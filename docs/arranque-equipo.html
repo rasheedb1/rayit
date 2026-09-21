@@ -1,0 +1,420 @@
+<title>Arranque de construcción</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f2f3f7; --border: #e3e6ec; --grid: #eceef2;
+    --ink: #0e1116; --ink-2: #4a5160; --muted: #8b92a5;
+    --accent: #5a4fcf; --accent-ink: #ffffff; --accent-wash: rgba(90,79,207,.09);
+    --good: #157347; --good-wash: #e8f6ee; --warn: #b7791f; --warn-wash: #fdf5e6;
+    --bad: #d1435b; --bad-wash: #fdecef;
+    --a-ink: #1d4ed8; --a-wash: #eef2ff; --b-ink: #0f766e; --b-wash: #eefbf7;
+    --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.04);
+    --sans: "Instrument Sans", "Inter", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0d12; --surface: #12151c; --surface-2: #181c24; --border: #242935; --grid: #1e222b;
+      --ink: #e8eaf0; --ink-2: #a3a9b8; --muted: #6f7686;
+      --accent: #9d94ff; --accent-ink: #0b0d12; --accent-wash: rgba(157,148,255,.14);
+      --good: #4ade80; --good-wash: rgba(74,222,128,.12); --warn: #fbbf24; --warn-wash: rgba(251,191,36,.12);
+      --bad: #f87171; --bad-wash: rgba(248,113,113,.12);
+      --a-ink: #8ab4ff; --a-wash: rgba(138,180,255,.12); --b-ink: #5eead4; --b-wash: rgba(94,234,212,.12);
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0d12; --surface: #12151c; --surface-2: #181c24; --border: #242935; --grid: #1e222b;
+    --ink: #e8eaf0; --ink-2: #a3a9b8; --muted: #6f7686;
+    --accent: #9d94ff; --accent-ink: #0b0d12; --accent-wash: rgba(157,148,255,.14);
+    --good: #4ade80; --good-wash: rgba(74,222,128,.12); --warn: #fbbf24; --warn-wash: rgba(251,191,36,.12);
+    --bad: #f87171; --bad-wash: rgba(248,113,113,.12);
+    --a-ink: #8ab4ff; --a-wash: rgba(138,180,255,.12); --b-ink: #5eead4; --b-wash: rgba(94,234,212,.12);
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1140px; margin: 0 auto; padding-block: 36px 72px; padding-inline: 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 34px; font-weight: 600; letter-spacing: -.03em; line-height: 1.12; margin: 6px 0 12px; text-wrap: balance; max-width: 20ch; }
+  h2 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 6px; text-wrap: balance; }
+  h3 { font-size: 15.5px; font-weight: 600; margin: 0 0 4px; letter-spacing: -.01em; }
+  p { margin: 0 0 10px; max-width: 72ch; color: var(--ink-2); }
+  p.lead { font-size: 17px; color: var(--ink); max-width: 64ch; }
+  section { margin-top: 52px; }
+  .sec-head { margin-bottom: 18px; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 900px) { .g2, .g3 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow); min-width: 0; }
+  .card p { font-size: 14px; margin-bottom: 6px; }
+  .card .src { font-size: 12px; color: var(--muted); }
+  .card .src a { color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 2px 8px; white-space: nowrap; color: var(--ink-2); background: var(--surface-2); }
+  .pill-a { color: var(--a-ink); background: var(--a-wash); }
+  .pill-b { color: var(--b-ink); background: var(--b-wash); }
+  .pill-good { color: var(--good); background: var(--good-wash); }
+  .pill-warn { color: var(--warn); background: var(--warn-wash); }
+  .pill-bad { color: var(--bad); background: var(--bad-wash); }
+  .pill-accent { color: var(--accent); background: var(--accent-wash); }
+  .tt { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .tbl { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; color: var(--ink-2); }
+  td:first-child { color: var(--ink); font-weight: 500; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  @media (max-width: 700px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--surface); padding: 14px 16px; }
+  .stat .k { font-size: 12.5px; color: var(--muted); }
+  .stat .v { font-size: 25px; font-weight: 600; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .weeks { display: flex; flex-direction: column; gap: 0; }
+  .week { display: grid; grid-template-columns: 96px 1fr 1fr; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--grid); align-items: start; }
+  .week:last-child { border-bottom: 0; }
+  @media (max-width: 800px) { .week { grid-template-columns: 1fr; gap: 10px; } }
+  .week .wk { font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding-top: 2px; }
+  .week .wk b { display: block; font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+  .task { margin-bottom: 10px; }
+  .task:last-child { margin-bottom: 0; }
+  .task b { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink); margin-bottom: 1px; }
+  .task span { font-size: 13px; color: var(--ink-2); }
+  .track-h { font-size: 11.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 8px; }
+  .track-a { color: var(--a-ink); }
+  .track-b { color: var(--b-ink); }
+  ol.num { margin: 0; padding-left: 0; list-style: none; counter-reset: n; }
+  ol.num li { counter-increment: n; display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--grid); }
+  ol.num li:last-child { border-bottom: 0; }
+  ol.num li::before { content: counter(n, decimal-leading-zero); font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding-top: 2px; }
+  ol.num li b { display: block; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+  ol.num li span { color: var(--ink-2); font-size: 14px; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-wash); border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 16px 0; }
+  .callout p { margin-bottom: 0; color: var(--ink); }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-wash); }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">MultiCampaign · 20 de septiembre de 2026</div>
+  <h1>Arranque de construcción</h1>
+  <p class="lead">La base de datos está lista y verificada. Esto es lo que encontramos investigando, qué cambió por eso, y cómo se reparten seis semanas entre dos programadores.</p>
+
+  <div class="stat-row" style="margin-top:20px">
+    <div class="stat"><div class="k">Migraciones</div><div class="v">13</div></div>
+    <div class="stat"><div class="k">Tablas</div><div class="v">88</div></div>
+    <div class="stat"><div class="k">Vistas</div><div class="v">10</div></div>
+    <div class="stat"><div class="k">Reglas del semáforo</div><div class="v">29</div></div>
+  </div>
+
+  <!-- ============ HALLAZGOS ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Tres hallazgos que cambiaron el diseño</h2>
+      <p>Verificados contra documentación oficial y literatura publicada. Los dos informes completos están en el repositorio.</p>
+    </div>
+
+    <div class="card" style="border-color:var(--accent)">
+      <span class="pill pill-accent">Cambia el producto entero</span>
+      <h3 style="margin-top:10px">TikTok sí entrega retención segundo a segundo</h3>
+      <p>Pero no por la API de la que habla todo el mundo. La <b>Display API</b> devuelve dieciséis campos y cuatro contadores de vanidad. La <b>Accounts API</b> de TikTok for Business, con el permiso <code>video.insights</code>, devuelve por cada video:</p>
+      <ul style="color:var(--ink-2); font-size:14px; margin:8px 0">
+        <li><code>video_view_retention</code>, el porcentaje de espectadores que sigue viendo en cada segundo</li>
+        <li><code>engagement_likes</code>, los likes en cada segundo del timeline. Ni YouTube expone eso</li>
+        <li>Demografía <b>por video</b>: país, ciudad y género</li>
+        <li>De dónde vinieron las vistas: Para Ti, Siguiendo, Sonido, Búsqueda</li>
+        <li>Nuevos contra recurrentes, seguidores contra no seguidores</li>
+      </ul>
+      <p>Son dos aplicaciones distintas, en dos portales distintos, con dos trámites distintos.</p>
+      <div class="src">Fuente: <a href="https://business-api.tiktok.com/portal/docs?id=1762228421622786">business-api.tiktok.com · /business/video/list/</a></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <span class="pill pill-warn">Cambia qué prometemos</span>
+        <h3 style="margin-top:10px">Predecir views no funciona. Predecir retención sí.</h3>
+        <p>En el SMP Challenge 2025, quitar los rasgos del creador degradó el error un setenta y dos por ciento; quitar todo el contenido visual, solo un cuatro. En SMTPD, de la conferencia CVPR 2025, la variable más predictiva son las views del primer día, que por definición no existen antes de publicar.</p>
+        <p>En cambio, el reto VQualA 2025 de la conferencia ICCV, con ciento veinte mil videos y arranque en frío, alcanzó una correlación de Spearman de cero coma setenta y uno prediciendo <b>retención temprana</b> solo con el contenido.</p>
+        <p><b>Por eso el laboratorio de video predice retención, no views.</b> Y como TikTok nos da la curva real, el modelo se calibra contra la verdad medida.</p>
+        <div class="src">Fuentes: <a href="https://arxiv.org/html/2507.00950v1">SMP Challenge 2025</a> · <a href="https://arxiv.org/html/2503.04446v1">SMTPD, CVPR 2025</a> · <a href="https://arxiv.org/html/2509.02969v1">VQualA 2025, ICCV</a></div>
+      </div>
+      <div class="card">
+        <span class="pill pill-bad">Define el flujo</span>
+        <h3 style="margin-top:10px">Descargar el mp4 de TikTok está prohibido</h3>
+        <p>Los términos de la plataforma lo dicen por escrito, y se reservan revocar el acceso sin aviso. Ninguna API entrega la URL del archivo.</p>
+        <p>Eso no es un obstáculo: es lo que define el flujo correcto. <b>El creador sube su máster a la plataforma.</b> Lo analizamos antes de publicar, le decimos si está listo, y publicamos nosotros por API. Así nos quedamos con el original sin transcodificar, y el análisis ocurre cuando todavía sirve para algo, que es antes de publicar.</p>
+        <p>La única vía oficial para bajar archivos es la API de portabilidad de datos, con aprobación de tres a cuatro semanas.</p>
+        <div class="src">Fuente: <a href="https://business-api.tiktok.com/portal/docs?id=1737944384433218">TikTok · Prohibited Uses</a></div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <p><b>El cruce que nadie más tiene.</b> Por cada segundo sabemos qué pasa en el video (planos, texto, rostro, sonoridad) y cuánta gente sigue viendo. La vista <code>second_by_second</code> los une: «perdiste el treinta y uno por ciento de la audiencia en el segundo siete, donde hay un plano fijo de cuatro segundos sin texto en pantalla».</p>
+    </div>
+  </section>
+
+  <!-- ============ SEMÁFORO ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>El semáforo de «listo para publicar»</h2>
+      <p>Veintinueve reglas, cada una con su umbral, su severidad y <b>la procedencia del umbral</b>. Las reglas viven en la base de datos, no en el código: cambiar un umbral no es un despliegue.</p>
+    </div>
+
+    <div class="grid g3">
+      <div class="card">
+        <h3>Dieciséis con fuente dura</h3>
+        <p>Especificaciones de plataforma y el detector ABCDs de Google, que es código abierto y viene de quien sí tiene los datos.</p>
+        <p style="font-size:13px"><b>Ejemplos:</b> el mensaje central en los primeros tres segundos (TikTok midió que el sesenta y tres por ciento de los videos con mejor tasa de clic lo hacen); el primer plano dura menos de tres segundos; cinco planos en los primeros cinco segundos.</p>
+      </div>
+      <div class="card">
+        <h3>Trece marcadas como criterio</h3>
+        <p>Buenas prácticas del oficio sin fuente publicada. La interfaz lo dice: nunca presentamos folclore como dato duro.</p>
+        <p style="font-size:13px"><b>Ejemplos:</b> no abrir con saludo; ningún plano de más de seis segundos; voz por encima de la música.</p>
+      </div>
+      <div class="card">
+        <h3>Lo que no vamos a repetir</h3>
+        <p>«El setenta y uno por ciento de si te siguen viendo se decide en los primeros tres segundos» circula en toda la industria y <b>no tiene fuente primaria localizable</b>.</p>
+        <p style="font-size:13px">Tampoco «los subtítulos aumentan el tiempo de visualización un doce por ciento». Ponemos subtítulos igual, por accesibilidad, pero sin citar la cifra.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:20px; margin-bottom:8px">Las ocho reglas que bloquean la publicación</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Regla</th><th>Por qué</th><th>Procedencia</th></tr></thead>
+        <tbody>
+          <tr><td>Formato vertical 9:16</td><td>Cualquier otro formato deja barras y pierde alcance</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+          <tr><td>Resolución mínima 540 × 960</td><td>Debajo de eso la compresión trabaja sobre material ya pobre</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+          <tr><td>Duración entre 3 y 600 segundos</td><td>Límite de la API de publicación de TikTok</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+          <tr><td>El video trae pista de audio</td><td>Un video mudo pierde casi todo el enganche</td><td><span class="pill">Criterio</span></td></tr>
+          <tr><td>Mensaje central en los primeros 3 segundos</td><td>Más del 63 % de los videos con mejor tasa de clic lo hacen</td><td><span class="pill pill-accent">Investigación</span></td></tr>
+          <tr><td>El texto no cae bajo la interfaz</td><td>El texto en zona tapada simplemente no se lee</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+          <tr><td>Contenido con IA declarado</td><td>No etiquetarlo pone en riesgo la monetización</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+          <tr><td>Colaboración pagada declarada</td><td>Lo exigen la ley y las plataformas, y da métricas a la marca</td><td><span class="pill pill-good">Plataforma</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ CIFRAS ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Casi todo lo que la industria repite sobre video corto es falso</h2>
+      <p>La segunda investigación desmontó varias cifras que dábamos por buenas, algunas de las cuales yo mismo había usado. Están en la base de datos: una tabla con las cifras que sí tienen fuente, y otra con las vetadas.</p>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Lo que circula</th><th>Por qué no sirve</th><th>Lo que decimos en su lugar</th></tr></thead>
+        <tbody>
+          <tr><td>«El 71 % de si te siguen viendo se decide en 3 segundos»</td><td>Sin fuente primaria localizable, en ninguna de sus variantes</td><td>La mitad de los videos se abandona antes del 10 % de su duración. Revisado por pares, 2,65 millones de casos</td></tr>
+          <tr><td>«El 85 % ve sin sonido»</td><td>Cifra de 2016 sobre Facebook, mal extrapolada</td><td>TikTok reporta <b>93 % con sonido</b>; YouTube, 95 %. La premisa estaba invertida</td></tr>
+          <tr><td>«Una finalización del 62 % es normal»</td><td>Blog comercial, 500 videos, sin metodología</td><td><b>6,30 %</b> de media en TikTok, medido sobre 2,3 millones de publicaciones</td></tr>
+          <tr><td>«La duración óptima es de 21 a 34 segundos»</td><td>Sin fuente, y la evidencia apunta al contrario</td><td>Los videos de más de 60 s logran 43 % más alcance que los de 30 a 60. Por eso <b>no hay regla de duración</b> en el semáforo</td></tr>
+          <tr><td>«Los subtítulos suben 12 % el tiempo visto»</td><td>Atribuido a un estudio de Meta que no se puede localizar</td><td>Ponemos subtítulos por accesibilidad, que no necesita cifra inventada</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <p><b>Esto es el diferenciador comercial, no solo higiene.</b> Ninguna herramienta del mercado publica la validación de su puntaje: ni OpusClip, ni Munch, ni Vizard, ni Submagic. Nosotros podemos publicar la correlación de nuestro semáforo contra la retención real que mide TikTok, y compararla con el techo académico de 0,71. Es un argumento que nadie más puede hacer.</p>
+    </div>
+  </section>
+
+  <!-- ============ COSTO ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Cuánto cuesta analizar un video</h2>
+      <p>Tres decisiones que bajan el costo de trece centavos de dólar a uno y medio, con la misma información.</p>
+    </div>
+    <div class="grid g3">
+      <div class="card">
+        <h3>El OCR va en casa</h3>
+        <p>Los servicios gestionados de texto en video cuestan entre diez y quince centavos por minuto. La transcripción cuesta tres milésimas. Veinte a cuarenta veces más caro, y es lo que más veces hay que correr.</p>
+      </div>
+      <div class="card">
+        <h3>Los fotogramas van empaquetados</h3>
+        <p>Sesenta fotogramas sueltos gastan cincuenta y un mil tokens visuales. En siete hojas de tres por tres, seis mil. Casi nueve veces menos por la misma información.</p>
+      </div>
+      <div class="card">
+        <h3>Primero medir, después el modelo</h3>
+        <p>Cortes, sonoridad, texto y transcripción se miden con herramientas deterministas. El modelo llega con eso ya en el prompt y obligado a citar el segundo exacto de cada observación.</p>
+      </div>
+    </div>
+    <p style="margin-top:12px">Tiempo objetivo: entre treinta y cinco y cincuenta y cinco segundos por video con el worker caliente. El cuello es el OCR, por eso se limita a veinte fotogramas clave. Y en español conviene Canary sobre Whisper: 2,90 de tasa de error contra 3,12, con licencia comercial.</p>
+  </section>
+
+  <!-- ============ CAMINO CRÍTICO ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Lo primero, porque no depende de programar</h2>
+    </div>
+    <div class="callout warn">
+      <p><b>Tres trámites bloquean funciones enteras y tardan semanas. Hay que iniciarlos hoy y no tienen dueño asignado.</b></p>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Trámite</th><th>Qué desbloquea</th><th>Sin él</th></tr></thead>
+        <tbody>
+          <tr><td>Accounts API Access Application Form, de TikTok</td><td>Retención por segundo, demografía por video, likes por segundo</td><td>El producto se queda con cuatro contadores de vanidad</td></tr>
+          <tr><td>App Review y Business Verification, de Meta</td><td>Métricas de Instagram y Facebook</td><td>No hay datos de Instagram</td></tr>
+          <tr><td>Auditoría de compliance, de Google</td><td>YouTube</td><td>Los videos que subamos quedan privados</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px">Desde el veinte de marzo de 2026 el formulario de TikTok es obligatorio <b>antes</b> de someter la aplicación a revisión. Mientras los trámites corren, los dos programadores trabajan contra respuestas grabadas, que además son las pruebas automatizadas.</p>
+  </section>
+
+  <!-- ============ REPARTO ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Cómo se reparten los dos programadores</h2>
+      <p>La regla que hace posible el paralelo: <b>cada uno es dueño de carpetas distintas y nunca edita las del otro</b>. El contrato entre ambos es el esquema de la base, que ya está cerrado y verificado.</p>
+    </div>
+    <div class="grid g2">
+      <div class="card" style="border-color:var(--a-ink)">
+        <span class="pill pill-a">Programador A</span>
+        <h3 style="margin-top:10px">Datos</h3>
+        <p>Dueño de <code>packages/connectors/</code>, <code>apps/worker/</code> y <code>packages/db/</code>.</p>
+        <p>Construye la columna vertebral: conectar cuentas, traer datos, guardarlos bien y calcular los puntajes. Nada de esto tiene pantalla, así que avanza sin discutir diseño con nadie.</p>
+      </div>
+      <div class="card" style="border-color:var(--b-ink)">
+        <span class="pill pill-b">Programador B</span>
+        <h3 style="margin-top:10px">Producto</h3>
+        <p>Dueño de <code>apps/web/</code>, <code>apps/media/</code> y <code>packages/core/</code>.</p>
+        <p>Construye la aplicación y el laboratorio de video. Es el único módulo que <b>no depende de ninguna aprobación de plataforma</b>: un creador sube un archivo y recibe su análisis.</p>
+      </div>
+    </div>
+    <p style="margin-top:12px">Lo que <b>no</b> funciona es partir por capas, uno el frontend y otro el backend: cada pantalla quedaría bloqueada esperando a la otra persona.</p>
+  </section>
+
+  <!-- ============ SEIS SEMANAS ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Seis semanas</h2>
+      <p>Cada viernes hay un punto de integración: todo lo de la semana tiene que correr junto en un solo <code>make dev</code>.</p>
+    </div>
+    <div class="weeks">
+
+      <div class="week">
+        <div class="wk"><b>Semana 1</b>La tubería de punta a punta</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Conectores con respuestas grabadas</b><span>TikTok Display, TikTok Accounts, Instagram y YouTube, con reintentos y respeto de cuota.</span></div>
+          <div class="task"><b>OAuth de TikTok, las dos aplicaciones</b><span>Con rotación de refresh token.</span></div>
+          <div class="task"><b>El worker arranca y toma un trabajo</b><span>Colas sobre Postgres, con registro de cada corrida.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Esqueleto de la aplicación</b><span>Autenticación, cambio entre creador y agencia, y los nueve módulos con su ruta.</span></div>
+          <div class="task"><b>Subir un archivo y guardarlo</b><span>Carga directa al almacenamiento, con la ficha técnica del video.</span></div>
+        </div>
+      </div>
+
+      <div class="week">
+        <div class="wk"><b>Semana 2</b>El laboratorio empieza a decir algo</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Recolector de posts y métricas</b><span>Snapshots append-only con la edad del post.</span></div>
+          <div class="task"><b>Curvas por segundo de TikTok</b><span>Retención, likes por segundo y fuente de las vistas.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Análisis segundo a segundo, capa barata</b><span>Cortes, brillo, movimiento, rostros y sonoridad. Sin modelos todavía.</span></div>
+          <div class="task"><b>Transcripción con marca por palabra</b><span>Para medir el hook exacto y las palabras por minuto.</span></div>
+        </div>
+      </div>
+
+      <div class="week">
+        <div class="wk"><b>Semana 3</b>Semáforo y puntajes</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Línea base y puntaje</b><span>La mediana del creador y el «por cuántas veces» de cada video.</span></div>
+          <div class="task"><b>Administrador de cuota</b><span>Cuarenta consultas por minuto por cuenta, sin llegar al corte.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Texto en pantalla y zonas seguras</b><span>Qué texto cae bajo la interfaz de cada red.</span></div>
+          <div class="task"><b>Motor de reglas del semáforo</b><span>Veredicto por red, con los fallos ubicados en el segundo exacto.</span></div>
+        </div>
+      </div>
+
+      <div class="week">
+        <div class="wk"><b>Semana 4</b>Las primeras pantallas de verdad</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Demografía y métricas de cuenta</b><span>Explicando los huecos en vez de dejar celdas vacías.</span></div>
+          <div class="task"><b>Vigilancia del nicho</b><span>Cuentas ajenas, sus snapshots y su línea base.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Pantalla del laboratorio de video</b><span>Con la curva de retención real encima de la línea de tiempo del análisis.</span></div>
+          <div class="task"><b>Resumen y Mis videos</b><span>Contra datos reales, no contra el mock.</span></div>
+        </div>
+      </div>
+
+      <div class="week">
+        <div class="wk"><b>Semana 5</b>Ventas</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Radar de prospección</b><span>Biblioteca de anuncios de Meta, Top Ads de TikTok y colaboraciones pagadas.</span></div>
+          <div class="task"><b>Guardarraíles del outbound</b><span>Máximo de toques, enfriamiento y baja voluntaria que se respeta en toda la plataforma.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Pipeline y ficha de empresa</b><span>Tablero, lista y línea de tiempo, como quedó en el mock.</span></div>
+          <div class="task"><b>Pitch con afirmaciones trazables</b><span>Una cifra sin respaldo no se puede enviar.</span></div>
+        </div>
+      </div>
+
+      <div class="week">
+        <div class="wk"><b>Semana 6</b>Cerrar el ciclo del dinero</div>
+        <div>
+          <div class="track-h track-a">Programador A</div>
+          <div class="task"><b>Seguimiento de marcas en campaña</b><span>Seguidores públicos de la marca con su línea base de dos semanas antes.</span></div>
+        </div>
+        <div>
+          <div class="track-h track-b">Programador B</div>
+          <div class="task"><b>Cotización, media kit y reporte</b><span>Los tres con enlace compartible. El reporte congela sus datos.</span></div>
+          <div class="task"><b>Finanzas</b><span>Cuentas por cobrar, recordatorios y flujo de caja.</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <h3 style="margin-top:24px; margin-bottom:8px">Qué se puede enseñar y cuándo</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Momento</th><th>Qué se le puede mostrar a un usuario real</th></tr></thead>
+        <tbody>
+          <tr><td>Fin de semana 3</td><td>Subir un video y recibir el semáforo por red. <b>No espera ninguna aprobación de plataforma.</b></td></tr>
+          <tr><td>Fin de semana 4</td><td>Lo anterior más el dashboard con datos propios, si TikTok ya aprobó</td></tr>
+          <tr><td>Fin de semana 5</td><td>Radar de marcas y pipeline de ventas</td></tr>
+          <tr><td>Fin de semana 6</td><td>El ciclo completo: cotizar, medir la campaña, reportar y cobrar</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px">El laboratorio de video es la punta de lanza porque es lo único que no espera a nadie. Conviene usarlo para conseguir los primeros creadores, y que ellos conecten sus cuentas justo cuando lleguen las aprobaciones.</p>
+  </section>
+
+  <!-- ============ DECISIONES ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Cuatro decisiones que hacen falta</h2>
+    </div>
+    <div class="card">
+      <ol class="num">
+        <li><b>¿Quién inicia los tres trámites y con qué cuenta de empresa?</b><span>Es el camino crítico del proyecto y hoy no tiene dueño.</span></li>
+        <li><b>¿Entendimos bien el outbound?</b><span>Lo construido asume que el creador carga lo que busca (categorías, presupuesto mínimo, disponibilidad y qué <b>no</b> acepta) y que el radar y el pitch trabajan a partir de eso, con límites éticos aplicados en la base de datos: máximo de toques, baja voluntaria que se respeta en toda la plataforma, y ninguna cifra en un pitch sin origen trazable. Si la idea era otra, hay que corregirlo antes de la semana cinco.</span></li>
+        <li><b>¿Cuál de las tres direcciones visuales?</b><span>El programador B necesita los tokens en la semana uno. La recomendación sigue siendo Signal.</span></li>
+        <li><b>¿Nombre del producto y dominio?</b><span>Hace falta para el correo de outbound, que necesita dominio propio con sus registros de autenticación.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>Documento de arranque · la investigación completa está en <code>docs/research/</code> · el esquema y el pipeline, en <code>platform/</code> · MultiCampaign, 20 de septiembre de 2026.</footer>
+</div>

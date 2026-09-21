@@ -1,0 +1,487 @@
+<title>Dirección visual Creadores</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Figtree:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f2f3f7; --border: #e3e6ec; --grid: #eceef2;
+    --ink: #0e1116; --ink-2: #4a5160; --muted: #8b92a5; --accent: #5a4fcf; --accent-ink: #ffffff; --accent-wash: rgba(90, 79, 207, 0.09);
+    --good: #157347; --good-wash: #e8f6ee; --warn: #b7791f; --warn-wash: #fdf5e6;
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.04);
+    --sans: "Instrument Sans", "Inter", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0d12; --surface: #12151c; --surface-2: #181c24; --border: #242935; --grid: #1e222b;
+      --ink: #e8eaf0; --ink-2: #a3a9b8; --muted: #6f7686; --accent: #9d94ff; --accent-ink: #0b0d12; --accent-wash: rgba(157, 148, 255, 0.14);
+      --good: #4ade80; --good-wash: rgba(74, 222, 128, 0.12); --warn: #fbbf24; --warn-wash: rgba(251, 191, 36, 0.12);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0d12; --surface: #12151c; --surface-2: #181c24; --border: #242935; --grid: #1e222b;
+    --ink: #e8eaf0; --ink-2: #a3a9b8; --muted: #6f7686; --accent: #9d94ff; --accent-ink: #0b0d12; --accent-wash: rgba(157, 148, 255, 0.14);
+    --good: #4ade80; --good-wash: rgba(74, 222, 128, 0.12); --warn: #fbbf24; --warn-wash: rgba(251, 191, 36, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding-block: 36px 72px; padding-inline: 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.12; margin: 6px 0 12px; text-wrap: balance; max-width: 22ch; }
+  h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 6px; text-wrap: balance; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  p { margin: 0 0 10px; max-width: 70ch; color: var(--ink-2); }
+  p.lead { font-size: 17px; color: var(--ink); max-width: 62ch; }
+  section { margin-top: 56px; }
+  .sec-head { margin-bottom: 18px; }
+  .sec-head p { margin-top: 4px; }
+  .grid { display: grid; gap: 14px; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 900px) { .g3, .g2 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow); min-width: 0; }
+  .card p { font-size: 14px; margin-bottom: 6px; }
+  .card .src { font-size: 12.5px; color: var(--muted); }
+  .card .src a { color: var(--muted); }
+  ul.clean { list-style: none; margin: 0; padding: 0; }
+  ol.num { margin: 0; padding-left: 0; list-style: none; counter-reset: n; }
+  ol.num li { counter-increment: n; display: grid; grid-template-columns: 40px 1fr; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--grid); }
+  ol.num li:last-child { border-bottom: 0; }
+  ol.num li::before { content: counter(n, decimal-leading-zero); font-family: var(--mono); font-size: 13px; color: var(--muted); padding-top: 2px; }
+  ol.num li b { display: block; font-weight: 600; margin-bottom: 2px; }
+  ol.num li span { color: var(--ink-2); font-size: 14px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 2px 8px; white-space: nowrap; color: var(--ink-2); background: var(--surface-2); }
+  .pill-accent { color: var(--accent); background: var(--accent-wash); }
+  .pill-good { color: var(--good); background: var(--good-wash); }
+  .pill-warn { color: var(--warn); background: var(--warn-wash); }
+  .tt { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .note { font-size: 13.5px; color: var(--muted); }
+
+  /* ---------- dirección ---------- */
+  .dir { margin-top: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+  .dir-head { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px; padding: 22px 24px 18px; border-bottom: 1px solid var(--border); }
+  @media (max-width: 900px) { .dir-head { grid-template-columns: 1fr; } }
+  .dir-head .kicker { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .dir-head h2 { font-size: 24px; }
+  .dir-head .thesis { font-size: 15px; color: var(--ink); }
+  .dir-head .refs { font-size: 13px; color: var(--muted); }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13.5px; margin: 0; align-content: start; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; color: var(--ink-2); }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sw { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+  .sw i { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.12); display: inline-block; }
+  .typo { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .typo .big { font-size: 26px; line-height: 1.15; letter-spacing: -0.02em; }
+  .typo .num { font-size: 14px; color: var(--ink-2); }
+  .samples { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  @media (max-width: 900px) { .samples { grid-template-columns: 1fr; } }
+  .samples > div + div { border-left: 1px solid var(--border); }
+  @media (max-width: 900px) { .samples > div + div { border-left: 0; border-top: 1px solid var(--border); } }
+  .sample-wrap { padding: 16px; }
+  .sample-wrap .lbl { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .verdict { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 18px 24px 22px; border-top: 1px solid var(--border); font-size: 13.5px; }
+  @media (max-width: 900px) { .verdict { grid-template-columns: 1fr; } }
+  .verdict b { display: block; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .verdict ul { margin: 0; padding-left: 18px; color: var(--ink-2); }
+  .verdict li { margin-bottom: 3px; }
+
+  /* ---------- mini UI de muestra (usa tokens locales --s-*) ---------- */
+  .sample { display: grid; grid-template-columns: 118px 1fr; background: var(--s-bg); color: var(--s-ink); border: 1px solid var(--s-border); border-radius: var(--s-radius, 8px); overflow: hidden; font-family: var(--s-font); font-size: 11px; line-height: 1.4; min-height: 250px; }
+  .s-side { padding: 10px 8px; border-right: 1px solid var(--s-border); background: var(--s-side, var(--s-bg)); display: flex; flex-direction: column; gap: 2px; }
+  .s-brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11.5px; padding: 2px 6px 8px; letter-spacing: -0.01em; }
+  .s-brand .dots { display: inline-grid; grid-template-columns: repeat(2, 4px); gap: 1.5px; }
+  .s-brand .dots i { width: 4px; height: 4px; border-radius: 1px; display: block; }
+  .s-brand .dots i:nth-child(1) { background: var(--s-tiktok); }
+  .s-brand .dots i:nth-child(2) { background: var(--s-instagram); }
+  .s-brand .dots i:nth-child(3) { background: var(--s-facebook); }
+  .s-brand .dots i:nth-child(4) { background: var(--s-youtube); }
+  .s-nav span { display: block; padding: 4px 6px; border-radius: 5px; color: var(--s-ink2); }
+  .s-nav span.on { background: var(--s-nav-on-bg); color: var(--s-nav-on-ink); font-weight: 600; }
+  .s-main { padding: 12px 12px 10px; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .s-h1 { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+  .s-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--s-border); border: 1px solid var(--s-border); border-radius: var(--s-radius, 8px); overflow: hidden; }
+  .s-kpis > div { background: var(--s-surface); padding: 7px 9px; display: flex; flex-direction: column; gap: 0; }
+  .s-kpis small { color: var(--s-muted); font-size: 9.5px; }
+  .s-kpis b { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; font-family: var(--s-num, var(--s-font)); }
+  .s-kpis em { font-style: normal; font-size: 9.5px; font-weight: 600; color: var(--s-good); }
+  .s-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .s-box { background: var(--s-surface); border: 1px solid var(--s-border); border-radius: var(--s-radius, 8px); padding: 8px 9px; box-shadow: var(--s-shadow, none); min-width: 0; }
+  .s-box .t { font-weight: 600; font-size: 10.5px; margin-bottom: 4px; }
+  .s-box svg { display: block; width: 100%; height: auto; }
+  .s-tr { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--s-grid); font-size: 10px; }
+  .s-tr:last-child { border-bottom: 0; }
+  .s-tr .n { font-family: var(--s-num, var(--s-font)); font-variant-numeric: tabular-nums; color: var(--s-ink2); }
+  .s-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 600; border-radius: var(--s-pill-radius, 5px); padding: 1px 6px 1px 5px; white-space: nowrap; }
+  .s-pill::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+  .s-pill.g { color: var(--s-good); background: var(--s-good-wash); }
+  .s-pill.a { color: var(--s-accent-pill-ink, var(--s-accent)); background: var(--s-accent-pill-bg, var(--s-accent-wash)); }
+  .s-btns { display: flex; gap: 6px; }
+  .s-btns span { font-size: 10px; font-weight: 600; padding: 4px 9px; border-radius: var(--s-btn-radius, 6px); border: 1px solid var(--s-border); background: var(--s-surface); color: var(--s-ink); box-shadow: var(--s-shadow, none); }
+  .s-btns span.p { background: var(--s-accent); color: var(--s-accent-ink); border-color: var(--s-accent); }
+
+  /* tokens por dirección · claro */
+  .geist-l { --s-bg: #ffffff; --s-surface: #ffffff; --s-border: #eaeaea; --s-grid: #f0f0f0; --s-ink: #171717; --s-ink2: #525252; --s-muted: #8a8a8a; --s-accent: #171717; --s-accent-ink: #ffffff; --s-accent-wash: rgba(0,0,0,.05); --s-good: #15803d; --s-good-wash: #f0fdf4; --s-nav-on-bg: #f4f4f4; --s-nav-on-ink: #171717; --s-accent-pill-ink: #ffffff; --s-accent-pill-bg: #171717; --s-tiktok: #2a78d6; --s-instagram: #eb6834; --s-facebook: #1baf7a; --s-youtube: #eda100; --s-font: "Geist", system-ui, sans-serif; --s-num: "Geist Mono", ui-monospace, monospace; --s-radius: 6px; }
+  .geist-d { --s-bg: #000000; --s-surface: #0a0a0a; --s-border: #262626; --s-grid: #1f1f1f; --s-ink: #ededed; --s-ink2: #a1a1a1; --s-muted: #7d7d7d; --s-accent: #ededed; --s-accent-ink: #0a0a0a; --s-accent-wash: rgba(255,255,255,.08); --s-good: #4ade80; --s-good-wash: rgba(74,222,128,.12); --s-nav-on-bg: #171717; --s-nav-on-ink: #ededed; --s-accent-pill-ink: #0a0a0a; --s-accent-pill-bg: #ededed; --s-tiktok: #3987e5; --s-instagram: #d95926; --s-facebook: #199e70; --s-youtube: #c98500; --s-font: "Geist", system-ui, sans-serif; --s-num: "Geist Mono", ui-monospace, monospace; --s-radius: 6px; }
+  .signal-l { --s-bg: #f6f7f9; --s-side: #f6f7f9; --s-surface: #ffffff; --s-border: #e3e6ec; --s-grid: #eceef2; --s-ink: #0e1116; --s-ink2: #4a5160; --s-muted: #8b92a5; --s-accent: #5a4fcf; --s-accent-ink: #ffffff; --s-accent-wash: rgba(90,79,207,.09); --s-good: #157347; --s-good-wash: #e8f6ee; --s-nav-on-bg: rgba(90,79,207,.09); --s-nav-on-ink: #5a4fcf; --s-tiktok: #2a78d6; --s-instagram: #eb6834; --s-facebook: #1baf7a; --s-youtube: #eda100; --s-font: "Instrument Sans", system-ui, sans-serif; --s-num: "JetBrains Mono", ui-monospace, monospace; --s-radius: 8px; --s-shadow: 0 1px 2px rgba(16,24,40,.06); }
+  .signal-d { --s-bg: #0b0d12; --s-side: #0b0d12; --s-surface: #12151c; --s-border: #242935; --s-grid: #1e222b; --s-ink: #e8eaf0; --s-ink2: #a3a9b8; --s-muted: #6f7686; --s-accent: #9d94ff; --s-accent-ink: #0b0d12; --s-accent-wash: rgba(157,148,255,.14); --s-good: #4ade80; --s-good-wash: rgba(74,222,128,.12); --s-nav-on-bg: rgba(157,148,255,.14); --s-nav-on-ink: #9d94ff; --s-tiktok: #3987e5; --s-instagram: #d95926; --s-facebook: #199e70; --s-youtube: #c98500; --s-font: "Instrument Sans", system-ui, sans-serif; --s-num: "JetBrains Mono", ui-monospace, monospace; --s-radius: 8px; --s-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .studio-l { --s-bg: #fbfaf7; --s-surface: #ffffff; --s-border: #e6e2d9; --s-grid: #edeae3; --s-ink: #1c1b18; --s-ink2: #55524a; --s-muted: #8d897e; --s-accent: #1c1b18; --s-accent-ink: #fbfaf7; --s-accent-wash: rgba(28,27,24,.06); --s-good: #1f7a4d; --s-good-wash: #e9f4ee; --s-nav-on-bg: #f4f2ec; --s-nav-on-ink: #1c1b18; --s-accent-pill-ink: #fbfaf7; --s-accent-pill-bg: #1c1b18; --s-tiktok: #2a78d6; --s-instagram: #eb6834; --s-facebook: #1baf7a; --s-youtube: #eda100; --s-font: "Figtree", system-ui, sans-serif; --s-num: "Newsreader", Georgia, serif; --s-radius: 10px; --s-pill-radius: 999px; --s-btn-radius: 999px; }
+  .studio-d { --s-bg: #131210; --s-surface: #1a1915; --s-border: #2e2b25; --s-grid: #262420; --s-ink: #f1efe9; --s-ink2: #b5b0a4; --s-muted: #7f7a6f; --s-accent: #f1efe9; --s-accent-ink: #131210; --s-accent-wash: rgba(241,239,233,.08); --s-good: #5ccc8f; --s-good-wash: rgba(92,204,143,.12); --s-nav-on-bg: #211f1a; --s-nav-on-ink: #f1efe9; --s-accent-pill-ink: #131210; --s-accent-pill-bg: #f1efe9; --s-tiktok: #3987e5; --s-instagram: #d95926; --s-facebook: #199e70; --s-youtube: #c98500; --s-font: "Figtree", system-ui, sans-serif; --s-num: "Newsreader", Georgia, serif; --s-radius: 10px; --s-pill-radius: 999px; --s-btn-radius: 999px; }
+  .studio-l .s-h1, .studio-d .s-h1 { font-family: "Newsreader", Georgia, serif; font-weight: 500; font-size: 16px; letter-spacing: -0.01em; }
+  .studio-l .s-kpis b, .studio-d .s-kpis b { font-size: 17px; font-weight: 500; }
+  .studio-l .s-kpis, .studio-d .s-kpis { gap: 0; background: transparent; border-left: 0; border-right: 0; border-radius: 0; }
+  .studio-l .s-kpis > div, .studio-d .s-kpis > div { background: transparent; }
+
+  /* ---------- reco ---------- */
+  .reco { background: var(--surface); border: 1px solid var(--accent); border-radius: 14px; padding: 24px 26px; box-shadow: 0 0 0 4px var(--accent-wash); }
+  .reco h2 { color: var(--accent); }
+  .reco p { max-width: 74ch; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 14px; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  .split h3 { font-size: 14px; }
+  .split ul { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 14px; }
+
+  /* ---------- tabla ---------- */
+  .tbl { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; color: var(--ink-2); }
+  td:first-child { color: var(--ink); font-weight: 500; }
+  tr:last-child td { border-bottom: 0; }
+
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">MultiCampaign Creadores · exploración de diseño · 16 sep 2026</div>
+  <h1>Tres direcciones visuales para un dashboard de escala global</h1>
+  <p class="lead">Qué hacen hoy Vercel, Stripe, Linear, Notion y los dashboards más citados de 2026, qué patrones comparten, y tres direcciones completas para el producto, con recomendación. Las tres están implementadas y se cambian en vivo en el localhost con el selector "Geist · Signal · Studio" de la barra superior.</p>
+  <div class="tt"><span class="pill pill-accent">Recomendación: Signal para el producto</span><span class="pill">Studio para el media kit que ven las marcas</span><span class="pill">Geist se queda como modo denso</span></div>
+
+  <!-- ================= REFERENTES ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Lo que aprendimos de los referentes</h2>
+      <p>Hechos verificados en fuentes primarias o análisis públicos de sus sistemas de diseño. Lo que no pudimos verificar no está aquí.</p>
+    </div>
+    <div class="grid g3">
+      <div class="card">
+        <h3>Vercel · Geist</h3>
+        <p>Tipografía propia Geist Sans y Geist Mono (con Basement Studio), principios suizos: simplicidad, minimalismo, velocidad. Escala de grises como base, casi sin color. Geist, Geist Mono y Geist Pixel están en Google Fonts.</p>
+        <div class="src"><a href="https://vercel.com/geist/introduction">vercel.com/geist</a> · <a href="https://vercel.com/font">vercel.com/font</a></div>
+      </div>
+      <div class="card">
+        <h3>Stripe</h3>
+        <p>Söhne (Klim) con el set estilístico ss01, lienzo blanco, titulares azul marino y un solo color de marca, el índigo #533afd, que es a la vez ancla y acento interactivo. Cifras tabulares en el cuerpo. La tipografía fintech más copiada del mundo.</p>
+        <div class="src"><a href="https://www.shadcn.io/design/stripe">shadcn.io/design/stripe</a> · <a href="https://stripe.design/">stripe.design</a></div>
+      </div>
+      <div class="card">
+        <h3>Linear</h3>
+        <p>Inter Variable con cv01 y ss03, Berkeley Mono para código. Temas generados en LCH a partir de tres variables: color base, acento y contraste. Nativo en modo oscuro, denso, orientado a teclado. Rediseño mayor en 2024 y refinamientos desde entonces.</p>
+        <div class="src"><a href="https://linear.app/now/how-we-redesigned-the-linear-ui">linear.app · cómo rediseñamos la UI</a></div>
+      </div>
+      <div class="card">
+        <h3>Notion</h3>
+        <p>NotionInter (Inter modificada), lienzo blanco con texto casi negro cálido, y una escala de grises cálidos (#f6f5f4, #a39e98, #615d59, #31302e) que se siente como papel. Mucho espacio en blanco, jerarquía de dos colores y azul eléctrico solo para lo interactivo.</p>
+        <div class="src"><a href="https://open-design.ai/plugins/design-system-notion/">open-design.ai · Notion</a> · <a href="https://www.designyourway.net/blog/what-font-does-notion-use/">qué fuente usa Notion</a></div>
+      </div>
+      <div class="card">
+        <h3>Attio, Mercury, Raycast, Supabase</h3>
+        <p>Attio es la referencia de dashboard "nativo de IA": ordena y muestra sobre qué actuar en lugar de mostrar todo con el mismo peso. Mercury lidera con un solo número y contención. Raycast y Supabase tratan el modo oscuro como tema de primera clase con un solo acento.</p>
+        <div class="src"><a href="https://www.925studios.co/blog/saas-dashboard-design-examples-2026">925studios · ejemplos 2026</a> · <a href="https://www.saasui.design/application/attio">saasui · Attio</a></div>
+      </div>
+      <div class="card">
+        <h3>Cómo se construyen: shadcn/ui + Tremor</h3>
+        <p>shadcn/ui pasó a Base UI como primitiva por defecto en julio de 2026 (Radix sigue soportado) y tiene bloques de dashboard y sidebar listos. El patrón común de 2026 es shadcn como base y Tremor para los gráficos. Todo React, código abierto.</p>
+        <div class="src"><a href="https://ui.shadcn.com/docs/changelog/2026-07-base-ui-default">shadcn · Base UI por defecto</a> · <a href="https://ui.shadcn.com/docs/changelog/2026-02-blocks">bloques</a></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PATRONES ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Ocho patrones que comparten los mejores</h2>
+      <p>Independientes del estilo. Son la diferencia entre "bonito" y "de escala global".</p>
+    </div>
+    <div class="card">
+      <ol class="num">
+        <li><b>Un solo acento, todo lo demás neutro.</b><span>Stripe índigo, Linear violeta, Vercel negro, Notion azul solo en enlaces. El color de estado (verde, ámbar, rojo) es aparte y nunca decora.</span></li>
+        <li><b>Tipografía como identidad.</b><span>Söhne, Geist, Inter afinada con sets estilísticos. Cifras tabulares siempre. Una familia para la interfaz y una mono para los números.</span></li>
+        <li><b>Escala de grises decidida, no heredada.</b><span>Notion cálida, Linear fría en LCH, Vercel pura. El gris lleva la temperatura de la marca.</span></li>
+        <li><b>Modo oscuro nativo.</b><span>Tokens propios para cada tema, no una inversión. Linear y Supabase lo diseñan primero.</span></li>
+        <li><b>Jerarquía por peso, no por cajas.</b><span>Bordes finos, sombras casi invisibles, pocas tarjetas. El énfasis se pone con tamaño y peso de la letra.</span></li>
+        <li><b>Densidad con aire.</b><span>Tablas de 13 px con filas de 40 px, sidebar de 200 a 220 px, contenido a 1 200 px. Mucho dato, nada apretado.</span></li>
+        <li><b>Prioriza en vez de mostrar.</b><span>La tendencia 2026 es el dashboard que resume y dice qué hacer (Attio, Hex), con revelación progresiva. Ya lo tenemos en "Lo que importa esta semana" y en el radar de ventas.</span></li>
+        <li><b>Teclado y paleta de comandos.</b><span>Linear y Raycast nacen ahí. Un ⌘K que busque videos, marcas, campañas y acciones es lo que más "producto serio" transmite.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= DIRECCIONES ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Las tres direcciones</h2>
+      <p>Cada una es una hoja de estilos completa sobre el mismo producto. Los cuatro colores de red pasaron el validador de paleta en claro y oscuro para las tres.</p>
+    </div>
+
+    <!-- GEIST -->
+    <div class="dir">
+      <div class="dir-head">
+        <div>
+          <div class="kicker">01 · lo que ya tenemos en el localhost</div>
+          <h2>Geist</h2>
+          <p class="thesis">Blanco, negro y gris. Cero acento de color, mono para los números, hairlines. Se siente como infraestructura: Vercel, Resend, Cal.com.</p>
+          <p class="refs">Referentes: Vercel Geist, Cal.com, Resend.</p>
+          <div class="swatches"><span class="sw"><i style="background:#ffffff"></i>#FFFFFF</span><span class="sw"><i style="background:#171717"></i>#171717</span><span class="sw"><i style="background:#525252"></i>#525252</span><span class="sw"><i style="background:#eaeaea"></i>#EAEAEA</span><span class="sw"><i style="background:#000000"></i>#000000 oscuro</span></div>
+        </div>
+        <dl class="facts">
+          <dt>Interfaz</dt><dd style="font-family:'Geist',system-ui,sans-serif">Geist · 400 / 500 / 600</dd>
+          <dt>Números</dt><dd style="font-family:'Geist Mono',monospace">Geist Mono · 412 K · COP 9,4 M</dd>
+          <dt>Acento</dt><dd>Negro puro (blanco en oscuro)</dd>
+          <dt>Radio</dt><dd>6 px · sin sombras</dd>
+          <dt>Temperatura</dt><dd>Neutra, gris puro</dd>
+          <dt>Gráficos</dt><dd>Énfasis en negro, resto en gris; solo las redes tienen color</dd>
+        </dl>
+      </div>
+      <div class="samples">
+        <div class="sample-wrap"><div class="lbl">claro</div>
+          <div class="sample geist-l">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="2" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="2" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="2" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="2" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="2" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="2" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="2" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="2" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="2" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="2" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="2" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="2" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="sample-wrap"><div class="lbl">oscuro</div>
+          <div class="sample geist-d">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="2" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="2" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="2" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="2" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="2" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="2" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="2" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="2" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="2" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="2" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="2" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="2" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="verdict">
+        <div><b>A favor</b><ul><li>Serio y atemporal; nunca se ve "de plantilla".</li><li>Los colores de red destacan porque nada más compite.</li><li>Ya está construido.</li></ul></div>
+        <div><b>En contra</b><ul><li>Sin color de marca: difícil de recordar en un pitch o un anuncio.</li><li>Se parece a demasiadas herramientas de desarrolladores.</li><li>Frío para un creador que no es técnico.</li></ul></div>
+        <div><b>Quién lo elegiría</b><ul><li>Un equipo que quiere que el dato sea el protagonista absoluto.</li><li>Sirve como "modo denso" para agencias que viven en tablas.</li></ul></div>
+      </div>
+    </div>
+
+    <!-- SIGNAL -->
+    <div class="dir" style="border-color: var(--accent)">
+      <div class="dir-head">
+        <div>
+          <div class="kicker">02 · recomendada</div>
+          <h2>Signal</h2>
+          <p class="thesis">Lienzo gris frío, tarjetas blancas con una sombra casi invisible y un solo acento violeta, heredado del violeta de MultiCampaign. Es el lenguaje de Stripe y Linear aplicado a creadores.</p>
+          <p class="refs">Referentes: Stripe, Linear, Attio, Mercury.</p>
+          <div class="swatches"><span class="sw"><i style="background:#f6f7f9"></i>#F6F7F9</span><span class="sw"><i style="background:#0e1116"></i>#0E1116</span><span class="sw"><i style="background:#4a5160"></i>#4A5160</span><span class="sw"><i style="background:#5a4fcf"></i>#5A4FCF acento</span><span class="sw"><i style="background:#9d94ff"></i>#9D94FF oscuro</span><span class="sw"><i style="background:#0b0d12"></i>#0B0D12 fondo oscuro</span></div>
+        </div>
+        <dl class="facts">
+          <dt>Interfaz</dt><dd style="font-family:'Instrument Sans',system-ui,sans-serif">Instrument Sans · 400 / 500 / 600</dd>
+          <dt>Números</dt><dd style="font-family:'JetBrains Mono',monospace">JetBrains Mono · 412 K · COP 9,4 M</dd>
+          <dt>Acento</dt><dd>Violeta #5A4FCF; en oscuro #9D94FF</dd>
+          <dt>Radio</dt><dd>10 px · sombra de 1 px</dd>
+          <dt>Temperatura</dt><dd>Fría, gris azulado</dd>
+          <dt>Gráficos</dt><dd>Énfasis en violeta; navegación activa en violeta lavado</dd>
+        </dl>
+      </div>
+      <div class="samples">
+        <div class="sample-wrap"><div class="lbl">claro</div>
+          <div class="sample signal-l">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="2" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="2" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="2" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="2" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="2" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="2" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="2" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="2" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="2" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="2" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="2" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="2" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="sample-wrap"><div class="lbl">oscuro</div>
+          <div class="sample signal-d">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="2" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="2" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="2" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="2" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="2" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="2" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="2" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="2" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="2" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="2" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="2" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="2" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="verdict">
+        <div><b>A favor</b><ul><li>Es el lenguaje que agencias, marcas e inversionistas reconocen como "software serio".</li><li>Tiene color de marca sin ruido: un violeta que ya es de MultiCampaign.</li><li>Modo oscuro nativo con tokens propios, como Linear.</li></ul></div>
+        <div><b>En contra</b><ul><li>El violeta es el acento más usado del SaaS; lo distingue la tipografía y la voz, no el color.</li><li>Pide disciplina: si se añade un segundo acento, se rompe.</li></ul></div>
+        <div><b>Quién lo elegiría</b><ul><li>Una startup que va a vender a agencias y a levantar capital.</li><li>Escala bien: la misma hoja sirve para creador, agencia y portal de la marca.</li></ul></div>
+      </div>
+    </div>
+
+    <!-- STUDIO -->
+    <div class="dir">
+      <div class="dir-head">
+        <div>
+          <div class="kicker">03 · la más humana</div>
+          <h2>Studio</h2>
+          <p class="thesis">Papel cálido, tinta negra, titulares en serif, esquinas redondas y más aire. Notion en su versión más editorial: se siente como un cuaderno, no como una consola.</p>
+          <p class="refs">Referentes: Notion (grises cálidos), Attio, Clay.</p>
+          <div class="swatches"><span class="sw"><i style="background:#fbfaf7"></i>#FBFAF7</span><span class="sw"><i style="background:#1c1b18"></i>#1C1B18</span><span class="sw"><i style="background:#55524a"></i>#55524A</span><span class="sw"><i style="background:#e6e2d9"></i>#E6E2D9</span><span class="sw"><i style="background:#1f7a4d"></i>#1F7A4D positivo</span><span class="sw"><i style="background:#131210"></i>#131210 oscuro</span></div>
+        </div>
+        <dl class="facts">
+          <dt>Titulares</dt><dd style="font-family:'Newsreader',Georgia,serif; font-size: 16px">Newsreader · 500, óptico</dd>
+          <dt>Interfaz</dt><dd style="font-family:'Figtree',system-ui,sans-serif">Figtree · 400 / 500 / 600</dd>
+          <dt>Números</dt><dd style="font-family:'Newsreader',Georgia,serif">412 K · COP 9,4 M en serif</dd>
+          <dt>Acento</dt><dd>Tinta negra (Notion, Attio); verde solo para lo positivo</dd>
+          <dt>Radio</dt><dd>12 px · botones y pastillas redondas · sin sombras</dd>
+          <dt>Temperatura</dt><dd>Cálida, gris con base amarilla</dd>
+        </dl>
+      </div>
+      <div class="samples">
+        <div class="sample-wrap"><div class="lbl">claro</div>
+          <div class="sample studio-l">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="3" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="3" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="3" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="3" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="3" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="3" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="3" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="3" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="3" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="3" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="3" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="3" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="sample-wrap"><div class="lbl">oscuro</div>
+          <div class="sample studio-d">
+            <div class="s-side"><div class="s-brand"><span class="dots"><i></i><i></i><i></i><i></i></span>MultiCampaign</div><div class="s-nav"><span class="on">Resumen</span><span>Mis videos</span><span>Tendencias</span><span>Ideas y guiones</span><span>Ventas</span><span>Finanzas</span></div></div>
+            <div class="s-main">
+              <div class="s-h1">Todas tus redes en una sola lectura</div>
+              <div class="s-kpis"><div><small>Seguidores</small><b>412 K</b><em>▲ 3,8 %</em></div><div><small>Views 30 d</small><b>2,7 M</b><em>▲ 12,4 %</em></div><div><small>No seguidores</small><b>61 %</b><em>▲ 7,0 %</em></div></div>
+              <div class="s-row">
+                <div class="s-box"><div class="t">Views por semana</div><svg viewBox="0 0 160 52"><g><rect x="4" y="30" width="10" height="20" rx="3" fill="var(--s-tiktok)"/><rect x="16" y="22" width="10" height="28" rx="3" fill="var(--s-tiktok)"/><rect x="28" y="26" width="10" height="24" rx="3" fill="var(--s-tiktok)"/><rect x="40" y="12" width="10" height="38" rx="3" fill="var(--s-tiktok)"/><rect x="52" y="20" width="10" height="30" rx="3" fill="var(--s-tiktok)"/><rect x="64" y="16" width="10" height="34" rx="3" fill="var(--s-tiktok)"/><rect x="80" y="34" width="10" height="16" rx="3" fill="var(--s-instagram)"/><rect x="92" y="30" width="10" height="20" rx="3" fill="var(--s-instagram)"/><rect x="104" y="28" width="10" height="22" rx="3" fill="var(--s-instagram)"/><rect x="116" y="24" width="10" height="26" rx="3" fill="var(--s-instagram)"/><rect x="128" y="26" width="10" height="24" rx="3" fill="var(--s-instagram)"/><rect x="140" y="18" width="10" height="32" rx="3" fill="var(--s-instagram)"/><line x1="0" y1="50.5" x2="160" y2="50.5" stroke="var(--s-border)"/></g></svg></div>
+                <div class="s-box"><div class="t">Pipeline</div><div class="s-tr"><span>Fresko Market</span><span class="n">COP 14,2 M</span><span class="s-pill a">Propuesta</span></div><div class="s-tr"><span>Café Alma</span><span class="n">COP 12 M</span><span class="s-pill g">Al día</span></div><div class="s-tr"><span>Sabores Caseros</span><span class="n">COP 16 M</span><span class="s-pill a">Negociación</span></div></div>
+              </div>
+              <div class="s-btns"><span class="p">Generar media kit</span><span>Ver tabla</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="verdict">
+        <div><b>A favor</b><ul><li>Cercano para un creador: se parece a sus herramientas de escribir, no a una consola.</li><li>El serif en cifras y titulares es memorable y casi nadie lo usa en analítica.</li><li>Perfecto para lo que la marca recibe: media kit, cotización, reporte.</li></ul></div>
+        <div><b>En contra</b><ul><li>Menos denso: las tablas grandes de agencia respiran de más.</li><li>El serif exige cuidado en tamaños pequeños y en modo oscuro.</li><li>Sin color de acento, la navegación activa se apoya solo en el peso.</li></ul></div>
+        <div><b>Quién lo elegiría</b><ul><li>Un producto que quiere sentirse como un estudio creativo.</li><li>Ideal como identidad del sitio de marketing y de los documentos que salen hacia las marcas.</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= RECOMENDACIÓN ================= -->
+  <section>
+    <div class="reco">
+      <div class="eyebrow">Recomendación</div>
+      <h2>Signal en el producto, Studio en lo que ve la marca, Geist como modo denso</h2>
+      <p>El producto lo usan a diario creadores y agencias, y lo evalúan marcas e inversionistas. Signal es el lenguaje que esos cuatro públicos ya leen como "empresa de software seria", y hereda el violeta de MultiCampaign en vez de inventar un color nuevo. Studio no se pierde: es la identidad del media kit, la cotización y el reporte de campaña, que son documentos que persuaden, no consolas que se operan. Y Geist queda como ajuste de densidad para quien vive en tablas.</p>
+      <div class="split">
+        <div>
+          <h3>Qué define a la marca visual</h3>
+          <ul>
+            <li>Una marca de cuatro puntos, uno por red, que ya existe y funciona como favicon, avatar y sello.</li>
+            <li>Violeta #5A4FCF como único acento; verde, ámbar y rojo solo para estado.</li>
+            <li>Instrument Sans para la interfaz y JetBrains Mono para cifras. Newsreader aparece solo en documentos hacia marcas.</li>
+            <li>Grises fríos en el producto, cálidos en los documentos. La temperatura dice en qué contexto estás.</li>
+            <li>Voz: precisa, directa, cómplice del creador. Dice "cuánto cobrar", no "optimiza tu monetización".</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Lo que falta decidir</h3>
+          <ul>
+            <li>El nombre. "MultiCampaign Creadores" es un marcador. El nombre debería ser corto, pronunciable igual en español e inglés, con dominio disponible y sin la palabra "creator".</li>
+            <li>Si el violeta se mantiene tal cual o se afina en LCH para que el claro y el oscuro tengan la misma luminosidad percibida, como hace Linear.</li>
+            <li>Si el modo oscuro es el predeterminado. Tres de cada cuatro SaaS de diseño destacado lo son en 2026; para creadores el claro sigue siendo más seguro.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= UX ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Mejoras de experiencia que valen más que el estilo</h2>
+      <p>Ordenadas por impacto. Las primeras cuatro son las que hacen que el producto se sienta de escala global antes de cambiar un solo color.</p>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Mejora</th><th>Qué es</th><th>Quién lo hace bien</th><th>Cuándo</th></tr></thead>
+        <tbody>
+          <tr><td>Paleta de comandos ⌘K</td><td>Buscar videos, marcas, campañas y ejecutar acciones desde el teclado.</td><td>Linear, Raycast, Vercel</td><td><span class="pill pill-accent">Ahora</span></td></tr>
+          <tr><td>Cambio de espacio creador ↔ agencia</td><td>Selector arriba a la izquierda, como el de equipos de Vercel. La agencia ve su roster; el creador, sus cuentas.</td><td>Vercel, Notion, Linear</td><td><span class="pill pill-accent">Ahora</span></td></tr>
+          <tr><td>Estados vacíos que enseñan</td><td>Cada módulo sin datos explica qué conectar y qué pasará. Hoy el mock siempre tiene datos.</td><td>Stripe, Notion</td><td><span class="pill pill-accent">Ahora</span></td></tr>
+          <tr><td>Onboarding en lista de tareas</td><td>Conecta redes → define nicho → vigila 5 cuentas → genera media kit. Se ve el progreso.</td><td>Stripe, Supabase</td><td><span class="pill pill-accent">Ahora</span></td></tr>
+          <tr><td>"Por qué este número"</td><td>Cada KPI abre su fuente, su fecha y su fórmula. Es lo que hace defendible el reporte a la marca.</td><td>Mercury, Attio</td><td><span class="pill pill-warn">Después</span></td></tr>
+          <tr><td>Bandeja de notificaciones</td><td>Señales del radar, seguimientos vencidos, pagos recibidos, videos outlier. Una sola bandeja.</td><td>Linear, Attio</td><td><span class="pill pill-warn">Después</span></td></tr>
+          <tr><td>Vistas guardadas y filtros persistentes</td><td>"Mis outliers de TikTok", "Deals que vencen esta semana". Se comparten con el equipo.</td><td>Linear, Attio</td><td><span class="pill pill-warn">Después</span></td></tr>
+          <tr><td>Densidad ajustable</td><td>Cómodo / compacto. Compacto es Geist; cómodo es Signal.</td><td>Linear, Gmail</td><td><span class="pill pill-warn">Después</span></td></tr>
+          <tr><td>Navegación móvil inferior</td><td>Resumen, Ideas, Ventas, Finanzas, Más. El creador vive en el teléfono.</td><td>Mercury, Notion</td><td><span class="pill pill-warn">Después</span></td></tr>
+          <tr><td>Atajos de teclado visibles</td><td>Un "?" que muestra los atajos. Cuesta poco y transmite madurez.</td><td>Linear, Raycast</td><td><span class="pill">Luego</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= COMPETENCIA ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>De qué diferenciarse</h2>
+      <p>Un hallazgo que importa más que el estilo.</p>
+    </div>
+    <div class="grid g2">
+      <div class="card">
+        <h3>Beacons ya vende media kit, facturación y outreach</h3>
+        <p>Su plan gratuito incluye tienda, media kit con IA, facturación de deals con marcas y outreach a marcas con IA. Subió el plan Pro de 9 a 15 dólares en noviembre de 2025. Es la referencia directa de "back office del creador", centrada en Estados Unidos y en el link-in-bio.</p>
+        <div class="src"><a href="https://www.theleap.co/blog/beacons-vs-linktree/">theleap.co · Beacons vs Linktree</a> · <a href="https://linke.ro/blog/beacons-vs-linktree">linke.ro</a></div>
+      </div>
+      <div class="card">
+        <h3>Dónde ganamos</h3>
+        <p>Nadie junta las tres capas: métricas propias con puntaje frente a la mediana, tendencias del nicho que terminan en guion, y un radar de marcas que alimenta el CRM y el reporte de campaña. Y nadie lo hace en español, con pesos, para agencias latinoamericanas. La diferenciación visual debe subrayar eso: dato serio, no link-in-bio de colores.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PASOS ================= -->
+  <section>
+    <div class="sec-head"><h2>Siguientes pasos</h2></div>
+    <div class="card">
+      <ol class="num">
+        <li><b>Elegir la dirección del producto.</b><span>Probar las tres en el localhost con el selector de la barra superior, en claro y en oscuro, y en el teléfono.</span></li>
+        <li><b>Fijar la hoja elegida como base.</b><span>Convertirla en tokens (color, tipo, espacio, radio, sombra) para que el desarrollo real con shadcn/ui o Base UI los consuma tal cual.</span></li>
+        <li><b>Construir las cuatro mejoras "Ahora".</b><span>Paleta ⌘K, cambio creador ↔ agencia, estados vacíos y onboarding. Se pueden prototipar en el mismo mock.</span></li>
+        <li><b>Decidir el nombre y registrar el dominio.</b><span>Antes del primer pitch a agencias.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>Exploración interna de diseño · las cifras de las muestras son de ejemplo · fuentes enlazadas en cada tarjeta · MultiCampaign, 16 sep 2026.</footer>
+</div>

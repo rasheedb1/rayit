@@ -1,0 +1,12 @@
+node_modules/
+.next/
+dist/
+.turbo/
+.env
+.env.local
+*.log
+.DS_Store
+# Archivos de video y fotogramas de pruebas locales
+tmp/
+apps/media/.venv/
+apps/media/__pycache__/

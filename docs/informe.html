@@ -1,0 +1,380 @@
+<title>Informe MultiCampaign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --line: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --accent: #4a3aa7;
+    --accent-ink: #ffffff;
+    --accent-wash: rgba(74, 58, 167, 0.07);
+    --dot-tiktok: #2a78d6;
+    --dot-instagram: #eb6834;
+    --dot-facebook: #1baf7a;
+    --dot-youtube: #eda100;
+    --ok: #006300;
+    --warn: #8a5a00;
+    --no: #b02a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --line: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #9085e9;
+      --accent-ink: #12102a;
+      --accent-wash: rgba(144, 133, 233, 0.10);
+      --dot-tiktok: #3987e5;
+      --dot-instagram: #d95926;
+      --dot-facebook: #199e70;
+      --dot-youtube: #c98500;
+      --ok: #0ca30c;
+      --warn: #d9a13c;
+      --no: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --line: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #9085e9;
+    --accent-ink: #12102a;
+    --accent-wash: rgba(144, 133, 233, 0.10);
+    --dot-tiktok: #3987e5;
+    --dot-instagram: #d95926;
+    --dot-facebook: #199e70;
+    --dot-youtube: #c98500;
+    --ok: #0ca30c;
+    --warn: #d9a13c;
+    --no: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .page { max-width: 860px; margin: 0 auto; padding: 40px 28px 72px; }
+
+  header { margin-bottom: 8px; }
+  .wordmark {
+    font-family: "Archivo", system-ui, sans-serif;
+    font-weight: 700; font-size: 24px; letter-spacing: -0.02em;
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .dot-grid { display: inline-grid; grid-template-columns: repeat(2, 8px); gap: 3px; }
+  .dot-grid i { width: 8px; height: 8px; border-radius: 2px; display: block; }
+  .dot-grid i:nth-child(1) { background: var(--dot-tiktok); }
+  .dot-grid i:nth-child(2) { background: var(--dot-instagram); }
+  .dot-grid i:nth-child(3) { background: var(--dot-facebook); }
+  .dot-grid i:nth-child(4) { background: var(--dot-youtube); }
+  .eyebrow {
+    font-size: 11.5px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--accent); margin: 14px 0 6px;
+  }
+  h1 {
+    font-family: "Archivo", system-ui, sans-serif;
+    font-size: 33px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;
+    margin: 0 0 10px; text-wrap: balance; max-width: 24ch;
+  }
+  .standfirst { font-size: 16.5px; color: var(--ink-2); max-width: 62ch; margin: 0 0 6px; }
+  .meta-line { font-size: 13px; color: var(--muted); margin-bottom: 34px; }
+
+  h2 {
+    font-family: "Archivo", system-ui, sans-serif;
+    font-size: 21px; font-weight: 700; letter-spacing: -0.015em;
+    margin: 44px 0 12px; text-wrap: balance;
+  }
+  h3 {
+    font-family: "Archivo", system-ui, sans-serif;
+    font-size: 15.5px; font-weight: 600; margin: 26px 0 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  h3 .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  p { margin: 0 0 12px; max-width: 68ch; }
+  ul { margin: 0 0 14px; padding-left: 22px; max-width: 66ch; }
+  li { margin-bottom: 6px; }
+  strong { font-weight: 650; }
+  a { color: var(--accent); }
+
+  .findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 18px 0 6px; }
+  .finding {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .finding .num {
+    font-family: "Archivo", system-ui, sans-serif; font-weight: 700; font-size: 13px;
+    color: var(--accent); letter-spacing: 0.04em; margin-bottom: 6px;
+  }
+  .finding .t { font-weight: 650; margin-bottom: 5px; line-height: 1.35; text-wrap: balance; }
+  .finding .d { font-size: 13.5px; color: var(--ink-2); }
+
+  .table-scroll { overflow-x: auto; margin: 16px 0 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap;
+    vertical-align: bottom;
+  }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 650; white-space: nowrap; }
+  .num-cell { font-variant-numeric: tabular-nums; }
+  .yes { color: var(--ok); font-weight: 650; }
+  .part { color: var(--warn); font-weight: 650; }
+  .not { color: var(--no); font-weight: 650; }
+  .cell-note { display: block; font-weight: 400; font-size: 12.5px; color: var(--muted); }
+
+  .callout {
+    background: var(--accent-wash); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 13px 16px; margin: 16px 0; max-width: 70ch;
+  }
+  .callout p { margin: 0; max-width: none; }
+
+  .risk-list { list-style: none; padding: 0; max-width: none; }
+  .risk-list li {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 8px; max-width: none;
+  }
+  .risk-list .rt { font-weight: 650; }
+  .risk-list .rd { font-size: 13.5px; color: var(--ink-2); }
+
+  .phases { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  @media (max-width: 640px) { .phases { grid-template-columns: 1fr; } }
+  .phase { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .phase .ph-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+  .phase .ph-title { font-family: "Archivo", system-ui, sans-serif; font-weight: 650; margin-bottom: 8px; }
+  .phase ul { margin-bottom: 0; padding-left: 18px; font-size: 13.5px; }
+
+  .dash-link {
+    display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; margin: 18px 0; text-decoration: none; color: var(--ink);
+  }
+  .dash-link:hover { background: var(--accent-wash); }
+  .dash-link .dl-t { font-weight: 650; color: var(--accent); }
+  .dash-link .dl-d { font-size: 13.5px; color: var(--ink-2); margin-top: 3px; }
+
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); max-width: 74ch; }
+  footer p { margin: 4px 0; max-width: none; }
+
+  @media print {
+    :root {
+      --bg: #ffffff; --surface: #ffffff; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+      --line: #e1e0d9; --border: rgba(11, 11, 11, 0.16); --accent: #4a3aa7;
+      --accent-wash: rgba(74, 58, 167, 0.07);
+      --dot-tiktok: #2a78d6; --dot-instagram: #eb6834; --dot-facebook: #1baf7a; --dot-youtube: #eda100;
+      --ok: #006300; --warn: #8a5a00; --no: #b02a2a;
+    }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 12.5px; }
+    .page { max-width: none; padding: 0; }
+    .table-scroll { overflow: visible; }
+    table { min-width: 0; font-size: 10.5px; }
+    th, td:first-child { white-space: normal; }
+    th, td { padding: 7px 8px; }
+    h2 { break-after: avoid; }
+    .finding, .phase, .risk-list li, .table-scroll { break-inside: avoid; }
+    .dash-link:after { content: " — " attr(href); font-size: 11px; color: var(--muted); }
+  }
+</style>
+
+<div class="page">
+  <header>
+    <span class="wordmark" translate="no">
+      <span class="dot-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      MultiCampaign
+    </span>
+    <div class="eyebrow">Informe de viabilidad · Publicación por API y analítica multi-cuenta</div>
+    <h1>Una red de cuentas con contenido IA, operada por API</h1>
+    <p class="standfirst">Qué permite hoy cada plataforma para publicar video corto sin subida manual, qué demografía entrega cada API para el dashboard, y el plan para pasar de 5 a 50–100 cuentas sin poner en riesgo la operación.</p>
+    <p class="meta-line">Agosto de 2026 · Investigación verificada contra documentación oficial de TikTok, Meta y Google</p>
+  </header>
+
+  <h2>Respuesta corta</h2>
+  <p><strong>Sí es viable: las cuatro plataformas permiten subir video por API oficialmente.</strong> El código no es el cuello de botella — los trámites sí: TikTok y YouTube exigen <strong>auditar la app</strong> antes de que los posts salgan públicos, y Meta exige App Review. Tres hallazgos definen el diseño de toda la operación:</p>
+
+  <div class="findings">
+    <div class="finding">
+      <div class="num">HALLAZGO 1</div>
+      <div class="t">La auditoría es el camino crítico, no el desarrollo</div>
+      <div class="d">Sin auditoría, TikTok fuerza los posts a modo privado (y máx. 5 cuentas publicando) y YouTube bloquea los videos como privados. Iniciar los trámites el día 1; mientras tanto, la integración TikTok de Higgsfield (ya auditada) permite publicar en público desde ya.</div>
+    </div>
+    <div class="finding">
+      <div class="num">HALLAZGO 2</div>
+      <div class="t">Demografía edad/sexo por video: solo YouTube</div>
+      <div class="d">TikTok e Instagram entregan edad/sexo únicamente a nivel de audiencia de la cuenta (y con ≥100 seguidores). El dashboard se diseñó para ese mundo real: demografía por cuenta cruzada con métricas por video.</div>
+    </div>
+    <div class="finding">
+      <div class="num">HALLAZGO 3</div>
+      <div class="t">El riesgo no es tener 100 cuentas — es clonar contenido</div>
+      <div class="d">Las políticas de comportamiento inauténtico (Meta, TikTok) y de monetización (YouTube "inauthentic content", 2025) castigan el mismo video replicado en N cuentas. Cuentas de nichos diferenciados con variantes por cuenta = legítimo y seguro.</div>
+    </div>
+  </div>
+
+  <h2>Matriz de plataformas</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Plataforma</th>
+          <th>Publicación por API</th>
+          <th>Límite de posts</th>
+          <th>Requisito crítico</th>
+          <th>Demografía por video</th>
+          <th>Demografía por cuenta</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TikTok</td>
+          <td>Content Posting API</td>
+          <td class="num-cell">~15/día por cuenta<span class="cell-note">6 req/min por token</span></td>
+          <td>Auditoría de la app<span class="cell-note">sin ella: posts privados</span></td>
+          <td><span class="not">No</span><span class="cell-note">solo país, vía Business API</span></td>
+          <td><span class="yes">Sí</span><span class="cell-note">cuenta Business, ≥100 seguidores</span></td>
+        </tr>
+        <tr>
+          <td>Instagram</td>
+          <td>Graph API (Reels)</td>
+          <td class="num-cell">100/día por cuenta<span class="cell-note">ventana móvil de 24 h</span></td>
+          <td>Cuenta profesional + App Review</td>
+          <td><span class="not">No</span></td>
+          <td><span class="yes">Sí</span><span class="cell-note">edad/sexo/ciudad/país, ≥100 seguidores</span></td>
+        </tr>
+        <tr>
+          <td>Facebook</td>
+          <td>Reels Publishing API</td>
+          <td class="num-cell">30 reels/día por página</td>
+          <td>App Review + Business Verification</td>
+          <td><span class="part">Parcial</span><span class="cell-note">edad/sexo en videos clásicos de página</span></td>
+          <td><span class="not">No</span><span class="cell-note">edad/sexo eliminados en 2024; queda geografía</span></td>
+        </tr>
+        <tr>
+          <td>YouTube</td>
+          <td>Data API v3 (Shorts)</td>
+          <td class="num-cell">100 subidas/día por proyecto<span class="cell-note">bucket propio desde jun-2026</span></td>
+          <td>Auditoría de compliance<span class="cell-note">sin ella: videos privados</span></td>
+          <td><span class="yes">Sí</span><span class="cell-note">edad × sexo × país, Analytics API</span></td>
+          <td><span class="yes">Sí</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Lo esencial de cada API</h2>
+
+  <h3><span class="dot" style="background: var(--dot-tiktok)"></span>TikTok — Content Posting API</h3>
+  <ul>
+    <li>Cada cuenta autoriza por OAuth individual (access token de 24 h, refresh de 365 días — rotación continua).</li>
+    <li>En el formulario de auditoría se declara cuántos creadores activos tendrá la app: <strong>declarar la meta de 50–100 desde el inicio</strong>.</li>
+    <li>Conflicto a decidir por cuenta: Creator Rewards (monetización) exige cuenta <em>personal</em>; la demografía por API exige cuenta <em>Business</em>. No hay ambas a la vez.</li>
+  </ul>
+
+  <h3><span class="dot" style="background: var(--dot-instagram)"></span>Instagram — Graph API</h3>
+  <ul>
+    <li>Dos variantes: con Instagram Login (sin página de Facebook — la vía simple para cuentas nuevas) o con Facebook Login.</li>
+    <li>Flujo contenedor → publish con URL pública del video; Reels de 3 s a 15 min, ≤300 MB.</li>
+    <li>Límite verificable en vivo por cuenta con <code>content_publishing_limit</code>.</li>
+  </ul>
+
+  <h3><span class="dot" style="background: var(--dot-facebook)"></span>Facebook — Reels Publishing API</h3>
+  <ul>
+    <li>Tokens de <em>system user</em> del Business Manager no caducan — la mejor base para automatizar; 100 páginas caben en un solo Business Manager verificado.</li>
+    <li>Permite crossposting de un video entre páginas sin re-subirlo.</li>
+    <li>Meta viene recortando métricas (2024–2026): construir sobre <code>media_view</code> y <code>page_follows</code>, no sobre impressions/reach.</li>
+  </ul>
+
+  <h3><span class="dot" style="background: var(--dot-youtube)"></span>YouTube — Data API + Analytics API</h3>
+  <ul>
+    <li>No hay flag "Short": todo video ≤3 min, cuadrado o vertical, se clasifica solo.</li>
+    <li>Cuota nueva (jun-2026): 100 subidas/día por proyecto. 100 cuentas × 1 Short diario = justo el tope → pedir extensión al escalar.</li>
+    <li>La mejor analítica de las cuatro: edad × sexo × país <strong>por video</strong> (una consulta por video), con cuota independiente.</li>
+  </ul>
+
+  <h2>Agregadores: una sola API para todas las redes</h2>
+  <p>Todos los evaluados publican vía las APIs oficiales por OAuth (ninguno automatiza navegador, que es lo que sí arriesga cuentas). Los límites nativos de cada plataforma aplican igual con cualquiera.</p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Servicio</th>
+          <th>5 cuentas</th>
+          <th>~100 cuentas</th>
+          <th>Demografía por API</th>
+          <th>Nota</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Zernio (ex-Late)</td><td class="num-cell">~$18/mes</td><td class="num-cell">~$318/mes</td><td><span class="not">No documentada</span></td><td>2 cuentas gratis; X/Twitter se cobra aparte</td></tr>
+        <tr><td>Post Bridge</td><td class="num-cell">~$14–34/mes</td><td class="num-cell">~$54/mes</td><td><span class="not">No</span></td><td>El más barato a escala; producto muy joven</td></tr>
+        <tr><td>upload-post</td><td class="num-cell">$24/mes</td><td class="num-cell">~$147–438/mes</td><td><span class="not">No</span></td><td>~$2/perfil a escala; convierte specs por red</td></tr>
+        <tr><td>Blotato</td><td class="num-cell">$29/mes</td><td class="num-cell">$97–499/mes</td><td><span class="not">No</span></td><td>Incluye generación IA en el mismo plan</td></tr>
+        <tr><td>Ayrshare</td><td class="num-cell">$149–299/mes</td><td class="num-cell">~$599–1.228/mes</td><td><span class="yes">Sí — el único</span></td><td>El más maduro; demografía por cuenta</td></tr>
+        <tr><td>Postiz (open source)</td><td class="num-cell">$0 self-hosted</td><td class="num-cell">$0 + infraestructura</td><td><span class="part">Con apps propias</span></td><td>Elimina dependencia del proveedor; exige auditar apps propias</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>Recomendación:</strong> fase 1 con Higgsfield para TikTok + Zernio o Post Bridge para el resto (~$20–35/mes). Al escalar: multiposter barato para publicar + lectura de demografía directa contra las APIs nativas con apps propias (gratis y más completa que pagar Ayrshare).</p>
+  </div>
+
+  <h2>Reglas del juego: políticas y monetización</h2>
+  <ul class="risk-list">
+    <li><span class="rt">Multi-cuenta legítima = camino empresarial.</span><span class="rd"> Los límites "3 cuentas por dispositivo" (TikTok) o "5 por app" (Instagram) son de las apps móviles. A escala se opera con Meta Business Manager (system users), TikTok Business Center y canales de marca de YouTube.</span></li>
+    <li><span class="rt">Lo que banea es el patrón, no la cantidad.</span><span class="rd"> Redes de cuentas que simulan independencia, se amplifican entre sí o publican contenido idéntico. Nichos temáticos con identidad transparente y variantes por cuenta = seguro.</span></li>
+    <li><span class="rt">Etiqueta de IA obligatoria</span><span class="rd"> en TikTok, YouTube y Meta para contenido realista generado o alterado con IA (auto-detección por metadatos C2PA). Omitirla reiteradamente conlleva sanciones. Contenido claramente estilizado no la requiere.</span></li>
+    <li><span class="rt">La monetización nativa subió el listón para contenido IA.</span><span class="rd"> YouTube exige originalidad ("inauthentic content", 2025) y 1.000 subs + 10 M vistas de Shorts/90 días; TikTok Creator Rewards exige 10.000 seguidores y cuenta personal; Facebook ~10.000 seguidores. El modelo de ingresos más robusto para esta operación es el previsto: <strong>campañas con marcas y referidos</strong>, donde lo que vale es el alcance demostrable — justo lo que mide el dashboard.</span></li>
+  </ul>
+
+  <h2>Plan por fases</h2>
+  <div class="phases">
+    <div class="phase">
+      <div class="ph-label">Fase 1 · validar</div>
+      <div class="ph-title">5 cuentas, ~$0–35/mes en APIs</div>
+      <ul>
+        <li>Crear 5 cuentas con nichos temáticos diferenciados</li>
+        <li>Registrar apps (Meta, TikTok, Google) e <strong>iniciar auditorías el día 1</strong></li>
+        <li>Publicar TikTok vía Higgsfield; IG/FB/YT vía agregador o apps propias</li>
+        <li>Recolector diario de métricas → Postgres</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <div class="ph-label">Fase 2 · escalar</div>
+      <div class="ph-title">50–100 cuentas con apps auditadas</div>
+      <ul>
+        <li>Apps propias auditadas publicando en las 4 plataformas</li>
+        <li>Pipeline de variantes por cuenta (hook, voz, idioma) sobre cada asset</li>
+        <li>Extensión de cuota de YouTube; varios portfolios de Meta si hace falta</li>
+        <li>Dashboard con data real → media kit para campañas con marcas</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>El dashboard</h2>
+  <p>El mock interactivo ya está construido con la estructura definitiva: KPIs del período, alcance diario por red, audiencia por edad y sexo, alcance por país, % de audiencia nueva, ranking de cuentas y top videos — todo filtrable por período, red, país, edad, sexo y tipo de usuario.</p>
+  <a class="dash-link" href="https://claude.ai/code/artifact/cdcd58ef-d8c7-444a-9000-472dccc6d69f">
+    <span class="dl-t">Abrir el mock del dashboard →</span>
+    <span class="dl-d">Datos simulados deterministas; con data real solo se reemplaza la fuente. La demografía se calcula como alcance estimado (alcance × distribución reportada por cada API).</span>
+  </a>
+
+  <footer>
+    <p>Investigación realizada el 18 de agosto de 2026 con verificación adversarial independiente por tema contra documentación oficial (developers.tiktok.com, developers.facebook.com, developers.google.com) y precios publicados de cada proveedor. Las cifras de límites y precios cambian con frecuencia; verificar antes de contratar.</p>
+    <p>MultiCampaign · documento interno del proyecto.</p>
+  </footer>
+</div>

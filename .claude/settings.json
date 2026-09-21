@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make help)",
+      "Bash(make arranque)",
+      "Bash(make db.info)",
+      "Bash(make db.status)",
+      "Bash(make db.check)",
+      "Bash(make github.status)",
+      "Bash(make github.check)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git fetch*)",
+      "Bash(git remote -v)"
+    ],
+    "deny": [
+      "Read(./platform/.env.local)",
+      "Read(./platform/.env)",
+      "Read(./platform/secrets/*.enc)"
+    ]
+  }
+}

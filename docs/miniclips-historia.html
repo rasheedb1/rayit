@@ -1,0 +1,925 @@
+<title>Miniclips de Historia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #f4f3ee;
+    --card: #fbfaf7;
+    --ink: #16161d;
+    --ink-2: #4a4a58;
+    --ink-3: #82828f;
+    --rule: #dedcd2;
+    --hair: rgba(22, 22, 29, 0.10);
+    --ink-blue: #2f3a9e;
+    --ink-blue-soft: rgba(47, 58, 158, 0.08);
+    --amber: #9a5b06;
+    --amber-soft: rgba(154, 91, 6, 0.09);
+    --green: #2f6a3f;
+    --red: #a83232;
+    --shot: #6b6b78;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --paper: #101014;
+      --card: #191920;
+      --ink: #f2f1ec;
+      --ink-2: #b6b5c0;
+      --ink-3: #83828e;
+      --rule: #2a2a33;
+      --hair: rgba(242, 241, 236, 0.11);
+      --ink-blue: #9aa3f0;
+      --ink-blue-soft: rgba(154, 163, 240, 0.12);
+      --amber: #dda44e;
+      --amber-soft: rgba(221, 164, 78, 0.12);
+      --green: #6fbc80;
+      --red: #e8807f;
+      --shot: #9a99a6;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101014;
+    --card: #191920;
+    --ink: #f2f1ec;
+    --ink-2: #b6b5c0;
+    --ink-3: #83828e;
+    --rule: #2a2a33;
+    --hair: rgba(242, 241, 236, 0.11);
+    --ink-blue: #9aa3f0;
+    --ink-blue-soft: rgba(154, 163, 240, 0.12);
+    --amber: #dda44e;
+    --amber-soft: rgba(221, 164, 78, 0.12);
+    --green: #6fbc80;
+    --red: #e8807f;
+    --shot: #9a99a6;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 880px; margin: 0 auto; padding: 44px 26px 90px; }
+
+  /* ---------- header ---------- */
+  .slate {
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    background: var(--card);
+    padding: 22px 26px 24px;
+    margin-bottom: 34px;
+  }
+  .slate-top {
+    display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px; letter-spacing: 0.13em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 14px;
+    padding-bottom: 12px; border-bottom: 1px solid var(--rule);
+  }
+  .slate-top .proj { color: var(--ink-blue); font-weight: 600; }
+  h1 {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: clamp(30px, 5.4vw, 44px); font-weight: 700;
+    line-height: 1.05; letter-spacing: -0.02em;
+    margin: 0 0 12px; text-wrap: balance; max-width: 17ch;
+  }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 60ch; margin: 0; }
+
+  h2 {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 25px; font-weight: 700; letter-spacing: -0.015em;
+    margin: 52px 0 4px; text-wrap: balance;
+    padding-top: 18px; border-top: 2px solid var(--ink);
+  }
+  h2 .n {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 500;
+    color: var(--ink-blue); letter-spacing: 0.1em; display: block; margin-bottom: 5px;
+  }
+  h3 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 16px; font-weight: 600; margin: 30px 0 7px; letter-spacing: -0.005em;
+  }
+  h4 {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--ink-3); margin: 24px 0 8px;
+  }
+  p { margin: 0 0 13px; max-width: 66ch; }
+  ul, ol { margin: 0 0 14px; padding-left: 20px; max-width: 65ch; }
+  li { margin-bottom: 7px; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+  a { color: var(--ink-blue); text-underline-offset: 2px; }
+  code {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.88em;
+    background: var(--ink-blue-soft); padding: 1px 5px; border-radius: 3px;
+  }
+
+  /* ---------- verdict box (can I see it) ---------- */
+  .verdict { display: grid; gap: 10px; margin: 18px 0 6px; }
+  .v-row {
+    display: grid; grid-template-columns: auto 1fr; gap: 13px; align-items: start;
+    background: var(--card); border: 1px solid var(--hair);
+    border-left: 3px solid var(--ink-3); border-radius: 3px; padding: 13px 16px;
+  }
+  .v-row.yes { border-left-color: var(--green); }
+  .v-row.no { border-left-color: var(--red); }
+  .v-mark {
+    font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 12px;
+    letter-spacing: 0.06em; padding-top: 2px; white-space: nowrap;
+  }
+  .v-row.yes .v-mark { color: var(--green); }
+  .v-row.no .v-mark { color: var(--red); }
+  .v-row p { margin: 0; max-width: none; font-size: 14.5px; }
+  .v-row p + p { margin-top: 5px; color: var(--ink-2); }
+
+  /* ---------- generic card ---------- */
+  .card {
+    background: var(--card); border: 1px solid var(--hair);
+    border-radius: 3px; padding: 17px 20px; margin: 16px 0;
+  }
+  .card > :last-child { margin-bottom: 0; }
+
+  .note {
+    border-left: 3px solid var(--amber); background: var(--amber-soft);
+    border-radius: 0 3px 3px 0; padding: 12px 16px; margin: 16px 0; max-width: 68ch;
+  }
+  .note p { margin: 0; max-width: none; font-size: 14.5px; }
+  .note p + p { margin-top: 7px; }
+  .note .lbl {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--amber);
+    display: block; margin-bottom: 4px;
+  }
+
+  /* ---------- timeline strip ---------- */
+  .strip { margin: 22px 0 8px; }
+  .strip-bar { display: flex; gap: 2px; height: 44px; }
+  .strip-seg {
+    flex: 1; border-radius: 2px; display: flex; align-items: center; justify-content: center;
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; font-weight: 600;
+    color: var(--card); letter-spacing: 0.04em; min-width: 0; overflow: hidden;
+  }
+  .seg-hook { background: var(--ink-blue); flex: 1.15; }
+  .seg-build { background: var(--shot); }
+  .seg-turn { background: var(--amber); flex: 1.15; }
+  .seg-payoff { background: var(--ink); flex: 1.15; }
+  :root[data-theme="dark"] .seg-payoff,
+  :root:where(:not([data-theme="light"])) .seg-payoff { color: var(--paper); }
+  .strip-scale {
+    display: flex; justify-content: space-between; margin-top: 5px;
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3);
+  }
+  .strip-legend {
+    display: flex; gap: 16px; flex-wrap: wrap; margin-top: 11px;
+    font-size: 13px; color: var(--ink-2);
+  }
+  .strip-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .strip-legend i { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  /* ---------- tables ---------- */
+  .t-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--hair); border-radius: 3px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 520px; background: var(--card); }
+  th {
+    text-align: left; font-family: "IBM Plex Mono", monospace;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-3); padding: 10px 13px; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 9px 13px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; }
+  .mono { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- script blocks ---------- */
+  .script-head {
+    display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+    margin: 30px 0 3px; padding-bottom: 9px; border-bottom: 1px solid var(--rule);
+  }
+  .script-head .st {
+    font-family: "Fraunces", Georgia, serif; font-size: 21px; font-weight: 700; letter-spacing: -0.01em;
+  }
+  .script-head .sm {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-3); margin-left: auto;
+  }
+  .tl-line {
+    font-size: 13.5px; color: var(--ink-2); background: var(--ink-blue-soft);
+    border-radius: 3px; padding: 10px 14px; margin: 12px 0 18px; max-width: none;
+  }
+  .tl-line b { color: var(--ink-blue); font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-bottom: 3px; }
+
+  .blk {
+    display: grid; grid-template-columns: 74px 1fr; gap: 16px;
+    padding: 15px 0; border-bottom: 1px solid var(--rule);
+  }
+  .blk:last-of-type { border-bottom: 0; }
+  .blk-meta { font-family: "IBM Plex Mono", monospace; font-size: 11px; line-height: 1.5; }
+  .blk-meta .tc { color: var(--ink); font-weight: 600; display: block; }
+  .blk-meta .role {
+    display: inline-block; margin-top: 5px; padding: 1px 6px; border-radius: 2px;
+    font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+    background: var(--shot); color: var(--card);
+  }
+  .blk-meta .role.hook { background: var(--ink-blue); }
+  .blk-meta .role.turn { background: var(--amber); }
+  .blk-meta .role.payoff { background: var(--ink); color: var(--paper); }
+  .blk-meta .wc { display: block; margin-top: 5px; color: var(--ink-3); font-size: 10px; }
+  .vo {
+    font-family: "Fraunces", Georgia, serif; font-size: 17.5px; line-height: 1.42;
+    margin: 0 0 10px; max-width: 54ch; text-wrap: pretty;
+  }
+  .vo.fixed { color: var(--ink); }
+  .shots { list-style: none; margin: 0 0 8px; padding: 0; max-width: none; }
+  .shots li {
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; line-height: 1.45;
+    color: var(--shot); margin-bottom: 3px; padding-left: 20px; position: relative;
+  }
+  .shots li::before {
+    content: counter(shot); counter-increment: shot;
+    position: absolute; left: 0; color: var(--ink-3); font-size: 10px;
+  }
+  .shots { counter-reset: shot; }
+  .tl-state {
+    font-size: 12.5px; color: var(--ink-3); font-style: italic; margin: 0; max-width: 58ch;
+  }
+  .fix {
+    background: var(--amber-soft); border-left: 2px solid var(--amber);
+    padding: 8px 12px; margin: 9px 0 0; border-radius: 0 3px 3px 0; font-size: 13px; max-width: 58ch;
+  }
+  .fix b {
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--amber); display: block; margin-bottom: 3px;
+  }
+
+  .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 10px; margin: 16px 0; }
+  .acct {
+    background: var(--card); border: 1px solid var(--hair); border-radius: 3px; padding: 12px 14px;
+  }
+  .acct .h { font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600; color: var(--ink-blue); word-break: break-all; }
+  .acct .f { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+  .acct .w { font-size: 12.5px; color: var(--ink-3); margin-top: 5px; }
+
+  footer {
+    margin-top: 56px; padding-top: 18px; border-top: 2px solid var(--ink);
+    font-size: 13px; color: var(--ink-3);
+  }
+  footer p { max-width: 72ch; }
+
+  @media (max-width: 620px) {
+    .blk { grid-template-columns: 1fr; gap: 8px; }
+    .blk-meta { display: flex; gap: 10px; align-items: center; }
+    .blk-meta .wc, .blk-meta .role { margin-top: 0; }
+  }
+  @media print {
+    :root { --paper:#fff; --card:#fff; --ink:#16161d; --ink-2:#4a4a58; --ink-3:#82828f;
+            --rule:#dedcd2; --hair:rgba(22,22,29,.16); --ink-blue:#2f3a9e; --amber:#9a5b06; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11.5px; }
+    .page { max-width: none; padding: 0; }
+    h2 { break-after: avoid; } .blk, .card, .note, .v-row { break-inside: avoid; }
+    table { min-width: 0; font-size: 10px; } .t-wrap { overflow: visible; }
+  }
+</style>
+
+<div class="page">
+  <div class="slate">
+    <div class="slate-top">
+      <span class="proj">MultiCampaign</span>
+      <span>Nicho · Historia</span>
+      <span>Formato · 90 s vertical</span>
+      <span>Agosto 2026</span>
+    </div>
+    <h1>Cómo se hace un miniclip de historia</h1>
+    <p class="lede">La fórmula de un clip de noventa segundos que retiene: la estructura por bloques, el pipeline de producción con IA, y tres guiones completos listos para analizar y rodar.</p>
+  </div>
+
+  <h2><span class="n">01</span>Sobre tus referencias</h2>
+
+  <div class="verdict">
+    <div class="v-row no">
+      <span class="v-mark">NO</span>
+      <div>
+        <p><strong>El Reel de Instagram: no puedo verlo.</strong></p>
+        <p>Instagram exige sesión iniciada y me devuelve una página vacía. Lo único que logré sacar fue la ficha del embed: la cuenta es <strong>@polymaths.unite</strong>, con 146.000 seguidores y 184 publicaciones. Ni el video ni el caption.</p>
+      </div>
+    </div>
+    <div class="v-row yes">
+      <span class="v-mark">SÍ</span>
+      <div>
+        <p><strong>El archivo <code>test1.mov</code>: lo vi completo.</strong></p>
+        <p>Así es como funciona. Un archivo de video local lo puedo abrir, medir y extraer fotograma por fotograma para analizarlo. Es la vía correcta: <strong>descarga el clip y déjalo en una carpeta</strong>, como hiciste.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Lo que encontré en tu clip</h3>
+  <p>Son 6,15 segundos a 60 fotogramas por segundo, 876 × 1550 píxeles (vertical 9:16), grabados de pantalla — se ve el cursor y el botón de silencio de Instagram. Es el arranque del Reel, no la pieza entera, así que analizo el hook y la primera transición.</p>
+
+  <h4>La fórmula que usa</h4>
+  <p>Lo interesante no es el dibujo: es que el clip monta <strong>dos capas de texto simultáneas</strong>, y esa es la mecánica que hay que copiar.</p>
+  <ul>
+    <li><strong>Capa fija — el hook escrito.</strong> «What if the only thing between you and a new skill was a decision?» se queda arriba, quieto, durante toda la primera escena, y desaparece al cambiar de escena. Sirve para quien mira sin sonido: la promesa está escrita antes de que la voz llegue a decirla.</li>
+    <li><strong>Capa dinámica — subtítulo karaoke.</strong> Dos o tres palabras a la vez en el tercio medio, sincronizadas con la voz: «only thing» → «standing between you» → «and a new» → «skill was a» → «decision» → «Benjamin Franklin left» → «school at 10». Va en el centro, no abajo, para esquivar la interfaz de la app.</li>
+  </ul>
+  <p>La tipografía es una serif en negrita, blanca con contorno negro grueso. Es una elección deliberada y buena: casi todo el formato corto usa sans, y la serif le da aire de libro sin costar legibilidad.</p>
+
+  <h4>El ángulo del contenido</h4>
+  <p>No es historia pura: es <strong>historia como vehículo de un mensaje motivacional</strong>. El hecho (Franklin dejó la escuela a los diez años) llega después de la pregunta que interpela al espectador sobre sí mismo. Ese giro es lo que le da alcance fuera del nicho de aficionados a la historia, y es replicable: hecho histórico + espejo para el espectador.</p>
+
+  <h4>Y lo que yo haría distinto</h4>
+  <p>Cuatro defectos concretos, visibles en seis segundos, que conviene no heredar:</p>
+  <ul>
+    <li><strong>El personaje cambia de diseño entre escenas.</strong> En la imprenta, Franklin es un dibujo con volumen y sombreado; frente a la escuela es un monigote de palitos con la misma ropa. Es el fallo clásico de consistencia al generar planos sueltos, y se arregla con una ficha de personaje reutilizada en todos los planos.</li>
+    <li><strong>La paleta salta.</strong> Escena uno: marrones cálidos de taller. Escena dos: azules y verdes de campo. Cada plano parece de un video distinto. Se fija una paleta por clip y no se toca.</li>
+    <li><strong>La segunda escena tiene marco.</strong> Se ve un borde crema alrededor: el plano generado no llenó el encuadre vertical. En una plataforma donde el video ocupa toda la pantalla, ese margen se lee como error.</li>
+    <li><strong>El ritmo va lento para el formato.</strong> Dos escenas en seis segundos son tres segundos por plano. El punto óptimo medido está entre 1,5 y 2 segundos por evento visual.</li>
+  </ul>
+
+  <div class="note">
+    <p><span class="lbl">Cómo pasarme más referencias</span></p>
+    <p>Lo que funciona: <strong>el archivo de video descargado</strong> (.mp4 o .mov, en cualquier carpeta) — lo abro, lo mido y lo veo. También sirve una captura de pantalla, o el enlace de <strong>TikTok y YouTube</strong>, que sí puedo leer sin sesión.</p>
+      <p>Lo que no funciona: enlaces de Instagram y Facebook, que exigen login. Si el Reel entero te sirve como referencia, descárgalo completo — con seis segundos veo el hook, pero no la estructura, que es donde está lo bueno.</p>
+  </div>
+
+  <h2><span class="n">02</span>La forma de un clip de noventa segundos</h2>
+
+  <p>Un miniclip histórico se escribe en <strong>nueve bloques de diez segundos</strong>. Cada bloque es una idea, una línea de narración y cinco planos de unos dos segundos. Esa rejilla no es arbitraria: es la que usa el pipeline de video narrado de Higgsfield, y encaja con el ritmo visual que miden los estudios de retención.</p>
+
+  <div class="strip">
+    <div class="strip-bar">
+      <div class="strip-seg seg-hook">HOOK</div>
+      <div class="strip-seg seg-build">2</div>
+      <div class="strip-seg seg-build">3</div>
+      <div class="strip-seg seg-build">4</div>
+      <div class="strip-seg seg-build">5</div>
+      <div class="strip-seg seg-build">6</div>
+      <div class="strip-seg seg-build">7</div>
+      <div class="strip-seg seg-turn">GIRO</div>
+      <div class="strip-seg seg-payoff">CIERRE</div>
+    </div>
+    <div class="strip-scale"><span>0:00</span><span>0:30</span><span>1:00</span><span>1:30</span></div>
+    <div class="strip-legend">
+      <span><i style="background:var(--ink-blue)"></i>Hook: la frase que detiene el scroll</span>
+      <span><i style="background:var(--shot)"></i>Build: pruebas que escalan</span>
+      <span><i style="background:var(--amber)"></i>Giro: contradice lo que creías</span>
+      <span><i style="background:var(--ink)"></i>Cierre: reencuadra el hook</span>
+    </div>
+  </div>
+
+  <h3>Las cinco reglas que hacen la diferencia</h3>
+
+  <p><strong>1. El hook abre en seco, con ocho palabras o menos.</strong> Sin saludo, sin «hoy les voy a contar», sin logo. El dato más raro dicho plano — la sobriedad agranda la cifra. Después el bloque se completa hasta las veinte o veintitrés palabras. Escribe el hook <em>al final</em>, cuando ya tengas el cuerpo, y prueba varias versiones sobre el mismo guion.</p>
+
+  <p><strong>2. Nunca «y entonces»: siempre «pero» o «por lo tanto».</strong> Es la regla de los guionistas de South Park y en historia importa más que en ningún otro nicho, porque la cronología es por defecto una cadena de «nació, luego gobernó, luego murió» — exactamente la estructura que aplana la retención. Al terminar el guion, marca los conectores: dos «y entonces» seguidos señalan el tramo que hay que reescribir como conflicto o como consecuencia.</p>
+
+  <p><strong>3. La prueba de reordenamiento.</strong> Si puedes barajar los bloques del medio sin que se pierda nada, hiciste una lista en vez de una escalada. Cada bloque debe ser más grande, más raro o más específico que el anterior.</p>
+
+  <p><strong>4. El giro tiene que contradecir, no resumir.</strong> Va en el penúltimo bloque y su prueba es esta: ¿cambia lo que el espectador creía dos bloques antes? Un resumen no es un giro.</p>
+
+  <p><strong>5. Un objeto que atraviesa el clip.</strong> Elige una cosa física que aparezca en los nueve bloques y que <em>escale</em> siempre en la misma dirección — una mecha que se consume, una palma con granos que se vacía, un reloj que avanza. Nunca decorativo: en el bloque final se resuelve. Es lo que convierte nueve datos sueltos en una sola historia, y además le da a la IA un ancla visual que repetir.</p>
+
+  <h3>Los números de producción</h3>
+
+  <div class="t-wrap">
+    <table>
+      <thead>
+        <tr><th>Parámetro</th><th>Valor</th><th>Por qué</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Narración</td><td class="mono">20–23 palabras / bloque</td><td>Llena entre 7,8 y 9,5 s de los 10 s. Más corto suena a pausa muerta; más largo, atropellado.</td></tr>
+        <tr><td>Guion completo</td><td class="mono">≈200 palabras</td><td>A 140–150 palabras por minuto, dejando aire visual al principio y al final.</td></tr>
+        <tr><td>Evento visual</td><td class="mono">cada 1,5–2 s</td><td>Bajo 1,2 s se lee como ruido; sobre 2,5 s cae la retención.</td></tr>
+        <tr><td>Planos por bloque</td><td class="mono">5 (~2 s c/u)</td><td>Cada uno cambia de tamaño <em>y</em> de ángulo respecto al anterior.</td></tr>
+        <tr><td>Localizaciones</td><td class="mono">máx. 2 bloques seguidos</td><td>Repetir el mismo lugar más de dos bloques es lo que produce la sensación de «todo igual».</td></tr>
+        <tr><td>Números</td><td class="mono">escritos como palabras</td><td>«mil ochocientos quince», no «1815»: los dígitos se pronuncian mucho más largo y revientan el tiempo sin que lo notes.</td></tr>
+        <tr><td>Puntuación</td><td class="mono">máx. 2 frases, pocas comas</td><td>La voz sintética hace ~0,7 s de pausa en cada punto y ~0,5 s en cada coma.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><span class="lbl">Por qué 90 segundos y no 30</span></p>
+    <p>Es una decisión de negocio, no de retención. En TikTok, el programa de recompensas solo cuenta vistas de videos de <strong>más de un minuto</strong>: por debajo de eso, las visualizaciones no monetizan. El precio es que el porcentaje de retención baja — a noventa segundos, superar el 30 % es aceptable y 45 % es fuerte, mientras que bajo treinta segundos se esperan cifras de 50–60 %. La aritmética compensa: noventa segundos al 40 % son treinta y seis segundos vistos; quince segundos al 90 % son trece y medio.</p>
+  </div>
+
+  <h2><span class="n">03</span>Cómo se produce, paso a paso</h2>
+
+  <p>Higgsfield ya trae un flujo de trabajo interno para esto, llamado <em>faceless-video</em>, con un tipo «History» dedicado. Consulté su especificación directamente y estas son las decisiones que ya vienen tomadas ahí, por si sirven de atajo.</p>
+
+  <ol>
+    <li><strong>Fija el estilo antes que nada.</strong> Un único ancla visual para todo el clip. El estilo por defecto de historia es un collage editorial de papel crema con recortes de archivo en monocromo y <em>un solo</em> color de acento; las alternativas son diorama de papel y maniquí. Tu referencia usa otra cosa — caricatura 2D — que también es válida y probablemente más cercana a lo que quieres; lo importante es elegir una y no moverla.</li>
+    <li><strong>Arma la ficha de personajes, lugares y objetos.</strong> Este es el paso que tu referencia se saltó. Cada personaje recurrente y el objeto del <em>through-line</em> se generan una vez y se reutilizan como referencia en todos los planos. Sin esto, Franklin cambia de cara entre escenas.</li>
+    <li><strong>Escribe el guion y ciérralo.</strong> Los nueve bloques con su línea de voz, sus cinco planos y su estado del objeto. Investiga antes: el dato-gancho, tres a cinco hechos concretos, el giro contraintuitivo, y contrasta cada número contra una segunda fuente.</li>
+    <li><strong>Genera los bloques de video.</strong> Nueve generaciones, una por bloque, en paralelo y no en serie. Los modelos disponibles hoy llegan holgadamente a esa duración: <strong>Seedance 2.5</strong> genera hasta treinta segundos por clip en 1080p vertical, y Wan 3.0 también; Grok Video 1.5 y MiniMax H3 llegan a quince.</li>
+    <li><strong>Graba la voz, una línea por bloque.</strong> Misma voz en todo el clip, sin excepción — un plano que vuelve con otro timbre se descarta y se repite. Para historia, las voces recomendadas del catálogo son Arthur o Callum. La emoción se pone en <em>cómo está escrita la línea</em>, no cambiando de voz a mitad.</li>
+    <li><strong>Mide antes de montar.</strong> Cada toma se cronometra: si el habla pasa de 9,5 segundos se reescribe más corta, y si termina antes de 7,8 se reescribe más densa. Nunca se acelera ni se ralentiza el audio para que quepa — se nota siempre.</li>
+    <li><strong>Monta y quema los subtítulos.</strong> Voz al frente, efectos por debajo, música muy baja y agachada bajo la voz. Los subtítulos van al final, sobre el montaje ya cerrado.</li>
+  </ol>
+
+  <div class="note">
+    <p><span class="lbl">La regla que más veces se rompe</span></p>
+    <p>Graba la voz <strong>primero</strong>, mide su duración real y solo entonces decide cuánto video generar. Al revés — generar el video y después intentar que la narración quepa — es la receta de la locución atropellada, que es la queja número uno de este formato.</p>
+  </div>
+
+  <h2><span class="n">04</span>Tres guiones para analizar</h2>
+
+  <p>Están escritos con el formato completo: nueve bloques, línea de voz contada palabra por palabra, cinco planos con tamaño y ángulo, y el objeto que atraviesa el clip. Los dos primeros pasaron después por un verificador histórico independiente cuyo encargo era refutarlos — <strong>y encontró errores en ambos</strong>, pese a que el guionista había investigado con fuentes a la vista. Dejo las correcciones marcadas donde ocurrieron, porque ese hallazgo es la parte más útil del ejercicio: te dice que la verificación no es un trámite opcional del proceso.</p>
+
+  <!-- GUION 1 -->
+  <div class="script-head">
+    <span class="st">Los cinco misiles que nunca despegaron</span>
+    <span class="sm">Guion 01 · 90 s</span>
+  </div>
+  <div class="tl-line"><b>Objeto que atraviesa el clip</b>El reloj de pared del búnker. Arranca en la medianoche y solo avanza: minutos en los primeros bloques, el plazo de vuelo en el sexto, jornadas enteras en el octavo, quince años en el noveno. Al final sigue andando en la sala vacía mientras la página del diario de guerra continúa en blanco.</div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:00</span><span class="role hook">hook</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Pasada la medianoche sonó la alarma nuclear. El tablero anunciaba un misil estadounidense en camino y el reloj del búnker empezó a correr.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL contrapicado — la sala de control en penumbra, el tablero encendido al fondo</li>
+        <li>PLANO DETALLE cenital — la bocina de la alarma vibrando sobre el mamparo de acero</li>
+        <li>PRIMER PLANO holandés — el tablero marcando un único trazo de misil ascendente</li>
+        <li>PLANO MEDIO nivel de ojos — el oficial de guardia girando el cuerpo hacia la pantalla</li>
+        <li>PRIMERÍSIMO PRIMER PLANO picado — el segundero saliendo de las doce</li>
+      </ul>
+      <p class="tl-state">Reloj: segundo cero.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:10</span><span class="role">build</span><span class="wc">22 pal.</span></div>
+    <div>
+      <p class="vo">El teniente coronel Stanislav Petrov dirigía la guardia en Serpujov quince donde el sistema Oko vigilaba los silos estadounidenses desde el espacio.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL picado — el complejo cerrado entre bosques de pino</li>
+        <li>PLANO MEDIO contrapicado — Petrov de uniforme ante su puesto</li>
+        <li>PLANO DETALLE nivel de ojos — la placa metálica del sistema Oko atornillada a la consola</li>
+        <li>PLANO GENERAL cenital — filas de consolas con la guardia nocturna</li>
+        <li>PRIMER PLANO holandés — la manecilla ya despegada de la medianoche</li>
+      </ul>
+      <p class="tl-state">Reloj: la manecilla se separa de las doce por primera vez.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:20</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">Minutos después aparecieron cuatro misiles más. Cinco en total y el sistema los situaba todos en un mismo punto de Estados Unidos.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL nivel de ojos — la pradera con tapas de silo hundidas en la hierba seca</li>
+        <li>PLANO DETALLE contrapicado — cuatro trazos nuevos encendiéndose uno a uno</li>
+        <li>PLANO GENERAL picado — hangares y torres de una base aérea al amanecer</li>
+        <li>PRIMERÍSIMO PRIMER PLANO cenital — el contador saltando de uno a cinco</li>
+        <li>PLANO MEDIO holandés — el reloj con la manecilla lejos del arranque</li>
+      </ul>
+      <p class="tl-state">Reloj: más minutos consumidos mientras el conteo sube.</p>
+      <p class="fix"><b>Corregido tras la verificación</b>El borrador decía que el sistema atribuía los misiles a la base de Malmstrom, en Montana. Esa precisión no está sostenida por las fuentes: se cambió por «un mismo punto de Estados Unidos».</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:30</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Veinticinco días antes un caza soviético derribó un avión coreano con doscientos sesenta y nueve personas a bordo. Andrópov temía un primer golpe.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL contrapicado — un caza cruzando el cielo nocturno sobre el mar</li>
+        <li>PLANO DETALLE cenital — una lista mecanografiada de nombres</li>
+        <li>PLANO MEDIO nivel de ojos — Andrópov enfermo tras un escritorio del Kremlin</li>
+        <li>GRAN PLANO GENERAL picado — las murallas del Kremlin bajo reflectores</li>
+        <li>PRIMER PLANO contrapicado — el reloj avanzando junto al teléfono de campaña</li>
+      </ul>
+      <p class="tl-state">Reloj: cada segundo reduce el margen de duda.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:40</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Petrov razonó que un ataque real traería cientos de misiles, no cinco. Ese sistema estaba en servicio de combate desde el año anterior.</p>
+      <ul class="shots">
+        <li>PRIMERÍSIMO PRIMER PLANO nivel de ojos — los ojos de Petrov fijos en la pantalla</li>
+        <li>GRAN PLANO GENERAL cenital — un mapa mural cubierto de trayectorias hipotéticas</li>
+        <li>PLANO DETALLE contrapicado — cinco marcas solitarias sobre ese mismo mapa enorme</li>
+        <li>PLANO MEDIO picado — un manual de servicio con el sello del año anterior</li>
+        <li>PLANO GENERAL holandés — la sala completa con el reloj visible al fondo</li>
+      </ul>
+      <p class="tl-state">Reloj: se acerca al final del plazo de vuelo.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:50</span><span class="role">build</span><span class="wc">22 pal.</span></div>
+    <div>
+      <p class="vo">Los radares terrestres no veían más allá del horizonte. Solo el reloj podía decidir y el plazo de vuelo venció sin explosiones.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL nivel de ojos — una antena de radar girando en la estepa</li>
+        <li>PLANO DETALLE picado — la línea del horizonte plana y limpia en la pantalla</li>
+        <li>PRIMERÍSIMO PRIMER PLANO contrapicado — la manecilla cruzando el minuto del plazo vencido</li>
+        <li>PLANO MEDIO cenital — Petrov soltando el aire, las palmas en la consola</li>
+        <li>PLANO GENERAL holandés — el horizonte sin destellos ni columnas de fuego</li>
+      </ul>
+      <p class="tl-state">Reloj: cruza el plazo y sigue. Cero explosiones — el instrumento dicta el veredicto.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:00</span><span class="role">build</span><span class="wc">22 pal.</span></div>
+    <div>
+      <p class="vo">Las órbitas Molniya veían la Tierra de canto y confundieron con llamas de cohete el sol reflejado en nubes de gran altitud.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL contrapicado — la curva de la Tierra vista de canto desde la órbita alta</li>
+        <li>PLANO DETALLE nivel de ojos — el sensor infrarrojo recorriendo el limbo terrestre</li>
+        <li>PLANO MEDIO picado — nubes de gran altitud encendidas por el sol rasante</li>
+        <li>PRIMER PLANO cenital — la elipse de la órbita trazada sobre una carta de navegación</li>
+        <li>PLANO GENERAL holandés — el reloj sobre el tablero ya apagado, a plena mañana</li>
+      </ul>
+      <p class="tl-state">Reloj: horas acumuladas; es de día cuando se reconstruye el reflejo.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:10</span><span class="role turn">giro</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Petrov no decidía solo. Sobre su centro de mando había varias capas de evaluación, aunque los historiadores discrepan sobre cuánto pesaba su informe.</p>
+      <ul class="shots">
+        <li>PRIMER PLANO picado — las manos abiertas y vacías de Petrov junto al reloj</li>
+        <li>GRAN PLANO GENERAL contrapicado — un edificio de mando con tres pisos iluminados</li>
+        <li>PLANO MEDIO nivel de ojos — oficiales superiores descolgando teléfonos en otro despacho</li>
+        <li>PLANO DETALLE cenital — un organigrama con escalones dibujados sobre su puesto</li>
+        <li>PLANO GENERAL holandés — las torres del Kremlin cerrando la cadena de decisión</li>
+      </ul>
+      <p class="tl-state">Reloj: ya no cuenta minutos sino jornadas, en los puestos que estaban por encima.</p>
+      <p class="fix"><b>Corregido tras la verificación</b>El borrador afirmaba «tres niveles de decisión» como dato cerrado y sentenciaba «Petrov nunca tuvo el mundo en sus manos». La cadena de mando exacta está en disputa, así que la línea ahora nombra la discrepancia en lugar de zanjarla — y el giro mejora, porque desmontar el mito del héroe solitario <em>es</em> la historia.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:20</span><span class="role payoff">cierre</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">No hubo medalla. Lo reprendieron por dejar el diario de guerra en blanco y esa madrugada tardó quince años en salir del búnker.</p>
+      <ul class="shots">
+        <li>PLANO DETALLE cenital — un estuche de medalla abierto y vacío sobre una mesa</li>
+        <li>PLANO MEDIO contrapicado — un superior devolviéndole el diario de guerra</li>
+        <li>PRIMERÍSIMO PRIMER PLANO nivel de ojos — la página en blanco con la fecha sin llenar</li>
+        <li>PLANO GENERAL picado — el búnker vacío, el polvo cubriendo las consolas</li>
+        <li>GRAN PLANO GENERAL holandés — la sala abandonada con el reloj todavía andando</li>
+      </ul>
+      <p class="tl-state">Reloj: quince años acumulados, todavía en marcha sobre la sala vacía.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4 style="margin-top:0">Qué mirar en este guion</h4>
+    <p style="margin-bottom:0">El giro no es un dato nuevo: es el desmontaje del titular con el que el espectador llegó. Todo el mundo conoce a Petrov como «el hombre que salvó al mundo» — el bloque ocho dice que no fue así de simple, y el nueve remata con que ni siquiera lo condecoraron. El cierre reencuadra el hook: la alarma que abría el clip termina siendo una nota que nadie escribió.</p>
+  </div>
+
+  <!-- GUION 2 -->
+  <div class="script-head">
+    <span class="st">El volcán que escribió Frankenstein</span>
+    <span class="sm">Guion 02 · 90 s</span>
+  </div>
+  <div class="tl-line"><b>Objeto que atraviesa el clip</b>Una palma abierta con granos, siempre en el mismo encuadre cerrado. Rebosante en el bloque uno, cubierta de ceniza en el dos, con diez granos en el cinco, tres de avena en el siete, uno solo en el ocho, vacía en el nueve — donde se cierra sobre el manillar de madera de la primera bicicleta.</div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:00</span><span class="role hook">hook</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">Nevó en junio y nadie entendía por qué. La respuesta estaba en Indonesia, en una montaña que había perdido su cima.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL nivel de ojos — un maizal cubierto de nieve bajo un sol pálido</li>
+        <li>PLANO DETALLE cenital — copos posándose sobre las hojas de maíz</li>
+        <li>GRAN PLANO GENERAL contrapicado — la silueta decapitada del volcán contra el cielo</li>
+        <li>PLANO MEDIO picado — un granjero inmóvil frente al sembrado helado, sombrero en mano</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — una palma rebosante de granos que resbalan</li>
+      </ul>
+      <p class="tl-state">Palma: rebosante, los granos desbordan.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:10</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">El diez de abril de mil ochocientos quince el Tambora estalló y su estruendo se oyó a dos mil seiscientos kilómetros.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL nivel de ojos — el cráter reventando de noche sobre el mar</li>
+        <li>PRIMER PLANO contrapicado — rocas incandescentes despedidas desde el borde</li>
+        <li>PLANO GENERAL cenital — la isla vista desde arriba con el penacho abriéndose</li>
+        <li>PLANO DETALLE picado — vasos temblando sobre una mesa en un puesto lejano</li>
+        <li>PLANO MEDIO holandés — la palma mientras la ceniza cae y algunos granos se derraman</li>
+      </ul>
+      <p class="tl-state">Palma: cae ceniza, se pierden varios granos.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:20</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">La columna de ceniza subió cuarenta y tres kilómetros y la montaña perdió mil cuatrocientos metros de cumbre en pocas horas.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL contrapicado — la columna atravesando las nubes hacia la estratosfera</li>
+        <li>PLANO DETALLE nivel de ojos — ceniza acumulándose sobre una hoja hasta doblarla</li>
+        <li>PLANO GENERAL picado — la cumbre derrumbándose hacia adentro</li>
+        <li>PRIMER PLANO cenital — el borde dentado del nuevo cráter humeando</li>
+        <li>PLANO MEDIO holandés — la palma medio sepultada, los granos apenas visibles</li>
+      </ul>
+      <p class="tl-state">Palma: media cubierta de ceniza.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:30</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">Once mil personas murieron bajo la ceniza en Sumbawa y cuarenta y nueve mil más cayeron luego por hambre y epidemias.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL picado — los techos de una aldea hundidos bajo la ceniza</li>
+        <li>PLANO DETALLE nivel de ojos — la palma con un cuarto de granos, el resto vuelto polvo</li>
+        <li>PLANO MEDIO contrapicado — sobrevivientes caminando descalzos sobre ceniza tibia</li>
+        <li>PRIMERÍSIMO PRIMER PLANO cenital — el rostro afiebrado de un niño sobre una estera</li>
+        <li>GRAN PLANO GENERAL holandés — la costa con los árboles calcinados hasta el horizonte</li>
+      </ul>
+      <p class="tl-state">Palma: queda un cuarto de los granos.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:40</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">Treinta megatones de azufre llegaron a la estratosfera y se volvieron gotas de ácido que devolvieron la luz solar al espacio.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL contrapicado — el penacho extendiéndose como una sábana amarilla</li>
+        <li>PLANO DETALLE cenital — gotas microscópicas brillando como polvo de vidrio</li>
+        <li>PLANO GENERAL nivel de ojos — la curva de la Tierra con una banda opaca ciñendo el planeta</li>
+        <li>PRIMER PLANO picado — un rayo de sol rebotando en el velo y perdiéndose hacia arriba</li>
+        <li>PLANO MEDIO holandés — la palma con diez granos bajo una luz amarillenta</li>
+      </ul>
+      <p class="tl-state">Palma: diez granos contados.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:50</span><span class="role">build</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">El planeta se enfrió medio grado y el seis de junio cayó nieve sobre Albany y sobre los campos de Maine.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL cenital — calles blancas en pleno junio, las carretas detenidas</li>
+        <li>PLANO DETALLE contrapicado — un termómetro de mercurio marcando bajo cero</li>
+        <li>GRAN PLANO GENERAL nivel de ojos — campos con los brotes negros bajo la nieve</li>
+        <li>PLANO MEDIO picado — un granjero rompiendo con la bota la costra de hielo</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — la palma con seis granos escarchados</li>
+      </ul>
+      <p class="tl-state">Palma: seis granos, con escarcha.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:00</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">La avena norteamericana saltó de doce a noventa y dos centavos por medida; el tifus mató después a sesenta y cinco mil europeos.</p>
+      <ul class="shots">
+        <li>PLANO MEDIO nivel de ojos — un pizarrón de mercado donde reescriben el precio</li>
+        <li>PLANO DETALLE picado — la palma con tres granos junto a una medida de madera vacía</li>
+        <li>GRAN PLANO GENERAL cenital — una fila de gente esperando pan en una plaza</li>
+        <li>PRIMER PLANO contrapicado — una mano enferma aferrada al borde de un catre</li>
+        <li>PLANO GENERAL holandés — un galpón de enfermos con las camillas alineadas al fondo</li>
+      </ul>
+      <p class="tl-state">Palma: tres granos de avena.</p>
+      <p class="fix"><b>Corregido tras la verificación</b>El borrador juntaba el precio de la avena y las muertes por tifus como si fueran el mismo lugar y el mismo momento. El precio es de Estados Unidos y la epidemia recorrió Europa durante varios años: la línea ahora los separa.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:10</span><span class="role turn">giro</span><span class="wc">21 pal.</span></div>
+    <div>
+      <p class="vo">La misma lluvia encerró tres días a Mary Shelley en Villa Diodati y a los dieciocho años soñó despierta al monstruo.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL picado — la villa sobre el lago bajo una cortina de lluvia</li>
+        <li>PLANO DETALLE contrapicado — gotas golpeando el cristal, las montañas borrosas detrás</li>
+        <li>PLANO MEDIO nivel de ojos — cinco personas alrededor del fuego leyendo historias de fantasmas</li>
+        <li>PRIMERÍSIMO PRIMER PLANO cenital — los ojos abiertos de Mary Shelley en la penumbra</li>
+        <li>PRIMER PLANO holandés — la palma con un solo grano junto a una pluma y un cuaderno</li>
+      </ul>
+      <p class="tl-state">Palma: un solo grano.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:20</span><span class="role payoff">cierre</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Un solo historiador propuso que la falta de forraje inspiró a Karl Drais; otros lo niegan. Aquella nieve quizá aprendió a rodar.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL nivel de ojos — un establo con los pesebres vacíos, ningún caballo dentro</li>
+        <li>PLANO DETALLE contrapicado — la rueda de madera con llanta de hierro girando</li>
+        <li>PLANO MEDIO cenital — Drais empujando con los pies su máquina</li>
+        <li>GRAN PLANO GENERAL picado — el camino recto con la máquina alejándose</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — la palma vacía cerrándose sobre el manillar</li>
+      </ul>
+      <p class="tl-state">Palma: vacía, cerrada sobre el manillar de la draisina.</p>
+      <p class="fix"><b>Corregido tras la verificación</b>El borrador decía «varios historiadores creen». Es uno solo, Hans-Erhard Lessing, y la biografía de referencia de Drais ni menciona el año sin verano — el propio Drais atribuyó su máquina a la escasez de forraje por la guerra. La línea ahora nombra la disputa, y el «quizá» del cierre pasa a ser deliberado.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4 style="margin-top:0">Qué mirar en este guion</h4>
+    <p>El objeto que atraviesa el clip es el mejor de los tres: una palma que se vacía grano a grano. Cada bloque tiene un estado distinto y medible, y el último cierra la mano sobre el manillar — la imagen del hambre convertida en la imagen del invento. Eso es un cierre que reencuadra, no que repite.</p>
+    <p style="margin-bottom:0">También es el guion con la trampa más fácil de pisar: la cadena «volcán → hambre → bicicleta» es irresistible y se cuenta por todas partes como si fuera un hecho. No lo es. La conexión con <em>Frankenstein</em> sí está bien documentada; la de la bicicleta es la hipótesis de un solo historiador. Un clip que las presente igual de firmes se gana un hilo de comentarios corrigiéndolo — y eso destruye el argumento de venta a una marca.</p>
+  </div>
+
+  <!-- GUION 3 -->
+  <div class="script-head">
+    <span class="st">El vagón de los tres mil muertos</span>
+    <span class="sm">Guion 03 · 90 s</span>
+  </div>
+  <div class="tl-line"><b>Objeto que atraviesa el clip</b>Un vagón de tren. Sale de Ciénaga cargado de cadáveres que nadie logra contar; se llena y se vacía según quién lleve la cuenta — nueve cuerpos en el acta oficial, más de mil en el cable del embajador — hasta que en el bloque nueve el vagón real, casi vacío, queda olvidado frente a los doscientos vagones que inventó una novela.</div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:00</span><span class="role hook">hook</span><span class="wc">22 pal.</span></div>
+    <div>
+      <p class="vo">Un vagón salió de Ciénaga cargado de cadáveres. Casi cien años después, nadie coincide en cuántos cuerpos alcanzó a llevar esa madrugada.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL cenital — la vía férrea saliendo de Ciénaga en la penumbra, el vagón alejándose</li>
+        <li>PLANO GENERAL contrapicado — el vagón avanzando entre bananales, humo contra el cielo</li>
+        <li>PLANO MEDIO nivel de ojos — las puertas corredizas entreabiertas, sombras apenas visibles adentro</li>
+        <li>PRIMER PLANO holandés — una mano inerte asomando entre las tablas</li>
+        <li>PLANO DETALLE picado — el rótulo oxidado de la compañía en el costado de la madera</li>
+      </ul>
+      <p class="tl-state">Vagón: cargado, sin que nadie sepa de cuánto.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:10</span><span class="role">build</span><span class="wc">20 pal.</span></div>
+    <div>
+      <p class="vo">Veinticinco mil obreros bananeros exigieron contrato escrito, médico permanente, descanso dominical y pago en dinero, no en vales de comisariato.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL picado — hileras de obreros deteniendo el corte de racimos</li>
+        <li>PLANO GENERAL nivel de ojos — un grupo mostrando el pliego de peticiones</li>
+        <li>PLANO MEDIO contrapicado — un capataz recibiendo de vuelta un vale que un obrero rechaza</li>
+        <li>PRIMER PLANO cenital — manos sosteniendo monedas frente a vales de cartón desechados</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — el rostro cansado de un obrero</li>
+      </ul>
+      <p class="tl-state">Vagón: detenido. La huelga paraliza la carga de fruta.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:20</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">General Cortés Vargas puso la zona bajo ley marcial y declaró a los huelguistas una cuadrilla de malhechores que el ejército podía fusilar.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL contrapicado — el general sobre el techo de la estación, leyendo el bando</li>
+        <li>GRAN PLANO GENERAL cenital — la plaza rodeada de soldados formados en línea</li>
+        <li>PLANO MEDIO nivel de ojos — fusiles cargándose frente a la multitud</li>
+        <li>PRIMER PLANO picado — el papel del decreto temblando en las manos del general</li>
+        <li>PLANO DETALLE holandés — la palabra «malhechores» subrayada sobre el texto</li>
+      </ul>
+      <p class="tl-state">Vagón: varado bajo ley marcial; los rieles pasan a ser zona de guerra.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:30</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">En la madrugada del seis de diciembre, al tercer toque de clarín, los huelguistas gritaron viva la huelga y la ametralladora abrió fuego.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL picado — la plaza colmada de huelguistas antes del amanecer</li>
+        <li>PLANO MEDIO nivel de ojos — un soldado llevándose el clarín a los labios por tercera vez</li>
+        <li>PLANO GENERAL contrapicado — la multitud alzando los puños hacia la tropa</li>
+        <li>PRIMERÍSIMO PRIMER PLANO cenital — el cañón de la ametralladora apuntando sobre la plaza</li>
+        <li>PLANO DETALLE holandés — el destello del disparo reflejado en los rieles</li>
+      </ul>
+      <p class="tl-state">Vagón: empieza a llenarse junto a las vías.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:40</span><span class="role">build</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Al amanecer, el acta oficial registró apenas nueve cuerpos en la plaza de Ciénaga, la misma cifra que tenía el pliego de peticiones.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL nivel de ojos — la alcaldía convertida en sala de registro al amanecer</li>
+        <li>PLANO MEDIO contrapicado — un funcionario inclinado sobre la mesa, escribiendo el acta</li>
+        <li>PRIMER PLANO picado — la pluma trazando el número junto a la lista de cuerpos</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — el pliego de peticiones junto al acta recién firmada</li>
+        <li>PLANO DETALLE cenital — una gota de tinta cayendo sobre la cifra final</li>
+      </ul>
+      <p class="tl-state">Vagón: según el gobierno, casi ni se llenó.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">0:50</span><span class="role">build</span><span class="wc">20 pal.</span></div>
+    <div>
+      <p class="vo">Meses después, el embajador Jefferson Caffery citó una fuente de la propia bananera que hablaba de más de mil muertos.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL contrapicado — un despacho diplomático con una máquina de télex</li>
+        <li>PLANO MEDIO nivel de ojos — el embajador leyendo un cable frente a su escritorio</li>
+        <li>PRIMER PLANO cenital — el télex imprimiendo el mensaje línea por línea</li>
+        <li>PRIMERÍSIMO PRIMER PLANO picado — el sello de la compañía junto a la firma del informante</li>
+        <li>PLANO DETALLE holandés — la frase «más de mil» subrayada en tinta sobre el papel</li>
+      </ul>
+      <p class="tl-state">Vagón: en este relato, se desborda.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:00</span><span class="role">build</span><span class="wc">22 pal.</span></div>
+    <div>
+      <p class="vo">En el Congreso, Jorge Eliécer Gaitán mostró huesos recogidos junto a las vías y acusó al gobierno de servir al oro americano.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL nivel de ojos — el recinto del Congreso colmado durante la sesión</li>
+        <li>PLANO MEDIO contrapicado — Gaitán en la tribuna, brazo en alto, señalando al salón</li>
+        <li>PRIMER PLANO picado — una bolsa de tela abierta con fragmentos de hueso sobre el atril</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — el rostro tenso de un congresista escuchando</li>
+        <li>PLANO DETALLE cenital — un mapa de las vías férreas extendido sobre la mesa</li>
+      </ul>
+      <p class="tl-state">Vagón: los huesos junto a las vías prueban que cargó más de lo admitido.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:10</span><span class="role turn">giro</span><span class="wc">23 pal.</span></div>
+    <div>
+      <p class="vo">Décadas después, García Márquez confesó que la cifra real no llenaba ni un vagón, así que inventó tres mil muertos para su novela.</p>
+      <ul class="shots">
+        <li>PLANO GENERAL nivel de ojos — García Márquez sentado frente a una cámara de televisión</li>
+        <li>PLANO MEDIO contrapicado — el escritor gesticulando, luces de estudio detrás</li>
+        <li>PRIMER PLANO picado — sus manos pasando páginas mecanografiadas</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — sus ojos fijos, a media palabra, tras nombrar la cifra</li>
+        <li>PLANO DETALLE cenital — una máquina de escribir con la frase recién tecleada</li>
+      </ul>
+      <p class="tl-state">Vagón: mide la ficción. Si el real no se llenaba, la novela inventa un tren entero.</p>
+    </div>
+  </div>
+
+  <div class="blk">
+    <div class="blk-meta"><span class="tc">1:20</span><span class="role payoff">cierre</span><span class="wc">20 pal.</span></div>
+    <div>
+      <p class="vo">El vagón real que salió de Ciénaga casi iba vacío. El que Colombia recuerda tiene doscientos vagones y nunca existió.</p>
+      <ul class="shots">
+        <li>GRAN PLANO GENERAL cenital — las vías abandonadas de Ciénaga, oxidadas, bajo luz de hoy</li>
+        <li>PLANO GENERAL nivel de ojos — un único vagón viejo detenido en el mismo tramo de riel</li>
+        <li>PLANO MEDIO contrapicado — un ejemplar de la novela abierto sobre el vagón oxidado</li>
+        <li>PRIMER PLANO picado — un dedo recorriendo la frase de los doscientos vagones en la página</li>
+        <li>PRIMERÍSIMO PRIMER PLANO holandés — el vagón real multiplicado en el reflejo de una vitrina</li>
+      </ul>
+      <p class="tl-state">Resolución: el vagón real se pierde en el olvido; los doscientos que nunca existieron son los que el país recuerda.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4 style="margin-top:0">Qué mirar en este guion</h4>
+    <p>Es el más ambicioso de los tres porque su tema <em>es</em> la incertidumbre. No afirma ninguna cifra de muertos, y esa negativa no es prudencia: es el motor de la historia. El acta oficial registró nueve cuerpos; el cable del embajador estadounidense citó a un abogado de la propia bananera hablando de más de mil; Gaitán llevó huesos al Congreso. El giro llega cuando García Márquez admite que la cifra real «no llenaba ni un vagón» y que inventó tres mil para la novela — y esos tres mil son los que Colombia recuerda.</p>
+    <p style="margin-bottom:0">Ahí está la lección de método: un clip histórico puede construirse sobre un desacuerdo en lugar de sobre un dato. Suele ser más honesto y casi siempre es mejor televisión.</p>
+  </div>
+
+  <div class="note">
+    <p><span class="lbl">Advertencia sobre este tercer guion</span></p>
+    <p>A diferencia de los dos anteriores, <strong>este no pasó por el verificador independiente</strong> — ese proceso falló por tiempo de ejecución. Lleva solo la autoverificación del guionista, que dejó anotadas varias cosas antes de rodarlo: la fecha de inicio de la huelga varía entre fuentes; el número del decreto de «cuadrilla de malhechores» está en disputa; junto al acta de nueve cuerpos existe otro registro del mismo día que habla de trece muertos y diecinueve heridos; y la coincidencia entre esos nueve cuerpos y los nueve puntos del pliego la señalan cronistas, pero no está probada como relación causal. Además, la cita de García Márquez proviene de una entrevista de mil novecientos noventa muy reproducida, no de una transcripción primaria. <strong>Verifícalo antes de grabar la voz.</strong></p>
+  </div>
+
+  <h2><span class="n">05</span>Referentes reales que puedes estudiar</h2>
+
+  <p>Cuentas verificadas del nicho, para que veas formatos en vivo. El desequilibrio es la oportunidad: en inglés el nicho está saturado, en español hay un solo gigante y mucho espacio debajo.</p>
+
+  <h4>En español</h4>
+  <div class="accounts">
+    <div class="acct"><div class="h">@historiaparatontos</div><div class="f">TikTok · 7,9 M seguidores</div><div class="w">El referente del idioma. «Historia para quienes no les gusta la historia» — el posicionamiento está en la bio.</div></div>
+    <div class="acct"><div class="h">@plushistoria</div><div class="f">TikTok · 318 K</div><div class="w">Historia antigua, formato corto y limpio.</div></div>
+    <div class="acct"><div class="h">@memoriasdepez</div><div class="f">TikTok · 54 K</div><div class="w">«Historia en un minuto»: exactamente tu formato objetivo.</div></div>
+    <div class="acct"><div class="h">@academiaplay</div><div class="f">TikTok 22 K · YouTube +3 M</div><div class="w">Caso de estudio inverso: enorme en largo, sin trasladar al corto. El hueco que tú puedes ocupar.</div></div>
+  </div>
+
+  <h4>En inglés — los formatos que funcionan</h4>
+  <div class="accounts">
+    <div class="acct"><div class="h">@historyphotographed</div><div class="f">Instagram · 10 M</div><div class="w">La mayor marca de historia en redes. Fotografía de archivo con contexto.</div></div>
+    <div class="acct"><div class="h">@history.war</div><div class="f">TikTok · 3,4 M</div><div class="w">Historia militar, ritmo alto.</div></div>
+    <div class="acct"><div class="h">@historycoolkids</div><div class="f">Instagram · 2 M</div><div class="w">Archivo con voz propia y humor.</div></div>
+    <div class="acct"><div class="h">@thesuithistorian</div><div class="f">TikTok · 1,1 M</div><div class="w">Personaje fijo y recurrente como marca.</div></div>
+    <div class="acct"><div class="h">@timetravellerpov</div><div class="f">TikTok · 582 K</div><div class="w">Etiquetada por TikTok como generada con IA. Estúdiala: es tu formato, con la etiqueta puesta.</div></div>
+    <div class="acct"><div class="h">@impossibleaicinema</div><div class="f">TikTok</div><div class="w">Recreaciones con IA; su video Tudor pasó los 950 K «me gusta».</div></div>
+  </div>
+
+  <div class="note">
+    <p><span class="lbl">El dato que define la estrategia</span></p>
+    <p>Un estudio académico analizó 5.565 videos de historia en primera persona hechos con IA en TikTok, de 2.023 creadores. La media fue de 137.491 visualizaciones — pero la <strong>mediana fue de 876</strong>. Esa brecha lo dice todo: la enorme mayoría no despega y unos pocos explotan.</p>
+    <p>Es un negocio de portafolio, no de aciertos individuales. Justifica exactamente lo que planteaste desde el principio: muchas cuentas, mucho volumen, y la disciplina de leer los datos para detectar el que funcionó y repetir su patrón.</p>
+  </div>
+
+  <h2><span class="n">06</span>Cuatro reglas para no perder las cuentas</h2>
+
+  <ol>
+    <li><strong>Etiqueta el contenido como generado con IA.</strong> Es obligatorio en TikTok, YouTube y Meta cuando la recreación es realista — y una recreación histórica realista lo es. YouTube dice explícitamente que declarar contenido de IA <em>no</em> reduce el alcance ni afecta la monetización; ocultarlo sí conlleva sanciones. Además, las tres plataformas detectan por metadatos, así que la etiqueta va a aparecer igual.</li>
+    <li><strong>Distingue en pantalla la recreación del archivo real.</strong> Cuando una imagen generada aparece sin marca junto a material documental, el espectador entiende que es una foto de época. Ahí es donde el nicho histórico se gana denuncias y desmentidos — y donde una institución puede señalarte públicamente.</li>
+    <li><strong>Verifica cada cifra antes de grabar la voz.</strong> Los tres guiones de arriba salieron con errores de un guionista que investigó con fuentes a la vista. Es el costo normal de este nicho, y por eso el paso de verificación va en el proceso, no en la buena intención. Un error en un video que ven miles de personas se paga en comentarios, y los comentarios los va a leer la marca a la que le quieras vender.</li>
+    <li><strong>Nada de clonar el mismo video en varias cuentas.</strong> Las políticas de contenido no original de Meta y la de contenido inauténtico de YouTube apuntan justo a ese patrón. Un mismo hecho histórico puede dar varias piezas distintas — otro ángulo, otra voz, otro idioma, otro personaje — pero el archivo idéntico multiplicado es lo que apaga cuentas.</li>
+  </ol>
+
+  <footer>
+    <p>Investigación de agosto de 2026 con verificación adversarial independiente por tema. El pipeline de producción está tomado directamente de la especificación del flujo <em>faceless-video</em> de Higgsfield y del catálogo de modelos consultado en vivo; las cifras de retención provienen en su mayoría de agregadores del sector y no de datos primarios de plataforma, así que sirven para orientar el diseño, no como objetivo contractual. Construye tu propia tabla de referencia con las primeras veinte publicaciones.</p>
+    <p>MultiCampaign · documento interno del proyecto.</p>
+  </footer>
+</div>

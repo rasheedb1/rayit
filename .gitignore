@@ -1,0 +1,53 @@
+# =====================================================================
+# .gitignore raíz — la red de seguridad del repositorio.
+#
+# Regla de oro: en este repo los secretos SOLO viajan cifrados.
+# Un archivo con credenciales en claro nunca debe llegar a un commit.
+# Si agregas una ruta nueva que pueda contener credenciales, agrégala
+# aquí ANTES de crear el archivo.
+# =====================================================================
+
+# ---------- Secretos en claro ----------
+.env
+.env.*
+!.env.example
+*.env
+!*.env.enc            # el vault cifrado SÍ se versiona: es ilegible sin passphrase
+secrets/*.env
+secrets/*.plain
+*.pem
+*.key
+!*.pub
+
+# ---------- Estado local de herramientas ----------
+# .vercel/ lo genera la CLI de Vercel al enlazar un proyecto. Los ids
+# que guarda no son secretos, pero son estado por-clon: la fuente de
+# verdad es el vault (secrets/vercel.env.enc). Se regenera con
+# `make vercel.link`.
+.vercel/
+
+# ---------- Dependencias y artefactos ----------
+node_modules/
+.next/
+dist/
+build/
+.turbo/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---------- Claude Code ----------
+# settings.json SÍ se versiona: son los permisos del equipo.
+# settings.local.json es de cada uno.
+.claude/settings.local.json
+
+# ---------- Sistema y editores ----------
+.DS_Store
+*.log
+.idea/
+*.swp
+
+# ---------- Temporales ----------
+tmp/
+.cache/

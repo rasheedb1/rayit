@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MultiCampaign Creadores</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Figtree:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css" id="theme-css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="wordmark"><span class="dot-grid"><i></i><i></i><i></i><i></i></span>MultiCampaign</span>
+    <span class="module">Creadores</span>
+    <span class="mock-badge">Datos de ejemplo</span>
+    <span class="sync">Sincronizado hoy 06:10 · 16 sep 2026</span>
+    <div class="seg style-seg" id="style-seg" aria-label="Estilo visual"><button data-v="geist" aria-pressed="true">Geist</button><button data-v="signal">Signal</button><button data-v="studio">Studio</button></div>
+    <button class="theme-btn" id="theme-btn" type="button" aria-label="Cambiar tema">Tema</button>
+  </header>
+
+  <div class="creator">
+    <span class="avatar">LM</span>
+    <div class="who">
+      <b>Laura M. · @laura.recetas.co</b>
+      <span>Cocina fácil · Colombia · español · publica 5 videos por semana</span>
+    </div>
+    <div class="nets" id="nets"></div>
+  </div>
+
+  <div class="app">
+    <nav class="side" id="nav" aria-label="Módulos">
+      <div class="group">Medir</div>
+      <button class="nav-btn" data-p="resumen">Resumen</button>
+      <button class="nav-btn" data-p="videos">Mis videos <span class="cnt">30</span></button>
+      <button class="nav-btn" data-p="nicho">Tendencias del nicho <span class="cnt">7 d</span></button>
+      <div class="group">Crear</div>
+      <button class="nav-btn" data-p="ideas">Ideas y guiones <span class="cnt">3</span></button>
+      <div class="group">Monetizar</div>
+      <button class="nav-btn" data-p="cotizar">Cotizar</button>
+      <button class="nav-btn" data-p="campanas">Campañas <span class="cnt">4</span></button>
+      <button class="nav-btn" data-p="ventas">Ventas <span class="cnt">17</span></button>
+      <button class="nav-btn" data-p="finanzas">Finanzas</button>
+      <div class="group">Equipo</div>
+      <button class="nav-btn" data-p="agencia">Vista agencia</button>
+    </nav>
+
+    <main id="panels">
+
+      <!-- ================= RESUMEN ================= -->
+      <section class="panel" id="p-resumen">
+        <div class="panel-head">
+          <div class="eyebrow">Medir · interno</div>
+          <h1>Todas tus redes en una sola lectura</h1>
+          <p class="lede">Lo que pasó en los últimos 30 días, comparado con los 30 anteriores. Cada cifra sale de la API de la red conectada, no de estimaciones.</p>
+        </div>
+        <div class="kpis" id="kpis-resumen"></div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div><h2>Seguidores por red</h2><div class="sub">Últimos 90 días</div></div><button class="toggle-view" data-toggle="c-followers">Ver tabla</button></div>
+            <div class="legend" id="lg-followers"></div>
+            <div class="chart-box" id="c-followers"></div>
+            <div class="table-alt table-scroll" id="t-followers" hidden></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Views por semana y red</h2><div class="sub">Últimas 12 semanas</div></div><button class="toggle-view" data-toggle="c-views">Ver tabla</button></div>
+            <div class="legend" id="lg-views"></div>
+            <div class="chart-box" id="c-views"></div>
+            <div class="table-alt table-scroll" id="t-views" hidden></div>
+          </div>
+        </div>
+        <div class="grid-21">
+          <div class="card">
+            <div class="card-head"><div><h2>Lo que importa esta semana</h2><div class="sub">Generado hoy a partir de tus datos, del nicho y de tus campañas</div></div></div>
+            <ul class="insights" id="insights"></ul>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Cuándo publicar</h2><div class="sub">Seguidores conectados por hora, Instagram, últimos 30 días</div></div></div>
+            <div class="heat" id="heat"></div>
+            <div class="chart-note">Pico: martes y jueves entre 19:00 y 21:00. Tus últimos 5 videos salieron a las 14:00.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= MIS VIDEOS ================= -->
+      <section class="panel" id="p-videos" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Medir · interno</div>
+          <h1>Qué de lo tuyo funciona y por qué</h1>
+          <p class="lede">Cada video se compara con tu propia mediana, no con cuentas grandes. Un puntaje de 2 significa el doble de views de lo habitual para ti a la misma edad del video.</p>
+        </div>
+        <div class="filters">
+          <div class="filter"><label>Red</label><div class="seg" id="f-red"><button aria-pressed="true" data-v="all">Todas</button><button data-v="tiktok">TikTok</button><button data-v="instagram">Instagram</button><button data-v="youtube">YouTube</button><button data-v="facebook">Facebook</button></div></div>
+          <div class="filter"><label>Ordenar por</label><div class="seg" id="f-ord"><button aria-pressed="true" data-v="score">× mediana</button><button data-v="views">Views</button><button data-v="date">Fecha</button></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Últimos 30 videos</h2><div class="sub">Views a 7 días · salto en los primeros 3 s solo en Instagram y TikTok</div></div></div>
+          <div class="table-scroll" id="tbl-videos"></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div><h2>Rasgos de tus outliers frente al resto</h2><div class="sub">% de videos con el rasgo · outliers = puntaje ≥ 2</div></div></div>
+            <div class="legend" id="lg-traits"></div>
+            <div class="chart-box" id="c-traits"></div>
+            <div class="chart-note">Rasgos extraídos con IA multimodal sobre los primeros 3 s, el audio y el texto en pantalla.</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Cómo crecen tus videos</h2><div class="sub">Views acumuladas por día desde la publicación</div></div><button class="toggle-view" data-toggle="c-growth">Ver tabla</button></div>
+            <div class="legend" id="lg-growth"></div>
+            <div class="chart-box" id="c-growth"></div>
+            <div class="table-alt table-scroll" id="t-growth" hidden></div>
+            <div class="chart-note">Un outlier se distingue en las primeras 48 h: si a las 24 h va por encima de 1,5 veces tu mediana, conviene empujarlo con historias.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= NICHO ================= -->
+      <section class="panel" id="p-nicho" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Medir · externo</div>
+          <h1>Lo que está rompiendo en cocina fácil esta semana</h1>
+          <p class="lede">Vigilamos cuentas de referencia y hashtags de tu nicho con snapshots diarios. Un video entra aquí cuando supera 2 veces la mediana de su propia cuenta.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Cuentas vigiladas</h2><div class="sub">12 cuentas · 212 videos analizados en 7 días</div></div></div>
+          <div class="watch" id="watch"></div>
+          <div class="addrow"><input type="text" id="watch-add" placeholder="Añadir @cuenta o #hashtag" aria-label="Añadir cuenta o hashtag"><button class="btn" type="button">Añadir</button></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Videos que están rompiendo</h2><div class="sub">Ordenados por puntaje frente a la mediana de su cuenta</div></div></div>
+          <div class="table-scroll" id="tbl-nicho"></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div><h2>Rasgos comunes de los outliers del nicho</h2><div class="sub">Cuántas veces más aparece el rasgo en outliers que en el resto</div></div></div>
+            <ul class="lifts" id="lifts"></ul>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Sonidos y hashtags en alza</h2><div class="sub">Crecimiento en uso, últimos 7 días frente a los 7 anteriores</div></div></div>
+            <ul class="lifts" id="sounds"></ul>
+            <div class="chart-note">Fuentes: TikTok Creative Center, hashtag search de Instagram, búsqueda pública de YouTube.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= IDEAS ================= -->
+      <section class="panel" id="p-ideas" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Crear</div>
+          <h1>Tres ideas para esta semana, con guion listo</h1>
+          <p class="lede">Cruzan lo que a ti te funciona con lo que está funcionando en el nicho. Cada idea dice de dónde sale y qué tan probable es que rompa.</p>
+        </div>
+        <div class="grid-3" id="ideas"></div>
+        <div class="grid-21">
+          <div class="card">
+            <div class="card-head"><div><h2 id="script-title"></h2><div class="sub">Guion de 90 s en 9 bloques de 10 s · cada línea entre 20 y 23 palabras</div></div></div>
+            <div class="roles-legend">
+              <span><i style="background:var(--role-hook)"></i>Hook</span>
+              <span><i style="background:var(--role-build)"></i>Build (escala)</span>
+              <span><i style="background:var(--role-giro)"></i>Giro</span>
+              <span><i style="background:var(--role-cierre)"></i>Cierre</span>
+            </div>
+            <div class="blocks" id="blocks"></div>
+            <div class="actions">
+              <button class="btn btn-primary" type="button">Grabar voz y medir</button>
+              <button class="btn" type="button">Generar video con IA</button>
+              <button class="btn" type="button">Editar guion</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Cómo publicarla</h2><div class="sub">Variantes por red y momento</div></div></div>
+            <dl class="kv" id="publish-kv"></dl>
+            <div class="actions"><button class="btn" type="button">Programar las 3 variantes</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= COTIZAR ================= -->
+      <section class="panel" id="p-cotizar" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Monetizar</div>
+          <h1>Cuánto cobrar, con los números que lo sostienen</h1>
+          <p class="lede">El rango sale de tus views promedio, el CPM de referencia de cocina en Colombia y ajustes por engagement y audiencia. Tú lo editas; el media kit lo justifica.</p>
+        </div>
+        <div class="grid-21">
+          <div class="card">
+            <div class="card-head"><div><h2>Tarifario sugerido</h2><div class="sub">Pesos colombianos · rangos, no precios fijos</div></div></div>
+            <div class="table-scroll" id="tbl-rates"></div>
+            <div class="formula">Rango = <code>views promedio × CPM del nicho (COP 45 000 a 70 000 por mil views) × 1,15 por engagement sobre la media × 1,10 por audiencia 25 a 34</code>. Derechos de uso y exclusividad se suman como porcentaje sobre el entregable.</div>
+            <div class="actions">
+              <button class="btn btn-primary" type="button">Generar media kit</button>
+              <button class="btn" type="button">Crear cotización para una marca</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Media kit</h2><div class="sub">Lo que la marca ve</div></div></div>
+            <dl class="kv" id="mediakit-kv"></dl>
+            <div class="chart-note" style="margin-top:12px">Edad de la audiencia (Instagram, seguidores)</div>
+            <div class="demo-bars" id="demo-age" style="margin-top:6px"></div>
+            <div class="chart-note">La demografía es por cuenta. Solo YouTube la entrega por video.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CAMPAÑAS ================= -->
+      <section class="panel" id="p-campanas" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Monetizar</div>
+          <h1>Lo que cada campaña produjo, listo para enviar</h1>
+          <p class="lede">La medición se acuerda antes de publicar. El reporte cruza tus métricas, el crecimiento público de la marca y las ventas que la marca comparte.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Campañas</h2><div class="sub">2026</div></div></div>
+          <div class="table-scroll" id="tbl-camps"></div>
+        </div>
+        <div class="card-head" style="margin: 4px 0 10px"><div><h2 style="font-size:17px">Café Alma · lanzamiento cold brew</h2><div class="sub">1 reel + 1 TikTok + 3 historias · 24 ago a 31 ago · reporte a 30 días</div></div></div>
+        <div class="kpis" id="kpis-camp"></div>
+        <div class="grid-21">
+          <div class="card">
+            <div class="card-head"><div><h2>Seguidores de @cafealma durante la campaña</h2><div class="sub">Snapshot diario público · línea base de 2 semanas antes</div></div><button class="toggle-view" data-toggle="c-brand">Ver tabla</button></div>
+            <div class="chart-box" id="c-brand"></div>
+            <div class="table-alt table-scroll" id="t-brand" hidden></div>
+            <div class="chart-note">La marca venía ganando 15 seguidores por día. En la semana de campaña ganó 1 240, y el ritmo posterior se quedó en 26 por día.</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Acordado antes de publicar</h2><div class="sub">Lo que hace defendible el reporte</div></div></div>
+            <ul class="checks" id="camp-checks"></ul>
+            <div class="actions">
+              <button class="btn btn-primary" type="button">Enviar reporte a Café Alma</button>
+              <button class="btn" type="button">Ver como lo ve la marca</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= VENTAS ================= -->
+      <section class="panel" id="p-ventas" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Monetizar · ventas</div>
+          <h1>Prospectar todos los días y no soltar ningún deal</h1>
+          <p class="lede">El radar detecta empresas que ya están invirtiendo en tu nicho y las califica. Lo que apruebas entra al pipeline con su siguiente acción. Cada deal ganado crea su cotización, su campaña y su factura.</p>
+        </div>
+        <div class="kpis" id="kpis-ventas"></div>
+        <div class="filters">
+          <div class="filter"><label>Vista</label><div class="seg" id="vs-tabs"><button aria-pressed="true" data-v="radar">Radar</button><button data-v="pipeline">Pipeline</button><button data-v="empresa">Empresa</button></div></div>
+          <span class="chart-note" style="margin:0 0 6px">Revisión diaria: 10 minutos para aprobar o descartar señales y atender los seguimientos que vencen hoy.</span>
+        </div>
+
+        <div id="vs-radar">
+          <div class="grid-21">
+            <div class="card">
+              <div class="card-head"><div><h2>Señales de esta semana</h2><div class="sub">Empresas nuevas o con un movimiento nuevo · primero las pendientes, ordenadas por encaje</div></div></div>
+              <div class="table-scroll" id="tbl-signals"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><div><h2>Fuentes del radar</h2><div class="sub">Corre cada madrugada, quita duplicados y califica</div></div></div>
+              <div class="table-scroll" id="tbl-sources"></div>
+              <div class="chart-note">Criterios: cocina, hogar o bienestar · Colombia · presupuesto estimado desde COP 3 M · encaje de audiencia desde 60 %.</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Pitch listo para Delicias del Campo</h2><div class="sub">Se arma con la señal, tu media kit y tu última campaña · editable antes de enviar</div></div></div>
+            <div class="pitch" id="pitch"></div>
+            <div class="actions"><button class="btn btn-primary" type="button">Enviar y pasar a Contactado</button><button class="btn" type="button">Editar</button><button class="btn" type="button">Programar secuencia</button></div>
+          </div>
+        </div>
+
+        <div id="vs-pipeline" hidden>
+          <div class="card">
+            <div class="card-head"><div><h2>Pipeline</h2><div class="sub" id="pipe-sub"></div></div><button class="toggle-view" data-toggle="c-pipe" data-labels="Ver lista|Ver tablero">Ver lista</button></div>
+            <div class="kanban" id="c-pipe"></div>
+            <div class="table-alt table-scroll" id="t-pipe" hidden></div>
+            <div class="chart-note">Perdidos este trimestre: 3 (Bebidas Frescas: sin presupuesto · Mercado Express: eligió otro creador · Snacks Andinos: sin respuesta tras 4 toques). Cada tarjeta abre la ficha de la empresa.</div>
+          </div>
+        </div>
+
+        <div id="vs-empresa" hidden>
+          <div class="card">
+            <div class="card-head"><div><h2 id="co-name"></h2><div class="sub" id="co-sub"></div></div><span id="co-stage" style="margin-left:auto"></span></div>
+            <dl class="kv" id="co-kv"></dl>
+            <div class="chain" id="co-chain" style="margin-top:14px"></div>
+          </div>
+          <div class="grid-21">
+            <div class="card">
+              <div class="card-head"><div><h2>Actividad</h2><div class="sub">Todo lo que pasó con esta empresa, del radar al cierre</div></div></div>
+              <ul class="timeline" id="co-timeline"></ul>
+              <div class="card-head" style="margin-top:18px"><div><h2>Contactos</h2></div></div>
+              <div class="table-scroll" id="tbl-contacts"></div>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <div class="card-head"><div><h2>Siguiente acción</h2><div class="sub" id="co-next-when"></div></div></div>
+                <p id="co-next" style="margin:0"></p>
+                <p class="chart-note" id="co-next-tip"></p>
+                <div class="actions"><button class="btn btn-primary" type="button">Enviar seguimiento</button><button class="btn" type="button">Reprogramar</button><button class="btn" type="button">Marcar ganado</button></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><h2>Secuencia</h2><div class="sub">Toques programados desde el pitch</div></div></div>
+                <ul class="checks" id="co-seq"></ul>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><h2>Lo que sabemos</h2></div></div>
+                <ul class="why" id="co-facts"></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= FINANZAS ================= -->
+      <section class="panel" id="p-finanzas" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Monetizar · back office</div>
+          <h1>Quién te debe, cuándo entra la plata y cuánto apartar</h1>
+          <p class="lede">Cada campaña cerrada crea su factura y su fecha esperada de cobro. Los gastos recurrentes y los impuestos se descuentan solos.</p>
+        </div>
+        <div class="kpis" id="kpis-fin"></div>
+        <div class="grid-21">
+          <div class="card">
+            <div class="card-head"><div><h2>Cuentas por cobrar</h2><div class="sub">Facturas emitidas a marcas</div></div></div>
+            <div class="table-scroll" id="tbl-cxc"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Adelanto disponible</h2><div class="sub">Sobre facturas de marcas con historial de pago</div></div></div>
+            <dl class="kv" id="adv-kv"></dl>
+            <div class="actions"><button class="btn btn-primary" type="button">Solicitar adelanto</button></div>
+            <div class="chart-note">Producto financiero de etapa 3: solo si el volumen lo justifica.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Flujo de caja proyectado</h2><div class="sub">Próximas 8 semanas · cobros esperados frente a gastos y apartado de impuestos</div></div><button class="toggle-view" data-toggle="c-cash">Ver tabla</button></div>
+          <div class="legend" id="lg-cash"></div>
+          <div class="chart-box" id="c-cash"></div>
+          <div class="table-alt table-scroll" id="t-cash" hidden></div>
+        </div>
+      </section>
+
+      <!-- ================= AGENCIA ================= -->
+      <section class="panel" id="p-agencia" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">Equipo</div>
+          <h1>Varias marcas, un solo tablero</h1>
+          <p class="lede">Para agencias que hacen community management. Cada marca cliente tiene sus cuentas conectadas, su calendario, su aprobación y su reporte programado con marca blanca.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h2>Marcas gestionadas</h2><div class="sub">Agencia Norte Creativo · 3 community managers</div></div></div>
+          <div class="table-scroll" id="tbl-agencia"></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div><h2>Contenido pendiente de aprobación</h2><div class="sub">El cliente aprueba desde su portal o por WhatsApp</div></div></div>
+            <div class="table-scroll" id="tbl-aprob"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Reportes programados</h2><div class="sub">Se generan y envían solos</div></div></div>
+            <dl class="kv" id="rep-kv"></dl>
+            <div class="actions"><button class="btn" type="button">Previsualizar reporte de Nutrivé</button></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer>
+    <p><b>Mock con datos simulados.</b> Ninguna cuenta, marca ni cifra es real. Sirve para acordar qué construir.</p>
+    <p>Restricciones ya verificadas que el mock respeta: demografía por video solo en YouTube; salto a 3 s solo en Instagram y TikTok; el archivo de video de cuentas ajenas no se obtiene en Instagram; las ventas atribuidas exigen código, enlace con integración o datos de la marca.</p>
+  </footer>
+</div>
+<div class="tooltip" id="tooltip" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>

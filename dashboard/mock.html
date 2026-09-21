@@ -1,0 +1,1161 @@
+<title>MultiCampaign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --accent: #4a3aa7;
+    --accent-ink: #ffffff;
+    --accent-wash: rgba(74, 58, 167, 0.08);
+    --s-tiktok: #2a78d6;
+    --s-instagram: #eb6834;
+    --s-facebook: #1baf7a;
+    --s-youtube: #eda100;
+    --deemph: #c3c2b7;
+    --good: #006300;
+    --bad: #d03b3b;
+    --tooltip-bg: #232320;
+    --tooltip-ink: #ffffff;
+    --tooltip-ink-2: #b5b4ab;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #9085e9;
+      --accent-ink: #12102a;
+      --accent-wash: rgba(144, 133, 233, 0.12);
+      --s-tiktok: #3987e5;
+      --s-instagram: #d95926;
+      --s-facebook: #199e70;
+      --s-youtube: #c98500;
+      --deemph: #4a4a47;
+      --good: #0ca30c;
+      --bad: #e66767;
+      --tooltip-bg: #f0efec;
+      --tooltip-ink: #0b0b0b;
+      --tooltip-ink-2: #52514e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #9085e9;
+    --accent-ink: #12102a;
+    --accent-wash: rgba(144, 133, 233, 0.12);
+    --s-tiktok: #3987e5;
+    --s-instagram: #d95926;
+    --s-facebook: #199e70;
+    --s-youtube: #c98500;
+    --deemph: #4a4a47;
+    --good: #0ca30c;
+    --bad: #e66767;
+    --tooltip-bg: #f0efec;
+    --tooltip-ink: #0b0b0b;
+    --tooltip-ink-2: #52514e;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 64px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  .wordmark {
+    font-family: "Archivo", system-ui, sans-serif;
+    font-weight: 700; font-size: 22px; letter-spacing: -0.02em;
+    display: inline-flex; align-items: center; gap: 9px;
+  }
+  .wordmark .dot-grid { display: inline-grid; grid-template-columns: repeat(2, 7px); gap: 3px; }
+  .wordmark .dot-grid i { width: 7px; height: 7px; border-radius: 2px; display: block; }
+  .wordmark .dot-grid i:nth-child(1) { background: var(--s-tiktok); }
+  .wordmark .dot-grid i:nth-child(2) { background: var(--s-instagram); }
+  .wordmark .dot-grid i:nth-child(3) { background: var(--s-facebook); }
+  .wordmark .dot-grid i:nth-child(4) { background: var(--s-youtube); }
+  .mock-badge {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-wash);
+    border: 1px solid var(--accent); border-radius: 999px; padding: 2px 10px;
+  }
+  .subtitle { color: var(--ink-2); margin: 2px 0 22px; max-width: 68ch; }
+
+  /* ---------- filters ---------- */
+  .filters {
+    display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;
+    padding: 14px 16px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px; margin-bottom: 18px;
+  }
+  .filter { display: flex; flex-direction: column; gap: 5px; }
+  .filter > label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--ink-2);
+    font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button:hover { background: var(--accent-wash); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .seg button:focus-visible, select:focus-visible, .toggle-view:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  select {
+    appearance: none; font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 28px 6px 10px; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+  }
+  .filter-reset {
+    appearance: none; border: 0; background: none; color: var(--accent);
+    font: inherit; font-size: 13px; cursor: pointer; padding: 6px 4px; margin-left: auto;
+  }
+  .filter-reset:hover { text-decoration: underline; }
+
+  /* ---------- KPI row ---------- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  }
+  .kpi .label { font-size: 12.5px; color: var(--ink-2); }
+  .kpi .value { font-family: "Archivo", system-ui, sans-serif; font-size: 27px; font-weight: 600; letter-spacing: -0.01em; }
+  .kpi .delta { font-size: 12px; font-weight: 600; }
+  .kpi .delta.up { color: var(--good); }
+  .kpi .delta.down { color: var(--bad); }
+  .kpi .delta .vs { color: var(--muted); font-weight: 400; }
+  .kpi svg { margin-top: 6px; }
+
+  /* ---------- cards & grid ---------- */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 880px) { .grid-2 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px 14px; margin-bottom: 14px; min-width: 0;
+  }
+  .grid-2 .card { margin-bottom: 0; }
+  .card-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+  .card-head h2 {
+    font-family: "Archivo", system-ui, sans-serif; font-size: 15.5px; font-weight: 600;
+    margin: 0; letter-spacing: -0.01em; text-wrap: balance;
+  }
+  .card-head .sub { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+  .toggle-view {
+    margin-left: auto; flex-shrink: 0; appearance: none; font: inherit; font-size: 12px;
+    color: var(--ink-2); background: none; border: 1px solid var(--border); border-radius: 7px;
+    padding: 4px 10px; cursor: pointer;
+  }
+  .toggle-view:hover { background: var(--accent-wash); color: var(--accent); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+  .legend .swatch-line { width: 14px; height: 2px; border-radius: 1px; }
+  .legend .swatch-rect { width: 10px; height: 10px; border-radius: 3px; }
+  .chart-note { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .chart-box { position: relative; }
+  .chart-box svg { display: block; width: 100%; height: auto; }
+  .chart-box svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* ---------- tables ---------- */
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted);
+    padding: 8px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap;
+  }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--accent-wash); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cell-main { font-weight: 600; }
+  .cell-sub { font-size: 12px; color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .minibar-wrap { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .minibar { width: 64px; height: 5px; border-radius: 3px; background: var(--grid); overflow: hidden; flex-shrink: 0; }
+  .minibar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .delta-cell.up { color: var(--good); font-weight: 600; }
+  .delta-cell.down { color: var(--bad); font-weight: 600; }
+
+  /* ---------- tooltip ---------- */
+  .tooltip {
+    position: fixed; z-index: 30; pointer-events: none; display: none;
+    background: var(--tooltip-bg); color: var(--tooltip-ink);
+    border-radius: 8px; padding: 8px 11px; font-size: 12.5px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); max-width: 260px;
+  }
+  .tooltip .tt-title { color: var(--tooltip-ink-2); font-size: 11.5px; margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+  .tooltip .tt-key { width: 12px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+  .tooltip .tt-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tooltip .tt-lbl { color: var(--tooltip-ink-2); }
+
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 26px; max-width: 78ch; }
+  footer p { margin: 4px 0; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .seg button, select, .toggle-view { transition: background-color 120ms ease, color 120ms ease; }
+  }
+
+  @media print {
+    :root, :root[data-theme="dark"] {
+      --bg: #ffffff;
+      --surface: #ffffff;
+      --ink: #0b0b0b;
+      --ink-2: #52514e;
+      --muted: #898781;
+      --grid: #e1e0d9;
+      --axis: #c3c2b7;
+      --border: rgba(11, 11, 11, 0.16);
+      --accent: #4a3aa7;
+      --accent-ink: #ffffff;
+      --accent-wash: rgba(74, 58, 167, 0.08);
+      --s-tiktok: #2a78d6;
+      --s-instagram: #eb6834;
+      --s-facebook: #1baf7a;
+      --s-youtube: #eda100;
+      --deemph: #c3c2b7;
+      --good: #006300;
+      --bad: #d03b3b;
+    }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .wrap { max-width: none; padding: 0; }
+    .kpi, .grid-2 .card, .filters { break-inside: avoid; }
+    .toggle-view, .filter-reset { display: none; }
+    .table-scroll { overflow: visible; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="wordmark" translate="no">
+      <span class="dot-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      MultiCampaign
+    </span>
+    <span class="mock-badge">Mock · datos simulados</span>
+  </header>
+  <p class="subtitle">Panel de rendimiento de la red de cuentas: alcance y engagement por red social, segmentado por geografía, edad, sexo y tipo de usuario. Todos los datos de esta vista son ficticios y sirven para definir el diseño antes de conectar las APIs reales.</p>
+
+  <div class="filters" role="group" aria-label="Filtros del panel">
+    <div class="filter">
+      <label id="lb-periodo">Período</label>
+      <div class="seg" role="group" aria-labelledby="lb-periodo" id="seg-periodo">
+        <button data-v="7">7 días</button>
+        <button data-v="30" aria-pressed="true">30 días</button>
+        <button data-v="90">90 días</button>
+      </div>
+    </div>
+    <div class="filter">
+      <label for="f-red">Red social</label>
+      <select id="f-red"><option value="all">Todas</option></select>
+    </div>
+    <div class="filter">
+      <label for="f-pais">País</label>
+      <select id="f-pais"><option value="all">Todos</option></select>
+    </div>
+    <div class="filter">
+      <label for="f-edad">Edad</label>
+      <select id="f-edad"><option value="all">Todas</option></select>
+    </div>
+    <div class="filter">
+      <label for="f-sexo">Sexo</label>
+      <select id="f-sexo">
+        <option value="all">Todos</option>
+        <option value="F">Femenino</option>
+        <option value="M">Masculino</option>
+      </select>
+    </div>
+    <div class="filter">
+      <label for="f-tipo">Tipo de usuario</label>
+      <select id="f-tipo">
+        <option value="all">Todos</option>
+        <option value="seg">Seguidores</option>
+        <option value="noseg">No seguidores</option>
+      </select>
+    </div>
+    <button class="filter-reset" id="btn-reset">Limpiar filtros</button>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Alcance diario por red</h2>
+        <div class="sub" id="line-sub"></div>
+      </div>
+      <button class="toggle-view" data-target="line">Ver tabla</button>
+    </div>
+    <div class="legend" id="line-legend"></div>
+    <div class="chart-box" id="chart-line"></div>
+    <div class="table-scroll" id="table-line" hidden></div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Audiencia por edad y sexo</h2>
+          <div class="sub">% del alcance del período</div>
+        </div>
+        <button class="toggle-view" data-target="agesex">Ver tabla</button>
+      </div>
+      <div class="legend" id="agesex-legend"></div>
+      <div class="chart-box" id="chart-agesex"></div>
+      <div class="table-scroll" id="table-agesex" hidden></div>
+      <div class="chart-note">En producción: YouTube expone edad y sexo por video; Facebook solo en videos clásicos de página; TikTok e Instagram, únicamente a nivel de audiencia de cada cuenta.</div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Alcance por país</h2>
+          <div class="sub" id="geo-sub"></div>
+        </div>
+        <button class="toggle-view" data-target="geo">Ver tabla</button>
+      </div>
+      <div class="chart-box" id="chart-geo"></div>
+      <div class="table-scroll" id="table-geo" hidden></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Audiencia nueva por red</h2>
+          <div class="sub">Alcance en no seguidores = potencial viral</div>
+        </div>
+        <button class="toggle-view" data-target="ftype">Ver tabla</button>
+      </div>
+      <div class="legend" id="ftype-legend"></div>
+      <div class="chart-box" id="chart-ftype"></div>
+      <div class="table-scroll" id="table-ftype" hidden></div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Cuentas líderes</h2>
+          <div class="sub" id="acc-sub"></div>
+        </div>
+      </div>
+      <div class="table-scroll" id="table-accounts"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Top videos del período</h2>
+        <div class="sub" id="videos-sub"></div>
+      </div>
+    </div>
+    <div class="table-scroll" id="table-videos"></div>
+  </section>
+
+  <footer>
+    <p><strong>Nota sobre los datos:</strong> todo lo que ves es simulado con un generador determinista, pensado para validar el diseño del panel. Con data real, los filtros de edad, sexo y geografía se calcularán como alcance estimado (alcance total × distribución demográfica reportada por cada API), porque las plataformas entregan distribuciones, no conteos exactos por segmento.</p>
+    <p>Fuentes futuras: TikTok Content Posting API + analítica, Instagram/Facebook Graph API Insights, YouTube Analytics API. Ver <em>docs/investigacion-apis.md</em> del proyecto.</p>
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip" role="status"></div>
+
+<script>
+'use strict';
+
+/* ---------- utilidades ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rnd = mulberry32(20260818);
+const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+const range = (a, b) => a + rnd() * (b - a);
+
+const fmtInt = new Intl.NumberFormat('es-CO');
+const fmtCompact = new Intl.NumberFormat('es', { notation: 'compact', maximumFractionDigits: 1 });
+const fmtPct = (v, d = 1) => (v * 100).toFixed(d).replace('.', ',') + ' %';
+const fmtDate = (d) => new Intl.DateTimeFormat('es', { day: 'numeric', month: 'short' }).format(d);
+const nf = (v) => (v >= 10000 ? fmtCompact.format(v) : fmtInt.format(Math.round(v)));
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, parent) {
+  const n = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function h(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+/* ---------- catálogo mock ---------- */
+const MOCK_TODAY = new Date(2026, 7, 18); // 18 ago 2026 (fecha fija del mock)
+const DAY = 86400000;
+
+const NETWORKS = [
+  { id: 'tiktok', name: 'TikTok', color: 'var(--s-tiktok)' },
+  { id: 'instagram', name: 'Instagram', color: 'var(--s-instagram)' },
+  { id: 'facebook', name: 'Facebook', color: 'var(--s-facebook)' },
+  { id: 'youtube', name: 'YouTube', color: 'var(--s-youtube)' },
+];
+const NET = Object.fromEntries(NETWORKS.map((n) => [n.id, n]));
+
+const COUNTRIES = [
+  { id: 'CO', name: 'Colombia' }, { id: 'MX', name: 'México' }, { id: 'US', name: 'EE. UU.' },
+  { id: 'ES', name: 'España' }, { id: 'AR', name: 'Argentina' }, { id: 'PE', name: 'Perú' },
+  { id: 'CL', name: 'Chile' }, { id: 'EC', name: 'Ecuador' },
+];
+const AGES = ['13–17', '18–24', '25–34', '35–44', '45–54', '55+'];
+
+const ACCOUNTS = [
+  { id: 'a1', net: 'tiktok', handle: '@viral.data.co', tema: 'Datos curiosos', pais: 'CO', followers: 184000 },
+  { id: 'a2', net: 'tiktok', handle: '@recetas.exp', tema: 'Cocina rápida', pais: 'MX', followers: 96500 },
+  { id: 'a3', net: 'tiktok', handle: '@futbol.clips.la', tema: 'Deportes', pais: 'AR', followers: 231000 },
+  { id: 'a4', net: 'instagram', handle: '@finanzas.simples', tema: 'Finanzas personales', pais: 'CO', followers: 58200 },
+  { id: 'a5', net: 'instagram', handle: '@viajes.cortos', tema: 'Viajes', pais: 'ES', followers: 74800 },
+  { id: 'a6', net: 'instagram', handle: '@fit.rapido', tema: 'Fitness', pais: 'MX', followers: 41200 },
+  { id: 'a7', net: 'facebook', handle: 'Historias IA', tema: 'Historias', pais: 'US', followers: 122000 },
+  { id: 'a8', net: 'facebook', handle: 'Humor Latam', tema: 'Humor', pais: 'MX', followers: 167500 },
+  { id: 'a9', net: 'facebook', handle: 'Tech Explica', tema: 'Tecnología', pais: 'CO', followers: 33900 },
+  { id: 'a10', net: 'youtube', handle: 'DatosEn60s', tema: 'Datos curiosos', pais: 'US', followers: 88400 },
+  { id: 'a11', net: 'youtube', handle: 'CocinaExprés', tema: 'Cocina rápida', pais: 'MX', followers: 52700 },
+  { id: 'a12', net: 'youtube', handle: 'MisteriosCortos', tema: 'Misterio', pais: 'ES', followers: 61300 },
+];
+
+const TITLES = {
+  'Datos curiosos': ['El dato que nadie te contó del océano', '3 países que no sabías que existen', 'Por qué el cielo no es azul', 'El animal que nunca duerme', 'Qué pasa si dejas de parpadear'],
+  'Cocina rápida': ['Pasta cremosa en 4 minutos', 'El truco del huevo perfecto', 'Arepas rellenas exprés', '3 desayunos con 2 ingredientes', 'Salsa que mejora todo'],
+  'Deportes': ['El gol que rompió la física', 'La jugada más rápida del año', 'Así entrena un arquero élite', '5 récords imposibles del fútbol', 'El penal que nadie esperaba'],
+  'Finanzas personales': ['La regla 50/30/20 en 60 segundos', 'Deudas: cuál pagar primero', 'Interés compuesto explicado fácil', '3 errores al ahorrar', 'Tu primer fondo de emergencia'],
+  'Viajes': ['La ciudad más barata de Europa', '48 horas en Madrid sin gastar', 'El pueblo azul que pocos conocen', 'Trucos para volar más barato', 'Playas secretas del Caribe'],
+  'Fitness': ['Rutina de 7 minutos sin equipo', 'El error #1 al hacer sentadillas', 'Cardio que sí quema grasa', 'Abdomen en 30 días: la verdad', 'Estiramiento para oficina'],
+  'Historias': ['La carta que llegó 40 años tarde', 'El pueblo que desapareció una noche', 'Historia del gemelo perdido', 'El tesoro bajo la casa', 'La foto que resolvió un misterio'],
+  'Humor': ['Cuando mamá dice "ya casi llegamos"', 'Tipos de personas en el gimnasio', 'El grupo familiar en diciembre', 'Cuando el wifi se cae 5 minutos', 'Reuniones que pudieron ser un audio'],
+  'Tecnología': ['Tu celular te escucha: la verdad', '5 funciones ocultas de WhatsApp', 'Por qué tu batería dura menos', 'La IA que diseña ciudades', 'Cargar el celular: mitos'],
+  'Misterio': ['La señal que llegó del espacio', 'El barco que apareció vacío', '3 casos que la ciencia no explica', 'La puerta que nadie puede abrir', 'El código que nadie descifra'],
+};
+
+/* distribución demográfica plausible por tema (base que luego se perturba por video) */
+function demoFor(acc) {
+  const geo = {};
+  let remaining = 1;
+  const homeShare = range(0.34, 0.5);
+  geo[acc.pais] = homeShare; remaining -= homeShare;
+  const others = COUNTRIES.filter((c) => c.id !== acc.pais).map((c) => c.id);
+  const weights = others.map(() => rnd());
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  others.forEach((c, i) => { geo[c] = remaining * (weights[i] / wSum); });
+
+  const youngTilt = { 'Datos curiosos': 0.6, 'Cocina rápida': 0.4, 'Deportes': 0.7, 'Finanzas personales': 0.35, 'Viajes': 0.45, 'Fitness': 0.5, 'Historias': 0.25, 'Humor': 0.55, 'Tecnología': 0.5, 'Misterio': 0.4 }[acc.tema] ?? 0.5;
+  const base = [0.06 + youngTilt * 0.08, 0.18 + youngTilt * 0.18, 0.26 + youngTilt * 0.02, 0.2 - youngTilt * 0.06, 0.14 - youngTilt * 0.08, 0.16 - youngTilt * 0.14];
+  const jitter = base.map((v) => Math.max(0.015, v + range(-0.03, 0.03)));
+  const jSum = jitter.reduce((a, b) => a + b, 0);
+  const age = Object.fromEntries(AGES.map((a, i) => [a, jitter[i] / jSum]));
+
+  const femTilt = { 'Cocina rápida': 0.62, 'Viajes': 0.58, 'Fitness': 0.55, 'Historias': 0.6, 'Deportes': 0.3, 'Tecnología': 0.36, 'Finanzas personales': 0.46, 'Datos curiosos': 0.47, 'Humor': 0.5, 'Misterio': 0.52 }[acc.tema] ?? 0.5;
+  const F = Math.min(0.9, Math.max(0.1, femTilt + range(-0.06, 0.06)));
+  const NE = range(0.03, 0.07);
+  const sex = { F: F * (1 - NE), M: (1 - F) * (1 - NE), NE };
+
+  const segShare = range(0.22, 0.58);
+  return { geo, age, sex, ftype: { seg: segShare, noseg: 1 - segShare } };
+}
+
+/* ---------- generación de posts ---------- */
+const POSTS = [];
+(function generate() {
+  let vid = 0;
+  for (const acc of ACCOUNTS) {
+    const nPosts = 9 + Math.floor(rnd() * 5); // 9–13 posts por cuenta en 90 días
+    const titles = TITLES[acc.tema];
+    for (let i = 0; i < nPosts; i++) {
+      vid++;
+      const daysAgo = Math.floor(range(0, 92));
+      const viral = rnd() < 0.14;
+      const baseReach = acc.followers * range(0.25, 1.1) * (viral ? range(3.5, 9) : 1);
+      const tau = range(1.6, 5.5);
+      const er = range(0.035, 0.13);
+      const completion = range(0.24, 0.72);
+      const playsFactor = range(1.25, 1.95);
+      POSTS.push({
+        id: 'v' + vid,
+        title: titles[i % titles.length] + (i >= titles.length ? ' · parte ' + (Math.floor(i / titles.length) + 1) : ''),
+        acc, net: acc.net,
+        publishedAt: new Date(MOCK_TODAY.getTime() - daysAgo * DAY),
+        daysAgo, totalReach: baseReach, tau, er, completion, playsFactor,
+        demo: demoFor(acc),
+        viral,
+      });
+    }
+  }
+})();
+
+/* alcance de un post en un día concreto (curva de decaimiento normalizada) */
+function reachOnDay(post, dayOffsetFromToday) {
+  const d = post.daysAgo - dayOffsetFromToday; // días desde publicación
+  if (d < 0) return 0;
+  const norm = 1 - Math.exp(-1 / post.tau); // suma geométrica → factor de normalización
+  return post.totalReach * norm * Math.exp(-d / post.tau);
+}
+
+/* ---------- estado de filtros ---------- */
+const state = { period: 30, red: 'all', pais: 'all', edad: 'all', sexo: 'all', tipo: 'all' };
+
+function demoWeight(post) {
+  let w = 1;
+  if (state.pais !== 'all') w *= post.demo.geo[state.pais] ?? 0;
+  if (state.edad !== 'all') w *= post.demo.age[state.edad] ?? 0;
+  if (state.sexo !== 'all') w *= post.demo.sex[state.sexo] ?? 0;
+  if (state.tipo !== 'all') w *= post.demo.ftype[state.tipo] ?? 0;
+  return w;
+}
+function activePosts() {
+  return POSTS.filter((p) => state.red === 'all' || p.net === state.red);
+}
+/* alcance efectivo de un post dentro de una ventana [start,end) en días-atrás */
+function reachInWindow(post, fromDaysAgo, toDaysAgo) {
+  let sum = 0;
+  for (let d = toDaysAgo; d < fromDaysAgo; d++) sum += reachOnDay(post, d);
+  return sum * demoWeight(post);
+}
+
+function periodLabel() {
+  return 'últimos ' + state.period + ' días';
+}
+
+/* ---------- tooltip ---------- */
+const tooltip = document.getElementById('tooltip');
+function showTooltip(x, y, title, rows) {
+  tooltip.textContent = '';
+  const t = h('div', 'tt-title', title);
+  tooltip.appendChild(t);
+  for (const r of rows) {
+    const row = h('div', 'tt-row');
+    if (r.color) { const k = h('span', 'tt-key'); k.style.background = r.color; row.appendChild(k); }
+    row.appendChild(h('span', 'tt-val', r.value));
+    row.appendChild(h('span', 'tt-lbl', r.label));
+    tooltip.appendChild(row);
+  }
+  tooltip.style.display = 'block';
+  const rect = tooltip.getBoundingClientRect();
+  const px = Math.min(x + 14, window.innerWidth - rect.width - 10);
+  const py = Math.max(8, y - rect.height - 12);
+  tooltip.style.left = px + 'px';
+  tooltip.style.top = py + 'px';
+}
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+/* ---------- KPIs ---------- */
+function computeTotals(fromDaysAgo, toDaysAgo) {
+  let reach = 0, plays = 0, inter = 0, follows = 0;
+  for (const p of activePosts()) {
+    const r = reachInWindow(p, fromDaysAgo, toDaysAgo);
+    reach += r;
+    plays += r * p.playsFactor;
+    inter += r * p.er;
+    follows += r * 0.0042;
+  }
+  return { reach, plays, inter, follows, er: reach ? inter / reach : 0 };
+}
+function sparkData(points) {
+  const P = state.period;
+  points = Math.min(points, P);
+  const step = P / points;
+  const out = [];
+  for (let i = 0; i < points; i++) {
+    const to = Math.round(P - (i + 1) * step);
+    const from = Math.round(P - i * step);
+    let v = 0;
+    for (const p of activePosts()) v += reachInWindow(p, from, to);
+    out.push(v);
+  }
+  return out;
+}
+function renderKPIs() {
+  const cur = computeTotals(state.period, 0);
+  const prev = computeTotals(state.period * 2, state.period);
+  const defs = [
+    { label: 'Alcance total', v: cur.reach, pv: prev.reach },
+    { label: 'Reproducciones', v: cur.plays, pv: prev.plays },
+    { label: 'Interacciones', v: cur.inter, pv: prev.inter },
+    { label: 'Nuevos seguidores', v: cur.follows, pv: prev.follows },
+    { label: 'Engagement medio', v: cur.er, pv: prev.er, pct: true },
+  ];
+  const wrap = document.getElementById('kpis');
+  wrap.textContent = '';
+  const spark = sparkData(12);
+  for (const d of defs) {
+    const tile = h('div', 'kpi');
+    tile.appendChild(h('div', 'label', d.label));
+    tile.appendChild(h('div', 'value', d.pct ? fmtPct(d.v) : nf(d.v)));
+    const delta = d.pv > 0 ? (d.v - d.pv) / d.pv : 0;
+    const up = delta >= 0;
+    const el = h('div', 'delta ' + (up ? 'up' : 'down'));
+    el.appendChild(document.createTextNode((up ? '▲ ' : '▼ ') + Math.abs(delta * 100).toFixed(1).replace('.', ',') + ' % '));
+    el.appendChild(h('span', 'vs', 'vs. período anterior'));
+    tile.appendChild(el);
+    // sparkline (12 puntos, alcance; tono de des-énfasis, tramo final en acento)
+    const W = 150, H = 30, max = Math.max(...spark, 1);
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true' });
+    const pts = spark.map((v, i) => [4 + (i * (W - 8)) / (spark.length - 1), H - 4 - (v / max) * (H - 9)]);
+    const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    svgEl('path', { d: path, fill: 'none', stroke: 'var(--deemph)', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg);
+    const lastSeg = pts.slice(-2).map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    svgEl('path', { d: lastSeg, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linecap': 'round' }, svg);
+    const last = pts[pts.length - 1];
+    svgEl('circle', { cx: last[0], cy: last[1], r: 3.5, fill: 'var(--accent)', stroke: 'var(--surface)', 'stroke-width': 2 }, svg);
+    tile.appendChild(svg);
+    wrap.appendChild(tile);
+  }
+}
+
+/* ---------- gráfico de líneas: alcance diario por red ---------- */
+function lineSeries() {
+  const P = state.period;
+  const nets = state.red === 'all' ? NETWORKS : NETWORKS.filter((n) => n.id === state.red);
+  return nets.map((net) => {
+    const data = [];
+    for (let d = P - 1; d >= 0; d--) {
+      let v = 0;
+      for (const p of POSTS) if (p.net === net.id) v += reachOnDay(p, d) * demoWeight(p);
+      data.push({ date: new Date(MOCK_TODAY.getTime() - d * DAY), v });
+    }
+    return { net, data };
+  });
+}
+function niceTicks(max, n = 4) {
+  if (max <= 0) return [0, 1];
+  const raw = max / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || 10 * mag;
+  const ticks = [];
+  for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
+  if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
+  return ticks;
+}
+function renderLine() {
+  const box = document.getElementById('chart-line');
+  const legend = document.getElementById('line-legend');
+  document.getElementById('line-sub').textContent = 'Alcance estimado con filtros aplicados · ' + periodLabel();
+  box.textContent = ''; legend.textContent = '';
+
+  const series = lineSeries();
+  for (const s of series.length > 1 ? series : []) {
+    const k = h('span', 'key');
+    const sw = h('span', 'swatch-line'); sw.style.background = s.net.color;
+    k.appendChild(sw); k.appendChild(document.createTextNode(s.net.name));
+    legend.appendChild(k);
+  }
+
+  const W = Math.max(560, box.clientWidth || 900), H = 300;
+  const M = { t: 14, r: 96, b: 30, l: 46 };
+  const iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Alcance diario por red social' });
+  const n = series[0].data.length;
+  const maxV = Math.max(1, ...series.flatMap((s) => s.data.map((d) => d.v)));
+  const ticks = niceTicks(maxV);
+  const yMax = ticks[ticks.length - 1];
+  const x = (i) => M.l + (i * iw) / (n - 1);
+  const y = (v) => M.t + ih - (v / yMax) * ih;
+
+  for (const tv of ticks) {
+    svgEl('line', { x1: M.l, x2: M.l + iw, y1: y(tv), y2: y(tv), stroke: tv === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }, svg);
+    svgEl('text', { x: M.l - 8, y: y(tv) + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = fmtCompact.format(tv);
+  }
+  const nLabels = Math.min(6, n);
+  for (let i = 0; i < nLabels; i++) {
+    const idx = Math.round((i * (n - 1)) / (nLabels - 1));
+    svgEl('text', { x: x(idx), y: H - 8, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = fmtDate(series[0].data[idx].date);
+  }
+
+  for (const s of series) {
+    const d = s.data.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1)).join(' ');
+    svgEl('path', { d, fill: 'none', stroke: s.net.color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg);
+    const last = s.data[n - 1];
+    svgEl('circle', { cx: x(n - 1), cy: y(last.v), r: 4, fill: s.net.color, stroke: 'var(--surface)', 'stroke-width': 2 }, svg);
+  }
+  // etiquetas directas al final (se omiten las que colisionan; la leyenda las cubre)
+  const placed = [];
+  const ends = series.map((s) => ({ s, yv: y(s.data[n - 1].v) })).sort((a, b) => a.yv - b.yv);
+  for (const e of ends) {
+    if (placed.some((py) => Math.abs(py - e.yv) < 14)) continue;
+    placed.push(e.yv);
+    const t = svgEl('text', { x: M.l + iw + 10, y: e.yv + 4, 'font-size': 11.5, 'font-weight': 600, fill: 'var(--ink-2)' }, svg);
+    t.textContent = e.s.net.name;
+  }
+
+  // crosshair + tooltip
+  const cross = svgEl('line', { y1: M.t, y2: M.t + ih, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const hot = svgEl('rect', { x: M.l, y: M.t, width: iw, height: ih, fill: 'transparent' }, svg);
+  hot.addEventListener('pointermove', (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((ev.clientX - rect.left) / rect.width) * W;
+    const i = Math.max(0, Math.min(n - 1, Math.round(((sx - M.l) / iw) * (n - 1))));
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i));
+    cross.setAttribute('visibility', 'visible');
+    showTooltip(ev.clientX, ev.clientY,
+      new Intl.DateTimeFormat('es', { weekday: 'short', day: 'numeric', month: 'short' }).format(series[0].data[i].date),
+      series.map((s) => ({ color: s.net.color, value: nf(s.data[i].v), label: s.net.name })));
+  });
+  hot.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); hideTooltip(); });
+  box.appendChild(svg);
+
+  // vista de tabla (gemela accesible)
+  const tbl = document.getElementById('table-line');
+  tbl.textContent = '';
+  const table = h('table');
+  const thead = h('thead'); const trh = h('tr');
+  trh.appendChild(h('th', null, 'Fecha'));
+  for (const s of series) { const th = h('th', 'num', s.net.name); trh.appendChild(th); }
+  thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  const stride = Math.max(1, Math.floor(n / 15));
+  for (let i = n - 1; i >= 0; i -= stride) {
+    const tr = h('tr');
+    tr.appendChild(h('td', null, fmtDate(series[0].data[i].date)));
+    for (const s of series) tr.appendChild(h('td', 'num', fmtInt.format(Math.round(s.data[i].v))));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody); tbl.appendChild(table);
+}
+
+/* ---------- edad × sexo ---------- */
+function renderAgeSex() {
+  const box = document.getElementById('chart-agesex');
+  const legend = document.getElementById('agesex-legend');
+  box.textContent = ''; legend.textContent = '';
+  const SEXES = [
+    { id: 'F', name: 'Femenino', color: 'var(--s-tiktok)' },
+    { id: 'M', name: 'Masculino', color: 'var(--s-instagram)' },
+  ];
+  const show = SEXES.filter((s) => state.sexo === 'all' || state.sexo === s.id);
+  for (const s of show.length > 1 ? show : []) {
+    const k = h('span', 'key');
+    const sw = h('span', 'swatch-rect'); sw.style.background = s.color;
+    k.appendChild(sw); k.appendChild(document.createTextNode(s.name));
+    legend.appendChild(k);
+  }
+  const bands = state.edad === 'all' ? AGES : [state.edad];
+  const agg = {};
+  let total = 0;
+  for (const b of bands) for (const s of show) agg[b + s.id] = 0;
+  for (const p of activePosts()) {
+    let w = 1;
+    if (state.pais !== 'all') w *= p.demo.geo[state.pais] ?? 0;
+    if (state.tipo !== 'all') w *= p.demo.ftype[state.tipo] ?? 0;
+    const base = reachInWindowRaw(p, state.period, 0) * w;
+    for (const b of bands) for (const s of show) {
+      const v = base * p.demo.age[b] * p.demo.sex[s.id];
+      agg[b + s.id] += v; total += v;
+    }
+  }
+  const W = Math.max(420, box.clientWidth || 520), H = 250;
+  const M = { t: 12, r: 8, b: 28, l: 40 };
+  const iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Distribución de audiencia por edad y sexo' });
+  const maxShare = Math.max(0.02, ...bands.flatMap((b) => show.map((s) => (total ? agg[b + s.id] / total : 0))));
+  const ticks = niceTicks(maxShare * 100, 4);
+  const yMax = ticks[ticks.length - 1];
+  const y = (v) => M.t + ih - (v / yMax) * ih;
+  for (const tv of ticks) {
+    svgEl('line', { x1: M.l, x2: M.l + iw, y1: y(tv), y2: y(tv), stroke: tv === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }, svg);
+    svgEl('text', { x: M.l - 7, y: y(tv) + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = tv + ' %';
+  }
+  const band = iw / bands.length;
+  const barW = Math.min(24, (band * 0.6) / show.length);
+  bands.forEach((b, bi) => {
+    const cx = M.l + band * bi + band / 2;
+    svgEl('text', { x: cx, y: H - 8, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = b;
+    show.forEach((s, si) => {
+      const share = total ? (agg[b + s.id] / total) * 100 : 0;
+      const gx = cx - ((show.length * barW + (show.length - 1) * 2) / 2) + si * (barW + 2);
+      const bh = Math.max(1, ((share / yMax) * ih));
+      const rTop = Math.min(4, bh);
+      const yTop = M.t + ih - bh;
+      const path = `M ${gx} ${M.t + ih} L ${gx} ${yTop + rTop} Q ${gx} ${yTop} ${gx + rTop} ${yTop} L ${gx + barW - rTop} ${yTop} Q ${gx + barW} ${yTop} ${gx + barW} ${yTop + rTop} L ${gx + barW} ${M.t + ih} Z`;
+      const bar = svgEl('path', { d: path, fill: s.color, tabindex: 0, role: 'img', 'aria-label': `${s.name} ${b}: ${share.toFixed(1)} %` }, svg);
+      const onShow = (px, py) => showTooltip(px, py, 'Edad ' + b, [{ color: s.color, value: fmtPct(share / 100), label: s.name + ' del alcance' }]);
+      bar.addEventListener('pointermove', (ev) => onShow(ev.clientX, ev.clientY));
+      bar.addEventListener('pointerleave', hideTooltip);
+      bar.addEventListener('focus', () => { const r = bar.getBoundingClientRect(); onShow(r.left + r.width / 2, r.top); });
+      bar.addEventListener('blur', hideTooltip);
+    });
+  });
+  box.appendChild(svg);
+
+  const tbl = document.getElementById('table-agesex');
+  tbl.textContent = '';
+  const table = h('table');
+  const trh = h('tr'); trh.appendChild(h('th', null, 'Edad'));
+  for (const s of show) trh.appendChild(h('th', 'num', s.name));
+  const thead = h('thead'); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  for (const b of bands) {
+    const tr = h('tr'); tr.appendChild(h('td', null, b));
+    for (const s of show) tr.appendChild(h('td', 'num', total ? fmtPct(agg[b + s.id] / total) : '—'));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody); tbl.appendChild(table);
+}
+/* alcance sin pesos demográficos (los pesos se aplican dimensión a dimensión en los gráficos demográficos) */
+function reachInWindowRaw(post, fromDaysAgo, toDaysAgo) {
+  let sum = 0;
+  for (let d = toDaysAgo; d < fromDaysAgo; d++) sum += reachOnDay(post, d);
+  return sum;
+}
+
+/* ---------- alcance por país ---------- */
+function renderGeo() {
+  const box = document.getElementById('chart-geo');
+  document.getElementById('geo-sub').textContent = 'Alcance estimado · ' + periodLabel();
+  box.textContent = '';
+  const list = state.pais === 'all' ? COUNTRIES : COUNTRIES.filter((c) => c.id === state.pais);
+  const agg = list.map((c) => {
+    let v = 0;
+    for (const p of activePosts()) {
+      let w = p.demo.geo[c.id] ?? 0;
+      if (state.edad !== 'all') w *= p.demo.age[state.edad] ?? 0;
+      if (state.sexo !== 'all') w *= p.demo.sex[state.sexo] ?? 0;
+      if (state.tipo !== 'all') w *= p.demo.ftype[state.tipo] ?? 0;
+      v += reachInWindowRaw(p, state.period, 0) * w;
+    }
+    return { c, v };
+  }).sort((a, b) => b.v - a.v);
+
+  const W = Math.max(420, box.clientWidth || 520);
+  const rowH = 30, M = { t: 6, r: 74, b: 6, l: 86 };
+  const H = M.t + M.b + agg.length * rowH;
+  const iw = W - M.l - M.r;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Alcance por país' });
+  const maxV = Math.max(1, ...agg.map((a) => a.v));
+  svgEl('line', { x1: M.l, x2: M.l, y1: M.t, y2: H - M.b, stroke: 'var(--axis)', 'stroke-width': 1 }, svg);
+  agg.forEach((a, i) => {
+    const cy = M.t + i * rowH + rowH / 2;
+    svgEl('text', { x: M.l - 10, y: cy + 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink-2)' }, svg).textContent = a.c.name;
+    const bw = Math.max(2, (a.v / maxV) * iw);
+    const bH = 18, r = 4;
+    const yTop = cy - bH / 2;
+    const d = `M ${M.l} ${yTop} L ${M.l + bw - r} ${yTop} Q ${M.l + bw} ${yTop} ${M.l + bw} ${yTop + r} L ${M.l + bw} ${yTop + bH - r} Q ${M.l + bw} ${yTop + bH} ${M.l + bw - r} ${yTop + bH} L ${M.l} ${yTop + bH} Z`;
+    const bar = svgEl('path', { d, fill: 'var(--s-tiktok)', tabindex: 0, role: 'img', 'aria-label': `${a.c.name}: ${fmtInt.format(Math.round(a.v))}` }, svg);
+    svgEl('text', { x: M.l + bw + 8, y: cy + 4, 'font-size': 12, 'font-variant-numeric': 'tabular-nums', fill: 'var(--ink-2)' }, svg).textContent = nf(a.v);
+    const onShow = (px, py) => showTooltip(px, py, a.c.name, [{ color: getComputedStyle(document.documentElement).getPropertyValue('--s-tiktok'), value: fmtInt.format(Math.round(a.v)), label: 'alcance estimado' }]);
+    bar.addEventListener('pointermove', (ev) => onShow(ev.clientX, ev.clientY));
+    bar.addEventListener('pointerleave', hideTooltip);
+    bar.addEventListener('focus', () => { const r2 = bar.getBoundingClientRect(); onShow(r2.left + r2.width, r2.top); });
+    bar.addEventListener('blur', hideTooltip);
+  });
+  box.appendChild(svg);
+
+  const tbl = document.getElementById('table-geo');
+  tbl.textContent = '';
+  const table = h('table');
+  const trh = h('tr'); trh.appendChild(h('th', null, 'País')); trh.appendChild(h('th', 'num', 'Alcance'));
+  const thead = h('thead'); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  for (const a of agg) {
+    const tr = h('tr');
+    tr.appendChild(h('td', null, a.c.name));
+    tr.appendChild(h('td', 'num', fmtInt.format(Math.round(a.v))));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody); tbl.appendChild(table);
+}
+
+/* ---------- seguidores vs no seguidores (énfasis en audiencia nueva) ---------- */
+function renderFtype() {
+  const box = document.getElementById('chart-ftype');
+  const legend = document.getElementById('ftype-legend');
+  box.textContent = ''; legend.textContent = '';
+  const KEYS = [
+    { id: 'noseg', name: 'No seguidores', color: 'var(--accent)' },
+    { id: 'seg', name: 'Seguidores', color: 'var(--deemph)' },
+  ];
+  for (const k of KEYS) {
+    const key = h('span', 'key');
+    const sw = h('span', 'swatch-rect'); sw.style.background = k.color;
+    key.appendChild(sw); key.appendChild(document.createTextNode(k.name));
+    legend.appendChild(key);
+  }
+  const nets = state.red === 'all' ? NETWORKS : NETWORKS.filter((n) => n.id === state.red);
+  const rows = nets.map((net) => {
+    let seg = 0, noseg = 0;
+    for (const p of POSTS) {
+      if (p.net !== net.id) continue;
+      let w = 1;
+      if (state.pais !== 'all') w *= p.demo.geo[state.pais] ?? 0;
+      if (state.edad !== 'all') w *= p.demo.age[state.edad] ?? 0;
+      if (state.sexo !== 'all') w *= p.demo.sex[state.sexo] ?? 0;
+      const base = reachInWindowRaw(p, state.period, 0) * w;
+      seg += base * p.demo.ftype.seg;
+      noseg += base * p.demo.ftype.noseg;
+    }
+    return { net, seg, noseg, total: seg + noseg };
+  });
+
+  const W = Math.max(420, box.clientWidth || 520);
+  const rowH = 40, M = { t: 6, r: 10, b: 22, l: 86 };
+  const H = M.t + M.b + rows.length * rowH;
+  const iw = W - M.l - M.r;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Proporción de alcance en seguidores y no seguidores por red' });
+  rows.forEach((r, i) => {
+    const cy = M.t + i * rowH + rowH / 2;
+    svgEl('text', { x: M.l - 10, y: cy + 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink-2)' }, svg).textContent = r.net.name;
+    const bH = 20, yTop = cy - bH / 2;
+    const shareNo = r.total ? r.noseg / r.total : 0;
+    const wNo = Math.max(0, iw * shareNo - 1);
+    const wSeg = Math.max(0, iw * (1 - shareNo) - 1);
+    const segX = M.l + wNo + 2; // 2px de separación en color de superficie
+    const rad = 4;
+    const dNo = `M ${M.l} ${yTop} L ${M.l + wNo} ${yTop} L ${M.l + wNo} ${yTop + bH} L ${M.l} ${yTop + bH} Z`;
+    const dSeg = `M ${segX} ${yTop} L ${segX + wSeg - rad} ${yTop} Q ${segX + wSeg} ${yTop} ${segX + wSeg} ${yTop + rad} L ${segX + wSeg} ${yTop + bH - rad} Q ${segX + wSeg} ${yTop + bH} ${segX + wSeg - rad} ${yTop + bH} L ${segX} ${yTop + bH} Z`;
+    const segNo = svgEl('path', { d: dNo, fill: KEYS[0].color, tabindex: 0, role: 'img', 'aria-label': `${r.net.name} — no seguidores: ${(shareNo * 100).toFixed(0)} %` }, svg);
+    const segSi = svgEl('path', { d: dSeg, fill: KEYS[1].color, tabindex: 0, role: 'img', 'aria-label': `${r.net.name} — seguidores: ${((1 - shareNo) * 100).toFixed(0)} %` }, svg);
+    if (wNo > 46) {
+      svgEl('text', { x: M.l + 8, y: cy + 4, 'font-size': 11.5, 'font-weight': 600, fill: 'var(--accent-ink)' }, svg).textContent = Math.round(shareNo * 100) + ' %';
+    }
+    if (wSeg > 46) {
+      svgEl('text', { x: segX + wSeg - 8, y: cy + 4, 'text-anchor': 'end', 'font-size': 11.5, fill: 'var(--ink-2)' }, svg).textContent = Math.round((1 - shareNo) * 100) + ' %';
+    }
+    const tip = (px, py) => showTooltip(px, py, r.net.name, [
+      { color: KEYS[0].color, value: fmtPct(shareNo, 0), label: 'no seguidores · ' + nf(r.noseg) },
+      { color: KEYS[1].color, value: fmtPct(1 - shareNo, 0), label: 'seguidores · ' + nf(r.seg) },
+    ]);
+    for (const el of [segNo, segSi]) {
+      el.addEventListener('pointermove', (ev) => tip(ev.clientX, ev.clientY));
+      el.addEventListener('pointerleave', hideTooltip);
+      el.addEventListener('focus', () => { const rc = el.getBoundingClientRect(); tip(rc.left + rc.width / 2, rc.top); });
+      el.addEventListener('blur', hideTooltip);
+    }
+  });
+  box.appendChild(svg);
+
+  const tbl = document.getElementById('table-ftype');
+  tbl.textContent = '';
+  const table = h('table');
+  const trh = h('tr');
+  for (const c of ['Red', 'No seguidores', 'Seguidores']) trh.appendChild(h('th', c === 'Red' ? null : 'num', c));
+  const thead = h('thead'); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  for (const r of rows) {
+    const tr = h('tr');
+    tr.appendChild(h('td', null, r.net.name));
+    tr.appendChild(h('td', 'num', r.total ? fmtPct(r.noseg / r.total, 0) : '—'));
+    tr.appendChild(h('td', 'num', r.total ? fmtPct(r.seg / r.total, 0) : '—'));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody); tbl.appendChild(table);
+}
+
+/* ---------- tablas: cuentas y videos ---------- */
+function netChip(netId) {
+  const net = NET[netId];
+  const chip = h('span', 'chip');
+  const dot = h('i'); dot.style.background = net.color;
+  chip.appendChild(dot); chip.appendChild(document.createTextNode(net.name));
+  return chip;
+}
+function renderAccounts() {
+  document.getElementById('acc-sub').textContent = 'Por alcance estimado · ' + periodLabel();
+  const wrap = document.getElementById('table-accounts');
+  wrap.textContent = '';
+  const rows = ACCOUNTS
+    .filter((a) => state.red === 'all' || a.net === state.red)
+    .map((a) => {
+      let reach = 0, inter = 0, prevReach = 0;
+      for (const p of POSTS) {
+        if (p.acc.id !== a.id) continue;
+        const r = reachInWindow(p, state.period, 0);
+        reach += r; inter += r * p.er;
+        prevReach += reachInWindow(p, state.period * 2, state.period);
+      }
+      return { a, reach, er: reach ? inter / reach : 0, growth: prevReach > 0 ? (reach - prevReach) / prevReach : 0 };
+    })
+    .sort((x, y) => y.reach - x.reach)
+    .slice(0, 8);
+  const maxReach = Math.max(1, ...rows.map((r) => r.reach));
+  const table = h('table');
+  const trh = h('tr');
+  trh.appendChild(h('th', null, 'Cuenta'));
+  trh.appendChild(h('th', null, 'Red'));
+  trh.appendChild(h('th', 'num', 'Seguidores'));
+  trh.appendChild(h('th', 'num', 'Alcance'));
+  trh.appendChild(h('th', 'num', 'ER'));
+  trh.appendChild(h('th', 'num', 'Δ vs. anterior'));
+  const thead = h('thead'); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  for (const r of rows) {
+    const tr = h('tr');
+    const tdA = h('td');
+    tdA.appendChild(h('div', 'cell-main', r.a.handle));
+    tdA.appendChild(h('div', 'cell-sub', r.a.tema));
+    tr.appendChild(tdA);
+    const tdN = h('td'); tdN.appendChild(netChip(r.a.net)); tr.appendChild(tdN);
+    tr.appendChild(h('td', 'num', nf(r.a.followers)));
+    const tdR = h('td', 'num');
+    const mb = h('span', 'minibar-wrap');
+    const bar = h('span', 'minibar'); const fill = h('i');
+    fill.style.width = Math.max(4, (r.reach / maxReach) * 100) + '%';
+    bar.appendChild(fill);
+    mb.appendChild(document.createTextNode(nf(r.reach)));
+    mb.appendChild(bar);
+    tdR.appendChild(mb); tr.appendChild(tdR);
+    tr.appendChild(h('td', 'num', fmtPct(r.er)));
+    const up = r.growth >= 0;
+    tr.appendChild(h('td', 'num delta-cell ' + (up ? 'up' : 'down'), (up ? '▲ ' : '▼ ') + Math.abs(r.growth * 100).toFixed(0) + ' %'));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+function topDemo(post) {
+  const bestAge = AGES.reduce((a, b) => (post.demo.age[a] >= post.demo.age[b] ? a : b));
+  const bestSex = post.demo.sex.F >= post.demo.sex.M ? 'F' : 'M';
+  const bestGeo = Object.entries(post.demo.geo).sort((a, b) => b[1] - a[1])[0][0];
+  return bestAge + ' · ' + bestSex + ' · ' + bestGeo;
+}
+function renderVideos() {
+  document.getElementById('videos-sub').textContent = 'Ordenados por alcance estimado con filtros aplicados · ' + periodLabel();
+  const wrap = document.getElementById('table-videos');
+  wrap.textContent = '';
+  const rows = activePosts()
+    .map((p) => ({ p, reach: reachInWindow(p, state.period, 0) }))
+    .filter((r) => r.reach > 0)
+    .sort((a, b) => b.reach - a.reach)
+    .slice(0, 10);
+  const maxReach = Math.max(1, ...rows.map((r) => r.reach));
+  const table = h('table');
+  const trh = h('tr');
+  for (const c of [['#'], ['Video'], ['Red'], ['Publicado'], ['Alcance', 'num'], ['Reprod.', 'num'], ['ER', 'num'], ['Finalización', 'num'], ['Audiencia dominante']]) {
+    trh.appendChild(h('th', c[1] || null, c[0]));
+  }
+  const thead = h('thead'); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = h('tbody');
+  rows.forEach((r, i) => {
+    const tr = h('tr');
+    tr.appendChild(h('td', 'num', String(i + 1)));
+    const tdV = h('td');
+    tdV.appendChild(h('div', 'cell-main', r.p.title));
+    tdV.appendChild(h('div', 'cell-sub', r.p.acc.handle));
+    tr.appendChild(tdV);
+    const tdN = h('td'); tdN.appendChild(netChip(r.p.net)); tr.appendChild(tdN);
+    tr.appendChild(h('td', null, fmtDate(r.p.publishedAt)));
+    const tdR = h('td', 'num');
+    const mb = h('span', 'minibar-wrap');
+    const bar = h('span', 'minibar'); const fill = h('i');
+    fill.style.width = Math.max(4, (r.reach / maxReach) * 100) + '%';
+    bar.appendChild(fill);
+    mb.appendChild(document.createTextNode(nf(r.reach)));
+    mb.appendChild(bar);
+    tdR.appendChild(mb); tr.appendChild(tdR);
+    tr.appendChild(h('td', 'num', nf(r.reach * r.p.playsFactor)));
+    tr.appendChild(h('td', 'num', fmtPct(r.p.er)));
+    tr.appendChild(h('td', 'num', fmtPct(r.p.completion, 0)));
+    tr.appendChild(h('td', null, topDemo(r.p)));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+/* ---------- montaje de filtros ---------- */
+function fillSelect(id, items) {
+  const sel = document.getElementById(id);
+  for (const it of items) {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = it.name;
+    sel.appendChild(o);
+  }
+}
+fillSelect('f-red', NETWORKS);
+fillSelect('f-pais', COUNTRIES.map((c) => ({ id: c.id, name: c.name })));
+fillSelect('f-edad', AGES.map((a) => ({ id: a, name: a + ' años' })));
+
+document.getElementById('seg-periodo').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button');
+  if (!btn) return;
+  for (const b of ev.currentTarget.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === btn));
+  state.period = Number(btn.dataset.v);
+  render();
+});
+for (const [id, key] of [['f-red', 'red'], ['f-pais', 'pais'], ['f-edad', 'edad'], ['f-sexo', 'sexo'], ['f-tipo', 'tipo']]) {
+  document.getElementById(id).addEventListener('change', (ev) => { state[key] = ev.target.value; render(); });
+}
+document.getElementById('btn-reset').addEventListener('click', () => {
+  state.red = 'all'; state.pais = 'all'; state.edad = 'all'; state.sexo = 'all'; state.tipo = 'all'; state.period = 30;
+  for (const id of ['f-red', 'f-pais', 'f-edad', 'f-sexo', 'f-tipo']) document.getElementById(id).value = 'all';
+  for (const b of document.querySelectorAll('#seg-periodo button')) b.setAttribute('aria-pressed', String(b.dataset.v === '30'));
+  render();
+});
+
+/* ---------- alternar gráfico / tabla ---------- */
+for (const btn of document.querySelectorAll('.toggle-view')) {
+  btn.addEventListener('click', () => {
+    const t = btn.dataset.target;
+    const chart = document.getElementById('chart-' + t);
+    const table = document.getElementById('table-' + t);
+    const showingTable = !table.hidden;
+    table.hidden = showingTable;
+    chart.style.display = showingTable ? '' : 'none';
+    const legend = document.getElementById(t + '-legend');
+    if (legend) legend.style.display = showingTable ? '' : 'none';
+    btn.textContent = showingTable ? 'Ver tabla' : 'Ver gráfico';
+  });
+}
+
+/* ---------- render maestro ---------- */
+function render() {
+  renderKPIs();
+  renderLine();
+  renderAgeSex();
+  renderGeo();
+  renderFtype();
+  renderAccounts();
+  renderVideos();
+}
+render();
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 180);
+});
+</script>
