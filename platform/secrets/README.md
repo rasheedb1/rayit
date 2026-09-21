@@ -1,12 +1,13 @@
 # El vault
 
-En esta carpeta hay dos archivos cifrados con AES-256, **con la misma
+En esta carpeta hay tres archivos cifrados con AES-256, **con la misma
 frase de paso**:
 
 | Archivo | Qué guarda | Quién lo abre |
 |---|---|---|
 | `supabase.env.enc` | Credenciales de la base de datos | `make db.unlock` |
 | `github.env.enc` | El token para empujar al repositorio | `make github.install` |
+| `vercel.env.enc` | El token para desplegar el dashboard | `make vercel.link` |
 
 **Sí, están commiteados. Sí, es a propósito.**
 
@@ -70,6 +71,9 @@ no serviría de nada: por eso la genera el script, no una persona.
 
 Las credenciales dentro también se consideran filtradas. En orden:
 
+0. Rotar los tokens de terceros, que es lo más rápido y lo más visible:
+   `make github.set` y `make vercel.set`, revocando el viejo en GitHub y
+   en vercel.com → Account Settings → Tokens.
 1. `./scripts/vault.sh passphrase` — frase nueva.
 2. Rotar las contraseñas de Postgres:
    ```bash

@@ -35,7 +35,6 @@ set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$RAIZ/scripts/lib/frase.sh"
-REPO="$(cd "$RAIZ/.." && pwd)"
 CIFRADO="$RAIZ/secrets/vercel.env.enc"
 ITER=600000
 API="https://api.vercel.com"
@@ -83,8 +82,9 @@ enmascarar() { sed -E 's/^(.{8}).*(.{6})$/\1••••••••\2/'; }
 # ---------------------------------------------------------------------
 # El vault, como variables V_*
 # ---------------------------------------------------------------------
-# El archivo tiene siempre las mismas seis claves y en el mismo orden,
+# El archivo tiene siempre las mismas siete claves y en el mismo orden,
 # para que un `git diff` del .enc no dependa de en qué orden se escribió.
+# VERCEL_APP_DIR es relativo a platform/, que es donde vive el código.
 V_USER='' V_SCOPE='' V_ORG_ID='' V_PROJECT='' V_PROJECT_ID='' V_APP_DIR='' V_TOKEN=''
 
 cargar_vault() {
@@ -290,14 +290,14 @@ cmd_link() {
 
   # El enlace local: es lo que hace que `vercel` a secas, sin este
   # script, sepa a qué proyecto va. Es por clon y no se versiona.
-  local destino="$REPO/$V_APP_DIR/.vercel"
+  local destino="$RAIZ/$V_APP_DIR/.vercel"
   mkdir -p "$destino"
   printf '{"orgId":"%s","projectId":"%s","projectName":"%s"}\n' \
     "$V_ORG_ID" "$V_PROJECT_ID" "$V_PROJECT" > "$destino/project.json"
 
   verde "✓ $V_APP_DIR enlazado a $V_SCOPE/$V_PROJECT"
   gris  "   El token NO está en $V_APP_DIR/.vercel: ahí solo hay ids públicos."
-  if [[ ! -f "$REPO/$V_APP_DIR/package.json" ]]; then
+  if [[ ! -f "$RAIZ/$V_APP_DIR/package.json" ]]; then
     amarillo "Ojo: $V_APP_DIR todavía no tiene package.json — no hay nada que desplegar."
   fi
   gris  "   Commitea secrets/vercel.env.enc: ahora lleva el id del proyecto."
@@ -306,7 +306,7 @@ cmd_link() {
 cmd_unlink() {
   local rc=0; cargar_vault || rc=$?
   local dir="${V_APP_DIR:-apps/web}"
-  rm -rf "$REPO/$dir/.vercel"
+  rm -rf "$RAIZ/$dir/.vercel"
   verde "✓ enlace local retirado de $dir (el vault cifrado sigue intacto)"
 }
 
@@ -316,7 +316,7 @@ cmd_unlink() {
 cmd_deploy() {
   exigir_vault
   [[ -n "$V_PROJECT_ID" ]] || { rojo "No hay proyecto enlazado. Corre: make vercel.link"; exit 1; }
-  local dir="$REPO/${V_APP_DIR:-apps/web}"
+  local dir="$RAIZ/${V_APP_DIR:-apps/web}"
   [[ -f "$dir/package.json" ]] || {
     rojo "No hay nada que desplegar en ${V_APP_DIR:-apps/web} (falta package.json)."; exit 1; }
   correr_cli deploy --cwd "$dir" --yes "$@"
@@ -353,7 +353,7 @@ cmd_status() {
   printf '    %-18s %s\n' VERCEL_TOKEN      "$(printf '%s' "$V_TOKEN" | enmascarar)"
 
   printf '\n  En este clon:\n'
-  local enlace="$REPO/${V_APP_DIR:-apps/web}/.vercel/project.json"
+  local enlace="$RAIZ/${V_APP_DIR:-apps/web}/.vercel/project.json"
   printf '    %-18s %s\n' enlace \
     "$([[ -f "$enlace" ]] && echo "${V_APP_DIR}/.vercel ✓" || echo 'sin enlazar — make vercel.link')"
   printf '    %-18s %s\n' cli \

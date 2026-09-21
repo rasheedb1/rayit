@@ -114,7 +114,34 @@ else
 fi
 
 # ---------------------------------------------------------------------
-titulo "5 · ¿Responde todo?"
+titulo "5 · Vercel"
+# ---------------------------------------------------------------------
+# El token es uno solo para todo el equipo y vive cifrado en el vault,
+# con la misma frase. Lo único que es por-clon es el enlace local al
+# proyecto, y eso solo tiene sentido cuando apps/web ya tiene código.
+if [[ -f "$RAIZ/secrets/vercel.env.enc" ]]; then
+  if "$RAIZ/scripts/vercel.sh" check >/dev/null 2>&1; then
+    verde "el token de Vercel responde"
+    if [[ -f "$RAIZ/apps/web/package.json" ]]; then
+      if "$RAIZ/scripts/vercel.sh" link >/dev/null 2>&1; then
+        verde "apps/web enlazado al proyecto compartido"
+      else
+        amber "no se pudo enlazar apps/web"
+        gris  "mira: cd platform && make vercel.link"
+      fi
+    else
+      gris "apps/web todavía no tiene código; cuando lo tenga: make vercel.link"
+    fi
+  else
+    fallo "el token de Vercel no responde" "mira: cd platform && make vercel.check"
+  fi
+else
+  amber "no hay token de Vercel en el vault"
+  gris  "make vercel.set — una sola vez, y le sirve a todo el equipo"
+fi
+
+# ---------------------------------------------------------------------
+titulo "6 · ¿Responde todo?"
 # ---------------------------------------------------------------------
 if [[ -f "$RAIZ/.env.local" ]]; then
   if (cd "$RAIZ" && node db/sql.mjs "select 1 as ok" >/dev/null 2>&1); then

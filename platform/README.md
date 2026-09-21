@@ -45,7 +45,7 @@ db/migrate.mjs     Runner. Aplica contra Supabase, Postgres local o embebido.
 db/sql.mjs         Consola SQL contra Supabase.
 db/certs/          CA raíz de Supabase (pública, versionada).
 secrets/           Credenciales cifradas + su manual.
-scripts/           vault.sh (cifrar/descifrar) y supabase-admin.sh.
+scripts/           vault.sh (cifrar/descifrar), github.sh, vercel.sh.
 db/seed/           Catálogo base (nichos, CPM de referencia).
 apps/web/          Dashboard (Next.js).
 apps/worker/       Trabajos en segundo plano (Node + pg-boss).

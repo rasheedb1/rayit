@@ -9,6 +9,8 @@
       "Bash(make db.check)",
       "Bash(make github.status)",
       "Bash(make github.check)",
+      "Bash(make vercel.check)",
+      "Bash(make vercel.status)",
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",

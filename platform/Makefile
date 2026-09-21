@@ -5,7 +5,9 @@ DB_URL ?= postgres://mc:mc@localhost:5432/multicampaign
 .PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
-        github.status github.check arranque
+        github.status github.check \
+        vercel.set vercel.link vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
+        arranque
 
 help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_.-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -136,3 +138,34 @@ github.status: ## Qué hay guardado y cómo está este clon, sin revelar el toke
 
 github.check: ## Pregunta a GitHub: qué usuario, qué permisos, cuándo expira
 	@./scripts/github.sh check
+
+# =====================================================================
+# Vercel · el despliegue del dashboard
+# ---------------------------------------------------------------------
+# Mismo trato que GitHub: el token vive cifrado en secrets/vercel.env.enc
+# con la MISMA frase de paso. Quien ya corrió 'make db.unlock' puede
+# desplegar sin pedir nada nuevo.
+#
+# Al clonar el repositorio por primera vez:  make vercel.link
+# =====================================================================
+
+vercel.set: ## Guarda o rota el token de Vercel (lo pide sin mostrarlo)
+	@./scripts/vercel.sh set
+
+vercel.link: ## Crea o adopta el proyecto y lo enlaza en ESTE clon
+	@./scripts/vercel.sh link $(NOMBRE)
+
+vercel.unlink: ## Quita el enlace local (no toca el vault)
+	@./scripts/vercel.sh unlink
+
+vercel.status: ## Qué hay guardado y cómo está este clon, sin revelar el token
+	@./scripts/vercel.sh status
+
+vercel.check: ## Pregunta a Vercel: qué cuenta, qué equipo, cuándo expira
+	@./scripts/vercel.sh check
+
+vercel.deploy: ## Despliega apps/web. Vista previa, o PROD=1 para producción
+	@./scripts/vercel.sh deploy $(if $(PROD),--prod,)
+
+vercel.run: ## Cualquier comando de la CLI.  make vercel.run ARGS="logs --follow"
+	@./scripts/vercel.sh run $(ARGS)

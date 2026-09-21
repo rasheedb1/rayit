@@ -20,8 +20,8 @@ responden. Es idempotente: se puede volver a correr cuando algo se
 rompa, y dice exactamente qué falta.
 
 Lo único que no puede hacer solo es conseguir la **frase de paso** del
-vault. Es una sola frase, abre la base de datos y el token de GitHub, y
-se comparte a mano por un canal aparte. Pídesela a Rasheed
+vault. Es una sola frase, abre la base de datos y los tokens de GitHub y
+Vercel, y se comparte a mano por un canal aparte. Pídesela a Rasheed
 (rasheed@y.uno). **Nunca la pegues en un chat de IA ni en un ticket.**
 
 Después de eso, `claude` dentro del repositorio ya lee este archivo y
@@ -154,12 +154,62 @@ make github.install   # remoto + credential helper, en tu clon
 
 ---
 
+## Vercel — desplegar el dashboard
+
+Mismo trato que GitHub: el token vive **cifrado dentro del repositorio**,
+con la misma frase de paso. Quien ya corrió `make db.unlock` puede
+desplegar sin pedirle nada a nadie.
+
+```bash
+cd platform
+make vercel.check     # qué cuenta, qué equipo, cuándo expira el token
+make vercel.link      # crea o adopta el proyecto y lo enlaza en TU clon
+make vercel.deploy    # vista previa
+make vercel.deploy PROD=1   # producción
+```
+
+| Comando | Qué hace |
+|---|---|
+| `make vercel.link` | Crea o adopta el proyecto y escribe el enlace local. **Uno por clon.** |
+| `make vercel.status` | Qué hay guardado y cómo está tu clon, sin revelar el token |
+| `make vercel.check` | Pregunta a Vercel: qué cuenta, qué equipo, cuándo expira |
+| `make vercel.deploy` | Despliega `apps/web`. `PROD=1` para producción |
+| `make vercel.run ARGS="..."` | Cualquier comando de la CLI con el token compartido |
+| `make vercel.set` | Guarda o rota el token (lo pide sin mostrarlo) |
+
+La cuenta es `influ0909@gmail.com`, equipo `influ3`. El token expira el
+**21 de septiembre de 2027**; `make vercel.check` dice cuántos días
+quedan.
+
+### Cosas que rompen si no las sabes
+
+- **`vercel.link` es por clon.** Escribe `apps/web/.vercel/project.json`,
+  que no se versiona. Al clonar en otra máquina hay que correrlo otra vez.
+  Lo que sí viaja es el id del proyecto, dentro del vault.
+- **El token es de cuenta, no de proyecto.** Vercel no sabe limitar un
+  token a un proyecto, igual que GitHub con los tokens clásicos. El
+  límite lo pone `scripts/vercel.sh`: siempre despliega al equipo y al
+  proyecto que tiene guardados.
+- **Nunca uses `--token` ni `vercel login` con este token.** `--token`
+  deja el secreto visible en `ps` y en el historial del shell; `vercel
+  login` lo escribiría en claro y para siempre en
+  `~/Library/Application Support/com.vercel.cli/auth.json`. El script lo
+  deja en un directorio temporal de permisos 700 y lo borra al terminar.
+- **Si el token se escribe fuera del vault, rótalo.** `make vercel.set`,
+  y revoca el viejo en vercel.com → Account Settings → Tokens.
+- **`apps/web` todavía está vacío.** Hasta que tenga `package.json` no
+  hay nada que desplegar, y `vercel.deploy` se niega a propósito en vez
+  de crear un despliegue vacío.
+
+---
+
 ## Dónde viven los secretos
 
 | Qué | Dónde | Viaja con el repo |
 |---|---|---|
 | Credenciales de Supabase y Postgres | `platform/secrets/supabase.env.enc` (AES-256) | **Sí**, cifrado |
 | Token de GitHub del repositorio | `platform/secrets/github.env.enc` (AES-256) | **Sí**, cifrado |
+| Token de Vercel del equipo | `platform/secrets/vercel.env.enc` (AES-256) | **Sí**, cifrado |
 | Frase de paso de ese archivo | Llavero de macOS · se comparte a mano | No |
 | Token de administración de Supabase (`sbp_…`) | Llavero de macOS, solo en la máquina de Rasheed | **No, nunca** |
 | Copia de emergencia de las dos llaves irrecuperables | Esquema `recuperacion` en la propia base (solo `postgres`) | — |
@@ -209,6 +259,7 @@ platform/              El código real
   secrets/             El vault cifrado y su manual
   scripts/vault.sh     Cifrar y descifrar credenciales
   scripts/github.sh    El token de GitHub + credential helper de git
+  scripts/vercel.sh    El token de Vercel + despliegue del dashboard
   scripts/arranque.sh  Deja una máquina nueva lista, de cero
   scripts/lib/frase.sh Dónde guarda cada sistema la frase de paso
   scripts/supabase-admin.sh   Operaciones que piden el token de admin

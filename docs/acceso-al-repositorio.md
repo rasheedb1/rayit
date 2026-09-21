@@ -50,8 +50,8 @@ gh api repos/rasheedb1/rayit/invitations
 
 ### 1.3 Pasarle la frase de paso del vault
 
-Es **una sola frase** y abre las dos cosas: las credenciales de Supabase
-y el token de GitHub del vault.
+Es **una sola frase** y abre las tres cosas: las credenciales de
+Supabase, el token de GitHub y el token de Vercel del vault.
 
 Por Signal, 1Password, o dictándosela. **Nunca por un chat de IA, un
 correo, un ticket de Jira ni un mensaje de Slack**: esos no se borran
@@ -180,6 +180,10 @@ En este orden, y ninguno es opcional:
    ```
 4. **Rotar el token de GitHub del vault**, si llegó a usarlo:
    `make github.set`, y revocar el viejo en GitHub.
+5. **Rotar el token de Vercel del vault**, por lo mismo:
+   `make vercel.set`, y revocar el viejo en vercel.com → Account
+   Settings → Tokens. Ese token despliega a producción: no lo dejes
+   vivo porque «total, ya no tiene el repo».
 
 ---
 
