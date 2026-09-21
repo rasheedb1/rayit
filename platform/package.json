@@ -9,7 +9,8 @@
     "migrate": "node db/migrate.mjs $DATABASE_URL"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.17"
+    "@electric-sql/pglite": "^0.2.17",
+    "turbo": "^2.11.2"
   },
   "dependencies": {
     "pg": "^8.13.1"

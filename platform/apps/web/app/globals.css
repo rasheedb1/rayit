@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* El tema se decide en <html data-theme="light|dark">. Lo fija un script
+   antes de pintar, así que no hay destello, y `dark:` responde a él. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-2: #fafafa;
+  --bg-3: #f2f2f2;
+  --line: #eaeaea;
+  --line-2: #d4d4d4;
+  --fg: #171717;
+  --fg-2: #525252;
+  --fg-3: #8a8a8a;
+  --accent: #171717;
+  --accent-fg: #ffffff;
+
+  --rasheed: #0062d6;
+  --rasheed-bg: #e8f0fe;
+  --nicolas: #a85a0a;
+  --nicolas-bg: #fbeedd;
+
+  --ok: #0f7b3d;
+  --ok-bg: #e5f5ea;
+  --info: #5b3fd0;
+  --info-bg: #ede9fb;
+  --danger: #c2362b;
+  --danger-bg: #fdecea;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --bg-2: #111111;
+  --bg-3: #1a1a1a;
+  --line: #262626;
+  --line-2: #363636;
+  --fg: #ededed;
+  --fg-2: #a3a3a3;
+  --fg-3: #737373;
+  --accent: #ededed;
+  --accent-fg: #0a0a0a;
+
+  --rasheed: #6aaeff;
+  --rasheed-bg: #10243f;
+  --nicolas: #f0b263;
+  --nicolas-bg: #35240e;
+
+  --ok: #56c98a;
+  --ok-bg: #0f2e1c;
+  --info: #b39cf6;
+  --info-bg: #261c4a;
+  --danger: #f28b82;
+  --danger-bg: #3d1614;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-rasheed: var(--rasheed);
+  --color-rasheed-bg: var(--rasheed-bg);
+  --color-nicolas: var(--nicolas);
+  --color-nicolas-bg: var(--nicolas-bg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+html {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

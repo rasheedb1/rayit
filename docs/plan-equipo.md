@@ -7,6 +7,13 @@ Fecha: 20 de septiembre de 2026. Punto de partida: la base de datos ya
 existe, verificada, con ochenta y seis tablas, diez vistas y doscientos
 nueve índices, y el entorno local se levanta con un comando.
 
+> **Actualización del 21 de septiembre de 2026.** El alcance se recortó a
+> un MVP de cinco módulos (Resumen, Ventas/CRM, Cotizar, Campañas y
+> Finanzas); el laboratorio de video y el resto pasan a una segunda
+> fase. El backlog vigente, con dueños e historias, está en
+> [backlog-mvp.md](backlog-mvp.md). Las reglas de trabajo de la
+> sección 5 de este documento siguen aplicando.
+
 ---
 
 ## 1. Lo primero, porque no depende de programar

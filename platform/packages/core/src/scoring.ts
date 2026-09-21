@@ -27,7 +27,9 @@ export function median(values: number[]): number {
   if (values.length === 0) return 0;
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  const hi = s[mid] ?? 0;
+  const lo = s[mid - 1] ?? hi;
+  return s.length % 2 ? hi : (lo + hi) / 2;
 }
 
 export function percentile(values: number[], p: number): number {
@@ -36,7 +38,9 @@ export function percentile(values: number[], p: number): number {
   const idx = (s.length - 1) * p;
   const lo = Math.floor(idx);
   const hi = Math.ceil(idx);
-  return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (idx - lo);
+  const vLo = s[lo] ?? 0;
+  const vHi = s[hi] ?? vLo;
+  return lo === hi ? vLo : vLo + (vHi - vLo) * (idx - lo);
 }
 
 /**
@@ -118,10 +122,13 @@ export function summarizeRetention(curve: RetentionPoint[]): RetentionSummary {
   let biggestDropAt: number | null = null;
   let biggestDropSize = 0;
   for (let i = 1; i < sorted.length; i++) {
-    const drop = sorted[i - 1].p - sorted[i].p;
+    const prev = sorted[i - 1];
+    const cur = sorted[i];
+    if (!prev || !cur) continue;
+    const drop = prev.p - cur.p;
     if (drop > biggestDropSize) {
       biggestDropSize = drop;
-      biggestDropAt = sorted[i - 1].s;
+      biggestDropAt = prev.s;
     }
   }
 
@@ -131,7 +138,7 @@ export function summarizeRetention(curve: RetentionPoint[]): RetentionSummary {
     halfAt,
     biggestDropAt,
     biggestDropSize: biggestDropAt === null ? null : Number(biggestDropSize.toFixed(5)),
-    fullWatchRate: sorted[sorted.length - 1].p,
+    fullWatchRate: sorted[sorted.length - 1]?.p ?? null,
   };
 }
 

@@ -197,9 +197,12 @@ quedan.
   deja en un directorio temporal de permisos 700 y lo borra al terminar.
 - **Si el token se escribe fuera del vault, rótalo.** `make vercel.set`,
   y revoca el viejo en vercel.com → Account Settings → Tokens.
-- **`apps/web` todavía está vacío.** Hasta que tenga `package.json` no
-  hay nada que desplegar, y `vercel.deploy` se niega a propósito en vez
-  de crear un despliegue vacío.
+- **`apps/web` ya es la app real** (Next.js 15, Tailwind 4, Geist) y está
+  publicada en https://multicampaign-web.vercel.app. Hoy muestra el plan
+  de construcción de cada módulo y el estado de sus historias
+  (`apps/web/content/backlog.ts`); cada módulo se reemplaza por su
+  pantalla real cuando llega. No hay integración con GitHub todavía: se
+  publica con `make vercel.deploy PROD=1` después de mergear a `main`.
 
 ---
 
