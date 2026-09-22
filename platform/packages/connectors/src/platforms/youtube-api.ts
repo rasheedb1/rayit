@@ -35,6 +35,14 @@ export const YOUTUBE_PLAYLIST_PAGE_MAX = 50;
 export interface YouTubeOptions {
   dataBaseUrl?: string;
   analyticsUrl?: string;
+  /**
+   * API key del proyecto de Google Cloud (GOOGLE_API_KEY): basta para los
+   * endpoints públicos de la Data API (canal por handle, videos, listas).
+   * Va en la query `key` porque así lo exige Google; nunca se registra
+   * en api_call_log y safeErrorMessage la borra de los mensajes. Si hay
+   * tokens, mandan los tokens.
+   */
+  apiKey?: string;
 }
 
 export interface YouTubeChannel {
@@ -96,18 +104,22 @@ export class YouTubeClient {
   readonly #auth: ConnectionAuth;
   readonly #data: string;
   readonly #analytics: string;
+  readonly #apiKey: string | undefined;
 
   constructor(core: HttpCore, auth: ConnectionAuth, opts: YouTubeOptions = {}) {
     this.#core = core;
     this.#auth = auth;
     this.#data = opts.dataBaseUrl ?? YOUTUBE_DATA_BASE_URL;
     this.#analytics = opts.analyticsUrl ?? YOUTUBE_ANALYTICS_URL;
+    this.#apiKey = opts.apiKey;
   }
 
   #get(endpoint: string, family: 'youtube' | 'youtube-analytics', url: string, query: Record<string, string | number | boolean | undefined>, signal?: AbortSignal) {
+    const withKey = !this.#auth.tokens && this.#apiKey ? { ...query, key: this.#apiKey } : query;
     return this.#core.call<Record<string, unknown>>({
-      platformId: 'youtube', family, endpoint, method: 'GET', url, query,
-      connectionId: this.#auth.connectionId, tokens: this.#auth.tokens, authStyle: 'bearer', signal, parseError: parseGoogleError,
+      platformId: 'youtube', family, endpoint, method: 'GET', url, query: withKey,
+      connectionId: this.#auth.connectionId, tokens: this.#auth.tokens, authStyle: this.#auth.tokens ? 'bearer' : 'none',
+      secrets: this.#apiKey ? [this.#apiKey] : undefined, signal, parseError: parseGoogleError,
     });
   }
 

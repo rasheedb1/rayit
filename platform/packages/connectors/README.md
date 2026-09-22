@@ -25,6 +25,7 @@ src/platforms/tiktok.ts      createTikTokRefresher(core, { login, business }): e
 src/platforms/instagram.ts   createInstagramRefresher(core, app)
 src/platforms/youtube.ts     refresher sin implementar hasta CON-8
 src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
+src/public/                  Cuentas por @ (CON-10): PublicProfileSource por plataforma. tiktok = oEmbed (identidad), instagram = business_discovery con INSTAGRAM_HOUSE_TOKEN, youtube = Data API con GOOGLE_API_KEY (YouTubeClient acepta apiKey)
 
 src/http/errors.ts           PlatformApiError { kind: transient | permanent | auth | quota } y el clasificador único
 src/http/retry.ts            backoff exponencial con jitter, Retry-After, sleep cancelable
@@ -235,7 +236,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 176 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
+pnpm --filter @mc/connectors test        # 180 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

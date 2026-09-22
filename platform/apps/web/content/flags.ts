@@ -15,6 +15,7 @@ export const FLAG_KEYS = [
   "niche_radar", // 0004 · Tendencias del nicho (propuesta)
   "ideas_scripts", // 0006 · Ideas y guiones (propuesta)
   "kit", // galería del kit de interfaz (CIM-5): solo en desarrollo
+  "oauth_connect", // conexión OAuth por creador (CON-3): pospuesta; el MVP agrega cuentas por @ (CON-10)
 ] as const;
 
 export type FlagKey = (typeof FLAG_KEYS)[number];
@@ -33,6 +34,10 @@ export const flags: Flags = {
   // bundle del cliente, y la navegación es un componente cliente; con otra
   // variable el servidor y el navegador verían banderas distintas.
   kit: process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_KIT === "1",
+  // Decisión del 22-sep-2026: la autorización por creador queda para una
+  // versión posterior. El código de CON-3 sigue ahí; se enciende con
+  // OAUTH_CONNECT=1 en el servidor (rutas y botones son de servidor).
+  oauth_connect: process.env.OAUTH_CONNECT === "1",
 };
 
 export function isFlagKey(key: string): key is FlagKey {

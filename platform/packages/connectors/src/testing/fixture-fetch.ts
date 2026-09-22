@@ -130,7 +130,7 @@ function tryJson(text: string): unknown {
   }
 }
 
-const SECRET_QUERY_KEYS = new Set(['client_secret', 'access_token', 'code', 'refresh_token', 'code_verifier', 'app_secret']);
+const SECRET_QUERY_KEYS = new Set(['client_secret', 'access_token', 'code', 'refresh_token', 'code_verifier', 'app_secret', 'key']);
 
 function redactUrl(url: string): string {
   try {
