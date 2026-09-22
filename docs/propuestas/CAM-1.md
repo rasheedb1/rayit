@@ -310,3 +310,70 @@ Diez hallazgos; nueve resueltos en el commit «Revisión», uno justificado:
 | `UUID_RE`, `firstErrors` y el estado de acción duplicados | `apps/web/lib/forms.ts`; el esquema usa `isIsoDate` de core (rechaza 2026-02-30). Finanzas migra a `lib/forms` en su próxima historia (FIN-2), para no tocarlo en esta |
 | `finanzas/_lib/db.ts` como reexport en vez de cambiar cuatro importaciones | **Se mantiene**: el prompt de CAM-1 lo pide así y evita tocar páginas de Finanzas en esta historia; se borra al llegar CIM-2 |
 | Identificadores en español en la capa web | Componentes y hooks renombrados en inglés. Las Server Actions conservan el nombre en español (`asociarPost`, `editarCampana`…) por el precedente de FIN-1 (`crearFactura`, `facturarCampana`, que este módulo importa): son la «API» que ve la pantalla, en el idioma de la interfaz. **Decisión pendiente de Nicolás** si quiere unificar |
+
+## 6. QA en producción (22 de septiembre de 2026, fa4a499)
+
+Sobre https://on-cue-web.vercel.app, con Supabase como base (sin modo
+demo).
+
+**Rutas y respuestas.** `/campanas`, los seis filtros de estado y las
+cuatro fichas del seed responden 200 entre 0,37 y 0,61 s; un id
+inexistente o malformado y `/kit` responden 404; `/finanzas` y el
+detalle de FV-2026-010 siguen en 200. `Cache-Control: private,
+no-store` y `noindex, nofollow`, como corresponde a una app privada.
+
+**Contenido.** La lista muestra las cuatro campañas con las cifras del
+mock (Fresko 265.000, Café Alma 712.000, Nutrivé 58.000, Hogar Lindo
+«Sin datos»), pastillas y fechas en es-CO; cada ficha muestra el
+«Facturar» resuelto como enlace a su factura, lo acordado como
+EmptyState honesto, entregables, seguimiento con copiar y edición,
+posts con views y «datos hasta», transiciones según el estado (Nutrivé
+cerrada: «no cambia de estado», sin Quitar ni Asociar) y las secciones de
+CAM-3 y CAM-5 como EmptyState.
+
+**Accesibilidad y rendimiento.** Lighthouse sobre la ficha de Café Alma:
+rendimiento 98, accesibilidad 100, buenas prácticas 100, SEO 60 (solo
+por el `noindex` intencional y el `no-store`). axe-core sobre el HTML de
+lista y fichas: ninguna violación propia del módulo; la única marcada
+(`landmark-unique`) es del shell, que pinta las dos barras de navegación
+con `aria-label="Principal"` y la de escritorio va oculta por CSS: en
+un navegador real no se da. Un `h1` por página, ningún `img` sin `alt`,
+ningún botón sin nombre accesible, enlaces externos con `rel`.
+
+**Escrituras.** No se ejercitaron contra producción (datos reales del
+seed compartido). Se verificó por SQL de solo lectura que `mc_app` tiene
+SELECT/INSERT/UPDATE/DELETE sobre `campaign`, `campaign_post`, `post`,
+`quote`, `quote_item`, `invoice` y las vistas, y que las políticas RLS
+existen donde se esperaba (`campaign`, `post`, `quote`, `invoice`; no en
+`campaign_post` ni `quote_item`, que el código protege por sus joins).
+Las mismas acciones se ejercitaron en dev por HTTP contra la base
+embebida (§3).
+
+**Hallazgos.**
+
+| # | Qué | Gravedad | Dónde se resuelve |
+|---|---|---|---|
+| 1 | Los snapshots del seed 0003 tienen `captured_at` en el futuro (Fresko «datos hasta el 6 oct», Café Alma «26 sep») porque se fijaron a 30 días de la publicación. En una demo del 22 de septiembre desconcierta. | Baja · datos de demo | CIM-8 (seed, mío): fijar `captured_at` a una fecha pasada con su `age_hours` real. En Supabase hay que borrar las filas viejas porque la tabla es append-only y `post_metrics_latest` toma la más reciente. **Decisión de Nicolás.** |
+| 2 | Vercel avisa en el build que `DATABASE_URL` no está declarada en `turbo.json` (`env`). En tiempo de ejecución sí llega (la app lee Supabase), pero el aviso es real y la caché de Turbo no la tiene en cuenta. | Baja | `turbo.json` es de CIM-1/CIM-7 (Rasheed): `"build": { "env": ["DATABASE_URL"] }`. |
+| 3 | «Creada 22 de septiembre de 2026» en las cuatro campañas: es la fecha en que el seed insertó las filas, no la de la campaña. Es cierto, pero engaña en la demo. | Cosmética | Se puede quitar el dato del panel o cambiar la etiqueta a «Registrada». Decisión de Nicolás. |
+| 4 | Migración 0015 pendiente en Supabase (última aplicada: 0014). | Media para CAM-2, nula para la web | `make db.migrate` (Nicolás). |
+
+Ninguno de los cuatro rompe un criterio de terminado ni un punto de la
+rúbrica del módulo.
+
+## 7. Contraste con el plan: ¿queda el módulo listo para lo que sigue?
+
+| Lo que sigue | Qué necesita de CAM-1/CAM-2 | Estado |
+|---|---|---|
+| COT-4 (Rasheed, sprint 4) | `createCampaignFromQuote()` con contrato escrito | Listo: firma, errores, garantías y guion de prueba conjunta en `CAM-2.md`. Falta aplicar 0015. |
+| CAM-3 · Seguidores de la marca | `brand_baseline_from` fijado al iniciar, `brand_accounts` con una sola forma, sitio en la ficha | Listo: la transición a `live` lo fija, la forma es `[{ platform_id, handle }]` en seed y función, y la sección «Seguidores de la marca» ya existe como EmptyState con el handle y la fecha. Falta crear `apps/worker/src/jobs/campanas/` (§3.2 del backlog), que hoy no existe. |
+| CAM-4 · Lo que aporta la marca | Un sitio en la ficha para canjes, pedidos y CSV | Parcial: la ficha no tiene sección para `campaign_brand_input`; CAM-4 la agrega junto a «Resultado». No hay nada que deshacer. |
+| CAM-5 · Resultado | `campaign_result` y la sección «Resultado» | Listo el sitio (EmptyState con los seis KPIs nombrados); la lista sigue sin fila de KPIs a propósito (§0.2.4). |
+| CAM-6 · Reporte | Lo acordado y los posts con sus cortes | Listo lo acordado (desde `quote`) y los posts con views actuales; los cortes a 7 y 30 días salen de `post_metrics_at_cut`, que la ficha aún no lee. |
+| FIN-2 · Pagos | Nada de Campañas; `lib/forms.ts` para unificar validaciones | Listo. |
+| CIM-2 / CIM-3 (Rasheed) | Reemplazo del cliente y del workspace provisionales | Un solo sitio (`lib/db/`), documentado en §1. |
+
+Veredicto: el módulo cumple los dos «terminado cuando» del sprint 2 y
+deja preparados los puntos de anclaje de CAM-3, CAM-5 y CAM-6; CAM-4
+tendrá que abrir su propia sección. Lo único que bloquea a alguien es
+la migración 0015 para COT-4, y es un comando de Nicolás.
