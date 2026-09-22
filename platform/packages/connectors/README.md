@@ -235,7 +235,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 115 pruebas, < 3 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
+pnpm --filter @mc/connectors test        # 175 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

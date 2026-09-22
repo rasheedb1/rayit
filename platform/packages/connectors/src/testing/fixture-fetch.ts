@@ -27,6 +27,7 @@ export interface FixtureResponse {
 
 export interface Fixture {
   meta: { source: 'docs' | 'recorded'; recordedAt: string; notes?: string };
+  /** `method` '*' casa cualquier método (solo para fixtures sintetizados en pruebas). */
   request: { method: string; urlPattern: string; body?: unknown };
   response: FixtureResponse | FixtureResponse[];
 }
@@ -90,7 +91,7 @@ export class FixtureFetch {
     // El cuerpo grabado pasa por el redactor: un client_secret o un refresh_token de un formulario no queda ni en memoria de pruebas.
     const call: RecordedCall = { method, url: redactUrl(url), headers: redactHeaders(init.headers), body: redactSecrets(maskCodes(body)) };
     this.calls.push(call);
-    const match = this.#loaded.find((l) => l.fixture.request.method.toUpperCase() === method && l.regex.test(url) && subset(l.fixture.request.body, body));
+    const match = this.#loaded.find((l) => (l.fixture.request.method === '*' || l.fixture.request.method.toUpperCase() === method) && l.regex.test(url) && subset(l.fixture.request.body, body));
     if (!match) throw new UnexpectedCallError(call, this.#loaded.map((l) => `${l.fixture.request.method} ${l.fixture.request.urlPattern}`));
     const next = match.queue.length > 1 ? match.queue.shift()! : match.queue[0];
     if (!next) throw new Error(`FixtureFetch: el fixture ${match.fixture.request.urlPattern} no tiene más respuestas`);

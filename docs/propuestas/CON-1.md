@@ -310,8 +310,11 @@ de `packages/connectors`, que ya está en git.
 
 ## 5. Verificación (22 de septiembre de 2026)
 
-- `pnpm --filter @mc/connectors typecheck lint test`: 73 pruebas, < 2 s,
-  con `withoutNetwork()` en cada archivo y `guard.attempts === 0`.
+- `pnpm --filter @mc/connectors typecheck lint test`: 137 pruebas, < 3 s,
+  con `withoutNetwork()` en cada archivo y `guard.attempts === 0`. Incluye
+  la matriz de transporte (`test/transport-matrix.test.ts`): token
+  inválido, 429 con Retry-After y 5xx-luego-ok contra los veinte métodos
+  públicos de los cuatro clientes.
 - `pnpm --filter @mc/worker typecheck lint test`: 25 pruebas sobre
   pglite (~35 s); la de CON-2 «ningún token en job_run ni pgboss.job»
   sigue en verde con `oauth.refresh` registrando por el sink.
