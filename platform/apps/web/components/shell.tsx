@@ -7,9 +7,9 @@ function Brand() {
   return (
     <Link href="/" className="inline-flex items-center gap-2.5 rounded-sm">
       <span className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-fg" aria-hidden="true">
-        M
+        O
       </span>
-      <span className="text-sm font-semibold tracking-tight">MultiCampaign</span>
+      <span className="text-sm font-semibold tracking-tight">On Cue</span>
     </Link>
   );
 }

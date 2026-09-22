@@ -1,6 +1,6 @@
 # Kit de interfaz (`components/ui/`)
 
-Componentes compartidos de MultiCampaign. Galería en `/kit` (bandera `kit`, encendida en desarrollo).
+Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida en desarrollo).
 
 **Solo props, sin datos.** Ningún componente consulta la base ni conoce las consultas: recibe todo por props, ya formateado cuando es texto. Los colores son tokens del tema (`text-good`, `bg-surface`, `var(--s-tiktok)`), nunca un valor literal. Server Components por defecto; `"use client"` solo donde hay estado o eventos.
 

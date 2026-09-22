@@ -6,7 +6,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/multicampaign
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
-        vercel.set vercel.link vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
+        vercel.set vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
         arranque
 
 help: ## Muestra esta ayuda
@@ -154,6 +154,9 @@ vercel.set: ## Guarda o rota el token de Vercel (lo pide sin mostrarlo)
 
 vercel.link: ## Crea o adopta el proyecto y lo enlaza en ESTE clon
 	@./scripts/vercel.sh link $(NOMBRE)
+
+vercel.rename: ## Renombra el proyecto en Vercel y conserva la URL vieja.  make vercel.rename NOMBRE=on-cue-web
+	@./scripts/vercel.sh rename $(NOMBRE)
 
 vercel.unlink: ## Quita el enlace local (no toca el vault)
 	@./scripts/vercel.sh unlink

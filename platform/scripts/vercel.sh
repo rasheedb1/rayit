@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-# vercel.sh — el token de Vercel de MultiCampaign.
+# vercel.sh — el token de Vercel de On Cue.
 #
 # El problema es el mismo que con GitHub: el dashboard se despliega en
 # Vercel y cualquiera del equipo tiene que poder desplegar. Las dos
@@ -22,6 +22,7 @@
 #
 #   ./scripts/vercel.sh set          guarda (o rota) el token
 #   ./scripts/vercel.sh link         crea o adopta el proyecto y lo enlaza
+#   ./scripts/vercel.sh rename NOMBRE  renombra el proyecto y conserva la URL vieja
 #   ./scripts/vercel.sh status       qué hay guardado, sin revelarlo
 #   ./scripts/vercel.sh check        pregunta a Vercel: quién, qué equipo, cuándo expira
 #   ./scripts/vercel.sh deploy       despliega una vista previa (--prod para producción)
@@ -265,7 +266,7 @@ cmd_set() {
 # ---------------------------------------------------------------------
 cmd_link() {
   exigir_vault
-  local nombre="${1:-${V_PROJECT:-multicampaign-web}}"
+  local nombre="${1:-${V_PROJECT:-on-cue-web}}"
   local q=''; [[ -n "$V_ORG_ID" ]] && q="?teamId=$V_ORG_ID"
 
   local proyecto codigo
@@ -301,6 +302,52 @@ cmd_link() {
     amarillo "Ojo: $V_APP_DIR todavía no tiene package.json — no hay nada que desplegar."
   fi
   gris  "   Commitea secrets/vercel.env.enc: ahora lleva el id del proyecto."
+}
+
+# ---------------------------------------------------------------------
+# rename — renombra el proyecto en Vercel sin perder la URL anterior
+# ---------------------------------------------------------------------
+# Renombrar un proyecto cambia su dominio <nombre>.vercel.app: el viejo
+# deja de responder. Para que los enlaces ya compartidos sigan vivos,
+# el dominio anterior se vuelve a colgar del mismo proyecto como alias.
+cmd_rename() {
+  exigir_vault
+  [[ -n "$V_PROJECT_ID" ]] || { rojo "No hay proyecto enlazado. Corre: make vercel.link"; exit 1; }
+  local nuevo="${1:-}"
+  [[ -n "$nuevo" ]] || { rojo 'Uso: vercel.sh rename <nombre-nuevo>   p.ej.  rename on-cue-web'; exit 1; }
+  local viejo="$V_PROJECT"
+  [[ "$nuevo" != "$viejo" ]] || { verde "✓ el proyecto ya se llama $nuevo"; exit 0; }
+  local q=''; [[ -n "$V_ORG_ID" ]] && q="?teamId=$V_ORG_ID"
+
+  local cuerpo; cuerpo="$(mktemp)"; trap 'rm -f "$cuerpo"' RETURN
+  printf '{"name":"%s"}' "$nuevo" > "$cuerpo"
+  local proyecto codigo
+  proyecto="$(api PATCH "/v9/projects/$V_PROJECT_ID$q" "$cuerpo")"; codigo="$(codigo_http)"
+  [[ "$codigo" == "200" ]] || {
+    rojo "Vercel no dejó renombrar el proyecto (HTTP ${codigo:-sin respuesta}):"
+    rojo "$(json error message <<<"$proyecto")"; exit 1; }
+  V_PROJECT="$(json name <<<"$proyecto")"
+  guardar_vault
+  verde "✓ proyecto $viejo renombrado a $V_PROJECT en $V_SCOPE"
+
+  # El dominio viejo, de vuelta al proyecto, para no romper enlaces.
+  printf '{"name":"%s.vercel.app"}' "$viejo" > "$cuerpo"
+  local dominio
+  dominio="$(api POST "/v10/projects/$V_PROJECT_ID/domains$q" "$cuerpo")"; codigo="$(codigo_http)"
+  if [[ "$codigo" =~ ^20 ]]; then
+    verde "✓ $viejo.vercel.app sigue apuntando al proyecto (alias)"
+  else
+    amarillo "No se pudo conservar $viejo.vercel.app (HTTP ${codigo:-sin respuesta}): $(json error message <<<"$dominio")"
+    amarillo "Los enlaces viejos dejarán de responder; el nuevo es https://$V_PROJECT.vercel.app"
+  fi
+
+  local destino="$RAIZ/${V_APP_DIR:-apps/web}/.vercel"
+  if [[ -f "$destino/project.json" ]]; then
+    printf '{"orgId":"%s","projectId":"%s","projectName":"%s"}\n' \
+      "$V_ORG_ID" "$V_PROJECT_ID" "$V_PROJECT" > "$destino/project.json"
+  fi
+  gris  "   Commitea secrets/vercel.env.enc: ahora lleva el nombre nuevo."
+  gris  "   URL de producción: https://$V_PROJECT.vercel.app"
 }
 
 cmd_unlink() {
@@ -427,10 +474,11 @@ json_lista() {
 case "${1:-}" in
   set)      shift; cmd_set "$@" ;;
   link)     shift; cmd_link "${1:-}" ;;
+  rename)   shift; cmd_rename "${1:-}" ;;
   unlink)   cmd_unlink ;;
   deploy)   shift; cmd_deploy "$@" ;;
   run)      shift; cmd_run "$@" ;;
   status)   cmd_status ;;
   check)    cmd_check ;;
-  *) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 esac

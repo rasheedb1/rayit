@@ -7,7 +7,7 @@ import { themeScript } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "MultiCampaign", template: "%s · MultiCampaign" },
+  title: { default: "On Cue", template: "%s · On Cue" },
   description: "Plataforma para que creadores y agencias midan, creen, vendan y cobren.",
   robots: { index: false, follow: false },
 };

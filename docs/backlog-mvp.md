@@ -15,7 +15,7 @@ sprint 1: las cinco historias de Nicolás están construidas y probadas,
 tres ya en `main`. El detalle, lo que falta integrar y lo que Rasheed
 tiene que destrabar están en la [sección 8](#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
 
-**Dónde se ve:** https://multicampaign-web.vercel.app. Es el marco real
+**Dónde se ve:** https://on-cue-web.vercel.app. Es el marco real
 de la aplicación (`platform/apps/web`), con una ruta por módulo que
 muestra su dueño, sus historias y su estado. El estado vivo de cada
 historia está en `platform/apps/web/content/backlog.ts`: cada uno cambia
