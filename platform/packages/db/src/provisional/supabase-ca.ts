@@ -4,8 +4,8 @@
  * Es público y está versionado en db/certs/supabase-root-2021.crt; se
  * copia aquí porque en Vercel el bundle no puede localizar ese archivo
  * por ruta (webpack fija import.meta.url a la ruta de la máquina de
- * build). La prueba test/supabase-ca.test.ts falla si las dos copias
- * divergen: al correr `make db.cert`, hay que actualizar esta también.
+ * build). Lo regenera `make db.cert` (db/scripts/embed-ca.mjs); la
+ * prueba test/supabase-ca.test.ts falla si las dos copias divergen.
  */
 export const SUPABASE_ROOT_CA = `
 -----BEGIN CERTIFICATE-----
