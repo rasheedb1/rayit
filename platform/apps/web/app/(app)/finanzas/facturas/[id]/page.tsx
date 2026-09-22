@@ -92,13 +92,13 @@ export default async function FacturaPage({
               <Pill kind={pill.kind}>{pill.text}</Pill>
             </div>
             <dl className="mt-3 divide-y divide-line">
-              <Row label="Subtotal" value={formatMoney(invoice.subtotal, invoice.currency)} />
-              <Row label={`IVA${ivaPct ? ` ${ivaPct} %` : ""}`} value={formatMoney(invoice.tax, invoice.currency)} />
-              <Row label="Total de la factura" value={formatMoney(invoice.total, invoice.currency)} strong />
-              <Row label={`Retención en la fuente${retPct ? ` ${retPct} %` : ""}`} value={`−${formatMoney(invoice.withholding, invoice.currency)}`} muted />
-              <Row label="Neto que entra al banco" value={formatMoney(invoice.net, invoice.currency)} />
-              <Row label="Pagado" value={formatMoney(invoice.paidAmount, invoice.currency)} muted />
-              <Row label="Pendiente por cobrar" value={formatMoney(invoice.outstanding, invoice.currency)} strong />
+              <Row label="Subtotal" value={formatMoney(invoice.subtotal, invoice.currency, { mode: "full" })} />
+              <Row label={`IVA${ivaPct ? ` ${ivaPct} %` : ""}`} value={formatMoney(invoice.tax, invoice.currency, { mode: "full" })} />
+              <Row label="Total de la factura" value={formatMoney(invoice.total, invoice.currency, { mode: "full" })} strong />
+              <Row label={`Retención en la fuente${retPct ? ` ${retPct} %` : ""}`} value={`−${formatMoney(invoice.withholding, invoice.currency, { mode: "full" })}`} muted />
+              <Row label="Neto que entra al banco" value={formatMoney(invoice.net, invoice.currency, { mode: "full" })} />
+              <Row label="Pagado" value={formatMoney(invoice.paidAmount, invoice.currency, { mode: "full" })} muted />
+              <Row label="Pendiente por cobrar" value={formatMoney(invoice.outstanding, invoice.currency, { mode: "full" })} strong />
             </dl>
           </section>
 

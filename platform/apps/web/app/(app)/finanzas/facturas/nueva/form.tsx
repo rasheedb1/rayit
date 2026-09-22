@@ -112,7 +112,7 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
                 placeholder="Sin campaña · factura a mano"
                 options={campaigns.map((c) => ({
                   value: c.id,
-                  label: `${c.companyName} · ${c.name}${c.amount ? ` · ${formatMoney(c.amount, c.currency)}` : ""} · ${CAMPAIGN_STATUS_ES[c.status] ?? c.status}`,
+                  label: `${c.companyName} · ${c.name}${c.amount ? ` · ${formatMoney(c.amount, c.currency, { mode: "full" })}` : ""} · ${CAMPAIGN_STATUS_ES[c.status] ?? c.status}`,
                 }))}
               />
             </Field>
@@ -197,28 +197,28 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
         <div className="rounded-md border border-line p-4">
           <p className="text-xs text-fg-3">Total de la factura</p>
           <p className="mt-1 font-mono text-2xl font-medium tabular-nums">
-            {totals ? formatMoney(totals.total, "COP") : "COP —"}
+            {totals ? formatMoney(totals.total, "COP", { mode: "full" }) : "COP —"}
           </p>
           <dl className="mt-4 space-y-1.5 text-sm">
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">Subtotal</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.subtotal, "COP") : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.subtotal, "COP", { mode: "full" }) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">IVA {taxPct || "0"} %</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.tax, "COP") : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.tax, "COP", { mode: "full" }) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3 border-t border-line pt-1.5">
               <dt className="font-medium">Total</dt>
-              <dd className="font-mono font-medium tabular-nums">{totals ? formatMoney(totals.total, "COP") : "—"}</dd>
+              <dd className="font-mono font-medium tabular-nums">{totals ? formatMoney(totals.total, "COP", { mode: "full" }) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">Retención {withholdingPct || "0"} %</dt>
-              <dd className="font-mono tabular-nums text-fg-2">{totals ? `−${formatMoney(totals.withholding, "COP")}` : "—"}</dd>
+              <dd className="font-mono tabular-nums text-fg-2">{totals ? `−${formatMoney(totals.withholding, "COP", { mode: "full" })}` : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3 border-t border-line pt-1.5">
               <dt className="text-fg-2">Neto que entra al banco</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.net, "COP") : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.net, "COP", { mode: "full" }) : "—"}</dd>
             </div>
           </dl>
           <p className="mt-4 text-xs leading-4 text-fg-3">Calculado en el navegador con la misma función que usa el servidor al guardar.</p>

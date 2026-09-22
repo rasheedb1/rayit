@@ -32,8 +32,8 @@ const COLUMNS: Column<InvoiceListRow>[] = [
     header: "Monto",
     align: "num",
     render: (r) => (
-      <CellMain sub={r.status === "partial" ? `pendiente ${formatMoney(r.outstanding, r.currency)}` : undefined}>
-        {formatMoney(r.total, r.currency)}
+      <CellMain sub={r.status === "partial" ? `pendiente ${formatMoney(r.outstanding, r.currency, { mode: "full" })}` : undefined}>
+        {formatMoney(r.total, r.currency, { mode: "full" })}
       </CellMain>
     ),
   },
