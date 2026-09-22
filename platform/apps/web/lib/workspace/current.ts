@@ -1,27 +1,38 @@
 import "server-only";
 import { cache } from "react";
-import { isMemberOf } from "@mc/db/queries/identidad";
 import type { Identity } from "@mc/db";
+import type { MyWorkspace } from "@mc/db/queries/identidad";
 import { getSesion, type Sesion } from "@/lib/auth/session";
-import { sincronizarSesion } from "@/lib/auth/sincronizar";
-import { withIdentity } from "@/lib/db/cliente";
+import { leerOCrearSesion } from "@/lib/auth/sincronizar";
 import { espacioDeLaCookie } from "./elegir";
 
 /**
  * El workspace actual: la ÚNICA costura entre la sesión y la base.
  *
- * Desde CIM-3 sale de la sesión de Supabase y de la cookie firmada
- * `mc.workspace`, en este orden:
+ * Desde CIM-3 sale de la sesión de Supabase; la cookie firmada
+ * `mc.workspace` solo dice CUÁL de mis espacios prefiero. El orden:
  *
  *   1. ¿hay sesión? Si no, la web va en modo demo (ver abajo).
- *   2. ¿la cookie trae un espacio, con firma válida y del correo de
- *      ESTA sesión? Entonces se comprueba la membresía contra la base,
- *      en cada petición. Una persona a la que le quitaron el acceso
- *      deja de ver ese espacio en la siguiente, no cuando caduque su
- *      cookie.
- *   3. Si no hay cookie usable, se sincroniza la sesión (app_user,
- *      membresías y, si no tiene ninguna, su primer espacio) y se sirve
- *      el primero.
+ *   2. ¿quién soy? Se resuelve SIEMPRE desde el correo verificado de la
+ *      sesión: `withIdentity({ email })` y `email = current_user_email()`
+ *      (política de 0022). Nunca desde la cookie.
+ *   3. ¿a qué espacios pertenezco? Sale de membership, en la misma
+ *      transacción, por `user_id = current_user_id()` (0019).
+ *   4. ¿cuál sirvo? El de la cookie SI ESTÁ EN ESA LISTA, y si no el
+ *      primero.
+ *
+ * Por qué así y no al revés (ronda 2, hallazgo 1): antes el id de
+ * app_user salía de la propia cookie y luego se preguntaba «¿ese id es
+ * miembro?» con RLS fijada a ESE MISMO id, así que la respuesta era
+ * siempre sí. La frontera entre inquilinos colgaba de un único HMAC:
+ * quien pudiera fabricar una cookie firmada entraba en cualquier
+ * espacio. Ahora la cookie no aporta identidad ninguna —solo una
+ * preferencia que se comprueba contra la lista que devuelve la base—,
+ * así que aunque la firma se rompiera, lo único que se podría hacer con
+ * ella es elegir entre los espacios que ya son tuyos.
+ *
+ * Y NO ESCRIBE: este camino solo hace SELECT (ver lib/auth/sincronizar.ts).
+ * Pintar una pantalla no toca `last_seen_at` ni ninguna otra columna.
  *
  * DEMO_WORKSPACE_ID sobrevive como ATAJO DE DESARROLLO y nada más: solo
  * se mira cuando no hay sesión, que con Supabase Auth configurado solo
@@ -46,6 +57,11 @@ export interface Contexto {
   /** Quién es, cuando hay sesión. En modo demo no hay nadie y app.user_id queda NULL. */
   identity?: Identity;
   sesion: Sesion | null;
+  /**
+   * Mis espacios, ya resueltos. Van aquí para que el marco no vuelva a
+   * preguntarlos: el selector los pinta y la pantalla los ignora.
+   */
+  workspaces: readonly MyWorkspace[];
 }
 
 /** Se avisa una vez por proceso, no en cada petición. */
@@ -93,7 +109,8 @@ export function workspaceDeDesarrollo(env: Env = process.env, warn: (message: st
  * Cuál de mis espacios se sirve: el que dice la cookie si sigue siendo
  * mío, y si no el primero (el más antiguo, que es donde la gente tiene
  * su trabajo). Aparte y sin dependencias para poder probarlo: es la
- * regla que hace que cambiar de espacio cambie lo que se ve.
+ * regla que hace que cambiar de espacio cambie lo que se ve, y también
+ * la que convierte la cookie en una preferencia y no en un permiso.
  */
 export function elegirWorkspaceId(preferido: string | null, mios: readonly { id: string }[]): string | null {
   if (preferido && mios.some((w) => w.id === preferido)) return preferido;
@@ -103,29 +120,25 @@ export function elegirWorkspaceId(preferido: string | null, mios: readonly { id:
 /**
  * El contexto de ESTA petición. `cache` de React lo memoriza: la
  * pantalla, el marco y el selector de espacio preguntan una vez entre
- * los tres, y la comprobación de membresía se hace una sola vez.
+ * los tres, así que toda la resolución cuesta una transacción.
  */
 export const getCurrentContext = cache(async (): Promise<Contexto> => {
   const sesion = await getSesion();
-  if (!sesion) return { workspaceId: workspaceDeDesarrollo(), sesion: null };
+  if (!sesion) return { workspaceId: workspaceDeDesarrollo(), sesion: null, workspaces: [] };
 
-  const elegido = await espacioDeLaCookie(sesion.email);
-  if (elegido) {
-    const identity: Identity = { userId: elegido.u, email: sesion.email };
-    const esMiembro = await withIdentity(identity, (tx) => isMemberOf(tx, elegido.w, elegido.u));
-    if (esMiembro) return { workspaceId: elegido.w, identity, sesion };
-  }
+  // Quién soy y qué es mío, desde el correo verificado. Solo da de alta
+  // si no hay absolutamente nada que leer (primer inicio de sesión, o
+  // un callback que falló a medias).
+  const { userId, workspaces } = await leerOCrearSesion(sesion);
 
-  // Sin cookie usable: se resuelve desde la base. Es también el camino
-  // del primer inicio de sesión, que crea la persona y su espacio.
-  const { userId, workspaces } = await sincronizarSesion(sesion);
-  const workspaceId = elegirWorkspaceId(elegido?.w ?? null, workspaces);
+  const preferido = await espacioDeLaCookie(sesion.email);
+  const workspaceId = elegirWorkspaceId(preferido?.w ?? null, workspaces);
   if (!workspaceId) {
-    // sincronizarSesion crea uno si no había ninguno, así que llegar
+    // leerOCrearSesion crea uno si no había ninguno, así que llegar
     // aquí sería un fallo suyo, no un estado normal.
     throw new Error(`La sesión de ${sesion.email} no tiene ningún espacio después de sincronizar.`);
   }
-  return { workspaceId, identity: { userId, email: sesion.email }, sesion };
+  return { workspaceId, identity: { userId, email: sesion.email }, sesion, workspaces };
 });
 
 /** El id del workspace actual. Lo usa lib/db; una pantalla no lo necesita. */

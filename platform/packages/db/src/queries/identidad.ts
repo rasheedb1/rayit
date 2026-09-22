@@ -146,6 +146,76 @@ export async function getAppUser(tx: IdentityTx | WorkspaceTx, id: string): Prom
 }
 
 /**
+ * Mi fila por el correo que la SESIÓN verificó, sin escribir nada.
+ *
+ * El correo no se pasa por parámetro a propósito: se compara contra
+ * `current_user_email()`, que es lo que `withIdentity` fijó en la
+ * transacción a partir de la sesión de Supabase (política
+ * app_user_read_self_email, 0022). Así el id de app_user que la web
+ * usa como identidad no puede venir de nada que mande el navegador —ni
+ * de una cookie firmada—, sino solo del correo que el proveedor
+ * verificó.
+ *
+ * Es el camino de LECTURA del inicio de sesión: un SELECT por un índice
+ * único, sin UPDATE, para que pintar una pantalla no escriba en la base.
+ */
+export async function getMyAppUserByVerifiedEmail(tx: IdentityTx): Promise<AppUser | null> {
+  const [row] = await tx.db
+    .select()
+    .from(appUser)
+    .where(sql`${appUser.email} = current_user_email()`)
+    .limit(1);
+  return row ?? null;
+}
+
+/** Quién soy y a qué espacios pertenezco. */
+export interface MiSesion {
+  user: AppUser;
+  workspaces: MyWorkspace[];
+}
+
+/**
+ * Las dos preguntas de cada petición con sesión, en UNA transacción y
+ * sin escribir: quién soy (por el correo verificado) y a qué espacios
+ * pertenezco.
+ *
+ * El `set_config` de en medio es necesario: la transacción se abre
+ * sabiendo solo el correo, y la política de membership filtra por
+ * `user_id = current_user_id()` (0019). Se fija con el id que acaba de
+ * devolver app_user, no con uno que venga de fuera.
+ *
+ * Devuelve null si ese correo todavía no tiene fila: es el primer
+ * inicio de sesión, y de darlo de alta se encarga quien llama.
+ */
+export async function getMyIdentityAndWorkspaces(tx: IdentityTx): Promise<MiSesion | null> {
+  const user = await getMyAppUserByVerifiedEmail(tx);
+  if (!user) return null;
+  await tx.query("SELECT set_config('app.user_id', $1, true)", [user.id]);
+  const workspaces = await listMyWorkspaces(tx);
+  return { user, workspaces };
+}
+
+/**
+ * Un cerrojo por correo, para lo que solo puede pasar una vez: crear el
+ * primer espacio de alguien.
+ *
+ * Se toma DENTRO de la transacción (`pg_advisory_xact_lock`) y se
+ * suelta con ella, pase lo que pase. Sin él, dos peticiones a la vez de
+ * quien todavía no tiene espacios —el callback del enlace mágico más el
+ * prefetch de /resumen, o dos pestañas— leen las dos «no tengo
+ * ninguno», y la persona termina con DOS espacios vacíos y dos
+ * creator_profile. `ON CONFLICT` no lo evita: no hay ninguna
+ * restricción única que se lo impida.
+ *
+ * hashtext() es estable dentro de una versión de Postgres y puede
+ * colisionar; una colisión solo significa que dos correos distintos se
+ * turnan un instante, no un dato malo.
+ */
+export async function lockByEmail(tx: IdentityTx | WorkspaceTx, email: string): Promise<void> {
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`on-cue/alta/${email.trim().toLowerCase()}`]);
+}
+
+/**
  * Cambia MI nombre. La política de UPDATE de app_user (0021, 0022) es
  * la que comprueba que la fila sea mía; aquí no se filtra por sesión a
  * mano, y por eso no hay forma de editar la de otra persona.
@@ -169,8 +239,12 @@ export async function updateMyName(tx: IdentityTx, id: string, name: string): Pr
  * membership por la rama «user_id = current_user_id()» de su política
  * (0019): si la transacción no fijó el id, esto son cero filas, no
  * todos los espacios.
+ *
+ * Vale también dentro de un withWorkspace (misma rama de la política),
+ * que es como el alta del primer espacio comprueba, ya con el cerrojo
+ * tomado, si alguien se le adelantó.
  */
-export async function listMyWorkspaces(tx: IdentityTx): Promise<MyWorkspace[]> {
+export async function listMyWorkspaces(tx: IdentityTx | WorkspaceTx): Promise<MyWorkspace[]> {
   const rows = await tx.db
     .select({
       id: workspace.id,

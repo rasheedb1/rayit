@@ -29,8 +29,37 @@ export type Env = Readonly<Record<string, string | undefined>>;
 /** Las variables que hacen falta, con el nombre que se le pide a la persona. */
 export const VARIABLES_AUTH = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"] as const;
 
-function leer(env: Env, publico: string, propio: string): string {
-  return (env[publico] ?? env[propio] ?? "").trim();
+/**
+ * Las dos públicas, leídas con acceso ESTÁTICO.
+ *
+ * Next sustituye en el bundle las apariciones literales de
+ * `process.env.NEXT_PUBLIC_X`; un acceso por índice (`env[nombre]`) no
+ * se sustituye nunca, así que `env` podría venir vacío —o `process.env`
+ * ni existir— en el navegador y en el runtime Edge. Lo comprobamos tras
+ * `next build` con las llaves puestas: NEXT_PUBLIC_SUPABASE_URL no
+ * aparecía en `.next/static/chunks/*.js`. Hoy no rompe nada porque todo
+ * el flujo de sesión corre en el servidor, pero la primera persona que
+ * añada un cliente de navegador leería cadenas vacías y el fallo sería
+ * mudo.
+ *
+ * El nombre sin prefijo (el que escribe `make db.unlock`) se sigue
+ * leyendo por índice a propósito: esa solo existe en el servidor, donde
+ * `process.env` es el de verdad y no hace falta sustituir nada.
+ */
+const PUBLICAS = {
+  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+} as const;
+
+type NombrePublico = keyof typeof PUBLICAS;
+
+function leer(env: Env, publico: NombrePublico, propio: string): string {
+  const de = (nombre: string) => env[nombre]?.trim() ?? "";
+  // La constante estática solo cuenta cuando el entorno es el del
+  // proceso: una prueba que pasa su propio objeto describe un entorno
+  // completo y no debe heredar lo que tenga la máquina.
+  const estatico = env === process.env ? PUBLICAS[publico].trim() : "";
+  return de(publico) || estatico || de(propio);
 }
 
 /** La configuración, o null si falta alguna de las dos. Nunca lanza. */

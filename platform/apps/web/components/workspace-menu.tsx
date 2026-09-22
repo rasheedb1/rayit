@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronsUpDown, LogOut, Plus, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { cambiarEspacio, cerrarSesion, crearEspacio, type EstadoEspacio } from "@/lib/auth/acciones";
 import { MESSAGES } from "@/lib/auth/messages";
+import { inicial } from "@/lib/workspace/inicial";
 
 /**
  * El menú del selector de espacio. Referencia: el conmutador de Notion
@@ -18,6 +19,16 @@ import { MESSAGES } from "@/lib/auth/messages";
  * el `value` de cada botón y la membresía la comprueba el servidor
  * (lib/auth/acciones.ts). Este componente no consulta nada ni sabe
  * quién puede ver qué.
+ *
+ * Accesibilidad (ronda 2): se ANUNCIA como menú y se puede usar con el
+ * teclado igual que el de las referencias. `role="menu"` en el panel y
+ * `role="menuitem"` en cada fila —antes era un div anónimo con botones
+ * sueltos, así que un lector de pantalla no sabía ni que era un menú ni
+ * cuántas opciones tenía—, `aria-haspopup="menu"` en el disparador,
+ * `aria-controls` solo mientras el panel existe (apuntaba a un id
+ * inexistente estando cerrado), el foco va a la primera opción al abrir
+ * y vuelve al disparador al cerrar con Escape, y las flechas recorren
+ * la lista.
  */
 export interface EspacioVisible {
   id: string;
@@ -31,37 +42,70 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
   const [abierto, setAbierto] = useState(false);
   const [creando, setCreando] = useState(false);
   const caja = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const disparador = useRef<HTMLButtonElement>(null);
   const menuId = useId();
 
   const [estadoCambio, cambiar, cambiando] = useActionState<EstadoEspacio, FormData>(cambiarEspacio, ESTADO);
   const [estadoCreacion, crear, creandoEnvio] = useActionState<EstadoEspacio, FormData>(crearEspacio, ESTADO);
 
+  /** Las opciones del menú, en el orden en que se ven. */
+  const opciones = useCallback((): HTMLElement[] => {
+    const nodos = panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])');
+    return nodos ? [...nodos] : [];
+  }, []);
+
+  const cerrar = useCallback((devolverFoco: boolean) => {
+    setAbierto(false);
+    setCreando(false);
+    if (devolverFoco) disparador.current?.focus();
+  }, []);
+
+  // Al abrir, el foco entra en el menú: si se queda en el disparador
+  // hay que tabular a ciegas para llegar a la lista.
+  useEffect(() => {
+    if (!abierto || creando) return;
+    opciones()[0]?.focus();
+  }, [abierto, creando, opciones]);
+
   useEffect(() => {
     if (!abierto) return;
     const fuera = (e: MouseEvent) => {
-      if (caja.current && !caja.current.contains(e.target as Node)) setAbierto(false);
+      if (caja.current && !caja.current.contains(e.target as Node)) cerrar(false);
     };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setAbierto(false);
+    const teclado = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        cerrar(true);
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const lista = opciones();
+      if (lista.length === 0) return;
+      const actualIdx = lista.indexOf(document.activeElement as HTMLElement);
+      const paso = e.key === "ArrowDown" ? 1 : -1;
+      const siguiente = actualIdx === -1 ? 0 : (actualIdx + paso + lista.length) % lista.length;
+      e.preventDefault();
+      lista[siguiente]?.focus();
     };
     document.addEventListener("mousedown", fuera);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", teclado);
     return () => {
       document.removeEventListener("mousedown", fuera);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", teclado);
     };
-  }, [abierto]);
+  }, [abierto, cerrar, opciones]);
 
   const error = estadoCambio.error ?? estadoCreacion.error;
 
   return (
     <div ref={caja} className="relative">
       <button
+        ref={disparador}
         type="button"
         onClick={() => setAbierto((v) => !v)}
-        aria-haspopup="true"
+        aria-haspopup="menu"
         aria-expanded={abierto}
-        aria-controls={menuId}
+        aria-controls={abierto ? menuId : undefined}
         aria-label={t.etiqueta}
         className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-hover"
       >
@@ -77,7 +121,10 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
 
       {abierto && (
         <div
+          ref={panel}
           id={menuId}
+          role="menu"
+          aria-label={t.etiqueta}
           className="absolute left-0 right-0 z-20 mt-1 rounded-md border border-border bg-surface p-1 shadow-lg"
         >
           <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">{t.espacios}</p>
@@ -90,6 +137,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
                   <li key={e.id}>
                     <button
                       type="submit"
+                      role="menuitem"
                       name="workspaceId"
                       value={e.id}
                       disabled={cambiando || esActual}
@@ -123,6 +171,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
           ) : (
             <button
               type="button"
+              role="menuitem"
               onClick={() => setCreando(true)}
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-ink-2 transition-colors hover:bg-hover hover:text-ink"
             >
@@ -135,7 +184,8 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
 
           <Link
             href="/cuenta"
-            onClick={() => setAbierto(false)}
+            role="menuitem"
+            onClick={() => cerrar(false)}
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-ink-2 transition-colors hover:bg-hover hover:text-ink"
           >
             <User className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -145,6 +195,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
           <form action={cerrarSesion}>
             <button
               type="submit"
+              role="menuitem"
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-ink-2 transition-colors hover:bg-hover hover:text-ink"
             >
               <LogOut className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -161,8 +212,4 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
       )}
     </div>
   );
-}
-
-function inicial(nombre: string): string {
-  return [...nombre.trim()][0]?.toLocaleUpperCase("es") ?? "·";
 }

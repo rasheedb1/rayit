@@ -5,7 +5,15 @@ import { MailCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { MESSAGES } from "@/lib/auth/messages";
-import { enviarEnlace, ESTADO_INICIAL, type EstadoLogin } from "./acciones";
+import { enviarEnlace, type EstadoLogin } from "./acciones";
+
+/**
+ * El estado inicial vive AQUÍ y no en acciones.ts: ese archivo lleva
+ * "use server" y Next exige que todos sus exports en tiempo de
+ * ejecución sean funciones async (un objeto exportado allí tumba el
+ * primer envío con un 500). Mismo patrón que components/workspace-menu.tsx.
+ */
+const ESTADO_INICIAL: EstadoLogin = { estado: "inicio", email: "" };
 
 /**
  * Un campo y un botón. Es toda la pantalla de entrada, y es a propósito:

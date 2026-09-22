@@ -97,6 +97,33 @@ flujo corre en el servidor (`@supabase/ssr`), la sesión vive en cookies
 httpOnly y `middleware.ts` la refresca en cada petición y manda a
 `/login` lo que no sea público (`lib/auth/rutas.ts`).
 
+Lo de «httpOnly» hay que decírselo a `@supabase/ssr`: por defecto
+escribe `sb-…-auth-token` **sin** `HttpOnly` y **sin** `Secure`, y
+dentro de esa cookie van el access token y el refresh token. Los dos
+clientes que la escriben —`lib/auth/supabase.ts` y `middleware.ts`—
+pasan el mismo `cookieOptions` desde `lib/auth/cookies.ts`. Si algún día
+se añade un cliente de Supabase **de navegador**, esto hay que
+revisarlo con él: hoy no lo hay, y por eso la cookie puede ser httpOnly.
+
+### Quién eres, y en qué espacio estás
+
+Son dos cosas distintas y se resuelven por separado:
+
+- **quién eres** sale SIEMPRE del correo que Supabase verificó. La
+  transacción fija `app.user_email` y la fila de `app_user` se busca con
+  `email = current_user_email()` (migración 0022). Nada que venga del
+  navegador entra en esa respuesta.
+- **en qué espacio estás** sale de la cookie firmada `mc.workspace`,
+  que es una **preferencia**: solo se respeta si ese espacio está en la
+  lista que la base devuelve para tu correo. Una cookie falsificada no
+  te mete en el espacio de nadie; lo más que puede hacer es elegir
+  entre los tuyos.
+
+Pintar una pantalla **no escribe** en la base: el camino de lectura son
+dos `SELECT` en una transacción. Lo único que escribe es
+`/auth/callback` (alta de `app_user`, `last_seen_at`, y el primer
+espacio si no hay ninguno) y las acciones del selector.
+
 ### Variables
 
 Las que hacen falta ya están en el vault (`make db.unlock` las escribe
@@ -104,9 +131,9 @@ en `platform/.env.local`) y en Vercel:
 
 | Variable | Para qué |
 |---|---|
-| `SUPABASE_URL` | el cliente de servidor; `next.config.ts` la copia a `NEXT_PUBLIC_SUPABASE_URL` |
+| `SUPABASE_URL` | el cliente de servidor; `next.config.ts` la copia a `NEXT_PUBLIC_SUPABASE_URL` (el `env:` define el valor; para que además llegue al navegador hay que leerlo con acceso estático, y eso lo hace `lib/auth/config.ts`) |
 | `SUPABASE_ANON_KEY` | igual, a `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No es un secreto: viaja al navegador por diseño |
-| `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta) |
+| `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
 | `APP_URL` | a qué origen vuelve el enlace del correo. Sin ella se deduce de las cabeceras de la petición |
 
 Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`

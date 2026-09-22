@@ -11,6 +11,16 @@ import { createServerSupabase } from "@/lib/auth/supabase";
  * correo. No crea sesión, no toca la base y no dice si ese correo
  * existía —eso último a propósito: un formulario que responde distinto
  * a un correo registrado que a uno que no es un enumerador de usuarios.
+ *
+ * OJO: este archivo lleva "use server", así que Next convierte TODOS
+ * sus exports en tiempo de ejecución en referencias de servidor y exige
+ * que sean funciones async. Una constante exportada aquí —el estado
+ * inicial del formulario vivía en esta línea— revienta el primer envío
+ * con «A "use server" file can only export async functions, found
+ * object» y deja la pantalla de entrada en un 500. Las interfaces sí
+ * pueden salir: TypeScript las borra al compilar y no existen en tiempo
+ * de ejecución. El estado inicial vive en app/login/formulario.tsx, que
+ * es quien lo usa. Lo vigila app/login/acciones.test.ts.
  */
 export interface EstadoLogin {
   /** "inicio" pide el correo; "enviado" muestra «revisa tu correo». */
@@ -20,8 +30,6 @@ export interface EstadoLogin {
   /** Solo tras pulsar «Reenviar», para confirmarlo sin cambiar de pantalla. */
   reenviado?: boolean;
 }
-
-export const ESTADO_INICIAL: EstadoLogin = { estado: "inicio", email: "" };
 
 /** Un correo con forma de correo. La verdad la dice el enlace que llega, no esto. */
 const CORREO_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;

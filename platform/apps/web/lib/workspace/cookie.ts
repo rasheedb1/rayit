@@ -1,22 +1,29 @@
 /**
  * La cookie `mc.workspace`: en cuál de mis espacios estoy trabajando.
  *
- * No guarda ningún secreto —el id de un workspace no abre nada por sí
- * solo— pero tiene que ser INFALSIFICABLE: si se pudiera editar a mano,
- * cambiar un uuid en el navegador sería pedirle a la base los datos de
- * otro cliente. Por eso va firmada (HMAC-SHA256) con el mismo sello que
- * usa la cookie de OAuth, derivado de TOKEN_ENCRYPTION_KEY con una
- * etiqueta propia: la misma clave maestra no firma dos cosas distintas.
+ * ESTA COOKIE NO DA PERMISO: es una PREFERENCIA. Dice «de mis
+ * espacios, estaba trabajando en este». Quién eres lo decide siempre el
+ * correo verificado de la sesión de Supabase, y a qué espacios
+ * perteneces lo decide la base bajo RLS; `lib/workspace/current.ts`
+ * resuelve las dos cosas sin mirar la cookie y solo después comprueba
+ * si el espacio que la cookie pide está en esa lista. Si no está, se
+ * ignora. Por eso una cookie falsificada no sirve para entrar en el
+ * espacio de nadie: lo más que se puede pedir con ella es uno de los
+ * que ya son tuyos.
  *
- * Y aun firmada NO basta: `lib/workspace/current.ts` comprueba SIEMPRE
- * la membresía contra la base antes de servir nada. La firma evita que
- * la cookie mienta; la membresía es lo que decide. Una persona a la que
- * le quitaron el acceso deja de verlo en la siguiente petición, no
- * cuando caduque su cookie.
+ * (Hasta la ronda 2 no era así: el id de app_user salía de la propia
+ * cookie y la comprobación de membresía corría con ESE id, de modo que
+ * siempre decía que sí. Toda la frontera entre inquilinos colgaba de
+ * este HMAC. Si algún día alguien vuelve a leer `u` como identidad,
+ * vuelve el agujero.)
  *
- * El correo va dentro para atar la cookie a la sesión: cerrar sesión y
- * entrar con otra cuenta en el mismo navegador no hereda el espacio de
- * la anterior.
+ * Aun así va firmada (HMAC-SHA256) con el mismo sello que usa la cookie
+ * de OAuth, derivado de TOKEN_ENCRYPTION_KEY con una etiqueta propia:
+ * la misma clave maestra no firma dos cosas distintas. La firma es lo
+ * que evita que un valor cualquiera del navegador se cuele como
+ * preferencia y, con el correo dentro, ata la cookie a la sesión:
+ * cerrar sesión y entrar con otra cuenta en el mismo navegador no
+ * hereda el espacio de la anterior.
  *
  * Sin TOKEN_ENCRYPTION_KEY (una máquina sin `make db.unlock`) no se
  * firma ni se abre nada: se devuelve null, la web sirve el primer
@@ -33,9 +40,13 @@ export const COOKIE_WORKSPACE_MAX_AGE_S = 30 * 24 * 60 * 60;
 const SELLO_INFO = "on-cue/workspace-cookie/v1";
 
 export interface EspacioElegido {
-  /** Workspace actual. */
+  /** Workspace actual: lo único que se usa, y solo si está entre los míos. */
   w: string;
-  /** Fila de app_user de quien lo eligió. */
+  /**
+   * Fila de app_user de quien lo eligió. Se guarda para poder depurar y
+   * para que la cookie siga siendo legible por quien la escribió; NO se
+   * usa como identidad en ninguna parte (ver arriba).
+   */
   u: string;
   /** Correo de la sesión que lo eligió. */
   e: string;

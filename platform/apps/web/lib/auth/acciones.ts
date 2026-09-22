@@ -74,8 +74,14 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
     return { error: MESSAGES.selector.errores.generico };
   }
 
-  await recordarEspacio({ w: workspaceId, u: userId, e: identity.email ?? "" });
+  // El espacio YA quedó creado, así que si no se puede sellar la cookie
+  // no se redirige: se dice. Antes se tiraba el booleano y en una
+  // máquina sin TOKEN_ENCRYPTION_KEY la persona creaba un espacio,
+  // aterrizaba en /resumen y seguía viendo el viejo sin saber por qué.
+  const recordado = await recordarEspacio({ w: workspaceId, u: userId, e: identity.email ?? "" });
   revalidatePath("/", "layout");
+  if (!recordado) return { error: MESSAGES.selector.errores.creadoSinRecordar };
+
   redirect(DESPUES_DE_CAMBIAR);
 }
 

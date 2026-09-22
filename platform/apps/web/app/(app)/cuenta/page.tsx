@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getAppUser, listMyWorkspaces } from "@mc/db/queries/identidad";
+import { getAppUser } from "@mc/db/queries/identidad";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function CuentaPage() {
   const t = MESSAGES.cuenta;
-  const { identity, sesion, workspaceId } = await getCurrentContext();
+  const { identity, sesion, workspaceId, workspaces } = await getCurrentContext();
 
   // Sin sesión solo se llega aquí en modo demo: con Supabase Auth
   // configurado, el middleware manda a /login antes de renderizar.
@@ -36,8 +36,10 @@ export default async function CuentaPage() {
     );
   }
 
+  // Los espacios ya vienen resueltos en el contexto de la petición: no
+  // se vuelven a pedir.
+  const espacios = workspaces;
   const persona = await withIdentity(identity, (tx) => getAppUser(tx, identity.userId!));
-  const espacios = await withIdentity(identity, (tx) => listMyWorkspaces(tx));
 
   return (
     <>

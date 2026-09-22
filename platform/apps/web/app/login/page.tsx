@@ -28,8 +28,13 @@ export default async function LoginPage({ searchParams }: Props) {
   const destino = destinoSeguro(next);
   const t = MESSAGES.login;
 
-  if (isAuthConfigured()) {
-    // Quien ya entró no tiene nada que hacer aquí.
+  // Quien ya entró no tiene nada que hacer aquí... salvo cuando viene
+  // con un error. /auth/callback abre la sesión ANTES de sincronizar,
+  // así que un fallo al sincronizar dejaba sesión viva y este redirect
+  // se tragaba el mensaje: la persona iba a /resumen sin enterarse de
+  // nada. El callback ya cierra la sesión en ese caso, y esto es el
+  // cinturón: con ?error= la pantalla SIEMPRE se pinta.
+  if (isAuthConfigured() && !error) {
     const sesion = await getSesion();
     if (sesion) redirect(destino);
   }
@@ -81,7 +86,17 @@ export default async function LoginPage({ searchParams }: Props) {
         <FormularioLogin next={destino} />
       )}
 
-      <p className="mt-10 text-xs leading-4 text-muted">{t.legal}</p>
+      <p className="mt-10 text-xs leading-4 text-muted">
+        {t.legal.prefijo}{" "}
+        <Link href={t.legal.terminos.href} className="underline underline-offset-2 hover:text-ink">
+          {t.legal.terminos.texto}
+        </Link>{" "}
+        {t.legal.union}{" "}
+        <Link href={t.legal.privacidad.href} className="underline underline-offset-2 hover:text-ink">
+          {t.legal.privacidad.texto}
+        </Link>
+        {t.legal.sufijo}
+      </p>
     </main>
   );
 }

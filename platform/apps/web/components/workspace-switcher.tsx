@@ -1,37 +1,56 @@
 import "server-only";
 import { cache } from "react";
 import Link from "next/link";
-import { listMyWorkspaces } from "@mc/db/queries/identidad";
 import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
+import { isAuthConfigured } from "@/lib/auth/config";
 import { MESSAGES } from "@/lib/auth/messages";
-import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
+import { withWorkspaceId } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
+import { inicial } from "@/lib/workspace/inicial";
 import { WorkspaceMenu, type EspacioVisible } from "./workspace-menu";
 
 /**
  * En qué espacio estoy y cómo cambio de espacio. Va en el marco (CIM-4)
  * y es lo primero que se lee de la aplicación, así que tiene que
- * aguantar los tres casos sin romper la pantalla entera:
+ * aguantar cuatro casos sin romper la pantalla entera:
  *
- *   con sesión      el espacio actual y la lista de los míos;
- *   sin sesión      (modo demo, o una ruta pública como /kit) el nombre
- *                   del espacio que se está sirviendo y un enlace para
- *                   entrar de verdad;
- *   con la base caída  nada. Un marco no puede tumbar todas las rutas
- *                   por una consulta: el error de la pantalla ya lo
- *                   cuenta su propio error.tsx.
+ *   sesion    el espacio actual y la lista de los míos, que ya vienen
+ *             resueltos en el contexto de la petición: este componente
+ *             no consulta nada.
+ *   entrar    sin sesión y con autenticación configurada: SOLO el
+ *             enlace para entrar, sin ningún nombre. /kit es pública y
+ *             vive dentro de (app), así que cualquiera que abriera esa
+ *             URL en el sitio desplegado veía el nombre del espacio de
+ *             DEMO_WORKSPACE_ID —o el del seed con
+ *             ALLOW_SEED_WORKSPACE=1—. No son datos del negocio, pero
+ *             es el nombre de un espacio real enseñado a quien pase.
+ *   demo      sin llaves de Supabase: una copia local donde no hay
+ *             sesión posible y el espacio del seed es justamente lo que
+ *             se está enseñando. Ahí sí se pinta el nombre.
+ *   nada      la base no respondió. Un marco no puede tumbar todas las
+ *             rutas por una consulta: el error de la pantalla ya lo
+ *             cuenta su propio error.tsx.
  */
-const datos = cache(async (): Promise<{ actual: EspacioVisible; espacios: EspacioVisible[]; sesion: boolean } | null> => {
+type Vista =
+  | { modo: "sesion"; actual: EspacioVisible; espacios: EspacioVisible[] }
+  | { modo: "demo"; actual: EspacioVisible }
+  | { modo: "entrar" };
+
+const datos = cache(async (): Promise<Vista | null> => {
   try {
-    const { workspaceId, identity, sesion } = await getCurrentContext();
-    if (!sesion || !identity?.userId) {
+    const { workspaceId, sesion, workspaces } = await getCurrentContext();
+    if (!sesion) {
+      if (isAuthConfigured()) return { modo: "entrar" };
       const ws = await withWorkspaceId(workspaceId, (tx) => getWorkspaceSettings(tx));
-      return { actual: { id: ws.id, name: ws.name }, espacios: [], sesion: false };
+      return { modo: "demo", actual: { id: ws.id, name: ws.name } };
     }
-    const espacios = await withIdentity(identity, (tx) => listMyWorkspaces(tx));
-    const actual = espacios.find((e) => e.id === workspaceId) ?? espacios[0];
+    const actual = workspaces.find((e) => e.id === workspaceId) ?? workspaces[0];
     if (!actual) return null;
-    return { actual: { id: actual.id, name: actual.name }, espacios: espacios.map((e) => ({ id: e.id, name: e.name })), sesion: true };
+    return {
+      modo: "sesion",
+      actual: { id: actual.id, name: actual.name },
+      espacios: workspaces.map((e) => ({ id: e.id, name: e.name })),
+    };
   } catch (err) {
     console.error("[workspace] no se pudo leer el espacio actual para el marco", err);
     return null;
@@ -42,7 +61,15 @@ export async function WorkspaceSwitcher() {
   const d = await datos();
   if (!d) return null;
 
-  if (!d.sesion) {
+  if (d.modo === "entrar") {
+    return (
+      <div className="border-b border-line px-2 py-2">
+        <EnlaceEntrar />
+      </div>
+    );
+  }
+
+  if (d.modo === "demo") {
     return (
       <div className="border-b border-line px-2 py-2">
         <div className="flex items-center gap-2 px-2 py-1.5">
@@ -50,16 +77,11 @@ export async function WorkspaceSwitcher() {
             className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-surface-2 text-[11px] font-bold text-ink-2"
             aria-hidden="true"
           >
-            {[...d.actual.name.trim()][0]?.toLocaleUpperCase("es") ?? "·"}
+            {inicial(d.actual.name)}
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{d.actual.name}</span>
         </div>
-        <Link
-          href="/login"
-          className="mt-0.5 block rounded-sm px-2 py-1 text-xs text-muted underline underline-offset-4 transition-colors hover:text-ink"
-        >
-          {MESSAGES.cuenta.demo.entrar}
-        </Link>
+        <EnlaceEntrar />
       </div>
     );
   }
@@ -68,5 +90,16 @@ export async function WorkspaceSwitcher() {
     <div className="border-b border-line px-2 py-2">
       <WorkspaceMenu actual={d.actual} espacios={d.espacios} />
     </div>
+  );
+}
+
+function EnlaceEntrar() {
+  return (
+    <Link
+      href="/login"
+      className="mt-0.5 block rounded-sm px-2 py-1 text-xs text-muted underline underline-offset-4 transition-colors hover:text-ink"
+    >
+      {MESSAGES.cuenta.demo.entrar}
+    </Link>
   );
 }

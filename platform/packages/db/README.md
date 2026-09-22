@@ -147,6 +147,17 @@ la web solo con lo que Supabase verificó.
 —`withWorkspace(wsId, fn, { userId, email })`— y es como la web abre
 todas sus transacciones desde CIM-3.
 
+Las dos preguntas de cada petición con sesión van juntas en
+`getMyIdentityAndWorkspaces(tx)` (`queries/identidad.ts`): busca la fila
+de `app_user` con `email = current_user_email()` —el correo NO se pasa
+por parámetro: se compara contra lo que la transacción fijó, así que el
+id no puede venir de nada que mande el navegador—, fija `app.user_id`
+con ese id y lee las membresías. Solo `SELECT`: pintar una pantalla no
+escribe. El alta (`upsertAppUserPorCorreo`, `createCreatorWorkspace`) es
+otro camino y lo llama solo `/auth/callback`, con `lockByEmail(tx,
+email)` —un `pg_advisory_xact_lock`— para que dos peticiones a la vez no
+creen dos espacios a la misma persona.
+
 ### 5. Job global con `asWorker`
 
 ```ts

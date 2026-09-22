@@ -18,8 +18,21 @@ export const MESSAGES = {
     correoPlaceholder: "tu@correo.com",
     enviar: "Enviarme un enlace",
     enviando: "Enviando…",
-    legal: "Al entrar aceptas que guardemos tu correo para identificarte.",
-    volver: "Volver al inicio",
+    /**
+     * El pie legal, como enlaces y no como una frase suelta: es lo que
+     * un cliente que paga espera ver antes de dejar su correo, y es lo
+     * que hacen las dos referencias de esta pantalla (Vercel y Linear).
+     * Mientras no haya un texto legal redactado por alguien que sepa,
+     * los dos apuntan a /legal, que es pública, dice lo que hoy es
+     * cierto y no inventa cláusulas.
+     */
+    legal: {
+      prefijo: "Al entrar aceptas los",
+      terminos: { texto: "términos", href: "/legal#terminos" },
+      union: "y la",
+      privacidad: { texto: "política de privacidad", href: "/legal#privacidad" },
+      sufijo: ".",
+    },
     enviado: {
       titulo: "Revisa tu correo",
       descripcion: "Te mandamos un enlace para entrar. Se abre una sola vez y caduca en una hora.",
@@ -82,6 +95,34 @@ export const MESSAGES = {
     },
   },
 
+  /**
+   * El error.tsx de /login. La puerta del producto no puede caer en la
+   * pantalla genérica de Next, en inglés y sin marca: es justo donde se
+   * decide si alguien entra o no. Misma forma que el de Finanzas.
+   */
+  loginError: {
+    eyebrow: "Entrar",
+    titulo: "No pudimos abrir la pantalla de acceso",
+    descripcion:
+      "Algo falló antes de poder pedirte el correo. No se mandó ningún enlace; vuelve a intentarlo y, si sigue igual, avísanos.",
+    reintentar: "Reintentar",
+    referencia: "Referencia",
+  },
+
+  /**
+   * El error.tsx de la raíz: cubre /auth/callback y cualquier ruta
+   * futura que viva fuera del grupo (app), que no hereda el límite de
+   * error del marco.
+   */
+  errorRaiz: {
+    eyebrow: "On Cue",
+    titulo: "Algo se rompió",
+    descripcion: "No pudimos cargar esta página. Vuelve a intentarlo y, si sigue igual, avísanos.",
+    reintentar: "Reintentar",
+    referencia: "Referencia",
+    inicio: "Ir a Resumen",
+  },
+
   /** El error.tsx del segmento /cuenta, con la misma forma que el de Finanzas. */
   cuentaError: {
     eyebrow: "Cuenta",
@@ -104,6 +145,8 @@ export const MESSAGES = {
     errores: {
       sinMembresia: "Ese espacio ya no es tuyo.",
       sinFirma: "No podemos recordar el espacio elegido en esta máquina: falta TOKEN_ENCRYPTION_KEY (make db.unlock).",
+      creadoSinRecordar:
+        "El espacio se creó, pero no podemos recordarlo en esta máquina: falta TOKEN_ENCRYPTION_KEY (make db.unlock). Entra a él desde la lista.",
       nombreVacio: "Escribe un nombre.",
       generico: "No pudimos cambiar de espacio. Vuelve a intentarlo.",
     },
@@ -112,5 +155,34 @@ export const MESSAGES = {
   espacio: {
     /** Cuando el correo no da ningún nombre legible. */
     sinNombre: "Mi espacio",
+  },
+
+  /**
+   * La página pública a la que apunta el pie de /login. No es un texto
+   * legal: es lo que hoy es cierto, escrito sin adornos, hasta que haya
+   * unos términos y una política redactados por alguien que sepa. Vale
+   * más una frase honesta que una plantilla copiada.
+   */
+  legal: {
+    titulo: "Términos y privacidad",
+    descripcion: "On Cue está en construcción. Esto es lo que hoy es cierto, sin letra pequeña.",
+    terminos: {
+      id: "terminos",
+      titulo: "Términos",
+      parrafos: [
+        "Todavía no hay unos términos de servicio redactados. Mientras no los haya, usar On Cue no te obliga a nada y tampoco te promete disponibilidad: es software en desarrollo y puede cambiar o dejar de funcionar sin aviso.",
+        "Los datos que subas o conectes son tuyos. Puedes pedir que los borremos escribiendo a rasheed@y.uno.",
+      ],
+    },
+    privacidad: {
+      id: "privacidad",
+      titulo: "Privacidad",
+      parrafos: [
+        "Guardamos tu correo para identificarte y para mandarte el enlace de acceso. Nada más: no hay contraseñas que guardar y no vendemos ni cedemos esa dirección.",
+        "Si conectas una cuenta de TikTok, Instagram, Facebook o YouTube, guardamos sus credenciales cifradas y las métricas que esa plataforma nos deja leer, para enseñártelas a ti y a nadie más.",
+        "Escribe a rasheed@y.uno para pedir una copia de tus datos o su borrado.",
+      ],
+    },
+    volver: "Volver a entrar",
   },
 } as const;
