@@ -25,6 +25,11 @@ nueve índices, y el entorno local se levanta con un comando.
 > CON-3 (OAuth de TikTok e Instagram) está completa en código y bloqueada
 > solo por la prueba en vivo, que depende del acceso a las apps. Detalle
 > en la sección 9 de [backlog-mvp.md](backlog-mvp.md#9-estado-del-sprint-2-al-22-de-septiembre-de-2026).
+>
+> **Cambio de producto del 22 de septiembre (noche).** El MVP no pide
+> autorización OAuth a cada creador: una cuenta se agrega por su @ y se
+> lee con fuentes oficiales (CON-10, en `main`). La autorización del
+> dueño (alcance, retención, demografía) pasa a una versión avanzada.
 
 ---
 

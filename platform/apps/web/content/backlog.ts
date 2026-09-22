@@ -170,7 +170,7 @@ export const STORIES: readonly Story[] = [
     desc: "Callback, cifrado del token con TOKEN_ENCRYPTION_KEY, secret_ref en social_connection, data_consent con la evidencia. Necesita acceso de desarrollador a las apps de TikTok y Meta (lo da Rasheed).",
     done: "Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro en ninguna tabla.",
     status: "bloqueada",
-    note: "Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, aplicada en Supabase el 21-sep), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. En main y desplegada en producción el 22-sep con TOKEN_ENCRYPTION_KEY y APP_URL en Vercel. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §9.4 fila 15); el paso a paso está en docs/propuestas/CON-3.md §5.",
+    note: "POSPUESTA a una versión avanzada (decisión del 22-sep): el MVP agrega cuentas por @ con datos públicos (CON-10); esta autorización queda detrás de la bandera oauth_connect (OAUTH_CONNECT=1). Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, aplicada en Supabase el 21-sep), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. En main y desplegada en producción el 22-sep con TOKEN_ENCRYPTION_KEY y APP_URL en Vercel. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §9.4 fila 15); el paso a paso está en docs/propuestas/CON-3.md §5.",
   },
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
@@ -178,6 +178,15 @@ export const STORIES: readonly Story[] = [
     desc: "Lista sobre connection_health, botón para conectar cada red, estado (activa, vencida, necesita reautorizar), horas desde la última sincronización, y el paso manual «activa Analytics en TikTok».",
     done: "Una conexión con token vencido se ve en rojo con el botón de reautorizar.",
     status: "pendiente",
+    note: "Pospuesta con CON-3 (versión avanzada). La pantalla de cuentas del MVP la trae CON-10.",
+  },
+  {
+    id: "CON-10", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1"],
+    title: "Cuentas por @ con datos públicos",
+    desc: "Decisión del 22-sep: sin OAuth por creador en el MVP. Una cuenta se agrega con su @ y se lee cada día con fuentes oficiales: Instagram por business_discovery con el token de la cuenta casa (INSTAGRAM_HOUSE_TOKEN), YouTube con API key (GOOGLE_API_KEY), TikTok solo identidad por oEmbed hasta elegir fuente. Migración 0022 (access_mode public_profile), snapshots en account_metric_snapshot con source public_profile, job collect.account_metrics, pantalla «Agregar cuenta».",
+    done: "Agregar un @ deja la fila con su snapshot público del día, el worker la actualiza cada día y ninguna credencial aparece en las tablas.",
+    status: "hecho",
+    note: "En main el 22-sep. Probado con respuestas grabadas (connectors 180, db 46, worker 31, web 119) y con el volcado de todas las columnas de texto sin credenciales. Comprobado desde servidor que el HTML público de TikTok e Instagram no sirve (reto anti-bot y muro de login): por eso solo fuentes oficiales. Para la prueba real faltan dos configuraciones de Nicolás: INSTAGRAM_HOUSE_TOKEN (token de su cuenta profesional, generado en el App Dashboard de Meta) y GOOGLE_API_KEY; TikTok se agrega ya, sin métricas, y su fuente (proveedor o CSV de TikTok Studio) es una decisión pendiente. Detalle en docs/propuestas/CON-10.md.",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],
@@ -206,6 +215,7 @@ export const STORIES: readonly Story[] = [
     desc: "Mismo flujo que CON-3 para un canal de prueba.",
     done: "Conectar un canal de prueba deja la fila con sus scopes y el token cifrado.",
     status: "pendiente",
+    note: "Pospuesta con CON-3. En el MVP YouTube se lee por @ con API key (CON-10).",
   },
   {
     id: "CON-9", module: "CON", owner: "rasheed", size: null, sprint: 1, deps: [],

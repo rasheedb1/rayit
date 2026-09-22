@@ -96,9 +96,9 @@ export const MODULES: readonly ModuleDef[] = [
     group: "producto",
     phase: 1,
     owner: "nicolas",
-    summary: "Las cuentas conectadas y los datos que traen.",
+    summary: "Las cuentas del creador y los datos que traen.",
     purpose:
-      "Conectar TikTok, Instagram y YouTube, los conectores con sus fixtures, el worker, la recolección diaria de posts y métricas, la línea base del creador y la demografía. Es la entrada de datos de todo el producto.",
+      "Agregar cuentas de TikTok, Instagram y YouTube por su @ y leer cada día lo que la plataforma publica; los conectores con sus fixtures, el worker, la recolección diaria de posts y métricas y la línea base del creador. La autorización del dueño (alcance, retención, demografía) queda para una versión avanzada. Es la entrada de datos de todo el producto.",
     prefix: "CON",
     paths: [
       "apps/web/app/(app)/conexiones/",
