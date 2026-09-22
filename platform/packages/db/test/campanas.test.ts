@@ -15,6 +15,9 @@ import {
   CampaignNotFoundError,
   CampaignPostNotFoundError,
   PostNotFoundError,
+  QuoteNotAcceptedError,
+  QuoteNotFoundError,
+  createCampaignFromQuote,
   type WorkspaceTx,
 } from '../src/index.ts';
 import {
@@ -276,5 +279,168 @@ describe('editar y cambiar de estado', () => {
       t.db.withWorkspace(WORKSPACE_AJENO, (tx) => updateCampaign(tx, CAMPAIGN_AJENA, { name: 'Otro' })),
       (e: unknown) => e instanceof CampaignLockedError && /cancelada/.test(e.messageEs),
     );
+  });
+});
+
+// ---------------------------------------------------------------------
+// CAM-2 · createCampaignFromQuote: el contrato con COT-4
+// ---------------------------------------------------------------------
+
+const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
+const QUOTE_ACCEPTED = '00000003-0000-4000-8000-0000c0700001';
+const QUOTE_SENT = '00000003-0000-4000-8000-0000c0700002';
+const QUOTE_RACE = '00000003-0000-4000-8000-0000c0700003';
+const QUOTE_FLOW = '00000003-0000-4000-8000-0000c0700004';
+
+describe('crear campaña desde la cotización (CAM-2)', () => {
+  before(async () => {
+    // El seed no trae cotizaciones: las inserta la prueba, bajo el workspace de Laura.
+    const quote = (id: string, number: string, status: string) => `
+      INSERT INTO quote (id, workspace_id, company_id, creator_id, number, slug, currency, subtotal, tax, total,
+                         agreed_metrics, report_cuts_hours, usage_rights_days, exclusivity_days, exclusivity_scope, payment_terms_days, status)
+      VALUES ('${id}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CREATOR_LAURA}', '${number}', 'cot-${number.toLowerCase()}', 'COP',
+              5100000.00, 969000.00, 6069000.00, '{views,reach,link_clicks}', '{168,720}', 90, 30, 'café', 45, '${status}')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO quote_item (quote_id, deliverable, platform_id, description, quantity, unit_price, total, position)
+      SELECT '${id}', 'reel', 'instagram', '1 reel de cold brew', 1, 3200000.00, 3200000.00, 0
+      WHERE NOT EXISTS (SELECT 1 FROM quote_item WHERE quote_id = '${id}');
+      INSERT INTO quote_item (quote_id, deliverable, platform_id, description, quantity, unit_price, total, position)
+      SELECT '${id}', 'historia', 'instagram', '3 historias', 3, 633333.33, 1900000.00, 1
+      WHERE (SELECT count(*) FROM quote_item WHERE quote_id = '${id}') < 2;
+    `;
+    await t.admin(quote(QUOTE_ACCEPTED, 'COT-2026-014', 'accepted') + quote(QUOTE_SENT, 'COT-2026-015', 'sent') + quote(QUOTE_RACE, 'COT-2026-016', 'accepted') + quote(QUOTE_FLOW, 'COT-2026-017', 'sent'));
+  });
+
+  test('crea la campaña con lo copiado de la cotización, la línea base y las cuentas de la marca', async () => {
+    const { campaign, created } = await laura((tx) =>
+      createCampaignFromQuote(tx, { quoteId: QUOTE_ACCEPTED, startsOn: '2026-11-03', endsOn: '2026-11-10', trackingCode: 'LAURA30' }),
+    );
+    assert.equal(created, true);
+    assert.equal(campaign.status, 'planned');
+    assert.equal(campaign.name, 'Café Alma · 1 reel de cold brew');
+    assert.equal(campaign.companyId, COMPANY_CAFE_ALMA);
+    assert.equal(campaign.creatorId, CREATOR_LAURA);
+    assert.equal(campaign.quoteId, QUOTE_ACCEPTED);
+    assert.equal(campaign.dealId, null);
+    assert.equal(campaign.amount, '6069000.00', 'quote.total como string, sin aritmética');
+    assert.equal(campaign.currency, 'COP');
+    assert.equal(campaign.startsOn, '2026-11-03');
+    assert.equal(campaign.endsOn, '2026-11-10');
+    assert.equal(campaign.brandBaselineFrom, '2026-10-20', 'startsOn − 14');
+    assert.deepEqual(campaign.brandAccounts, [
+      { platform_id: 'instagram', handle: 'cafealma' },
+      { platform_id: 'tiktok', handle: 'cafealma.co' },
+    ]);
+    assert.equal(campaign.trackingCode, 'LAURA30');
+    assert.equal(campaign.trackingUrl, null);
+    assert.deepEqual(campaign.utm, {});
+    assert.match(campaign.brief ?? '', /^Métricas acordadas: views, reach, link_clicks\.\nCortes del reporte: 7 días, 30 días\.\nDerechos de uso: 90 días\.\nExclusividad: 30 días \(café\)\.\nPlazo de pago: 45 días\.$/);
+    assert.equal(campaign.postsCount, 0);
+    assert.equal(campaign.viewsTotal, null);
+    assert.equal(campaign.hasInvoice, false);
+  });
+
+  test('aparece en la lista y la ficha muestra lo acordado y los entregables desde la cotización', async () => {
+    const rows = await laura((tx) => listCampaigns(tx, { status: 'planned' }));
+    const row = rows.find((r) => r.name === 'Café Alma · 1 reel de cold brew');
+    assert.ok(row, 'está en la lista');
+    const c = await laura((tx) => getCampaign(tx, row.id));
+    assert.ok(c);
+    assert.deepEqual(c.agreed, {
+      quoteId: QUOTE_ACCEPTED,
+      quoteNumber: 'COT-2026-014',
+      quoteStatus: 'accepted',
+      agreedMetrics: ['views', 'reach', 'link_clicks'],
+      reportCutsHours: [168, 720],
+      usageRightsDays: 90,
+      exclusivityDays: 30,
+      exclusivityScope: 'café',
+      paymentTermsDays: 45,
+    });
+    assert.equal(c.deliverablesSource, 'quote');
+    assert.deepEqual(c.deliverables.map((d) => [d.deliverable, d.quantity, d.platformId]), [['reel', 1, 'instagram'], ['historia', 3, 'instagram']]);
+  });
+
+  test('una segunda llamada con la misma cotización devuelve la misma campaña con created false, sin cambiar nada', async () => {
+    const first = await laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_ACCEPTED, startsOn: '2026-11-03', endsOn: '2026-11-10' }));
+    const again = await laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_ACCEPTED, startsOn: '2026-12-01', endsOn: '2026-12-02', name: 'Otro nombre' }));
+    assert.equal(first.created, false);
+    assert.equal(again.created, false);
+    assert.equal(again.campaign.id, first.campaign.id);
+    assert.equal(again.campaign.name, 'Café Alma · 1 reel de cold brew', 'no pisa el nombre');
+    assert.equal(again.campaign.startsOn, '2026-11-03', 'no pisa las fechas');
+    const n = await laura((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM campaign WHERE quote_id = $1', [QUOTE_ACCEPTED]));
+    assert.equal(n.rows[0]?.n, 1);
+  });
+
+  test('dos aceptaciones concurrentes crean una sola campaña', async () => {
+    const [a, b] = await Promise.all([
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_RACE, startsOn: '2026-11-17', endsOn: '2026-11-24' })),
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_RACE, startsOn: '2026-11-17', endsOn: '2026-11-24' })),
+    ]);
+    assert.equal(a.campaign.id, b.campaign.id);
+    assert.deepEqual([a.created, b.created].sort(), [false, true]);
+    const n = await laura((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM campaign WHERE quote_id = $1', [QUOTE_RACE]));
+    assert.equal(n.rows[0]?.n, 1);
+  });
+
+  test('una cotización en sent no crea campaña', async () => {
+    await assert.rejects(
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '2026-11-03', endsOn: '2026-11-10' })),
+      (e: unknown) => e instanceof QuoteNotAcceptedError && e.status === 'sent' && /aceptada/.test(e.messageEs),
+    );
+    const n = await laura((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM campaign WHERE quote_id = $1', [QUOTE_SENT]));
+    assert.equal(n.rows[0]?.n, 0);
+  });
+
+  test('una cotización de otro workspace es «no encontrada»', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_AJENO, (tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_ACCEPTED, startsOn: '2026-11-03', endsOn: '2026-11-10' })),
+      (e: unknown) => e instanceof QuoteNotFoundError && /no existe en este workspace/.test(e.messageEs),
+    );
+    await assert.rejects(
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: '00000003-0000-4000-8000-0000c0700099', startsOn: '2026-11-03', endsOn: '2026-11-10' })),
+      QuoteNotFoundError,
+    );
+    await assert.rejects(laura((tx) => createCampaignFromQuote(tx, { quoteId: 'no-es-uuid', startsOn: '2026-11-03', endsOn: '2026-11-10' })), QuoteNotFoundError);
+  });
+
+  test('fechas inválidas: fin anterior a inicio o no ISO', async () => {
+    await assert.rejects(
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '2026-11-10', endsOn: '2026-11-03' })),
+      (e: unknown) => e instanceof InvalidDatesError && /anterior/.test(e.messageEs),
+    );
+    await assert.rejects(laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '2026-02-30', endsOn: '2026-03-01' })), InvalidDatesError);
+    await assert.rejects(laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '10/11/2026', endsOn: '2026-11-12' })), InvalidDatesError);
+  });
+
+  test('el flujo de COT-4 de punta a punta: aceptar y crear en UNA transacción, y si algo falla no queda nada', async () => {
+    // Primer intento: la acción de Rasheed falla después de crear la campaña → rollback de todo.
+    await assert.rejects(
+      laura(async (tx) => {
+        await tx.query("UPDATE quote SET status = 'accepted', accepted_at = now() WHERE id = $1", [QUOTE_FLOW]);
+        const r = await createCampaignFromQuote(tx, { quoteId: QUOTE_FLOW, startsOn: '2026-12-01', endsOn: '2026-12-08' });
+        assert.equal(r.created, true);
+        throw new Error('falló el UPDATE de deal');
+      }),
+      /falló el UPDATE de deal/,
+    );
+    const after = await laura((tx) => tx.query<{ status: string; n: number }>(
+      'SELECT q.status, (SELECT count(*)::int FROM campaign c WHERE c.quote_id = q.id) AS n FROM quote q WHERE q.id = $1',
+      [QUOTE_FLOW],
+    ));
+    assert.equal(after.rows[0]?.status, 'sent', 'la cotización no quedó aceptada');
+    assert.equal(after.rows[0]?.n, 0, 'ni quedó campaña');
+
+    // Segundo intento: todo bien. La campaña queda en planned y se ve en el módulo.
+    const { campaign, created } = await laura(async (tx) => {
+      await tx.query("UPDATE quote SET status = 'accepted', accepted_at = now() WHERE id = $1", [QUOTE_FLOW]);
+      return createCampaignFromQuote(tx, { quoteId: QUOTE_FLOW, startsOn: '2026-12-01', endsOn: '2026-12-08', name: 'Navidad con Café Alma' });
+    });
+    assert.equal(created, true);
+    assert.equal(campaign.name, 'Navidad con Café Alma');
+    const planned = await laura((tx) => listCampaigns(tx, { status: 'planned' }));
+    assert.ok(planned.some((c) => c.id === campaign.id));
+    assert.equal((await laura((tx) => getCampaign(tx, campaign.id)))?.agreed?.quoteNumber, 'COT-2026-017');
   });
 });

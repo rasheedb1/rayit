@@ -269,3 +269,70 @@ export function suggestionReasons(post: SuggestionCandidate, needles: Suggestion
   if (name && text.includes(name)) reasons.push({ kind: 'name', text: `Nombra a ${needles.companyName}` });
   return reasons;
 }
+
+// ---------------------------------------------------------------------
+// Desde la cotización (CAM-2)
+// ---------------------------------------------------------------------
+
+/** A quién medir en CAM-3: una cuenta pública de la marca por red. */
+export interface BrandAccount {
+  platform_id: string;
+  handle: string;
+}
+
+/**
+ * company.socials ({ "instagram": "cafealma", "tiktok": "@cafealma.co" })
+ * → [{ platform_id: 'instagram', handle: 'cafealma' }, …]. Se conserva
+ * la llave tal cual (en minúsculas) como platform_id; el handle va sin @.
+ */
+export function brandAccountsFromSocials(socials: unknown): BrandAccount[] {
+  if (!socials || typeof socials !== 'object') return [];
+  const out: BrandAccount[] = [];
+  for (const [key, v] of Object.entries(socials as Record<string, unknown>)) {
+    if (typeof v !== 'string') continue;
+    const handle = v.trim().replace(/^@/, '');
+    const platformId = key.trim().toLowerCase();
+    if (handle && platformId) out.push({ platform_id: platformId, handle });
+  }
+  // jsonb no conserva el orden de las llaves: se ordena por red para que
+  // el resultado sea el mismo venga de donde venga.
+  return out.sort((a, b) => a.platform_id.localeCompare(b.platform_id));
+}
+
+/** «Café Alma · 1 reel + 1 TikTok»; sin ítems, «Café Alma · COT-2026-014». */
+export function defaultCampaignName(companyName: string, firstItemDescription: string | null, quoteNumber: string): string {
+  const tail = firstItemDescription?.trim() || quoteNumber;
+  return `${companyName} · ${tail}`;
+}
+
+export interface AgreedTerms {
+  agreedMetrics: readonly string[];
+  reportCutsHours: readonly number[];
+  usageRightsDays: number | null;
+  exclusivityDays: number | null;
+  exclusivityScope: string | null;
+  paymentTermsDays: number;
+}
+
+const HOURS_PER_DAY = 24;
+
+/** «24 h» hasta dos días; «7 días», «30 días» después. */
+export function cutHoursLabel(hours: number): string {
+  return hours < HOURS_PER_DAY * 2 ? `${hours} h` : `${Math.round(hours / HOURS_PER_DAY)} días`;
+}
+
+/**
+ * Lo acordado antes de publicar, en texto, para el brief de la campaña.
+ * Queda copiado para que la ficha lo muestre aunque la cotización cambie
+ * después; la fuente sigue siendo quote (getCampaign la lee por quote_id).
+ */
+export function briefFromQuote(terms: AgreedTerms): string {
+  const lines: string[] = [];
+  lines.push(terms.agreedMetrics.length > 0 ? `Métricas acordadas: ${terms.agreedMetrics.join(', ')}.` : 'Métricas acordadas: sin definir.');
+  if (terms.reportCutsHours.length > 0) lines.push(`Cortes del reporte: ${terms.reportCutsHours.map(cutHoursLabel).join(', ')}.`);
+  lines.push(terms.usageRightsDays === null ? 'Sin derechos de uso.' : `Derechos de uso: ${terms.usageRightsDays} días.`);
+  if (terms.exclusivityDays === null) lines.push('Sin exclusividad.');
+  else lines.push(`Exclusividad: ${terms.exclusivityDays} días${terms.exclusivityScope ? ` (${terms.exclusivityScope})` : ''}.`);
+  lines.push(`Plazo de pago: ${terms.paymentTermsDays} días.`);
+  return lines.join('\n');
+}

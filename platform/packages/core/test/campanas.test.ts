@@ -5,6 +5,7 @@ import {
   canTransitionCampaign, canEditCampaign, transitionCampaign, InvalidCampaignTransition,
   assertCampaignDates, InvalidDatesError, isIsoDate, brandBaselineFrom,
   handlesFromSocials, suggestionReasons, deliverableLabel, isDeliverable,
+  brandAccountsFromSocials, defaultCampaignName, briefFromQuote, cutHoursLabel,
 } from '../src/campanas.ts';
 
 // ------------------------------------------------------------- estados
@@ -130,4 +131,34 @@ test('entregables con etiqueta; un valor desconocido se muestra tal cual', () =>
   assert.equal(deliverableLabel('dedicado'), 'Video dedicado');
   assert.equal(deliverableLabel('podcast'), 'podcast');
   assert.equal(deliverableLabel(null), null);
+});
+
+// ------------------------------------------------ desde la cotización
+
+test('brandAccountsFromSocials: una cuenta por red, sin @, llave en minúsculas, ordenadas por red', () => {
+  assert.deepEqual(brandAccountsFromSocials({ TikTok: '@cafealma.co', instagram: 'cafealma', followers: 12, youtube: ' ' }), [
+    { platform_id: 'instagram', handle: 'cafealma' },
+    { platform_id: 'tiktok', handle: 'cafealma.co' },
+  ]);
+  assert.deepEqual(brandAccountsFromSocials(null), []);
+  assert.deepEqual(brandAccountsFromSocials('x'), []);
+});
+
+test('defaultCampaignName: empresa · primer entregable, o el número de la cotización', () => {
+  assert.equal(defaultCampaignName('Café Alma', '1 reel + 1 TikTok', 'COT-2026-014'), 'Café Alma · 1 reel + 1 TikTok');
+  assert.equal(defaultCampaignName('Café Alma', '  ', 'COT-2026-014'), 'Café Alma · COT-2026-014');
+  assert.equal(defaultCampaignName('Café Alma', null, 'COT-2026-014'), 'Café Alma · COT-2026-014');
+});
+
+test('briefFromQuote: lo acordado en texto, en español, sin inventar lo que falta', () => {
+  assert.equal(
+    briefFromQuote({ agreedMetrics: ['views', 'reach'], reportCutsHours: [24, 168, 720], usageRightsDays: 90, exclusivityDays: 30, exclusivityScope: 'café', paymentTermsDays: 30 }),
+    'Métricas acordadas: views, reach.\nCortes del reporte: 24 h, 7 días, 30 días.\nDerechos de uso: 90 días.\nExclusividad: 30 días (café).\nPlazo de pago: 30 días.',
+  );
+  assert.equal(
+    briefFromQuote({ agreedMetrics: [], reportCutsHours: [], usageRightsDays: null, exclusivityDays: null, exclusivityScope: null, paymentTermsDays: 45 }),
+    'Métricas acordadas: sin definir.\nSin derechos de uso.\nSin exclusividad.\nPlazo de pago: 45 días.',
+  );
+  assert.equal(cutHoursLabel(47), '47 h');
+  assert.equal(cutHoursLabel(48), '2 días');
 });

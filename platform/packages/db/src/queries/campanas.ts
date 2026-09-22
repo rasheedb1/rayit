@@ -20,7 +20,11 @@
  */
 import {
   assertCampaignDates,
+  brandAccountsFromSocials,
+  brandBaselineFrom,
+  briefFromQuote,
   canEditCampaign,
+  defaultCampaignName,
   handlesFromSocials,
   suggestionReasons,
   transitionCampaign as applyTransition,
@@ -187,6 +191,7 @@ function intOrNull(v: string | number | null): number | null {
   return n;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 const DATE = (col: string) => `to_char(${col}, 'YYYY-MM-DD')`;
 
@@ -690,4 +695,139 @@ export async function transitionCampaign(tx: WorkspaceTx, id: string, to: Campai
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
   await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [id, result.status, result.brandBaselineFrom]);
   return requireCampaign(tx, id);
+}
+
+// ---------------------------------------------------------------------
+// Desde la cotización (CAM-2): el contrato con Cotizar (COT-4)
+// ---------------------------------------------------------------------
+
+export interface CreateCampaignFromQuoteInput {
+  quoteId: string;
+  /** 'YYYY-MM-DD'. La cotización no tiene fechas: COT-4 las pide al aceptar. */
+  startsOn: string;
+  /** 'YYYY-MM-DD', ≥ startsOn. */
+  endsOn: string;
+  /** Por defecto «<empresa> · <primer entregable>». */
+  name?: string;
+  /** Código que la marca reconoce en sus canjes ('LAURA15'). Opcional. */
+  trackingCode?: string;
+}
+
+export interface CreateCampaignFromQuoteResult {
+  campaign: CampaignDetail;
+  /** false si ya existía una campaña de esa cotización: se devuelve esa, sin cambios. */
+  created: boolean;
+}
+
+export class QuoteNotFoundError extends CampaignError {
+  constructor(id: string) {
+    super('QuoteNotFoundError', `La cotización ${id} no existe en este workspace.`);
+  }
+}
+
+export class QuoteNotAcceptedError extends CampaignError {
+  readonly status: string;
+  constructor(status: string) {
+    super('QuoteNotAcceptedError', `Solo una cotización aceptada crea campaña; esta está en «${status}».`);
+    this.status = status;
+  }
+}
+
+interface RawQuoteRow {
+  id: string;
+  number: string;
+  status: string;
+  company_id: string;
+  company_name: string;
+  socials: unknown;
+  creator_id: string;
+  deal_id: string | null;
+  total: string;
+  currency: string;
+  agreed_metrics: string[];
+  report_cuts_hours: number[];
+  usage_rights_days: number | null;
+  exclusivity_days: number | null;
+  exclusivity_scope: string | null;
+  payment_terms_days: number;
+  first_item: string | null;
+}
+
+/**
+ * Crea la campaña de una cotización aceptada. Es la dependencia D5 del
+ * backlog: Cotizar (COT-4) la llama dentro de SU transacción, después
+ * del UPDATE que deja la cotización en 'accepted', y aceptar y crear
+ * quedan juntas o no quedan.
+ *
+ * Copia de la cotización: empresa, creadora, deal, monto y moneda (como
+ * string, sin aritmética), y lo acordado en texto al brief. Fija
+ * status 'planned', brand_baseline_from = startsOn − 14 y brand_accounts
+ * desde company.socials ([{ platform_id, handle }]) para que CAM-3 sepa a
+ * quién medir. No toca deal ni crea factura.
+ *
+ * Garantías:
+ *   - Idempotente: una segunda llamada con el mismo quoteId devuelve la
+ *     campaña existente con created: false. Dos llamadas concurrentes se
+ *     serializan con pg_advisory_xact_lock('campaign-from-quote:' ||
+ *     quote_id), así que no se duplica.
+ *   - RLS: una cotización de otro workspace es QuoteNotFoundError.
+ *   - Valida antes de escribir: InvalidDatesError (fechas), QuoteNotFoundError,
+ *     QuoteNotAcceptedError. Todos con messageEs.
+ */
+export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCampaignFromQuoteInput): Promise<CreateCampaignFromQuoteResult> {
+  assertCampaignDates(input.startsOn, input.endsOn);
+  if (!UUID_RE.test(input.quoteId)) throw new QuoteNotFoundError(input.quoteId);
+
+  // Serializa por cotización dentro de la transacción de quien llama.
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${input.quoteId}`]);
+
+  const existing = await tx.query<{ id: string }>('SELECT id FROM campaign WHERE quote_id = $1 ORDER BY created_at LIMIT 1', [input.quoteId]);
+  const existingId = existing.rows[0]?.id;
+  if (existingId) {
+    return { campaign: await requireCampaign(tx, existingId), created: false };
+  }
+
+  const { rows } = await tx.query<RawQuoteRow>(
+    `SELECT q.id, q.number, q.status, q.company_id, co.name AS company_name, co.socials,
+            q.creator_id, q.deal_id, q.total::text AS total, q.currency,
+            to_jsonb(q.agreed_metrics) AS agreed_metrics, to_jsonb(q.report_cuts_hours) AS report_cuts_hours,
+            q.usage_rights_days, q.exclusivity_days, q.exclusivity_scope, q.payment_terms_days,
+            (SELECT qi.description FROM quote_item qi WHERE qi.quote_id = q.id ORDER BY qi.position, qi.id LIMIT 1) AS first_item
+     FROM quote q
+     JOIN company co ON co.id = q.company_id
+     WHERE q.id = $1`,
+    [input.quoteId],
+  );
+  const q = rows[0];
+  if (!q) throw new QuoteNotFoundError(input.quoteId);
+  if (q.status !== 'accepted') throw new QuoteNotAcceptedError(q.status);
+
+  const name = input.name?.trim() || defaultCampaignName(q.company_name, q.first_item, q.number);
+  const brief = briefFromQuote({
+    agreedMetrics: q.agreed_metrics ?? [],
+    reportCutsHours: q.report_cuts_hours ?? [],
+    usageRightsDays: q.usage_rights_days,
+    exclusivityDays: q.exclusivity_days,
+    exclusivityScope: q.exclusivity_scope,
+    paymentTermsDays: q.payment_terms_days,
+  });
+
+  const inserted = await tx.query<{ id: string }>(
+    `INSERT INTO campaign (workspace_id, company_id, creator_id, deal_id, quote_id, name, brief,
+                           starts_on, ends_on, tracking_code, tracking_url, utm, brand_baseline_from, brand_accounts,
+                           amount, currency, status)
+     VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6,
+             $7::date, $8::date, $9, NULL, '{}'::jsonb, $10::date, $11::jsonb,
+             $12, $13, 'planned')
+     RETURNING id`,
+    [
+      q.company_id, q.creator_id, q.deal_id, q.id, name, brief,
+      input.startsOn, input.endsOn, input.trackingCode?.trim() || null,
+      brandBaselineFrom(input.startsOn), JSON.stringify(brandAccountsFromSocials(q.socials)),
+      q.total, q.currency,
+    ],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
+  return { campaign: await requireCampaign(tx, id), created: true };
 }
