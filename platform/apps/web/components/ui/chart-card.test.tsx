@@ -52,4 +52,10 @@ describe("ChartCard", () => {
     expect(screen.getByRole("region", { name: "Views" })).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
+  it("error: mensaje en rol alert, sin gráfico ni interruptor", () => {
+    render(<ChartCard title="Views" chart="bar" series={series} labels={labels} ariaLabel="Views" error="No se pudieron cargar las views" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron cargar las views");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 });

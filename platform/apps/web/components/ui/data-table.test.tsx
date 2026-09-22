@@ -41,4 +41,16 @@ describe("DataTable", () => {
     expect(onRowClick).toHaveBeenCalledTimes(2);
     expect(onRowClick).toHaveBeenLastCalledWith(rows[1]);
   });
+  it("error: mensaje en rol alert y sin filas", () => {
+    render(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} caption="CXC" emptyState={null} error="No se pudieron cargar las facturas" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron cargar las facturas");
+    expect(screen.queryByText("Café Alma")).not.toBeInTheDocument();
+  });
+  it("con maxHeight el envoltorio hace scroll por dentro (cabecera fija)", () => {
+    render(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} caption="CXC" emptyState={null} maxHeight="20rem" />);
+    const wrapper = screen.getByRole("table").parentElement!;
+    expect(wrapper).toHaveStyle({ maxHeight: "20rem" });
+    expect(wrapper.className).toContain("overflow-auto");
+    expect(screen.getByRole("table").querySelector("thead")?.className).toContain("sticky");
+  });
 });

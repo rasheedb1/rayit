@@ -198,6 +198,33 @@ export default function Page() {
             loading
           />
         </Variant>
+        <Variant label="Error">
+          <DataTable
+            columns={[
+              { key: "brand", header: "Marca" },
+              { key: "amount", header: "Monto", align: "num" },
+            ]}
+            rows={[]}
+            rowKey={() => ""}
+            caption="Cuentas por cobrar · error"
+            emptyState={null}
+            error="No se pudieron cargar las facturas. Vuelve a intentarlo en un momento."
+          />
+        </Variant>
+        <Variant label="Con alto máximo: la cabecera se queda al hacer scroll dentro de la tabla">
+          <DataTable
+            columns={[
+              { key: "n", header: "#", align: "num", width: "4rem" },
+              { key: "brand", header: "Marca" },
+              { key: "amount", header: "Monto", align: "num" },
+            ]}
+            rows={Array.from({ length: 30 }, (_, i) => ({ n: i + 1, brand: ["Café Alma", "Fresko Market", "Hotel Casa Verde", "Distribuidora Nacional de Alimentos S.A.S."][i % 4]!, amount: `COP ${(1.1 + (i % 7) * 0.7).toFixed(1).replace(".", ",")} M` }))}
+            rowKey={(r) => String(r.n)}
+            caption="Treinta filas con alto máximo"
+            emptyState={null}
+            maxHeight="14rem"
+          />
+        </Variant>
         <Variant label="Valores largos">
           <DataTable
             columns={[
@@ -277,10 +304,11 @@ export default function Page() {
             />
           </div>
         </Variant>
-        <Variant label="Vacío y cargando">
-          <div className="grid gap-4 lg:grid-cols-2">
+        <Variant label="Vacío, cargando y error">
+          <div className="grid gap-4 lg:grid-cols-3">
             <ChartCard title="Views por semana" chart="bar" series={[]} labels={[]} ariaLabel="Views" emptyState={<EmptyState title="Sin datos de views" description="Conecta una red o importa un CSV." action={{ label: "Conectar", href: "/conexiones" }} />} />
             <ChartCard title="Seguidores por red" subtitle="Últimos 90 días" chart="line" series={nets.series} labels={nets.labels} ariaLabel="Seguidores" loading />
+            <ChartCard title="Views por semana" subtitle="Últimas 12 semanas" chart="bar" series={views.series} labels={views.cats} ariaLabel="Views" error="No se pudieron cargar las views de TikTok. La conexión necesita reautorizarse." />
           </div>
         </Variant>
         <Variant label="Título largo, abre en tabla">

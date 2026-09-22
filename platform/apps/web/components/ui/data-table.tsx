@@ -36,6 +36,10 @@ export type DataTableProps<Row> = {
   stickyHeader?: boolean;
   /** Cinco filas de esqueleto. */
   loading?: boolean;
+  /** Mensaje de error en vez de las filas ("No se pudieron cargar las facturas"). */
+  error?: string;
+  /** Con alto máximo la tabla hace scroll por dentro y la cabecera fija se queda arriba. Sin él, la cabecera viaja con la página. */
+  maxHeight?: string;
   /** Previstos para el próximo sprint: la API los acepta y los ignora. */
   sort?: SortState;
   onSortChange?: (sort: SortState) => void;
@@ -71,13 +75,15 @@ export function DataTable<Row>({
   density = "compact",
   stickyHeader = true,
   loading = false,
+  error,
+  maxHeight,
   className = "",
 }: DataTableProps<Row>) {
   const pad = density === "compact" ? "px-2.5 py-2" : "px-3 py-3";
   const alignCls = (a: Align | undefined) => (a === "num" ? "text-right font-mono text-[12.5px] tabular-nums whitespace-nowrap" : "text-left");
   const clickable = Boolean(onRowClick);
   return (
-    <div className={`overflow-x-auto rounded-md border border-border ${className}`}>
+    <div className={`${maxHeight ? "overflow-auto" : "overflow-x-auto"} rounded-md border border-border ${className}`} style={maxHeight ? { maxHeight } : undefined}>
       <table className="w-full border-collapse text-sm">
         <caption className={showCaption ? "px-3 py-2 text-left text-xs text-muted" : "sr-only"}>{caption}</caption>
         <thead className={stickyHeader ? "sticky top-0 z-[1]" : undefined}>
@@ -105,7 +111,19 @@ export function DataTable<Row>({
                 ))}
               </tr>
             ))}
-          {!loading && rows.length === 0 && (
+          {!loading && error && (
+            <tr>
+              <td colSpan={columns.length} className="p-3">
+                <p role="alert" className="flex items-center gap-2 rounded-md bg-bad-wash px-3 py-2 text-sm text-bad">
+                  <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[10px] font-bold" aria-hidden="true">
+                    !
+                  </span>
+                  {error}
+                </p>
+              </td>
+            </tr>
+          )}
+          {!loading && !error && rows.length === 0 && (
             <tr>
               <td colSpan={columns.length} className="p-3">
                 {emptyState}
@@ -113,6 +131,7 @@ export function DataTable<Row>({
             </tr>
           )}
           {!loading &&
+            !error &&
             rows.map((row) => (
               <tr
                 key={rowKey(row)}

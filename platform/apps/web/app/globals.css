@@ -10,6 +10,12 @@
    mismos nombres y valores en claro y en oscuro. El kit de interfaz
    (CIM-5) solo consume estos nombres.
 
+   Tres valores del tema claro se apartan del mock por contraste AA
+   (decisión de accesibilidad de CIM-5): --muted #8a8a8a pasa a #737373
+   (4,7:1), --s-facebook #1baf7a a #0f8a5f (4,4:1) y --s-youtube #eda100 a
+   #b87700 (3,7:1). Los del mock no llegaban a 4,5:1 en texto ni a 3:1 en
+   gráficos.
+
    Debajo, alias con los nombres que usaba el primer marco (--fg, --line,
    --ok, --danger…) apuntando a los tokens del mock, para que nada se
    rompa mientras los componentes viejos migran. No agregues valores a
@@ -24,7 +30,7 @@
   --hover: #f4f4f4;
   --ink: #171717;
   --ink-2: #525252;
-  --muted: #8a8a8a;
+  --muted: #737373;
   --grid: #f0f0f0;
   --axis: #d4d4d4;
   --border: #eaeaea;
@@ -42,8 +48,8 @@
 
   --s-tiktok: #2a78d6;
   --s-instagram: #eb6834;
-  --s-facebook: #1baf7a;
-  --s-youtube: #eda100;
+  --s-facebook: #0f8a5f;
+  --s-youtube: #b87700;
 
   --tooltip-bg: #171717;
   --tooltip-ink: #ffffff;

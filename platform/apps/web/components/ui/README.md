@@ -14,11 +14,13 @@ Componentes compartidos de MultiCampaign. Galería en `/kit` (bandera `kit`, enc
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
 | `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
 | `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. |
-| `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, cabecera fija, fila clicable. `sort` y `page` previstos sin implementar. |
+| `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, error, fila clicable. Cabecera fija con `maxHeight` (scroll interno). `sort` y `page` previstos sin implementar. |
 | `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. Cliente. |
 | `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. Cliente. |
-| `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota y DataAsOf. |
+| `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota, DataAsOf, carga y error. |
 | `chart-utils.ts` | — | Colores por nombre de token y formato por nombre (`int`, `compact`, `pct`, `money`, `money-full`), para que crucen la frontera servidor → cliente. |
+
+Contraste: los tokens cumplen AA en los dos temas; tres valores del tema claro se apartan del mock por eso (ver el comentario en `app/globals.css`).
 
 Formato de cifras y fechas: `lib/format.ts` (`formatMoney`, `formatInt`, `formatCompact`, `formatPct`, `formatDelta`, `formatDate`, `formatDateRange`). Todo con Intl y es-CO.
 

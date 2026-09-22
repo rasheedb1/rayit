@@ -28,6 +28,8 @@ export type ChartCardProps = {
   legend?: boolean;
   defaultView?: "chart" | "table";
   loading?: boolean;
+  /** Mensaje de error en vez del gráfico ("No se pudieron cargar las views"). */
+  error?: string;
   /** Qué mostrar cuando no hay datos. Si falta, el gráfico dice «Sin datos». */
   emptyState?: ReactNode;
   className?: string;
@@ -70,6 +72,7 @@ export function ChartCard({
   legend = true,
   defaultView = "chart",
   loading = false,
+  error,
   emptyState,
   className = "",
 }: ChartCardProps) {
@@ -77,7 +80,7 @@ export function ChartCard({
   const height = (chart === "line" ? line?.height : bar?.height) ?? 260;
   return (
     <section className={`min-w-0 rounded-md border border-border bg-surface px-5 pb-4 pt-[18px] ${className}`} aria-label={title} aria-busy={loading || undefined}>
-      {loading ? (
+      {loading || error ? (
         <>
           <div className="mb-2 flex items-start gap-2.5">
             <div className="min-w-0 flex-1">
@@ -85,7 +88,15 @@ export function ChartCard({
               {subtitle && <p className="mt-0.5 text-[12.5px] text-muted">{subtitle}</p>}
             </div>
           </div>
-          <div className="animate-pulse rounded-md bg-hover" style={{ height }} />
+          {error ? (
+            <div className="grid place-items-center rounded-md border border-dashed border-bad/40 bg-bad-wash px-4 text-center" style={{ height }}>
+              <p role="alert" className="text-sm text-bad">
+                {error}
+              </p>
+            </div>
+          ) : (
+            <div className="animate-pulse rounded-md bg-hover" style={{ height }} />
+          )}
         </>
       ) : (
         <ChartCardView
