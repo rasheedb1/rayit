@@ -137,7 +137,8 @@ export const STORIES: readonly Story[] = [
     title: "Seed de finanzas y campañas",
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Seed 0003 con verificación en Postgres embebido (node db/seed/verify/run-0003.mjs). Como 0002 no existe todavía, trae una sección de prerrequisitos con los ids que 0002 debe usar: docs/propuestas/CIM-8.md.",
   },
 
   // ---------------------------------------------------------------- CON
@@ -374,7 +375,8 @@ export const STORIES: readonly Story[] = [
     title: "Facturas",
     desc: "Crear desde una campaña o a mano, con subtotal, IVA, retención en la fuente, total, fecha de emisión y vencimiento, numeración por workspace. Estados draft → sent → partial/paid → overdue. Campo para el número de la factura electrónica DIAN.",
     done: "Una factura creada desde una campaña trae nombre, empresa y monto sin escribirlos.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Lista con KPIs, formulario con total en vivo, detalle con Marcar enviada y Anular, y facturarCampana() para el botón «Facturar» de CAM-1. Cliente de base y workspace provisionales hasta CIM-2 y CIM-3: docs/propuestas/FIN-1.md.",
   },
   {
     id: "FIN-2", module: "FIN", owner: "nicolas", size: "M", sprint: 3, deps: ["FIN-1"],

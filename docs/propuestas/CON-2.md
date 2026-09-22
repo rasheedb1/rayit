@@ -109,10 +109,12 @@ Privilegios de fila para `mc_worker`, los mismos que tiene `mc_app`.
 Los concede `mc_migrator` porque es dueño de las tablas; no necesita
 `CREATEROLE`. Está en `db/migrations/0014_worker_grants.sql` y aplicada
 en Supabase el 21 de septiembre (14 migraciones en `schema_migrations`).
-Las pruebas del worker aplican la misma SQL sobre pglite y corren como
-`mc_worker`; si faltara un privilegio, fallan. Comprobado después de
-aplicarla: `has_table_privilege('mc_worker', 'job_run', 'INSERT')` es
-`true`.
+Las pruebas del worker aplican las 14 migraciones sobre pglite y corren
+como `mc_worker`; si faltara un privilegio, fallan. Comprobado después
+de aplicarla: `has_table_privilege('mc_worker', 'job_run', 'INSERT')` es
+`true`. (El comentario del archivo menciona una copia en
+`apps/worker/test/fixtures/`; esa copia ya no existe porque el embebido
+aplica la migración real, y el archivo no se edita por ser inmutable.)
 
 Contenido, para que lo revises:
 
@@ -197,6 +199,10 @@ redactor, que era el requisito).
   `collect.demographics` (2, 300 s) tendrían que compartir concurrencia,
   timeout y reintentos, y un `stately` para uno frenaría al otro.
   `queue` queda como grupo lógico (`WORKER_GROUPS`).
+- **Los jobs con cron son colas `stately`** (un tick en cola, uno
+  activo): dos corridas de `oauth.refresh` no se solapan ni se apilan.
+  `max_concurrency` es la concurrencia por plataforma dentro de la
+  corrida, como dice el comentario de 0009, no el número de corridas.
 - **Los tokens no pasan por la base ni por pg-boss.** El payload del
   cron es `{ job, source }`; `job_run.metadata` lleva ids; el logger
   redacta por nombre de llave y por forma (`OAuthTokens`). Hay prueba de

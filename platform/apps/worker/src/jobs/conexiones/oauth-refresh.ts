@@ -14,10 +14,18 @@
  *      refresh token ya rotado, que sigue siendo válido)
  *   4. UPDATE social_connection con las fechas nuevas
  *
- * Fallo transitorio (red, 5xx, rate limit): cuenta como failed, no toca
- * el estado, y pg-boss reintenta. Fallo definitivo (invalid_grant,
- * revocado, refresh vencido): status = needs_reauth, status_detail en
- * español y una fila en notification para que el creador lo vea.
+ * Fallo transitorio (red, 5xx, rate limit, o nuestro propio almacén de
+ * secretos sin la credencial): cuenta como failed, no toca el estado, y
+ * pg-boss reintenta salvo que reintentar no ayude (rate limit, conector
+ * sin implementar). Fallo definitivo, y solo cuando lo dice LA PLATAFORMA
+ * (invalid_grant, revocado) o el refresh token ya venció: status =
+ * needs_reauth, status_detail en español y una fila en notification para
+ * que el creador lo vea. Un problema nuestro nunca cambia el estado de la
+ * cuenta de un creador.
+ *
+ * Dos corridas no se pisan: la cola es 'stately' (una activa) y, por si
+ * acaso, el UPDATE final exige que access_expires_at siga siendo el que
+ * leímos.
  *
  * Aquí NO hay tokens en logs ni en metadata: solo ids y fechas.
  */
@@ -56,7 +64,10 @@ const ENDPOINT = 'oauth.refresh';
 type Outcome =
   | { kind: 'renewed' }
   | { kind: 'needs_reauth'; code: string }
-  | { kind: 'transient'; code: string };
+  | { kind: 'transient'; code: string; retryHelps: boolean };
+
+/** Fallos que un reintento inmediato de pg-boss no va a arreglar. */
+const RETRY_USELESS_CODES = new Set(['no_refresher', 'not_implemented', 'missing_secret', 'rate_limit']);
 
 export async function selectDueConnections(db: Queryable, payload: OAuthRefreshPayload, cutoff: Date): Promise<ConnectionRow[]> {
   if (payload.connectionId) {
@@ -85,7 +96,7 @@ function asDate(v: Date | string | null): Date | null {
   return v instanceof Date ? v : new Date(v);
 }
 
-function fechaEs(d: Date): string {
+function formatDateEs(d: Date): string {
   return new Intl.DateTimeFormat('es-CO', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' }).format(d) + ' UTC';
 }
 
@@ -99,6 +110,7 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
   const renewed: string[] = [];
   const needsReauth: string[] = [];
   const transient: string[] = [];
+  const retryUseless: string[] = [];
 
   const byPlatform = new Map<string, ConnectionRow[]>();
   for (const c of due) byPlatform.set(c.platform_id, [...(byPlatform.get(c.platform_id) ?? []), c]);
@@ -110,11 +122,19 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
           transient.push(conn.id);
           return;
         }
-        const outcome = await refreshOne(conn, ctx, now);
+        const outcome = await refreshOne(conn, ctx, now).catch((err: unknown): Outcome => {
+          // Un error nuestro (base, almacén) no puede tumbar el lote ni
+          // cambiar el estado de la cuenta: cuenta como transitorio.
+          ctx.logger.error('error inesperado renovando una conexión', { connectionId: conn.id, workspaceId: conn.workspace_id, platform, err });
+          return { kind: 'transient', code: 'unexpected', retryHelps: true };
+        });
         if (outcome.kind === 'renewed') renewed.push(conn.id);
         else if (outcome.kind === 'needs_reauth') needsReauth.push(conn.id);
-        else transient.push(conn.id);
-        ctx.logger.info('conexión procesada', { connectionId: conn.id, workspaceId: conn.workspace_id, platform, resultado: outcome.kind, code: 'code' in outcome ? outcome.code : undefined });
+        else {
+          transient.push(conn.id);
+          if (!outcome.retryHelps) retryUseless.push(conn.id);
+        }
+        ctx.logger.info('conexión procesada', { connectionId: conn.id, workspaceId: conn.workspace_id, platform, outcome: outcome.kind, code: 'code' in outcome ? outcome.code : undefined });
       }),
     ),
   );
@@ -122,6 +142,9 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
   return {
     processed: renewed.length + needsReauth.length,
     failed: transient.length,
+    // Si TODO lo que falló es de los que no mejoran con un reintento
+    // inmediato, el siguiente tick del cron es el reintento.
+    retry: transient.length > 0 && retryUseless.length < transient.length,
     metadata: { due: due.length, marginMinutes, renewed, needsReauth, transient },
   };
 });
@@ -132,21 +155,24 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
 
   const tokens = await ctx.secrets.get(conn.secret_ref);
   if (!tokens) {
-    return markNeedsReauth(ctx.db, conn, platformName, 'missing_secret',
-      'No hay credenciales guardadas para esta conexión; hay que volver a autorizar la cuenta.', log);
+    // Es un problema del almacén (mal configurado, ref perdida), no de
+    // la cuenta del creador: no se toca su estado. Ruidoso en el log.
+    log.error('el SecretStore no tiene credenciales para este secret_ref; revisa SECRET_STORE', { secretRef: conn.secret_ref });
+    await markTransient(ctx.db, conn);
+    return { kind: 'transient', code: 'missing_secret', retryHelps: false };
   }
 
   const refreshExpiry = tokens.refreshExpiresAt ?? asDate(conn.refresh_expires_at);
   if (refreshExpiry && refreshExpiry.getTime() <= now.getTime()) {
     return markNeedsReauth(ctx.db, conn, platformName, 'refresh_expired',
-      `El permiso de renovación venció el ${fechaEs(refreshExpiry)}; hay que volver a autorizar la cuenta.`, log);
+      `El permiso de renovación venció el ${formatDateEs(refreshExpiry)}; hay que volver a autorizar la cuenta.`, log);
   }
 
   const refresher = isPlatformId(conn.platform_id) ? ctx.refreshers.get(conn.platform_id) : undefined;
   if (!refresher) {
     log.error('no hay TokenRefresher para esta plataforma (llega con CON-3/CON-8)');
     await markTransient(ctx.db, conn);
-    return { kind: 'transient', code: 'no_refresher' };
+    return { kind: 'transient', code: 'no_refresher', retryHelps: false };
   }
 
   const started = Date.now();
@@ -162,23 +188,38 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
     if (e.isPermanent) {
       return markNeedsReauth(ctx.db, conn, platformName, e.code, `${e.messageEs} (${e.code})`, log);
     }
-    log.warn('renovación con fallo transitorio', { code: e.code, httpStatus: e.httpStatus, err: e.code === 'unexpected' ? err : undefined });
+    log.warn('renovación con fallo transitorio', { code: e.code, httpStatus: e.httpStatus, retryAfterS: e.retryAfterS, err: e.code === 'unexpected' ? err : undefined });
     await markTransient(ctx.db, conn);
-    return { kind: 'transient', code: e.code };
+    return { kind: 'transient', code: e.code, retryHelps: !e.isRateLimited && !RETRY_USELESS_CODES.has(e.code) };
   }
   const durationMs = Date.now() - started;
   await logApiCall(ctx.db, conn, { ok: true, httpStatus: 200, errorCode: null, errorMessage: null, durationMs, rateLimited: false, retryAfterS: null });
 
-  // Primero el almacén, después la base (ver cabecera).
-  await ctx.secrets.set(conn.secret_ref, fresh);
-  await ctx.db.query(
+  // Primero el almacén, después la base (ver cabecera). Si el almacén
+  // falla aquí, la plataforma ya rotó el refresh token y lo perdimos: es
+  // lo más grave que puede pasar en este job, y se dice con esas palabras.
+  try {
+    await ctx.secrets.set(conn.secret_ref, fresh);
+  } catch (err) {
+    log.error('TOKENS RENOVADOS PERO NO GUARDADOS: el SecretStore falló al escribir; la plataforma ya rotó el refresh token', { secretRef: conn.secret_ref, err });
+    await markTransient(ctx.db, conn);
+    return { kind: 'transient', code: 'secret_store_write', retryHelps: false };
+  }
+  const updated = await ctx.db.query(
     `UPDATE social_connection
         SET access_expires_at = $3, refresh_expires_at = COALESCE($4, refresh_expires_at),
             scopes = CASE WHEN cardinality($5::text[]) > 0 THEN $5::text[] ELSE scopes END,
             status = 'active', status_detail = NULL, consecutive_failures = 0
-      WHERE id = $1 AND workspace_id = $2`,
-    [conn.id, conn.workspace_id, fresh.accessExpiresAt, fresh.refreshExpiresAt ?? null, fresh.scopes],
+      WHERE id = $1 AND workspace_id = $2 AND status = 'active'
+        AND access_expires_at IS NOT DISTINCT FROM $6`,
+    [conn.id, conn.workspace_id, fresh.accessExpiresAt, fresh.refreshExpiresAt ?? null, fresh.scopes, asDate(conn.access_expires_at)],
   );
+  if (updated.rowCount === 0) {
+    // Otra corrida la renovó (o la desactivó) mientras tanto. El almacén
+    // ya tiene tokens válidos; no hay nada que deshacer.
+    log.warn('la conexión cambió mientras se renovaba; se respeta el estado más reciente');
+    return { kind: 'renewed' };
+  }
   log.info('token renovado', { accessExpiresAt: fresh.accessExpiresAt.toISOString(), durationMs });
   return { kind: 'renewed' };
 }

@@ -1,7 +1,8 @@
 /**
  * Postgres embebido (pglite) para pruebas, para `--pglite`/`--demo` y
  * para cualquier máquina sin Docker. Es Postgres 16 de verdad compilado
- * a WASM: corren las 13 migraciones del repo, los roles, RLS y pg-boss.
+ * a WASM: corren todas las migraciones del repo (incluida 0014, los
+ * privilegios de mc_worker), los roles, RLS y pg-boss.
  *
  * Una sola sesión, así que el cambio de rol no puede ser por conexión:
  * cada consulta de negocio va dentro de una transacción con
@@ -28,8 +29,6 @@ export interface PgliteDatabaseOptions {
   setRole: string | null;
   /** Directorio con *.sql a aplicar en orden; por defecto las migraciones del repo. */
   migrationsDir?: string;
-  /** Archivos SQL adicionales (p. ej. los GRANTs propuestos en 0014) tras las migraciones. */
-  extraSql?: string[];
 }
 
 const ROLE_SQL = `SELECT current_user AS current_user, session_user AS session_user,
@@ -50,7 +49,6 @@ export class PgliteDatabase implements WorkerDatabase {
     const dir = opts.migrationsDir ?? MIGRATIONS_DIR;
     const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
     for (const f of files) await db.exec(await readFile(join(dir, f), 'utf8'));
-    for (const path of opts.extraSql ?? []) await db.exec(await readFile(path, 'utf8'));
     return new PgliteDatabase(db, opts.setRole);
   }
 

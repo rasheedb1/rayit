@@ -25,7 +25,10 @@ pnpm --filter @mc/worker start -- --demo     # lo anterior + 3 conexiones y un o
 `--demo` siembra una conexión que vence en 10 minutos (se renueva), una
 en 3 horas (intacta) y una revocada (pasa a `needs_reauth` con su
 notificación), encola `oauth.refresh` y a los cuatro segundos imprime
-`job_run`, `social_connection` y `notification`.
+`job_run`, `social_connection` y `notification`. El embebido aplica
+todas las migraciones del repo, incluida `0014` con los privilegios de
+`mc_worker`, y corre las consultas como ese rol: es el mismo reparto que
+en Supabase.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
@@ -80,6 +83,19 @@ Reglas:
 - El id (`finance.reminders`) tiene que existir en `job_definition`. De
   ahí salen cola, cron, `timeout_s`, `max_attempts` y `max_concurrency`.
   Si necesitas una fila nueva, es una migración (Rasheed).
+- `max_concurrency` es la concurrencia **dentro** de una corrida (por
+  plataforma, contra el rate limit de cada API): léelo en
+  `ctx.definition.maxConcurrency`. Por defecto corre **una** instancia
+  del job a la vez por proceso. Un job con un envío por entidad (un
+  video, una factura) puede pedir `defineJob(id, fn, { instances: 'max' })`.
+- Un job con cron tiene cola `stately`: un tick en cola y uno activo, así
+  las corridas no se apilan ni se solapan aunque una tarde más que el
+  intervalo. Si desde una pantalla encolas un envío manual en esa cola y
+  no quieres que colapse con el cron, pásale su propio `singletonKey`.
+- Si devuelves `failed > 0`, pg-boss reintenta (hasta `max_attempts`)
+  salvo que devuelvas `retry: false`: hazlo cuando un reintento
+  inmediato no ayude (rate limit con `Retry-After`, conector sin
+  implementar). El siguiente tick del cron es el reintento.
 - `ctx.db` corre como **`mc_worker`, que se salta RLS**. Cada escritura
   filtra por `workspace_id` explícitamente. Un `UPDATE` sin ese `WHERE`
   toca todos los clientes.
@@ -100,9 +116,10 @@ Reglas:
 |---|---|---|
 | El handler lanza | `failed`, `error = "Clase: mensaje"` (el stack va al log) | reintenta con backoff hasta `max_attempts` |
 | Excede `timeout_s` | `failed`, `error = "timeout"`, `metadata.timeoutS` | igual; además `expireInSeconds = timeout_s + 30` como red de seguridad |
-| `failed > 0` y `processed > 0` | `partial`, con los contadores | reintenta (el job debe ser idempotente: lo ya hecho no se rehace) |
-| `failed > 0` y `processed = 0` | `failed`, `error = "JobItemsFailedError: …"` | reintenta |
-| Definición sin handler | una fila `skipped` con `error = "sin handler"` por arranque | no se crea cola de trabajo |
+| `failed > 0` y `processed > 0` | `partial`, con los contadores | reintenta, salvo `retry: false` (el job debe ser idempotente: lo ya hecho no se rehace) |
+| `failed > 0` y `processed = 0` | `failed`, `error = "JobItemsFailedError: …"` | reintenta, salvo `retry: false` |
+| El payload trae un `workspaceId` que ya no existe | la fila se abre sin workspace y lo anota en `metadata.workspaceIdIgnored` | la ejecución sigue |
+| Definición sin handler | una fila `skipped` con `error = "sin handler"`, una sola mientras siga sin handler (los reinicios no la repiten) | no se crea cola de trabajo |
 | `enabled = false` | nada | se retira el schedule si existía |
 | El proceso recibe SIGTERM | los jobs activos terminan (hasta `WORKER_STOP_TIMEOUT_S`) | los que no terminaron vuelven a la cola al expirar |
 
@@ -110,6 +127,12 @@ Cada job es su propia cola en pg-boss (`job_definition.id`); `queue` es
 el grupo lógico para repartir procesos con `WORKER_GROUPS`. Los crons
 se guardan en `pgboss.schedule` con la clave `cron`: reiniciar el worker
 no los duplica, y si cambia `default_cron` se actualiza al arrancar.
+
+En `oauth.refresh`, un fallo **nuestro** (el SecretStore no tiene la
+credencial, o no pudo escribirla) nunca cambia el estado de la cuenta
+del creador: queda como transitorio, ruidoso en el log, y la conexión
+sigue `active`. Solo la plataforma (`invalid_grant`, revocado) o un
+refresh token vencido la pasan a `needs_reauth`.
 
 ## Cómo leer job_run
 
@@ -141,10 +164,9 @@ pnpm --filter @mc/connectors test    # unitarias del paquete de conectores
 pnpm --filter @mc/worker typecheck lint
 ```
 
-Las de integración aplican las 13 migraciones reales más los GRANTs
-propuestos en `test/fixtures/0014_worker_grants.sql`, y corren como
-`mc_worker`: si la propuesta no alcanzara, las pruebas fallan. No tocan
-Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
+Las de integración aplican las 14 migraciones reales (la `0014` da los
+privilegios a `mc_worker`) y corren como `mc_worker`: si un privilegio
+faltara, las pruebas fallan. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
 ## Estructura

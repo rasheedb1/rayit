@@ -1,8 +1,14 @@
 # @mc/web · el dashboard
 
-Next.js 15, React 19, Tailwind 4, Geist. Sin base de datos todavía: lo
-que se ve es el plan de construcción de cada módulo, y se reemplaza por
-el módulo real a medida que llega.
+Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
+construcción de su módulo hasta que llega la pantalla real. Finanzas ya
+es real (FIN-1): lee la base por `@mc/db`.
+
+Base de datos: con `DATABASE_URL` en el entorno usa ese Postgres
+(Supabase por el pooler, o el Docker de `make up`). Sin ella, en
+desarrollo, levanta un Postgres embebido en memoria con las migraciones
+y los seeds: es el «modo demo» y no necesita nada instalado. En
+producción sin `DATABASE_URL` la app falla a propósito.
 
 ```bash
 cd platform
@@ -11,6 +17,7 @@ pnpm --filter @mc/web dev        # http://localhost:3000
 pnpm --filter @mc/web typecheck
 pnpm --filter @mc/web lint
 pnpm --filter @mc/web build
+pnpm --filter @mc/web test        # lib/*.test.ts con node --test
 ```
 
 Desplegar: `make vercel.deploy` (vista previa) o `make vercel.deploy
@@ -22,6 +29,10 @@ raíz.
 ```
 app/(app)/<modulo>/page.tsx   La ruta de cada módulo. Hoy muestra el plan;
                               el dueño la reemplaza por la pantalla real.
+app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+                              index.ts exporta facturarCampana() para Campañas.
+components/ui/                Kit de interfaz compartido (ver su README).
+lib/format.ts                 Dinero, fechas y porcentajes en es-CO.
 app/(app)/page.tsx            El plan completo (inicio).
 app/(app)/reglas/page.tsx     Reglas para no pisarse, dependencias, decisiones.
 content/backlog.ts            Las historias y SU ESTADO. Es lo que cambia.
