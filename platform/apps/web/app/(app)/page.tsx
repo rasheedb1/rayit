@@ -10,8 +10,13 @@ import { OwnerAvatar, OwnerName } from "@/components/owner";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Progress, StatsList } from "@/components/progress";
 import { SprintBoard } from "@/components/sprint-board";
+import { formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 
 export const metadata: Metadata = { title: "Plan" };
+// Lee la fila del workspace para la marca de publicación (su locale y
+// su zona horaria): nada de esto se prerenderiza.
+export const dynamic = "force-dynamic";
 
 function ModuleCard({ m }: { m: ModuleDef }) {
   const st = stats(m.prefix ? storiesFor(m.prefix) : []);
@@ -38,13 +43,13 @@ function ModuleCard({ m }: { m: ModuleDef }) {
   );
 }
 
-export default function PlanPage() {
+export default async function PlanPage() {
   const all = stats(STORIES);
-  const published = new Intl.DateTimeFormat("es-CO", {
-    dateStyle: "long",
-    timeStyle: "short",
-    timeZone: "America/Bogota",
-  }).format(new Date());
+  // La fecha de publicación se presentaba en es-CO y America/Bogota
+  // fijos, que es justo lo que el producto no puede tener escrito en el
+  // código: son columnas del workspace (locale, timezone) desde 0001.
+  const f = formatterFor(await getCurrentWorkspace());
+  const published = f.dateTime(new Date().toISOString());
 
   return (
     <>

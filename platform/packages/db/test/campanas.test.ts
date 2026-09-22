@@ -24,7 +24,7 @@ import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
   POST_D01_REEL_CAFE_ALMA, POST_D02_TIKTOK_CAFE_ALMA, POST_D03_TIKTOK_FRESKO, POST_D04_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE,
-} from './helpers/base.ts';
+} from './pglite.ts';
 
 /** Un workspace ajeno con una campaña propia, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';
@@ -50,7 +50,7 @@ before(async () => {
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();

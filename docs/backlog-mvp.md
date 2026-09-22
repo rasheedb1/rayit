@@ -51,9 +51,12 @@ migración de esquema para el MVP.** Si aparece una, es una migración
 nueva, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
 (CON-2), solo `GRANT`s al rol `mc_worker`, aplicada en Supabase el 21 de
 septiembre; `0015_connection_secret` (CON-3, aplicada) y
-`0016_campaign_quote_unique` (CAM-2, pendiente) el 22. La siguiente es
-`0017_…`: antes de crearla, `git fetch` y mirar el número más alto en
-todas las ramas activas.
+`0016_campaign_quote_unique` (CAM-2, pendiente) el 22, y
+`0017_outbound_policy_rls` y `0018_child_tables_rls` (CIM-2, pendientes)
+el mismo día. La siguiente es `0019_…`: antes de crearla, `git fetch` y
+mirar el número más alto en todas las ramas activas. Desde CIM-2
+`make db.check` (y el job «esquema» del CI) falla si dos archivos
+comparten número.
 
 ---
 
@@ -445,8 +448,10 @@ lista corta, en orden de urgencia:
 | # | Qué | Para qué historia | Dónde está el detalle |
 |---|---|---|---|
 | 1 | Con el token de administración de Supabase, dos comandos: `CREATE SCHEMA pgboss` y `GRANT mc_worker TO mc_migrator`; luego `pnpm --filter @mc/worker install-schema`. | CON-2 en producción; sin esto el worker solo corre en pglite | `docs/propuestas/CON-2.md` §3.1 y §3.3 |
-| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. Nicolás borra `provisional/` y `_lib/workspace.ts` al recibirlo. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
-| 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. Hoy producción muestra el workspace del seed. | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
+| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. **Entregado** (rama `rasheed/CIM-2-cliente-db-r3`, con `main` integrado): `provisional/`, `lib/db/workspace.ts` y `test/helpers/base.ts` ya no existen; la web abre la base por `apps/web/lib/db` (`withWorkspace`) y el workspace sale solo de `lib/workspace/current.ts`; `queries/campanas.ts` y `queries/conexiones.ts` de CAM-2 y CON-3 se conservaron y solo cambió su importación (`isUuid`/`UUID_RE` ahora salen de `client.ts`). Las consultas se importan por `@mc/db/queries/<módulo>`; la raíz sigue reexportando las de Finanzas, Conexiones y Campañas para no tocar sus pantallas. Contrato en `packages/db/README.md`. Queda para Nicolás (CON-2b): migrar `apps/worker/src/runner/db.ts` a `createPgDb`/`tlsFor` de `@mc/db` y reemplazar la copia del bucle de migraciones de `connectors/test/helpers/pglite.ts` y `worker/src/runner/db-pglite.ts` por `@mc/db/test/pglite` o `db/lib/aplicar.mjs`. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
+| 2b | **Prioridad 1 de esta lista, junto con la fila 1.** Con la integración de CIM-2 el integrador aplica `make db.migrate` (0017 y 0018; nacieron como 0015 y 0016 y se renumeraron al integrar CON-3 y CAM-2) y comprueba `select relname, relrowsecurity from pg_class where relname in ('outbound_policy','quote_item','rate_card_item','deal_stage_history','campaign_post')` = `true` en todas. Hasta entonces la base real tiene el hueco que la rama cierra (verificado el 22-sep como `mc_app` sin workspace: `campaign_post` devuelve filas y esas cuatro tablas tienen `relrowsecurity = false`): **no cargar datos de clientes reales antes de aplicarlas.** Desde 0017 `outbound_policy` tiene RLS: toda lectura suya fuera de `withWorkspace` devuelve cero filas sin aviso (ia-outreach, ui-cadencias). Desde 0018 las tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`, `deal_stage_history`, `campaign_post`, hijas de `video_analysis`, `script`, `idea`) heredan la RLS del padre. Las hijas con FK opcional (`brand_account_snapshot`, `trait_lift`, `external_post`, `api_call_log`, `api_quota_usage`) siguen sin RLS: su dueño decide la política. | Ventas, Cotizar, Campañas, CON | `packages/db/test/schema.test.ts` |
+| 2c | Ventas (VEN-1): `contact` y `app_user` son tablas globales con PII (correo, teléfono, LinkedIn, `opted_out`) y hoy cualquier workspace las enumera. Propuesta de migración para el dueño de Ventas: `ALTER TABLE contact ENABLE/FORCE ROW LEVEL SECURITY; CREATE POLICY contact_visibility ON contact USING (source IN ('public_website','public_profile','press') OR EXISTS (SELECT 1 FROM company_link l WHERE l.company_id = contact.company_id AND l.workspace_id = current_workspace_id()))`, con una prueba en `rls.test.ts` (un contacto `user_provided` de A que B no ve). Mientras tanto `contact` y `company` se leen SIEMPRE dentro de `withWorkspace` a través de `company_link`; `test.todo` visible en `schema.test.ts`. | Ventas | `packages/db/README.md` §3 |
+| 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. Hoy el workspace sale de `DEMO_WORKSPACE_ID`; sin la variable, la web usa el del seed y lo avisa en el log (también en producción, para no romper `/finanzas`). | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
 | 4 | Seed `0002` usando los ids fijos de la sección 0 de `0003` (workspace, creadora, conexiones, empresas, posts), o avisar para cambiarlos. `0002` debe abrir con `set_config('app.workspace_id', …)` porque RLS está en `FORCE`. | CIM-6, CIM-8 | `docs/propuestas/CIM-8.md` §1 |
 | 5 | CIM-7: conectar GitHub con el proyecto de Vercel (Root Directory y `DATABASE_URL` ya están) y CI en Node 22 corriendo `test` además de migraciones. Con eso `scripts/vercel.sh deploy` deja de hacer falta; si se conserva, aplicar la propuesta de `--cwd "$RAIZ"`. | Despliegue de todo | `docs/propuestas/CIM-4.md`, `CON-2.md` §3.5 |
 | 6 | Migración futura con tres filas en `feature_flag`: `content_metrics`, `niche_radar`, `ideas_scripts`. | CIM-4 (banderas a la base) | `docs/propuestas/CIM-4.md` §1 |
@@ -464,6 +469,21 @@ lista corta, en orden de urgencia:
   y Nicolás no esperó: FIN-1 usa un cliente provisional con la misma
   forma que tendrá `withWorkspace`, y el worker se conecta con `pg`
   directo. Los dos llevan `TODO(CIM-2)` y su reemplazo es mecánico.
+  **Cómo quedó (22-sep):** el provisional de FIN-1 desapareció con
+  CIM-2; el del worker (`apps/worker/src/runner/db.ts`, con su pool y
+  su `tlsFor` propios) sigue y lo migra Nicolás a `createPgDb`/`tlsFor`
+  de `@mc/db` en CON-2b. El bucle «aplicar `*.sql` en orden» vive una
+  sola vez en `db/lib/aplicar.mjs` (lo usan `migrate.mjs`, el embebido
+  de `@mc/db` e `introspect`) y desde CIM-2 se niega si dos archivos
+  comparten número; las copias de `connectors/test/helpers/pglite.ts` y
+  `worker/src/runner/db-pglite.ts` pueden importarlo o usar
+  `@mc/db/test/pglite` en su siguiente cambio.
+- **CIM-1 sigue bloqueada por dos permisos de administración.** El
+  worker contra Supabase necesita `GRANT mc_worker TO mc_migrator` y el
+  esquema `pgboss` (`docs/propuestas/CON-2.md` §3.1), que solo el token
+  de administración puede dar. Mientras tanto `make dev` no se cae:
+  `apps/worker/src/dev.ts` comprueba las dos cosas, imprime los
+  comandos exactos y lista `job_definition`; `make arranque` avisa igual.
 - **Kit duplicado, ya resuelto.** FIN-1 se construyó en paralelo a
   CIM-5 con la API del borrador (`docs/propuestas/CIM-5-kit.md`) y trajo
   su propio kit mínimo. Al integrar `main` en FIN-1 se tomó el kit de

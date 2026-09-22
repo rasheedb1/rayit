@@ -1,4 +1,4 @@
-import type { InvoiceListRow } from "@mc/db";
+import type { InvoiceListRow } from "@mc/db/queries/finanzas";
 import type { PillKind } from "@/components/ui/pill";
 
 /**

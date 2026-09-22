@@ -32,8 +32,16 @@ en Supabase.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
-`pgboss` y membresía de `mc_worker`). Hasta entonces falla al arrancar
-con un mensaje que dice exactamente qué falta; no arranca a medias.
+`pgboss` y membresía de `mc_worker`). Hasta entonces, `make worker` y
+`make dev` (que corren `src/dev.ts`) comprueban esas dos cosas antes de
+arrancar y, si faltan, imprimen el comando exacto, listan `job_definition`
+y salen con 0 en vez de caerse en bucle; `start` (producción) no degrada.
+`make arranque` hace la misma comprobación. Para probar solo que
+`@mc/db`, el TLS y las credenciales están bien, sin pg-boss:
+
+```bash
+make worker.humo                        # = pnpm --filter @mc/worker humo: lista job_definition por DATABASE_URL
+```
 
 ## Variables de entorno (nombres, no valores)
 
@@ -58,8 +66,16 @@ con un mensaje que dice exactamente qué falta; no arranca a medias.
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
-`make worker` carga `platform/.env.local` y `platform/.env` con
-`--env-file-if-exists`; no hay dependencia de dotenv.
+`make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
+(lo que escribe `make db.unlock`) con `--env-file-if-exists`; no hay
+dependencia de dotenv. `platform/.env` (el Postgres de Docker de
+`.env.example`) no se lee: para apuntar el worker ahí, `WORKER_DATABASE_URL`
+en `.env.local`.
+
+Si Postgres rechaza las credenciales (`28P01`) o no se llega al host,
+`dev` y `humo` lo dicen en una línea con el comando que lo arregla
+(`make db.unlock`, `make db.info`) en vez del stack de `pg`; `humo` sale
+con 2 y `dev` con 0, por la misma razón que arriba.
 
 ## Cómo agregar un job en tu módulo
 

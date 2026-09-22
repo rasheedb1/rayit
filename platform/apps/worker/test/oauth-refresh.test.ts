@@ -76,7 +76,7 @@ before(async () => {
   for (const [key, s] of Object.entries(SECRETS)) {
     await h.secrets.set(`vault:${key}`, { ...s, accessExpiresAt: minutes(10), refreshExpiresAt: minutes(60 * 24 * 200), scopes: ['user.info.basic'] });
   }
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await h.stop();

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regenera packages/db/src/provisional/supabase-ca.ts a partir de
+ * Regenera packages/db/src/supabase-ca.ts a partir de
  * db/certs/supabase-root-2021.crt. Lo llama `make db.cert`; la prueba
- * packages/db/test/supabase-ca.test.ts falla si las dos copias divergen.
+ * packages/db/test/tls.test.ts falla si las dos copias divergen.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -22,10 +22,10 @@ const out = `/**
  * copia aquí porque en Vercel el bundle no puede localizar ese archivo
  * por ruta (webpack fija import.meta.url a la ruta de la máquina de
  * build). Lo regenera \`make db.cert\` (db/scripts/embed-ca.mjs); la
- * prueba test/supabase-ca.test.ts falla si las dos copias divergen.
+ * prueba test/tls.test.ts falla si las dos copias divergen.
  */
 export const SUPABASE_ROOT_CA = \`
 ${pem}
 \`;
 `;
-writeFileSync(join(PLATFORM, 'packages', 'db', 'src', 'provisional', 'supabase-ca.ts'), out);
+writeFileSync(join(PLATFORM, 'packages', 'db', 'src', 'supabase-ca.ts'), out);

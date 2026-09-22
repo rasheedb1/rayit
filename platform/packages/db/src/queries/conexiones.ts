@@ -12,7 +12,7 @@
  *
  * TODO(CIM-3): `getDefaultCreatorId` saldrá de la sesión.
  */
-import type { WorkspaceTx } from '../provisional/client.ts';
+import type { WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos

@@ -42,7 +42,14 @@ que se pueda arreglar del lado del cliente.
 | | Puerto | Modo | Para qué |
 |---|---|---|---|
 | `DATABASE_URL` | 6543 | transacción | La app. Aguanta muchas conexiones cortas |
-| `DATABASE_URL_DIRECT` | 5432 | sesión | Migraciones: sentencias preparadas y transacciones largas |
+| `DATABASE_URL_DIRECT` | 5432 | sesión | Migraciones y el worker: sentencias preparadas, transacciones largas, `SET ROLE` |
+
+Junto a `DATABASE_URL`, la web lee `DEMO_WORKSPACE_ID`: el workspace que
+muestran las pantallas mientras no hay sesión (CIM-3). Sin la variable
+usa el de la creadora del seed (`00000002-0000-4000-8000-000000000001`)
+y lo avisa en el log, también en producción. En Vercel hoy no está
+definida; para fijarla: `make vercel.run ARGS="env add DEMO_WORKSPACE_ID
+production"` (y `preview`), con ese id.
 
 Dos detalles que cuestan una tarde si no se saben:
 
@@ -164,12 +171,38 @@ divergieron, y la salida es una migración nueva, nunca editar la vieja.
 
 ## Lo que falta
 
-- **RLS está definido pero no probado con usuarios reales.** La
-  migración 0010 crea las políticas y la función
-  `current_setting('app.workspace_id')`. Nadie ha verificado todavía que
-  un workspace no pueda leer los datos de otro. Es la primera prueba de
-  integración que hay que escribir, antes de que entren datos de
-  clientes.
+- **RLS está probado en Postgres embebido, no con usuarios reales.**
+  `packages/db/test/rls.test.ts` corre como `mc_app` sobre las
+  migraciones reales: dos workspaces, cada uno ve solo lo suyo, sin
+  workspace cero filas, y las tablas hijas sin `workspace_id`
+  (`quote_item`, `rate_card_item`, `deal_stage_history`, …) heredan el
+  aislamiento del padre (0018). `packages/db/test/schema.test.ts` exige
+  RLS en toda tabla de tenant o hija de una. El CI corre además esas
+  pruebas contra Postgres 16 con un rol `mc_app_ci` sin BYPASSRLS
+  (`TEST_DATABASE_URL`), que es lo que ejercita el runner de `pg`.
+  Quedan por aplicar en Supabase **0017, 0018, 0019 y 0020**, en ese
+  orden (`make db.migrate`, en la integración de CIM-2). Hasta
+  entonces, en la Supabase viva, `outbound_policy`, `quote_item`,
+  `rate_card_item`, `deal_stage_history`, `campaign_post`,
+  `membership`, `contact`, `app_user`, `pipeline_stage` y
+  `feature_flag` se leen sin workspace: **no cargar datos de clientes
+  reales antes**. Desde la ronda 5 de CIM-2 eso no depende de que
+  alguien lea este párrafo: `@mc/db` lo comprueba al arrancar
+  (`assertSchemaUpToDate`) y lo dice con las migraciones que faltan y
+  las tablas sin RLS —aviso en desarrollo, error con
+  `NODE_ENV=production`—, y el worker pregunta lo mismo en su
+  `preflight`. Ya no queda ninguna tabla con `workspace_id` ni con
+  datos personales sin política: 0019 cerró `membership` y `contact`, y
+  0020 le dio a `contact` un dueño propio (`owner_workspace_id`, porque
+  `company_link` no servía de candado: `company` es un catálogo global
+  y cualquiera puede vincularse a cualquier empresa), activó la de
+  `app_user` y la de los dos catálogos con `workspace_id`. Falta la
+  prueba con sesiones de usuario reales, que llega con CIM-3.
+- **El worker no puede arrancar contra Supabase todavía.** Necesita
+  `GRANT mc_worker TO mc_migrator` y el esquema `pgboss`
+  (`docs/propuestas/CON-2.md` §3.1), con el token de administración.
+  `make arranque` lo comprueba y dice qué falta; `make dev` degrada a
+  listar `job_definition` en vez de caerse.
 - **Backups**: Supabase hace backup diario en el plan gratuito, con
   siete días de retención y sin point-in-time recovery. Para datos de
   clientes reales eso es poco.

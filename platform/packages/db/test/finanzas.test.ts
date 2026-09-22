@@ -11,12 +11,12 @@ import {
   listInvoices,
   transitionInvoice,
   InvoiceNotFound,
-  assertWorkspaceId,
-} from '../src/index.ts';
+} from '../src/queries/finanzas.ts';
+import { assertWorkspaceId } from '../src/index.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
-} from './helpers/base.ts';
+} from './pglite.ts';
 
 /** Un workspace ajeno, sin filas de finanzas, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';
@@ -30,7 +30,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-pruebas', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();
@@ -165,7 +165,7 @@ describe('crear facturas', () => {
     await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, base)), /anterior a la emisión/);
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, { ...base, dueOn: '2026-10-21', currency: 'USD' })),
-      /pesos colombianos/,
+      /moneda del workspace \(COP\)/,
     );
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, { ...base, dueOn: '2026-10-21', subtotal: '-5' })),

@@ -37,6 +37,29 @@ Eso levanta un Postgres embebido, aplica las trece migraciones y reporta
 cuántas tablas, vistas e índices quedaron. Es lo mismo que corre el CI en
 cada pull request.
 
+## La puerta de calidad
+
+```bash
+pnpm verificar      # = turbo run typecheck lint test --force --concurrency=2
+```
+
+Es **este** comando, no `pnpm turbo run typecheck lint test` a secas, y
+por dos razones medidas:
+
+- **`--force`.** La caché de turbo es por contenido, no por rama, y se
+  comparte entre worktrees: una corrida en una rama recién creada
+  contestó «14/14 cache hit, FULL TURBO» replayando los registros de
+  otro worktree, es decir, verde sin ejecutar nada. `test` además ya no
+  se cachea en `turbo.json` (cada suite levanta su propio Postgres
+  embebido: cachearla no ahorra casi nada y sí miente).
+- **`--concurrency=2`.** Con la concurrencia por defecto, `@mc/db`,
+  `@mc/worker` y `@mc/web` levantan PGlite y pg-boss a la vez y las
+  pruebas del worker mueren con «Promise resolution is still pending but
+  the event loop has already resolved» una de cada cinco corridas.
+
+`make verificar` hace lo mismo. Y `pnpm --filter @mc/web build` aparte,
+que es lo que despliega Vercel.
+
 ## Mapa del repositorio
 
 ```

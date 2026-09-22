@@ -18,10 +18,16 @@
  *
  * TODO(CIM-2): cuando exista packages/db con el cliente compartido,
  * migrar PostgresDatabase a ese cliente y dejar aquí solo la capa de rol.
+ *
+ * El TLS ya no se decide aquí: `hostOf`, `tlsFor` y `resolveTls` salen
+ * de @mc/db (una línea de montaje de CIM-2, ronda 4). Antes había dos
+ * copias del mismo camino de seguridad —esta leía la CA del disco, la
+ * de @mc/db usa la embebida— y solo una tenía prueba; tocar una y no la
+ * otra dejaba al worker sin verificar o sin arrancar. Con resolveTls
+ * hereda además la guardia contra `?sslmode=…` en la URL.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { hostOf, PLATFORM_ROOT, resolveTls, tlsFor, type Ssl } from '@mc/db';
 import pg from 'pg';
 import type { ConstructorOptions } from 'pg-boss';
 
@@ -89,55 +95,34 @@ export interface PostgresDatabaseOptions {
   onError?: (err: Error) => void;
 }
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-/** platform/: contra esta carpeta se resuelven las rutas relativas de .env.local (PGSSLROOTCERT). */
-export const PLATFORM_ROOT = join(HERE, '..', '..', '..', '..');
+/**
+ * Los mismos helpers de TLS que usa la web, reexportados para que el
+ * worker no tenga una segunda copia del camino de seguridad. El TLS
+ * hacia Supabase lo decide @mc/db con su CA embebida; PGSSLROOTCERT
+ * manda si existe, y un `?sslmode=…` en la URL se rechaza en vez de
+ * ganar por detrás (packages/db/src/tls.ts).
+ */
+export { hostOf, tlsFor, PLATFORM_ROOT };
 /** El mismo certificado que usa db/migrate.mjs: público y versionado. */
 export const SUPABASE_CA_PATH = join(PLATFORM_ROOT, 'db', 'certs', 'supabase-root-2021.crt');
-
-/**
- * TLS según el host:
- *   - PGSSLROOTCERT definido → ese CA, verificación estricta.
- *   - host de Supabase → el CA versionado en db/certs/, verificación estricta.
- *   - cualquier otro (localhost, Docker, un Postgres de Railway/Fly) → sin
- *     opción ssl explícita: manda lo que diga la URL (`sslmode=…`), como
- *     hace `pg`. Nunca `rejectUnauthorized: false`.
- */
-export function tlsFor(connectionString: string, sslRootCert: string | null): false | { ca: string; rejectUnauthorized: true } {
-  const host = hostOf(connectionString);
-  const isSupabase = /\.supabase\.(com|co)$/i.test(host);
-  if (!sslRootCert && !isSupabase) return false;
-  const path = sslRootCert ? resolve(PLATFORM_ROOT, sslRootCert) : SUPABASE_CA_PATH;
-  if (!existsSync(path)) {
-    throw new Error(`Falta el certificado raíz en ${path}. Descárgalo con: make db.cert (o fija PGSSLROOTCERT).`);
-  }
-  return { ca: readFileSync(path, 'utf8'), rejectUnauthorized: true };
-}
-
-export function hostOf(connectionString: string): string {
-  let host = '';
-  try {
-    host = new URL(connectionString).hostname;
-  } catch {
-    host = '';
-  }
-  if (!host) host = connectionString.replace(/^.*@/, '').replace(/[:/].*$/, '');
-  return host.replace(/^\[|\]$/g, '');
-}
 
 export class PostgresDatabase implements WorkerDatabase {
   readonly kind = 'postgres' as const;
   readonly #pool: pg.Pool;
   readonly #opts: PostgresDatabaseOptions;
-  readonly #ssl: false | { ca: string; rejectUnauthorized: true };
+  readonly #ssl: Ssl;
+  /** La URL ya sin parámetros de TLS: una sola fuente de verdad, también para pg-boss. */
+  readonly #connectionString: string;
   /** Clientes del pool que ya hicieron SET ROLE. */
   readonly #prepared = new WeakSet<pg.PoolClient>();
 
   constructor(opts: PostgresDatabaseOptions) {
     this.#opts = opts;
-    this.#ssl = tlsFor(opts.connectionString, opts.sslRootCert);
+    const tls = resolveTls(opts.connectionString, opts.sslRootCert);
+    this.#ssl = tls.ssl;
+    this.#connectionString = tls.connectionString;
     this.#pool = new pg.Pool({
-      connectionString: opts.connectionString,
+      connectionString: this.#connectionString,
       ssl: this.#ssl,
       max: opts.jobPoolMax,
       application_name: `${opts.applicationName}:jobs`,
@@ -147,7 +132,7 @@ export class PostgresDatabase implements WorkerDatabase {
 
   bossConnection(): BossConnection {
     return {
-      connectionString: this.#opts.connectionString,
+      connectionString: this.#connectionString,
       ssl: this.#ssl,
       max: this.#opts.bossPoolMax,
       application_name: `${this.#opts.applicationName}:boss`,

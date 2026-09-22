@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
-.PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
+.PHONY: help up down logs reset migrate migrate-check seed psql web worker worker.humo media dev fmt test \
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
@@ -54,6 +54,9 @@ web: ## Solo el dashboard
 worker: ## Solo los trabajos en segundo plano
 	pnpm --filter @mc/worker dev
 
+worker.humo: ## Comprueba @mc/db, TLS y credenciales: lista job_definition contra Supabase, sin pg-boss
+	pnpm --filter @mc/worker humo
+
 media: ## Solo el analizador de video (Python)
 	cd apps/media && uv run uvicorn main:app --reload --port 8100
 
@@ -62,6 +65,9 @@ fmt: ## Formatea el código
 
 test: ## Corre las pruebas
 	pnpm turbo run test
+
+verificar: ## La puerta de calidad entera: typecheck + lint + test, sin caché y de dos en dos
+	pnpm verificar
 
 arranque: ## Deja esta máquina lista: credenciales, remoto y comprobaciones
 	@./scripts/arranque.sh
@@ -107,7 +113,7 @@ db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
-	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/provisional/supabase-ca.ts regenerado"
+	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/supabase-ca.ts regenerado"
 
 # =====================================================================
 # GitHub · el token compartido

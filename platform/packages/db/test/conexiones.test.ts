@@ -5,7 +5,7 @@ import {
   ConnectionNotFound, CreatorNotInWorkspace, NoCreatorProfile, disconnectConnection, findConnectionByAccount, getDefaultCreatorId,
   listConnections, listConsents, recordConsent, upsertConnection, type UpsertConnectionInput,
 } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './helpers/base.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000002';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -18,7 +18,7 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-conexiones', 'Ajeno') ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 after(async () => { await t.close(); });
 
 const input = (over: Partial<UpsertConnectionInput> = {}): UpsertConnectionInput => ({

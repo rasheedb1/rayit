@@ -47,7 +47,7 @@ before(async () => {
       `);
     },
   });
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await h.stop();
