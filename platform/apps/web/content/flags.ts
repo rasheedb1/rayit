@@ -27,8 +27,9 @@ export const flags: Flags = {
   content_metrics: false,
   niche_radar: false,
   ideas_scripts: false,
-  // Herramientas del equipo: encendidas en desarrollo, apagadas en producción.
-  kit: process.env.NODE_ENV !== "production",
+  // Herramientas del equipo: encendidas en desarrollo y apagadas en
+  // producción, salvo que el build lleve KIT=1 (vistas previas de Vercel).
+  kit: process.env.NODE_ENV !== "production" || process.env.KIT === "1",
 };
 
 export function isFlagKey(key: string): key is FlagKey {
