@@ -222,6 +222,10 @@ export interface SuggestionCandidate {
   mentions: readonly string[];
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function normalize(s: string): string {
   return s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
@@ -250,7 +254,10 @@ export function suggestionReasons(post: SuggestionCandidate, needles: Suggestion
 
   for (const handle of needles.handles) {
     const h = normalize(handle);
-    if (mentions.includes(h) || text.includes(`@${h}`) || tags.includes(h)) {
+    // «@cafealma» en la caption no es «@cafealma.co»: el handle termina donde
+    // termina la palabra (letras, dígitos, guion bajo o punto).
+    const inCaption = new RegExp(`@${escapeRegExp(h)}(?![\\w.])`).test(text);
+    if (mentions.includes(h) || inCaption || tags.includes(h)) {
       reasons.push({ kind: 'mention', text: `Menciona a @${handle}` });
     }
   }

@@ -109,6 +109,9 @@ test('motivos: mención en mentions o en la caption, código, nombre; sin motivo
   const porNombre = suggestionReasons({ caption: 'Probé el nuevo cafe alma de la esquina', title: null, hashtags: [], mentions: [] }, cafeAlma);
   assert.deepEqual(porNombre.map((r) => r.kind), ['name'], 'sin tildes ni mayúsculas');
 
+  const conPunto = suggestionReasons({ caption: 'El cold brew #ad @cafealma.co', title: null, hashtags: [], mentions: [] }, cafeAlma);
+  assert.deepEqual(conPunto.map((r) => r.text), ['Menciona a @cafealma.co'], '@cafealma.co no cuenta como @cafealma');
+
   const porHashtag = suggestionReasons({ caption: null, title: 'Mañanas', hashtags: ['CafeAlma'], mentions: [] }, cafeAlma);
   assert.deepEqual(porHashtag.map((r) => r.kind), ['mention']);
 
