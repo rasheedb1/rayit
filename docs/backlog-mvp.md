@@ -237,6 +237,20 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | VEN-7 | Brief de outbound: qué busca y qué no acepta; filtra el radar. | S | VEN-2 | Una señal de una categoría excluida no aparece. |
 | VEN-8 | Deal perdido con motivo y conversión por etapa. | S | VEN-3 | La tasa entre etapas aparece con su número de deals. |
 
+Outreach automático (diseño en [ventas-outreach.md](ventas-outreach.md),
+a partir de CadenceV1.0):
+
+| Id | Historia | Tam. | Depende de | Terminado cuando |
+|---|---|---|---|---|
+| VEN-9 | Canales de outreach: migración `0015`, Unipile (LinkedIn, Instagram) con hosted auth y webhook firmado, OAuth de Google, pantalla de canales, keepalive. | L | CIM-2, CIM-3 | Un creador conecta Gmail y LinkedIn; el token se refresca solo; una cuenta caída se ve en rojo. |
+| VEN-10 | Motor de cadencias: pasos, enrolamiento, cola atómica en `outbound_touch`, despachador por canal, días hábiles y zona horaria, límites, reintentos, apagado, cancelación al responder. | L | VEN-9, CON-2 | Una secuencia de tres pasos corre sola contra un buzón de prueba; una respuesta cancela lo pendiente. |
+| VEN-11 | Perfil comercial del creador con narrativa de afirmaciones enlazadas. | M | CON-6, COT-1 | Cada cifra de la narrativa lleva a su origen. |
+| VEN-12 | Generación con afirmaciones trazables: pre-vuelo, juez con rúbrica por paso, regeneración con pistas, riesgos, revisión humana con calentamiento. | L | VEN-10, VEN-11 | Una cifra sin origen no pasa; similitud entre marcas menor de 0,65; nota, tokens y costo registrados. |
+| VEN-13 | Recomendador de cadencia con guía por paso y plantillas por nicho y señal. | M | VEN-12 | Desde una señal, seis pasos con guía activados en dos clics. |
+| VEN-14 | Bandeja de aprobación y bandeja unificada, con clasificación de intención de la respuesta. | L | VEN-12 | Un retenido se aprueba y sale; un «me interesa» mueve el deal. |
+| VEN-15 | Entregabilidad y cumplimiento: baja pública, `List-Unsubscribe`, rebotes, calentamiento, alertas. | M | VEN-10 | El enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido. |
+| VEN-16 | Actividad y métricas: cola con reintento por tipo, uso por canal, embudo por paso, vista de flujo. | M | VEN-10 | El embudo cuadra con `outbound_touch` fila a fila. |
+
 ### COT · Cotizar (Rasheed)
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |

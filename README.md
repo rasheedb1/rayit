@@ -37,5 +37,8 @@ platform/apps/web/          El dashboard real (Next.js). Publicado en https://mu
 docs/arquitectura.md        Decisiones de arquitectura y por qué
 docs/plan-equipo.md         Reparto de tareas para dos programadores, seis semanas
 docs/backlog-mvp.md         Backlog del MVP (Resumen, Ventas/CRM, Cotizar, Campañas, Finanzas) repartido entre Nicolás y Rasheed
+docs/fases-rasheed.md       Plan por fases de la parte de Rasheed (sin Ventas) y el workflow de agentes con puerta de calidad de 9,5
+docs/ventas-outreach.md     Análisis de CadenceV1.0 y adaptación del outreach automático a creadores: qué se reutiliza, qué falta, ocho historias nuevas de Ventas
+.claude/workflows/          Workflows de agentes: rasheed-fase-1 construye cimientos, Resumen y Cotizar en paralelo
 docs/research/              Investigación verificada: campos de TikTok, análisis de video
 ```
