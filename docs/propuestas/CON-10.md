@@ -162,10 +162,15 @@ para el snapshot diario.
 
 ## 4. Lo que queda decidido, pendiente y fuera
 
-- **DECISIÓN PENDIENTE DE NICOLÁS · fuente de TikTok.** Hoy solo
-  identidad. Opciones: proveedor de pago (Apify, EnsembleData, Phyllo:
-  `access_mode = 'aggregator'`), CSV de TikTok Studio (RES-2) o la
-  autorización del dueño (CON-3, ya construida, detrás de la bandera).
+- **Fuente de TikTok, DECIDIDA el 22-sep (noche):** las métricas entran
+  por el **CSV de TikTok Studio**, gratuito y sin credenciales (RES-2:
+  hoy en el backlog de Rasheed; si no la toma en el sprint 2, la asume
+  Nicolás). El proveedor de pago queda como opción futura, historia
+  CON-12 (pendiente, no bloquea nada). La autorización del dueño (CON-3)
+  sigue detrás de la bandera. Para construir el importador hace falta un
+  **export real de TikTok Studio** (Analíticas → Descargar datos, CSV):
+  el formato de columnas no está documentado públicamente y no se puede
+  adivinar.
 - Publicaciones y métricas por video (`collect.posts`,
   `collect.post_metrics`) sobre estas fuentes: **CON-5**.
 - Renovación automática del token casa: historia nueva.

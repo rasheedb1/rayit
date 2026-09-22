@@ -180,7 +180,15 @@ export const STORIES: readonly Story[] = [
     desc: "Decisión del 22-sep: sin OAuth por creador en el MVP. Una cuenta se agrega con su @ y se lee cada día con fuentes oficiales: Instagram por business_discovery con el token de la cuenta casa (INSTAGRAM_HOUSE_TOKEN), YouTube con API key (GOOGLE_API_KEY), TikTok solo identidad por oEmbed hasta elegir fuente. Migración 0022 (access_mode public_profile), snapshots en account_metric_snapshot con source public_profile, job collect.account_metrics, pantalla «Agregar cuenta».",
     done: "Agregar un @ deja la fila con su snapshot público del día, el worker la actualiza cada día y ninguna credencial aparece en las tablas.",
     status: "hecho",
-    note: "En main el 22-sep. Probado con respuestas grabadas (connectors 180, db 46, worker 31, web 119) y con el volcado de todas las columnas de texto sin credenciales. Comprobado desde servidor que el HTML público de TikTok e Instagram no sirve (reto anti-bot y muro de login): por eso solo fuentes oficiales. Para la prueba real faltan dos configuraciones de Nicolás: INSTAGRAM_HOUSE_TOKEN (token de su cuenta profesional, generado en el App Dashboard de Meta) y GOOGLE_API_KEY; TikTok se agrega ya, sin métricas, y su fuente (proveedor o CSV de TikTok Studio) es una decisión pendiente. Detalle en docs/propuestas/CON-10.md.",
+    note: "En main el 22-sep. Probado con respuestas grabadas (connectors 180, db 46, worker 31, web 119) y con el volcado de todas las columnas de texto sin credenciales. Comprobado desde servidor que el HTML público de TikTok e Instagram no sirve (reto anti-bot y muro de login): por eso solo fuentes oficiales. Para la prueba real faltan dos configuraciones de Nicolás: INSTAGRAM_HOUSE_TOKEN (token de su cuenta profesional, generado en el App Dashboard de Meta) y GOOGLE_API_KEY; TikTok se agrega ya, sin métricas. DECIDIDO el 22-sep: las métricas de TikTok entran por el CSV de TikTok Studio (RES-2, gratuito) y el proveedor de pago queda como opción futura (CON-12). Detalle en docs/propuestas/CON-10.md.",
+  },
+  {
+    id: "CON-12", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-10"],
+    title: "Proveedor de datos de TikTok (opción futura)",
+    desc: "Seguidores, vistas y videos de TikTok por @ a través de un proveedor de pago (Apify, EnsembleData o Phyllo) sobre la interfaz PublicProfileSource de CON-10, con access_mode = aggregator. Solo si el CSV de TikTok Studio (RES-2) se queda corto o la fricción de subir archivos frena a los creadores.",
+    done: "Agregar un @ de TikTok deja seguidores y vistas del día sin que el creador suba nada; el costo mensual del proveedor está aprobado y anotado.",
+    status: "pendiente",
+    note: "Decisión del 22-sep: por ahora TikTok va por CSV gratuito (RES-2). Esta historia se abre solo si hace falta; no bloquea nada.",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],
