@@ -14,7 +14,7 @@ export type KpiProps = {
   delta?: number;
   /** "vs. mismo período 2025". */
   deltaLabel?: string;
-  /** Si falta, se deduce del signo de delta (|delta| < 0,05 % es flat). */
+  /** Si falta, se deduce del signo de delta: si el texto redondea a "0 %", es flat. */
   trend?: Trend;
   /** Serie corta, decorativa: el valor ya está en texto. */
   sparkline?: number[];
@@ -25,9 +25,10 @@ export type KpiProps = {
   className?: string;
 };
 
-export function trendOf(delta: number | undefined, trend?: Trend): Trend {
+/** El umbral coincide con formatDelta(delta, digits): la flecha nunca contradice al texto. */
+export function trendOf(delta: number | undefined, trend?: Trend, digits = 0): Trend {
   if (trend) return trend;
-  if (delta === undefined || Math.abs(delta) < 0.0005) return "flat";
+  if (delta === undefined || Number((delta * 100).toFixed(digits)) === 0) return "flat";
   return delta > 0 ? "up" : "down";
 }
 

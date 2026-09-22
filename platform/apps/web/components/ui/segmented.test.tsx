@@ -27,4 +27,8 @@ describe("Segmented", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "Instagram" }), { key: "ArrowLeft" });
     expect(onChange).toHaveBeenLastCalledWith("tiktok");
   });
+  it("si el valor activo está deshabilitado o no existe, la primera opción habilitada es alcanzable con Tab", () => {
+    render(<Segmented label="Red" options={options} value="youtube" onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Todas" })).toHaveAttribute("tabindex", "0");
+  });
 });

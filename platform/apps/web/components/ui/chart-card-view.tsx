@@ -17,6 +17,7 @@ type Props = {
   format: ValueFormat;
   axisFormat?: ValueFormat;
   currency?: string;
+  headingId: string;
   labelsHeader: string;
   defaultView: "chart" | "table";
   legend: ReactNode;
@@ -24,7 +25,7 @@ type Props = {
 };
 
 /** La parte con estado: el interruptor gráfico/tabla. La tabla sale de series+labels, el mismo dato. */
-export function ChartCardView({ title, subtitle, series, labels, chart, line, bar, ariaLabel, format, axisFormat, currency, labelsHeader, defaultView, legend, emptyState }: Props) {
+export function ChartCardView({ title, subtitle, series, labels, chart, line, bar, ariaLabel, format, axisFormat, currency, headingId, labelsHeader, defaultView, legend, emptyState }: Props) {
   const [view, setView] = useState<"chart" | "table">(defaultView);
   const panelId = useId();
   const showTable = view === "table";
@@ -37,7 +38,9 @@ export function ChartCardView({ title, subtitle, series, labels, chart, line, ba
     <>
       <div className="mb-2 flex items-start gap-2.5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[14.5px] font-semibold tracking-tight text-ink [text-wrap:balance]">{title}</h2>
+          <h2 id={headingId} className="text-[14.5px] font-semibold tracking-tight text-ink [text-wrap:balance]">
+            {title}
+          </h2>
           {subtitle && <p className="mt-0.5 text-[12.5px] text-muted">{subtitle}</p>}
         </div>
         {!emptyState && (
@@ -57,7 +60,7 @@ export function ChartCardView({ title, subtitle, series, labels, chart, line, ba
         {emptyState ? (
           emptyState
         ) : showTable ? (
-          <div className="mt-1.5 max-h-[320px] overflow-auto rounded-md border border-border">
+          <div className="mt-1.5 max-h-[320px] overflow-auto rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink" tabIndex={0}>
             <table className="w-full border-collapse text-sm">
               <caption className="sr-only">{title}</caption>
               <thead className="sticky top-0 bg-surface-2">

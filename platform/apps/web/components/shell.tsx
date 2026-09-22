@@ -17,7 +17,7 @@ function Brand() {
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[232px_minmax(0,1fr)]">
-      <aside className="hidden border-r border-line bg-bg-2 md:sticky md:top-0 md:flex md:h-dvh md:flex-col">
+      <aside aria-label="Barra lateral" className="hidden border-r border-line bg-bg-2 md:sticky md:top-0 md:flex md:h-dvh md:flex-col">
         <div className="flex h-14 items-center justify-between px-4">
           <Brand />
           <ThemeToggle />

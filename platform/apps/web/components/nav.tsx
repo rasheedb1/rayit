@@ -32,7 +32,7 @@ const ICONS: Partial<Record<string, LucideIcon>> = {
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
 /** Lo que ve el equipo. La galería del kit solo con su bandera encendida. */
-function construccion(flags: Flags): NavItem[] {
+function teamTools(flags: Flags): NavItem[] {
   const items: NavItem[] = [
     { href: "/", label: "Plan", icon: ListChecks },
     { href: "/cimientos", label: "Cimientos", icon: Layers },
@@ -55,7 +55,7 @@ const linkOn = "bg-bg-3 font-medium text-fg";
 export function SideNav({ flags = defaultFlags }: { flags?: Flags }) {
   const pathname = usePathname();
   const modules = productModules(flags);
-  const tools = construccion(flags);
+  const tools = teamTools(flags);
   return (
     <nav className="flex flex-col gap-6" aria-label="Principal">
       <div>
@@ -100,7 +100,7 @@ export function SideNav({ flags = defaultFlags }: { flags?: Flags }) {
 /** En pantallas pequeñas la navegación es una fila que se desplaza. */
 export function MobileNav({ flags = defaultFlags }: { flags?: Flags }) {
   const pathname = usePathname();
-  const tools = construccion(flags);
+  const tools = teamTools(flags);
   const items = [
     ...tools.slice(0, 1),
     ...productModules(flags).map((m) => ({ href: `/${m.slug}`, label: m.name })),

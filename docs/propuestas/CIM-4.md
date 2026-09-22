@@ -46,10 +46,17 @@ workspace, que además deja que pnpm vea el lockfile:
 cd platform
 ./scripts/vercel.sh run deploy --cwd "$PWD" --yes            # vista previa
 ./scripts/vercel.sh run deploy --cwd "$PWD" --yes --prod     # producción
-./scripts/vercel.sh run deploy --cwd "$PWD" --yes --build-env KIT=1   # vista previa con /kit
+./scripts/vercel.sh run deploy --cwd "$PWD" --yes --build-env NEXT_PUBLIC_KIT=1   # vista previa con /kit
 ```
 
 Propuesta para `cmd_deploy` en `scripts/vercel.sh`: `--cwd "$RAIZ"` en
 vez de `--cwd "$dir"`, y dejar `VERCEL_APP_DIR` solo para el enlace
 local. `platform/.vercelignore` ya excluye el vault, las migraciones,
 los scripts, el worker y las pruebas del paquete que sube.
+
+## 5. QA de accesibilidad: página de reglas
+
+axe marca en `apps/web/app/(app)/reglas/page.tsx` a 390 px la tabla con
+`overflow-x-auto` como región con scroll sin acceso por teclado
+(`scrollable-region-focusable`). Arreglo: `tabIndex={0}` y un
+`aria-label` en el envoltorio de la tabla, como hace `DataTable` del kit.

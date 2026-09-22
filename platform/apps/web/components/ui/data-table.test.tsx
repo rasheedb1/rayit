@@ -41,6 +41,15 @@ describe("DataTable", () => {
     expect(onRowClick).toHaveBeenCalledTimes(2);
     expect(onRowClick).toHaveBeenLastCalledWith(rows[1]);
   });
+  it("un botón dentro de la fila conserva su teclado", () => {
+    const onRowClick = vi.fn();
+    const cols: Column<Row>[] = [...columns, { key: "act", header: "Acción", render: () => <button type="button">Adelantar</button> }];
+    render(<DataTable columns={cols} rows={rows} rowKey={(r) => r.id} caption="CXC" emptyState={null} onRowClick={onRowClick} />);
+    const btn = screen.getAllByRole("button", { name: "Adelantar" })[0]!;
+    const evt = fireEvent.keyDown(btn, { key: " " });
+    expect(evt).toBe(true); // no se llamó preventDefault
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
   it("error: mensaje en rol alert y sin filas", () => {
     render(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} caption="CXC" emptyState={null} error="No se pudieron cargar las facturas" />);
     expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron cargar las facturas");

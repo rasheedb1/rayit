@@ -7,6 +7,9 @@ describe("trendOf", () => {
     expect(trendOf(0.31)).toBe("up");
     expect(trendOf(-0.05)).toBe("down");
     expect(trendOf(0.0001)).toBe("flat");
+    expect(trendOf(0.003)).toBe("flat"); // el texto dice "0 %", la flecha no puede decir "sube"
+    expect(trendOf(0.003, undefined, 1)).toBe("up"); // con una decimal el texto dice "+0,3 %"
+    expect(trendOf(-0.004)).toBe("flat");
     expect(trendOf(undefined)).toBe("flat");
     expect(trendOf(0.31, "down")).toBe("down");
   });

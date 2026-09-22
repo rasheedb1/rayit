@@ -61,7 +61,7 @@ export function ModulePlan({ slug }: { slug: string }) {
           })}
         </div>
 
-        <aside className="space-y-3 lg:sticky lg:top-8 lg:self-start">
+        <aside aria-label="Ficha del módulo" className="space-y-3 lg:sticky lg:top-8 lg:self-start">
           <div className="rounded-md border border-line p-4">
             <p className="text-xs text-fg-3">{owners.length > 1 ? "Dueños" : "Dueño"}</p>
             <div className="mt-2 space-y-3">

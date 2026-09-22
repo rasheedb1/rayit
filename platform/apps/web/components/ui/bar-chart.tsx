@@ -60,7 +60,7 @@ export function BarChart({ cats, series, mode = "stack", ariaLabel, format = "co
   const colors = series.map(seriesColor);
   const labelEvery = n > 8 ? Math.ceil(n / 8) : 1;
 
-  const onKey = (e: KeyboardEvent<SVGRectElement>) => {
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     const cur = hover ?? n - 1;
     if (e.key === "ArrowRight") setHover(Math.min(n - 1, cur + 1));
     else if (e.key === "ArrowLeft") setHover(Math.max(0, cur - 1));
@@ -118,20 +118,18 @@ export function BarChart({ cats, series, mode = "stack", ariaLabel, format = "co
             </g>
           );
         })}
-        <rect
-          x={M.l}
-          y={M.t}
-          width={iw}
-          height={ih}
-          fill="none"
-          tabIndex={0}
-          aria-label="Explorar los valores con las flechas"
-          aria-describedby={liveId}
-          className="pointer-events-none outline-none focus-visible:stroke-ink focus-visible:[stroke-width:2]"
-          onKeyDown={onKey}
-          onFocus={() => hover ?? setHover(n - 1)}
-        />
       </svg>
+      {/* Capa de teclado: un botón real sobre el área de trazado. Las flechas mueven la categoría y aria-live la anuncia. */}
+      <button
+        type="button"
+        aria-label="Explorar los valores con las flechas"
+        aria-describedby={liveId}
+        className="absolute rounded-sm bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ink"
+        style={{ left: M.l, top: M.t, width: iw, height: ih, pointerEvents: "none" }}
+        onKeyDown={onKey}
+        onFocus={() => hover ?? setHover(n - 1)}
+        onBlur={() => setHover(null)}
+      />
       <div id={liveId} className="sr-only" aria-live="polite">
         {hover === null ? "" : `${cats[hover]}: ${rows.map((r) => `${r.label} ${r.value}`).join(", ")}`}
       </div>

@@ -12,7 +12,7 @@ export function Section({ id, title, usage, children }: { id: string; title: str
           #{id}
         </a>
       </div>
-      <pre className="mb-6 overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[12px] leading-5 text-ink-2">
+      <pre className="mb-6 overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[12px] leading-5 text-ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink" tabIndex={0} aria-label={`Uso de ${title}`}>
         <code>{usage}</code>
       </pre>
       <div className="space-y-6">{children}</div>

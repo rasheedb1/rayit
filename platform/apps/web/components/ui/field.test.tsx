@@ -27,6 +27,18 @@ describe("Field", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Escribe un monto mayor a cero");
     expect(input).toHaveAccessibleDescription("Escribe un monto mayor a cero");
   });
+  it("con ayuda y error a la vez, solo referencia el error (la ayuda no se pinta)", () => {
+    render(
+      <Field label="Monto" help="Sin IVA" error="Escribe un monto">
+        <Input />
+      </Field>,
+    );
+    const input = screen.getByLabelText("Monto");
+    const ids = (input.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+    expect(ids).toHaveLength(1);
+    expect(document.getElementById(ids[0]!)).toHaveTextContent("Escribe un monto");
+    expect(screen.queryByText("Sin IVA")).not.toBeInTheDocument();
+  });
   it("Select y Textarea toman el id del Field", () => {
     render(
       <>
