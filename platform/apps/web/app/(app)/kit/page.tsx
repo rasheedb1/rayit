@@ -10,6 +10,10 @@ import { DataAsOf } from "@/components/ui/data-as-of";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { CellMain, DataTable } from "@/components/ui/data-table";
 import { TableDemo } from "./table-demo";
+import { LineChart } from "@/components/ui/line-chart";
+import { BarChart } from "@/components/ui/bar-chart";
+import { ChartCard } from "@/components/ui/chart-card";
+import { brandFollowers, CASH, followersByNetwork, weeklyViews } from "./data";
 import { FormDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ArrowRight } from "lucide-react";
@@ -24,6 +28,9 @@ const SECTIONS = [
   ["data-as-of", "DataAsOf"],
   ["kpi", "Kpi / KpiRow"],
   ["data-table", "DataTable"],
+  ["line-chart", "LineChart"],
+  ["bar-chart", "BarChart"],
+  ["chart-card", "ChartCard"],
 ] as const;
 
 // Galería del kit (CIM-5). Detrás de la bandera "kit": encendida en
@@ -32,6 +39,9 @@ const SECTIONS = [
 // bien en claro y oscuro, a 390 px y a 1440 px.
 export default function Page() {
   const mod = requireModule("kit");
+  const brand = brandFollowers();
+  const nets = followersByNetwork();
+  const views = weeklyViews();
   return (
     <>
       <PageHeader
@@ -207,6 +217,90 @@ export default function Page() {
             rowKey={(r) => r.brand}
             caption="Valores largos"
             emptyState={null}
+          />
+        </Variant>
+      </Section>
+
+      <Section
+        id="line-chart"
+        title="LineChart"
+        usage={`<LineChart series={[{ name: "@cafealma", data, color: "accent" }]} labels={days} fromZero={false} shade={{ from: 62, to: 69, label: "Campaña 24–31 ago" }} format="int" ariaLabel="Seguidores de @cafealma por día" />`}
+      >
+        <Variant label="Serie de 90 puntos con ventana sombreada (seguidores de @cafealma)">
+          <LineChart series={brand.series} labels={brand.labels} shade={brand.shade} fromZero={false} format="int" ariaLabel="Seguidores de @cafealma por día durante 90 días, con la ventana de campaña del 24 al 31 de agosto" />
+        </Variant>
+        <Variant label="Varias series por red, una discontinua; tooltip por pointer y por teclado (Tab y flechas)">
+          <LineChart series={nets.series} labels={nets.labels} format="compact" ariaLabel="Seguidores por red en 90 días" />
+        </Variant>
+        <Variant label="Vacío">
+          <LineChart series={[]} labels={[]} ariaLabel="Seguidores por red" height={160} />
+        </Variant>
+      </Section>
+
+      <Section id="bar-chart" title="BarChart" usage={`<BarChart cats={weeks} series={series} mode="stack" format="compact" ariaLabel="Views por semana y red" />`}>
+        <Variant label="Apiladas: views por semana y red, 12 semanas">
+          <BarChart cats={views.cats} series={views.series} mode="stack" ariaLabel="Views por semana y red en las últimas 12 semanas" />
+        </Variant>
+        <Variant label="Agrupadas: flujo de caja, en dinero">
+          <BarChart cats={CASH.cats} series={CASH.series} mode="group" format="money" axisFormat="compact" ariaLabel="Flujo de caja proyectado a ocho semanas" />
+        </Variant>
+        <Variant label="Vacío">
+          <BarChart cats={[]} series={[]} ariaLabel="Views por semana" height={160} />
+        </Variant>
+      </Section>
+
+      <Section
+        id="chart-card"
+        title="ChartCard"
+        usage={`<ChartCard title="Seguidores de @cafealma durante la campaña" chart="line" series={series} labels={days}\n  line={{ fromZero: false, shade: { from: 62, to: 69, label: "Campaña 24–31 ago" } }} format="int"\n  ariaLabel="…" asOf={{ date: "2026-09-20", source: "Instagram" }} />`}
+      >
+        <Variant label="Línea con ventana, nota y «datos hasta»; pulsa «Ver tabla»">
+          <ChartCard
+            title="Seguidores de @cafealma durante la campaña"
+            subtitle="Snapshot diario público · línea base de 2 semanas antes"
+            chart="line"
+            series={brand.series}
+            labels={brand.labels}
+            line={{ fromZero: false, shade: brand.shade }}
+            format="int"
+            ariaLabel="Seguidores de @cafealma por día durante 90 días, con la ventana de campaña"
+            note="La marca venía ganando 15 seguidores por día. En la semana de campaña ganó 1 240, y el ritmo posterior se quedó en 26 por día."
+            asOf={{ date: "2026-09-20T00:00:00Z", source: "Instagram" }}
+          />
+        </Variant>
+        <Variant label="Dos tarjetas en rejilla: barras apiladas y agrupadas">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ChartCard title="Views por semana y red" subtitle="Últimas 12 semanas" chart="bar" series={views.series} labels={views.cats} labelsHeader="Semana" ariaLabel="Views por semana y red" asOf={{ date: "2026-09-20", source: "todas las redes" }} />
+            <ChartCard
+              title="Flujo de caja proyectado"
+              subtitle="Ocho semanas"
+              chart="bar"
+              bar={{ mode: "group" }}
+              series={CASH.series}
+              labels={CASH.cats}
+              labelsHeader="Semana"
+              format="money"
+              axisFormat="compact"
+              ariaLabel="Flujo de caja proyectado a ocho semanas"
+              note="Los cobros esperados salen de las facturas con fecha de vencimiento; los gastos, del promedio de los últimos tres meses."
+            />
+          </div>
+        </Variant>
+        <Variant label="Vacío y cargando">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ChartCard title="Views por semana" chart="bar" series={[]} labels={[]} ariaLabel="Views" emptyState={<EmptyState title="Sin datos de views" description="Conecta una red o importa un CSV." action={{ label: "Conectar", href: "/conexiones" }} />} />
+            <ChartCard title="Seguidores por red" subtitle="Últimos 90 días" chart="line" series={nets.series} labels={nets.labels} ariaLabel="Seguidores" loading />
+          </div>
+        </Variant>
+        <Variant label="Título largo, abre en tabla">
+          <ChartCard
+            title="Seguidores públicos de Distribuidora Nacional de Alimentos S.A.S. durante la campaña de lanzamiento"
+            chart="line"
+            series={brand.series}
+            labels={brand.labels}
+            format="int"
+            defaultView="table"
+            ariaLabel="Seguidores por día"
           />
         </Variant>
       </Section>
