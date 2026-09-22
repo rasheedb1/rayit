@@ -8,6 +8,7 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 |---|---|---|
 | `Button` | `button.tsx` | Acción con variant, size, loading (aria-busy) y `href` para enlaces. Cliente. |
 | `Pill` | `pill.tsx` | Estado corto con punto de color: good, warn, bad, neutral. Texto obligatorio. |
+| `PlatformPill` | `platform-pill.tsx` | Red (TikTok, Instagram, Facebook, YouTube) con el punto en `--s-<red>` y el texto en tinta normal. |
 | `Field`, `Input`, `Select`, `Textarea` | `field.tsx` | Etiqueta, ayuda y error; el control toma id, aria-describedby y aria-invalid por contexto. La validación la hace el formulario (zod). Cliente. |
 | `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
 | `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
