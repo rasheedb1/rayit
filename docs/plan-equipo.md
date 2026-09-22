@@ -19,6 +19,12 @@ nueve índices, y el entorno local se levanta con un comando.
 > CON-2 ya en `main`, CIM-8 y FIN-1 en rama pendientes de merge. El
 > estado completo, lo que falta integrar y lo que Rasheed tiene que
 > destrabar están en la sección 8 de [backlog-mvp.md](backlog-mvp.md#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
+>
+> **Avance al 22 de septiembre.** Módulo B del sprint 2: CON-1
+> (conectores con respuestas grabadas) hecha en rama y CON-3 (OAuth de
+> TikTok e Instagram) completa en código y bloqueada solo por la prueba
+> en vivo con las apps. Estado, pendientes de Rasheed y desvíos en la
+> sección 9 de [backlog-mvp.md](backlog-mvp.md#9-estado-del-sprint-2-al-22-de-septiembre-de-2026-módulo-b-de-nicolás).
 
 ---
 

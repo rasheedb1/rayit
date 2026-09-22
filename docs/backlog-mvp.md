@@ -458,3 +458,45 @@ campaña; el botón «Facturar» ya tiene detrás `facturarCampana()`) y
 CAM-2 (`createCampaignFromQuote()`, el contrato con Cotizar). CON-3
 depende de CIM-3 y del acceso a las apps (§8.3, fila 8); si no llegan
 en la semana 3, se adelantan CAM-1 y CAM-2 y CON-3 corre contra fakes.
+
+---
+
+## 9. Estado del sprint 2 al 22 de septiembre de 2026 (módulo B de Nicolás)
+
+Escrito la noche del 22 de septiembre. El sprint 2 va de la semana 3 a
+la 4; esta es la foto del módulo B (Conexiones), no el cierre del sprint.
+
+### 9.1 Historias, una por una
+
+| Id | Historia | Estado | Dónde está | Verificación |
+|---|---|---|---|---|
+| CON-1 | Conectores con respuestas grabadas | **Hecha en rama** | `nicolas/CON-1-conectores-grabados` (en `origin`, PR pendiente) | `packages/connectors`: núcleo HTTP con fetch y reloj inyectables, taxonomía `transient / permanent / auth / quota`, reintentos con `Retry-After`, `QuotaManager` con `api_quota_usage`, clientes de TikTok Display, TikTok Accounts, Instagram (Instagram Login) y YouTube (Data + Analytics) con fixtures de la documentación y matriz de transporte. 137 pruebas sin red. Pendiente de CON-9: el portal de la Accounts API no se pudo leer. Detalle en `docs/propuestas/CON-1.md`. |
+| CON-3 | OAuth de TikTok e Instagram en sandbox | **Bloqueada solo por la prueba en vivo** | `nicolas/CON-3-oauth-sandbox` (apilada sobre CON-1) | Migración `0015_connection_secret.sql` (pasa `make db.check`, **sin aplicar**), cifrado AES-256-GCM con HKDF y rotación, `EncryptedSecretStore`, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de `TIKTOK_BUSINESS_APP_ID`), rutas `start`/`callback` con cookie sellada de 10 minutos, `data_consent` con evidencia, pantalla mínima de `/conexiones` y `oauth.refresh` con los refreshers reales. Pruebas corridas hoy: connectors 176, db 20, worker 29, web 95 y `next build`. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. `/security-review` sin hallazgos; diez de `/code-review` resueltos. Lo que falta es solo la prueba con una cuenta sandbox (`docs/propuestas/CON-3.md` §5), que depende del acceso a las apps (§8.3, fila 8). |
+
+CAM-1 y CAM-2 (módulo C) no han empezado.
+
+### 9.2 Lo que Nicolás necesita de Rasheed (nuevo desde §8.3)
+
+| # | Qué | Para qué | Dónde está el detalle |
+|---|---|---|---|
+| 9 | Aplicar `db/migrations/0015_connection_secret.sql` (`make db.migrate`). Sin ella, «Desconectar» y el callback de OAuth fallan en producción. | CON-3 | `docs/propuestas/CON-3.md` §1 |
+| 10 | `TOKEN_ENCRYPTION_KEY` y `APP_URL` en Vercel (producción y vista previa) y en el entorno del worker; luego las credenciales de las apps con los nombres de `.env.example`. | CON-3 | `docs/propuestas/CON-3.md` §3 |
+| 11 | Registrar las redirect URIs `/conexiones/oauth/<proveedor>/callback` y los scopes en cada app; corregir `.env.example`, que trae `/api/oauth/…`. | CON-3 | `docs/propuestas/CON-3.md` §2 |
+| 12 | El JSON de `platform.limits` para el seed 0001 y el número de caso del formulario de la Accounts API. | CON-1, CON-9 | `docs/propuestas/CON-1.md` §1 y §3 |
+
+### 9.3 Desvíos respecto al plan, y por qué
+
+- **CON-3 arrancó desde la rama de CON-1, no desde `main`**, porque
+  CON-1 no se había mezclado y CON-3 necesita su cliente HTTP. Es la
+  regla que dejó el sprint 1 (§8.4, «kit duplicado»): quien necesita
+  una pieza parte de su rama. El PR de CON-3 va apilado.
+- **Segunda migración nueva (`0015`)**, con el precedente de `0014`:
+  crea la tabla del token cifrado porque ningún rol nuestro tiene
+  acceso a Supabase Vault (comprobado) y porque el contrato del
+  `SecretStore` exige una referencia estable.
+- **CIM-3 sigue sin llegar**: workspace y creadora provisionales, como
+  en FIN-1, con `TODO(CIM-3)`.
+- **El módulo se despliega sin la prueba en vivo.** La pantalla funciona
+  con las conexiones del seed y los botones de conectar responden 503
+  con el nombre de la variable que falta hasta que existan las apps.
+
