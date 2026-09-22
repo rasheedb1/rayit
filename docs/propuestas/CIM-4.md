@@ -33,3 +33,23 @@ sugerido: `flex-wrap` en ese contenedor o `min-w-0` en los hijos.
 `--good`…) y los nombres del primer marco (`--fg`, `--line`, `--ok`…)
 como alias. Cuando Rasheed toque sus componentes, conviene pasar a los
 nombres nuevos y retirar los alias. No urge.
+
+## 4. Despliegue: el proyecto de Vercel ahora tiene Root Directory = apps/web
+
+Desde el 21 de septiembre por la noche, `multicampaign-web` tiene
+`rootDirectory: apps/web` en Vercel. Con eso, `scripts/vercel.sh deploy`
+(que pasa `--cwd platform/apps/web`) falla: Vercel busca
+`apps/web/apps/web`. Mientras tanto se despliega así, desde la raíz del
+workspace, que además deja que pnpm vea el lockfile:
+
+```bash
+cd platform
+./scripts/vercel.sh run deploy --cwd "$PWD" --yes            # vista previa
+./scripts/vercel.sh run deploy --cwd "$PWD" --yes --prod     # producción
+./scripts/vercel.sh run deploy --cwd "$PWD" --yes --build-env KIT=1   # vista previa con /kit
+```
+
+Propuesta para `cmd_deploy` en `scripts/vercel.sh`: `--cwd "$RAIZ"` en
+vez de `--cwd "$dir"`, y dejar `VERCEL_APP_DIR` solo para el enlace
+local. `platform/.vercelignore` ya excluye el vault, las migraciones,
+los scripts, el worker y las pruebas del paquete que sube.

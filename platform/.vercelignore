@@ -1,0 +1,18 @@
+# Lo que NO sube al build de Vercel. El proyecto tiene Root Directory =
+# apps/web, así que se despliega desde platform/ (la raíz del workspace)
+# para que pnpm vea el lockfile; esto deja fuera lo que el dashboard no
+# necesita y, sobre todo, el vault y las migraciones.
+secrets/
+db/
+scripts/
+docs/
+docker-compose.yml
+Makefile
+apps/worker/
+apps/media/
+packages/connectors/
+**/test/
+**/*.test.ts
+**/*.test.tsx
+node_modules/
+.next/
