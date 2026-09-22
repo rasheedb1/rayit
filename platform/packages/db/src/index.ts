@@ -11,3 +11,4 @@ export type { Db, WorkspaceTx, SqlExecutor, QueryResult } from './provisional/cl
 export { createPgDb, createPgliteDb, assertWorkspaceId } from './provisional/client.ts';
 export { createDbFromEnv, type DbMode } from './provisional/from-env.ts';
 export * from './queries/finanzas.ts';
+export * from './queries/conexiones.ts';
