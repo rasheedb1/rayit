@@ -24,3 +24,7 @@ export * from './platforms/tiktok-accounts.ts';
 export * from './platforms/instagram-api.ts';
 export * from './platforms/youtube-api.ts';
 export * from './factory.ts';
+export * from './crypto/master-key.ts';
+export * from './crypto/token-cipher.ts';
+export * from './crypto/sealed-cookie.ts';
+export * from './encrypted-secret-store.ts';
