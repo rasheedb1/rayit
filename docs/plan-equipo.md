@@ -14,11 +14,11 @@ nueve índices, y el entorno local se levanta con un comando.
 > [backlog-mvp.md](backlog-mvp.md). Las reglas de trabajo de la
 > sección 5 de este documento siguen aplicando.
 >
-> **Avance al 21 de septiembre (noche).** Las cinco historias de
-> Nicolás del sprint 1 están construidas y probadas; CIM-4, CIM-5 y
-> CON-2 ya en `main`, CIM-8 y FIN-1 en rama pendientes de merge. El
-> estado completo, lo que falta integrar y lo que Rasheed tiene que
-> destrabar están en la sección 8 de [backlog-mvp.md](backlog-mvp.md#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
+> **Avance al 21 de septiembre, 20:30.** Las cinco historias de
+> Nicolás del sprint 1 (CIM-4, CIM-5, CIM-8, CON-2, FIN-1) están en
+> `main`, verificadas dos veces y desplegadas en producción. El estado
+> completo y lo que Rasheed tiene que destrabar están en la sección 8
+> de [backlog-mvp.md](backlog-mvp.md#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
 
 ---
 
