@@ -3,20 +3,11 @@
  * conexiones de TikTok en distinto estado, y un oauth.refresh encolado
  * al arrancar. Sirve para enseñar el worker sin Supabase ni Docker
  * (demo del viernes) y para ver job_run llenándose.
- *
- * También exporta la ruta del SQL con los GRANTs que propone CON-2 para
- * mc_worker: en pglite se aplican tras las migraciones, igual que harán
- * en Supabase cuando Rasheed cree la migración 0014.
  */
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { SecretStore } from '@mc/connectors';
 import type { WorkerDatabase } from './runner/db.ts';
 import type { Logger } from './runner/logger.ts';
 import type { RunningWorker } from './runner/worker.ts';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const WORKER_GRANTS_SQL = join(HERE, '..', 'test', 'fixtures', '0014_worker_grants.sql');
 
 export interface DemoSeed {
   workspaceId: string;
@@ -70,7 +61,7 @@ export async function seedDemo(db: WorkerDatabase, secrets: SecretStore, now: Da
 export async function runDemo(opts: { db: WorkerDatabase; worker: RunningWorker; secrets: SecretStore; logger: Logger }): Promise<void> {
   const { db, worker, secrets, logger } = opts;
   const seed = await seedDemo(db, secrets, new Date());
-  logger.info('demo: escenario sembrado', { workspaceId: seed.workspaceId, conexiones: seed.connections.map((c) => c.label) });
+  logger.info('demo: escenario sembrado', { workspaceId: seed.workspaceId, connections: seed.connections.map((c) => c.label) });
   const jobId = await worker.boss.send('oauth.refresh', { source: 'demo', workspaceId: seed.workspaceId });
   logger.info('demo: oauth.refresh encolado', { jobId });
 

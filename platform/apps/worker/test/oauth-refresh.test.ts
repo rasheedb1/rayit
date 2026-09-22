@@ -233,6 +233,33 @@ test('refresh_expires_at vencido pasa a needs_reauth sin llamar a la plataforma'
   assert.match(notes.rows[0]!.title_es, /YouTube/);
 });
 
+test('sin credencial en el SecretStore la cuenta NO cambia de estado: es un problema nuestro, no del creador', async () => {
+  const raw = h.db.raw;
+  const cp = await raw.query<{ id: string }>(`SELECT id FROM creator_profile WHERE workspace_id = $1`, [seed.workspaceId]);
+  const r = await raw.query<{ id: string }>(
+    `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, secret_ref, access_expires_at)
+     VALUES ($1, $2, 'tiktok', 'tt-sin-secreto', 'vault:no-existe', $3) RETURNING id`,
+    [seed.workspaceId, cp.rows[0]!.id, minutes(5)],
+  );
+  const id = r.rows[0]!.id;
+  // Las corridas por connectionId tienen due = 1; así no se confunden con
+  // los reintentos del cron de la primera prueba, que también la ven.
+  const mine = (rows: Awaited<ReturnType<typeof jobRuns>>) =>
+    rows.filter((x) => x.metadata['due'] === 1 && (x.metadata['transient'] as string[] | undefined)?.includes(id));
+  await h.worker.boss.send('oauth.refresh', { connectionId: id });
+  const run = await waitFor(async () => mine(await jobRuns(h.db, 'oauth.refresh')).find((x) => x.status !== 'running'), { timeoutMs: 20_000, label: 'sin secreto' });
+  assert.equal(run.status, 'failed');
+  assert.deepEqual(run.metadata['transient'], [id]);
+  const row = await conn(id);
+  assert.equal(row.status, 'active', 'sigue activa');
+  assert.equal(row.status_detail, null);
+  assert.ok(row.consecutive_failures >= 1);
+  assert.ok(h.sink.records().some((x) => x['msg']?.toString().includes('SecretStore no tiene credenciales') && x['secretRef'] === 'vault:no-existe'));
+  // missing_secret no mejora con un reintento inmediato: el runner no vuelve a lanzar el job.
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(mine(await jobRuns(h.db, 'oauth.refresh')).length, 1);
+});
+
 test('mapLimit respeta el límite de concurrencia', async () => {
   let active = 0;
   let peak = 0;

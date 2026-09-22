@@ -45,9 +45,8 @@ const logger: Logger = createLogger({ level: config.logLevel, format: config.log
 async function openDatabase(): Promise<WorkerDatabase> {
   if (config.mode === 'pglite') {
     const { PgliteDatabase } = await import('./runner/db-pglite.ts');
-    const { WORKER_GRANTS_SQL } = await import('./demo.ts');
     logger.info('arrancando Postgres embebido (pglite) con las migraciones del repo');
-    return PgliteDatabase.open({ setRole: config.setRole, extraSql: [WORKER_GRANTS_SQL] });
+    return PgliteDatabase.open({ setRole: config.setRole });
   }
   return new PostgresDatabase({
     connectionString: config.databaseUrl!,

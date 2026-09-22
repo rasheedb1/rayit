@@ -1,10 +1,8 @@
 /**
- * Arnés de pruebas de integración: Postgres embebido con las 13
- * migraciones del repo + los GRANTs propuestos para mc_worker, un
- * logger en memoria y un worker arrancado con reintentos rápidos.
+ * Arnés de pruebas de integración: Postgres embebido con todas las
+ * migraciones del repo (incluida 0014, los privilegios de mc_worker),
+ * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -12,11 +10,8 @@ import { createLogger, MemorySink, type Logger } from '../../src/runner/logger.t
 import type { JobRegistration } from '../../src/runner/registry.ts';
 import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const GRANTS_SQL = join(HERE, '..', 'fixtures', '0014_worker_grants.sql');
-
 export async function openTestDatabase(): Promise<PgliteDatabase> {
-  return PgliteDatabase.open({ setRole: 'mc_worker', extraSql: [GRANTS_SQL] });
+  return PgliteDatabase.open({ setRole: 'mc_worker' });
 }
 
 export function testConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
@@ -118,6 +113,7 @@ export async function seedTestDefinitions(db: PgliteDatabase): Promise<void> {
       ('test.fail',  'Prueba: falla siempre',  'test', NULL, 5, 3, 1),
       ('test.slow',  'Prueba: excede timeout', 'test', NULL, 1, 1, 1),
       ('test.items', 'Prueba: fallos parciales','test', NULL, 5, 2, 1),
+      ('test.noretry','Prueba: sin reintento',   'test', NULL, 5, 3, 1),
       ('test.off',   'Prueba: deshabilitado',  'test', '*/5 * * * *', 5, 1, 1);
     UPDATE job_definition SET enabled = false WHERE id = 'test.off';
   `);
