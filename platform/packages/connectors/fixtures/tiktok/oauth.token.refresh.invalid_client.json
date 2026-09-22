@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "client_secret rotado en el portal y no en el vault: es culpa nuestra, no de la cuenta del creador." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 400, "body": { "error": "invalid_client", "error_description": "Client key or secret is incorrect.", "log_id": "2026092205" } }
+}

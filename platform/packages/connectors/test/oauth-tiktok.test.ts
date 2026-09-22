@@ -84,6 +84,11 @@ test('refresh invalid_grant: TokenRefreshError definitivo y el token que la plat
   assert.match(log.entries[0]!.error_message ?? '', /\[REDACTADO\]/);
 });
 
+test('refresh con invalid_client (nuestra app mal configurada): transitorio, NO needs_reauth', async () => {
+  const { core } = await oauthCore('tiktok', [['oauth.token', 'refresh.invalid_client']]);
+  await assert.rejects(tiktokRefresh(core, CFG, CURRENT), (e: unknown) => e instanceof TokenRefreshError && e.kind === 'transient' && e.code === 'invalid_client' && /vault/.test(e.messageEs));
+});
+
 test('refresh con 429 y Retry-After: transitorio, rate limit, retryAfterS = 7, y el núcleo reintentó hasta el tope', async () => {
   const { core, clock } = await oauthCore('tiktok', [['oauth.token', 'refresh.rate_limit']]);
   let caught: unknown;

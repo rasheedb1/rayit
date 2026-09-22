@@ -429,16 +429,18 @@ la fila 8 de §8.3:
 
 ## 6. Verificación (22 de septiembre de 2026)
 
-- `pnpm --filter @mc/connectors typecheck lint test`: **115 pruebas**
-  (20 de OAuth, 8 del cifrado, 3 del sello, 7 del almacén en pglite),
-  < 3 s, `withoutNetwork()` en cada archivo.
+- `pnpm --filter @mc/connectors typecheck lint test`: **176 pruebas**
+  (las 137 de CON-1 tras integrar su commit de QA, más 21 de OAuth, 8 del
+  cifrado, 3 del sello y 7 del almacén en pglite), < 4 s,
+  `withoutNetwork()` en cada archivo.
 - `pnpm --filter @mc/db typecheck test`: **20 pruebas** en Postgres
   embebido con el seed 0003 (6 de conexiones, con otro workspace en cada
   operación).
-- `pnpm --filter @mc/worker typecheck lint test`: **27 pruebas** (~26 s),
+- `pnpm --filter @mc/worker typecheck lint test`: **29 pruebas** (~27 s),
   incluida `oauth-refresh-real.test.ts` con el almacén cifrado y los
-  refreshers reales sobre fixtures, más el volcado de `public` y `pgboss`.
-- `pnpm --filter @mc/web typecheck lint test build`: **94 pruebas** (9 de
+  refreshers reales sobre fixtures, **sin `app.workspace_id` en sesión**
+  (como el worker real), más el volcado de `public` y `pgboss`.
+- `pnpm --filter @mc/web typecheck lint test build`: **95 pruebas** (10 de
   los handlers OAuth contra pglite con el seed, incluida la prueba clave)
   y `next build` en verde con las tres rutas nuevas dinámicas.
 - `make db.check`: 15 migraciones, 89 tablas, 10 vistas.
@@ -454,6 +456,33 @@ la fila 8 de §8.3:
 - Worker en pglite con `TOKEN_ENCRYPTION_KEY`: arranca como `mc_worker`
   con el almacén cifrado y avisa por cada app OAuth sin configurar; sin
   la clave, sale con código 1 y «Falta TOKEN_ENCRYPTION_KEY…».
+
+## 6.1 Revisión (`/code-review` y `/security-review`, 22 de septiembre)
+
+`/security-review` sobre la rama: **sin hallazgos High ni Medium**
+(revisó inyección SQL, state/CSRF de la cookie sellada, open redirect,
+RLS entre workspaces, criptografía, exposición de secretos y XSS). Dos
+notas de defensa en profundidad que quedan documentadas: el
+`client_secret` en la query de `ig_exchange_token` es lo que exige Meta
+(§0.5) y el «un solo uso» de la cookie se garantiza borrándola, no con un
+nonce en servidor (si se quiere endurecer, es una tabla de nonces de 10
+minutos; no hay vector de captura de una cookie HttpOnly).
+
+`/code-review` (nivel alto) sobre el diff contra CON-1: diez hallazgos,
+todos resueltos en el commit «Revisión»:
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | **En el worker, `set()` fallaba por NOT NULL**: sin `app.workspace_id` en sesión, `COALESCE($ws, current_workspace_id())` era null y Postgres lo comprueba antes de resolver `ON CONFLICT`. La prueba lo tapaba porque el seed dejaba el workspace fijado en la sesión. | El INSERT toma el workspace de la fila existente como tercer camino; la prueba del worker limpia `app.workspace_id` tras sembrar (falla sin el arreglo) y comprueba que la fila conservó su workspace. |
+| 2 | `toTokenRefreshError` volvía definitivo cualquier 400 (`invalid_client` por un secreto mal rotado en el vault mandaba a todos los creadores a `needs_reauth`). | Solo `auth` y los códigos de grant (`PERMANENT_CODES`) son definitivos; `invalid_client`, `invalid_request`, `unsupported_grant_type`, `invalid_scope`, `redirect_uri_mismatch` son transitorios sin reintento inmediato (fixture y prueba nuevas). |
+| 3 | El callback reutilizaba cualquier ref `enc:` de la fila, aunque fuera de otro proveedor. | Solo se reutiliza si empieza por `enc:<proveedor>:`. |
+| 4 | `payload.marginMinutes` no mandaba sobre el margen por plataforma. | El override del payload gana sobre plataforma y entorno (prueba). |
+| 5 | La rotación no podía retirar la v1: `keyringFromEnv` la exigía y el sello de la cookie se derivaba de v1. | v1 es opcional cuando hay otra versión; el sello se deriva de la clave actual (`currentMasterKey`). |
+| 6 | La transacción tras el intercambio no estaba protegida: un fallo daba un 500 sin `api_call_log` ni mensaje. | `try/catch` → se vuelca el log y se redirige con `error=temporal` o `sin_creador`. |
+| 7 | La prueba del worker corría con workspace en sesión (ver 1). | Corregido. |
+| 8 | `conexiones/_lib/{db,workspace}.ts` eran copias de los de Finanzas. | Ahora reexportan los de Finanzas (un solo sitio hasta CIM-2/CIM-3). |
+| 9 | `tokensFromBusiness` duplicaba `tokensFromTikTok`. | Una sola función con `label` y el alias `refresh_token_expires_in`. |
+| 10 | Lista de plataformas duplicada en el job. | Usa `PLATFORM_IDS` de `@mc/connectors`. |
 
 ## 7. Pendiente de ti
 

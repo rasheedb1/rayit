@@ -48,7 +48,8 @@ export interface Keyring {
 
 export function keyringOf(keys: Record<string, Uint8Array>, current?: string): Keyring {
   const map = new Map<string, Uint8Array>();
-  for (const [version, key] of Object.entries(keys)) {
+  // Orden estable por número de versión, venga como venga el entorno.
+  for (const [version, key] of Object.entries(keys).sort(([a], [b]) => Number(a.slice(1)) - Number(b.slice(1)))) {
     if (!/^v\d+$/.test(version)) throw new MasterKeyError(`Versión de clave inválida: "${version}" (se espera v1, v2…).`);
     if (key.length !== MASTER_KEY_BYTES) throw new MasterKeyError(`La clave ${version} tiene ${key.length} bytes; deben ser ${MASTER_KEY_BYTES}.`);
     map.set(version, key);
@@ -68,12 +69,20 @@ function highestVersion(versions: string[]): string {
  * NOMBRE_CURRENT la versión con la que se cifra (por defecto la más alta).
  */
 export function keyringFromEnv(env: Readonly<Record<string, string | undefined>>, name: string = MASTER_KEY_ENV): Keyring {
-  const keys: Record<string, Uint8Array> = { v1: parseMasterKey(env[name], name) };
+  const keys: Record<string, Uint8Array> = {};
   const extra = new RegExp(`^${name}_V(\\d+)$`);
   for (const [k, v] of Object.entries(env)) {
     const m = extra.exec(k);
-    if (m && v) keys[`v${m[1]}`] = parseMasterKey(v, k);
+    if (m && v?.trim()) keys[`v${m[1]}`] = parseMasterKey(v, k);
   }
+  // v1 es obligatoria mientras sea la única; cuando exista otra versión se
+  // puede retirar (tras rotate() sobre todas las filas) sin tumbar nada.
+  if (env[name]?.trim() || Object.keys(keys).length === 0) keys['v1'] = parseMasterKey(env[name], name);
   const current = env[`${name}_CURRENT`]?.trim() || undefined;
   return keyringOf(keys, current);
+}
+
+/** La clave maestra con la que se cifra hoy (para derivar otros usos, como el sello de la cookie). */
+export function currentMasterKey(keyring: Keyring): Uint8Array {
+  return keyring.keys.get(keyring.current)!;
 }

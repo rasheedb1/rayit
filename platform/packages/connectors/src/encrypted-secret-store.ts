@@ -102,10 +102,16 @@ export class EncryptedSecretStore implements SecretStore {
     return res.rows?.[0] ?? null;
   }
 
+  /**
+   * El workspace del INSERT sale, en orden, de la opción, de la transacción
+   * (web) o de la fila que ya existe (worker sin contexto: renovar solo
+   * reemplaza). Postgres comprueba NOT NULL antes de resolver ON CONFLICT,
+   * así que sin ese tercer camino el worker no podría guardar un token rotado.
+   */
   async #write(ref: string, blob: EncryptedBlob): Promise<void> {
     await this.#db.query(
       `INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag, key_version)
-       VALUES ($1, COALESCE($2::uuid, current_workspace_id()), $3, $4, $5, $6)
+       VALUES ($1, COALESCE($2::uuid, current_workspace_id(), (SELECT workspace_id FROM connection_secret WHERE secret_ref = $1)), $3, $4, $5, $6)
        ON CONFLICT (secret_ref) DO UPDATE
          SET ciphertext = EXCLUDED.ciphertext, iv = EXCLUDED.iv, tag = EXCLUDED.tag, key_version = EXCLUDED.key_version`,
       [ref, this.#workspaceId, Buffer.from(blob.ciphertext), Buffer.from(blob.iv), Buffer.from(blob.tag), blob.keyVersion],

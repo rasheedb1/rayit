@@ -59,16 +59,21 @@ async function tokenCall(core: HttpCore, cfg: OAuthAppConfig, endpoint: string, 
   });
 }
 
-export function tokensFromTikTok(body: Record<string, unknown>, now: Date, previous?: OAuthTokens): OAuthTokens {
+/**
+ * Las dos apps de TikTok devuelven los mismos campos (la Accounts API
+ * llama refresh_token_expires_in a lo que Login Kit llama refresh_expires_in).
+ */
+export function tokensFromTikTok(body: Record<string, unknown>, now: Date, previous?: OAuthTokens, label: string = 'TikTok'): OAuthTokens {
   const accessToken = strOrNull(body['access_token']);
-  if (!accessToken) throw new TokenRefreshError({ kind: 'transient', code: 'malformed_response', messageEs: 'TikTok respondió sin access_token.' });
+  if (!accessToken) throw new TokenRefreshError({ kind: 'transient', code: 'malformed_response', messageEs: `${label} respondió sin access_token.` });
   const refreshToken = strOrNull(body['refresh_token']) ?? previous?.refreshToken;
   const scopes = splitScopes(body['scope']);
+  const refreshTtl = body['refresh_expires_in'] ?? body['refresh_token_expires_in'];
   return {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
     accessExpiresAt: expiresAt(now, body['expires_in'], TIKTOK_ACCESS_TTL_S),
-    refreshExpiresAt: body['refresh_expires_in'] !== undefined ? expiresAt(now, body['refresh_expires_in'], TIKTOK_REFRESH_TTL_S) : previous?.refreshExpiresAt,
+    refreshExpiresAt: refreshTtl !== undefined ? expiresAt(now, refreshTtl, TIKTOK_REFRESH_TTL_S) : previous?.refreshExpiresAt,
     scopes: scopes.length > 0 ? scopes : [...(previous?.scopes ?? [])],
   };
 }

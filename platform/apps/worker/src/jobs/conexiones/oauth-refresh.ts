@@ -29,7 +29,7 @@
  *
  * Aquí NO hay tokens en logs ni en metadata: solo ids y fechas.
  */
-import { TokenRefreshError, type OAuthTokens, type PlatformId, isPlatformId } from '@mc/connectors';
+import { PLATFORM_IDS, TokenRefreshError, type OAuthTokens, type PlatformId, isPlatformId } from '@mc/connectors';
 import { envInt } from '../../runner/config.ts';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
@@ -71,7 +71,9 @@ export const PLATFORM_MARGIN_MINUTES: Partial<Record<PlatformId, number>> = {
 };
 const ENDPOINT = 'oauth.refresh';
 
-export function marginFor(platformId: string, baseMinutes: number, env: JobContext['env']): number {
+/** Un margen pedido en el payload manda sobre el de la plataforma y sobre el entorno: es para ESA corrida. */
+export function marginFor(platformId: string, baseMinutes: number, env: JobContext['env'], override?: number): number {
+  if (override !== undefined) return override;
   if (!isPlatformId(platformId)) return baseMinutes;
   const fallback = PLATFORM_MARGIN_MINUTES[platformId] ?? baseMinutes;
   return envInt(env, `OAUTH_REFRESH_MARGIN_MINUTES_${platformId.toUpperCase()}`, fallback);
@@ -83,7 +85,7 @@ type Outcome =
   | { kind: 'transient'; code: string; retryHelps: boolean };
 
 /** Fallos que un reintento inmediato de pg-boss no va a arreglar. */
-const RETRY_USELESS_CODES = new Set(['no_refresher', 'not_implemented', 'missing_secret', 'rate_limit']);
+const RETRY_USELESS_CODES = new Set(['no_refresher', 'not_implemented', 'not_configured', 'missing_secret', 'rate_limit', 'invalid_client', 'invalid_request', 'unsupported_grant_type', 'invalid_scope', 'redirect_uri_mismatch']);
 
 /** Una fila por plataforma con su propio corte; el UNION deja una sola consulta indexada por access_expires_at. */
 export async function selectDueConnections(db: Queryable, payload: OAuthRefreshPayload, cutoffs: ReadonlyMap<string, Date> | Date): Promise<ConnectionRow[]> {
@@ -97,7 +99,7 @@ export async function selectDueConnections(db: Queryable, payload: OAuthRefreshP
     );
     return rows;
   }
-  const byPlatform = cutoffs instanceof Date ? new Map(PLATFORM_IDS_FOR_CUTOFF.map((p) => [p, cutoffs])) : cutoffs;
+  const byPlatform = cutoffs instanceof Date ? new Map(PLATFORM_IDS.map((p) => [p, cutoffs])) : cutoffs;
   const platforms = [...byPlatform.keys()];
   const dates = platforms.map((p) => byPlatform.get(p)!);
   const { rows } = await db.query<ConnectionRow>(
@@ -112,10 +114,8 @@ export async function selectDueConnections(db: Queryable, payload: OAuthRefreshP
   return rows;
 }
 
-const PLATFORM_IDS_FOR_CUTOFF: readonly PlatformId[] = ['tiktok', 'instagram', 'facebook', 'youtube'];
-
-export function cutoffsFor(now: Date, baseMinutes: number, env: JobContext['env']): Map<string, Date> {
-  return new Map(PLATFORM_IDS_FOR_CUTOFF.map((p) => [p, new Date(now.getTime() + marginFor(p, baseMinutes, env) * 60_000)]));
+export function cutoffsFor(now: Date, baseMinutes: number, env: JobContext['env'], override?: number): Map<string, Date> {
+  return new Map(PLATFORM_IDS.map((p) => [p, new Date(now.getTime() + marginFor(p, baseMinutes, env, override) * 60_000)]));
 }
 
 function asDate(v: Date | string | null): Date | null {
@@ -130,7 +130,7 @@ function formatDateEs(d: Date): string {
 export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', async (payload, ctx) => {
   const marginMinutes = payload.marginMinutes ?? envInt(ctx.env, 'OAUTH_REFRESH_MARGIN_MINUTES', DEFAULT_MARGIN_MINUTES);
   const now = ctx.now();
-  const cutoffs = cutoffsFor(now, marginMinutes, ctx.env);
+  const cutoffs = cutoffsFor(now, marginMinutes, ctx.env, payload.marginMinutes);
   const due = await selectDueConnections(ctx.db, payload, cutoffs);
   ctx.logger.info('conexiones por renovar', { total: due.length, marginMinutes, cutoffs: Object.fromEntries([...cutoffs].map(([p, d]) => [p, d.toISOString()])) });
 

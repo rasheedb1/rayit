@@ -68,6 +68,8 @@ async function seed(db: PgliteDatabase): Promise<void> {
   await store.set(REF_TT, { ...OLD.tt, accessExpiresAt: hours(0.2), refreshExpiresAt: hours(24 * 300), scopes: [...TIKTOK_LOGIN_SCOPES] });
   await store.set(REF_IG, { ...OLD.ig, accessExpiresAt: hours(20), scopes: [...INSTAGRAM_LOGIN_SCOPES] });
   await store.set(REF_IG_OLD, { ...OLD.igOld, accessExpiresAt: hours(-1), scopes: [...INSTAGRAM_LOGIN_SCOPES] });
+  // Como en producción: el worker NO tiene app.workspace_id en sesión. Sin esto la prueba taparía un set() que falla por NOT NULL.
+  await raw.exec("SELECT set_config('app.workspace_id', '', false)");
 }
 
 before(async () => {
@@ -144,6 +146,25 @@ test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; Instagra
   const log = await h.db.query<{ connection_id: string; ok: boolean; error_code: string | null }>(`SELECT connection_id, ok, error_code FROM api_call_log WHERE endpoint = 'oauth.refresh' ORDER BY id`);
   assert.equal(log.rows.length, 3, 'una fila por conexión, la escribe el job');
   assert.equal(log.rows.find((r) => r.connection_id === ids.igOld)?.error_code, 'refresh_expired');
+});
+
+test('el worker guarda sin workspace en sesión: la fila de connection_secret conservó su workspace y sigue siendo una', async () => {
+  const rows = await h.db.query<{ workspace_id: string }>(`SELECT workspace_id FROM connection_secret WHERE secret_ref = $1`, [REF_TT]);
+  assert.equal(rows.rows[0]!.workspace_id, WORKSPACE);
+  const total = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM connection_secret`);
+  assert.equal(Number(total.rows[0]!.n), 3, 'tres refs sembradas, ninguna duplicada');
+  const ws = await h.db.query<{ ws: string | null }>(`SELECT current_setting('app.workspace_id', true) AS ws`);
+  assert.ok(!ws.rows[0]!.ws, 'la sesión no tiene workspace');
+});
+
+test('payload.marginMinutes manda sobre el margen de la plataforma', async () => {
+  const { cutoffsFor, marginFor } = await import('../src/jobs/conexiones/oauth-refresh.ts');
+  assert.equal(marginFor('instagram', 30, {}), 7 * 24 * 60);
+  assert.equal(marginFor('instagram', 30, { OAUTH_REFRESH_MARGIN_MINUTES_INSTAGRAM: '60' }), 60);
+  assert.equal(marginFor('instagram', 30, {}, 0), 0);
+  assert.equal(marginFor('tiktok', 30, {}), 30);
+  const c = cutoffsFor(NOW, 30, {}, 5);
+  assert.equal(c.get('instagram')!.toISOString(), new Date(NOW.getTime() + 5 * 60_000).toISOString());
 });
 
 test('R4: ningún token (viejo ni nuevo) en ninguna columna de texto de public ni de pgboss, ni en el log del worker', async () => {

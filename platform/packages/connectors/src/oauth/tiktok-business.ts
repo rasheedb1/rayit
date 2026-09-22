@@ -27,8 +27,8 @@ import { parseTikTokBusinessError, TikTokAccountsClient } from '../platforms/tik
 import { TokenRefreshError } from '../token-refresher.ts';
 import type { OAuthTokens } from '../types.ts';
 import { toTokenRefreshError } from './errors.ts';
-import { TIKTOK_AUTHORIZE_URL, TIKTOK_ACCESS_TTL_S, TIKTOK_REFRESH_TTL_S } from './tiktok-login.ts';
-import { expiresAt, OAUTH_ENDPOINTS, splitScopes, type AuthorizationUrlInput, type CodeExchange, type ExchangeOptions, type OAuthAppConfig, type OAuthProvider, type RefreshCallOptions } from './types.ts';
+import { TIKTOK_AUTHORIZE_URL, tokensFromTikTok } from './tiktok-login.ts';
+import { OAUTH_ENDPOINTS, type AuthorizationUrlInput, type CodeExchange, type ExchangeOptions, type OAuthAppConfig, type OAuthProvider, type RefreshCallOptions } from './types.ts';
 
 export const TIKTOK_BUSINESS_OAUTH_BASE = 'https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2';
 export const TIKTOK_BUSINESS_SCOPES: readonly string[] = ['user.info.basic', 'user.info.username', 'user.info.stats', 'user.insights', 'video.list', 'video.insights'];
@@ -43,20 +43,6 @@ export function tiktokBusinessAuthorizationUrl(cfg: OAuthAppConfig, input: Autho
   return u.toString();
 }
 
-function tokensFromBusiness(data: Record<string, unknown>, now: Date, previous?: OAuthTokens): OAuthTokens {
-  const accessToken = strOrNull(data['access_token']);
-  if (!accessToken) throw new TokenRefreshError({ kind: 'transient', code: 'malformed_response', messageEs: 'TikTok (Accounts API) respondió sin access_token.' });
-  const refreshToken = strOrNull(data['refresh_token']) ?? previous?.refreshToken;
-  const scopes = splitScopes(data['scope']);
-  return {
-    accessToken,
-    ...(refreshToken ? { refreshToken } : {}),
-    accessExpiresAt: expiresAt(now, data['expires_in'], TIKTOK_ACCESS_TTL_S),
-    refreshExpiresAt: data['refresh_token_expires_in'] !== undefined ? expiresAt(now, data['refresh_token_expires_in'], TIKTOK_REFRESH_TTL_S) : previous?.refreshExpiresAt,
-    scopes: scopes.length > 0 ? scopes : [...(previous?.scopes ?? [])],
-  };
-}
-
 async function businessCall(core: HttpCore, cfg: OAuthAppConfig, endpoint: string, path: string, body: Record<string, string>, secrets: string[], connectionId: string | null, signal?: AbortSignal) {
   return core.call<Record<string, unknown>>({
     platformId: 'tiktok', family: 'tiktok-accounts', endpoint, method: 'POST', url: `${TIKTOK_BUSINESS_OAUTH_BASE}/${path}`,
@@ -68,7 +54,7 @@ async function businessCall(core: HttpCore, cfg: OAuthAppConfig, endpoint: strin
 export async function tiktokBusinessExchangeCode(core: HttpCore, cfg: OAuthAppConfig, code: string, opts: ExchangeOptions = {}): Promise<CodeExchange> {
   const res = await businessCall(core, cfg, OAUTH_ENDPOINTS.token, 'token/', { grant_type: 'authorization_code', auth_code: code, redirect_uri: cfg.redirectUri }, [code], null, opts.signal);
   const data = asRecord(res.body['data']);
-  const tokens = tokensFromBusiness(data, core.now());
+  const tokens = tokensFromTikTok(data, core.now(), undefined, 'TikTok (Accounts API)');
   return { tokens, externalAccountId: strOrNull(data['open_id']), scopesGranted: [...tokens.scopes] };
 }
 
@@ -78,7 +64,7 @@ export async function tiktokBusinessRefresh(core: HttpCore, cfg: OAuthAppConfig,
   }
   try {
     const res = await businessCall(core, cfg, OAUTH_ENDPOINTS.refresh, 'refresh_token/', { grant_type: 'refresh_token', refresh_token: tokens.refreshToken }, [tokens.refreshToken, tokens.accessToken], opts.connectionId ?? null, opts.signal);
-    return tokensFromBusiness(asRecord(res.body['data']), core.now(), tokens);
+    return tokensFromTikTok(asRecord(res.body['data']), core.now(), tokens, 'TikTok (Accounts API)');
   } catch (err) {
     throw toTokenRefreshError(err);
   }

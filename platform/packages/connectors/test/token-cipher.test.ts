@@ -100,4 +100,9 @@ test('keyringFromEnv: NOMBRE es v1, NOMBRE_V2 se suma y NOMBRE_CURRENT elige', (
   assert.equal(ring.current, 'v2');
   assert.equal(keyringFromEnv({ ...env, TOKEN_ENCRYPTION_KEY_CURRENT: 'v1' }).current, 'v1');
   assert.throws(() => keyringFromEnv({ ...env, TOKEN_ENCRYPTION_KEY_CURRENT: 'v9' }), MasterKeyError);
+  // Retirar la v1 tras rotar: con otra versión presente ya no es obligatoria.
+  const soloV2 = keyringFromEnv({ TOKEN_ENCRYPTION_KEY_V2: Buffer.from(K2).toString('base64') });
+  assert.deepEqual([...soloV2.keys.keys()], ['v2']);
+  assert.equal(soloV2.current, 'v2');
+  assert.throws(() => keyringFromEnv({}), (e: unknown) => e instanceof MasterKeyError && /Falta TOKEN_ENCRYPTION_KEY/.test(e.message));
 });

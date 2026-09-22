@@ -16,7 +16,7 @@ import { listConnections, listConsents, type WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/provisional/embedded";
 import { createOAuthHandlers, OAUTH_COOKIE, type OAuthHandlers } from "./oauth-handlers";
 import { CONSENT_POLICY_VERSION } from "./consent";
-import { SEED_WORKSPACE_ID } from "./workspace";
+import { SEED_WORKSPACE_ID } from "../../finanzas/_lib/workspace";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";
@@ -230,6 +230,12 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(new URL(res.headers.get("location")!).searchParams.get("conectada")).toBe(tiktokId);
     const refs = await db.queryAsSuperuser<{ secret_ref: string }>("SELECT secret_ref FROM connection_secret WHERE secret_ref LIKE 'enc:tiktok:%'");
     expect(refs.rows.length).toBe(1);
+  });
+
+  it("una fila con ref de otro proveedor (Login Kit) no presta su ref: la Accounts API tendría la suya", async () => {
+    const refs = await db.queryAsSuperuser<{ secret_ref: string }>("SELECT secret_ref FROM social_connection WHERE id = $1", [tiktokId]);
+    expect(refs.rows[0]!.secret_ref.startsWith("enc:tiktok:")).toBe(true);
+    expect(refs.rows[0]!.secret_ref.startsWith("enc:tiktok-business:")).toBe(false);
   });
 
   it("R4: ninguna columna de texto, jsonb, arreglo o bytea de ninguna tabla contiene un token, el code ni el client secret", async () => {

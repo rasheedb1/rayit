@@ -19,11 +19,13 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
-  EncryptedSecretStore, HttpCore, InMemoryCallLogSink, isEncryptedRef, isOAuthProviderId, isPlatformApiError, keyringFromEnv, loadOAuthApps,
+  currentMasterKey, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, isOAuthProviderId, isPlatformApiError, keyringFromEnv, loadOAuthApps,
   MasterKeyError, newSecretRef, OAUTH_PROVIDERS, openSealedValue, PostgresCallLogSink, QuotaManager, redactSecrets, sealingKey, sealValue,
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
-import { findConnectionByAccount, getDefaultCreatorId, NoCreatorProfile, recordConsent, upsertConnection, type ConsentPurpose, type WorkspaceTx } from "@mc/db";
+import {
+  CreatorNotInWorkspace, findConnectionByAccount, getDefaultCreatorId, NoCreatorProfile, recordConsent, upsertConnection, type ConsentPurpose, type WorkspaceTx,
+} from "@mc/db";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
 
 export const OAUTH_COOKIE = "oc_oauth";
@@ -118,7 +120,8 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
   let keys: { cipher: TokenCipher; seal: Uint8Array } | { error: string };
   try {
     const keyring = keyringFromEnv(deps.env);
-    keys = { cipher: new TokenCipher(keyring), seal: sealingKey(keyring.keys.get("v1")!) };
+    // El sello se deriva de la clave ACTUAL: al rotar, la v1 puede retirarse y las cookies viejas simplemente dejan de abrir.
+    keys = { cipher: new TokenCipher(keyring), seal: sealingKey(currentMasterKey(keyring)) };
   } catch (err) {
     keys = { error: err instanceof MasterKeyError ? err.message : "No se pudo preparar la clave de cifrado." };
   }
@@ -212,9 +215,12 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         scopesRequested: saved.scopesRequested, scopesGranted, at,
       }) as Record<string, unknown>;
       const cipher = keys.cipher;
-      const connectionId = await deps.withWorkspace(async (tx) => {
+      let connectionId: string;
+      try {
+        connectionId = await deps.withWorkspace(async (tx) => {
         const existing = await findConnectionByAccount(tx, prov.platformId, externalAccountId);
-        const secretRef = existing && isEncryptedRef(existing.secretRef) ? existing.secretRef : newSecretRef(provider);
+        // Se reutiliza la ref solo si es de ESTE proveedor: una fila de Login Kit no puede acabar con tokens de la Accounts API bajo 'enc:tiktok:'.
+        const secretRef = existing && existing.secretRef.startsWith(`enc:${provider}:`) ? existing.secretRef : newSecretRef(provider);
         await new EncryptedSecretStore({ db: tx, cipher }).set(secretRef, tokens);
         const { id } = await upsertConnection(tx, {
           creatorId: saved.creatorId, platformId: prov.platformId, externalAccountId,
@@ -228,7 +234,13 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         const sink = new PostgresCallLogSink(tx);
         for (const entry of callLog.entries) await sink.record({ ...entry, connection_id: entry.connection_id ?? id });
         return id;
-      });
+        });
+      } catch (err) {
+        // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
+        await flushCallLog(deps, callLog).catch(() => undefined);
+        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador" : "temporal";
+        return redirect(req, `/conexiones?error=${codeOut}`, headers);
+      }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);
     },
   };
