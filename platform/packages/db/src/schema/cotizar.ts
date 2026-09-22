@@ -74,6 +74,16 @@ export const quote = pgTable('quote', {
   exclusivityDays: integer('exclusivity_days'),
   exclusivityScope: text('exclusivity_scope'),
   paymentTermsDays: integer('payment_terms_days').default(30).notNull(),
+  /**
+   * Lo que la marca vio cuando se le envió, congelado (migración 0022).
+   * Lo escribe `sendQuote` y lo devuelve `public_quote(slug)`: editar la
+   * cotización después no cambia un documento ya enviado.
+   */
+  publicSnapshot: jsonb('public_snapshot'),
+  /** Ventana de la campaña, acordada antes de publicar. La usa COT-4 al llamar a CAM-2. */
+  campaignStartsOn: date('campaign_starts_on', { mode: 'string' }),
+  campaignEndsOn: date('campaign_ends_on', { mode: 'string' }),
+  viewCount: integer('view_count').default(0).notNull(),
   status: text('status', { enum: QUOTE_STATUSES }).default('draft').notNull(),
   validUntil: date('valid_until', { mode: 'string' }),
   sentAt: timestamptz('sent_at'),
