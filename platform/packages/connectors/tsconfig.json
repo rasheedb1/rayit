@@ -11,7 +11,10 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "scripts", "eslint.config.mjs"]
 }
