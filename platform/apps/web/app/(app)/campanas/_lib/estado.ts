@@ -21,7 +21,8 @@ export const LIST_FILTERS: Record<ListFilterKey, { label: string; status: Campai
 export const LIST_FILTER_KEYS = Object.keys(LIST_FILTERS) as ListFilterKey[];
 
 export function filterKey(value: string | undefined): ListFilterKey {
-  return value && value in LIST_FILTERS ? (value as ListFilterKey) : "todas";
+  // hasOwn y no `in`: "__proto__" o "constructor" también están «en» un objeto.
+  return value && Object.hasOwn(LIST_FILTERS, value) ? (value as ListFilterKey) : "todas";
 }
 
 export function filterHref(key: ListFilterKey): string {
