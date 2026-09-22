@@ -339,7 +339,8 @@ export const STORIES: readonly Story[] = [
     title: "Crear campaña desde la cotización",
     desc: "createCampaignFromQuote() en queries/campanas.ts: crea la campaña con quote_id, agreed_metrics, fechas y brand_baseline_from catorce días antes. Es el contrato con Cotizar: Rasheed la llama desde COT-4.",
     done: "Rasheed la usa en COT-4 sin pedir cambios.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Lista para COT-4: createCampaignFromQuote(tx, { quoteId, startsOn, endsOn, name?, trackingCode? }) en @mc/db, idempotente con bloqueo consultivo, RLS y errores tipados con messageEs. Contrato, ejemplo de uso y prueba conjunta del lunes del sprint 4 en docs/propuestas/CAM-2.md.",
   },
   {
     id: "CAM-3", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CON-1", "CON-2"],
