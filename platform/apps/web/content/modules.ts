@@ -132,7 +132,7 @@ export const MODULES: readonly ModuleDef[] = [
       "packages/core/src/permisos.ts (Nicolás)",
       "apps/web/lib/auth/ (Rasheed)",
       "packages/db/src/scope.ts, audit.ts (Rasheed)",
-      "db/migrations/0017_access_control.sql (propone Nicolás, aplica Rasheed)",
+      "db/migrations/0023_access_control.sql (propone Nicolás, aplica Rasheed)",
     ],
   },
   // Fase 2. Apagados en flags.ts; la base ya los modela.

@@ -473,8 +473,8 @@ export const STORIES: readonly Story[] = [
   },
   {
     id: "ACC-3", module: "ACC", owner: "nicolas", size: "M", sprint: 4, deps: ["ACC-1", "CIM-3"],
-    title: "Esquema de accesos (migración 0017)",
-    desc: "0017_access_control.sql: permission, role, role_permission, membership.role → role_id, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los roles de fábrica.",
+    title: "Esquema de accesos (migración 0023)",
+    desc: "0023_access_control.sql: permission, role, role_permission, membership.role → role_id, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los roles de fábrica.",
     done: "Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz.",
     status: "pendiente",
     note: "El SQL y la semilla los escribe Nicolás y los revisa y aplica Rasheed (regla de db/migrations/ en §3.1); el esquema Drizzle es de Rasheed. Va en el sprint 4 y no en el 5 por riesgo: ACC-4 no puede empezar sin la tabla.",

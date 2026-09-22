@@ -213,12 +213,15 @@ rellenarlo hacia atrás es imposible.
 
 ---
 
-## Fase 4 · El esquema (migración `0017`)
+## Fase 4 · El esquema (migración `0023`)
 
-Números tomados el 22 de septiembre: `origin/main` va en `0016`;
-`nicolas/CON-3` trae `0015_connection_secret` y `0016_campaign_quote_unique`.
-La siguiente libre es **`0017_access_control.sql`**. La propone Nicolás
-en el PR; la revisa y aplica Rasheed (§3.1).
+Números tomados el 22 de septiembre, después de CON-10: el más alto en
+`main` es `0022_public_profile_access`, y **`0017` a `0021` están
+aplicados en Supabase pero no existen en ninguna rama** (§9.4 del
+backlog, fila 17), así que no se reciclan. La siguiente libre es
+**`0023_access_control.sql`**. La propone Nicolás en el PR; la revisa y
+aplica Rasheed (§3.1). Antes de crearla, `git fetch` y volver a mirar:
+este número ya se movió una vez.
 
 ```sql
 -- Catálogo de permisos. Como 'niche': compartido, sin workspace_id.
@@ -293,7 +296,7 @@ CREATE UNIQUE INDEX ON invitation (workspace_id, email)
   WHERE accepted_at IS NULL AND revoked_at IS NULL;
 
 -- Concesión entre workspaces: la agencia entra al del creador.
--- Va en 0017 aunque la pantalla sea fase 2: la tabla es barata y así el
+-- Va en 0023 aunque la pantalla sea fase 2: la tabla es barata y así el
 -- modelo queda cerrado de una vez.
 CREATE TABLE workspace_grant (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -418,7 +421,7 @@ convención, y las convenciones solo son gratis al principio.
 
 ### Sprint 4 · el esquema (ACC-3)
 
-La migración `0017` la escribe Nicolás y la revisan y aplican Rasheed:
+La migración `0023` la escribe Nicolás y la revisan y aplican Rasheed:
 es la convención de §3.1 para `db/migrations/`, y en el sprint 4 Rasheed
 va en 9 días de 10 mientras Nicolás ya va en 12. El esquema Drizzle
 (`packages/db/schema/`) sí es de Rasheed.
@@ -478,7 +481,7 @@ tocar. Si aprieta, lo que se mueve es el SQL de ACC-3 a la semana 9
    ingeniería: si el plan comercial es vender a agencias que traen a sus
    creadores en blanco, «conceder» sigue funcionando (la agencia crea el
    workspace y nace con la concesión), pero el onboarding lo tiene que
-   contar bien. Conviene confirmarla antes de escribir `0017`.
+   contar bien. Conviene confirmarla antes de escribir `0023`.
 2. **Dueño del épico ACC.** Toca `lib/auth/`, `packages/db/client.ts` y
    `db/migrations/` — todo de Rasheed (§3.1) — pero nace de una
    necesidad de los módulos de Nicolás. Propuesta: ACC-1 y ACC-2 de

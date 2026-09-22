@@ -59,13 +59,16 @@ están en
 y en §6.
 
 La base de datos ya tiene las 88 tablas. **Al MVP le hace falta una sola
-migración de esquema, `0017_access_control.sql` (ACC-3)**, y sale de esa
+migración de esquema, `0023_access_control.sql` (ACC-3)**, y sale de esa
 decisión; el resto del producto no pide ninguna. Toda migración es un
 archivo nuevo, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
 (CON-2), solo `GRANT`s al rol `mc_worker`, aplicada en Supabase el 21 de
 septiembre; `0015_connection_secret` (CON-3, aplicada) y
-`0016_campaign_quote_unique` (CAM-2, pendiente) el 22. La siguiente es
-`0017_…`: antes de crearla, `git fetch` y mirar el número más alto en
+`0016_campaign_quote_unique` (CAM-2, pendiente) y
+`0022_public_profile_access` (CON-10) el 22. **Los números 0017 a 0021
+están aplicados en Supabase pero no en ninguna rama** (§9.4, fila 17):
+no se reciclan. La siguiente libre es `0023_…`, que es la de ACC-3.
+Antes de crear cualquiera, `git fetch` y mirar el número más alto en
 todas las ramas activas.
 
 ---
@@ -317,7 +320,7 @@ con las agencias, que es donde el alcance empieza a significar algo.
 |---|---|---|---|---|---|
 | ACC-1 | `packages/core/permisos.ts`: catálogo de permisos `<módulo>.<recurso>.<acción>`, roles de fábrica y `can()`. Puro, sin base ni pantalla. | Nicolás | S | — | Cada Server Action nueva abre con su `requirePermission()`; una prueba comprueba que el «Mánager» no trae `finanzas.flujo.ver`. |
 | ACC-2 | `withAudit()`: toda escritura de dinero, publicación o cuenta conectada deja fila en `audit_log` con actor, `before` y `after`. | Nicolás | S | CIM-2 | Crear una factura y conectar una cuenta dejan su fila; una prueba recorre las escrituras de `queries/` y falla si alguna no audita. |
-| ACC-3 | Migración `0017_access_control.sql`: `permission`, `role`, `role_permission`, `membership.role → role_id`, `membership_scope`, `invitation`, `workspace_grant`, `audit_log.on_behalf_of_workspace_id`. Semilla de los roles de fábrica. | SQL y semilla Nicolás (§3.1); esquema Drizzle, revisión y aplicación Rasheed | M | ACC-1, CIM-3 | Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz. |
+| ACC-3 | Migración `0023_access_control.sql`: `permission`, `role`, `role_permission`, `membership.role → role_id`, `membership_scope`, `invitation`, `workspace_grant`, `audit_log.on_behalf_of_workspace_id`. Semilla de los roles de fábrica. | SQL y semilla Nicolás (§3.1); esquema Drizzle, revisión y aplicación Rasheed | M | ACC-1, CIM-3 | Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz. |
 | ACC-4 | Pantalla **Equipo**, lo del piloto: invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol, revocar. Al invitar a un mánager, dos casillas explícitas: «también puede ver mis finanzas» y «también puede conectar mis cuentas», apagadas. Nadie otorga lo que no tiene; el último dueño no se puede quitar. | Rasheed | M | ACC-3 | Un creador invita a su mánager, entra por el enlace y ve Campañas pero no el flujo de caja. Con la casilla marcada sí lo ve. Intentar quitar al último dueño falla con mensaje. |
 | ACC-5 | Permisos en el marco: `requireModule()` recibe el permiso mínimo; el menú esconde lo que no se puede abrir; una ruta sin permiso da 404, no 403. | Nicolás | S | ACC-3 | Con sesión de «Contador», `/campanas` responde 404 y no aparece en el menú. |
 | ACC-6 | Alcance en las consultas: `scopeFilter()` en `packages/db` compuesto por cada `queries/<modulo>.ts`, con prueba por módulo. | los dos, por módulo | M | ACC-3 | Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada. |
@@ -431,7 +434,7 @@ módulos, y el reparto de AGE depende de quién tenga aire cuando se abra.
    superconjunto de absorber —una agencia puede crear el workspace del
    creador y nacer con la concesión—, mientras que el camino inverso es
    una migración entre tenants. Es la decisión más cara de cambiar
-   después: conviene cerrarla antes de escribir `0017`.
+   después: conviene cerrarla antes de escribir `0023`.
 7. **El código pregunta por permisos, no por roles.** Propuesta:
    `requirePermission(session, 'finanzas.factura.crear')`, nunca
    `role === 'admin'`. Un rol es un nombre para un conjunto de
