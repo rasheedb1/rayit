@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Shell } from "@/components/shell";
 import { themeScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -21,6 +20,15 @@ export const viewport: Viewport = {
   ],
 };
 
+/**
+ * Solo el documento: tema, tipografía y fondo.
+ *
+ * El marco con la navegación (Shell, CIM-4) se monta un nivel más
+ * abajo, en app/(app)/layout.tsx. Se movió en COT-2: las páginas
+ * públicas —el media kit y la cotización que abre la marca, sin
+ * sesión— cuelgan de app/(public)/ y no pueden llevar la barra lateral
+ * del creador. Es la única línea que cambió del marco.
+ */
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
@@ -28,7 +36,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-dvh bg-bg font-sans text-fg antialiased">
-        <Shell>{children}</Shell>
+        {children}
       </body>
     </html>
   );

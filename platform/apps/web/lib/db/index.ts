@@ -1,5 +1,6 @@
 import "server-only";
-import { createDbFromEnv, type Db, type DbMode, type WorkspaceTx } from "@mc/db";
+import { createDbFromEnv, type BaseTx, type Db, type DbMode, type WorkspaceTx } from "@mc/db";
+import type { CatalogDb } from "@mc/db/client";
 import { getCurrentWorkspaceId } from "@/lib/workspace/current";
 
 /**
@@ -50,6 +51,29 @@ function getDb(): Promise<{ db: Db; mode: DbMode }> {
 export async function withWorkspace<T>(fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
   const { db } = await getDb();
   return db.withWorkspace(getCurrentWorkspaceId(), fn);
+}
+
+/**
+ * Una transacción SIN workspace, solo para los enlaces públicos de
+ * Cotizar (/kit/<slug> y /cotizacion/<slug>).
+ *
+ * Es la única excepción a «toda pantalla abre withWorkspace», y está
+ * acotada por los dos lados: quien la abre no tiene sesión —la marca
+ * que recibió el enlace no es nadie en el producto—, y lo único que se
+ * puede hacer con ella son las tres funciones SECURITY DEFINER de la
+ * migración 0022, que reciben el slug y devuelven jsonb ya recortado.
+ * Sobre cualquier tabla con RLS y sin workspace fijado, esta
+ * transacción no ve NADA: la prueba «el permiso del enlace no
+ * sobrevive a la llamada» (packages/db/test/cotizar.test.ts) lo fija.
+ *
+ * Por eso recibe las consultas por su nombre (@mc/db/queries/cotizar) y
+ * no el cliente crudo, igual que los catálogos.
+ */
+export async function withPublicShare<T>(fn: (tx: BaseTx) => Promise<T>): Promise<T> {
+  const { db } = await getDb();
+  // createDbFromEnv construye siempre un CatalogDb (pg o embebido); el
+  // tipo público lo estrecha a Db a propósito (ver @mc/db/src/client.ts).
+  return (db as CatalogDb).withCatalogs(fn);
 }
 
 /** Contra qué corre la web: 'postgres' (DATABASE_URL) o 'embedded' (modo demo). */
