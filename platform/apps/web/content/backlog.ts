@@ -122,7 +122,8 @@ export const STORIES: readonly Story[] = [
     title: "Seed de ventas y métricas",
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Seed 0002 determinista e idempotente: 60 videos con curvas acumuladas, 90 días de cuenta y demografía, línea base y puntaje calculados con la regla de scoring.ts, y el CRM con 8 marcas, 12 señales y 15 deals. Verificación en Postgres embebido con cifras: node db/seed/verify/run.mjs 0002. Decisiones en docs/propuestas/CIM-6.md.",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],

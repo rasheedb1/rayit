@@ -3,7 +3,7 @@ SHELL := /bin/bash
 DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
 .PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
-        db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
+        db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check db.seed.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
@@ -103,6 +103,9 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
+
+db.seed.check: ## Verifica los seeds en Postgres embebido: dos pasadas, conteos y cifras
+	@node db/seed/verify/run.mjs $(SEED)
 
 db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
