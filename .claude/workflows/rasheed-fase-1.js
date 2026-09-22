@@ -387,9 +387,14 @@ TERMINADO CUANDO: una señal de una categoría excluida no aparece en la bandeja
 // Conflicto conocido de la fase 1, con su resolución ya decidida.
 const EXTRA_FASE_1 = `2b. CONFLICTO CONOCIDO en platform/db/seed/0003_demo_finanzas_campanas.sql al mergear la rama del seed. Los dos lados son correctos y NO se pisan de verdad: main (Nicolás, dueño del archivo) renombró la clave del jsonb brand_accounts de "platform" a "platform_id" en cuatro líneas; la rama del seed movió la línea de tiempo de la campaña de Café Alma de agosto 24/27 a agosto 10/12 y quitó las dos lecturas manuales de Fresko, porque sus captured_at caían en el FUTURO respecto al día de hoy y una lectura «a 30 días» fechada mañana es un dato falso. Resuelve conservando AMBOS: la clave platform_id de main y las fechas y los comentarios de la rama del seed. Después corre \`node db/seed/verify/run.mjs\` (o el comando equivalente que exista) y \`make db.check\` para confirmar que 0002 y 0003 siembran juntos sin datos en el futuro.`
 
+// En paralelo con la fase 2 corre el pase de endurecimiento del esquema
+// (workflow rasheed-endurecer-db), que toca unos pocos archivos que la
+// pieza auth también toca. Su integración suele llegar antes.
+const EXTRA_FASE_2 = `2b. OJO: en paralelo a esta fase corrió un pase de endurecimiento del esquema que probablemente ya esté integrado en ${RAMA_INTEGRACION}. Toca estos archivos, que la pieza auth también toca: packages/db/src/esquema.ts (guardia de esquema invertida), packages/db/src/queries/cimientos.ts (getWorkspace sin filtro en JavaScript), apps/web/lib/workspace/current.ts, apps/web/app/(app)/error.tsx y loading.tsx, apps/web/lib/format.ts, y una migración de RLS. Regla para resolver esos conflictos: **en seguridad y aislamiento gana el endurecimiento** (sus políticas, su guardia, su getWorkspace sin filtro en JavaScript, sus revocaciones de privilegios); **en sesión y workspace actual gana auth** (getCurrentWorkspaceId leyendo sesión y cookie firmada, la validación de la membresía). No son alternativas: se combinan. Si dos migraciones reclaman el mismo número, renumera la de auth a la siguiente libre (el runner se niega si dos archivos comparten número, así que lo verás). Después del merge corre la prueba de RLS y la de auth juntas.`
+
 const FASES_DEF = [
   { n: 1, titulo: 'Fase 1 · cimientos', primero: [], paralelo: ['db', 'seed'], extra: EXTRA_FASE_1 },
-  { n: 2, titulo: 'Fase 2 · pantallas', primero: [], paralelo: ['auth', 'resumen', 'cotizar'] },
+  { n: 2, titulo: 'Fase 2 · pantallas', primero: [], paralelo: ['auth', 'resumen', 'cotizar'], extra: EXTRA_FASE_2 },
   { n: 3, titulo: 'Fase 3 · CRM', primero: [], paralelo: ['crm', 'ficha'] },
   { n: 4, titulo: 'Fase 4 · tubería de outreach', primero: ['esquema'], paralelo: ['canales', 'motor', 'entregabilidad'] },
   { n: 5, titulo: 'Fase 5 · inteligencia', primero: [], paralelo: ['perfil', 'generacion', 'recomendador'] },
