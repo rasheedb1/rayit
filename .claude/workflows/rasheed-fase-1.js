@@ -164,7 +164,7 @@ QUÉ CONSTRUYES: el paquete de acceso a datos y el esqueleto del monorepo.
 - Pruebas (test/): Postgres embebido con pglite aplicando db/migrations en orden (reutiliza la lógica de db/migrate.mjs). Como pglite corre como superusuario y el superusuario salta RLS, la prueba debe \`SET ROLE mc_app\` (el rol existe desde la migración 0010; concede lo necesario en la prueba). Prueba obligatoria: dos workspaces, un deal en cada uno, cada uno ve solo el suyo; sin workspace fijado, cero filas. Deja un helper reutilizable \`test/pglite.ts\` que otros paquetes puedan importar para sus propias pruebas.
 - apps/worker (@mc/worker): esqueleto con pg-boss como dependencia y un src/index.ts que abre @mc/db y lista job_definition (humo). El runner de verdad lo hace Nicolás en CON-2: no lo escribas.
 - apps/web/lib/workspace/current.ts: \`getCurrentWorkspaceId()\` que hoy devuelve DEMO_WORKSPACE_ID del entorno (documentado en .env.example) y que CIM-3 reemplazará por la sesión. Es la costura para que las pantallas avancen sin auth.
-- turbo: que \`pnpm turbo run typecheck lint test\` cubra los tres paquetes y \`make dev\` levante web y worker. No cambies el Makefile salvo que sea imprescindible.
+- turbo: que \`pnpm verificar\` cubra los tres paquetes y \`make dev\` levante web y worker. No cambies el Makefile salvo que sea imprescindible.
 TERMINADO CUANDO: la prueba de RLS pasa en pglite sin red; \`pnpm --filter @mc/worker dev\` imprime las definiciones de jobs contra Supabase; typecheck, lint, test y build en verde.
 REFERENCIAS: la forma de \`withWorkspace\` sigue el patrón de Supabase para RLS con set_config por transacción; el paquete se organiza como los starters de Drizzle (schema/, client, queries por dominio).
 `,
@@ -400,7 +400,7 @@ const FASES_DEF = [
 // Prompts
 // ---------------------------------------------------------------------
 function promptConstruir(p) {
-  return `Eres el constructor de la pieza «${p.id}» del MVP de MultiCampaign: historias ${p.historias} de Rasheed.
+  return `Eres el constructor de la pieza «${p.id}» del MVP de On Cue: historias ${p.historias} de Rasheed.
 ${CONTEXTO}
 ${p.brief}
 ${PROTOCOLO_RAMA(p.branch)}
@@ -430,7 +430,7 @@ LA PIEZA PEDIDA:
 ${p.brief}
 FINDINGS A RESOLVER (todos; si uno te parece equivocado, explícalo en decisions con evidencia, no lo ignores):
 ${lista}
-PROTOCOLO: estás en un worktree limpio. \`git checkout -b ${nueva} ${branch}\`; \`cd platform && pnpm install\`; resuelve; corre \`pnpm turbo run typecheck lint test\` y \`pnpm --filter @mc/web build\` en verde; actualiza backlog.ts si cambia algo; commit en español con el id de la historia; \`git checkout --detach\`.
+PROTOCOLO: estás en un worktree limpio. \`git checkout -b ${nueva} ${branch}\`; \`cd platform && pnpm install\`; resuelve; corre \`pnpm verificar\` y \`pnpm --filter @mc/web build\` en verde; actualiza backlog.ts si cambia algo; commit en español con el id de la historia; \`git checkout --detach\`.
 Devuelve el JSON del esquema con la rama nueva (${nueva}) y el SHA.`
 }
 
@@ -443,7 +443,7 @@ ${ramas}
 PROTOCOLO:
 1. \`git status\` debe estar limpio y \`git branch --show-current\` debe ser ${RAMA_INTEGRACION}. Si no, detente y explícalo en notes con ok=false.
 2. \`git merge --no-ff <rama>\` una por una. Los conflictos esperables son package.json y pnpm-lock.yaml: resuélvelos conservando ambas dependencias y regenerando el lockfile con \`pnpm install\` en platform/. Un conflicto en código de dos piezas distintas es una señal de que alguien tocó carpeta ajena: resuélvelo respetando al dueño y dilo en notes.
-3. En platform/: \`pnpm install\`, \`pnpm turbo run typecheck lint test\`, \`pnpm --filter @mc/web build\`. Si algo falla por la integración (no por una pieza), arréglalo con un commit "integración ${etiqueta}: …". Si falla por una pieza, dilo en notes con el detalle y ok=false; no parches la pieza.
+3. En platform/: \`pnpm install\`, \`pnpm verificar\`, \`pnpm --filter @mc/web build\`. Si algo falla por la integración (no por una pieza), arréglalo con un commit "integración ${etiqueta}: …". Si falla por una pieza, dilo en notes con el detalle y ok=false; no parches la pieza.
 4. Si la integración trae migraciones nuevas en platform/db/migrations: \`make db.check\` y, si pasa, \`make db.migrate\` (aplica a Supabase, que es la base de desarrollo). Si trae seeds nuevos en platform/db/seed: \`make db.seed\`. Anota en notes qué aplicaste.
 5. Revisa platform/apps/web/content/backlog.ts: cada historia integrada con su status correcto.
 ${extra || ''}
@@ -456,7 +456,7 @@ const EXTRA_VERCEL = `5b. Vercel en modo monorepo: cuando apps/web depende de pa
 const PROMPT_PREPARAR = `Prepara el repositorio para el workflow. Trabajas en el checkout principal, sin worktrees.
 1. \`git status --porcelain\` debe estar vacío. Si hay cambios sin commit, devuelve ok=false y explica en notes qué hay: no arregles nada.
 2. Rama: si estás en ${RAMA_INTEGRACION}, sigue. Si estás en main: si ${RAMA_INTEGRACION} no existe, créala (\`git checkout -b ${RAMA_INTEGRACION}\`); si existe, \`git checkout ${RAMA_INTEGRACION}\` y \`git merge main\` (si hay conflicto, ok=false). En cualquier otra rama, ok=false.
-3. En platform/: \`pnpm install\`, \`pnpm turbo run typecheck lint test\` y \`pnpm --filter @mc/web build\`. Devuelve los resultados en ci.
+3. En platform/: \`pnpm install\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\`. Devuelve los resultados en ci.
 4. Confirma que docs/fases-rasheed.md y docs/ventas-outreach.md existen (son el plan que leen los agentes).
 Devuelve el JSON del esquema con ok, el SHA actual en commit y notas.`
 
@@ -478,7 +478,7 @@ function promptCorregirIntegrado(area, findings, ronda) {
 ${CONTEXTO}
 FINDINGS (si uno te parece equivocado, explícalo en decisions con evidencia, no lo ignores):
 ${lista}
-PROTOCOLO: estás en un worktree limpio sobre ${RAMA_INTEGRACION}. \`git checkout -b ${branch}\`; \`cd platform && pnpm install\`; resuelve tocando solo los archivos de tu área (si un arreglo exige tocar otra área, hazlo mínimo y dilo en decisions); corre \`pnpm turbo run typecheck lint test\` y \`pnpm --filter @mc/web build\` en verde; commits en español; \`git checkout --detach\`.
+PROTOCOLO: estás en un worktree limpio sobre ${RAMA_INTEGRACION}. \`git checkout -b ${branch}\`; \`cd platform && pnpm install\`; resuelve tocando solo los archivos de tu área (si un arreglo exige tocar otra área, hazlo mínimo y dilo en decisions); corre \`pnpm verificar\` y \`pnpm --filter @mc/web build\` en verde; commits en español; \`git checkout --detach\`.
 Devuelve el JSON del esquema con la rama (${branch}) y el SHA.`
 }
 
