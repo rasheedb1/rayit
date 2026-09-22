@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Reel reciente: la API solo devolvió tres métricas. Lo demás es null, no cero."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/1800000000000000d09/insights\\?metric="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "views",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 10
+            }
+          ],
+          "title": "views",
+          "description": "views",
+          "id": "1800000000000000d01/insights/views/lifetime"
+        },
+        {
+          "name": "reach",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 9
+            }
+          ],
+          "title": "reach",
+          "description": "reach",
+          "id": "1800000000000000d01/insights/reach/lifetime"
+        },
+        {
+          "name": "reposts",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 0
+            }
+          ],
+          "title": "reposts",
+          "description": "reposts",
+          "id": "1800000000000000d01/insights/reposts/lifetime"
+        }
+      ]
+    }
+  }
+}

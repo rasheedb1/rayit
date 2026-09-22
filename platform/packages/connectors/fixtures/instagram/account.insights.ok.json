@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "api-reference/instagram-user/insights con metric_type=total_value y period=day para un día."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=reach"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "reach",
+          "period": "day",
+          "title": "Accounts reached",
+          "description": "",
+          "total_value": {
+            "value": 152000
+          },
+          "id": "17841400000000123/insights/reach/day"
+        },
+        {
+          "name": "views",
+          "period": "day",
+          "title": "Views",
+          "description": "",
+          "total_value": {
+            "value": 310000
+          },
+          "id": "x"
+        },
+        {
+          "name": "accounts_engaged",
+          "period": "day",
+          "title": "Accounts engaged",
+          "description": "",
+          "total_value": {
+            "value": 9800
+          },
+          "id": "x"
+        },
+        {
+          "name": "total_interactions",
+          "period": "day",
+          "title": "Total interactions",
+          "description": "",
+          "total_value": {
+            "value": 12400
+          },
+          "id": "x"
+        },
+        {
+          "name": "follows_and_unfollows",
+          "period": "day",
+          "title": "Follows and unfollows",
+          "description": "",
+          "total_value": {
+            "value": 320
+          },
+          "id": "x"
+        },
+        {
+          "name": "profile_links_taps",
+          "period": "day",
+          "title": "Profile links taps",
+          "description": "",
+          "total_value": {
+            "value": 41
+          },
+          "id": "x"
+        }
+      ],
+      "paging": {
+        "previous": "",
+        "next": ""
+      }
+    }
+  }
+}

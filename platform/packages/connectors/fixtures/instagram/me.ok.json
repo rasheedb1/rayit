@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "reference/ig-user con Instagram Login: enteros en followers_count/follows_count/media_count."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=id%2Cuser_id"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "17841400000000123",
+      "user_id": "17841400000000123",
+      "username": "laura.cocinafacil",
+      "name": "Laura · Cocina fácil",
+      "account_type": "MEDIA_CREATOR",
+      "profile_picture_url": "https://scontent.cdninstagram.com/demo/avatar.jpg",
+      "followers_count": 412000,
+      "follows_count": 310,
+      "media_count": 1205
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "code 190, subcódigo 463 = token vencido (cabecera de platforms/instagram.ts)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/media\\?"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "Error validating access token: Session has expired on Monday, 21-Sep-26 10:00:00 PDT.",
+        "type": "OAuthException",
+        "code": 190,
+        "fbtrace_id": "AbCdEfDemo",
+        "error_subcode": 463
+      }
+    }
+  }
+}
