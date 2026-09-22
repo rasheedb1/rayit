@@ -164,12 +164,21 @@ divergieron, y la salida es una migración nueva, nunca editar la vieja.
 
 ## Lo que falta
 
-- **RLS está definido pero no probado con usuarios reales.** La
-  migración 0010 crea las políticas y la función
-  `current_setting('app.workspace_id')`. Nadie ha verificado todavía que
-  un workspace no pueda leer los datos de otro. Es la primera prueba de
-  integración que hay que escribir, antes de que entren datos de
-  clientes.
+- **RLS está probado en Postgres embebido, no con usuarios reales.**
+  `packages/db/test/rls.test.ts` corre como `mc_app` sobre las
+  migraciones reales: dos workspaces, cada uno ve solo lo suyo, sin
+  workspace cero filas, y las tablas hijas sin `workspace_id`
+  (`quote_item`, `rate_card_item`, `deal_stage_history`, …) heredan el
+  aislamiento del padre (0016). `packages/db/test/schema.test.ts` exige
+  RLS en toda tabla de tenant o hija de una. Quedan por aplicar en
+  Supabase 0015 y 0016 (`make db.migrate`, en la integración de CIM-2),
+  y `membership` sigue sin RLS hasta CIM-3 (`test.todo` visible). Falta
+  la prueba con sesiones de usuario reales, que llega con CIM-3.
+- **El worker no puede arrancar contra Supabase todavía.** Necesita
+  `GRANT mc_worker TO mc_migrator` y el esquema `pgboss`
+  (`docs/propuestas/CON-2.md` §3.1), con el token de administración.
+  `make arranque` lo comprueba y dice qué falta; `make dev` degrada a
+  listar `job_definition` en vez de caerse.
 - **Backups**: Supabase hace backup diario en el plan gratuito, con
   siete días de retención y sin point-in-time recovery. Para datos de
   clientes reales eso es poco.

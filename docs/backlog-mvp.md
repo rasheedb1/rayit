@@ -413,7 +413,8 @@ lista corta, en orden de urgencia:
 | # | Qué | Para qué historia | Dónde está el detalle |
 |---|---|---|---|
 | 1 | Con el token de administración de Supabase, dos comandos: `CREATE SCHEMA pgboss` y `GRANT mc_worker TO mc_migrator`; luego `pnpm --filter @mc/worker install-schema`. | CON-2 en producción; sin esto el worker solo corre en pglite | `docs/propuestas/CON-2.md` §3.1 y §3.3 |
-| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. Nicolás borra `provisional/` y `_lib/workspace.ts` al recibirlo. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
+| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. **Entregado** (rama `rasheed/CIM-2-cliente-db-r2`): `provisional/` y `_lib/workspace.ts` ya no existen; `finanzas/_lib/db.ts` reexporta `apps/web/lib/db.ts`, y las consultas se importan por `@mc/db/queries/finanzas`. Contrato en `packages/db/README.md`. Queda para Nicolás: migrar `apps/worker/src/runner/db.ts` a `createPgDb`/`tlsFor` de `@mc/db` (CON-2b/CON-4) y, cuando toque, reemplazar la copia del bucle de migraciones de `connectors/test/helpers/pglite.ts` y `worker/src/runner/db-pglite.ts` por `@mc/db/test/pglite` o `db/lib/aplicar.mjs`. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
+| 2b | Con la integración de CIM-2 el integrador aplica `make db.migrate` (0015 y 0016). Desde 0015 `outbound_policy` tiene RLS: toda lectura suya fuera de `withWorkspace` devuelve cero filas sin aviso (ia-outreach, ui-cadencias). Desde 0016 las tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`, `deal_stage_history`, `campaign_post`, hijas de `video_analysis`, `script`, `idea`) heredan la RLS del padre. Las hijas con FK opcional (`brand_account_snapshot`, `trait_lift`, `external_post`, `api_call_log`, `api_quota_usage`) siguen sin RLS: su dueño decide la política. | Ventas, Cotizar, Campañas, CON | `packages/db/test/schema.test.ts` |
 | 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
 | 4 | Seed `0002` usando los ids fijos de la sección 0 de `0003` (workspace, creadora, conexiones, empresas, posts), o avisar para cambiarlos. `0002` debe abrir con `set_config('app.workspace_id', …)` porque RLS está en `FORCE`. | CIM-6, CIM-8 | `docs/propuestas/CIM-8.md` §1 |
 | 5 | CIM-7: Root Directory `apps/web` en Vercel, `DATABASE_URL` en el proyecto, y CI en Node 22 corriendo `test` además de migraciones. | Despliegue de FIN-1, CON-2 | `docs/propuestas/FIN-1.md` §7, `CON-2.md` §3.5 |
@@ -432,6 +433,20 @@ lista corta, en orden de urgencia:
   y Nicolás no esperó: FIN-1 usa un cliente provisional con la misma
   forma que tendrá `withWorkspace`, y el worker se conecta con `pg`
   directo. Los dos llevan `TODO(CIM-2)` y su reemplazo es mecánico.
+  **Cómo quedó (22-sep):** el provisional de FIN-1 desapareció con
+  CIM-2; el del worker (`apps/worker/src/runner/db.ts`, con su pool y
+  su `tlsFor` propios) sigue y lo migra Nicolás a `createPgDb`/`tlsFor`
+  de `@mc/db` en CON-2b/CON-4. El bucle «aplicar `*.sql` en orden» vive
+  una sola vez en `db/lib/aplicar.mjs` (lo usan `migrate.mjs`, el
+  embebido de `@mc/db` e `introspect`); las copias de
+  `connectors/test/helpers/pglite.ts` y `worker/src/runner/db-pglite.ts`
+  pueden importarlo o usar `@mc/db/test/pglite` en su siguiente cambio.
+- **CIM-1 sigue bloqueada por dos permisos de administración.** El
+  worker contra Supabase necesita `GRANT mc_worker TO mc_migrator` y el
+  esquema `pgboss` (`docs/propuestas/CON-2.md` §3.1), que solo el token
+  de administración puede dar. Mientras tanto `make dev` no se cae:
+  `apps/worker/src/dev.ts` comprueba las dos cosas, imprime los
+  comandos exactos y lista `job_definition`; `make arranque` avisa igual.
 - **Kit duplicado.** FIN-1 se construyó en paralelo a CIM-5 con la API
   del borrador (`docs/propuestas/CIM-5-kit.md`). Eso permitió avanzar,
   pero es la causa de los trece conflictos de §8.2. Regla para el

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { rateToPct } from "@mc/core";
-import { getReceivablesKpis, listInvoices, type InvoiceListRow } from "@mc/db";
+import { getReceivablesKpis, listInvoices, type InvoiceListRow } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";

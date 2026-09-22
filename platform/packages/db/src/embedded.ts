@@ -8,37 +8,35 @@
  *     producción (from-env.ts lanza).
  *
  * Lo que la hace fiel a Supabase:
- *   - Las migraciones se aplican como un rol SIN superusuario
- *     (mc_migrator_embedded), como mc_migrator en Supabase. Con el
- *     superusuario de PGlite, RLS (FORCE) se saltaría y las vistas, que
- *     corren con los privilegios de su dueño, devolverían todo.
+ *   - Las migraciones las aplica db/lib/aplicar.mjs, el mismo runner que
+ *     usa `make db.migrate`: mismo orden, misma tabla schema_migrations
+ *     con los mismos checksums.
+ *   - Se aplican como un rol SIN superusuario (mc_migrator_embedded),
+ *     como mc_migrator en Supabase. Con el superusuario de PGlite, RLS
+ *     (FORCE) se saltaría y las vistas, que corren con los privilegios
+ *     de su dueño, devolverían todo.
  *   - Al terminar, la sesión queda como mc_app, con los mismos permisos
  *     de filas que en producción y sin BYPASSRLS. Lo que pasa aquí es
  *     lo que pasa en producción.
  */
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { Db } from './client.ts';
+import { dirname } from 'node:path';
+import { applyMigrations, applySeeds, MIGRATIONS_DIR, SEED_DIR, type MigrationExec } from '../../../db/lib/aplicar.mjs';
+import type { DbOptions } from './client.ts';
+import type { PgliteDb } from './pglite.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-/** platform/db, relativo a este archivo (packages/db/src). */
-export const DB_DIR = join(HERE, '..', '..', '..', 'db');
+export { MIGRATIONS_DIR, SEED_DIR };
+/** platform/db: migraciones, seeds y certificados. */
+export const DB_DIR = dirname(MIGRATIONS_DIR);
 
 /** El rol con el que corren las consultas, igual que la web contra Supabase. */
 export const APP_ROLE = 'mc_app';
 
-async function listSql(dir: string): Promise<string[]> {
-  const files = await readdir(dir).catch(() => [] as string[]);
-  return files.filter((f) => f.endsWith('.sql')).sort();
-}
-
-export interface EmbeddedOptions {
+export interface EmbeddedOptions extends DbOptions {
   /** Cargar db/seed/*.sql después de migrar. Por defecto, sí. */
   seeds?: boolean;
 }
 
-export interface EmbeddedDb extends Db {
+export interface EmbeddedDb extends PgliteDb {
   /** SQL como superusuario, fuera de transacción; vuelve a mc_app al terminar. Solo para preparar pruebas. */
   execAsSuperuser(sql: string): Promise<void>;
 }
@@ -61,26 +59,14 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     SET ROLE mc_migrator_embedded;
   `);
 
-  const migrationsDir = join(DB_DIR, 'migrations');
-  for (const file of await listSql(migrationsDir)) {
-    const sql = await readFile(join(migrationsDir, file), 'utf8');
-    await pglite.exec('BEGIN');
-    try {
-      await pglite.exec(sql);
-      await pglite.exec('COMMIT');
-    } catch (err) {
-      await pglite.exec('ROLLBACK');
-      throw new Error(`Migración ${file} falló en Postgres embebido: ${(err as Error).message}`, { cause: err });
-    }
-  }
-
-  if (opts.seeds !== false) {
-    const seedDir = join(DB_DIR, 'seed');
-    for (const file of await listSql(seedDir)) {
-      const sql = await readFile(join(seedDir, file), 'utf8');
-      await pglite.exec(sql);
-    }
-  }
+  // exec() admite varias sentencias y devuelve un resultado por cada
+  // una; el runner solo mira las filas de la última.
+  const exec: MigrationExec = async (sql) => {
+    const out = await pglite.exec(sql);
+    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+  };
+  await applyMigrations(exec, { dir: MIGRATIONS_DIR });
+  if (opts.seeds !== false) await applySeeds(exec, { dir: SEED_DIR });
 
   // Los mismos privilegios de filas que mc_app tiene en Supabase, y la
   // sesión queda como ese rol. Los seeds fijan app.workspace_id para
@@ -96,7 +82,7 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     SET ROLE ${APP_ROLE};
   `);
 
-  const db = createPgliteDb(pglite);
+  const db = createPgliteDb(pglite, opts);
   return {
     ...db,
     execAsSuperuser: (sql) =>

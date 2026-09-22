@@ -1,21 +1,26 @@
 /**
  * Humo del worker contra la base real:
  *
- *   pnpm --filter @mc/worker humo
+ *   pnpm --filter @mc/worker humo      (= make worker.humo)
  *
- * Abre @mc/db con WORKER_DATABASE_URL, DATABASE_URL_DIRECT o
- * DATABASE_URL (en ese orden), lista job_definition y sale. No arranca
- * pg-boss ni necesita el esquema pgboss: comprueba que el paquete de
- * datos, el TLS y las credenciales están bien antes de `dev`.
+ * Abre @mc/db con DATABASE_URL (pooler :6543, mc_app: mínimo
+ * privilegio) o, si no existe, WORKER_DATABASE_URL; lista
+ * job_definition y sale. No arranca pg-boss ni hace SET ROLE, así que
+ * no necesita el modo sesión ni DATABASE_URL_DIRECT (mc_migrator, que
+ * puede alterar el esquema): comprueba que el paquete de datos, el TLS
+ * y las credenciales están bien antes de `dev`.
  *
  * job_definition es un catálogo sin RLS, por eso va por
- * withoutWorkspace. El runner de verdad está en src/index.ts.
+ * withoutWorkspace. El runner de verdad está en src/index.ts; `dev`
+ * (src/dev.ts) cae a este mismo listado cuando faltan los permisos de
+ * administración.
  */
-import { createPgDb, createPool, hostOf, jobDefinition } from '@mc/db';
+import { createPgDb, createPool } from '@mc/db';
+import { formatJobDefinitions } from './preflight.ts';
 
-const url = process.env['WORKER_DATABASE_URL'] || process.env['DATABASE_URL_DIRECT'] || process.env['DATABASE_URL'];
+const url = process.env['DATABASE_URL'] || process.env['WORKER_DATABASE_URL'];
 if (!url) {
-  process.stderr.write('Falta DATABASE_URL_DIRECT o DATABASE_URL. En local: make db.unlock\n');
+  process.stderr.write('Falta DATABASE_URL. En local: make db.unlock\n');
   process.exit(2);
 }
 
@@ -24,13 +29,7 @@ const db = createPgDb(
 );
 
 try {
-  const defs = await db.withoutWorkspace((tx) =>
-    tx.db.select().from(jobDefinition).orderBy(jobDefinition.queue, jobDefinition.id),
-  );
-  const lines = defs.map(
-    (d) => `  ${d.enabled ? '·' : '✗'} ${d.id.padEnd(26)} ${d.queue.padEnd(12)} ${(d.defaultCron ?? '—').padEnd(14)} ${d.labelEs}`,
-  );
-  process.stdout.write(`\n  ${defs.length} definiciones de jobs en ${hostOf(url)}\n\n${lines.join('\n')}\n\n`);
+  process.stdout.write(await formatJobDefinitions(db, url));
 } finally {
   await db.close();
 }

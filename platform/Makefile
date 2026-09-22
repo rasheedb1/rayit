@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
-.PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
+.PHONY: help up down logs reset migrate migrate-check seed psql web worker worker.humo media dev fmt test \
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
@@ -53,6 +53,9 @@ web: ## Solo el dashboard
 
 worker: ## Solo los trabajos en segundo plano
 	pnpm --filter @mc/worker dev
+
+worker.humo: ## Comprueba @mc/db, TLS y credenciales: lista job_definition contra Supabase, sin pg-boss
+	pnpm --filter @mc/worker humo
 
 media: ## Solo el analizador de video (Python)
 	cd apps/media && uv run uvicorn main:app --reload --port 8100

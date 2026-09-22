@@ -1,7 +1,7 @@
 /**
  * Cliente de base de @mc/db (CIM-2).
  *
- * Contrato con el resto del producto:
+ * Contrato con el resto del producto (detalle y ejemplos en README.md):
  *
  *   withWorkspace(id, fn)   Abre una transacción, fija `app.workspace_id`
  *                           con set_config(…, true) —local a la
@@ -26,13 +26,22 @@
  *                           mc_worker; mc_app no lo es a propósito, así
  *                           que la web nunca puede cruzar workspaces.
  *
+ * Toda transacción arranca con `SET LOCAL statement_timeout` e
+ * `idle_in_transaction_session_timeout` (15 s por defecto, DbOptions):
+ * contra el pooler en modo transacción, una petición colgada no puede
+ * retener una conexión sin límite.
+ *
+ * Las manijas `tx.db` y `tx.query` mueren con la transacción: usarlas
+ * después (un `return tx` accidental) lanza TransactionClosedError en
+ * vez de correr fuera de transacción y sin workspace.
+ *
  * Contra Supabase va por el pooler en modo transacción (DATABASE_URL,
  * :6543): como set_config y SET LOCAL son locales a la transacción, la
  * conexión vuelve limpia al pool.
  *
  * Los drivers (pg aquí, PGlite en pglite.ts) solo aportan un TxRunner:
  * abrir la transacción y entregar las dos manijas. La lógica de
- * workspace y de rol vive una sola vez, en createDb.
+ * workspace, rol, timeouts y cierre vive una sola vez, en createDb.
  */
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -79,6 +88,9 @@ export const CURRENT_WORKSPACE = sql<string>`current_workspace_id()`;
 
 export const WORKER_ROLE = 'mc_worker';
 
+export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
+export const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS = 15_000;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function assertWorkspaceId(workspaceId: string): void {
@@ -87,28 +99,101 @@ export function assertWorkspaceId(workspaceId: string): void {
   }
 }
 
+/** Se lanza al usar `tx.db` o `tx.query` después de que su transacción terminó. */
+export class TransactionClosedError extends Error {
+  constructor() {
+    super(
+      'Transacción cerrada: tx.db y tx.query solo valen dentro de withWorkspace / withoutWorkspace / asWorker. ' +
+        'No devuelvas tx desde fn; devuelve el resultado.',
+    );
+    this.name = 'TransactionClosedError';
+  }
+}
+
+/** Ajustes comunes a los dos drivers. */
+export interface DbOptions {
+  /** `SET LOCAL statement_timeout` al abrir cada transacción, en ms. 0 lo desactiva. */
+  statementTimeoutMs?: number;
+  /** `SET LOCAL idle_in_transaction_session_timeout`, en ms. 0 lo desactiva. */
+  idleInTransactionTimeoutMs?: number;
+}
+
 /** Lo que cada driver aporta: una transacción abierta con sus dos manijas. */
 export interface TxRunner {
   run<T>(fn: (tx: BaseTx) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
-export function createDb(runner: TxRunner): Db {
+function timeoutMs(value: number | undefined, fallback: number, name: string): number {
+  const ms = value ?? fallback;
+  if (!Number.isInteger(ms) || ms < 0) throw new Error(`${name} debe ser un entero de milisegundos ≥ 0; recibió ${String(value)}`);
+  return ms;
+}
+
+/**
+ * Envuelve las manijas para que dejen de servir al cerrar. `db` es un
+ * Proxy sobre el ORM de Drizzle: cualquier acceso tras el cierre lanza.
+ */
+function guardTx(raw: BaseTx): { tx: BaseTx; close(): void } {
+  let closed = false;
+  const assertOpen = () => {
+    if (closed) throw new TransactionClosedError();
+  };
+  const db = new Proxy(raw.db, {
+    get(target, prop) {
+      assertOpen();
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  const tx: BaseTx = {
+    db,
+    query: async (text, params) => {
+      assertOpen();
+      return raw.query(text, params);
+    },
+  };
+  return {
+    tx,
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+export function createDb(runner: TxRunner, opts: DbOptions = {}): Db {
+  const statementTimeout = timeoutMs(opts.statementTimeoutMs, DEFAULT_STATEMENT_TIMEOUT_MS, 'statementTimeoutMs');
+  const idleTimeout = timeoutMs(opts.idleInTransactionTimeoutMs, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, 'idleInTransactionTimeoutMs');
+
+  /** Una transacción con timeouts fijados y manijas que mueren al salir de fn. */
+  const run = <T>(fn: (tx: BaseTx) => Promise<T>): Promise<T> =>
+    runner.run(async (raw) => {
+      const guard = guardTx(raw);
+      try {
+        // Enteros validados arriba; SET LOCAL no admite parámetros.
+        await guard.tx.query(`SET LOCAL statement_timeout = ${statementTimeout}`);
+        await guard.tx.query(`SET LOCAL idle_in_transaction_session_timeout = ${idleTimeout}`);
+        return await fn(guard.tx);
+      } finally {
+        guard.close();
+      }
+    });
+
   return {
     async withWorkspace(workspaceId, fn) {
       // async a propósito: un workspace inválido rechaza la promesa en
       // vez de lanzar antes de devolverla, y quien llama solo maneja un camino.
       assertWorkspaceId(workspaceId);
-      return runner.run(async (tx) => {
+      return run(async (tx) => {
         await tx.query("SELECT set_config('app.workspace_id', $1, true)", [workspaceId]);
         return fn({ db: tx.db, query: tx.query, workspaceId });
       });
     },
     withoutWorkspace(fn) {
-      return runner.run(fn);
+      return run(fn);
     },
     asWorker(fn) {
-      return runner.run(async (tx) => {
+      return run(async (tx) => {
         try {
           await tx.query(`SET LOCAL ROLE ${WORKER_ROLE}`);
         } catch (err) {
@@ -130,12 +215,16 @@ export function createDb(runner: TxRunner): Db {
 // node-postgres
 // ---------------------------------------------------------------------
 
-export interface PoolOptions {
+export interface PoolOptions extends DbOptions {
   /** Conexiones máximas. Contra el pooler de Supabase basta con pocas. */
   max?: number;
   /** PGSSLROOTCERT: ruta al CA. null = decidir por el host (ver tls.ts). */
   sslRootCert?: string | null;
   applicationName?: string;
+  /** Cuánto esperar una conexión libre del pool antes de fallar. */
+  connectionTimeoutMillis?: number;
+  /** Cuánto vive una conexión ociosa antes de cerrarse. */
+  idleTimeoutMillis?: number;
 }
 
 export function createPool(connectionString: string, opts: PoolOptions = {}): pg.Pool {
@@ -144,10 +233,12 @@ export function createPool(connectionString: string, opts: PoolOptions = {}): pg
     ssl: tlsFor(connectionString, opts.sslRootCert ?? null),
     max: opts.max ?? 5,
     application_name: opts.applicationName ?? 'mc-db',
+    connectionTimeoutMillis: opts.connectionTimeoutMillis ?? 5_000,
+    idleTimeoutMillis: opts.idleTimeoutMillis ?? 30_000,
   });
 }
 
-export function createPgDb(pool: pg.Pool): Db {
+export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): Db {
   const runner: TxRunner = {
     async run(fn) {
       const client = await pool.connect();
@@ -172,5 +263,5 @@ export function createPgDb(pool: pg.Pool): Db {
     },
     close: () => pool.end(),
   };
-  return createDb(runner);
+  return createDb(runner, opts);
 }

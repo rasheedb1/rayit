@@ -84,8 +84,8 @@ export const STORIES: readonly Story[] = [
     title: "Monorepo listo",
     desc: "apps/web con Next.js + TypeScript, packages/db con Drizzle, apps/worker con pg-boss, turbo corriendo dev, typecheck, lint y test. Un package.json por paquete.",
     done: "make dev levanta los tres procesos y pnpm turbo run typecheck lint pasa en CI.",
-    status: "hecho",
-    note: "Cerrada el 21 de septiembre: pnpm turbo run typecheck lint test cubre web, db y worker (14 tareas en verde) y pnpm --filter @mc/web build pasa. apps/worker trae `humo`, que abre @mc/db y lista job_definition contra Supabase sin pg-boss; el runner real es de CON-2. lib/workspace/current.ts es la costura del workspace hasta CIM-3 (DEMO_WORKSPACE_ID en .env.example). El proceso de media (Python) sigue fuera de turbo.",
+    status: "bloqueada",
+    note: "Bloqueada el 22 de septiembre, tras la ronda 2: falta GRANT mc_worker TO mc_migrator en Supabase (supabase-admin.sh, docs/propuestas/CON-2.md §3.1) y el esquema pgboss; media fuera de turbo hasta MED-1. Lo que sí está: pnpm turbo run typecheck lint test cubre web, db y worker y pnpm --filter @mc/web build pasa; `pnpm --filter @mc/worker dev` (src/dev.ts) comprueba la membresía y el esquema antes de arrancar y, si faltan, imprime los comandos exactos y las definiciones de jobs y sale con 0 (make dev no se cae en bucle); `make worker.humo` lista job_definition por DATABASE_URL; make arranque dice qué falta. lib/workspace/current.ts (DEMO_WORKSPACE_ID) es la única costura del workspace: lib/db.ts la usa y Finanzas la reexporta. Vuelve a «hecho» cuando `pnpm --filter @mc/worker dev` arranque el runner contra Supabase.",
   },
   {
     id: "CIM-2", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-1"],
@@ -93,7 +93,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cada consulta corre en una transacción que fija app.workspace_id con set_config(…, true), contra el pooler en modo transacción. Esquema Drizzle generado desde las migraciones para las tablas del MVP.",
     done: "Un test crea dos workspaces, inserta un deal en cada uno y comprueba que ninguno ve el del otro. Sin workspace_id fijado, la consulta devuelve cero filas.",
     status: "hecho",
-    note: "Cerrada el 21 de septiembre: packages/db con Drizzle (45 tablas y 8 vistas curadas desde las migraciones; test/schema.test.ts las compara columna a columna con la base), client.ts con withWorkspace, withoutWorkspace (catálogos) y asWorker (SET LOCAL ROLE mc_worker), TLS con la CA de db/certs, y Postgres embebido que corre como mc_app. La prueba de RLS pasa en pglite sin red. Hallazgo: outbound_policy no tenía RLS; migración 0015 lista y verificada con make db.check, pendiente de aplicar en Supabase (make db.migrate). Lo provisional de FIN-1 quedó absorbido; queries/finanzas.ts no cambió salvo la importación.",
+    note: "Cerrada el 21 de septiembre; ronda 2 el 22. packages/db con Drizzle (45 tablas y 8 vistas curadas desde las migraciones; test/schema.test.ts las compara columna a columna con la base y exige RLS en toda tabla de tenant o hija de una), client.ts con withWorkspace, withoutWorkspace (catálogos) y asWorker (SET LOCAL ROLE mc_worker), timeouts por transacción, manijas que lanzan TransactionClosedError tras el cierre, TLS con la CA de db/certs, y Postgres embebido que corre como mc_app con el mismo runner de migraciones que Supabase (db/lib/aplicar.mjs). README.md con los cinco usos; los operadores de Drizzle salen de @mc/db y las consultas SIEMPRE por @mc/db/queries/<módulo>. Migraciones pendientes de aplicar en Supabase por el integrador (make db.migrate): 0015 (RLS en outbound_policy: desde entonces exige withWorkspace, aviso a los dueños de Ventas) y 0016 (RLS heredada en quote_item, rate_card_item, deal_stage_history, campaign_post y las hijas de video_analysis/script/idea: desde B se leían los precios de A). membership sigue sin RLS hasta CIM-3 (test.todo visible). apps/worker/src/runner/db.ts conserva su cliente propio; Nicolás lo migra a createPgDb/tlsFor de @mc/db en CON-2b/CON-4, y connectors/worker pueden adoptar @mc/db/test/pglite en vez de su copia del bucle de migraciones.",
   },
   {
     id: "CIM-3", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-2"],
@@ -101,6 +101,7 @@ export const STORIES: readonly Story[] = [
     desc: "Supabase Auth con correo y enlace mágico. Al entrar se crea app_user y membership; si no hay workspace, se crea uno de tipo creador con su creator_profile. Cambio de workspace en la barra.",
     done: "Se entra con un correo nuevo y aparece un workspace vacío con nombre; se entra con uno del seed y aparece la creadora ficticia.",
     status: "pendiente",
+    note: "Debe traer la migración que cierra membership: ENABLE + FORCE RLS con USING (user_id = current_user_id() OR workspace_id = current_workspace_id()) y una función current_user_id() que lea app.user_id fijado por la capa de sesión (hoy packages/db/test/schema.test.ts lo lleva como test.todo). Y reemplazar el cuerpo de apps/web/lib/workspace/current.ts (DEMO_WORKSPACE_ID) por el workspace de la sesión: es el único sitio.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],

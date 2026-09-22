@@ -32,8 +32,16 @@ en Supabase.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
-`pgboss` y membresía de `mc_worker`). Hasta entonces falla al arrancar
-con un mensaje que dice exactamente qué falta; no arranca a medias.
+`pgboss` y membresía de `mc_worker`). Hasta entonces, `make worker` y
+`make dev` (que corren `src/dev.ts`) comprueban esas dos cosas antes de
+arrancar y, si faltan, imprimen el comando exacto, listan `job_definition`
+y salen con 0 en vez de caerse en bucle; `start` (producción) no degrada.
+`make arranque` hace la misma comprobación. Para probar solo que
+`@mc/db`, el TLS y las credenciales están bien, sin pg-boss:
+
+```bash
+make worker.humo                        # = pnpm --filter @mc/worker humo: lista job_definition por DATABASE_URL
+```
 
 ## Variables de entorno (nombres, no valores)
 

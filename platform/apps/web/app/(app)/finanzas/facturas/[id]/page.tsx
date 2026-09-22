@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { rateToPct, INVOICE_STATUS_LABEL_ES } from "@mc/core";
-import { getInvoice } from "@mc/db";
+import { getInvoice } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";

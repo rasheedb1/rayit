@@ -11,7 +11,7 @@ import {
   rateToPct,
   type InvoiceTotals,
 } from "@mc/core";
-import type { CampaignOption, CompanyOption } from "@mc/db";
+import type { CampaignOption, CompanyOption } from "@mc/db/queries/finanzas";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";

@@ -5,7 +5,13 @@ import { defineConfig } from "vitest/config";
 // compila el JSX con el runtime automático, igual que Next.
 export default defineConfig({
   esbuild: { jsx: "automatic" },
-  resolve: { alias: { "@": fileURLToPath(new URL("./", import.meta.url)) } },
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./", import.meta.url)),
+      // `server-only` lanza fuera de un Server Component; en Node se vacía.
+      "server-only": fileURLToPath(new URL("./lib/testing/server-only-stub.ts", import.meta.url)),
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],

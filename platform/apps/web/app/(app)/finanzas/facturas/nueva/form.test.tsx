@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CampaignOption, CompanyOption } from "@mc/db";
+import type { CampaignOption, CompanyOption } from "@mc/db/queries/finanzas";
 
 // La Server Action se sustituye: aquí solo importa cómo reacciona el
 // formulario a lo que devuelve (errores por campo) y qué envía.

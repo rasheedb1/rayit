@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { addDays } from "@mc/core";
-import { listCampaignsForInvoice, listCompanies } from "@mc/db";
+import { listCampaignsForInvoice, listCompanies } from "@mc/db/queries/finanzas";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { withWorkspace } from "../../_lib/db";

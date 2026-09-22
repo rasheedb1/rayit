@@ -11,8 +11,8 @@ import {
   listInvoices,
   transitionInvoice,
   InvoiceNotFound,
-  assertWorkspaceId,
-} from '../src/index.ts';
+} from '../src/queries/finanzas.ts';
+import { assertWorkspaceId } from '../src/index.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
