@@ -4,10 +4,13 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { pctToRate, type InvoiceStatus } from "@mc/core";
+// UUID_RE e isUuid salen de @mc/db: había una copia aquí y otra en
+// lib/workspace/current.ts, y tres definiciones de lo mismo terminan
+// divergiendo (una acepta mayúsculas, otra no).
+import { isUuid, UUID_RE } from "@mc/db";
 import { createInvoice, createInvoiceFromCampaign, transitionInvoice } from "@mc/db/queries/finanzas";
 import { withWorkspace } from "../_lib/db";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
 const PCT_RE = /^\d{1,3}([.,]\d{1,2})?$/;
@@ -94,7 +97,7 @@ const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];
  * Si la máquina de estados rechaza, vuelve al detalle con el mensaje.
  */
 export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promise<void> {
-  if (!UUID_RE.test(id)) redirect("/finanzas");
+  if (!isUuid(id)) redirect("/finanzas");
   if (!TRANSICIONES_UI.includes(to)) {
     redirect(`/finanzas/facturas/${id}?error=${encodeURIComponent("Esa acción todavía no está disponible.")}`);
   }
@@ -116,7 +119,7 @@ export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promi
  * Importarla desde app/(app)/finanzas (índice), no desde aquí.
  */
 export async function facturarCampana(campaignId: string): Promise<void> {
-  if (!UUID_RE.test(campaignId)) redirect("/finanzas");
+  if (!isUuid(campaignId)) redirect("/finanzas");
   let id: string;
   try {
     const invoice = await withWorkspace((tx) => createInvoiceFromCampaign(tx, campaignId));

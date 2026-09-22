@@ -7,7 +7,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/oncue
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
-        arranque
+        verificar arranque
 
 help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_.-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

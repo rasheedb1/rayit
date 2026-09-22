@@ -19,10 +19,10 @@
  * parámetro suelto ni desde un componente.
  */
 
+import { isUuid } from "@mc/db";
+
 /** Workspace de la creadora ficticia del seed (db/seed/0003, docs/propuestas/CIM-8.md). */
 export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -32,7 +32,7 @@ let warned = false;
 export function getCurrentWorkspaceId(env: Env = process.env, warn: (message: string) => void = console.warn): string {
   const id = env.DEMO_WORKSPACE_ID?.trim();
   if (id) {
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       throw new Error(`DEMO_WORKSPACE_ID no es un UUID: "${id}". Debe ser el id de una fila de workspace.`);
     }
     return id;

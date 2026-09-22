@@ -10,13 +10,27 @@ import { OwnerAvatar, OwnerName } from "@/components/owner";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Progress, StatsList } from "@/components/progress";
 import { SprintBoard } from "@/components/sprint-board";
-import { formatterFor } from "@/lib/format";
-import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { formatDate } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Plan" };
-// Lee la fila del workspace para la marca de publicación (su locale y
-// su zona horaria): nada de esto se prerenderiza.
-export const dynamic = "force-dynamic";
+/**
+ * Esta pantalla NO toca la base, y por eso se prerenderiza.
+ *
+ * Antes abría una transacción para leer `workspace` y quedarse con el
+ * locale y la zona horaria… para formatear UNA fecha en el pie. El
+ * precio era que la portada del producto dependía de la base: con un
+ * DEMO_WORKSPACE_ID que no corresponde a ninguna fila —lo normal en un
+ * despliegue recién hecho—, getWorkspace lanza y la portada respondía
+ * 500. Una página cuyo contenido entero sale de content/backlog.ts no
+ * tiene por qué caerse cuando Supabase no contesta.
+ *
+ * La marca de publicación tampoco era del workspace: este plan se
+ * publica con cada merge a main, así que es la fecha de la compilación
+ * y se presenta con los valores por defecto (lib/format.ts), no con los
+ * de un inquilino que aquí no existe.
+ */
+export const dynamic = "force-static";
+const PUBLICADO = formatDate(new Date().toISOString(), "long");
 
 function ModuleCard({ m }: { m: ModuleDef }) {
   const st = stats(m.prefix ? storiesFor(m.prefix) : []);
@@ -43,13 +57,8 @@ function ModuleCard({ m }: { m: ModuleDef }) {
   );
 }
 
-export default async function PlanPage() {
+export default function PlanPage() {
   const all = stats(STORIES);
-  // La fecha de publicación se presentaba en es-CO y America/Bogota
-  // fijos, que es justo lo que el producto no puede tener escrito en el
-  // código: son columnas del workspace (locale, timezone) desde 0001.
-  const f = formatterFor(await getCurrentWorkspace());
-  const published = f.dateTime(new Date().toISOString());
 
   return (
     <>
@@ -145,7 +154,7 @@ export default async function PlanPage() {
       </section>
 
       <footer className="mt-12 border-t border-line pt-4 text-xs text-fg-3">
-        Publicado el {published}. El estado vive en apps/web/content/backlog.ts; el plan completo, en docs/backlog-mvp.md.
+        Publicado el {PUBLICADO}. El estado vive en apps/web/content/backlog.ts; el plan completo, en docs/backlog-mvp.md.
       </footer>
     </>
   );
