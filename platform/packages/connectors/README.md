@@ -12,10 +12,19 @@ CON-5 los guarda. Lo único que escribe en la base es `api_call_log`
 
 ```
 src/types.ts                 PlatformId, OAuthTokens (CON-2)
-src/secret-store.ts          SecretStore: InMemory y Env (CON-2; el real es CON-3)
+src/secret-store.ts          SecretStore: InMemory y Env (CON-2, desarrollo)
+src/encrypted-secret-store.ts   EncryptedSecretStore: el real (CON-3), connection_secret cifrado; newSecretRef('tiktok') → 'enc:tiktok:<uuid>'
+src/crypto/master-key.ts     TOKEN_ENCRYPTION_KEY (32 bytes en base64 o hex) y llavero por versión (_V2, _CURRENT)
+src/crypto/token-cipher.ts   AES-256-GCM con HKDF (info on-cue/token/<versión>), IV por escritura, AAD = secret_ref, rotación
+src/crypto/sealed-cookie.ts  sello HMAC-SHA256 con TTL para la cookie del flujo OAuth
+src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login):
+                             authorizationUrl, exchangeCode, identity, refresh; loadOAuthApps(env) solo con nombres de variables
 src/token-refresher.ts       TokenRefresher, TokenRefreshError, kindFromHttp (CON-2)
 src/redact.ts                redactSecrets: lo usan el logger del worker y este paquete
-src/platforms/{tiktok,instagram,youtube}.ts   refreshers (sin implementar hasta CON-3/CON-8)
+src/platforms/tiktok.ts      createTikTokRefresher(core, { login, business }): elige la app por el prefijo del secret_ref
+src/platforms/instagram.ts   createInstagramRefresher(core, app)
+src/platforms/youtube.ts     refresher sin implementar hasta CON-8
+src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
 
 src/http/errors.ts           PlatformApiError { kind: transient | permanent | auth | quota } y el clasificador único
 src/http/retry.ts            backoff exponencial con jitter, Retry-After, sleep cancelable
@@ -63,6 +72,46 @@ const core = new HttpCore({ callLog: new PostgresCallLogSink(tx), quota: new Quo
 const brand = await new InstagramClient(core, { connectionId: conn.id, tokens }).businessDiscovery('cafealma');
 ```
 
+## OAuth y el token en reposo (CON-3)
+
+```
+POST /conexiones/oauth/<proveedor>/start   →  state (32 bytes) + cookie sellada  →  authorizationUrl(cfg, { state })
+GET  …/callback?code&state                 →  exchangeCode → identity → set() cifrado + social_connection + data_consent
+oauth.refresh (worker)                     →  ctx.secrets.get(ref) → refresher.refresh(tokens, { secretRef, connectionId }) → set()
+```
+
+- **Proveedor ≠ plataforma.** TikTok son dos apps sobre `platform_id
+  'tiktok'`: `tiktok` (Login Kit, la del sandbox) y `tiktok-business`
+  (Accounts API, tras CON-9). La ref lo dice: `enc:tiktok:<uuid>` o
+  `enc:tiktok-business:<uuid>`; `createTikTokRefresher` elige por ella.
+- **Instagram Login** no tiene refresh token: se guarda el de larga
+  duración (60 días) como `accessToken`, `refreshToken` vacío, y
+  `instagramRefresh` pide otro mientras queden más de 24 h; vencido es
+  definitivo (`refresh_expired`).
+- **Sin PKCE en web**: ninguna de las tres plataformas lo documenta para
+  web; la cookie deja el campo `verifier` para cuando alguna lo admita.
+- **`EncryptedSecretStore`** recibe `{ query(text, params) }`: en la web
+  el `WorkspaceTx` (RLS pone el workspace en el INSERT con
+  `current_workspace_id()`); en el worker `ctx.db` (`mc_worker`, la fila
+  ya existe y solo se reemplaza). `get()` devuelve `null` solo si la fila
+  no existe; un fallo de descifrado lanza `TokenCipherError` y el job lo
+  trata como problema nuestro sin tocar la cuenta.
+- **Rotación de clave**: `TOKEN_ENCRYPTION_KEY_V2` + `TOKEN_ENCRYPTION_KEY_CURRENT=v2`;
+  `store.rotate(ref)` reescribe lo que esté en v1. Lo viejo se sigue
+  leyendo mientras la v1 esté en el llavero.
+- **Errores**: `oauth/errors.ts` convierte el `PlatformApiError` del
+  núcleo en `TokenRefreshError` (`auth`/`permanent` → definitivo;
+  `transient`/`quota` → transitorio, `quota` con code `rate_limit`).
+- Los endpoints de token aceptan cuerpo en formulario (`form`) y pasan
+  `secrets` extra (client_secret, code, refresh_token) para que
+  `safeErrorMessage` los borre de cualquier mensaje. Meta exige
+  `client_secret` en la query de `ig_exchange_token`; nuestro
+  `api_call_log` no guarda URLs y `FixtureFetch` la tapa al grabar.
+
+Fixtures: `fixtures/<plataforma>/oauth.*.json` (`ok`, `invalid`/`invalid_grant`,
+`rate_limit`, `server_error_then_ok`), con `meta.source = 'docs'`; los de
+`tiktok-accounts` se confirman con CON-9.
+
 ## La regla: el token nunca sale de OAuthTokens
 
 - El núcleo pone la credencial en una cabecera (`Authorization: Bearer`
@@ -75,8 +124,15 @@ const brand = await new InstagramClient(core, { connectionId: conn.id, tokens })
   cabeceras de autenticación en `calls`; `scripts/record.ts` no guarda
   cabeceras de petición.
 - Pruebas: `test/http-core.test.ts` («401 → … el token no aparece en el
-  error ni en el log») y `apps/worker/test/connectors.test.ts` (ni en
-  `job_run`, ni en `api_call_log`, ni en los logs del worker).
+  error ni en el log»), `apps/worker/test/connectors.test.ts` (ni en
+  `job_run`, ni en `api_call_log`, ni en los logs del worker),
+  `test/encrypted-secret-store.test.ts` (lo guardado no contiene el token;
+  otro workspace no lo lee), y las pruebas R4 de CON-3
+  (`apps/web/app/(app)/conexiones/_lib/oauth-handlers.test.ts` y
+  `apps/worker/test/oauth-refresh-real.test.ts`): tras un callback y una
+  renovación, `dumpTextColumns` recorre TODAS las columnas de texto, jsonb,
+  arreglo y bytea de `public` (y `pgboss`) y ningún token, code ni secreto
+  aparece.
 
 ## Taxonomía de errores y qué hace cada consumidor
 
@@ -179,7 +235,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 73 pruebas, < 2 s, sin red (guard en cada archivo)
+pnpm --filter @mc/connectors test        # 115 pruebas, < 3 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

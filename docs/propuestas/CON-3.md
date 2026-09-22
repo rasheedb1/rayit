@@ -278,3 +278,192 @@ apps/worker/
 - `deauthorize callback` y `data deletion request` de Meta: **CON-4**
   (URLs a registrar en la app; la lógica es la misma que desconectar).
 - Cliente Drizzle, sesión y workspace real: **CIM-2**, **CIM-3**.
+
+---
+
+## 1. La migración `0015_connection_secret.sql` (para revisar y aplicar)
+
+Está en `db/migrations/0015_connection_secret.sql`, pasa `make db.check`
+(15 migraciones, 89 tablas) y **no se aplicó** en Supabase. Contenido:
+
+```sql
+CREATE TABLE connection_secret (
+  secret_ref    text PRIMARY KEY CHECK (secret_ref LIKE 'enc:%'),
+  workspace_id  uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  ciphertext    bytea NOT NULL,
+  iv            bytea NOT NULL CHECK (octet_length(iv) = 12),
+  tag           bytea NOT NULL CHECK (octet_length(tag) = 16),
+  key_version   text NOT NULL DEFAULT 'v1' CHECK (key_version ~ '^v[0-9]+$'),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ON connection_secret (workspace_id);
+CREATE TRIGGER connection_secret_updated BEFORE UPDATE ON connection_secret
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+ALTER TABLE connection_secret ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connection_secret FORCE ROW LEVEL SECURITY;
+CREATE POLICY connection_secret_ws_isolation ON connection_secret
+  USING (workspace_id = current_workspace_id());
+```
+
+- Privilegios: comprobado en Supabase (solo lectura) que `mc_migrator`
+  tiene `DEFAULT PRIVILEGES` para `mc_app` (`arwd`) y para `mc_worker`
+  (0014), así que la tabla nace con los mismos permisos de fila que las
+  demás; no hace falta `GRANT`.
+- La clave no está en la base: sin `TOKEN_ENCRYPTION_KEY` la tabla es
+  ruido. AAD = `secret_ref`: un ciphertext copiado a otra fila no descifra.
+- Cuando la apliques: `make db.migrate`. Nada más; la web y el worker ya
+  la usan.
+
+## 2. Lo que hay que registrar en cada app (redirect URIs y scopes)
+
+La ruta del callback es `/conexiones/oauth/<proveedor>/callback`. Si no
+se fija la variable `*_REDIRECT_URI`, la web la deriva de `APP_URL`.
+**Ojo:** `.env.example` trae `…/api/oauth/tiktok/callback`; esa ruta no
+existe. Propongo actualizar `.env.example` (no lo toqué: es archivo
+compartido) con estos valores.
+
+| App | Redirect URIs a registrar (exactas) | Scopes |
+|---|---|---|
+| TikTok Login Kit (`developers.tiktok.com`) | `https://on-cue-web.vercel.app/conexiones/oauth/tiktok/callback` · `https://<vista-previa>.vercel.app/conexiones/oauth/tiktok/callback` (una por vista previa que se quiera probar; TikTok solo admite https, absolutas, sin query ni `#`, hasta 10) · **local no es posible** (`http://localhost` no es https): en desarrollo se prueba con un túnel https o directamente en la vista previa | `user.info.basic`, `user.info.profile`, `user.info.stats`, `video.list` |
+| TikTok Accounts API (`business-api.tiktok.com`, tras CON-9) | `…/conexiones/oauth/tiktok-business/callback` (mismos hosts) | `user.info.basic`, `user.info.username`, `user.info.stats`, `user.insights`, `video.list`, `video.insights` |
+| Meta · Instagram Login (`developers.facebook.com`, app tipo Business, producto «Instagram» → «API setup with Instagram login» → Business login) | `https://on-cue-web.vercel.app/conexiones/oauth/instagram/callback` · vistas previas · `http://localhost:3000/conexiones/oauth/instagram/callback` (Meta sí acepta localhost en desarrollo) | `instagram_business_basic`, `instagram_business_manage_insights` |
+
+Meta pide además una **Deauthorize callback URL** y una **Data deletion
+request URL**; hoy pueden apuntar a `https://on-cue-web.vercel.app/conexiones`
+(la lógica real es CON-4, §0.6).
+
+## 3. Variables que necesito en el vault y en Vercel (solo nombres)
+
+| Variable | Dónde | Notas |
+|---|---|---|
+| `TOKEN_ENCRYPTION_KEY` | Vercel (producción y vista previa) · Railway/Fly | Ya está en el vault (44 caracteres, base64). La web la necesita para cifrar el primer token y sellar la cookie; el worker, para descifrar. **Sin ella la web responde 503 en `/conexiones/oauth/*` y el worker no arranca.** |
+| `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET` | vault → Vercel y worker | De la app de Login Kit, cuando me des acceso (§8.3 fila 8 del backlog). |
+| `TIKTOK_LOGIN_REDIRECT_URI` | Vercel | Opcional si `APP_URL` está; en vista previa conviene fijarla porque `APP_URL` cambia. |
+| `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `TIKTOK_BUSINESS_REDIRECT_URI` | vault → Vercel y worker | Tras CON-9. Sin `TIKTOK_BUSINESS_APP_ID` el botón «Activar analítica avanzada» no aparece. |
+| `META_APP_ID`, `META_APP_SECRET`, `META_REDIRECT_URI` | vault → Vercel y worker | De la app de Meta con Instagram Login. |
+| `APP_URL` | Vercel | `https://on-cue-web.vercel.app` en producción. |
+| `OAUTH_REFRESH_MARGIN_MINUTES_INSTAGRAM` | worker, opcional | 7 días por defecto (§0.2 · 9). |
+
+Ninguna dependencia nueva: `zod` ya estaba en la web; `node:crypto` es
+de Node. `apps/web` ahora depende de `@mc/connectors` (workspace) y el
+lockfile solo suma ese enlace en el importer de `apps/web`.
+
+## 4. Lo provisional y qué lo reemplaza
+
+| Qué | Dónde | Cuándo se va |
+|---|---|---|
+| `getCurrentWorkspaceId()` (workspace del seed o `MC_WORKSPACE_ID`) | `apps/web/app/(app)/conexiones/_lib/workspace.ts` | **CIM-3**: `lib/workspace/` de la sesión. Se borra junto con el de Finanzas. |
+| `getDefaultCreatorId(tx)` (el `creator_profile` del workspace, filtrado por RLS) | `packages/db/src/queries/conexiones.ts` | **CIM-3**: el creador de la sesión. Es una función; cambia quién la llama. |
+| `getDb()` compartido con Finanzas por `globalThis.__mcFinanzasDb` | `apps/web/app/(app)/conexiones/_lib/db.ts` | **CIM-2**: `packages/db/src/client.ts`. Las consultas solo dependen de `WorkspaceTx`. |
+| `EncryptedSecretStore` y `PostgresCallLogSink` reciben `{ query(text, params) }` | `packages/connectors` | **CIM-2**: el ejecutor será `tx.execute` o equivalente. |
+| Redirect URIs en `.env.example` con `/api/oauth/...` | `platform/.env.example` | Cambiar a `/conexiones/oauth/<proveedor>/callback` (§2). |
+
+## 5. Prueba en vivo con una cuenta sandbox (paso a paso)
+
+Lo que falta para dar CON-3 por «hecha» es solo esto. Con los accesos de
+la fila 8 de §8.3:
+
+**TikTok (Login Kit, sandbox).**
+
+1. En `developers.tiktok.com`, en la app: crear un **Sandbox**, añadir
+   mi cuenta de TikTok como *target user* (tarda hasta una hora en
+   aparecer), activar Login Kit con los cuatro scopes de §2 y registrar
+   la redirect URI de producción o de la vista previa que vaya a usar.
+2. Meter al vault `TIKTOK_LOGIN_CLIENT_KEY` y `TIKTOK_LOGIN_CLIENT_SECRET`
+   del sandbox; ponerlas en Vercel junto con `TOKEN_ENCRYPTION_KEY` y
+   `APP_URL`; desplegar (`./scripts/vercel.sh run deploy --cwd "$PWD" --yes`
+   desde `platform/`, o vista previa sin `--prod`). Aplicar `0015`.
+3. Abrir `/conexiones`, pulsar «Conectar TikTok», leer el diálogo,
+   marcar la casilla, «Continuar a TikTok». Debo ver la pantalla de
+   autorización de TikTok con la app del sandbox y los cuatro permisos.
+4. Autorizar. Debo volver a `/conexiones?conectada=<uuid>` con el aviso
+   verde «Cuenta de TikTok (@mi_handle) conectada» y la fila en la tabla:
+   Activa, conectada hoy, «Sin sincronizar todavía», permisos listados.
+5. Confirmar en la base (solo lectura):
+   ```bash
+   make db.sql Q="select id, platform_id, external_account_id, handle, status, scopes, access_expires_at, refresh_expires_at, secret_ref, connected_at from social_connection where platform_id = 'tiktok' and deleted_at is null order by connected_at desc limit 3"
+   make db.sql Q="select secret_ref, key_version, octet_length(ciphertext) as bytes, workspace_id, created_at from connection_secret order by created_at desc limit 3"
+   make db.sql Q="select purpose, granted, policy_version, evidence - 'textShown' as evidence, granted_at from data_consent order by granted_at desc limit 3"
+   make db.sql Q="select endpoint, http_status, ok, error_code, called_at from api_call_log order by id desc limit 5"
+   ```
+   Lo esperado: `scopes = {user.info.basic,user.info.profile,user.info.stats,video.list}`,
+   `access_expires_at` a 24 h, `refresh_expires_at` a 365 días,
+   `secret_ref` con la forma `enc:tiktok:<uuid>`, una fila en
+   `connection_secret` con `key_version = 'v1'`, un `data_consent`
+   `analytics` con `ip`, `userAgent`, `scopesGranted` y `at`, y en
+   `api_call_log` `oauth.token` y `tiktok.user.info` en 200. **Ningún
+   `select` muestra un token**: `social_connection` solo tiene la ref y
+   `connection_secret` bytes.
+6. Cancelar en TikTok en otro intento → `/conexiones?error=cancelada`.
+7. Renovación: `make worker` con `TOKEN_ENCRYPTION_KEY` y las variables
+   de TikTok en el entorno; encolar `oauth.refresh` para esa conexión
+   (`boss.send('oauth.refresh', { connectionId })` desde `--demo` no
+   sirve: usa el `select` de arriba y espera el tick de 15 min o baja
+   `access_expires_at` a mano con `ADMIN=1` en una base de prueba, nunca
+   en producción). Lo esperado: `job_run` `ok` con `renewed = [id]`,
+   `access_expires_at` movido 24 h y `connection_secret.updated_at`
+   nuevo. Después, `pnpm --filter @mc/connectors record -- --platform
+   tiktok --ref enc:…` no aplica todavía (el script lee `env:`; queda
+   para cuando se regraben fixtures).
+
+**Instagram (app en modo desarrollo).**
+
+1. En el App Dashboard: app tipo Business → producto Instagram → «API
+   setup with Instagram login» → Business login: redirect URIs de §2,
+   deauthorize y data deletion URLs, y añadir mi cuenta profesional
+   (business o creator) como **Instagram Tester** en App Roles; aceptar
+   la invitación en Instagram → Configuración → Apps y sitios web.
+2. Vault y Vercel: `META_APP_ID`, `META_APP_SECRET` (y `META_REDIRECT_URI`
+   si no hay `APP_URL`).
+3. «Conectar Instagram» → autorización de Instagram con los dos permisos
+   → vuelta a `/conexiones?conectada=<uuid>`. Confirmar con los mismos
+   `select`: `scopes = {instagram_business_basic,instagram_business_manage_insights}`,
+   `access_expires_at` a ~60 días, `refresh_expires_at` nulo, `secret_ref`
+   `enc:instagram:<uuid>`, dos `data_consent` (`analytics`,
+   `audience_demographics`), `api_call_log` con `oauth.token`,
+   `oauth.long_lived` e `instagram.me`.
+4. Si la llamada `oauth.long_lived` o la renovación fallan con `190`
+   pese a un token recién emitido, es el punto abierto de §0.5 (token en
+   cabecera vs. query): avísame y lo paso a query en esas dos llamadas.
+
+## 6. Verificación (22 de septiembre de 2026)
+
+- `pnpm --filter @mc/connectors typecheck lint test`: **115 pruebas**
+  (20 de OAuth, 8 del cifrado, 3 del sello, 7 del almacén en pglite),
+  < 3 s, `withoutNetwork()` en cada archivo.
+- `pnpm --filter @mc/db typecheck test`: **20 pruebas** en Postgres
+  embebido con el seed 0003 (6 de conexiones, con otro workspace en cada
+  operación).
+- `pnpm --filter @mc/worker typecheck lint test`: **27 pruebas** (~26 s),
+  incluida `oauth-refresh-real.test.ts` con el almacén cifrado y los
+  refreshers reales sobre fixtures, más el volcado de `public` y `pgboss`.
+- `pnpm --filter @mc/web typecheck lint test build`: **94 pruebas** (9 de
+  los handlers OAuth contra pglite con el seed, incluida la prueba clave)
+  y `next build` en verde con las tres rutas nuevas dinámicas.
+- `make db.check`: 15 migraciones, 89 tablas, 10 vistas.
+- En dev (`next dev` con una clave aleatoria y una app de TikTok ficticia):
+  `/conexiones` lista las tres conexiones del seed con «datos hasta el»
+  por red; `POST …/tiktok/start` sin casilla → 303 `?error=consentimiento`;
+  con casilla → 303 a `www.tiktok.com/v2/auth/authorize/` con `state` y
+  `Set-Cookie: oc_oauth=…; Path=/conexiones/oauth; HttpOnly; SameSite=Lax; Max-Age=600`;
+  `GET …/start` → 405; callback con `state` distinto → 400 sin tocar la
+  base; sin cookie → 400; `?error=access_denied` → 303 `?error=cancelada`
+  y la página muestra «Cancelaste la autorización…»; `…/instagram/start`
+  sin app → 503 «faltan META_APP_ID, META_APP_SECRET».
+- Worker en pglite con `TOKEN_ENCRYPTION_KEY`: arranca como `mc_worker`
+  con el almacén cifrado y avisa por cada app OAuth sin configurar; sin
+  la clave, sale con código 1 y «Falta TOKEN_ENCRYPTION_KEY…».
+
+## 7. Pendiente de ti
+
+- [ ] Aplicar `0015_connection_secret.sql` (`make db.migrate`).
+- [ ] Acceso de desarrollador a la app de TikTok (Login Kit, con sandbox)
+      y a la app de Meta (Instagram Login), o las credenciales al vault
+      con los nombres de §3.
+- [ ] Registrar las redirect URIs y los scopes de §2 en cada app.
+- [ ] `TOKEN_ENCRYPTION_KEY` y `APP_URL` en Vercel (producción y vista
+      previa) y en el entorno del worker (CIM-7).
+- [ ] Actualizar `.env.example` con las rutas de §2 (o darme el visto
+      bueno para hacerlo yo).
+- [ ] CIM-2 y CIM-3 como en FIN-1 (§4).

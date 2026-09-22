@@ -163,7 +163,8 @@ export const STORIES: readonly Story[] = [
     title: "OAuth de TikTok e Instagram en sandbox",
     desc: "Callback, cifrado del token con TOKEN_ENCRYPTION_KEY, secret_ref en social_connection, data_consent con la evidencia. Necesita acceso de desarrollador a las apps de TikTok y Meta (lo da Rasheed).",
     done: "Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro en ninguna tabla.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, pendiente de aplicar), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §8.3 fila 8); el paso a paso está en docs/propuestas/CON-3.md §5.",
   },
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],

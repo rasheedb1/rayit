@@ -48,12 +48,15 @@ con un mensaje que dice exactamente qué falta; no arranca a medias.
 | `WORKER_STOP_TIMEOUT_S` | Cuánto espera a los jobs activos al recibir SIGTERM. | `30` |
 | `WORKER_BOSS_SCHEMA` | Esquema de pg-boss. | `pgboss` |
 | `WORKER_JOB_POOL_MAX` / `WORKER_BOSS_POOL_MAX` | Tamaño de los dos pools. | `8` / `4` |
-| `OAUTH_REFRESH_MARGIN_MINUTES` | Con cuánta anticipación renueva `oauth.refresh`. | `30` |
-| `SECRET_STORE` | `env` (lee `env:NOMBRE` de variables) o `memory`. El real llega con CON-3. | `env` |
-| `TOKEN_REFRESHER` | `real` (TikTok/Instagram/YouTube: sin implementar hasta CON-3/CON-8) o `fake`. | `real` |
+| `OAUTH_REFRESH_MARGIN_MINUTES` | Con cuánta anticipación renueva `oauth.refresh` (tokens de horas: TikTok, YouTube). | `30` |
+| `OAUTH_REFRESH_MARGIN_MINUTES_INSTAGRAM` | Margen para Instagram, cuyo token dura 60 días y Meta solo renueva con más de 24 h de vida. | `10080` (7 días) |
+| `SECRET_STORE` | `encrypted` (connection_secret cifrado con `TOKEN_ENCRYPTION_KEY`, el real desde CON-3), `env` (lee `env:NOMBRE`) o `memory`. | `encrypted` |
+| `TOKEN_ENCRYPTION_KEY` | 32 bytes en base64 (la del vault). Sin ella el worker no arranca; `_V2` y `_CURRENT` para rotar. | obligatoria |
+| `TOKEN_REFRESHER` | `real` (TikTok e Instagram sobre el cliente de CON-1; YouTube llega con CON-8) o `fake`. | `real` |
+| `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `META_APP_ID`, `META_APP_SECRET` | Las apps con las que se renueva cada token. Sin una app, sus conexiones fallan como `not_configured` (transitorio, sin reintento inmediato) y el arranque lo avisa. | — |
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
-| `TOKEN_ENCRYPTION_KEY`, `TIKTOK_*`, `META_*`, `GOOGLE_*` | Las usarán los refreshers reales (CON-3, CON-8). Hoy no se leen. | — |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
 `make worker` carga `platform/.env.local` y `platform/.env` con
 `--env-file-if-exists`; no hay dependencia de dotenv.
@@ -140,10 +143,13 @@ se guardan en `pgboss.schedule` con la clave `cron`: reiniciar el worker
 no los duplica, y si cambia `default_cron` se actualiza al arrancar.
 
 En `oauth.refresh`, un fallo **nuestro** (el SecretStore no tiene la
-credencial, o no pudo escribirla) nunca cambia el estado de la cuenta
-del creador: queda como transitorio, ruidoso en el log, y la conexión
-sigue `active`. Solo la plataforma (`invalid_grant`, revocado) o un
-refresh token vencido la pasan a `needs_reauth`.
+credencial, no pudo escribirla o no pudo descifrarla) nunca cambia el
+estado de la cuenta del creador: queda como transitorio, ruidoso en el
+log, y la conexión sigue `active`. Solo la plataforma (`invalid_grant`,
+Meta `190`, revocado) o un refresh token vencido (TikTok) o un token de
+larga duración vencido (Instagram, `refresh_expired`) la pasan a
+`needs_reauth`. El job pasa `connectionId` y `secretRef` al refresher:
+con `enc:tiktok-business:…` renueva contra la Accounts API.
 
 ## Cómo leer job_run
 
@@ -182,13 +188,13 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~35 s
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~40 s; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
-Las de integración aplican las 14 migraciones reales (la `0014` da los
-privilegios a `mc_worker`) y corren como `mc_worker`: si un privilegio
+Las de integración aplican las 15 migraciones reales (la `0014` da los
+privilegios a `mc_worker`; la `0015` crea `connection_secret`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
