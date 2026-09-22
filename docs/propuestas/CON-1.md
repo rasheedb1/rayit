@@ -201,3 +201,124 @@ y los clientes nuevos van en archivos aparte.
 - Publicar contenido (Content Posting API): fase 2.
 
 ---
+
+## 1. `platform.limits`: el JSON para el seed 0001 (Rasheed)
+
+`platform.limits` está vacío desde 0002 y el comentario de la tabla
+dice que los límites se versionan sin desplegar código. El worker ya lo
+lee al arrancar (`loadPlatformLimits`, `packages/connectors/src/factory.ts`)
+y lo aplica sobre la tabla por defecto de `quota/limits.ts`; lo que no
+se entiende se ignora con un `warn` y nunca frena el arranque. Una
+llave por **familia** de cuota, porque TikTok tiene dos apps y YouTube
+dos cuotas bajo el mismo `platform_id`:
+
+```sql
+UPDATE platform SET limits = '{
+  "tiktok": {
+    "rates": [
+      { "scope": "connection", "per_endpoint": true, "window_s": 60, "max": 40,
+        "source": "docs/arquitectura.md", "checked_at": "2026-09-22" },
+      { "scope": "app", "per_endpoint": true, "window_s": 60, "max": 600,
+        "source": "developers.tiktok.com/doc/tiktok-api-v2-rate-limit", "checked_at": "2026-08-04" }
+    ],
+    "daily": null
+  },
+  "tiktok-accounts": {
+    "rates": [
+      { "scope": "connection", "per_endpoint": true, "window_s": 60, "max": 40,
+        "source": "docs/arquitectura.md (pendiente CON-9)", "checked_at": "2026-09-22" }
+    ],
+    "daily": null
+  }
+}'::jsonb WHERE id = 'tiktok';
+
+UPDATE platform SET limits = '{
+  "instagram": {
+    "rates": [
+      { "scope": "connection", "per_endpoint": false, "window_s": 3600, "max": 200,
+        "source": "developers.facebook.com/docs/graph-api/overview/rate-limiting", "checked_at": "2026-09-22" }
+    ],
+    "daily": null
+  }
+}'::jsonb WHERE id = 'instagram';
+
+UPDATE platform SET limits = '{
+  "youtube": {
+    "rates": [],
+    "daily": { "scope": "app", "units": 10000,
+               "source": "developers.google.com/youtube/v3/determine_quota_cost", "checked_at": "2026-09-15" },
+    "unit_cost": { "youtube.channels.list": 1, "youtube.playlist_items.list": 1, "youtube.videos.list": 1 }
+  },
+  "youtube-search": {
+    "rates": [],
+    "daily": { "scope": "app", "units": 100,
+               "source": "developers.google.com/youtube/v3/determine_quota_cost", "checked_at": "2026-09-15" },
+    "unit_cost": { "youtube.search.list": 1 }
+  },
+  "youtube-analytics": {
+    "rates": [],
+    "daily": { "scope": "app", "units": null,
+               "source": "developers.google.com/youtube/analytics/reference/reports/query", "checked_at": "2026-09-22" }
+  }
+}'::jsonb WHERE id = 'youtube';
+```
+
+Forma: `rates[]` con `scope` (`connection` | `app`), `per_endpoint`,
+`window_s`, `max`, `source`, `checked_at`, `note`; `daily` con `scope`,
+`units` (`null` = existe pero no se conoce), `source`, `checked_at`;
+`unit_cost` por endpoint lógico. Prueba de la fusión:
+`packages/connectors/test/limits.test.ts`. Mientras no esté, el worker
+usa exactamente los mismos valores desde el código.
+
+## 2. Lo provisional y cuándo se va
+
+| Qué | Dónde | Cuándo se va |
+|---|---|---|
+| `PostgresCallLogSink` y `PostgresQuotaUsageStore` reciben un ejecutor mínimo `{ query(text, params) }`. En el worker es `ctx.db` (`mc_worker`, `BYPASSRLS`, sin `workspace_id` porque `api_call_log` y `api_quota_usage` no lo tienen: son tablas de operación, ligadas a `connection_id`). | `packages/connectors/src/log/postgres.ts`, `quota/postgres.ts` | `TODO(CIM-2)`: cuando `packages/db` exponga el cliente real, el ejecutor será `tx.execute` o equivalente. Solo cambia quien construye el sink (`apps/worker/src/runner/run.ts`). |
+| `loadPlatformLimits` hace `SELECT id, limits FROM platform` con `ctx.db`. | `packages/connectors/src/factory.ts` | Igual: pasa al cliente de CIM-2. |
+| Los fixtures salen de la documentación (`meta.source = 'docs'`). | `packages/connectors/fixtures/` | Cuando CON-3 deje una cuenta de prueba: `pnpm --filter @mc/connectors record`. Las variables (`TIKTOK_DEMO`, `INSTAGRAM_DEMO`, `YOUTUBE_DEMO`, `TIKTOK_BUSINESS_DEMO`) las mete Nicolás al vault; llevan el JSON de `OAuthTokens`. |
+| `videoInsights` de la Accounts API usa `business/video/list` con `filters.video_ids` y pide `video_view_retention` y `engagement_likes`. | `packages/connectors/src/platforms/tiktok-accounts.ts` | CON-9: al tener acceso al portal con `video.insights`, se confirma o se corrige el endpoint y se regraba `business.video.insights.ok.json`. |
+| `business_discovery` se asume igual en `graph.instagram.com` que en la variante con Facebook Login. | `platforms/instagram-api.ts` | CON-3, con la app de prueba de Meta. |
+
+Nada de esto toca `db/migrations/`, `db/seed/0001_catalog.sql`,
+`packages/db/src/client.ts` ni `.github/workflows/`.
+
+## 3. Lo que necesito de ti
+
+- [ ] El `UPDATE` de §1 en `db/seed/0001_catalog.sql` (o en el seed que
+      corresponda). No urge: el código trae los mismos valores.
+- [ ] CON-9: el número de caso del «Accounts API Access Application
+      Form» de TikTok (obligatorio desde el 20-mar-2026 para el scope
+      TikTok Accounts) y acceso al portal `business-api.tiktok.com` con
+      la app, para confirmar `video_view_retention` / `engagement_likes`.
+- [ ] Meta: el App Review de `instagram_business_manage_insights` y
+      `business_discovery` para la app con Instagram Login.
+- [ ] Google: el número de cuota de la YouTube Analytics API del
+      proyecto (Consola de Google Cloud → APIs → YouTube Analytics API →
+      Cuotas), para la fila `youtube-analytics` de §1.
+- [ ] CI (`.github/workflows/ci.yml`): `pnpm --filter @mc/connectors
+      lint test` corre sin red y sin servicios; las pruebas de
+      `api_quota_usage` usan pglite como las del worker.
+
+## 4. Dependencias (para el daily)
+
+Ninguna nueva. `packages/connectors` agrega como `devDependencies`
+`eslint`, `@typescript-eslint/parser`, `@typescript-eslint/eslint-plugin`
+y `@electric-sql/pglite`, todas ya en `pnpm-lock.yaml` por `apps/worker`
+y la raíz, en las mismas versiones. El lockfile solo suma el importer
+de `packages/connectors`, que ya está en git.
+
+## 5. Verificación (22 de septiembre de 2026)
+
+- `pnpm --filter @mc/connectors typecheck lint test`: 73 pruebas, < 2 s,
+  con `withoutNetwork()` en cada archivo y `guard.attempts === 0`.
+- `pnpm --filter @mc/worker typecheck lint test`: 25 pruebas sobre
+  pglite (~35 s); la de CON-2 «ningún token en job_run ni pgboss.job»
+  sigue en verde con `oauth.refresh` registrando por el sink.
+- `pnpm --filter @mc/web test` (85) y `next build` en verde tras tocar
+  `content/backlog.ts`.
+- `node --experimental-strip-types src/index.ts --demo` en
+  `apps/worker`: `rol comprobado currentUser=mc_worker bypassRls=true`,
+  `oauth.refresh` renueva una conexión y pasa otra a `needs_reauth`, y
+  `demo: api_call_log` muestra las dos filas (`oauth.refresh`, 400
+  `invalid_grant` y 200) sin token.
