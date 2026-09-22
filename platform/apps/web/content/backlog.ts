@@ -153,7 +153,8 @@ export const STORIES: readonly Story[] = [
     title: "Worker arrancado y oauth.refresh",
     desc: "pg-boss sobre la base, job_definition cargado, job_run registrando duración y errores. El job oauth.refresh renueva tokens antes de que venzan. Cada job vive en la carpeta de su módulo.",
     done: "make worker toma un job de la cola, lo registra, y un token con access_expires_at cercano se renueva solo.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Verificado contra Postgres embebido con las migraciones reales; la migración 0014 (GRANTs de mc_worker) ya está aplicada en Supabase. Falta que Rasheed corra dos comandos con el token de administración (esquema pgboss y GRANT mc_worker TO mc_migrator), ver docs/propuestas/CON-2.md. Los refreshers reales llegan con CON-3 y CON-8.",
   },
   {
     id: "CON-3", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1", "CIM-3"],

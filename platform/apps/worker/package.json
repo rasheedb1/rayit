@@ -1,0 +1,29 @@
+{
+  "name": "@mc/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "install-schema": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --install",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test --experimental-strip-types --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "@mc/connectors": "workspace:*",
+    "pg": "^8.23.0",
+    "pg-boss": "^12.33.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.0"
+  }
+}
