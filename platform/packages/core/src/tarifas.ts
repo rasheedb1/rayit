@@ -1,0 +1,355 @@
+/**
+ * Tarifas: el rango que se le cobra a una marca por un entregable, y la
+ * explicación de cómo salió.
+ *
+ * Nada de aquí toca la base ni la red, y nada de aquí escribe texto de
+ * interfaz: entran números y salen números, con una lista de PASOS
+ * tipados que la pantalla traduce con su messages.ts. Es la misma regla
+ * de facturacion.ts —el dinero es un string decimal, nunca un number— y
+ * la misma razón: el rango que ve el creador mientras edita lo calcula
+ * esta función en el navegador, y el que se guarda lo calcula esta
+ * función en el servidor.
+ *
+ * La fórmula, en una línea:
+ *
+ *     precio = (views ÷ 1000) × CPM × cantidad × (1 + Σ modificadores)
+ *
+ * Por qué un RANGO y no un precio: el CPM de referencia
+ * (niche_cpm_benchmark) es un rango de mercado por nicho, país y red.
+ * Un precio único invita a que la marca lo negocie hacia abajo; un
+ * rango dice dónde empieza la conversación y dónde termina. Es lo que
+ * hacen los tarifarios de Passionfroot y los media kits de Beacons.
+ *
+ * Por qué los modificadores son un PORCENTAJE que se suma antes de
+ * multiplicar: derechos de uso y exclusividad no son entregables
+ * aparte, son condiciones sobre el mismo trabajo. Sumar los porcentajes
+ * y multiplicar una vez (y no encadenar multiplicaciones) hace que el
+ * orden en que se activan no cambie el resultado, que es lo que espera
+ * cualquiera que los marque y los desmarque en la pantalla.
+ *
+ * Decisiones que se ven en la explicación, no en el código:
+ *   - Las views son por PIEZA. Un paquete de tres historias multiplica
+ *     por cantidad al final, no antes, para que el paso «base» se pueda
+ *     leer como «lo que vale una».
+ *   - El redondeo es al centavo, mitad hacia arriba, una sola vez por
+ *     multiplicación (mulRateHalfUp), igual que en facturación.
+ *   - No se redondea a cifras «bonitas» (50.000, 100.000): un tarifario
+ *     que redondea esconde que cambiar el CPM cambió el precio, y ese
+ *     es justo el número que el creador está aprendiendo a mover.
+ */
+import { type PlatformId } from './campanas.ts';
+import {
+  addDecimal, compareDecimal, fromCents, mulRateHalfUp, normalizeDecimal, subDecimal, toCents,
+  type Decimal,
+} from './facturacion.ts';
+
+export type { PlatformId };
+
+// ---------------------------------------------------------------------
+// Vocabulario
+// ---------------------------------------------------------------------
+
+/** De dónde salieron las views promedio de un entregable. */
+export type FuenteViews = 'baseline' | 'manual';
+
+/**
+ * Los modificadores del MVP, con su porcentaje por defecto. El id es lo
+ * que se guarda en rate_card_item.adjustments y en la cotización; la
+ * etiqueta en español vive en el messages.ts de la pantalla, porque es
+ * texto de interfaz y este paquete no tiene idioma.
+ */
+export const MODIFICADORES_POR_DEFECTO = [
+  { id: 'derechos_uso_30d', pct: '0.35' },
+  { id: 'exclusividad_30d', pct: '0.50' },
+  { id: 'uso_en_pauta_90d', pct: '0.60' },
+  { id: 'entrega_express', pct: '0.25' },
+] as const;
+
+export type ModificadorId = (typeof MODIFICADORES_POR_DEFECTO)[number]['id'] | (string & {});
+
+export interface Modificador {
+  id: ModificadorId;
+  /** Fracción, no porcentaje: '0.35' es +35 %. */
+  pct: string;
+}
+
+/**
+ * Un entregable del tarifario, tal como entra al cálculo. Las views son
+ * por pieza y ya vienen resueltas (línea base o a mano): quién las
+ * eligió es cosa de la consulta, no de la fórmula.
+ */
+export interface EntradaTarifa {
+  /** 'tiktok' | 'reel' | 'historias' | 'youtube' | … Es el id del entregable, no el de la red. */
+  deliverable: string;
+  platformId: PlatformId;
+  /** Cuántas piezas incluye (3 historias). Entero ≥ 1. */
+  cantidad: number;
+  /** Views promedio de UNA pieza. Entero ≥ 0. */
+  views: number;
+  viewsSource: FuenteViews;
+  /** Con cuántos videos se calculó la mediana, si vino de la línea base. */
+  viewsSample?: number;
+  /** A qué edad se midió la mediana (24, 72, 168, 720). */
+  viewsCutHours?: number;
+  /** CPM de referencia del nicho, país y red. Decimales, no number. */
+  cpmLow: Decimal;
+  cpmHigh: Decimal;
+  /** 'manual' | 'deals' | 'informe-externo': de dónde salió el CPM. */
+  cpmSource: string;
+  nicheSlug: string;
+  /** ISO-3166 alfa-2, del workspace. */
+  country: string;
+  /** Los modificadores activos para ESTE entregable. */
+  modificadores?: readonly Modificador[];
+  /** Descuento del paquete, como fracción ('0.10' es −10 %). */
+  descuentoPct?: string;
+}
+
+/**
+ * Un paso del «Cómo se calcula», al estilo del desglose de comisiones
+ * de Stripe: cada línea trae el número y de dónde salió, y la pantalla
+ * le pone las palabras.
+ */
+export type PasoCalculo =
+  | { tipo: 'views'; views: number; cantidad: number; fuente: FuenteViews; muestra?: number; corteHoras?: number }
+  | { tipo: 'cpm'; cpmLow: Decimal; cpmHigh: Decimal; fuente: string; nicheSlug: string; country: string; platformId: PlatformId }
+  | { tipo: 'base'; low: Decimal; high: Decimal }
+  | { tipo: 'cantidad'; cantidad: number; low: Decimal; high: Decimal }
+  | { tipo: 'modificador'; id: ModificadorId; pct: string; low: Decimal; high: Decimal }
+  | { tipo: 'descuento'; pct: string; low: Decimal; high: Decimal }
+  | { tipo: 'total'; low: Decimal; high: Decimal };
+
+export interface ItemTarifa {
+  deliverable: string;
+  platformId: PlatformId;
+  cantidad: number;
+  views: number;
+  viewsSource: FuenteViews;
+  cpmLow: Decimal;
+  cpmHigh: Decimal;
+  /** Suma de los porcentajes aplicados, como fracción ('0.85'). */
+  modificadorTotalPct: string;
+  priceLow: Decimal;
+  priceHigh: Decimal;
+  /** El desglose completo, en el orden en que se lee. */
+  pasos: PasoCalculo[];
+}
+
+export class TarifaError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'TarifaError';
+    this.code = code;
+  }
+}
+
+// ---------------------------------------------------------------------
+// La fórmula
+// ---------------------------------------------------------------------
+
+const FRACCION_RE = /^\d+(\.\d{1,6})?$/;
+
+/**
+ * (views ÷ 1000) × cpm, al centavo y mitad hacia arriba.
+ *
+ * No se divide primero: `views × cpm` en centavos y luego ÷ 1000 con
+ * redondeo, para que 999 views por un CPM de 45.000 den 44.955 y no
+ * cero coma algo convertido en ruido.
+ */
+export function precioPorViews(cpm: Decimal, views: number): Decimal {
+  if (!Number.isInteger(views) || views < 0) {
+    throw new TarifaError('ViewsInvalidas', `Las views tienen que ser un entero ≥ 0: ${views}.`);
+  }
+  const cents = toCents(cpm);
+  if (cents < 0n) throw new TarifaError('CpmInvalido', `El CPM no puede ser negativo: "${cpm}".`);
+  const producto = cents * BigInt(views);
+  // División entera con redondeo mitad hacia arriba.
+  return fromCents((producto + 500n) / 1000n);
+}
+
+/**
+ * Suma de fracciones: '0.35' + '0.50' = '0.85'. Seis decimales, como
+ * mulRateHalfUp.
+ *
+ * El tope de 5 (500 %) no es capricho: el error que de verdad ocurre es
+ * pasar '35' donde iba '0.35', y sin tope eso multiplica el precio por
+ * 36 en silencio.
+ */
+export const PCT_MAXIMO = 5;
+
+export function sumarPct(pcts: readonly string[]): string {
+  let total = 0n;
+  for (const p of pcts) {
+    const s = p.trim();
+    if (!FRACCION_RE.test(s)) throw new TarifaError('PctInvalido', `Porcentaje inválido: "${p}". Se espera una fracción como "0.35".`);
+    const [i = '0', f = ''] = s.split('.');
+    if (Number(i) > PCT_MAXIMO) {
+      throw new TarifaError('PctFueraDeRango', `Porcentaje fuera de rango: "${p}". Es una fracción (0,35 es +35 %), con tope ${PCT_MAXIMO}.`);
+    }
+    total += BigInt(i) * 1_000_000n + BigInt((f + '000000').slice(0, 6));
+  }
+  const entero = total / 1_000_000n;
+  const frac = (total % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
+  return frac ? `${entero}.${frac}` : `${entero}`;
+}
+
+/** Calcula el rango de un entregable y deja el desglose que lo explica. */
+export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
+  const { cantidad, views, platformId } = entrada;
+  if (!Number.isInteger(cantidad) || cantidad < 1) {
+    throw new TarifaError('CantidadInvalida', `La cantidad tiene que ser un entero ≥ 1: ${cantidad}.`);
+  }
+  const cpmLow = normalizeDecimal(entrada.cpmLow);
+  const cpmHigh = normalizeDecimal(entrada.cpmHigh);
+  if (compareDecimal(cpmLow, cpmHigh) > 0) {
+    throw new TarifaError('RangoCpmInvertido', `El CPM bajo (${cpmLow}) no puede ser mayor que el alto (${cpmHigh}).`);
+  }
+
+  const pasos: PasoCalculo[] = [
+    {
+      tipo: 'views',
+      views,
+      cantidad,
+      fuente: entrada.viewsSource,
+      ...(entrada.viewsSample === undefined ? {} : { muestra: entrada.viewsSample }),
+      ...(entrada.viewsCutHours === undefined ? {} : { corteHoras: entrada.viewsCutHours }),
+    },
+    {
+      tipo: 'cpm',
+      cpmLow,
+      cpmHigh,
+      fuente: entrada.cpmSource,
+      nicheSlug: entrada.nicheSlug,
+      country: entrada.country,
+      platformId,
+    },
+  ];
+
+  // 1 · La pieza suelta.
+  let low = precioPorViews(cpmLow, views);
+  let high = precioPorViews(cpmHigh, views);
+  pasos.push({ tipo: 'base', low, high });
+
+  // 2 · Por cuántas piezas.
+  if (cantidad > 1) {
+    low = multiplicarPorEntero(low, cantidad);
+    high = multiplicarPorEntero(high, cantidad);
+    pasos.push({ tipo: 'cantidad', cantidad, low, high });
+  }
+
+  // 3 · Los modificadores, todos sobre la misma base: sumar los
+  // porcentajes y multiplicar una vez. Cada paso muestra lo que APORTA,
+  // que es lo que el creador quiere ver al marcar la casilla.
+  const modificadores = entrada.modificadores ?? [];
+  const baseLow = low;
+  const baseHigh = high;
+  for (const m of modificadores) {
+    normalizarPct(m.pct); // valida rango y formato antes de multiplicar
+    const aporteLow = mulRateHalfUp(baseLow, m.pct);
+    const aporteHigh = mulRateHalfUp(baseHigh, m.pct);
+    pasos.push({ tipo: 'modificador', id: m.id, pct: normalizarPct(m.pct), low: aporteLow, high: aporteHigh });
+    low = addDecimal(low, aporteLow);
+    high = addDecimal(high, aporteHigh);
+  }
+  const modificadorTotalPct = sumarPct(modificadores.map((m) => m.pct));
+
+  // 4 · El descuento del paquete, al final y sobre el total.
+  if (entrada.descuentoPct && entrada.descuentoPct !== '0') {
+    if (compareDecimal(normalizarPct(entrada.descuentoPct), '1') > 0) {
+      throw new TarifaError('DescuentoInvalido', `Un descuento no puede pasar del 100 %: "${entrada.descuentoPct}".`);
+    }
+    const descLow = mulRateHalfUp(low, entrada.descuentoPct);
+    const descHigh = mulRateHalfUp(high, entrada.descuentoPct);
+    pasos.push({ tipo: 'descuento', pct: normalizarPct(entrada.descuentoPct), low: descLow, high: descHigh });
+    low = subDecimal(low, descLow);
+    high = subDecimal(high, descHigh);
+  }
+
+  pasos.push({ tipo: 'total', low, high });
+
+  return {
+    deliverable: entrada.deliverable,
+    platformId,
+    cantidad,
+    views,
+    viewsSource: entrada.viewsSource,
+    cpmLow,
+    cpmHigh,
+    modificadorTotalPct,
+    priceLow: low,
+    priceHigh: high,
+    pasos,
+  };
+}
+
+/** El tarifario completo: un ítem por entregable, en el orden que llegan. */
+export function calcularTarifario(entradas: readonly EntradaTarifa[]): ItemTarifa[] {
+  return entradas.map(calcularItem);
+}
+
+function multiplicarPorEntero(valor: Decimal, veces: number): Decimal {
+  return fromCents(toCents(valor) * BigInt(veces));
+}
+
+function normalizarPct(pct: string): string {
+  return sumarPct([pct]);
+}
+
+// ---------------------------------------------------------------------
+// Totales de una cotización
+// ---------------------------------------------------------------------
+
+export interface LineaCotizacion {
+  /** Entero ≥ 1. */
+  quantity: number;
+  /** Precio por unidad, decimal. */
+  unitPrice: Decimal;
+}
+
+export interface TotalesCotizacion {
+  subtotal: Decimal;
+  discount: Decimal;
+  tax: Decimal;
+  total: Decimal;
+  /** Lo que se guarda en cada quote_item.total, en el mismo orden que entró. */
+  lineTotals: Decimal[];
+}
+
+/**
+ * subtotal = Σ (cantidad × precio) · base = subtotal − descuento ·
+ * impuesto = base × tasa · total = base + impuesto.
+ *
+ * El descuento se resta ANTES del impuesto porque el impuesto se
+ * declara sobre lo que se factura, no sobre lo que se pidió. Es la
+ * misma cadena que después reproduce la factura (FIN-1), y por eso
+ * `total` de la cotización se puede comparar con `total` de la factura
+ * sin traducir nada.
+ */
+export function calcularTotalesCotizacion(input: {
+  items: readonly LineaCotizacion[];
+  discount?: Decimal;
+  /** Fracción: '0.19' es 19 %. */
+  taxRate?: string;
+}): TotalesCotizacion {
+  const lineTotals: Decimal[] = [];
+  let subtotalCents = 0n;
+  for (const item of input.items) {
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+      throw new TarifaError('CantidadInvalida', `La cantidad de un ítem tiene que ser un entero ≥ 1: ${item.quantity}.`);
+    }
+    const linea = toCents(item.unitPrice) * BigInt(item.quantity);
+    if (linea < 0n) throw new TarifaError('PrecioInvalido', `El precio de un ítem no puede ser negativo: "${item.unitPrice}".`);
+    lineTotals.push(fromCents(linea));
+    subtotalCents += linea;
+  }
+  const subtotal = fromCents(subtotalCents);
+  const discount = normalizeDecimal(input.discount ?? '0');
+  if (toCents(discount) < 0n) throw new TarifaError('DescuentoInvalido', 'El descuento no puede ser negativo.');
+  if (compareDecimal(discount, subtotal) > 0) {
+    throw new TarifaError('DescuentoMayorQueSubtotal', 'El descuento no puede ser mayor que el subtotal.');
+  }
+  const base = subDecimal(subtotal, discount);
+  const tax = input.taxRate ? mulRateHalfUp(base, input.taxRate) : '0.00';
+  return { subtotal, discount, tax, total: addDecimal(base, tax), lineTotals };
+}
