@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Menos de 100 seguidores: Meta responde con error 100 (forma supuesta hasta grabarla). CON-7 explica por qué no hay demografía."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_demographics.*breakdown=age"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "(#100) Not enough followers to show demographics for this account.",
+        "type": "OAuthException",
+        "code": 100,
+        "fbtrace_id": "AbCdEfDemo",
+        "error_subcode": 2108006
+      }
+    }
+  }
+}

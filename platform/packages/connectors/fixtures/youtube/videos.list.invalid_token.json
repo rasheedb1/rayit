@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "401 authError: credenciales inválidas → auth."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/videos\\?part=snippet%2CcontentDetails%2Cstatistics%2Cstatus&id="
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": 401,
+        "message": "Invalid Credentials",
+        "errors": [
+          {
+            "message": "Invalid Credentials",
+            "domain": "global",
+            "reason": "authError"
+          }
+        ],
+        "status": "UNAUTHENTICATED"
+      }
+    }
+  }
+}

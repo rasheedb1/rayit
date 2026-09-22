@@ -1,4 +1,4 @@
-# MultiCampaign
+# On Cue
 
 Plataforma para que creadores y agencias midan, creen, vendan y cobren.
 Red de cuentas propias en TikTok, Instagram, Facebook y YouTube, con
@@ -170,7 +170,8 @@ make vercel.deploy PROD=1   # producción
 
 | Comando | Qué hace |
 |---|---|
-| `make vercel.link` | Crea o adopta el proyecto y escribe el enlace local. **Uno por clon.** |
+| `make vercel.link` | Adopta el proyecto (`NOMBRE=on-cue-web`) y escribe el enlace local con sus settings. **Uno por clon.** |
+| `make vercel.dir DIR=.` | Qué directorio se sube. Es `.` (platform entero) porque el proyecto tiene Root Directory `apps/web` |
 | `make vercel.status` | Qué hay guardado y cómo está tu clon, sin revelar el token |
 | `make vercel.check` | Pregunta a Vercel: qué cuenta, qué equipo, cuándo expira |
 | `make vercel.deploy` | Despliega `apps/web`. `PROD=1` para producción |
@@ -198,7 +199,7 @@ quedan.
 - **Si el token se escribe fuera del vault, rótalo.** `make vercel.set`,
   y revoca el viejo en vercel.com → Account Settings → Tokens.
 - **`apps/web` ya es la app real** (Next.js 15, Tailwind 4, Geist) y está
-  publicada en https://multicampaign-web.vercel.app. Hoy muestra el plan
+  publicada en https://on-cue-web.vercel.app. Hoy muestra el plan
   de construcción de cada módulo y el estado de sus historias
   (`apps/web/content/backlog.ts`); cada módulo se reemplaza por su
   pantalla real cuando llega. No hay integración con GitHub todavía: se

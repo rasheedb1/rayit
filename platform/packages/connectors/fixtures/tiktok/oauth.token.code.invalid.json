@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "code usado o vencido: forma { error, error_description, log_id } de la misma página." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "authorization_code" } },
+  "response": { "status": 400, "body": { "error": "invalid_grant", "error_description": "Authorization code is invalid or expired.", "log_id": "2026092201" } }
+}

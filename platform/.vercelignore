@@ -1,0 +1,25 @@
+# Lo que NO sube al build de Vercel. El proyecto tiene Root Directory =
+# apps/web, así que se despliega desde platform/ (la raíz del workspace)
+# para que pnpm vea el lockfile; esto deja fuera lo que el dashboard no
+# necesita y, sobre todo, el vault y las migraciones.
+/secrets/
+# Solo lo de la raíz: `db/` a secas también excluía packages/db (que la
+# web importa) y db/certs, la CA de Supabase que @mc/db necesita en runtime.
+/db/migrations/
+/db/seed/
+/db/scripts/
+/db/*.mjs
+/scripts/
+docs/
+docker-compose.yml
+Makefile
+apps/worker/
+apps/media/
+# packages/connectors NO se excluye desde CON-3: la web lo importa (OAuth,
+# cifrado y configuración de las apps). Sus fixtures pesan poco y sus
+# pruebas caen por **/test/.
+**/test/
+**/*.test.ts
+**/*.test.tsx
+node_modules/
+.next/

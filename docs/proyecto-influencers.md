@@ -16,13 +16,13 @@ El núcleo común es **análisis de datos de video**:
 - **Interno**: las cuentas del cliente (métricas propias, audiencia, qué le funciona).
 - **Externo**: tendencias de nichos específicos para traer recomendaciones.
 
-Relación con MultiCampaign: comparte los conectores a las APIs, el esquema de métricas y el dashboard. MultiCampaign es la red propia de cuentas; este proyecto es el producto para terceros. Todo lo verificado en [investigacion-apis.md](investigacion-apis.md) aplica aquí (auditorías, límites, demografía por video solo en YouTube, TikTok personal vs. Business).
+Relación con On Cue: comparte los conectores a las APIs, el esquema de métricas y el dashboard. On Cue es la red propia de cuentas; este proyecto es el producto para terceros. Todo lo verificado en [investigacion-apis.md](investigacion-apis.md) aplica aquí (auditorías, límites, demografía por video solo en YouTube, TikTok personal vs. Business).
 
 **Hilo que une las ideas (16 sep, segunda ronda)**: cotizar, conseguir marcas, cobrar, manejar gastos y flujo de caja son un solo problema. El producto puede ser el **back office comercial y financiero del influencer**, y el que demuestra a la marca lo que la campaña produjo (sección 8). Eso refuerza la vía del money flow en la sección 3.
 
 ## 1b. Mock del producto
 
-Publicado el 16 sep 2026 como Artifact: [dashboard/creadores-mock.html](../dashboard/creadores-mock.html) → https://claude.ai/artifact/Gw6u4k7MorX6fRHBFPBhCW (actualizar ese Artifact, no crear otro). Nueve módulos con datos simulados: Resumen, Mis videos, Tendencias del nicho, Ideas y guiones, Cotizar, Campañas, Ventas (radar + CRM, sustituye a Marcas desde la quinta ronda), Finanzas y Vista agencia. Usa la misma identidad visual de MultiCampaign (paleta validada, acento violeta, Archivo).
+Publicado el 16 sep 2026 como Artifact: [dashboard/creadores-mock.html](../dashboard/creadores-mock.html) → https://claude.ai/artifact/Gw6u4k7MorX6fRHBFPBhCW (actualizar ese Artifact, no crear otro). Nueve módulos con datos simulados: Resumen, Mis videos, Tendencias del nicho, Ideas y guiones, Cotizar, Campañas, Ventas (radar + CRM, sustituye a Marcas desde la quinta ronda), Finanzas y Vista agencia. Usa la misma identidad visual de On Cue (paleta validada, acento violeta, Archivo).
 
 Versión local con diseño minimal tipo Vercel/Notion (blanco, negro, grises, Geist y Geist Mono, bordes finos, sin sombras, con botón de tema): [dashboard/local/](../dashboard/local/). Se sirve con `python3 -m http.server 4173 --bind 127.0.0.1` desde esa carpeta y se abre en http://localhost:4173. Comparte el mismo JavaScript que el Artifact; solo cambia la hoja de estilos. Se regenera con `python3 dashboard/build-local.py` después de editar el Artifact.
 
@@ -35,7 +35,7 @@ Tres direcciones implementadas como hojas de estilo completas en `dashboard/loca
 | Dirección | Archivo | Idea | Tipografía | Acento |
 |---|---|---|---|---|
 | Geist | styles.css | Blanco, negro, gris; infraestructura | Geist + Geist Mono | Negro |
-| Signal (recomendada) | theme-signal.css | Lienzo gris frío, tarjetas con sombra mínima; Stripe/Linear | Instrument Sans + JetBrains Mono | Violeta #5A4FCF (hereda el de MultiCampaign) |
+| Signal (recomendada) | theme-signal.css | Lienzo gris frío, tarjetas con sombra mínima; Stripe/Linear | Instrument Sans + JetBrains Mono | Violeta #5A4FCF (hereda el de On Cue) |
 | Studio | theme-studio.css | Papel cálido, serif en titulares y cifras; Notion editorial | Newsreader + Figtree | Tinta negra; verde solo positivo |
 
 Recomendación de Claude: **Signal para el producto, Studio para los documentos que ven las marcas (media kit, cotización, reporte), Geist como modo denso**. Marca: los cuatro puntos como sello, un solo acento violeta, estado en verde/ámbar/rojo, voz precisa y cómplice. Pendiente: nombre del producto (corto, bilingüe, dominio libre, sin "creator"), afinar el violeta en LCH, decidir si el oscuro es el predeterminado.
@@ -50,7 +50,7 @@ Lo que el mock ya decide de forma implícita y conviene confirmar o cambiar:
 
 - El puntaje central de todo el producto es **× mediana** (views del video sobre la mediana de su propia cuenta), tanto para lo interno como para el nicho.
 - Las ideas se explican con evidencia etiquetada **Tuyo** (interno) o **Nicho** (externo) y traen una probabilidad de superar 2× la mediana.
-- El guion sale en la rejilla de 9 bloques × 10 s de MultiCampaign, con roles hook, build, giro y cierre y conteo de palabras por bloque.
+- El guion sale en la rejilla de 9 bloques × 10 s de On Cue, con roles hook, build, giro y cierre y conteo de palabras por bloque.
 - La cotización muestra la fórmula (views promedio × CPM del nicho × ajustes) y no esconde el rango.
 - El reporte de campaña incluye una lista de "acordado antes de publicar" con lo que falta de la marca.
 
@@ -170,7 +170,7 @@ Pregunta del usuario (16 sep): veamos cómo analizamos ciertos videos, cosas en 
 
 **Paso 3. Comparar outliers contra el resto** dentro del nicho o de la cuenta: en qué rasgos aparecen más los outliers (lift). Con 100 a 300 videos basta con frecuencias; con miles se entrena un modelo.
 
-**Paso 4. Traducir a recomendaciones concretas**, no a estadística. Ejemplo del tono buscado: "En tu nicho, 7 de los 10 videos que más crecieron abren con una pregunta y duran menos de 35 s. Tus últimos 20 abren con saludo y duran 60 s." Y a continuación tres ideas con guion listo, usando la rejilla de miniclips de MultiCampaign donde aplique.
+**Paso 4. Traducir a recomendaciones concretas**, no a estadística. Ejemplo del tono buscado: "En tu nicho, 7 de los 10 videos que más crecieron abren con una pregunta y duran menos de 35 s. Tus últimos 20 abren con saludo y duran 60 s." Y a continuación tres ideas con guion listo, usando la rejilla de miniclips de On Cue donde aplique.
 
 **Paso 5. Pre-check antes de publicar.** El predictor de viralidad de Higgsfield y el mismo extractor de rasgos sirven para evaluar un video antes de subirlo y sugerir cambios en hook o duración.
 

@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Forma de developers.tiktok.com/doc/tiktok-api-v2-video-list con los campos del Video Object; ids y handles ficticios."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields="
+  },
+  "response": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "data": {
+        "videos": [
+          {
+            "id": "7400000000000000d01",
+            "create_time": 1787932800,
+            "cover_image_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d01.jpeg",
+            "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01",
+            "video_description": "Receta 1 con @cafealma.co #recetafacil #ad",
+            "duration": 31,
+            "height": 1920,
+            "width": 1080,
+            "title": "Receta 1",
+            "embed_html": "<blockquote></blockquote>",
+            "embed_link": "https://www.tiktok.com/embed/v2/7400000000000000d01",
+            "like_count": 1201,
+            "comment_count": 41,
+            "share_count": 11,
+            "view_count": 50001,
+            "is_aigc": false
+          },
+          {
+            "id": "7400000000000000d02",
+            "create_time": 1788019200,
+            "cover_image_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d02.jpeg",
+            "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d02",
+            "video_description": "Receta 2 con @cafealma.co #recetafacil #ad",
+            "duration": 32,
+            "height": 1920,
+            "width": 1080,
+            "title": "Receta 2",
+            "embed_html": "<blockquote></blockquote>",
+            "embed_link": "https://www.tiktok.com/embed/v2/7400000000000000d02",
+            "like_count": 1202,
+            "comment_count": 42,
+            "share_count": 12,
+            "view_count": 50002,
+            "is_aigc": false
+          },
+          {
+            "id": "7400000000000000d03",
+            "create_time": 1756569600,
+            "cover_image_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d03.jpeg",
+            "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d03",
+            "video_description": "Receta 3 con @cafealma.co #recetafacil #ad",
+            "duration": 33,
+            "height": 1920,
+            "width": 1080,
+            "title": "Receta 3",
+            "embed_html": "<blockquote></blockquote>",
+            "embed_link": "https://www.tiktok.com/embed/v2/7400000000000000d03",
+            "like_count": 1203,
+            "comment_count": 43,
+            "share_count": 13,
+            "view_count": 50003,
+            "is_aigc": false
+          }
+        ],
+        "cursor": 1787846400000,
+        "has_more": false
+      },
+      "error": {
+        "code": "ok",
+        "message": "",
+        "log_id": "2026092201"
+      }
+    }
+  }
+}

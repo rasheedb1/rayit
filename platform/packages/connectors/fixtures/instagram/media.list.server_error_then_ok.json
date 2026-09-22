@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "500 code 2 «An unexpected error has occurred» y luego ok."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/media\\?"
+  },
+  "response": [
+    {
+      "status": 500,
+      "body": {
+        "error": {
+          "message": "An unexpected error has occurred. Please retry your request later.",
+          "type": "OAuthException",
+          "code": 2,
+          "fbtrace_id": "AbCdEfDemo"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "1800000000000000d01",
+            "caption": "Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA1 #coldbrew #ad",
+            "media_type": "VIDEO",
+            "media_product_type": "REELS",
+            "media_url": "https://scontent.cdninstagram.com/demo/d01.mp4",
+            "permalink": "https://www.instagram.com/reel/demo-d01/",
+            "thumbnail_url": "https://scontent.cdninstagram.com/demo/d01.jpg",
+            "timestamp": "2026-08-21T17:00:00+0000",
+            "username": "laura.cocinafacil",
+            "like_count": 3201,
+            "comments_count": 121,
+            "is_shared_to_feed": true
+          }
+        ],
+        "paging": {
+          "cursors": {
+            "before": "b",
+            "after": "a"
+          }
+        }
+      }
+    }
+  ]
+}

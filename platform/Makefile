@@ -1,12 +1,12 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
-DB_URL ?= postgres://mc:mc@localhost:5432/multicampaign
+DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
 .PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
-        vercel.set vercel.link vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
+        vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
         arranque
 
 help: ## Muestra esta ayuda
@@ -16,10 +16,10 @@ help: ## Muestra esta ayuda
 up: ## Levanta base de datos, almacenamiento y correo
 	docker compose up -d
 	@echo "esperando a Postgres..."
-	@until docker compose exec -T db pg_isready -U mc -d multicampaign >/dev/null 2>&1; do sleep 1; done
+	@until docker compose exec -T db pg_isready -U mc -d oncue >/dev/null 2>&1; do sleep 1; done
 	@$(MAKE) migrate
 	@echo ""
-	@echo "  Postgres   localhost:5432   (mc / mc / multicampaign)"
+	@echo "  Postgres   localhost:5432   (mc / mc / oncue)"
 	@echo "  MinIO      localhost:9001   (mc / mcmcmcmc)"
 	@echo "  Correo     localhost:8025"
 
@@ -43,7 +43,7 @@ seed: ## Carga datos de ejemplo (la creadora ficticia y su nicho)
 	@node db/migrate.mjs "$(DB_URL)" --seed
 
 psql: ## Abre una consola SQL
-	docker compose exec db psql -U mc -d multicampaign
+	docker compose exec db psql -U mc -d oncue
 
 dev: ## Arranca web + worker + media en paralelo
 	pnpm turbo run dev --parallel
@@ -104,9 +104,10 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
 
-db.cert: ## Vuelve a bajar el certificado raíz de Supabase
+db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
+	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/provisional/supabase-ca.ts regenerado"
 
 # =====================================================================
 # GitHub · el token compartido
@@ -152,8 +153,14 @@ github.check: ## Pregunta a GitHub: qué usuario, qué permisos, cuándo expira
 vercel.set: ## Guarda o rota el token de Vercel (lo pide sin mostrarlo)
 	@./scripts/vercel.sh set
 
+vercel.dir: ## Qué directorio se despliega.  make vercel.dir DIR=.   (Root Directory apps/web en Vercel)
+	@./scripts/vercel.sh dir $(DIR)
+
 vercel.link: ## Crea o adopta el proyecto y lo enlaza en ESTE clon
 	@./scripts/vercel.sh link $(NOMBRE)
+
+vercel.rename: ## Renombra el proyecto en Vercel y conserva la URL vieja.  make vercel.rename NOMBRE=on-cue-web
+	@./scripts/vercel.sh rename $(NOMBRE)
 
 vercel.unlink: ## Quita el enlace local (no toca el vault)
 	@./scripts/vercel.sh unlink

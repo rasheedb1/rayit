@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "follower_demographics con breakdown=age y timeframe=this_month: absolutos, no porcentajes."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_demographics.*breakdown=age"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "follower_demographics",
+          "period": "lifetime",
+          "title": "Follower demographics",
+          "description": "",
+          "total_value": {
+            "breakdowns": [
+              {
+                "dimension_keys": [
+                  "age"
+                ],
+                "results": [
+                  {
+                    "dimension_values": [
+                      "13-17"
+                    ],
+                    "value": 8200
+                  },
+                  {
+                    "dimension_values": [
+                      "18-24"
+                    ],
+                    "value": 98000
+                  },
+                  {
+                    "dimension_values": [
+                      "25-34"
+                    ],
+                    "value": 164000
+                  },
+                  {
+                    "dimension_values": [
+                      "35-44"
+                    ],
+                    "value": 82000
+                  },
+                  {
+                    "dimension_values": [
+                      "45-54"
+                    ],
+                    "value": 36000
+                  },
+                  {
+                    "dimension_values": [
+                      "55-64"
+                    ],
+                    "value": 15000
+                  },
+                  {
+                    "dimension_values": [
+                      "65+"
+                    ],
+                    "value": 8800
+                  }
+                ]
+              }
+            ]
+          },
+          "id": "x"
+        }
+      ],
+      "paging": {
+        "previous": "",
+        "next": ""
+      }
+    }
+  }
+}

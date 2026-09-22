@@ -1,0 +1,8 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "un 500 (code 2, servicio no disponible) y luego la respuesta buena." },
+  "request": { "method": "GET", "urlPattern": "^https://graph\\.instagram\\.com/refresh_access_token\\?grant_type=ig_refresh_token$" },
+  "response": [
+    { "status": 500, "body": { "error": { "message": "Service temporarily unavailable", "type": "OAuthException", "code": 2, "fbtrace_id": "AbCdEf125" } } },
+    { "status": 200, "body": { "access_token": "IGAA-long-demo-0003-SECRETO", "token_type": "bearer", "expires_in": 5184000 } }
+  ]
+}

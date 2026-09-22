@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "v3/docs/channels/list con mine=true: statistics como cadenas, relatedPlaylists.uploads."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/channels\\?part=snippet%2CcontentDetails%2Cstatistics&mine=true"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#channelListResponse",
+      "etag": "e",
+      "pageInfo": {
+        "totalResults": 1,
+        "resultsPerPage": 5
+      },
+      "items": [
+        {
+          "kind": "youtube#channel",
+          "etag": "e",
+          "id": "UCdemo000000000000000001",
+          "snippet": {
+            "title": "Laura · Cocina fácil",
+            "description": "Recetas fáciles",
+            "customUrl": "@lauracocinafacil",
+            "publishedAt": "2021-03-01T00:00:00Z",
+            "thumbnails": {
+              "default": {
+                "url": "https://yt3.ggpht.com/demo=s88",
+                "width": 88,
+                "height": 88
+              }
+            },
+            "country": "CO"
+          },
+          "contentDetails": {
+            "relatedPlaylists": {
+              "likes": "",
+              "uploads": "UUdemo000000000000000001"
+            }
+          },
+          "statistics": {
+            "viewCount": "48200000",
+            "subscriberCount": "215000",
+            "hiddenSubscriberCount": false,
+            "videoCount": "312"
+          }
+        }
+      ]
+    }
+  }
+}

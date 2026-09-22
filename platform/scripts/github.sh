@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-# github.sh — el token de GitHub de MultiCampaign.
+# github.sh — el token de GitHub de On Cue.
 #
 # El problema: somos dos trabajando sobre el mismo repositorio y los
 # dos necesitamos empujar. Las dos salidas habituales fallan igual que

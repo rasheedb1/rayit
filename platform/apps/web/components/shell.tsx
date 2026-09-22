@@ -7,9 +7,9 @@ function Brand() {
   return (
     <Link href="/" className="inline-flex items-center gap-2.5 rounded-sm">
       <span className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-fg" aria-hidden="true">
-        M
+        O
       </span>
-      <span className="text-sm font-semibold tracking-tight">MultiCampaign</span>
+      <span className="text-sm font-semibold tracking-tight">On Cue</span>
     </Link>
   );
 }
@@ -17,7 +17,7 @@ function Brand() {
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[232px_minmax(0,1fr)]">
-      <aside className="hidden border-r border-line bg-bg-2 md:sticky md:top-0 md:flex md:h-dvh md:flex-col">
+      <aside aria-label="Barra lateral" className="hidden border-r border-line bg-bg-2 md:sticky md:top-0 md:flex md:h-dvh md:flex-col">
         <div className="flex h-14 items-center justify-between px-4">
           <Brand />
           <ThemeToggle />

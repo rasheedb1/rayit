@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Cuenta sin videos."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "videos": [],
+        "cursor": 0,
+        "has_more": false
+      },
+      "error": {
+        "code": "ok",
+        "message": "",
+        "log_id": "2026092202"
+      }
+    }
+  }
+}

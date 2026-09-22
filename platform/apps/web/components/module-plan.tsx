@@ -1,6 +1,6 @@
-import { notFound } from "next/navigation";
 import { SPRINTS } from "@/content/backlog";
-import { moduleBySlug } from "@/content/modules";
+import { notFound } from "next/navigation";
+import { requireModule } from "@/content/modules";
 import { OWNERS, type OwnerId } from "@/content/team";
 import { daysRange, formatDays, stats, storiesFor } from "@/lib/backlog";
 import { OwnerAvatar } from "./owner";
@@ -15,8 +15,9 @@ import { StoryCard } from "./story-card";
  * page.tsx de su carpeta por el módulo de verdad.
  */
 export function ModulePlan({ slug }: { slug: string }) {
-  const mod = moduleBySlug(slug);
-  if (!mod || !mod.prefix) notFound();
+  // 404 si el módulo no existe o su bandera está apagada.
+  const mod = requireModule(slug);
+  if (!mod.prefix) notFound();
 
   const stories = storiesFor(mod.prefix);
   const st = stats(stories);
@@ -60,7 +61,7 @@ export function ModulePlan({ slug }: { slug: string }) {
           })}
         </div>
 
-        <aside className="space-y-3 lg:sticky lg:top-8 lg:self-start">
+        <aside aria-label="Ficha del módulo" className="space-y-3 lg:sticky lg:top-8 lg:self-start">
           <div className="rounded-md border border-line p-4">
             <p className="text-xs text-fg-3">{owners.length > 1 ? "Dueños" : "Dueño"}</p>
             <div className="mt-2 space-y-3">

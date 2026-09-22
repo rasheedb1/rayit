@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Métrica no soportada para el medio: code 100 → permanent, sin reintento."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/1800000000000000d02/insights\\?metric="
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "(#100) The Media Insights API does not support the ig_reels_avg_watch_time metric for this media product type.",
+        "type": "OAuthException",
+        "code": 100,
+        "fbtrace_id": "AbCdEfDemo"
+      }
+    }
+  }
+}

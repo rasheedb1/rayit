@@ -1,4 +1,4 @@
-# MultiCampaign
+# On Cue
 
 Operación de contenido multi-cuenta: generar video corto con IA (Higgsfield, ElevenLabs), publicarlo por API en TikTok, Instagram, Facebook y YouTube desde una red propia de cuentas (5 → 50–100), y medir alcance/engagement segmentado por red, geografía, edad, sexo y tipo de usuario para luego monetizar con campañas de marcas y referidos.
 
@@ -33,7 +33,7 @@ dashboard/build-local.py    Regenera dashboard/local a partir del mock del Artif
 dashboard/direcciones-visuales.html Exploración de dirección visual: referentes, tres direcciones, recomendación (Artifact)
 dashboard/local/theme-*.css  Direcciones Signal y Studio (styles.css es Geist); se cambian con el selector de la barra
 platform/                   El producto real: esquema, migraciones, pipeline y CI
-platform/apps/web/          El dashboard real (Next.js). Publicado en https://multicampaign-web.vercel.app
+platform/apps/web/          El dashboard real (Next.js). Publicado en https://on-cue-web.vercel.app
 docs/arquitectura.md        Decisiones de arquitectura y por qué
 docs/plan-equipo.md         Reparto de tareas para dos programadores, seis semanas
 docs/backlog-mvp.md         Backlog del MVP (Resumen, Ventas/CRM, Cotizar, Campañas, Finanzas) repartido entre Nicolás y Rasheed

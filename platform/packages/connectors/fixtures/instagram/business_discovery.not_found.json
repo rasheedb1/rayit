@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Usuario inexistente o no profesional: code 110, subcódigo 2207013 → permanent."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "(#110) Could not find the user.",
+        "type": "IGApiException",
+        "code": 110,
+        "fbtrace_id": "AbCdEfDemo",
+        "error_subcode": 2207013
+      }
+    }
+  }
+}

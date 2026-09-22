@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-# vault.sh — las credenciales de MultiCampaign.
+# vault.sh — las credenciales de On Cue.
 #
 # El problema que resuelve: el equipo necesita que cualquiera que tenga
 # el repositorio pueda tocar la base de datos, pero un archivo con

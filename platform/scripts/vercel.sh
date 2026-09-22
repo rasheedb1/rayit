@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-# vercel.sh — el token de Vercel de MultiCampaign.
+# vercel.sh — el token de Vercel de On Cue.
 #
 # El problema es el mismo que con GitHub: el dashboard se despliega en
 # Vercel y cualquiera del equipo tiene que poder desplegar. Las dos
@@ -22,6 +22,7 @@
 #
 #   ./scripts/vercel.sh set          guarda (o rota) el token
 #   ./scripts/vercel.sh link         crea o adopta el proyecto y lo enlaza
+#   ./scripts/vercel.sh rename NOMBRE  renombra el proyecto y conserva la URL vieja
 #   ./scripts/vercel.sh status       qué hay guardado, sin revelarlo
 #   ./scripts/vercel.sh check        pregunta a Vercel: quién, qué equipo, cuándo expira
 #   ./scripts/vercel.sh deploy       despliega una vista previa (--prod para producción)
@@ -265,7 +266,7 @@ cmd_set() {
 # ---------------------------------------------------------------------
 cmd_link() {
   exigir_vault
-  local nombre="${1:-${V_PROJECT:-multicampaign-web}}"
+  local nombre="${1:-${V_PROJECT:-on-cue-web}}"
   local q=''; [[ -n "$V_ORG_ID" ]] && q="?teamId=$V_ORG_ID"
 
   local proyecto codigo
@@ -290,10 +291,21 @@ cmd_link() {
 
   # El enlace local: es lo que hace que `vercel` a secas, sin este
   # script, sepa a qué proyecto va. Es por clon y no se versiona.
-  local destino="$RAIZ/$V_APP_DIR/.vercel"
+  # El enlace lleva también los `settings` del proyecto (Root Directory,
+  # framework, comandos). Sin ellos, la CLI "detecta" la configuración
+  # local en el primer deploy y la GUARDA en el proyecto: así se borró
+  # una vez el Root Directory apps/web.
+  local destino; destino="$(cd "$RAIZ/$V_APP_DIR" && pwd)/.vercel"
   mkdir -p "$destino"
-  printf '{"orgId":"%s","projectId":"%s","projectName":"%s"}\n' \
-    "$V_ORG_ID" "$V_PROJECT_ID" "$V_PROJECT" > "$destino/project.json"
+  ORG="$V_ORG_ID" PID="$V_PROJECT_ID" NOMBRE="$V_PROJECT" node -e '
+    let e = ""
+    process.stdin.on("data", d => e += d).on("end", () => {
+      const p = JSON.parse(e)
+      const settings = {}
+      for (const k of ["createdAt","framework","devCommand","installCommand","buildCommand","outputDirectory","rootDirectory","directoryListing","nodeVersion"])
+        settings[k] = p[k] ?? null
+      process.stdout.write(JSON.stringify({ orgId: process.env.ORG, projectId: process.env.PID, projectName: process.env.NOMBRE, settings }, null, 2) + "\n")
+    })' <<<"$proyecto" > "$destino/project.json"
 
   verde "✓ $V_APP_DIR enlazado a $V_SCOPE/$V_PROJECT"
   gris  "   El token NO está en $V_APP_DIR/.vercel: ahí solo hay ids públicos."
@@ -301,6 +313,65 @@ cmd_link() {
     amarillo "Ojo: $V_APP_DIR todavía no tiene package.json — no hay nada que desplegar."
   fi
   gris  "   Commitea secrets/vercel.env.enc: ahora lleva el id del proyecto."
+}
+
+# ---------------------------------------------------------------------
+# rename — renombra el proyecto en Vercel sin perder la URL anterior
+# ---------------------------------------------------------------------
+# Renombrar un proyecto cambia su dominio <nombre>.vercel.app: el viejo
+# deja de responder. Para que los enlaces ya compartidos sigan vivos,
+# el dominio anterior se vuelve a colgar del mismo proyecto como alias.
+cmd_rename() {
+  exigir_vault
+  [[ -n "$V_PROJECT_ID" ]] || { rojo "No hay proyecto enlazado. Corre: make vercel.link"; exit 1; }
+  local nuevo="${1:-}"
+  [[ -n "$nuevo" ]] || { rojo 'Uso: vercel.sh rename <nombre-nuevo>   p.ej.  rename on-cue-web'; exit 1; }
+  local viejo="$V_PROJECT"
+  [[ "$nuevo" != "$viejo" ]] || { verde "✓ el proyecto ya se llama $nuevo"; exit 0; }
+  local q=''; [[ -n "$V_ORG_ID" ]] && q="?teamId=$V_ORG_ID"
+
+  local cuerpo; cuerpo="$(mktemp)"; trap 'rm -f "$cuerpo"' RETURN
+  printf '{"name":"%s"}' "$nuevo" > "$cuerpo"
+  local proyecto codigo
+  proyecto="$(api PATCH "/v9/projects/$V_PROJECT_ID$q" "$cuerpo")"; codigo="$(codigo_http)"
+  [[ "$codigo" == "200" ]] || {
+    rojo "Vercel no dejó renombrar el proyecto (HTTP ${codigo:-sin respuesta}):"
+    rojo "$(json error message <<<"$proyecto")"; exit 1; }
+  V_PROJECT="$(json name <<<"$proyecto")"
+  guardar_vault
+  verde "✓ proyecto $viejo renombrado a $V_PROJECT en $V_SCOPE"
+
+  # El dominio viejo, de vuelta al proyecto, para no romper enlaces.
+  printf '{"name":"%s.vercel.app"}' "$viejo" > "$cuerpo"
+  local dominio
+  dominio="$(api POST "/v10/projects/$V_PROJECT_ID/domains$q" "$cuerpo")"; codigo="$(codigo_http)"
+  if [[ "$codigo" =~ ^20 ]]; then
+    verde "✓ $viejo.vercel.app sigue apuntando al proyecto (alias)"
+  else
+    amarillo "No se pudo conservar $viejo.vercel.app (HTTP ${codigo:-sin respuesta}): $(json error message <<<"$dominio")"
+    amarillo "Los enlaces viejos dejarán de responder; el nuevo es https://$V_PROJECT.vercel.app"
+  fi
+
+  gris  "   Commitea secrets/vercel.env.enc: ahora lleva el nombre nuevo."
+  gris  "   Vuelve a correr make vercel.link en cada clon para refrescar .vercel/project.json."
+  gris  "   URL de producción: https://$V_PROJECT.vercel.app"
+}
+
+# ---------------------------------------------------------------------
+# dir — qué directorio despliega la CLI. Con Root Directory = apps/web en
+# el proyecto de Vercel, hay que subir platform/ entero ("."): así pnpm
+# ve el workspace y packages/core y packages/db entran al build.
+# ---------------------------------------------------------------------
+cmd_dir() {
+  local nuevo="${1:-}"
+  [[ -n "$nuevo" ]] || { rojo "Uso: vercel.sh dir <directorio relativo a platform/>   p.ej.  dir ."; exit 1; }
+  [[ -f "$RAIZ/$nuevo/package.json" ]] || { rojo "En $nuevo no hay package.json: no hay nada que desplegar."; exit 1; }
+  exigir_vault
+  local anterior="$V_APP_DIR"
+  V_APP_DIR="$nuevo"
+  guardar_vault
+  verde "✓ directorio de despliegue: $nuevo (antes: ${anterior:-apps/web})"
+  gris  "   Commitea secrets/vercel.env.enc y vuelve a correr make vercel.link en cada clon."
 }
 
 cmd_unlink() {
@@ -316,7 +387,10 @@ cmd_unlink() {
 cmd_deploy() {
   exigir_vault
   [[ -n "$V_PROJECT_ID" ]] || { rojo "No hay proyecto enlazado. Corre: make vercel.link"; exit 1; }
-  local dir="$RAIZ/${V_APP_DIR:-apps/web}"
+  # Ruta normalizada: con "." la CLI recibiría "platform/." y entonces
+  # ignora el Root Directory del proyecto ("No Next.js version detected").
+  local dir; dir="$(cd "$RAIZ/${V_APP_DIR:-apps/web}" 2>/dev/null && pwd)" || {
+    rojo "No existe el directorio ${V_APP_DIR:-apps/web}."; exit 1; }
   [[ -f "$dir/package.json" ]] || {
     rojo "No hay nada que desplegar en ${V_APP_DIR:-apps/web} (falta package.json)."; exit 1; }
   correr_cli deploy --cwd "$dir" --yes "$@"
@@ -427,10 +501,12 @@ json_lista() {
 case "${1:-}" in
   set)      shift; cmd_set "$@" ;;
   link)     shift; cmd_link "${1:-}" ;;
+  rename)   shift; cmd_rename "${1:-}" ;;
   unlink)   cmd_unlink ;;
+  dir)      shift; cmd_dir "$@" ;;
   deploy)   shift; cmd_deploy "$@" ;;
   run)      shift; cmd_run "$@" ;;
   status)   cmd_status ;;
   check)    cmd_check ;;
-  *) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 esac

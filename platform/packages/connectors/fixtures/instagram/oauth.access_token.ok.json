@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "api.instagram.com/oauth/access_token (business-login): token corto, user_id numérico y permissions." },
+  "request": { "method": "POST", "urlPattern": "^https://api\\.instagram\\.com/oauth/access_token$", "body": { "grant_type": "authorization_code" } },
+  "response": { "status": 200, "body": { "access_token": "IGQVJ-short-demo-0001-SECRETO", "user_id": 17841400000000123, "permissions": "instagram_business_basic,instagram_business_manage_insights" } }
+}

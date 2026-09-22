@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
-
-type Theme = "light" | "dark";
-const KEY = "mc.theme";
+import { THEME_KEY as KEY, type Theme } from "@/lib/theme";
 
 export function ThemeToggle() {
   // Antes de montar no sabemos el tema (lo fijó un script en <head>).

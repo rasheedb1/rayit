@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "refresh token revocado o vencido. La descripción repite el token a propósito: la prueba afirma que se borra del error y del log." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 400, "body": { "error": "invalid_grant", "error_description": "Refresh token rft.demo-refresh-tiktok-0001-SECRETO is invalid or expired.", "log_id": "2026092202" } }
+}

@@ -13,6 +13,18 @@ nueve índices, y el entorno local se levanta con un comando.
 > fase. El backlog vigente, con dueños e historias, está en
 > [backlog-mvp.md](backlog-mvp.md). Las reglas de trabajo de la
 > sección 5 de este documento siguen aplicando.
+>
+> **Avance al 21 de septiembre, 20:30.** Las cinco historias de
+> Nicolás del sprint 1 (CIM-4, CIM-5, CIM-8, CON-2, FIN-1) están en
+> `main`, verificadas dos veces y desplegadas en producción. El estado
+> completo y lo que Rasheed tiene que destrabar están en la sección 8
+> de [backlog-mvp.md](backlog-mvp.md#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
+>
+> **Avance al 22 de septiembre.** Del sprint 2 de Nicolás, CON-1, CAM-1,
+> CAM-2 y CON-3 están en `main`, verificadas y desplegadas en producción.
+> CON-3 (OAuth de TikTok e Instagram) está completa en código y bloqueada
+> solo por la prueba en vivo, que depende del acceso a las apps. Detalle
+> en la sección 9 de [backlog-mvp.md](backlog-mvp.md#9-estado-del-sprint-2-al-22-de-septiembre-de-2026).
 
 ---
 

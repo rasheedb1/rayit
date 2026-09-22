@@ -1,5 +1,6 @@
+import { notFound } from "next/navigation";
 import type { OwnerId } from "./team";
-import { flags, type FlagKey } from "./flags";
+import { flags as defaultFlags, type FlagKey, type Flags } from "./flags";
 
 export type StoryPrefix = "CIM" | "CON" | "RES" | "VEN" | "COT" | "CAM" | "FIN";
 
@@ -19,6 +20,8 @@ export interface ModuleDef {
   prefix?: StoryPrefix;
   /** Carpetas de las que es dueño quien construye el módulo. */
   paths: string[];
+  /** Bandera que lo enciende. Sin bandera, el módulo siempre está encendido. */
+  flag?: FlagKey;
 }
 
 export const MODULES: readonly ModuleDef[] = [
@@ -117,11 +120,13 @@ export const MODULES: readonly ModuleDef[] = [
     paths: ["packages/db/src/client.ts (Rasheed)", "apps/web/components/ui/ (Nicolás)", "db/seed/ (por archivo)"],
   },
   // Fase 2. Apagados en flags.ts; la base ya los modela.
-  { slug: "videos", name: "Mis videos", group: "producto", phase: 2, summary: "Qué de lo tuyo funciona y por qué.", purpose: "", paths: [] },
-  { slug: "nicho", name: "Tendencias del nicho", group: "producto", phase: 2, summary: "Lo que está rompiendo en tu nicho esta semana.", purpose: "", paths: [] },
-  { slug: "ideas", name: "Ideas y guiones", group: "producto", phase: 2, summary: "Tres ideas para esta semana, con guion listo.", purpose: "", paths: [] },
-  { slug: "laboratorio", name: "Laboratorio de video", group: "producto", phase: 2, summary: "Sube el máster y recibe el semáforo por red.", purpose: "", paths: [] },
-  { slug: "agencia", name: "Vista agencia", group: "producto", phase: 2, summary: "Varias marcas, un solo tablero.", purpose: "", paths: [] },
+  { slug: "videos", name: "Mis videos", group: "producto", phase: 2, summary: "Qué de lo tuyo funciona y por qué.", purpose: "", paths: [], flag: "content_metrics" },
+  { slug: "nicho", name: "Tendencias del nicho", group: "producto", phase: 2, summary: "Lo que está rompiendo en tu nicho esta semana.", purpose: "", paths: [], flag: "niche_radar" },
+  { slug: "ideas", name: "Ideas y guiones", group: "producto", phase: 2, summary: "Tres ideas para esta semana, con guion listo.", purpose: "", paths: [], flag: "ideas_scripts" },
+  { slug: "laboratorio", name: "Laboratorio de video", group: "producto", phase: 2, summary: "Sube el máster y recibe el semáforo por red.", purpose: "", paths: [], flag: "video_lab" },
+  { slug: "agencia", name: "Vista agencia", group: "producto", phase: 2, summary: "Varias marcas, un solo tablero.", purpose: "", paths: [], flag: "agency_workspace" },
+  // Herramientas del equipo: no van en la navegación de producto.
+  { slug: "kit", name: "Kit de interfaz", group: "construccion", phase: 1, owner: "nicolas", summary: "Los componentes compartidos, con datos de ejemplo.", purpose: "Galería de CIM-5: cada componente en claro y oscuro, vacío, cargando y con valores largos.", paths: ["apps/web/components/ui/"], flag: "kit" },
 ];
 
 export function moduleBySlug(slug: string): ModuleDef | undefined {
@@ -134,11 +139,26 @@ export function moduleByPrefix(prefix: StoryPrefix): ModuleDef {
   return m;
 }
 
-export function isEnabled(m: ModuleDef): boolean {
-  if (m.group === "construccion") return true;
-  return flags[m.slug as FlagKey] === true;
+/** Un módulo sin bandera siempre está encendido. `flags` se inyecta en pruebas. */
+export function isEnabled(m: ModuleDef, flags: Flags = defaultFlags): boolean {
+  return m.flag === undefined || flags[m.flag] === true;
 }
 
 /** Módulos de producto encendidos, en el orden de la navegación. */
-export const PRODUCT_MODULES = MODULES.filter((m) => m.group === "producto" && isEnabled(m));
+export function productModules(flags: Flags = defaultFlags): ModuleDef[] {
+  return MODULES.filter((m) => m.group === "producto" && isEnabled(m, flags));
+}
+
+export const PRODUCT_MODULES = productModules();
 export const PHASE2_MODULES = MODULES.filter((m) => m.phase === 2);
+
+/**
+ * El módulo de una ruta, o 404 si no existe o su bandera está apagada.
+ * Lo llama la página de cada módulo (hoy, ModulePlan) antes de renderizar:
+ * apagar una bandera cierra la ruta directa, no solo la quita del menú.
+ */
+export function requireModule(slug: string, flags: Flags = defaultFlags): ModuleDef {
+  const m = moduleBySlug(slug);
+  if (!m || !isEnabled(m, flags)) notFound();
+  return m;
+}

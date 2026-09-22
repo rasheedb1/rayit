@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "HTTP 200 con code 40105 (rango 40100–40199 = auth): definitivo." },
+  "request": { "method": "POST", "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/tt_user/oauth2/refresh_token/$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 200, "body": { "code": 40105, "message": "Refresh token is invalid or expired.", "request_id": "2026092212", "data": {} } }
+}

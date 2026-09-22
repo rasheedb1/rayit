@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "breakdown=country: ISO 3166-1."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_demographics.*breakdown=country"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "follower_demographics",
+          "period": "lifetime",
+          "title": "Follower demographics",
+          "description": "",
+          "total_value": {
+            "breakdowns": [
+              {
+                "dimension_keys": [
+                  "country"
+                ],
+                "results": [
+                  {
+                    "dimension_values": [
+                      "CO"
+                    ],
+                    "value": 350000
+                  },
+                  {
+                    "dimension_values": [
+                      "MX"
+                    ],
+                    "value": 22000
+                  },
+                  {
+                    "dimension_values": [
+                      "US"
+                    ],
+                    "value": 14000
+                  }
+                ]
+              }
+            ]
+          },
+          "id": "x"
+        }
+      ],
+      "paging": {
+        "previous": "",
+        "next": ""
+      }
+    }
+  }
+}

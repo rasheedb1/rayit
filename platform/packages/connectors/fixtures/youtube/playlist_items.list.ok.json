@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "v3/docs/playlistItems/list: tres videos, sin nextPageToken."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/playlistItems\\?part=contentDetails&playlistId=UUdemo000000000000000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#playlistItemListResponse",
+      "etag": "e",
+      "pageInfo": {
+        "totalResults": 3,
+        "resultsPerPage": 50
+      },
+      "items": [
+        {
+          "kind": "youtube#playlistItem",
+          "etag": "e",
+          "id": "UUitem1",
+          "contentDetails": {
+            "videoId": "vid00000001",
+            "videoPublishedAt": "2026-09-01T15:00:00Z"
+          }
+        },
+        {
+          "kind": "youtube#playlistItem",
+          "etag": "e",
+          "id": "UUitem2",
+          "contentDetails": {
+            "videoId": "vid00000002",
+            "videoPublishedAt": "2026-09-02T15:00:00Z"
+          }
+        },
+        {
+          "kind": "youtube#playlistItem",
+          "etag": "e",
+          "id": "UUitem3",
+          "contentDetails": {
+            "videoId": "vid00000003",
+            "videoPublishedAt": "2026-09-03T15:00:00Z"
+          }
+        }
+      ]
+    }
+  }
+}
