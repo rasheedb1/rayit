@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hrefDe, parseFiltro, parsePeriodo, parseRed, PERIODO_POR_DEFECTO } from "./filtro";
+import { hrefDe, MAX_PERIODO, parseFiltro, parsePeriodo, parseRed, PERIODO_POR_DEFECTO, salidaDelVacio } from "./filtro";
 
 /**
  * El filtro de Resumen viaja en la URL, así que lo escribe cualquiera:
@@ -27,6 +27,19 @@ describe("el filtro de la URL", () => {
     expect(hrefDe({ dias: 90, red: null })).toBe("/resumen?periodo=90");
     expect(hrefDe({ dias: PERIODO_POR_DEFECTO, red: "tiktok" })).toBe("/resumen?red=tiktok");
     expect(hrefDe({ dias: 7, red: "youtube" })).toBe("/resumen?periodo=7&red=youtube");
+  });
+
+  it("el estado vacío no ofrece una salida a ninguna parte", () => {
+    // Con un periodo corto, alargarlo. Ya en el más largo, quitar la
+    // red. Y en el más largo sin red, no hay salida: ofrecer «Ver 90
+    // días» ahí enlaza a la página en la que ya estás.
+    expect(salidaDelVacio({ dias: 7, red: null })).toBe("masLargo");
+    expect(salidaDelVacio({ dias: 30, red: "tiktok" })).toBe("masLargo");
+    expect(salidaDelVacio({ dias: MAX_PERIODO, red: "tiktok" })).toBe("quitarRed");
+    expect(salidaDelVacio({ dias: MAX_PERIODO, red: null })).toBeNull();
+    // Y la salida que se ofrece cambia de verdad la URL.
+    const enNoventa = { dias: MAX_PERIODO, red: "tiktok" as const };
+    expect(hrefDe({ ...enNoventa, red: null })).not.toBe(hrefDe(enNoventa));
   });
 
   it("lo que se escribe en la URL es lo que se vuelve a leer", () => {

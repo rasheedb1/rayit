@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CuentaImportable, RedId } from "@mc/db/queries/resumen";
@@ -13,7 +13,7 @@ import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import { Segmented } from "@/components/ui/segmented";
 import { formatterFor, type FormatSettings } from "@/lib/format";
 import { MESSAGES } from "../messages";
-import { importarCsv } from "./actions";
+import { buscarPostsConocidos, importarCsv } from "./actions";
 import {
   analizar,
   ErrorCsv,
@@ -63,15 +63,61 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [formato, setFormato] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resultado, setResultado] = useState<{ videos: number; nuevos: number; conocidos: number; lecturas: number } | null>(null);
+  /** Ids que la cuenta de destino ya tiene. null = todavía no se ha preguntado. */
+  const [yaConocidos, setYaConocidos] = useState<readonly string[] | null>(null);
 
   const deLaRed = cuentas.filter((c) => c.platformId === red);
   const faltan = faltantesDelMapeo(mapeo);
 
-  const revision: Revision | null = useMemo(
-    () => (tabla && faltan.length === 0 ? revisar(tabla, mapeo, { timeZone: workspace.timezone }) : null),
+  // La zona y el idioma del workspace: la zona interpreta las horas sin
+  // zona, el idioma decide si «09/10/2026» es 9 de octubre o 10 de
+  // septiembre. Ninguno de los dos está fijado a Colombia.
+  const opciones = useMemo(
+    () => ({ timeZone: workspace.timezone, locale: workspace.locale }),
+    [workspace.timezone, workspace.locale],
+  );
+
+  // Dos pasadas a propósito: la primera saca los ids del archivo, que es
+  // lo que hay que preguntarle a la base; la segunda vuelve a revisar
+  // con la respuesta. `revisar` es pura y barata, y así el paso 3 puede
+  // avisar «este video ya está» ANTES de escribir nada.
+  const revisionBase: Revision | null = useMemo(
+    () => (tabla && faltan.length === 0 ? revisar(tabla, mapeo, opciones) : null),
     // `faltan` se recalcula con `mapeo`, así que no hace falta en las dependencias.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tabla, mapeo, workspace.timezone],
+    [tabla, mapeo, opciones],
+  );
+
+  useEffect(() => {
+    setYaConocidos(null);
+    const ids = revisionBase?.listas.map((l) => l.externalPostId) ?? [];
+    // Una cuenta que todavía no existe no puede tener nada repetido.
+    if (cuenta === NUEVA || ids.length === 0) return;
+    let vivo = true;
+    void buscarPostsConocidos({ connectionId: cuenta, ids }).then(
+      (r) => {
+        if (vivo && r.ok && r.ids.length > 0) setYaConocidos(r.ids);
+      },
+      // Si la consulta falla, la previsualización sigue valiendo: solo
+      // se queda sin el aviso. No es motivo para no dejar importar.
+      () => undefined,
+    );
+    return () => {
+      vivo = false;
+    };
+  }, [cuenta, revisionBase]);
+
+  const conocidos = useMemo(() => (yaConocidos ? new Set(yaConocidos) : null), [yaConocidos]);
+
+  const revision: Revision | null = useMemo(
+    () => (tabla && revisionBase && conocidos ? revisar(tabla, mapeo, { ...opciones, yaConocidos: conocidos }) : revisionBase),
+    [tabla, mapeo, opciones, revisionBase, conocidos],
+  );
+
+  /** De las filas que se van a escribir, cuántas ya estaban en la cuenta. */
+  const yaEstaban = useMemo(
+    () => (conocidos && revision ? revision.listas.filter((l) => conocidos.has(l.externalPostId)).length : 0),
+    [conocidos, revision],
   );
 
   function recibir(archivo: File) {
@@ -110,25 +156,34 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   function importar() {
     setError(null);
     empezar(async () => {
-      const r = await importarCsv({
-        texto,
-        red,
-        connectionId: cuenta === NUEVA ? undefined : cuenta,
-        handleNuevo: cuenta === NUEVA ? handleNuevo.trim().replace(/^@/, "") : undefined,
-        mapeo,
-      });
-      if (!r.ok) {
-        setError(r.error);
-        return;
+      try {
+        const r = await importarCsv({
+          texto,
+          red,
+          connectionId: cuenta === NUEVA ? undefined : cuenta,
+          handleNuevo: cuenta === NUEVA ? handleNuevo.trim().replace(/^@/, "") : undefined,
+          mapeo,
+        });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        setResultado({
+          videos: r.resultado.postsNuevos + r.resultado.postsConocidos,
+          nuevos: r.resultado.postsNuevos,
+          conocidos: r.resultado.postsConocidos,
+          lecturas: r.resultado.lecturas,
+        });
+        setPaso(3);
+        router.refresh();
+      } catch (err) {
+        // Un fallo de TRANSPORTE —el cuerpo rechazado por pesar
+        // demasiado, la red caída— no puede tumbar el segmento. Sin este
+        // catch la promesa sube a la frontera de error y el creador
+        // pierde el archivo, el mapeo y la revisión, sin camino de vuelta.
+        console.error("[resumen/importar] la acción no respondió", err);
+        setError(t.error.generico);
       }
-      setResultado({
-        videos: r.resultado.postsNuevos + r.resultado.postsConocidos,
-        nuevos: r.resultado.postsNuevos,
-        conocidos: r.resultado.postsConocidos,
-        lecturas: r.resultado.lecturas,
-      });
-      setPaso(3);
-      router.refresh();
     });
   }
 
@@ -139,6 +194,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     setMapeo({});
     setResultado(null);
     setNombreArchivo("");
+    setYaConocidos(null);
     setError(null);
   }
 
@@ -179,7 +235,9 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         />
       )}
 
-      {paso === 2 && revision && <PasoRevisar revision={revision} fecha={(iso) => f.date(iso)} entero={(n) => f.int(n)} />}
+      {paso === 2 && revision && (
+        <PasoRevisar revision={revision} yaEstaban={yaEstaban} fecha={(iso) => f.date(iso)} entero={(n) => f.int(n)} />
+      )}
 
       {paso === 3 && resultado && <PasoHecho resultado={resultado} onOtro={reiniciar} />}
 
@@ -360,7 +418,11 @@ function PasoFormato(props: {
 
       <div>
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-sm font-semibold text-ink">{t.columnas}</h3>
+          <h3 className="text-sm font-semibold text-ink">
+            {t.columnas}
+            {/* Debajo de cada campo se enseña su celda: hay que decir de qué fila. */}
+            <span className="ml-2 text-xs font-normal text-muted">{t.muestra}</span>
+          </h3>
           {faltan.length > 0 && (
             <p className="text-xs text-bad">
               {t.faltan(faltan.map((c) => DEF_CAMPOS.find((d) => d.campo === c)!.label.toLowerCase()).join(", "))}
@@ -407,10 +469,12 @@ function PasoFormato(props: {
 
 function PasoRevisar({
   revision,
+  yaEstaban,
   fecha,
   entero,
 }: {
   revision: Revision;
+  yaEstaban: number;
   fecha: (iso: string) => string;
   entero: (n: number) => string;
 }) {
@@ -422,7 +486,14 @@ function PasoRevisar({
       header: t.columnas.video,
       render: (r) => (
         <CellMain sub={r.problemas.map((p) => p.mensaje).join(" · ") || undefined}>
-          {r.lectura?.title ?? r.lectura?.externalPostId ?? "—"}
+          {/*
+            Cuando la fila no entra, lo que se enseña es la celda CRUDA:
+            quien tiene que arreglar el CSV en Excel necesita saber qué
+            buscar, y el número de fila solo no basta.
+          */}
+          {r.lectura?.title ?? r.lectura?.externalPostId ?? (
+            <span className="font-normal text-muted">{r.crudo.title ?? r.crudo.externalPostId ?? "—"}</span>
+          )}
         </CellMain>
       ),
     },
@@ -461,6 +532,7 @@ function PasoRevisar({
           <span className="text-ink-2">{t.resumen(revision.listas.length, revision.filas.length)}</span>
           {revision.errores > 0 && <Pill kind="bad">{t.errores(revision.filas.filter((f) => !f.lectura).length)}</Pill>}
           {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos)}</Pill>}
+          {yaEstaban > 0 && <span>{t.yaEstaban(yaEstaban)}</span>}
           {revision.duplicadasEnArchivo > 0 && <span>{t.duplicadas(revision.duplicadasEnArchivo)}</span>}
         </p>
       </div>

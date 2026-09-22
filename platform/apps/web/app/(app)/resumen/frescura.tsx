@@ -38,15 +38,39 @@ export async function Frescura() {
               <PlatformPill platformId={c.platformId} />
               {c.handle && <span className="truncate text-xs text-muted">@{c.handle}</span>}
             </div>
-            {c.ultimoDiaCuenta ? (
+            {/*
+              Las dos fuentes cuentan. Una cuenta importada por CSV no
+              tiene serie de cuenta —eso lo llena el recolector—, pero sí
+              lecturas de contenido: mirar solo `ultimoDiaCuenta` decía
+              «Sin lecturas todavía» justo después de una importación
+              que acababa de anunciar «N videos, M lecturas».
+            */}
+            {c.ultimoDiaCuenta ?? c.ultimaLecturaContenido ? (
               <DataAsOf
-                date={c.ultimoDiaCuenta}
+                date={(c.ultimoDiaCuenta ?? c.ultimaLecturaContenido)!}
                 source={c.ultimaFuente ? (t.fuente[c.ultimaFuente] ?? c.ultimaFuente) : undefined}
               />
             ) : (
               <p className="text-xs text-muted">{t.sinLecturas}</p>
             )}
             {c.tokenExpiringSoon && <Pill kind="warn">{t.tokenPorVencer}</Pill>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Cuatro tarjetas del mismo alto mientras la base responde. */
+export function FrescuraEsqueleto() {
+  return (
+    <section className="mt-10" aria-busy="true" aria-label={MESSAGES.loading.frescura}>
+      <SectionTitle>{MESSAGES.frescura.title}</SectionTitle>
+      <ul className="grid gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <li key={i} className="flex min-w-0 flex-col gap-1.5 bg-surface px-4 py-3">
+            <span className="h-5 w-24 animate-pulse rounded-sm bg-hover" />
+            <span className="h-3 w-32 animate-pulse rounded-sm bg-hover" />
           </li>
         ))}
       </ul>

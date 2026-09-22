@@ -2,13 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { asegurarCuentaCsv, importarLecturasCsv, type ResultadoImportacion } from "@mc/db/queries/resumen";
+import {
+  asegurarCuentaCsv,
+  importarLecturasCsv,
+  listExternalPostIds,
+  type ResultadoImportacion,
+} from "@mc/db/queries/resumen";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../messages";
 import { CAMPOS, type Campo, type Mapeo } from "./_lib/formatos";
-import { ErrorCsv, faltantesDelMapeo, leerCsv, MAX_BYTES, revisar } from "./_lib/csv";
+import { ErrorCsv, faltantesDelMapeo, leerCsv, MAX_BYTES, MAX_FILAS, revisar } from "./_lib/csv";
 
 /**
  * La escritura de la importación por CSV.
@@ -25,8 +30,18 @@ import { ErrorCsv, faltantesDelMapeo, leerCsv, MAX_BYTES, revisar } from "./_lib
  * para RLS.
  */
 
+/**
+ * El techo se mide en BYTES, no en unidades UTF-16: `"á"` ocupa dos
+ * bytes y una sola unidad, así que un archivo lleno de tildes pasaba un
+ * `.max(MAX_BYTES)` con bastante más de cinco megas reales.
+ */
+const textoDelArchivo = z
+  .string()
+  .min(1)
+  .refine((v) => Buffer.byteLength(v, "utf8") <= MAX_BYTES, { message: "demasiado grande" });
+
 const esquema = z.object({
-  texto: z.string().min(1).max(MAX_BYTES),
+  texto: textoDelArchivo,
   red: z.enum(["tiktok", "instagram", "facebook", "youtube"]),
   /** Uno de los dos: la cuenta que ya existe, o el nombre de la que se crea. */
   connectionId: z.string().regex(UUID_RE).optional(),
@@ -49,6 +64,34 @@ function limpiarMapeo(crudo: Record<string, string>): Mapeo {
   return mapeo;
 }
 
+const esquemaConocidos = z.object({
+  connectionId: z.string().regex(UUID_RE),
+  ids: z.array(z.string().min(1).max(256)).max(MAX_FILAS),
+});
+
+export type ResultadoConocidos = { ok: true; ids: string[] } | { ok: false };
+
+/**
+ * Solo lectura: de estos identificadores, cuáles YA existen en la
+ * cuenta de destino. La usa el paso 3 para avisar «este video ya está»
+ * ANTES de escribir; si falla, la previsualización sigue siendo válida,
+ * solo pierde ese aviso, así que devuelve `{ ok: false }` y no lanza.
+ *
+ * El workspace lo fija el cliente de base: un connectionId de otro
+ * workspace no existe para RLS y la respuesta sale vacía.
+ */
+export async function buscarPostsConocidos(entrada: unknown): Promise<ResultadoConocidos> {
+  const parsed = esquemaConocidos.safeParse(entrada);
+  if (!parsed.success) return { ok: false };
+  try {
+    const ids = await withWorkspace((tx) => listExternalPostIds(tx, parsed.data.connectionId, parsed.data.ids));
+    return { ok: true, ids };
+  } catch (err) {
+    console.error("[resumen/importar] no se pudo mirar qué videos ya estaban", err);
+    return { ok: false };
+  }
+}
+
 export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
   const t = MESSAGES.importar.error;
   const parsed = esquema.safeParse(entrada);
@@ -63,7 +106,7 @@ export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
   try {
     const tabla = leerCsv(texto);
     if (faltantesDelMapeo(mapeo).length > 0) return { ok: false, error: t.generico };
-    filas = revisar(tabla, mapeo, { timeZone: ws.timezone }).listas;
+    filas = revisar(tabla, mapeo, { timeZone: ws.timezone, locale: ws.locale }).listas;
   } catch (err) {
     return { ok: false, error: err instanceof ErrorCsv ? err.message : t.generico };
   }

@@ -7,7 +7,7 @@ import { withWorkspace } from "@/lib/db";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./messages";
-import { hrefDe, type Filtro } from "./_lib/filtro";
+import { hrefDe, MAX_PERIODO, salidaDelVacio, type Filtro } from "./_lib/filtro";
 
 /**
  * Los dos gráficos: seguidores por red en el tiempo y visualizaciones
@@ -22,13 +22,28 @@ function aSeries(series: SeriePorRed[]): Series[] {
   return series.map((s) => ({ name: PLATFORM_LABEL[s.platformId], data: s.data, color: s.platformId }));
 }
 
+/**
+ * El estado vacío de una tarjeta ofrece la salida que de verdad existe.
+ * Ofrecer «Ver 90 días» a quien YA está en 90 días es un enlace a la
+ * página en la que está, y decirle «prueba con un periodo más largo» es
+ * aconsejarle algo imposible: cuando no queda salida, se explica por
+ * qué no hay datos y no se pinta ningún botón.
+ */
 function SinDatos({ filtro }: { filtro: Filtro }) {
   const t = MESSAGES.vacio.periodoSinDatos;
+  const cual = salidaDelVacio(filtro);
+  const salida =
+    cual === "masLargo"
+      ? { ...t.masLargo, href: hrefDe({ ...filtro, dias: MAX_PERIODO }) }
+      : cual === "quitarRed"
+        ? { ...t.quitarRed, href: hrefDe({ ...filtro, red: null }) }
+        : null;
+
   return (
     <EmptyState
       title={t.title}
-      description={t.description}
-      action={{ label: t.accion, href: hrefDe({ ...filtro, dias: 90 }) }}
+      description={salida?.description ?? t.sinSalida.description}
+      action={salida ? { label: salida.accion, href: salida.href } : undefined}
       className="min-h-[260px]"
     />
   );
@@ -57,11 +72,12 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
         subtitle={t.seguidores.subtitle(seguidores.labels.length)}
         ariaLabel={t.seguidores.aria}
         chart="line"
-        // Con varias redes el eje arranca en cero: si arranca en el
-        // mínimo, las marcas salen desplazadas por el valor de Facebook
-        // («220,1 mil») y no caben en el margen del eje. Con una sola
-        // red no hay ese desfase y arrancar en el mínimo enseña la curva.
-        line={{ fromZero: filtro.red === null }}
+        // El eje arranca SIEMPRE en cero. Arrancando en el mínimo, las
+        // marcas dejan de ser redondas —«216,1 mil», «211,1 mil»— y no
+        // caben en los 48 px de margen del eje del kit: la del medio se
+        // corta y se lee «?06,1 mil». Subir ese margen es cambiar la API
+        // de LineChart; el pie de la tarjeta explica la escala.
+        line={{ fromZero: true }}
         labels={seguidores.labels.map((d) => f.date(d))}
         labelsHeader={t.seguidores.labelsHeader}
         series={aSeries(seguidores.series)}

@@ -99,10 +99,40 @@ export function aEntero(celda: string): number | null {
   return n === null ? null : Math.round(n);
 }
 
+/** Las regiones que escriben mes/día/año. El resto del mundo, día/mes/año. */
+const REGIONES_MES_PRIMERO = new Set(["US", "PH", "FM", "MH", "PW"]);
+
+/**
+ * En qué orden lee este workspace una fecha numérica. Sale del `locale`
+ * del workspace, igual que el formato de los montos y de las fechas en
+ * `lib/format.ts`: el producto no es de Colombia, solo arranca ahí.
+ */
+export function mesAntesQueDia(locale: string | undefined): boolean {
+  const region = locale?.replace(/_/g, "-").split("-")[1];
+  return region ? REGIONES_MES_PRIMERO.has(region.toUpperCase()) : false;
+}
+
+/** El patrón de una fecha numérica: dos números de uno o dos dígitos y un año. */
+const NUMERICA = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
+
+/**
+ * Si los dos primeros números pueden ser mes los dos, el archivo no
+ * dice cuál es cuál: «09/10/2026» es el 9 de octubre o el 10 de
+ * septiembre según quién lo exportó. Se lee con el orden del workspace
+ * y se avisa, porque un video colgado del mes equivocado no se nota.
+ */
+export function fechaAmbigua(celda: string): boolean {
+  const m = NUMERICA.exec(celda.trim());
+  if (!m) return false;
+  const a = +m[1]!;
+  const b = +m[2]!;
+  return a <= 12 && b <= 12 && a !== b;
+}
+
 /**
  * Una fecha de exportación. Se aceptan, en este orden:
  *   ISO 8601 con o sin zona   2026-09-10T15:00:00Z · 2026-09-10 15:00
- *   día/mes/año               10/09/2026 15:00  (es el orden de es-CO)
+ *   numérica                  10/09/2026 15:00  (el orden lo da el locale)
  *   solo fecha                2026-09-10 → mediodía UTC
  *
  * Sin zona horaria, la hora se lee en la del workspace: la exportación
@@ -112,8 +142,11 @@ export function aEntero(celda: string): number | null {
  * El día suelto se ancla a las 12:00 y no a las 00:00 a propósito: con
  * medianoche, un desfase de zona de ±5 h cambia el día, y «publicado el
  * 10» pasaría a ser el 9.
+ *
+ * Sin `locale`, el orden es día/mes/año: es el de casi todo el mundo y
+ * el de los valores por defecto del workspace.
  */
-export function aFechaIso(celda: string, timeZone: string): string | null {
+export function aFechaIso(celda: string, timeZone: string, locale?: string): string | null {
   const s = celda.trim();
   if (!s) return null;
 
@@ -127,11 +160,17 @@ export function aFechaIso(celda: string, timeZone: string): string | null {
     return desdeZona(+a!, +m!, +d!, hh === undefined ? 12 : +hh, +(mm ?? 0), +(ss ?? 0), timeZone);
   }
 
-  const dmy = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
-  if (dmy) {
-    const [, d, m, a, hh, mm, ss] = dmy;
-    if (+m! > 12) return null;
-    return desdeZona(+a!, +m!, +d!, hh === undefined ? 12 : +hh, +(mm ?? 0), +(ss ?? 0), timeZone);
+  const numerica = NUMERICA.exec(s);
+  if (numerica) {
+    const [, p1, p2, a, hh, mm, ss] = numerica;
+    const mesPrimero = mesAntesQueDia(locale);
+    let d = mesPrimero ? +p2! : +p1!;
+    let m = mesPrimero ? +p1! : +p2!;
+    // Un número mayor que doce no puede ser un mes: antes de rendirse se
+    // prueba al revés. «25/12/2026» en en-US es Navidad, no un error.
+    if (m > 12 && d <= 12) [d, m] = [m, d];
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+    return desdeZona(+a!, m, d, hh === undefined ? 12 : +hh, +(mm ?? 0), +(ss ?? 0), timeZone);
   }
 
   return null;
@@ -170,7 +209,7 @@ const TIPOS_MEDIO: Record<string, MediaTypeCsv> = {
 
 /** Lo que no reconocemos se queda en 'video': es lo que trae un CSV de métricas de contenido corto. */
 export function aTipoMedio(celda: string): MediaTypeCsv {
-  const k = celda.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const k = celda.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   return TIPOS_MEDIO[k] ?? "video";
 }
 
@@ -207,6 +246,13 @@ export interface FilaRevisada {
   fila: number;
   /** null si la fila no se puede escribir. */
   lectura: LecturaCsv | null;
+  /**
+   * Las celdas que identifican la fila DENTRO del archivo, tal como
+   * vinieron. Existen aunque la fila no se pueda escribir: quien va a
+   * arreglar el CSV en Excel necesita saber qué fila buscar, y el
+   * número de fila solo no basta.
+   */
+  crudo: { title: string | null; externalPostId: string | null };
   problemas: Problema[];
 }
 
@@ -223,6 +269,8 @@ export interface Revision {
 export interface OpcionesRevision {
   /** La del workspace: interpreta las fechas sin zona. */
   timeZone: string;
+  /** El del workspace: decide si «09/10/2026» es 9 de octubre o 10 de septiembre. */
+  locale?: string;
   /** Ids que ya existen en la cuenta de destino: la fila entra igual, como lectura nueva. */
   yaConocidos?: ReadonlySet<string>;
 }
@@ -262,10 +310,16 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     if (!externalPostId) error("externalPostId", "Sin identificador: ni columna de id ni enlace del que sacarlo.");
 
     const fechaCruda = celda(cruda, "publishedAt");
-    const publishedAt = fechaCruda ? aFechaIso(fechaCruda, opts.timeZone) : null;
+    const publishedAt = fechaCruda ? aFechaIso(fechaCruda, opts.timeZone, opts.locale) : null;
     if (!fechaCruda) error("publishedAt", "Sin fecha de publicación.");
     else if (!publishedAt) error("publishedAt", `No se entiende la fecha «${fechaCruda}».`);
     else if (Date.parse(publishedAt) > Date.now()) error("publishedAt", "La fecha de publicación está en el futuro.");
+    else if (fechaAmbigua(fechaCruda)) {
+      // El archivo no dice si el primer número es el día o el mes. Se
+      // lee con el orden del workspace y se enseña cómo quedó: si está
+      // al revés, se ve aquí y no tres meses después en el gráfico.
+      aviso("publishedAt", `La fecha «${fechaCruda}» es ambigua: se leyó como ${diaYMes(publishedAt, opts)}.`);
+    }
 
     const numero = (campo: Campo): number | null => {
       const bruto = celda(cruda, campo);
@@ -311,11 +365,13 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
           }
         : null;
 
+    const crudo = { title: celda(cruda, "title") || null, externalPostId: idCrudo || null };
+
     if (lectura) {
       if (vistos.has(lectura.externalPostId)) {
         duplicadasEnArchivo++;
         error("externalPostId", "Repetida en este mismo archivo: se queda la primera.");
-        filas.push({ fila: n, lectura: null, problemas });
+        filas.push({ fila: n, lectura: null, crudo, problemas });
         return;
       }
       vistos.add(lectura.externalPostId);
@@ -327,7 +383,7 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
       }
     }
 
-    filas.push({ fila: n, lectura, problemas });
+    filas.push({ fila: n, lectura, crudo, problemas });
   });
 
   return {
@@ -337,6 +393,15 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     avisos: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "aviso").length, 0),
     duplicadasEnArchivo,
   };
+}
+
+/** «9 de octubre», en el idioma y la zona del workspace. Solo para el aviso de ambigüedad. */
+function diaYMes(iso: string, opts: OpcionesRevision): string {
+  return new Intl.DateTimeFormat(opts.locale ?? "es-CO", {
+    day: "numeric",
+    month: "long",
+    timeZone: opts.timeZone,
+  }).format(new Date(iso));
 }
 
 /** Lo que hace la pantalla en cuanto llega un archivo: leer, detectar y premapear. */

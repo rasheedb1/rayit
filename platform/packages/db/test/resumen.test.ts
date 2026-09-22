@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import type { WorkspaceTx } from '../src/client.ts';
 import {
   asegurarCuentaCsv,
+  contarPosts,
   getCoberturaResumen,
   getFrescuraPorConexion,
   getResumenKpis,
@@ -21,21 +22,33 @@ import {
   getViewsPorBloque,
   importarLecturasCsv,
   listCuentasImportables,
+  listExternalPostIds,
   pasoDeBloque,
+  ultimaEtiquetaEnLaRejilla,
   type LecturaCsv,
 } from '../src/queries/resumen.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 /** Un workspace vecino, vacío: el estado "sin datos" tiene que ser NULL, no cero. */
 const WS_VECINO = '0000000c-0000-4000-8000-000000000042';
+/** Otro vecino, este SOLO con lo que deja una importación por CSV (RES-2). */
+const WS_SOLO_CSV = '0000000c-0000-4000-8000-000000000043';
 
 let t: TestDb;
 
 before(async () => {
   t = await openTestDb();
+  // Los dos vecinos llevan creador: sin él, `importarLecturasCsv`
+  // moriría por falta de creador y la prueba de aislamiento pasaría por
+  // el motivo equivocado, sin llegar a comprobar la conexión ajena.
   await t.admin(`
     INSERT INTO workspace (id, slug, name, currency, timezone, locale, country)
-    VALUES ('${WS_VECINO}', 'vecino-resumen', 'Estudio vecino', 'COP', 'America/Bogota', 'es-CO', 'CO')
+    VALUES ('${WS_VECINO}',   'vecino-resumen',  'Estudio vecino',  'COP', 'America/Bogota', 'es-CO', 'CO'),
+           ('${WS_SOLO_CSV}', 'vecino-solo-csv', 'Estudio de CSVs', 'COP', 'America/Bogota', 'es-CO', 'CO')
+    ON CONFLICT DO NOTHING;
+    INSERT INTO creator_profile (workspace_id, display_name, handle)
+    VALUES ('${WS_VECINO}',   'Vecino',        'vecino'),
+           ('${WS_SOLO_CSV}', 'Solo CSV',      'solo.csv')
     ON CONFLICT DO NOTHING;
   `);
 });
@@ -151,26 +164,66 @@ describe('Resumen · las dos series', () => {
 
   test('views por bloque: el paso lo marca el periodo y el último bloque está completo', async () => {
     assert.equal(pasoDeBloque(7), 1);
-    assert.equal(pasoDeBloque(30), 2);
-    assert.equal(pasoDeBloque(90), 7);
+    assert.equal(pasoDeBloque(30), 4);
+    assert.equal(pasoDeBloque(90), 10);
 
-    const quincena = await enLaura((tx) => getViewsPorBloque(tx, { dias: 30 }));
-    assert.equal(quincena.paso, 2);
-    assert.equal(quincena.bloques.length, 15);
+    const mes = await enLaura((tx) => getViewsPorBloque(tx, { dias: 30 }));
+    assert.equal(mes.paso, 4);
+    assert.equal(mes.bloques.length, 7);
 
-    const semanas = await enLaura((tx) => getViewsPorBloque(tx, { dias: 90 }));
-    assert.equal(semanas.paso, 7);
-    assert.equal(semanas.bloques.length, 12); // las doce semanas del mock
-    for (const b of semanas.bloques) {
-      assert.equal((Date.parse(b.fin) - Date.parse(b.inicio)) / 86_400_000, 6);
+    const trimestre = await enLaura((tx) => getViewsPorBloque(tx, { dias: 90 }));
+    assert.equal(trimestre.paso, 10);
+    assert.equal(trimestre.bloques.length, 9);
+    for (const b of trimestre.bloques) {
+      assert.equal((Date.parse(b.fin) - Date.parse(b.inicio)) / 86_400_000, 9);
     }
     // Ordenados de más viejo a más nuevo.
-    assert.ok(Date.parse(semanas.bloques[0]!.inicio) < Date.parse(semanas.bloques.at(-1)!.inicio));
+    assert.ok(Date.parse(trimestre.bloques[0]!.inicio) < Date.parse(trimestre.bloques.at(-1)!.inicio));
 
     const dias = await enLaura((tx) => getViewsPorBloque(tx, { dias: 7 }));
     assert.equal(dias.paso, 1);
     assert.equal(dias.bloques.length, 7);
     assert.equal(dias.series.every((s) => s.data.length === 7), true);
+  });
+
+  test('con cualquier periodo, la última barra cae en la rejilla de etiquetas del kit', async () => {
+    // BarChart etiqueta cada ceil(n/8) categorías y ADEMÁS fuerza la
+    // última: si esa no cae en la rejilla, sus dos etiquetas se pisan.
+    for (const dias of [7, 30, 90] as const) {
+      const serie = await enLaura((tx) => getViewsPorBloque(tx, { dias }));
+      assert.ok(
+        ultimaEtiquetaEnLaRejilla(serie.bloques.length),
+        `con ${dias} días salen ${serie.bloques.length} barras y la última etiqueta se pisa con la anterior`,
+      );
+    }
+  });
+
+  test('una conexión nueva no recorta la serie de las que llevan meses midiendo', async () => {
+    const antes = await enLaura((tx) => getSeguidoresPorRed(tx, { dias: 90 }));
+    assert.equal(antes.labels.length, 90);
+
+    // Una quinta cuenta con UNA sola lectura, la de hoy.
+    const nueva = await enLaura((tx) => asegurarCuentaCsv(tx, { red: 'tiktok', handle: 'recien.llegada' }));
+    try {
+      await enLaura((tx) =>
+        tx.query(
+          `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, views)
+           SELECT $1, current_workspace_id(), max(a.day), 1200, 300 FROM account_metric_snapshot a`,
+          [nueva.connectionId],
+        ),
+      );
+
+      const despues = await enLaura((tx) => getSeguidoresPorRed(tx, { dias: 90 }));
+      assert.equal(despues.labels.length, 90, 'la conexión joven recortó la ventana de todas');
+      const bloques = await enLaura((tx) => getViewsPorBloque(tx, { dias: 90 }));
+      assert.equal(bloques.bloques.length, 9, 'la conexión joven vació el gráfico de barras');
+      // Y su red sigue sumando lo de siempre en el último punto, más la nueva.
+      const tiktokAntes = antes.series.find((x) => x.platformId === 'tiktok')!.data.at(-1)!;
+      const tiktokDespues = despues.series.find((x) => x.platformId === 'tiktok')!.data.at(-1)!;
+      assert.equal(tiktokDespues, tiktokAntes + 1200);
+    } finally {
+      await t.admin(`DELETE FROM social_connection WHERE id = '${nueva.connectionId}'`);
+    }
   });
 
   test('el filtro por red también recorta las series', async () => {
@@ -196,10 +249,12 @@ describe('Resumen · frescura y cobertura', () => {
     const laura = await enLaura((tx) => getCoberturaResumen(tx));
     assert.equal(laura.conexiones, 4);
     assert.equal(laura.conDatos, 4);
-    assert.ok(laura.posts >= 60);
+    // El conteo de posts va aparte: no entra en el camino crítico de la pantalla.
+    assert.ok((await enLaura((tx) => contarPosts(tx))) >= 60);
 
     const vecino = await t.db.withWorkspace(WS_VECINO, (tx) => getCoberturaResumen(tx));
-    assert.deepEqual(vecino, { conexiones: 0, conDatos: 0, posts: 0 });
+    assert.deepEqual(vecino, { conexiones: 0, conDatos: 0 });
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => contarPosts(tx)), 0);
   });
 });
 
@@ -283,18 +338,59 @@ describe('Resumen · importación por CSV', () => {
   });
 
   test('una importación aparece en el Resumen del workspace', async () => {
-    const antes = await enLaura((tx) => getCoberturaResumen(tx));
+    const antes = await enLaura((tx) => contarPosts(tx));
     const cuenta = await enLaura((tx) => asegurarCuentaCsv(tx, { red: 'facebook', handle: 'aparece' }));
     await enLaura((tx) =>
       importarLecturasCsv(tx, { connectionId: cuenta.connectionId, red: 'facebook', filas: [fila('fb_1'), fila('fb_2')] }),
     );
-    const despues = await enLaura((tx) => getCoberturaResumen(tx));
-    assert.equal(despues.posts, antes.posts + 2);
+    const despues = await enLaura((tx) => contarPosts(tx));
+    assert.equal(despues, antes + 2);
 
     const frescura = await enLaura((tx) => getFrescuraPorConexion(tx));
     const importada = frescura.find((f) => f.connectionId === cuenta.connectionId);
     assert.equal(importada?.ultimaFuente, 'csv_import');
     assert.ok(importada?.ultimaLecturaContenido);
+  });
+
+  test('la previsualización puede preguntar qué ids ya existen, sin traerse la tabla', async () => {
+    const cuenta = await enLaura((tx) => asegurarCuentaCsv(tx, { red: 'instagram', handle: 'conocidos' }));
+    await enLaura((tx) =>
+      importarLecturasCsv(tx, { connectionId: cuenta.connectionId, red: 'instagram', filas: [fila('ig_ya_1'), fila('ig_ya_2')] }),
+    );
+    const hay = await enLaura((tx) => listExternalPostIds(tx, cuenta.connectionId, ['ig_ya_2', 'ig_nuevo']));
+    assert.deepEqual(hay, ['ig_ya_2']);
+    // Sin ids que preguntar, ni siquiera se consulta.
+    assert.deepEqual(await enLaura((tx) => listExternalPostIds(tx, cuenta.connectionId, [])), []);
+  });
+
+  test('un workspace que SOLO importó un CSV ve cifras, no una pantalla en blanco', async () => {
+    // El caso para el que existe RES-2: ni una fila de serie de cuenta,
+    // solo post + post_metric_snapshot. Si el reloj del módulo mirase
+    // únicamente account_metric_snapshot, aquí todo saldría null.
+    const enCsv = <T,>(fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> => t.db.withWorkspace(WS_SOLO_CSV, fn);
+    const cuenta = await enCsv((tx) => asegurarCuentaCsv(tx, { red: 'instagram', handle: 'solo.csv' }));
+    await enCsv((tx) =>
+      importarLecturasCsv(tx, { connectionId: cuenta.connectionId, red: 'instagram', filas: [fila('csv_1'), fila('csv_2')] }),
+    );
+
+    const cobertura = await enCsv((tx) => getCoberturaResumen(tx));
+    assert.deepEqual(cobertura, { conexiones: 1, conDatos: 1 });
+
+    const kpis = await enCsv((tx) => getResumenKpis(tx, { dias: 30 }));
+    assert.ok(kpis.hasta !== null, 'el módulo tiene "hoy" aunque no haya serie de cuenta');
+    assert.equal(kpis.posts, 2);
+    assert.ok(kpis.nonFollowerReach.value !== null && kpis.nonFollowerReach.value > 0);
+    assert.ok(kpis.savesPer1k.value !== null && kpis.savesPer1k.value > 0);
+    // Lo que de verdad no se sabe sigue siendo null, no cero.
+    assert.equal(kpis.followers.value, null);
+    assert.equal(kpis.views.value, null);
+
+    // Y la frescura sabe decir hasta cuándo llegan esos datos.
+    const frescura = await enCsv((tx) => getFrescuraPorConexion(tx));
+    assert.equal(frescura.length, 1);
+    assert.equal(frescura[0]!.ultimoDiaCuenta, null);
+    assert.ok(frescura[0]!.ultimaLecturaContenido);
+    assert.equal(frescura[0]!.ultimaFuente, 'csv_import');
   });
 
   test('un lote vacío o una cuenta ajena se rechazan', async () => {
@@ -309,7 +405,7 @@ describe('Resumen · importación por CSV', () => {
         t.db.withWorkspace(WS_VECINO, (tx) =>
           importarLecturasCsv(tx, { connectionId: cuenta.connectionId, red: 'tiktok', filas: [fila('x')] }),
         ),
-      /no existe en este workspace|no tiene ningún creador/,
+      /no existe en este workspace/,
     );
   });
 });

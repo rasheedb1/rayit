@@ -26,6 +26,24 @@ export function parseFiltro(params: { periodo?: string; red?: string }): Filtro 
   return { dias: parsePeriodo(params.periodo), red: parseRed(params.red) };
 }
 
+/**
+ * Qué salida ofrecer cuando una tarjeta se queda sin datos.
+ *
+ * Es una decisión, no un texto, y por eso vive aquí y se prueba:
+ * ofrecer «Ver 90 días» a quien YA está en 90 días enlaza a la página
+ * en la que está, y aconsejarle «prueba con un periodo más largo» es
+ * pedirle algo imposible. Cuando no queda ninguna salida, `null`: la
+ * pantalla explica por qué no hay datos y no pinta ningún botón.
+ */
+export function salidaDelVacio(filtro: Filtro): "masLargo" | "quitarRed" | null {
+  if (filtro.dias < MAX_PERIODO) return "masLargo";
+  if (filtro.red !== null) return "quitarRed";
+  return null;
+}
+
+/** El periodo más largo que ofrece el filtro. */
+export const MAX_PERIODO: Periodo = PERIODOS[PERIODOS.length - 1]!;
+
 /** La ruta canónica de un filtro: sin parámetros cuando son los de por defecto. */
 export function hrefDe(filtro: Filtro): string {
   const q = new URLSearchParams();

@@ -7,7 +7,11 @@ import type { CuentaImportable } from "@mc/db/queries/resumen";
 // La Server Action se sustituye: aquí importa el recorrido de la
 // pantalla, no lo que escribe Postgres (eso lo prueba @mc/db).
 const importarCsv = vi.fn();
-vi.mock("./actions", () => ({ importarCsv: (...args: unknown[]) => importarCsv(...args) }));
+const buscarPostsConocidos = vi.fn();
+vi.mock("./actions", () => ({
+  importarCsv: (...args: unknown[]) => importarCsv(...args),
+  buscarPostsConocidos: (...args: unknown[]) => buscarPostsConocidos(...args),
+}));
 
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push: vi.fn() }) }));
@@ -36,6 +40,9 @@ async function subir(nombre: string) {
 
 beforeEach(() => {
   importarCsv.mockReset();
+  buscarPostsConocidos.mockReset();
+  // Por defecto, la base no dice nada: la previsualización vale igual.
+  buscarPostsConocidos.mockResolvedValue({ ok: false });
   refresh.mockReset();
 });
 
@@ -113,6 +120,29 @@ describe("el asistente de importación", () => {
     expect(importarCsv).not.toHaveBeenCalled();
   });
 
+  it("avisa de los videos que YA están en la cuenta antes de escribir nada", async () => {
+    buscarPostsConocidos.mockResolvedValue({
+      ok: true,
+      ids: ["ig_18001122334455001", "ig_18001122334455002"],
+    });
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+
+    await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalled());
+    const preguntado = buscarPostsConocidos.mock.calls[0]?.[0] as { connectionId: string; ids: string[] };
+    expect(preguntado.connectionId).toBe(CUENTA_IG.connectionId);
+    expect(preguntado.ids).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+
+    // El paso 3 lo dice antes de confirmar, no el resumen del paso 4.
+    expect(await screen.findByText("2 ya estaban: se les añade una lectura")).toBeInTheDocument();
+    const tabla = screen.getByRole("table");
+    expect(within(tabla).getAllByText("Con aviso")).toHaveLength(2);
+    expect(within(tabla).getAllByText(/Este video ya está/)).toHaveLength(2);
+    expect(importarCsv).not.toHaveBeenCalled();
+  });
+
   it("si la escritura falla, lo dice y no finge que terminó", async () => {
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
     await subir("instagram-insights.csv");
@@ -123,6 +153,25 @@ describe("el asistente de importación", () => {
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo importar.");
+    expect(screen.queryByText(/videos,/)).not.toBeInTheDocument();
+  });
+
+  it("si la acción ni siquiera responde, la pantalla lo dice y conserva el trabajo", async () => {
+    // Lo que pasa cuando Next rechaza el cuerpo por tamaño: la promesa
+    // se rompe. Sin try/catch subía a la frontera de error y se llevaba
+    // por delante el archivo, el mapeo y la revisión.
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("3 de 3 filas listas");
+
+    importarCsv.mockRejectedValue(new Error("Body exceeded 1 MB limit"));
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo importar.");
+    // Sigue en el paso 3, con la revisión entera delante.
+    expect(screen.getByText("3 de 3 filas listas")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
     expect(screen.queryByText(/videos,/)).not.toBeInTheDocument();
   });
 });

@@ -21,11 +21,20 @@ function spark(serie: KpiSerie): number[] | undefined {
   return serie.spark.length > 1 ? serie.spark : undefined;
 }
 
-/** El delta solo se muestra si existe; si no, se dice por qué. */
-function comparacion(serie: KpiSerie, label: string) {
-  return serie.delta === null
-    ? { note: MESSAGES.kpis.sinComparacion }
-    : { delta: serie.delta, deltaLabel: label };
+/**
+ * Lo que va debajo de la cifra: el delta si existe y, si no, por qué no
+ * existe. Las CUATRO tarjetas pasan por aquí a propósito: si unas
+ * explican la ausencia de flecha y otras la omiten, quien mira no puede
+ * distinguir «no hay con qué comparar» de «no cambió».
+ *
+ * Cuando la tarjeta ya trae nota propia —los videos publicados, la
+ * señal que más pesa—, las dos frases se componen en vez de pisarse.
+ */
+function comparacion(serie: KpiSerie, label: string, note?: string) {
+  if (serie.delta === null) {
+    return { note: [note, MESSAGES.kpis.sinComparacion].filter(Boolean).join(" · ") };
+  }
+  return { delta: serie.delta, deltaLabel: label, note };
 }
 
 function valor(serie: KpiSerie, formatear: (v: number) => string): string {
@@ -52,21 +61,29 @@ export async function Kpis({ filtro }: { filtro: Filtro }) {
         label={t.views.label(filtro.dias)}
         value={valor(kpis.views, (v) => f.compact(v))}
         sparkline={spark(kpis.views)}
-        {...comparacion(kpis.views, t.deltaLabel(filtro.dias))}
+        // Esta cifra cuenta otra cosa que las dos de al lado —la cuenta
+        // entera, no solo lo publicado en el periodo— y hay que decirlo.
+        {...comparacion(kpis.views, t.deltaLabel(filtro.dias), t.views.note)}
       />
       <Kpi
         label={t.nonFollowerReach.label}
         value={valor(kpis.nonFollowerReach, (v) => f.pct(v))}
-        note={kpis.nonFollowerReach.value === null ? undefined : t.nonFollowerReach.note(kpis.posts)}
         sparkline={spark(kpis.nonFollowerReach)}
-        {...(kpis.nonFollowerReach.delta === null ? {} : { delta: kpis.nonFollowerReach.delta, deltaLabel: t.deltaLabel(filtro.dias) })}
+        {...comparacion(
+          kpis.nonFollowerReach,
+          t.deltaLabel(filtro.dias),
+          kpis.nonFollowerReach.value === null ? undefined : t.nonFollowerReach.note(kpis.posts),
+        )}
       />
       <Kpi
         label={t.savesPer1k.label}
         value={valor(kpis.savesPer1k, (v) => f.compact(v))}
-        note={kpis.savesPer1k.value === null ? undefined : t.savesPer1k.note}
         sparkline={spark(kpis.savesPer1k)}
-        {...(kpis.savesPer1k.delta === null ? {} : { delta: kpis.savesPer1k.delta, deltaLabel: t.deltaLabel(filtro.dias) })}
+        {...comparacion(
+          kpis.savesPer1k,
+          t.deltaLabel(filtro.dias),
+          kpis.savesPer1k.value === null ? undefined : t.savesPer1k.note,
+        )}
       />
     </KpiRow>
   );

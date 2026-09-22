@@ -5,12 +5,12 @@ import { getCoberturaResumen } from "@mc/db/queries/resumen";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
-import { Filtros } from "./filtros";
-import { Frescura } from "./frescura";
-import { Graficos, GraficosEsqueleto } from "./graficos";
-import { Kpis, KpisEsqueleto } from "./kpis";
-import { MESSAGES } from "./messages";
-import { parseFiltro } from "./_lib/filtro";
+import { Filtros } from "../filtros";
+import { Frescura, FrescuraEsqueleto } from "../frescura";
+import { Graficos, GraficosEsqueleto } from "../graficos";
+import { Kpis, KpisEsqueleto } from "../kpis";
+import { MESSAGES } from "../messages";
+import { parseFiltro } from "../_lib/filtro";
 
 export const metadata: Metadata = { title: "Resumen" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -97,7 +97,14 @@ export default async function ResumenPage({
             </Suspense>
           </div>
 
-          <Frescura />
+          {/*
+            Frescura también es asíncrona: sin su propia frontera,
+            su consulta bloquea el envío del documento y los dos
+            esqueletos de arriba no llegan a verse nunca.
+          */}
+          <Suspense fallback={<FrescuraEsqueleto />}>
+            <Frescura />
+          </Suspense>
         </>
       )}
     </>

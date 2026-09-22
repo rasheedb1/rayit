@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   asegurarCuentaCsv,
+  contarPosts,
   getCoberturaResumen,
   getFrescuraPorConexion,
+  getResumenKpis,
   importarLecturasCsv,
 } from "@mc/db/queries/resumen";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
@@ -37,10 +39,11 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     const { tabla, deteccion, mapeo } = analizar(fixture("instagram-insights.csv"));
     expect(deteccion.formato?.red).toBe("instagram");
 
-    const { listas } = revisar(tabla, mapeo, { timeZone: "America/Bogota" });
+    const { listas } = revisar(tabla, mapeo, { timeZone: "America/Bogota", locale: "es-CO" });
     expect(listas).toHaveLength(3);
 
     const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCoberturaResumen(tx));
+    const postsAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => contarPosts(tx));
 
     const resultado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const cuenta = await asegurarCuentaCsv(tx, { red: "instagram", handle: "laura.cocinafacil.csv" });
@@ -49,8 +52,14 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     expect(resultado).toMatchObject({ postsNuevos: 3, postsConocidos: 0, lecturas: 3 });
 
     const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCoberturaResumen(tx));
-    expect(despues.posts).toBe(antes.posts + 3);
+    expect(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => contarPosts(tx))).toBe(postsAntes + 3);
     expect(despues.conexiones).toBe(antes.conexiones + 1);
+
+    // Y el Resumen cuenta esos videos: los dos KPIs de contenido no
+    // cuelgan de la serie de cuenta, que una importación nunca llena.
+    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenKpis(tx, { dias: 30 }));
+    expect(kpis.nonFollowerReach.value).not.toBeNull();
+    expect(kpis.savesPer1k.value).not.toBeNull();
 
     // La cuenta importada dice de dónde salieron sus datos.
     const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFrescuraPorConexion(tx));

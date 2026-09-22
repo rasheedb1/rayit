@@ -11,11 +11,18 @@
  * guardados por mil se calculan en SQL, sobre account_metric_snapshot y
  * la vista post_metrics_latest. React solo formatea lo que llega.
  *
- * El reloj: el "hoy" del módulo es el ÚLTIMO DÍA CERRADO con lecturas
- * de cuenta (max(day) de account_metric_snapshot), no now(). El
- * recolector cierra el día anterior de madrugada, así que anclar en
- * now() dejaría siempre un día a medias al final de cada serie y el
- * aviso «datos hasta el {fecha}» diría "hoy" con datos incompletos.
+ * El reloj: el "hoy" del módulo es el ÚLTIMO DÍA CERRADO con lecturas,
+ * no now(). El recolector cierra el día anterior de madrugada, así que
+ * anclar en now() dejaría siempre un día a medias al final de cada
+ * serie y el aviso «datos hasta el {fecha}» diría "hoy" con datos
+ * incompletos.
+ *
+ * Ese último día mira las DOS fuentes: la serie de cuenta
+ * (account_metric_snapshot, que llena el recolector) y las lecturas de
+ * contenido (post_metric_snapshot, que llena también la importación por
+ * CSV). Un workspace que solo subió un archivo —el creador para el que
+ * existe RES-2— no tiene ni una fila de serie de cuenta, y anclar el
+ * reloj solo ahí dejaba el Resumen entero en blanco.
  *
  * Las fechas `date` salen como 'YYYY-MM-DD' (to_char) para no depender
  * de la zona horaria del driver; los timestamptz, como ISO 8601 en UTC.
@@ -148,7 +155,6 @@ export interface CoberturaResumen {
   conexiones: number;
   /** De esas, cuántas tienen al menos una lectura de cuenta o de contenido. */
   conDatos: number;
-  posts: number;
 }
 
 // =====================================================================
@@ -168,7 +174,12 @@ const SQL_KPIS = `
 WITH ventana AS (
   SELECT $1::int AS dias,
          $2::text AS red,
-         (SELECT max(a.day) FROM account_metric_snapshot a) AS fin
+         -- greatest() ignora los NULL: basta con que UNA de las dos
+         -- fuentes tenga algo para que el módulo tenga "hoy".
+         greatest(
+           (SELECT max(a.day) FROM account_metric_snapshot a),
+           (SELECT (max(s.captured_at) AT TIME ZONE 'UTC')::date FROM post_metric_snapshot s)
+         ) AS fin
 ),
 corte AS (
   SELECT v.dias, v.red,
@@ -177,16 +188,19 @@ corte AS (
   FROM ventana v
   WHERE v.fin IS NOT NULL
 ),
--- Desde cuándo hay datos. Sirve para descartar las ventanas que la
--- historia no cubre: una suma de treinta días sobre una base con tres
--- días de historia no vale cero, no vale nada.
+-- Desde cuándo hay serie de cuenta. Sirve para descartar las ventanas
+-- que la historia no cubre: una SUMA de treinta días sobre una base con
+-- tres días de historia no vale cero, no vale nada.
+--
+-- Solo la usan las views, que son una suma. Los dos KPIs de contenido
+-- son RAZONES sobre los posts publicados dentro de la ventana: una
+-- ventana que empieza antes del primer post no los falsea, solo los
+-- calcula sobre menos videos. Atarlos a este origen era lo que dejaba
+-- en null el alcance y los guardados de un workspace recién importado.
 origen AS (
   SELECT (SELECT min(a.day) FROM account_metric_snapshot a
             JOIN social_connection sc ON sc.id = a.connection_id AND sc.deleted_at IS NULL
-           WHERE ($2::text IS NULL OR sc.platform_id = $2::text)) AS dia_cuenta,
-         (SELECT min(p.published_at) FROM post p
-           WHERE p.deleted_on_platform = false
-             AND ($2::text IS NULL OR p.platform_id = $2::text)) AS primer_post
+           WHERE ($2::text IS NULL OR sc.platform_id = $2::text)) AS dia_cuenta
 ),
 bucket AS (
   SELECT g.i, c.dias, c.red,
@@ -244,9 +258,11 @@ punto AS (
          -- una suma a medias que se lee como una caída.
          CASE WHEN (b.fin_b - make_interval(days => b.dias)) AT TIME ZONE 'UTC' >= o.dia_cuenta
               THEN v.views END AS views,
-         CASE WHEN b.fin_b - make_interval(days => b.dias) >= o.primer_post AND c.reach > 0
+         -- Razones: valen con los videos que haya en la ventana, y si no
+         -- hay ninguno el divisor es NULL y la razón sale NULL sola.
+         CASE WHEN c.reach > 0
               THEN c.reach_nf::numeric / c.reach END AS no_seguidores,
-         CASE WHEN b.fin_b - make_interval(days => b.dias) >= o.primer_post AND c.post_views > 0
+         CASE WHEN c.post_views > 0
               THEN c.saves::numeric * 1000 / c.post_views END AS guardados_1k,
          COALESCE(c.posts, 0) AS posts
   FROM bucket b
@@ -359,10 +375,16 @@ export async function getResumenKpis(tx: WorkspaceTx, filtro: ResumenFiltro): Pr
  * (arrastre), no el del día exacto: si un día no se sincronizó, la
  * curva no cae a cero.
  *
- * La ventana empieza en el día en que TODAS las redes del filtro ya
- * tienen lecturas. Así ninguna serie necesita rellenos inventados y el
- * primer punto del gráfico es un dato real de todas. Quien llama recibe
- * `labels` y decide cómo decirlo.
+ * La ventana la decide EL PERIODO, no la conexión más joven. El único
+ * suelo es «antes de esto no hay ni una lectura en todo el workspace»:
+ * con `greatest(max(day) - (dias-1), min(primer_dia))`, conectar hoy
+ * una cuenta nueva ya no recorta la serie de las que llevan meses
+ * midiendo —que era lo que dejaba el gráfico en un solo punto.
+ *
+ * Una red que empezó a medirse dentro de la ventana arranca en cero
+ * hasta su primera lectura: la serie del kit es `number[]`, no admite
+ * huecos, y un cero es más honesto que arrastrar hacia atrás un valor
+ * que nadie midió. La nota del gráfico lo dice.
  */
 const SQL_SEGUIDORES = `
 WITH conexion AS (
@@ -374,7 +396,7 @@ WITH conexion AS (
 rango AS (
   SELECT greatest(
            (SELECT max(a.day) FROM account_metric_snapshot a) - ($1::int - 1),
-           (SELECT max(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL)
+           (SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL)
          ) AS desde,
          (SELECT max(a.day) FROM account_metric_snapshot a) AS hasta
 ),
@@ -410,8 +432,7 @@ export async function getSeguidoresPorRed(tx: WorkspaceTx, filtro: ResumenFiltro
 /**
  * Los bloques se anclan al último día cerrado y caminan hacia atrás, no
  * a la semana del calendario: así el último bloque siempre está
- * completo. Cuántos días cubre cada uno lo decide `pasoDeBloque`; con
- * 90 días salen las doce semanas del mock.
+ * completo. Cuántos días cubre cada uno lo decide `pasoDeBloque`.
  *
  * El generate_series va hasta `dias` porque ese es el techo aunque el
  * paso sea 1; quien corta de verdad es el WHERE, que descarta el
@@ -428,7 +449,7 @@ rango AS (
   SELECT (SELECT max(a.day) FROM account_metric_snapshot a) AS hasta,
          greatest(
            (SELECT max(a.day) FROM account_metric_snapshot a) - ($1::int - 1),
-           (SELECT max(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL)
+           (SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL)
          ) AS desde
 ),
 bloque AS (
@@ -467,18 +488,37 @@ export async function getViewsPorBloque(tx: WorkspaceTx, filtro: ResumenFiltro):
 }
 
 /**
- * Cuántos días cubre cada barra. No es una regla estética: el kit
- * etiqueta el eje x cada ceil(n/8) categorías Y ADEMÁS la última, así
- * que con 30 barras las dos últimas etiquetas se pisan. Con 7, 15 y 12
- * barras eso no pasa, y de paso treinta barras diarias a 1 400 px
- * quedan demasiado finas para leer nada.
+ * Cuántos días cubre cada barra. No es una regla estética: BarChart
+ * etiqueta el eje x cada `ceil(n/8)` categorías Y ADEMÁS fuerza la
+ * última, así que si la última no cae en esa rejilla sus dos etiquetas
+ * se pisan y se lee «8 sep15 sep». La condición es
+ * `(n - 1) % (n > 8 ? ceil(n / 8) : 1) === 0`, y la comprueba
+ * `ultimaEtiquetaEnLaRejilla` en las pruebas.
  *
- *    7 días → 7 barras de un día
- *   30 días → 15 barras de dos días
- *   90 días → 12 barras de siete días (las doce semanas del mock)
+ * Con doce barras de siete días —las doce semanas del mock— eso NO se
+ * cumple: ceil(12/8) = 2 marca 0,2,4,6,8,10 y luego fuerza la 11. Subir
+ * el número de etiquetas es cambiar la API del kit, así que lo que se
+ * mueve es el número de barras:
+ *
+ *    7 días →  7 barras de un día      (n ≤ 8: se etiquetan todas)
+ *   30 días →  7 barras de cuatro días (n ≤ 8: se etiquetan todas)
+ *   90 días →  9 barras de diez días   (cada 2: 0,2,4,6,8 y 8 es la última)
+ *
+ * De paso caben a 400 px: con quince barras las ocho etiquetas se
+ * tocaban en móvil aunque la rejilla cuadrara.
  */
 export function pasoDeBloque(dias: Periodo): number {
-  return dias >= 90 ? 7 : dias >= 30 ? 2 : 1;
+  return dias >= 90 ? 10 : dias >= 30 ? 4 : 1;
+}
+
+/**
+ * La regla de etiquetado de BarChart, escrita una sola vez para que la
+ * prueba compruebe lo mismo que el kit dibuja.
+ */
+export function ultimaEtiquetaEnLaRejilla(barras: number): boolean {
+  if (barras <= 1) return true;
+  const cada = barras > 8 ? Math.ceil(barras / 8) : 1;
+  return (barras - 1) % cada === 0;
 }
 
 /**
@@ -555,17 +595,27 @@ export async function getFrescuraPorConexion(tx: WorkspaceTx): Promise<FrescuraC
  * sin conexiones ve el estado vacío, no cuatro ceros.
  */
 export async function getCoberturaResumen(tx: WorkspaceTx): Promise<CoberturaResumen> {
-  const { rows } = await tx.query<{ conexiones: number; con_datos: number; posts: number }>(`
+  const { rows } = await tx.query<{ conexiones: number; con_datos: number }>(`
     SELECT count(*)::int AS conexiones,
            count(*) FILTER (
              WHERE EXISTS (SELECT 1 FROM account_metric_snapshot a WHERE a.connection_id = sc.id)
                 OR EXISTS (SELECT 1 FROM post p WHERE p.connection_id = sc.id)
-           )::int AS con_datos,
-           (SELECT count(*)::int FROM post) AS posts
+           )::int AS con_datos
     FROM social_connection sc
     WHERE sc.deleted_at IS NULL`);
   const fila = rows[0];
-  return { conexiones: fila?.conexiones ?? 0, conDatos: fila?.con_datos ?? 0, posts: fila?.posts ?? 0 };
+  return { conexiones: fila?.conexiones ?? 0, conDatos: fila?.con_datos ?? 0 };
+}
+
+/**
+ * Cuántos posts vivos tiene el workspace. Va aparte de `getCoberturaResumen`
+ * a propósito: es un conteo completo de la tabla más grande y la
+ * cobertura se lee en el camino crítico de /resumen, antes de soltar el
+ * shell. Hoy solo lo usan las pruebas y la importación.
+ */
+export async function contarPosts(tx: WorkspaceTx): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM post');
+  return rows[0]?.n ?? 0;
 }
 
 // =====================================================================
@@ -614,6 +664,28 @@ export async function listCuentasImportables(tx: WorkspaceTx, red?: RedId | null
     accessMode: r.access_mode,
     posts: r.posts,
   }));
+}
+
+/**
+ * De estos identificadores, cuáles YA existen en la cuenta de destino.
+ *
+ * Es lo que deja que el paso 3 de la importación avise «este video ya
+ * está: se añade una lectura nueva» ANTES de escribir, en vez de
+ * enterarse en el resumen final. Recibe los ids del archivo y no
+ * devuelve la tabla entera: una cuenta con miles de videos no tiene por
+ * qué viajar al navegador para comparar veinte filas.
+ */
+export async function listExternalPostIds(
+  tx: WorkspaceTx,
+  connectionId: string,
+  ids: readonly string[],
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await tx.query<{ external_post_id: string }>(
+    'SELECT external_post_id FROM post WHERE connection_id = $1 AND external_post_id = ANY($2::text[])',
+    [connectionId, [...new Set(ids)]],
+  );
+  return rows.map((r) => r.external_post_id);
 }
 
 /**
@@ -703,12 +775,16 @@ export async function importarLecturasCsv(
   if (input.filas.length === 0) {
     throw new Error('No hay filas que importar.');
   }
-  const creador = await getCreadorPorDefecto(tx);
+  // La cuenta de destino se comprueba ANTES que nada: es la frontera
+  // entre workspaces. Si se mirase después del creador, un connectionId
+  // ajeno en un workspace sin creador moriría con el mensaje equivocado
+  // y la comprobación que de verdad importa no llegaría a correr.
   const { rows: cuenta } = await tx.query<{ id: string }>(
     'SELECT id FROM social_connection WHERE id = $1 AND deleted_at IS NULL AND platform_id = $2',
     [input.connectionId, input.red],
   );
   if (!cuenta[0]) throw new Error('La cuenta de destino no existe en este workspace.');
+  const creador = await getCreadorPorDefecto(tx);
 
   // Un solo captured_at para todo el lote: las lecturas de un mismo
   // archivo son la misma foto, y así age_hours queda coherente entre ellas.
@@ -718,11 +794,10 @@ export async function importarLecturasCsv(
   const capturadoEn = reloj[0]!.ahora;
 
   const ids = input.filas.map((f) => f.externalPostId);
-  const { rows: yaEstaban } = await tx.query<{ external_post_id: string }>(
-    'SELECT external_post_id FROM post WHERE connection_id = $1 AND external_post_id = ANY($2::text[])',
-    [input.connectionId, ids],
-  );
-  const conocidos = new Set(yaEstaban.map((r) => r.external_post_id));
+  // La misma consulta que usa la previsualización del paso 3, para que
+  // lo que el creador vio antes de confirmar y lo que se le cuenta
+  // después salgan del mismo sitio.
+  const conocidos = new Set(await listExternalPostIds(tx, input.connectionId, ids));
 
   // jsonb_to_recordset casa por NOMBRE de campo, así que el lote viaja
   // con las claves de la tabla (snake_case), no con las del tipo.

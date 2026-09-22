@@ -108,7 +108,7 @@ export const CAMPOS_METRICA: readonly Campo[] = [
 export function normalizar(encabezado: string): string {
   return encabezado
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9%]+/g, " ")
     .trim();

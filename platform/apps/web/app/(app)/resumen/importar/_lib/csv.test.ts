@@ -9,8 +9,10 @@ import {
   analizar,
   ErrorCsv,
   faltantesDelMapeo,
+  fechaAmbigua,
   idDesdeUrl,
   leerCsv,
+  mesAntesQueDia,
   revisar,
 } from "./csv";
 import { mapearPorAlias, normalizar } from "./formatos";
@@ -84,6 +86,33 @@ describe("celdas", () => {
     expect(aFechaIso("2026-09-05", "UTC")).toBe("2026-09-05T12:00:00.000Z");
     expect(aFechaIso("el martes pasado", BOGOTA)).toBeNull();
     expect(aFechaIso("13/25/2026", BOGOTA)).toBeNull();
+  });
+
+  it("el orden de una fecha numérica lo decide el locale del workspace", () => {
+    // «09/10/2026» es el 9 de octubre para un workspace en español y el
+    // 10 de septiembre para uno en inglés de Estados Unidos. Leerlo
+    // siempre a la española colgaba el video del mes equivocado, sin
+    // error y sin aviso.
+    expect(aFechaIso("09/10/2026", BOGOTA, "es-CO")).toBe(aFechaIso("2026-10-09", BOGOTA));
+    expect(aFechaIso("09/10/2026", BOGOTA, "en-US")).toBe(aFechaIso("2026-09-10", BOGOTA));
+    // Sin locale, día/mes/año: el orden de casi todo el mundo.
+    expect(aFechaIso("09/10/2026", BOGOTA)).toBe(aFechaIso("2026-10-09", BOGOTA));
+    // Un número que no puede ser mes se prueba al revés antes de rendirse.
+    expect(aFechaIso("25/12/2026", BOGOTA, "en-US")).toBe(aFechaIso("2026-12-25", BOGOTA));
+    expect(aFechaIso("13/25/2026", BOGOTA, "en-US")).toBeNull();
+    expect(aFechaIso("10/45/2026", BOGOTA)).toBeNull();
+
+    expect(mesAntesQueDia("en-US")).toBe(true);
+    expect(mesAntesQueDia("es-CO")).toBe(false);
+    expect(mesAntesQueDia("en-GB")).toBe(false);
+    expect(mesAntesQueDia(undefined)).toBe(false);
+  });
+
+  it("sabe cuándo una fecha numérica es ambigua", () => {
+    expect(fechaAmbigua("09/10/2026")).toBe(true);
+    expect(fechaAmbigua("15/09/2026")).toBe(false); // 15 no puede ser mes
+    expect(fechaAmbigua("09/09/2026")).toBe(false); // los dos órdenes dan lo mismo
+    expect(fechaAmbigua("2026-09-10 15:04:00")).toBe(false);
   });
 
   it("traduce el tipo de publicación y cae en video", () => {
@@ -203,7 +232,7 @@ describe("un archivo que no reconocemos", () => {
   it("con el mapeo hecho a mano, importa", () => {
     const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Publicado el", reach: "Personas alcanzadas" };
     expect(faltantesDelMapeo(aMano)).toEqual([]);
-    const r = revisar(tabla, aMano, { timeZone: BOGOTA });
+    const r = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "es-CO" });
     expect(r.errores).toBe(0);
     expect(r.listas[0]).toMatchObject({
       externalPostId: "pub-0091",
@@ -212,6 +241,24 @@ describe("un archivo que no reconocemos", () => {
       reach: 9310,
       saves: 318,
     });
+  });
+
+  it("avisa de la fecha ambigua y dice cómo la leyó", () => {
+    const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Publicado el" };
+    // «10/09/2026» en es-CO es el 10 de septiembre…
+    const enEspanol = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "es-CO" });
+    expect(enEspanol.errores).toBe(0);
+    const aviso = enEspanol.filas[0]!.problemas.find((p) => p.campo === "publishedAt");
+    expect(aviso).toMatchObject({ gravedad: "aviso" });
+    expect(aviso!.mensaje).toContain("10 de septiembre");
+
+    // …y en en-US, el 9 de octubre. La fila entra en los dos casos: lo
+    // que cambia es el dato, y por eso hay que enseñarlo antes.
+    const enIngles = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "en-US" });
+    expect(enIngles.listas[0]!.publishedAt).not.toBe(enEspanol.listas[0]!.publishedAt);
+
+    // «15/09/2026» no es ambigua: 15 no puede ser un mes.
+    expect(enEspanol.filas[2]!.problemas).toHaveLength(0);
   });
 });
 
@@ -251,6 +298,16 @@ describe("filas sucias", () => {
 
   it("avisa de que un video ya conocido recibe una lectura nueva, no un reemplazo", () => {
     expect(problemasDe(1).some((p) => p.gravedad === "aviso" && /lectura nueva/.test(p.mensaje))).toBe(true);
+  });
+
+  it("guarda la celda cruda de las filas que no entran, para poder buscarlas en el archivo", () => {
+    // La 4 no tiene id ni enlace: sin esto, en la tabla solo se vería
+    // «—» y quien va a arreglar el CSV no sabría qué fila es.
+    const sinId = r.filas.find((f) => f.fila === 4)!;
+    expect(sinId.lectura).toBeNull();
+    expect(sinId.crudo.title).toBe("Sin id y sin enlace");
+    const malaFecha = r.filas.find((f) => f.fila === 3)!;
+    expect(malaFecha.crudo.externalPostId).toBe("ig_mala_fecha");
   });
 });
 

@@ -1,12 +1,18 @@
-import { GraficosEsqueleto } from "./graficos";
-import { KpisEsqueleto } from "./kpis";
-import { MESSAGES } from "./messages";
+import { GraficosEsqueleto } from "../graficos";
+import { KpisEsqueleto } from "../kpis";
+import { MESSAGES } from "../messages";
 
 /**
- * Esqueleto del segmento mientras la base responde: la misma cabecera,
+ * Esqueleto de la pantalla mientras la base responde: la misma cabecera,
  * la misma fila de KPIs y las mismas dos tarjetas de gráfico, del mismo
  * tamaño que la pantalla real, para que una consulta lenta no deje la
  * navegación congelada sin señal ni desplace el contenido al llegar.
+ *
+ * Vive dentro del grupo de rutas `(panel)` —que no cambia la URL— y no
+ * en `resumen/` a propósito: el `loading.tsx` de un segmento es el
+ * fallback de Suspense de ese segmento Y DE SUS RUTAS ANIDADAS, así que
+ * puesto un nivel más arriba este esqueleto, con sus cuatro KPIs
+ * falsos, se colaba también en /resumen/importar, que no tiene ninguno.
  */
 export default function ResumenLoading() {
   return (

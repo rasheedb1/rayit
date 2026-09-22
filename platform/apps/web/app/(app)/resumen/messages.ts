@@ -31,7 +31,6 @@ export const MESSAGES = {
       label: "Seguidores en total",
       /** Se usa cuando el filtro deja una sola red. */
       labelRed: (red: string) => `Seguidores en ${red}`,
-      note: (redes: number) => (redes === 1 ? "1 red" : `${redes} redes`),
     },
     views: {
       label: (dias: number) => `Visualizaciones en ${dias} días`,
@@ -58,24 +57,19 @@ export const MESSAGES = {
       subtitle: (dias: number) => `Un punto por día · ${dias} días`,
       aria: "Seguidores por red, un punto por día",
       labelsHeader: "Fecha",
-      nota: "La curva arranca el día en que todas las redes del filtro ya tienen lecturas.",
+      nota: "El eje arranca en cero, así que la curva enseña el tamaño y no solo el movimiento. Una red que empezó a medirse dentro del periodo aparece en cero hasta su primera lectura.",
     },
     views: {
       title: "Visualizaciones por red",
-      /** El subtítulo dice cuánto cubre cada barra, que cambia con el periodo (1, 2 o 7 días). */
+      /** El subtítulo dice cuánto cubre cada barra, que cambia con el periodo. */
       subtitle: (paso: number, bloques: number) =>
-        paso === 1 ? `Por día · ${bloques} días`
-        : paso === 7 ? `Por semana · ${bloques} semanas`
-        : `Cada dos días · ${bloques} barras`,
+        paso === 1 ? `Por día · ${bloques} días` : `Cada ${paso} días · ${bloques} barras`,
       aria: "Visualizaciones por red y periodo",
       labelsHeaderBloque: "Desde el",
       labelsHeaderDia: "Día",
       nota: (paso: number) =>
-        paso === 1
-          ? undefined
-          : `Cada barra son ${paso === 7 ? "siete" : "dos"} días contados hacia atrás desde el último día cerrado.`,
+        paso === 1 ? undefined : `Cada barra son ${paso} días contados hacia atrás desde el último día cerrado.`,
     },
-    error: "No se pudieron cargar las series",
   },
   frescura: {
     title: "Hasta cuándo llegan los datos",
@@ -103,10 +97,24 @@ export const MESSAGES = {
         "El recolector cierra el día anterior de madrugada; la primera sincronización puede tardar unas horas. Si no quieres esperar, importa el CSV de tu exportación.",
       importar: "Importar un CSV",
     },
+    /**
+     * Cuando la tarjeta de un gráfico se queda sin datos, la salida
+     * depende de dónde esté el filtro: ofrecer «Ver 90 días» a quien ya
+     * está en 90 días es un callejón sin salida.
+     */
     periodoSinDatos: {
       title: "No hay datos en este periodo",
-      description: "Prueba con un periodo más largo o quita el filtro por red.",
-      accion: "Ver 90 días",
+      masLargo: {
+        description: "Prueba con un periodo más largo: quizá las lecturas empiezan antes de esta ventana.",
+        accion: "Ver 90 días",
+      },
+      quitarRed: {
+        description: "Esta red todavía no tiene lecturas en los últimos 90 días. Mira todas juntas para ver lo que sí hay.",
+        accion: "Quitar el filtro de red",
+      },
+      sinSalida: {
+        description: "No hay ninguna lectura de cuenta en los últimos 90 días. En cuanto el recolector cierre un día, o importes un CSV, aparece aquí.",
+      },
     },
   },
   error: {
@@ -122,6 +130,7 @@ export const MESSAGES = {
     label: "Cargando tu resumen",
     kpis: ["Seguidores en total", "Visualizaciones", "Alcance en no seguidores", "Guardados por 1 000"],
     graficos: ["Seguidores por red", "Visualizaciones por red"],
+    frescura: "Cargando hasta cuándo llegan los datos",
   },
 
   /** Los cuatro pasos de la importación por CSV (RES-2). */
@@ -138,7 +147,6 @@ export const MESSAGES = {
       elegir: "elige un archivo",
       formatos: "Reconocemos las exportaciones de:",
       cualquiera: "Si tu archivo no es ninguno de estos, también sirve: en el paso siguiente dices qué columna es cada cosa.",
-      leyendo: "Leyendo el archivo…",
       demasiadoGrande: (mb: number) => `El archivo pesa más de ${mb} MB. Divídelo por fechas y sube una parte.`,
       noEsCsv: "Ese archivo no parece un CSV. Si lo exportaste en Excel, guárdalo como CSV y vuelve a subirlo.",
     },
@@ -165,9 +173,11 @@ export const MESSAGES = {
       avisos: (n: number) => (n === 1 ? "1 aviso" : `${n} avisos`),
       duplicadas: (n: number) => (n === 1 ? "1 fila repetida en el archivo" : `${n} filas repetidas en el archivo`),
       ninguna: "Ninguna fila se puede importar. Revisa el mapeo del paso anterior.",
-      columnas: { fila: "Fila", video: "Video", publicado: "Publicado", views: "Views", estado: "Estado" },
+      /** Contra los videos que YA están en la cuenta de destino, no contra el propio archivo. */
+      yaEstaban: (n: number) =>
+        n === 1 ? "1 ya estaba: se le añade una lectura" : `${n} ya estaban: se les añade una lectura`,
+      columnas: { fila: "Fila", video: "Video", publicado: "Publicado", views: "Visualizaciones", estado: "Estado" },
       estado: { lista: "Lista", error: "No entra", aviso: "Con aviso" },
-      verTodo: "Ver todos los problemas",
     },
     acciones: { atras: "Atrás", siguiente: "Siguiente", importar: "Importar", importando: "Importando…", otro: "Importar otro archivo" },
     hecho: {
@@ -182,6 +192,18 @@ export const MESSAGES = {
       generico: "No se pudo importar. Vuelve a intentarlo y, si sigue igual, avísanos.",
       sinCuenta: "Elige la cuenta a la que pertenece el archivo.",
       sinFilas: "No hay ninguna fila que se pueda importar.",
+    },
+    /** La frontera de error del propio asistente: aquí no hay métricas que leer. */
+    errorPagina: {
+      eyebrow: "Resumen · Importar",
+      title: "El asistente de importación se quedó a medias",
+      description:
+        "No se escribió nada: tus métricas están como estaban. Vuelve a empezar desde el archivo y, si sigue igual, avísanos.",
+      retry: "Empezar otra vez",
+      reference: "Referencia",
+    },
+    loading: {
+      label: "Cargando el asistente de importación",
     },
   },
 } as const;
