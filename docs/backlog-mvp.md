@@ -10,6 +10,11 @@ cambió a pedido de Rasheed). Reemplaza el alcance de
 reglas de trabajo de ese documento (ramas, revisión, integración,
 migraciones inmutables) siguen vigentes.
 
+**Actualizado la noche del 21 de septiembre de 2026** con el avance del
+sprint 1: las cinco historias de Nicolás están construidas y probadas,
+tres ya en `main`. El detalle, lo que falta integrar y lo que Rasheed
+tiene que destrabar están en la [sección 8](#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
+
 **Dónde se ve:** https://multicampaign-web.vercel.app. Es el marco real
 de la aplicación (`platform/apps/web`), con una ruta por módulo que
 muestra su dueño, sus historias y su estado. El estado vivo de cada
@@ -39,8 +44,10 @@ video, Vista agencia, predictor, envío automático de outbound, adelanto
 de pagos.
 
 La base de datos ya tiene las 88 tablas. **No hace falta ninguna
-migración nueva para el MVP.** Si aparece una, es una migración nueva
-(`0014_…`), nunca una edición.
+migración de esquema para el MVP.** Si aparece una, es una migración
+nueva, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
+(CON-2), solo `GRANT`s al rol `mc_worker`, aplicada en Supabase el 21 de
+septiembre. La siguiente es `0015_…`.
 
 ---
 
@@ -169,7 +176,7 @@ ningún `git merge` toca el mismo archivo desde dos ramas.
 
 | # | Quién espera a quién | Cuándo | Cómo no bloquearse |
 |---|---|---|---|
-| D1 | Todo lo de Nicolás que toca la base espera el **cliente con RLS** y el **monorepo** (`CIM-1`, `CIM-2`, Rasheed). | Días 1 a 3 | Rasheed los entrega primero que nada, con un test. Nicolás arranca el kit de interfaz y el worker sin base esos tres días. |
+| D1 | Todo lo de Nicolás que toca la base espera el **cliente con RLS** y el **monorepo** (`CIM-1`, `CIM-2`, Rasheed). | Días 1 a 3 | Rasheed los entrega primero que nada, con un test. Nicolás arranca el kit de interfaz y el worker sin base esos tres días. **Cómo quedó:** CIM-1 y CIM-2 no llegaron en el sprint 1; Nicolás no esperó y abrió un cliente provisional en `packages/db/src/provisional/` (FIN-1) y una conexión `pg` directa en el worker (CON-2), ambos marcados `TODO(CIM-2)` para reemplazarlos cuando exista el cliente real. Ver §8.4. |
 | D2 | Las pantallas de Rasheed (Resumen, Ventas, Cotizar) esperan el **kit de interfaz** (`CIM-5`, Nicolás). | Semana 1 | Rasheed hace base, auth, seeds y las consultas de Ventas en la semana 1; la pantalla la arma en la 2 con el kit ya listo. |
 | D3 | Resumen y Campañas esperan **datos de las plataformas**, que esperan las aprobaciones. | Semanas 1 a 8, quizá más | Seed de métricas (`CIM-6`), importación por CSV (`RES-2`) y respuestas grabadas (`CON-1`). |
 | D4 | Cotizar quiere las **views promedio** del creador (`creator_baseline`, `CON-6`, Nicolás). | Semana 5 | El tarifario acepta las views a mano con `source = 'manual'` y las reemplaza cuando exista la línea base (`COT-1`). |
@@ -195,18 +202,18 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | CIM-1 | Monorepo listo: `apps/web`, `packages/db` con Drizzle, `apps/worker` con pg-boss, turbo con `dev`, `typecheck`, `lint`, `test`. | Rasheed | M | — | `make dev` levanta los tres procesos y el CI pasa. |
 | CIM-2 | Cliente de base con aislamiento: cada consulta en una transacción que fija `app.workspace_id`; esquema Drizzle de las tablas del MVP. | Rasheed | M | CIM-1 | Un test con dos workspaces comprueba que ninguno ve al otro. |
 | CIM-3 | Autenticación con Supabase Auth y enlace mágico; `app_user`, `membership`, workspace de creador por defecto; cambio de workspace. | Rasheed | M | CIM-2 | Se entra con un correo nuevo y aparece un workspace vacío. |
-| CIM-4 | Marco de la aplicación: navegación con los módulos, fase 2 tras bandera, tema claro y oscuro. | Nicolás | M | — | Se navega entre los módulos, el tema se conserva, una bandera apagada quita el módulo. **Desplegado el 21-sep; Nicolás lo cierra.** |
-| CIM-5 | Kit de interfaz: KPIs con delta y sparkline, tabla con «Ver tabla», gráficos con tooltip, estado vacío, aviso «datos hasta el {fecha}», formularios. | Nicolás | L | CIM-4 | Una galería (`/kit`) muestra cada componente en claro y oscuro. |
+| CIM-4 | Marco de la aplicación: navegación con los módulos, fase 2 tras bandera, tema claro y oscuro. | Nicolás | M | — | Se navega entre los módulos, el tema se conserva, una bandera apagada quita el módulo. **Hecha, en `main` el 21-sep.** |
+| CIM-5 | Kit de interfaz: KPIs con delta y sparkline, tabla con «Ver tabla», gráficos con tooltip, estado vacío, aviso «datos hasta el {fecha}», formularios. | Nicolás | L | CIM-4 | Una galería (`/kit`) muestra cada componente en claro y oscuro. **Hecha, en `main` el 21-sep.** |
 | CIM-6 | Seed de ventas y métricas: empresas, deals por etapa, actividades; cuatro conexiones, sesenta posts, noventa días de snapshots, línea base. | Rasheed | S | CIM-2 | `make seed` deja Ventas y Resumen con los números del mock. |
 | CIM-7 | Despliegue continuo: el repositorio de GitHub conectado al proyecto de Vercel, cada merge a `main` publica; worker en Railway o Fly. | Rasheed | S | CIM-1 | Un merge a `main` aparece solo en la URL, sin comando. |
-| CIM-8 | Seed de finanzas y campañas: tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts y snapshots de la marca. | Nicolás | S | CIM-2 | `make seed` deja Finanzas y Campañas con los números del mock. |
+| CIM-8 | Seed de finanzas y campañas: tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts y snapshots de la marca. | Nicolás | S | CIM-2 | `make seed` deja Finanzas y Campañas con los números del mock. **Hecha en rama el 21-sep, pendiente de merge.** |
 
 ### CON · Conexiones y datos (Nicolás, salvo los trámites)
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
 | CON-1 | Conectores con respuestas grabadas: TikTok Display, TikTok Accounts, Instagram Graph, YouTube. Reintentos, cuota, `api_call_log`. | L | CIM-1 | `pnpm test` pasa sin red y cada llamada deja su fila. |
-| CON-2 | Worker arrancado: pg-boss, `job_definition`, `job_run`; `oauth.refresh` renovando tokens. | M | CIM-1 | `make worker` toma un job y lo registra; un token por vencer se renueva solo. |
+| CON-2 | Worker arrancado: pg-boss, `job_definition`, `job_run`; `oauth.refresh` renovando tokens. | M | CIM-1 | `make worker` toma un job y lo registra; un token por vencer se renueva solo. **Hecha, en `main` el 21-sep**; en Supabase falta un paso con el token de administración (§8.3). |
 | CON-3 | OAuth de TikTok e Instagram en sandbox: token cifrado, `secret_ref`, `data_consent`. | L | CON-1, CIM-3 | Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro. |
 | CON-4 | Pantalla Conexiones sobre `connection_health`: conectar, estado, horas desde la última sincronización, paso manual de Analytics en TikTok. | M | CON-3, CIM-5 | Una conexión vencida se ve en rojo con el botón de reautorizar. |
 | CON-5 | Recolector: `collect.posts`, `collect.post_metrics`, `collect.account_metrics`, con `age_hours`. Append-only. | L | CON-1, CON-2 | Dos corridas producen dos filas por post y `post_metrics_daily_delta` muestra el crecimiento. |
@@ -261,7 +268,7 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
-| FIN-1 | Facturas: desde una campaña o a mano; IVA, retención, vencimiento, numeración, estados, número DIAN. | M | CIM-2, CIM-5 | Una factura desde una campaña trae nombre, empresa y monto solos. |
+| FIN-1 | Facturas: desde una campaña o a mano; IVA, retención, vencimiento, numeración, estados, número DIAN. | M | CIM-2, CIM-5 | Una factura desde una campaña trae nombre, empresa y monto solos. **Hecha en rama el 21-sep, pendiente de merge** (§8.2). |
 | FIN-2 | Pagos parciales o totales; `tax_reserve` con el porcentaje del workspace. | M | FIN-1 | Un pago parcial deja `partial`; el total pasa a `paid` y aparta el impuesto. |
 | FIN-3 | Cuentas por cobrar sobre `receivables`, con los cuatro KPIs. | M | FIN-1 | La factura vencida sale en rojo con sus días. |
 | FIN-4 | Recordatorios de cobro: job `finanzas/recordatorios.ts` que redacta y deja listo para copiar. | M | FIN-1, CON-2 | Una factura vencida hace 41 días tiene sus tres recordatorios. |
@@ -325,3 +332,129 @@ Carga estimada por sprint (extremo bajo, sobre 10 días): Rasheed 12 ·
 
 Y una que no bloquea nada: **nombre del producto y dominio**, para el
 media kit y el reporte públicos.
+
+---
+
+## 8. Estado del sprint 1 al 21 de septiembre de 2026
+
+Escrito la noche del 21 de septiembre, al cierre del primer día de
+trabajo real. El sprint 1 va de la semana 1 a la 2; lo que sigue es la
+foto de dónde está cada cosa, no el cierre del sprint.
+
+### 8.1 Historias, una por una
+
+Estado según `apps/web/content/backlog.ts` en `origin/main` y en las
+ramas de cada historia. «En `main`» quiere decir que el código ya está
+en `origin/main` y se publica con el siguiente despliegue.
+
+| Id | Historia | Estado | Dónde está | Verificación |
+|---|---|---|---|---|
+| CIM-4 | Marco y navegación | **Hecha** | `origin/main` | Banderas con las llaves de `feature_flag` (0009) y 404 en la ruta directa; tokens del mock en `globals.css`; tema sin parpadeo; pruebas con vitest de nav, banderas y tema. Las banderas viven en `content/flags.ts` hasta que exista el cliente de base. |
+| CIM-5 | Kit de interfaz | **Hecha** | `origin/main` | Trece componentes en `components/ui/` con pruebas (`Button`, `Pill`, formulario, `EmptyState`, `DataAsOf`, `Kpi`/`KpiRow`, `DataTable`, `LineChart`, `BarChart`, `ChartCard`, `Segmented`), `lib/format.ts`, galería `/kit` detrás de la bandera `kit` (`KIT=1` en el build). Los dos últimos commits (contraste AA en claro, cabecera fija con `maxHeight`, estado de error; y `Segmented`, el filtro por red que necesita Resumen) entraron a `main` a las 20:03 y **todavía no están en la rama de integración**. |
+| CIM-8 | Seed de finanzas y campañas | **Hecha en rama** | `nicolas/CIM-8-seed-finanzas-campanas` | `db/seed/0003_demo_finanzas_campanas.sql` + `db/seed/verify/run-0003.mjs`: migra en Postgres embebido como rol sin `BYPASSRLS`, corre los seeds dos veces y compara conteos. Como `0002` (Rasheed) no existe, trae una sección 0 con los ids que `0002` debe usar (`docs/propuestas/CIM-8.md`). |
+| CON-2 | Worker y `oauth.refresh` | **Hecha** | `origin/main` | `apps/worker` (runner, registro, logger con redacción, `job_run`) y `packages/connectors` (refresher, `secret-store`, fakes por plataforma). Pruebas sobre pglite: worker 16/16, conectores 17/17, corridas hoy. Migración `0014_worker_grants.sql` aplicada en Supabase. Falta el paso administrativo de §8.3. |
+| FIN-1 | Facturas | **Hecha en rama** | `nicolas/FIN-1-facturas` (7 commits; el último, `e107ed0`, sin subir a `origin`) | `packages/core/src/facturacion.ts` (dominio y máquina de estados), `packages/db/src/queries/finanzas.ts` (transacción por workspace), lista con KPIs, formulario «Nueva factura» con total en vivo y Server Action con zod, detalle con «Marcar enviada» y «Anular», y `facturarCampana()` para el botón de CAM-1. Pruebas corridas hoy: db 13/13 en Postgres embebido con el seed 0003, web 6/6, core en verde. Sin `DATABASE_URL` arranca en modo demo. |
+
+Historias de Rasheed en el sprint 1, según `backlog.ts` en `main`:
+CIM-1 y CIM-7 en curso; CIM-2, CIM-3, CIM-6, CON-9, VEN-1 y VEN-2
+pendientes. `docs/tramites.md` (CON-9) no existe todavía.
+
+**Sobre la demo 1 del viernes.** La parte de Nicolás («primera factura
+a mano y el worker corriendo un job») ya se puede enseñar desde las
+ramas. La de Rasheed («login y marco; seeds cargados; empresas y radar
+manual») depende de CIM-1, CIM-2, CIM-3 y CIM-6.
+
+### 8.2 Lo que falta integrar, y en qué orden
+
+Hay una rama local de integración, `nicolas/integracion-sprint-1`
+(worktree `rayit-integracion`, sin remoto), que ya trae CIM-4, CIM-8,
+CIM-5 y CON-2 mergeados y **tiene el merge de FIN-1 a medias**: trece
+archivos en conflicto, ocho en `apps/web/components/ui/` más su
+`README.md`, `globals.css`, `lib/format.ts` con su prueba y
+`apps/web/package.json`. La causa es conocida: FIN-1
+arrancó antes de que CIM-5 llegara a `main` y trajo su propio «kit
+mínimo» con la misma API (§4 de `docs/propuestas/FIN-1.md`); al
+juntarlos, cada archivo tiene dos versiones.
+
+Orden propuesto para cerrar el sprint:
+
+1. **Resolver el merge de FIN-1** quedándose con la versión de CIM-5 en
+   todo `components/ui/`, `globals.css` y `lib/format.ts` (es el kit
+   completo y las dos versiones exponen la misma API), conservando de
+   FIN-1 solo `input.tsx` si CIM-5 no lo trae con ese nombre, y uniendo
+   a mano `apps/web/package.json` (dependencias de `@mc/core` y `@mc/db`
+   de FIN-1 más el runner de pruebas de CIM-5). Después, `typecheck`,
+   `lint`, `test` y
+   `pnpm --filter @mc/web dev` con `/finanzas` y `/finanzas/facturas/nueva`
+   abiertas, porque el build no ejecuta páginas apagadas ni detecta
+   errores de frontera cliente/servidor.
+2. **Mergear `origin/main` en la integración**: trae los dos últimos
+   commits de CIM-5 (contraste AA y `Segmented`), que se quedaron fuera.
+3. **Subir `e107ed0` de FIN-1** a `origin`.
+4. **PR de CIM-8 y PR de FIN-1** contra `main`, con Rasheed como
+   revisor. Ambas cambian su `status` a `hecho` en `backlog.ts`; el de
+   `main` todavía las tiene en `pendiente`.
+5. **`make vercel.deploy PROD=1`** después del merge. Ojo: desde FIN-1
+   la web importa `@mc/core` y `@mc/db`, así que el despliegue tiene
+   que salir desde `platform/` con Root Directory `apps/web`
+   (`V_APP_DIR=. make vercel.link` una vez, `V_APP_DIR=. make
+   vercel.deploy PROD=1`) y el proyecto de Vercel necesita
+   `DATABASE_URL`. Detalle en §7 de `docs/propuestas/FIN-1.md`.
+
+También quedan sin versionar en el clon principal
+`docs/sprint-1-nicolas-prompts.md` y `docs/propuestas/CIM-5-kit.md`;
+conviene meterlos en el PR de FIN-1 o en uno de documentación.
+
+### 8.3 Lo que Nicolás necesita de Rasheed (consolidado)
+
+Todo esto está escrito con detalle en `docs/propuestas/`. Aquí, la
+lista corta, en orden de urgencia:
+
+| # | Qué | Para qué historia | Dónde está el detalle |
+|---|---|---|---|
+| 1 | Con el token de administración de Supabase, dos comandos: `CREATE SCHEMA pgboss` y `GRANT mc_worker TO mc_migrator`; luego `pnpm --filter @mc/worker install-schema`. | CON-2 en producción; sin esto el worker solo corre en pglite | `docs/propuestas/CON-2.md` §3.1 y §3.3 |
+| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. Nicolás borra `provisional/` y `_lib/workspace.ts` al recibirlo. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
+| 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
+| 4 | Seed `0002` usando los ids fijos de la sección 0 de `0003` (workspace, creadora, conexiones, empresas, posts), o avisar para cambiarlos. `0002` debe abrir con `set_config('app.workspace_id', …)` porque RLS está en `FORCE`. | CIM-6, CIM-8 | `docs/propuestas/CIM-8.md` §1 |
+| 5 | CIM-7: Root Directory `apps/web` en Vercel, `DATABASE_URL` en el proyecto, y CI en Node 22 corriendo `test` además de migraciones. | Despliegue de FIN-1, CON-2 | `docs/propuestas/FIN-1.md` §7, `CON-2.md` §3.5 |
+| 6 | Migración futura con tres filas en `feature_flag`: `content_metrics`, `niche_radar`, `ideas_scripts`. | CIM-4 (banderas a la base) | `docs/propuestas/CIM-4.md` §1 |
+| 7 | Arreglo responsive de la tarjeta «Por persona» en `app/(app)/page.tsx` a 390 px. No urge. | Marco | `docs/propuestas/CIM-4.md` §2 |
+| 8 | Acceso de desarrollador a las apps de TikTok y Meta (decisión 5). Bloquea CON-3 en el sprint 2. | CON-3 | §7 de este documento |
+
+### 8.4 Desvíos respecto al plan, y por qué
+
+- **La primera migración nueva ya existe** (`0014_worker_grants.sql`).
+  El plan decía que el MVP no necesitaba ninguna; esta no cambia el
+  esquema, solo concede privilegios a `mc_worker`, que desde 0010
+  existía sin poder leer nada. Entró en `db/migrations/` (carpeta de
+  Rasheed) por indicación expresa de Nicolás para no frenar CON-2.
+- **D1 se resolvió al revés.** CIM-1 y CIM-2 no llegaron los días 1 a 3
+  y Nicolás no esperó: FIN-1 usa un cliente provisional con la misma
+  forma que tendrá `withWorkspace`, y el worker se conecta con `pg`
+  directo. Los dos llevan `TODO(CIM-2)` y su reemplazo es mecánico.
+- **Kit duplicado.** FIN-1 se construyó en paralelo a CIM-5 con la API
+  del borrador (`docs/propuestas/CIM-5-kit.md`). Eso permitió avanzar,
+  pero es la causa de los trece conflictos de §8.2. Regla para el
+  sprint 2: una historia que necesita el kit espera a que el kit esté en
+  `main`, o parte de la rama del kit, no de `main`.
+- **Cifras del mock que no cuadran con la aritmética.** La factura de
+  Nutrivé quedó en 4,7 M y no 4,5 M porque 4,5 M no se descompone en
+  subtotal más IVA 19 % con dos decimales exactos. Decidido y documentado
+  en `docs/propuestas/CIM-8.md` §3.
+- **`make db.check` no corre los seeds** y cada corrida de pglite es una
+  base nueva. Por eso el seed 0003 trae su propio `run-0003.mjs`. Vale
+  para 0002 también.
+- **Sesiones en paralelo sobre el mismo clon.** Las cinco historias se
+  construyeron a la vez, cada una en su worktree (`rayit-cim5`,
+  `rayit-CON-2`, `rayit-finanzas`, `rayit-integracion`). Funcionó, con
+  una regla: el árbol principal se queda en `main` y nadie hace
+  `checkout` ahí.
+
+### 8.5 Lo que sigue (sprint 2 de Nicolás)
+
+Sin cambios de alcance: CON-1 (conectores con respuestas grabadas),
+CON-3 (OAuth de TikTok e Instagram en sandbox), CAM-1 (lista y ficha de
+campaña; el botón «Facturar» ya tiene detrás `facturarCampana()`) y
+CAM-2 (`createCampaignFromQuote()`, el contrato con Cotizar). CON-3
+depende de CIM-3 y del acceso a las apps (§8.3, fila 8); si no llegan
+en la semana 3, se adelantan CAM-1 y CAM-2 y CON-3 corre contra fakes.
