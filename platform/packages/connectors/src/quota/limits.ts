@@ -27,10 +27,16 @@ export interface RateRule {
   note?: string;
 }
 
-/** Presupuesto diario en unidades. `units` null = existe pero no se conoce el número. */
+/**
+ * Presupuesto diario en unidades. `units` null = existe pero no se conoce
+ * el número. `persist`: api_quota_usage no tiene columna de familia, así
+ * que solo UNA familia por platform_id puede persistir su acumulado (la
+ * principal: YouTube Data); las demás cuentan solo en memoria.
+ */
 export interface DailyBudget {
   scope: QuotaScope;
   units: number | null;
+  persist?: boolean;
   source: string;
   checkedAt: string;
   note?: string;
@@ -47,7 +53,7 @@ export interface PlatformLimits {
 export type LimitsTable = Record<QuotaFamily, PlatformLimits>;
 
 const TIKTOK_RATE_LIMIT_DOC = 'developers.tiktok.com/doc/tiktok-api-v2-rate-limit (página del 4-ago-2026)';
-const ARQUITECTURA = 'docs/arquitectura.md «APIs de plataforma»';
+const ARCHITECTURE_DOC = 'docs/arquitectura.md «APIs de plataforma»';
 const META_RATE_LIMIT_DOC = 'developers.facebook.com/docs/graph-api/overview/rate-limiting';
 const YOUTUBE_QUOTA_DOC = 'developers.google.com/youtube/v3/determine_quota_cost (actualizada 15-sep-2026)';
 const YOUTUBE_ANALYTICS_DOC = 'developers.google.com/youtube/analytics/reference/reports/query';
@@ -57,7 +63,7 @@ export const DEFAULT_LIMITS: LimitsTable = {
   tiktok: {
     platformId: 'tiktok',
     rates: [
-      { scope: 'connection', perEndpoint: true, windowS: 60, max: 40, source: ARQUITECTURA, checkedAt: CHECKED_AT, note: 'DECISIÓN PENDIENTE DE NICOLÁS: la documentación de hoy no distingue por cuenta.' },
+      { scope: 'connection', perEndpoint: true, windowS: 60, max: 40, source: ARCHITECTURE_DOC, checkedAt: CHECKED_AT, note: 'DECISIÓN PENDIENTE DE NICOLÁS: la documentación de hoy no distingue por cuenta.' },
       { scope: 'app', perEndpoint: true, windowS: 60, max: 600, source: TIKTOK_RATE_LIMIT_DOC, checkedAt: CHECKED_AT, note: 'user/info, video/list y video/query; ventana deslizante de un minuto; 429 rate_limit_exceeded.' },
     ],
     daily: null,
@@ -66,7 +72,7 @@ export const DEFAULT_LIMITS: LimitsTable = {
   'tiktok-accounts': {
     platformId: 'tiktok',
     rates: [
-      { scope: 'connection', perEndpoint: true, windowS: 60, max: 40, source: ARQUITECTURA, checkedAt: CHECKED_AT, note: 'El portal de la Accounts API es JavaScript y no se pudo leer; se aplica el límite del documento de arquitectura hasta CON-9.' },
+      { scope: 'connection', perEndpoint: true, windowS: 60, max: 40, source: ARCHITECTURE_DOC, checkedAt: CHECKED_AT, note: 'El portal de la Accounts API es JavaScript y no se pudo leer; se aplica el límite del documento de arquitectura hasta CON-9.' },
     ],
     daily: null,
     unitCost: {},
@@ -82,7 +88,7 @@ export const DEFAULT_LIMITS: LimitsTable = {
   youtube: {
     platformId: 'youtube',
     rates: [],
-    daily: { scope: 'app', units: 10_000, source: YOUTUBE_QUOTA_DOC, checkedAt: CHECKED_AT, note: 'Por proyecto de Google Cloud; se reinicia a medianoche del Pacífico, aquí el día es UTC (conservador).' },
+    daily: { scope: 'app', units: 10_000, persist: true, source: YOUTUBE_QUOTA_DOC, checkedAt: CHECKED_AT, note: 'Por proyecto de Google Cloud; se reinicia a medianoche del Pacífico, aquí el día es UTC (conservador).' },
     unitCost: {
       'youtube.channels.list': 1,
       'youtube.playlist_items.list': 1,
@@ -204,6 +210,7 @@ function parseDaily(d: unknown): DailyBudget | null {
   return {
     scope,
     units: units as number | null,
+    persist: o['persist'] === true,
     source: typeof o['source'] === 'string' ? o['source'] : 'platform.limits',
     checkedAt: typeof o['checked_at'] === 'string' ? o['checked_at'] : 'platform.limits',
     note: typeof o['note'] === 'string' ? o['note'] : undefined,

@@ -43,6 +43,8 @@ export interface HttpCoreOptions {
   retry?: Partial<RetryPolicy>;
   /** Tope por intento. Se encadena con la señal del llamador. */
   timeoutMs?: number;
+  /** Si un Retry-After pide esperar más que esto, no se reintenta: se lanza el error con retryAfterS para que el job programe. */
+  maxRetryWaitMs?: number;
   /** Señal que llevan las llamadas que no traen la suya (en el worker, la del job). */
   defaultSignal?: AbortSignal;
 }
@@ -65,6 +67,8 @@ export interface ApiRequest {
   authStyle: AuthStyle;
   /** Unidades de cuota; por defecto las de quota/limits.ts para el endpoint. */
   units?: number;
+  /** Endpoint con el que se cuenta la ventana por minuto, si varios lógicos pegan a la misma URL. Por defecto, `endpoint`. */
+  quotaEndpoint?: string;
   signal?: AbortSignal;
   /**
    * Cada plataforma sabe cómo se ve su error, incluso con HTTP 200
@@ -82,6 +86,7 @@ export interface ApiResponse<T> {
 }
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_MAX_RETRY_WAIT_MS = 120_000;
 const NO_LOGGER: ConnectorLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 export class HttpCore {
@@ -95,6 +100,7 @@ export class HttpCore {
   readonly #retry: RetryPolicy;
   readonly #timeoutMs: number;
   readonly #defaultSignal: AbortSignal | undefined;
+  readonly #maxRetryWaitMs: number;
 
   constructor(opts: HttpCoreOptions) {
     this.callLog = opts.callLog;
@@ -109,11 +115,13 @@ export class HttpCore {
     this.#retry = { ...DEFAULT_RETRY_POLICY, ...opts.retry };
     this.#timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#defaultSignal = opts.defaultSignal;
+    this.#maxRetryWaitMs = opts.maxRetryWaitMs ?? DEFAULT_MAX_RETRY_WAIT_MS;
   }
 
   async call<T = unknown>(input: ApiRequest): Promise<ApiResponse<T>> {
     const req: ApiRequest = input.signal ? input : { ...input, signal: this.#defaultSignal };
-    const units = req.units ?? this.quota.unitsFor({ family: req.family, platformId: req.platformId, connectionId: req.connectionId, endpoint: req.endpoint });
+    const quotaKey = { family: req.family, platformId: req.platformId, connectionId: req.connectionId, endpoint: req.quotaEndpoint ?? req.endpoint };
+    const units = req.units ?? this.quota.unitsFor({ ...quotaKey, endpoint: req.endpoint });
     const secrets = req.tokens ? [req.tokens.accessToken, req.tokens.refreshToken ?? ''] : [];
     const url = buildUrl(req.url, req.query);
     const started = performance.now();
@@ -121,7 +129,7 @@ export class HttpCore {
     for (let attempt = 1; ; attempt++) {
       if (req.signal?.aborted) throw this.#aborted(req);
       try {
-        await this.quota.acquire({ family: req.family, platformId: req.platformId, connectionId: req.connectionId, endpoint: req.endpoint }, units, req.signal);
+        await this.quota.acquire(quotaKey, units, req.signal);
       } catch (err) {
         if (err instanceof PlatformApiError) {
           await this.#log({ req, units, status: null, ok: false, error: err, durationMs: 0 });
@@ -137,6 +145,11 @@ export class HttpCore {
       const retriesLeft = this.#retry.maxRetries - (attempt - 1);
       if (!error.isRetryable || retriesLeft <= 0 || error.code === 'aborted' || req.signal?.aborted) throw error;
       const delay = delayForRetry(this.#retry, attempt, error.retryAfterS, this.#random);
+      if (delay > this.#maxRetryWaitMs) {
+        // Un Retry-After de una hora no se espera dentro del job: el error lleva retryAfterS y el job decide.
+        this.logger.warn('Retry-After supera el tope de espera; no se reintenta aquí', { platform: req.platformId, endpoint: req.endpoint, retryAfterS: error.retryAfterS });
+        throw error;
+      }
       this.logger.debug('reintento programado', { platform: req.platformId, endpoint: req.endpoint, attempt, delayMs: delay, code: error.code, httpStatus: error.httpStatus });
       await this.#sleep(delay, req.signal);
     }
@@ -155,8 +168,11 @@ export class HttpCore {
     const signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
     const t0 = performance.now();
     let res: Response;
+    let body: unknown;
     try {
       res = await this.#fetch(url, { method: req.method, headers, body: bodyText, signal });
+      // Leer el cuerpo también puede abortar o cortarse: es el mismo fallo transitorio.
+      body = await readBody(res);
     } catch (cause) {
       // Un fetch de pruebas que no reconoce la llamada no es un fallo de red: se propaga tal cual.
       if (cause instanceof Error && cause.name === 'UnexpectedCallError') throw cause;
@@ -165,7 +181,6 @@ export class HttpCore {
       await this.#log({ req, units, status: null, ok: false, error, durationMs: elapsed(t0) });
       return { ok: false, error };
     }
-    const body = await readBody(res);
     const durationMs = elapsed(t0);
     const parsed = req.parseError(res.status, body, res.headers);
     if (res.ok && parsed === null) {

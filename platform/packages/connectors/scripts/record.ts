@@ -67,7 +67,10 @@ function anonymize(value: unknown, secrets: string[]): unknown {
   if (typeof value === 'object' && value !== null) {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = /username|handle|display_name|customUrl|title|name$/i.test(k) && typeof v === 'string' ? `demo-${createHash('sha256').update(v).digest('hex').slice(0, 6)}` : anonymize(v, secrets);
+      // Solo llaves de identidad del perfil: `name` a secas es el nombre de la métrica en los insights y no se toca.
+      out[k] = /^(username|handle|display_name|customUrl|title|name|biography|bio_description)$/.test(k) && typeof v === 'string' && !/^[a-z_]+$/.test(v)
+        ? `demo-${createHash('sha256').update(v).digest('hex').slice(0, 6)}`
+        : anonymize(v, secrets);
     }
     return out;
   }
@@ -102,7 +105,7 @@ function recordingFetch(store: Recorded[]): FetchLike {
   };
 }
 
-async function write(platform: string, endpoint: string, caso: string, calls: Recorded[], secrets: string[], notes: string): Promise<void> {
+async function write(platform: string, endpoint: string, variant: string, calls: Recorded[], secrets: string[], notes: string): Promise<void> {
   if (calls.length === 0) return;
   const first = calls[0]!;
   const urlPattern = '^' + first.url.replace(/\?.*$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (first.url.includes('?') ? '\\?' : '');
@@ -115,7 +118,7 @@ async function write(platform: string, endpoint: string, caso: string, calls: Re
   };
   const dir = join(FIXTURES_DIR, platform);
   await mkdir(dir, { recursive: true });
-  const path = join(dir, `${endpoint}.${caso}.json`);
+  const path = join(dir, `${endpoint}.${variant}.json`);
   await writeFile(path, JSON.stringify(fixture, null, 2) + '\n');
   process.stdout.write(`grabado ${path} (${calls.length} respuesta(s))\n`);
 }

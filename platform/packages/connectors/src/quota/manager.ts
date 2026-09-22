@@ -90,13 +90,21 @@ export class QuotaManager {
     return unitCostFor(this.limits[key.family], key.endpoint);
   }
 
-  /** Espera lo que haga falta y reserva la llamada; lanza 'quota' si el día no alcanza. */
+  /**
+   * Espera lo que haga falta y reserva la llamada; lanza 'quota' si el día
+   * no alcanza. La comprobación de las ventanas y la reserva son un solo
+   * paso síncrono (#tryReserve): dos llamadas concurrentes no pueden pasar
+   * por la misma rendija entre el check y el push.
+   */
   async acquire(key: QuotaKey, units: number, signal?: AbortSignal): Promise<void> {
     const limits = this.limits[key.family];
     await this.#waitForWindows(key, limits, signal);
-    await this.#reserveDaily(key, limits, units);
-    const at = this.#now().getTime();
-    for (const rule of limits.rates) this.#timestamps(key, rule).push(at);
+    try {
+      await this.#reserveDaily(key, limits, units);
+    } catch (err) {
+      this.#unreserve(key, limits);
+      throw err;
+    }
   }
 
   /** Cuánto lleva consumido hoy la conexión (o la app) en esta familia, según la memoria del proceso. */
@@ -108,20 +116,32 @@ export class QuotaManager {
     return { unitsUsed: counter.used, calls: counter.calls };
   }
 
+  /** Síncrono a propósito: comprueba todas las ventanas y, si caben, reserva en todas. Devuelve los ms a esperar (0 = reservado). */
+  #tryReserve(key: QuotaKey, limits: PlatformLimits): number {
+    const nowMs = this.#now().getTime();
+    let waitMs = 0;
+    for (const rule of limits.rates) {
+      const stamps = this.#timestamps(key, rule);
+      const from = nowMs - rule.windowS * 1000;
+      while (stamps.length > 0 && stamps[0]! <= from) stamps.shift();
+      if (stamps.length >= rule.max) {
+        const oldest = stamps[stamps.length - rule.max]!;
+        waitMs = Math.max(waitMs, oldest + rule.windowS * 1000 - nowMs);
+      }
+    }
+    if (waitMs > 0) return waitMs;
+    for (const rule of limits.rates) this.#timestamps(key, rule).push(nowMs);
+    return 0;
+  }
+
+  #unreserve(key: QuotaKey, limits: PlatformLimits): void {
+    for (const rule of limits.rates) this.#timestamps(key, rule).pop();
+  }
+
   async #waitForWindows(key: QuotaKey, limits: PlatformLimits, signal?: AbortSignal): Promise<void> {
     for (;;) {
       if (signal?.aborted) throw abortedError(key);
-      const nowMs = this.#now().getTime();
-      let waitMs = 0;
-      for (const rule of limits.rates) {
-        const stamps = this.#timestamps(key, rule);
-        const from = nowMs - rule.windowS * 1000;
-        while (stamps.length > 0 && stamps[0]! <= from) stamps.shift();
-        if (stamps.length >= rule.max) {
-          const oldest = stamps[stamps.length - rule.max]!;
-          waitMs = Math.max(waitMs, oldest + rule.windowS * 1000 - nowMs);
-        }
-      }
+      const waitMs = this.#tryReserve(key, limits);
       if (waitMs <= 0) return;
       if (waitMs > this.#maxWaitMs) {
         throw new PlatformApiError({
@@ -145,9 +165,11 @@ export class QuotaManager {
       this.#days.set(dayKey, counter);
     }
     const connectionId = limits.daily.scope === 'connection' ? key.connectionId : null;
-    if (this.#store && counter.seeded === null) {
+    // api_quota_usage no distingue familias: solo persiste la principal de cada plataforma (daily.persist).
+    const store = limits.daily.persist ? this.#store : null;
+    if (store && counter.seeded === null) {
       const c = counter;
-      c.seeded = this.#store.load(key.platformId, connectionId, day).then(
+      c.seeded = store.load(key.platformId, connectionId, day).then(
         (row) => { if (row) { c.used += row.unitsUsed; c.calls += row.calls; } },
         (err: unknown) => { this.#logger?.warn('cuota: no se pudo leer api_quota_usage; se parte de la memoria del proceso', { family: key.family, err }); },
       );
@@ -162,9 +184,11 @@ export class QuotaManager {
     }
     counter.used += units;
     counter.calls += 1;
-    if (this.#store) {
+    if (store) {
+      // Se espera el UPSERT a propósito: una escritura perdida subcuenta la cuota
+      // de YouTube, y la ida a la base es corta frente a la llamada HTTP que sigue.
       try {
-        await this.#store.add(key.platformId, connectionId, day, units, 1, budget);
+        await store.add(key.platformId, connectionId, day, units, 1, budget);
       } catch (err) {
         this.#logger?.warn('cuota: no se pudo persistir api_quota_usage; la cuota en memoria sigue vigente', { family: key.family, err });
       }

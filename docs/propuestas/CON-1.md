@@ -245,7 +245,7 @@ UPDATE platform SET limits = '{
 UPDATE platform SET limits = '{
   "youtube": {
     "rates": [],
-    "daily": { "scope": "app", "units": 10000,
+    "daily": { "scope": "app", "units": 10000, "persist": true,
                "source": "developers.google.com/youtube/v3/determine_quota_cost", "checked_at": "2026-09-15" },
     "unit_cost": { "youtube.channels.list": 1, "youtube.playlist_items.list": 1, "youtube.videos.list": 1 }
   },
@@ -266,7 +266,7 @@ UPDATE platform SET limits = '{
 Forma: `rates[]` con `scope` (`connection` | `app`), `per_endpoint`,
 `window_s`, `max`, `source`, `checked_at`, `note`; `daily` con `scope`,
 `units` (`null` = existe pero no se conoce), `source`, `checked_at`;
-`unit_cost` por endpoint lógico. Prueba de la fusión:
+`unit_cost` por endpoint lógico; `persist: true` en una sola familia por plataforma (api_quota_usage no distingue familias). Prueba de la fusión:
 `packages/connectors/test/limits.test.ts`. Mientras no esté, el worker
 usa exactamente los mismos valores desde el código.
 

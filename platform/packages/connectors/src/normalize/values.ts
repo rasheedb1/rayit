@@ -35,10 +35,23 @@ export function dateFromIso(v: unknown): Date | null {
   return Number.isNaN(t) ? null : new Date(t);
 }
 
-/** Porcentaje 0..100 → fracción 0..1 (con cuatro decimales de sobra para numeric(6,5)). */
+const FRACTION_SCALE = 1_000_000; // seis decimales: caben en numeric(7,6) y numeric(6,5)
+
+/** Porcentaje 0..100 → fracción 0..1 con seis decimales. Para APIs que documentan porcentaje (YouTube). */
 export function fractionFromPercent(v: unknown): number | null {
   const n = numOrNull(v);
-  return n === null ? null : Math.round(n * 1_000_000) / 100_000_000;
+  return n === null ? null : Math.round((n / 100) * FRACTION_SCALE) / FRACTION_SCALE;
+}
+
+/**
+ * Para APIs que no dicen si mandan fracción o porcentaje (reels_skip_rate
+ * de Instagram, percentage de TikTok Accounts): > 1 se toma como
+ * porcentaje. Se confirma con el fixture grabado.
+ */
+export function fractionOrPercent(v: unknown): number | null {
+  const n = numOrNull(v);
+  if (n === null) return null;
+  return n > 1 ? fractionFromPercent(n) : Math.round(n * FRACTION_SCALE) / FRACTION_SCALE;
 }
 
 export function extractHashtags(text: string | null): string[] {

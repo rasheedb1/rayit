@@ -26,7 +26,7 @@ import type { HttpCore } from '../http/client.ts';
 import type { ParsedApiError } from '../http/errors.ts';
 import type { BrandAccountSnapshot, ConnectorResult, NormalizedAccountMetrics, NormalizedAccountProfile, NormalizedDemographics, NormalizedPostMetrics, NormalizedVideo, Page } from '../normalize/types.ts';
 import { emptyAccountMetrics, emptyPostMetrics } from '../normalize/types.ts';
-import { asArray, asRecord, dateFromIso, extractHashtags, extractMentions, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
+import { asArray, asRecord, dateFromIso, extractHashtags, extractMentions, fractionOrPercent, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
 import { ConnectorUsageError, DEFAULT_MAX_PAGES, type CallOptions, type ConnectionAuth, type PageOptions } from './base.ts';
 
 export const INSTAGRAM_GRAPH_VERSION = 'v25.0';
@@ -246,13 +246,6 @@ function insightValues(body: Record<string, unknown>): Map<string, unknown> {
   return out;
 }
 
-/** reels_skip_rate: la documentación no dice si es fracción o porcentaje; > 1 se toma como porcentaje. Se verifica con el fixture grabado (CON-7). */
-function rateToFraction(v: unknown): number | null {
-  const n = numOrNull(v);
-  if (n === null) return null;
-  return n > 1 ? Math.round(n * 1000) / 100_000 : n;
-}
-
 export function normalizeInstagramMediaInsights(body: Record<string, unknown>): NormalizedPostMetrics {
   const v = insightValues(body);
   const m = emptyPostMetrics();
@@ -268,7 +261,8 @@ export function normalizeInstagramMediaInsights(body: Record<string, unknown>): 
   m.avg_watch_time_s = avgMs === null ? null : Math.round(avgMs) / 1000;
   const totalMs = numOrNull(v.get('ig_reels_video_view_total_time'));
   m.total_watch_time_s = totalMs === null ? null : Math.round(totalMs / 1000);
-  m.skip_rate_3s = rateToFraction(v.get('reels_skip_rate'));
+  // reels_skip_rate: la documentación no dice si es fracción o porcentaje (ver fractionOrPercent). Se verifica con el fixture grabado (CON-7).
+  m.skip_rate_3s = fractionOrPercent(v.get('reels_skip_rate'));
   m.follows_from_post = intOrNull(v.get('follows'));
   m.profile_visits = intOrNull(v.get('profile_visits'));
   m.link_clicks = intOrNull(v.get('link_clicks'));

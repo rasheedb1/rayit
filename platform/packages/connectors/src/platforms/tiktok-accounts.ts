@@ -35,7 +35,7 @@ import type { HttpCore } from '../http/client.ts';
 import type { ParsedApiError } from '../http/errors.ts';
 import type { ConnectorResult, NormalizedAccountMetrics, NormalizedAccountProfile, NormalizedDemographics, NormalizedVideo, Page } from '../normalize/types.ts';
 import { emptyAccountMetrics, emptyPostMetrics } from '../normalize/types.ts';
-import { asArray, asRecord, dateFromUnixS, extractHashtags, extractMentions, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
+import { asArray, asRecord, dateFromUnixS, extractHashtags, extractMentions, fractionOrPercent, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
 import { ConnectorUsageError, DEFAULT_MAX_PAGES, type CallOptions, type ConnectionAuth, type PageOptions } from './base.ts';
 
 export const TIKTOK_BUSINESS_BASE_URL = 'https://business-api.tiktok.com/open_api/v1.3';
@@ -99,9 +99,9 @@ export class TikTokAccountsClient {
     this.#base = opts.baseUrl ?? TIKTOK_BUSINESS_BASE_URL;
   }
 
-  #get(endpoint: string, path: string, query: Record<string, string | number | undefined>, signal?: AbortSignal) {
+  #get(endpoint: string, path: string, query: Record<string, string | number | undefined>, signal?: AbortSignal, quotaEndpoint?: string) {
     return this.#core.call<Record<string, unknown>>({
-      platformId: 'tiktok', family: 'tiktok-accounts', endpoint, method: 'GET', url: `${this.#base}/${path}`, query: { business_id: this.#businessId, ...query },
+      platformId: 'tiktok', family: 'tiktok-accounts', endpoint, quotaEndpoint, method: 'GET', url: `${this.#base}/${path}`, query: { business_id: this.#businessId, ...query },
       connectionId: this.#auth.connectionId, tokens: this.#auth.tokens, authStyle: 'access-token-header', signal, parseError: parseTikTokBusinessError,
     });
   }
@@ -150,18 +150,14 @@ export class TikTokAccountsClient {
     if (videoIds.length < 1 || videoIds.length > TIKTOK_BUSINESS_VIDEO_MAX) throw new ConnectorUsageError(`videoInsights acepta entre 1 y ${TIKTOK_BUSINESS_VIDEO_MAX} ids`);
     const res = await this.#get('tiktok.business.video.insights', 'business/video/list/', {
       fields: JSON.stringify([...TIKTOK_BUSINESS_VIDEO_FIELDS, ...TIKTOK_BUSINESS_INSIGHT_FIELDS]), filters: JSON.stringify({ video_ids: [...videoIds] }), max_count: videoIds.length,
-    }, opts.signal);
+    }, opts.signal, 'tiktok.business.video.list'); // misma URL que listVideos: misma ventana por minuto
     const data = asRecord(res.body['data']);
     return { data: asArray(data['videos']).map((v) => normalizeTikTokBusinessVideo(asRecord(v))), raw: res.body };
   }
 }
 
-/** La documentación no fija si `percentage` es 0..1 o 0..100; > 1 se toma como porcentaje. */
-function shareOf(v: unknown): number | null {
-  const n = numOrNull(v);
-  if (n === null) return null;
-  return n > 1 ? Math.round(n * 10_000) / 1_000_000 : n;
-}
+/** La documentación no fija si `percentage` es 0..1 o 0..100 (ver fractionOrPercent). */
+const shareOf = fractionOrPercent;
 
 const GENDER_BUCKET: Record<string, string> = { female: 'F', male: 'M', other: 'U', unknown: 'U' };
 

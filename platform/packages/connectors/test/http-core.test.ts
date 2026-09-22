@@ -188,3 +188,43 @@ test('presupuesto diario agotado → kind quota sin llamar, con su fila en el lo
   assert.equal(log.entries[1]!.http_status, null);
   assert.equal(log.entries[1]!.error_code, 'quota_exhausted');
 });
+
+test('Retry-After por encima del tope (120 s) no se espera dentro del job: se lanza con retryAfterS', async () => {
+  const { clock, calls, core } = setup([
+    () => jsonResponse(429, { error: { code: 'rate_limit_exceeded', message: 'slow down', log_id: 'L1' } }, { 'retry-after': '3600' }),
+    () => jsonResponse(200, {}),
+  ]);
+  const err = await expectError(core.call(request()));
+  assert.equal(err.kind, 'transient');
+  assert.equal(err.retryAfterS, 3600);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('un cuerpo que se corta a mitad de descarga es un fallo transitorio con su fila en el log, no una excepción suelta', async () => {
+  const broken = new Response(new ReadableStream({ pull(controller) { controller.error(new TypeError('terminated')); } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const { log, core } = setup([
+    () => broken,
+    () => jsonResponse(200, { data: {}, error: { code: 'ok' } }),
+  ]);
+  const res = await core.call(request());
+  assert.equal(res.attempts, 2);
+  assert.equal(log.entries[0]!.error_code, 'network');
+  assert.equal(log.entries[0]!.http_status, null);
+});
+
+test('llamadas concurrentes no se cuelan por la misma rendija: la ventana reserva en el mismo paso en que comprueba', async () => {
+  const clock = new FakeClock();
+  // Un sleep que anota la espera pero no la resuelve hasta que la prueba lo libere.
+  const waiting: Array<() => void> = [];
+  const sleep = (ms: number) => new Promise<void>((resolve) => { clock.sleeps.push(ms); waiting.push(resolve); });
+  const quota = new QuotaManager({ now: clock.now, sleep });
+  const key = { family: 'tiktok' as const, platformId: 'tiktok' as const, connectionId: CONN, endpoint: 'tiktok.video.list' };
+  for (let i = 0; i < 39; i++) await quota.acquire(key, 1);
+  const pending = Promise.all(Array.from({ length: 8 }, () => quota.acquire(key, 1)));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(clock.sleeps.length, 7, 'solo una de las ocho cabía en la ventana; las otras siete esperaron');
+  clock.advance(60_000);
+  for (const release of waiting.splice(0)) release();
+  await pending;
+});

@@ -109,9 +109,12 @@ Cómo se aplica: `acquire()` **espera** (con el `sleep` inyectado)
 cuando la siguiente llamada superaría una ventana, y **lanza `quota`
 sin llamar** cuando el presupuesto del día no alcanza o la espera
 superaría `maxWaitMs` (120 s). El día es UTC; YouTube reinicia a
-medianoche del Pacífico, así que el corte es conservador. Solo las
-familias con presupuesto numérico persisten en `api_quota_usage`
-(`connection_id` nulo = cuota de app). `platform.limits` sobreescribe la
+medianoche del Pacífico, así que el corte es conservador.
+`api_quota_usage` no distingue familias, así que solo la principal de
+cada plataforma persiste (`daily.persist`: hoy YouTube Data, con
+`connection_id` nulo = cuota de app); las demás cuentan en memoria. Un
+`Retry-After` mayor que 120 s tampoco se espera dentro del job: el error
+sale con `retryAfterS` y el job programa el siguiente intento. `platform.limits` sobreescribe la
 tabla por familia (`loadPlatformLimits`); el JSON propuesto está en
 `docs/propuestas/CON-1.md` §1.
 

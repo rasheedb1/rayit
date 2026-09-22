@@ -80,3 +80,15 @@ test('api_call_log: PostgresCallLogSink deja la fila con todas las columnas', as
   assert.equal(row['retry_after_s'], 7);
   assert.equal(row['request_units'], 1);
 });
+
+test('solo la familia principal de cada plataforma persiste: youtube-analytics no toca la fila de youtube', async () => {
+  const clock = new FakeClock();
+  const store = new PostgresQuotaUsageStore(executor(db));
+  const before = await store.load('youtube', null, '2026-09-22');
+  const m = new QuotaManager({ now: clock.now, sleep: clock.sleep, store });
+  await m.acquire({ family: 'youtube-analytics', platformId: 'youtube', connectionId: null, endpoint: 'youtube.analytics.query' }, 1);
+  await m.acquire({ family: 'youtube-search', platformId: 'youtube', connectionId: null, endpoint: 'youtube.search.list' }, 1);
+  const after = await store.load('youtube', null, '2026-09-22');
+  assert.deepEqual(after, before, 'la fila de la Data API no cambió');
+  assert.deepEqual(m.usedToday({ family: 'youtube-search', platformId: 'youtube', connectionId: null }), { unitsUsed: 1, calls: 1 }, 'en memoria sí cuenta');
+});

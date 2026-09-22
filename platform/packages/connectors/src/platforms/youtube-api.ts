@@ -24,7 +24,7 @@ import type { HttpCore } from '../http/client.ts';
 import type { ParsedApiError } from '../http/errors.ts';
 import type { BrandAccountSnapshot, ConnectorResult, NormalizedAccountMetrics, NormalizedAccountProfile, NormalizedDemographics, NormalizedPostMetrics, NormalizedVideo, Page } from '../normalize/types.ts';
 import { emptyAccountMetrics, emptyPostMetrics } from '../normalize/types.ts';
-import { asArray, asRecord, dateFromIso, extractHashtags, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
+import { asArray, asRecord, dateFromIso, extractHashtags, fractionFromPercent, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
 import { ConnectorUsageError, DEFAULT_MAX_PAGES, type CallOptions, type ConnectionAuth, type PageOptions } from './base.ts';
 
 export const YOUTUBE_DATA_BASE_URL = 'https://www.googleapis.com/youtube/v3';
@@ -216,8 +216,7 @@ function analyticsRowToMetrics(r: Record<string, unknown>): NormalizedPostMetric
   m.avg_watch_time_s = numOrNull(r['averageViewDuration']);
   const minutes = numOrNull(r['estimatedMinutesWatched']);
   m.total_watch_time_s = minutes === null ? null : Math.round(minutes * 60);
-  const pct = numOrNull(r['averageViewPercentage']);
-  m.completion_rate = pct === null ? null : Math.round(pct * 1000) / 100_000;
+  m.completion_rate = fractionFromPercent(r['averageViewPercentage']);
   m.follows_from_post = intOrNull(r['subscribersGained']);
   return m;
 }
@@ -229,9 +228,9 @@ function demographicsFromTable(t: AnalyticsTable): NormalizedDemographics {
   return tableRows(t).flatMap((r) => {
     const age = AGE_BUCKET[String(r['ageGroup'])] ?? String(r['ageGroup'] ?? '');
     const gender = GENDER_BUCKET[String(r['gender'])] ?? String(r['gender'] ?? '');
-    const pct = numOrNull(r['viewerPercentage']);
-    if (!age || !gender || pct === null) return [];
-    return [{ population: 'viewers' as const, dimension: 'age_gender' as const, bucket: `${age}|${gender}`, share: Math.round(pct * 10_000) / 1_000_000, absolute: null }];
+    const share = fractionFromPercent(r['viewerPercentage']);
+    if (!age || !gender || share === null) return [];
+    return [{ population: 'viewers' as const, dimension: 'age_gender' as const, bucket: `${age}|${gender}`, share, absolute: null }];
   });
 }
 

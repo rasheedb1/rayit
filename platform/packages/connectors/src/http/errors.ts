@@ -112,6 +112,14 @@ export const QUOTA_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
   youtube: ['quotaExceeded', 'dailyLimitExceeded'],
 };
 
+/** Códigos transitorios que algunas plataformas mandan con HTTP 400/403. */
+export const TRANSIENT_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
+  tiktok: ['internal_error'],
+  instagram: ['1', '2'],       // «An unknown error has occurred», «Service temporarily unavailable»
+  facebook: ['1', '2'],
+  youtube: ['backendError', 'internalError'],
+};
+
 /** Códigos de rate limit corto (segundos o un minuto): transitorio con espera. */
 const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'rate_limit']);
 
@@ -148,7 +156,7 @@ export function kindFor(platformId: PlatformId, httpStatus: number | undefined, 
   if (code !== undefined) {
     if (AUTH_CODES[platformId].includes(code)) return 'auth';
     if (QUOTA_CODES[platformId].includes(code)) return 'quota';
-    if (RATE_LIMIT_CODES.has(code)) return 'transient';
+    if (RATE_LIMIT_CODES.has(code) || TRANSIENT_CODES[platformId].includes(code)) return 'transient';
     // Un 429 es rate limit aunque el cuerpo traiga un código numérico de la Accounts API.
     if (httpStatus === 429) return 'transient';
     if (platformId === 'tiktok' && /^\d{5}$/.test(code)) {

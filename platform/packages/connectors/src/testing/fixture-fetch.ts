@@ -41,15 +41,15 @@ export interface RecordedCall {
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FIXTURES_DIR = join(HERE, '..', '..', 'fixtures');
 
-export async function loadFixture(platform: string, endpoint: string, caso?: string): Promise<Fixture> {
-  const name = caso ? `${endpoint}.${caso}.json` : `${endpoint}.json`;
+export async function loadFixture(platform: string, endpoint: string, variant?: string): Promise<Fixture> {
+  const name = variant ? `${endpoint}.${variant}.json` : `${endpoint}.json`;
   const path = join(FIXTURES_DIR, platform, name);
   const parsed = JSON.parse(await readFile(path, 'utf8')) as Fixture;
   if (!parsed.request?.urlPattern || !parsed.response) throw new Error(`Fixture inválido: ${path}`);
   return parsed;
 }
 
-export async function loadFixtures(platform: string, names: ReadonlyArray<[endpoint: string, caso?: string]>): Promise<Fixture[]> {
+export async function loadFixtures(platform: string, names: ReadonlyArray<[endpoint: string, variant?: string]>): Promise<Fixture[]> {
   return Promise.all(names.map(([e, c]) => loadFixture(platform, e, c)));
 }
 

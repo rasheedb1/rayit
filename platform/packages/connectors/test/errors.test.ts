@@ -16,6 +16,8 @@ test('clasificación por plataforma y código', () => {
   assert.equal(kindFor('instagram', 400, '4'), 'quota');
   assert.equal(kindFor('instagram', 400, '80002'), 'quota');
   assert.equal(kindFor('instagram', 400, '100'), 'permanent');
+  assert.equal(kindFor('instagram', 400, '1'), 'transient', 'Meta 1 y 2 son transitorios aunque vengan con 400');
+  assert.equal(kindFor('instagram', 400, '2'), 'transient');
   assert.equal(kindFor('youtube', 403, 'quotaExceeded'), 'quota');
   assert.equal(kindFor('youtube', 403, 'dailyLimitExceeded'), 'quota');
   assert.equal(kindFor('youtube', 403, 'rateLimitExceeded'), 'transient');
