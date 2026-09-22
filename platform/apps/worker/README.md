@@ -1,0 +1,166 @@
+# @mc/worker · trabajos en segundo plano
+
+Node + pg-boss sobre el mismo Postgres del producto. Lee `job_definition`
+(migración 0009) para saber qué corre, cuándo y con qué límites, y deja
+cada ejecución en `job_run`. Los jobs viven en la carpeta de su módulo;
+el runner (`src/runner/`) no se toca para agregar uno.
+
+## Correrlo
+
+```bash
+cd platform
+make db.unlock                          # una vez: descifra .env.local
+pnpm --filter @mc/worker install-schema # una vez por base: crea/migra el esquema pgboss
+make worker                             # = pnpm --filter @mc/worker dev (recarga al guardar)
+make dev                                # web + worker juntos (turbo)
+```
+
+Sin Supabase ni Docker, para ver el worker funcionando en esta máquina:
+
+```bash
+pnpm --filter @mc/worker start -- --pglite   # Postgres embebido vacío con las 13 migraciones
+pnpm --filter @mc/worker start -- --demo     # lo anterior + 3 conexiones y un oauth.refresh en vivo
+```
+
+`--demo` siembra una conexión que vence en 10 minutos (se renueva), una
+en 3 horas (intacta) y una revocada (pasa a `needs_reauth` con su
+notificación), encola `oauth.refresh` y a los cuatro segundos imprime
+`job_run`, `social_connection` y `notification`.
+
+Contra Supabase el worker arranca **solo cuando Rasheed aplique
+[docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
+`pgboss` y membresía de `mc_worker`). Hasta entonces falla al arrancar
+con un mensaje que dice exactamente qué falta; no arranca a medias.
+
+## Variables de entorno (nombres, no valores)
+
+| Variable | Para qué | Por defecto |
+|---|---|---|
+| `DATABASE_URL_DIRECT` | Conexión en **modo sesión** (pooler :5432). pg-boss y `SET ROLE` necesitan una sesión estable; el worker rechaza :6543. | obligatoria |
+| `WORKER_DATABASE_URL` | Sustituye a la anterior cuando exista un rol de login propio del worker. | — |
+| `WORKER_SET_ROLE` | Rol que asumen las consultas de negocio tras conectar. `none` para no cambiar. | `mc_worker` |
+| `WORKER_GROUPS` | Grupos (`job_definition.queue`) que atiende este proceso: `collect,connections`. | todos |
+| `WORKER_POLL_S` | Cada cuánto pregunta pg-boss por trabajo (≥ 0,5). | `2` |
+| `WORKER_RETRY_DELAY_S` / `WORKER_RETRY_DELAY_MAX_S` | Base y tope del backoff exponencial entre reintentos. | `30` / `900` |
+| `WORKER_STOP_TIMEOUT_S` | Cuánto espera a los jobs activos al recibir SIGTERM. | `30` |
+| `WORKER_BOSS_SCHEMA` | Esquema de pg-boss. | `pgboss` |
+| `WORKER_JOB_POOL_MAX` / `WORKER_BOSS_POOL_MAX` | Tamaño de los dos pools. | `8` / `4` |
+| `OAUTH_REFRESH_MARGIN_MINUTES` | Con cuánta anticipación renueva `oauth.refresh`. | `30` |
+| `SECRET_STORE` | `env` (lee `env:NOMBRE` de variables) o `memory`. El real llega con CON-3. | `env` |
+| `TOKEN_REFRESHER` | `real` (TikTok/Instagram/YouTube: sin implementar hasta CON-3/CON-8) o `fake`. | `real` |
+| `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
+| `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
+| `TOKEN_ENCRYPTION_KEY`, `TIKTOK_*`, `META_*`, `GOOGLE_*` | Las usarán los refreshers reales (CON-3, CON-8). Hoy no se leen. | — |
+
+`make worker` carga `platform/.env.local` y `platform/.env` con
+`--env-file-if-exists`; no hay dependencia de dotenv.
+
+## Cómo agregar un job en tu módulo
+
+```ts
+// apps/worker/src/jobs/finanzas/recordatorios.ts
+import { defineJob } from '../../runner/registry.ts';
+
+export const recordatoriosJob = defineJob('finance.reminders', async (payload, ctx) => {
+  const { rows } = await ctx.db.query('SELECT … FROM invoice WHERE workspace_id = $1 AND …', [ctx.workspaceId]);
+  // … trabajo …
+  return { processed: rows.length, failed: 0, metadata: { invoices: rows.map((r) => r.id) } };
+});
+```
+
+```ts
+// apps/worker/src/jobs/finanzas/index.ts
+export const finanzasJobs = [recordatoriosJob];
+// apps/worker/src/jobs/index.ts — la única línea fuera de tu carpeta
+export const allJobs = [...conexionesJobs, ...finanzasJobs];
+```
+
+Reglas:
+
+- El id (`finance.reminders`) tiene que existir en `job_definition`. De
+  ahí salen cola, cron, `timeout_s`, `max_attempts` y `max_concurrency`.
+  Si necesitas una fila nueva, es una migración (Rasheed).
+- `ctx.db` corre como **`mc_worker`, que se salta RLS**. Cada escritura
+  filtra por `workspace_id` explícitamente. Un `UPDATE` sin ese `WHERE`
+  toca todos los clientes.
+- Devuelve `{ processed, failed, metadata? }`. `metadata` va a
+  `job_run.metadata` pasando por el redactor: ids y fechas sí, tokens
+  jamás.
+- Revisa `ctx.signal` en bucles largos: se dispara al vencer `timeout_s`
+  y al apagar el worker.
+- Para encolar desde fuera del cron: `boss.send('finance.reminders',
+  { workspaceId, entityType: 'invoice', entityId })`. Esos tres campos
+  del payload se copian a `job_run`.
+- Nada de `console.log`: usa `ctx.logger` (eslint lo impone). Todo lo
+  que imprime pasa por el redactor.
+
+## Qué pasa cuando falla
+
+| Situación | job_run | pg-boss |
+|---|---|---|
+| El handler lanza | `failed`, `error = "Clase: mensaje"` (el stack va al log) | reintenta con backoff hasta `max_attempts` |
+| Excede `timeout_s` | `failed`, `error = "timeout"`, `metadata.timeoutS` | igual; además `expireInSeconds = timeout_s + 30` como red de seguridad |
+| `failed > 0` y `processed > 0` | `partial`, con los contadores | reintenta (el job debe ser idempotente: lo ya hecho no se rehace) |
+| `failed > 0` y `processed = 0` | `failed`, `error = "JobItemsFailedError: …"` | reintenta |
+| Definición sin handler | una fila `skipped` con `error = "sin handler"` por arranque | no se crea cola de trabajo |
+| `enabled = false` | nada | se retira el schedule si existía |
+| El proceso recibe SIGTERM | los jobs activos terminan (hasta `WORKER_STOP_TIMEOUT_S`) | los que no terminaron vuelven a la cola al expirar |
+
+Cada job es su propia cola en pg-boss (`job_definition.id`); `queue` es
+el grupo lógico para repartir procesos con `WORKER_GROUPS`. Los crons
+se guardan en `pgboss.schedule` con la clave `cron`: reiniciar el worker
+no los duplica, y si cambia `default_cron` se actualiza al arrancar.
+
+## Cómo leer job_run
+
+```sql
+-- Últimas ejecuciones, con duración y resultado
+SELECT id, job_id, status, attempt, started_at, duration_ms, items_processed, items_failed, error
+  FROM job_run ORDER BY id DESC LIMIT 20;
+
+-- ¿Por qué esta conexión no se renovó?
+SELECT id, status, started_at, error, metadata
+  FROM job_run
+ WHERE job_id = 'oauth.refresh' AND metadata->'needsReauth' ? '<connection_id>';
+
+-- Fallos de las últimas 24 h por job
+SELECT job_id, count(*) FROM job_run
+ WHERE status IN ('failed','partial') AND started_at > now() - interval '24 hours'
+ GROUP BY 1 ORDER BY 2 DESC;
+```
+
+`metadata.bossJobId` cruza con `pgboss.job.id` cuando hace falta ver
+el estado en la cola. Las llamadas salientes de `oauth.refresh` quedan
+en `api_call_log` (`endpoint = 'oauth.refresh'`, sin cuerpo).
+
+## Pruebas
+
+```bash
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~17 s
+pnpm --filter @mc/connectors test    # unitarias del paquete de conectores
+pnpm --filter @mc/worker typecheck lint
+```
+
+Las de integración aplican las 13 migraciones reales más los GRANTs
+propuestos en `test/fixtures/0014_worker_grants.sql`, y corren como
+`mc_worker`: si la propuesta no alcanzara, las pruebas fallan. No tocan
+Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
+`backend: 'pglite'`); no hace falta Docker.
+
+## Estructura
+
+```
+src/index.ts                 arranque, --install, --pglite, --demo, apagado limpio
+src/runner/config.ts         variables de entorno
+src/runner/logger.ts         JSON por línea + redactor
+src/runner/db.ts             pool de pg + SET ROLE mc_worker (Postgres real)
+src/runner/db-pglite.ts      Postgres embebido (pruebas y demo)
+src/runner/registry.ts       defineJob(), JobContext, JobResult   ← el contrato
+src/runner/definitions.ts    lectura de job_definition
+src/runner/boss.ts           job_definition → opciones de pg-boss
+src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
+src/runner/worker.ts         arranque: colas, crons, handlers, resumen
+src/jobs/index.ts            suma de los jobs de todos los módulos
+src/jobs/conexiones/         oauth.refresh
+test/                        integración (pglite) y unitarias
+```
