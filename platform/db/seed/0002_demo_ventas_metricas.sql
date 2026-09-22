@@ -15,13 +15,26 @@
 --     veces deja los mismos conteos, el mismo día o cualquier día
 --     después (verify/run.mjs lo prueba con una tercera pasada con el
 --     reloj adelantado un día).
---   * Determinista. Nada de random(): las curvas salen de funciones
---     cerradas sobre generate_series, así que dos corridas dan lo
---     mismo, y dos máquinas que siembren el mismo día UTC también.
+--   * Determinista. Nada de random(): las curvas, los conteos y todo lo
+--     derivado de generate_series salen de funciones cerradas, así que
+--     dos corridas dan lo mismo y dos máquinas que siembren el mismo
+--     día UTC dan lo mismo en todo eso. Lo que NO coincide entre dos
+--     máquinas son las nueve columnas de frescura, que salen de now() y
+--     llevan la hora exacta de la siembra: social_connection
+--     .last_synced_at, .access_expires_at, .refresh_expires_at y
+--     .connected_at; app_user.last_seen_at; signal.detected_at y
+--     .reviewed_at (las pendientes y la duplicada);
+--     audience_breakdown.captured_at; y company.enriched_at (Olla
+--     Fácil). Un diff entre dos entornos que solo toque esas nueve es
+--     lo esperado, no un síntoma.
 --   * El seed fija TimeZone = UTC para su sesión, junto al workspace.
 --     CURRENT_DATE y date_trunc('day', now()) dependen del TimeZone de
 --     la sesión, no del sistema: sin fijarlo, un Postgres inicializado
---     en Bogotá a las 02:00 UTC sembraría "ayer" y daría otra demo.
+--     en Bogotá a las 02:00 UTC sembraría "ayer" y daría otra demo. Es
+--     un ajuste de sesión, así que sobrevive al archivo; quien cargue
+--     los seeds dentro de otro proceso lo fija además por su cuenta
+--     (packages/db/src/provisional/embedded.ts), para no depender de
+--     este efecto lateral.
 --   * El reloj del seed es la medianoche UTC de hoy, date_trunc('day',
 --     now()): es la hora a la que correría el job nocturno, que solo
 --     tiene cerrado el día de ayer. Las lecturas que "ya ocurrieron",
@@ -39,20 +52,32 @@
 --     viva; y toda la fila lo es: el texto, la dedupe_key y las fechas
 --     que la acompañan se derivan de la misma fecha, para que nunca
 --     diga "hace 2 horas" de algo del 14 de septiembre.
---   * Lo relativo se congela en la primera corrida. published_at de los
---     videos relativos y el día 0 de la serie de la cuenta se toman de
---     lo ya guardado si existe (COALESCE sobre la fila anterior), así
---     que una corrida en otro día no desplaza fechas, no duplica
---     lecturas ni añade un día plano: las lecturas nuevas que entran
---     son solo las que la curva de cada video ya alcanzó. Las señales,
---     deals y actividades relativos usan ON CONFLICT DO NOTHING y
---     quedan fechados el día en que el seed corrió por primera vez.
---   * Lo único que se refresca en cada corrida es la frescura de las
---     conexiones (social_connection.last_synced_at, access_expires_at,
---     refresh_expires_at) y app_user.last_seen_at, con DO UPDATE. Son
---     tablas maestras, no métricas: no viola el append-only, y evita
---     que una hora después de sembrar la demo diga que el token de
---     YouTube venció y al día siguiente que nadie sincroniza.
+--   * Lo que YA PASÓ se congela en la primera corrida. published_at de
+--     los videos relativos y el día 0 de la serie de la cuenta se toman
+--     de lo ya guardado si existe (COALESCE sobre la fila anterior),
+--     así que una corrida en otro día no desplaza fechas ni duplica
+--     lecturas: las que entran son solo las que la curva de cada video
+--     ya alcanzó. Las señales aceptadas, los deals cerrados, la
+--     historia de etapas y las actividades usan ON CONFLICT DO NOTHING
+--     y quedan fechados el día en que el seed corrió por primera vez:
+--     son hechos ocurridos, y las actividades los citan por su texto.
+--   * Lo que la demo MIRA HOY se refresca en cada corrida, con DO
+--     UPDATE: la frescura de las conexiones (social_connection
+--     .last_synced_at, .access_expires_at, .refresh_expires_at) y
+--     app_user.last_seen_at; el cierre esperado y la fecha de la
+--     próxima acción de los deals ABIERTOS (sección 10); el titular, la
+--     fecha, el evidence y la dedupe_key de las señales PENDIENTES
+--     (sección 9); y la ventana del brief activo (sección 12). Son
+--     tablas maestras y planes, no métricas: no viola el append-only.
+--     Además la serie de la cuenta se extiende hasta ayer (sección 5) y
+--     la línea base se recalcula con la fecha del día (sección 7).
+--     Sin esto, `make db.seed` sobre una base sembrada hace seis
+--     semanas —el camino documentado contra Supabase— enseña ocho de
+--     diez deals abiertos con el cierre en el pasado, cuatro señales
+--     pendientes de mes y medio y la gráfica de seguidores terminando
+--     hace mes y medio, todo al lado de un "sincronizado hace 2 h".
+--     verify/run.mjs lo prueba con una cuarta pasada que vuelve a
+--     sembrar la MISMA base con el reloj adelantado.
 --   * Las métricas se insertan, nunca se actualizan (append-only).
 --   * RLS está en modo FORCE: incluso mc_migrator, dueño de las tablas,
 --     necesita app.workspace_id fijado. Se fija al principio para toda
@@ -82,16 +107,21 @@
 --   …-0000adHHHHHH       audience_breakdown, HHHHHH = red·100 + bucket
 --                        en hexadecimal (id fijo = clave de idempotencia)
 --   …-0000000b0001       outbound_brief
---   …-0000ba5PCCCC       creator_baseline, P = red (1 tiktok, 2 instagram,
---                        3 youtube, 4 facebook), CCCC = corte en horas
+--   …-ba5PCCCCDDDD       creator_baseline, P = red (1 tiktok, 2 instagram,
+--                        3 youtube, 4 facebook), CCCC = corte en horas,
+--                        DDDD = día del cálculo (días desde el 1-ene-2026,
+--                        en hexadecimal): una línea base por día
 --   00000003-…-ca0001/ca0004  las dos campañas reportadas: mismos ids y
 --                        cifras que 0003, que al correr después las
 --                        reafirma; aquí se enlazan a su deal ganado.
 --
 -- Cómo se aplica y se verifica:
 --   node db/migrate.mjs <url> --seed         (Supabase o Docker)
---   node db/seed/verify/run.mjs 0002          (Postgres embebido, dos
---                                              pasadas y las cifras)
+--   node db/seed/verify/run.mjs 0002          (Postgres embebido: dos
+--                                              pasadas, las cifras, una
+--                                              tercera pasada mañana y
+--                                              una cuarta a +40 días
+--                                              sobre la misma base)
 -- Al final del archivo está la tabla de conteos esperados.
 -- =====================================================================
 
@@ -464,7 +494,7 @@ WHERE c.published_at + make_interval(hours => a.h) <= date_trunc('day', now())
 
 
 -- =====================================================================
--- 5 · Noventa días de la cuenta, por red
+-- 5 · La serie de la cuenta, por red: noventa días, y los que vengan
 -- ---------------------------------------------------------------------
 -- Seguidores: de los valores de hace 90 días a los de FOLLOWERS_NOW del
 -- mock (TikTok 214 000, Instagram 128 000, YouTube 49 000, Facebook
@@ -481,14 +511,24 @@ WHERE c.published_at + make_interval(hours => a.h) <= date_trunc('day', now())
 -- de la arepa (días 85–87, ×1,5). La base está calibrada para que los
 -- últimos 30 días, con la tendencia y el pico de la arepa dentro de la
 -- ventana, sumen ≈ 2,6 M: el KPI "Views en 30 días" del mock.
--- UNIQUE (connection_id, day, source) es la clave de idempotencia. El
--- día 0 se ancla al primer día ya guardado (si lo hay): una corrida en
--- otro día no añade un día plano al final de la serie.
--- El día 89 es AYER (día 0 = CURRENT_DATE - 90): el job nocturno solo
--- tiene cerrado el día anterior, y así el aviso «datos hasta el
--- {fecha}» de Resumen nunca dice "hoy" con un día a medias. Cada día se
--- captura a las 05:00 UTC del día siguiente (la hora del job), que para
--- el día 89 ya pasó siempre.
+--
+-- La serie llega SIEMPRE hasta ayer, también al volver a sembrar una
+-- base que ya la tiene. El día 0 se ancla al primer día guardado (si lo
+-- hay) y se generan los días que falten desde entonces hasta ayer: d
+-- pasa de 89 en una base vieja, UNIQUE (connection_id, day, source)
+-- deja fuera los días que ya están y solo entran los nuevos. Por eso el
+-- normalizador de los seguidores es la suma de pesos de los días 0..89
+-- (constante) y no la del rango generado: los días ya guardados vuelven
+-- a dar exactamente el mismo número, y los nuevos siguen subiendo por
+-- encima de FOLLOWERS_NOW en vez de dejar un escalón. Anclar por el
+-- final (día 89 = ayer) daría ese escalón: la parte vieja de la serie
+-- ya vale 214 000 seguidores en TikTok y la nueva volvería a empezar en
+-- 205 000, y "la serie nunca baja" dejaría de ser cierto.
+-- El día 89 de la primera corrida es AYER (día 0 = CURRENT_DATE - 90):
+-- el job nocturno solo tiene cerrado el día anterior, y así el aviso
+-- «datos hasta el {fecha}» de Resumen nunca dice "hoy" con un día a
+-- medias. Cada día se captura a las 05:00 UTC del día siguiente (la
+-- hora del job), que para el último día ya pasó siempre.
 -- =====================================================================
 INSERT INTO account_metric_snapshot
   (connection_id, workspace_id, captured_at, day, followers, following, media_count, views, reach,
@@ -512,12 +552,18 @@ FROM (
     ('00000002-0000-4000-8000-0000000000c4'::uuid, 'facebook',  4,  20100,  21000,  2300,  40,  530)
   ) AS c(connection_id, platform, pcode, f_start, f_end, views_base, following, media_base)
   CROSS JOIN LATERAL (
-    SELECT g.d,
-           COALESCE((SELECT min(a.day) FROM account_metric_snapshot a
+    -- El día 0: el primer día ya guardado, o hace 90 días si la base
+    -- está limpia. El último día generado es siempre ayer.
+    SELECT COALESCE((SELECT min(a.day) FROM account_metric_snapshot a
                       WHERE a.connection_id = c.connection_id AND a.source = 'api'),
-                    CURRENT_DATE - 90) + g.d AS day,
-           sum(g.wt) OVER (ORDER BY g.d) AS cw,
-           sum(g.wt) OVER ()             AS sw,
+                    CURRENT_DATE - 90) AS dia_cero
+  ) a0
+  CROSS JOIN LATERAL (
+    SELECT g.d, a0.dia_cero + g.d AS day,
+           sum(g.wt) OVER (ORDER BY g.d)                  AS cw,
+           -- Normalizador fijo: los noventa primeros días. Así cw/sw
+           -- vale 1 el día 89 (FOLLOWERS_NOW) y pasa de 1 después.
+           sum(g.wt) FILTER (WHERE g.d <= 89) OVER ()     AS sw,
            round(c.views_base
                  * (0.75 + 0.5 * (((g.d * 53 + c.pcode * 7) % 100) / 100.0))
                  * (1 + g.d * 0.0018)
@@ -530,7 +576,7 @@ FROM (
                + CASE WHEN c.platform = 'tiktok'    AND d BETWEEN 63 AND 69 THEN 3.2
                       WHEN c.platform = 'instagram' AND d > 76              THEN 0.9
                       ELSE 0 END AS wt
-      FROM generate_series(0, 89) AS d
+      FROM generate_series(0, greatest(89, (CURRENT_DATE - 1) - a0.dia_cero)) AS d
     ) g
   ) w
 ) s
@@ -597,14 +643,24 @@ ON CONFLICT (id) DO NOTHING;
 -- percentile(). is_reliable pide 8 videos (MIN_SAMPLE_FOR_BASELINE).
 -- computed_at es la medianoche UTC de hoy: es lo que dejaría el job
 -- nocturno, y hace idempotente la fila dentro del día.
+-- El id lleva el DÍA del cálculo, no solo la red y el corte: cada
+-- siembra deja una línea base nueva (la tabla ya tiene UNIQUE (creator,
+-- red, corte, computed_at) y un índice por computed_at DESC), y el
+-- puntaje de más abajo usa la de max(computed_at). Con el id fijo por
+-- (red, corte) la línea base se congelaba en la primera corrida y un
+-- video puntuado hoy se comparaba contra la mediana de hace un mes,
+-- calculada sobre una ventana de veinte videos que ya no era la actual.
 -- =====================================================================
 INSERT INTO creator_baseline
   (id, workspace_id, creator_id, platform_id, computed_at, window_posts, age_hours_cut, sample_size,
    median_views, p25_views, p75_views, median_reach, median_engagement, median_saves_per_1k,
    median_completion, median_skip_3s, is_reliable)
-SELECT ('00000002-0000-4000-8000-0000ba5'
+-- id = …-ba5 + red + corte (4 dígitos) + día en hexadecimal (días desde
+-- el 1-ene-2026, cuatro dígitos: alcanza hasta el año 2205).
+SELECT ('00000002-0000-4000-8000-ba5'
         || CASE r.platform_id WHEN 'tiktok' THEN '1' WHEN 'instagram' THEN '2' WHEN 'youtube' THEN '3' ELSE '4' END
-        || lpad(r.cut::text, 4, '0'))::uuid,
+        || lpad(r.cut::text, 4, '0')
+        || lpad(to_hex(CURRENT_DATE - DATE '2026-01-01'), 4, '0'))::uuid,
        '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003', r.platform_id,
        date_trunc('day', now()), 20, r.cut, count(*),
        round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.views)::numeric, 2),
@@ -632,9 +688,12 @@ GROUP BY r.platform_id, r.cut
 ON CONFLICT DO NOTHING;
 
 -- Cada video se puntúa en el mayor corte que ya alcanzó, contra la
--- línea base más reciente de su red en ese corte (la de la primera
--- corrida: el id fijo la congela). Así una corrida posterior puntúa al
--- video que cumplió 24 h desde entonces, en vez de dejarlo sin fila.
+-- línea base más reciente de su red en ese corte: la que acaba de
+-- calcular la sentencia de arriba. Así una corrida posterior puntúa al
+-- video que cumplió 24 h desde entonces contra la mediana de hoy, en
+-- vez de dejarlo sin fila o compararlo con una mediana vieja. El
+-- puntaje ya calculado no se recalcula (ON CONFLICT (post_id) DO
+-- NOTHING): es append-only y cita la línea base con la que se midió.
 -- versusMedian() devuelve null (no cero) con menos de 8 videos;
 -- outlierTier(): ≥5 breakout, ≥2 outlier, ≥1,2 good, ≥0,7 normal, si
 -- no under. is_outlier = ≥ 2.
@@ -753,6 +812,14 @@ ON CONFLICT DO NOTHING;
 -- mes en español se saca de un ARRAY porque to_char no tiene locale
 -- garantizado en Postgres embebido.
 -- =====================================================================
+-- Los nombres de los meses en español, una sola vez por sentencia:
+-- to_char no tiene locale garantizado en Postgres embebido, y tener la
+-- lista repetida dentro de cada expresión hacía que corregir una tilde
+-- fuera siete ediciones.
+WITH meses AS (
+  SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo,
+         ARRAY['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'] AS corto
+)
 INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, detected_at, evidence_url, evidence, fit_score, budget_estimate, budget_currency, dedupe_key, status, reviewed_by, reviewed_at, discard_reason)
 VALUES
   -- Aceptadas: cada una tiene su deal (origin_signal_id).
@@ -778,19 +845,19 @@ VALUES
    'creator_marketplace:saborescaseros.co:tiktok:2026-08-15', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-15 13:00:00+00', NULL),
   ('00000002-0000-4000-8000-00000005e006', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
    '4 anuncios activos en Meta desde el ' || to_char(CURRENT_DATE - 32, 'FMDD') || ' '
-     || (ARRAY['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'])[extract(month FROM CURRENT_DATE - 32)::int] || ' · bienestar',
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 32)::int] FROM meses m) || ' · bienestar',
    (CURRENT_DATE - 31 + time '08:00') AT TIME ZONE 'UTC', 'https://www.facebook.com/ads/library/?q=vitale',
    jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'bienestar', 'since', to_char(CURRENT_DATE - 32, 'YYYY-MM-DD')), 0.7300, 9800000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 32, 'YYYY-MM-DD'), 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC', NULL),
   -- Por revisar: la bandeja de hoy.
   ('00000002-0000-4000-8000-00000005e007', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
    '4 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 7, 'FMDD') || ' '
-     || (ARRAY['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'])[extract(month FROM CURRENT_DATE - 7)::int] || ' · snacks',
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 7)::int] FROM meses m) || ' · snacks',
    now() - interval '2 hours', 'https://www.facebook.com/ads/library/?q=vitale',
    jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 7, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e008', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', 'press_launches',
-   'Anuncia línea de desayunos para ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 30)::int],
+   'Anuncia línea de desayunos para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 30)::int] FROM meses m),
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
    jsonb_build_object('launch', 'línea de desayunos', 'month', to_char(CURRENT_DATE + 30, 'YYYY-MM')), 0.7500, 6000000.00, 'COP',
    'press_launches:freskomarket.co:desayunos-' || to_char(CURRENT_DATE + 30, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
@@ -812,15 +879,28 @@ VALUES
    '9 anuncios activos en Meta · hogar', now() - interval '5 days', 'https://www.facebook.com/ads/library/?q=hogarlindo',
    '{"active_ads": 9, "country": "CO", "category": "hogar"}', 0.5800, 3000000.00, 'COP',
    'meta_ad_library:hogarlindo.co:' || to_char(CURRENT_DATE - 5, 'YYYY-MM-DD'), 'discarded', '00000002-0000-4000-8000-000000000002', now() - interval '5 days' + interval '3 hours', 'Cliente con factura en mora: no prospectar hasta cobrar FV-2026-007.')
-ON CONFLICT DO NOTHING;
+-- Volver a sembrar refresca la bandeja: una señal PENDIENTE es trabajo
+-- por hacer, no un hecho archivado, y cuatro señales de hace mes y
+-- medio esperando revisión no son la demo. Se refresca la fila entera
+-- (titular, fecha, evidence y dedupe_key salen de la misma
+-- CURRENT_DATE), para que nunca diga "hace 2 horas" de algo de hace un
+-- mes. Las aceptadas, la duplicada y la descartada ya ocurrieron y no
+-- se tocan.
+ON CONFLICT (id) DO UPDATE SET
+  headline_es = EXCLUDED.headline_es,
+  detected_at = EXCLUDED.detected_at,
+  evidence    = EXCLUDED.evidence,
+  dedupe_key  = EXCLUDED.dedupe_key
+WHERE signal.status = 'pending';
 
 
 -- =====================================================================
 -- 10 · Pipeline: quince deals
 -- ---------------------------------------------------------------------
 -- Diez abiertos (COP 95,5 M, ponderado 43,15 M), cuatro ganados (los
--- tres del "Ganado en Q3" del mock más el de Hogar Lindo de junio, que
--- es la factura en mora de 0003 y la campaña ca0004) y uno perdido
+-- tres del "Ganado en Q3" del mock, 13 M entre los tres, más el de
+-- Hogar Lindo de junio, que es la factura en mora de 0003 y la campaña
+-- ca0004) y uno perdido
 -- (Granos del Valle en marzo: es lo que explica la baja de Mateo
 -- Giraldo y el "segundo intento" de hoy). Las próximas acciones van
 -- relativas a hoy: Granos del Valle (−2 d) y Vitalé (−1 d) están
@@ -839,6 +919,9 @@ ON CONFLICT DO NOTHING;
 -- (p) lo vigila). Los cobros pendientes apuntan al vencimiento de su
 -- factura en 0003.
 -- =====================================================================
+-- Los nombres de los meses en español, una sola vez por sentencia
+-- (ver la sentencia de signal).
+WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo)
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, origin_signal_id, name, stage_id, amount, currency, probability, expected_close_date, next_action, next_action_due, next_action_user_id, last_contact_at, won_at, lost_at, lost_reason, created_at)
 SELECT d.id, '00000002-0000-4000-8000-000000000001', d.company_id, '00000002-0000-4000-8000-000000000003', '00000002-0000-4000-8000-000000000002', d.origin_signal_id,
        d.name, d.stage_id, d.amount, 'COP', NULL, d.expected_close_date, d.next_action, d.next_action_due, '00000002-0000-4000-8000-000000000002',
@@ -873,14 +956,19 @@ FROM (VALUES
    '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
    (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 6 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
-   '1 TikTok + 1 Short · ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int], 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
+   '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
    '2 TikTok · septiembre', 'ganado', 5200000.00, DATE '2026-08-27', 'Cobrar la factura FV-2026-011',
    ((CURRENT_DATE + 23)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-09 15:10:00+00', '2026-08-27 17:30:00+00', NULL, NULL, '2026-08-13 14:20:00+00'),
+  -- 4,7 M, no 4,5: es el mismo trabajo que la campaña ca0003 y la
+  -- factura FV-2026-009 de 0003, que valen 4 700 000. El mock da 4,5 M
+  -- para este deal, pero un tablero de Ventas que diga 4,5 al lado de
+  -- una factura de 4,7 por el mismo video mata la demo antes que la
+  -- cifra del mock.
   ('00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000000e4', NULL,
-   'Video dedicado · julio', 'ganado', 4500000.00, DATE '2026-07-01', 'Cobrada',
+   'Video dedicado · julio', 'ganado', 4700000.00, DATE '2026-07-01', 'Cobrada',
    NULL, '2026-08-20 15:00:00+00', '2026-07-01 14:00:00+00', NULL, NULL, '2026-06-10 10:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-00000005e002',
    'Lanzamiento cold brew', 'ganado', 3100000.00, DATE '2026-07-29', 'Cobrar la factura FV-2026-010',
@@ -893,7 +981,18 @@ FROM (VALUES
    'Receta con granola · marzo', 'perdido', 5000000.00, DATE '2026-03-15', NULL,
    NULL, '2026-03-18 14:00:00+00', NULL, '2026-03-20 15:00:00+00', 'eligio_otro_creador', '2026-02-20 10:00:00+00')
 ) AS d(id, company_id, origin_signal_id, name, stage_id, amount, expected_close_date, next_action, next_action_due, last_contact_at, won_at, lost_at, lost_reason, created_at)
-ON CONFLICT DO NOTHING;
+-- Volver a sembrar refresca el PLAN de los deals abiertos (el cierre
+-- esperado y la fecha de la próxima acción) igual que refresca la
+-- frescura de las conexiones: son lo que el tablero mira hoy, no un
+-- hecho ocurrido. Sin esto, una base sembrada hace seis semanas enseña
+-- ocho de diez deals abiertos con el cierre en el pasado. Lo que ya
+-- pasó (etapas, último contacto, cierres reales, el mes o el trimestre
+-- del nombre, que las actividades citan) no se toca, y los ganados y
+-- perdidos quedan intactos: su cierre esperado es historia.
+ON CONFLICT (id) DO UPDATE SET
+  expected_close_date = EXCLUDED.expected_close_date,
+  next_action_due     = EXCLUDED.next_action_due
+WHERE deal.stage_id NOT IN ('ganado', 'perdido');
 
 -- Historia de etapas: de aquí salen el ciclo de venta y la conversión
 -- por etapa. Sin clave natural: se evita el duplicado por (deal, etapa
@@ -961,6 +1060,9 @@ WHERE NOT EXISTS (
 -- Fresko Market es la del mock (COMPANIES en app.js), con las fechas
 -- tal cual.
 -- =====================================================================
+-- Los nombres de los meses en español, una sola vez por sentencia
+-- (ver la sentencia de signal).
+WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo)
 INSERT INTO activity (id, workspace_id, company_id, deal_id, contact_id, user_id, kind, subject, body, occurred_at, metadata)
 SELECT ('00000002-0000-4000-8000-00000ac7' || lpad(to_hex(a.n), 4, '0'))::uuid,
        '00000002-0000-4000-8000-000000000001', a.company_id, a.deal_id, a.contact_id,
@@ -997,7 +1099,7 @@ FROM (VALUES
   (13, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000c0005', 'meeting',
     'Reunión con Julián', 'Video dedicado de YouTube sobre almuerzos saludables para julio.', '2026-06-18 15:00:00+00', '{"duration_min": 40}'),
   (14, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000c0005', 'proposal_sent',
-    'Cotización del video dedicado', 'Un video de 10 minutos con mención integrada. COP 4,5 M.', '2026-06-24 15:00:00+00', '{"amount": 4500000, "currency": "COP"}'),
+    'Cotización del video dedicado', 'Un video de 10 minutos con mención integrada. COP 4,7 M.', '2026-06-24 15:00:00+00', '{"amount": 4700000, "currency": "COP"}'),
   (15, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea10', NULL, 'payment_received',
     'Pago recibido', 'FV-2026-009 pagada por transferencia.', '2026-08-20 15:00:00+00', '{"invoice_number": "FV-2026-009"}'),
   (16, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000c0005', 'email_received',
@@ -1022,8 +1124,8 @@ FROM (VALUES
     'Aceptan el paquete', 'Pasan a contrato. Enviar el contrato esta semana con las fechas de octubre.', '2026-09-15 20:30:00+00', '{"duration_min": 12}'),
   -- Nutrivé · la activación corta de octubre (relativa)
   (25, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'proposal_sent',
-    'Cotización del TikTok + Short de ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int],
-    'Un TikTok y un Short sobre el almuerzo listo de Nutrivé, para la primera quincena de ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int] || '. COP 6,5 M.', (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 6500000, "currency": "COP"}'),
+    'Cotización del TikTok + Short de ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m),
+    'Un TikTok y un Short sobre el almuerzo listo de Nutrivé, para la primera quincena de ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m) || '. COP 6,5 M.', (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 6500000, "currency": "COP"}'),
   -- Granos del Valle (relativa)
   (26, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', NULL, 'signal_detected',
     'Top Ads en TikTok Creative Center', 'Colombia, últimos 7 días, categoría alimentos.', (CURRENT_DATE - 24 + time '09:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e004"}'),
@@ -1051,7 +1153,7 @@ FROM (VALUES
     'Colaboración pagada con @la.olla.facil', 'Cuenta vigilada del nicho. Encaje de audiencia 79 %.', (CURRENT_DATE - 3 + time '10:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e003"}'),
   -- Nutrivé · la activación corta de octubre (relativa), sigue de la 25
   (37, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
-    'Piden un TikTok y un Short para ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int],
+    'Piden un TikTok y un Short para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m),
     'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q' || extract(quarter FROM CURRENT_DATE + 28) || '. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
   (38, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
     'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}')
@@ -1082,7 +1184,14 @@ VALUES (
   'Prioridad: lanzamientos de productos de despensa y desayuno. Siempre con código propio y enlace rastreado para poder reportar ventas.',
   'active'
 )
-ON CONFLICT DO NOTHING;
+-- La ventana del brief activo también es un plan: se refresca al volver
+-- a sembrar, si no un brief "activo" acaba con la disponibilidad
+-- cerrada hace semanas.
+ON CONFLICT (id) DO UPDATE SET
+  title             = EXCLUDED.title,
+  availability_from = EXCLUDED.availability_from,
+  availability_to   = EXCLUDED.availability_to
+WHERE outbound_brief.status = 'active';
 
 INSERT INTO outbound_policy (workspace_id, max_touches_per_company, min_days_between_touches, max_emails_per_day, cooldown_days_after_no, require_optout_link, require_human_review, claims_must_be_sourced, allowed_channels)
 VALUES ('00000002-0000-4000-8000-000000000001', 4, 3, 20, 180, true, true, true, '{email,linkedin,instagram_dm}')
@@ -1090,13 +1199,20 @@ ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
--- 13 · Las dos campañas reportadas: la prueba social del perfil
+-- 13 · Las campañas, enlazadas a su deal ganado
 -- ---------------------------------------------------------------------
 -- Mismos ids y cifras que 0003 (que corre después y las reafirma con
 -- DO UPDATE sobre todo menos deal_id), enlazadas aquí a su deal ganado
 -- para que la cadena señal → deal → campaña → factura → cobro se pueda
--- recorrer. Las views del resultado de Café Alma (412 K + 300 K) son
--- las que la curva de la sección 4 da a 720 h para d01 y d02.
+-- recorrer. Van las CUATRO, no solo las dos reportadas: 0003 no toca
+-- deal_id, así que si 0002 no las crea, Fresko (ca0002 → dea09) y
+-- Nutrivé (ca0003 → dea10) quedan para siempre sin deal y su ficha no
+-- puede decir de qué venta salieron, aunque el deal ganado exista y se
+-- llame igual. Las dos reportadas traen además su campaign_result: son
+-- la prueba social del perfil. Las views del resultado de Café Alma
+-- (412 K + 300 K) son las que la curva de la sección 4 da a 720 h para
+-- d01 y d02. Los entregables (campaign_post) y el resto de las cifras
+-- de ca0002 y ca0003 son de 0003, que es su dueño.
 -- Línea de tiempo de Café Alma, una sola para 0002 y 0003: lanzamiento
 -- del cold brew el 22 jul, propuesta el 23, aceptada el 29; campaña del
 -- 10 al 17 ago (reel el 10, TikTok el 12; línea base de @cafealma desde
@@ -1120,7 +1236,21 @@ VALUES
    '3 historias · jun', '3 historias con código. Reporte enviado; la factura sigue pendiente de pago.',
    DATE '2026-06-05', DATE '2026-06-06', 'LAURAHOGAR', NULL, '{}'::jsonb,
    DATE '2026-05-22', '[{"platform": "instagram", "handle": "hogarlindo"}]'::jsonb,
-   1100000.00, 'COP', 'reported')
+   1100000.00, 'COP', 'reported'),
+  ('00000003-0000-4000-8000-000000ca0002', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-000000000003',
+   '00000002-0000-4000-8000-0000000dea09',
+   'Campaña 2 TikTok · sep', '2 TikTok con enlace rastreado a la caja de desayunos. Medición a 30 días.',
+   DATE '2026-09-02', DATE '2026-09-09', 'LAURAFRESKO',
+   'https://freskomarket.co/caja?utm_source=tiktok&utm_medium=creator&utm_campaign=laura_sep',
+   '{"utm_source": "tiktok", "utm_medium": "creator", "utm_campaign": "laura_sep"}'::jsonb,
+   DATE '2026-08-19', '[{"platform": "tiktok", "handle": "freskomarket"}]'::jsonb,
+   5200000.00, 'COP', 'measuring'),
+  ('00000003-0000-4000-8000-000000ca0003', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-000000000003',
+   '00000002-0000-4000-8000-0000000dea10',
+   'Video dedicado · julio', '1 video dedicado en YouTube. La marca no compartió datos de ventas.',
+   DATE '2026-07-15', DATE '2026-07-22', NULL, NULL, '{}'::jsonb,
+   DATE '2026-07-01', '[{"platform": "youtube", "handle": "NutriveOficial"}]'::jsonb,
+   4700000.00, 'COP', 'closed')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO campaign_post (campaign_id, post_id, deliverable, is_primary)
@@ -1144,8 +1274,9 @@ ON CONFLICT DO NOTHING;
 -- Conteos esperados (node db/seed/verify/run.mjs 0002, pasadas 1 y 2)
 -- ---------------------------------------------------------------------
 -- Solo lo que este seed crea (sembrando 0001 + 0002); 0003 añade lo suyo
--- encima (campañas 2 → 4, post_metric_snapshot +3, y finanzas), y
--- run.mjs corre los tres seeds, así que muestra esos 3 de más. Las lecturas por post dependen
+-- encima (campaign_post 2 → 5, post_metric_snapshot +3 o +5, y las
+-- finanzas), y run.mjs corre los tres seeds, así que muestra esos de
+-- más. Las lecturas por post dependen
 -- de la edad de cada video, así que su conteo crece un poco cada día
 -- (una lectura diaria por video con menos de 90 días, medida a
 -- medianoche UTC); el resto es fijo. Una tercera corrida con el reloj
@@ -1161,9 +1292,11 @@ ON CONFLICT DO NOTHING;
 --   post                        60
 --   post_metric_snapshot     ~2 650  (60 posts × lecturas ya ocurridas; 2 650 el 22-sep-2026 y 2 708 al día
 --                                    siguiente; run.mjs muestra 3 más porque 0003 añade sus tres lecturas manuales)
---   account_metric_snapshot    360  (4 conexiones × 90 días, el último es ayer)
+--   account_metric_snapshot    360  (4 conexiones × 90 días, el último es ayer; al volver a
+--                                    sembrar N días después crece en 4·N: la serie llega hasta ayer)
 --   audience_breakdown          60  (4 conexiones × 15 buckets)
---   creator_baseline            16  (4 redes × 4 cortes), is_reliable en todas
+--   creator_baseline            16  (4 redes × 4 cortes), is_reliable en todas; +16 por cada
+--                                    día distinto en que se vuelva a sembrar (el id lleva el día)
 --   post_score                  59  (todo video con al menos 24 h; 6 outliers, 1 breakout)
 --   company                      8
 --   company_link                 8
@@ -1174,7 +1307,7 @@ ON CONFLICT DO NOTHING;
 --   activity                    38
 --   outbound_brief               1
 --   outbound_policy              1
---   campaign                     2
---   campaign_post                2
---   campaign_result              2
+--   campaign                     4  (las cuatro de 0003, enlazadas aquí a su deal ganado)
+--   campaign_post                2  (los dos posts de Café Alma; los otros tres los pone 0003)
+--   campaign_result              2  (las dos reportadas)
 -- =====================================================================

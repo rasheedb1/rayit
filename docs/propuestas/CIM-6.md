@@ -22,9 +22,9 @@ necesitan para parecerse al mock (`dashboard/local/app.js`):
 | `social_connection` | 4 (TikTok, Instagram, YouTube, Facebook) | `secret_ref = seed://…`, `status = active`. **[r2]** La frescura (`last_synced_at` hace 2–6 h, `access_expires_at` de YouTube a 50 min y de TikTok a 20 h) se refresca con `DO UPDATE` en cada corrida: son tablas maestras, no métricas, y así `connection_health` cuenta siempre la historia pensada en vez de "token vencido" una hora después de sembrar. |
 | `post` | 60 en 120 días (21 · 17 · 12 · 10) | Los doce de la tabla "Mis videos" del mock con sus views, guardados, no seguidores y salto a 3 s; los cinco de las campañas de 0003 (ids `d01..d05`, texto idéntico); 43 más con títulos de cocina fácil. **[r2]** `published_at` de los 55 relativos se congela en la primera corrida. |
 | `post_metric_snapshot` | 2 650 el 22-sep sembrando 0001 + 0002 (2 653 con las tres lecturas manuales de 0003; crece una lectura diaria por video con menos de 90 días) | Curva acumulada por video: lecturas a 1, 3, 6, 12, 24, 48 y 72 h y luego diarias hasta 90 días, medidas contra el reloj del seed (medianoche UTC). `age_hours` exacta por construcción. **[r2]** `captured_at` sale del `published_at` guardado, así que sembrar otro día solo añade lo que la curva alcanzó. |
-| `account_metric_snapshot` | 360 (4 × 90 días) | Seguidores de los valores de hace 90 días a `FOLLOWERS_NOW` (214 000 · 128 000 · 49 000 · 21 000 = 412 000) con el salto de TikTok de la semana 9 y el empujón de Instagram; views diarias calibradas para que los últimos 30 días sumen ≈ 2,6 M. **[r2]** El día 0 se ancla al primer día guardado: sembrar otro día no añade un día plano. **[r3]** El último día es ayer (día 0 = hoy − 90), porque el job nocturno solo tiene cerrado el día anterior; `captured_at` es las 05:00 UTC del día siguiente, siempre en el pasado. |
+| `account_metric_snapshot` | 360 (4 × 90 días) | Seguidores de los valores de hace 90 días a `FOLLOWERS_NOW` (214 000 · 128 000 · 49 000 · 21 000 = 412 000) con el salto de TikTok de la semana 9 y el empujón de Instagram; views diarias calibradas para que los últimos 30 días sumen ≈ 2,6 M. **[r2]** El día 0 se ancla al primer día guardado. **[r4]** Y la serie se extiende hasta ayer: volver a sembrar N días después añade esos N días (+4·N filas) en vez de dejar la gráfica congelada. **[r3]** El último día es ayer (día 0 = hoy − 90), porque el job nocturno solo tiene cerrado el día anterior; `captured_at` es las 05:00 UTC del día siguiente, siempre en el pasado. |
 | `audience_breakdown` | 60 (4 × 15 buckets) | Edad, género y país. Instagram es la base del media kit (71 % entre 18 y 34, 64 % mujeres, Colombia 71 %); cada red se desvía unos puntos y sigue sumando 1. |
-| `creator_baseline` | 16 (4 redes × 4 cortes) | **Calculada** sobre las lecturas con la regla de `scoring.ts`. Todas `is_reliable`. Congelada en la primera corrida (id fijo por red y corte). |
+| `creator_baseline` | 16 (4 redes × 4 cortes) por día de cálculo | **Calculada** sobre las lecturas con la regla de `scoring.ts`. Todas `is_reliable`. **[r4]** El id lleva el día, así que cada siembra deja una línea base nueva y el puntaje de hoy se mide contra la mediana de hoy. |
 | `post_score` | 59 (todo video con ≥ 24 h por el reloj del seed) | **Calculado** contra la línea base más reciente de su red en el mayor corte alcanzado. **[r2]** Una corrida posterior puntúa al video que cumplió 24 h desde entonces. |
 | `company` / `company_link` | 8 / 8 | Las cuatro de 0003 (Café Alma, Fresko Market, Hogar Lindo, Nutrivé) y cuatro del radar (Sabores Caseros, Granos del Valle, Vitalé, Olla Fácil). |
 | `contact` | 12, uno con `opted_out` | Procedencia obligatoria; Mateo Giraldo pidió la baja. **[r2]** La consulta (o) de la verificación intenta programar y enviar un toque a Mateo por `email`, `linkedin` e `instagram_dm` y exige que el disparador de `outbound_touch` lo rechace con `check_violation` las seis veces. |
@@ -32,7 +32,7 @@ necesitan para parecerse al mock (`dashboard/local/app.js`):
 | `deal` | 15 (**10 abiertos**, 4 ganados, 1 perdido) | Ver §2 y §3.1. |
 | `deal_stage_history` / `activity` | 47 / 38 | La línea de tiempo de Fresko Market es la del mock (`COMPANIES`), fecha por fecha. |
 | `outbound_brief` / `outbound_policy` | 1 / 1 | El tarifario del mock como entregables; la política conservadora del esquema, explícita. |
-| `campaign` + `campaign_result` | 2 reportadas | Mismos ids y cifras que 0003, enlazadas a su deal ganado. **[r2]** Café Alma del 10 al 17 de agosto (ver §3.10). |
+| `campaign` + `campaign_result` | 4 campañas, 2 con resultado | Mismos ids y cifras que 0003. **[r4]** Las **cuatro** llevan su `deal_id`, no solo Café Alma y Hogar Lindo: 0003 no toca esa columna, así que Fresko y Nutrivé se quedaban sin deal para siempre (§3.16). **[r2]** Café Alma del 10 al 17 de agosto (ver §3.10). |
 
 ## 2. Mapa de cifras: mock → seed → consulta que lo verifica
 
@@ -50,11 +50,11 @@ una trae una columna `ok` que el runner evalúa.
 | "Huevo perfecto" 74 K · 1,6× | **[r2]** `v_ref = 74 000` a 48 h (las views del mock) | (d) | 53,7 K en su lectura de 24 h · 0,79× · normal (§3.5) |
 | "Sopa de la abuela" 58 K · 0,7× · "Respondo sus preguntas" 12 K · 0,5× | cut 168 / 720 | (d) | 0,47× y 0,56× · under |
 | Views promedio TikTok **138 K** (tarifario) | mediana de TikTok a 30 días | (e) | 121 500 (p25 100 K, p75 156 K) |
-| Deals abiertos **17 · COP 129,3 M · ponderado 49,4 M** | 10 abiertos con ocho marcas | (i) | **10 · COP 95,5 M · ponderado 43,15 M** (§3.1) |
-| Seguimientos vencidos | Granos del Valle (−2 d) y Vitalé (−1 d) | (i) | 2 vencidos, 2 para hoy, 1 sin fecha |
-| Ganado en Q3 **COP 12,8 M · 3 deals** | Fresko 5,2 · Nutrivé 4,5 · Café Alma 3,1 | (i) | 12 800 000 |
+| Deals abiertos **17 · COP 129,3 M · ponderado 49,4 M** | 10 abiertos con ocho marcas | (i) `i_pipeline_cifras` | **10 · COP 95,5 M · ponderado 43,15 M** (§3.1) |
+| Seguimientos vencidos | Granos del Valle (−2 d) y Vitalé (−1 d) | (i3) `i_pipeline_vencimientos` | 2 vencidos, 2 para hoy, 1 sin fecha. **[r4]** Consulta aparte: es lo único del pipeline que depende del reloj de la vista, y así las cifras de arriba no se toleran con `--dias` (§3.17) |
+| Ganado en Q3 **COP 12,8 M · 3 deals** | Fresko 5,2 · Nutrivé **4,7** · Café Alma 3,1 | (i) | 13 000 000. **[r4]** El mock da 4,5 M al de Nutrivé, pero es la misma venta que la campaña `ca0003` y la factura FV-2026-009 de 0003, que valen 4,7 (§3.18) |
 | Señales por revisar | 4 pending | (j) | 4 · 6 · 1 · 1 |
-| Café Alma: 712 K views, +1 240 seguidores, 318 canjes | `campaign_result` de `ca0001`, enlazada al deal ganado y a la señal de prensa | (k) | la cadena completa, con la factura de 0003 |
+| Café Alma: 712 K views, +1 240 seguidores, 318 canjes | `campaign_result` de `ca0001`, enlazada al deal ganado y a la señal de prensa | (k), **[r4]** (k2) | la cadena completa, con la factura de 0003; (k2) exige que las cuatro campañas con factura tengan deal ganado y que `deal.amount = campaign.amount = invoice.total` |
 | Media kit: 71 % entre 18 y 34, 64 % mujeres, Colombia 71 % | `audience_breakdown` de Instagram | (h2) | exacto |
 
 Invariantes que también se comprueban: las curvas nunca bajan y a las
@@ -120,7 +120,16 @@ en los tres canales y los dos estados que vigila el disparador (o).
    ayer a las 19:00 UTC cruzaba las 24 h a las 19:00 de hoy y entraba en
    la línea base de TikTok, cambiando la mediana y los "× mediana" según
    la hora a la que se sembrara: dos máquinas el mismo día no daban lo
-   mismo. Ahora sí, y la cabecera dice "mismo día UTC". **[r3]** Y
+   mismo. Ahora sí, y la cabecera dice "mismo día UTC". **[r4]** Con
+   una precisión que la ronda 3 no hacía: lo idéntico entre dos máquinas
+   son las curvas, los conteos y todo lo derivado de `generate_series`.
+   Nueve columnas de frescura salen de `now()` y llevan la hora exacta
+   de la siembra, así que sí difieren: `social_connection.last_synced_at`,
+   `.access_expires_at`, `.refresh_expires_at` y `.connected_at`,
+   `app_user.last_seen_at`, `signal.detected_at` y `.reviewed_at` (las
+   pendientes y la duplicada), `audience_breakdown.captured_at` y
+   `company.enriched_at` (Olla Fácil). Un diff entre dos entornos que
+   solo toque esas nueve es lo esperado. **[r3]** Y
    el seed lo garantiza en vez de suponerlo: `CURRENT_DATE` y
    `date_trunc('day', now())` dependen del `TimeZone` de la sesión, no
    del sistema, así que un Postgres nativo inicializado en Bogotá a las
@@ -132,8 +141,14 @@ en los tres canales y los dos estados que vigila el disparador (o).
    `percentile_cont` sobre `post_metrics_at_cut`, igual que lo haría el
    job de CON-6. Así el puntaje es coherente con las lecturas por
    construcción, y cuando el job real corra dará lo mismo. La línea
-   base queda congelada en la primera corrida (id fijo por red y corte)
-   y el puntaje se calcula contra la más reciente de su red y corte.
+   **[r4]** La línea base ya no queda congelada: el id lleva el día del
+   cálculo (`…-ba5` + red + corte + día en hexadecimal), la tabla ya
+   tenía `UNIQUE (creator, red, corte, computed_at)` y el puntaje toma
+   la de `max(computed_at)`. Antes, volver a sembrar seis semanas
+   después dejaba `computed_at` de hace seis semanas y comparaba un
+   video puntuado hoy contra la mediana de una ventana de veinte videos
+   que ya no era la actual. El puntaje ya calculado no se recalcula: es
+   append-only y cita la línea base con la que se midió.
 5. **"Huevo perfecto" con las views del mock.** **[r2]** La ronda 1 le
    había puesto 92 K (el único de los doce con una cifra que no era la
    del mock); ahora son las 74 K a 48 h del mock. Por el reloj del seed
@@ -178,10 +193,19 @@ en los tres canales y los dos estados que vigila el disparador (o).
     (4 jul en vez de 18 jul, misma serie), las dos lecturas manuales de
     Café Alma, los aportes de la marca, `computed_at`, el gasto de la
     grabación en la finca (6 ago) y la consulta (e) de `verify/0003.sql`.
-    Y se quitaron las dos lecturas manuales "a 30 días" de los TikTok de
-    Fresko fechadas el 2 y el 6 de octubre: la campaña sigue midiendo y
-    las views actuales las da la curva de 0002 (≈ 137 K + 120 K hoy,
-    265 K cuando cumplan 30 días). El "reporte de la campaña de
+    **[r4]** Las dos lecturas manuales "a 30 días" de los TikTok de
+    Fresko vuelven a 0003, pero condicionadas: `captured_at` es las
+    06:00 UTC del día siguiente a las 720 h del video (3 y 7 de octubre)
+    y solo se insertan cuando esa fecha ya pasó (`WHERE v.captured_at <=
+    now()`). La ronda 3 las había borrado —el razonamiento era bueno,
+    una lectura "a 30 días" fechada antes de las 720 h es mentira— pero
+    dejaba el comentario de encima diciendo que esas lecturas existían
+    "para que Campañas funcione aunque 0002 no esté", y para Fresko ya
+    no era cierto; además le restaba dos filas a la historia de Nicolás.
+    Así 0003 vuelve a ser autosuficiente en cuanto la fecha llega, y
+    mientras tanto las views las da la curva de 0002 (≈ 137 K + 120 K
+    hoy, 265 K cuando cumplan 30 días). **Aviso para Nicolás**: son dos
+    filas de `post_metric_snapshot` en su archivo. El "reporte de la campaña de
     septiembre" del 9 sep pasó a ser un avance a 7 días con las cifras
     que la curva da ese día (236 K views y 1 736 clics), y el pitch a
     Fresko del 20 ago cita el avance a 7 días de Café Alma (ya
@@ -221,16 +245,114 @@ en los tres canales y los dos estados que vigila el disparador (o).
     titular, `evidence.month` y `dedupe_key` salen de esa fecha; con las
     notas de `company_link` y las actividades de Nutrivé que decían
     "octubre" y "Q4"; y con el brief activo, cuya ventana es el
-    trimestre de `hoy + 30` (1 oct – 15 dic sembrado el 22 sep). Todo
-    se congela en la primera corrida por el `DO NOTHING`. La consulta
-    (p) de `verify/0002.sql` lo prueba: cero deals abiertos con cierre
-    en el pasado, cero señales pendientes de más de 14 días, cero briefs
-    activos vencidos.
+    trimestre de `hoy + 30` (1 oct – 15 dic sembrado el 22 sep). La
+    consulta (p) de `verify/0002.sql` lo prueba: cero deals abiertos con
+    cierre en el pasado, cero señales pendientes de más de 14 días, cero
+    briefs activos vencidos. **[r4]** La ronda 3 lo dejaba todo
+    congelado en la primera corrida con `DO NOTHING`, y eso es
+    exactamente lo que hacía caducar la demo: ver §3.15.
 14. **La ayuda de `make db.seed` dice lo que hace.** **[r3]** Makefile,
     `platform/README.md` y `docs/base-de-datos.md` decían "carga el
     catálogo base"; desde este PR ese comando siembra en Supabase un
     workspace de demostración completo, y ahora lo dicen, con
     `make db.seed.check` al lado para verificarlo sin tocar Supabase.
+    **[r4]** Y el bloque "contra Postgres local" del README vuelve a
+    decir `make seed` (que usa `DB_URL`): `db.seed` va a Supabase y
+    empieza exigiendo `.env.local`, así que quien seguía "si prefieres
+    trabajar sin red" acababa en un error pidiéndole la frase de paso
+    del vault.
+15. **Volver a sembrar refresca los planes; la demo no caduca.**
+    **[r4]** La ronda 3 hizo relativos los planes, pero los congelaba en
+    la primera corrida con `DO NOTHING`. El reloj sigue: sembrado un
+    día y mirado seis semanas después, 8 de 10 deals abiertos tienen el
+    cierre en el pasado, 4 señales `pending` llevan mes y medio en la
+    bandeja y la serie de seguidores termina 41 días atrás —justo los
+    tres invariantes que (p) existe para impedir— mientras
+    `last_synced_at` sí se refrescaba y decía "sincronizado hace 2 h".
+    Y era el camino documentado: `make db.seed` contra un Supabase que
+    ya tiene la demo. La regla ahora es por **naturaleza de la columna**,
+    no por momento: lo que YA PASÓ (etapas, actividades, último
+    contacto, cierres reales, el mes del nombre que las actividades
+    citan) se congela con `DO NOTHING`; lo que la demo MIRA HOY se
+    refresca con `DO UPDATE`: `expected_close_date` y `next_action_due`
+    de los deals **abiertos** (`WHERE deal.stage_id NOT IN ('ganado',
+    'perdido')`), el titular, la fecha, el `evidence` y la `dedupe_key`
+    de las señales **pendientes**, la ventana del brief **activo**, y la
+    frescura de las conexiones, que ya lo hacía. Nada de eso es una
+    métrica, así que el append-only sigue intacto.
+    La serie de la cuenta se arregla aparte, porque no es un `DO
+    UPDATE`: el día 0 se sigue anclando al primer día guardado, pero
+    ahora se generan los días que falten **hasta ayer** (`greatest(89,
+    ayer − día 0)`) y el `ON CONFLICT DO NOTHING` deja fuera los que ya
+    están. La clave es que el normalizador de los seguidores es la suma
+    de pesos de los días 0..89, constante: los días guardados vuelven a
+    dar el mismo número y los nuevos siguen subiendo por encima de
+    `FOLLOWERS_NOW` en vez de dejar un escalón. Anclar la serie **por el
+    final** (día 89 = ayer), que era la otra propuesta, sí deja ese
+    escalón: la parte vieja ya vale 214 000 en TikTok y la nueva
+    volvería a empezar en 205 000, rompiendo "la serie nunca baja"; por
+    eso se descartó.
+    `run.mjs` lo vigila con una **cuarta pasada**: los mismos seeds
+    sobre la MISMA base con el reloj 41 días más adelante (81 con
+    `--dias 40`), y después exige cero deals abiertos con cierre en el
+    pasado, cero señales pendientes de más de 14 días, cero briefs
+    vencidos, cero conexiones con más de 24 h sin sincronizar, cero
+    bajadas en la serie de seguidores, las cuatro series llegando a ayer
+    y views > 0 en los últimos 30 días. Va en las dos corridas de CI.
+16. **Las cuatro campañas con su `deal_id`.** **[r4]** 0002 enlazaba
+    `ca0001` (Café Alma) y `ca0004` (Hogar Lindo), y 0003 hace `DO
+    UPDATE` sobre todo **menos** `deal_id`: `ca0002` (Fresko) y `ca0003`
+    (Nutrivé) quedaban con `deal_id` NULL para siempre, aunque sus deals
+    ganados existen y se llaman igual (`dea09`, `dea10`). La cadena
+    señal → deal → campaña → factura → cobro, que es el argumento
+    comercial de la demo, solo se recorría en Café Alma —y la consulta
+    (k) medía precisamente ese único caso, por eso no lo veía—. Ahora
+    0002 crea las cuatro con su deal (0003 las reafirma sin pisar la
+    columna) y (k2) exige que ninguna campaña con factura se quede sin
+    deal y que ese deal esté ganado. Los entregables y el resto de las
+    cifras de `ca0002` y `ca0003` siguen siendo de 0003, que es su dueño.
+17. **Las cifras del pipeline no se toleran con `--dias`.** **[r4]**
+    `i_pipeline` afirmaba en el mismo `ok` las cifras del mock y los
+    estados de vencimiento, y estaba entera en `TOLERADAS_CON_DIAS`: en
+    la corrida de CI `--dias 40` —la que se anuncia como "la demo es la
+    misma sembrada dentro de 40 días"— una regresión en el ponderado o
+    en el total del pipeline salía como "tolerada" y CI quedaba verde.
+    Se partió en `i_pipeline_cifras` (conteos, montos, ponderado,
+    ganados, Q3, perdidos) e `i_pipeline_vencimientos` (solo
+    `due_state`), y `l_conexiones` en `l_conexiones_cuentas` (estado y
+    `posts_tracked`) y `l_conexiones_frescura` (`hours_since_sync`,
+    `token_expiring_soon`). Solo las dos segundas se toleran. De paso,
+    `i2_tablero` era la única consulta del archivo con `true AS ok` —no
+    podía fallar nunca y se leía como cobertura—: ahora exige que
+    `stage_position` sea la posición de `pipeline_stage`, que
+    `weighted_amount = amount × probability` en las quince filas y que
+    todo deal abierto tenga próxima acción.
+18. **Un solo precio para el video de Nutrivé: 4,7 M.** **[r4]** El deal
+    `dea10` valía 4 500 000 (la cifra del mock) mientras la campaña
+    `ca0003` y la factura FV-2026-009 de 0003 valían 4 700 000 por el
+    mismo trabajo, y la actividad nº 15 de 0002 dice "FV-2026-009
+    pagada" sobre ese deal. En la aplicación se veía: `/finanzas` con
+    4,7 M y el tablero de Ventas con 4,5 M. Se alinea subiendo el deal
+    (y la cotización que lo acompaña) a 4,7 M, no bajando la factura,
+    porque tocar la factura obliga a recalcular subtotal, IVA,
+    retención, el cobro y `c_cobrado` en `verify/0003.sql`, todo en
+    carpeta de Nicolás. "Ganado en Q3" pasa de 12,8 a 13,0 M, que sigue
+    siendo del orden del mock. Y (k2) impide que vuelva a pasar en
+    cualquier cadena enlazada.
+19. **Cosas pequeñas.** **[r4]** El parseo de `run.mjs` confundía el
+    valor de `--dias` con un selector de archivo: `--dias 1000` imprimía
+    "No existe verify/1000.sql" y no verificaba nada. Se excluye la
+    posición del valor antes de filtrar y se rechaza cualquier argumento
+    no reconocido en vez de ignorarlo. Los nombres de los meses en
+    español estaban copiados siete veces en dos variantes; ahora se
+    declaran una vez por sentencia en un CTE `meses` y se referencian
+    con subconsultas escalares. `turbo.json` no invalidaba
+    `@mc/worker#test` al cambiar una migración, aunque
+    `apps/worker/src/runner/db-pglite.ts` migra PGlite en sus pruebas:
+    tiene el mismo bloque de `inputs` que `@mc/db` y `@mc/connectors`.
+    Y `createEmbeddedDb` fija `TimeZone = UTC` explícitamente, para que
+    la base embebida del modo demo no dependa de que un archivo de datos
+    se lo deje puesto de lado.
 
 ## 4. Idempotencia y conteos
 
@@ -253,8 +375,13 @@ por la misma causa que (l): `deal_pipeline.due_state` se calcula con el
 alcanza. Ahora está en CI: `node db/seed/verify/run.mjs --dias 40`
 siembra una base limpia con `CURRENT_DATE` y `now()` a +40 días en los
 seeds **y** en los verify (la tercera pasada va a +41), exige lo mismo
-que la corrida normal y tolera solo `i_pipeline` y `l_conexiones`,
-diciendo por qué. Comprobado con `--dias 1`, `9`, `40` y `60`: pasan
+que la corrida normal y tolera solo `i_pipeline_vencimientos` y
+`l_conexiones_frescura`, diciendo por qué. **[r4]** Y hay una cuarta
+pasada, en las dos corridas, que vuelve a sembrar la MISMA base con el
+reloj 41 días más adelante (81 con `--dias 40`) y exige que la demo siga
+viva (§3.15); los conteos que ahí crecen a propósito son
+`account_metric_snapshot` (+4 por día) y `creator_baseline` (+16 por día
+de cálculo), y están declarados en `CRECEN_CON_EL_RELOJ`. Comprobado con `--dias 1`, `9`, `40` y `60`: pasan
 todas las demás, incluida la (p) nueva. Los conteos de 0002 están al
 final del propio archivo (2 650 lecturas por video sembrando 0001 +
 0002; `run.mjs` muestra 2 653 porque 0003 añade tres manuales);

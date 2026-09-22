@@ -139,12 +139,16 @@ ON CONFLICT DO NOTHING;
 
 -- Una lectura manual a 30 días de los posts cuya campaña ya cerró, para
 -- que Campañas pueda mostrar views y clics aunque 0002 no esté: Café
--- Alma 412 K + 300 K = 712 K; Nutrivé 58 K. Se capturan después de que
--- el video cumplió las 720 h (d01 el 9 sep, d02 el 11 sep, d05 el 14
--- ago) y nunca en el futuro. Los dos TikTok de Fresko (d03, d04) no
--- llevan lectura manual: su campaña sigue midiendo hasta el 2 y el 6 de
--- octubre, y una lectura "a 30 días" fechada antes de eso sería una
--- mentira; las views actuales (≈ 137 K + 120 K) las da la curva de 0002.
+-- Alma 412 K + 300 K = 712 K; Nutrivé 58 K; Fresko 140 K + 125 K. Se
+-- capturan a las 06:00 UTC del día siguiente a las 720 h del video
+-- (d01 el 10 sep, d02 el 12 sep, d05 el 15 ago, d03 el 3 oct y d04 el
+-- 7 oct) y NUNCA en el futuro: las dos de Fresko solo entran cuando esa
+-- fecha ya pasó (WHERE v.captured_at <= now()), porque una lectura "a
+-- 30 días" fechada antes de que el video cumpla las 720 h sería una
+-- mentira. Mientras tanto las views de esa campaña salen de la curva de
+-- 0002 (≈ 137 K + 120 K), así que la ficha nunca queda vacía si 0002
+-- está; si no está, Fresko no tiene views hasta octubre, y es el precio
+-- de no inventar una lectura que no ha ocurrido.
 -- Sin clave natural: se evita el duplicado con WHERE NOT EXISTS.
 INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, reach, likes, comments, shares, saves, total_interactions, profile_visits, follows_from_post, link_clicks, reach_followers, reach_non_followers, source)
 SELECT v.post_id, '00000002-0000-4000-8000-000000000001', v.captured_at, 720, v.views, v.reach, v.likes, v.comments, v.shares, v.saves,
@@ -152,11 +156,14 @@ SELECT v.post_id, '00000002-0000-4000-8000-000000000001', v.captured_at, 720, v.
 FROM (VALUES
   ('00000002-0000-4000-8000-000000000d01'::uuid, '2026-09-10 06:00:00+00'::timestamptz, 412000, 296000, 24800, 610, 3100, 6200, 4100, 780, 3900, 172000),
   ('00000002-0000-4000-8000-000000000d02'::uuid, '2026-09-12 06:00:00+00'::timestamptz, 300000, 190000, 17000, 420, 2000, 3400, 2600, 460, 2340, 110000),
-  ('00000002-0000-4000-8000-000000000d05'::uuid, '2026-08-15 06:00:00+00'::timestamptz,  58000,  41000,  2900, 140,  310,  900,  600,  95,  420,  22000)
+  ('00000002-0000-4000-8000-000000000d05'::uuid, '2026-08-15 06:00:00+00'::timestamptz,  58000,  41000,  2900, 140,  310,  900,  600,  95,  420,  22000),
+  ('00000002-0000-4000-8000-000000000d03'::uuid, '2026-10-03 06:00:00+00'::timestamptz, 140000,  89000,  7900, 200,  930, 1500, 1200, 210, 1106,  51000),
+  ('00000002-0000-4000-8000-000000000d04'::uuid, '2026-10-07 06:00:00+00'::timestamptz, 125000,  79000,  7000, 175,  830, 1300, 1080, 190,  838,  46000)
 ) AS v(post_id, captured_at, views, reach, likes, comments, shares, saves, profile_visits, follows, link_clicks, reach_nf)
-WHERE NOT EXISTS (
-  SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = v.post_id AND s.captured_at = v.captured_at
-);
+WHERE v.captured_at <= now()
+  AND NOT EXISTS (
+    SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = v.post_id AND s.captured_at = v.captured_at
+  );
 
 
 -- =====================================================================

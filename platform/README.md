@@ -19,10 +19,14 @@ Contra **Postgres local**, si prefieres trabajar sin red:
 ```bash
 cp .env.example .env     # rellenar lo que haga falta; lo local ya funciona
 make up                  # Postgres + almacenamiento + correo, y migra
-make db.seed             # catálogo y el workspace de demostración (Laura · Cocina fácil) en Supabase
-make db.seed.check       # lo mismo en Postgres embebido, sin tocar Supabase: dos pasadas y cifras
+make seed                # catálogo y el workspace de demostración (Laura · Cocina fácil)
 make dev
 ```
+
+El mismo workspace de demostración se carga en Supabase con `make
+db.seed` (pide antes `make db.unlock`), y se verifica sin base ninguna
+con `make db.seed.check`: Postgres embebido, cuatro pasadas y las cifras
+del mock.
 
 `make help` lista todo. Los comandos `db.*` van a Supabase; el resto, a
 Docker. El manual está en [../docs/base-de-datos.md](../docs/base-de-datos.md).

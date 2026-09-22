@@ -39,7 +39,7 @@ migrate: ## Aplica las migraciones pendientes
 migrate-check: ## Verifica las migraciones con Postgres embebido (sin Docker)
 	@node db/migrate.mjs --pglite
 
-seed: ## Carga datos de ejemplo (la creadora ficticia y su nicho)
+seed: ## Carga el catálogo y el workspace de demostración en el Postgres de Docker (DB_URL)
 	@node db/migrate.mjs "$(DB_URL)" --seed
 
 psql: ## Abre una consola SQL
@@ -104,7 +104,7 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
 
-db.seed.check: ## Verifica los seeds en Postgres embebido: dos pasadas, conteos y cifras (DIAS=40 adelanta el reloj)
+db.seed.check: ## Verifica los seeds en Postgres embebido: cuatro pasadas, conteos y cifras (DIAS=40 adelanta el reloj)
 	@node db/seed/verify/run.mjs $(SEED) $(if $(DIAS),--dias $(DIAS))
 
 db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)

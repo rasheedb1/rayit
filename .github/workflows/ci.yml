@@ -41,16 +41,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verificar que las migraciones aplican en limpio
         run: node db/migrate.mjs --pglite --seed
-      - name: Los seeds son idempotentes (hoy y mañana) y sus cifras son las esperadas
+      - name: Los seeds son idempotentes (hoy, mañana y dentro de seis semanas) y sus cifras son las esperadas
         # Sin argumento corre todos los verify/NNNN.sql: dos pasadas con
         # los mismos conteos, las cifras del mock por consulta (0002 y
-        # 0003) y una tercera pasada con el reloj adelantado un día.
+        # 0003), una tercera pasada con el reloj adelantado un día y una
+        # CUARTA que vuelve a sembrar la MISMA base seis semanas
+        # después (el `make db.seed` sobre un Supabase que ya tiene la
+        # demo) y exige que siga viva: planes al día, bandeja fresca y
+        # la serie de la cuenta llegando hasta ayer.
         run: node db/seed/verify/run.mjs
       - name: La demo es la misma sembrada en limpio dentro de 40 días
         # Los seeds y los verify con CURRENT_DATE y now() a +40 días: lo
         # que ve un Supabase nuevo o la demo de un cliente el mes que
-        # viene. Solo se toleran las dos comprobaciones que comparan
-        # contra el now() interno de una vista (run.mjs dice cuáles).
+        # viene; la tercera pasada va a +41 y la cuarta a +81. Solo se
+        # toleran las dos comprobaciones que comparan contra el now()
+        # interno de una vista (i_pipeline_vencimientos y
+        # l_conexiones_frescura); las cifras del pipeline y el recuento
+        # de posts por conexión van en consultas aparte que sí fallan.
         run: node db/seed/verify/run.mjs --dias 40
       - name: Verificar que ninguna migración aplicada fue modificada
         working-directory: .

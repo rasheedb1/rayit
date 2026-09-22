@@ -23,22 +23,35 @@
  *      cuando la segunda persona corre `make db.seed` al día siguiente.
  *      Se reemplazan CURRENT_DATE y now() en el texto de los seeds por
  *      su valor de mañana y se vuelven a correr; después se exige que
- *      ningún conteo haya cambiado, salvo los dos que crecen con el
- *      reloj (CRECEN_CON_EL_RELOJ): post_metric_snapshot, con las
- *      lecturas que la curva de cada video alcanzó en ese día, y
- *      post_score, con el video que cumplió 24 h desde la última
- *      corrida. Y que sigan valiendo los invariantes de las lecturas:
- *      ningún par (post, edad, fuente) repetido, ninguna edad
- *      incoherente con published_at y ninguna curva que baje.
+ *      ningún conteo haya cambiado, salvo los que crecen con el reloj
+ *      (CRECEN_CON_EL_RELOJ). Y que sigan valiendo los invariantes de
+ *      las lecturas: ningún par (post, edad, fuente) repetido, ninguna
+ *      edad incoherente con published_at y ninguna curva que baje.
+ *   5. Cuarta pasada, los mismos seeds sobre la MISMA base con el reloj
+ *      seis semanas más adelante: `make db.seed` contra un Supabase que
+ *      ya tiene la demo, semanas después. Es el caso que la tercera
+ *      pasada (un solo día) y `--dias N` (base limpia) no cubren, y el
+ *      que más duele, porque es el camino documentado. Se exige que la
+ *      demo siga viva: ningún deal abierto con el cierre en el pasado,
+ *      ninguna señal pendiente de más de catorce días, ningún brief
+ *      activo con la ventana cerrada, las cuatro conexiones
+ *      sincronizadas hace menos de un día, la serie de la cuenta
+ *      llegando hasta ayer sin bajar y con views en los últimos 30
+ *      días.
  *
  * Con `--dias N` todo lo anterior ocurre en una base limpia sembrada
  * con el reloj a +N días (CURRENT_DATE y now() desplazados en los seeds
- * Y en los verify; la tercera pasada va a +N+1). Es la prueba de que la
- * demo es la misma sembrada cualquier día. Solo se toleran dos
- * comprobaciones, y se dice cuáles: i_pipeline y l_conexiones comparan
- * contra el now() y CURRENT_DATE internos de las vistas deal_pipeline
- * (due_state) y connection_health (hours_since_sync, token_expiring_soon),
- * que no se pueden desplazar desde fuera. CI lo corre con --dias 40.
+ * Y en los verify; la tercera pasada va a +N+1 y la cuarta a +N+41). Es
+ * la prueba de que la demo es la misma sembrada cualquier día. Solo se
+ * toleran dos comprobaciones, y se dice cuáles: i_pipeline_vencimientos
+ * y l_conexiones_frescura comparan contra el now() y CURRENT_DATE
+ * internos de las vistas deal_pipeline (due_state) y connection_health
+ * (hours_since_sync, token_expiring_soon), que no se pueden desplazar
+ * desde fuera. Las cifras del pipeline y el recuento de posts por
+ * conexión están en consultas aparte (i_pipeline_cifras,
+ * l_conexiones_cuentas) que NO se toleran: una regresión en el
+ * ponderado o en el total tiene que hacer fallar también la corrida con
+ * --dias. CI lo corre con --dias 40.
  *
  * Es deliberadamente independiente de db/migrate.mjs (que corre como
  * superusuario y no ejecuta los seeds dos veces). No necesita red.
@@ -59,6 +72,8 @@ const SEED_DIR = join(DB_DIR, 'seed');
 const CRECEN_CON_EL_RELOJ = {
   post_metric_snapshot: 'una lectura diaria por video con menos de 90 días',
   post_score: 'el video que cumplió 24 h desde la última corrida se puntúa',
+  account_metric_snapshot: 'la serie de cada conexión llega hasta ayer: +4 por día',
+  creator_baseline: 'una línea base nueva por red y corte en cada día distinto: +16',
 };
 
 /** Invariantes de las lecturas que la tercera pasada no puede romper. */
@@ -84,8 +99,46 @@ const INVARIANTES_DEL_RELOJ = `
  * desplazamiento textual de los seeds y los verify no alcanza.
  */
 const TOLERADAS_CON_DIAS = {
-  i_pipeline: 'deal_pipeline.due_state usa el now() real de la vista',
-  l_conexiones: 'connection_health usa el now() real de la vista',
+  i_pipeline_vencimientos: 'deal_pipeline.due_state usa el now() real de la vista',
+  l_conexiones_frescura: 'connection_health usa el now() real de la vista',
+};
+
+/** Días que se adelanta el reloj en la cuarta pasada (seis semanas). */
+const SALTO_DE_LA_CUARTA = 40;
+
+/**
+ * Lo que tiene que seguir siendo cierto después de volver a sembrar la
+ * MISMA base semanas más tarde. No son conteos: son los invariantes que
+ * hacen que la demo siga contando su historia.
+ */
+const INVARIANTES_TRAS_RESEMBRAR = `
+  SELECT
+    (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE NOT st.is_won AND NOT st.is_lost
+        AND d.expected_close_date < CURRENT_DATE)                       AS cierres_en_el_pasado,
+    (SELECT count(*) FROM signal
+      WHERE status = 'pending' AND detected_at < now() - interval '14 days') AS senales_viejas,
+    (SELECT count(*) FROM outbound_brief
+      WHERE status = 'active' AND availability_to < CURRENT_DATE)       AS briefs_vencidos,
+    (SELECT count(*) FROM social_connection
+      WHERE deleted_at IS NULL AND now() - last_synced_at > interval '24 hours') AS conexiones_rancias,
+    (SELECT count(*) FROM (
+       SELECT followers - lag(followers) OVER (PARTITION BY connection_id ORDER BY day) AS d
+       FROM account_metric_snapshot) x WHERE d < 0)                     AS seguidores_en_baja,
+    (SELECT count(*) FROM account_metric_snapshot WHERE day = CURRENT_DATE - 1) AS series_hasta_ayer,
+    (SELECT COALESCE(sum(views), 0) FROM account_metric_snapshot
+      WHERE day > CURRENT_DATE - 31)                                    AS views_30d
+`;
+
+/** Qué valor espera cada columna de la consulta de arriba. */
+const ESPERADO_TRAS_RESEMBRAR = {
+  cierres_en_el_pasado: { prueba: (v) => v === 0, dice: '= 0 (los planes se refrescan)' },
+  senales_viejas: { prueba: (v) => v === 0, dice: '= 0 (la bandeja se refresca)' },
+  briefs_vencidos: { prueba: (v) => v === 0, dice: '= 0 (la ventana del brief se refresca)' },
+  conexiones_rancias: { prueba: (v) => v === 0, dice: '= 0 (last_synced_at se refresca)' },
+  seguidores_en_baja: { prueba: (v) => v === 0, dice: '= 0 (la serie no baja en la costura)' },
+  series_hasta_ayer: { prueba: (v) => v === 4, dice: '= 4 (las cuatro llegan hasta ayer)' },
+  views_30d: { prueba: (v) => v > 0, dice: '> 0 (hay datos en los últimos 30 días)' },
 };
 
 async function listSql(dir) {
@@ -94,11 +147,21 @@ async function listSql(dir) {
 }
 
 const argv = process.argv.slice(2);
-const pedidos = argv.filter((a) => /^\d{4}$/.test(a));
 const diasIdx = argv.indexOf('--dias');
-const DIAS = diasIdx >= 0 ? Number(argv[diasIdx + 1]) : 0;
+const valorIdx = diasIdx >= 0 ? diasIdx + 1 : -1;
+const DIAS = diasIdx >= 0 ? Number(argv[valorIdx]) : 0;
 if (!Number.isInteger(DIAS) || DIAS < 0) {
   console.error('  ✗ --dias necesita un entero ≥ 0 (días que se adelanta el reloj)');
+  process.exit(1);
+}
+// El valor de --dias se excluye por POSICIÓN antes de filtrar: si no,
+// `--dias 1000` se leería como "quiero verify/1000.sql" y no se
+// verificaría nada.
+const pedidos = argv.filter((a, i) => i !== valorIdx && /^\d{4}$/.test(a));
+const sobran = argv.filter((a, i) => i !== diasIdx && i !== valorIdx && !/^\d{4}$/.test(a));
+if (sobran.length > 0) {
+  console.error(`  ✗ argumento no reconocido: ${sobran.join(', ')}`);
+  console.error('    uso: run.mjs [NNNN ...] [--dias N]');
   process.exit(1);
 }
 
@@ -285,5 +348,33 @@ if (reloj.ok && invariantesOk) {
   console.error(`\n  ✗ Sembrar al día siguiente corrompe la demo${reloj.detalle.length ? ` (cambió: ${reloj.detalle.join(', ')})` : ''}.\n`);
 }
 
+// Cuarta pasada: la MISMA base, seis semanas después. Es `make db.seed`
+// contra un Supabase que ya tiene la demo puesta, que es como se usa de
+// verdad; `--dias N` no lo cubre, porque siembra en limpio, y la
+// tercera pasada solo adelanta un día. Lo que aquí se mira no son los
+// conteos (la serie de la cuenta y la línea base crecen a propósito)
+// sino que la demo siga viva.
+const saltoTotal = DIAS + 1 + SALTO_DE_LA_CUARTA;
+console.log(`  ── cuarta pasada: los seeds otra vez sobre la MISMA base, con el reloj a +${saltoTotal} días`);
+await pasada(4, desplazar(saltoTotal));
+
+await db.exec('RESET ROLE');
+const vivos = (await db.query(desplazar(saltoTotal)(INVARIANTES_TRAS_RESEMBRAR))).rows[0];
+await db.exec('SET ROLE mc_migrator_test');
+console.log('');
+console.table([vivos]);
+
+let vivosOk = true;
+for (const [columna, { prueba, dice }] of Object.entries(ESPERADO_TRAS_RESEMBRAR)) {
+  if (prueba(Number(vivos[columna]))) continue;
+  vivosOk = false;
+  console.error(`  ✗ ${columna} = ${vivos[columna]}, se esperaba ${dice}`);
+}
+if (vivosOk) {
+  console.log(`\n  ✓ Volver a sembrar ${saltoTotal} días después deja la demo viva: planes al día, bandeja fresca y la serie hasta ayer.\n`);
+} else {
+  console.error(`\n  ✗ Volver a sembrar ${saltoTotal} días después deja la demo caducada.\n`);
+}
+
 await db.close();
-process.exit(idem.ok && fallos === 0 && reloj.ok && invariantesOk ? 0 : 1);
+process.exit(idem.ok && fallos === 0 && reloj.ok && invariantesOk && vivosOk ? 0 : 1);

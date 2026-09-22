@@ -253,36 +253,63 @@ SELECT 'h2_media_kit' AS check_id,
 FROM audience_breakdown
 WHERE connection_id = '00000002-0000-4000-8000-0000000000c1';
 
--- (i) Pipeline (deal_pipeline): 10 abiertos por COP 95,5 M, ponderado
---     43,15 M, 2 seguimientos vencidos, 2 para hoy, 1 sin fecha; 4
---     ganados (3 en Q3 por 12,8 M) y 1 perdido. El mock tiene 17
---     abiertos por 129,3 M y ponderado 49,4 M; con ocho marcas y quince
---     deals el orden es el mismo (docs/propuestas/CIM-6.md §3.1).
-SELECT 'i_pipeline' AS check_id,
+-- (i) Pipeline (deal_pipeline), las CIFRAS: 10 abiertos por COP 95,5 M,
+--     ponderado 43,15 M; 4 ganados (3 en Q3 por 13 M) y 1 perdido. El
+--     mock tiene 17 abiertos por 129,3 M y ponderado 49,4 M; con ocho
+--     marcas y quince deals el orden es el mismo (CIM-6.md §3.1). Los
+--     13 M de Q3 son 5,2 (Fresko) + 4,7 (Nutrivé) + 3,1 (Café Alma):
+--     el mock da 4,5 M al de Nutrivé, pero es la misma venta que la
+--     factura FV-2026-009 de 0003, que vale 4,7 (CIM-6.md §3.11).
+--     Esta consulta NO mira due_state: va aparte (i3) porque es lo
+--     único que depende del now() interno de la vista, y así una
+--     regresión en el ponderado o en el total no se puede colar como
+--     "tolerada" en la corrida de CI con --dias N.
+SELECT 'i_pipeline_cifras' AS check_id,
        count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) AS abiertos,
        sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) AS en_pipeline,
        sum(p.weighted_amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) AS ponderado,
-       count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'vencido') AS vencidos,
-       count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'hoy') AS hoy,
-       count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'sin_fecha') AS sin_fecha,
        count(*) FILTER (WHERE p.is_won) AS ganados,
        sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) AS ganado_q3,
        count(*) FILTER (WHERE p.is_lost) AS perdidos,
        count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 10
          AND sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 95500000
          AND sum(p.weighted_amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 43150000
-         AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'vencido') = 2
-         AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'hoy') = 2
-         AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'sin_fecha') = 1
          AND count(*) FILTER (WHERE p.is_won) = 4
-         AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 12800000
+         AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 13000000
          AND count(*) FILTER (WHERE p.is_lost) = 1 AS ok
 FROM deal_pipeline p
 JOIN deal d ON d.id = p.id;
 
--- (i2) El tablero: cada deal con su etapa, valor, próxima acción y estado.
+-- (i3) Lo único del pipeline que depende del reloj de la vista: 2
+--      seguimientos vencidos, 2 para hoy, 1 sin fecha. deal_pipeline
+--      calcula due_state con su propio now(), que el desplazamiento
+--      textual de run.mjs --dias N no alcanza; por eso esta consulta,
+--      y solo esta, está en TOLERADAS_CON_DIAS.
+SELECT 'i_pipeline_vencimientos' AS check_id,
+       count(*) FILTER (WHERE due_state = 'vencido')   AS vencidos,
+       count(*) FILTER (WHERE due_state = 'hoy')       AS hoy,
+       count(*) FILTER (WHERE due_state = 'sin_fecha') AS sin_fecha,
+       count(*) FILTER (WHERE due_state = 'futuro')    AS futuros,
+       count(*) FILTER (WHERE due_state = 'vencido') = 2
+         AND count(*) FILTER (WHERE due_state = 'hoy') = 2
+         AND count(*) FILTER (WHERE due_state = 'sin_fecha') = 1 AS ok
+FROM deal_pipeline
+WHERE NOT is_won AND NOT is_lost;
+
+-- (i2) El tablero: cada deal con su etapa, valor, próxima acción y
+--      estado, tal como lo pinta Ventas. No es un volcado: se exige que
+--      el orden de las columnas sea el de pipeline_stage, que el
+--      ponderado sea exactamente monto × probabilidad en las quince
+--      filas, y que todo deal abierto tenga próxima acción (sin ella la
+--      tarjeta no tiene qué mostrar).
 SELECT 'i2_tablero' AS check_id, stage_position AS pos, stage_label, company_name, name, amount, probability, weighted_amount,
-       next_action, due_state, true AS ok
+       next_action, due_state,
+       stage_position = CASE stage_id WHEN 'nuevo' THEN 1 WHEN 'contactado' THEN 2 WHEN 'conversacion' THEN 3
+                                      WHEN 'propuesta' THEN 4 WHEN 'negociacion' THEN 5 WHEN 'ganado' THEN 6
+                                      WHEN 'perdido' THEN 7 END
+         AND weighted_amount = round(amount * probability, 2)
+         AND (is_won OR is_lost OR next_action IS NOT NULL)
+         AND (SELECT count(*) FROM deal_pipeline) = 15 AS ok
 FROM deal_pipeline
 ORDER BY stage_position, amount DESC;
 
@@ -313,12 +340,42 @@ LEFT JOIN signal s ON s.id = d.origin_signal_id
 JOIN campaign_result r ON r.campaign_id = c.id
 WHERE c.id = '00000003-0000-4000-8000-000000ca0001';
 
--- (l) Salud de las conexiones: las cuatro activas, sincronizadas hace
---     menos de un día, con sus posts contados; YouTube avisa que el
---     token vence pronto.
-SELECT 'l_conexiones' AS check_id, platform_id, status, round(hours_since_sync, 1) AS horas_sin_sync, posts_tracked, token_expiring_soon,
-       status = 'active' AND hours_since_sync < 24
-         AND posts_tracked = CASE platform_id WHEN 'tiktok' THEN 21 WHEN 'instagram' THEN 17 WHEN 'youtube' THEN 12 ELSE 10 END
+-- (k2) Y se recorre en TODAS, no solo en Café Alma: ninguna campaña con
+--      factura se queda sin deal, ese deal está ganado, y el mismo
+--      trabajo vale lo mismo en las tres tablas (deal.amount =
+--      campaign.amount = invoice.total). Sin esto, Fresko y Nutrivé
+--      quedaban con deal_id NULL —su deal ganado existe y se llama
+--      igual— y el tablero de Ventas enseñaba un deal de 4,5 M al lado
+--      de una factura de 4,7 M por el mismo video. Con 0003 sin aplicar
+--      la consulta no tiene filas y pasa.
+SELECT 'k2_cadenas' AS check_id, count(*) AS campanas_con_factura,
+       count(*) FILTER (WHERE c.deal_id IS NULL)     AS sin_deal,
+       count(*) FILTER (WHERE st.is_won IS NOT TRUE) AS deal_no_ganado,
+       count(*) FILTER (WHERE c.amount <> d.amount)  AS campana_distinta_del_deal,
+       count(*) FILTER (WHERE i.total <> c.amount)   AS factura_distinta_de_la_campana,
+       count(*) FILTER (WHERE c.deal_id IS NULL) = 0
+         AND count(*) FILTER (WHERE st.is_won IS NOT TRUE) = 0
+         AND count(*) FILTER (WHERE c.amount <> d.amount) = 0
+         AND count(*) FILTER (WHERE i.total <> c.amount) = 0 AS ok
+FROM campaign c
+JOIN invoice i ON i.campaign_id = c.id
+LEFT JOIN deal d ON d.id = c.deal_id
+LEFT JOIN pipeline_stage st ON st.id = d.stage_id;
+
+-- (l) Las cuatro conexiones activas, con sus posts contados. Verificable
+--     con cualquier reloj: esta consulta no mira la frescura.
+SELECT 'l_conexiones_cuentas' AS check_id, platform_id, status, account_type, posts_tracked,
+       status = 'active'
+         AND posts_tracked = CASE platform_id WHEN 'tiktok' THEN 21 WHEN 'instagram' THEN 17 WHEN 'youtube' THEN 12 ELSE 10 END AS ok
+FROM connection_health
+ORDER BY platform_id;
+
+-- (l2) La frescura, que sí depende del now() interno de connection_health:
+--      sincronizadas hace menos de un día y el token a punto de vencer
+--      en YouTube (50 min) y TikTok (20 h). Es la única parte de las
+--      conexiones que run.mjs tolera con --dias N.
+SELECT 'l_conexiones_frescura' AS check_id, platform_id, round(hours_since_sync, 1) AS horas_sin_sync, token_expiring_soon,
+       hours_since_sync < 24
          AND token_expiring_soon = (platform_id IN ('youtube', 'tiktok')) AS ok
 FROM connection_health
 ORDER BY platform_id;
