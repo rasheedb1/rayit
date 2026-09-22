@@ -2,9 +2,14 @@
 # apps/web, así que se despliega desde platform/ (la raíz del workspace)
 # para que pnpm vea el lockfile; esto deja fuera lo que el dashboard no
 # necesita y, sobre todo, el vault y las migraciones.
-secrets/
-db/
-scripts/
+/secrets/
+# Solo lo de la raíz: `db/` a secas también excluía packages/db (que la
+# web importa) y db/certs, la CA de Supabase que @mc/db necesita en runtime.
+/db/migrations/
+/db/seed/
+/db/scripts/
+/db/*.mjs
+/scripts/
 docs/
 docker-compose.yml
 Makefile
