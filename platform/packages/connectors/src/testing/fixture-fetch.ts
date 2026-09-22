@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FetchLike } from '../http/client.ts';
+import { redactSecrets } from '../redact.ts';
 
 export interface FixtureResponse {
   status: number;
@@ -33,6 +34,7 @@ export interface Fixture {
 
 export interface RecordedCall {
   method: string;
+  /** Con los parámetros secretos de la query tapados (Meta exige client_secret en la URL de ig_exchange_token). */
   url: string;
   /** Cabeceras con Authorization / Access-Token tapadas. */
   headers: Record<string, string>;
@@ -85,8 +87,9 @@ export class FixtureFetch {
 
   async #handle(url: string, init: RequestInit): Promise<Response> {
     const method = (init.method ?? 'GET').toUpperCase();
-    const body = typeof init.body === 'string' ? tryJson(init.body) : undefined;
-    const call: RecordedCall = { method, url, headers: redactHeaders(init.headers), body };
+    const body = typeof init.body === 'string' ? parseBody(init.body, init.headers) : undefined;
+    // El cuerpo grabado pasa por el redactor: un client_secret o un refresh_token de un formulario no queda ni en memoria de pruebas.
+    const call: RecordedCall = { method, url: redactUrl(url), headers: redactHeaders(init.headers), body: redactSecrets(maskCodes(body)) };
     this.calls.push(call);
     const match = this.#loaded.find((l) => (l.fixture.request.method === '*' || l.fixture.request.method.toUpperCase() === method) && l.regex.test(url) && subset(l.fixture.request.body, body));
     if (!match) throw new UnexpectedCallError(call, this.#loaded.map((l) => `${l.fixture.request.method} ${l.fixture.request.urlPattern}`));
@@ -98,11 +101,50 @@ export class FixtureFetch {
   }
 }
 
+/** JSON, o application/x-www-form-urlencoded como objeto (así `request.body` de un fixture casa por subconjunto también en formularios). */
+function parseBody(text: string, headers: RequestInit['headers'] | undefined): unknown {
+  const type = headerValue(headers, 'content-type') ?? '';
+  if (type.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text));
+  return tryJson(text);
+}
+
+function headerValue(h: RequestInit['headers'] | undefined, name: string): string | undefined {
+  if (!h) return undefined;
+  const entries = h instanceof Headers ? [...h.entries()] : Array.isArray(h) ? h : Object.entries(h);
+  return entries.find(([k]) => k.toLowerCase() === name)?.[1];
+}
+
+/** El `code` de OAuth no es una llave que el redactor reconozca por nombre; aquí se tapa aparte. */
+function maskCodes(body: unknown): unknown {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return body;
+  const out: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  for (const k of ['code', 'auth_code', 'code_verifier']) if (typeof out[k] === 'string') out[k] = '[REDACTADO]';
+  return out;
+}
+
 function tryJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
     return text;
+  }
+}
+
+const SECRET_QUERY_KEYS = new Set(['client_secret', 'access_token', 'code', 'refresh_token', 'code_verifier', 'app_secret']);
+
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    let touched = false;
+    for (const k of [...u.searchParams.keys()]) {
+      if (SECRET_QUERY_KEYS.has(k)) {
+        u.searchParams.set(k, 'REDACTADO');
+        touched = true;
+      }
+    }
+    return touched ? u.toString() : url;
+  } catch {
+    return url;
   }
 }
 

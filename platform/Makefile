@@ -110,7 +110,7 @@ db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
-	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/provisional/supabase-ca.ts regenerado"
+	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/supabase-ca.ts regenerado"
 
 # =====================================================================
 # GitHub · el token compartido

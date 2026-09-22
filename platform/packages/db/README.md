@@ -26,11 +26,15 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
 
-La raíz **no** reexporta consultas: cada módulo es dueño de su espacio
-de nombres y dos módulos pueden llamar igual a una función. Los
-operadores de Drizzle (`eq`, `and`, `or`, `desc`, `asc`, `sql`,
-`count`, `inArray`, `isNull`, …) sí salen de la raíz para que ni la web
-ni el worker dependan de `drizzle-orm` ni cuiden su versión.
+Cada módulo es dueño de su espacio de nombres y dos módulos pueden
+llamar igual a una función: las consultas nuevas se importan por
+subruta. La raíz reexporta además las de Finanzas, Conexiones y
+Campañas, que ya se importaban desde `@mc/db` antes de CIM-2; si dos
+nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
+(`eq`, `and`, `or`, `desc`, `asc`, `sql`, `count`, `inArray`, `isNull`,
+…) salen de la raíz para que ni la web ni el worker dependan de
+`drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
+validar ids que llegan de una ruta o un formulario antes de consultar.
 
 ## Los cinco usos
 
@@ -65,7 +69,7 @@ await db.withWorkspace(wsId, (tx) =>
 Escribir el uuid de otro workspace falla con `row-level security`. Las
 tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`,
 `deal_stage_history`, `campaign_post`, …) heredan la política del padre
-(migración 0016): si no ves la cotización, no ves ni escribes sus ítems.
+(migración 0018): si no ves la cotización, no ves ni escribes sus ítems.
 
 ### 3. Catálogo sin workspace
 
@@ -73,10 +77,17 @@ tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`,
 const plataformas = await db.withoutWorkspace((tx) => tx.db.select().from(platform));
 ```
 
-Solo para `platform`, `niche`, `niche_cpm_benchmark`, `pipeline_stage`,
-`feature_flag`, `signal_source`, `job_definition`, `company`, `contact`
-y `workspace`. En una tabla con RLS devuelve cero filas sin avisar; la
-prueba `test/rls.test.ts` lo demuestra.
+Solo para los catálogos: `platform`, `niche`, `niche_cpm_benchmark`,
+`pipeline_stage`, `feature_flag`, `signal_source` y `job_definition`.
+En una tabla con RLS devuelve cero filas sin avisar; la prueba
+`test/rls.test.ts` lo demuestra.
+
+`company` y `contact` **no** son catálogos aunque no tengan
+`workspace_id`: `contact` guarda correo, teléfono y LinkedIn que un
+workspace escribió a mano (`source = 'user_provided'`). Se leen SIEMPRE
+dentro de `withWorkspace`, a través de `company_link` (que sí tiene
+RLS), como hace `queries/finanzas.ts`. La RLS propia de `contact` es de
+VEN-1; `test/schema.test.ts` la deja a la vista como `todo`.
 
 ### 4. Job global con `asWorker`
 
@@ -104,10 +115,17 @@ await t.close();
 ```
 
 `openTestDb({ seeds: false })` deja la base vacía. Con
-`TEST_DATABASE_URL` corre contra un Postgres real (nunca Supabase: el
-helper se niega). Los paquetes con su propia copia del bucle de
-migraciones (`connectors/test/helpers/pglite.ts`,
-`worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper.
+`TEST_DATABASE_URL` corre contra un Postgres real ya migrado y con seed
+(nunca Supabase: el helper se niega), con el rol de la aplicación; para
+`admin()` hace falta `TEST_DATABASE_ADMIN_URL` con un superusuario o el
+dueño de las tablas. Así corre el CI (`.github/workflows/ci.yml`, job
+«contra-postgres-real»): un rol `mc_app_ci` miembro de `mc_app` y de
+`mc_worker`, y `mc` como administrador. Es lo que ejercita el runner de
+`pg` (BEGIN/COMMIT/ROLLBACK, `set_config` sobre un cliente prestado, la
+devolución al pool) que PGlite no toca. Los paquetes con su propia copia
+del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
+`worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
+(CON-2b).
 
 ## Lo que hace el cliente por ti
 
@@ -120,12 +138,24 @@ migraciones (`connectors/test/helpers/pglite.ts`,
   `return tx` accidental no corre fuera de transacción y sin workspace.
 - **Validación del workspace.** `withWorkspace('laura', …)` rechaza antes
   de abrir nada: tiene que ser un UUID.
+- **Sin transacciones anidadas.** Llamar a `withWorkspace`,
+  `withoutWorkspace` o `asWorker` desde dentro de otra transacción del
+  mismo cliente lanza `NestedTransactionError` antes de tocar el driver,
+  en `pg` y en PGlite por igual. Sobre `pg` abriría una segunda conexión
+  que no ve lo que la primera aún no confirmó; sobre PGlite esperaría
+  para siempre a la transacción que la contiene. Se reutiliza el `tx`
+  que ya se tiene; dos transacciones en paralelo desde fuera sí valen.
+- **Conexiones rotas fuera del pool.** Si el `ROLLBACK` falla, la
+  conexión se devuelve al pool con el error y `pg` la destruye en vez de
+  prestársela, con la transacción a medias, a la siguiente petición.
 - **TLS.** Contra un host de Supabase se verifica con la CA de
   `db/certs/` (embebida para Vercel). `PGSSLROOTCERT` manda si existe.
 
 ## Ciclo de una migración nueva
 
 1. `db/migrations/00NN_lo_que_sea.sql` (las aplicadas son inmutables).
+   Antes, `git fetch` y mirar el número más alto en todas las ramas
+   activas: dos archivos con el mismo número detienen el runner.
 2. `make db.check` — aplica todas en PGlite con el mismo runner que
    Supabase (`db/lib/aplicar.mjs`).
 3. `pnpm --filter @mc/db introspect` — `drizzle-kit pull` sobre PGlite,

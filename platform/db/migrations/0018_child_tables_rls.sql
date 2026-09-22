@@ -1,7 +1,7 @@
 -- =====================================================================
--- 0016 · RLS en las tablas hijas de una tabla de tenant (CIM-2, ronda 2)
+-- 0018 · RLS en las tablas hijas de una tabla de tenant (CIM-2, ronda 2)
 -- ---------------------------------------------------------------------
--- 0010, 0011 y 0015 aíslan por workspace las tablas que tienen
+-- 0010, 0011 y 0017 aíslan por workspace las tablas que tienen
 -- workspace_id. Las hijas que no lo tienen —quote_item, rate_card_item,
 -- deal_stage_history, campaign_post y las del laboratorio de video—
 -- quedaron legibles y escribibles desde cualquier workspace y sin

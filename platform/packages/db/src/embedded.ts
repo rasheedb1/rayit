@@ -39,6 +39,8 @@ export interface EmbeddedOptions extends DbOptions {
 export interface EmbeddedDb extends PgliteDb {
   /** SQL como superusuario, fuera de transacción; vuelve a mc_app al terminar. Solo para preparar pruebas. */
   execAsSuperuser(sql: string): Promise<void>;
+  /** Consulta como superusuario, saltando RLS: para que una prueba mire TODAS las filas de TODAS las tablas. */
+  queryAsSuperuser<T = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>;
 }
 
 export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
@@ -83,16 +85,26 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
   `);
 
   const db = createPgliteDb(pglite, opts);
+  /** Corre fn como superusuario y deja la sesión como mc_app pase lo que pase. */
+  const asSuperuser = <T>(fn: (p: InstanceType<typeof PGlite>) => Promise<T>) =>
+    db.raw(async (p) => {
+      await p.exec('RESET ROLE');
+      try {
+        return await fn(p);
+      } finally {
+        await p.exec(`SET ROLE ${APP_ROLE}`);
+      }
+    });
   return {
     ...db,
     execAsSuperuser: (sql) =>
-      db.raw(async (p) => {
-        await p.exec('RESET ROLE');
-        try {
-          await p.exec(sql);
-        } finally {
-          await p.exec(`SET ROLE ${APP_ROLE}`);
-        }
+      asSuperuser(async (p) => {
+        await p.exec(sql);
+      }),
+    queryAsSuperuser: <T>(text: string, params?: readonly unknown[]) =>
+      asSuperuser(async (p) => {
+        const r = await p.query<T>(text, params ? [...params] : undefined);
+        return { rows: r.rows };
       }),
   };
 }

@@ -1,15 +1,15 @@
 // @vitest-environment node
 /**
  * La costura del workspace es UNA: lib/workspace/current.ts. Esta prueba
- * lo demuestra por el camino real de Finanzas —withWorkspace de lib/db.ts
+ * lo demuestra por el camino real de Finanzas —withWorkspace de lib/db
  * y listInvoices— sobre Postgres embebido con el seed, sin red:
  * cambiar DEMO_WORKSPACE_ID cambia lo que ve la pantalla, y la variable
  * provisional MC_WORKSPACE_ID ya no tiene efecto.
  */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { listInvoices } from "@mc/db/queries/finanzas";
-import { getDb, withWorkspace } from "./db";
-import { SEED_WORKSPACE_ID } from "./workspace/current";
+import { getDb, withWorkspace } from "./index";
+import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 /** Un workspace que no existe en el seed: RLS no devuelve nada suyo. */
 const OTRO = "0000000a-0000-4000-8000-000000000001";

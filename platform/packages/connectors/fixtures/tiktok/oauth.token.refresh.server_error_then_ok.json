@@ -1,0 +1,11 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "un 500 y luego la respuesta buena: el núcleo reintenta y el resultado es el token nuevo." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "refresh_token" } },
+  "response": [
+    { "status": 500, "body": { "error": "internal_error", "error_description": "Something went wrong.", "log_id": "2026092204" } },
+    { "status": 200, "body": {
+      "access_token": "act.demo-access-tiktok-0003-SECRETO", "expires_in": 86400, "open_id": "open_id_demo_laura",
+      "refresh_expires_in": 31536000, "refresh_token": "rft.demo-refresh-tiktok-0003-SECRETO",
+      "scope": "user.info.basic,user.info.profile,user.info.stats,video.list", "token_type": "Bearer" } }
+  ]
+}

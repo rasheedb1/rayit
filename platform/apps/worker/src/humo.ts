@@ -14,9 +14,12 @@
  * withoutWorkspace. El runner de verdad está en src/index.ts; `dev`
  * (src/dev.ts) cae a este mismo listado cuando faltan los permisos de
  * administración.
+ *
+ * Salidas: 0 listó; 2 no pudo conectar (credenciales o red), con el
+ * mensaje del producto en vez del stack de pg.
  */
 import { createPgDb, createPool } from '@mc/db';
-import { formatJobDefinitions } from './preflight.ts';
+import { explainConnectionError, formatJobDefinitions } from './preflight.ts';
 
 const url = process.env['DATABASE_URL'] || process.env['WORKER_DATABASE_URL'];
 if (!url) {
@@ -30,6 +33,11 @@ const db = createPgDb(
 
 try {
   process.stdout.write(await formatJobDefinitions(db, url));
+} catch (err) {
+  const explained = explainConnectionError(err, url);
+  if (!explained) throw err;
+  process.stderr.write(`\n  ${explained}\n\n`);
+  process.exitCode = 2;
 } finally {
   await db.close();
 }

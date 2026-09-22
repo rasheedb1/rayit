@@ -85,7 +85,7 @@ export const STORIES: readonly Story[] = [
     desc: "apps/web con Next.js + TypeScript, packages/db con Drizzle, apps/worker con pg-boss, turbo corriendo dev, typecheck, lint y test. Un package.json por paquete.",
     done: "make dev levanta los tres procesos y pnpm turbo run typecheck lint pasa en CI.",
     status: "bloqueada",
-    note: "Bloqueada el 22 de septiembre, tras la ronda 2: falta GRANT mc_worker TO mc_migrator en Supabase (supabase-admin.sh, docs/propuestas/CON-2.md §3.1) y el esquema pgboss; media fuera de turbo hasta MED-1. Lo que sí está: pnpm turbo run typecheck lint test cubre web, db y worker y pnpm --filter @mc/web build pasa; `pnpm --filter @mc/worker dev` (src/dev.ts) comprueba la membresía y el esquema antes de arrancar y, si faltan, imprime los comandos exactos y las definiciones de jobs y sale con 0 (make dev no se cae en bucle); `make worker.humo` lista job_definition por DATABASE_URL; make arranque dice qué falta. lib/workspace/current.ts (DEMO_WORKSPACE_ID) es la única costura del workspace: lib/db.ts la usa y Finanzas la reexporta. Vuelve a «hecho» cuando `pnpm --filter @mc/worker dev` arranque el runner contra Supabase.",
+    note: "Bloqueada el 22 de septiembre, tras la ronda 3: falta GRANT mc_worker TO mc_migrator en Supabase (supabase-admin.sh, docs/propuestas/CON-2.md §3.1) y el esquema pgboss; media fuera de turbo hasta MED-1. Lo que sí está: pnpm turbo run typecheck lint test cubre web, db, worker, core y connectors y pnpm --filter @mc/web build pasa; `pnpm --filter @mc/worker dev` (src/dev.ts) comprueba la membresía y el esquema antes de arrancar y, si faltan, imprime los comandos exactos y las definiciones de jobs y sale con 0 (make dev no se cae en bucle); con credenciales rechazadas o host inalcanzable dice qué corregir (make db.unlock, make db.info) en vez del stack de pg; `make worker.humo` lista job_definition por DATABASE_URL; make arranque dice qué falta. `pnpm --filter @mc/web dev --port NNNN` ya manda (el script dev no fija puerto) y el worker solo carga .env.local. lib/workspace/current.ts (DEMO_WORKSPACE_ID) es la única costura del workspace: lib/db la usa y Finanzas y Conexiones la reexportan. Vuelve a «hecho» cuando `pnpm --filter @mc/worker dev` arranque el runner contra Supabase.",
   },
   {
     id: "CIM-2", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-1"],
@@ -93,7 +93,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cada consulta corre en una transacción que fija app.workspace_id con set_config(…, true), contra el pooler en modo transacción. Esquema Drizzle generado desde las migraciones para las tablas del MVP.",
     done: "Un test crea dos workspaces, inserta un deal en cada uno y comprueba que ninguno ve el del otro. Sin workspace_id fijado, la consulta devuelve cero filas.",
     status: "hecho",
-    note: "Cerrada el 21 de septiembre; ronda 2 el 22. packages/db con Drizzle (45 tablas y 8 vistas curadas desde las migraciones; test/schema.test.ts las compara columna a columna con la base y exige RLS en toda tabla de tenant o hija de una), client.ts con withWorkspace, withoutWorkspace (catálogos) y asWorker (SET LOCAL ROLE mc_worker), timeouts por transacción, manijas que lanzan TransactionClosedError tras el cierre, TLS con la CA de db/certs, y Postgres embebido que corre como mc_app con el mismo runner de migraciones que Supabase (db/lib/aplicar.mjs). README.md con los cinco usos; los operadores de Drizzle salen de @mc/db y las consultas SIEMPRE por @mc/db/queries/<módulo>. Migraciones pendientes de aplicar en Supabase por el integrador (make db.migrate): 0015 (RLS en outbound_policy: desde entonces exige withWorkspace, aviso a los dueños de Ventas) y 0016 (RLS heredada en quote_item, rate_card_item, deal_stage_history, campaign_post y las hijas de video_analysis/script/idea: desde B se leían los precios de A). membership sigue sin RLS hasta CIM-3 (test.todo visible). apps/worker/src/runner/db.ts conserva su cliente propio; Nicolás lo migra a createPgDb/tlsFor de @mc/db en CON-2b/CON-4, y connectors/worker pueden adoptar @mc/db/test/pglite en vez de su copia del bucle de migraciones.",
+    note: "Cerrada el 21 de septiembre; rondas 2 y 3 el 22, la última con main (CAM-1, CAM-2, CON-3) integrado. packages/db con Drizzle (45 tablas y 8 vistas curadas desde las migraciones; test/schema.test.ts las compara columna a columna con la base y exige RLS en toda tabla de tenant o hija de una), client.ts con withWorkspace, withoutWorkspace (solo catálogos: company y contact NO lo son, se leen por company_link) y asWorker (SET LOCAL ROLE mc_worker; probado también que mc_app no puede asumirlo), timeouts por transacción, manijas que lanzan TransactionClosedError tras el cierre, NestedTransactionError si se anida una transacción, conexión destruida si el ROLLBACK falla, TLS con la CA de db/certs, y Postgres embebido que corre como mc_app con el mismo runner de migraciones que Supabase (db/lib/aplicar.mjs, que ahora se niega si dos archivos comparten número). Las consultas de CAM-2 y CON-3 se conservaron (isUuid/UUID_RE salen de client.ts) y campanas/conexiones/finanzas.test.ts corren sobre test/pglite.ts; el CI las corre además contra Postgres 16 con un rol mc_app_ci (TEST_DATABASE_URL), que es lo que ejercita el runner de pg. README.md con los cinco usos; los operadores de Drizzle salen de @mc/db y las consultas por @mc/db/queries/<módulo> (la raíz reexporta las de Finanzas, Conexiones y Campañas por compatibilidad). Migraciones pendientes de aplicar en Supabase por el integrador, en el mismo PR de la fusión (make db.migrate): 0017 (RLS en outbound_policy, antes 0015: desde entonces exige withWorkspace, aviso a los dueños de Ventas) y 0018 (antes 0016: RLS heredada en quote_item, rate_card_item, deal_stage_history, campaign_post y las hijas de video_analysis/script/idea: desde B se leían los precios de A); comprobar después relrowsecurity = true en esas cinco tablas y no cargar clientes reales antes. membership sigue sin RLS hasta CIM-3 y contact/app_user hasta VEN-1 (test.todo visibles; propuesta de política en docs/backlog-mvp.md §8.4 fila 2c). Lo que queda para Nicolás está en CON-2b.",
   },
   {
     id: "CIM-3", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-2"],
@@ -132,7 +132,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre en Railway o Fly con las variables del vault.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "La web ya despliega con make vercel.deploy PROD=1. Falta conectar GitHub al proyecto de Vercel y desplegar el worker.",
+    note: "La web ya despliega con make vercel.deploy PROD=1. Falta conectar GitHub al proyecto de Vercel y desplegar el worker. Variables en Vercel (producción): DATABASE_URL, TOKEN_ENCRYPTION_KEY y APP_URL están; falta DEMO_WORKSPACE_ID (00000002-0000-4000-8000-000000000001, el workspace del seed) en production y preview: `make vercel.run ARGS=\"env add DEMO_WORKSPACE_ID production\"`. Mientras no esté, la web usa ese mismo workspace y lo avisa en el log (lib/workspace/current.ts), así que /finanzas no se cae; ver docs/base-de-datos.md.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
@@ -161,11 +161,20 @@ export const STORIES: readonly Story[] = [
     note: "Verificado contra Postgres embebido con las migraciones reales; la migración 0014 (GRANTs de mc_worker) ya está aplicada en Supabase. Falta que Rasheed corra dos comandos con el token de administración (esquema pgboss y GRANT mc_worker TO mc_migrator), ver docs/propuestas/CON-2.md. Los refreshers reales llegan con CON-3 y CON-8.",
   },
   {
+    id: "CON-2b", module: "CON", owner: "nicolas", size: "S", sprint: 2, deps: ["CIM-2", "CON-2"],
+    title: "El worker sobre @mc/db",
+    desc: "Quitar las tres copias de lógica que CIM-2 centralizó: en apps/worker/src/runner/db.ts importar tlsFor y hostOf desde @mc/db y borrar las locales (hoy el worker resuelve la CA por archivo y @mc/db la embebe: ya divergen); en apps/worker/src/runner/db-pglite.ts y packages/connectors/test/helpers/pglite.ts reemplazar el bucle «aplicar *.sql en orden como superusuario» por applyMigrations(exec) de db/lib/aplicar.mjs u openTestDb de @mc/db/test/pglite, para tener schema_migrations, checksums y el rol mc_app iguales que en Supabase.",
+    done: "apps/worker y packages/connectors no definen tlsFor, hostOf ni un bucle de migraciones propio; sus pruebas siguen en verde.",
+    status: "pendiente",
+    note: "Abierta por Rasheed en la ronda 3 de CIM-2 (22 de septiembre). Son carpetas de Nicolás; no resta seguridad hoy, pero la deriva ya empezó.",
+  },
+  {
     id: "CON-3", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1", "CIM-3"],
     title: "OAuth de TikTok e Instagram en sandbox",
     desc: "Callback, cifrado del token con TOKEN_ENCRYPTION_KEY, secret_ref en social_connection, data_consent con la evidencia. Necesita acceso de desarrollador a las apps de TikTok y Meta (lo da Rasheed).",
     done: "Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro en ninguna tabla.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, aplicada en Supabase el 21-sep), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. En main y desplegada en producción el 22-sep con TOKEN_ENCRYPTION_KEY y APP_URL en Vercel. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §9.4 fila 15); el paso a paso está en docs/propuestas/CON-3.md §5.",
   },
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
@@ -334,14 +343,16 @@ export const STORIES: readonly Story[] = [
     title: "Lista y ficha de campaña",
     desc: "Estado, entregables, fechas, posts asociados (elegidos a mano de creator_post_board o detectados por fecha y mención), código y enlace de seguimiento. Desde la ficha se crea la factura (FIN-1).",
     done: "Se asocian dos posts a una campaña y aparecen con sus views actuales.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Lista con filtro por estado y ficha con lo acordado, entregables, seguimiento, posts asociados (sugeridos por fecha y mención, o buscados), transiciones y «Facturar» (FIN-1). Dejó para CAM-2 la máquina de estados, assertCampaignDates y brandBaselineFrom en core, y getCampaign leyendo lo acordado desde quote. Conexión provisional compartida en lib/db: docs/propuestas/CAM-1.md.",
   },
   {
     id: "CAM-2", module: "CAM", owner: "nicolas", size: "S", sprint: 2, deps: ["CAM-1"],
     title: "Crear campaña desde la cotización",
     desc: "createCampaignFromQuote() en queries/campanas.ts: crea la campaña con quote_id, agreed_metrics, fechas y brand_baseline_from catorce días antes. Es el contrato con Cotizar: Rasheed la llama desde COT-4.",
     done: "Rasheed la usa en COT-4 sin pedir cambios.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Lista para COT-4: createCampaignFromQuote(tx, { quoteId, startsOn, endsOn, name?, trackingCode? }) en @mc/db, idempotente con bloqueo consultivo, RLS y errores tipados con messageEs. Contrato, ejemplo de uso y prueba conjunta del lunes del sprint 4 en docs/propuestas/CAM-2.md.",
   },
   {
     id: "CAM-3", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CON-1", "CON-2"],
@@ -379,7 +390,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear desde una campaña o a mano, con subtotal, IVA, retención en la fuente, total, fecha de emisión y vencimiento, numeración por workspace. Estados draft → sent → partial/paid → overdue. Campo para el número de la factura electrónica DIAN.",
     done: "Una factura creada desde una campaña trae nombre, empresa y monto sin escribirlos.",
     status: "hecho",
-    note: "Lista con KPIs, formulario con total en vivo, detalle con Marcar enviada y Anular, y facturarCampana() para el botón «Facturar» de CAM-1. Cliente de base y workspace provisionales hasta CIM-2 y CIM-3: docs/propuestas/FIN-1.md.",
+    note: "Lista con KPIs, formulario con total en vivo, detalle con Marcar enviada y Anular, y facturarCampana() para el botón «Facturar» de CAM-1. Desde CIM-2 usa @mc/db (withWorkspace de lib/db) y la costura lib/workspace/current.ts; el workspace de sesión llega con CIM-3. Propuesta original: docs/propuestas/FIN-1.md.",
   },
   {
     id: "FIN-2", module: "FIN", owner: "nicolas", size: "M", sprint: 3, deps: ["FIN-1"],

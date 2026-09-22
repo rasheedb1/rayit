@@ -29,7 +29,7 @@
  *
  * Aquí NO hay tokens en logs ni en metadata: solo ids y fechas.
  */
-import { TokenRefreshError, type OAuthTokens, type PlatformId, isPlatformId } from '@mc/connectors';
+import { PLATFORM_IDS, TokenRefreshError, type OAuthTokens, type PlatformId, isPlatformId } from '@mc/connectors';
 import { envInt } from '../../runner/config.ts';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
@@ -59,7 +59,25 @@ export const PLATFORM_NAMES: Record<PlatformId, string> = {
 };
 
 export const DEFAULT_MARGIN_MINUTES = 30;
+/**
+ * Margen por plataforma cuando el token dura semanas: el de Instagram vive
+ * 60 días y Meta solo lo renueva con más de 24 h de vida y al menos 24 h
+ * de antigüedad. Renovarlo a media hora del vencimiento sería jugársela;
+ * 7 días es la opción conservadora (docs/propuestas/CON-3.md §0.2 · 9).
+ * Se sobrescribe con OAUTH_REFRESH_MARGIN_MINUTES_<PLATAFORMA>.
+ */
+export const PLATFORM_MARGIN_MINUTES: Partial<Record<PlatformId, number>> = {
+  instagram: 7 * 24 * 60,
+};
 const ENDPOINT = 'oauth.refresh';
+
+/** Un margen pedido en el payload manda sobre el de la plataforma y sobre el entorno: es para ESA corrida. */
+export function marginFor(platformId: string, baseMinutes: number, env: JobContext['env'], override?: number): number {
+  if (override !== undefined) return override;
+  if (!isPlatformId(platformId)) return baseMinutes;
+  const fallback = PLATFORM_MARGIN_MINUTES[platformId] ?? baseMinutes;
+  return envInt(env, `OAUTH_REFRESH_MARGIN_MINUTES_${platformId.toUpperCase()}`, fallback);
+}
 
 type Outcome =
   | { kind: 'renewed' }
@@ -67,9 +85,10 @@ type Outcome =
   | { kind: 'transient'; code: string; retryHelps: boolean };
 
 /** Fallos que un reintento inmediato de pg-boss no va a arreglar. */
-const RETRY_USELESS_CODES = new Set(['no_refresher', 'not_implemented', 'missing_secret', 'rate_limit']);
+const RETRY_USELESS_CODES = new Set(['no_refresher', 'not_implemented', 'not_configured', 'missing_secret', 'rate_limit', 'invalid_client', 'invalid_request', 'unsupported_grant_type', 'invalid_scope', 'redirect_uri_mismatch']);
 
-export async function selectDueConnections(db: Queryable, payload: OAuthRefreshPayload, cutoff: Date): Promise<ConnectionRow[]> {
+/** Una fila por plataforma con su propio corte; el UNION deja una sola consulta indexada por access_expires_at. */
+export async function selectDueConnections(db: Queryable, payload: OAuthRefreshPayload, cutoffs: ReadonlyMap<string, Date> | Date): Promise<ConnectionRow[]> {
   if (payload.connectionId) {
     const { rows } = await db.query<ConnectionRow>(
       `SELECT id, workspace_id, platform_id, handle, secret_ref, access_expires_at, refresh_expires_at
@@ -80,15 +99,23 @@ export async function selectDueConnections(db: Queryable, payload: OAuthRefreshP
     );
     return rows;
   }
+  const byPlatform = cutoffs instanceof Date ? new Map(PLATFORM_IDS.map((p) => [p, cutoffs])) : cutoffs;
+  const platforms = [...byPlatform.keys()];
+  const dates = platforms.map((p) => byPlatform.get(p)!);
   const { rows } = await db.query<ConnectionRow>(
-    `SELECT id, workspace_id, platform_id, handle, secret_ref, access_expires_at, refresh_expires_at
-       FROM social_connection
-      WHERE status = 'active' AND deleted_at IS NULL AND access_mode = 'direct_oauth'
-        AND access_expires_at IS NOT NULL AND access_expires_at <= $1
-      ORDER BY access_expires_at ASC`,
-    [cutoff],
+    `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.secret_ref, c.access_expires_at, c.refresh_expires_at
+       FROM social_connection c
+       JOIN unnest($1::text[], $2::timestamptz[]) AS m(platform_id, cutoff) ON m.platform_id = c.platform_id
+      WHERE c.status = 'active' AND c.deleted_at IS NULL AND c.access_mode = 'direct_oauth'
+        AND c.access_expires_at IS NOT NULL AND c.access_expires_at <= m.cutoff
+      ORDER BY c.access_expires_at ASC`,
+    [platforms, dates],
   );
   return rows;
+}
+
+export function cutoffsFor(now: Date, baseMinutes: number, env: JobContext['env'], override?: number): Map<string, Date> {
+  return new Map(PLATFORM_IDS.map((p) => [p, new Date(now.getTime() + marginFor(p, baseMinutes, env, override) * 60_000)]));
 }
 
 function asDate(v: Date | string | null): Date | null {
@@ -103,9 +130,9 @@ function formatDateEs(d: Date): string {
 export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', async (payload, ctx) => {
   const marginMinutes = payload.marginMinutes ?? envInt(ctx.env, 'OAUTH_REFRESH_MARGIN_MINUTES', DEFAULT_MARGIN_MINUTES);
   const now = ctx.now();
-  const cutoff = new Date(now.getTime() + marginMinutes * 60_000);
-  const due = await selectDueConnections(ctx.db, payload, cutoff);
-  ctx.logger.info('conexiones por renovar', { total: due.length, marginMinutes, cutoff: cutoff.toISOString() });
+  const cutoffs = cutoffsFor(now, marginMinutes, ctx.env, payload.marginMinutes);
+  const due = await selectDueConnections(ctx.db, payload, cutoffs);
+  ctx.logger.info('conexiones por renovar', { total: due.length, marginMinutes, cutoffs: Object.fromEntries([...cutoffs].map(([p, d]) => [p, d.toISOString()])) });
 
   const renewed: string[] = [];
   const needsReauth: string[] = [];
@@ -178,7 +205,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
   const started = Date.now();
   let fresh: OAuthTokens;
   try {
-    fresh = await refresher.refresh(tokens, { signal: ctx.signal });
+    fresh = await refresher.refresh(tokens, { signal: ctx.signal, connectionId: conn.id, secretRef: conn.secret_ref });
   } catch (err) {
     const durationMs = Date.now() - started;
     const e = err instanceof TokenRefreshError

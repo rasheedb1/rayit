@@ -2,10 +2,12 @@
  * La prueba obligatoria de CIM-2: dos workspaces, un deal en cada uno,
  * cada uno ve solo el suyo; sin workspace fijado, cero filas.
  *
- * Y lo que se sumó en la ronda 2: las tablas hijas sin workspace_id
- * (quote_item, rate_card_item, deal_stage_history) heredan el
- * aislamiento del padre (0016); las manijas de una transacción mueren
- * con ella; y toda transacción arranca con timeouts.
+ * Y lo que se sumó en las rondas 2 y 3: las tablas hijas sin
+ * workspace_id (quote_item, rate_card_item, deal_stage_history) heredan
+ * el aislamiento del padre (0018); las manijas de una transacción mueren
+ * con ella; toda transacción arranca con timeouts; una transacción no se
+ * anida; y asWorker se niega cuando el rol de conexión no es miembro de
+ * mc_worker (el caso de mc_app en producción).
  *
  * Corre sobre Postgres embebido como mc_app (sin BYPASSRLS), con las
  * migraciones reales: si RLS o el cliente se rompen, esto se rompe.
@@ -13,8 +15,8 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertWorkspaceId, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory, eq, quote, quoteItem,
-  rateCard, rateCardItem, TransactionClosedError, type BaseTx, type WorkspaceTx,
+  assertWorkspaceId, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory, eq, NestedTransactionError, quote,
+  quoteItem, rateCard, rateCardItem, TransactionClosedError, type BaseTx, type WorkspaceTx,
 } from '../src/index.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -30,13 +32,18 @@ const WHO_SQL = `SELECT current_user::text AS current_user,
   (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass_rls`;
 
 /** Drizzle envuelve el error de Postgres ("Failed query: …") y deja el original en cause. */
-function mensajeCompleto(err: unknown): string {
-  const partes: string[] = [];
-  for (let e = err; e instanceof Error; e = e.cause) partes.push(e.message);
-  return partes.join(' ← ');
+function fullMessage(err: unknown): string {
+  const parts: string[] = [];
+  for (let e = err; e instanceof Error; e = e.cause) parts.push(e.message);
+  return parts.join(' ← ');
 }
 
-const esViolacionDeRls = (err: unknown) => /row-level security/.test(mensajeCompleto(err));
+const isRlsViolation = (err: unknown) => /row-level security/.test(fullMessage(err));
+const isNotWorkerMember = (err: unknown) => /miembro de mc_worker/.test(fullMessage(err));
+
+/** count(*) de una tabla, con lo que la transacción actual puede ver. */
+const countRows = (tx: BaseTx, table: string) =>
+  tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`).then((r) => r.rows[0]?.n ?? -1);
 
 let t: TestDb;
 let dealA = '';
@@ -79,10 +86,10 @@ describe('aislamiento por workspace', () => {
     dealA = a.id;
     dealB = b.id;
 
-    const vistoPorA = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
-    const vistoPorB = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ id: deal.id }).from(deal));
-    assert.deepEqual(vistoPorA.map((r) => r.id), [dealA]);
-    assert.deepEqual(vistoPorB.map((r) => r.id), [dealB]);
+    const seenByA = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
+    const seenByB = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ id: deal.id }).from(deal));
+    assert.deepEqual(seenByA.map((r) => r.id), [dealA]);
+    assert.deepEqual(seenByB.map((r) => r.id), [dealB]);
   });
 
   test('sin workspace fijado, cero filas', async () => {
@@ -97,37 +104,62 @@ describe('aislamiento por workspace', () => {
       t.db.withWorkspace(WS_A, (tx) =>
         tx.db.insert(deal).values({ workspaceId: WS_B, companyId: COMPANY, name: 'Intruso', stageId: 'nuevo' }),
       ),
-      esViolacionDeRls,
+      isRlsViolation,
     );
-    const tocadas = await t.db.withWorkspace(WS_A, (tx) =>
+    const touched = await t.db.withWorkspace(WS_A, (tx) =>
       tx.db.update(deal).set({ name: 'Pisado' }).where(eq(deal.id, dealB)).returning({ id: deal.id }),
     );
-    assert.equal(tocadas.length, 0, 'el UPDATE no encuentra la fila ajena');
-    const [intacto] = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ name: deal.name }).from(deal));
-    assert.equal(intacto?.name, 'Lanzamiento B');
+    assert.equal(touched.length, 0, 'el UPDATE no encuentra la fila ajena');
+    const [intact] = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ name: deal.name }).from(deal));
+    assert.equal(intact?.name, 'Lanzamiento B');
   });
 
   test('las vistas heredan el aislamiento: deal_pipeline solo trae lo propio', async () => {
-    const filas = await t.db.withWorkspace(WS_A, (tx) => tx.db.select().from(dealPipeline));
-    assert.equal(filas.length, 1);
-    assert.equal(filas[0]?.id, dealA);
-    assert.equal(filas[0]?.companyName, 'Café Alma');
-    assert.equal(filas[0]?.stageLabel, 'Nuevo');
-    assert.equal(filas[0]?.probability, '0.0500', 'sin probabilidad propia usa la de la etapa');
-    assert.equal(filas[0]?.dueState, 'sin_fecha');
+    const pipelineRows = await t.db.withWorkspace(WS_A, (tx) => tx.db.select().from(dealPipeline));
+    assert.equal(pipelineRows.length, 1);
+    assert.equal(pipelineRows[0]?.id, dealA);
+    assert.equal(pipelineRows[0]?.companyName, 'Café Alma');
+    assert.equal(pipelineRows[0]?.stageLabel, 'Nuevo');
+    assert.equal(pipelineRows[0]?.probability, '0.0500', 'sin probabilidad propia usa la de la etapa');
+    assert.equal(pipelineRows[0]?.dueState, 'sin_fecha');
   });
 
   test('asWorker cruza workspaces (jobs globales) y vuelve a mc_app al terminar', async (ctx) => {
     if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
-    const todos = await t.db.asWorker(async (tx) => {
+    const allDeals = await t.db.asWorker(async (tx) => {
       const { rows } = await tx.query<Who>(WHO_SQL);
       assert.equal(rows[0]?.current_user, 'mc_worker');
       assert.equal(rows[0]?.bypass_rls, true);
       return tx.db.select({ id: deal.id }).from(deal);
     });
-    assert.deepEqual(todos.map((r) => r.id).sort(), [dealA, dealB].sort());
+    assert.deepEqual(allDeals.map((r) => r.id).sort(), [dealA, dealB].sort());
     const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app', 'SET LOCAL ROLE muere con la transacción');
+  });
+
+  test('asWorker se niega si el rol de conexión no es miembro de mc_worker (mc_app en producción)', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    // La sesión de PGlite es el superusuario con SET ROLE mc_app, y un
+    // superusuario asume cualquier rol: el caso positivo de arriba no
+    // demuestra nada sobre mc_app. Aquí la sesión pasa a SER mc_app
+    // (SET SESSION AUTHORIZATION), que no es miembro de mc_worker.
+    const sessionUser = (await t.raw<{ session_user: string }>('SELECT session_user::text AS session_user'))[0]?.session_user ?? 'postgres';
+    await t.raw('SET SESSION AUTHORIZATION mc_app');
+    try {
+      const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+      assert.equal(rows[0]?.current_user, 'mc_app');
+      await assert.rejects(t.db.asWorker(async () => 1), isNotWorkerMember);
+      // withWorkspace sigue funcionando: la sesión no quedó rota.
+      const seen = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
+      assert.deepEqual(seen.map((r) => r.id), [dealA]);
+    } finally {
+      // PGlite no honra RESET SESSION AUTHORIZATION (deja mc_app): se
+      // vuelve al usuario de sesión por su nombre, y de ahí a mc_app.
+      await t.raw(`SET SESSION AUTHORIZATION "${sessionUser}"`);
+      await t.raw('SET ROLE mc_app');
+    }
+    const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+    assert.equal(rows[0]?.current_user, 'mc_app', 'la sesión vuelve a como estaba');
   });
 
   test('un error revierte la transacción entera', async () => {
@@ -138,13 +170,13 @@ describe('aislamiento por workspace', () => {
       }),
       /boom/,
     );
-    const deA = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
-    assert.deepEqual(deA.map((r) => r.id), [dealA]);
+    const ofA = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
+    assert.deepEqual(ofA.map((r) => r.id), [dealA]);
   });
 
   test('el workspace fijado no sobrevive a su transacción', async () => {
-    const despues = await t.db.withoutWorkspace((tx) => tx.query<{ ws: string | null }>("SELECT nullif(current_setting('app.workspace_id', true), '') AS ws"));
-    assert.equal(despues.rows[0]?.ws, null);
+    const afterTx = await t.db.withoutWorkspace((tx) => tx.query<{ ws: string | null }>("SELECT nullif(current_setting('app.workspace_id', true), '') AS ws"));
+    assert.equal(afterTx.rows[0]?.ws, null);
   });
 
   test('el workspace se valida antes de abrir la transacción', async () => {
@@ -154,7 +186,7 @@ describe('aislamiento por workspace', () => {
   });
 });
 
-describe('las tablas hijas heredan el aislamiento del padre (0016)', () => {
+describe('las tablas hijas heredan el aislamiento del padre (0018)', () => {
   let creatorA = '';
   let quoteA = '';
   let rateCardA = '';
@@ -184,22 +216,19 @@ describe('las tablas hijas heredan el aislamiento del padre (0016)', () => {
     });
   });
 
-  const contar = (tx: BaseTx, tabla: string) =>
-    tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${tabla}`).then((r) => r.rows[0]?.n ?? -1);
-
-  for (const tabla of ['quote_item', 'rate_card_item', 'deal_stage_history']) {
-    test(`${tabla}: A ve su fila; B y sin workspace ven cero`, async () => {
-      assert.equal(await t.db.withWorkspace(WS_A, (tx) => contar(tx, tabla)), 1);
-      assert.equal(await t.db.withWorkspace(WS_B, (tx) => contar(tx, tabla)), 0, `desde B se leen filas de ${tabla} de A`);
-      assert.equal(await t.db.withoutWorkspace((tx) => contar(tx, tabla)), 0, `sin workspace se leen filas de ${tabla}`);
+  for (const table of ['quote_item', 'rate_card_item', 'deal_stage_history']) {
+    test(`${table}: A ve su fila; B y sin workspace ven cero`, async () => {
+      assert.equal(await t.db.withWorkspace(WS_A, (tx) => countRows(tx, table)), 1);
+      assert.equal(await t.db.withWorkspace(WS_B, (tx) => countRows(tx, table)), 0, `desde B se leen filas de ${table} de A`);
+      assert.equal(await t.db.withoutWorkspace((tx) => countRows(tx, table)), 0, `sin workspace se leen filas de ${table}`);
     });
   }
 
   test('desde B no se ven los precios de A ni por Drizzle', async () => {
-    const precios = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ unitPrice: quoteItem.unitPrice }).from(quoteItem));
-    assert.deepEqual(precios, []);
-    const tarifas = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ low: rateCardItem.priceLow }).from(rateCardItem));
-    assert.deepEqual(tarifas, []);
+    const prices = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ unitPrice: quoteItem.unitPrice }).from(quoteItem));
+    assert.deepEqual(prices, []);
+    const rates = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ low: rateCardItem.priceLow }).from(rateCardItem));
+    assert.deepEqual(rates, []);
   });
 
   test('desde B no se puede colgar una fila de un padre de A', async () => {
@@ -207,48 +236,78 @@ describe('las tablas hijas heredan el aislamiento del padre (0016)', () => {
       t.db.withWorkspace(WS_B, (tx) =>
         tx.db.insert(quoteItem).values({ quoteId: quoteA, deliverable: 'reel', description: 'Intruso', unitPrice: '1.00', total: '1.00' }),
       ),
-      esViolacionDeRls,
+      isRlsViolation,
     );
     await assert.rejects(
       t.db.withWorkspace(WS_B, (tx) => tx.db.insert(dealStageHistory).values({ dealId: dealA, toStageId: 'nuevo' })),
-      esViolacionDeRls,
+      isRlsViolation,
     );
-    const tocadas = await t.db.withWorkspace(WS_B, (tx) =>
+    const touched = await t.db.withWorkspace(WS_B, (tx) =>
       tx.db.update(quoteItem).set({ unitPrice: '0.00' }).where(eq(quoteItem.quoteId, quoteA)).returning({ id: quoteItem.id }),
     );
-    assert.equal(tocadas.length, 0, 'el UPDATE no encuentra la fila ajena');
-    const [intacto] = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ unitPrice: quoteItem.unitPrice }).from(quoteItem));
-    assert.equal(intacto?.unitPrice, '2500000.00');
+    assert.equal(touched.length, 0, 'el UPDATE no encuentra la fila ajena');
+    const [intact] = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ unitPrice: quoteItem.unitPrice }).from(quoteItem));
+    assert.equal(intact?.unitPrice, '2500000.00');
   });
 
   test('mc_worker sigue viendo las hijas de todos (jobs globales)', async (ctx) => {
     if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
-    assert.equal(await t.db.asWorker((tx) => contar(tx, 'quote_item')), 1);
+    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'quote_item')), 1);
   });
 });
 
 describe('la transacción y sus manijas', () => {
   test('tx.db y tx.query lanzan TransactionClosedError después del cierre', async () => {
-    const fugada = await t.db.withoutWorkspace(async (tx) => tx);
-    await assert.rejects(fugada.query('SELECT 1'), TransactionClosedError);
-    assert.throws(() => fugada.db.select({ id: deal.id }).from(deal), TransactionClosedError);
+    const leaked = await t.db.withoutWorkspace(async (tx) => tx);
+    await assert.rejects(leaked.query('SELECT 1'), TransactionClosedError);
+    assert.throws(() => leaked.db.select({ id: deal.id }).from(deal), TransactionClosedError);
 
-    const fugadaConWs = await t.db.withWorkspace(WS_A, async (tx) => tx);
-    await assert.rejects(fugadaConWs.query('SELECT 1'), /Transacción cerrada/);
-    assert.throws(() => fugadaConWs.db.query, TransactionClosedError);
-    assert.equal(fugadaConWs.workspaceId, WS_A, 'los datos planos siguen ahí; solo las manijas mueren');
+    const leakedWithWs = await t.db.withWorkspace(WS_A, async (tx) => tx);
+    await assert.rejects(leakedWithWs.query('SELECT 1'), /Transacción cerrada/);
+    assert.throws(() => leakedWithWs.db.query, TransactionClosedError);
+    assert.equal(leakedWithWs.workspaceId, WS_A, 'los datos planos siguen ahí; solo las manijas mueren');
   });
 
   test('las manijas también mueren cuando fn lanza', async () => {
-    let fugada: BaseTx | undefined;
+    let leaked: BaseTx | undefined;
     await assert.rejects(
       t.db.withoutWorkspace(async (tx) => {
-        fugada = tx;
+        leaked = tx;
         throw new Error('boom');
       }),
       /boom/,
     );
-    await assert.rejects(fugada!.query('SELECT 1'), TransactionClosedError);
+    await assert.rejects(leaked!.query('SELECT 1'), TransactionClosedError);
+  });
+
+  test('una transacción no se anida: se reutiliza el tx que ya se tiene', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, async () => t.db.withWorkspace(WS_B, async () => 1)),
+      NestedTransactionError,
+    );
+    await assert.rejects(
+      t.db.withoutWorkspace(async () => t.db.asWorker(async () => 1)),
+      /Transacción anidada/,
+    );
+    await assert.rejects(
+      t.db.asWorker(async () => t.db.withoutWorkspace(async () => 1)).catch((err: unknown) => {
+        // Si esta sesión no puede asumir mc_worker, el rechazo viene de ahí y no prueba nada.
+        if (isNotWorkerMember(err)) throw new NestedTransactionError();
+        throw err;
+      }),
+      NestedTransactionError,
+    );
+    // Y después de rechazar, el cliente sigue sano: la anidación se
+    // detecta antes de tocar el driver, así que nada queda a medias.
+    const seen = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
+    assert.deepEqual(seen.map((r) => r.id), [dealA]);
+    // Dos transacciones en secuencia o en paralelo desde fuera sí valen.
+    const [a, b] = await Promise.all([
+      t.db.withWorkspace(WS_A, (tx) => countRows(tx, 'deal')),
+      t.db.withWorkspace(WS_B, (tx) => countRows(tx, 'deal')),
+    ]);
+    assert.equal(a, 1);
+    assert.equal(b, 1);
   });
 
   test('toda transacción arranca con statement_timeout e idle_in_transaction_session_timeout', async () => {
@@ -257,15 +316,15 @@ describe('la transacción y sus manijas', () => {
       it: string;
     }
     const sql = "SELECT current_setting('statement_timeout') AS st, current_setting('idle_in_transaction_session_timeout') AS it";
-    const dentro = await t.db.withWorkspace(WS_A, (tx) => tx.query<Timeouts>(sql));
-    assert.equal(dentro.rows[0]?.st, '15s');
-    assert.equal(dentro.rows[0]?.it, '15s');
-    const enWorker = await t.db.asWorker((tx) => tx.query<Timeouts>(sql)).catch(() => null);
-    if (enWorker) assert.equal(enWorker.rows[0]?.st, '15s', 'también como mc_worker');
+    const inside = await t.db.withWorkspace(WS_A, (tx) => tx.query<Timeouts>(sql));
+    assert.equal(inside.rows[0]?.st, '15s');
+    assert.equal(inside.rows[0]?.it, '15s');
+    const asWorkerRows = await t.db.asWorker((tx) => tx.query<Timeouts>(sql)).catch(() => null);
+    if (asWorkerRows) assert.equal(asWorkerRows.rows[0]?.st, '15s', 'también como mc_worker');
     // SET LOCAL: al terminar la transacción, la sesión vuelve a su valor.
     if (t.kind === 'pglite') {
-      const fuera = await t.raw<Timeouts>(sql);
-      assert.equal(fuera[0]?.st, '0');
+      const outside = await t.raw<Timeouts>(sql);
+      assert.equal(outside[0]?.st, '0');
     }
   });
 });

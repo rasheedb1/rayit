@@ -35,6 +35,12 @@
  * después (un `return tx` accidental) lanza TransactionClosedError en
  * vez de correr fuera de transacción y sin workspace.
  *
+ * Una transacción no se anida: llamar a withWorkspace / withoutWorkspace
+ * / asWorker desde dentro de otra lanza NestedTransactionError en los
+ * dos drivers. Sobre pg abriría una segunda conexión que no ve lo que
+ * la primera aún no confirmó; sobre PGlite esperaría para siempre a la
+ * transacción que la contiene. Se reutiliza el tx que ya se tiene.
+ *
  * Contra Supabase va por el pooler en modo transacción (DATABASE_URL,
  * :6543): como set_config y SET LOCAL son locales a la transacción, la
  * conexión vuelve limpia al pool.
@@ -43,6 +49,7 @@
  * abrir la transacción y entregar las dos manijas. La lógica de
  * workspace, rol, timeouts y cierre vive una sola vez, en createDb.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
@@ -91,7 +98,12 @@ export const WORKER_ROLE = 'mc_worker';
 export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
 export const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS = 15_000;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Para validar ids que llegan de fuera (rutas, formularios) antes de consultar. */
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
 
 export function assertWorkspaceId(workspaceId: string): void {
   if (!UUID_RE.test(workspaceId)) {
@@ -107,6 +119,17 @@ export class TransactionClosedError extends Error {
         'No devuelvas tx desde fn; devuelve el resultado.',
     );
     this.name = 'TransactionClosedError';
+  }
+}
+
+/** Se lanza al abrir una transacción desde dentro de otra del mismo cliente. */
+export class NestedTransactionError extends Error {
+  constructor() {
+    super(
+      'Transacción anidada: reutiliza el tx que ya tienes. withWorkspace / withoutWorkspace / asWorker ' +
+        'no se llaman desde dentro de otra transacción del mismo cliente.',
+    );
+    this.name = 'NestedTransactionError';
   }
 }
 
@@ -165,19 +188,31 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): Db {
   const statementTimeout = timeoutMs(opts.statementTimeoutMs, DEFAULT_STATEMENT_TIMEOUT_MS, 'statementTimeoutMs');
   const idleTimeout = timeoutMs(opts.idleInTransactionTimeoutMs, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, 'idleInTransactionTimeoutMs');
 
+  /**
+   * Profundidad de transacción por cadena asíncrona: dentro de fn vale
+   * true, y volver a entrar lanza antes de tocar el driver. Es por
+   * cliente, así que dos bases distintas (la del worker y la de una
+   * prueba) no se estorban.
+   */
+  const inTransaction = new AsyncLocalStorage<true>();
+
   /** Una transacción con timeouts fijados y manijas que mueren al salir de fn. */
-  const run = <T>(fn: (tx: BaseTx) => Promise<T>): Promise<T> =>
-    runner.run(async (raw) => {
-      const guard = guardTx(raw);
-      try {
-        // Enteros validados arriba; SET LOCAL no admite parámetros.
-        await guard.tx.query(`SET LOCAL statement_timeout = ${statementTimeout}`);
-        await guard.tx.query(`SET LOCAL idle_in_transaction_session_timeout = ${idleTimeout}`);
-        return await fn(guard.tx);
-      } finally {
-        guard.close();
-      }
-    });
+  const run = async <T>(fn: (tx: BaseTx) => Promise<T>): Promise<T> => {
+    if (inTransaction.getStore()) throw new NestedTransactionError();
+    return inTransaction.run(true, () =>
+      runner.run(async (raw) => {
+        const guard = guardTx(raw);
+        try {
+          // Enteros validados arriba; SET LOCAL no admite parámetros.
+          await guard.tx.query(`SET LOCAL statement_timeout = ${statementTimeout}`);
+          await guard.tx.query(`SET LOCAL idle_in_transaction_session_timeout = ${idleTimeout}`);
+          return await fn(guard.tx);
+        } finally {
+          guard.close();
+        }
+      }),
+    );
+  };
 
   return {
     async withWorkspace(workspaceId, fn) {
@@ -242,6 +277,10 @@ export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): Db {
   const runner: TxRunner = {
     async run(fn) {
       const client = await pool.connect();
+      // Si el ROLLBACK falla la conexión está rota (o a medias): se
+      // devuelve al pool con el error para que pg la destruya en vez de
+      // prestársela, con la transacción abierta, a la siguiente petición.
+      let broken: Error | undefined;
       try {
         await client.query('BEGIN');
         const tx: BaseTx = {
@@ -255,10 +294,12 @@ export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): Db {
         await client.query('COMMIT');
         return out;
       } catch (err) {
-        await client.query('ROLLBACK').catch(() => undefined);
+        await client.query('ROLLBACK').catch((e: unknown) => {
+          broken = e instanceof Error ? e : new Error(String(e));
+        });
         throw err;
       } finally {
-        client.release();
+        client.release(broken);
       }
     },
     close: () => pool.end(),

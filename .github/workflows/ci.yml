@@ -85,6 +85,18 @@ jobs:
       - run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
       - name: Aplicar dos veces debe ser inocuo
         run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
+      - name: Rol de la aplicación para las pruebas (sin BYPASSRLS, miembro de mc_app y de mc_worker)
+        # mc_app y mc_worker existen desde 0010 y son NOLOGIN; mc_app_ci es
+        # el rol con el que la web se conectaría, más la membresía en
+        # mc_worker para que asWorker también se ejercite sobre pg.
+        run: |
+          psql "postgres://mc:mc@localhost:5432/oncue" -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+      - name: Pruebas de @mc/db contra Postgres real (el runner de pg, no PGlite)
+        env:
+          TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
+          TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
+        run: pnpm --filter @mc/db test
 
   calidad:
     name: Tipos, lint, pruebas y build

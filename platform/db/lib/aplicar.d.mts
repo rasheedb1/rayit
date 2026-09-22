@@ -30,6 +30,10 @@ export function listSql(dir: string): Promise<string[]>;
 export function applyMigrations(exec: MigrationExec, opts?: ApplyMigrationsOptions): Promise<ApplyMigrationsResult>;
 export function applySeeds(exec: MigrationExec, opts?: ApplySeedsOptions): Promise<string[]>;
 
+export class DuplicateMigrationNumberError extends Error {
+  files: string[];
+  constructor(files: string[]);
+}
 export class MigrationChangedError extends Error {
   readonly file: string;
   constructor(file: string);

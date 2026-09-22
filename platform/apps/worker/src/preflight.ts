@@ -74,6 +74,34 @@ export function explainMissing(p: PreflightResult, opts: { role: string | null; 
   return lines;
 }
 
+/**
+ * Un error de conexión, en una línea del producto con el comando que lo
+ * arregla; null si no es de conexión (que se propague con su stack).
+ *
+ *   28P01                       Postgres rechazó usuario o contraseña.
+ *   ENOTFOUND/ECONNREFUSED/…    No se llega al host.
+ */
+export function explainConnectionError(err: unknown, url: string): string | null {
+  const e = err as { code?: unknown; message?: unknown };
+  const code = typeof e?.code === 'string' ? e.code : '';
+  const host = hostOf(url);
+  if (code === '28P01') {
+    return `Supabase rechazó las credenciales de ${userOf(url)}@${host}: corre make db.unlock (o make db.status).`;
+  }
+  if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EAI_AGAIN' || code === 'ECONNRESET') {
+    return `no se llega a ${host} (${code}): revisa la red o make db.info.`;
+  }
+  return null;
+}
+
+function userOf(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).username) || '?';
+  } catch {
+    return '?';
+  }
+}
+
 /** El humo: lista job_definition (catálogo sin RLS, por withoutWorkspace) en el formato de la consola. */
 export async function formatJobDefinitions(db: Db, url: string): Promise<string> {
   const defs = await db.withoutWorkspace((tx) =>

@@ -11,9 +11,13 @@
  *
  * Convención de importación:
  *   - Cliente, esquema y operadores: desde la raíz, `@mc/db`.
- *   - Consultas de un módulo: SIEMPRE por subruta, `@mc/db/queries/<módulo>`.
- *     La raíz no reexporta consultas: cada módulo es dueño de su
- *     espacio de nombres y dos módulos pueden llamar igual a una función.
+ *   - Consultas de un módulo: por subruta, `@mc/db/queries/<módulo>`.
+ *     Cada módulo es dueño de su espacio de nombres y dos módulos
+ *     pueden llamar igual a una función. La raíz reexporta, al final de
+ *     este archivo, las consultas de los módulos que ya se importaban
+ *     desde `@mc/db` antes de CIM-2 (Finanzas, Conexiones, Campañas):
+ *     si dos nombres chocan, `tsc` lo señala (TS2308) y el módulo nuevo
+ *     pasa a importarse por subruta.
  *
  * Reglas: el workspace lo fija el cliente por transacción, nunca la
  * pantalla; las métricas se insertan, no se actualizan; ninguna pantalla
@@ -23,8 +27,8 @@ export type {
   BaseTx, Db, DbOptions, Orm, PoolOptions, QueryResult, Schema, SqlExecutor, TxRunner, WorkerTx, WorkspaceTx,
 } from './client.ts';
 export {
-  assertWorkspaceId, createDb, createPgDb, createPool, CURRENT_WORKSPACE,
-  DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS, TransactionClosedError, WORKER_ROLE,
+  assertWorkspaceId, createDb, createPgDb, createPool, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+  DEFAULT_STATEMENT_TIMEOUT_MS, isUuid, NestedTransactionError, TransactionClosedError, UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
 export { hostOf, isSupabaseHost, tlsFor, PLATFORM_ROOT, type Tls } from './tls.ts';
@@ -40,3 +44,11 @@ export {
   max, min, ne, not, notInArray, or, sql, sum,
 } from 'drizzle-orm';
 export type { SQL } from 'drizzle-orm';
+
+/**
+ * Compatibilidad con FIN-1, CON-3 y CAM-1/CAM-2: sus pantallas importan
+ * las consultas desde la raíz. Los módulos nuevos usan la subruta.
+ */
+export * from './queries/finanzas.ts';
+export * from './queries/conexiones.ts';
+export * from './queries/campanas.ts';

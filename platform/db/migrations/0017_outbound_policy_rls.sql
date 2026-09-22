@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0015 · RLS en outbound_policy (CIM-2)
+-- 0017 · RLS en outbound_policy (CIM-2)
 -- ---------------------------------------------------------------------
 -- La regla del proyecto es que toda tabla con workspace_id lleva RLS.
 -- outbound_policy (0007) tiene workspace_id como clave primaria y no

@@ -23,7 +23,8 @@ export interface WorkerConfig {
   bossPoolMax: number;
   jobPoolMax: number;
   oauthRefreshMarginMinutes: number;
-  secretStore: 'env' | 'memory';
+  /** encrypted = connection_secret con TOKEN_ENCRYPTION_KEY (CON-3, el real); env y memory son de desarrollo. */
+  secretStore: 'encrypted' | 'env' | 'memory';
   tokenRefresher: 'real' | 'fake';
   logLevel: LogLevel;
   logFormat: LogFormat;
@@ -58,7 +59,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<WorkerConf
     bossPoolMax: envNumber(env, 'WORKER_BOSS_POOL_MAX', 4, 1),
     jobPoolMax: envNumber(env, 'WORKER_JOB_POOL_MAX', 8, 1),
     oauthRefreshMarginMinutes: envNumber(env, 'OAUTH_REFRESH_MARGIN_MINUTES', 30, 0),
-    secretStore: env['SECRET_STORE'] === 'memory' ? 'memory' : 'env',
+    secretStore: parseSecretStore(env['SECRET_STORE']),
     tokenRefresher: env['TOKEN_REFRESHER'] === 'fake' ? 'fake' : 'real',
     logLevel: isLogLevel(env['LOG_LEVEL']) ? env['LOG_LEVEL'] : 'info',
     logFormat: env['LOG_FORMAT'] === 'pretty' ? 'pretty' : 'json',
@@ -90,6 +91,12 @@ export function usesTransactionPooler(url: string): boolean {
   } catch {
     return /:6543(\/|$|\?)/.test(url);
   }
+}
+
+function parseSecretStore(raw: string | undefined): WorkerConfig['secretStore'] {
+  if (raw === undefined || raw === '' || raw === 'encrypted') return 'encrypted';
+  if (raw === 'env' || raw === 'memory') return raw;
+  throw new ConfigError(`SECRET_STORE debe ser encrypted, env o memory; recibió "${raw}"`);
 }
 
 function parseRole(raw: string | undefined): string | null {

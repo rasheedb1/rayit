@@ -36,7 +36,7 @@ const VISTAS_MVP = [
 
 /**
  * Tablas de tenant del MVP: toda fila pertenece a un workspace y RLS la
- * aísla (0010, 0011, 0015). Con workspace_id NOT NULL.
+ * aísla (0010, 0011, 0017). Con workspace_id NOT NULL.
  */
 const TENANT_MVP = [
   'creator_profile', 'social_connection', 'data_consent', 'post', 'post_metric_snapshot',
@@ -48,9 +48,9 @@ const TENANT_MVP = [
 
 /**
  * Hijas de una tabla de tenant, sin workspace_id propio: heredan la RLS
- * del padre por EXISTS (0016). La FK al padre es NOT NULL.
+ * del padre por EXISTS (0018). La FK al padre es NOT NULL.
  */
-const HIJAS_DE_TENANT: Array<[hija: string, padre: string]> = [
+const HIJAS_DE_TENANT: Array<[child: string, parent: string]> = [
   ['quote_item', 'quote'],
   ['rate_card_item', 'rate_card'],
   ['deal_stage_history', 'deal'],
@@ -85,7 +85,7 @@ const CATALOGOS_CON_WORKSPACE_OPCIONAL = ['pipeline_stage', 'feature_flag'];
  * campaña) y la política se decide por módulo, no aquí. Cada corrida
  * las deja a la vista como pendientes.
  */
-const HIJAS_CON_FK_OPCIONAL: Array<[hija: string, padre: string, dueño: string]> = [
+const HIJAS_CON_FK_OPCIONAL: Array<[child: string, parent: string, owner: string]> = [
   ['brand_account_snapshot', 'campaign', 'CAM'],
   ['trait_lift', 'creator_profile', 'MET'],
   ['external_post', 'video_analysis', 'MED'],
@@ -95,6 +95,14 @@ const HIJAS_CON_FK_OPCIONAL: Array<[hija: string, padre: string, dueño: string]
 
 /** Con workspace_id NOT NULL y sin RLS hasta la migración de CIM-3 (ver el test.todo de abajo). */
 const PENDIENTE_CIM_3 = ['membership'];
+
+/**
+ * Tablas globales sin workspace_id que guardan datos personales y hoy
+ * cualquier workspace enumera (ver el test.todo de VEN-1). Hasta que
+ * lleven RLS se leen SIEMPRE dentro de withWorkspace, a través de
+ * company_link; nunca como catálogo.
+ */
+const PENDIENTE_VEN_1_PII = ['contact', 'app_user'];
 
 interface ColumnRow extends Record<string, unknown> {
   table_name: string;
@@ -140,7 +148,7 @@ let t: TestDb;
 const columns = new Map<string, Map<string, ColumnRow>>();
 const relations = new Map<string, RelRow>();
 /** Tablas sin RLS con una FK NOT NULL hacia una tabla con RLS: hijas que se quedaron sin aislar. */
-let hijasSinRls: FkRow[] = [];
+let childrenWithoutRls: FkRow[] = [];
 
 before(async () => {
   t = await openTestDb({ seeds: false });
@@ -175,44 +183,44 @@ before(async () => {
         AND NOT c.relrowsecurity AND p.relrowsecurity AND a.attnotnull
       ORDER BY 1, 2`),
   );
-  hijasSinRls = fks.rows;
+  childrenWithoutRls = fks.rows;
 });
 
 after(async () => {
   await t.close();
 });
 
-const exportado: unknown[] = Object.values(schema);
-const tables = exportado.filter((v): v is PgTable => is(v, PgTable));
-const views = exportado.filter((v): v is PgView => is(v, PgView));
+const exported: unknown[] = Object.values(schema);
+const tables = exported.filter((v): v is PgTable => is(v, PgTable));
+const views = exported.filter((v): v is PgView => is(v, PgView));
 
 describe('el esquema Drizzle coincide con db/migrations', () => {
   test('exporta todas las tablas y vistas del MVP', () => {
-    const nombres = new Set(tables.map((x) => getTableName(x)));
-    const faltan = TABLAS_MVP.filter((n) => !nombres.has(n));
-    assert.deepEqual(faltan, [], `tablas del MVP sin declarar: ${faltan.join(', ')}`);
-    const vistas = new Set(views.map((v) => getViewName(v)));
-    const faltanVistas = VISTAS_MVP.filter((n) => !vistas.has(n));
-    assert.deepEqual(faltanVistas, [], `vistas del MVP sin declarar: ${faltanVistas.join(', ')}`);
+    const names = new Set(tables.map((x) => getTableName(x)));
+    const missing = TABLAS_MVP.filter((n) => !names.has(n));
+    assert.deepEqual(missing, [], `tablas del MVP sin declarar: ${missing.join(', ')}`);
+    const viewNames = new Set(views.map((v) => getViewName(v)));
+    const missingViews = VISTAS_MVP.filter((n) => !viewNames.has(n));
+    assert.deepEqual(missingViews, [], `vistas del MVP sin declarar: ${missingViews.join(', ')}`);
   });
 
   for (const table of tables) {
     const name = getTableName(table);
     test(`tabla ${name}`, () => {
       assert.equal(relations.get(name)?.kind, 'table', `${name} no existe como tabla en la base`);
-      const enBase = columns.get(name);
-      assert.ok(enBase, `${name} sin columnas en information_schema`);
-      const declaradas = new Set<string>();
+      const inDb = columns.get(name);
+      assert.ok(inDb, `${name} sin columnas en information_schema`);
+      const declared = new Set<string>();
       for (const col of Object.values(getTableColumns(table))) {
-        declaradas.add(col.name);
-        const c = enBase.get(col.name);
+        declared.add(col.name);
+        const c = inDb.get(col.name);
         assert.ok(c, `${name}.${col.name} no existe en la base`);
         assert.equal(drizzleType(col), dbType(c), `${name}.${col.name}: tipo`);
         assert.equal(col.notNull, c.is_nullable === 'NO', `${name}.${col.name}: NOT NULL`);
         assert.equal(col.hasDefault, c.column_default !== null, `${name}.${col.name}: DEFAULT`);
       }
-      const sinDeclarar = [...enBase.keys()].filter((c) => !declaradas.has(c));
-      assert.deepEqual(sinDeclarar, [], `${name}: columnas de la base que faltan en el esquema`);
+      const undeclared = [...inDb.keys()].filter((c) => !declared.has(c));
+      assert.deepEqual(undeclared, [], `${name}: columnas de la base que faltan en el esquema`);
     });
   }
 
@@ -220,18 +228,18 @@ describe('el esquema Drizzle coincide con db/migrations', () => {
     const name = getViewName(view);
     test(`vista ${name}`, () => {
       assert.equal(relations.get(name)?.kind, 'view', `${name} no existe como vista en la base`);
-      const enBase = columns.get(name);
-      assert.ok(enBase, `${name} sin columnas en information_schema`);
-      const declaradas = new Set<string>();
+      const inDb = columns.get(name);
+      assert.ok(inDb, `${name} sin columnas en information_schema`);
+      const declared = new Set<string>();
       for (const field of Object.values(getViewSelectedFields(view))) {
         assert.ok(is(field, PgColumn), `${name}: campo que no es columna`);
-        declaradas.add(field.name);
-        const c = enBase.get(field.name);
+        declared.add(field.name);
+        const c = inDb.get(field.name);
         assert.ok(c, `${name}.${field.name} no existe en la base`);
         assert.equal(drizzleType(field), dbType(c), `${name}.${field.name}: tipo`);
       }
-      const sinDeclarar = [...enBase.keys()].filter((c) => !declaradas.has(c));
-      assert.deepEqual(sinDeclarar, [], `${name}: columnas de la base que faltan en el esquema`);
+      const undeclared = [...inDb.keys()].filter((c) => !declared.has(c));
+      assert.deepEqual(undeclared, [], `${name}: columnas de la base que faltan en el esquema`);
     });
   }
 });
@@ -247,11 +255,11 @@ describe('aislamiento por workspace en la base', () => {
     }
   });
 
-  test('las hijas de una tabla de tenant heredan su RLS (0016)', () => {
-    for (const [hija, padre] of HIJAS_DE_TENANT) {
-      assert.equal(relations.get(padre)?.rls, true, `${padre} (padre de ${hija}) no tiene RLS`);
-      assert.equal(relations.get(hija)?.rls, true, `${hija} es hija de ${padre} pero no tiene RLS`);
-      assert.equal(columns.get(hija)?.has('workspace_id'), false, `${hija} tiene workspace_id: va en TENANT_MVP, no aquí`);
+  test('las hijas de una tabla de tenant heredan su RLS (0018)', () => {
+    for (const [child, parent] of HIJAS_DE_TENANT) {
+      assert.equal(relations.get(parent)?.rls, true, `${parent} (padre de ${child}) no tiene RLS`);
+      assert.equal(relations.get(child)?.rls, true, `${child} es hija de ${parent} pero no tiene RLS`);
+      assert.equal(columns.get(child)?.has('workspace_id'), false, `${child} tiene workspace_id: va en TENANT_MVP, no aquí`);
     }
   });
 
@@ -265,10 +273,10 @@ describe('aislamiento por workspace en la base', () => {
   });
 
   test('ninguna tabla sin RLS apunta con una FK obligatoria a una tabla con RLS', () => {
-    // Es la regla que 0016 cerró y que evita el hueco de quote_item de
+    // Es la regla que 0018 cerró y que evita el hueco de quote_item de
     // la ronda 1: una hija nueva sin política aparece aquí con su padre.
-    const huecos = hijasSinRls.map((r) => `${r.child}.${r.fk} → ${r.parent}`);
-    assert.deepEqual(huecos, [], `hijas de una tabla de tenant sin RLS: ${huecos.join(', ')}`);
+    const gaps = childrenWithoutRls.map((r) => `${r.child}.${r.fk} → ${r.parent}`);
+    assert.deepEqual(gaps, [], `hijas de una tabla de tenant sin RLS: ${gaps.join(', ')}`);
   });
 
   test('los catálogos con workspace_id opcional siguen sin RLS, a propósito', () => {
@@ -290,6 +298,23 @@ describe('aislamiento por workspace en la base', () => {
   test(
     'CIM-3: RLS en membership — ENABLE + FORCE con USING (user_id = current_user_id() OR workspace_id = current_workspace_id()) ' +
       'y current_user_id() leyendo app.user_id fijado por la sesión. Hoy cualquier consulta como mc_app enumera user_id y rol de todos los workspaces.',
+    { todo: true },
+    () => {},
+  );
+
+  test('contact y app_user existen sin workspace_id y hoy se leen sin RLS (PII global)', () => {
+    for (const name of PENDIENTE_VEN_1_PII) {
+      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
+      assert.equal(relations.get(name)?.rls, false, `${name} ya tiene RLS: cierra el test.todo de VEN-1`);
+    }
+  });
+
+  test(
+    'VEN-1: RLS en contact y app_user (PII globales) — contact: ENABLE + FORCE con USING (source IN (' +
+      "'public_website', 'public_profile', 'press') OR EXISTS (SELECT 1 FROM company_link l WHERE l.company_id = " +
+      'contact.company_id AND l.workspace_id = current_workspace_id())), y una prueba en rls.test.ts con un contacto ' +
+      'user_provided de A que B no ve. app_user: por membership, con CIM-3. Hoy cualquier consulta como mc_app enumera ' +
+      'correo, teléfono y LinkedIn de todos los workspaces.',
     { todo: true },
     () => {},
   );

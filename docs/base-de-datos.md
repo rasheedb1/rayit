@@ -42,7 +42,14 @@ que se pueda arreglar del lado del cliente.
 | | Puerto | Modo | Para qué |
 |---|---|---|---|
 | `DATABASE_URL` | 6543 | transacción | La app. Aguanta muchas conexiones cortas |
-| `DATABASE_URL_DIRECT` | 5432 | sesión | Migraciones: sentencias preparadas y transacciones largas |
+| `DATABASE_URL_DIRECT` | 5432 | sesión | Migraciones y el worker: sentencias preparadas, transacciones largas, `SET ROLE` |
+
+Junto a `DATABASE_URL`, la web lee `DEMO_WORKSPACE_ID`: el workspace que
+muestran las pantallas mientras no hay sesión (CIM-3). Sin la variable
+usa el de la creadora del seed (`00000002-0000-4000-8000-000000000001`)
+y lo avisa en el log, también en producción. En Vercel hoy no está
+definida; para fijarla: `make vercel.run ARGS="env add DEMO_WORKSPACE_ID
+production"` (y `preview`), con ese id.
 
 Dos detalles que cuestan una tarde si no se saben:
 
@@ -169,11 +176,17 @@ divergieron, y la salida es una migración nueva, nunca editar la vieja.
   migraciones reales: dos workspaces, cada uno ve solo lo suyo, sin
   workspace cero filas, y las tablas hijas sin `workspace_id`
   (`quote_item`, `rate_card_item`, `deal_stage_history`, …) heredan el
-  aislamiento del padre (0016). `packages/db/test/schema.test.ts` exige
-  RLS en toda tabla de tenant o hija de una. Quedan por aplicar en
-  Supabase 0015 y 0016 (`make db.migrate`, en la integración de CIM-2),
-  y `membership` sigue sin RLS hasta CIM-3 (`test.todo` visible). Falta
-  la prueba con sesiones de usuario reales, que llega con CIM-3.
+  aislamiento del padre (0018). `packages/db/test/schema.test.ts` exige
+  RLS en toda tabla de tenant o hija de una. El CI corre además esas
+  pruebas contra Postgres 16 con un rol `mc_app_ci` sin BYPASSRLS
+  (`TEST_DATABASE_URL`), que es lo que ejercita el runner de `pg`.
+  Quedan por aplicar en Supabase 0017 y 0018 (`make db.migrate`, en la
+  integración de CIM-2; hasta entonces `outbound_policy`, `quote_item`,
+  `rate_card_item`, `deal_stage_history` y `campaign_post` se leen sin
+  workspace, así que no cargar datos de clientes reales antes), y
+  `membership`, `contact` y `app_user` siguen sin RLS hasta CIM-3 y
+  VEN-1 (`test.todo` visibles). Falta la prueba con sesiones de usuario
+  reales, que llega con CIM-3.
 - **El worker no puede arrancar contra Supabase todavía.** Necesita
   `GRANT mc_worker TO mc_migrator` y el esquema `pgboss`
   (`docs/propuestas/CON-2.md` §3.1), con el token de administración.

@@ -9,10 +9,12 @@
  *     Nada que instalar, nada que levantar, sin red. Las transacciones
  *     se serializan.
  *   - TEST_DATABASE_URL=postgres://…: un Postgres real ya migrado y con
- *     seed (por ejemplo, el Docker de `make up` + `make seed`). Aquí sí
- *     hay concurrencia real. El rol de conexión no debe tener BYPASSRLS
- *     ni ser dueño de las tablas, o RLS no aplica. NUNCA apuntarlo a
- *     Supabase: el helper se niega.
+ *     seed (por ejemplo, el Docker de `make up` + `make seed`, o el
+ *     Postgres 16 del CI). Aquí sí hay concurrencia real y se ejercita
+ *     el runner de pg. El rol de conexión no debe tener BYPASSRLS ni ser
+ *     dueño de las tablas, o RLS no aplica; `admin(sql)` usa
+ *     TEST_DATABASE_ADMIN_URL (superusuario o dueño) y, si falta,
+ *     la misma URL. NUNCA apuntarlas a Supabase: el helper se niega.
  *
  * Para las pruebas de otros paquetes (connectors, worker): abrir aquí y
  * usar `db` (withWorkspace / asWorker) o `admin(sql)` para sembrar, en
@@ -22,10 +24,19 @@ import type { Db, DbOptions } from '../src/client.ts';
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
 export const WORKSPACE_LAURA = '00000002-0000-4000-8000-000000000001';
-export const CAMPAIGN_CAFE_ALMA = '00000003-0000-4000-8000-000000ca0001';
 export const COMPANY_CAFE_ALMA = '00000002-0000-4000-8000-0000000000e1';
 export const INVOICE_FV_2026_001 = '00000003-0000-4000-8000-0000fac26001';
 export const INVOICE_FV_2026_010 = '00000003-0000-4000-8000-0000fac26010';
+/** Campañas y posts del seed 0003 (CAM-1). */
+export const CAMPAIGN_CAFE_ALMA = '00000003-0000-4000-8000-000000ca0001';
+export const CAMPAIGN_FRESKO = '00000003-0000-4000-8000-000000ca0002';
+export const CAMPAIGN_NUTRIVE = '00000003-0000-4000-8000-000000ca0003';
+export const CAMPAIGN_HOGAR_LINDO = '00000003-0000-4000-8000-000000ca0004';
+export const POST_D01_REEL_CAFE_ALMA = '00000002-0000-4000-8000-000000000d01';
+export const POST_D02_TIKTOK_CAFE_ALMA = '00000002-0000-4000-8000-000000000d02';
+export const POST_D03_TIKTOK_FRESKO = '00000002-0000-4000-8000-000000000d03';
+export const POST_D04_TIKTOK_FRESKO = '00000002-0000-4000-8000-000000000d04';
+export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
 
 export interface TestDb {
   readonly kind: 'pglite' | 'postgres';
@@ -46,20 +57,27 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
   const { seeds, ...dbOpts } = opts;
   const url = process.env.TEST_DATABASE_URL;
   if (url) {
-    if (/supabase\.co|supabase\.com/.test(url)) {
-      throw new Error('TEST_DATABASE_URL apunta a Supabase. Las pruebas no corren contra la base real.');
+    const adminUrl = process.env.TEST_DATABASE_ADMIN_URL || url;
+    for (const [name, value] of [['TEST_DATABASE_URL', url], ['TEST_DATABASE_ADMIN_URL', adminUrl]] as const) {
+      if (/supabase\.co|supabase\.com/.test(value)) {
+        throw new Error(`${name} apunta a Supabase. Las pruebas no corren contra la base real.`);
+      }
     }
     const { createPgDb, createPool } = await import('../src/client.ts');
     const pool = createPool(url, { max: 5, applicationName: 'mc-db:test' });
+    const adminPool = createPool(adminUrl, { max: 1, applicationName: 'mc-db:test:admin' });
     const db = createPgDb(pool, dbOpts);
     return {
       kind: 'postgres',
       db,
       admin: async (sql) => {
-        await pool.query(sql);
+        await adminPool.query(sql);
       },
       raw: async <T>(sql: string) => (await pool.query(sql)).rows as T[],
-      close: () => db.close(),
+      close: async () => {
+        await db.close();
+        await adminPool.end();
+      },
     };
   }
   const { createEmbeddedDb } = await import('../src/embedded.ts');

@@ -7,10 +7,10 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "node --watch --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types src/dev.ts",
+    "dev": "node --watch --env-file-if-exists=../../.env.local --experimental-strip-types src/dev.ts",
     "start": "node --experimental-strip-types src/index.ts",
-    "install-schema": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --install",
-    "humo": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types src/humo.ts",
+    "install-schema": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --install",
+    "humo": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/humo.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test --experimental-strip-types --test-concurrency=1 test/*.test.ts"

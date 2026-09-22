@@ -39,11 +39,36 @@ const NOMBRE_SQL = /^[A-Za-z0-9_.-]+\.sql$/;
 
 export const checksumOf = (sql) => createHash('sha256').update(sql).digest('hex').slice(0, 16);
 
+export class DuplicateMigrationNumberError extends Error {
+  constructor(files) {
+    super(
+      `Dos migraciones comparten el número ${files[0].slice(0, 4)}: ${files.join(' y ')}. ` +
+        'Renombra la más nueva al siguiente número libre (git fetch y mira todas las ramas activas).',
+    );
+    this.name = 'DuplicateMigrationNumberError';
+    this.files = files;
+  }
+}
+
+/**
+ * Los .sql de `dir`, en orden. Dos archivos con el mismo prefijo
+ * numérico (0015_a.sql y 0015_b.sql) detienen todo: el runner los
+ * aplicaría a ambos sin quejarse, pero rompen la regla «el siguiente
+ * 00NN» y no se sabe cuál fue primero. Pasa cuando dos ramas crean una
+ * migración a la vez; mejor que lo diga `make db.check` y el CI que
+ * Supabase.
+ */
 export async function listSql(dir) {
   const files = await readdir(dir).catch(() => []);
   const sql = files.filter((f) => f.endsWith('.sql')).sort();
+  const seen = new Map();
   for (const f of sql) {
     if (!NOMBRE_SQL.test(f)) throw new Error(`Nombre de archivo SQL no admitido: ${f}`);
+    const n = f.slice(0, 4);
+    if (/^\d{4}$/.test(n)) {
+      if (seen.has(n)) throw new DuplicateMigrationNumberError([seen.get(n), f]);
+      seen.set(n, f);
+    }
   }
   return sql;
 }
