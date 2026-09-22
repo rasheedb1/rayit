@@ -14,6 +14,7 @@ test('clasificación por plataforma y código', () => {
   assert.equal(kindFor('tiktok', 400, 'scope_permission_missed'), 'permanent');
   assert.equal(kindFor('instagram', 400, '190'), 'auth', 'Meta 190 = token');
   assert.equal(kindFor('instagram', 400, '4'), 'quota');
+  assert.equal(kindFor('instagram', 429, '613'), 'transient', 'con 429 y Retry-After se espera; con 400 es quota');
   assert.equal(kindFor('instagram', 400, '80002'), 'quota');
   assert.equal(kindFor('instagram', 400, '100'), 'permanent');
   assert.equal(kindFor('instagram', 400, '1'), 'transient', 'Meta 1 y 2 son transitorios aunque vengan con 400');

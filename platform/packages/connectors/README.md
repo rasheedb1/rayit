@@ -179,7 +179,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 73 pruebas, < 2 s, sin red (guard en cada archivo)
+pnpm --filter @mc/connectors test        # 137 pruebas, < 3 s, sin red (guard en cada archivo)
 pnpm --filter @mc/connectors typecheck lint
 ```
 
