@@ -1,0 +1,79 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CampaignOption, CompanyOption } from "@mc/db";
+
+// La Server Action se sustituye: aquí solo importa cómo reacciona el
+// formulario a lo que devuelve (errores por campo) y qué envía.
+const crearFactura = vi.fn();
+vi.mock("../actions", () => ({ crearFactura: (...args: unknown[]) => crearFactura(...args) }));
+
+import { NuevaFacturaForm } from "./form";
+
+const CAFE_ALMA = "00000002-0000-4000-8000-0000000000e1";
+const CAMPANA = "00000003-0000-4000-8000-000000ca0001";
+
+const companies: CompanyOption[] = [
+  { id: CAFE_ALMA, name: "Café Alma" },
+  { id: "00000002-0000-4000-8000-0000000000e2", name: "Fresko Market" },
+];
+const campaigns: CampaignOption[] = [
+  { id: CAMPANA, name: "Lanzamiento cold brew", status: "reported", companyId: CAFE_ALMA, companyName: "Café Alma", amount: "3100000.00", currency: "COP", quoteId: null },
+];
+const defaults = { issuedOn: "2026-09-21", dueOn: "2026-10-21" };
+
+beforeEach(() => crearFactura.mockReset());
+
+describe("NuevaFacturaForm", () => {
+  it("«Desde una campaña» prellena empresa, monto y total sin escribirlos", () => {
+    const { container } = render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    fireEvent.change(screen.getByLabelText("Campaña"), { target: { value: CAMPANA } });
+
+    expect(screen.getByLabelText(/Empresa/)).toHaveValue(CAFE_ALMA);
+    // Al servidor viaja el decimal normalizado, no el texto con puntos.
+    expect(container.querySelector('input[name="subtotal"]')).toHaveValue("2605042.02");
+    expect(screen.getByLabelText(/Subtotal/)).toHaveValue("2.605.042,02");
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 3.100.000");
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 494.957,98");
+  });
+
+  it("el total en vivo sigue al subtotal y a las tasas editables", () => {
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    fireEvent.change(screen.getByLabelText(/Subtotal/), { target: { value: "1.000.000" } });
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 1.190.000");
+    fireEvent.change(screen.getByLabelText(/IVA %/), { target: { value: "0" } });
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 1.000.000");
+    fireEvent.change(screen.getByLabelText(/Retención en la fuente %/), { target: { value: "2,5" } });
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 975.000");
+  });
+
+  it("el vencimiento sigue a la emisión (+30) hasta que la persona lo toca", () => {
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-31" } });
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2027-01-30");
+    fireEvent.change(screen.getByLabelText(/Vencimiento/), { target: { value: "2027-01-15" } });
+    fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-11-01" } });
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2027-01-15");
+  });
+
+  it("los errores del servidor se pintan en español, con aria-invalid, y el foco va al primero", async () => {
+    crearFactura.mockResolvedValue({
+      errors: { companyId: "Elige la empresa a la que le facturas.", subtotal: "Escribe el subtotal, sin IVA." },
+    });
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    fireEvent.submit(screen.getByRole("button", { name: "Guardar borrador" }).closest("form") as HTMLFormElement);
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+    const empresa = screen.getByLabelText(/Empresa/);
+    expect(empresa).toHaveAttribute("aria-invalid", "true");
+    expect(empresa).toHaveAccessibleDescription("Elige la empresa a la que le facturas.");
+    expect(screen.getByLabelText(/Subtotal/)).toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(empresa).toHaveFocus());
+  });
+
+  it("un mensaje general (p. ej. «Facturar» desde Campañas falló) se anuncia arriba", () => {
+    render(
+      <NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} initialMessage="La campaña no tiene monto acordado: escríbelo a mano." />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("La campaña no tiene monto acordado");
+  });
+});

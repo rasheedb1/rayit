@@ -6,7 +6,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/oncue
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
-        vercel.set vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
+        vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
         arranque
 
 help: ## Muestra esta ayuda
@@ -104,9 +104,10 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
 
-db.cert: ## Vuelve a bajar el certificado raíz de Supabase
+db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
+	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/provisional/supabase-ca.ts regenerado"
 
 # =====================================================================
 # GitHub · el token compartido
@@ -151,6 +152,9 @@ github.check: ## Pregunta a GitHub: qué usuario, qué permisos, cuándo expira
 
 vercel.set: ## Guarda o rota el token de Vercel (lo pide sin mostrarlo)
 	@./scripts/vercel.sh set
+
+vercel.dir: ## Qué directorio se despliega.  make vercel.dir DIR=.   (Root Directory apps/web en Vercel)
+	@./scripts/vercel.sh dir $(DIR)
 
 vercel.link: ## Crea o adopta el proyecto y lo enlaza en ESTE clon
 	@./scripts/vercel.sh link $(NOMBRE)

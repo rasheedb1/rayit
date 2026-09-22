@@ -80,7 +80,7 @@ export function LineChart({
     const i = indexAt(e.clientX, e.currentTarget);
     setHover({ i, px: x(i), py: e.clientY - e.currentTarget.closest("div")!.getBoundingClientRect().top });
   };
-  const onKey = (e: KeyboardEvent<SVGRectElement>) => {
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     const cur = hover?.i ?? n - 1;
     if (e.key === "ArrowRight") focusIndex(Math.min(n - 1, cur + 1));
     else if (e.key === "ArrowLeft") focusIndex(Math.max(0, cur - 1));
@@ -152,22 +152,19 @@ export function LineChart({
             ))}
           </>
         )}
-        <rect
-          x={M.l}
-          y={M.t}
-          width={iw}
-          height={ih}
-          fill="transparent"
-          tabIndex={0}
-          aria-label="Explorar los valores con las flechas"
-          aria-describedby={liveId}
-          className="cursor-crosshair outline-none focus-visible:stroke-ink focus-visible:[stroke-width:2]"
-          onPointerMove={onPointer}
-          onPointerDown={onPointer}
-          onKeyDown={onKey}
-          onFocus={() => hover ?? focusIndex(n - 1)}
-        />
+        <rect x={M.l} y={M.t} width={iw} height={ih} fill="transparent" className="cursor-crosshair" onPointerMove={onPointer} onPointerDown={onPointer} />
       </svg>
+      {/* Capa de teclado: un botón real sobre el área de trazado. Las flechas mueven el índice y aria-live lo anuncia. */}
+      <button
+        type="button"
+        aria-label="Explorar los valores con las flechas"
+        aria-describedby={liveId}
+        className="absolute rounded-sm bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ink"
+        style={{ left: M.l, top: M.t, width: iw, height: ih, pointerEvents: "none" }}
+        onKeyDown={onKey}
+        onFocus={() => hover ?? focusIndex(n - 1)}
+        onBlur={() => setHover(null)}
+      />
       <div id={liveId} className="sr-only" aria-live="polite">
         {hover ? `${labels[hover.i]}: ${rows.map((r) => `${r.label} ${r.value}`).join(", ")}` : ""}
       </div>

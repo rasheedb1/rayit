@@ -71,7 +71,8 @@ export function Button({
           <Spinner />
         </span>
       )}
-      <span className={`inline-flex min-w-0 items-center [overflow-wrap:anywhere] ${GAP[size]} ${loading ? "invisible" : ""}`}>
+      {/* Con opacity y no visibility: el nombre accesible del botón se conserva mientras carga. */}
+      <span className={`inline-flex min-w-0 items-center [overflow-wrap:anywhere] ${GAP[size]} ${loading ? "opacity-0" : ""}`}>
         {icon && (
           <span className="inline-flex shrink-0" aria-hidden="true">
             {icon}

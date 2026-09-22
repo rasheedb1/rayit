@@ -38,9 +38,10 @@ export type FieldProps = {
 export function Field({ label, help, error, required = false, htmlFor, children, className = "" }: FieldProps) {
   const generated = useId();
   const id = htmlFor ?? generated;
-  const helpId = help ? `${id}-help` : undefined;
+  // Con error no se pinta la ayuda, así que tampoco se referencia.
   const errorId = error ? `${id}-error` : undefined;
-  const describedBy = [errorId, helpId].filter(Boolean).join(" ") || undefined;
+  const helpId = help && !error ? `${id}-help` : undefined;
+  const describedBy = errorId ?? helpId;
   return (
     <Ctx.Provider value={{ id, describedBy, invalid: Boolean(error), required }}>
       <div className={`flex flex-col gap-1.5 ${className}`}>

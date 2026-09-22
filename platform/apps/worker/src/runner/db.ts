@@ -95,13 +95,34 @@ export const PLATFORM_ROOT = join(HERE, '..', '..', '..', '..');
 /** El mismo certificado que usa db/migrate.mjs: público y versionado. */
 export const SUPABASE_CA_PATH = join(PLATFORM_ROOT, 'db', 'certs', 'supabase-root-2021.crt');
 
+/**
+ * TLS según el host:
+ *   - PGSSLROOTCERT definido → ese CA, verificación estricta.
+ *   - host de Supabase → el CA versionado en db/certs/, verificación estricta.
+ *   - cualquier otro (localhost, Docker, un Postgres de Railway/Fly) → sin
+ *     opción ssl explícita: manda lo que diga la URL (`sslmode=…`), como
+ *     hace `pg`. Nunca `rejectUnauthorized: false`.
+ */
 export function tlsFor(connectionString: string, sslRootCert: string | null): false | { ca: string; rejectUnauthorized: true } {
-  if (/@(localhost|127\.0\.0\.1|db|postgres):/.test(connectionString)) return false;
+  const host = hostOf(connectionString);
+  const isSupabase = /\.supabase\.(com|co)$/i.test(host);
+  if (!sslRootCert && !isSupabase) return false;
   const path = sslRootCert ? resolve(PLATFORM_ROOT, sslRootCert) : SUPABASE_CA_PATH;
   if (!existsSync(path)) {
     throw new Error(`Falta el certificado raíz en ${path}. Descárgalo con: make db.cert (o fija PGSSLROOTCERT).`);
   }
   return { ca: readFileSync(path, 'utf8'), rejectUnauthorized: true };
+}
+
+export function hostOf(connectionString: string): string {
+  let host = '';
+  try {
+    host = new URL(connectionString).hostname;
+  } catch {
+    host = '';
+  }
+  if (!host) host = connectionString.replace(/^.*@/, '').replace(/[:/].*$/, '');
+  return host.replace(/^\[|\]$/g, '');
 }
 
 export class PostgresDatabase implements WorkerDatabase {

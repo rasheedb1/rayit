@@ -138,26 +138,26 @@ el juego completo de tokens del mock).
       (`.env.local` está en `platform/`, no en `apps/web/`). Sin ella
       arranca en modo demo, que es lo que enseña la demo del viernes.
 
-## 7. Despliegue: lo que cambia con FIN-1 (CIM-7, Rasheed)
+## 7. Despliegue (hecho el 22 de septiembre; antes era de CIM-7)
 
-`scripts/vercel.sh` despliega con `vercel deploy --cwd apps/web`: sube
-solo esa carpeta. Desde FIN-1 la web importa `@mc/core` y `@mc/db`
-(`workspace:*`), que viven en `packages/`, así que ese deploy fallaría
-al instalar. Dos salidas, la primera es la buena:
+`scripts/vercel.sh` desplegaba `apps/web` a secas; desde FIN-1 la web
+importa `@mc/core` y `@mc/db`, así que se sube `platform/` entero con
+Root Directory = `apps/web` en el proyecto de Vercel. Lo que quedó:
 
-1. **Desplegar desde `platform/` con Root Directory = `apps/web`** en
-   la configuración del proyecto de Vercel (y "Include source files
-   outside of the Root Directory" activado, que es el valor por
-   defecto). El script ya lo permite sin tocarlo: `V_APP_DIR=. make
-   vercel.link` una vez por clon y `V_APP_DIR=. make vercel.deploy
-   PROD=1`. Vercel instala con pnpm en el workspace y construye
-   `apps/web`.
-2. La integración con GitHub (CIM-7), que resuelve lo mismo por
-   configuración y quita el comando.
-
-Variables de entorno del proyecto en Vercel (producción y preview):
-`DATABASE_URL` (el pooler :6543 con `mc_app`, la misma del vault) y,
-opcional, `MC_WORKSPACE_ID` (por defecto, la creadora del seed). Sin
-`DATABASE_URL` la app falla a propósito en producción: no hay modo
-demo allí. El certificado raíz de Supabase viaja en el repo
-(`db/certs`) y `@mc/db` lo usa solo; no hay que subirlo aparte.
+- `make vercel.dir DIR=.` guarda en el vault qué directorio se
+  despliega (nuevo subcomando `dir`). `make vercel.link` escribe el
+  enlace local **con los `settings` del proyecto**: sin ellos, la CLI
+  "detecta" la configuración local en el primer deploy y la guarda en el
+  proyecto, borrando el Root Directory (pasó una vez). `make vercel.deploy`
+  y `make vercel.deploy PROD=1` funcionan tal cual.
+- Si el proyecto no existe con ese nombre, `vercel.link` lo **crea**:
+  al renombrarse el proyecto a `on-cue-web`, un `make vercel.link` creó
+  un duplicado `multicampaign-web`. Se borró. Enlazar por nombre:
+  `make vercel.link NOMBRE=on-cue-web`.
+- Variables en Vercel: `DATABASE_URL` (pooler :6543, `mc_app`) en
+  producción y preview. Sin ella la app falla a propósito.
+- La CA de Supabase va embebida en `@mc/db` (`supabase-ca.ts`);
+  `make db.cert` la regenera y una prueba avisa si diverge.
+- `.vercelignore` de `platform/` no debe excluir `packages/db`.
+- El CI vive ahora en `.github/workflows/ci.yml` de la raíz (la copia en
+  `platform/.github/` nunca corrió) y usa pnpm.

@@ -28,8 +28,11 @@ export const flags: Flags = {
   niche_radar: false,
   ideas_scripts: false,
   // Herramientas del equipo: encendidas en desarrollo y apagadas en
-  // producción, salvo que el build lleve KIT=1 (vistas previas de Vercel).
-  kit: process.env.NODE_ENV !== "production" || process.env.KIT === "1",
+  // producción, salvo que el build lleve NEXT_PUBLIC_KIT=1 (vistas previas
+  // de Vercel). Tiene que ser NEXT_PUBLIC_: Next solo inyecta esas en el
+  // bundle del cliente, y la navegación es un componente cliente; con otra
+  // variable el servidor y el navegador verían banderas distintas.
+  kit: process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_KIT === "1",
 };
 
 export function isFlagKey(key: string): key is FlagKey {

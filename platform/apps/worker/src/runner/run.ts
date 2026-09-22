@@ -112,7 +112,39 @@ function validateResult(value: unknown, jobId: string): JobResult {
     processed: processed as number,
     failed: failed as number,
     metadata: typeof metadata === 'object' && metadata !== null ? (metadata as Record<string, unknown>) : undefined,
+    retry: typeof v['retry'] === 'boolean' ? v['retry'] : undefined,
   };
+}
+
+const FK_VIOLATION = '23503';
+
+/**
+ * Abre la fila de job_run. Si el payload trae un workspaceId que ya no
+ * existe (se borró entre el envío y la ejecución), la fila se abre sin
+ * workspace en vez de perder la ejecución entera sin rastro.
+ */
+async function insertRun(deps: RunDeps, jobId: string, ctx: PayloadContext, attempt: number, bossJobId: string): Promise<number> {
+  const insert = (workspaceId: string | null) => deps.db.query<{ id: number | string }>(
+    `INSERT INTO job_run (job_id, workspace_id, entity_type, entity_id, status, attempt, metadata)
+     VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb) RETURNING id`,
+    [jobId, workspaceId, ctx.entityType, ctx.entityId, attempt, JSON.stringify({ bossJobId, ...(workspaceId === null && ctx.workspaceId ? { workspaceIdIgnored: ctx.workspaceId } : {}) })],
+  );
+  try {
+    const { rows } = await insert(ctx.workspaceId);
+    return Number(rows[0]?.id);
+  } catch (err) {
+    if (ctx.workspaceId && (err as { code?: string }).code === FK_VIOLATION) {
+      deps.logger.warn('el workspace del payload no existe; job_run se abre sin workspace', { job: jobId, workspaceId: ctx.workspaceId });
+      const { rows } = await insert(null);
+      return Number(rows[0]?.id);
+    }
+    throw err;
+  }
+}
+
+async function workspaceRecorded(deps: RunDeps, runId: number): Promise<boolean> {
+  const { rows } = await deps.db.query<{ workspace_id: string | null }>('SELECT workspace_id FROM job_run WHERE id = $1', [runId]);
+  return rows[0]?.workspace_id !== null && rows[0]?.workspace_id !== undefined;
 }
 
 export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOutcome> {
@@ -120,12 +152,7 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
   const now = deps.now ?? (() => new Date());
   const ctxPayload = payloadContext(payload);
 
-  const inserted = await deps.db.query<{ id: number | string }>(
-    `INSERT INTO job_run (job_id, workspace_id, entity_type, entity_id, status, attempt, metadata)
-     VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb) RETURNING id`,
-    [definition.id, ctxPayload.workspaceId, ctxPayload.entityType, ctxPayload.entityId, attempt, JSON.stringify({ bossJobId })],
-  );
-  const runId = Number(inserted.rows[0]?.id);
+  const runId = await insertRun(deps, definition.id, ctxPayload, attempt, bossJobId);
   const logger = deps.logger.child({ job: definition.id, runId, jobId: bossJobId, attempt });
 
   const abort = new AbortController();
@@ -181,7 +208,12 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
   const status: RunStatus = error ? 'failed' : statusFor(result!);
   if (!error && status === 'failed' && result) error = new JobItemsFailedError(result.processed, result.failed);
 
-  const metadata = redactSecrets({ ...(result?.metadata ?? {}), bossJobId, ...(error instanceof JobTimeoutError ? { timeoutS: error.timeoutS } : {}) });
+  const metadata = redactSecrets({
+    ...(result?.metadata ?? {}),
+    bossJobId,
+    ...(error instanceof JobTimeoutError ? { timeoutS: error.timeoutS } : {}),
+    ...(ctxPayload.workspaceId && !(await workspaceRecorded(deps, runId)) ? { workspaceIdIgnored: ctxPayload.workspaceId } : {}),
+  });
 
   await deps.db.query(
     `UPDATE job_run

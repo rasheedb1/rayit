@@ -3,26 +3,26 @@
  *
  *   DATABASE_URL presente  → node-postgres contra ese Postgres (Supabase
  *                            por el pooler :6543 con TLS verificado
- *                            contra db/certs, o el Docker local).
+ *                            con la CA de Supabase embebida, o el Docker local).
  *   Sin DATABASE_URL       → en desarrollo, Postgres embebido en memoria
  *                            con migraciones y seeds ("modo demo"); en
  *                            producción, error. Nunca se cae a la demo
  *                            en producción por accidente.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Db } from './client.ts';
-import { DB_DIR } from './embedded.ts';
+import { SUPABASE_ROOT_CA } from './supabase-ca.ts';
 
 export type DbMode = 'postgres' | 'embedded';
 
+/**
+ * TLS: contra localhost/Docker no hay; contra cualquier otro host se
+ * verifica con la CA de Supabase embebida (la del sistema no la conoce:
+ * "self-signed certificate in certificate chain"). Nunca
+ * rejectUnauthorized: false.
+ */
 function tlsFor(url: string): false | { ca: string; rejectUnauthorized: true } {
   if (/@(localhost|127\.0\.0\.1|db):/.test(url)) return false;
-  const ca = join(DB_DIR, 'certs', 'supabase-root-2021.crt');
-  if (!existsSync(ca)) {
-    throw new Error(`Falta el certificado raíz de Supabase en ${ca}. Corre: make db.cert`);
-  }
-  return { ca: readFileSync(ca, 'utf8'), rejectUnauthorized: true };
+  return { ca: SUPABASE_ROOT_CA, rejectUnauthorized: true };
 }
 
 export async function createDbFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<{ db: Db; mode: DbMode }> {

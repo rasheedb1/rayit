@@ -2,9 +2,13 @@ name: CI
 
 # Puerta de calidad del repositorio. Con dos programadores trabajando en
 # paralelo, esto es lo que evita que una rama rompa a la otra.
+#
+# Vive en .github/ de la RAÍZ del repositorio: GitHub solo lee los
+# workflows de ahí. La copia que estaba en platform/.github/ nunca corrió.
+#
 # Lo más importante: la verificación del esquema corre SIN base de datos
 # (Postgres embebido), así que cada pull request valida las migraciones
-# en menos de un minuto.
+# en menos de un minuto. El monorepo usa pnpm (platform/pnpm-lock.yaml).
 
 on:
   push:
@@ -15,23 +19,35 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    working-directory: platform
+
 jobs:
   esquema:
-    name: Migraciones
+    name: Migraciones y seeds en Postgres embebido
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - run: npm ci --prefix platform
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: platform/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       - name: Verificar que las migraciones aplican en limpio
-        run: node platform/db/migrate.mjs --pglite
+        run: node db/migrate.mjs --pglite --seed
+      - name: Los seeds son idempotentes (dos pasadas, mismos conteos)
+        run: node db/seed/verify/run-0003.mjs
       - name: Verificar que ninguna migración aplicada fue modificada
+        working-directory: .
         run: |
           # Una migración ya desplegada es inmutable. Si cambió, el
           # runner falla, pero aquí lo detectamos antes con git.
-          git fetch origin main --depth=1 || true
           if git rev-parse origin/main >/dev/null 2>&1; then
             CAMBIADAS=$(git diff --name-only --diff-filter=M origin/main -- platform/db/migrations/ || true)
             if [ -n "$CAMBIADAS" ]; then
@@ -58,28 +74,31 @@ jobs:
           --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - run: npm ci --prefix platform
-      - run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: platform/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
       - name: Aplicar dos veces debe ser inocuo
-        run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue"
+        run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
 
-  lint:
-    name: Tipos y formato
+  calidad:
+    name: Tipos, lint, pruebas y build
     runs-on: ubuntu-latest
-    if: hashFiles('platform/pnpm-lock.yaml') != ''
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        working-directory: platform
-      - run: pnpm turbo run typecheck lint
-        working-directory: platform
+      - run: pnpm turbo run typecheck lint test
+      - name: Build del dashboard
+        run: pnpm --filter @mc/web build

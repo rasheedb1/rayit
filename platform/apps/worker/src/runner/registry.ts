@@ -77,17 +77,35 @@ export interface JobResult {
   failed: number;
   /** Se guarda en job_run.metadata, redactado. Nunca pongas un token aquí. */
   metadata?: Record<string, unknown>;
+  /**
+   * Si hubo fallos por elemento, ¿conviene que pg-boss reintente ya?
+   * Por defecto manda `retryOnItemFailure` de defineJob(). Un job puede
+   * devolver `retry: false` cuando sabe que reintentar no ayuda (rate
+   * limit con Retry-After largo, conector sin implementar).
+   */
+  retry?: boolean;
 }
 
 export type JobHandler<P extends object = JobPayload> = (payload: P, ctx: JobContext) => Promise<JobResult>;
 
 export interface JobOptions {
   /**
-   * Política de la cola en pg-boss. 'standard' (por defecto) admite N
-   * jobs en cola; 'stately' deja uno en cola y uno activo, útil para un
-   * cron que no debe apilarse si una corrida se alarga.
+   * Política de la cola en pg-boss. Por defecto: 'stately' si la
+   * definición tiene cron (un tick en cola y uno activo: las corridas
+   * no se apilan ni se solapan) y 'standard' si no (N jobs en cola, por
+   * ejemplo uno por video). En una cola 'stately', un envío manual que
+   * no deba colapsar con el cron lleva su propio `singletonKey`.
    */
   policy?: QueuePolicy;
+  /**
+   * Instancias del job que corren en paralelo en este proceso
+   * (`localConcurrency` de pg-boss). Por defecto 1: `max_concurrency`
+   * de job_definition es la concurrencia POR PLATAFORMA dentro de una
+   * corrida (ctx.definition.maxConcurrency), no el número de corridas.
+   * Un job por entidad (video.probe) puede pedir `instances: 'max'`
+   * para usar max_concurrency como corridas paralelas.
+   */
+  instances?: number | 'max';
   /**
    * Si el handler devuelve failed > 0, el runner registra el job_run
    * (partial o failed) y además lanza para que pg-boss reintente hasta
@@ -101,7 +119,7 @@ export interface JobOptions {
 export interface JobRegistration {
   id: string;
   handler: JobHandler<JobPayload>;
-  options: Required<JobOptions>;
+  options: JobOptions & { retryOnItemFailure: boolean; instances: number | 'max' };
 }
 
 export function defineJob<P extends object = JobPayload>(id: string, handler: JobHandler<P>, options: JobOptions = {}): JobRegistration {
@@ -113,7 +131,8 @@ export function defineJob<P extends object = JobPayload>(id: string, handler: Jo
     // El payload lo tipa el job; el runner solo lo transporta.
     handler: (payload, ctx) => handler(payload as P, ctx),
     options: {
-      policy: options.policy ?? 'standard',
+      policy: options.policy,
+      instances: options.instances ?? 1,
       retryOnItemFailure: options.retryOnItemFailure ?? true,
     },
   };

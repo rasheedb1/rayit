@@ -10,10 +10,14 @@
  *   timeout_s             → nuestro timer (AbortSignal) + expireInSeconds
  *                           de pg-boss 30 s después, como red de seguridad
  *   max_attempts          → retryLimit = max_attempts − 1, backoff exponencial
- *   max_concurrency       → localConcurrency (pollers en paralelo por cola)
+ *   max_concurrency       → concurrencia por plataforma DENTRO de una corrida
+ *                           (ctx.definition.maxConcurrency); las corridas en
+ *                           paralelo las fija JobOptions.instances (1 por defecto)
+ *   default_cron presente → política 'stately': un tick en cola y uno activo,
+ *                           así una corrida larga no se solapa con la siguiente
  *   enabled = false       → sin cola de trabajo ni schedule
  */
-import { PgBoss, type ConstructorOptions, type Queue, type UpdateQueueOptions } from 'pg-boss';
+import { PgBoss, type ConstructorOptions, type Queue, type QueuePolicy, type UpdateQueueOptions } from 'pg-boss';
 import type { WorkerConfig } from './config.ts';
 import type { WorkerDatabase } from './db.ts';
 import type { Logger } from './logger.ts';
@@ -22,9 +26,18 @@ import type { JobDefinition, JobOptions } from './registry.ts';
 /** Margen entre nuestro timeout y el de pg-boss: el nuestro manda; el suyo es red de seguridad. */
 export const EXPIRE_MARGIN_S = 30;
 
-export function queueOptionsFor(def: JobDefinition, cfg: Pick<WorkerConfig, 'retryDelayS' | 'retryDelayMaxS'>, options: Required<JobOptions>): Omit<Queue, 'name'> {
+export function defaultPolicy(def: JobDefinition): QueuePolicy {
+  return def.defaultCron ? 'stately' : 'standard';
+}
+
+export function localConcurrencyFor(def: JobDefinition, options: JobOptions): number {
+  const wanted = options.instances ?? 1;
+  return Math.max(1, wanted === 'max' ? def.maxConcurrency : wanted);
+}
+
+export function queueOptionsFor(def: JobDefinition, cfg: Pick<WorkerConfig, 'retryDelayS' | 'retryDelayMaxS'>, options: JobOptions): Omit<Queue, 'name'> {
   return {
-    policy: options.policy,
+    policy: options.policy ?? defaultPolicy(def),
     retryLimit: Math.max(0, def.maxAttempts - 1),
     retryDelay: Math.max(0, Math.round(cfg.retryDelayS)),
     retryBackoff: true,

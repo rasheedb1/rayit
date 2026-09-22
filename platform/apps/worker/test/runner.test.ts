@@ -39,10 +39,16 @@ const itemsJob = defineJob<{ processed: number; failed: number }>('test.items', 
   metadata: { accessToken: 'NO-DEBERIA-GUARDARSE', ok: true },
 }));
 
+const noRetryJob = defineJob<{ processed: number; failed: number }>('test.noretry', async (payload) => ({
+  processed: payload.processed,
+  failed: payload.failed,
+  retry: false,
+}));
+
 let h: Harness;
 
 before(async () => {
-  h = await startHarness({ jobs: [...allJobs, echoJob, failJob, slowJob, itemsJob], seed: seedTestDefinitions });
+  h = await startHarness({ jobs: [...allJobs, echoJob, failJob, slowJob, itemsJob, noRetryJob], seed: seedTestDefinitions });
 });
 
 after(async () => {
@@ -52,25 +58,25 @@ after(async () => {
 test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles tienen handler', async () => {
   const records = h.sink.records();
   const rol = records.find((r) => r['msg'] === 'rol comprobado');
-  assert.equal(rol?.['consultas'], 'mc_worker');
+  assert.equal(rol?.['currentUser'], 'mc_worker');
   assert.equal(rol?.['bypassRls'], true);
 
   const seeded = h.worker.definitions.filter((d) => !d.id.startsWith('test.'));
   assert.equal(seeded.length, 21, 'las 21 definiciones de 0009');
 
   const registered = records.filter((r) => r['msg'] === 'job registrado');
-  assert.equal(registered.length, 21 + 5);
+  assert.equal(registered.length, 21 + 6);
   const byJob = new Map(registered.map((r) => [r['job'], r]));
   assert.equal(byJob.get('oauth.refresh')?.['handler'], 'sí');
   assert.equal(byJob.get('oauth.refresh')?.['cron'], '*/15 * * * *');
-  assert.equal(byJob.get('oauth.refresh')?.['grupo'], 'connections');
+  assert.equal(byJob.get('oauth.refresh')?.['group'], 'connections');
   assert.equal(byJob.get('collect.posts')?.['handler'], 'no');
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
-  assert.equal(listo?.['conHandler'], 5);       // oauth.refresh + 4 de prueba (test.off está apagado)
-  assert.equal(listo?.['sinHandler'], 20);
-  assert.equal(listo?.['deshabilitadas'], 1);
+  assert.equal(listo?.['withHandler'], 6);       // oauth.refresh + 5 de prueba (test.off está apagado)
+  assert.equal(listo?.['withoutHandler'], 20);
+  assert.equal(listo?.['disabled'], 1);
   assert.equal(listo?.['crons'], 17);           // las 21 menos las 4 de video
 
   // Sin handler → una fila skipped por arranque, y nada más.
@@ -89,6 +95,22 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(oauth?.timezone, 'UTC');
   assert.deepEqual(oauth?.data, { job: 'oauth.refresh', source: 'cron' });
   assert.equal(schedules.some((s) => s.name === 'test.off'), false, 'un job deshabilitado no se programa');
+
+  // Política por definición: con cron 'stately' (no se apilan ticks), sin cron 'standard'.
+  assert.equal((await h.worker.boss.getQueue('oauth.refresh'))?.policy, 'stately');
+  assert.equal((await h.worker.boss.getQueue('video.probe'))?.policy, 'standard');
+  assert.equal((await h.worker.boss.getQueue('test.echo'))?.policy, 'standard');
+  assert.equal((await h.worker.boss.getQueue('oauth.refresh'))?.retryLimit, 4, 'max_attempts 5 → 4 reintentos');
+  assert.equal((await h.worker.boss.getQueue('oauth.refresh'))?.expireInSeconds, 90, 'timeout_s 60 + 30 de margen');
+});
+
+test('un workspaceId que ya no existe no pierde la ejecución: job_run se abre sin workspace', async () => {
+  const fantasma = '99999999-9999-4999-8999-999999999999';
+  await h.worker.boss.send('test.echo', { n: 1, workspaceId: fantasma });
+  const row = await waitFor(async () => (await jobRuns(h.db, 'test.echo')).find((r) => r.metadata['workspaceIdIgnored'] === fantasma && r.status === 'ok'), { label: 'fk' });
+  assert.equal(row.workspace_id, null);
+  const warn = h.sink.records().find((r) => r['msg'] === 'el workspace del payload no existe; job_run se abre sin workspace');
+  assert.equal(warn?.['workspaceId'], fantasma);
 });
 
 test('2 · un job encolado pasa por running y termina ok con duration_ms > 0', async () => {
@@ -101,14 +123,14 @@ test('2 · un job encolado pasa por running y termina ok con duration_ms > 0', a
   // Debe verse en running antes de terminar (el handler tarda 25 ms).
   const running = await waitFor(async () => {
     const rows = await jobRuns(h.db, 'test.echo');
-    return rows.find((r) => r.status === 'running');
+    return rows.find((r) => r.status === 'running' && r.workspace_id === workspaceId);
   }, { everyMs: 5, timeoutMs: 5000, label: 'running' });
   assert.equal(running.attempt, 1);
   assert.equal(running.workspace_id, workspaceId);
   assert.equal(running.entity_type, 'prueba');
   assert.equal(running.entity_id, entityId);
 
-  const done = await waitFor(async () => (await jobRuns(h.db, 'test.echo')).find((r) => r.status === 'ok'), { label: 'ok' });
+  const done = await waitFor(async () => (await jobRuns(h.db, 'test.echo')).find((r) => r.status === 'ok' && r.metadata['eco'] === 3), { label: 'ok' });
   assert.ok(Number(done.duration_ms) > 0, `duration_ms = ${done.duration_ms}`);
   assert.ok(done.finished_at);
   assert.equal(done.items_processed, 3);
@@ -117,7 +139,7 @@ test('2 · un job encolado pasa por running y termina ok con duration_ms > 0', a
   assert.equal(done.metadata['eco'], 3);
   assert.equal(done.metadata['bossJobId'], jobId);
 
-  const log = h.sink.records().find((r) => r['msg'] === 'job terminado' && r['job'] === 'test.echo');
+  const log = h.sink.records().find((r) => r['msg'] === 'job terminado' && r['job'] === 'test.echo' && r['processed'] === 3);
   assert.equal(log?.['runId'], Number(done.id));
   assert.equal(log?.['jobId'], jobId);
   assert.ok(typeof log?.['durationMs'] === 'number');
@@ -190,6 +212,15 @@ test('fallos por elemento: partial cuando processed > 0, failed cuando processed
   assert.ok(jobId);
 });
 
+test('un job que devuelve retry: false queda partial una sola vez, sin reintento', async () => {
+  await h.worker.boss.send('test.noretry', { processed: 1, failed: 1 });
+  const row = await waitFor(async () => (await jobRuns(h.db, 'test.noretry')).find((r) => r.status !== 'running'), { label: 'noretry' });
+  assert.equal(row.status, 'partial');
+  await sleep(2500);
+  assert.equal((await jobRuns(h.db, 'test.noretry')).length, 1);
+  assert.ok(h.sink.records().some((r) => r['msg'] === 'sin reintento: el job indicó que no ayuda' && r['job'] === 'test.noretry'));
+});
+
 test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se actualiza', async () => {
   const before = await h.worker.boss.getSchedules('oauth.refresh');
   assert.equal(before.length, 1);
@@ -212,8 +243,14 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     assert.equal(after.find((s) => s.name === 'oauth.refresh')?.cron, '*/5 * * * *');
     const updated = sink.records().find((r) => r['msg'] === 'schedule actualizado');
     assert.equal(updated?.['job'], 'oauth.refresh');
-    assert.equal(updated?.['antes'], '*/15 * * * *');
+    assert.equal(updated?.['previous'], '*/15 * * * *');
     assert.equal(sink.records().filter((r) => r['msg'] === 'schedule creado').length, 0, 'ningún schedule se creó de nuevo');
+    // El segundo worker no registra los jobs test.*: esos 5 sí quedan skipped
+    // (ahora no tienen handler). Los 20 de 0009 no se repiten.
+    const skipped = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id NOT LIKE 'test.%'`);
+    assert.equal(Number(skipped.rows[0]!.n), 20, 'el reinicio no vuelve a insertar filas skipped');
+    const skippedTest = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id LIKE 'test.%'`);
+    assert.equal(Number(skippedTest.rows[0]!.n), 5, 'los que perdieron su handler sí se anotan');
   } finally {
     await second.boss.stop({ graceful: true, timeout: 5000, close: false });
   }

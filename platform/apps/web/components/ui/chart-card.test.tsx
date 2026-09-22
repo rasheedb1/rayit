@@ -49,7 +49,7 @@ describe("ChartCard", () => {
 
   it("cargando: aria-busy y sin gráfico", () => {
     render(<ChartCard title="Views" chart="bar" series={series} labels={labels} ariaLabel="Views" loading />);
-    expect(screen.getByRole("region", { name: "Views" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("article", { name: "Views" })).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
   it("error: mensaje en rol alert, sin gráfico ni interruptor", () => {

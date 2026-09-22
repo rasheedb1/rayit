@@ -83,7 +83,12 @@ export function DataTable<Row>({
   const alignCls = (a: Align | undefined) => (a === "num" ? "text-right font-mono text-[12.5px] tabular-nums whitespace-nowrap" : "text-left");
   const clickable = Boolean(onRowClick);
   return (
-    <div className={`${maxHeight ? "overflow-auto" : "overflow-x-auto"} rounded-md border border-border ${className}`} style={maxHeight ? { maxHeight } : undefined}>
+    <div
+      className={`${maxHeight ? "overflow-auto" : "overflow-x-auto"} rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink ${className}`}
+      style={maxHeight ? { maxHeight } : undefined}
+      tabIndex={0}
+      aria-label={caption}
+    >
       <table className="w-full border-collapse text-sm">
         <caption className={showCaption ? "px-3 py-2 text-left text-xs text-muted" : "sr-only"}>{caption}</caption>
         <thead className={stickyHeader ? "sticky top-0 z-[1]" : undefined}>
@@ -141,6 +146,8 @@ export function DataTable<Row>({
                       tabIndex: 0,
                       onClick: () => onRowClick?.(row),
                       onKeyDown: (e: React.KeyboardEvent) => {
+                        // Solo la fila: un botón dentro conserva su Enter y su espacio.
+                        if (e.target !== e.currentTarget) return;
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
                           onRowClick?.(row);

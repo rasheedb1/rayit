@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { seriesColor, type Series, type ValueFormat } from "./chart-utils";
 import { ChartCardView } from "./chart-card-view";
 import { DataAsOf } from "./data-as-of";
@@ -78,13 +78,17 @@ export function ChartCard({
 }: ChartCardProps) {
   const empty = labels.length === 0 || series.every((s) => s.data.length === 0);
   const height = (chart === "line" ? line?.height : bar?.height) ?? 260;
+  const headingId = useId();
+  // <article>, no <section aria-label>: varias tarjetas no deben crear varias regiones.
   return (
-    <section className={`min-w-0 rounded-md border border-border bg-surface px-5 pb-4 pt-[18px] ${className}`} aria-label={title} aria-busy={loading || undefined}>
+    <article className={`min-w-0 rounded-md border border-border bg-surface px-5 pb-4 pt-[18px] ${className}`} aria-labelledby={headingId} aria-busy={loading || undefined}>
       {loading || error ? (
         <>
           <div className="mb-2 flex items-start gap-2.5">
             <div className="min-w-0 flex-1">
-              <h2 className="text-[14.5px] font-semibold tracking-tight text-ink">{title}</h2>
+              <h2 id={headingId} className="text-[14.5px] font-semibold tracking-tight text-ink">
+                {title}
+              </h2>
               {subtitle && <p className="mt-0.5 text-[12.5px] text-muted">{subtitle}</p>}
             </div>
           </div>
@@ -111,6 +115,7 @@ export function ChartCard({
           format={format}
           axisFormat={axisFormat}
           currency={currency}
+          headingId={headingId}
           labelsHeader={labelsHeader ?? (chart === "line" ? "Fecha" : "Período")}
           defaultView={defaultView}
           legend={legend && !empty ? <Legend series={series} kind={chart} /> : null}
@@ -119,6 +124,6 @@ export function ChartCard({
       )}
       {note && <p className="mt-2.5 text-xs text-muted">{note}</p>}
       {asOf && <DataAsOf date={asOf.date} source={asOf.source} className="mt-1.5" />}
-    </section>
+    </article>
   );
 }
