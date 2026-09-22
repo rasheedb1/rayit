@@ -16,7 +16,7 @@ import {
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
-} from './helpers/base.ts';
+} from './pglite.ts';
 
 /** Un workspace ajeno, sin filas de finanzas, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';

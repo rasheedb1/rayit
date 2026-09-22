@@ -7,21 +7,35 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./embedded": "./src/embedded.ts",
+    "./queries/resumen": "./src/queries/resumen.ts",
+    "./queries/ventas": "./src/queries/ventas.ts",
+    "./queries/cotizar": "./src/queries/cotizar.ts",
+    "./queries/campanas": "./src/queries/campanas.ts",
     "./queries/finanzas": "./src/queries/finanzas.ts",
-    "./provisional/embedded": "./src/provisional/embedded.ts"
+    "./queries/conexiones": "./src/queries/conexiones.ts",
+    "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "lint": "eslint .",
+    "test": "node --test --experimental-strip-types --test-concurrency=1 test/*.test.ts",
+    "introspect": "node scripts/introspect.mjs"
   },
   "dependencies": {
     "@mc/core": "workspace:*",
+    "drizzle-orm": "^0.45.3",
     "pg": "^8.13.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9.39.0",
     "typescript": "^5.6.0"
   }
 }

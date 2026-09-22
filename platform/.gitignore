@@ -14,3 +14,6 @@ apps/media/__pycache__/
 # Artefactos de TypeScript / Next.js que se regeneran solos
 *.tsbuildinfo
 next-env.d.ts
+
+# Salida de `pnpm --filter @mc/db introspect`: se cura a mano, no se versiona
+packages/db/.introspect/

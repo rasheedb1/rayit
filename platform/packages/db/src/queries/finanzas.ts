@@ -28,7 +28,7 @@ import {
   type InvoiceStatus,
   type TransitionInput,
 } from '@mc/core';
-import type { WorkspaceTx } from '../provisional/client.ts';
+import type { WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
