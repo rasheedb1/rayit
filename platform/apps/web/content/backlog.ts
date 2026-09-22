@@ -115,7 +115,7 @@ export const STORIES: readonly Story[] = [
     desc: "Fila de KPIs con delta y sparkline, tabla con «Ver tabla» sobre cada gráfico, gráfico de líneas y de barras con tooltip, estado vacío, aviso «datos hasta el {fecha}», formulario con validación, botón de acción principal.",
     done: "Una página de galería (/kit) muestra cada componente con datos de ejemplo, en claro y oscuro.",
     status: "hecho",
-    note: "Cerrada el 21 de septiembre: doce componentes en components/ui con pruebas, utilidades de formato en lib/format.ts y galería /kit detrás de la bandera kit.",
+    note: "Cerrada el 21 de septiembre: trece componentes en components/ui con pruebas (el último, Segmented, para el filtro por red de Resumen), utilidades de formato en lib/format.ts y galería /kit detrás de la bandera kit.",
   },
   {
     id: "CIM-6", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-2"],
