@@ -167,7 +167,7 @@ export default async function FacturaPage({
                   </Button>
                 </form>
               )}
-              <Button disabled title="Sprint 3 · FIN-2" aria-describedby="pago-nota" className="w-full">
+              <Button disabled title="Sprint 3 · FIN-2" className="w-full">
                 Registrar pago
               </Button>
               <p id="pago-nota" className="text-xs text-fg-3">

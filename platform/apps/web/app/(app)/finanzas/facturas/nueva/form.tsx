@@ -14,8 +14,7 @@ import {
 import type { CampaignOption, CompanyOption } from "@mc/db";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
-import { Field } from "@/components/ui/field";
-import { Input, Select } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { formatMoney } from "@/lib/format";
 import { crearFactura, type CrearFacturaState } from "../actions";
@@ -133,7 +132,9 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
           </Field>
 
           <Field label="Subtotal" required help="Sin IVA. El total se calcula abajo." error={errors.subtotal} htmlFor="subtotal">
-            <MoneyInput name="subtotal" value={subtotal} currency="COP" onChange={(v) => setSubtotal(v)} required />
+            <MoneyInput value={subtotal} currency="COP" onChange={(v) => setSubtotal(v)} required />
+            {/* El MoneyInput muestra "2.605.042,02"; al servidor viaja el decimal normalizado. */}
+            <input type="hidden" name="subtotal" value={subtotal} />
           </Field>
 
           <Field label="Moneda" help="Por ahora solo COP." htmlFor="currency">

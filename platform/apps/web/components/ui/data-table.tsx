@@ -1,44 +1,69 @@
 import type { ReactNode } from "react";
 
+// Sin "use client": si quien la usa es un Server Component, la tabla se
+// renderiza en el servidor. onRowClick solo tiene sentido desde un
+// componente cliente (una función no cruza la frontera servidor→cliente).
+
 export type Align = "left" | "num";
 
-export interface Column<Row> {
+export type Column<Row> = {
   key: string;
   header: string;
-  /** num: a la derecha, mono, tabular-nums, sin saltos. */
+  /** num: alineada a la derecha, en mono y con cifras tabulares. */
   align?: Align;
   /** Si falta, muestra String(row[key]). */
   render?: (row: Row) => ReactNode;
-  /** "12rem", opcional. */
+  /** "12rem", "1%"… */
   width?: string;
-  /** Previsto, sin efecto este sprint. */
+  /** Previsto: sin efecto este sprint. */
   sortable?: boolean;
-}
+};
 
-export interface DataTableProps<Row> {
+export type SortState = { key: string; dir: "asc" | "desc" };
+export type PageState = { index: number; size: number; total: number };
+
+export type DataTableProps<Row> = {
   columns: Column<Row>[];
   rows: Row[];
   rowKey: (row: Row) => string;
-  /** <caption>, visualmente oculto salvo showCaption. */
+  /** <caption>: qué es esta tabla. Oculto salvo showCaption. */
   caption: string;
   showCaption?: boolean;
-  /** Normalmente <EmptyState/>; se pinta en una fila que ocupa todo. */
+  /** Se pinta cuando no hay filas, en una fila que ocupa todo el ancho. */
   emptyState: ReactNode;
-  /** compact por defecto. */
+  onRowClick?: (row: Row) => void;
   density?: "compact" | "normal";
-  /** true por defecto; el scroll vive en el envoltorio. */
   stickyHeader?: boolean;
-  /** 5 filas esqueleto, aria-busy. */
+  /** Cinco filas de esqueleto. */
   loading?: boolean;
+  /** Mensaje de error en vez de las filas ("No se pudieron cargar las facturas"). */
+  error?: string;
+  /** Con alto máximo la tabla hace scroll por dentro y la cabecera fija se queda arriba. Sin él, la cabecera viaja con la página. */
+  maxHeight?: string;
+  /** Previstos para el próximo sprint: la API los acepta y los ignora. */
+  sort?: SortState;
+  onSortChange?: (sort: SortState) => void;
+  page?: PageState;
+  onPageChange?: (index: number) => void;
   className?: string;
+};
+
+/** Celda con texto principal y secundario ("Café Alma" / "Campaña de agosto"). */
+export function CellMain({ children, sub }: { children: ReactNode; sub?: ReactNode }) {
+  return (
+    <span className="block min-w-0">
+      <span className="block font-medium text-ink">{children}</span>
+      {sub && <span className="block text-xs text-muted">{sub}</span>}
+    </span>
+  );
 }
 
-/**
- * Tabla de datos. Server Component: recibe filas ya consultadas y
- * columnas con su render. Sin paginación ni ordenamiento en este sprint
- * (la API los deja previstos en CIM-5). Cabecera pegajosa; el
- * envoltorio hace scroll horizontal a 390 px.
- */
+function cellValue<Row>(row: Row, col: Column<Row>): ReactNode {
+  if (col.render) return col.render(row);
+  const v = (row as Record<string, unknown>)[col.key];
+  return v === null || v === undefined ? "" : String(v);
+}
+
 export function DataTable<Row>({
   columns,
   rows,
@@ -46,73 +71,93 @@ export function DataTable<Row>({
   caption,
   showCaption = false,
   emptyState,
+  onRowClick,
   density = "compact",
   stickyHeader = true,
   loading = false,
+  error,
+  maxHeight,
   className = "",
 }: DataTableProps<Row>) {
-  const cell = density === "compact" ? "px-3 py-2" : "px-3 py-3";
+  const pad = density === "compact" ? "px-2.5 py-2" : "px-3 py-3";
+  const alignCls = (a: Align | undefined) => (a === "num" ? "text-right font-mono text-[12.5px] tabular-nums whitespace-nowrap" : "text-left");
+  const clickable = Boolean(onRowClick);
   return (
-    <div className={`overflow-x-auto rounded-md border border-line ${className}`}>
-      <table className="w-full min-w-[640px] border-collapse text-sm" aria-busy={loading || undefined}>
-        <caption className={showCaption ? "px-3 py-2 text-left text-xs text-fg-3" : "sr-only"}>{caption}</caption>
-        <thead className={stickyHeader ? "sticky top-0 z-[1] bg-bg-2" : "bg-bg-2"}>
-          <tr>
+    <div className={`${maxHeight ? "overflow-auto" : "overflow-x-auto"} rounded-md border border-border ${className}`} style={maxHeight ? { maxHeight } : undefined}>
+      <table className="w-full border-collapse text-sm">
+        <caption className={showCaption ? "px-3 py-2 text-left text-xs text-muted" : "sr-only"}>{caption}</caption>
+        <thead className={stickyHeader ? "sticky top-0 z-[1]" : undefined}>
+          <tr className="bg-surface-2">
             {columns.map((c) => (
               <th
                 key={c.key}
                 scope="col"
                 style={c.width ? { width: c.width } : undefined}
-                className={`${cell} border-b border-line text-xs font-medium text-fg-3 ${c.align === "num" ? "text-right" : "text-left"}`}
+                className={`${pad} border-b border-border text-xs font-medium text-muted ${c.align === "num" ? "text-right" : "text-left"} whitespace-nowrap`}
               >
                 {c.header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>
-          {loading
-            ? Array.from({ length: 5 }, (_, i) => (
-                <tr key={`skeleton-${i}`} className="border-b border-line last:border-b-0">
-                  {columns.map((c) => (
-                    <td key={c.key} className={cell}>
-                      <div className="h-3.5 w-3/4 animate-pulse rounded bg-bg-3" />
-                    </td>
-                  ))}
-                </tr>
-              ))
-            : rows.length === 0
-              ? (
-                <tr>
-                  <td colSpan={columns.length} className="p-3">
-                    {emptyState}
+        <tbody aria-busy={loading || undefined}>
+          {loading &&
+            Array.from({ length: 5 }, (_, i) => (
+              <tr key={`sk-${i}`} className="border-b border-grid last:border-b-0">
+                {columns.map((c) => (
+                  <td key={c.key} className={pad}>
+                    <span className="block h-3.5 w-3/4 animate-pulse rounded-sm bg-hover" />
                   </td>
-                </tr>
-              )
-              : rows.map((row) => (
-                  <tr key={rowKey(row)} className="border-b border-line transition-colors last:border-b-0 hover:bg-bg-2">
-                    {columns.map((c) => (
-                      <td
-                        key={c.key}
-                        className={`${cell} align-top ${c.align === "num" ? "whitespace-nowrap text-right font-mono tabular-nums" : ""}`}
-                      >
-                        {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key] ?? "")}
-                      </td>
-                    ))}
-                  </tr>
                 ))}
+              </tr>
+            ))}
+          {!loading && error && (
+            <tr>
+              <td colSpan={columns.length} className="p-3">
+                <p role="alert" className="flex items-center gap-2 rounded-md bg-bad-wash px-3 py-2 text-sm text-bad">
+                  <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-current text-[10px] font-bold" aria-hidden="true">
+                    !
+                  </span>
+                  {error}
+                </p>
+              </td>
+            </tr>
+          )}
+          {!loading && !error && rows.length === 0 && (
+            <tr>
+              <td colSpan={columns.length} className="p-3">
+                {emptyState}
+              </td>
+            </tr>
+          )}
+          {!loading &&
+            !error &&
+            rows.map((row) => (
+              <tr
+                key={rowKey(row)}
+                className={`border-b border-grid last:border-b-0 ${clickable ? "cursor-pointer hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none" : "hover:bg-surface-2"}`}
+                {...(clickable
+                  ? {
+                      tabIndex: 0,
+                      onClick: () => onRowClick?.(row),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onRowClick?.(row);
+                        }
+                      },
+                    }
+                  : {})}
+              >
+                {columns.map((c) => (
+                  <td key={c.key} className={`${pad} align-middle ${alignCls(c.align)}`}>
+                    {cellValue(row, c)}
+                  </td>
+                ))}
+              </tr>
+            ))}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** Celda con texto principal y secundario: <CellMain sub="Campaña 2 TikTok · sep">Fresko Market</CellMain>. */
-export function CellMain({ children, sub }: { children: ReactNode; sub?: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <div className="font-medium text-fg">{children}</div>
-      {sub && <div className="text-xs text-fg-3">{sub}</div>}
     </div>
   );
 }

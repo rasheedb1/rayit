@@ -1,48 +1,37 @@
 # Kit de interfaz (`components/ui/`)
 
-Dueño: Nicolás (CIM-5). Este directorio nació en FIN-1 con el subconjunto
-que Finanzas necesita, con las **mismas props que propone CIM-5** para
-que la galería `/kit` los absorba sin cambiar ninguna firma.
+Componentes compartidos de MultiCampaign. Galería en `/kit` (bandera `kit`, encendida en desarrollo).
 
-## Principio: solo props, sin datos
+**Solo props, sin datos.** Ningún componente consulta la base ni conoce las consultas: recibe todo por props, ya formateado cuando es texto. Los colores son tokens del tema (`text-good`, `bg-surface`, `var(--s-tiktok)`), nunca un valor literal. Server Components por defecto; `"use client"` solo donde hay estado o eventos.
 
-Ningún componente consulta la base, hace fetch ni conoce el workspace.
-Recibe valores ya formateados (`formatMoney`, `formatDate` de
-`lib/format.ts`) y pinta. Server Components por defecto; `"use client"`
-solo donde hay estado o eventos (los controles de formulario).
+| Componente | Archivo | Una línea |
+|---|---|---|
+| `Button` | `button.tsx` | Acción con variant, size, loading (aria-busy) y `href` para enlaces. Cliente. |
+| `Pill` | `pill.tsx` | Estado corto con punto de color: good, warn, bad, neutral. Texto obligatorio. |
+| `Field`, `Input`, `Select`, `Textarea` | `field.tsx` | Etiqueta, ayuda y error; el control toma id, aria-describedby y aria-invalid por contexto. La validación la hace el formulario (zod). Cliente. |
+| `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
+| `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
+| `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
+| `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
+| `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
+| `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. |
+| `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, error, fila clicable. Cabecera fija con `maxHeight` (scroll interno). `sort` y `page` previstos sin implementar. |
+| `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. Cliente. |
+| `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. Cliente. |
+| `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota, DataAsOf, carga y error. |
+| `chart-utils.ts` | — | Colores por nombre de token y formato por nombre (`int`, `compact`, `pct`, `money`, `money-full`), para que crucen la frontera servidor → cliente. |
 
-Colores solo por tokens del tema (`bg-bg`, `text-fg`, `border-line`,
-`text-ok`, `text-warn`, `text-danger` y sus `-bg`). Nada hardcodeado.
-Cifras con `tabular-nums` y Geist Mono.
+Contraste: los tokens cumplen AA en los dos temas; tres valores del tema claro se apartan del mock por eso (ver el comentario en `app/globals.css`).
 
-## Componentes
+Formato de cifras y fechas: `lib/format.ts` (`formatMoney`, `formatInt`, `formatCompact`, `formatPct`, `formatDelta`, `formatDate`, `formatDateRange`). Todo con Intl y es-CO.
 
-| Componente | Archivo | Qué hace | Cliente |
-|---|---|---|---|
-| `Button` | `button.tsx` | `variant` primary/secondary/ghost/danger, `size`, `loading` (spinner + aria-busy), `href` renderiza un enlace | no |
-| `Pill` | `pill.tsx` | `kind` good/warn/bad/neutral, texto obligatorio | no |
-| `Field` | `field.tsx` | label + control + `help` + `error`; genera el id y pasa `aria-describedby`/`aria-invalid` por contexto | sí |
-| `Input`, `Select`, `Textarea` | `input.tsx` | envoltorios finos del elemento nativo; heredan del `Field` | sí |
-| `MoneyInput` | `money-input.tsx` | recibe y emite string decimal (`"5200000.50"`); muestra `5.200.000,50`; nunca `type="number"` | sí |
-| `DateInput` | `date-input.tsx` | `type="date"`, entra y sale `YYYY-MM-DD` | sí |
-| `EmptyState` | `empty-state.tsx` | `title`, `description`, `action` con `href` u `onClick` | no |
-| `Kpi`, `KpiRow` | `kpi.tsx` | valor formateado, `note`, `delta` con flecha y signo en texto, `href`, `loading`; 1/2/4 columnas | no |
-| `DataTable`, `CellMain` | `data-table.tsx` | `columns` con `align: "num"` y `render`, `rowKey`, `caption`, `emptyState`, `loading`, cabecera pegajosa | no |
+## Agregar un componente
 
-Pendientes de CIM-5 (no están aquí): `LineChart`, `BarChart`, `ChartCard`,
-`DataAsOf`, `DataTable.onRowClick`, ordenamiento y paginación.
-
-## Cómo agregar uno
-
-1. Un archivo por componente, props tipadas y exportadas, `className?`
-   al final.
-2. Sin datos ni fetch; el texto visible entra por props.
-3. Accesible de fábrica: labels asociados, `aria-*`, foco visible, y el
-   color nunca como único indicador.
-4. Agrégalo a la tabla de arriba y, cuando exista, a `/kit`.
+1. `components/ui/<nombre>.tsx` con sus props tipadas y exportadas, y `"use client"` solo si hace falta.
+2. `<nombre>.test.tsx` con al menos el estado normal y el vacío.
+3. Una `Section` en `app/(app)/kit/page.tsx` con uso mínimo y variantes: normal, vacío, cargando, error, valores largos.
+4. Una fila en esta tabla.
 
 ## Regla del plan
 
-Agregar un componente es libre. **Cambiar uno existente pide PR revisado
-por Nicolás**: una vez que Resumen, Ventas o Cotizar lo usan, cambiar la
-API cuesta dos PR.
+Agregar un componente es libre. Cambiar la API de uno existente pide PR revisado por Nicolás: una vez que Resumen, Ventas o Cotizar lo usan, cambiarlo cuesta dos PR.

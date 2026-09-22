@@ -1,33 +1,17 @@
 "use client";
 
 import type { InputHTMLAttributes } from "react";
-import { controlClasses, useField } from "./field";
+import { CONTROL, useFieldControl } from "./field";
 
-export type DateInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type"> & {
-  /** "2026-09-20": solo fecha, sin hora. */
+export type DateInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "value" | "onChange"> & {
+  /** Solo fecha, "2026-09-20". El formulario la convierte a timestamptz UTC al guardar. */
   value: string;
   onChange: (isoDate: string) => void;
   invalid?: boolean;
 };
 
-/**
- * Fecha nativa (type="date"). Entra y sale como "YYYY-MM-DD"; quien la
- * consume la convierte a timestamptz UTC en el borde (regla del repo).
- */
-export function DateInput({ value, onChange, invalid, className = "", id, ...rest }: DateInputProps) {
-  const field = useField();
-  const isInvalid = invalid ?? field?.invalid ?? false;
-  return (
-    <input
-      id={id ?? field?.id}
-      type="date"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-describedby={rest["aria-describedby"] ?? field?.describedBy}
-      aria-invalid={isInvalid || undefined}
-      aria-required={rest.required ?? field?.required ?? undefined}
-      className={controlClasses(isInvalid, `font-mono tabular-nums ${className}`)}
-      {...rest}
-    />
-  );
+/** Fecha con el control nativo del navegador. */
+export function DateInput({ value, onChange, invalid, className = "", ...rest }: DateInputProps) {
+  const a11y = useFieldControl({ id: rest.id, invalid, required: rest.required });
+  return <input {...rest} {...a11y} type="date" value={value} onChange={(e) => onChange(e.target.value)} className={`${CONTROL} h-9 tabular-nums ${className}`} />;
 }

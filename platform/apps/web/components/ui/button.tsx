@@ -1,51 +1,45 @@
+"use client";
+
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, MouseEvent, ReactNode } from "react";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
 
-export interface ButtonProps {
-  /** secondary por defecto */
+export type ButtonProps = {
   variant?: ButtonVariant;
-  /** md por defecto */
   size?: ButtonSize;
-  /** Spinner + aria-busy + disabled; conserva el ancho. */
+  /** Muestra el spinner, marca aria-busy y desactiva el botón. Conserva el ancho. */
   loading?: boolean;
   disabled?: boolean;
-  /** Si viene, renderiza next/link con el mismo estilo. */
+  /** Si viene, es un enlace (next/link) con el mismo estilo. */
   href?: string;
   type?: "button" | "submit";
-  /** A la izquierda, aria-hidden. */
+  /** A la izquierda del texto, decorativo. */
   icon?: ReactNode;
-  /** Texto obligatorio. */
   children: ReactNode;
-  /** Solo desde un componente cliente. */
-  onClick?: () => void;
-  /** Tooltip nativo; útil con disabled para decir por qué. */
-  title?: string;
-  /** Para <button> dentro de un <form> con Server Actions. */
-  name?: string;
-  value?: string;
-  form?: string;
-  "aria-describedby"?: string;
+  onClick?: (event: MouseEvent<HTMLElement>) => void;
   className?: string;
-}
+} & Pick<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label" | "title" | "form" | "name" | "value">;
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: "border-transparent bg-accent text-accent-fg hover:bg-fg-2",
-  secondary: "border-line bg-bg text-fg hover:border-line-2 hover:bg-bg-2",
-  ghost: "border-transparent bg-transparent text-fg-2 hover:bg-bg-3 hover:text-fg",
-  danger: "border-transparent bg-danger-bg text-danger hover:bg-danger hover:text-bg",
+  primary: "bg-accent text-accent-ink border-accent hover:bg-ink-2 hover:border-ink-2",
+  secondary: "bg-surface text-ink border-border hover:bg-hover hover:border-axis",
+  ghost: "bg-transparent text-ink-2 border-transparent hover:bg-hover hover:text-ink",
+  danger: "bg-surface text-bad border-border hover:bg-bad-wash hover:border-bad",
 };
 
 const SIZE: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 text-[13px]",
-  md: "h-9 px-4 text-sm",
+  sm: "min-h-7 px-2.5 py-1 text-xs leading-4",
+  md: "min-h-9 px-3.5 py-1.5 text-sm leading-5",
 };
 
+const GAP: Record<ButtonSize, string> = { sm: "gap-1.5", md: "gap-2" };
+
+// Sin whitespace-nowrap: un texto largo envuelve en vez de desbordar la página a 390 px.
 const BASE =
-  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border font-medium transition-colors " +
-  "disabled:pointer-events-none disabled:opacity-50 aria-busy:pointer-events-none";
+  "relative inline-flex max-w-full shrink-0 items-center justify-center rounded-md border text-center font-medium transition-colors " +
+  "disabled:cursor-not-allowed disabled:opacity-50 aria-busy:cursor-progress";
 
 function Spinner() {
   return (
@@ -56,10 +50,6 @@ function Spinner() {
   );
 }
 
-/**
- * Botón del kit. Sin hooks: sirve igual en Server y Client Components.
- * Con `href` es un enlace con el mismo aspecto (sin Slot ni asChild).
- */
 export function Button({
   variant = "secondary",
   size = "md",
@@ -70,42 +60,37 @@ export function Button({
   icon,
   children,
   onClick,
-  title,
-  name,
-  value,
-  form,
   className = "",
-  ...aria
+  ...rest
 }: ButtonProps) {
-  const cls = `${BASE} ${VARIANT[variant]} ${SIZE[size]} ${className}`;
+  const classes = `${BASE} ${VARIANT[variant]} ${SIZE[size]} ${className}`;
   const content = (
     <>
-      {loading ? <Spinner /> : icon ? <span aria-hidden="true" className="inline-flex">{icon}</span> : null}
-      <span>{children}</span>
-      {loading && <span className="sr-only">Cargando</span>}
+      {loading && (
+        <span className="absolute inset-0 grid place-items-center" aria-hidden="true">
+          <Spinner />
+        </span>
+      )}
+      <span className={`inline-flex min-w-0 items-center [overflow-wrap:anywhere] ${GAP[size]} ${loading ? "invisible" : ""}`}>
+        {icon && (
+          <span className="inline-flex shrink-0" aria-hidden="true">
+            {icon}
+          </span>
+        )}
+        {children}
+      </span>
     </>
   );
+
   if (href && !disabled && !loading) {
     return (
-      <Link href={href} className={cls} title={title} aria-describedby={aria["aria-describedby"]}>
+      <Link href={href} className={classes} onClick={onClick} {...rest}>
         {content}
       </Link>
     );
   }
   return (
-    <button
-      type={type}
-      className={cls}
-      disabled={disabled || loading}
-      aria-busy={loading || undefined}
-      aria-disabled={disabled || loading || undefined}
-      onClick={onClick}
-      title={title}
-      name={name}
-      value={value}
-      form={form}
-      aria-describedby={aria["aria-describedby"]}
-    >
+    <button type={type} className={classes} disabled={disabled || loading} aria-busy={loading || undefined} onClick={onClick} {...rest}>
       {content}
     </button>
   );
