@@ -19,8 +19,21 @@
  * Para las pruebas de otros paquetes (connectors, worker): abrir aquí y
  * usar `db` (withWorkspace / asWorker) o `admin(sql)` para sembrar, en
  * vez de mantener una copia del bucle de migraciones.
+ *
+ * REGLA: `admin(sql)` y `raw(sql)` van FUERA de toda transacción. Sobre
+ * PGlite comparten la cola de exclusión con las transacciones, así que
+ * llamarlos desde dentro de un withWorkspace sería esperar a la
+ * transacción que los llamó, que a su vez los espera: la promesa no
+ * resuelve nunca. Desde la ronda 4 de CIM-2 eso lanza
+ * RawInsideTransactionError en vez de colgarse. Prepara el escenario
+ * antes de abrir la transacción, o usa `tx.query` dentro.
+ *
+ * (Con TEST_DATABASE_URL no hay tal cola —`admin` tiene su propio
+ * pool—, así que el mismo código «funcionaba» en el job
+ * «contra-postgres-real» del CI y colgaba el de PGlite. Por eso la
+ * regla es la misma en los dos.)
  */
-import type { Db, DbOptions } from '../src/client.ts';
+import type { CatalogDb, DbOptions } from '../src/client.ts';
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
 export const WORKSPACE_LAURA = '00000002-0000-4000-8000-000000000001';
@@ -40,7 +53,7 @@ export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
 
 export interface TestDb {
   readonly kind: 'pglite' | 'postgres';
-  db: Db;
+  db: CatalogDb;
   /** SQL como superusuario o dueño, fuera de transacción, para preparar escenarios. */
   admin(sql: string): Promise<void>;
   /** SQL como el rol de la aplicación, fuera de cualquier transacción (para comprobar qué queda en la sesión). */

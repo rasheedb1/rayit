@@ -30,7 +30,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-pruebas', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();
@@ -165,7 +165,7 @@ describe('crear facturas', () => {
     await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, base)), /anterior a la emisión/);
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, { ...base, dueOn: '2026-10-21', currency: 'USD' })),
-      /pesos colombianos/,
+      /moneda del workspace \(COP\)/,
     );
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoice(tx, { ...base, dueOn: '2026-10-21', subtotal: '-5' })),

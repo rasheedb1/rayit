@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { listInvoices } from "@mc/db/queries/finanzas";
-import { getDb, withWorkspace } from "./index";
+import { closeDb, getDbMode, withWorkspace } from "./index";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 /** Un workspace que no existe en el seed: RLS no devuelve nada suyo. */
@@ -27,14 +27,11 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.DEMO_WORKSPACE_ID;
   delete process.env.MC_WORKSPACE_ID;
-  const { mode } = await getDb();
-  expect(mode).toBe("embedded");
+  expect(await getDbMode()).toBe("embedded");
 }, 120_000);
 
 afterAll(async () => {
-  const { db } = await getDb();
-  await db.close();
-  globalThis.__mcDb = undefined;
+  await closeDb();
   for (const [k, v] of Object.entries(entorno)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;

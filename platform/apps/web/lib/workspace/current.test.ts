@@ -21,13 +21,24 @@ describe("getCurrentWorkspaceId", () => {
     expect(warnings).toEqual([]);
   });
 
-  test("sin variable, en producción usa el del seed y lo avisa una sola vez por proceso", () => {
-    // Producción no puede caerse por una variable que falta: /finanzas
-    // seguía funcionando antes de CIM-2 y tiene que seguir haciéndolo.
+  test("sin variable, en producción lanza con el comando exacto en vez de servir un workspace codificado", () => {
+    // Es el mismo principio de from-env.ts: en producción no hay modo
+    // demo por descuido. Un despliegue sin la variable falla al arrancar
+    // la pantalla, no sirve en silencio los datos de otro workspace.
     const warnings: string[] = [];
-    expect(getCurrentWorkspaceId({ NODE_ENV: "production" }, (m) => warnings.push(m))).toBe(SEED_WORKSPACE_ID);
-    expect(getCurrentWorkspaceId({ NODE_ENV: "production" }, (m) => warnings.push(m))).toBe(SEED_WORKSPACE_ID);
-    expect(warnings).toEqual(["[workspace] Sin DEMO_WORKSPACE_ID: usando el del seed hasta CIM-3"]);
+    expect(() => getCurrentWorkspaceId({ NODE_ENV: "production" }, (m) => warnings.push(m))).toThrow(
+      /DEMO_WORKSPACE_ID/,
+    );
+    expect(() => getCurrentWorkspaceId({ NODE_ENV: "production" }, silent)).toThrow(/vercel\.run/);
+    expect(warnings).toEqual([]);
+  });
+
+  test("en producción con ALLOW_SEED_WORKSPACE=1 sirve el del seed y lo avisa una sola vez por proceso", () => {
+    const env = { NODE_ENV: "production", ALLOW_SEED_WORKSPACE: "1" };
+    const warnings: string[] = [];
+    expect(getCurrentWorkspaceId(env, (m) => warnings.push(m))).toBe(SEED_WORKSPACE_ID);
+    expect(getCurrentWorkspaceId(env, (m) => warnings.push(m))).toBe(SEED_WORKSPACE_ID);
+    expect(warnings).toEqual(["[workspace] ALLOW_SEED_WORKSPACE=1: producción sirve el workspace del seed hasta CIM-3"]);
   });
 
   test("en producción con DEMO_WORKSPACE_ID no avisa", () => {

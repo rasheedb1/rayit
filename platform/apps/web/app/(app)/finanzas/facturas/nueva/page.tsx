@@ -3,6 +3,7 @@ import { addDays } from "@mc/core";
 import { listCampaignsForInvoice, listCompanies } from "@mc/db/queries/finanzas";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { NuevaFacturaForm } from "./form";
 
@@ -19,6 +20,7 @@ export default async function NuevaFacturaPage({
     companies: await listCompanies(tx),
     campaigns: await listCampaignsForInvoice(tx),
   }));
+  const { currency, locale } = await getCurrentWorkspace();
   // Hoy en UTC, YYYY-MM-DD: la regla del repo es trabajar en UTC.
   const today = new Date().toISOString().slice(0, 10);
 
@@ -37,6 +39,7 @@ export default async function NuevaFacturaPage({
       <NuevaFacturaForm
         companies={companies}
         campaigns={campaigns}
+        workspace={{ currency, locale }}
         defaults={{ issuedOn: today, dueOn: addDays(today, 30), campaignId: params.campana ?? "" }}
         initialMessage={params.error}
       />

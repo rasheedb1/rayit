@@ -31,4 +31,23 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
+  // scripts/ es parte del flujo documentado en el README (paso 3 del
+  // ciclo de una migración nueva) y quedaba fuera del lint. Son
+  // herramientas de línea de comandos: imprimir por consola es su
+  // trabajo, así que ahí no_console no aplica; el resto sí.
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { process: 'readonly', console: 'readonly', URL: 'readonly' },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-debugger': 'error',
+      'eqeqeq': ['error', 'always'],
+      'prefer-const': 'error',
+      'no-var': 'error',
+    },
+  },
 ];

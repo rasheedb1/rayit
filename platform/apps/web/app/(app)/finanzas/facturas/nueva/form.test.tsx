@@ -23,9 +23,12 @@ const defaults = { issuedOn: "2026-09-21", dueOn: "2026-10-21" };
 
 beforeEach(() => crearFactura.mockReset());
 
+/** Moneda y locale del workspace del seed: el formulario ya no los codifica. */
+const WORKSPACE = { currency: "COP", locale: "es-CO" };
+
 describe("NuevaFacturaForm", () => {
   it("«Desde una campaña» prellena empresa, monto y total sin escribirlos", () => {
-    const { container } = render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    const { container } = render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} />);
     fireEvent.change(screen.getByLabelText("Campaña"), { target: { value: CAMPANA } });
 
     expect(screen.getByLabelText(/Empresa/)).toHaveValue(CAFE_ALMA);
@@ -37,7 +40,7 @@ describe("NuevaFacturaForm", () => {
   });
 
   it("el total en vivo sigue al subtotal y a las tasas editables", () => {
-    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} />);
     fireEvent.change(screen.getByLabelText(/Subtotal/), { target: { value: "1.000.000" } });
     expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 1.190.000");
     fireEvent.change(screen.getByLabelText(/IVA %/), { target: { value: "0" } });
@@ -47,7 +50,7 @@ describe("NuevaFacturaForm", () => {
   });
 
   it("el vencimiento sigue a la emisión (+30) hasta que la persona lo toca", () => {
-    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} />);
     fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-31" } });
     expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2027-01-30");
     fireEvent.change(screen.getByLabelText(/Vencimiento/), { target: { value: "2027-01-15" } });
@@ -59,7 +62,7 @@ describe("NuevaFacturaForm", () => {
     crearFactura.mockResolvedValue({
       errors: { companyId: "Elige la empresa a la que le facturas.", subtotal: "Escribe el subtotal, sin IVA." },
     });
-    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} />);
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} />);
     fireEvent.submit(screen.getByRole("button", { name: "Guardar borrador" }).closest("form") as HTMLFormElement);
 
     await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
@@ -72,7 +75,7 @@ describe("NuevaFacturaForm", () => {
 
   it("un mensaje general (p. ej. «Facturar» desde Campañas falló) se anuncia arriba", () => {
     render(
-      <NuevaFacturaForm companies={companies} campaigns={campaigns} defaults={defaults} initialMessage="La campaña no tiene monto acordado: escríbelo a mano." />,
+      <NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} initialMessage="La campaña no tiene monto acordado: escríbelo a mano." />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("La campaña no tiene monto acordado");
   });

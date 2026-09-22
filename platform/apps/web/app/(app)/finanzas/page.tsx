@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
 import { formatDate, formatDaysRelative, formatMoney } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "./_lib/db";
 import { LIST_FILTERS, filterKey, pillForInvoice, type ListFilterKey } from "./_lib/estado";
 
@@ -95,6 +96,10 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
     kpis: await getReceivablesKpis(tx),
     invoices: await listInvoices(tx, { status: statuses ? [...statuses] : undefined, limit: 100 }),
   }));
+  // Los KPI suman facturas de todo el workspace, así que van en SU
+  // moneda (workspace.currency), no en una constante. Cada fila, en
+  // cambio, muestra la moneda con la que se emitió.
+  const { currency, locale } = await getCurrentWorkspace();
 
   const year = new Date().getUTCFullYear();
   const overdueNote =
@@ -118,21 +123,21 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
       <KpiRow>
         <Kpi
           label="Por cobrar"
-          value={formatMoney(kpis.outstanding, "COP", { mode: "compact" })}
+          value={formatMoney(kpis.outstanding, currency, { mode: "compact", locale })}
           note={`${kpis.openCount} ${kpis.openCount === 1 ? "factura" : "facturas"}`}
           href="/finanzas?estado=por_cobrar"
         />
-        <Kpi label="Vencido" value={formatMoney(kpis.overdue, "COP", { mode: "compact" })} note={overdueNote} />
+        <Kpi label="Vencido" value={formatMoney(kpis.overdue, currency, { mode: "compact", locale })} note={overdueNote} />
         <Kpi
           label={`Cobrado en ${year}`}
-          value={formatMoney(kpis.collectedYtd, "COP", { mode: "compact" })}
+          value={formatMoney(kpis.collectedYtd, currency, { mode: "compact", locale })}
           delta={kpis.collectedDelta ?? undefined}
           deltaLabel={kpis.collectedDelta === null ? undefined : `vs. mismo período ${year - 1}`}
           note={kpis.collectedDelta === null ? `Sin cobros en ${year - 1} para comparar` : undefined}
         />
         <Kpi
           label="Apartado para impuestos"
-          value={formatMoney(kpis.taxReserved, "COP", { mode: "compact" })}
+          value={formatMoney(kpis.taxReserved, currency, { mode: "compact", locale })}
           note={kpis.taxRate ? `${rateToPct(kpis.taxRate)} % de cada cobro` : "Sin reservas todavía"}
         />
       </KpiRow>

@@ -11,14 +11,14 @@
  * y las credenciales están bien antes de `dev`.
  *
  * job_definition es un catálogo sin RLS, por eso va por
- * withoutWorkspace. El runner de verdad está en src/index.ts; `dev`
+ * withCatalogs. El runner de verdad está en src/index.ts; `dev`
  * (src/dev.ts) cae a este mismo listado cuando faltan los permisos de
  * administración.
  *
  * Salidas: 0 listó; 2 no pudo conectar (credenciales o red), con el
  * mensaje del producto en vez del stack de pg.
  */
-import { createPgDb, createPool } from '@mc/db';
+import { createPgDb, createPool } from '@mc/db/client';
 import { explainConnectionError, formatJobDefinitions } from './preflight.ts';
 
 const url = process.env['DATABASE_URL'] || process.env['WORKER_DATABASE_URL'];

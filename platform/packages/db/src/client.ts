@@ -12,12 +12,18 @@
  *                           de otro workspace. Ninguna consulta recibe el
  *                           workspace como parámetro suelto.
  *
- *   withoutWorkspace(fn)    Transacción sin workspace: solo sirve para
+ *   withCatalogs(fn)        Transacción sin workspace: solo sirve para
  *                           los catálogos sin RLS (platform, niche,
- *                           pipeline_stage, job_definition, feature_flag,
- *                           signal_source). En las tablas con RLS devuelve
- *                           cero filas, y eso es lo que prueba
- *                           test/rls.test.ts.
+ *                           niche_cpm_benchmark, pipeline_stage,
+ *                           signal_source, feature_flag, job_definition).
+ *                           En una tabla con RLS devuelve cero filas SIN
+ *                           avisar, así que no sale del barril de
+ *                           @mc/db: las pantallas leen catálogos por las
+ *                           funciones con nombre de queries/catalogos.ts,
+ *                           y solo el worker y las pruebas lo abren a
+ *                           mano desde @mc/db/client. Se llamaba
+ *                           withoutWorkspace, que sonaba a "todos los
+ *                           workspaces" — que es lo que hace asWorker.
  *
  *   asWorker(fn)            SET LOCAL ROLE mc_worker dentro de la
  *                           transacción: salta RLS para los jobs globales
@@ -35,7 +41,7 @@
  * después (un `return tx` accidental) lanza TransactionClosedError en
  * vez de correr fuera de transacción y sin workspace.
  *
- * Una transacción no se anida: llamar a withWorkspace / withoutWorkspace
+ * Una transacción no se anida: llamar a withWorkspace / withCatalogs
  * / asWorker desde dentro de otra lanza NestedTransactionError en los
  * dos drivers. Sobre pg abriría una segunda conexión que no ve lo que
  * la primera aún no confirmó; sobre PGlite esperaría para siempre a la
@@ -55,9 +61,13 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import * as schema from './schema/index.ts';
-import { tlsFor } from './tls.ts';
+import { resolveTls } from './tls.ts';
 
 export type Schema = typeof schema;
+
+/** Cada Db lleva su dueño aquí, para que isInTransaction(db) pueda preguntar por ESE cliente. */
+export const TX_OWNER: unique symbol = Symbol.for('mc/db:tx-owner');
+
 
 /** El ORM atado a la transacción actual: `tx.db.select().from(deal)`. */
 export type Orm = PgDatabase<PgQueryResultHKT, Schema>;
@@ -83,11 +93,28 @@ export interface WorkspaceTx extends BaseTx {
 /** Una transacción como mc_worker: RLS no aplica. Cada escritura filtra por workspace_id a mano. */
 export type WorkerTx = BaseTx;
 
+/**
+ * Lo que ve quien recibe una base ya construida (la web, un módulo).
+ * No trae withCatalogs a propósito: ver CatalogDb.
+ */
 export interface Db {
+  /** Quién abre las transacciones de este cliente. Lo lee isInTransaction(db); nadie más lo toca. */
+  readonly [TX_OWNER]?: object;
   withWorkspace<T>(workspaceId: string, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T>;
-  withoutWorkspace<T>(fn: (tx: BaseTx) => Promise<T>): Promise<T>;
   asWorker<T>(fn: (tx: WorkerTx) => Promise<T>): Promise<T>;
   close(): Promise<void>;
+}
+
+/**
+ * La base completa, con la transacción de catálogos. La devuelven las
+ * fábricas (createPgDb, createPgliteDb, createEmbeddedDb) y se importa
+ * desde `@mc/db/client`, no desde el barril: withCatalogs sobre una
+ * tabla con RLS devuelve cero filas en silencio, y quien lo use por
+ * descuido buscará el error en la pantalla. Las lecturas de catálogo
+ * con nombre están en queries/catalogos.ts.
+ */
+export interface CatalogDb extends Db {
+  withCatalogs<T>(fn: (tx: BaseTx) => Promise<T>): Promise<T>;
 }
 
 /** Para INSERT dentro de withWorkspace: `workspaceId: CURRENT_WORKSPACE`. */
@@ -115,18 +142,39 @@ export function assertWorkspaceId(workspaceId: string): void {
 export class TransactionClosedError extends Error {
   constructor() {
     super(
-      'Transacción cerrada: tx.db y tx.query solo valen dentro de withWorkspace / withoutWorkspace / asWorker. ' +
+      'Transacción cerrada: tx.db y tx.query solo valen dentro de withWorkspace / withCatalogs / asWorker. ' +
         'No devuelvas tx desde fn; devuelve el resultado.',
     );
     this.name = 'TransactionClosedError';
   }
 }
 
+/**
+ * Marca de transacción abierta en la cadena asíncrona actual. Guarda el
+ * dueño (un objeto por cliente), así que dos bases distintas —la del
+ * worker y la de una prueba— no se estorban.
+ */
+const openTx = new AsyncLocalStorage<object>();
+
+/**
+ * ¿La cadena asíncrona actual está dentro de una transacción?
+ *
+ * Con `db`, pregunta por ese cliente; sin argumento, por cualquiera. Lo
+ * usa pglite.ts para negarse a correr `raw` / `admin` dentro de una
+ * transacción, que sobre PGlite sería un interbloqueo silencioso.
+ */
+export function isInTransaction(db?: Db): boolean {
+  const owner = openTx.getStore();
+  if (owner === undefined) return false;
+  if (!db) return true;
+  return owner === (db as unknown as Record<symbol, unknown>)[TX_OWNER];
+}
+
 /** Se lanza al abrir una transacción desde dentro de otra del mismo cliente. */
 export class NestedTransactionError extends Error {
   constructor() {
     super(
-      'Transacción anidada: reutiliza el tx que ya tienes. withWorkspace / withoutWorkspace / asWorker ' +
+      'Transacción anidada: reutiliza el tx que ya tienes. withWorkspace / withCatalogs / asWorker ' +
         'no se llaman desde dentro de otra transacción del mismo cliente.',
     );
     this.name = 'NestedTransactionError';
@@ -184,22 +232,22 @@ function guardTx(raw: BaseTx): { tx: BaseTx; close(): void } {
   };
 }
 
-export function createDb(runner: TxRunner, opts: DbOptions = {}): Db {
+export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
   const statementTimeout = timeoutMs(opts.statementTimeoutMs, DEFAULT_STATEMENT_TIMEOUT_MS, 'statementTimeoutMs');
   const idleTimeout = timeoutMs(opts.idleInTransactionTimeoutMs, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, 'idleInTransactionTimeoutMs');
 
   /**
-   * Profundidad de transacción por cadena asíncrona: dentro de fn vale
-   * true, y volver a entrar lanza antes de tocar el driver. Es por
-   * cliente, así que dos bases distintas (la del worker y la de una
-   * prueba) no se estorban.
+   * El dueño de las transacciones de ESTE cliente: dentro de fn está en
+   * el AsyncLocalStorage, y volver a entrar lanza antes de tocar el
+   * driver. Dos bases distintas (la del worker y la de una prueba) no
+   * se estorban porque cada una tiene su propio objeto.
    */
-  const inTransaction = new AsyncLocalStorage<true>();
+  const owner = {};
 
   /** Una transacción con timeouts fijados y manijas que mueren al salir de fn. */
   const run = async <T>(fn: (tx: BaseTx) => Promise<T>): Promise<T> => {
-    if (inTransaction.getStore()) throw new NestedTransactionError();
-    return inTransaction.run(true, () =>
+    if (openTx.getStore() === owner) throw new NestedTransactionError();
+    return openTx.run(owner, () =>
       runner.run(async (raw) => {
         const guard = guardTx(raw);
         try {
@@ -215,6 +263,7 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): Db {
   };
 
   return {
+    [TX_OWNER]: owner,
     async withWorkspace(workspaceId, fn) {
       // async a propósito: un workspace inválido rechaza la promesa en
       // vez de lanzar antes de devolverla, y quien llama solo maneja un camino.
@@ -224,7 +273,7 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): Db {
         return fn({ db: tx.db, query: tx.query, workspaceId });
       });
     },
-    withoutWorkspace(fn) {
+    withCatalogs(fn) {
       return run(fn);
     },
     asWorker(fn) {
@@ -262,10 +311,21 @@ export interface PoolOptions extends DbOptions {
   idleTimeoutMillis?: number;
 }
 
+/**
+ * El pool de `pg` con el TLS decidido en un solo sitio.
+ *
+ * `pg` re-parsea la cadena de conexión DESPUÉS de la configuración
+ * explícita, así que un `?sslmode=…` en la URL ganaría sobre el `ssl`
+ * que pasemos aquí: `no-verify` apagaría la verificación, `disable`
+ * mandaría texto plano y `require` descartaría la CA embebida. Por eso
+ * resolveTls lanza (host con CA propia) o traduce el parámetro y lo
+ * borra de la URL (host sin CA propia) antes de construir el Pool.
+ */
 export function createPool(connectionString: string, opts: PoolOptions = {}): pg.Pool {
+  const tls = resolveTls(connectionString, opts.sslRootCert ?? null);
   return new pg.Pool({
-    connectionString,
-    ssl: tlsFor(connectionString, opts.sslRootCert ?? null),
+    connectionString: tls.connectionString,
+    ssl: tls.ssl,
     max: opts.max ?? 5,
     application_name: opts.applicationName ?? 'mc-db',
     connectionTimeoutMillis: opts.connectionTimeoutMillis ?? 5_000,
@@ -273,7 +333,7 @@ export function createPool(connectionString: string, opts: PoolOptions = {}): pg
   });
 }
 
-export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): Db {
+export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): CatalogDb {
   const runner: TxRunner = {
     async run(fn) {
       const client = await pool.connect();

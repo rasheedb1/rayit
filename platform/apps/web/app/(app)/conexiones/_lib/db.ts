@@ -5,4 +5,4 @@ import "server-only";
  * cuando packages/db exponga el cliente real, lib/db se reduce a
  * reexportarlo y este archivo desaparece.
  */
-export { getDb, withWorkspace } from "@/lib/db";
+export { withWorkspace } from "@/lib/db";

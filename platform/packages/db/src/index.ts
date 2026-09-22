@@ -2,7 +2,7 @@
  * @mc/db · acceso a datos de MultiCampaign. El contrato completo, con
  * ejemplos, está en README.md.
  *
- *   client.ts      withWorkspace / withoutWorkspace / asWorker sobre pg
+ *   client.ts      withWorkspace / asWorker sobre pg (y withCatalogs, por @mc/db/client)
  *   pglite.ts      lo mismo sobre Postgres embebido (pruebas y demo)
  *   embedded.ts    Postgres embebido con migraciones, seeds y rol mc_app
  *   from-env.ts    cómo la web elige entre los dos
@@ -11,6 +11,11 @@
  *
  * Convención de importación:
  *   - Cliente, esquema y operadores: desde la raíz, `@mc/db`.
+ *   - Construir una base a mano (worker, pruebas): `@mc/db/client`.
+ *     La raíz entrega `createDbFromEnv` y el tipo `Db`, que NO tiene
+ *     `withCatalogs`: una transacción sin workspace sobre una tabla con
+ *     RLS devuelve cero filas en silencio, así que las pantallas leen
+ *     catálogos por `@mc/db/queries/catalogos`, con nombre.
  *   - Consultas de un módulo: por subruta, `@mc/db/queries/<módulo>`.
  *     Cada módulo es dueño de su espacio de nombres y dos módulos
  *     pueden llamar igual a una función. La raíz reexporta, al final de
@@ -24,14 +29,14 @@
  * hace aritmética de métricas (para eso están las vistas).
  */
 export type {
-  BaseTx, Db, DbOptions, Orm, PoolOptions, QueryResult, Schema, SqlExecutor, TxRunner, WorkerTx, WorkspaceTx,
+  BaseTx, Db, DbOptions, Orm, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
 } from './client.ts';
 export {
-  assertWorkspaceId, createDb, createPgDb, createPool, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
-  DEFAULT_STATEMENT_TIMEOUT_MS, isUuid, NestedTransactionError, TransactionClosedError, UUID_RE, WORKER_ROLE,
+  assertWorkspaceId, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS,
+  isInTransaction, isUuid, NestedTransactionError, TransactionClosedError, UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
-export { hostOf, isSupabaseHost, tlsFor, PLATFORM_ROOT, type Tls } from './tls.ts';
+export { hostOf, isSupabaseHost, resolveTls, tlsFor, TlsConfigError, TLS_URL_PARAMS, PLATFORM_ROOT, type Ssl, type Tls, type TlsDecision } from './tls.ts';
 export * from './schema/index.ts';
 
 /**

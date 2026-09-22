@@ -7,13 +7,14 @@ Ninguna pantalla, server action ni job recibe `workspace_id` como
 parámetro suelto.
 
 ```
-src/client.ts      withWorkspace / withoutWorkspace / asWorker sobre pg
+src/client.ts      withWorkspace / asWorker / withCatalogs sobre pg
 src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
-src/queries/       un archivo por módulo: resumen, ventas, cotizar, campanas, finanzas, conexiones
+src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
+                   cotizar, campanas, finanzas, conexiones
 test/pglite.ts     openTestDb(): la base para las pruebas de cualquier paquete
 scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 ```
@@ -24,7 +25,15 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 |---|---|---|
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
+| Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
+
+El tipo `Db` que entrega el barril **no** tiene `withCatalogs`: una
+transacción sin workspace sobre una tabla con RLS devuelve cero filas sin
+avisar, y el paquete se vende como la barandilla que impide equivocarse.
+Los catálogos se leen con nombre (`@mc/db/queries/catalogos`) y el
+cliente completo (`CatalogDb`) sale por `@mc/db/client`, que es lo que
+usan el worker y las pruebas.
 
 Cada módulo es dueño de su espacio de nombres y dos módulos pueden
 llamar igual a una función: las consultas nuevas se importan por
@@ -74,20 +83,29 @@ tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`,
 ### 3. Catálogo sin workspace
 
 ```ts
-const plataformas = await db.withoutWorkspace((tx) => tx.db.select().from(platform));
+import { listPlatforms, listPipelineStages } from '@mc/db/queries/catalogos';
+
+const plataformas = await listPlatforms(db);
 ```
 
-Solo para los catálogos: `platform`, `niche`, `niche_cpm_benchmark`,
-`pipeline_stage`, `feature_flag`, `signal_source` y `job_definition`.
-En una tabla con RLS devuelve cero filas sin avisar; la prueba
-`test/rls.test.ts` lo demuestra.
+Son siete y están ahí con nombre: `platform`, `niche`,
+`niche_cpm_benchmark`, `pipeline_stage`, `signal_source`,
+`feature_flag` y `job_definition`. Por debajo abren `withCatalogs`, la
+transacción sin workspace, que **no** sale del barril: en una tabla con
+RLS devuelve cero filas sin avisar, y quien la use por descuido verá una
+lista vacía y buscará el error en la pantalla. Se llamaba
+`withoutWorkspace`, que además sonaba a «todos los workspaces» — que es
+lo que hace `asWorker`. Sigue accesible desde `@mc/db/client` para el
+worker y las pruebas; `test/rls.test.ts` demuestra las cero filas.
 
 `company` y `contact` **no** son catálogos aunque no tengan
-`workspace_id`: `contact` guarda correo, teléfono y LinkedIn que un
-workspace escribió a mano (`source = 'user_provided'`). Se leen SIEMPRE
-dentro de `withWorkspace`, a través de `company_link` (que sí tiene
-RLS), como hace `queries/finanzas.ts`. La RLS propia de `contact` es de
-VEN-1; `test/schema.test.ts` la deja a la vista como `todo`.
+`workspace_id`. Desde la migración 0019 `contact` lleva RLS propia: se
+ve si su fuente es pública (`public_website`, `public_profile`,
+`press`) o si la empresa está vinculada a mi workspace por
+`company_link`. `company` sí es global a propósito: nombre, dominio y
+sector, sin PII. `app_user` es lo único que sigue sin política, y va con
+CIM-3 (necesita `app.user_id`); `test/schema.test.ts` lo deja a la vista
+como `todo`.
 
 ### 4. Job global con `asWorker`
 
@@ -139,7 +157,7 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 - **Validación del workspace.** `withWorkspace('laura', …)` rechaza antes
   de abrir nada: tiene que ser un UUID.
 - **Sin transacciones anidadas.** Llamar a `withWorkspace`,
-  `withoutWorkspace` o `asWorker` desde dentro de otra transacción del
+  `withCatalogs` o `asWorker` desde dentro de otra transacción del
   mismo cliente lanza `NestedTransactionError` antes de tocar el driver,
   en `pg` y en PGlite por igual. Sobre `pg` abriría una segunda conexión
   que no ve lo que la primera aún no confirmó; sobre PGlite esperaría
@@ -148,8 +166,19 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 - **Conexiones rotas fuera del pool.** Si el `ROLLBACK` falla, la
   conexión se devuelve al pool con el error y `pg` la destruye en vez de
   prestársela, con la transacción a medias, a la siguiente petición.
-- **TLS.** Contra un host de Supabase se verifica con la CA de
-  `db/certs/` (embebida para Vercel). `PGSSLROOTCERT` manda si existe.
+- **TLS, con una sola fuente de verdad.** Contra un host de Supabase se
+  verifica con la CA de `db/certs/` (embebida para Vercel);
+  `PGSSLROOTCERT` manda si existe. Y un `?sslmode=…` pegado a la URL
+  **lanza** en vez de ganar: `pg` re-parsea la cadena de conexión
+  después de la configuración explícita, así que `sslmode=no-verify`
+  dejaría `rejectUnauthorized: false`, `disable` mandaría texto plano a
+  Supabase y `require` descartaría la CA embebida. Si el certificado
+  falla, `make db.cert`; nunca el parámetro. En un host sin CA propia el
+  parámetro se traduce a una opción `ssl` explícita y se borra de la URL.
+- **Las mismas decisiones en el worker.** `apps/worker/src/runner/db.ts`
+  importa `tlsFor` / `hostOf` / `resolveTls` de aquí en vez de tener su
+  copia: era el mismo camino de seguridad escrito dos veces, y solo uno
+  tenía prueba.
 
 ## Ciclo de una migración nueva
 
@@ -169,9 +198,38 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 
 Nunca al revés: no hay `drizzle-kit generate` ni `push`.
 
+## Verificar de verdad: `--force`
+
+La caché de turbo es local a la máquina y **se comparte entre todos los
+clones del repositorio**, incluidos los worktrees de `.claude/worktrees`,
+y no distingue la rama. `pnpm turbo run typecheck lint test` puede dar
+14/14 «cache hit» replayando los logs de otro worktree: verde sin haber
+ejecutado nada de esta rama. Para que el verde signifique algo:
+
+```bash
+pnpm turbo run typecheck lint test --force     # o TURBO_FORCE=1
+```
+
+El job «calidad» del CI corre siempre con `--force`, que es el único
+sitio donde el verde tiene que ser incuestionable.
+
+Las suites de `@mc/db` y `@mc/worker` levantan PGlite (WASM) y esperan a
+pg-boss con tiempos reales. Corren con `--test-isolation=none` (un solo
+proceso, los archivos en orden) y `--test-timeout=120000`: con el
+aislamiento por proceso, y varias instancias WASM arrancando a la vez,
+el runner cancelaba archivos enteros con «Promise resolution is still
+pending but the event loop has already resolved» en una máquina cargada
+—justo lo que es un runner compartido de CI—. En un solo proceso es
+además más rápido.
+
 ## Reglas del proyecto que este paquete impone
 
 - El workspace lo fija el cliente por transacción, nunca la pantalla.
+- Toda tabla con `workspace_id` lleva RLS. Sin excepciones desde 0019;
+  `test/schema.test.ts` lo comprueba en cada corrida.
+- La moneda, la zona horaria y el locale salen del workspace
+  (`queries/cimientos.ts`), no de una constante. Colombia es el valor
+  por defecto de un workspace, no del producto.
 - Las métricas se insertan, no se actualizan (`*_snapshot`).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.

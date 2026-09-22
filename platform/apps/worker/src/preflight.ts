@@ -21,7 +21,9 @@
  * job_definition (catálogo sin RLS): eso es el humo, y sirve para
  * comprobar @mc/db, TLS y credenciales antes de cualquier otra cosa.
  */
-import { hostOf, jobDefinition, type Db } from '@mc/db';
+import { hostOf } from '@mc/db';
+import type { CatalogDb } from '@mc/db/client';
+import { listJobDefinitions } from '@mc/db/queries/catalogos';
 
 export interface PreflightResult {
   currentUser: string;
@@ -37,8 +39,8 @@ interface PreflightRow extends Record<string, unknown> {
   boss: boolean;
 }
 
-export async function runPreflight(db: Db, opts: { role: string | null; bossSchema: string }): Promise<PreflightResult> {
-  const { rows } = await db.withoutWorkspace((tx) =>
+export async function runPreflight(db: CatalogDb, opts: { role: string | null; bossSchema: string }): Promise<PreflightResult> {
+  const { rows } = await db.withCatalogs((tx) =>
     tx.query<PreflightRow>(
       `SELECT current_user::text AS current_user,
               CASE WHEN $1::text IS NULL THEN true ELSE pg_has_role(current_user, $1::name, 'MEMBER') END AS member,
@@ -102,11 +104,9 @@ function userOf(url: string): string {
   }
 }
 
-/** El humo: lista job_definition (catálogo sin RLS, por withoutWorkspace) en el formato de la consola. */
-export async function formatJobDefinitions(db: Db, url: string): Promise<string> {
-  const defs = await db.withoutWorkspace((tx) =>
-    tx.db.select().from(jobDefinition).orderBy(jobDefinition.queue, jobDefinition.id),
-  );
+/** El humo: lista job_definition (catálogo sin RLS, por @mc/db/queries/catalogos) en el formato de la consola. */
+export async function formatJobDefinitions(db: CatalogDb, url: string): Promise<string> {
+  const defs = await listJobDefinitions(db);
   const lines = defs.map(
     (d) => `  ${d.enabled ? '·' : '✗'} ${d.id.padEnd(26)} ${d.queue.padEnd(12)} ${(d.defaultCron ?? '—').padEnd(14)} ${d.labelEs}`,
   );

@@ -39,6 +39,7 @@ const VISTAS_MVP = [
  * aísla (0010, 0011, 0017). Con workspace_id NOT NULL.
  */
 const TENANT_MVP = [
+  'membership',
   'creator_profile', 'social_connection', 'data_consent', 'post', 'post_metric_snapshot',
   'account_metric_snapshot', 'audience_breakdown', 'creator_baseline', 'post_score', 'company_link',
   'signal', 'deal', 'activity', 'outbound_brief', 'outbound_policy', 'outbound_sequence', 'outbound_touch',
@@ -93,16 +94,22 @@ const HIJAS_CON_FK_OPCIONAL: Array<[child: string, parent: string, owner: string
   ['api_quota_usage', 'social_connection', 'CON'],
 ];
 
-/** Con workspace_id NOT NULL y sin RLS hasta la migración de CIM-3 (ver el test.todo de abajo). */
-const PENDIENTE_CIM_3 = ['membership'];
+/**
+ * Tablas globales sin workspace_id que guardan datos personales y con
+ * política propia desde 0019: `contact` se ve si su fuente es pública o
+ * si la empresa está vinculada a mi workspace por company_link.
+ */
+const PII_CON_RLS = ['contact'];
 
 /**
- * Tablas globales sin workspace_id que guardan datos personales y hoy
- * cualquier workspace enumera (ver el test.todo de VEN-1). Hasta que
- * lleven RLS se leen SIEMPRE dentro de withWorkspace, a través de
- * company_link; nunca como catálogo.
+ * Lo que sigue sin RLS y por qué: `app_user` no tiene workspace_id y su
+ * política («soy yo, o comparto workspace conmigo») necesita app.user_id
+ * fijado ANTES del primer INSERT — hoy el seed crea app_user antes que
+ * su membership, así que con FORCE ese INSERT fallaría. Va con CIM-3,
+ * que es quien fija app.user_id. Mientras tanto se lee SIEMPRE dentro
+ * de withWorkspace, a través de membership; nunca como catálogo.
  */
-const PENDIENTE_VEN_1_PII = ['contact', 'app_user'];
+const PENDIENTE_CIM_3_PII = ['app_user'];
 
 interface ColumnRow extends Record<string, unknown> {
   table_name: string;
@@ -152,7 +159,7 @@ let childrenWithoutRls: FkRow[] = [];
 
 before(async () => {
   t = await openTestDb({ seeds: false });
-  const cols = await t.db.withoutWorkspace((tx) =>
+  const cols = await t.db.withCatalogs((tx) =>
     tx.query<ColumnRow>(`
       SELECT table_name, column_name, data_type, udt_name, character_maximum_length,
              numeric_precision, numeric_scale, is_nullable, column_default
@@ -162,7 +169,7 @@ before(async () => {
     if (!columns.has(c.table_name)) columns.set(c.table_name, new Map());
     columns.get(c.table_name)!.set(c.column_name, c);
   }
-  const rels = await t.db.withoutWorkspace((tx) =>
+  const rels = await t.db.withCatalogs((tx) =>
     tx.query<RelRow>(`
       SELECT c.relname AS name,
              CASE c.relkind WHEN 'v' THEN 'view' ELSE 'table' END AS kind,
@@ -171,7 +178,7 @@ before(async () => {
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v')`),
   );
   for (const r of rels.rows) relations.set(r.name, r);
-  const fks = await t.db.withoutWorkspace((tx) =>
+  const fks = await t.db.withCatalogs((tx) =>
     tx.query<FkRow>(`
       SELECT c.relname AS child, a.attname AS fk, p.relname AS parent
       FROM pg_constraint k
@@ -184,7 +191,7 @@ before(async () => {
       ORDER BY 1, 2`),
   );
   childrenWithoutRls = fks.rows;
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();
@@ -263,11 +270,13 @@ describe('aislamiento por workspace en la base', () => {
     }
   });
 
-  test('toda tabla con workspace_id obligatorio tiene RLS, salvo lo pendiente de CIM-3', () => {
+  test('toda tabla con workspace_id obligatorio tiene RLS, sin excepciones', () => {
+    // Desde 0019 no queda ninguna: membership era la última, y su
+    // aplazamiento a CIM-3 no compraba nada porque nadie la leía.
     for (const [name, cols] of columns) {
       if (relations.get(name)?.kind !== 'table') continue;
       const ws = cols.get('workspace_id');
-      if (!ws || ws.is_nullable !== 'NO' || PENDIENTE_CIM_3.includes(name)) continue;
+      if (!ws || ws.is_nullable !== 'NO') continue;
       assert.equal(relations.get(name)?.rls, true, `${name} tiene workspace_id NOT NULL pero no RLS`);
     }
   });
@@ -287,34 +296,39 @@ describe('aislamiento por workspace en la base', () => {
     }
   });
 
-  test('membership existe con workspace_id NOT NULL y hoy se lee sin RLS', () => {
-    for (const name of PENDIENTE_CIM_3) {
-      assert.equal(columns.get(name)?.get('workspace_id')?.is_nullable, 'NO');
+  test('membership lleva RLS desde 0019, y la función current_user_id() existe para CIM-3', async () => {
+    assert.equal(columns.get('membership')?.get('workspace_id')?.is_nullable, 'NO');
+    assert.equal(relations.get('membership')?.rls, true);
+    // Devuelve NULL mientras nadie fije app.user_id: la rama por usuario
+    // de la política todavía no existe, y eso es lo que CIM-3 enciende.
+    const { rows } = await t.db.withCatalogs((tx) =>
+      tx.query<{ uid: string | null }>('SELECT current_user_id()::text AS uid'),
+    );
+    assert.equal(rows[0]?.uid, null);
+  });
+
+  test('contact lleva RLS desde 0019 aunque no tenga workspace_id (PII por company_link)', () => {
+    for (const name of PII_CON_RLS) {
+      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
+      assert.equal(relations.get(name)?.rls, true, `${name} guarda PII y tiene que llevar RLS (0019)`);
+    }
+    // company sí es global a propósito: nombre, dominio y sector, sin PII.
+    assert.equal(relations.get('company')?.rls, false, 'company es el catálogo global de empresas');
+  });
+
+  test('app_user sigue sin RLS, y aquí queda escrito por qué', () => {
+    for (const name of PENDIENTE_CIM_3_PII) {
+      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
       assert.equal(relations.get(name)?.rls, false, `${name} ya tiene RLS: cierra el test.todo de CIM-3`);
     }
   });
 
-  // Pendientes visibles en cada corrida (salen como "todo" en el resumen).
+  // Pendiente visible en cada corrida (sale como "todo" en el resumen).
   test(
-    'CIM-3: RLS en membership — ENABLE + FORCE con USING (user_id = current_user_id() OR workspace_id = current_workspace_id()) ' +
-      'y current_user_id() leyendo app.user_id fijado por la sesión. Hoy cualquier consulta como mc_app enumera user_id y rol de todos los workspaces.',
-    { todo: true },
-    () => {},
-  );
-
-  test('contact y app_user existen sin workspace_id y hoy se leen sin RLS (PII global)', () => {
-    for (const name of PENDIENTE_VEN_1_PII) {
-      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
-      assert.equal(relations.get(name)?.rls, false, `${name} ya tiene RLS: cierra el test.todo de VEN-1`);
-    }
-  });
-
-  test(
-    'VEN-1: RLS en contact y app_user (PII globales) — contact: ENABLE + FORCE con USING (source IN (' +
-      "'public_website', 'public_profile', 'press') OR EXISTS (SELECT 1 FROM company_link l WHERE l.company_id = " +
-      'contact.company_id AND l.workspace_id = current_workspace_id())), y una prueba en rls.test.ts con un contacto ' +
-      'user_provided de A que B no ve. app_user: por membership, con CIM-3. Hoy cualquier consulta como mc_app enumera ' +
-      'correo, teléfono y LinkedIn de todos los workspaces.',
+    'CIM-3: RLS en app_user — ENABLE + FORCE con USING (id = current_user_id() OR EXISTS (SELECT 1 FROM membership m ' +
+      'WHERE m.user_id = app_user.id AND m.workspace_id = current_workspace_id())), junto con quien fije app.user_id ' +
+      'por transacción. Hasta entonces, cualquier consulta como mc_app enumera el correo de todos los workspaces: ' +
+      'app_user se lee solo a través de membership, dentro de withWorkspace.',
     { todo: true },
     () => {},
   );

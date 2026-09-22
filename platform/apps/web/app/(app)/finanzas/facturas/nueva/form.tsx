@@ -22,6 +22,8 @@ import { crearFactura, type CrearFacturaState } from "../actions";
 export interface NuevaFacturaFormProps {
   companies: CompanyOption[];
   campaigns: CampaignOption[];
+  /** Moneda y locale del workspace: el formulario no los adivina (ver lib/workspace/settings.ts). */
+  workspace: { currency: string; locale: string };
   defaults: { issuedOn: string; dueOn: string; campaignId?: string };
   /** Mensaje que llega por la URL (p. ej. «Facturar» desde Campañas falló). */
   initialMessage?: string;
@@ -46,7 +48,9 @@ function liveTotals(subtotal: string, taxPct: string, withholdingPct: string): I
   }
 }
 
-export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessage }: NuevaFacturaFormProps) {
+export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, initialMessage }: NuevaFacturaFormProps) {
+  const { currency, locale } = workspace;
+  const money = (amount: string) => formatMoney(amount, currency, { mode: "full", locale });
   const [state, formAction, pending] = useActionState<CrearFacturaState, FormData>(crearFactura, {});
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -112,7 +116,7 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
                 placeholder="Sin campaña · factura a mano"
                 options={campaigns.map((c) => ({
                   value: c.id,
-                  label: `${c.companyName} · ${c.name}${c.amount ? ` · ${formatMoney(c.amount, c.currency, { mode: "full" })}` : ""} · ${CAMPAIGN_STATUS_ES[c.status] ?? c.status}`,
+                  label: `${c.companyName} · ${c.name}${c.amount ? ` · ${formatMoney(c.amount, c.currency, { mode: "full", locale })}` : ""} · ${CAMPAIGN_STATUS_ES[c.status] ?? c.status}`,
                 }))}
               />
             </Field>
@@ -132,13 +136,14 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
           </Field>
 
           <Field label="Subtotal" required help="Sin IVA. El total se calcula abajo." error={errors.subtotal} htmlFor="subtotal">
-            <MoneyInput value={subtotal} currency="COP" onChange={(v) => setSubtotal(v)} required />
+            <MoneyInput value={subtotal} currency={currency} onChange={(v) => setSubtotal(v)} required />
             {/* El MoneyInput muestra "2.605.042,02"; al servidor viaja el decimal normalizado. */}
             <input type="hidden" name="subtotal" value={subtotal} />
           </Field>
 
-          <Field label="Moneda" help="Por ahora solo COP." htmlFor="currency">
-            <Input name="currency" value="COP" disabled readOnly />
+          {/* La moneda es la del workspace: se muestra, no se elige (CIM-2 r4). */}
+          <Field label="Moneda" help="La del workspace. Se cambia en sus ajustes." htmlFor="currency">
+            <Input name="currency" value={currency} disabled readOnly />
           </Field>
 
           <Field label="IVA %" required error={errors.taxPct} htmlFor="taxPct">
@@ -197,28 +202,28 @@ export function NuevaFacturaForm({ companies, campaigns, defaults, initialMessag
         <div className="rounded-md border border-line p-4">
           <p className="text-xs text-fg-3">Total de la factura</p>
           <p className="mt-1 font-mono text-2xl font-medium tabular-nums">
-            {totals ? formatMoney(totals.total, "COP", { mode: "full" }) : "COP —"}
+            {totals ? money(totals.total) : `${currency} —`}
           </p>
           <dl className="mt-4 space-y-1.5 text-sm">
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">Subtotal</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.subtotal, "COP", { mode: "full" }) : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? money(totals.subtotal) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">IVA {taxPct || "0"} %</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.tax, "COP", { mode: "full" }) : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? money(totals.tax) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3 border-t border-line pt-1.5">
               <dt className="font-medium">Total</dt>
-              <dd className="font-mono font-medium tabular-nums">{totals ? formatMoney(totals.total, "COP", { mode: "full" }) : "—"}</dd>
+              <dd className="font-mono font-medium tabular-nums">{totals ? money(totals.total) : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-fg-2">Retención {withholdingPct || "0"} %</dt>
-              <dd className="font-mono tabular-nums text-fg-2">{totals ? `−${formatMoney(totals.withholding, "COP", { mode: "full" })}` : "—"}</dd>
+              <dd className="font-mono tabular-nums text-fg-2">{totals ? `−${money(totals.withholding)}` : "—"}</dd>
             </div>
             <div className="flex justify-between gap-3 border-t border-line pt-1.5">
               <dt className="text-fg-2">Neto que entra al banco</dt>
-              <dd className="font-mono tabular-nums">{totals ? formatMoney(totals.net, "COP", { mode: "full" }) : "—"}</dd>
+              <dd className="font-mono tabular-nums">{totals ? money(totals.net) : "—"}</dd>
             </div>
           </dl>
           <p className="mt-4 text-xs leading-4 text-fg-3">Calculado en el navegador con la misma función que usa el servidor al guardar.</p>

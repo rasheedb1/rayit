@@ -18,7 +18,7 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-conexiones', 'Ajeno') ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 after(async () => { await t.close(); });
 
 const input = (over: Partial<UpsertConnectionInput> = {}): UpsertConnectionInput => ({

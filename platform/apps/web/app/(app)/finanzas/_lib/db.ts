@@ -4,4 +4,4 @@
  * (DEMO_WORKSPACE_ID hasta CIM-3). Este archivo solo reexporta para que
  * las pantallas de Finanzas sigan importando "./_lib/db" sin cambios.
  */
-export { getDb, withWorkspace } from "@/lib/db";
+export { withWorkspace } from "@/lib/db";

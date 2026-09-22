@@ -20,7 +20,7 @@
  *
  * Con --pglite o --demo no hay nada que comprobar: pasa directo.
  */
-import { createPgDb, createPool } from '@mc/db';
+import { createPgDb, createPool } from '@mc/db/client';
 import { explainConnectionError, explainMissing, formatJobDefinitions, runPreflight } from './preflight.ts';
 
 const args = new Set(process.argv.slice(2));

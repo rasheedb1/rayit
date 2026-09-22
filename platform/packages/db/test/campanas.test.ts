@@ -50,7 +50,7 @@ before(async () => {
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();

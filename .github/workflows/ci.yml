@@ -111,6 +111,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run typecheck lint test
+      # --force: la caché de turbo es local a la máquina y se comparte
+      # entre todos los clones (worktrees incluidos) sin distinguir la
+      # rama. Un «cache hit» aquí sería verde sin haber ejecutado nada.
+      # --concurrency=2: @mc/db y @mc/worker levantan PGlite (WASM) y
+      # pg-boss; el runner compartido no da para más a la vez.
+      - run: pnpm turbo run typecheck lint test --force --concurrency=2
       - name: Build del dashboard
         run: pnpm --filter @mc/web build

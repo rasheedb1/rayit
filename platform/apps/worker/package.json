@@ -13,7 +13,7 @@
     "humo": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/humo.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node --test --experimental-strip-types --test-concurrency=1 test/*.test.ts"
+    "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 test/*.test.ts"
   },
   "dependencies": {
     "@mc/connectors": "workspace:*",

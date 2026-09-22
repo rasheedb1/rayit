@@ -2,6 +2,10 @@
  * La prueba obligatoria de CIM-2: dos workspaces, un deal en cada uno,
  * cada uno ve solo el suyo; sin workspace fijado, cero filas.
  *
+ * Y lo que se sumó en la ronda 4: membership y contact, las dos tablas
+ * que quedaban sin política (0019), y que el helper de pruebas se niega
+ * a correr `admin` / `raw` dentro de una transacción en vez de colgarse.
+ *
  * Y lo que se sumó en las rondas 2 y 3: las tablas hijas sin
  * workspace_id (quote_item, rate_card_item, deal_stage_history) heredan
  * el aislamiento del padre (0018); las manijas de una transacción mueren
@@ -15,8 +19,8 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertWorkspaceId, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory, eq, NestedTransactionError, quote,
-  quoteItem, rateCard, rateCardItem, TransactionClosedError, type BaseTx, type WorkspaceTx,
+  assertWorkspaceId, contact, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory, eq, membership,
+  NestedTransactionError, quote, quoteItem, rateCard, rateCardItem, TransactionClosedError, type BaseTx, type WorkspaceTx,
 } from '../src/index.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -57,7 +61,7 @@ before(async () => {
       ('${WS_B}', 'workspace-b', 'Workspace B');
     INSERT INTO company (id, name) VALUES ('${COMPANY}', 'Café Alma');
   `);
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await t.close();
@@ -66,7 +70,7 @@ after(async () => {
 describe('aislamiento por workspace', () => {
   test('las consultas corren como mc_app, sin BYPASSRLS', async (ctx) => {
     if (t.kind !== 'pglite') return ctx.skip('el rol lo decide TEST_DATABASE_URL');
-    const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+    const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app');
     assert.equal(rows[0]?.bypass_rls, false);
   });
@@ -93,9 +97,9 @@ describe('aislamiento por workspace', () => {
   });
 
   test('sin workspace fijado, cero filas', async () => {
-    const orm = await t.db.withoutWorkspace((tx) => tx.db.select({ id: deal.id }).from(deal));
+    const orm = await t.db.withCatalogs((tx) => tx.db.select({ id: deal.id }).from(deal));
     assert.equal(orm.length, 0);
-    const raw = await t.db.withoutWorkspace((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM deal'));
+    const raw = await t.db.withCatalogs((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM deal'));
     assert.equal(raw.rows[0]?.n, 0);
   });
 
@@ -133,7 +137,7 @@ describe('aislamiento por workspace', () => {
       return tx.db.select({ id: deal.id }).from(deal);
     });
     assert.deepEqual(allDeals.map((r) => r.id).sort(), [dealA, dealB].sort());
-    const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+    const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app', 'SET LOCAL ROLE muere con la transacción');
   });
 
@@ -146,7 +150,7 @@ describe('aislamiento por workspace', () => {
     const sessionUser = (await t.raw<{ session_user: string }>('SELECT session_user::text AS session_user'))[0]?.session_user ?? 'postgres';
     await t.raw('SET SESSION AUTHORIZATION mc_app');
     try {
-      const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+      const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
       assert.equal(rows[0]?.current_user, 'mc_app');
       await assert.rejects(t.db.asWorker(async () => 1), isNotWorkerMember);
       // withWorkspace sigue funcionando: la sesión no quedó rota.
@@ -158,7 +162,7 @@ describe('aislamiento por workspace', () => {
       await t.raw(`SET SESSION AUTHORIZATION "${sessionUser}"`);
       await t.raw('SET ROLE mc_app');
     }
-    const { rows } = await t.db.withoutWorkspace((tx) => tx.query<Who>(WHO_SQL));
+    const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app', 'la sesión vuelve a como estaba');
   });
 
@@ -175,7 +179,7 @@ describe('aislamiento por workspace', () => {
   });
 
   test('el workspace fijado no sobrevive a su transacción', async () => {
-    const afterTx = await t.db.withoutWorkspace((tx) => tx.query<{ ws: string | null }>("SELECT nullif(current_setting('app.workspace_id', true), '') AS ws"));
+    const afterTx = await t.db.withCatalogs((tx) => tx.query<{ ws: string | null }>("SELECT nullif(current_setting('app.workspace_id', true), '') AS ws"));
     assert.equal(afterTx.rows[0]?.ws, null);
   });
 
@@ -220,7 +224,7 @@ describe('las tablas hijas heredan el aislamiento del padre (0018)', () => {
     test(`${table}: A ve su fila; B y sin workspace ven cero`, async () => {
       assert.equal(await t.db.withWorkspace(WS_A, (tx) => countRows(tx, table)), 1);
       assert.equal(await t.db.withWorkspace(WS_B, (tx) => countRows(tx, table)), 0, `desde B se leen filas de ${table} de A`);
-      assert.equal(await t.db.withoutWorkspace((tx) => countRows(tx, table)), 0, `sin workspace se leen filas de ${table}`);
+      assert.equal(await t.db.withCatalogs((tx) => countRows(tx, table)), 0, `sin workspace se leen filas de ${table}`);
     });
   }
 
@@ -258,7 +262,7 @@ describe('las tablas hijas heredan el aislamiento del padre (0018)', () => {
 
 describe('la transacción y sus manijas', () => {
   test('tx.db y tx.query lanzan TransactionClosedError después del cierre', async () => {
-    const leaked = await t.db.withoutWorkspace(async (tx) => tx);
+    const leaked = await t.db.withCatalogs(async (tx) => tx);
     await assert.rejects(leaked.query('SELECT 1'), TransactionClosedError);
     assert.throws(() => leaked.db.select({ id: deal.id }).from(deal), TransactionClosedError);
 
@@ -271,7 +275,7 @@ describe('la transacción y sus manijas', () => {
   test('las manijas también mueren cuando fn lanza', async () => {
     let leaked: BaseTx | undefined;
     await assert.rejects(
-      t.db.withoutWorkspace(async (tx) => {
+      t.db.withCatalogs(async (tx) => {
         leaked = tx;
         throw new Error('boom');
       }),
@@ -286,11 +290,11 @@ describe('la transacción y sus manijas', () => {
       NestedTransactionError,
     );
     await assert.rejects(
-      t.db.withoutWorkspace(async () => t.db.asWorker(async () => 1)),
+      t.db.withCatalogs(async () => t.db.asWorker(async () => 1)),
       /Transacción anidada/,
     );
     await assert.rejects(
-      t.db.asWorker(async () => t.db.withoutWorkspace(async () => 1)).catch((err: unknown) => {
+      t.db.asWorker(async () => t.db.withCatalogs(async () => 1)).catch((err: unknown) => {
         // Si esta sesión no puede asumir mc_worker, el rechazo viene de ahí y no prueba nada.
         if (isNotWorkerMember(err)) throw new NestedTransactionError();
         throw err;
@@ -326,5 +330,113 @@ describe('la transacción y sus manijas', () => {
       const outside = await t.raw<Timeouts>(sql);
       assert.equal(outside[0]?.st, '0');
     }
+  });
+});
+
+describe('membership y contact: las dos tablas que 0019 cerró', () => {
+  const USER_A = '0000000d-0000-4000-8000-00000000000a';
+  const USER_B = '0000000d-0000-4000-8000-00000000000b';
+  const COMPANY_B = '0000000c-0000-4000-8000-000000000002';
+
+  before(async () => {
+    // Los usuarios y las membresías se crean como superusuario: app_user
+    // sigue sin RLS (CIM-3) y membership necesita el workspace fijado.
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES
+        ('${USER_A}', 'a@ejemplo.com', 'Persona A'),
+        ('${USER_B}', 'b@ejemplo.com', 'Persona B');
+      INSERT INTO company (id, name) VALUES ('${COMPANY_B}', 'Fresko');
+      SELECT set_config('app.workspace_id', '${WS_A}', false);
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${USER_A}', 'owner');
+      SELECT set_config('app.workspace_id', '${WS_B}', false);
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_B}', '${USER_B}', 'owner');
+      SELECT set_config('app.workspace_id', '', false);
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_A}', '${COMPANY}', 'client');
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_B}', '${COMPANY_B}', 'client');
+    `);
+  }, { timeout: 120_000 });
+
+  test('membership: cada workspace ve solo sus membresías; sin workspace, ninguna', async () => {
+    const usuariosDe = (ws: string) =>
+      t.db.withWorkspace(ws, (tx) => tx.db.select({ userId: membership.userId }).from(membership));
+    assert.deepEqual((await usuariosDe(WS_A)).map((r) => r.userId), [USER_A]);
+    assert.deepEqual((await usuariosDe(WS_B)).map((r) => r.userId), [USER_B]);
+    assert.equal(await t.db.withCatalogs((tx) => countRows(tx, 'membership')), 0, 'sin workspace se enumeraban todas');
+  });
+
+  test('membership: desde A no se puede colgar a alguien de B', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) => tx.db.insert(membership).values({ workspaceId: WS_B, userId: USER_A, role: 'admin' })),
+      isRlsViolation,
+    );
+  });
+
+  test('membership: mc_worker las ve todas (es como CIM-3 leerá "a qué workspaces pertenezco")', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')), 2);
+  });
+
+  test('contact: un contacto user_provided de A no lo ve B', async () => {
+    const [propio] = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.db
+        .insert(contact)
+        .values({ companyId: COMPANY, fullName: 'Marcela Ruiz', email: 'marcela@cafealma.co', phone: '+573001112233', source: 'user_provided' })
+        .returning({ id: contact.id }),
+    );
+    assert.ok(propio);
+    const correosDe = (ws: string) =>
+      t.db.withWorkspace(ws, (tx) => tx.db.select({ email: contact.email }).from(contact));
+    assert.deepEqual((await correosDe(WS_A)).map((r) => r.email), ['marcela@cafealma.co']);
+    assert.deepEqual(await correosDe(WS_B), [], 'desde B se leía el correo y el teléfono de un contacto de A');
+    assert.equal(await t.db.withCatalogs((tx) => countRows(tx, 'contact')), 0, 'sin workspace se enumeraba la PII');
+  });
+
+  test('contact: los de fuente pública son de todos (es el dato de prospección compartido)', async () => {
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.insert(contact).values({ companyId: COMPANY_B, fullName: 'Prensa Fresko', email: 'prensa@fresko.co', source: 'press' }),
+    );
+    const vistosPorA = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ email: contact.email }).from(contact));
+    assert.ok(
+      vistosPorA.some((r) => r.email === 'prensa@fresko.co'),
+      'un contacto de prensa de una empresa ajena debería verse: es público',
+    );
+  });
+
+  test('contact: desde B no se puede escribir un contacto de una empresa que no tiene vinculada', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.db.insert(contact).values({ companyId: COMPANY, fullName: 'Intruso', source: 'user_provided' }),
+      ),
+      isRlsViolation,
+    );
+  });
+});
+
+describe('el helper de pruebas no se cuelga: raw/admin fuera de la transacción', () => {
+  test('llamar a admin() dentro de withWorkspace lanza en vez de esperar para siempre', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('sobre Postgres real admin usa otro pool y no hay cola compartida');
+    // Antes esto no resolvía ni lanzaba: la cola de exclusión de PGlite
+    // es la misma para raw y para las transacciones.
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, async () => t.admin('SELECT 1')),
+      (err: unknown) => err instanceof Error && err.name === 'RawInsideTransactionError',
+    );
+    // Y el cliente sigue sano después del rechazo.
+    const seen = await t.db.withWorkspace(WS_A, (tx) => tx.db.select({ id: deal.id }).from(deal));
+    assert.deepEqual(seen.map((r) => r.id), [dealA]);
+  });
+
+  test('t.raw() dentro de una transacción también lanza, con el mismo nombre', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('sobre Postgres real raw usa el pool y no hay cola compartida');
+    await assert.rejects(
+      t.db.withCatalogs(async () => t.raw('SELECT 1')),
+      /RawInsideTransactionError|no se llaman dentro de una transacción/,
+    );
+  });
+
+  test('fuera de transacción siguen funcionando', async () => {
+    await t.admin('SELECT 1');
+    const filas = await t.raw<{ uno: number }>('SELECT 1::int AS uno');
+    assert.equal(filas[0]?.uno, 1);
   });
 });

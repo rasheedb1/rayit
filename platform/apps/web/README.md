@@ -4,21 +4,42 @@ Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Finanzas ya
 es real (FIN-1): lee la base por `@mc/db`.
 
-Base de datos: con `DATABASE_URL` en el entorno usa ese Postgres
-(Supabase por el pooler, o el Docker de `make up`). Sin ella, en
-desarrollo, levanta un Postgres embebido en memoria con las migraciones
-y los seeds: es el «modo demo» y no necesita nada instalado. En
-producción sin `DATABASE_URL` la app falla a propósito.
+## Base de datos en local
+
+Con `DATABASE_URL` en el entorno usa ese Postgres (Supabase por el
+pooler, o el Docker de `make up`). Sin ella, en desarrollo, levanta un
+Postgres embebido en memoria con las migraciones y los seeds: es el
+«modo demo» y no necesita nada instalado. En producción sin
+`DATABASE_URL` la app falla a propósito.
+
+`make db.unlock` escribe las credenciales en `platform/.env.local`, que
+NO es una de las rutas que `next dev` lee por su cuenta (solo mira
+`apps/web/.env*`). Por eso el script `dev` de este paquete arranca Next
+con `node --env-file-if-exists=../../.env.local`, igual que el worker:
+así `make dev` levanta la web y el worker contra LA MISMA base. Si lo
+cambias y quitas esa parte, la web vuelve al modo demo sin decirlo más
+que en una línea del log:
+
+```
+[db] Sin DATABASE_URL: Postgres embebido en memoria con el seed (modo demo).
+```
 
 ```bash
 cd platform
+make db.unlock                   # una vez: escribe ../../.env.local
 pnpm install
-pnpm --filter @mc/web dev        # http://localhost:3000
+pnpm --filter @mc/web dev --port 3100   # el puerto lo eliges tú
 pnpm --filter @mc/web typecheck
 pnpm --filter @mc/web lint
 pnpm --filter @mc/web build
-pnpm --filter @mc/web test        # lib/*.test.ts con node --test
+pnpm --filter @mc/web test        # vitest
 ```
+
+Y en producción hay que decir qué workspace se sirve: `DEMO_WORKSPACE_ID`
+es obligatoria hasta CIM-3 (`lib/workspace/current.ts` lanza si falta).
+Se fija con `make vercel.run ARGS="env add DEMO_WORKSPACE_ID production"`
+(y otra vez con `preview`). Para servir el workspace del seed a
+propósito, `ALLOW_SEED_WORKSPACE=1`.
 
 Desplegar: `make vercel.deploy` (vista previa) o `make vercel.deploy
 PROD=1` (producción). El token vive en el vault; ver el CLAUDE.md de la
@@ -32,7 +53,11 @@ app/(app)/<modulo>/page.tsx   La ruta de cada módulo. Hoy muestra el plan;
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
 components/ui/                Kit de interfaz compartido (ver su README).
-lib/format.ts                 Dinero, fechas y porcentajes en es-CO.
+lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
+                              llegan del workspace; es-CO solo es el valor por defecto.
+lib/workspace/current.ts      El único sitio que sabe cuál es el workspace.
+lib/workspace/settings.ts     Su moneda, zona horaria y locale (cacheado por petición).
+lib/db/index.ts               withWorkspace(fn): la única forma de abrir una transacción.
 app/(app)/page.tsx            El plan completo (inicio).
 app/(app)/reglas/page.tsx     Reglas para no pisarse, dependencias, decisiones.
 content/backlog.ts            Las historias y SU ESTADO. Es lo que cambia.
