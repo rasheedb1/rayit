@@ -30,11 +30,12 @@ import {
   transitionCampaign as applyTransition,
   CampaignError,
   CampaignLockedError,
+  InvalidNameError,
   SUGGESTION_WINDOW_DAYS,
   type CampaignStatus,
   type SuggestionReason,
 } from '@mc/core';
-import type { WorkspaceTx } from '../provisional/client.ts';
+import { isUuid, type WorkspaceTx } from '../provisional/client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -191,7 +192,6 @@ function intOrNull(v: string | number | null): number | null {
   return n;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 const DATE = (col: string) => `to_char(${col}, 'YYYY-MM-DD')`;
 
@@ -656,7 +656,7 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   assertCampaignDates(startsOn, endsOn);
 
   const name = input.name?.trim();
-  if (input.name !== undefined && !name) throw new CampaignError('InvalidNameError', 'La campaña necesita un nombre.');
+  if (input.name !== undefined && !name) throw new InvalidNameError();
 
   await tx.query(
     `UPDATE campaign SET
@@ -767,26 +767,24 @@ interface RawQuoteRow {
  *
  * Garantías:
  *   - Idempotente: una segunda llamada con el mismo quoteId devuelve la
- *     campaña existente con created: false. Dos llamadas concurrentes se
- *     serializan con pg_advisory_xact_lock('campaign-from-quote:' ||
- *     quote_id), así que no se duplica.
+ *     campaña existente (no cancelada) con created: false. Dos llamadas
+ *     concurrentes se serializan con pg_advisory_xact_lock(
+ *     'campaign-from-quote:' || quote_id) y el índice único parcial de
+ *     0015 lo garantiza en la base para cualquier escritor. Una campaña
+ *     cancelada libera la cotización: se puede crear otra.
  *   - RLS: una cotización de otro workspace es QuoteNotFoundError.
- *   - Valida antes de escribir: InvalidDatesError (fechas), QuoteNotFoundError,
- *     QuoteNotAcceptedError. Todos con messageEs.
+ *   - Valida antes de escribir: InvalidDatesError (fechas), InvalidNameError
+ *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError. Todos
+ *     con messageEs.
  */
 export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCampaignFromQuoteInput): Promise<CreateCampaignFromQuoteResult> {
   assertCampaignDates(input.startsOn, input.endsOn);
-  if (!UUID_RE.test(input.quoteId)) throw new QuoteNotFoundError(input.quoteId);
+  if (!isUuid(input.quoteId)) throw new QuoteNotFoundError(input.quoteId);
+  const name = input.name === undefined ? undefined : input.name.trim();
+  if (name === '') throw new InvalidNameError();
 
-  // Serializa por cotización dentro de la transacción de quien llama.
-  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${input.quoteId}`]);
-
-  const existing = await tx.query<{ id: string }>('SELECT id FROM campaign WHERE quote_id = $1 ORDER BY created_at LIMIT 1', [input.quoteId]);
-  const existingId = existing.rows[0]?.id;
-  if (existingId) {
-    return { campaign: await requireCampaign(tx, existingId), created: false };
-  }
-
+  // Primero la cotización, bajo RLS: una ajena no existe, y nada de lo
+  // que sigue (bloqueo, campaña existente) se hace sobre ella.
   const { rows } = await tx.query<RawQuoteRow>(
     `SELECT q.id, q.number, q.status, q.company_id, co.name AS company_name, co.socials,
             q.creator_id, q.deal_id, q.total::text AS total, q.currency,
@@ -802,10 +800,24 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   if (!q) throw new QuoteNotFoundError(input.quoteId);
   if (q.status !== 'accepted') throw new QuoteNotAcceptedError(q.status);
 
-  const name = input.name?.trim() || defaultCampaignName(q.company_name, q.first_item, q.number);
+  // Serializa por cotización dentro de la transacción de quien llama. El
+  // índice único parcial de 0015 (quote_id, salvo canceladas) es la
+  // garantía en la base; el bloqueo evita que la segunda llamada choque
+  // con él y pueda devolver la campaña de la primera.
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${q.id}`]);
+  const existing = await tx.query<{ id: string }>(
+    "SELECT id FROM campaign WHERE quote_id = $1 AND status <> 'cancelled' ORDER BY created_at LIMIT 1",
+    [q.id],
+  );
+  const existingId = existing.rows[0]?.id;
+  if (existingId) {
+    return { campaign: await requireCampaign(tx, existingId), created: false };
+  }
+
+  const campaignName = name ?? defaultCampaignName(q.company_name, q.first_item, q.number);
   const brief = briefFromQuote({
-    agreedMetrics: q.agreed_metrics ?? [],
-    reportCutsHours: q.report_cuts_hours ?? [],
+    agreedMetrics: q.agreed_metrics,
+    reportCutsHours: q.report_cuts_hours,
     usageRightsDays: q.usage_rights_days,
     exclusivityDays: q.exclusivity_days,
     exclusivityScope: q.exclusivity_scope,
@@ -821,7 +833,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
              $12, $13, 'planned')
      RETURNING id`,
     [
-      q.company_id, q.creator_id, q.deal_id, q.id, name, brief,
+      q.company_id, q.creator_id, q.deal_id, q.id, campaignName, brief,
       input.startsOn, input.endsOn, input.trackingCode?.trim() || null,
       brandBaselineFrom(input.startsOn), JSON.stringify(brandAccountsFromSocials(q.socials)),
       q.total, q.currency,

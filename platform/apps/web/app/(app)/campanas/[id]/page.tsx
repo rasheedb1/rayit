@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache } from "react";
 import { notFound } from "next/navigation";
-import { CAMPAIGN_STATUS_META, CAMPAIGN_TRANSITIONS, canEditCampaign, deliverableLabel, INVOICE_STATUS_LABEL_ES, type InvoiceStatus } from "@mc/core";
+import { CAMPAIGN_STATUS_META, CAMPAIGN_TRANSITIONS, canEditCampaign, cutHoursLabel, deliverableLabel, INVOICE_STATUS_LABEL_ES, type InvoiceStatus } from "@mc/core";
 import { getCampaign, listCampaignPosts, listLinkablePosts, suggestPosts, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -71,12 +71,6 @@ function DataItem({ label, children }: { label: string; children: React.ReactNod
 }
 
 const None = ({ children = "—" }: { children?: string }) => <span className="text-fg-3">{children}</span>;
-
-/** «24 h», «7 días», «30 días» a partir de los cortes en horas de la cotización. */
-function cutLabel(hours: number): string {
-  const HOURS_PER_DAY = 24;
-  return hours < HOURS_PER_DAY * 2 ? `${hours} h` : `${Math.round(hours / HOURS_PER_DAY)} días`;
-}
 
 function dateRange(c: Pick<CampaignDetail, "startsOn" | "endsOn">): string | null {
   if (c.startsOn && c.endsOn) return formatDateRange(c.startsOn, c.endsOn);
@@ -233,7 +227,7 @@ export default async function CampanaPage({
             {campaign.agreed ? (
               <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
                 <DataItem label="Métricas acordadas">{campaign.agreed.agreedMetrics.length > 0 ? campaign.agreed.agreedMetrics.join(", ") : <None>Sin métricas acordadas</None>}</DataItem>
-                <DataItem label="Cortes del reporte">{campaign.agreed.reportCutsHours.length > 0 ? campaign.agreed.reportCutsHours.map(cutLabel).join(" · ") : <None />}</DataItem>
+                <DataItem label="Cortes del reporte">{campaign.agreed.reportCutsHours.length > 0 ? campaign.agreed.reportCutsHours.map(cutHoursLabel).join(" · ") : <None />}</DataItem>
                 <DataItem label="Derechos de uso">{campaign.agreed.usageRightsDays === null ? <None>Sin derechos de uso</None> : `${formatInt(campaign.agreed.usageRightsDays)} días`}</DataItem>
                 <DataItem label="Exclusividad">
                   {campaign.agreed.exclusivityDays === null ? (

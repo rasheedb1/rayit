@@ -1,6 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CampaignLockedError, InvalidCampaignTransition, InvalidDatesError } from '@mc/core';
+import { CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
 import {
   getCampaign,
   linkPost,
@@ -412,6 +412,32 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     );
     await assert.rejects(laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '2026-02-30', endsOn: '2026-03-01' })), InvalidDatesError);
     await assert.rejects(laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '10/11/2026', endsOn: '2026-11-12' })), InvalidDatesError);
+    await assert.rejects(
+      laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_SENT, startsOn: '2026-11-10', endsOn: '2026-11-12', name: '   ' })),
+      (e: unknown) => e instanceof InvalidNameError && /nombre/.test(e.messageEs),
+      'un nombre en blanco no cae al nombre por defecto: se rechaza como en updateCampaign',
+    );
+  });
+
+  test('una campaña cancelada libera la cotización: se puede crear otra; una activa la bloquea también en la base', async () => {
+    const first = await laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_RACE, startsOn: '2026-11-17', endsOn: '2026-11-24' }));
+    assert.equal(first.created, false);
+    // El índice único parcial (0015) protege incluso a quien no pase por la función.
+    await assert.rejects(
+      laura((tx) => tx.query(
+        `INSERT INTO campaign (workspace_id, company_id, quote_id, name, status)
+         VALUES (current_workspace_id(), $1, $2, 'Duplicada a mano', 'planned')`,
+        [COMPANY_CAFE_ALMA, QUOTE_RACE],
+      )),
+      /campaign_quote_id_active_key/,
+    );
+    await laura((tx) => transitionCampaign(tx, first.campaign.id, 'cancelled'));
+    const second = await laura((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_RACE, startsOn: '2026-12-15', endsOn: '2026-12-22' }));
+    assert.equal(second.created, true);
+    assert.notEqual(second.campaign.id, first.campaign.id);
+    assert.equal(second.campaign.status, 'planned');
+    const n = await laura((tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM campaign WHERE quote_id = $1', [QUOTE_RACE]));
+    assert.equal(n.rows[0]?.n, 2, 'la cancelada queda como historial');
   });
 
   test('el flujo de COT-4 de punta a punta: aceptar y crear en UNA transacción, y si algo falla no queda nada', async () => {

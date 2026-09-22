@@ -98,7 +98,7 @@ const cafeAlma = { handles: handlesFromSocials({ instagram: 'cafealma', tiktok: 
 test('handlesFromSocials toma cualquier valor de texto, sin @ y sin repetir', () => {
   assert.deepEqual(cafeAlma.handles, ['cafealma', 'cafealma.co']);
   assert.deepEqual(handlesFromSocials(null), []);
-  assert.deepEqual(handlesFromSocials({ instagram: 'x', followers: 12, tiktok: ' x ' }), ['x']);
+  assert.deepEqual(handlesFromSocials({ instagram: 'x', followers: 12, tiktok: ' x ', website: 'https://x.co' }), ['x'], 'sin repetir y sin la web');
 });
 
 test('motivos: mención en mentions o en la caption, código, nombre; sin motivo, vacío', () => {
@@ -135,8 +135,8 @@ test('entregables con etiqueta; un valor desconocido se muestra tal cual', () =>
 
 // ------------------------------------------------ desde la cotización
 
-test('brandAccountsFromSocials: una cuenta por red, sin @, llave en minúsculas, ordenadas por red', () => {
-  assert.deepEqual(brandAccountsFromSocials({ TikTok: '@cafealma.co', instagram: 'cafealma', followers: 12, youtube: ' ' }), [
+test('brandAccountsFromSocials: solo redes del producto, sin @, llave en minúsculas, ordenadas por red', () => {
+  assert.deepEqual(brandAccountsFromSocials({ TikTok: '@cafealma.co', instagram: 'cafealma', followers: 12, youtube: ' ', website: 'https://cafealma.co', linkedin: 'cafe-alma' }), [
     { platform_id: 'instagram', handle: 'cafealma' },
     { platform_id: 'tiktok', handle: 'cafealma.co' },
   ]);
@@ -161,4 +161,5 @@ test('briefFromQuote: lo acordado en texto, en español, sin inventar lo que fal
   );
   assert.equal(cutHoursLabel(47), '47 h');
   assert.equal(cutHoursLabel(48), '2 días');
+  assert.equal(cutHoursLabel(60), '60 h', 'dos días y medio no se redondea');
 });

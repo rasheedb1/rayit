@@ -8,7 +8,7 @@
  * Detalle: docs/propuestas/FIN-1.md.
  */
 export type { Db, WorkspaceTx, SqlExecutor, QueryResult } from './provisional/client.ts';
-export { createPgDb, createPgliteDb, assertWorkspaceId } from './provisional/client.ts';
+export { createPgDb, createPgliteDb, assertWorkspaceId, isUuid, UUID_RE } from './provisional/client.ts';
 export { createDbFromEnv, type DbMode } from './provisional/from-env.ts';
 export * from './queries/finanzas.ts';
 export * from './queries/campanas.ts';

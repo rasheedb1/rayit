@@ -98,6 +98,12 @@ export class CampaignLockedError extends CampaignError {
   }
 }
 
+export class InvalidNameError extends CampaignError {
+  constructor() {
+    super('InvalidNameError', 'La campaña necesita un nombre.');
+  }
+}
+
 export class InvalidDatesError extends CampaignError {
   constructor(messageEs = 'La fecha de fin no puede ser anterior a la de inicio.') {
     super('InvalidDatesError', messageEs);
@@ -230,14 +236,50 @@ function normalize(s: string): string {
   return s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
-/** Handles de company.socials: cualquier valor de texto, sin @ ni espacios. */
-export function handlesFromSocials(socials: unknown): string[] {
+/** Las redes del producto (platform.id en 0002). company.socials puede traer más llaves (web, linkedin): se ignoran. */
+export const PLATFORM_IDS = ['tiktok', 'instagram', 'facebook', 'youtube'] as const;
+export type PlatformId = (typeof PLATFORM_IDS)[number];
+
+export function isPlatformId(value: string): value is PlatformId {
+  return (PLATFORM_IDS as readonly string[]).includes(value);
+}
+
+/** A quién medir en CAM-3: una cuenta pública de la marca por red. */
+export interface BrandAccount {
+  platform_id: PlatformId;
+  handle: string;
+}
+
+/** '@CafeAlma ' → 'CafeAlma'. null si no queda nada. */
+function normalizeHandle(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const handle = value.trim().replace(/^@/, '');
+  return handle || null;
+}
+
+/**
+ * company.socials ({ "instagram": "cafealma", "tiktok": "@cafealma.co",
+ * "website": "https://…" }) → [{ platform_id: 'instagram', handle:
+ * 'cafealma' }, { platform_id: 'tiktok', handle: 'cafealma.co' }]. Solo
+ * las llaves que son redes del producto; el handle va sin @. Ordenadas
+ * por red porque jsonb no conserva el orden de las llaves.
+ */
+export function brandAccountsFromSocials(socials: unknown): BrandAccount[] {
   if (!socials || typeof socials !== 'object') return [];
+  const out: BrandAccount[] = [];
+  for (const [key, v] of Object.entries(socials as Record<string, unknown>)) {
+    const platformId = key.trim().toLowerCase();
+    const handle = normalizeHandle(v);
+    if (handle && isPlatformId(platformId)) out.push({ platform_id: platformId, handle });
+  }
+  return out.sort((a, b) => a.platform_id.localeCompare(b.platform_id));
+}
+
+/** Handles de company.socials en las redes del producto, sin @ ni repetidos. */
+export function handlesFromSocials(socials: unknown): string[] {
   const out: string[] = [];
-  for (const v of Object.values(socials as Record<string, unknown>)) {
-    if (typeof v !== 'string') continue;
-    const handle = v.trim().replace(/^@/, '');
-    if (handle && !out.includes(handle)) out.push(handle);
+  for (const { handle } of brandAccountsFromSocials(socials)) {
+    if (!out.includes(handle)) out.push(handle);
   }
   return out;
 }
@@ -274,31 +316,6 @@ export function suggestionReasons(post: SuggestionCandidate, needles: Suggestion
 // Desde la cotización (CAM-2)
 // ---------------------------------------------------------------------
 
-/** A quién medir en CAM-3: una cuenta pública de la marca por red. */
-export interface BrandAccount {
-  platform_id: string;
-  handle: string;
-}
-
-/**
- * company.socials ({ "instagram": "cafealma", "tiktok": "@cafealma.co" })
- * → [{ platform_id: 'instagram', handle: 'cafealma' }, …]. Se conserva
- * la llave tal cual (en minúsculas) como platform_id; el handle va sin @.
- */
-export function brandAccountsFromSocials(socials: unknown): BrandAccount[] {
-  if (!socials || typeof socials !== 'object') return [];
-  const out: BrandAccount[] = [];
-  for (const [key, v] of Object.entries(socials as Record<string, unknown>)) {
-    if (typeof v !== 'string') continue;
-    const handle = v.trim().replace(/^@/, '');
-    const platformId = key.trim().toLowerCase();
-    if (handle && platformId) out.push({ platform_id: platformId, handle });
-  }
-  // jsonb no conserva el orden de las llaves: se ordena por red para que
-  // el resultado sea el mismo venga de donde venga.
-  return out.sort((a, b) => a.platform_id.localeCompare(b.platform_id));
-}
-
 /** «Café Alma · 1 reel + 1 TikTok»; sin ítems, «Café Alma · COT-2026-014». */
 export function defaultCampaignName(companyName: string, firstItemDescription: string | null, quoteNumber: string): string {
   const tail = firstItemDescription?.trim() || quoteNumber;
@@ -316,9 +333,9 @@ export interface AgreedTerms {
 
 const HOURS_PER_DAY = 24;
 
-/** «24 h» hasta dos días; «7 días», «30 días» después. */
+/** «24 h», «36 h»; «7 días», «30 días» cuando son días exactos desde dos. */
 export function cutHoursLabel(hours: number): string {
-  return hours < HOURS_PER_DAY * 2 ? `${hours} h` : `${Math.round(hours / HOURS_PER_DAY)} días`;
+  return hours >= HOURS_PER_DAY * 2 && hours % HOURS_PER_DAY === 0 ? `${hours / HOURS_PER_DAY} días` : `${hours} h`;
 }
 
 /**

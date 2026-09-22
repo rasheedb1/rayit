@@ -49,26 +49,34 @@ No toco nada de Cotizar ni de `deal`.
    métricas, cortes, derechos, exclusividad, plazo) para que la ficha lo
    muestre aunque la cotización cambie después. No toca `deal` (`won_at`
    lo pone Rasheed) ni crea factura.
-   **DECISIÓN PENDIENTE DE NICOLÁS:** el seed 0003 guarda
-   `brand_accounts` como `[{ platform, handle }]` y CAM-2 escribe
-   `[{ platform_id, handle }]` como pide el prompt. CAM-3 debería leer
-   `platform_id ?? platform`; o cambio el seed (es mío, con `ON CONFLICT
-   DO UPDATE`) en la historia que lo lea. No lo cambio aquí para no
-   mezclar historias.
+   El seed 0003 guardaba `brand_accounts` como `[{ platform, handle }]`;
+   tras la revisión se alineó a `[{ platform_id, handle }]` en esta rama
+   (es mi archivo, `ON CONFLICT DO UPDATE`, `run-0003.mjs` en verde) para
+   que la columna tenga UNA forma. Solo entran las llaves de `socials`
+   que son redes del producto (`PLATFORM_IDS` en core: tiktok,
+   instagram, facebook, youtube); `website`, `linkedin`… se ignoran.
 3. **Reglas.** La cotización debe estar en `'accepted'`: la llamada va
    DESPUÉS del `UPDATE quote SET status = 'accepted'` en la misma
    transacción; si no, `QuoteNotAcceptedError`. Una cotización de otro
    workspace es «no encontrada» (RLS en `quote`): `QuoteNotFoundError`.
    Idempotente: bloqueo consultivo `pg_advisory_xact_lock(hashtext(
    'campaign-from-quote:' || quote_id))` (el mismo patrón de la
-   numeración de FIN-1) y, dentro, si ya existe una campaña con ese
-   `quote_id` en el workspace, se devuelve con `created: false` sin tocar
-   nada; dos aceptaciones concurrentes se serializan y la segunda ve la
-   campaña de la primera. `InvalidDatesError` (core) para fechas
-   inválidas. Todos con `messageEs`.
-   Se lee `quote` con `FOR UPDATE`? No: el bloqueo consultivo ya
-   serializa por cotización y `FOR UPDATE` sobre una fila que COT-4 acaba
-   de actualizar en la misma transacción es inocuo pero innecesario.
+   numeración de FIN-1) y, dentro, si ya existe una campaña **no
+   cancelada** con ese `quote_id` en el workspace, se devuelve con
+   `created: false` sin tocar nada; dos aceptaciones concurrentes se
+   serializan y la segunda ve la campaña de la primera. Tras la
+   revisión, la garantía vive también en la base: **migración
+   `0015_campaign_quote_unique.sql`**, índice único parcial sobre
+   `campaign (quote_id) WHERE quote_id IS NOT NULL AND status <>
+   'cancelled'` (precedente 0014; pasa `node db/migrate.mjs --pglite
+   --seed` y `run-0003.mjs`; **la aplicas tú con `make db.migrate`**).
+   Una campaña cancelada libera la cotización: si la marca vuelve a
+   aceptar, se crea otra y la cancelada queda como historial.
+   `InvalidDatesError` (core) para fechas inválidas; `InvalidNameError`
+   si `name` viene en blanco (igual que `updateCampaign`: no cae al
+   nombre por defecto sin avisar). Todos con `messageEs`. El orden es
+   leer la cotización (RLS) → bloquear → buscar existente → insertar,
+   para que una campaña ajena con ese `quote_id` nunca corte el camino.
 4. **Qué devuelve.** El `CampaignDetail` de CAM-1 (con `agreed` leído de
    la cotización y `deliverables` desde `quote_item`), para que COT-4
    pueda redirigir a `/campanas/<id>` o mostrar el nombre sin otra
@@ -156,6 +164,7 @@ simulado en el paso 3 para demostrar el rollback).
 | `InvalidDatesError` (core) | `startsOn`/`endsOn` no son fechas ISO reales o `endsOn < startsOn` | «La fecha de fin no puede ser anterior a la de inicio.» / «La fecha de inicio debe ser YYYY-MM-DD.» |
 | `QuoteNotFoundError` | La cotización no existe **en este workspace** (RLS) o el id no es UUID | «La cotización … no existe en este workspace.» |
 | `QuoteNotAcceptedError` (con `.status`) | La cotización no está en `accepted` (llamaste antes del UPDATE, o está en `sent`, `rejected`…) | «Solo una cotización aceptada crea campaña; esta está en «sent».» |
+| `InvalidNameError` (core) | `name` viene definido pero en blanco | «La campaña necesita un nombre.» |
 
 Todos extienden `CampaignError` (core): `code`, `messageEs` y el mismo
 texto en `message`. No hay otros errores esperables; un fallo de base
@@ -166,11 +175,14 @@ llega como `Error` de node-postgres y se muestra genérico.
 - **Atomicidad.** Corre en tu `tx`. Si tu acción lanza después, la
   campaña se deshace con la cotización.
 - **Idempotencia.** Con el mismo `quoteId` devuelve la campaña existente
-  y `created: false`, sin tocar nombre ni fechas. Dos llamadas
-  concurrentes se serializan con `pg_advisory_xact_lock(hashtext(
-  'campaign-from-quote:' || quote_id))` (el mismo patrón que la
-  numeración de facturas de FIN-1): una crea y la otra ve la creada.
-  Reintentar tu acción es seguro.
+  (no cancelada) y `created: false`, sin tocar nombre ni fechas. Dos
+  llamadas concurrentes se serializan con `pg_advisory_xact_lock(
+  hashtext('campaign-from-quote:' || quote_id))` (el mismo patrón que
+  la numeración de facturas de FIN-1): una crea y la otra ve la creada.
+  Y aunque alguien escriba `campaign` sin pasar por aquí, el índice
+  único parcial de 0015 no deja dos campañas activas por cotización.
+  Reintentar tu acción es seguro. Si la creadora cancela la campaña y la
+  marca vuelve a aceptar, se crea una nueva.
 - **RLS.** Nunca recibe `workspace_id`: la cotización se lee bajo la
   política de `quote` y la campaña se inserta con
   `current_workspace_id()`.
@@ -189,7 +201,7 @@ llega como `Error` de node-postgres y se muestra genérico.
 
 1. En tu rama, con la base embebida (sin `DATABASE_URL`):
    ```bash
-   cd platform && pnpm --filter @mc/db test   # 35 pruebas, 8 de CAM-2
+   cd platform && pnpm --filter @mc/db test   # 36 pruebas, 9 de CAM-2
    ```
 2. En Supabase, después de aceptar una cotización real desde tu pantalla:
    ```bash
@@ -211,22 +223,45 @@ llega como `Error` de node-postgres y se muestra genérico.
       del `UPDATE` de `quote.status`, en la misma transacción.
 - [ ] CIM-2: cuando `WorkspaceTx` sea el de Drizzle, si expone
       `tx.execute` o `tx.query(text, params)` esta función sigue igual.
-- [ ] `brand_accounts`: forma `[{ platform_id, handle }]`. El seed 0003
-      (mío) tiene `{ platform, handle }`; lo alineo en CAM-3 (§0.2.2).
+- [ ] Aplicar `db/migrations/0015_campaign_quote_unique.sql` en
+      Supabase (`make db.migrate`). Sin ella la función sigue siendo
+      idempotente para quien la llame; con ella lo es para todos.
 
 ## 7. Verificación
 
 - `pnpm --filter @mc/core test`: 36 pruebas (3 nuevas: cuentas de la
   marca, nombre por defecto, brief desde lo acordado).
-- `pnpm --filter @mc/db test`: 35 (8 de CAM-2): crea con los campos
+- `pnpm --filter @mc/db test`: 36 (9 de CAM-2): crea con los campos
   esperados; aparece en la lista y la ficha lee lo acordado y los
   entregables desde la cotización; segunda llamada → misma campaña,
   `created false`, sin pisar nombre ni fechas; `Promise.all` de dos →
   una sola; `sent` → `QuoteNotAcceptedError` y nada creado; otro
   workspace o id inexistente → `QuoteNotFoundError`; fechas inválidas →
-  `InvalidDatesError`; el flujo de COT-4 con rollback y luego completo.
+  `InvalidDatesError`; nombre en blanco → `InvalidNameError`; una
+  campaña cancelada libera la cotización y el índice de 0015 rechaza un
+  INSERT duplicado a mano; el flujo de COT-4 con rollback y luego
+  completo. `node db/migrate.mjs --pglite --seed` (15 migraciones) y
+  `node db/seed/verify/run-0003.mjs` en verde con la migración y el seed
+  alineado.
   Nota: pglite serializa las transacciones, así que la concurrencia real
   del bloqueo consultivo se ejercita con `TEST_DATABASE_URL` contra un
   Postgres de verdad (el mismo aviso de FIN-1).
 - Sin pantalla nueva: `typecheck` y `lint` de la web siguen en verde con
   el estado de la historia en `backlog.ts`.
+
+## 8. Revisión (/code-review, nivel alto)
+
+Diez hallazgos, todos resueltos en el commit «Revisión»:
+
+| Hallazgo | Qué se hizo |
+|---|---|
+| La idempotencia dependía solo del bloqueo y de un SELECT | Migración 0015: índice único parcial sobre `campaign (quote_id)` salvo canceladas |
+| `brand_accounts` tomaba cualquier llave de `socials` | Solo redes del producto (`PLATFORM_IDS`); `website`, `linkedin`… fuera |
+| Dos formas de `brand_accounts` (seed vs. función) | Seed 0003 alineado a `platform_id` |
+| Una campaña cancelada bloqueaba crear otra | Canceladas fuera de la búsqueda y del índice |
+| Bloqueo y búsqueda antes de verificar la cotización bajo RLS | Orden: cotización → bloqueo → existente → insertar |
+| `cutHoursLabel` redondeaba 60 h a «3 días» | Solo días exactos; si no, horas. La ficha usa la misma función |
+| Cuarta copia de `UUID_RE` | `isUuid`/`UUID_RE` exportados desde `provisional/client.ts` |
+| Dos normalizadores de handle | `handlesFromSocials` sale de `brandAccountsFromSocials` |
+| `?? []` sobre columnas NOT NULL | Quitado |
+| Nombre en blanco caía al nombre por defecto | `InvalidNameError`, el mismo criterio que `updateCampaign` |
