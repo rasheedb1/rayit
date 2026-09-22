@@ -33,7 +33,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
 function Section({ id, title, meta, children }: { id: string; title: string; meta?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-line p-4" aria-labelledby={id}>
+    <section className="min-w-0 rounded-md border border-line p-4" aria-labelledby={id}>
       <SectionTitle meta={meta}>
         <span id={id}>{title}</span>
       </SectionTitle>
@@ -73,8 +73,8 @@ function Miniatura({ post }: { post: CampaignPostRow }) {
     return <img src={post.coverUrl} alt="" width={40} height={40} loading="lazy" className="h-10 w-10 shrink-0 rounded-sm object-cover" />;
   }
   return (
-    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-surface-2 text-xs text-fg-3" aria-hidden="true">
-      {post.platformId.slice(0, 2)}
+    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-sm bg-surface-2 text-xs font-medium uppercase text-fg-3" aria-hidden="true">
+      {post.platformId.slice(0, 1)}
     </span>
   );
 }
@@ -219,8 +219,8 @@ export default async function CampanaPage({
         </p>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-8">
+      <div className="grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-8">
           <Section id="acordado" title="Acordado antes de publicar" meta={campaign.agreed ? `Cotización ${campaign.agreed.quoteNumber}` : undefined}>
             {campaign.agreed ? (
               <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
@@ -287,7 +287,7 @@ export default async function CampanaPage({
               <Dato label="Enlace rastreado">
                 {campaign.trackingUrl ? (
                   <span className="flex flex-wrap items-center gap-2">
-                    <a href={campaign.trackingUrl} target="_blank" rel="noopener noreferrer" className="break-all font-mono text-xs underline-offset-2 hover:underline">
+                    <a href={campaign.trackingUrl} target="_blank" rel="noopener noreferrer" className="min-w-0 max-w-full break-all font-mono text-xs underline-offset-2 hover:underline">
                       {campaign.trackingUrl}
                     </a>
                     <CopiarButton value={campaign.trackingUrl} label="Enlace" />
@@ -304,43 +304,6 @@ export default async function CampanaPage({
             )}
           </Section>
 
-          <Section id="posts" title="Posts asociados" meta={`${posts.length} ${posts.length === 1 ? "post" : "posts"}`}>
-            <DataTable
-              columns={postColumns(campaign, editable)}
-              rows={posts}
-              rowKey={(p) => p.postId}
-              caption="Posts de la campaña con sus métricas actuales"
-              emptyState={
-                <EmptyState
-                  title="Sin posts asociados"
-                  description={editable ? "Asocia los posts que publicaste para esta campaña: abajo están los sugeridos por fecha y mención." : "Esta campaña cerró sin posts asociados."}
-                />
-              }
-            />
-            {campaign.dataAsOf && <DataAsOf date={campaign.dataAsOf} source="último snapshot de métricas" className="mt-2" />}
-          </Section>
-
-          {editable && (
-            <Section id="asociar" title="Asociar post">
-              <AsociarPosts campaignId={campaign.id} suggestions={suggestions} initial={linkable} />
-            </Section>
-          )}
-
-          <Section id="resultado" title="Resultado">
-            <EmptyState
-              title="Llega con la medición"
-              description="Alcance, views, clics, canjes, seguidores para la marca, CPM y CPA se calculan desde los snapshots y lo que aporta la marca. Hasta entonces no hay cifras que mostrar."
-            />
-          </Section>
-
-          <Section id="seguidores" title="Seguidores de la marca">
-            <EmptyState
-              title="Llega con la medición"
-              description={`La curva de seguidores${brandHandle ? ` de @${brandHandle}` : " de la marca"}${
-                campaign.brandBaselineFrom ? ` desde el ${formatDate(campaign.brandBaselineFrom, "long")}` : ""
-              } se toma del snapshot público diario. Todavía no hay serie que dibujar.`}
-            />
-          </Section>
         </div>
 
         <aside className="space-y-6 lg:sticky lg:top-8 lg:self-start">
@@ -397,6 +360,48 @@ export default async function CampanaPage({
             )}
           </div>
         </aside>
+      </div>
+
+      <div className="mt-8 min-w-0 space-y-8">
+        <Section id="posts" title="Posts asociados" meta={`${posts.length} ${posts.length === 1 ? "post" : "posts"}`}>
+          <DataTable
+            columns={postColumns(campaign, editable)}
+            rows={posts}
+            rowKey={(p) => p.postId}
+            caption="Posts de la campaña con sus métricas actuales"
+            emptyState={
+              <EmptyState
+                title="Sin posts asociados"
+                description={editable ? "Asocia los posts que publicaste para esta campaña: abajo están los sugeridos por fecha y mención." : "Esta campaña cerró sin posts asociados."}
+              />
+            }
+          />
+          {campaign.dataAsOf && <DataAsOf date={campaign.dataAsOf} source="último snapshot de métricas" className="mt-2" />}
+        </Section>
+
+        {editable && (
+          <Section id="asociar" title="Asociar post">
+            <AsociarPosts campaignId={campaign.id} suggestions={suggestions} initial={linkable} />
+          </Section>
+        )}
+      </div>
+
+      <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">
+        <Section id="resultado" title="Resultado">
+          <EmptyState
+            title="Llega con la medición"
+            description="Alcance, views, clics, canjes, seguidores para la marca, CPM y CPA se calculan desde los snapshots y lo que aporta la marca. Hasta entonces no hay cifras que mostrar."
+          />
+        </Section>
+
+        <Section id="seguidores" title="Seguidores de la marca">
+          <EmptyState
+            title="Llega con la medición"
+            description={`La curva de seguidores${brandHandle ? ` de @${brandHandle}` : " de la marca"}${
+              campaign.brandBaselineFrom ? ` desde el ${formatDate(campaign.brandBaselineFrom, "long")}` : ""
+            } se toma del snapshot público diario. Todavía no hay serie que dibujar.`}
+          />
+        </Section>
       </div>
     </>
   );

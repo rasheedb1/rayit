@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { CampaignError, DELIVERABLES, isCampaignStatus, type CampaignStatus } from "@mc/core";
+import { CampaignError, isCampaignStatus, isDeliverable, type CampaignStatus } from "@mc/core";
 import {
   linkPost,
   listLinkablePosts,
@@ -63,8 +63,9 @@ function backWithError(campaignId: string, error: string | null): never {
 const asociarSchema = z.object({
   campaignId: z.string().regex(UUID_RE, "La campaña no es válida."),
   postId: z.string().regex(UUID_RE, "Elige un post."),
-  deliverable: z.enum(DELIVERABLES, { message: "Elige un entregable de la lista." }).or(z.literal("")),
-  isPrimary: z.literal("on").or(z.literal("")),
+  // refine y no enum(...).or(literal("")): la unión de zod responde «Invalid input» en inglés.
+  deliverable: z.string().refine((v) => v === "" || isDeliverable(v), "Elige un entregable de la lista."),
+  isPrimary: z.string().refine((v) => v === "" || v === "on", "El campo «principal» no es válido."),
 });
 
 /** Formulario «Asociar» (por post): valida, asocia y deja la ficha revalidada. */
@@ -136,8 +137,8 @@ const editarSchema = z
     campaignId: z.string().regex(UUID_RE, "La campaña no es válida."),
     name: z.string().trim().min(1, "La campaña necesita un nombre.").max(120, "El nombre no puede pasar de 120 caracteres.").optional(),
     brief: z.string().trim().max(2000, "El brief no puede pasar de 2000 caracteres.").optional(),
-    startsOn: z.string().regex(ISO_DATE_RE, "Elige la fecha de inicio.").or(z.literal("")).optional(),
-    endsOn: z.string().regex(ISO_DATE_RE, "Elige la fecha de fin.").or(z.literal("")).optional(),
+    startsOn: z.string().refine((v) => v === "" || ISO_DATE_RE.test(v), "Elige la fecha de inicio.").optional(),
+    endsOn: z.string().refine((v) => v === "" || ISO_DATE_RE.test(v), "Elige la fecha de fin.").optional(),
     trackingCode: z
       .string()
       .trim()
