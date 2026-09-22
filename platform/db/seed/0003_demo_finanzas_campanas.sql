@@ -13,9 +13,13 @@
 --     append-only con ON CONFLICT DO NOTHING sobre su clave natural.
 --   * Fechas de las facturas abiertas relativas a CURRENT_DATE para que
 --     la demo diga "vencida hace 41 días" cualquier día. La campaña de
---     Café Alma y el snapshot de @cafealma van con fechas FIJAS (24–31
+--     Café Alma y el snapshot de @cafealma van con fechas FIJAS (10–17
 --     ago 2026): son hechos históricos que el reporte y la factura
 --     citan, y así la consulta de verificación da siempre lo mismo.
+--     Es la misma línea de tiempo que 0002 (sección 13): reel el 10 y
+--     TikTok el 12 ago, 30 días cumplidos el 11 sep, resultado calculado
+--     y reporte enviado el 12 sep. Ninguna fecha queda en el futuro
+--     respecto al día del seed (verify/0002.sql lo comprueba).
 --
 -- Mapa de identificadores (solo dígitos hexadecimales):
 --   00000002-…  ids que DEBEN existir en 0002 (contrato con Rasheed):
@@ -114,11 +118,11 @@ VALUES
   ('00000002-0000-4000-8000-000000000d01', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003',
    '00000002-0000-4000-8000-0000000000c1', 'instagram', 'ig_18000000000000d01', 'https://www.instagram.com/reel/demo-d01/',
    'video', 'reels', 'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', '{coldbrew,cafe,recetafacil}', '{cafealma}', 41, true,
-   '2026-08-24 17:00:00+00'),
+   '2026-08-10 17:00:00+00'),
   ('00000002-0000-4000-8000-000000000d02', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003',
    '00000002-0000-4000-8000-0000000000c2', 'tiktok', 'tt_7400000000000000d02', 'https://www.tiktok.com/@laura.cocinafacil/video/demo-d02',
    'video', 'feed', 'El cold brew que me salva las mañanas 🧊 #ad @cafealma.co', '{coldbrew,cafe,ad}', '{cafealma.co}', 34, true,
-   '2026-08-27 16:30:00+00'),
+   '2026-08-12 16:30:00+00'),
   ('00000002-0000-4000-8000-000000000d03', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003',
    '00000002-0000-4000-8000-0000000000c2', 'tiktok', 'tt_7400000000000000d03', 'https://www.tiktok.com/@laura.cocinafacil/video/demo-d03',
    'video', 'feed', 'Tres desayunos con lo que llega en la caja de @freskomarket 🥑 #ad', '{desayuno,recetafacil,ad}', '{freskomarket}', 52, true,
@@ -133,19 +137,22 @@ VALUES
    '2026-07-15 14:00:00+00')
 ON CONFLICT DO NOTHING;
 
--- Una lectura de métricas por post (a 30 días) para que Campañas pueda
--- mostrar views y clics: Café Alma 412 K + 300 K = 712 K; Fresko
--- 140 K + 125 K = 265 K con 1 100 + 840 = 1 940 clics; Nutrivé 58 K.
+-- Una lectura manual a 30 días de los posts cuya campaña ya cerró, para
+-- que Campañas pueda mostrar views y clics aunque 0002 no esté: Café
+-- Alma 412 K + 300 K = 712 K; Nutrivé 58 K. Se capturan después de que
+-- el video cumplió las 720 h (d01 el 9 sep, d02 el 11 sep, d05 el 14
+-- ago) y nunca en el futuro. Los dos TikTok de Fresko (d03, d04) no
+-- llevan lectura manual: su campaña sigue midiendo hasta el 2 y el 6 de
+-- octubre, y una lectura "a 30 días" fechada antes de eso sería una
+-- mentira; las views actuales (≈ 137 K + 120 K) las da la curva de 0002.
 -- Sin clave natural: se evita el duplicado con WHERE NOT EXISTS.
 INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, reach, likes, comments, shares, saves, total_interactions, profile_visits, follows_from_post, link_clicks, reach_followers, reach_non_followers, source)
 SELECT v.post_id, '00000002-0000-4000-8000-000000000001', v.captured_at, 720, v.views, v.reach, v.likes, v.comments, v.shares, v.saves,
        v.likes + v.comments + v.shares + v.saves, v.profile_visits, v.follows, v.link_clicks, v.reach - v.reach_nf, v.reach_nf, 'manual'
 FROM (VALUES
-  ('00000002-0000-4000-8000-000000000d01'::uuid, '2026-09-23 06:00:00+00'::timestamptz, 412000, 296000, 24800, 610, 3100, 6200, 4100, 780, 3900, 172000),
-  ('00000002-0000-4000-8000-000000000d02'::uuid, '2026-09-26 06:00:00+00'::timestamptz, 300000, 190000, 17000, 420, 2000, 3400, 2600, 460, 2340, 110000),
-  ('00000002-0000-4000-8000-000000000d03'::uuid, '2026-10-02 06:00:00+00'::timestamptz, 140000,  96000,  8100, 230,  900, 1500, 1300, 210, 1100,  55000),
-  ('00000002-0000-4000-8000-000000000d04'::uuid, '2026-10-06 06:00:00+00'::timestamptz, 125000,  84000,  7200, 190,  760, 1300, 1100, 180,  840,  49000),
-  ('00000002-0000-4000-8000-000000000d05'::uuid, '2026-08-14 06:00:00+00'::timestamptz,  58000,  41000,  2900, 140,  310,  900,  600,  95,  420,  22000)
+  ('00000002-0000-4000-8000-000000000d01'::uuid, '2026-09-10 06:00:00+00'::timestamptz, 412000, 296000, 24800, 610, 3100, 6200, 4100, 780, 3900, 172000),
+  ('00000002-0000-4000-8000-000000000d02'::uuid, '2026-09-12 06:00:00+00'::timestamptz, 300000, 190000, 17000, 420, 2000, 3400, 2600, 460, 2340, 110000),
+  ('00000002-0000-4000-8000-000000000d05'::uuid, '2026-08-15 06:00:00+00'::timestamptz,  58000,  41000,  2900, 140,  310,  900,  600,  95,  420,  22000)
 ) AS v(post_id, captured_at, views, reach, likes, comments, shares, saves, profile_visits, follows, link_clicks, reach_nf)
 WHERE NOT EXISTS (
   SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = v.post_id AND s.captured_at = v.captured_at
@@ -159,10 +166,10 @@ INSERT INTO campaign (id, workspace_id, company_id, creator_id, name, brief, sta
 VALUES
   ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-000000000003',
    'Lanzamiento cold brew', '1 reel + 1 TikTok + 3 historias. Código propio y enlace rastreado; reporte a 30 días con cortes a 7 y 30.',
-   DATE '2026-08-24', DATE '2026-08-31', 'LAURA15',
+   DATE '2026-08-10', DATE '2026-08-17', 'LAURA15',
    'https://cafealma.co/cold-brew?utm_source=instagram&utm_medium=creator&utm_campaign=laura_coldbrew',
    '{"utm_source": "instagram", "utm_medium": "creator", "utm_campaign": "laura_coldbrew"}'::jsonb,
-   DATE '2026-08-10', '[{"platform": "instagram", "handle": "cafealma"}]'::jsonb,
+   DATE '2026-07-27', '[{"platform": "instagram", "handle": "cafealma"}]'::jsonb,
    3100000.00, 'COP', 'reported'),
   ('00000003-0000-4000-8000-000000ca0002', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-000000000003',
    'Campaña 2 TikTok · sep', '2 TikTok con enlace rastreado a la caja de desayunos. Medición a 30 días.',
@@ -202,11 +209,11 @@ ON CONFLICT (campaign_id, post_id) DO UPDATE SET
 -- =====================================================================
 -- 2 · Seguidores públicos de @cafealma: 60 días diarios, deterministas
 -- ---------------------------------------------------------------------
--- Día 0 = 18 jul 2026 con 18 200 seguidores. Ganancia diaria:
+-- Día 0 = 4 jul 2026 con 18 200 seguidores. Ganancia diaria:
 --   antes (d < 37):      12 + (d·2 mod 3)   → 12..14, promedio 12,9/día
---   ventana 24–31 ago:   150,155,175,160,150,150,150,150 → 1 240 en total
+--   ventana 10–17 ago:   150,155,175,160,150,150,150,150 → 1 240 en total
 --   después (d > 44):    22 + (d·5 mod 9)   → 22..30, promedio 26/día
--- d=23 es el 10 ago (brand_baseline_from), d=37 el 24 ago, d=44 el 31 ago.
+-- d=23 es el 27 jul (brand_baseline_from), d=37 el 10 ago, d=44 el 17 ago.
 -- Con la línea base de 14 días (12,93/día) y 155/día en campaña, el
 -- ritmo es 12×, como dice el mock. Sin random(): dos corridas dan lo mismo.
 -- =====================================================================
@@ -215,11 +222,11 @@ SELECT
   '00000003-0000-4000-8000-000000ca0001',
   '00000002-0000-4000-8000-0000000000e1',
   'instagram', '17841400000000e01', 'cafealma',
-  DATE '2026-07-18' + a.d,
+  DATE '2026-07-04' + a.d,
   18200 + a.ganados,
   640 + a.d / 3,
   'business_discovery',
-  ((DATE '2026-07-18' + a.d + 1)::timestamp + interval '6 hours') AT TIME ZONE 'UTC'
+  ((DATE '2026-07-04' + a.d + 1)::timestamp + interval '6 hours') AT TIME ZONE 'UTC'
 FROM (
   SELECT d, sum(gain) OVER (ORDER BY d) AS ganados
   FROM (
@@ -242,9 +249,9 @@ ON CONFLICT (company_id, platform_id, day) DO NOTHING;
 INSERT INTO campaign_brand_input (id, workspace_id, campaign_id, kind, day, value_num, currency, source, received_at, notes)
 VALUES
   ('00000003-0000-4000-8000-000000ab0001', '00000002-0000-4000-8000-000000000001', '00000003-0000-4000-8000-000000ca0001',
-   'code_redemptions', DATE '2026-09-15', 318, NULL, 'brand_manual', '2026-09-15 14:00:00+00', 'Canjes de LAURA15 acumulados al 15 sep, reportados por la marca.'),
+   'code_redemptions', DATE '2026-09-11', 318, NULL, 'brand_manual', '2026-09-11 14:00:00+00', 'Canjes de LAURA15 acumulados al 11 sep, reportados por la marca.'),
   ('00000003-0000-4000-8000-000000ab0002', '00000002-0000-4000-8000-000000000001', '00000003-0000-4000-8000-000000ca0001',
-   'revenue',          DATE '2026-09-15', 8400000.00, 'COP', 'brand_manual', '2026-09-15 14:00:00+00', 'Ventas con código, reportadas por la marca. Falta el CSV diario para el lift.'),
+   'revenue',          DATE '2026-09-11', 8400000.00, 'COP', 'brand_manual', '2026-09-11 14:00:00+00', 'Ventas con código, reportadas por la marca. Falta el CSV diario para el lift.'),
   ('00000003-0000-4000-8000-000000ab0003', '00000002-0000-4000-8000-000000000001', '00000003-0000-4000-8000-000000ca0004',
    'code_redemptions', DATE '2026-06-30', 42, NULL, 'brand_manual', '2026-06-30 16:00:00+00', 'Canjes de LAURAHOGAR al cierre de junio.'),
   ('00000003-0000-4000-8000-000000ab0004', '00000002-0000-4000-8000-000000000001', '00000003-0000-4000-8000-000000ca0004',
@@ -262,7 +269,7 @@ ON CONFLICT (id) DO UPDATE SET
 -- =====================================================================
 INSERT INTO campaign_result (campaign_id, workspace_id, computed_at, cut_hours, views, reach, interactions, saves, shares, link_clicks, reach_non_followers_pct, views_vs_median, brand_followers_gained, brand_followers_baseline_rate, brand_followers_campaign_rate, code_redemptions, attributed_revenue, currency, cpm, cost_per_follower, cpa, emv, missing_inputs)
 VALUES
-  ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '2026-09-24 07:30:00+00', 720,
+  ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '2026-09-12 07:30:00+00', 720,
    712000, 486000, 57630, 9600, 5100, 6240, 0.58000, NULL,
    1240, 12.9286, 155.0000, 318, 8400000.00, 'COP', 11800.00, 2500.00, 26400.00, NULL, '{brand_csv_sales}'),
   ('00000003-0000-4000-8000-000000ca0003', '00000002-0000-4000-8000-000000000001', '2026-08-22 07:30:00+00', 720,
@@ -417,7 +424,7 @@ FROM (VALUES
   ('00000003-0000-4000-8000-0009a5080003'::uuid, 'equipo',       'Estudio La Loma',                'Alquiler de estudio y luces · agosto', 900000.00, DATE '2026-08-01', true, 'monthly'),
   ('00000003-0000-4000-8000-0009a5080004'::uuid, 'contabilidad', 'Contadora (Diana P.)',           'Contabilidad · agosto',               400000.00, DATE '2026-08-01', true,  'monthly'),
   ('00000003-0000-4000-8000-0009a5080005'::uuid, 'servicios',    'Claro',                          'Internet y telefonía · agosto',       220000.00, DATE '2026-08-01', true,  'monthly'),
-  ('00000003-0000-4000-8000-0009a5080101'::uuid, 'viajes',       'Transporte y alojamiento',       'Grabación en la finca de Café Alma',  460000.00, DATE '2026-08-22', false, NULL),
+  ('00000003-0000-4000-8000-0009a5080101'::uuid, 'viajes',       'Transporte y alojamiento',       'Grabación en la finca de Café Alma',  460000.00, DATE '2026-08-06', false, NULL),
   -- septiembre
   ('00000003-0000-4000-8000-0009a5090001'::uuid, 'edicion',      'Mateo R. (freelance)',           'Edición de video · septiembre',      1800000.00, DATE '2026-09-01', true,  'monthly'),
   ('00000003-0000-4000-8000-0009a5090002'::uuid, 'software',     'Adobe · CapCut · Notion · Canva', 'Suscripciones · septiembre',         380000.00, DATE '2026-09-01', true,  'monthly'),

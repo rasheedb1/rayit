@@ -6,6 +6,15 @@
     "typecheck": { "dependsOn": ["^build"] },
     "lint":      {},
     "test":      { "dependsOn": ["^build"] },
-    "format":    { "cache": false }
+    "format":    { "cache": false },
+
+    "@mc/db#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**", "$TURBO_ROOT$/db/seed/**"]
+    },
+    "@mc/connectors#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**"]
+    }
   }
 }

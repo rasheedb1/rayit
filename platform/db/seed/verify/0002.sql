@@ -36,26 +36,38 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
          AND (SELECT count(*) FROM signal) = 12
          AND (SELECT count(*) FROM deal) = 15
-         AND (SELECT count(*) FROM activity) = 36 AS ok;
+         AND (SELECT count(*) FROM activity) = 38 AS ok;
 
+-- El "hoy" de la serie de la cuenta es el día en que el seed corrió por
+-- primera vez (el día 0 se ancla a lo ya guardado; ver sección 5 del
+-- seed). Las comprobaciones de la serie se anclan a ese día, no a
+-- CURRENT_DATE, para que valgan también contra una base sembrada hace
+-- días; y se exige que ese día no esté en el futuro y que la serie
+-- sean 90 días seguidos por conexión.
 -- (b) Seguidores hoy, por red: FOLLOWERS_NOW del mock (412 000 en total).
-SELECT 'b_seguidores' AS check_id, c.platform_id, s.followers, s.day,
+SELECT 'b_seguidores' AS check_id, c.platform_id, s.followers, s.day, s.dias,
        s.followers = CASE c.platform_id WHEN 'tiktok' THEN 214000 WHEN 'instagram' THEN 128000
                                         WHEN 'youtube' THEN 49000 ELSE 21000 END
-         AND s.day = CURRENT_DATE AS ok
+         AND s.day = (SELECT max(day) FROM account_metric_snapshot)
+         AND s.day <= CURRENT_DATE
+         AND s.dias = 90 AND s.primer_dia = s.day - 89 AS ok
 FROM social_connection c
 JOIN LATERAL (
-  SELECT followers, day FROM account_metric_snapshot a
-  WHERE a.connection_id = c.id ORDER BY a.day DESC LIMIT 1
+  SELECT max(day) AS day, min(day) AS primer_dia, count(*) AS dias,
+         (SELECT followers FROM account_metric_snapshot x WHERE x.connection_id = c.id ORDER BY x.day DESC LIMIT 1) AS followers
+  FROM account_metric_snapshot a
+  WHERE a.connection_id = c.id
 ) s ON true
 ORDER BY c.platform_id;
 
 -- (b2) Total de seguidores y delta a 30 días (el KPI "Seguidores en
 --      total": 412 K, ≈ +2..3 %). La serie nunca baja.
-WITH hoy AS (
-  SELECT sum(followers) AS n FROM account_metric_snapshot WHERE day = CURRENT_DATE
+WITH ancla AS (
+  SELECT max(day) AS dia FROM account_metric_snapshot
+), hoy AS (
+  SELECT sum(followers) AS n FROM account_metric_snapshot, ancla WHERE day = ancla.dia
 ), hace30 AS (
-  SELECT sum(followers) AS n FROM account_metric_snapshot WHERE day = CURRENT_DATE - 30
+  SELECT sum(followers) AS n FROM account_metric_snapshot, ancla WHERE day = ancla.dia - 30
 ), caidas AS (
   SELECT count(*) AS n FROM (
     SELECT followers - lag(followers) OVER (PARTITION BY connection_id ORDER BY day) AS d
@@ -67,18 +79,27 @@ SELECT 'b2_total' AS check_id, hoy.n AS seguidores, hace30.n AS hace_30_dias,
        hoy.n = 412000 AND caidas.n = 0 AS ok
 FROM hoy, hace30, caidas;
 
--- (c) Views en 30 días. Dos lecturas que deben ser del mismo orden que
---     el mock (≈ 2,6 M): las views diarias de la cuenta y las views
---     actuales de los videos publicados en la ventana.
+-- (c) Views en 30 días. El KPI del mock es ≈ 2,6 M sobre las views
+--     diarias de la cuenta: se exige entre 2,4 y 2,9 M, un margen que
+--     sí defiende la cifra (la base diaria, la tendencia y el pico de
+--     la arepa están calibrados para eso). Las views actuales de los
+--     videos publicados en la ventana son otra lectura del mismo orden
+--     (los doce del mock traen sus views tal cual): algo por debajo de
+--     la cuenta, porque la cuenta también suma lo que siguen ganando
+--     los videos de antes de la ventana.
+WITH ancla AS (
+  SELECT max(day) AS dia FROM account_metric_snapshot
+)
 SELECT 'c_views_30d' AS check_id,
-       (SELECT sum(views) FROM account_metric_snapshot WHERE day > CURRENT_DATE - 30) AS cuenta_30d,
-       (SELECT sum(views) FROM account_metric_snapshot WHERE day > CURRENT_DATE - 60 AND day <= CURRENT_DATE - 30) AS cuenta_30d_previos,
-       (SELECT sum(m.views) FROM post p JOIN post_metrics_latest m ON m.post_id = p.id
-         WHERE p.published_at > now() - interval '30 days') AS videos_30d,
-       (SELECT count(*) FROM post WHERE published_at > now() - interval '30 days') AS videos,
-       (SELECT sum(views) FROM account_metric_snapshot WHERE day > CURRENT_DATE - 30) BETWEEN 2000000 AND 3500000
-         AND (SELECT sum(m.views) FROM post p JOIN post_metrics_latest m ON m.post_id = p.id
-               WHERE p.published_at > now() - interval '30 days') BETWEEN 2000000 AND 4000000 AS ok;
+       (SELECT sum(views) FROM account_metric_snapshot, ancla WHERE day > ancla.dia - 30) AS cuenta_30d,
+       (SELECT sum(views) FROM account_metric_snapshot, ancla WHERE day > ancla.dia - 60 AND day <= ancla.dia - 30) AS cuenta_30d_previos,
+       (SELECT sum(m.views) FROM post p JOIN post_metrics_latest m ON m.post_id = p.id, ancla
+         WHERE p.published_at > (ancla.dia + 1)::timestamp AT TIME ZONE 'UTC' - interval '30 days') AS videos_30d,
+       (SELECT count(*) FROM post, ancla WHERE published_at > (ancla.dia + 1)::timestamp AT TIME ZONE 'UTC' - interval '30 days') AS videos,
+       (SELECT sum(views) FROM account_metric_snapshot, ancla WHERE day > ancla.dia - 30) BETWEEN 2400000 AND 2900000
+         AND (SELECT sum(m.views) FROM post p JOIN post_metrics_latest m ON m.post_id = p.id, ancla
+               WHERE p.published_at > (ancla.dia + 1)::timestamp AT TIME ZONE 'UTC' - interval '30 days') BETWEEN 2000000 AND 3200000 AS ok
+FROM ancla;
 
 -- (d) La tabla "Mis videos" del mock: views, × mediana y nivel de cada
 --     uno de los doce, desde creator_post_board. Los outliers claros
@@ -110,15 +131,18 @@ ORDER BY b.views_vs_median DESC NULLS LAST;
 -- (d2) Outliers en total: entre 3 y 7 videos con ≥ 2× (los cuatro del
 --      mock más los dos de la campaña de Café Alma), y a lo sumo un
 --      breakout: el reel del cold brew, 412 K views contra una mediana
---      de Instagram de 62 K. Todo video con 24 h tiene puntaje.
+--      de Instagram de 62 K. Todo video con 24 h según el reloj del
+--      seed (medianoche UTC del día de la última corrida, que es el
+--      computed_at más reciente de post_score) tiene puntaje.
 SELECT 'd2_outliers' AS check_id,
        count(*) FILTER (WHERE is_outlier) AS outliers,
        count(*) FILTER (WHERE outlier_tier = 'breakout') AS breakouts,
        count(*) AS puntuados,
-       (SELECT count(*) FROM post WHERE published_at <= now() - interval '24 hours') AS con_24h,
+       (SELECT count(*) FROM post WHERE published_at <= (SELECT max(computed_at) FROM post_score) - interval '24 hours') AS con_24h,
        count(*) FILTER (WHERE is_outlier) BETWEEN 3 AND 7
          AND count(*) FILTER (WHERE outlier_tier = 'breakout') <= 1
-         AND count(*) = (SELECT count(*) FROM post WHERE published_at <= now() - interval '24 hours') AS ok
+         AND (SELECT max(computed_at) FROM post_score) <= now()
+         AND count(*) = (SELECT count(*) FROM post WHERE published_at <= (SELECT max(computed_at) FROM post_score) - interval '24 hours') AS ok
 FROM post_score;
 
 -- (e) Línea base por red y corte: 16 filas, todas confiables (≥ 8
@@ -169,15 +193,43 @@ SELECT 'f_curvas' AS check_id,
                WHERE a72.cut_hours = 72 AND a720.age_hours = 720) BETWEEN 0.65 AND 0.95 AS ok
 FROM s;
 
--- (g) Los posts de las campañas de 0003 llegan a sus views de 30 días
---     (412 K, 300 K, 140 K, 125 K, 58 K) por la misma curva.
-SELECT 'g_posts_campana' AS check_id, p.external_post_id, m.views AS views_720h,
-       m.views = CASE right(p.external_post_id, 3) WHEN 'd01' THEN 412000 WHEN 'd02' THEN 300000
-                                                    WHEN 'd03' THEN 140000 WHEN 'd04' THEN 125000 ELSE 58000 END AS ok
-FROM post p
-JOIN post_metric_snapshot m ON m.post_id = p.id AND m.age_hours = 720 AND m.source = 'api'
-WHERE p.is_branded_content
-ORDER BY p.external_post_id;
+-- (g) Los posts de las campañas de 0003 siguen la curva que lleva a sus
+--     views de 30 días (412 K, 300 K, 140 K, 125 K, 58 K). Se comprueba
+--     por construcción, en los cinco: la lectura de mayor edad de cada
+--     uno vale round(v_ref · f(edad) / f(720)) con la fórmula de la
+--     sección 4 del seed, y los que ya cumplieron 30 días tienen la
+--     lectura de 720 h exacta. Así la consulta no queda vacía para los
+--     videos que todavía no llegan a 30 días.
+WITH esperado AS (
+  SELECT * FROM (VALUES
+    ('00000002-0000-4000-8000-000000000d01'::uuid, 412000, 30.0),
+    ('00000002-0000-4000-8000-000000000d02'::uuid, 300000, 24.0),
+    ('00000002-0000-4000-8000-000000000d03'::uuid, 140000, 24.0),
+    ('00000002-0000-4000-8000-000000000d04'::uuid, 125000, 24.0),
+    ('00000002-0000-4000-8000-000000000d05'::uuid,  58000, 48.0)
+  ) AS v(post_id, v_ref, tau1)
+), ultima AS (
+  SELECT DISTINCT ON (s.post_id) s.post_id, s.age_hours::int AS age_hours, s.views
+  FROM post_metric_snapshot s
+  WHERE s.source = 'api' AND s.post_id IN (SELECT post_id FROM esperado)
+  ORDER BY s.post_id, s.age_hours DESC
+), comparado AS (
+  SELECT p.external_post_id, u.age_hours, u.views, e.v_ref,
+         round(e.v_ref
+               * (0.85 * (1 - exp(-u.age_hours / e.tau1)) + 0.15 * (1 - exp(-u.age_hours / 400.0)))
+               / (0.85 * (1 - exp(-720 / e.tau1))         + 0.15 * (1 - exp(-720 / 400.0))))::bigint AS esperado,
+         EXISTS (SELECT 1 FROM post_metric_snapshot x
+                  WHERE x.post_id = e.post_id AND x.source = 'api' AND x.age_hours = 720 AND x.views = e.v_ref) AS tiene_720h
+  FROM esperado e
+  JOIN ultima u ON u.post_id = e.post_id
+  JOIN post p ON p.id = e.post_id AND p.is_branded_content
+)
+SELECT 'g_posts_campana' AS check_id, external_post_id, age_hours AS edad_h, views, esperado, v_ref AS views_a_720h, tiene_720h,
+       (SELECT count(*) FROM comparado) = 5
+         AND views = esperado
+         AND (age_hours < 720 OR tiene_720h) AS ok
+FROM comparado
+ORDER BY external_post_id;
 
 -- (h) Demografía: cada dimensión suma 1 en cada cuenta; 18–34 ≈ 71 %,
 --     mujeres ≈ 64 % y Colombia ≈ 71 % en Instagram (la base del media kit).
@@ -197,10 +249,11 @@ SELECT 'h2_media_kit' AS check_id,
 FROM audience_breakdown
 WHERE connection_id = '00000002-0000-4000-8000-0000000000c1';
 
--- (i) Pipeline (deal_pipeline): 8 abiertos por COP 80 M, ponderado
---     36,6 M, 2 seguimientos vencidos, 2 para hoy, 1 sin fecha; 4
---     ganados (3 en Q3 por 12,8 M) y 3 perdidos. El mock tiene 17
---     abiertos por 129,3 M; con ocho marcas el orden es el mismo.
+-- (i) Pipeline (deal_pipeline): 10 abiertos por COP 95,5 M, ponderado
+--     43,15 M, 2 seguimientos vencidos, 2 para hoy, 1 sin fecha; 4
+--     ganados (3 en Q3 por 12,8 M) y 1 perdido. El mock tiene 17
+--     abiertos por 129,3 M y ponderado 49,4 M; con ocho marcas y quince
+--     deals el orden es el mismo (docs/propuestas/CIM-6.md §3.1).
 SELECT 'i_pipeline' AS check_id,
        count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) AS abiertos,
        sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) AS en_pipeline,
@@ -211,14 +264,15 @@ SELECT 'i_pipeline' AS check_id,
        count(*) FILTER (WHERE p.is_won) AS ganados,
        sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) AS ganado_q3,
        count(*) FILTER (WHERE p.is_lost) AS perdidos,
-       count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 8
-         AND sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 80000000
-         AND sum(p.weighted_amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 36600000
+       count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 10
+         AND sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 95500000
+         AND sum(p.weighted_amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 43150000
          AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'vencido') = 2
          AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'hoy') = 2
+         AND count(*) FILTER (WHERE NOT p.is_won AND NOT p.is_lost AND p.due_state = 'sin_fecha') = 1
          AND count(*) FILTER (WHERE p.is_won) = 4
          AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 12800000
-         AND count(*) FILTER (WHERE p.is_lost) = 3 AS ok
+         AND count(*) FILTER (WHERE p.is_lost) = 1 AS ok
 FROM deal_pipeline p
 JOIN deal d ON d.id = p.id;
 
@@ -274,3 +328,71 @@ SELECT 'm_aislamiento' AS check_id,
        (SELECT count(*) FROM post) = 0 AND (SELECT count(*) FROM deal_pipeline) = 0
          AND (SELECT count(*) FROM creator_post_board) = 0 AS ok;
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
+
+-- (n) Nada del seed está en el futuro: ni un resultado de campaña
+--     calculado antes de que el video cumpla 30 días, ni un reporte
+--     "enviado" mañana, ni una lectura capturada antes de la edad que
+--     dice tener (vale para las lecturas manuales de 0003 también).
+SELECT 'n_sin_futuro' AS check_id,
+       (SELECT count(*) FROM campaign_result WHERE computed_at > now())                        AS resultados_futuros,
+       (SELECT count(*) FROM activity WHERE occurred_at > now())                               AS actividades_futuras,
+       (SELECT count(*) FROM post_metric_snapshot WHERE captured_at > now())                   AS lecturas_futuras,
+       (SELECT count(*) FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+         WHERE s.captured_at < p.published_at + make_interval(hours => s.age_hours::int))     AS lecturas_antes_de_su_edad,
+       (SELECT count(*) FROM signal WHERE detected_at > now() OR reviewed_at > now())          AS senales_futuras,
+       (SELECT count(*) FROM deal WHERE created_at > now() OR last_contact_at > now()
+                                     OR won_at > now() OR lost_at > now())                     AS deals_futuros,
+       (SELECT count(*) FROM deal_stage_history WHERE changed_at > now())                      AS etapas_futuras,
+       (SELECT count(*) FROM campaign_brand_input WHERE received_at > now())                   AS aportes_futuros,
+       (SELECT count(*) FROM campaign_result cr JOIN campaign_post cp ON cp.campaign_id = cr.campaign_id
+          JOIN post p ON p.id = cp.post_id
+         WHERE cr.computed_at < p.published_at + make_interval(hours => cr.cut_hours))         AS resultados_antes_del_corte,
+       (SELECT count(*) FROM campaign_result WHERE computed_at > now()) = 0
+         AND (SELECT count(*) FROM activity WHERE occurred_at > now()) = 0
+         AND (SELECT count(*) FROM post_metric_snapshot WHERE captured_at > now()) = 0
+         AND (SELECT count(*) FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+               WHERE s.captured_at < p.published_at + make_interval(hours => s.age_hours::int)) = 0
+         AND (SELECT count(*) FROM signal WHERE detected_at > now() OR reviewed_at > now()) = 0
+         AND (SELECT count(*) FROM deal WHERE created_at > now() OR last_contact_at > now()
+                                           OR won_at > now() OR lost_at > now()) = 0
+         AND (SELECT count(*) FROM deal_stage_history WHERE changed_at > now()) = 0
+         AND (SELECT count(*) FROM campaign_brand_input WHERE received_at > now()) = 0
+         AND (SELECT count(*) FROM campaign_result cr JOIN campaign_post cp ON cp.campaign_id = cr.campaign_id
+                JOIN post p ON p.id = cp.post_id
+               WHERE cr.computed_at < p.published_at + make_interval(hours => cr.cut_hours)) = 0 AS ok;
+
+-- (o) La baja de Mateo Giraldo se respeta en todos los canales: el
+--     disparador de outbound_touch (0007) rechaza programar o enviar
+--     un toque a un contacto con opted_out, con ERRCODE check_violation.
+--     Se intenta en los tres canales permitidos y en los dos estados
+--     que el disparador vigila; si alguno pasa, el bloque lanza un error
+--     distinto (raise_exception) que run.mjs no traga, y la consulta
+--     de después exige que no quede ningún toque para ese contacto.
+DO $$
+DECLARE
+  canal text;
+  estado text;
+BEGIN
+  FOREACH canal IN ARRAY ARRAY['email', 'linkedin', 'instagram_dm'] LOOP
+    FOREACH estado IN ARRAY ARRAY['scheduled', 'sent'] LOOP
+      BEGIN
+        INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for, sent_at)
+        VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6',
+                '00000002-0000-4000-8000-0000000c0010', canal, 'Prueba de la baja',
+                'Este toque no debería poder programarse ni enviarse.', estado,
+                CASE WHEN estado = 'scheduled' THEN now() + interval '1 day' END,
+                CASE WHEN estado = 'sent' THEN now() END);
+        RAISE EXCEPTION 'la baja no se respetó: canal %, estado %', canal, estado;
+      EXCEPTION WHEN check_violation THEN
+        NULL; -- lo esperado: el disparador lo bloqueó
+      END;
+    END LOOP;
+  END LOOP;
+END $$;
+
+SELECT 'o_baja_respetada' AS check_id, c.full_name, c.opted_out, c.opted_out_at,
+       (SELECT count(*) FROM outbound_touch t WHERE t.contact_id = c.id) AS toques,
+       c.opted_out AND c.opted_out_at IS NOT NULL
+         AND (SELECT count(*) FROM outbound_touch t WHERE t.contact_id = c.id) = 0 AS ok
+FROM contact c
+WHERE c.id = '00000002-0000-4000-8000-0000000c0010';

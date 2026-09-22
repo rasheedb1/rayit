@@ -11,16 +11,43 @@
 -- Reglas del archivo:
 --   * Idempotente. UUID fijos y ON CONFLICT DO NOTHING en las tablas
 --     con clave; WHERE NOT EXISTS sobre la clave natural en las que no
---     la tienen (post_metric_snapshot, audience_breakdown, historia de
---     etapas). Correr dos veces deja los mismos conteos.
+--     la tienen (post_metric_snapshot, historia de etapas). Correr dos
+--     veces deja los mismos conteos, el mismo día o cualquier día
+--     después (verify/run.mjs lo prueba con una tercera pasada con el
+--     reloj adelantado un día).
 --   * Determinista. Nada de random(): las curvas salen de funciones
 --     cerradas sobre generate_series, así que dos corridas dan lo
---     mismo, y dos máquinas también.
---   * Fechas. Lo que la demo mira "hoy" (videos recientes, lecturas,
---     seguidores, señales de la bandeja, próximas acciones) va relativo
---     a CURRENT_DATE, para que en dos meses siga vivo. Lo que ya pasó y
---     se cita en un reporte o una factura (los cinco posts de las
---     campañas de 0003, los cierres, los correos y llamadas) va fijo.
+--     mismo, y dos máquinas que siembren el mismo día UTC también.
+--   * El reloj del seed es la medianoche UTC de hoy, date_trunc('day',
+--     now()): es la hora a la que correría el job nocturno. Las
+--     lecturas que "ya ocurrieron", los cortes que un video "ya
+--     alcanzó" y computed_at de línea base y puntaje se miden contra
+--     ese reloj, no contra now(), para que dar el seed a las 9 o a las
+--     21 deje exactamente las mismas filas.
+--   * Fechas relativas y fechas fijas. Lo que ya pasó y se cita en un
+--     reporte o una factura (los cinco posts de las campañas de 0003,
+--     los cierres, los correos y llamadas de los clientes) va fijo. Lo
+--     que la demo mira "hoy" (videos recientes, seguidores, bandeja del
+--     radar, próximas acciones, los dos seguimientos vencidos) va
+--     relativo a CURRENT_DATE, para que una base sembrada en dos meses
+--     (CI, Postgres embebido, un Supabase nuevo) tenga la misma demo
+--     viva; y toda la fila lo es: el texto, la dedupe_key y las fechas
+--     que la acompañan se derivan de la misma fecha, para que nunca
+--     diga "hace 2 horas" de algo del 14 de septiembre.
+--   * Lo relativo se congela en la primera corrida. published_at de los
+--     videos relativos y el día 0 de la serie de la cuenta se toman de
+--     lo ya guardado si existe (COALESCE sobre la fila anterior), así
+--     que una corrida en otro día no desplaza fechas, no duplica
+--     lecturas ni añade un día plano: las lecturas nuevas que entran
+--     son solo las que la curva de cada video ya alcanzó. Las señales,
+--     deals y actividades relativos usan ON CONFLICT DO NOTHING y
+--     quedan fechados el día en que el seed corrió por primera vez.
+--   * Lo único que se refresca en cada corrida es la frescura de las
+--     conexiones (social_connection.last_synced_at, access_expires_at,
+--     refresh_expires_at) y app_user.last_seen_at, con DO UPDATE. Son
+--     tablas maestras, no métricas: no viola el append-only, y evita
+--     que una hora después de sembrar la demo diga que el token de
+--     YouTube venció y al día siguiente que nadie sincroniza.
 --   * Las métricas se insertan, nunca se actualizan (append-only).
 --   * RLS está en modo FORCE: incluso mc_migrator, dueño de las tablas,
 --     necesita app.workspace_id fijado. Se fija al principio para toda
@@ -47,6 +74,8 @@
 --   …-00000005e001..     señales (5e = señal)
 --   …-0000000dea01..     deals
 --   …-00000ac70001..     actividades (ac7 = actividad)
+--   …-0000adHHHHHH       audience_breakdown, HHHHHH = red·100 + bucket
+--                        en hexadecimal (id fijo = clave de idempotencia)
 --   …-0000000b0001       outbound_brief
 --   …-0000ba5PCCCC       creator_baseline, P = red (1 tiktok, 2 instagram,
 --                        3 youtube, 4 facebook), CCCC = corte en horas
@@ -80,9 +109,11 @@ VALUES (
 )
 ON CONFLICT DO NOTHING;
 
+-- last_seen_at se refresca en cada corrida: es la última visita, no
+-- una métrica.
 INSERT INTO app_user (id, email, name, locale, last_seen_at)
 VALUES ('00000002-0000-4000-8000-000000000002', 'demo@multicampaign.test', 'Laura Méndez', 'es-CO', now() - interval '2 hours')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at;
 
 INSERT INTO membership (workspace_id, user_id, role)
 VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', 'owner')
@@ -111,6 +142,10 @@ ON CONFLICT DO NOTHING;
 -- en la base. TikTok es cuenta business para que exista demografía por
 -- cuenta (la personal no la da por API). YouTube tiene el acceso a
 -- punto de vencer: connection_health lo marca token_expiring_soon.
+-- La frescura (last_synced_at y los dos vencimientos) es relativa a
+-- now() y se refresca con DO UPDATE en cada corrida: la demo siempre
+-- está "sincronizada hace 2–6 h", y el token de YouTube siempre está a
+-- 50 minutos de vencer, que es la historia que connection_health cuenta.
 -- =====================================================================
 INSERT INTO social_connection
   (id, workspace_id, creator_id, platform_id, external_account_id, handle, display_name, profile_url,
@@ -132,7 +167,10 @@ VALUES
    'facebook', '1000000000000c4', 'lauracocinafacil', 'Laura · Cocina fácil', 'https://www.facebook.com/lauracocinafacil',
    'page', 'seed://demo/facebook/laura', '{pages_read_engagement,pages_show_list,read_insights}',
    now() + interval '55 days', NULL, 'business_portfolio', 'active', now() - interval '6 hours', now() - interval '120 days')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  last_synced_at     = EXCLUDED.last_synced_at,
+  access_expires_at  = EXCLUDED.access_expires_at,
+  refresh_expires_at = EXCLUDED.refresh_expires_at;
 
 
 -- =====================================================================
@@ -149,7 +187,11 @@ ON CONFLICT DO NOTHING;
 --   days_ago   publicado hace N días (relativo a CURRENT_DATE), a las
 --              hour_utc. NULL para los cinco posts de campaña de 0003,
 --              que van con fecha fija (fixed_at) porque sus reportes y
---              facturas las citan.
+--              facturas las citan. days_ago se congela en la primera
+--              corrida: si el post ya existe, su published_at guardado
+--              manda (seed_post_curve lo toma con COALESCE), así que
+--              una corrida en otro día no mueve el video ni sus
+--              lecturas.
 --   v_ref      views conocidas a la edad ref_age_h. Para los doce videos
 --              de la tabla "Mis videos" del mock son las views que el
 --              mock muestra a su edad de hoy; para los de campaña, las
@@ -164,9 +206,9 @@ SELECT *
 FROM (VALUES
   -- seq, platform, surface, days_ago, fixed_at, hour_utc, title, caption, hashtags, mentions, duration_s, v_ref, ref_age_h, saves_per_1k, nofol, skip3, link_rate
   -- Posts de campaña (contrato con 0003): fecha fija, texto idéntico.
-  ( 1, 'instagram', 'reels', NULL, '2026-08-24 17:00:00+00'::timestamptz, NULL, 'Cold brew en casa en 3 pasos',
+  ( 1, 'instagram', 'reels', NULL, '2026-08-10 17:00:00+00'::timestamptz, NULL, 'Cold brew en casa en 3 pasos',
     'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', '{coldbrew,cafe,recetafacil}'::text[], '{cafealma}'::text[], 41, 412000, 720, 15.0, 0.58, 0.21, 0.0095),
-  ( 2, 'tiktok', 'feed', NULL, '2026-08-27 16:30:00+00', NULL, 'El cold brew que me salva las mañanas',
+  ( 2, 'tiktok', 'feed', NULL, '2026-08-12 16:30:00+00', NULL, 'El cold brew que me salva las mañanas',
     'El cold brew que me salva las mañanas 🧊 #ad @cafealma.co', '{coldbrew,cafe,ad}', '{cafealma.co}', 34, 300000, 720, 11.3, 0.58, 0.23, 0.0078),
   ( 3, 'tiktok', 'feed', NULL, '2026-09-02 15:00:00+00', NULL, 'Tres desayunos con la caja de Fresko',
     'Tres desayunos con lo que llega en la caja de @freskomarket 🥑 #ad', '{desayuno,recetafacil,ad}', '{freskomarket}', 52, 140000, 720, 10.7, 0.57, 0.26, 0.0079),
@@ -180,7 +222,7 @@ FROM (VALUES
   ( 7, 'tiktok', 'feed',  12, NULL, 19, 'El error que arruina tu arroz',
     'El error que arruina tu arroz (y lo cometemos todos) 🍚 #arroz #cocinafacil #truco', '{arroz,cocinafacil,truco}', '{}', 38, 240000, 288, 15.2, 0.69, 0.24, NULL),
   ( 8, 'tiktok', 'feed',   2, NULL, 19, 'Huevo perfecto: el truco del vaso',
-    'Huevo perfecto en 40 segundos: el truco del vaso 🥚 #huevo #desayuno #truco', '{huevo,desayuno,truco}', '{}', 29, 92000, 48, 11.0, 0.61, 0.28, NULL),
+    'Huevo perfecto en 40 segundos: el truco del vaso 🥚 #huevo #desayuno #truco', '{huevo,desayuno,truco}', '{}', 29, 74000, 48, 11.0, 0.61, 0.28, NULL),
   ( 9, 'tiktok', 'feed',  23, NULL, 16, 'Sopa de la abuela paso a paso',
     'La sopa de mi abuela, paso a paso y sin afán 🍲 #sopa #recetadefamilia #cocinacolombiana', '{sopa,recetadefamilia,cocinacolombiana}', '{}', 88, 58000, 552, 6.4, 0.35, 0.41, NULL),
   -- TikTok · el resto de la parrilla
@@ -314,7 +356,15 @@ SELECT
     WHEN 'youtube'   THEN '00000002-0000-4000-8000-0000000000c3'::uuid
     ELSE                  '00000002-0000-4000-8000-0000000000c4'::uuid
   END AS connection_id,
-  COALESCE(p.fixed_at, ((CURRENT_DATE - p.days_ago) + make_interval(hours => p.hour_utc)) AT TIME ZONE 'UTC') AS published_at,
+  -- Si el post ya existe (corrida anterior), su fecha guardada manda.
+  -- La subconsulta ve la foto previa a la sentencia: NULL en la primera
+  -- corrida, el valor guardado en las siguientes.
+  COALESCE(
+    (SELECT x.published_at FROM post x
+      WHERE x.id = ('00000002-0000-4000-8000-000000000d' || lpad(to_hex(p.seq), 2, '0'))::uuid),
+    p.fixed_at,
+    ((CURRENT_DATE - p.days_ago) + make_interval(hours => p.hour_utc)) AT TIME ZONE 'UTC'
+  ) AS published_at,
   CASE p.platform
     WHEN 'tiktok'    THEN 'tt_7400000000000000d' || lpad(to_hex(p.seq), 2, '0')
     WHEN 'instagram' THEN 'ig_18000000000000d'   || lpad(to_hex(p.seq), 2, '0')
@@ -361,10 +411,13 @@ ON CONFLICT DO NOTHING
 -- 4 · Lecturas de cada video: la curva acumulada
 -- ---------------------------------------------------------------------
 -- Una lectura a 1, 3, 6, 12, 24, 48 y 72 h, y luego una diaria hasta
--- los 90 días (2 160 h), solo las que ya ocurrieron (captured_at <=
--- now()). age_hours es exacta por construcción, así que los cortes
--- canónicos (24, 72, 168, 720) encuentran su lectura justa. Sin clave
--- natural en la tabla: el duplicado se evita por (post_id, captured_at).
+-- los 90 días (2 160 h), solo las que ya ocurrieron según el reloj del
+-- seed (captured_at <= medianoche UTC de hoy). age_hours es exacta por
+-- construcción, así que los cortes canónicos (24, 72, 168, 720)
+-- encuentran su lectura justa. Sin clave natural en la tabla: el
+-- duplicado se evita por (post_id, captured_at), y como captured_at
+-- sale del published_at guardado, una corrida en otro día solo añade
+-- las lecturas que la curva alcanzó desde entonces.
 -- =====================================================================
 seed_age AS (
 SELECT h FROM (VALUES (1), (3), (6), (12), (24), (48), (72)) AS v(h)
@@ -395,7 +448,7 @@ CROSS JOIN LATERAL (
          round(x.v * c.saves_1k / 1000)::bigint AS saves,
          round(x.v * c.reach_ratio * c.nofol_share)::bigint AS reach_nf
 ) y
-WHERE c.published_at + make_interval(hours => a.h) <= now()
+WHERE c.published_at + make_interval(hours => a.h) <= date_trunc('day', now())
   AND NOT EXISTS (
     SELECT 1 FROM post_metric_snapshot s
     WHERE s.post_id = c.post_id AND s.captured_at = c.published_at + make_interval(hours => a.h)
@@ -413,11 +466,16 @@ WHERE c.published_at + make_interval(hours => a.h) <= now()
 -- en followersSeries() del mock. Se acumula con redondeo sobre la suma
 -- acumulada de pesos, así que el día 89 da exactamente el valor final
 -- y la serie nunca baja.
--- Views diarias: la base semanal del mock entre siete (TikTok 51 400,
--- Instagram 23 600, YouTube 9 700, Facebook 3 000), con oscilación
--- 0,75..1,25, tendencia de +16 % en el trimestre y el pico de TikTok de
--- la semana 9 (×1,9) más el del reto de la arepa (días 85–87, ×1,5).
--- UNIQUE (connection_id, day, source) es la clave de idempotencia.
+-- Views diarias: una base por red (TikTok 39 400, Instagram 18 100,
+-- YouTube 7 400, Facebook 2 300; el reparto por red es el de weeklyViews()
+-- del mock) con oscilación 0,75..1,25, tendencia de +16 % en el
+-- trimestre y el pico de TikTok de la semana 9 (×1,9) más el del reto
+-- de la arepa (días 85–87, ×1,5). La base está calibrada para que los
+-- últimos 30 días, con la tendencia y el pico de la arepa dentro de la
+-- ventana, sumen ≈ 2,6 M: el KPI "Views en 30 días" del mock.
+-- UNIQUE (connection_id, day, source) es la clave de idempotencia. El
+-- día 0 se ancla al primer día ya guardado (si lo hay): una corrida en
+-- otro día no añade un día plano al final de la serie.
 -- =====================================================================
 INSERT INTO account_metric_snapshot
   (connection_id, workspace_id, captured_at, day, followers, following, media_count, views, reach,
@@ -435,13 +493,16 @@ FROM (
                  c.f_start + round((c.f_end - c.f_start) * w.cw / w.sw)::bigint) OVER (PARTITION BY c.connection_id ORDER BY w.d) AS gain,
          c.media_base + (w.d * 30) / 90 AS media_count
   FROM (VALUES
-    ('00000002-0000-4000-8000-0000000000c2'::uuid, 'tiktok',    1, 196000, 214000, 51400, 312,  640),
-    ('00000002-0000-4000-8000-0000000000c1'::uuid, 'instagram', 2, 119500, 128000, 23600, 488,  910),
-    ('00000002-0000-4000-8000-0000000000c3'::uuid, 'youtube',   3,  45200,  49000,  9700,  57,  214),
-    ('00000002-0000-4000-8000-0000000000c4'::uuid, 'facebook',  4,  20100,  21000,  3000,  40,  530)
+    ('00000002-0000-4000-8000-0000000000c2'::uuid, 'tiktok',    1, 196000, 214000, 39400, 312,  640),
+    ('00000002-0000-4000-8000-0000000000c1'::uuid, 'instagram', 2, 119500, 128000, 18100, 488,  910),
+    ('00000002-0000-4000-8000-0000000000c3'::uuid, 'youtube',   3,  45200,  49000,  7400,  57,  214),
+    ('00000002-0000-4000-8000-0000000000c4'::uuid, 'facebook',  4,  20100,  21000,  2300,  40,  530)
   ) AS c(connection_id, platform, pcode, f_start, f_end, views_base, following, media_base)
   CROSS JOIN LATERAL (
-    SELECT g.d, CURRENT_DATE - 89 + g.d AS day,
+    SELECT g.d,
+           COALESCE((SELECT min(a.day) FROM account_metric_snapshot a
+                      WHERE a.connection_id = c.connection_id AND a.source = 'api'),
+                    CURRENT_DATE - 89) + g.d AS day,
            sum(g.wt) OVER (ORDER BY g.d) AS cw,
            sum(g.wt) OVER ()             AS sw,
            round(c.views_base
@@ -551,16 +612,19 @@ FROM (
   CROSS JOIN (VALUES (24), (72), (168), (720)) AS c(cut)
   JOIN post_metrics_at_cut m ON m.post_id = p.id AND m.cut_hours = c.cut
   WHERE p.creator_id = '00000002-0000-4000-8000-000000000003'
-    AND p.published_at <= now() - make_interval(hours => c.cut)
+    AND p.published_at <= date_trunc('day', now()) - make_interval(hours => c.cut)
 ) r
 WHERE r.rn <= 20
 GROUP BY r.platform_id, r.cut
 ON CONFLICT DO NOTHING;
 
 -- Cada video se puntúa en el mayor corte que ya alcanzó, contra la
--- línea base de su red en ese corte. versusMedian() devuelve null (no
--- cero) con menos de 8 videos; outlierTier(): ≥5 breakout, ≥2 outlier,
--- ≥1,2 good, ≥0,7 normal, si no under. is_outlier = ≥ 2.
+-- línea base más reciente de su red en ese corte (la de la primera
+-- corrida: el id fijo la congela). Así una corrida posterior puntúa al
+-- video que cumplió 24 h desde entonces, en vez de dejarlo sin fila.
+-- versusMedian() devuelve null (no cero) con menos de 8 videos;
+-- outlierTier(): ≥5 breakout, ≥2 outlier, ≥1,2 good, ≥0,7 normal, si
+-- no under. is_outlier = ≥ 2.
 INSERT INTO post_score
   (post_id, workspace_id, computed_at, baseline_id, age_hours_cut, views_at_cut,
    views_vs_median, reach_vs_median, saves_vs_median, engagement_vs_median, is_outlier, outlier_tier)
@@ -585,15 +649,18 @@ FROM (
               THEN round((m.total_interactions::numeric / m.views) / b.median_engagement, 3) END AS engagement_vs
   FROM post p
   CROSS JOIN LATERAL (
-    SELECT CASE WHEN p.published_at <= now() - interval '720 hours' THEN 720
-                WHEN p.published_at <= now() - interval '168 hours' THEN 168
-                WHEN p.published_at <= now() - interval '72 hours'  THEN 72
-                WHEN p.published_at <= now() - interval '24 hours'  THEN 24 END AS cut
+    SELECT CASE WHEN p.published_at <= date_trunc('day', now()) - interval '720 hours' THEN 720
+                WHEN p.published_at <= date_trunc('day', now()) - interval '168 hours' THEN 168
+                WHEN p.published_at <= date_trunc('day', now()) - interval '72 hours'  THEN 72
+                WHEN p.published_at <= date_trunc('day', now()) - interval '24 hours'  THEN 24 END AS cut
   ) k
   JOIN post_metrics_at_cut m ON m.post_id = p.id AND m.cut_hours = k.cut
   JOIN creator_baseline b
     ON b.creator_id = p.creator_id AND b.platform_id = p.platform_id
-   AND b.age_hours_cut = k.cut AND b.computed_at = date_trunc('day', now())
+   AND b.age_hours_cut = k.cut
+   AND b.computed_at = (SELECT max(x.computed_at) FROM creator_baseline x
+                         WHERE x.creator_id = b.creator_id AND x.platform_id = b.platform_id
+                           AND x.age_hours_cut = b.age_hours_cut)
   WHERE p.creator_id = '00000002-0000-4000-8000-000000000003'
 ) s
 ON CONFLICT (post_id) DO NOTHING;
@@ -608,13 +675,15 @@ ON CONFLICT (post_id) DO NOTHING;
 -- =====================================================================
 INSERT INTO company (id, name, legal_name, domain, country, city, industry, niche_slugs, size_bucket, socials, runs_ads, ads_first_seen_at, ads_platforms, enriched_at)
 VALUES
-  ('00000002-0000-4000-8000-0000000000e1', 'Café Alma',        'Café Alma S.A.S.',            'cafealma.co',        'CO', 'Bogotá',   'alimentos', '{cocina}',         'pyme',    '{"instagram": "cafealma", "tiktok": "cafealma.co"}',                 true,  '2026-03-02 00:00:00+00', '{meta,tiktok}', '2026-08-05 12:00:00+00'),
+  ('00000002-0000-4000-8000-0000000000e1', 'Café Alma',        'Café Alma S.A.S.',            'cafealma.co',        'CO', 'Bogotá',   'alimentos', '{cocina}',         'pyme',    '{"instagram": "cafealma", "tiktok": "cafealma.co"}',                 true,  '2026-03-02 00:00:00+00', '{meta,tiktok}', '2026-07-22 12:00:00+00'),
   ('00000002-0000-4000-8000-0000000000e2', 'Fresko Market',    'Fresko Market S.A.S.',        'freskomarket.co',    'CO', 'Bogotá',   'alimentos', '{cocina}',         'mediana', '{"instagram": "freskomarket", "tiktok": "freskomarket"}',            true,  '2026-08-12 00:00:00+00', '{meta}',        '2026-08-12 09:00:00+00'),
   ('00000002-0000-4000-8000-0000000000e3', 'Hogar Lindo',      'Hogar Lindo Ltda.',           'hogarlindo.co',      'CO', 'Medellín', 'hogar',     '{hogar}',          'pyme',    '{"instagram": "hogarlindo"}',                                       false, NULL,                     '{}',            '2026-05-18 12:00:00+00'),
   ('00000002-0000-4000-8000-0000000000e4', 'Nutrivé',          'Nutrivé Alimentos S.A.S.',    'nutrive.co',         'CO', 'Cali',     'alimentos', '{cocina,fitness}', 'mediana', '{"instagram": "nutrive", "youtube": "NutriveOficial"}',              true,  '2026-01-15 00:00:00+00', '{meta,youtube}','2026-06-10 12:00:00+00'),
   ('00000002-0000-4000-8000-0000000000e5', 'Sabores Caseros',  'Sabores Caseros S.A.S.',      'saborescaseros.co',  'CO', 'Bogotá',   'alimentos', '{cocina}',         'pyme',    '{"instagram": "saborescaseros", "tiktok": "saborescaseros.co"}',     true,  '2026-07-30 00:00:00+00', '{tiktok}',      '2026-08-15 12:00:00+00'),
-  ('00000002-0000-4000-8000-0000000000e6', 'Granos del Valle', 'Granos del Valle S.A.',       'granosdelvalle.co',  'CO', 'Cali',     'alimentos', '{cocina}',         'mediana', '{"instagram": "granosdelvalle", "tiktok": "granosdelvalle"}',        true,  '2026-08-20 00:00:00+00', '{tiktok,meta}', '2026-08-28 12:00:00+00'),
-  ('00000002-0000-4000-8000-0000000000e7', 'Vitalé',           'Vitalé Bienestar S.A.S.',     'vitale.co',          'CO', 'Medellín', 'bienestar', '{cocina,fitness}', 'pyme',    '{"instagram": "vitale.co"}',                                        true,  '2026-08-20 00:00:00+00', '{meta}',        '2026-08-21 12:00:00+00'),
+  -- Granos del Valle y Vitalé son las dos historias relativas (ver
+  -- sección 10): su pauta y su enriquecimiento también lo son.
+  ('00000002-0000-4000-8000-0000000000e6', 'Granos del Valle', 'Granos del Valle S.A.',       'granosdelvalle.co',  'CO', 'Cali',     'alimentos', '{cocina}',         'mediana', '{"instagram": "granosdelvalle", "tiktok": "granosdelvalle"}',        true,  (CURRENT_DATE - 32)::timestamp AT TIME ZONE 'UTC', '{tiktok,meta}', (CURRENT_DATE - 24 + time '12:00') AT TIME ZONE 'UTC'),
+  ('00000002-0000-4000-8000-0000000000e7', 'Vitalé',           'Vitalé Bienestar S.A.S.',     'vitale.co',          'CO', 'Medellín', 'bienestar', '{cocina,fitness}', 'pyme',    '{"instagram": "vitale.co"}',                                        true,  (CURRENT_DATE - 32)::timestamp AT TIME ZONE 'UTC', '{meta}',        (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000000e8', 'Olla Fácil',       'Olla Fácil Utensilios S.A.S.','ollafacil.co',       'CO', 'Bogotá',   'hogar',     '{cocina,hogar}',   'pyme',    '{"instagram": "ollafacil", "tiktok": "ollafacil.co"}',              false, NULL,                     '{}',            now() - interval '3 days')
 ON CONFLICT DO NOTHING;
 
@@ -628,7 +697,7 @@ VALUES
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-000000000002', 'client',      0.7400, '{"audience_overlap": 0.74, "niche": "cocina", "country": "CO"}', 'Cliente actual. Serie de 3 videos Q4 en conversación.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-000000000002', 'contacted',   0.8000, '{"audience_overlap": 0.80, "niche": "cocina", "country": "CO"}', 'Entró por el marketplace de TikTok. Paquete con exclusividad en negociación.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-000000000002', 'contacted',   0.7100, '{"audience_overlap": 0.71, "niche": "cocina", "country": "CO"}', 'Top Ads en TikTok. Un deal perdido en marzo; segundo intento en curso.'),
-  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-000000000002', 'contacted',   0.7300, '{"audience_overlap": 0.73, "niche": "bienestar", "country": "CO"}', 'Pauta en Meta desde agosto. Cotización de 2 reels con derechos enviada.'),
+  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-000000000002', 'contacted',   0.7300, '{"audience_overlap": 0.73, "niche": "bienestar", "country": "CO"}', 'Pauta en Meta desde hace un mes. Cotización de 2 reels con derechos enviada; segundo frente abierto por la línea de snacks.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-000000000002', 'prospect',    0.7900, '{"audience_overlap": 0.79, "niche": "cocina", "country": "CO"}', 'Detectada por el radar: colaboración pagada con @la.olla.facil.')
 ON CONFLICT DO NOTHING;
 
@@ -655,9 +724,18 @@ ON CONFLICT DO NOTHING;
 -- 9 · Radar: doce señales en estados mixtos
 -- ---------------------------------------------------------------------
 -- Las de la bandeja (pending, duplicate, discarded) son de estos días y
--- van relativas a now(); las aceptadas son las que originaron un deal y
--- llevan la fecha en que se detectaron. dedupe_key = fuente:dominio:
--- fecha o detalle, único por workspace.
+-- van relativas a CURRENT_DATE; las aceptadas son las que originaron un
+-- deal y llevan la fecha en que se detectaron: fija si su deal tiene
+-- historia fija (Fresko, Café Alma, Sabores Caseros), relativa si su
+-- deal es relativo (Granos del Valle, Vitalé, Olla Fácil). En una fila
+-- relativa TODO es relativo: el "desde el 14 sep" del titular, la
+-- fecha del evidence y la dedupe_key salen de la misma CURRENT_DATE,
+-- para que en dos meses el radar no diga "hace 2 horas" de algo del 14
+-- de septiembre. La única excepción es la de Fresko (e008), fija de
+-- punta a punta porque cita un lanzamiento de octubre con cotización
+-- del 2 de septiembre. dedupe_key = fuente:dominio:fecha o detalle,
+-- única por workspace. El mes en español se saca de un ARRAY porque
+-- to_char no tiene locale garantizado en Postgres embebido.
 -- =====================================================================
 INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, detected_at, evidence_url, evidence, fit_score, budget_estimate, budget_currency, dedupe_key, status, reviewed_by, reviewed_at, discard_reason)
 VALUES
@@ -667,42 +745,46 @@ VALUES
    '{"active_ads": 6, "country": "CO", "category": "alimentos", "since": "2026-08-12"}', 0.8200, 12000000.00, 'COP',
    'meta_ad_library:freskomarket.co:2026-08-12', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-13 14:20:00+00', NULL),
   ('00000002-0000-4000-8000-00000005e002', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e1', 'press_launches',
-   'Lanzó cold brew en botella el 5 ago', '2026-08-05 11:00:00+00', 'https://www.instagram.com/p/demo-cafealma-coldbrew/',
+   'Lanzó cold brew en botella el 22 jul', '2026-07-22 11:00:00+00', 'https://www.instagram.com/p/demo-cafealma-coldbrew/',
    '{"launch": "cold brew en botella", "channel": "instagram"}', 0.8500, 3000000.00, 'COP',
-   'press_launches:cafealma.co:cold-brew-2026-08', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-05 15:00:00+00', NULL),
+   'press_launches:cafealma.co:cold-brew-2026-07', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-07-22 15:00:00+00', NULL),
   ('00000002-0000-4000-8000-00000005e003', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
-   'Colaboración pagada con @la.olla.facil', now() - interval '3 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
+   'Colaboración pagada con @la.olla.facil', (CURRENT_DATE - 3 + time '10:00') AT TIME ZONE 'UTC', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
    '{"watched_account": "la.olla.facil", "platform": "instagram", "label": "Colaboración pagada"}', 0.7900, 6000000.00, 'COP',
-   'watchlist_collab:ollafacil.co:la.olla.facil:1', 'accepted', '00000002-0000-4000-8000-000000000002', now() - interval '3 days' + interval '2 hours', NULL),
+   'watchlist_collab:ollafacil.co:la.olla.facil:1', 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC', NULL),
   ('00000002-0000-4000-8000-00000005e004', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', 'tiktok_top_ads',
-   'Top Ads en TikTok Creative Center · Colombia · 7 días', '2026-08-28 09:00:00+00', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
+   'Top Ads en TikTok Creative Center · Colombia · 7 días', (CURRENT_DATE - 24 + time '09:00') AT TIME ZONE 'UTC', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
    '{"country": "CO", "window_days": 7, "rank": 14, "industry": "alimentos"}', 0.7100, 8000000.00, 'COP',
-   'tiktok_top_ads:granosdelvalle.co:2026-w35', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-28 16:00:00+00', NULL),
+   'tiktok_top_ads:granosdelvalle.co:' || to_char(CURRENT_DATE - 24, 'IYYY-"w"IW'), 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC', NULL),
   ('00000002-0000-4000-8000-00000005e005', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', 'creator_marketplace',
    'Buscó creadores de cocina en TikTok Creator Marketplace', '2026-08-15 10:00:00+00', 'https://creatormarketplace.tiktok.com/',
    '{"marketplace": "tiktok", "brief_category": "cocina", "budget_hint": "10-20M"}', 0.8000, 16000000.00, 'COP',
    'creator_marketplace:saborescaseros.co:tiktok:2026-08-15', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-15 13:00:00+00', NULL),
   ('00000002-0000-4000-8000-00000005e006', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
-   '4 anuncios activos en Meta desde el 20 ago · bienestar', '2026-08-21 08:00:00+00', 'https://www.facebook.com/ads/library/?q=vitale',
-   '{"active_ads": 4, "country": "CO", "category": "bienestar", "since": "2026-08-20"}', 0.7300, 9800000.00, 'COP',
-   'meta_ad_library:vitale.co:2026-08-20', 'accepted', '00000002-0000-4000-8000-000000000002', '2026-08-21 12:00:00+00', NULL),
+   '4 anuncios activos en Meta desde el ' || to_char(CURRENT_DATE - 32, 'FMDD') || ' '
+     || (ARRAY['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'])[extract(month FROM CURRENT_DATE - 32)::int] || ' · bienestar',
+   (CURRENT_DATE - 31 + time '08:00') AT TIME ZONE 'UTC', 'https://www.facebook.com/ads/library/?q=vitale',
+   jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'bienestar', 'since', to_char(CURRENT_DATE - 32, 'YYYY-MM-DD')), 0.7300, 9800000.00, 'COP',
+   'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 32, 'YYYY-MM-DD'), 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC', NULL),
   -- Por revisar: la bandeja de hoy.
   ('00000002-0000-4000-8000-00000005e007', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
-   '4 anuncios nuevos en Meta desde el 14 sep · snacks', now() - interval '2 hours', 'https://www.facebook.com/ads/library/?q=vitale',
-   '{"active_ads": 4, "country": "CO", "category": "snacks", "since": "2026-09-14"}', 0.7200, 5000000.00, 'COP',
-   'meta_ad_library:vitale.co:2026-09-14', 'pending', NULL, NULL, NULL),
+   '4 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 7, 'FMDD') || ' '
+     || (ARRAY['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'])[extract(month FROM CURRENT_DATE - 7)::int] || ' · snacks',
+   now() - interval '2 hours', 'https://www.facebook.com/ads/library/?q=vitale',
+   jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
+   'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 7, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e008', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', 'press_launches',
-   'Anuncia línea de desayunos para octubre', now() - interval '1 day', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
+   'Anuncia línea de desayunos para octubre', '2026-09-20 15:00:00+00', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
    '{"launch": "línea de desayunos", "month": "2026-10"}', 0.7500, 6000000.00, 'COP',
    'press_launches:freskomarket.co:desayunos-2026-10', 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e009', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', 'job_posts',
    'Vacante "coordinador de influencer marketing"', now() - interval '1 day' - interval '3 hours', 'https://www.linkedin.com/jobs/view/demo-granosdelvalle-influencer',
    '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 8000000.00, 'COP',
-   'job_posts:granosdelvalle.co:influencer-marketing:2026-09', 'pending', NULL, NULL, NULL),
+   'job_posts:granosdelvalle.co:influencer-marketing:' || to_char(CURRENT_DATE - 1, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e010', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', 'tiktok_top_ads',
    'Top Ads en TikTok · Colombia · 7 días', now() - interval '2 days', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
    '{"country": "CO", "window_days": 7, "rank": 9, "industry": "alimentos"}', 0.6600, 4000000.00, 'COP',
-   'tiktok_top_ads:nutrive.co:2026-w38', 'pending', NULL, NULL, NULL),
+   'tiktok_top_ads:nutrive.co:' || to_char(CURRENT_DATE - 2, 'IYYY-"w"IW'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -712,18 +794,27 @@ VALUES
   ('00000002-0000-4000-8000-00000005e012', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e3', 'meta_ad_library',
    '9 anuncios activos en Meta · hogar', now() - interval '5 days', 'https://www.facebook.com/ads/library/?q=hogarlindo',
    '{"active_ads": 9, "country": "CO", "category": "hogar"}', 0.5800, 3000000.00, 'COP',
-   'meta_ad_library:hogarlindo.co:2026-09-16', 'discarded', '00000002-0000-4000-8000-000000000002', now() - interval '5 days' + interval '3 hours', 'Cliente con factura en mora: no prospectar hasta cobrar FV-2026-007.')
+   'meta_ad_library:hogarlindo.co:' || to_char(CURRENT_DATE - 5, 'YYYY-MM-DD'), 'discarded', '00000002-0000-4000-8000-000000000002', now() - interval '5 days' + interval '3 hours', 'Cliente con factura en mora: no prospectar hasta cobrar FV-2026-007.')
 ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
 -- 10 · Pipeline: quince deals
 -- ---------------------------------------------------------------------
--- Ocho abiertos (COP 80 M, ponderado 36,6 M), cuatro ganados (los tres
--- del "Ganado en Q3" del mock más el de Hogar Lindo de junio, que es la
--- factura en mora de 0003) y tres perdidos. Las próximas acciones van
+-- Diez abiertos (COP 95,5 M, ponderado 43,15 M), cuatro ganados (los
+-- tres del "Ganado en Q3" del mock más el de Hogar Lindo de junio, que
+-- es la factura en mora de 0003 y la campaña ca0004) y uno perdido
+-- (Granos del Valle en marzo: es lo que explica la baja de Mateo
+-- Giraldo y el "segundo intento" de hoy). Las próximas acciones van
 -- relativas a hoy: Granos del Valle (−2 d) y Vitalé (−1 d) están
--- vencidas; Olla Fácil y Sabores Caseros vencen hoy. Los cobros
+-- vencidas; Olla Fácil y Sabores Caseros vencen hoy.
+-- Dos relojes, nunca en la misma fila: los deals de los clientes con
+-- campaña o factura en 0003 (Fresko, Café Alma, Nutrivé, Hogar Lindo)
+-- y el de Sabores Caseros tienen historia fija; los que nacieron del
+-- radar y cuya historia es solo seguimiento (Olla Fácil, Granos del
+-- Valle, Vitalé) y la activación corta de Nutrivé son relativos de
+-- punta a punta: señal, creación, etapas, actividades, último contacto
+-- y próxima acción salen de la misma CURRENT_DATE. Los cobros
 -- pendientes apuntan al vencimiento de su factura en 0003.
 -- =====================================================================
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, origin_signal_id, name, stage_id, amount, currency, probability, expected_close_date, next_action, next_action_due, next_action_user_id, last_contact_at, won_at, lost_at, lost_reason, created_at)
@@ -734,10 +825,13 @@ FROM (VALUES
   -- Abiertos
   ('00000002-0000-4000-8000-0000000dea01'::uuid, '00000002-0000-4000-8000-0000000000e8'::uuid, '00000002-0000-4000-8000-00000005e003'::uuid,
    'Por definir', 'nuevo', 6000000.00, NULL::date, 'Enviar pitch',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, now() - interval '3 days' + interval '2 hours'),
+   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-00000005e004',
-   'Historias + 1 Reel', 'contactado', 8000000.00, DATE '2026-10-15', 'Seguimiento 2',
-   ((CURRENT_DATE - 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-07 14:05:00+00', NULL, NULL, NULL, '2026-08-28 16:00:00+00'),
+   'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Seguimiento 2',
+   (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
+  ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
+   'Paquete snacks · Q4', 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
+   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-00000005e005',
    'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, DATE '2026-09-30', 'Enviar contrato',
    ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', '2026-09-15 20:30:00+00', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
@@ -754,8 +848,11 @@ FROM (VALUES
    'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, DATE '2026-09-30', 'Seguimiento a la cotización',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-09 15:10:00+00', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
   ('00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-00000005e006',
-   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, DATE '2026-10-05', 'Ajustar entregables',
-   ((CURRENT_DATE - 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-15 17:00:00+00', NULL, NULL, NULL, '2026-08-21 12:00:00+00'),
+   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
+   (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 6 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
+  ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
+   '1 TikTok + 1 Short · octubre', 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
+   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
    '2 TikTok · septiembre', 'ganado', 5200000.00, DATE '2026-08-27', 'Cobrar la factura FV-2026-011',
@@ -764,21 +861,15 @@ FROM (VALUES
    'Video dedicado · julio', 'ganado', 4500000.00, DATE '2026-07-01', 'Cobrada',
    NULL, '2026-08-20 15:00:00+00', '2026-07-01 14:00:00+00', NULL, NULL, '2026-06-10 10:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-00000005e002',
-   'Lanzamiento cold brew', 'ganado', 3100000.00, DATE '2026-08-12', 'Cobrar la factura FV-2026-010',
-   ((CURRENT_DATE + 7)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-15 14:00:00+00', '2026-08-12 16:00:00+00', NULL, NULL, '2026-08-05 15:00:00+00'),
+   'Lanzamiento cold brew', 'ganado', 3100000.00, DATE '2026-07-29', 'Cobrar la factura FV-2026-010',
+   ((CURRENT_DATE + 7)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-12 14:00:00+00', '2026-07-29 16:00:00+00', NULL, NULL, '2026-07-22 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea12', '00000002-0000-4000-8000-0000000000e3', NULL,
    '3 historias · junio', 'ganado', 1100000.00, DATE '2026-06-01', 'Esperar el pago de FV-2026-007 (2 recordatorios enviados)',
    NULL, '2026-09-04 16:00:00+00', '2026-06-01 15:00:00+00', NULL, NULL, '2026-05-18 10:00:00+00'),
-  -- Perdidos
+  -- Perdido
   ('00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000000e6', NULL,
    'Receta con granola · marzo', 'perdido', 5000000.00, DATE '2026-03-15', NULL,
-   NULL, '2026-03-18 14:00:00+00', NULL, '2026-03-20 15:00:00+00', 'eligio_otro_creador', '2026-02-20 10:00:00+00'),
-  ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
-   '1 Reel · mayo', 'perdido', 4000000.00, DATE '2026-05-30', NULL,
-   NULL, '2026-05-22 14:00:00+00', NULL, '2026-05-28 15:00:00+00', 'sin_respuesta', '2026-05-06 10:00:00+00'),
-  ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e5', NULL,
-   'Historias · junio', 'perdido', 3500000.00, DATE '2026-06-20', NULL,
-   NULL, '2026-06-16 14:00:00+00', NULL, '2026-06-18 15:00:00+00', 'precio', '2026-05-25 10:00:00+00')
+   NULL, '2026-03-18 14:00:00+00', NULL, '2026-03-20 15:00:00+00', 'eligio_otro_creador', '2026-02-20 10:00:00+00')
 ) AS d(id, company_id, origin_signal_id, name, stage_id, amount, expected_close_date, next_action, next_action_due, last_contact_at, won_at, lost_at, lost_reason, created_at)
 ON CONFLICT DO NOTHING;
 
@@ -788,9 +879,9 @@ ON CONFLICT DO NOTHING;
 INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by, changed_at, days_in_stage)
 SELECT h.deal_id, h.from_stage_id, h.to_stage_id, '00000002-0000-4000-8000-000000000002', h.changed_at, h.days_in_stage
 FROM (VALUES
-  ('00000002-0000-4000-8000-0000000dea01'::uuid, NULL::text,      'nuevo',        now() - interval '3 days' + interval '2 hours', NULL::numeric),
-  ('00000002-0000-4000-8000-0000000dea02', NULL,           'nuevo',        '2026-08-28 16:00:00+00'::timestamptz, NULL),
-  ('00000002-0000-4000-8000-0000000dea02', 'nuevo',        'contactado',   '2026-08-31 14:00:00+00', 2.92),
+  ('00000002-0000-4000-8000-0000000dea01'::uuid, NULL::text,      'nuevo',        (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC', NULL::numeric),
+  ('00000002-0000-4000-8000-0000000dea02', NULL,           'nuevo',        (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC', NULL),
+  ('00000002-0000-4000-8000-0000000dea02', 'nuevo',        'contactado',   (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', 2.92),
   ('00000002-0000-4000-8000-0000000dea03', NULL,           'nuevo',        '2026-08-15 13:00:00+00', NULL),
   ('00000002-0000-4000-8000-0000000dea03', 'nuevo',        'contactado',   '2026-08-19 15:00:00+00', 4.08),
   ('00000002-0000-4000-8000-0000000dea03', 'contactado',   'conversacion', '2026-08-22 16:00:00+00', 3.04),
@@ -803,10 +894,15 @@ FROM (VALUES
   ('00000002-0000-4000-8000-0000000dea07', 'nuevo',        'contactado',   '2026-08-20 14:00:00+00', 6.99),
   ('00000002-0000-4000-8000-0000000dea07', 'contactado',   'conversacion', '2026-08-23 15:00:00+00', 3.04),
   ('00000002-0000-4000-8000-0000000dea07', 'conversacion', 'propuesta',    '2026-09-02 15:00:00+00', 10.00),
-  ('00000002-0000-4000-8000-0000000dea08', NULL,           'nuevo',        '2026-08-21 12:00:00+00', NULL),
-  ('00000002-0000-4000-8000-0000000dea08', 'nuevo',        'contactado',   '2026-08-25 14:00:00+00', 4.08),
-  ('00000002-0000-4000-8000-0000000dea08', 'contactado',   'conversacion', '2026-09-01 15:00:00+00', 7.04),
-  ('00000002-0000-4000-8000-0000000dea08', 'conversacion', 'propuesta',    '2026-09-08 15:00:00+00', 7.00),
+  ('00000002-0000-4000-8000-0000000dea08', NULL,           'nuevo',        (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC', NULL),
+  ('00000002-0000-4000-8000-0000000dea08', 'nuevo',        'contactado',   (CURRENT_DATE - 27 + time '14:00') AT TIME ZONE 'UTC', 4.08),
+  ('00000002-0000-4000-8000-0000000dea08', 'contactado',   'conversacion', (CURRENT_DATE - 20 + time '15:00') AT TIME ZONE 'UTC', 7.04),
+  ('00000002-0000-4000-8000-0000000dea08', 'conversacion', 'propuesta',    (CURRENT_DATE - 13 + time '15:00') AT TIME ZONE 'UTC', 7.00),
+  ('00000002-0000-4000-8000-0000000dea14', NULL,           'nuevo',        (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC', NULL),
+  ('00000002-0000-4000-8000-0000000dea14', 'nuevo',        'contactado',   (CURRENT_DATE - 3 + time '14:00') AT TIME ZONE 'UTC', 2.17),
+  ('00000002-0000-4000-8000-0000000dea15', NULL,           'conversacion', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', NULL),
+  ('00000002-0000-4000-8000-0000000dea15', 'conversacion', 'propuesta',    (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', 1.08),
+  ('00000002-0000-4000-8000-0000000dea15', 'propuesta',    'negociacion',  (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', 4.04),
   ('00000002-0000-4000-8000-0000000dea09', NULL,           'nuevo',        '2026-08-13 14:20:00+00', NULL),
   ('00000002-0000-4000-8000-0000000dea09', 'nuevo',        'contactado',   '2026-08-20 14:00:00+00', 6.99),
   ('00000002-0000-4000-8000-0000000dea09', 'contactado',   'conversacion', '2026-08-23 15:00:00+00', 3.04),
@@ -818,9 +914,9 @@ FROM (VALUES
   ('00000002-0000-4000-8000-0000000dea10', 'contactado',   'conversacion', '2026-06-18 15:00:00+00', 6.04),
   ('00000002-0000-4000-8000-0000000dea10', 'conversacion', 'propuesta',    '2026-06-24 15:00:00+00', 6.00),
   ('00000002-0000-4000-8000-0000000dea10', 'propuesta',    'ganado',       '2026-07-01 14:00:00+00', 6.96),
-  ('00000002-0000-4000-8000-0000000dea11', NULL,           'conversacion', '2026-08-05 15:00:00+00', NULL),
-  ('00000002-0000-4000-8000-0000000dea11', 'conversacion', 'propuesta',    '2026-08-06 14:00:00+00', 0.96),
-  ('00000002-0000-4000-8000-0000000dea11', 'propuesta',    'ganado',       '2026-08-12 16:00:00+00', 6.08),
+  ('00000002-0000-4000-8000-0000000dea11', NULL,           'conversacion', '2026-07-22 15:00:00+00', NULL),
+  ('00000002-0000-4000-8000-0000000dea11', 'conversacion', 'propuesta',    '2026-07-23 14:00:00+00', 0.96),
+  ('00000002-0000-4000-8000-0000000dea11', 'propuesta',    'ganado',       '2026-07-29 16:00:00+00', 6.08),
   ('00000002-0000-4000-8000-0000000dea12', NULL,           'nuevo',        '2026-05-18 10:00:00+00', NULL),
   ('00000002-0000-4000-8000-0000000dea12', 'nuevo',        'contactado',   '2026-05-20 14:00:00+00', 2.17),
   ('00000002-0000-4000-8000-0000000dea12', 'contactado',   'propuesta',    '2026-05-26 15:00:00+00', 6.04),
@@ -829,15 +925,7 @@ FROM (VALUES
   ('00000002-0000-4000-8000-0000000dea13', 'nuevo',        'contactado',   '2026-02-24 14:00:00+00', 4.17),
   ('00000002-0000-4000-8000-0000000dea13', 'contactado',   'conversacion', '2026-03-03 15:00:00+00', 7.04),
   ('00000002-0000-4000-8000-0000000dea13', 'conversacion', 'propuesta',    '2026-03-10 15:00:00+00', 7.00),
-  ('00000002-0000-4000-8000-0000000dea13', 'propuesta',    'perdido',      '2026-03-20 15:00:00+00', 10.00),
-  ('00000002-0000-4000-8000-0000000dea14', NULL,           'nuevo',        '2026-05-06 10:00:00+00', NULL),
-  ('00000002-0000-4000-8000-0000000dea14', 'nuevo',        'contactado',   '2026-05-08 14:00:00+00', 2.17),
-  ('00000002-0000-4000-8000-0000000dea14', 'contactado',   'perdido',      '2026-05-28 15:00:00+00', 20.04),
-  ('00000002-0000-4000-8000-0000000dea15', NULL,           'nuevo',        '2026-05-25 10:00:00+00', NULL),
-  ('00000002-0000-4000-8000-0000000dea15', 'nuevo',        'contactado',   '2026-05-28 14:00:00+00', 3.17),
-  ('00000002-0000-4000-8000-0000000dea15', 'contactado',   'conversacion', '2026-06-03 15:00:00+00', 6.04),
-  ('00000002-0000-4000-8000-0000000dea15', 'conversacion', 'propuesta',    '2026-06-10 15:00:00+00', 7.00),
-  ('00000002-0000-4000-8000-0000000dea15', 'propuesta',    'perdido',      '2026-06-18 15:00:00+00', 8.00)
+  ('00000002-0000-4000-8000-0000000dea13', 'propuesta',    'perdido',      '2026-03-20 15:00:00+00', 10.00)
 ) AS h(deal_id, from_stage_id, to_stage_id, changed_at, days_in_stage)
 WHERE NOT EXISTS (
   SELECT 1 FROM deal_stage_history x WHERE x.deal_id = h.deal_id AND x.to_stage_id = h.to_stage_id
@@ -861,7 +949,7 @@ FROM (VALUES
   ( 1, '00000002-0000-4000-8000-0000000000e2'::uuid, '00000002-0000-4000-8000-0000000dea09'::uuid, NULL::uuid, 'signal_detected',
     'El radar detectó 6 anuncios activos en Meta', 'Categoría alimentos, Colombia. Encaje de audiencia 82 %.', '2026-08-12 08:00:00+00'::timestamptz, '{"signal_id": "00000002-0000-4000-8000-00000005e001"}'::jsonb),
   ( 2, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000c0001', 'email_sent',
-    'Pitch con media kit y el reporte de Café Alma', 'Enviado a Camila con el media kit y el reporte de la campaña de Café Alma como prueba.', '2026-08-20 14:00:00+00', '{}'),
+    'Pitch con media kit y el avance de Café Alma', 'Enviado a Camila con el media kit y el avance a 7 días de la campaña de Café Alma (10–17 ago) como prueba.', '2026-08-20 14:00:00+00', '{}'),
   ( 3, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000c0001', 'email_received',
     'Camila responde: piden propuesta', 'Quieren 2 TikTok en septiembre y una propuesta aparte para el lanzamiento de desayunos de octubre.', '2026-08-23 15:00:00+00', '{}'),
   ( 4, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000c0001', 'call',
@@ -871,18 +959,18 @@ FROM (VALUES
   ( 6, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea07', '00000002-0000-4000-8000-0000000c0001', 'proposal_sent',
     'Cotización enviada', '1 TikTok + 1 Reel + 3 historias, derechos 90 días, COP 14,2 M. Código y enlace propios incluidos.', '2026-09-02 15:00:00+00', '{"amount": 14200000, "currency": "COP"}'),
   ( 7, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000c0001', 'report_sent',
-    'Reporte de la campaña de septiembre', 'Cerró la campaña anterior (2 TikTok): 265 K views y 1 940 clics. Reporte adjunto como argumento para la cotización de octubre.', '2026-09-09 15:10:00+00', '{"campaign_id": "00000003-0000-4000-8000-000000ca0002"}'),
+    'Avance a una semana de los 2 TikTok', 'Primer corte de la campaña de septiembre (sigue midiendo hasta el 6 de octubre): 236 K views y 1 736 clics entre los dos videos. Enviado como argumento para la cotización de octubre.', '2026-09-09 15:10:00+00', '{"campaign_id": "00000003-0000-4000-8000-000000ca0002", "cut_hours": 168}'),
   -- Café Alma
   ( 8, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea11', NULL, 'signal_detected',
-    'Lanzó cold brew en botella', 'Anuncio del lanzamiento en Instagram el 5 de agosto.', '2026-08-05 11:00:00+00', '{"signal_id": "00000002-0000-4000-8000-00000005e002"}'),
+    'Lanzó cold brew en botella', 'Anuncio del lanzamiento en Instagram el 22 de julio.', '2026-07-22 11:00:00+00', '{"signal_id": "00000002-0000-4000-8000-00000005e002"}'),
   ( 9, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000c0003', 'proposal_sent',
-    'Propuesta para el lanzamiento', '1 reel + 1 TikTok + 3 historias con código LAURA15 y enlace rastreado. COP 3,1 M.', '2026-08-06 14:00:00+00', '{"amount": 3100000, "currency": "COP"}'),
+    'Propuesta para el lanzamiento', '1 reel + 1 TikTok + 3 historias con código LAURA15 y enlace rastreado. COP 3,1 M.', '2026-07-23 14:00:00+00', '{"amount": 3100000, "currency": "COP"}'),
   (10, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000c0003', 'email_received',
-    'Aceptan la propuesta', 'Arranque el 24 de agosto. Valentina pide el reporte a 30 días con cortes a 7 y 30.', '2026-08-12 16:00:00+00', '{}'),
+    'Aceptan la propuesta', 'Arranque el 10 de agosto. Valentina pide el reporte a 30 días con cortes a 7 y 30.', '2026-07-29 16:00:00+00', '{}'),
   (11, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000c0003', 'call',
     'Renovación Q4', 'Tres meses, un reel y un TikTok al mes. Piden la propuesta antes del 30 de septiembre.', '2026-09-11 15:00:00+00', '{"duration_min": 18}'),
   (12, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000c0003', 'report_sent',
-    'Reporte a 30 días', '712 K views, 58 % del alcance en no seguidores, 318 canjes de LAURA15 y +1 240 seguidores para @cafealma.', '2026-09-15 14:00:00+00', '{"campaign_id": "00000003-0000-4000-8000-000000ca0001"}'),
+    'Reporte a 30 días', '712 K views, 58 % del alcance en no seguidores, 318 canjes de LAURA15 y +1 240 seguidores para @cafealma.', '2026-09-12 14:00:00+00', '{"campaign_id": "00000003-0000-4000-8000-000000ca0001"}'),
   -- Nutrivé
   (13, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000c0005', 'meeting',
     'Reunión con Julián', 'Video dedicado de YouTube sobre almuerzos saludables para julio.', '2026-06-18 15:00:00+00', '{"duration_min": 40}'),
@@ -910,33 +998,39 @@ FROM (VALUES
     'Cotización del paquete', 'Paquete con exclusividad 30 d, COP 16 M.', '2026-09-05 14:00:00+00', '{"amount": 16000000, "currency": "COP"}'),
   (24, '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000c0008', 'call',
     'Aceptan el paquete', 'Pasan a contrato. Enviar el contrato esta semana con las fechas de octubre.', '2026-09-15 20:30:00+00', '{"duration_min": 12}'),
-  (25, '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0008', 'note',
-    'Perdido por precio', 'Eligieron una cotización más barata para las historias de junio. Dejaron la puerta abierta para el lanzamiento de salsas.', '2026-06-18 15:00:00+00', '{}'),
-  -- Granos del Valle
+  -- Nutrivé · la activación corta de octubre (relativa)
+  (25, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'proposal_sent',
+    'Cotización del TikTok + Short de octubre', 'Un TikTok y un Short sobre el almuerzo listo de Nutrivé, para la primera quincena de octubre. COP 6,5 M.', (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 6500000, "currency": "COP"}'),
+  -- Granos del Valle (relativa)
   (26, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', NULL, 'signal_detected',
-    'Top Ads en TikTok Creative Center', 'Colombia, últimos 7 días, categoría alimentos.', '2026-08-28 09:00:00+00', '{"signal_id": "00000002-0000-4000-8000-00000005e004"}'),
+    'Top Ads en TikTok Creative Center', 'Colombia, últimos 7 días, categoría alimentos.', (CURRENT_DATE - 24 + time '09:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e004"}'),
   (27, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000c0009', 'email_sent',
-    'Pitch por correo', 'Con media kit y la propuesta de historias + 1 reel.', '2026-08-31 14:00:00+00', '{}'),
+    'Pitch por correo', 'Con media kit y la propuesta de historias + 1 reel.', (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', '{}'),
   (28, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000c0009', 'email_sent',
-    'Seguimiento 1', 'Se cita el video "Almuerzo por 8 mil pesos" como referencia de formato.', '2026-09-07 14:05:00+00', '{}'),
+    'Seguimiento 1', 'Se cita el video "Almuerzo por 8 mil pesos" como referencia de formato.', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', '{}'),
   (29, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000c0010', 'note',
     'Perdido', 'Eligieron a otra creadora del nicho. Mateo pidió no recibir más correos.', '2026-03-20 15:00:00+00', '{}'),
-  -- Vitalé
+  -- Vitalé (relativa)
   (30, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', NULL, 'signal_detected',
-    '4 anuncios activos en Meta desde el 20 ago', 'Categoría bienestar, Colombia.', '2026-08-21 08:00:00+00', '{"signal_id": "00000002-0000-4000-8000-00000005e006"}'),
+    '4 anuncios activos en Meta', 'Categoría bienestar, Colombia. Pauta desde hace un mes.', (CURRENT_DATE - 31 + time '08:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e006"}'),
   (31, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000c0011', 'email_sent',
-    'Pitch por correo', 'Con media kit; se citan los reels de desayunos.', '2026-08-25 14:00:00+00', '{}'),
+    'Pitch por correo', 'Con media kit; se citan los reels de desayunos.', (CURRENT_DATE - 27 + time '14:00') AT TIME ZONE 'UTC', '{}'),
   (32, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000c0011', 'email_received',
-    'Interesados', 'Sofía pide 2 reels con derechos de uso para pauta.', '2026-09-01 15:00:00+00', '{}'),
+    'Interesados', 'Sofía pide 2 reels con derechos de uso para pauta.', (CURRENT_DATE - 20 + time '15:00') AT TIME ZONE 'UTC', '{}'),
   (33, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000c0011', 'proposal_sent',
-    'Cotización', '2 Reels + derechos 90 d, COP 9,8 M.', '2026-09-08 15:00:00+00', '{"amount": 9800000, "currency": "COP"}'),
+    'Cotización', '2 Reels + derechos 90 d, COP 9,8 M.', (CURRENT_DATE - 13 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 9800000, "currency": "COP"}'),
   (34, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000c0011', 'call',
-    'Piden ajustar entregables', 'Un reel más corto y una historia extra, mismo presupuesto.', '2026-09-15 17:00:00+00', '{"duration_min": 15}'),
-  (35, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000c0011', 'note',
-    'Perdido sin respuesta', 'Cuatro toques sin respuesta. Enfriamiento hasta agosto.', '2026-05-28 15:00:00+00', '{}'),
-  -- Olla Fácil
+    'Piden ajustar entregables', 'Un reel más corto y una historia extra, mismo presupuesto.', (CURRENT_DATE - 6 + time '17:00') AT TIME ZONE 'UTC', '{"duration_min": 15}'),
+  (35, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000c0011', 'email_sent',
+    'Pitch para la línea de snacks', 'Con el media kit y una propuesta de 1 TikTok + 1 Reel + 3 historias para el lanzamiento de snacks, aparte de los 2 reels en propuesta.', (CURRENT_DATE - 3 + time '14:00') AT TIME ZONE 'UTC', '{}'),
+  -- Olla Fácil (relativa)
   (36, '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000dea01', NULL, 'signal_detected',
-    'Colaboración pagada con @la.olla.facil', 'Cuenta vigilada del nicho. Encaje de audiencia 79 %.', now() - interval '3 days', '{"signal_id": "00000002-0000-4000-8000-00000005e003"}')
+    'Colaboración pagada con @la.olla.facil', 'Cuenta vigilada del nicho. Encaje de audiencia 79 %.', (CURRENT_DATE - 3 + time '10:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e003"}'),
+  -- Nutrivé · la activación corta de octubre (relativa), sigue de la 25
+  (37, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
+    'Piden un TikTok y un Short para octubre', 'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q4. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
+  (38, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
+    'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}')
 ) AS a(n, company_id, deal_id, contact_id, kind, subject, body, occurred_at, metadata)
 ON CONFLICT DO NOTHING;
 
@@ -974,16 +1068,23 @@ ON CONFLICT DO NOTHING;
 -- para que la cadena señal → deal → campaña → factura → cobro se pueda
 -- recorrer. Las views del resultado de Café Alma (412 K + 300 K) son
 -- las que la curva de la sección 4 da a 720 h para d01 y d02.
+-- Línea de tiempo de Café Alma, una sola para 0002 y 0003: lanzamiento
+-- del cold brew el 22 jul, propuesta el 23, aceptada el 29; campaña del
+-- 10 al 17 ago (reel el 10, TikTok el 12; línea base de @cafealma desde
+-- el 27 jul); las 720 h del TikTok se cumplen el 11 sep; resultado
+-- calculado el 12 sep a las 07:30 y reporte enviado ese día a las
+-- 14:00. Todo antes de hoy: ninguna fecha del seed está en el futuro
+-- (verify/0002.sql lo comprueba).
 -- =====================================================================
 INSERT INTO campaign (id, workspace_id, company_id, creator_id, deal_id, name, brief, starts_on, ends_on, tracking_code, tracking_url, utm, brand_baseline_from, brand_accounts, amount, currency, status)
 VALUES
   ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-000000000003',
    '00000002-0000-4000-8000-0000000dea11',
    'Lanzamiento cold brew', '1 reel + 1 TikTok + 3 historias. Código propio y enlace rastreado; reporte a 30 días con cortes a 7 y 30.',
-   DATE '2026-08-24', DATE '2026-08-31', 'LAURA15',
+   DATE '2026-08-10', DATE '2026-08-17', 'LAURA15',
    'https://cafealma.co/cold-brew?utm_source=instagram&utm_medium=creator&utm_campaign=laura_coldbrew',
    '{"utm_source": "instagram", "utm_medium": "creator", "utm_campaign": "laura_coldbrew"}'::jsonb,
-   DATE '2026-08-10', '[{"platform": "instagram", "handle": "cafealma"}]'::jsonb,
+   DATE '2026-07-27', '[{"platform": "instagram", "handle": "cafealma"}]'::jsonb,
    3100000.00, 'COP', 'reported'),
   ('00000003-0000-4000-8000-000000ca0004', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e3', '00000002-0000-4000-8000-000000000003',
    '00000002-0000-4000-8000-0000000dea12',
@@ -1001,7 +1102,7 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO campaign_result (campaign_id, workspace_id, computed_at, cut_hours, views, reach, interactions, saves, shares, link_clicks, reach_non_followers_pct, views_vs_median, brand_followers_gained, brand_followers_baseline_rate, brand_followers_campaign_rate, code_redemptions, attributed_revenue, currency, cpm, cost_per_follower, cpa, emv, missing_inputs)
 VALUES
-  ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '2026-09-24 07:30:00+00', 720,
+  ('00000003-0000-4000-8000-000000ca0001', '00000002-0000-4000-8000-000000000001', '2026-09-12 07:30:00+00', 720,
    712000, 486000, 57630, 9600, 5100, 6240, 0.58000, NULL,
    1240, 12.9286, 155.0000, 318, 8400000.00, 'COP', 11800.00, 2500.00, 26400.00, NULL, '{brand_csv_sales}'),
   ('00000003-0000-4000-8000-000000ca0004', '00000002-0000-4000-8000-000000000001', '2026-07-07 07:30:00+00', 720,
@@ -1014,9 +1115,12 @@ ON CONFLICT DO NOTHING;
 -- Conteos esperados (node db/seed/verify/run.mjs 0002, pasadas 1 y 2)
 -- ---------------------------------------------------------------------
 -- Solo lo que este seed crea; 0003 añade lo suyo encima (campañas 2 → 4,
--- post_metric_snapshot +5, y finanzas). Las lecturas por post dependen
--- de la edad de cada video, así que su conteo crece un poco cada día;
--- el resto es fijo.
+-- post_metric_snapshot +3, y finanzas). Las lecturas por post dependen
+-- de la edad de cada video, así que su conteo crece un poco cada día
+-- (una lectura diaria por video con menos de 90 días, medida a
+-- medianoche UTC); el resto es fijo. Una tercera corrida con el reloj
+-- adelantado un día (run.mjs) deja idénticos todos los conteos salvo
+-- ese, que crece solo en las lecturas del día nuevo.
 --
 --   tabla                    filas
 --   workspace                    1
@@ -1025,7 +1129,7 @@ ON CONFLICT DO NOTHING;
 --   creator_profile              1
 --   social_connection            4
 --   post                        60
---   post_metric_snapshot     ~2 600  (60 posts × lecturas ya ocurridas; 2 627 el 22-sep-2026)
+--   post_metric_snapshot     ~2 650  (60 posts × lecturas ya ocurridas; 2 653 el 22-sep-2026, 2 711 al día siguiente)
 --   account_metric_snapshot    360  (4 conexiones × 90 días)
 --   audience_breakdown          60  (4 conexiones × 15 buckets)
 --   creator_baseline            16  (4 redes × 4 cortes), is_reliable en todas
@@ -1034,9 +1138,9 @@ ON CONFLICT DO NOTHING;
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
 --   signal                      12  (6 accepted, 4 pending, 1 duplicate, 1 discarded)
---   deal                        15  (8 abiertos, 4 ganados, 3 perdidos)
---   deal_stage_history          50
---   activity                    36
+--   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
+--   deal_stage_history          47
+--   activity                    38
 --   outbound_brief               1
 --   outbound_policy              1
 --   campaign                     2

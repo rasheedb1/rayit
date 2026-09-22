@@ -41,8 +41,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verificar que las migraciones aplican en limpio
         run: node db/migrate.mjs --pglite --seed
-      - name: Los seeds son idempotentes (dos pasadas, mismos conteos)
-        run: node db/seed/verify/run-0003.mjs
+      - name: Los seeds son idempotentes (hoy y mañana) y sus cifras son las esperadas
+        # Sin argumento corre todos los verify/NNNN.sql: dos pasadas con
+        # los mismos conteos, las cifras del mock por consulta (0002 y
+        # 0003) y una tercera pasada con el reloj adelantado un día.
+        run: node db/seed/verify/run.mjs
       - name: Verificar que ninguna migración aplicada fue modificada
         working-directory: .
         run: |
