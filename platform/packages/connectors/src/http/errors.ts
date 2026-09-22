@@ -149,6 +149,8 @@ export function kindFor(platformId: PlatformId, httpStatus: number | undefined, 
     if (AUTH_CODES[platformId].includes(code)) return 'auth';
     if (QUOTA_CODES[platformId].includes(code)) return 'quota';
     if (RATE_LIMIT_CODES.has(code)) return 'transient';
+    // Un 429 es rate limit aunque el cuerpo traiga un código numérico de la Accounts API.
+    if (httpStatus === 429) return 'transient';
     if (platformId === 'tiktok' && /^\d{5}$/.test(code)) {
       const n = Number(code);
       if (n >= TIKTOK_BUSINESS_AUTH_RANGE[0] && n <= TIKTOK_BUSINESS_AUTH_RANGE[1]) return 'auth';

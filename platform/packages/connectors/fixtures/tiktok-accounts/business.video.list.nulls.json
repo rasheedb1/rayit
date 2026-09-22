@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Video de menos de 7 días: reach y los campos de retención no traen dato. Null, no cero."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/business/video/list/\\?business_id=open_id_business_laura&fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "message": "OK",
+      "request_id": "2026092209",
+      "data": {
+        "videos": [
+          {
+            "item_id": "7400000000000000d09",
+            "create_time": 1788451200,
+            "caption": "",
+            "video_views": 120,
+            "likes": 0,
+            "comments": 0,
+            "shares": 0
+          }
+        ],
+        "cursor": 0,
+        "has_more": false
+      }
+    }
+  }
+}

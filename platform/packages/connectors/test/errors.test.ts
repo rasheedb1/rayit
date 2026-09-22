@@ -9,6 +9,7 @@ test('clasificación por plataforma y código', () => {
   assert.equal(kindFor('tiktok', 200, '40104'), 'auth', 'Accounts API: 40100–40199');
   assert.equal(kindFor('tiktok', 200, '40001'), 'permanent');
   assert.equal(kindFor('tiktok', 200, '50002'), 'transient');
+  assert.equal(kindFor('tiktok', 429, '40022'), 'transient', 'el 429 manda sobre el código numérico');
   assert.equal(kindFor('tiktok', 429, 'rate_limit_exceeded'), 'transient');
   assert.equal(kindFor('tiktok', 400, 'scope_permission_missed'), 'permanent');
   assert.equal(kindFor('instagram', 400, '190'), 'auth', 'Meta 190 = token');

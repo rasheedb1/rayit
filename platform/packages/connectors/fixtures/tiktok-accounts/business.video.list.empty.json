@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Sin videos."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/business/video/list/\\?business_id=open_id_business_laura&fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "message": "OK",
+      "request_id": "2026092204",
+      "data": {
+        "videos": [],
+        "cursor": 0,
+        "has_more": false
+      }
+    }
+  }
+}
