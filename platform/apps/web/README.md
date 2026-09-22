@@ -1,8 +1,9 @@
 # @mc/web · el dashboard
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
-construcción de su módulo hasta que llega la pantalla real. Finanzas ya
-es real (FIN-1): lee la base por `@mc/db`.
+construcción de su módulo hasta que llega la pantalla real. Resumen
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1) y Conexiones (CON-3)
+ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
 
@@ -48,10 +49,15 @@ raíz.
 ## Dónde está cada cosa
 
 ```
-app/(app)/<modulo>/page.tsx   La ruta de cada módulo. Hoy muestra el plan;
-                              el dueño la reemplaza por la pantalla real.
+app/(app)/<modulo>/page.tsx   La ruta de cada módulo. Mientras no hay pantalla
+                              muestra el plan; el dueño la reemplaza por la real.
+app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tiene
+                              pantalla. Se enlaza desde su cabecera.
+app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
+                              por red, frescura por conexión e importación por CSV.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
+test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
                               llegan del workspace; es-CO solo es el valor por defecto.

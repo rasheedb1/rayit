@@ -1,0 +1,8 @@
+Post ID,Description,Publish time,Permalink,Views,Accounts reached,Likes,Saves,Non-follower reach
+ig_ok_1,Fila sana,2026-09-10 15:04:00,https://www.instagram.com/reel/Ok1/,12480,9310,1104,318,6200
+ig_ok_1,Repetida en el mismo archivo,2026-09-10 15:04:00,https://www.instagram.com/reel/Ok1/,12480,9310,1104,318,6200
+ig_mala_fecha,Fecha que no se entiende,el martes pasado,https://www.instagram.com/reel/Mala/,900,800,80,12,400
+,Sin id y sin enlace,2026-09-11 10:00:00,,700,600,60,9,300
+ig_futuro,Publicada en el futuro,2099-01-01 10:00:00,https://www.instagram.com/reel/Fut/,100,90,9,1,40
+ig_numero_raro,Número con letras,2026-09-13 09:00:00,https://www.instagram.com/reel/Raro/,mil doscientos,1000,100,10,400
+ig_nofol_alto,No seguidores mayor que el alcance,2026-09-14 09:00:00,https://www.instagram.com/reel/Nof/,5000,1000,100,10,4000
