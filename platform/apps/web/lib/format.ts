@@ -102,3 +102,11 @@ export function formatDateRange(fromIso: string, toIso: string): string {
   if (sameMonth) return `${a.getUTCDate()}–${b.getUTCDate()} ${shortMonth(b)}`;
   return `${formatDate(fromIso)} – ${formatDate(toIso)}`;
 }
+
+/** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
+export function formatDaysRelative(days: number): string {
+  if (days === 0) return "hoy";
+  if (days === 1) return "mañana";
+  if (days === -1) return "ayer";
+  return days > 0 ? `en ${days} días` : `hace ${-days} días`;
+}
