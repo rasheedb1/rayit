@@ -9,28 +9,39 @@ import {
   LayoutDashboard,
   ListChecks,
   Megaphone,
+  Palette,
   Plug,
   Receipt,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
-import { PRODUCT_MODULES } from "@/content/modules";
+import { flags as defaultFlags, type Flags } from "@/content/flags";
+import { isEnabled, moduleBySlug, productModules } from "@/content/modules";
 import { OwnerAvatar } from "./owner";
 
-const ICONS: Record<string, LucideIcon> = {
+const ICONS: Partial<Record<string, LucideIcon>> = {
   resumen: LayoutDashboard,
   ventas: Handshake,
   cotizar: Receipt,
   campanas: Megaphone,
   finanzas: Wallet,
   conexiones: Plug,
+  kit: Palette,
 };
 
-const CONSTRUCCION = [
-  { href: "/", label: "Plan", icon: ListChecks },
-  { href: "/cimientos", label: "Cimientos", icon: Layers },
-  { href: "/reglas", label: "Reglas", icon: BookOpen },
-] as const;
+type NavItem = { href: string; label: string; icon: LucideIcon };
+
+/** Lo que ve el equipo. La galería del kit solo con su bandera encendida. */
+function construccion(flags: Flags): NavItem[] {
+  const items: NavItem[] = [
+    { href: "/", label: "Plan", icon: ListChecks },
+    { href: "/cimientos", label: "Cimientos", icon: Layers },
+    { href: "/reglas", label: "Reglas", icon: BookOpen },
+  ];
+  const kit = moduleBySlug("kit");
+  if (kit && isEnabled(kit, flags)) items.push({ href: "/kit", label: kit.name, icon: Palette });
+  return items;
+}
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
@@ -40,14 +51,17 @@ const linkBase = "flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-sm tra
 const linkIdle = "text-fg-2 hover:bg-bg-3 hover:text-fg";
 const linkOn = "bg-bg-3 font-medium text-fg";
 
-export function SideNav() {
+/** `flags` se inyecta en pruebas; en la app se usan las reales. */
+export function SideNav({ flags = defaultFlags }: { flags?: Flags }) {
   const pathname = usePathname();
+  const modules = productModules(flags);
+  const tools = construccion(flags);
   return (
     <nav className="flex flex-col gap-6" aria-label="Principal">
       <div>
         <p className="mb-1.5 px-2.5 text-[11px] font-medium uppercase tracking-wide text-fg-3">Producto</p>
         <ul className="space-y-0.5">
-          {PRODUCT_MODULES.map((m) => {
+          {modules.map((m) => {
             const Icon = ICONS[m.slug] ?? LayoutDashboard;
             const href = `/${m.slug}`;
             const on = isActive(pathname, href);
@@ -66,7 +80,7 @@ export function SideNav() {
       <div>
         <p className="mb-1.5 px-2.5 text-[11px] font-medium uppercase tracking-wide text-fg-3">Construcción</p>
         <ul className="space-y-0.5">
-          {CONSTRUCCION.map((item) => {
+          {tools.map((item) => {
             const on = isActive(pathname, item.href);
             return (
               <li key={item.href}>
@@ -84,12 +98,13 @@ export function SideNav() {
 }
 
 /** En pantallas pequeñas la navegación es una fila que se desplaza. */
-export function MobileNav() {
+export function MobileNav({ flags = defaultFlags }: { flags?: Flags }) {
   const pathname = usePathname();
+  const tools = construccion(flags);
   const items = [
-    ...CONSTRUCCION.slice(0, 1),
-    ...PRODUCT_MODULES.map((m) => ({ href: `/${m.slug}`, label: m.name })),
-    ...CONSTRUCCION.slice(1),
+    ...tools.slice(0, 1),
+    ...productModules(flags).map((m) => ({ href: `/${m.slug}`, label: m.name })),
+    ...tools.slice(1),
   ];
   return (
     <nav className="flex gap-1 overflow-x-auto px-4 py-2 [scrollbar-width:none]" aria-label="Principal">
