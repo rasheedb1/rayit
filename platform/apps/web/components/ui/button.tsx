@@ -30,14 +30,15 @@ const VARIANT: Record<ButtonVariant, string> = {
 };
 
 const SIZE: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-xs",
-  md: "h-9 px-3.5 text-sm",
+  sm: "min-h-7 px-2.5 py-1 text-xs leading-4",
+  md: "min-h-9 px-3.5 py-1.5 text-sm leading-5",
 };
 
 const GAP: Record<ButtonSize, string> = { sm: "gap-1.5", md: "gap-2" };
 
+// Sin whitespace-nowrap: un texto largo envuelve en vez de desbordar la página a 390 px.
 const BASE =
-  "relative inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md border font-medium transition-colors " +
+  "relative inline-flex max-w-full shrink-0 items-center justify-center rounded-md border text-center font-medium transition-colors " +
   "disabled:cursor-not-allowed disabled:opacity-50 aria-busy:cursor-progress";
 
 function Spinner() {
@@ -70,7 +71,7 @@ export function Button({
           <Spinner />
         </span>
       )}
-      <span className={`inline-flex items-center ${GAP[size]} ${loading ? "invisible" : ""}`}>
+      <span className={`inline-flex min-w-0 items-center [overflow-wrap:anywhere] ${GAP[size]} ${loading ? "invisible" : ""}`}>
         {icon && (
           <span className="inline-flex shrink-0" aria-hidden="true">
             {icon}

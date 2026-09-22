@@ -74,3 +74,17 @@ export function FormDemo() {
     </form>
   );
 }
+
+/** Controles deshabilitados. Vive aquí porque MoneyInput exige onChange y una función no cruza la frontera servidor → cliente. */
+export function FormDisabledDemo() {
+  return (
+    <div className="grid max-w-xl gap-4 sm:grid-cols-2">
+      <Field label="Marca">
+        <Input disabled defaultValue="Café Alma" />
+      </Field>
+      <Field label="Monto">
+        <MoneyInput value="1234567890.00" currency="COP" onChange={() => {}} disabled />
+      </Field>
+    </div>
+  );
+}

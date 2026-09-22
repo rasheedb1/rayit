@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import { requireModule } from "@/content/modules";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
-import { MoneyInput } from "@/components/ui/money-input";
 import { Pill } from "@/components/ui/pill";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataAsOf } from "@/components/ui/data-as-of";
@@ -14,7 +12,7 @@ import { LineChart } from "@/components/ui/line-chart";
 import { BarChart } from "@/components/ui/bar-chart";
 import { ChartCard } from "@/components/ui/chart-card";
 import { brandFollowers, CASH, followersByNetwork, weeklyViews } from "./data";
-import { FormDemo } from "./form-demo";
+import { FormDemo, FormDisabledDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ArrowRight } from "lucide-react";
 
@@ -114,14 +112,7 @@ export default function Page() {
           <FormDemo />
         </Variant>
         <Variant label="Deshabilitado">
-          <div className="grid max-w-xl gap-4 sm:grid-cols-2">
-            <Field label="Marca">
-              <Input disabled defaultValue="Café Alma" />
-            </Field>
-            <Field label="Monto">
-              <MoneyInput value="1234567890.00" currency="COP" onChange={() => {}} disabled />
-            </Field>
-          </div>
+          <FormDisabledDemo />
         </Variant>
       </Section>
 
