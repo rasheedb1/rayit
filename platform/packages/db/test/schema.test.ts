@@ -16,6 +16,9 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
 import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
+import {
+  CATALOGOS_CON_WORKSPACE, TABLAS_CON_RLS, TABLAS_DE_TENANT, TABLAS_HIJAS, TABLAS_PII,
+} from '../src/esquema.ts';
 import * as schema from '../src/schema/index.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -35,50 +38,20 @@ const VISTAS_MVP = [
 ];
 
 /**
- * Tablas de tenant del MVP: toda fila pertenece a un workspace y RLS la
- * aísla (0010, 0011, 0017). Con workspace_id NOT NULL.
+ * Quién tiene que estar aislado lo declara el paquete en
+ * src/esquema.ts, no esta prueba: la misma lista la usa
+ * assertSchemaUpToDate en tiempo de ejecución, para que una base
+ * atrasada lo diga en vez de servir las filas de todos los workspaces.
+ * Aquí solo se comprueba contra la base.
+ *
+ *   TENANT_MVP        workspace_id NOT NULL (0010, 0011, 0017, 0019)
+ *   HIJAS_DE_TENANT   sin workspace_id, heredan del padre por EXISTS (0018)
+ *   PII_CON_RLS       sin workspace_id, política propia (0019, 0020)
+ *   CATALOGOS_…       workspace_id NULL = fila global (0020)
  */
-const TENANT_MVP = [
-  'membership',
-  'creator_profile', 'social_connection', 'data_consent', 'post', 'post_metric_snapshot',
-  'account_metric_snapshot', 'audience_breakdown', 'creator_baseline', 'post_score', 'company_link',
-  'signal', 'deal', 'activity', 'outbound_brief', 'outbound_policy', 'outbound_sequence', 'outbound_touch',
-  'rate_card', 'media_kit', 'quote', 'campaign', 'campaign_result', 'invoice', 'payment', 'expense',
-  'platform_payout', 'tax_reserve', 'notification', 'job_run',
-];
-
-/**
- * Hijas de una tabla de tenant, sin workspace_id propio: heredan la RLS
- * del padre por EXISTS (0018). La FK al padre es NOT NULL.
- */
-const HIJAS_DE_TENANT: Array<[child: string, parent: string]> = [
-  ['quote_item', 'quote'],
-  ['rate_card_item', 'rate_card'],
-  ['deal_stage_history', 'deal'],
-  ['campaign_post', 'campaign'],
-  ['idea_evidence', 'idea'],
-  ['posting_window', 'creator_profile'],
-  ['script_block', 'script'],
-  ['script_variant', 'script'],
-  ['preflight_result', 'video_analysis'],
-  ['preflight_verdict', 'video_analysis'],
-  ['video_audio_profile', 'video_analysis'],
-  ['video_feature', 'video_analysis'],
-  ['video_onscreen_text', 'video_analysis'],
-  ['video_prediction', 'video_analysis'],
-  ['video_recommendation', 'video_analysis'],
-  ['video_second', 'video_analysis'],
-  ['video_shot', 'video_analysis'],
-  ['video_transcript', 'video_analysis'],
-  ['video_transcript_word', 'video_analysis'],
-];
-
-/**
- * Catálogos globales con filas por workspace opcionales (workspace_id
- * NULL = de todos). Se leen antes de fijar un workspace, y por eso no
- * llevan RLS. Está decidido, y aquí queda escrito.
- */
-const CATALOGOS_CON_WORKSPACE_OPCIONAL = ['pipeline_stage', 'feature_flag'];
+const TENANT_MVP = TABLAS_DE_TENANT;
+const HIJAS_DE_TENANT = TABLAS_HIJAS;
+const PII_CON_RLS = TABLAS_PII;
 
 /**
  * Hijas con la FK al padre OPCIONAL: tienen filas sin padre por diseño
@@ -93,23 +66,6 @@ const HIJAS_CON_FK_OPCIONAL: Array<[child: string, parent: string, owner: string
   ['api_call_log', 'social_connection', 'CON'],
   ['api_quota_usage', 'social_connection', 'CON'],
 ];
-
-/**
- * Tablas globales sin workspace_id que guardan datos personales y con
- * política propia desde 0019: `contact` se ve si su fuente es pública o
- * si la empresa está vinculada a mi workspace por company_link.
- */
-const PII_CON_RLS = ['contact'];
-
-/**
- * Lo que sigue sin RLS y por qué: `app_user` no tiene workspace_id y su
- * política («soy yo, o comparto workspace conmigo») necesita app.user_id
- * fijado ANTES del primer INSERT — hoy el seed crea app_user antes que
- * su membership, así que con FORCE ese INSERT fallaría. Va con CIM-3,
- * que es quien fija app.user_id. Mientras tanto se lee SIEMPRE dentro
- * de withWorkspace, a través de membership; nunca como catálogo.
- */
-const PENDIENTE_CIM_3_PII = ['app_user'];
 
 interface ColumnRow extends Record<string, unknown> {
   table_name: string;
@@ -288,11 +244,19 @@ describe('aislamiento por workspace en la base', () => {
     assert.deepEqual(gaps, [], `hijas de una tabla de tenant sin RLS: ${gaps.join(', ')}`);
   });
 
-  test('los catálogos con workspace_id opcional siguen sin RLS, a propósito', () => {
-    for (const name of CATALOGOS_CON_WORKSPACE_OPCIONAL) {
+  test('los catálogos con workspace_id opcional también llevan RLS desde 0020', () => {
+    // Antes NO la llevaban «a propósito», y el filtro por workspace lo
+    // hacía JavaScript con el id como parámetro suelto: A creaba la
+    // etapa «Cierre con Café Alma» y B la leía entera; B insertaba
+    // feature_flag('outbound_send', workspace_id = A, enabled = true) y
+    // le encendía el envío de correo a otro workspace. El caso que las
+    // justificaba —leerlas sin workspace fijado— lo resuelve la propia
+    // política: sin workspace, current_workspace_id() es NULL y quedan
+    // las globales.
+    for (const name of CATALOGOS_CON_WORKSPACE) {
       const ws = columns.get(name)?.get('workspace_id');
-      assert.equal(ws?.is_nullable, 'YES', `${name}.workspace_id debería admitir NULL (catálogo global)`);
-      assert.equal(relations.get(name)?.rls, false, `${name} es un catálogo: si ahora lleva RLS, sácalo de esta lista`);
+      assert.equal(ws?.is_nullable, 'YES', `${name}.workspace_id debería admitir NULL (fila global)`);
+      assert.equal(relations.get(name)?.rls, true, `${name} tiene workspace_id y tiene que llevar RLS (0020)`);
     }
   });
 
@@ -307,31 +271,32 @@ describe('aislamiento por workspace en la base', () => {
     assert.equal(rows[0]?.uid, null);
   });
 
-  test('contact lleva RLS desde 0019 aunque no tenga workspace_id (PII por company_link)', () => {
+  test('contact y app_user llevan RLS aunque no tengan workspace_id (PII)', () => {
     for (const name of PII_CON_RLS) {
       assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
-      assert.equal(relations.get(name)?.rls, true, `${name} guarda PII y tiene que llevar RLS (0019)`);
+      assert.equal(relations.get(name)?.rls, true, `${name} guarda datos personales y tiene que llevar RLS (0019/0020)`);
     }
     // company sí es global a propósito: nombre, dominio y sector, sin PII.
     assert.equal(relations.get('company')?.rls, false, 'company es el catálogo global de empresas');
   });
 
-  test('app_user sigue sin RLS, y aquí queda escrito por qué', () => {
-    for (const name of PENDIENTE_CIM_3_PII) {
-      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
-      assert.equal(relations.get(name)?.rls, false, `${name} ya tiene RLS: cierra el test.todo de CIM-3`);
-    }
+  test('contact se aísla por owner_workspace_id, no por company_link', () => {
+    // company es un catálogo global sin RLS: cualquier workspace puede
+    // insertarse un company_link a cualquier empresa con una sola fila,
+    // así que el candado de 0019 no cerraba nada. Desde 0020 el dueño
+    // está en la propia fila y lo pone la base.
+    const owner = columns.get('contact')?.get('owner_workspace_id');
+    assert.ok(owner, 'contact.owner_workspace_id no existe (migración 0020)');
+    assert.equal(owner.data_type, 'uuid');
+    assert.equal(owner.column_default, 'current_workspace_id()', 'el dueño lo pone la base, no la pantalla');
   });
 
-  // Pendiente visible en cada corrida (sale como "todo" en el resumen).
-  test(
-    'CIM-3: RLS en app_user — ENABLE + FORCE con USING (id = current_user_id() OR EXISTS (SELECT 1 FROM membership m ' +
-      'WHERE m.user_id = app_user.id AND m.workspace_id = current_workspace_id())), junto con quien fije app.user_id ' +
-      'por transacción. Hasta entonces, cualquier consulta como mc_app enumera el correo de todos los workspaces: ' +
-      'app_user se lee solo a través de membership, dentro de withWorkspace.',
-    { todo: true },
-    () => {},
-  );
+  test('todas las tablas que el paquete declara aisladas lo están de verdad', () => {
+    // Es la misma lista que assertSchemaUpToDate comprueba en tiempo de
+    // ejecución contra Supabase (src/esquema.ts).
+    const sinRls = TABLAS_CON_RLS.filter((n) => relations.get(n) && relations.get(n)?.rls !== true);
+    assert.deepEqual(sinRls, [], `declaradas en src/esquema.ts pero sin RLS: ${sinRls.join(', ')}`);
+  });
 
   test(
     'hijas con FK opcional a una tabla de tenant, política pendiente por módulo: ' +

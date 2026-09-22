@@ -5,18 +5,16 @@ import { getInvoice } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
-import { formatDate, formatDaysRelative, formatMoney } from "@/lib/format";
+import { formatterFor, type Formatter } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { pillForInvoice } from "../../_lib/estado";
 import { cambiarEstadoFactura } from "../actions";
 
 export const dynamic = "force-dynamic";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
-  if (!UUID_RE.test(id)) return { title: "Factura" };
   const invoice = await withWorkspace((tx) => getInvoice(tx, id));
   return { title: invoice ? `Factura ${invoice.number}` : "Factura" };
 }
@@ -28,6 +26,11 @@ function Row({ label, value, strong = false, muted = false }: { label: string; v
       <dd className={`font-mono text-sm tabular-nums ${strong ? "font-medium" : ""} ${muted ? "text-fg-3" : ""}`}>{value}</dd>
     </div>
   );
+}
+
+/** Un monto de la factura, en la moneda con la que se emitió y el locale del workspace. */
+function monto(f: Formatter, amount: string, currency: string): string {
+  return f.money(amount, currency, { mode: "full" });
 }
 
 /** Tasa efectiva a partir de los montos guardados, para mostrar "IVA 19 %". */
@@ -53,9 +56,13 @@ export default async function FacturaPage({
 }) {
   const { id } = await params;
   const { error } = await searchParams;
-  if (!UUID_RE.test(id)) notFound();
   const invoice = await withWorkspace((tx) => getInvoice(tx, id));
   if (!invoice) notFound();
+  // Locale, moneda y zona horaria del workspace, atados: esta pantalla
+  // formateaba con es-CO fijo mientras la lista de facturas ya usaba el
+  // del workspace, así que un workspace en MXN/en-US veía dos formatos
+  // de número en el mismo flujo.
+  const f = formatterFor(await getCurrentWorkspace());
 
   const pill = pillForInvoice(invoice);
   const puedeEnviar = invoice.status === "draft";
@@ -92,13 +99,13 @@ export default async function FacturaPage({
               <Pill kind={pill.kind}>{pill.text}</Pill>
             </div>
             <dl className="mt-3 divide-y divide-line">
-              <Row label="Subtotal" value={formatMoney(invoice.subtotal, invoice.currency, { mode: "full" })} />
-              <Row label={`IVA${ivaPct ? ` ${ivaPct} %` : ""}`} value={formatMoney(invoice.tax, invoice.currency, { mode: "full" })} />
-              <Row label="Total de la factura" value={formatMoney(invoice.total, invoice.currency, { mode: "full" })} strong />
-              <Row label={`Retención en la fuente${retPct ? ` ${retPct} %` : ""}`} value={`−${formatMoney(invoice.withholding, invoice.currency, { mode: "full" })}`} muted />
-              <Row label="Neto que entra al banco" value={formatMoney(invoice.net, invoice.currency, { mode: "full" })} />
-              <Row label="Pagado" value={formatMoney(invoice.paidAmount, invoice.currency, { mode: "full" })} muted />
-              <Row label="Pendiente por cobrar" value={formatMoney(invoice.outstanding, invoice.currency, { mode: "full" })} strong />
+              <Row label="Subtotal" value={monto(f, invoice.subtotal, invoice.currency)} />
+              <Row label={`IVA${ivaPct ? ` ${ivaPct} %` : ""}`} value={monto(f, invoice.tax, invoice.currency)} />
+              <Row label="Total de la factura" value={monto(f, invoice.total, invoice.currency)} strong />
+              <Row label={`Retención en la fuente${retPct ? ` ${retPct} %` : ""}`} value={`−${monto(f, invoice.withholding, invoice.currency)}`} muted />
+              <Row label="Neto que entra al banco" value={monto(f, invoice.net, invoice.currency)} />
+              <Row label="Pagado" value={monto(f, invoice.paidAmount, invoice.currency)} muted />
+              <Row label="Pendiente por cobrar" value={monto(f, invoice.outstanding, invoice.currency)} strong />
             </dl>
           </section>
 
@@ -117,14 +124,14 @@ export default async function FacturaPage({
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Emisión</dt>
-                <dd className="text-sm">{formatDate(invoice.issuedOn, "long")}</dd>
+                <dd className="text-sm">{f.date(invoice.issuedOn, "long")}</dd>
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Vencimiento</dt>
                 <dd className="text-sm">
-                  {formatDate(invoice.dueOn, "long")}
+                  {f.date(invoice.dueOn, "long")}
                   {invoice.bucket !== "pagada" && invoice.bucket !== "anulada" && invoice.bucket !== "borrador" && (
-                    <span className="text-fg-3"> · {formatDaysRelative(invoice.daysToDue)}</span>
+                    <span className="text-fg-3"> · {f.daysRelative(invoice.daysToDue)}</span>
                   )}
                 </dd>
               </div>
@@ -145,12 +152,12 @@ export default async function FacturaPage({
                 <dt className="text-xs text-fg-3">Recordatorios enviados</dt>
                 <dd className="text-sm">
                   {invoice.remindersSent}
-                  {invoice.lastReminderAt && <span className="text-fg-3"> · último el {formatDate(invoice.lastReminderAt)}</span>}
+                  {invoice.lastReminderAt && <span className="text-fg-3"> · último el {f.date(invoice.lastReminderAt)}</span>}
                 </dd>
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Pagada el</dt>
-                <dd className="text-sm">{invoice.paidAt ? formatDate(invoice.paidAt, "long") : <span className="text-fg-3">—</span>}</dd>
+                <dd className="text-sm">{invoice.paidAt ? f.date(invoice.paidAt, "long") : <span className="text-fg-3">—</span>}</dd>
               </div>
             </dl>
           </section>

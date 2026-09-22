@@ -66,6 +66,9 @@ fmt: ## Formatea el código
 test: ## Corre las pruebas
 	pnpm turbo run test
 
+verificar: ## La puerta de calidad entera: typecheck + lint + test, sin caché y de dos en dos
+	pnpm verificar
+
 arranque: ## Deja esta máquina lista: credenciales, remoto y comprobaciones
 	@./scripts/arranque.sh
 

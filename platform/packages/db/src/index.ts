@@ -36,6 +36,10 @@ export {
   isInTransaction, isUuid, NestedTransactionError, TransactionClosedError, UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
+export {
+  assertSchemaUpToDate, CATALOGOS_CON_WORKSPACE, esquemaObligatorio, estadoDelEsquema, explicarEsquema, migracionesDelRepositorio,
+  TABLAS_CON_RLS, TABLAS_DE_TENANT, TABLAS_HIJAS, TABLAS_PII, type EstadoDelEsquema,
+} from './esquema.ts';
 export { hostOf, isSupabaseHost, resolveTls, tlsFor, TlsConfigError, TLS_URL_PARAMS, PLATFORM_ROOT, type Ssl, type Tls, type TlsDecision } from './tls.ts';
 export * from './schema/index.ts';
 

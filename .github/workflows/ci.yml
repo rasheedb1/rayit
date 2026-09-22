@@ -111,11 +111,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # --force: la caché de turbo es local a la máquina y se comparte
-      # entre todos los clones (worktrees incluidos) sin distinguir la
-      # rama. Un «cache hit» aquí sería verde sin haber ejecutado nada.
-      # --concurrency=2: @mc/db y @mc/worker levantan PGlite (WASM) y
-      # pg-boss; el runner compartido no da para más a la vez.
-      - run: pnpm turbo run typecheck lint test --force --concurrency=2
+      # `pnpm verificar` = turbo run typecheck lint test --force
+      # --concurrency=2. Está en platform/package.json (y en `make
+      # verificar`) para que el CI y quien trabaja en local corran
+      # EXACTAMENTE lo mismo: cuando los flags vivían solo aquí, el
+      # comando documentado daba falsos verdes (--force: la caché de
+      # turbo es local a la máquina y se comparte entre clones y
+      # worktrees sin distinguir la rama) y falsos rojos
+      # (--concurrency=2: @mc/db, @mc/worker y @mc/web levantan PGlite y
+      # pg-boss a la vez y se quedan sin bucle de eventos).
+      - run: pnpm verificar
       - name: Build del dashboard
         run: pnpm --filter @mc/web build

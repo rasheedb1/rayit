@@ -19,9 +19,11 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertWorkspaceId, contact, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory, eq, membership,
-  NestedTransactionError, quote, quoteItem, rateCard, rateCardItem, TransactionClosedError, type BaseTx, type WorkspaceTx,
+  and, appUser, assertWorkspaceId, contact, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory,
+  eq, featureFlag, isNull, membership, NestedTransactionError, pipelineStage, quote, quoteItem, rateCard, rateCardItem,
+  TransactionClosedError, type BaseTx, type WorkspaceTx,
 } from '../src/index.ts';
+import { listFeatureFlags, listPipelineStages } from '../src/queries/catalogos.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '0000000a-0000-4000-8000-000000000001';
@@ -438,5 +440,231 @@ describe('el helper de pruebas no se cuelga: raw/admin fuera de la transacción'
     await t.admin('SELECT 1');
     const filas = await t.raw<{ uno: number }>('SELECT 1::int AS uno');
     assert.equal(filas[0]?.uno, 1);
+  });
+});
+
+/**
+ * Lo que la ronda 5 cerró con la migración 0020. Cada prueba de aquí
+ * reproduce un camino que ANTES funcionaba: están escritas desde el
+ * ataque, no desde la política.
+ */
+describe('contact: la PII tiene dueño, y la baja es definitiva (0020)', () => {
+  const COMPANY_C = '0000000c-0000-4000-8000-000000000003';
+  const USER_A = '0000000d-0000-4000-8000-00000000000a';
+  const USER_B = '0000000d-0000-4000-8000-00000000000b';
+  let contactoDeA = '';
+
+  const contactosDe = (ws: string) =>
+    t.db.withWorkspace(ws, (tx) =>
+      tx.db.select({ id: contact.id, email: contact.email, optedOut: contact.optedOut }).from(contact),
+    );
+  const soloAna = (rows: Array<{ id: string; email: string | null; optedOut: boolean }>) =>
+    rows.find((r) => r.id === contactoDeA);
+
+  before(async () => {
+    await t.admin(`INSERT INTO company (id, name) VALUES ('${COMPANY_C}', 'Hogar Lindo')`);
+    await t.db.withWorkspace(WS_A, async (tx) => {
+      await tx.query(
+        'INSERT INTO company_link (workspace_id, company_id, relationship) VALUES (current_workspace_id(), $1, $2)',
+        [COMPANY_C, 'client'],
+      );
+      const [c] = await tx.db
+        .insert(contact)
+        .values({ companyId: COMPANY_C, fullName: 'Ana Privada', email: 'ana@hogarlindo.co', phone: '+573001234567', source: 'user_provided' })
+        .returning({ id: contact.id, owner: contact.ownerWorkspaceId });
+      assert.equal(c?.owner, WS_A, 'el dueño lo pone la base (DEFAULT current_workspace_id())');
+      contactoDeA = c!.id;
+    });
+  }, { timeout: 120_000 });
+
+  test('B no lo ve aunque se vincule a la MISMA empresa: el candado ya no es company_link', async () => {
+    // company es un catálogo global sin RLS, así que B puede vincularse
+    // a cualquier empresa con una sola fila. Con 0019 eso bastaba para
+    // leer el nombre, el correo y el teléfono que guardó A.
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query(
+        'INSERT INTO company_link (workspace_id, company_id, relationship) VALUES (current_workspace_id(), $1, $2)',
+        [COMPANY_C, 'prospect'],
+      ),
+    );
+    assert.equal(soloAna(await contactosDe(WS_B)), undefined, 'desde B se leía la PII de A con solo insertarse un company_link');
+    // Y A lo sigue viendo, que es el otro lado de la misma política.
+    assert.equal(soloAna(await contactosDe(WS_A))?.email, 'ana@hogarlindo.co');
+  });
+
+  test('B no le cambia el correo ni lo borra: la USING de 0019 servía también de escritura', async () => {
+    const pisado = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.update(contact).set({ email: 'secuestrado@b.co' }).where(eq(contact.id, contactoDeA)).returning({ id: contact.id }),
+    );
+    assert.deepEqual(pisado, [], 'B reescribía el correo de A y el outreach de A se iba a la dirección de B');
+    const borrado = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.delete(contact).where(eq(contact.id, contactoDeA)).returning({ id: contact.id }),
+    );
+    assert.deepEqual(borrado, [], 'B borraba contactos de A');
+    assert.equal(soloAna(await contactosDe(WS_A))?.email, 'ana@hogarlindo.co');
+  });
+
+  test('B no puede crear un contacto a nombre de A, ni siquiera marcándolo público', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.db.insert(contact).values({ companyId: COMPANY_C, ownerWorkspaceId: WS_A, fullName: 'Falso', source: 'press' }),
+      ),
+      isRlsViolation,
+    );
+    // Lo que sí puede es guardar el SUYO sobre la misma empresa: es
+    // prospección, y queda con B de dueño.
+    const [propio] = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db
+        .insert(contact)
+        .values({ companyId: COMPANY_C, fullName: 'Prensa Hogar Lindo', email: 'prensa@hogarlindo.co', source: 'press' })
+        .returning({ owner: contact.ownerWorkspaceId }),
+    );
+    assert.equal(propio?.owner, WS_B);
+  });
+
+  test('la baja no vuelve atrás, ni para su dueño', async () => {
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.db.update(contact).set({ optedOut: true, optedOutAt: new Date().toISOString() }).where(eq(contact.id, contactoDeA)),
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) => tx.db.update(contact).set({ optedOut: false }).where(eq(contact.id, contactoDeA))),
+      (err: unknown) => /definitiva/.test(fullMessage(err)),
+    );
+    assert.equal(soloAna(await contactosDe(WS_A))?.optedOut, true);
+  });
+
+  test('la baja de un contacto ajeno la registra el worker, no otro workspace', async () => {
+    // La baja es global (0007), pero un UPDATE con WHERE tiene que poder
+    // LEER la fila: abrirle a otro workspace «solo para dar de baja»
+    // sería abrirle la lectura de la PII. Así que A no puede tocar el
+    // contacto de B ni para eso…
+    const [suyo] = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db
+        .insert(contact)
+        .values({ companyId: COMPANY_C, fullName: 'Beto Privado', email: 'beto@hogarlindo.co', source: 'user_provided' })
+        .returning({ id: contact.id }),
+    );
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query('UPDATE contact SET opted_out = true, email = $2 WHERE id = $1', [suyo!.id, 'secuestrado@a.co']),
+    );
+    const deB = (await contactosDe(WS_B)).find((r) => r.id === suyo!.id);
+    assert.equal(deB?.optedOut, false, 'A tocó un contacto de B');
+    assert.equal(deB?.email, 'beto@hogarlindo.co');
+  });
+
+  test('…y el worker sí, porque salta RLS (es como el outreach respeta la baja)', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    const [victima] = (await contactosDe(WS_B)).filter((r) => r.email === 'beto@hogarlindo.co');
+    await t.db.asWorker((tx) => tx.query('UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = $1', [victima!.id]));
+    const deB = (await contactosDe(WS_B)).find((r) => r.id === victima!.id);
+    assert.equal(deB?.optedOut, true);
+  });
+
+  test('mc_worker sigue viendo y escribiendo los de todos (rebotes, bajas globales)', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    const n = await t.db.asWorker((tx) => countRows(tx, 'contact'));
+    assert.ok(n >= 3, `el worker ve ${n} contactos, de todos los workspaces`);
+    await t.db.asWorker((tx) => tx.query('UPDATE contact SET bounced = true WHERE id = $1', [contactoDeA]));
+  });
+
+  test('app_user: desde B no se lee el correo de las personas de A', async () => {
+    const correos = (ws: string) =>
+      t.db.withWorkspace(ws, (tx) => tx.db.select({ id: appUser.id, email: appUser.email }).from(appUser));
+    assert.deepEqual((await correos(WS_A)).map((r) => r.id), [USER_A], 'B veía a las personas de A, con su correo');
+    assert.deepEqual((await correos(WS_B)).map((r) => r.id), [USER_B]);
+    assert.equal(await t.db.withCatalogs((tx) => countRows(tx, 'app_user')), 0, 'sin workspace se enumeraban todos los correos');
+  });
+});
+
+describe('pipeline_stage y feature_flag: catálogos con dueño (0020)', () => {
+  const ETAPA_A = 'etapa-secreta-a';
+
+  before(async () => {
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.db.insert(pipelineStage).values({
+        id: ETAPA_A,
+        workspaceId: CURRENT_WORKSPACE,
+        labelEs: 'Cierre con Café Alma',
+        position: 10,
+        defaultProbability: '0.9000',
+      }),
+    );
+  }, { timeout: 120_000 });
+
+  test('A ve su etapa y las globales; B solo las globales', async () => {
+    const etapasDe = (ws: string) => t.db.withWorkspace(ws, (tx) => listPipelineStages(tx));
+    const deA = await etapasDe(WS_A);
+    const deB = await etapasDe(WS_B);
+    assert.ok(deA.some((e) => e.id === ETAPA_A));
+    assert.equal(deB.some((e) => e.id === ETAPA_A), false, 'B leía la etapa privada de A, con su nombre');
+    assert.ok(deB.some((e) => e.id === 'nuevo'), 'las globales se siguen viendo desde cualquier workspace');
+    assert.equal(deA.length, deB.length + 1);
+  });
+
+  test('sin workspace fijado quedan las globales, que es como se leen antes de la sesión', async () => {
+    const globales = await listPipelineStages(t.db);
+    assert.ok(globales.length >= 7);
+    assert.equal(globales.some((e) => e.id === ETAPA_A), false);
+    assert.equal(globales.every((e) => e.workspaceId === null), true);
+  });
+
+  test('B no le enciende una bandera a A', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.db.insert(featureFlag).values({ key: 'outbound_send', workspaceId: WS_A, enabled: true }),
+      ),
+      isRlsViolation,
+    );
+    // La suya sí, y A no la ve.
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.insert(featureFlag).values({ key: 'outbound_send', workspaceId: CURRENT_WORKSPACE, enabled: true }),
+    );
+    const deA = await t.db.withWorkspace(WS_A, (tx) => listFeatureFlags(tx));
+    assert.equal(deA.some((f) => f.workspaceId === WS_B), false);
+    const [global] = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.db.select().from(featureFlag).where(and(eq(featureFlag.key, 'outbound_send'), isNull(featureFlag.workspaceId))),
+    );
+    assert.equal(global?.enabled, false, 'la bandera global sigue apagada: nadie la tocó');
+  });
+
+  test('nadie edita ni borra una fila global desde un workspace', async () => {
+    const tocadas = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.update(pipelineStage).set({ labelEs: 'Pisado' }).where(isNull(pipelineStage.workspaceId)).returning({ id: pipelineStage.id }),
+    );
+    assert.deepEqual(tocadas, []);
+    const borradas = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.delete(pipelineStage).where(isNull(pipelineStage.workspaceId)).returning({ id: pipelineStage.id }),
+    );
+    assert.deepEqual(borradas, []);
+    // Y tampoco se crea una global nueva desde un workspace: eso es un
+    // seed o una migración, donde no hay workspace fijado.
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.db.insert(pipelineStage).values({ id: 'global-intrusa', labelEs: 'Global', position: 99, defaultProbability: '0.1000' }),
+      ),
+      isRlsViolation,
+    );
+  });
+});
+
+describe('una consulta capturada dentro de la transacción no corre fuera de ella', () => {
+  test('un builder esperado después del cierre lanza TransactionClosedError', async () => {
+    // El Proxy de tx.db solo lanza en el ACCESO a la propiedad: aquí el
+    // acceso ocurre DENTRO (y pasa) y la espera FUERA, donde antes
+    // corría sobre una conexión ya devuelta al pool, sin transacción y
+    // sin workspace. Se devuelve envuelto en un objeto a propósito: un
+    // builder de Drizzle es «thenable», así que devolverlo pelado lo
+    // haría esperar la propia transacción.
+    const { q } = await t.db.withWorkspace(WS_A, async (tx) => ({ q: tx.db.select({ id: deal.id }).from(deal) }));
+    await assert.rejects(async () => {
+      await q;
+    }, (err: unknown) => /Transacción cerrada/.test(fullMessage(err)));
+  });
+
+  test('lo mismo con una transacción de catálogos', async () => {
+    const { q } = await t.db.withCatalogs(async (tx) => ({ q: tx.db.select({ id: deal.id }).from(deal) }));
+    await assert.rejects(async () => {
+      await q;
+    }, (err: unknown) => /Transacción cerrada/.test(fullMessage(err)));
   });
 });

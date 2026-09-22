@@ -1,9 +1,13 @@
 /**
  * Ventas: empresas, radar, pipeline y outbound. Migración 0007.
  *
- * company y contact son globales (sin RLS): la relación de un workspace
- * con una empresa vive en company_link, que sí está aislada.
+ * company es el catálogo global de empresas (sin RLS: nombre, dominio y
+ * sector, sin datos personales). contact sí lleva RLS desde 0019 y,
+ * desde 0020, su candado es owner_workspace_id: el workspace que lo
+ * guardó. La relación comercial de un workspace con una empresa vive
+ * en company_link, que también está aislada.
  */
+import { sql } from 'drizzle-orm';
 import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
 import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
@@ -55,6 +59,14 @@ export const company = pgTable('company', {
 export const contact = pgTable('contact', {
   id: uuidPk(),
   companyId: uuid('company_id').notNull().references(() => company.id, { onDelete: 'cascade' }),
+  /**
+   * Quién guardó este contacto. Lo pone la base
+   * (DEFAULT current_workspace_id(), migración 0020) y es el candado de
+   * su PII: nadie lo escribe a mano. Admite NULL solo por las filas
+   * anteriores a 0020, que quedan visibles únicamente si su fuente es
+   * pública.
+   */
+  ownerWorkspaceId: uuid('owner_workspace_id').references(() => workspace.id, { onDelete: 'cascade' }).default(sql`current_workspace_id()`),
   fullName: text('full_name'),
   roleTitle: text('role_title'),
   email: citext('email'),

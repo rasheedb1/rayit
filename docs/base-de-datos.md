@@ -180,13 +180,24 @@ divergieron, y la salida es una migración nueva, nunca editar la vieja.
   RLS en toda tabla de tenant o hija de una. El CI corre además esas
   pruebas contra Postgres 16 con un rol `mc_app_ci` sin BYPASSRLS
   (`TEST_DATABASE_URL`), que es lo que ejercita el runner de `pg`.
-  Quedan por aplicar en Supabase 0017 y 0018 (`make db.migrate`, en la
-  integración de CIM-2; hasta entonces `outbound_policy`, `quote_item`,
-  `rate_card_item`, `deal_stage_history` y `campaign_post` se leen sin
-  workspace, así que no cargar datos de clientes reales antes), y
-  `membership`, `contact` y `app_user` siguen sin RLS hasta CIM-3 y
-  VEN-1 (`test.todo` visibles). Falta la prueba con sesiones de usuario
-  reales, que llega con CIM-3.
+  Quedan por aplicar en Supabase **0017, 0018, 0019 y 0020**, en ese
+  orden (`make db.migrate`, en la integración de CIM-2). Hasta
+  entonces, en la Supabase viva, `outbound_policy`, `quote_item`,
+  `rate_card_item`, `deal_stage_history`, `campaign_post`,
+  `membership`, `contact`, `app_user`, `pipeline_stage` y
+  `feature_flag` se leen sin workspace: **no cargar datos de clientes
+  reales antes**. Desde la ronda 5 de CIM-2 eso no depende de que
+  alguien lea este párrafo: `@mc/db` lo comprueba al arrancar
+  (`assertSchemaUpToDate`) y lo dice con las migraciones que faltan y
+  las tablas sin RLS —aviso en desarrollo, error con
+  `NODE_ENV=production`—, y el worker pregunta lo mismo en su
+  `preflight`. Ya no queda ninguna tabla con `workspace_id` ni con
+  datos personales sin política: 0019 cerró `membership` y `contact`, y
+  0020 le dio a `contact` un dueño propio (`owner_workspace_id`, porque
+  `company_link` no servía de candado: `company` es un catálogo global
+  y cualquiera puede vincularse a cualquier empresa), activó la de
+  `app_user` y la de los dos catálogos con `workspace_id`. Falta la
+  prueba con sesiones de usuario reales, que llega con CIM-3.
 - **El worker no puede arrancar contra Supabase todavía.** Necesita
   `GRANT mc_worker TO mc_migrator` y el esquema `pgboss`
   (`docs/propuestas/CON-2.md` §3.1), con el token de administración.

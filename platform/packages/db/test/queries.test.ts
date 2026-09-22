@@ -13,8 +13,9 @@ import { CURRENT_WORKSPACE, creatorProfile, rateCard, rateCardItem } from '../sr
 import { listJobDefinitions, listPipelineStages, listPlatforms, listSignalSources } from '../src/queries/catalogos.ts';
 import { getWorkspaceSettings } from '../src/queries/cimientos.ts';
 import { getCurrentRateCard } from '../src/queries/cotizar.ts';
+import { getInvoice } from '../src/queries/finanzas.ts';
 import { listPostBoard } from '../src/queries/resumen.ts';
-import { listPipeline } from '../src/queries/ventas.ts';
+import { getPipelineDeal, listPipeline } from '../src/queries/ventas.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 /** Un workspace vecino, para comprobar que los helpers no cruzan la frontera. */
@@ -167,5 +168,65 @@ describe('queries/catalogos · las siete lecturas con nombre', () => {
     assert.ok((await listSignalSources(t.db)).length > 0);
     const jobs = await listJobDefinitions(t.db);
     assert.ok(jobs.length > 0, 'el catálogo de jobs alimenta el humo del worker');
+  });
+});
+
+/**
+ * Un id que llega de una ruta o de un formulario no es un uuid porque
+ * sí. Estos helpers son la plantilla que copian los demás módulos, así
+ * que el descuido se multiplicaría por módulo: `/cotizar/no-soy-uuid`
+ * acababa en un 22P02 de Postgres convertido en 500 en vez de en el 404
+ * del producto.
+ */
+describe('queries/* · un id de fuera se valida antes de consultar', () => {
+  const BASURA = ['no-soy-uuid', '', '  ', "'; DROP TABLE deal; --", '00000000-0000-4000-8000-00000000000', '1 OR 1=1'];
+
+  test('getCurrentRateCard devuelve null, igual que cuando no hay tarifario', async () => {
+    for (const id of BASURA) {
+      const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, id));
+      assert.equal(r, null, `getCurrentRateCard(${JSON.stringify(id)}) tendría que ser null`);
+    }
+    // Y con un uuid que no existe, lo mismo: para la pantalla son el
+    // mismo caso, y por eso no lanza.
+    const inexistente = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      getCurrentRateCard(tx, '0000000f-0000-4000-8000-00000000ffff'),
+    );
+    assert.equal(inexistente, null);
+  });
+
+  test('getPipelineDeal y getInvoice, lo mismo', async () => {
+    for (const id of BASURA) {
+      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPipelineDeal(tx, id)), null);
+      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, id)), null);
+    }
+  });
+
+  test('un uuid de verdad sí consulta: la validación no se come el caso bueno', async () => {
+    const [unDeal] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPipeline(tx));
+    // La vista deal_pipeline declara sus columnas nulables (lo son para
+    // Drizzle: es una vista), así que el id se comprueba antes de usarlo.
+    if (unDeal?.id) {
+      const encontrado = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPipelineDeal(tx, unDeal.id!));
+      assert.equal(encontrado?.id, unDeal.id);
+    }
+    const conTarifario = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, creadoraLaura));
+    assert.ok(conTarifario, 'el tarifario vigente se sigue leyendo');
+  });
+
+  test('un deal de otro workspace tampoco existe, aunque el uuid sea válido', async () => {
+    const [deLaura] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPipeline(tx));
+    if (!deLaura?.id) return;
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getPipelineDeal(tx, deLaura.id!)), null);
+  });
+
+  test('listPostBoard rechaza un limit imposible en vez de mandárselo a Postgres', async () => {
+    for (const limit of [0, -1, 1.5, Number.NaN, 1000]) {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPostBoard(tx, { limit })),
+        /limit inválido/,
+        `limit=${String(limit)}`,
+      );
+    }
+    assert.ok((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPostBoard(tx, { limit: 1 }))).length <= 1);
   });
 });

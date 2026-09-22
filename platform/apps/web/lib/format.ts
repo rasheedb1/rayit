@@ -199,6 +199,17 @@ export function formatDateRange(fromIso: string, toIso: string, opts: LocaleOpts
   return `${formatDate(fromIso, "short", opts)} – ${formatDate(toIso, "short", opts)}`;
 }
 
+/**
+ * Fecha y hora de un instante, en la zona del workspace: "20 de
+ * septiembre de 2026, 3:04 p. m.". Para los sellos de "publicado el…",
+ * donde la hora importa y por tanto la zona también.
+ */
+export function formatDateTime(iso: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const timeZone = opts.timeZone ?? DEFAULT_TIME_ZONE;
+  return plain(dateFormat(locale, { dateStyle: "long", timeStyle: "short", timeZone }).format(utcDate(iso)));
+}
+
 /** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
 export function formatDaysRelative(days: number): string {
   if (days === 0) return "hoy";
@@ -231,7 +242,15 @@ export function formatterFor(settings: FormatSettings) {
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
+    dateTime: (iso: string) => formatDateTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     daysRelative: formatDaysRelative,
   };
 }
+
+/**
+ * El formateador atado a un workspace. Es el tipo que reciben las
+ * funciones de una pantalla (columnas de una tabla, una tarjeta) para
+ * que ninguna vuelva a formatear con los valores por defecto.
+ */
+export type Formatter = ReturnType<typeof formatterFor>;

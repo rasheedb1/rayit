@@ -29,7 +29,7 @@ import {
   type TransitionInput,
 } from '@mc/core';
 import { getWorkspaceSettings } from './cimientos.ts';
-import type { WorkspaceTx } from '../client.ts';
+import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -280,7 +280,13 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
   return { rows: page, nextCursor: rows.length > limit && last ? encodeCursor(last) : null };
 }
 
+/**
+ * Una factura del workspace por su id, o null. El id llega de la ruta:
+ * si no es un UUID no se consulta (Postgres devolvería 22P02, que la
+ * pantalla convertiría en 500 en vez de en su 404).
+ */
 export async function getInvoice(tx: WorkspaceTx, id: string): Promise<InvoiceDetail | null> {
+  if (!isUuid(id)) return null;
   const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1`, [id]);
   const r = rows[0];
   return r ? toDetail(r) : null;

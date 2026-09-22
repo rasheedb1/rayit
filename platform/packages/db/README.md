@@ -98,6 +98,21 @@ lista vacía y buscará el error en la pantalla. Se llamaba
 lo que hace `asWorker`. Sigue accesible desde `@mc/db/client` para el
 worker y las pruebas; `test/rls.test.ts` demuestra las cero filas.
 
+Dos de esos catálogos —`pipeline_stage` y `feature_flag`— tienen filas
+globales (`workspace_id NULL`) y filas de un workspace, y desde la
+migración **0020** llevan RLS. Por eso sus dos lecturas no reciben
+ningún id:
+
+```ts
+const globales = await listPipelineStages(db);              // sin workspace: solo las compartidas
+const mias     = await withWorkspace((tx) => listPipelineStages(tx)); // las compartidas + las del workspace
+```
+
+Antes tomaban `{ workspaceId }` como parámetro suelto —lo único que el
+contrato de este paquete no permite en ningún otro sitio— y el filtro
+lo hacía JavaScript: quien pasara el id de otro tenant leía sus etapas
+o le encendía una bandera. Ahora el filtro lo pone la base.
+
 `company` y `contact` **no** son catálogos aunque no tengan
 `workspace_id`. Desde la migración 0019 `contact` lleva RLS propia: se
 ve si su fuente es pública (`public_website`, `public_profile`,
@@ -154,6 +169,9 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 - **Manijas que mueren con la transacción.** Usar `tx.db` o `tx.query`
   después de que `fn` terminó lanza `TransactionClosedError`. Un
   `return tx` accidental no corre fuera de transacción y sin workspace.
+  Y tampoco un constructor de consulta capturado dentro y esperado
+  fuera (`const q = tx.db.select()…; await q` después): el cliente que
+  Drizzle recibe va envuelto, así que la espera tardía lanza igual.
 - **Validación del workspace.** `withWorkspace('laura', …)` rechaza antes
   de abrir nada: tiene que ser un UUID.
 - **Sin transacciones anidadas.** Llamar a `withWorkspace`,
@@ -166,15 +184,38 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 - **Conexiones rotas fuera del pool.** Si el `ROLLBACK` falla, la
   conexión se devuelve al pool con el error y `pg` la destruye en vez de
   prestársela, con la transacción a medias, a la siguiente petición.
+- **El pool nunca se queda sin oyente de `error`.** `pg` emite `error`
+  en el Pool cuando se rompe una conexión **ociosa** —el pooler de
+  Supabase las cierra de forma rutinaria— y un `EventEmitter` sin
+  oyente de `error` **lanza**: eso no tumbaba una petición, tumbaba el
+  proceso de Next entero. `createPool` deja siempre uno; con
+  `PoolOptions.onError` lo manda quien construye el pool a su logger.
+- **Que la base tenga el esquema del repositorio.** `createDbFromEnv`
+  lo comprueba una vez al construir el cliente
+  (`assertSchemaUpToDate`): migraciones aplicadas vs. `db/migrations` y
+  `relrowsecurity` de todas las tablas que `src/esquema.ts` declara
+  aisladas. En desarrollo avisa con `make db.migrate`; con
+  `NODE_ENV=production`, lanza (salida explícita:
+  `ALLOW_STALE_SCHEMA=1`, que lo baja a aviso). El contrato de este paquete —RLS aísla
+  cada workspace— lo cumplen las políticas, no el código: contra una
+  base atrasada todo compila, las rutas responden 200 y el aislamiento
+  no existe. El worker lo pregunta también, en su `preflight`.
 - **TLS, con una sola fuente de verdad.** Contra un host de Supabase se
   verifica con la CA de `db/certs/` (embebida para Vercel);
   `PGSSLROOTCERT` manda si existe. Y un `?sslmode=…` pegado a la URL
   **lanza** en vez de ganar: `pg` re-parsea la cadena de conexión
   después de la configuración explícita, así que `sslmode=no-verify`
   dejaría `rejectUnauthorized: false`, `disable` mandaría texto plano a
-  Supabase y `require` descartaría la CA embebida. Si el certificado
-  falla, `make db.cert`; nunca el parámetro. En un host sin CA propia el
-  parámetro se traduce a una opción `ssl` explícita y se borra de la URL.
+  Supabase y `require` descartaría la CA embebida. Lo mismo con los
+  otros cuatro parámetros que `pg-connection-string` convierte en
+  `ssl`: `sslrootcert` sustituía la CA del repositorio por la del
+  archivo que diga la URL, `sslcert` / `sslkey` metían un certificado
+  de cliente y `sslnegotiation=direct` dejaba `ssl: true` con el
+  almacén del sistema, que no conoce la CA de Supabase. Si el
+  certificado falla, `make db.cert`; nunca el parámetro. En un host sin
+  CA propia, `sslmode`/`ssl` deciden si hay TLS, `sslrootcert` aporta la
+  CA, y todos se borran de la URL; los otros tres se rechazan (su sitio
+  es `PoolOptions`, donde se ven).
 - **Las mismas decisiones en el worker.** `apps/worker/src/runner/db.ts`
   importa `tlsFor` / `hostOf` / `resolveTls` de aquí en vez de tener su
   copia: era el mismo camino de seguridad escrito dos veces, y solo uno
@@ -191,10 +232,13 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
    deja `.introspect/schema.ts` (no se versiona).
 4. Curar `src/schema/<dominio>.ts` a mano con el estilo de los demás
    (helpers en `src/schema/_tipos.ts`).
-5. `pnpm --filter @mc/db test` — `test/schema.test.ts` compara columna a
+5. Si la tabla es nueva y lleva aislamiento, añadirla a la lista que
+   corresponda en `src/esquema.ts`: es la que usan a la vez
+   `test/schema.test.ts` y la comprobación en tiempo de ejecución.
+6. `pnpm --filter @mc/db test` — `test/schema.test.ts` compara columna a
    columna con la base y falla si algo falta o difiere; y comprueba que
    toda tabla de tenant (o hija de una) tiene RLS.
-6. El integrador aplica en Supabase: `make db.migrate`.
+7. El integrador aplica en Supabase: `make db.migrate`.
 
 Nunca al revés: no hay `drizzle-kit generate` ni `push`.
 

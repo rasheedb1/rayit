@@ -26,7 +26,10 @@
  */
 import type { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { createDb, isInTransaction, type BaseTx, type CatalogDb, type DbOptions, type TxRunner } from './client.ts';
+import {
+  createDb, guardClient, isInTransaction, TransactionClosedError,
+  type BaseTx, type CatalogDb, type DbOptions, type TxRunner,
+} from './client.ts';
 import * as schema from './schema/index.ts';
 
 export interface PgliteDb extends CatalogDb {
@@ -52,7 +55,23 @@ export class RawInsideTransactionError extends Error {
 }
 
 export function createPgliteDb(pglite: PGlite, opts: DbOptions = {}): PgliteDb {
-  const orm = drizzle({ client: pglite, schema });
+  /**
+   * El ORM se construye una vez, sobre el cliente envuelto: una
+   * consulta esperada fuera de su transacción lanza
+   * TransactionClosedError en vez de correr sin workspace (guardClient
+   * en client.ts). Aquí basta una bandera porque PGlite serializa las
+   * transacciones: solo hay una abierta a la vez. Lo que esta bandera
+   * no distingue —y sobre `pg` sí, porque allí el ORM es por
+   * transacción— es un constructor capturado en una transacción y
+   * esperado mientras corre OTRA.
+   */
+  let abierta = false;
+  const orm = drizzle({
+    client: guardClient(pglite, () => {
+      if (!abierta) throw new TransactionClosedError();
+    }),
+    schema,
+  });
 
   let chain: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(job: () => Promise<T>): Promise<T> => {
@@ -68,6 +87,7 @@ export function createPgliteDb(pglite: PGlite, opts: DbOptions = {}): PgliteDb {
     run: (fn) =>
       exclusive(async () => {
         await pglite.query('BEGIN');
+        abierta = true;
         try {
           const tx: BaseTx = {
             db: orm,
@@ -82,6 +102,8 @@ export function createPgliteDb(pglite: PGlite, opts: DbOptions = {}): PgliteDb {
         } catch (err) {
           await pglite.query('ROLLBACK').catch(() => undefined);
           throw err;
+        } finally {
+          abierta = false;
         }
       }),
     close: () => pglite.close(),

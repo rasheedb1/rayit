@@ -39,7 +39,11 @@
  *
  * Las manijas `tx.db` y `tx.query` mueren con la transacción: usarlas
  * después (un `return tx` accidental) lanza TransactionClosedError en
- * vez de correr fuera de transacción y sin workspace.
+ * vez de correr fuera de transacción y sin workspace. Y no solo al
+ * acceder a la propiedad: también un constructor de consulta capturado
+ * dentro y esperado fuera (`const q = tx.db.select()…` y `await q`
+ * después), porque el cliente que Drizzle recibe va envuelto
+ * (guardClient).
  *
  * Una transacción no se anida: llamar a withWorkspace / withCatalogs
  * / asWorker desde dentro de otra lanza NestedTransactionError en los
@@ -202,6 +206,37 @@ function timeoutMs(value: number | undefined, fallback: number, name: string): n
 }
 
 /**
+ * Envuelve el cliente del driver (un PoolClient de `pg`, la instancia
+ * de PGlite) para que su método de ejecución compruebe, en cada
+ * consulta, que la transacción sigue abierta.
+ *
+ * Es la otra mitad de guardTx, y hace falta porque el Proxy de `tx.db`
+ * solo lanza en el ACCESO a una propiedad: un constructor de consulta
+ * capturado DENTRO de la transacción y esperado fuera
+ *
+ *     const q = tx.db.select().from(deal);   // dentro: el acceso pasa
+ *     await q;                               // fuera: ya no hay transacción
+ *
+ * se llevaba la referencia al ejecutor y corría sobre una conexión ya
+ * devuelta al pool, fuera de toda transacción y sin workspace fijado.
+ * Con el guard aquí, esa espera tardía lanza TransactionClosedError.
+ */
+export function guardClient<C extends object>(client: C, assertOpen: () => void): C {
+  return new Proxy(client, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop, target);
+      if (typeof value !== 'function') return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      if (prop !== 'query') return fn.bind(target);
+      return (...args: unknown[]) => {
+        assertOpen();
+        return fn.apply(target, args);
+      };
+    },
+  });
+}
+
+/**
  * Envuelve las manijas para que dejen de servir al cerrar. `db` es un
  * Proxy sobre el ORM de Drizzle: cualquier acceso tras el cierre lanza.
  */
@@ -309,6 +344,12 @@ export interface PoolOptions extends DbOptions {
   connectionTimeoutMillis?: number;
   /** Cuánto vive una conexión ociosa antes de cerrarse. */
   idleTimeoutMillis?: number;
+  /**
+   * Qué hacer cuando se rompe una conexión OCIOSA del pool. Sin esto se
+   * escribe en console.error; lo que no se puede es dejarlo sin oyente
+   * (ver createPool). La web le pasa su logger.
+   */
+  onError?: (err: Error) => void;
 }
 
 /**
@@ -320,10 +361,18 @@ export interface PoolOptions extends DbOptions {
  * mandaría texto plano y `require` descartaría la CA embebida. Por eso
  * resolveTls lanza (host con CA propia) o traduce el parámetro y lo
  * borra de la URL (host sin CA propia) antes de construir el Pool.
+ *
+ * Y el pool SIEMPRE sale con un oyente de 'error'. `pg` emite ese
+ * evento en el Pool cuando se rompe una conexión OCIOSA —el pooler de
+ * Supabase cierra las ociosas de forma rutinaria, y también lo hace un
+ * reinicio de Supavisor o un corte de red—, y un EventEmitter sin
+ * oyente de 'error' LANZA: se caería el proceso entero de Next con
+ * ERR_UNHANDLED_ERROR, no una petición. No hay nada que hacer con la
+ * conexión (el pool ya la descarta), así que basta con dejar rastro.
  */
 export function createPool(connectionString: string, opts: PoolOptions = {}): pg.Pool {
   const tls = resolveTls(connectionString, opts.sslRootCert ?? null);
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: tls.connectionString,
     ssl: tls.ssl,
     max: opts.max ?? 5,
@@ -331,6 +380,14 @@ export function createPool(connectionString: string, opts: PoolOptions = {}): pg
     connectionTimeoutMillis: opts.connectionTimeoutMillis ?? 5_000,
     idleTimeoutMillis: opts.idleTimeoutMillis ?? 30_000,
   });
+  pool.on('error', (err: Error) => {
+    if (opts.onError) opts.onError(err);
+    // A stderr y no a console: este paquete no impone un logger (el
+    // worker tiene el suyo, la web el de Next) y su lint prohíbe
+    // console.* a propósito. Quien quiera el suyo pasa onError.
+    else process.stderr.write(`[db] conexión ociosa rota; el pool la descarta y abre otra: ${err.message}\n`);
+  });
+  return pool;
 }
 
 export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): CatalogDb {
@@ -341,10 +398,17 @@ export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): CatalogDb {
       // devuelve al pool con el error para que pg la destruya en vez de
       // prestársela, con la transacción abierta, a la siguiente petición.
       let broken: Error | undefined;
+      // Lo que ve Drizzle es el cliente envuelto: una consulta esperada
+      // después de que la transacción cerró lanza en vez de correr sobre
+      // una conexión ya devuelta al pool (ver guardClient).
+      let abierta = true;
+      const guarded = guardClient(client, () => {
+        if (!abierta) throw new TransactionClosedError();
+      });
       try {
         await client.query('BEGIN');
         const tx: BaseTx = {
-          db: drizzle({ client, schema }),
+          db: drizzle({ client: guarded, schema }),
           query: async (text, params) => {
             const r = await client.query(text, params ? [...params] : undefined);
             return { rows: r.rows };
@@ -359,6 +423,7 @@ export function createPgDb(pool: pg.Pool, opts: DbOptions = {}): CatalogDb {
         });
         throw err;
       } finally {
+        abierta = false;
         client.release(broken);
       }
     },

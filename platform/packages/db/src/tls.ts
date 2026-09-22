@@ -26,12 +26,21 @@
  * fallo de certificado pega `?sslmode=no-verify` a la URL del vault y
  * todo parece seguir funcionando.
  *
+ * Y no es solo `sslmode`: `pg-connection-string` arma `config.ssl`
+ * también con `sslrootcert`, `sslcert`, `sslkey` y `sslnegotiation`
+ * (TLS_URL_PARAMS los lista con lo que hace cada uno, medido). Un
+ * `?sslrootcert=/tmp/atacante.crt` sustituía la CA del repositorio sin
+ * que nada lo dijera.
+ *
  * Por eso resolveTls:
- *   - Con CA propia (Supabase o PGSSLROOTCERT), un `sslmode` / `ssl` en
- *     la URL es un error y se lanza con instrucciones.
+ *   - Con CA propia (Supabase o PGSSLROOTCERT), CUALQUIERA de los seis
+ *     parámetros en la URL es un error y se lanza con instrucciones.
  *   - Sin CA propia, el parámetro se traduce aquí a una opción `ssl`
  *     explícita y se BORRA de una copia de la URL, para que solo haya
- *     un sitio donde mirar. `no-verify` se rechaza siempre.
+ *     un sitio donde mirar: `sslmode`/`ssl` deciden si hay TLS y
+ *     `sslrootcert` aporta la CA. `no-verify` se rechaza siempre, y
+ *     `sslcert`/`sslkey`/`sslnegotiation` también: hablan del cliente y
+ *     su sitio es PoolOptions, donde se ven.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -54,8 +63,30 @@ export interface TlsDecision {
   ssl: Ssl;
 }
 
-/** Los parámetros de la URL que hablan de TLS. Ninguno convive con una CA propia. */
-export const TLS_URL_PARAMS = ['sslmode', 'ssl'] as const;
+/**
+ * Los parámetros de la URL que hablan de TLS. Ninguno convive con una
+ * CA propia.
+ *
+ * Son SEIS, no dos: `pg-connection-string` construye `config.ssl` a
+ * partir de todos ellos, y `pg` re-parsea la cadena DESPUÉS de la
+ * configuración explícita. Medido con el `pg` instalado, pasando
+ * siempre `ssl: { ca: 'CA-DEL-REPO', rejectUnauthorized: true }`:
+ *
+ *   ?sslrootcert=/tmp/atacante.crt  → { ca: '…ATACANTE…' }   (nuestra CA, fuera)
+ *   ?sslcert=/tmp/atacante.crt      → { cert: '…ATACANTE…' } (ídem)
+ *   ?sslkey=/tmp/atacante.key       → {}                     (ídem)
+ *   ?sslnegotiation=direct          → true                   (almacén del sistema)
+ *   ?ssl=true                       → true
+ *   ?sslmode=no-verify              → { rejectUnauthorized: false }
+ *
+ * Es decir: la misma puerta que cerró la ronda 4 con `sslmode`, abierta
+ * cuatro veces más. Y es realista: quien vea un fallo de certificado
+ * pega `sslrootcert=` a la URL del vault.
+ */
+export const TLS_URL_PARAMS = ['sslmode', 'ssl', 'sslrootcert', 'sslcert', 'sslkey', 'sslnegotiation'] as const;
+
+/** Los que no tienen traducción posible: hablan del cliente, no del servidor. */
+const TLS_URL_PARAMS_SIN_TRADUCCION = ['sslcert', 'sslkey', 'sslnegotiation'] as const;
 
 export function hostOf(connectionString: string): string {
   let host = '';
@@ -72,14 +103,17 @@ export function isSupabaseHost(host: string): boolean {
   return /\.supabase\.(com|co)$/i.test(host);
 }
 
-export function tlsFor(connectionString: string, sslRootCert: string | null = null, platformRoot: string = PLATFORM_ROOT): Tls {
-  if (sslRootCert) {
-    const path = isAbsolute(sslRootCert) ? sslRootCert : resolve(platformRoot, sslRootCert);
-    if (!existsSync(path)) {
-      throw new Error(`Falta el certificado raíz en ${path} (PGSSLROOTCERT). Descárgalo con: make db.cert`);
-    }
-    return { ca: readFileSync(path, 'utf8'), rejectUnauthorized: true };
+/** Lee un certificado raíz del disco. Una ruta relativa se resuelve contra platform/. */
+function leerCa(sslRootCert: string, platformRoot: string): { ca: string; rejectUnauthorized: true } {
+  const path = isAbsolute(sslRootCert) ? sslRootCert : resolve(platformRoot, sslRootCert);
+  if (!existsSync(path)) {
+    throw new Error(`Falta el certificado raíz en ${path} (PGSSLROOTCERT). Descárgalo con: make db.cert`);
   }
+  return { ca: readFileSync(path, 'utf8'), rejectUnauthorized: true };
+}
+
+export function tlsFor(connectionString: string, sslRootCert: string | null = null, platformRoot: string = PLATFORM_ROOT): Tls {
+  if (sslRootCert) return leerCa(sslRootCert, platformRoot);
   if (isSupabaseHost(hostOf(connectionString))) {
     return { ca: SUPABASE_ROOT_CA, rejectUnauthorized: true };
   }
@@ -160,11 +194,34 @@ export function resolveTls(connectionString: string, sslRootCert: string | null 
         'descartando la CA (o apagando la verificación). Si el certificado falla, corre make db.cert.',
     );
   }
-  if (present.length > 1) {
+
+  // Sin CA propia: el parámetro se traduce aquí y se borra de una copia
+  // de la URL, para que solo haya un sitio donde mirar.
+  const sinTraduccion = TLS_URL_PARAMS_SIN_TRADUCCION.filter((p) => url.searchParams.has(p));
+  if (sinTraduccion.length > 0) {
+    throw new TlsConfigError(
+      `La URL de la base trae ${sinTraduccion.join(' y ')}, que @mc/db no traduce: el TLS lo decide el paquete, no la cadena. ` +
+        'Un certificado de cliente (sslcert/sslkey) o una negociación distinta (sslnegotiation) se añaden a PoolOptions, ' +
+        'donde se ven; en la URL, `pg` los aplicaría DESPUÉS y descartarían la CA configurada.',
+    );
+  }
+  if (url.searchParams.has('sslmode') && url.searchParams.has('ssl')) {
     throw new TlsConfigError(`La URL de la base trae ${escrito}: dos parámetros de TLS que pueden contradecirse. Deja solo sslmode.`);
   }
-  const [param] = present;
-  const ssl = sslFromParam(param!, url.searchParams.get(param!) ?? '');
+
+  const modo = url.searchParams.has('sslmode') ? 'sslmode' : url.searchParams.has('ssl') ? 'ssl' : null;
+  let ssl: Ssl = modo === null ? VERIFIED : sslFromParam(modo, url.searchParams.get(modo) ?? '');
+
+  const rootCert = url.searchParams.get('sslrootcert');
+  if (rootCert !== null) {
+    if (ssl === false) {
+      throw new TlsConfigError(
+        `La URL de la base trae sslrootcert=${rootCert} junto a ${escrito}: un certificado raíz con el TLS apagado no significa nada. Deja uno de los dos.`,
+      );
+    }
+    ssl = leerCa(rootCert, platformRoot);
+  }
+
   const limpia = new URL(url.toString());
   for (const p of TLS_URL_PARAMS) limpia.searchParams.delete(p);
   return { connectionString: limpia.toString(), ssl };

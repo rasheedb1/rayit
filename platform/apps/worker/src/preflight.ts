@@ -21,7 +21,7 @@
  * job_definition (catálogo sin RLS): eso es el humo, y sirve para
  * comprobar @mc/db, TLS y credenciales antes de cualquier otra cosa.
  */
-import { hostOf } from '@mc/db';
+import { estadoDelEsquema, explicarEsquema, hostOf, type EstadoDelEsquema } from '@mc/db';
 import type { CatalogDb } from '@mc/db/client';
 import { listJobDefinitions } from '@mc/db/queries/catalogos';
 
@@ -31,6 +31,13 @@ export interface PreflightResult {
   memberOfRole: boolean;
   /** Existe el esquema de pg-boss. */
   bossSchemaExists: boolean;
+  /**
+   * Si esa base tiene el esquema del repositorio. Un worker contra una
+   * base atrasada corre jobs sobre tablas sin RLS y sin las columnas
+   * que sus consultas esperan: es el mismo «falta esto, corre esto» que
+   * el resto de este archivo.
+   */
+  esquema: EstadoDelEsquema;
 }
 
 interface PreflightRow extends Record<string, unknown> {
@@ -53,6 +60,7 @@ export async function runPreflight(db: CatalogDb, opts: { role: string | null; b
     currentUser: row?.current_user ?? '',
     memberOfRole: row?.member === true,
     bossSchemaExists: row?.boss === true,
+    esquema: await estadoDelEsquema(db),
   };
 }
 
@@ -73,6 +81,11 @@ export function explainMissing(p: PreflightResult, opts: { role: string | null; 
     );
   }
   if (lines.length) lines.push('Detalle: docs/propuestas/CON-2.md §3.1 y §3.3. Necesita el token de administración (Rasheed).');
+  // El esquema va aparte: no lo arregla el token de administración sino
+  // `make db.migrate`, y no lo dice ninguna otra cosa en tiempo de
+  // ejecución (el aviso vivía en una nota del backlog).
+  const esquema = explicarEsquema(p.esquema);
+  if (esquema) lines.push(esquema.replace(/^\[db\] /, ''));
   return lines;
 }
 
