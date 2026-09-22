@@ -267,9 +267,9 @@ transacción.
   no los de Nutrivé; transiciones válidas e inválidas con la línea base
   fijada al iniciar; `updateCampaign` rechaza fin anterior a inicio;
   una campaña cerrada no admite cambios.
-- `pnpm --filter @mc/web test`: 101 pruebas (16 nuevas: pills y
-  filtros, copiador, formulario de asociar, formularios de edición,
-  `PlatformPill`). `typecheck`, `lint` y `build` en verde.
+- `pnpm --filter @mc/web test`: 104 pruebas (19 nuevas: pills y
+  filtros, copiador, formulario de asociar y su búsqueda, formularios
+  de edición, `PlatformPill`). `typecheck`, `lint` y `build` en verde.
 - En dev sin `DATABASE_URL` (modo demo): `/campanas` y
   `/campanas/00000003-0000-4000-8000-000000ca0001` responden 200 con el
   contenido esperado; las Server Actions se ejercitaron por HTTP con
@@ -293,3 +293,20 @@ transacción.
       `campaign_post` vía `EXISTS (SELECT 1 FROM campaign …)`. Las
       consultas ya se protegen solas, pero la base quedaría cerrada
       también para quien escriba SQL a mano.
+
+## 5. Revisión (/code-review, nivel alto)
+
+Diez hallazgos; nueve resueltos en el commit «Revisión», uno justificado:
+
+| Hallazgo | Qué se hizo |
+|---|---|
+| Buscar: un post recién asociado seguía en los resultados | La búsqueda se repite cuando la ficha se revalida (`initial` en las dependencias) |
+| Buscar: una respuesta lenta pisaba a la nueva | Número de secuencia por búsqueda; una respuesta vieja se descarta |
+| «Facturar» visible en campañas canceladas | Se oculta en `cancelled`; el panel de facturas lo dice |
+| Fechas del formulario de datos sobrevivían a Cancelar | Viven en `DateFields`, que se desmonta con el formulario |
+| La consulta de detalle corría cuatro veces por petición | `cache()` entre `generateMetadata` y la página; `suggestPosts` y `listLinkablePosts` comprueban la campaña con consultas ligeras; los agregados van en un `LEFT JOIN LATERAL` |
+| `isPlatformId` con `in` aceptaba `constructor` | `Object.hasOwn` |
+| `buscarPosts` no validaba el tipo de `q` | Se valida y se recorta |
+| `UUID_RE`, `firstErrors` y el estado de acción duplicados | `apps/web/lib/forms.ts`; el esquema usa `isIsoDate` de core (rechaza 2026-02-30). Finanzas migra a `lib/forms` en su próxima historia (FIN-2), para no tocarlo en esta |
+| `finanzas/_lib/db.ts` como reexport en vez de cambiar cuatro importaciones | **Se mantiene**: el prompt de CAM-1 lo pide así y evita tocar páginas de Finanzas en esta historia; se borra al llegar CIM-2 |
+| Identificadores en español en la capa web | Componentes y hooks renombrados en inglés. Las Server Actions conservan el nombre en español (`asociarPost`, `editarCampana`…) por el precedente de FIN-1 (`crearFactura`, `facturarCampana`, que este módulo importa): son la «API» que ve la pantalla, en el idioma de la interfaz. **Decisión pendiente de Nicolás** si quiere unificar |
