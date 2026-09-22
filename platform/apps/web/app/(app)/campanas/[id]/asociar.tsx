@@ -9,14 +9,15 @@ import { Field, Input, Select } from "@/components/ui/field";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { Segmented } from "@/components/ui/segmented";
 import { formatDate, formatInt } from "@/lib/format";
-import { asociarPost, buscarPosts, type AccionState } from "./actions";
+import type { ActionState } from "@/lib/forms";
+import { asociarPost, buscarPosts } from "./actions";
 
 /** Espera tras la última tecla antes de buscar en el servidor. */
 const SEARCH_DEBOUNCE_MS = 300;
 
 type Tab = "sugeridos" | "buscar";
 
-function PostResumen({ post }: { post: LinkablePost }) {
+function PostSummary({ post }: { post: LinkablePost }) {
   return (
     <div className="min-w-0 flex-1">
       <p className="truncate text-sm font-medium text-ink">{post.title ?? post.caption ?? "Sin título"}</p>
@@ -30,8 +31,8 @@ function PostResumen({ post }: { post: LinkablePost }) {
 }
 
 /** El formulario «Asociar» de un post: entregable, principal y el botón. */
-export function AsociarForm({ campaignId, post }: { campaignId: string; post: LinkablePost }) {
-  const [state, formAction, pending] = useActionState<AccionState, FormData>(asociarPost, {});
+export function LinkPostForm({ campaignId, post }: { campaignId: string; post: LinkablePost }) {
+  const [state, formAction, pending] = useActionState<ActionState, FormData>(asociarPost, {});
   const formRef = useRef<HTMLFormElement>(null);
   const errors = state.errors ?? {};
   useEffect(() => {
@@ -65,11 +66,11 @@ export function AsociarForm({ campaignId, post }: { campaignId: string; post: Li
   );
 }
 
-function Fila({ campaignId, post, reasons }: { campaignId: string; post: LinkablePost; reasons?: SuggestedPost["reasons"] }) {
+function Row({ campaignId, post, reasons }: { campaignId: string; post: LinkablePost; reasons?: SuggestedPost["reasons"] }) {
   return (
     <li className="flex flex-col gap-3 py-3 md:flex-row md:items-start md:justify-between">
       <div className="min-w-0 flex-1">
-        <PostResumen post={post} />
+        <PostSummary post={post} />
         {reasons && reasons.length > 0 && (
           <ul className="mt-1 flex flex-wrap gap-1.5" aria-label="Por qué se sugiere">
             {reasons.map((r) => (
@@ -80,7 +81,7 @@ function Fila({ campaignId, post, reasons }: { campaignId: string; post: Linkabl
           </ul>
         )}
       </div>
-      <AsociarForm campaignId={campaignId} post={post} />
+      <LinkPostForm campaignId={campaignId} post={post} />
     </li>
   );
 }
@@ -90,33 +91,42 @@ function Fila({ campaignId, post, reasons }: { campaignId: string; post: Linkabl
  * que nombran a la marca, con el motivo) y pestaña Buscar (por título o
  * caption, contra el servidor).
  */
-export function AsociarPosts({ campaignId, suggestions, initial }: { campaignId: string; suggestions: SuggestedPost[]; initial: LinkablePost[] }) {
+export function LinkPosts({ campaignId, suggestions, initial }: { campaignId: string; suggestions: SuggestedPost[]; initial: LinkablePost[] }) {
   const [tab, setTab] = useState<Tab>(suggestions.length > 0 ? "sugeridos" : "buscar");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<LinkablePost[]>(initial);
   const [searching, startSearch] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Número de la última búsqueda lanzada: una respuesta vieja que llegue
+  // después de una nueva (o de borrar la caja) no pisa el estado.
+  const seq = useRef(0);
 
-  // Cuando la ficha se revalida (un post asociado), la lista inicial cambia.
-  useEffect(() => {
-    if (!q.trim()) setResults(initial);
-  }, [initial, q]);
-
+  // Sin texto, la lista es la inicial. Con texto, se busca en el servidor
+  // tras la pausa. `initial` entra en las dependencias a propósito: cuando
+  // la ficha se revalida (un post asociado), la búsqueda se repite y el
+  // post recién asociado desaparece de los resultados.
   useEffect(() => {
     const term = q.trim();
-    if (!term) return;
+    const mine = ++seq.current;
+    if (!term) {
+      setResults(initial);
+      setError(null);
+      return;
+    }
     const id = setTimeout(() => {
       startSearch(async () => {
         try {
-          setResults(await buscarPosts(campaignId, term));
+          const found = await buscarPosts(campaignId, term);
+          if (mine !== seq.current) return;
+          setResults(found);
           setError(null);
         } catch {
-          setError("No se pudo buscar. Inténtalo de nuevo.");
+          if (mine === seq.current) setError("No se pudo buscar. Inténtalo de nuevo.");
         }
       });
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(id);
-  }, [q, campaignId]);
+  }, [q, campaignId, initial]);
 
   return (
     <div>
@@ -141,7 +151,7 @@ export function AsociarPosts({ campaignId, suggestions, initial }: { campaignId:
           ) : (
             <ul className="divide-y divide-line">
               {suggestions.map((s) => (
-                <Fila key={s.postId} campaignId={campaignId} post={s} reasons={s.reasons} />
+                <Row key={s.postId} campaignId={campaignId} post={s} reasons={s.reasons} />
               ))}
             </ul>
           )}
@@ -168,7 +178,7 @@ export function AsociarPosts({ campaignId, suggestions, initial }: { campaignId:
             ) : (
               <ul className="divide-y divide-line">
                 {results.map((p) => (
-                  <Fila key={p.postId} campaignId={campaignId} post={p} />
+                  <Row key={p.postId} campaignId={campaignId} post={p} />
                 ))}
               </ul>
             )}

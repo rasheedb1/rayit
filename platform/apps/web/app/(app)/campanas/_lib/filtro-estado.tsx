@@ -10,7 +10,7 @@ import { LIST_FILTERS, LIST_FILTER_KEYS, filterHref, type ListFilterKey } from "
  * onChange) y escribe ?estado= en la URL: la página sigue siendo Server
  * Component y lee el filtro de searchParams.
  */
-export function FiltroEstado({ active }: { active: ListFilterKey }) {
+export function StatusFilter({ active }: { active: ListFilterKey }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   return (

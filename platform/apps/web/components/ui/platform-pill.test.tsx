@@ -15,4 +15,8 @@ describe("PlatformPill", () => {
     const dot = container.querySelector('[aria-hidden="true"]') as HTMLElement;
     expect(dot.style.color).toBe("");
   });
+  it("un nombre heredado de Object no cuenta como red conocida", () => {
+    render(<PlatformPill platformId="constructor" />);
+    expect(screen.getByText("constructor")).toBeInTheDocument();
+  });
 });

@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { CampaignError, isCampaignStatus, isDeliverable, type CampaignStatus } from "@mc/core";
+import { CampaignError, isCampaignStatus, isDeliverable, isIsoDate, type CampaignStatus } from "@mc/core";
 import {
   linkPost,
   listLinkablePosts,
@@ -14,30 +14,10 @@ import {
   type LinkablePost,
 } from "@mc/db";
 import { withWorkspace } from "@/lib/db";
+import { UUID_RE, firstErrors, type ActionState } from "@/lib/forms";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Códigos como LAURA15: letras, dígitos, guion y guion bajo. */
 const TRACKING_CODE_RE = /^[A-Za-z0-9_-]+$/;
-
-/** Lo que devuelven las acciones con useActionState. */
-export interface AccionState {
-  /** Errores por campo, en español. */
-  errors?: Record<string, string>;
-  /** Error general (base de datos, regla de negocio). */
-  message?: string;
-  /** La última acción terminó bien; el formulario puede cerrarse. */
-  ok?: boolean;
-}
-
-function firstErrors(issues: { path: PropertyKey[]; message: string }[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const issue of issues) {
-    const key = String(issue.path[0] ?? "form");
-    if (!(key in out)) out[key] = issue.message;
-  }
-  return out;
-}
 
 /** Los errores de dominio llegan en español; cualquier otro se registra y se resume. */
 function messageOf(err: unknown, fallback: string): string {
@@ -69,7 +49,7 @@ const asociarSchema = z.object({
 });
 
 /** Formulario «Asociar» (por post): valida, asocia y deja la ficha revalidada. */
-export async function asociarPost(_prev: AccionState, formData: FormData): Promise<AccionState> {
+export async function asociarPost(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const parsed = asociarSchema.safeParse({
     campaignId: String(formData.get("campaignId") ?? ""),
     postId: String(formData.get("postId") ?? ""),
@@ -124,8 +104,10 @@ export async function marcarPrincipal(campaignId: string, postId: string): Promi
 
 /** Pestaña «Buscar»: posts del workspace no asociados, por título o caption. */
 export async function buscarPosts(campaignId: string, q: string): Promise<LinkablePost[]> {
-  if (!UUID_RE.test(campaignId)) return [];
-  return withWorkspace((tx) => listLinkablePosts(tx, { campaignId, q: q.slice(0, 80) }));
+  // Es una acción pública: los argumentos no vienen validados por nadie.
+  if (typeof campaignId !== "string" || !UUID_RE.test(campaignId)) return [];
+  const term = typeof q === "string" ? q.slice(0, 80) : "";
+  return withWorkspace((tx) => listLinkablePosts(tx, { campaignId, q: term }));
 }
 
 // ---------------------------------------------------------------------
@@ -137,8 +119,8 @@ const editarSchema = z
     campaignId: z.string().regex(UUID_RE, "La campaña no es válida."),
     name: z.string().trim().min(1, "La campaña necesita un nombre.").max(120, "El nombre no puede pasar de 120 caracteres.").optional(),
     brief: z.string().trim().max(2000, "El brief no puede pasar de 2000 caracteres.").optional(),
-    startsOn: z.string().refine((v) => v === "" || ISO_DATE_RE.test(v), "Elige la fecha de inicio.").optional(),
-    endsOn: z.string().refine((v) => v === "" || ISO_DATE_RE.test(v), "Elige la fecha de fin.").optional(),
+    startsOn: z.string().refine((v) => v === "" || isIsoDate(v), "Elige una fecha de inicio válida.").optional(),
+    endsOn: z.string().refine((v) => v === "" || isIsoDate(v), "Elige una fecha de fin válida.").optional(),
     trackingCode: z
       .string()
       .trim()
@@ -168,7 +150,7 @@ function optional(formData: FormData, key: string): string | undefined {
  * Solo los campos presentes en el formulario cambian; un campo vacío
  * limpia el valor (salvo el nombre, que es obligatorio).
  */
-export async function editarCampana(_prev: AccionState, formData: FormData): Promise<AccionState> {
+export async function editarCampana(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const parsed = editarSchema.safeParse({
     campaignId: String(formData.get("campaignId") ?? ""),
     name: optional(formData, "name"),

@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatDate, formatDateRange, formatInt, formatMoney } from "@/lib/format";
 import { withWorkspace } from "@/lib/db";
-import { FiltroEstado } from "./_lib/filtro-estado";
+import { StatusFilter } from "./_lib/filtro-estado";
 import { LIST_FILTERS, filterKey, pillForCampaign } from "./_lib/estado";
 
 export const metadata: Metadata = { title: "Campañas" };
@@ -94,7 +94,7 @@ export default async function CampanasPage({ searchParams }: { searchParams: Pro
           <span id="campanas">Campañas</span>
         </SectionTitle>
         <div className="mb-3">
-          <FiltroEstado active={filter} />
+          <StatusFilter active={filter} />
         </div>
         <DataTable
           columns={COLUMNS}

@@ -210,16 +210,24 @@ interface RawListRow {
   has_invoice: boolean;
 }
 
-/** Agregados de posts y facturas, comunes a la lista y a la ficha. */
+/** Agregados de posts y facturas, comunes a la lista y a la ficha (con FROM_CAMPAIGN). */
 const CAMPAIGN_AGGREGATES = `
-  (SELECT count(*)::int FROM campaign_post cp WHERE cp.campaign_id = c.id) AS posts_count,
-  (SELECT sum(m.views)::text FROM campaign_post cp
-     JOIN post_metrics_latest m ON m.post_id = cp.post_id
-    WHERE cp.campaign_id = c.id) AS views_total,
-  (SELECT ${TS('max(m.captured_at)')} FROM campaign_post cp
-     JOIN post_metrics_latest m ON m.post_id = cp.post_id
-    WHERE cp.campaign_id = c.id) AS data_as_of,
+  agg.posts_count, agg.views_total, agg.data_as_of,
   EXISTS (SELECT 1 FROM invoice i WHERE i.campaign_id = c.id AND i.status <> 'void') AS has_invoice
+`;
+
+/** Una sola pasada por los posts de cada campaña para contar y sumar views. */
+const FROM_CAMPAIGN = `
+  FROM campaign c
+  JOIN company co ON co.id = c.company_id
+  LEFT JOIN LATERAL (
+    SELECT count(*)::int AS posts_count,
+           sum(m.views)::text AS views_total,
+           ${TS('max(m.captured_at)')} AS data_as_of
+    FROM campaign_post cp
+    LEFT JOIN post_metrics_latest m ON m.post_id = cp.post_id
+    WHERE cp.campaign_id = c.id
+  ) agg ON true
 `;
 
 const SELECT_LIST = `
@@ -227,8 +235,7 @@ const SELECT_LIST = `
          ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on,
          c.amount::text AS amount, c.currency,
          ${CAMPAIGN_AGGREGATES}
-  FROM campaign c
-  JOIN company co ON co.id = c.company_id
+  ${FROM_CAMPAIGN}
 `;
 
 function toListRow(r: RawListRow): CampaignListRow {
@@ -313,8 +320,7 @@ const SELECT_DETAIL = `
             'id', i.id, 'number', i.number, 'status', i.status, 'total', i.total::text, 'currency', i.currency)
             ORDER BY i.issued_on DESC, i.number DESC), '[]'::jsonb)
           FROM invoice i WHERE i.campaign_id = c.id) AS invoices
-  FROM campaign c
-  JOIN company co ON co.id = c.company_id
+  ${FROM_CAMPAIGN}
   WHERE c.id = $1
 `;
 
@@ -377,6 +383,12 @@ async function requireCampaign(tx: WorkspaceTx, id: string): Promise<CampaignDet
   const c = await getCampaign(tx, id);
   if (!c) throw new CampaignNotFoundError(id);
   return c;
+}
+
+/** Existe en este workspace (RLS), sin cargar la ficha entera. */
+async function assertCampaignExists(tx: WorkspaceTx, id: string): Promise<void> {
+  const { rows } = await tx.query('SELECT 1 FROM campaign WHERE id = $1', [id]);
+  if (rows.length === 0) throw new CampaignNotFoundError(id);
 }
 
 // ---------------------------------------------------------------------
@@ -477,7 +489,7 @@ export async function listLinkablePosts(
   tx: WorkspaceTx,
   params: { campaignId: string; q?: string },
 ): Promise<LinkablePost[]> {
-  await requireCampaign(tx, params.campaignId);
+  await assertCampaignExists(tx, params.campaignId);
   const values: unknown[] = [params.campaignId];
   let search = '';
   if (params.q && params.q.trim()) {
@@ -505,15 +517,16 @@ export async function listLinkablePosts(
  * uno trae por qué. Sin fechas en la campaña no hay ventana: lista vacía.
  */
 export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise<SuggestedPost[]> {
-  const camp = await requireCampaign(tx, campaignId);
-  if (!camp.startsOn || !camp.endsOn) return [];
-  const { rows: companies } = await tx.query<{ name: string; socials: unknown }>(
-    'SELECT name, socials FROM company WHERE id = $1',
-    [camp.companyId],
+  const { rows: camps } = await tx.query<{ starts_on: string | null; ends_on: string | null; tracking_code: string | null; name: string; socials: unknown }>(
+    `SELECT ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, co.name, co.socials
+     FROM campaign c JOIN company co ON co.id = c.company_id
+     WHERE c.id = $1`,
+    [campaignId],
   );
-  const company = companies[0];
-  if (!company) return [];
-  const needles = { handles: handlesFromSocials(company.socials), companyName: company.name, trackingCode: camp.trackingCode };
+  const camp = camps[0];
+  if (!camp) throw new CampaignNotFoundError(campaignId);
+  if (!camp.starts_on || !camp.ends_on) return [];
+  const needles = { handles: handlesFromSocials(camp.socials), companyName: camp.name, trackingCode: camp.tracking_code };
 
   const { rows } = await tx.query<RawLinkableRow & { hashtags: string[]; mentions: string[] }>(
     `SELECT b.post_id, b.platform_id, b.title, b.caption, b.url, b.cover_url,
@@ -525,7 +538,7 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
        AND b.published_at < ($3::date + $4::int + 1)::timestamptz
        AND NOT EXISTS (SELECT 1 FROM campaign_post cp WHERE cp.campaign_id = $1 AND cp.post_id = b.post_id)
      ORDER BY b.published_at ASC, b.post_id`,
-    [campaignId, camp.startsOn, camp.endsOn, SUGGESTION_WINDOW_DAYS],
+    [campaignId, camp.starts_on, camp.ends_on, SUGGESTION_WINDOW_DAYS],
   );
   const out: SuggestedPost[] = [];
   for (const r of rows) {

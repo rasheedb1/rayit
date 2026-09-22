@@ -4,7 +4,8 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Textarea } from "@/components/ui/field";
-import { editarCampana, type AccionState } from "./actions";
+import type { ActionState } from "@/lib/forms";
+import { editarCampana } from "./actions";
 
 /**
  * Edición inline: un botón «Editar» abre el formulario en el sitio; al
@@ -12,8 +13,8 @@ import { editarCampana, type AccionState } from "./actions";
  * del formulario; el resto se conserva. Los errores por campo vienen
  * del servidor (zod), en español.
  */
-function useEditar(onSaved: () => void) {
-  const [state, formAction, pending] = useActionState<AccionState, FormData>(editarCampana, {});
+function useEdit(onSaved: () => void) {
+  const [state, formAction, pending] = useActionState<ActionState, FormData>(editarCampana, {});
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     if (state.ok) onSaved();
@@ -24,19 +25,7 @@ function useEditar(onSaved: () => void) {
   return { state, formAction, pending, formRef };
 }
 
-function Marco({
-  open,
-  setOpen,
-  title,
-  children,
-  message,
-}: {
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  title: string;
-  children: React.ReactNode;
-  message?: string;
-}) {
+function Frame({ onCancel, title, children, message }: { onCancel: () => void; title: string; children: React.ReactNode; message?: string }) {
   return (
     <div className="mt-3 rounded-md border border-line bg-surface-2 p-3" role="group" aria-label={title}>
       {message && (
@@ -49,7 +38,7 @@ function Marco({
         <Button type="submit" variant="primary" size="sm">
           Guardar
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(!open)}>
+        <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancelar
         </Button>
       </div>
@@ -57,9 +46,9 @@ function Marco({
   );
 }
 
-export function SeguimientoForm({ campaignId, trackingCode, trackingUrl }: { campaignId: string; trackingCode: string | null; trackingUrl: string | null }) {
+export function TrackingForm({ campaignId, trackingCode, trackingUrl }: { campaignId: string; trackingCode: string | null; trackingUrl: string | null }) {
   const [open, setOpen] = useState(false);
-  const { state, formAction, pending, formRef } = useEditar(() => setOpen(false));
+  const { state, formAction, pending, formRef } = useEdit(() => setOpen(false));
   const errors = state.errors ?? {};
   if (!open) {
     return (
@@ -71,7 +60,7 @@ export function SeguimientoForm({ campaignId, trackingCode, trackingUrl }: { cam
   return (
     <form ref={formRef} action={formAction} noValidate aria-busy={pending || undefined}>
       <input type="hidden" name="campaignId" value={campaignId} />
-      <Marco open={open} setOpen={setOpen} title="Editar seguimiento" message={state.message}>
+      <Frame onCancel={() => setOpen(false)} title="Editar seguimiento" message={state.message}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Código" help="El que la marca reconoce en sus canjes, como LAURA15." error={errors.trackingCode} htmlFor="trackingCode">
             <Input name="trackingCode" defaultValue={trackingCode ?? ""} maxLength={40} autoComplete="off" />
@@ -80,12 +69,28 @@ export function SeguimientoForm({ campaignId, trackingCode, trackingUrl }: { cam
             <Input name="trackingUrl" type="url" inputMode="url" defaultValue={trackingUrl ?? ""} maxLength={500} placeholder="https://" />
           </Field>
         </div>
-      </Marco>
+      </Frame>
     </form>
   );
 }
 
-export function DatosForm({
+/** Las fechas son controladas (el fin toma el inicio como mínimo); viven dentro del formulario para que Cancelar las descarte. */
+function DateFields({ startsOn, endsOn, errors }: { startsOn: string | null; endsOn: string | null; errors: Record<string, string> }) {
+  const [starts, setStarts] = useState(startsOn ?? "");
+  const [ends, setEnds] = useState(endsOn ?? "");
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Inicio" error={errors.startsOn} htmlFor="startsOn">
+        <DateInput name="startsOn" value={starts} onChange={setStarts} />
+      </Field>
+      <Field label="Fin" error={errors.endsOn} htmlFor="endsOn">
+        <DateInput name="endsOn" value={ends} min={starts || undefined} onChange={setEnds} />
+      </Field>
+    </div>
+  );
+}
+
+export function DetailsForm({
   campaignId,
   name,
   startsOn,
@@ -99,10 +104,8 @@ export function DatosForm({
   brief: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const { state, formAction, pending, formRef } = useEditar(() => setOpen(false));
+  const { state, formAction, pending, formRef } = useEdit(() => setOpen(false));
   const errors = state.errors ?? {};
-  const [starts, setStarts] = useState(startsOn ?? "");
-  const [ends, setEnds] = useState(endsOn ?? "");
   if (!open) {
     return (
       <Button size="sm" onClick={() => setOpen(true)}>
@@ -113,24 +116,17 @@ export function DatosForm({
   return (
     <form ref={formRef} action={formAction} noValidate aria-busy={pending || undefined}>
       <input type="hidden" name="campaignId" value={campaignId} />
-      <Marco open={open} setOpen={setOpen} title="Editar datos" message={state.message}>
+      <Frame onCancel={() => setOpen(false)} title="Editar datos" message={state.message}>
         <div className="grid gap-3">
           <Field label="Nombre" required error={errors.name} htmlFor="name">
             <Input name="name" defaultValue={name} maxLength={120} required />
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Inicio" error={errors.startsOn} htmlFor="startsOn">
-              <DateInput name="startsOn" value={starts} onChange={setStarts} />
-            </Field>
-            <Field label="Fin" error={errors.endsOn} htmlFor="endsOn">
-              <DateInput name="endsOn" value={ends} min={starts || undefined} onChange={setEnds} />
-            </Field>
-          </div>
+          <DateFields startsOn={startsOn} endsOn={endsOn} errors={errors} />
           <Field label="Brief" help="Lo que se acordó, en texto. Vacío para quitarlo." error={errors.brief} htmlFor="brief">
             <Textarea name="brief" defaultValue={brief ?? ""} maxLength={2000} rows={3} />
           </Field>
         </div>
-      </Marco>
+      </Frame>
     </form>
   );
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import { CAMPAIGN_STATUS_META, CAMPAIGN_TRANSITIONS, canEditCampaign, deliverableLabel, INVOICE_STATUS_LABEL_ES, type InvoiceStatus } from "@mc/core";
 import { getCampaign, listCampaignPosts, listLinkablePosts, suggestPosts, type CampaignDetail, type CampaignPostRow } from "@mc/db";
@@ -13,22 +14,40 @@ import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatDate, formatDateRange, formatInt, formatMoney } from "@/lib/format";
 import { withWorkspace } from "@/lib/db";
+import { UUID_RE } from "@/lib/forms";
 import { pillForCampaign } from "../_lib/estado";
 import { cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
-import { AsociarPosts } from "./asociar";
-import { CopiarButton } from "./copiar";
-import { DatosForm, SeguimientoForm } from "./editar-form";
-import { TransicionButton } from "./transicion";
+import { LinkPosts } from "./asociar";
+import { CopyButton } from "./copiar";
+import { DetailsForm, TrackingForm } from "./editar-form";
+import { TransitionButton } from "./transicion";
 
 export const dynamic = "force-dynamic";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Todo lo que pinta la ficha, en una transacción. cache() lo comparte
+ * entre generateMetadata y la página dentro de la misma petición.
+ */
+const loadCampaign = cache(async (id: string) =>
+  withWorkspace(async (tx) => {
+    const campaign = await getCampaign(tx, id);
+    if (!campaign) return null;
+    const editable = canEditCampaign(campaign.status);
+    return {
+      campaign,
+      editable,
+      posts: await listCampaignPosts(tx, id),
+      suggestions: editable ? await suggestPosts(tx, id) : [],
+      linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
+    };
+  }),
+);
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
   if (!UUID_RE.test(id)) return { title: "Campaña" };
-  const campaign = await withWorkspace((tx) => getCampaign(tx, id));
-  return { title: campaign ? `${campaign.companyName} · ${campaign.name}` : "Campaña" };
+  const data = await loadCampaign(id);
+  return { title: data ? `${data.campaign.companyName} · ${data.campaign.name}` : "Campaña" };
 }
 
 function Section({ id, title, meta, children }: { id: string; title: string; meta?: string; children: React.ReactNode }) {
@@ -42,7 +61,7 @@ function Section({ id, title, meta, children }: { id: string; title: string; met
   );
 }
 
-function Dato({ label, children }: { label: string; children: React.ReactNode }) {
+function DataItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <dt className="text-xs text-fg-3">{label}</dt>
@@ -51,7 +70,7 @@ function Dato({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-const Nada = ({ children = "—" }: { children?: string }) => <span className="text-fg-3">{children}</span>;
+const None = ({ children = "—" }: { children?: string }) => <span className="text-fg-3">{children}</span>;
 
 /** «24 h», «7 días», «30 días» a partir de los cortes en horas de la cotización. */
 function cutLabel(hours: number): string {
@@ -59,13 +78,13 @@ function cutLabel(hours: number): string {
   return hours < HOURS_PER_DAY * 2 ? `${hours} h` : `${Math.round(hours / HOURS_PER_DAY)} días`;
 }
 
-function fechas(c: Pick<CampaignDetail, "startsOn" | "endsOn">): string | null {
+function dateRange(c: Pick<CampaignDetail, "startsOn" | "endsOn">): string | null {
   if (c.startsOn && c.endsOn) return formatDateRange(c.startsOn, c.endsOn);
   if (c.startsOn) return `desde el ${formatDate(c.startsOn)}`;
   return null;
 }
 
-function Miniatura({ post }: { post: CampaignPostRow }) {
+function Thumbnail({ post }: { post: CampaignPostRow }) {
   if (post.coverUrl) {
     // Las portadas vienen de las plataformas (dominios que no controlamos):
     // next/image exigiría declararlos y no aporta nada a 40 px.
@@ -86,7 +105,7 @@ function postColumns(campaign: CampaignDetail, editable: boolean): Column<Campai
       header: "Post",
       render: (p) => (
         <span className="flex min-w-0 items-center gap-3">
-          <Miniatura post={p} />
+          <Thumbnail post={p} />
           <span className="min-w-0">
             <span className="block max-w-xs truncate font-medium text-ink">
               {p.url ? (
@@ -104,15 +123,15 @@ function postColumns(campaign: CampaignDetail, editable: boolean): Column<Campai
         </span>
       ),
     },
-    { key: "published", header: "Publicado", render: (p) => (p.publishedAt ? formatDate(p.publishedAt) : <Nada>Sin fecha</Nada>) },
+    { key: "published", header: "Publicado", render: (p) => (p.publishedAt ? formatDate(p.publishedAt) : <None>Sin fecha</None>) },
     {
       key: "views",
       header: "Views",
       align: "num",
-      render: (p) => (p.views === null ? <Nada>Sin datos</Nada> : <CellMain sub={p.dataAsOf ? `hasta el ${formatDate(p.dataAsOf)}` : undefined}>{formatInt(p.views)}</CellMain>),
+      render: (p) => (p.views === null ? <None>Sin datos</None> : <CellMain sub={p.dataAsOf ? `hasta el ${formatDate(p.dataAsOf)}` : undefined}>{formatInt(p.views)}</CellMain>),
     },
-    { key: "reach", header: "Alcance", align: "num", render: (p) => (p.reach === null ? <Nada>Sin datos</Nada> : formatInt(p.reach)) },
-    { key: "saves", header: "Guardados", align: "num", render: (p) => (p.saves === null ? <Nada>Sin datos</Nada> : formatInt(p.saves)) },
+    { key: "reach", header: "Alcance", align: "num", render: (p) => (p.reach === null ? <None>Sin datos</None> : formatInt(p.reach)) },
+    { key: "saves", header: "Guardados", align: "num", render: (p) => (p.saves === null ? <None>Sin datos</None> : formatInt(p.saves)) },
     {
       key: "primary",
       header: "Principal",
@@ -126,10 +145,10 @@ function postColumns(campaign: CampaignDetail, editable: boolean): Column<Campai
             </Button>
           </form>
         ) : (
-          <Nada />
+          <None />
         ),
     },
-    { key: "deliverable", header: "Entregable", render: (p) => deliverableLabel(p.deliverable) ?? <Nada>Sin entregable</Nada> },
+    { key: "deliverable", header: "Entregable", render: (p) => deliverableLabel(p.deliverable) ?? <None>Sin entregable</None> },
   ];
   if (editable) {
     cols.push({
@@ -166,25 +185,14 @@ export default async function CampanaPage({
   const { error } = await searchParams;
   if (!UUID_RE.test(id)) notFound();
 
-  const data = await withWorkspace(async (tx) => {
-    const campaign = await getCampaign(tx, id);
-    if (!campaign) return null;
-    const editable = canEditCampaign(campaign.status);
-    return {
-      campaign,
-      editable,
-      posts: await listCampaignPosts(tx, id),
-      suggestions: editable ? await suggestPosts(tx, id) : [],
-      linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
-    };
-  });
+  const data = await loadCampaign(id);
   if (!data) notFound();
   const { campaign, editable, posts, suggestions, linkable } = data;
 
   const pill = pillForCampaign(campaign.status);
   const invoice = campaign.invoices.find((i) => i.status !== "void") ?? null;
   const transitions = CAMPAIGN_TRANSITIONS[campaign.status];
-  const rango = fechas(campaign);
+  const rango = dateRange(campaign);
   const brandHandle = (campaign.brandAccounts as { handle?: unknown }[]).map((a) => (typeof a?.handle === "string" ? a.handle : null)).find(Boolean) ?? null;
 
   return (
@@ -199,7 +207,7 @@ export default async function CampanaPage({
               <Button variant="primary" href={`/finanzas/facturas/${invoice.id}`}>
                 Ver factura {invoice.number}
               </Button>
-            ) : (
+            ) : campaign.status === "cancelled" ? null : (
               <form action={facturarCampana.bind(null, campaign.id)}>
                 <Button type="submit" variant="primary">
                   Facturar
@@ -224,17 +232,17 @@ export default async function CampanaPage({
           <Section id="acordado" title="Acordado antes de publicar" meta={campaign.agreed ? `Cotización ${campaign.agreed.quoteNumber}` : undefined}>
             {campaign.agreed ? (
               <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-                <Dato label="Métricas acordadas">{campaign.agreed.agreedMetrics.length > 0 ? campaign.agreed.agreedMetrics.join(", ") : <Nada>Sin métricas acordadas</Nada>}</Dato>
-                <Dato label="Cortes del reporte">{campaign.agreed.reportCutsHours.length > 0 ? campaign.agreed.reportCutsHours.map(cutLabel).join(" · ") : <Nada />}</Dato>
-                <Dato label="Derechos de uso">{campaign.agreed.usageRightsDays === null ? <Nada>Sin derechos de uso</Nada> : `${formatInt(campaign.agreed.usageRightsDays)} días`}</Dato>
-                <Dato label="Exclusividad">
+                <DataItem label="Métricas acordadas">{campaign.agreed.agreedMetrics.length > 0 ? campaign.agreed.agreedMetrics.join(", ") : <None>Sin métricas acordadas</None>}</DataItem>
+                <DataItem label="Cortes del reporte">{campaign.agreed.reportCutsHours.length > 0 ? campaign.agreed.reportCutsHours.map(cutLabel).join(" · ") : <None />}</DataItem>
+                <DataItem label="Derechos de uso">{campaign.agreed.usageRightsDays === null ? <None>Sin derechos de uso</None> : `${formatInt(campaign.agreed.usageRightsDays)} días`}</DataItem>
+                <DataItem label="Exclusividad">
                   {campaign.agreed.exclusivityDays === null ? (
-                    <Nada>Sin exclusividad</Nada>
+                    <None>Sin exclusividad</None>
                   ) : (
                     `${formatInt(campaign.agreed.exclusivityDays)} días${campaign.agreed.exclusivityScope ? ` · ${campaign.agreed.exclusivityScope}` : ""}`
                   )}
-                </Dato>
-                <Dato label="Plazo de pago">{formatInt(campaign.agreed.paymentTermsDays)} días</Dato>
+                </DataItem>
+                <DataItem label="Plazo de pago">{formatInt(campaign.agreed.paymentTermsDays)} días</DataItem>
               </dl>
             ) : (
               <EmptyState
@@ -274,32 +282,32 @@ export default async function CampanaPage({
 
           <Section id="seguimiento" title="Seguimiento">
             <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-              <Dato label="Código">
+              <DataItem label="Código">
                 {campaign.trackingCode ? (
                   <span className="flex flex-wrap items-center gap-2">
                     <code className="font-mono text-sm">{campaign.trackingCode}</code>
-                    <CopiarButton value={campaign.trackingCode} label="Código" />
+                    <CopyButton value={campaign.trackingCode} label="Código" />
                   </span>
                 ) : (
-                  <Nada>Sin código</Nada>
+                  <None>Sin código</None>
                 )}
-              </Dato>
-              <Dato label="Enlace rastreado">
+              </DataItem>
+              <DataItem label="Enlace rastreado">
                 {campaign.trackingUrl ? (
                   <span className="flex flex-wrap items-center gap-2">
                     <a href={campaign.trackingUrl} target="_blank" rel="noopener noreferrer" className="min-w-0 max-w-full break-all font-mono text-xs underline-offset-2 hover:underline">
                       {campaign.trackingUrl}
                     </a>
-                    <CopiarButton value={campaign.trackingUrl} label="Enlace" />
+                    <CopyButton value={campaign.trackingUrl} label="Enlace" />
                   </span>
                 ) : (
-                  <Nada>Sin enlace</Nada>
+                  <None>Sin enlace</None>
                 )}
-              </Dato>
+              </DataItem>
             </dl>
             {editable && (
               <div className="mt-3">
-                <SeguimientoForm campaignId={campaign.id} trackingCode={campaign.trackingCode} trackingUrl={campaign.trackingUrl} />
+                <TrackingForm campaignId={campaign.id} trackingCode={campaign.trackingCode} trackingUrl={campaign.trackingUrl} />
               </div>
             )}
           </Section>
@@ -312,7 +320,7 @@ export default async function CampanaPage({
             <Pill kind={pill.kind}>{pill.text}</Pill>
             <div className="mt-3 flex flex-col gap-2">
               {transitions.map((to) => (
-                <TransicionButton
+                <TransitionButton
                   key={to}
                   action={cambiarEstadoCampana.bind(null, campaign.id, to)}
                   label={CAMPAIGN_STATUS_META[to].action}
@@ -327,15 +335,15 @@ export default async function CampanaPage({
           <div className="rounded-md border border-line p-4">
             <SectionTitle>Datos</SectionTitle>
             <dl className="grid gap-3">
-              <Dato label="Marca">{campaign.companyName}</Dato>
-              <Dato label="Fechas">{rango ?? <Nada>Sin fechas</Nada>}</Dato>
-              <Dato label="Monto acordado">{campaign.amount ? formatMoney(campaign.amount, campaign.currency, { mode: "full" }) : <Nada>Sin monto</Nada>}</Dato>
-              <Dato label="Línea base de la marca desde">{campaign.brandBaselineFrom ? formatDate(campaign.brandBaselineFrom, "long") : <Nada>Se fija al iniciar</Nada>}</Dato>
-              <Dato label="Creada">{formatDate(campaign.createdAt, "long")}</Dato>
+              <DataItem label="Marca">{campaign.companyName}</DataItem>
+              <DataItem label="Fechas">{rango ?? <None>Sin fechas</None>}</DataItem>
+              <DataItem label="Monto acordado">{campaign.amount ? formatMoney(campaign.amount, campaign.currency, { mode: "full" }) : <None>Sin monto</None>}</DataItem>
+              <DataItem label="Línea base de la marca desde">{campaign.brandBaselineFrom ? formatDate(campaign.brandBaselineFrom, "long") : <None>Se fija al iniciar</None>}</DataItem>
+              <DataItem label="Creada">{formatDate(campaign.createdAt, "long")}</DataItem>
             </dl>
             {editable && (
               <div className="mt-3">
-                <DatosForm campaignId={campaign.id} name={campaign.name} startsOn={campaign.startsOn} endsOn={campaign.endsOn} brief={campaign.brief} />
+                <DetailsForm campaignId={campaign.id} name={campaign.name} startsOn={campaign.startsOn} endsOn={campaign.endsOn} brief={campaign.brief} />
               </div>
             )}
           </div>
@@ -343,7 +351,9 @@ export default async function CampanaPage({
           <div className="rounded-md border border-line p-4">
             <SectionTitle>Facturas</SectionTitle>
             {campaign.invoices.length === 0 ? (
-              <p className="text-xs text-fg-3">Sin factura todavía. «Facturar» la crea en borrador con el monto acordado.</p>
+              <p className="text-xs text-fg-3">
+                {campaign.status === "cancelled" ? "Una campaña cancelada no se factura." : "Sin factura todavía. «Facturar» la crea en borrador con el monto acordado."}
+              </p>
             ) : (
               <ul className="space-y-1.5 text-sm">
                 {campaign.invoices.map((i) => (
@@ -381,7 +391,7 @@ export default async function CampanaPage({
 
         {editable && (
           <Section id="asociar" title="Asociar post">
-            <AsociarPosts campaignId={campaign.id} suggestions={suggestions} initial={linkable} />
+            <LinkPosts campaignId={campaign.id} suggestions={suggestions} initial={linkable} />
           </Section>
         )}
       </div>

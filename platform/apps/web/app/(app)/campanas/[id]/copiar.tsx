@@ -11,7 +11,7 @@ const COPIED_MS = 2000;
  * en la sección de seguimiento: el código y el enlace se pintan en el
  * servidor.
  */
-export function CopiarButton({ value, label }: { value: string; label: string }) {
+export function CopyButton({ value, label }: { value: string; label: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {

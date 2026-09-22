@@ -7,7 +7,7 @@ import { Button, type ButtonVariant } from "@/components/ui/button";
  * ya ligada (bind) desde la página: las acciones sí cruzan la frontera
  * servidor → cliente, a diferencia de cualquier otra función.
  */
-export function TransicionButton({
+export function TransitionButton({
   action,
   label,
   confirmText,

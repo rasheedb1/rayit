@@ -11,7 +11,7 @@ vi.mock("./actions", () => ({
   buscarPosts: (...args: unknown[]) => buscarPosts(...args),
 }));
 
-import { AsociarForm, AsociarPosts } from "./asociar";
+import { LinkPostForm, LinkPosts } from "./asociar";
 
 const CAMPANA = "00000003-0000-4000-8000-000000ca0001";
 const post: LinkablePost = {
@@ -31,10 +31,10 @@ beforeEach(() => {
   buscarPosts.mockReset();
 });
 
-describe("AsociarForm", () => {
+describe("LinkPostForm", () => {
   it("envía campaña, post, entregable y principal", async () => {
     asociarPost.mockResolvedValue({ ok: true });
-    render(<AsociarForm campaignId={CAMPANA} post={post} />);
+    render(<LinkPostForm campaignId={CAMPANA} post={post} />);
     fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "dedicado" } });
     fireEvent.click(screen.getByLabelText("Principal"));
     fireEvent.click(screen.getByRole("button", { name: "Asociar" }));
@@ -48,7 +48,7 @@ describe("AsociarForm", () => {
 
   it("los errores por campo llegan en español, con aria-invalid y foco", async () => {
     asociarPost.mockResolvedValue({ errors: { deliverable: "Elige un entregable de la lista." } });
-    render(<AsociarForm campaignId={CAMPANA} post={post} />);
+    render(<LinkPostForm campaignId={CAMPANA} post={post} />);
     fireEvent.click(screen.getByRole("button", { name: "Asociar" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Elige un entregable de la lista."));
     const select = screen.getByLabelText("Entregable");
@@ -59,15 +59,15 @@ describe("AsociarForm", () => {
 
   it("un error de dominio (otro workspace, campaña cerrada) se muestra tal cual", async () => {
     asociarPost.mockResolvedValue({ message: "Una campaña cerrada no admite cambios." });
-    render(<AsociarForm campaignId={CAMPANA} post={post} />);
+    render(<LinkPostForm campaignId={CAMPANA} post={post} />);
     fireEvent.click(screen.getByRole("button", { name: "Asociar" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Una campaña cerrada no admite cambios."));
   });
 });
 
-describe("AsociarPosts", () => {
+describe("LinkPosts", () => {
   it("abre en Sugeridos cuando hay, con el motivo, y en Buscar cuando no", () => {
-    render(<AsociarPosts campaignId={CAMPANA} suggestions={[sugerido]} initial={[post]} />);
+    render(<LinkPosts campaignId={CAMPANA} suggestions={[sugerido]} initial={[post]} />);
     expect(screen.getByRole("button", { name: "Sugeridos (1)" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Menciona a @cafealma")).toBeInTheDocument();
     expect(screen.queryByLabelText("Buscar por título o caption")).not.toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("AsociarPosts", () => {
 
   it("sin sugerencias abre en Buscar con la lista inicial y busca en el servidor al escribir", async () => {
     buscarPosts.mockResolvedValue([]);
-    render(<AsociarPosts campaignId={CAMPANA} suggestions={[]} initial={[post]} />);
+    render(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[post]} />);
     expect(screen.getByRole("button", { name: "Buscar" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(/almuerzos saludables/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Buscar por título o caption"), { target: { value: "cold brew" } });
@@ -84,8 +84,25 @@ describe("AsociarPosts", () => {
   });
 
   it("la pestaña Sugeridos vacía lo dice en español", () => {
-    render(<AsociarPosts campaignId={CAMPANA} suggestions={[]} initial={[]} />);
+    render(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[]} />);
     fireEvent.click(screen.getByRole("button", { name: "Sugeridos (0)" }));
     expect(screen.getByText("Nada que sugerir")).toBeInTheDocument();
+  });
+
+  it("cuando la ficha se revalida con la búsqueda escrita, vuelve a buscar y una respuesta vieja no pisa la nueva", async () => {
+    let resolveFirst: (v: LinkablePost[]) => void = () => undefined;
+    buscarPosts.mockImplementationOnce(() => new Promise<LinkablePost[]>((r) => (resolveFirst = r)));
+    buscarPosts.mockResolvedValue([]);
+    const { rerender } = render(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[post]} />);
+    fireEvent.change(screen.getByLabelText("Buscar por título o caption"), { target: { value: "nutriv" } });
+    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    // La ficha se revalida (el post ya se asoció): initial cambia y se repite la búsqueda.
+    rerender(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[]} />);
+    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText("Ningún post con «nutriv»")).toBeInTheDocument());
+    // La primera respuesta llega tarde con el post: se ignora.
+    resolveFirst([post]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/almuerzos saludables/)).not.toBeInTheDocument();
   });
 });

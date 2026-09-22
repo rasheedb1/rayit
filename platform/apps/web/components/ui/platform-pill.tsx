@@ -15,7 +15,8 @@ export const PLATFORM_LABEL: Record<PlatformId, string> = {
 };
 
 export function isPlatformId(value: string): value is PlatformId {
-  return value in PLATFORM_LABEL;
+  // hasOwn y no `in`: "constructor" o "toString" también están «en» un objeto.
+  return Object.hasOwn(PLATFORM_LABEL, value);
 }
 
 /**
