@@ -106,8 +106,8 @@ export const STORIES: readonly Story[] = [
     title: "Marco de la aplicación y navegación",
     desc: "Layout, navegación con los módulos del MVP, los de fase 2 ocultos tras una bandera, tema claro y oscuro, dirección visual minimalista. Cada módulo con su ruta.",
     done: "Se navega entre los módulos, el tema se conserva al recargar, y una bandera apagada quita el módulo del menú.",
-    status: "en_curso",
-    note: "Marco desplegado el 21 de septiembre. Las banderas viven en content/flags.ts hasta que exista el cliente de base. Nicolás lo revisa y lo cierra.",
+    status: "hecho",
+    note: "Cerrada el 21 de septiembre: banderas con las llaves de feature_flag y 404 en ruta directa, tokens del mock en globals.css, pruebas con vitest. Las banderas viven en content/flags.ts hasta que exista el cliente de base.",
   },
   {
     id: "CIM-5", module: "CIM", owner: "nicolas", size: "L", sprint: 1, deps: ["CIM-4"],
