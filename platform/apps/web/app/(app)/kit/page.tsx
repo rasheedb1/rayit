@@ -8,6 +8,7 @@ import { DataAsOf } from "@/components/ui/data-as-of";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { CellMain, DataTable } from "@/components/ui/data-table";
 import { TableDemo } from "./table-demo";
+import { SegmentedDemo } from "./segmented-demo";
 import { LineChart } from "@/components/ui/line-chart";
 import { BarChart } from "@/components/ui/bar-chart";
 import { ChartCard } from "@/components/ui/chart-card";
@@ -22,6 +23,7 @@ const SECTIONS = [
   ["button", "Button"],
   ["pill", "Pill"],
   ["form", "Formulario"],
+  ["segmented", "Segmented"],
   ["empty-state", "EmptyState"],
   ["data-as-of", "DataAsOf"],
   ["kpi", "Kpi / KpiRow"],
@@ -113,6 +115,12 @@ export default function Page() {
         </Variant>
         <Variant label="Deshabilitado">
           <FormDisabledDemo />
+        </Variant>
+      </Section>
+
+      <Section id="segmented" title="Segmented" usage={`<Segmented label="Red" value={net} onChange={setNet} options={[{ value: "all", label: "Todas" }, { value: "tiktok", label: "TikTok" }]} />`}>
+        <Variant label="Filtro por red y orden (Tab entra al grupo, flechas cambian de opción)">
+          <SegmentedDemo />
         </Variant>
       </Section>
 

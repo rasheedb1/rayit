@@ -11,6 +11,7 @@ Componentes compartidos de MultiCampaign. Galería en `/kit` (bandera `kit`, enc
 | `Field`, `Input`, `Select`, `Textarea` | `field.tsx` | Etiqueta, ayuda y error; el control toma id, aria-describedby y aria-invalid por contexto. La validación la hace el formulario (zod). Cliente. |
 | `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
 | `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
+| `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
 | `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
 | `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. |
