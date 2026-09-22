@@ -41,6 +41,8 @@ venv/
 # settings.json SÍ se versiona: son los permisos del equipo.
 # settings.local.json es de cada uno.
 .claude/settings.local.json
+# worktrees/ los crea Claude Code para los agentes en paralelo. Nunca se versionan.
+.claude/worktrees/
 
 # ---------- Sistema y editores ----------
 .DS_Store
