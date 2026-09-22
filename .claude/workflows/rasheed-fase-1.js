@@ -379,8 +379,11 @@ TERMINADO CUANDO: una señal de una categoría excluida no aparece en la bandeja
   },
 }
 
+// Conflicto conocido de la fase 1, con su resolución ya decidida.
+const EXTRA_FASE_1 = `2b. CONFLICTO CONOCIDO en platform/db/seed/0003_demo_finanzas_campanas.sql al mergear la rama del seed. Los dos lados son correctos y NO se pisan de verdad: main (Nicolás, dueño del archivo) renombró la clave del jsonb brand_accounts de "platform" a "platform_id" en cuatro líneas; la rama del seed movió la línea de tiempo de la campaña de Café Alma de agosto 24/27 a agosto 10/12 y quitó las dos lecturas manuales de Fresko, porque sus captured_at caían en el FUTURO respecto al día de hoy y una lectura «a 30 días» fechada mañana es un dato falso. Resuelve conservando AMBOS: la clave platform_id de main y las fechas y los comentarios de la rama del seed. Después corre \`node db/seed/verify/run.mjs\` (o el comando equivalente que exista) y \`make db.check\` para confirmar que 0002 y 0003 siembran juntos sin datos en el futuro.`
+
 const FASES_DEF = [
-  { n: 1, titulo: 'Fase 1 · cimientos', primero: [], paralelo: ['db', 'seed'] },
+  { n: 1, titulo: 'Fase 1 · cimientos', primero: [], paralelo: ['db', 'seed'], extra: EXTRA_FASE_1 },
   { n: 2, titulo: 'Fase 2 · pantallas', primero: [], paralelo: ['auth', 'resumen', 'cotizar'] },
   { n: 3, titulo: 'Fase 3 · CRM', primero: [], paralelo: ['crm', 'ficha'] },
   { n: 4, titulo: 'Fase 4 · tubería de outreach', primero: ['esquema'], paralelo: ['canales', 'motor', 'entregabilidad'] },
@@ -544,7 +547,8 @@ async function correrFase(def) {
   hechas.push(...paralelas)
   if (paralelas.some((x) => !x.ok)) log(`Fase ${def.n}: alguna pieza no alcanzó el umbral; se integra igual y queda señalada en el informe`)
   const listas = paralelas.filter((x) => x.branch)
-  const int = await integrar(`fase ${def.n}`, def.n, listas, def.n === 6 ? EXTRA_VERCEL : '')
+  const extra = [def.extra || '', def.n === 6 ? EXTRA_VERCEL : ''].filter(Boolean).join('\n')
+  const int = await integrar(`fase ${def.n}`, def.n, listas, extra)
   return { fase: def.n, piezas: hechas, integracion: int, ok: !!(int && int.ok) }
 }
 
