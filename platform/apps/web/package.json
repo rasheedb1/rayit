@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@mc/connectors": "workspace:*",
     "@mc/core": "workspace:*",
     "@mc/db": "workspace:*",
     "geist": "1.7.2",

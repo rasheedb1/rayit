@@ -21,6 +21,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@mc/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@mc/core':
         specifier: workspace:*
         version: link:../../packages/core

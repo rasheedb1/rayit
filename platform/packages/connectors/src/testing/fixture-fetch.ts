@@ -33,6 +33,7 @@ export interface Fixture {
 
 export interface RecordedCall {
   method: string;
+  /** Con los parámetros secretos de la query tapados (Meta exige client_secret en la URL de ig_exchange_token). */
   url: string;
   /** Cabeceras con Authorization / Access-Token tapadas. */
   headers: Record<string, string>;
@@ -87,7 +88,7 @@ export class FixtureFetch {
     const method = (init.method ?? 'GET').toUpperCase();
     const body = typeof init.body === 'string' ? parseBody(init.body, init.headers) : undefined;
     // El cuerpo grabado pasa por el redactor: un client_secret o un refresh_token de un formulario no queda ni en memoria de pruebas.
-    const call: RecordedCall = { method, url, headers: redactHeaders(init.headers), body: redactSecrets(maskCodes(body)) };
+    const call: RecordedCall = { method, url: redactUrl(url), headers: redactHeaders(init.headers), body: redactSecrets(maskCodes(body)) };
     this.calls.push(call);
     const match = this.#loaded.find((l) => l.fixture.request.method.toUpperCase() === method && l.regex.test(url) && subset(l.fixture.request.body, body));
     if (!match) throw new UnexpectedCallError(call, this.#loaded.map((l) => `${l.fixture.request.method} ${l.fixture.request.urlPattern}`));
@@ -125,6 +126,24 @@ function tryJson(text: string): unknown {
     return JSON.parse(text) as unknown;
   } catch {
     return text;
+  }
+}
+
+const SECRET_QUERY_KEYS = new Set(['client_secret', 'access_token', 'code', 'refresh_token', 'code_verifier', 'app_secret']);
+
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    let touched = false;
+    for (const k of [...u.searchParams.keys()]) {
+      if (SECRET_QUERY_KEYS.has(k)) {
+        u.searchParams.set(k, 'REDACTADO');
+        touched = true;
+      }
+    }
+    return touched ? u.toString() : url;
+  } catch {
+    return url;
   }
 }
 
