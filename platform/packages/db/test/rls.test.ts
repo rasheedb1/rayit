@@ -24,6 +24,7 @@ import {
   TransactionClosedError, type BaseTx, type WorkspaceTx,
 } from '../src/index.ts';
 import { listFeatureFlags, listPipelineStages } from '../src/queries/catalogos.ts';
+import { getWorkspace } from '../src/queries/cimientos.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '0000000a-0000-4000-8000-000000000001';
@@ -844,7 +845,7 @@ describe('endurecimiento (0022): workspace, app_user, company, catálogos y la b
   // -------------------------------------------------------------------
   // company: el directorio se lee, pero no lo escribe cualquiera
   // -------------------------------------------------------------------
-  describe('company: se lee como catálogo, se escribe con dueño', () => {
+  describe('company: el directorio compartido deja de ser la lista de prospectos de todos', () => {
     test('A da de alta una empresa y la BASE le pone el dueño', async () => {
       const { rows } = await t.db.withWorkspace(WS_A, (tx) =>
         tx.query<{ id: string; owner: string | null }>(
@@ -855,12 +856,57 @@ describe('endurecimiento (0022): workspace, app_user, company, catálogos y la b
       assert.equal(rows[0]?.owner, WS_A, 'el dueño lo pone la base (DEFAULT current_workspace_id())');
     });
 
-    test('B la LEE —dos workspaces pueden trabajar con la misma marca— pero no la toca', async () => {
+    test('B no la LEE: qué marcas trabaja una agencia no es un catálogo público', async () => {
+      // La ronda 1 dejó aquí `company_read USING (true)` con el
+      // argumento de que el directorio es compartido. La consecuencia
+      // medida: desde un workspace cualquiera se enumeraba la lista de
+      // prospectos de otro, con su razón social —el mismo dato que 0020
+      // cerró en `contact`—.
       const visto = await t.db.withWorkspace(WS_B, (tx) =>
         tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
       );
-      assert.equal(visto.rows[0]?.name, 'Café Alma S.A.S.', 'el directorio de empresas es compartido a propósito');
+      assert.deepEqual(visto.rows, [], 'B leía «Café Alma S.A.S.» con su razón social');
 
+      const sinWorkspace = await t.db.withCatalogs((tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+      );
+      assert.deepEqual(sinWorkspace.rows, [], 'sin workspace fijado tampoco');
+
+      const propia = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+      );
+      assert.equal(propia.rows[0]?.name, 'Café Alma S.A.S.', 'su dueño sí, claro');
+    });
+
+    test('pero sí la lee si la tiene vinculada: es como la pantalla ve el nombre de su cliente', async () => {
+      // Dos workspaces trabajan con la misma marca, y esa es la mitad
+      // cierta del argumento de la ronda 1. Lo que la hace visible es
+      // company_link, que lleva RLS: mi vínculo, no el del vecino.
+      await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query('INSERT INTO company_link (workspace_id, company_id, relationship) VALUES (current_workspace_id(), $1, $2)', [
+          empresaDeA,
+          'prospect',
+        ]),
+      );
+      try {
+        const visto = await t.db.withWorkspace(WS_B, (tx) =>
+          tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+        );
+        assert.equal(visto.rows[0]?.name, 'Café Alma S.A.S.');
+        // Y el tercer workspace, que no la vinculó, sigue sin verla: la
+        // subconsulta mira MIS vínculos, no los de cualquiera.
+        const testigo = await t.db.withWorkspace(WS_C, (tx) =>
+          tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+        );
+        assert.deepEqual(testigo.rows, []);
+      } finally {
+        await t.db.withWorkspace(WS_B, (tx) =>
+          tx.query('DELETE FROM company_link WHERE company_id = $1', [empresaDeA]),
+        );
+      }
+    });
+
+    test('vinculada o no, B no la renombra ni la borra', async () => {
       const renombrada = await t.db.withWorkspace(WS_B, (tx) =>
         tx.query<{ id: string }>('UPDATE company SET name = $2 WHERE id = $1 RETURNING id::text AS id', [empresaDeA, 'Mía ahora']),
       );
@@ -892,9 +938,16 @@ describe('endurecimiento (0022): workspace, app_user, company, catálogos y la b
       );
     });
 
-    test('las empresas del catálogo compartido no las edita ni las borra nadie desde un workspace', async () => {
+    test('las del catálogo compartido (sin dueño) sí se leen, y no las edita ni las borra nadie', async () => {
       // COMPANY se creó con t.admin (sin workspace fijado): owner NULL.
-      for (const ws of [WS_A, WS_B]) {
+      // Esa rama es la que mantiene vivo el directorio de verdad —lo que
+      // llena un enriquecimiento o el worker— sin exponer a quién
+      // prospecta cada quien.
+      for (const ws of [WS_A, WS_B, WS_C]) {
+        const visible = await t.db.withWorkspace(ws, (tx) =>
+          tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [COMPANY]),
+        );
+        assert.equal(visible.rows[0]?.name, 'Café Alma', `${ws} no ve el catálogo compartido`);
         const tocadas = await t.db.withWorkspace(ws, (tx) =>
           tx.query<{ id: string }>('UPDATE company SET name = $2 WHERE id = $1 RETURNING id::text AS id', [COMPANY, 'Pisada']),
         );
@@ -1036,5 +1089,312 @@ describe('endurecimiento (0022): workspace, app_user, company, catálogos y la b
       assert.ok((await t.db.asWorker((tx) => countRows(tx, 'api_call_log'))) >= 4);
       assert.equal(await t.db.asWorker((tx) => countRows(tx, 'api_quota_usage')), 3);
     });
+  });
+});
+
+/**
+ * La sección 6 de 0022: las hijas cuya clave ajena al padre admite NULL.
+ *
+ * 0018 cerró las hijas con la FK NOT NULL y dejó estas «a decisión del
+ * dueño del módulo», con un test.todo. 0022 las cerró con la regla
+ * general —`fk IS NULL OR EXISTS (padre)`— y era la única parte de la
+ * migración sin ninguna prueba desde el ataque. La rama `fk IS NULL` es
+ * la que más fácil se escribe mal: si se olvida, el worker deja de ver
+ * el dato global; si se invierte, B ve el de A.
+ */
+describe('las hijas con clave ajena opcional (0022 §6)', () => {
+  const WS_D = '0000000f-0000-4000-8000-000000000001';
+  // Ids fijos: `admin` no devuelve filas, y así la prueba dice sin
+  // rodeos qué cuelga de quién.
+  const CAMPANA_DE_A = '0000001a-0000-4000-8000-000000000001';
+  const CREADORA_DE_A = '0000001a-0000-4000-8000-000000000002';
+  const ASSET_DE_A = '0000001a-0000-4000-8000-000000000003';
+  const ANALISIS_DE_A = '0000001a-0000-4000-8000-000000000004';
+  const POST_DE_A = '0000001a-0000-4000-8000-000000000005';
+  const POST_GLOBAL = '0000001a-0000-4000-8000-000000000006';
+
+  before(async () => {
+    // El padre de A, y el dato sin padre de cada familia. Se siembran
+    // como admin porque desde 0022 mc_app no escribe ninguna de estas
+    // tablas: las llena el worker.
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name) VALUES ('${WS_D}', 'workspace-d', 'Workspace D');
+      INSERT INTO campaign (id, workspace_id, company_id, name)
+        VALUES ('${CAMPANA_DE_A}', '${WS_A}', '${COMPANY}', 'Campaña de A');
+      INSERT INTO creator_profile (id, workspace_id, display_name)
+        VALUES ('${CREADORA_DE_A}', '${WS_A}', 'Creadora de A');
+      INSERT INTO video_asset (id, workspace_id) VALUES ('${ASSET_DE_A}', '${WS_A}');
+      INSERT INTO video_analysis (id, video_asset_id, workspace_id, analyzer_version)
+        VALUES ('${ANALISIS_DE_A}', '${ASSET_DE_A}', '${WS_A}', 'v1.0.0');
+      INSERT INTO external_post (id, platform_id, external_post_id, analysis_id)
+        VALUES ('${POST_DE_A}', 'tiktok', 'ep-de-a', '${ANALISIS_DE_A}');
+      INSERT INTO external_post (id, platform_id, external_post_id)
+        VALUES ('${POST_GLOBAL}', 'tiktok', 'ep-global');
+
+      INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, day, followers)
+        VALUES ('${CAMPANA_DE_A}', '${COMPANY}', 'tiktok', '2026-09-01', 1000);
+      INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, day, followers)
+        VALUES (NULL, '${COMPANY}', 'instagram', '2026-09-01', 2000);
+      INSERT INTO trait_lift (scope, creator_id, trait_key, trait_label, freq_outliers, freq_rest, lift, sample_outliers, sample_rest)
+        VALUES ('creator', '${CREADORA_DE_A}', 'hook.type=method', 'Gancho de método', 0.4, 0.1, 4.0, 20, 80);
+      INSERT INTO trait_lift (scope, creator_id, trait_key, trait_label, freq_outliers, freq_rest, lift, sample_outliers, sample_rest)
+        VALUES ('niche', NULL, 'duration.lt40s', 'Menos de 40 s', 0.6, 0.3, 2.0, 30, 90);
+      INSERT INTO external_post_score (external_post_id, is_outlier) VALUES ('${POST_DE_A}', true);
+      INSERT INTO external_post_score (external_post_id, is_outlier) VALUES ('${POST_GLOBAL}', false);
+      INSERT INTO external_post_snapshot (external_post_id, views) VALUES ('${POST_DE_A}', 111);
+      INSERT INTO external_post_snapshot (external_post_id, views) VALUES ('${POST_GLOBAL}', 222);
+    `);
+  }, { timeout: 120_000 });
+
+  /** Las cinco familias, con la consulta que separa la fila de A de la global. */
+  const familias: Array<{ tabla: string; deA: () => string; global: () => string; sql: string }> = [
+    {
+      tabla: 'brand_account_snapshot',
+      deA: () => CAMPANA_DE_A,
+      global: () => 'instagram',
+      sql: 'SELECT coalesce(campaign_id::text, platform_id) AS marca FROM brand_account_snapshot ORDER BY 1',
+    },
+    {
+      tabla: 'trait_lift',
+      deA: () => CREADORA_DE_A,
+      global: () => 'duration.lt40s',
+      sql: 'SELECT coalesce(creator_id::text, trait_key) AS marca FROM trait_lift ORDER BY 1',
+    },
+    {
+      tabla: 'external_post',
+      deA: () => POST_DE_A,
+      global: () => POST_GLOBAL,
+      sql: 'SELECT id::text AS marca FROM external_post ORDER BY 1',
+    },
+    {
+      tabla: 'external_post_score',
+      deA: () => POST_DE_A,
+      global: () => POST_GLOBAL,
+      sql: 'SELECT external_post_id::text AS marca FROM external_post_score ORDER BY 1',
+    },
+    {
+      tabla: 'external_post_snapshot',
+      deA: () => POST_DE_A,
+      global: () => POST_GLOBAL,
+      sql: 'SELECT external_post_id::text AS marca FROM external_post_snapshot ORDER BY 1',
+    },
+  ];
+
+  for (const f of familias) {
+    test(`${f.tabla}: A ve la suya y la global; D solo la global`, async () => {
+      const visto = (ws: string) =>
+        t.db.withWorkspace(ws, (tx) => tx.query<{ marca: string }>(f.sql)).then((r) => r.rows.map((x) => x.marca));
+
+      const deA = await visto(WS_A);
+      assert.ok(deA.includes(f.deA()), `A no ve lo suyo en ${f.tabla}`);
+      assert.ok(deA.includes(f.global()), `A no ve el dato global de ${f.tabla}`);
+
+      // WS_D no tiene campaña, ni creadora, ni análisis: solo puede ver
+      // lo que no cuelga de nadie. Es la rama `fk IS NULL`.
+      const deD = await visto(WS_D);
+      assert.deepEqual(deD, [f.global()], `desde D se ve lo que cuelga del padre de A en ${f.tabla}`);
+    });
+  }
+
+  test('y ninguna de las cinco se escribe desde la aplicación: las llena el worker', async () => {
+    const escrituras: Array<[tabla: string, sql: string]> = [
+      [
+        'brand_account_snapshot',
+        `INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, day) VALUES (NULL, '${COMPANY}', 'youtube', '2026-09-02')`,
+      ],
+      ['brand_account_snapshot', 'UPDATE brand_account_snapshot SET followers = 0'],
+      ['brand_account_snapshot', 'DELETE FROM brand_account_snapshot'],
+      [
+        'trait_lift',
+        "INSERT INTO trait_lift (scope, trait_key, trait_label, freq_outliers, freq_rest, lift, sample_outliers, sample_rest) VALUES ('niche', 'x', 'X', 0.1, 0.1, 1, 1, 1)",
+      ],
+      ['trait_lift', 'DELETE FROM trait_lift'],
+      ['external_post', "INSERT INTO external_post (platform_id, external_post_id) VALUES ('tiktok', 'intruso')"],
+      ['external_post', 'UPDATE external_post SET caption = $$pisado$$'],
+      ['external_post', 'DELETE FROM external_post'],
+      ['external_post_score', 'UPDATE external_post_score SET is_outlier = false'],
+      ['external_post_score', 'DELETE FROM external_post_score'],
+      ['external_post_snapshot', 'UPDATE external_post_snapshot SET views = 0'],
+      ['external_post_snapshot', 'DELETE FROM external_post_snapshot'],
+    ];
+    for (const [tabla, sql] of escrituras) {
+      await assert.rejects(
+        t.db.withWorkspace(WS_D, (tx) => tx.query(sql)),
+        isRechazada,
+        `${tabla} se puede escribir desde la aplicación: ${sql}`,
+      );
+    }
+  });
+
+  test('mc_worker las sigue viendo todas: es como el radar compara', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('requiere membresía en mc_worker');
+    const n = await t.db.asWorker((tx) => countRows(tx, 'external_post'));
+    assert.equal(n, 2);
+  });
+});
+
+/**
+ * getWorkspace no se queda esperando a que la migración esté aplicada.
+ *
+ * La consulta no lleva WHERE a propósito —la política es la que aísla, y
+ * filtrar en JavaScript volvía a pasar el workspace como parámetro—,
+ * pero eso deja la corrección al 100% en manos de que 0022 esté
+ * APLICADA, y hay una ventana documentada en la que no lo está
+ * (ALLOW_STALE_SCHEMA=1). En esa ventana, `limit(1)` sin ORDER BY
+ * devolvía un inquilino cualquiera y Finanzas formateaba con SU moneda.
+ */
+describe('getWorkspace: si la política no está, se cae en vez de servir al vecino', () => {
+  test('con la política puesta, devuelve el workspace de la transacción', async () => {
+    const ws = await t.db.withWorkspace(WS_A, getWorkspace);
+    assert.equal(ws.id, WS_A);
+  });
+
+  test('sin la política, la consulta ve TODOS los inquilinos y getWorkspace se niega a servir uno', async () => {
+    // Es la ventana de ALLOW_STALE_SCHEMA: `workspace` sin la RLS de
+    // 0022. Allí `limit(1)` sin ORDER BY devuelve una fila CUALQUIERA de
+    // las cinco que hay, y antes se servía tal cual: la moneda, el
+    // locale y la zona con que Finanzas formatea salían de otro
+    // inquilino. La política de mentira es `id <> current_workspace_id()`
+    // y no `true` a propósito: con `true` el motor podría devolver por
+    // suerte la fila propia y la prueba sería intermitente; así el
+    // «cualquiera» es siempre otro, que es justo el caso malo.
+    await t.admin(
+      'DROP POLICY workspace_read ON workspace; ' +
+        'CREATE POLICY workspace_read ON workspace FOR SELECT USING (id <> current_workspace_id())',
+    );
+    try {
+      const todos = await t.db.withWorkspace(WS_B, (tx) => countRows(tx, 'workspace'));
+      assert.ok(todos > 1, 'la prueba no vale si la consulta solo puede ver una fila');
+      await assert.rejects(t.db.withWorkspace(WS_B, getWorkspace), (err: unknown) => {
+        assert.match(fullMessage(err), /otro inquilino/);
+        assert.match(fullMessage(err), /0022/);
+        return true;
+      });
+    } finally {
+      await t.admin(
+        'DROP POLICY workspace_read ON workspace; ' +
+          'CREATE POLICY workspace_read ON workspace FOR SELECT USING (id = current_workspace_id())',
+      );
+    }
+  });
+
+  test('y si la fila no está, lo dice en vez de devolver undefined', async () => {
+    const huerfano = '0000009f-0000-4000-8000-000000000001';
+    await assert.rejects(t.db.withWorkspace(huerfano, getWorkspace), (err: unknown) => {
+      assert.match(fullMessage(err), /no existe en esta base/);
+      return true;
+    });
+  });
+
+  test('y la política vuelve a estar, para las pruebas que siguen', async () => {
+    const ws = await t.db.withWorkspace(WS_B, getWorkspace);
+    assert.equal(ws.id, WS_B);
+  });
+});
+
+/**
+ * Las puertas a `company`, enumeradas por la base y no por la memoria.
+ *
+ * company_read dice «la empresa con la que trabajo»: la mía, la del
+ * catálogo compartido, la vinculada (company_link) y la que tiene un
+ * deal, una campaña, una factura o un reporte conmigo. Esa lista está
+ * escrita a mano dentro de la política, y una lista escrita a mano es
+ * justo lo que esta ronda existe para vigilar: si mañana alguien crea
+ * una tabla con company_id y la une con JOIN a company, la fila
+ * desaparecería de su propia pantalla sin que nadie se entere (que es
+ * lo que se midió con campaign antes de añadirla).
+ *
+ * Así que la lista se comprueba contra pg_constraint: toda tabla de
+ * inquilino que apunte a company tiene que estar nombrada en la
+ * política, o declarada aquí con el motivo de por qué NO abre la
+ * empresa.
+ */
+describe('company_read: las puertas están declaradas, y la base dice cuáles hay', () => {
+  /** Un workspace que no trabaja con ninguna empresa: el testigo. */
+  const WS_TESTIGO = '0000002b-0000-4000-8000-000000000001';
+
+  before(async () => {
+    await t.admin(`INSERT INTO workspace (id, slug, name) VALUES ('${WS_TESTIGO}', 'workspace-testigo', 'Testigo')`);
+  }, { timeout: 120_000 });
+
+  /** Las que apuntan a company y no la abren, con su motivo. */
+  const NO_ABREN_LA_EMPRESA: Readonly<Record<string, string>> = {
+    contact:
+      'se lee también por fuente pública (0020), así que «veo un contacto» no puede implicar «veo su empresa»: ' +
+      'sería reabrir por la puerta de al lado lo que 0020 cerró',
+    signal: 'cuelga de la empresa que ya vi por una de las cuatro puertas; es una observación, no una relación',
+    activity: 'lo mismo: la actividad es de un deal o de un contacto que ya tengo',
+    outbound_touch: 'el toque sale de una secuencia sobre una empresa que ya está en mi company_link',
+    brand_account_snapshot: 'métrica del worker sobre la cuenta de la marca; se aísla por su campaña (0022 §6)',
+    quote: 'la cotización nace de un deal, y el deal ya es una de las cuatro puertas',
+  };
+
+  test('toda tabla con company_id está nombrada en la política o declarada aquí', async () => {
+    const { rows } = await t.db.withCatalogs((tx) =>
+      tx.query<{ child: string }>(`
+        SELECT DISTINCT c.relname AS child
+          FROM pg_constraint k
+          JOIN pg_class c ON c.oid = k.conrelid
+          JOIN pg_class p ON p.oid = k.confrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND k.contype = 'f' AND p.relname = 'company'
+         ORDER BY 1`),
+    );
+    const { rows: pol } = await t.db.withCatalogs((tx) =>
+      tx.query<{ qual: string }>(`
+        SELECT pg_get_expr(p.polqual, p.polrelid) AS qual
+          FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+         WHERE c.relname = 'company' AND p.polname = 'company_read'`),
+    );
+    const expresion = pol[0]?.qual ?? '';
+    assert.ok(expresion.includes('current_workspace_id'), 'company_read no menciona el workspace de la transacción');
+
+    const sinDeclarar = rows
+      .map((r) => r.child)
+      .filter((tabla) => !new RegExp(`\\b${tabla}\\b`).test(expresion) && !(tabla in NO_ABREN_LA_EMPRESA));
+    assert.deepEqual(
+      sinDeclarar,
+      [],
+      `tablas que apuntan a company y nadie decidió qué hacen con su visibilidad: ${sinDeclarar.join(', ')}. ` +
+        'O la empresa se ve por ahí (añádela a company_read en una migración nueva), o no (decláralo aquí con el motivo).',
+    );
+
+    // Y la declaración tampoco se pudre: si la tabla desapareció, o si
+    // alguien la metió en la política, sobra el renglón.
+    const existen = new Set(rows.map((r) => r.child));
+    const sobran = Object.keys(NO_ABREN_LA_EMPRESA).filter(
+      (tabla) => !existen.has(tabla) || new RegExp(`\\b${tabla}\\b`).test(expresion),
+    );
+    assert.deepEqual(sobran, [], `declaraciones que ya no corresponden: ${sobran.join(', ')}`);
+  });
+
+  test('una campaña propia NO pierde el nombre de su empresa, aunque no esté vinculada', async () => {
+    // Es el caso que midió el JOIN de listCampaigns: con la política
+    // acotada solo a company_link, la campaña del propio inquilino
+    // desaparecía de su pantalla porque `JOIN company` tiraba la fila.
+    const EMPRESA = '0000002a-0000-4000-8000-000000000001';
+    const CAMPANA = '0000002a-0000-4000-8000-000000000002';
+    await t.admin(`
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${EMPRESA}', 'Marca sin vínculo', '${WS_A}');
+      INSERT INTO campaign (id, workspace_id, company_id, name)
+        VALUES ('${CAMPANA}', '${WS_B}', '${EMPRESA}', 'Campaña de B con la marca de A');
+    `);
+    try {
+      const deB = await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query<{ name: string }>(
+          'SELECT co.name FROM campaign c JOIN company co ON co.id = c.company_id WHERE c.id = $1',
+          [CAMPANA],
+        ),
+      );
+      assert.equal(deB.rows[0]?.name, 'Marca sin vínculo', 'B perdía su propia campaña por no poder leer la empresa');
+
+      // Y el que no tiene nada con ella sigue sin verla.
+      const deC = await t.db.withWorkspace(WS_TESTIGO, (tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [EMPRESA]),
+      );
+      assert.deepEqual(deC.rows, []);
+    } finally {
+      await t.admin(`DELETE FROM campaign WHERE id = '${CAMPANA}'; DELETE FROM company WHERE id = '${EMPRESA}'`);
+    }
   });
 });

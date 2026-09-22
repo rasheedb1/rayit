@@ -31,13 +31,35 @@
  * desapareció, o alguien le puso política— también se reporta, para que
  * la lista no se pudra.
  *
- * Aislada significa las tres cosas a la vez:
+ * Aislada significa las CUATRO cosas a la vez:
  *   1. ENABLE ROW LEVEL SECURITY (relrowsecurity)
  *   2. FORCE ROW LEVEL SECURITY (relforcerowsecurity), porque sin FORCE
  *      el dueño de la tabla —mc_migrator, que es quien corre los seeds
  *      y las migraciones— se salta la política sin decirlo
  *   3. al menos una política: RLS activado y cero políticas no aísla,
  *      niega, y eso se descubre en producción
+ *   4. y que esa política DIGA algo. Contar políticas no basta: una
+ *      tabla con `CREATE POLICY p ON t USING (true)` tiene RLS, FORCE y
+ *      una política, y no aísla nada. Así que además de contarlas se
+ *      leen: al menos una tiene que mencionar current_workspace_id(),
+ *      current_user_id() o una subconsulta al padre. Las que son
+ *      `true` a propósito se declaran en POLITICAS_ABIERTAS_DECLARADAS,
+ *      con su motivo, igual que las tablas sin RLS.
+ *
+ * Y LAS VISTAS, QUE NO SON TABLAS PERO SE CONSULTAN IGUAL
+ * ------------------------------------------------------
+ * La ronda 1 preguntó por `relkind IN ('r','p')` y dejó fuera las diez
+ * vistas de `public`. En Postgres una vista es SECURITY DEFINER por
+ * omisión: lee sus tablas base con los privilegios de su DUEÑO, que
+ * aquí es mc_migrator. Medido: `CREATE VIEW v AS SELECT * FROM niche;
+ * GRANT ALL ON v TO mc_app;` y desde withWorkspace `UPDATE v SET slug =
+ * slug` toca las 12 filas del catálogo que la sección 7 de 0022 acaba
+ * de dejar de solo lectura. Es la misma clase que esta guardia vino a
+ * cerrar, movida de las tablas a las vistas.
+ *
+ * Así que las vistas también se traen, y a cada una se le exige
+ * `security_invoker = on` —que es lo que 0022 §8 les pone— o su entrada
+ * en VISTAS_SIN_INVOCADOR con el motivo escrito.
  *
  * Y LOS PRIVILEGIOS, QUE RLS NO CUBRE
  * -----------------------------------
@@ -49,7 +71,7 @@
  * tabla por tabla y con su motivo, qué se le deja; la migración 0022
  * revoca el resto y esta guardia comprueba que siga revocado.
  *
- * Tres comprobaciones, porque responden a cosas distintas:
+ * Comprobaciones, porque responden a cosas distintas:
  *   1. Migraciones aplicadas vs. db/migrations del repositorio. Es la
  *      pregunta directa, pero solo se puede hacer donde estén los
  *      archivos: el despliegue de Vercel excluye /db/migrations/ a
@@ -57,8 +79,23 @@
  *   2. Que toda tabla esté aislada, salvo excepción declarada. No
  *      necesita los archivos, viaja con el bundle y es exactamente la
  *      promesa que se estaba rompiendo.
- *   3. Que mc_app no tenga privilegios de más sobre las tablas que
+ *   3. Que ninguna política sea `true` sin declararlo.
+ *   4. Que toda vista corra con security_invoker.
+ *   5. Que mc_app no tenga privilegios de más sobre las tablas que
  *      declara de solo lectura.
+ *   6. Y que la guardia haya podido PREGUNTAR. Ver abajo.
+ *
+ * LA GUARDIA NO FALLA ABIERTA
+ * ---------------------------
+ * La ronda 1 tragaba el error de las consultas del inventario con un
+ * `.catch(() => [])`. Con la lista vacía todo lo demás sale vacío
+ * —ninguna tabla sin aislar, ninguna excepción obsoleta, ningún
+ * privilegio de más— y explicarEsquema devuelve null: el arranque da
+ * verde AFIRMANDO que toda tabla está aislada cuando lo que pasó es que
+ * no pudo preguntar (un permiso, un statement_timeout, un pooler que
+ * corta). Es el mismo silencio que esta guardia declara como causa raíz,
+ * con otro disparador. Ahora el error se anota en `inventarioLeido` y
+ * se reporta como cualquier otro problema: en producción, lanza.
  */
 import type { CatalogDb } from './client.ts';
 
@@ -71,7 +108,15 @@ import type { CatalogDb } from './client.ts';
  * política.
  *
  * Todas ellas están además en PRIVILEGIOS_DE_LA_APP: sin RLS, lo único
- * que las protege es el GRANT.
+ * que las protege es el GRANT. Eso no es una nota al lector: lo
+ * comprueba `excepcionesSinPrivilegios`, porque una excepción nueva sin
+ * su entrada de privilegios nacería sin RLS y con los cuatro privilegios
+ * de mc_app (ALTER DEFAULT PRIVILEGES se los da al nacer) y las dos
+ * mitades de la guardia la darían por buena: la de aislamiento porque
+ * está declarada, la de privilegios porque solo recorre
+ * PRIVILEGIOS_DE_LA_APP. Es la misma forma del agujero que esta guardia
+ * cerró —una lista escrita a mano con una salida que nadie vigila—, así
+ * que la salida se vigila.
  */
 export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   // ------ catálogos globales: los mismos para todos los inquilinos ---
@@ -96,6 +141,42 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   schema_migrations:
     'contabilidad del runner de migraciones (db/lib/aplicar.mjs), no dato del producto. La lee esta misma guardia',
 };
+
+/**
+ * Las políticas que dicen `true` a propósito, y por qué.
+ *
+ * Contar políticas no basta. Una tabla con RLS, FORCE y
+ * `CREATE POLICY p ON t USING (true)` cumple las tres primeras
+ * condiciones y no aísla nada: está reproducido en esquema.test.ts. Y
+ * el patrón tenía un ejemplo vivo en el propio esquema —la primera
+ * versión de `company_read`—, así que nada impedía que la siguiente
+ * tabla lo copiara «para salir del paso» y la puerta de salida dejara
+ * de ser corta y explícita sin que esta lista creciera un renglón.
+ *
+ * Por eso la guardia LEE las expresiones: una política cuyas
+ * expresiones son todas el literal `true` no cuenta como aislamiento y
+ * hay que declararla aquí, con su motivo, igual que una tabla sin RLS.
+ *
+ * La clave es `tabla.politica`. Hoy está vacía: `company_read`, que era
+ * la única, se acotó en 0022 §4 (sin dueño, mío, o vinculado por
+ * company_link) porque «qué marcas trabaja la competencia, y con qué
+ * razón social» no es un catálogo público.
+ */
+export const POLITICAS_ABIERTAS_DECLARADAS: Readonly<Record<string, string>> = {};
+
+/**
+ * Las vistas de `public` que NO corren con los privilegios de quien
+ * consulta, y por qué.
+ *
+ * En Postgres una vista es SECURITY DEFINER por omisión: lee sus tablas
+ * base con los privilegios de su dueño —aquí mc_migrator, que puede
+ * todo— así que una vista sin `security_invoker = on` rodea el muro de
+ * privilegios de PRIVILEGIOS_DE_LA_APP. 0022 §8 se lo pone a las diez
+ * que había, en un bucle sobre pg_class y no en una lista de diez
+ * nombres; esta lista existe para la vista que alguien añada mañana y
+ * tenga una razón para dejar fuera. Por eso está vacía.
+ */
+export const VISTAS_SIN_INVOCADOR: Readonly<Record<string, string>> = {};
 
 /** Los cuatro privilegios de fila que concede el esquema. */
 export const PRIVILEGIOS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] as const;
@@ -160,7 +241,7 @@ export const APP_ROLE = 'mc_app';
 /** Una tabla sin aislamiento que tampoco está declarada como excepción. */
 export interface TablaSinAislar {
   tabla: string;
-  /** Qué le falta: 'sin RLS', 'sin FORCE', 'sin políticas'. */
+  /** Qué le falta: 'sin RLS', 'sin FORCE', 'sin políticas', 'con políticas que no aíslan'. */
   falta: string;
 }
 
@@ -169,6 +250,14 @@ export interface PrivilegioDeMas {
   tabla: string;
   privilegios: Privilegio[];
   motivo: string;
+}
+
+/** Una política cuyas expresiones son todas `true` y que nadie declaró. */
+export interface PoliticaAbierta {
+  tabla: string;
+  politica: string;
+  /** 'tabla.politica', que es como se declara en POLITICAS_ABIERTAS_DECLARADAS. */
+  clave: string;
 }
 
 /** Lo que dice la base cuando se le pregunta por el esquema. */
@@ -191,10 +280,26 @@ export interface EstadoDelEsquema {
   sinAislar: TablaSinAislar[];
   /** Excepciones declaradas que ya no corresponden: la tabla no existe, o sí está aislada. */
   excepcionesObsoletas: string[];
+  /** Excepciones sin RLS que además no dicen qué puede hacer mc_app con ellas. */
+  excepcionesSinPrivilegios: string[];
+  /** Políticas que dicen `true` y no están en POLITICAS_ABIERTAS_DECLARADAS. */
+  politicasAbiertas: PoliticaAbierta[];
+  /** Declaraciones de POLITICAS_ABIERTAS_DECLARADAS que ya no corresponden. */
+  politicasAbiertasObsoletas: string[];
+  /** Vistas sin `security_invoker = on` y sin excepción declarada. */
+  vistasSinInvocador: string[];
+  /** Entradas de VISTAS_SIN_INVOCADOR que ya no corresponden. */
+  vistasDeclaradasObsoletas: string[];
   /** Privilegios que mc_app conserva y no debería. */
   privilegiosDeMas: PrivilegioDeMas[];
   /** Si la comprobación de archivos se pudo hacer. */
   comparadoConArchivos: boolean;
+  /**
+   * Si la base contestó al inventario (tablas, políticas y privilegios).
+   * En false, TODO lo de arriba está vacío porque no se pudo preguntar,
+   * no porque esté bien: es un problema, no un visto bueno.
+   */
+  inventarioLeido: boolean;
 }
 
 /**
@@ -213,11 +318,21 @@ export async function migracionesDelRepositorio(): Promise<string[]> {
 interface FilaMigracion extends Record<string, unknown> {
   filename: string;
 }
-interface FilaTabla extends Record<string, unknown> {
+interface FilaRelacion extends Record<string, unknown> {
   relname: string;
+  /** 'r' y 'p' son tablas; 'v', vistas. */
+  relkind: string;
   rls: boolean;
   forzada: boolean;
   politicas: number;
+  /** Vistas: si llevan `security_invoker = on` en reloptions. */
+  invocador: boolean;
+}
+interface FilaPolitica extends Record<string, unknown> {
+  relname: string;
+  polname: string;
+  qual: string | null;
+  with_check: string | null;
 }
 interface FilaPrivilegio extends Record<string, unknown> {
   relname: string;
@@ -225,19 +340,43 @@ interface FilaPrivilegio extends Record<string, unknown> {
 }
 
 /**
- * TODAS las tablas de `public` con su estado de aislamiento. Es la
- * pregunta invertida: la base dice qué tablas hay, no una lista del
- * repositorio.
+ * TODAS las relaciones de `public` —tablas y vistas— con su estado de
+ * aislamiento. Es la pregunta invertida: la base dice qué hay, no una
+ * lista del repositorio.
+ *
+ * Las vistas van aquí y no en una consulta aparte porque la pregunta es
+ * la misma: «¿con los privilegios de quién se lee esto?». Para una
+ * tabla lo contesta la política; para una vista, security_invoker.
  */
-const SQL_TABLAS = `
+const SQL_RELACIONES = `
   SELECT c.relname AS relname,
+         c.relkind::text AS relkind,
          c.relrowsecurity AS rls,
          c.relforcerowsecurity AS forzada,
-         (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas
+         (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas,
+         coalesce(c.reloptions @> ARRAY['security_invoker=on'], false) AS invocador
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v')
    ORDER BY c.relname`;
+
+/**
+ * Lo que DICE cada política, no cuántas hay.
+ *
+ * pg_get_expr devuelve la expresión tal como Postgres la guardó, así
+ * que un `USING (true)` sale literalmente como `true` y se reconoce sin
+ * interpretar SQL.
+ */
+const SQL_POLITICAS = `
+  SELECT c.relname AS relname,
+         p.polname AS polname,
+         pg_get_expr(p.polqual, p.polrelid) AS qual,
+         pg_get_expr(p.polwithcheck, p.polrelid) AS with_check
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public'
+   ORDER BY 1, 2`;
 
 /**
  * Los privilegios de mc_app, leídos de pg_class.relacl con aclexplode.
@@ -246,6 +385,10 @@ const SQL_TABLAS = `
  * solo enseña las concesiones en las que el usuario actual es parte, y
  * el worker consulta esto como mc_worker. relacl la ve cualquiera, así
  * que la respuesta es la misma se pregunte desde donde se pregunte.
+ *
+ * Incluye las vistas: sus GRANT también cuentan, aunque desde 0022 §8
+ * una vista con security_invoker ya no puede dar más de lo que el
+ * invocador tiene sobre las tablas base.
  */
 const SQL_PRIVILEGIOS = `
   SELECT c.relname AS relname, a.privilege_type AS privilegio
@@ -256,15 +399,50 @@ const SQL_PRIVILEGIOS = `
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v') AND r.rolname = $1
    ORDER BY 1, 2`;
 
+/** Las expresiones que una política tiene de verdad (USING y WITH CHECK). */
+const expresiones = (p: FilaPolitica): string[] =>
+  [p.qual, p.with_check].filter((e): e is string => typeof e === 'string' && e.trim() !== '');
+
+/**
+ * Una política «abierta» es la que no filtra nada: todas sus
+ * expresiones son el literal `true`. Postgres normaliza `USING (true)`
+ * a exactamente eso.
+ */
+function esAbierta(p: FilaPolitica): boolean {
+  const exprs = expresiones(p);
+  return exprs.length > 0 && exprs.every((e) => e.trim().toLowerCase() === 'true');
+}
+
+/**
+ * Y una política aísla si al menos una de sus expresiones nombra el
+ * workspace de la transacción, la persona de la transacción, o mira al
+ * padre con una subconsulta (que es la forma de 0018 y de la sección 6
+ * de 0022: `fk IS NULL OR EXISTS (SELECT 1 FROM padre …)`).
+ *
+ * No pretende demostrar que la política sea correcta —eso lo prueban
+ * los ataques de test/rls.test.ts, workspace por workspace—: pretende
+ * que `true` no pase por aislamiento.
+ */
+const MENCIONA_EL_INQUILINO = /current_workspace_id\(\)|current_user_id\(\)|\bSELECT\b/i;
+function aisla(p: FilaPolitica): boolean {
+  return expresiones(p).some((e) => MENCIONA_EL_INQUILINO.test(e));
+}
+
 /** Qué le falta a una tabla para estar aislada, o null si no le falta nada. */
-function queLeFalta(t: FilaTabla): string | null {
+function queLeFalta(t: FilaRelacion, politicas: FilaPolitica[]): string | null {
   if (!t.rls) return 'sin ENABLE ROW LEVEL SECURITY';
   if (!t.forzada) return 'sin FORCE ROW LEVEL SECURITY (mc_migrator se la salta)';
   if (t.politicas < 1) return 'con RLS y sin ninguna política (niega, no aísla)';
+  // Contar no basta: hay que leer lo que dicen. Si la consulta de
+  // políticas no contestó, esto no se puede exigir y quien lo dice es
+  // inventarioLeido.
+  if (politicas.length && !politicas.some(aisla)) {
+    return 'con políticas que no aíslan (ninguna menciona current_workspace_id(), current_user_id() ni una subconsulta al padre)';
+  }
   return null;
 }
 
-/** Pregunta a la base qué migraciones tiene, qué tablas no están aisladas y qué puede mc_app. */
+/** Pregunta a la base qué migraciones tiene, qué no está aislado y qué puede mc_app. */
 export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema> {
   const enElRepo = await migracionesDelRepositorio();
   const aplicadas = await db
@@ -272,20 +450,42 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     .then((r) => r.rows.map((x) => x.filename))
     .catch(() => null); // la tabla no existe: base sin migrar
 
-  const tablas = await db
-    .withCatalogs((tx) => tx.query<FilaTabla>(SQL_TABLAS))
+  // Las tres consultas del inventario NO se tragan: si alguna falla, la
+  // guardia no comprobó nada y hay que decirlo. Ver la nota de arriba.
+  let inventarioLeido = true;
+  const noContesto = <T>(): T[] => {
+    inventarioLeido = false;
+    return [];
+  };
+  const relaciones = await db
+    .withCatalogs((tx) => tx.query<FilaRelacion>(SQL_RELACIONES))
     .then((r) => r.rows)
-    .catch(() => [] as FilaTabla[]);
+    .catch(() => noContesto<FilaRelacion>());
+
+  const politicas = await db
+    .withCatalogs((tx) => tx.query<FilaPolitica>(SQL_POLITICAS))
+    .then((r) => r.rows)
+    .catch(() => noContesto<FilaPolitica>());
 
   const privilegios = await db
     .withCatalogs((tx) => tx.query<FilaPrivilegio>(SQL_PRIVILEGIOS, [APP_ROLE]))
     .then((r) => r.rows)
-    .catch(() => [] as FilaPrivilegio[]);
+    .catch(() => noContesto<FilaPrivilegio>());
+
+  const politicasPorTabla = new Map<string, FilaPolitica[]>();
+  for (const p of politicas) {
+    const lista = politicasPorTabla.get(p.relname);
+    if (lista) lista.push(p);
+    else politicasPorTabla.set(p.relname, [p]);
+  }
+
+  const tablas = relaciones.filter((r) => r.relkind === 'r' || r.relkind === 'p');
+  const vistas = relaciones.filter((r) => r.relkind === 'v');
 
   const sinAislar: TablaSinAislar[] = [];
   const aisladas = new Set<string>();
   for (const t of tablas) {
-    const falta = queLeFalta(t);
+    const falta = queLeFalta(t, politicasPorTabla.get(t.relname) ?? []);
     if (falta === null) {
       aisladas.add(t.relname);
       continue;
@@ -301,6 +501,38 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const existen = new Set(tablas.map((t) => t.relname));
   const excepcionesObsoletas = tablas.length
     ? Object.keys(EXCEPCIONES_SIN_AISLAMIENTO).filter((t) => !existen.has(t) || aisladas.has(t))
+    : [];
+  // Y una excepción sin RLS que además no dice qué puede hacer mc_app
+  // con ella es una tabla sin ninguno de los dos candados. No necesita
+  // la base: son dos listas del repositorio, y por eso se comprueba
+  // siempre.
+  const excepcionesSinPrivilegios = Object.keys(EXCEPCIONES_SIN_AISLAMIENTO).filter(
+    (t) => !(t in PRIVILEGIOS_DE_LA_APP),
+  );
+
+  // Políticas que dicen `true`: o están declaradas con su motivo, o se
+  // reportan. Con el mismo mecanismo de «declaración obsoleta».
+  const politicasAbiertas: PoliticaAbierta[] = [];
+  const abiertas = new Set<string>();
+  for (const p of politicas) {
+    if (!esAbierta(p)) continue;
+    const clave = `${p.relname}.${p.polname}`;
+    abiertas.add(clave);
+    if (clave in POLITICAS_ABIERTAS_DECLARADAS) continue;
+    politicasAbiertas.push({ tabla: p.relname, politica: p.polname, clave });
+  }
+  const politicasAbiertasObsoletas = politicas.length
+    ? Object.keys(POLITICAS_ABIERTAS_DECLARADAS).filter((k) => !abiertas.has(k))
+    : [];
+
+  // Vistas: sin security_invoker corren con los privilegios de su dueño
+  // (mc_migrator) y rodean PRIVILEGIOS_DE_LA_APP.
+  const vistasSinInvocador = vistas
+    .filter((v) => !v.invocador && !(v.relname in VISTAS_SIN_INVOCADOR))
+    .map((v) => v.relname);
+  const conInvocador = new Map(vistas.map((v) => [v.relname, v.invocador] as const));
+  const vistasDeclaradasObsoletas = vistas.length
+    ? Object.keys(VISTAS_SIN_INVOCADOR).filter((v) => !conInvocador.has(v) || conInvocador.get(v) === true)
     : [];
 
   const porTabla = new Map<string, Set<string>>();
@@ -329,8 +561,14 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     sinRls: sinAislar.map((t) => t.tabla),
     sinAislar,
     excepcionesObsoletas,
+    excepcionesSinPrivilegios,
+    politicasAbiertas,
+    politicasAbiertasObsoletas,
+    vistasSinInvocador,
+    vistasDeclaradasObsoletas,
     privilegiosDeMas,
     comparadoConArchivos: enElRepo.length > 0 && aplicadas !== null,
+    inventarioLeido,
   };
 }
 
@@ -342,13 +580,28 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   sinRls: [],
   sinAislar: [],
   excepcionesObsoletas: [],
+  excepcionesSinPrivilegios: [],
+  politicasAbiertas: [],
+  politicasAbiertasObsoletas: [],
+  vistasSinInvocador: [],
+  vistasDeclaradasObsoletas: [],
   privilegiosDeMas: [],
   comparadoConArchivos: true,
+  inventarioLeido: true,
 };
 
 /** El texto del problema, o null si no hay ninguno. */
 export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   const partes: string[] = [];
+  if (!estado.inventarioLeido) {
+    // Lo primero, porque invalida todo lo demás: con el inventario sin
+    // leer, las listas vacías de abajo no dicen «está bien», dicen «no
+    // se pudo preguntar».
+    partes.push(
+      'no se pudo leer el inventario de tablas, políticas y privilegios de la base: la guardia no comprobó nada. ' +
+        'Puede ser un permiso que le falta a la conexión, un statement_timeout o un pooler que cortó',
+    );
+  }
   if (estado.aplicadas === -1) {
     partes.push('la base no tiene schema_migrations: nunca se migró');
   } else if (estado.pendientes.length) {
@@ -367,17 +620,42 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         'Si alguna es global a propósito, decláralo en EXCEPCIONES_SIN_AISLAMIENTO con su motivo',
     );
   }
+  if (estado.politicasAbiertas.length) {
+    partes.push(
+      'hay políticas que no filtran nada (USING/WITH CHECK `true`), así que su tabla tiene RLS y no aísla: ' +
+        estado.politicasAbiertas.map((p) => p.clave).join(', ') +
+        '. Si alguna es global a propósito, decláralo en POLITICAS_ABIERTAS_DECLARADAS con su motivo',
+    );
+  }
+  if (estado.vistasSinInvocador.length) {
+    partes.push(
+      'hay vistas sin security_invoker, que leen sus tablas base con los privilegios de su DUEÑO y rodean ' +
+        `los GRANT de ${APP_ROLE}: ` +
+        estado.vistasSinInvocador.join(', ') +
+        '. Ponles ALTER VIEW … SET (security_invoker = on) en una migración, o decláralas en VISTAS_SIN_INVOCADOR',
+    );
+  }
   if (estado.privilegiosDeMas.length) {
     partes.push(
       `${APP_ROLE} tiene privilegios que no le tocan: ` +
         estado.privilegiosDeMas.map((p) => `${p.tabla} (${p.privilegios.join(', ')}: ${p.motivo})`).join('; '),
     );
   }
-  if (estado.excepcionesObsoletas.length) {
+  if (estado.excepcionesSinPrivilegios.length) {
     partes.push(
-      'sobran excepciones en EXCEPCIONES_SIN_AISLAMIENTO (la tabla ya no existe, o ya está aislada): ' +
-        estado.excepcionesObsoletas.join(', '),
+      `declaraste la excepción sin decir qué puede hacer ${APP_ROLE} con ella, y sin RLS el GRANT es lo ` +
+        'único que la protege: ' +
+        estado.excepcionesSinPrivilegios.join(', ') +
+        '. Añádelas a PRIVILEGIOS_DE_LA_APP',
     );
+  }
+  const sobran = [
+    ...estado.excepcionesObsoletas.map((t) => `EXCEPCIONES_SIN_AISLAMIENTO: ${t}`),
+    ...estado.politicasAbiertasObsoletas.map((k) => `POLITICAS_ABIERTAS_DECLARADAS: ${k}`),
+    ...estado.vistasDeclaradasObsoletas.map((v) => `VISTAS_SIN_INVOCADOR: ${v}`),
+  ];
+  if (sobran.length) {
+    partes.push('sobran excepciones declaradas (el objeto ya no existe, o ya está cerrado): ' + sobran.join(', '));
   }
   if (!partes.length) return null;
   return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. Corre: make db.migrate`;

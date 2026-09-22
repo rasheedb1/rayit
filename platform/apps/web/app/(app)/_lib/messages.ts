@@ -19,8 +19,19 @@ export const MESSAGES = {
     home: "Volver al plan",
     /** Solo se muestra cuando Next entrega un identificador del error (producción). */
     reference: "Referencia",
-    /** Lo que ayuda a quien despliega, sin enseñar nada del error a quien no lo necesita. */
-    hint: "Si acabas de desplegar, revisa DEMO_WORKSPACE_ID y DATABASE_URL.",
+    /**
+     * Lo que ve quien entra. A una creadora los nombres de dos
+     * variables de entorno del servidor no le dicen nada y no le sirven
+     * de nada: la pista de despliegue es la de abajo, y solo sale fuera
+     * de producción.
+     */
+    hint: "Vuelve a intentarlo en un momento; si sigue así, escríbenos.",
+    /**
+     * La misma pantalla, en desarrollo y en vista previa: ahí quien
+     * mira es quien despliega. En producción esto no se renderiza; las
+     * variables siguen en el log del servidor, que es donde ya estaban.
+     */
+    hintDespliegue: "Si acabas de desplegar, revisa DEMO_WORKSPACE_ID y DATABASE_URL.",
   },
   loading: {
     label: "Cargando la pantalla",

@@ -33,6 +33,11 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
       <h1 className="mt-2 text-xl font-semibold">{t.title}</h1>
       <p className="mt-2 text-sm leading-5 text-fg-2">{t.description}</p>
       <p className="mt-2 text-xs leading-5 text-fg-3">{t.hint}</p>
+      {/* La pista de despliegue nombra variables del servidor: se la
+          enseñamos a quien despliega, no a quien entra. */}
+      {process.env.NODE_ENV !== "production" ? (
+        <p className="mt-2 text-xs leading-5 text-fg-3">{t.hintDespliegue}</p>
+      ) : null}
       {error.digest ? (
         <p className="mt-2 font-mono text-xs tabular-nums text-fg-3">
           {t.reference}: {error.digest}

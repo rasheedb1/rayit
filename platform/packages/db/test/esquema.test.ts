@@ -14,8 +14,9 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
-  explicarEsquema, migracionesDelRepositorio, type EstadoDelEsquema,
+  explicarEsquema, migracionesDelRepositorio, PRIVILEGIOS_DE_LA_APP, type EstadoDelEsquema,
 } from '../src/esquema.ts';
+import type { CatalogDb } from '../src/client.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 let t: TestDb;
@@ -120,7 +121,13 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
   });
 
   test('una excepción que ya no corresponde también se reporta: la lista no se pudre', async () => {
-    await t.admin('ALTER TABLE platform ENABLE ROW LEVEL SECURITY; ALTER TABLE platform FORCE ROW LEVEL SECURITY; CREATE POLICY platform_todo ON platform USING (true)');
+    // La política tiene que AISLAR para que la excepción sobre: con un
+    // `USING (true)` la tabla sigue sin aislar (ver la prueba de abajo),
+    // así que aquí se le pone una de verdad.
+    await t.admin(
+      'ALTER TABLE platform ENABLE ROW LEVEL SECURITY; ALTER TABLE platform FORCE ROW LEVEL SECURITY; ' +
+        "CREATE POLICY platform_todo ON platform USING (current_workspace_id() IS NOT NULL)",
+    );
     try {
       const estado = await estadoDelEsquema(t.db);
       assert.deepEqual(estado.excepcionesObsoletas, ['platform']);
@@ -128,6 +135,83 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
     } finally {
       await t.admin('DROP POLICY platform_todo ON platform; ALTER TABLE platform NO FORCE ROW LEVEL SECURITY; ALTER TABLE platform DISABLE ROW LEVEL SECURITY');
     }
+  });
+
+  test('contar políticas no basta: una que dice `true` no aísla, y la guardia la nombra', async () => {
+    // El agujero de la ronda 1: «aislada = ENABLE + FORCE + políticas >= 1».
+    // Con ese criterio, una tabla nueva con `USING (true)` pasaba en
+    // verde y desde el workspace B se leía la fila de A. Y el patrón
+    // tenía un ejemplo vivo en el esquema (company_read, hasta 0022).
+    await t.admin(
+      'CREATE TABLE tabla_con_politica_true (id uuid PRIMARY KEY, workspace_id uuid); ' +
+        'ALTER TABLE tabla_con_politica_true ENABLE ROW LEVEL SECURITY; ' +
+        'ALTER TABLE tabla_con_politica_true FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY abierta ON tabla_con_politica_true USING (true) WITH CHECK (true)',
+    );
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.sinRls, ['tabla_con_politica_true'], 'tiene RLS, FORCE y una política, y no aísla nada');
+      assert.match(String(estado.sinAislar[0]?.falta), /no aíslan/);
+      assert.deepEqual(
+        estado.politicasAbiertas.map((p) => p.clave),
+        ['tabla_con_politica_true.abierta'],
+      );
+      const msg = String(explicarEsquema(estado));
+      assert.match(msg, /POLITICAS_ABIERTAS_DECLARADAS/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /tabla_con_politica_true/);
+    } finally {
+      await t.admin('DROP TABLE tabla_con_politica_true');
+    }
+  });
+
+  test('las diez vistas corren con security_invoker: una nueva sin él se reporta', async () => {
+    // En Postgres una vista es SECURITY DEFINER por omisión y lee sus
+    // tablas base con los privilegios de su DUEÑO (mc_migrator), así
+    // que rodea el muro de privilegios de la sección 7 de 0022.
+    // Reproducido por los revisores: una vista sobre webhook_event
+    // —donde mc_app no tiene NINGÚN privilegio— la deja leer, y la
+    // guardia de la ronda 1 devolvía null.
+    const alDia = await estadoDelEsquema(t.db);
+    assert.deepEqual(alDia.vistasSinInvocador, [], '0022 §8 se lo pone a todas las que había');
+
+    await t.admin('CREATE VIEW zz_webhooks AS SELECT * FROM webhook_event; GRANT SELECT ON zz_webhooks TO mc_app');
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.vistasSinInvocador, ['zz_webhooks']);
+      const msg = String(explicarEsquema(estado));
+      assert.match(msg, /security_invoker/);
+      assert.match(msg, /zz_webhooks/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /zz_webhooks/);
+    } finally {
+      await t.admin('DROP VIEW zz_webhooks');
+    }
+  });
+
+  test('y con security_invoker puesto, esa misma vista deja de reportarse', async () => {
+    await t.admin(
+      'CREATE VIEW zz_deals AS SELECT id, workspace_id FROM deal; ' +
+        'ALTER VIEW zz_deals SET (security_invoker = on); GRANT SELECT ON zz_deals TO mc_app',
+    );
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.vistasSinInvocador, []);
+      assert.equal(explicarEsquema(estado), null, String(explicarEsquema(estado)));
+    } finally {
+      await t.admin('DROP VIEW zz_deals');
+    }
+  });
+
+  test('una excepción declarada sin decir qué puede hacer mc_app con ella se reporta', () => {
+    // El invariante estaba escrito en el comentario de
+    // EXCEPCIONES_SIN_AISLAMIENTO y no lo comprobaba nadie: una
+    // excepción nueva sin su entrada de privilegios nace sin RLS y con
+    // los cuatro privilegios (ALTER DEFAULT PRIVILEGES se los da al
+    // nacer), y las dos mitades de la guardia la dan por buena.
+    const huerfanas = Object.keys(EXCEPCIONES_SIN_AISLAMIENTO).filter((t) => !(t in PRIVILEGIOS_DE_LA_APP));
+    assert.deepEqual(huerfanas, [], 'hoy no hay ninguna, y la guardia lo vigila');
+    const msg = String(explicarEsquema({ ...AL_DIA, excepcionesSinPrivilegios: ['tabla_huerfana'] }));
+    assert.match(msg, /tabla_huerfana/);
+    assert.match(msg, /PRIVILEGIOS_DE_LA_APP/);
   });
 
   test('sin schema_migrations (base nunca migrada) lo dice, en vez de dar por buena la base', () => {
@@ -182,5 +266,65 @@ describe('esquemaObligatorio: cuándo un esquema atrasado impide arrancar', () =
     assert.equal(esquemaObligatorio({ NODE_ENV: 'production', ALLOW_STALE_SCHEMA: '1' }), false);
     assert.equal(esquemaObligatorio({ NODE_ENV: 'production', ALLOW_STALE_SCHEMA: 'true' }), true);
     assert.equal(esquemaObligatorio({ NODE_ENV: 'production', ALLOW_STALE_SCHEMA: '' }), true);
+  });
+});
+
+/**
+ * La guardia no falla ABIERTA.
+ *
+ * En la ronda 1, las consultas del inventario terminaban en
+ * `.catch(() => [])`. Con la lista vacía todo lo demás sale vacío
+ * —ninguna tabla sin aislar, ninguna excepción obsoleta, ningún
+ * privilegio de más— y explicarEsquema devolvía null: el arranque daba
+ * verde AFIRMANDO que toda tabla estaba aislada cuando lo que había
+ * pasado es que no pudo preguntar. Basta un permiso que falte, un
+ * statement_timeout o un pooler que corta, y en producción
+ * assertSchemaUpToDate no lanzaba.
+ */
+describe('la guardia falla cerrada: si no pudo preguntar, lo dice', () => {
+  /** Un CatalogDb de mentira: contesta a schema_migrations y se cae con el inventario. */
+  function dbQueSeCae(seCaeCon: RegExp): CatalogDb {
+    const tx = {
+      query: (sql: string) => {
+        if (seCaeCon.test(sql)) return Promise.reject(new Error('57014 canceling statement due to statement timeout'));
+        return Promise.resolve({ rows: [{ filename: '0001_core.sql' }] });
+      },
+    };
+    return { withCatalogs: (fn: (t: unknown) => Promise<unknown>) => fn(tx) } as unknown as CatalogDb;
+  }
+
+  test('si pg_class no contesta, inventarioLeido queda en false y explicarEsquema lo dice', async () => {
+    const estado = await estadoDelEsquema(dbQueSeCae(/pg_class/));
+    assert.equal(estado.inventarioLeido, false);
+    // Y todo lo demás está vacío porque no se pudo preguntar, no porque esté bien.
+    assert.deepEqual(estado.sinAislar, []);
+    assert.deepEqual(estado.privilegiosDeMas, []);
+    const msg = String(explicarEsquema(estado));
+    assert.match(msg, /no se pudo leer el inventario/);
+    assert.match(msg, /la guardia no comprobó nada/);
+  });
+
+  test('y en producción eso no arranca, igual que con migraciones pendientes', async () => {
+    await assert.rejects(
+      assertSchemaUpToDate(dbQueSeCae(/pg_class/), { production: true }),
+      /no se pudo leer el inventario/,
+    );
+  });
+
+  test('lo mismo si la que se cae es la consulta de políticas', async () => {
+    const estado = await estadoDelEsquema(dbQueSeCae(/pg_policy/));
+    assert.equal(estado.inventarioLeido, false);
+    assert.match(String(explicarEsquema(estado)), /no se pudo leer el inventario/);
+  });
+
+  test('lo mismo si la que se cae es la de privilegios', async () => {
+    const estado = await estadoDelEsquema(dbQueSeCae(/aclexplode/));
+    assert.equal(estado.inventarioLeido, false);
+    assert.match(String(explicarEsquema(estado)), /no se pudo leer el inventario/);
+  });
+
+  test('contra la base de verdad, en cambio, el inventario sí se lee', async () => {
+    const estado = await estadoDelEsquema(t.db);
+    assert.equal(estado.inventarioLeido, true);
   });
 });

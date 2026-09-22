@@ -46,6 +46,16 @@ export interface WorkspaceSettings {
  * daba la impresión de que ESE filtro era el que aislaba: mientras
  * faltó la política, cualquier otra consulta de la tabla veía los
  * inquilinos ajenos y esta parecía prueba de que no.
+ *
+ * Pero quitar el WHERE deja la corrección al 100% en manos de que 0022
+ * esté APLICADA, y hay una ventana documentada en la que no lo está:
+ * ALLOW_STALE_SCHEMA=1, la salida para el despliegue que tiene que
+ * salir antes de que el integrador corra `make db.migrate`. En esa
+ * ventana, `limit(1)` sin ORDER BY sobre una tabla sin RLS devuelve un
+ * workspace CUALQUIERA, y su moneda, su locale y su zona horaria se
+ * sirven a /finanzas sin que nadie se entere. Así que la fila que vuelve
+ * se comprueba: es barato, no vuelve a pasar el workspace a la
+ * consulta, y convierte un fallo silencioso en uno ruidoso.
  */
 export async function getWorkspace(tx: WorkspaceTx): Promise<Workspace> {
   const [row] = await tx.db.select().from(workspace).limit(1);
@@ -53,6 +63,15 @@ export async function getWorkspace(tx: WorkspaceTx): Promise<Workspace> {
     throw new Error(
       `El workspace ${tx.workspaceId} no existe en esta base. Revisa DEMO_WORKSPACE_ID (platform/.env.example) ` +
         'o que la base tenga el seed aplicado.',
+    );
+  }
+  if (row.id !== tx.workspaceId) {
+    // La política de 0022 no está en esta base: la consulta devolvió el
+    // inquilino de otro. Mejor caer que formatear las facturas con la
+    // moneda del vecino.
+    throw new Error(
+      `workspace devolvió la fila de otro inquilino (${row.id} en vez de ${tx.workspaceId}): ` +
+        'falta la RLS de la migración 0022 en esta base. Corre: make db.migrate',
     );
   }
   return row;

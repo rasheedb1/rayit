@@ -66,6 +66,8 @@ interface RelRow extends Record<string, unknown> {
   /** Sin FORCE, el dueño de la tabla (mc_migrator: migraciones y seeds) se salta la política. */
   forzada: boolean;
   politicas: number;
+  /** Vistas: sin security_invoker leen sus tablas base como su DUEÑO. */
+  invocador: boolean;
 }
 interface FkRow extends Record<string, unknown> {
   child: string;
@@ -103,6 +105,8 @@ const relations = new Map<string, RelRow>();
 let childrenWithoutRls: FkRow[] = [];
 /** Lo que mc_app puede hacer, tabla por tabla, leído de pg_class.relacl. */
 const privilegiosDeLaApp = new Map<string, Set<string>>();
+/** Lo que DICE cada política, no cuántas hay: `USING (true)` no aísla nada. */
+const expresionesPorTabla = new Map<string, string[]>();
 
 before(async () => {
   t = await openTestDb({ seeds: false });
@@ -122,7 +126,8 @@ before(async () => {
              CASE c.relkind WHEN 'v' THEN 'view' ELSE 'table' END AS kind,
              c.relrowsecurity AS rls,
              c.relforcerowsecurity AS forzada,
-             (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas
+             (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas,
+             coalesce(c.reloptions @> ARRAY['security_invoker=on'], false) AS invocador
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v')`),
   );
@@ -145,6 +150,20 @@ before(async () => {
   // leían los endpoints y los errores de A). La rama «fk IS NULL» es
   // parte de la política, no una excusa para no tenerla.
   childrenWithoutRls = fks.rows;
+  const pols = await t.db.withCatalogs((tx) =>
+    tx.query<{ relname: string; expr: string | null }>(`
+      SELECT c.relname AS relname, e.expr AS expr
+        FROM pg_policy p
+        JOIN pg_class c ON c.oid = p.polrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL (VALUES (pg_get_expr(p.polqual, p.polrelid)), (pg_get_expr(p.polwithcheck, p.polrelid))) AS e(expr)
+       WHERE n.nspname = 'public' AND e.expr IS NOT NULL`),
+  );
+  for (const row of pols.rows) {
+    const lista = expresionesPorTabla.get(row.relname);
+    if (lista) lista.push(row.expr!);
+    else expresionesPorTabla.set(row.relname, [row.expr!]);
+  }
   const grants = await t.db.withCatalogs((tx) =>
     tx.query<GrantRow>(
       `SELECT c.relname AS relname, a.privilege_type AS privilegio
@@ -236,10 +255,20 @@ describe('el esquema Drizzle coincide con db/migrations', () => {
  * rompe la tercera.
  */
 describe('aislamiento por workspace en la base', () => {
-  /** Aislada = ENABLE + FORCE + al menos una política. Las tres cosas. */
+  /**
+   * Aislada = ENABLE + FORCE + al menos una política + que la política
+   * DIGA algo. Las cuatro cosas.
+   *
+   * Contar no bastaba: una tabla con `USING (true)` tiene RLS, FORCE y
+   * una política, y desde el workspace B se lee la fila de A. El
+   * criterio es el mismo de src/esquema.ts, y aquí se comprueba contra
+   * el esquema entero.
+   */
   const aislada = (name: string) => {
     const r = relations.get(name);
-    return r?.rls === true && r.forzada === true && r.politicas > 0;
+    if (!(r?.rls === true && r.forzada === true && r.politicas > 0)) return false;
+    const exprs = expresionesPorTabla.get(name) ?? [];
+    return exprs.some((e) => /current_workspace_id\(\)|current_user_id\(\)|\bSELECT\b/i.test(e));
   };
   const tablas = () => [...relations.values()].filter((r) => r.kind === 'table').map((r) => r.name).sort();
 
@@ -346,6 +375,47 @@ describe('aislamiento por workspace en la base', () => {
       tx.query<{ uid: string | null }>('SELECT current_user_id()::text AS uid'),
     );
     assert.equal(rows[0]?.uid, null);
+  });
+
+  test('ninguna política del esquema dice `true`: eso es RLS puesta que no aísla', () => {
+    // La primera versión de company_read era exactamente eso, y era la
+    // única política del esquema cuya expresión no mencionaba ni
+    // current_workspace_id(), ni current_user_id(), ni un EXISTS sobre
+    // el padre. Mientras el criterio fuera «cuenta > 0», la ronda
+    // siguiente podía ser «tenía política, pero la política era true».
+    const abiertas: string[] = [];
+    for (const [tabla, exprs] of expresionesPorTabla) {
+      if (exprs.every((e) => e.trim().toLowerCase() === 'true')) abiertas.push(tabla);
+    }
+    assert.deepEqual(abiertas, [], `políticas que no filtran nada: ${abiertas.join(', ')}`);
+  });
+
+  test('toda vista corre con security_invoker: si no, rodea los GRANT de mc_app', () => {
+    // En Postgres una vista es SECURITY DEFINER por omisión y lee sus
+    // tablas base con los privilegios de su DUEÑO (mc_migrator, que
+    // puede todo). Reproducido: una vista sobre `niche` deja hacer
+    // UPDATE a mc_app, que 0022 §7.1 acaba de dejar sin escritura.
+    const sinInvocador = [...relations.values()]
+      .filter((r) => r.kind === 'view' && !r.invocador)
+      .map((r) => r.name);
+    assert.deepEqual(
+      sinInvocador,
+      [],
+      `vistas que leen con los privilegios de mc_migrator: ${sinInvocador.join(', ')}. ` +
+        'Ponles ALTER VIEW … SET (security_invoker = on) en una migración (0022 §8 lo hace en bucle sobre pg_class).',
+    );
+    const vistas = [...relations.values()].filter((r) => r.kind === 'view');
+    assert.ok(vistas.length >= 10, `solo ${vistas.length} vistas: la prueba no está mirando nada`);
+  });
+
+  test('cada excepción sin RLS dice además qué puede hacer mc_app con ella', () => {
+    // Sin RLS lo único que protege una tabla es el GRANT, así que una
+    // excepción declarada sin su entrada de privilegios nace sin
+    // ninguno de los dos candados —y con los cuatro privilegios, que
+    // ALTER DEFAULT PRIVILEGES le da al nacer—. Las dos mitades de la
+    // guardia la darían por buena.
+    const huerfanas = Object.keys(EXCEPCIONES_SIN_AISLAMIENTO).filter((t) => !(t in PRIVILEGIOS_DE_LA_APP));
+    assert.deepEqual(huerfanas, [], `excepciones sin entrada en PRIVILEGIOS_DE_LA_APP: ${huerfanas.join(', ')}`);
   });
 
   test('y la misma guardia, en tiempo de ejecución, no reporta nada contra esta base', async () => {

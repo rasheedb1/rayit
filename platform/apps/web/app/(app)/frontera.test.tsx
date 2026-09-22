@@ -66,11 +66,45 @@ describe("el segmento (app) tiene frontera de error y esqueleto de carga", () =>
     expect(raiz).toHaveAttribute("aria-label", MESSAGES.loading.label);
   });
 
-  it("los textos están en español y no citan variables de entorno en la parte visible del usuario", () => {
+  it("los textos están en español y lo que ve quien entra no nombra ninguna variable de entorno", () => {
     expect(MESSAGES.error.title).toMatch(/[áéíóúñ¿¡]|no se pudo/i);
-    // La pista técnica existe, pero es una línea aparte y secundaria:
-    // quien despliega la necesita y quien usa el producto no.
-    expect(MESSAGES.error.hint).toContain("DEMO_WORKSPACE_ID");
-    expect(MESSAGES.error.description).not.toContain("DEMO_WORKSPACE_ID");
+    // La ronda 1 le enseñaba «revisa DEMO_WORKSPACE_ID y DATABASE_URL»
+    // a cualquiera que entrara. A una creadora eso no le dice nada y no
+    // le sirve de nada: es una pista para quien despliega.
+    for (const texto of [MESSAGES.error.description, MESSAGES.error.hint]) {
+      expect(texto).not.toContain("DEMO_WORKSPACE_ID");
+      expect(texto).not.toContain("DATABASE_URL");
+    }
+    expect(MESSAGES.error.hint).toMatch(/[áéíóúñ¿¡]/);
+    expect(MESSAGES.error.hintDespliegue).toContain("DEMO_WORKSPACE_ID");
+  });
+
+  it("en producción la pista de despliegue no se renderiza", () => {
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    const antes = process.env.NODE_ENV;
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      render(<AppError error={new Error("boom")} reset={vi.fn()} />);
+      const alerta = screen.getByRole("alert");
+      expect(alerta).toHaveTextContent(MESSAGES.error.hint);
+      expect(alerta.textContent).not.toContain("DEMO_WORKSPACE_ID");
+      expect(alerta.textContent).not.toContain("DATABASE_URL");
+    } finally {
+      vi.unstubAllEnvs();
+      expect(process.env.NODE_ENV).toBe(antes);
+      consola.mockRestore();
+    }
+  });
+
+  it("y fuera de producción sí, que es donde mira quien despliega", () => {
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.stubEnv("NODE_ENV", "development");
+      render(<AppError error={new Error("boom")} reset={vi.fn()} />);
+      expect(screen.getByRole("alert")).toHaveTextContent(MESSAGES.error.hintDespliegue);
+    } finally {
+      vi.unstubAllEnvs();
+      consola.mockRestore();
+    }
   });
 });

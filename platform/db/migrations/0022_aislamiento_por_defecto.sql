@@ -14,8 +14,9 @@
 -- (esquema.ts, ahora sobre information_schema y pg_class) exige
 -- aislamiento en TODAS las tablas de public salvo una lista corta de
 -- excepciones con motivo escrito, y aquí se cierra todo lo que esa
--- guardia reporta. Son nueve tablas con política nueva y una rebaja
--- general de privilegios de mc_app.
+-- guardia reporta. Son nueve tablas con política nueva, una rebaja
+-- general de privilegios de mc_app y las diez vistas, que dejaban de
+-- correr con los privilegios de su dueño (sección 8).
 --
 -- Nada de esto se aplica a mc_worker: sigue con BYPASSRLS y con los
 -- GRANT de 0014, que es como los jobs globales cruzan workspaces.
@@ -28,6 +29,7 @@
 --   5 · api_call_log · api_quota_usage   heredan de social_connection
 --   6 · las hijas con clave ajena OPCIONAL, que 0018 aplazó
 --   7 · privilegios mínimos de mc_app (lo que no se puede tapar con RLS)
+--   8 · las vistas dejan de correr con los privilegios de su dueño
 -- =====================================================================
 
 
@@ -186,8 +188,77 @@ CREATE INDEX company_owner_workspace_id_idx ON company (owner_workspace_id);
 ALTER TABLE company ENABLE ROW LEVEL SECURITY;
 ALTER TABLE company FORCE ROW LEVEL SECURITY;
 
--- Lectura: el directorio es de todos, a propósito y por escrito.
-CREATE POLICY company_read ON company FOR SELECT USING (true);
+-- Lectura: ni el directorio entero, ni solo lo mío.
+--
+-- La ronda 1 escribió aquí `USING (true)` con el argumento de que el
+-- directorio de empresas es compartido. La mitad es cierta —una fila de
+-- company sin dueño es catálogo, y dos workspaces trabajan con la misma
+-- marca— pero la consecuencia medida no lo era: desde un workspace
+-- cualquiera se enumeraba la lista de prospectos de una agencia, con su
+-- razón social, que es exactamente el dato que 0020 cerró en `contact`.
+-- «Qué marcas trabaja la competencia» no es un catálogo público.
+--
+-- Y lo contrario —«solo lo mío y lo que tengo en company_link»— tampoco
+-- sirve, y está medido: una campaña cuya empresa no esté vinculada
+-- desaparece de su propia pantalla, porque listCampaigns hace
+-- `JOIN company` y el JOIN interno tira la fila. El inquilino perdería
+-- sus propios datos por una política pensada contra el vecino.
+--
+-- Así que la regla es «la empresa con la que TRABAJO», y trabajar con
+-- una empresa tiene cuatro formas en este esquema:
+--   sin dueño     catálogo compartido: lo llena una migración, un
+--                 enriquecimiento o el worker, y no lo escribió nadie
+--                 en privado
+--   mía           la dio de alta este workspace
+--   vinculada     está en mi company_link, que es LA tabla que 0007
+--                 creó para decir «esta empresa es de este workspace»
+--   con historia  tengo un deal, una campaña, una factura o un reporte
+--                 con ella
+--
+-- Las cuatro tablas de la subconsulta llevan RLS por workspace_id desde
+-- 0010, así que cada EXISTS solo ve MIS filas; el
+-- `workspace_id = current_workspace_id()` explícito es cinturón y
+-- tirantes, y deja la política legible sin ir a buscar la del padre.
+--
+-- Las demás tablas con company_id NO abren la empresa, y eso es
+-- deliberado: `contact` se lee también por fuente pública, así que ver
+-- un contacto no puede implicar ver su empresa —sería volver a abrir lo
+-- que 0020 cerró—, y signal, activity, outbound_touch y
+-- brand_account_snapshot cuelgan siempre de una de las de arriba. (Las
+-- dos de reportes salieron de esa misma prueba: nadie las había
+-- mencionado, y un reporte nombra al cliente igual que una factura.) packages/db/test/rls.test.ts recorre pg_constraint y exige
+-- que cada tabla que apunte a company esté nombrada aquí o declarada
+-- allí con su motivo: si mañana alguien añade una y la une con JOIN a
+-- company, la prueba lo dice en vez de que la fila desaparezca.
+CREATE POLICY company_read ON company FOR SELECT
+  USING (
+    owner_workspace_id IS NULL
+    OR owner_workspace_id = current_workspace_id()
+    OR EXISTS (
+      SELECT 1 FROM company_link l
+      WHERE l.company_id = company.id AND l.workspace_id = current_workspace_id()
+    )
+    OR EXISTS (
+      SELECT 1 FROM deal d
+      WHERE d.company_id = company.id AND d.workspace_id = current_workspace_id()
+    )
+    OR EXISTS (
+      SELECT 1 FROM campaign c
+      WHERE c.company_id = company.id AND c.workspace_id = current_workspace_id()
+    )
+    OR EXISTS (
+      SELECT 1 FROM invoice i
+      WHERE i.company_id = company.id AND i.workspace_id = current_workspace_id()
+    )
+    OR EXISTS (
+      SELECT 1 FROM report r
+      WHERE r.company_id = company.id AND r.workspace_id = current_workspace_id()
+    )
+    OR EXISTS (
+      SELECT 1 FROM report_schedule rs
+      WHERE rs.company_id = company.id AND rs.workspace_id = current_workspace_id()
+    )
+  );
 
 -- Escritura: solo sobre lo propio (USING gobierna UPDATE y DELETE) y
 -- solo dejándolo propio (WITH CHECK gobierna INSERT y cómo queda el
@@ -311,10 +382,14 @@ BEGIN
   END LOOP;
 END $$;
 
--- external_post_score y external_post_snapshot consultan a su padre por
--- fila: el índice por la FK deja de ser opcional.
-CREATE INDEX IF NOT EXISTS external_post_snapshot_post_id_idx
-  ON external_post_snapshot (external_post_id, captured_at DESC);
+-- Las dos hijas de external_post consultan a su padre por fila, así que
+-- su FK tiene que estar indexada: lo está desde 0004, y por eso aquí no
+-- se crea ningún índice. external_post_score tiene external_post_id como
+-- PRIMARY KEY, y external_post_snapshot lo lleva en
+-- external_post_snapshot_external_post_id_captured_at_idx. La ronda 1
+-- añadió aquí un CREATE INDEX IF NOT EXISTS con OTRO nombre y la misma
+-- definición: `IF NOT EXISTS` compara nombres, no definiciones, así que
+-- creaba un duplicado exacto sobre la tabla que más escribe el radar.
 
 
 -- =====================================================================
@@ -409,3 +484,55 @@ REVOKE INSERT, UPDATE, DELETE ON membership FROM mc_app;
 --       política de la sección 3); el UPDATE, para que cada quien
 --       edite SU fila (política de 0021).
 REVOKE DELETE ON app_user FROM mc_app;
+
+
+-- =====================================================================
+-- 8 · Las vistas dejan de correr con los privilegios de su dueño
+-- ---------------------------------------------------------------------
+-- La sección 7 levanta un muro de privilegios, y una vista lo rodea.
+--
+-- En Postgres una vista es SECURITY DEFINER por omisión: lee sus tablas
+-- base con los privilegios de SU DUEÑO, que aquí es mc_migrator, el rol
+-- que corre las migraciones y puede todo. Las diez vistas de `public`
+-- (0007, 0010, 0011) nacieron así —reloptions NULL, comprobado en
+-- pglite y en la Supabase real— y mc_app tiene los cuatro privilegios
+-- sobre todas.
+--
+-- Reproducido: como mc_migrator, `CREATE VIEW v_niche AS SELECT * FROM
+-- niche; GRANT ALL ON v_niche TO mc_app;` y luego, desde withWorkspace
+-- como mc_app, `UPDATE v_niche SET slug = slug` toca las 12 filas de
+-- `niche`, la tabla que 7.1 acaba de dejar de solo lectura. Lo mismo
+-- valía para leer webhook_event, que 7.4 le quita entero.
+--
+-- Hoy ninguna vista apunta a un catálogo revocado, así que no hay fuga
+-- abierta; lo que hay es la MISMA clase que esta migración vino a
+-- cerrar —un objeto que nadie declaró pasa en verde— movida de las
+-- tablas a las vistas. Con security_invoker la vista lee y escribe con
+-- los privilegios y la RLS de quien consulta, así que el muro de la
+-- sección 7 vale también por dentro de una vista.
+--
+-- Va como bucle sobre pg_class y no como lista de diez nombres a
+-- propósito: es la forma de la guardia invertida. Una vista que alguien
+-- añada en una migración posterior sí tendrá que declararse —la guardia
+-- de packages/db/src/esquema.ts la exige con security_invoker o con su
+-- motivo escrito—, pero ninguna de las que ya existen se queda fuera
+-- por no estar en un renglón.
+--
+-- mc_app no pierde nada: ya tiene SELECT sobre todas las tablas base
+-- que las diez leen. Lo único que cambia es de quién son los
+-- privilegios con que se leen.
+-- =====================================================================
+DO $$
+DECLARE
+  v record;
+BEGIN
+  FOR v IN
+    SELECT c.relname
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'v'
+     ORDER BY c.relname
+  LOOP
+    EXECUTE format('ALTER VIEW %I SET (security_invoker = on)', v.relname);
+  END LOOP;
+END $$;
