@@ -14,7 +14,6 @@
  * Regla: ninguna capa inventa moneda, zona ni locale. Los pide aquí,
  * dentro de la transacción que ya sabe su workspace.
  */
-import { eq } from 'drizzle-orm';
 import type { WorkspaceTx } from '../client.ts';
 import { workspace } from '../schema/index.ts';
 
@@ -38,9 +37,18 @@ export interface WorkspaceSettings {
  * La fila del workspace de la transacción actual. Lanza si no existe:
  * un workspace fijado que no está en la base es un error de
  * configuración (un DEMO_WORKSPACE_ID viejo), no una lista vacía.
+ *
+ * No hay WHERE, y eso es la regla del paquete, no un descuido: desde la
+ * migración 0022 `workspace` lleva RLS y la política deja ver UNA fila,
+ * la de current_workspace_id(). Filtrar además en JavaScript con
+ * `eq(workspace.id, tx.workspaceId)` era volver a poner el workspace
+ * como parámetro de la consulta —lo que el contrato prohíbe— y, peor,
+ * daba la impresión de que ESE filtro era el que aislaba: mientras
+ * faltó la política, cualquier otra consulta de la tabla veía los
+ * inquilinos ajenos y esta parecía prueba de que no.
  */
 export async function getWorkspace(tx: WorkspaceTx): Promise<Workspace> {
-  const [row] = await tx.db.select().from(workspace).where(eq(workspace.id, tx.workspaceId)).limit(1);
+  const [row] = await tx.db.select().from(workspace).limit(1);
   if (!row) {
     throw new Error(
       `El workspace ${tx.workspaceId} no existe en esta base. Revisa DEMO_WORKSPACE_ID (platform/.env.example) ` +

@@ -45,6 +45,10 @@ function fullMessage(err: unknown): string {
 }
 
 const isRlsViolation = (err: unknown) => /row-level security/.test(fullMessage(err));
+/** Sin GRANT no hay ni política que evaluar: Postgres corta antes, con otro mensaje. */
+const isPermissionDenied = (err: unknown) => /permission denied|permiso denegado/i.test(fullMessage(err));
+/** Rechazada por cualquiera de los dos candados: la política o el privilegio. */
+const isRechazada = (err: unknown) => isRlsViolation(err) || isPermissionDenied(err);
 const isNotWorkerMember = (err: unknown) => /miembro de mc_worker/.test(fullMessage(err));
 
 /** count(*) de una tabla, con lo que la transacción actual puede ver. */
@@ -369,8 +373,43 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
   test('membership: desde A no se puede colgar a alguien de B', async () => {
     await assert.rejects(
       t.db.withWorkspace(WS_A, (tx) => tx.db.insert(membership).values({ workspaceId: WS_B, userId: USER_A, role: 'admin' })),
-      isRlsViolation,
+      isRechazada,
     );
+  });
+
+  test('membership: B tampoco puede colgarse a CUALQUIERA dentro de B, que era el camino a la PII', async () => {
+    // El hallazgo: membership_ws_isolation (0019) era FOR ALL sin WITH
+    // CHECK propio, así que su USING gobernaba el INSERT. B insertaba
+    // membership(current_workspace_id(), USER_A, 'owner') sin error y
+    // acto seguido app_user_read («comparto workspace con esa persona»)
+    // le abría el correo y el nombre de USER_A. Con 0022, mc_app ya no
+    // tiene INSERT sobre membership: el alta es del worker y del seed.
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.db.insert(membership).values({ workspaceId: CURRENT_WORKSPACE, userId: USER_A, role: 'owner' }),
+      ),
+      isRechazada,
+    );
+    const correos = await t.db.withWorkspace(WS_B, (tx) => tx.db.select({ email: appUser.email }).from(appUser));
+    assert.equal(
+      correos.some((r) => r.email === 'a@ejemplo.com'),
+      false,
+      'B leyó el correo de una persona de A tras colgársela a su propio workspace',
+    );
+  });
+
+  test('membership: desde ningún workspace se edita ni se borra una membresía', async () => {
+    for (const ws of [WS_A, WS_B]) {
+      await assert.rejects(
+        t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ role: 'owner' }).where(eq(membership.userId, USER_A))),
+        isRechazada,
+      );
+      await assert.rejects(
+        t.db.withWorkspace(ws, (tx) => tx.db.delete(membership).where(eq(membership.userId, USER_A))),
+        isRechazada,
+      );
+    }
+    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')).catch(() => 2), 2);
   });
 
   test('membership: mc_worker las ve todas (es como CIM-3 leerá "a qué workspaces pertenezco")', async (ctx) => {
@@ -666,5 +705,336 @@ describe('una consulta capturada dentro de la transacción no corre fuera de ell
     await assert.rejects(async () => {
       await q;
     }, (err: unknown) => /Transacción cerrada/.test(fullMessage(err)));
+  });
+});
+
+/**
+ * LA RONDA DE ENDURECIMIENTO (migración 0022).
+ *
+ * Cada prueba de aquí reproduce un camino que ANTES funcionaba, y está
+ * escrita desde el ataque: leer, escribir y borrar desde el workspace
+ * equivocado. Las cinco rondas de la fase 1 taparon los casos que les
+ * nombraron; lo que cierra esta ronda es la CLASE, y esto es lo que lo
+ * demuestra sobre la base de verdad.
+ */
+describe('endurecimiento (0022): workspace, app_user, company, catálogos y la bitácora de llamadas', () => {
+  const WS_C = '0000000e-0000-4000-8000-000000000001';
+  let creatorA = '';
+  let creatorB = '';
+  let conexionA = '';
+  let conexionB = '';
+  let empresaDeA = '';
+
+  before(async () => {
+    // Un tercer workspace que nadie de estas pruebas fija nunca: sirve
+    // de testigo de que lo ajeno sigue intacto al final.
+    await t.admin(`INSERT INTO workspace (id, slug, name) VALUES ('${WS_C}', 'workspace-c', 'Workspace C')`);
+    const creador = async (ws: string) =>
+      t.db.withWorkspace(ws, async (tx) => {
+        const { rows } = await tx.query<{ id: string }>(
+          "INSERT INTO creator_profile (workspace_id, display_name) VALUES (current_workspace_id(), 'Creadora') RETURNING id",
+        );
+        const creatorId = rows[0]!.id;
+        const conn = await tx.query<{ id: string }>(
+          `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes)
+           VALUES (current_workspace_id(), $1, 'tiktok', $2, $2, 'vault://demo', '{video.list}') RETURNING id`,
+          [creatorId, `cuenta-${ws.slice(0, 8)}`],
+        );
+        return { creatorId, connectionId: conn.rows[0]!.id };
+      });
+    const a = await creador(WS_A);
+    const b = await creador(WS_B);
+    creatorA = a.creatorId;
+    creatorB = b.creatorId;
+    conexionA = a.connectionId;
+    conexionB = b.connectionId;
+    assert.ok(creatorA && creatorB);
+  }, { timeout: 120_000 });
+
+  // -------------------------------------------------------------------
+  // workspace: el hallazgo bloqueante
+  // -------------------------------------------------------------------
+  describe('workspace: la raíz del inquilino ya no se lee, ni se renombra, ni se borra desde fuera', () => {
+    test('cada transacción ve UN workspace: el suyo. Sin workspace fijado, ninguno', async () => {
+      const visibles = (ws: string) =>
+        t.db.withWorkspace(ws, (tx) => tx.query<{ id: string }>('SELECT id::text AS id FROM workspace ORDER BY id'));
+      assert.deepEqual((await visibles(WS_A)).rows.map((r) => r.id), [WS_A], 'se veía el directorio entero de inquilinos');
+      assert.deepEqual((await visibles(WS_B)).rows.map((r) => r.id), [WS_B]);
+      assert.equal(await t.db.withCatalogs((tx) => countRows(tx, 'workspace')), 0, 'sin workspace se enumeraban todos');
+    });
+
+    test('desde A no se renombra el workspace de B', async () => {
+      const tocados = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ id: string }>('UPDATE workspace SET name = $2 WHERE id = $1 RETURNING id::text AS id', [WS_B, 'Secuestrado']),
+      );
+      assert.deepEqual(tocados.rows, [], 'A renombraba el workspace de B');
+      const [suyo] = (await t.db.withWorkspace(WS_B, (tx) => tx.query<{ name: string }>('SELECT name FROM workspace'))).rows;
+      assert.equal(suyo?.name, 'Workspace B');
+    });
+
+    test('nadie BORRA un workspace desde la aplicación: ni el ajeno ni el propio', async () => {
+      // Es el peor camino de la fase 1: el DELETE cascadeaba a todos los
+      // datos del inquilino. No hay política de DELETE Y no hay
+      // privilegio, así que Postgres corta antes de evaluar nada.
+      for (const [desde, objetivo] of [[WS_A, WS_B], [WS_A, WS_A], [WS_B, WS_C]] as const) {
+        await assert.rejects(
+          t.db.withWorkspace(desde, (tx) => tx.query('DELETE FROM workspace WHERE id = $1', [objetivo])),
+          isPermissionDenied,
+          `desde ${desde} se borró el workspace ${objetivo}`,
+        );
+      }
+      // Y siguen ahí: cada uno se lo confirma a sí mismo, que es lo
+      // único que la política deja ver.
+      for (const ws of [WS_A, WS_B]) {
+        assert.equal(await t.db.withWorkspace(ws, (tx) => countRows(tx, 'workspace')), 1, `se borró ${ws}`);
+      }
+    });
+
+    test('A sí renombra el suyo, y no puede cambiarle el id a otro', async () => {
+      await t.db.withWorkspace(WS_A, (tx) => tx.query("UPDATE workspace SET name = 'Workspace A (renombrado)'"));
+      const [suyo] = (await t.db.withWorkspace(WS_A, (tx) => tx.query<{ name: string }>('SELECT name FROM workspace'))).rows;
+      assert.equal(suyo?.name, 'Workspace A (renombrado)');
+      await assert.rejects(
+        t.db.withWorkspace(WS_A, (tx) => tx.query('UPDATE workspace SET id = $1', [WS_C])),
+        (err: unknown) => isRechazada(err) || /viola/i.test(fullMessage(err)),
+        'A se llevaba su fila al id de otro inquilino',
+      );
+      await t.db.withWorkspace(WS_A, (tx) => tx.query("UPDATE workspace SET name = 'Workspace A'"));
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // app_user: la primitiva de apropiación de cuenta
+  // -------------------------------------------------------------------
+  describe('app_user: el alta deja de ser WITH CHECK (true)', () => {
+    test('desde un workspace no se crea una persona con el correo que se quiera', async () => {
+      // Con el enlace mágico de CIM-3, que casa por correo, una fila
+      // precreada con el correo de la víctima es una apropiación de
+      // cuenta: quien la creó controla el id.
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) =>
+          tx.query("INSERT INTO app_user (email, name) VALUES ('victima@ejemplo.com', 'Víctima')"),
+        ),
+        isRechazada,
+      );
+      // El alta sigue existiendo, pero solo por el camino del registro:
+      // SIN workspace fijado, que es el mismo patrón que 0020 usa para
+      // los catálogos. Ese camino la web no lo tiene —withCatalogs no
+      // sale del barril de @mc/db— y con CIM-3 lo acotará además
+      // app.user_id.
+      await t.db.withCatalogs((tx) =>
+        tx.query("INSERT INTO app_user (id, email, name) VALUES ($1, 'registro@ejemplo.com', 'Registro')", [WS_C]),
+      );
+      // Y lo que se acaba de crear tampoco se ve desde un workspace que
+      // no comparte membresía con esa persona.
+      const correos = await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query<{ email: string }>("SELECT email FROM app_user WHERE email = 'registro@ejemplo.com'"),
+      );
+      assert.deepEqual(correos.rows, []);
+    });
+
+    test('tampoco se borra a una persona desde una pantalla', async () => {
+      await assert.rejects(
+        t.db.withWorkspace(WS_A, (tx) => tx.query('DELETE FROM app_user')),
+        isPermissionDenied,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // company: el directorio se lee, pero no lo escribe cualquiera
+  // -------------------------------------------------------------------
+  describe('company: se lee como catálogo, se escribe con dueño', () => {
+    test('A da de alta una empresa y la BASE le pone el dueño', async () => {
+      const { rows } = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ id: string; owner: string | null }>(
+          "INSERT INTO company (name, legal_name) VALUES ('Café Alma S.A.S.', 'Café Alma S.A.S.') RETURNING id::text AS id, owner_workspace_id::text AS owner",
+        ),
+      );
+      empresaDeA = rows[0]!.id;
+      assert.equal(rows[0]?.owner, WS_A, 'el dueño lo pone la base (DEFAULT current_workspace_id())');
+    });
+
+    test('B la LEE —dos workspaces pueden trabajar con la misma marca— pero no la toca', async () => {
+      const visto = await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+      );
+      assert.equal(visto.rows[0]?.name, 'Café Alma S.A.S.', 'el directorio de empresas es compartido a propósito');
+
+      const renombrada = await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query<{ id: string }>('UPDATE company SET name = $2 WHERE id = $1 RETURNING id::text AS id', [empresaDeA, 'Mía ahora']),
+      );
+      assert.deepEqual(renombrada.rows, [], 'B renombraba una empresa que dio de alta A');
+
+      const borrada = await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query<{ id: string }>('DELETE FROM company WHERE id = $1 RETURNING id::text AS id', [empresaDeA]),
+      );
+      assert.deepEqual(borrada.rows, [], 'B borraba la empresa de A, y con ella sus contactos por ON DELETE CASCADE');
+
+      const intacta = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [empresaDeA]),
+      );
+      assert.equal(intacta.rows[0]?.name, 'Café Alma S.A.S.');
+    });
+
+    test('B no crea una empresa a nombre de A, ni una del catálogo compartido', async () => {
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) =>
+          tx.query("INSERT INTO company (name, owner_workspace_id) VALUES ('Falsa', $1)", [WS_A]),
+        ),
+        isRlsViolation,
+      );
+      // Una fila sin dueño es del catálogo compartido: la escribe una
+      // migración, un seed o el worker, nunca una transacción de la web.
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) => tx.query("INSERT INTO company (name, owner_workspace_id) VALUES ('Global', NULL)")),
+        isRlsViolation,
+      );
+    });
+
+    test('las empresas del catálogo compartido no las edita ni las borra nadie desde un workspace', async () => {
+      // COMPANY se creó con t.admin (sin workspace fijado): owner NULL.
+      for (const ws of [WS_A, WS_B]) {
+        const tocadas = await t.db.withWorkspace(ws, (tx) =>
+          tx.query<{ id: string }>('UPDATE company SET name = $2 WHERE id = $1 RETURNING id::text AS id', [COMPANY, 'Pisada']),
+        );
+        assert.deepEqual(tocadas.rows, []);
+        const borradas = await t.db.withWorkspace(ws, (tx) =>
+          tx.query<{ id: string }>('DELETE FROM company WHERE id = $1 RETURNING id::text AS id', [COMPANY]),
+        );
+        assert.deepEqual(borradas.rows, []);
+      }
+      const sigue = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ name: string }>('SELECT name FROM company WHERE id = $1', [COMPANY]),
+      );
+      assert.equal(sigue.rows[0]?.name, 'Café Alma');
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // los catálogos globales: sin RLS, pero tampoco con escritura
+  // -------------------------------------------------------------------
+  describe('catálogos globales: la aplicación los lee y no los escribe', () => {
+    const escrituras: Array<[tabla: string, sql: string]> = [
+      ['platform', "INSERT INTO platform (id, name) VALUES ('mastodon', 'Mastodon')"],
+      ['platform', "UPDATE platform SET limits = '{}'::jsonb WHERE id = 'tiktok'"],
+      ['platform', "DELETE FROM platform WHERE id = 'tiktok'"],
+      ['niche', "INSERT INTO niche (slug, name_es) VALUES ('intruso', 'Intruso')"],
+      ['niche', "UPDATE niche SET name_es = 'Pisado' WHERE slug = 'cocina'"],
+      ['niche_cpm_benchmark', "UPDATE niche_cpm_benchmark SET cpm_high = 1"],
+      ['signal_source', "UPDATE signal_source SET enabled = false"],
+      ['job_definition', "UPDATE job_definition SET enabled = false"],
+      ['preflight_rule', "DELETE FROM preflight_rule"],
+      ['benchmark', "UPDATE benchmark SET value_num = 0"],
+      ['blocked_claim', "DELETE FROM blocked_claim"],
+      ['metric_requirement', "UPDATE metric_requirement SET message_es = 'x'"],
+      ['trend_signal', "INSERT INTO trend_signal (platform_id, kind, key, label, computed_at, source) VALUES ('tiktok', 'audio', 'k', 'l', now(), 'demo')"],
+      ['external_account_baseline', "DELETE FROM external_account_baseline"],
+    ];
+    for (const [tabla, sql] of escrituras) {
+      test(`${tabla}: «${sql.split(' ')[0]}» desde un workspace no pasa del privilegio`, async () => {
+        // Antes los cuatro privilegios estaban concedidos sobre las 89
+        // tablas: una transacción cualquiera de la web cambiaba los
+        // límites de TikTok o apagaba un job para TODOS los workspaces.
+        await assert.rejects(t.db.withWorkspace(WS_A, (tx) => tx.query(sql)), isPermissionDenied);
+      });
+    }
+
+    test('pero leerlos sigue funcionando, que es para lo que están', async () => {
+      const n = await t.db.withCatalogs((tx) => countRows(tx, 'platform'));
+      assert.ok(n >= 4, `solo ${n} plataformas: los catálogos dejaron de leerse`);
+    });
+
+    test('webhook_event no se lee siquiera: es del worker', async () => {
+      await assert.rejects(t.db.withWorkspace(WS_A, (tx) => countRows(tx, 'webhook_event')), isPermissionDenied);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // api_call_log y api_quota_usage
+  // -------------------------------------------------------------------
+  describe('api_call_log y api_quota_usage heredan el aislamiento de social_connection', () => {
+    before(async () => {
+      // Una llamada por workspace, más una de la aplicación (sin
+      // conexión), que es la que el OAuth fallido registra.
+      const registra = (ws: string, conn: string | null, endpoint: string) =>
+        t.db.withWorkspace(ws, (tx) =>
+          tx.query(
+            `INSERT INTO api_call_log (connection_id, platform_id, endpoint, ok, error_message, request_units)
+             VALUES ($1, 'tiktok', $2, false, $3, 1)`,
+            [conn, endpoint, `token revocado para ${endpoint}`],
+          ),
+        );
+      await registra(WS_A, conexionA, '/v2/video/list/a');
+      await registra(WS_B, conexionB, '/v2/video/list/b');
+      await registra(WS_A, null, '/v2/oauth/token');
+      await t.admin(
+        `INSERT INTO api_quota_usage (platform_id, connection_id, day, units_used, calls)
+         VALUES ('tiktok', '${conexionA}', CURRENT_DATE, 10, 1),
+                ('tiktok', '${conexionB}', CURRENT_DATE, 20, 1),
+                ('youtube', NULL, CURRENT_DATE, 30, 1)`,
+      );
+    }, { timeout: 120_000 });
+
+    test('B no ve los endpoints ni los mensajes de error de las llamadas de A', async () => {
+      const endpoints = (ws: string) =>
+        t.db
+          .withWorkspace(ws, (tx) => tx.query<{ endpoint: string }>('SELECT endpoint FROM api_call_log ORDER BY endpoint'))
+          .then((r) => r.rows.map((x) => x.endpoint));
+      assert.deepEqual(await endpoints(WS_A), ['/v2/video/list/a'], 'la fila sin conexión es de la app, no de un inquilino');
+      assert.deepEqual(await endpoints(WS_B), ['/v2/video/list/b'], 'desde B se leían las llamadas y los errores de A');
+      assert.equal(await t.db.withCatalogs((tx) => countRows(tx, 'api_call_log')), 0);
+    });
+
+    test('B no puede colgar una llamada de una conexión de A, y sí registrar las suyas y las de la app', async () => {
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) =>
+          tx.query(
+            "INSERT INTO api_call_log (connection_id, platform_id, endpoint, ok, request_units) VALUES ($1, 'tiktok', '/intruso', true, 1)",
+            [conexionA],
+          ),
+        ),
+        isRlsViolation,
+      );
+      // El camino de OAuth que falla: todavía no hay conexión.
+      await t.db.withWorkspace(WS_B, (tx) =>
+        tx.query("INSERT INTO api_call_log (connection_id, platform_id, endpoint, ok, request_units) VALUES (NULL, 'tiktok', '/v2/oauth/token', false, 1)"),
+      );
+    });
+
+    test('la bitácora no se corrige ni se borra desde la aplicación', async () => {
+      await assert.rejects(
+        t.db.withWorkspace(WS_A, (tx) => tx.query("UPDATE api_call_log SET error_message = NULL")),
+        isPermissionDenied,
+      );
+      await assert.rejects(t.db.withWorkspace(WS_A, (tx) => tx.query('DELETE FROM api_call_log')), isPermissionDenied);
+    });
+
+    test('la cuota: cada uno la suya, más la global de la app, y ninguno la escribe', async () => {
+      const cuotas = (ws: string) =>
+        t.db
+          .withWorkspace(ws, (tx) =>
+            tx.query<{ units: string }>('SELECT units_used::text AS units FROM api_quota_usage ORDER BY units_used'),
+          )
+          .then((r) => r.rows.map((x) => x.units));
+      assert.deepEqual(await cuotas(WS_A), ['10', '30'], 'la de A y la global de la app; la de B no');
+      assert.deepEqual(await cuotas(WS_B), ['20', '30']);
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) => tx.query('UPDATE api_quota_usage SET units_used = 0')),
+        isPermissionDenied,
+      );
+      await assert.rejects(
+        t.db.withWorkspace(WS_B, (tx) =>
+          tx.query("INSERT INTO api_quota_usage (platform_id, day, units_used, calls) VALUES ('tiktok', CURRENT_DATE, 1, 1)"),
+        ),
+        isPermissionDenied,
+      );
+    });
+
+    test('mc_worker las sigue viendo todas: es como se mide la cuota global', async (ctx) => {
+      if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+      assert.ok((await t.db.asWorker((tx) => countRows(tx, 'api_call_log'))) >= 4);
+      assert.equal(await t.db.asWorker((tx) => countRows(tx, 'api_quota_usage')), 3);
+    });
   });
 });

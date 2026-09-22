@@ -4,10 +4,14 @@
  * tipo, nulabilidad y default de cada tabla; nombre y tipo de cada
  * vista; y que ninguna columna de la base falte en el esquema.
  *
- * Y el aislamiento: qué tablas son de tenant (directamente, por
- * workspace_id, o por ser hijas de una que lo tiene) y que todas tengan
- * RLS activo. La lista es explícita a propósito: una tabla nueva sin
- * aislamiento no pasa en verde por no tener workspace_id.
+ * Y el aislamiento, con la guardia INVERTIDA (src/esquema.ts): no se
+ * comprueba una lista de tablas que alguien escribió a mano, se le
+ * pregunta a la base cuáles hay y se exige aislamiento en TODAS, salvo
+ * las que EXCEPCIONES_SIN_AISLAMIENTO declara con su motivo. Una tabla
+ * nueva sin política y sin excepción declarada rompe esta prueba: es la
+ * única forma de que no vuelva a pasar lo de la fase 1, donde cada
+ * ronda tapaba los casos que le nombraban y la siguiente encontraba los
+ * que la lista no mencionaba (workspace incluida, que se podía BORRAR).
  *
  * Si esta prueba falla tras una migración nueva, se cura src/schema/
  * (pnpm --filter @mc/db introspect ayuda). Nunca al revés.
@@ -17,7 +21,7 @@ import assert from 'node:assert/strict';
 import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
 import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
 import {
-  CATALOGOS_CON_WORKSPACE, TABLAS_CON_RLS, TABLAS_DE_TENANT, TABLAS_HIJAS, TABLAS_PII,
+  APP_ROLE, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO, explicarEsquema, PRIVILEGIOS, PRIVILEGIOS_DE_LA_APP,
 } from '../src/esquema.ts';
 import * as schema from '../src/schema/index.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
@@ -38,34 +42,11 @@ const VISTAS_MVP = [
 ];
 
 /**
- * Quién tiene que estar aislado lo declara el paquete en
- * src/esquema.ts, no esta prueba: la misma lista la usa
- * assertSchemaUpToDate en tiempo de ejecución, para que una base
- * atrasada lo diga en vez de servir las filas de todos los workspaces.
- * Aquí solo se comprueba contra la base.
- *
- *   TENANT_MVP        workspace_id NOT NULL (0010, 0011, 0017, 0019)
- *   HIJAS_DE_TENANT   sin workspace_id, heredan del padre por EXISTS (0018)
- *   PII_CON_RLS       sin workspace_id, política propia (0019, 0020)
- *   CATALOGOS_…       workspace_id NULL = fila global (0020)
+ * Aquí NO hay lista de tablas que deban estar aisladas, y eso es lo que
+ * cambió: la única lista que queda es la de EXCEPCIONES, en
+ * src/esquema.ts, y la usa también assertSchemaUpToDate en tiempo de
+ * ejecución contra Supabase. Lo demás lo trae la base.
  */
-const TENANT_MVP = TABLAS_DE_TENANT;
-const HIJAS_DE_TENANT = TABLAS_HIJAS;
-const PII_CON_RLS = TABLAS_PII;
-
-/**
- * Hijas con la FK al padre OPCIONAL: tienen filas sin padre por diseño
- * (una cuota global de plataforma, un snapshot de marca previo a la
- * campaña) y la política se decide por módulo, no aquí. Cada corrida
- * las deja a la vista como pendientes.
- */
-const HIJAS_CON_FK_OPCIONAL: Array<[child: string, parent: string, owner: string]> = [
-  ['brand_account_snapshot', 'campaign', 'CAM'],
-  ['trait_lift', 'creator_profile', 'MET'],
-  ['external_post', 'video_analysis', 'MED'],
-  ['api_call_log', 'social_connection', 'CON'],
-  ['api_quota_usage', 'social_connection', 'CON'],
-];
 
 interface ColumnRow extends Record<string, unknown> {
   table_name: string;
@@ -82,11 +63,19 @@ interface RelRow extends Record<string, unknown> {
   name: string;
   kind: 'table' | 'view';
   rls: boolean;
+  /** Sin FORCE, el dueño de la tabla (mc_migrator: migraciones y seeds) se salta la política. */
+  forzada: boolean;
+  politicas: number;
 }
 interface FkRow extends Record<string, unknown> {
   child: string;
   fk: string;
   parent: string;
+  obligatoria: boolean;
+}
+interface GrantRow extends Record<string, unknown> {
+  relname: string;
+  privilegio: string;
 }
 
 const ARRAY_UDT: Record<string, string> = { _text: 'text[]', _uuid: 'uuid[]', _int4: 'integer[]' };
@@ -110,8 +99,10 @@ function drizzleType(col: PgColumn): string {
 let t: TestDb;
 const columns = new Map<string, Map<string, ColumnRow>>();
 const relations = new Map<string, RelRow>();
-/** Tablas sin RLS con una FK NOT NULL hacia una tabla con RLS: hijas que se quedaron sin aislar. */
+/** Tablas sin RLS con una FK hacia una tabla con RLS: hijas que se quedaron sin aislar. */
 let childrenWithoutRls: FkRow[] = [];
+/** Lo que mc_app puede hacer, tabla por tabla, leído de pg_class.relacl. */
+const privilegiosDeLaApp = new Map<string, Set<string>>();
 
 before(async () => {
   t = await openTestDb({ seeds: false });
@@ -129,24 +120,50 @@ before(async () => {
     tx.query<RelRow>(`
       SELECT c.relname AS name,
              CASE c.relkind WHEN 'v' THEN 'view' ELSE 'table' END AS kind,
-             c.relrowsecurity AS rls
+             c.relrowsecurity AS rls,
+             c.relforcerowsecurity AS forzada,
+             (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v')`),
   );
   for (const r of rels.rows) relations.set(r.name, r);
   const fks = await t.db.withCatalogs((tx) =>
     tx.query<FkRow>(`
-      SELECT c.relname AS child, a.attname AS fk, p.relname AS parent
+      SELECT c.relname AS child, a.attname AS fk, p.relname AS parent, a.attnotnull AS obligatoria
       FROM pg_constraint k
       JOIN pg_class c ON c.oid = k.conrelid
       JOIN pg_class p ON p.oid = k.confrelid
       JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.conkey[1]
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND k.contype = 'f'
-        AND NOT c.relrowsecurity AND p.relrowsecurity AND a.attnotnull
+        AND NOT c.relrowsecurity AND p.relrowsecurity
       ORDER BY 1, 2`),
   );
+  // Sin el filtro por a.attnotnull que tenía antes: una FK OPCIONAL
+  // hacia una tabla aislada deja el mismo agujero (api_call_log y
+  // api_quota_usage colgaban de social_connection así, y desde B se
+  // leían los endpoints y los errores de A). La rama «fk IS NULL» es
+  // parte de la política, no una excusa para no tenerla.
   childrenWithoutRls = fks.rows;
+  const grants = await t.db.withCatalogs((tx) =>
+    tx.query<GrantRow>(
+      `SELECT c.relname AS relname, a.privilege_type AS privilegio
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL aclexplode(c.relacl) a
+         JOIN pg_roles r ON r.oid = a.grantee
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v') AND r.rolname = $1`,
+      [APP_ROLE],
+    ),
+  );
+  for (const g of grants.rows) {
+    let s = privilegiosDeLaApp.get(g.relname);
+    if (!s) {
+      s = new Set();
+      privilegiosDeLaApp.set(g.relname, s);
+    }
+    s.add(g.privilegio);
+  }
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -207,101 +224,138 @@ describe('el esquema Drizzle coincide con db/migrations', () => {
   }
 });
 
+
+/**
+ * LA GUARDIA INVERTIDA.
+ *
+ * Ninguna de estas pruebas enumera las tablas que deberían estar
+ * aisladas: las trae de la base. Lo único escrito a mano es la lista de
+ * EXCEPCIONES, en src/esquema.ts, y cada entrada lleva su motivo. Una
+ * tabla nueva sin política y sin excepción rompe la primera prueba; una
+ * excepción que ya no corresponde rompe la segunda; un GRANT de más
+ * rompe la tercera.
+ */
 describe('aislamiento por workspace en la base', () => {
-  test('las tablas de tenant del MVP tienen RLS activo', () => {
-    for (const name of TENANT_MVP) {
-      const ws = columns.get(name)?.get('workspace_id');
-      assert.ok(ws, `${name} no existe o no tiene workspace_id`);
-      // job_run admite workspace_id NULL (jobs globales): RLS oculta esas
-      // filas a mc_app y solo el worker (BYPASSRLS) las ve. Es lo buscado.
-      assert.equal(relations.get(name)?.rls, true, `${name} es de tenant pero no tiene RLS`);
+  /** Aislada = ENABLE + FORCE + al menos una política. Las tres cosas. */
+  const aislada = (name: string) => {
+    const r = relations.get(name);
+    return r?.rls === true && r.forzada === true && r.politicas > 0;
+  };
+  const tablas = () => [...relations.values()].filter((r) => r.kind === 'table').map((r) => r.name).sort();
+
+  test('TODA tabla de public está aislada, o declarada como excepción con su motivo', () => {
+    // Esta es la prueba que la fase 1 no tenía. La anterior preguntaba
+    // «¿estas 53 tablas tienen RLS?» y por eso no vio `workspace` —la
+    // raíz del inquilino, cuya clave se llama `id` y no workspace_id—,
+    // ni los catálogos, ni api_call_log. Aquí la lista la pone la base.
+    const sinAislar = tablas().filter((n) => !aislada(n) && !(n in EXCEPCIONES_SIN_AISLAMIENTO));
+    assert.deepEqual(
+      sinAislar,
+      [],
+      `tablas sin RLS, sin FORCE o sin política, y sin excepción declarada: ${sinAislar.join(', ')}. ` +
+        'O les pones política en una migración nueva, o declaras por qué son globales en EXCEPCIONES_SIN_AISLAMIENTO.',
+    );
+  });
+
+  test('la lista de excepciones no se pudre: cada una existe y sigue sin política', () => {
+    const existen = new Set(tablas());
+    const sobran = Object.keys(EXCEPCIONES_SIN_AISLAMIENTO).filter((n) => !existen.has(n) || aislada(n));
+    assert.deepEqual(sobran, [], `excepciones que ya no corresponden: ${sobran.join(', ')}`);
+    for (const [tabla, motivo] of Object.entries(EXCEPCIONES_SIN_AISLAMIENTO)) {
+      assert.ok(motivo.length > 20, `la excepción de ${tabla} no explica nada: "${motivo}"`);
     }
   });
 
-  test('las hijas de una tabla de tenant heredan su RLS (0018)', () => {
-    for (const [child, parent] of HIJAS_DE_TENANT) {
-      assert.equal(relations.get(parent)?.rls, true, `${parent} (padre de ${child}) no tiene RLS`);
-      assert.equal(relations.get(child)?.rls, true, `${child} es hija de ${parent} pero no tiene RLS`);
-      assert.equal(columns.get(child)?.has('workspace_id'), false, `${child} tiene workspace_id: va en TENANT_MVP, no aquí`);
-    }
+  test('workspace, la raíz del inquilino, está aislada y no se puede BORRAR desde la app', () => {
+    // El hallazgo bloqueante de la fase 1: mc_app tenía los cuatro
+    // privilegios sobre workspace y no había política, así que cualquier
+    // transacción de la aplicación leía, renombraba y borraba los
+    // workspaces ajenos, y el DELETE cascadeaba a todos sus datos.
+    assert.ok(aislada('workspace'), 'workspace sin RLS: se leen, renombran y borran los inquilinos ajenos');
+    assert.equal(columns.get('workspace')?.has('workspace_id'), false, 'su clave de inquilino es id, no workspace_id');
+    assert.equal(privilegiosDeLaApp.get('workspace')?.has('DELETE'), false, 'mc_app puede borrar inquilinos');
   });
 
-  test('toda tabla con workspace_id obligatorio tiene RLS, sin excepciones', () => {
-    // Desde 0019 no queda ninguna: membership era la última, y su
-    // aplazamiento a CIM-3 no compraba nada porque nadie la leía.
-    for (const [name, cols] of columns) {
-      if (relations.get(name)?.kind !== 'table') continue;
-      const ws = cols.get('workspace_id');
-      if (!ws || ws.is_nullable !== 'NO') continue;
-      assert.equal(relations.get(name)?.rls, true, `${name} tiene workspace_id NOT NULL pero no RLS`);
+  test(`${APP_ROLE} no tiene ni un privilegio de más sobre lo que el paquete declara de solo lectura`, () => {
+    // RLS no protege una tabla sin política: la protege el GRANT. Los
+    // revisores midieron 99 relaciones × 4 privilegios contra la
+    // Supabase real y salieron los cuatro en todas, catálogos incluidos.
+    const deMas: string[] = [];
+    for (const [tabla, { permite }] of Object.entries(PRIVILEGIOS_DE_LA_APP)) {
+      const tiene = privilegiosDeLaApp.get(tabla);
+      if (!tiene) continue;
+      const sobran = PRIVILEGIOS.filter((p) => tiene.has(p) && !permite.includes(p));
+      if (sobran.length) deMas.push(`${tabla}: ${sobran.join(', ')}`);
     }
+    assert.deepEqual(deMas, [], `privilegios que la migración 0022 revocó y alguien devolvió: ${deMas.join(' · ')}`);
   });
 
-  test('ninguna tabla sin RLS apunta con una FK obligatoria a una tabla con RLS', () => {
-    // Es la regla que 0018 cerró y que evita el hueco de quote_item de
-    // la ronda 1: una hija nueva sin política aparece aquí con su padre.
-    const gaps = childrenWithoutRls.map((r) => `${r.child}.${r.fk} → ${r.parent}`);
+  test('ninguna tabla sin RLS apunta con una clave ajena a una tabla con RLS, ni siquiera opcional', () => {
+    // 0018 cerró las hijas con la FK NOT NULL y dejó las opcionales «a
+    // decisión del módulo»: así se quedaron abiertas api_call_log,
+    // api_quota_usage, brand_account_snapshot, trait_lift y
+    // external_post. Que la columna admita NULL es una rama de la
+    // política, no una excusa para no tenerla.
+    const gaps = childrenWithoutRls
+      .filter((r) => !(r.child in EXCEPCIONES_SIN_AISLAMIENTO))
+      .map((r) => `${r.child}.${r.fk}${r.obligatoria ? '' : '?'} → ${r.parent}`);
     assert.deepEqual(gaps, [], `hijas de una tabla de tenant sin RLS: ${gaps.join(', ')}`);
   });
 
-  test('los catálogos con workspace_id opcional también llevan RLS desde 0020', () => {
-    // Antes NO la llevaban «a propósito», y el filtro por workspace lo
-    // hacía JavaScript con el id como parámetro suelto: A creaba la
-    // etapa «Cierre con Café Alma» y B la leía entera; B insertaba
-    // feature_flag('outbound_send', workspace_id = A, enabled = true) y
-    // le encendía el envío de correo a otro workspace. El caso que las
-    // justificaba —leerlas sin workspace fijado— lo resuelve la propia
-    // política: sin workspace, current_workspace_id() es NULL y quedan
-    // las globales.
-    for (const name of CATALOGOS_CON_WORKSPACE) {
-      const ws = columns.get(name)?.get('workspace_id');
-      assert.equal(ws?.is_nullable, 'YES', `${name}.workspace_id debería admitir NULL (fila global)`);
-      assert.equal(relations.get(name)?.rls, true, `${name} tiene workspace_id y tiene que llevar RLS (0020)`);
+  test('toda tabla con workspace_id, obligatorio u opcional, está aislada', () => {
+    // La regla vieja solo miraba workspace_id NOT NULL, y por ahí se
+    // colaron pipeline_stage y feature_flag (workspace_id NULL = fila
+    // global) hasta 0020.
+    for (const [name, cols] of columns) {
+      if (relations.get(name)?.kind !== 'table') continue;
+      if (!cols.has('workspace_id')) continue;
+      assert.ok(aislada(name), `${name} tiene workspace_id y no está aislada`);
     }
   });
 
-  test('membership lleva RLS desde 0019, y la función current_user_id() existe para CIM-3', async () => {
-    assert.equal(columns.get('membership')?.get('workspace_id')?.is_nullable, 'NO');
-    assert.equal(relations.get('membership')?.rls, true);
-    // Devuelve NULL mientras nadie fije app.user_id: la rama por usuario
-    // de la política todavía no existe, y eso es lo que CIM-3 enciende.
+  test('las tres piezas del aislamiento, no solo la primera: ENABLE, FORCE y política', () => {
+    const sinForce = tablas().filter((n) => relations.get(n)?.rls && !relations.get(n)?.forzada);
+    assert.deepEqual(sinForce, [], `con RLS pero sin FORCE (mc_migrator se la salta): ${sinForce.join(', ')}`);
+    const sinPolitica = tablas().filter((n) => relations.get(n)?.rls && relations.get(n)?.politicas === 0);
+    assert.deepEqual(sinPolitica, [], `con RLS y sin ninguna política (niega en vez de aislar): ${sinPolitica.join(', ')}`);
+  });
+
+  test('contact y app_user llevan RLS aunque no tengan workspace_id (PII)', () => {
+    for (const name of ['contact', 'app_user']) {
+      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id`);
+      assert.ok(aislada(name), `${name} guarda datos personales y tiene que llevar RLS (0019/0020)`);
+    }
+  });
+
+  test('contact y company se aíslan por owner_workspace_id, y el dueño lo pone la base', () => {
+    // company se describía como «catálogo global sin PII» y por eso se
+    // quedó sin RLS: pero el CRM la escribe, y desde B se renombraba y
+    // se BORRABA una empresa que dio de alta A (y borrarla arrastra sus
+    // contactos por ON DELETE CASCADE). Desde 0022 lleva el mismo dueño
+    // explícito que contact desde 0020.
+    for (const name of ['contact', 'company']) {
+      const owner = columns.get(name)?.get('owner_workspace_id');
+      assert.ok(owner, `${name}.owner_workspace_id no existe`);
+      assert.equal(owner.data_type, 'uuid');
+      assert.equal(owner.column_default, 'current_workspace_id()', 'el dueño lo pone la base, no la pantalla');
+    }
+  });
+
+  test('current_user_id() existe y devuelve NULL hasta que CIM-3 fije app.user_id', async () => {
     const { rows } = await t.db.withCatalogs((tx) =>
       tx.query<{ uid: string | null }>('SELECT current_user_id()::text AS uid'),
     );
     assert.equal(rows[0]?.uid, null);
   });
 
-  test('contact y app_user llevan RLS aunque no tengan workspace_id (PII)', () => {
-    for (const name of PII_CON_RLS) {
-      assert.equal(columns.get(name)?.has('workspace_id'), false, `${name} ya tiene workspace_id: va en TENANT_MVP`);
-      assert.equal(relations.get(name)?.rls, true, `${name} guarda datos personales y tiene que llevar RLS (0019/0020)`);
-    }
-    // company sí es global a propósito: nombre, dominio y sector, sin PII.
-    assert.equal(relations.get('company')?.rls, false, 'company es el catálogo global de empresas');
+  test('y la misma guardia, en tiempo de ejecución, no reporta nada contra esta base', async () => {
+    // Es literalmente lo que corre assertSchemaUpToDate al construir el
+    // cliente contra Supabase: si esto pasa aquí y allá falla, es que
+    // allá falta una migración.
+    const estado = await estadoDelEsquema(t.db);
+    assert.deepEqual(estado.sinAislar, [], JSON.stringify(estado.sinAislar));
+    assert.deepEqual(estado.excepcionesObsoletas, []);
+    assert.deepEqual(estado.privilegiosDeMas, [], JSON.stringify(estado.privilegiosDeMas));
+    assert.equal(explicarEsquema(estado), null, String(explicarEsquema(estado)));
   });
-
-  test('contact se aísla por owner_workspace_id, no por company_link', () => {
-    // company es un catálogo global sin RLS: cualquier workspace puede
-    // insertarse un company_link a cualquier empresa con una sola fila,
-    // así que el candado de 0019 no cerraba nada. Desde 0020 el dueño
-    // está en la propia fila y lo pone la base.
-    const owner = columns.get('contact')?.get('owner_workspace_id');
-    assert.ok(owner, 'contact.owner_workspace_id no existe (migración 0020)');
-    assert.equal(owner.data_type, 'uuid');
-    assert.equal(owner.column_default, 'current_workspace_id()', 'el dueño lo pone la base, no la pantalla');
-  });
-
-  test('todas las tablas que el paquete declara aisladas lo están de verdad', () => {
-    // Es la misma lista que assertSchemaUpToDate comprueba en tiempo de
-    // ejecución contra Supabase (src/esquema.ts).
-    const sinRls = TABLAS_CON_RLS.filter((n) => relations.get(n) && relations.get(n)?.rls !== true);
-    assert.deepEqual(sinRls, [], `declaradas en src/esquema.ts pero sin RLS: ${sinRls.join(', ')}`);
-  });
-
-  test(
-    'hijas con FK opcional a una tabla de tenant, política pendiente por módulo: ' +
-      HIJAS_CON_FK_OPCIONAL.map(([h, p, d]) => `${h} → ${p} (${d})`).join(', '),
-    { todo: true },
-    () => {},
-  );
 });

@@ -52,6 +52,17 @@ export const company = pgTable('company', {
   adsFirstSeenAt: timestamptz('ads_first_seen_at'),
   adsPlatforms: text('ads_platforms').array().default([]).notNull(),
   enrichedAt: timestamptz('enriched_at'),
+  /**
+   * Quién dio de alta esta empresa. Lo pone la base
+   * (DEFAULT current_workspace_id(), migración 0022) y gobierna solo la
+   * ESCRITURA: el directorio se lee desde cualquier workspace —dos
+   * pueden trabajar con la misma marca— pero renombrarla o borrarla es
+   * de quien la creó. NULL es la fila del catálogo compartido, la que
+   * escribe una migración o el worker.
+   *
+   * Nadie lo pasa a mano: va sin valor en el INSERT, como en contact.
+   */
+  ownerWorkspaceId: uuid('owner_workspace_id').references(() => workspace.id, { onDelete: 'set null' }).default(sql`current_workspace_id()`),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

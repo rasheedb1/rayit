@@ -114,13 +114,24 @@ lo hacía JavaScript: quien pasara el id de otro tenant leía sus etapas
 o le encendía una bandera. Ahora el filtro lo pone la base.
 
 `company` y `contact` **no** son catálogos aunque no tengan
-`workspace_id`. Desde la migración 0019 `contact` lleva RLS propia: se
-ve si su fuente es pública (`public_website`, `public_profile`,
-`press`) o si la empresa está vinculada a mi workspace por
-`company_link`. `company` sí es global a propósito: nombre, dominio y
-sector, sin PII. `app_user` es lo único que sigue sin política, y va con
-CIM-3 (necesita `app.user_id`); `test/schema.test.ts` lo deja a la vista
-como `todo`.
+`workspace_id`.
+
+- `contact` (PII: correo, teléfono, LinkedIn) lleva `owner_workspace_id`
+  desde **0020**, puesto por la base: se ve si su fuente es pública
+  (`public_website`, `public_profile`, `press`) o si es mío, y solo lo
+  escribe su dueño. Y la baja es definitiva: un trigger impide que
+  `opted_out` vuelva a `false`.
+- `company` se lee como directorio compartido —dos workspaces pueden
+  trabajar con la misma marca, y ahí no hay PII— pero desde **0022**
+  también lleva `owner_workspace_id` y solo su dueño la renombra o la
+  borra. Antes cualquiera podía borrar una empresa ajena, y con ella
+  sus contactos por `ON DELETE CASCADE`.
+- `app_user` lleva RLS desde **0020**: se ve uno mismo y quien comparta
+  workspace; el alta solo pasa sin workspace fijado o siendo uno mismo
+  (**0022**), y no hay política de `DELETE`.
+- `workspace`, la raíz del inquilino, lleva RLS desde **0022**. Se ve
+  una fila, la de la transacción; se renombra la propia; no hay
+  política de `DELETE` ni privilegio para hacerlo.
 
 ### 4. Job global con `asWorker`
 
@@ -192,9 +203,11 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
   `PoolOptions.onError` lo manda quien construye el pool a su logger.
 - **Que la base tenga el esquema del repositorio.** `createDbFromEnv`
   lo comprueba una vez al construir el cliente
-  (`assertSchemaUpToDate`): migraciones aplicadas vs. `db/migrations` y
-  `relrowsecurity` de todas las tablas que `src/esquema.ts` declara
-  aisladas. En desarrollo avisa con `make db.migrate`; con
+  (`assertSchemaUpToDate`): migraciones aplicadas vs. `db/migrations`;
+  **todas** las tablas de `public` que la base declara, aisladas salvo
+  las de `EXCEPCIONES_SIN_AISLAMIENTO`; y los privilegios que `mc_app`
+  conserva sobre lo que `PRIVILEGIOS_DE_LA_APP` declara de solo
+  lectura. En desarrollo avisa con `make db.migrate`; con
   `NODE_ENV=production`, lanza (salida explícita:
   `ALLOW_STALE_SCHEMA=1`, que lo baja a aviso). El contrato de este paquete —RLS aísla
   cada workspace— lo cumplen las políticas, no el código: contra una
@@ -232,12 +245,17 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
    deja `.introspect/schema.ts` (no se versiona).
 4. Curar `src/schema/<dominio>.ts` a mano con el estilo de los demás
    (helpers en `src/schema/_tipos.ts`).
-5. Si la tabla es nueva y lleva aislamiento, añadirla a la lista que
-   corresponda en `src/esquema.ts`: es la que usan a la vez
-   `test/schema.test.ts` y la comprobación en tiempo de ejecución.
+5. Si la tabla es nueva, **no hay que apuntarla en ninguna lista**: la
+   guardia de `src/esquema.ts` está invertida y exige aislamiento a
+   todo lo que encuentre en `public`. Lo que sí hay que escribir es la
+   política, en la misma migración. Si de verdad es global —un catálogo
+   que llena una migración, una observación sin inquilino— se declara
+   en `EXCEPCIONES_SIN_AISLAMIENTO` **con su motivo**, y se le quita a
+   `mc_app` lo que no necesite en `PRIVILEGIOS_DE_LA_APP`.
 6. `pnpm --filter @mc/db test` — `test/schema.test.ts` compara columna a
    columna con la base y falla si algo falta o difiere; y comprueba que
-   toda tabla de tenant (o hija de una) tiene RLS.
+   ninguna tabla se quedó sin aislamiento ni excepción declarada, que
+   ninguna excepción sobra y que `mc_app` no tiene privilegios de más.
 7. El integrador aplica en Supabase: `make db.migrate`.
 
 Nunca al revés: no hay `drizzle-kit generate` ni `push`.
@@ -269,8 +287,18 @@ además más rápido.
 ## Reglas del proyecto que este paquete impone
 
 - El workspace lo fija el cliente por transacción, nunca la pantalla.
-- Toda tabla con `workspace_id` lleva RLS. Sin excepciones desde 0019;
-  `test/schema.test.ts` lo comprueba en cada corrida.
+- **Toda tabla de `public` lleva aislamiento** (ENABLE + FORCE + al
+  menos una política), no solo las que tienen `workspace_id`. Las
+  excepciones se declaran una a una, con su motivo, en
+  `EXCEPCIONES_SIN_AISLAMIENTO`; una tabla nueva sin política y sin
+  excepción rompe la prueba. La regla anterior —«toda tabla con
+  `workspace_id`»— se leyó al pie de la letra durante cinco rondas y
+  por eso `workspace`, cuya clave se llama `id`, se quedó sin política
+  hasta 0022.
+- **`mc_app` tiene los privilegios mínimos.** RLS no protege una tabla
+  sin política: la protege el `GRANT`. `PRIVILEGIOS_DE_LA_APP` dice qué
+  puede hacer sobre cada catálogo y la guardia lo comprueba, también en
+  producción.
 - La moneda, la zona horaria y el locale salen del workspace
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.

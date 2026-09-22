@@ -58,7 +58,11 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     CREATE ROLE ${APP_ROLE} NOLOGIN;
     ALTER SCHEMA public OWNER TO mc_migrator_embedded;
     GRANT mc_migrator_embedded TO postgres;
+    GRANT USAGE ON SCHEMA public TO ${APP_ROLE};
     SET ROLE mc_migrator_embedded;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${APP_ROLE};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${APP_ROLE};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ${APP_ROLE};
   `);
 
   // exec() admite varias sentencias y devuelve un resultado por cada
@@ -70,17 +74,26 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
   await applyMigrations(exec, { dir: MIGRATIONS_DIR });
   if (opts.seeds !== false) await applySeeds(exec, { dir: SEED_DIR });
 
-  // Los mismos privilegios de filas que mc_app tiene en Supabase, y la
-  // sesión queda como ese rol. Los seeds fijan app.workspace_id para
-  // toda la sesión; se limpia para que ninguna consulta herede un
-  // workspace por accidente.
+  // La sesión queda como mc_app. Los privilegios de filas ya los tiene:
+  // se conceden ARRIBA, con ALTER DEFAULT PRIVILEGES, antes de crear
+  // ninguna tabla. Eso no es un detalle de estilo.
+  //
+  // Antes se concedían aquí, con un `GRANT … ON ALL TABLES` DESPUÉS de
+  // migrar, y eso devolvía en silencio todo lo que una migración
+  // hubiera revocado: la 0022 le quita a mc_app la escritura de los
+  // catálogos y de webhook_event, y sobre el embebido esa rebaja
+  // duraba hasta esta línea. La prueba pasaba en pglite y el
+  // privilegio real de Supabase era otro, que es justo lo que este
+  // módulo existe para evitar («lo que pasa aquí es lo que pasa en
+  // producción»). Con las DEFAULT PRIVILEGES, mc_app recibe lo mismo
+  // que en Supabase según nace cada tabla y la migración manda.
+  //
+  // Los seeds fijan app.workspace_id para toda la sesión; se limpia
+  // para que ninguna consulta herede un workspace por accidente.
   await pglite.exec(`
     RESET ROLE;
-    GRANT USAGE ON SCHEMA public TO ${APP_ROLE};
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE};
-    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};
-    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${APP_ROLE};
     SELECT set_config('app.workspace_id', '', false);
+    SELECT set_config('app.user_id', '', false);
     SET ROLE ${APP_ROLE};
   `);
 
