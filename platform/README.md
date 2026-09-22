@@ -1,4 +1,4 @@
-# MultiCampaign · plataforma
+# On Cue · plataforma
 
 Producto para que creadores y agencias midan, creen, vendan y cobren.
 Este directorio es el código real. Los mocks del dashboard viven en

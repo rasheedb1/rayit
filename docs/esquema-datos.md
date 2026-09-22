@@ -1,4 +1,4 @@
-# Esquema de datos — MultiCampaign
+# Esquema de datos — On Cue
 
 Modelo de datos para operar una red de cuentas propias (5 → 50–100) en TikTok, Instagram, Facebook y YouTube, publicar video corto generado con IA (Higgsfield / ElevenLabs) vía API, y analizar rendimiento segmentado por **red social, geografía, edad, sexo y tipo de usuario**.
 

@@ -2,7 +2,7 @@
 # Entorno local completo. Un solo comando y los dos programadores
 # tienen exactamente lo mismo: `make up`.
 # =====================================================================
-name: multicampaign
+name: oncue
 
 services:
   db:
@@ -11,7 +11,7 @@ services:
     environment:
       POSTGRES_USER: mc
       POSTGRES_PASSWORD: mc
-      POSTGRES_DB: multicampaign
+      POSTGRES_DB: oncue
       # Español para ordenamientos y mensajes coherentes con producción.
       LANG: es_ES.UTF-8
     ports:
@@ -20,7 +20,7 @@ services:
       - db_data:/var/lib/postgresql/data
       - ./db/migrations:/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mc -d multicampaign"]
+      test: ["CMD-SHELL", "pg_isready -U mc -d oncue"]
       interval: 5s
       timeout: 5s
       retries: 10

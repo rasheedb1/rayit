@@ -36,7 +36,7 @@ nombres nuevos y retirar los alias. No urge.
 
 ## 4. Despliegue: el proyecto de Vercel ahora tiene Root Directory = apps/web
 
-Desde el 21 de septiembre por la noche, `multicampaign-web` tiene
+Desde el 21 de septiembre por la noche, `multicampaign-web` (hoy `on-cue-web`) tiene
 `rootDirectory: apps/web` en Vercel. Con eso, `scripts/vercel.sh deploy`
 (que pasa `--cwd platform/apps/web`) falla: Vercel busca
 `apps/web/apps/web`. Mientras tanto se despliega así, desde la raíz del

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
-DB_URL ?= postgres://mc:mc@localhost:5432/multicampaign
+DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
 .PHONY: help up down logs reset migrate migrate-check seed psql web worker media dev fmt test \
         db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check \
@@ -16,10 +16,10 @@ help: ## Muestra esta ayuda
 up: ## Levanta base de datos, almacenamiento y correo
 	docker compose up -d
 	@echo "esperando a Postgres..."
-	@until docker compose exec -T db pg_isready -U mc -d multicampaign >/dev/null 2>&1; do sleep 1; done
+	@until docker compose exec -T db pg_isready -U mc -d oncue >/dev/null 2>&1; do sleep 1; done
 	@$(MAKE) migrate
 	@echo ""
-	@echo "  Postgres   localhost:5432   (mc / mc / multicampaign)"
+	@echo "  Postgres   localhost:5432   (mc / mc / oncue)"
 	@echo "  MinIO      localhost:9001   (mc / mcmcmcmc)"
 	@echo "  Correo     localhost:8025"
 
@@ -43,7 +43,7 @@ seed: ## Carga datos de ejemplo (la creadora ficticia y su nicho)
 	@node db/migrate.mjs "$(DB_URL)" --seed
 
 psql: ## Abre una consola SQL
-	docker compose exec db psql -U mc -d multicampaign
+	docker compose exec db psql -U mc -d oncue
 
 dev: ## Arranca web + worker + media en paralelo
 	pnpm turbo run dev --parallel

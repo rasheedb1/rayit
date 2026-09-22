@@ -51,7 +51,7 @@ jobs:
         env:
           POSTGRES_USER: mc
           POSTGRES_PASSWORD: mc
-          POSTGRES_DB: multicampaign
+          POSTGRES_DB: oncue
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U mc" --health-interval 5s
@@ -62,9 +62,9 @@ jobs:
         with:
           node-version: 20
       - run: npm ci --prefix platform
-      - run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/multicampaign" --seed
+      - run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
       - name: Aplicar dos veces debe ser inocuo
-        run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/multicampaign"
+        run: node platform/db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue"
 
   lint:
     name: Tipos y formato

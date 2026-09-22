@@ -15,6 +15,9 @@
 # y para quien no tenga gestor), y luego el gestor del sistema.
 # =====================================================================
 
+# El nombre del servicio conserva «multicampaign» a propósito: es la llave
+# bajo la que ya está guardada la frase en cada máquina. Cambiarlo dejaría
+# a todo el equipo sin frase hasta volver a correr make db.unlock.
 MC_LLAVERO_SERVICIO="${MC_LLAVERO_SERVICIO:-multicampaign-vault}"
 
 # Qué gestor hay en esta máquina: macos | libsecret | ninguno
@@ -42,7 +45,7 @@ llavero_guardar() {
       security add-generic-password -U -s "$MC_LLAVERO_SERVICIO" -a "$USER" -w "$1" 2>/dev/null \
         && printf '\033[90m   (guardada en el Llavero: no te la vuelve a pedir)\033[0m\n' ;;
     libsecret)
-      printf '%s' "$1" | secret-tool store --label="MultiCampaign vault" service "$MC_LLAVERO_SERVICIO" 2>/dev/null \
+      printf '%s' "$1" | secret-tool store --label="On Cue vault" service "$MC_LLAVERO_SERVICIO" 2>/dev/null \
         && printf '\033[90m   (guardada en libsecret: no te la vuelve a pedir)\033[0m\n' ;;
     *)
       printf '\033[90m   (sin gestor de secretos: exporta MC_VAULT_PASSPHRASE en tu shell)\033[0m\n' ;;
