@@ -28,6 +28,8 @@
   --info-bg: #ede9fb;
   --danger: #c2362b;
   --danger-bg: #fdecea;
+  --warn: #b45309;
+  --warn-bg: #fffbeb;
 }
 
 [data-theme="dark"] {
@@ -54,6 +56,8 @@
   --info-bg: #261c4a;
   --danger: #f28b82;
   --danger-bg: #3d1614;
+  --warn: #fbbf24;
+  --warn-bg: #3a2a08;
 }
 
 @theme inline {
@@ -77,6 +81,8 @@
   --color-info-bg: var(--info-bg);
   --color-danger: var(--danger);
   --color-danger-bg: var(--danger-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
