@@ -19,7 +19,7 @@ sobre `origin/main` (bc72a12).
 | Conexión provisional compartida entre módulos | `apps/web/lib/db/index.ts`, `apps/web/lib/db/workspace.ts` | nuevo, mío (movido desde `finanzas/_lib/`) |
 | Finanzas reexporta | `apps/web/app/(app)/finanzas/_lib/db.ts` (reexport), `_lib/workspace.ts` (se borra: solo lo importaba `db.ts`) | sin cambio de comportamiento |
 | Lista | `apps/web/app/(app)/campanas/page.tsx`, `_lib/estado.ts`, `_lib/filtro-estado.tsx` (cliente) | reemplaza el `ModulePlan` |
-| Ficha | `apps/web/app/(app)/campanas/[id]/page.tsx`, `actions.ts`, `copiar.tsx`, `seguimiento-form.tsx`, `datos-form.tsx`, `asociar.tsx`, `transicion.tsx` (cliente los últimos cinco) | nuevo |
+| Ficha | `apps/web/app/(app)/campanas/[id]/page.tsx`, `actions.ts`, `copiar.tsx`, `editar-form.tsx` (SeguimientoForm y DatosForm), `asociar.tsx`, `transicion.tsx` (cliente los últimos cuatro) | nuevo |
 | Pastilla de red con el color de la plataforma | `apps/web/components/ui/platform-pill.tsx` + test + fila en README + sección en `/kit` | componente nuevo del kit (permitido sin PR) |
 | Estado de la historia | `apps/web/content/backlog.ts` (solo CAM-1) | |
 | Esta propuesta | `docs/propuestas/CAM-1.md` | |
@@ -153,3 +153,143 @@ No toco `db/migrations/`, `db/seed/0003` (no hace falta: ya trae todo),
   anotado allí.
 
 ---
+
+## 1. Lo que necesito de ti (CIM-2, CIM-3, CIM-6)
+
+### 1.1 CIM-2 · esquema Drizzle y cliente
+
+`queries/campanas.ts` usa SQL con parámetros sobre `WorkspaceTx`
+(la misma interfaz provisional de FIN-1: `{ workspaceId; query(text,
+params) }`). Cuando exista `client.ts`, el cambio es la importación.
+Tablas y vistas que toca, con las columnas tal como están (nada nuevo,
+ninguna migración):
+
+- `campaign`: todas. `amount` → **string** (`numeric`), `starts_on`,
+  `ends_on`, `brand_baseline_from` → `'YYYY-MM-DD'` (no `Date`),
+  `status` con el union de `CampaignStatus` (core), `utm` y
+  `brand_accounts` como `jsonb`.
+- `campaign_post` (**sin `workspace_id` ni RLS**: se lee siempre unida a
+  `campaign` y se escribe después de comprobar campaña y post en el
+  workspace; si en CIM-2 le agregas política vía `campaign`, mejor, y
+  estas consultas siguen valiendo).
+- `post` (`caption`, `title`, `hashtags`, `mentions`, `published_at`) y
+  la vista `creator_post_board` (`pgView`, solo lectura) para los posts
+  asociados y asociables; `post_metrics_latest` para `captured_at`
+  («datos hasta») y la suma de views.
+- `quote` (`number`, `status`, `agreed_metrics`, `report_cuts_hours`,
+  `usage_rights_days`, `exclusivity_days`, `exclusivity_scope`,
+  `payment_terms_days`) y `quote_item` (`deliverable`, `platform_id`,
+  `description`, `quantity`, `position`) para «Acordado antes de
+  publicar» y los entregables.
+- `company` (`name`, `socials`) para la marca y la detección por
+  mención; `invoice` (`id`, `number`, `status`, `total`, `currency`,
+  `campaign_id`) para el panel de facturas.
+
+`views`, `reach`, `saves`, `shares` son `bigint`: node-postgres los da
+como string y pglite como number. Pido `::text` y convierto una sola vez
+(`intOrNull`). Si Drizzle los expone con `{ mode: "number" }`, se quita
+esa conversión.
+
+### 1.2 CIM-3 · workspace de la sesión
+
+`apps/web/lib/db/workspace.ts` es el único sitio que conoce el
+workspace (antes `finanzas/_lib/workspace.ts`). Cuando `lib/workspace/`
+exista, `lib/db/index.ts` lo importa de ahí y se borra ese archivo.
+Nada más cambia: las consultas reciben el workspace dentro de la
+transacción.
+
+### 1.3 CIM-6 · seed 0002
+
+- Los ids fijos de la sección 0 del seed 0003 (`docs/propuestas/CIM-8.md`
+  §1) son los que usan las pruebas de `packages/db/test/campanas.test.ts`
+  y `test/helpers/base.ts` (`POST_D01_REEL_CAFE_ALMA`…). Si 0002 usa
+  otros, hay que cambiarlos ahí.
+- **Forma de `company.socials`** para la detección por mención: un
+  objeto `{ "<red>": "<handle sin @>" }` (`{"instagram": "cafealma",
+  "tiktok": "cafealma.co"}` como en 0003). `handlesFromSocials()` toma
+  cualquier valor de texto, con o sin `@`; si 0002 guarda URLs o
+  objetos por red, hay que decírmelo para ampliar esa función.
+- La detección también usa `post.mentions` (sin `@`) y `post.hashtags`;
+  0002 debería llenarlos como los llenará el conector (CON-1).
+
+## 2. Decisiones de dominio
+
+1. **Estados.** `planned → live → measuring → reported → closed`;
+   `cancelled` solo desde `planned` o `live`; nada sale de `closed` ni
+   de `cancelled`. Etiqueta, color y verbo del botón en
+   `CAMPAIGN_STATUS_META` (core), un solo sitio. Al pasar a `live`,
+   `brand_baseline_from = starts_on − 14` si estaba vacío
+   (`transitionCampaign` en core devuelve qué persistir; la consulta lo
+   escribe). Una campaña `closed` o `cancelled` no admite asociar,
+   quitar, marcar principal ni editar (**decisión pendiente de
+   Nicolás**, ver §0.2.3).
+2. **Aislamiento con `campaign_post`.** No tiene `workspace_id` ni
+   política RLS (0010) y su FK a `campaign` no distingue workspaces.
+   Regla en `queries/campanas.ts`: toda lectura va `FROM campaign c JOIN
+   campaign_post cp`; toda escritura pasa antes por
+   `lockEditableCampaign` (`SELECT … FROM campaign … FOR UPDATE`, que
+   RLS deja vacío si la campaña es ajena) y, al asociar, por `SELECT 1
+   FROM post WHERE id = $1` (RLS en `post`). La prueba negativa usa un
+   segundo workspace fijado con su propia campaña: desde él, la campaña
+   de Laura «no existe» y el post de Laura «no existe».
+3. **Un solo post principal por campaña.** `is_primary` no tiene
+   restricción en la base; `linkPost(isPrimary: true)` y
+   `setPrimaryPost` desmarcan los demás en la misma transacción.
+4. **Sugerencias.** Ventana `starts_on − 2` a `ends_on + 2` en SQL;
+   motivo en TypeScript (`suggestionReasons`, core, probado): mención
+   (`mentions`, `@handle` en la caption con frontera de palabra, o el
+   handle como hashtag), código (`tracking_code` en el texto) y nombre
+   de la empresa (sin tildes ni mayúsculas). Un post ya asociado no se
+   sugiere. Sin fechas, lista vacía: no se inventa ventana.
+5. **Sin KPIs en la lista.** Los del mock son `campaign_result` de Café
+   Alma (CAM-5). Ver §0.2.4.
+6. **Cuatro campañas.** El seed 0003 trae Hogar Lindo sin posts; la lista
+   dice «0» posts (es un hecho) y «Sin datos» en views (no hay
+   snapshot: no es un cero).
+7. **Entregables.** Si hay cotización con ítems, salen de `quote_item`;
+   si no, se agrupan los `deliverable` de `campaign_post`. La lista
+   canónica (`DELIVERABLES` en core: reel, tiktok, historia, short,
+   dedicado, integracion) sale del comentario de `rate_card_item` en
+   0008 más el tarifario del mock; un valor fuera de la lista se muestra
+   tal cual.
+
+## 3. Verificación
+
+- `pnpm --filter @mc/core test`: 33 pruebas de `campanas.ts` (56 en
+  total con facturación y scoring).
+- `pnpm --filter @mc/db test`: 13 pruebas de campañas en Postgres
+  embebido con el seed 0003 (27 en total con finanzas): la lista da las
+  cuatro campañas del mock (Café Alma 712 K con dos posts 412 K +
+  300 K, Fresko 265 K, Nutrivé 58 K, Hogar Lindo sin datos); asociar a
+  Fresko un post de Nutrivé y quitarlo; asociar dos veces no duplica;
+  un post o una campaña de otro workspace no se pueden asociar; las
+  sugerencias de Café Alma encuentran sus posts por mención y código y
+  no los de Nutrivé; transiciones válidas e inválidas con la línea base
+  fijada al iniciar; `updateCampaign` rechaza fin anterior a inicio;
+  una campaña cerrada no admite cambios.
+- `pnpm --filter @mc/web test`: 101 pruebas (16 nuevas: pills y
+  filtros, copiador, formulario de asociar, formularios de edición,
+  `PlatformPill`). `typecheck`, `lint` y `build` en verde.
+- En dev sin `DATABASE_URL` (modo demo): `/campanas` y
+  `/campanas/00000003-0000-4000-8000-000000ca0001` responden 200 con el
+  contenido esperado; las Server Actions se ejercitaron por HTTP con
+  los campos ocultos de sus formularios (sin JavaScript): quitar el
+  TikTok de Café Alma (303 y la ficha con un post), verlo aparecer en
+  Sugeridos con «Menciona a @cafealma.co», asociarlo de nuevo como
+  TikTok (la ficha vuelve a dos posts, 412.000 y 300.000 con «hasta el
+  23 sep» y «hasta el 26 sep»), asociar el video de Nutrivé a Fresko
+  como principal y quitarlo, Fresko a «Reporte listo» y a «Cerrada»
+  (desaparecen Quitar y Asociar), editar el seguimiento con datos
+  válidos e inválidos (los inválidos no escriben). Capturas con Chrome
+  sin cabeza a 1440 px y, dentro de un iframe de 390 px (Chrome no baja
+  de 500 px de ventana), sin desborde horizontal.
+
+## 4. Pendiente de ti
+
+- [ ] CIM-2: el esquema de §1.1. Yo cambio las importaciones.
+- [ ] CIM-3: `lib/workspace/`. Yo borro `lib/db/workspace.ts`.
+- [ ] CIM-6: ids fijos y forma de `company.socials` (§1.3).
+- [ ] Opcional, en 0010 o en una migración nueva: política RLS para
+      `campaign_post` vía `EXISTS (SELECT 1 FROM campaign …)`. Las
+      consultas ya se protegen solas, pero la base quedaría cerrada
+      también para quien escriba SQL a mano.
