@@ -16,7 +16,7 @@ import { listConnections, listConsents, type WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/provisional/embedded";
 import { createOAuthHandlers, OAUTH_COOKIE, type OAuthHandlers } from "./oauth-handlers";
 import { CONSENT_POLICY_VERSION } from "./consent";
-import { SEED_WORKSPACE_ID } from "../../finanzas/_lib/workspace";
+import { SEED_WORKSPACE_ID } from "@/lib/db/workspace";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";

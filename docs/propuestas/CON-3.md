@@ -5,8 +5,11 @@ Escrito para: Rasheed (dueño de `db/migrations/`, `lib/auth/`,
 Meta) y quien revise el PR de CON-3.
 Fecha: 22 de septiembre de 2026. Rama `nicolas/CON-3-oauth-sandbox`,
 worktree `rayit-con3`, creada desde `origin/nicolas/CON-1-conectores-grabados`
-(`33e26a0`), porque CON-1 todavía no está en `main` y CON-3 se apoya en
-su cliente HTTP. El PR va apilado sobre el de CON-1.
+(`33e26a0`), porque CON-1 todavía no estaba en `main` y CON-3 se apoya en
+su cliente HTTP. El 22 de septiembre se integró `main` (CAM-1, CAM-2) en
+la rama y se publicó en `main` por avance rápido, por indicación de
+Nicolás; la migración de CAM-2 pasó de 0015 a 0016 porque
+`0015_connection_secret.sql` ya estaba aplicada.
 
 ---
 
@@ -284,7 +287,9 @@ apps/worker/
 ## 1. La migración `0015_connection_secret.sql` (para revisar y aplicar)
 
 Está en `db/migrations/0015_connection_secret.sql`, pasa `make db.check`
-(15 migraciones, 89 tablas) y **no se aplicó** en Supabase. Contenido:
+y **quedó aplicada en Supabase el 21 de septiembre a las 23:49** (la
+aplicó Nicolás con `make db.migrate` para poder desplegar). Contenido,
+para tu revisión:
 
 ```sql
 CREATE TABLE connection_secret (
@@ -491,13 +496,13 @@ todos resueltos en el commit «Revisión»:
 
 ## 7. Pendiente de ti
 
-- [ ] Aplicar `0015_connection_secret.sql` (`make db.migrate`).
+- [x] Aplicar `0015_connection_secret.sql` (hecho el 21-sep).
 - [ ] Acceso de desarrollador a la app de TikTok (Login Kit, con sandbox)
       y a la app de Meta (Instagram Login), o las credenciales al vault
       con los nombres de §3.
 - [ ] Registrar las redirect URIs y los scopes de §2 en cada app.
-- [ ] `TOKEN_ENCRYPTION_KEY` y `APP_URL` en Vercel (producción y vista
-      previa) y en el entorno del worker (CIM-7).
+- [x] `TOKEN_ENCRYPTION_KEY` y `APP_URL` en Vercel producción (22-sep).
+- [ ] Las mismas dos en vista previa de Vercel y en el entorno del worker (CIM-7).
 - [ ] Actualizar `.env.example` con las rutas de §2 (o darme el visto
       bueno para hacerlo yo).
 - [ ] CIM-2 y CIM-3 como en FIN-1 (§4).

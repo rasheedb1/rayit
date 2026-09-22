@@ -3,6 +3,7 @@ import { requireModule } from "@/content/modules";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
+import { PlatformPill } from "@/components/ui/platform-pill";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataAsOf } from "@/components/ui/data-as-of";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
@@ -22,6 +23,7 @@ export const metadata: Metadata = { title: "Kit de interfaz" };
 const SECTIONS = [
   ["button", "Button"],
   ["pill", "Pill"],
+  ["platform-pill", "PlatformPill"],
   ["form", "Formulario"],
   ["segmented", "Segmented"],
   ["empty-state", "EmptyState"],
@@ -102,6 +104,18 @@ export default function Page() {
         </Variant>
         <Variant label="Texto largo">
           <Pill kind="warn">Esperando aprobación de Distribuidora Nacional de Alimentos</Pill>
+        </Variant>
+      </Section>
+
+      <Section id="platform-pill" title="PlatformPill" usage={`<PlatformPill platformId="tiktok" />`}>
+        <Variant label="Las cuatro redes y una desconocida (sin color)">
+          <div className="flex flex-wrap items-center gap-2">
+            <PlatformPill platformId="tiktok" />
+            <PlatformPill platformId="instagram" />
+            <PlatformPill platformId="facebook" />
+            <PlatformPill platformId="youtube" />
+            <PlatformPill platformId="threads" />
+          </div>
         </Variant>
       </Section>
 
