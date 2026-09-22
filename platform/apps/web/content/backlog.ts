@@ -19,7 +19,7 @@ import type { StoryPrefix } from "./modules";
 
 export type Status = "pendiente" | "en_curso" | "bloqueada" | "hecho";
 export type Size = "S" | "M" | "L";
-export type SprintNumber = 1 | 2 | 3 | 4 | 5;
+export type SprintNumber = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface Story {
   id: string;
@@ -72,8 +72,14 @@ export const SPRINTS: readonly Sprint[] = [
   {
     n: 5,
     weeks: "Semanas 9 y 10",
-    name: "Lo que depende de aprobaciones, y el piloto",
-    demo: "Pantalla de conexiones, demografía, YouTube, recordatorios de cobro (Nicolás). Lo que importa esta semana, cuándo publicar, brief y conversión (Rasheed). Producción abierta a los primeros creadores.",
+    name: "Lo que depende de aprobaciones, el mánager y el piloto",
+    demo: "Pantalla de conexiones, YouTube, recordatorios de cobro (Nicolás). Lo que importa esta semana (Rasheed). Y la que pide el piloto: el creador invita a su mánager, el mánager entra y ve Campañas pero no el flujo de caja. Producción abierta a los primeros creadores.",
+  },
+  {
+    n: 6,
+    weeks: "Fase 2 · sin fecha",
+    name: "Alcance, agencias y lo que se corrió para que cupieran los roles",
+    demo: "No tiene demo de viernes: se abre cuando el piloto confirme que hay agencias esperando. Lleva el alcance por creador (ACC-6, ACC-7), los roles a medida (ACC-9), el épico AGE de agencias, y las cuatro historias que salieron del sprint 5 para hacerle sitio a ACC-4.",
   },
 ];
 
@@ -232,11 +238,12 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 5, deps: ["CON-7"],
+    id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 6, deps: ["CON-7"],
     title: "Demografía y cuándo publicar, en pantalla",
     desc: "El bloque de audiencia por edad, género y país, y el de «cuándo publicar» (seguidores conectados por hora, Instagram), sobre lo que recolecta CON-7.",
     done: "El gráfico por hora coincide con el fixture; si la cuenta no da demografía, la pantalla explica por qué.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: depende de CON-7, que a su vez depende de aprobaciones que pueden no llegar.",
   },
 
   // ---------------------------------------------------------------- VEN
@@ -283,18 +290,20 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["VEN-2"],
+    id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
     title: "Brief de outbound",
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
   },
   {
-    id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["VEN-3"],
+    id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
     title: "Deal perdido y conversión por etapa",
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
   },
 
   // ---------------------------------------------------------------- COT
@@ -418,11 +427,12 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["FIN-6"],
+    id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 6, deps: ["FIN-6"],
     title: "Ingresos de plataformas",
     desc: "Carga manual o CSV de Creator Rewards, AdSense y bonos en platform_payout. Entra al flujo de caja.",
     done: "Un CSV de AdSense aparece como ingreso en su mes.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-5 y ACC-8: no la toca ningún creador en un piloto de dos semanas.",
   },
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
@@ -430,5 +440,80 @@ export const STORIES: readonly Story[] = [
     desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, datos fiscales para la factura. En workspace.settings.",
     done: "Cambiar el porcentaje cambia la reserva de los pagos siguientes, no de los anteriores.",
     status: "pendiente",
+  },
+
+  // ---------------------------------------------------------------- ACC
+  // Entró al MVP el 22 de septiembre: los creadores del piloto tienen
+  // mánager. El diseño completo está en docs/propuestas/ACC-accesos-y-roles.md.
+  {
+    id: "ACC-1", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: [],
+    title: "Catálogo de permisos y can()",
+    desc: "packages/core/src/permisos.ts: los permisos con la forma <módulo>.<recurso>.<acción>, los cinco roles de fábrica del creador y los cinco de agencia, y can(). Puro, sin base de datos y sin pantalla. Desde aquí, ninguna Server Action pregunta por el rol.",
+    done: "Cada Server Action nueva abre con su requirePermission(); una prueba comprueba que el rol «Mánager» no trae finanzas.flujo.ver.",
+    status: "pendiente",
+    note: "Va en el sprint 3 a propósito: fija los nombres antes de que Campañas y Finanzas tengan sus Server Actions escritas. Después cuesta diez veces más.",
+  },
+  {
+    id: "ACC-2", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-2"],
+    title: "Bitácora obligatoria",
+    desc: "withAudit() en packages/db: toda escritura de dinero, publicación o cuenta conectada deja su fila en audit_log con actor, before y after.",
+    done: "Crear una factura y conectar una cuenta dejan su fila; una prueba recorre las escrituras de queries/ y falla si alguna no audita.",
+    status: "pendiente",
+    note: "audit_log no se puede rellenar hacia atrás: o se escribe desde la primera Server Action o no existe.",
+  },
+  {
+    id: "ACC-3", module: "ACC", owner: "nicolas", size: "M", sprint: 4, deps: ["ACC-1", "CIM-3"],
+    title: "Esquema de accesos (migración 0017)",
+    desc: "0017_access_control.sql: permission, role, role_permission, membership.role → role_id, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los roles de fábrica.",
+    done: "Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz.",
+    status: "pendiente",
+    note: "El SQL y la semilla los escribe Nicolás y los revisa y aplica Rasheed (regla de db/migrations/ en §3.1); el esquema Drizzle es de Rasheed. Va en el sprint 4 y no en el 5 por riesgo: ACC-4 no puede empezar sin la tabla.",
+  },
+  {
+    id: "ACC-4", module: "ACC", owner: "rasheed", size: "M", sprint: 5, deps: ["ACC-3"],
+    title: "Pantalla Equipo: invitar al mánager",
+    desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
+    done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
+    status: "pendiente",
+    note: "Es la demo del quinto viernes. Recortada a lo del piloto: sin matriz editable ni roles a medida, que son ACC-9.",
+  },
+  {
+    id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
+    title: "Permisos en el marco",
+    desc: "requireModule() recibe el permiso mínimo además de la bandera; el menú esconde lo que la persona no puede abrir; la ruta directa responde 404.",
+    done: "Con sesión de «Contador», /campanas responde 404 y no aparece en el menú.",
+    status: "pendiente",
+    note: "404 y no 403, igual que una bandera apagada: un 403 confirma que el módulo existe.",
+  },
+  {
+    id: "ACC-6", module: "ACC", owner: "nicolas", size: "M", sprint: 6, deps: ["ACC-3"],
+    title: "Alcance en las consultas",
+    desc: "scopeFilter() en packages/db, compuesto por cada queries/<modulo>.ts. La tenencia se garantiza en RLS; el alcance, aquí: depende de columnas que no todas las tablas tienen, y una política de alcance mal escrita no se ve como un bug.",
+    done: "Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada del módulo.",
+    status: "pendiente",
+    note: "Cada uno hace el alcance de sus módulos. Fuera del MVP: un workspace de creador tiene un solo creador, así que no hay nada que acotar hasta que existan las agencias.",
+  },
+  {
+    id: "ACC-7", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-6"],
+    title: "Endurecimiento por creador en RLS",
+    desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
+    done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
+    status: "pendiente",
+  },
+  {
+    id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
+    title: "Consentimiento delegado",
+    desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
+    done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
+    status: "pendiente",
+    note: "Deja de ser opcional en cuanto el mánager hace el onboarding del piloto. Es además la respuesta el día que Meta o TikTok pregunten quién dio el consentimiento.",
+  },
+  {
+    id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],
+    title: "Matriz editable y roles a medida",
+    desc: "La pantalla que muestra los permisos uno por uno y deja crear un rol propio del workspace (role con workspace_id).",
+    done: "Una agencia crea el rol «Becario» con tres permisos y se lo asigna a alguien.",
+    status: "pendiente",
+    note: "Necesidad de agencia, no de un creador con un mánager: para el piloto bastan los cinco roles de fábrica.",
   },
 ];
