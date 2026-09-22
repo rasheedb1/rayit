@@ -153,6 +153,8 @@ export class HttpCore {
     try {
       res = await this.#fetch(url, { method: req.method, headers, body: bodyText, signal });
     } catch (cause) {
+      // Un fetch de pruebas que no reconoce la llamada no es un fallo de red: se propaga tal cual.
+      if (cause instanceof Error && cause.name === 'UnexpectedCallError') throw cause;
       const failure = req.signal?.aborted ? 'aborted' : timeout.aborted ? 'timeout' : 'network';
       const error = classifyApiError({ platformId: req.platformId, endpoint: req.endpoint, httpStatus: undefined, parsed: null, failure, cause });
       await this.#log({ req, units, status: null, ok: false, error, durationMs: elapsed(t0) });

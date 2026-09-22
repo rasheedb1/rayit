@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Video sin interacción reciente: TikTok omite contadores. Un nulo no es un cero."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "videos": [
+          {
+            "id": "7400000000000000d09",
+            "create_time": 1787846400,
+            "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d09",
+            "video_description": "",
+            "duration": 12
+          }
+        ],
+        "cursor": 0,
+        "has_more": false
+      },
+      "error": {
+        "code": "ok",
+        "message": "",
+        "log_id": "2026092207"
+      }
+    }
+  }
+}

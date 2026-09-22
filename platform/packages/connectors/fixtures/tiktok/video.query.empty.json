@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Ids que ya no existen: lista vacía."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/query/\\?fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "videos": []
+      },
+      "error": {
+        "code": "ok",
+        "message": "",
+        "log_id": "2026092211"
+      }
+    }
+  }
+}

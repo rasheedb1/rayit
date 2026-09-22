@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "429 con Retry-After; código rate_limit_exceeded (doc de rate limit, 4-ago-2026)."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields="
+  },
+  "response": [
+    {
+      "status": 429,
+      "headers": {
+        "retry-after": "7"
+      },
+      "body": {
+        "data": {},
+        "error": {
+          "code": "rate_limit_exceeded",
+          "message": "The API rate limit was exceeded. Please try again later.",
+          "log_id": "2026092204a"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "data": {
+          "videos": [
+            {
+              "id": "7400000000000000d01",
+              "create_time": 1787932800,
+              "cover_image_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d01.jpeg",
+              "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01",
+              "video_description": "Receta 1 con @cafealma.co #recetafacil #ad",
+              "duration": 31,
+              "height": 1920,
+              "width": 1080,
+              "title": "Receta 1",
+              "embed_html": "<blockquote></blockquote>",
+              "embed_link": "https://www.tiktok.com/embed/v2/7400000000000000d01",
+              "like_count": 1201,
+              "comment_count": 41,
+              "share_count": 11,
+              "view_count": 50001,
+              "is_aigc": false
+            }
+          ],
+          "cursor": 0,
+          "has_more": false
+        },
+        "error": {
+          "code": "ok",
+          "message": "",
+          "log_id": "2026092204b"
+        }
+      }
+    }
+  ]
+}
