@@ -7,7 +7,7 @@ Ninguna pantalla, server action ni job recibe `workspace_id` como
 parámetro suelto.
 
 ```
-src/client.ts      withWorkspace / asWorker / withCatalogs sobre pg
+src/client.ts      withWorkspace / withIdentity / asWorker / withCatalogs sobre pg
 src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
@@ -45,7 +45,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los cinco usos
+## Los seis usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -118,11 +118,36 @@ o le encendía una bandera. Ahora el filtro lo pone la base.
 ve si su fuente es pública (`public_website`, `public_profile`,
 `press`) o si la empresa está vinculada a mi workspace por
 `company_link`. `company` sí es global a propósito: nombre, dominio y
-sector, sin PII. `app_user` es lo único que sigue sin política, y va con
-CIM-3 (necesita `app.user_id`); `test/schema.test.ts` lo deja a la vista
-como `todo`.
+sector, sin PII. `app_user` tiene la suya desde 0020, 0021 y 0022: se ve
+y se edita la fila propia, por `current_user_id()` o por el correo
+verificado de la sesión.
 
-### 4. Job global con `asWorker`
+### 4. Quién entra, con `withIdentity`
+
+```ts
+// Solo la capa de sesión (apps/web/lib/auth y lib/workspace).
+const persona = await db.withIdentity({ email }, (tx) => upsertAppUserPorCorreo(tx, { email }));
+const mios    = await db.withIdentity({ userId: persona.id }, (tx) => listMyWorkspaces(tx));
+```
+
+Transacción **sin workspace y con identidad**: fija `app.user_id` y
+`app.user_email` igual que `withWorkspace` fija `app.workspace_id`, y
+con eso valen las ramas «soy yo» de las políticas de `app_user` (0020 a
+0022) y de `membership` (0019). Así se responde «¿a qué espacios
+pertenezco?» como `mc_app`, sin `asWorker` ni una función
+`SECURITY DEFINER`.
+
+Sirve para **tres tablas y ninguna más**: `app_user`, `membership` y
+`workspace` (que no lleva RLS). En cualquier otra devuelve cero filas en
+silencio, porque `current_workspace_id()` es NULL. El correo es la llave
+del primer inicio de sesión, cuando todavía no se sabe el id; lo fija
+la web solo con lo que Supabase verificó.
+
+`withWorkspace` también acepta la identidad como tercer argumento
+—`withWorkspace(wsId, fn, { userId, email })`— y es como la web abre
+todas sus transacciones desde CIM-3.
+
+### 5. Job global con `asWorker`
 
 ```ts
 const porVencer = await db.asWorker((tx) =>
@@ -136,7 +161,7 @@ rol de conexión es miembro de `mc_worker` (`mc_migrator` en Supabase,
 tras `GRANT mc_worker TO mc_migrator` con `scripts/supabase-admin.sh`;
 `mc_app` no lo es a propósito). En PGlite embebido siempre funciona.
 
-### 5. Prueba con `openTestDb`
+### 6. Prueba con `openTestDb`
 
 ```ts
 import { openTestDb, WORKSPACE_LAURA } from '@mc/db/test/pglite';

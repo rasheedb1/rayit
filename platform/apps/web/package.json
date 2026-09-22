@@ -15,6 +15,8 @@
     "@mc/connectors": "workspace:*",
     "@mc/core": "workspace:*",
     "@mc/db": "workspace:*",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.0",
     "geist": "1.7.2",
     "lucide-react": "1.47.0",
     "next": "15.5.25",

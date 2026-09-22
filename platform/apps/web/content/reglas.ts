@@ -67,6 +67,7 @@ export const DECISIONS: readonly { title: string; blocks: string[]; proposal: st
     title: "Autenticación",
     blocks: ["CIM-3"],
     proposal: "Supabase Auth con enlace mágico por correo: ya está pagado y vive sobre la misma base. Google como segundo método cuando pase la verificación.",
+    resolved: "Resuelta el 22 de septiembre, con CIM-3: enlace mágico, todo el flujo en el servidor (@supabase/ssr), sesión en cookies httpOnly y middleware que protege (app)/. Falta que una persona ponga el Site URL y las Redirect URLs en el panel de Supabase (apps/web/README.md, «Autenticación»), y un SMTP propio cuando el correo integrado se quede corto.",
   },
   {
     title: "Dueño de los trámites",

@@ -25,6 +25,11 @@
  *                           withoutWorkspace, que sonaba a "todos los
  *                           workspaces" — que es lo que hace asWorker.
  *
+ *   withIdentity(who, fn)   Transacción SIN workspace y CON identidad
+ *                           (app.user_id, app.user_email). La puerta de
+ *                           la sesión: app_user, membership y workspace
+ *                           y nada más. Ver Db.withIdentity.
+ *
  *   asWorker(fn)            SET LOCAL ROLE mc_worker dentro de la
  *                           transacción: salta RLS para los jobs globales
  *                           (renovar todos los tokens por vencer). Solo
@@ -89,9 +94,35 @@ export interface BaseTx extends SqlExecutor {
   readonly db: Orm;
 }
 
+/**
+ * Quién abre la transacción (CIM-3). Se fija en la transacción igual
+ * que el workspace, con set_config(…, true), y lo leen las políticas
+ * por current_user_id() (0019) y current_user_email() (0022).
+ *
+ *   userId  la fila de app_user. Con él valen las ramas «soy yo» de
+ *           app_user y de membership, así que «a qué workspaces
+ *           pertenezco» se responde como mc_app, sin asWorker.
+ *   email   el correo VERIFICADO de la sesión, y solo eso. Es la llave
+ *           del primer inicio de sesión, cuando todavía no se sabe el
+ *           id: sin él, buscar app_user por correo devuelve cero filas
+ *           (RLS) y el alta crearía un duplicado que choca con el único
+ *           de email.
+ */
+export interface Identity {
+  userId?: string;
+  email?: string;
+}
+
 /** Una transacción con el workspace ya fijado. */
 export interface WorkspaceTx extends BaseTx {
   readonly workspaceId: string;
+  /** Quién la abrió, si la sesión lo dijo. */
+  readonly identity?: Identity;
+}
+
+/** Una transacción sin workspace, con la identidad fijada: ver Db.withIdentity. */
+export interface IdentityTx extends BaseTx {
+  readonly identity: Identity;
 }
 
 /** Una transacción como mc_worker: RLS no aplica. Cada escritura filtra por workspace_id a mano. */
@@ -104,7 +135,21 @@ export type WorkerTx = BaseTx;
 export interface Db {
   /** Quién abre las transacciones de este cliente. Lo lee isInTransaction(db); nadie más lo toca. */
   readonly [TX_OWNER]?: object;
-  withWorkspace<T>(workspaceId: string, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T>;
+  withWorkspace<T>(workspaceId: string, fn: (tx: WorkspaceTx) => Promise<T>, identity?: Identity): Promise<T>;
+  /**
+   * Transacción SIN workspace y CON identidad. Es la puerta de la
+   * sesión (CIM-3) y sirve para exactamente tres tablas:
+   *
+   *   app_user     la propia fila, por id o por el correo verificado
+   *   membership   las propias membresías (user_id = current_user_id())
+   *   workspace    que no lleva RLS
+   *
+   * En cualquier otra tabla con RLS devuelve CERO FILAS sin avisar,
+   * igual que withCatalogs: current_workspace_id() es NULL. No es un
+   * atajo para leer «todos los workspaces» —eso es asWorker— ni para
+   * saltarse withWorkspace en una pantalla.
+   */
+  withIdentity<T>(identity: Identity, fn: (tx: IdentityTx) => Promise<T>): Promise<T>;
   asWorker<T>(fn: (tx: WorkerTx) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
@@ -123,6 +168,9 @@ export interface CatalogDb extends Db {
 
 /** Para INSERT dentro de withWorkspace: `workspaceId: CURRENT_WORKSPACE`. */
 export const CURRENT_WORKSPACE = sql<string>`current_workspace_id()`;
+
+/** Para INSERT dentro de withWorkspace / withIdentity: `userId: CURRENT_USER_ID`. */
+export const CURRENT_USER_ID = sql<string>`current_user_id()`;
 
 export const WORKER_ROLE = 'mc_worker';
 
@@ -267,6 +315,33 @@ function guardTx(raw: BaseTx): { tx: BaseTx; close(): void } {
   };
 }
 
+/**
+ * Limpia la identidad antes de que llegue a la base: el correo sin
+ * espacios (citext ya ignora mayúsculas) y el id comprobado como UUID.
+ * Un `userId` con cualquier otra cosa lanza aquí, no en un 22P02 a
+ * medio camino, y `email: ''` es «no hay correo», no un correo vacío
+ * que haría verdadera la rama «soy yo» de ninguna política.
+ */
+function normalizeIdentity(identity: Identity | undefined): Identity | undefined {
+  if (!identity) return undefined;
+  const email = identity.email?.trim();
+  const userId = identity.userId?.trim();
+  if (userId !== undefined && userId !== '' && !UUID_RE.test(userId)) {
+    throw new Error(`user_id inválido: "${userId}". Debe ser el UUID de una fila de app_user.`);
+  }
+  return {
+    ...(userId ? { userId } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
+/** Fija app.user_id y app.user_email en la transacción (locales a ella, como el workspace). */
+async function applyIdentity(tx: BaseTx, identity: Identity | undefined): Promise<void> {
+  if (!identity) return;
+  if (identity.userId) await tx.query("SELECT set_config('app.user_id', $1, true)", [identity.userId]);
+  if (identity.email) await tx.query("SELECT set_config('app.user_email', $1, true)", [identity.email]);
+}
+
 export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
   const statementTimeout = timeoutMs(opts.statementTimeoutMs, DEFAULT_STATEMENT_TIMEOUT_MS, 'statementTimeoutMs');
   const idleTimeout = timeoutMs(opts.idleInTransactionTimeoutMs, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, 'idleInTransactionTimeoutMs');
@@ -299,13 +374,25 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
 
   return {
     [TX_OWNER]: owner,
-    async withWorkspace(workspaceId, fn) {
+    async withWorkspace(workspaceId, fn, identity) {
       // async a propósito: un workspace inválido rechaza la promesa en
       // vez de lanzar antes de devolverla, y quien llama solo maneja un camino.
       assertWorkspaceId(workspaceId);
+      const who = normalizeIdentity(identity);
       return run(async (tx) => {
         await tx.query("SELECT set_config('app.workspace_id', $1, true)", [workspaceId]);
-        return fn({ db: tx.db, query: tx.query, workspaceId });
+        await applyIdentity(tx, who);
+        return fn({ db: tx.db, query: tx.query, workspaceId, identity: who });
+      });
+    },
+    async withIdentity(identity, fn) {
+      const who = normalizeIdentity(identity);
+      if (!who || (who.userId === undefined && who.email === undefined)) {
+        throw new Error('withIdentity necesita al menos userId o email. Sin identidad no hay nada que pueda leer: usa withCatalogs.');
+      }
+      return run(async (tx) => {
+        await applyIdentity(tx, who);
+        return fn({ db: tx.db, query: tx.query, identity: who });
       });
     },
     withCatalogs(fn) {

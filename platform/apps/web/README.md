@@ -35,10 +35,11 @@ pnpm --filter @mc/web build
 pnpm --filter @mc/web test        # vitest
 ```
 
-Y en producción hay que decir qué workspace se sirve: `DEMO_WORKSPACE_ID`
-es obligatoria hasta CIM-3 (`lib/workspace/current.ts` lanza si falta).
-Se fija con `make vercel.run ARGS="env add DEMO_WORKSPACE_ID production"`
-(y otra vez con `preview`). Para servir el workspace del seed a
+Desde CIM-3 el workspace sale de la **sesión**, no de una variable.
+`DEMO_WORKSPACE_ID` sigue existiendo como atajo de desarrollo y solo se
+mira cuando **no hay sesión** (modo demo, o una ruta pública). En
+producción sin sesión y sin esa variable, `lib/workspace/current.ts`
+lanza diciendo qué falta; para servir el workspace del seed a
 propósito, `ALLOW_SEED_WORKSPACE=1`.
 
 Desplegar: `make vercel.deploy` (vista previa) o `make vercel.deploy
@@ -55,7 +56,16 @@ app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
                               llegan del workspace; es-CO solo es el valor por defecto.
+lib/auth/                     Sesión de Supabase: configuración, cliente de servidor,
+                              sincronización de la persona y sus espacios, server
+                              actions (cambiar de espacio, salir) y messages.ts.
+middleware.ts                 Refresca la sesión y protege todo (app)/.
+app/login/                    La entrada: un campo y un botón.
+app/auth/callback/            Donde aterriza el enlace del correo.
+app/(app)/cuenta/             Nombre, correo, espacios y cerrar sesión.
+components/workspace-switcher.tsx  El selector de espacio, montado en el marco.
 lib/workspace/current.ts      El único sitio que sabe cuál es el workspace.
+lib/workspace/cookie.ts       La cookie firmada `mc.workspace`.
 lib/workspace/settings.ts     Su moneda, zona horaria y locale (cacheado por petición).
 lib/db/index.ts               withWorkspace(fn): la única forma de abrir una transacción.
 app/(app)/page.tsx            El plan completo (inicio).
@@ -79,6 +89,75 @@ note: "Rama abierta, falta el test de RLS.",
 
 Va en el mismo PR de la historia. Al mergear a `main`, el despliegue
 lo publica: es la forma de ver en la URL lo que cada quien va haciendo.
+
+## Autenticación
+
+Supabase Auth con **enlace mágico**: un correo, sin contraseñas. Todo el
+flujo corre en el servidor (`@supabase/ssr`), la sesión vive en cookies
+httpOnly y `middleware.ts` la refresca en cada petición y manda a
+`/login` lo que no sea público (`lib/auth/rutas.ts`).
+
+### Variables
+
+Las que hacen falta ya están en el vault (`make db.unlock` las escribe
+en `platform/.env.local`) y en Vercel:
+
+| Variable | Para qué |
+|---|---|
+| `SUPABASE_URL` | el cliente de servidor; `next.config.ts` la copia a `NEXT_PUBLIC_SUPABASE_URL` |
+| `SUPABASE_ANON_KEY` | igual, a `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No es un secreto: viaja al navegador por diseño |
+| `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta) |
+| `APP_URL` | a qué origen vuelve el enlace del correo. Sin ella se deduce de las cabeceras de la petición |
+
+Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
+dice cuáles faltan y el resto sigue sirviendo `DEMO_WORKSPACE_ID`. Eso
+es lo que permite que `pnpm verificar` corra sin red y sin llaves.
+
+### Lo que hay que configurar en el panel de Supabase
+
+Una persona, una vez, en **Authentication → URL Configuration**:
+
+- **Site URL**: `https://on-cue-web.vercel.app`
+- **Redirect URLs**, una por línea:
+  - `https://on-cue-web.vercel.app/auth/callback`
+  - `http://localhost:3000/auth/callback`
+  - `http://localhost:*/auth/callback` (los agentes trabajan entre el
+    3100 y el 3999; Supabase admite el comodín)
+  - `https://*.vercel.app/auth/callback` para las vistas previas
+
+Un origen que no esté en esa lista **no recibe el enlace**: Supabase
+redirige al Site URL y la persona acaba en `/login` sin saber por qué.
+
+Y en **Authentication → Providers → Email**: proveedor de correo
+encendido y contraseñas apagadas.
+
+### El límite del correo integrado
+
+El proveedor de correo que trae Supabase es para desarrollo y tiene un
+**límite bajo por hora**, por proyecto y no por persona. Al pasarlo
+responde 429 y `/login` lo dice con su propio texto («ya mandamos varios
+enlaces a ese correo…»). Para uso real hay que conectar un SMTP propio
+en **Project Settings → Auth → SMTP Settings**; hasta entonces, no
+probar el login en bucle.
+
+### Cómo probarlo sin esperar un correo
+
+`generate_link` de la API de administración devuelve el enlace sin
+mandarlo:
+
+```bash
+curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
+  -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"magiclink","email":"tu@correo.com",
+       "options":{"redirect_to":"http://localhost:3100/auth/callback"}}'
+```
+
+De la respuesta salen `hashed_token` y `verification_type` —para quien
+no existía todavía es `signup`, no `magiclink`— y con los dos se abre
+`/auth/callback?token_hash=…&type=…`. La clave de servicio no se usa en
+el código de la web: solo aquí, a mano.
 
 ## Reglas del marco
 

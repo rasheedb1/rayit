@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Shell } from "@/components/shell";
 import { themeScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -27,9 +26,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-dvh bg-bg font-sans text-fg antialiased">
-        <Shell>{children}</Shell>
-      </body>
+      <body className="min-h-dvh bg-bg font-sans text-fg antialiased">{children}</body>
     </html>
   );
 }
