@@ -56,24 +56,55 @@ after(async () => {
   await t.close();
 });
 
+/**
+ * Las views que enseñan la lista y la ficha son la ÚLTIMA lectura de
+ * cada video, y el seed 0002 sigue midiendo la curva de todos hasta los
+ * 90 días: el número exacto sube cada día que pasa. Clavarlo aquí sería
+ * una prueba que falla sola mañana sin que nadie toque el código.
+ *
+ * Lo que no se mueve es la cifra del mock —la lectura a 720 h, que es
+ * la que citan el reporte y la factura— y el margen en el que la curva
+ * puede estar respecto a ella: como mucho un 3 % por encima (su techo,
+ * porque el denominador de la curva vale 0,9752 a 720 h) y no más de un
+ * 5 % por debajo mientras el video aún no cumple los 30 días. Fuera de
+ * esa banda ya no es el paso del tiempo: es una regresión.
+ */
+function cercaDelMock(actual: number | null | undefined, ref: number, que: string): asserts actual is number {
+  assert.ok(
+    typeof actual === 'number' && actual >= Math.round(ref * 0.95) && actual <= Math.round(ref * 1.03),
+    `${que}: ${actual} debería estar a menos del 5 % de la cifra del mock (${ref})`,
+  );
+}
+
+/** La curva de 0002 llega hasta ayer: la última lectura es de las últimas 48 h. */
+const lecturaReciente = (iso: string | null | undefined, que: string) => {
+  assert.ok(typeof iso === 'string', `${que}: debería haber una lectura, no ${iso}`);
+  const horas = (Date.now() - Date.parse(iso as string)) / 3_600_000;
+  assert.ok(horas >= 0 && horas < 48, `${que}: la última lectura (${iso}) debería ser de las últimas 48 h`);
+};
+
 describe('lista y ficha', () => {
   test('la lista da las cuatro campañas del mock con sus cifras', async () => {
     const rows = await laura((tx) => listCampaigns(tx));
     const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA);
     assert.deepEqual(
-      seed.map((r) => [r.companyName, r.status, r.postsCount, r.viewsTotal, r.amount, r.hasInvoice]),
+      seed.map((r) => [r.companyName, r.status, r.postsCount, r.amount, r.hasInvoice]),
       [
-        ['Fresko Market', 'measuring', 2, 265000, '5200000.00', true],
-        ['Café Alma', 'reported', 2, 712000, '3100000.00', true],
-        ['Nutrivé', 'closed', 1, 58000, '4700000.00', true],
-        ['Hogar Lindo', 'reported', 0, null, '1100000.00', true],
+        ['Fresko Market', 'measuring', 2, '5200000.00', true],
+        ['Café Alma', 'reported', 2, '3100000.00', true],
+        ['Nutrivé', 'closed', 1, '4700000.00', true],
+        ['Hogar Lindo', 'reported', 0, '1100000.00', true],
       ],
-      'más recientes primero; sin posts no hay views (null, no cero)',
+      'más recientes primero',
     );
+    cercaDelMock(seed[0]?.viewsTotal, 140000 + 125000, 'Fresko Market');
+    cercaDelMock(seed[1]?.viewsTotal, 412000 + 300000, 'Café Alma');
+    cercaDelMock(seed[2]?.viewsTotal, 58000, 'Nutrivé');
+    assert.equal(seed[3]?.viewsTotal, null, 'sin posts no hay views: null, no cero');
     const cafe = rows.find((r) => r.id === CAMPAIGN_CAFE_ALMA);
-    assert.equal(cafe?.dataAsOf, '2026-09-26T06:00:00Z', 'el snapshot más reciente de sus posts');
-    assert.equal(cafe?.startsOn, '2026-08-24');
-    assert.equal(cafe?.endsOn, '2026-08-31');
+    lecturaReciente(cafe?.dataAsOf, 'Café Alma');
+    assert.equal(cafe?.startsOn, '2026-08-10');
+    assert.equal(cafe?.endsOn, '2026-08-17');
     assert.equal(rows.find((r) => r.id === CAMPAIGN_HOGAR_LINDO)?.dataAsOf, null);
     assert.equal(rows.find((r) => r.id === CAMPAIGN_PRUEBA)?.hasInvoice, false);
   });
@@ -92,44 +123,47 @@ describe('lista y ficha', () => {
     assert.equal(c.trackingCode, 'LAURA15');
     assert.match(c.trackingUrl ?? '', /^https:\/\/cafealma\.co\//);
     assert.deepEqual(c.utm, { utm_source: 'instagram', utm_medium: 'creator', utm_campaign: 'laura_coldbrew' });
-    assert.equal(c.brandBaselineFrom, '2026-08-10');
+    assert.equal(c.brandBaselineFrom, '2026-07-27');
     assert.equal(c.agreed, null, 'la campaña del seed se creó a mano');
     assert.equal(c.deliverablesSource, 'posts');
     assert.deepEqual(c.deliverables.map((d) => [d.deliverable, d.quantity]), [['reel', 1], ['tiktok', 1]]);
     assert.deepEqual(c.invoices.map((i) => [i.number, i.status, i.total]), [['FV-2026-010', 'sent', '3100000.00']]);
-    assert.equal(c.viewsTotal, 712000);
+    cercaDelMock(c.viewsTotal, 412000 + 300000, 'la ficha de Café Alma');
     assert.equal(await laura((tx) => getCampaign(tx, '00000003-0000-4000-8000-000000000000')), null);
   });
 
   test('los posts de Café Alma: dos, 412 K + 300 K, el principal primero, con datos hasta', async () => {
     const posts = await laura((tx) => listCampaignPosts(tx, CAMPAIGN_CAFE_ALMA));
     assert.deepEqual(
-      posts.map((p) => [p.postId, p.platformId, p.views, p.isPrimary, p.deliverable]),
+      posts.map((p) => [p.postId, p.platformId, p.isPrimary, p.deliverable]),
       [
-        [POST_D01_REEL_CAFE_ALMA, 'instagram', 412000, true, 'reel'],
-        [POST_D02_TIKTOK_CAFE_ALMA, 'tiktok', 300000, false, 'tiktok'],
+        [POST_D01_REEL_CAFE_ALMA, 'instagram', true, 'reel'],
+        [POST_D02_TIKTOK_CAFE_ALMA, 'tiktok', false, 'tiktok'],
       ],
     );
-    assert.equal(posts[0]?.reach, 296000);
-    assert.equal(posts[0]?.saves, 6200);
-    assert.equal(posts[0]?.dataAsOf, '2026-09-23T06:00:00Z');
-    assert.equal(posts[0]?.publishedAt, '2026-08-24T17:00:00Z');
-    assert.equal(posts[1]?.dataAsOf, '2026-09-26T06:00:00Z');
+    cercaDelMock(posts[0]?.views, 412000, 'el reel de Café Alma');
+    cercaDelMock(posts[1]?.views, 300000, 'el TikTok de Café Alma');
+    cercaDelMock(posts[0]?.reach, 296000, 'el alcance del reel');
+    cercaDelMock(posts[0]?.saves, 6200, 'los guardados del reel');
+    lecturaReciente(posts[0]?.dataAsOf, 'el reel de Café Alma');
+    assert.equal(posts[0]?.publishedAt, '2026-08-10T17:00:00Z');
+    lecturaReciente(posts[1]?.dataAsOf, 'el TikTok de Café Alma');
   });
 });
 
 describe('asociar y quitar posts', () => {
   test('asociar a Fresko un post que no es suyo y quitarlo; asociar dos veces no duplica', async () => {
+    const antes = (await laura((tx) => listCampaigns(tx, { status: 'measuring' })))[0]?.viewsTotal ?? 0;
     const linked = await laura((tx) => linkPost(tx, { campaignId: CAMPAIGN_FRESKO, postId: POST_D05_YOUTUBE_NUTRIVE, deliverable: 'dedicado' }));
     assert.equal(linked.postId, POST_D05_YOUTUBE_NUTRIVE);
-    assert.equal(linked.views, 58000, 'con sus views actuales');
+    cercaDelMock(linked.views, 58000, 'el video de Nutrivé, con sus views actuales');
     assert.equal(linked.deliverable, 'dedicado');
     assert.equal(linked.isPrimary, false);
 
     let posts = await laura((tx) => listCampaignPosts(tx, CAMPAIGN_FRESKO));
     assert.equal(posts.length, 3);
     const lista = await laura((tx) => listCampaigns(tx, { status: 'measuring' }));
-    assert.equal(lista[0]?.viewsTotal, 265000 + 58000, 'la lista suma el post nuevo');
+    assert.equal(lista[0]?.viewsTotal, antes + linked.views, 'la lista suma el post nuevo');
 
     const otraVez = await laura((tx) => linkPost(tx, { campaignId: CAMPAIGN_FRESKO, postId: POST_D05_YOUTUBE_NUTRIVE }));
     assert.equal(otraVez.deliverable, 'dedicado', 'sin deliverable conserva el anterior');
@@ -189,10 +223,21 @@ describe('asociar y quitar posts', () => {
 describe('buscar y sugerir', () => {
   test('posts asociables: los que no están en la campaña, buscables por caption con comodines escapados', async () => {
     const todos = await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA }));
-    assert.deepEqual(todos.map((p) => p.postId), [POST_D04_TIKTOK_FRESKO, POST_D03_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE], 'más recientes primero');
-    assert.equal(todos[0]?.views, 125000);
+    // Con el seed 0002 la parrilla de Laura tiene decenas de videos, así
+    // que la lista completa ya no se puede clavar entera. Lo que sí se
+    // afirma es lo que la consulta promete: los dos que YA están en la
+    // campaña no aparecen, los de las otras campañas sí, y el orden es
+    // por fecha de publicación descendente.
+    const ids = todos.map((p) => p.postId);
+    assert.ok(!ids.includes(POST_D01_REEL_CAFE_ALMA) && !ids.includes(POST_D02_TIKTOK_CAFE_ALMA), 'los suyos no se ofrecen');
+    for (const id of [POST_D04_TIKTOK_FRESKO, POST_D03_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE]) {
+      assert.ok(ids.includes(id), `${id} debería poder asociarse`);
+    }
+    const fechas = todos.map((p) => p.publishedAt);
+    assert.deepEqual(fechas, [...fechas].sort().reverse(), 'más recientes primero');
     const fresko = await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA, q: 'FRESKO' }));
     assert.deepEqual(fresko.map((p) => p.postId), [POST_D04_TIKTOK_FRESKO, POST_D03_TIKTOK_FRESKO]);
+    cercaDelMock(fresko[0]?.views, 125000, 'el segundo TikTok de Fresko');
     assert.deepEqual(await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA, q: '%' })), [], 'el comodín se busca literal');
     await assert.rejects(laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_AJENA })), CampaignNotFoundError);
   });
@@ -210,7 +255,7 @@ describe('buscar y sugerir', () => {
           [POST_D02_TIKTOK_CAFE_ALMA, ['Menciona a @cafealma.co']],
         ],
       );
-      assert.equal(sugeridos[0]?.views, 412000);
+      cercaDelMock(sugeridos[0]?.views, 412000, 'el reel sugerido');
       // Nutrivé (15–22 jul): su único post ya está asociado; nada que sugerir, y nunca los de Café Alma.
       assert.deepEqual(await laura((tx) => suggestPosts(tx, CAMPAIGN_NUTRIVE)), []);
     } finally {

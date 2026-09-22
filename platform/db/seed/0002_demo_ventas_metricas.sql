@@ -150,6 +150,11 @@
 -- =====================================================================
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
+-- Y quién es: lo mismo que fijará withWorkspace cuando CIM-3 exista.
+-- El seed no es un proceso anónimo con permisos de más, es esta
+-- usuaria; por eso puede refrescar SU last_seen_at (política
+-- app_user_update, migración 0021) y nada más.
+SELECT set_config('app.user_id', '00000002-0000-4000-8000-000000000002', false);
 -- CURRENT_DATE es local a la sesión: se fija UTC para que "hoy" sea el
 -- mismo día en Supabase, Docker, PGlite, CI y un Postgres nativo.
 SELECT set_config('TimeZone', 'UTC', false);
