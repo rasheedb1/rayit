@@ -4,60 +4,162 @@
    antes de pintar, así que no hay destello, y `dark:` responde a él. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+/* ---------------------------------------------------------------------
+   Tokens de color. Son los de dashboard/local/styles.css (la referencia
+   visual, decisión 1: minimalista, Vercel y Notion, Geist), con los
+   mismos nombres y valores en claro y en oscuro. El kit de interfaz
+   (CIM-5) solo consume estos nombres.
+
+   Debajo, alias con los nombres que usaba el primer marco (--fg, --line,
+   --ok, --danger…) apuntando a los tokens del mock, para que nada se
+   rompa mientras los componentes viejos migran. No agregues valores a
+   los alias: cambia el token de origen.
+   ------------------------------------------------------------------ */
 :root {
   color-scheme: light;
-  --bg: #ffffff;
-  --bg-2: #fafafa;
-  --bg-3: #f2f2f2;
-  --line: #eaeaea;
-  --line-2: #d4d4d4;
-  --fg: #171717;
-  --fg-2: #525252;
-  --fg-3: #8a8a8a;
-  --accent: #171717;
-  --accent-fg: #ffffff;
 
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --hover: #f4f4f4;
+  --ink: #171717;
+  --ink-2: #525252;
+  --muted: #8a8a8a;
+  --grid: #f0f0f0;
+  --axis: #d4d4d4;
+  --border: #eaeaea;
+  --accent: #171717;
+  --accent-ink: #ffffff;
+  --accent-wash: rgba(0, 0, 0, 0.05);
+  --deemph: #d4d4d4;
+
+  --good: #15803d;
+  --good-wash: #f0fdf4;
+  --warn: #b45309;
+  --warn-wash: #fffbeb;
+  --bad: #dc2626;
+  --bad-wash: #fef2f2;
+
+  --s-tiktok: #2a78d6;
+  --s-instagram: #eb6834;
+  --s-facebook: #1baf7a;
+  --s-youtube: #eda100;
+
+  --tooltip-bg: #171717;
+  --tooltip-ink: #ffffff;
+  --tooltip-ink-2: #a3a3a3;
+
+  /* Propios de la app de construcción (no están en el mock). */
+  --info: #5b3fd0;
+  --info-wash: #ede9fb;
   --rasheed: #0062d6;
   --rasheed-bg: #e8f0fe;
   --nicolas: #a85a0a;
   --nicolas-bg: #fbeedd;
-
-  --ok: #0f7b3d;
-  --ok-bg: #e5f5ea;
-  --info: #5b3fd0;
-  --info-bg: #ede9fb;
-  --danger: #c2362b;
-  --danger-bg: #fdecea;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0a0a0a;
-  --bg-2: #111111;
-  --bg-3: #1a1a1a;
-  --line: #262626;
-  --line-2: #363636;
-  --fg: #ededed;
-  --fg-2: #a3a3a3;
-  --fg-3: #737373;
-  --accent: #ededed;
-  --accent-fg: #0a0a0a;
 
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-2: #111111;
+  --hover: #171717;
+  --ink: #ededed;
+  --ink-2: #a1a1a1;
+  --muted: #7d7d7d;
+  --grid: #1f1f1f;
+  --axis: #333333;
+  --border: #262626;
+  --accent: #ededed;
+  --accent-ink: #0a0a0a;
+  --accent-wash: rgba(255, 255, 255, 0.08);
+  --deemph: #404040;
+
+  --good: #4ade80;
+  --good-wash: rgba(74, 222, 128, 0.12);
+  --warn: #fbbf24;
+  --warn-wash: rgba(251, 191, 36, 0.12);
+  --bad: #f87171;
+  --bad-wash: rgba(248, 113, 113, 0.12);
+
+  --s-tiktok: #3987e5;
+  --s-instagram: #d95926;
+  --s-facebook: #199e70;
+  --s-youtube: #c98500;
+
+  --tooltip-bg: #ededed;
+  --tooltip-ink: #0a0a0a;
+  --tooltip-ink-2: #525252;
+
+  --info: #b39cf6;
+  --info-wash: #261c4a;
   --rasheed: #6aaeff;
   --rasheed-bg: #10243f;
   --nicolas: #f0b263;
   --nicolas-bg: #35240e;
-
-  --ok: #56c98a;
-  --ok-bg: #0f2e1c;
-  --info: #b39cf6;
-  --info-bg: #261c4a;
-  --danger: #f28b82;
-  --danger-bg: #3d1614;
 }
 
+/* Alias del primer marco → tokens del mock. */
+:root,
+[data-theme="dark"] {
+  --bg-2: var(--surface-2);
+  --bg-3: var(--hover);
+  --line: var(--border);
+  --line-2: var(--axis);
+  --fg: var(--ink);
+  --fg-2: var(--ink-2);
+  --fg-3: var(--muted);
+  --accent-fg: var(--accent-ink);
+  --ok: var(--good);
+  --ok-bg: var(--good-wash);
+  --info-bg: var(--info-wash);
+  --danger: var(--bad);
+  --danger-bg: var(--bad-wash);
+
+  /* Tipografía: Geist se carga con next/font en el layout. */
+  --sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Lo mismo como utilidades de Tailwind: bg-surface, text-ink, border-border,
+   text-good, bg-warn-wash, stroke-s-tiktok, font-mono… */
 @theme inline {
   --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-hover: var(--hover);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-grid: var(--grid);
+  --color-axis: var(--axis);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-wash: var(--accent-wash);
+  --color-deemph: var(--deemph);
+  --color-good: var(--good);
+  --color-good-wash: var(--good-wash);
+  --color-warn: var(--warn);
+  --color-warn-wash: var(--warn-wash);
+  --color-bad: var(--bad);
+  --color-bad-wash: var(--bad-wash);
+  --color-s-tiktok: var(--s-tiktok);
+  --color-s-instagram: var(--s-instagram);
+  --color-s-facebook: var(--s-facebook);
+  --color-s-youtube: var(--s-youtube);
+  --color-tooltip-bg: var(--tooltip-bg);
+  --color-tooltip-ink: var(--tooltip-ink);
+  --color-tooltip-ink-2: var(--tooltip-ink-2);
+  --color-info: var(--info);
+  --color-info-wash: var(--info-wash);
+  --color-rasheed: var(--rasheed);
+  --color-rasheed-bg: var(--rasheed-bg);
+  --color-nicolas: var(--nicolas);
+  --color-nicolas-bg: var(--nicolas-bg);
+
+  /* Alias (bg-bg-2, text-fg, border-line, text-ok, bg-danger-bg…). */
   --color-bg-2: var(--bg-2);
   --color-bg-3: var(--bg-3);
   --color-line: var(--line);
@@ -65,21 +167,15 @@
   --color-fg: var(--fg);
   --color-fg-2: var(--fg-2);
   --color-fg-3: var(--fg-3);
-  --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
-  --color-rasheed: var(--rasheed);
-  --color-rasheed-bg: var(--rasheed-bg);
-  --color-nicolas: var(--nicolas);
-  --color-nicolas-bg: var(--nicolas-bg);
   --color-ok: var(--ok);
   --color-ok-bg: var(--ok-bg);
-  --color-info: var(--info);
   --color-info-bg: var(--info-bg);
   --color-danger: var(--danger);
   --color-danger-bg: var(--danger-bg);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -88,20 +184,20 @@
 
 html {
   background: var(--bg);
-  color: var(--fg);
+  color: var(--ink);
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-sans);
+  color: var(--ink);
+  font-family: var(--sans);
   font-feature-settings: "cv11", "ss01";
   text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background: var(--fg);
+  background: var(--ink);
   color: var(--bg);
 }
 
@@ -113,7 +209,7 @@ summary::-webkit-details-marker {
 }
 
 :focus-visible {
-  outline: 2px solid var(--fg);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
   border-radius: 4px;
 }
