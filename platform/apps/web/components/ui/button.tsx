@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, MouseEvent, ReactNode } from "react";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
@@ -18,7 +18,7 @@ export type ButtonProps = {
   /** A la izquierda del texto, decorativo. */
   icon?: ReactNode;
   children: ReactNode;
-  onClick?: () => void;
+  onClick?: (event: MouseEvent<HTMLElement>) => void;
   className?: string;
 } & Pick<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label" | "title" | "form" | "name" | "value">;
 

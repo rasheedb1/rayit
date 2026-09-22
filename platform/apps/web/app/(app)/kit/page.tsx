@@ -8,6 +8,8 @@ import { Pill } from "@/components/ui/pill";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataAsOf } from "@/components/ui/data-as-of";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
+import { CellMain, DataTable } from "@/components/ui/data-table";
+import { TableDemo } from "./table-demo";
 import { FormDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ArrowRight } from "lucide-react";
@@ -21,6 +23,7 @@ const SECTIONS = [
   ["empty-state", "EmptyState"],
   ["data-as-of", "DataAsOf"],
   ["kpi", "Kpi / KpiRow"],
+  ["data-table", "DataTable"],
 ] as const;
 
 // Galería del kit (CIM-5). Detrás de la bandera "kit": encendida en
@@ -155,6 +158,56 @@ export default function Page() {
             <Kpi label="Cobrado desde el inicio" value="COP 1.234.567.890" note="Distribuidora Nacional de Alimentos S.A.S." />
             <Kpi label="Un valor y una nota que no caben en una línea" value="COP 1.234.567.890,50" delta={1.234} deltaLabel="vs. Distribuidora Nacional de Alimentos S.A.S. en 2025" />
           </KpiRow>
+        </Variant>
+      </Section>
+
+      <Section
+        id="data-table"
+        title="DataTable"
+        usage={`<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} caption="Cuentas por cobrar" emptyState={<EmptyState title="Nada por cobrar" />} onRowClick={open} />`}
+      >
+        <Variant label="La tabla CXC del mock, con fila clicable">
+          <TableDemo />
+        </Variant>
+        <Variant label="Vacía">
+          <DataTable
+            columns={[
+              { key: "brand", header: "Marca" },
+              { key: "amount", header: "Monto", align: "num" },
+            ]}
+            rows={[]}
+            rowKey={() => ""}
+            caption="Cuentas por cobrar"
+            emptyState={<EmptyState title="Nada por cobrar" description="Cuando aceptes una cotización, la factura aparece aquí." action={{ label: "Ir a Cotizar", href: "/cotizar" }} />}
+          />
+        </Variant>
+        <Variant label="Cargando, con caption visible y densidad normal">
+          <DataTable
+            columns={[
+              { key: "brand", header: "Marca" },
+              { key: "campaign", header: "Campaña" },
+              { key: "amount", header: "Monto", align: "num" },
+            ]}
+            rows={[]}
+            rowKey={() => ""}
+            caption="Cuentas por cobrar · cargando"
+            showCaption
+            density="normal"
+            emptyState={null}
+            loading
+          />
+        </Variant>
+        <Variant label="Valores largos">
+          <DataTable
+            columns={[
+              { key: "brand", header: "Marca", render: (r: { brand: string; sub: string; amount: string }) => <CellMain sub={r.sub}>{r.brand}</CellMain> },
+              { key: "amount", header: "Monto", align: "num" },
+            ]}
+            rows={[{ brand: "Distribuidora Nacional de Alimentos S.A.S.", sub: "Campaña de lanzamiento de la línea de productos veganos del segundo semestre", amount: "COP 1.234.567.890,50" }]}
+            rowKey={(r) => r.brand}
+            caption="Valores largos"
+            emptyState={null}
+          />
         </Variant>
       </Section>
     </>
