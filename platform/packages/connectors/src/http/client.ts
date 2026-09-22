@@ -43,6 +43,8 @@ export interface HttpCoreOptions {
   retry?: Partial<RetryPolicy>;
   /** Tope por intento. Se encadena con la señal del llamador. */
   timeoutMs?: number;
+  /** Señal que llevan las llamadas que no traen la suya (en el worker, la del job). */
+  defaultSignal?: AbortSignal;
 }
 
 export type AuthStyle = 'bearer' | 'access-token-header' | 'none';
@@ -92,6 +94,7 @@ export class HttpCore {
   readonly #random: () => number;
   readonly #retry: RetryPolicy;
   readonly #timeoutMs: number;
+  readonly #defaultSignal: AbortSignal | undefined;
 
   constructor(opts: HttpCoreOptions) {
     this.callLog = opts.callLog;
@@ -105,9 +108,11 @@ export class HttpCore {
     this.#random = opts.random ?? Math.random;
     this.#retry = { ...DEFAULT_RETRY_POLICY, ...opts.retry };
     this.#timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#defaultSignal = opts.defaultSignal;
   }
 
-  async call<T = unknown>(req: ApiRequest): Promise<ApiResponse<T>> {
+  async call<T = unknown>(input: ApiRequest): Promise<ApiResponse<T>> {
+    const req: ApiRequest = input.signal ? input : { ...input, signal: this.#defaultSignal };
     const units = req.units ?? this.quota.unitsFor({ family: req.family, platformId: req.platformId, connectionId: req.connectionId, endpoint: req.endpoint });
     const secrets = req.tokens ? [req.tokens.accessToken, req.tokens.refreshToken ?? ''] : [];
     const url = buildUrl(req.url, req.query);

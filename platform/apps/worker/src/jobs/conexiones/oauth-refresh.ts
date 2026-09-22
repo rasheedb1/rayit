@@ -184,7 +184,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
     const e = err instanceof TokenRefreshError
       ? err
       : new TokenRefreshError({ kind: 'transient', code: 'unexpected', messageEs: 'Error inesperado al renovar; se volverá a intentar.', cause: err });
-    await logApiCall(ctx.db, conn, { ok: false, httpStatus: e.httpStatus ?? null, errorCode: e.code, errorMessage: e.messageEs, durationMs, rateLimited: e.isRateLimited, retryAfterS: e.retryAfterS ?? null });
+    await logApiCall(ctx, conn, { ok: false, httpStatus: e.httpStatus ?? null, errorCode: e.code, errorMessage: e.messageEs, durationMs, rateLimited: e.isRateLimited, retryAfterS: e.retryAfterS ?? null });
     if (e.isPermanent) {
       return markNeedsReauth(ctx.db, conn, platformName, e.code, `${e.messageEs} (${e.code})`, log);
     }
@@ -193,7 +193,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
     return { kind: 'transient', code: e.code, retryHelps: !e.isRateLimited && !RETRY_USELESS_CODES.has(e.code) };
   }
   const durationMs = Date.now() - started;
-  await logApiCall(ctx.db, conn, { ok: true, httpStatus: 200, errorCode: null, errorMessage: null, durationMs, rateLimited: false, retryAfterS: null });
+  await logApiCall(ctx, conn, { ok: true, httpStatus: 200, errorCode: null, errorMessage: null, durationMs, rateLimited: false, retryAfterS: null });
 
   // Primero el almacén, después la base (ver cabecera). Si el almacén
   // falla aquí, la plataforma ya rotó el refresh token y lo perdimos: es
@@ -260,13 +260,22 @@ interface ApiCall {
   retryAfterS: number | null;
 }
 
-/** Bitácora de la llamada saliente. Sin cuerpo de respuesta: solo código, estado y duración. */
-async function logApiCall(db: JobDatabase, conn: ConnectionRow, call: ApiCall): Promise<void> {
-  await db.query(
-    `INSERT INTO api_call_log (connection_id, platform_id, endpoint, http_status, ok, error_code, error_message, duration_ms, rate_limited, retry_after_s)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [conn.id, conn.platform_id, ENDPOINT, call.httpStatus, call.ok, call.errorCode, call.errorMessage, call.durationMs, call.rateLimited, call.retryAfterS],
-  );
+/**
+ * Bitácora de la llamada saliente por el sink de CON-1 (ctx.callLog →
+ * api_call_log). Sin cuerpo de respuesta: solo código, estado y duración.
+ * Un fallo al escribir el log no puede tumbar la renovación: se avisa y sigue.
+ */
+async function logApiCall(ctx: JobContext, conn: ConnectionRow, call: ApiCall): Promise<void> {
+  if (!isPlatformId(conn.platform_id)) return;
+  try {
+    await ctx.callLog.record({
+      connection_id: conn.id, platform_id: conn.platform_id, endpoint: ENDPOINT, http_status: call.httpStatus, ok: call.ok,
+      error_code: call.errorCode, error_message: call.errorMessage, request_units: 1, duration_ms: call.durationMs,
+      rate_limited: call.rateLimited, retry_after_s: call.retryAfterS,
+    });
+  } catch (err) {
+    ctx.logger.warn('no se pudo escribir api_call_log; la renovación sigue', { connectionId: conn.id, err });
+  }
 }
 
 /** Ejecuta fn sobre items con a lo sumo `limit` en paralelo, conservando el orden de arranque. */

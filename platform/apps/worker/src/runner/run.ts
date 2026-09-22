@@ -12,7 +12,7 @@
  * log. La metadata pasa por el redactor antes de guardarse: aunque un
  * handler se equivoque y devuelva un token, no llega a la base.
  */
-import { redactSecrets, type SecretStore, type TokenRefresherRegistry } from '@mc/connectors';
+import { createConnectors, PostgresCallLogSink, redactSecrets, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresherRegistry } from '@mc/connectors';
 import type { Env } from './config.ts';
 import type { JobDatabase } from './db.ts';
 import type { Logger } from './logger.ts';
@@ -36,6 +36,10 @@ export interface RunDeps {
   logger: Logger;
   secrets: SecretStore;
   refreshers: TokenRefresherRegistry;
+  /** Cuota compartida por todas las ejecuciones del proceso (CON-1). */
+  quota: QuotaManager;
+  /** fetch/sleep/reloj inyectados para probar los conectores sin red; vacío en producción. */
+  http?: ConnectorHttpOverrides;
   env: Env;
   now?: () => Date;
 }
@@ -168,6 +172,7 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
     else abort.signal.addEventListener('abort', fail, { once: true });
   });
 
+  const callLog = new PostgresCallLogSink(deps.db);
   const ctx: JobContext = {
     jobId: definition.id,
     runId,
@@ -179,6 +184,8 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
     signal: abort.signal,
     secrets: deps.secrets,
     refreshers: deps.refreshers,
+    connectors: createConnectors({ callLog, quota: deps.quota, logger, signal: abort.signal, http: deps.http }),
+    callLog,
     now,
     env: deps.env,
   };

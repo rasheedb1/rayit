@@ -2,7 +2,7 @@
  * Arranque del worker: conecta, comprueba el rol, lee job_definition,
  * registra colas, crons y handlers, y deja pg-boss corriendo.
  */
-import type { SecretStore, TokenRefresherRegistry } from '@mc/connectors';
+import { loadPlatformLimits, PostgresQuotaUsageStore, QuotaManager, type ConnectorHttpOverrides, type SecretStore, type TokenRefresherRegistry } from '@mc/connectors';
 import type { PgBoss } from 'pg-boss';
 import { bossSchemaExists, createBoss, localConcurrencyFor, queueOptionsFor, updatableQueueOptions } from './boss.ts';
 import type { Env, WorkerConfig } from './config.ts';
@@ -21,6 +21,10 @@ export interface StartWorkerOptions {
   refreshers: TokenRefresherRegistry;
   env?: Env;
   now?: () => Date;
+  /** Cuota compartida del proceso; si no se pasa, se construye con api_quota_usage y platform.limits. */
+  quota?: QuotaManager;
+  /** Piezas inyectables de los conectores (pruebas sin red). */
+  http?: ConnectorHttpOverrides;
   /** Solo instalar/migrar el esquema pgboss y volver, sin registrar colas. */
   installOnly?: boolean;
 }
@@ -84,6 +88,13 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
   const { config, db, logger, secrets, refreshers } = opts;
   const env = opts.env ?? process.env;
   const registry = new JobRegistry(opts.jobs);
+  const quota = opts.quota ?? new QuotaManager({
+    limits: await loadPlatformLimits(db, logger),
+    store: new PostgresQuotaUsageStore(db),
+    logger,
+    now: opts.now,
+    sleep: opts.http?.sleep,
+  });
   const all = await loadJobDefinitions(db);
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
   const summary: JobSummary[] = [];
@@ -116,7 +127,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
           for (const job of jobs) {
             const outcome = await executeRun(
               { definition: def, registration, payload: job.data, attempt: job.retryCount + 1, bossJobId: job.id, signal: job.signal },
-              { db, logger, secrets, refreshers, env, now: opts.now },
+              { db, logger, secrets, refreshers, quota, http: opts.http, env, now: opts.now },
             );
             if (outcome.status === 'ok') continue;
             // Lanzar es lo que hace que pg-boss reintente hasta max_attempts.
