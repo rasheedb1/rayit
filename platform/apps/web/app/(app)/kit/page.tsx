@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Pill } from "@/components/ui/pill";
+import { EmptyState } from "@/components/ui/empty-state";
+import { DataAsOf } from "@/components/ui/data-as-of";
+import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { FormDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ArrowRight } from "lucide-react";
@@ -15,6 +18,9 @@ const SECTIONS = [
   ["button", "Button"],
   ["pill", "Pill"],
   ["form", "Formulario"],
+  ["empty-state", "EmptyState"],
+  ["data-as-of", "DataAsOf"],
+  ["kpi", "Kpi / KpiRow"],
 ] as const;
 
 // Galería del kit (CIM-5). Detrás de la bandera "kit": encendida en
@@ -103,6 +109,52 @@ export default function Page() {
               <MoneyInput value="1234567890.00" currency="COP" onChange={() => {}} disabled />
             </Field>
           </div>
+        </Variant>
+      </Section>
+
+      <Section id="empty-state" title="EmptyState" usage={`<EmptyState title="Sin conexiones" description="Conecta una red para ver datos." action={{ label: "Conectar", href: "/conexiones" }} />`}>
+        <Variant label="Con acción">
+          <EmptyState title="Sin conexiones" description="Conecta TikTok, Instagram o YouTube para empezar a ver datos." action={{ label: "Conectar una red", href: "/conexiones" }} />
+        </Variant>
+        <Variant label="Solo título">
+          <EmptyState title="Nada por cobrar" />
+        </Variant>
+      </Section>
+
+      <Section id="data-as-of" title="DataAsOf" usage={`<DataAsOf date="2026-09-20T00:00:00Z" source="Instagram" />`}>
+        <Variant label="Con y sin fuente">
+          <div className="space-y-1">
+            <DataAsOf date="2026-09-20T00:00:00Z" source="Instagram" />
+            <DataAsOf date="2026-09-18T23:30:00Z" source="CSV de TikTok Studio" />
+            <DataAsOf date="2026-01-05" />
+          </div>
+        </Variant>
+      </Section>
+
+      <Section id="kpi" title="Kpi / KpiRow" usage={`<KpiRow>\n  <Kpi label="Cobrado en 2026" value="COP 38,6 M" delta={0.31} deltaLabel="vs. mismo período 2025" />\n</KpiRow>`}>
+        <Variant label="Finanzas (cifras del mock)">
+          <KpiRow>
+            <Kpi label="Por cobrar" value="COP 9,4 M" note="3 facturas" href="/finanzas" />
+            <Kpi label="Vencido" value="COP 1,1 M" note="1 factura · 41 días" />
+            <Kpi label="Cobrado en 2026" value="COP 38,6 M" delta={0.31} deltaLabel="vs. mismo período 2025" />
+            <Kpi label="Apartado para impuestos" value="COP 4,2 M" note="11 % de cada cobro" />
+          </KpiRow>
+        </Variant>
+        <Variant label="Con sparkline, delta negativo y plano">
+          <KpiRow>
+            <Kpi label="Seguidores" value="412 mil" delta={0.042} deltaLabel="vs. 30 días antes" sparkline={[380, 384, 390, 388, 395, 401, 404, 412]} />
+            <Kpi label="Views en 30 días" value="9,8 M" delta={-0.117} deltaLabel="vs. 30 días antes" sparkline={[11.2, 10.9, 10.1, 10.4, 9.7, 9.9, 9.8]} />
+            <Kpi label="Alcance en no seguidores" value="63 %" delta={0} deltaLabel="sin cambio" />
+            <Kpi label="Guardados por mil" value="14,2" trend="up" delta={0.08} note="Mejor semana del trimestre" />
+          </KpiRow>
+        </Variant>
+        <Variant label="Cargando y valores largos">
+          <KpiRow>
+            <Kpi label="Por cobrar" value="" loading />
+            <Kpi label="Cobrado en 2026" value="" loading />
+            <Kpi label="Cobrado desde el inicio" value="COP 1.234.567.890" note="Distribuidora Nacional de Alimentos S.A.S." />
+            <Kpi label="Un valor y una nota que no caben en una línea" value="COP 1.234.567.890,50" delta={1.234} deltaLabel="vs. Distribuidora Nacional de Alimentos S.A.S. en 2025" />
+          </KpiRow>
         </Variant>
       </Section>
     </>
