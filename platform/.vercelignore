@@ -15,7 +15,9 @@ docker-compose.yml
 Makefile
 apps/worker/
 apps/media/
-packages/connectors/
+# packages/connectors NO se excluye desde CON-3: la web lo importa (OAuth,
+# cifrado y configuración de las apps). Sus fixtures pesan poco y sus
+# pruebas caen por **/test/.
 **/test/
 **/*.test.ts
 **/*.test.tsx

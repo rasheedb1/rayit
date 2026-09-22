@@ -345,6 +345,11 @@ request URL**; hoy pueden apuntar a `https://on-cue-web.vercel.app/conexiones`
 | `APP_URL` | Vercel | `https://on-cue-web.vercel.app` en producción. |
 | `OAUTH_REFRESH_MARGIN_MINUTES_INSTAGRAM` | worker, opcional | 7 días por defecto (§0.2 · 9). |
 
+**Despliegue:** `platform/.vercelignore` excluía `packages/connectors/`;
+desde CON-3 la web lo importa, así que ya no se excluye (mismo caso que
+`packages/db` en FIN-1). El primer deploy falló por eso con «Module not
+found: Can't resolve '@mc/connectors'».
+
 Ninguna dependencia nueva: `zod` ya estaba en la web; `node:crypto` es
 de Node. `apps/web` ahora depende de `@mc/connectors` (workspace) y el
 lockfile solo suma ese enlace en el importer de `apps/web`.
