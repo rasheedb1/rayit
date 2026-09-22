@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "code 4: límite de la app por horas. Meta no manda Retry-After; transitorio sin reintento inmediato." },
+  "request": { "method": "GET", "urlPattern": "^https://graph\\.instagram\\.com/refresh_access_token\\?grant_type=ig_refresh_token$" },
+  "response": { "status": 400, "body": { "error": { "message": "Application request limit reached", "type": "OAuthException", "code": 4, "fbtrace_id": "AbCdEf124" } } }
+}

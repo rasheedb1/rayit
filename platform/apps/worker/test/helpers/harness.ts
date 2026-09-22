@@ -3,7 +3,7 @@
  * migraciones del repo (incluida 0014, los privilegios de mc_worker),
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
-import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type TokenRefresher } from '@mc/connectors';
+import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
 import { createLogger, MemorySink, type Logger } from '../../src/runner/logger.ts';
@@ -25,7 +25,7 @@ export interface Harness {
   db: PgliteDatabase;
   sink: MemorySink;
   logger: Logger;
-  secrets: InMemorySecretStore;
+  secrets: SecretStore;
   refresher: FakeTokenRefresher;
   worker: RunningWorker;
   now: () => Date;
@@ -35,6 +35,8 @@ export interface Harness {
 export interface HarnessOptions {
   jobs: readonly JobRegistration[];
   refreshers?: TokenRefresher[];
+  /** Almacén de secretos; por defecto uno en memoria. Puede construirse con la base (recibe el PgliteDatabase ya migrado y sembrado). */
+  secrets?: (db: PgliteDatabase) => SecretStore;
   now?: () => Date;
   config?: Partial<WorkerConfig>;
   /** SQL a ejecutar como superusuario antes de arrancar (definiciones de prueba, datos). */
@@ -50,7 +52,7 @@ export async function startHarness(opts: HarnessOptions): Promise<Harness> {
   if (opts.seed) await opts.seed(db);
   const sink = new MemorySink();
   const logger = createLogger({ level: 'debug', sink });
-  const secrets = new InMemorySecretStore();
+  const secrets = opts.secrets ? opts.secrets(db) : new InMemorySecretStore();
   const refresher = new FakeTokenRefresher('tiktok');
   const refreshers = refresherRegistry(opts.refreshers ?? [refresher]);
   const now = opts.now ?? (() => new Date());

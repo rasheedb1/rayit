@@ -61,7 +61,14 @@ export interface ApiRequest {
   query?: Record<string, string | number | boolean | undefined>;
   /** Se serializa como JSON. */
   body?: unknown;
+  /** Cuerpo application/x-www-form-urlencoded (los endpoints de token de TikTok e Instagram). Excluyente con `body`. */
+  form?: Record<string, string | undefined>;
   headers?: Record<string, string>;
+  /**
+   * Valores que, además del token, no pueden aparecer en un mensaje de
+   * error ni en api_call_log (client_secret, code, refresh_token).
+   */
+  secrets?: readonly string[];
   connectionId: string | null;
   tokens: OAuthTokens | null;
   authStyle: AuthStyle;
@@ -122,7 +129,7 @@ export class HttpCore {
     const req: ApiRequest = input.signal ? input : { ...input, signal: this.#defaultSignal };
     const quotaKey = { family: req.family, platformId: req.platformId, connectionId: req.connectionId, endpoint: req.quotaEndpoint ?? req.endpoint };
     const units = req.units ?? this.quota.unitsFor({ ...quotaKey, endpoint: req.endpoint });
-    const secrets = req.tokens ? [req.tokens.accessToken, req.tokens.refreshToken ?? ''] : [];
+    const secrets = secretsOf(req);
     const url = buildUrl(req.url, req.query);
     const started = performance.now();
 
@@ -160,7 +167,12 @@ export class HttpCore {
     if (req.tokens && req.authStyle === 'bearer') headers['Authorization'] = `Bearer ${req.tokens.accessToken}`;
     if (req.tokens && req.authStyle === 'access-token-header') headers['Access-Token'] = req.tokens.accessToken;
     let bodyText: string | undefined;
-    if (req.body !== undefined) {
+    if (req.form !== undefined) {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(req.form)) if (v !== undefined) params.set(k, v);
+      bodyText = params.toString();
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    } else if (req.body !== undefined) {
       bodyText = JSON.stringify(req.body);
       headers['Content-Type'] = 'application/json';
     }
@@ -198,7 +210,7 @@ export class HttpCore {
   }
 
   async #log(a: { req: ApiRequest; units: number; status: number | null; ok: boolean; error: PlatformApiError | null; durationMs: number; platformMessage?: string }): Promise<void> {
-    const secrets = a.req.tokens ? [a.req.tokens.accessToken, a.req.tokens.refreshToken ?? ''] : [];
+    const secrets = secretsOf(a.req);
     const entry: CallLogEntry = {
       connection_id: a.req.connectionId,
       platform_id: a.req.platformId,
@@ -222,6 +234,13 @@ export class HttpCore {
   #aborted(req: ApiRequest): PlatformApiError {
     return classifyApiError({ platformId: req.platformId, endpoint: req.endpoint, httpStatus: undefined, parsed: null, failure: 'aborted' });
   }
+}
+
+/** Todo lo que safeErrorMessage debe borrar de un mensaje: el token y los secretos extra de la petición. */
+function secretsOf(req: ApiRequest): string[] {
+  const out = req.tokens ? [req.tokens.accessToken, req.tokens.refreshToken ?? ''] : [];
+  for (const s of req.secrets ?? []) if (s) out.push(s);
+  return out;
 }
 
 function elapsed(t0: number): number {

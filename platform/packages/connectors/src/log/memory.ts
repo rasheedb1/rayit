@@ -15,3 +15,6 @@ export class InMemoryCallLogSink implements CallLogSink {
     return this.entries.filter((e) => e.endpoint === endpoint);
   }
 }
+
+/** Sink que descarta: para un HttpCore cuyo registro ya hace otro (el job oauth.refresh escribe su propia fila). */
+export const NULL_CALL_LOG: CallLogSink = { async record() {} };

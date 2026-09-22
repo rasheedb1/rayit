@@ -1,0 +1,13 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "developers.tiktok.com/doc/oauth-user-access-token-management: respuesta del grant authorization_code." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "authorization_code" } },
+  "response": { "status": 200, "body": {
+    "access_token": "act.demo-access-tiktok-0001-SECRETO",
+    "expires_in": 86400,
+    "open_id": "open_id_demo_laura",
+    "refresh_expires_in": 31536000,
+    "refresh_token": "rft.demo-refresh-tiktok-0001-SECRETO",
+    "scope": "user.info.basic,user.info.profile,user.info.stats,video.list",
+    "token_type": "Bearer"
+  } }
+}

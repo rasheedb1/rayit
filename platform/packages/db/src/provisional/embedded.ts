@@ -34,6 +34,8 @@ export interface EmbeddedOptions {
 export interface EmbeddedDb extends Db {
   /** Ejecuta SQL suelto como superusuario (solo para preparar pruebas). */
   execAsSuperuser(sql: string): Promise<void>;
+  /** Consulta como superusuario, saltando RLS: para que una prueba mire TODAS las filas de TODAS las tablas. */
+  queryAsSuperuser<T = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>;
 }
 
 export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
@@ -84,6 +86,15 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
       await pglite.exec('RESET ROLE');
       try {
         await pglite.exec(sql);
+      } finally {
+        await pglite.exec('SET ROLE mc_migrator_embedded');
+      }
+    },
+    async queryAsSuperuser(text, params) {
+      await pglite.exec('RESET ROLE');
+      try {
+        const r = await pglite.query(text, params ? [...params] : undefined);
+        return { rows: r.rows as never[] };
       } finally {
         await pglite.exec('SET ROLE mc_migrator_embedded');
       }

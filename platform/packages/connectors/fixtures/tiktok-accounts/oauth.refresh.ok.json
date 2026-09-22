@@ -1,0 +1,8 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "tt_user/oauth2/refresh_token/ (cabecera de CON-2). El refresh token rota como en Login Kit." },
+  "request": { "method": "POST", "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/tt_user/oauth2/refresh_token/$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 200, "body": { "code": 0, "message": "OK", "request_id": "2026092211", "data": {
+    "access_token": "act.demo-business-0002-SECRETO", "expires_in": 86400,
+    "refresh_token": "rft.demo-business-0002-SECRETO", "refresh_token_expires_in": 31536000,
+    "open_id": "biz_open_id_demo_laura", "scope": "user.info.basic,user.info.username,user.info.stats,user.insights,video.list,video.insights" } } }
+}

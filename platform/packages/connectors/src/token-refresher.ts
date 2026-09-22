@@ -29,6 +29,14 @@ export interface TokenRefresher {
 
 export interface RefreshOptions {
   signal?: AbortSignal;
+  /** Para api_call_log; los refreshers reales lo anotan si su sink registra. */
+  connectionId?: string;
+  /**
+   * La ref distingue las dos apps de TikTok ('enc:tiktok:…' es Login
+   * Kit, 'enc:tiktok-business:…' la Accounts API): el refresher no
+   * necesita otra pista (cabecera de platforms/tiktok.ts).
+   */
+  secretRef?: string;
 }
 
 export type TokenRefreshFailureKind = 'transient' | 'permanent';

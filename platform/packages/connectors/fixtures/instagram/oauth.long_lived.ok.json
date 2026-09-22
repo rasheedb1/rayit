@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "graph.instagram.com/access_token?grant_type=ig_exchange_token: 60 días." },
+  "request": { "method": "GET", "urlPattern": "^https://graph\\.instagram\\.com/access_token\\?grant_type=ig_exchange_token" },
+  "response": { "status": 200, "body": { "access_token": "IGAA-long-demo-0001-SECRETO", "token_type": "bearer", "expires_in": 5183944 } }
+}

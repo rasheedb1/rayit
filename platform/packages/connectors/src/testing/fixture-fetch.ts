@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FetchLike } from '../http/client.ts';
+import { redactSecrets } from '../redact.ts';
 
 export interface FixtureResponse {
   status: number;
@@ -84,8 +85,9 @@ export class FixtureFetch {
 
   async #handle(url: string, init: RequestInit): Promise<Response> {
     const method = (init.method ?? 'GET').toUpperCase();
-    const body = typeof init.body === 'string' ? tryJson(init.body) : undefined;
-    const call: RecordedCall = { method, url, headers: redactHeaders(init.headers), body };
+    const body = typeof init.body === 'string' ? parseBody(init.body, init.headers) : undefined;
+    // El cuerpo grabado pasa por el redactor: un client_secret o un refresh_token de un formulario no queda ni en memoria de pruebas.
+    const call: RecordedCall = { method, url, headers: redactHeaders(init.headers), body: redactSecrets(maskCodes(body)) };
     this.calls.push(call);
     const match = this.#loaded.find((l) => l.fixture.request.method.toUpperCase() === method && l.regex.test(url) && subset(l.fixture.request.body, body));
     if (!match) throw new UnexpectedCallError(call, this.#loaded.map((l) => `${l.fixture.request.method} ${l.fixture.request.urlPattern}`));
@@ -95,6 +97,27 @@ export class FixtureFetch {
     const headers = new Headers({ 'content-type': 'application/json', ...next.headers });
     return new Response(next.body === null || next.body === undefined ? '' : JSON.stringify(next.body), { status: next.status, headers });
   }
+}
+
+/** JSON, o application/x-www-form-urlencoded como objeto (así `request.body` de un fixture casa por subconjunto también en formularios). */
+function parseBody(text: string, headers: RequestInit['headers'] | undefined): unknown {
+  const type = headerValue(headers, 'content-type') ?? '';
+  if (type.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text));
+  return tryJson(text);
+}
+
+function headerValue(h: RequestInit['headers'] | undefined, name: string): string | undefined {
+  if (!h) return undefined;
+  const entries = h instanceof Headers ? [...h.entries()] : Array.isArray(h) ? h : Object.entries(h);
+  return entries.find(([k]) => k.toLowerCase() === name)?.[1];
+}
+
+/** El `code` de OAuth no es una llave que el redactor reconozca por nombre; aquí se tapa aparte. */
+function maskCodes(body: unknown): unknown {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return body;
+  const out: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  for (const k of ['code', 'auth_code', 'code_verifier']) if (typeof out[k] === 'string') out[k] = '[REDACTADO]';
+  return out;
 }
 
 function tryJson(text: string): unknown {

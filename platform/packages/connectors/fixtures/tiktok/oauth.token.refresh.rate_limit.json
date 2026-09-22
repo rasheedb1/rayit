@@ -1,0 +1,10 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "429 con Retry-After: transitorio; el job no reintenta de inmediato." },
+  "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/oauth/token/$", "body": { "grant_type": "refresh_token" } },
+  "response": [
+    { "status": 429, "headers": { "retry-after": "7" }, "body": { "error": "rate_limit_exceeded", "error_description": "Too many requests.", "log_id": "2026092203" } },
+    { "status": 429, "headers": { "retry-after": "7" }, "body": { "error": "rate_limit_exceeded", "error_description": "Too many requests.", "log_id": "2026092203" } },
+    { "status": 429, "headers": { "retry-after": "7" }, "body": { "error": "rate_limit_exceeded", "error_description": "Too many requests.", "log_id": "2026092203" } },
+    { "status": 429, "headers": { "retry-after": "7" }, "body": { "error": "rate_limit_exceeded", "error_description": "Too many requests.", "log_id": "2026092203" } }
+  ]
+}

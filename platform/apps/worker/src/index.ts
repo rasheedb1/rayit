@@ -10,8 +10,9 @@
  * activos hasta WORKER_STOP_TIMEOUT_S) → cierra el pool → sale con 0.
  */
 import {
-  EnvSecretStore, FakeTokenRefresher, InMemorySecretStore, PLATFORM_IDS, instagramRefresher, refresherRegistry,
-  tiktokRefresher, youtubeRefresher, type SecretStore, type TokenRefresherRegistry,
+  createInstagramRefresher, createTikTokRefresher, EncryptedSecretStore, EnvSecretStore, FakeTokenRefresher, HttpCore, InMemorySecretStore,
+  keyringFromEnv, loadOAuthApps, MasterKeyError, NULL_CALL_LOG, PLATFORM_IDS, refresherRegistry, TokenCipher, youtubeRefresher,
+  type SecretStore, type TokenRefresherRegistry,
 } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
 import { ConfigError, loadConfig, type WorkerConfig } from './runner/config.ts';
@@ -59,8 +60,23 @@ async function openDatabase(): Promise<WorkerDatabase> {
   });
 }
 
-function buildSecrets(): SecretStore {
-  return config.secretStore === 'memory' ? new InMemorySecretStore() : new EnvSecretStore();
+/**
+ * El almacén real (CON-3): connection_secret cifrado con TOKEN_ENCRYPTION_KEY,
+ * leído y escrito con la conexión del worker (mc_worker). Sin la clave el
+ * worker no arranca: un refresher que no puede leer tokens no sirve de nada.
+ */
+function buildSecrets(db: WorkerDatabase): SecretStore {
+  if (config.secretStore === 'memory') return new InMemorySecretStore();
+  if (config.secretStore === 'env') {
+    logger.warn('SECRET_STORE=env: los tokens salen de variables de entorno. Solo para desarrollo.');
+    return new EnvSecretStore();
+  }
+  try {
+    return new EncryptedSecretStore({ db, cipher: new TokenCipher(keyringFromEnv(process.env)) });
+  } catch (err) {
+    if (err instanceof MasterKeyError) throw new ConfigError(`${err.message} Para desarrollo sin clave: SECRET_STORE=memory o env.`);
+    throw err;
+  }
 }
 
 function buildRefreshers(): TokenRefresherRegistry {
@@ -68,13 +84,23 @@ function buildRefreshers(): TokenRefresherRegistry {
     logger.warn('TOKEN_REFRESHER=fake: los tokens se "renuevan" con un refresher falso. Solo para desarrollo.');
     return refresherRegistry(PLATFORM_IDS.map((p) => new FakeTokenRefresher(p)));
   }
-  // Los reales llegan con CON-3 (TikTok, Instagram) y CON-8 (YouTube); hoy fallan como transitorio.
-  return refresherRegistry([tiktokRefresher, instagramRefresher, youtubeRefresher]);
+  // TikTok e Instagram reales (CON-3) sobre el cliente HTTP de CON-1; YouTube llega con CON-8.
+  // El sink es nulo porque el job oauth.refresh escribe su propia fila en api_call_log.
+  const { apps, missing } = loadOAuthApps(process.env);
+  for (const [provider, vars] of Object.entries(missing)) {
+    logger.warn('app OAuth sin configurar: sus tokens no se podrán renovar', { provider, missing: vars });
+  }
+  const core = new HttpCore({ callLog: NULL_CALL_LOG, logger, retry: { maxRetries: 1 } });
+  return refresherRegistry([
+    createTikTokRefresher(core, { login: apps.tiktok, business: apps['tiktok-business'] }),
+    createInstagramRefresher(core, apps.instagram),
+    youtubeRefresher,
+  ]);
 }
 
 async function main(): Promise<void> {
   const db = await openDatabase();
-  const secrets = buildSecrets();
+  const secrets = buildSecrets(db);
   const refreshers = buildRefreshers();
 
   let worker: RunningWorker;

@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "code inválido: api.instagram.com responde con la forma vieja { error_type, code, error_message }." },
+  "request": { "method": "POST", "urlPattern": "^https://api\\.instagram\\.com/oauth/access_token$", "body": { "grant_type": "authorization_code" } },
+  "response": { "status": 400, "body": { "error_type": "OAuthException", "code": 400, "error_message": "Invalid authorization code" } }
+}
