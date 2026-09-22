@@ -18,7 +18,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyMigrations, applySeeds, MigrationChangedError, MigrationFailedError } from './lib/aplicar.mjs';
+import { applyMigrations, applySeeds, MigrationChangedError, MigrationFailedError, SeedFailedError } from './lib/aplicar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -104,7 +104,21 @@ async function main() {
   }
 
   if (withSeed) {
-    await applySeeds(db.query, { onApplied: (file) => console.log(`  ✓ seed/${file}`) });
+    // Cada seed va en su transacción, igual que una migración; el
+    // bucle vive en db/lib/aplicar.mjs. Aquí solo queda la salida.
+    try {
+      await applySeeds(db.query, {
+        onApplied: (file, ms) => console.log(`  ✓ seed/${file}  (${ms} ms)`),
+      });
+    } catch (err) {
+      if (err instanceof SeedFailedError) {
+        console.error(`\n  ✗ seed/${err.file}\n    ${err.cause?.message ?? err.message}\n`);
+      } else {
+        console.error(err);
+      }
+      await db.close();
+      process.exit(1);
+    }
   }
 
   // Resumen: cuántos objetos quedaron creados.

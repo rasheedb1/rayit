@@ -6,6 +6,24 @@
     "typecheck": { "dependsOn": ["^build"] },
     "lint":      {},
     "test":      { "dependsOn": ["^build"], "cache": false },
-    "format":    { "cache": false }
+    "format":    { "cache": false },
+
+    "//#test": {
+      "inputs": ["db/migrations/**", "db/seed/**", "package.json"],
+      "outputs": []
+    },
+
+    "@mc/db#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**", "$TURBO_ROOT$/db/seed/**"]
+    },
+    "@mc/connectors#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**"]
+    },
+    "@mc/worker#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**"]
+    }
   }
 }

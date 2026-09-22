@@ -84,6 +84,12 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     SET ROLE ${APP_ROLE};
   `);
 
+  // UTC, explícito y decidido aquí. Los seeds también lo fijan para su
+  // sesión (CURRENT_DATE depende de la zona), pero esta base trabaja en
+  // UTC porque lo dice este módulo —la app trabaja en UTC—, no por
+  // efecto lateral de un archivo de datos que quizá ni se cargó.
+  await pglite.exec("SELECT set_config('TimeZone', 'UTC', false)");
+
   const db = createPgliteDb(pglite, opts);
   /** Corre fn como superusuario y deja la sesión como mc_app pase lo que pase. */
   const asSuperuser = <T>(fn: (p: InstanceType<typeof PGlite>) => Promise<T>) =>

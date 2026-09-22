@@ -124,7 +124,8 @@ export const STORIES: readonly Story[] = [
     title: "Seed de ventas y métricas",
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Seed 0002 determinista e idempotente cualquier día, y que no caduca por ningún lado: 60 videos con curvas ancladas a la primera corrida y una parrilla que se rellena sola (un video cada dos días desde el último guardado hasta ayer), la serie de la cuenta extendida hasta ayer, demografía cuyas personas salen de la última lectura de seguidores, línea base por día de cálculo y puntaje que sube al corte alcanzado con la regla de scoring.ts, y el CRM con 8 marcas, 13 señales (5 por revisar, como el mock) y 15 deals (10 abiertos · COP 95,5 M · ponderado 43,15 M). Volver a sembrar refresca lo que la demo mira hoy —cierre esperado, próxima acción y último contacto de los deals abiertos con su actividad de seguimiento, señales pendientes, ventana del brief, frescura de las conexiones, foto de la audiencia— y congela lo que ya pasó. Las cuatro campañas llevan su deal, así que la cadena señal → deal → campaña → factura se recorre entera. Verificación en Postgres embebido, ya colgada del comando estándar (pnpm turbo run test → tarea raíz //#test): cifras, prueba de la baja en outbound_touch, tercera pasada con el reloj a +1 y cuarta que resiembra la misma base a +41 exigiendo también videos recientes, tablero vivo y cero puntajes obsoletos; más la siembra en limpio a +40 días (node db/seed/verify/run.mjs [--dias 40], también en CI). El reloj del harness vive en reloj.mjs y ya no puede reescribir un dato que se parezca a now(). Toca 0003 (Nicolás) lo mínimo: línea de tiempo de Café Alma y las dos lecturas de Fresko condicionadas a su fecha (CIM-6.md §3.10). Decisiones en docs/propuestas/CIM-6.md.",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
@@ -140,7 +141,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0003 con verificación en Postgres embebido (node db/seed/verify/run-0003.mjs). Como 0002 no existe todavía, trae una sección de prerrequisitos con los ids que 0002 debe usar: docs/propuestas/CIM-8.md.",
+    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10).",
   },
 
   // ---------------------------------------------------------------- CON

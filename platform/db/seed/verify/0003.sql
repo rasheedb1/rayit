@@ -56,17 +56,17 @@ SELECT 'd_apartado' AS check_id, sum(amount) AS apartado, count(*) AS reservas, 
 FROM tax_reserve
 WHERE released_at IS NULL;
 
--- (e) Seguidores ganados por @cafealma en la ventana 24–31 ago: 1 240.
---     Línea base (10–23 ago): 12,93/día. Campaña: 155/día → 12×.
+-- (e) Seguidores ganados por @cafealma en la ventana 10–17 ago: 1 240.
+--     Línea base (27 jul–9 ago): 12,93/día. Campaña: 155/día → 12×.
 SELECT 'e_seguidores' AS check_id,
-       (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-31')
-     - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-23') AS ganados_ventana,
-       round(((SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-23')
-            - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-09'))::numeric / 14, 2) AS base_por_dia,
-       round(((SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-31')
-            - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-23'))::numeric / 8, 2) AS campana_por_dia,
+       (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-17')
+     - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-09') AS ganados_ventana,
+       round(((SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-09')
+            - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-07-26'))::numeric / 14, 2) AS base_por_dia,
+       round(((SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-17')
+            - (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-08-09'))::numeric / 8, 2) AS campana_por_dia,
        (SELECT count(*) FROM brand_account_snapshot WHERE handle = 'cafealma') AS dias,
-       (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-07-18') AS inicio;
+       (SELECT followers FROM brand_account_snapshot WHERE handle = 'cafealma' AND day = DATE '2026-07-04') AS inicio;
 
 -- (f) campaign_result de Café Alma: los KPIs del mock.
 SELECT 'f_resultado' AS check_id, c.name, c.status, c.tracking_code, c.brand_baseline_from,

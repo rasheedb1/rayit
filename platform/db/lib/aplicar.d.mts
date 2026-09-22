@@ -18,7 +18,7 @@ export interface ApplyMigrationsResult {
 export interface ApplySeedsOptions {
   /** Directorio con *.sql; por defecto db/seed. */
   dir?: string;
-  onApplied?: (file: string) => void;
+  onApplied?: (file: string, ms: number) => void;
 }
 
 export const MIGRATIONS_DIR: string;
@@ -40,6 +40,11 @@ export class MigrationChangedError extends Error {
 }
 
 export class MigrationFailedError extends Error {
+  readonly file: string;
+  constructor(file: string, cause: unknown);
+}
+
+export class SeedFailedError extends Error {
   readonly file: string;
   constructor(file: string, cause: unknown);
 }

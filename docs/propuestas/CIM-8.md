@@ -75,8 +75,8 @@ Todas las consultas están en `verify/0003.sql`, con su letra.
 
 | Cifra del mock | Filas que la producen | Consulta | Resultado |
 |---|---|---|---|
-| Café Alma · 1 reel + 1 TikTok · 24–31 ago · Reporte listo · 712 K · COP 8,4 M (318 canjes) | `campaign` ca0001 `status = 'reported'`, `tracking_code = 'LAURA15'`, `brand_baseline_from = 2026-08-10`; `campaign_post` d01 (reel, primary) y d02 (tiktok); `campaign_brand_input` 318 canjes y 8 400 000 `brand_manual` | (f), (g) | reported · 712 000 views · 318 · 8 400 000 |
-| Fresko Market · 2 TikTok · 2–9 sep · En curso · 265 K · 1 940 clics | `campaign` ca0002 `status = 'measuring'`; `campaign_post` d03, d04; clics desde `post_metric_snapshot` | (g) | measuring · 265 000 · 1 940 |
+| Café Alma · 1 reel + 1 TikTok · 10–17 ago · Reporte listo · 712 K · COP 8,4 M (318 canjes) | `campaign` ca0001 `status = 'reported'`, `tracking_code = 'LAURA15'`, `brand_baseline_from = 2026-07-27`; `campaign_post` d01 (reel, primary) y d02 (tiktok); `campaign_brand_input` 318 canjes y 8 400 000 `brand_manual`. (La campaña se adelantó del 24–31 ago al 10–17 ago en la ronda 2 de CIM-6, para que el resultado a 30 días y el reporte del 12 sep existan antes del día del seed; ver CIM-6.md §3.10.) | (f), (g) | reported · 712 000 views · 318 · 8 400 000 |
+| Fresko Market · 2 TikTok · 2–9 sep · En curso · 265 K · 1 940 clics | `campaign` ca0002 `status = 'measuring'`; `campaign_post` d03, d04; views y clics desde la curva de 0002 (`post_metrics_latest`), que llega a 140 K + 125 K = 265 K y 1 940 clics cuando los dos videos cumplen 30 días, el 2 y el 6 oct; hasta entonces muestra lo que llevan (≈ 137 K + 120 K). Las dos lecturas manuales "a 30 días" fechadas en octubre se quitaron en la ronda 2 de CIM-6: estaban en el futuro. | (g) | measuring · ≈ 257 000 hoy · 265 000 el 6 oct |
 | Nutrivé · video dedicado · 15–22 jul · Cobrada · 58 K · sin datos de la marca | `campaign` ca0003 `closed`, factura FV-2026-009 pagada, `campaign_result.missing_inputs = {brand_inputs,brand_followers}` | (g) | closed · 58 000 · 1 factura |
 | Hogar Lindo · 3 historias · 5–6 jun · Pendiente de pago · 94 K · 1,1 M (42 canjes) | `campaign` ca0004 `reported`, factura FV-2026-007 vencida, `campaign_result.views = 94000`, brand input 42 canjes y 1,1 M | (g) | reported · 1 factura vencida |
 | KPIs: alcance 486 K · views 712 K · 58 % no seguidores · 6 240 clics · 318 canjes · 8,4 M · +1 240 seguidores · 12× · CPM 11 800 · CPA 26 400 | `campaign_result` de ca0001 | (f) | todos, y `veces_ritmo = 12,0` |
@@ -104,7 +104,7 @@ Todas las consultas están en `verify/0003.sql`, con su letra.
    pendientes: relativas a `CURRENT_DATE` (−41, +7, +23). Campañas,
    snapshot de @cafealma, facturas pagadas y pagos: fijas. Razón: son
    hechos del pasado que el reporte y el KPI anual citan; y una serie de
-   60 días relativa dejaría la ventana 24–31 ago fuera del rango en dos
+   60 días relativa dejaría la ventana 10–17 ago fuera del rango en dos
    meses. Consecuencia conocida: FV-2026-007 (relativa) va numerada
    entre 006 (8 jun) y 008 (20 jul), coherente hoy y hasta noviembre.
 4. **Total de la factura.** `total = subtotal + IVA 19 %`. La retención

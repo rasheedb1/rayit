@@ -130,19 +130,43 @@ export async function applyMigrations(exec, opts = {}) {
   return result;
 }
 
+export class SeedFailedError extends Error {
+  constructor(file, cause) {
+    super(`Seed ${file} falló: ${cause?.message ?? String(cause)}`, { cause });
+    this.name = 'SeedFailedError';
+    this.file = file;
+  }
+}
+
 /**
  * Carga db/seed/*.sql en orden. Los seeds no se registran: son
  * idempotentes por construcción (ON CONFLICT) y se verifican aparte.
  *
+ * Cada seed va en su transacción, igual que una migración. Son archivos
+ * de mil líneas y decenas de sentencias: un fallo a mitad (un timeout
+ * del pooler, un CHECK nuevo) dejaba el workspace de demostración a
+ * medias, en un estado que ninguna verificación cubre, y la corrida
+ * siguiente partía de ahí. Con la transacción, o entra el seed entero o
+ * no entra nada.
+ *
  * @param {(sql: string) => Promise<{ rows: any[] }>} exec
- * @param {{ dir?: string, onApplied?: (file: string) => void }} [opts]
+ * @param {{ dir?: string, onApplied?: (file: string, ms: number) => void }} [opts]
  */
 export async function applySeeds(exec, opts = {}) {
   const dir = opts.dir ?? SEED_DIR;
   const files = await listSql(dir);
   for (const file of files) {
-    await exec(await readFile(join(dir, file), 'utf8'));
-    opts.onApplied?.(file);
+    const sql = await readFile(join(dir, file), 'utf8');
+    const t0 = Date.now();
+    try {
+      await exec('BEGIN');
+      await exec(sql);
+      await exec('COMMIT');
+    } catch (err) {
+      await exec('ROLLBACK').catch(() => {});
+      throw new SeedFailedError(file, err);
+    }
+    opts.onApplied?.(file, Date.now() - t0);
   }
   return files;
 }
