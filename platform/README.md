@@ -19,7 +19,8 @@ Contra **Postgres local**, si prefieres trabajar sin red:
 ```bash
 cp .env.example .env     # rellenar lo que haga falta; lo local ya funciona
 make up                  # Postgres + almacenamiento + correo, y migra
-make seed                # catálogo de nichos y CPM de referencia
+make db.seed             # catálogo y el workspace de demostración (Laura · Cocina fácil) en Supabase
+make db.seed.check       # lo mismo en Postgres embebido, sin tocar Supabase: dos pasadas y cifras
 make dev
 ```
 
@@ -46,7 +47,7 @@ db/sql.mjs         Consola SQL contra Supabase.
 db/certs/          CA raíz de Supabase (pública, versionada).
 secrets/           Credenciales cifradas + su manual.
 scripts/           vault.sh (cifrar/descifrar), github.sh, vercel.sh.
-db/seed/           Catálogo base (nichos, CPM de referencia).
+db/seed/           Catálogo base (0001) y el workspace de demostración (0002 ventas y métricas, 0003 finanzas y campañas). verify/ los comprueba.
 apps/web/          Dashboard (Next.js).
 apps/worker/       Trabajos en segundo plano (Node + pg-boss).
 apps/media/        Analizador de video (Python: ffmpeg, ASR, OCR).

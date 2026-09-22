@@ -123,7 +123,7 @@ export const STORIES: readonly Story[] = [
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0002 determinista e idempotente cualquier día: 60 videos con curvas acumuladas ancladas a la primera corrida, 90 días de cuenta y demografía, línea base y puntaje calculados con la regla de scoring.ts, y el CRM con 8 marcas, 12 señales y 15 deals (10 abiertos · COP 95,5 M · ponderado 43,15 M). Verificación en Postgres embebido con cifras, prueba de la baja en outbound_touch y tercera pasada con el reloj adelantado: node db/seed/verify/run.mjs (también en CI). Decisiones en docs/propuestas/CIM-6.md.",
+    note: "Seed 0002 determinista e idempotente cualquier día: 60 videos con curvas acumuladas ancladas a la primera corrida, 90 días de cuenta y demografía, línea base y puntaje calculados con la regla de scoring.ts, y el CRM con 8 marcas, 12 señales y 15 deals (10 abiertos · COP 95,5 M · ponderado 43,15 M). Verificación en Postgres embebido con cifras, prueba de la baja en outbound_touch, tercera pasada con el reloj adelantado y siembra en limpio a +40 días: node db/seed/verify/run.mjs [--dias 40] (también en CI). Toca 0003 (Nicolás) lo mínimo para una sola línea de tiempo de Café Alma; detalle en CIM-6.md §3.10. Decisiones en docs/propuestas/CIM-6.md.",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
@@ -139,7 +139,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0003 con verificación en Postgres embebido (node db/seed/verify/run-0003.mjs). Como 0002 no existe todavía, trae una sección de prerrequisitos con los ids que 0002 debe usar: docs/propuestas/CIM-8.md.",
+    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10).",
   },
 
   // ---------------------------------------------------------------- CON

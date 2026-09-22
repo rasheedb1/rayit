@@ -4,6 +4,7 @@
  *
  *   node db/seed/verify/run.mjs            todos los verify/NNNN.sql
  *   node db/seed/verify/run.mjs 0002       solo ese
+ *   node db/seed/verify/run.mjs --dias 40  lo mismo, con el reloj a +40 días
  *
  * Qué hace, en orden:
  *   1. Levanta PGlite y aplica las migraciones como un rol NO superusuario
@@ -19,15 +20,25 @@
  *      fallar la verificación: así el archivo es una prueba, no una
  *      impresión.
  *   4. Tercera pasada con el reloj adelantado un día: es lo que pasa
- *      cuando la segunda persona corre `make db.migrate` (que lleva
- *      --seed) al día siguiente. Se reemplazan CURRENT_DATE y now() en
- *      el texto de los seeds por su valor de mañana y se vuelven a
- *      correr; después se exige que ningún conteo haya cambiado, salvo
- *      post_metric_snapshot, que solo puede crecer con las lecturas que
- *      la curva de cada video alcanzó en ese día, y que sigan valiendo
- *      los invariantes de las lecturas: ningún par (post, edad, fuente)
- *      repetido, ninguna edad incoherente con published_at y ninguna
- *      curva que baje.
+ *      cuando la segunda persona corre `make db.seed` al día siguiente.
+ *      Se reemplazan CURRENT_DATE y now() en el texto de los seeds por
+ *      su valor de mañana y se vuelven a correr; después se exige que
+ *      ningún conteo haya cambiado, salvo los dos que crecen con el
+ *      reloj (CRECEN_CON_EL_RELOJ): post_metric_snapshot, con las
+ *      lecturas que la curva de cada video alcanzó en ese día, y
+ *      post_score, con el video que cumplió 24 h desde la última
+ *      corrida. Y que sigan valiendo los invariantes de las lecturas:
+ *      ningún par (post, edad, fuente) repetido, ninguna edad
+ *      incoherente con published_at y ninguna curva que baje.
+ *
+ * Con `--dias N` todo lo anterior ocurre en una base limpia sembrada
+ * con el reloj a +N días (CURRENT_DATE y now() desplazados en los seeds
+ * Y en los verify; la tercera pasada va a +N+1). Es la prueba de que la
+ * demo es la misma sembrada cualquier día. Solo se toleran dos
+ * comprobaciones, y se dice cuáles: i_pipeline y l_conexiones comparan
+ * contra el now() y CURRENT_DATE internos de las vistas deal_pipeline
+ * (due_state) y connection_health (hours_since_sync, token_expiring_soon),
+ * que no se pueden desplazar desde fuera. CI lo corre con --dias 40.
  *
  * Es deliberadamente independiente de db/migrate.mjs (que corre como
  * superusuario y no ejecuta los seeds dos veces). No necesita red.
@@ -67,12 +78,37 @@ const INVARIANTES_DEL_RELOJ = `
        GROUP BY connection_id, day, source HAVING count(*) > 1) d)           AS dias_repetidos
 `;
 
+/**
+ * Comprobaciones que con `--dias N` no pueden pasar, y por qué: las
+ * vistas calculan due_state y la frescura con su propio now(), que el
+ * desplazamiento textual de los seeds y los verify no alcanza.
+ */
+const TOLERADAS_CON_DIAS = {
+  i_pipeline: 'deal_pipeline.due_state usa el now() real de la vista',
+  l_conexiones: 'connection_health usa el now() real de la vista',
+};
+
 async function listSql(dir) {
   const files = await readdir(dir).catch(() => []);
   return files.filter((f) => f.endsWith('.sql')).sort();
 }
 
-const pedidos = process.argv.slice(2).filter((a) => /^\d{4}$/.test(a));
+const argv = process.argv.slice(2);
+const pedidos = argv.filter((a) => /^\d{4}$/.test(a));
+const diasIdx = argv.indexOf('--dias');
+const DIAS = diasIdx >= 0 ? Number(argv[diasIdx + 1]) : 0;
+if (!Number.isInteger(DIAS) || DIAS < 0) {
+  console.error('  ✗ --dias necesita un entero ≥ 0 (días que se adelanta el reloj)');
+  process.exit(1);
+}
+
+/**
+ * Desplaza el reloj de un SQL n días: CURRENT_DATE y now() pasan a
+ * valer su valor de dentro de n días. Con n = 0 no toca nada.
+ */
+const desplazar = (n) => (sql) => n === 0 ? sql : sql
+  .replace(/\bCURRENT_DATE\b/g, `(CURRENT_DATE + ${n})`)
+  .replace(/\bnow\(\)/g, `(now() + interval '${n} days')`);
 const verifyFiles = (await listSql(HERE)).filter(
   (f) => pedidos.length === 0 || pedidos.includes(f.replace('.sql', ''))
 );
@@ -113,7 +149,9 @@ for (const file of migraciones) {
 console.log(`\n  ${migraciones.length} migraciones aplicadas como mc_migrator_test.`);
 
 const seeds = await listSql(SEED_DIR);
-console.log(`  seeds: ${seeds.join(', ')}\n`);
+console.log(`  seeds: ${seeds.join(', ')}`);
+if (DIAS > 0) console.log(`  reloj: CURRENT_DATE y now() adelantados ${DIAS} días en seeds y verify`);
+console.log('');
 
 async function conteos() {
   // Los conteos se toman como superusuario para no depender de RLS.
@@ -176,8 +214,8 @@ function comparar(a, b, etiquetaA, etiquetaB, { permitidas = {} } = {}) {
   return { ok, detalle };
 }
 
-const primera = await pasada(1);
-const segunda = await pasada(2);
+const primera = await pasada(1, desplazar(DIAS));
+const segunda = await pasada(2, desplazar(DIAS));
 
 const idem = comparar(primera, segunda, 'pasada 1', 'pasada 2');
 console.log(idem.ok
@@ -186,9 +224,10 @@ console.log(idem.ok
 
 // Verificación de cifras, como el dueño del esquema (RLS activo).
 let fallos = 0;
+let toleradas = 0;
 for (const file of verifyFiles) {
   console.log(`  ── verify/${file}`);
-  const verifySql = await readFile(join(HERE, file), 'utf8');
+  const verifySql = desplazar(DIAS)(await readFile(join(HERE, file), 'utf8'));
   let resultados = [];
   try {
     resultados = await db.exec(verifySql);
@@ -203,24 +242,28 @@ for (const file of verifyFiles) {
     console.table(r.rows);
     if (r.fields?.some((f) => f.name === 'ok')) {
       for (const row of r.rows) {
-        if (row.ok === false) {
-          fallos++;
-          console.error(`  ✗ ${row.check_id ?? file}: la cifra no es la esperada`);
+        if (row.ok !== false) continue;
+        if (DIAS > 0 && TOLERADAS_CON_DIAS[row.check_id]) {
+          toleradas++;
+          console.log(`  ~ ${row.check_id}: tolerada con --dias (${TOLERADAS_CON_DIAS[row.check_id]})`);
+          continue;
         }
+        fallos++;
+        console.error(`  ✗ ${row.check_id ?? file}: la cifra no es la esperada`);
       }
     }
   }
 }
 if (fallos > 0) console.error(`\n  ✗ ${fallos} comprobación(es) fallaron.\n`);
-else if (verifyFiles.length > 0) console.log('\n  ✓ Todas las comprobaciones pasaron.\n');
+else if (verifyFiles.length > 0) {
+  console.log(`\n  ✓ Todas las comprobaciones pasaron${toleradas ? ` (${toleradas} tolerada(s) por el reloj de las vistas)` : ''}.\n`);
+}
 
 // Tercera pasada: los mismos seeds, mañana. CURRENT_DATE y now() pasan
 // a valer un día más; la base ya tiene lo de hoy. Lo que estaba anclado
 // a "la primera corrida" no se mueve, y solo entran las lecturas nuevas.
-const manana = (sql) => sql
-  .replace(/\bCURRENT_DATE\b/g, "(CURRENT_DATE + 1)")
-  .replace(/\bnow\(\)/g, "(now() + interval '1 day')");
-console.log('  ── tercera pasada: los seeds otra vez, con el reloj un día adelante');
+const manana = desplazar(DIAS + 1);
+console.log(`  ── tercera pasada: los seeds otra vez, con el reloj un día adelante${DIAS ? ` (+${DIAS + 1})` : ''}`);
 const tercera = await pasada(3, manana);
 const reloj = comparar(segunda, tercera, 'pasada 2', 'mañana', { permitidas: CRECEN_CON_EL_RELOJ });
 

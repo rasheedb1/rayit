@@ -46,6 +46,12 @@ jobs:
         # los mismos conteos, las cifras del mock por consulta (0002 y
         # 0003) y una tercera pasada con el reloj adelantado un día.
         run: node db/seed/verify/run.mjs
+      - name: La demo es la misma sembrada en limpio dentro de 40 días
+        # Los seeds y los verify con CURRENT_DATE y now() a +40 días: lo
+        # que ve un Supabase nuevo o la demo de un cliente el mes que
+        # viene. Solo se toleran las dos comprobaciones que comparan
+        # contra el now() interno de una vista (run.mjs dice cuáles).
+        run: node db/seed/verify/run.mjs --dias 40
       - name: Verificar que ninguna migración aplicada fue modificada
         working-directory: .
         run: |

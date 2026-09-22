@@ -21,8 +21,8 @@ necesitan para parecerse al mock (`dashboard/local/app.js`):
 |---|---|---|
 | `social_connection` | 4 (TikTok, Instagram, YouTube, Facebook) | `secret_ref = seed://…`, `status = active`. **[r2]** La frescura (`last_synced_at` hace 2–6 h, `access_expires_at` de YouTube a 50 min y de TikTok a 20 h) se refresca con `DO UPDATE` en cada corrida: son tablas maestras, no métricas, y así `connection_health` cuenta siempre la historia pensada en vez de "token vencido" una hora después de sembrar. |
 | `post` | 60 en 120 días (21 · 17 · 12 · 10) | Los doce de la tabla "Mis videos" del mock con sus views, guardados, no seguidores y salto a 3 s; los cinco de las campañas de 0003 (ids `d01..d05`, texto idéntico); 43 más con títulos de cocina fácil. **[r2]** `published_at` de los 55 relativos se congela en la primera corrida. |
-| `post_metric_snapshot` | 2 653 el 22-sep (crece una lectura diaria por video con menos de 90 días) | Curva acumulada por video: lecturas a 1, 3, 6, 12, 24, 48 y 72 h y luego diarias hasta 90 días, medidas contra el reloj del seed (medianoche UTC). `age_hours` exacta por construcción. **[r2]** `captured_at` sale del `published_at` guardado, así que sembrar otro día solo añade lo que la curva alcanzó. |
-| `account_metric_snapshot` | 360 (4 × 90 días) | Seguidores de los valores de hace 90 días a `FOLLOWERS_NOW` (214 000 · 128 000 · 49 000 · 21 000 = 412 000) con el salto de TikTok de la semana 9 y el empujón de Instagram; views diarias calibradas para que los últimos 30 días sumen ≈ 2,6 M. **[r2]** El día 0 se ancla al primer día guardado: sembrar otro día no añade un día plano. |
+| `post_metric_snapshot` | 2 650 el 22-sep sembrando 0001 + 0002 (2 653 con las tres lecturas manuales de 0003; crece una lectura diaria por video con menos de 90 días) | Curva acumulada por video: lecturas a 1, 3, 6, 12, 24, 48 y 72 h y luego diarias hasta 90 días, medidas contra el reloj del seed (medianoche UTC). `age_hours` exacta por construcción. **[r2]** `captured_at` sale del `published_at` guardado, así que sembrar otro día solo añade lo que la curva alcanzó. |
+| `account_metric_snapshot` | 360 (4 × 90 días) | Seguidores de los valores de hace 90 días a `FOLLOWERS_NOW` (214 000 · 128 000 · 49 000 · 21 000 = 412 000) con el salto de TikTok de la semana 9 y el empujón de Instagram; views diarias calibradas para que los últimos 30 días sumen ≈ 2,6 M. **[r2]** El día 0 se ancla al primer día guardado: sembrar otro día no añade un día plano. **[r3]** El último día es ayer (día 0 = hoy − 90), porque el job nocturno solo tiene cerrado el día anterior; `captured_at` es las 05:00 UTC del día siguiente, siempre en el pasado. |
 | `audience_breakdown` | 60 (4 × 15 buckets) | Edad, género y país. Instagram es la base del media kit (71 % entre 18 y 34, 64 % mujeres, Colombia 71 %); cada red se desvía unos puntos y sigue sumando 1. |
 | `creator_baseline` | 16 (4 redes × 4 cortes) | **Calculada** sobre las lecturas con la regla de `scoring.ts`. Todas `is_reliable`. Congelada en la primera corrida (id fijo por red y corte). |
 | `post_score` | 59 (todo video con ≥ 24 h por el reloj del seed) | **Calculado** contra la línea base más reciente de su red en el mayor corte alcanzado. **[r2]** Una corrida posterior puntúa al video que cumplió 24 h desde entonces. |
@@ -107,7 +107,7 @@ en los tres canales y los dos estados que vigila el disparador (o).
    sobre la fila anterior), y señales, deals y actividades usan `DO
    NOTHING`. Consecuencia: una base sembrada hoy o dentro de dos meses
    tiene la misma demo viva; una base ya sembrada que recibe `make
-   db.migrate --seed` otro día no desplaza fechas, no duplica lecturas
+   db.seed` otro día no desplaza fechas, no duplica lecturas
    ni añade días planos: solo entran las lecturas que la curva alcanzó
    (58 el primer día) y el puntaje del video que cumplió 24 h. La ronda
    1 decía "correr dos veces deja los mismos conteos" y era cierto solo
@@ -120,7 +120,14 @@ en los tres canales y los dos estados que vigila el disparador (o).
    ayer a las 19:00 UTC cruzaba las 24 h a las 19:00 de hoy y entraba en
    la línea base de TikTok, cambiando la mediana y los "× mediana" según
    la hora a la que se sembrara: dos máquinas el mismo día no daban lo
-   mismo. Ahora sí, y la cabecera dice "mismo día UTC".
+   mismo. Ahora sí, y la cabecera dice "mismo día UTC". **[r3]** Y
+   el seed lo garantiza en vez de suponerlo: `CURRENT_DATE` y
+   `date_trunc('day', now())` dependen del `TimeZone` de la sesión, no
+   del sistema, así que un Postgres nativo inicializado en Bogotá a las
+   02:00 UTC sembraba "ayer" (2 651 lecturas en vez de 2 655 y la serie
+   de la cuenta un día más corta). Ahora el seed y `verify/0002.sql`
+   fijan `set_config('TimeZone', 'UTC', false)` en la misma línea en
+   que fijan el workspace.
 4. **Línea base y puntaje calculados, no escritos.** Se insertan con
    `percentile_cont` sobre `post_metrics_at_cut`, igual que lo haría el
    job de CON-6. Así el puntaje es coherente con las lecturas por
@@ -197,6 +204,33 @@ en los tres canales y los dos estados que vigila el disparador (o).
     las migraciones (sus pruebas de cuota migran en PGlite). Comprobado
     con `turbo run test --dry=json`: 21 archivos de `db/` entran al hash
     de `@mc/db#test` y el hash cambia al tocar un seed.
+13. **Los planes son relativos aunque la historia sea fija.** **[r3]** La
+    ronda 2 prometía "dos relojes, nunca en la misma fila" y no lo
+    cumplía: Sabores Caseros, Café Alma, Nutrivé, Hogar Lindo y Fresko
+    tenían `expected_close_date` fija (30 sep, 10 oct, 20 oct, 15 nov,
+    30 sep) y `next_action_due` relativa, así que una base sembrada el
+    1 de octubre mostraba "Enviar contrato · mañana" con cierre esperado
+    "hace 2 días", y a +60 días eran 5 de 10 abiertos. La regla ahora es
+    por columna: lo que ya pasó (señal, creación, etapas, actividades,
+    cierres reales) sigue fijo en esos deals; lo que todavía es un plan
+    (cierre esperado, próxima acción, el mes o el trimestre del nombre)
+    va relativo a `CURRENT_DATE` en todos, con los mismos días que hoy
+    respecto al 22 de septiembre (+8, +18, +28, +54, +8). Lo mismo con
+    la señal pendiente de Fresko (e008), que envejecía en la bandeja:
+    detectada anteayer, anuncia el lanzamiento del mes de `hoy + 30`, y
+    titular, `evidence.month` y `dedupe_key` salen de esa fecha; con las
+    notas de `company_link` y las actividades de Nutrivé que decían
+    "octubre" y "Q4"; y con el brief activo, cuya ventana es el
+    trimestre de `hoy + 30` (1 oct – 15 dic sembrado el 22 sep). Todo
+    se congela en la primera corrida por el `DO NOTHING`. La consulta
+    (p) de `verify/0002.sql` lo prueba: cero deals abiertos con cierre
+    en el pasado, cero señales pendientes de más de 14 días, cero briefs
+    activos vencidos.
+14. **La ayuda de `make db.seed` dice lo que hace.** **[r3]** Makefile,
+    `platform/README.md` y `docs/base-de-datos.md` decían "carga el
+    catálogo base"; desde este PR ese comando siembra en Supabase un
+    workspace de demostración completo, y ahora lo dicen, con
+    `make db.seed.check` al lado para verificarlo sin tocar Supabase.
 
 ## 4. Idempotencia y conteos
 
@@ -208,20 +242,32 @@ mismos conteos; después las cifras de `verify/0002.sql` y
 en todas las tablas salvo `post_metric_snapshot` (+58: la lectura diaria
 de cada video) y `post_score` (+1: el video que cumplió 24 h), y cero
 pares `(post, edad, fuente)` repetidos, cero edades incoherentes y cero
-curvas que bajen. Aparte, `verify/0002.sql` se corrió entero después de
-sembrar con el reloj a +1, +9 y +40 días (script ad hoc): pasa todo
-salvo la frescura de las conexiones (l), que compara contra el `now()`
-real de la vista y no se puede desplazar en el simulacro. Los conteos de
-0002 están al final del propio archivo; `node db/migrate.mjs --pglite
---seed` pasa, y `packages/db` (que carga los seeds en sus pruebas) sigue
-en verde.
+curvas que bajen.
+
+**[r3]** La afirmación de la ronda 2 de que sembrar con el reloj a +1,
++9 y +40 días "pasa todo salvo (l)" era doblemente inexacta: venía de un
+script que no estaba en el repositorio, y también falla (i) `i_pipeline`,
+por la misma causa que (l): `deal_pipeline.due_state` se calcula con el
+`now()` y `CURRENT_DATE` internos de la vista, igual que
+`connection_health`, y el desplazamiento textual de los seeds no los
+alcanza. Ahora está en CI: `node db/seed/verify/run.mjs --dias 40`
+siembra una base limpia con `CURRENT_DATE` y `now()` a +40 días en los
+seeds **y** en los verify (la tercera pasada va a +41), exige lo mismo
+que la corrida normal y tolera solo `i_pipeline` y `l_conexiones`,
+diciendo por qué. Comprobado con `--dias 1`, `9`, `40` y `60`: pasan
+todas las demás, incluida la (p) nueva. Los conteos de 0002 están al
+final del propio archivo (2 650 lecturas por video sembrando 0001 +
+0002; `run.mjs` muestra 2 653 porque 0003 añade tres manuales);
+`node db/migrate.mjs --pglite --seed` pasa, y `packages/db` (que carga
+los seeds en sus pruebas) sigue en verde.
 
 ## 5. Contrato con quien lea estos datos
 
 - **Resumen (RES-1).** Seguidores: último `account_metric_snapshot`
   por conexión; la serie de 90 días está completa y sin huecos, y su
-  último día es el de la primera siembra (el aviso «datos hasta el
-  {fecha}» de la pantalla es exactamente para eso). Views en 30 días:
+  último día es el anterior a la primera siembra: el job nocturno solo
+  tiene cerrado ayer, y el aviso «datos hasta el {fecha}» de la
+  pantalla es exactamente para eso. Views en 30 días:
   `account_metric_snapshot.views` es la lectura diaria de la cuenta (no
   acumulada); las views por video están en `post_metrics_latest` y su
   delta diario en `post_metrics_daily_delta`. Demografía:

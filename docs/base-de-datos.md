@@ -131,7 +131,8 @@ make db.sql Q="select * from platform"       # consulta (como mc_app)
 make db.sql ADMIN=1 Q="alter table ..."      # como mc_migrator
 make db.check                                # prueba el esquema sin tocar Supabase
 make db.migrate                              # aplica lo pendiente
-make db.seed                                 # catálogo base
+make db.seed                                 # catálogo y el workspace de demostración (Laura · Cocina fácil)
+make db.seed.check                           # lo mismo en Postgres embebido, sin tocar Supabase
 make db.status                               # qué hay en el vault
 ```
 

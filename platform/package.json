@@ -7,7 +7,8 @@
   "scripts": {
     "migrate:check": "node db/migrate.mjs --pglite",
     "migrate": "node db/migrate.mjs $DATABASE_URL",
-    "seed:check": "node db/seed/verify/run.mjs"
+    "seed:check": "node db/seed/verify/run.mjs",
+    "seed:check:futuro": "node db/seed/verify/run.mjs --dias 40"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",

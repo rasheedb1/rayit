@@ -18,18 +18,23 @@
 --   * Determinista. Nada de random(): las curvas salen de funciones
 --     cerradas sobre generate_series, así que dos corridas dan lo
 --     mismo, y dos máquinas que siembren el mismo día UTC también.
+--   * El seed fija TimeZone = UTC para su sesión, junto al workspace.
+--     CURRENT_DATE y date_trunc('day', now()) dependen del TimeZone de
+--     la sesión, no del sistema: sin fijarlo, un Postgres inicializado
+--     en Bogotá a las 02:00 UTC sembraría "ayer" y daría otra demo.
 --   * El reloj del seed es la medianoche UTC de hoy, date_trunc('day',
---     now()): es la hora a la que correría el job nocturno. Las
---     lecturas que "ya ocurrieron", los cortes que un video "ya
---     alcanzó" y computed_at de línea base y puntaje se miden contra
---     ese reloj, no contra now(), para que dar el seed a las 9 o a las
---     21 deje exactamente las mismas filas.
+--     now()): es la hora a la que correría el job nocturno, que solo
+--     tiene cerrado el día de ayer. Las lecturas que "ya ocurrieron",
+--     los cortes que un video "ya alcanzó", computed_at de línea base y
+--     puntaje y el último día de la serie de la cuenta (ayer) se miden
+--     contra ese reloj, no contra now(), para que dar el seed a las 9 o
+--     a las 21 deje exactamente las mismas filas.
 --   * Fechas relativas y fechas fijas. Lo que ya pasó y se cita en un
 --     reporte o una factura (los cinco posts de las campañas de 0003,
 --     los cierres, los correos y llamadas de los clientes) va fijo. Lo
 --     que la demo mira "hoy" (videos recientes, seguidores, bandeja del
---     radar, próximas acciones, los dos seguimientos vencidos) va
---     relativo a CURRENT_DATE, para que una base sembrada en dos meses
+--     radar, próximas acciones, cierres esperados, los dos seguimientos
+--     vencidos) va relativo a CURRENT_DATE, para que una base sembrada en dos meses
 --     (CI, Postgres embebido, un Supabase nuevo) tenga la misma demo
 --     viva; y toda la fila lo es: el texto, la dedupe_key y las fechas
 --     que la acompañan se derivan de la misma fecha, para que nunca
@@ -91,6 +96,9 @@
 -- =====================================================================
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
+-- CURRENT_DATE es local a la sesión: se fija UTC para que "hoy" sea el
+-- mismo día en Supabase, Docker, PGlite, CI y un Postgres nativo.
+SELECT set_config('TimeZone', 'UTC', false);
 
 
 -- =====================================================================
@@ -476,12 +484,17 @@ WHERE c.published_at + make_interval(hours => a.h) <= date_trunc('day', now())
 -- UNIQUE (connection_id, day, source) es la clave de idempotencia. El
 -- día 0 se ancla al primer día ya guardado (si lo hay): una corrida en
 -- otro día no añade un día plano al final de la serie.
+-- El día 89 es AYER (día 0 = CURRENT_DATE - 90): el job nocturno solo
+-- tiene cerrado el día anterior, y así el aviso «datos hasta el
+-- {fecha}» de Resumen nunca dice "hoy" con un día a medias. Cada día se
+-- captura a las 05:00 UTC del día siguiente (la hora del job), que para
+-- el día 89 ya pasó siempre.
 -- =====================================================================
 INSERT INTO account_metric_snapshot
   (connection_id, workspace_id, captured_at, day, followers, following, media_count, views, reach,
    profile_views, accounts_engaged, total_interactions, follows, unfollows, website_clicks, source)
 SELECT s.connection_id, '00000002-0000-4000-8000-000000000001',
-       least(((s.day + 1)::timestamp + interval '5 hours') AT TIME ZONE 'UTC', now()),
+       ((s.day + 1)::timestamp + interval '5 hours') AT TIME ZONE 'UTC',
        s.day, s.followers, s.following, s.media_count, s.views, round(s.views * 0.80),
        round(s.views * 0.020), round(s.views * 0.050), round(s.views * 0.060),
        s.gain + round(s.gain * 0.25), round(s.gain * 0.25), round(s.views * 0.002), 'api'
@@ -502,7 +515,7 @@ FROM (
     SELECT g.d,
            COALESCE((SELECT min(a.day) FROM account_metric_snapshot a
                       WHERE a.connection_id = c.connection_id AND a.source = 'api'),
-                    CURRENT_DATE - 89) + g.d AS day,
+                    CURRENT_DATE - 90) + g.d AS day,
            sum(g.wt) OVER (ORDER BY g.d) AS cw,
            sum(g.wt) OVER ()             AS sw,
            round(c.views_base
@@ -691,10 +704,10 @@ ON CONFLICT DO NOTHING;
 -- la ficha de empresa muestra debajo del nombre.
 INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship, fit_score, fit_explain, notes)
 VALUES
-  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-000000000002', 'client',      0.8500, '{"audience_overlap": 0.85, "niche": "cocina", "country": "CO"}', 'Cliente actual. Renovación Q4 en conversación.'),
+  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-000000000002', 'client',      0.8500, '{"audience_overlap": 0.85, "niche": "cocina", "country": "CO"}', 'Cliente actual. Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' en conversación.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-000000000002', 'client',      0.8200, '{"audience_overlap": 0.82, "niche": "cocina", "country": "CO"}', 'Cliente actual. Cotización de desayunos enviada el 2 sep.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e3', '00000002-0000-4000-8000-000000000002', 'past_client', 0.5800, '{"audience_overlap": 0.58, "niche": "hogar", "country": "CO"}',  'Cliente anterior con factura en mora.'),
-  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-000000000002', 'client',      0.7400, '{"audience_overlap": 0.74, "niche": "cocina", "country": "CO"}', 'Cliente actual. Serie de 3 videos Q4 en conversación.'),
+  ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-000000000002', 'client',      0.7400, '{"audience_overlap": 0.74, "niche": "cocina", "country": "CO"}', 'Cliente actual. Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28) || ' en conversación.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-000000000002', 'contacted',   0.8000, '{"audience_overlap": 0.80, "niche": "cocina", "country": "CO"}', 'Entró por el marketplace de TikTok. Paquete con exclusividad en negociación.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-000000000002', 'contacted',   0.7100, '{"audience_overlap": 0.71, "niche": "cocina", "country": "CO"}', 'Top Ads en TikTok. Un deal perdido en marzo; segundo intento en curso.'),
   ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-000000000002', 'contacted',   0.7300, '{"audience_overlap": 0.73, "niche": "bienestar", "country": "CO"}', 'Pauta en Meta desde hace un mes. Cotización de 2 reels con derechos enviada; segundo frente abierto por la línea de snacks.'),
@@ -731,11 +744,14 @@ ON CONFLICT DO NOTHING;
 -- relativa TODO es relativo: el "desde el 14 sep" del titular, la
 -- fecha del evidence y la dedupe_key salen de la misma CURRENT_DATE,
 -- para que en dos meses el radar no diga "hace 2 horas" de algo del 14
--- de septiembre. La única excepción es la de Fresko (e008), fija de
--- punta a punta porque cita un lanzamiento de octubre con cotización
--- del 2 de septiembre. dedupe_key = fuente:dominio:fecha o detalle,
--- única por workspace. El mes en español se saca de un ARRAY porque
--- to_char no tiene locale garantizado en Postgres embebido.
+-- de septiembre. La de Fresko (e008) también es relativa: es una noticia
+-- de anteayer sobre un lanzamiento "el mes que viene" (CURRENT_DATE +
+-- 30), y el titular, el evidence y la dedupe_key salen de esa fecha;
+-- sembrada el 22 de septiembre dice "octubre", igual que la cotización
+-- fija del 2 de septiembre y las llamadas de agosto con Fresko.
+-- dedupe_key = fuente:dominio:fecha o detalle, única por workspace. El
+-- mes en español se saca de un ARRAY porque to_char no tiene locale
+-- garantizado en Postgres embebido.
 -- =====================================================================
 INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, detected_at, evidence_url, evidence, fit_score, budget_estimate, budget_currency, dedupe_key, status, reviewed_by, reviewed_at, discard_reason)
 VALUES
@@ -774,9 +790,10 @@ VALUES
    jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 7, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e008', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', 'press_launches',
-   'Anuncia línea de desayunos para octubre', '2026-09-20 15:00:00+00', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
-   '{"launch": "línea de desayunos", "month": "2026-10"}', 0.7500, 6000000.00, 'COP',
-   'press_launches:freskomarket.co:desayunos-2026-10', 'pending', NULL, NULL, NULL),
+   'Anuncia línea de desayunos para ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 30)::int],
+   (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
+   jsonb_build_object('launch', 'línea de desayunos', 'month', to_char(CURRENT_DATE + 30, 'YYYY-MM')), 0.7500, 6000000.00, 'COP',
+   'press_launches:freskomarket.co:desayunos-' || to_char(CURRENT_DATE + 30, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e009', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', 'job_posts',
    'Vacante "coordinador de influencer marketing"', now() - interval '1 day' - interval '3 hours', 'https://www.linkedin.com/jobs/view/demo-granosdelvalle-influencer',
    '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 8000000.00, 'COP',
@@ -808,14 +825,19 @@ ON CONFLICT DO NOTHING;
 -- Giraldo y el "segundo intento" de hoy). Las próximas acciones van
 -- relativas a hoy: Granos del Valle (−2 d) y Vitalé (−1 d) están
 -- vencidas; Olla Fácil y Sabores Caseros vencen hoy.
--- Dos relojes, nunca en la misma fila: los deals de los clientes con
+-- Dos relojes, y una regla para cada columna: lo que ya PASÓ (señal de
+-- origen, creación, etapas, actividades, último contacto, cierre real
+-- de los ganados y perdidos) va fijo en los deals de los clientes con
 -- campaña o factura en 0003 (Fresko, Café Alma, Nutrivé, Hogar Lindo)
--- y el de Sabores Caseros tienen historia fija; los que nacieron del
--- radar y cuya historia es solo seguimiento (Olla Fácil, Granos del
--- Valle, Vitalé) y la activación corta de Nutrivé son relativos de
--- punta a punta: señal, creación, etapas, actividades, último contacto
--- y próxima acción salen de la misma CURRENT_DATE. Los cobros
--- pendientes apuntan al vencimiento de su factura en 0003.
+-- y en Sabores Caseros, y relativo en los que nacieron del radar y cuya
+-- historia es solo seguimiento (Olla Fácil, Granos del Valle, Vitalé) y
+-- en la activación corta de Nutrivé. Lo que todavía es un PLAN (próxima
+-- acción y su fecha, cierre esperado de los abiertos, el mes o el
+-- trimestre del nombre cuando lo lleva) va relativo a CURRENT_DATE en
+-- todos, porque es lo que el tablero mira hoy: un cierre esperado fijo
+-- sería "hace 50 días" en una base sembrada dentro de dos meses (verify
+-- (p) lo vigila). Los cobros pendientes apuntan al vencimiento de su
+-- factura en 0003.
 -- =====================================================================
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, origin_signal_id, name, stage_id, amount, currency, probability, expected_close_date, next_action, next_action_due, next_action_user_id, last_contact_at, won_at, lost_at, lost_reason, created_at)
 SELECT d.id, '00000002-0000-4000-8000-000000000001', d.company_id, '00000002-0000-4000-8000-000000000003', '00000002-0000-4000-8000-000000000002', d.origin_signal_id,
@@ -830,28 +852,28 @@ FROM (VALUES
    'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Seguimiento 2',
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
-   'Paquete snacks · Q4', 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
+   'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-00000005e005',
-   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, DATE '2026-09-30', 'Enviar contrato',
+   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Enviar contrato',
    ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', '2026-09-15 20:30:00+00', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000000e1', NULL,
-   'Renovación Q4 · 3 meses', 'conversacion', 12000000.00, DATE '2026-10-10', 'Llamada',
+   'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamada',
    ((CURRENT_DATE + 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-11 15:00:00+00', NULL, NULL, NULL, '2026-09-11 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000000e4', NULL,
-   'Serie de 3 videos Q4', 'conversacion', 11000000.00, DATE '2026-10-20', 'Enviar propuesta',
+   'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviar propuesta',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-10 13:40:00+00', NULL, NULL, NULL, '2026-09-10 13:40:00+00'),
   ('00000002-0000-4000-8000-0000000dea06', '00000002-0000-4000-8000-0000000000e3', NULL,
-   'Historias navidad', 'conversacion', 3000000.00, DATE '2026-11-15', 'Esperar pago de la mora',
+   'Historias navidad', 'conversacion', 3000000.00, CURRENT_DATE + 54, 'Esperar pago de la mora',
    NULL, '2026-09-04 16:00:00+00', NULL, NULL, NULL, '2026-09-04 16:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea07', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
-   'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, DATE '2026-09-30', 'Seguimiento a la cotización',
+   'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, CURRENT_DATE + 8, 'Seguimiento a la cotización',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-09 15:10:00+00', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
   ('00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-00000005e006',
    '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
    (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 6 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
-   '1 TikTok + 1 Short · octubre', 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
+   '1 TikTok + 1 Short · ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int], 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
@@ -1000,7 +1022,8 @@ FROM (VALUES
     'Aceptan el paquete', 'Pasan a contrato. Enviar el contrato esta semana con las fechas de octubre.', '2026-09-15 20:30:00+00', '{"duration_min": 12}'),
   -- Nutrivé · la activación corta de octubre (relativa)
   (25, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'proposal_sent',
-    'Cotización del TikTok + Short de octubre', 'Un TikTok y un Short sobre el almuerzo listo de Nutrivé, para la primera quincena de octubre. COP 6,5 M.', (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 6500000, "currency": "COP"}'),
+    'Cotización del TikTok + Short de ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int],
+    'Un TikTok y un Short sobre el almuerzo listo de Nutrivé, para la primera quincena de ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int] || '. COP 6,5 M.', (CURRENT_DATE - 7 + time '15:00') AT TIME ZONE 'UTC', '{"amount": 6500000, "currency": "COP"}'),
   -- Granos del Valle (relativa)
   (26, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', NULL, 'signal_detected',
     'Top Ads en TikTok Creative Center', 'Colombia, últimos 7 días, categoría alimentos.', (CURRENT_DATE - 24 + time '09:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e004"}'),
@@ -1028,7 +1051,8 @@ FROM (VALUES
     'Colaboración pagada con @la.olla.facil', 'Cuenta vigilada del nicho. Encaje de audiencia 79 %.', (CURRENT_DATE - 3 + time '10:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e003"}'),
   -- Nutrivé · la activación corta de octubre (relativa), sigue de la 25
   (37, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
-    'Piden un TikTok y un Short para octubre', 'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q4. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
+    'Piden un TikTok y un Short para ' || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])[extract(month FROM CURRENT_DATE + 10)::int],
+    'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q' || extract(quarter FROM CURRENT_DATE + 28) || '. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
   (38, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
     'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}')
 ) AS a(n, company_id, deal_id, contact_id, kind, subject, body, occurred_at, metadata)
@@ -1038,18 +1062,23 @@ ON CONFLICT DO NOTHING;
 -- =====================================================================
 -- 12 · Outbound: qué busca la creadora y con qué límites
 -- ---------------------------------------------------------------------
--- deliverables son los rangos del tarifario del mock (RATES). La
--- política deja los valores conservadores del esquema, explícitos.
+-- deliverables son los rangos del tarifario del mock (RATES). El brief
+-- está activo y mira el trimestre que viene: título y ventana (del
+-- primer día del trimestre de CURRENT_DATE + 30, 75 días: 1 oct – 15
+-- dic sembrado el 22 sep) salen de CURRENT_DATE y se congelan con DO
+-- NOTHING. La política deja los valores conservadores del esquema,
+-- explícitos.
 -- =====================================================================
 INSERT INTO outbound_brief (id, workspace_id, creator_id, title, wanted_categories, wanted_countries, min_budget, currency, deliverables, availability_from, availability_to, excluded_categories, excluded_companies, requires_disclosure, notes, status)
 VALUES (
   '00000002-0000-4000-8000-0000000b0001', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003',
-  'Marcas de alimentos y cocina · Q4 2026', '{alimentos,cocina,hogar,bienestar}', '{CO,MX}', 3000000.00, 'COP',
+  'Marcas de alimentos y cocina · Q' || extract(quarter FROM CURRENT_DATE + 30) || ' ' || extract(year FROM CURRENT_DATE + 30),
+  '{alimentos,cocina,hogar,bienestar}', '{CO,MX}', 3000000.00, 'COP',
   '[{"kind": "tiktok",    "label": "Video de TikTok",                  "price_low": 7100000, "price_high": 10600000},
     {"kind": "reel",      "label": "Reel de Instagram",                "price_low": 4800000, "price_high": 7200000},
     {"kind": "short",     "label": "YouTube Short",                    "price_low": 2100000, "price_high": 3200000},
     {"kind": "historias", "label": "Historia de Instagram (3 pantallas)", "price_low": 1600000, "price_high": 2400000}]'::jsonb,
-  DATE '2026-10-01', DATE '2026-12-15', '{alcohol,apuestas,suplementos}', '{}', true,
+  date_trunc('quarter', CURRENT_DATE + 30)::date, date_trunc('quarter', CURRENT_DATE + 30)::date + 75, '{alcohol,apuestas,suplementos}', '{}', true,
   'Prioridad: lanzamientos de productos de despensa y desayuno. Siempre con código propio y enlace rastreado para poder reportar ventas.',
   'active'
 )
@@ -1114,8 +1143,9 @@ ON CONFLICT DO NOTHING;
 -- =====================================================================
 -- Conteos esperados (node db/seed/verify/run.mjs 0002, pasadas 1 y 2)
 -- ---------------------------------------------------------------------
--- Solo lo que este seed crea; 0003 añade lo suyo encima (campañas 2 → 4,
--- post_metric_snapshot +3, y finanzas). Las lecturas por post dependen
+-- Solo lo que este seed crea (sembrando 0001 + 0002); 0003 añade lo suyo
+-- encima (campañas 2 → 4, post_metric_snapshot +3, y finanzas), y
+-- run.mjs corre los tres seeds, así que muestra esos 3 de más. Las lecturas por post dependen
 -- de la edad de cada video, así que su conteo crece un poco cada día
 -- (una lectura diaria por video con menos de 90 días, medida a
 -- medianoche UTC); el resto es fijo. Una tercera corrida con el reloj
@@ -1129,8 +1159,9 @@ ON CONFLICT DO NOTHING;
 --   creator_profile              1
 --   social_connection            4
 --   post                        60
---   post_metric_snapshot     ~2 650  (60 posts × lecturas ya ocurridas; 2 653 el 22-sep-2026, 2 711 al día siguiente)
---   account_metric_snapshot    360  (4 conexiones × 90 días)
+--   post_metric_snapshot     ~2 650  (60 posts × lecturas ya ocurridas; 2 650 el 22-sep-2026 y 2 708 al día
+--                                    siguiente; run.mjs muestra 3 más porque 0003 añade sus tres lecturas manuales)
+--   account_metric_snapshot    360  (4 conexiones × 90 días, el último es ayer)
 --   audience_breakdown          60  (4 conexiones × 15 buckets)
 --   creator_baseline            16  (4 redes × 4 cortes), is_reliable en todas
 --   post_score                  59  (todo video con al menos 24 h; 6 outliers, 1 breakout)

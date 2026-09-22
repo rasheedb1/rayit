@@ -14,6 +14,9 @@
 
 -- RLS: sin el workspace fijado, todas las consultas devuelven cero filas.
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
+-- El mismo reloj que el seed: CURRENT_DATE en UTC, no en la zona de la
+-- sesión (ver la cabecera del seed).
+SELECT set_config('TimeZone', 'UTC', false);
 
 -- (a) Conteos fijos de este seed.
 SELECT 'a_conteos' AS check_id,
@@ -38,18 +41,19 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM deal) = 15
          AND (SELECT count(*) FROM activity) = 38 AS ok;
 
--- El "hoy" de la serie de la cuenta es el día en que el seed corrió por
--- primera vez (el día 0 se ancla a lo ya guardado; ver sección 5 del
--- seed). Las comprobaciones de la serie se anclan a ese día, no a
--- CURRENT_DATE, para que valgan también contra una base sembrada hace
--- días; y se exige que ese día no esté en el futuro y que la serie
--- sean 90 días seguidos por conexión.
+-- El último día de la serie de la cuenta es el ANTERIOR al día en que el
+-- seed corrió por primera vez: el job nocturno solo tiene cerrado ayer
+-- (el día 0 se ancla a lo ya guardado; ver sección 5 del seed). Las
+-- comprobaciones de la serie se anclan a ese día, no a CURRENT_DATE,
+-- para que valgan también contra una base sembrada hace días; y se
+-- exige que ese día sea anterior a hoy y que la serie sean 90 días
+-- seguidos por conexión.
 -- (b) Seguidores hoy, por red: FOLLOWERS_NOW del mock (412 000 en total).
 SELECT 'b_seguidores' AS check_id, c.platform_id, s.followers, s.day, s.dias,
        s.followers = CASE c.platform_id WHEN 'tiktok' THEN 214000 WHEN 'instagram' THEN 128000
                                         WHEN 'youtube' THEN 49000 ELSE 21000 END
          AND s.day = (SELECT max(day) FROM account_metric_snapshot)
-         AND s.day <= CURRENT_DATE
+         AND s.day < CURRENT_DATE
          AND s.dias = 90 AND s.primer_dia = s.day - 89 AS ok
 FROM social_connection c
 JOIN LATERAL (
@@ -396,3 +400,25 @@ SELECT 'o_baja_respetada' AS check_id, c.full_name, c.opted_out, c.opted_out_at,
          AND (SELECT count(*) FROM outbound_touch t WHERE t.contact_id = c.id) = 0 AS ok
 FROM contact c
 WHERE c.id = '00000002-0000-4000-8000-0000000c0010';
+
+-- (p) Lo que el tablero mira hoy no envejece: ningún deal abierto tiene
+--     el cierre esperado en el pasado (los planes van relativos a
+--     CURRENT_DATE, sección 10 del seed; solo Olla Fácil, recién
+--     entrado, no lo tiene), ninguna señal pendiente lleva más de 14
+--     días en la bandeja y el brief activo todavía no cerró su ventana.
+--     Es la comprobación que `run.mjs --dias N` vigila con el reloj a
+--     +N días: sembrada en limpio cualquier día, Ventas cuenta la misma
+--     historia.
+SELECT 'p_planes_vivos' AS check_id,
+       (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
+         WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date < CURRENT_DATE)    AS cierres_en_el_pasado,
+       (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
+         WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL)           AS abiertos_sin_cierre,
+       (SELECT count(*) FROM signal WHERE status = 'pending' AND detected_at < now() - interval '14 days') AS senales_viejas,
+       (SELECT count(*) FROM outbound_brief WHERE status = 'active' AND availability_to < CURRENT_DATE)    AS briefs_vencidos,
+       (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
+         WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date < CURRENT_DATE) = 0
+         AND (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
+               WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL) = 1
+         AND (SELECT count(*) FROM signal WHERE status = 'pending' AND detected_at < now() - interval '14 days') = 0
+         AND (SELECT count(*) FROM outbound_brief WHERE status = 'active' AND availability_to < CURRENT_DATE) = 0 AS ok;

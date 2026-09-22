@@ -88,7 +88,7 @@ db.migrate: ## Aplica las migraciones pendientes en Supabase
 	@test -f .env.local || { echo "  Corre primero: make db.unlock"; exit 1; }
 	@node db/migrate.mjs "$$(grep '^DATABASE_URL_DIRECT=' .env.local | cut -d= -f2-)"
 
-db.seed: ## Carga el catálogo base en Supabase
+db.seed: ## Carga el catálogo y el workspace de demostración (Laura · Cocina fácil) en Supabase
 	@test -f .env.local || { echo "  Corre primero: make db.unlock"; exit 1; }
 	@node db/migrate.mjs "$$(grep '^DATABASE_URL_DIRECT=' .env.local | cut -d= -f2-)" --seed
 
@@ -104,8 +104,8 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
 
-db.seed.check: ## Verifica los seeds en Postgres embebido: dos pasadas, conteos y cifras
-	@node db/seed/verify/run.mjs $(SEED)
+db.seed.check: ## Verifica los seeds en Postgres embebido: dos pasadas, conteos y cifras (DIAS=40 adelanta el reloj)
+	@node db/seed/verify/run.mjs $(SEED) $(if $(DIAS),--dias $(DIAS))
 
 db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida en @mc/db)
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
