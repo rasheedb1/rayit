@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "viewerPercentage por ageGroup × gender de un video."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://youtubeanalytics\\.googleapis\\.com/v2/reports\\?.*metrics=viewerPercentage&dimensions=ageGroup%2Cgender&filters=video%3D%3Dvid00000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtubeAnalytics#resultTable",
+      "columnHeaders": [
+        {
+          "name": "ageGroup",
+          "columnType": "DIMENSION",
+          "dataType": "STRING"
+        },
+        {
+          "name": "gender",
+          "columnType": "DIMENSION",
+          "dataType": "STRING"
+        },
+        {
+          "name": "viewerPercentage",
+          "columnType": "METRIC",
+          "dataType": "FLOAT"
+        }
+      ],
+      "rows": [
+        [
+          "age18-24",
+          "female",
+          21.3
+        ],
+        [
+          "age18-24",
+          "male",
+          9.1
+        ],
+        [
+          "age25-34",
+          "female",
+          30.2
+        ],
+        [
+          "age25-34",
+          "male",
+          12.4
+        ],
+        [
+          "age35-44",
+          "female",
+          14.0
+        ],
+        [
+          "age35-44",
+          "male",
+          5.5
+        ],
+        [
+          "age65-",
+          "user_specified",
+          0.3
+        ]
+      ]
+    }
+  }
+}

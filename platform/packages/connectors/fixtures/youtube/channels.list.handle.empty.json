@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Handle inexistente: items vacío (no es error)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/channels\\?part=snippet%2Cstatistics&forHandle=%40"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#channelListResponse",
+      "etag": "e",
+      "pageInfo": {
+        "totalResults": 0,
+        "resultsPerPage": 5
+      },
+      "items": []
+    }
+  }
+}

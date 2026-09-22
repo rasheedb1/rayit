@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "views por country del canal."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://youtubeanalytics\\.googleapis\\.com/v2/reports\\?.*metrics=views&dimensions=country"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtubeAnalytics#resultTable",
+      "columnHeaders": [
+        {
+          "name": "country",
+          "columnType": "DIMENSION",
+          "dataType": "STRING"
+        },
+        {
+          "name": "views",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        }
+      ],
+      "rows": [
+        [
+          "CO",
+          31000
+        ],
+        [
+          "MX",
+          4200
+        ],
+        [
+          "US",
+          1900
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Canal sin subidas."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/playlistItems\\?part=contentDetails&playlistId=UUdemo000000000000000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#playlistItemListResponse",
+      "etag": "e",
+      "pageInfo": {
+        "totalResults": 0,
+        "resultsPerPage": 50
+      },
+      "items": []
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "analytics/reference/reports/query con dimensions=day y filters=video==ID: columnHeaders + rows."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://youtubeanalytics\\.googleapis\\.com/v2/reports\\?ids=channel%3D%3DMINE&startDate=2026-09-01&endDate=2026-09-03&metrics=views%2CestimatedMinutesWatched"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtubeAnalytics#resultTable",
+      "columnHeaders": [
+        {
+          "name": "day",
+          "columnType": "DIMENSION",
+          "dataType": "STRING"
+        },
+        {
+          "name": "views",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "estimatedMinutesWatched",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "averageViewDuration",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "averageViewPercentage",
+          "columnType": "METRIC",
+          "dataType": "FLOAT"
+        },
+        {
+          "name": "likes",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "comments",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "shares",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        },
+        {
+          "name": "subscribersGained",
+          "columnType": "METRIC",
+          "dataType": "INTEGER"
+        }
+      ],
+      "rows": [
+        [
+          "2026-09-01",
+          12000,
+          9800,
+          49,
+          67.12,
+          610,
+          32,
+          40,
+          21
+        ],
+        [
+          "2026-09-02",
+          8100,
+          6400,
+          47,
+          64.4,
+          380,
+          18,
+          22,
+          12
+        ],
+        [
+          "2026-09-03",
+          3900,
+          3100,
+          48,
+          65.8,
+          150,
+          9,
+          11,
+          4
+        ]
+      ]
+    }
+  }
+}
