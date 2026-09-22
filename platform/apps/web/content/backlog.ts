@@ -373,7 +373,8 @@ export const STORIES: readonly Story[] = [
     title: "Facturas",
     desc: "Crear desde una campaña o a mano, con subtotal, IVA, retención en la fuente, total, fecha de emisión y vencimiento, numeración por workspace. Estados draft → sent → partial/paid → overdue. Campo para el número de la factura electrónica DIAN.",
     done: "Una factura creada desde una campaña trae nombre, empresa y monto sin escribirlos.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Lista con KPIs, formulario con total en vivo, detalle con Marcar enviada y Anular, y facturarCampana() para el botón «Facturar» de CAM-1. Cliente de base y workspace provisionales hasta CIM-2 y CIM-3: docs/propuestas/FIN-1.md.",
   },
   {
     id: "FIN-2", module: "FIN", owner: "nicolas", size: "M", sprint: 3, deps: ["FIN-1"],
