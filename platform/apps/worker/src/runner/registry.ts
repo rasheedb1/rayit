@@ -23,7 +23,7 @@
  * en job_definition no se ejecuta nunca; una fila sin handler queda
  * registrada en job_run como `skipped` al arrancar.
  */
-import type { SecretStore, TokenRefresherRegistry } from '@mc/connectors';
+import type { CallLogSink, ConnectorFactory, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
 import type { QueuePolicy } from 'pg-boss';
 import type { Env } from './config.ts';
 import type { JobDatabase } from './db.ts';
@@ -68,6 +68,15 @@ export interface JobContext {
   signal: AbortSignal;
   secrets: SecretStore;
   refreshers: TokenRefresherRegistry;
+  /**
+   * Clientes de las cuatro APIs (CON-1), ya cableados con api_call_log
+   * sobre ctx.db, la cuota compartida del proceso y ctx.signal:
+   *   const tiktok = ctx.connectors.tiktokDisplay({ connectionId, tokens });
+   *   for await (const page of tiktok.iterateVideos()) { … }
+   */
+  connectors: ConnectorFactory;
+  /** Registrar a mano una llamada saliente que no pasó por un conector (p. ej. oauth.refresh). */
+  callLog: CallLogSink;
   now(): Date;
   env: Env;
 }

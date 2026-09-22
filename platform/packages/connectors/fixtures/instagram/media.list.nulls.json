@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "like_count omitido (el dueño oculta likes) y media_url omitido (derechos de autor)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/media\\?"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "id": "1800000000000000d09",
+          "media_type": "VIDEO",
+          "media_product_type": "REELS",
+          "permalink": "https://www.instagram.com/reel/demo-d09/",
+          "timestamp": "2026-09-01T12:00:00+0000",
+          "comments_count": 0
+        }
+      ]
+    }
+  }
+}

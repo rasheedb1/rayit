@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Dos páginas con cursor."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/business/video/list/\\?business_id=open_id_business_laura&fields="
+  },
+  "response": [
+    {
+      "status": 200,
+      "body": {
+        "code": 0,
+        "message": "OK",
+        "request_id": "2026092205a",
+        "data": {
+          "videos": [
+            {
+              "item_id": "7400000000000000d01",
+              "create_time": 1787932800,
+              "thumbnail_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d01.jpeg",
+              "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01",
+              "embed_url": "https://www.tiktok.com/embed/v2/7400000000000000d01",
+              "caption": "Receta 1 con @cafealma.co #recetafacil #ad",
+              "video_views": 50001,
+              "likes": 1201,
+              "comments": 41,
+              "shares": 11,
+              "reach": 38001,
+              "video_duration": 31.5,
+              "full_video_watched_rate": 0.31,
+              "total_time_watched": 410001,
+              "average_time_watched": 8.2,
+              "impression_sources": [
+                {
+                  "impression_source": "For You",
+                  "percentage": 0.71
+                },
+                {
+                  "impression_source": "Following",
+                  "percentage": 0.12
+                },
+                {
+                  "impression_source": "Personal Profile",
+                  "percentage": 0.17
+                }
+              ],
+              "audience_countries": [
+                {
+                  "country": "CO",
+                  "percentage": 0.82
+                },
+                {
+                  "country": "MX",
+                  "percentage": 0.06
+                }
+              ]
+            }
+          ],
+          "cursor": 1787932800,
+          "has_more": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "code": 0,
+        "message": "OK",
+        "request_id": "2026092205b",
+        "data": {
+          "videos": [
+            {
+              "item_id": "7400000000000000d02",
+              "create_time": 1788019200,
+              "thumbnail_url": "https://p16-sign.tiktokcdn-us.com/demo/cover-d02.jpeg",
+              "share_url": "https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d02",
+              "embed_url": "https://www.tiktok.com/embed/v2/7400000000000000d02",
+              "caption": "Receta 2 con @cafealma.co #recetafacil #ad",
+              "video_views": 50002,
+              "likes": 1202,
+              "comments": 42,
+              "shares": 12,
+              "reach": 38002,
+              "video_duration": 32.5,
+              "full_video_watched_rate": 0.31,
+              "total_time_watched": 410002,
+              "average_time_watched": 8.2,
+              "impression_sources": [
+                {
+                  "impression_source": "For You",
+                  "percentage": 0.71
+                },
+                {
+                  "impression_source": "Following",
+                  "percentage": 0.12
+                },
+                {
+                  "impression_source": "Personal Profile",
+                  "percentage": 0.17
+                }
+              ],
+              "audience_countries": [
+                {
+                  "country": "CO",
+                  "percentage": 0.82
+                },
+                {
+                  "country": "MX",
+                  "percentage": 0.06
+                }
+              ]
+            }
+          ],
+          "cursor": 1788019200,
+          "has_more": false
+        }
+      }
+    }
+  ]
+}

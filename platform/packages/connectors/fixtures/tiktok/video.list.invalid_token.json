@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "401 access_token_invalid (doc de errores)."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields="
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "data": {},
+      "error": {
+        "code": "access_token_invalid",
+        "message": "The access token is invalid or not found in the request. Please refresh the token and retry.",
+        "log_id": "2026092206"
+      }
+    }
+  }
+}

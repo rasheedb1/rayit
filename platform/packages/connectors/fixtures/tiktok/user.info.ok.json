@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Forma de developers.tiktok.com/doc/tiktok-api-v2-get-user-info con los tres scopes."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://open\\.tiktokapis\\.com/v2/user/info/\\?fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "user": {
+          "open_id": "open_id_demo_laura",
+          "union_id": "union_demo_laura",
+          "avatar_url": "https://p19-sign.tiktokcdn-us.com/demo/avatar.jpeg",
+          "display_name": "Laura · Cocina fácil",
+          "bio_description": "Cocina fácil para 412 mil personas en Colombia.",
+          "profile_deep_link": "https://www.tiktok.com/@laura.cocinafacil",
+          "is_verified": false,
+          "username": "laura.cocinafacil",
+          "follower_count": 412000,
+          "following_count": 310,
+          "likes_count": 9800000,
+          "video_count": 214
+        }
+      },
+      "error": {
+        "code": "ok",
+        "message": "",
+        "log_id": "2026092208"
+      }
+    }
+  }
+}

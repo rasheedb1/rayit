@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Solo instagram_business_basic sin stats: contadores ausentes."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=id%2Cuser_id"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "17841400000000123",
+      "username": "laura.cocinafacil"
+    }
+  }
+}

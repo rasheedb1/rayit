@@ -147,7 +147,8 @@ export const STORIES: readonly Story[] = [
     title: "Conectores con respuestas grabadas",
     desc: "Cliente para TikTok Display, TikTok Accounts, Instagram Graph y YouTube Data + Analytics. Reintentos, respeto de cuota, registro en api_call_log y api_quota_usage. Fixtures para las pruebas.",
     done: "pnpm test pasa sin red y cada llamada deja su fila en api_call_log.",
-    status: "pendiente",
+    status: "hecho",
+    note: "packages/connectors: núcleo HTTP con fetch y reloj inyectables, PlatformApiError (transient/permanent/auth/quota), reintentos con Retry-After, QuotaManager con ventanas y presupuesto diario persistido en api_quota_usage, y clientes de TikTok Display, TikTok Accounts, Instagram (Instagram Login) y YouTube (Data + Analytics) con 62 fixtures sacados de la documentación del 22-sep. El worker expone ctx.connectors y ctx.callLog. Pendiente de CON-9: el portal de la Accounts API no se pudo leer; video_view_retention y engagement_likes quedan sin verificar. platform.limits sigue vacío: JSON propuesto en docs/propuestas/CON-1.md.",
   },
   {
     id: "CON-2", module: "CON", owner: "nicolas", size: "M", sprint: 1, deps: ["CIM-1"],

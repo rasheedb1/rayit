@@ -109,6 +109,17 @@ Reglas:
   del payload se copian a `job_run`.
 - Nada de `console.log`: usa `ctx.logger` (eslint lo impone). Todo lo
   que imprime pasa por el redactor.
+- Las APIs de las plataformas se llaman por `ctx.connectors` (CON-1):
+  `ctx.connectors.tiktokDisplay({ connectionId, tokens })`, `.instagram(…)`,
+  `.youtube(…)`, `.tiktokAccounts(…, businessId)`. Cada intento deja su
+  fila en `api_call_log` con el `connection_id`, la cuota es una por
+  proceso (`api_quota_usage`) y las llamadas llevan `ctx.signal`. Un
+  error sale como `PlatformApiError` con `kind`: `auth` → pasa la
+  conexión a `needs_reauth`; `quota` → devuelve `retry: false`;
+  `transient` → cuenta como fallo y pg-boss reintenta; `permanent` →
+  el elemento falla y la conexión no se toca. Una llamada que no pasa
+  por un conector se registra con `ctx.callLog.record(...)`. Detalle en
+  `packages/connectors/README.md`.
 
 ## Qué pasa cuando falla
 
@@ -153,14 +164,26 @@ SELECT job_id, count(*) FROM job_run
 ```
 
 `metadata.bossJobId` cruza con `pgboss.job.id` cuando hace falta ver
-el estado en la cola. Las llamadas salientes de `oauth.refresh` quedan
-en `api_call_log` (`endpoint = 'oauth.refresh'`, sin cuerpo).
+el estado en la cola. Las llamadas salientes quedan en `api_call_log`
+(una fila por intento, `endpoint` lógico como `tiktok.video.list` u
+`oauth.refresh`, sin cuerpo ni token) y la cuota del día en
+`api_quota_usage`:
+
+```sql
+-- ¿Qué llamó el worker hoy y cuántas fallaron?
+SELECT platform_id, endpoint, count(*) FILTER (WHERE ok) AS ok, count(*) FILTER (WHERE NOT ok) AS fallidas,
+       count(*) FILTER (WHERE rate_limited) AS rate_limited
+  FROM api_call_log WHERE called_at > now() - interval '24 hours' GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- ¿Cuánta cuota de YouTube va hoy?
+SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_id = 'youtube' AND connection_id IS NULL ORDER BY day DESC LIMIT 1;
+```
 
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~17 s
-pnpm --filter @mc/connectors test    # unitarias del paquete de conectores
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~35 s
+pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
@@ -177,7 +200,7 @@ src/runner/config.ts         variables de entorno
 src/runner/logger.ts         JSON por línea + redactor
 src/runner/db.ts             pool de pg + SET ROLE mc_worker (Postgres real)
 src/runner/db-pglite.ts      Postgres embebido (pruebas y demo)
-src/runner/registry.ts       defineJob(), JobContext, JobResult   ← el contrato
+src/runner/registry.ts       defineJob(), JobContext (db, secrets, connectors, callLog, signal…), JobResult   ← el contrato
 src/runner/definitions.ts    lectura de job_definition
 src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed

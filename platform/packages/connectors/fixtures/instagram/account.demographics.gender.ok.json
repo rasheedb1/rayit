@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "breakdown=gender: F, M y U."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_demographics.*breakdown=gender"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "follower_demographics",
+          "period": "lifetime",
+          "title": "Follower demographics",
+          "description": "",
+          "total_value": {
+            "breakdowns": [
+              {
+                "dimension_keys": [
+                  "gender"
+                ],
+                "results": [
+                  {
+                    "dimension_values": [
+                      "F"
+                    ],
+                    "value": 288000
+                  },
+                  {
+                    "dimension_values": [
+                      "M"
+                    ],
+                    "value": 115000
+                  },
+                  {
+                    "dimension_values": [
+                      "U"
+                    ],
+                    "value": 9000
+                  }
+                ]
+              }
+            ]
+          },
+          "id": "x"
+        }
+      ],
+      "paging": {
+        "previous": "",
+        "next": ""
+      }
+    }
+  }
+}

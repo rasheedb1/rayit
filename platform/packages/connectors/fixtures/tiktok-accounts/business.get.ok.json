@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Accounts API v1.3 business/get con los campos de cuenta y demografía por cuenta (porcentajes 0..1). Forma según la búsqueda sobre el portal; se regraba con CON-9."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://business-api\\.tiktok\\.com/open_api/v1\\.3/business/get/\\?business_id=open_id_business_laura&fields="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "message": "OK",
+      "request_id": "2026092201",
+      "data": {
+        "username": "laura.cocinafacil",
+        "display_name": "Laura · Cocina fácil",
+        "profile_image": "https://p19-sign.tiktokcdn-us.com/demo/avatar.jpeg",
+        "followers_count": 412000,
+        "profile_views": 5300,
+        "video_views": 2100000,
+        "likes": 98000,
+        "comments": 4100,
+        "shares": 2600,
+        "is_business_account": true,
+        "audience_countries": [
+          {
+            "country": "CO",
+            "percentage": 0.82
+          },
+          {
+            "country": "MX",
+            "percentage": 0.06
+          },
+          {
+            "country": "US",
+            "percentage": 0.04
+          }
+        ],
+        "audience_genders": [
+          {
+            "gender": "Female",
+            "percentage": 0.7
+          },
+          {
+            "gender": "Male",
+            "percentage": 0.28
+          },
+          {
+            "gender": "Other",
+            "percentage": 0.02
+          }
+        ],
+        "audience_ages": [
+          {
+            "age": "18-24",
+            "percentage": 0.24
+          },
+          {
+            "age": "25-34",
+            "percentage": 0.41
+          },
+          {
+            "age": "35-44",
+            "percentage": 0.2
+          },
+          {
+            "age": "45-54",
+            "percentage": 0.09
+          },
+          {
+            "age": "55+",
+            "percentage": 0.06
+          }
+        ]
+      }
+    }
+  }
+}

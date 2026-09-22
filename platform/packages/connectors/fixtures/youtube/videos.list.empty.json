@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Ids que no existen: items vacío."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/videos\\?part=snippet%2CcontentDetails%2Cstatistics%2Cstatus&id="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#videoListResponse",
+      "etag": "e",
+      "pageInfo": {
+        "totalResults": 0,
+        "resultsPerPage": 0
+      },
+      "items": []
+    }
+  }
+}

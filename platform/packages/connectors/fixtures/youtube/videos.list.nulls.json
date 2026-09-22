@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "likeCount y commentCount ocultos; duración ausente. Null, no cero."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/videos\\?part=snippet%2CcontentDetails%2Cstatistics%2Cstatus&id="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#videoListResponse",
+      "items": [
+        {
+          "kind": "youtube#video",
+          "id": "vid00000009",
+          "snippet": {
+            "publishedAt": "2026-09-09T15:00:00Z",
+            "title": "Sin contadores"
+          },
+          "statistics": {
+            "viewCount": "0",
+            "favoriteCount": "0"
+          }
+        }
+      ]
+    }
+  }
+}

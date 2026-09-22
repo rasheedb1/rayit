@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "Meta no responde 429 ni Retry-After: devuelve 400 con code 17 (límite por usuario). Es kind quota: se espera al siguiente tick."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/media\\?"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "(#17) User request limit reached",
+        "type": "OAuthException",
+        "code": 17,
+        "fbtrace_id": "AbCdEfDemo",
+        "error_subcode": 2446079
+      }
+    }
+  }
+}

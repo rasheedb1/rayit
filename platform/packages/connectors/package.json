@@ -7,7 +7,16 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "lint": "eslint .",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "record": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types scripts/record.ts"
   },
-  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.0" }
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.0"
+  }
 }

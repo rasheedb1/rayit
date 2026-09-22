@@ -1,0 +1,174 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "reference/instagram-media/insights, métricas de REELS. ig_reels_* en milisegundos."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/1800000000000000d01/insights\\?metric="
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "views",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 88000
+            }
+          ],
+          "title": "views",
+          "description": "views",
+          "id": "1800000000000000d01/insights/views/lifetime"
+        },
+        {
+          "name": "reach",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 61000
+            }
+          ],
+          "title": "reach",
+          "description": "reach",
+          "id": "1800000000000000d01/insights/reach/lifetime"
+        },
+        {
+          "name": "likes",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 3201
+            }
+          ],
+          "title": "likes",
+          "description": "likes",
+          "id": "1800000000000000d01/insights/likes/lifetime"
+        },
+        {
+          "name": "comments",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 121
+            }
+          ],
+          "title": "comments",
+          "description": "comments",
+          "id": "1800000000000000d01/insights/comments/lifetime"
+        },
+        {
+          "name": "shares",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 410
+            }
+          ],
+          "title": "shares",
+          "description": "shares",
+          "id": "1800000000000000d01/insights/shares/lifetime"
+        },
+        {
+          "name": "saved",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 950
+            }
+          ],
+          "title": "saved",
+          "description": "saved",
+          "id": "1800000000000000d01/insights/saved/lifetime"
+        },
+        {
+          "name": "reposts",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 12
+            }
+          ],
+          "title": "reposts",
+          "description": "reposts",
+          "id": "1800000000000000d01/insights/reposts/lifetime"
+        },
+        {
+          "name": "total_interactions",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 4694
+            }
+          ],
+          "title": "total_interactions",
+          "description": "total_interactions",
+          "id": "1800000000000000d01/insights/total_interactions/lifetime"
+        },
+        {
+          "name": "ig_reels_avg_watch_time",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 8420
+            }
+          ],
+          "title": "ig_reels_avg_watch_time",
+          "description": "ig_reels_avg_watch_time",
+          "id": "1800000000000000d01/insights/ig_reels_avg_watch_time/lifetime"
+        },
+        {
+          "name": "ig_reels_video_view_total_time",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 741000000
+            }
+          ],
+          "title": "ig_reels_video_view_total_time",
+          "description": "ig_reels_video_view_total_time",
+          "id": "1800000000000000d01/insights/ig_reels_video_view_total_time/lifetime"
+        },
+        {
+          "name": "reels_skip_rate",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 27.5
+            }
+          ],
+          "title": "reels_skip_rate",
+          "description": "reels_skip_rate",
+          "id": "1800000000000000d01/insights/reels_skip_rate/lifetime"
+        },
+        {
+          "name": "follows",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 140
+            }
+          ],
+          "title": "follows",
+          "description": "follows",
+          "id": "1800000000000000d01/insights/follows/lifetime"
+        },
+        {
+          "name": "profile_visits",
+          "period": "lifetime",
+          "values": [
+            {
+              "value": 900
+            }
+          ],
+          "title": "profile_visits",
+          "description": "profile_visits",
+          "id": "1800000000000000d01/insights/profile_visits/lifetime"
+        }
+      ]
+    }
+  }
+}

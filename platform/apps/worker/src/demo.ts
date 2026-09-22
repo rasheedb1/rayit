@@ -75,9 +75,13 @@ export async function runDemo(opts: { db: WorkerDatabase; worker: RunningWorker;
         `SELECT handle, status, status_detail, to_char(access_expires_at, 'YYYY-MM-DD HH24:MI') AS access_expires_at FROM social_connection ORDER BY handle`,
       );
       const notes = await db.query(`SELECT kind, severity, title_es FROM notification ORDER BY created_at`);
+      const calls = await db.query(
+        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY id`,
+      );
       logger.info('demo: job_run', { rows: runs.rows });
       logger.info('demo: social_connection', { rows: conns.rows });
       logger.info('demo: notification', { rows: notes.rows });
+      logger.info('demo: api_call_log (CON-1: una fila por llamada, sin token)', { rows: calls.rows });
       logger.info('demo: el worker sigue corriendo; Ctrl-C para salir');
     })().catch((err: unknown) => logger.error('demo: no se pudo consultar', { err }));
   }, 4000);

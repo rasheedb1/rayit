@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "metric=follower_count, period=day: serie con end_time por día."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_count"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "follower_count",
+          "period": "day",
+          "values": [
+            {
+              "value": 411900,
+              "end_time": "2026-09-20T07:00:00+0000"
+            },
+            {
+              "value": 412000,
+              "end_time": "2026-09-21T07:00:00+0000"
+            }
+          ],
+          "title": "Follower Count",
+          "description": "",
+          "id": "x"
+        }
+      ]
+    }
+  }
+}

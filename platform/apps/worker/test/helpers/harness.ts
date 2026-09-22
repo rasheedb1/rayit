@@ -3,7 +3,7 @@
  * migraciones del repo (incluida 0014, los privilegios de mc_worker),
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
-import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type TokenRefresher } from '@mc/connectors';
+import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
 import { createLogger, MemorySink, type Logger } from '../../src/runner/logger.ts';
@@ -40,6 +40,9 @@ export interface HarnessOptions {
   /** SQL a ejecutar como superusuario antes de arrancar (definiciones de prueba, datos). */
   seed?: (db: PgliteDatabase) => Promise<void>;
   env?: Record<string, string | undefined>;
+  /** fetch/sleep falsos para los conectores (CON-1). */
+  http?: ConnectorHttpOverrides;
+  quota?: QuotaManager;
 }
 
 export async function startHarness(opts: HarnessOptions): Promise<Harness> {
@@ -60,6 +63,8 @@ export async function startHarness(opts: HarnessOptions): Promise<Harness> {
     refreshers,
     now,
     env: opts.env ?? {},
+    http: opts.http,
+    quota: opts.quota,
   });
   return {
     db, sink, logger, secrets, refresher, worker, now,

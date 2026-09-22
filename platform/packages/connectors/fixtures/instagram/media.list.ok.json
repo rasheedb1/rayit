@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "reference/instagram-media: un reel, una foto de feed y una historia."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/media\\?"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "id": "1800000000000000d01",
+          "caption": "Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA1 #coldbrew #ad",
+          "media_type": "VIDEO",
+          "media_product_type": "REELS",
+          "media_url": "https://scontent.cdninstagram.com/demo/d01.mp4",
+          "permalink": "https://www.instagram.com/reel/demo-d01/",
+          "thumbnail_url": "https://scontent.cdninstagram.com/demo/d01.jpg",
+          "timestamp": "2026-08-21T17:00:00+0000",
+          "username": "laura.cocinafacil",
+          "like_count": 3201,
+          "comments_count": 121,
+          "is_shared_to_feed": true
+        },
+        {
+          "id": "1800000000000000d02",
+          "caption": "Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA2 #coldbrew #ad",
+          "media_type": "IMAGE",
+          "media_product_type": "FEED",
+          "media_url": "https://scontent.cdninstagram.com/demo/d02.jpg",
+          "permalink": "https://www.instagram.com/reel/demo-d02/",
+          "thumbnail_url": null,
+          "timestamp": "2026-08-22T17:00:00+0000",
+          "username": "laura.cocinafacil",
+          "like_count": 3202,
+          "comments_count": 122,
+          "is_shared_to_feed": true
+        },
+        {
+          "id": "1800000000000000d03",
+          "caption": "Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA3 #coldbrew #ad",
+          "media_type": "VIDEO",
+          "media_product_type": "STORY",
+          "media_url": "https://scontent.cdninstagram.com/demo/d03.mp4",
+          "permalink": "https://www.instagram.com/reel/demo-d03/",
+          "thumbnail_url": "https://scontent.cdninstagram.com/demo/d03.jpg",
+          "timestamp": "2026-08-23T17:00:00+0000",
+          "username": "laura.cocinafacil",
+          "like_count": 3203,
+          "comments_count": 123,
+          "is_shared_to_feed": true
+        }
+      ],
+      "paging": {
+        "cursors": {
+          "before": "QVFIU_before",
+          "after": "QVFIU_after_1"
+        }
+      }
+    }
+  }
+}

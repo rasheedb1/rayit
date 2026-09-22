@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "403 rateLimitExceeded (ráfaga): transitorio con backoff; Google no manda Retry-After en la Data API."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/videos\\?part=snippet%2CcontentDetails%2Cstatistics%2Cstatus&id="
+  },
+  "response": [
+    {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": 403,
+          "message": "Rate Limit Exceeded",
+          "errors": [
+            {
+              "message": "Rate Limit Exceeded",
+              "domain": "global",
+              "reason": "rateLimitExceeded"
+            }
+          ],
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "kind": "youtube#videoListResponse",
+        "items": [
+          {
+            "kind": "youtube#video",
+            "etag": "e",
+            "id": "vid00000001",
+            "snippet": {
+              "publishedAt": "2026-09-01T15:00:00Z",
+              "channelId": "UCdemo000000000000000001",
+              "title": "Receta 1 en 10 minutos",
+              "description": "Tres desayunos con @freskomarket #desayuno #recetafacil\\nCódigo LAURA1",
+              "thumbnails": {
+                "default": {
+                  "url": "https://i.ytimg.com/vi/vid00000001/default.jpg"
+                },
+                "high": {
+                  "url": "https://i.ytimg.com/vi/vid00000001/hqdefault.jpg"
+                }
+              },
+              "tags": [
+                "cocina",
+                "recetas"
+              ],
+              "categoryId": "26"
+            },
+            "contentDetails": {
+              "duration": "PT1M13S",
+              "dimension": "2d",
+              "definition": "hd",
+              "caption": "false"
+            },
+            "status": {
+              "privacyStatus": "public",
+              "madeForKids": false
+            },
+            "statistics": {
+              "viewCount": "90001",
+              "likeCount": "4101",
+              "favoriteCount": "0",
+              "commentCount": "211"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

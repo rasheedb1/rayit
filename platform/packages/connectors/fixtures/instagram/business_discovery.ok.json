@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-22",
+    "notes": "instagram-api-with-facebook-login/business-discovery, asumido igual con Instagram Login (propuesta 0.5)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "business_discovery": {
+        "id": "17841400000000e01",
+        "username": "cafealma",
+        "followers_count": 267793,
+        "media_count": 1205
+      },
+      "id": "17841400000000123"
+    }
+  }
+}
