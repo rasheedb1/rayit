@@ -21,23 +21,35 @@
  *      impresión.
  *   4. Tercera pasada con el reloj adelantado un día: es lo que pasa
  *      cuando la segunda persona corre `make db.seed` al día siguiente.
- *      Se reemplazan CURRENT_DATE y now() en el texto de los seeds por
- *      su valor de mañana y se vuelven a correr; después se exige que
- *      ningún conteo haya cambiado, salvo los que crecen con el reloj
+ *      CURRENT_DATE y now() de los seeds pasan a valer lo de mañana
+ *      (reloj.mjs, que no confunde el reloj con un dato que se le
+ *      parezca) y se vuelven a correr; después se exige que ningún
+ *      conteo haya cambiado, salvo los que crecen con el reloj
  *      (CRECEN_CON_EL_RELOJ). Y que sigan valiendo los invariantes de
  *      las lecturas: ningún par (post, edad, fuente) repetido, ninguna
  *      edad incoherente con published_at y ninguna curva que baje.
  *   5. Cuarta pasada, los mismos seeds sobre la MISMA base con el reloj
- *      seis semanas más adelante: `make db.seed` contra un Supabase que
- *      ya tiene la demo, semanas después. Es el caso que la tercera
+ *      seis semanas más adelante, y una quinta que la repite sin mover
+ *      el reloj (la idempotencia, pero sobre una base ya envejecida, con
+ *      los videos y los días que la cuarta añadió): `make db.seed`
+ *      contra un Supabase que ya tiene la demo, semanas después. Es el caso que la tercera
  *      pasada (un solo día) y `--dias N` (base limpia) no cubren, y el
  *      que más duele, porque es el camino documentado. Se exige que la
- *      demo siga viva: ningún deal abierto con el cierre en el pasado,
- *      ninguna señal pendiente de más de catorce días, ningún brief
- *      activo con la ventana cerrada, las cuatro conexiones
- *      sincronizadas hace menos de un día, la serie de la cuenta
- *      llegando hasta ayer sin bajar y con views en los últimos 30
- *      días.
+ *      demo siga VIVA por los dos lados, ventas y contenido:
+ *        · ventas: ningún deal abierto con el cierre en el pasado,
+ *          ninguna señal pendiente de más de catorce días, ningún brief
+ *          activo con la ventana cerrada, las cuatro conexiones
+ *          sincronizadas hace menos de un día y la serie de la cuenta
+ *          llegando hasta ayer sin bajar;
+ *        · contenido: al menos doce videos publicados en los últimos 30
+ *          días (los que enseña "Mis videos"), otras tantas filas en
+ *          creator_post_board, menos de una semana desde el último
+ *          video y CERO puntajes citando un corte que el video ya
+ *          superó.
+ *      Las cuatro del contenido son la parte que faltaba: medir
+ *      views_30d sobre account_metric_snapshot —la tabla que el propio
+ *      seed acaba de extender— no podía dar cero por construcción, así
+ *      que la pasada pasaba en verde con media demo apagada.
  *
  * Con `--dias N` todo lo anterior ocurre en una base limpia sembrada
  * con el reloj a +N días (CURRENT_DATE y now() desplazados en los seeds
@@ -62,6 +74,7 @@ import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { desplazarReloj } from './reloj.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_DIR = join(HERE, '..', '..');
@@ -70,6 +83,7 @@ const SEED_DIR = join(DB_DIR, 'seed');
 
 /** Tablas que sí pueden crecer en la pasada con el reloj adelantado, y por qué. */
 const CRECEN_CON_EL_RELOJ = {
+  post: 'un video cada dos días hasta ayer, si hace más de dos que no se siembra',
   post_metric_snapshot: 'una lectura diaria por video con menos de 90 días',
   post_score: 'el video que cumplió 24 h desde la última corrida se puntúa',
   account_metric_snapshot: 'la serie de cada conexión llega hasta ayer: +4 por día',
@@ -103,6 +117,10 @@ const TOLERADAS_CON_DIAS = {
   l_conexiones_frescura: 'connection_health usa el now() real de la vista',
 };
 
+/** El workspace de la demo (seed 0002): lo fija el propio seed, y las
+ *  vistas lo necesitan para devolver filas. */
+const WORKSPACE_DEMO = '00000002-0000-4000-8000-000000000001';
+
 /** Días que se adelanta el reloj en la cuarta pasada (seis semanas). */
 const SALTO_DE_LA_CUARTA = 40;
 
@@ -127,7 +145,26 @@ const INVARIANTES_TRAS_RESEMBRAR = `
        FROM account_metric_snapshot) x WHERE d < 0)                     AS seguidores_en_baja,
     (SELECT count(*) FROM account_metric_snapshot WHERE day = CURRENT_DATE - 1) AS series_hasta_ayer,
     (SELECT COALESCE(sum(views), 0) FROM account_metric_snapshot
-      WHERE day > CURRENT_DATE - 31)                                    AS views_30d
+      WHERE day > CURRENT_DATE - 31)                                    AS views_30d,
+    -- Las cuatro de abajo miran el CONTENIDO, que es lo que la cuarta
+    -- pasada no miraba: sumar views de account_metric_snapshot —la
+    -- tabla que el propio seed acaba de extender hasta ayer— no puede
+    -- dar cero por construcción, así que una parrilla muerta pasaba en
+    -- verde. Estas sí fallan: cuentan videos, filas del tablero, días
+    -- desde el último video y puntajes medidos a un corte que el video
+    -- ya superó.
+    (SELECT count(*) FROM post
+      WHERE published_at > now() - interval '30 days')                  AS posts_30d,
+    (SELECT count(*) FROM creator_post_board
+      WHERE published_at > now() - interval '30 days')                  AS tablero_30d,
+    (SELECT round(EXTRACT(EPOCH FROM (now() - max(published_at))) / 86400)
+       FROM post)                                                       AS dias_sin_publicar,
+    (SELECT count(*) FROM post_score s JOIN post p ON p.id = s.post_id
+      WHERE s.age_hours_cut < CASE
+              WHEN p.published_at <= date_trunc('day', now()) - interval '720 hours' THEN 720
+              WHEN p.published_at <= date_trunc('day', now()) - interval '168 hours' THEN 168
+              WHEN p.published_at <= date_trunc('day', now()) - interval '72 hours'  THEN 72
+              ELSE 24 END)                                              AS puntajes_obsoletos
 `;
 
 /** Qué valor espera cada columna de la consulta de arriba. */
@@ -139,6 +176,10 @@ const ESPERADO_TRAS_RESEMBRAR = {
   seguidores_en_baja: { prueba: (v) => v === 0, dice: '= 0 (la serie no baja en la costura)' },
   series_hasta_ayer: { prueba: (v) => v === 4, dice: '= 4 (las cuatro llegan hasta ayer)' },
   views_30d: { prueba: (v) => v > 0, dice: '> 0 (hay datos en los últimos 30 días)' },
+  posts_30d: { prueba: (v) => v >= 12, dice: '>= 12 (el mock enseña doce en «Mis videos»)' },
+  tablero_30d: { prueba: (v) => v >= 12, dice: '>= 12 (creator_post_board no se queda vacía)' },
+  dias_sin_publicar: { prueba: (v) => v <= 7, dice: '<= 7 (la parrilla llega a esta semana)' },
+  puntajes_obsoletos: { prueba: (v) => v === 0, dice: '= 0 (ningún puntaje citando un corte ya superado)' },
 };
 
 async function listSql(dir) {
@@ -168,10 +209,19 @@ if (sobran.length > 0) {
 /**
  * Desplaza el reloj de un SQL n días: CURRENT_DATE y now() pasan a
  * valer su valor de dentro de n días. Con n = 0 no toca nada.
+ *
+ * El trabajo fino —no confundir el reloj con un dato que se le parezca—
+ * vive en reloj.mjs, que no toca la base y se prueba solo.
  */
-const desplazar = (n) => (sql) => n === 0 ? sql : sql
-  .replace(/\bCURRENT_DATE\b/g, `(CURRENT_DATE + ${n})`)
-  .replace(/\bnow\(\)/g, `(now() + interval '${n} days')`);
+const desplazar = (n) => (sql, donde = 'sql') => {
+  try {
+    return desplazarReloj(sql, n, donde);
+  } catch (err) {
+    console.error(`  ✗ ${err.message}`);
+    process.exit(1);
+  }
+};
+
 const verifyFiles = (await listSql(HERE)).filter(
   (f) => pedidos.length === 0 || pedidos.includes(f.replace('.sql', ''))
 );
@@ -239,7 +289,7 @@ async function conteos() {
  */
 async function pasada(n, transformar = (sql) => sql) {
   for (const file of seeds) {
-    const sql = transformar(await readFile(join(SEED_DIR, file), 'utf8'));
+    const sql = transformar(await readFile(join(SEED_DIR, file), 'utf8'), `seed/${file}`);
     const t0 = Date.now();
     try {
       await db.exec(sql);
@@ -290,7 +340,7 @@ let fallos = 0;
 let toleradas = 0;
 for (const file of verifyFiles) {
   console.log(`  ── verify/${file}`);
-  const verifySql = desplazar(DIAS)(await readFile(join(HERE, file), 'utf8'));
+  const verifySql = desplazar(DIAS)(await readFile(join(HERE, file), 'utf8'), `verify/${file}`);
   let resultados = [];
   try {
     resultados = await db.exec(verifySql);
@@ -356,10 +406,30 @@ if (reloj.ok && invariantesOk) {
 // sino que la demo siga viva.
 const saltoTotal = DIAS + 1 + SALTO_DE_LA_CUARTA;
 console.log(`  ── cuarta pasada: los seeds otra vez sobre la MISMA base, con el reloj a +${saltoTotal} días`);
-await pasada(4, desplazar(saltoTotal));
+const cuarta = await pasada(4, desplazar(saltoTotal));
+
+// Quinta pasada: la misma base envejecida, los mismos seeds, el mismo
+// reloj. La idempotencia de las dos primeras pasadas se mide sobre una
+// base RECIÉN sembrada, donde casi nada de lo que se añade con el
+// tiempo existe todavía; aquí ya están los videos de 3b, los días de
+// más de la serie y los puntajes subidos de corte, así que es la
+// prueba de que volver a correr `make db.seed` sobre la demo de
+// producción no duplica nada.
+console.log(`\n  ── quinta pasada: otra vez, sin mover el reloj (idempotencia sobre la base envejecida)`);
+const quinta = await pasada(5, desplazar(saltoTotal));
+const idemViejo = comparar(cuarta, quinta, 'pasada 4', 'pasada 5');
+console.log(idemViejo.ok
+  ? '\n  ✓ Sobre una base envejecida, volver a sembrar tampoco cambia ningún conteo.\n'
+  : `\n  ✗ Sobre una base envejecida el seed NO es idempotente (cambió: ${idemViejo.detalle.join(', ')}).\n`);
 
 await db.exec('RESET ROLE');
-const vivos = (await db.query(desplazar(saltoTotal)(INVARIANTES_TRAS_RESEMBRAR))).rows[0];
+// creator_post_board corre con los privilegios de su dueño, que no
+// tiene BYPASSRLS: sin el workspace fijado devolvería cero filas y el
+// invariante del tablero pasaría por la razón equivocada.
+await db.query(`SELECT set_config('app.workspace_id', '${WORKSPACE_DEMO}', false)`);
+const vivos = (await db.query(
+  desplazar(saltoTotal)(INVARIANTES_TRAS_RESEMBRAR, 'INVARIANTES_TRAS_RESEMBRAR')
+)).rows[0];
 await db.exec('SET ROLE mc_migrator_test');
 console.log('');
 console.table([vivos]);
@@ -377,4 +447,4 @@ if (vivosOk) {
 }
 
 await db.close();
-process.exit(idem.ok && fallos === 0 && reloj.ok && invariantesOk && vivosOk ? 0 : 1);
+process.exit(idem.ok && fallos === 0 && reloj.ok && invariantesOk && vivosOk && idemViejo.ok ? 0 : 1);

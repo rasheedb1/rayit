@@ -37,9 +37,9 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM creator_baseline) = 16
          AND (SELECT count(*) FROM company_link) = 8
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
-         AND (SELECT count(*) FROM signal) = 12
+         AND (SELECT count(*) FROM signal) = 13
          AND (SELECT count(*) FROM deal) = 15
-         AND (SELECT count(*) FROM activity) = 38 AS ok;
+         AND (SELECT count(*) FROM activity) = 47 AS ok;
 
 -- El último día de la serie de la cuenta es el ANTERIOR al día en que el
 -- seed corrió por primera vez: el job nocturno solo tiene cerrado ayer
@@ -126,10 +126,17 @@ SELECT 'd_mis_videos' AS check_id, b.platform_id, b.title, b.views, b.views_vs_m
          ELSE b.outlier_tier IN ('normal', 'good')
        END AS ok
 FROM creator_post_board b
-WHERE b.title IN ('La arepa que se hace sin plancha', 'Tres desayunos con dos ingredientes', 'El error que arruina tu arroz',
-                  'Pasta cremosa en cuatro minutos', 'Salsa que mejora cualquier cosa', 'Huevo perfecto: el truco del vaso',
-                  'Qué cocino un lunes sin ganas', 'Compras de la semana por 80 mil', 'Mi cocina en 60 segundos',
-                  'Sopa de la abuela paso a paso', 'Postre sin horno para visitas', 'Respondo sus preguntas de cocina')
+-- Por id, no por título: los videos que la sección 3b añade al volver a
+-- sembrar reciclan los títulos de la parrilla, y con el filtro por
+-- título esta consulta acabaría midiendo dos videos distintos con el
+-- mismo nombre. Son los doce de "Mis videos": d06..d09 (TikTok),
+-- d18..d1b (Instagram), d28/d29 (YouTube) y d33/d34 (Facebook).
+WHERE b.post_id IN ('00000002-0000-4000-8000-000000000d06', '00000002-0000-4000-8000-000000000d07',
+                    '00000002-0000-4000-8000-000000000d08', '00000002-0000-4000-8000-000000000d09',
+                    '00000002-0000-4000-8000-000000000d18', '00000002-0000-4000-8000-000000000d19',
+                    '00000002-0000-4000-8000-000000000d1a', '00000002-0000-4000-8000-000000000d1b',
+                    '00000002-0000-4000-8000-000000000d28', '00000002-0000-4000-8000-000000000d29',
+                    '00000002-0000-4000-8000-000000000d33', '00000002-0000-4000-8000-000000000d34')
 ORDER BY b.views_vs_median DESC NULLS LAST;
 
 -- (d2) Outliers en total: entre 3 y 7 videos con ≥ 2× (los cuatro del
@@ -243,6 +250,28 @@ FROM audience_breakdown a JOIN social_connection c ON c.id = a.connection_id
 GROUP BY c.platform_id, a.dimension
 ORDER BY c.platform_id, a.dimension;
 
+-- (h3) Y las PERSONAS de la demografía son las del último día de la
+--      serie de la cuenta, no un literal congelado: sumar `absolute`
+--      por dimensión tiene que dar los seguidores de esa red. Con el
+--      literal, un media kit que sumara audience_breakdown enseñaba
+--      412 000 al lado del KPI de Resumen que decía 427 227, en la
+--      misma sesión. Género (dos cubos) cuadra exacto; edad y país
+--      reparten el redondeo entre seis y siete cubos, así que se
+--      tolera un entero de diferencia.
+SELECT 'h3_audiencia_personas' AS check_id, c.platform_id, a.dimension,
+       sum(a.absolute) AS personas, f.followers, sum(a.absolute) - f.followers AS diferencia,
+       CASE WHEN a.dimension = 'gender' THEN sum(a.absolute) = f.followers
+            ELSE abs(sum(a.absolute) - f.followers) <= 1 END AS ok
+FROM audience_breakdown a
+JOIN social_connection c ON c.id = a.connection_id
+CROSS JOIN LATERAL (
+  SELECT x.followers FROM account_metric_snapshot x
+   WHERE x.connection_id = c.id AND x.source = 'api'
+   ORDER BY x.day DESC LIMIT 1
+) f
+GROUP BY c.platform_id, a.dimension, f.followers
+ORDER BY c.platform_id, a.dimension;
+
 SELECT 'h2_media_kit' AS check_id,
        sum(share) FILTER (WHERE dimension = 'age' AND bucket IN ('18-24', '25-34')) AS entre_18_y_34,
        sum(share) FILTER (WHERE dimension = 'gender' AND bucket = 'F') AS mujeres,
@@ -313,11 +342,13 @@ SELECT 'i2_tablero' AS check_id, stage_position AS pos, stage_label, company_nam
 FROM deal_pipeline
 ORDER BY stage_position, amount DESC;
 
--- (j) Radar: 4 por revisar, 6 aceptadas (cada una con su deal), 1
---     duplicada, 1 descartada con motivo. dedupe_key única.
+-- (j) Radar: 5 por revisar —las cinco del mock, que su Resumen cita
+--     con todas las letras («Hay 5 señales por revisar»)—, 6 aceptadas
+--     (cada una con su deal), 1 duplicada, 1 descartada con motivo.
+--     dedupe_key única.
 SELECT 'j_radar' AS check_id, status, count(*) AS senales,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) AS con_deal,
-       CASE status WHEN 'pending' THEN count(*) = 4
+       CASE status WHEN 'pending' THEN count(*) = 5
                    WHEN 'accepted' THEN count(*) = 6 AND count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) = 6
                    WHEN 'duplicate' THEN count(*) = 1
                    WHEN 'discarded' THEN count(*) = 1 AND bool_and(discard_reason IS NOT NULL)
@@ -457,6 +488,25 @@ SELECT 'o_baja_respetada' AS check_id, c.full_name, c.opted_out, c.opted_out_at,
          AND (SELECT count(*) FROM outbound_touch t WHERE t.contact_id = c.id) = 0 AS ok
 FROM contact c
 WHERE c.id = '00000002-0000-4000-8000-0000000c0010';
+
+-- (q) El último contacto de un deal abierto es lo que la demo mira hoy,
+--     igual que su próxima acción: cada deal abierto ya contactado
+--     (los nueve; Olla Fácil sigue en "nuevo" y todavía no recibió el
+--     pitch) tiene su actividad de seguimiento de la sección 11b, y
+--     deal.last_contact_at es exactamente esa fecha. Sin esto, un deal
+--     en "Negociación" decía «Enviar contrato · vence hoy» con el
+--     último contacto y la última actividad de hace seis semanas.
+SELECT 'q_ultimo_contacto' AS check_id,
+       count(*) AS abiertos_contactados,
+       count(*) FILTER (WHERE d.last_contact_at <> u.ultima)                  AS descuadrados,
+       count(*) FILTER (WHERE d.last_contact_at < now() - interval '10 days') AS contactos_viejos,
+       count(*) = 9
+         AND count(*) FILTER (WHERE d.last_contact_at <> u.ultima) = 0
+         AND count(*) FILTER (WHERE d.last_contact_at < now() - interval '10 days') = 0 AS ok
+FROM deal d
+JOIN pipeline_stage st ON st.id = d.stage_id
+CROSS JOIN LATERAL (SELECT max(a.occurred_at) AS ultima FROM activity a WHERE a.deal_id = d.id) u
+WHERE NOT st.is_won AND NOT st.is_lost AND d.last_contact_at IS NOT NULL;
 
 -- (p) Lo que el tablero mira hoy no envejece: ningún deal abierto tiene
 --     el cierre esperado en el pasado (los planes van relativos a

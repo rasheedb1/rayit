@@ -138,10 +138,26 @@ async function main() {
   }
 
   if (withSeed) {
+    // Cada seed va en su transacción, igual que una migración. Son
+    // archivos de mil líneas y decenas de sentencias: un fallo a mitad
+    // (un timeout del pooler, un CHECK nuevo) dejaba el workspace de
+    // demostración a medias, en un estado que ninguna verificación
+    // cubre, y la corrida siguiente partía de ahí. Con la transacción,
+    // o entra el seed entero o no entra nada.
     for (const file of await listSql(SEED_DIR)) {
       const sql = await readFile(join(SEED_DIR, file), 'utf8');
-      await db.query(sql);
-      console.log(`  ✓ seed/${file}`);
+      const t0 = Date.now();
+      try {
+        await db.query('BEGIN');
+        await db.query(sql);
+        await db.query('COMMIT');
+        console.log(`  ✓ seed/${file}  (${Date.now() - t0} ms)`);
+      } catch (err) {
+        await db.query('ROLLBACK').catch(() => {});
+        console.error(`\n  ✗ seed/${file}\n    ${err.message}\n`);
+        await db.close();
+        process.exit(1);
+      }
     }
   }
 

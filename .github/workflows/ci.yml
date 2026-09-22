@@ -41,14 +41,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verificar que las migraciones aplican en limpio
         run: node db/migrate.mjs --pglite --seed
+      - name: El reloj del harness no confunde el código con los datos
+        # Ocho pruebas sin base de datos sobre db/seed/verify/reloj.mjs,
+        # que es lo que desplaza CURRENT_DATE y now() en las pasadas de
+        # abajo. Si desplazara mal, todo lo que viene después pasaría en
+        # verde midiendo otra cosa.
+        run: pnpm run seed:check:unit
       - name: Los seeds son idempotentes (hoy, mañana y dentro de seis semanas) y sus cifras son las esperadas
         # Sin argumento corre todos los verify/NNNN.sql: dos pasadas con
         # los mismos conteos, las cifras del mock por consulta (0002 y
-        # 0003), una tercera pasada con el reloj adelantado un día y una
+        # 0003), una tercera pasada con el reloj adelantado un día, una
         # CUARTA que vuelve a sembrar la MISMA base seis semanas
         # después (el `make db.seed` sobre un Supabase que ya tiene la
-        # demo) y exige que siga viva: planes al día, bandeja fresca y
-        # la serie de la cuenta llegando hasta ayer.
+        # demo) y una QUINTA que la repite sin mover el reloj. Exige que
+        # la demo siga viva por los dos lados: planes al día, bandeja
+        # fresca y serie hasta ayer, y también videos de los últimos 30
+        # días, tablero con filas, menos de una semana sin publicar y
+        # cero puntajes citando un corte ya superado.
         run: node db/seed/verify/run.mjs
       - name: La demo es la misma sembrada en limpio dentro de 40 días
         # Los seeds y los verify con CURRENT_DATE y now() a +40 días: lo

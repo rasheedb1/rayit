@@ -27,6 +27,12 @@
 --     audience_breakdown.captured_at; y company.enriched_at (Olla
 --     Fácil). Un diff entre dos entornos que solo toque esas nueve es
 --     lo esperado, no un síntoma.
+--     De esas nueve, las que la demo MIRA HOY se refrescan en cada
+--     corrida: las tres de social_connection, app_user.last_seen_at,
+--     signal.detected_at y .reviewed_at de las PENDIENTES, y
+--     audience_breakdown.captured_at. Las otras tres son hechos
+--     ocurridos y se quedan con la hora de la primera siembra:
+--     .connected_at, la señal duplicada y company.enriched_at.
 --   * El seed fija TimeZone = UTC para su sesión, junto al workspace.
 --     CURRENT_DATE y date_trunc('day', now()) dependen del TimeZone de
 --     la sesión, no del sistema: sin fijarlo, un Postgres inicializado
@@ -52,32 +58,45 @@
 --     viva; y toda la fila lo es: el texto, la dedupe_key y las fechas
 --     que la acompañan se derivan de la misma fecha, para que nunca
 --     diga "hace 2 horas" de algo del 14 de septiembre.
---   * Lo que YA PASÓ se congela en la primera corrida. published_at de
---     los videos relativos y el día 0 de la serie de la cuenta se toman
---     de lo ya guardado si existe (COALESCE sobre la fila anterior),
---     así que una corrida en otro día no desplaza fechas ni duplica
---     lecturas: las que entran son solo las que la curva de cada video
---     ya alcanzó. Las señales aceptadas, los deals cerrados, la
---     historia de etapas y las actividades usan ON CONFLICT DO NOTHING
---     y quedan fechados el día en que el seed corrió por primera vez:
---     son hechos ocurridos, y las actividades los citan por su texto.
---   * Lo que la demo MIRA HOY se refresca en cada corrida, con DO
---     UPDATE: la frescura de las conexiones (social_connection
---     .last_synced_at, .access_expires_at, .refresh_expires_at) y
---     app_user.last_seen_at; el cierre esperado y la fecha de la
---     próxima acción de los deals ABIERTOS (sección 10); el titular, la
---     fecha, el evidence y la dedupe_key de las señales PENDIENTES
---     (sección 9); y la ventana del brief activo (sección 12). Son
---     tablas maestras y planes, no métricas: no viola el append-only.
---     Además la serie de la cuenta se extiende hasta ayer (sección 5) y
---     la línea base se recalcula con la fecha del día (sección 7).
---     Sin esto, `make db.seed` sobre una base sembrada hace seis
---     semanas —el camino documentado contra Supabase— enseña ocho de
---     diez deals abiertos con el cierre en el pasado, cuatro señales
---     pendientes de mes y medio y la gráfica de seguidores terminando
---     hace mes y medio, todo al lado de un "sincronizado hace 2 h".
---     verify/run.mjs lo prueba con una cuarta pasada que vuelve a
---     sembrar la MISMA base con el reloj adelantado.
+--   * Tres reglas, según la NATURALEZA de cada columna. Volver a
+--     sembrar una base que ya tiene la demo —`make db.seed` contra un
+--     Supabase que la lleva puesta, que es el camino documentado— no
+--     puede reescribir la historia ni dejar la demo caducada.
+--     1) Lo que YA PASÓ se congela en la primera corrida. published_at
+--        de los videos de la lista y el día 0 de la serie de la cuenta
+--        se toman de lo ya guardado si existe (COALESCE sobre la fila
+--        anterior), así que una corrida en otro día no desplaza fechas
+--        ni duplica lecturas: las que entran son solo las que la curva
+--        de cada video ya alcanzó. Las señales aceptadas, los deals
+--        cerrados, la historia de etapas y las actividades históricas
+--        usan ON CONFLICT DO NOTHING y quedan fechadas el día en que el
+--        seed corrió por primera vez: son hechos ocurridos, y las
+--        actividades los citan por su texto.
+--     2) Lo que la demo MIRA HOY se refresca, con DO UPDATE: la
+--        frescura de las conexiones (social_connection.last_synced_at,
+--        .access_expires_at, .refresh_expires_at) y app_user
+--        .last_seen_at; el cierre esperado, la fecha de la próxima
+--        acción y el ÚLTIMO CONTACTO de los deals ABIERTOS (sección 10)
+--        con su actividad de seguimiento (11b); el titular, la fecha,
+--        el evidence y la dedupe_key de las señales PENDIENTES (9); la
+--        ventana del brief activo (12); la foto de la demografía y las
+--        personas que cuenta (6); y el puntaje de cada video, que SUBE
+--        al corte que el video ya alcanzó (7), porque post_score es el
+--        puntaje vigente y no un registro append-only. Son tablas
+--        maestras, planes y valores vigentes, no métricas: no viola el
+--        append-only.
+--     3) Lo que FALTA se añade, sin tocar lo anterior: la serie de la
+--        cuenta se extiende hasta ayer (5), la línea base se recalcula
+--        con la fecha del día (7) y la parrilla recibe los videos que
+--        se habrían publicado desde el último guardado (3b), con sus
+--        lecturas.
+--     Sin las tres, una base sembrada hace seis semanas enseña ocho de
+--     diez deals abiertos con el cierre en el pasado, la bandeja del
+--     radar de mes y medio, la gráfica de seguidores terminando hace
+--     mes y medio y —lo peor— "Mis videos" vacía al lado de un
+--     "sincronizado hace 2 h". verify/run.mjs lo prueba con una cuarta
+--     pasada que vuelve a sembrar la MISMA base con el reloj adelantado
+--     seis semanas y exige que la demo siga viva, videos incluidos.
 --   * Las métricas se insertan, nunca se actualizan (append-only).
 --   * RLS está en modo FORCE: incluso mc_migrator, dueño de las tablas,
 --     necesita app.workspace_id fijado. Se fija al principio para toda
@@ -99,11 +118,16 @@
 -- Ids propios de este seed (últimos doce dígitos hexadecimales):
 --   …-0000000000e5..e8   empresas nuevas (Sabores Caseros, Granos del
 --                        Valle, Vitalé, Olla Fácil)
---   …-000000000dNN       posts, NN = secuencia en hexadecimal (01..3c)
+--   …-000000000dNN       posts, NN = secuencia en hexadecimal (01..3c).
+--                        En realidad el id es …-00000000 || hex(0x0d00
+--                        + seq), así que los videos que añade 3b siguen
+--                        en 0d3d, 0d3e, … sin tope práctico
 --   …-0000000c0001..     contactos (c0 = contacto)
 --   …-00000005e001..     señales (5e = señal)
 --   …-0000000dea01..     deals
---   …-00000ac70001..     actividades (ac7 = actividad)
+--   …-00000ac70001..     actividades (ac7 = actividad); 0027..002f son
+--                        las nueve de seguimiento de 11b, una por deal
+--                        abierto ya contactado
 --   …-0000adHHHHHH       audience_breakdown, HHHHHH = red·100 + bucket
 --                        en hexadecimal (id fijo = clave de idempotencia)
 --   …-0000000b0001       outbound_brief
@@ -162,7 +186,10 @@ INSERT INTO creator_profile (id, workspace_id, user_id, display_name, handle, bi
 VALUES (
   '00000002-0000-4000-8000-000000000003', '00000002-0000-4000-8000-000000000001',
   '00000002-0000-4000-8000-000000000002', 'Laura Méndez', 'laura.cocinafacil',
-  'Cocina fácil para 412 mil personas en Colombia. Recetas de menos de diez minutos con lo que ya tienes en casa.',
+  -- La bio la escribe la creadora, no el producto: por eso la cifra va
+  -- redondeada ("más de 400 mil") y no con el número exacto, que sube
+  -- cada día y dejaría el texto desfasado frente al KPI de Resumen.
+  'Cocina fácil para más de 400 mil personas en Colombia. Recetas de menos de diez minutos con lo que ya tienes en casa.',
   'CO', '{es}', '{cocina}',
   '{"tagline": "Cocina fácil, sin vueltas",
     "formats": ["tiktok", "reel", "short", "historias"],
@@ -215,13 +242,17 @@ ON CONFLICT (id) DO UPDATE SET
 -- 3 · Sesenta videos en 120 días
 -- ---------------------------------------------------------------------
 -- Una sola sentencia: la lista de lo que define a cada video (CTE
--- seed_post), lo derivado (seed_post_curve), el INSERT del post y el de
--- sus lecturas. Va junto porque los parámetros de la curva no viven en
--- ninguna tabla, y el seed no crea tablas de trabajo (el rol migrador
--- no tiene TEMP en Postgres embebido). De la línea base y el puntaje
--- se ocupa la sección 7, leyendo lo ya insertado.
+-- seed_post_base), los que faltan para llegar a esta semana (3b, CTE
+-- seed_nuevo), la unión de los dos (seed_post), lo derivado
+-- (seed_post_curve), el INSERT del post y el de sus lecturas. Va junto
+-- porque los parámetros de la curva no viven en ninguna tabla, y el
+-- seed no crea tablas de trabajo (el rol migrador no tiene TEMP en
+-- Postgres embebido). De la línea base y el puntaje se ocupa la
+-- sección 7, leyendo lo ya insertado.
 --
---   seq        secuencia: el id del post es …-000000000d + seq en hex.
+--   seq        secuencia: el id del post es …-00000000 más
+--              hex(0x0d00 + seq), o sea …-000000000d01..0d3c para estos
+--              sesenta y 0d3d en adelante para los que añade 3b.
 --   days_ago   publicado hace N días (relativo a CURRENT_DATE), a las
 --              hour_utc. NULL para los cinco posts de campaña de 0003,
 --              que van con fecha fija (fixed_at) porque sus reportes y
@@ -239,7 +270,7 @@ ON CONFLICT (id) DO UPDATE SET
 --              deriva con una función determinista de seq.
 --   link_rate  clics por view; solo los posts de campaña (branded).
 -- =====================================================================
-WITH seed_post AS (
+WITH seed_post_base AS (
 SELECT *
 FROM (VALUES
   -- seq, platform, surface, days_ago, fixed_at, hour_utc, title, caption, hashtags, mentions, duration_s, v_ref, ref_age_h, saves_per_1k, nofol, skip3, link_rate
@@ -375,6 +406,120 @@ FROM (VALUES
 ) AS v(seq, platform, surface, days_ago, fixed_at, hour_utc, title, caption, hashtags, mentions, duration_s, v_ref, ref_age_h, saves_per_1k, nofol, skip3, link_rate)
 ),
 
+-- ---------------------------------------------------------------------
+-- 3b · Los videos que faltan: del último publicado hasta ayer
+-- ---------------------------------------------------------------------
+-- Los sesenta de arriba se CONGELAN en la primera corrida (el
+-- published_at guardado manda). Sin nada más, volver a sembrar la misma
+-- base seis semanas después dejaba la parrilla muerta: cero videos en
+-- los últimos 30 días y el más nuevo con 42 días, justo al lado de unas
+-- conexiones "sincronizadas hace 3 h", un radar de esta semana y una
+-- curva de seguidores que llega hasta ayer. El contraste era peor que
+-- tenerlo todo viejo.
+--
+-- Aquí se le aplica a los videos la MISMA regla que a la serie de la
+-- cuenta (sección 5): lo publicado no se toca y se AÑADE lo que falta.
+-- Un video cada dos días desde el ancla —el último video de la lista de
+-- arriba, que ya está congelado y por eso nunca se mueve— hasta ayer.
+--   seq = 60 + n, con n contado DESDE EL ANCLA, no desde el último
+--   video generado: así el video del día X tiene siempre el mismo id,
+--   se siembre una vez o diez, y ningún id se reutiliza.
+--   id  = …-00000000 || hex(0x0d00 + seq): 0d3d, 0d3e, … justo después
+--   de los sesenta (0d01..0d3c). Caben 58 000, no 195.
+-- Sembrando en limpio no entra ninguno: el video más nuevo de la lista
+-- es de ayer, así que el primer día candidato (ancla + 2) es mañana, y
+-- los conteos de una base recién sembrada siguen siendo 60 videos.
+-- El texto, la red y la duración salen de una rotación de veinticuatro
+-- recetas (ninguna repetida de las sesenta) y las views de una función
+-- cerrada de seq: dos corridas dan exactamente lo mismo, sin random().
+-- Sus lecturas, su línea base y su puntaje los calculan las secciones 4
+-- y 7 sin saber que estos videos son distintos de los otros.
+seed_ancla AS (
+  SELECT COALESCE(max(p.published_at)::date, CURRENT_DATE - 1) AS dia
+  FROM post p
+  WHERE p.workspace_id = '00000002-0000-4000-8000-000000000001'
+    AND p.id BETWEEN '00000002-0000-4000-8000-000000000d01'
+                 AND '00000002-0000-4000-8000-000000000d3c'
+),
+
+seed_nuevo AS (
+SELECT (60 + g.n)::int AS seq, t.platform, t.surface, NULL::int AS days_ago,
+       ((a.dia + 2 * g.n)::timestamp + make_interval(hours => t.hour_utc)) AT TIME ZONE 'UTC' AS fixed_at,
+       NULL::int AS hour_utc, t.title, t.caption, t.hashtags, '{}'::text[] AS mentions, t.duration_s,
+       -- views a 30 días: la base de la red movida entre 0,75 y 1,34 por
+       -- una función de seq, así que la misma receta no repite cifra al
+       -- volver a salir 48 días después.
+       round(t.v_base * (0.75 + (((60 + g.n) * 29) % 60) / 100.0))::int AS v_ref,
+       720 AS ref_age_h,
+       NULL::numeric AS saves_per_1k, NULL::numeric AS nofol, NULL::numeric AS skip3, NULL::numeric AS link_rate
+FROM seed_ancla a
+-- Los días que van del ancla a ayer, uno de cada dos. Con el ancla en
+-- ayer (base recién sembrada) el rango es vacío.
+CROSS JOIN generate_series(1, greatest(0, ((CURRENT_DATE - 1) - a.dia) / 2)) AS g(n)
+CROSS JOIN LATERAL (
+  SELECT * FROM (VALUES
+    -- k, platform, surface, hour_utc, duration_s, v_base, title, caption, hashtags
+    ( 0, 'tiktok',    'feed',   19,  38, 110000, 'Arroz con pollo en una sola olla',
+      'Arroz con pollo en una sola olla, sin dorar aparte 🍗 #arrozconpollo #cocinafacil #unaolla', '{arrozconpollo,cocinafacil,unaolla}'::text[]),
+    ( 1, 'instagram', 'reels',  19,  35,  70000, 'Desayuno de 5 minutos con avena y banano',
+      'Desayuno de 5 minutos con avena y banano maduro 🍌 #desayuno #avena #recetafacil', '{desayuno,avena,recetafacil}'),
+    ( 2, 'youtube',   'video',  14, 520,  55000, 'Cinco cenas de la semana en una hora',
+      'Cinco cenas para toda la semana, cocinadas en una hora y con lista de compras', '{cena,mealprep,semana}'),
+    ( 3, 'tiktok',    'feed',   19,  31, 110000, 'El truco para que el aguacate no se dañe',
+      'El truco para que el aguacate no se ponga negro 🥑 #aguacate #truco #cocinafacil', '{aguacate,truco,cocinafacil}'),
+    ( 4, 'facebook',  'feed',   16, 110,  22000, 'Sancocho de gallina como en casa',
+      'Sancocho de gallina como lo hacía mi abuela, paso a paso 🍲 #sancocho #cocinacolombiana', '{sancocho,cocinacolombiana}'),
+    ( 5, 'tiktok',    'feed',   23,  29, 110000, 'Chocolate caliente espeso sin grumos',
+      'Chocolate caliente espeso y sin un solo grumo ☕ #chocolate #desayuno #truco', '{chocolate,desayuno,truco}'),
+    ( 6, 'instagram', 'reels',  19,  42,  70000, 'Bowl de pollo y arroz para llevar',
+      'Bowl de pollo y arroz para llevar al trabajo 🥡 #mealprep #almuerzo #recetafacil', '{mealprep,almuerzo,recetafacil}'),
+    ( 7, 'tiktok',    'feed',   19,  33, 110000, 'Mazamorra rápida en olla a presión',
+      'Mazamorra en 20 minutos con olla a presión 🌽 #mazamorra #cocinacolombiana #ollaapresion', '{mazamorra,cocinacolombiana,ollaapresion}'),
+    ( 8, 'youtube',   'shorts', 19,  54,  42000, 'Cómo organizar la nevera para cocinar rápido',
+      'Cómo organizo la nevera para cocinar rápido entre semana #shorts #orden #cocina', '{shorts,orden,cocina}'),
+    ( 9, 'instagram', 'reels',  16,  46,  70000, 'Tortillas de maíz caseras',
+      'Tortillas de maíz caseras con tres ingredientes 🌽 #tortillas #recetafacil #maiz', '{tortillas,recetafacil,maiz}'),
+    (10, 'tiktok',    'feed',   19,  40, 110000, 'Frijoles en 30 minutos sin remojar',
+      'Frijoles en 30 minutos y sin remojarlos desde anoche 🫘 #frijoles #almuerzo #truco', '{frijoles,almuerzo,truco}'),
+    (11, 'facebook',  'feed',   19, 130,  22000, 'Mi lista de mercado de 100 mil',
+      'Mi lista de mercado de 100 mil pesos para una semana 🧾 #mercado #ahorro', '{mercado,ahorro}'),
+    (12, 'tiktok',    'feed',   19,  36, 110000, 'Salchipapa casera al horno',
+      'Salchipapa casera al horno, con salsa de la casa 🍟 #salchipapa #alhorno #recetafacil', '{salchipapa,alhorno,recetafacil}'),
+    (13, 'instagram', 'reels',  12,  37,  70000, 'Yogur casero con dos ingredientes',
+      'Yogur casero con dos ingredientes y sin máquina 🥛 #yogur #desayuno #recetafacil', '{yogur,desayuno,recetafacil}'),
+    (14, 'youtube',   'video',  14, 560,  55000, 'Almuerzos de oficina para toda la semana',
+      'Cinco almuerzos de oficina que aguantan la nevera y el microondas', '{almuerzo,mealprep,oficina}'),
+    (15, 'youtube',   'shorts', 19,  50,  42000, 'Pescado al horno que no huele',
+      'Pescado al horno que no deja oliendo la casa #shorts #pescado #cena', '{shorts,pescado,cena}'),
+    (16, 'instagram', 'reels',  19,  39,  70000, 'Crema de auyama en 15 minutos',
+      'Crema de auyama en 15 minutos, con lo que ya tienes 🎃 #crema #auyama #cena', '{crema,auyama,cena}'),
+    (17, 'tiktok',    'feed',   19,  43, 110000, 'Pan casero sin amasar',
+      'Pan casero sin amasar: se mezcla y al horno 🍞 #pan #sinamasar #recetafacil', '{pan,sinamasar,recetafacil}'),
+    (18, 'facebook',  'feed',   19,  96,  22000, 'Qué hacer con el pollo de ayer',
+      'Tres formas de aprovechar el pollo de ayer sin que sepa a sobras 🍗 #sobras #ahorro', '{sobras,ahorro}'),
+    (19, 'youtube',   'shorts', 19,  57,  42000, 'Guía para comprar carne barata',
+      'Cómo comprar carne barata y que quede blanda #shorts #carne #ahorro', '{shorts,carne,ahorro}'),
+    (20, 'tiktok',    'feed',   16,  32, 110000, 'Limonada de coco sin licuadora grande',
+      'Limonada de coco sin licuadora grande y sin grumos 🥥 #limonadadecoco #bebida #verano', '{limonadadecoco,bebida,verano}'),
+    (21, 'instagram', 'reels',  19,  44,  70000, 'Ensalada de pasta para el calor',
+      'Ensalada de pasta para el calor, aguanta dos días 🥗 #ensalada #pasta #mealprep', '{ensalada,pasta,mealprep}'),
+    (22, 'instagram', 'reels',  19,  48,  70000, 'Torta de zanahoria en licuadora',
+      'Torta de zanahoria hecha toda en la licuadora 🥕 #torta #zanahoria #postre', '{torta,zanahoria,postre}'),
+    (23, 'facebook',  'feed',   16, 104,  22000, 'Cómo congelar comida sin perder sabor',
+      'Cómo congelar comida sin que pierda sabor ni textura 🧊 #congelar #mealprep', '{congelar,mealprep}')
+  ) AS x(k, platform, surface, hour_utc, duration_s, v_base, title, caption, hashtags)
+  WHERE x.k = (g.n - 1) % 24
+) t
+),
+
+-- Los sesenta de siempre, más los que hagan falta para que la parrilla
+-- llegue hasta esta semana. De aquí para abajo son todos iguales.
+seed_post AS (
+  SELECT * FROM seed_post_base
+  UNION ALL
+  SELECT * FROM seed_nuevo
+),
+
 -- Lo derivado: fecha de publicación, ids, curva y tasas por post.
 -- La curva de views acumuladas es
 --   f(h) = 0,85·(1 − e^(−h/τ1)) + 0,15·(1 − e^(−h/400))
@@ -387,7 +532,10 @@ FROM (VALUES
 seed_post_curve AS (
 SELECT
   p.*,
-  ('00000002-0000-4000-8000-000000000d' || lpad(to_hex(p.seq), 2, '0'))::uuid AS post_id,
+  -- …-00000000 || hex(0x0d00 + seq). Para los sesenta de la lista da
+  -- exactamente los ids de siempre (0d01..0d3c) y deja sitio de sobra
+  -- para los de 3b, que siguen en 0d3d.
+  ('00000002-0000-4000-8000-00000000' || lpad(to_hex(3328 + p.seq), 4, '0'))::uuid AS post_id,
   CASE p.platform
     WHEN 'instagram' THEN '00000002-0000-4000-8000-0000000000c1'::uuid
     WHEN 'tiktok'    THEN '00000002-0000-4000-8000-0000000000c2'::uuid
@@ -399,7 +547,7 @@ SELECT
   -- corrida, el valor guardado en las siguientes.
   COALESCE(
     (SELECT x.published_at FROM post x
-      WHERE x.id = ('00000002-0000-4000-8000-000000000d' || lpad(to_hex(p.seq), 2, '0'))::uuid),
+      WHERE x.id = ('00000002-0000-4000-8000-00000000' || lpad(to_hex(3328 + p.seq), 4, '0'))::uuid),
     p.fixed_at,
     ((CURRENT_DATE - p.days_ago) + make_interval(hours => p.hour_utc)) AT TIME ZONE 'UTC'
   ) AS published_at,
@@ -592,19 +740,37 @@ ON CONFLICT (connection_id, day, source) DO NOTHING;
 -- puntos: TikTok más joven y más México, YouTube más adulto y más
 -- EE. UU., Facebook mayor y más Colombia. Cada ajuste suma cero dentro
 -- de su dimensión, así que los shares siguen sumando 1.
+--
+-- El share es ESTRUCTURAL (cómo es la audiencia) y se congela; las
+-- PERSONAS salen del último día de la serie de la cuenta (sección 5),
+-- no de un literal, y se refrescan con la foto en cada corrida. Con el
+-- literal y DO NOTHING la demografía acababa contradiciendo al resto de
+-- la demo: tras resembrar a +41 días la serie daba 427 227 seguidores y
+-- audience_breakdown seguía sumando 412 000, con day de hace seis
+-- semanas, en la misma pantalla. Por eso captured_at, day y absolute
+-- van en el DO UPDATE: así la columna de frescura que el encabezado de
+-- este archivo promete es de verdad frescura.
 -- =====================================================================
 INSERT INTO audience_breakdown
   (id, workspace_id, scope, connection_id, captured_at, day, population, dimension, bucket, share, absolute)
 SELECT ('00000002-0000-4000-8000-0000ad' || lpad(to_hex(c.pcode * 100 + b.n), 6, '0'))::uuid,
        '00000002-0000-4000-8000-000000000001', 'account', c.connection_id, now(), CURRENT_DATE, 'followers',
        b.dimension, b.bucket, b.share + COALESCE(adj.delta, 0),
-       round(c.followers * (b.share + COALESCE(adj.delta, 0)))::bigint
+       round(f.followers * (b.share + COALESCE(adj.delta, 0)))::bigint
 FROM (VALUES
   ('00000002-0000-4000-8000-0000000000c2'::uuid, 'tiktok',    1, 214000),
   ('00000002-0000-4000-8000-0000000000c1'::uuid, 'instagram', 2, 128000),
   ('00000002-0000-4000-8000-0000000000c3'::uuid, 'youtube',   3,  49000),
   ('00000002-0000-4000-8000-0000000000c4'::uuid, 'facebook',  4,  21000)
-) AS c(connection_id, platform, pcode, followers)
+) AS c(connection_id, platform, pcode, followers_mock)
+-- Los seguidores de HOY, los mismos que enseña Resumen. La sección 5 ya
+-- corrió, así que la serie existe; el valor del mock queda solo como
+-- respaldo para una base a la que le falte la serie.
+CROSS JOIN LATERAL (
+  SELECT COALESCE((SELECT a.followers FROM account_metric_snapshot a
+                    WHERE a.connection_id = c.connection_id AND a.source = 'api'
+                    ORDER BY a.day DESC LIMIT 1), c.followers_mock) AS followers
+) f
 CROSS JOIN (VALUES
   ( 1, 'age',     '13-17', 0.04), ( 2, 'age',     '18-24', 0.31), ( 3, 'age',     '25-34', 0.40),
   ( 4, 'age',     '35-44', 0.15), ( 5, 'age',     '45-54', 0.07), ( 6, 'age',     '55+',   0.03),
@@ -627,9 +793,14 @@ LEFT JOIN (VALUES
   ('facebook', 'country', 'US', -0.02), ('facebook', 'country', 'ES', -0.01)
 ) AS adj(platform, dimension, bucket, delta)
   ON adj.platform = c.platform AND adj.dimension = b.dimension AND adj.bucket = b.bucket
--- El id fijo (…-0000ad + red·100 + fila) es la clave de idempotencia: la
--- foto queda fechada el día en que el seed corrió por primera vez.
-ON CONFLICT (id) DO NOTHING;
+-- El id fijo (…-0000ad + red·100 + fila) es la clave de idempotencia.
+-- El share no se toca (es estructural); la foto y las personas sí, para
+-- que la suma de `absolute` sea siempre la de la última lectura de
+-- seguidores.
+ON CONFLICT (id) DO UPDATE SET
+  captured_at = EXCLUDED.captured_at,
+  day         = EXCLUDED.day,
+  absolute    = EXCLUDED.absolute;
 
 
 -- =====================================================================
@@ -691,12 +862,23 @@ ON CONFLICT DO NOTHING;
 -- línea base más reciente de su red en ese corte: la que acaba de
 -- calcular la sentencia de arriba. Así una corrida posterior puntúa al
 -- video que cumplió 24 h desde entonces contra la mediana de hoy, en
--- vez de dejarlo sin fila o compararlo con una mediana vieja. El
--- puntaje ya calculado no se recalcula (ON CONFLICT (post_id) DO
--- NOTHING): es append-only y cita la línea base con la que se midió.
+-- vez de dejarlo sin fila o compararlo con una mediana vieja.
 -- versusMedian() devuelve null (no cero) con menos de 8 videos;
 -- outlierTier(): ≥5 breakout, ≥2 outlier, ≥1,2 good, ≥0,7 normal, si
 -- no under. is_outlier = ≥ 2.
+--
+-- post_score tiene PRIMARY KEY (post_id): es el puntaje VIGENTE del
+-- video, no un registro append-only —el job compute.post_score lo
+-- recalcula cada noche—, así que el puntaje SUBE de corte cuando el
+-- video crece. Con DO NOTHING se congelaba en el corte de la primera
+-- corrida: al resembrar a +41 días, 25 de 60 filas citaban un corte ya
+-- superado y creator_post_board (0010_views_rls.sql) juntaba las views
+-- de hoy (post_metrics_latest) con un "× mediana" medido a otra edad,
+-- que es justo el error que scoring.ts existe para evitar.
+-- La guarda WHERE age_hours_cut < EXCLUDED.age_hours_cut lo deja
+-- MONÓTONO: el corte solo sube, nunca baja, así que dos corridas del
+-- mismo día dan la misma fila y ninguna reescribe un puntaje por uno
+-- medido antes.
 INSERT INTO post_score
   (post_id, workspace_id, computed_at, baseline_id, age_hours_cut, views_at_cut,
    views_vs_median, reach_vs_median, saves_vs_median, engagement_vs_median, is_outlier, outlier_tier)
@@ -735,7 +917,18 @@ FROM (
                            AND x.age_hours_cut = b.age_hours_cut)
   WHERE p.creator_id = '00000002-0000-4000-8000-000000000003'
 ) s
-ON CONFLICT (post_id) DO NOTHING;
+ON CONFLICT (post_id) DO UPDATE SET
+  computed_at          = EXCLUDED.computed_at,
+  baseline_id          = EXCLUDED.baseline_id,
+  age_hours_cut        = EXCLUDED.age_hours_cut,
+  views_at_cut         = EXCLUDED.views_at_cut,
+  views_vs_median      = EXCLUDED.views_vs_median,
+  reach_vs_median      = EXCLUDED.reach_vs_median,
+  saves_vs_median      = EXCLUDED.saves_vs_median,
+  engagement_vs_median = EXCLUDED.engagement_vs_median,
+  is_outlier           = EXCLUDED.is_outlier,
+  outlier_tier         = EXCLUDED.outlier_tier
+WHERE post_score.age_hours_cut < EXCLUDED.age_hours_cut;
 
 
 -- =====================================================================
@@ -869,6 +1062,16 @@ VALUES
    'Top Ads en TikTok · Colombia · 7 días', now() - interval '2 days', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
    '{"country": "CO", "window_days": 7, "rank": 9, "industry": "alimentos"}', 0.6600, 4000000.00, 'COP',
    'tiktok_top_ads:nutrive.co:' || to_char(CURRENT_DATE - 2, 'IYYY-"w"IW'), 'pending', NULL, NULL, NULL),
+  -- La quinta por revisar. El mock enseña CINCO señales pendientes y el
+  -- aviso de Resumen lo dice con todas las letras («Hay 5 señales por
+  -- revisar en el radar»); con cuatro, la pantalla que RES-1 copie del
+  -- mock y el radar dirían números distintos el primer día.
+  ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', 'meta_ad_library',
+   '5 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 4, 'FMDD') || ' '
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · salsas',
+   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=saborescaseros',
+   jsonb_build_object('active_ads', 5, 'country', 'CO', 'category', 'salsas', 'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
+   'meta_ad_library:saborescaseros.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -933,31 +1136,31 @@ FROM (VALUES
    ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-00000005e004',
    'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Seguimiento 2',
-   (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
+   (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 5 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
    'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
-   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
+   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-00000005e005',
    'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Enviar contrato',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', '2026-09-15 20:30:00+00', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
+   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000000e1', NULL,
    'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamada',
-   ((CURRENT_DATE + 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-11 15:00:00+00', NULL, NULL, NULL, '2026-09-11 15:00:00+00'),
+   ((CURRENT_DATE + 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-11 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000000e4', NULL,
    'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviar propuesta',
-   ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-10 13:40:00+00', NULL, NULL, NULL, '2026-09-10 13:40:00+00'),
+   ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-10 13:40:00+00'),
   ('00000002-0000-4000-8000-0000000dea06', '00000002-0000-4000-8000-0000000000e3', NULL,
    'Historias navidad', 'conversacion', 3000000.00, CURRENT_DATE + 54, 'Esperar pago de la mora',
-   NULL, '2026-09-04 16:00:00+00', NULL, NULL, NULL, '2026-09-04 16:00:00+00'),
+   NULL, (CURRENT_DATE - 6 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-04 16:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea07', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
    'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, CURRENT_DATE + 8, 'Seguimiento a la cotización',
-   ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-09 15:10:00+00', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
+   ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
   ('00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-00000005e006',
    '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
-   (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 6 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
+   (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
    '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
-   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
+   (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
    '2 TikTok · septiembre', 'ganado', 5200000.00, DATE '2026-08-27', 'Cobrar la factura FV-2026-011',
@@ -981,18 +1184,29 @@ FROM (VALUES
    'Receta con granola · marzo', 'perdido', 5000000.00, DATE '2026-03-15', NULL,
    NULL, '2026-03-18 14:00:00+00', NULL, '2026-03-20 15:00:00+00', 'eligio_otro_creador', '2026-02-20 10:00:00+00')
 ) AS d(id, company_id, origin_signal_id, name, stage_id, amount, expected_close_date, next_action, next_action_due, last_contact_at, won_at, lost_at, lost_reason, created_at)
--- Volver a sembrar refresca el PLAN de los deals abiertos (el cierre
--- esperado y la fecha de la próxima acción) igual que refresca la
--- frescura de las conexiones: son lo que el tablero mira hoy, no un
--- hecho ocurrido. Sin esto, una base sembrada hace seis semanas enseña
--- ocho de diez deals abiertos con el cierre en el pasado. Lo que ya
--- pasó (etapas, último contacto, cierres reales, el mes o el trimestre
--- del nombre, que las actividades citan) no se toca, y los ganados y
+-- Volver a sembrar refresca lo que el tablero MIRA HOY de los deals
+-- abiertos: el cierre esperado, la fecha de la próxima acción y el
+-- último contacto. Sin esto, una base sembrada hace seis semanas enseña
+-- ocho de diez deals abiertos con el cierre en el pasado; y con el
+-- último contacto congelado, un deal en "Negociación" decía «Enviar
+-- contrato · vence hoy» al lado de un último contacto de hace seis
+-- semanas, que no es una historia creíble sino un deal abandonado.
+-- last_contact_at va emparejado con la actividad de seguimiento de la
+-- sección 11b (misma fecha y misma hora, deal por deal): la ficha de
+-- empresa y la tarjeta del tablero cuentan lo mismo. La consulta (q) de
+-- verify/0002.sql exige esa igualdad, para que no se separen.
+-- Lo que ya pasó (etapas, cierres reales, el mes o el trimestre del
+-- nombre, que las actividades citan) no se toca, y los ganados y
 -- perdidos quedan intactos: su cierre esperado es historia.
+-- Qué es "cerrado" lo dice pipeline_stage con is_won/is_lost, como la
+-- vista deal_pipeline y el propio verify: con la lista de literales,
+-- añadir una etapa terminal ('archivado') o renombrar una hacía que el
+-- seed reescribiera en silencio el plan de deals ya cerrados.
 ON CONFLICT (id) DO UPDATE SET
   expected_close_date = EXCLUDED.expected_close_date,
-  next_action_due     = EXCLUDED.next_action_due
-WHERE deal.stage_id NOT IN ('ganado', 'perdido');
+  next_action_due     = EXCLUDED.next_action_due,
+  last_contact_at     = EXCLUDED.last_contact_at
+WHERE deal.stage_id IN (SELECT st.id FROM pipeline_stage st WHERE NOT st.is_won AND NOT st.is_lost);
 
 -- Historia de etapas: de aquí salen el ciclo de venta y la conversión
 -- por etapa. Sin clave natural: se evita el duplicado por (deal, etapa
@@ -1161,6 +1375,50 @@ FROM (VALUES
 ON CONFLICT DO NOTHING;
 
 
+-- ---------------------------------------------------------------------
+-- 11b · El último toque de cada deal abierto
+-- ---------------------------------------------------------------------
+-- Las actividades de arriba son hechos: se congelan. Pero una línea de
+-- tiempo que termina hace seis semanas en un deal que dice «vence hoy»
+-- no es una historia creíble. Por eso cada deal ABIERTO que ya fue
+-- contactado —todos menos Olla Fácil, que sigue en "nuevo" y todavía no
+-- ha recibido el pitch— lleva UNA actividad de seguimiento anclada a
+-- CURRENT_DATE, con id fijo y DO UPDATE: al volver a sembrar se mueve
+-- con el reloj, como el plan del deal.
+-- occurred_at es exactamente deal.last_contact_at (sección 10): la
+-- tarjeta del tablero y la ficha de empresa no pueden decir cosas
+-- distintas. La consulta (q) de verify/0002.sql lo comprueba.
+INSERT INTO activity (id, workspace_id, company_id, deal_id, contact_id, user_id, kind, subject, body, occurred_at, metadata)
+SELECT ('00000002-0000-4000-8000-00000ac7' || lpad(to_hex(a.n), 4, '0'))::uuid,
+       '00000002-0000-4000-8000-000000000001', a.company_id, a.deal_id, a.contact_id,
+       '00000002-0000-4000-8000-000000000002', a.kind, a.subject, a.body,
+       (CURRENT_DATE - a.dias + a.hora) AT TIME ZONE 'UTC', a.metadata
+FROM (VALUES
+  (39, '00000002-0000-4000-8000-0000000000e6'::uuid, '00000002-0000-4000-8000-0000000dea02'::uuid, '00000002-0000-4000-8000-0000000c0009'::uuid, 'dm_sent',
+    'Recordatorio por DM', 'Se le recuerda a Laura Quintero la propuesta de historias + 1 reel. El seguimiento 2 por correo sigue pendiente.', 5, time '15:00', '{}'::jsonb),
+  (40, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000c0011', 'email_received',
+    'Sofía pide el guion de las historias', 'Quiere ver las tres pantallas antes de pasar el presupuesto de snacks a aprobación.', 1, time '16:00', '{}'),
+  (41, '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000c0008', 'email_sent',
+    'Borrador del contrato para revisión', 'Enviado el borrador con las fechas de publicación y la exclusividad de 30 días. Falta la versión final para firma.', 2, time '15:00', '{}'),
+  (42, '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000c0003', 'email_sent',
+    'La propuesta de renovación llega esta semana', 'Se le confirma a Valentina el alcance: un reel y un TikTok al mes durante tres meses.', 4, time '14:00', '{}'),
+  (43, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000c0005', 'call',
+    'Llamada de 12 min sobre la serie', 'Julián confirma los tres videos, uno por mes. Falta cerrar presupuesto y fechas de grabación.', 3, time '13:00', '{"duration_min": 12}'),
+  (44, '00000002-0000-4000-8000-0000000000e3', '00000002-0000-4000-8000-0000000dea06', '00000002-0000-4000-8000-0000000c0007', 'call',
+    'Llamada por la factura en mora', 'Andrea dice que el pago sale al cierre de mes. La propuesta de navidad sigue condicionada a que entre.', 6, time '16:00', '{"duration_min": 9}'),
+  (45, '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-0000000dea07', '00000002-0000-4000-8000-0000000c0001', 'email_received',
+    'Camila revisa la cotización esta semana', 'El comité de marketing la ve el jueves; piden mantener el código y el enlace propios.', 2, time '15:00', '{}'),
+  (46, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000c0011', 'dm_sent',
+    'Entregables ajustados', 'Enviada la versión con el reel más corto y la historia extra, con el mismo presupuesto de COP 9,8 M.', 4, time '17:00', '{}'),
+  (47, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_sent',
+    'Fechas propuestas para el TikTok y el Short', 'Se proponen dos fechas de publicación de la primera quincena. Falta la confirmación de Julián.', 1, time '13:00', '{}')
+) AS a(n, company_id, deal_id, contact_id, kind, subject, body, dias, hora, metadata)
+ON CONFLICT (id) DO UPDATE SET
+  occurred_at = EXCLUDED.occurred_at,
+  subject     = EXCLUDED.subject,
+  body        = EXCLUDED.body;
+
+
 -- =====================================================================
 -- 12 · Outbound: qué busca la creadora y con qué límites
 -- ---------------------------------------------------------------------
@@ -1289,22 +1547,27 @@ ON CONFLICT DO NOTHING;
 --   membership                   1
 --   creator_profile              1
 --   social_connection            4
---   post                        60
+--   post                        60  (sembrando en limpio; al volver a sembrar N días
+--                                    después crece en N/2: un video cada dos días hasta
+--                                    ayer, sección 3b)
 --   post_metric_snapshot     ~2 650  (60 posts × lecturas ya ocurridas; 2 650 el 22-sep-2026 y 2 708 al día
 --                                    siguiente; run.mjs muestra 3 más porque 0003 añade sus tres lecturas manuales)
 --   account_metric_snapshot    360  (4 conexiones × 90 días, el último es ayer; al volver a
 --                                    sembrar N días después crece en 4·N: la serie llega hasta ayer)
---   audience_breakdown          60  (4 conexiones × 15 buckets)
+--   audience_breakdown          60  (4 conexiones × 15 buckets; `absolute` sale del
+--                                    último día de la serie, no de un literal)
 --   creator_baseline            16  (4 redes × 4 cortes), is_reliable en todas; +16 por cada
 --                                    día distinto en que se vuelva a sembrar (el id lleva el día)
---   post_score                  59  (todo video con al menos 24 h; 6 outliers, 1 breakout)
+--   post_score                  59  (todo video con al menos 24 h; 6 outliers, 1 breakout;
+--                                    al resembrar, cada fila sube al corte alcanzado)
 --   company                      8
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
---   signal                      12  (6 accepted, 4 pending, 1 duplicate, 1 discarded)
+--   signal                      13  (6 accepted, 5 pending —las cinco del mock—,
+--                                    1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
---   activity                    38
+--   activity                    47  (38 históricas + 9 de seguimiento, sección 11b)
 --   outbound_brief               1
 --   outbound_policy              1
 --   campaign                     4  (las cuatro de 0003, enlazadas aquí a su deal ganado)

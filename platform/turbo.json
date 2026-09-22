@@ -8,6 +8,11 @@
     "test":      { "dependsOn": ["^build"] },
     "format":    { "cache": false },
 
+    "//#test": {
+      "inputs": ["db/migrations/**", "db/seed/**", "package.json"],
+      "outputs": []
+    },
+
     "@mc/db#test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/db/migrations/**", "$TURBO_ROOT$/db/seed/**"]
