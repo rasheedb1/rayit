@@ -170,7 +170,8 @@ make vercel.deploy PROD=1   # producción
 
 | Comando | Qué hace |
 |---|---|
-| `make vercel.link` | Crea o adopta el proyecto y escribe el enlace local. **Uno por clon.** |
+| `make vercel.link` | Adopta el proyecto (`NOMBRE=on-cue-web`) y escribe el enlace local con sus settings. **Uno por clon.** |
+| `make vercel.dir DIR=.` | Qué directorio se sube. Es `.` (platform entero) porque el proyecto tiene Root Directory `apps/web` |
 | `make vercel.status` | Qué hay guardado y cómo está tu clon, sin revelar el token |
 | `make vercel.check` | Pregunta a Vercel: qué cuenta, qué equipo, cuándo expira |
 | `make vercel.deploy` | Despliega `apps/web`. `PROD=1` para producción |
