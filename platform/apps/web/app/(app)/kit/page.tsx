@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import { requireModule } from "@/content/modules";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/field";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Pill } from "@/components/ui/pill";
+import { FormDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ArrowRight } from "lucide-react";
 
@@ -11,6 +14,7 @@ export const metadata: Metadata = { title: "Kit de interfaz" };
 const SECTIONS = [
   ["button", "Button"],
   ["pill", "Pill"],
+  ["form", "Formulario"],
 ] as const;
 
 // Galería del kit (CIM-5). Detrás de la bandera "kit": encendida en
@@ -79,6 +83,26 @@ export default function Page() {
         </Variant>
         <Variant label="Texto largo">
           <Pill kind="warn">Esperando aprobación de Distribuidora Nacional de Alimentos</Pill>
+        </Variant>
+      </Section>
+
+      <Section
+        id="form"
+        title="Formulario: Field, Input, Select, Textarea, MoneyInput, DateInput"
+        usage={`<Field label="Monto" help="Sin IVA" error={errors.amount} required>\n  <MoneyInput value={amount} currency="COP" onChange={(v) => setAmount(v)} />\n</Field>`}
+      >
+        <Variant label="Normal, con ayuda, obligatorio; pulsa Validar para ver los errores">
+          <FormDemo />
+        </Variant>
+        <Variant label="Deshabilitado">
+          <div className="grid max-w-xl gap-4 sm:grid-cols-2">
+            <Field label="Marca">
+              <Input disabled defaultValue="Café Alma" />
+            </Field>
+            <Field label="Monto">
+              <MoneyInput value="1234567890.00" currency="COP" onChange={() => {}} disabled />
+            </Field>
+          </div>
         </Variant>
       </Section>
     </>
