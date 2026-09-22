@@ -136,7 +136,8 @@ export const STORIES: readonly Story[] = [
     title: "Seed de finanzas y campañas",
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Seed 0003 con verificación en Postgres embebido (node db/seed/verify/run-0003.mjs). Como 0002 no existe todavía, trae una sección de prerrequisitos con los ids que 0002 debe usar: docs/propuestas/CIM-8.md.",
   },
 
   // ---------------------------------------------------------------- CON
