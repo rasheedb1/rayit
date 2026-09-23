@@ -90,13 +90,16 @@ connection_id)`.
 - `deleted_on_platform = false` al volver a verlo (un post que reaparece
   deja de estar marcado).
 - **Ventana**: `since` = `max(published_at)` de los posts que ya
-  conocemos de esa conexión; `max` = 25 posts. Se paginan páginas hasta
-  agotar `max` o hasta ver un post con `published_at <= since`, lo que
-  ocurra primero. **Fuente del 25**: es el `limit` por defecto de
-  `/me/media` en `instagram-api.ts` (CON-1) y cabe en una sola página de
-  las dos fuentes; con el cron de 6 h haría falta publicar 26 videos en
-  seis horas para perder uno, y la corrida siguiente lo recoge igual
-  porque `since` no avanza más allá de lo que se guardó.
+  conocemos de esa conexión; `max` = 25 posts. Se deja de pedir páginas
+  en cuanto una trae algo publicado en `since` o antes, o al agotar
+  `max`. La página donde aparece `since` **se entrega entera**, porque
+  ya se pagó: cortar a mitad de página no ahorra ninguna llamada y sí
+  impedía la fusión con el archivo importado (ver §5.1). **Fuente del
+  25**: es el `limit` por defecto de `/me/media` en `instagram-api.ts`
+  (CON-1) y cabe en una sola página de las dos fuentes; con el cron de
+  6 h haría falta publicar 26 videos en seis horas para perder uno, y la
+  corrida siguiente lo recoge igual porque `since` no avanza más allá de
+  lo que se guardó.
 
 **3 · La regla de fusión con el CSV (para Rasheed).** La identidad de un
 post es `(platform_id, external_post_id, connection_id)`, el UNIQUE de
@@ -154,13 +157,14 @@ post es `(platform_id, external_post_id, connection_id)`, el UNIQUE de
 
 **6 · Cuota.**
 
-- `business_discovery` va contra el token de la casa. El `HttpCore` ya
-  lo cuenta en una sola ventana (la regla de `instagram` en
+- `business_discovery` va contra el token de la casa, y el `HttpCore` ya
+  lo cuenta en una sola ventana: la regla de `instagram` en
   `quota/limits.ts` es 200/hora y las llamadas de la casa llevan
-  `connection_id = null`, así que comparten cubo). Encima, el job pone
-  un tope por corrida, `COLLECT_INSTAGRAM_CALLS_PER_RUN` (por defecto
-  **150**), para dejar 50 llamadas/hora libres a `collect.account_metrics`
-  y a la pantalla.
+  `connection_id = null`, así que comparten cubo. Cuando la ventana se
+  llena, `acquire` espera hasta 120 s y después lanza `quota`, que es
+  exactamente lo que el job necesita. **No hace falta un tope propio**
+  (el plan preveía `COLLECT_INSTAGRAM_CALLS_PER_RUN`; se cayó por
+  innecesario: una perilla más que puede quedar mal puesta).
 - YouTube: 1 unidad por llamada, presupuesto diario de 10 000
   (`quota/limits.ts`, persistido en `api_quota_usage`). El job consulta
   `core.quota.usedToday(...)` antes de cada lote y deja de pedir cuando
@@ -292,9 +296,73 @@ Ninguna hace falta para que el job arranque; todas tienen defecto y
 | Variable | Para qué | Por defecto |
 |---|---|---|
 | `COLLECT_POSTS_MAX` | Posts nuevos por cuenta y corrida | `25` |
-| `COLLECT_INSTAGRAM_CALLS_PER_RUN` | Tope de llamadas al token de la casa por corrida | `150` |
 | `COLLECT_YOUTUBE_UNITS_RESERVE` | Unidades de YouTube que el recolector no gasta | `500` |
 | `COLLECT_MAX_AGE_HOURS` | Tope de edad para seguir midiendo | `888` (720 + 7 días) |
 
 Las que sí son secretos ya existen desde CON-10:
 `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY`.
+
+
+---
+
+## 5. Lo que cambió respecto al plan, y por qué
+
+1. **El corte de la ventana es por PÁGINA, no por elemento.** El plan
+   decía «para en el primer post ya conocido». Al construirlo se vio que
+   eso no ahorra nada: las dos APIs cobran **por llamada**, y el post
+   conocido llega en la misma página que los nuevos. Cortar a mitad de
+   página costaba lo mismo y tenía un precio: un video que ya había
+   entrado por un archivo importado **nunca** se volvía a ver por la
+   API, así que la fusión de §0.2 punto 3 no llegaba a ocurrir. Ahora la
+   página se entrega entera y la siguiente no se pide.
+
+2. **Se separó «sin cuota» de «abortada».** Las dos dejan trabajo
+   pendiente, pero solo la primera significa que reintentar no ayuda.
+   Estaban en la misma lista y eso apagaba el reintento de un apagado
+   del worker. Son dos contadores distintos en `metadata`.
+
+3. **Un aborto no se le apunta a la cuenta del creador.** Apagar el
+   worker o vencer el `timeout_s` es cosa nuestra; sumarlo a
+   `consecutive_failures` acabaría pintando de rota, en
+   `connection_health` y en Conexiones, una cuenta que está bien.
+
+4. **`deleted_on_platform` se marca en `collect.post_metrics`**, no en
+   `collect.posts` (§0.2 punto 8): es donde ya se pregunta por los ids
+   conocidos, así que no cuesta una llamada extra.
+
+5. **`--demo` del worker ahora también enseña CON-5.** Agrega dos
+   cuentas por @, descubre, mide dos veces con un día de diferencia e
+   imprime `post`, `post_metric_snapshot` y `post_metrics_daily_delta`.
+   Si faltan `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` usa las
+   respuestas **grabadas** y lo dice en el log, para que en una máquina
+   sin credenciales se pueda ver el camino entero sin hacer pasar por
+   real un número que no lo es.
+
+6. **`@mc/worker` ahora depende de `@mc/core`** (una línea en su
+   `package.json` y en `pnpm-lock.yaml`), porque la regla de hasta
+   cuándo se mide un post vive allí.
+
+---
+
+## 6. Lo que necesito de Rasheed
+
+**Nada bloquea esta historia.** Lo que sí le pido:
+
+1. **Leer §0.2 punto 3 (la regla de fusión con el CSV).** Hoy el archivo
+   de TikTok Studio crea su propia conexión `manual_csv`, así que un
+   video importado y el mismo video leído por API en *otra* conexión
+   serían dos filas de `post`. No puede pasar en el MVP (TikTok no tiene
+   fuente de videos por @), pero si RES-2 se extiende a Instagram o
+   YouTube hay que unificar la **conexión**, no el post, y eso es una
+   historia aparte.
+2. **Dos contadores de `runner.test.ts` subieron** (de 19 a 17 jobs sin
+   handler): es suyo el archivo solo a medias, pero el cambio es mecánico
+   y ya está hecho.
+3. **`INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` no están en el vault.**
+   Sin ellas, las cuentas por @ se saltan y el job lo dice en su
+   metadata (`sinConfigurar`), pero no se recoge ni una publicación real.
+
+Y una cosa que **no** le pido: no hace falta ninguna migración.
+`collect.posts` y `collect.post_metrics` ya están en `job_definition`
+(0009), `mc_worker` ya tiene `INSERT`/`UPDATE` sobre las dos tablas
+(0014) y las vistas son las de 0010.

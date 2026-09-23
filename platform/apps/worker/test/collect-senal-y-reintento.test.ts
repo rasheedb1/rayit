@@ -17,7 +17,7 @@ import {
 } from '@mc/connectors';
 import { collectPostMetricsJob } from '../src/jobs/conexiones/collect-post-metrics.ts';
 import { collectPostsJob } from '../src/jobs/conexiones/collect-posts.ts';
-import { PgliteDatabase } from '../src/runner/db-pglite.ts';
+import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import type { JobContext, JobDefinition, JobPayload, JobResult } from '../src/runner/registry.ts';
 import { openTestDatabase } from './helpers/harness.ts';

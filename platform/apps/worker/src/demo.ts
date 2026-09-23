@@ -3,8 +3,22 @@
  * conexiones de TikTok en distinto estado, y un oauth.refresh encolado
  * al arrancar. Sirve para enseñar el worker sin Supabase ni Docker
  * (demo del viernes) y para ver job_run llenándose.
+ *
+ * Además agrega dos cuentas públicas por @ y corre los dos recolectores
+ * de CON-5: descubre publicaciones, las mide dos veces (con un día de
+ * diferencia, para que post_metrics_daily_delta tenga un crecimiento
+ * que enseñar) e imprime post, post_metric_snapshot y la vista.
+ *
+ * Con INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno va contra
+ * las APIs de verdad. Sin ellas usa las respuestas GRABADAS
+ * (packages/connectors/fixtures) y lo dice en el log: así el demo
+ * enseña el camino entero en una máquina sin credenciales, sin hacer
+ * pasar por real un número que no lo es.
+ *
+ * Las cuentas se eligen con DEMO_INSTAGRAM_HANDLE y DEMO_YOUTUBE_HANDLE.
  */
-import type { SecretStore } from '@mc/connectors';
+import { FixtureFetch, loadFixtures, type ConnectorHttpOverrides, type SecretStore } from '@mc/connectors';
+import type { Env } from './runner/config.ts';
 import type { WorkerDatabase } from './runner/db.ts';
 import type { Logger } from './runner/logger.ts';
 import type { RunningWorker } from './runner/worker.ts';
@@ -58,7 +72,150 @@ export async function seedDemo(db: WorkerDatabase, secrets: SecretStore, now: Da
   return { workspaceId, creatorId, connections };
 }
 
-export async function runDemo(opts: { db: WorkerDatabase; worker: RunningWorker; secrets: SecretStore; logger: Logger }): Promise<void> {
+/** Cuentas por @ para ver CON-5 contra las APIs de verdad. Se cambian con DEMO_INSTAGRAM_HANDLE y DEMO_YOUTUBE_HANDLE. */
+export const DEMO_INSTAGRAM_HANDLE = 'nicolasduartea';
+export const DEMO_YOUTUBE_HANDLE = 'NutriveOficial';
+/** Los @ que cubren las respuestas grabadas; con fixtures hay que usar estos o la llamada no casa con ninguna. */
+export const DEMO_GRABADO_HANDLES = { instagram: 'cafealma', youtube: 'NutriveOficial' } as const;
+
+/** Credenciales de mentira para que las fuentes arranquen cuando el demo va contra respuestas grabadas. */
+const DEMO_FAKE_CREDENTIALS = { INSTAGRAM_HOUSE_TOKEN: 'demo-sin-credencial', GOOGLE_API_KEY: 'demo-sin-credencial' };
+
+export interface DemoNetwork {
+  /** true si las respuestas salen de los fixtures y no de la plataforma. */
+  grabado: boolean;
+  env: Env;
+  http?: ConnectorHttpOverrides;
+}
+
+/**
+ * Cómo habla el demo con las plataformas. Si faltan las credenciales de
+ * la casa, se usan las respuestas grabadas de CON-1/CON-5 y se avisa;
+ * el resto del camino (jobs, upsert, snapshots, vistas) es el de verdad.
+ */
+export async function demoNetwork(env: Env): Promise<DemoNetwork> {
+  const conCredenciales = Boolean(env['INSTAGRAM_HOUSE_TOKEN']?.trim()) && Boolean(env['GOOGLE_API_KEY']?.trim());
+  if (conCredenciales) return { grabado: false, env };
+  const fixtures = await loadFixtures('youtube', [
+    ['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'uploads.ok'], ['videos.list', 'crecimiento'],
+  ]);
+  const instagram = await loadFixtures('instagram', [['business_discovery.media', 'ok']]);
+  const fetch = new FixtureFetch([...fixtures, ...instagram]);
+  return { grabado: true, env: { ...env, ...DEMO_FAKE_CREDENTIALS }, http: { fetch: fetch.fetch } };
+}
+
+/** Reloj del demo: avanza un día entre las dos lecturas para que la vista de delta tenga dos días que comparar. */
+export function demoClock(): { now: () => Date; avanzaUnDia: () => void } {
+  let instante = new Date();
+  return {
+    now: () => instante,
+    avanzaUnDia: () => { instante = new Date(instante.getTime() + 86_400_000); },
+  };
+}
+
+/** Agrega las dos cuentas por @ del demo (sin tokens: son públicas). */
+export async function seedDemoPublicAccounts(db: WorkerDatabase, seed: DemoSeed, env: Env, grabado = false): Promise<Array<{ id: string; platform: string; handle: string }>> {
+  const raw = (db as unknown as { raw: { query<R>(q: string, p?: unknown[]): Promise<{ rows: R[] }> } }).raw;
+  const cuentas = grabado
+    ? [
+        { platform: 'instagram', handle: DEMO_GRABADO_HANDLES.instagram },
+        { platform: 'youtube', handle: DEMO_GRABADO_HANDLES.youtube },
+      ]
+    : [
+        { platform: 'instagram', handle: env['DEMO_INSTAGRAM_HANDLE']?.trim() || DEMO_INSTAGRAM_HANDLE },
+        { platform: 'youtube', handle: env['DEMO_YOUTUBE_HANDLE']?.trim() || DEMO_YOUTUBE_HANDLE },
+      ];
+  const out: Array<{ id: string; platform: string; handle: string }> = [];
+  for (const c of cuentas) {
+    const r = await raw.query<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, status)
+       VALUES ($1, $2, $3, $4, $5, $6, '{}', 'public_profile', 'active') RETURNING id`,
+      [seed.workspaceId, seed.creatorId, c.platform, `${c.platform}:${c.handle}`, c.handle, `public:${c.platform}:${c.handle}`],
+    );
+    out.push({ id: r.rows[0]!.id, platform: c.platform, handle: c.handle });
+  }
+  return out;
+}
+
+/** Espera a que ese job deje `n` corridas terminadas, o se rinde con lo que haya. */
+async function esperaCorridas(db: WorkerDatabase, jobId: string, n: number, msTope = 60_000): Promise<Array<Record<string, unknown>>> {
+  const hasta = Date.now() + msTope;
+  for (;;) {
+    const { rows } = await db.query<Record<string, unknown>>(
+      `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
+         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY id`,
+      [jobId],
+    );
+    if (rows.length >= n || Date.now() > hasta) return rows;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/** CON-5 en vivo: descubre, mide dos veces e imprime lo que quedó en la base. */
+export async function runDemoPosts(opts: {
+  db: WorkerDatabase; worker: RunningWorker; logger: Logger; env: Env; seed: DemoSeed;
+  grabado: boolean; avanzaUnDia: () => void;
+}): Promise<void> {
+  const { db, worker, logger, env, seed } = opts;
+  const cuentas = await seedDemoPublicAccounts(db, seed, env, opts.grabado);
+  logger.info('demo CON-5: cuentas por @ agregadas', {
+    cuentas: cuentas.map((c) => `${c.platform}:@${c.handle}`),
+    fuente: opts.grabado ? 'respuestas GRABADAS (faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY)' : 'APIs de las plataformas',
+  });
+
+  // Solo las cuentas por @ de este demo: las tres conexiones de CON-2
+  // llevan tokens de mentira, y llamar a TikTok con ellas solo
+  // ensuciaría la salida con 401 que no dicen nada de CON-5.
+  for (const c of cuentas) {
+    await worker.boss.send('collect.posts', { source: 'demo', workspaceId: seed.workspaceId, connectionId: c.id }, { singletonKey: `demo-posts-${c.id}` });
+  }
+  const posts = await esperaCorridas(db, 'collect.posts', cuentas.length);
+  logger.info('demo CON-5: job_run de collect.posts', { rows: posts });
+
+  // Dos corridas con un día de diferencia: la tabla es append-only, así
+  // que quedan dos filas por publicación, y post_metrics_daily_delta
+  // —que agrupa por DÍA— puede enseñar el crecimiento.
+  let hechas = 0;
+  for (const vuelta of [1, 2]) {
+    if (vuelta === 2) opts.avanzaUnDia();
+    for (const c of cuentas) {
+      await worker.boss.send('collect.post_metrics', { source: `demo-${vuelta}`, workspaceId: seed.workspaceId, connectionId: c.id }, { singletonKey: `demo-metrics-${vuelta}-${c.id}` });
+    }
+    hechas += cuentas.length;
+    const corridas = await esperaCorridas(db, 'collect.post_metrics', hechas);
+    logger.info(`demo CON-5: job_run de collect.post_metrics (corrida ${vuelta})`, { rows: corridas.slice(-cuentas.length) });
+  }
+
+  const resumen = await db.query(
+    `SELECT sc.platform_id, sc.handle,
+            (SELECT count(*)::int FROM post p WHERE p.connection_id = sc.id) AS posts,
+            (SELECT count(*)::int FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id WHERE p.connection_id = sc.id) AS lecturas
+       FROM social_connection sc WHERE sc.access_mode = 'public_profile' ORDER BY sc.platform_id`,
+  );
+  logger.info('demo CON-5: post y post_metric_snapshot por cuenta', { rows: resumen.rows });
+
+  const muestra = await db.query(
+    `SELECT p.platform_id, p.external_post_id, p.title, p.media_type, p.surface,
+            to_char(p.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS published_at,
+            s.age_hours, s.views, s.likes, s.comments, s.source,
+            to_char(s.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS captured_at
+       FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+      ORDER BY p.platform_id, p.published_at DESC, s.captured_at LIMIT 12`,
+  );
+  logger.info('demo CON-5: lecturas (una celda sin dato es null, nunca cero)', { rows: muestra.rows });
+
+  const delta = await db.query(
+    `SELECT p.platform_id, p.external_post_id, d.day::text AS day, d.views_gained, d.views_cumulative
+       FROM post_metrics_daily_delta d JOIN post p ON p.id = d.post_id
+      ORDER BY p.platform_id, p.external_post_id, d.day LIMIT 12`,
+  );
+  logger.info('demo CON-5: post_metrics_daily_delta', { rows: delta.rows });
+}
+
+export async function runDemo(opts: {
+  db: WorkerDatabase; worker: RunningWorker; secrets: SecretStore; logger: Logger;
+  env?: Env; grabado?: boolean; avanzaUnDia?: () => void;
+}): Promise<void> {
   const { db, worker, secrets, logger } = opts;
   const seed = await seedDemo(db, secrets, new Date());
   logger.info('demo: escenario sembrado', { workspaceId: seed.workspaceId, connections: seed.connections.map((c) => c.label) });
@@ -82,6 +239,7 @@ export async function runDemo(opts: { db: WorkerDatabase; worker: RunningWorker;
       logger.info('demo: social_connection', { rows: conns.rows });
       logger.info('demo: notification', { rows: notes.rows });
       logger.info('demo: api_call_log (CON-1: una fila por llamada, sin token)', { rows: calls.rows });
+      await runDemoPosts({ db, worker, logger, env: opts.env ?? process.env, seed, grabado: opts.grabado ?? false, avanzaUnDia: opts.avanzaUnDia ?? (() => undefined) });
       logger.info('demo: el worker sigue corriendo; Ctrl-C para salir');
     })().catch((err: unknown) => logger.error('demo: no se pudo consultar', { err }));
   }, 4000);
