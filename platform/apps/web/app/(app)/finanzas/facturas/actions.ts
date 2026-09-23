@@ -4,15 +4,16 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { pctToRate, type InvoiceStatus } from "@mc/core";
-// UUID_RE e isUuid salen de @mc/db: había una copia aquí y otra en
-// lib/workspace/current.ts, y tres definiciones de lo mismo terminan
-// divergiendo (una acepta mayúsculas, otra no).
-import { isUuid, UUID_RE } from "@mc/db";
+// UUID_RE, isUuid, DECIMAL_RE, firstErrors, formField y ActionState
+// salen de @/lib/forms (que a su vez reexporta las dos primeras de
+// @mc/db): este archivo llevaba su propia copia de cada uno, y tres
+// definiciones de lo mismo terminan divergiendo. Es el pendiente que
+// CAM-1 §7 y el §9.5 del backlog dejaron anotado para FIN-2.
 import { createInvoice, createInvoiceFromCampaign, transitionInvoice } from "@mc/db/queries/finanzas";
+import { DECIMAL_RE, firstErrors, formField, isUuid, UUID_RE, type ActionState } from "@/lib/forms";
 import { withWorkspace } from "../_lib/db";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
 const PCT_RE = /^\d{1,3}([.,]\d{1,2})?$/;
 
 /** Lo que llega del formulario "Nueva factura". Mensajes en español. */
@@ -36,33 +37,24 @@ const nuevaFacturaSchema = z
     message: "El vencimiento no puede ser anterior a la emisión.",
   });
 
-export interface CrearFacturaState {
-  /** Errores por campo, en español. */
-  errors?: Record<string, string>;
-  /** Error general (base de datos, regla de negocio). */
-  message?: string;
-}
-
-function firstErrors(issues: { path: PropertyKey[]; message: string }[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const issue of issues) {
-    const key = String(issue.path[0] ?? "form");
-    if (!(key in out)) out[key] = issue.message;
-  }
-  return out;
-}
+/**
+ * Lo que «Nueva factura» devuelve a useActionState. Es el ActionState
+ * común de @/lib/forms; el alias se conserva porque nueva/form.tsx y su
+ * prueba lo importan con este nombre.
+ */
+export type CrearFacturaState = ActionState;
 
 /** Server Action del formulario: valida, crea en borrador y redirige al detalle. */
 export async function crearFactura(_prev: CrearFacturaState, formData: FormData): Promise<CrearFacturaState> {
   const parsed = nuevaFacturaSchema.safeParse({
-    companyId: String(formData.get("companyId") ?? ""),
-    campaignId: String(formData.get("campaignId") ?? ""),
-    subtotal: String(formData.get("subtotal") ?? ""),
-    taxPct: String(formData.get("taxPct") ?? ""),
-    withholdingPct: String(formData.get("withholdingPct") ?? ""),
-    issuedOn: String(formData.get("issuedOn") ?? ""),
-    dueOn: String(formData.get("dueOn") ?? ""),
-    externalRef: String(formData.get("externalRef") ?? ""),
+    companyId: formField(formData, "companyId"),
+    campaignId: formField(formData, "campaignId"),
+    subtotal: formField(formData, "subtotal"),
+    taxPct: formField(formData, "taxPct"),
+    withholdingPct: formField(formData, "withholdingPct"),
+    issuedOn: formField(formData, "issuedOn"),
+    dueOn: formField(formData, "dueOn"),
+    externalRef: formField(formData, "externalRef"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
@@ -131,3 +123,4 @@ export async function facturarCampana(campaignId: string): Promise<void> {
   revalidatePath("/finanzas");
   redirect(`/finanzas/facturas/${id}`);
 }
+
