@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -11,6 +11,19 @@ import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
 import { useVentasForm } from "../_lib/use-ventas-form";
 import type { SeguimientoContexto, SiguienteAccionData } from "./datos";
+
+/**
+ * La hora que el editor propone para un día: la que trae, salvo que el
+ * día sea hoy y esa hora ya haya pasado; entonces, la próxima en punto
+ * (lo mismo que hace setNextAction sin hora). Compara «HH:MM» de la zona
+ * del espacio, que llegan de la base: aquí no se hacen cuentas de husos.
+ */
+export function horaPropuesta(dia: string, hora: string, ctx: Pick<SeguimientoContexto, "today" | "now" | "nextHour">): string {
+  if (dia !== ctx.today || hora > ctx.now) return hora;
+  // A las 23:xx la próxima en punto ya es mañana: se deja la que había y
+  // el servidor dirá «Esa hora ya pasó».
+  return ctx.nextHour > ctx.now ? ctx.nextHour : hora;
+}
 
 /**
  * La siguiente acción de un negocio en UNA línea —qué, cuándo y quién—,
@@ -25,19 +38,24 @@ import type { SeguimientoContexto, SiguienteAccionData } from "./datos";
  *     el botón para ponerla: un negocio sin siguiente acción se enfría.
  *
  * `compact` apila los campos: la tarjeta del tablero mide 256 px.
- * `onEditingChange` avisa al tablero para que la tarjeta deje de ser
- * arrastrable mientras se escribe (si no, seleccionar texto la arrastra).
+ * `onTouch` avisa ANTES de que la acción llegue al servidor («Hecha») o
+ * al abrir el formulario: «Para hoy» lo usa para no soltar la fila cuando
+ * la revalidación la saque de su lista. `onEditingChange` avisa al abrir
+ * y al cerrar (con el aviso de lo guardado, si lo hubo); el tablero lo usa
+ * para que la tarjeta deje de ser arrastrable mientras se escribe.
  */
 export function SiguienteAccion({
   data,
   ctx,
   compact = false,
+  onTouch,
   onEditingChange,
 }: {
   data: SiguienteAccionData;
   ctx: SeguimientoContexto;
   compact?: boolean;
-  onEditingChange?: (editing: boolean) => void;
+  onTouch?: () => void;
+  onEditingChange?: (editing: boolean, notice?: string) => void;
 }) {
   const t = FICHA.siguiente;
   const [editing, setEditingState] = useState(false);
@@ -47,10 +65,10 @@ export function SiguienteAccion({
   /** Al cerrar el formulario, el foco vuelve a la línea y no cae en <body>. */
   const [refocus, setRefocus] = useState(false);
   const lineRef = useRef<HTMLDivElement>(null);
-  const setEditing = (v: boolean) => {
+  const setEditing = (v: boolean, aviso?: string) => {
     setEditingState(v);
     if (!v) setRefocus(true);
-    onEditingChange?.(v);
+    onEditingChange?.(v, aviso);
   };
 
   useEffect(() => {
@@ -65,6 +83,11 @@ export function SiguienteAccion({
     setEditing(true);
   });
 
+  function onHecha(event: FormEvent<HTMLFormElement>) {
+    onTouch?.();
+    hecha.onSubmit(event);
+  }
+
   if (editing) {
     return (
       <Editor
@@ -76,7 +99,7 @@ export function SiguienteAccion({
         onDone={(msg) => {
           setNotice(msg);
           setAfterDone(false);
-          setEditing(false);
+          setEditing(false, msg);
         }}
         onCancel={() => {
           setAfterDone(false);
@@ -104,6 +127,7 @@ export function SiguienteAccion({
           size="sm"
           variant={data.action ? "ghost" : "secondary"}
           onClick={() => {
+            onTouch?.();
             setNotice(undefined);
             setAfterDone(false);
             setEditing(true);
@@ -113,7 +137,7 @@ export function SiguienteAccion({
           {data.action ? t.edit : t.set}
         </Button>
         {data.action && (
-          <form ref={hecha.formRef} onSubmit={hecha.onSubmit} noValidate>
+          <form ref={hecha.formRef} onSubmit={onHecha} noValidate>
             <input type="hidden" name="dealId" value={data.dealId} />
             <Button type="submit" size="sm" variant="ghost" loading={hecha.pending} aria-label={t.doneLabel(data.action)}>
               {t.done}
@@ -145,6 +169,8 @@ function Editor({
 }) {
   const t = FICHA.siguiente;
   const [dueDate, setDueDate] = useState(blank ? ctx.tomorrow : data.form.dueDate);
+  // Hoy a una hora que ya pasó no se propone: la acción nacería vencida.
+  const [dueTime, setDueTime] = useState(() => horaPropuesta(blank ? ctx.tomorrow : data.form.dueDate, data.form.dueTime, ctx));
   const { state, pending, formRef, onSubmit, errors } = useVentasForm(fijarSiguienteAccion, (s) => onDone(s.notice));
   const id = (campo: string) => `siguiente-${data.dealId}-${campo}`;
   const ownerOptions = ctx.owners.map((o) => ({ value: o.userId, label: o.label }));
@@ -180,10 +206,17 @@ function Editor({
           />
         </Field>
         <Field label={t.dueDate} error={errors.dueDate} required htmlFor={id("date")}>
-          <DateInput value={dueDate} min={ctx.today} onChange={setDueDate} />
+          <DateInput
+            value={dueDate}
+            min={ctx.today}
+            onChange={(dia) => {
+              setDueDate(dia);
+              setDueTime((hora) => horaPropuesta(dia, hora, ctx));
+            }}
+          />
         </Field>
         <Field label={t.dueTime} help={compact ? undefined : t.dueTimeHelp} error={errors.dueTime} htmlFor={id("time")}>
-          <Input name="dueTime" type="time" defaultValue={data.form.dueTime} className="tabular-nums" />
+          <Input name="dueTime" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} className="tabular-nums" />
         </Field>
         <Field label={t.responsible} error={errors.responsibleUserId} htmlFor={id("who")}>
           <Select name="responsibleUserId" defaultValue={data.form.responsibleUserId} placeholder={t.noResponsible} options={ownerOptions} />

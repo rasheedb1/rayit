@@ -40,6 +40,10 @@ const COMPANY_FRESKO = '00000002-0000-4000-8000-0000000000e2';
 /** Valentina (Café Alma), contacto del seed. */
 const CONTACT_VALENTINA = '00000002-0000-4000-8000-0000000c0003';
 const CONTACT_CAMILA_FRESKO = '00000002-0000-4000-8000-0000000c0001';
+/** Granos del Valle y Mateo Giraldo, que pidió la baja (seed 0002). */
+const COMPANY_GRANOS = '00000002-0000-4000-8000-0000000000e6';
+const CONTACT_MATEO_BAJA = '00000002-0000-4000-8000-0000000c0010';
+const DEAL_GRANOS = '00000002-0000-4000-8000-0000000dea02';
 const USER_LAURA = '00000002-0000-4000-8000-000000000002';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000fe01';
@@ -148,11 +152,47 @@ describe('VEN-5 · registrar una actividad', () => {
     const res = await laura((tx) =>
       logActivity(tx, { companyId: COMPANY_CAFE_ALMA, kind: 'call', dealId: DEAL_CAFE_RENOVACION, occurredOn: ayer }),
     );
-    const { rows } = await laura((tx) => listCompanyActivity(tx, COMPANY_CAFE_ALMA, 200));
+    const { rows } = await laura((tx) => listCompanyActivity(tx, COMPANY_CAFE_ALMA, { limit: 200 }));
     const llamada = rows.find((r) => r.id === res.activityId);
     // Mediodía en Bogotá son las 17:00 UTC.
     assert.equal(llamada?.occurredAt, `${ayer}T17:00:00Z`);
+    // Esa hora la puso el producto, no la persona: la pantalla pinta solo el día.
+    assert.equal(llamada?.meta.timeUnknown, true);
+    assert.equal(rows.find((r) => r.kind === 'call' && r.id !== res.activityId)?.meta.timeUnknown, false, 'la de hoy sí tiene hora');
     assert.equal(await lastContact(DEAL_CAFE_RENOVACION), antes);
+  });
+
+  test('a quien pidió la baja no se le registra una llamada, un correo ni una reunión; una nota sí', async () => {
+    for (const kind of ['call', 'email_sent', 'meeting'] as const) {
+      await rejects(
+        laura((tx) => logActivity(tx, { companyId: COMPANY_GRANOS, kind, contactId: CONTACT_MATEO_BAJA })),
+        'ContactOptedOut',
+      );
+    }
+    const nota = await laura((tx) =>
+      logActivity(tx, { companyId: COMPANY_GRANOS, kind: 'note', body: 'Mateo pidió la baja en marzo.', contactId: CONTACT_MATEO_BAJA }),
+    );
+    assert.ok(nota.activityId);
+  });
+
+  test('la línea de tiempo se lee por páginas, sin saltarse ni repetir ninguna', async () => {
+    const todas = await laura((tx) => listCompanyActivity(tx, COMPANY_CAFE_ALMA, { limit: 200 }));
+    assert.ok(todas.rows.length >= 4, 'Café Alma tiene historia de sobra');
+    assert.equal(todas.nextCursor, null);
+
+    const vistas: string[] = [];
+    let before: string | null = null;
+    do {
+      const pagina = await laura((tx) => listCompanyActivity(tx, COMPANY_CAFE_ALMA, { limit: 3, before }));
+      assert.ok(pagina.rows.length <= 3);
+      vistas.push(...pagina.rows.map((r) => r.id));
+      assert.equal(pagina.hasMore, pagina.nextCursor !== null);
+      before = pagina.nextCursor;
+    } while (before);
+    assert.deepEqual(vistas, todas.rows.map((r) => r.id));
+
+    // Un cursor que no se entiende no vuelve a dar la primera página.
+    assert.deepEqual((await laura((tx) => listCompanyActivity(tx, COMPANY_CAFE_ALMA, { before: 'basura' }))).rows, []);
   });
 
   test('lo que no se acepta: nota vacía, día futuro, negocio o contacto de otra empresa, empresa ajena', async () => {
@@ -213,17 +253,36 @@ describe('VEN-4 · la siguiente acción', () => {
   });
 
   test('sin hora, vence a las 15:00 locales, como las que pone el producto', async () => {
-    const hoy = diaEnBogota();
-    await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Enviar el pitch', dueDate: hoy }));
+    const manana = diaEnBogota(1);
+    const r = await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Enviar el pitch', dueDate: manana }));
     const fila = (await laura((tx) => listNextActions(tx, { companyId: '00000002-0000-4000-8000-0000000000e8' })))[0];
     assert.equal(fila?.dueTime, '15:00');
-    assert.equal(fila?.dueAt, `${hoy}T20:00:00Z`);
+    assert.equal(fila?.dueAt, `${manana}T20:00:00Z`);
+    assert.equal(r.dueAt, fila?.dueAt, 'devuelve el instante guardado');
+  });
+
+  test('hoy y sin hora: las 15:00 si no han pasado; si ya pasaron, la próxima hora en punto. Nunca nace vencida', async () => {
+    const hoy = diaEnBogota();
+    const r = await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Enviar el pitch', dueDate: hoy }));
+    assert.ok(Date.parse(r.dueAt) > Date.now(), `${r.dueAt} es futuro`);
+    assert.match(r.dueAt, /T\d{2}:00:00Z$/, 'en punto');
+    const fila = (await laura((tx) => listNextActions(tx, { companyId: '00000002-0000-4000-8000-0000000000e8' })))[0];
+    assert.notEqual(fila?.dueState, 'vencido');
+  });
+
+  test('hoy con una hora que ya pasó: «Esa hora ya pasó», no una acción que nace vencida', async () => {
+    // Las 00:00 de hoy en Bogotá ya pasaron a cualquier hora del día.
+    await rejects(
+      laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Llamar a Carolina', dueDate: diaEnBogota(), dueTime: '00:00' })),
+      'PastDueTime',
+    );
   });
 
   test('lo que no se acepta: sin texto, fecha que ya pasó, hora imposible, responsable de otro espacio, negocio cerrado o ajeno', async () => {
     const manana = diaEnBogota(1);
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: '  ', dueDate: manana })), 'InvalidNextAction');
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: diaEnBogota(-1) })), 'PastDueDate');
+    await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: diaEnBogota(-1), dueTime: '23:00' })), 'PastDueDate');
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: manana, dueTime: '25:00' })), 'InvalidDueDate');
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: '2026-02-30x' })), 'InvalidDueDate');
     await rejects(
@@ -275,6 +334,35 @@ describe('VEN-4 · la siguiente acción', () => {
     const suyo = await ajeno((tx) => listDueToday(tx));
     assert.deepEqual(suyo.rows.map((r) => r.dealId), [DEAL_AJENO]);
     assert.equal(suyo.overdueCount, 1);
+  });
+
+  test('una fecha sin texto no es un seguimiento vencido: cuenta solo como «sin siguiente acción»', async () => {
+    const antes = await laura((tx) => listDueToday(tx, 50));
+    await t.admin(`UPDATE deal SET next_action = '   ', next_action_due = now() - interval '2 days' WHERE id = '${DEAL_GRANOS}'`);
+    const despues = await laura((tx) => listDueToday(tx, 50));
+    assert.ok(!despues.rows.some((r) => r.dealId === DEAL_GRANOS), 'no sale en la lista');
+    const eraVencido = antes.rows.some((r) => r.dealId === DEAL_GRANOS && r.dueState === 'vencido');
+    assert.equal(despues.overdueCount, antes.overdueCount - (eraVencido ? 1 : 0), 'ni en los vencidos');
+    assert.equal(despues.withoutActionCount, antes.withoutActionCount + 1, 'sí en los que hay que arreglar');
+    // Y cuadra con la lista: los conteos son los de las filas.
+    assert.equal(despues.overdueCount + despues.todayCount, despues.rows.length + despues.moreCount);
+  });
+
+  test('el pipeline se filtra en SQL: por empresa y por lo que pide «Para hoy»', async () => {
+    const deVitale = await laura((tx) => listPipeline(tx, { companyId: COMPANY_VITALE }));
+    assert.deepEqual(deVitale.map((d) => d.id).sort(), [DEAL_VITALE_PROPUESTA, DEAL_VITALE_SNACKS].sort());
+    assert.deepEqual(await laura((tx) => listPipeline(tx, { companyId: 'no-es-un-id' })), []);
+    assert.deepEqual(await laura((tx) => listPipeline(tx, { companyId: COMPANY_AJENA })), []);
+
+    const hoy = await laura((tx) => listDueToday(tx, 50));
+    const sinAccion = await laura((tx) => listPipeline(tx, { seguimiento: 'sin_accion' }));
+    assert.equal(sinAccion.length, hoy.withoutActionCount, 'los mismos que cuenta «Para hoy»');
+    assert.ok(sinAccion.some((d) => d.id === DEAL_GRANOS));
+    assert.ok(sinAccion.every((d) => !d.isWon && !d.isLost));
+
+    const paraHoy = await laura((tx) => listPipeline(tx, { seguimiento: 'para_hoy' }));
+    assert.deepEqual(paraHoy.map((d) => d.id).sort(), hoy.rows.map((r) => r.dealId).sort());
+    assert.ok(paraHoy.every((d) => d.dueState === 'vencido' || d.dueState === 'hoy'));
   });
 });
 

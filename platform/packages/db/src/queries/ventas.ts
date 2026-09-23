@@ -1711,13 +1711,30 @@ export async function discardSignal(tx: WorkspaceTx, signalId: string, reason: s
 // VEN-3 · Pipeline
 // ---------------------------------------------------------------------
 
+/** Los dos filtros de seguimiento del pipeline (VEN-4): ver listPipeline. */
+export const PIPELINE_SEGUIMIENTOS = ['sin_accion', 'para_hoy'] as const;
+export type PipelineSeguimiento = (typeof PIPELINE_SEGUIMIENTOS)[number];
+
 /**
  * Los deals del workspace por etapa y, dentro de cada una, por fecha de
  * siguiente acción. Sale de la vista deal_pipeline, que ya resuelve
  * probabilidad, monto ponderado y estado del seguimiento; se le añaden
  * los días en la etapa actual (del historial) y el responsable.
+ *
+ * Los filtros van en SQL, no en la pantalla (VEN-4/VEN-5):
+ *   - `companyId`: solo los negocios de una empresa (la ficha no lee el
+ *     pipeline entero para quedarse con tres).
+ *   - `seguimiento`: 'sin_accion' deja los abiertos sin siguiente acción
+ *     con texto y fecha; 'para_hoy', los abiertos con acción vencida o
+ *     que vence hoy. Son los dos enlaces del bloque «Para hoy» y cuentan
+ *     igual que sus cifras (listDueToday).
  */
-export async function listPipeline(tx: WorkspaceTx): Promise<PipelineDealRow[]> {
+export async function listPipeline(
+  tx: WorkspaceTx,
+  opts: { companyId?: string; seguimiento?: PipelineSeguimiento | null } = {},
+): Promise<PipelineDealRow[]> {
+  if (opts.companyId !== undefined && !isUuid(opts.companyId)) return [];
+  const seguimiento = opts.seguimiento && PIPELINE_SEGUIMIENTOS.includes(opts.seguimiento) ? opts.seguimiento : null;
   const { rows } = await tx.query<PipelineRowSql>(
     `SELECT p.id, p.company_id, p.company_name, p.name, p.stage_id, p.stage_label, p.stage_position,
             p.amount::text AS amount, p.currency::text AS currency, p.probability::text AS probability,
@@ -1733,7 +1750,14 @@ export async function listPipeline(tx: WorkspaceTx): Promise<PipelineDealRow[]> 
        WHERE deal_id = p.id AND to_stage_id = p.stage_id
        ORDER BY changed_at DESC LIMIT 1
      ) h ON true
+     WHERE ($1::uuid IS NULL OR p.company_id = $1::uuid)
+       AND ($2::text IS NULL
+            OR ($2 = 'sin_accion' AND NOT p.is_won AND NOT p.is_lost
+                AND (nullif(btrim(p.next_action), '') IS NULL OR p.next_action_due IS NULL))
+            OR ($2 = 'para_hoy' AND NOT p.is_won AND NOT p.is_lost
+                AND nullif(btrim(p.next_action), '') IS NOT NULL AND p.due_state IN ('vencido', 'hoy')))
      ORDER BY p.stage_position ASC, p.next_action_due ASC NULLS LAST, p.name ASC`,
+    [opts.companyId ?? null, seguimiento],
   );
   return rows.map(toPipelineRow);
 }

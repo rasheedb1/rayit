@@ -20,14 +20,19 @@ import {
   LOGGABLE_ACTIVITY_KINDS,
   NEXT_ACTION_MAX,
   completeNextAction,
+  getCompanyName,
+  listCompanyActivity,
   logActivity,
   setNextAction,
   type FichaErrorCode,
 } from "@mc/db/queries/ventas-ficha";
+import { formatterFor } from "@/lib/format";
 import { UUID_RE, firstErrors, formField as field } from "@/lib/forms";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import type { VentasState } from "../actions";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
+import { vistaDeActividad, type ActividadVista } from "./[id]/actividad";
 import { FICHA } from "./messages";
 
 const E = MESSAGES.errores;
@@ -93,26 +98,30 @@ export async function fijarSiguienteAccion(_prev: VentasState, formData: FormDat
     return { errors };
   }
   const v = parsed.data;
-  let companyId: string;
+  let saved: { companyId: string; dueAt: string };
   try {
-    ({ companyId } = await withWorkspace((tx) =>
+    saved = await withWorkspace((tx) =>
       setNextAction(tx, v.dealId, {
         action: v.action,
         dueDate: v.dueDate,
         dueTime: v.dueTime || null,
         ...(formData.has("responsibleUserId") ? { responsibleUserId: v.responsibleUserId || null } : {}),
       }),
-    ));
+    );
   } catch (err) {
     const message = messageOf(err, t.error);
     const code = codeOf(err);
     if (code === "InvalidNextAction") return { errors: { action: message } };
     if (code === "InvalidDueDate" || code === "PastDueDate") return { errors: { dueDate: message } };
+    if (code === "PastDueTime") return { errors: { dueTime: message } };
     if (code === "InvalidResponsible") return { errors: { responsibleUserId: message } };
     return { message };
   }
-  revalidate(companyId);
-  return { ok: true, notice: t.saved, stamp: Date.now() };
+  revalidate(saved.companyId);
+  // «Guardada para el 24 sep · 3:00 p. m.»: dónde quedó, en la zona del
+  // espacio. En «Para hoy» es lo último que se ve de la fila que se va.
+  const f = formatterFor(await getCurrentWorkspace());
+  return { ok: true, notice: t.savedFor(`${f.date(saved.dueAt)} · ${f.time(saved.dueAt)}`), stamp: Date.now() };
 }
 
 /**
@@ -185,9 +194,34 @@ export async function registrarActividad(_prev: VentasState, formData: FormData)
     if (code === "InvalidActivityBody") return { errors: { body: message } };
     if (code === "InvalidActivityDate") return { errors: { occurredOn: message } };
     if (code === "DealNotInCompany") return { errors: { dealId: message } };
-    if (code === "ContactNotInCompany") return { errors: { contactId: message } };
+    if (code === "ContactNotInCompany" || code === "ContactOptedOut") return { errors: { contactId: message } };
     return { message };
   }
   revalidate(v.companyId);
   return { ok: true, notice: t.logged[v.kind], stamp: Date.now() };
+}
+
+/**
+ * «Ver más» de la línea de tiempo: la página que sigue al cursor, ya
+ * formateada con el formateador del espacio, igual que la primera. Es de
+ * lectura: no revalida nada.
+ */
+export async function verMasActividad(
+  companyId: string,
+  cursor: string,
+): Promise<{ items: ActividadVista[]; nextCursor: string | null } | { error: string }> {
+  const t = FICHA.actividad;
+  if (!UUID_RE.test(companyId) || typeof cursor !== "string" || cursor.length > 200) return { error: t.moreError };
+  try {
+    const { company, page } = await withWorkspace(async (tx) => ({
+      company: await getCompanyName(tx, companyId),
+      page: await listCompanyActivity(tx, companyId, { before: cursor }),
+    }));
+    if (company === null) return { error: t.moreError };
+    const f = formatterFor(await getCurrentWorkspace());
+    return { items: vistaDeActividad(page.rows, company, f), nextCursor: page.nextCursor };
+  } catch (err) {
+    console.error("[ventas/ficha]", err);
+    return { error: t.moreError };
+  }
 }

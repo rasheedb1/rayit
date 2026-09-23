@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const moverNegocio = vi.fn();
 vi.mock("../actions", () => ({ moverNegocio: (...a: unknown[]) => moverNegocio(...a) }));
+vi.mock("../empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn() }));
 
+import type { SeguimientoContexto, SiguienteAccionData } from "../_seguimiento/datos";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
@@ -238,6 +240,27 @@ describe("PipelineBoard", () => {
     // revalidar, vuelve a la suya): el foco la sigue a donde quede.
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(screen.getByLabelText("Mover «Café Alma» a otra etapa"));
+  });
+
+  it("con la siguiente acción editable, la tarjeta lleva UNA sola pastilla de vencimiento (VEN-4)", () => {
+    const ctx: SeguimientoContexto = { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "20:00", nextHour: "21:00" };
+    const siguiente: SiguienteAccionData = {
+      dealId: DEAL,
+      dealLabel: "Café Alma · Lanzamiento cold brew",
+      action: "Enviar pitch",
+      dueText: "23 sep · 9:00 p. m.",
+      due: { kind: "warn", text: "Hoy" },
+      responsibleName: null,
+      form: { dueDate: "2026-09-23", dueTime: "21:00", responsibleUserId: "" },
+    };
+    // La vieja (deal.due, de deal_pipeline) dice «Al día» y la nueva «Hoy»:
+    // antes de 0034 podían contradecirse en la misma tarjeta.
+    render(<PipelineBoard deals={[{ ...deals[0]!, siguiente }]} stages={stages} ctx={ctx} />);
+    const card = screen.getByRole("listitem", { name: "Café Alma, Lanzamiento cold brew" });
+    const pastillas = within(card).queryAllByText(/^(Vencido|Hoy|Al día|Sin fecha)$/);
+    expect(pastillas).toHaveLength(1);
+    expect(pastillas[0]).toHaveTextContent("Hoy");
+    expect(within(card).getByText("4 días")).toBeInTheDocument();
   });
 
   it("un negocio perdido dice por qué", () => {

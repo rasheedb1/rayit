@@ -11,7 +11,7 @@ vi.mock("../empresas/actions", () => ({
 }));
 
 import { siguienteAccionData, type SeguimientoContexto } from "./datos";
-import { SiguienteAccion } from "./siguiente-accion";
+import { SiguienteAccion, horaPropuesta } from "./siguiente-accion";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
 const LAURA = "00000002-0000-4000-8000-000000000002";
@@ -24,6 +24,8 @@ const ctx: SeguimientoContexto = {
   ],
   today: "2026-09-23",
   tomorrow: "2026-09-24",
+  now: "17:10",
+  nextHour: "18:00",
 };
 
 const vencida: NextActionRow = {
@@ -63,6 +65,18 @@ describe("siguienteAccionData", () => {
     const d = siguienteAccionData(sinAccion, f, ctx, LABEL);
     expect(d.due).toBeNull();
     expect(d.form).toEqual({ dueDate: "2026-09-24", dueTime: "15:00", responsibleUserId: LAURA });
+  });
+});
+
+describe("horaPropuesta", () => {
+  it("hoy, con la hora de la acción ya pasada, propone la próxima en punto; otro día o una hora que viene, la misma", () => {
+    // Son las 17:10 en la zona del espacio.
+    expect(horaPropuesta("2026-09-23", "15:00", ctx)).toBe("18:00");
+    expect(horaPropuesta("2026-09-23", "17:10", ctx)).toBe("18:00");
+    expect(horaPropuesta("2026-09-23", "19:30", ctx)).toBe("19:30");
+    expect(horaPropuesta("2026-09-24", "15:00", ctx)).toBe("15:00");
+    // A las 23:20 la próxima en punto ya es mañana: no se propone una hora de hoy que no existe.
+    expect(horaPropuesta("2026-09-23", "10:00", { ...ctx, now: "23:20", nextHour: "00:00" })).toBe("10:00");
   });
 });
 
@@ -127,6 +141,30 @@ describe("SiguienteAccion", () => {
     });
     expect(await screen.findByText("Ese día ya pasó. Elige hoy o uno que venga.")).toBeInTheDocument();
     expect(screen.getByRole("form")).toBeInTheDocument();
+  });
+
+  it("reprogramar para hoy a las 17:10 no propone las 15:00, que ya pasaron: propone las 18:00", () => {
+    const deHoy = siguienteAccionData({ ...vencida, dueState: "futuro", dueDate: "2026-09-25", dueTime: "15:00" }, f, ctx, LABEL);
+    render(<SiguienteAccion data={deHoy} ctx={ctx} />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    const hora = screen.getByLabelText(/Hora/);
+    expect(hora).toHaveValue("15:00");
+    fireEvent.change(screen.getByLabelText(/Cuándo/), { target: { value: "2026-09-23" } });
+    expect(hora).toHaveValue("18:00");
+  });
+
+  it("«Cambiar» avisa antes de abrir (onTouch) y, al guardar, entrega el aviso de dónde quedó", async () => {
+    fijarSiguienteAccion.mockResolvedValue({ ok: true, notice: "Guardada para el 24 sep · 10:00 a. m.", stamp: 1 });
+    const onTouch = vi.fn();
+    const onEditingChange = vi.fn();
+    render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} onTouch={onTouch} onEditingChange={onEditingChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    expect(onTouch).toHaveBeenCalledTimes(1);
+    expect(onEditingChange).toHaveBeenLastCalledWith(true, undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+    });
+    expect(onEditingChange).toHaveBeenLastCalledWith(false, "Guardada para el 24 sep · 10:00 a. m.");
   });
 
   it("«Hecha» la deja en la historia y abre la siguiente, vacía y para mañana", async () => {

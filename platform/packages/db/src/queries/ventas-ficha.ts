@@ -33,6 +33,8 @@ export const FICHA_ERROR_CODES = [
   'InvalidDueDate',
   /** La fecha de la acción ya pasó (antes de hoy, en la zona del espacio). */
   'PastDueDate',
+  /** El día es hoy pero la hora ya pasó: la acción nacería vencida. */
+  'PastDueTime',
   /** El responsable no es alguien de este espacio. */
   'InvalidResponsible',
   /** No hay siguiente acción que marcar como hecha. */
@@ -47,6 +49,8 @@ export const FICHA_ERROR_CODES = [
   'DealNotInCompany',
   /** El contacto elegido no es de esta empresa (o no se ve desde aquí). */
   'ContactNotInCompany',
+  /** El contacto pidió la baja: no se le atribuye una llamada, un correo ni una reunión. */
+  'ContactOptedOut',
 ] as const;
 export type FichaErrorCode = (typeof FICHA_ERROR_CODES)[number];
 
@@ -125,32 +129,36 @@ interface NextActionSql {
 }
 
 /**
+ * «Tiene siguiente acción»: un texto que no esté en blanco. El esquema
+ * deja guardar una fecha sin texto; ese negocio cuenta como SIN acción en
+ * todas partes (la lista, los conteos y el job), no como vencido.
+ */
+const HAS_ACTION = `nullif(btrim(d.next_action), '') IS NOT NULL`;
+
+/**
  * La parte común de las dos lecturas de siguiente acción. `w` es la fila
- * de WORKSPACE_TZ. El estado del vencimiento se cuenta aquí y no se lee
- * de deal_pipeline: así «Para hoy» dice lo mismo con 0034 aplicada o sin
- * ella.
+ * de WORKSPACE_TZ y `p` la de deal_pipeline, de donde sale el estado del
+ * vencimiento: desde 0034 la vista lo cuenta en la zona del espacio, así
+ * que el tablero, la ficha y «Para hoy» lo leen de una sola definición.
+ * La única copia de ese CASE fuera de la vista es la del job
+ * (apps/worker/src/jobs/ventas/seguimientos.ts), que cuenta con el
+ * instante de SU corrida y no con now().
  */
 const NEXT_ACTION_SELECT = `
-  SELECT d.id AS deal_id, d.company_id, co.name AS company_name, d.name AS deal_name, st.label_es AS stage_label,
+  SELECT d.id AS deal_id, d.company_id, p.company_name, d.name AS deal_name, p.stage_label,
          nullif(btrim(d.next_action), '') AS action,
          ${iso('d.next_action_due')} AS due_at,
          to_char(d.next_action_due AT TIME ZONE w.tz, 'YYYY-MM-DD') AS due_date,
          to_char(d.next_action_due AT TIME ZONE w.tz, 'HH24:MI') AS due_time,
-         CASE
-           WHEN d.next_action_due IS NULL THEN 'sin_fecha'
-           WHEN d.next_action_due < now() THEN 'vencido'
-           WHEN (d.next_action_due AT TIME ZONE w.tz)::date = (now() AT TIME ZONE w.tz)::date THEN 'hoy'
-           ELSE 'futuro'
-         END AS due_state,
+         p.due_state,
          d.next_action_user_id AS responsible_user_id,
          coalesce(nullif(btrim(u.name), ''), u.email::text) AS responsible_name,
          d.owner_user_id
-    FROM deal d
-    JOIN pipeline_stage st ON st.id = d.stage_id
-    JOIN company co ON co.id = d.company_id
+    FROM deal_pipeline p
+    JOIN deal d ON d.id = p.id
     LEFT JOIN app_user u ON u.id = d.next_action_user_id
     CROSS JOIN ${WORKSPACE_TZ} w
-   WHERE NOT st.is_won AND NOT st.is_lost`;
+   WHERE NOT p.is_won AND NOT p.is_lost`;
 
 function toNextActionRow(r: NextActionSql): NextActionRow {
   return {
@@ -180,27 +188,48 @@ export async function listNextActions(tx: WorkspaceTx, opts: { companyId?: strin
   const { rows } = await tx.query<NextActionSql>(
     `${NEXT_ACTION_SELECT}
        AND ($1::uuid IS NULL OR d.company_id = $1::uuid)
-     ORDER BY d.next_action_due ASC NULLS LAST, co.name ASC`,
+     ORDER BY d.next_action_due ASC NULLS LAST, p.company_name ASC`,
     [opts.companyId ?? null],
   );
   return rows.map(toNextActionRow);
 }
 
+/** El reloj del espacio: lo que los formularios necesitan para no proponer algo que ya pasó. */
+export interface LocalDates {
+  /** Hoy, «2026-09-23». */
+  today: string;
+  /** Mañana. */
+  tomorrow: string;
+  /** La hora de ahora, «17:12». */
+  now: string;
+  /** La próxima hora en punto, «18:00»: la que se propone hoy cuando la de siempre ya pasó. */
+  nextHour: string;
+}
+
 /**
- * Hoy y mañana en la zona del espacio, como «2026-09-23». Son el mínimo
- * y el valor por defecto de los <input type="date"> de la siguiente
- * acción y de la actividad: la pantalla no calcula días.
+ * Hoy, mañana, la hora de ahora y la próxima hora en punto, en la zona
+ * del espacio. Son el mínimo y el valor por defecto de los <input
+ * type="date"> y type="time" de la siguiente acción y de la actividad:
+ * la pantalla no calcula días ni husos.
  */
-export async function getLocalDates(tx: WorkspaceTx): Promise<{ today: string; tomorrow: string }> {
-  const { rows } = await tx.query<{ today: string; tomorrow: string }>(
-    `SELECT to_char((now() AT TIME ZONE w.tz)::date, 'YYYY-MM-DD') AS today,
-            to_char((now() AT TIME ZONE w.tz)::date + 1, 'YYYY-MM-DD') AS tomorrow
-       FROM ${WORKSPACE_TZ} w`,
+export async function getLocalDates(tx: WorkspaceTx): Promise<LocalDates> {
+  const { rows } = await tx.query<LocalDates>(
+    `SELECT to_char(l.t::date, 'YYYY-MM-DD') AS today,
+            to_char(l.t::date + 1, 'YYYY-MM-DD') AS tomorrow,
+            to_char(l.t, 'HH24:MI') AS now,
+            to_char(date_trunc('hour', l.t) + interval '1 hour', 'HH24:MI') AS "nextHour"
+       FROM ${WORKSPACE_TZ} w, LATERAL (SELECT now() AT TIME ZONE w.tz AS t) l`,
   );
   const r = rows[0];
   if (!r) {
-    const hoy = new Date().toISOString().slice(0, 10);
-    return { today: hoy, tomorrow: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10) };
+    // Sin la fila del espacio (no debería pasar: RLS deja leer la propia), en UTC.
+    const ahora = new Date();
+    return {
+      today: ahora.toISOString().slice(0, 10),
+      tomorrow: new Date(ahora.getTime() + 86_400_000).toISOString().slice(0, 10),
+      now: ahora.toISOString().slice(11, 16),
+      nextHour: `${String((ahora.getUTCHours() + 1) % 24).padStart(2, '0')}:00`,
+    };
   }
   return r;
 }
@@ -221,27 +250,28 @@ export interface DueToday {
  * «Para hoy», el bloque de arriba de /ventas (VEN-4): los negocios
  * abiertos cuya siguiente acción ya venció o vence antes de que acabe el
  * día EN LA ZONA DEL ESPACIO. Los conteos salen de SQL, no de la lista
- * recortada.
+ * recortada, y cuadran entre sí: un negocio con fecha pero sin texto no
+ * está en la lista ni cuenta como vencido; cuenta solo como «sin
+ * siguiente acción», que es lo que hay que arreglar (y el job tampoco
+ * avisa de él).
  */
 export async function listDueToday(tx: WorkspaceTx, limit = 8): Promise<DueToday> {
   const top = Math.max(1, Math.min(limit, 50));
   const { rows } = await tx.query<NextActionSql>(
     `${NEXT_ACTION_SELECT}
-       AND d.next_action_due IS NOT NULL
-       AND (d.next_action_due AT TIME ZONE w.tz)::date <= (now() AT TIME ZONE w.tz)::date
-     ORDER BY d.next_action_due ASC, co.name ASC
+       AND ${HAS_ACTION}
+       AND p.due_state IN ('vencido', 'hoy')
+     ORDER BY d.next_action_due ASC, p.company_name ASC
      LIMIT $1`,
     [top],
   );
   const counts = await tx.query<{ overdue: string; today: string; without: string }>(
-    `SELECT count(*) FILTER (WHERE d.next_action_due < now())::text AS overdue,
-            count(*) FILTER (WHERE d.next_action_due >= now()
-                               AND (d.next_action_due AT TIME ZONE w.tz)::date = (now() AT TIME ZONE w.tz)::date)::text AS today,
-            count(*) FILTER (WHERE nullif(btrim(d.next_action), '') IS NULL OR d.next_action_due IS NULL)::text AS without
-       FROM deal d
-       JOIN pipeline_stage st ON st.id = d.stage_id
-       CROSS JOIN ${WORKSPACE_TZ} w
-      WHERE NOT st.is_won AND NOT st.is_lost`,
+    `SELECT count(*) FILTER (WHERE ${HAS_ACTION} AND p.due_state = 'vencido')::text AS overdue,
+            count(*) FILTER (WHERE ${HAS_ACTION} AND p.due_state = 'hoy')::text AS today,
+            count(*) FILTER (WHERE NOT (${HAS_ACTION}) OR d.next_action_due IS NULL)::text AS without
+       FROM deal_pipeline p
+       JOIN deal d ON d.id = p.id
+      WHERE NOT p.is_won AND NOT p.is_lost`,
   );
   const c = counts.rows[0];
   const overdueCount = Number(c?.overdue ?? 0);
@@ -260,7 +290,11 @@ export interface SetNextActionInput {
   action: string;
   /** El día, en la zona del espacio: «2026-09-24». */
   dueDate: string;
-  /** La hora, en la zona del espacio: «09:30». Sin ella, PITCH_DUE_HOUR:00, como las que pone el producto. */
+  /**
+   * La hora, en la zona del espacio: «09:30». Sin ella, PITCH_DUE_HOUR:00,
+   * como las que pone el producto; y si el día es hoy y esa hora ya pasó,
+   * la próxima hora en punto.
+   */
   dueTime?: string | null;
   /** Quién la hace: alguien de este espacio; null la deja sin responsable y sin el campo no se toca. */
   responsibleUserId?: string | null;
@@ -270,20 +304,33 @@ export interface SetNextActionInput {
  * Fija la siguiente acción de un negocio abierto: qué, cuándo y quién.
  *
  * La fecha y la hora se interpretan en la zona del espacio y se guardan
- * como instante (timestamptz) en SQL, sin cuentas de husos en la web. No
- * se acepta un día anterior a hoy: una acción que nace vencida es un
- * error de dedo, no un plan. Cambiar el texto deja el marcador del
- * producto (next_action_kind) en NULL por el disparador de 0032: a partir
- * de ahí es una acción escrita por una persona y Cotizar la respeta.
+ * como instante (timestamptz) en SQL, sin cuentas de husos en la web.
+ * Una acción que nace vencida es un error de dedo, no un plan, y se mira
+ * el instante entero: un día anterior es PastDueDate y una hora de hoy
+ * que ya pasó, PastDueTime (si no, a las 17:00 «hoy a las 15:00» se
+ * guardaría ya vencida y el job avisaría de algo recién escrito). Sin
+ * hora se toma PITCH_DUE_HOUR:00 o, si hoy ya pasó, la próxima hora en
+ * punto. Cambiar el texto deja el marcador del producto
+ * (next_action_kind) en NULL por el disparador de 0032: a partir de ahí
+ * es una acción escrita por una persona y Cotizar la respeta.
  *
- * Devuelve la empresa del negocio, para revalidar su ficha.
+ * Devuelve la empresa del negocio, para revalidar su ficha, y el instante
+ * en que quedó (ISO en UTC), para decir «Guardada para el 24 sep».
  */
-export async function setNextAction(tx: WorkspaceTx, dealId: string, input: SetNextActionInput): Promise<{ companyId: string }> {
+export async function setNextAction(
+  tx: WorkspaceTx,
+  dealId: string,
+  input: SetNextActionInput,
+): Promise<{ companyId: string; dueAt: string }> {
   if (!isUuid(dealId)) throw new DealNotFound();
   const action = input.action.trim();
   if (!action || action.length > NEXT_ACTION_MAX) throw new FichaError('InvalidNextAction');
-  const dueTime = input.dueTime?.trim() || `${String(PITCH_DUE_HOUR).padStart(2, '0')}:00`;
-  if (!ISO_DATE_RE.test(input.dueDate) || !TIME_RE.test(dueTime) || Number.isNaN(Date.parse(`${input.dueDate}T00:00:00Z`))) {
+  const dueTime = input.dueTime?.trim() || null;
+  if (
+    !ISO_DATE_RE.test(input.dueDate) ||
+    (dueTime !== null && !TIME_RE.test(dueTime)) ||
+    Number.isNaN(Date.parse(`${input.dueDate}T00:00:00Z`))
+  ) {
     throw new FichaError('InvalidDueDate');
   }
   const tocaResponsable = input.responsibleUserId !== undefined;
@@ -291,23 +338,35 @@ export async function setNextAction(tx: WorkspaceTx, dealId: string, input: SetN
   if (responsible !== null) await assertMember(tx, responsible);
 
   const deal = await readOpenDeal(tx, dealId);
-  const past = await tx.query<{ past: boolean }>(
-    `SELECT $1::date < (now() AT TIME ZONE w.tz)::date AS past FROM ${WORKSPACE_TZ} w`,
-    [input.dueDate],
+  // El instante, en SQL y en la zona del espacio. Con hora, esa; sin
+  // ella, la de siempre o, si hoy ya pasó, la próxima en punto.
+  const when = await tx.query<{ due: string; past_day: boolean; past_time: boolean }>(
+    `SELECT ${iso('x.due')} AS due,
+            $1::date < (now() AT TIME ZONE w.tz)::date AS past_day,
+            x.due < now() AS past_time
+       FROM ${WORKSPACE_TZ} w,
+            LATERAL (SELECT CASE
+                              WHEN $2::time IS NOT NULL THEN ($1::date + $2::time) AT TIME ZONE w.tz
+                              WHEN ($1::date + $3::time) AT TIME ZONE w.tz > now() THEN ($1::date + $3::time) AT TIME ZONE w.tz
+                              ELSE (date_trunc('hour', now() AT TIME ZONE w.tz) + interval '1 hour') AT TIME ZONE w.tz
+                            END AS due) x`,
+    [input.dueDate, dueTime, `${String(PITCH_DUE_HOUR).padStart(2, '0')}:00`],
   );
-  if (past.rows[0]?.past) throw new FichaError('PastDueDate');
+  const w = when.rows[0];
+  if (!w) throw new FichaError('InvalidDueDate');
+  if (w.past_day) throw new FichaError('PastDueDate');
+  if (w.past_time) throw new FichaError('PastDueTime');
 
   await tx.query(
-    `UPDATE deal d
+    `UPDATE deal
         SET next_action = $2,
-            next_action_due = ($3::date + $4::time) AT TIME ZONE w.tz,
-            next_action_user_id = CASE WHEN $6::boolean THEN $5::uuid ELSE d.next_action_user_id END,
+            next_action_due = $3::timestamptz,
+            next_action_user_id = CASE WHEN $5::boolean THEN $4::uuid ELSE next_action_user_id END,
             updated_at = now()
-       FROM ${WORKSPACE_TZ} w
-      WHERE d.id = $1`,
-    [dealId, action, input.dueDate, dueTime, responsible, tocaResponsable],
+      WHERE id = $1`,
+    [dealId, action, w.due, responsible, tocaResponsable],
   );
-  return { companyId: deal.companyId };
+  return { companyId: deal.companyId, dueAt: w.due };
 }
 
 /**
@@ -383,45 +442,99 @@ export interface ActivityRow {
     lostReason: string | null;
     quoteNumber: string | null;
     durationMin: number | null;
+    /**
+     * Se registró para un día anterior sin decir la hora: se guarda a
+     * mediodía de ese día para ordenar, pero la pantalla pinta solo la
+     * fecha, no una hora que nadie dijo.
+     */
+    timeUnknown: boolean;
   };
+}
+
+/** Una página de la historia, y el cursor de la siguiente (null si no hay más). */
+export interface ActivityPage {
+  rows: ActivityRow[];
+  hasMore: boolean;
+  /** Dónde sigue: se pasa como `before` para traer las anteriores. */
+  nextCursor: string | null;
+}
+
+/**
+ * El cursor de la línea de tiempo: (occurred_at, id) de la última fila
+ * de una página, en un texto opaco para la web. Con el id de desempate,
+ * dos actividades del mismo instante no se saltan ni se repiten.
+ */
+function encodeCursor(occurredAt: string, id: string): string {
+  return `${occurredAt}_${id}`;
+}
+
+function decodeCursor(cursor: string): { at: string; id: string } | null {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z)_([0-9a-f-]{36})$/i.exec(cursor);
+  if (!m || !m[1] || !m[2] || !isUuid(m[2]) || Number.isNaN(Date.parse(m[1]))) return null;
+  return { at: m[1], id: m[2] };
+}
+
+/** El nombre de una empresa del CRM de este espacio, o null si no está en él. */
+export async function getCompanyName(tx: WorkspaceTx, companyId: string): Promise<string | null> {
+  if (!isUuid(companyId)) return null;
+  const { rows } = await tx.query<{ name: string }>(
+    'SELECT co.name FROM company co JOIN company_link l ON l.company_id = co.id WHERE co.id = $1',
+    [companyId],
+  );
+  return rows[0]?.name ?? null;
 }
 
 /**
  * La historia de una empresa, la más reciente primero: lo que se registró
  * a mano (notas, llamadas, correos, reuniones) y lo que dejó el producto
- * (una señal aceptada, un cambio de etapa, una cotización). `hasMore`
- * dice si hay más de las que se trajeron.
+ * (una señal aceptada, un cambio de etapa, una cotización). Se lee por
+ * páginas: `before` es el `nextCursor` de la página anterior y trae las
+ * que van detrás. Un cursor que no se entiende devuelve una página vacía,
+ * no la primera otra vez.
  */
 export async function listCompanyActivity(
   tx: WorkspaceTx,
   companyId: string,
-  limit = TIMELINE_LIMIT,
-): Promise<{ rows: ActivityRow[]; hasMore: boolean }> {
-  if (!isUuid(companyId)) return { rows: [], hasMore: false };
-  const top = Math.max(1, Math.min(limit, 200));
+  opts: { limit?: number; before?: string | null } = {},
+): Promise<ActivityPage> {
+  const vacia: ActivityPage = { rows: [], hasMore: false, nextCursor: null };
+  if (!isUuid(companyId)) return vacia;
+  const top = Math.max(1, Math.min(opts.limit ?? TIMELINE_LIMIT, 200));
+  const cursor = opts.before ? decodeCursor(opts.before) : null;
+  if (opts.before && !cursor) return vacia;
+  // El instante del cursor va con microsegundos, como lo guarda Postgres:
+  // si se truncara al segundo, la actividad del límite se repetiría.
   const { rows } = await tx.query<{
-    id: string; kind: ActivityKind; subject: string | null; body: string | null; occurred_at: string;
+    id: string; kind: ActivityKind; subject: string | null; body: string | null; occurred_at: string; cursor_at: string;
     deal_id: string | null; deal_name: string | null; contact_name: string | null; user_name: string | null;
-    lost_reason: string | null; quote_number: string | null; duration_min: string | null;
+    lost_reason: string | null; quote_number: string | null; duration_min: string | null; time_unknown: boolean;
   }>(
     `SELECT a.id, a.kind, a.subject, a.body, ${iso('a.occurred_at')} AS occurred_at,
+            to_char(a.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,
             a.deal_id, d.name AS deal_name,
             coalesce(nullif(btrim(c.full_name), ''), c.email::text) AS contact_name,
             coalesce(nullif(btrim(u.name), ''), u.email::text) AS user_name,
             a.metadata->>'lost_reason' AS lost_reason,
             coalesce(a.metadata->>'quoteNumber', a.metadata->>'quote_number') AS quote_number,
-            CASE WHEN jsonb_typeof(a.metadata->'duration_min') = 'number' THEN a.metadata->>'duration_min' END AS duration_min
+            CASE WHEN jsonb_typeof(a.metadata->'duration_min') = 'number' THEN a.metadata->>'duration_min' END AS duration_min,
+            coalesce(a.metadata->'time_unknown' = 'true'::jsonb, false) AS time_unknown
        FROM activity a
        LEFT JOIN deal d ON d.id = a.deal_id
        LEFT JOIN contact c ON c.id = a.contact_id
        LEFT JOIN app_user u ON u.id = a.user_id
       WHERE a.company_id = $1
+        AND ($3::timestamptz IS NULL OR (a.occurred_at, a.id) < ($3::timestamptz, $4::uuid))
       ORDER BY a.occurred_at DESC, a.id DESC
       LIMIT $2`,
-    [companyId, top + 1],
+    [companyId, top + 1, cursor?.at ?? null, cursor?.id ?? null],
   );
+  const page = rows.slice(0, top);
+  const last = page[page.length - 1];
+  const hasMore = rows.length > top;
   return {
-    rows: rows.slice(0, top).map((r) => ({
+    hasMore,
+    nextCursor: hasMore && last ? encodeCursor(last.cursor_at, last.id) : null,
+    rows: page.map((r) => ({
       id: r.id,
       kind: r.kind,
       subject: r.subject,
@@ -435,9 +548,9 @@ export async function listCompanyActivity(
         lostReason: r.lost_reason,
         quoteNumber: r.quote_number,
         durationMin: r.duration_min === null ? null : Math.round(Number(r.duration_min)),
+        timeUnknown: r.time_unknown,
       },
     })),
-    hasMore: rows.length > top,
   };
 }
 
@@ -451,7 +564,8 @@ export interface LogActivityInput {
   contactId?: string | null;
   /**
    * El día en que pasó, en la zona del espacio. Vacío o hoy: ahora mismo.
-   * Un día anterior: a mediodía de ese día. Uno futuro no se acepta.
+   * Un día anterior: a mediodía de ese día, con metadata.time_unknown
+   * para que la línea de tiempo no pinte esa hora. Uno futuro no se acepta.
    */
   occurredOn?: string | null;
 }
@@ -491,18 +605,27 @@ export async function logActivity(tx: WorkspaceTx, input: LogActivityInput): Pro
     if (d.rows.length === 0) throw new FichaError('DealNotInCompany');
   }
   if (contactId !== null) {
-    const c = await tx.query('SELECT 1 FROM contact WHERE id = $1 AND company_id = $2', [contactId, input.companyId]);
-    if (c.rows.length === 0) throw new FichaError('ContactNotInCompany');
+    const c = await tx.query<{ opted_out: boolean }>(
+      'SELECT opted_out FROM contact WHERE id = $1 AND company_id = $2',
+      [contactId, input.companyId],
+    );
+    const contacto = c.rows[0];
+    if (!contacto) throw new FichaError('ContactNotInCompany');
+    // Quien pidió la baja no recibe llamadas, correos ni reuniones: una
+    // actividad así no se registra, aunque la pantalla ya lo esconda (un
+    // POST armado a mano llega igual). Una nota sobre esa persona sí.
+    if (contacto.opted_out && CONTACT_ACTIVITY_KINDS.includes(input.kind)) throw new FichaError('ContactOptedOut');
   }
 
   // El instante: ahora si es hoy (o no se dijo); mediodía local de un día
-  // anterior; y un día futuro, nada.
-  const when = await tx.query<{ occurred_at: string | null; future: boolean }>(
+  // anterior, marcado como «sin hora»; y un día futuro, nada.
+  const when = await tx.query<{ occurred_at: string | null; future: boolean; time_unknown: boolean }>(
     `SELECT CASE
               WHEN $1::date IS NULL OR $1::date = (now() AT TIME ZONE w.tz)::date THEN now()
               WHEN $1::date < (now() AT TIME ZONE w.tz)::date THEN ($1::date + time '12:00') AT TIME ZONE w.tz
             END AS occurred_at,
-            coalesce($1::date > (now() AT TIME ZONE w.tz)::date, false) AS future
+            coalesce($1::date > (now() AT TIME ZONE w.tz)::date, false) AS future,
+            coalesce($1::date < (now() AT TIME ZONE w.tz)::date, false) AS time_unknown
        FROM ${WORKSPACE_TZ} w`,
     [occurredOn],
   );
@@ -510,10 +633,11 @@ export async function logActivity(tx: WorkspaceTx, input: LogActivityInput): Pro
   if (!w || w.future || w.occurred_at === null) throw new FichaError('InvalidActivityDate');
 
   const inserted = await tx.query<{ id: string; occurred_at: string }>(
-    `INSERT INTO activity (workspace_id, company_id, deal_id, contact_id, user_id, kind, body, occurred_at)
-     VALUES (current_workspace_id(), $1, $2, $3, current_user_id(), $4, $5, $6::timestamptz)
+    `INSERT INTO activity (workspace_id, company_id, deal_id, contact_id, user_id, kind, body, occurred_at, metadata)
+     VALUES (current_workspace_id(), $1, $2, $3, current_user_id(), $4, $5, $6::timestamptz,
+             CASE WHEN $7::boolean THEN jsonb_build_object('time_unknown', true) ELSE '{}'::jsonb END)
      RETURNING id, occurred_at`,
-    [input.companyId, dealId, contactId, input.kind, body, w.occurred_at],
+    [input.companyId, dealId, contactId, input.kind, body, w.occurred_at, w.time_unknown],
   );
   const activityId = inserted.rows[0]?.id;
   if (!activityId) throw new FichaError('InvalidActivityKind');

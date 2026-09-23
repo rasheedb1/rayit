@@ -74,7 +74,7 @@ const seguimiento = {
     accion(CON_ACCION, {}),
     accion(SIN_ACCION, { companyName: "Fresko", dealName: "Fresko", action: null, dueAt: null, dueDate: null, dueTime: null, dueState: "sin_fecha" }),
   ],
-  ctx: { owners: [], today: "2026-09-23", tomorrow: "2026-09-24" },
+  ctx: { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00" },
 };
 
 describe("PipelineView con la siguiente acción (VEN-4)", () => {
@@ -92,6 +92,18 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
     expect(screen.queryByText(f.money("0", undefined, { mode: "short" }))).toBeNull();
     // La columna con negocios sí lleva su total.
     expect(screen.getByText(f.money("6400000.00", undefined, { mode: "short" }))).toBeInTheDocument();
+  });
+
+  it("filtrada desde «Para hoy», dice qué enseña y ofrece ver todos; vacía, lo celebra en vez de «no hay negocios»", () => {
+    render(<PipelineView deals={[deals[1]!]} stages={stages} f={f} forma="lista" filtro="sin_accion" seguimiento={seguimiento} />);
+    expect(screen.getByText("Solo los negocios abiertos sin siguiente acción")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver todos" })).toHaveAttribute("href", "/ventas?vista=pipeline&forma=lista");
+  });
+
+  it("filtrada y sin nada que enseñar, no dice que el pipeline está vacío", () => {
+    render(<PipelineView deals={[]} stages={stages} f={f} forma="lista" filtro="para_hoy" />);
+    expect(screen.getByText("Nada vencido ni para hoy")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver todos" })).toBeInTheDocument();
   });
 
   it("sin `seguimiento`, la siguiente acción se lee como texto, sin botones", () => {

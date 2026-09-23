@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const logActivity = vi.fn();
 const setNextAction = vi.fn();
 const completeNextAction = vi.fn();
+const listCompanyActivity = vi.fn();
+const getCompanyName = vi.fn();
 const revalidatePath = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
@@ -18,11 +20,17 @@ vi.mock("@mc/db/queries/ventas-ficha", async (original) => ({
   logActivity: (...a: unknown[]) => logActivity(...a),
   setNextAction: (...a: unknown[]) => setNextAction(...a),
   completeNextAction: (...a: unknown[]) => completeNextAction(...a),
+  listCompanyActivity: (...a: unknown[]) => listCompanyActivity(...a),
+  getCompanyName: (...a: unknown[]) => getCompanyName(...a),
+}));
+vi.mock("@/lib/workspace/settings", () => ({
+  getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
 
 import { FichaError } from "@mc/db/queries/ventas-ficha";
 import { DealNotFound } from "@mc/db/queries/ventas";
-import { fijarSiguienteAccion, marcarHecha, registrarActividad } from "./actions";
+import { formatterFor } from "@/lib/format";
+import { fijarSiguienteAccion, marcarHecha, registrarActividad, verMasActividad } from "./actions";
 import { FICHA } from "./messages";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
@@ -38,7 +46,9 @@ function form(values: Record<string, string>): FormData {
 
 beforeEach(() => {
   logActivity.mockReset().mockResolvedValue({ activityId: "a1", touchedDealIds: [DEAL] });
-  setNextAction.mockReset().mockResolvedValue({ companyId: COMPANY });
+  setNextAction.mockReset().mockResolvedValue({ companyId: COMPANY, dueAt: "2026-09-24T14:30:00Z" });
+  listCompanyActivity.mockReset();
+  getCompanyName.mockReset().mockResolvedValue("Café Alma");
   completeNextAction.mockReset().mockResolvedValue({ companyId: COMPANY });
   revalidatePath.mockReset();
 });
@@ -85,6 +95,9 @@ describe("registrarActividad", () => {
     expect((await registrarActividad({}, form(llamada))).errors).toEqual({ dealId: FICHA.errores.DealNotInCompany });
     logActivity.mockRejectedValueOnce(new FichaError("ContactNotInCompany"));
     expect((await registrarActividad({}, form(llamada))).errors).toEqual({ contactId: FICHA.errores.ContactNotInCompany });
+    // Quien pidió la baja: el error va en «Con quién», no en la pantalla.
+    logActivity.mockRejectedValueOnce(new FichaError("ContactOptedOut"));
+    expect((await registrarActividad({}, form(llamada))).errors).toEqual({ contactId: FICHA.errores.ContactOptedOut });
   });
 
   it("un id fabricado o un error desconocido se resumen en la pantalla, sin el texto de Postgres", async () => {
@@ -101,7 +114,10 @@ describe("fijarSiguienteAccion", () => {
 
   it("qué, cuándo, a qué hora y quién llegan a setNextAction", async () => {
     const r = await fijarSiguienteAccion({}, form(accion));
-    expect(r).toMatchObject({ ok: true, notice: FICHA.siguiente.saved });
+    // Dice dónde quedó, en la zona del espacio: 14:30 UTC son las 9:30 en Bogotá.
+    const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    expect(r).toMatchObject({ ok: true, notice: FICHA.siguiente.savedFor(`${f.date("2026-09-24T14:30:00Z")} · ${f.time("2026-09-24T14:30:00Z")}`) });
+    expect(r.notice).toMatch(/^Guardada para el 24 sep/);
     expect(setNextAction).toHaveBeenCalledWith({}, DEAL, {
       action: "Llamar a Sofía",
       dueDate: "2026-09-24",
@@ -129,6 +145,9 @@ describe("fijarSiguienteAccion", () => {
   it("un día que ya pasó va en «Cuándo»; un negocio cerrado, en la pantalla", async () => {
     setNextAction.mockRejectedValueOnce(new FichaError("PastDueDate"));
     expect((await fijarSiguienteAccion({}, form(accion))).errors).toEqual({ dueDate: FICHA.errores.PastDueDate });
+    // Hoy, pero a una hora que ya pasó: el error va en «Hora».
+    setNextAction.mockRejectedValueOnce(new FichaError("PastDueTime"));
+    expect((await fijarSiguienteAccion({}, form(accion))).errors).toEqual({ dueTime: FICHA.errores.PastDueTime });
     setNextAction.mockRejectedValueOnce(new FichaError("InvalidResponsible"));
     expect((await fijarSiguienteAccion({}, form(accion))).errors).toEqual({ responsibleUserId: FICHA.errores.InvalidResponsible });
     setNextAction.mockRejectedValueOnce(new FichaError("DealClosed"));
@@ -153,5 +172,31 @@ describe("marcarHecha", () => {
     expect(r.message).toBeTruthy();
     expect(revalidatePath).not.toHaveBeenCalled();
     expect(await marcarHecha({}, form({ dealId: "x" }))).toEqual({ message: FICHA.siguiente.doneError });
+  });
+});
+
+describe("verMasActividad", () => {
+  it("trae la página que sigue al cursor, formateada como la primera", async () => {
+    listCompanyActivity.mockResolvedValue({
+      rows: [
+        {
+          id: "a9", kind: "call", subject: null, body: "Primera llamada", occurredAt: "2026-09-01T15:00:00Z",
+          dealId: null, dealName: null, contactName: null, userName: null,
+          meta: { lostReason: null, quoteNumber: null, durationMin: null, timeUnknown: true },
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+    const r = await verMasActividad(COMPANY, "2026-09-23T15:00:00.000000Z_00000009-0000-4000-8000-000000000001");
+    expect(listCompanyActivity).toHaveBeenCalledWith({}, COMPANY, { before: "2026-09-23T15:00:00.000000Z_00000009-0000-4000-8000-000000000001" });
+    expect(r).toMatchObject({ nextCursor: null, items: [{ id: "a9", author: FICHA.actividad.unknownAuthor, tipo: "Llamada" }] });
+  });
+
+  it("una empresa que no es de este espacio, o un id fabricado, no trae nada", async () => {
+    getCompanyName.mockResolvedValueOnce(null);
+    listCompanyActivity.mockResolvedValue({ rows: [], hasMore: false, nextCursor: null });
+    expect(await verMasActividad(COMPANY, "c")).toEqual({ error: FICHA.actividad.moreError });
+    expect(await verMasActividad("1; drop", "c")).toEqual({ error: FICHA.actividad.moreError });
   });
 });

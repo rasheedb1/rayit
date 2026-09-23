@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type { ContactRow } from "@mc/db/queries/ventas";
-import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -12,6 +11,7 @@ import { Aviso } from "../../../_lib/aviso";
 import { SOURCE_META, SOURCE_OPTIONS } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
 import { useVentasForm } from "../../_lib/use-ventas-form";
+import { Bloque } from "./bloque";
 
 /**
  * Los contactos de una empresa (VEN-1): los que guardó este espacio y
@@ -22,24 +22,33 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
  * baja se pide con confirmación porque no se puede deshacer (un trigger
  * de la base lo impide, no solo esta pantalla).
  */
-export function Contactos({ companyId, contacts }: { companyId: string; contacts: ContactRow[] }) {
+export function Contactos({
+  companyId,
+  contacts,
+  contactsMeta,
+}: {
+  companyId: string;
+  contacts: ContactRow[];
+  /** Lo que va junto al título, ya formateado en el servidor («3»). */
+  contactsMeta?: string;
+}) {
   const t = MESSAGES.contacto;
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
 
+  // Un bloque que se pliega, como Negocios y Actividad (patrón Attio).
+  // «Añadir contacto» va al principio del cuerpo y no junto al título: el
+  // título es un <summary> (role=button) y un botón dentro de otro es
+  // contenido interactivo anidado, que un lector de pantalla no anuncia.
   return (
-    <section aria-labelledby="contactos">
-      <SectionTitle
-        meta={
-          !adding && contacts.length > 0 ? (
-            <Button size="sm" variant="secondary" onClick={() => { setAdding(true); setNotice(undefined); }}>
-              {t.new}
-            </Button>
-          ) : undefined
-        }
-      >
-        <span id="contactos">{t.title}</span>
-      </SectionTitle>
+    <Bloque id="contactos" title={t.title} meta={contactsMeta}>
+      {!adding && contacts.length > 0 && (
+        <div className="mb-3">
+          <Button size="sm" variant="secondary" onClick={() => { setAdding(true); setNotice(undefined); }}>
+            {t.new}
+          </Button>
+        </div>
+      )}
 
       {notice && !adding && <Aviso notice={notice} className="mb-3" />}
 
@@ -63,7 +72,7 @@ export function Contactos({ companyId, contacts }: { companyId: string; contacts
           ))}
         </ul>
       )}
-    </section>
+    </Bloque>
   );
 }
 

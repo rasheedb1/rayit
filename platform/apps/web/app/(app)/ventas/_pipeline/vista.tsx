@@ -1,11 +1,12 @@
 import Link from "next/link";
-import type { PipelineDealRow, StageTotal } from "@mc/db/queries/ventas";
+import type { PipelineDealRow, PipelineSeguimiento, StageTotal } from "@mc/db/queries/ventas";
 import { SectionTitle } from "@/components/page-header";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
+import { FICHA } from "../empresas/messages";
 import { MESSAGES } from "../_lib/messages";
 import { lostReasonText, needsNextAction, pillForDue, type PipelineForma } from "../_lib/estado";
 import { siguienteAccionData, type SeguimientoContexto } from "../_seguimiento/datos";
@@ -32,15 +33,31 @@ export function PipelineView({
   stages,
   f,
   forma,
+  filtro = null,
   seguimiento,
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
   f: Formatter;
   forma: PipelineForma;
+  /** La lista filtrada desde «Para hoy» (VEN-4): ya viene filtrada de SQL; aquí se dice y se ofrece quitarlo. */
+  filtro?: PipelineSeguimiento | null;
   seguimiento?: { rows: NextActionRow[]; ctx: SeguimientoContexto };
 }) {
   const t = MESSAGES.pipeline;
+  const x = FICHA.filtro;
+
+  if (filtro && deals.length === 0) {
+    return (
+      <section aria-labelledby="pipeline">
+        <SectionTitle>
+          <span id="pipeline">{t.title}</span>
+        </SectionTitle>
+        <FormaSwitch forma={forma} />
+        <EmptyState title={x.empty[filtro].title} description={x.empty[filtro].description} action={{ label: x.clear, href: LISTA_HREF }} />
+      </section>
+    );
+  }
 
   if (deals.length === 0) {
     return (
@@ -99,6 +116,15 @@ export function PipelineView({
 
       <FormaSwitch forma={forma} />
 
+      {filtro && (
+        <p className="-mt-2 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-2">
+          <span className="text-warn">{x[filtro]}</span>
+          <Link href={LISTA_HREF} className="underline underline-offset-4 hover:text-ink">
+            {x.clear}
+          </Link>
+        </p>
+      )}
+
       {forma === "tablero" ? (
         <PipelineBoard deals={boardDeals} stages={boardStages} ctx={seguimiento?.ctx} locale={f.locale} />
       ) : (
@@ -107,6 +133,9 @@ export function PipelineView({
     </section>
   );
 }
+
+/** La lista del pipeline sin filtro: «Ver todos». */
+const LISTA_HREF = "/ventas?vista=pipeline&forma=lista";
 
 /** «Cotizar» desde un negocio: la nueva cotización ya lo trae elegido (COT-3). */
 export function quoteHref(dealId: string): string {

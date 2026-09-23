@@ -354,7 +354,10 @@ function DealCard({
       <p className="mt-2 whitespace-nowrap text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {deal.due && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}
+        {/* Con la siguiente acción editable (VEN-4), su pastilla es la
+            única del vencimiento: dos («Al día» aquí y «Hoy» abajo) se
+            contradecían mientras 0034 no estaba aplicada. */}
+        {deal.due && !(deal.siguiente && ctx) && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}
         <span className="text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</span>
       </div>
 

@@ -26,6 +26,13 @@
  * otro. A quién va el aviso: al responsable de la acción, si no al del
  * negocio, y si no a todo el espacio (user_id NULL).
  *
+ * «Vencido» y «vence hoy» se cuentan aquí con el instante de la corrida
+ * ($1) y no se leen de deal_pipeline.due_state, que usa now(): es la
+ * única copia de ese criterio fuera de la vista (0034), y existe para
+ * que una corrida con `now` fijo (las pruebas, una corrida atrasada)
+ * decida con SU hora. Lo que sí es igual en los tres sitios: un negocio
+ * con fecha y sin texto no avisa (tampoco sale en «Para hoy»).
+ *
  * Es una función pura sobre la base (`runSeguimientos(db, now)`) para
  * poder probarla en pglite y correrla a mano
  * (`pnpm --filter @mc/worker run job:seguimientos`) sin el runner.

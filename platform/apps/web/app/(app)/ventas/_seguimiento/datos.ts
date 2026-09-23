@@ -31,13 +31,20 @@ export interface SiguienteAccionData {
   };
 }
 
-/** Lo que el editor necesita del espacio, igual para todos los negocios de la pantalla. */
+/**
+ * Lo que el editor necesita del espacio, igual para todos los negocios de
+ * la pantalla. Es getLocalDates (queries/ventas-ficha) más las personas.
+ */
 export interface SeguimientoContexto {
   owners: OwnerOption[];
   /** Hoy en la zona del espacio: el mínimo del campo de fecha. */
   today: string;
   /** Mañana: la fecha que se propone para una acción nueva o vencida. */
   tomorrow: string;
+  /** La hora de ahora en la zona del espacio, «17:12», cuando se pintó la pantalla. */
+  now: string;
+  /** La próxima hora en punto, «18:00»: la que se propone para hoy si la de la acción ya pasó. */
+  nextHour: string;
 }
 
 /** La hora que se propone sin otra: la misma a la que vencen las acciones que pone el producto. */

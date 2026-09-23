@@ -1162,7 +1162,25 @@ WHERE signal.status = 'pending';
 -- cotizaciones que lo acuerdan están en 0004.
 -- Los nombres de los meses en español, una sola vez por sentencia
 -- (ver la sentencia de signal).
-WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo)
+-- Las siguientes acciones dicen qué hacer y con quién («Llamar a Laura
+-- Quintero por la propuesta»), como las escribiría una creadora y como
+-- propone el formulario (VEN-4): «Seguimiento 1» o «Llamada» no enseñan
+-- nada en la demo. «Enviar pitch» y «Seguimiento a la cotización» se
+-- quedan: son los textos que pone el producto (next_action_kind, 0032).
+-- Las dos que vencen HOY vencen a una hora local creíble, las 15:00 de
+-- Bogotá (PITCH_DUE_HOUR, la hora de las que pone el producto) y no a
+-- las 23:59 UTC, que la pantalla enseñaba como «6:59 p. m.». Si el seed
+-- corre después de las 15:00 locales, a la próxima hora en punto (hasta
+-- las 23:30), como hace setNextAction sin hora: tienen que seguir siendo
+-- «de hoy» y no nacer vencidas (verify (i) cuenta dos de hoy).
+WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo),
+     hoy AS (
+       SELECT CASE
+                WHEN now() < ((l.dia + time '15:00') AT TIME ZONE 'America/Bogota') THEN (l.dia + time '15:00') AT TIME ZONE 'America/Bogota'
+                ELSE least(date_trunc('hour', l.ahora) + interval '1 hour', l.dia + time '23:30') AT TIME ZONE 'America/Bogota'
+              END AS vence
+         FROM (SELECT now() AT TIME ZONE 'America/Bogota' AS ahora, (now() AT TIME ZONE 'America/Bogota')::date AS dia) l
+     )
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, origin_signal_id, name, stage_id, amount, currency, probability, expected_close_date, next_action, next_action_due, next_action_user_id, last_contact_at, won_at, lost_at, lost_reason, created_at)
 SELECT d.id, '00000002-0000-4000-8000-000000000001', d.company_id, '00000002-0000-4000-8000-000000000003', '00000002-0000-4000-8000-000000000002', d.origin_signal_id,
        d.name, d.stage_id, d.amount, 'COP', NULL, d.expected_close_date, d.next_action, d.next_action_due, '00000002-0000-4000-8000-000000000002',
@@ -1171,21 +1189,21 @@ FROM (VALUES
   -- Abiertos
   ('00000002-0000-4000-8000-0000000dea01'::uuid, '00000002-0000-4000-8000-0000000000e8'::uuid, '00000002-0000-4000-8000-00000005e003'::uuid,
    'Por definir', 'nuevo', 6000000.00, NULL::date, 'Enviar pitch',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
+   (SELECT vence FROM hoy), NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-00000005e004',
-   'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Seguimiento 2',
+   'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Llamar a Laura Quintero por la propuesta',
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 5 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
-   'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
+   'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Mandarle a Sofía Cárdenas ideas para los snacks',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-00000005e005',
-   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Enviar contrato',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
+   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Mandar el contrato a Daniel Restrepo',
+   (SELECT vence FROM hoy), (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000000e1', NULL,
-   'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamada',
+   'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamar a Valentina para cerrar fechas de la renovación',
    ((CURRENT_DATE + 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-11 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000000e4', NULL,
-   'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviar propuesta',
+   'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviarle a Julián Mesa la propuesta de la serie',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-10 13:40:00+00'),
   ('00000002-0000-4000-8000-0000000dea06', '00000002-0000-4000-8000-0000000000e3', NULL,
    'Historias navidad', 'conversacion', 3000000.00, CURRENT_DATE + 54, 'Esperar pago de la mora',
@@ -1194,10 +1212,10 @@ FROM (VALUES
    'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, CURRENT_DATE + 8, 'Seguimiento a la cotización',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
   ('00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-00000005e006',
-   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
+   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar los entregables con Sofía Cárdenas',
    (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
-   '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
+   '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar con Julián Mesa las fechas de grabación',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
@@ -1240,10 +1258,19 @@ FROM (VALUES
 -- vista deal_pipeline y el propio verify: con la lista de literales,
 -- añadir una etapa terminal ('archivado') o renombrar una hacía que el
 -- seed reescribiera en silencio el plan de deals ya cerrados.
+-- El texto de la siguiente acción se reescribe solo si sigue siendo uno
+-- de los de relleno de antes (VEN-4): una acción que alguien escribió en
+-- la demo no se pisa.
 ON CONFLICT (id) DO UPDATE SET
   expected_close_date = EXCLUDED.expected_close_date,
   next_action_due     = EXCLUDED.next_action_due,
-  last_contact_at     = EXCLUDED.last_contact_at
+  last_contact_at     = EXCLUDED.last_contact_at,
+  next_action         = CASE
+                          WHEN deal.next_action IN ('Seguimiento 1', 'Seguimiento 2', 'Llamada', 'Enviar contrato',
+                                                    'Enviar propuesta', 'Ajustar entregables', 'Confirmar fechas')
+                          THEN EXCLUDED.next_action
+                          ELSE deal.next_action
+                        END
 WHERE deal.stage_id IN (SELECT st.id FROM pipeline_stage st WHERE NOT st.is_won AND NOT st.is_lost);
 
 -- Una base sembrada antes de fijar la convención tiene esos cuatro

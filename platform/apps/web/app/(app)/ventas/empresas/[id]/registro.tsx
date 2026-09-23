@@ -25,8 +25,16 @@ function escribiendo(target: EventTarget | null): boolean {
  * El registro rápido de la ficha (VEN-5): nota, llamada, correo o
  * reunión, con el teclado de principio a fin.
  *
- *   · N, L, C o R (fuera de un campo) eligen el tipo y ponen el cursor en
- *     «Qué pasó».
+ *   · N, L, C o R eligen el tipo y ponen el cursor en «Qué pasó», pero
+ *     SOLO con el foco dentro del bloque «Actividad» (su título, el
+ *     selector de tipo, los botones del formulario) y fuera de un campo
+ *     de texto. Un atajo de una letra puesto en toda la página se
+ *     disparaba con el foco en cualquier botón o enlace («Cambiar» de un
+ *     negocio + R cambiaba el tipo y robaba el foco), y eso incumple WCAG
+ *     2.1.4 (Character Key Shortcuts): quien dicta por voz o navega con
+ *     las teclas del lector de pantalla lo activa sin querer. Como en
+ *     Superhuman, el atajo vale en la vista activa. Si el bloque está
+ *     plegado (el foco en su título), la tecla lo abre antes de enfocar.
  *   · ⌘ o Ctrl + Enter registra desde el texto.
  *
  * Una llamada, un correo o una reunión son hablar con la marca: mueven el
@@ -65,17 +73,25 @@ export function RegistroRapido({
   const dealDefault = abiertos.length === 1 ? (abiertos[0]?.id ?? "") : "";
 
   useEffect(() => {
+    // El ámbito del atajo: la sección que envuelve el registro (el bloque
+    // «Actividad» de la ficha) o, montado suelto, el propio formulario.
+    const form = formRef.current;
+    const ambito: HTMLElement | null = form?.closest("section") ?? form;
+    if (!ambito) return;
     function onKey(event: globalThis.KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey || escribiendo(event.target)) return;
       const next = TECLAS[event.key.toLowerCase()];
       if (!next) return;
       event.preventDefault();
       setKind(next);
+      // Plegado, el textarea no se ve y focus() no haría nada: se abre antes.
+      const details = form?.closest("details");
+      if (details && !details.open) details.open = true;
       document.getElementById(bodyId)?.focus();
     }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [bodyId]);
+    ambito.addEventListener("keydown", onKey);
+    return () => ambito.removeEventListener("keydown", onKey);
+  }, [bodyId, formRef]);
 
   function onBodyKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -93,6 +109,7 @@ export function RegistroRapido({
       }}
       noValidate
       aria-label={t.composerLabel}
+      aria-keyshortcuts="N L C R"
       className="rounded-md border border-border bg-surface p-3"
     >
       <input type="hidden" name="companyId" value={companyId} />
@@ -118,8 +135,16 @@ export function RegistroRapido({
         />
       </Field>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label={t.deal} help={kind === "note" ? undefined : t.dealHelp} error={errors.dealId} htmlFor={`registro-${companyId}-deal`}>
+      {/* «Negocio» ocupa dos de cuatro columnas: sus opciones son largas
+          («Café Alma · Renovación Q4 · Propuesta») y a 1400 px se cortaban. */}
+      <div className="mt-3 grid gap-3 sm:grid-cols-4">
+        <Field
+          label={t.deal}
+          help={kind === "note" ? undefined : t.dealHelp}
+          error={errors.dealId}
+          htmlFor={`registro-${companyId}-deal`}
+          className="sm:col-span-2"
+        >
           <Select
             key={dealDefault}
             name="dealId"

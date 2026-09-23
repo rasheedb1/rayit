@@ -13,8 +13,9 @@ import { FICHA } from "../messages";
 /**
  * Lo que salió de un negocio, hacia adelante (VEN-5): sus cotizaciones →
  * la campaña → la factura, cada una con su estado y enlazada a su módulo.
- * Solo lo que existe: un negocio recién abierto dice «Sin cotización
- * todavía» y nada más.
+ * Solo lo que existe: un negocio abierto sin nada dice «Sin cotización
+ * todavía»; uno ganado o perdido sin nada, «Sin cotización», porque ya no
+ * va a llegar.
  *
  * Los estados y sus colores son los de cada módulo (Cotizar, Campañas,
  * Finanzas), importados tal cual: la cadena no tiene su propia versión de
@@ -26,12 +27,15 @@ export function Cadena({
   invoices,
   f,
   label,
+  closed = false,
 }: {
   links: ChainLinks | undefined;
   /** Las facturas de la empresa como las lee Finanzas, por id: de ahí salen su estado y su mora. */
   invoices: ReadonlyMap<string, InvoiceListRow>;
   f: Formatter;
   label: string;
+  /** El negocio ya se ganó o se perdió. */
+  closed?: boolean;
 }) {
   const t = FICHA.cadena;
   const quotes = (links?.quotes ?? []).filter((q) => !q.supersededById);
@@ -42,7 +46,7 @@ export function Cadena({
   });
 
   if (quotes.length === 0 && campaigns.length === 0 && facturas.length === 0) {
-    return <p className="text-xs text-muted">{t.noQuote}</p>;
+    return <p className="text-xs text-muted">{closed ? t.noQuoteClosed : t.noQuote}</p>;
   }
 
   type Paso = { key: string; href: string; title: string; text: string; extra: string | null; pill: { kind: PillKind; text: string } | null };

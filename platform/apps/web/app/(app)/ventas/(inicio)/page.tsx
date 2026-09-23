@@ -1,5 +1,13 @@
 import type { Metadata } from "next";
-import { getSalesKpis, getStageTotals, listOwnerOptions, listPipeline, listSignals } from "@mc/db/queries/ventas";
+import {
+  PIPELINE_SEGUIMIENTOS,
+  getSalesKpis,
+  getStageTotals,
+  listOwnerOptions,
+  listPipeline,
+  listSignals,
+  type PipelineSeguimiento,
+} from "@mc/db/queries/ventas";
 import { getLocalDates, listNextActions } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
@@ -22,17 +30,28 @@ export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
-export default async function VentasPage({ searchParams }: { searchParams: Promise<{ vista?: string; forma?: string }> }) {
+export default async function VentasPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ vista?: string; forma?: string; seguimiento?: string }>;
+}) {
   const params = await searchParams;
   const vista = tabKey(params.vista);
   const forma = pipelineForma(params.forma);
+  // «Ponérsela» y «y N más» de «Para hoy» llevan a la lista filtrada
+  // (?seguimiento=sin_accion|para_hoy). En el tablero no se filtra: sus
+  // columnas suman todo el pipeline (getStageTotals) y no cuadrarían.
+  const filtro: PipelineSeguimiento | null =
+    forma === "lista" && PIPELINE_SEGUIMIENTOS.includes(params.seguimiento as PipelineSeguimiento)
+      ? (params.seguimiento as PipelineSeguimiento)
+      : null;
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
   const { kpis, signals, deals, stages, nextActions, owners, dates } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
-    deals: vista === "pipeline" ? await listPipeline(tx) : [],
+    deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
     // La siguiente acción de cada negocio abierto, editable en la tarjeta (VEN-4).
     nextActions: vista === "pipeline" ? await listNextActions(tx) : [],
@@ -106,6 +125,7 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
             stages={stages}
             f={f}
             forma={forma}
+            filtro={filtro}
             seguimiento={dates ? { rows: nextActions, ctx: { owners: opcionesDeResponsable(owners, nextActions), ...dates } } : undefined}
           />
         )}

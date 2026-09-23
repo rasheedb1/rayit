@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listInvoices } from "@mc/db/queries/finanzas";
@@ -28,6 +29,7 @@ import { Bloque } from "../bloque";
 import { Cadena } from "../cadena";
 import { Contactos } from "../contactos";
 import { DatosEmpresa } from "../datos";
+import { vistaDeActividad } from "../actividad";
 import { LineaDeTiempo } from "../linea-de-tiempo";
 import { NuevoNegocio } from "../negocio";
 import { RegistroRapido } from "../registro";
@@ -66,11 +68,11 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   const data = await withWorkspace(async (tx) => {
     const company = await getCompany(tx, id);
     if (!company) return null;
-    const pipeline = await listPipeline(tx);
     return {
       company,
       contacts: await listContacts(tx, id),
-      deals: pipeline.filter((d) => d.companyId === id),
+      // Solo los de esta empresa, filtrados en SQL: la ficha no lee el pipeline entero.
+      deals: await listPipeline(tx, { companyId: id }),
       owners: await listOwnerOptions(tx),
       nextActions: await listNextActions(tx, { companyId: id }),
       activity: await listCompanyActivity(tx, id),
@@ -104,8 +106,22 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   const nicho = niches.map((n) => (ingles && n.nameEn ? n.nameEn : n.nameEs));
   const sueltos = [chain.loose.quotes, chain.loose.campaigns, chain.loose.invoices].some((l) => l.length > 0);
 
-  const cabecera: { label: string; value: string | null }[] = [
-    { label: x.cabecera.niche, value: nicho.length > 0 ? new Intl.ListFormat(f.locale, { type: "conjunction" }).format(nicho) : null },
+  // Cada nicho es una pastilla: unidos con «y» («Cocina fácil y Fitness y
+  // bienestar») no se sabía dónde acababa uno y empezaba el otro.
+  const cabecera: { label: string; value: ReactNode }[] = [
+    {
+      label: x.cabecera.niche,
+      value:
+        nicho.length > 0 ? (
+          <span className="inline-flex flex-wrap gap-1">
+            {nicho.map((n) => (
+              <Pill key={n} kind="neutral">
+                {n}
+              </Pill>
+            ))}
+          </span>
+        ) : null,
+    },
     { label: x.cabecera.industry, value: company.industry },
     { label: x.cabecera.owner, value: company.ownerName ?? x.cabecera.noOwner },
   ];
@@ -115,7 +131,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       <PageHeader eyebrow={MESSAGES.header.eyebrow} title={company.name} description={company.domain ?? undefined} aside={<Pill kind={rel.kind}>{rel.label}</Pill>} />
       <dl aria-label={x.cabecera.label} className="-mt-5 mb-8 flex flex-wrap gap-x-6 gap-y-1 text-sm">
         {cabecera.flatMap((c) => (c.value === null ? [] : [{ label: c.label, value: c.value }])).map((c) => (
-          <div key={c.label} className="flex min-w-0 gap-1.5">
+          <div key={c.label} className="flex min-w-0 items-baseline gap-1.5">
             <dt className="text-muted">{c.label}</dt>
             <dd className="min-w-0 break-words text-ink">{c.value}</dd>
           </div>
@@ -132,7 +148,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
               company.openDealCount > 0 ? (
                 <span className="whitespace-nowrap tabular-nums">
                   {company.openDealAmount !== null ? (
-                    f.money(company.openDealAmount, undefined, { mode: "short" })
+                    x.bloques.dealsOpenAmount(f.money(company.openDealAmount, undefined, { mode: "short" }))
                   ) : (
                     <span className="text-muted">{MESSAGES.pipeline.noAmount}</span>
                   )}
@@ -178,7 +194,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                         </div>
                       </div>
                       {accion && <SiguienteAccion data={siguienteAccionData(accion, f, ctx, `${company.name} · ${negocio}`)} ctx={ctx} />}
-                      <Cadena links={chain.byDeal[d.id]} invoices={facturas} f={f} label={x.cadena.label(negocio)} />
+                      <Cadena links={chain.byDeal[d.id]} invoices={facturas} f={f} label={x.cadena.label(negocio)} closed={!abierto} />
                     </li>
                   );
                 })}
@@ -204,14 +220,16 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                 .filter((c) => !c.optedOut)
                 .map((c) => ({ id: c.id, label: c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : MESSAGES.contacto.noName) }))}
             />
-            <LineaDeTiempo rows={activity.rows} hasMore={activity.hasMore} companyName={company.name} f={f} />
+            <LineaDeTiempo companyId={company.id} items={vistaDeActividad(activity.rows, company.name, f)} nextCursor={activity.nextCursor} />
           </Bloque>
 
-          <Contactos companyId={company.id} contacts={contacts} />
+          <Contactos companyId={company.id} contacts={contacts} contactsMeta={contacts.length > 0 ? f.int(contacts.length) : undefined} />
         </div>
 
         <aside className="min-w-0 space-y-8" aria-label={t.detail.data}>
-          <RelacionForm companyId={company.id} relationship={company.relationship} ownerUserId={company.ownerUserId} owners={ownerOptions} />
+          <Bloque id="relacion" title={x.bloques.relation}>
+            <RelacionForm companyId={company.id} relationship={company.relationship} ownerUserId={company.ownerUserId} owners={ownerOptions} />
+          </Bloque>
           <DatosEmpresa
             countries={countryOptions(f.locale)}
             company={{
