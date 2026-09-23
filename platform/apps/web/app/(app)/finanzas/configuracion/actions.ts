@@ -8,7 +8,7 @@ import {
   parseFinanceSettings,
   type FinanceSettings,
 } from "@mc/core";
-import { countInvoicesInOtherCurrency, updateFinanceSettings } from "@mc/db/queries/finanzas";
+import { updateFinanceSettings } from "@mc/db/queries/finanzas";
 import { firstErrors, formField, type ActionState } from "@/lib/forms";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -149,13 +149,4 @@ export async function guardarConfiguracion(
     monedaAnterior: guardado.previousCurrency,
     facturasEnOtraMoneda: guardado.invoicesInOtherCurrency,
   };
-}
-
-/**
- * Cuántas facturas vivas hay en otra moneda. La pantalla lo pide al
- * pintar, para advertir ANTES de que alguien cambie la moneda y no
- * después.
- */
-export async function contarFacturasEnOtraMoneda(currency: string): Promise<number> {
-  return withWorkspace((tx) => countInvoicesInOtherCurrency(tx, currency));
 }

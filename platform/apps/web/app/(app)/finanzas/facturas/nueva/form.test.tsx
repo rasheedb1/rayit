@@ -113,4 +113,17 @@ describe("NuevaFacturaForm", () => {
     fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-01" } });
     expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2026-12-01");
   });
+
+  it("llegando con ?campana= el subtotal se descompone con la tasa CONFIGURADA, no con el 19 % de core", () => {
+    // El camino del botón «Facturar» de Campañas: la campaña ya viene
+    // elegida al montar. En un workspace al 16 %, subtotal + IVA tiene
+    // que volver a dar los 3.100.000 acordados con la marca.
+    const mx = { issuedOn: "2026-09-21", dueOn: "2026-11-05", taxPct: "16", withholdingPct: "0", plazoDias: 45, campaignId: CAMPANA };
+    const { container } = render(
+      <NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={mx} />,
+    );
+    // 3.100.000 / 1,16 = 2.672.413,79 (con el 19 % daría 2.605.042,02).
+    expect(container.querySelector('input[name="subtotal"]')).toHaveValue("2672413.79");
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 3.100.000");
+  });
 });

@@ -561,8 +561,16 @@ export interface FinanceSettingsSaved {
   previousCurrency: string;
   /**
    * Cuántas facturas quedaron en una moneda distinta de la del
-   * workspace. Cambiar la moneda NO convierte nada (FIN-8 §0.3 F), y
-   * los KPI de /finanzas suman sin convertir: la pantalla lo dice.
+   * workspace POR ESTE CAMBIO. Cambiar la moneda NO convierte nada
+   * (FIN-8 §0.3 F), y los KPI de /finanzas suman sin convertir: la
+   * pantalla lo dice.
+   *
+   * Es 0 cuando la moneda no cambió, aunque haya facturas viejas en
+   * otra. El aviso que alimenta dice «cambiar la moneda no las
+   * convierte», así que sacarlo en un guardado que solo tocó el IVA
+   * sería ruido, y encima lo etiqueta con previousCurrency —que ahí es
+   * la moneda propia—, o sea que nombraría la moneda en la que esas
+   * facturas NO están.
    */
   invoicesInOtherCurrency: number;
 }
@@ -694,16 +702,17 @@ export async function updateFinanceSettings(
   );
 
   const monedaFinal = currency ?? monedaPrevia;
-  const otras = await tx.query<{ n: number }>(
-    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) <> $1 AND status <> 'void'",
-    [monedaFinal],
-  );
+  // Solo se cuenta si la moneda cambió: ver el JSDoc de
+  // invoicesInOtherCurrency. Y de paso es una consulta menos en el
+  // guardado normal, que es el que pasa siempre.
+  const cambio = monedaFinal !== monedaPrevia;
+  const otras = cambio ? await countInvoicesInOtherCurrency(tx, monedaFinal) : 0;
 
   return {
     settings: parseFinanceSettings(bloque),
     currency: monedaFinal,
     previousCurrency: monedaPrevia,
-    invoicesInOtherCurrency: otras.rows[0]?.n ?? 0,
+    invoicesInOtherCurrency: otras,
   };
 }
 

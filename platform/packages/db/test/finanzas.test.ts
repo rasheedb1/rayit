@@ -428,6 +428,45 @@ describe('configuración financiera (FIN-8)', () => {
     assert.equal(ws.currency, 'COP');
   });
 
+  test('un guardado que NO toca la moneda no saca el aviso, aunque haya facturas en otra', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+
+    // Escenario: el workspace pasa a MXN y sus facturas siguen en COP.
+    // Sin la guardia, cualquier guardado POSTERIOR volvería a sacar el
+    // aviso —y etiquetado con previousCurrency, que ya es MXN: nombraría
+    // la moneda en la que esas facturas NO están—.
+    //
+    // Todo se mide primero y se restaura la moneda ANTES de afirmar
+    // nada: una aserción que falla a mitad dejaría el workspace en MXN y
+    // tumbaría las pruebas siguientes, que es justo lo que pasó la
+    // primera vez que se escribió.
+    const cambio = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'MXN' }),
+    );
+    const soloElIva = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, ivaPct: '16' }, currency: 'MXN' }),
+    );
+    const sinMoneda = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base }),
+    );
+    // Las de COP siguen ahí: nadie las convirtió. El número exacto
+    // depende de cuántas hayan creado las pruebas de arriba, así que se
+    // compara con la cuenta real, no con una constante.
+    const enCop = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countInvoicesInOtherCurrency(tx, 'MXN'));
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base, currency: 'COP' }));
+
+    assert.ok(enCop > 0, 'hay facturas en COP que el cambio de moneda dejó atrás');
+    assert.equal(cambio.invoicesInOtherCurrency, enCop, 'el cambio de moneda sí avisa, y de todas');
+    assert.equal(soloElIva.previousCurrency, 'MXN');
+    assert.equal(soloElIva.invoicesInOtherCurrency, 0, 'la moneda no cambió: no hay nada que advertir');
+    assert.equal(sinMoneda.currency, 'MXN', 'sin moneda se conserva la que había');
+    assert.equal(sinMoneda.invoicesInOtherCurrency, 0);
+
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(final.currency, 'COP', 'la prueba deja el workspace como lo encontró');
+  });
+
   test('una moneda que no es ISO-4217 de tres letras se rechaza antes de tocar la base', async () => {
     const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
     for (const mala of ['PESOS', 'C0P', '', 'co ']) {

@@ -64,7 +64,14 @@ export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, in
   const initialCampaign = campaigns.find((c) => c.id === defaults.campaignId);
   const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? "");
   const [companyId, setCompanyId] = useState(initialCampaign?.companyId ?? "");
-  const [subtotal, setSubtotal] = useState(initialCampaign?.amount ? subtotalFromTotal(initialCampaign.amount) : "");
+  // Con la tasa CONFIGURADA, no con el 19 % que subtotalFromTotal pone
+  // por omisión: en un workspace al 16 %, subtotal + IVA tiene que volver
+  // a dar el monto acordado con la marca. pickCampaign ya lo hacía bien;
+  // este camino —llegar con ?campana= desde el botón «Facturar»— se
+  // quedó atrás.
+  const [subtotal, setSubtotal] = useState(
+    initialCampaign?.amount ? subtotalFromTotal(initialCampaign.amount, pctToRate(defaults.taxPct)) : "",
+  );
   const [taxPct, setTaxPct] = useState(defaults.taxPct);
   const [withholdingPct, setWithholdingPct] = useState(defaults.withholdingPct);
   const [issuedOn, setIssuedOn] = useState(defaults.issuedOn);
