@@ -403,6 +403,7 @@ eso es ACC-5; esta historia solo deja las tablas y la matriz.
 | `db/seed/0002_demo_ventas_metricas.sql` | una línea: `role_id` con `system_role_id` | El seed falla sin ella. |
 | `apps/web/lib/auth/messages.ts` | las seis etiquetas de rol | `t.rol[e.role]` está tipado por `RoleKey`. |
 | `packages/db/test/{rls,identidad,ventas}.test.ts` | los `INSERT` de membresía con `role_id` | Idem. |
+| `apps/web/app/(app)/resumen/importar/lote.test.ts` (RES-2) | la prueba del 413 manda el multipart por trozos en vez de un `FormData` | No es de ACC-3: con Node 24, cancelar la lectura de un `FormData` en memoria deja un rechazo sin manejar en `undici` y `pnpm verificar` terminaba en rojo también en `main`. La prueba sigue ejercitando el contador (sin Content-Length). |
 
 ## 7. Verificación al cerrar (23-sep)
 
@@ -412,7 +413,7 @@ eso es ACC-5; esta historia solo deja las tablas y la matriz.
 | `packages/db/test/accesos.test.ts` | 16/16 |
 | `pnpm --filter @mc/db test` (incluye `schema.test.ts`, `identidad.test.ts` de CIM-3 y `rls.test.ts`) | 624/624 |
 | `make db.seed.check` | verde, cuatro pasadas y la de 41 días |
-| `pnpm verificar` | 14 de 15 tareas en verde; `@mc/web#test` con 723/723 pruebas pasando pero un «Unhandled Rejection: ReadableStream is already closed» en `resumen/importar/lote.test.ts`, que **también sale en `origin/main` limpio** (comprobado en un worktree aparte). No es de esta historia. |
+| `pnpm verificar` | Al principio, 14 de 15 tareas: `@mc/web#test` con 723/723 pruebas pasando pero un «Unhandled Rejection: ReadableStream is already closed» en `resumen/importar/lote.test.ts`, que **también salía en `origin/main` limpio**. Arreglado en la prueba (§6) y en verde, 15/15. |
 | Dev (`pnpm dev -p 3134`, base embebida con 0034 y los seeds) | `/`, `/resumen`, `/ventas`, `/cotizar`, `/campanas`, `/finanzas`, `/conexiones`, `/cuenta` y `/accesos` responden 200; la ficha de Café Alma ofrece a «Laura Méndez» como responsable (sale de `membership` con `role_id`) |
 
 ## 8. Revisión (`/code-review` nivel alto y `/security-review`)
