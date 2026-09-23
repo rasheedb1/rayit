@@ -1017,6 +1017,8 @@ export interface OpenThread {
   /** El último toque enviado en el hilo: a él se cuelga la respuesta. */
   touchId: string;
   lastSentAt: Date;
+  /** El primer envío del hilo: lo anterior no es una respuesta (un chat de LinkedIn que ya existía). */
+  firstSentAt: Date;
   /** La dirección a la que se escribió (para reconocer quién responde). */
   recipient: string | null;
   account: { id: string; provider: 'gmail_oauth' | 'unipile'; providerAccountId: string; secretRef: string | null; status: string };
@@ -1039,6 +1041,9 @@ export async function listOpenThreads(
       `SELECT DISTINCT ON (t.workspace_id, t.channel, t.thread_ref)
               t.workspace_id, t.enrollment_id, t.contact_id, t.deal_id, t.channel, t.thread_ref, t.id AS touch_id, t.sent_at,
               t.recipient_address::text AS recipient,
+              (SELECT min(x.sent_at) FROM outbound_touch x
+                WHERE x.workspace_id = t.workspace_id AND x.channel = t.channel AND x.thread_ref = t.thread_ref
+                  AND x.status = 'sent') AS first_sent_at,
               a.id AS account_id, a.provider, a.provider_account_id, a.secret_ref, a.status AS account_status,
               coalesce((SELECT array_agg(m.provider_message_id) FROM outbound_message m
                          WHERE m.workspace_id = t.workspace_id AND m.channel = t.channel AND m.thread_ref = t.thread_ref
@@ -1064,6 +1069,7 @@ export async function listOpenThreads(
     threadRef: r.thread_ref as string,
     touchId: r.touch_id as string,
     lastSentAt: toDate(r.sent_at)!,
+    firstSentAt: toDate(r.first_sent_at) ?? toDate(r.sent_at)!,
     recipient: (r.recipient as string | null) ?? null,
     account: {
       id: r.account_id as string,
