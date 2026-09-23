@@ -24,6 +24,8 @@ export const MESSAGES = {
       "El radar te trae marcas que encajan con lo que haces; el tablero dice en qué etapa está cada negocio y qué toca hacer hoy.",
     /** El título de la pestaña del navegador. */
     metaTitle: "Ventas",
+    /** El enlace a /ventas/politica (VEN-15). */
+    politica: "Política de envío",
   },
 
   tabs: {
