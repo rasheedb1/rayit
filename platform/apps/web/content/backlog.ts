@@ -215,8 +215,8 @@ export const STORIES: readonly Story[] = [
     title: "Pantalla Conexiones",
     desc: "Una sola tabla sobre connection_health con las dos clases de fila (por @ y autorizada), estado derivado del reloj (activa, vence pronto, vencida, necesita reautorizar, error), horas desde la última sincronización, «Conectar» por red, «Reautorizar» en rojo y el paso manual «Activa Analytics en TikTok».",
     done: "Una conexión con token vencido se ve en rojo con el botón de reautorizar.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/CON-4-pantalla-conexiones (en GitHub, sin fusionar). Estado calculado con access_expires_at y el reloj, no copiado de social_connection.status; «Conectar» y «Reautorizar» detrás de OAUTH_CONNECT=1, que ya está en producción. Abre con requirePermission (ACC-1); la bitácora queda en TODO(ACC-2). Detalle en docs/propuestas/CON-4.md.",
+    status: "hecho",
+    note: "23-sep: en main y en producción (cierre CON-B). Una tabla con las dos clases de fila; el estado sale del reloj, no de social_connection.status: vencida sin renovación en rojo con «Reautorizar», vencida con renovación viva «Se renueva sola» (depende del worker, que aún no corre en producción; reautorizar queda como salida secundaria). En la fila, «Conectada por» (ACC-8), publicaciones en seguimiento (CON-5) y qué dato falta y por qué (CON-7, metric_gap). Quien solo ve no ve botones; sin conexiones.* es 404 (ACC-5). La bitácora la escriben las consultas (ACC-2). Detalle en docs/propuestas/CIERRE-CON-B.md.",
   },
   {
     id: "CON-10", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1"],
