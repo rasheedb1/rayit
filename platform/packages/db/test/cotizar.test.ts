@@ -15,7 +15,10 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calcularItem } from '@mc/core';
+import {
+  calcularItem, calcularPaquete, redondearParaNegociar,
+  type ComponentePaquete, type FuenteViews, type PasoCalculo, type PlatformId,
+} from '@mc/core';
 import {
   acceptPublicQuote, acceptQuote, acceptQuoteAndCreateCampaign, buildMediaKitSnapshot, completePublicAcceptance,
   createMediaKit, createQuote, createCampaignForQuote, deleteQuoteDraft, getCurrentRateCard, getDefaultTaxRate,
@@ -1274,6 +1277,78 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
       const esperado = Math.round((p.views! / red.medianViews) * 10) / 10;
       assert.equal(Number(p.viewsVsMedian), esperado, `${p.platformId}: ${p.views} / ${red.medianViews}`);
     }
+  });
+
+  test('el media kit del seed 0004 dice lo que diría uno real: N× contra su mediana y tarifas de @mc/core (pulido r8)', async () => {
+    // El seed 0004 no puede congelar su kit con buildMediaKitSnapshot
+    // (la demo es relativa al reloj y el kit está fechado el 22-sep),
+    // así que lo escribe a mano. Esta prueba es la que impide que lo
+    // escrito a mano contradiga a la fórmula: cada tarifa se vuelve a
+    // calcular con calcularItem/calcularPaquete desde sus propias
+    // entradas, y cada «N×» contra la mediana que el kit publica.
+    const { kit, items } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const k = await getMediaKitById(tx, '00000004-0000-4000-8000-000000d0c001');
+      const { rows } = await tx.query<{
+        deliverable: string; platform_id: PlatformId | null; price_low: string; price_high: string;
+        avg_views: number | null; cpm_low: string | null; cpm_high: string | null;
+        adjustments: Record<string, unknown>;
+      }>(
+        `SELECT deliverable, platform_id, price_low::text, price_high::text, avg_views,
+                cpm_low::text, cpm_high::text, adjustments
+           FROM rate_card_item WHERE rate_card_id = '00000004-0000-4000-8000-0000007a1f01' ORDER BY position`);
+      return { kit: k, items: rows };
+    });
+    assert.ok(kit, 'el seed trae su media kit');
+    const snap = kit.snapshot;
+
+    for (const p of snap.topPosts) {
+      const red = snap.redes.find((r) => r.platformId === p.platformId);
+      assert.ok(red?.medianViews && p.views !== null && p.viewsVsMedian !== null, `${p.platformId}: post con views y mediana`);
+      const cociente = p.views / red.medianViews;
+      assert.ok(Math.abs(Number(p.viewsVsMedian) - cociente) < 0.05,
+        `${p.url}: dice ${p.viewsVsMedian}×, y ${p.views} / ${red.medianViews} = ${cociente.toFixed(2)}`);
+      assert.equal(p.viewsVsMedian, (Math.round(cociente * 10) / 10).toFixed(1), 'con el decimal de buildMediaKitSnapshot');
+    }
+
+    assert.equal(items.length, 5);
+    const precios = new Map<string, { priceLow: string; priceHigh: string }>();
+    for (const it of items) {
+      const adj = it.adjustments as {
+        pasos: PasoCalculo[]; cantidad?: number; viewsSource?: FuenteViews; cpmSource?: string;
+        componentes?: ComponentePaquete[]; descuentoPct?: string;
+      };
+      let calculado: { priceLow: string; priceHigh: string; pasos: PasoCalculo[] };
+      if (it.platform_id === null) {
+        for (const c of adj.componentes ?? []) {
+          assert.deepEqual({ priceLow: c.priceLow, priceHigh: c.priceHigh }, precios.get(c.deliverable),
+            `el paquete suma ${c.deliverable} al precio del tarifario`);
+        }
+        calculado = calcularPaquete({ componentes: adj.componentes ?? [], descuentoPct: adj.descuentoPct ?? '0', currency: 'COP' });
+      } else {
+        const views = adj.pasos.find((s) => s.tipo === 'views');
+        const cpm = adj.pasos.find((s) => s.tipo === 'cpm');
+        assert.ok(views?.tipo === 'views' && cpm?.tipo === 'cpm', `${it.deliverable}: guarda sus entradas`);
+        calculado = calcularItem({
+          deliverable: it.deliverable, platformId: it.platform_id, cantidad: adj.cantidad ?? 1,
+          views: it.avg_views ?? 0, viewsSource: adj.viewsSource ?? views.fuente,
+          ...(views.muestra === undefined ? {} : { viewsSample: views.muestra }),
+          ...(views.corteHoras === undefined ? {} : { viewsCutHours: views.corteHoras }),
+          cpmLow: it.cpm_low ?? '0', cpmHigh: it.cpm_high ?? '0', cpmSource: adj.cpmSource ?? cpm.fuente,
+          nicheSlug: cpm.nicheSlug, country: cpm.country, currency: 'COP', modificadores: [],
+        });
+      }
+      assert.equal(it.price_low, calculado.priceLow, `${it.deliverable}: el bajo es el de @mc/core`);
+      assert.equal(it.price_high, calculado.priceHigh, `${it.deliverable}: el alto es el de @mc/core`);
+      assert.deepEqual(adj.pasos, calculado.pasos, `${it.deliverable}: el «Cómo se calcula» es el de @mc/core`);
+      assert.equal(redondearParaNegociar(it.price_low), it.price_low, `${it.deliverable}: tres cifras`);
+      assert.equal(redondearParaNegociar(it.price_high), it.price_high, `${it.deliverable}: tres cifras`);
+      precios.set(it.deliverable, { priceLow: it.price_low, priceHigh: it.price_high });
+    }
+    assert.deepEqual(
+      snap.tarifas.map((x) => [x.priceLow, x.priceHigh]),
+      items.map((i) => [i.price_low, i.price_high]),
+      'el kit ofrece las tarifas del tarifario, las mismas cifras',
+    );
   });
 
   test('en la audiencia por país, «Otros» va al final aunque pese más que el último país', async () => {

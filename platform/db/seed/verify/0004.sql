@@ -120,3 +120,53 @@ SELECT 'f_tarifas' AS check_id,
          AND (SELECT count(*) FROM rate_card_item i WHERE i.rate_card_id = k.rate_card_id AND i.price_low > i.price_high) = 0 AS ok
 FROM media_kit k
 WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
+
+-- (g) El «N× su mediana» de cada post del media kit cuadra con la
+--     mediana que el MISMO kit publica de su red (pulido r8). Una marca
+--     que divide las dos cifras de la página tiene que encontrar el
+--     mismo número: buildMediaKitSnapshot lo calcula así al congelar
+--     (round(views / mediana, 1)), y el kit del seed, escrito a mano,
+--     no puede decir otra cosa.
+SELECT 'g_multiplos_del_kit' AS check_id,
+       count(*) AS posts,
+       count(*) FILTER (WHERE r.mediana IS NULL OR r.mediana = 0) AS sin_mediana,
+       count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / r.mediana) >= 0.05) AS descuadrados,
+       count(*) > 0
+         AND count(*) FILTER (WHERE r.mediana IS NULL OR r.mediana = 0) = 0
+         AND count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / r.mediana) >= 0.05) = 0 AS ok
+FROM media_kit k
+CROSS JOIN LATERAL jsonb_array_elements(k.snapshot->'topPosts') p
+LEFT JOIN LATERAL (
+  SELECT (red->>'medianViews')::numeric AS mediana
+    FROM jsonb_array_elements(k.snapshot->'redes') red
+   WHERE red->>'platformId' = p->>'platformId'
+) r ON true
+WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
+
+-- (h) Las tarifas son las del tarifario, cifra por cifra y en su orden,
+--     y van redondeadas a tres cifras significativas como las deja
+--     redondearParaNegociar (@mc/core): 5.195.070 sale 5.200.000. Un
+--     rango al peso en el kit que ve la marca es una precisión falsa.
+SELECT 'h_tarifas_redondeadas' AS check_id,
+       count(*) AS tarifas,
+       count(*) FILTER (WHERE i.id IS NULL
+                          OR (t->>'priceLow')::numeric <> i.price_low
+                          OR (t->>'priceHigh')::numeric <> i.price_high) AS distintas_del_tarifario,
+       count(*) FILTER (WHERE i.price_low  <> round(i.price_low,  -greatest(floor(log(i.price_low))  + 1 - 3, 0)::int)
+                           OR i.price_high <> round(i.price_high, -greatest(floor(log(i.price_high)) + 1 - 3, 0)::int)) AS al_peso,
+       count(*) = 5
+         AND count(*) FILTER (WHERE i.id IS NULL
+                            OR (t->>'priceLow')::numeric <> i.price_low
+                            OR (t->>'priceHigh')::numeric <> i.price_high) = 0
+         AND count(*) FILTER (WHERE i.price_low  <> round(i.price_low,  -greatest(floor(log(i.price_low))  + 1 - 3, 0)::int)
+                             OR i.price_high <> round(i.price_high, -greatest(floor(log(i.price_high)) + 1 - 3, 0)::int)) = 0 AS ok
+FROM media_kit k
+CROSS JOIN LATERAL jsonb_array_elements(k.snapshot->'tarifas') WITH ORDINALITY AS x(t, n)
+LEFT JOIN LATERAL (
+  SELECT ri.id, ri.price_low, ri.price_high
+    FROM rate_card_item ri
+   WHERE ri.rate_card_id = k.rate_card_id AND NOT ri.is_modifier
+   ORDER BY ri.position
+  OFFSET x.n - 1 LIMIT 1
+) i ON true
+WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
