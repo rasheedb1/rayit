@@ -128,6 +128,25 @@ período 2025», que es la cifra del mock. Sin cobros el año anterior,
 `collectedDelta` es `null` y en vez del delta va la frase «Sin cobros
 en 2025 para comparar» — ya está así desde FIN-1 y se conserva.
 
+### 0.1 bis · ACC-1 entró antes que esta historia
+
+El encargo decía que FIN-3 «no necesita ACC-1 ni ACC-2, por eso va
+primera en el carril mientras Accesos fija sus convenciones». ACC-1 se
+mergeó a `main` mientras esta historia estaba en curso, así que la
+convención ya existe y esa razón se cayó. Las dos pantallas abren con
+
+```ts
+await requirePermission("finanzas.factura.ver");
+```
+
+como PRIMERA línea, antes de leer nada: sin ella, un rol sin Finanzas
+leía todas las facturas del espacio escribiendo la URL (la RLS acota el
+espacio, no el rol), y si la comprobación fuera después de la consulta,
+las cifras ya habrían pasado por el servidor. Hoy no cambia el
+comportamiento —la sesión resuelve como Dueño hasta ACC-3— y convertir
+`SinPermisoError` en un 404 es de ACC-5. Lo cubren cuatro pruebas en
+`(inicio)/permiso.test.tsx`.
+
 ### 0.2 DECISIÓN PENDIENTE DE NICOLÁS · los KPIs de un workspace vacío
 
 El encargo pide que, con otro workspace, los KPIs salgan «en null, no
@@ -195,10 +214,10 @@ grupos de ruta).
   `listReceivables` usa `tx.query` con SQL, como el resto de
   `queries/finanzas.ts`, y pide `::text` para el dinero. La migración a
   Drizzle, si llega, es consulta por consulta.
-- **Ningún permiso nuevo.** FIN-3 es solo lectura: no hay Server Action,
-  así que no hay `requirePermission` ni `audit()` que poner. Cuando
-  ACC-1 esté en `main`, lo que toca es proteger la LECTURA con el
-  alcance de ACC-6, no esta pantalla.
+- **Ningún permiso nuevo.** FIN-3 no añade ninguna clave al catálogo:
+  las dos pantallas abren con `requirePermission("finanzas.factura.ver")`,
+  que ya existe en `@mc/core` y es el permiso raíz del módulo
+  (`ROOT_PERMISSION`). Tampoco hay `audit()`: no se escribe nada.
 
 ## 2. Un nombre que cambié por ti
 
