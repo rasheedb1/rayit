@@ -6,6 +6,8 @@ import {
   assertCampaignDates, InvalidDatesError, isIsoDate, brandBaselineFrom,
   handlesFromSocials, suggestionReasons, deliverableLabel, isDeliverable,
   brandAccountsFromSocials, defaultCampaignName, briefFromQuote, cutHoursLabel,
+  BRAND_INPUT_KINDS, BRAND_INPUT_KIND_LABEL_ES, MANUAL_BRAND_INPUT_KINDS, brandInputSemantics, isBrandInputKind,
+  isManualBrandInputKind, isMoneyBrandInputKind, brandCsvWindow, parseBrandCsvDay, reviewBrandCsvRows,
 } from '../src/campanas.ts';
 
 // ------------------------------------------------------------- estados
@@ -162,4 +164,81 @@ test('briefFromQuote: lo acordado en texto, en español, sin inventar lo que fal
   assert.equal(cutHoursLabel(47), '47 h');
   assert.equal(cutHoursLabel(48), '2 días');
   assert.equal(cutHoursLabel(60), '60 h', 'dos días y medio no se redondea');
+});
+
+// ------------------------------------------- lo que aporta la marca (CAM-4)
+
+test('brandInputSemantics: la fuente decide; el formulario es total, el CSV es diario', () => {
+  assert.equal(brandInputSemantics('brand_manual'), 'total');
+  assert.equal(brandInputSemantics('brand_csv'), 'daily');
+  assert.deepEqual([...MANUAL_BRAND_INPUT_KINDS], ['code_redemptions', 'orders', 'revenue', 'signups']);
+  assert.equal(isBrandInputKind('csv_sales'), true);
+  assert.equal(isBrandInputKind('postback'), false, 'postback es de fase 2: el producto no lo escribe');
+  assert.equal(isManualBrandInputKind('csv_sales'), false);
+  assert.equal(isMoneyBrandInputKind('revenue'), true);
+  assert.equal(isMoneyBrandInputKind('orders'), false);
+  for (const k of BRAND_INPUT_KINDS) assert.ok(BRAND_INPUT_KIND_LABEL_ES[k].length > 0, k);
+});
+
+test('brandCsvWindow: starts_on − 7 … ends_on + 60; sin fechas no hay ventana', () => {
+  assert.deepEqual(brandCsvWindow('2026-09-02', '2026-09-09'), { from: '2026-08-26', to: '2026-11-08' });
+  assert.equal(brandCsvWindow(null, '2026-09-09'), null);
+  assert.equal(brandCsvWindow('2026-09-02', null), null);
+  assert.throws(() => brandCsvWindow('2026-09-09', '2026-09-02'), InvalidDatesError);
+});
+
+test('parseBrandCsvDay: ISO o día/mes/año; nunca adivina mes/día', () => {
+  assert.equal(parseBrandCsvDay('2026-09-02'), '2026-09-02');
+  assert.equal(parseBrandCsvDay(' 02/09/2026 '), '2026-09-02');
+  assert.equal(parseBrandCsvDay('2-9-2026'), '2026-09-02');
+  assert.equal(parseBrandCsvDay('02.09.2026'), '2026-09-02');
+  assert.equal(parseBrandCsvDay('09/14/2026'), null, 'mes/día no se lee: el 14 no es un mes');
+  assert.equal(parseBrandCsvDay('31/02/2026'), null);
+  assert.equal(parseBrandCsvDay('2026-02-30'), null);
+  assert.equal(parseBrandCsvDay('el martes'), null);
+  assert.equal(parseBrandCsvDay(''), null);
+});
+
+const numero = (c: string) => {
+  const n = Number(c.replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(n) && c.trim() !== '' ? n : null;
+};
+
+test('reviewBrandCsvRows: acepta lo que cabe en la ventana y rechaza con motivo lo demás', () => {
+  const window = { from: '2026-08-26', to: '2026-11-08' };
+  const r = reviewBrandCsvRows(
+    [
+      { line: 2, day: '2026-09-02', sales: '1.250.000,50', orders: '12', redemptions: '3' },
+      { line: 3, day: '03/09/2026', sales: '980000', orders: '', redemptions: undefined },
+      { line: 4, day: '2026-08-01', sales: '10' },
+      { line: 5, day: 'ayer', sales: '10' },
+      { line: 6, day: '2026-09-02', sales: '999' },
+      { line: 7, day: '2026-09-04', sales: '' },
+      { line: 8, day: '2026-09-05', sales: 'x' },
+      { line: 9, day: '2026-09-06', sales: '-5' },
+      { line: 10, day: '2026-09-07', sales: '5', orders: '1,5' },
+      { line: 11, day: '2026-09-08', sales: '5', redemptions: '-1' },
+      { line: 12, day: '2026-11-08', sales: '0' },
+    ],
+    window,
+    numero,
+  );
+  assert.deepEqual(r.accepted, [
+    { line: 2, day: '2026-09-02', sales: '1250000.50', orders: 12, redemptions: 3 },
+    { line: 3, day: '2026-09-03', sales: '980000.00', orders: null, redemptions: null },
+    { line: 12, day: '2026-11-08', sales: '0.00', orders: null, redemptions: null },
+  ]);
+  assert.deepEqual(
+    r.rejected.map((x) => [x.line, x.reason, x.value]),
+    [
+      [4, 'fuera_de_rango', '2026-08-01'],
+      [5, 'fecha_ilegible', 'ayer'],
+      [6, 'dia_repetido', '2026-09-02'],
+      [7, 'ventas_vacia', ''],
+      [8, 'ventas_ilegible', 'x'],
+      [9, 'ventas_negativa', '-5'],
+      [10, 'pedidos_ilegible', '1,5'],
+      [11, 'canjes_ilegible', '-1'],
+    ],
+  );
 });

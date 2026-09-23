@@ -3,7 +3,7 @@
  * reglas puras que la ficha y las consultas comparten. Sin base, sin
  * React, sin fechas locales: todo trabaja sobre 'YYYY-MM-DD'.
  */
-import { addDays } from './facturacion.ts';
+import { addDays, type Decimal } from './facturacion.ts';
 
 // ---------------------------------------------------------------------
 // Estados
@@ -352,4 +352,218 @@ export function briefFromQuote(terms: AgreedTerms): string {
   else lines.push(`Exclusividad: ${terms.exclusivityDays} días${terms.exclusivityScope ? ` (${terms.exclusivityScope})` : ''}.`);
   lines.push(`Plazo de pago: ${terms.paymentTermsDays} días.`);
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+
+/** Los kind de campaign_brand_input (CHECK en 0008) que el producto escribe. postback es de fase 2. */
+export const BRAND_INPUT_KINDS = ['code_redemptions', 'orders', 'revenue', 'signups', 'csv_sales'] as const;
+export type BrandInputKind = (typeof BRAND_INPUT_KINDS)[number];
+
+/** Los que admite el formulario «Registrar aporte»: un total acumulado a una fecha. */
+export const MANUAL_BRAND_INPUT_KINDS = ['code_redemptions', 'orders', 'revenue', 'signups'] as const satisfies readonly BrandInputKind[];
+export type ManualBrandInputKind = (typeof MANUAL_BRAND_INPUT_KINDS)[number];
+
+/** Las fuentes que el producto escribe (CHECK en 0008). integration y postback son de fase 2. */
+export const BRAND_INPUT_SOURCES = ['brand_manual', 'brand_csv'] as const;
+export type BrandInputSource = (typeof BRAND_INPUT_SOURCES)[number];
+
+export const BRAND_INPUT_KIND_LABEL_ES: Record<BrandInputKind, string> = {
+  code_redemptions: 'Canjes del código',
+  orders: 'Pedidos',
+  revenue: 'Ingresos',
+  signups: 'Registros',
+  csv_sales: 'Ventas diarias',
+};
+
+export const BRAND_INPUT_SOURCE_LABEL_ES: Record<BrandInputSource, string> = {
+  brand_manual: 'Formulario',
+  brand_csv: 'CSV de ventas',
+};
+
+export function isBrandInputKind(value: string): value is BrandInputKind {
+  return (BRAND_INPUT_KINDS as readonly string[]).includes(value);
+}
+
+export function isManualBrandInputKind(value: string): value is ManualBrandInputKind {
+  return (MANUAL_BRAND_INPUT_KINDS as readonly string[]).includes(value);
+}
+
+export function isBrandInputSource(value: string): value is BrandInputSource {
+  return (BRAND_INPUT_SOURCES as readonly string[]).includes(value);
+}
+
+/**
+ * Cómo se lee una fila de campaign_brand_input:
+ *   - 'total': un acumulado a la fecha `day`. Manda el último por
+ *     received_at; no se suma. Es lo que reporta la marca por formulario
+ *     («318 canjes al 11 de septiembre»).
+ *   - 'daily': lo de ESE día. Se suma. Es lo que trae el CSV de ventas
+ *     diarias (ventas, y si vienen, pedidos y canjes del día).
+ * La semántica la decide la FUENTE, no el kind: un canje reportado por
+ * formulario es un total; el mismo kind en una fila del CSV es un día.
+ * CAM-5 lee con esta regla.
+ */
+export type BrandInputSemantics = 'total' | 'daily';
+
+export function brandInputSemantics(source: BrandInputSource): BrandInputSemantics {
+  return source === 'brand_csv' ? 'daily' : 'total';
+}
+
+/** Los kind que llevan moneda (value_num es dinero). Los demás son conteos. */
+export const MONEY_BRAND_INPUT_KINDS: readonly BrandInputKind[] = ['revenue', 'csv_sales'];
+
+export function isMoneyBrandInputKind(kind: BrandInputKind): boolean {
+  return MONEY_BRAND_INPUT_KINDS.includes(kind);
+}
+
+/**
+ * Ventana que admite el CSV de ventas: starts_on − 7 (la marca pudo abrir
+ * el código antes de publicar) … ends_on + 60 (las ventas atribuidas
+ * siguen semanas después). Fuera de ahí, la fila se rechaza con motivo.
+ */
+export const BRAND_CSV_WINDOW_DAYS = { before: 7, after: 60 } as const;
+
+export interface DateWindow {
+  /** 'YYYY-MM-DD', inclusive. */
+  from: string;
+  /** 'YYYY-MM-DD', inclusive. */
+  to: string;
+}
+
+/** null si la campaña no tiene las dos fechas: sin ventana no se importa. */
+export function brandCsvWindow(startsOn: string | null, endsOn: string | null): DateWindow | null {
+  if (startsOn === null || endsOn === null) return null;
+  assertCampaignDates(startsOn, endsOn);
+  return { from: addDays(startsOn, -BRAND_CSV_WINDOW_DAYS.before), to: addDays(endsOn, BRAND_CSV_WINDOW_DAYS.after) };
+}
+
+const DAY_DMY_RE = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/;
+
+/**
+ * Un día como lo escribe la marca: '2026-09-02', '02/09/2026',
+ * '2-9-2026' o '02.09.2026', siempre día/mes/año. No adivina mes/día:
+ * el formato del CSV lo fija el producto, no el archivo. Devuelve
+ * 'YYYY-MM-DD' o null si no es una fecha real.
+ */
+export function parseBrandCsvDay(cell: string): string | null {
+  const s = cell.trim();
+  if (isIsoDate(s)) return s;
+  const m = DAY_DMY_RE.exec(s);
+  if (!m) return null;
+  const iso = `${m[3]}-${m[2]!.padStart(2, '0')}-${m[1]!.padStart(2, '0')}`;
+  return isIsoDate(iso) ? iso : null;
+}
+
+/** Una fila del CSV ya leída: celdas en texto, tal como vinieron. */
+export interface BrandCsvRawRow {
+  /** Número de fila en el archivo (la cabecera es la 1), para el resumen. */
+  line: number;
+  day: string;
+  sales: string;
+  orders?: string;
+  redemptions?: string;
+}
+
+/** Una fila aceptada: el día y sus cifras, listas para escribir. */
+export interface BrandCsvRow {
+  line: number;
+  day: string;
+  /** Decimal con dos cifras ('1250000.00'). */
+  sales: Decimal;
+  orders: number | null;
+  redemptions: number | null;
+}
+
+/** Por qué se rechaza una fila. La frase la pone la pantalla (messages.ts). */
+export type BrandCsvRejectReason =
+  | 'fecha_ilegible'
+  | 'fuera_de_rango'
+  | 'dia_repetido'
+  | 'ventas_vacia'
+  | 'ventas_ilegible'
+  | 'ventas_negativa'
+  | 'pedidos_ilegible'
+  | 'canjes_ilegible';
+
+export interface BrandCsvRejectedRow {
+  line: number;
+  reason: BrandCsvRejectReason;
+  /** La celda que falló, tal cual, para que la persona la encuentre. */
+  value: string;
+}
+
+export interface BrandCsvReview {
+  accepted: BrandCsvRow[];
+  rejected: BrandCsvRejectedRow[];
+}
+
+/** Un número que ya pasó por la hoja de cálculo (aNumero en la web): finito o null si no se lee. */
+export type CellNumber = (cell: string) => number | null;
+
+/** Techo de un importe o conteo del CSV: por encima no es una venta, es un error de columna. */
+const MAX_CSV_VALUE = 1e12;
+
+function toCount(cell: string | undefined, toNumber: CellNumber): { ok: true; value: number | null } | { ok: false } {
+  if (cell === undefined || cell.trim() === '') return { ok: true, value: null };
+  const n = toNumber(cell);
+  if (n === null || !Number.isInteger(n) || n < 0 || n > MAX_CSV_VALUE) return { ok: false };
+  return { ok: true, value: n };
+}
+
+/**
+ * Revisa las filas del CSV contra la ventana de la campaña. Pura y sin
+ * frases: sale la lista de aceptadas (día ISO, ventas con dos decimales,
+ * pedidos y canjes enteros o null) y la de rechazadas con su motivo. Un
+ * día repetido en el archivo se rechaza la segunda vez; una fila sin
+ * ventas no vale aunque traiga pedidos (la columna es obligatoria).
+ * `toNumber` es quien entiende «1.234,50»: vive en la web (aNumero).
+ */
+export function reviewBrandCsvRows(rows: readonly BrandCsvRawRow[], window: DateWindow, toNumber: CellNumber): BrandCsvReview {
+  const accepted: BrandCsvRow[] = [];
+  const rejected: BrandCsvRejectedRow[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const day = parseBrandCsvDay(r.day);
+    if (day === null) {
+      rejected.push({ line: r.line, reason: 'fecha_ilegible', value: r.day });
+      continue;
+    }
+    if (day < window.from || day > window.to) {
+      rejected.push({ line: r.line, reason: 'fuera_de_rango', value: day });
+      continue;
+    }
+    if (seen.has(day)) {
+      rejected.push({ line: r.line, reason: 'dia_repetido', value: day });
+      continue;
+    }
+    if (r.sales.trim() === '') {
+      rejected.push({ line: r.line, reason: 'ventas_vacia', value: '' });
+      continue;
+    }
+    const sales = toNumber(r.sales);
+    if (sales === null || sales > MAX_CSV_VALUE) {
+      rejected.push({ line: r.line, reason: 'ventas_ilegible', value: r.sales });
+      continue;
+    }
+    if (sales < 0) {
+      rejected.push({ line: r.line, reason: 'ventas_negativa', value: r.sales });
+      continue;
+    }
+    const orders = toCount(r.orders, toNumber);
+    if (!orders.ok) {
+      rejected.push({ line: r.line, reason: 'pedidos_ilegible', value: r.orders ?? '' });
+      continue;
+    }
+    const redemptions = toCount(r.redemptions, toNumber);
+    if (!redemptions.ok) {
+      rejected.push({ line: r.line, reason: 'canjes_ilegible', value: r.redemptions ?? '' });
+      continue;
+    }
+    seen.add(day);
+    accepted.push({ line: r.line, day, sales: sales.toFixed(2), orders: orders.value, redemptions: redemptions.value });
+  }
+  return { accepted, rejected };
 }
