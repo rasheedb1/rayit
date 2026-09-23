@@ -56,7 +56,7 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     CREATE ROLE mc_migrator_embedded NOSUPERUSER;
     CREATE ROLE mc_worker NOLOGIN BYPASSRLS;
     CREATE ROLE ${APP_ROLE} NOLOGIN;
-    -- El rol de los enlaces públicos de Cotizar (migración 0023). Lo
+    -- El rol de los enlaces públicos de Cotizar (migración 0026). Lo
     -- crea el superusuario, como en Supabase lo hace supabase-admin.sh,
     -- porque el migrador no tiene CREATEROLE; la membresía es la que le
     -- deja pasarle el dueño de las funciones.

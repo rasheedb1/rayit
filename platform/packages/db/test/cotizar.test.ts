@@ -5,7 +5,7 @@
  *
  * Lo que de verdad se comprueba aquí y no se puede comprobar en
  * packages/core:
- *   - que el enlace público abra SIN workspace fijado (withCatalogs),
+ *   - que el enlace público abra SIN workspace fijado (withPublicShare),
  *     que es la situación real de /kit/<slug> y /cotizacion/<slug>;
  *   - que el snapshot esté congelado: cambiar las métricas después no
  *     cambia lo que la marca ve;
@@ -15,18 +15,34 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { calcularItem } from '@mc/core';
 import {
   acceptPublicQuote, acceptQuote, acceptQuoteAndCreateCampaign, buildMediaKitSnapshot, completePublicAcceptance,
   createMediaKit, createQuote, createCampaignForQuote, deleteQuoteDraft, getCurrentRateCard, getDefaultTaxRate,
   getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
   nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
   saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
-  QuoteNotDraft, QuoteNotEditable,
+  listAcceptanceNotices, markAcceptanceNoticeRead,
+  QuoteNotDraft, QuoteNotEditable, RangoDeTarifaInvalido, ValidezVencida, type TextosCotizar,
 } from '../src/queries/cotizar.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
 const FIRMA = { name: 'Ana Gómez', email: 'ana@cafealma.co' };
+
+/**
+ * Las frases que en la web salen de messages.ts. Aquí son marcas
+ * reconocibles: la prueba comprueba que la base guarda lo que la web
+ * compuso, y no una frase propia.
+ */
+const TEXTOS: TextosCotizar = {
+  actividadEnviada: ({ quoteNumber }) => `[enviada] ${quoteNumber}`,
+  actividadAceptada: ({ quoteNumber, signerName, via }) => `[aceptada:${via}] ${quoteNumber}${signerName ? ` ${signerName}` : ''}`,
+  avisoAceptada: ({ companyName, quoteNumber, signerName, campaignName }) => ({
+    title: `[aviso] ${companyName} ${quoteNumber}`,
+    body: `${signerName ?? '-'} · ${campaignName ?? 'pendiente'}`,
+  }),
+};
 
 let t: TestDb;
 let creadora = '';
@@ -110,6 +126,69 @@ describe('COT-1 · tarifario', () => {
     assert.equal(editado.priceLow, '4000000.00');
   });
 
+  test('con las views REALES del seed, el rango es del orden del mock y se mueve con el CPM', async () => {
+    const inputs = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getRateCardInputs(tx, creadora)))!;
+    // El Reel: la mediana de Instagram del seed y el CPM de cocina en CO.
+    const base = inputs.baselines.find((b) => b.platformId === 'instagram');
+    const cpm = inputs.benchmarks.find((b) => b.platform === 'instagram');
+    assert.ok(base && cpm, 'el seed trae línea base y CPM de Instagram');
+    const entrada = {
+      deliverable: 'reel', platformId: 'instagram' as const, cantidad: 1,
+      views: base.medianViews, viewsSource: 'baseline' as const,
+      cpmLow: cpm.cpmLow, cpmHigh: cpm.cpmHigh, cpmSource: cpm.source,
+      nicheSlug: cpm.nicheSlug, country: cpm.country, currency: inputs.currency,
+    };
+    const item = calcularItem(entrada);
+    // El mock pone el Reel en COP 4,8 – 7,2 millones (92 K views). Con
+    // las views del seed tiene que caer en el mismo orden: millones de
+    // pesos, no miles ni cientos de millones.
+    for (const v of [item.priceLow, item.priceHigh]) {
+      assert.ok(Number(v) >= 1_000_000 && Number(v) <= 20_000_000, `${v} está en el orden del mock`);
+    }
+    assert.ok(Number(item.priceLow) < Number(item.priceHigh));
+
+    // Cambiar el CPM cambia el rango y la explicación lo dice.
+    const otro = calcularItem({ ...entrada, cpmLow: '60000', cpmHigh: '90000', cpmSource: 'creador' });
+    assert.notEqual(otro.priceLow, item.priceLow);
+    assert.deepEqual(otro.pasos.find((p) => p.tipo === 'cpm'), {
+      tipo: 'cpm', cpmLow: '60000.00', cpmHigh: '90000.00', fuente: 'creador',
+      nicheSlug: cpm.nicheSlug, country: cpm.country, platformId: 'instagram',
+    });
+  });
+
+  test('un rango al revés, vacío o en cero no llega a la base', async () => {
+    const item = {
+      deliverable: 'reel', platformId: 'instagram' as const, labelEs: 'Reel',
+      priceLow: '9000000.00', priceHigh: '1000000.00', avgViews: null,
+      cpmLow: null, cpmHigh: null, adjustments: {}, overridden: true,
+    };
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, creadora));
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => saveRateCard(tx, { creatorId: creadora, currency: 'COP', basis: {}, items: [item] })),
+      (err: unknown) => err instanceof RangoDeTarifaInvalido && err.code === 'RangoInvertido' && err.deliverable === 'reel',
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        saveRateCard(tx, { creatorId: creadora, currency: 'COP', basis: {}, items: [{ ...item, priceLow: '0', priceHigh: '0' }] })),
+      (err: unknown) => err instanceof RangoDeTarifaInvalido && err.code === 'RangoEnCero',
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, creadora));
+    assert.equal(despues?.card.id, antes?.card.id, 'no se guardó ninguna versión a medias');
+
+    const primero = despues!.items[0]!;
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => overrideRateCardItemPrice(tx, primero.id, { priceLow: '9000000.00', priceHigh: '1.00' })),
+      RangoDeTarifaInvalido,
+    );
+
+    // Y si alguien escribe sin pasar por las consultas, el CHECK de 0026 lo para.
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        tx.query('UPDATE rate_card_item SET price_low = 9000000, price_high = 1 WHERE id = $1', [primero.id])),
+      /rate_card_item_price_range_check/,
+    );
+  });
+
   test('el tarifario del vecino no se ve desde aquí', async () => {
     const desdeElVecino = await t.db.withWorkspace(WS_VECINO, (tx) => getCurrentRateCard(tx, creadora));
     assert.equal(desdeElVecino, null);
@@ -134,7 +213,7 @@ describe('COT-2 · media kit', () => {
     const seguidoresAlCongelar = kit.snapshot.totales.followers;
 
     // La marca abre el enlace: SIN workspace fijado, como la ruta pública.
-    const abierto = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const abierto = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.equal(abierto.status, 'ok');
     assert.equal(abierto.status === 'ok' && abierto.viewCount, 1);
     assert.deepEqual(abierto.status === 'ok' ? abierto.snapshot.totales : null, kit.snapshot.totales);
@@ -149,7 +228,7 @@ describe('COT-2 · media kit', () => {
       );
     });
 
-    const otraVez = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const otraVez = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.equal(otraVez.status, 'ok');
     assert.equal(otraVez.status === 'ok' && otraVez.snapshot.totales.followers, seguidoresAlCongelar);
     assert.equal(otraVez.status === 'ok' && otraVez.viewCount, 2);
@@ -173,15 +252,15 @@ describe('COT-2 · media kit', () => {
 
   test('la vista previa del panel no cuenta como visita', async () => {
     const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora }));
-    const previa = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, null, { count: false }));
+    const previa = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, null, { count: false }));
     assert.equal(previa.status, 'ok');
     assert.equal(previa.status === 'ok' && previa.viewCount, 0);
-    const marca = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const marca = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.equal(marca.status === 'ok' && marca.viewCount, 1);
   });
 
   test('un slug que no existe es not_found, no un error', async () => {
-    const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, 'esto-no-existe'));
+    const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, 'esto-no-existe'));
     assert.deepEqual(r, { status: 'not_found' });
   });
 
@@ -190,14 +269,14 @@ describe('COT-2 · media kit', () => {
       createMediaKit(tx, { creatorId: creadora, password: 'cafe-con-leche' }));
     assert.equal(kit.hasPassword, true);
 
-    const pide = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const pide = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.equal(pide.status, 'password_required');
 
-    const mala = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'otra'));
+    const mala = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'otra'));
     assert.equal(mala.status, 'password_invalid');
     assert.equal(mala.status === 'password_invalid' && mala.attemptsLeft, 9);
 
-    const buena = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'cafe-con-leche'));
+    const buena = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'cafe-con-leche'));
     assert.equal(buena.status, 'ok');
 
     // Una contraseña fallida no cuenta como visita.
@@ -209,16 +288,16 @@ describe('COT-2 · media kit', () => {
       createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
     let ultimo = '';
     for (let i = 0; i < 10; i++) {
-      const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`));
+      const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`));
       ultimo = r.status;
     }
     assert.equal(ultimo, 'locked');
-    const conLaBuena = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    const conLaBuena = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
     assert.equal(conLaBuena.status, 'locked');
 
     // Pasado el bloqueo, la buena entra y la cuenta vuelve a cero.
     await t.admin(`UPDATE media_kit SET locked_until = now() - interval '1 second' WHERE id = '${kit.id}'`);
-    const despues = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    const despues = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
     assert.equal(despues.status, 'ok');
     const estado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ failed_attempts: number; locked_until: string | null }>(
@@ -231,14 +310,14 @@ describe('COT-2 · media kit', () => {
   test('un enlace vencido no entrega el snapshot', async () => {
     const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       createMediaKit(tx, { creatorId: creadora, expiresAt: new Date(Date.now() - 60_000).toISOString() }));
-    const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.equal(r.status, 'expired');
   });
 
   test('despublicar apaga el enlace sin borrar las cifras', async () => {
     const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora }));
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateMediaKitShare(tx, kit.id, { isPublic: false }));
-    const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug));
     assert.deepEqual(r, { status: 'not_found' });
 
     const sigueEnCasa = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listMediaKits(tx));
@@ -276,7 +355,22 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
   test('la numeración es COT-AAAA-NNN y no se repite dentro del workspace', async () => {
     const year = new Date().getUTCFullYear();
     const n = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx));
-    assert.match(n, new RegExp(`^COT-${year}-\\d{3}$`));
+    assert.match(n, new RegExp(`^COT-(${year - 1}|${year}|${year + 1})-\\d{3}$`));
+  });
+
+  test('el año de la numeración es el de la zona del workspace, no el de UTC', async () => {
+    // 1 de enero de 2027 a la 01:00 UTC es 31 de diciembre de 2026 a las
+    // 20:00 en Bogotá: esa cotización es de 2026.
+    const zona = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ timezone: string }>('SELECT timezone FROM workspace WHERE id = $1', [tx.workspaceId]);
+      return rows[0]!.timezone;
+    });
+    assert.equal(zona, 'America/Bogota');
+    const n = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2027-01-01T01:00:00Z') }));
+    assert.match(n, /^COT-2026-\d{3}$/);
+    // Cinco horas y media más tarde en UTC, en Bogotá ya es 2027.
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2027-01-01T05:30:00Z') }));
+    assert.equal(despues, 'COT-2027-001');
   });
 
   test('crear desde un deal, enviar, abrir el enlace, aceptar y crear la campaña', async () => {
@@ -311,11 +405,11 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     assert.equal(creada.items[1]!.total, '2100000.00');
 
     // Un borrador no abre el enlace.
-    const antesDeEnviar = await t.db.withCatalogs((tx) => readPublicQuote(tx, creada.slug));
+    const antesDeEnviar = await t.db.withPublicShare((tx) => readPublicQuote(tx, creada.slug));
     assert.deepEqual(antesDeEnviar, { status: 'not_found' });
 
     // Enviar: congela el documento y mueve el deal.
-    const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, creada.id));
+    const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, creada.id, TEXTOS));
     assert.equal(enviada.status, 'sent');
     assert.ok(enviada.sentAt);
 
@@ -326,7 +420,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     assert.equal(etapa, 'propuesta');
 
     // La marca abre el enlace, sin sesión: pasa a «vista».
-    const publica = await t.db.withCatalogs((tx) => readPublicQuote(tx, creada.slug));
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, creada.slug));
     assert.equal(publica.status, 'ok');
     if (publica.status === 'ok') {
       assert.equal(publica.quote.status, 'viewed');
@@ -337,11 +431,11 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     }
 
     // Sin nombre o con un correo que no es correo, no acepta.
-    const sinFirma = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, { name: ' ', email: 'x' }));
+    const sinFirma = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, creada.slug, { name: ' ', email: 'x' }));
     assert.deepEqual(sinFirma, { status: 'invalid_signer' });
 
     // Y acepta, con nombre y correo. El workspace lo dice la base.
-    const aceptada = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
+    const aceptada = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
     assert.equal(aceptada.status, 'ok');
     assert.equal(aceptada.status === 'ok' && aceptada.workspaceId, WORKSPACE_LAURA);
 
@@ -370,7 +464,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     // campaña la crea CAM-2 con la ventana acordada, y queda el aviso.
     const terminada = await t.db.withWorkspace(
       aceptada.status === 'ok' ? aceptada.workspaceId : '',
-      (tx) => completePublicAcceptance(tx, creada.id),
+      (tx) => completePublicAcceptance(tx, creada.id, TEXTOS),
     );
     assert.equal(terminada.pendingReason, null);
     const campana = terminada.campaign!;
@@ -382,7 +476,45 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     });
     assert.equal(aviso.length, 1);
     assert.equal(aviso[0]!.kind, 'quote_accepted');
-    assert.match(aviso[0]!.body_es, /Ana Gómez/);
+    // La frase es la que compuso la web (TEXTOS), con la campaña ya creada.
+    assert.equal(aviso[0]!.title_es, `[aviso] ${deal.companyName} ${creada.number}`);
+    assert.equal(aviso[0]!.body_es, `Ana Gómez · ${campana.campaignName}`);
+    // La campaña se llama como el negocio, no «marca · primer entregable».
+    assert.equal(campana.campaignName, deal.name);
+
+    // La historia del negocio: frases de la web, y en metadata el código
+    // y los parámetros para recomponerlas.
+    const actividades = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ subject: string; metadata: Record<string, unknown> }>(
+        'SELECT subject, metadata FROM activity WHERE deal_id = $1 ORDER BY occurred_at, subject', [deal.id]);
+      return rows;
+    });
+    const enviadaAct = actividades.find((a) => a.metadata.kind === 'quote_sent');
+    const aceptadaAct = actividades.find((a) => a.metadata.kind === 'quote_accepted');
+    assert.equal(enviadaAct?.subject, `[enviada] ${creada.number}`);
+    assert.equal(aceptadaAct?.subject, `[aceptada:enlace] ${creada.number} Ana Gómez`);
+    assert.deepEqual(
+      { ...aceptadaAct!.metadata },
+      { kind: 'quote_accepted', quoteId: creada.id, quoteNumber: creada.number, signerName: FIRMA.name, signerEmail: FIRMA.email, via: 'enlace' },
+    );
+
+    // El aviso sale en la lista de cotizaciones hasta que se da por visto.
+    const avisos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAcceptanceNotices(tx));
+    const esteAviso = avisos.find((a) => a.quoteId === creada.id);
+    assert.ok(esteAviso, 'el aviso se lista');
+    assert.equal(esteAviso.signerName, FIRMA.name);
+    assert.equal(esteAviso.campaignName, campana.campaignName);
+    assert.deepEqual(await t.db.withWorkspace(WS_VECINO, (tx) => listAcceptanceNotices(tx)), [], 'el vecino no lo ve');
+    await t.db.withWorkspace(WS_VECINO, (tx) => markAcceptanceNoticeRead(tx, esteAviso.id));
+    assert.ok(
+      (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAcceptanceNotices(tx))).some((a) => a.id === esteAviso.id),
+      'el vecino no lo puede dar por visto',
+    );
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markAcceptanceNoticeRead(tx, esteAviso.id));
+    assert.equal(
+      (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAcceptanceNotices(tx))).some((a) => a.id === esteAviso.id),
+      false,
+    );
     const otraVez = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createCampaignForQuote(tx, creada.id));
     assert.equal(otraVez.created, false, 'idempotente: no crea una segunda campaña');
     assert.equal(otraVez.campaignId, campana.campaignId);
@@ -400,9 +532,10 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     assert.equal(planeada.status, 'planned');
     assert.equal(planeada.starts_on, '2026-10-01');
 
-    // Aceptada dos veces: la segunda no es aceptable.
-    const otraAceptacion = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
-    assert.equal(otraAceptacion.status, 'not_acceptable');
+    // Aceptada dos veces (otra pestaña): la segunda no es aceptable, y
+    // dice por qué, para que la página no la llame «vencida».
+    const otraAceptacion = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
+    assert.deepEqual(otraAceptacion, { status: 'not_acceptable', quoteStatus: 'accepted' });
   });
 
   test('una enviada ya no se edita', async () => {
@@ -426,8 +559,8 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
         items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '3000000' }],
         campaignStartsOn: '2026-11-02', campaignEndsOn: '2026-11-20',
       });
-      await sendQuote(tx, creada.id);
-      return acceptQuoteAndCreateCampaign(tx, creada.id);
+      await sendQuote(tx, creada.id, TEXTOS);
+      return acceptQuoteAndCreateCampaign(tx, creada.id, TEXTOS);
     });
     assert.equal(r.quote.status, 'accepted');
     assert.equal(r.pendingReason, null);
@@ -451,8 +584,8 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
         dealId: deal.id, creatorId: creadora,
         items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
       });
-      await sendQuote(tx, creada.id);
-      return acceptQuoteAndCreateCampaign(tx, creada.id);
+      await sendQuote(tx, creada.id, TEXTOS);
+      return acceptQuoteAndCreateCampaign(tx, creada.id, TEXTOS);
     });
     assert.equal(r.quote.status, 'accepted', 'el SAVEPOINT deshizo solo la campaña');
     assert.equal(r.campaign, null);
@@ -470,8 +603,8 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
         items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '2000000' }],
         campaignStartsOn: null, campaignEndsOn: null,
       });
-      await sendQuote(tx, creada.id);
-      return acceptQuote(tx, creada.id);
+      await sendQuote(tx, creada.id, TEXTOS);
+      return acceptQuote(tx, creada.id, TEXTOS);
     });
     await assert.rejects(
       () => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createCampaignForQuote(tx, q.id)),
@@ -491,7 +624,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
   test('el permiso del enlace no sobrevive a la llamada', async () => {
     const [una] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['accepted'] }));
     assert.ok(una);
-    const fuga = await t.db.withCatalogs(async (tx) => {
+    const fuga = await t.db.withPublicShare(async (tx) => {
       await readPublicQuote(tx, una.slug);
       // Después de la función, app.public_share vuelve a estar vacío:
       // sin workspace ni enlace, esta transacción no ve ninguna fila.
@@ -502,9 +635,9 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
   });
 });
 
-// ------------------------------------------------ la cerradura (0023)
+// ------------------------------------------------ la cerradura (0026)
 
-describe('0023 · el enlace público corre con su propio rol', () => {
+describe('0026 · el enlace público corre con su propio rol', () => {
   test('la sonda: mc_app con el parámetro fijado a mano no ve ni escribe nada', async () => {
     const [una] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['accepted'] }));
     assert.ok(una);
@@ -596,33 +729,68 @@ describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
     assert.equal(etapas.some((e) => e.is_won || e.is_lost), false);
   });
 
-  test('rechazar deja su fecha', async () => {
+  test('una cotización con la validez ya vencida no se envía: nacería vencida', async () => {
+    const deal = await dealAbierto();
+    const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM], validUntil: '2020-01-31' }));
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, c.id, TEXTOS)), ValidezVencida);
+    const sigue = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, c.id));
+    assert.equal(sigue!.status, 'draft', 'se queda en borrador para corregir la fecha');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => deleteQuoteDraft(tx, c.id));
+  });
+
+  test('rechazar deja su fecha, y el enlace dice «rechazada», no «vencida»', async () => {
     const deal = await dealAbierto();
     const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
-      await sendQuote(tx, c.id);
+      await sendQuote(tx, c.id, TEXTOS);
       return rejectQuote(tx, c.id);
     });
     assert.equal(q.status, 'rejected');
     assert.ok(q.rejectedAt);
+    const aceptar = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
+    assert.deepEqual(aceptar, { status: 'not_acceptable', quoteStatus: 'rejected' });
+  });
+
+  test('aceptada sin ventana, la campaña se crea después con las fechas que se den', async () => {
+    const deal = await dealAbierto();
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
+      await sendQuote(tx, c.id, TEXTOS);
+      return (await acceptQuoteAndCreateCampaign(tx, c.id, TEXTOS)).quote;
+    });
+    assert.equal(q.campaignPending, true);
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createCampaignForQuote(tx, q.id, { startsOn: '2026-12-10', endsOn: '2026-12-01' })),
+      (err: unknown) => (err as { code?: string }).code === 'FinAntesDeInicio',
+    );
+    const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createCampaignForQuote(tx, q.id, { startsOn: '2026-12-01', endsOn: '2026-12-15' }));
+    assert.equal(c.created, true);
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
+    assert.equal(despues!.campaignPending, false);
+    assert.equal(despues!.campaignId, c.campaignId);
   });
 
   test('una enviada con la validez vencida sale vencida en el panel, sin que nadie abra el enlace', async () => {
     const deal = await dealAbierto();
-    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
-      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM], validUntil: '2020-01-31' });
-      return sendQuote(tx, c.id);
+    const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM], validUntil: '2099-12-31' });
+      return sendQuote(tx, c.id, TEXTOS);
     });
+    // Pasa el tiempo: la validez queda atrás sin que nadie abra el enlace.
+    await t.admin(`UPDATE quote SET valid_until = '2020-01-31' WHERE id = '${enviada.id}'`);
+    const q = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, enviada.id)))!;
     assert.equal(q.status, 'expired');
     assert.ok(q.expiredAt, 'con la fecha en que dejó de valer');
     const vencidas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['expired'] }));
     assert.ok(vencidas.some((x) => x.id === q.id));
-    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, q.id)), /vencida|expired/i);
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, q.id, TEXTOS)), /vencida|expired/i);
 
     // El enlace la persiste con su fecha, y ya no se puede aceptar.
-    const publica = await t.db.withCatalogs((tx) => readPublicQuote(tx, q.slug));
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, q.slug));
     assert.equal(publica.status === 'ok' && publica.quote.status, 'expired');
-    const aceptar = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
+    const aceptar = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
     assert.equal(aceptar.status, 'not_acceptable');
   });
 
@@ -652,7 +820,7 @@ describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
     const deal = await dealAbierto();
     const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
-      return sendQuote(tx, c.id);
+      return sendQuote(tx, c.id, TEXTOS);
     });
     await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => deleteQuoteDraft(tx, q.id)), QuoteNotDraft);
   });
@@ -661,11 +829,11 @@ describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
     const deal = await dealAbierto();
     const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
-      return sendQuote(tx, c.id);
+      return sendQuote(tx, c.id, TEXTOS);
     });
     const previa = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuotePreview(tx, q.id));
     assert.equal(previa?.status, 'sent');
-    const robot = await t.db.withCatalogs((tx) => readPublicQuote(tx, q.slug, { count: false }));
+    const robot = await t.db.withPublicShare((tx) => readPublicQuote(tx, q.slug, { count: false }));
     assert.equal(robot.status === 'ok' && robot.quote.status, 'sent');
     const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
     assert.equal(despues!.status, 'sent');
@@ -678,5 +846,59 @@ describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
     assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getDefaultTaxRate(tx)), '0');
     await t.admin(`UPDATE workspace SET settings = settings || '{"taxRate":"0.16"}' WHERE id = '${WS_VECINO}'`);
     assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getDefaultTaxRate(tx)), '0.16');
+  });
+});
+
+// ------------------------------- convivencia con el endurecimiento (0025)
+
+describe('0026 con los disparadores de referencias de 0025', () => {
+  test('aceptar desde el enlace sigue funcionando cuando cada clave ajena exige ver a su padre', async (ctx) => {
+    // 0025 (pase de endurecimiento, otra rama) crea assert_reference_visible()
+    // y un disparador por clave ajena hacia una tabla con RLS. Corre con los
+    // permisos de quien escribe: al aceptar, mc_public_share tiene que poder
+    // LEER la etapa del negocio (GRANT y política de 0026). Hasta que 0025
+    // llegue a esta rama, la prueba se salta sola.
+    const existe = await t.db.withCatalogs(async (tx) => {
+      const { rows } = await tx.query<{ f: string | null }>("SELECT to_regproc('public.assert_reference_visible')::text AS f");
+      return rows[0]!.f !== null;
+    });
+    if (!existe) {
+      ctx.skip('assert_reference_visible() no existe todavía (0025 no está en esta rama)');
+      return;
+    }
+    // En PGlite mc_app recibe sus privilegios DESPUÉS de migrar, así que el
+    // bucle de 0025 no encontró tablas; se crean aquí los de estas tres.
+    await t.admin(`
+      DO $$
+      DECLARE r record;
+      BEGIN
+        FOR r IN
+          SELECT hija.relname AS hija, a.attname AS col, padre.relname AS padre, pa.attname AS pcol
+            FROM pg_constraint k
+            JOIN pg_class hija   ON hija.oid = k.conrelid
+            JOIN pg_namespace n  ON n.oid = hija.relnamespace
+            JOIN pg_class padre  ON padre.oid = k.confrelid
+            JOIN pg_attribute a  ON a.attrelid = hija.oid AND a.attnum = k.conkey[1]
+            JOIN pg_attribute pa ON pa.attrelid = padre.oid AND pa.attnum = k.confkey[1]
+           WHERE n.nspname = 'public' AND k.contype = 'f' AND padre.relrowsecurity
+             AND hija.relname IN ('deal', 'deal_stage_history', 'quote')
+        LOOP
+          EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I', 'ref_visible_' || r.col, r.hija);
+          EXECUTE format(
+            'CREATE TRIGGER %I BEFORE INSERT OR UPDATE OF %I ON %I FOR EACH ROW WHEN (NEW.%I IS NOT NULL) '
+            'EXECUTE FUNCTION assert_reference_visible(%L, %L, %L)',
+            'ref_visible_' || r.col, r.col, r.hija, r.col, r.col, r.padre, r.pcol);
+        END LOOP;
+      END $$;`);
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))[0]!;
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, {
+        dealId: deal.id, creatorId: creadora,
+        items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
+      });
+      return sendQuote(tx, c.id, TEXTOS);
+    });
+    const r = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
+    assert.equal(r.status, 'ok');
   });
 });

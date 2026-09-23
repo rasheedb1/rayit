@@ -40,7 +40,8 @@ beforeEach(() => guardarTarifario.mockReset());
 describe("TarifarioTabla", () => {
   it("el rango del mock se lee entero, como texto y sin centavos, sin entrar a ningún campo", () => {
     pintar();
-    expect(screen.getByLabelText("Views por pieza · TikTok dedicado")).toHaveValue("84000");
+    // Fuera del campo, las views llevan el separador de miles como todo lo demás.
+    expect(screen.getByLabelText("Views por pieza · TikTok dedicado")).toHaveValue("84.000");
     expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000");
     // Sin «Editar», no hay campos de precio.
     expect(screen.queryByLabelText(/Rango sugerido bajo · TikTok dedicado/)).not.toBeInTheDocument();
@@ -58,13 +59,18 @@ describe("TarifarioTabla", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
     await waitFor(() => expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000"));
 
-    const boton = screen.getAllByRole("button", { name: "Cómo se calcula" })[0]!;
+    const boton = screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" });
     expect(boton).toHaveAttribute("aria-expanded", "false");
-    expect(boton).toHaveAttribute("aria-controls", "tarifario-explicacion");
     fireEvent.click(boton);
     const panel = await screen.findByRole("region", { name: /Cómo se calcula · TikTok dedicado/ });
-    expect(panel).toHaveAttribute("id", "tarifario-explicacion");
-    expect(screen.getByRole("button", { name: "Cerrar" })).toHaveAttribute("aria-expanded", "true");
+    const cerrar = screen.getByRole("button", { name: "Cerrar · TikTok dedicado" });
+    expect(cerrar).toHaveAttribute("aria-expanded", "true");
+    expect(cerrar).toHaveAttribute("aria-controls", "tarifario-explicacion-tiktok");
+    // El desglose se abre JUSTO DEBAJO de su fila, no al final de la página.
+    const filaDetalle = document.getElementById("tarifario-explicacion-tiktok")!;
+    expect(filaDetalle.tagName).toBe("TR");
+    expect(filaDetalle.contains(panel)).toBe(true);
+    expect(filaDetalle.previousElementSibling).toHaveTextContent("TikTok dedicado");
     expect(within(panel).getByRole("heading")).toHaveFocus();
     expect(within(panel).getByText(/Tus views medianas: 84.000/)).toBeInTheDocument();
     expect(within(panel).getByText(/CPM de referencia de cocina en CO/)).toBeInTheDocument();
@@ -86,7 +92,7 @@ describe("TarifarioTabla", () => {
     await waitFor(() => expect(rango("tiktok")).toBe("COP 5.040.000 – COP 7.560.000"));
     expect(screen.getByText("CPM propio")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Cómo se calcula" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" }));
     const panel = await screen.findByRole("region", { name: /Cómo se calcula · TikTok dedicado/ });
     expect(within(panel).getByText("Tu CPM: COP 60.000 – COP 90.000 (lo escribiste tú)")).toBeInTheDocument();
     expect(within(panel).getByText("Rango sugerido: COP 5.040.000 – COP 7.560.000")).toBeInTheDocument();
@@ -120,7 +126,7 @@ describe("TarifarioTabla", () => {
     pintar();
     const views = screen.getByLabelText("Views por pieza · Reel de Instagram");
     expect(views).toHaveValue("");
-    expect(views).toHaveAttribute("placeholder", "61000");
+    expect(views).toHaveAttribute("placeholder", "61.000");
     expect(screen.getByText("Tu mediana sale de solo 6 videos (61.000). Confírmala o escribe la tuya.")).toBeInTheDocument();
     expect(screen.queryByTestId("rango-reel")).not.toBeInTheDocument();
 
@@ -138,6 +144,54 @@ describe("TarifarioTabla", () => {
 
     fireEvent.change(screen.getByLabelText("Descuento del paquete (%)"), { target: { value: "12" } });
     await waitFor(() => expect(rango("p1")).toBe("COP 6.278.800 – COP 9.737.200"));
+  });
+
+  it("las views se escriben sin separadores y se leen con ellos al salir del campo", async () => {
+    pintar();
+    const views = screen.getByLabelText("Views por pieza · TikTok dedicado");
+    fireEvent.focus(views);
+    expect(views).toHaveValue("84000");
+    fireEvent.change(views, { target: { value: "115446" } });
+    expect(views).toHaveValue("115446");
+    fireEvent.blur(views);
+    expect(views).toHaveValue("115.446");
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.195.070 – COP 8.081.220"));
+  });
+
+  it("un precio a mano al revés se marca en la fila y no se puede cerrar ni guardar", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const bajo = screen.getByLabelText(/Rango sugerido bajo · TikTok dedicado/);
+    fireEvent.change(bajo, { target: { value: "9.000.000" } });
+    fireEvent.blur(bajo);
+
+    const aviso = await screen.findByText("El precio bajo no puede ser mayor que el alto.");
+    expect(aviso).toHaveAttribute("role", "alert");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(/Rango sugerido alto · TikTok dedicado/)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("group", { name: "Rango sugerido · TikTok dedicado" })).toHaveAccessibleDescription(
+      "El precio bajo no puede ser mayor que el alto.",
+    );
+    expect(screen.getByRole("button", { name: "Listo · TikTok dedicado" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+    expect(screen.queryByTestId("rango-tiktok")).not.toBeInTheDocument();
+
+    // Corregido, se cierra y se guarda.
+    fireEvent.change(bajo, { target: { value: "4.000.000" } });
+    fireEvent.blur(bajo);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Listo · TikTok dedicado" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeEnabled();
+  });
+
+  it("un extremo borrado se queda vacío e inválido, no se convierte en cero", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const alto = screen.getByLabelText(/Rango sugerido alto · TikTok dedicado/);
+    fireEvent.change(alto, { target: { value: "" } });
+    fireEvent.blur(alto);
+    expect(await screen.findByText("Escribe los dos extremos del rango.")).toBeInTheDocument();
+    expect(alto).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
   });
 
   it("guardar manda el estado completo al servidor, no los precios ya calculados", async () => {

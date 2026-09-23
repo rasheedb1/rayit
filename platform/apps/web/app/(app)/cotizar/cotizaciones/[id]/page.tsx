@@ -14,9 +14,11 @@ import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
 import { pillDeCotizacion } from "../../_lib/estado";
+import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 import { ResumenTotales } from "../../_ui/resumen-totales";
 import { EliminarBorrador } from "./eliminar";
 import { EnviarCotizacion } from "./enviar";
+import { VentanaCampana } from "./ventana";
 
 export const metadata: Metadata = { title: "Cotización" };
 export const dynamic = "force-dynamic";
@@ -178,8 +180,8 @@ export default async function CotizacionPage({
           </section>
 
           {esBorrador && (
-            <div>
-              <EliminarBorrador id={quote.id} />
+            <div className="max-w-md">
+              <EliminarBorrador id={quote.id} numero={quote.number} />
             </div>
           )}
         </div>
@@ -212,17 +214,35 @@ export default async function CotizacionPage({
           )}
 
           {sePuedeCerrar && (
-            <div className="flex flex-wrap gap-2">
-              <form action={aceptarCotizacion.bind(null, quote.id)}>
-                <Button type="submit" variant="primary">
-                  {t.aceptar}
-                </Button>
-              </form>
-              <form action={rechazarCotizacion.bind(null, quote.id)}>
-                <Button type="submit" variant="danger">
-                  {t.rechazar}
-                </Button>
-              </form>
+            // Aceptar y rechazar no se deshacen: cada uno pide su segundo
+            // paso, y el de rechazar vive aparte, bajo su propia pregunta,
+            // para que no quede pegado al de aceptar.
+            <div className="space-y-4 rounded-md border border-border p-4">
+              <ConfirmarAccion
+                action={aceptarCotizacion.bind(null, quote.id)}
+                label={t.aceptar}
+                variant="primary"
+                pregunta={t.confirmar.aceptar.pregunta(quote.number)}
+                consecuencia={
+                  quote.campaignStartsOn && quote.campaignEndsOn
+                    ? t.confirmar.aceptar.consecuencia
+                    : t.confirmar.aceptar.consecuenciaSinVentana
+                }
+                confirmar={t.confirmar.aceptar.boton}
+                cancelar={t.confirmar.cancelar}
+              />
+              <div className="border-t border-border pt-4">
+                <p className="mb-2 text-xs text-muted">{t.otraRespuesta}</p>
+                <ConfirmarAccion
+                  action={rechazarCotizacion.bind(null, quote.id)}
+                  label={t.rechazar}
+                  variant="danger"
+                  pregunta={t.confirmar.rechazar.pregunta(quote.number)}
+                  consecuencia={t.confirmar.rechazar.consecuencia}
+                  confirmar={t.confirmar.rechazar.boton}
+                  cancelar={t.confirmar.cancelar}
+                />
+              </div>
             </div>
           )}
 
@@ -244,12 +264,16 @@ export default async function CotizacionPage({
                   <p className="mt-1 text-xs leading-4 text-muted">
                     {quote.campaignStartsOn && quote.campaignEndsOn ? t.campanaPendienteAyuda : t.campanaSinFechas}
                   </p>
-                  {quote.campaignStartsOn && quote.campaignEndsOn && (
+                  {quote.campaignStartsOn && quote.campaignEndsOn ? (
                     <form className="mt-3" action={crearCampanaDeCotizacion.bind(null, quote.id)}>
                       <Button size="sm" variant="primary" type="submit">
                         {t.crearCampana}
                       </Button>
                     </form>
+                  ) : (
+                    // Aceptada sin ventana: una aceptada ya no se edita, así
+                    // que las fechas se dan aquí y CAM-2 crea la campaña.
+                    <VentanaCampana id={quote.id} />
                   )}
                 </>
               )}

@@ -1,56 +1,65 @@
 -- =====================================================================
--- 0023 · El enlace público corre con su propio rol (COT-2, COT-3, COT-4)
+-- 0026 · Enlaces públicos de Cotizar: media kit y cotización
+--        (COT-2, COT-3, COT-4)
 -- ---------------------------------------------------------------------
--- Qué estaba mal en 0022. Las seis políticas del enlace público no
--- llevaban cláusula TO, así que valían para CUALQUIER rol, también
--- mc_app. Cualquier transacción de la aplicación que hiciera
+-- Número: 0022 es de CON-10 (0022_public_profile_access, en main y
+-- aplicada), 0023 está reservada para ACC-3, 0024 y 0025 para el pase
+-- de endurecimiento de RLS y 0027/0028 para CIM-3. Esta migración nació
+-- en dos archivos (0022 + 0023 de las rondas 1 y 2 de Cotizar, ninguno
+-- aplicado); aquí van fundidos en el estado final, sin el paso
+-- intermedio de políticas abiertas que el segundo corregía.
 --
---     SELECT set_config('app.public_share', '<slug>', true);
+-- El problema: /kit/<slug> y /cotizacion/<slug> se abren SIN sesión y
+-- sin workspace, y media_kit, quote y deal llevan RLS con FORCE. Sin
+-- workspace fijado, current_workspace_id() es NULL y la página pública
+-- no ve nada; con un workspace fijado desde la URL, cualquiera leería
+-- el del vecino. Ninguna de las dos sirve.
 --
--- sin pasar por las funciones podía leer el deal entero y reescribir
--- cualquier columna de la cotización (total, status, public_snapshot) y
--- del deal (name, amount, stage_id), y también el snapshot «congelado»
--- del media kit. La revisión lo reprodujo en PGlite como mc_app. La
--- puerta (las funciones SECURITY DEFINER) estaba bien; la cerradura
--- (las políticas) estaba abierta para todos.
+-- La salida tiene tres piezas:
 --
--- Qué cambia:
+--   · La PUERTA: tres funciones SECURITY DEFINER, una por acción
+--     pública (abrir el media kit, abrir la cotización, aceptarla). La
+--     web las llama como mc_app desde una transacción sin workspace
+--     (lib/db · withPublicShare). Reciben el slug y devuelven jsonb ya
+--     recortado, nunca la fila entera.
+--   · El ROL: las funciones son de mc_public_share —NOLOGIN, sin
+--     BYPASSRLS, con privilegios de COLUMNA, los justos para sumar una
+--     visita, marcar vista, vencida o aceptada y pasar el deal a
+--     «Ganado» con su historial—. Aunque una función tuviera un error,
+--     no podría tocar el total de una cotización ni el nombre de un
+--     deal: Postgres se lo niega.
+--   · La CERRADURA: políticas `TO mc_public_share` que abren
+--     exactamente la fila cuyo slug está en `app.public_share`. Para
+--     mc_app ese parámetro no significa nada: fijarlo a mano en una
+--     transacción de la aplicación no abre ninguna fila (lo fija «la
+--     sonda» de packages/db/test/cotizar.test.ts).
 --
---   1 · Un rol nuevo, mc_public_share: NOLOGIN, sin BYPASSRLS, y con
---       privilegios de COLUMNA, los justos para las tres acciones
---       públicas (sumar una visita, marcar vista, vencida o aceptada,
---       pasar el deal a «Ganado» con su historial). Aunque una de estas
---       funciones tuviera un error, no podría tocar el total de una
---       cotización ni el nombre de un deal: Postgres se lo niega.
---   2 · Las funciones son de mc_public_share (ALTER … OWNER), así que
---       dentro de ellas current_user es mc_public_share y no el dueño
---       de las tablas.
---   3 · Las seis políticas se recrean con `TO mc_public_share`. Para
---       mc_app el parámetro app.public_share vuelve a no significar
---       nada: la prueba «la sonda» de packages/db/test/cotizar.test.ts
---       lo fija.
+-- Cada función fija `app.public_share` al entrar y lo RESTAURA al salir,
+-- también si algo lanza (bloque EXCEPTION), así que el permiso no
+-- sobrevive a la llamada. Sería más corto con la cláusula
+-- `SET "app.public_share" = ''` de CREATE FUNCTION, que Postgres
+-- restaura solo; no se puede: guardar un parámetro en proconfig pide
+-- privilegio sobre ese parámetro, y mc_migrator no es superusuario.
 --
--- Y, ya que las funciones se recrean, lo que la revisión pidió de ellas:
+-- El slug ES la credencial, como en el compartir de Notion o en una
+-- factura alojada de Stripe: 26 signos aleatorios (≈128 bits) que no se
+-- enumeran. La contraseña opcional se compara por su derivado (scrypt
+-- con sal por fila, 's1:<sal hex>:<scrypt hex>'); la contraseña en claro
+-- no llega nunca a la base.
 --
---   · public_media_kit y public_quote reciben p_count: la vista previa
---     del panel y los robots que desenrollan enlaces (WhatsApp, Slack)
---     no cuentan como visita ni marcan la cotización como vista.
---   · public_media_kit bloquea 15 minutos tras 10 contraseñas fallidas
---     (failed_attempts, locked_until) y compara los derivados por su
---     sha256, no con `<>` sobre el texto: la comparación ya no filtra
---     cuántos caracteres del derivado guardado coinciden.
---   · public_quote_accept pide nombre y correo de quien acepta, los
---     guarda (accepted_by_name, accepted_by_email) y devuelve el
---     workspace de la cotización —un dato de la base, no del
---     navegador— para que el servidor cree la campaña (COT-4).
---   · rejected_at y expired_at: el ciclo draft → sent → viewed →
---     accepted / rejected / expired queda con una fecha por estado.
---   · El vencimiento se cuenta en la zona del workspace (la que viaja en
---     public_snapshot), no en UTC.
---
--- 0022 no se toca: todavía no está aplicada en Supabase y el integrador
--- puede aplicarlas juntas. Esta migración deja el resultado final igual
--- que si 0022 hubiera nacido así.
+-- Bloqueo por contraseñas fallidas (compromiso aceptado): 10 fallos
+-- seguidos bloquean el media kit 15 minutos, cuente quien cuente. Lo
+-- puede disparar cualquiera que tenga el enlace, y durante esos 15
+-- minutos deja fuera también a la marca que sí sabe la contraseña. Se
+-- acepta porque (1) para intentarlo hay que tener el enlace, que solo
+-- circula entre quienes el creador eligió; (2) el peor caso es una
+-- espera de 15 minutos y la página dice hasta qué hora; (3) delante hay
+-- un límite por enlace e IP en el servidor (5 intentos por minuto,
+-- apps/web/app/(app)/cotizar/_lib/limite.ts), que frena a una sola
+-- máquina mucho antes de llegar a 10; y (4) la contraseña pide ahora 8
+-- signos como mínimo. Contar por IP dentro de la base pediría guardar
+-- IPs de visitantes anónimos, que es un dato personal que hoy no
+-- guardamos. Si aparece el abuso, el siguiente paso es ese.
 --
 -- REQUISITO EN SUPABASE (mc_migrator no tiene CREATEROLE, a propósito):
 --
@@ -61,8 +70,15 @@
 -- public también (el dueño de una función tiene que poder crearla en
 -- su esquema). En PGlite de pruebas, en `make db.check` y en el
 -- Postgres del CI la migración corre como superusuario o el embebido
--- crea el rol antes (packages/db/src/embedded.ts), así que se verifica
--- sin ese paso.
+-- crea el rol antes (packages/db/src/embedded.ts).
+--
+-- Convivencia con el pase de endurecimiento (0024/0025): 0025 pone un
+-- disparador assert_reference_visible en cada clave ajena hacia una
+-- tabla con RLS, que corre con los permisos de quien escribe. Al
+-- aceptar, mc_public_share cambia deal.stage_id e inserta en
+-- deal_stage_history, así que tiene que poder LEER la etapa (sección 3
+-- y la política pipeline_stage_public_share). Sin eso, la aceptación
+-- desde el enlace fallaría en cuanto 0025 esté aplicada.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -96,6 +112,24 @@ GRANT CREATE ON SCHEMA public TO mc_public_share;
 -- ---------------------------------------------------------------------
 -- 2 · Columnas nuevas
 -- ---------------------------------------------------------------------
+-- public_snapshot: lo que la marca vio cuando se le envió la
+-- cotización, congelado igual que el media kit. Sin esto la página
+-- pública tendría que leer quote_item, company y creator_profile en
+-- vivo —tres políticas más— y una edición posterior cambiaría un
+-- documento ya enviado.
+ALTER TABLE quote ADD COLUMN IF NOT EXISTS public_snapshot jsonb;
+
+-- La ventana de la campaña se acuerda ANTES de publicar, como el resto
+-- de lo acordado: es lo que COT-4 le pasa a createCampaignFromQuote()
+-- (CAM-2) al aceptar, sin volver a preguntar.
+ALTER TABLE quote ADD COLUMN IF NOT EXISTS campaign_starts_on date;
+ALTER TABLE quote ADD COLUMN IF NOT EXISTS campaign_ends_on   date;
+ALTER TABLE quote ADD CONSTRAINT quote_campaign_window_check
+  CHECK (campaign_starts_on IS NULL OR campaign_ends_on IS NULL OR campaign_ends_on >= campaign_starts_on);
+
+-- Cuántas veces se abrió el enlace. Mismo contador que el media kit.
+ALTER TABLE quote ADD COLUMN IF NOT EXISTS view_count int NOT NULL DEFAULT 0;
+
 -- La tasa con la que se calculó el impuesto, para que el detalle diga
 -- «Impuesto (19 %)» sin dividir tax entre la base en la pantalla.
 ALTER TABLE quote ADD COLUMN IF NOT EXISTS tax_rate numeric(7,6)
@@ -124,10 +158,27 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'payment_received','invoice_overdue','connection_error',
    'analysis_ready','report_sent','trend','quote_accepted'));
 
+-- Un rango del tarifario no puede estar al revés ni ser negativo: ese
+-- rango llega al media kit que ve la marca y al aviso «fuera de rango»
+-- de la cotización. La aplicación ya lo valida en las tres capas
+-- (pantalla, acción y saveRateCard); esto es la garantía de la base.
+-- NOT VALID: vale para toda fila nueva o editada sin reescribir la
+-- bitácora de tarifarios que ya existe (un tarifario viejo se consulta,
+-- no se toca).
+ALTER TABLE rate_card_item ADD CONSTRAINT rate_card_item_price_range_check
+  CHECK (
+    (price_low IS NULL OR price_low >= 0)
+    AND (price_high IS NULL OR price_high >= 0)
+    AND (price_low IS NULL OR price_high IS NULL OR price_low <= price_high)
+  ) NOT VALID;
+
+-- El enlace se busca por slug en cada visita.
+CREATE INDEX IF NOT EXISTS quote_slug_idx ON quote (slug);
+
 -- ---------------------------------------------------------------------
 -- 3 · Lo único que mc_public_share puede tocar
 -- ---------------------------------------------------------------------
-GRANT SELECT ON media_kit, quote, deal, deal_stage_history TO mc_public_share;
+GRANT SELECT ON media_kit, quote, deal, deal_stage_history, pipeline_stage TO mc_public_share;
 GRANT UPDATE (view_count, failed_attempts, locked_until) ON media_kit TO mc_public_share;
 GRANT UPDATE (status, viewed_at, accepted_at, expired_at, view_count,
               accepted_by_name, accepted_by_email) ON quote TO mc_public_share;
@@ -136,33 +187,37 @@ GRANT INSERT ON deal_stage_history TO mc_public_share;
 GRANT USAGE ON SEQUENCE deal_stage_history_id_seq TO mc_public_share;
 
 -- ---------------------------------------------------------------------
--- 4 · La cerradura, ahora con dueño
+-- 4 · La cerradura: políticas acotadas al slug compartido
 -- ---------------------------------------------------------------------
-DROP POLICY IF EXISTS media_kit_public_share       ON media_kit;
-DROP POLICY IF EXISTS media_kit_public_share_views ON media_kit;
-DROP POLICY IF EXISTS quote_public_share           ON quote;
-DROP POLICY IF EXISTS quote_public_share_state     ON quote;
-DROP POLICY IF EXISTS deal_public_share            ON deal;
-DROP POLICY IF EXISTS deal_public_share_won        ON deal;
+-- Se suman (OR) a las de aislamiento por workspace de 0010, pero solo
+-- para mc_public_share: el creador sigue viendo lo suyo por la suya.
 
 CREATE POLICY media_kit_public_share ON media_kit
   FOR SELECT TO mc_public_share
   USING (is_public AND slug = nullif(current_setting('app.public_share', true), ''));
 
+-- El contador de vistas y el de contraseñas fallidas. WITH CHECK con la
+-- misma condición: la fila no puede dejar de ser la compartida.
 CREATE POLICY media_kit_public_share_views ON media_kit
   FOR UPDATE TO mc_public_share
   USING (is_public AND slug = nullif(current_setting('app.public_share', true), ''))
   WITH CHECK (is_public AND slug = nullif(current_setting('app.public_share', true), ''));
 
+-- Un borrador no tiene enlace: el slug existe desde que se crea la
+-- cotización, pero hasta enviarla no abre nada.
 CREATE POLICY quote_public_share ON quote
   FOR SELECT TO mc_public_share
   USING (status <> 'draft' AND slug = nullif(current_setting('app.public_share', true), ''));
 
+-- Marcar vista, vencida o aceptada.
 CREATE POLICY quote_public_share_state ON quote
   FOR UPDATE TO mc_public_share
   USING (status <> 'draft' AND slug = nullif(current_setting('app.public_share', true), ''))
   WITH CHECK (status <> 'draft' AND slug = nullif(current_setting('app.public_share', true), ''));
 
+-- El deal de esa cotización, para pasarlo a «Ganado» al aceptar. La
+-- subconsulta corre bajo la RLS de mc_public_share, así que la política
+-- de arriba es la que decide qué cotización cuenta.
 CREATE POLICY deal_public_share ON deal
   FOR SELECT TO mc_public_share
   USING (EXISTS (SELECT 1 FROM quote q
@@ -178,19 +233,22 @@ CREATE POLICY deal_public_share_won ON deal
                       WHERE q.deal_id = deal.id
                         AND q.slug = nullif(current_setting('app.public_share', true), '')));
 
--- deal_stage_history sigue heredando de deal por la política de 0018,
--- que no tiene TO: su EXISTS sobre deal corre como mc_public_share y
--- es deal_public_share la que decide.
+-- La etapa en la que está ese deal, si es propia del workspace (las
+-- globales ya las deja ver pipeline_stage_read de 0020). Hace falta
+-- para el disparador de referencias de 0025 (ver la cabecera).
+CREATE POLICY pipeline_stage_public_share ON pipeline_stage
+  FOR SELECT TO mc_public_share
+  USING (EXISTS (SELECT 1 FROM deal d
+                 WHERE d.stage_id = pipeline_stage.id
+                   AND d.workspace_id = pipeline_stage.workspace_id));
+
+-- deal_stage_history hereda de deal por la política de 0018, que no
+-- tiene TO: su EXISTS sobre deal corre como mc_public_share y es
+-- deal_public_share la que decide.
 
 -- ---------------------------------------------------------------------
--- 5 · La puerta, recreada
+-- 5 · La puerta
 -- ---------------------------------------------------------------------
-DROP FUNCTION IF EXISTS public_media_kit(text, text);
-DROP FUNCTION IF EXISTS public_media_kit_impl(text, text);
-DROP FUNCTION IF EXISTS public_quote(text);
-DROP FUNCTION IF EXISTS public_quote_impl(text);
-DROP FUNCTION IF EXISTS public_quote_accept(text);
-DROP FUNCTION IF EXISTS public_quote_accept_impl(text);
 
 -- El día de hoy en una zona, sin que un nombre de zona raro tire la
 -- función: si no se reconoce, UTC.

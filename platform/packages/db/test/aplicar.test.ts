@@ -15,6 +15,22 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 
+/**
+ * Los números que otra rama ya tomó y esta todavía no tiene. Un hueco en
+ * db/migrations solo es aceptable si está aquí, con quién lo tiene (es
+ * la misma tabla que lleva rasheed/CIM-3-auth-workspaces: al integrar,
+ * las entradas de las migraciones que llegan sobran y se borran).
+ */
+const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
+  '0022': 'main: 0022_public_profile_access.sql (CON-10), ya aplicada en Supabase',
+  '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  '0024': 'rasheed/endurecer-db: 0024_aislamiento_por_defecto.sql',
+  '0025': 'rasheed/endurecer-db: 0025_referencias_visibles.sql',
+  '0026': 'rasheed/COT-1-cotizar: 0026_public_share.sql (enlaces públicos de Cotizar)',
+  '0027': 'rasheed/CIM-3-auth-workspaces: 0027_sesion_correo_verificado.sql',
+  '0028': 'rasheed/CIM-3-auth-workspaces: 0028_membership_alta_propia.sql',
+};
+
 let dir = '';
 
 before(async () => {
@@ -54,7 +70,17 @@ describe('listSql', () => {
     const files = await listSql(MIGRATIONS_DIR);
     assert.ok(files.length >= 18, `hay ${files.length} migraciones; se esperaban al menos 18`);
     // Y son consecutivas desde 0001: un hueco sería una migración que
-    // alguien borró o renumeró después de aplicarla.
-    files.forEach((f, i) => assert.equal(f.slice(0, 4), String(i + 1).padStart(4, '0'), `hueco antes de ${f}`));
+    // alguien borró o renumeró después de aplicarla. Salvo los números
+    // que otra rama ya tomó y esta todavía no tiene: esos se declaran,
+    // con quién los tiene, para que el hueco sea una decisión y no un
+    // olvido.
+    const numeros = new Set(files.map((f) => Number(f.slice(0, 4))));
+    const ultimo = Math.max(...numeros);
+    const huecos: string[] = [];
+    for (let n = 1; n <= ultimo; n++) {
+      const nn = String(n).padStart(4, '0');
+      if (!numeros.has(n) && !(nn in NUMEROS_DE_OTRAS_RAMAS)) huecos.push(nn);
+    }
+    assert.deepEqual(huecos, [], `huecos sin declarar en db/migrations: ${huecos.join(', ')}`);
   });
 });

@@ -2,19 +2,21 @@
  * La fórmula del tarifario (COT-1) y los totales de una cotización
  * (COT-3). Pura: sin base, sin red, sin reloj.
  *
- * Los números del mock que se comprueban aquí son los de la creadora
- * del seed: 84.000 views de mediana en TikTok y el CPM de cocina en
- * Colombia (45.000 – 70.000 COP, db/seed/0001_catalog.sql).
+ * Las entradas son de ejemplo, escritas a mano: 84.000 views por pieza
+ * y el CPM de cocina en Colombia del seed (45.000 – 70.000 COP,
+ * db/seed/0001_catalog.sql). Lo que sale con las views REALES del seed
+ * (la mediana que calcula creator_baseline) lo comprueba
+ * packages/db/test/cotizar.test.ts, que sí tiene base.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calcularItem, calcularPaquete, calcularTarifario, calcularTotalesCotizacion, precioPorViews, redondearAUnidad,
-  sumarPct, unidadDePrecio, MODIFICADORES_POR_DEFECTO, TarifaError, type EntradaTarifa,
+  sumarPct, unidadDePrecio, validarRangoPrecio, MODIFICADORES_POR_DEFECTO, TarifaError, type EntradaTarifa,
 } from '../src/tarifas.ts';
 
-/** TikTok dedicado de la creadora del seed, sin modificadores. */
-function tiktokDelSeed(over: Partial<EntradaTarifa> = {}): EntradaTarifa {
+/** Un TikTok dedicado de ejemplo (84.000 views a mano, CPM de cocina del seed), sin modificadores. */
+function tiktokDeEjemplo(over: Partial<EntradaTarifa> = {}): EntradaTarifa {
   return {
     deliverable: 'tiktok',
     platformId: 'tiktok',
@@ -47,16 +49,16 @@ test('views ÷ 1000 × CPM, al centavo y mitad hacia arriba', () => {
   assert.throws(() => precioPorViews('45000', -1), TarifaError);
 });
 
-test('con las views del seed salen los rangos del mock', () => {
-  const item = calcularItem(tiktokDelSeed());
+test('con 84.000 views y el CPM de cocina del seed (45.000 – 70.000) sale el rango de la fórmula', () => {
+  const item = calcularItem(tiktokDeEjemplo());
   assert.equal(item.priceLow, '3780000.00');
   assert.equal(item.priceHigh, '5880000.00');
   assert.equal(item.modificadorTotalPct, '0');
 });
 
 test('cambiar el CPM cambia el rango, y la explicación lo dice', () => {
-  const antes = calcularItem(tiktokDelSeed());
-  const despues = calcularItem(tiktokDelSeed({ cpmLow: '60000', cpmHigh: '90000' }));
+  const antes = calcularItem(tiktokDeEjemplo());
+  const despues = calcularItem(tiktokDeEjemplo({ cpmLow: '60000', cpmHigh: '90000' }));
 
   assert.equal(despues.priceLow, '5040000.00');
   assert.equal(despues.priceHigh, '7560000.00');
@@ -72,16 +74,16 @@ test('cambiar el CPM cambia el rango, y la explicación lo dice', () => {
 });
 
 test('la explicación lleva el paso de views con su procedencia', () => {
-  const baseline = calcularItem(tiktokDelSeed()).pasos[0];
+  const baseline = calcularItem(tiktokDeEjemplo()).pasos[0];
   assert.deepEqual(baseline, { tipo: 'views', views: 84_000, cantidad: 1, fuente: 'baseline', muestra: 20, corteHoras: 168 });
 
   // A mano: sin muestra ni corte, porque no los hay.
-  const manual = calcularItem(tiktokDelSeed({ viewsSource: 'manual', viewsSample: undefined, viewsCutHours: undefined })).pasos[0];
+  const manual = calcularItem(tiktokDeEjemplo({ viewsSource: 'manual', viewsSample: undefined, viewsCutHours: undefined })).pasos[0];
   assert.deepEqual(manual, { tipo: 'views', views: 84_000, cantidad: 1, fuente: 'manual' });
 });
 
 test('la cantidad multiplica al final y deja su propio paso', () => {
-  const historias = calcularItem(tiktokDelSeed({
+  const historias = calcularItem(tiktokDeEjemplo({
     deliverable: 'historias', platformId: 'instagram', cantidad: 3, views: 12_000,
     cpmLow: '55000', cpmHigh: '85000',
   }));
@@ -93,15 +95,15 @@ test('la cantidad multiplica al final y deja su propio paso', () => {
 });
 
 test('un solo entregable no imprime el paso de cantidad', () => {
-  assert.equal(calcularItem(tiktokDelSeed()).pasos.some((p) => p.tipo === 'cantidad'), false);
+  assert.equal(calcularItem(tiktokDeEjemplo()).pasos.some((p) => p.tipo === 'cantidad'), false);
 });
 
 test('los modificadores se suman sobre la misma base: el orden no cambia el total', () => {
   const derechos = { id: 'derechos_uso_30d', pct: '0.35' };
   const exclusividad = { id: 'exclusividad_30d', pct: '0.50' };
 
-  const a = calcularItem(tiktokDelSeed({ modificadores: [derechos, exclusividad] }));
-  const b = calcularItem(tiktokDelSeed({ modificadores: [exclusividad, derechos] }));
+  const a = calcularItem(tiktokDeEjemplo({ modificadores: [derechos, exclusividad] }));
+  const b = calcularItem(tiktokDeEjemplo({ modificadores: [exclusividad, derechos] }));
 
   // 3.780.000 × (1 + 0,85) = 6.993.000
   assert.equal(a.priceLow, '6993000.00');
@@ -118,7 +120,7 @@ test('los modificadores se suman sobre la misma base: el orden no cambia el tota
 });
 
 test('el descuento del paquete se resta al final, sobre el total ya modificado', () => {
-  const paquete = calcularItem(tiktokDelSeed({
+  const paquete = calcularItem(tiktokDeEjemplo({
     deliverable: 'paquete',
     modificadores: [{ id: 'derechos_uso_30d', pct: '0.35' }],
     descuentoPct: '0.10',
@@ -129,8 +131,8 @@ test('el descuento del paquete se resta al final, sobre el total ya modificado',
 });
 
 test('un rango de CPM invertido es un error, no un precio al revés', () => {
-  assert.throws(() => calcularItem(tiktokDelSeed({ cpmLow: '70000', cpmHigh: '45000' })), /RangoCpmInvertido|no puede ser mayor/);
-  assert.throws(() => calcularItem(tiktokDelSeed({ cantidad: 0 })), TarifaError);
+  assert.throws(() => calcularItem(tiktokDeEjemplo({ cpmLow: '70000', cpmHigh: '45000' })), /RangoCpmInvertido|no puede ser mayor/);
+  assert.throws(() => calcularItem(tiktokDeEjemplo({ cantidad: 0 })), TarifaError);
 });
 
 test('sumarPct trabaja en fracciones, no en porcentajes', () => {
@@ -149,8 +151,8 @@ test('el catálogo de modificadores tiene ids únicos y fracciones válidas', ()
 
 test('calcularTarifario respeta el orden de entrada', () => {
   const items = calcularTarifario([
-    tiktokDelSeed(),
-    tiktokDelSeed({ deliverable: 'reel', platformId: 'instagram', views: 61_000, cpmLow: '55000', cpmHigh: '85000' }),
+    tiktokDeEjemplo(),
+    tiktokDeEjemplo({ deliverable: 'reel', platformId: 'instagram', views: 61_000, cpmLow: '55000', cpmHigh: '85000' }),
   ]);
   assert.deepEqual(items.map((i) => i.deliverable), ['tiktok', 'reel']);
   assert.equal(items[1]!.priceLow, '3355000.00');
@@ -202,7 +204,7 @@ test('en pesos el tarifario no lleva centavos; en dólares sí', () => {
 
   // 1.001 views × 45.000 da 45.045 exactos, pero con un modificador de
   // +35 % el aporte sería 15.765,75: en COP sube al peso.
-  const cop = calcularItem(tiktokDelSeed({
+  const cop = calcularItem(tiktokDeEjemplo({
     views: 1_001, currency: 'COP', modificadores: [{ id: 'derechos_uso_30d', pct: '0.35' }],
   }));
   const aporte = cop.pasos.find((p) => p.tipo === 'modificador');
@@ -210,7 +212,7 @@ test('en pesos el tarifario no lleva centavos; en dólares sí', () => {
   assert.match(cop.priceLow, /\.00$/);
   assert.match(cop.priceHigh, /\.00$/);
 
-  const usd = calcularItem(tiktokDelSeed({
+  const usd = calcularItem(tiktokDeEjemplo({
     views: 1_001, cpmLow: '10.37', cpmHigh: '12.41', currency: 'USD',
   }));
   assert.equal(usd.priceLow, '10.38');
@@ -219,7 +221,7 @@ test('en pesos el tarifario no lleva centavos; en dólares sí', () => {
 // --------------------------------------------------------------- paquetes
 
 test('un paquete suma sus entregables y descuenta al final', () => {
-  const tiktok = calcularItem(tiktokDelSeed({ currency: 'COP' }));
+  const tiktok = calcularItem(tiktokDeEjemplo({ currency: 'COP' }));
   const paquete = calcularPaquete({
     componentes: [
       { deliverable: 'tiktok', cantidad: 1, priceLow: tiktok.priceLow, priceHigh: tiktok.priceHigh },
@@ -254,4 +256,23 @@ test('en pesos el impuesto de la cotización tampoco lleva centavos', () => {
   assert.equal(usd.tax, '987.06');
   // Sin moneda, como hasta ahora: al centavo.
   assert.equal(calcularTotalesCotizacion({ items: [{ quantity: 1, unitPrice: '5195070' }], taxRate: '0.19' }).tax, '987063.30');
+});
+
+// ------------------------------------------------ el rango escrito a mano
+
+test('un rango a mano vale si está en orden y el alto no es cero', () => {
+  assert.equal(validarRangoPrecio('1000000.00', '2000000.00'), null);
+  assert.equal(validarRangoPrecio('1500000', '1500000'), null, 'un precio fijo (bajo = alto) es un rango válido');
+  assert.equal(validarRangoPrecio('0', '500000.50'), null, 'el bajo puede ser cero');
+});
+
+test('un rango a mano al revés, vacío, en cero o que no es un número no vale', () => {
+  assert.equal(validarRangoPrecio('9000000.00', '1000000.00'), 'invertido');
+  assert.equal(validarRangoPrecio('', '1000000.00'), 'vacio');
+  assert.equal(validarRangoPrecio('1000000.00', '  '), 'vacio');
+  assert.equal(validarRangoPrecio(null, undefined), 'vacio');
+  assert.equal(validarRangoPrecio('0', '0.00'), 'cero');
+  assert.equal(validarRangoPrecio('-5', '10'), 'no_numero');
+  assert.equal(validarRangoPrecio('1.000.000', '2000000'), 'no_numero');
+  assert.equal(validarRangoPrecio('1.234', '2000000'), 'no_numero', 'más de dos decimales no es un precio');
 });

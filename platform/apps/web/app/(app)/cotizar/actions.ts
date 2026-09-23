@@ -3,11 +3,11 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { calcularItem, finDelDiaEnZona, pctToRate, TarifaError } from "@mc/core";
+import { calcularItem, finDelDiaEnZona, pctToRate, TarifaError, validarRangoPrecio } from "@mc/core";
 import {
   acceptQuoteAndCreateCampaign, createCampaignForQuote, createMediaKit, createQuote, deleteQuoteDraft,
-  getRateCardInputs, rejectQuote, saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, CotizarError,
-  type QuoteItemInput, type SaveRateCardItem,
+  getRateCardInputs, markAcceptanceNoticeRead, rejectQuote, saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft,
+  CotizarError, type QuoteItemInput, type SaveRateCardItem,
 } from "@mc/db/queries/cotizar";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
@@ -15,6 +15,7 @@ import { firstErrors, UUID_RE, type ActionState } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, nombreEntregable } from "./messages";
 import { construirFilas, construirPaquetes, precioDe, type BasisTarifario } from "./_lib/tarifario";
+import { TEXTOS_COTIZAR } from "./_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
@@ -53,7 +54,13 @@ function mensajeDe(err: unknown): string {
 // COT-1 · Guardar el tarifario
 // ---------------------------------------------------------------------
 
-const rangoSchema = z.object({ low: z.string().regex(DECIMAL_RE), high: z.string().regex(DECIMAL_RE) });
+/**
+ * Un rango escrito a mano llega como texto (puede venir vacío mientras
+ * se edita). Aquí solo se acota su forma; si VALE lo decide
+ * validarRangoPrecio de @mc/core, la misma regla de la tabla y de
+ * saveRateCard, y el error vuelve por fila (clave `precio.<entregable>`).
+ */
+const rangoSchema = z.object({ low: z.string().max(20), high: z.string().max(20) });
 const rangoCpmSchema = z.object({
   low: z.string().regex(DECIMAL_RE).or(z.literal("")),
   high: z.string().regex(DECIMAL_RE).or(z.literal("")),
@@ -95,6 +102,18 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
     basis = basisSchema.parse(JSON.parse(String(formData.get("estado") ?? "{}")));
   } catch {
     return { message: E.tarifarioIlegible };
+  }
+
+  // Un precio a mano al revés, vacío o en cero no se guarda: el rango
+  // llega al media kit que ve la marca y al aviso «fuera de rango» de la
+  // cotización. Se devuelve por fila para que la tabla lo marque.
+  const erroresRango: Record<string, string> = {};
+  for (const [id, precio] of Object.entries(basis.precios)) {
+    const motivo = validarRangoPrecio(precio.low, precio.high);
+    if (motivo) erroresRango[`precio.${id}`] = MESSAGES.tarifario.rangoErrores[motivo] ?? E.generico!;
+  }
+  if (Object.keys(erroresRango).length > 0) {
+    return { errors: erroresRango, message: MESSAGES.tarifario.rangoRevisar };
   }
 
   try {
@@ -159,7 +178,9 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
 
 const mediaKitSchema = z.object({
   creatorId: z.string().regex(UUID_RE, E.CreatorNotFound),
-  password: z.string().max(120),
+  // Opcional; si se escribe, ocho signos como mínimo: el enlace ya es un
+  // secreto largo, pero una contraseña de un carácter no protege nada.
+  password: z.union([z.literal(""), z.string().min(8, V.passwordCorta).max(120)]),
   expiresOn: z.string().regex(ISO_DATE_RE, V.fecha).or(z.literal("")),
 });
 
@@ -333,7 +354,7 @@ export type EnviarResultado = { status: "ok"; path: string } | { status: "error"
 export async function enviarCotizacion(id: string): Promise<EnviarResultado> {
   if (!UUID_RE.test(id)) return { status: "error", message: E.QuoteNotFound! };
   try {
-    const quote = await withWorkspace((tx) => sendQuote(tx, id));
+    const quote = await withWorkspace((tx) => sendQuote(tx, id, TEXTOS_COTIZAR));
     revalidatePath("/cotizar/cotizaciones");
     revalidatePath(`/cotizar/cotizaciones/${id}`);
     return { status: "ok", path: `/cotizacion/${quote.slug}` };
@@ -348,7 +369,7 @@ export async function enviarCotizacion(id: string): Promise<EnviarResultado> {
  * crearla (faltan fechas), la aceptación queda y el detalle lo dice.
  */
 export async function aceptarCotizacion(id: string): Promise<void> {
-  await transicion(id, (tx) => acceptQuoteAndCreateCampaign(tx, id));
+  await transicion(id, (tx) => acceptQuoteAndCreateCampaign(tx, id, TEXTOS_COTIZAR));
 }
 
 export async function rechazarCotizacion(id: string): Promise<void> {
@@ -362,6 +383,49 @@ export async function rechazarCotizacion(id: string): Promise<void> {
  */
 export async function crearCampanaDeCotizacion(id: string): Promise<void> {
   await transicion(id, (tx) => createCampaignForQuote(tx, id));
+}
+
+const ventanaSchema = z.object({
+  startsOn: z.string().regex(ISO_DATE_RE, V.fechaObligatoria),
+  endsOn: z.string().regex(ISO_DATE_RE, V.fechaObligatoria),
+});
+
+/**
+ * COT-4 · Una cotización que se aceptó SIN la ventana de la campaña: el
+ * creador da aquí Desde y Hasta, y CAM-2 crea la campaña con ellas. Sin
+ * esto quedaba «pendiente» para siempre, porque una aceptada ya no se
+ * edita. Se usa con bind(null, id) y useActionState.
+ */
+export async function crearCampanaConVentana(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
+  const parsed = ventanaSchema.safeParse({
+    startsOn: String(formData.get("startsOn") ?? ""),
+    endsOn: String(formData.get("endsOn") ?? ""),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const { startsOn, endsOn } = parsed.data;
+  if (endsOn < startsOn) return { errors: { endsOn: V.finAntesDeInicio } };
+  try {
+    await withWorkspace((tx) => createCampaignForQuote(tx, id, { startsOn, endsOn }));
+  } catch (err) {
+    return { message: mensajeDe(err) };
+  }
+  revalidatePath("/cotizar/cotizaciones");
+  revalidatePath(`/cotizar/cotizaciones/${id}`);
+  redirect(`/cotizar/cotizaciones/${id}`);
+}
+
+/** «Entendido» en un aviso de aceptación de la lista. Se usa con bind. */
+export async function marcarAvisoVisto(id: string): Promise<void> {
+  if (UUID_RE.test(id)) {
+    try {
+      await withWorkspace((tx) => markAcceptanceNoticeRead(tx, id));
+    } catch (err) {
+      console.error("[cotizar] no se pudo marcar el aviso", err);
+    }
+  }
+  revalidatePath("/cotizar/cotizaciones");
+  redirect("/cotizar/cotizaciones");
 }
 
 /** Borra un borrador y vuelve a la lista. */

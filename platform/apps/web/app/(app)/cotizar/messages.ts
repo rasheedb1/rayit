@@ -38,6 +38,8 @@ export const MESSAGES = {
       cpm: "CPM de referencia",
       rango: "Rango sugerido",
       estado: "Origen",
+      /** La columna de los botones. Solo la oyen los lectores de pantalla. */
+      acciones: "Acciones",
     },
     piezas: (n: string) => `${n} piezas`,
     rangoBajo: "bajo",
@@ -59,6 +61,14 @@ export const MESSAGES = {
       sin_cpm: (red: string, pais: string) => `No hay CPM de referencia para ${red} en ${pais}. Escribe el tuyo.`,
       cpm_invertido: "El CPM bajo no puede ser mayor que el alto.",
     },
+    /** Por qué un rango escrito a mano no vale (validarRangoPrecio de @mc/core). */
+    rangoErrores: {
+      vacio: "Escribe los dos extremos del rango.",
+      no_numero: "El rango tiene que ser un número.",
+      invertido: "El precio bajo no puede ser mayor que el alto.",
+      cero: "El precio alto tiene que ser mayor que cero.",
+    } as Record<string, string>,
+    rangoRevisar: "Hay rangos que no valen. Corrígelos (van marcados en la tabla) y vuelve a guardar.",
     vacio: {
       title: "Todavía no hay con qué calcular",
       description:
@@ -75,6 +85,8 @@ export const MESSAGES = {
     },
     comoSeCalcula: "Cómo se calcula",
     cerrar: "Cerrar",
+    /** Título del desglose que se abre bajo la fila. */
+    desgloseDe: (nombre: string) => `Cómo se calcula · ${nombre}`,
   },
 
   paquetes: {
@@ -145,7 +157,8 @@ export const MESSAGES = {
     opciones: {
       title: "Cómo se comparte",
       password: "Contraseña (opcional)",
-      passwordAyuda: "Quien abra el enlace tendrá que escribirla. Se guarda cifrada, nunca en claro.",
+      passwordAyuda:
+        "Mínimo 8 signos. Quien abra el enlace tendrá que escribirla. Se guarda como huella (no se puede leer ni recuperar); si la olvidas, genera otro enlace.",
       placeholder: "Sin contraseña",
       mostrar: "Mostrar",
       ocultar: "Ocultar",
@@ -249,21 +262,51 @@ export const MESSAGES = {
     verVistaPrevia: "Vista previa",
     editar: "Editar",
     eliminar: "Eliminar borrador",
-    eliminarConfirmar: "¿Eliminar este borrador? No se puede deshacer.",
     aceptar: "Marcar aceptada",
     rechazar: "Marcar rechazada",
     crearCampana: "Crear la campaña",
     campanaPendiente: "Campaña: pendiente de Campañas",
     campanaPendienteAyuda:
       "La cotización está aceptada y el negocio, ganado. La campaña la crea el módulo Campañas con la ventana acordada.",
-    campanaSinFechas: "Falta la ventana de la campaña: sin inicio y fin acordados, Campañas no la crea.",
+    campanaSinFechas:
+      "La cotización se aceptó sin la ventana de la campaña. Di cuándo se publica y Campañas la crea con esas fechas.",
+    ventanaDesde: "Desde",
+    ventanaHasta: "Hasta",
+    /**
+     * Las acciones que no se deshacen piden un segundo paso en la misma
+     * tarjeta, como las de Stripe Quotes: qué va a pasar y un botón que
+     * lo dice.
+     */
+    confirmar: {
+      cancelar: "Cancelar",
+      aceptar: {
+        pregunta: (numero: string) => `¿Marcar ${numero} como aceptada?`,
+        consecuencia:
+          "El negocio pasará a «Ganado» y se creará la campaña con la ventana acordada. No se puede deshacer.",
+        consecuenciaSinVentana:
+          "El negocio pasará a «Ganado». Como no hay ventana acordada, después te pediremos las fechas para crear la campaña. No se puede deshacer.",
+        boton: "Sí, marcar aceptada",
+      },
+      rechazar: {
+        pregunta: (numero: string) => `¿Rechazar ${numero}?`,
+        consecuencia: "La marca ya no podrá aceptarla desde el enlace. No se puede deshacer.",
+        boton: "Sí, rechazar",
+      },
+      eliminar: {
+        pregunta: (numero: string) => `¿Eliminar el borrador ${numero}?`,
+        consecuencia: "Se borra con sus entregables. No se puede deshacer.",
+        boton: "Sí, eliminar",
+      },
+    },
+    /** Encima del botón de rechazar, para separarlo de «aceptar». */
+    otraRespuesta: "¿La marca dijo que no?",
     campanaCreada: "Campaña creada",
     verCampana: "Ver la campaña",
     entregables: "Entregables",
     acordado: "Lo acordado",
     historia: "Historia",
     enlace: "Enlace para la marca",
-    enlaceAyuda: "En el MVP no hay correo: se copia y se pega donde ya estás hablando con la marca.",
+    enlaceAyuda: "Copia el enlace y pégalo donde ya hablas con la marca.",
     visitas: (n: number) => (n === 1 ? "1 visita" : `${n} visitas`),
     sinVisitas: "Todavía sin abrir",
     totalLinea: "Total",
@@ -309,7 +352,15 @@ export const MESSAGES = {
     QuoteTransitionError: "La cotización ya no está en un estado que permita esa acción. Recarga para ver cómo quedó.",
     QuoteSinItems: "Una cotización necesita al menos un entregable.",
     QuoteNotAccepted: "Solo una cotización aceptada crea campaña.",
-    FechasDeCampanaFaltan: "Falta la ventana de la campaña. Acuérdala en la cotización (inicio y fin) antes de crearla.",
+    FechasDeCampanaFaltan: "Falta la ventana de la campaña. Di cuándo empieza y cuándo termina para crearla.",
+    FinAntesDeInicio: "El fin de la campaña no puede ser anterior al inicio.",
+    InvalidDatesError: "Las fechas de la campaña no son válidas: revisa el inicio y el fin.",
+    QuoteNotAcceptedError: "Solo una cotización aceptada crea campaña.",
+    ValidezVencida: "La fecha «Válida hasta» ya pasó: la marca abriría una cotización vencida. Cámbiala en el borrador y vuelve a enviar.",
+    RangoInvertido: "Un rango del tarifario está al revés: el precio bajo es mayor que el alto.",
+    RangoVacio: "Un rango del tarifario tiene un extremo vacío.",
+    RangoEnCero: "Un rango del tarifario tiene el precio alto en cero.",
+    RangoNoNumero: "Un rango del tarifario no es un número.",
     MediaKitNotFound: "Ese media kit no existe en este espacio de trabajo.",
     CreatorNotFound: "No encontramos tu perfil de creador.",
     DealNotFound: "Ese negocio no existe en este espacio de trabajo.",
@@ -332,7 +383,39 @@ export const MESSAGES = {
     descuento: "El descuento tiene que ser un número.",
     impuesto: "El impuesto es un porcentaje entre 0 y 100.",
     fecha: "Elige una fecha válida.",
+    fechaObligatoria: "Elige la fecha.",
     finAntesDeInicio: "El fin de la campaña no puede ser anterior al inicio.",
+    passwordCorta: "La contraseña necesita al menos 8 signos.",
+  },
+
+  /**
+   * Las frases que Cotizar deja en tablas de otros módulos: la historia
+   * del negocio (Ventas la enseña tal cual) y el aviso al creador. Las
+   * compone _lib/textos.ts; la base guarda además el código y los
+   * parámetros.
+   */
+  actividad: {
+    enviada: (numero: string) => `Cotización ${numero} enviada`,
+    aceptadaPanel: (numero: string) => `Cotización ${numero} marcada como aceptada`,
+    aceptadaEnlace: (numero: string, firma: string | null) =>
+      firma ? `Cotización ${numero} aceptada por ${firma} desde el enlace` : `Cotización ${numero} aceptada desde el enlace`,
+    firma: (nombre: string, correo: string | null) => (correo ? `${nombre} <${correo}>` : nombre),
+    avisoTitulo: (marca: string, numero: string) => `${marca} aceptó la cotización ${numero}`,
+    avisoConCampana: (firma: string | null, campana: string) =>
+      `${firma ? `Aceptada por ${firma}. ` : ""}La campaña «${campana}» ya está planeada.`,
+    avisoSinCampana: (firma: string | null) =>
+      `${firma ? `Aceptada por ${firma}. ` : ""}La campaña quedó pendiente: termínala desde la cotización.`,
+  },
+
+  /** Los avisos de «la marca aceptó» en la lista de cotizaciones. */
+  avisos: {
+    title: "Aceptadas desde el enlace",
+    aceptada: (marca: string, numero: string) => `${marca} aceptó ${numero}`,
+    firmo: (nombre: string) => `Firmó ${nombre}`,
+    campana: (nombre: string) => `Campaña «${nombre}» planeada`,
+    campanaPendiente: "Campaña pendiente: termínala desde la cotización",
+    ver: "Ver cotización",
+    entendido: "Entendido",
   },
 
   /** Las métricas que se pueden acordar. El valor es lo que se guarda. */
@@ -402,6 +485,7 @@ export const MESSAGES = {
       aceptadaPor: (nombre: string, fecha: string) => `Aceptada por ${nombre} el ${fecha}`,
       rechazada: "Esta cotización fue rechazada.",
       vencida: "Esta cotización venció. Pide una nueva a quien te la envió.",
+      yaAceptada: "Esta cotización ya estaba aceptada: no hace falta hacer nada más.",
       firma: {
         title: "Para aceptarla, deja tu nombre",
         description: "Queda registrado quién la aceptó y cuándo, como en una propuesta firmada.",
@@ -415,7 +499,7 @@ export const MESSAGES = {
         },
       },
       graciasTitle: "Listo: cotización aceptada",
-      graciasDescription: "Quedó registrada a tu nombre. Quien te la envió ya tiene el aviso en su panel.",
+      graciasDescription: "Quedó registrada a tu nombre. Le avisamos a quien te la envió.",
       error: "No pudimos registrar la aceptación. Vuelve a intentarlo en un momento.",
       pie: "Documento generado con On Cue",
     },

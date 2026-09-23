@@ -2,7 +2,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './helpers/base.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';

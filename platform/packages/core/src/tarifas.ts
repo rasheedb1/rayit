@@ -39,6 +39,23 @@
  *   - No se redondea a cifras «bonitas» (50.000, 100.000): un tarifario
  *     que redondea esconde que cambiar el CPM cambió el precio, y ese
  *     es justo el número que el creador está aprendiendo a mover.
+ *
+ * Lo que la fórmula del mock trae y esta NO: «× 1,15 por engagement
+ * sobre la media» y «× 1,10 por audiencia 25 a 34»
+ * (dashboard/creadores-mock.html). Se dejan fuera a propósito:
+ *   - No hay en la base una referencia de engagement ni de audiencia por
+ *     nicho y país contra la cual decir «sobre la media»
+ *     (niche_cpm_benchmark solo trae CPM). Un 1,15 escrito aquí sería un
+ *     número sin fuente, y este tarifario promete que cada paso del
+ *     «Cómo se calcula» dice de dónde sale.
+ *   - El engagement ya está, en parte, dentro de las views medianas: una
+ *     pieza que engancha se ve más. Multiplicarlo otra vez lo cuenta dos
+ *     veces.
+ *   - Si el creador sabe que su audiencia vale más, la herramienta
+ *     honesta ya existe: su propio CPM o un precio a mano, que quedan
+ *     marcados («CPM propio», «editado») y se ven en la explicación.
+ * Cuando exista una referencia de engagement por nicho, entra como un
+ * Modificador más, con su paso y su fuente, sin tocar esta fórmula.
  */
 import { type PlatformId } from './campanas.ts';
 import {
@@ -177,6 +194,34 @@ export function redondearAUnidad(valor: Decimal, unidad: Decimal): Decimal {
   const c = toCents(valor);
   if (c < 0n) throw new TarifaError('MontoNegativo', `No se redondea un monto negativo: "${valor}".`);
   return fromCents(((c + u / 2n) / u) * u);
+}
+
+/**
+ * Por qué un rango escrito a mano no vale, o null si vale.
+ *
+ *   'vacio'      falta uno de los dos extremos
+ *   'no_numero'  alguno no es un decimal (o es negativo)
+ *   'invertido'  el bajo es mayor que el alto
+ *   'cero'       el alto es cero: un rango «0 – 0» no es una tarifa
+ *
+ * Es UNA regla para las tres capas —la tabla del tarifario mientras se
+ * escribe, la Server Action que guarda y saveRateCard en @mc/db—, así
+ * que un rango invertido no puede pasar por ninguna, y el CHECK de la
+ * migración 0026 es la última red. El CPM invertido tiene su propio
+ * motivo en la pantalla (la fila no se calcula); este es el del precio.
+ */
+export type RangoInvalido = 'vacio' | 'no_numero' | 'invertido' | 'cero';
+
+const RANGO_RE = /^\d+(\.\d{1,2})?$/;
+
+export function validarRangoPrecio(low: string | null | undefined, high: string | null | undefined): RangoInvalido | null {
+  const l = (low ?? '').trim();
+  const h = (high ?? '').trim();
+  if (l === '' || h === '') return 'vacio';
+  if (!RANGO_RE.test(l) || !RANGO_RE.test(h)) return 'no_numero';
+  if (compareDecimal(l, h) > 0) return 'invertido';
+  if (toCents(h) === 0n) return 'cero';
+  return null;
 }
 
 /**

@@ -3,20 +3,21 @@
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { readPublicMediaKit, type MediaKitSnapshot } from "@mc/db/queries/cotizar";
+import { readPublicMediaKit, type MediaKitSnapshot, type QuoteStatus } from "@mc/db/queries/cotizar";
 import { acceptQuoteFromLink, withPublicShare } from "@/lib/db";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
 import { LimiteDeIntentos } from "@/app/(app)/cotizar/_lib/limite";
 import { esRobotDePrevisualizacion } from "@/app/(app)/cotizar/_lib/robots";
+import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 
 /**
  * Las dos acciones que puede hacer quien recibió un enlace, sin sesión
  * y sin workspace: escribir la contraseña de un media kit y aceptar una
  * cotización.
  *
- * Pasan por las funciones SECURITY DEFINER de las migraciones 0022 y
- * 0023 (que corren como mc_public_share): el slug es la credencial y la
- * base es quien decide qué se ve. Aquí no se consulta ninguna tabla.
+ * Pasan por las funciones SECURITY DEFINER de la migración 0026 (que
+ * corren como mc_public_share): el slug es la credencial y la base es
+ * quien decide qué se ve. Aquí no se consulta ninguna tabla.
  */
 
 /** 5 contraseñas por minuto, por enlace y por IP, antes de gastar un scrypt. */
@@ -77,7 +78,13 @@ const firmaSchema = z.object({
 export type AceptarResultado =
   | { status: "ok"; campaignPending: boolean }
   | { status: "invalid"; errors: Partial<Record<"name" | "email" | "terminos", string>> }
-  | { status: "no_aceptable" | "no_existe" | "error" };
+  /**
+   * Ya no se puede aceptar, con el estado real: aceptada en otra
+   * pestaña, rechazada por el creador mientras la marca la tenía
+   * abierta, o vencida. La página dice cuál, no «venció» para todo.
+   */
+  | { status: "no_aceptable"; quoteStatus: QuoteStatus }
+  | { status: "no_existe" | "error" };
 
 /**
  * «Aceptar cotización», con nombre, correo y la casilla de términos:
@@ -100,7 +107,7 @@ export async function aceptarCotizacionPublica(
     return { status: "invalid", errors };
   }
   try {
-    const r = await acceptQuoteFromLink(slug, { name: parsed.data.name, email: parsed.data.email });
+    const r = await acceptQuoteFromLink(slug, { name: parsed.data.name, email: parsed.data.email }, TEXTOS_COTIZAR);
     revalidatePath(`/cotizacion/${slug}`);
     if (r.status === "ok") return { status: "ok", campaignPending: r.campaignPending };
     if (r.status === "invalid_signer") {
@@ -109,7 +116,8 @@ export async function aceptarCotizacionPublica(
         errors: { name: MESSAGES.publico.cotizacion.firma.errores.nombre, email: MESSAGES.publico.cotizacion.firma.errores.correo },
       };
     }
-    return { status: r.status === "not_found" ? "no_existe" : "no_aceptable" };
+    if (r.status === "not_acceptable") return { status: "no_aceptable", quoteStatus: r.quoteStatus };
+    return { status: "no_existe" };
   } catch (err) {
     console.error("[cotizacion pública] no se pudo aceptar", err);
     return { status: "error" };

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listQuotes, type QuoteListRow } from "@mc/db/queries/cotizar";
+import { listAcceptanceNotices, listQuotes, type QuoteListRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -9,6 +9,7 @@ import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { marcarAvisoVisto } from "../actions";
 import { MESSAGES } from "../messages";
 import { pillDeCotizacion } from "../_lib/estado";
 
@@ -19,7 +20,13 @@ export default async function CotizacionesPage() {
   const t = MESSAGES.cotizaciones;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
-  const quotes = await withWorkspace((tx) => listQuotes(tx));
+  // Las cotizaciones y los avisos de «la marca aceptó» en la misma
+  // transacción: el aviso que promete la página pública es este.
+  const { quotes, avisos } = await withWorkspace(async (tx) => ({
+    quotes: await listQuotes(tx),
+    avisos: await listAcceptanceNotices(tx),
+  }));
+  const ta = MESSAGES.avisos;
 
   const columnas: Column<QuoteListRow>[] = [
     {
@@ -79,6 +86,42 @@ export default async function CotizacionesPage() {
           </div>
         }
       />
+
+      {avisos.length > 0 && (
+        <section aria-labelledby="avisos" className="mb-8">
+          <SectionTitle meta={f.int(avisos.length)}>
+            <span id="avisos">{ta.title}</span>
+          </SectionTitle>
+          <ul className="divide-y divide-border rounded-md border border-good/30 bg-good-wash">
+            {avisos.map((a) => (
+              <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0 text-sm">
+                  <p className="font-medium text-ink">{ta.aceptada(a.companyName, a.quoteNumber)}</p>
+                  <p className="mt-0.5 text-xs text-ink-2">
+                    {[
+                      f.dateTime(a.createdAt),
+                      a.signerName ? ta.firmo(a.signerName) : null,
+                      a.campaignName ? ta.campana(a.campaignName) : ta.campanaPendiente,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" href={`/cotizar/cotizaciones/${a.quoteId}`}>
+                    {ta.ver}
+                  </Button>
+                  <form action={marcarAvisoVisto.bind(null, a.id)}>
+                    <Button size="sm" variant="ghost" type="submit">
+                      {ta.entendido}
+                    </Button>
+                  </form>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section aria-labelledby="cotizaciones">
         <SectionTitle meta={f.int(quotes.length)}>

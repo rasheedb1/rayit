@@ -41,7 +41,7 @@ export function lineasAcordado(a: Acordado, f: Pick<Formatter, "dateRange">): { 
 
 /**
  * La etiqueta del impuesto con su tasa: «Impuesto (19 %)», «Impuesto
- * (19,5 %)». Sin tasa guardada (cotizaciones anteriores a 0023), solo
+ * (19,5 %)». Sin tasa guardada (las primeras cotizaciones no la tienen), solo
  * «Impuesto».
  */
 export function etiquetaImpuesto(taxRate: string | null | undefined, f: Pick<Formatter, "pct">): string {

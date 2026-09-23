@@ -9,7 +9,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { listInvoices } from "@mc/db/queries/finanzas";
 import { createQuote, getPrimaryCreator, getQuote, listQuotableDeals, sendQuote } from "@mc/db/queries/cotizar";
-import { acceptQuoteFromLink, closeDb, getDbMode, withWorkspace } from "./index";
+import { acceptQuoteFromLink, closeDb, getDbMode, withPublicShare, withWorkspace } from "./index";
+import { readPublicQuote } from "@mc/db/queries/cotizar";
+import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 /** Un workspace que no existe en el seed: RLS no devuelve nada suyo. */
@@ -80,10 +82,14 @@ describe("acceptQuoteFromLink: aceptar desde el enlace deja la campaña planeada
         campaignStartsOn: "2026-11-02",
         campaignEndsOn: "2026-11-30",
       });
-      return sendQuote(tx, q.id);
+      return sendQuote(tx, q.id, TEXTOS_COTIZAR);
     });
 
-    const r = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" });
+    // El enlace abre por la operación con nombre, sin forzar tipos.
+    const abierta = await withPublicShare((tx) => readPublicQuote(tx, creada.slug, { count: false }));
+    expect(abierta.status).toBe("ok");
+
+    const r = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" }, TEXTOS_COTIZAR);
     expect(r).toEqual({ status: "ok", quoteNumber: creada.number, campaignPending: false });
 
     const despues = await withWorkspace((tx) => getQuote(tx, creada.id));
@@ -96,8 +102,19 @@ describe("acceptQuoteFromLink: aceptar desde el enlace deja la campaña planeada
     });
     expect(campana).toEqual([{ status: "planned" }]);
 
-    // Otra vez: ya no es aceptable, y no hay segunda campaña.
-    const otra = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" });
-    expect(otra.status).toBe("not_acceptable");
+    // Las frases que quedaron en la base son las de messages.ts.
+    const aviso = await withWorkspace(async (tx) => {
+      const { rows } = await tx.query<{ title_es: string; body_es: string }>(
+        "SELECT title_es, body_es FROM notification WHERE entity_id = $1",
+        [creada.id],
+      );
+      return rows[0];
+    });
+    expect(aviso?.title_es).toBe(`${creada.companyName} aceptó la cotización ${creada.number}`);
+    expect(aviso?.body_es).toMatch(/^Aceptada por Ana Gómez <ana@cafealma\.co>\. La campaña «.+» ya está planeada\.$/);
+
+    // Otra vez (otra pestaña): ya no es aceptable, dice por qué, y no hay segunda campaña.
+    const otra = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" }, TEXTOS_COTIZAR);
+    expect(otra).toEqual({ status: "not_acceptable", quoteStatus: "accepted" });
   });
 });

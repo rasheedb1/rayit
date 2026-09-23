@@ -15,6 +15,14 @@ import { aceptarCotizacionPublica, type AceptarResultado } from "../../actions";
  * La validación de verdad está en la Server Action (zod) y en la base
  * (public_quote_accept): aquí solo se pinta lo que devuelven.
  */
+/** Por qué ya no se puede aceptar, con el estado que devolvió la base. */
+export function textoNoAceptable(quoteStatus: string): string {
+  const t = MESSAGES.publico.cotizacion;
+  if (quoteStatus === "accepted") return t.yaAceptada;
+  if (quoteStatus === "rejected") return t.rechazada;
+  return t.vencida;
+}
+
 export function AceptarCotizacion({ slug }: { slug: string }) {
   const t = MESSAGES.publico.cotizacion;
   const id = useId();
@@ -32,13 +40,23 @@ export function AceptarCotizacion({ slug }: { slug: string }) {
       </div>
     );
   }
+  // Aceptada en otra pestaña (o por otra persona de la marca): no es un
+  // error, y decir «venció» sería falso.
+  if (resultado?.status === "no_aceptable" && resultado.quoteStatus === "accepted") {
+    return (
+      <div role="status" className="rounded-md border border-good/30 bg-good-wash px-4 py-3">
+        <p className="text-sm font-medium text-good">{t.graciasTitle}</p>
+        <p className="mt-1 text-sm text-ink-2">{t.yaAceptada}</p>
+      </div>
+    );
+  }
 
   const errores = resultado?.status === "invalid" ? resultado.errors : {};
   const general =
     resultado?.status === "no_existe"
       ? MESSAGES.publico.noExiste.description
       : resultado?.status === "no_aceptable"
-        ? t.vencida
+        ? textoNoAceptable(resultado.quoteStatus)
         : resultado?.status === "error"
           ? t.error
           : null;

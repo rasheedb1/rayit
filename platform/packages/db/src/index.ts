@@ -29,7 +29,7 @@
  * hace aritmética de métricas (para eso están las vistas).
  */
 export type {
-  BaseTx, Db, DbOptions, Orm, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
+  BaseTx, Db, DbOptions, Orm, PublicShareTx, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
 } from './client.ts';
 export {
   assertWorkspaceId, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS,

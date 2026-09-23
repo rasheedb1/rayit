@@ -9,8 +9,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from "@mc/connectors";
 import { listConsents, type WorkspaceTx } from "@mc/db";
-import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/provisional/embedded";
-import { SEED_WORKSPACE_ID } from "@/lib/db/workspace";
+import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
+import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
 
 const NOW = new Date("2026-09-22T15:00:00Z");

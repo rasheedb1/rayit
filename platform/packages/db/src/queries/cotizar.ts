@@ -20,17 +20,26 @@
  *
  * Y las TRES funciones públicas del final (readPublicMediaKit,
  * readPublicQuote, acceptPublicQuote) son la excepción explicada: no
- * reciben WorkspaceTx porque la marca abre el enlace sin sesión. No
- * consultan tablas: llaman a las funciones SECURITY DEFINER de las
- * migraciones 0022 y 0023, que corren como mc_public_share y son a la
- * vez la puerta y el registro de la visita. Ver la cabecera de 0023
- * para por qué las políticas llevan `TO mc_public_share`.
+ * reciben WorkspaceTx porque la marca abre el enlace sin sesión, sino un
+ * PublicShareTx, que solo abre `db.withPublicShare`. No consultan
+ * tablas: llaman a las funciones SECURITY DEFINER de la migración 0026,
+ * que corren como mc_public_share y son a la vez la puerta y el registro
+ * de la visita. Ver su cabecera para por qué las políticas llevan
+ * `TO mc_public_share`.
+ *
+ * Texto de interfaz: este paquete no escribe frases. Lo que Cotizar deja
+ * escrito en tablas de otros módulos (el asunto de una actividad del
+ * negocio, el aviso al creador) lo compone la web con su messages.ts y
+ * llega aquí como `TextosCotizar`; la fila guarda además el código y
+ * los parámetros (activity.metadata.kind, notification.kind +
+ * entity_id), para que otra pantalla u otro idioma lo recomponga.
  */
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import {
-  calcularTotalesCotizacion, DEFAULT_TAX_RATE, type Decimal, type PasoCalculo, type PlatformId,
+  calcularTotalesCotizacion, DEFAULT_TAX_RATE, validarRangoPrecio, type Decimal, type PasoCalculo, type PlatformId,
+  type RangoInvalido,
 } from '@mc/core';
-import { isUuid, type BaseTx, type WorkspaceTx } from '../client.ts';
+import { isUuid, type PublicShareTx, type WorkspaceTx } from '../client.ts';
 import { createCampaignFromQuote } from './campanas.ts';
 
 // ---------------------------------------------------------------------
@@ -85,6 +94,41 @@ export class QuoteNotDraft extends CotizarError {
   }
 }
 
+/** El código de cada motivo de validarRangoPrecio (@mc/core), para messages.ts. */
+const CODIGO_RANGO: Record<RangoInvalido, string> = {
+  vacio: 'RangoVacio',
+  no_numero: 'RangoNoNumero',
+  invertido: 'RangoInvertido',
+  cero: 'RangoEnCero',
+};
+
+/**
+ * Un rango de tarifario que no vale (al revés, vacío, en cero). Nunca
+ * llega a la base: saveRateCard y overrideRateCardItemPrice lo paran
+ * antes, con la misma regla que la pantalla y la acción.
+ */
+export class RangoDeTarifaInvalido extends CotizarError {
+  readonly motivo: RangoInvalido;
+  readonly deliverable: string | null;
+  constructor(motivo: RangoInvalido, deliverable: string | null = null) {
+    super(CODIGO_RANGO[motivo], `El rango${deliverable ? ` de «${deliverable}»` : ''} no es válido (${motivo}).`);
+    this.motivo = motivo;
+    this.deliverable = deliverable;
+  }
+}
+
+/** Enviar una cotización cuya «válida hasta» ya pasó: nacería vencida. */
+export class ValidezVencida extends CotizarError {
+  constructor() {
+    super('ValidezVencida', 'La fecha de validez ya pasó: cámbiala antes de enviar.');
+  }
+}
+
+function assertRango(low: Decimal | null, high: Decimal | null, deliverable: string | null): void {
+  const motivo = validarRangoPrecio(low, high);
+  if (motivo) throw new RangoDeTarifaInvalido(motivo, deliverable);
+}
+
 // ---------------------------------------------------------------------
 // Enlaces compartidos: slug y contraseña
 // ---------------------------------------------------------------------
@@ -130,7 +174,7 @@ function scryptAsync(secreto: string, salt: Buffer): Promise<Buffer> {
 /**
  * Deriva la contraseña de un enlace. Formato: 's1:<sal hex>:<scrypt hex>'.
  * La contraseña en claro no se guarda ni viaja a la base: la base
- * compara derivados (ver migraciones 0022 y 0023).
+ * compara derivados (ver la migración 0026).
  */
 export async function hashSharePassword(secreto: string, saltHex = randomBytes(16).toString('hex')): Promise<string> {
   const clave = await scryptAsync(secreto.normalize('NFKC'), Buffer.from(saltHex, 'hex'));
@@ -401,6 +445,8 @@ export interface SaveRateCardInput {
  */
 export async function saveRateCard(tx: WorkspaceTx, input: SaveRateCardInput): Promise<{ card: RateCard; items: RateCardItem[] }> {
   if (!isUuid(input.creatorId)) throw new RateCardNotFound();
+  // Antes de tocar nada: un rango al revés no se guarda a medias.
+  for (const item of input.items) assertRango(item.priceLow, item.priceHigh, item.deliverable);
   const { rows: creador } = await tx.query('SELECT 1 FROM creator_profile WHERE id = $1', [input.creatorId]);
   if (!creador[0]) throw new RateCardNotFound();
 
@@ -449,6 +495,7 @@ export async function overrideRateCardItemPrice(
   prices: { priceLow: Decimal; priceHigh: Decimal },
 ): Promise<RateCardItem> {
   if (!isUuid(itemId)) throw new CotizarError('RateCardItemNotFound', 'Ese entregable no existe en el tarifario.');
+  assertRango(prices.priceLow, prices.priceHigh, null);
   const { rows } = await tx.query<RawRateCardItem>(
     `UPDATE rate_card_item SET price_low = $2, price_high = $3, overridden = true
       WHERE id = $1
@@ -845,7 +892,7 @@ export interface QuoteDetail extends QuoteListRow {
   subtotal: Decimal;
   discount: Decimal;
   tax: Decimal;
-  /** La tasa con la que se calculó `tax`, como fracción ('0.19'). null en cotizaciones anteriores a 0023. */
+  /** La tasa con la que se calculó `tax`, como fracción ('0.19'). null en las que no la guardaron. */
   taxRate: string | null;
   agreedMetrics: string[];
   reportCutsHours: number[];
@@ -889,7 +936,7 @@ interface RawQuote {
  * Bogotá, no a las 19:00. La fecha de vencimiento derivada es el
  * principio del día siguiente en esa zona, que es cuando dejó de valer.
  *
- * Es la misma regla que aplica public_quote() (0023) al abrir el enlace,
+ * Es la misma regla que aplica public_quote() (0026) al abrir el enlace,
  * que además la persiste. Aquí solo se lee: un GET del panel no escribe.
  */
 const SELECT_QUOTE = `
@@ -1106,7 +1153,25 @@ export interface CreateQuoteInput {
 }
 
 /**
- * Numeración COT-AAAA-NNN por workspace.
+ * El año de la numeración, en la zona del workspace. El 31 de diciembre
+ * a las 20:00 en Bogotá ya es 1 de enero en UTC: con getUTCFullYear()
+ * esa cotización salía numerada con el año siguiente. Lo resuelve la
+ * base con la zona guardada en el workspace, la misma expresión que usa
+ * SELECT_QUOTE para decidir si una cotización venció.
+ */
+async function anioDeNumeracion(tx: WorkspaceTx, at: Date | undefined): Promise<number> {
+  const { rows } = await tx.query<{ y: number }>(
+    `SELECT extract(year FROM coalesce($2::timestamptz, now())
+              AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::int AS y
+       FROM workspace w WHERE w.id = $1`,
+    [tx.workspaceId, at ? at.toISOString() : null],
+  );
+  return Number(rows[0]?.y ?? (at ?? new Date()).getUTCFullYear());
+}
+
+/**
+ * Numeración COT-AAAA-NNN por workspace, con el año de la zona del
+ * workspace (`at` existe para las pruebas: por defecto, ahora).
  *
  * El bloqueo consultivo se toma DENTRO de la transacción de quien llama
  * y se suelta al confirmar: dos creadores del mismo workspace que
@@ -1114,7 +1179,8 @@ export interface CreateQuoteInput {
  * UNIQUE (workspace_id, number) de 0008. El UNIQUE sigue siendo la
  * garantía de la base; esto es lo que evita el error.
  */
-export async function nextQuoteNumber(tx: WorkspaceTx, year = new Date().getUTCFullYear()): Promise<string> {
+export async function nextQuoteNumber(tx: WorkspaceTx, opts: { at?: Date } = {}): Promise<string> {
+  const year = await anioDeNumeracion(tx, opts.at);
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`quote-number:${tx.workspaceId}:${year}`]);
   const prefijo = `COT-${year}-`;
   const { rows } = await tx.query<{ n: number | null }>(
@@ -1266,7 +1332,7 @@ export async function deleteQuoteDraft(tx: WorkspaceTx, id: string): Promise<voi
  * Lo que la marca verá en el enlace, congelado al enviarlo. Editar la
  * cotización después no cambia un documento ya entregado, y la página
  * pública no necesita leer quote_item, company ni creator_profile en
- * vivo (una política menos por tabla; ver 0022).
+ * vivo (una política menos por tabla; ver 0026).
  */
 export interface QuotePublicSnapshot {
   version: 1;
@@ -1280,7 +1346,7 @@ export interface QuotePublicSnapshot {
   subtotal: Decimal;
   discount: Decimal;
   tax: Decimal;
-  /** Fracción. Opcional: los snapshots anteriores a 0023 no la traen. */
+  /** Fracción. Opcional: los primeros snapshots no la traen. */
   taxRate?: string | null;
   total: Decimal;
   acordado: {
@@ -1381,18 +1447,64 @@ export async function getQuotePreview(tx: WorkspaceTx, id: string): Promise<Publ
 }
 
 /**
+ * Las frases que Cotizar deja escritas en tablas de otros módulos. Las
+ * compone la web con su messages.ts (apps/web/app/(app)/cotizar/
+ * _lib/textos.ts) y llegan aquí ya en el idioma de la pantalla: este
+ * paquete no tiene idioma.
+ *
+ * Por qué hacen falta frases y no solo códigos: activity.subject es lo
+ * que la ficha del negocio en Ventas enseña tal cual, y
+ * notification.title_es es NOT NULL desde 0009. Junto a cada frase se
+ * guardan el código y los parámetros (activity.metadata.kind,
+ * notification.kind + entity_id): quien quiera otra frase u otro idioma
+ * la recompone con ellos, que es lo que hace el aviso de la lista de
+ * cotizaciones (listAcceptanceNotices).
+ */
+export interface TextosCotizar {
+  /** Asunto de la actividad del negocio al enviar la cotización. */
+  actividadEnviada(p: { quoteNumber: string }): string;
+  /** Asunto de la actividad del negocio al aceptarla, desde el panel o desde el enlace. */
+  actividadAceptada(p: {
+    quoteNumber: string;
+    signerName: string | null;
+    signerEmail: string | null;
+    via: 'panel' | 'enlace';
+  }): string;
+  /** El aviso al creador cuando la marca acepta desde el enlace. */
+  avisoAceptada(p: {
+    companyName: string;
+    quoteNumber: string;
+    signerName: string | null;
+    signerEmail: string | null;
+    campaignName: string | null;
+  }): { title: string; body: string };
+}
+
+/**
  * Enviar. En el MVP no hay correo: enviar es congelar el documento,
  * dejarlo en 'sent' y entregar el enlace para pegarlo donde ya se está
  * hablando con la marca.
  *
+ * Una cotización cuya «válida hasta» ya pasó (en la zona del workspace)
+ * no se envía: nacería vencida y la marca abriría un enlace que no
+ * acepta. Se corrige la fecha en el borrador y se envía.
+ *
  * Efecto en Ventas: el deal pasa a «Propuesta enviada» con su fila de
  * historial y su actividad, como lo haría el CRM a mano.
  */
-export async function sendQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail> {
+export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuote(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'draft') throw new QuoteTransitionError(quote.status, 'sent');
   if (quote.items.length === 0) throw new CotizarError('QuoteSinItems', 'Una cotización sin entregables no se puede enviar.');
+  if (quote.validUntil) {
+    const { rows } = await tx.query<{ vencida: boolean }>(
+      `SELECT $2::date < (now() AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::date AS vencida
+         FROM workspace w WHERE w.id = $1`,
+      [tx.workspaceId, quote.validUntil],
+    );
+    if (rows[0]?.vencida) throw new ValidezVencida();
+  }
 
   const snapshot = await buildQuoteSnapshot(tx, quote);
   await tx.query(
@@ -1400,14 +1512,26 @@ export async function sendQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetai
     [id, JSON.stringify(snapshot)],
   );
 
-  if (quote.dealId) await moverDealAPropuesta(tx, quote.dealId, quote.number);
+  if (quote.dealId) await moverDealAPropuesta(tx, quote.dealId, quote, textos);
 
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
   return actualizada;
 }
 
-async function moverDealAPropuesta(tx: WorkspaceTx, dealId: string, quoteNumber: string): Promise<void> {
+async function moverDealAPropuesta(
+  tx: WorkspaceTx,
+  dealId: string,
+  quote: Pick<QuoteDetail, 'id' | 'number'>,
+  textos: TextosCotizar,
+): Promise<void> {
+  const actividad = () =>
+    registrarActividad(tx, dealId, 'proposal_sent', textos.actividadEnviada({ quoteNumber: quote.number }), {
+      kind: 'quote_sent',
+      quoteId: quote.id,
+      quoteNumber: quote.number,
+    });
+
   const { rows } = await tx.query<{ stage_id: string; is_won: boolean; is_lost: boolean; position: number }>(
     `SELECT d.stage_id, s.is_won, s.is_lost, s.position
        FROM deal d JOIN pipeline_stage s ON s.id = d.stage_id
@@ -1423,7 +1547,7 @@ async function moverDealAPropuesta(tx: WorkspaceTx, dealId: string, quoteNumber:
   );
   const posPropuesta = propuesta[0]?.position ?? 4;
   if (deal.is_won || deal.is_lost || deal.position >= posPropuesta) {
-    await registrarActividad(tx, dealId, 'proposal_sent', `Cotización ${quoteNumber} enviada`);
+    await actividad();
     return;
   }
 
@@ -1436,15 +1560,20 @@ async function moverDealAPropuesta(tx: WorkspaceTx, dealId: string, quoteNumber:
     [dealId, deal.stage_id],
   );
   await tx.query("UPDATE deal SET stage_id = 'propuesta', last_contact_at = now() WHERE id = $1", [dealId]);
-  await registrarActividad(tx, dealId, 'proposal_sent', `Cotización ${quoteNumber} enviada`);
+  await actividad();
 }
 
+/**
+ * Una fila en la historia del negocio. `subject` es la frase ya
+ * compuesta por la web; `metadata` lleva siempre `kind` y los
+ * parámetros con los que se compuso.
+ */
 async function registrarActividad(
   tx: WorkspaceTx,
   dealId: string,
   kind: 'proposal_sent' | 'stage_change',
   subject: string,
-  metadata: Record<string, unknown> = {},
+  metadata: { kind: 'quote_sent' | 'quote_accepted' } & Record<string, unknown>,
 ): Promise<void> {
   await tx.query(
     `INSERT INTO activity (workspace_id, company_id, deal_id, kind, subject, occurred_at, metadata)
@@ -1454,12 +1583,28 @@ async function registrarActividad(
   );
 }
 
+/** La actividad «aceptada» del negocio, desde el panel o desde el enlace. */
+async function registrarAceptacion(tx: WorkspaceTx, quote: QuoteDetail, via: 'panel' | 'enlace', textos: TextosCotizar): Promise<void> {
+  if (!quote.dealId) return;
+  const params = {
+    quoteNumber: quote.number,
+    signerName: quote.acceptedByName,
+    signerEmail: quote.acceptedByEmail,
+    via,
+  };
+  await registrarActividad(tx, quote.dealId, 'stage_change', textos.actividadAceptada(params), {
+    kind: 'quote_accepted',
+    quoteId: quote.id,
+    ...params,
+  });
+}
+
 /**
  * Aceptar desde el panel (la marca dijo que sí por otro canal). Hace lo
- * mismo que la función pública `public_quote_accept` de 0023: deja la
+ * mismo que la función pública `public_quote_accept` de 0026: deja la
  * cotización en 'accepted' y el deal en «Ganado» con su historial.
  */
-export async function acceptQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail> {
+export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuote(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'accepted');
@@ -1467,7 +1612,7 @@ export async function acceptQuote(tx: WorkspaceTx, id: string): Promise<QuoteDet
   await tx.query("UPDATE quote SET status = 'accepted', accepted_at = coalesce(accepted_at, now()) WHERE id = $1", [id]);
   if (quote.dealId) {
     await ganarDeal(tx, quote.dealId);
-    await registrarActividad(tx, quote.dealId, 'stage_change', `Cotización ${quote.number} aceptada`, { quoteId: quote.id });
+    await registrarAceptacion(tx, quote, 'panel', textos);
   }
 
   const actualizada = await getQuote(tx, id);
@@ -1527,7 +1672,7 @@ export interface PublicReadOptions {
  * contraseña en claro no salga de este proceso.
  */
 export async function readPublicMediaKit(
-  tx: BaseTx,
+  tx: PublicShareTx,
   slug: string,
   password?: string | null,
   opts: PublicReadOptions = {},
@@ -1539,7 +1684,7 @@ export async function readPublicMediaKit(
   return llamarPublicMediaKit(tx, slug, hash, count);
 }
 
-async function llamarPublicMediaKit(tx: BaseTx, slug: string, hash: string | null, count: boolean): Promise<PublicMediaKitResult> {
+async function llamarPublicMediaKit(tx: PublicShareTx, slug: string, hash: string | null, count: boolean): Promise<PublicMediaKitResult> {
   const { rows } = await tx.query<{ r: PublicMediaKitResult }>('SELECT public_media_kit($1, $2, $3) AS r', [slug, hash, count]);
   return rows[0]?.r ?? { status: 'not_found' };
 }
@@ -1559,7 +1704,7 @@ export interface PublicQuoteView extends QuotePublicSnapshot {
 export type PublicQuoteResult = { status: 'not_found' } | { status: 'ok'; quote: PublicQuoteView };
 
 /** Abre una cotización por su enlace. Con `count` (por defecto), la marca queda registrada como vista. */
-export async function readPublicQuote(tx: BaseTx, slug: string, opts: PublicReadOptions = {}): Promise<PublicQuoteResult> {
+export async function readPublicQuote(tx: PublicShareTx, slug: string, opts: PublicReadOptions = {}): Promise<PublicQuoteResult> {
   const { rows } = await tx.query<{ r: PublicQuoteResult }>('SELECT public_quote($1, $2) AS r', [slug, opts.count ?? true]);
   return rows[0]?.r ?? { status: 'not_found' };
 }
@@ -1593,8 +1738,12 @@ export type PublicQuoteAcceptResult =
  * aceptada (con nombre y correo de quien acepta) y el deal en «Ganado»
  * en una sola transacción. La campaña la crea después
  * `completePublicAcceptance` con el workspace que devuelve.
+ *
+ * `not_acceptable` trae el estado real (aceptada en otra pestaña,
+ * rechazada por el creador mientras la marca la tenía abierta, vencida)
+ * para que la página diga lo que pasó y no «venció» para todo.
  */
-export async function acceptPublicQuote(tx: BaseTx, slug: string, firma: FirmaAceptacion): Promise<PublicQuoteAcceptResult> {
+export async function acceptPublicQuote(tx: PublicShareTx, slug: string, firma: FirmaAceptacion): Promise<PublicQuoteAcceptResult> {
   const { rows } = await tx.query<{ r: PublicQuoteAcceptResult }>(
     'SELECT public_quote_accept($1, $2, $3) AS r',
     [slug, firma.name, firma.email],
@@ -1622,8 +1771,14 @@ export interface CampanaDeCotizacion {
  *
  * Las fechas salen de lo acordado en la cotización
  * (campaign_starts_on / campaign_ends_on), que es lo que se pactó antes
- * de publicar; se pueden sustituir al llamar. Sin ninguna de las dos,
- * pide que se pacten en vez de inventarlas.
+ * de publicar; se pueden dar al llamar cuando la cotización se aceptó
+ * sin ventana (el detalle ofrece entonces un formulario Desde/Hasta).
+ * Sin ninguna de las dos, pide que se pacten en vez de inventarlas.
+ *
+ * El nombre es el del negocio («Paquete snacks · Q4») cuando lo hay: es
+ * como el creador ya llama a ese trabajo, y describe mejor un paquete de
+ * varios entregables que «marca · primer entregable», que es lo que CAM-2
+ * pone por defecto.
  *
  * Es idempotente porque CAM-2 lo es: llamarla dos veces devuelve la
  * misma campaña con created: false.
@@ -1646,7 +1801,11 @@ export async function createCampaignForQuote(
       'Falta la ventana de la campaña. Acuérdala en la cotización (inicio y fin) antes de crearla.',
     );
   }
-  const { campaign, created } = await createCampaignFromQuote(tx, { quoteId: quote.id, startsOn, endsOn });
+  if (endsOn < startsOn) {
+    throw new CotizarError('FinAntesDeInicio', 'El fin de la campaña no puede ser anterior al inicio.');
+  }
+  const name = quote.dealName?.trim() || undefined;
+  const { campaign, created } = await createCampaignFromQuote(tx, { quoteId: quote.id, startsOn, endsOn, name });
   return { campaignId: campaign.id, campaignName: campaign.name, created };
 }
 
@@ -1685,8 +1844,9 @@ async function intentarCampana(tx: WorkspaceTx, quoteId: string): Promise<Result
 export async function acceptQuoteAndCreateCampaign(
   tx: WorkspaceTx,
   id: string,
+  textos: TextosCotizar,
 ): Promise<{ quote: QuoteDetail } & ResultadoCampana> {
-  await acceptQuote(tx, id);
+  await acceptQuote(tx, id, textos);
   const campana = await intentarCampana(tx, id);
   const quote = await getQuote(tx, id);
   if (!quote) throw new QuoteNotFound();
@@ -1703,36 +1863,83 @@ export async function acceptQuoteAndCreateCampaign(
  * campaña de CAM-2. Todo en la misma transacción; si la campaña no se
  * puede crear, el aviso lo dice y el detalle ofrece terminarla.
  */
-export async function completePublicAcceptance(tx: WorkspaceTx, quoteId: string): Promise<ResultadoCampana> {
+export async function completePublicAcceptance(tx: WorkspaceTx, quoteId: string, textos: TextosCotizar): Promise<ResultadoCampana> {
   const quote = await getQuote(tx, quoteId);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'accepted') {
     throw new CotizarError('QuoteNotAccepted', `Solo una cotización aceptada crea campaña; esta está en «${quote.status}».`);
   }
-  const firma = quote.acceptedByName
-    ? `${quote.acceptedByName}${quote.acceptedByEmail ? ` <${quote.acceptedByEmail}>` : ''}`
-    : null;
-  if (quote.dealId) {
-    await registrarActividad(
-      tx, quote.dealId, 'stage_change',
-      `Cotización ${quote.number} aceptada${firma ? ` por ${firma}` : ''} desde el enlace`,
-      { quoteId: quote.id, acceptedByName: quote.acceptedByName, acceptedByEmail: quote.acceptedByEmail },
-    );
-  }
+  await registrarAceptacion(tx, quote, 'enlace', textos);
   const campana = await intentarCampana(tx, quoteId);
+  const aviso = textos.avisoAceptada({
+    companyName: quote.companyName,
+    quoteNumber: quote.number,
+    signerName: quote.acceptedByName,
+    signerEmail: quote.acceptedByEmail,
+    campaignName: campana.campaign?.campaignName ?? null,
+  });
   await tx.query(
     `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
      VALUES (current_workspace_id(), 'quote_accepted', 'success', $1, $2, 'quote', $3, $4)`,
-    [
-      `${quote.companyName} aceptó la cotización ${quote.number}`,
-      campana.campaign
-        ? `Aceptada${firma ? ` por ${firma}` : ''}. La campaña «${campana.campaign.campaignName}» ya está planeada.`
-        : `Aceptada${firma ? ` por ${firma}` : ''}. La campaña quedó pendiente: termínala desde la cotización.`,
-      quote.id,
-      `/cotizar/cotizaciones/${quote.id}`,
-    ],
+    [aviso.title, aviso.body, quote.id, `/cotizar/cotizaciones/${quote.id}`],
   );
   return campana;
+}
+
+// ---------------------------------------------------------------------
+// Los avisos de aceptación (notification.kind = 'quote_accepted')
+// ---------------------------------------------------------------------
+
+/**
+ * Un aviso «la marca aceptó» sin leer, con los datos para componerlo en
+ * la pantalla (no se reusa title_es: la frase la pone messages.ts).
+ */
+export interface AcceptanceNotice {
+  id: string;
+  createdAt: string;
+  quoteId: string;
+  quoteNumber: string;
+  companyName: string;
+  signerName: string | null;
+  campaignName: string | null;
+}
+
+/** Los avisos de aceptación que el creador todavía no ha dado por vistos, los más recientes primero. */
+export async function listAcceptanceNotices(tx: WorkspaceTx, limit = 5): Promise<AcceptanceNotice[]> {
+  const { rows } = await tx.query<{
+    id: string; created_at: string; quote_id: string; number: string; company_name: string;
+    accepted_by_name: string | null; campaign_name: string | null;
+  }>(
+    `SELECT n.id, n.created_at, q.id AS quote_id, q.number, co.name AS company_name,
+            q.accepted_by_name, ca.name AS campaign_name
+       FROM notification n
+       JOIN quote q ON q.id = n.entity_id
+       JOIN company co ON co.id = q.company_id
+       LEFT JOIN campaign ca ON ca.quote_id = q.id AND ca.status <> 'cancelled'
+      WHERE n.kind = 'quote_accepted' AND n.entity_type = 'quote'
+        AND n.read_at IS NULL AND n.dismissed_at IS NULL
+      ORDER BY n.created_at DESC
+      LIMIT $1`,
+    [Math.max(1, Math.min(limit, 50))],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: r.created_at,
+    quoteId: r.quote_id,
+    quoteNumber: r.number,
+    companyName: r.company_name,
+    signerName: r.accepted_by_name,
+    campaignName: r.campaign_name,
+  }));
+}
+
+/** «Entendido»: el aviso deja de salir. Solo toca avisos de aceptación de este workspace (RLS). */
+export async function markAcceptanceNoticeRead(tx: WorkspaceTx, id: string): Promise<void> {
+  if (!isUuid(id)) return;
+  await tx.query(
+    "UPDATE notification SET read_at = coalesce(read_at, now()) WHERE id = $1 AND kind = 'quote_accepted'",
+    [id],
+  );
 }
 
 /** Los pasos del cálculo guardados en un ítem del tarifario, si los tiene. */

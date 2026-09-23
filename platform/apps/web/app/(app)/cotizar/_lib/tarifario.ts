@@ -7,9 +7,9 @@
  * @mc/db/queries/cotizar. Aquí no se multiplica nada.
  */
 import {
-  calcularItem, calcularPaquete, compareDecimal, MODIFICADORES_POR_DEFECTO,
+  calcularItem, calcularPaquete, compareDecimal, MODIFICADORES_POR_DEFECTO, validarRangoPrecio,
   type ComponentePaquete, type EntradaTarifa, type ItemPaquete, type ItemTarifa, type Modificador, type PasoCalculo,
-  type PlatformId,
+  type PlatformId, type RangoInvalido,
 } from "@mc/core";
 import type { BaselineViews, CpmBenchmark, RateCardInputs } from "@mc/db/queries/cotizar";
 import type { Formatter } from "@/lib/format";
@@ -188,11 +188,26 @@ export function precioDe(item: ItemTarifa, manual: { low: string; high: string }
   return { low: item.priceLow, high: item.priceHigh, editado: false };
 }
 
-/** El precio vigente de cada entregable que tiene rango: el que entra en los paquetes. */
+/**
+ * Por qué el precio a mano de una fila no vale, o null. La regla es
+ * validarRangoPrecio de @mc/core: la misma que aplican la acción de
+ * guardar y saveRateCard, así que lo que la tabla deja pasar es lo que
+ * el servidor acepta.
+ */
+export function motivoRangoManual(fila: Pick<FilaTarifario, "precioManual">): RangoInvalido | null {
+  if (!fila.precioManual) return null;
+  return validarRangoPrecio(fila.precioManual.low, fila.precioManual.high);
+}
+
+/**
+ * El precio vigente de cada entregable que tiene rango: el que entra en
+ * los paquetes. Un precio a mano que no vale (al revés, vacío) no entra:
+ * el paquete no suma un rango que no se va a poder guardar.
+ */
 export function preciosPorEntregable(filas: readonly FilaTarifario[]): Map<string, { low: string; high: string }> {
   const out = new Map<string, { low: string; high: string }>();
   for (const fila of filas) {
-    if (!fila.entrada) continue;
+    if (!fila.entrada || motivoRangoManual(fila)) continue;
     const precio = precioDe(calcularItem(fila.entrada), fila.precioManual);
     out.set(fila.def.id, { low: precio.low, high: precio.high });
   }
