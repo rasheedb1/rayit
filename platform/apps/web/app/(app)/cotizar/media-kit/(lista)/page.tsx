@@ -14,7 +14,7 @@ import { MESSAGES, mensajeDeError } from "../../messages";
 import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 import { GenerarMediaKitForm } from "../generar-form";
 
-export const metadata: Metadata = { title: "Media kit" };
+export const metadata: Metadata = { title: MESSAGES.meta.mediaKits };
 export const dynamic = "force-dynamic";
 
 function estadoDe(kit: MediaKitRow, ahora: number): { kind: "good" | "warn" | "bad" | "neutral"; text: string } {

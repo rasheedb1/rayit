@@ -17,6 +17,11 @@ export interface ConfirmarAccionProps {
   /** El botón que de verdad ejecuta: «Sí, rechazar». */
   confirmar: string;
   cancelar: string;
+  /**
+   * El ancho de la pregunta abierta. Por defecto ocupa su tarjeta; en la
+   * cabecera del detalle se acota para no apretar el título (pulido r7).
+   */
+  anchoAbierta?: string;
 }
 
 /**
@@ -30,7 +35,7 @@ export interface ConfirmarAccionProps {
  * Escape cancela.
  */
 export function ConfirmarAccion({
-  action, label, variant = "secondary", pregunta, consecuencia, confirmar, cancelar,
+  action, label, variant = "secondary", pregunta, consecuencia, confirmar, cancelar, anchoAbierta = "w-full",
 }: ConfirmarAccionProps) {
   const [abierta, setAbierta] = useState(false);
   const id = useId();
@@ -68,7 +73,7 @@ export function ConfirmarAccion({
       role="group"
       aria-labelledby={`${id}-pregunta`}
       aria-describedby={`${id}-consecuencia`}
-      className="w-full rounded-md border border-border bg-surface-2 p-3"
+      className={`${anchoAbierta} rounded-md border border-border bg-surface-2 p-3`}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.preventDefault();

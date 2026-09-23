@@ -69,6 +69,19 @@ export interface QuoteListRow {
    */
   supersededById: string | null;
   supersededByNumber: string | null;
+  /**
+   * El estado DE HOY de esa versión que la reemplazó: el detalle no puede
+   * decir «es la que la marca puede aceptar» de una que ya se aceptó,
+   * se rechazó o venció (pulido r7).
+   */
+  supersededByStatus: QuoteStatus | null;
+}
+
+/** Una versión del mismo negocio, con su número y su estado de hoy. */
+export interface QuoteVersionRef {
+  id: string;
+  number: string;
+  status: QuoteStatus;
 }
 
 export interface QuoteDetail extends QuoteListRow {
@@ -98,6 +111,14 @@ export interface QuoteDetail extends QuoteListRow {
   campaignPending: boolean;
   /** Las versiones del mismo negocio que esta dejó sin efecto al enviarse (0033). */
   supersedes: { id: string; number: string }[];
+  /**
+   * Las OTRAS versiones del mismo negocio que la marca puede aceptar hoy
+   * (enviadas o vistas, sin vencer). Enviar esta las deja sin efecto
+   * (0033) y eso no se deshace: el detalle de un borrador lo avisa y
+   * pide confirmación antes de enviar (pulido r7). Vacía si no hay
+   * negocio o si no queda ninguna viva.
+   */
+  liveSiblings: QuoteVersionRef[];
 }
 
 interface RawQuote {
@@ -114,7 +135,7 @@ interface RawQuote {
   accepted_by_name: string | null; accepted_by_email: string | null;
   view_count: number; created_at: string;
   campaign_id: string | null; campaign_name: string | null;
-  superseded_by: string | null; superseded_by_number: string | null;
+  superseded_by: string | null; superseded_by_number: string | null; superseded_by_status: QuoteStatus | null;
 }
 
 /**
@@ -143,7 +164,10 @@ const SELECT_QUOTE = `
          q.accepted_by_name, q.accepted_by_email,
          q.view_count, q.created_at,
          ca.id AS campaign_id, ca.name AS campaign_name,
-         q.superseded_by, sb.number AS superseded_by_number
+         q.superseded_by, sb.number AS superseded_by_number,
+         CASE WHEN sb.status IN ('sent', 'viewed') AND sb.valid_until IS NOT NULL
+                   AND sb.valid_until < (now() AT TIME ZONE w.timezone)::date
+              THEN 'expired' ELSE sb.status END AS superseded_by_status
     FROM quote q
     JOIN workspace w ON w.id = q.workspace_id
     JOIN company co ON co.id = q.company_id
@@ -197,7 +221,9 @@ function mapQuote(r: RawQuote): QuoteDetail {
     campaignPending: r.status === 'accepted' && r.campaign_id === null,
     supersededById: r.superseded_by,
     supersededByNumber: r.superseded_by_number,
+    supersededByStatus: r.superseded_by_status,
     supersedes: [],
+    liveSiblings: [],
   };
 }
 
@@ -246,7 +272,40 @@ export async function getQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail
     [id],
   );
   quote.supersedes = reemplazadas;
+  if (quote.dealId) {
+    const vivas = await listLiveQuotesByDeal(tx, [quote.dealId]);
+    quote.liveSiblings = (vivas.get(quote.dealId) ?? []).filter((v) => v.id !== id);
+  }
   return quote;
+}
+
+/**
+ * Las cotizaciones que la marca puede aceptar HOY (enviadas o vistas y
+ * sin vencer, con la regla de SELECT_QUOTE), agrupadas por negocio y
+ * por número. Sin `dealIds`, las de todos los negocios del workspace.
+ *
+ * Es lo que 0033 deja sin efecto al enviar otra versión del mismo
+ * negocio: el formulario y el detalle lo enseñan ANTES de enviar.
+ */
+export async function listLiveQuotesByDeal(
+  tx: WorkspaceTx,
+  dealIds?: readonly string[],
+): Promise<Map<string, QuoteVersionRef[]>> {
+  const filtrar = dealIds !== undefined;
+  const { rows } = await tx.query<{ deal_id: string; id: string; number: string; status: QuoteStatus }>(
+    `SELECT x.deal_id, x.id, x.number, x.status FROM (${SELECT_QUOTE}) x
+      WHERE x.deal_id IS NOT NULL AND x.status IN ('sent', 'viewed')
+            ${filtrar ? 'AND x.deal_id = ANY($1::uuid[])' : ''}
+      ORDER BY x.number`,
+    filtrar ? [[...dealIds]] : [],
+  );
+  const porNegocio = new Map<string, QuoteVersionRef[]>();
+  for (const r of rows) {
+    const lista = porNegocio.get(r.deal_id) ?? [];
+    lista.push({ id: r.id, number: r.number, status: r.status });
+    porNegocio.set(r.deal_id, lista);
+  }
+  return porNegocio;
 }
 
 /**
@@ -332,6 +391,12 @@ export interface QuotableDeal {
   stageLabel: string;
   amount: Decimal | null;
   currency: string;
+  /**
+   * Las cotizaciones de este negocio que la marca puede aceptar hoy. Si
+   * hay alguna, enviar la nueva la deja sin efecto (0033): el formulario
+   * lo dice en la ayuda del campo «Negocio» (pulido r7).
+   */
+  liveQuotes: QuoteVersionRef[];
 }
 
 /**
@@ -352,6 +417,7 @@ export async function listQuotableDeals(tx: WorkspaceTx): Promise<QuotableDeal[]
       WHERE NOT p.is_lost AND NOT p.is_won
       ORDER BY greatest(h.ultimo, p.last_contact_at) DESC NULLS LAST, p.name`,
   );
+  const vivas = rows.length > 0 ? await listLiveQuotesByDeal(tx, rows.map((r) => r.id)) : new Map<string, QuoteVersionRef[]>();
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -361,6 +427,7 @@ export async function listQuotableDeals(tx: WorkspaceTx): Promise<QuotableDeal[]
     stageLabel: r.stage_label,
     amount: r.amount,
     currency: r.currency.toUpperCase(),
+    liveQuotes: vivas.get(r.id) ?? [],
   }));
 }
 

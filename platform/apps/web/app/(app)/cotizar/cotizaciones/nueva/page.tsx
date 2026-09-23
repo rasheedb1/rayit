@@ -12,7 +12,7 @@ import { MESSAGES } from "../../messages";
 import { mediaKitPorDefecto } from "../../_lib/kits";
 import { CotizacionForm } from "./form";
 
-export const metadata: Metadata = { title: "Nueva cotización" };
+export const metadata: Metadata = { title: MESSAGES.meta.nueva };
 export const dynamic = "force-dynamic";
 
 /**

@@ -34,6 +34,27 @@ export function idiomaDocumento(locale: string | null | undefined): string {
 export const MESSAGES = {
   modulo: "Cotizar",
 
+  /**
+   * Los títulos de pestaña (metadata.title) de cada pantalla, y los de
+   * las dos páginas que abre la marca. El layout raíz les pone « · On Cue».
+   */
+  meta: {
+    tarifario: "Cotizar",
+    mediaKits: "Media kit",
+    mediaKitVistaPrevia: "Vista previa del media kit",
+    cotizaciones: "Cotizaciones",
+    nueva: "Nueva cotización",
+    cotizacion: "Cotización",
+    editar: "Editar cotización",
+    vistaPrevia: "Vista previa de la cotización",
+    /** La pestaña de la marca: el número y quién la manda, como el asunto de una factura. */
+    cotizacionPublica: (numero: string, creador: string) => (creador ? `${numero} · ${creador}` : numero),
+    cotizacionPublicaSinDatos: "Cotización",
+    /** Solo con el kit abierto: detrás de una contraseña no se dice de quién es. */
+    kitPublico: (creador: string) => (creador ? `Media kit · ${creador}` : "Media kit"),
+    kitPublicoSinDatos: "Media kit",
+  },
+
   /** Las tres pantallas del módulo, para moverse entre ellas. */
   navegacion: {
     tarifario: "Tarifario",
@@ -272,6 +293,15 @@ export const MESSAGES = {
     },
     negocio: "Negocio",
     negocioAyuda: "La marca sale del negocio. Enviar la cotización lo pasa a «Propuesta enviada».",
+    /**
+     * El negocio elegido ya tiene una cotización que la marca puede
+     * aceptar: enviar esta la deja sin efecto (0033). Se dice al elegirlo,
+     * no después de enviar (pulido r7).
+     */
+    negocioConViva: (numeros: readonly string[]) =>
+      numeros.length === 1
+        ? `Este negocio ya tiene ${numeros[0]} enviada. Cuando envíes esta, ${numeros[0]} dejará de poder aceptarse.`
+        : `Este negocio ya tiene ${numeros.join(", ")} enviadas. Cuando envíes esta, dejarán de poder aceptarse.`,
     sinNegocio: "Elige el negocio que estás cotizando",
     entregables: "Entregables",
     // Sin tarifario guardado, el selector solo ofrece «Otro entregable»:
@@ -371,6 +401,19 @@ export const MESSAGES = {
         consecuencia: "La marca ya no podrá aceptarla desde el enlace. No se puede deshacer.",
         boton: "Sí, rechazar",
       },
+      /**
+       * Enviar un borrador cuyo negocio ya tiene otra versión viva: la
+       * deja sin efecto (0033) y eso no se deshace, así que pide el mismo
+       * segundo paso que aceptar y rechazar (pulido r7).
+       */
+      enviar: {
+        pregunta: (numero: string) => `¿Enviar ${numero}?`,
+        consecuencia: (numeros: readonly string[]) =>
+          numeros.length === 1
+            ? `${numeros[0]} dejará de poder aceptarse, también si la marca la tiene abierta ahora. No se puede deshacer.`
+            : `${numeros.join(", ")} dejarán de poder aceptarse, también si la marca las tiene abiertas ahora. No se puede deshacer.`,
+        boton: "Sí, enviar y copiar enlace",
+      },
       eliminar: {
         pregunta: (numero: string) => `¿Eliminar el borrador ${numero}?`,
         consecuencia: "Se borra con sus entregables. No se puede deshacer.",
@@ -386,6 +429,19 @@ export const MESSAGES = {
     historia: "Historia",
     enlace: "Enlace para la marca",
     enlaceAyuda: "Copia el enlace y pégalo donde ya hablas con la marca.",
+    /**
+     * Una cotización que ya no se puede aceptar: su enlace sigue abriendo
+     * (la marca lee por qué), pero no se ofrece copiarlo (pulido r7).
+     */
+    enlaceMuerto: {
+      /** Solo se manda a la sucesora si su enlace sirve: viva, o aceptada (la marca ve lo que firmó). */
+      sinEfecto: (numero: string, estadoSucesora: string | null) =>
+        estadoSucesora === "rejected" || estadoSucesora === "expired"
+          ? `Este enlace ya no acepta, y el de ${numero}, que la reemplazó, tampoco. Si la marca quiere retomarla, crea otra versión.`
+          : `Este enlace ya no acepta: comparte el de ${numero}.`,
+      rechazada: "Este enlace ya no acepta: la cotización está rechazada. Si la marca quiere retomarla, crea otra versión.",
+      vencida: "Este enlace ya no acepta: pasó su fecha de validez. Si la marca quiere retomarla, crea otra versión.",
+    },
     visitas: (n: number) => (n === 1 ? "1 visita" : `${n} visitas`),
     sinVisitas: "Todavía sin abrir",
     totalLinea: "Total",
@@ -411,7 +467,26 @@ export const MESSAGES = {
       numeros.length === 1
         ? `${numeros[0]} queda sin efecto: la marca ya no puede aceptarla. Vale esta.`
         : `${numeros.join(", ")} quedan sin efecto: la marca ya no puede aceptarlas. Vale esta.`,
-    quedoSinEfecto: (numero: string) => `Quedó sin efecto: la reemplazó ${numero}, que es la que la marca puede aceptar.`,
+    /**
+     * Depende de cómo esté HOY la versión que la reemplazó: decir «es la
+     * que la marca puede aceptar» de una ya aceptada era falso (pulido r7).
+     */
+    quedoSinEfecto: (numero: string, estadoSucesora: string | null) =>
+      estadoSucesora === "accepted"
+        ? `Quedó sin efecto: la reemplazó ${numero}, que la marca ya aceptó.`
+        : estadoSucesora === "rejected"
+          ? `Quedó sin efecto: la reemplazó ${numero}, que después se rechazó.`
+          : estadoSucesora === "expired"
+            ? `Quedó sin efecto: la reemplazó ${numero}, que tampoco sigue vigente.`
+            : `Quedó sin efecto: la reemplazó ${numero}, que es la que la marca puede aceptar.`,
+    /**
+     * En un borrador cuyo negocio tiene otra versión viva: lo que pasará
+     * al enviarlo, antes de enviarlo (0033, pulido r7).
+     */
+    alEnviarQuedaSinEfecto: (numeros: readonly string[]) =>
+      numeros.length === 1
+        ? `Al enviarla, ${numeros[0]} deja de poder aceptarse: la marca que tenga ese enlace abierto ya no podrá aceptarla.`
+        : `Al enviarla, ${numeros.join(", ")} dejan de poder aceptarse: la marca que tenga esos enlaces abiertos ya no podrá aceptarlas.`,
     verVersion: (numero: string) => `Ver ${numero}`,
     metricas: "Métricas a reportar",
     cortes: "Cortes",
@@ -612,8 +687,19 @@ export const MESSAGES = {
           terminos: "Marca la casilla para aceptar los términos.",
         },
       },
+      /** La respuesta a la propia firma: solo la ve quien acaba de aceptar. */
       graciasTitle: "Listo: cotización aceptada",
       graciasDescription: "Quedó registrada a tu nombre. Le avisamos a quien te la envió.",
+      /**
+       * El estado leído al abrir el enlace de una ya aceptada: lo puede
+       * ver otra persona del equipo de la marca, así que va en tercera
+       * persona (pulido r7). Recibe la fecha ya formateada.
+       */
+      aceptadaTitle: "Cotización aceptada",
+      aceptadaLeida: (nombre: string | null, fecha: string) =>
+        nombre
+          ? `Aceptada por ${nombre} el ${fecha}. Quien te la envió ya lo sabe.`
+          : `Aceptada el ${fecha}. Quien te la envió ya lo sabe.`,
       error: "No pudimos registrar la aceptación. Vuelve a intentarlo en un momento.",
       pie: "Documento generado con On Cue",
     },

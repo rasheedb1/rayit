@@ -1,5 +1,5 @@
 import type { PillKind } from "@/components/ui/pill";
-import { nombreEstadoCotizacion } from "../messages";
+import { MESSAGES, nombreEstadoCotizacion } from "../messages";
 
 /**
  * El estado que se ENSEÑA: 'superseded' para una vencida que dejó sin
@@ -40,4 +40,30 @@ export function pillDeCotizacion(status: string): { kind: PillKind; text: string
  */
 export function validezYaNoAplica(status: string): boolean {
   return status === "accepted" || status === "rejected" || status === "expired";
+}
+
+/**
+ * Qué hacer con el enlace de una cotización ya enviada, según su estado
+ * de hoy (pulido r7):
+ *
+ *   enviada, vista o aceptada → se ofrece copiarlo (la aceptada, para que
+ *     la marca vuelva a ver lo que firmó)
+ *   rechazada o vencida → ya no acepta: no se ofrece copiarlo, y la ayuda
+ *     dice qué compartir en su lugar
+ *   sin efecto → el enlace de la versión que la reemplazó, si ese sirve
+ *
+ * El enlace muerto sigue abriendo (la marca lee por qué ya no vale): lo
+ * que no hace la pantalla es invitar a mandarlo.
+ */
+export function enlaceDeCotizacion(q: {
+  status: string;
+  supersededByNumber?: string | null;
+  supersededByStatus?: string | null;
+}): { copiable: boolean; ayuda: string } {
+  const t = MESSAGES.detalle;
+  if (q.status !== "rejected" && q.status !== "expired") return { copiable: true, ayuda: t.enlaceAyuda };
+  if (q.status === "expired" && q.supersededByNumber) {
+    return { copiable: false, ayuda: t.enlaceMuerto.sinEfecto(q.supersededByNumber, q.supersededByStatus ?? null) };
+  }
+  return { copiable: false, ayuda: q.status === "rejected" ? t.enlaceMuerto.rechazada : t.enlaceMuerto.vencida };
 }

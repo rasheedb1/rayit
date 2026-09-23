@@ -15,7 +15,7 @@ import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from 
 import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
-import { estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
+import { enlaceDeCotizacion, estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
 import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 import { EsqueletoLista } from "../../_ui/esqueleto-lista";
 import { ResumenTotales } from "../../_ui/resumen-totales";
@@ -24,7 +24,7 @@ import { EliminarBorrador } from "./eliminar";
 import { EnviarCotizacion } from "./enviar";
 import { VentanaCampana } from "./ventana";
 
-export const metadata: Metadata = { title: "Cotización" };
+export const metadata: Metadata = { title: MESSAGES.meta.cotizacion };
 
 /**
  * Una fila de «Lo acordado» y de «Historia»: el término arriba y el
@@ -77,6 +77,13 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
   const pill = pillDeCotizacion(estadoVisible(quote));
   const esBorrador = quote.status === "draft";
   const sePuedeCerrar = quote.status === "sent" || quote.status === "viewed";
+  // Rechazada o vencida —también «sin efecto»— ya no acepta: no se
+  // ofrece copiar su enlace, y la tarjeta dice qué compartir en su lugar.
+  const estadoEnlace = enlaceDeCotizacion(quote);
+  // Las otras versiones vivas del negocio: enviar este borrador las deja
+  // sin efecto (0033), y eso se avisa y se confirma ANTES (pulido r7).
+  const vivas = esBorrador ? quote.liveSiblings : [];
+  const numerosVivas = vivas.map((v) => v.number);
   // Aceptada, rechazada o vencida, la validez ya no dice nada: como en
   // Stripe Quotes, desaparece en cuanto la cotización se cierra.
   const validezCerrada = validezYaNoAplica(quote.status);
@@ -153,9 +160,19 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
             {esBorrador ? (
               <>
                 <Button href={`/cotizar/cotizaciones/${quote.id}/editar`}>{t.editar}</Button>
-                <EnviarCotizacion id={quote.id} />
+                <EnviarCotizacion
+                  id={quote.id}
+                  confirmacion={
+                    vivas.length > 0
+                      ? {
+                          pregunta: t.confirmar.enviar.pregunta(quote.number),
+                          consecuencia: t.confirmar.enviar.consecuencia(numerosVivas),
+                        }
+                      : undefined
+                  }
+                />
               </>
-            ) : (
+            ) : !estadoEnlace.copiable ? null : (
               <CopiarEnlace path={enlace} size="md" />
             )}
           </div>
@@ -168,6 +185,20 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
         </p>
       )}
       {enviada && !esBorrador && <AvisoEnviada enviada={enviada} enlace={enlace} />}
+      {vivas.length > 0 && (
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm"
+          data-aviso="al-enviar-sin-efecto"
+        >
+          <span className="min-w-0 text-ink-2">{t.alEnviarQuedaSinEfecto(numerosVivas)}</span>
+          {vivas.map((v) => (
+            <Button key={v.id} size="sm" variant="ghost" href={`/cotizar/cotizaciones/${v.id}`}>
+              {t.verVersion(v.number)}
+            </Button>
+          ))}
+        </div>
+      )}
       {/* Una versión por negocio (0033): la que se envía deja sin efecto las
           anteriores, y cada una lo dice con un enlace a la otra. */}
       {quote.supersedes.length > 0 && (
@@ -190,7 +221,7 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
           className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm"
           data-aviso="sin-efecto"
         >
-          <span className="min-w-0 text-ink-2">{t.quedoSinEfecto(quote.supersededByNumber)}</span>
+          <span className="min-w-0 text-ink-2">{t.quedoSinEfecto(quote.supersededByNumber, quote.supersededByStatus)}</span>
           <Button size="sm" variant="ghost" href={`/cotizar/cotizaciones/${quote.supersededById}`}>
             {t.verVersion(quote.supersededByNumber)}
           </Button>
@@ -266,7 +297,7 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
             <div className="rounded-md border border-border p-4">
               <p className="text-xs font-medium text-ink-2">{t.enlace}</p>
               <p className="mt-1 break-all font-mono text-xs text-ink-2">{enlace}</p>
-              <p className="mt-2 text-xs leading-4 text-muted">{t.enlaceAyuda}</p>
+              <p className="mt-2 text-xs leading-4 text-muted">{estadoEnlace.ayuda}</p>
               <p className="mt-2 text-xs text-muted">
                 {quote.viewCount > 0 ? t.visitas(quote.viewCount) : t.sinVisitas}
                 {quote.validUntil && !validezCerrada ? ` · ${MESSAGES.publico.cotizacion.valida(f.date(quote.validUntil))}` : ""}

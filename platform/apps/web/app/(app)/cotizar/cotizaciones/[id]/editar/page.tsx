@@ -14,7 +14,7 @@ import { MESSAGES } from "../../../messages";
 import { EsqueletoLista } from "../../../_ui/esqueleto-lista";
 import { CotizacionForm } from "../../nueva/form";
 
-export const metadata: Metadata = { title: "Editar cotización" };
+export const metadata: Metadata = { title: MESSAGES.meta.editar };
 export const dynamic = "force-dynamic";
 
 /**

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { enviarCotizacion } from "../../actions";
 import { MESSAGES } from "../../messages";
+import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 
 /**
  * «Enviar y copiar enlace». Hace las dos cosas que dice: envía (congela
@@ -18,41 +19,74 @@ import { MESSAGES } from "../../messages";
  * (?enviada=copiado | manual) y lo anuncia el detalle, no este botón.
  * El detalle lo pinta una sola vez: AvisoEnviada borra el parámetro de
  * la URL, y recargar o compartir la dirección ya no repite «copiado».
+ *
+ * Con `confirmacion` —el negocio tiene otra versión que la marca puede
+ * aceptar, y enviar esta la deja sin efecto (0033)—, enviar deja de ser
+ * un clic: pide el mismo segundo paso que aceptar y rechazar, porque
+ * tampoco se deshace (pulido r7).
  */
-export function EnviarCotizacion({ id }: { id: string }) {
+export function EnviarCotizacion({
+  id,
+  confirmacion,
+}: {
+  id: string;
+  confirmacion?: { pregunta: string; consecuencia: string };
+}) {
   const t = MESSAGES.detalle;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  function enviar() {
-    startTransition(async () => {
-      const r = await enviarCotizacion(id);
-      if (r.status === "error") {
-        setError(r.message);
-        return;
-      }
-      let copiado = false;
-      try {
-        await navigator.clipboard.writeText(new URL(r.path, window.location.origin).toString());
-        copiado = true;
-      } catch {
-        copiado = false;
-      }
-      router.replace(`/cotizar/cotizaciones/${id}?enviada=${copiado ? "copiado" : "manual"}`);
-    });
+  async function enviarYCopiar() {
+    setError(null);
+    const r = await enviarCotizacion(id);
+    if (r.status === "error") {
+      setError(r.message);
+      return;
+    }
+    let copiado = false;
+    try {
+      await navigator.clipboard.writeText(new URL(r.path, window.location.origin).toString());
+      copiado = true;
+    } catch {
+      copiado = false;
+    }
+    router.replace(`/cotizar/cotizaciones/${id}?enviada=${copiado ? "copiado" : "manual"}`);
+  }
+
+  const alerta = error && (
+    <span role="alert" className="text-sm text-bad">
+      {error}
+    </span>
+  );
+
+  if (confirmacion) {
+    // La acción del formulario de ConfirmarAccion: su botón «Sí, enviar…»
+    // ya lleva el estado de carga (useFormStatus), así que un doble clic
+    // no envía dos veces.
+    return (
+      <span className="flex flex-col items-start gap-1">
+        <ConfirmarAccion
+          action={enviarYCopiar}
+          label={t.enviar}
+          variant="primary"
+          anchoAbierta="w-full sm:w-80"
+          pregunta={confirmacion.pregunta}
+          consecuencia={confirmacion.consecuencia}
+          confirmar={t.confirmar.enviar.boton}
+          cancelar={t.confirmar.cancelar}
+        />
+        {alerta}
+      </span>
+    );
   }
 
   return (
     <span className="flex flex-col items-start gap-1">
-      <Button variant="primary" loading={pending} onClick={enviar}>
+      <Button variant="primary" loading={pending} onClick={() => startTransition(enviarYCopiar)}>
         {pending ? t.enviando : t.enviar}
       </Button>
-      {error && (
-        <span role="alert" className="text-sm text-bad">
-          {error}
-        </span>
-      )}
+      {alerta}
     </span>
   );
 }

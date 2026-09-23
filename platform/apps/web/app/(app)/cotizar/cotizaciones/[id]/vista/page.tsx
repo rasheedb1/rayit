@@ -6,7 +6,7 @@ import { withWorkspace } from "@/lib/db";
 import { MESSAGES } from "../../../messages";
 import { DocumentoCotizacion } from "../../../_ui/documento-cotizacion";
 
-export const metadata: Metadata = { title: "Vista previa de la cotización" };
+export const metadata: Metadata = { title: MESSAGES.meta.vistaPrevia };
 export const dynamic = "force-dynamic";
 
 /**
