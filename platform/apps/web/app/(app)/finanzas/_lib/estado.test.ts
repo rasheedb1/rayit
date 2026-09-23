@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   RECEIVABLE_FILTERS,
   RECEIVABLE_FILTER_KEYS,
+  filterKey,
   invoiceFilterHref,
   pillForInvoice,
   pillForReceivable,
@@ -63,6 +64,16 @@ describe("el filtro vive en la URL", () => {
     expect(receivableFilterKey("no-existe")).toBe("por_cobrar");
     expect(receivableHref("por_cobrar")).toBe("/finanzas");
     expect(RECEIVABLE_FILTERS.por_cobrar.bucket).toBe(null);
+  });
+
+  it("una propiedad heredada de Object no es un filtro (hallazgo de /code-review)", () => {
+    // Con `in` en vez de Object.hasOwn, ?bucket=toString pasaba por
+    // bueno y la pantalla decía «No hay facturas en «undefined»».
+    for (const heredada of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+      expect(receivableFilterKey(heredada)).toBe("por_cobrar");
+      expect(RECEIVABLE_FILTERS[receivableFilterKey(heredada)].label).toBe("Por cobrar");
+    }
+    expect(filterKey("toString")).toBe("todas");
   });
 
   it("cada bucket tiene su URL compartible y conserva la búsqueda", () => {
