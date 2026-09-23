@@ -17,6 +17,7 @@
 //
 // Se lanza fase por fase:  args = { fases: [1] } … { fases: [7] }
 // Argumentos: umbral (9.5), maxRondas (5), maxRondasFinal (4), fases.
+// Pulido de lo ya integrado: args = { pulir: { pendientes: [...] } } (ver pulir()).
 // El plan está en docs/fases-rasheed.md y docs/ventas-outreach.md.
 // =====================================================================
 export const meta = {
@@ -38,6 +39,7 @@ export const meta = {
     { title: 'Fase 6 · operación', detail: 'bandejas · métricas · cierre' },
     { title: 'Integración 6', detail: 'merge, CI y Vercel en modo monorepo' },
     { title: 'Revisión final', detail: 'producto integrado en bucle hasta el umbral' },
+    { title: 'Pulido', detail: 'lo integrado que quedó bajo el umbral, sin migrar Supabase' },
   ],
 }
 
@@ -608,6 +610,101 @@ async function revisionFinal() {
 }
 
 // ---------------------------------------------------------------------
+// Pulido · args = { pulir: { pendientes: [{ area, severity, where, issue, fix }] } }
+// Cierra lo que dejaron abajo de 9,5 las fases ya integradas, sobre la
+// rama integrada. A diferencia de la revisión final (fase 7), solo
+// califica lo que ya existe y el integrador NO aplica migraciones en
+// Supabase: eso lo confirma una persona.
+// ---------------------------------------------------------------------
+const ALCANCE_PULIDO = `
+ALCANCE DE ESTE PULIDO (lee con cuidado)
+- Lo que se califica es lo que YA está construido en ${RAMA_INTEGRACION}: cimientos y aislamiento por fila (CIM-1, CIM-2, CIM-6 y el pase de endurecimiento: migraciones 0024, 0025, 0026, 0029 y la guardia de packages/db/src/esquema.ts), autenticación y workspaces (CIM-3, migraciones 0027 y 0028), Resumen e importación CSV (RES-1, RES-2), Cotizar (COT-1 a COT-4, migración 0030) y el CRM base de Ventas (VEN-1 a VEN-3).
+- NO se califica lo que todavía no existe (VEN-4 en adelante, cadencias, canales, fases 4 a 6) ni los módulos de Nicolás (Conexiones, Campañas, Finanzas), salvo que algo nuestro los rompa.
+- Supabase está a propósito en 0022: las migraciones 0024 a 0030 NO se aplican en este pulido. Nadie corre \`make db.migrate\` ni escribe en Supabase. Para probar la app con el esquema completo usa una base local con todas las migraciones y el seed (Postgres embebido/pglite, como hacen las pruebas y \`make db.check\`); si no es posible levantar la web contra ella, dilo y evalúa con pruebas de integración.
+- Lo que depende de una persona no baja la nota si el código está listo, muestra un estado claro de «no configurado» y figura como pendiente humano en la note de backlog.ts: la llave de CAPTCHA (Turnstile), el visto bueno de Nicolás a los cambios en su carpeta, crear el rol mc_public_share con supabase-admin, aplicar 0024–0030 y las Redirect URLs de Supabase Auth.
+`
+
+function promptCorregirPulido(area, findings, ronda) {
+  const lista = findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.where}: ${f.issue}\n   Arreglo: ${f.fix}`).join('\n')
+  const branch = `rasheed/pulir-r${ronda}-${area}`
+  return `Eres el corrector del área «${area}» en la ronda ${ronda} del pulido. Estos findings quedaron abiertos y caen en tu área. Resuélvelos todos sin romper nada de lo demás.
+${CONTEXTO}
+${ALCANCE_PULIDO}
+FINDINGS (si uno ya está resuelto en ${RAMA_INTEGRACION} o te parece equivocado, dilo en decisions con evidencia, no lo ignores):
+${lista}
+REGLAS DE MIGRACIONES: 0001–0022 están aplicadas y son inmutables. 0024–0030 NO están aplicadas en ningún sitio, así que puedes corregirlas en su propio archivo en vez de crear una nueva, conservando el orden. Si necesitas una migración nueva, usa 0031 en adelante y dilo en decisions (otras áreas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Siempre \`make db.check\`.
+PROTOCOLO: estás en un worktree limpio sobre ${RAMA_INTEGRACION}. \`git checkout -b ${branch} ${RAMA_INTEGRACION}\`; \`cd platform && pnpm install\`; resuelve tocando solo los archivos de tu área (si un arreglo exige tocar otra, hazlo mínimo y dilo en decisions); en platform/backlog.ts cambia solo las notas de las historias de tu área y déjalas cortas; corre \`make db.check\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\` en verde; commits en español con el id de la historia; \`git checkout --detach\`.
+Devuelve el JSON del esquema con la rama (${branch}) y el SHA.`
+}
+
+function promptIntegrarPulido(ronda, ramas) {
+  const lista = ramas.map((r) => `- ${r.id}: ${r.branch}`).join('\n')
+  return `Eres el integrador de la ronda ${ronda} del pulido. Trabajas en el checkout principal del repositorio, en la rama ${RAMA_INTEGRACION}. NO uses worktrees.
+${CONTEXTO}
+${ALCANCE_PULIDO}
+RAMAS A INTEGRAR, en este orden:
+${lista}
+PROTOCOLO:
+1. \`git status\` limpio y \`git branch --show-current\` = ${RAMA_INTEGRACION}. Si no, ok=false y explícalo.
+2. \`git merge --no-ff <rama>\` una por una. En backlog.ts conserva las notas de cada área. Si dos ramas crearon migraciones con el mismo número (0031+), renumera la segunda y actualiza sus referencias. Un conflicto de código entre áreas: resuélvelo conservando la intención de las dos y dilo en notes.
+3. En platform/: \`pnpm install\`, \`make db.check\`, \`pnpm verificar\`, \`pnpm --filter @mc/web build\`. Si algo falla por la integración, arréglalo con un commit "pulido r${ronda}: …". Si falla por una rama, dilo en notes con el detalle y ok=false.
+4. PROHIBIDO: \`make db.migrate\`, \`make db.seed\` contra Supabase, push, tocar main, desplegar.
+5. Deja el checkout en ${RAMA_INTEGRACION} con todo commiteado.
+Devuelve el JSON del esquema.`
+}
+
+function promptRevisionPulido(lente, ronda) {
+  const foco = lente === 'tecnico'
+    ? `LENTE TÉCNICO. Corre \`make db.check\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\`. Lee \`git diff main...${RAMA_INTEGRACION} --stat\` y revisa, dentro del alcance: aislamiento por fila en cada consulta y cada tabla (la guardia de esquema.ts debe quedar activa y sin falsos verdes), el orden y la idempotencia de 0024–0030 sobre una base en 0022, autenticación (redirecciones, sesión, identidad, alta de workspace), validación de entradas, secretos, formularios públicos (media kit y cotización), duplicación entre módulos y tipos débiles.`
+    : `LENTE DE PRODUCTO. Recorre, dentro del alcance, como un creador nuevo y luego como la creadora del seed: entrar; workspace vacío; Resumen con periodos y redes e importar un CSV (también el mismo archivo dos veces); Ventas (empresas, contactos, radar, pipeline); Cotizar con tarifario, media kit público y cotización pública con su aceptación en una ventana sin sesión; cambio de workspace; cerrar sesión. Comprueba coherencia entre módulos (mismas cifras, moneda y nombres), tema claro y oscuro, 400 px y teclado.`
+  return `Eres el revisor del pulido sobre ${RAMA_INTEGRACION}, ronda ${ronda}. Trabajas en un worktree limpio: \`git checkout --detach ${RAMA_INTEGRACION}\`; \`cd platform && pnpm install\`. No modifiques nada.
+${CONTEXTO}
+${ALCANCE_PULIDO}
+${foco}
+${RUBRICA}
+La nota es del producto integrado dentro del alcance. Empieza cada \`where\` con la ruta del archivo o de la pantalla (apps/web/app/(app)/cotizar/…, /resumen, packages/db/…) para poder asignarlo a su área. Devuelve el JSON del esquema.`
+}
+
+function areaPulido(f) {
+  if (f.area) return f.area
+  const a = areaDe(f.where)
+  return a === 'web' ? 'datos' : a
+}
+
+async function pulir(pendientes) {
+  phase('Pulido')
+  const salida = { rondas: [], ok: false, score: 0 }
+  let findings = pendientes
+  for (let ronda = 1; ronda <= MAX_RONDAS_FINAL; ronda++) {
+    const grupos = {}
+    for (const f of findings) { const a = areaPulido(f); (grupos[a] ||= []).push(f) }
+    const fixes = (await parallel(Object.keys(grupos).map((area) => () =>
+      agent(promptCorregirPulido(area, grupos[area], ronda), { label: `pulir-corregir:${area} r${ronda}`, phase: 'Pulido', isolation: 'worktree', effort: 'high', schema: BUILD })
+        .then((r) => (r && r.branch ? { id: area, branch: r.branch } : null))
+    ))).filter(Boolean)
+    if (!fixes.length) { salida.findings = findings; salida.detalle = 'ningún corrector devolvió rama'; return salida }
+    const int = await agent(promptIntegrarPulido(ronda, fixes), { label: `pulir-integrar r${ronda}`, phase: 'Pulido', effort: 'high', schema: MERGE })
+    if (!int || !int.ok) { salida.integracion = int; salida.findings = findings; return salida }
+    log(`Pulido · ronda ${ronda}: ${fixes.length} áreas integradas (${int.commit})`)
+    const [tec, prod] = await parallel([
+      () => agent(promptRevisionPulido('tecnico', ronda), { label: `pulir-tecnico r${ronda}`, phase: 'Pulido', isolation: 'worktree', effort: 'high', schema: REVIEW }),
+      () => agent(promptRevisionPulido('producto', ronda), { label: `pulir-producto r${ronda}`, phase: 'Pulido', isolation: 'worktree', effort: 'high', schema: REVIEW }),
+    ])
+    const notaTec = tec ? tec.score : 0
+    const notaProd = prod ? prod.score : 0
+    const score = Math.min(notaTec, notaProd)
+    findings = [...((tec && tec.findings) || []), ...((prod && prod.findings) || [])]
+    log(`Pulido · ronda ${ronda}: técnico ${notaTec} · producto ${notaProd} · mínimo ${score} (umbral ${UMBRAL}) · ${findings.length} findings`)
+    salida.rondas.push({ ronda, tec: notaTec, prod: notaProd, score, findings: findings.length, commit: int.commit })
+    salida.score = score
+    if (score >= UMBRAL) { salida.ok = true; return salida }
+  }
+  salida.findings = findings
+  log(`Pulido: no alcanzó ${UMBRAL} en ${MAX_RONDAS_FINAL} rondas; quedan ${findings.length} findings`)
+  return salida
+}
+
+// ---------------------------------------------------------------------
 // Orquestación
 // ---------------------------------------------------------------------
 phase('Preparación')
@@ -616,6 +713,11 @@ if (!prep || !prep.ok) {
   return { ok: false, etapa: 'preparación', detalle: prep ? prep.notes : 'sin respuesta del agente de preparación' }
 }
 log(`Repositorio listo en ${RAMA_INTEGRACION} (${prep.commit})`)
+
+if (args && args.pulir) {
+  const pul = await pulir(args.pulir.pendientes || [])
+  return { ok: pul.ok, umbral: UMBRAL, pulido: pul, siguiente: 'Confirmar con Rasheed: crear el rol mc_public_share, aplicar 0024–0030 en Supabase, correr la guardia contra Supabase, merge a main y deploy.' }
+}
 
 const resultado = { ok: true, umbral: UMBRAL, fases: {} }
 
