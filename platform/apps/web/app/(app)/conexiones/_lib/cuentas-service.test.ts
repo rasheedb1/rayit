@@ -98,7 +98,8 @@ describe("actualizar y quitar", () => {
     const rows = await service.listar();
     const ig = rows.find((r) => r.handle === "cafealma")!;
     const upd = await service.actualizar(ig.id);
-    expect(upd).toMatchObject({ ok: true, withMetrics: true });
+    // Ya había lectura de hoy (la del alta): no se guarda otra y la pantalla lo dice.
+    expect(upd).toMatchObject({ ok: true, withMetrics: true, alreadyReadToday: true });
     const n = await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM account_metric_snapshot WHERE connection_id = $1", [ig.id]);
     expect(Number(n.rows[0]!.n)).toBe(1);
     const again = await service.agregar({ platformId: "instagram", handle: "cafealma" }, WHO);

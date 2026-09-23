@@ -35,13 +35,14 @@ export async function agregarCuenta(formData: FormData): Promise<void> {
   redirect(`/conexiones?agregada=${encodeURIComponent(out.id)}`);
 }
 
-/** «Actualizar»: vuelve a leer la fuente pública y deja el snapshot del día. */
+/** «Actualizar»: vuelve a leer la fuente pública y deja el snapshot del día (si ya lo había, lo dice). */
 export async function actualizarCuenta(id: string): Promise<void> {
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
   const out = await getCuentasService().actualizar(id);
   revalidatePath("/conexiones");
   if (!out.ok) aviso(out.message);
-  redirect(`/conexiones?actualizada=${encodeURIComponent(id)}${out.withMetrics ? "" : "&sin_metricas=1"}`);
+  const extra = !out.withMetrics ? "&sin_metricas=1" : out.alreadyReadToday ? "&ya_hoy=1" : "";
+  redirect(`/conexiones?actualizada=${encodeURIComponent(id)}${extra}`);
 }
 
 /** «Quitar»: deleted_at, status 'disabled', consentimiento revocado. La historia se conserva. */
