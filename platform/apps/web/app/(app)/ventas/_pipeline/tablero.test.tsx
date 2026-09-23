@@ -132,6 +132,23 @@ describe("PipelineBoard", () => {
     expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
   });
 
+  it("perder un negocio con cotización enviada avisa de que se cerró", async () => {
+    moverNegocio.mockResolvedValue({ ok: true, closedQuotes: ["COT-2026-007"] });
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "perdido" } });
+    });
+    const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
+    expect(within(form).getByText(/Si le enviaste una cotización, se cierra/)).toBeInTheDocument();
+    fireEvent.change(within(form).getByLabelText(/¿Por qué lo pierdes\?/), { target: { value: "precio" } });
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Café Alma pasó a «Perdido». También se cerró COT-2026-007: la marca ya no puede aceptarla.",
+    );
+  });
+
   it("soltar en «Perdido» también pregunta, y cancelar lo deja donde estaba", async () => {
     render(<PipelineBoard deals={deals} stages={stages} />);
     const store = new Map<string, string>();

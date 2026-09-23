@@ -14,7 +14,10 @@ vi.mock("../actions", () => ({
 }));
 
 import { MESSAGES } from "../_lib/messages";
+import { countryOptions } from "../_lib/paises";
 import { Radar, type SignalCardData } from "./radar";
+
+const PAISES = countryOptions("es-CO");
 
 const SIGNAL = "00000005-0000-4000-8000-000000000001";
 const card: SignalCardData = {
@@ -43,7 +46,7 @@ describe("Radar", () => {
       message: MESSAGES.radar.form.duplicateAccepted,
       link: { href: empresa, label: MESSAGES.radar.form.seeCompany },
     });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: MESSAGES.radar.newSignal }));
     fireEvent.change(screen.getByLabelText("Marca"), { target: { value: "Café Alma" } });
     fireEvent.change(screen.getByLabelText(/Qué viste/), { target: { value: "Lanzó cold brew" } });
@@ -61,7 +64,7 @@ describe("Radar", () => {
       notice: "Abriste un negocio con Café Alma. La siguiente acción es «Enviar pitch».",
       link: { href: "/ventas?vista=pipeline", label: "Ver en el pipeline" },
     });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("Enviar pitch");
@@ -77,7 +80,7 @@ describe("Radar", () => {
       notice: "Ya tienes un negocio con Café Alma: la señal quedó anotada en él.",
       link: { href: empresa, label: "Ver el negocio" },
     });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("Ya tienes un negocio con Café Alma");
@@ -87,7 +90,7 @@ describe("Radar", () => {
 
   it("descartar pide el motivo y muestra el error del servidor en su campo", async () => {
     descartarSenal.mockResolvedValue({ errors: { reason: "Di por qué la descartas: es lo que afina el radar." } });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Descartar: Café Alma" }));
     fireEvent.click(screen.getByRole("button", { name: "Descartar señal" }));
 
@@ -97,7 +100,7 @@ describe("Radar", () => {
 
   it("descartar con motivo envía el texto y avisa que no vuelve", async () => {
     descartarSenal.mockResolvedValue({ ok: true, notice: "Señal descartada. No volverá a la bandeja." });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Descartar: Café Alma" }));
     fireEvent.change(screen.getByRole("textbox", { name: /¿Por qué la descartas\?/ }), { target: { value: "No encaja con mi nicho" } });
     fireEvent.click(screen.getByRole("button", { name: "Descartar señal" }));
@@ -110,13 +113,24 @@ describe("Radar", () => {
 
   it("un error al aceptar se queda en la tarjeta", async () => {
     aceptarSenal.mockResolvedValue({ message: "Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó." });
-    render(<Radar cards={[card]} currency="COP" />);
+    render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("ya la revisaste"));
   });
 
+  it("el país de «Anotar una marca» se elige de la lista, no se escribe (pulido r6)", () => {
+    render(<Radar cards={[]} currency="COP" countries={PAISES} />);
+    fireEvent.click(screen.getByRole("button", { name: "Anotar una marca", expanded: false }));
+    const pais = screen.getByRole("combobox", { name: "País" });
+    expect(pais).toHaveValue("");
+    fireEvent.change(pais, { target: { value: "PE" } });
+    expect(pais).toHaveValue("PE");
+    expect(screen.getByRole("option", { name: "Perú" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "XX" })).toBeNull();
+  });
+
   it("vacía, la bandeja ofrece anotar una marca y abre el formulario", () => {
-    render(<Radar cards={[]} currency="COP" />);
+    render(<Radar cards={[]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Anotar una marca", expanded: false }));
     expect(screen.getByRole("form", { name: "Anotar una marca" })).toBeInTheDocument();
     expect(screen.getByLabelText(/Qué viste/)).toBeRequired();

@@ -550,7 +550,12 @@ export const MESSAGES = {
       aceptando: "Aceptando…",
       aceptada: (fecha: string) => `Aceptada el ${fecha}`,
       aceptadaPor: (nombre: string, fecha: string) => `Aceptada por ${nombre} el ${fecha}`,
-      rechazada: "Esta cotización fue rechazada.",
+      /**
+       * 'rejected' la escribe el creador: al marcarla rechazada desde el
+       * panel o al perder el negocio (0031). La marca no la rechazó: se le
+       * dice que la conversación se cerró y cómo retomarla.
+       */
+      rechazada: "Quien te envió esta cotización la cerró. Si quieres retomarla, escríbele.",
       vencida: "Esta cotización venció. Pide una nueva a quien te la envió.",
       yaAceptada: "Esta cotización ya estaba aceptada: no hace falta hacer nada más.",
       firma: {

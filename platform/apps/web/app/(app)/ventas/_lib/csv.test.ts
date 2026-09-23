@@ -106,6 +106,17 @@ describe("el país de una lista", () => {
     expect(countryCode("Narnia")).toBeNull();
   });
 
+  it("dos letras que no son un país tampoco entran: «XX», «EU» o «UN» (pulido r6)", () => {
+    expect(countryCode("XX")).toBeNull();
+    expect(countryCode("eu")).toBeNull();
+    expect(countryCode("UN")).toBeNull();
+    // «UK» no es el código ISO, pero es el nombre corto que la gente escribe.
+    expect(countryCode("UK")).toBe("GB");
+    const r = parseBrandCsv("marca;país\nCafé Alma;XX\n");
+    expect(r.rows[0]?.country).toBeNull();
+    expect(r.warnings).toHaveLength(1);
+  });
+
   it("«Colombia» en la columna país entra como CO", () => {
     const r = parseBrandCsv("marca;país\nCafé Alma;Colombia\n");
     expect(r.rows).toEqual([{ name: "Café Alma", domain: null, country: "CO", industry: null, note: null }]);

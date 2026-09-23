@@ -1701,7 +1701,16 @@ export interface MoveDealResult {
    * promoteCompanyOnWin). False si ya lo era, o si no se ganó.
    */
   companyPromoted: boolean;
+  /**
+   * Las cotizaciones enviadas o vistas que se cerraron ('rejected')
+   * porque el negocio se perdió (0031): la marca ya no puede aceptarlas
+   * desde el enlace. Vacío en cualquier otra transición.
+   */
+  closedQuotes: { id: string; number: string }[];
 }
+
+/** La frase de la actividad «se cerró la cotización al perder el negocio», si la pantalla no da otra (respaldo, como PITCH_ACTION). */
+export const quoteClosedOnLossActivity = (quoteNumber: string): string => `${quoteNumber} se cerró al perder el negocio`;
 
 export interface MoveDealOptions {
   /** No retroceder: si ya está en esa etapa o más adelante, o cerrado, no se mueve. */
@@ -1720,6 +1729,12 @@ export interface MoveDealOptions {
    * Se ignora en cualquier otra etapa.
    */
   lostReason?: LostReason | null;
+  /**
+   * La frase de la actividad que cuenta cada cotización cerrada al
+   * perder el negocio, en el idioma de la pantalla. Por defecto,
+   * quoteClosedOnLossActivity.
+   */
+  quoteClosedActivity?: (quoteNumber: string) => string;
 }
 
 interface MoveStageJson {
@@ -1735,6 +1750,7 @@ interface MoveStageJson {
   currencyFrom?: string;
   amountTo?: string | null;
   currencyTo?: string;
+  closedQuotes?: { id: string; number: string }[];
 }
 
 /**
@@ -1747,7 +1763,9 @@ interface MoveStageJson {
  * copias que diverjan.
  *
  * Es idempotente: mover a la etapa en la que ya está no escribe
- * historial ni cambia fechas. Sacar de «Ganado» un negocio con campaña
+ * historial ni cambia fechas. Perder un negocio cierra sus cotizaciones
+ * enviadas o vistas (`closedQuotes`), para que la marca no lo gane
+ * después desde el enlace por encima del motivo de pérdida. Sacar de «Ganado» un negocio con campaña
  * viva o con la cotización firmada lanza DealLocked: la cotización y
  * la campaña dirían otra cosa.
  *
@@ -1791,6 +1809,7 @@ export async function moveDeal(
     amountTo: r.amountTo ?? null,
     currencyTo: r.currencyTo ?? '',
     companyPromoted: false,
+    closedQuotes: r.closedQuotes ?? [],
   };
 
   // Perder un negocio pide su motivo: es el dato con el que el pipeline
@@ -1802,6 +1821,19 @@ export async function moveDeal(
   if (result.moved && result.isLost) {
     if (lostReason === null) throw new VentasError('LostReasonRequired');
     await tx.query('UPDATE deal SET lost_reason = $2 WHERE id = $1', [dealId, lostReason]);
+    // Las cotizaciones que deal_move_stage cerró al perderlo: cada una
+    // deja su línea en la historia del negocio, con el motivo.
+    const frase = opts.quoteClosedActivity ?? quoteClosedOnLossActivity;
+    for (const q of result.closedQuotes) {
+      await tx.query(
+        `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, metadata)
+         SELECT current_workspace_id(), d.company_id, d.id, current_user_id(), 'note', $2,
+                jsonb_build_object('kind', 'quote_closed_on_loss', 'quoteId', $3::text, 'quoteNumber', $4::text,
+                                   'lost_reason', $5::text)
+           FROM deal d WHERE d.id = $1`,
+        [dealId, frase(q.number), q.id, q.number, lostReason],
+      );
+    }
   }
 
   // Ganar un negocio hace cliente a la marca, en la misma transacción:

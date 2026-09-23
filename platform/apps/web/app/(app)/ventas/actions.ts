@@ -42,6 +42,7 @@ import { withWorkspace } from "./_lib/db";
 import { parseBrandCsv, type CsvLineError } from "./_lib/csv";
 import { fitFromPercent } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
+import { isCountryCode } from "./_lib/paises";
 
 /** Lo que devuelven las acciones de Ventas: lo común más un aviso de éxito. */
 export interface VentasState extends ActionState {
@@ -60,7 +61,6 @@ export interface VentasState extends ActionState {
 /** Tamaño máximo de un CSV. Más que eso no es una lista de marcas para revisar a mano. */
 const MAX_CSV_BYTES = 1024 * 1024;
 
-const COUNTRY_RE = /^[A-Za-z]{2}$/;
 /**
  * El id de una etapa: el nombre legible de una global ('propuesta') o
  * el uuid al azar de una privada del workspace (0026 §2). Aquí solo se
@@ -101,10 +101,16 @@ const optionalUrl = (message: string) =>
     .max(2000, message)
     .refine((v) => v === "" || /^https?:\/\/\S+$/i.test(v), message);
 
+/**
+ * El país: vacío, o un código de la lista de _lib/paises.ts (la misma
+ * que llena el <Select> y que lee el CSV). Dos letras cualesquiera
+ * («XX») ya no pasan.
+ */
 const optionalCountry = z
   .string()
   .trim()
-  .refine((v) => v === "" || COUNTRY_RE.test(v), V.country);
+  .transform((v) => v.toUpperCase())
+  .refine((v) => v === "" || isCountryCode(v), V.country);
 
 // ---------------------------------------------------------------------
 // Radar · anotar una marca
@@ -591,6 +597,8 @@ export async function darDeBaja(_prev: VentasState, formData: FormData): Promise
 export interface MoverResult {
   ok: boolean;
   message?: string;
+  /** Los números de las cotizaciones que se cerraron porque el negocio se perdió (COT-2026-007). */
+  closedQuotes?: string[];
 }
 
 /**
@@ -615,11 +623,16 @@ export async function moverNegocio(dealId: string, toStageId: string, lostReason
     return { ok: false, message: V.lostReason };
   }
   const reason = lostReason === undefined ? null : (lostReason as LostReason);
+  let closedQuotes: string[];
   try {
-    await withWorkspace((tx) => moveDeal(tx, dealId, toStageId, { lostReason: reason }));
+    const res = await withWorkspace((tx) =>
+      moveDeal(tx, dealId, toStageId, { lostReason: reason, quoteClosedActivity: MESSAGES.pipeline.quoteClosedActivity }),
+    );
+    closedQuotes = (res?.closedQuotes ?? []).map((q) => q.number);
   } catch (err) {
     return { ok: false, message: messageOf(err, MESSAGES.pipeline.moveError) };
   }
   revalidateVentas();
-  return { ok: true };
+  if (closedQuotes.length > 0) revalidatePath("/cotizar", "layout");
+  return closedQuotes.length > 0 ? { ok: true, closedQuotes } : { ok: true };
 }

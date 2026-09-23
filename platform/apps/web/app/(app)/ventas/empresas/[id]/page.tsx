@@ -12,6 +12,7 @@ import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
 import { RELATIONSHIP_META, lostReasonText, pillForDue } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
+import { countryOptions } from "../../_lib/paises";
 import { quoteHref } from "../../_pipeline/vista";
 import { Contactos } from "./contactos";
 import { DatosEmpresa } from "./datos";
@@ -161,6 +162,7 @@ async function Ficha({ id }: { id: string }) {
         <aside className="space-y-6" aria-label={t.detail.data}>
           <RelacionForm companyId={company.id} relationship={company.relationship} ownerUserId={company.ownerUserId} owners={ownerOptions} />
           <DatosEmpresa
+            countries={countryOptions(f.locale)}
             company={{
               id: company.id,
               name: company.name,

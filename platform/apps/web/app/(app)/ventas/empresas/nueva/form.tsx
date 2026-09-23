@@ -6,6 +6,7 @@ import { crearEmpresa, editarEmpresa } from "../../actions";
 import { Aviso } from "../../_componentes/aviso";
 import { RELATIONSHIP_OPTIONS } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
+import type { CountryOption } from "../../_lib/paises";
 import { useVentasForm } from "../../_lib/use-ventas-form";
 
 /** Lo que el formulario necesita de una empresa para editarla. */
@@ -26,8 +27,8 @@ export interface EmpresaEditable {
  * solo se ven los errores. Un dominio que ya es de otra empresa del
  * espacio se marca en su campo, con el nombre de la que ya existe.
  */
-export function NuevaEmpresaForm() {
-  return <EmpresaForm />;
+export function NuevaEmpresaForm({ countries }: { countries: CountryOption[] }) {
+  return <EmpresaForm countries={countries} />;
 }
 
 /**
@@ -42,11 +43,18 @@ export function NuevaEmpresaForm() {
  */
 export function EmpresaForm({
   company,
+  countries,
   onCancel,
   onSaved,
 }: {
   /** Sin empresa, es «Nueva empresa». */
   company?: EmpresaEditable;
+  /**
+   * Las opciones de país (countryOptions, en el servidor). Un país
+   * guardado que no está en la lista (un «XX» de antes) sale como «Sin
+   * país»: al guardar se limpia en vez de volver a escribirse.
+   */
+  countries: CountryOption[];
   onCancel?: () => void;
   onSaved?: (notice: string) => void;
 }) {
@@ -88,8 +96,14 @@ export function EmpresaForm({
                 defaultValue={company?.domain ?? undefined}
               />
             </Field>
-            <Field label={t.country} help={t.countryHelp} error={errors.country} htmlFor="empresa-country">
-              <Input name="country" maxLength={2} className="uppercase" autoComplete="off" defaultValue={company?.country ?? undefined} />
+            <Field label={t.country} error={errors.country} htmlFor="empresa-country">
+              <Select
+                name="country"
+                defaultValue={company?.country?.toUpperCase() ?? ""}
+                placeholder={t.countryPlaceholder}
+                options={countries}
+                autoComplete="country"
+              />
             </Field>
             <Field label={t.city} error={errors.city} htmlFor="empresa-city">
               <Input name="city" maxLength={120} defaultValue={company?.city ?? undefined} />

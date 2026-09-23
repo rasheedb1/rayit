@@ -15,7 +15,7 @@
  *     orden. Sin cabecera reconocible, la primera columna es la marca y
  *     la segunda el dominio.
  *   - BOM al principio y finales de línea de Windows.
- *   - El país como código de dos letras («CO») o por su nombre, en
+ *   - El país como código ISO de dos letras («CO») o por su nombre, en
  *     español, inglés o portugués, con o sin tildes («Colombia», «México»,
  *     «Peru»). Uno que no se reconoce no tumba la fila: la marca entra
  *     sin país y la fila sale en los avisos, en vez de perderse el dato
@@ -23,6 +23,10 @@
  */
 import type { ImportSignalRow } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./messages";
+import { countryCode } from "./paises";
+
+/** La lectura del país vive en paises.ts, con la tabla que usa también el formulario. */
+export { countryCode };
 
 const T = MESSAGES.radar.csv.parse;
 
@@ -73,69 +77,6 @@ function columnOf(cell: string): Column | null {
     if (aliases.includes(h)) return col;
   }
   return null;
-}
-
-/** «México», «MEXICO» y « mexico » son la misma palabra. */
-function nameKey(text: string): string {
-  return text
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
-/** Los idiomas en los que se reconoce el nombre de un país. */
-const COUNTRY_NAME_LOCALES = ["es", "en", "pt"];
-/** Los nombres cortos que la gente escribe y Intl no da. */
-const COUNTRY_ALIASES: Record<string, string> = { eeuu: "US", eua: "US", usa: "US", uk: "GB" };
-
-let countryIndex: Map<string, string> | null = null;
-
-/**
- * Nombre de país (sin tildes ni espacios) → código ISO. Se arma una vez
- * con Intl.DisplayNames, recorriendo los códigos de dos letras, para no
- * mantener a mano una tabla de países que Intl ya sabe en cada idioma.
- */
-function countryNames(): Map<string, string> {
-  if (countryIndex) return countryIndex;
-  const index = new Map<string, string>(Object.entries(COUNTRY_ALIASES));
-  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  for (const locale of COUNTRY_NAME_LOCALES) {
-    let names: Intl.DisplayNames;
-    try {
-      names = new Intl.DisplayNames([locale], { type: "region", fallback: "none" });
-    } catch {
-      continue;
-    }
-    // «Región desconocida» (ZZ) no es el nombre de ningún país.
-    const unknown = names.of("ZZ");
-    for (const a of letters) {
-      for (const b of letters) {
-        const code = a + b;
-        let name: string | undefined;
-        try {
-          name = names.of(code);
-        } catch {
-          name = undefined;
-        }
-        if (!name || name === code || name === unknown) continue;
-        const key = nameKey(name);
-        if (key && !index.has(key)) index.set(key, code);
-      }
-    }
-  }
-  countryIndex = index;
-  return index;
-}
-
-/**
- * El país de una celda como código ISO de dos letras, o null si no se
- * reconoce. «co» y «CO» son CO; «Colombia», «Perú» o «Brazil», su código.
- */
-export function countryCode(value: string): string | null {
-  const v = value.trim();
-  if (/^[A-Za-z]{2}$/.test(v)) return v.toUpperCase();
-  return countryNames().get(nameKey(v)) ?? null;
 }
 
 /** El separador de la primera línea: el que más aparece fuera de comillas. */

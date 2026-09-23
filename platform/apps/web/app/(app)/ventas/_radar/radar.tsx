@@ -10,6 +10,7 @@ import { Pill, type PillKind } from "@/components/ui/pill";
 import { aceptarSenal, descartarSenal, type VentasState } from "../actions";
 import { Aviso } from "../_componentes/aviso";
 import { MESSAGES } from "../_lib/messages";
+import type { CountryOption } from "../_lib/paises";
 import { CargarListaForm, NuevaSenalForm } from "./formularios";
 
 /**
@@ -42,7 +43,7 @@ type AvisoRadar = { notice?: string; message?: string; link?: { href: string; la
  * página se revalida y la tarjeta desaparece de la bandeja, y con ella
  * se iría el mensaje que explica adónde fue.
  */
-export function Radar({ cards, currency }: { cards: SignalCardData[]; currency: string }) {
+export function Radar({ cards, currency, countries }: { cards: SignalCardData[]; currency: string; countries: CountryOption[] }) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
   const [aviso, setAviso] = useState<AvisoRadar | null>(null);
@@ -70,7 +71,7 @@ export function Radar({ cards, currency }: { cards: SignalCardData[]; currency: 
 
       {panel === "manual" && (
         <div className="mb-6">
-          <NuevaSenalForm currency={currency} onCancel={() => setPanel("none")} />
+          <NuevaSenalForm currency={currency} countries={countries} onCancel={() => setPanel("none")} />
         </div>
       )}
       {panel === "csv" && (

@@ -1,6 +1,7 @@
 import type { SignalRow } from "@mc/db/queries/ventas";
 import type { Formatter } from "@/lib/format";
 import { pillForFit } from "../_lib/estado";
+import { countryOptions } from "../_lib/paises";
 import { Radar, type SignalCardData } from "./radar";
 
 /**
@@ -28,5 +29,5 @@ export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: F
     evidenceUrl: s.evidenceUrl,
     viaCsv: s.via === "csv",
   }));
-  return <Radar cards={cards} currency={currency} />;
+  return <Radar cards={cards} currency={currency} countries={countryOptions(f.locale)} />;
 }

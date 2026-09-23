@@ -25,6 +25,10 @@
 --      distintas del mismo acuerdo.
 --   3. Un negocio ganado con la cotización firmada y la campaña planeada
 --      se podía devolver a «Contactado» desde el tablero, sin aviso.
+--   4. Perder un negocio dejaba viva la cotización enviada o vista: si
+--      la marca la aceptaba después desde el enlace, el negocio volvía
+--      de «Perdido» a «Ganado», nacía la campaña y el motivo de pérdida
+--      que había escrito el creador se borraba sin avisar a nadie.
 --
 -- La salida es UNA función, deal_move_stage, que usan las tres rutas
 -- (moveDeal y Cotizar como mc_app, la aceptación pública como
@@ -97,6 +101,18 @@ $$;
 --     (no cancelada) o una cotización aceptada cuya campaña todavía no
 --     existe: la cotización diría «Firmó …» y la campaña «Planeada» con
 --     un negocio abierto. Se cancela la campaña primero.
+--   · entrar en una etapa PERDIDA cierra, en la misma transacción, las
+--     cotizaciones que la marca todavía podía aceptar ('sent' o
+--     'viewed' → 'rejected', con rejected_at): perder es decir que no a
+--     lo que está sobre la mesa. El enlace público las ve «rechazadas»
+--     y ya no gana el negocio por detrás del creador. Los borradores no
+--     se tocan (la marca no los ve). Si el creador quiere retomar la
+--     conversación, reabre el negocio y envía una cotización nueva.
+--     Esas filas se bloquean ANTES que el negocio, en el mismo orden
+--     que la aceptación pública (cotización → negocio): perder y
+--     aceptar a la vez no se bloquean entre sí; gana el primero y el
+--     otro ve el resultado (la aceptación, «rechazada»; perder un
+--     negocio recién ganado, «locked»).
 --
 -- Devuelve jsonb (los montos y los días como texto, para que ningún
 -- decimal pase por un number de JavaScript):
@@ -105,7 +121,8 @@ $$;
 --   {"status":"moved"|"unchanged","fromStageId":…,"toStageId":…,
 --    "daysInStage":"3.25"|null,"isWon":…,"isLost":…,
 --    "amountChanged":true|false,"amountFrom":"9000000.00"|null,
---    "currencyFrom":"COP","amountTo":…,"currencyTo":…}
+--    "currencyFrom":"COP","amountTo":…,"currencyTo":…,
+--    "closedQuotes":[{"id":…,"number":"COT-2026-007"}]}
 CREATE FUNCTION deal_move_stage(
   p_deal_id uuid,
   p_to_stage text,
@@ -128,6 +145,7 @@ DECLARE
   toca_monto boolean;
   cambia_monto boolean;
   cerrado boolean;
+  cerradas jsonb := '[]'::jsonb;
   moneda text := upper(nullif(btrim(coalesce(p_currency, '')), ''));
 BEGIN
   IF p_deal_id IS NULL OR p_to_stage IS NULL OR length(p_to_stage) = 0 OR length(p_to_stage) > 64 THEN
@@ -135,6 +153,16 @@ BEGIN
   END IF;
   IF p_amount IS NOT NULL AND p_amount < 0 THEN
     RAISE EXCEPTION 'deal_move_stage: monto negativo' USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Las cotizaciones abiertas primero, y después el negocio: el mismo
+  -- orden de bloqueo que public_quote_accept_impl (ver las reglas).
+  IF EXISTS (SELECT 1 FROM pipeline_stage WHERE id = p_to_stage AND is_lost) THEN
+    PERFORM 1
+       FROM quote
+      WHERE deal_id = p_deal_id AND status IN ('sent', 'viewed')
+      ORDER BY id
+        FOR UPDATE;
   END IF;
 
   SELECT id, stage_id, amount, currency::text AS currency, created_at
@@ -198,6 +226,18 @@ BEGIN
     VALUES (d.id, d.stage_id, hacia.id, current_user_id(), ahora, dias);
   END IF;
 
+  IF mueve AND hacia.is_lost THEN
+    WITH c AS (
+      UPDATE quote
+         SET status = 'rejected', rejected_at = coalesce(rejected_at, ahora)
+       WHERE deal_id = d.id AND status IN ('sent', 'viewed')
+      RETURNING id, number
+    )
+    SELECT coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'number', c.number) ORDER BY c.number), '[]'::jsonb)
+      INTO cerradas
+      FROM c;
+  END IF;
+
   RETURN jsonb_build_object(
     'status', CASE WHEN mueve THEN 'moved' ELSE 'unchanged' END,
     'fromStageId', d.stage_id,
@@ -209,7 +249,8 @@ BEGIN
     'amountFrom', to_jsonb(d.amount::text),
     'currencyFrom', d.currency,
     'amountTo', to_jsonb((CASE WHEN cambia_monto THEN p_amount ELSE d.amount END)::numeric(14,2)::text),
-    'currencyTo', CASE WHEN cambia_monto AND moneda IS NOT NULL THEN moneda ELSE d.currency END);
+    'currencyTo', CASE WHEN cambia_monto AND moneda IS NOT NULL THEN moneda ELSE d.currency END,
+    'closedQuotes', cerradas);
 END;
 $$;
 

@@ -1522,6 +1522,103 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
     assert.equal(sigue.stage_id, 'ganado');
   });
 
+  // Hallazgo r6: Vitalé perdido «por el precio» y su COT-2026-007 todavía
+  // aceptable desde el enlace; al aceptarla, el negocio volvía a «Ganado»
+  // y el motivo se borraba. Perder cierra lo que está sobre la mesa.
+  test('perder un negocio cierra sus cotizaciones abiertas: el enlace ya no lo gana ni borra el motivo', async () => {
+    const ITEM = { deliverable: 'reel', platformId: 'instagram' as const, description: 'Reel', quantity: 1, unitPrice: '2000000' };
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Para perder con cotización', amount: '2000000' }));
+    const { enviada, vista, borrador } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const a = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
+      const b = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
+      const c = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
+      return { enviada: await sendQuote(tx, a.id, TEXTOS), vista: await sendQuote(tx, b.id, TEXTOS), borrador: c };
+    });
+    // La marca abrió la segunda: queda 'viewed'.
+    assert.equal((await t.db.withPublicShare((tx) => readPublicQuote(tx, vista.slug))).status, 'ok');
+
+    const res = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      moveDeal(tx, dealId, 'perdido', { lostReason: 'precio', quoteClosedActivity: (n) => `[cerrada] ${n}` }));
+    assert.equal(res.isLost, true);
+    assert.deepEqual(
+      res.closedQuotes.map((q) => q.number).sort(),
+      [enviada.number, vista.number].sort(),
+      'se cierran la enviada y la vista, no el borrador',
+    );
+
+    const estado = async (id: string) => (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, id)))!;
+    for (const q of [enviada, vista]) {
+      const final = await estado(q.id);
+      assert.equal(final.status, 'rejected');
+      assert.ok(final.rejectedAt, 'con su fecha');
+    }
+    assert.equal((await estado(borrador.id)).status, 'draft');
+
+    // Cada una deja su línea en la historia del negocio, con el motivo.
+    const lineas = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ subject: string; lost_reason: string }>(
+        `SELECT subject, metadata->>'lost_reason' AS lost_reason FROM activity
+          WHERE deal_id = $1 AND metadata->>'kind' = 'quote_closed_on_loss' ORDER BY subject`, [dealId]);
+      return rows;
+    });
+    assert.deepEqual(lineas, [enviada.number, vista.number].sort().map((n) => ({ subject: `[cerrada] ${n}`, lost_reason: 'precio' })));
+
+    // La marca intenta aceptar después: el enlace dice «rechazada».
+    assert.deepEqual(
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, enviada.slug, FIRMA)),
+      { status: 'not_acceptable', quoteStatus: 'rejected' },
+    );
+    const fila = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ stage_id: string; lost_reason: string | null }>(
+        'SELECT stage_id, lost_reason FROM deal WHERE id = $1', [dealId]);
+      return rows[0]!;
+    });
+    assert.deepEqual(fila, { stage_id: 'perdido', lost_reason: 'precio' }, 'sigue perdido y con su motivo');
+
+    // Mover entre etapas abiertas no cierra nada.
+    const otro = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const id = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Sigue abierto', amount: '1000000' });
+      const q = await createQuote(tx, { dealId: id, creatorId: creadora, taxRate: '0', items: [ITEM] });
+      await sendQuote(tx, q.id, TEXTOS);
+      const r = await moveDeal(tx, id, 'negociacion');
+      return { r, q };
+    });
+    assert.deepEqual(otro.r.closedQuotes, []);
+    assert.equal((await estado(otro.q.id)).status, 'sent');
+  });
+
+  test('la marca acepta mientras el creador lo pierde: gana la aceptación y el tablero recibe DealLocked', async () => {
+    const ITEM = { deliverable: 'reel', platformId: 'instagram' as const, description: 'Reel', quantity: 1, unitPrice: '2000000' };
+    const { dealId, q } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const id = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Carrera perder-aceptar', amount: '2000000' });
+      const c = await createQuote(tx, { dealId: id, creatorId: creadora, taxRate: '0', items: [ITEM] });
+      return { dealId: id, q: await sendQuote(tx, c.id, TEXTOS) };
+    });
+    let soltar!: () => void;
+    const retenida = new Promise<void>((r) => (soltar = r));
+    let yaAcepto!: () => void;
+    const acepto = new Promise<void>((r) => (yaAcepto = r));
+    const enlace = t.db.withPublicShare(async (tx) => {
+      const r = await acceptPublicQuote(tx, q.slug, FIRMA);
+      yaAcepto();
+      await retenida;
+      return r;
+    });
+    await acepto;
+    const tablero = t.db.withWorkspace(WORKSPACE_LAURA, (tx) => moveDeal(tx, dealId, 'perdido', { lostReason: 'precio' })).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    await new Promise((r) => setTimeout(r, t.kind === 'postgres' ? 400 : 10));
+    soltar();
+
+    assert.equal((await enlace).status, 'ok');
+    const err = await tablero;
+    assert.ok(err instanceof DealLocked, `el tablero tenía que recibir DealLocked, y devolvió ${String(err)}`);
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id)))!.status, 'accepted');
+  });
+
   test('enviar una cotización sobre un negocio ganado no le cambia el monto ni la etapa', async () => {
     const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const id = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Ganado antes', amount: '4000000' });
