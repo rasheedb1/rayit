@@ -70,8 +70,8 @@ INSERT INTO app_user (id, email, name, locale)
 VALUES ('00000002-0000-4000-8000-000000000002', 'laura@ejemplo.com', 'Laura Méndez', 'es-CO')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO membership (workspace_id, user_id, role)
-VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', 'owner')
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', system_role_id('creator', 'owner'))
 ON CONFLICT DO NOTHING;
 
 INSERT INTO creator_profile (id, workspace_id, user_id, display_name, handle, bio, country, languages, niche_slugs)

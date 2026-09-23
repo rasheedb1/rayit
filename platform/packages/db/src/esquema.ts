@@ -210,6 +210,10 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   benchmark: 'cifras públicas de referencia con su fuente y su nivel de evidencia (0013)',
   blocked_claim: 'afirmaciones que el producto no deja escribir, y qué decir en su lugar (0013)',
   metric_requirement: 'qué exige cada red para entregar cada grupo de métricas (0011)',
+  permission:
+    'catálogo de permisos <módulo>.<recurso>.<acción> (0034, ACC-3). Igual para todos; lo llena la migración desde ' +
+    'packages/core/src/permisos.ts y la web solo lo lee. Los roles (role, con workspace_id NULL para los de sistema) ' +
+    'SÍ llevan RLS: son el patrón de feature_flag',
 
   // ------ observación de terceros: no hay inquilino a quien aislar ---
   // OJO, para cuando llegue el radar (fase 2): «sin dueño» no es
@@ -324,6 +328,9 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'deal_move_stage(uuid,text,boolean,numeric,text)':
     '0031_mover_negocio: el tablero de Ventas, «Enviar» y «Aceptar» en Cotizar y la aceptación pública',
   'brand_key(text)': '0031_mover_negocio: el radar y las listas de Ventas reconocen una marca por su nombre',
+  'system_role_id(text,text)':
+    '0034_access_control: el id de un rol de sistema por (tipo de workspace, clave). Lo usan createCreatorWorkspace ' +
+    '(la dueña del espacio nuevo), los seeds y las pruebas',
 };
 
 /**
@@ -607,6 +614,10 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
   'connection_secret.connection_secret_pkey':
     'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
     'chocar con una exige conocerla, y conocerla ya es tenerla',
+  'invitation.invitation_token_hash_uk':
+    'el SHA-256 del token del enlace de invitación (0034 §7; el CHECK de la columna no admite otra cosa). La ' +
+    'aceptación busca por el hash sin saber el workspace, así que tiene que resolver a una sola fila; y chocar exige ' +
+    'conocer el token (≥128 bits al azar, generado por el código), que ya es tenerlo',
 };
 
 /**
@@ -731,6 +742,33 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
+
+  // Accesos (0034, ACC-3): el catálogo y los roles de fábrica los llena
+  // la migración; los roles a medida son ACC-9 y las concesiones AGE-1.
+  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0034 §1)' },
+  role: {
+    permite: ['SELECT'],
+    motivo:
+      'los roles de sistema los siembra la migración (0034 §4); los a medida llegan con ACC-9, que traerá su política ' +
+      'de escritura por workspace y su GRANT',
+  },
+  role_permission: { permite: ['SELECT'], motivo: 'la matriz: la siembra la migración; editable solo desde ACC-9' },
+  membership_scope: {
+    permite: ['SELECT'],
+    motivo:
+      'el alcance de una persona (0034 §6, ACC-6) lo fija quien administra el equipo por función o worker; con ' +
+      'escritura, cualquier miembro borraría su propio alcance y vería todo el workspace',
+  },
+  workspace_grant: {
+    permite: ['SELECT'],
+    motivo:
+      'la concesión creador → agencia (0034 §8) la escribe el worker o una función acotada cuando exista AGE-1; ' +
+      'la web la lee por los dos extremos',
+  },
+  invitation: {
+    permite: ['SELECT', 'INSERT', 'UPDATE'],
+    motivo: 'revocar una invitación es revoked_at (0034 §7): nadie borra el rastro de a quién se invitó',
+  },
 
   // Tablas de inquilino con un comando de menos.
   workspace: {
