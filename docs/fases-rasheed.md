@@ -139,8 +139,8 @@ Lo que todos los agentes tienen que respetar (va en su prompt):
    `apps/web` y desplegar desde `platform/`: un cambio en
    `scripts/vercel.sh` y un `PATCH` al proyecto con el token del
    vault. Lo hago yo con un comando cuando toque.
-3. Aplicar `0024`–`0031` con `make db.migrate` (orden en la nota de
-   CIM-2), `make db.guardia` en verde, configurar Supabase Auth
+3. Aplicar `0024`–`0033` con `make db.migrate` (la cola única está en
+   la nota de CIM-2), `make db.guardia` en verde, configurar Supabase Auth
    ([`apps/web/README.md#autenticación`](../platform/apps/web/README.md#autenticación))
    y `make vercel.deploy PROD=1`.
 4. Iniciar los trámites (CON-9) y conectar GitHub a Vercel (CIM-7).

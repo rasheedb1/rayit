@@ -13,7 +13,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
+  assertSchemaUpToDate, COLUMNAS_QUE_USA_EL_CODIGO, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
   explicarEsquema, migracionesDelRepositorio, POLITICAS_DEL_ENLACE_PUBLICO, PRIVILEGIOS_DE_LA_APP,
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
@@ -243,6 +243,35 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
       await t.admin(`GRANT EXECUTE ON FUNCTION ${firma} TO mc_app`);
     }
     assert.deepEqual((await estadoDelEsquema(t.db)).funcionesQueFaltan, []);
+  });
+
+  test('sin deal.next_action_kind (0032) la guardia no da verde, aunque no haya migraciones que comparar', async () => {
+    // El mismo caso que deal_move_stage, con una columna: 0032 no crea
+    // funciones ni tablas, y una base con 0031 y sin 0032 pasaba la
+    // guardia en verde y caía en el primer «Aceptar» del radar. Las
+    // columnas salen de src/schema, no de una lista a mano.
+    assert.ok(COLUMNAS_QUE_USA_EL_CODIGO.includes('deal.next_action_kind'));
+    assert.ok(COLUMNAS_QUE_USA_EL_CODIGO.includes('deal_pipeline.stage_id'), 'también las vistas');
+    assert.deepEqual((await estadoDelEsquema(t.db)).columnasQueFaltan, []);
+    await t.admin('ALTER TABLE deal RENAME COLUMN next_action_kind TO zz_next_action_kind');
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.pendientes, []);
+      assert.deepEqual(estado.columnasQueFaltan, ['deal.next_action_kind']);
+      assert.match(String(explicarEsquema(estado)), /faltan columnas o relaciones que el código lee y escribe/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /deal\.next_action_kind/);
+    } finally {
+      await t.admin('ALTER TABLE deal RENAME COLUMN zz_next_action_kind TO next_action_kind');
+    }
+    // Una relación que falta entera se nombra una vez, no columna por columna.
+    await t.admin('ALTER TABLE feature_flag RENAME TO zz_feature_flag');
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.columnasQueFaltan, ['feature_flag (no existe)']);
+    } finally {
+      await t.admin('ALTER TABLE zz_feature_flag RENAME TO feature_flag');
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).columnasQueFaltan, []);
   });
 
   test('una excepción declarada sin decir qué puede hacer mc_app con ella se reporta', () => {
