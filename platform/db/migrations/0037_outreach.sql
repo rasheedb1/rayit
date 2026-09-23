@@ -949,3 +949,298 @@ BEGIN
       'ref_visible_' || r.col, r.col, r.hija, r.col, r.col, r.padre, r.pcol);
   END LOOP;
 END $$;
+
+
+-- =====================================================================
+-- 8 · Funciones del motor
+-- ---------------------------------------------------------------------
+-- Todas SECURITY INVOKER: corren con los privilegios y la RLS de quien
+-- llama. El despachador las llama como mc_worker (BYPASSRLS); desde la
+-- web, withWorkspace solo alcanza las filas de su workspace, y pasar
+-- otro p_workspace no toca nada ajeno (la política lo filtra o el
+-- WITH CHECK lo rechaza). Contadores y disyuntores, además, solo los
+-- escribe el worker (7.4).
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 8.1 · El día local del workspace
+-- ---------------------------------------------------------------------
+-- La fecha de p_at en la zona del workspace. Si el workspace no se ve
+-- (o no existe), UTC: nunca se inventa una zona.
+CREATE FUNCTION outreach_local_date(p_workspace uuid, p_at timestamptz)
+RETURNS date
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT (p_at AT TIME ZONE coalesce((SELECT w.timezone FROM workspace w WHERE w.id = p_workspace), 'UTC'))::date;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8.2 · next_business_day: el siguiente día hábil, a la misma hora local
+-- ---------------------------------------------------------------------
+-- Estrictamente DESPUÉS del día local de p_ts, saltando sábado y
+-- domingo, y a la misma hora de reloj en p_tz: viernes 10:00 → lunes
+-- 10:00; lunes 10:00 → martes 10:00. Es lo que usa el motor cuando el
+-- límite diario se agotó («reprograma al día siguiente»). La conversión
+-- la hace Postgres con la base de zonas IANA, así que el cambio de
+-- horario no corre la hora local. Una zona desconocida es un error, no
+-- UTC: una cadencia con la zona mal escrita no debe salir a las 4 a. m.
+-- Los festivos no están: dependen del país y no hay tabla de festivos
+-- todavía.
+CREATE FUNCTION next_business_day(p_ts timestamptz, p_tz text)
+RETURNS timestamptz
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  local_ts timestamp;
+  d date;
+BEGIN
+  IF p_ts IS NULL OR p_tz IS NULL THEN
+    RETURN NULL;
+  END IF;
+  local_ts := p_ts AT TIME ZONE p_tz;
+  d := local_ts::date + 1;
+  WHILE extract(isodow FROM d) > 5 LOOP
+    d := d + 1;
+  END LOOP;
+  RETURN (d + local_ts::time) AT TIME ZONE p_tz;
+END;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8.3 · increment_if_under_cap e increment_weekly
+-- ---------------------------------------------------------------------
+-- Suman uno al contador del periodo si todavía está por debajo del tope
+-- y dicen si pudieron. Es UNA sentencia: el INSERT … ON CONFLICT DO
+-- UPDATE bloquea la fila del periodo que cuenta (la del día, o la de la
+-- semana), y quien llega segundo espera a ese bloqueo y vuelve a evaluar
+-- el WHERE con el valor ya sumado. Dos despachadores a la vez con una
+-- plaza libre: uno recibe true y el otro false, nunca los dos true.
+--
+-- Un tope de 0 o NULL no deja pasar nada. Quien necesite los dos
+-- límites llama a las dos dentro de la MISMA transacción del reclamo y,
+-- si la segunda dice false, deshace: así el día no se come una plaza
+-- que la semana no dio.
+CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  nuevo int;
+BEGIN
+  IF p_cap IS NULL OR p_cap <= 0 THEN
+    RETURN false;
+  END IF;
+  INSERT INTO outbound_counter AS c (workspace_id, period, period_start, action_type, count)
+  VALUES (p_workspace, 'day', outreach_local_date(p_workspace, now()), p_action_type, 1)
+  ON CONFLICT (workspace_id, period, period_start, action_type)
+  DO UPDATE SET count = c.count + 1, updated_at = now()
+     WHERE c.count < p_cap
+  RETURNING c.count INTO nuevo;
+  RETURN nuevo IS NOT NULL;
+END;
+$$;
+
+CREATE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  hoy date;
+  nuevo int;
+BEGIN
+  IF p_cap IS NULL OR p_cap <= 0 THEN
+    RETURN false;
+  END IF;
+  hoy := outreach_local_date(p_workspace, now());
+  INSERT INTO outbound_counter AS c (workspace_id, period, period_start, action_type, count)
+  VALUES (p_workspace, 'week', hoy - (extract(isodow FROM hoy)::int - 1), p_action_type, 1)
+  ON CONFLICT (workspace_id, period, period_start, action_type)
+  DO UPDATE SET count = c.count + 1, updated_at = now()
+     WHERE c.count < p_cap
+  RETURNING c.count INTO nuevo;
+  RETURN nuevo IS NOT NULL;
+END;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8.4 · should_pause_outreach: ¿se para el despacho de este workspace?
+-- ---------------------------------------------------------------------
+-- Sí si el interruptor está apagado (o no hay política: nace apagado) o
+-- si la cola pasó la contrapresión (max_pending_touches). El presupuesto
+-- de LLM no para el ENVÍO de lo ya aprobado: lo mira el generador, con
+-- outbound_health.
+CREATE FUNCTION should_pause_outreach(p_workspace uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT NOT coalesce(p.enabled, false)
+         OR (SELECT count(*) FROM outbound_touch t
+              WHERE t.workspace_id = p_workspace AND t.status IN ('scheduled', 'processing'))
+            > coalesce(p.max_pending_touches, 200)
+    FROM (SELECT 1) AS uno
+    LEFT JOIN outbound_policy p ON p.workspace_id = p_workspace;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8.5 · El interruptor: disable_outreach y enable_outreach
+-- ---------------------------------------------------------------------
+-- Apagar deja el motivo y la hora, y cancela lo que está en cola,
+-- reclamado o retenido (el despachador relee el toque en la transacción
+-- del envío, así que uno reclamado no sale). Los borradores se quedan:
+-- son trabajo de una persona y no salen sin programarse. Devuelve
+-- cuántos toques canceló.
+--
+-- Encender no reprograma nada: el motor vuelve a planificar desde los
+-- enrolamientos. Sin dirección postal no enciende: lo impide el CHECK
+-- outbound_policy_enabled_needs_address (23514).
+CREATE FUNCTION disable_outreach(p_workspace uuid, p_reason text)
+RETURNS int
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  motivo text := coalesce(nullif(btrim(p_reason), ''), 'manual');
+  cancelados int;
+BEGIN
+  INSERT INTO outbound_policy AS p (workspace_id, enabled, disabled_reason, disabled_at)
+  VALUES (p_workspace, false, motivo, now())
+  ON CONFLICT (workspace_id)
+  DO UPDATE SET enabled = false, disabled_reason = motivo, disabled_at = now();
+
+  UPDATE outbound_touch
+     SET status = 'canceled', blocked_reason = 'outreach_disabled'
+   WHERE workspace_id = p_workspace
+     AND status IN ('scheduled', 'processing', 'held');
+  GET DIAGNOSTICS cancelados = ROW_COUNT;
+  RETURN cancelados;
+END;
+$$;
+
+CREATE FUNCTION enable_outreach(p_workspace uuid)
+RETURNS void
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  INSERT INTO outbound_policy AS p (workspace_id, enabled)
+  VALUES (p_workspace, true)
+  ON CONFLICT (workspace_id)
+  DO UPDATE SET enabled = true, disabled_reason = NULL, disabled_at = NULL;
+END;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8.6 · outbound_health: la salud del outreach en una sola lectura
+-- ---------------------------------------------------------------------
+-- Lo que miran la pantalla de canales, las alertas diarias (VEN-15) y el
+-- generador antes de gastar. Las cuentas salen aquí para que ninguna
+-- pantalla las haga. p_hours es la ventana de lo ocurrido (1 a 720 h).
+--
+--   { "enabled", "disabledReason", "disabledAt", "shouldPause",
+--     "since", "hours",
+--     "queue":   { "draft", "scheduled", "due", "processing", "stuck", "held" },
+--     "window":  { "sent", "failed", "canceled", "opened", "replied", "optedOut" },
+--     "byChannel": { "<canal>": { "sent", "failed" } },
+--     "breakersOpen": ["<step_type>"],
+--     "accountsDown": n, "lastSentAt",
+--     "llm": { "spentToday", "dailyCap", "currency": "USD" } }
+--
+-- «stuck» es lo reclamado hace más de cinco minutos (el zombi de Chief).
+-- «spentToday» es el día LOCAL del workspace, el mismo de los contadores.
+CREATE FUNCTION outbound_health(p_workspace uuid, p_hours int)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  horas int := greatest(1, least(coalesce(p_hours, 24), 720));
+  desde timestamptz := now() - make_interval(hours => horas);
+  zona text := coalesce((SELECT w.timezone FROM workspace w WHERE w.id = p_workspace), 'UTC');
+  inicio_hoy timestamptz := date_trunc('day', now() AT TIME ZONE zona) AT TIME ZONE zona;
+  pol outbound_policy%ROWTYPE;
+  cola jsonb;
+  ventana jsonb;
+  por_canal jsonb;
+  abiertos jsonb;
+  caidas int;
+  ultimo timestamptz;
+  gastado numeric;
+BEGIN
+  SELECT * INTO pol FROM outbound_policy WHERE workspace_id = p_workspace;
+
+  SELECT jsonb_build_object(
+           'draft',      count(*) FILTER (WHERE status = 'draft'),
+           'scheduled',  count(*) FILTER (WHERE status = 'scheduled'),
+           'due',        count(*) FILTER (WHERE status = 'scheduled'
+                                            AND coalesce(next_retry_at, scheduled_for) <= now()),
+           'processing', count(*) FILTER (WHERE status = 'processing'),
+           'stuck',      count(*) FILTER (WHERE status = 'processing'
+                                            AND claimed_at < now() - interval '5 minutes'),
+           'held',       count(*) FILTER (WHERE status = 'held')),
+         jsonb_build_object(
+           'sent',     count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde),
+           'failed',   count(*) FILTER (WHERE status = 'failed' AND updated_at >= desde),
+           'canceled', count(*) FILTER (WHERE status = 'canceled' AND updated_at >= desde),
+           'opened',   count(*) FILTER (WHERE opened_at >= desde),
+           'replied',  count(*) FILTER (WHERE replied_at >= desde),
+           'optedOut', count(*) FILTER (WHERE status = 'canceled' AND blocked_reason = 'opted_out'
+                                          AND updated_at >= desde)),
+         max(sent_at)
+    INTO cola, ventana, ultimo
+    FROM outbound_touch
+   WHERE workspace_id = p_workspace;
+
+  SELECT coalesce(jsonb_object_agg(channel, jsonb_build_object('sent', enviados, 'failed', fallidos)), '{}'::jsonb)
+    INTO por_canal
+    FROM (SELECT channel,
+                 count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde) AS enviados,
+                 count(*) FILTER (WHERE status = 'failed' AND updated_at >= desde) AS fallidos
+            FROM outbound_touch
+           WHERE workspace_id = p_workspace
+             AND ((status = 'sent' AND sent_at >= desde) OR (status = 'failed' AND updated_at >= desde))
+           GROUP BY channel) AS c;
+
+  SELECT coalesce(jsonb_agg(step_type ORDER BY step_type), '[]'::jsonb)
+    INTO abiertos
+    FROM outbound_breaker
+   WHERE workspace_id = p_workspace AND state <> 'closed';
+
+  SELECT count(*) INTO caidas
+    FROM outreach_channel_account
+   WHERE workspace_id = p_workspace AND status IN ('needs_reconnect', 'error');
+
+  SELECT coalesce(sum(cost), 0) INTO gastado
+    FROM outbound_review
+   WHERE workspace_id = p_workspace AND cost_currency = 'USD' AND created_at >= inicio_hoy;
+
+  RETURN jsonb_build_object(
+    'enabled',        coalesce(pol.enabled, false),
+    'disabledReason', pol.disabled_reason,
+    'disabledAt',     pol.disabled_at,
+    'shouldPause',    should_pause_outreach(p_workspace),
+    'since',          desde,
+    'hours',          horas,
+    'queue',          cola,
+    'window',         ventana,
+    'byChannel',      por_canal,
+    'breakersOpen',   abiertos,
+    'accountsDown',   caidas,
+    'lastSentAt',     ultimo,
+    'llm',            jsonb_build_object('spentToday', gastado,
+                                         'dailyCap', coalesce(pol.llm_daily_cap_usd, 0),
+                                         'currency', 'USD'));
+END;
+$$;
