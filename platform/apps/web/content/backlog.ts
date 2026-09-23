@@ -562,7 +562,8 @@ export const STORIES: readonly Story[] = [
     title: "Flujo de caja proyectado",
     desc: "packages/core/flujo-caja.ts combina cobros esperados (facturas por due_on, deals ganados sin factura por expected_close_date y plazo de pago) menos gastos recurrentes y reserva de impuestos, por semana, ocho semanas. Gráfico y tabla.",
     done: "El gráfico sale de la función con los datos del seed; un test cubre una semana con cobro, gasto e impuesto.",
-    status: "pendiente",
+    status: "hecho",
+    note: "projectCashflow() en packages/core/src/flujo-caja.ts (34 pruebas), getCashflowInputs() —una sola consulta— en queries/finanzas.ts (25 en PGlite con el seed, con la negativa de RLS) y /finanzas/flujo (13). La pantalla abre con requirePermission(\'finanzas.flujo.ver\') y una prueba comprueba que el rol Mánager no la abre y que ni siquiera se lee la base. FIN-2 y FIN-5 no hacían falta: lo que FIN-6 necesita de ellas son las tablas payment/expense (0008) y el seed 0003, no sus pantallas; flujo-caja.ts lo crea esta historia. Sin migración. Falta solo el 404 de ACC-5 (hoy el error cae en error.tsx) y la decisión de docs/propuestas/FIN-6.md §0.2.4: el cobro esperado es el bruto de la factura, no el neto de retención.",
   },
   {
     id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 6, deps: ["FIN-6"],
