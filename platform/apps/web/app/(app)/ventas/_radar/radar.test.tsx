@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // bandeja a lo que devuelven, no la base (eso lo prueba @mc/db).
 const aceptarSenal = vi.fn();
 const descartarSenal = vi.fn();
-const anotarSenal = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
+const anotarSenal = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({}));
 vi.mock("../actions", () => ({
   aceptarSenal: (...a: unknown[]) => aceptarSenal(...a),
   descartarSenal: (...a: unknown[]) => descartarSenal(...a),
