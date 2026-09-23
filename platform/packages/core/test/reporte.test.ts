@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canGenerateReport, construirReporte, isReportPayloadV1, isReportSentViaMvp, reportCutsHours, reportForbiddenMatch,
-  trackingUrlSinParametros, ReportAlreadySentError, ReportNotAvailableError, ReportNotSendableError,
+  trackingUrlSinParametros, tituloParaLaMarca, DATO_OMITIDO, ReportPayloadRejectedError, ReportAlreadySentError, ReportNotAvailableError, ReportNotSendableError,
   REPORT_PAYLOAD_VERSION, REPORT_STATUS_META, REPORT_SENT_VIA_LABEL_ES, REPORTABLE_CAMPAIGN_STATUSES,
   type ReportInputs, type ReportPostCut,
 } from '../src/reporte.ts';
@@ -204,4 +204,19 @@ test('los errores llevan messageEs y el estado de cada reporte tiene etiqueta', 
   assert.equal(REPORT_SENT_VIA_LABEL_ES.pdf, 'como PDF');
   assert.equal(isReportSentViaMvp('link'), true);
   assert.equal(isReportSentViaMvp('email'), false);
+});
+
+test('el título de un post sin título es la primera línea de la caption, sin correos ni teléfonos', () => {
+  assert.equal(tituloParaLaMarca(null, 'Cold brew ☕ con @cafealma\nPedidos: laura@gmail.com'), 'Cold brew ☕ con @cafealma');
+  assert.equal(tituloParaLaMarca(null, 'Escríbeme a laura@gmail.com o al +57 300 123 4567'), `Escríbeme a ${DATO_OMITIDO} o al ${DATO_OMITIDO}`);
+  assert.equal(tituloParaLaMarca(null, 'Llama al 300 123 4567'), `Llama al ${DATO_OMITIDO}`);
+  assert.equal(tituloParaLaMarca('Título propio', 'caption'), 'Título propio');
+  assert.equal(tituloParaLaMarca(null, null), null);
+  assert.equal(tituloParaLaMarca(null, '   '), null);
+  assert.equal(tituloParaLaMarca(null, 'x'.repeat(300))!.length, 140);
+  const e = entradasCafeAlma();
+  e.posts[0]!.caption = 'Receta\ncontacto: laura@gmail.com +57 300 123 4567';
+  e.posts[1]!.caption = 'Pedidos a laura@gmail.com';
+  assert.equal(reportForbiddenMatch(JSON.stringify(construirReporte(e))), null);
+  assert.match(new ReportPayloadRejectedError('correo').messageEs, /correo/);
 });

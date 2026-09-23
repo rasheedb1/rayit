@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { deliverableLabel, type MissingInput, type ReportBrandInput, type ReportPayload, type ReportPost, type ReportResult } from "@mc/core";
+import { cutHoursLabel, deliverableLabel, type MissingInput, type ReportBrandInput, type ReportPayload, type ReportPost, type ReportResult } from "@mc/core";
 import { ChartCard } from "@/components/ui/chart-card";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
@@ -78,7 +78,7 @@ export function DocumentoReporte({
       <Seccion
         id="doc-resultado"
         title={t.resultado}
-        meta={r.result ? `${t.resultadoCorte(horas(r.result.cutHours))} · ${t.resultadoCalculado(f.date(r.result.computedAt))}` : undefined}
+        meta={r.result ? `${t.resultadoCorte(cutHoursLabel(r.result.cutHours))} · ${t.resultadoCalculado(f.date(r.result.computedAt))}` : undefined}
       >
         {r.result ? <Resultado result={r.result} f={f} /> : <p className="text-sm text-ink-2">{t.sinResultado}</p>}
       </Seccion>
@@ -165,11 +165,6 @@ function Seccion({ id, title, meta, children }: { id: string; title: string; met
   );
 }
 
-/** «7 días», «30 días», «24 h»: la misma regla que cutHoursLabel de core. */
-function horas(h: number): string {
-  return h >= 48 && h % 24 === 0 ? `${h / 24} días` : `${h} h`;
-}
-
 /** Lo que falta, con las frases de «Resultado» de la ficha (CAM-5): la marca lee lo mismo que el creador. */
 const FALTANTES: Record<string, string> = MESSAGES.resultado.missing satisfies Record<MissingInput, string>;
 
@@ -249,7 +244,7 @@ function PostCard({ post, cutsHours, f }: { post: ReportPost; cutsHours: number[
               </th>
               {cutsHours.map((h) => (
                 <th key={h} scope="col" className="py-1 pl-2 text-right font-normal whitespace-nowrap">
-                  {t.corte(horas(h))}
+                  {t.corte(cutHoursLabel(h))}
                 </th>
               ))}
             </tr>

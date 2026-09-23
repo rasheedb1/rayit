@@ -74,6 +74,12 @@ describe("ReporteSeccion (CAM-6)", () => {
     expect(screen.queryByRole("button", { name: /copiar/i })).toBeNull();
   });
 
+  it("un borrador de una campaña cancelada después no ofrece enviarlo", () => {
+    render(<ReporteSeccion campaignId={CAMPANA} status="cancelled" reports={[reporte()]} origin="https://on-cue.test" f={f} />);
+    expect(screen.queryByRole("button", { name: t.marcarEnlace })).toBeNull();
+    expect(screen.queryByRole("button", { name: t.regenerar })).toBeNull();
+  });
+
   it("con varias versiones las lista y marca la reemplazada", () => {
     const nueva = reporte({ id: "00000000-0000-4000-8000-00000000a002", status: "sent", sentAt: "2026-09-25T10:00:00Z", sentVia: "link" });
     const vieja = reporte({ status: "viewed", sentAt: "2026-09-23T16:00:00Z", sentVia: "link", viewedAt: "2026-09-24T13:00:00Z", supersededById: nueva.id });

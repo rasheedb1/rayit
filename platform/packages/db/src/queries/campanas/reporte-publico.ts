@@ -39,8 +39,14 @@ export interface PublicReportOptions {
  * visita. Un borrador y un slug desconocido responden igual: not_found.
  */
 export async function readPublicReport(tx: PublicShareTx, slug: string, opts: PublicReportOptions = {}): Promise<PublicReportResult> {
-  const { rows } = await tx.query<{ r: PublicReportResult }>('SELECT public_report($1, $2) AS r', [slug, opts.count ?? true]);
-  const r = rows[0]?.r ?? { status: 'not_found' };
-  if (r.status === 'ok' && !isReportPayloadV1(r.report)) return { status: 'unsupported_version' };
-  return r;
+  const leer = async (count: boolean) => {
+    const { rows } = await tx.query<{ r: PublicReportResult }>('SELECT public_report($1, $2) AS r', [slug, count]);
+    return rows[0]?.r ?? { status: 'not_found' as const };
+  };
+  // Primero sin contar: un payload que esta versión no sabe pintar no
+  // puede quedar como «abierto por la marca» si la marca no lo vio.
+  const previa = await leer(false);
+  if (previa.status === 'ok' && !isReportPayloadV1(previa.report)) return { status: 'unsupported_version' };
+  if (previa.status !== 'ok' || !(opts.count ?? true)) return previa;
+  return leer(true);
 }

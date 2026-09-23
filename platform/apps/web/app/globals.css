@@ -233,8 +233,9 @@ summary::-webkit-details-marker {
 /* ---------------------------------------------------------------------
    Impresión (CAM-6): «Descargar PDF» es el diálogo de impresión del
    navegador sobre la propia página. El papel es blanco: en tema oscuro
-   se vuelve a los tokens del tema claro de arriba (copiados aquí, no
-   inventados). Fuera lo que no es documento: botones, avisos de la
+   se vuelve a TODOS los tokens del tema claro de arriba (copiados
+   aquí, no inventados): si no, un aviso o una pastilla saldría en su
+   color oscuro sobre papel blanco. Fuera lo que no es documento: botones, avisos de la
    vista previa, tooltips.
    ------------------------------------------------------------------ */
 @media print {
@@ -255,7 +256,27 @@ summary::-webkit-details-marker {
     --border: #eaeaea;
     --accent: #171717;
     --accent-ink: #ffffff;
+    --accent-wash: rgba(0, 0, 0, 0.05);
     --deemph: #d4d4d4;
+    --good: #15803d;
+    --good-wash: #f0fdf4;
+    --warn: #b45309;
+    --warn-wash: #fffbeb;
+    --bad: #b91c1c;
+    --bad-wash: #fef2f2;
+    --s-tiktok: #2a78d6;
+    --s-instagram: #eb6834;
+    --s-facebook: #0f8a5f;
+    --s-youtube: #b87700;
+    --tooltip-bg: #171717;
+    --tooltip-ink: #ffffff;
+    --tooltip-ink-2: #a3a3a3;
+    --info: #5b3fd0;
+    --info-wash: #ede9fb;
+    --rasheed: #0062d6;
+    --rasheed-bg: #e8f0fe;
+    --nicolas: #8a4a06;
+    --nicolas-bg: #fbeedd;
   }
   .no-print {
     display: none !important;

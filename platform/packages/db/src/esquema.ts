@@ -768,7 +768,7 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
 
   // Accesos (0034, ACC-3): el catálogo y los roles de fábrica los llena
   // la migración; los roles a medida son ACC-9 y las concesiones AGE-1.
-  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0037 §1)' },
+  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0034 §1)' },
   role: {
     permite: ['SELECT'],
     motivo:

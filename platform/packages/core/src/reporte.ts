@@ -119,6 +119,13 @@ export class ReportAlreadySentError extends CampaignError {
   }
 }
 
+/** El payload armado contiene algo de la lista negra (§0.3.6): no se guarda. */
+export class ReportPayloadRejectedError extends CampaignError {
+  constructor(motivo: string) {
+    super('ReportPayloadRejectedError', `El reporte no se generó: llevaría ${motivo}. Revisa los títulos de los posts y vuelve a generarlo.`);
+  }
+}
+
 export class ReportNotSendableError extends CampaignError {
   constructor(via: string) {
     super('ReportNotSendableError', `«${via}» no es un canal de envío de este MVP: marca «por enlace» o «como PDF».`);
@@ -154,7 +161,7 @@ export interface ReportPostCut extends ReportPostMetrics {
 export interface ReportPost {
   platformId: PlatformId;
   deliverable: string | null;
-  /** Título si lo hay; si no, la caption. Puede faltar en los dos. */
+  /** Título, o la primera línea de la caption, sin correos ni teléfonos (tituloParaLaMarca). */
   title: string | null;
   /** El enlace público del post en su red. */
   url: string | null;
@@ -328,6 +335,26 @@ function metricas(m: ReportPostMetrics): ReportPostMetrics {
   };
 }
 
+/** Lo que sustituye un correo o un teléfono que el creador escribió en una caption. */
+export const DATO_OMITIDO = '[dato de contacto omitido]';
+
+const CORREO_EN_TEXTO_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+const TELEFONO_EN_TEXTO_RE = /\+\d[\d\s().-]{7,}\d|\(\d{2,4}\)\s?\d{3}[\s.-]?\d{4}|\b\d{3}[\s.-]\d{3}[\s.-]\d{4}\b/g;
+/** Una caption no es un título: la primera línea, y con tope. */
+const TITULO_MAX = 140;
+
+/**
+ * El título de un post para la marca: el título si lo hay, si no la
+ * PRIMERA línea de la caption, sin correos ni teléfonos y con tope. Un
+ * «@cafealma» no es un correo (no lleva dominio con punto) y se queda.
+ */
+export function tituloParaLaMarca(title: string | null, caption: string | null): string | null {
+  const base = (title ?? caption ?? '').split(/\r?\n/)[0]!.trim();
+  if (!base) return null;
+  const limpio = base.replace(CORREO_EN_TEXTO_RE, DATO_OMITIDO).replace(TELEFONO_EN_TEXTO_RE, DATO_OMITIDO);
+  return limpio.length > TITULO_MAX ? `${limpio.slice(0, TITULO_MAX - 1).trimEnd()}…` : limpio;
+}
+
 /**
  * Arma el payload a partir de las entradas. Es una lista blanca: cada
  * campo que sale de aquí está escrito a mano, y lo que las entradas
@@ -340,7 +367,7 @@ export function construirReporte(entradas: ReportInputs): ReportPayload {
   const posts: ReportPost[] = entradas.posts.map((p) => ({
     platformId: p.platformId,
     deliverable: p.deliverable,
-    title: p.title ?? p.caption ?? null,
+    title: tituloParaLaMarca(p.title, p.caption),
     url: p.url,
     publishedAt: p.publishedAt,
     isPrimary: p.isPrimary,

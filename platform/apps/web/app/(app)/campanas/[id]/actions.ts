@@ -457,7 +457,7 @@ export async function marcarReporteEnviado(campaignId: string, reportId: string,
   const v = parsed.data;
   let error: string | null = null;
   try {
-    await withWorkspace((tx) => markReportSent(tx, v.reportId, v.via, TEXTOS_REPORTE));
+    await withWorkspace((tx) => markReportSent(tx, { campaignId: v.campaignId, reportId: v.reportId, via: v.via }, TEXTOS_REPORTE));
   } catch (err) {
     error = messageOf(err, MESSAGES.reporte.errores.enviar);
   }

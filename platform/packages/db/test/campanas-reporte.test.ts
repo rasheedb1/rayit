@@ -27,7 +27,7 @@ import {
 import { LARGO_SLUG } from '../src/queries/cotizar.ts';
 import {
   openTestDb, type TestDb,
-  WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, POST_D01_REEL_CAFE_ALMA,
+  WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_HOGAR_LINDO, POST_D01_REEL_CAFE_ALMA,
 } from './pglite.ts';
 
 const WORKSPACE_VECINO = '0000000c-0000-4000-8000-00000000c6c6';
@@ -159,7 +159,7 @@ describe('RLS: el workspace vecino no ve ni genera nada', () => {
     assert.deepEqual(await vecino((tx) => listCampaignReports(tx, CAMPAIGN_CAFE_ALMA)), []);
     const [r] = await laura((tx) => listCampaignReports(tx, CAMPAIGN_CAFE_ALMA));
     assert.equal(await vecino((tx) => getReport(tx, r!.id)), null);
-    await assert.rejects(vecino((tx) => markReportSent(tx, r!.id, 'link', TEXTOS)), ReportNotFoundError);
+    await assert.rejects(vecino((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: r!.id, via: 'link' }, TEXTOS)), ReportNotFoundError);
   });
 
   test('la sonda: fijar app.public_share a mano no abre la fila a mc_app (la política es TO mc_public_share)', async () => {
@@ -184,7 +184,7 @@ describe('marcar enviado', () => {
 
   test('deja el reporte enviado, la actividad en la empresa, el aviso y la bitácora', async () => {
     const [borrador] = await laura((tx) => listCampaignReports(tx, CAMPAIGN_CAFE_ALMA));
-    const r = await laura((tx) => markReportSent(tx, borrador!.id, 'link', TEXTOS));
+    const r = await laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: borrador!.id, via: 'link' }, TEXTOS));
     enviado = { id: r.id, slug: r.slug };
     assert.equal(r.status, 'sent');
     assert.equal(r.sentVia, 'link');
@@ -228,10 +228,27 @@ describe('marcar enviado', () => {
     assert.equal(reportForbiddenMatch(JSON.stringify(audit.rows[0]!.after)), null);
   });
 
+  test('un reporte de otra campaña del mismo workspace no se envía con el id de esta', async () => {
+    const r = await laura((tx) => generateReport(tx, CAMPAIGN_HOGAR_LINDO));
+    await assert.rejects(laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: r.id, via: 'link' }, TEXTOS)), ReportNotFoundError);
+    assert.equal((await laura((tx) => getReport(tx, r.id)))?.status, 'draft');
+  });
+
+  test('un borrador de una campaña que después se canceló no se publica', async () => {
+    await t.admin(`UPDATE campaign SET status = 'live' WHERE id = '${CAMPAIGN_CANCELADA}'`);
+    const r = await laura((tx) => generateReport(tx, CAMPAIGN_CANCELADA));
+    await t.admin(`UPDATE campaign SET status = 'cancelled' WHERE id = '${CAMPAIGN_CANCELADA}'`);
+    await assert.rejects(
+      laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CANCELADA, reportId: r.id, via: 'link' }, TEXTOS)),
+      (e: unknown) => e instanceof ReportNotAvailableError && /cancelada/.test(e.messageEs),
+    );
+    assert.deepEqual(await t.db.withPublicShare((tx) => readPublicReport(tx, r.slug)), { status: 'not_found' });
+  });
+
   test('repetirlo no escribe nada, y un canal fuera del MVP se rechaza', async () => {
-    await assert.rejects(laura((tx) => markReportSent(tx, enviado.id, 'pdf', TEXTOS)), ReportAlreadySentError);
-    await assert.rejects(laura((tx) => markReportSent(tx, enviado.id, 'email', TEXTOS)), ReportNotSendableError);
-    await assert.rejects(laura((tx) => markReportSent(tx, '00000000-0000-4000-8000-000000000000', 'link', TEXTOS)), ReportNotFoundError);
+    await assert.rejects(laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: enviado.id, via: 'pdf' }, TEXTOS)), ReportAlreadySentError);
+    await assert.rejects(laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: enviado.id, via: 'email' }, TEXTOS)), ReportNotSendableError);
+    await assert.rejects(laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: '00000000-0000-4000-8000-000000000000', via: 'link' }, TEXTOS)), ReportNotFoundError);
     const { rows } = await laura((tx) => tx.query<{ n: number }>("SELECT count(*)::int AS n FROM activity WHERE kind = 'report_sent' AND metadata->>'reportId' = $1", [enviado.id]));
     assert.equal(rows[0]!.n, 1);
   });
@@ -240,7 +257,7 @@ describe('marcar enviado', () => {
     const { rows: antes } = await laura((tx) => tx.query<{ status: string }>('SELECT status FROM campaign WHERE id = $1', [CAMPAIGN_FRESKO]));
     assert.equal(antes[0]!.status, 'measuring');
     const r = await laura((tx) => generateReport(tx, CAMPAIGN_FRESKO));
-    await laura((tx) => markReportSent(tx, r.id, 'pdf', TEXTOS));
+    await laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_FRESKO, reportId: r.id, via: 'pdf' }, TEXTOS));
     const { rows } = await laura((tx) => tx.query<{ status: string }>('SELECT status FROM campaign WHERE id = ANY($1::uuid[]) ORDER BY id', [[CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO]]));
     assert.deepEqual(rows.map((x) => x.status), ['reported', 'reported']);
     const detalle = await laura((tx) => getReport(tx, r.id));
@@ -327,7 +344,7 @@ describe('marcar enviado', () => {
     const viejoAntes = await t.db.withPublicShare((tx) => readPublicReport(tx, enviado.slug, { count: false }));
     assert.equal(viejoAntes.status === 'ok' && viejoAntes.report.superseded, false);
 
-    const nuevo = await laura((tx) => markReportSent(tx, lista[0]!.id, 'link', TEXTOS));
+    const nuevo = await laura((tx) => markReportSent(tx, { campaignId: CAMPAIGN_CAFE_ALMA, reportId: lista[0]!.id, via: 'link' }, TEXTOS));
     assert.equal(nuevo.status, 'sent');
     const despues = await laura((tx) => listCampaignReports(tx, CAMPAIGN_CAFE_ALMA));
     assert.equal(despues[1]!.supersededById, nuevo.id);

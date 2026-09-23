@@ -61,7 +61,7 @@ export function ReporteSeccion({ campaignId, status, reports, origin, f }: Repor
 
   return (
     <div className="space-y-5">
-      {ultimo && <VersionActual campaignId={campaignId} r={ultimo} origin={origin} f={f} />}
+      {ultimo && <VersionActual campaignId={campaignId} r={ultimo} origin={origin} f={f} publicable={disponible} />}
       {generar}
       {reports.length > 1 && (
         <div>
@@ -89,7 +89,20 @@ export function ReporteSeccion({ campaignId, status, reports, origin, f }: Repor
   );
 }
 
-function VersionActual({ campaignId, r, origin, f }: { campaignId: string; r: CampaignReportRow; origin: string | null; f: Formatter }) {
+function VersionActual({
+  campaignId,
+  r,
+  origin,
+  f,
+  publicable,
+}: {
+  campaignId: string;
+  r: CampaignReportRow;
+  origin: string | null;
+  f: Formatter;
+  /** La campaña sigue admitiendo reporte: una cancelada después de generar no publica su borrador. */
+  publicable: boolean;
+}) {
   const meta = REPORT_STATUS_META[r.status];
   const ruta = `/reporte/${r.slug}`;
   const enlace = origin ? `${origin}${ruta}` : null;
@@ -137,7 +150,7 @@ function VersionActual({ campaignId, r, origin, f }: { campaignId: string; r: Ca
         {r.status === "draft" && <p className="mt-1 text-xs text-fg-3">{t.enlaceBorrador}</p>}
       </div>
 
-      {r.status === "draft" && (
+      {r.status === "draft" && publicable && (
         <div className="flex flex-wrap gap-2">
           <TransitionButton
             action={marcarReporteEnviado.bind(null, campaignId, r.id, "link")}

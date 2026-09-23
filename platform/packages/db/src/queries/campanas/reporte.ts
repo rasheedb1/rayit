@@ -30,6 +30,8 @@ import {
   ReportAlreadySentError,
   ReportNotAvailableError,
   ReportNotSendableError,
+  ReportPayloadRejectedError,
+  reportForbiddenMatch,
   type CampaignStatus,
   type PlatformId,
   type ReportBrandInput,
@@ -347,11 +349,14 @@ async function seguidoresDeLaMarca(tx: WorkspaceTx, campaign: CampaignDetail): P
   }
   if (!cuenta) return null;
   const { rows } = await tx.query<{ day: string; followers: string | null }>(
-    `SELECT ${DATE('day')} AS day, followers::text AS followers
-       FROM brand_account_snapshot
-      WHERE campaign_id = $1 AND platform_id = $2
-      ORDER BY day
-      LIMIT $3`,
+    // Los MÁS RECIENTES hasta el tope, devueltos en orden de día.
+    `SELECT day, followers FROM (
+       SELECT ${DATE('day')} AS day, followers::text AS followers
+         FROM brand_account_snapshot
+        WHERE campaign_id = $1 AND platform_id = $2
+        ORDER BY day DESC
+        LIMIT $3) ultimos
+      ORDER BY day`,
     [campaign.id, cuenta.platformId, MAX_PUNTOS_CURVA],
   );
   return { ...cuenta, points: rows.map((r) => ({ day: r.day, followers: intOrNull(r.followers) })) };
@@ -449,6 +454,10 @@ export async function generateReport(tx: WorkspaceTx, campaignId: string): Promi
   if (!campaign) throw new CampaignNotFoundError(campaignId);
 
   const payload = construirReporte(await entradasDelReporte(tx, campaign));
+  // La misma lista negra que las pruebas (§0.3.6), también en producción:
+  // si algo se cuela (un dato que core no sanea), no se guarda.
+  const prohibido = reportForbiddenMatch(JSON.stringify(payload));
+  if (prohibido) throw new ReportPayloadRejectedError(prohibido);
   const whiteLabel = { version: payload.version, creator: payload.creator };
 
   const ultimo = await tx.query<{ id: string; status: ReportStatus }>(
@@ -496,12 +505,19 @@ export async function generateReport(tx: WorkspaceTx, campaignId: string): Promi
  *     estado no se toca.
  *
  * Idempotente: un reporte ya enviado lanza ReportAlreadySentError sin
- * escribir nada. Un canal fuera del MVP (email, whatsapp) lanza
+ * escribir nada. El reporte tiene que ser de `campaignId`
+ * (ReportNotFoundError si no), y la campaña seguir admitiendo reporte
+ * (ReportNotAvailableError si se canceló después de generarlo). Un canal fuera del MVP (email, whatsapp) lanza
  * ReportNotSendableError. Nunca toca el payload.
  */
-export async function markReportSent(tx: WorkspaceTx, reportId: string, via: string, textos: TextosReporte): Promise<CampaignReportDetail> {
+export async function markReportSent(
+  tx: WorkspaceTx,
+  input: { campaignId: string; reportId: string; via: string },
+  textos: TextosReporte,
+): Promise<CampaignReportDetail> {
+  const { campaignId, reportId, via } = input;
   if (!isReportSentViaMvp(via)) throw new ReportNotSendableError(via);
-  if (!isUuid(reportId)) throw new ReportNotFoundError(reportId);
+  if (!isUuid(reportId) || !isUuid(campaignId)) throw new ReportNotFoundError(reportId);
   const { rows } = await tx.query<{
     id: string; status: ReportStatus; campaign_id: string; campaign_status: CampaignStatus; campaign_name: string;
     company_id: string; company_name: string; deal_id: string | null;
@@ -511,13 +527,15 @@ export async function markReportSent(tx: WorkspaceTx, reportId: string, via: str
        FROM report r
        JOIN campaign c ON c.id = r.campaign_id
        JOIN company co ON co.id = c.company_id
-      WHERE r.id = $1 AND r.kind = 'campaign'
+      WHERE r.id = $1 AND r.campaign_id = $2 AND r.kind = 'campaign'
       FOR UPDATE OF r, c`,
-    [reportId],
+    [reportId, campaignId],
   );
   const r = rows[0];
   if (!r) throw new ReportNotFoundError(reportId);
   if (r.status !== 'draft') throw new ReportAlreadySentError();
+  // Un borrador de una campaña que después se canceló no se publica.
+  if (!canGenerateReport(r.campaign_status)) throw new ReportNotAvailableError(r.campaign_status);
 
   await tx.query("UPDATE report SET status = 'sent', sent_at = now(), sent_via = $2 WHERE id = $1", [r.id, via]);
   await tx.query(
