@@ -27,9 +27,10 @@ export const MESSAGES = {
      */
     hint: "Vuelve a intentarlo en un momento; si sigue así, escríbenos.",
     /**
-     * La misma pantalla, en desarrollo y en vista previa: ahí quien
-     * mira es quien despliega. En producción esto no se renderiza; las
-     * variables siguen en el log del servidor, que es donde ya estaban.
+     * La misma pantalla, en desarrollo y en las vistas previas de Vercel:
+     * ahí quien mira es quien despliega. En producción no se renderiza
+     * (ver mostrarPistaDeDespliegue en reintentar.ts, que es quien
+     * decide); las variables siguen en el log del servidor.
      */
     hintDespliegue: "Si acabas de desplegar, revisa DEMO_WORKSPACE_ID y DATABASE_URL.",
   },

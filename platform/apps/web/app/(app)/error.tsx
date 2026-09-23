@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { MESSAGES } from "./_lib/messages";
+import { mostrarPistaDeDespliegue, useReintentar } from "./_lib/reintentar";
 
 /**
  * La frontera de error del segmento (app): la que faltaba.
@@ -16,11 +17,13 @@ import { MESSAGES } from "./_lib/messages";
  * barra lateral sigue ahí, se puede navegar a otro módulo) y en
  * español.
  *
- * Next exige que sea un componente cliente. `reset()` vuelve a
- * renderizar el segmento; el error, entero, queda en el servidor.
+ * Next exige que sea un componente cliente. «Reintentar» vuelve a
+ * pedir el segmento al servidor (useReintentar: `reset()` solo, no lo
+ * hacía); el error, entero, queda en el servidor.
  */
 export default function AppError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   const t = MESSAGES.error;
+  const { reintentar, pendiente } = useReintentar(reset);
 
   useEffect(() => {
     // En desarrollo Next ya lo muestra; en producción solo llega el digest.
@@ -34,8 +37,9 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
       <p className="mt-2 text-sm leading-5 text-fg-2">{t.description}</p>
       <p className="mt-2 text-xs leading-5 text-fg-3">{t.hint}</p>
       {/* La pista de despliegue nombra variables del servidor: se la
-          enseñamos a quien despliega, no a quien entra. */}
-      {process.env.NODE_ENV !== "production" ? (
+          enseñamos a quien despliega (desarrollo y vistas previas de
+          Vercel), no a quien entra. */}
+      {mostrarPistaDeDespliegue() ? (
         <p className="mt-2 text-xs leading-5 text-fg-3">{t.hintDespliegue}</p>
       ) : null}
       {error.digest ? (
@@ -44,7 +48,7 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
         </p>
       ) : null}
       <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-        <Button variant="primary" onClick={() => reset()}>
+        <Button variant="primary" onClick={reintentar} loading={pendiente}>
           {t.retry}
         </Button>
         <Link

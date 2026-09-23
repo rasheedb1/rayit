@@ -15,11 +15,20 @@
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppError from "./error";
+import FinanzasError from "./finanzas/error";
 import AppLoading from "./loading";
 import { MESSAGES } from "./_lib/messages";
+
+// Fuera de Next no hay router: el de mentira solo registra refresh().
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+
+beforeEach(() => {
+  router.refresh.mockClear();
+});
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +88,27 @@ describe("el segmento (app) tiene frontera de error y esqueleto de carga", () =>
     expect(MESSAGES.error.hintDespliegue).toContain("DEMO_WORKSPACE_ID");
   });
 
+  it("«Reintentar» vuelve a pedir la pantalla al servidor, no solo re-renderiza el error", async () => {
+    // En Next 15, reset() re-renderiza en el cliente con el payload RSC
+    // que ya tiene, que es el del error: medido por CDP, pulsarlo con la
+    // base caída no disparaba ninguna petición y la pantalla seguía en
+    // error aunque la base hubiera vuelto. router.refresh() es la
+    // petición; reset() limpia el estado cuando llega.
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const Frontera of [AppError, FinanzasError]) {
+      router.refresh.mockClear();
+      const reset = vi.fn();
+      const { unmount } = render(<Frontera error={new Error("boom")} reset={reset} />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: MESSAGES.error.retry }));
+      });
+      expect(router.refresh).toHaveBeenCalledOnce();
+      expect(reset).toHaveBeenCalledOnce();
+      unmount();
+    }
+    consola.mockRestore();
+  });
+
   it("en producción la pista de despliegue no se renderiza", () => {
     const consola = vi.spyOn(console, "error").mockImplementation(() => {});
     const antes = process.env.NODE_ENV;
@@ -92,6 +122,26 @@ describe("el segmento (app) tiene frontera de error y esqueleto de carga", () =>
     } finally {
       vi.unstubAllEnvs();
       expect(process.env.NODE_ENV).toBe(antes);
+      consola.mockRestore();
+    }
+  });
+
+  it("en una vista previa de Vercel sí, aunque NODE_ENV diga production", () => {
+    // NODE_ENV se fija al compilar y las vistas previas de Vercel
+    // compilan con «production»: la ronda 2 escondía la pista justo ahí.
+    // Lo que las distingue es NEXT_PUBLIC_VERCEL_ENV.
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("NEXT_PUBLIC_VERCEL_ENV", "preview");
+      const { unmount } = render(<AppError error={new Error("boom")} reset={vi.fn()} />);
+      expect(screen.getByRole("alert")).toHaveTextContent(MESSAGES.error.hintDespliegue);
+      unmount();
+      vi.stubEnv("NEXT_PUBLIC_VERCEL_ENV", "production");
+      render(<AppError error={new Error("boom")} reset={vi.fn()} />);
+      expect(screen.getByRole("alert").textContent).not.toContain("DEMO_WORKSPACE_ID");
+    } finally {
+      vi.unstubAllEnvs();
       consola.mockRestore();
     }
   });
