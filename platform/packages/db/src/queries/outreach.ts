@@ -63,7 +63,7 @@ export interface CapRequest {
 
 function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] } {
   assertWorkspaceId(req.workspaceId);
-  if (req.accountId != null && !isUuid(req.accountId)) {
+  if (req.accountId !== undefined && req.accountId !== null && !isUuid(req.accountId)) {
     throw new TypeError(`${fn}: accountId no es un uuid («${req.accountId}»).`);
   }
   if (!ACTION_TYPE_RE.test(req.actionType)) {
@@ -72,7 +72,7 @@ function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] 
   if (!Number.isInteger(req.cap)) {
     throw new TypeError(`${fn}: cap tiene que ser un entero (${req.cap}).`);
   }
-  return req.accountId != null
+  return req.accountId !== undefined && req.accountId !== null
     ? {
         sql: `SELECT ${fn}($1::uuid, $2::uuid, $3::text, $4::int) AS ok`,
         params: [req.workspaceId, req.accountId, req.actionType, req.cap],
@@ -200,7 +200,7 @@ function reader(fn: string) {
     if (typeof v !== 'string') throw new OutreachShapeError(fn, `${path}.${k}`, 'se esperaba texto');
     return v;
   };
-  const strOrNull = (o: Obj, k: string, path: string): string | null => (o[k] == null ? null : str(o, k, path));
+  const strOrNull = (o: Obj, k: string, path: string): string | null => (o[k] === null || o[k] === undefined ? null : str(o, k, path));
   return { obj, num, bool, str, strOrNull };
 }
 
