@@ -106,21 +106,25 @@ before(async () => {
       ('${ENR_B}', '${WS_B}', '${SEQ_B}', '${CONTACT_B}');
     -- Lo que dejó el despachador (admin hace de worker): el hash y el id del proveedor.
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, enrollment_id, step_id, channel, body,
-                                status, scheduled_for, sent_at, claimed_at, optout_token_hash, provider_message_id) VALUES
+                                status, scheduled_for, sent_at, claimed_at, optout_token_hash, provider_message_id,
+                                recipient_address) VALUES
       ('${TOUCH_SENT}', '${WS_A}', '${COMPANY}', '${CONTACT_A}', '${ENR_A}', '${STEP_A1}', 'email', 'Hola',
-       'sent', now() - interval '2 days', now() - interval '2 days', NULL, '${sha256(TOKEN)}', 'gmail-0001'),
+       'sent', now() - interval '2 days', now() - interval '2 days', NULL, '${sha256(TOKEN)}', 'gmail-0001',
+       'marta@cafe.test'),
       ('${TOUCH_PENDING_A}', '${WS_A}', '${COMPANY}', '${CONTACT_A}', '${ENR_A}', '${STEP_A2}', 'email', 'Sigo',
-       'scheduled', now() + interval '2 days', NULL, NULL, NULL, NULL),
+       'scheduled', now() + interval '2 days', NULL, NULL, NULL, NULL, NULL),
       ('${TOUCH_PENDING_B}', '${WS_B}', '${COMPANY}', '${CONTACT_B}', '${ENR_B}', '${STEP_B1}', 'email', 'Hola',
-       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL),
+       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL, NULL),
       ('${TOUCH_EN_VUELO}', '${WS_B}', '${COMPANY}', '${CONTACT_B}', NULL, NULL, 'email', 'Hola otra vez',
-       'processing', now() - interval '1 minute', NULL, now() - interval '30 seconds', NULL, NULL),
+       'processing', now() - interval '1 minute', NULL, now() - interval '30 seconds', NULL, NULL, NULL),
       ('${TOUCH_OTRO}', '${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', NULL, NULL, 'email', 'Hola',
-       'scheduled', now() + interval '1 day', NULL, NULL, '${sha256('token-que-no-salio-nunca-0001')}', NULL),
+       'scheduled', now() + interval '1 day', NULL, NULL, '${sha256('token-que-no-salio-nunca-0001')}', NULL, NULL),
       ('${TOUCH_SIN_ID}', '${WS_A}', '${COMPANY}', '${CONTACT_VICTIMA}', NULL, NULL, 'email', 'Hola',
-       'sent', now() - interval '1 day', now() - interval '1 day', NULL, '${sha256(TOKEN_SIN_ID)}', NULL),
+       'sent', now() - interval '1 day', now() - interval '1 day', NULL, '${sha256(TOKEN_SIN_ID)}', NULL,
+       'victima@cafe.test'),
       ('${TOUCH_SOLA}', '${WS_A}', '${COMPANY}', '${CONTACT_SOLA}', NULL, NULL, 'email', 'Hola',
-       'sent', now() - interval '1 day', now() - interval '1 day', NULL, '${sha256(TOKEN_SOLA)}', 'gmail-0002');
+       'sent', now() - interval '1 day', now() - interval '1 day', NULL, '${sha256(TOKEN_SOLA)}', 'gmail-0002',
+       'sola@cafe.test');
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, status_changed_at, created_at)
     VALUES ('${TOUCH_FALLIDO}', '${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', 'email', 'Hola', 'failed',
             now() - interval '30 days', now() - interval '31 days');
