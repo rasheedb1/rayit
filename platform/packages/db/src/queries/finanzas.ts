@@ -169,7 +169,7 @@ export interface ListReceivablesParams {
    * es lo que suma el KPI «Por cobrar».
    */
   bucket?: ReceivableBucket | null;
-  /** Empresa o número de factura. Se ignora con menos de MIN_SEARCH caracteres. */
+  /** Empresa o número de factura. Se ignora con menos de RECEIVABLES_MIN_SEARCH caracteres. */
   q?: string | null;
   /** 1..200. Por defecto 50. */
   limit?: number;
@@ -418,18 +418,22 @@ export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKp
 // FIN-3 · Cuentas por cobrar
 // ---------------------------------------------------------------------
 
-/** Desde cuántos caracteres filtra el buscador. El mismo criterio que Ventas. */
-export const MIN_SEARCH = 3;
+/** Desde cuántos caracteres filtra el buscador de cobros. El mismo criterio que Ventas. */
+export const RECEIVABLES_MIN_SEARCH = 3;
 
 /**
  * El texto del buscador, listo para la consulta, o null si no llega al
  * mínimo. Es la misma regla que `searchTerm` de queries/ventas.ts y se
  * repite a propósito: son dos módulos con dueños distintos y un cambio
  * de criterio en uno no debe mover el del otro sin que nadie lo vea.
+ *
+ * Lleva el prefijo del módulo porque este archivo SÍ se reexporta desde
+ * la raíz de @mc/db (src/index.ts) y `searchTerm` a secas chocaría con
+ * el de Ventas el día que también se reexporte (TS2308).
  */
-export function searchTerm(raw: string | undefined | null): string | null {
+export function receivablesSearchTerm(raw: string | undefined | null): string | null {
   const q = (raw ?? '').trim();
-  return q.length >= MIN_SEARCH ? q : null;
+  return q.length >= RECEIVABLES_MIN_SEARCH ? q : null;
 }
 
 /** El texto del usuario con los comodines de LIKE escapados: un `%` suelto no devuelve todo. */
@@ -524,7 +528,7 @@ export async function listReceivables(
 ): Promise<ListReceivablesResult> {
   const limit = Math.min(200, Math.max(1, params.limit ?? 50));
   const bucket = params.bucket && RECEIVABLE_BUCKETS.includes(params.bucket) ? params.bucket : null;
-  const q = searchTerm(params.q);
+  const q = receivablesSearchTerm(params.q);
   const values: unknown[] = [bucket, q];
   const where: string[] = [
     // Sin bucket, lo abierto; con bucket, ese grupo (aging_bucket = 'pagada' ⟺ status = 'paid').

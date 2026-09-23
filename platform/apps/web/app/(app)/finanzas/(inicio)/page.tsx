@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { compareDecimal, rateToPct } from "@mc/core";
 import {
-  MIN_SEARCH,
+  RECEIVABLES_MIN_SEARCH,
   getReceivablesKpis,
   listReceivables,
-  searchTerm,
+  receivablesSearchTerm,
   type ReceivableRow,
 } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -135,7 +135,7 @@ export default async function CuentasPorCobrarPage({
 }) {
   const params = await searchParams;
   const filter = receivableFilterKey(params.bucket);
-  const q = searchTerm(params.q);
+  const q = receivablesSearchTerm(params.q);
 
   const { kpis, receivables } = await withWorkspace(async (tx) => ({
     kpis: await getReceivablesKpis(tx),
@@ -211,7 +211,7 @@ export default async function CuentasPorCobrarPage({
           <span id="cobros">{t.section}</span>
         </SectionTitle>
 
-        <Filtros active={filter} minSearch={MIN_SEARCH} />
+        <Filtros active={filter} minSearch={RECEIVABLES_MIN_SEARCH} />
 
         <DataTable
           columns={columnas(f)}

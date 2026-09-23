@@ -102,11 +102,17 @@ la que hay que cobrar hoy.
 **Decisión 6 · la búsqueda.** `ILIKE` sobre `company_name` (que la
 vista ya trae) y `number`, con `%` y `_` del usuario escapados, desde
 el tercer carácter. NO usa `similarity()` ni `brand_key()` como
-`listCompanies` de Ventas: `brand_key` nace en la migración **0031**,
-que está en `main` pero **no aplicada en Supabase** (la cola va por
-0022). Una pantalla nueva que dependa de la cola no se puede desplegar.
-Cuando 0024–0033 estén aplicadas se puede subir a la búsqueda de Ventas
-en un PR de una línea; queda en §5.
+`listCompanies` de Ventas.
+
+El motivo: `brand_key` nace en la migración **0031**, y sobre si está
+aplicada hay dos versiones. `docs/backlog-mvp.md` §1 dice que 0024–0033
+siguen «pendientes de aplicar»; una nota de mi lado del 23 de
+septiembre dice que se aplicaron esa mañana. No pude comprobarlo (no
+tengo la frase de paso del vault en esta máquina, `make db.info` se
+niega). Una pantalla de solo lectura no debería depender de cuál de las
+dos es cierta, y con este volumen `ILIKE` sobra. **Dime cuál es y, si
+0031 ya está, lo subo a la búsqueda de Ventas —acentos y eñes
+incluidos— en un PR de una línea.** Va también en §5.
 
 El umbral de tres caracteres y el helper `searchTerm` se repiten en
 `queries/finanzas.ts` en vez de importarse de `queries/ventas.ts`: son
@@ -149,8 +155,9 @@ Si prefieres que las sumas viajen como `null`, es un cambio de FIN-1
 Nuevos:
 
 - `packages/db/src/queries/finanzas.ts` → `listReceivables`,
-  `ReceivableRow`, `RECEIVABLE_BUCKETS`, `searchTerm`, `MIN_SEARCH`
-  (añadidos al archivo, que ya es mío).
+  `ReceivableRow`, `ReceivableBucket`, `RECEIVABLE_BUCKETS`,
+  `receivablesSearchTerm`, `RECEIVABLES_MIN_SEARCH` (añadidos al
+  archivo, que ya es mío).
 - `apps/web/app/(app)/finanzas/(inicio)/page.tsx` y `loading.tsx`.
 - `apps/web/app/(app)/finanzas/facturas/(lista)/page.tsx` y `loading.tsx`.
 - `apps/web/app/(app)/finanzas/_componentes/pestanas.tsx`,
@@ -177,3 +184,96 @@ grupos de ruta).
    destino todavía.
 
 ---
+
+## 1. Lo que NO te pido
+
+- **Ninguna migración.** La vista `receivables` está en 0010 y tiene
+  todo lo que hace falta; el único dato que no trae —el nombre de la
+  campaña— sale de un `LEFT JOIN campaign` normal.
+- **Ningún cambio en `client.ts` ni en `schema/`.** `receivables` ya
+  está curada como `pgView(...).existing()` en `schema/vistas.ts`;
+  `listReceivables` usa `tx.query` con SQL, como el resto de
+  `queries/finanzas.ts`, y pide `::text` para el dinero. La migración a
+  Drizzle, si llega, es consulta por consulta.
+- **Ningún permiso nuevo.** FIN-3 es solo lectura: no hay Server Action,
+  así que no hay `requirePermission` ni `audit()` que poner. Cuando
+  ACC-1 esté en `main`, lo que toca es proteger la LECTURA con el
+  alcance de ACC-6, no esta pantalla.
+
+## 2. Un nombre que cambié por ti
+
+`queries/finanzas.ts` se reexporta entero desde la raíz de `@mc/db`
+(`src/index.ts` línea 67), y `queries/ventas.ts` no. Mis dos helpers de
+búsqueda se llaman por eso `RECEIVABLES_MIN_SEARCH` y
+`receivablesSearchTerm`, y no `MIN_SEARCH` / `searchTerm` como los de
+Ventas: con los nombres cortos, el día que añadas `export * from
+'./queries/ventas.ts'` al barril, `tsc` responde TS2308 y el que se
+lleva el susto eres tú.
+
+## 3. Rutas que se movieron
+
+| Antes | Ahora |
+|---|---|
+| `/finanzas` = lista de facturas | `/finanzas` = cuentas por cobrar |
+| — | `/finanzas/facturas` = el archivo completo |
+| `finanzas/page.tsx` | `finanzas/(inicio)/page.tsx` |
+| `finanzas/loading.tsx` | `finanzas/(inicio)/loading.tsx` **y** `finanzas/facturas/(lista)/loading.tsx` |
+
+Toqué dos pruebas tuyas de `app/(app)/`, las dos mecánicamente:
+
+- `frontera-ruta.test.tsx` importaba `./finanzas/page`. Ahora importa
+  las dos pantallas y comprueba que las dos caen en la misma frontera.
+- `frontera.test.tsx` exigía `loading.tsx` en la raíz de `finanzas/`.
+  Ahora exige que NO esté ahí y que sí esté en cada grupo de lista, que
+  es lo que el propio comentario de esa prueba explica para el resto de
+  módulos (pulido r4). Si prefieres escribir tú esa comprobación,
+  bórrala y la repongo donde digas.
+
+`facturas/actions.ts` revalida ahora las dos rutas: la misma factura se
+lee desde la vista en una y desde la tabla en la otra, y revalidar solo
+una dejaba la otra con la cifra vieja.
+
+## 4. Cómo comprobarlo sin creerme
+
+```bash
+cd platform
+pnpm --filter @mc/db test                     # 21 pruebas, 8 de FIN-3
+pnpm --filter @mc/web test                    # 44 en app/(app)/finanzas
+pnpm verificar
+
+# y en dev, que es donde se ve:
+pnpm --filter @mc/web dev --port 3141
+curl -s "http://localhost:3141/finanzas?bucket=vencida"
+DENTRO='table td:first-child a' \
+  node apps/web/scripts/ancho-movil.mjs http://localhost:3141 /finanzas /finanzas/facturas
+```
+
+## 5. Dos cosas para ti
+
+1. **¿Está aplicada 0031?** Si lo está, la búsqueda de cobros puede
+   usar `brand_key` y dejar de distinguir acentos, como la de Ventas
+   (decisión 6). Es una línea. Si no lo está, `docs/backlog-mvp.md` §1
+   y mi nota se contradicen y conviene arreglar una de las dos.
+2. **Un índice, si el `EXPLAIN` lo pide.** No lo creo yo. Con el seed
+   (17 facturas) la consulta es un `Seq Scan` y no hace falta. El día
+   que un workspace tenga miles, el orden de cobro se apoya en
+   `invoice (workspace_id, status, due_on)`:
+
+   ```sql
+   CREATE INDEX CONCURRENTLY IF NOT EXISTS invoice_cobro_idx
+     ON invoice (workspace_id, status, due_on);
+   ```
+
+   Lo propongo, no lo creo: `db/migrations/` es tuyo y un índice
+   `CONCURRENTLY` no puede ir dentro de la transacción del runner.
+
+## 6. Lo que quedó fuera, y de quién es
+
+| Qué | Historia |
+|---|---|
+| Registrar un pago desde la fila | FIN-2 |
+| «Recordar» (recordatorio de cobro) | FIN-4 |
+| Exportar la lista a CSV | fase 2 |
+| Enviar la factura por correo | CIM-10 + fase 2 |
+| «Adelanto de cobro» (`adv-kv` del mock) | sin historia todavía |
+| Paginación con «cargar más» en la pantalla | no hace falta: `listReceivables` ya tiene cursor y la pantalla avisa si llega a 200 |

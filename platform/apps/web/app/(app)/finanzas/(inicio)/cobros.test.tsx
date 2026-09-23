@@ -93,8 +93,8 @@ const estado: { rows: ReceivableRow[]; kpis: ReceivablesKpis; visto: unknown } =
 };
 
 vi.mock("@mc/db/queries/finanzas", () => ({
-  MIN_SEARCH: 3,
-  searchTerm: (raw: string | undefined) => {
+  RECEIVABLES_MIN_SEARCH: 3,
+  receivablesSearchTerm: (raw: string | undefined) => {
     const q = (raw ?? "").trim();
     return q.length >= 3 ? q : null;
   },
