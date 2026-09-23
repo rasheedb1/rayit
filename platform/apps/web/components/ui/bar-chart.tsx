@@ -6,8 +6,15 @@ import { ChartTooltip } from "./chart-tooltip";
 import { useMeasuredWidth } from "./use-measure";
 
 export type BarChartProps = {
-  /** Categorías del eje x ("S38", "Ago"…). */
+  /** Categorías del eje x ("S38", "Ago"…). Son también el título del tooltip y lo que anuncia el teclado. */
   cats: string[];
+  /**
+   * Opcional: lo que se escribe bajo cada barra, si tiene que ser más
+   * corto que la categoría. Una barra de cinco días se llama «24–28/8» en
+   * el tooltip y en la tabla, pero bajo la barra solo cabe «28/8»: a
+   * 400 px dos rangos seguidos se pisaban. Mismo largo que `cats`.
+   */
+  axisLabels?: string[];
   series: Series[];
   mode?: "group" | "stack";
   ariaLabel: string;
@@ -32,7 +39,7 @@ export function totalsOf(cats: string[], series: Series[], mode: "group" | "stac
   return cats.map((_, i) => (mode === "stack" ? series.reduce((a, s) => a + (s.data[i] ?? 0), 0) : Math.max(0, ...series.map((s) => s.data[i] ?? 0))));
 }
 
-export function BarChart({ cats, series, mode = "stack", ariaLabel, format = "compact", axisFormat, currency, height = 260, showTotal = true, className = "" }: BarChartProps) {
+export function BarChart({ cats, axisLabels, series, mode = "stack", ariaLabel, format = "compact", axisFormat, currency, height = 260, showTotal = true, className = "" }: BarChartProps) {
   const { ref, width } = useMeasuredWidth<HTMLDivElement>(600);
   const [hover, setHover] = useState<number | null>(null);
   const liveId = useId();
@@ -111,7 +118,7 @@ export function BarChart({ cats, series, mode = "stack", ariaLabel, format = "co
                   })}
               {(i % labelEvery === 0 || i === n - 1) && (
                 <text x={cx} y={H - 8} textAnchor="middle" {...CHART_TEXT}>
-                  {c}
+                  {axisLabels?.[i] ?? c}
                 </text>
               )}
               <rect x={M.l + slot * i} y={M.t} width={slot} height={ih} fill="transparent" onPointerMove={() => setHover(i)} onPointerDown={() => setHover(i)} />

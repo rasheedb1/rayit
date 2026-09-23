@@ -15,6 +15,7 @@
     "./queries/cimientos": "./src/queries/cimientos.ts",
     "./queries/identidad": "./src/queries/identidad.ts",
     "./queries/resumen": "./src/queries/resumen.ts",
+    "./queries/resumen-constantes": "./src/queries/resumen-constantes.ts",
     "./queries/ventas": "./src/queries/ventas.ts",
     "./queries/cotizar": "./src/queries/cotizar.ts",
     "./queries/campanas": "./src/queries/campanas.ts",
