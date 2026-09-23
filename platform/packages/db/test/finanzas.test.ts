@@ -743,6 +743,37 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.match(kpis.today, /^\d{4}-\d{2}-\d{2}$/);
   });
 
+  test('la bitácora: el lote deja una fila sin entityId y el pago a mano deja la suya', async () => {
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query<{ action: string; entity_type: string; entity_id: string | null; after: Record<string, unknown> }>(
+        `SELECT action, entity_type, entity_id::text, after
+           FROM audit_log
+          WHERE entity_type = 'platform_payout'
+          ORDER BY created_at, action`,
+      ),
+    );
+    const lotes = rows.filter((r) => r.action === 'platform_payout.imported');
+    const aMano = rows.filter((r) => r.action === 'platform_payout.created');
+
+    // Tres importaciones escribieron algo: las tres de AdSense, la de
+    // TikTok y (desde el espacio ajeno, que no se ve aquí) ninguna. La
+    // segunda vez del mismo lote NO dejó fila: no se escribió nada.
+    assert.equal(lotes.length, 2, 'el lote repetido no deja una segunda fila');
+    for (const fila of lotes) {
+      assert.equal(fila.entity_id, null, 'un lote son n pagos y ninguno es «el» pago');
+      assert.equal(fila.after.source, 'csv_import');
+      assert.equal(fila.after.currency, 'COP');
+      assert.ok(Array.isArray(fila.after.platforms));
+      assert.ok(typeof fila.after.inserted === 'number');
+      // Ni un monto en la bitácora: el dinero de cada pago está en su fila.
+      assert.equal(Object.keys(fila.after).includes('amount'), false);
+    }
+
+    assert.equal(aMano.length, 1, 'el pago a mano repetido tampoco deja una segunda fila');
+    assert.match(aMano[0]?.entity_id ?? '', /^[0-9a-f-]{36}$/, 'el pago a mano nombra SU fila');
+    assert.equal(aMano[0]?.after.source, 'manual');
+  });
+
   test('ninguna fila devuelve un id bigserial a la web', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     for (const r of rows) {
