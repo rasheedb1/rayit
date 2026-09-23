@@ -484,7 +484,7 @@ export const STORIES: readonly Story[] = [
     desc: "Estado, entregables, fechas, posts asociados (elegidos a mano de creator_post_board o detectados por fecha y mención), código y enlace de seguimiento. Desde la ficha se crea la factura (FIN-1).",
     done: "Se asocian dos posts a una campaña y aparecen con sus views actuales.",
     status: "hecho",
-    note: "Hecha el 22-sep (PR #8), en producción. Lista con filtro por estado; ficha con lo acordado, entregables, seguimiento, posts asociados, transiciones y «Facturar» (FIN-1); secciones ancladas para CAM-3, CAM-5 y CAM-6 (docs/propuestas/CAM-1.md §7). Pendiente: visto bueno al loading.tsx que puso Rasheed en el pulido.",
+    note: "23-sep, cierre del módulo: en main y en producción. Lista con filtro por estado; ficha con lo acordado, entregables, seguimiento, posts con sus views actuales (prueba de la ficha real contra el seed), transiciones y «Facturar» (FIN-1, ruta en _lib/rutas.ts). El loading.tsx de Rasheed tiene visto bueno. Decisiones en docs/propuestas/CIERRE-CAM.md.",
   },
   {
     id: "CAM-2", module: "CAM", owner: "nicolas", size: "S", sprint: 2, deps: ["CAM-1"],
@@ -492,7 +492,7 @@ export const STORIES: readonly Story[] = [
     desc: "createCampaignFromQuote() en queries/campanas.ts: crea la campaña con quote_id, agreed_metrics, fechas y brand_baseline_from catorce días antes. Es el contrato con Cotizar: Rasheed la llama desde COT-4.",
     done: "Rasheed la usa en COT-4 sin pedir cambios.",
     status: "hecho",
-    note: "Hecha el 22-sep; 0016 aplicada en Supabase el 22-sep. createCampaignFromQuote(tx, { quoteId, startsOn, endsOn, name?, trackingCode? }) en @mc/db, idempotente (índice único de 0016), RLS y errores con messageEs. COT-4 ya la llama desde el panel y desde el enlace público (23-sep). Contrato en docs/propuestas/CAM-2.md.",
+    note: "23-sep, cierre del módulo: createCampaignFromQuote en @mc/db, idempotente (0016). COT-4 la llama desde el panel y el enlace; la prueba del ciclo acepta COT-2026-008 del seed y comprueba una sola campaña con los entregables de la cotización. Contrato en docs/propuestas/CAM-2.md.",
   },
   {
     id: "CAM-3", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CON-1", "CON-2"],
@@ -500,7 +500,7 @@ export const STORIES: readonly Story[] = [
     desc: "brand.snapshot diario del perfil público de la marca (Business Discovery en Instagram, canal en YouTube), desde brand_baseline_from.",
     done: "La curva de seguidores de la marca sale del snapshot con su línea base de dos semanas.",
     status: "hecho",
-    note: "Rama nicolas/CAM-3-seguidores-marca. ritmoSeguidores en core (seed: 12,93/día vs 155/día, ×12, 1 240 ganados; línea base corta marcada, nunca inventada), job brand.snapshot en apps/worker/src/jobs/campanas (idempotente por día, TikTok y handles inexistentes dejan la razón), sección de la ficha con curva, «×12 el ritmo» y «Actualizar ahora». 23-sep: la migración 0035 (unicidad por campaña e INSERT de la web) ya está aplicada en Supabase; falta el worker desplegado (CIM-7) para la lectura diaria en producción. Detalle en docs/propuestas/CAM-3.md.",
+    note: "23-sep, cierre del módulo: 0035 aplicada. ritmoSeguidores en core (seed: 12,93/día vs 155/día, ×12, 1 240 ganados; línea base corta marcada), sección de la ficha con curva y «Actualizar ahora». La lectura diaria (brand.snapshot) espera al worker (WRK); la ficha dice que se actualiza cada mañana.",
   },
   {
     id: "CAM-4", module: "CAM", owner: "nicolas", size: "S", sprint: 4, deps: ["CAM-1"],
@@ -508,7 +508,7 @@ export const STORIES: readonly Story[] = [
     desc: "Canjes del código, pedidos, ingresos, por formulario o CSV, en campaign_brand_input.",
     done: "Subir un CSV de ventas diarias llena la tabla y aparece en la ficha.",
     status: "hecho",
-    note: "Sección «Lo que aportó la marca» en la ficha: tabla por concepto (último total del formulario o suma del CSV, calculado en SQL), ventas diarias en barras, «Registrar aporte» e «Importar CSV de ventas» con el resumen de filas aceptadas y rechazadas. La fuente decide la semántica (formulario = total a la fecha, CSV = diario); repetir el CSV no duplica; una campaña cerrada lo rechaza; cada alta deja audit_log desde queries/campanas.ts hasta que exista audit() (ACC-2). Sin migraciones; el índice único de la clave natural y el contrato de lectura para CAM-5 están en docs/propuestas/CAM-4.md.",
+    note: "23-sep, cierre del módulo: «Lo que aportó la marca» con formulario y CSV de ventas diarias (repetir no duplica; una fila fuera de rango se rechaza con motivo), bitácora con audit() dentro de la consulta (ACC-2). Contrato de lectura para CAM-5 en docs/propuestas/CAM-4.md.",
   },
   {
     id: "CAM-5", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CAM-3", "CAM-4", "CON-6"],
@@ -516,7 +516,7 @@ export const STORIES: readonly Story[] = [
     desc: "campaign.compute llena campaign_result con views, alcance, clics, canjes, seguidores ganados por la marca frente a su ritmo previo, CPM y CPA reales, y views_vs_median. missing_inputs dice qué falta.",
     done: "Los seis KPIs salen de la tabla; si no hay datos de la marca, la celda dice «sin datos de la marca», no cero.",
     status: "hecho",
-    note: "calcularResultado (core, pura) con corte común (720 h o el mayor que todos alcanzaron), vs mediana ponderado por views, seguidores de la marca con ritmoSeguidores (CAM-3), canjes e ingresos de CAM-4 (manda el CSV) y CPM/CPA en centavos. Job campaign.compute cada mañana para live/measuring/reported como mc_worker con workspace explícito; «Resultado» en la ficha con los seis KPIs de campaign_result y «Falta: …» con enlace. El seed recalculado da CPM 4.353,93 y CPA 9.748,43 (no los del mock). «Recalcular» espera el GRANT de docs/propuestas/CAM-5.md §2: mc_app solo lee campaign_result desde 0025. Rama encadenada sobre CAM-4.",
+    note: "23-sep, cierre del módulo: los seis KPIs salen de campaign_result; sin datos de la marca dice «Sin datos de la marca». «Recalcular» se enciende con la migración 0041 (GRANT a mc_app, sin DELETE) y el permiso campanas.resultado.calcular; el cálculo de cada mañana (campaign.compute) espera al worker (WRK). EMV sigue null (decisión en CIERRE-CAM.md).",
   },
   {
     id: "CAM-6", module: "CAM", owner: "nicolas", size: "L", sprint: 4, deps: ["CAM-5"],
@@ -524,7 +524,7 @@ export const STORIES: readonly Story[] = [
     desc: "Página pública por slug con el payload congelado, «acordado antes de publicar» arriba, envío por enlace o PDF, sent_at y viewed_at. Registra activity de tipo report_sent.",
     done: "El reporte enviado no cambia aunque lleguen snapshots nuevos; la marca lo abre sin sesión.",
     status: "hecho",
-    note: "ReportPayload v1 armado por construirReporte (core, lista blanca: sin correos, teléfonos, notas, brief, ids ni UTM) y congelado en report.payload. /reporte/[slug] sin sesión por public_report() (migración 0037, patrón 0030): borrador o slug desconocido = 404, la primera apertura marca viewed_at (los robots de vista previa no). Enviar por enlace o PDF (impresión del navegador) deja activity report_sent, notification, bitácora campaign.report_sent y la campaña en «Reporte listo». Regenerar un enviado crea otra versión y la vieja sigue abriendo con «hay una versión más reciente». Permiso nuevo campanas.reporte.generar (sembrado en 0037). Prueba byte a byte en pglite. 23-sep: 0037 aplicada en Supabase.",
+    note: "23-sep, cierre del módulo: 0037 aplicada. ReportPayload v1 congelado; /reporte/[slug] sin sesión, 404 en borrador o slug desconocido, viewed_at en la primera apertura; regenerar crea otra versión y la vieja sigue abriendo. La prueba del ciclo lo recorre de la cotización a la apertura pública.",
   },
 
   // ---------------------------------------------------------------- FIN

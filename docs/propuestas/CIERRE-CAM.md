@@ -63,3 +63,108 @@ decisiones pendientes están repartidas en cinco propuestas.
    `/security-review` (toca privilegios de la base).
 5. **F5** · PARADA 1 con la 0041; tras CONTINUAR-DESPLIEGUE, push a main
    y despliegue desde `../rayit-deploy`.
+
+---
+
+## 1. Lo hecho
+
+| Fase | Commit | Qué |
+|---|---|---|
+| F0 | `8ea4e2d` | Esta sección 0. |
+| F1 | `84ea9a0` | **Migración `0041_campaign_result_escritura_web.sql`**; `PRIVILEGIOS_DE_LA_APP` en `esquema.ts`; la ficha no pinta «Recalcular» ni «Generar»/«Enviado» a un rol sin el permiso (y lo dice con una frase). |
+| F2 | `097e88b` | La prueba del ciclo (`apps/web/app/(app)/campanas/ciclo-db.test.ts`), la ficha real contra el seed (`ficha-db.test.tsx`), CON-6 → CAM-5 con y sin línea base, y la ruta de la factura en un solo sitio (`_lib/rutas.ts`). |
+| F3 | (este) | `TODO(ACC-2)` viejos, README de la web, notas del tablero, una línea de estado en CAM-4.md y CAM-5.md, y la tabla de decisiones (§3). |
+
+### 1.1 La migración 0041
+
+- **Qué hace.** `GRANT INSERT, UPDATE ON campaign_result TO mc_app` y
+  `REVOKE DELETE`; dos políticas **restrictivas** (`campaign_result_web_insert`,
+  `campaign_result_web_update`, solo `TO mc_app`) que exigen que la
+  campaña de la fila exista, se vea y sea del mismo `workspace_id`; el
+  disparador `assert_reference_visible` en `campaign_id` y `workspace_id`
+  (la guardia lo exige en cuanto `mc_app` escribe).
+- **Por qué las restrictivas, si 0010 ya aísla por `workspace_id`.** La
+  política de 0010 obliga a que `workspace_id` sea el de la transacción,
+  pero no que la campaña sea de ese workspace; hoy eso lo cubre la RLS de
+  `campaign` (aislamiento puro) vía el disparador. Si ACC-6 o las cuentas
+  de agencia abren la visibilidad de `campaign`, una campaña visible de
+  otro workspace podría recibir una fila con `workspace_id` propio. La
+  prueba «las restrictivas atan la fila…» simula esa apertura y, **sin**
+  las restrictivas, falla (lo comprobé quitándolas: 52/53).
+- **Compatible con producción (`7737b62`).** Ese código ya pregunta
+  `has_table_privilege('campaign_result', 'INSERT' | 'UPDATE')`
+  (`canRecomputeResult`) y la acción ya abre con
+  `requirePermission('campanas.resultado.calcular')` y hace el mismo
+  UPSERT. Aplicada antes del deploy, la ficha vieja enseña «Recalcular»
+  y escribe una fila válida. Nada de lo que ya corre cambia de forma.
+- **Re-ejecutable.** Prueba «la migración es re-ejecutable»: se aplica
+  otra vez sobre la base ya migrada y los privilegios, las políticas y
+  los disparadores quedan idénticos.
+- **Sin permiso nuevo**: `campanas.resultado.calcular` ya está en la
+  semilla de 0034 (Dueño y Mánager de creador; Dueño, Admin y Mánager de
+  agencia).
+
+### 1.2 «Recalcular» y el reporte, por rol
+
+`page.tsx` pregunta `puede()` por `campanas.resultado.calcular`,
+`campanas.reporte.generar` y `campanas.reporte.enviar` (la sesión está en
+`cache()`: una consulta). Sin el permiso no hay botón y una frase lo dice
+(`MESSAGES.resultado.noRole`, `MESSAGES.reporte.sinPermisoGenerar` /
+`sinPermisoEnviar`). Las acciones siguen rechazando con
+`requirePermission`: esconder el botón es producto, no seguridad.
+
+---
+
+## 2. Costuras (cada contrato con su prueba)
+
+| Contrato | Prueba que falla si se rompe |
+|---|---|
+| **COT-4 → CAM-2**: aceptar crea UNA campaña (idempotente) con los entregables de la cotización | `ciclo-db.test.ts` paso 1: `aceptarCotizacion` (COT-2026-008, sin ventana) deja la cotización aceptada y ninguna campaña; `crearCampanaConVentana` dos veces deja **una** campaña, con `deliverablesSource = 'quote'` y los dos ítems de `quote_item`. Además, las de Rasheed en `packages/db/test/cotizar.test.ts` (panel y enlace) y las nueve de CAM-2 en `campanas.test.ts`. |
+| **CAM-1 → FIN-1**: «Facturar» abre la factura con la campaña, en la ruta nueva | `ciclo-db.test.ts` paso 6: `facturarCampana` deja UNA factura en borrador con `campaign_id` y redirige a `facturaHref(id)`, la misma función con la que la ficha enlaza sus facturas (`_lib/rutas.ts`, un solo sitio). FIN-3 no está en main, pero `/finanzas/facturas/[id]` ya lo está: se usa la ruta nueva. |
+| **CON-5/CON-10 → CAM-1**: los posts asociados salen de `post` y `post_metric_snapshot`; sin posts, la frase | `ficha-db.test.tsx`: la ficha real de Café Alma pinta los dos posts con su última lectura (417.673 y 303.685 views «hasta el 22 sep»); la de Hogar Lindo dice «Sin posts asociados». En @mc/db, «se asocian dos posts…» de CAM-1. |
+| **CON-6 → CAM-5**: `views_vs_median` usa la línea base; si falta, `baseline` y la ficha lo dice | `campanas.test.ts` «CON-6 → CAM-5»: con la línea base del seed, 4,496; con la de TikTok marcada no fiable, `null` y `['baseline', 'brand_csv_sales']` (el resto de cifras intacto). `resultado.test.tsx` «CON-6 → CAM-5»: con ella, «× tu mediana»; sin ella, ninguna razón inventada y la frase de «Falta». CON-6 no está en main: la costura es la tabla `creator_baseline`, no su código. |
+| **CAM-3 + CAM-4 + CAM-5 → CAM-6**: el payload congela el resultado; regenerar crea versión nueva y la vieja sigue abriendo | `ciclo-db.test.ts` pasos 7–9: el `result` del documento público es el de `campaign_result`; una lectura nueva de la marca, un canje nuevo y otro «Recalcular» (CPA pasa a 25.783,33) no lo cambian; regenerar da otro id y otro slug, y al enviarla la vieja queda con `superseded_by` y sigue abriendo con las cifras de antes. Además la prueba byte a byte de `campanas-reporte.test.ts`. |
+| **CAM-6 → público**: sin sesión, 404 en borrador o slug desconocido, `viewed_at` en la primera apertura | `ciclo-db.test.ts` paso 7, con la página real `/reporte/[slug]`: borrador y slug inventado → `notFound()`; enviado → abre; `viewed_at` se fija en la primera apertura y la segunda solo suma `view_count`. |
+| **La prueba del ciclo** | `apps/web/app/(app)/campanas/ciclo-db.test.ts`: una sola prueba, Server Actions reales contra pglite con migraciones y seeds, cifras derivadas a mano (views 154 000, alcance 104 720, no seguidores 0,54991, vs mediana 0,824, ganados 1 600 a 10 y 200 al día, canjes 150, ingresos 2 000 000,00, CPM 50.227,27, costo por seguidor 4.834,38, CPA 51.566,67, `missing_inputs` vacío). Cambiar una sola cifra la pone en rojo (lo comprobé con el CPM). |
+
+---
+
+## 3. Decisiones pendientes de Nicolás (todas las del módulo)
+
+Ninguna se cambió: en el código queda la opción conservadora. «Si dices
+lo contrario» da el archivo y el tamaño del cambio.
+
+| # | Dónde | La pregunta | En el código hoy | Recomiendo | Si dices lo contrario |
+|---|---|---|---|---|---|
+| 1 | `docs/propuestas/CAM-1.md:102` | ¿Una campaña cerrada o cancelada admite asociar, quitar, marcar principal o editar? | No (`canEditCampaign`). | Mantener: el reporte se congela al cerrar y el resultado de una cerrada no se recalcula. | Quitar la comprobación en `packages/core/src/campanas.ts` (`canEditCampaign`) y sus pruebas; ~10 líneas, sin migración. |
+| 2 | `docs/propuestas/CAM-3.md:150` | ¿«Actualizar ahora» con migración (0035) o sin ella y solo lo del job? | Con 0035, ya aplicada. | Mantener: es lo único que da seguidores de la marca en producción mientras no corra el worker. | Quitar la acción y el botón (~40 líneas en `actions.ts` y `seguidores.tsx`); 0035 queda (es inmutable). |
+| 3 | `docs/propuestas/CAM-3.md:192` y `:236` | ¿Editar `brand_accounts` desde la ficha? ¿En CAM-4 o historia propia? | No se edita; la ficha dice qué handle falta o no se encontró. | Historia propia, S: campo «Cuentas de la marca» en el formulario de datos de CAM-1. **Fuera de alcance** de este cierre. | `editar-form.tsx`, `editarCampana` y `updateCampaign` (+ `brandAccountsOf`) y pruebas; ~150 líneas, sin migración. |
+| 4 | `docs/propuestas/CAM-4.md:77` y `:137` (1) | Un día del CSV ya cargado con otra cifra: ¿se corrige o se rechaza? | Se corrige (UPDATE) y el resumen lo cuenta como «corregido». | Mantener: es la regla del formulario (lo último que reporta la marca manda) y sin ella un error de la marca no tiene arreglo. | Rechazo `dia_ya_cargado` en `BrandCsvRejectReason` (core), en `importBrandCsv` y en `messages.ts`; ~40 líneas con pruebas. |
+| 5 | `docs/propuestas/CAM-4.md:137` (2) | ¿El formulario acepta fechas futuras? | No (hoy en la zona del workspace). | Mantener. | Quitar la comprobación en `registrarAporte`; 2 líneas. |
+| 6 | `docs/propuestas/CAM-5.md:71` y `:146` | «Recalcular»: ¿GRANT a `mc_app` o solo el job? | **Resuelta por este prompt**: migración 0041. | — | Revertir: una migración 0042 con `REVOKE INSERT, UPDATE` y la línea de `esquema.ts`; el botón se apaga solo. |
+| 7 | `docs/propuestas/CAM-5.md:83` (y `:170`) | EMV (valor de medios equivalente): ¿qué fórmula? | Siempre `null`; la ficha no lo enseña. | Mantener `null` hasta acordar la fórmula: un EMV sin fuente infla el reporte que ve la marca. **Fuera de alcance.** | Fórmula en `calcularResultado` (core), el `NULL` literal de `upsertResult` pasa a parámetro, el payload del reporte y la ficha; ~60 líneas con pruebas, sin migración (la columna existe). |
+| 8 | `docs/propuestas/CAM-6.md:93` y `:246` | Regenerar un reporte enviado: ¿el enlace viejo sigue abriendo o caduca? | Sigue abriendo con «hay una versión más reciente» y sus cifras. | Mantener: un enlace enviado nunca se rompe. | Migración nueva con `CREATE OR REPLACE` de `public_report_impl` para devolver `expired` si `superseded_by` no es null (0037 es inmutable), y el estado en la página; ~30 líneas con pruebas. |
+| 9 | `app/(app)/campanas/loading.tsx` (Rasheed, pulido r4) | ¿Visto bueno al esqueleto genérico en Campañas? | Reexporta `EsqueletoGenerico`; cubre lista y ficha. | **Visto bueno**: conserva la señal de carga y no hay un esqueleto propio que valga más. | Un esqueleto propio de la ficha; ~30 líneas. |
+| 10 | `app/(app)/campanas/page.tsx:69` (COT-4, Rasheed; backlog §10.6) | ¿«Total con impuesto» como columna de monto en `/campanas`? | Así está: `campaign.amount = quote.total`. | **Visto bueno**: es lo que se factura y cobra, y coincide con la ficha («Monto acordado (con impuesto)»). | Otra etiqueta o el neto: 1 línea de texto, o una columna nueva en la consulta. |
+
+---
+
+## 4. Lo que necesita Rasheed
+
+| # | Qué | Por qué |
+|---|---|---|
+| 1 | **Revisar `db/migrations/0041_campaign_result_escritura_web.sql`** (carpeta suya; excepción con precedente: pasa `make db.check` y la guardia, re-ejecutable, con cabecera). | Es el GRANT que CAM-5 §2 le proponía. |
+| 2 | **`packages/db/src/esquema.ts`**: la fila de `campaign_result` en `PRIVILEGIOS_DE_LA_APP` pasa a `SELECT, INSERT, UPDATE` con su motivo. Va en esta rama porque sin ella la guardia fallaría con la 0041. | La guardia exige declarar lo que `mc_app` tiene. |
+| 3 | Nada más: sin variables, sin permisos nuevos, sin cambios en `lib/auth/` ni `lib/workspace/`. | — |
+
+---
+
+## 5. Fuera de alcance, y adónde va
+
+| Qué | Por qué | Historia destino |
+|---|---|---|
+| La lectura diaria de seguidores (`brand.snapshot`) y el cálculo de cada mañana (`campaign.compute`) en producción | Necesitan el worker desplegado; la ficha dice «Se recalcula cada mañana» y hay botones a mano. | WRK |
+| EMV | Decisión #7. | Decisión de Nicolás |
+| Editar `brand_accounts` desde la ficha | Decisión #3. | Historia propia (CAM, S) |
+| Esconder por rol los demás botones de la ficha (asociar, editar datos y seguimiento, registrar aporte, transiciones) | Hoy los ve todo el que entra al módulo; la acción los rechaza con `requirePermission` y el error cae en la frontera. Aquí solo se hizo con «Recalcular» y el reporte porque el prompt lo pedía. | ACC (marco de permisos, ACC-5/ACC-7) |
+| Mover a `messages.ts` los textos que `page.tsx` de la ficha aún escribe en línea (títulos de sección, vacíos de posts) | Deuda de CAM-1 anterior a la regla; no cambia comportamiento. | Pulido de CAM |

@@ -135,6 +135,12 @@ lecturas manuales).
 
 ## 2. Lo que necesita Rasheed
 
+> **Actualización del 23-sep (cierre del módulo):** la fila 1 está hecha
+> en la migración `0041_campaign_result_escritura_web.sql` (GRANT INSERT,
+> UPDATE sin DELETE, políticas restrictivas y disparador de referencias)
+> y en `PRIVILEGIOS_DE_LA_APP`. «Recalcular» se enciende solo con ella.
+> Detalle en `docs/propuestas/CIERRE-CAM.md`.
+
 | # | Qué | Por qué | Urgencia |
 |---|---|---|---|
 | 1 | **DECISIÓN PENDIENTE DE NICOLÁS, y luego Rasheed**: una migración con `GRANT INSERT, UPDATE ON campaign_result TO mc_app;` y el cambio de `campaign_result` en `PRIVILEGIOS_DE_LA_APP` (`packages/db/src/esquema.ts`) de `['SELECT']` a `['SELECT', 'INSERT', 'UPDATE']` con el motivo «el botón Recalcular de CAM-5». Sin DELETE. La política `campaign_result_ws_isolation` ya aísla la escritura (USING sirve de WITH CHECK). | 0025 le quitó a `mc_app` la escritura porque «lo consolida el worker», pero el worker no está desplegado (CIM-7) y la web no llega a la cola. Sin esto, en producción `campaign_result` conserva las cifras del mock (CPM 11 800) hasta CIM-7. Con esto, «Recalcular» aparece solo en la ficha: no hay que tocar código. Probado en PGlite (`packages/db/test/campanas.test.ts`, bloque «con el GRANT propuesto») y en dev con el GRANT en un seed local no commiteado. | Alta si se quiere el resultado real antes de CIM-7. |
