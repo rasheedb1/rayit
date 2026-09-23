@@ -280,3 +280,441 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
        'guidance_es', 'Resume en tres líneas, enlaza el media kit y la cotización y propón una fecha concreta '
                       'para hablar. Sin urgencia falsa.')
    ));
+
+
+-- =====================================================================
+-- 2 · Cuentas de canal
+-- ---------------------------------------------------------------------
+-- Una cuenta conectada por canal y creador: el Gmail del creador por
+-- OAuth, su LinkedIn o su Instagram por Unipile. En Chief la tabla de
+-- cuentas no tenía organización y el refresh token vivía en cuatro
+-- sitios; aquí nace con workspace_id y RLS, y el token NO está en la
+-- fila: secret_ref apunta a connection_secret (0015), cifrado con una
+-- clave que no está en la base. Una fila por concesión: refrescar el
+-- token reescribe el secreto con la misma ref, nunca crea otra fila.
+--
+-- daily_cap y weekly_cap son los de la CUENTA (el proveedor castiga a
+-- la cuenta, no al workspace); NULL = el de outbound_policy.
+-- warmup_started_at arranca el calentamiento progresivo (VEN-15).
+-- =====================================================================
+CREATE TABLE outreach_channel_account (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  creator_id          uuid REFERENCES creator_profile(id) ON DELETE CASCADE,
+  channel             text NOT NULL CHECK (channel IN ('email','linkedin','instagram_dm','whatsapp')),
+  provider            text NOT NULL CHECK (provider IN ('gmail_oauth','unipile')),
+  -- El id de la cuenta en el proveedor: la dirección de Gmail, o el
+  -- account_id de Unipile.
+  provider_account_id text NOT NULL CHECK (length(provider_account_id) BETWEEN 1 AND 256),
+  -- Lo que se enseña: la dirección o el nombre del perfil.
+  display_name        text,
+  secret_ref          text REFERENCES connection_secret(secret_ref) ON DELETE SET NULL
+                           CHECK (secret_ref LIKE 'enc:%'),
+  status              text NOT NULL DEFAULT 'pending'
+                           CHECK (status IN ('pending','connected','needs_reconnect','error','disconnected')),
+  daily_cap           int CHECK (daily_cap BETWEEN 0 AND 2000),
+  weekly_cap          int CHECK (weekly_cap BETWEEN 0 AND 10000),
+  warmup_started_at   timestamptz,
+  last_ok_at          timestamptz,
+  last_error_at       timestamptz,
+  last_error          text,
+  -- Alcances concedidos (gmail.send, gmail.modify…), para saber si hay
+  -- que volver a pedir permiso.
+  scopes              text[] NOT NULL DEFAULT '{}',
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  -- Gmail es correo; Unipile es LinkedIn, Instagram o WhatsApp.
+  CHECK ((provider = 'gmail_oauth') = (channel = 'email'))
+);
+CREATE UNIQUE INDEX outreach_channel_account_provider_idx
+  ON outreach_channel_account (workspace_id, provider, provider_account_id);
+CREATE INDEX ON outreach_channel_account (workspace_id, channel, status);
+CREATE INDEX ON outreach_channel_account (creator_id);
+CREATE TRIGGER outreach_channel_account_updated BEFORE UPDATE ON outreach_channel_account
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- =====================================================================
+-- 3 · Secuencia, pasos y enrolamiento
+-- ---------------------------------------------------------------------
+-- Plantilla → secuencia → paso → enrolamiento → toque. outbound_sequence
+-- (0007) guardaba los pasos en un jsonb; aquí se normalizan en
+-- outbound_step para poder programar y medir cada paso. La columna
+-- `steps` queda por compatibilidad y el motor ya no la lee; `channel`
+-- sigue siendo el canal principal de la secuencia, y `active` convive
+-- con `status` hasta que la pantalla de secuencias (VEN-13) la retire.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 3.1 · outbound_sequence: zona, modo, estado y plantilla de origen
+-- ---------------------------------------------------------------------
+--   timezone         la zona de la cadencia (horarios de cada paso). NULL
+--                    = la del workspace. Solo nombres IANA, igual que
+--                    workspace.timezone (0035).
+--   automation_mode  manual: la persona envía cada toque; review: la
+--                    máquina propone y la persona aprueba (lo que pide
+--                    require_human_review, y el valor por defecto); auto:
+--                    sale solo lo que pasa el juez.
+--   status           draft, active, paused, archived.
+ALTER TABLE outbound_sequence
+  ADD COLUMN timezone        text,
+  ADD COLUMN automation_mode text NOT NULL DEFAULT 'review'
+                                  CHECK (automation_mode IN ('manual','review','auto')),
+  ADD COLUMN status          text NOT NULL DEFAULT 'draft'
+                                  CHECK (status IN ('draft','active','paused','archived')),
+  ADD COLUMN template_id     uuid REFERENCES outbound_sequence_template(id) ON DELETE SET NULL,
+  ADD COLUMN updated_at      timestamptz NOT NULL DEFAULT now();
+
+CREATE TRIGGER outbound_sequence_updated BEFORE UPDATE ON outbound_sequence
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Las secuencias que ya existan conservan lo que decía `active`. La
+-- tabla tiene RLS forzada y la migración corre sin workspace: se quita
+-- FORCE un momento, como en 0033 y 0035.
+DO $$
+DECLARE
+  forzada boolean;
+BEGIN
+  SELECT c.relforcerowsecurity INTO forzada
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname = 'outbound_sequence';
+  IF forzada THEN
+    ALTER TABLE outbound_sequence NO FORCE ROW LEVEL SECURITY;
+  END IF;
+  UPDATE outbound_sequence SET status = CASE WHEN active THEN 'active' ELSE 'paused' END;
+  IF forzada THEN
+    ALTER TABLE outbound_sequence FORCE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
+CREATE FUNCTION outbound_sequence_timezone_check()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.timezone IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.timezone IS NOT DISTINCT FROM OLD.timezone THEN
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_timezone_names WHERE name = NEW.timezone) THEN
+    RAISE EXCEPTION 'zona horaria desconocida: «%»', NEW.timezone
+      USING ERRCODE = 'invalid_parameter_value',
+            HINT = 'Usa un nombre IANA, como America/Bogota o Europe/Madrid, o NULL para la del espacio.';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER outbound_sequence_timezone_check
+  BEFORE INSERT OR UPDATE OF timezone ON outbound_sequence
+  FOR EACH ROW EXECUTE FUNCTION outbound_sequence_timezone_check();
+
+-- ---------------------------------------------------------------------
+-- 3.2 · outbound_step: los pasos normalizados
+-- ---------------------------------------------------------------------
+-- scheduled_time es la hora LOCAL en la zona de la secuencia; el motor
+-- la convierte con next_business_day y la zona (sección 8). El mensaje
+-- de un paso sale del generador (generate_with_ai) o de la plantilla
+-- fija del paso (subject_template, body_template), que es lo que usa
+-- el motor mientras no hay generación (VEN-10). guidance_es es la guía
+-- por paso del recomendador (§5.5). requires_asset: el toque adjunta o
+-- enlaza el media kit o la cotización.
+CREATE TABLE outbound_step (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  sequence_id         uuid NOT NULL REFERENCES outbound_sequence(id) ON DELETE CASCADE,
+  day_offset          int NOT NULL CHECK (day_offset BETWEEN 0 AND 60),
+  order_in_day        int NOT NULL DEFAULT 0 CHECK (order_in_day BETWEEN 0 AND 20),
+  step_type           text NOT NULL
+                           CHECK (step_type IN ('email','email_reply','linkedin_connect','linkedin_message',
+                                                'linkedin_comment','linkedin_like','instagram_dm',
+                                                'instagram_comment','instagram_like','whatsapp_message',
+                                                'manual_task')),
+  channel             text NOT NULL CHECK (channel IN ('email','linkedin','instagram_dm','whatsapp')),
+  scheduled_time      time NOT NULL DEFAULT '09:30',
+  angle_id            uuid REFERENCES outbound_angle(id) ON DELETE SET NULL,
+  guidance_es         text,
+  subject_template    text,
+  body_template       text,
+  generate_with_ai    boolean NOT NULL DEFAULT true,
+  requires_asset      text CHECK (requires_asset IN ('media_kit','quote')),
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  -- El canal sale del tipo de paso (ver la lista de la sección 1).
+  CHECK (
+    CASE
+      WHEN step_type IN ('email','email_reply') THEN channel = 'email'
+      WHEN step_type LIKE 'linkedin\_%' THEN channel = 'linkedin'
+      WHEN step_type LIKE 'instagram\_%' THEN channel = 'instagram_dm'
+      WHEN step_type = 'whatsapp_message' THEN channel = 'whatsapp'
+      ELSE true
+    END
+  ),
+  -- Sin IA, el paso necesita su plantilla (salvo los que no llevan texto).
+  CHECK (generate_with_ai OR body_template IS NOT NULL
+         OR step_type IN ('linkedin_like','instagram_like','manual_task'))
+);
+CREATE UNIQUE INDEX outbound_step_order_idx ON outbound_step (sequence_id, day_offset, order_in_day);
+CREATE INDEX ON outbound_step (angle_id);
+CREATE TRIGGER outbound_step_updated BEFORE UPDATE ON outbound_step
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------
+-- 3.3 · outbound_enrollment: un contacto dentro de una secuencia
+-- ---------------------------------------------------------------------
+--   active     el motor programa su siguiente paso
+--   paused     parado a mano, o por un «fuera de la oficina» hasta
+--              resume_at
+--   completed  hizo todos los pasos
+--   replied    respondió: se cancela lo pendiente (VEN-10, VEN-14)
+--   opted_out  pidió la baja (public_optout, o la intención unsubscribe)
+--   cooldown   «ahora no»: vuelve en resume_at (90 días, §5.7)
+-- context guarda lo que el generador necesita recordar entre toques,
+-- empezando por los ángulos ya usados: {"angles_used": ["presencia"]}.
+CREATE TABLE outbound_enrollment (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  sequence_id         uuid NOT NULL REFERENCES outbound_sequence(id) ON DELETE CASCADE,
+  contact_id          uuid NOT NULL REFERENCES contact(id) ON DELETE CASCADE,
+  deal_id             uuid REFERENCES deal(id) ON DELETE SET NULL,
+  current_step_id     uuid REFERENCES outbound_step(id) ON DELETE SET NULL,
+  status              text NOT NULL DEFAULT 'active'
+                           CHECK (status IN ('active','paused','completed','replied','opted_out','cooldown')),
+  resume_at           timestamptz,
+  context             jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(context) = 'object'),
+  enrolled_by         uuid REFERENCES app_user(id) ON DELETE SET NULL,
+  started_at          timestamptz NOT NULL DEFAULT now(),
+  finished_at         timestamptz,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  CHECK (status <> 'cooldown' OR resume_at IS NOT NULL)
+);
+-- Un contacto entra una vez en cada secuencia; si vuelve tras un
+-- enfriamiento, es la misma fila la que se reanuda.
+CREATE UNIQUE INDEX outbound_enrollment_contact_idx ON outbound_enrollment (sequence_id, contact_id);
+CREATE INDEX ON outbound_enrollment (workspace_id, status, resume_at);
+CREATE INDEX ON outbound_enrollment (contact_id);
+CREATE INDEX ON outbound_enrollment (deal_id);
+CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- =====================================================================
+-- 4 · La cola: outbound_touch extendida
+-- ---------------------------------------------------------------------
+-- outbound_touch deja de ser solo el registro del envío y pasa a ser la
+-- cola: una fila por enrolamiento y paso, con una máquina de estados.
+--
+--   draft       propuesto, sin programar (borrador de VEN-6, o lo que
+--               el generador dejó para aprobar)
+--   scheduled   en la cola, sale en scheduled_for (o en next_retry_at
+--               si un intento falló)
+--   processing  un despachador lo reclamó (claimed_at) y lo está
+--               enviando. Si pasa de cinco minutos es un zombi y el
+--               motor lo devuelve a scheduled
+--   held        retenido para revisión humana; held_reason dice por qué
+--   sent        salió (sent_at, provider_message_id)
+--   failed      agotó los reintentos, o el proveedor lo rechazó
+--   skipped     el paso ya no aplica (sin canal, sin correo, deal cerrado)
+--   canceled    lo canceló una respuesta, una baja o el apagado
+--
+-- Los estados de 0007 que desaparecen se traducen: cancelled → canceled
+-- (se unifica la ortografía con el resto del motor), bounced → failed,
+-- blocked → held, opted_out → canceled y replied → sent, que es lo que
+-- era (replied_at ya dice que respondió).
+--
+-- Reintentos (Chief no reintentaba: un fallo de red mataba el paso):
+-- attempt_count cuenta los intentos y next_retry_at dice cuándo toca el
+-- siguiente, con espera creciente (VEN-10).
+--
+-- Hilos: provider_message_id es el id del proveedor (Gmail o Unipile);
+-- thread_ref, el hilo del proveedor; message_id_rfc, la cabecera
+-- Message-ID real, que es lo que va en In-Reply-To y References (Chief
+-- ponía el threadId de Gmail y rompía los hilos fuera de Gmail).
+--
+-- La baja: el enlace de un correo lleva un token al azar que solo va en
+-- el correo; aquí se guarda su sha256 (optout_token_hash), así que quien
+-- lee la tabla no puede fabricar el enlace. public_optout (sección 9) lo
+-- busca por ese resumen.
+-- =====================================================================
+ALTER TABLE outbound_touch
+  ADD COLUMN enrollment_id       uuid REFERENCES outbound_enrollment(id) ON DELETE SET NULL,
+  ADD COLUMN step_id             uuid REFERENCES outbound_step(id) ON DELETE SET NULL,
+  ADD COLUMN attempt_count       int NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 20),
+  ADD COLUMN next_retry_at       timestamptz,
+  ADD COLUMN claimed_at          timestamptz,
+  ADD COLUMN provider_message_id text,
+  ADD COLUMN thread_ref          text,
+  ADD COLUMN message_id_rfc      text,
+  ADD COLUMN opened_at           timestamptz,
+  ADD COLUMN held_reason         text,
+  ADD COLUMN optout_token_hash   text CHECK (optout_token_hash ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN updated_at          timestamptz NOT NULL DEFAULT now();
+
+CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Los estados. El CHECK de 0007 se llama como lo nombró Postgres.
+DO $$
+DECLARE
+  forzada boolean;
+BEGIN
+  SELECT c.relforcerowsecurity INTO forzada
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname = 'outbound_touch';
+  IF forzada THEN
+    ALTER TABLE outbound_touch NO FORCE ROW LEVEL SECURITY;
+  END IF;
+
+  ALTER TABLE outbound_touch DROP CONSTRAINT outbound_touch_status_check;
+  UPDATE outbound_touch
+     SET status = CASE status
+                    WHEN 'cancelled' THEN 'canceled'
+                    WHEN 'opted_out' THEN 'canceled'
+                    WHEN 'bounced'   THEN 'failed'
+                    WHEN 'blocked'   THEN 'held'
+                    WHEN 'replied'   THEN 'sent'
+                  END,
+         held_reason = CASE WHEN status = 'blocked' THEN coalesce(blocked_reason, 'blocked') END
+   WHERE status IN ('cancelled', 'opted_out', 'bounced', 'blocked', 'replied');
+  ALTER TABLE outbound_touch ADD CONSTRAINT outbound_touch_status_check
+    CHECK (status IN ('draft','scheduled','processing','held','sent','failed','skipped','canceled'));
+
+  IF forzada THEN
+    ALTER TABLE outbound_touch FORCE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
+ALTER TABLE outbound_touch
+  ADD CONSTRAINT outbound_touch_held_reason_check CHECK (status <> 'held' OR held_reason IS NOT NULL),
+  ADD CONSTRAINT outbound_touch_processing_claimed_check CHECK (status <> 'processing' OR claimed_at IS NOT NULL);
+
+-- Índices de la cola.
+--   · Un enrolamiento no tiene dos toques vivos del mismo paso: es la
+--     tercera capa de deduplicación de Chief y la que para el doble
+--     avance de paso de su process-queue.
+--   · (workspace_id, status, scheduled_for) ya existe desde 0007 y es el
+--     que usan las pantallas; no se duplica.
+--   · El reclamo del worker cruza workspaces: lo que toca salir, por hora.
+--   · Los zombis: lo que lleva reclamado demasiado tiempo.
+--   · Las búsquedas por id del proveedor (webhooks, respuestas, baja).
+CREATE UNIQUE INDEX outbound_touch_live_step_idx ON outbound_touch (enrollment_id, step_id)
+  WHERE status IN ('scheduled', 'processing');
+CREATE INDEX outbound_touch_due_idx ON outbound_touch (coalesce(next_retry_at, scheduled_for))
+  WHERE status = 'scheduled';
+CREATE INDEX outbound_touch_claimed_idx ON outbound_touch (claimed_at) WHERE status = 'processing';
+CREATE INDEX outbound_touch_enrollment_idx ON outbound_touch (enrollment_id);
+CREATE INDEX outbound_touch_provider_message_idx ON outbound_touch (provider_message_id)
+  WHERE provider_message_id IS NOT NULL;
+CREATE INDEX outbound_touch_message_id_rfc_idx ON outbound_touch (message_id_rfc) WHERE message_id_rfc IS NOT NULL;
+CREATE INDEX outbound_touch_optout_token_idx ON outbound_touch (optout_token_hash)
+  WHERE optout_token_hash IS NOT NULL;
+
+-- La regla dura de 0007 (no se programa ni se envía a quien pidió la
+-- baja) cubre también lo que un despachador tiene reclamado: si la baja
+-- llega entre el reclamo y el envío, el UPDATE a processing o a sent
+-- falla y el toque no sale.
+CREATE OR REPLACE FUNCTION enforce_outbound_optout() RETURNS trigger AS $$
+DECLARE
+  is_out boolean;
+BEGIN
+  IF NEW.status IN ('scheduled','processing','sent') AND NEW.contact_id IS NOT NULL THEN
+    SELECT opted_out INTO is_out FROM contact WHERE id = NEW.contact_id;
+    IF is_out THEN
+      RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', NEW.contact_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- =====================================================================
+-- 5 · Mensajes por hilo y revisiones de calidad
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 5.1 · outbound_message: lo que entra y lo que sale, por hilo
+-- ---------------------------------------------------------------------
+-- La bandeja unificada (VEN-14) lee de aquí: correo, LinkedIn e
+-- Instagram en un solo lugar. Lo que sale también se copia aquí (el
+-- toque es la cola; el mensaje es la conversación). intent la pone el
+-- clasificador barato (§5.7) solo a lo que entra; resume_at es la fecha
+-- de vuelta de un «fuera de la oficina».
+CREATE TABLE outbound_message (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  channel_account_id  uuid REFERENCES outreach_channel_account(id) ON DELETE SET NULL,
+  enrollment_id       uuid REFERENCES outbound_enrollment(id) ON DELETE SET NULL,
+  touch_id            uuid REFERENCES outbound_touch(id) ON DELETE SET NULL,
+  contact_id          uuid REFERENCES contact(id) ON DELETE SET NULL,
+  deal_id             uuid REFERENCES deal(id) ON DELETE SET NULL,
+  direction           text NOT NULL CHECK (direction IN ('inbound','outbound')),
+  channel             text NOT NULL CHECK (channel IN ('email','linkedin','instagram_dm','whatsapp')),
+  thread_ref          text,
+  provider_message_id text,
+  message_id_rfc      text,
+  in_reply_to         text,
+  from_address        text,
+  subject             text,
+  body                text NOT NULL,
+  intent              text CHECK (intent IN ('interested','not_now','ooo','unsubscribe','referral','ambiguous')),
+  intent_confidence   numeric(4,3) CHECK (intent_confidence BETWEEN 0 AND 1),
+  classified_at       timestamptz,
+  resume_at           timestamptz,
+  occurred_at         timestamptz NOT NULL DEFAULT now(),
+  read_at             timestamptz,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  CHECK (direction = 'inbound' OR intent IS NULL)
+);
+-- Un webhook que llega dos veces no crea dos mensajes.
+CREATE UNIQUE INDEX outbound_message_provider_idx
+  ON outbound_message (workspace_id, channel, provider_message_id)
+  WHERE provider_message_id IS NOT NULL;
+CREATE INDEX ON outbound_message (workspace_id, thread_ref, occurred_at);
+CREATE INDEX ON outbound_message (workspace_id, occurred_at DESC) WHERE direction = 'inbound' AND read_at IS NULL;
+CREATE INDEX ON outbound_message (enrollment_id);
+CREATE INDEX ON outbound_message (contact_id);
+
+-- ---------------------------------------------------------------------
+-- 5.2 · outbound_review: cada evaluación de la puerta de calidad
+-- ---------------------------------------------------------------------
+-- Una fila por intento: lo que dijo el pre-vuelo (gates), la nota por
+-- dimensión (scores: relevance, quality, structure, voice, de 0 a 10),
+-- la nota ponderada, la pista para regenerar, los disparadores de riesgo
+-- que fuerzan revisión humana y la decisión. Registra el modelo, los
+-- tokens y el costo de cada llamada (0 si el intento no llegó al juez).
+-- Es una bitácora: se inserta y no se corrige.
+--
+-- El costo va en numeric(14,6) y no en (14,2): una llamada cuesta
+-- fracciones de centavo y redondeada a dos decimales sumaría cero. La
+-- moneda va aparte, como en el resto del esquema.
+CREATE TABLE outbound_review (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  touch_id            uuid NOT NULL REFERENCES outbound_touch(id) ON DELETE CASCADE,
+  attempt             int NOT NULL CHECK (attempt BETWEEN 1 AND 10),
+  subject             text,
+  body                text NOT NULL,
+  gates               jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(gates) = 'object'),
+  scores              jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(scores) = 'object'),
+  total_score         numeric(4,2) CHECK (total_score BETWEEN 0 AND 10),
+  regenerate_hint     text CHECK (regenerate_hint IN ('shorter','more_specific','other_angle','other_signal',
+                                                      'soften','add_proof')),
+  risk_triggers       text[] NOT NULL DEFAULT '{}'
+                           CHECK (risk_triggers <@ ARRAY['unsourced_figure','invented_client','false_urgency',
+                                                         'pressure','competitor_mention','missing_disclosure']::text[]),
+  decision            text NOT NULL CHECK (decision IN ('pass','regenerate','send_best','hold','reject')),
+  model               text,
+  input_tokens        int NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens       int NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  cost                numeric(14,6) NOT NULL DEFAULT 0 CHECK (cost >= 0),
+  cost_currency       char(3) NOT NULL DEFAULT 'USD',
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (touch_id, attempt)
+);
+CREATE INDEX ON outbound_review (workspace_id, created_at);
