@@ -84,7 +84,7 @@ before(async () => {
       ('${WS_B}', 'workspace-b', 'Workspace B');
     INSERT INTO company (id, name) VALUES ('${COMPANY}', 'Café Alma');
   `);
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();
@@ -379,7 +379,7 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
       INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_A}', '${COMPANY}', 'client');
       INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_B}', '${COMPANY_B}', 'client');
     `);
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('membership: cada workspace ve solo sus membresías; sin workspace, ninguna', async () => {
     const usuariosDe = (ws: string) =>
@@ -548,7 +548,7 @@ describe('contact: la PII tiene dueño, y la baja es definitiva (0020)', () => {
       assert.equal(c?.owner, WS_A, 'el dueño lo pone la base (DEFAULT current_workspace_id())');
       contactoDeA = c!.id;
     });
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('B no lo ve aunque se vincule a la MISMA empresa: el candado ya no es company_link', async () => {
     // company es un catálogo global sin RLS, así que B puede vincularse
@@ -663,7 +663,7 @@ describe('pipeline_stage y feature_flag: catálogos con dueño (0020)', () => {
         defaultProbability: '0.9000',
       }),
     );
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('A ve su etapa y las globales; B solo las globales', async () => {
     const etapasDe = (ws: string) => t.db.withWorkspace(ws, (tx) => listPipelineStages(tx));
@@ -803,7 +803,7 @@ describe('endurecimiento (0024): workspace, app_user, company, catálogos y la b
     conexionA = a.connectionId;
     conexionB = b.connectionId;
     assert.ok(creatorA && creatorB);
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   // -------------------------------------------------------------------
   // workspace: el hallazgo bloqueante
@@ -1157,7 +1157,7 @@ describe('endurecimiento (0024): workspace, app_user, company, catálogos y la b
                 ('tiktok', '${conexionB}', CURRENT_DATE, 20, 1),
                 ('youtube', NULL, CURRENT_DATE, 30, 1)`,
       );
-    }, { timeout: 120_000 });
+    }, { timeout: 600_000 });
 
     test('B no ve los endpoints ni los mensajes de error de las llamadas de A', async () => {
       const endpoints = (ws: string) =>
@@ -1274,7 +1274,7 @@ describe('las hijas con clave ajena opcional (0024 §6)', () => {
       INSERT INTO external_post_snapshot (external_post_id, views) VALUES ('${POST_DE_A}', 111);
       INSERT INTO external_post_snapshot (external_post_id, views) VALUES ('${POST_GLOBAL}', 222);
     `);
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   /** Las cinco familias, con la consulta que separa la fila de A de la global. */
   const familias: Array<{ tabla: string; deA: () => string; global: () => string; sql: string }> = [
@@ -1484,7 +1484,7 @@ describe('un padre por persona no aísla una tabla con inquilino (pulido, ronda 
       INSERT INTO zz_persona VALUES ('${FILA}', '${WS_A}', '${PERSONA}', 'secreto de A');
       INSERT INTO zz_miembro VALUES ('${FILA}', '${WS_A}', 'secreto de A');
     `);
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   after(async () => {
     if (!embebido()) return;
@@ -1577,7 +1577,7 @@ describe('las referencias solo nombran lo que quien escribe puede leer (0025)', 
       ),
     );
     creadoraDeB = rows[0]!.id;
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   const empresasDeAVistasDesde = (ws: string) =>
     t.db
@@ -1882,7 +1882,7 @@ describe('la unicidad es por inquilino: un 23505 ya no dice qué tiene otro work
       );
       await tx.query('INSERT INTO video_asset (workspace_id, content_hash) VALUES (current_workspace_id(), $1)', [HASH]);
     });
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('el guion de los revisores: B guarda a la misma persona sin chocar con la ficha de A', async () => {
     // Hasta 0026: «duplicate key value violates unique constraint
@@ -1980,7 +1980,7 @@ describe('la baja global la llena solo una baja verificada, no el CRM de un work
         await tx.query('INSERT INTO company_link (workspace_id, company_id) VALUES (current_workspace_id(), $1)', [empresa]);
       });
     }
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   /** Guarda un contacto en el CRM de `ws` y devuelve cómo nació. */
   const guardar = (ws: string, empresa: string, email: string) =>
@@ -2120,7 +2120,7 @@ describe('borrar un workspace no publica su CRM (0029 §2)', () => {
       tx.query<{ n: number }>('SELECT count(*)::int AS n FROM company WHERE id = $1', [SECRETO]),
     );
     assert.equal(rows[0]?.n, 0, 'antes de borrar, B no la ve: la prueba mira lo que cambia al borrar');
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('se borra C (como el worker, sin RLS) y B no lee su empresa: se fue con él', async () => {
     await t.admin(`DELETE FROM workspace WHERE id = '${WS_C}'`);
@@ -2165,7 +2165,7 @@ describe('una fila global no nombra lo que quien lee no ve (0029 §3)', () => {
         ('${EMPRESA_DE_A}', NULL, 'Prensa de la marca de A', 'prensa@cafe-alma-0029.co', 'press'),
         ('${EMPRESA_CATALOGO}', NULL, 'Prensa del catálogo', 'prensa@catalogo-0029.co', 'press');
     `);
-  }, { timeout: 120_000 });
+  }, { timeout: 600_000 });
 
   test('B no lee los seguidores de la empresa privada de A; los del catálogo, sí', async () => {
     const { rows } = await t.db.withWorkspace(WS_B, (tx) =>

@@ -177,7 +177,7 @@ before(async () => {
     s.add(g.privilegio);
   }
   estado = await estadoDelEsquema(t.db);
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();

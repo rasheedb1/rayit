@@ -583,3 +583,12 @@ además más rápido.
   en `audit_log` con `audit()` (uso 7), en la misma transacción, con
   `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige
   en los archivos de consultas que adoptaron la convención.
+
+## Los tiempos de las pruebas
+
+Cada archivo de `test/` abre su propia base embebida en su `before`, y
+con 35 migraciones eso cuesta de 84 a 200 s según la carga. `--test-timeout`
+es de 300 s y cada `before` lleva `{ timeout: 600_000 }`: con
+`--test-isolation=none`, un `before` que se pasa **cancela la suite
+entera del paquete** y el informe dice `pass 0, cancelled 704` sin
+señalar quién tardó. Un archivo nuevo necesita el mismo límite.

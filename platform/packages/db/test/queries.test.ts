@@ -79,7 +79,7 @@ before(async () => {
       .returning({ id: creatorProfile.id });
     creadoraVecina = c!.id;
   });
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();

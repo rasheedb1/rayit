@@ -73,7 +73,7 @@ async function runOnce(h: Harness, payload: Record<string, unknown> = {}): Promi
 let h: Harness;
 before(async () => {
   h = await startHarness({ jobs: allJobs, now: () => NOW, seed });
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 after(async () => { await h.stop(); });
 
 test('las campañas en curso quedan con el resultado recalculado; la cerrada no se toca', async () => {

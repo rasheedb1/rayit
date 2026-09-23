@@ -85,7 +85,7 @@ before(async () => {
     refreshers: [createTikTokRefresher(core, { login: app('tiktok', TIKTOK_LOGIN_SCOPES) }), createInstagramRefresher(core, app('instagram', INSTAGRAM_LOGIN_SCOPES))],
     env: { OAUTH_REFRESH_MARGIN_MINUTES: '30' },
   });
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await h.stop();

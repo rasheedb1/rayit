@@ -49,7 +49,7 @@ let h: Harness;
 
 before(async () => {
   h = await startHarness({ jobs: [...allJobs, echoJob, failJob, slowJob, itemsJob, noRetryJob], seed: seedTestDefinitions });
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await h.stop();

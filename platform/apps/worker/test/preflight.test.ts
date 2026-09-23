@@ -24,7 +24,7 @@ let t: TestDb;
 
 before(async () => {
   t = await openTestDb();
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();

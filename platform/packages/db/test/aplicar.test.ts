@@ -33,7 +33,7 @@ let dir = '';
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'mc-migraciones-'));
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await rm(dir, { recursive: true, force: true });

@@ -82,7 +82,7 @@ before(async () => {
     VALUES ('${CAMPAIGN_SIN_FECHAS}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña sin fechas', 'planned', 500000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();

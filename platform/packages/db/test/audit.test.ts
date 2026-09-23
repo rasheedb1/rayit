@@ -37,7 +37,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-bitacora', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+}, { timeout: 600_000 });
 
 after(async () => {
   await t.close();

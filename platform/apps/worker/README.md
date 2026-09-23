@@ -288,7 +288,16 @@ pnpm --filter @mc/worker typecheck lint
 Las de integración aplican TODAS las migraciones reales (la `0014` da
 los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
 `0036`, `metric_gap`) y corren como `mc_worker`: si un privilegio
-faltara, las pruebas fallan. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
+faltara, las pruebas fallan.
+
+**Los tiempos**: cada archivo abre SU propia base embebida en su
+`before`, y con 35 migraciones eso cuesta de 84 a 200 s según la carga
+de la máquina. Por eso `--test-timeout` es de 300 s y los `before` de
+cada archivo llevan `{ timeout: 600_000 }`: con `--test-isolation=none`,
+un `before` que se pasa de su límite **cancela la suite entera del
+paquete**, y el informe dice `pass 0, cancelled 704` sin señalar quién
+tardó. Si añades un archivo de integración, dale el mismo límite y, si
+puedes, mete varios casos en el mismo arnés en vez de abrir otro. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
 ## Estructura
