@@ -100,12 +100,16 @@ ALTER TABLE metric_requirement ADD CONSTRAINT metric_requirement_requirement_che
 -- el MVP necesita y no existían. El texto es lo que lee la persona: se
 -- escribe entero aquí para que cambiarlo sea una migración y no un JSX.
 INSERT INTO metric_requirement (id, platform_id, metric_group, requirement, message_es) VALUES
+  -- Las tres valen para los DOS caminos que llevan aquí: la cuenta que
+  -- se agregó por su @ y nunca se autorizó, y la que se autorizó y hoy
+  -- tiene el permiso caído. Por eso ninguna afirma cómo se agregó: en
+  -- la mitad de los casos sería falso, y el texto va en pantalla.
   ('ig.demographics.auth',     'instagram', 'demografia_de_cuenta', 'owner_authorization',
-   'Esta cuenta se agregó por su @, y lo que Instagram publica no incluye la audiencia. Para verla, el dueño tiene que autorizar la lectura de sus cifras.'),
+   'Instagram no publica la audiencia de una cuenta: solo se la entrega a quien la autoriza. Para verla, el dueño tiene que autorizar la lectura de sus cifras.'),
   ('tt.audience.auth',         'tiktok',    'demografia_de_cuenta', 'owner_authorization',
-   'Esta cuenta se agregó por su @. TikTok solo entrega la audiencia a la cuenta autorizada y con permiso de analítica; el dueño tiene que autorizarla.'),
+   'TikTok solo entrega la audiencia a la cuenta autorizada y con permiso de analítica. Para verla, el dueño tiene que autorizarla.'),
   ('yt.demographics.auth',     'youtube',   'demografia_de_cuenta', 'owner_authorization',
-   'Este canal se agregó por su @, y la API pública no da audiencia. Para verla, el dueño tiene que autorizar YouTube Analytics.'),
+   'La audiencia de un canal solo sale de YouTube Analytics, y eso exige el permiso del dueño. Para verla, el dueño tiene que autorizar YouTube Analytics.'),
   ('ig.insights.account_type', 'instagram', 'demografia_de_cuenta', 'business_account',
    'Instagram solo entrega la audiencia de cuentas profesionales. Cambia la cuenta a Empresa o Creador en Instagram y vuelve a autorizarla.'),
   ('yt.analytics.scope',       'youtube',   'demografia_de_cuenta', 'scope_video_insights',

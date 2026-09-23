@@ -458,7 +458,24 @@ Los seis tienen prueba: la 1 y la 4 en `prerrequisitos-demografia.test.ts`
 `make db.check`, y la 6 en `packages/db/test/demografia.test.ts`
 («el corte que hoy no llegó sigue siendo el de la última vez»).
 
-### 7.2 `/security-review` · cero hallazgos
+### 7.2 Lo que solo se vio corriendo el worker
+
+Ninguna prueba lo miraba, porque todas comprobaban que hubiera **una**
+frase, no cuál. Al leer la salida de la corrida apareció esto:
+
+```
+youtube/CanalCaido (direct_oauth, needs_reauth) → owner_authorization
+    «Este canal se agregó por su @, y la API pública no da audiencia…»
+```
+
+El canal **no** se agregó por su @: se autorizó, y el permiso se cayó.
+Las tres filas `*.auth` daban por hecho el camino de CON-10, y desde el
+arreglo 5 del code-review llegan aquí también las autorizaciones caídas.
+Los tres textos se reescribieron para no afirmar cómo se agregó la
+cuenta, que en la mitad de los casos sería falso, y la prueba de
+`@mc/db` ahora lo exige explícitamente.
+
+### 7.3 `/security-review` · cero hallazgos
 
 Se corrió porque la historia toca privilegios (`REVOKE` sobre una tabla
 nueva), RLS y la clasificación de errores de las plataformas. Comprobó

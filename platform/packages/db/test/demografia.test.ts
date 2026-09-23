@@ -86,6 +86,7 @@ describe('la última demografía de una cuenta', () => {
     assert.equal(g!.metricGroup, 'demografia_de_cuenta');
     assert.equal(g!.day, '2026-09-23');
     assert.match(g!.messageEs, /el dueño tiene que autorizarla/);
+    assert.ok(!/se agregó por su @/.test(g!.messageEs), 'la frase vale también para una autorización caída');
     assert.ok(g!.detectedAt.endsWith('Z'), 'las timestamptz salen como ISO en UTC');
   });
 });
