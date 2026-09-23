@@ -196,3 +196,91 @@ nuevas.
    «Marcar como enviado» escriba `emailed_at` aunque no haya SMTP, es un
    cambio de una línea en la query — pero entonces la fase 2 no puede
    distinguir «lo mandé yo a mano» de «lo mandó el sistema».
+
+---
+
+## 1. Lo que cambió respecto al plan (fase 2 a 5)
+
+| Decisión del §0 | Cómo quedó |
+|---|---|
+| §0.2 pasos y vigencia | Tal cual. `PASOS_RECORDATORIO`, `pasoRecordatorio`, `pasoVigente` y `pasosPendientes` en `packages/core/src/recordatorios.ts`. |
+| §0.3 todos los pasos pendientes | Tal cual, y **comprobado sobre el seed real con un worker de verdad**: FV-2026-007 termina con tres recordatorios y `reminders_sent = 3`. Sigue marcado como decisión pendiente. |
+| §0.4 idempotencia por `action_url` | Tal cual. `urlRecordatorio` y `pasoDeUrl` acabaron en `@mc/core` y no en la carpeta del worker: los necesitan el job, las consultas y la pantalla. |
+| §0.5 texto puro con Intl | Tal cual, con un matiz: `redactarRecordatorio` recibe `hoy` y deriva los días, en vez de recibir `días` aparte, para que los dos no puedan contradecirse. |
+| §0.6 parar en paid/void/draft | Tal cual. |
+| §0.7 la bandeja | Tal cual. `listReminders` y `markReminderSent` en `queries/finanzas.ts`. |
+| ACC-1 | **Cambió**: cuando escribí el §0, ACC-1 no estaba en `main`; al rebasar ya estaba. El `// TODO(ACC-1)` es ahora `await requirePermission("finanzas.factura.editar")`, con prueba negativa. |
+| FIN-8 | Sigue **sin** estar en `main` (`content/backlog.ts` la da como pendiente), así que el correo explica dónde se configurarán los datos de pago. El hueco está listo: `redactarRecordatorio` ya acepta `datosDePago` y lo prueba. |
+
+**Sin migraciones, sin dependencias de terceros, sin variables de
+entorno nuevas.** La única dependencia nueva es `@mc/core` en
+`apps/worker/package.json`, que es un paquete de este repositorio
+(`workspace:*`, cero peso).
+
+## 2. Lo que necesita Rasheed
+
+Nada bloquea esta historia. Tres cosas para su cola, por orden:
+
+### 2.1 Índice único parcial sobre `notification` (opcional, recomendado)
+
+Hoy la idempotencia la garantizan la cola `stately` (una corrida a la
+vez) y un `INSERT … WHERE NOT EXISTS` dentro de la misma transacción.
+Eso cubre el modelo de ejecución real, pero no es una invariante de la
+base: un envío manual con su propio `singletonKey` a la vez que el cron
+podría colarse entre el `SELECT` y el `INSERT`. Una línea lo cierra:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS notification_invoice_reminder_uniq
+  ON notification (workspace_id, entity_id, action_url)
+  WHERE kind = 'invoice_overdue' AND entity_type = 'invoice';
+```
+
+No la escribí yo para no pedir un número de migración con seis sesiones
+abriendo archivos en `db/migrations/` el mismo día. Si te parece, va en
+la siguiente que toques y yo cambio el `WHERE NOT EXISTS` por
+`ON CONFLICT DO NOTHING`.
+
+### 2.2 El envío real es una historia de fase 2, no un pendiente de esta
+
+Cuando exista correo saliente (CIM-10), **FIN-4b · enviar los
+recordatorios**: el mismo job, o uno nuevo en la misma cola, toma los
+`notification` de tipo `invoice_overdue` con `emailed_at IS NULL`, manda
+el correo y sella `emailed_at`. La columna ya existe (0009) y está
+libre a propósito: `read_at` es «el creador lo despachó a mano», que es
+lo que hace el botón de la bandeja hoy. Dos cosas a decidir entonces:
+
+- **Mandar solo el último paso pendiente** y dejar los demás como
+  historial. Hoy no importa (no se envía nada), pero con SMTP tres
+  correos de golpe serían tres correos de golpe.
+- **A quién**. `invoice` no guarda el correo de la marca; habría que
+  llegar por `company` → `contact`, que es PII y tiene `opted_out`.
+
+### 2.3 El worker sigue sin correr contra Supabase
+
+Sin cambios respecto a CON-2: `finance.reminders` no se ejecutará en
+producción hasta `GRANT mc_worker TO mc_migrator` y `CREATE SCHEMA
+pgboss` (docs/propuestas/CON-2.md) y hasta CIM-7 (worker desplegado).
+Mientras tanto la bandeja de `/finanzas` sale vacía en producción, con
+su estado vacío explicándolo. No hace falta apagar nada: la pantalla
+aguanta cero filas sin mentir.
+
+### 2.4 Nota menor sobre el catálogo de permisos (ACC-1)
+
+`marcarRecordatorioEnviado` pide `finanzas.factura.editar`, que en el
+catálogo se llama «Marcar facturas como enviadas o anularlas». Encaja
+—son las tres gestiones sobre el estado de cobro— pero si algún día
+quieres que un rol pueda gestionar cobros sin poder anular facturas,
+hace falta `finanzas.recordatorio.marcar` en `permisos.ts`, y eso
+arrastra el snapshot `test/snapshots/permisos.sql` y la semilla de
+`permission`/`role_permission`. No lo abrí yo por eso.
+
+## 3. Lo que no se hizo, y a qué historia pertenece
+
+| Fuera de alcance | Historia |
+|---|---|
+| Envío automático del correo | FIN-4b (fase 2), depende de CIM-10 |
+| Plantillas editables por el creador | fase 2 |
+| Recordatorios por WhatsApp | fuera del MVP |
+| Datos de pago reales en el texto | FIN-8 (el hueco ya está) |
+| La fila «factura vencida» del panel semanal | RES-3, que lee `notification` |
+| Promover el botón «Copiar» al kit (hoy hay dos gemelos, en Campañas y en Finanzas) | pulido |

@@ -52,8 +52,11 @@ export function RecordatorioCard({ r, f }: { r: ReminderRow; f: Formatter }) {
         {r.asunto}
       </p>
       {/* El cuerpo es texto plano con saltos de línea: se respeta tal cual
-          y se parte por palabras, para que a 400 px no empuje la página. */}
-      <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-bg-2 p-3 font-sans text-xs leading-relaxed text-fg-2">
+          y se parte por palabras, para que a 400 px no empuje la página.
+          Sin alto máximo a propósito: con uno, a 390 px el correo se
+          cortaba a media frase dentro de un scroll que no se ve venir, y
+          nadie copia con confianza un texto que no ha leído entero. */}
+      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-bg-2 p-3 font-sans text-xs leading-relaxed text-fg-2">
         {r.cuerpo}
       </pre>
 
@@ -87,9 +90,13 @@ export function BandejaRecordatorios({ rows, f }: { rows: readonly ReminderRow[]
         <h2 id="recordatorios" className="text-sm font-semibold">
           {t.titulo}
         </h2>
-        <span className="text-xs text-fg-3">
-          {rows.length} {rows.length === 1 ? "recordatorio por enviar" : "recordatorios por enviar"}
-        </span>
+        {/* Sin ninguno no se escribe «0 recordatorios»: el cero es lo que
+            el estado vacío explica abajo con una frase. */}
+        {rows.length > 0 && (
+          <span className="text-xs text-fg-3">
+            {rows.length} {rows.length === 1 ? "recordatorio por enviar" : "recordatorios por enviar"}
+          </span>
+        )}
       </div>
       <p className="mb-3 max-w-2xl text-xs text-fg-3">{t.descripcion}</p>
       {rows.length === 0 ? (

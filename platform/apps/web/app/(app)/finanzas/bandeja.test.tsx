@@ -68,6 +68,8 @@ describe("bandeja de recordatorios", () => {
     expect(vacio).toHaveTextContent("No hay recordatorios por enviar");
     expect(vacio.textContent).toContain("una semana antes del vencimiento");
     expect(screen.queryByText("—")).not.toBeInTheDocument();
+    // El cero lo explica el estado vacío: no se escribe «0 recordatorios».
+    expect(screen.queryByText(/^0 recordatorios/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Marcar como enviado" })).not.toBeInTheDocument();
   });
 
