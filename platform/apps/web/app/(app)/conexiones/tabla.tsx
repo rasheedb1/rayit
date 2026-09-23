@@ -157,7 +157,12 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion):
       render: (r) => (
         <span className="block min-w-0">
           <span className="block text-ink">{frescura(r.hoursSinceSync)}</span>
-          {r.latest && <DataAsOf date={`${r.latest.day}T00:00:00Z`} opts={{ locale: f.locale, timeZone: f.timeZone }} className="mt-0.5" />}
+          {/* `latest.day` es una columna `date` ('YYYY-MM-DD'). Se pasa TAL
+              CUAL: formatDate presenta en UTC las fechas sin hora, y
+              convertirla a un instante la correría un día hacia atrás en
+              cualquier workspace al oeste de Greenwich (con Bogotá, un
+              snapshot del 21 se leía «20 sep»). */}
+          {r.latest && <DataAsOf date={r.latest.day} opts={{ locale: f.locale, timeZone: f.timeZone }} className="mt-0.5" />}
         </span>
       ),
     },

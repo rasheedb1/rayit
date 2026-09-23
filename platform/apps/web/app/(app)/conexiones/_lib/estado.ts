@@ -74,6 +74,16 @@ export interface Acceso {
   explicacion: string;
   /** true si la cuenta se lee con un token del dueño: solo esas vencen y solo esas se reautorizan. */
   conToken: boolean;
+  /**
+   * true si ESTA pantalla sabe volver a leer la cuenta ahora mismo
+   * (`cuentas-service.actualizar`): por @ con su fuente pública, o con
+   * el token del dueño si la autorizó por OAuth. El portafolio de
+   * empresa, el CSV y el proveedor de datos llegan por otro camino, así
+   * que no se les ofrece un botón «Actualizar» que solo puede fallar
+   * —y que, en una cuenta importada por CSV, dispararía una búsqueda
+   * pública por su @ capaz de dejarla en 'error'—.
+   */
+  relectura: boolean;
 }
 
 /**
@@ -82,11 +92,11 @@ export interface Acceso {
  * empresa de Meta: también es un permiso del dueño y también caduca.
  */
 const ACCESO: Record<FilaDeCuenta["accessMode"], Acceso> = {
-  public_profile: { clase: "por_arroba", etiqueta: t.acceso.porArroba, explicacion: t.acceso.porArrobaExplicacion, conToken: false },
-  direct_oauth: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.autorizadaExplicacion, conToken: true },
-  business_portfolio: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.portafolioExplicacion, conToken: true },
-  manual_csv: { clase: "csv", etiqueta: t.acceso.csv, explicacion: t.acceso.csvExplicacion, conToken: false },
-  aggregator: { clase: "proveedor", etiqueta: t.acceso.proveedor, explicacion: t.acceso.proveedorExplicacion, conToken: false },
+  public_profile: { clase: "por_arroba", etiqueta: t.acceso.porArroba, explicacion: t.acceso.porArrobaExplicacion, conToken: false, relectura: true },
+  direct_oauth: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.autorizadaExplicacion, conToken: true, relectura: true },
+  business_portfolio: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.portafolioExplicacion, conToken: true, relectura: false },
+  manual_csv: { clase: "csv", etiqueta: t.acceso.csv, explicacion: t.acceso.csvExplicacion, conToken: false, relectura: false },
+  aggregator: { clase: "proveedor", etiqueta: t.acceso.proveedor, explicacion: t.acceso.proveedorExplicacion, conToken: false, relectura: false },
 };
 
 export function accesoDe(accessMode: FilaDeCuenta["accessMode"]): Acceso {
@@ -111,22 +121,25 @@ export interface EstadoDeCuenta {
  */
 export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
   if (row.status === "disabled") return { tono: "neutral", texto: t.estado.quitada, accion: "ninguna" };
-  const { conToken } = accesoDe(row.accessMode);
+  const { conToken, relectura } = accesoDe(row.accessMode);
+  // Lo que se puede hacer con una cuenta que está bien: releerla, si
+  // esta pantalla sabe hacerlo. Si no, nada; nunca un botón que falla.
+  const alDia: AccionDeCuenta = relectura ? "actualizar" : "ninguna";
   if (conToken) {
     if (row.status === "needs_reauth") return { tono: "bad", texto: t.estado.necesitaReautorizar, accion: "reautorizar" };
     if (row.status === "revoked") return { tono: "bad", texto: t.estado.revocada, accion: "reautorizar" };
     if (row.status === "expired" || vencido(row.accessExpiresAt, ahora)) {
       return { tono: "bad", texto: t.estado.vencida, accion: "reautorizar" };
     }
-    if (row.status === "error") return { tono: "bad", texto: t.estado.noSePudoLeer, accion: "actualizar" };
-    if (row.tokenExpiringSoon) return { tono: "warn", texto: t.estado.vencePronto, accion: "actualizar" };
-    return { tono: "good", texto: t.estado.activa, accion: "actualizar" };
+    if (row.status === "error") return { tono: "bad", texto: t.estado.noSePudoLeer, accion: alDia };
+    if (row.tokenExpiringSoon) return { tono: "warn", texto: t.estado.vencePronto, accion: alDia };
+    return { tono: "good", texto: t.estado.activa, accion: alDia };
   }
   // Sin token no hay permiso que caduque: una cuenta por @ solo puede
   // estar bien o no haberse podido leer. Los estados de token que
   // pudiera arrastrar de una autorización anterior se leen como eso.
-  if (row.status === "active") return { tono: "good", texto: t.estado.activa, accion: "actualizar" };
-  return { tono: "bad", texto: t.estado.noSePudoLeer, accion: "actualizar" };
+  if (row.status === "active") return { tono: "good", texto: t.estado.activa, accion: alDia };
+  return { tono: "bad", texto: t.estado.noSePudoLeer, accion: alDia };
 }
 
 /** Un instante ISO ya pasado. Sin fecha, no se sabe que haya vencido: no se inventa. */

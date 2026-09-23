@@ -144,6 +144,23 @@ describe("la tabla con oauth_connect encendida", () => {
     expect(screen.getByText(MESSAGES.tabla.delta(f.delta(0.05)))).toBeInTheDocument();
   });
 
+  it("la fecha del snapshot es una columna `date`: no se corre un día en un workspace al oeste de Greenwich", () => {
+    const bogota = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    const latest = { day: "2026-09-21", followers: 4210, following: null, mediaCount: 41, views: null };
+    render(<TablaDeCuentas rows={[fila({ id: "6", latest })]} ahora={AHORA} f={bogota} entorno={CONFIGURADO} />);
+    expect(screen.getByText("21 sep")).toBeInTheDocument();
+    expect(screen.queryByText("20 sep")).not.toBeInTheDocument();
+    expect(document.querySelector("time")).toHaveAttribute("dateTime", "2026-09-21");
+  });
+
+  it("una cuenta que esta pantalla no sabe releer no enseña «Actualizar»", () => {
+    const portafolio = fila({ id: "7", platformId: "facebook", handle: "lauracocinafacil", accessMode: "business_portfolio" });
+    pintar([portafolio], CONFIGURADO);
+    const r = celdas("@lauracocinafacil");
+    expect(r.queryByRole("button", { name: MESSAGES.tabla.actualizarAria("@lauracocinafacil") })).not.toBeInTheDocument();
+    expect(r.getByRole("button", { name: MESSAGES.tabla.quitarAria("@lauracocinafacil") })).toBeInTheDocument();
+  });
+
   it("«no cambió» es un dato: una variación de cero se escribe, no se esconde como si faltara", () => {
     const latest = { day: "2026-09-23", followers: 21000, following: null, mediaCount: 559, views: null };
     pintar([fila({ id: "4", latest, followersDelta7d: 0 })], CONFIGURADO);

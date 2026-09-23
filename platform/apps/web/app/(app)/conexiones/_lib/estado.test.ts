@@ -77,6 +77,23 @@ describe("estadoDeCuenta · una cuenta autorizada", () => {
     expect(estadoDeCuenta(fila(), AHORA)).toEqual({ tono: "good", texto: "Activa", accion: "actualizar" });
   });
 
+  it("una cuenta que esta pantalla no sabe releer no ofrece «Actualizar»: sería un botón que solo puede fallar", () => {
+    for (const modo of ["business_portfolio", "manual_csv", "aggregator"] as const) {
+      expect(estadoDeCuenta(fila({ accessMode: modo }), AHORA).accion).toBe("ninguna");
+    }
+    for (const modo of ["direct_oauth", "public_profile"] as const) {
+      expect(estadoDeCuenta(fila({ accessMode: modo }), AHORA).accion).toBe("actualizar");
+    }
+  });
+
+  it("y tampoco la ofrece cuando falló la lectura: un CSV no se arregla buscando el @ por ahí", () => {
+    expect(estadoDeCuenta(fila({ accessMode: "manual_csv", status: "error" }), AHORA)).toEqual({
+      tono: "bad",
+      texto: "No se pudo leer",
+      accion: "ninguna",
+    });
+  });
+
   it("el portafolio de empresa también lleva permiso del dueño: también vence", () => {
     const e = estadoDeCuenta(fila({ accessMode: "business_portfolio", accessExpiresAt: "2026-09-20T00:00:00.000Z" }), AHORA);
     expect(e).toMatchObject({ texto: "Vencida", accion: "reautorizar" });
@@ -106,11 +123,11 @@ describe("estadoDeCuenta · una cuenta por @", () => {
 
 describe("accesoDe", () => {
   it("distingue las cuatro procedencias y cuáles llevan token", () => {
-    expect(accesoDe("public_profile")).toMatchObject({ clase: "por_arroba", etiqueta: "Por @", conToken: false });
-    expect(accesoDe("direct_oauth")).toMatchObject({ clase: "autorizada", etiqueta: "Autorizada", conToken: true });
-    expect(accesoDe("business_portfolio")).toMatchObject({ clase: "autorizada", conToken: true });
-    expect(accesoDe("manual_csv")).toMatchObject({ clase: "csv", etiqueta: "Por CSV", conToken: false });
-    expect(accesoDe("aggregator")).toMatchObject({ clase: "proveedor", etiqueta: "Por proveedor", conToken: false });
+    expect(accesoDe("public_profile")).toMatchObject({ clase: "por_arroba", etiqueta: "Por @", conToken: false, relectura: true });
+    expect(accesoDe("direct_oauth")).toMatchObject({ clase: "autorizada", etiqueta: "Autorizada", conToken: true, relectura: true });
+    expect(accesoDe("business_portfolio")).toMatchObject({ clase: "autorizada", conToken: true, relectura: false });
+    expect(accesoDe("manual_csv")).toMatchObject({ clase: "csv", etiqueta: "Por CSV", conToken: false, relectura: false });
+    expect(accesoDe("aggregator")).toMatchObject({ clase: "proveedor", etiqueta: "Por proveedor", conToken: false, relectura: false });
   });
 
   it("«Por @» y «Autorizada» no comparten ni etiqueta ni explicación: se distinguen leyendo", () => {
