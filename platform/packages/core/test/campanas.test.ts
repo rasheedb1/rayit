@@ -8,6 +8,7 @@ import {
   brandAccountsFromSocials, defaultCampaignName, briefFromQuote, cutHoursLabel,
   BRAND_INPUT_KINDS, BRAND_INPUT_KIND_LABEL_ES, MANUAL_BRAND_INPUT_KINDS, brandInputSemantics, isBrandInputKind,
   isManualBrandInputKind, isMoneyBrandInputKind, brandCsvWindow, parseBrandCsvDay, reviewBrandCsvRows,
+  calcularResultado, followerRateMultiple, isResultComplete, MISSING_INPUTS, type ResultInputs, type ResultPost,
   ritmoSeguidores, isBrandSnapshotDue, isBrandNoDataReason, BRAND_AFTER_DAYS, BRAND_BASELINE_DAYS, type BrandFollowerPoint,
 } from '../src/campanas.ts';
 import { addDays } from '../src/facturacion.ts';
@@ -375,4 +376,176 @@ test('las razones «sin cifra» son un vocabulario cerrado', () => {
   assert.equal(isBrandNoDataReason('not_found'), true);
   assert.equal(isBrandNoDataReason('no_public_source'), true);
   assert.equal(isBrandNoDataReason('instagram.business_discovery'), false);
+});
+
+// ---------------------------------------------------- resultado (CAM-5)
+
+/** Un post con sus lecturas por corte; las cifras por defecto son las de la lectura manual a 720 h del seed 0003. */
+function post(id: string, platformId: string, maxAgeHours: number, cuts: Partial<Record<24 | 72 | 168 | 720, Partial<ResultPost['cuts'][number]>>>): ResultPost {
+  return {
+    postId: id,
+    platformId,
+    maxAgeHours,
+    cuts: Object.entries(cuts).map(([c, m]) => ({
+      cutHours: Number(c) as 24 | 72 | 168 | 720,
+      views: null, reach: null, interactions: null, saves: null, shares: null, linkClicks: null, reachNonFollowers: null,
+      ...m,
+    })),
+  };
+}
+
+/** Las líneas base a 720 h y 168 h del seed 0002 (fiables). */
+const BASELINES: ResultInputs['baselines'] = [
+  { platformId: 'instagram', cutHours: 720, medianViews: 69000, sampleSize: 9, reliable: true },
+  { platformId: 'tiktok', cutHours: 720, medianViews: 121500, sampleSize: 10, reliable: true },
+  { platformId: 'youtube', cutHours: 720, medianViews: 47000, sampleSize: 8, reliable: true },
+  { platformId: 'tiktok', cutHours: 168, medianViews: 115446, sampleSize: 17, reliable: true },
+];
+
+/** Café Alma en el seed: las dos lecturas manuales a 720 h, la serie de @cafealma y los aportes de la marca. */
+function resultadoCafeAlma(): ResultInputs {
+  return {
+    amount: '3100000.00',
+    currency: 'COP',
+    startsOn: '2026-08-10',
+    endsOn: '2026-08-17',
+    brandBaselineFrom: '2026-07-27',
+    posts: [
+      post('d01', 'instagram', 1032, { 720: { views: 412000, reach: 296000, interactions: 34710, saves: 6200, shares: 3100, linkClicks: 3900, reachNonFollowers: 172000 } }),
+      post('d02', 'tiktok', 984, { 720: { views: 300000, reach: 190000, interactions: 22820, saves: 3400, shares: 2000, linkClicks: 2340, reachNonFollowers: 110000 } }),
+    ],
+    baselines: BASELINES,
+    brandSeries: [{ platformId: 'instagram', points: serieDelSeed() }],
+    brandTotals: [
+      { kind: 'code_redemptions', source: 'brand_manual', value: '318.00', currency: null },
+      { kind: 'revenue', source: 'brand_manual', value: '8400000.00', currency: 'COP' },
+    ],
+  };
+}
+
+test('calcularResultado: Café Alma reproduce el seed recalculado (CPM 4 353,93, no los 11 800 del mock)', () => {
+  const r = calcularResultado(resultadoCafeAlma());
+  assert.deepEqual(
+    { ...r },
+    {
+      cutHours: 720,
+      partial: false,
+      views: 712000,
+      reach: 486000,
+      interactions: 57530,
+      saves: 9600,
+      shares: 5100,
+      linkClicks: 6240,
+      reachNonFollowersPct: '0.58025',
+      viewsVsMedian: '4.496',
+      brandFollowersGained: 1240,
+      brandFollowersBaselineRate: '12.9286',
+      brandFollowersCampaignRate: '155.0000',
+      codeRedemptions: 318,
+      attributedRevenue: '8400000.00',
+      currency: 'COP',
+      cpm: '4353.93',
+      costPerFollower: '2500.00',
+      cpa: '9748.43',
+      emv: null,
+      missingInputs: ['brand_csv_sales'],
+      redemptionsSource: 'manual',
+      revenueSource: 'manual',
+    },
+  );
+  assert.equal(followerRateMultiple(r.brandFollowersBaselineRate, r.brandFollowersCampaignRate)?.toFixed(2), '11.99', '«×12 el ritmo»');
+  assert.equal(isResultComplete(r), false, 'falta el CSV de ventas');
+});
+
+test('calcularResultado: Nutrivé sin datos de la marca da null, nunca cero, y lo dice', () => {
+  const r = calcularResultado({
+    amount: '4700000.00', currency: 'COP', startsOn: '2026-07-15', endsOn: '2026-07-22', brandBaselineFrom: '2026-07-01',
+    posts: [post('d05', 'youtube', 1656, { 720: { views: 58000, reach: 41000, interactions: 4250, saves: 900, shares: 310, linkClicks: 420, reachNonFollowers: 22000 } })],
+    baselines: BASELINES, brandSeries: [], brandTotals: [],
+  });
+  assert.deepEqual(r.missingInputs, ['brand_followers', 'brand_inputs']);
+  assert.equal(r.views, 58000);
+  assert.equal(r.viewsVsMedian, '1.234');
+  assert.equal(r.cpm, '81034.48');
+  for (const k of ['brandFollowersGained', 'brandFollowersBaselineRate', 'brandFollowersCampaignRate', 'codeRedemptions', 'attributedRevenue', 'costPerFollower', 'cpa'] as const) {
+    assert.equal(r[k], null, k);
+  }
+});
+
+test('calcularResultado: el corte es el mayor que todos alcanzaron; a 7 días es parcial', () => {
+  const r = calcularResultado({
+    ...resultadoCafeAlma(),
+    posts: [
+      post('d03', 'tiktok', 480, { 168: { views: 129299, reach: 84044 }, 720: { views: 137074 } }),
+      post('d04', 'tiktok', 384, { 168: { views: 120000, reach: 80000 } }),
+    ],
+  });
+  assert.equal(r.cutHours, 168);
+  assert.equal(r.partial, true);
+  assert.equal(r.views, 249299, 'las dos a 7 días, no una a 30 y otra a 7');
+  assert.equal(r.viewsVsMedian, (((129299 ** 2) / 115446 + (120000 ** 2) / 115446) / 249299).toFixed(3));
+  assert.equal(r.saves, null, 'un dato que no trae ningún post es null, no 0');
+  assert.equal(isResultComplete(r), false);
+});
+
+test('calcularResultado: sin posts o sin ningún corte común, las cifras son null y falta «posts»', () => {
+  const sin = calcularResultado({ ...resultadoCafeAlma(), posts: [] });
+  assert.equal(sin.views, null);
+  assert.equal(sin.cpm, null);
+  assert.equal(sin.cutHours, 720);
+  assert.deepEqual(sin.missingInputs, ['posts', 'brand_csv_sales']);
+  const joven = calcularResultado({ ...resultadoCafeAlma(), posts: [post('nuevo', 'tiktok', 3, {})] });
+  assert.deepEqual(joven.missingInputs.slice(0, 1), ['posts']);
+  assert.equal(joven.cpa, '9748.43', 'el CPA no depende de los posts');
+});
+
+test('calcularResultado: ninguna división por cero, y sin monto no hay CPM ni CPA', () => {
+  const cero = calcularResultado({
+    ...resultadoCafeAlma(),
+    posts: [post('x', 'instagram', 800, { 720: { views: 0, reach: 0, reachNonFollowers: 0 } })],
+    brandSeries: [],
+    brandTotals: [{ kind: 'code_redemptions', source: 'brand_manual', value: '0.00', currency: null }],
+  });
+  assert.equal(cero.views, 0, 'cero views medidas es un cero de verdad');
+  assert.equal(cero.cpm, null);
+  assert.equal(cero.cpa, null);
+  assert.equal(cero.reachNonFollowersPct, null);
+  assert.equal(cero.viewsVsMedian, null);
+  const sinMonto = calcularResultado({ ...resultadoCafeAlma(), amount: null });
+  assert.equal(sinMonto.cpm, null);
+  assert.equal(sinMonto.cpa, null);
+  assert.equal(sinMonto.costPerFollower, null);
+  assert.deepEqual(sinMonto.missingInputs, ['amount', 'brand_csv_sales']);
+});
+
+test('calcularResultado: el CSV manda sobre el total manual; ingresos en otra moneda no se atribuyen', () => {
+  const conCsv = calcularResultado({
+    ...resultadoCafeAlma(),
+    brandTotals: [
+      ...resultadoCafeAlma().brandTotals,
+      { kind: 'csv_sales', source: 'brand_csv', value: '2880000.50', currency: 'COP' },
+      { kind: 'code_redemptions', source: 'brand_csv', value: '5.00', currency: null },
+    ],
+  });
+  assert.deepEqual([conCsv.codeRedemptions, conCsv.attributedRevenue, conCsv.redemptionsSource, conCsv.revenueSource], [5, '2880000.50', 'csv', 'csv']);
+  assert.deepEqual(conCsv.missingInputs, [], 'con el CSV no falta nada');
+  assert.equal(conCsv.cpa, '620000.00');
+  assert.equal(isResultComplete(conCsv), true);
+  const usd = calcularResultado({ ...resultadoCafeAlma(), brandTotals: [{ kind: 'revenue', source: 'brand_manual', value: '400.00', currency: 'USD' }] });
+  assert.equal(usd.attributedRevenue, null);
+  assert.equal(usd.codeRedemptions, null);
+});
+
+test('calcularResultado: sin línea base fiable en una red, vs mediana es null y falta «baseline»', () => {
+  const r = calcularResultado({ ...resultadoCafeAlma(), baselines: BASELINES.map((b) => (b.platformId === 'tiktok' ? { ...b, reliable: false } : b)) });
+  assert.equal(r.viewsVsMedian, null);
+  assert.deepEqual(r.missingInputs, ['baseline', 'brand_csv_sales']);
+  assert.equal(r.views, 712000, 'lo demás no cambia');
+});
+
+test('calcularResultado: línea base de la marca corta → «brand_followers_baseline_short»', () => {
+  const r = calcularResultado({ ...resultadoCafeAlma(), brandSeries: [{ platformId: 'instagram', points: serieDelSeed().filter((p) => p.day >= '2026-08-05') }] });
+  assert.ok(r.brandFollowersGained !== null);
+  assert.ok(r.missingInputs.includes('brand_followers_baseline_short'));
+  assert.deepEqual([...MISSING_INPUTS], ['posts', 'amount', 'baseline', 'brand_followers', 'brand_followers_baseline_short', 'brand_inputs', 'brand_csv_sales']);
 });

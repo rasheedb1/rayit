@@ -3,7 +3,8 @@
  * reglas puras que la ficha y las consultas comparten. Sin base, sin
  * React, sin fechas locales: todo trabaja sobre 'YYYY-MM-DD'.
  */
-import { addDays, daysBetween, type Decimal } from './facturacion.ts';
+import { addDays, daysBetween, fromCents, toCents, type Decimal } from './facturacion.ts';
+import { AGE_CUTS_HOURS, MIN_SAMPLE_FOR_BASELINE, type AgeCut } from './scoring.ts';
 
 // ---------------------------------------------------------------------
 // Estados
@@ -724,4 +725,314 @@ export function ritmoSeguidores(serie: readonly BrandFollowerPoint[], windows: B
     baselineDataFrom: baseline?.dataFrom ?? null,
     fiable: baselineRate !== null && campaignRate !== null && diasDeLineaBase >= BRAND_BASELINE_DAYS,
   };
+}
+
+// ---------------------------------------------------------------------
+// Resultado de campaña (CAM-5)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que puede faltar para que el resultado esté completo, con estos
+ * nombres fijos (campaign_result.missing_inputs). El orden es el de la
+ * ficha: primero lo del creador, después lo de la marca.
+ *   posts                          no hay posts, o ninguno llegó al primer corte
+ *   amount                         la campaña no tiene monto: sin CPM ni CPA
+ *   baseline                       algún post no tiene línea base fiable de su red a ese corte
+ *   brand_followers                no hay serie de seguidores de la marca
+ *   brand_followers_baseline_short hay ritmo, pero la línea base de la marca no cubre 14 días
+ *   brand_inputs                   la marca no reportó nada (CAM-4)
+ *   brand_csv_sales                reportó totales, pero no el CSV de ventas diarias
+ */
+export const MISSING_INPUTS = [
+  'posts',
+  'amount',
+  'baseline',
+  'brand_followers',
+  'brand_followers_baseline_short',
+  'brand_inputs',
+  'brand_csv_sales',
+] as const;
+export type MissingInput = (typeof MISSING_INPUTS)[number];
+
+export function isMissingInput(value: string): value is MissingInput {
+  return (MISSING_INPUTS as readonly string[]).includes(value);
+}
+
+/** El corte del reporte completo: 30 días. */
+export const RESULT_FULL_CUT_HOURS = 720;
+
+/** Estados cuyo resultado recalcula el job cada día. closed y cancelled quedan congelados. */
+export const RESULT_COMPUTE_STATUSES: readonly CampaignStatus[] = ['live', 'measuring', 'reported'];
+
+/** Las cifras de un post a un corte. null = la lectura no traía ese dato. */
+export interface ResultPostCut {
+  cutHours: AgeCut;
+  views: number | null;
+  reach: number | null;
+  interactions: number | null;
+  saves: number | null;
+  shares: number | null;
+  linkClicks: number | null;
+  reachNonFollowers: number | null;
+}
+
+export interface ResultPost {
+  postId: string;
+  platformId: string;
+  /** La edad de la lectura más vieja del post. null = sin lecturas. */
+  maxAgeHours: number | null;
+  /** Una entrada por corte con lectura a esa edad o antes (la más cercana sin pasarse). */
+  cuts: readonly ResultPostCut[];
+}
+
+/** La línea base del creador en una red a un corte (creator_baseline, CON-6): la más reciente. */
+export interface ResultBaseline {
+  platformId: string;
+  cutHours: number;
+  medianViews: number | null;
+  sampleSize: number;
+  reliable: boolean;
+}
+
+/** Un total de lo que aportó la marca (listBrandInputs de CAM-4). value en texto decimal. */
+export interface ResultBrandTotal {
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  value: string;
+  currency: string | null;
+}
+
+export interface ResultInputs {
+  /** campaign.amount, texto decimal. null = sin monto. */
+  amount: Decimal | null;
+  currency: string;
+  startsOn: string | null;
+  endsOn: string | null;
+  brandBaselineFrom: string | null;
+  posts: readonly ResultPost[];
+  baselines: readonly ResultBaseline[];
+  /** Una serie por red de la marca (brand_account_snapshot). */
+  brandSeries: readonly { platformId: string; points: readonly BrandFollowerPoint[] }[];
+  brandTotals: readonly ResultBrandTotal[];
+}
+
+/** De dónde salieron canjes e ingresos (no se guarda: la ficha lo deduce de CAM-4). */
+export type BrandFigureSource = 'csv' | 'manual';
+
+/** Lo que va a campaign_result. Conteos como number; dinero y proporciones como texto con la escala de 0008. */
+export interface CampaignResultValues {
+  cutHours: number;
+  /** El corte es menor que 30 días: el resultado es parcial y se recalcula. */
+  partial: boolean;
+  views: number | null;
+  reach: number | null;
+  interactions: number | null;
+  saves: number | null;
+  shares: number | null;
+  linkClicks: number | null;
+  /** numeric(6,5), 0..1. */
+  reachNonFollowersPct: string | null;
+  /** numeric(8,3). */
+  viewsVsMedian: string | null;
+  brandFollowersGained: number | null;
+  /** numeric(10,4), seguidores/día. */
+  brandFollowersBaselineRate: string | null;
+  brandFollowersCampaignRate: string | null;
+  codeRedemptions: number | null;
+  attributedRevenue: Decimal | null;
+  currency: string;
+  cpm: Decimal | null;
+  costPerFollower: Decimal | null;
+  cpa: Decimal | null;
+  /** Sin fórmula acordada (decisión pendiente): siempre null. */
+  emv: null;
+  missingInputs: MissingInput[];
+  redemptionsSource: BrandFigureSource | null;
+  revenueSource: BrandFigureSource | null;
+}
+
+/** a / b redondeado al entero, mitad hacia arriba. b > 0 y a ≥ 0. */
+function divHalfUp(a: bigint, b: bigint): bigint {
+  return (a * 2n + b) / (b * 2n);
+}
+
+/** Un número con `digits` decimales, o null si no es finito. */
+function fixed(n: number | null, digits: number): string | null {
+  return n === null || !Number.isFinite(n) ? null : n.toFixed(digits);
+}
+
+/** '318.00' → 318. Los conteos de CAM-4 vienen como numeric; un valor no entero no es un conteo. */
+function countOf(value: string): number | null {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/** El corte común: el mayor que todos los posts alcanzaron, con views en todos. null si ninguno. */
+function commonCut(posts: readonly ResultPost[]): AgeCut | null {
+  if (posts.length === 0) return null;
+  const desc = [...AGE_CUTS_HOURS].sort((a, b) => b - a);
+  for (const cut of desc) {
+    const all = posts.every((p) => {
+      const c = p.cuts.find((x) => x.cutHours === cut);
+      return p.maxAgeHours !== null && p.maxAgeHours >= cut && c !== undefined && c.views !== null;
+    });
+    if (all) return cut;
+  }
+  return null;
+}
+
+/** Suma solo si todos traen el dato: una suma con huecos no es la cifra de la campaña. */
+function sumAll(values: readonly (number | null)[]): number | null {
+  if (values.length === 0 || values.some((v) => v === null)) return null;
+  return values.reduce<number>((a, v) => a + (v ?? 0), 0);
+}
+
+/**
+ * El resultado de una campaña, desde sus entradas. Pura: no lee la base
+ * ni el reloj. Llena cada columna de campaign_result y dice en
+ * missingInputs qué falta; donde falta un dato la cifra es null, nunca
+ * cero. Ver docs/propuestas/CAM-5.md §0.3 para cada regla.
+ */
+export function calcularResultado(inputs: ResultInputs): CampaignResultValues {
+  const missing = new Set<MissingInput>();
+
+  // Posts al corte común.
+  const cut = commonCut(inputs.posts);
+  if (cut === null) missing.add('posts');
+  const atCut = cut === null ? [] : inputs.posts.map((p) => ({ post: p, m: p.cuts.find((c) => c.cutHours === cut)! }));
+  const views = cut === null ? null : sumAll(atCut.map((x) => x.m.views));
+  const reach = cut === null ? null : sumAll(atCut.map((x) => x.m.reach));
+  const pick = (f: (m: ResultPostCut) => number | null) => (cut === null ? null : sumAll(atCut.map((x) => f(x.m))));
+
+  // No seguidores: sobre los posts que traen los dos datos.
+  let nfNum = 0;
+  let nfDen = 0;
+  for (const { m } of atCut) {
+    if (m.reach !== null && m.reachNonFollowers !== null && m.reach > 0) {
+      nfNum += m.reachNonFollowers;
+      nfDen += m.reach;
+    }
+  }
+  const reachNonFollowersPct = nfDen > 0 ? fixed(Math.min(nfNum / nfDen, 9.99999), 5) : null;
+
+  // Contra la mediana del creador, ponderado por views.
+  let viewsVsMedian: string | null = null;
+  if (cut !== null) {
+    let weighted = 0;
+    let totalViews = 0;
+    let ok = true;
+    for (const { post, m } of atCut) {
+      const b = inputs.baselines.find((x) => x.platformId === post.platformId && x.cutHours === cut);
+      if (!b || !b.reliable || b.sampleSize < MIN_SAMPLE_FOR_BASELINE || b.medianViews === null || b.medianViews <= 0 || m.views === null) {
+        ok = false;
+        break;
+      }
+      weighted += m.views * (m.views / b.medianViews);
+      totalViews += m.views;
+    }
+    if (!ok) missing.add('baseline');
+    else if (totalViews > 0) viewsVsMedian = fixed(weighted / totalViews, 3);
+  }
+
+  // Seguidores de la marca (CAM-3), sumados entre redes.
+  let gained: number | null = null;
+  let baselineRate: number | null = null;
+  let campaignRate: number | null = null;
+  let short = false;
+  const windows: BrandWindows = { baselineFrom: inputs.brandBaselineFrom, startsOn: inputs.startsOn, endsOn: inputs.endsOn };
+  for (const series of inputs.brandSeries) {
+    const r = ritmoSeguidores(series.points, windows);
+    if (r.gained === null) continue;
+    gained = (gained ?? 0) + r.gained;
+    if (r.campaignRate !== null) campaignRate = (campaignRate ?? 0) + r.campaignRate;
+    if (r.baselineRate !== null) baselineRate = (baselineRate ?? 0) + r.baselineRate;
+    if (!r.fiable) short = true;
+  }
+  if (gained === null) missing.add('brand_followers');
+  else if (short || baselineRate === null) missing.add('brand_followers_baseline_short');
+
+  // Canjes e ingresos (CAM-4): el CSV si existe; si no, el último total manual.
+  const total = (kind: BrandInputKind, source: BrandInputSource) => inputs.brandTotals.find((t) => t.kind === kind && t.source === source);
+  let codeRedemptions: number | null = null;
+  let redemptionsSource: BrandFigureSource | null = null;
+  const csvRedemptions = total('code_redemptions', 'brand_csv');
+  const manualRedemptions = total('code_redemptions', 'brand_manual');
+  if (csvRedemptions) {
+    codeRedemptions = countOf(csvRedemptions.value);
+    redemptionsSource = 'csv';
+  } else if (manualRedemptions) {
+    codeRedemptions = countOf(manualRedemptions.value);
+    redemptionsSource = 'manual';
+  }
+  let attributedRevenue: Decimal | null = null;
+  let revenueSource: BrandFigureSource | null = null;
+  const csvSales = total('csv_sales', 'brand_csv');
+  const manualRevenue = total('revenue', 'brand_manual');
+  if (csvSales) {
+    attributedRevenue = fromCents(toCents(csvSales.value));
+    revenueSource = 'csv';
+  } else if (manualRevenue && (manualRevenue.currency ?? inputs.currency) === inputs.currency) {
+    attributedRevenue = fromCents(toCents(manualRevenue.value));
+    revenueSource = 'manual';
+  }
+  if (inputs.brandTotals.length === 0) missing.add('brand_inputs');
+  else if (!csvSales) missing.add('brand_csv_sales');
+
+  // Eficiencia: dinero en centavos, mitad hacia arriba; sin divisor, null.
+  let cpm: Decimal | null = null;
+  let costPerFollower: Decimal | null = null;
+  let cpa: Decimal | null = null;
+  if (inputs.amount === null) missing.add('amount');
+  else {
+    const cents = toCents(inputs.amount);
+    if (cents >= 0n) {
+      if (views !== null && views > 0) cpm = fromCents(divHalfUp(cents * 1000n, BigInt(views)));
+      if (gained !== null && gained > 0) costPerFollower = fromCents(divHalfUp(cents, BigInt(gained)));
+      if (codeRedemptions !== null && codeRedemptions > 0) cpa = fromCents(divHalfUp(cents, BigInt(codeRedemptions)));
+    }
+  }
+
+  const cutHours = cut ?? RESULT_FULL_CUT_HOURS;
+  return {
+    cutHours,
+    partial: cut !== null && cut < RESULT_FULL_CUT_HOURS,
+    views,
+    reach,
+    interactions: pick((m) => m.interactions),
+    saves: pick((m) => m.saves),
+    shares: pick((m) => m.shares),
+    linkClicks: pick((m) => m.linkClicks),
+    reachNonFollowersPct,
+    viewsVsMedian,
+    brandFollowersGained: gained,
+    brandFollowersBaselineRate: fixed(baselineRate, 4),
+    brandFollowersCampaignRate: fixed(campaignRate, 4),
+    codeRedemptions,
+    attributedRevenue,
+    currency: inputs.currency,
+    cpm,
+    costPerFollower,
+    cpa,
+    emv: null,
+    missingInputs: MISSING_INPUTS.filter((m) => missing.has(m)),
+    redemptionsSource,
+    revenueSource,
+  };
+}
+
+/**
+ * «×12 el ritmo»: ritmo en campaña ÷ ritmo previo, desde las columnas de
+ * campaign_result (texto). null si falta alguno o el previo no crece.
+ * Vive aquí para que la ficha no haga aritmética.
+ */
+export function followerRateMultiple(baselineRate: string | null, campaignRate: string | null): number | null {
+  if (baselineRate === null || campaignRate === null) return null;
+  const b = Number(baselineRate);
+  const c = Number(campaignRate);
+  return Number.isFinite(b) && Number.isFinite(c) && b > 0 ? c / b : null;
+}
+
+/** La ficha sugiere «marca el reporte listo» cuando el resultado está completo a 30 días. */
+export function isResultComplete(result: { cutHours: number; missingInputs: readonly string[] }): boolean {
+  return result.cutHours >= RESULT_FULL_CUT_HOURS && result.missingInputs.length === 0;
 }
