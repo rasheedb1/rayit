@@ -508,8 +508,8 @@ describe('0034: el archivo, dos veces y al revés', { timeout: TIEMPO_BLOQUE }, 
         }
       }
       await db.execAsSuperuser(sql.join('\n'));
-      // 0034 primero; detrás pueden venir las posteriores (0037, CAM-6), que no tocan membership.
       const aplicadas = await db.migrar();
+      // La primera pendiente es 0034; las que vengan detrás (0035 de CAM-3, 0037 de CAM-6, …) también se aplican y no cambian el relleno.
       assert.equal(aplicadas[0], MIGRACION);
 
       const { rows } = await db.queryAsSuperuser<{ kind: string; user_id: string; key: string }>(

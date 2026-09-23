@@ -247,7 +247,9 @@ FROM (
     FROM generate_series(0, 59) AS d
   ) g
 ) a
-ON CONFLICT (company_id, platform_id, day) DO NOTHING;
+-- Sin objetivo: vale con la unicidad de 0008 (empresa, red, día) y con la
+-- de 0035 (campaña, red, día, con o sin cifra).
+ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================

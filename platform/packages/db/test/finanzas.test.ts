@@ -24,6 +24,8 @@ import {
   listCompanies,
   listInvoices,
   listPayments,
+  listReminders,
+  markReminderSent,
   recordPayment,
   transitionInvoice,
   InvoiceNotFound,
@@ -557,6 +559,148 @@ describe('FIN-6 · aislamiento', () => {
     }
   });
 });
+
+describe('bandeja de recordatorios (FIN-4)', () => {
+  /** Ids fijos, para poder afirmar el orden sin depender del uuid que sortee la base. */
+  const N2 = '00000004-0000-4000-8000-00000000fa02';
+  const N3 = '00000004-0000-4000-8000-00000000fa03';
+  const N4 = '00000004-0000-4000-8000-00000000fa04';
+  const N_SIN_PASO = '00000004-0000-4000-8000-00000000fa09';
+  const N_DESCARTADA = '00000004-0000-4000-8000-00000000fa08';
+  const N_AJENA = '00000004-0000-4000-8000-00000000fa07';
+  /** …f1, no …e1: ese es EMPRESA_SIN_RESERVA de FIN-2, con otro dueño. */
+  const EMPRESA_AJENA = '00000009-0000-4000-8000-0000000000f1';
+  const FV_007 = '00000003-0000-4000-8000-0000fac26007';
+
+  before(async () => {
+    // Una factura del workspace ajeno, para que su recordatorio apunte a
+    // algo. La empresa es …f1 y no …e1: ese id es de FIN-2
+    // (EMPRESA_SIN_RESERVA) y lo espera con OTRO dueño, así que el
+    // primero en insertar decidía de quién era la empresa.
+    await t.admin(`
+      INSERT INTO company (id, name, owner_workspace_id)
+      VALUES ('${EMPRESA_AJENA}', 'Marca Ajena', '${WORKSPACE_AJENO}') ON CONFLICT DO NOTHING;
+      INSERT INTO invoice (id, workspace_id, company_id, number, currency, subtotal, tax, withholding, total, issued_on, due_on, status, paid_amount)
+      VALUES ('00000009-0000-4000-8000-0000fac26001', '${WORKSPACE_AJENO}', '${EMPRESA_AJENA}',
+              'FV-2026-A01', 'COP', 1000000.00, 190000.00, 110000.00, 1190000.00, CURRENT_DATE - 71, CURRENT_DATE - 41, 'sent', 0.00)
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO notification (id, workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, dismissed_at) VALUES
+        ('${N3}', '${WORKSPACE_LAURA}', 'invoice_overdue', 'warning', 'Factura FV-2026-007 pendiente · 41 días de mora',
+         'Hola, equipo de Hogar Lindo:', 'invoice', '${FV_007}', '/finanzas/facturas/${FV_007}?recordatorio=3', NULL),
+        ('${N2}', '${WORKSPACE_LAURA}', 'invoice_overdue', 'info', 'La factura FV-2026-007 venció el 13 de agosto de 2026',
+         'Hola, equipo de Hogar Lindo:', 'invoice', '${FV_007}', '/finanzas/facturas/${FV_007}?recordatorio=2', NULL),
+        ('${N4}', '${WORKSPACE_LAURA}', 'invoice_overdue', 'critical', 'Aviso formal de cobro · factura FV-2026-007',
+         'Hola, equipo de Hogar Lindo:', 'invoice', '${FV_007}', '/finanzas/facturas/${FV_007}?recordatorio=5', NULL),
+        ('${N_SIN_PASO}', '${WORKSPACE_LAURA}', 'invoice_overdue', 'info', 'Aviso viejo sin paso',
+         'Cuerpo', 'invoice', '${FV_007}', '/finanzas/facturas/${FV_007}', NULL),
+        ('${N_DESCARTADA}', '${WORKSPACE_LAURA}', 'invoice_overdue', 'warning', 'Descartado',
+         'Cuerpo', 'invoice', '${FV_007}', '/finanzas/facturas/${FV_007}?recordatorio=4', now()),
+        ('${N_AJENA}', '${WORKSPACE_AJENO}', 'invoice_overdue', 'critical', 'Aviso del workspace ajeno',
+         'Hola, equipo de Marca Ajena:', 'invoice', '00000009-0000-4000-8000-0000fac26001',
+         '/finanzas/facturas/00000009-0000-4000-8000-0000fac26001?recordatorio=5', NULL)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+  });
+
+  test('la bandeja trae el asunto, el cuerpo y el paso, lo más grave primero', async () => {
+    const filas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx));
+    assert.deepEqual(filas.map((f) => f.id), [N4, N3, N2], 'critical, warning, info');
+    assert.deepEqual(filas.map((f) => f.paso), [5, 3, 2]);
+    assert.deepEqual(filas.map((f) => f.etiquetaEs), ['Aviso formal de cobro', 'Primer aviso de mora', 'Aviso de vencimiento']);
+    const uno = filas[1]!;
+    assert.equal(uno.asunto, 'Factura FV-2026-007 pendiente · 41 días de mora');
+    assert.equal(uno.cuerpo, 'Hola, equipo de Hogar Lindo:');
+    assert.equal(uno.invoiceNumber, 'FV-2026-007');
+    assert.equal(uno.companyName, 'Hogar Lindo');
+    assert.equal(uno.currency, 'COP');
+    assert.equal(uno.outstanding, '1100000.00');
+    assert.equal(uno.daysOverdue, 41);
+    assert.equal(uno.sentAt, null);
+    assert.match(uno.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  test('lo descartado y lo que no lleva paso no entran', async () => {
+    const filas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx));
+    const ids = filas.map((f) => f.id);
+    assert.ok(!ids.includes(N_DESCARTADA), 'dismissed_at descarta para siempre');
+    assert.ok(!ids.includes(N_SIN_PASO), 'sin paso en action_url no es un recordatorio de FIN-4');
+  });
+
+  test('otro workspace no ve la bandeja ajena, ni con su id delante', async () => {
+    const mios = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx));
+    assert.ok(!mios.some((f) => f.id === N_AJENA));
+    const ajenos = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReminders(tx));
+    assert.deepEqual(ajenos.map((f) => f.id), [N_AJENA]);
+    assert.equal(ajenos[0]?.companyName, 'Marca Ajena');
+  });
+
+  test('se puede pedir la de una sola factura, y un id que no es uuid no consulta', async () => {
+    const dela = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }));
+    assert.equal(dela.length, 3);
+    assert.deepEqual(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: 'no-es-uuid' })), []);
+    assert.deepEqual(
+      await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: INVOICE_FV_2026_001 })),
+      [],
+      'una factura sin recordatorios devuelve la lista vacía, no las de otra',
+    );
+  });
+
+  test('marcar como enviado sella la fecha una sola vez', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, N2)), true);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, N2)), false, 'repetir el clic no mueve la fecha');
+
+    const [marcado] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007, pendingOnly: false }));
+    const fila = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }))).find((f) => f.id === N2);
+    assert.ok(marcado, 'la bandeja completa lo sigue mostrando');
+    assert.match(fila!.sentAt ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
+    const pendientes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { pendingOnly: true }));
+    assert.deepEqual(pendientes.map((f) => f.id), [N4, N3], 'el marcado sale de los pendientes');
+  });
+
+  test('una factura pagada saca sus recordatorios de la bandeja, pero los deja en su ficha', async () => {
+    const pendientesAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { pendingOnly: true }));
+    assert.ok(pendientesAntes.some((r) => r.invoiceId === FV_007), 'antes de pagar sí está en la bandeja');
+
+    await t.admin(`UPDATE invoice SET status = 'paid', paid_amount = total, paid_at = now() WHERE id = '${FV_007}'`);
+    try {
+      const pendientes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { pendingOnly: true }));
+      assert.ok(!pendientes.some((r) => r.invoiceId === FV_007), 'nadie tiene que cobrarle a quien ya pagó');
+      const enLaFicha = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }));
+      assert.equal(enLaFicha.length, 3, 'la ficha sigue siendo el historial del cobro');
+    } finally {
+      await t.admin(`UPDATE invoice SET status = 'sent', paid_amount = 0, paid_at = NULL WHERE id = '${FV_007}'`);
+    }
+  });
+
+  test('los días de mora salen de la zona del workspace, no de la del servidor', async () => {
+    const [r] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }));
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query<{ esperado: number }>(
+        `SELECT (((now() AT TIME ZONE w.timezone)::date) - i.due_on)::int AS esperado
+           FROM invoice i JOIN workspace w ON w.id = i.workspace_id WHERE i.id = $1`,
+        [FV_007],
+      ),
+    );
+    assert.equal(r?.daysOverdue, rows[0]?.esperado);
+  });
+
+  test('no se marca el recordatorio de otro workspace', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, N_AJENA)), false);
+    const ajenos = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReminders(tx));
+    assert.equal(ajenos[0]?.sentAt, null, 'sigue intacto en su workspace');
+  });
+
+  test('un id que no es uuid, o que no existe, devuelve false sin lanzar', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, 'no-es-uuid')), false);
+    assert.equal(
+      await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, '00000000-0000-4000-8000-000000000000')),
+      false,
+    );
+  });
+});
+
 
 // =====================================================================
 // FIN-2 · Pagos y reserva de impuestos

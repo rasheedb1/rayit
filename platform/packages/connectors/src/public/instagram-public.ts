@@ -5,10 +5,14 @@
  * Una cuenta personal devuelve code 100 (permanent) → not_discoverable.
  */
 import type { HttpCore } from '../http/client.ts';
+import { isPlatformApiError } from '../http/errors.ts';
 import { InstagramClient } from '../platforms/instagram-api.ts';
 import type { OAuthTokens } from '../types.ts';
 import { toLookupError } from './tiktok-public.ts';
 import { assertHandle, PublicLookupError, type PublicProfile, type PublicProfileSource } from './types.ts';
+
+/** Meta, business_discovery: «Could not find the user» (fixtures/instagram/business_discovery.not_found.json). */
+export const META_USER_NOT_FOUND_CODE = '110';
 
 export const INSTAGRAM_HOUSE_TOKEN_ENV = 'INSTAGRAM_HOUSE_TOKEN';
 export const INSTAGRAM_METRICS_NOTE_ES = 'Instagram publica seguidores y número de publicaciones de las cuentas profesionales. Alcance, guardados y demografía requieren que el dueño autorice la cuenta.';
@@ -27,6 +31,11 @@ export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record
       try {
         res = await new InstagramClient(core, { connectionId: null, tokens: house }).businessDiscovery(clean, { signal: opts.signal });
       } catch (err) {
+        // Meta separa «no existe» (110, subcódigo 2207013) de «personal o privada» (100):
+        // el primero es un @ mal escrito y la pantalla lo dice así (CAM-3).
+        if (isPlatformApiError(err) && err.code === META_USER_NOT_FOUND_CODE) {
+          throw new PublicLookupError('not_found', `No encontramos @${clean} en Instagram. Revisa que esté bien escrito y que la cuenta sea pública.`, { cause: err });
+        }
         throw toLookupError(err, clean, 'Instagram');
       }
       const d = res.data;

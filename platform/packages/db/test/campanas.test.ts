@@ -32,6 +32,10 @@ import {
   listCampaignsToCompute,
   ResultFrozenError,
   type WorkspaceTx,
+  brandAccountsOf,
+  brandPlatformsReadOn,
+  listBrandFollowers,
+  recordBrandSnapshot,
 } from '../src/index.ts';
 import { filasDeBitacora } from './bitacora.ts';
 import {
@@ -906,5 +910,148 @@ describe('resultado de campaña', () => {
     assert.ok(todas.some((c) => c.id === CAMPAIGN_CAFE_ALMA && c.workspaceId === WORKSPACE_LAURA));
     assert.ok(!todas.some((c) => c.id === CAMPAIGN_NUTRIVE), 'closed no se recalcula');
     assert.deepEqual(await t.db.asWorker((tx) => listCampaignsToCompute(tx, { workspaceId: WORKSPACE_AJENO })), []);
+  });
+});
+
+// ------------------------------------------ seguidores de la marca (CAM-3)
+
+describe('seguidores de la marca (CAM-3)', () => {
+  /**
+   * Segunda campaña de Laura con Café Alma, planeada para septiembre con
+   * la línea base desde el 25 de agosto: reutiliza las lecturas que dejó
+   * la primera (el seed llega hasta el 1 de septiembre).
+   */
+  const CAMPAIGN_CAFE_ALMA_2 = '00000003-0000-4000-8000-00000ca3f002';
+  const isRechazada = (err: unknown) => /row-level security|permission denied|no existe|violates|23503|42501/i.test(err instanceof Error ? `${err.message} ${(err as { cause?: Error }).cause?.message ?? ''}` : String(err));
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, brand_baseline_from, brand_accounts)
+      VALUES ('${CAMPAIGN_CAFE_ALMA_2}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Café Alma, segunda ronda', 'planned',
+              DATE '2026-09-08', DATE '2026-09-15', DATE '2026-08-25', '[{"platform_id": "instagram", "handle": "cafealma"}]'::jsonb)
+      ON CONFLICT DO NOTHING;
+    `);
+  });
+
+  test('la curva de Café Alma sale del seed con su línea base: 12,93/día antes, 155/día en campaña, ×12, 1 240 ganados', async () => {
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA));
+    assert.ok(r);
+    assert.equal(r.baselineFrom, '2026-07-27');
+    assert.equal(r.accounts.length, 1);
+    const a = r.accounts[0]!;
+    assert.equal(a.platformId, 'instagram');
+    assert.equal(a.handle, 'cafealma');
+    // Desde la lectura anterior a la línea base (26 jul, el ancla) hasta el último día del seed (1 sep).
+    assert.equal(a.series[0]!.day, '2026-07-26');
+    assert.equal(a.series[a.series.length - 1]!.day, '2026-09-01');
+    assert.equal(a.series.length, 38);
+    assert.equal(Number(a.ritmo.baselineRate!.toFixed(4)), 12.9286);
+    assert.equal(a.ritmo.campaignRate, 155);
+    assert.equal(a.ritmo.gained, 1240);
+    assert.equal(Math.round(a.ritmo.ratio!), 12);
+    assert.equal(a.ritmo.diasDeLineaBase, 14);
+    assert.equal(a.ritmo.fiable, true);
+    assert.equal(a.latest?.day, '2026-09-01');
+    assert.equal(a.latest?.source, 'business_discovery');
+    assert.equal(a.dataAsOf, '2026-09-02T06:00:00Z', 'el máximo captured_at de la serie');
+  });
+
+  test('una segunda campaña de la misma marca reutiliza la serie: la historia se lee por empresa', async () => {
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2));
+    assert.ok(r);
+    const a = r.accounts[0]!;
+    // Del ancla (24 ago) al último día del seed (1 sep): filas que pidió la PRIMERA campaña.
+    assert.equal(a.series[0]!.day, '2026-08-24');
+    assert.equal(a.series[a.series.length - 1]!.day, '2026-09-01');
+    assert.equal(a.series.length, 9);
+    assert.equal(a.ritmo.baselineDataFrom, '2026-08-25');
+    assert.equal(a.ritmo.diasDeLineaBase, 8, 'línea base corta: 8 de 14 días');
+    assert.ok(a.ritmo.baselineRate !== null && a.ritmo.baselineRate > 0);
+    assert.equal(a.ritmo.campaignRate, null, 'la campaña no ha empezado: nada que inventar');
+    assert.equal(a.ritmo.fiable, false);
+  });
+
+  test('otro workspace no ve la serie de @cafealma aunque la fila no tenga workspace_id (RLS por la campaña)', async () => {
+    const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA));
+    assert.equal(ajeno, null, 'la campaña de Laura no existe para el vecino');
+    const { rows } = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM brand_account_snapshot WHERE company_id = $1', [COMPANY_CAFE_ALMA]),
+    );
+    assert.equal(rows[0]?.n, 0, 'ni una fila de @cafealma desde el vecino');
+  });
+
+  test('recordBrandSnapshot desde la web: la primera lectura del día queda; la segunda no duplica ni corrige', async () => {
+    const input = { campaignId: CAMPAIGN_PRUEBA, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day: '2026-09-23', handle: 'cafealma', externalAccountId: '17841400000000e01', followers: 20500, mediaCount: 700, source: 'instagram.business_discovery' };
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, input)), 'guardada');
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, { ...input, followers: 99999 })), 'ya_hay_lectura_de_hoy');
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_PRUEBA));
+    const a = r!.accounts.find((x) => x.platformId === 'instagram');
+    // CAMPAIGN_PRUEBA nació sin brand_accounts: la ficha no tiene cuenta que dibujar aunque haya filas.
+    assert.equal(a, undefined);
+    const { rows } = await laura((tx) => tx.query<{ followers: string; n: number }>(
+      "SELECT followers::text AS followers, count(*) OVER ()::int AS n FROM brand_account_snapshot WHERE campaign_id = $1 AND day = DATE '2026-09-23'", [CAMPAIGN_PRUEBA],
+    ));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.followers, '20500', 'la primera lectura del día es la del día');
+  });
+
+  test('la web no escribe bajo una campaña que no ve, ni con la empresa de otra campaña, ni sin campaña', async () => {
+    const base = { platformId: 'youtube', day: '2026-09-23', handle: 'x', externalAccountId: null, followers: 1, mediaCount: null, source: 'youtube.channels.list' };
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_AJENO, (tx) => recordBrandSnapshot(tx, { ...base, campaignId: CAMPAIGN_CAFE_ALMA, companyId: COMPANY_CAFE_ALMA })),
+      isRechazada, 'el vecino dejó una lectura bajo la campaña de Laura',
+    );
+    await assert.rejects(
+      laura((tx) => recordBrandSnapshot(tx, { ...base, campaignId: CAMPAIGN_CAFE_ALMA, companyId: EMPRESA_AJENA })),
+      isRechazada, 'una lectura de otra empresa bajo la campaña de Café Alma',
+    );
+    await assert.rejects(
+      laura((tx) => tx.query("INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, day) VALUES (NULL, $1, 'youtube', DATE '2026-09-23')", [COMPANY_CAFE_ALMA])),
+      isRechazada, 'una fila sin campaña desde la web',
+    );
+    await assert.rejects(
+      laura((tx) => tx.query('UPDATE brand_account_snapshot SET followers = 0 WHERE campaign_id = $1', [CAMPAIGN_PRUEBA])),
+      isRechazada, 'mc_app corrigió una métrica',
+    );
+  });
+
+  test('solo INSERT: un día admite una fila sin cifra y una con cifra; la ficha prefiere la que trae cifra', async () => {
+    const day = '2026-09-24';
+    const sinCifra = { campaignId: CAMPAIGN_CAFE_ALMA_2, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day, handle: 'cafealma', externalAccountId: null, followers: null, mediaCount: null, source: 'not_found' };
+    // 07:00: el job no la encontró. Mediodía: se corrige el handle y «Actualizar ahora» sí la lee.
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, sinCifra)), 'guardada');
+    assert.deepEqual(await laura((tx) => brandPlatformsReadOn(tx, CAMPAIGN_CAFE_ALMA_2, day)), [], 'sin cifra hoy: todavía se puede leer');
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20600, source: 'instagram.business_discovery' })), 'guardada');
+    assert.deepEqual(await laura((tx) => brandPlatformsReadOn(tx, CAMPAIGN_CAFE_ALMA_2, day)), ['instagram']);
+    // Otra de cada tipo el mismo día: nada entra, nada cambia.
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20700, source: 'instagram.business_discovery' })), 'ya_hay_lectura_de_hoy');
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, sinCifra)), 'ya_hay_lectura_de_hoy');
+    const { rows } = await laura((tx) => tx.query<{ followers: string | null; source: string }>(
+      'SELECT followers::text AS followers, source FROM brand_account_snapshot WHERE campaign_id = $1 AND day = $2::date ORDER BY followers NULLS FIRST', [CAMPAIGN_CAFE_ALMA_2, day],
+    ));
+    assert.deepEqual(rows, [{ followers: null, source: 'not_found' }, { followers: '20600', source: 'instagram.business_discovery' }], 'las dos lecturas quedan: la tabla no se corrige');
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2));
+    const a = r!.accounts[0]!;
+    assert.deepEqual([a.latest?.day, a.latest?.followers, a.latest?.source], [day, 20600, 'instagram.business_discovery']);
+  });
+
+  test('la serie es la de la cuenta de la campaña: otra cuenta de la misma empresa en la misma red no se mezcla', async () => {
+    await laura((tx) => recordBrandSnapshot(tx, {
+      campaignId: CAMPAIGN_CAFE_ALMA_2, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day: '2026-08-30', handle: 'cafealma_outlet', externalAccountId: null, followers: 999, mediaCount: null, source: 'instagram.business_discovery',
+    }));
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2));
+    const a = r!.accounts[0]!;
+    assert.ok(!a.series.some((p) => p.followers === 999), 'la lectura de @cafealma_outlet se coló en la curva de @cafealma');
+    // Y la campaña ya cargada evita releer la ficha: el resultado es el mismo.
+    const detalle = await laura((tx) => getCampaign(tx, CAMPAIGN_CAFE_ALMA_2));
+    assert.deepEqual(await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2, detalle!)), r);
+  });
+
+  test('brandAccountsOf: solo redes del producto, sin @, sin repetir red, entradas malformadas fuera', () => {
+    assert.deepEqual(
+      brandAccountsOf([{ platform_id: 'instagram', handle: '@cafealma' }, { platform_id: 'Instagram', handle: 'otra' }, { platform_id: 'linkedin', handle: 'x' }, { handle: 'sin red' }, null, { platform_id: 'youtube', handle: ' ' }, { platform_id: 'tiktok', handle: 'cafealma.co' }]),
+      [{ platform_id: 'instagram', handle: 'cafealma' }, { platform_id: 'tiktok', handle: 'cafealma.co' }],
+    );
+    assert.deepEqual(brandAccountsOf('no es una lista'), []);
   });
 });

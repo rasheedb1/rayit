@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { rateToPct } from "@mc/core";
-import { getReceivablesKpis, listInvoices, type InvoiceListRow } from "@mc/db/queries/finanzas";
+import { getReceivablesKpis, listInvoices, listReminders, MAX_REMINDERS, type InvoiceListRow } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -10,6 +10,7 @@ import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { BandejaRecordatorios } from "./bandeja";
 import { withWorkspace } from "./_lib/db";
 import { LIST_FILTERS, filterKey, pillForInvoice, type ListFilterKey } from "./_lib/estado";
 
@@ -98,9 +99,12 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
   const filter = filterKey(params.estado);
   const statuses = LIST_FILTERS[filter].statuses;
 
-  const { kpis, invoices } = await withWorkspace(async (tx) => ({
+  const { kpis, invoices, recordatorios } = await withWorkspace(async (tx) => ({
     kpis: await getReceivablesKpis(tx),
     invoices: await listInvoices(tx, { status: statuses ? [...statuses] : undefined, limit: 100 }),
+    // La bandeja de FIN-4: lo que el job dejó redactado y todavía no se
+    // ha marcado como enviado. El filtro de la lista no la toca.
+    recordatorios: await listReminders(tx, { pendingOnly: true, limit: MAX_REMINDERS }),
   }));
   // Los KPI suman facturas de todo el workspace, así que van en SU
   // moneda (workspace.currency), no en una constante. Cada fila, en
@@ -151,6 +155,8 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
           note={kpis.taxRate ? `${rateToPct(kpis.taxRate)} % de cada cobro` : "Sin reservas todavía"}
         />
       </KpiRow>
+
+      <BandejaRecordatorios rows={recordatorios} f={f} />
 
       <section className="mt-10" aria-labelledby="facturas">
         <SectionTitle meta={`${invoices.rows.length} ${invoices.rows.length === 1 ? "factura" : "facturas"}`}>

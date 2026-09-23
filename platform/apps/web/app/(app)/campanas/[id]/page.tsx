@@ -17,7 +17,7 @@ import {
   isMoneyBrandInputKind,
   type InvoiceStatus,
 } from "@mc/core";
-import { canRecomputeResult, getCampaign, getCampaignResult, listBrandInputs, listCampaignPosts, listCampaignReports, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
+import { canRecomputeResult, getCampaign, getCampaignResult, listBrandFollowers, listBrandInputs, listCampaignPosts, listCampaignReports, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -33,14 +33,16 @@ import { UUID_RE } from "@/lib/forms";
 import { origenDeLaPeticion } from "@/lib/auth/origen";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
+import { leerAvisoMarca } from "../_lib/aviso-marca";
 import { MESSAGES } from "../_lib/messages";
-import { cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
+import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
 import { ReporteSeccion } from "./reporte-seccion";
 import { Resultado } from "./resultado";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
+import { SeguidoresMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +66,7 @@ const loadCampaign = cache(async (id: string) =>
       brandInputs: await listBrandInputs(tx, id),
       result: await getCampaignResult(tx, id),
       canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
+      marca: await listBrandFollowers(tx, id, campaign),
       reports: await listCampaignReports(tx, id),
     };
   }),
@@ -271,18 +274,19 @@ export default async function CampanaPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; marca?: string; aviso?: string }>;
 }) {
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, marca: marcaParam, aviso } = await searchParams;
   if (!UUID_RE.test(id)) notFound();
 
   const data = await loadCampaign(id);
   if (!data) notFound();
-  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute, reports } = data;
+  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute, marca, reports } = data;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
   const today = hoyEnZona(ws.timezone);
+  const avisoMarca = leerAvisoMarca(marcaParam, aviso);
   // El enlace para la marca, absoluto con el origen público (APP_URL en
   // producción; nunca deducido de las cabeceras allí). Si no está
   // configurado, la sección lo dice en vez de repartir un enlace roto.
@@ -295,7 +299,6 @@ export default async function CampanaPage({
   const invoice = campaign.invoices.find((i) => i.status !== "void") ?? null;
   const transitions = CAMPAIGN_TRANSITIONS[campaign.status];
   const rango = dateRange(campaign);
-  const brandHandle = (campaign.brandAccounts as { handle?: unknown }[]).map((a) => (typeof a?.handle === "string" ? a.handle : null)).find(Boolean) ?? null;
 
   return (
     <>
@@ -519,13 +522,17 @@ export default async function CampanaPage({
 
       <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">
 
-        <Section id="seguidores" title="Seguidores de la marca">
-          <EmptyState
-            title="Llega con la medición"
-            description={`La curva de seguidores${brandHandle ? ` de @${brandHandle}` : " de la marca"}${
-              campaign.brandBaselineFrom ? ` desde el ${formatDate(campaign.brandBaselineFrom, "long")}` : ""
-            } se toma del snapshot público diario. Todavía no hay serie que dibujar.`}
-          />
+        <Section id="seguidores" title={MESSAGES.seguidores.title}>
+          {marca && (
+            <SeguidoresMarca
+              data={marca}
+              status={campaign.status}
+              f={f}
+              actualizar={actualizarSeguidoresMarca.bind(null, campaign.id)}
+              resultado={avisoMarca.resultado}
+              avisos={avisoMarca.mensajes}
+            />
+          )}
         </Section>
       </div>
     </>

@@ -9,7 +9,7 @@ import {
   BRAND_INPUT_KINDS, BRAND_INPUT_KIND_LABEL_ES, MANUAL_BRAND_INPUT_KINDS, brandInputSemantics, isBrandInputKind,
   isManualBrandInputKind, isMoneyBrandInputKind, brandCsvWindow, parseBrandCsvDay, reviewBrandCsvRows,
   calcularResultado, brandFigures, followerRateMultiple, isResultComplete, MISSING_INPUTS, type ResultInputs, type ResultPost,
-  ritmoSeguidores, isBrandSnapshotDue, isBrandNoDataReason, BRAND_AFTER_DAYS, BRAND_BASELINE_DAYS, type BrandFollowerPoint,
+  ritmoSeguidores, isBrandSnapshotDue, isBrandNoDataReason, brandNoDataReasonFor, BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, BRAND_AFTER_DAYS, BRAND_BASELINE_DAYS, type BrandFollowerPoint,
 } from '../src/campanas.ts';
 import { addDays } from '../src/facturacion.ts';
 
@@ -376,6 +376,15 @@ test('las razones «sin cifra» son un vocabulario cerrado', () => {
   assert.equal(isBrandNoDataReason('not_found'), true);
   assert.equal(isBrandNoDataReason('no_public_source'), true);
   assert.equal(isBrandNoDataReason('instagram.business_discovery'), false);
+});
+
+test('brandNoDataReasonFor: lo definitivo deja razón; lo que se reintenta, no', () => {
+  assert.equal(brandNoDataReasonFor('not_found'), 'not_found');
+  assert.equal(brandNoDataReasonFor('invalid_handle'), 'not_found');
+  assert.equal(brandNoDataReasonFor('not_discoverable'), 'not_discoverable');
+  assert.equal(brandNoDataReasonFor('not_configured'), null);
+  assert.equal(brandNoDataReasonFor('transient'), null);
+  assert.deepEqual(BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, ['tiktok']);
 });
 
 // ---------------------------------------------------- resultado (CAM-5)
