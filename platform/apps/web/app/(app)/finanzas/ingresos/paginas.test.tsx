@@ -10,7 +10,11 @@ import type { PlatformPayoutKpis } from "@mc/db/queries/finanzas";
  * finanzas.flujo.ver; agregar e importar, finanzas.pago.registrar, el
  * mismo que exige su Server Action.
  *
- * El control positivo (el Contador sí entra) es lo que impide que la
+ * Hay dos 404 distintos y se prueban los dos: el Mánager no pasa ni la
+ * puerta del módulo (no tiene finanzas.factura.ver); un rol a medida
+ * (la casilla de ACC-4) con el mínimo del módulo pero sin el permiso
+ * de la pantalla pasa el layout y lo para requirePagePermission. El
+ * control positivo (el Contador sí entra) es lo que impide que la
  * prueba pase con una página que da 404 a todo el mundo.
  */
 
@@ -71,6 +75,19 @@ describe.each(PAGINAS)("$ruta (ACC-5)", ({ pagina, permiso, titulo }) => {
   it("el rol Mánager, sin Finanzas, recibe 404 y no se lee la base", async () => {
     sesion.permisos = permisosDeRol("creator", "manager");
     expect(sesion.permisos.has(permiso)).toBe(false);
+
+    const err = await pagina().catch((e: unknown) => e);
+    expect((err as { digest?: string }).digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+    expect(base.lecturas).toBe(0);
+    for (const f of Object.values(consulta)) expect(f).not.toHaveBeenCalled();
+  });
+
+  it("un rol a medida con el mínimo de Finanzas pero sin el permiso de la pantalla recibe 404", async () => {
+    // Todo Finanzas menos el permiso de ESTA pantalla: así la puerta
+    // del módulo deja pasar y solo requirePagePermission puede parar.
+    const contador = permisosDeRol("creator", "finance");
+    sesion.permisos = new Set([...contador].filter((p) => p !== permiso));
+    expect(sesion.permisos.has("finanzas.factura.ver")).toBe(true);
 
     const err = await pagina().catch((e: unknown) => e);
     expect((err as { digest?: string }).digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");

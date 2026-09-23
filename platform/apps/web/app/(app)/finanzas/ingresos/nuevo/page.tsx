@@ -18,8 +18,8 @@ export default async function NuevoIngresoPage() {
   await requirePagePermission("finanzas.pago.registrar");
   const { plataformas, hoy } = await withWorkspace(async (tx) => ({
     plataformas: await listPayoutPlatforms(tx),
-    // El día lo dice la BASE (CURRENT_DATE), no el reloj de Node: es el
-    // mismo que usa la ventana del promedio.
+    // El día lo dice la base, en la zona del espacio, no el reloj de
+    // Node: es el mismo que usa la ventana del promedio.
     hoy: (await getPlatformPayoutKpis(tx)).today,
   }));
   const { currency } = await getCurrentWorkspace();
