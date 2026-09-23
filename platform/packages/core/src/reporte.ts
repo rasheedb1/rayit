@@ -11,7 +11,7 @@
  * fuera (correos, teléfonos, notas, parámetros del enlace rastreado,
  * ids internos).
  */
-import { CampaignError, CAMPAIGN_STATUS_META, type CampaignStatus, type PlatformId } from './campanas.ts';
+import { CampaignError, CAMPAIGN_STATUS_META, type BrandInputKind, type BrandInputSource, type CampaignStatus, type PlatformId } from './campanas.ts';
 import type { Decimal } from './facturacion.ts';
 
 // ---------------------------------------------------------------------
@@ -206,9 +206,6 @@ export interface ReportBrandFollowers {
   baselineFrom: string | null;
   points: ReportFollowerPoint[];
 }
-
-export type BrandInputKind = 'code_redemptions' | 'orders' | 'revenue' | 'signups' | 'csv_sales' | 'postback';
-export type BrandInputSource = 'brand_manual' | 'brand_csv' | 'integration' | 'postback';
 
 /** Lo que aportó la marca (CAM-4). Sin `notes`: ahí el creador escribe lo que quiere. */
 export interface ReportBrandInput {

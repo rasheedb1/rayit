@@ -2,7 +2,7 @@
  * Campañas · el reporte que abre la marca, sin sesión ni workspace
  * (PublicShareTx). Es la cuarta función pública del producto, con la
  * misma forma que las tres de queries/cotizar/publico.ts: no consulta
- * tablas, llama a public_report() (migración 0034), que corre como
+ * tablas, llama a public_report() (migración 0037), que corre como
  * mc_public_share y devuelve jsonb ya recortado.
  *
  * Parte de @mc/db/queries/campanas (la entrada es ../campanas.ts).
@@ -16,7 +16,7 @@ export interface PublicReportView extends ReportPayload {
   status: 'sent' | 'viewed';
   sentAt: string | null;
   viewedAt: string | null;
-  /** El creador envió después una versión más reciente (0034 §1): este enlace sigue abriendo, con el aviso. */
+  /** El creador envió después una versión más reciente (0037 §1): este enlace sigue abriendo, con el aviso. */
   superseded: boolean;
   createdAt: string;
 }

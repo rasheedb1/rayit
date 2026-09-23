@@ -82,6 +82,11 @@ const TIEMPO_BLOQUE = 600_000;
 
 let t: TestDb;
 let sqlMigracion = '';
+
+/** Permisos del catálogo que NO siembra 0034 sino una migración posterior (0034 es inmutable). */
+const PERMISOS_DESPUES_DE_0034: Readonly<Record<string, string>> = {
+  'campanas.reporte.generar': '0037_reporte_publico.sql',
+};
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_LAURA });
 
 before(async () => {
@@ -177,10 +182,30 @@ describe('0034: tablas, columnas y semilla', { timeout: TIEMPO_BLOQUE }, () => {
     // Si alguien cambia el catálogo de core sin traer una migración nueva,
     // o edita la semilla a mano, esto falla. La cabecera del script (sus
     // comentarios iniciales) no viaja a la migración.
-    const delScript = generarSemillaSql().slice(generarSemillaSql().indexOf('INSERT INTO permission')).trim();
+    // Los permisos que llegaron después de 0034, cada uno con SU migración
+    // (0034 ya está aplicada y es inmutable): 0034 se compara con el
+    // catálogo sin ellos, y cada uno tiene que estar sembrado en la suya.
+    const semilla = generarSemillaSql({ sinPermisos: Object.keys(PERMISOS_DESPUES_DE_0034) });
+    const delScript = semilla.slice(semilla.indexOf('INSERT INTO permission')).trim();
     const desde = sqlMigracion.indexOf('INSERT INTO permission');
     const hasta = sqlMigracion.indexOf('ON CONFLICT DO NOTHING;', sqlMigracion.indexOf('INSERT INTO role_permission')) + 'ON CONFLICT DO NOTHING;'.length;
     assert.equal(sqlMigracion.slice(desde, hasta).trim(), delScript);
+  });
+
+  test('cada permiso posterior a 0034 lo siembra su propia migración, con la matriz de core', async () => {
+    for (const [permiso, archivo] of Object.entries(PERMISOS_DESPUES_DE_0034)) {
+      const sql = await readFile(join(MIGRATIONS_DIR, archivo), 'utf8');
+      assert.ok(sql.includes(`INSERT INTO permission (key, module, label_es, sensitivity)\nVALUES ('${permiso}'`), `${archivo} no siembra ${permiso}`);
+      const roles = await t.db.withCatalogs((tx) =>
+        tx.query<{ k: string }>(
+          `SELECT r.workspace_kind || ':' || r.key AS k FROM role_permission rp JOIN role r ON r.id = rp.role_id
+            WHERE r.workspace_id IS NULL AND rp.permission_key = $1 ORDER BY 1`,
+          [permiso],
+        ),
+      );
+      const esperados = ROLES_SISTEMA.filter((r) => (r.permisos as readonly string[]).includes(permiso)).map((r) => `${r.workspaceKind}:${r.key}`).sort();
+      assert.deepEqual(roles.rows.map((r) => r.k), esperados, permiso);
+    }
   });
 
   test('decisión E: el Mánager de creador no ve el flujo de caja ni conecta cuentas; el Contador no edita campañas', async () => {
@@ -483,8 +508,9 @@ describe('0034: el archivo, dos veces y al revés', { timeout: TIEMPO_BLOQUE }, 
         }
       }
       await db.execAsSuperuser(sql.join('\n'));
+      // 0034 primero; detrás pueden venir las posteriores (0037, CAM-6), que no tocan membership.
       const aplicadas = await db.migrar();
-      assert.deepEqual(aplicadas, [MIGRACION]);
+      assert.equal(aplicadas[0], MIGRACION);
 
       const { rows } = await db.queryAsSuperuser<{ kind: string; user_id: string; key: string }>(
         `SELECT w.kind, m.user_id, r.key FROM membership m JOIN workspace w ON w.id = m.workspace_id JOIN role r ON r.id = m.role_id

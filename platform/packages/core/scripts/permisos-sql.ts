@@ -30,8 +30,17 @@ function lit(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-/** La semilla completa, determinista (el orden es el del catálogo y el de la matriz). */
-export function generarSemillaSql(): string {
+/**
+ * La semilla completa, determinista (el orden es el del catálogo y el de
+ * la matriz). `sinPermisos` deja fuera claves que llegaron DESPUÉS de la
+ * migración que la sembró (0034) con su propia migración: así la prueba
+ * de ACC-3 compara 0034 con el catálogo de entonces y, aparte, que cada
+ * permiso nuevo tenga su INSERT (CAM-6: campanas.reporte.generar, 0037).
+ */
+export function generarSemillaSql(opts: { sinPermisos?: readonly string[] } = {}): string {
+  const fuera = new Set(opts.sinPermisos ?? []);
+  const PERMISOS_ = PERMISOS.filter((p) => !fuera.has(p.key));
+  const ROLES_ = ROLES_SISTEMA.map((r) => ({ ...r, permisos: r.permisos.filter((p) => !fuera.has(p)) }));
   const out: string[] = [];
   out.push('-- Semilla de permisos y roles de fábrica. GENERADA por');
   out.push('-- packages/core/scripts/permisos-sql.ts desde packages/core/src/permisos.ts (ACC-1).');
@@ -39,23 +48,23 @@ export function generarSemillaSql(): string {
   out.push('-- con `pnpm --filter @mc/core permisos:sql`. Re-ejecutable.');
   out.push('');
 
-  out.push(`-- ${PERMISOS.length} permisos.`);
+  out.push(`-- ${PERMISOS_.length} permisos.`);
   out.push('INSERT INTO permission (key, module, label_es, sensitivity) VALUES');
-  out.push(PERMISOS.map((p) => `  (${lit(p.key)}, ${lit(p.module)}, ${lit(p.labelEs)}, ${lit(p.sensitivity)})`).join(',\n'));
+  out.push(PERMISOS_.map((p) => `  (${lit(p.key)}, ${lit(p.module)}, ${lit(p.labelEs)}, ${lit(p.sensitivity)})`).join(',\n'));
   out.push('ON CONFLICT (key) DO NOTHING;');
   out.push('');
 
-  out.push(`-- ${ROLES_SISTEMA.length} roles de sistema (workspace_id IS NULL).`);
+  out.push(`-- ${ROLES_.length} roles de sistema (workspace_id IS NULL).`);
   out.push('INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, is_system) VALUES');
   out.push(
-    ROLES_SISTEMA.map(
+    ROLES_.map(
       (r) => `  (NULL, ${lit(r.key)}, ${lit(r.workspaceKind)}, ${lit(r.labelEs)}, ${lit(r.descriptionEs)}, true)`,
     ).join(',\n'),
   );
   out.push('ON CONFLICT (key, workspace_kind) WHERE workspace_id IS NULL DO NOTHING;');
   out.push('');
 
-  const filas = ROLES_SISTEMA.flatMap((r) => r.permisos.map((p) => `  (${lit(r.key)}, ${lit(r.workspaceKind)}, ${lit(p)})`));
+  const filas = ROLES_.flatMap((r) => r.permisos.map((p) => `  (${lit(r.key)}, ${lit(r.workspaceKind)}, ${lit(p)})`));
   out.push(`-- ${filas.length} filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().`);
   out.push('INSERT INTO role_permission (role_id, permission_key)');
   out.push('SELECT r.id, m.permission_key');

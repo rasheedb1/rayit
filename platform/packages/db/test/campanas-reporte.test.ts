@@ -83,17 +83,19 @@ describe('generar el reporte de Café Alma', () => {
     assert.equal(p.campaign.trackingCode, 'LAURA15');
     // El enlace rastreado del seed lleva UTM: se guarda sin parámetros.
     assert.equal(p.campaign.trackingUrl, 'https://cafealma.co/cold-brew');
-    // Café Alma se creó a mano en el seed: sin cotización, cortes por defecto.
-    assert.equal(p.agreed, null);
-    assert.deepEqual(p.cutsHours, [168, 720]);
+    // Café Alma viene de la cotización COT-2026-003 del seed: lo acordado
+    // antes de publicar va arriba, y los cortes son los acordados.
+    assert.equal(p.agreed?.quoteNumber, 'COT-2026-003');
+    assert.deepEqual(p.agreed?.metrics, ['views', 'reach', 'link_clicks', 'code_redemptions']);
+    assert.deepEqual(p.cutsHours, [24, 168, 720]);
     // Dos posts, el reel principal primero, con su corte a 30 días (la lectura manual del seed 0003) y su última lectura.
     assert.equal(p.posts.length, 2);
     const reel = p.posts[0]!;
     assert.equal(reel.platformId, 'instagram');
     assert.equal(reel.isPrimary, true);
     assert.equal(reel.deliverable, 'reel');
-    assert.equal(reel.cuts.length, 2);
-    assert.ok(reel.cuts[1] && reel.cuts[1].cutHours === 720 && reel.cuts[1].views !== null);
+    assert.equal(reel.cuts.length, 3);
+    assert.ok(reel.cuts[2] && reel.cuts[2].cutHours === 720 && reel.cuts[2].views !== null);
     assert.ok(reel.latest && reel.latest.views !== null && reel.latest.capturedAt);
     // El resultado consolidado del seed, copiado sin aritmética.
     assert.equal(p.result?.views, 712000);
@@ -214,15 +216,15 @@ describe('marcar enviado', () => {
     assert.equal(notif.rows[0]!.action_url, `/campanas/${CAMPAIGN_CAFE_ALMA}#reporte`);
 
     const audit = await laura((tx) =>
-      tx.query<{ action: string; before: Record<string, unknown>; after: Record<string, unknown> }>(
-        "SELECT action, before, after FROM audit_log WHERE entity_type = 'report' AND entity_id = $1",
+      tx.query<{ action: string; entity_type: string; before: Record<string, unknown>; after: Record<string, unknown> }>(
+        "SELECT action, entity_type, before, after FROM audit_log WHERE action = 'campaign.report_sent' AND after->>'reportId' = $1",
         [r.id],
       ),
     );
     assert.equal(audit.rows.length, 1);
-    assert.equal(audit.rows[0]!.action, 'report.sent');
-    assert.deepEqual(audit.rows[0]!.before, { status: 'draft' });
-    assert.equal(audit.rows[0]!.after.sentVia, 'link');
+    assert.equal(audit.rows[0]!.entity_type, 'campaign');
+    assert.deepEqual(audit.rows[0]!.before, { reportId: r.id, reportStatus: 'draft' });
+    assert.deepEqual(audit.rows[0]!.after, { reportId: r.id, reportStatus: 'sent', sentVia: 'link' });
     assert.equal(reportForbiddenMatch(JSON.stringify(audit.rows[0]!.after)), null);
   });
 
@@ -243,6 +245,13 @@ describe('marcar enviado', () => {
     assert.deepEqual(rows.map((x) => x.status), ['reported', 'reported']);
     const detalle = await laura((tx) => getReport(tx, r.id));
     assert.equal(detalle?.sentVia, 'pdf');
+    const cambio = await laura((tx) =>
+      tx.query<{ after: Record<string, unknown> }>(
+        "SELECT after FROM audit_log WHERE action = 'campaign.status_changed' AND entity_id = $1 ORDER BY created_at DESC LIMIT 1",
+        [CAMPAIGN_FRESKO],
+      ),
+    );
+    assert.equal(cambio.rows[0]?.after.status, 'reported');
   });
 
   test('la marca lo abre sin sesión: la primera apertura marca viewed_at una sola vez y cada apertura suma', async () => {

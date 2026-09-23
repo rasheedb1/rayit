@@ -1,13 +1,15 @@
 -- =====================================================================
--- 0034 · El reporte a la marca por enlace público (CAM-6)
+-- 0037 · El reporte a la marca por enlace público (CAM-6)
 -- ---------------------------------------------------------------------
--- Número: 0033 es la más alta en todas las ramas (git fetch, 23-sep);
--- 0023 sigue reservada para ACC-3 y no se recicla. Ninguna de 0024–0033
--- está aplicada en Supabase todavía: esta va detrás de todas porque
--- cuenta con 0024 (aislamiento por defecto), 0025 (disparadores de
--- referencias) y 0030 (el rol mc_public_share y su forma). Si otra rama
--- eligió también 0034, el integrador renumera: no depende de nada que
--- venga después.
+-- Número: git fetch el 23-sep y el más alto en TODAS las ramas es 0036
+-- (0034 la usan ACC-3 —access_control, aplicada— y dos ramas sin
+-- fusionar; 0035 CAM-3 y ACC-6; 0036 FIN-7). 0023 sigue reservada y no
+-- se recicla. Cuenta con 0024 (aislamiento por defecto), 0025
+-- (disparadores de referencias), 0030 (el rol mc_public_share y su
+-- forma) y 0034 (permission / role / role_permission). No depende de
+-- 0035 ni de 0036: si el integrador aplica en otro orden, esta va bien
+-- en cualquier punto después de 0034. Si otra rama eligió también 0037,
+-- se renumera sin tocar el contenido.
 --
 -- Qué hace y por qué. /reporte/<slug> se abre SIN sesión y sin
 -- workspace, igual que /cotizacion/<slug>, y `report` lleva RLS con
@@ -101,6 +103,19 @@ CREATE POLICY report_public_share_state ON report
 -- ---------------------------------------------------------------------
 -- 4 · La puerta
 -- ---------------------------------------------------------------------
+-- Las fechas salen como el resto de @mc/db: ISO en UTC con «Z» y sin
+-- fracción ('2026-09-23T20:07:14Z'), no el to_jsonb de timestamptz
+-- ('…14.96+00:00'), para que la vista previa y el enlace digan lo mismo.
+CREATE OR REPLACE FUNCTION public_report_iso(p_ts timestamptz)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT CASE WHEN p_ts IS NULL THEN 'null'::jsonb
+              ELSE to_jsonb(to_char(p_ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')) END
+$$;
+
 -- Con p_count la primera visita marca el reporte como visto; sin él
 -- (vista previa del creador, robots que pintan la vista previa de un
 -- chat) solo se lee. Devuelve el payload congelado más lo único vivo:
@@ -145,10 +160,10 @@ BEGIN
               || jsonb_build_object(
                    'slug', r.slug,
                    'status', nuevo_estado,
-                   'sentAt', to_jsonb(r.sent_at),
-                   'viewedAt', to_jsonb(visto),
+                   'sentAt', public_report_iso(r.sent_at),
+                   'viewedAt', public_report_iso(visto),
                    'superseded', r.superseded_by IS NOT NULL,
-                   'createdAt', to_jsonb(r.created_at)));
+                   'createdAt', public_report_iso(r.created_at)));
 END;
 $$;
 
@@ -180,11 +195,35 @@ $$;
 -- ---------------------------------------------------------------------
 -- 5 · Privilegios y dueño (mismo orden que 0030 §6)
 -- ---------------------------------------------------------------------
+REVOKE ALL ON FUNCTION public_report_iso(timestamptz)    FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_report_impl(text, boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_report(text, boolean)      FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public_report(text, boolean)   TO mc_app;
 
+ALTER FUNCTION public_report_iso(timestamptz)    OWNER TO mc_public_share;
 ALTER FUNCTION public_report_impl(text, boolean) OWNER TO mc_public_share;
 ALTER FUNCTION public_report(text, boolean)      OWNER TO mc_public_share;
 
 REVOKE CREATE ON SCHEMA public FROM mc_public_share;
+
+-- ---------------------------------------------------------------------
+-- 6 · El permiso de generar (ACC-1 → ACC-3)
+-- ---------------------------------------------------------------------
+-- 0034 sembró el catálogo con campanas.reporte.enviar; CAM-6 separa
+-- generar (congela las cifras en un borrador que nadie más ve) de
+-- enviar (lo publica). Lo reciben los roles de sistema que ya tienen
+-- todo Campañas —los mismos cinco que enviar—, igual que haría la
+-- semilla regenerada (packages/core/scripts/permisos-sql.ts). Los roles
+-- propios de un workspace (workspace_id no nulo) no se tocan: su dueño
+-- decide. ON CONFLICT DO NOTHING: re-ejecutable.
+INSERT INTO permission (key, module, label_es, sensitivity)
+VALUES ('campanas.reporte.generar', 'campanas', 'Generar el reporte a la marca', 'normal')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO role_permission (role_id, permission_key)
+SELECT r.id, 'campanas.reporte.generar'
+  FROM role r
+ WHERE r.workspace_id IS NULL
+   AND (r.key, r.workspace_kind) IN (('owner', 'creator'), ('manager', 'creator'),
+                                     ('owner', 'agency'), ('admin', 'agency'), ('manager', 'agency'))
+ON CONFLICT DO NOTHING;

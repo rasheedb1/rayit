@@ -311,9 +311,9 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'motivo de pérdida y el monto con su moneda, que la función copia de la cotización que acaba de leer por su ' +
     'slug— y SELECT de la etapa: no puede tocar el total de la cotización ni el nombre, la empresa o el dueño del ' +
     'negocio; la campaña la crea después la web dentro del workspace de la cotización',
-  // El reporte a la marca (0034, CAM-6): la misma puerta que la cotización.
+  // El reporte a la marca (0037, CAM-6): la misma puerta que la cotización.
   'public_report(text,boolean)':
-    'abre /reporte/<slug> sin sesión (0034), con el mismo rol y la misma cerradura que public_quote: devuelve el ' +
+    'abre /reporte/<slug> sin sesión (0037), con el mismo rol y la misma cerradura que public_quote: devuelve el ' +
     'payload congelado al generar el reporte (nunca la fila) y solo escribe la primera vista y el contador de ' +
     'visitas (privilegios de COLUMNA: status, viewed_at, view_count). Un borrador no abre nada. No es de ningún ' +
     'disparador',
@@ -519,7 +519,7 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['SELECT'],
     columnas: { UPDATE: ['status', 'view_count', 'viewed_at'] },
     motivo:
-      'abrir /reporte/<slug> (0034 §2, CAM-6), marcarlo visto la primera vez y sumar la visita; nunca el payload ' +
+      'abrir /reporte/<slug> (0037 §2, CAM-6), marcarlo visto la primera vez y sumar la visita; nunca el payload ' +
       'congelado, el workspace ni la campaña',
   },
 };
@@ -543,7 +543,7 @@ const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share
 const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las dos de 0034. Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las dos de 0037. Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -591,12 +591,12 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
   'report.report_public_share': {
     cmd: 'r',
     exige: [SLUG_DE_LA_LLAMADA],
-    motivo: 'el reporte enviado de ese slug (0034 §3, CAM-6); un borrador no abre',
+    motivo: 'el reporte enviado de ese slug (0037 §3, CAM-6); un borrador no abre',
   },
   'report.report_public_share_state': {
     cmd: 'w',
     exige: [SLUG_DE_LA_LLAMADA],
-    motivo: 'marcar visto y sumar la visita a ese reporte (0034 §3)',
+    motivo: 'marcar visto y sumar la visita a ese reporte (0037 §3)',
   },
 };
 
@@ -768,7 +768,7 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
 
   // Accesos (0034, ACC-3): el catálogo y los roles de fábrica los llena
   // la migración; los roles a medida son ACC-9 y las concesiones AGE-1.
-  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0034 §1)' },
+  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0037 §1)' },
   role: {
     permite: ['SELECT'],
     motivo:

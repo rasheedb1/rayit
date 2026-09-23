@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /** Los archivos de consultas de Nicolás. Los de Rasheed entran cuando él adopte la convención (docs/propuestas/ACC-2.md §3). */
-const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'conexiones.ts'] as const;
+const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'campanas/reporte.ts', 'conexiones.ts'] as const;
 
 /**
  * Escrituras sin bitácora, con motivo. Lo que no es un hecho del negocio
@@ -28,6 +28,11 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
     upsertResult:
       'campaign_result es la métrica derivada de la campaña (CAM-5): se recalcula entera desde snapshots y aportes cada mañana ' +
       'y con «Recalcular»; lo que cambia su valor (aportes de la marca, posts asociados) ya deja su fila, y la tabla no es un hecho del negocio',
+  },
+  'campanas/reporte.ts': {
+    generateReport:
+      'un reporte generado es un BORRADOR que solo ve el creador (el enlace no abre hasta enviarlo, 0037 §3): congelar ' +
+      'cifras no es publicar. La publicación es markReportSent, que sí deja campaign.report_sent',
   },
   'conexiones.ts': {
     recordAccountSnapshot:
@@ -123,7 +128,7 @@ describe('toda escritura de queries/ deja bitácora (ACC-2)', () => {
     const esperadas = [
       'finanzas.ts:createInvoice', 'finanzas.ts:transitionInvoice',
       'campanas.ts:linkPost', 'campanas.ts:unlinkPost', 'campanas.ts:setPrimaryPost', 'campanas.ts:updateCampaign',
-      'campanas.ts:transitionCampaign', 'campanas.ts:createCampaignFromQuote',
+      'campanas.ts:transitionCampaign', 'campanas.ts:createCampaignFromQuote', 'campanas/reporte.ts:markReportSent',
       'conexiones.ts:upsertConnection', 'conexiones.ts:recordConsent', 'conexiones.ts:disconnectConnection',
       'conexiones.ts:addPublicAccount', 'conexiones.ts:upgradePublicAccountToOAuth',
     ];

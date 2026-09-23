@@ -100,6 +100,8 @@ export const PERMISOS = [
   { key: 'campanas.post.asociar', module: 'campanas', labelEs: 'Asociar posts y marcar entregables', sensitivity: 'normal' },
   { key: 'campanas.aporte.registrar', module: 'campanas', labelEs: 'Registrar lo que aporta la marca', sensitivity: 'normal' },
   { key: 'campanas.resultado.calcular', module: 'campanas', labelEs: 'Recalcular el resultado de una campaña', sensitivity: 'normal' },
+  // CAM-6: generar congela las cifras en un borrador que nadie más ve; enviar lo publica.
+  { key: 'campanas.reporte.generar', module: 'campanas', labelEs: 'Generar el reporte a la marca', sensitivity: 'normal' },
   { key: 'campanas.reporte.enviar', module: 'campanas', labelEs: 'Enviar el reporte a la marca', sensitivity: 'normal' },
 
   // Finanzas (Nicolás): FIN-1; FIN-2, FIN-3, FIN-5, FIN-6 y FIN-8 por la matriz. Todo es dinero: sensible.

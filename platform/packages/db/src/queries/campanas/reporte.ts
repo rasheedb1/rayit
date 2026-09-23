@@ -12,7 +12,7 @@
  *     las entradas y se guarda lo que core devuelve. Una vez guardado,
  *     nadie lo reescribe: ni un snapshot nuevo, ni marcar «enviado», ni
  *     la función pública (que solo toca status, viewed_at y view_count,
- *     0034 §2).
+ *     0037 §2).
  *   - Mientras el último reporte de la campaña es un borrador, generar
  *     lo reemplaza; una vez enviado, generar crea otra fila con otro
  *     slug y el enlace viejo sigue abriendo.
@@ -26,7 +26,6 @@ import {
   construirReporte,
   isPlatformId,
   isReportSentViaMvp,
-  transitionCampaign as applyTransition,
   CampaignError,
   ReportAlreadySentError,
   ReportNotAvailableError,
@@ -43,10 +42,11 @@ import {
   type ReportSentVia,
   type ReportStatus,
 } from '@mc/core';
+import { audit } from '../../audit.ts';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
 import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { nuevoSlug } from '../cotizar/enlace.ts';
-import { getCampaign, listCampaignPosts, CampaignNotFoundError, type CampaignDetail } from '../campanas.ts';
+import { getCampaign, listCampaignPosts, transitionCampaign, CampaignNotFoundError, type CampaignDetail } from '../campanas.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -490,8 +490,9 @@ export async function generateReport(tx: WorkspaceTx, campaignId: string): Promi
  *   - activity 'report_sent' en la empresa (y en el negocio, si la
  *     campaña tiene), con la frase de la web y metadata.kind;
  *   - notification 'report_sent' al creador, con enlace a la ficha;
- *   - audit_log 'report.sent' (TODO(ACC-2): por audit() cuando exista);
- *   - la campaña pasa a 'reported' si estaba en 'measuring'; en otro
+ *   - bitácora 'campaign.report_sent' por audit() (ACC-2);
+ *   - la campaña pasa a 'reported' si estaba en 'measuring', por
+ *     transitionCampaign (con su propia fila de bitácora); en otro
  *     estado no se toca.
  *
  * Idempotente: un reporte ya enviado lanza ReportAlreadySentError sin
@@ -503,11 +504,10 @@ export async function markReportSent(tx: WorkspaceTx, reportId: string, via: str
   if (!isUuid(reportId)) throw new ReportNotFoundError(reportId);
   const { rows } = await tx.query<{
     id: string; status: ReportStatus; campaign_id: string; campaign_status: CampaignStatus; campaign_name: string;
-    company_id: string; company_name: string; deal_id: string | null; starts_on: string | null; brand_baseline_from: string | null;
+    company_id: string; company_name: string; deal_id: string | null;
   }>(
     `SELECT r.id, r.status, r.campaign_id, c.status AS campaign_status, c.name AS campaign_name,
-            c.company_id, co.name AS company_name, c.deal_id,
-            ${DATE('c.starts_on')} AS starts_on, ${DATE('c.brand_baseline_from')} AS brand_baseline_from
+            c.company_id, co.name AS company_name, c.deal_id
        FROM report r
        JOIN campaign c ON c.id = r.campaign_id
        JOIN company co ON co.id = c.company_id
@@ -543,17 +543,20 @@ export async function markReportSent(tx: WorkspaceTx, reportId: string, via: str
      VALUES (current_workspace_id(), 'report_sent', 'success', $1, $2, 'report', $3, $4)`,
     [aviso.title, aviso.body, r.id, `/campanas/${r.campaign_id}#reporte`],
   );
-  // TODO(ACC-2): pasar por audit() cuando exista packages/db/src/audit.ts.
-  // Sin payload ni PII: solo el cambio de estado y el canal.
-  await tx.query(
-    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
-     VALUES (current_workspace_id(), current_user_id(), 'user', 'report.sent', 'report', $1, $2::jsonb, $3::jsonb)`,
-    [r.id, JSON.stringify({ status: 'draft' }), JSON.stringify({ status: 'sent', sentVia: via, campaignId: r.campaign_id })],
-  );
+  // La publicación queda en la bitácora (ACC-2). La entidad es la
+  // campaña, como el resto de campanas.ts; el reporte va por su id. Sin
+  // payload ni PII: el estado, el canal y la versión.
+  await audit(tx, {
+    action: 'campaign.report_sent',
+    entityType: 'campaign',
+    entityId: r.campaign_id,
+    before: { reportId: r.id, reportStatus: 'draft' },
+    after: { reportId: r.id, reportStatus: 'sent', sentVia: via },
+  });
 
-  if (r.campaign_status === 'measuring') {
-    const t = applyTransition({ status: r.campaign_status, startsOn: r.starts_on, brandBaselineFrom: r.brand_baseline_from }, 'reported');
-    await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [r.campaign_id, t.status, t.brandBaselineFrom]);
-  }
+  // measuring → reported por la misma transición que el panel «Estado»:
+  // deja su propia fila campaign.status_changed. En otro estado no se
+  // toca (un reporte de una campaña cerrada no la reabre).
+  if (r.campaign_status === 'measuring') await transitionCampaign(tx, r.campaign_id, 'reported');
   return requireReport(tx, r.id);
 }
