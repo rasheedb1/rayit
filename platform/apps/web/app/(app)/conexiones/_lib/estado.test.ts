@@ -92,13 +92,14 @@ describe("estadoDeCuenta · una cuenta autorizada", () => {
     }
   });
 
-  it("y tampoco la ofrece cuando falló la lectura: un CSV no se arregla buscando el @ por ahí", () => {
+  it("y tampoco la ofrece cuando falló la lectura: un CSV no se arregla buscando el @ por ahí, y lo dice", () => {
     expect(estadoDeCuenta(fila({ accessMode: "manual_csv", status: "error" }), AHORA)).toEqual({
       tono: "bad",
       texto: "No se pudo leer",
       accion: "ninguna",
-      nota: null,
+      nota: MESSAGES.tabla.sinRelectura,
     });
+    expect(estadoDeCuenta(fila({ accessMode: "business_portfolio", status: "error" }), AHORA).nota).toBe(MESSAGES.tabla.sinRelectura);
   });
 
   it("el portafolio de empresa también lleva permiso del dueño: también vence", () => {
@@ -181,6 +182,9 @@ describe("proveedorDe", () => {
     expect(proveedorDe("instagram")).toBe("instagram");
     expect(proveedorDe("youtube")).toBeNull();
     expect(proveedorDe("facebook")).toBeNull();
+    // Revisión: el portafolio de empresa de Meta no se repara con Instagram Login.
+    expect(proveedorDe("instagram", "business_portfolio")).toBeNull();
+    expect(proveedorDe("tiktok", "public_profile")).toBeNull();
   });
 });
 
@@ -191,9 +195,9 @@ describe("proveedorDe", () => {
 describe("costura CON-3 → CON-4: un acceso vencido con renovación viva", () => {
   const VENCIO = "2026-09-23T11:00:00.000Z";
 
-  it("se renueva sola: ámbar, sin «Reautorizar» ni «Actualizar», y la frase dice que depende del worker", () => {
+  it("se renueva sola: ámbar, sin «Actualizar» ni reautorizar urgente, con salida secundaria, y la frase dice que depende del worker", () => {
     const e = estadoDeCuenta(fila({ accessExpiresAt: VENCIO, refreshExpiresAt: "2027-09-23T00:00:00.000Z" }), AHORA);
-    expect(e).toEqual({ tono: "warn", texto: MESSAGES.tabla.estado.seRenuevaSola, accion: "ninguna", nota: MESSAGES.tabla.seRenuevaSola });
+    expect(e).toEqual({ tono: "warn", texto: MESSAGES.tabla.estado.seRenuevaSola, accion: "reautorizar_opcional", nota: MESSAGES.tabla.seRenuevaSola });
     expect(e.nota).toContain("worker de renovación");
     expect(e.nota).toContain("cuando corra");
   });
@@ -235,7 +239,7 @@ describe("costura CON-7: qué dato falta y por qué", () => {
   it("cada hueco dice el grupo en palabras y el porqué TAL CUAL viene de metric_requirement", () => {
     const porQue = "TikTok solo entrega la audiencia a la cuenta autorizada y con permiso de analítica.";
     const [h] = huecosDeCuenta(fila({ gaps: [{ metricGroup: "demografia_de_cuenta", requirementId: "tt.audience.auth", messageEs: porQue, fixUrl: null, since: "2026-09-20" }] }));
-    expect(h).toEqual({ que: "Falta la audiencia de la cuenta", porQue, desde: "2026-09-20", arreglo: null });
+    expect(h).toEqual({ grupo: "demografia_de_cuenta", que: "Falta la audiencia de la cuenta", porQue, desde: "2026-09-20", arreglo: null });
   });
 
   it("un grupo que la pantalla no conoce no se calla: se nombra genérico", () => {
@@ -248,6 +252,13 @@ describe("costura CON-7: qué dato falta y por qué", () => {
     expect(g("https://support.tiktok.com/x")).toBe("https://support.tiktok.com/x");
     expect(g("javascript:alert(1)")).toBeNull();
     expect(g("http://inseguro.example")).toBeNull();
+  });
+
+  it("los grupos del catálogo tienen nombre, y el grupo es la clave de cada hueco", () => {
+    const grupos = ["alcance_y_retencion", "clics_de_contacto", "visitas_al_perfil", "demografia_de_cuenta", "retencion_y_audiencia"];
+    const hs = huecosDeCuenta(fila({ gaps: grupos.map((metricGroup) => ({ metricGroup, requirementId: "x", messageEs: "m", fixUrl: null, since: "2026-09-20" })) }));
+    expect(hs.every((h) => !h.que.includes(MESSAGES.tabla.grupoDesconocido))).toBe(true);
+    expect(new Set(hs.map((h) => h.grupo)).size).toBe(grupos.length);
   });
 
   it("sin huecos, nada", () => {

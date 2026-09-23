@@ -124,8 +124,12 @@ export function accesoDe(accessMode: FilaDeCuenta["accessMode"]): Acceso {
   return ACCESO[accessMode];
 }
 
-/** Qué ofrece la fila como acción principal. «reautorizar» solo existe con token. */
-export type AccionDeCuenta = "actualizar" | "reautorizar" | "ninguna";
+/**
+ * Qué ofrece la fila como acción principal. «reautorizar» solo existe con
+ * token; «reautorizar_opcional» es la salida de una cuenta que se renovaría
+ * sola si el worker corriera (botón secundario, no rojo).
+ */
+export type AccionDeCuenta = "actualizar" | "reautorizar" | "reautorizar_opcional" | "ninguna";
 
 export interface EstadoDeCuenta {
   tono: PillKind;
@@ -160,15 +164,18 @@ export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
     if (vencido(row.accessExpiresAt, ahora)) {
       // CON-3 → CON-4. El acceso venció pero la renovación sigue viva:
       // oauth.refresh lo resuelve sin pedirle nada al dueño, así que ni
-      // rojo ni «Reautorizar». Tampoco «Actualizar»: leer con un token
-      // vencido haría que la plataforma lo rechace y la cuenta quedaría
-      // en 'error' por algo que no es un error.
+      // rojo ni «Reautorizar» urgente. Tampoco «Actualizar»: leer con un
+      // token vencido haría que la plataforma lo rechace y la cuenta
+      // quedaría en 'error' por algo que no es un error. Pero el worker
+      // la renueva 30 minutos ANTES de que venza, así que si la fila se
+      // ve así es que no corre (hoy, en producción): se ofrece
+      // reautorizar como salida secundaria para no dejarla atascada.
       if (row.refreshExpiresAt !== null && !vencido(row.refreshExpiresAt, ahora)) {
-        return e("warn", t.estado.seRenuevaSola, "ninguna", t.seRenuevaSola);
+        return e("warn", t.estado.seRenuevaSola, "reautorizar_opcional", t.seRenuevaSola);
       }
       return e("bad", t.estado.vencida, "reautorizar");
     }
-    if (row.status === "error") return e("bad", t.estado.noSePudoLeer, alDia);
+    if (row.status === "error") return e("bad", t.estado.noSePudoLeer, alDia, relectura ? null : t.sinRelectura);
     if (row.tokenExpiringSoon) return e("warn", t.estado.vencePronto, alDia);
     return e("good", t.estado.activa, alDia);
   }
@@ -176,7 +183,7 @@ export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
   // estar bien o no haberse podido leer. Los estados de token que
   // pudiera arrastrar de una autorización anterior se leen como eso.
   if (row.status === "active") return e("good", t.estado.activa, alDia);
-  return e("bad", t.estado.noSePudoLeer, alDia);
+  return e("bad", t.estado.noSePudoLeer, alDia, relectura ? null : t.sinRelectura);
 }
 
 /**
@@ -186,6 +193,8 @@ export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
  * con el formatter del workspace.
  */
 export interface HuecoDeCuenta {
+  /** metric_group: único por cuenta (UNIQUE de 0039), sirve de clave. */
+  grupo: string;
   que: string;
   porQue: string;
   desde: string;
@@ -194,6 +203,7 @@ export interface HuecoDeCuenta {
 
 export function huecosDeCuenta(row: Pick<FilaDeCuenta, "huecos">): HuecoDeCuenta[] {
   return row.huecos.map((g) => ({
+    grupo: g.metricGroup,
     que: t.falta(t.grupos[g.metricGroup] ?? t.grupoDesconocido),
     porQue: g.messageEs,
     desde: g.since,
@@ -235,6 +245,10 @@ const PROVEEDOR: Partial<Record<ConnectionPlatformId, OAuthProviderId>> = {
   instagram: "instagram",
 };
 
-export function proveedorDe(platformId: ConnectionPlatformId): OAuthProviderId | null {
+export function proveedorDe(platformId: ConnectionPlatformId, accessMode: FilaDeCuenta["accessMode"] = "direct_oauth"): OAuthProviderId | null {
+  // Solo una autorización directa se repara con la app de OAuth de la red.
+  // El portafolio de empresa de Meta es otro permiso y otra app: mandarlo
+  // por Instagram Login crearía otra fila o le cambiaría el modo.
+  if (accessMode !== "direct_oauth") return null;
   return PROVEEDOR[platformId] ?? null;
 }

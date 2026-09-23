@@ -80,7 +80,7 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * conserva. Si la app de esa red no está configurada en el entorno, el
  * botón sale deshabilitado diciendo qué falta, nunca desaparece.
  */
-function Reautorizar({ row, provider }: { row: FilaDeCuenta; provider: OAuthProviderId }) {
+function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; provider: OAuthProviderId; urgente?: boolean }) {
   const red = PLATFORM_LABEL[provider];
   return (
     <ConnectDialog
@@ -91,7 +91,7 @@ function Reautorizar({ row, provider }: { row: FilaDeCuenta; provider: OAuthProv
       text={MESSAGES.conectar.reautorizarTexto(red)}
       policyVersion={CONSENT_POLICY_VERSION}
       action={`/conexiones/oauth/${provider}/start`}
-      variant="danger"
+      variant={urgente ? "danger" : "secondary"}
       size="sm"
     />
   );
@@ -134,7 +134,7 @@ function DetalleDeEstado({ r, nota, f }: { r: FilaDeCuenta; nota: string | null;
       {nota && <span className="block">{nota}</span>}
       {r.statusDetail && <span className="block">{r.statusDetail}</span>}
       {huecos.map((h) => (
-        <span key={h.que} className="block">
+        <span key={h.grupo} className="block">
           <span className="font-medium text-ink">{h.que}</span> <span className="text-muted">{t.faltaDesde(f.date(h.desde))}.</span> {h.porQue}
           {h.arreglo && (
             <>
@@ -263,7 +263,7 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
         // este entorno. Si no, la fila no se queda sin salida: dice qué
         // hacer. Un botón deshabilitado con el nombre de una variable
         // de servidor le sirve a quien despliega, no a quien mira.
-        const posible = entorno.oauthConnect ? proveedorDe(r.platformId) : null;
+        const posible = entorno.oauthConnect ? proveedorDe(r.platformId, r.accessMode) : null;
         const provider = posible && appDeRed(entorno, posible).configurada ? posible : null;
         if (!permisos.conectar && !permisos.desconectar) return <span className="text-xs text-muted">{t.sinAcciones}</span>;
         return (
@@ -274,6 +274,7 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
               ) : (
                 <span className="max-w-[16rem] text-xs text-ink-2">{t.sinReautorizar}</span>
               ))}
+            {permisos.conectar && estado.accion === "reautorizar_opcional" && provider && <Reautorizar row={r} provider={provider} urgente={false} />}
             {permisos.conectar && estado.accion === "actualizar" && (
               <form action={actualizarCuenta.bind(null, r.id)}>
                 <Button type="submit" size="sm" variant="secondary" aria-label={t.actualizarAria(nombre(r))}>

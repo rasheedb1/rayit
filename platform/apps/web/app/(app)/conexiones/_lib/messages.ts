@@ -133,7 +133,7 @@ export const MESSAGES = {
      * pasado (lo renueva 30 minutos ANTES de que venza), así que la
      * frase no promete una hora: dice de quién depende.
      */
-    seRenuevaSola: "El worker de renovación la renueva sin pedirte nada cuando corra; hasta entonces se ven las cifras de la última lectura.",
+    seRenuevaSola: "El worker de renovación la renueva sin pedirte nada cuando corra; hasta entonces se ven las cifras de la última lectura. Si no quieres esperar, reautorízala.",
     /**
      * CON-7: qué dato falta de la cuenta. El porqué NO está aquí: es
      * metric_requirement.message_es, que viene con el hueco (metric_gap).
@@ -145,6 +145,9 @@ export const MESSAGES = {
     grupos: {
       demografia_de_cuenta: "la audiencia de la cuenta",
       retencion_y_audiencia: "la retención y la audiencia de los videos",
+      alcance_y_retencion: "el alcance y la retención de los videos",
+      visitas_al_perfil: "las visitas al perfil",
+      clics_de_contacto: "los clics de contacto",
     } as Record<string, string>,
     grupoDesconocido: "un grupo de cifras",
     /** Pie de la tabla: los huecos los detecta un job (collect.demographics), no esta pantalla. */
@@ -159,7 +162,9 @@ export const MESSAGES = {
      * producción) o esa red todavía no tiene app de OAuth (YouTube y
      * Facebook, CON-8). Es una instrucción, no un callejón sin salida.
      */
-    sinReautorizar: "Para volver a leerla, quítala y agrégala por su @.",
+    sinReautorizar: "Esta versión no puede reautorizarla desde aquí. Sus cifras se quedan en la última lectura y su historial se conserva.",
+    /** Una cuenta que no se relee desde aquí (portafolio, CSV, proveedor) y cuya última lectura falló. */
+    sinRelectura: "Esta cuenta no se vuelve a leer desde aquí: la lee el worker en su próxima pasada.",
     actualizar: "Actualizar",
     actualizarAria: (cuenta: string) => `Actualizar ${cuenta}`,
     quitar: "Quitar",

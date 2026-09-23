@@ -215,12 +215,14 @@ describe("una red que todavía no tiene app de OAuth (YouTube, CON-8)", () => {
  * entraron a /conexiones después de CON-4.
  */
 describe("las costuras en la fila", () => {
-  it("CON-3 → CON-4: vencida con renovación viva se ve «Se renueva sola» con su frase, sin botón de permiso", () => {
+  it("CON-3 → CON-4: vencida con renovación viva se ve «Se renueva sola» con su frase y reautorizar solo como salida secundaria", () => {
     pintar([fila({ id: "r1", handle: "renovable", accessExpiresAt: "2026-09-23T10:00:00.000Z", refreshExpiresAt: "2027-09-23T00:00:00.000Z" })], CONFIGURADO);
     const r = celdas("@renovable");
     expect(r.getByText(MESSAGES.tabla.estado.seRenuevaSola)).toBeInTheDocument();
     expect(r.getByText(MESSAGES.tabla.seRenuevaSola)).toBeInTheDocument();
-    expect(r.queryByRole("button", { name: MESSAGES.conectar.reautorizarAria("@renovable") })).not.toBeInTheDocument();
+    // No es urgente: el botón existe (el worker no corre en producción) pero no va en rojo.
+    const boton = r.getByRole("button", { name: MESSAGES.conectar.reautorizarAria("@renovable") });
+    expect(boton.className).not.toMatch(/bad/);
     expect(r.queryByRole("button", { name: MESSAGES.tabla.actualizarAria("@renovable") })).not.toBeInTheDocument();
   });
 
