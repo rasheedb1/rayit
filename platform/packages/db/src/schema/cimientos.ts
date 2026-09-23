@@ -25,6 +25,10 @@ export const NOTIFICATION_KINDS = [
   'quote_accepted',
   // 0030 (pulido r6): el techo de contraseñas fallidas bloqueó un media kit para todos.
   'media_kit_locked',
+  // 0038 (VEN-15): las alertas diarias del outreach, una por tipo y día.
+  // 'connection_added' es de main (ACC-8) y la 0038 de integración lo
+  // conserva en el CHECK; se declara aquí cuando llegue su código.
+  'outreach_bounce_rate', 'outreach_no_sends', 'outreach_queue_stuck', 'outreach_account_down', 'outreach_llm_budget',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

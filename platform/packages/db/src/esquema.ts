@@ -923,6 +923,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'quién provocó cada baja global (0037 §4.6): la escribe public_optout y la lee un operador. Con escritura, ' +
       'un workspace borraría su rastro',
   },
+  outbound_bounce: {
+    permite: ['SELECT'],
+    motivo:
+      'los rebotes los lee del buzón el worker (0038, VEN-15) y la web solo los muestra. Con escritura, un ' +
+      'workspace se borraría los rebotes que disparan la alerta de entregabilidad',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:

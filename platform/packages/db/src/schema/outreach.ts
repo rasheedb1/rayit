@@ -484,3 +484,28 @@ export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   alreadyOptedOut: boolean('already_opted_out').notNull(),
   createdAt: createdAt(),
 });
+
+/** Los tipos de rebote (0038): la dirección no existe, algo pasajero, o un rechazo por política del receptor. */
+export const BOUNCE_KINDS = ['hard', 'soft', 'blocked'] as const;
+
+/**
+ * Rebotes leídos del buzón del creador (0038, VEN-15, job
+ * outbound.bounces). Append-only; la escribe el worker y la web solo la
+ * lee. Única por (workspace_id, provider_message_id): el id del aviso en
+ * el buzón.
+ */
+export const outboundBounce = pgTable('outbound_bounce', {
+  id: uuidPk(),
+  workspaceId: workspaceId(),
+  channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
+  providerMessageId: text('provider_message_id').notNull(),
+  touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
+  contactId: uuid('contact_id').references(() => contact.id, { onDelete: 'set null' }),
+  recipientAddress: citext('recipient_address'),
+  kind: text('kind', { enum: BOUNCE_KINDS }).notNull(),
+  statusCode: text('status_code'),
+  smtpCode: integer('smtp_code'),
+  reason: text('reason').notNull(),
+  receivedAt: timestamptz('received_at'),
+  detectedAt: timestamptz('detected_at').defaultNow().notNull(),
+});
