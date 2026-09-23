@@ -1598,7 +1598,7 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
     today: r.today,
     currency,
     reservaPct: r.reserva_pct,
-    // Sin porcentaje configurado (FIN-8 todavía no existe) no se
+    // Sin porcentaje configurado en /finanzas/configuracion (FIN-8) no se
     // inventa uno: la reserva es cero y la pantalla lo dice con una
     // frase, que es distinto de apartar el 11 % de nadie.
     reservaRate: r.reserva_pct === null ? '0' : pctToRate(r.reserva_pct),

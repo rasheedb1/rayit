@@ -49,6 +49,7 @@ import {
   updateFinanceSettings,
   type TextosFinanzas,
 } from '../src/queries/finanzas.ts';
+import { getDefaultTaxRate } from '../src/queries/cotizar/cotizacion.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_FRESKO, COMPANY_CAFE_ALMA, INVOICE_FV_2026_010,
@@ -260,6 +261,25 @@ describe('costura FIN-8 → FIN-1: la factura nueva nace con lo configurado', ()
     for (const campo of ['subtotal', 'tax', 'withholding', 'total', 'dueOn', 'issuedOn'] as const) {
       assert.equal(despues[campo], vieja[campo], `FV-2026-010.${campo}`);
     }
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+});
+
+describe('costura COT → FIN-8: hoy son dos IVA, y guardar Finanzas no toca el de Cotizar', () => {
+  test('el IVA de Finanzas no llega a Cotizar, ni lo borra: Cotizar sigue con settings.taxRate', async () => {
+    // Estado que ve un creador que puso su IVA en Cotizar antes de FIN-8.
+    await t.admin(`UPDATE workspace SET settings = settings || '{"taxRate": "0.19"}'::jsonb WHERE id = '${WORKSPACE_LAURA}';`);
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: { ...base, ivaPct: '16' } }));
+
+    const [finanzas, cotizar] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [
+      await getFinanceSettings(tx),
+      await getDefaultTaxRate(tx),
+    ]);
+    assert.equal(finanzas.ivaPct, '16', 'la factura nueva nace con 16 %');
+    assert.equal(cotizar, '0.19', 'la cotización nueva sigue con el 19 % de settings.taxRate');
+    // Cuando Rasheed unifique las dos fuentes (CIERRE-FIN.md), esta
+    // prueba tiene que fallar y cambiarse a propósito, no por accidente.
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
   });
 });

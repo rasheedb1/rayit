@@ -111,10 +111,11 @@ const columnas = (f: Formatter): Column<ReceivableRow>[] => {
     },
     {
       key: "action",
-      // FIN-2 pondrá aquí «Registrar pago» y FIN-4 «Recordar». Hasta
-      // entonces el único botón es el que de verdad hace algo: abrir la
-      // factura. Un botón que solo navega a una pantalla donde todavía
-      // no se puede cobrar promete lo que no cumple.
+      // Un solo botón: abrir la factura. Ahí están «Registrar pago»
+      // (FIN-2) y sus recordatorios (FIN-4); los del día, además, en la
+      // bandeja de arriba. Duplicar el formulario de pago en la fila
+      // obligaría a una tabla de cliente para una acción que se hace
+      // una vez por factura.
       header: t.columns.action,
       render: (r) => (
         <Button size="sm" href={`/finanzas/facturas/${r.id}`}>

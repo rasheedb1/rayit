@@ -204,7 +204,12 @@ export const MESSAGES = {
       titulo: "Porcentajes y plazo",
       ayuda: "Son los valores con los que se prellena una factura nueva. En la factura se pueden cambiar una a una.",
       iva: "IVA %",
-      ivaAyuda: "El general de tu país. Cero si no facturas IVA.",
+      /**
+       * Hoy hay dos IVA: este (facturas) y el de Cotizar (settings.taxRate,
+       * de Rasheed). Mientras no se unifiquen (CIERRE-FIN.md, COT → FIN-8),
+       * la pantalla lo dice para que nadie espere verlo en sus cotizaciones.
+       */
+      ivaAyuda: "El general de tu país. Cero si no facturas IVA. Se usa en las facturas; las cotizaciones todavía llevan el suyo.",
       retencion: "Retención en la fuente %",
       retencionAyuda: "Lo que la marca te retiene al pagar. No se resta del total de la factura.",
       reserva: "Reserva de impuestos %",
