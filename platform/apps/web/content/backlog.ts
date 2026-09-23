@@ -239,8 +239,8 @@ export const STORIES: readonly Story[] = [
     title: "Recolector de posts y métricas",
     desc: "collect.posts descubre videos nuevos; collect.post_metrics y collect.account_metrics guardan el snapshot con age_hours. Append-only.",
     done: "Dos corridas seguidas producen dos filas por post y post_metrics_daily_delta muestra el crecimiento.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/CON-5-recolector-posts, solo local (sin push). Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null hasta que el dueño autorice. TikTok por @ no publica videos: entran por el CSV de RES-2. Para cuentas reales faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en Vercel.",
+    status: "hecho",
+    note: "collect.account_metrics ya venía de CON-10. Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null (nunca en cero) hasta que el dueño autorice la cuenta. TikTok por @ no publica videos: entran por el CSV de RES-2. Para leer cuentas reales faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno y en Vercel."
   },
   {
     id: "CON-6", module: "CON", owner: "nicolas", size: "M", sprint: 3, deps: ["CON-5"],

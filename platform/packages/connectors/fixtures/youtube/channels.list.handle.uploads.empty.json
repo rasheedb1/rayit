@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Handle que no existe: 200 con items vacío (la Data API no devuelve 404 para forHandle)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/channels\\?part=snippet%2CcontentDetails%2Cstatistics&forHandle=%40noexiste"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#channelListResponse",
+      "etag": "e",
+      "pageInfo": { "totalResults": 0, "resultsPerPage": 5 },
+      "items": []
+    }
+  }
+}
