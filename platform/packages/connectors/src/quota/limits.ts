@@ -5,13 +5,13 @@
  *
  * Una «familia» de cuota agrupa los endpoints que comparten límite:
  * TikTok Display y TikTok Accounts son dos apps con dos cuotas aunque
- * las dos sean platform_id = 'tiktok'; YouTube Data y YouTube Analytics
- * tienen presupuestos distintos. En api_quota_usage se persiste por
+ * las dos sean platform_id = 'tiktok'; YouTube Data, YouTube Analytics y
+ * el endpoint de token de Google tienen presupuestos distintos. En api_quota_usage se persiste por
  * platform_id, y solo las familias con presupuesto diario numérico.
  */
 import type { PlatformId } from '../types.ts';
 
-export type QuotaFamily = 'tiktok' | 'tiktok-accounts' | 'instagram' | 'youtube' | 'youtube-search' | 'youtube-analytics';
+export type QuotaFamily = 'tiktok' | 'tiktok-accounts' | 'instagram' | 'youtube' | 'youtube-search' | 'youtube-analytics' | 'google-oauth';
 
 export type QuotaScope = 'connection' | 'app';
 
@@ -57,6 +57,7 @@ const ARCHITECTURE_DOC = 'docs/arquitectura.md «APIs de plataforma»';
 const META_RATE_LIMIT_DOC = 'developers.facebook.com/docs/graph-api/overview/rate-limiting';
 const YOUTUBE_QUOTA_DOC = 'developers.google.com/youtube/v3/determine_quota_cost (actualizada 15-sep-2026)';
 const YOUTUBE_ANALYTICS_DOC = 'developers.google.com/youtube/analytics/reference/reports/query';
+const GOOGLE_OAUTH_DOC = 'developers.google.com/identity/protocols/oauth2/web-server (leída el 23-sep-2026)';
 const CHECKED_AT = '2026-09-22';
 
 export const DEFAULT_LIMITS: LimitsTable = {
@@ -107,9 +108,21 @@ export const DEFAULT_LIMITS: LimitsTable = {
     daily: { scope: 'app', units: null, source: YOUTUBE_ANALYTICS_DOC, checkedAt: CHECKED_AT, note: 'Cuota aparte de la Data API; Google no publica el número. DECISIÓN PENDIENTE DE NICOLÁS: leerlo del proyecto en Google Cloud.' },
     unitCost: {},
   },
+  // oauth2.googleapis.com no es la Data API y no gasta unidades de su cupo
+  // diario: cobrárselas mentiría, porque un access token de YouTube dura
+  // una hora y cada canal conectado se renueva unas 40 veces al día
+  // (docs/propuestas/CON-8.md §0.2 · 6).
+  'google-oauth': {
+    platformId: 'youtube',
+    rates: [
+      { scope: 'app', perEndpoint: false, windowS: 60, max: 600, source: GOOGLE_OAUTH_DOC, checkedAt: '2026-09-23', note: 'Google no publica un límite para el endpoint de token; 600/min es NUESTRO freno de mano, no el suyo. DECISIÓN PENDIENTE DE NICOLÁS.' },
+    ],
+    daily: null,
+    unitCost: {},
+  },
 };
 
-export const QUOTA_FAMILIES: readonly QuotaFamily[] = ['tiktok', 'tiktok-accounts', 'instagram', 'youtube', 'youtube-search', 'youtube-analytics'];
+export const QUOTA_FAMILIES: readonly QuotaFamily[] = ['tiktok', 'tiktok-accounts', 'instagram', 'youtube', 'youtube-search', 'youtube-analytics', 'google-oauth'];
 
 export function isQuotaFamily(value: unknown): value is QuotaFamily {
   return typeof value === 'string' && (QUOTA_FAMILIES as readonly string[]).includes(value);

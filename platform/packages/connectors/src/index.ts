@@ -5,7 +5,7 @@ export * from './redact.ts';
 export * from './fakes/index.ts';
 export * from './platforms/tiktok.ts';
 export * from './platforms/instagram.ts';
-export { youtubeRefresher } from './platforms/youtube.ts';
+export * from './platforms/youtube.ts';
 export * from './http/errors.ts';
 export * from './http/retry.ts';
 export * from './http/client.ts';
