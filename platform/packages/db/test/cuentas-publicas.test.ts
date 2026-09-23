@@ -1,7 +1,7 @@
 /** CON-10 · cuentas por @: alta, snapshot diario (la primera lectura del día queda; mc_app no la corrige), lista con último snapshot y Δ7d, fallos, aislamiento. */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, upgradePublicAccountToOAuth } from '../src/index.ts';
+import { addPublicAccount, AGGREGATOR_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, setAccountAccessMode, upgradePublicAccountToOAuth } from '../src/index.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
@@ -141,3 +141,43 @@ describe('de @ a autorizada', () => {
   });
 });
 
+
+describe('cuentas por proveedor de datos (CON-12)', () => {
+  const tiktok = { ...input, platformId: 'tiktok' as const, handle: 'laura.cocinafacil', externalAccountId: 'MS4wLjABAAAA-anonimo-d01', profileUrl: 'https://www.tiktok.com/@laura.cocinafacil', accountType: 'unknown' as const };
+
+  test('el alta con proveedor deja access_mode aggregator y su snapshot cuenta como última lectura', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, accessMode: 'aggregator' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-23', followers: 128400, following: 312, mediaCount: 3, views: 65401, raw: {}, source: AGGREGATOR_SNAPSHOT_SOURCE }));
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.accessMode, 'aggregator');
+    assert.deepEqual(row.latest, { day: '2026-09-23', followers: 128400, following: 312, mediaCount: 3, views: 65401 });
+    assert.ok(row.lastSyncedAt, 'la lectura del proveedor mueve la frescura del dato');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0, 'otro workspace no la ve');
+  });
+
+  test('contratar el proveedor convierte la cuenta por @ sin perder id ni historia; darlo de baja la devuelve', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'selvathegolden', externalAccountId: 'selvathegolden' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-22', followers: null, following: null, mediaCount: null, views: null, raw: {} }));
+
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), true);
+    const conProveedor = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(conProveedor.accessMode, 'aggregator');
+    assert.equal(conProveedor.latest?.day, '2026-09-22', 'la historia por @ se conserva');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false, 'ya estaba: no vuelve a escribir');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'public_profile')), true);
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!.accessMode, 'public_profile');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false, 'otro workspace no la mueve');
+  });
+
+  test('una cuenta autorizada por su dueño no se degrada a aggregator', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'duenoautorizado', externalAccountId: 'open_id_dueno' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {
+      externalAccountId: 'open_id_dueno', handle: 'duenoautorizado', displayName: null, avatarUrl: null, profileUrl: null, accountType: 'creator',
+      secretRef: 'enc:tiktok:77777777-7777-4777-8777-777777777777', scopes: ['user.info.basic'], accessExpiresAt: new Date('2026-09-24T00:00:00Z'), refreshExpiresAt: null,
+    }));
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false);
+    // Volver a agregarla por @ con el proveedor encendido tampoco la degrada.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'duenoautorizado', externalAccountId: 'open_id_dueno', accessMode: 'aggregator' }));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!.accessMode, 'direct_oauth');
+  });
+});

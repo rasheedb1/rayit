@@ -313,7 +313,11 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
       return {
         platformId: 'tiktok',
         profile: {
-          external_account_id: p.secUid ?? p.uniqueId,
+          // El @ y no el secUid, a propósito: es el mismo id externo que usa
+          // el oEmbed de CON-10, así contratar el proveedor convierte la
+          // fila que ya existe en vez de crear una cuenta duplicada. El
+          // secUid queda en `raw`.
+          external_account_id: p.uniqueId,
           handle: p.uniqueId,
           display_name: p.nickname,
           avatar_url: p.avatarUrl,

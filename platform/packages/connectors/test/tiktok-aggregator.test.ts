@@ -47,7 +47,7 @@ test('con el token: seguidores del perfil y vistas sumadas del catálogo complet
 
   assert.equal(p.profile.handle, 'laura.cocinafacil');
   assert.equal(p.profile.display_name, 'Laura · Cocina fácil');
-  assert.equal(p.profile.external_account_id, 'MS4wLjABAAAA-anonimo-d01');
+  assert.equal(p.profile.external_account_id, 'laura.cocinafacil', 'el mismo id externo que el oEmbed de CON-10: contratar el proveedor no duplica la cuenta');
   assert.equal(p.profile.profile_url, 'https://www.tiktok.com/@laura.cocinafacil');
   assert.deepEqual(p.metrics, { followers: 128400, following: 312, mediaCount: 3, views: 65401 });
   assert.deepEqual(p.coverage, { postsRead: 3, postsTotal: 3, maxPosts: 200, complete: true });
