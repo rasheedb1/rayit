@@ -535,7 +535,11 @@ ALTER TABLE outbound_sequence
   ADD COLUMN status          text NOT NULL DEFAULT 'draft'
                                   CHECK (status IN ('draft','active','paused','archived')),
   ADD COLUMN template_id     uuid REFERENCES outbound_sequence_template(id) ON DELETE SET NULL,
-  ADD COLUMN updated_at      timestamptz NOT NULL DEFAULT now();
+  ADD COLUMN updated_at      timestamptz NOT NULL DEFAULT now(),
+  -- active pasa a ser la sombra de status (abajo): su DEFAULT dice lo
+  -- mismo que el de status ('draft' ⇒ false), y así lo dice también el
+  -- esquema de Drizzle.
+  ALTER COLUMN active SET DEFAULT false;
 
 CREATE TRIGGER outbound_sequence_updated BEFORE UPDATE ON outbound_sequence
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();

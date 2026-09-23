@@ -15,10 +15,13 @@
  * outbound_optout_event (quién provocó cada baja) no los toca la web:
  * los escriben el despachador y public_optout.
  *
- * Las funciones de la migración (increment_if_under_cap,
- * increment_weekly, should_pause_outreach, disable_outreach,
- * enable_outreach, outbound_health, next_business_day y public_optout)
- * se llaman con SQL; sus firmas están en OUTREACH_FUNCTIONS.
+ * Las funciones de la migración NO se llaman con SQL suelto: el camino
+ * es @mc/db/queries/outreach (src/queries/outreach.ts), que valida los
+ * argumentos antes de llamar y la forma del jsonb al volver:
+ * incrementIfUnderCap e incrementWeekly (solo con WorkerTx),
+ * shouldPauseOutreach, disableOutreach, enableOutreach, outboundHealth,
+ * nextBusinessDay y publicOptout. Sus firmas SQL están en
+ * OUTREACH_FUNCTIONS, que la prueba compara con la base.
  */
 import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
 import { citext, createdAt, currency, localTime, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
@@ -58,6 +61,19 @@ export const LIVE_CHANNEL_ACCOUNT_STATUSES = ['connected', 'needs_reconnect', 'e
  * rechaza lo demás con 42501.
  */
 export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = ['status', 'provider_account_id', 'secret_ref', 'scopes'] as const;
+/**
+ * El techo de daily_cap y weekly_cap por canal (§5.1): lo que el
+ * proveedor aguanta antes de castigar la cuenta. La base lo exige a
+ * todos, también al worker (CHECK outreach_channel_account_channel_caps_check,
+ * 0037 §2); la pantalla de canales lo usa como máximo del campo. Por
+ * debajo, el tope es de la persona.
+ */
+export const CHANNEL_CAP_LIMITS = {
+  email: { daily: 2000, weekly: 10000 },
+  linkedin: { daily: 100, weekly: 200 },
+  instagram_dm: { daily: 100, weekly: 700 },
+  whatsapp: { daily: 100, weekly: 700 },
+} as const satisfies Record<(typeof OUTBOUND_CHANNELS)[number], { daily: number; weekly: number }>;
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
@@ -77,6 +93,14 @@ export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend'] 
  * enlace de baja no está aquí: vive en outbound_optout_link.
  */
 export const WORKER_ONLY_TOUCH_COLUMNS = ['provider_message_id', 'message_id_rfc', 'recipient_address'] as const;
+/**
+ * El estado que solo pone y quita el despachador: la web no crea un
+ * toque en él, no lleva uno a él y no saca uno de él (42501,
+ * outbound_touch_worker_columns, 0037 §4.2). Lo reclamado no lo cancelan
+ * ni la baja ni el apagado: si la web pudiera ponerlo, el toque quedaba
+ * fuera de los dos.
+ */
+export const WORKER_ONLY_TOUCH_STATUS = 'processing' as const;
 /**
  * Las columnas que fijan el destinatario de un toque. En cuanto el toque
  * tiene alguna de WORKER_ONLY_TOUCH_COLUMNS, mc_app ya no las cambia (el
@@ -238,7 +262,7 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   /** 'enc:<plataforma>:<uuid>' → connection_secret. */
   secretRef: text('secret_ref'),
   status: text('status', { enum: CHANNEL_ACCOUNT_STATUSES }).default('pending').notNull(),
-  /** NULL = el de outbound_policy. */
+  /** NULL = el de outbound_policy. Nunca por encima de CHANNEL_CAP_LIMITS[channel] (CHECK). */
   dailyCap: integer('daily_cap'),
   weeklyCap: integer('weekly_cap'),
   warmupStartedAt: timestamptz('warmup_started_at'),
@@ -416,10 +440,14 @@ export const outboundBreaker = pgTable(
 // ---------------------------------------------------------------------
 
 /**
- * La prueba del enlace de baja de un correo enviado (0037 §4.5). La
- * escribe el despachador en la misma transacción que providerMessageId; la
- * web no tiene ningún privilegio. Las claves ajenas son SET NULL: borrar el
- * toque, la ficha o el workspace no rompe el enlace.
+ * La prueba del enlace de baja de un intento de envío (0037 §4.5). La
+ * escribe el despachador AL RECLAMAR el toque, en la transacción que lo
+ * pasa a processing y ANTES de llamar al proveedor: la base no confirma
+ * un correo reclamado sin el enlace de su intento
+ * (outbound_touch_optout_link_required). sentAt se anota una vez, cuando
+ * el proveedor confirma; si nunca confirma, el enlace funciona igual. La
+ * web no tiene ningún privilegio. Las claves ajenas son SET NULL: borrar
+ * el toque, la ficha o el workspace no rompe el enlace.
  */
 export const outboundOptoutLink = pgTable('outbound_optout_link', {
   /** sha256 (hex) del token al azar que solo va en el correo. */
@@ -427,10 +455,15 @@ export const outboundOptoutLink = pgTable('outbound_optout_link', {
   workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'set null' }),
   touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
   contactId: uuid('contact_id').references(() => contact.id, { onDelete: 'set null' }),
+  /** El intento del toque (su attempt_count después de reclamarlo): un enlace por intento. */
+  attempt: integer('attempt').default(1).notNull(),
   channel: text('channel', { enum: ['email'] }).default('email').notNull(),
-  /** La dirección a la que salió: lo que public_optout suprime. */
+  /** La dirección a la que sale: lo que public_optout suprime. */
   recipientAddress: citext('recipient_address').notNull(),
-  sentAt: timestamptz('sent_at').notNull(),
+  /** Cuándo se reclamó el intento: el enlace existe desde entonces. */
+  claimedAt: timestamptz('claimed_at').defaultNow().notNull(),
+  /** Cuándo confirmó el proveedor; NULL si no llegó a confirmar. */
+  sentAt: timestamptz('sent_at'),
   createdAt: createdAt(),
 });
 
@@ -445,7 +478,9 @@ export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'set null' }),
   touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
   recipientAddress: citext('recipient_address').notNull(),
-  sentAt: timestamptz('sent_at').notNull(),
+  /** Copiados del enlace: sentAt es NULL si el proveedor no confirmó ese intento. */
+  claimedAt: timestamptz('claimed_at').notNull(),
+  sentAt: timestamptz('sent_at'),
   alreadyOptedOut: boolean('already_opted_out').notNull(),
   createdAt: createdAt(),
 });

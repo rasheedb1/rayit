@@ -321,7 +321,13 @@ export const outboundSequence = pgTable('outbound_sequence', {
   channel: text('channel', { enum: OUTBOUND_CHANNELS }).notNull(),
   /** Pasos de 0007 en jsonb. El motor lee outbound_step (0037). */
   steps: jsonb('steps').default([]).notNull(),
-  active: boolean('active').default(true).notNull(),
+  /**
+   * @deprecated Sombra de status (0037 §3.1): la base la recalcula en
+   * cada alta y cada cambio (outbound_sequence_sync_active), active ⇔
+   * status = 'active'. Escribe status. Un alta que solo diga active nace
+   * en 'draft' y con active = false, de ahí el default.
+   */
+  active: boolean('active').default(false).notNull(),
   createdAt: createdAt(),
   /** Zona IANA de la cadencia; NULL = la del workspace (0037 §3.1). */
   timezone: text('timezone'),

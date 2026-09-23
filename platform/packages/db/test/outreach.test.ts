@@ -64,7 +64,8 @@ import {
   OutreachShapeError, parseOutboundHealth, parsePublicOptout, publicOptout, shouldPauseOutreach,
 } from '../src/queries/outreach.ts';
 import {
-  DEFAULT_LLM_DAILY_CAP_USD, OUTREACH_FUNCTIONS, WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS, WORKER_ONLY_TOUCH_COLUMNS,
+  CHANNEL_CAP_LIMITS, DEFAULT_LLM_DAILY_CAP_USD, OUTREACH_FUNCTIONS, WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS,
+  WORKER_ONLY_TOUCH_COLUMNS, WORKER_ONLY_TOUCH_STATUS,
 } from '../src/schema/outreach.ts';
 import { CANCELABLE_TOUCH_STATUSES, LIVE_TOUCH_STATUSES } from '../src/schema/ventas.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
@@ -126,9 +127,11 @@ const TOKEN_SIN_ID = 'sin-id-del-proveedor-0000000000001';
 const TOKEN_SOLA = 'z9Yx8Wv7Ut6Sr5Qp4On3Ml2Kj1Ih0Gf9';
 const TOKEN_YO_B = 'yo-b-1234567890-abcdefghijklmnopq';
 const TOKEN_BORRADA = 'borrada-0987654321-zyxwvutsrqponm';
+/** El enlace que el despachador escribió al reclamar TOUCH_EN_VUELO, antes de llamar al proveedor. */
+const TOKEN_EN_VUELO = 'en-vuelo-5555555555-abcdefghijklm';
 const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 /** Los tokens con enlace de los workspaces A y B (los de C se reconocen por su dirección). */
-const TOKENS_DE_ESTE_ARCHIVO = [TOKEN, TOKEN_SOLA, TOKEN_YO_B, TOKEN_BORRADA];
+const TOKENS_DE_ESTE_ARCHIVO = [TOKEN, TOKEN_SOLA, TOKEN_YO_B, TOKEN_BORRADA, TOKEN_EN_VUELO];
 
 let t: TestDb;
 
@@ -167,37 +170,45 @@ before(async () => {
     -- Lo que dejó el despachador (admin hace de worker): el hash y el id del proveedor.
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, enrollment_id, step_id, channel, body,
                                 status, scheduled_for, sent_at, claimed_at, provider_message_id,
-                                recipient_address) VALUES
+                                recipient_address, attempt_count) VALUES
       ('${TOUCH_SENT}', '${WS_A}', '${COMPANY}', '${CONTACT_A}', '${ENR_A}', '${STEP_A1}', 'email', 'Hola',
-       'sent', now() - interval '2 days', now() - interval '2 days', NULL, 'gmail-0001', 'marta@cafe.test'),
+       'sent', now() - interval '2 days', now() - interval '2 days', NULL, 'gmail-0001', 'marta@cafe.test', 1),
       ('${TOUCH_PENDING_A}', '${WS_A}', '${COMPANY}', '${CONTACT_A}', '${ENR_A}', '${STEP_A2}', 'email', 'Sigo',
-       'scheduled', now() + interval '2 days', NULL, NULL, NULL, NULL),
+       'scheduled', now() + interval '2 days', NULL, NULL, NULL, NULL, 0),
       ('${TOUCH_PENDING_B}', '${WS_B}', '${COMPANY}', '${CONTACT_B}', '${ENR_B}', '${STEP_B1}', 'email', 'Hola',
-       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL),
+       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL, 0),
       -- Reclamado: el despachador escribió la dirección al reclamarlo (CHECK).
       ('${TOUCH_EN_VUELO}', '${WS_B}', '${COMPANY}', '${CONTACT_B}', NULL, NULL, 'email', 'Hola otra vez',
-       'processing', now() - interval '1 minute', NULL, now() - interval '30 seconds', NULL, 'marta@cafe.test'),
+       'processing', now() - interval '1 minute', NULL, now() - interval '30 seconds', NULL, 'marta@cafe.test', 1),
       ('${TOUCH_OTRO}', '${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', NULL, NULL, 'email', 'Hola',
-       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL),
+       'scheduled', now() + interval '1 day', NULL, NULL, NULL, NULL, 0),
       ('${TOUCH_SIN_ID}', '${WS_A}', '${COMPANY}', '${CONTACT_VICTIMA}', NULL, NULL, 'email', 'Hola',
-       'sent', now() - interval '1 day', now() - interval '1 day', NULL, NULL, 'victima@cafe.test'),
+       'sent', now() - interval '1 day', now() - interval '1 day', NULL, NULL, 'victima@cafe.test', 1),
       ('${TOUCH_SOLA}', '${WS_A}', '${COMPANY}', '${CONTACT_SOLA}', NULL, NULL, 'email', 'Hola',
-       'sent', now() - interval '1 day', now() - interval '1 day', NULL, 'gmail-0002', 'sola@cafe.test'),
+       'sent', now() - interval '1 day', now() - interval '1 day', NULL, 'gmail-0002', 'sola@cafe.test', 1),
       -- Enviados hace cinco días: fuera de la ventana de 72 h de la salud.
       ('${TOUCH_YO_B}', '${WS_B}', '${COMPANY}', '${CONTACT_YO_B}', NULL, NULL, 'email', 'Prueba',
-       'sent', now() - interval '5 days', now() - interval '5 days', NULL, 'gmail-b-0003', 'yo@outreach-b.test'),
+       'sent', now() - interval '5 days', now() - interval '5 days', NULL, 'gmail-b-0003', 'yo@outreach-b.test', 1),
       ('${TOUCH_BORRADA}', '${WS_A}', '${COMPANY}', '${CONTACT_BORRADA}', NULL, NULL, 'email', 'Hola',
-       'sent', now() - interval '5 days', now() - interval '5 days', NULL, 'gmail-0003', 'borrada@cafe.test'),
+       'sent', now() - interval '5 days', now() - interval '5 days', NULL, 'gmail-0003', 'borrada@cafe.test', 1),
       ('${TOUCH_BORRADA_B}', '${WS_B}', '${COMPANY}', '${CONTACT_BORRADA_B}', NULL, NULL, 'email', 'Hola',
-       'scheduled', now() + interval '6 days', NULL, NULL, NULL, NULL);
+       'scheduled', now() + interval '6 days', NULL, NULL, NULL, NULL, 0);
     -- Los enlaces de baja de lo que salió de verdad (admin hace de
     -- despachador). TOUCH_SIN_ID no tiene: sin id del proveedor no salió.
-    INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, sent_at) VALUES
-      ('${sha256(TOKEN)}', '${WS_A}', '${TOUCH_SENT}', '${CONTACT_A}', 'marta@cafe.test', now() - interval '2 days'),
-      ('${sha256(TOKEN_SOLA)}', '${WS_A}', '${TOUCH_SOLA}', '${CONTACT_SOLA}', 'sola@cafe.test', now() - interval '1 day'),
-      ('${sha256(TOKEN_YO_B)}', '${WS_B}', '${TOUCH_YO_B}', '${CONTACT_YO_B}', 'yo@outreach-b.test', now() - interval '5 days'),
+    -- El de TOUCH_EN_VUELO se escribió al reclamarlo y todavía no tiene
+    -- sent_at: sin él, el reclamo no se confirma (4.5).
+    INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, claimed_at,
+                                      sent_at) VALUES
+      ('${sha256(TOKEN)}', '${WS_A}', '${TOUCH_SENT}', '${CONTACT_A}', 'marta@cafe.test', now() - interval '2 days',
+       now() - interval '2 days'),
+      ('${sha256(TOKEN_SOLA)}', '${WS_A}', '${TOUCH_SOLA}', '${CONTACT_SOLA}', 'sola@cafe.test', now() - interval '1 day',
+       now() - interval '1 day'),
+      ('${sha256(TOKEN_YO_B)}', '${WS_B}', '${TOUCH_YO_B}', '${CONTACT_YO_B}', 'yo@outreach-b.test',
+       now() - interval '5 days', now() - interval '5 days'),
       ('${sha256(TOKEN_BORRADA)}', '${WS_A}', '${TOUCH_BORRADA}', '${CONTACT_BORRADA}', 'borrada@cafe.test',
-       now() - interval '5 days');
+       now() - interval '5 days', now() - interval '5 days'),
+      ('${sha256(TOKEN_EN_VUELO)}', '${WS_B}', '${TOUCH_EN_VUELO}', '${CONTACT_B}', 'marta@cafe.test',
+       now() - interval '30 seconds', NULL);
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, status_changed_at, created_at)
     VALUES ('${TOUCH_FALLIDO}', '${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', 'email', 'Hola', 'failed',
             now() - interval '30 days', now() - interval '31 days');
@@ -1000,7 +1011,11 @@ describe('0037 · la regla de la baja, en las transiciones', () => {
     );
     await assert.rejects(
       t.db.asWorker((tx) =>
-        tx.query(`UPDATE outbound_touch SET status = 'processing', claimed_at = now() WHERE id = $1`, [TOUCH_PENDING_A]),
+        tx.query(
+          `UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = attempt_count + 1,
+                  recipient_address = 'marta@cafe.test' WHERE id = $1`,
+          [TOUCH_PENDING_A],
+        ),
       ),
       /opt-out/,
     );
@@ -1335,6 +1350,7 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
         DELETE FROM workspace WHERE id = '${WS_D}';
         DELETE FROM company WHERE id = '${COMPANY_D}';
         DELETE FROM contact_suppression WHERE email::text LIKE '%@d.outreach.test';
+        DELETE FROM outbound_optout_link WHERE recipient_address::text LIKE '%@d.outreach.test';
       `);
     }
   });
@@ -1397,10 +1413,20 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
         [WS_D, COMPANY_D, D3],
       )
     ).rows[0] as { id: string };
+    // El reclamo de verdad (4.5): la dirección, el intento y el enlace de baja de ese intento, en una transacción.
     const reclamar = (direccion: string | null) =>
-      w(`UPDATE outbound_touch SET status = 'processing', claimed_at = now(), recipient_address = $1 WHERE id = $2`, [
-        direccion, paraD3,
-      ]);
+      t.db.asWorker(async (tx) => {
+        await tx.query(
+          `UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = attempt_count + 1,
+                  recipient_address = $1 WHERE id = $2`,
+          [direccion, paraD3],
+        );
+        await tx.query(
+          `INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address)
+           VALUES ($1, $2, $3, $4, 1, $5)`,
+          [sha256(`d3-${direccion}-0000000000000000`), WS_D, paraD3, D3, direccion],
+        );
+      });
     // Reclamar un correo exige decir a qué dirección sale…
     await assert.rejects(reclamar(null), /outbound_touch_email_recipient_check/);
     // …y si esa dirección está en la lista global, aunque la ficha diga otra, no sale.
@@ -1444,5 +1470,248 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
       void incrementIfUnderCap(wk, req);
     };
     assert.equal(typeof soloTipos, 'function');
+  });
+});
+
+describe('0037 · techo por canal, processing del despachador, baja global al enrolar y enlace al reclamar (E)', () => {
+  const WS_E = '00000037-0000-4000-8000-00000000000e';
+  const COMPANY_E = '00000037-0000-4000-8000-0000000000e0';
+  /** Dada de baja solo en la lista global: su ficha no lo dice. */
+  const E_REBOTADA = '00000037-0000-4000-8000-0000000000e1';
+  const E_LINKEDIN = '00000037-0000-4000-8000-0000000000e2';
+  const E_CORREO = '00000037-0000-4000-8000-0000000000e3';
+  const SEQ_E = '00000037-0000-4000-8000-0000000005e1';
+  const TOKEN_E1 = 'e-intento-uno-aaaaaaaaaa-abcdefghij';
+  const TOKEN_E2 = 'e-intento-dos-bbbbbbbbbb-abcdefghij';
+  const e = (sql: string, params: unknown[] = []) => t.db.withWorkspace(WS_E, (tx) => tx.query(sql, params));
+  const w = (sql: string, params: unknown[] = []) => t.db.asWorker((tx) => tx.query(sql, params));
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_E}', 'outreach-e', 'Outreach E', 'America/Lima');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_E}', 'Empresa de E', '${WS_E}');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_E}', '${COMPANY_E}');
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id) VALUES
+        ('${E_REBOTADA}', '${COMPANY_E}', 'E rebotada', 'rebotada@e.outreach.test', 'user_provided', '${WS_E}'),
+        ('${E_LINKEDIN}', '${COMPANY_E}', 'E linkedin', NULL, 'user_provided', '${WS_E}'),
+        ('${E_CORREO}', '${COMPANY_E}', 'E correo', 'correo@e.outreach.test', 'user_provided', '${WS_E}');
+      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES
+        ('${SEQ_E}', '${WS_E}', 'E', 'email', 'active');
+    `);
+  });
+
+  after(async () => {
+    if (t.kind === 'postgres') {
+      await t.admin(`
+        DELETE FROM workspace WHERE id = '${WS_E}';
+        DELETE FROM company WHERE id = '${COMPANY_E}';
+        DELETE FROM contact_suppression WHERE email::text LIKE '%@e.outreach.test';
+        DELETE FROM outbound_optout_link WHERE recipient_address::text LIKE '%@e.outreach.test';
+        DELETE FROM outbound_optout_event WHERE recipient_address::text LIKE '%@e.outreach.test';
+      `);
+    }
+  });
+
+  test('el techo de cada canal (§5.1): ni la web ni el worker pasan de lo que el proveedor aguanta', async () => {
+    const fuera = (err: { code?: string; message?: string }) =>
+      err.code === '23514' && /outreach_channel_account_channel_caps_check/.test(err.message ?? '');
+    for (const [canal, techo] of Object.entries(CHANNEL_CAP_LIMITS)) {
+      const [proveedor, buzon] =
+        canal === 'email' ? ['gmail_oauth', `techo-${canal}@e.outreach.test`] : ['unipile', `unipile-techo-${canal}`];
+      // Justo en el techo entra; uno más, en el día o en la semana, no.
+      const { id } = (
+        await w(
+          `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, daily_cap, weekly_cap)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [WS_E, canal, proveedor, buzon, techo.daily, techo.weekly],
+        )
+      ).rows[0] as { id: string };
+      await assert.rejects(w('UPDATE outreach_channel_account SET daily_cap = $1 WHERE id = $2', [techo.daily + 1, id]), fuera, canal);
+      await assert.rejects(w('UPDATE outreach_channel_account SET weekly_cap = $1 WHERE id = $2', [techo.weekly + 1, id]), fuera, canal);
+    }
+    // El caso del hallazgo: la web sube el LinkedIn de la persona a los números de un Gmail.
+    const { id: li } = (
+      await e(
+        `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id)
+         VALUES ($1, 'linkedin', 'unipile', 'unipile-E-web') RETURNING id`,
+        [WS_E],
+      )
+    ).rows[0] as { id: string };
+    await assert.rejects(e('UPDATE outreach_channel_account SET daily_cap = 2000, weekly_cap = 10000 WHERE id = $1', [li]), fuera);
+    await assert.rejects(e('UPDATE outreach_channel_account SET daily_cap = 101 WHERE id = $1', [li]), fuera);
+    await assert.rejects(e('UPDATE outreach_channel_account SET weekly_cap = 201 WHERE id = $1', [li]), fuera);
+    await assert.rejects(
+      e(
+        `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, daily_cap)
+         VALUES ($1, 'instagram_dm', 'unipile', 'unipile-E-ig', 101)`,
+        [WS_E],
+      ),
+      fuera,
+    );
+    // Por debajo, el tope es de la persona.
+    await e('UPDATE outreach_channel_account SET daily_cap = 40, weekly_cap = 150 WHERE id = $1', [li]);
+  });
+
+  test('processing es del despachador: la web no pone un toque en él, no lo saca y no lo borra', async () => {
+    const despachador = (err: { code?: string; message?: string }) =>
+      err.code === '42501' && /processing es del despachador/.test(err.message ?? '');
+    assert.equal(WORKER_ONLY_TOUCH_STATUS, 'processing');
+    // Un toque de LinkedIn (sin correo, el CHECK de recipient_address no aplica) que nace en processing desde la web.
+    await assert.rejects(
+      e(
+        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, claimed_at, attempt_count)
+         VALUES ($1, $2, $3, 'linkedin', 'Hola', 'processing', now(), 1)`,
+        [WS_E, COMPANY_E, E_LINKEDIN],
+      ),
+      despachador,
+    );
+    const { id } = (
+      await e(
+        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+         VALUES ($1, $2, $3, 'linkedin', 'Hola', 'scheduled', now()) RETURNING id`,
+        [WS_E, COMPANY_E, E_LINKEDIN],
+      )
+    ).rows[0] as { id: string };
+    await assert.rejects(
+      e(`UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = 1 WHERE id = $1`, [id]),
+      despachador,
+    );
+    // El worker lo reclama (LinkedIn no lleva enlace de baja)…
+    await w(`UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = 1 WHERE id = $1`, [id]);
+    // …y desde la web ya no se mueve: ni a sent sin haberlo enviado, ni fuera de la cola, ni se borra.
+    for (const status of ['sent', 'canceled', 'scheduled', 'draft']) {
+      await assert.rejects(e('UPDATE outbound_touch SET status = $1 WHERE id = $2', [status, id]), despachador, status);
+    }
+    await assert.rejects(
+      e('DELETE FROM outbound_touch WHERE id = $1', [id]),
+      (err: { code?: string; message?: string }) => err.code === '42501' && /no se borra/.test(err.message ?? ''),
+    );
+    // Lo cierra quien lo reclamó.
+    await w(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), provider_message_id = 'unipile-msg-e1' WHERE id = $1`, [id]);
+    assert.equal((await toque(id)).status, 'sent');
+  });
+
+  test('no se enrola a quien tiene el correo en la lista global aunque su ficha no lo diga', async () => {
+    await t.admin(`INSERT INTO contact_suppression (email, reason) VALUES ('rebotada@e.outreach.test', 'hard_bounce')`);
+    const [ficha] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${E_REBOTADA}'`);
+    assert.equal(ficha?.opted_out, false, 'la ficha existía antes del rebote y no lo refleja');
+    const optOut = (err: { code?: string; message?: string }) => err.code === '23514' && /opt-out/.test(err.message ?? '');
+    await assert.rejects(
+      e('INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id) VALUES ($1, $2, $3)', [WS_E, SEQ_E, E_REBOTADA]),
+      optOut,
+    );
+    // Terminado sí se puede anotar, y no se reanuda.
+    const { id } = (
+      await e(
+        `INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id, status, finished_at)
+         VALUES ($1, $2, $3, 'completed', now()) RETURNING id`,
+        [WS_E, SEQ_E, E_REBOTADA],
+      )
+    ).rows[0] as { id: string };
+    await assert.rejects(e(`UPDATE outbound_enrollment SET status = 'active' WHERE id = $1`, [id]), optOut);
+  });
+
+  test('el enlace de baja se escribe al reclamar: si el envío no se confirma, el del primer intento sigue dando de baja', async () => {
+    const sinEnlace = (intento: number) => (err: { code?: string; message?: string }) =>
+      err.code === '23514' && new RegExp(`intento ${intento}\\) sin su enlace de baja`).test(err.message ?? '');
+    const reescribe = (err: { code?: string; message?: string }) =>
+      err.code === '23514' && /no se reescribe/.test(err.message ?? '');
+    const { id } = (
+      await e(
+        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+         VALUES ($1, $2, $3, 'email', 'Hola', 'scheduled', now()) RETURNING id`,
+        [WS_E, COMPANY_E, E_CORREO],
+      )
+    ).rows[0] as { id: string };
+    const reclamo = `UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = attempt_count + 1,
+                            recipient_address = 'correo@e.outreach.test' WHERE id = $1`;
+    const enlace = (token: string, intento: number) =>
+      `INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address)
+       VALUES ('${sha256(token)}', '${WS_E}', '${id}', '${E_CORREO}', ${intento}, 'correo@e.outreach.test')`;
+
+    // Reclamar un correo sin escribir su enlace no se confirma: el COMMIT falla y el toque sigue en la cola.
+    await assert.rejects(w(reclamo, [id]), sinEnlace(1));
+    assert.equal((await toque(id)).status, 'scheduled');
+    // Si en la misma transacción lo cancela antes de llamar al proveedor (4.1), no hace falta enlace: no sale nada.
+    await t.db.asWorker(async (tx) => {
+      await tx.query(reclamo, [id]);
+      await tx.query(`UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'outreach_disabled' WHERE id = $1`, [id]);
+    });
+    await w(`UPDATE outbound_touch SET status = 'scheduled', attempt_count = 0 WHERE id = $1`, [id]);
+
+    // Intento 1: reclama y escribe el enlace, y llama a Gmail. La respuesta se pierde (timeout): nadie anota sent_at.
+    await t.db.asWorker(async (tx) => {
+      await tx.query(reclamo, [id]);
+      await tx.query(enlace(TOKEN_E1, 1));
+    });
+    // El rescate del zombi lo devuelve a la cola, para otro intento.
+    await w(`UPDATE outbound_touch SET status = 'scheduled', next_retry_at = now() WHERE id = $1`, [id]);
+
+    // Intento 2: el enlace del 1 no vale para el 2, ni se repite su número.
+    await assert.rejects(w(reclamo, [id]), sinEnlace(2));
+    await assert.rejects(
+      t.db.asWorker(async (tx) => {
+        await tx.query(reclamo, [id]);
+        await tx.query(enlace(TOKEN_E2, 1));
+      }),
+      /outbound_optout_link_touch_idx/,
+    );
+    await t.db.asWorker(async (tx) => {
+      await tx.query(reclamo, [id]);
+      await tx.query(enlace(TOKEN_E2, 2));
+    });
+    // Esta vez el proveedor confirma: el toque sale y su enlace anota sent_at, una vez.
+    await t.db.asWorker(async (tx) => {
+      await tx.query(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), provider_message_id = 'gmail-e-2' WHERE id = $1`, [id]);
+      await tx.query(`UPDATE outbound_optout_link SET sent_at = now() WHERE token_hash = $1`, [sha256(TOKEN_E2)]);
+    });
+    await assert.rejects(w('UPDATE outbound_optout_link SET sent_at = now() WHERE token_hash = $1', [sha256(TOKEN_E2)]), reescribe);
+    await assert.rejects(
+      w(`UPDATE outbound_optout_link SET recipient_address = 'otra@e.outreach.test' WHERE token_hash = $1`, [sha256(TOKEN_E1)]),
+      reescribe,
+    );
+    const enlaces = await sinRls<{ attempt: number; enviado: boolean }>(
+      `SELECT attempt, sent_at IS NOT NULL AS enviado FROM outbound_optout_link WHERE touch_id = '${id}' ORDER BY attempt`,
+    );
+    assert.deepEqual(enlaces.map((x) => ({ ...x })), [{ attempt: 1, enviado: false }, { attempt: 2, enviado: true }]);
+
+    // La persona pulsa el enlace del PRIMER correo, el que quizá salió sin que nadie lo confirmara: se da de baja.
+    const { r } = await baja(TOKEN_E1);
+    assert.equal(r.status, 'ok');
+    assert.equal(r.status === 'ok' && r.touchId, id);
+    const [ficha] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${E_CORREO}'`);
+    assert.equal(ficha?.opted_out, true);
+    const [clic] = await sinRls<{ reclamado: boolean; enviado: boolean }>(
+      `SELECT claimed_at IS NOT NULL AS reclamado, sent_at IS NOT NULL AS enviado
+         FROM outbound_optout_event WHERE token_hash = '${sha256(TOKEN_E1)}'`,
+    );
+    assert.deepEqual({ ...clic }, { reclamado: true, enviado: false });
+  });
+
+  test('outbound_health lee la ventana, no la historia: lo viejo no cuenta y lastSentAt es el último enviado', async () => {
+    await t.admin(`
+      INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, sent_at, opened_at,
+                                  replied_at, status_changed_at, created_at) VALUES
+        ('${WS_E}', '${COMPANY_E}', '${E_LINKEDIN}', 'linkedin', 'Viejo', 'sent', now() - interval '60 days',
+         now() - interval '59 days', now() - interval '58 days', now() - interval '60 days', now() - interval '61 days'),
+        ('${WS_E}', '${COMPANY_E}', '${E_LINKEDIN}', 'linkedin', 'Fallo viejo', 'failed', NULL, NULL, NULL,
+         now() - interval '40 days', now() - interval '41 days');
+    `);
+    const h = await t.db.withWorkspace(WS_E, (tx) => outboundHealth(tx, 24));
+    // Lo de hoy: el LinkedIn y el correo del intento 2, que salieron en las pruebas de arriba.
+    assert.equal(h.window.sent, 2);
+    assert.equal(h.window.failed, 0);
+    assert.equal(h.window.opened, 0);
+    assert.equal(h.window.replied, 0);
+    assert.deepEqual(h.byChannel, { email: { sent: 1, failed: 0 }, linkedin: { sent: 1, failed: 0 } });
+    assert.deepEqual(h.queue, { draft: 0, scheduled: 0, due: 0, processing: 0, stuck: 0, held: 0 });
+    const [ultimo] = await sinRls<{ ultimo: string }>(
+      `SELECT max(sent_at)::text AS ultimo FROM outbound_touch WHERE workspace_id = '${WS_E}' AND status = 'sent'`,
+    );
+    assert.equal(new Date(h.lastSentAt!).getTime(), new Date(ultimo!.ultimo).getTime());
+    // Con la ventana más larga (720 h, 30 días), el envío de hace 60 días y el fallo de hace 40 siguen fuera.
+    const mes = await t.db.withWorkspace(WS_E, (tx) => outboundHealth(tx, 720));
+    assert.equal(mes.window.sent, 2);
+    assert.equal(mes.window.failed, 0);
   });
 });

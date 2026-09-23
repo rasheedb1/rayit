@@ -405,12 +405,23 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
 export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
   'outbound_touch.outbound_touch_worker_columns':
     'provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, un toque con esas ' +
-    'pruebas no cambia de contacto ni de empresa, y un toque en sent no vuelve atrás (0037 §4.2). Sin él, un ' +
-    'workspace movía un envío de verdad a la ficha de otra persona, o devolvía a la cola un correo que ya salió ' +
-    '(un segundo envío)',
+    'pruebas no cambia de contacto ni de empresa, un toque en sent no vuelve atrás, y el estado processing solo ' +
+    'lo pone y lo quita el despachador (0037 §4.2). Sin él, un workspace movía un envío de verdad a la ficha de ' +
+    'otra persona, devolvía a la cola un correo que ya salió (un segundo envío), o ponía un toque en processing ' +
+    'para dejarlo fuera de public_optout y de disable_outreach, que no tocan lo reclamado',
   'outbound_touch.outbound_touch_keep_sent':
-    'un toque con pruebas de envío no se borra desde la aplicación (0037 §4.2): es el registro de lo que la ' +
-    'plataforma envió. Las cascadas de empresa y workspace sí pasan; el enlace de baja vive aparte',
+    'un toque con pruebas de envío, o en processing, no se borra desde la aplicación (0037 §4.2): es el registro ' +
+    'de lo que la plataforma envió o está enviando. Las cascadas de empresa y workspace sí pasan; el enlace de ' +
+    'baja vive aparte',
+  'outbound_touch.outbound_touch_optout_link_required':
+    'un correo no queda reclamado (processing) sin el enlace de baja de su intento en outbound_optout_link (0037 ' +
+    '§4.5), comprobado al COMMIT. Sin él, un correo podía salir con un token que la base nunca guardó (el ' +
+    'despachador cae entre el proveedor y el COMMIT) y la baja respondía not_found',
+  'outbound_touch.outbound_touch_optout_link_required_insert':
+    'lo mismo que outbound_touch_optout_link_required para un toque que nace en processing',
+  'outbound_optout_link.outbound_optout_link_check':
+    'un enlace de baja dice lo mismo que su toque al crearse, y después no se reescribe: solo se anota sent_at una ' +
+    'vez (0037 §4.5). Sin él, el despachador podía mover a otra dirección la baja de un correo que ya salió',
   'outbound_touch.outbound_touch_enrollment_check':
     'un toque es del mismo workspace y contacto que su enrolamiento, y su paso es de la misma secuencia (0037 ' +
     '§4.4). Sin él, un toque del enrolamiento de X con contact_id Y se saltaba la regla de la baja, que mira ' +
@@ -423,8 +434,8 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
     'llm_daily_cap_usd lo fija la plataforma (0037 §6.1): la llave de Anthropic es de On Cue, y con un UPDATE un ' +
     'workspace se quitaba su propio techo de gasto',
   'outbound_enrollment.outbound_enrollment_optout':
-    'no se enrola ni se reanuda a quien pidió la baja (0037 §3.3): sin él, el alta quedaba viva y el motor chocaba ' +
-    'con la regla de outbound_touch en cada vuelta',
+    'no se enrola ni se reanuda a quien pidió la baja, por su ficha o por su correo en la lista global (0037 §3.3): ' +
+    'sin él, el alta quedaba viva y el motor chocaba con la regla de outbound_touch en cada vuelta',
   'outbound_touch.outbound_touch_optout':
     'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0037 §4.1)',
 };
