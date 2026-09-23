@@ -73,6 +73,16 @@ const TITULO_DE_PASO = ["paso-subir", "paso-formato", "paso-revisar", "paso-hech
  */
 const TITULO_PASO = "text-sm font-semibold text-ink outline-none!";
 
+/**
+ * Las pastillas de aviso del paso 3 llevan frases enteras («3 ya tienen
+ * una lectura de esta fecha o posterior: no se guardarán»). La Pill del
+ * kit es de una sola línea; aquí se le permite partir la frase y no pasar
+ * del ancho disponible, para que a 400 px no se coma el margen. La
+ * utilidad es importante porque la Pill ya trae `whitespace-nowrap` y el
+ * orden de las clases no decide cuál gana. El punto no se encoge.
+ */
+const PILL_AVISO = "whitespace-normal! max-w-full *:shrink-0";
+
 interface Resultado {
   videos: number;
   nuevos: number;
@@ -883,10 +893,10 @@ function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo;
           <span className="text-ink-2">
             {t.resumen(revision.conNovedad, f.int(revision.conNovedad), f.int(revision.filas.length), revision.sinNovedad > 0)}
           </span>
-          {noEntran > 0 && <Pill kind="bad">{t.errores(noEntran, f.int(noEntran))}</Pill>}
-          {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
+          {noEntran > 0 && <Pill kind="bad" className={PILL_AVISO}>{t.errores(noEntran, f.int(noEntran))}</Pill>}
+          {revision.avisos > 0 && <Pill kind="warn" className={PILL_AVISO}>{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
           {revision.yaEstaban > 0 && <span>{t.yaEstaban(revision.yaEstaban, f.int(revision.yaEstaban))}</span>}
-          {revision.sinNovedad > 0 && <Pill kind="warn">{t.sinNovedad(revision.sinNovedad, f.int(revision.sinNovedad))}</Pill>}
+          {revision.sinNovedad > 0 && <Pill kind="warn" className={PILL_AVISO}>{t.sinNovedad(revision.sinNovedad, f.int(revision.sinNovedad))}</Pill>}
           {revision.duplicadasEnArchivo > 0 && (
             <span>{t.duplicadas(revision.duplicadasEnArchivo, f.int(revision.duplicadasEnArchivo))}</span>
           )}
