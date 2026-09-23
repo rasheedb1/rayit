@@ -35,9 +35,9 @@ import {
   AGE_CUTS_HOURS, MIN_SAMPLE_FOR_BASELINE, engagementRate, medianOf, percentileOf, savesPer1k,
   type AgeCut,
 } from '@mc/core';
+import { mapLimit } from '../../runner/concurrency.ts';
 import type { Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
-import { mapLimit } from './oauth-refresh.ts';
 
 export interface ComputeBaselinePayload extends JobPayload {
   /** Solo este creador. */

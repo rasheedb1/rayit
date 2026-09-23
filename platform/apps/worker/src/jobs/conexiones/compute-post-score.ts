@@ -31,11 +31,12 @@
  * escritura llevan workspace_id explícito.
  */
 import { AGE_CUTS_HOURS, isOutlier, outlierTier, savesPer1k, engagementRate, versusMedian, type AgeCut, type OutlierTier } from '@mc/core';
-import type { Queryable } from '../../runner/db.ts';
-import { num } from './compute-baseline.ts';
-import { defineJob, type JobPayload } from '../../runner/registry.ts';
-import { mapLimit, PLATFORM_NAMES } from './oauth-refresh.ts';
 import { isPlatformId } from '@mc/connectors';
+import { mapLimit } from '../../runner/concurrency.ts';
+import type { Queryable } from '../../runner/db.ts';
+import { defineJob, type JobPayload } from '../../runner/registry.ts';
+import { num } from './compute-baseline.ts';
+import { PLATFORM_NAMES } from './oauth-refresh.ts';
 
 export interface ComputePostScorePayload extends JobPayload {
   /** Puntuar un solo video (p. ej. justo después de recolectar sus métricas). */
