@@ -101,6 +101,25 @@ test('catálogo más largo que el tope: seguidores sí, vistas null con la razó
   assert.match(p.metricsNote!, /ENSEMBLEDATA_MAX_POSTS/);
 });
 
+test('el tope es de gasto, no de datos: lo que el proveedor mande de más se suma, no se recorta', async () => {
+  // Con el tope en 2 el proveedor igual manda sus 10 (un bloque) y cierra
+  // el catálogo: recortar a 2 daría un total MÁS BAJO que el real,
+  // etiquetado como «todo el catálogo».
+  const { src } = await source([['user.info', 'ok'], ['user.posts', 'ok']], { ...ENV, ENSEMBLEDATA_MAX_POSTS: '2' });
+  const p = await src.lookup('laura.cocinafacil');
+  assert.equal(p.metrics!.views, 65401);
+  assert.deepEqual(p.coverage, { postsRead: 3, postsTotal: 3, maxPosts: 2, complete: true });
+});
+
+test('el proveedor dice que hay más y no manda nada: no se afirma un total', async () => {
+  const { src, log } = await source([['user.info', 'ok'], ['user.posts', 'vacia_con_cursor']]);
+  const p = await src.lookup('laura.cocinafacil');
+  assert.equal(p.metrics!.followers, 128400);
+  assert.equal(p.metrics!.views, null);
+  assert.equal(p.coverage!.complete, false);
+  assert.equal(log.entries.filter((e) => e.endpoint === 'ensembledata.tt.user.posts').length, 1, 'no se queda en bucle gastando unidades');
+});
+
 test('un video sin play_count: el total tampoco se guarda', async () => {
   const { src } = await source([['user.info', 'ok'], ['user.posts', 'sin_play_count']]);
   const p = await src.lookup('laura.cocinafacil');
@@ -170,7 +189,7 @@ test('listPosts entrega el catálogo normalizado para CON-5, sin pasar por el pe
   assert.equal(posts[0]!.metrics.views, 50001);
   assert.equal(posts[0]!.post.external_post_id, '7400000000000000d01');
   assert.equal(posts[0]!.post.url, 'https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01');
-  assert.equal(posts[0]!.post.duration_s, 31);
+  assert.equal(posts[0]!.post.duration_s, 31, 'video.duration del aweme viene en milisegundos');
   assert.deepEqual(posts[0]!.post.hashtags, ['recetafacil']);
   assert.deepEqual(posts[0]!.post.mentions, ['cafealma.co']);
   assert.equal(posts[0]!.post.published_at?.toISOString(), '2026-08-28T16:00:00.000Z');

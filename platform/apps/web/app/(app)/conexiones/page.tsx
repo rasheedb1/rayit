@@ -68,8 +68,10 @@ const COLUMNS: Column<AccountRow>[] = [
     header: "Cifras",
     render: (r) => {
       if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
+      // TikTok primero: autorizar es gratis y da más que el proveedor de
+      // pago, así que la oferta sigue en pie aunque las cifras ya lleguen.
+      if (r.platformId === "tiktok") return <TikTokAuthorize row={r} />;
       if (r.accessMode === "aggregator") return <span className="text-xs text-ink-2">Por proveedor de datos</span>;
-      if (r.platformId === "tiktok" && r.accessMode === "public_profile") return <TikTokAuthorize row={r} />;
       return <span className="text-xs text-ink-2">Públicas por @</span>;
     },
   },
@@ -226,14 +228,20 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
  * TikTok no publica cifras por @: el dueño las desbloquea autorizando una
  * vez (CON-3, detrás de la bandera oauth_connect). El botón abre el
  * diálogo de consentimiento; el callback convierte esta misma fila.
+ *
+ * Con el proveedor de pago contratado (CON-12) las cifras ya llegan, pero
+ * la oferta se mantiene: autorizar es gratis, trae más datos y deja de
+ * gastar unidades.
  */
 function TikTokAuthorize({ row }: { row: AccountRow }) {
-  if (!flags.oauth_connect) return <span className="text-xs text-muted">Sin cifras por @</span>;
+  const origen =
+    row.accessMode === "aggregator" ? <span className="text-xs text-ink-2">Por proveedor de datos</span> : <span className="text-xs text-muted">Sin cifras por @</span>;
+  if (!flags.oauth_connect) return origen;
   const { apps, missing } = loadOAuthApps(process.env);
   const reason = apps.tiktok ? undefined : `TikTok no está configurado en este entorno: faltan ${(missing.tiktok ?? []).join(", ")}.`;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-xs text-muted">Sin cifras por @</span>
+      {origen}
       <ConnectDialog label="TikTok" actionLabel="Autorizar cifras" text={consentText("tiktok")} policyVersion={CONSENT_POLICY_VERSION} action="/conexiones/oauth/tiktok/start" disabledReason={reason} variant="secondary" size="sm" ariaLabel={`Autorizar cifras de @${row.handle ?? row.externalAccountId}`} />
     </div>
   );

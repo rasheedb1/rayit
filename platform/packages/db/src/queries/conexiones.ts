@@ -616,13 +616,16 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
 // ---------------------------------------------------------------------
 
 /**
- * La fila 'public_profile' de esa red con ese handle, si existe y está
- * viva: es la que «Autorizar» debe convertir, para conservar id e historial.
+ * La fila leída por @ de esa red con ese handle —por la fuente oficial o
+ * por el proveedor de pago (CON-12)—, si existe y está viva: es la que
+ * «Autorizar» debe convertir, para conservar id e historial. Si dejara
+ * fuera a las de proveedor, autorizar crearía una cuenta duplicada y la
+ * vieja seguiría gastando unidades.
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
     `SELECT id, secret_ref, deleted_at, status FROM social_connection
-      WHERE platform_id = $1 AND access_mode = 'public_profile' AND deleted_at IS NULL AND lower(handle) = lower($2)`,
+      WHERE platform_id = $1 AND access_mode IN ('public_profile', 'aggregator') AND deleted_at IS NULL AND lower(handle) = lower($2)`,
     [platformId, handle],
   );
   const r = rows[0];

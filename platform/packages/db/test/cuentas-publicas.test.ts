@@ -203,6 +203,17 @@ describe('cuentas por proveedor de datos (CON-12)', () => {
     assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false, 'otro workspace no la mueve');
   });
 
+  test('autorizar una cuenta que ya iba por proveedor convierte la misma fila, no crea una segunda', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'porproveedor', externalAccountId: 'porproveedor', accessMode: 'aggregator' }));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'PorProveedor')))?.id, id, 'la busca «Autorizar» aunque vaya por proveedor');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {
+      externalAccountId: 'open_id_porproveedor', handle: 'porproveedor', displayName: null, avatarUrl: null, profileUrl: null, accountType: 'creator',
+      secretRef: 'enc:tiktok:88888888-8888-4888-8888-888888888888', scopes: ['user.info.basic'], accessExpiresAt: new Date('2026-09-24T00:00:00Z'), refreshExpiresAt: null,
+    }));
+    const filas = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).filter((r) => r.handle === 'porproveedor');
+    assert.deepEqual(filas.map((r) => [r.id, r.accessMode]), [[id, 'direct_oauth']], 'una sola fila, la misma, y deja de gastar unidades');
+  });
+
   test('una cuenta autorizada por su dueño no se degrada a aggregator', async () => {
     const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'duenoautorizado', externalAccountId: 'open_id_dueno' }));
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {

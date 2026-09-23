@@ -224,11 +224,15 @@ export function normalizeEnsembleDataVideo(v: Record<string, unknown>): Normaliz
   };
 }
 
-/** El proveedor manda la duración en milisegundos en `video.duration`; algunos casos la dan en segundos. */
+/**
+ * `video.duration` del objeto aweme de TikTok viene en MILISEGUNDOS. No
+ * se adivina por el tamaño del número: un umbral convertiría un video de
+ * media hora en dos segundos. Si el proveedor cambiara la unidad, se ve
+ * al regrabar el fixture (CON-12 §3).
+ */
 function durationSeconds(video: Record<string, unknown>): number | null {
   const ms = intOrNull(video['duration']);
-  if (ms === null) return null;
-  return ms > 1000 ? Math.round(ms / 1000) : ms;
+  return ms === null ? null : Math.round(ms / 1000);
 }
 
 function shapeChanged(handle: string, detalle: string): PublicLookupError {
@@ -256,6 +260,14 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
   const client = new EnsembleDataClient(core, token, opts);
   const defaultMaxPosts = readMaxPosts(env);
 
+  /**
+   * `maxPosts` es un tope de GASTO, no de datos: acota cuántos bloques se
+   * piden, y lo que el proveedor devuelva de más se conserva —ya se pagó,
+   * y recortarlo daría un total más bajo que el real. `complete` es true
+   * solo cuando el proveedor dijo que no hay más; si el tope cortó la
+   * paginación, o si dijo «hay más» pero no mandó nada, queda en false y
+   * las vistas no se guardan.
+   */
   async function readPosts(handle: string, maxPosts: number, signal?: AbortSignal): Promise<PublicPostsPage> {
     const posts: NormalizedVideo[] = [];
     let cursor: string | null = null;
@@ -265,13 +277,16 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
       const depth = Math.min(ENSEMBLEDATA_MAX_DEPTH_PER_CALL, Math.ceil(pending / ENSEMBLEDATA_POSTS_PER_CHUNK));
       const page: ConnectorResult<Page<NormalizedVideo>> = await client.userPosts(handle, { cursor, depth, signal });
       posts.push(...page.data.items);
-      if (!page.data.hasMore || !page.data.cursor || page.data.items.length === 0) {
+      if (!page.data.hasMore || !page.data.cursor) {
         complete = true;
         break;
       }
+      // Dice que hay más y no manda nada: seguir sería un bucle. No se
+      // afirma que el catálogo esté entero.
+      if (page.data.items.length === 0) break;
       cursor = page.data.cursor;
     }
-    return { posts: posts.slice(0, maxPosts), complete };
+    return { posts, complete };
   }
 
   return {
