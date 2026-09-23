@@ -154,7 +154,7 @@ export class PostgresDatabase implements WorkerDatabase {
         client.release(err instanceof Error ? err : new Error(String(err)));
         throw new Error(
           `No se pudo hacer SET ROLE ${this.#opts.setRole}: ${(err as Error).message}. ` +
-          'El rol con el que se conecta el worker tiene que ser miembro de mc_worker (ver docs/propuestas/CON-2.md).',
+          'El rol con el que se conecta el worker tiene que ser miembro de mc_worker (ver docs/propuestas/WRK.md §1).',
           { cause: err },
         );
       }

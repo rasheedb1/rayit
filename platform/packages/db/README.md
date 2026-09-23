@@ -32,6 +32,7 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
 | Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionPermissions } from '@mc/db/queries/accesos'` — las llaves de `membership.role_id → role_permission`, con los dos ids de la transacción; la web las convierte en permisos del catálogo (`apps/web/lib/permisos`) |
+| Salud del worker (WRK) | `@mc/db/queries/worker` | `getWorkerHealth(q)`: última corrida, última buena y fallos desde entonces por cada `job_definition`; `workerDataAsOf(salud)` es «Datos al <fecha>». Recibe cualquier ejecutor de SQL, pero solo sirve como `mc_worker`: las corridas de cron tienen `workspace_id` NULL y `job_run` tiene RLS, así que como `mc_app` sale vacía (docs/propuestas/WRK.md §4) |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
 | Bitácora | `@mc/db` | `import { audit, auditAsJob } from '@mc/db'` |
