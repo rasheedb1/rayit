@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0034 · Un ingreso de plataforma por periodo (FIN-7)
+-- 0036 · Un ingreso de plataforma por periodo (FIN-7)
 -- ---------------------------------------------------------------------
 -- Qué hace: da a `platform_payout` la clave natural que nunca tuvo, para
 -- que volver a subir el mismo CSV de AdSense o de Creator Rewards no
@@ -16,10 +16,12 @@
 -- moneda, este monto—, y esa identidad es la que trae el archivo: los
 -- CSV no dan un identificador de transacción.
 --
--- Número: 0033 es la más alta de TODAS las ramas de origin (main y
--- rasheed/integracion). 0024–0033 siguen pendientes de aplicar en
--- Supabase; esta va detrás y no depende de ninguna de ellas, así que el
--- integrador puede renumerarla si otra área eligió también 0034.
+-- Número: 0035 es la más alta de TODAS las ramas (0034_access_control
+-- está en main; 0035_membership_scope en ACC-6 y
+-- 0035_brand_snapshot_por_campana en CAM-3), así que esta es 0036. No
+-- depende de ninguna de las anteriores —solo de platform_payout, que es
+-- de 0008—, así que el integrador puede renumerarla si otra área eligió
+-- también 0036.
 --
 -- Re-ejecutable: CREATE UNIQUE INDEX IF NOT EXISTS. No toca ninguna fila
 -- y no hay filas que romper (no existe ningún INSERT de platform_payout
