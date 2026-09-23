@@ -1244,3 +1244,206 @@ BEGIN
                                          'currency', 'USD'));
 END;
 $$;
+
+
+-- =====================================================================
+-- 9 · La baja desde el enlace público: public_optout(token)
+-- ---------------------------------------------------------------------
+-- La página de baja (VEN-15) se abre SIN sesión y sin workspace, y lo
+-- que tiene que hacer cruza workspaces: la persona que pide la baja deja
+-- de recibir mensajes de TODA la plataforma (0007), así que se cancela
+-- lo pendiente de ese contacto en cualquier workspace, y lo mismo con
+-- las fichas de otros workspaces que tengan su mismo correo. Es la baja
+-- verificable que 0029 §1 reservó para la lista global: la persona pulsó
+-- el enlace de un correo que la plataforma envió de verdad (un toque en
+-- 'sent' con ese token), así que el correo entra en contact_suppression
+-- con reason 'unsubscribe_link'.
+--
+-- Misma forma que los enlaces de Cotizar (0030): una función SECURITY
+-- DEFINER cuyo dueño es mc_public_share (NOLOGIN, sin BYPASSRLS), y
+-- políticas `TO mc_public_share` que abren solo las filas que la propia
+-- función fija en parámetros de la transacción y restaura al salir:
+--
+--   app.public_optout           el sha256 del token: abre el toque
+--   app.public_optout_contacts  los ids de los contactos que se dan de
+--                               baja ('{…}'): abre sus fichas, sus
+--                               toques y sus enrolamientos
+--   app.public_optout_email     el correo del contacto: abre las fichas
+--                               con ese correo en otros workspaces
+--
+-- Para mc_app esos parámetros no significan nada: las políticas son solo
+-- de mc_public_share, y fijarlos a mano en una transacción de la
+-- aplicación no abre ninguna fila. Lo que el rol puede escribir va por
+-- COLUMNA: el estado y el motivo de los toques, el estado de los
+-- enrolamientos y la baja del contacto; nunca su correo, su nombre ni
+-- el cuerpo de un mensaje. La guardia (src/esquema.ts) exige ese
+-- inventario exacto en cada arranque, igual que el de 0030.
+--
+-- La respuesta no dice a cuántos workspaces afectó (quien pulsa el
+-- enlace no tiene por qué saber cuántos creadores le escriben):
+--   {"status":"not_found"}
+--   {"status":"ok","alreadyOptedOut":false,"workspaceId":"…","touchId":"…"}
+-- workspaceId es para el servidor (avisar al creador), no para la página.
+--
+-- Lo que queda abierto y es de VEN-15: el correo sale del Gmail del
+-- creador, así que el enlace también queda en SU carpeta de enviados;
+-- quien lo pulse desde allí da de baja al contacto en toda la
+-- plataforma. Ver la nota de docs/ventas-outreach.md que deja VEN-9.
+-- =====================================================================
+
+GRANT CREATE ON SCHEMA public TO mc_public_share;   -- solo mientras dura la migración (ver 0030 §1)
+
+-- ---------------------------------------------------------------------
+-- 9.1 · Lo único que mc_public_share puede tocar para la baja
+-- ---------------------------------------------------------------------
+GRANT SELECT ON outbound_touch, outbound_enrollment, contact TO mc_public_share;
+GRANT UPDATE (status, blocked_reason) ON outbound_touch TO mc_public_share;
+GRANT UPDATE (status) ON outbound_enrollment TO mc_public_share;
+GRANT UPDATE (opted_out, opted_out_at, opted_out_reason) ON contact TO mc_public_share;
+GRANT INSERT ON contact_suppression TO mc_public_share;
+
+-- ---------------------------------------------------------------------
+-- 9.2 · La cerradura: políticas acotadas a lo que fija la función
+-- ---------------------------------------------------------------------
+CREATE POLICY outbound_touch_public_optout ON outbound_touch
+  FOR SELECT TO mc_public_share
+  USING (optout_token_hash = nullif(current_setting('app.public_optout', true), ''));
+
+CREATE POLICY outbound_touch_public_optout_contacts ON outbound_touch
+  FOR SELECT TO mc_public_share
+  USING (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+CREATE POLICY outbound_touch_public_optout_cancel ON outbound_touch
+  FOR UPDATE TO mc_public_share
+  USING (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]))
+  WITH CHECK (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+CREATE POLICY outbound_enrollment_public_optout ON outbound_enrollment
+  FOR SELECT TO mc_public_share
+  USING (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+CREATE POLICY outbound_enrollment_public_optout_cancel ON outbound_enrollment
+  FOR UPDATE TO mc_public_share
+  USING (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]))
+  WITH CHECK (contact_id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+CREATE POLICY contact_public_optout ON contact
+  FOR SELECT TO mc_public_share
+  USING (id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+CREATE POLICY contact_public_optout_email ON contact
+  FOR SELECT TO mc_public_share
+  USING (email = nullif(current_setting('app.public_optout_email', true), '')::citext);
+
+CREATE POLICY contact_public_optout_mark ON contact
+  FOR UPDATE TO mc_public_share
+  USING (id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]))
+  WITH CHECK (id = ANY (nullif(current_setting('app.public_optout_contacts', true), '')::uuid[]));
+
+-- ---------------------------------------------------------------------
+-- 9.3 · La puerta
+-- ---------------------------------------------------------------------
+-- Los parámetros se fijan con set_config(…, true) —de la transacción— y
+-- se restauran al salir, también si algo lanza. Por qué no con la
+-- cláusula SET de CREATE FUNCTION: ver la cabecera de 0030.
+CREATE FUNCTION public_optout(p_token text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  antes_token    text := coalesce(current_setting('app.public_optout', true), '');
+  antes_contacts text := coalesce(current_setting('app.public_optout_contacts', true), '');
+  antes_email    text := coalesce(current_setting('app.public_optout_email', true), '');
+  resumen   text;
+  toque     uuid;
+  espacio   uuid;
+  contacto  uuid;
+  correo    citext;
+  ya_baja   boolean;
+  ids       uuid[];
+  r         jsonb;
+BEGIN
+  -- El token lo genera el despachador al azar (al menos 128 bits en
+  -- base64url o hex); lo que no tenga esa forma no se busca.
+  IF p_token IS NULL OR length(p_token) < 16 OR length(p_token) > 200 THEN
+    RETURN jsonb_build_object('status', 'not_found');
+  END IF;
+  resumen := encode(sha256(convert_to(p_token, 'UTF8')), 'hex');
+
+  BEGIN
+    PERFORM set_config('app.public_optout', resumen, true);
+    SELECT t.id, t.workspace_id, t.contact_id
+      INTO toque, espacio, contacto
+      FROM outbound_touch t
+     WHERE t.optout_token_hash = resumen
+       AND t.status = 'sent'
+       AND t.contact_id IS NOT NULL
+     ORDER BY t.sent_at DESC NULLS LAST
+     LIMIT 1;
+
+    IF toque IS NULL THEN
+      r := jsonb_build_object('status', 'not_found');
+    ELSE
+      PERFORM set_config('app.public_optout_contacts', format('{%s}', contacto), true);
+      SELECT c.email, c.opted_out INTO correo, ya_baja FROM contact c WHERE c.id = contacto;
+
+      ids := ARRAY[contacto];
+      IF correo IS NOT NULL THEN
+        -- La misma persona en las fichas de otros workspaces.
+        PERFORM set_config('app.public_optout_email', correo::text, true);
+        SELECT array_agg(DISTINCT c.id) INTO ids
+          FROM contact c
+         WHERE c.id = contacto OR c.email = correo;
+        PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
+
+        INSERT INTO contact_suppression (email, reason) VALUES (correo, 'unsubscribe_link')
+        ON CONFLICT (email) DO NOTHING;
+      END IF;
+
+      UPDATE contact
+         SET opted_out = true,
+             opted_out_at = coalesce(opted_out_at, now()),
+             opted_out_reason = coalesce(opted_out_reason, 'Pidió la baja desde el enlace de un correo.')
+       WHERE id = ANY (ids) AND NOT opted_out;
+
+      UPDATE outbound_touch
+         SET status = 'canceled', blocked_reason = 'opted_out'
+       WHERE contact_id = ANY (ids)
+         AND status IN ('draft', 'scheduled', 'processing', 'held');
+
+      UPDATE outbound_enrollment
+         SET status = 'opted_out'
+       WHERE contact_id = ANY (ids)
+         AND status IN ('active', 'paused', 'cooldown');
+
+      r := jsonb_build_object('status', 'ok', 'alreadyOptedOut', coalesce(ya_baja, false),
+                              'workspaceId', espacio, 'touchId', toque);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM set_config('app.public_optout', antes_token, true);
+    PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
+    PERFORM set_config('app.public_optout_email', antes_email, true);
+    RAISE;
+  END;
+
+  PERFORM set_config('app.public_optout', antes_token, true);
+  PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
+  PERFORM set_config('app.public_optout_email', antes_email, true);
+  RETURN r;
+END;
+$$;
+
+COMMENT ON FUNCTION public_optout(text) IS
+  'Baja desde el enlace de un correo (VEN-9, VEN-15): marca contact.opted_out, anota el correo en contact_suppression '
+  'y cancela lo pendiente de ese contacto en cualquier workspace. SECURITY DEFINER de mc_public_share (0037 §9).';
+
+-- ---------------------------------------------------------------------
+-- 9.4 · Privilegios y dueño
+-- ---------------------------------------------------------------------
+REVOKE ALL ON FUNCTION public_optout(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public_optout(text) TO mc_app;
+ALTER FUNCTION public_optout(text) OWNER TO mc_public_share;
+
+REVOKE CREATE ON SCHEMA public FROM mc_public_share;
