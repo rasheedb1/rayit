@@ -72,6 +72,23 @@ export interface TemplateStep {
   guidance_es: string;
 }
 
+/** Lo que devuelve outbound_health(workspace, hours) (0037 §8.6). Los instantes, en ISO. */
+export interface OutboundHealth {
+  enabled: boolean;
+  disabledReason: string | null;
+  disabledAt: string | null;
+  shouldPause: boolean;
+  since: string;
+  hours: number;
+  queue: Record<'draft' | 'scheduled' | 'due' | 'processing' | 'stuck' | 'held', number>;
+  window: Record<'sent' | 'failed' | 'canceled' | 'opened' | 'replied' | 'optedOut', number>;
+  byChannel: Partial<Record<(typeof OUTBOUND_CHANNELS)[number], { sent: number; failed: number }>>;
+  breakersOpen: string[];
+  accountsDown: number;
+  lastSentAt: string | null;
+  llm: { spentToday: number; dailyCap: number; currency: 'USD' };
+}
+
 /** Las funciones de 0037 que el código llama por SQL, con su firma. */
 export const OUTREACH_FUNCTIONS = {
   incrementIfUnderCap: 'increment_if_under_cap(uuid,text,integer)',

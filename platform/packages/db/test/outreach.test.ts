@@ -18,7 +18,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { OUTREACH_FUNCTIONS } from '../src/schema/outreach.ts';
+import { OUTREACH_FUNCTIONS, type OutboundHealth } from '../src/schema/outreach.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '00000037-0000-4000-8000-00000000000a';
@@ -350,7 +350,7 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
 
   test('outbound_health devuelve la salud en jsonb, con la cola y el motivo del apagado', async () => {
     const h = await t.db.withWorkspace(WS_A, async (tx) =>
-      (await tx.query<{ h: Record<string, any> }>(`SELECT outbound_health('${WS_A}', 72) AS h`)).rows[0]!.h,
+      (await tx.query<{ h: OutboundHealth }>(`SELECT outbound_health('${WS_A}', 72) AS h`)).rows[0]!.h,
     );
     assert.equal(h.enabled, false);
     assert.equal(h.disabledReason, 'Revisión de la cuenta');
