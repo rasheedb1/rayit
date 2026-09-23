@@ -55,7 +55,7 @@ export const WINDOW_POSTS = 20;
  * view) daría un numeric fuera de rango y tumbaría la corrida entera
  * con un error que ningún reintento arregla. Se recorta y se avisa.
  */
-const TOPES = {
+export const TOPES = {
   /** numeric(14,2) */
   views: 999_999_999_999.99,
   /** numeric(8,6) */
@@ -64,7 +64,29 @@ const TOPES = {
   savesPer1k: 999_999.9999,
   /** numeric(6,5): completion_rate y skip_rate_3s son proporciones 0..1 */
   rate: 9.99999,
+  /** numeric(8,3): los cuatro «× mediana» de post_score */
+  multiplo: 99_999.999,
 } as const;
+
+/**
+ * La edad mínima que debe tener una lectura para contar como «medida en
+ * ese corte»: la del corte anterior.
+ *
+ * post_metrics_at_cut entrega la última lectura que no se pasó del
+ * corte, y eso, con la recolección al día, es justo lo que se quiere.
+ * Pero si la recolección se interrumpió —una cuenta en needs_reauth— la
+ * última lectura de un video de 31 días puede ser la de las 60 horas, y
+ * compararla contra la mediana de los 30 días diría «te fue diez veces
+ * peor» cuando la verdad es que no hay dato. Con la banda, ese video se
+ * puntúa en el corte que SÍ midió (72 h) y no ensucia la mediana de los
+ * demás.
+ */
+export const BANDAS: ReadonlyArray<{ cut: AgeCut; minAge: number }> = AGE_CUTS_HOURS.map((cut, i) => ({
+  cut,
+  minAge: i === 0 ? 0 : AGE_CUTS_HOURS[i - 1]!,
+}));
+export const CORTES = BANDAS.map((b) => b.cut);
+export const EDADES_MINIMAS = BANDAS.map((b) => b.minAge);
 
 /** Una lectura de un video en un corte, tal como la devuelve post_metrics_at_cut. */
 interface CandidateRow extends Record<string, unknown> {
@@ -96,7 +118,7 @@ export function num(value: unknown): number | null {
 }
 
 /** Recorta al tope de la columna. Devuelve también si hubo recorte, para avisarlo. */
-function cap(value: number | null, max: number): { value: number | null; capped: boolean } {
+export function cap(value: number | null, max: number): { value: number | null; capped: boolean } {
   if (value === null) return { value: null, capped: false };
   if (value > max) return { value: max, capped: true };
   if (value < -max) return { value: -max, capped: true };
@@ -182,14 +204,14 @@ export async function selectWindow(
               row_number() OVER (PARTITION BY p.workspace_id, p.creator_id, p.platform_id, m.cut_hours
                                  ORDER BY p.published_at DESC, p.id) AS rn
          FROM post p
-         JOIN post_metrics_at_cut m ON m.post_id = p.id
-        WHERE m.cut_hours = ANY($1::int[])
-          AND p.deleted_on_platform = false
+         JOIN unnest($1::int[], $2::int[]) AS c(cut_hours, min_age) ON true
+         JOIN post_metrics_at_cut m ON m.post_id = p.id AND m.cut_hours = c.cut_hours AND m.age_hours > c.min_age
+        WHERE p.deleted_on_platform = false
           AND p.published_at IS NOT NULL
-          AND p.published_at <= $2::timestamptz - make_interval(hours => m.cut_hours)
-          AND ($3::uuid IS NULL OR p.workspace_id = $3)
-          AND ($4::uuid IS NULL OR p.creator_id = $4)
-          AND ($5::text IS NULL OR p.platform_id = $5)
+          AND p.published_at <= $3::timestamptz - make_interval(hours => c.cut_hours)
+          AND ($4::uuid IS NULL OR p.workspace_id = $4)
+          AND ($5::uuid IS NULL OR p.creator_id = $5)
+          AND ($6::text IS NULL OR p.platform_id = $6)
      )
      SELECT workspace_id, creator_id, platform_id, cut_hours, post_id,
             views::text AS views, reach::text AS reach, likes::text AS likes,
@@ -197,10 +219,11 @@ export async function selectWindow(
             total_interactions::text AS total_interactions,
             completion_rate::text AS completion_rate, skip_rate_3s::text AS skip_rate_3s
        FROM ventana
-      WHERE rn <= $6
+      WHERE rn <= $7
       ORDER BY workspace_id, creator_id, platform_id, cut_hours`,
     [
-      [...AGE_CUTS_HOURS],
+      CORTES,
+      EDADES_MINIMAS,
       now.toISOString(),
       payload.workspaceId ?? null,
       payload.creatorId ?? null,
@@ -240,6 +263,9 @@ export const computeBaselineJob = defineJob<ComputeBaselinePayload>('compute.bas
   await mapLimit([...cuentas.values()], ctx.definition.maxConcurrency, async ({ cuenta, cortes }) => {
     if (ctx.signal.aborted) return;
     const log = ctx.logger.child({ workspaceId: cuenta.workspaceId, creatorId: cuenta.creatorId, platform: cuenta.platformId });
+    // Los conteos se suman DESPUÉS del commit: si la transacción se
+    // deshace, job_run.metadata no puede decir que escribió lo que no está.
+    const hecho = { escritas: 0, repetidas: 0, fiables: [] as number[] };
     try {
       await ctx.db.transaction(async (tx) => {
         for (const cut of AGE_CUTS_HOURS) {
@@ -265,14 +291,17 @@ export const computeBaselineJob = defineJob<ComputeBaselinePayload>('compute.bas
           );
           if (escrita.length === 0) {
             // Misma (creador, red, corte, computed_at): un reintento de la misma corrida. Ya está escrita.
-            repetidas += 1;
+            hecho.repetidas += 1;
             continue;
           }
-          escritas += 1;
-          workspaces.add(cuenta.workspaceId);
-          if (b.isReliable) fiables[String(cut)] = (fiables[String(cut)] ?? 0) + 1;
+          hecho.escritas += 1;
+          if (b.isReliable) hecho.fiables.push(cut);
         }
       });
+      escritas += hecho.escritas;
+      repetidas += hecho.repetidas;
+      if (hecho.escritas > 0) workspaces.add(cuenta.workspaceId);
+      for (const cut of hecho.fiables) fiables[String(cut)] = (fiables[String(cut)] ?? 0) + 1;
     } catch (err) {
       fallidas.push(`${cuenta.creatorId}:${cuenta.platformId}`);
       log.warn('no se pudo escribir la línea base de esta cuenta', { err });

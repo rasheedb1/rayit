@@ -297,13 +297,18 @@ SQL suelto ni de una pantalla.
 Las reglas que hay que saber antes de tocarlos:
 
 - **El corte manda.** Un video se puntúa en el **mayor** corte de
-  `AGE_CUTS_HOURS` (24, 72, 168, 720 h) que ya alcanzó, contra la línea
-  base de ESE corte, y el corte queda escrito en `age_hours_cut`. Un
-  video de menos de 24 h no recibe fila: compararlo sería medirlo a otra
-  edad que los demás.
+  `AGE_CUTS_HOURS` (24, 72, 168, 720 h) que ya alcanzó **y midió**,
+  contra la línea base de ESE corte, y el corte queda escrito en
+  `age_hours_cut`. Un video de menos de 24 h no recibe fila: compararlo
+  sería medirlo a otra edad que los demás.
+- **«Midió» es la banda del corte** (`BANDAS`, en `compute-baseline.ts`):
+  la lectura tiene que tener más horas que el corte anterior. Si a una
+  cuenta se le dejó de recolectar, su video de 31 días con la última
+  lectura a las 60 h se puntúa a las 72 h —lo que de verdad midió— y no
+  a los 30 días con una cifra de hace un mes.
 - **La ventana son los últimos `window_posts` (20) videos** que de
-  verdad llegaron al corte —edad cumplida **y** lectura en
-  `post_metrics_at_cut`—, sin los `deleted_on_platform`.
+  verdad llegaron al corte —edad cumplida **y** lectura dentro de la
+  banda—, sin los `deleted_on_platform`.
 - **Un nulo no es un cero.** Sin ocho videos en ese corte,
   `views_vs_median` y `outlier_tier` quedan en `NULL` (la fila se
   escribe igual, con sus views reales). `is_outlier` es `NOT NULL`, así
@@ -318,15 +323,18 @@ Las reglas que hay que saber antes de tocarlos:
   cambia con el paso del tiempo (un video de seis días y medio entra
   mañana en el corte de 168 h con la lectura que ya tiene). Sobre el
   seed son 889 ms las 16 líneas base y 3,3 s los 59 puntajes.
-- **Un aviso por video y por nivel.** El registro de «ya avisé» es la
-  propia tabla `notification` (`kind` + `entity_id`), no una fecha: así
-  un video que sube de `outlier` a `breakout` avisa la segunda vez, y
-  ninguna corrida repite la primera.
-- **Contra Supabase necesitan la migración `0024`** (`security_invoker`
-  en las vistas): los dos leen `post_metrics_at_cut`, y una vista sin esa
-  opción corre con los privilegios de su dueño, así que `mc_worker` —que
-  se salta RLS por rol— no se la salta a través de la vista y vería cero
-  filas. Detalle en [docs/propuestas/CON-6.md](../../../docs/propuestas/CON-6.md) §5.
+- **Un aviso por video, y solo cuando SUBE de nivel.** El registro de
+  «ya avisé» es la propia tabla `notification` (`kind` + `entity_id`),
+  no una fecha: un video que sube de `outlier` a `breakout` avisa la
+  segunda vez, ninguna corrida repite la primera, y uno que BAJA de
+  `breakout` a `outlier` —pasa al cambiar de corte— no manda una buena
+  noticia que no lo es (`debeAvisar()`).
+- **Dependen de la migración `0024`** (`security_invoker` en las
+  vistas), que ya está aplicada: los dos leen `post_metrics_at_cut`, y
+  una vista sin esa opción corre con los privilegios de su dueño, así
+  que `mc_worker` —que se salta RLS por rol— no se la salta a través de
+  la vista y vería cero filas, sin un solo error en el log. Detalle en
+  [docs/propuestas/CON-6.md](../../../docs/propuestas/CON-6.md) §5.
 
 Para probarlos a mano sobre la demo:
 

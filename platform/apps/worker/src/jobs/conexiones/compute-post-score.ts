@@ -30,12 +30,12 @@
  * ctx.db corre como mc_worker y se salta RLS: cada lectura y cada
  * escritura llevan workspace_id explícito.
  */
-import { AGE_CUTS_HOURS, isOutlier, outlierTier, savesPer1k, engagementRate, versusMedian, type AgeCut, type OutlierTier } from '@mc/core';
+import { isOutlier, outlierTier, savesPer1k, engagementRate, versusMedian, OUTLIER_TIERS, type AgeCut, type OutlierTier } from '@mc/core';
 import { isPlatformId } from '@mc/connectors';
 import { mapLimit } from '../../runner/concurrency.ts';
 import type { Queryable } from '../../runner/db.ts';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';
-import { num } from './compute-baseline.ts';
+import { cap, CORTES, EDADES_MINIMAS, num, TOPES } from './compute-baseline.ts';
 import { PLATFORM_NAMES } from './oauth-refresh.ts';
 
 export interface ComputePostScorePayload extends JobPayload {
@@ -43,9 +43,26 @@ export interface ComputePostScorePayload extends JobPayload {
   postId?: string;
 }
 
-/** notification.kind de 0009. Son los dos tramos de outlierTier() que se avisan. */
-const KIND_POR_TRAMO = { outlier: 'outlier', breakout: 'breakout' } as const;
-type TramoAvisable = keyof typeof KIND_POR_TRAMO;
+/**
+ * Los tramos que se avisan son los dos `kind` de notification (0009) con
+ * el mismo nombre, y OUTLIER_TIERS los trae en orden: outlier, breakout.
+ */
+type TramoAvisable = (typeof OUTLIER_TIERS)[number];
+const nivelDe = (kind: string): number => (OUTLIER_TIERS as readonly string[]).indexOf(kind);
+
+/**
+ * Se avisa cuando el video SUBE de nivel, no cada vez que está en uno.
+ *
+ * Deduplicar solo por `kind` no basta: un video que ya avisó 'breakout'
+ * a 5,2× en el corte de 24 h vuelve a caer a 2,4× al pasar al corte de
+ * 72 h —el múltiplo baja porque la mediana de los 3 días es mayor— y
+ * mandaría un 'outlier' que el creador leería como buena noticia
+ * cuando lo que pasó es lo contrario.
+ */
+export function debeAvisar(tramo: TramoAvisable, yaAvisados: readonly string[]): boolean {
+  const mayorAvisado = yaAvisados.reduce((max, k) => Math.max(max, nivelDe(k)), -1);
+  return nivelDe(tramo) > mayorAvisado;
+}
 
 /** Cómo se dice cada corte en español. Las claves son AGE_CUTS_HOURS: cambiar la lista rompe la compilación, no la demo. */
 const CORTE_EN_PALABRAS: Record<AgeCut, string> = {
@@ -91,6 +108,8 @@ export interface ScoreValues {
   engagementVsMedian: number | null;
   tier: OutlierTier | null;
   isOutlier: boolean;
+  /** Múltiplos que hubo que recortar al tope de numeric(8,3). Vacío es lo normal. */
+  capped: string[];
 }
 
 /**
@@ -101,17 +120,29 @@ export interface ScoreValues {
 export function scoreFrom(row: CandidateRow): ScoreValues {
   const sample = row.sample_size ?? 0;
   const views = num(row.views);
-  const contra = (valor: number | null, mediana: number | null): number | null =>
-    valor === null || mediana === null ? null : versusMedian(valor, mediana, sample);
+  const capped: string[] = [];
+  /**
+   * El múltiplo, recortado al tope de su columna. Una mediana de una
+   * view (ocho videos de una view es una muestra «fiable») con un video
+   * de 150 000 daría 150 000× y un numeric field overflow que tumbaría
+   * la transacción del workspace entero, todas las noches.
+   */
+  const contra = (columna: string, valor: number | null, mediana: number | null): number | null => {
+    if (valor === null || mediana === null) return null;
+    const r = cap(versusMedian(valor, mediana, sample), TOPES.multiplo);
+    if (r.capped) capped.push(columna);
+    return r.value;
+  };
 
-  const viewsVsMedian = contra(views, num(row.median_views));
+  const viewsVsMedian = contra('views_vs_median', views, num(row.median_views));
   const tier = outlierTier(viewsVsMedian);
   return {
     viewsAtCut: views,
     viewsVsMedian,
-    reachVsMedian: contra(num(row.reach), num(row.median_reach)),
-    savesVsMedian: contra(savesPer1k(num(row.saves), views), num(row.median_saves_per_1k)),
+    reachVsMedian: contra('reach_vs_median', num(row.reach), num(row.median_reach)),
+    savesVsMedian: contra('saves_vs_median', savesPer1k(num(row.saves), views), num(row.median_saves_per_1k)),
     engagementVsMedian: contra(
+      'engagement_vs_median',
       engagementRate(
         {
           totalInteractions: num(row.total_interactions),
@@ -126,6 +157,7 @@ export function scoreFrom(row: CandidateRow): ScoreValues {
     ),
     tier,
     isOutlier: isOutlier(tier),
+    capped,
   };
 }
 
@@ -159,39 +191,42 @@ export function textoNotificacion(row: CandidateRow, score: ScoreValues, tramo: 
  */
 export async function selectScorable(db: Queryable, payload: ComputePostScorePayload, now: Date): Promise<CandidateRow[]> {
   const { rows } = await db.query<CandidateRow>(
-    `WITH corte AS (
-       SELECT p.id AS post_id, p.workspace_id, p.creator_id, p.platform_id, p.title, p.caption,
-              max(c.cut_hours) AS cut_hours
+    `WITH medido AS (
+       -- Los cortes que el video alcanzó Y midió: la lectura tiene que caer
+       -- dentro de la banda del corte (compute-baseline.ts · BANDAS).
+       SELECT DISTINCT ON (p.id)
+              p.id AS post_id, p.workspace_id, p.creator_id, p.platform_id, p.title, p.caption,
+              c.cut_hours, m.views, m.reach, m.likes, m.comments, m.shares, m.saves, m.total_interactions
          FROM post p
-         JOIN unnest($1::int[]) AS c(cut_hours)
-           ON p.published_at <= $2::timestamptz - make_interval(hours => c.cut_hours)
+         JOIN unnest($1::int[], $2::int[]) AS c(cut_hours, min_age) ON true
+         JOIN post_metrics_at_cut m ON m.post_id = p.id AND m.cut_hours = c.cut_hours AND m.age_hours > c.min_age
         WHERE p.deleted_on_platform = false
           AND p.published_at IS NOT NULL
-          AND ($3::uuid IS NULL OR p.workspace_id = $3)
-          AND ($4::uuid IS NULL OR p.id = $4)
-        GROUP BY p.id, p.workspace_id, p.creator_id, p.platform_id, p.title, p.caption
+          AND p.published_at <= $3::timestamptz - make_interval(hours => c.cut_hours)
+          AND ($4::uuid IS NULL OR p.workspace_id = $4)
+          AND ($5::uuid IS NULL OR p.id = $5)
+        ORDER BY p.id, c.cut_hours DESC
      )
-     SELECT c.post_id, c.workspace_id, c.creator_id, c.platform_id, c.title, c.caption, c.cut_hours,
+     SELECT e.post_id, e.workspace_id, e.creator_id, e.platform_id, e.title, e.caption, e.cut_hours,
             w.locale,
-            m.views::text AS views, m.reach::text AS reach, m.likes::text AS likes,
-            m.comments::text AS comments, m.shares::text AS shares, m.saves::text AS saves,
-            m.total_interactions::text AS total_interactions,
+            e.views::text AS views, e.reach::text AS reach, e.likes::text AS likes,
+            e.comments::text AS comments, e.shares::text AS shares, e.saves::text AS saves,
+            e.total_interactions::text AS total_interactions,
             b.id AS baseline_id, b.sample_size,
             b.median_views::text AS median_views, b.median_reach::text AS median_reach,
             b.median_saves_per_1k::text AS median_saves_per_1k, b.median_engagement::text AS median_engagement
-       FROM corte c
-       JOIN workspace w ON w.id = c.workspace_id
-       JOIN post_metrics_at_cut m ON m.post_id = c.post_id AND m.cut_hours = c.cut_hours
+       FROM medido e
+       JOIN workspace w ON w.id = e.workspace_id
        LEFT JOIN LATERAL (
          SELECT b.id, b.sample_size, b.median_views, b.median_reach, b.median_saves_per_1k, b.median_engagement
            FROM creator_baseline b
-          WHERE b.workspace_id = c.workspace_id AND b.creator_id = c.creator_id
-            AND b.platform_id = c.platform_id AND b.age_hours_cut = c.cut_hours
+          WHERE b.workspace_id = e.workspace_id AND b.creator_id = e.creator_id
+            AND b.platform_id = e.platform_id AND b.age_hours_cut = e.cut_hours
           ORDER BY b.computed_at DESC
           LIMIT 1
        ) b ON true
-      ORDER BY c.workspace_id, c.post_id`,
-    [[...AGE_CUTS_HOURS], now.toISOString(), payload.workspaceId ?? null, payload.postId ?? null],
+      ORDER BY e.workspace_id, e.post_id`,
+    [CORTES, EDADES_MINIMAS, now.toISOString(), payload.workspaceId ?? null, payload.postId ?? null],
   );
   return rows;
 }
@@ -208,16 +243,24 @@ export const computePostScoreJob = defineJob<ComputePostScorePayload>('compute.p
   let noRetrocedidos = 0;
   const outliers: string[] = [];
   const avisados: string[] = [];
+  const recortados: string[] = [];
   const fallidos: string[] = [];
 
   await mapLimit([...porWorkspace.entries()], ctx.definition.maxConcurrency, async ([workspaceId, videos]) => {
     if (ctx.signal.aborted) return;
     const log = ctx.logger.child({ workspaceId });
+    // Los conteos se suman DESPUÉS del commit: si la transacción se
+    // deshace, job_run.metadata no puede nombrar filas que no existen.
+    const hecho = { puntuados: 0, sinLineaBase: 0, noRetrocedidos: 0, outliers: [] as string[], avisados: [] as string[], recortados: [] as string[] };
     try {
       await ctx.db.transaction(async (tx) => {
         for (const row of videos) {
           if (ctx.signal.aborted) return;
           const score = scoreFrom(row);
+          if (score.capped.length > 0) {
+            hecho.recortados.push(row.post_id);
+            log.warn('un múltiplo se recortó al tope de su columna', { postId: row.post_id, columnas: score.capped });
+          }
           const { rows: escrita } = await tx.query<{ post_id: string }>(
             `INSERT INTO post_score
                (post_id, workspace_id, computed_at, baseline_id, age_hours_cut, views_at_cut,
@@ -245,34 +288,42 @@ export const computePostScoreJob = defineJob<ComputePostScorePayload>('compute.p
           if (escrita.length === 0) {
             // La fila guardada mide una edad MAYOR que la de ahora (reloj torcido,
             // published_at corregido). No se reescribe un puntaje por otro medido antes.
-            noRetrocedidos += 1;
+            hecho.noRetrocedidos += 1;
             log.warn('el puntaje guardado mide un corte mayor; se deja como está', { postId: row.post_id, corte: row.cut_hours });
             continue;
           }
-          puntuados += 1;
-          if (score.viewsVsMedian === null) sinLineaBase += 1;
+          hecho.puntuados += 1;
+          if (score.viewsVsMedian === null) hecho.sinLineaBase += 1;
           if (!score.isOutlier || score.tier === null) continue;
 
-          outliers.push(row.post_id);
+          hecho.outliers.push(row.post_id);
           const tramo = score.tier as TramoAvisable;
-          const { titleEs, bodyEs } = textoNotificacion(row, score, tramo);
-          // Una por video y por nivel: la propia notificación es el registro de «ya avisé».
-          const { rows: avisada } = await tx.query<{ id: string }>(
-            `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-             SELECT $1, $2, 'success', $3, $4, 'post', $5, '/resumen'
-              WHERE NOT EXISTS (
-                SELECT 1 FROM notification n
-                 WHERE n.workspace_id = $1 AND n.kind = $2 AND n.entity_type = 'post' AND n.entity_id = $5
-              )
-             RETURNING id`,
-            [workspaceId, KIND_POR_TRAMO[tramo], titleEs, bodyEs, row.post_id],
+          // El registro de «ya avisé» es la propia tabla notification: qué
+          // niveles tiene ya este video. Se avisa solo si este los supera.
+          const { rows: previas } = await tx.query<{ kind: string }>(
+            `SELECT kind FROM notification
+              WHERE workspace_id = $1 AND entity_type = 'post' AND entity_id = $2 AND kind = ANY($3::text[])`,
+            [workspaceId, row.post_id, [...OUTLIER_TIERS]],
           );
-          if (avisada.length === 0) continue;
+          if (!debeAvisar(tramo, previas.map((n) => n.kind))) continue;
+
+          const { titleEs, bodyEs } = textoNotificacion(row, score, tramo);
+          await tx.query(
+            `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+             VALUES ($1, $2, 'success', $3, $4, 'post', $5, '/resumen')`,
+            [workspaceId, tramo, titleEs, bodyEs, row.post_id],
+          );
           await tx.query(`UPDATE post_score SET notified_at = $3 WHERE post_id = $1 AND workspace_id = $2`, [row.post_id, workspaceId, computedAt]);
-          avisados.push(row.post_id);
-          log.info('video destacado: se avisa una vez', { postId: row.post_id, tramo, vecesMediana: score.viewsVsMedian });
+          hecho.avisados.push(row.post_id);
+          log.info('video destacado: se avisa una vez por nivel', { postId: row.post_id, tramo, vecesMediana: score.viewsVsMedian });
         }
       });
+      puntuados += hecho.puntuados;
+      sinLineaBase += hecho.sinLineaBase;
+      noRetrocedidos += hecho.noRetrocedidos;
+      outliers.push(...hecho.outliers);
+      avisados.push(...hecho.avisados);
+      recortados.push(...hecho.recortados);
     } catch (err) {
       fallidos.push(workspaceId);
       log.warn('no se pudo puntuar este workspace', { err });
@@ -290,6 +341,7 @@ export const computePostScoreJob = defineJob<ComputePostScorePayload>('compute.p
       noRetrocedidos,
       outliers,
       avisados,
+      recortados,
       fallidos,
     },
   };

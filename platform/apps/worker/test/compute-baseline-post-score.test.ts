@@ -22,6 +22,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findSecretInDump } from '@mc/connectors';
 import { AGE_CUTS_HOURS, MIN_SAMPLE_FOR_BASELINE } from '@mc/core';
+import { debeAvisar, scoreFrom } from '../src/jobs/conexiones/compute-post-score.ts';
 import { allJobs } from '../src/jobs/index.ts';
 import { jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
@@ -41,6 +42,7 @@ const post = (n: string) => `00000006-0000-4000-8000-0000000${n}`;
 const A_OUT = post('0a001');
 const A_72 = post('0a002');
 const B_BREAK = post('0b001');
+const B_VIEJO = post('0b002');
 const A_NORMALES = Array.from({ length: 8 }, (_, i) => post(`0a1${String(i).padStart(2, '0')}`));
 const A_INSTA = Array.from({ length: 7 }, (_, i) => post(`0a2${String(i).padStart(2, '0')}`));
 const B_NORMALES = Array.from({ length: 9 }, (_, i) => post(`0b1${String(i).padStart(2, '0')}`));
@@ -158,6 +160,14 @@ async function seed(db: PgliteDatabase): Promise<void> {
       curva: [[24, 400], [72, 700], [168, 1_000]] as Curva,
       titulo: `Rutina de gimnasio ${i + 1}`,
     })),
+    // Recolección interrumpida: 31 días de edad y la última lectura es la
+    // de las 60 h. Se puntúa en el corte que SÍ midió, no a los 30 días.
+    {
+      id: B_VIEJO, workspaceId: WS_B, creatorId: MATEO, platform: 'tiktok',
+      horasDesdePublicacion: 31 * 24,
+      curva: [[24, 300], [60, 500]],
+      titulo: 'Lo que hago antes de entrenar',
+    },
     {
       id: B_BREAK, workspaceId: WS_B, creatorId: MATEO, platform: 'tiktok',
       horasDesdePublicacion: 9 * 24,
@@ -338,6 +348,14 @@ test('compute.post_score: el doble de la mediana queda como outlier, y el video 
   assert.ok(md.outliers.includes(A_OUT) && md.outliers.includes(B_BREAK));
 });
 
+test('una lectura vieja no puntúa un video en un corte que nunca midió', async () => {
+  const s = (await puntaje(B_VIEJO))!;
+  assert.equal(s.age_hours_cut, 72, 'tiene 31 días, pero su última lectura es de las 60 h: se mide a las 72, no a los 30 días');
+  assert.equal(Number(s.views_at_cut), 500);
+  const b = await lineasBase(`WHERE workspace_id = '${WS_B}' AND platform_id = 'tiktok' AND age_hours_cut = 168`);
+  assert.equal(b.at(-1)!.sample_size, 10, 'y ese valor inmaduro tampoco entra en la mediana de los 7 días');
+});
+
 test('con menos de ocho videos no se inventa un múltiplo', async () => {
   for (const id of A_INSTA) {
     const s = (await puntaje(id))!;
@@ -417,6 +435,27 @@ test('el corte de un puntaje nunca retrocede', async () => {
   assert.ok((run.metadata as { noRetrocedidos: number }).noRetrocedidos >= 1);
   assert.equal((await puntaje(A_OUT))!.age_hours_cut, 720, 'se deja como está en vez de reescribirlo con una medida a menos edad');
   assert.equal((await notificaciones(A_OUT)).length, 1, 'y tampoco vuelve a avisar');
+});
+
+test('un múltiplo absurdo se recorta en vez de tumbar la corrida del workspace', () => {
+  // numeric(8,3) de post_score: ocho videos de una view son una muestra
+  // «fiable», y un video de 150 000 daría 150 000×, que no cabe.
+  const fila = { sample_size: 8, views: '150000', median_views: '1', reach: null, median_reach: null,
+    saves: null, median_saves_per_1k: null, total_interactions: null, likes: null, comments: null, shares: null,
+    median_engagement: null, post_id: 'x', workspace_id: 'x', creator_id: 'x', platform_id: 'tiktok',
+    locale: 'es-CO', title: null, caption: null, cut_hours: 168, baseline_id: null };
+  const s = scoreFrom(fila);
+  assert.equal(s.viewsVsMedian, 99_999.999);
+  assert.deepEqual(s.capped, ['views_vs_median']);
+  assert.equal(s.tier, 'breakout');
+});
+
+test('solo se avisa cuando el video SUBE de nivel', () => {
+  assert.equal(debeAvisar('outlier', []), true);
+  assert.equal(debeAvisar('breakout', ['outlier']), true, 'de 2× a 5× sí se avisa');
+  assert.equal(debeAvisar('outlier', ['outlier']), false);
+  assert.equal(debeAvisar('breakout', ['breakout', 'outlier']), false);
+  assert.equal(debeAvisar('outlier', ['breakout']), false, 'bajar de breakout a outlier no es una buena noticia que anunciar');
 });
 
 test('nada de lo que escribe CON-6 lleva la referencia del secreto de la cuenta', async () => {

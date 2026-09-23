@@ -70,6 +70,20 @@ Un cero diría «te fue pésimo» cuando la verdad es «todavía no sabemos».
 `is_outlier` es `NOT NULL` en `0003`, así que el «no sabemos» vive en
 `views_vs_median` y en `outlier_tier`, y la pantalla lee esos dos.
 
+**El corte además tiene que estar MEDIDO** (añadido tras `/code-review`).
+No basta con que el video tenga la edad: la lectura que se use tiene que
+caer dentro de la banda de ese corte, es decir, tener más horas que el
+corte anterior (24 h → cualquier lectura; 72 h → una de más de 24 h;
+168 h → una de más de 72 h; 720 h → una de más de 168 h).
+`post_metrics_at_cut` entrega «la última lectura que no se pasó del
+corte», y con la recolección al día eso es justo lo que se quiere; pero
+si la recolección se interrumpió —una cuenta en `needs_reauth`— la
+última lectura de un video de 31 días puede ser la de las 60 horas, y
+compararla contra la mediana de los 30 días diría «te fue diez veces
+peor» cuando la verdad es que no hay dato. Con la banda, ese video se
+puntúa en el corte que **sí** midió (72 h). La misma regla se aplica en
+la ventana de `compute.baseline`, para que los dos lados se midan igual.
+
 Descartado: puntuar cada video en **todos** los cortes que alcanzó.
 `post_score` tiene `PRIMARY KEY (post_id)` — es el puntaje vigente, no
 un histórico—, así que no cabe sin una migración, y la historia no toca
@@ -88,6 +102,11 @@ Las dos condiciones (a) y (b) hacen falta las dos: la vista da «la
 última lectura con `age_hours <= corte`», así que un video de 10 horas
 con una lectura a las 6 aparecería en el corte de 24 h con un valor
 inmaduro y bajaría la mediana de todos los demás.
+
+Y (b) es la **banda** de la decisión 1, no solo «tiene lectura»: la
+lectura debe tener más horas que el corte anterior. Un video al que se
+le dejó de recolectar no ensucia la mediana de los 30 días con las
+views que tenía a los dos días.
 
 - **Videos que entraron por CSV** (RES-2, `source = 'csv_import'`):
   entran. Son datos del creador y su lectura vive en la misma tabla; la
@@ -144,11 +163,18 @@ el mismo video, aunque el job corra todas las noches.
 
 El registro de «ya avisé» **no** es `post_score.notified_at` —que es una
 sola fecha y no sabe de qué nivel— sino la propia tabla `notification`:
-antes de insertar se comprueba si ya existe una con
-`(workspace_id, kind, entity_type = 'post', entity_id = post_id)`. Es
-exacto, sobrevive a cualquier recálculo y no pide columna nueva.
-`notified_at` guarda **la última** notificación enviada, que es lo que
-dice su comentario en `0003`.
+antes de insertar se leen los `kind` que ese video ya tiene. Es exacto,
+sobrevive a cualquier recálculo y no pide columna nueva. `notified_at`
+guarda **la última** notificación enviada, que es lo que dice su
+comentario en `0003`.
+
+Y se avisa **solo cuando el nivel sube** (`debeAvisar()`, añadido tras
+`/code-review`), no cada vez que el video está en un nivel que no ha
+avisado. Deduplicar solo por `kind` tenía un agujero: un video que avisó
+`breakout` a 5,2× en el corte de 24 h cae a 2,4× al pasar al corte de
+72 h —el múltiplo baja porque la mediana de los 3 días es mayor— y
+mandaría un `outlier` que el creador leería como buena noticia cuando lo
+que pasó es lo contrario. El orden lo da `OUTLIER_TIERS` de core.
 
 La fila: `severity = 'success'` (es una buena noticia),
 `title_es`/`body_es` en español con el múltiplo formateado en el
@@ -311,17 +337,29 @@ sembró con el mismo `kind` y `entity_id`.
 
 ## 4. Verificación (23 de septiembre)
 
-El worker de verdad —pg-boss sobre Postgres embebido con las 33
+El worker de verdad —pg-boss sobre Postgres embebido con las 35
 migraciones y los cuatro seeds del repositorio— corriendo los dos jobs
 sobre la demo, y el resultado comparado **fila por fila** contra lo que
 el propio seed calcula en SQL.
 
+El reloj del worker se fija **un segundo después** del `computed_at` con
+el que el seed calculó su línea base (la medianoche UTC de hoy). Con la
+hora real, dos videos del seed ya han cruzado un corte desde la
+medianoche y la comparación mide el paso del tiempo en vez de la
+lógica; con el instante exacto, el `ON CONFLICT` del `UNIQUE` (que
+incluye `computed_at`) rechaza las 16 filas y la comparación se queda
+vacía —verde por no comparar nada—. Un segundo después entra cada fila
+y la elegibilidad de cada corte es la misma, porque los `published_at`
+del seed son horas en punto.
+
 ```
-== compute.baseline: ok · 16 procesados · 0 fallidos (duration_ms 889)
+reloj del worker = 2026-09-23T00:00:01.000Z (computed_at del seed + 1 s)
+
+== compute.baseline: ok · 16 procesados · 0 fallidos (duration_ms 205)
    {"cuentas":4,"workspaces":1,"windowPosts":20,"videosEnVentana":205,
     "fiablesPorCorte":{"24":4,"72":4,"168":4,"720":4},"repetidas":0,"fallidas":[]}
-== compute.post_score: ok · 59 procesados · 0 fallidos (duration_ms 3262)
-   {"candidatos":59,"workspaces":1,"sinLineaBase":0,"noRetrocedidos":0,
+== compute.post_score: ok · 59 procesados · 0 fallidos (duration_ms 188)
+   {"candidatos":59,"workspaces":1,"sinLineaBase":0,"noRetrocedidos":0,"recortados":[],
     "outliers":[…d01,d02,d06,d07,d18,d28],"avisados":[los mismos seis],"fallidos":[]}
 ```
 
@@ -344,7 +382,9 @@ de retención».
 compara `sample_size`, las cinco medianas, los dos percentiles y
 `is_reliable` de las 16 filas: **cero filas distintas**. Y de los 59
 puntajes, **cero** con corte, múltiplo o nivel distinto del que escribió
-el seed.
+el seed. (La regla de la banda no cambia nada aquí porque el seed
+recolecta a diario; está para la cuenta a la que se le dejó de
+recolectar.)
 
 **Los cinco puntajes más altos:**
 
@@ -372,23 +412,33 @@ Es lo correcto (§0.3 · 1).
 Los puntos de miles y la coma decimal salen de `workspace.locale`
 (`es-CO` en el seed), no de un formato escrito a mano.
 
-**Segunda corrida completa**: 6 notificaciones (las mismas), 48 líneas
-base (16 del seed + 16 + 16: la tabla es append-only) y 59 puntajes. Ni
-un aviso repetido, ni un puntaje que retroceda.
+**Segunda corrida completa**: 6 notificaciones (las mismas), 16 líneas
+base y 59 puntajes; ni un aviso repetido, ni un puntaje que retroceda.
+Con el reloj exacto del seed, `compute.baseline` devuelve
+`repetidas: 16` y no escribe nada: dos corridas del mismo instante dejan
+la base igual.
 
----
+**Tiempos** (Postgres embebido, 60 videos, 2 658 lecturas): línea base
+205 ms, puntaje 188 ms. Con el arnés arrancando de cero (migraciones +
+seeds + pg-boss), la verificación entera son 8,5 s.
+
+**La web**: `/resumen` en dev (`pnpm --filter @mc/web dev -p 3163`)
+responde 200 y enseña lo de siempre —«Seguidores en total · 412 mil»,
+las cuatro redes con «datos hasta el 22 sep»—. Es lo esperado: Resumen
+todavía no lee `post_score`; lo hará RES-3.
 
 ## 5. Lo que necesita Rasheed
 
-1. **`0024_aislamiento_por_defecto.sql` es prerrequisito de estos dos
-   jobs en Supabase.** Los dos leen `post_metrics_at_cut`, y una vista
-   sin `security_invoker` corre con los privilegios de su dueño: el
-   worker, que se salta RLS por rol, **no** se la salta a través de la
-   vista y vería cero filas. `0024` pone `security_invoker = on` en
-   todas las vistas (línea 592). Está en `main` y pendiente de aplicar,
-   en la cola única de la nota de CIM-2. Hasta que se aplique, estos
-   jobs dan `0 procesados` contra Supabase (en las pruebas y en la demo
-   embebida corren las 33 migraciones, así que ahí funcionan).
+1. **`0024_aislamiento_por_defecto.sql` era prerrequisito de estos dos
+   jobs, y ya está aplicada.** Los dos leen `post_metrics_at_cut`, y una
+   vista sin `security_invoker` corre con los privilegios de su dueño:
+   el worker, que se salta RLS por rol, **no** se la salta a través de la
+   vista y vería cero filas. Comprobado hoy contra Supabase (solo
+   lectura): `0024` está en `schema_migrations` —igual que 0025 a 0035—
+   y `pg_class.reloptions` de `post_metrics_at_cut` y
+   `creator_post_board` dice `security_invoker=on`. No hay nada que
+   hacer aquí; queda anotado porque es la clase de cosa que rompería
+   estos jobs sin un solo error en el log.
 2. **Nada de migraciones nuevas.** CON-6 no pide ninguna.
 3. **Cuando llegue RES-3**, leer §2 antes de escribir la consulta: la
    regla 1 (`NULL` no es cero) es la que rompe la pantalla si se ignora.
