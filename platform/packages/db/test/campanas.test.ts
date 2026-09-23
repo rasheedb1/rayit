@@ -25,6 +25,12 @@ import {
   CampaignWithoutDatesError,
   openBrandCsvImport,
   InvalidBrandInputError,
+  canRecomputeResult,
+  computeCampaignResult,
+  getCampaignResult,
+  getResultInputs,
+  listCampaignsToCompute,
+  ResultFrozenError,
   type WorkspaceTx,
 } from '../src/index.ts';
 import {
@@ -742,5 +748,109 @@ describe('lo que aporta la marca', () => {
     // La bitácora del workspace ajeno no ve nada de esto.
     const desdeAjeno = await ajeno((tx) => tx.query("SELECT 1 FROM audit_log WHERE action LIKE 'campaign.brand%'"));
     assert.equal(desdeAjeno.rows.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Resultado de campaña (CAM-5)
+// ---------------------------------------------------------------------
+
+describe('resultado de campaña', () => {
+  const ajeno = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_AJENO, fn);
+  const filas = () => laura((tx) => tx.query<{ campaign_id: string }>('SELECT campaign_id FROM campaign_result ORDER BY campaign_id')).then((r) => r.rows.map((x) => x.campaign_id));
+
+  test('sin el GRANT, mc_app no escribe campaign_result y la ficha no ofrece «Recalcular»', async () => {
+    assert.equal(await laura((tx) => canRecomputeResult(tx)), false);
+    await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), /permission denied|permiso/i);
+  });
+
+  test('las entradas de Café Alma salen de la base: lecturas manuales a 720 h, línea base, serie de la marca y aportes', async () => {
+    const r = await laura((tx) => getResultInputs(tx, CAMPAIGN_CAFE_ALMA));
+    assert.ok(r);
+    assert.equal(r.campaign.status, 'reported');
+    assert.equal(r.inputs.amount, '3100000.00');
+    const d01 = r.inputs.posts.find((p) => p.postId === POST_D01_REEL_CAFE_ALMA);
+    const a720 = d01?.cuts.find((c) => c.cutHours === 720);
+    assert.deepEqual([a720?.views, a720?.reach, a720?.interactions], [412000, 296000, 34710], 'a igual edad manda la lectura capturada más tarde (la manual)');
+    assert.ok((d01?.maxAgeHours ?? 0) >= 720);
+    assert.ok(r.inputs.baselines.some((b) => b.platformId === 'instagram' && b.cutHours === 720 && b.reliable));
+    assert.equal(r.inputs.brandSeries[0]?.platformId, 'instagram');
+    assert.equal(r.inputs.brandSeries[0]?.points.length, 60);
+    assert.deepEqual(r.inputs.brandTotals.map((x) => [x.kind, x.source, x.value]), [['code_redemptions', 'brand_manual', '318.00'], ['revenue', 'brand_manual', '8400000.00']]);
+  });
+
+  describe('con el GRANT propuesto', () => {
+    before(async () => {
+      await t.admin('GRANT INSERT, UPDATE ON campaign_result TO mc_app');
+    });
+    after(async () => {
+      await t.admin('REVOKE INSERT, UPDATE ON campaign_result FROM mc_app');
+    });
+
+    test('recalcular Café Alma deja en la tabla los números del seed recalculados, no los del mock', async () => {
+      assert.equal(await laura((tx) => canRecomputeResult(tx)), true);
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.equal(antes?.cpm, '11800.00', 'el seed trae el CPM del mock');
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.ok(r);
+      assert.deepEqual(
+        [r.cutHours, r.views, r.reach, r.interactions, r.saves, r.shares, r.linkClicks, r.reachNonFollowersPct, r.viewsVsMedian],
+        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', '4.496'],
+      );
+      assert.deepEqual(
+        [r.brandFollowersGained, r.brandFollowersBaselineRate, r.brandFollowersCampaignRate, r.codeRedemptions, r.attributedRevenue, r.currency],
+        [1240, '12.9286', '155.0000', 318, '8400000.00', 'COP'],
+      );
+      assert.deepEqual([r.cpm, r.costPerFollower, r.cpa, r.emv], ['4353.93', '2500.00', '9748.43', null]);
+      assert.deepEqual(r.missingInputs, ['brand_csv_sales']);
+    });
+
+    test('recalcular es idempotente: la misma fila, las mismas cifras', async () => {
+      const antes = await filas();
+      const primera = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      const segunda = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.deepEqual(await filas(), antes, 'ninguna fila nueva');
+      assert.deepEqual({ ...segunda, computedAt: '' }, { ...primera, computedAt: '' });
+    });
+
+    test('Hogar Lindo sin posts: views null, no cero; el CPA sale de sus canjes', async () => {
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_HOGAR_LINDO));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_HOGAR_LINDO));
+      assert.deepEqual([r?.views, r?.reach, r?.cpm, r?.cpa], [null, null, null, '26190.48']);
+      assert.deepEqual(r?.missingInputs, ['posts', 'brand_followers', 'brand_csv_sales']);
+    });
+
+    test('Fresko aún no llega a 30 días: resultado parcial a 7 días, con el CSV de CAM-4', async () => {
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
+      assert.equal(r?.cutHours, 168);
+      assert.ok((r?.views ?? 0) > 0);
+      assert.deepEqual(r?.missingInputs, ['brand_followers'], 'las pruebas de CAM-4 le cargaron el CSV de ventas');
+    });
+
+    test('una campaña cerrada conserva su resultado', async () => {
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE));
+      await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_NUTRIVE)), ResultFrozenError);
+      assert.deepEqual(await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE)), antes);
+    });
+
+    test('desde otro workspace no se lee ni se escribe el resultado de Laura', async () => {
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.equal(await ajeno((tx) => getResultInputs(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.equal(await ajeno((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.equal(await ajeno((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.deepEqual(await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), antes);
+    });
+  });
+
+  test('como mc_worker (sin RLS) el filtro explícito de workspace basta', async () => {
+    const r = await t.db.asWorker((tx) => getResultInputs({ workspaceId: WORKSPACE_AJENO, query: (text, params) => tx.query(text, params) }, CAMPAIGN_CAFE_ALMA));
+    assert.equal(r, null, 'la campaña de Laura no existe para el workspace ajeno aunque RLS no aplique');
+    const todas = await t.db.asWorker((tx) => listCampaignsToCompute(tx));
+    assert.ok(todas.some((c) => c.id === CAMPAIGN_CAFE_ALMA && c.workspaceId === WORKSPACE_LAURA));
+    assert.ok(!todas.some((c) => c.id === CAMPAIGN_NUTRIVE), 'closed no se recalcula');
+    assert.deepEqual(await t.db.asWorker((tx) => listCampaignsToCompute(tx, { workspaceId: WORKSPACE_AJENO })), []);
   });
 });
