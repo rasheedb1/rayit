@@ -541,7 +541,8 @@ export const STORIES: readonly Story[] = [
     title: "Cuentas por cobrar",
     desc: "Tabla sobre receivables con aging_bucket, y los cuatro KPIs: por cobrar, vencido, cobrado en el año, apartado para impuestos.",
     done: "Con el seed, coincide con el mock; la factura vencida sale en rojo con sus días.",
-    status: "pendiente",
+    status: "hecho",
+    note: "/finanzas es ahora la pantalla de cobro (listReceivables sobre la vista receivables, ordenada por urgencia en SQL, con Segmented por aging_bucket y buscador en la URL) y el archivo completo de facturas se mudó a /finanzas/facturas, con pestañas entre las dos. Solo lectura: no necesita ACC-1 ni ACC-2. Sin migración. Los esqueletos pasaron a los grupos (inicio) y facturas/(lista) porque en la raíz del segmento envolvían también el detalle de una factura (pulido r4). Pendiente de tu visto bueno en docs/propuestas/FIN-3.md §0.2: si las sumas de getReceivablesKpis deben viajar como null en un workspace sin facturas (hoy son «0» y la pantalla lo dice con una frase).",
   },
   {
     id: "FIN-4", module: "FIN", owner: "nicolas", size: "M", sprint: 5, deps: ["FIN-1", "CON-2"],

@@ -10,8 +10,11 @@ import {
   listCampaignsForInvoice,
   listCompanies,
   listInvoices,
+  listReceivables,
   transitionInvoice,
   InvoiceNotFound,
+  RECEIVABLE_BUCKETS,
+  type ReceivableRow,
 } from '../src/queries/finanzas.ts';
 import { assertWorkspaceId } from '../src/index.ts';
 import {
@@ -135,6 +138,178 @@ describe('los KPIs de Finanzas salen de la vista receivables', () => {
       assert.equal(k.collectedPrevYtd, '29500000.00');
       assert.equal(k.collectedDelta, 0.308);
     }
+  });
+});
+
+describe('FIN-3 · cuentas por cobrar (vista receivables)', () => {
+  const laura = <T,>(fn: (tx: Parameters<Parameters<typeof t.db.withWorkspace>[1]>[0]) => Promise<T>) =>
+    t.db.withWorkspace(WORKSPACE_LAURA, fn);
+
+  test('sin filtro devuelve las 3 abiertas del seed, con su campaña y su mora', async () => {
+    const { rows, nextCursor } = await laura((tx) => listReceivables(tx));
+    assert.equal(rows.length, 3);
+    assert.equal(nextCursor, null);
+
+    const porNumero = Object.fromEntries(rows.map((r) => [r.number, r]));
+    const vencida = porNumero['FV-2026-007'];
+    assert.equal(vencida?.companyName, 'Hogar Lindo');
+    assert.equal(vencida?.campaignName, '3 historias · jun');
+    assert.equal(vencida?.bucket, 'vencida');
+    assert.equal(vencida?.daysOverdue, 41, 'vencida hace 41 días, como el mock');
+    assert.equal(vencida?.outstanding, '1100000.00');
+    assert.equal(vencida?.status, 'sent', 'overdue no se persiste');
+
+    assert.equal(porNumero['FV-2026-010']?.bucket, 'vence_pronto');
+    assert.equal(porNumero['FV-2026-010']?.daysOverdue, -7, 'vence en 7 días');
+    assert.equal(porNumero['FV-2026-011']?.bucket, 'al_dia');
+    assert.equal(porNumero['FV-2026-011']?.daysOverdue, -23);
+
+    // El KPI «Por cobrar» del mock: 9,4 M en tres facturas. La tabla y el
+    // KPI leen la misma vista, así que tienen que sumar lo mismo.
+    const centavos = rows.reduce((acc, r) => acc + BigInt(r.outstanding.replace('.', '')), 0n);
+    assert.equal(centavos, 940000000n, '9 400 000,00');
+    const kpis = await laura((tx) => getReceivablesKpis(tx));
+    assert.equal(kpis.outstanding, '9400000.00');
+    assert.equal(kpis.openCount, rows.length);
+  });
+
+  test('la forma de la fila es la que espera la pantalla: si la vista cambia, esto falla', async () => {
+    const { rows } = await laura((tx) => listReceivables(tx, { bucket: 'vencida' }));
+    const fila = rows[0];
+    assert.ok(fila);
+    assert.deepEqual(
+      Object.keys(fila).sort(),
+      [
+        'bucket', 'campaignId', 'campaignName', 'companyId', 'companyName', 'currency',
+        'daysOverdue', 'dueOn', 'id', 'number', 'outstanding', 'paidAmount', 'status', 'total',
+      ],
+      'ni una columna de más ni de menos',
+    );
+    // Los tipos de verdad, no los de TypeScript: el dinero es texto y
+    // los días son un número. Un driver que devolviera numeric como
+    // number, o date como Date, rompe aquí y no en la pantalla.
+    assert.equal(typeof fila.outstanding, 'string');
+    assert.equal(typeof fila.total, 'string');
+    assert.equal(typeof fila.paidAmount, 'string');
+    assert.equal(typeof fila.daysOverdue, 'number');
+    assert.match(fila.dueOn, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(RECEIVABLE_BUCKETS.includes(fila.bucket));
+    // Ningún bigserial cruza a la web (CIM-2 §3): la vista no trae ninguno.
+    assert.equal('rank' in fila, false);
+  });
+
+  test('cada bucket por su cuenta, y «pagada» solo si se pide', async () => {
+    const conteo = async (bucket: ReceivableRow['bucket']) =>
+      (await laura((tx) => listReceivables(tx, { bucket }))).rows;
+
+    const vencidas = await conteo('vencida');
+    assert.equal(vencidas.length, 1);
+    assert.equal(vencidas[0]?.number, 'FV-2026-007');
+    assert.equal((await conteo('vence_pronto')).length, 1);
+    assert.equal((await conteo('al_dia')).length, 1);
+
+    const pagadas = await conteo('pagada');
+    assert.equal(pagadas.length, 14, 'seis de 2025 y ocho de 2026');
+    assert.equal(pagadas.every((r) => r.status === 'paid' && r.outstanding === '0.00'), true);
+
+    // Sin bucket NO salen las pagadas: la pantalla de cobro no las lista.
+    const abiertas = await laura((tx) => listReceivables(tx));
+    assert.equal(abiertas.rows.some((r) => r.bucket === 'pagada'), false);
+
+    // Y los borradores y las anuladas no están en ningún bucket: la
+    // vista los excluye. Esa es la diferencia con /finanzas/facturas.
+    const todos = (await Promise.all(RECEIVABLE_BUCKETS.map(conteo))).flat();
+    assert.equal(todos.some((r) => r.status === 'draft' || r.status === 'void'), false);
+    const archivo = await laura((tx) => listInvoices(tx, { limit: 200 }));
+    assert.ok(archivo.rows.length >= todos.length, 'el archivo es al menos tan grande');
+  });
+
+  test('el orden es el de cobro: lo vencido primero, y dentro lo más viejo', async () => {
+    const { rows } = await laura((tx) => listReceivables(tx));
+    assert.deepEqual(
+      rows.map((r) => r.number),
+      ['FV-2026-007', 'FV-2026-010', 'FV-2026-011'],
+      'vencida → vence pronto → al día (al revés que el mock, a propósito)',
+    );
+
+    // Con las pagadas incluidas, el criterio dentro del grupo es
+    // due_on ascendente, que es days_overdue descendente.
+    const pagadas = await laura((tx) => listReceivables(tx, { bucket: 'pagada' }));
+    for (let i = 1; i < pagadas.rows.length; i++) {
+      const previo = pagadas.rows[i - 1];
+      const actual = pagadas.rows[i];
+      assert.ok(previo && actual);
+      assert.ok(previo.dueOn <= actual.dueOn, 'due_on ascendente');
+      assert.ok(previo.daysOverdue >= actual.daysOverdue, 'y por tanto days_overdue descendente');
+    }
+  });
+
+  test('el buscador encuentra por empresa y por número, desde el tercer carácter', async () => {
+    const porEmpresa = await laura((tx) => listReceivables(tx, { q: 'Hogar' }));
+    assert.deepEqual(porEmpresa.rows.map((r) => r.number), ['FV-2026-007']);
+
+    const minusculas = await laura((tx) => listReceivables(tx, { q: 'hogar lindo' }));
+    assert.deepEqual(minusculas.rows.map((r) => r.number), ['FV-2026-007']);
+
+    const porNumero = await laura((tx) => listReceivables(tx, { q: '2026-011' }));
+    assert.deepEqual(porNumero.rows.map((r) => r.number), ['FV-2026-011']);
+
+    // Con una o dos letras no filtra: devuelve la lista entera y lo dice
+    // la pantalla, no una lista recortada al azar.
+    const corta = await laura((tx) => listReceivables(tx, { q: 'ho' }));
+    assert.equal(corta.rows.length, 3);
+
+    // Un comodín de LIKE es texto, no un patrón: si no se escapara,
+    // '%' devolvería las tres y parecería que el filtro no sirve.
+    const comodin = await laura((tx) => listReceivables(tx, { q: '%%%' }));
+    assert.equal(comodin.rows.length, 0);
+
+    // El filtro por bucket y la búsqueda se acumulan.
+    const juntos = await laura((tx) => listReceivables(tx, { bucket: 'al_dia', q: 'Hogar' }));
+    assert.equal(juntos.rows.length, 0);
+  });
+
+  test('la paginación no salta ni repite filas', async () => {
+    const enteras = await laura((tx) => listReceivables(tx, { bucket: 'pagada', limit: 200 }));
+    const numeros: string[] = [];
+    let cursor: string | null = null;
+    for (let pagina = 0; pagina < 10; pagina++) {
+      const r: Awaited<ReturnType<typeof listReceivables>> = await laura((tx) =>
+        listReceivables(tx, { bucket: 'pagada', limit: 3, cursor }),
+      );
+      numeros.push(...r.rows.map((x) => x.number));
+      cursor = r.nextCursor;
+      if (!cursor) break;
+    }
+    assert.equal(cursor, null, 'termina');
+    assert.deepEqual(numeros, enteras.rows.map((r) => r.number), 'mismo orden, sin huecos ni repetidos');
+    assert.equal(new Set(numeros).size, numeros.length);
+
+    await assert.rejects(
+      laura((tx) => listReceivables(tx, { cursor: 'no-es-un-cursor' })),
+      /cursor de paginación/,
+    );
+  });
+
+  test('desde otro workspace no hay ni una fila, ni con bucket ni con búsqueda', async () => {
+    const vacio = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx));
+    assert.deepEqual(vacio.rows, []);
+    assert.equal(vacio.nextCursor, null);
+    for (const bucket of RECEIVABLE_BUCKETS) {
+      const r = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx, { bucket }));
+      assert.deepEqual(r.rows, [], `bucket ${bucket}`);
+    }
+    const buscando = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx, { q: 'Hogar' }));
+    assert.deepEqual(buscando.rows, [], 'la búsqueda no es una rendija a otro workspace');
+
+    // Y los KPIs no inventan una cifra: cero facturas, y lo que de
+    // verdad se desconoce (la tasa de reserva, la comparación con el
+    // año anterior) viaja como null, no como 0.
+    const kpis = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getReceivablesKpis(tx));
+    assert.equal(kpis.openCount, 0);
+    assert.equal(kpis.overdueCount, 0);
+    assert.equal(kpis.taxRate, null);
+    assert.equal(kpis.collectedDelta, null);
   });
 });
 

@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
+import { MESSAGES } from "../../_lib/messages";
 import { NuevaFacturaForm } from "./form";
 
 export const metadata: Metadata = { title: "Nueva factura" };
@@ -31,8 +32,8 @@ export default async function NuevaFacturaPage({
         title="Nueva factura"
         description="Queda en borrador con el siguiente número del año. El total se calcula con la misma función que guarda el servidor."
         aside={
-          <Button variant="ghost" href="/finanzas">
-            Volver a facturas
+          <Button variant="ghost" href="/finanzas/facturas">
+            {MESSAGES.facturas.back}
           </Button>
         }
       />

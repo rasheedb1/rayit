@@ -170,7 +170,9 @@ describe("las pantallas atadas al workspace no vuelven al formato por defecto", 
   /** Solo el código: un comentario que EXPLICA el fallo no es el fallo. */
   const sinComentarios = (codigo: string) => codigo.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const ATADAS = [
-    "app/(app)/finanzas/page.tsx",
+    // FIN-3 partió Finanzas en dos: la pantalla de cobro y el archivo.
+    "app/(app)/finanzas/(inicio)/page.tsx",
+    "app/(app)/finanzas/facturas/(lista)/page.tsx",
     "app/(app)/finanzas/facturas/[id]/page.tsx",
   ];
   /**

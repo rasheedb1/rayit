@@ -57,7 +57,7 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas, en dos vistas (ver abajo).
                               index.ts exporta facturarCampana() para Campañas.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
                               calcula projectCashflow() de @mc/core; la pantalla pinta.
@@ -89,6 +89,48 @@ content/team.ts               Quién es quién.
 components/                   Marco, navegación, tema, tarjetas del plan.
 lib/backlog.ts                Cálculos sobre el backlog: avance, días, enlaces.
 ```
+
+## Finanzas, dónde está cada cosa
+
+Dos vistas, dos preguntas distintas, y una tira de pestañas
+(`_componentes/pestanas.tsx`) para pasar de una a otra:
+
+| Ruta | Qué responde | De dónde sale |
+|---|---|---|
+| `/finanzas` · `(inicio)/page.tsx` | «¿Quién me debe y qué cobro primero?» | `listReceivables` sobre la vista `receivables` (0010) + `getReceivablesKpis` |
+| `/finanzas/facturas` · `facturas/(lista)/page.tsx` | «¿Qué facturé?» — el archivo, con borradores y anuladas | `listInvoices` |
+| `/finanzas/facturas/nueva` · `/finanzas/facturas/<id>` | Crear y ver una factura | `createInvoice`, `getInvoice`, `transitionInvoice` |
+
+Lo que conviene saber antes de tocarlo:
+
+- **La vista `receivables` excluye `draft` y `void`.** Por eso un
+  borrador no aparece nunca en `/finanzas`: no es algo que nadie te
+  deba. El archivo sí los lista.
+- **El orden de cobro se hace en SQL**, no en la pantalla
+  (`URGENCY_RANK` en `queries/finanzas.ts`): vencidas, vence pronto, al
+  día, cobradas, y dentro de cada grupo por `due_on` ascendente. El
+  cursor se ancla a `due_on` y no a los días de mora, que cambian a
+  medianoche.
+- **El filtro y la búsqueda viven en la URL** (`?bucket=vencida&q=Hogar`),
+  como en Ventas: se pueden compartir y el botón de atrás los deshace.
+  `_componentes/filtros.tsx` es el único componente cliente de la
+  pantalla y no consulta nada.
+- **Los textos están todos en `_lib/messages.ts`**, los dos colores de
+  la pastilla salen de la misma función (`_lib/estado.ts`), y una
+  ausencia se dice con una frase: «Sin campaña», «Nada pendiente»,
+  «Ninguna vencida», «Sin cobros en 2025 para comparar». Nunca un guion
+  mudo ni un cero.
+- **Los esqueletos viven en los grupos de ruta** `(inicio)` y
+  `facturas/(lista)`, no en la raíz del segmento: ahí envolvían también
+  `facturas/<id>` y respondían 200 antes de saber que el id no existe
+  (la lección del pulido r4, en `app/(app)/_lib/esqueleto.tsx`). La
+  frontera de error sí está en la raíz, que es donde tiene que estar.
+- **A 400 px la tabla hace scroll por dentro**, así que el botón de la
+  última columna no se ve: la marca de la primera columna es el mismo
+  enlace. Se mide con
+  `DENTRO='table td:first-child a' node apps/web/scripts/ancho-movil.mjs
+  http://localhost:3141 /finanzas`.
+
 
 ## Marcar avance
 

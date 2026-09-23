@@ -87,8 +87,20 @@ export async function crearFactura(_prev: CrearFacturaState, formData: FormData)
   } catch (err) {
     return { message: err instanceof Error ? err.message : "No se pudo crear la factura." };
   }
-  revalidatePath("/finanzas");
+  revalidarFinanzas();
   redirect(`/finanzas/facturas/${id}`);
+}
+
+/**
+ * Las dos vistas del módulo leen la misma factura desde sitios
+ * distintos —/finanzas la vista `receivables`, /finanzas/facturas la
+ * tabla `invoice`—, así que una escritura invalida las dos. Revalidar
+ * solo una dejaba la otra con la cifra vieja hasta la siguiente
+ * navegación completa.
+ */
+function revalidarFinanzas(): void {
+  revalidatePath("/finanzas");
+  revalidatePath("/finanzas/facturas");
 }
 
 const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];
@@ -100,7 +112,7 @@ const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];
  */
 export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promise<void> {
   await requirePermission("finanzas.factura.editar");
-  if (!isUuid(id)) redirect("/finanzas");
+  if (!isUuid(id)) redirect("/finanzas/facturas");
   if (!TRANSICIONES_UI.includes(to)) {
     redirect(`/finanzas/facturas/${id}?error=${encodeURIComponent("Esa acción todavía no está disponible.")}`);
   }
@@ -110,7 +122,7 @@ export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promi
   } catch (err) {
     error = err instanceof Error ? err.message : "No se pudo cambiar el estado.";
   }
-  revalidatePath("/finanzas");
+  revalidarFinanzas();
   revalidatePath(`/finanzas/facturas/${id}`);
   redirect(error ? `/finanzas/facturas/${id}?error=${encodeURIComponent(error)}` : `/finanzas/facturas/${id}`);
 }
@@ -123,7 +135,7 @@ export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promi
  */
 export async function facturarCampana(campaignId: string): Promise<void> {
   await requirePermission("finanzas.factura.crear");
-  if (!isUuid(campaignId)) redirect("/finanzas");
+  if (!isUuid(campaignId)) redirect("/finanzas/facturas");
   let id: string;
   try {
     const invoice = await withWorkspace((tx) => createInvoiceFromCampaign(tx, campaignId));
@@ -132,6 +144,6 @@ export async function facturarCampana(campaignId: string): Promise<void> {
     const message = err instanceof Error ? err.message : "No se pudo crear la factura desde la campaña.";
     redirect(`/finanzas/facturas/nueva?campana=${encodeURIComponent(campaignId)}&error=${encodeURIComponent(message)}`);
   }
-  revalidatePath("/finanzas");
+  revalidarFinanzas();
   redirect(`/finanzas/facturas/${id}`);
 }
