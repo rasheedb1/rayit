@@ -388,16 +388,32 @@ export interface AccountSnapshotInput {
  * día. Las métricas se insertan, nunca se actualizan, y la base lo
  * exige: mc_app no tiene UPDATE sobre account_metric_snapshot (0025 §5).
  * El recolector diario (mc_worker, quien mide) sí puede reemplazarla.
- * Marca last_synced_at.
+ *
+ * last_synced_at anuncia la frescura del dato que se muestra, así que
+ * solo se mueve cuando esta lectura quedó guardada. Si ya había lectura
+ * de hoy, devuelve 'ya_hay_lectura_de_hoy' y deja last_synced_at en la
+ * hora de esa primera lectura; la lectura sí respondió, así que limpia
+ * los fallos anotados.
  */
-export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnapshotInput): Promise<void> {
-  await tx.query(
+export type AccountSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
+
+export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnapshotInput): Promise<AccountSnapshotOutcome> {
+  const inserted = await tx.query(
     `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views, raw, source)
      VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
-     ON CONFLICT (connection_id, day, source) DO NOTHING`,
+     ON CONFLICT (connection_id, day, source) DO NOTHING
+     RETURNING 1`,
     [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), PUBLIC_SNAPSHOT_SOURCE],
   );
-  await tx.query(`UPDATE social_connection SET last_synced_at = now(), last_error_at = NULL, consecutive_failures = 0, status_detail = NULL WHERE id = $1`, [input.connectionId]);
+  const saved = inserted.rows.length > 0;
+  await tx.query(
+    `UPDATE social_connection
+        SET last_synced_at = CASE WHEN $2 THEN now() ELSE last_synced_at END,
+            last_error_at = NULL, consecutive_failures = 0, status_detail = NULL
+      WHERE id = $1`,
+    [input.connectionId, saved],
+  );
+  return saved ? 'guardada' : 'ya_hay_lectura_de_hoy';
 }
 
 export interface AccountRow extends ConnectionListRow {

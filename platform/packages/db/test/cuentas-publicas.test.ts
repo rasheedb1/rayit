@@ -67,6 +67,29 @@ describe('snapshots', () => {
     assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => tx.query(`SELECT 1 FROM account_metric_snapshot WHERE connection_id = $1`, [id])).then((r) => r.rows.length), 0, 'RLS: el otro workspace no ve los snapshots');
   });
 
+  test('actualizar dos veces el mismo día no mueve last_synced_at: la frescura anunciada es la del dato guardado', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'youtube', handle: 'frescura', externalAccountId: 'UCfrescura', profileUrl: null, accountType: 'unknown' }));
+    const synced = async (): Promise<string> => {
+      const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ at: string }>(`SELECT last_synced_at::text AS at FROM social_connection WHERE id = $1`, [id]));
+      return r.rows[0]!.at;
+    };
+    const first = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-23', followers: 500, following: null, mediaCount: 10, views: 9000, raw: {} }));
+    assert.equal(first, 'guardada');
+    const morning = await synced();
+    assert.ok(morning, 'la primera lectura del día marca last_synced_at');
+    // Una lectura fallida en medio: la segunda lectura, que sí responde, limpia el fallo.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markAccountLookupFailure(tx, id, 'YouTube no respondió.', false));
+    const second = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-23', followers: 520, following: null, mediaCount: 10, views: 9100, raw: {} }));
+    assert.equal(second, 'ya_hay_lectura_de_hoy');
+    assert.equal(await synced(), morning, 'last_synced_at sigue en la hora de la primera lectura');
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.latest?.followers, 500, 'la cifra mostrada es la de la primera lectura, y su frescura también');
+    assert.equal(row.consecutiveFailures, 0);
+    assert.equal(row.statusDetail, null);
+    const next = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-24', followers: 530, following: null, mediaCount: 11, views: 9200, raw: {} }));
+    assert.equal(next, 'guardada', 'al día siguiente se vuelve a guardar');
+  });
+
   test('un fallo permanente pasa la cuenta a error con su detalle; quitar la cuenta conserva la historia', async () => {
     const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'tiktok', handle: 'selvathegolden', externalAccountId: 'selvathegolden', profileUrl: 'https://www.tiktok.com/@selvathegolden', accountType: 'unknown' }));
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markAccountLookupFailure(tx, id, 'TikTok no respondió.', false));

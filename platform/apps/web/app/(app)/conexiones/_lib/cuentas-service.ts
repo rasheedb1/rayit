@@ -45,7 +45,11 @@ export type AgregarResult =
   | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "plataforma"; message: string };
 
 export type ActualizarResult =
-  | { ok: true; id: string; withMetrics: boolean; note: string | null }
+  | {
+      ok: true; id: string; withMetrics: boolean; note: string | null;
+      /** true si ya había lectura de hoy: no se guardó nada nuevo y last_synced_at no se movió. */
+      alreadyReadToday: boolean;
+    }
   | { ok: false; code: PublicLookupError["code"] | "no_existe" | "plataforma"; message: string };
 
 export interface SourceAvailability {
@@ -139,12 +143,15 @@ export function createCuentasService(deps: CuentasDeps) {
       if (!source) return { ok: false, code: "plataforma", message: "Esa red no está disponible en esta versión." };
       try {
         const profile = await source.lookup(row.handle ?? row.externalAccountId);
-        await deps.withWorkspace(async (tx) => {
-          if (profile.metrics) await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw });
-          else await markAccountLookupFailure(tx, id, profile.metricsNote ?? "Sin métricas públicas.", false);
+        const outcome = await deps.withWorkspace(async (tx) => {
+          const saved = profile.metrics
+            ? await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw })
+            : null;
+          if (!profile.metrics) await markAccountLookupFailure(tx, id, profile.metricsNote ?? "Sin métricas públicas.", false);
           await flush(callLog, tx, id);
+          return saved;
         });
-        return { ok: true, id, withMetrics: profile.metrics !== null, note: profile.metricsNote };
+        return { ok: true, id, withMetrics: profile.metrics !== null, note: profile.metricsNote, alreadyReadToday: outcome === "ya_hay_lectura_de_hoy" };
       } catch (err) {
         if (err instanceof PublicLookupError) {
           const permanent = err.code === "not_found" || err.code === "not_discoverable";

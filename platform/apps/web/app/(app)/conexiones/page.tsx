@@ -102,7 +102,7 @@ const COLUMNS: Column<AccountRow>[] = [
   },
 ];
 
-type Search = { agregada?: string; actualizada?: string; sin_metricas?: string; conectada?: string; error?: string; desconectada?: string; aviso?: string };
+type Search = { agregada?: string; actualizada?: string; sin_metricas?: string; ya_hoy?: string; conectada?: string; error?: string; desconectada?: string; aviso?: string };
 
 function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
   let kind: "good" | "bad" | "neutral" = "neutral";
@@ -118,8 +118,12 @@ function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
       : "Cuenta agregada.";
   } else if (params.actualizada) {
     const row = find(params.actualizada);
-    kind = params.sin_metricas ? "neutral" : "good";
-    text = params.sin_metricas ? `@${row?.handle ?? ""}: ${row?.statusDetail ?? "esta red no publica métricas por @."}` : `@${row?.handle ?? ""} actualizada con los datos de hoy.`;
+    kind = params.sin_metricas || params.ya_hoy ? "neutral" : "good";
+    text = params.sin_metricas
+      ? `@${row?.handle ?? ""}: ${row?.statusDetail ?? "esta red no publica métricas por @."}`
+      : params.ya_hoy
+        ? `@${row?.handle ?? ""}: la lectura de hoy ya está guardada; mañana se vuelve a leer.`
+        : `@${row?.handle ?? ""} actualizada con los datos de hoy.`;
   } else if (params.conectada) {
     kind = "good";
     text = "Cuenta conectada.";
