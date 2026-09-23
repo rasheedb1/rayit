@@ -577,9 +577,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
     title: "Configuración financiera",
-    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, datos fiscales para la factura. En workspace.settings.",
+    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, plazo de pago, y datos fiscales para la factura. En workspace.settings.finanzas, que core tipa con parseFinanceSettings: FIN-1, FIN-2, FIN-4 y FIN-6 leen la misma función.",
     done: "Cambiar el porcentaje cambia la reserva de los pagos siguientes, no de los anteriores.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Hecha sin migración: 0024 §7.6 ya concede a mc_app UPDATE (settings, currency) sobre su propia fila. El bloque se guarda con `settings || $1::jsonb` (merge por llave) para no borrar settings.taxRate, que es de Cotizar —dos fuentes de verdad para el IVA, pendiente de decidir con Rasheed: propuesta §2.1—. El permiso es finanzas.ajustes.configurar, como lo nombra el catálogo de ACC-1, no finanzas.configuracion.editar del encargo: la acción abre con su requirePermission() y la pantalla explica en vez de reventar (TODO(ACC-5): requireModule). La bitácora sigue siendo SQL directo en la misma transacción con // TODO(ACC-2), porque audit.ts todavía no está en main; necesita la acción workspace.settings_updated.",
   },
 
   // ---------------------------------------------------------------- ACC

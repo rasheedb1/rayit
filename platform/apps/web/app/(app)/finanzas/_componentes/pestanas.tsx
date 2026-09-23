@@ -15,6 +15,7 @@ const MODULE_LINKS = [
   { href: "/finanzas", label: MESSAGES.tabs.cobros },
   { href: "/finanzas/facturas", label: MESSAGES.tabs.facturas },
   { href: "/finanzas/flujo", label: MESSAGES.tabs.flujo },
+  { href: "/finanzas/configuracion", label: MESSAGES.tabs.configuracion },
 ];
 
 /**

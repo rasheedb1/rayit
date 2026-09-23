@@ -57,10 +57,16 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas, en dos vistas (ver abajo).
-                              index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/           Finanzas, en cuatro vistas con su tira de pestañas
+                              (_componentes/pestanas.tsx). index.ts exporta
+                              facturarCampana() para Campañas.
+app/(app)/finanzas/(inicio)/  Cuentas por cobrar (FIN-3).
+app/(app)/finanzas/facturas/  El archivo de facturas, la nueva y el detalle.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
                               calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/finanzas/configuracion/  Porcentajes, plazo, moneda y datos fiscales del
+                              workspace (FIN-8). Es de donde salen los defaults de una
+                              factura nueva y la tasa que FIN-2 estampa en tax_reserve.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
