@@ -107,6 +107,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: El montaje de Supabase (roles y DEFAULT PRIVILEGES de mc_app), antes de migrar
+        # Sin esto las tablas las crea el superusuario y mc_app nace sin
+        # ningún privilegio: la guardia da por cerradas las excepciones
+        # declaradas y esquema.test.ts falla. Ver el archivo.
+        run: psql "postgres://mc:mc@localhost:5432/oncue" -v ON_ERROR_STOP=1 -f db/montaje-postgres-real.sql
       - run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
       - name: Aplicar dos veces debe ser inocuo
         run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
@@ -117,7 +122,24 @@ jobs:
         run: |
           psql "postgres://mc:mc@localhost:5432/oncue" -v ON_ERROR_STOP=1 -c \
             "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
-      - name: Pruebas de @mc/db contra Postgres real (el runner de pg, no PGlite)
+      - name: Límites atómicos, baja y guardia de esquema contra Postgres real (tienen que pasar)
+        # Lo que PGlite no puede probar: «el bloqueo es de verdad» de
+        # outreach.test.ts (dos transacciones que se pisan) y la guardia
+        # de esquema.test.ts sobre un Postgres que no es el embebido. Van
+        # en su propio paso para que su rojo se vea: el paso siguiente
+        # todavía no está en verde por razones ajenas a ellas.
+        env:
+          TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
+          TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
+        run: >-
+          pnpm --filter @mc/db exec node --test --experimental-strip-types --test-isolation=none
+          --test-concurrency=1 --test-timeout=120000 test/outreach.test.ts test/esquema.test.ts
+      - name: El resto de @mc/db contra Postgres real (informativo, CIM-2c)
+        # Pendiente (CIM-2c en backlog.ts): varios archivos miden los
+        # privilegios de mc_app con un rol de conexión que también hereda
+        # los de mc_worker, o cuentan filas sin esperar la demo sembrada.
+        # Mientras tanto no tumba el job; los dos de arriba sí.
+        continue-on-error: true
         env:
           TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
           TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue

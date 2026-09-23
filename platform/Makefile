@@ -17,6 +17,8 @@ up: ## Levanta base de datos, almacenamiento y correo
 	docker compose up -d
 	@echo "esperando a Postgres..."
 	@until docker compose exec -T db pg_isready -U mc -d oncue >/dev/null 2>&1; do sleep 1; done
+	@# Roles y DEFAULT PRIVILEGES de mc_app como en Supabase, antes de migrar (idempotente)
+	@docker compose exec -T db psql -q -U mc -d oncue -v ON_ERROR_STOP=1 < db/montaje-postgres-real.sql
 	@$(MAKE) migrate
 	@echo ""
 	@echo "  Postgres   localhost:5432   (mc / mc / oncue)"

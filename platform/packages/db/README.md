@@ -233,6 +233,67 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 `worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
 (CON-2b).
 
+#### Contra Postgres real, en local
+
+Lo que PGlite no puede probar —dos transacciones que se pisan de
+verdad, como «el bloqueo es de verdad» de `test/outreach.test.ts`, y la
+guardia de `test/esquema.test.ts` fuera del embebido— se corre contra
+un Postgres 16 con el mismo montaje que el CI:
+
+1. `db/montaje-postgres-real.sql`, como superusuario y **antes de
+   migrar**: crea mc_app, mc_worker y mc_public_share y le da a mc_app
+   las DEFAULT PRIVILEGES que en Supabase tiene mc_migrator. Sin él, las
+   tablas las crea el superusuario, mc_app nace sin ningún privilegio y
+   la guardia da por cerradas las excepciones declaradas («sobran
+   excepciones declaradas»): no era la guardia, era la base. `make up`
+   lo corre solo; una base de Docker migrada antes de este archivo se
+   rehace con `docker compose down -v && make up`.
+2. `node db/migrate.mjs <url> --seed`.
+3. El rol de conexión del CI, `mc_app_ci`, miembro de mc_app y de
+   mc_worker (para ejercitar también asWorker).
+
+Con Docker, desde `platform/`:
+
+```bash
+make up      # corre db/montaje-postgres-real.sql antes de migrar
+make seed
+docker compose exec -T db psql -U mc -d oncue -c \
+  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
+TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
+  pnpm --filter @mc/db exec node --test --experimental-strip-types \
+    --test-isolation=none --test-concurrency=1 test/outreach.test.ts test/esquema.test.ts
+```
+
+Sin Docker, cualquier Postgres 16 sirve. El paquete `embedded-postgres`
+trae los binarios y no se instala en el repositorio (en una carpeta
+temporal, `npm i embedded-postgres@16.14.0-beta.17`):
+
+```js
+// arranca.mjs, en esa carpeta: Postgres 16 en el puerto 55437, usuario mc
+import EmbeddedPostgres from 'embedded-postgres';
+const pg = new EmbeddedPostgres({ databaseDir: './data', user: 'mc', password: 'mc', port: 55437, persistent: false });
+await pg.initialise(); await pg.start(); await pg.createDatabase('oncue');
+setInterval(() => {}, 1 << 30);   // Ctrl+C lo apaga
+```
+
+y después los tres pasos de arriba con cualquier cliente (no hay psql
+en todas las máquinas: `pg` de este paquete basta) y las variables con
+el puerto 55437. Así se corrió el 23 de septiembre de 2026 (Postgres
+16.14, VEN-9 ronda 5): `outreach.test.ts` 48 en verde y 2 saltadas (las
+de GRANT, que solo se miden en PGlite), dos veces seguidas sobre la
+misma base (los enlaces de baja no se van con su workspace, así que la
+prueba los borra al terminar); `esquema.test.ts` 68 en verde y 8
+saltadas (las que reconstruyen una base a medio migrar o tocan roles).
+
+**En el CI** el job `contra-postgres-real` hace lo mismo y corre esos
+dos archivos en su propio paso, que tiene que pasar. El resto de
+`@mc/db` corre después como paso informativo (`continue-on-error`):
+todavía no está en verde contra Postgres real por razones ajenas a
+outreach y a la guardia (mide privilegios de mc_app con un rol que
+hereda los de mc_worker, o cuenta filas sin esperar la demo sembrada).
+Es la historia CIM-2c del backlog.
+
 ## Lo que hace el cliente por ti
 
 - **Timeouts.** Toda transacción arranca con `SET LOCAL statement_timeout`

@@ -256,6 +256,10 @@ export const POLITICAS_ABIERTAS_DECLARADAS: Readonly<Record<string, string>> = {
     'la rama «connection_id IS NULL» del alta: el camino de OAuth que FALLA registra sus llamadas antes de que ' +
     'exista la conexión (conexiones/oauth-handlers.ts). Esas filas no las lee nadie más que el worker ' +
     '(api_call_log_read exige la conexión), así que escribirlas no expone nada de ningún inquilino',
+  'outbound_sequence_template.outbound_sequence_template_read':
+    'las plantillas de secuencia (0037 §1 y §7.3) son un catálogo GLOBAL sin workspace ni dato de ningún inquilino: ' +
+    'las mismas para todos. Lectura abierta y ninguna política de escritura para mc_app (además del REVOKE), así que ' +
+    'esta política no abre nada que escribir',
 };
 
 /**
@@ -307,6 +311,21 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'motivo de pérdida y el monto con su moneda, que la función copia de la cotización que acaba de leer por su ' +
     'slug— y SELECT de la etapa: no puede tocar el total de la cotización ni el nombre, la empresa o el dueño del ' +
     'negocio; la campaña la crea después la web dentro del workspace de la cotización',
+  // La baja desde el enlace de un correo (0037 §9, VEN-9 y VEN-15).
+  'public_optout(text)':
+    'la baja desde el enlace de un correo (0037 §9): la página se abre sin sesión y la baja cruza workspaces (0007: ' +
+    'nadie en la plataforma vuelve a escribirle). Corre como mc_public_share, cuyas políticas `TO mc_public_share` ' +
+    'abren solo el enlace (outbound_optout_link, que escribe solo el despachador) cuyo sha256 del token fija la ' +
+    'función, y después la ficha que recibió el correo y las que tienen la dirección a la que salió. Escribe por ' +
+    'COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, el estado de sus ' +
+    'enrolamientos, el correo en contact_suppression (reason unsubscribe_link, la baja verificable de 0029 §1) y ' +
+    'el clic en outbound_optout_event (quién la provocó). No es de ningún disparador',
+  // La regla de la baja de outbound_touch mira la lista global (0037 §4.1).
+  'address_is_suppressed(citext)':
+    'la regla de la baja de outbound_touch (0037 §4.1) compara el correo de la ficha y recipient_address con la ' +
+    'baja global, y mc_app no puede leer contact_suppression (0026 §3). Solo LEE la lista y responde sí o no para ' +
+    'UNA dirección: lo mismo que un workspace ya aprende creando una ficha con ese correo, que nace dada de baja ' +
+    '(contact_suppression_apply). EXECUTE solo para mc_app y mc_worker',
 };
 
 /**
@@ -376,6 +395,52 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
 };
 
 /**
+ * Los disparadores que son un CANDADO de seguridad, como
+ * `tabla.disparador`, y qué cierran. No hay GRANT que los sustituya (un
+ * GRANT por columnas rompería los INSERT de Drizzle, que nombran todas
+ * las columnas), así que la guardia exige en cada arranque que existan y
+ * que estén activos: `ALTER TABLE … DISABLE TRIGGER` no deja rastro en
+ * schema_migrations y abriría el hueco sin que nadie lo viera.
+ */
+export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
+  'outbound_touch.outbound_touch_worker_columns':
+    'provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, un toque con esas ' +
+    'pruebas no cambia de contacto ni de empresa, un toque en sent no vuelve atrás, y el estado processing solo ' +
+    'lo pone y lo quita el despachador (0037 §4.2). Sin él, un workspace movía un envío de verdad a la ficha de ' +
+    'otra persona, devolvía a la cola un correo que ya salió (un segundo envío), o ponía un toque en processing ' +
+    'para dejarlo fuera de public_optout y de disable_outreach, que no tocan lo reclamado',
+  'outbound_touch.outbound_touch_keep_sent':
+    'un toque con pruebas de envío, o en processing, no se borra desde la aplicación (0037 §4.2): es el registro ' +
+    'de lo que la plataforma envió o está enviando. Las cascadas de empresa y workspace sí pasan; el enlace de ' +
+    'baja vive aparte',
+  'outbound_touch.outbound_touch_optout_link_required':
+    'un correo no queda reclamado (processing) sin el enlace de baja de su intento en outbound_optout_link (0037 ' +
+    '§4.5), comprobado al COMMIT. Sin él, un correo podía salir con un token que la base nunca guardó (el ' +
+    'despachador cae entre el proveedor y el COMMIT) y la baja respondía not_found',
+  'outbound_touch.outbound_touch_optout_link_required_insert':
+    'lo mismo que outbound_touch_optout_link_required para un toque que nace en processing',
+  'outbound_optout_link.outbound_optout_link_check':
+    'un enlace de baja dice lo mismo que su toque al crearse, y después no se reescribe: solo se anota sent_at una ' +
+    'vez (0037 §4.5). Sin él, el despachador podía mover a otra dirección la baja de un correo que ya salió',
+  'outbound_touch.outbound_touch_enrollment_check':
+    'un toque es del mismo workspace y contacto que su enrolamiento, y su paso es de la misma secuencia (0037 ' +
+    '§4.4). Sin él, un toque del enrolamiento de X con contact_id Y se saltaba la regla de la baja, que mira ' +
+    'el contacto del toque',
+  'outreach_channel_account.outreach_channel_account_worker_columns':
+    'el estado autenticado, provider_account_id, secret_ref y scopes de una cuenta de canal los escribe solo el ' +
+    'callback del proveedor (0037 §2.1). Sin él, un workspace ocupaba el buzón de otra persona en toda la ' +
+    'plataforma (outreach_channel_account_live_idx) con una fila «connected» sin OAuth',
+  'outbound_policy.outbound_policy_llm_cap':
+    'llm_daily_cap_usd lo fija la plataforma (0037 §6.1): la llave de Anthropic es de On Cue, y con un UPDATE un ' +
+    'workspace se quitaba su propio techo de gasto',
+  'outbound_enrollment.outbound_enrollment_optout':
+    'no se enrola ni se reanuda a quien pidió la baja, por su ficha o por su correo en la lista global (0037 §3.3): ' +
+    'sin él, el alta quedaba viva y el motor chocaba con la regla de outbound_touch en cada vuelta',
+  'outbound_touch.outbound_touch_optout':
+    'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0037 §4.1)',
+};
+
+/**
  * Las reglas (CREATE RULE) de `public` que no son el _RETURN de una
  * vista, como `tabla.regla`, y por qué. Su acción corre con los
  * privilegios del dueño de la tabla. Vacía: el esquema no usa ninguna.
@@ -429,13 +494,14 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
     'rol de administración de Supabase (BYPASSRLS): se lo concede ALTER DEFAULT PRIVILEGES de mc_migrator. ' +
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
   mc_public_share:
-    'dueño de las tres funciones de los enlaces públicos de Cotizar (0030). NOLOGIN, sin BYPASSRLS: ninguna ' +
+    'dueño de las funciones de los enlaces públicos: las tres de Cotizar (0030) y la baja (0037 §9). NOLOGIN, sin ' +
+    'BYPASSRLS: ninguna ' +
     'conexión entra con él. Lo que puede, privilegio por privilegio y columna por columna, lo dice ' +
     'PRIVILEGIOS_DEL_ENLACE_PUBLICO; sus políticas, POLITICAS_DEL_ENLACE_PUBLICO; y la guardia comprueba las dos ' +
     'listas y sus atributos en cada arranque, no solo la migración al aplicarse',
 };
 
-/** El rol que atiende los enlaces públicos de Cotizar (0030): dueño de sus funciones SECURITY DEFINER. */
+/** El rol que atiende los enlaces públicos (Cotizar, 0030; la baja, 0037 §9): dueño de sus funciones SECURITY DEFINER. */
 export const PUBLIC_SHARE_ROLE = 'mc_public_share';
 
 /** Lo que el rol de los enlaces públicos puede hacer sobre una relación de `public`. */
@@ -502,11 +568,59 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['SELECT'],
     motivo: 'leer la etapa del negocio: la pide assert_reference_visible de 0025 al cambiar deal.stage_id (0030 §3)',
   },
+  // La baja desde el enlace de un correo (0037 §9). Sus políticas dicen qué filas.
+  outbound_touch: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['blocked_reason', 'status'] },
+    motivo:
+      'encontrar el toque enviado por el sha256 del token y cancelar lo pendiente del contacto que pide la baja, en ' +
+      'cualquier workspace (0037 §9). Nunca el cuerpo, el destinatario ni las fechas',
+  },
+  outbound_enrollment: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['finished_at', 'status'] },
+    motivo: 'pasar a opted_out los enrolamientos de ese contacto y anotar cuándo terminaron (0037 §9)',
+  },
+  contact: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['opted_out', 'opted_out_at', 'opted_out_reason'] },
+    motivo:
+      'leer si la ficha que recibió el correo ya estaba de baja y marcar la baja en ella y en las fichas con la ' +
+      'dirección a la que salió (0037 §9). Nunca el correo, el nombre ni el dueño',
+  },
+  company: {
+    tabla: ['SELECT'],
+    motivo:
+      'contact_read (0029 §3) pregunta por la empresa del contacto y también le alcanza a este rol: sin SELECT, la ' +
+      'baja no podría leer la ficha (0037 §9). company_read le deja ver solo el catálogo compartido (sin dueño)',
+  },
+  company_link: {
+    tabla: ['SELECT'],
+    motivo:
+      'el WITH CHECK de contact_write (0020) pregunta por company_link al marcar la baja (0037 §9). Su política es ' +
+      'la de 0010: sin workspace fijado, este rol no ve ninguna fila',
+  },
+  contact_suppression: {
+    tabla: ['INSERT'],
+    motivo:
+      'anotar el correo en la baja global con reason unsubscribe_link, la baja verificable de la propia persona que ' +
+      '0029 §1 reserva a la lista (0037 §9). No la lee',
+  },
+  outbound_optout_link: {
+    tabla: ['SELECT'],
+    motivo:
+      'encontrar el enlace por el sha256 del token: la dirección a la que salió el correo, la ficha y el workspace ' +
+      'que lo envió (0037 §4.5 y §9). No lo escribe',
+  },
+  outbound_optout_event: {
+    tabla: ['INSERT'],
+    motivo: 'anotar el clic con el workspace y el toque que lo originaron (0037 §4.6). No lo lee',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
 export interface PoliticaDelEnlace {
-  /** polcmd: r = SELECT, w = UPDATE. */
+  /** polcmd: r = SELECT, w = UPDATE, a = INSERT (se mira su WITH CHECK). */
   cmd: string;
   /**
    * Lo que tiene que decir la expresión. USING y, si lo trae, WITH CHECK
@@ -521,9 +635,12 @@ export interface PoliticaDelEnlace {
 
 const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share'/;
 const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
+/** La baja (0037 §9): el sha256 del token, y la lista de contactos que public_optout fija. */
+const TOKEN_DE_LA_BAJA = /^\(?token_hash = NULLIF\(current_setting\('app\.public_optout'/;
+const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030 y la de 0033. Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las nueve de la baja (0037 §9). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -568,6 +685,52 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     ],
     motivo: 'la etapa en la que está un negocio que el rol ya ve (deal_public_share decide cuál)',
   },
+  // La baja desde el enlace de un correo (0037 §9).
+  'outbound_optout_link.outbound_optout_link_public_optout': {
+    cmd: 'r',
+    exige: [TOKEN_DE_LA_BAJA],
+    motivo: 'el enlace cuyo sha256 del token fija public_optout',
+  },
+  'outbound_optout_event.outbound_optout_event_public_optout': {
+    cmd: 'a',
+    exige: [TOKEN_DE_LA_BAJA],
+    motivo: 'anotar el clic de ese mismo enlace, y ningún otro',
+  },
+  'outbound_touch.outbound_touch_public_optout_contacts': {
+    cmd: 'r',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'los toques de los contactos que se dan de baja',
+  },
+  'outbound_touch.outbound_touch_public_optout_cancel': {
+    cmd: 'w',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'cancelar los toques pendientes de esos contactos',
+  },
+  'outbound_enrollment.outbound_enrollment_public_optout': {
+    cmd: 'r',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'los enrolamientos de los contactos que se dan de baja',
+  },
+  'outbound_enrollment.outbound_enrollment_public_optout_cancel': {
+    cmd: 'w',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'pasar a opted_out los enrolamientos de esos contactos',
+  },
+  'contact.contact_public_optout': {
+    cmd: 'r',
+    exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'las fichas de los contactos que se dan de baja',
+  },
+  'contact.contact_public_optout_email': {
+    cmd: 'r',
+    exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
+    motivo: 'las fichas con la dirección a la que salió el correo del enlace (recipient_address), en cualquier workspace',
+  },
+  'contact.contact_public_optout_mark': {
+    cmd: 'w',
+    exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'marcar la baja en esas fichas',
+  },
 };
 
 /**
@@ -607,6 +770,12 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
   'connection_secret.connection_secret_pkey':
     'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
     'chocar con una exige conocerla, y conocerla ya es tenerla',
+  'outreach_channel_account.outreach_channel_account_live_idx':
+    'un buzón (el Gmail o la cuenta de Unipile) envía desde UN workspace (0037 §2): los topes son por cuenta y, con ' +
+    'dos filas vivas del mismo buzón en dos workspaces, el proveedor recibiría el doble. El índice cubre solo las ' +
+    'cuentas AUTENTICADAS (connected, needs_reconnect, error), y a esos estados solo llega el callback del ' +
+    'proveedor (outreach_channel_account_worker_columns, en DISPARADORES_DE_CANDADO): chocar exige haber ' +
+    'autenticado esa misma cuenta, que ya es tenerla. Una fila pending de la web no ocupa nada',
 };
 
 /**
@@ -729,6 +898,38 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'toca. Con escritura, un workspace daba de baja a cualquier correo en toda la plataforma (0029 §1)',
   },
 
+  // Outreach (0037 §7.4).
+  outbound_sequence_template: { permite: ['SELECT'], motivo: 'catálogo global de plantillas de solo lectura' },
+  outbound_counter: {
+    permite: ['SELECT'],
+    motivo:
+      'los límites diarios y semanales los suma el despachador (worker) con increment_if_under_cap e ' +
+      'increment_weekly; con escritura, un workspace se reiniciaría sus propios topes y quemaría su cuenta',
+  },
+  outbound_breaker: { permite: ['SELECT'], motivo: 'el disyuntor por tipo de paso lo calcula el worker' },
+  outbound_review: {
+    permite: ['SELECT', 'INSERT'],
+    motivo: 'bitácora de la puerta de calidad (nota, tokens y costo): se anota, no se corrige ni se borra',
+  },
+  outbound_optout_link: {
+    permite: [],
+    motivo:
+      'la prueba del enlace de baja de cada correo (0037 §4.5): la escribe solo el despachador y la lee ' +
+      'public_optout. Con escritura, un workspace se fabricaba un enlace para dar de baja a cualquiera',
+  },
+  outbound_optout_event: {
+    permite: [],
+    motivo:
+      'quién provocó cada baja global (0037 §4.6): la escribe public_optout y la lee un operador. Con escritura, ' +
+      'un workspace borraría su rastro',
+  },
+  outbound_llm_call: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'bitácora de cada llamada al modelo (tokens y costo): se anota, no se corrige ni se borra. Borrar las de hoy ' +
+      'devolvería el presupuesto llm_daily_cap_usd',
+  },
+
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
 
@@ -841,6 +1042,8 @@ export interface EstadoDelEsquema {
   columnasQueFaltan: string[];
   /** Disparadores de tablas de `public` que llaman a una función SECURITY DEFINER, sin declarar. */
   disparadoresDefiner: string[];
+  /** Disparadores de DISPARADORES_DE_CANDADO que no existen o están desactivados, con lo que cierran. */
+  candadosQueFaltan: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
   reglas: string[];
   /** Esquemas fuera de public a los que llega mc_app, o CREATE en public. */
@@ -962,6 +1165,10 @@ interface FilaFuncionDelCodigo extends Record<string, unknown> {
   firma: string;
   existe: boolean;
   ejecuta: boolean;
+}
+interface FilaCandado extends Record<string, unknown> {
+  clave: string;
+  estado: string | null;
 }
 interface FilaColumnaQueFalta extends Record<string, unknown> {
   relacion: string;
@@ -1199,6 +1406,20 @@ const SQL_COLUMNAS_DEL_CODIGO = `
                         AND a.attnum > 0 AND NOT a.attisdropped)
    ORDER BY 1, 2`;
 
+/**
+ * Por cada `tabla.disparador` de DISPARADORES_DE_CANDADO: su estado
+ * (tgenabled) o NULL si no existe. 'O' y 'A' disparan en una sesión
+ * normal; 'D' está desactivado y 'R' solo dispara en réplica.
+ */
+const SQL_CANDADOS = `
+  SELECT k AS clave, t.tgenabled::text AS estado
+    FROM unnest($1::text[]) AS k
+    LEFT JOIN pg_trigger t
+      ON t.tgrelid = to_regclass('public.' || quote_ident(split_part(k, '.', 1)))
+     AND t.tgname = split_part(k, '.', 2)
+     AND NOT t.tgisinternal
+   ORDER BY 1`;
+
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
 const SQL_DISPARADORES_DEFINER = `
   SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
@@ -1393,6 +1614,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
+  const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
   const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
   const rolesDeLaApp = await leer<FilaRol>(SQL_ROL_DE_LA_APP, [APP_ROLE]);
@@ -1645,6 +1867,15 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       (f) =>
         `${f.firma} (${f.existe ? `${APP_ROLE} no la puede ejecutar` : 'no existe'}; ` +
         `${FUNCIONES_QUE_USA_EL_CODIGO[f.firma] ?? 'sin motivo declarado'})`,
+    );
+
+  // ---- candados: que existan y que disparen.
+  const candadosQueFaltan = candados
+    .filter((c) => c.estado !== 'O' && c.estado !== 'A')
+    .map(
+      (c) =>
+        `${c.clave} (${c.estado === null ? 'no existe' : 'desactivado'}; ` +
+        `${DISPARADORES_DE_CANDADO[c.clave] ?? 'sin motivo declarado'})`,
     );
 
   // ---- columnas que el código lee y escribe (src/schema): que existan.
@@ -2023,9 +2254,12 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     const cumple = (expr: string | null) =>
       expr !== null &&
       terminosDelAnd(expr).some((t) => !/ OR /i.test(t) && declarada.exige.every((re) => re.test(t)));
+    // Una política de INSERT ('a') no tiene USING: lo que acota la fila
+    // es su WITH CHECK, que entonces es obligatorio.
+    const alta = p.cmd === 'a';
     const malas = [
-      cumple(p.qual) ? '' : `USING ${p.qual ?? '(sin expresión)'}`,
-      p.with_check === null || cumple(p.with_check) ? '' : `WITH CHECK ${p.with_check}`,
+      (alta && p.qual === null) || cumple(p.qual) ? '' : `USING ${p.qual ?? '(sin expresión)'}`,
+      (!alta && p.with_check === null) || cumple(p.with_check) ? '' : `WITH CHECK ${p.with_check ?? '(sin expresión)'}`,
     ].filter(Boolean);
     if (malas.length) {
       enlaceDeMas.push(`política ${p.clave} ya no abre solo ${declarada.motivo}: ${malas.join('; ')}`);
@@ -2064,6 +2298,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     funcionesQueFaltan,
     columnasQueFaltan,
     disparadoresDefiner,
+    candadosQueFaltan,
     reglas,
     esquemasDeMas,
     rolDeLaApp,
@@ -2103,6 +2338,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   funcionesQueFaltan: [],
   columnasQueFaltan: [],
   disparadoresDefiner: [],
+  candadosQueFaltan: [],
   reglas: [],
   esquemasDeMas: [],
   rolDeLaApp: [],
@@ -2201,6 +2437,14 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         '. Quítalos, haz la función SECURITY INVOKER, o decláralos en DISPARADORES_DEFINER_DECLARADOS',
     );
   }
+  if (estado.candadosQueFaltan.length) {
+    partes.push(
+      'faltan o están desactivados disparadores que cierran un hueco de seguridad, y ningún GRANT lo cierra en ' +
+        'su lugar: ' +
+        estado.candadosQueFaltan.join('; ') +
+        '. Vuelve a activarlos (ALTER TABLE … ENABLE TRIGGER) o aplica la migración que los crea',
+    );
+  }
   if (estado.reglas.length) {
     partes.push(
       'hay reglas (CREATE RULE) en public: su acción corre con los privilegios del dueño de la tabla y rodea los ' +
@@ -2264,8 +2508,8 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   }
   if (estado.enlacePublico.length) {
     partes.push(
-      `el rol de los enlaces públicos (${PUBLIC_SHARE_ROLE}), que atiende /kit y /cotizacion sin sesión, no es el ` +
-        'que promete 0030: ' +
+      `el rol de los enlaces públicos (${PUBLIC_SHARE_ROLE}), que atiende /kit, /cotizacion y la baja sin sesión, ` +
+        'no es el que prometen 0030 y 0037: ' +
         estado.enlacePublico.join('; ') +
         '. Revoca lo que sobra (los atributos y las membresías, con ./scripts/supabase-admin.sh), o cambia ' +
         'PRIVILEGIOS_DEL_ENLACE_PUBLICO / POLITICAS_DEL_ENLACE_PUBLICO junto con la migración que lo concede',
