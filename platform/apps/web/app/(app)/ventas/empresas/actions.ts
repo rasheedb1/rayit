@@ -1,0 +1,193 @@
+"use server";
+
+/**
+ * Las Server Actions de la ficha de empresa (VEN-5) y de la siguiente
+ * acción (VEN-4): registrar una actividad, fijar la siguiente acción y
+ * marcarla hecha. Las usan la ficha, el pipeline y el bloque «Para hoy».
+ *
+ * La misma forma que ../actions.ts: zod valida lo que llega, la consulta
+ * de @mc/db hace el trabajo dentro de `withWorkspace`, y los errores de
+ * dominio vuelven como código —FichaError de ventas-ficha, o VentasError
+ * de ventas— que aquí se traducen. Cualquier otro error se registra y se
+ * resume: un mensaje de Postgres no se le enseña a una creadora.
+ */
+import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { VentasError } from "@mc/db/queries/ventas";
+import {
+  ACTIVITY_BODY_MAX,
+  FichaError,
+  LOGGABLE_ACTIVITY_KINDS,
+  NEXT_ACTION_MAX,
+  completeNextAction,
+  logActivity,
+  setNextAction,
+  type FichaErrorCode,
+} from "@mc/db/queries/ventas-ficha";
+import { UUID_RE, firstErrors, formField as field } from "@/lib/forms";
+import type { VentasState } from "../actions";
+import { withWorkspace } from "../_lib/db";
+import { MESSAGES } from "../_lib/messages";
+import { FICHA } from "./messages";
+
+const E = MESSAGES.errores;
+const F = FICHA.errores;
+
+/** El texto de un error de dominio, o el genérico de la acción (y entonces se registra). */
+function messageOf(err: unknown, fallback: string): string {
+  if (err instanceof FichaError && Object.hasOwn(F, err.code)) return F[err.code];
+  if (err instanceof VentasError && Object.hasOwn(E, err.code)) {
+    const m = E[err.code];
+    return typeof m === "function" ? m(err.params) : m;
+  }
+  console.error("[ventas/ficha]", err);
+  return fallback;
+}
+
+/** El código de dominio de un error, si lo tiene. */
+function codeOf(err: unknown): FichaErrorCode | null {
+  return err instanceof FichaError ? err.code : null;
+}
+
+function revalidate(companyId: string | null): void {
+  revalidatePath("/ventas");
+  revalidatePath("/ventas/empresas");
+  if (companyId) revalidatePath(`/ventas/empresas/${companyId}`);
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** Vacío o un uuid; el mensaje lo pone quien lo usa. */
+const optionalUuid = (message?: string) => z.string().refine((v) => v === "" || UUID_RE.test(v), message);
+
+// ---------------------------------------------------------------------
+// VEN-4 · Siguiente acción
+// ---------------------------------------------------------------------
+
+const siguienteSchema = z.object({
+  dealId: z.string().regex(UUID_RE, FICHA.siguiente.error),
+  action: z.string().trim().min(1, F.InvalidNextAction).max(NEXT_ACTION_MAX, F.InvalidNextAction),
+  dueDate: z.string().regex(ISO_DATE, F.InvalidDueDate),
+  dueTime: z.string().refine((v) => v === "" || TIME.test(v), F.InvalidDueDate),
+  responsibleUserId: optionalUuid(F.InvalidResponsible),
+});
+
+/**
+ * Qué, cuándo y quién: la siguiente acción de un negocio abierto. El día
+ * y la hora se leen en la zona del espacio (lo hace la base). Si el
+ * formulario no manda el campo del responsable, no se toca; vacío es
+ * «Sin responsable».
+ */
+export async function fijarSiguienteAccion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.siguiente;
+  const parsed = siguienteSchema.safeParse({
+    dealId: field(formData, "dealId"),
+    action: field(formData, "action"),
+    dueDate: field(formData, "dueDate"),
+    dueTime: field(formData, "dueTime"),
+    responsibleUserId: field(formData, "responsibleUserId"),
+  });
+  if (!parsed.success) {
+    const errors = firstErrors(parsed.error.issues);
+    if (errors.dealId) return { message: t.error };
+    return { errors };
+  }
+  const v = parsed.data;
+  let companyId: string;
+  try {
+    ({ companyId } = await withWorkspace((tx) =>
+      setNextAction(tx, v.dealId, {
+        action: v.action,
+        dueDate: v.dueDate,
+        dueTime: v.dueTime || null,
+        ...(formData.has("responsibleUserId") ? { responsibleUserId: v.responsibleUserId || null } : {}),
+      }),
+    ));
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    const code = codeOf(err);
+    if (code === "InvalidNextAction") return { errors: { action: message } };
+    if (code === "InvalidDueDate" || code === "PastDueDate") return { errors: { dueDate: message } };
+    if (code === "InvalidResponsible") return { errors: { responsibleUserId: message } };
+    return { message };
+  }
+  revalidate(companyId);
+  return { ok: true, notice: t.saved, stamp: Date.now() };
+}
+
+/**
+ * «Hecha»: la acción se cumplió. Queda como nota en la historia y el
+ * negocio pide la siguiente.
+ */
+export async function marcarHecha(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.siguiente;
+  const dealId = field(formData, "dealId");
+  if (!UUID_RE.test(dealId)) return { message: t.doneError };
+  let companyId: string;
+  try {
+    ({ companyId } = await withWorkspace((tx) => completeNextAction(tx, dealId, t.doneActivity)));
+  } catch (err) {
+    return { message: messageOf(err, t.doneError) };
+  }
+  revalidate(companyId);
+  return { ok: true, notice: t.doneNotice, stamp: Date.now() };
+}
+
+// ---------------------------------------------------------------------
+// VEN-5 · Registrar actividad
+// ---------------------------------------------------------------------
+
+const actividadSchema = z.object({
+  companyId: z.string().regex(UUID_RE, FICHA.actividad.error),
+  kind: z.enum(LOGGABLE_ACTIVITY_KINDS, F.InvalidActivityKind),
+  body: z.string().trim().max(ACTIVITY_BODY_MAX, F.InvalidActivityBody),
+  dealId: optionalUuid(),
+  contactId: optionalUuid(),
+  occurredOn: z.string().refine((v) => v === "" || ISO_DATE.test(v), F.InvalidActivityDate),
+});
+
+/**
+ * Registra una nota, una llamada, un correo o una reunión en la ficha.
+ * Las tres últimas mueven el último contacto del negocio (o de todos los
+ * abiertos de la empresa si no se eligió uno): lo hace logActivity.
+ */
+export async function registrarActividad(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.actividad;
+  const parsed = actividadSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    kind: field(formData, "kind"),
+    body: field(formData, "body"),
+    dealId: field(formData, "dealId"),
+    contactId: field(formData, "contactId"),
+    occurredOn: field(formData, "occurredOn"),
+  });
+  if (!parsed.success) {
+    const errors = firstErrors(parsed.error.issues);
+    if (errors.companyId || errors.dealId || errors.contactId) return { message: t.error };
+    return { errors };
+  }
+  const v = parsed.data;
+  if (v.kind === "note" && v.body === "") return { errors: { body: F.InvalidActivityBody } };
+  try {
+    await withWorkspace((tx) =>
+      logActivity(tx, {
+        companyId: v.companyId,
+        kind: v.kind,
+        body: v.body || null,
+        dealId: v.dealId || null,
+        contactId: v.contactId || null,
+        occurredOn: v.occurredOn || null,
+      }),
+    );
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    const code = codeOf(err);
+    if (code === "InvalidActivityBody") return { errors: { body: message } };
+    if (code === "InvalidActivityDate") return { errors: { occurredOn: message } };
+    if (code === "DealNotInCompany") return { errors: { dealId: message } };
+    if (code === "ContactNotInCompany") return { errors: { contactId: message } };
+    return { message };
+  }
+  revalidate(v.companyId);
+  return { ok: true, notice: t.logged[v.kind], stamp: Date.now() };
+}

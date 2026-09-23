@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { getSalesKpis, getStageTotals, listPipeline, listSignals } from "@mc/db/queries/ventas";
+import { getSalesKpis, getStageTotals, listOwnerOptions, listPipeline, listSignals } from "@mc/db/queries/ventas";
+import { getLocalDates, listNextActions } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor } from "@/lib/format";
@@ -14,6 +15,8 @@ import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 import { pipelineForma, tabKey } from "../_lib/estado";
 import { ModuleTabs } from "../_componentes/pestanas";
+import { opcionesDeResponsable } from "../_seguimiento/datos";
+import { ParaHoy } from "../_seguimiento/para-hoy";
 
 export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -26,11 +29,15 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, deals, stages } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, deals, stages, nextActions, owners, dates } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
     deals: vista === "pipeline" ? await listPipeline(tx) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
+    // La siguiente acción de cada negocio abierto, editable en la tarjeta (VEN-4).
+    nextActions: vista === "pipeline" ? await listNextActions(tx) : [],
+    owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
+    dates: vista === "pipeline" ? await getLocalDates(tx) : null,
   }));
 
   const workspace = await getCurrentWorkspace();
@@ -54,6 +61,9 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         title={t.header.title}
         description={t.header.description}
       />
+
+      {/* VEN-4: lo vencido y lo de hoy, antes que cualquier cifra. */}
+      <ParaHoy />
 
       <KpiRow>
         <Kpi
@@ -91,7 +101,13 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         {vista === "radar" ? (
           <RadarView signals={signals} f={f} currency={workspace.currency} />
         ) : (
-          <PipelineView deals={deals} stages={stages} f={f} forma={forma} />
+          <PipelineView
+            deals={deals}
+            stages={stages}
+            f={f}
+            forma={forma}
+            seguimiento={dates ? { rows: nextActions, ctx: { owners: opcionesDeResponsable(owners, nextActions), ...dates } } : undefined}
+          />
         )}
       </div>
     </>

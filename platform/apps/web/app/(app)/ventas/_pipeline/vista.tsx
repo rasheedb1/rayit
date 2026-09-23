@@ -8,6 +8,9 @@ import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { MESSAGES } from "../_lib/messages";
 import { lostReasonText, needsNextAction, pillForDue, type PipelineForma } from "../_lib/estado";
+import { siguienteAccionData, type SeguimientoContexto } from "../_seguimiento/datos";
+import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
+import type { NextActionRow } from "@mc/db/queries/ventas-ficha";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
@@ -20,17 +23,22 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
  * formateador del workspace y le pasa al tablero, que es de cliente,
  * los textos ya hechos. Los montos de cada columna llegan de
  * getStageTotals, sumados en SQL.
+ *
+ * Con `seguimiento` (VEN-4), la siguiente acción de cada negocio abierto
+ * se edita en su tarjeta y en su fila; sin él, se lee como antes.
  */
 export function PipelineView({
   deals,
   stages,
   f,
   forma,
+  seguimiento,
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
   f: Formatter;
   forma: PipelineForma;
+  seguimiento?: { rows: NextActionRow[]; ctx: SeguimientoContexto };
 }) {
   const t = MESSAGES.pipeline;
 
@@ -45,6 +53,7 @@ export function PipelineView({
     );
   }
 
+  const acciones = new Map((seguimiento?.rows ?? []).map((r) => [r.dealId, r]));
   const boardDeals: BoardDeal[] = deals.map((d) => ({
     id: d.id,
     companyId: d.companyId,
@@ -65,12 +74,19 @@ export function PipelineView({
     // ofrece (listQuotableDeals) y los que tiene sentido cotizar.
     quoteHref: d.isWon || d.isLost ? null : quoteHref(d.id),
     lostReasonText: lostReasonText(d.lostReason),
+    siguiente: (() => {
+      const row = d.isWon || d.isLost ? undefined : acciones.get(d.id);
+      if (!row || !seguimiento) return null;
+      const negocio = dealLabel(d.companyName, d.name);
+      return siguienteAccionData(row, f, seguimiento.ctx, negocio ? `${d.companyName} · ${negocio}` : d.companyName);
+    })(),
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,
     label: s.labelEs,
     countText: f.int(s.dealCount),
-    amountText: f.money(s.amount, undefined, { mode: "short" }),
+    // Una columna vacía no dice «COP 0»: el conteo 0 ya lo dice (pulido r8).
+    amountText: s.dealCount > 0 ? f.money(s.amount, undefined, { mode: "short" }) : null,
     isLost: s.isLost,
     isWon: s.isWon,
   }));
@@ -83,7 +99,11 @@ export function PipelineView({
 
       <FormaSwitch forma={forma} />
 
-      {forma === "tablero" ? <PipelineBoard deals={boardDeals} stages={boardStages} /> : <PipelineList deals={boardDeals} />}
+      {forma === "tablero" ? (
+        <PipelineBoard deals={boardDeals} stages={boardStages} ctx={seguimiento?.ctx} />
+      ) : (
+        <PipelineList deals={boardDeals} ctx={seguimiento?.ctx} />
+      )}
     </section>
   );
 }
@@ -128,7 +148,7 @@ function FormaSwitch({ forma }: { forma: PipelineForma }) {
  * vencida, que es lo que esta vista existe para enseñar— quedaba fuera de
  * la pantalla. Ahí cada negocio es una tarjeta, como en el tablero.
  */
-function PipelineList({ deals }: { deals: BoardDeal[] }) {
+function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx?: SeguimientoContexto }) {
   const t = MESSAGES.pipeline;
   const columns: Column<BoardDeal>[] = [
     {
@@ -152,7 +172,9 @@ function PipelineList({ deals }: { deals: BoardDeal[] }) {
       key: "next",
       header: t.columns.nextAction,
       render: (d) =>
-        d.nextAction ? (
+        d.siguiente && ctx ? (
+          <SiguienteAccion data={d.siguiente} ctx={ctx} compact />
+        ) : d.nextAction ? (
           <span className="flex flex-wrap items-center gap-1.5">
             {d.due && <Pill kind={d.due.kind}>{d.due.text}</Pill>}
             <span>
@@ -192,7 +214,7 @@ function PipelineList({ deals }: { deals: BoardDeal[] }) {
       </div>
       <ul aria-label={t.listCaption} className="flex flex-col gap-2 sm:hidden">
         {deals.map((d) => (
-          <FilaMovil key={d.id} deal={d} />
+          <FilaMovil key={d.id} deal={d} ctx={ctx} />
         ))}
       </ul>
     </>
@@ -200,7 +222,7 @@ function PipelineList({ deals }: { deals: BoardDeal[] }) {
 }
 
 /** Un negocio de la lista en el teléfono: marca y negocio; etapa y monto; la siguiente acción con su estado. */
-function FilaMovil({ deal: d }: { deal: BoardDeal }) {
+function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx?: SeguimientoContexto }) {
   const t = MESSAGES.pipeline;
   const negocio = dealLabel(d.companyName, d.name);
   return (
@@ -220,7 +242,11 @@ function FilaMovil({ deal: d }: { deal: BoardDeal }) {
         {d.stageLabel} · <span className="tabular-nums">{t.days(d.daysInStage)}</span>
         {d.lostReasonText && ` · ${d.lostReasonText}`}
       </p>
-      {(d.nextAction || d.needsNextAction) && (
+      {d.siguiente && ctx ? (
+        <div className="mt-2">
+          <SiguienteAccion data={d.siguiente} ctx={ctx} compact />
+        </div>
+      ) : (d.nextAction || d.needsNextAction) && (
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
           {d.due && <Pill kind={d.due.kind}>{d.due.text}</Pill>}
           {d.nextAction ? (

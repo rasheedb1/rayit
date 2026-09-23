@@ -11,6 +11,8 @@ import { moverNegocio } from "../actions";
 import { Aviso } from "../_componentes/aviso";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
+import type { SeguimientoContexto, SiguienteAccionData } from "../_seguimiento/datos";
+import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
 
 /** Un negocio listo para pintar: montos y fechas ya formateados en el servidor. */
 export interface BoardDeal {
@@ -33,6 +35,11 @@ export interface BoardDeal {
   quoteHref: string | null;
   /** Por qué se perdió («Por el precio»); null si no está perdido o no se dijo. */
   lostReasonText: string | null;
+  /**
+   * La siguiente acción editable en la tarjeta (VEN-4); null en los
+   * cerrados. Sin ella (o sin `ctx` en el tablero) se lee como texto.
+   */
+  siguiente?: SiguienteAccionData | null;
 }
 
 /** Una columna con su cabecera ya contada y sumada en SQL. */
@@ -40,7 +47,8 @@ export interface BoardStage {
   id: string;
   label: string;
   countText: string;
-  amountText: string;
+  /** Null en una columna vacía: no se pinta «COP 0» encima de «Nada aquí». */
+  amountText: string | null;
   /** Una etapa perdida: pasar a ella pide el motivo. */
   isLost: boolean;
   /** Una etapa ganada: pasar a ella un negocio sin monto pide el monto. */
@@ -74,7 +82,7 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * servidor no lo mueve (AmountRequired): si no, «N cerrados» subía y
  * «Ganado este trimestre» no, y las dos cifras dejaban de cuadrar.
  */
-export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: BoardStage[] }) {
+export function PipelineBoard({ deals, stages, ctx }: { deals: BoardDeal[]; stages: BoardStage[]; ctx?: SeguimientoContexto }) {
   const t = MESSAGES.pipeline;
   const [optimistic, addOptimistic] = useOptimistic(deals, (current: BoardDeal[], move: Move) => applyMove(current, move));
   const [pending, startTransition] = useTransition();
@@ -86,6 +94,18 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
    * qué etapa va: por qué se pierde, o por cuánto se gana si no tiene monto.
    */
   const [pregunta, setPregunta] = useState<{ dealId: string; toStageId: string; kind: "lost" | "won" } | null>(null);
+  /**
+   * El negocio que se acaba de mover: su tarjeta se desmonta de una
+   * columna y se monta en otra, y el foco caía en <body>. Cuando termina,
+   * vuelve a su menú «Mover a», en la columna donde quedó (pulido r8).
+   */
+  const [focusDeal, setFocusDeal] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!focusDeal || pending) return;
+    document.getElementById(`mover-${focusDeal}`)?.focus();
+    setFocusDeal(null);
+  }, [focusDeal, pending, optimistic]);
 
   function move(dealId: string, toStageId: string, extra: { lostReason?: string; amount?: string } = {}) {
     const deal = optimistic.find((d) => d.id === dealId);
@@ -113,6 +133,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
             }
           : { message: res.message ?? t.moveError },
       );
+      setFocusDeal(dealId);
     });
   }
 
@@ -158,7 +179,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                   <span className="text-sm font-medium text-ink">{stage.label}</span>
                   <span className="text-xs tabular-nums text-muted">{stage.countText}</span>
                 </div>
-                <p className="mb-2 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
+                <p className="mb-2 min-h-4 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
 
                 <div
                   className={`min-h-24 rounded-md transition-colors ${isOver ? "bg-hover outline-2 outline-dashed outline-axis" : ""}`}
@@ -175,6 +196,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                           key={deal.id}
                           deal={deal}
                           stages={stages}
+                          ctx={ctx}
                           dragging={dragging === deal.id}
                           onDragStart={() => setDragging(deal.id)}
                           onDragEnd={() => {
@@ -209,6 +231,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
 function DealCard({
   deal,
   stages,
+  ctx,
   dragging,
   onDragStart,
   onDragEnd,
@@ -219,6 +242,7 @@ function DealCard({
 }: {
   deal: BoardDeal;
   stages: BoardStage[];
+  ctx?: SeguimientoContexto;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -237,6 +261,8 @@ function DealCard({
   const [amount, setAmount] = useState("");
   const amountId = `ganado-${deal.id}`;
   const askingWon = asking?.kind === "won";
+  /** Mientras se escribe la siguiente acción, la tarjeta no se arrastra: seleccionar texto la movía. */
+  const [editingNext, setEditingNext] = useState(false);
 
   // «¿Por cuánto lo ganaste?» aparece debajo del menú: el foco va al
   // monto, como el motivo de «Perdido» (que lleva autoFocus en su
@@ -278,7 +304,7 @@ function DealCard({
 
   return (
     <li
-      draggable
+      draggable={!editingNext}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, deal.id);
         e.dataTransfer.effectAllowed = "move";
@@ -309,7 +335,11 @@ function DealCard({
 
       {deal.lostReasonText && <p className="mt-2 text-xs leading-4 text-muted">{deal.lostReasonText}</p>}
 
-      {(deal.nextAction || deal.needsNextAction) && (
+      {deal.siguiente && ctx ? (
+        <div className="mt-2 cursor-auto">
+          <SiguienteAccion data={deal.siguiente} ctx={ctx} compact onEditingChange={setEditingNext} />
+        </div>
+      ) : (deal.nextAction || deal.needsNextAction) && (
         <p className="mt-2 text-xs leading-4 text-ink-2">
           {deal.nextAction ? (
             <>

@@ -1495,9 +1495,10 @@ function dueInBusinessDays(desde: string, dias: string, hora: string): string {
 /**
  * El workspace actual con su zona, para las consultas que la necesitan.
  * Vacía cae en UTC, como en Cotizar (sendQuote); la zona la valida
- * quien la guarda en el workspace.
+ * quien la guarda en el workspace. La usa también queries/ventas-ficha.ts
+ * (VEN-4, VEN-5): una sola definición de «la zona del espacio».
  */
-const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
+export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
     FROM workspace WHERE id = current_workspace_id())`;
 
 /**

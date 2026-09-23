@@ -45,11 +45,21 @@ const vitale: SignalRow = {
 };
 
 vi.mock("@mc/db/queries/ventas", () => ({
+  PITCH_DUE_HOUR: 15,
   getSalesKpis: async () => kpis,
   listSignals: async () => [vitale],
   listPipeline: async () => [],
   getStageTotals: async () => [],
+  listOwnerOptions: async () => [],
 }));
+vi.mock("@mc/db/queries/ventas-ficha", () => ({
+  listNextActions: async () => [],
+  getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24" }),
+}));
+// «Para hoy» es un componente de servidor asíncrono con su propia prueba
+// (_seguimiento/para-hoy.test.tsx); aquí basta con que la portada lo monte.
+vi.mock("./empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn(), registrarActividad: vi.fn() }));
+vi.mock("./_seguimiento/para-hoy", () => ({ ParaHoy: () => <div data-testid="para-hoy" /> }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
@@ -76,6 +86,13 @@ describe("la portada de Ventas (pulido r8)", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(MESSAGES.header.title);
     expect(screen.queryByRole("link", { name: /Plan de construcción/i })).toBeNull();
     expect(document.querySelector('a[href^="/plan"]')).toBeNull();
+  });
+
+  it("monta «Para hoy» arriba de las cifras (VEN-4)", async () => {
+    render(await VentasPage({ searchParams: Promise.resolve({}) }));
+    const bloque = screen.getByTestId("para-hoy");
+    const primeraCifra = screen.getAllByText(MESSAGES.kpis.pending)[0]!;
+    expect(bloque.compareDocumentPosition(primeraCifra) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("la señal de una marca del CRM dice que ya está ahí y a qué negocio se sumará", async () => {
