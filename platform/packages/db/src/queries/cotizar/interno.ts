@@ -7,7 +7,7 @@ import { validarRangoPrecio, type Decimal } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
 import type { MoveDealResult } from '../ventas.ts';
 import type { QuoteDetail, TextosCotizar } from './cotizacion.ts';
-import { MediaKitNotFound, RangoDeTarifaInvalido } from './errores.ts';
+import { MediaKitNotFound, OtraVersionEnCurso, RangoDeTarifaInvalido } from './errores.ts';
 
 export function assertRango(low: Decimal | null, high: Decimal | null, deliverable: string | null): void {
   const motivo = validarRangoPrecio(low, high);
@@ -83,4 +83,67 @@ export async function registrarCambioDeMonto(
     quoteId: quote.id,
     ...params,
   });
+}
+
+/**
+ * Bloquea el negocio —DESPUÉS de la cotización, el orden de siempre
+ * (ver getQuoteForUpdate)— y devuelve la OTRA cotización aceptada con
+ * la que ya está ganado, o null.
+ *
+ * «Ganado con otra aceptada» y no solo «hay otra aceptada»: un negocio
+ * ganado cuya campaña se cancela se puede reabrir (deal_move_stage,
+ * 0031), y la versión que se negocie entonces se tiene que poder
+ * aceptar; la aceptada vieja sigue siendo historia. Es la misma regla
+ * que public_quote_accept_impl (0033) aplica desde el enlace.
+ *
+ * La segunda de dos aceptaciones a la vez espera aquí al bloqueo del
+ * negocio y, cuando lo tiene, la consulta siguiente ya ve la primera.
+ */
+export async function aceptadaDelNegocio(tx: WorkspaceTx, dealId: string, quoteId: string): Promise<{ id: string; number: string } | null> {
+  const { rows } = await tx.query<{ won_at: string | null }>('SELECT won_at FROM deal WHERE id = $1 FOR UPDATE', [dealId]);
+  if (!rows[0] || rows[0].won_at === null) return null;
+  const { rows: otra } = await tx.query<{ id: string; number: string }>(
+    `SELECT id, number FROM quote
+      WHERE deal_id = $1 AND id <> $2 AND status = 'accepted'
+      ORDER BY accepted_at DESC NULLS LAST
+      LIMIT 1`,
+    [dealId, quoteId],
+  );
+  return otra[0] ?? null;
+}
+
+/**
+ * Deja sin efecto las demás versiones VIVAS (enviadas o vistas) del
+ * negocio: 'expired' con superseded_by = la que se envía o se acepta
+ * (0033). Así un negocio tiene, en todo momento, como mucho una
+ * cotización que la marca puede aceptar, y el detalle de las dos lo
+ * dice («COT-2026-009 queda sin efecto»). Devuelve sus números.
+ *
+ * NOWAIT: si la marca está aceptando una de esas versiones en este
+ * instante, public_quote_accept tiene su fila y espera la del negocio,
+ * que ya es nuestra. Esperarla sería un bloqueo mutuo; se para con
+ * OtraVersionEnCurso y quien envía recarga y ve cómo quedó.
+ */
+export async function dejarSinEfecto(tx: WorkspaceTx, dealId: string, quoteId: string): Promise<string[]> {
+  let vivas: { id: string }[];
+  try {
+    ({ rows: vivas } = await tx.query<{ id: string }>(
+      `SELECT id FROM quote
+        WHERE deal_id = $1 AND id <> $2 AND status IN ('sent', 'viewed')
+        FOR UPDATE NOWAIT`,
+      [dealId, quoteId],
+    ));
+  } catch (err) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === '55P03') throw new OtraVersionEnCurso();
+    throw err;
+  }
+  if (vivas.length === 0) return [];
+  const { rows } = await tx.query<{ number: string }>(
+    `UPDATE quote
+        SET status = 'expired', expired_at = coalesce(expired_at, now()), superseded_by = $2
+      WHERE id = ANY($1::uuid[]) AND status IN ('sent', 'viewed')
+      RETURNING number`,
+    [vivas.map((v) => v.id), quoteId],
+  );
+  return rows.map((r) => r.number).sort();
 }

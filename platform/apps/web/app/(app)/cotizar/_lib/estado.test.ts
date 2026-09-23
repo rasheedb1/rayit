@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { QUOTE_STATUSES } from "@mc/db/queries/cotizar";
-import { pillDeCotizacion, validezYaNoAplica } from "./estado";
+import { estadoVisible, pillDeCotizacion, validezYaNoAplica } from "./estado";
 
 describe("pillDeCotizacion", () => {
   it("cada estado del ciclo tiene su etiqueta en español y su color, en un solo sitio", () => {
@@ -12,6 +12,13 @@ describe("pillDeCotizacion", () => {
       ["rejected", { kind: "bad", text: "Rechazada" }],
       ["expired", { kind: "bad", text: "Vencida" }],
     ]);
+  });
+
+  it("una vencida que reemplazó otra versión se lee «Sin efecto», no «Vencida» (0033)", () => {
+    expect(estadoVisible({ status: "expired", supersededById: "q2" })).toBe("superseded");
+    expect(estadoVisible({ status: "expired", supersededById: null })).toBe("expired");
+    expect(estadoVisible({ status: "sent" })).toBe("sent");
+    expect(pillDeCotizacion("superseded")).toEqual({ kind: "neutral", text: "Sin efecto" });
   });
 
   it("un estado desconocido no rompe la pantalla: se muestra tal cual", () => {

@@ -487,6 +487,12 @@ export async function unlockMediaKit(tx: WorkspaceTx, id: string): Promise<Media
   );
   if (!rows[0]) throw new MediaKitNotFound();
   await tx.query('DELETE FROM media_kit_lockout WHERE media_kit_id = $1', [id]);
+  // El aviso de bloqueo de este kit ya está atendido (avisos.ts).
+  await tx.query(
+    `UPDATE notification SET read_at = coalesce(read_at, now())
+      WHERE kind = 'media_kit_locked' AND entity_type = 'media_kit' AND entity_id = $1 AND read_at IS NULL`,
+    [id],
+  );
   const kit = await getMediaKitById(tx, id);
   if (!kit) throw new MediaKitNotFound();
   return kit;

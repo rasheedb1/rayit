@@ -39,7 +39,7 @@ export default async function CotizacionPublicaPage({ params }: { params: Promis
         <p className="mt-1 text-sm text-ink-2">{t.graciasDescription}</p>
       </div>
     ) : (
-      <p className="text-sm text-ink-2">{q.status === "rejected" ? t.rechazada : t.vencida}</p>
+      <p className="text-sm text-ink-2">{q.status === "rejected" ? t.rechazada : q.superseded ? t.sinEfecto : t.vencida}</p>
     );
 
   return <DocumentoCotizacion q={q} accion={accion} enlaceKit={q.mediaKitSlug ? `/kit/${q.mediaKitSlug}` : null} />;

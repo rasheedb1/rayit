@@ -186,6 +186,29 @@ export const MESSAGES = {
         : `${n} visitantes bloqueados 15 minutos por contraseñas fallidas.`,
     desbloquear: "Desbloquear",
     desbloquearAria: "Desbloquear este media kit: borra la cuenta de contraseñas fallidas",
+    /**
+     * El aviso al creador cuando el techo POR ENLACE deja un media kit
+     * bloqueado para todos, marca incluida (0030, pulido r6). Sin él se
+     * enteraba cuando la marca se quejaba.
+     */
+    avisosBloqueo: {
+      title: "Media kits bloqueados",
+      titulo: (fechaKit: string) => `Tu media kit del ${fechaKit} quedó bloqueado`,
+      hasta: (hora: string) =>
+        `Hubo demasiadas contraseñas fallidas en una hora y nadie puede entrar hasta las ${hora}, tampoco la marca.`,
+      yaAbierto: "Hubo demasiadas contraseñas fallidas en una hora. El bloqueo ya pasó y se puede entrar otra vez.",
+      consejo: "Si no fue la marca, genera otro enlace: el nuevo no lo tiene quien lo está intentando.",
+      entendido: "Entendido",
+      /**
+       * Lo que queda guardado en la notificación. Sin horas ni cifras: se
+       * escribe desde el enlace público, sin la zona del creador a mano, y
+       * esta pantalla lo recompone con el kit y su bloqueo de hoy.
+       */
+      guardado: {
+        title: "Un media kit quedó bloqueado por contraseñas fallidas",
+        body: "Nadie puede entrar durante 15 minutos, tampoco la marca. Desbloquéalo desde Cotizar › Media kit.",
+      },
+    },
     vacio: {
       title: "Todavía no has generado ningún media kit",
       description: "Se genera con las cifras de hoy y no vuelve a cambiar. Puedes generar otro cuando tus números crezcan.",
@@ -230,6 +253,8 @@ export const MESSAGES = {
       accepted: "Aceptada",
       rejected: "Rechazada",
       expired: "Vencida",
+      /** 'expired' porque la reemplazó otra versión del mismo negocio (0033), no por su fecha. */
+      superseded: "Sin efecto",
     } as Record<string, string>,
     sinEnviar: "Sin enviar",
   },
@@ -375,7 +400,19 @@ export const MESSAGES = {
       aceptada: "Aceptada",
       rechazada: "Rechazada",
       vencida: "Vencida",
+      sinEfecto: "Sin efecto",
     },
+    /**
+     * Una versión nueva del mismo negocio deja sin efecto las que
+     * siguieran vivas (0033): un negocio, una cotización que la marca
+     * puede aceptar. Reciben números COT-AAAA-NNN ya compuestos.
+     */
+    dejaSinEfecto: (numeros: readonly string[]) =>
+      numeros.length === 1
+        ? `${numeros[0]} queda sin efecto: la marca ya no puede aceptarla. Vale esta.`
+        : `${numeros.join(", ")} quedan sin efecto: la marca ya no puede aceptarlas. Vale esta.`,
+    quedoSinEfecto: (numero: string) => `Quedó sin efecto: la reemplazó ${numero}, que es la que la marca puede aceptar.`,
+    verVersion: (numero: string) => `Ver ${numero}`,
     metricas: "Métricas a reportar",
     cortes: "Cortes",
     derechos: "Derechos de uso",
@@ -424,6 +461,9 @@ export const MESSAGES = {
     TasaInvalida: "El impuesto es un porcentaje entre 0 y 100.",
     TarifarioVacio: "Todavía no hay ningún entregable que se pueda calcular.",
     DescuentoMayorQueSubtotal: "El descuento no puede ser mayor que el subtotal.",
+    DealAlreadyAccepted:
+      "Este negocio ya se ganó con otra cotización aceptada. Aceptar o enviar otra versión duplicaría la campaña y el ingreso: si lo acordado cambió, rechaza esta y ajusta la campaña.",
+    OtraVersionEnCurso: "Otra versión de esta cotización está en uso ahora mismo (la marca la está abriendo o aceptando). Recarga y vuelve a intentarlo.",
     formularioIlegible: "No pudimos leer el formulario. Recarga la página e inténtalo otra vez.",
     tarifarioIlegible: "No pudimos leer los cambios del tarifario. Recarga la página e inténtalo otra vez.",
     generico: "No se pudo completar la acción. Vuelve a intentarlo; si sigue igual, avísanos.",
@@ -552,6 +592,8 @@ export const MESSAGES = {
       aceptadaPor: (nombre: string, fecha: string) => `Aceptada por ${nombre} el ${fecha}`,
       rechazada: "Esta cotización fue rechazada.",
       vencida: "Esta cotización venció. Pide una nueva a quien te la envió.",
+      /** Una versión que otra más reciente del mismo acuerdo dejó sin efecto (0033). */
+      sinEfecto: "Esta versión quedó sin efecto: quien te la envió mandó una más reciente, o ya se aceptó otra para este mismo acuerdo. Usa el último enlace que te compartió.",
       yaAceptada: "Esta cotización ya estaba aceptada: no hace falta hacer nada más.",
       firma: {
         title: "Para aceptarla, deja tu nombre",
@@ -604,6 +646,8 @@ export const MESSAGES = {
     descuento: (pct: string, low: string, high: string) => `Descuento del paquete (${pct}): − ${low} – ${high}`,
     componente: (cantidad: string, nombre: string, low: string, high: string) => `${cantidad} × ${nombre}: ${low} – ${high}`,
     subtotal: (low: string, high: string) => `Piezas sueltas: ${low} – ${high}`,
+    /** Recibe el rango EXACTO; el redondeado es el del paso siguiente («Rango sugerido»). */
+    redondeo: (low: string, high: string) => `Sin redondear: ${low} – ${high}. Se propone a tres cifras, como se negocia un precio.`,
     total: (low: string, high: string) => `Rango sugerido: ${low} – ${high}`,
     editado: (low: string, high: string) => `Tú lo dejaste en ${low} – ${high}`,
   },

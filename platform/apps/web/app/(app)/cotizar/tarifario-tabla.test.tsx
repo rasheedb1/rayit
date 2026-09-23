@@ -50,14 +50,14 @@ describe("TarifarioTabla", () => {
   it("cambiar las views recalcula el rango en el navegador y marca las views como manuales", async () => {
     pintar();
     fireEvent.change(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado"), { target: { value: "168000" } });
-    await waitFor(() => expect(rango("tiktok")).toBe("COP 7.560.000 – COP 11.760.000"));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 7.560.000 – COP 11.800.000"));
     expect(screen.getAllByText("Visualizaciones a mano").length).toBeGreaterThan(0);
   });
 
   it("marcar un modificador sube el rango, y el desglose se abre anunciado y con el foco en su título", async () => {
     pintar();
     fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
-    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000"));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000"));
 
     const boton = screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" });
     expect(boton).toHaveAttribute("aria-expanded", "false");
@@ -73,9 +73,9 @@ describe("TarifarioTabla", () => {
     expect(filaDetalle.previousElementSibling).toHaveTextContent("TikTok dedicado");
     expect(within(panel).getByRole("heading")).toHaveFocus();
     expect(within(panel).getByText(/Tus visualizaciones medianas: 84.000/)).toBeInTheDocument();
-    expect(within(panel).getByText(/CPM de referencia de cocina en CO/)).toBeInTheDocument();
+    expect(within(panel).getByText(/CPM de referencia de cocina en Colombia/)).toBeInTheDocument();
     expect(within(panel).getByText(/Derechos de uso · 30 días \(35 %\)/)).toBeInTheDocument();
-    expect(within(panel).getByText(/Rango sugerido: COP 5.103.000 – COP 7.938.000/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Rango sugerido: COP 5.100.000 – COP 7.940.000/)).toBeInTheDocument();
   });
 
   it("cambiar el CPM en la pantalla cambia el rango y la explicación lo dice", async () => {
@@ -118,7 +118,7 @@ describe("TarifarioTabla", () => {
   it("las filas sin rango dicen qué les falta", () => {
     pintar();
     expect(screen.getAllByText("Escribe las visualizaciones de una pieza para ver el rango.").length).toBeGreaterThan(0);
-    expect(screen.getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
+    expect(screen.getByText("No hay CPM de referencia para Facebook en Colombia. Escribe el tuyo.")).toBeInTheDocument();
     expect(screen.queryByTestId("rango-historias")).not.toBeInTheDocument();
   });
 
@@ -137,7 +137,7 @@ describe("TarifarioTabla", () => {
     expect(within(celda).queryByText("Visualizaciones a mano")).not.toBeInTheDocument();
     // Lo único que queda a la vista es lo que de verdad falta.
     const fila = views.closest("tr")!;
-    expect(within(fila).getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
+    expect(within(fila).getByText("No hay CPM de referencia para Facebook en Colombia. Escribe el tuyo.")).toBeInTheDocument();
     expect(within(fila).queryByText("Escribe las visualizaciones de una pieza para ver el rango.")).not.toBeInTheDocument();
   });
 
@@ -182,19 +182,19 @@ describe("TarifarioTabla", () => {
     expect(screen.queryByTestId("rango-reel")).not.toBeInTheDocument();
 
     fireEvent.change(views, { target: { value: "61000" } });
-    await waitFor(() => expect(rango("reel")).toBe("COP 3.355.000 – COP 5.185.000"));
+    await waitFor(() => expect(rango("reel")).toBe("COP 3.360.000 – COP 5.190.000"));
   });
 
   it("un paquete suma sus entregables con descuento y tiene su propio desglose", async () => {
     pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
     fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
     // Arranca con los dos primeros entregables con rango y −10 %.
-    // (3.780.000 + 3.355.000) × 0,9 = 6.421.500 · (5.880.000 + 5.185.000) × 0,9 = 9.958.500
-    await waitFor(() => expect(rango("p1")).toBe("COP 6.421.500 – COP 9.958.500"));
+    // (3.780.000 + 3.360.000) × 0,9 = 6.426.000 · (5.880.000 + 5.190.000) × 0,9 = 9.963.000, a tres cifras
+    await waitFor(() => expect(rango("p1")).toBe("COP 6.430.000 – COP 9.960.000"));
     expect(screen.getByText("Paquete: 1 × TikTok dedicado + 1 × Reel de Instagram")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Descuento del paquete (%)"), { target: { value: "12" } });
-    await waitFor(() => expect(rango("p1")).toBe("COP 6.278.800 – COP 9.737.200"));
+    await waitFor(() => expect(rango("p1")).toBe("COP 6.280.000 – COP 9.740.000"));
   });
 
   it("en el editor de paquetes el nombre de cada entregable se lee entero y marca su casilla", async () => {
@@ -268,7 +268,7 @@ describe("TarifarioTabla", () => {
     expect(views).toHaveValue("115446");
     fireEvent.blur(views);
     expect(views).toHaveValue("115.446");
-    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.195.070 – COP 8.081.220"));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.200.000 – COP 8.080.000"));
   });
 
   it("un precio a mano al revés se marca en la fila y no se puede cerrar ni guardar", async () => {
@@ -332,7 +332,7 @@ describe("TarifarioTabla", () => {
     pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
     const derechos = screen.getByRole("checkbox", { name: /Derechos de uso/ });
     fireEvent.click(derechos);
-    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000"));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000"));
     fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
     const enPaquete = screen.getByRole("checkbox", { name: "TikTok dedicado" });
     expect(enPaquete).toBeChecked();
@@ -343,7 +343,7 @@ describe("TarifarioTabla", () => {
     // La casilla dice lo mismo que el rango: marcada, y con el recargo.
     expect(screen.getByRole("checkbox", { name: /Derechos de uso/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "TikTok dedicado" })).toBeChecked();
-    expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000");
+    expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000");
     // Y pulsarla otra vez la quita, como dice la casilla.
     fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
     await waitFor(() => expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000"));

@@ -87,3 +87,30 @@ export class ValidezVencida extends CotizarError {
     super('ValidezVencida', 'La fecha de validez ya pasó: cámbiala antes de enviar.');
   }
 }
+
+/**
+ * Aceptar (o enviar) una cotización de un negocio que ya está ganado con
+ * OTRA aceptada (0033). Aceptar dos versiones del mismo acuerdo creaba
+ * dos campañas y duplicaba el ingreso en Campañas y Finanzas.
+ */
+export class DealAlreadyAccepted extends CotizarError {
+  /** El número de la cotización que ya se aceptó. */
+  readonly acceptedNumber: string;
+  constructor(acceptedNumber: string) {
+    super('DealAlreadyAccepted', `Este negocio ya se ganó con ${acceptedNumber}: otra versión no se puede aceptar ni enviar.`);
+    this.acceptedNumber = acceptedNumber;
+  }
+}
+
+/**
+ * Enviar (o aceptar) una versión mientras otra del mismo negocio está
+ * en uso en ese mismo instante: la marca la está aceptando o abriendo.
+ * Hay que dejarla sin efecto y no se la puede tocar a medias: se para
+ * aquí en vez de esperarla (dos esperas cruzadas serían un bloqueo
+ * mutuo).
+ */
+export class OtraVersionEnCurso extends CotizarError {
+  constructor() {
+    super('OtraVersionEnCurso', 'Otra versión de esta cotización está en uso ahora mismo. Recarga y vuelve a intentarlo.');
+  }
+}

@@ -15,7 +15,7 @@ import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from 
 import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
-import { pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
+import { estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
 import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 import { EsqueletoLista } from "../../_ui/esqueleto-lista";
 import { ResumenTotales } from "../../_ui/resumen-totales";
@@ -74,7 +74,7 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
   const quote = await withWorkspace((tx) => getQuote(tx, id));
   if (!quote) notFound();
 
-  const pill = pillDeCotizacion(quote.status);
+  const pill = pillDeCotizacion(estadoVisible(quote));
   const esBorrador = quote.status === "draft";
   const sePuedeCerrar = quote.status === "sent" || quote.status === "viewed";
   // Aceptada, rechazada o vencida, la validez ya no dice nada: como en
@@ -135,7 +135,9 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
         ]
       : []),
     ...(quote.rejectedAt ? [{ termino: t.fechas.rechazada, valor: f.dateTime(quote.rejectedAt) }] : []),
-    ...(quote.expiredAt ? [{ termino: t.fechas.vencida, valor: f.dateTime(quote.expiredAt) }] : []),
+    ...(quote.expiredAt
+      ? [{ termino: quote.supersededById ? t.fechas.sinEfecto : t.fechas.vencida, valor: f.dateTime(quote.expiredAt) }]
+      : []),
   ];
 
   return (
@@ -166,6 +168,34 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
         </p>
       )}
       {enviada && !esBorrador && <AvisoEnviada enviada={enviada} enlace={enlace} />}
+      {/* Una versión por negocio (0033): la que se envía deja sin efecto las
+          anteriores, y cada una lo dice con un enlace a la otra. */}
+      {quote.supersedes.length > 0 && (
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm"
+          data-aviso="deja-sin-efecto"
+        >
+          <span className="min-w-0 text-ink-2">{t.dejaSinEfecto(quote.supersedes.map((v) => v.number))}</span>
+          {quote.supersedes.map((v) => (
+            <Button key={v.id} size="sm" variant="ghost" href={`/cotizar/cotizaciones/${v.id}`}>
+              {t.verVersion(v.number)}
+            </Button>
+          ))}
+        </div>
+      )}
+      {quote.supersededById && quote.supersededByNumber && (
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm"
+          data-aviso="sin-efecto"
+        >
+          <span className="min-w-0 text-ink-2">{t.quedoSinEfecto(quote.supersededByNumber)}</span>
+          <Button size="sm" variant="ghost" href={`/cotizar/cotizaciones/${quote.supersededById}`}>
+            {t.verVersion(quote.supersededByNumber)}
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-8">

@@ -75,7 +75,12 @@ export default async function NuevaCotizacionPage({ searchParams }: { searchPara
           validUntil: addDays(hoy, 14),
           metricas: ["views", "reach", "saves"],
           cortes: [24, 168, 720],
-          usageRightsDays: "30",
+          // Derechos y exclusividad arrancan en «no aplica»: los sube el
+          // formulario solo si el entregable elegido los cobra en su
+          // precio (subirPlazo). Con 30 por defecto, un TikTok a precio
+          // base cedía gratis los derechos que el tarifario cobra un 35 %
+          // más, y quedaba escrito en lo que firma la marca (pulido r6).
+          usageRightsDays: "",
           exclusivityDays: "",
           exclusivityScope: "",
           paymentTermsDays: "30",

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listAcceptanceNotices, listQuotes, type QuoteListRow } from "@mc/db/queries/cotizar";
+import { listAcceptanceNotices, listMediaKitLockNotices, listQuotes, type QuoteListRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -12,7 +12,8 @@ import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { marcarAvisoVisto } from "../../actions";
 import { MESSAGES } from "../../messages";
-import { pillDeCotizacion } from "../../_lib/estado";
+import { estadoVisible, pillDeCotizacion } from "../../_lib/estado";
+import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 
 export const metadata: Metadata = { title: "Cotizaciones" };
 export const dynamic = "force-dynamic";
@@ -23,9 +24,12 @@ export default async function CotizacionesPage() {
   const f = formatterFor(ws);
   // Las cotizaciones y los avisos de «la marca aceptó» en la misma
   // transacción: el aviso que promete la página pública es este.
-  const { quotes, avisos } = await withWorkspace(async (tx) => ({
+  const { quotes, avisos, bloqueos } = await withWorkspace(async (tx) => ({
     quotes: await listQuotes(tx),
     avisos: await listAcceptanceNotices(tx),
+    // Un media kit bloqueado para todos, marca incluida: se avisa también
+    // aquí, que es donde el creador mira sus avisos (pulido r6).
+    bloqueos: await listMediaKitLockNotices(tx),
   }));
   const ta = MESSAGES.avisos;
 
@@ -54,7 +58,7 @@ export default async function CotizacionesPage() {
       key: "estado",
       header: t.columnas.estado,
       render: (q) => {
-        const p = pillDeCotizacion(q.status);
+        const p = pillDeCotizacion(estadoVisible(q));
         return <Pill kind={p.kind}>{p.text}</Pill>;
       },
     },
@@ -123,6 +127,8 @@ export default async function CotizacionesPage() {
           </ul>
         </section>
       )}
+
+      <AvisosBloqueo avisos={bloqueos} f={f} vuelta="/cotizar/cotizaciones" />
 
       <section aria-labelledby="cotizaciones">
         <SectionTitle meta={f.int(quotes.length)}>

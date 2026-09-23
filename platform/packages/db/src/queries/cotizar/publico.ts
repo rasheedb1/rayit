@@ -16,7 +16,19 @@ import type { MediaKitSnapshot } from './media-kit.ts';
 export type PublicMediaKitResult =
   | { status: 'not_found' }
   | { status: 'expired'; expiresAt: string }
-  | { status: 'locked'; lockedUntil: string }
+  | {
+      status: 'locked';
+      lockedUntil: string;
+      /**
+       * Solo en la respuesta que SALTA el techo del enlace (50 fallos en
+       * una hora, 0030): el kit y su workspace, para que el servidor deje
+       * el aviso al creador (notifyMediaKitLocked). Nunca viajan a la
+       * página pública.
+       */
+      linkLocked?: boolean;
+      mediaKitId?: string;
+      workspaceId?: string;
+    }
   | { status: 'password_required'; algo: string; salt: string }
   | { status: 'password_invalid'; algo: string; salt: string; attemptsLeft: number }
   | { status: 'ok'; slug: string; snapshot: MediaKitSnapshot; viewCount: number; createdAt: string };
@@ -81,6 +93,11 @@ export interface PublicQuoteView extends QuotePublicSnapshot {
   acceptedByName?: string | null;
   rejectedAt?: string | null;
   expiredAt?: string | null;
+  /**
+   * Vencida porque la reemplazó otra versión del mismo negocio, no por
+   * su fecha (0033). La página dice «quedó sin efecto», no «venció».
+   */
+  superseded?: boolean;
 }
 
 export type PublicQuoteResult = { status: 'not_found' } | { status: 'ok'; quote: PublicQuoteView };
@@ -100,7 +117,11 @@ export interface FirmaAceptacion {
 export type PublicQuoteAcceptResult =
   | { status: 'not_found' }
   | { status: 'invalid_signer' }
-  | { status: 'not_acceptable'; quoteStatus: QuoteStatus }
+  /**
+   * 'superseded': otra versión del mismo negocio ya se aceptó, o esta
+   * quedó sin efecto al enviarse una más reciente (0033).
+   */
+  | { status: 'not_acceptable'; quoteStatus: QuoteStatus | 'superseded' }
   | {
       status: 'ok';
       quoteId: string;

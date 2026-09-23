@@ -11,8 +11,12 @@ import {
 import { isUuid, type WorkspaceTx } from '../../client.ts';
 import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { nuevoSlug } from './enlace.ts';
-import { CotizarError, QuoteNotDraft, QuoteNotEditable, QuoteNotFound, QuoteTransitionError, ValidezVencida } from './errores.ts';
-import { assertMediaKitDelCreador, registrarActividad, registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
+import {
+  CotizarError, DealAlreadyAccepted, QuoteNotDraft, QuoteNotEditable, QuoteNotFound, QuoteTransitionError, ValidezVencida,
+} from './errores.ts';
+import {
+  aceptadaDelNegocio, assertMediaKitDelCreador, dejarSinEfecto, registrarActividad, registrarAceptacion, registrarCambioDeMonto,
+} from './interno.ts';
 import { DealNotFound, followUpAfterProposal, moveDeal, type MoveDealResult } from '../ventas.ts';
 import { getCurrentRateCard } from './tarifario.ts';
 import type { PublicQuoteView } from './publico.ts';
@@ -59,6 +63,12 @@ export interface QuoteListRow {
   expiredAt: string | null;
   viewCount: number;
   createdAt: string;
+  /**
+   * La versión que dejó a esta sin efecto al enviarse (0033). Con ella,
+   * 'expired' no quiere decir «venció»: quiere decir «la reemplazó otra».
+   */
+  supersededById: string | null;
+  supersededByNumber: string | null;
 }
 
 export interface QuoteDetail extends QuoteListRow {
@@ -86,6 +96,8 @@ export interface QuoteDetail extends QuoteListRow {
   campaignName: string | null;
   /** true cuando está aceptada y todavía no tiene campaña. */
   campaignPending: boolean;
+  /** Las versiones del mismo negocio que esta dejó sin efecto al enviarse (0033). */
+  supersedes: { id: string; number: string }[];
 }
 
 interface RawQuote {
@@ -102,6 +114,7 @@ interface RawQuote {
   accepted_by_name: string | null; accepted_by_email: string | null;
   view_count: number; created_at: string;
   campaign_id: string | null; campaign_name: string | null;
+  superseded_by: string | null; superseded_by_number: string | null;
 }
 
 /**
@@ -129,12 +142,14 @@ const SELECT_QUOTE = `
               ELSE q.expired_at END AS expired_at,
          q.accepted_by_name, q.accepted_by_email,
          q.view_count, q.created_at,
-         ca.id AS campaign_id, ca.name AS campaign_name
+         ca.id AS campaign_id, ca.name AS campaign_name,
+         q.superseded_by, sb.number AS superseded_by_number
     FROM quote q
     JOIN workspace w ON w.id = q.workspace_id
     JOIN company co ON co.id = q.company_id
     LEFT JOIN deal d ON d.id = q.deal_id
     LEFT JOIN campaign ca ON ca.quote_id = q.id AND ca.status <> 'cancelled'
+    LEFT JOIN quote sb ON sb.id = q.superseded_by
     CROSS JOIN LATERAL (
       SELECT q.status IN ('sent', 'viewed') AND q.valid_until IS NOT NULL
              AND q.valid_until < (now() AT TIME ZONE w.timezone)::date AS vencida
@@ -180,6 +195,9 @@ function mapQuote(r: RawQuote): QuoteDetail {
     campaignId: r.campaign_id,
     campaignName: r.campaign_name,
     campaignPending: r.status === 'accepted' && r.campaign_id === null,
+    supersededById: r.superseded_by,
+    supersededByNumber: r.superseded_by_number,
+    supersedes: [],
   };
 }
 
@@ -223,6 +241,11 @@ export async function getQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail
   if (!row) return null;
   const quote = mapQuote(row);
   quote.items = await listQuoteItems(tx, id);
+  const { rows: reemplazadas } = await tx.query<{ id: string; number: string }>(
+    'SELECT id, number FROM quote WHERE superseded_by = $1 ORDER BY number',
+    [id],
+  );
+  quote.supersedes = reemplazadas;
   return quote;
 }
 
@@ -739,6 +762,7 @@ export async function getQuotePreview(
     acceptedByName: quote.acceptedByName,
     rejectedAt: quote.rejectedAt,
     expiredAt: quote.expiredAt,
+    superseded: quote.status === 'expired' && quote.supersededById !== null,
     // Solo para el panel: la vista previa enlaza el media kit por su
     // vista previa (que no cuenta visitas), no por el enlace público.
     mediaKitId: quote.mediaKitId,
@@ -832,13 +856,22 @@ export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotiz
     );
     if (rows[0]?.vencida) throw new ValidezVencida();
   }
+  // Un negocio ganado con otra versión aceptada no recibe una nueva: la
+  // marca abriría un enlace que no se puede aceptar (0033).
+  if (quote.dealId) {
+    const aceptada = await aceptadaDelNegocio(tx, quote.dealId, id);
+    if (aceptada) throw new DealAlreadyAccepted(aceptada.number);
+  }
 
   const snapshot = await buildQuoteSnapshot(tx, quote);
   await transicionar(tx, id, ['draft'], 'sent', 'sent_at = coalesce(sent_at, now()), public_snapshot = $4::jsonb', [
     JSON.stringify(snapshot),
   ]);
 
-  if (quote.dealId) await moverDealAPropuesta(tx, quote.dealId, quote, textos);
+  if (quote.dealId) {
+    await dejarSinEfecto(tx, quote.dealId, id);
+    await moverDealAPropuesta(tx, quote.dealId, quote, textos);
+  }
 
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
@@ -909,16 +942,27 @@ async function moverConMontoDeCotizacion(
 /**
  * Aceptar desde el panel (la marca dijo que sí por otro canal). Hace lo
  * mismo que la función pública `public_quote_accept` (0030, reescrita
- * en 0031): deja la cotización en 'accepted' y el deal en «Ganado» por
- * la transición única, con el monto neto de la cotización.
+ * en 0031 y 0033): deja la cotización en 'accepted' y el deal en
+ * «Ganado» por la transición única, con el monto neto de la cotización.
+ *
+ * Y la misma guardia (0033): si el negocio ya está ganado con OTRA
+ * aceptada, lanza DealAlreadyAccepted. Dos aceptadas del mismo acuerdo
+ * eran dos campañas y el ingreso contado dos veces.
  */
 export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuoteForUpdate(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'accepted');
+  if (quote.dealId) {
+    const aceptada = await aceptadaDelNegocio(tx, quote.dealId, id);
+    if (aceptada) throw new DealAlreadyAccepted(aceptada.number);
+  }
 
   await transicionar(tx, id, ['sent', 'viewed'], 'accepted', 'accepted_at = coalesce(accepted_at, now())');
   if (quote.dealId) {
+    // Una versión que siguiera viva (de antes de 0033) ya no se puede
+    // aceptar después de esta: queda sin efecto ahora.
+    await dejarSinEfecto(tx, quote.dealId, id);
     const mov = await moverConMontoDeCotizacion(tx, quote.dealId, quote.id, 'ganado', false);
     await registrarAceptacion(tx, quote, 'panel', textos);
     if (mov) await registrarCambioDeMonto(tx, quote.dealId, quote, mov, textos);

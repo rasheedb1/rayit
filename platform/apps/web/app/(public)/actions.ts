@@ -2,13 +2,13 @@
 
 import { headers } from "next/headers";
 import { z } from "zod";
-import { readPublicMediaKit, type MediaKitSnapshot, type QuoteStatus } from "@mc/db/queries/cotizar";
-import { acceptQuoteFromLink, withPublicShare } from "@/lib/db";
+import type { MediaKitSnapshot, PublicMediaKitResult, QuoteStatus } from "@mc/db/queries/cotizar";
+import { acceptQuoteFromLink, openProtectedMediaKit } from "@/lib/db";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
 import { LimiteDeIntentos } from "@/app/(app)/cotizar/_lib/limite";
 import { origenDeLaPeticion } from "@/app/(app)/cotizar/_lib/origen";
 import { esRobotDePrevisualizacion } from "@/app/(app)/cotizar/_lib/robots";
-import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
+import { TEXTOS_BLOQUEO_MEDIA_KIT, TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 
 /**
  * Las dos acciones que puede hacer quien recibió un enlace, sin sesión
@@ -48,9 +48,11 @@ export async function abrirMediaKitProtegido(slug: string, password: string): Pr
   if (!intentos.permitir(`${slug}|${origin}`)) return { status: "too_many" };
 
   const robot = esRobotDePrevisualizacion(h.get("user-agent"));
-  let r: Awaited<ReturnType<typeof readPublicMediaKit>>;
+  let r: PublicMediaKitResult;
   try {
-    r = await withPublicShare((tx) => readPublicMediaKit(tx, slug, password, { count: !robot, origin }));
+    // Si este fallo salta el techo del enlace, el creador recibe el aviso
+    // con «Desbloquear» (lib/db · openProtectedMediaKit).
+    r = await openProtectedMediaKit(slug, password, { count: !robot, origin }, TEXTOS_BLOQUEO_MEDIA_KIT);
   } catch (err) {
     console.error("[media kit público] no se pudo abrir", err);
     return { status: "error" };
@@ -83,7 +85,7 @@ export type AceptarResultado =
    * pestaña, rechazada por el creador mientras la marca la tenía
    * abierta, o vencida. La página dice cuál, no «venció» para todo.
    */
-  | { status: "no_aceptable"; quoteStatus: QuoteStatus }
+  | { status: "no_aceptable"; quoteStatus: QuoteStatus | "superseded" }
   | { status: "no_existe" | "error" };
 
 /**

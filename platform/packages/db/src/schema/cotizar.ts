@@ -1,7 +1,7 @@
 /**
  * Cotizar: tarifario, media kit y cotización. Migración 0008 (primera parte).
  */
-import { bigint, boolean, date, integer, jsonb, numeric, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, date, integer, jsonb, numeric, pgTable, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { creatorProfile, platform, workspaceId } from './cimientos.ts';
 import { company, deal } from './ventas.ts';
@@ -109,6 +109,11 @@ export const quote = pgTable('quote', {
   /** Quién aceptó desde el enlace público (0030). */
   acceptedByName: text('accepted_by_name'),
   acceptedByEmail: text('accepted_by_email'),
+  /**
+   * La versión que dejó a esta sin efecto al enviarse (0033): un negocio
+   * tiene como mucho una cotización viva, y la vieja pasa a 'expired'.
+   */
+  supersededBy: uuid('superseded_by').references((): AnyPgColumn => quote.id, { onDelete: 'set null' }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

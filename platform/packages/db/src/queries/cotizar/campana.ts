@@ -8,8 +8,8 @@ import type { WorkspaceTx } from '../../client.ts';
 import { createCampaignFromQuote } from '../campanas.ts';
 import { promoteCompanyOnWin } from '../ventas.ts';
 import { acceptQuote, getQuote, type QuoteDetail, type TextosCotizar } from './cotizacion.ts';
-import { CotizarError, QuoteNotFound } from './errores.ts';
-import { registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
+import { CotizarError, OtraVersionEnCurso, QuoteNotFound } from './errores.ts';
+import { dejarSinEfecto, registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
 
 // ---------------------------------------------------------------------
 // COT-4 · El cruce con Campañas
@@ -137,7 +137,22 @@ export async function completePublicAcceptance(
     throw new CotizarError('QuoteNotAccepted', `Solo una cotización aceptada crea campaña; esta está en «${quote.status}».`);
   }
   await registrarAceptacion(tx, quote, 'enlace', textos);
-  if (quote.dealId) await promoteCompanyOnWin(tx, quote.dealId);
+  if (quote.dealId) {
+    await promoteCompanyOnWin(tx, quote.dealId);
+    // Una versión que siguiera viva (de antes de 0033) ya no se puede
+    // aceptar después de esta. public_quote_accept no la puede tocar
+    // (su rol solo ve la cotización del slug): se deja sin efecto aquí.
+    // Si justo la están abriendo, se deja como está —la base ya se
+    // niega a aceptarla— y la campaña y el aviso siguen adelante.
+    await tx.query('SAVEPOINT cotizar_sin_efecto');
+    try {
+      await dejarSinEfecto(tx, quote.dealId, quote.id);
+      await tx.query('RELEASE SAVEPOINT cotizar_sin_efecto');
+    } catch (err) {
+      await tx.query('ROLLBACK TO SAVEPOINT cotizar_sin_efecto');
+      if (!(err instanceof OtraVersionEnCurso)) throw err;
+    }
+  }
   // El monto lo cambió public_quote_accept (0031) en la otra
   // transacción, que no puede escribir actividades: aquí se cuenta, con
   // el monto de antes que devolvió y el que quedó en el negocio.

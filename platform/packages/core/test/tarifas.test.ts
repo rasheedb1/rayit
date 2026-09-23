@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calcularItem, calcularPaquete, calcularTarifario, calcularTotalesCotizacion, precioPorViews, redondearAUnidad,
+  redondearParaNegociar,
   plazoConIncluido, sumarPct, terminosDeModificadores, unidadDePrecio, validarRangoPrecio, MODIFICADORES_POR_DEFECTO,
   TarifaError, type EntradaTarifa,
 } from '../src/tarifas.ts';
@@ -137,9 +138,13 @@ test('los modificadores se suman sobre la misma base: el orden no cambia el tota
   const a = calcularItem(tiktokDeEjemplo({ modificadores: [derechos, exclusividad] }));
   const b = calcularItem(tiktokDeEjemplo({ modificadores: [exclusividad, derechos] }));
 
-  // 3.780.000 × (1 + 0,85) = 6.993.000
-  assert.equal(a.priceLow, '6993000.00');
-  assert.equal(a.priceHigh, '10878000.00');
+  // 3.780.000 × (1 + 0,85) = 6.993.000, y a tres cifras 6.990.000
+  assert.equal(a.priceLow, '6990000.00');
+  assert.equal(a.priceHigh, '10900000.00');
+  // El exacto no se pierde: queda en el paso de redondeo.
+  assert.deepEqual(a.pasos.find((p) => p.tipo === 'redondeo'), {
+    tipo: 'redondeo', exactoLow: '6993000.00', exactoHigh: '10878000.00', low: '6990000.00', high: '10900000.00',
+  });
   assert.equal(a.priceLow, b.priceLow);
   assert.equal(a.priceHigh, b.priceHigh);
   assert.equal(a.modificadorTotalPct, '0.85');
@@ -157,9 +162,9 @@ test('el descuento del paquete se resta al final, sobre el total ya modificado',
     modificadores: [{ id: 'derechos_uso_30d', pct: '0.35' }],
     descuentoPct: '0.10',
   }));
-  // 3.780.000 × 1,35 = 5.103.000 · −10 % = 4.592.700
+  // 3.780.000 × 1,35 = 5.103.000 · −10 % = 4.592.700 → 4.590.000
   assert.deepEqual(paquete.pasos.find((p) => p.tipo === 'descuento'), { tipo: 'descuento', pct: '0.1', low: '510300.00', high: '793800.00' });
-  assert.equal(paquete.priceLow, '4592700.00');
+  assert.equal(paquete.priceLow, '4590000.00');
 });
 
 test('un rango de CPM invertido es un error, no un precio al revés', () => {
@@ -187,7 +192,8 @@ test('calcularTarifario respeta el orden de entrada', () => {
     tiktokDeEjemplo({ deliverable: 'reel', platformId: 'instagram', views: 61_000, cpmLow: '55000', cpmHigh: '85000' }),
   ]);
   assert.deepEqual(items.map((i) => i.deliverable), ['tiktok', 'reel']);
-  assert.equal(items[1]!.priceLow, '3355000.00');
+  // 61.000 × 55.000 ÷ 1.000 = 3.355.000 → 3.360.000 (la mitad sube)
+  assert.equal(items[1]!.priceLow, '3360000.00');
 });
 
 // -------------------------------------------------- totales de la cotización
@@ -244,10 +250,13 @@ test('en pesos el tarifario no lleva centavos; en dólares sí', () => {
   assert.match(cop.priceLow, /\.00$/);
   assert.match(cop.priceHigh, /\.00$/);
 
+  // En dólares los pasos llevan centavos; el rango para negociar, no.
   const usd = calcularItem(tiktokDeEjemplo({
     views: 1_001, cpmLow: '10.37', cpmHigh: '12.41', currency: 'USD',
   }));
-  assert.equal(usd.priceLow, '10.38');
+  assert.deepEqual(usd.pasos.find((p) => p.tipo === 'base'), { tipo: 'base', low: '10.38', high: '12.42' });
+  assert.equal(usd.priceLow, '10.00');
+  assert.equal(usd.priceHigh, '12.00');
 });
 
 // --------------------------------------------------------------- paquetes
@@ -262,11 +271,11 @@ test('un paquete suma sus entregables y descuenta al final', () => {
     descuentoPct: '0.12',
     currency: 'COP',
   });
-  // 3.780.000 + 1.500.000 = 5.280.000 → −12 % = 4.646.400
-  assert.equal(paquete.priceLow, '4646400.00');
-  // 5.880.000 + 2.100.000 = 7.980.000 → −12 % = 7.022.400
-  assert.equal(paquete.priceHigh, '7022400.00');
-  assert.deepEqual(paquete.pasos.map((p) => p.tipo), ['componente', 'componente', 'subtotal', 'descuento', 'total']);
+  // 3.780.000 + 1.500.000 = 5.280.000 → −12 % = 4.646.400 → 4.650.000
+  assert.equal(paquete.priceLow, '4650000.00');
+  // 5.880.000 + 2.100.000 = 7.980.000 → −12 % = 7.022.400 → 7.020.000
+  assert.equal(paquete.priceHigh, '7020000.00');
+  assert.deepEqual(paquete.pasos.map((p) => p.tipo), ['componente', 'componente', 'subtotal', 'descuento', 'redondeo', 'total']);
   const desc = paquete.pasos.find((p) => p.tipo === 'descuento');
   assert.equal(desc?.tipo === 'descuento' && desc.pct, '0.12');
 });
@@ -332,4 +341,36 @@ test('un plazo acordado sube hasta lo incluido y nunca baja', () => {
   assert.equal(plazoConIncluido(60, 30), 60);
   assert.equal(plazoConIncluido(null, null), null);
   assert.equal(plazoConIncluido(15, null), 15);
+});
+
+// ------------------------------------------ el precio para negociar (r6)
+
+test('el precio para negociar lleva tres cifras significativas, sin centavos ni pesos sueltos', () => {
+  // Los rangos del tarifario del seed, tal como salían al peso.
+  assert.equal(redondearParaNegociar('5195070.00'), '5200000.00');
+  assert.equal(redondearParaNegociar('8081220.00'), '8080000.00');
+  assert.equal(redondearParaNegociar('3419735.00'), '3420000.00');
+  assert.equal(redondearParaNegociar('9683824.00'), '9680000.00');
+  assert.equal(redondearParaNegociar('15013138.00'), '15000000.00');
+  // Mitad hacia arriba, también cuando sube de orden de magnitud.
+  assert.equal(redondearParaNegociar('3355000'), '3360000.00');
+  assert.equal(redondearParaNegociar('9995000'), '10000000.00');
+  // Por debajo de mil unidades, a la unidad entera: ni centavos en dólares…
+  assert.equal(redondearParaNegociar('45.67'), '46.00');
+  assert.equal(redondearParaNegociar('987'), '987.00');
+  assert.equal(redondearParaNegociar('1234.56'), '1230.00');
+  // …y lo que ya está redondeado no se mueve.
+  assert.equal(redondearParaNegociar('5200000.00'), '5200000.00');
+  assert.equal(redondearParaNegociar(redondearParaNegociar('7013344.50')), redondearParaNegociar('7013344.50'));
+  // Cero es cero, y un monto positivo no baja a cero.
+  assert.equal(redondearParaNegociar('0'), '0.00');
+  assert.equal(redondearParaNegociar('0.40'), '0.40');
+  assert.throws(() => redondearParaNegociar('-1'), TarifaError);
+});
+
+test('el rango redondeado nunca se invierte, y sin nada que redondear no hay paso de redondeo', () => {
+  const item = calcularItem(tiktokDeEjemplo({ views: 84_321, currency: 'COP' }));
+  assert.ok(Number(item.priceLow) <= Number(item.priceHigh));
+  assert.equal(item.pasos.at(-2)?.tipo, 'redondeo');
+  assert.equal(calcularItem(tiktokDeEjemplo()).pasos.some((p) => p.tipo === 'redondeo'), false);
 });

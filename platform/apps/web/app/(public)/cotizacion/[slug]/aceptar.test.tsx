@@ -29,6 +29,12 @@ describe("AceptarCotizacion: lo que ya no se puede aceptar dice por qué", () =>
     expect(screen.queryByText(t.vencida)).not.toBeInTheDocument();
   });
 
+  it("otra versión del mismo acuerdo ya se aceptó (0033): «sin efecto», no «venció»", async () => {
+    await aceptarCon({ status: "no_aceptable", quoteStatus: "superseded" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(t.sinEfecto);
+    expect(screen.queryByText(t.vencida)).not.toBeInTheDocument();
+  });
+
   it("vencida: lo dice", async () => {
     await aceptarCon({ status: "no_aceptable", quoteStatus: "expired" });
     expect(await screen.findByRole("alert")).toHaveTextContent(t.vencida);

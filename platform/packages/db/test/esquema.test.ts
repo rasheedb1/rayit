@@ -1202,7 +1202,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'pipeline_stage', 'quote',
     ]);
-    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 7);
+    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 8, 'las siete de 0030 y la aceptada del negocio de 0033');
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
   });

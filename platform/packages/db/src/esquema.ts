@@ -481,7 +481,7 @@ const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share
 const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030. Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030 y la de 0033. Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -503,6 +503,13 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     cmd: 'w',
     exige: [SLUG_DE_LA_LLAMADA],
     motivo: 'marcar vista, vencida o aceptada esa cotización',
+  },
+  'quote.quote_public_share_accepted_sibling': {
+    cmd: 'r',
+    exige: [/^\(?\(?deal_id\)?::text = NULLIF\(current_setting\('app\.public_share_deal'/],
+    motivo:
+      'las ACEPTADAS del negocio de esa cotización, cuyo id fija public_quote_accept_impl mientras comprueba que el ' +
+      'negocio no esté ya ganado con otra (0033): una aceptación por negocio, también desde el enlace',
   },
   'deal.deal_public_share': { cmd: 'r', exige: DEAL_DE_LA_COTIZACION, motivo: 'el negocio de esa cotización' },
   'deal.deal_public_share_won': {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getPrimaryCreator, listMediaKits, type MediaKitRow } from "@mc/db/queries/cotizar";
+import { getPrimaryCreator, listMediaKitLockNotices, listMediaKits, type MediaKitRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -11,6 +11,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { cambiarPublicacionMediaKit, desbloquearMediaKit } from "../../actions";
 import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
+import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 import { GenerarMediaKitForm } from "../generar-form";
 
 export const metadata: Metadata = { title: "Media kit" };
@@ -38,9 +39,10 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
   const f = formatterFor(ws);
   const ahora = Date.now();
 
-  const { creador, kits } = await withWorkspace(async (tx) => ({
+  const { creador, kits, avisos } = await withWorkspace(async (tx) => ({
     creador: await getPrimaryCreator(tx),
     kits: await listMediaKits(tx),
+    avisos: await listMediaKitLockNotices(tx),
   }));
 
   const columnas: Column<MediaKitRow>[] = [
@@ -138,6 +140,8 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
           {error}
         </p>
       )}
+
+      <AvisosBloqueo avisos={avisos} f={f} vuelta="/cotizar/media-kit" />
 
       {creador && <GenerarMediaKitForm creatorId={creador.id} />}
 
