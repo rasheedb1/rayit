@@ -188,14 +188,14 @@ export const MESSAGES = {
       },
     },
   },
+  /**
+   * El nombre y el título de la frontera de error. Lo demás —las causas,
+   * la pista de despliegue, Reintentar y Volver al plan— es el de la
+   * aplicación ((app)/_lib/messages.ts), igual que en Finanzas.
+   */
   error: {
     eyebrow: "Resumen",
     title: "No pudimos leer tus métricas",
-    description:
-      "La base de datos no respondió a tiempo o rechazó la conexión. Tus datos no cambiaron; vuelve a intentarlo y, si sigue igual, avísanos.",
-    retry: "Reintentar",
-    /** Solo aparece cuando Next entrega un identificador del error (producción). */
-    reference: "Referencia",
   },
   loading: {
     label: "Cargando tu resumen",

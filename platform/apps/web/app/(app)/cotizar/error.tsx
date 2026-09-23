@@ -1,36 +1,15 @@
 "use client";
 
-import { useEffect } from "react";
-import { Button } from "@/components/ui/button";
+import { FronteraDeError } from "../_lib/frontera";
 import { MESSAGES } from "./messages";
 
 /**
- * Lo que ve el creador cuando la base falla en tiempo de petición: un
- * mensaje en español con un botón para reintentar, en vez de la página
- * genérica de Next en inglés. Cubre todo el segmento /cotizar.
+ * Lo que ve el creador cuando /cotizar falla en tiempo de petición: la
+ * frontera de la aplicación (_lib/frontera.tsx) con el nombre y el
+ * título del módulo. Las causas, la pista de despliegue, «Reintentar»
+ * que vuelve a pedir al servidor y la salida al plan son las mismas en
+ * todos los módulos.
  */
 export default function CotizarError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  const t = MESSAGES.error;
-
-  useEffect(() => {
-    console.error("[cotizar] error al leer la base", error);
-  }, [error]);
-
-  return (
-    <div role="alert" className="mx-auto max-w-md py-24 text-center">
-      <p className="font-mono text-xs text-muted">{t.eyebrow}</p>
-      <h1 className="mt-2 text-xl font-semibold text-ink">{t.title}</h1>
-      <p className="mt-2 text-sm leading-5 text-ink-2">{t.description}</p>
-      {error.digest ? (
-        <p className="mt-2 font-mono text-xs tabular-nums text-muted">
-          {t.reference}: {error.digest}
-        </p>
-      ) : null}
-      <div className="mt-6">
-        <Button variant="primary" onClick={() => reset()}>
-          {t.retry}
-        </Button>
-      </div>
-    </div>
-  );
+  return <FronteraDeError error={error} reset={reset} titulo={MESSAGES.error} origen="cotizar" />;
 }

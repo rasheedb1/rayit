@@ -183,14 +183,13 @@ export const MESSAGES = {
     inicio: "Ir a Resumen",
   },
 
-  /** El error.tsx del segmento /cuenta, con la misma forma que el de Finanzas. */
+  /**
+   * El nombre y el título de la frontera de /cuenta. Lo demás es el de la
+   * aplicación ((app)/_lib/frontera.tsx), igual que en Finanzas.
+   */
   cuentaError: {
     eyebrow: "Cuenta",
     title: "No pudimos leer tu cuenta",
-    description:
-      "La sesión o la base de datos no respondieron. No se cambió nada; vuelve a intentarlo y, si sigue igual, avísanos.",
-    retry: "Reintentar",
-    reference: "Referencia",
   },
 
   selector: {
