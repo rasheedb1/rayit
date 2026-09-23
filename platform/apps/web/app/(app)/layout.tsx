@@ -4,11 +4,14 @@ import { Shell } from "@/components/shell";
 /**
  * El marco de la aplicación (CIM-4) envuelve solo al grupo (app).
  *
- * Antes lo hacía app/layout.tsx, que es la raíz de TODAS las rutas: con
- * CIM-3 aparecieron pantallas que no son la aplicación —/login y el
- * callback del enlace mágico— y no deben llevar barra lateral, ni
- * navegación de módulos, ni selector de espacio. Bajar el Shell un
- * nivel es lo que separa «la aplicación» de «la puerta».
+ * Antes lo hacía app/layout.tsx, que es la raíz de TODAS las rutas. Dos
+ * piezas necesitaban pantallas fuera del marco y lo bajaron aquí a la
+ * vez: CIM-3, por /login y el callback del enlace mágico, y COT-2, por
+ * app/(public)/ —el media kit y la cotización que abre la marca, sin
+ * sesión—, que se sirven con el mismo tema y sin la navegación del
+ * creador. Ninguna de las dos debe llevar barra lateral, ni navegación
+ * de módulos, ni selector de espacio. Bajar el Shell un nivel es lo que
+ * separa «la aplicación» de «la puerta».
  *
  * Y desde aquí para abajo nada se prerenderiza: el marco muestra el
  * espacio de QUIEN mira (el selector lee la sesión y sus membresías),

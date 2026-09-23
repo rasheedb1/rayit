@@ -1,0 +1,115 @@
+/**
+ * CON-10 · collect.account_metrics: cuentas por @ leídas con las fuentes
+ * públicas sobre fixtures. Instagram y YouTube dejan snapshot; TikTok
+ * queda anotada sin métricas; una cuenta que ya no existe pasa a error;
+ * la plataforma sin credencial se salta. Ni el token casa ni la API key
+ * aparecen en ninguna tabla ni en el log.
+ */
+import { after, before, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '@mc/connectors';
+import { allJobs } from '../src/jobs/index.ts';
+import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
+
+const NOW = new Date('2026-09-22T05:10:00Z');
+const WORKSPACE = '00000002-0000-4000-8000-000000000001';
+const CREATOR = '00000002-0000-4000-8000-000000000003';
+const ENV = { INSTAGRAM_HOUSE_TOKEN: 'IGAA-house-worker-SECRETO', GOOGLE_API_KEY: 'AIza-worker-key-SECRETO' };
+
+let h: Harness;
+let guard: NetworkGuard;
+let fetch: FixtureFetch;
+let ids: { ig: string; yt: string; tt: string; gone: string };
+
+async function seed(db: PgliteDatabase): Promise<void> {
+  const raw = db.raw;
+  await raw.exec(`
+    SELECT set_config('app.workspace_id', '${WORKSPACE}', false);
+    INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE}', 'laura', 'Laura');
+    INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREATOR}', '${WORKSPACE}', 'Laura');
+  `);
+  const add = async (platform: string, handle: string, ext: string) => {
+    const r = await raw.query<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, '{}', 'public_profile') RETURNING id`,
+      [WORKSPACE, CREATOR, platform, ext, handle, `public:${platform}:${handle}`],
+    );
+    return r.rows[0]!.id;
+  };
+  ids = { ig: await add('instagram', 'cafealma', '17841400000000e01'), yt: await add('youtube', 'NutriveOficial', 'UCnutrive00000000000000e4'), tt: await add('tiktok', 'laura.cocinafacil', 'laura.cocinafacil'), gone: await add('tiktok', 'noexiste.zz9', 'noexiste.zz9') };
+  await raw.exec("SELECT set_config('app.workspace_id', '', false)");
+}
+
+before(async () => {
+  guard = withoutNetwork();
+  fetch = new FixtureFetch([
+    ...(await loadFixtures('instagram', [['business_discovery', 'ok']])),
+    ...(await loadFixtures('youtube', [['channels.list', 'handle.ok']])),
+    // El oEmbed casa por handle: la cuenta buena tiene su fixture; cualquier otra cae en not_found.
+    ...(await loadFixtures('tiktok', [['oembed.profile', 'ok'], ['oembed.profile', 'not_found']])),
+  ]);
+  h = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: ENV, http: { fetch: fetch.fetch } });
+});
+after(async () => { await h.stop(); guard.restore(); });
+
+test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta inexistente en error; sin credenciales en tablas ni log', async () => {
+  await h.worker.boss.send('collect.account_metrics', { source: 'test' });
+  const run = await waitFor(async () => (await jobRuns(h.db, 'collect.account_metrics')).find((r) => r.status !== 'running'), { label: 'collect.account_metrics', timeoutMs: 30_000 });
+  assert.equal(run.status, 'ok', run.error ?? '');
+  const md = run.metadata as { snapshots: string[]; noMetrics: string[]; errored: string[]; transient: string[]; skipped: Record<string, string> };
+  assert.deepEqual([...md.snapshots].sort(), [ids.ig, ids.yt].sort());
+  assert.deepEqual(md.noMetrics, [ids.tt]);
+  assert.deepEqual(md.errored, [ids.gone]);
+  assert.deepEqual(md.transient, []);
+  assert.deepEqual(md.skipped, {});
+
+  const snaps = await h.db.query<{ connection_id: string; day: string; followers: string | number | null; media_count: string | number | null; views: string | number | null; source: string }>(
+    `SELECT connection_id, day::text AS day, followers, media_count, views, source FROM account_metric_snapshot ORDER BY connection_id`,
+  );
+  assert.equal(snaps.rows.length, 2);
+  const ig = snaps.rows.find((s) => s.connection_id === ids.ig)!;
+  assert.equal(Number(ig.followers), 267793);
+  assert.equal(Number(ig.media_count), 1205);
+  assert.equal(ig.views, null, 'Instagram no publica vistas: null, no cero');
+  assert.equal(ig.day, '2026-09-22');
+  assert.equal(ig.source, 'public_profile');
+  const yt = snaps.rows.find((s) => s.connection_id === ids.yt)!;
+  assert.equal(Number(yt.followers), 38400);
+  assert.ok(yt.views !== null);
+
+  const conns = await h.db.query<{ id: string; status: string; status_detail: string | null; last_synced_at: Date | string | null }>(`SELECT id, status, status_detail, last_synced_at FROM social_connection`);
+  const by = new Map(conns.rows.map((c) => [c.id, c]));
+  assert.ok(by.get(ids.ig)!.last_synced_at && by.get(ids.yt)!.last_synced_at);
+  assert.equal(by.get(ids.tt)!.status, 'active');
+  assert.match(by.get(ids.tt)!.status_detail!, /no publica seguidores/);
+  assert.equal(by.get(ids.tt)!.last_synced_at, null, 'sin métricas no hay «datos hasta»');
+  assert.equal(by.get(ids.gone)!.status, 'error');
+  assert.match(by.get(ids.gone)!.status_detail!, /No encontramos @noexiste.zz9/);
+
+  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log ORDER BY id`);
+  assert.deepEqual(log.rows.map((r) => r.endpoint).sort(), ['instagram.business_discovery', 'tiktok.oembed', 'tiktok.oembed', 'youtube.channels.list']);
+  assert.equal(guard.attempts, 0);
+
+  const raw = { query: (text: string, params?: readonly unknown[]) => h.db.raw.query(text, params as unknown[]) };
+  const dump = await dumpTextColumns(raw, 'public');
+  assert.equal(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY]), null);
+  const text = h.sink.text();
+  assert.ok(!text.includes(ENV.INSTAGRAM_HOUSE_TOKEN) && !text.includes(ENV.GOOGLE_API_KEY));
+});
+
+test('sin credenciales, la plataforma se salta y se avisa; nada falla', async () => {
+  const h2 = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: {}, http: { fetch: fetch.fetch } });
+  try {
+    await h2.worker.boss.send('collect.account_metrics', { source: 'test' });
+    const run = await waitFor(async () => (await jobRuns(h2.db, 'collect.account_metrics')).find((r) => r.status !== 'running'), { label: 'sin credenciales', timeoutMs: 30_000 });
+    assert.equal(run.status, 'ok');
+    const md = run.metadata as { snapshots: string[]; skipped: Record<string, string> };
+    assert.deepEqual(md.snapshots, []);
+    assert.match(md.skipped['instagram']!, /INSTAGRAM_HOUSE_TOKEN/);
+    assert.match(md.skipped['youtube']!, /GOOGLE_API_KEY/);
+    assert.equal(md.skipped['tiktok'], undefined, 'TikTok no necesita credencial');
+  } finally {
+    await h2.stop();
+  }
+});

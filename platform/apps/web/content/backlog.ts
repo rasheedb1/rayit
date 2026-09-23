@@ -19,7 +19,7 @@ import type { StoryPrefix } from "./modules";
 
 export type Status = "pendiente" | "en_curso" | "bloqueada" | "hecho";
 export type Size = "S" | "M" | "L";
-export type SprintNumber = 1 | 2 | 3 | 4 | 5;
+export type SprintNumber = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface Story {
   id: string;
@@ -72,8 +72,14 @@ export const SPRINTS: readonly Sprint[] = [
   {
     n: 5,
     weeks: "Semanas 9 y 10",
-    name: "Lo que depende de aprobaciones, y el piloto",
-    demo: "Pantalla de conexiones, demografía, YouTube, recordatorios de cobro (Nicolás). Lo que importa esta semana, cuándo publicar, brief y conversión (Rasheed). Producción abierta a los primeros creadores.",
+    name: "Lo que depende de aprobaciones, el mánager y el piloto",
+    demo: "Pantalla de conexiones, YouTube, recordatorios de cobro (Nicolás). Lo que importa esta semana (Rasheed). Y la que pide el piloto: el creador invita a su mánager, el mánager entra y ve Campañas pero no el flujo de caja. Producción abierta a los primeros creadores.",
+  },
+  {
+    n: 6,
+    weeks: "Fase 2 · sin fecha",
+    name: "Alcance, agencias y lo que se corrió para que cupieran los roles",
+    demo: "No tiene demo de viernes: se abre cuando el piloto confirme que hay agencias esperando. Lleva el alcance por creador (ACC-6, ACC-7), los roles a medida (ACC-9), el épico AGE de agencias, y las cuatro historias que salieron del sprint 5 para hacerle sitio a ACC-4.",
   },
 ];
 
@@ -184,7 +190,7 @@ export const STORIES: readonly Story[] = [
     desc: "Callback, cifrado del token con TOKEN_ENCRYPTION_KEY, secret_ref en social_connection, data_consent con la evidencia. Necesita acceso de desarrollador a las apps de TikTok y Meta (lo da Rasheed).",
     done: "Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro en ninguna tabla.",
     status: "bloqueada",
-    note: "Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, aplicada en Supabase el 21-sep), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. En main y desplegada en producción el 22-sep con TOKEN_ENCRYPTION_KEY y APP_URL en Vercel. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §9.4 fila 15); el paso a paso está en docs/propuestas/CON-3.md §5.",
+    note: "POSPUESTA a una versión avanzada (decisión del 22-sep): el MVP agrega cuentas por @ con datos públicos (CON-10); esta autorización queda detrás de la bandera oauth_connect (OAUTH_CONNECT=1). Código completo y probado con respuestas grabadas: cifrado AES-256-GCM (HKDF, AAD = secret_ref, rotación de clave), tabla connection_secret (migración 0015, RLS en FORCE, aplicada en Supabase el 21-sep), EncryptedSecretStore, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de TIKTOK_BUSINESS_APP_ID hasta CON-9), rutas start/callback con cookie sellada de 10 minutos, data_consent con evidencia, pantalla mínima de /conexiones y oauth.refresh con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas y no encuentra ningún token. En main y desplegada en producción el 22-sep con TOKEN_ENCRYPTION_KEY y APP_URL en Vercel. Bloqueada solo por la prueba en vivo: falta el acceso de desarrollador a las apps de TikTok y Meta (backlog §9.4 fila 15); el paso a paso está en docs/propuestas/CON-3.md §5.",
   },
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
@@ -192,6 +198,23 @@ export const STORIES: readonly Story[] = [
     desc: "Lista sobre connection_health, botón para conectar cada red, estado (activa, vencida, necesita reautorizar), horas desde la última sincronización, y el paso manual «activa Analytics en TikTok».",
     done: "Una conexión con token vencido se ve en rojo con el botón de reautorizar.",
     status: "pendiente",
+    note: "Pospuesta con CON-3 (versión avanzada). La pantalla de cuentas del MVP la trae CON-10.",
+  },
+  {
+    id: "CON-10", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1"],
+    title: "Cuentas por @ con datos públicos",
+    desc: "Decisión del 22-sep: sin OAuth por creador en el MVP. Una cuenta se agrega con su @ y se lee cada día con fuentes oficiales: Instagram por business_discovery con el token de la cuenta casa (INSTAGRAM_HOUSE_TOKEN), YouTube con API key (GOOGLE_API_KEY), TikTok solo identidad por oEmbed hasta elegir fuente. Migración 0022 (access_mode public_profile), snapshots en account_metric_snapshot con source public_profile, job collect.account_metrics, pantalla «Agregar cuenta».",
+    done: "Agregar un @ deja la fila con su snapshot público del día, el worker la actualiza cada día y ninguna credencial aparece en las tablas.",
+    status: "hecho",
+    note: "En main el 22-sep. Probado con respuestas grabadas (connectors 180, db 46, worker 31, web 119) y con el volcado de todas las columnas de texto sin credenciales. Comprobado desde servidor que el HTML público de TikTok e Instagram no sirve (reto anti-bot y muro de login): por eso solo fuentes oficiales. Para la prueba real faltan dos configuraciones de Nicolás: INSTAGRAM_HOUSE_TOKEN (token de su cuenta profesional, generado en el App Dashboard de Meta) y GOOGLE_API_KEY; TikTok se agrega ya, sin métricas. DECIDIDO el 22-sep: las métricas de TikTok entran por el CSV de TikTok Studio (RES-2, gratuito) y el proveedor de pago queda como opción futura (CON-12). Detalle en docs/propuestas/CON-10.md.",
+  },
+  {
+    id: "CON-12", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-10"],
+    title: "Proveedor de datos de TikTok (opción futura)",
+    desc: "Seguidores, vistas y videos de TikTok por @ a través de un proveedor de pago (Apify, EnsembleData o Phyllo) sobre la interfaz PublicProfileSource de CON-10, con access_mode = aggregator. Solo si el CSV de TikTok Studio (RES-2) se queda corto o la fricción de subir archivos frena a los creadores.",
+    done: "Agregar un @ de TikTok deja seguidores y vistas del día sin que el creador suba nada; el costo mensual del proveedor está aprobado y anotado.",
+    status: "pendiente",
+    note: "Decisión del 22-sep: por ahora TikTok va por CSV gratuito (RES-2). Esta historia se abre solo si hace falta; no bloquea nada.",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],
@@ -220,6 +243,7 @@ export const STORIES: readonly Story[] = [
     desc: "Mismo flujo que CON-3 para un canal de prueba.",
     done: "Conectar un canal de prueba deja la fila con sus scopes y el token cifrado.",
     status: "pendiente",
+    note: "Pospuesta con CON-3. En el MVP YouTube se lee por @ con API key (CON-10).",
   },
   {
     id: "CON-9", module: "CON", owner: "rasheed", size: null, sprint: 1, deps: [],
@@ -269,11 +293,12 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 5, deps: ["CON-7"],
+    id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 6, deps: ["CON-7"],
     title: "Demografía y cuándo publicar, en pantalla",
     desc: "El bloque de audiencia por edad, género y país, y el de «cuándo publicar» (seguidores conectados por hora, Instagram), sobre lo que recolecta CON-7.",
     done: "El gráfico por hora coincide con el fixture; si la cuenta no da demografía, la pantalla explica por qué.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: depende de CON-7, que a su vez depende de aprobaciones que pueden no llegar.",
   },
 
   // ---------------------------------------------------------------- VEN
@@ -323,18 +348,20 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["VEN-2"],
+    id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
     title: "Brief de outbound",
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
   },
   {
-    id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["VEN-3"],
+    id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
     title: "Deal perdido y conversión por etapa",
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
@@ -400,28 +427,32 @@ export const STORIES: readonly Story[] = [
     title: "Tarifario sugerido",
     desc: "packages/core/tarifas.ts calcula el rango por entregable desde views promedio × CPM de niche_cpm_benchmark, con modificadores (derechos de uso, exclusividad). Las views vienen de creator_baseline si existe y es confiable; si no, el creador las escribe y quedan marcadas como manuales.",
     done: "Con las views del mock salen los rangos del mock; cambiar el CPM cambia el rango y la explicación lo dice.",
-    status: "pendiente",
+    status: "hecho",
+    note: "packages/core/src/tarifas.ts (rango por entregable, paquetes con descuento y redondeo a la unidad de la moneda: en pesos, sin centavos) y /cotizar con el kit. El rango se lee como texto; «Editar» abre precio y CPM a mano, marcados como «editado» y «CPM propio». Con las views del seed (TikTok: 115.446 de mediana y el CPM de cocina en CO, 45.000 – 70.000) salen COP 5.195.070 – 8.081.220, del orden del mock (7,1 – 10,6 M con sus multiplicadores); subir el CPM cambia el rango y el «Cómo se calcula», que se abre justo debajo de su fila, dice «Tu CPM». Las views se leen con separador de miles. La línea base con poca muestra no entra sola (D4): se sugiere y el creador la confirma. Un precio a mano al revés, vacío o en cero no pasa por ninguna capa (validarRangoPrecio en la tabla, la acción y saveRateCard, más un CHECK en 0026). La fórmula no aplica los × 1,15 por engagement y × 1,10 por audiencia del mock: no hay referencia en la base contra la que medirlos (decisión en la cabecera de tarifas.ts). Ronda 4: un CPM de referencia en otra moneda que la del workspace no se usa (la fila dice «No hay CPM de referencia en USD…»); a 400 px «Cómo se calcula» y «Editar» van bajo el nombre del entregable, sin desplazar la tabla; una fila a la que solo le falta el CPM enseña las views de la línea base confiable.",
   },
   {
     id: "COT-2", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["COT-1", "RES-1"],
     title: "Media kit público",
     desc: "Foto congelada de los números en media_kit.snapshot, página pública por slug, opcional con contraseña y vencimiento. Contador de vistas.",
     done: "El enlace abre sin sesión, muestra las cifras congeladas, y no cambia aunque cambien las métricas.",
-    status: "pendiente",
+    status: "hecho",
+    note: "/kit/<slug> sin sesión, sobre public_media_kit() (migración 0026, rol mc_public_share; la web la abre con db.withPublicShare, sin forzar tipos). Contraseña de 8 signos como mínimo, guardada como huella scrypt con sal por fila, 5 intentos por minuto por IP y bloqueo de 15 minutos por enlace tras 10 fallos en la base (compromiso aceptado, explicado en la cabecera de 0026). Vence al final del día en la zona del workspace. La vista previa del panel y los robots de WhatsApp o Slack no cuentan visitas. Audiencia por red y dimensión, con «Otros» siempre al final. La cifra grande de views es la de la mejor red y se rotula con ella; los totales salen de SQL. El documento declara el idioma de sus textos (MVP en español, decisión en el README). Prueba: subir los seguidores después de generarlo no cambia lo que ve la marca.",
   },
   {
     id: "COT-3", module: "COT", owner: "rasheed", size: "L", sprint: 4, deps: ["COT-1", "VEN-3"],
     title: "Cotización",
     desc: "Crear desde un deal, ítems desde el tarifario, subtotal, descuento, impuesto y total. Lo que se acuerda antes de publicar: métricas a reportar, cortes (24 h, 7 d, 30 d), derechos, exclusividad, plazo de pago. Numeración COT-2026-014.",
     done: "Enviar pasa el deal a «Propuesta enviada»; la cotización tiene su enlace público.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Ciclo draft → sent → viewed → accepted/rejected/expired, con una fecha por estado; el estado de hoy lo deriva la consulta (una vencida sale vencida sin que la marca abra el enlace). Borrador editable y borrable, vista previa antes de enviar, «Enviar y copiar enlace» copia de verdad. Entregables elegidos del tarifario, con su rango y aviso si el precio se sale. Impuesto por defecto del workspace. Numeración COT-AAAA-NNN con bloqueo consultivo y el año de la zona del workspace. Una cotización con la validez ya vencida no se envía. Enviar mueve el deal a «Propuesta enviada»; la frase de la actividad sale de messages.ts y la base guarda su código. Acepta ?negocio=<id>. Ronda 4: las transiciones del panel leen con la fila bloqueada (FOR UPDATE) y el UPDATE guarda el estado de origen, así que un doble «Enviar» o un «Rechazar» a la vez que la marca acepta fallan con QuoteTransitionError en vez de pisar el estado; el formulario elige el media kit que la acompaña y pone el total antes de «Guardar» en el teléfono.",
   },
   {
     id: "COT-4", module: "COT", owner: "rasheed", size: "M", sprint: 4, deps: ["COT-3", "CAM-2"],
     title: "Aceptación crea la campaña",
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Aceptar crea la campaña de CAM-2 sin segundo clic. Desde el panel, acceptQuote y createCampaignFromQuote en la misma transacción (con SAVEPOINT: sin fechas acordadas, acepta y deja la campaña pendiente con su motivo). Desde el enlace, la marca firma con nombre, correo y términos; public_quote_accept() devuelve el workspace de la cotización y lib/db abre esa transacción para la campaña, la actividad y el aviso al creador. Aceptar y rechazar piden confirmación en línea. Aceptada sin ventana, el detalle pide Desde y Hasta y CAM-2 crea la campaña con esas fechas y el nombre del negocio. El aviso al creador sale en la lista de cotizaciones hasta darlo por visto, y la marca que llega tarde (otra pestaña, rechazada, vencida) lee qué pasó. Aceptar ya no suma una visita al volver a pintar la página, y tras una firma con errores el foco va al primer campo inválido. Falta aplicar 0026 en Supabase (0022 es de CON-10, 0023 de ACC-3, 0024/0025 del endurecimiento; 0026 ya cuenta con sus disparadores); pide crear antes el rol mc_public_share con supabase-admin (ver la cabecera de la migración).",
   },
 
   // ---------------------------------------------------------------- CAM
@@ -515,11 +546,12 @@ export const STORIES: readonly Story[] = [
     status: "pendiente",
   },
   {
-    id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["FIN-6"],
+    id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 6, deps: ["FIN-6"],
     title: "Ingresos de plataformas",
     desc: "Carga manual o CSV de Creator Rewards, AdSense y bonos en platform_payout. Entra al flujo de caja.",
     done: "Un CSV de AdSense aparece como ingreso en su mes.",
     status: "pendiente",
+    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-5 y ACC-8: no la toca ningún creador en un piloto de dos semanas.",
   },
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
@@ -527,5 +559,80 @@ export const STORIES: readonly Story[] = [
     desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, datos fiscales para la factura. En workspace.settings.",
     done: "Cambiar el porcentaje cambia la reserva de los pagos siguientes, no de los anteriores.",
     status: "pendiente",
+  },
+
+  // ---------------------------------------------------------------- ACC
+  // Entró al MVP el 22 de septiembre: los creadores del piloto tienen
+  // mánager. El diseño completo está en docs/propuestas/ACC-accesos-y-roles.md.
+  {
+    id: "ACC-1", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: [],
+    title: "Catálogo de permisos y can()",
+    desc: "packages/core/src/permisos.ts: los permisos con la forma <módulo>.<recurso>.<acción>, los cinco roles de fábrica del creador y los cinco de agencia, y can(). Puro, sin base de datos y sin pantalla. Desde aquí, ninguna Server Action pregunta por el rol.",
+    done: "Cada Server Action nueva abre con su requirePermission(); una prueba comprueba que el rol «Mánager» no trae finanzas.flujo.ver.",
+    status: "pendiente",
+    note: "Va en el sprint 3 a propósito: fija los nombres antes de que Campañas y Finanzas tengan sus Server Actions escritas. Después cuesta diez veces más.",
+  },
+  {
+    id: "ACC-2", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-2"],
+    title: "Bitácora obligatoria",
+    desc: "withAudit() en packages/db: toda escritura de dinero, publicación o cuenta conectada deja su fila en audit_log con actor, before y after.",
+    done: "Crear una factura y conectar una cuenta dejan su fila; una prueba recorre las escrituras de queries/ y falla si alguna no audita.",
+    status: "pendiente",
+    note: "audit_log no se puede rellenar hacia atrás: o se escribe desde la primera Server Action o no existe.",
+  },
+  {
+    id: "ACC-3", module: "ACC", owner: "nicolas", size: "M", sprint: 4, deps: ["ACC-1", "CIM-3"],
+    title: "Esquema de accesos (migración 0023)",
+    desc: "0023_access_control.sql: permission, role, role_permission, membership.role → role_id, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los roles de fábrica.",
+    done: "Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz.",
+    status: "pendiente",
+    note: "El SQL y la semilla los escribe Nicolás y los revisa y aplica Rasheed (regla de db/migrations/ en §3.1); el esquema Drizzle es de Rasheed. Va en el sprint 4 y no en el 5 por riesgo: ACC-4 no puede empezar sin la tabla.",
+  },
+  {
+    id: "ACC-4", module: "ACC", owner: "rasheed", size: "M", sprint: 5, deps: ["ACC-3"],
+    title: "Pantalla Equipo: invitar al mánager",
+    desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
+    done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
+    status: "pendiente",
+    note: "Es la demo del quinto viernes. Recortada a lo del piloto: sin matriz editable ni roles a medida, que son ACC-9.",
+  },
+  {
+    id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
+    title: "Permisos en el marco",
+    desc: "requireModule() recibe el permiso mínimo además de la bandera; el menú esconde lo que la persona no puede abrir; la ruta directa responde 404.",
+    done: "Con sesión de «Contador», /campanas responde 404 y no aparece en el menú.",
+    status: "pendiente",
+    note: "404 y no 403, igual que una bandera apagada: un 403 confirma que el módulo existe.",
+  },
+  {
+    id: "ACC-6", module: "ACC", owner: "nicolas", size: "M", sprint: 6, deps: ["ACC-3"],
+    title: "Alcance en las consultas",
+    desc: "scopeFilter() en packages/db, compuesto por cada queries/<modulo>.ts. La tenencia se garantiza en RLS; el alcance, aquí: depende de columnas que no todas las tablas tienen, y una política de alcance mal escrita no se ve como un bug.",
+    done: "Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada del módulo.",
+    status: "pendiente",
+    note: "Cada uno hace el alcance de sus módulos. Fuera del MVP: un workspace de creador tiene un solo creador, así que no hay nada que acotar hasta que existan las agencias.",
+  },
+  {
+    id: "ACC-7", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-6"],
+    title: "Endurecimiento por creador en RLS",
+    desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
+    done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
+    status: "pendiente",
+  },
+  {
+    id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
+    title: "Consentimiento delegado",
+    desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
+    done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
+    status: "pendiente",
+    note: "Deja de ser opcional en cuanto el mánager hace el onboarding del piloto. Es además la respuesta el día que Meta o TikTok pregunten quién dio el consentimiento.",
+  },
+  {
+    id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],
+    title: "Matriz editable y roles a medida",
+    desc: "La pantalla que muestra los permisos uno por uno y deja crear un rol propio del workspace (role con workspace_id).",
+    done: "Una agencia crea el rol «Becario» con tres permisos y se lo asigna a alguien.",
+    status: "pendiente",
+    note: "Necesidad de agencia, no de un creador con un mánager: para el piloto bastan los cinco roles de fábrica.",
   },
 ];

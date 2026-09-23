@@ -239,6 +239,8 @@ await db.exec(`
   CREATE ROLE mc_migrator_test NOSUPERUSER;
   CREATE ROLE mc_worker NOLOGIN BYPASSRLS;
   CREATE ROLE mc_app NOLOGIN;
+  CREATE ROLE mc_public_share NOLOGIN NOINHERIT;
+  GRANT mc_public_share TO mc_migrator_test;
   ALTER SCHEMA public OWNER TO mc_migrator_test;
   GRANT mc_migrator_test TO postgres;
 `);

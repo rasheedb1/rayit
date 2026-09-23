@@ -156,6 +156,17 @@ export function formatPoints(diff: number, digits = 1, opts: LocaleOpts = {}): s
   return `${rounded > 0 ? "+" : MINUS}${decimals(Math.abs(pts), digits, locale)}`;
 }
 
+/**
+ * Un múltiplo: 3.57 → "3,6×" · 12 → "12×". Para «este video hizo 3,6×
+ * su mediana»: el compacto ("3,6") pierde el «veces» y se lee como un
+ * número suelto.
+ */
+export function formatMultiple(ratio: number, digits = 1, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const body = plain(numberFormat(locale, { maximumFractionDigits: digits }).format(ratio));
+  return `${body}×`;
+}
+
 function utcDate(iso: string): Date {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
   if (Number.isNaN(d.getTime())) throw new Error(`No es una fecha ISO: "${iso}"`);
@@ -293,6 +304,7 @@ export function formatterFor(settings: FormatSettings) {
     int: (n: number) => formatInt(n, base),
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
+    multiple: (ratio: number, digits = 1) => formatMultiple(ratio, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),

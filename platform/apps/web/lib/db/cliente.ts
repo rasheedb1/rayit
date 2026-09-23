@@ -1,5 +1,7 @@
 import "server-only";
-import { createDbFromEnv, type Db, type DbMode, type Identity, type IdentityTx, type WorkspaceTx } from "@mc/db";
+import {
+  createDbFromEnv, type Db, type DbMode, type Identity, type IdentityTx, type PublicShareTx, type WorkspaceTx,
+} from "@mc/db";
 
 /**
  * La base de la web: quién la abre y cómo se cierra. Aquí NO se decide
@@ -9,9 +11,10 @@ import { createDbFromEnv, type Db, type DbMode, type Identity, type IdentityTx, 
  * El cliente crudo no sale de este módulo. Antes sí (`getDb()` devolvía
  * el `Db` entero) y con él una pantalla podía escribir `db.asWorker(...)`
  * y leer todos los workspaces saltándose RLS. Lo que sale son dos
- * puertas con nombre: `withWorkspaceId` (la que usa lib/db) y
+ * puertas con nombre: `withWorkspaceId` (la que usa lib/db),
  * `withIdentity` (la de la sesión, solo para lib/auth y
- * lib/workspace).
+ * lib/workspace) y `withPublicShare` (la de los enlaces públicos de
+ * Cotizar, que lib/db reexporta con su explicación).
  *
  * Se guarda en globalThis para sobrevivir a la recarga en caliente de
  * Next en desarrollo: sin esto, cada cambio de archivo levantaría otro
@@ -59,6 +62,16 @@ export async function withWorkspaceId<T>(
 export async function withIdentity<T>(identity: Identity, fn: (tx: IdentityTx) => Promise<T>): Promise<T> {
   const { db } = await getDb();
   return db.withIdentity(identity, fn);
+}
+
+/**
+ * Transacción de un enlace público de Cotizar: sin workspace y sin
+ * identidad. Solo la aceptan las funciones públicas de
+ * @mc/db/queries/cotizar (ver withPublicShare en lib/db/index.ts).
+ */
+export async function withPublicShare<T>(fn: (tx: PublicShareTx) => Promise<T>): Promise<T> {
+  const { db } = await getDb();
+  return db.withPublicShare(fn);
 }
 
 /** Contra qué corre la web: 'postgres' (DATABASE_URL) o 'embedded' (modo demo). */

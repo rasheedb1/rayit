@@ -64,6 +64,7 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `META_APP_ID`, `META_APP_SECRET` | Las apps con las que se renueva cada token. Sin una app, sus conexiones fallan como `not_configured` (transitorio, sin reintento inmediato) y el arranque lo avisa. | — |
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
+| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
@@ -204,7 +205,7 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~40 s; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
@@ -228,6 +229,6 @@ src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
-src/jobs/conexiones/         oauth.refresh
+src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @, CON-10)
 test/                        integración (pglite) y unitarias
 ```

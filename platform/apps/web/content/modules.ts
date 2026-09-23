@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import type { OwnerId } from "./team";
 import { flags as defaultFlags, type FlagKey, type Flags } from "./flags";
 
-export type StoryPrefix = "CIM" | "CON" | "RES" | "VEN" | "COT" | "CAM" | "FIN";
+export type StoryPrefix = "CIM" | "CON" | "RES" | "VEN" | "COT" | "CAM" | "FIN" | "ACC";
 
 export interface ModuleDef {
   slug: string;
@@ -96,9 +96,9 @@ export const MODULES: readonly ModuleDef[] = [
     group: "producto",
     phase: 1,
     owner: "nicolas",
-    summary: "Las cuentas conectadas y los datos que traen.",
+    summary: "Las cuentas del creador y los datos que traen.",
     purpose:
-      "Conectar TikTok, Instagram y YouTube, los conectores con sus fixtures, el worker, la recolección diaria de posts y métricas, la línea base del creador y la demografía. Es la entrada de datos de todo el producto.",
+      "Agregar cuentas de TikTok, Instagram y YouTube por su @ y leer cada día lo que la plataforma publica; los conectores con sus fixtures, el worker, la recolección diaria de posts y métricas y la línea base del creador. La autorización del dueño (alcance, retención, demografía) queda para una versión avanzada. Es la entrada de datos de todo el producto.",
     prefix: "CON",
     paths: [
       "apps/web/app/(app)/conexiones/",
@@ -119,12 +119,28 @@ export const MODULES: readonly ModuleDef[] = [
     prefix: "CIM",
     paths: ["packages/db/src/client.ts (Rasheed)", "apps/web/components/ui/ (Nicolás)", "db/seed/ (por archivo)"],
   },
+  {
+    slug: "accesos",
+    name: "Accesos",
+    group: "construccion",
+    phase: 1,
+    summary: "Una cuenta, varias personas, y cada una con lo suyo.",
+    purpose:
+      "Roles y permisos dentro de un workspace: el creador invita a su mánager, a su editor o a su contador y cada uno ve solo lo que le toca. El código pregunta por permisos, nunca por roles; el dinero no entra en ningún rol por defecto; y toda escritura de dinero o de cuenta conectada deja rastro en audit_log. Entró al MVP el 22 de septiembre, al confirmarse que los creadores del piloto tienen mánager. El alcance por creador y las agencias son la fase 2.",
+    prefix: "ACC",
+    paths: [
+      "packages/core/src/permisos.ts (Nicolás)",
+      "apps/web/lib/auth/ (Rasheed)",
+      "packages/db/src/scope.ts, audit.ts (Rasheed)",
+      "db/migrations/0023_access_control.sql (propone Nicolás, aplica Rasheed)",
+    ],
+  },
   // Fase 2. Apagados en flags.ts; la base ya los modela.
   { slug: "videos", name: "Mis videos", group: "producto", phase: 2, summary: "Qué de lo tuyo funciona y por qué.", purpose: "", paths: [], flag: "content_metrics" },
   { slug: "nicho", name: "Tendencias del nicho", group: "producto", phase: 2, summary: "Lo que está rompiendo en tu nicho esta semana.", purpose: "", paths: [], flag: "niche_radar" },
   { slug: "ideas", name: "Ideas y guiones", group: "producto", phase: 2, summary: "Tres ideas para esta semana, con guion listo.", purpose: "", paths: [], flag: "ideas_scripts" },
   { slug: "laboratorio", name: "Laboratorio de video", group: "producto", phase: 2, summary: "Sube el máster y recibe el semáforo por red.", purpose: "", paths: [], flag: "video_lab" },
-  { slug: "agencia", name: "Vista agencia", group: "producto", phase: 2, summary: "Varias marcas, un solo tablero.", purpose: "", paths: [], flag: "agency_workspace" },
+  { slug: "agencia", name: "Vista agencia", group: "producto", phase: 2, summary: "Varias marcas, un solo tablero. La agencia no absorbe al creador: recibe una concesión revocable sobre su workspace (épico AGE).", purpose: "", paths: [], flag: "agency_workspace" },
   // Herramientas del equipo: no van en la navegación de producto.
   { slug: "kit", name: "Kit de interfaz", group: "construccion", phase: 1, owner: "nicolas", summary: "Los componentes compartidos, con datos de ejemplo.", purpose: "Galería de CIM-5: cada componente en claro y oscuro, vacío, cargando y con valores largos.", paths: ["apps/web/components/ui/"], flag: "kit" },
 ];

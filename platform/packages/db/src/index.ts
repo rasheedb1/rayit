@@ -29,7 +29,8 @@
  * hace aritmética de métricas (para eso están las vistas).
  */
 export type {
-  BaseTx, Db, DbOptions, Identity, IdentityTx, Orm, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
+  BaseTx, Db, DbOptions, Identity, IdentityTx, Orm, PublicShareTx, QueryResult, Schema, SqlExecutor, WorkerTx,
+  WorkspaceTx,
 } from './client.ts';
 export {
   assertWorkspaceId, CURRENT_USER_ID, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,

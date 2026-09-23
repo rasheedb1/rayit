@@ -51,6 +51,9 @@ export const mediaKit = pgTable('media_kit', {
   passwordHash: text('password_hash'),
   expiresAt: timestamptz('expires_at'),
   viewCount: integer('view_count').default(0).notNull(),
+  /** Contraseñas fallidas seguidas y hasta cuándo está bloqueado el enlace (migración 0026). */
+  failedAttempts: integer('failed_attempts').default(0).notNull(),
+  lockedUntil: timestamptz('locked_until'),
   createdAt: createdAt(),
 });
 
@@ -68,17 +71,35 @@ export const quote = pgTable('quote', {
   discount: money('discount').default('0').notNull(),
   tax: money('tax').default('0').notNull(),
   total: money('total').default('0').notNull(),
+  /** La tasa con la que se calculó `tax`, como fracción (0026). */
+  taxRate: numeric('tax_rate', { precision: 7, scale: 6 }),
   agreedMetrics: text('agreed_metrics').array().default([]).notNull(),
   reportCutsHours: integer('report_cuts_hours').array().default([24, 168, 720]).notNull(),
   usageRightsDays: integer('usage_rights_days'),
   exclusivityDays: integer('exclusivity_days'),
   exclusivityScope: text('exclusivity_scope'),
   paymentTermsDays: integer('payment_terms_days').default(30).notNull(),
+  /**
+   * Lo que la marca vio cuando se le envió, congelado (migración 0026).
+   * Lo escribe `sendQuote` y lo devuelve `public_quote(slug)`: editar la
+   * cotización después no cambia un documento ya enviado.
+   */
+  publicSnapshot: jsonb('public_snapshot'),
+  /** Ventana de la campaña, acordada antes de publicar. La usa COT-4 al llamar a CAM-2. */
+  campaignStartsOn: date('campaign_starts_on', { mode: 'string' }),
+  campaignEndsOn: date('campaign_ends_on', { mode: 'string' }),
+  viewCount: integer('view_count').default(0).notNull(),
   status: text('status', { enum: QUOTE_STATUSES }).default('draft').notNull(),
   validUntil: date('valid_until', { mode: 'string' }),
   sentAt: timestamptz('sent_at'),
   viewedAt: timestamptz('viewed_at'),
   acceptedAt: timestamptz('accepted_at'),
+  /** Una fecha por estado (0026): rechazada y vencida. */
+  rejectedAt: timestamptz('rejected_at'),
+  expiredAt: timestamptz('expired_at'),
+  /** Quién aceptó desde el enlace público (0026). */
+  acceptedByName: text('accepted_by_name'),
+  acceptedByEmail: text('accepted_by_email'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

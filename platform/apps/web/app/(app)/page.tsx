@@ -56,11 +56,11 @@ export default async function PlanPage() {
       <PageHeader
         eyebrow="MVP · fase 1"
         title="Plan de construcción"
-        description="Seis módulos, dos personas, cinco sprints de dos semanas. Cada módulo tiene un dueño y cada historia un estado; esta página se publica con cada merge a main."
+        description="Seis módulos, dos personas, cinco sprints de dos semanas, más un sexto de fase 2. Cada módulo tiene un dueño y cada historia un estado; esta página se publica con cada merge a main."
       />
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Resumen del avance">
-        <Kpi label="Historias" value={all.total} hint="En siete grupos, cinco sprints" />
+        <Kpi label="Historias" value={all.total} hint="En ocho grupos, seis sprints" />
         <Kpi label="Hechas" value={all.hecho} hint={`${Math.round(all.progress * 100)} % del MVP`} />
         <Kpi label="En curso" value={all.en_curso} hint={all.bloqueada ? `${all.bloqueada} bloqueadas` : "Ninguna bloqueada"} />
         <Kpi label="Pendientes" value={all.pendiente} hint="Sin empezar" />
@@ -104,6 +104,9 @@ export default async function PlanPage() {
                   ))}
                   <Link href="/cimientos" className="rounded-full border border-line px-2.5 py-0.5 text-xs text-fg-2 hover:border-line-2 hover:text-fg">
                     Cimientos
+                  </Link>
+                  <Link href="/accesos" className="rounded-full border border-line px-2.5 py-0.5 text-xs text-fg-2 hover:border-line-2 hover:text-fg">
+                    Accesos
                   </Link>
                 </div>
                 <div className="mt-4 flex items-baseline justify-between">

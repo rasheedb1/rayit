@@ -21,6 +21,8 @@ export const JOB_RUN_STATUSES = ['running', 'ok', 'failed', 'skipped', 'partial'
 export const NOTIFICATION_KINDS = [
   'outlier', 'breakout', 'signal', 'deal_due', 'deal_overdue', 'payment_received',
   'invoice_overdue', 'connection_error', 'analysis_ready', 'report_sent', 'trend',
+  // 0026: la marca aceptó una cotización desde el enlace público (COT-4).
+  'quote_accepted',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

@@ -30,6 +30,18 @@
  *                           la sesión: app_user, membership y workspace
  *                           y nada más. Ver Db.withIdentity.
  *
+ *   withPublicShare(fn)     La transacción de los enlaces públicos de
+ *                           Cotizar (/kit/<slug>, /cotizacion/<slug>):
+ *                           sin workspace, como withCatalogs, pero con
+ *                           un tipo propio (PublicShareTx) que solo
+ *                           aceptan las tres funciones públicas de
+ *                           queries/cotizar.ts. Por sí sola no abre
+ *                           nada: lo que se ve lo deciden las funciones
+ *                           SECURITY DEFINER de la migración 0026, que
+ *                           corren como mc_public_share. Es una
+ *                           operación con nombre para que la web no
+ *                           tenga que forzar el tipo Db a CatalogDb.
+ *
  *   asWorker(fn)            SET LOCAL ROLE mc_worker dentro de la
  *                           transacción: salta RLS para los jobs globales
  *                           (renovar todos los tokens por vencer). Solo
@@ -125,6 +137,18 @@ export interface IdentityTx extends BaseTx {
   readonly identity: Identity;
 }
 
+declare const PUBLIC_SHARE: unique symbol;
+
+/**
+ * La transacción de un enlace público (withPublicShare). Es un BaseTx
+ * con marca de tipo: las funciones públicas de queries/cotizar.ts solo
+ * aceptan esta, así que no se pueden llamar por descuido desde otra
+ * transacción, y esta no sirve para ninguna consulta con WorkspaceTx.
+ */
+export interface PublicShareTx extends BaseTx {
+  readonly [PUBLIC_SHARE]: true;
+}
+
 /** Una transacción como mc_worker: RLS no aplica. Cada escritura filtra por workspace_id a mano. */
 export type WorkerTx = BaseTx;
 
@@ -150,6 +174,8 @@ export interface Db {
    * saltarse withWorkspace en una pantalla.
    */
   withIdentity<T>(identity: Identity, fn: (tx: IdentityTx) => Promise<T>): Promise<T>;
+  /** Sin workspace, para los enlaces públicos de Cotizar. Ver PublicShareTx. */
+  withPublicShare<T>(fn: (tx: PublicShareTx) => Promise<T>): Promise<T>;
   asWorker<T>(fn: (tx: WorkerTx) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
@@ -397,6 +423,11 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
     },
     withCatalogs(fn) {
       return run(fn);
+    },
+    withPublicShare(fn) {
+      // La marca es solo de tipo: en tiempo de ejecución es la misma
+      // transacción sin workspace que withCatalogs.
+      return run((tx) => fn(tx as PublicShareTx));
     },
     asWorker(fn) {
       return run(async (tx) => {
