@@ -224,6 +224,32 @@ export async function getDefaultCreatorId(tx: WorkspaceTx): Promise<string> {
   return id;
 }
 
+/** Una fila del catálogo `metric_requirement` (0011): qué exige una red para entregar un grupo de métricas. */
+export interface MetricRequirement {
+  id: string;
+  platformId: ConnectionPlatformId;
+  metricGroup: string;
+  requirement: string;
+  /** El texto que ve el creador, en español. La pantalla no lo copia: lo lee de aquí. */
+  messageEs: string;
+  fixUrl: string | null;
+}
+
+/**
+ * Un prerrequisito por su id ('tt.insights.optin'…). `metric_requirement`
+ * es un catálogo GLOBAL de solo lectura: sin workspace_id, sin RLS y sin
+ * escritura para mc_app (0024 §7.1). Se lee dentro de la transacción de
+ * workspace que ya está abierta; no hace falta otra.
+ */
+export async function getMetricRequirement(tx: WorkspaceTx, id: string): Promise<MetricRequirement | null> {
+  const { rows } = await tx.query<{ id: string; platform_id: ConnectionPlatformId; metric_group: string; requirement: string; message_es: string; fix_url: string | null }>(
+    `SELECT id, platform_id, metric_group, requirement, message_es, fix_url FROM metric_requirement WHERE id = $1`,
+    [id],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, platformId: r.platform_id, metricGroup: r.metric_group, requirement: r.requirement, messageEs: r.message_es, fixUrl: r.fix_url } : null;
+}
+
 export async function listConsents(tx: WorkspaceTx, connectionId: string): Promise<ConsentRow[]> {
   const { rows } = await tx.query<{ id: string; purpose: ConsentPurpose; granted: boolean; granted_at: string | Date; revoked_at: string | Date | null; policy_version: string }>(
     `SELECT id, purpose, granted, granted_at, revoked_at, policy_version FROM data_consent WHERE connection_id = $1 ORDER BY granted_at ASC, purpose`,
@@ -428,6 +454,12 @@ export interface AccountRow extends ConnectionListRow {
   latest: { day: string; followers: number | null; following: number | null; mediaCount: number | null; views: number | null } | null;
   /** Seguidores hace siete días o más, para la variación; null si no hay historia. */
   followersWeekAgo: number | null;
+  /**
+   * La variación de seguidores en esos siete días, ya calculada aquí
+   * (0,012 = +1,2 %). Ninguna pantalla resta ni divide métricas: la
+   * aritmética es de la base o de @mc/core (§3.3 del backlog).
+   */
+  followersDelta7d: number | null;
 }
 
 /** Cuentas vivas con su último snapshot público y el de hace una semana. */
@@ -437,12 +469,14 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
   const { rows } = await tx.query<{
     id: string; access_mode: AccountRow['accessMode']; day: string | null; followers: string | number | null; following: string | number | null;
     media_count: string | number | null; views: string | number | null; followers_week_ago: string | number | null;
+    followers_delta_7d: string | number | null;
   }>(
     `SELECT c.id, c.access_mode,
             to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
-            (SELECT w.followers FROM account_metric_snapshot w
-              WHERE w.connection_id = c.id AND w.source = ANY($1::text[]) AND w.day <= l.day - 7
-              ORDER BY w.day DESC LIMIT 1) AS followers_week_ago
+            w.followers AS followers_week_ago,
+            CASE WHEN w.followers > 0 AND l.followers IS NOT NULL
+                 THEN round((l.followers - w.followers)::numeric / w.followers, 6)
+            END AS followers_delta_7d
        FROM social_connection c
        LEFT JOIN LATERAL (
          SELECT s.day, s.followers, s.following, s.media_count, s.views
@@ -450,6 +484,12 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
           ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
+       LEFT JOIN LATERAL (
+         SELECT p.followers
+           FROM account_metric_snapshot p
+          WHERE p.connection_id = c.id AND p.source = ANY($1::text[]) AND p.day <= l.day - 7
+          ORDER BY p.day DESC LIMIT 1
+       ) w ON true
       WHERE c.deleted_at IS NULL`,
     [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
@@ -462,6 +502,7 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
       accessMode: e?.access_mode ?? 'direct_oauth',
       latest: e?.day ? { day: e.day, followers: n(e.followers), following: n(e.following), mediaCount: n(e.media_count), views: n(e.views) } : null,
       followersWeekAgo: n(e?.followers_week_ago),
+      followersDelta7d: n(e?.followers_delta_7d),
     };
   });
 }
