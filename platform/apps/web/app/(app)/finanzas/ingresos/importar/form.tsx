@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PlatformPill } from "@/components/ui/platform-pill";
@@ -48,7 +48,6 @@ function Problemas({ problemas }: { problemas: Problema[] }) {
 export function ImportarForm({ currency }: { currency: string }) {
   const [state, formAction, pending] = useActionState<ImportarState, FormData>(importarCsv, {});
   const [nombre, setNombre] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
   const r = state.resultado;
 
   return (
@@ -56,7 +55,6 @@ export function ImportarForm({ currency }: { currency: string }) {
       <form action={formAction} className="flex flex-col gap-4">
         <Field label={T.campo.label} help={T.campo.ayuda} error={state.message}>
           <input
-            ref={inputRef}
             type="file"
             name="archivo"
             accept=".csv,text/csv"
@@ -76,11 +74,8 @@ export function ImportarForm({ currency }: { currency: string }) {
       </form>
 
       {r && (
-        <section
-          aria-live="polite"
-          className={`mt-6 rounded-md border p-4 ${state.ok ? "border-border bg-surface" : "border-border bg-surface"}`}
-        >
-          <p className="text-sm font-medium text-ink">{state.ok ? T.resultado.titulo : ""}</p>
+        <section aria-live="polite" className="mt-6 rounded-md border border-border bg-surface p-4">
+          {state.ok && <p className="text-sm font-medium text-ink">{T.resultado.titulo}</p>}
           <ul className="mt-1 space-y-0.5 text-sm leading-5 text-ink-2">
             <li>{T.resultado.reconocido(T.formatos[r.formato])}</li>
             {r.escritos > 0 && <li className="font-medium text-ink">{T.resultado.escritos(r.escritos)}</li>}

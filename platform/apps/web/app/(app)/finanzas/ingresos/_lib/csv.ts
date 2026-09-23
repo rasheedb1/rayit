@@ -401,7 +401,7 @@ export function revisar(tabla: Tabla, deteccion: DeteccionIngresos, opts: Opcion
       return;
     }
     // El formato genérico manda su propio fin; los otros dos, el del mes.
-    let inicio = periodo.inicio;
+    const inicio = periodo.inicio;
     let fin = periodo.fin;
     let granularidad = periodo.granularidad;
     if (formato === "generico" && columnas.fin) {

@@ -27,6 +27,10 @@ const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023':
     'reservada en main para ACC-3 y sin usar: 0024–0033 llegaron antes y ACC-3 se escribió como ' +
     '0034_access_control.sql (cabecera de 0034). Queda como hueco declarado; rellenarlo con un archivo vacío es decisión de Nicolás',
+  '0035':
+    'la tomaron a la vez dos ramas que todavía no están en main: 0035_membership_scope (ACC-6) y ' +
+    '0035_brand_snapshot_por_campana (CAM-3). FIN-7 no recicla un número ajeno y se fue a 0036 ' +
+    '(cabecera de 0036). El hueco se cierra cuando entre cualquiera de las dos; si entran las dos, una renumera',
 };
 
 let dir = '';
