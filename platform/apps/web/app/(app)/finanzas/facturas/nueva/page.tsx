@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { addDays } from "@mc/core";
-import { listCampaignsForInvoice, listCompanies } from "@mc/db/queries/finanzas";
+import { getFinanceSettings, listCampaignsForInvoice, listCompanies } from "@mc/db/queries/finanzas";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -16,9 +16,13 @@ export default async function NuevaFacturaPage({
   searchParams: Promise<{ campana?: string; error?: string }>;
 }) {
   const params = await searchParams;
-  const { companies, campaigns } = await withWorkspace(async (tx) => ({
+  // Los porcentajes y el plazo salen de la configuración del workspace
+  // (FIN-8), no de las constantes de @mc/core: cambiarlos en
+  // /finanzas/configuracion cambia con qué nace la factura siguiente.
+  const { companies, campaigns, finanzas } = await withWorkspace(async (tx) => ({
     companies: await listCompanies(tx),
     campaigns: await listCampaignsForInvoice(tx),
+    finanzas: await getFinanceSettings(tx),
   }));
   const { currency, locale } = await getCurrentWorkspace();
   // Hoy en UTC, YYYY-MM-DD: la regla del repo es trabajar en UTC.
@@ -29,7 +33,7 @@ export default async function NuevaFacturaPage({
       <PageHeader
         eyebrow="Finanzas · facturas"
         title="Nueva factura"
-        description="Queda en borrador con el siguiente número del año. El total se calcula con la misma función que guarda el servidor."
+        description="Queda en borrador con el siguiente número del año. Los porcentajes y el plazo llegan de tu configuración financiera; el total se calcula con la misma función que guarda el servidor."
         aside={
           <Button variant="ghost" href="/finanzas">
             Volver a facturas
@@ -40,7 +44,14 @@ export default async function NuevaFacturaPage({
         companies={companies}
         campaigns={campaigns}
         workspace={{ currency, locale }}
-        defaults={{ issuedOn: today, dueOn: addDays(today, 30), campaignId: params.campana ?? "" }}
+        defaults={{
+          issuedOn: today,
+          dueOn: addDays(today, finanzas.plazoDias),
+          campaignId: params.campana ?? "",
+          taxPct: finanzas.ivaPct,
+          withholdingPct: finanzas.retencionPct,
+          plazoDias: finanzas.plazoDias,
+        }}
         initialMessage={params.error}
       />
     </>

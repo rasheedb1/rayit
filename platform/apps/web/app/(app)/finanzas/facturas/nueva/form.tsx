@@ -1,16 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import {
-  addDays,
-  computeInvoiceTotals,
-  pctToRate,
-  subtotalFromTotal,
-  DEFAULT_TAX_RATE,
-  DEFAULT_WITHHOLDING_RATE,
-  rateToPct,
-  type InvoiceTotals,
-} from "@mc/core";
+import { addDays, computeInvoiceTotals, pctToRate, subtotalFromTotal, type InvoiceTotals } from "@mc/core";
 import type { CampaignOption, CompanyOption } from "@mc/db/queries/finanzas";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
@@ -24,7 +15,23 @@ export interface NuevaFacturaFormProps {
   campaigns: CampaignOption[];
   /** Moneda y locale del workspace: el formulario no los adivina (ver lib/workspace/settings.ts). */
   workspace: { currency: string; locale: string };
-  defaults: { issuedOn: string; dueOn: string; campaignId?: string };
+  /**
+   * Lo que trae la configuración financiera del workspace (FIN-8): con
+   * qué porcentajes y con qué plazo nace la factura. Antes eran
+   * DEFAULT_TAX_RATE y DEFAULT_WITHHOLDING_RATE de @mc/core y un 30
+   * escrito a mano; Colombia es el valor por defecto de un workspace, no
+   * una constante del producto.
+   */
+  defaults: {
+    issuedOn: string;
+    dueOn: string;
+    campaignId?: string;
+    /** Porcentaje, no fracción: "19". */
+    taxPct: string;
+    /** Porcentaje, no fracción: "11". */
+    withholdingPct: string;
+    plazoDias: number;
+  };
   /** Mensaje que llega por la URL (p. ej. «Facturar» desde Campañas falló). */
   initialMessage?: string;
 }
@@ -58,8 +65,8 @@ export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, in
   const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? "");
   const [companyId, setCompanyId] = useState(initialCampaign?.companyId ?? "");
   const [subtotal, setSubtotal] = useState(initialCampaign?.amount ? subtotalFromTotal(initialCampaign.amount) : "");
-  const [taxPct, setTaxPct] = useState(rateToPct(DEFAULT_TAX_RATE));
-  const [withholdingPct, setWithholdingPct] = useState(rateToPct(DEFAULT_WITHHOLDING_RATE));
+  const [taxPct, setTaxPct] = useState(defaults.taxPct);
+  const [withholdingPct, setWithholdingPct] = useState(defaults.withholdingPct);
   const [issuedOn, setIssuedOn] = useState(defaults.issuedOn);
   const [dueOn, setDueOn] = useState(defaults.dueOn);
   const [dueTouched, setDueTouched] = useState(false);
@@ -87,8 +94,10 @@ export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, in
 
   function changeIssuedOn(v: string) {
     setIssuedOn(v);
-    // Vencimiento = emisión + 30 mientras la persona no lo haya tocado.
-    if (!dueTouched && /^\d{4}-\d{2}-\d{2}$/.test(v)) setDueOn(addDays(v, 30));
+    // Vencimiento = emisión + el plazo CONFIGURADO, mientras la persona
+    // no lo haya tocado. El 30 estaba escrito a mano aquí y en la
+    // página; ahora los dos leen defaults.plazoDias (FIN-8).
+    if (!dueTouched && /^\d{4}-\d{2}-\d{2}$/.test(v)) setDueOn(addDays(v, defaults.plazoDias));
   }
 
   const message = state.message ?? initialMessage;
@@ -164,7 +173,17 @@ export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, in
             <DateInput name="issuedOn" value={issuedOn} onChange={changeIssuedOn} required />
           </Field>
 
-          <Field label="Vencimiento" required help="Por defecto, 30 días después de la emisión." error={errors.dueOn} htmlFor="dueOn">
+          <Field
+            label="Vencimiento"
+            required
+            help={
+              defaults.plazoDias === 0
+                ? "Tu configuración dice pago contra entrega: vence el mismo día."
+                : `Por defecto, ${defaults.plazoDias} días después de la emisión (tu configuración).`
+            }
+            error={errors.dueOn}
+            htmlFor="dueOn"
+          >
             <DateInput
               name="dueOn"
               value={dueOn}

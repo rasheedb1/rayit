@@ -57,8 +57,12 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y configuración.
                               index.ts exporta facturarCampana() para Campañas.
+                              configuracion/ (FIN-8): los porcentajes, el plazo, la
+                              moneda y los datos fiscales del workspace. Es de donde
+                              salen los defaults de una factura nueva.
+                              _lib/permiso.ts: quién puede configurarlo, hasta ACC-1.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
