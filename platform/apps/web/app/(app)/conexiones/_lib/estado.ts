@@ -10,12 +10,58 @@
  * así que una cuenta con el token ya vencido sigue en 'active'. Aquí se
  * compara con el reloj: vencida es vencida aunque nadie lo haya anotado.
  */
-import type { AccountRow, ConnectionPlatformId } from "@mc/db";
+import type { AccountRow, ConnectionPlatformId, ConnectionStatus } from "@mc/db";
 import type { OAuthProviderId } from "@mc/connectors";
 import type { PillKind } from "@/components/ui/pill";
 import { MESSAGES } from "./messages";
 
 const t = MESSAGES.tabla;
+
+/**
+ * Lo que la PANTALLA necesita de una cuenta, y nada más.
+ *
+ * `AccountRow` trae además `secretRef` y `scopes`, que no se pintan.
+ * Pasarlos igual no era gratis: en desarrollo, React serializa las
+ * props de cada componente en la carga que manda al navegador (el
+ * «owner stack» de las herramientas), así que la ref del secreto y los
+ * permisos concedidos de todas las cuentas del workspace viajaban al
+ * cliente en cada visita. Se vio con un `grep enc:tiktok:` sobre el
+ * HTML de dev. Aquí se quedan fuera, y el `grep` sale vacío.
+ */
+export interface FilaDeCuenta {
+  id: string;
+  platformId: ConnectionPlatformId;
+  externalAccountId: string;
+  handle: string | null;
+  displayName: string | null;
+  status: ConnectionStatus;
+  statusDetail: string | null;
+  hoursSinceSync: number | null;
+  accessExpiresAt: string | null;
+  tokenExpiringSoon: boolean;
+  accessMode: AccountRow["accessMode"];
+  latest: AccountRow["latest"];
+  followersDelta7d: number | null;
+}
+
+/** La proyección, en un solo sitio: lo que se añada a AccountRow no entra aquí solo. */
+export function filaDeCuenta(r: AccountRow): FilaDeCuenta {
+  return {
+    id: r.id,
+    platformId: r.platformId,
+    externalAccountId: r.externalAccountId,
+    handle: r.handle,
+    displayName: r.displayName,
+    status: r.status,
+    statusDetail: r.statusDetail,
+    hoursSinceSync: r.hoursSinceSync,
+    accessExpiresAt: r.accessExpiresAt,
+    tokenExpiringSoon: r.tokenExpiringSoon,
+    accessMode: r.accessMode,
+    latest: r.latest,
+    followersDelta7d: r.followersDelta7d,
+  };
+}
 
 /** De dónde salen las cifras de una cuenta. */
 export type ClaseDeAcceso = "por_arroba" | "autorizada" | "csv" | "proveedor";
@@ -35,7 +81,7 @@ export interface Acceso {
  * pantalla necesita saber. `business_portfolio` es el portafolio de
  * empresa de Meta: también es un permiso del dueño y también caduca.
  */
-const ACCESO: Record<AccountRow["accessMode"], Acceso> = {
+const ACCESO: Record<FilaDeCuenta["accessMode"], Acceso> = {
   public_profile: { clase: "por_arroba", etiqueta: t.acceso.porArroba, explicacion: t.acceso.porArrobaExplicacion, conToken: false },
   direct_oauth: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.autorizadaExplicacion, conToken: true },
   business_portfolio: { clase: "autorizada", etiqueta: t.acceso.autorizada, explicacion: t.acceso.portafolioExplicacion, conToken: true },
@@ -43,7 +89,7 @@ const ACCESO: Record<AccountRow["accessMode"], Acceso> = {
   aggregator: { clase: "proveedor", etiqueta: t.acceso.proveedor, explicacion: t.acceso.proveedorExplicacion, conToken: false },
 };
 
-export function accesoDe(accessMode: AccountRow["accessMode"]): Acceso {
+export function accesoDe(accessMode: FilaDeCuenta["accessMode"]): Acceso {
   return ACCESO[accessMode];
 }
 
@@ -63,7 +109,7 @@ export interface EstadoDeCuenta {
  * plataforma y mandan sobre la fecha del token; «vencida» es lo que
  * queda cuando nadie ha preguntado todavía.
  */
-export function estadoDeCuenta(row: AccountRow, ahora: Date): EstadoDeCuenta {
+export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
   if (row.status === "disabled") return { tono: "neutral", texto: t.estado.quitada, accion: "ninguna" };
   const { conToken } = accesoDe(row.accessMode);
   if (conToken) {

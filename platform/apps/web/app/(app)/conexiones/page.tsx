@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getMetricRequirement, type AccountRow, type MetricRequirement } from "@mc/db";
+import { getMetricRequirement, type MetricRequirement } from "@mc/db";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -11,7 +11,7 @@ import { getCuentasService } from "./_lib/cuentas-server";
 import { OWNERSHIP_DECLARATION_ES, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
 import { withWorkspace } from "./_lib/db";
 import { entornoDeConexion } from "./_lib/entorno";
-import { accesoDe } from "./_lib/estado";
+import { accesoDe, filaDeCuenta, type FilaDeCuenta } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { Conectar } from "./conectar";
@@ -27,12 +27,12 @@ const REQUISITO_ANALYTICS = "tt.insights.optin";
 
 type Search = { agregada?: string; actualizada?: string; sin_metricas?: string; ya_hoy?: string; conectada?: string; error?: string; desconectada?: string; aviso?: string };
 
-function Notice({ params, rows, f }: { params: Search; rows: AccountRow[]; f: Formatter }) {
+function Notice({ params, rows, f }: { params: Search; rows: FilaDeCuenta[]; f: Formatter }) {
   const t = MESSAGES.avisos;
   let kind: "good" | "bad" | "neutral" = "neutral";
   let text: string | null = null;
   const find = (id?: string) => rows.find((r) => r.id === id);
-  const arroba = (r: AccountRow | undefined) => `@${r?.handle ?? ""}`;
+  const arroba = (r: FilaDeCuenta | undefined) => `@${r?.handle ?? ""}`;
   if (params.agregada) {
     const row = find(params.agregada);
     kind = "good";
@@ -75,7 +75,10 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
   // línea, en cuanto el catálogo de permisos esté en main.
   const params = await searchParams;
   const service = getCuentasService();
-  const [rows, ws] = await Promise.all([service.listar(), getCurrentWorkspace()]);
+  // De cada cuenta, solo lo que la pantalla pinta: ni la ref del
+  // secreto ni los scopes bajan al navegador (_lib/estado.ts).
+  const [cuentas, ws] = await Promise.all([service.listar(), getCurrentWorkspace()]);
+  const rows = cuentas.map(filaDeCuenta);
   const f = formatterFor(ws);
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {

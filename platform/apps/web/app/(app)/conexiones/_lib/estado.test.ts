@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AccountRow } from "@mc/db";
-import { accesoDe, estadoDeCuenta, frescura, proveedorDe } from "./estado";
+import { accesoDe, estadoDeCuenta, filaDeCuenta, frescura, proveedorDe, type FilaDeCuenta } from "./estado";
 
 /**
  * CON-4 · las tres decisiones de la pantalla, sin base y sin React.
@@ -13,7 +13,7 @@ import { accesoDe, estadoDeCuenta, frescura, proveedorDe } from "./estado";
 
 const AHORA = new Date("2026-09-23T12:00:00Z");
 
-function fila(over: Partial<AccountRow> = {}): AccountRow {
+function cuenta(over: Partial<AccountRow> = {}): AccountRow {
   return {
     id: "00000000-0000-4000-8000-000000000001",
     platformId: "tiktok",
@@ -41,6 +41,10 @@ function fila(over: Partial<AccountRow> = {}): AccountRow {
     followersDelta7d: null,
     ...over,
   };
+}
+
+function fila(over: Partial<AccountRow> = {}): FilaDeCuenta {
+  return filaDeCuenta(cuenta(over));
 }
 
 describe("estadoDeCuenta · una cuenta autorizada", () => {
@@ -134,6 +138,16 @@ describe("frescura", () => {
 
   it("un reloj adelantado no produce «hace −1 horas»", () => {
     expect(frescura(-0.5)).toBe("hace menos de una hora");
+  });
+});
+
+describe("filaDeCuenta", () => {
+  it("deja fuera la ref del secreto y los scopes: no son de la pantalla", () => {
+    const f = filaDeCuenta(cuenta());
+    expect(f).not.toHaveProperty("secretRef");
+    expect(f).not.toHaveProperty("scopes");
+    expect(JSON.stringify(f)).not.toContain("enc:tiktok:");
+    expect(JSON.stringify(f)).not.toContain("user.info.basic");
   });
 });
 

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { AccountRow } from "@mc/db";
 import { formatterFor } from "@/lib/format";
+import { filaDeCuenta, type FilaDeCuenta } from "./_lib/estado";
 import type { EntornoDeConexion } from "./_lib/entorno";
 import { MESSAGES } from "./_lib/messages";
 import { TablaDeCuentas } from "./tabla";
@@ -26,8 +27,8 @@ const SIN_CREDENCIALES: EntornoDeConexion = {
   apps: { tiktok: { configurada: false, faltan: ["TIKTOK_LOGIN_CLIENT_KEY"] }, instagram: { configurada: false, faltan: ["META_APP_ID"] } },
 };
 
-function fila(over: Partial<AccountRow> & { id: string }): AccountRow {
-  return {
+function fila(over: Partial<AccountRow> & { id: string }): FilaDeCuenta {
+  return filaDeCuenta({
     platformId: "tiktok",
     externalAccountId: "open_id_1",
     handle: "cafealma",
@@ -52,7 +53,7 @@ function fila(over: Partial<AccountRow> & { id: string }): AccountRow {
     followersWeekAgo: null,
     followersDelta7d: null,
     ...over,
-  };
+  });
 }
 
 const VENCIDA = fila({ id: "1", handle: "cafealma.tienda", accessExpiresAt: "2026-09-23T10:00:00.000Z" });
@@ -66,7 +67,7 @@ const POR_ARROBA = fila({
   lastSyncedAt: null,
 });
 
-function pintar(rows: AccountRow[], entorno: EntornoDeConexion) {
+function pintar(rows: FilaDeCuenta[], entorno: EntornoDeConexion) {
   render(<TablaDeCuentas rows={rows} ahora={AHORA} f={f} entorno={entorno} />);
 }
 

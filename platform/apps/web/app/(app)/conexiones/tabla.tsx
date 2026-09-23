@@ -1,5 +1,4 @@
 import type { OAuthProviderId } from "@mc/connectors";
-import type { AccountRow } from "@mc/db";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { DataAsOf } from "@/components/ui/data-as-of";
@@ -10,14 +9,14 @@ import type { Formatter } from "@/lib/format";
 import { actualizarCuenta, desconectarConexion } from "./actions";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL } from "./_lib/consent";
 import { appDeRed, type EntornoDeConexion } from "./_lib/entorno";
-import { accesoDe, estadoDeCuenta, frescura, proveedorDe, type Acceso } from "./_lib/estado";
+import { accesoDe, estadoDeCuenta, frescura, proveedorDe, type Acceso, type FilaDeCuenta } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
 import { ConnectDialog } from "./connect-dialog";
 
 const t = MESSAGES.tabla;
 
 export interface TablaDeCuentasProps {
-  rows: AccountRow[];
+  rows: FilaDeCuenta[];
   /** El reloj con el que se decide si un token ya venció. */
   ahora: Date;
   /** formatterFor(await getCurrentWorkspace()): su locale, su zona. */
@@ -26,7 +25,7 @@ export interface TablaDeCuentasProps {
 }
 
 /** El @ de la cuenta, o su id externo si la red no dio handle. Es el nombre que se lee en voz alta. */
-function nombre(r: AccountRow): string {
+function nombre(r: FilaDeCuenta): string {
   return `@${r.handle ?? r.externalAccountId}`;
 }
 
@@ -66,7 +65,7 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * conserva. Si la app de esa red no está configurada en el entorno, el
  * botón sale deshabilitado diciendo qué falta, nunca desaparece.
  */
-function Reautorizar({ row, provider }: { row: AccountRow; provider: OAuthProviderId }) {
+function Reautorizar({ row, provider }: { row: FilaDeCuenta; provider: OAuthProviderId }) {
   const red = PLATFORM_LABEL[provider];
   return (
     <ConnectDialog
@@ -88,7 +87,7 @@ function Reautorizar({ row, provider }: { row: AccountRow; provider: OAuthProvid
  * §7): TikTok no publica seguidores ni vistas por @, y el dueño las
  * desbloquea autorizando una vez.
  */
-function AutorizarCifras({ row, entorno }: { row: AccountRow; entorno: EntornoDeConexion }) {
+function AutorizarCifras({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {
   // Sin la app configurada no hay nada que autorizar. La fila ya dice
   // «Sin cifras por @»; qué variable falta se ve en la sección de
   // conectar, que es donde mira quien despliega.
@@ -107,7 +106,7 @@ function AutorizarCifras({ row, entorno }: { row: AccountRow; entorno: EntornoDe
   );
 }
 
-export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion): Column<AccountRow>[] {
+export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion): Column<FilaDeCuenta>[] {
   return [
     {
       key: "account",
