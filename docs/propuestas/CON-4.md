@@ -223,3 +223,107 @@ lo que ya estaba pedido:
 2. **Para encender la pantalla completa** hacen falta, en Vercel y en
    el vault, las variables de CON-3 §3 y `OAUTH_CONNECT=1`. Son de
    Nicolás; aquí solo se anotan los nombres, nunca los valores.
+
+---
+
+## 2. Verificación (23 de septiembre de 2026)
+
+### 2.1 Pruebas automáticas
+
+| Archivo | Qué fija |
+|---|---|
+| `_lib/estado.test.ts` (18) | El token vencido es rojo y pide reautorizar **aunque `status` siga en `active`**; la plataforma manda sobre la fecha; una cuenta por @ no vence; las horas en palabras (incluido un reloj adelantado); y que `filaDeCuenta` deja fuera `secretRef` y `scopes`. |
+| `_lib/entorno.test.ts` (3) | Lo que viaja por el árbol de render no contiene ningún valor del entorno, solo nombres de variables. |
+| `tabla.test.tsx` (14) | Las ramas del JSX: vencida en rojo con «Reautorizar» al mismo `POST …/start`; «Por @» y «Autorizada» con texto y explicación distintos; sin app configurada, la instrucción en vez de un botón muerto y **sin nombrar variables de servidor**; una variación de cero se escribe y una ausente no se inventa; y la bandera apagada. |
+| `pagina.test.tsx` (10) | La página entera contra Postgres embebido con el seed más el escenario del `--demo` del worker, con y sin bandera. |
+
+```
+$ pnpm --filter @mc/web exec vitest run "app/(app)/conexiones/"
+ Test Files  6 passed (6)
+      Tests  59 passed (59)
+```
+
+### 2.2 Verde total
+
+```
+$ pnpm turbo run typecheck lint test --force --concurrency=2 --continue
+ Tasks:    14 successful, 15 total
+Failed:    @mc/web#test
+@mc/web:test:  Test Files  90 passed (90)
+@mc/web:test:       Tests  766 passed | 1 todo (767)
+@mc/web:test:      Errors  1 error
+
+$ pnpm --filter @mc/web build
+BUILD_EXIT=0        (/conexiones ƒ, server-rendered on demand)
+```
+
+**El único rojo no es de esta historia y ya estaba en `main`.** Las 90
+suites y las 766 pruebas pasan; vitest sale 1 por un *unhandled
+rejection* de undici —`TypeError: Invalid state: ReadableStream is
+already closed`— que nace en `app/(app)/resumen/importar/lote.test.ts`
+(RES-6, de Rasheed). Corriendo ese archivo **solo** pasa igual y falla
+igual:
+
+```
+$ pnpm --filter @mc/web exec vitest run "app/(app)/resumen/importar/lote.test.ts"
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+     Errors  1 error
+```
+
+Esta rama no toca nada del importador (`git diff --name-only
+origin/main...HEAD` no devuelve ningún archivo de `resumen/`).
+**Para Rasheed:** la ruta de la importación deja una respuesta cuyo
+cuerpo se cierra antes de que undici termine de encolar; basta con
+consumir o cancelar el `body` del `Response` en la prueba. Mientras
+tanto, `pnpm verificar` sale 1 en `main` y en toda rama que salga de él.
+
+No se tocó ninguna migración, así que no hay `make db.check` ni `make
+db.guardia` que correr.
+
+### 2.3 Verificación en dev (lo que se ve)
+
+`pnpm --filter @mc/web dev -p 3123` con `OAUTH_CONNECT=1` y credenciales
+de mentira de TikTok, sobre el Postgres embebido con el seed más cuatro
+filas temporales **sin versionar** (un token vencido sin anotar, uno
+revocado por la plataforma y dos cuentas por @): el seed de demo no
+trae ninguna cuenta vencida ni ninguna por @, que son justo los dos
+casos del «terminado cuando». El archivo se borró al terminar.
+
+Las ocho filas, leídas del HTML servido (`curl` → `<tbody>`):
+
+```
+@lauracocinafacil  Facebook  │ Autorizada │  21.000  0 % en 7 días │ hace 6 horas      │ Activa
+@laura.reposteria  Instagram │ Autorizada │ Sin dato               │ Sin leer todavía  │ Necesita reautorizar → «Para volver a leerla, quítala y agrégala por su @.»
+@laura.cocinafacil Instagram │ Autorizada │ 128.000 +1 % en 7 días │ hace 3 horas      │ Activa
+@laura.recetas     TikTok    │ Por @ · Sin cifras por @ │ 18.450 +8 % │ hace una hora   │ Activa → «Autorizar cifras»
+@laura.tienda      TikTok    │ Autorizada │   4.210                │ hace un día       │ VENCIDA → «Reautorizar» (rojo)
+@laura.cocinafacil TikTok    │ Autorizada │ 214.000 +1 % en 7 días │ hace 2 horas      │ Vence pronto
+@LauraPostres      YouTube   │ Por @      │ Sin dato               │ hace 3 días       │ No se pudo leer · «YouTube no encontró el canal @LauraPostres.»
+@LauraCocinaFacil  YouTube   │ Autorizada │  49.000 +1 % en 7 días │ hace 5 horas      │ Vence pronto
+```
+
+- **El criterio.** `@laura.tienda` tiene `status = 'active'` en la base
+  y el token venció hace dos horas: la pantalla dice **Vencida** en rojo
+  y ofrece **Reautorizar**, también en rojo, con su diálogo de
+  consentimiento contra `/conexiones/oauth/tiktok/start`.
+- **Las dos clases, la misma red.** `@laura.recetas` (TikTok, **Por @**,
+  «Sin cifras por @», con «Autorizar cifras») y `@laura.tienda` (TikTok,
+  **Autorizada**) se distinguen sin leer la letra pequeña.
+- **El paso manual** sale al pie con el texto de la base:
+  «Activa Analytics en la app de TikTok (Herramientas de creador, botón
+  Activar)…», y nombra las dos cuentas de TikTok autorizadas.
+- **400 px y tema oscuro:** capturas a 390 px en un iframe (Chrome sin
+  cabeza no baja de 500 px) en claro y oscuro. La página no desborda; la
+  tabla hace su propio scroll horizontal dentro del recuadro, como en
+  todo el producto.
+- **Secretos:** sobre la respuesta de dev, `grep` de
+  `clave-falsa-de-prueba`, `secreto-falso-de-prueba`, `enc:tiktok:`,
+  `enc:instagram:`, `public:tiktok:`, `public:youtube:`, `seed://demo`,
+  `user.info.basic`, `instagram_business_basic`, `secretRef` y `scopes`:
+  **cero cada uno**. Antes del último commit, `enc:tiktok:` y los scopes
+  salían dos y tres veces: React serializa en desarrollo las props de
+  cada componente para sus herramientas, y la fila completa se estaba
+  pasando a la tabla. `renderToString` no escribe esa carga, así que la
+  prueba de página no lo veía; el `grep` sobre dev, sí. Por eso existe
+  `FilaDeCuenta`.

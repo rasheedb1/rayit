@@ -143,6 +143,19 @@ describe("la tabla con oauth_connect encendida", () => {
     pintar([fila({ id: "3", latest: { day: "2026-09-23", followers: 1200, following: null, mediaCount: 30, views: null }, followersDelta7d: 0.05 })], CONFIGURADO);
     expect(screen.getByText(MESSAGES.tabla.delta(f.delta(0.05)))).toBeInTheDocument();
   });
+
+  it("«no cambió» es un dato: una variación de cero se escribe, no se esconde como si faltara", () => {
+    const latest = { day: "2026-09-23", followers: 21000, following: null, mediaCount: 559, views: null };
+    pintar([fila({ id: "4", latest, followersDelta7d: 0 })], CONFIGURADO);
+    expect(screen.getByText(MESSAGES.tabla.delta(f.delta(0)))).toBeInTheDocument();
+  });
+
+  it("sin historia de hace siete días no se inventa un 0 %: no hay línea de variación", () => {
+    const latest = { day: "2026-09-23", followers: 21000, following: null, mediaCount: 559, views: null };
+    pintar([fila({ id: "5", latest, followersDelta7d: null })], CONFIGURADO);
+    expect(screen.queryByText(MESSAGES.tabla.delta(f.delta(0)))).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("en 7 días");
+  });
 });
 
 describe("la tabla con oauth_connect apagada (lo que hay hoy en producción)", () => {
