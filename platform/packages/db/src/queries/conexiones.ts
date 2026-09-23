@@ -363,9 +363,8 @@ export async function getSessionMember(tx: WorkspaceTx): Promise<SessionMember |
  * transacción que va a escribir: así el permiso y la escritura ven la
  * misma membresía. Sin identidad (modo demo) o sin membresía, false.
  *
- * TODO(ACC-5): cuando permisosDeLaSesion() (apps/web/lib/permisos) lea
- * la base, las dos preguntas son la misma; esta queda como la
- * comprobación dentro de la transacción.
+ * Desde ACC-5, requirePermission() (apps/web/lib/permisos) lee lo mismo;
+ * esta se queda como la comprobación dentro de la transacción.
  *
  * Sin alcance (ACC-6) a propósito: el permiso es del rol de la persona;
  * el alcance lo aplica después cada consulta sobre lo que toca.
