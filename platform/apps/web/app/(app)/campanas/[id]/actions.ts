@@ -11,12 +11,15 @@ import {
   isIsoDate,
   isManualBrandInputKind,
   isMoneyBrandInputKind,
+  isReportSentViaMvp,
   type BrandCsvRejectedRow,
   type CampaignStatus,
 } from "@mc/core";
 import {
   addBrandInput,
   computeCampaignResult,
+  generateReport,
+  markReportSent,
   importBrandCsv,
   linkPost,
   listLinkablePosts,
@@ -32,7 +35,7 @@ import { withWorkspace } from "@/lib/db";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
 import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { MESSAGES } from "../_lib/messages";
+import { MESSAGES, TEXTOS_REPORTE } from "../_lib/messages";
 import type { Codificacion } from "@/lib/csv";
 import { ErrorCsvVentas, leerCsvVentas, MAX_BYTES_VENTAS, MAX_FILAS_VENTAS } from "./_lib/csv-ventas";
 
@@ -404,4 +407,61 @@ export async function recalcularResultado(campaignId: string): Promise<void> {
   }
   paths(campaignId);
   backWithError(campaignId, error);
+}
+
+// ---------------------------------------------------------------------
+// Reporte a la marca (CAM-6)
+// ---------------------------------------------------------------------
+
+/**
+ * «Generar reporte»: congela las cifras de ahora en un borrador que
+ * nadie más ve. Reemplaza el borrador si lo hay; si el último ya se
+ * envió, crea otra versión con otro enlace. Se usa con
+ * bind(null, campaignId).
+ */
+export async function generarReporte(campaignId: string): Promise<void> {
+  await requirePermission("campanas.reporte.generar");
+  if (!UUID_RE.test(campaignId)) redirect("/campanas");
+  let error: string | null = null;
+  try {
+    await withWorkspace((tx) => generateReport(tx, campaignId));
+  } catch (err) {
+    error = messageOf(err, MESSAGES.reporte.errores.generar);
+  }
+  paths(campaignId);
+  revalidatePath(`/campanas/${campaignId}/reporte`, "layout");
+  backWithError(campaignId, error);
+}
+
+const enviarSchema = z.object({
+  campaignId: z.string().regex(UUID_RE, MESSAGES.reporte.errores.reporte),
+  reportId: z.string().regex(UUID_RE, MESSAGES.reporte.errores.reporte),
+  // refine y no enum: la unión de zod responde «Invalid input» en inglés.
+  via: z.string().refine((v) => isReportSentViaMvp(v), MESSAGES.reporte.errores.via),
+});
+
+/**
+ * «Enviado por enlace» o «Enviado como PDF». En una transacción: el
+ * reporte queda enviado y congelado, la actividad en la empresa, el
+ * aviso, la bitácora (audit(), dentro de markReportSent) y la campaña
+ * a «Reporte listo» si estaba midiendo. Se usa con
+ * bind(null, campaignId, reportId, via).
+ */
+export async function marcarReporteEnviado(campaignId: string, reportId: string, via: string): Promise<void> {
+  await requirePermission("campanas.reporte.enviar");
+  const parsed = enviarSchema.safeParse({ campaignId, reportId, via });
+  if (!parsed.success) {
+    if (!UUID_RE.test(String(campaignId))) redirect("/campanas");
+    backWithError(campaignId, Object.values(firstErrors(parsed.error.issues))[0] ?? MESSAGES.reporte.errores.enviar);
+  }
+  const v = parsed.data;
+  let error: string | null = null;
+  try {
+    await withWorkspace((tx) => markReportSent(tx, v.reportId, v.via, TEXTOS_REPORTE));
+  } catch (err) {
+    error = messageOf(err, MESSAGES.reporte.errores.enviar);
+  }
+  paths(v.campaignId);
+  revalidatePath(`/campanas/${v.campaignId}/reporte`, "layout");
+  backWithError(v.campaignId, error);
 }

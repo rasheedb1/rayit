@@ -17,7 +17,7 @@ import {
   isMoneyBrandInputKind,
   type InvoiceStatus,
 } from "@mc/core";
-import { canRecomputeResult, getCampaign, getCampaignResult, listBrandInputs, listCampaignPosts, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
+import { canRecomputeResult, getCampaign, getCampaignResult, listBrandInputs, listCampaignPosts, listCampaignReports, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -30,12 +30,14 @@ import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatDate, formatDateRange, formatInt, formatMoney, formatterFor, parseDecimal, type Formatter } from "@/lib/format";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
+import { origenDeLaPeticion } from "@/lib/auth/origen";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 import { cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
+import { ReporteSeccion } from "./reporte-seccion";
 import { Resultado } from "./resultado";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
@@ -62,6 +64,7 @@ const loadCampaign = cache(async (id: string) =>
       brandInputs: await listBrandInputs(tx, id),
       result: await getCampaignResult(tx, id),
       canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
+      reports: await listCampaignReports(tx, id),
     };
   }),
 );
@@ -276,10 +279,17 @@ export default async function CampanaPage({
 
   const data = await loadCampaign(id);
   if (!data) notFound();
-  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute } = data;
+  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute, reports } = data;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
   const today = hoyEnZona(ws.timezone);
+  // El enlace para la marca, absoluto con el origen público (APP_URL en
+  // producción; nunca deducido de las cabeceras allí). Si no está
+  // configurado, la sección lo dice en vez de repartir un enlace roto.
+  const origin = await origenDeLaPeticion().catch((err: unknown) => {
+    console.error("[campanas] sin origen público para el enlace del reporte", err instanceof Error ? err.name : err);
+    return null;
+  });
 
   const pill = pillForCampaign(campaign.status);
   const invoice = campaign.invoices.find((i) => i.status !== "void") ?? null;
@@ -502,6 +512,9 @@ export default async function CampanaPage({
           />
         </Section>
         <BrandInputsSection campaign={campaign} editable={editable} inputs={brandInputs} f={f} today={today} />
+        <Section id="reporte" title={MESSAGES.reporte.title} meta={reports.length > 1 ? MESSAGES.reporte.version(reports.length) : undefined}>
+          <ReporteSeccion campaignId={campaign.id} status={campaign.status} reports={reports} origin={origin} f={f} />
+        </Section>
       </div>
 
       <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">

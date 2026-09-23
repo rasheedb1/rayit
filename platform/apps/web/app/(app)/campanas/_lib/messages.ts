@@ -190,6 +190,9 @@ export const MESSAGES = {
     previsualizar: "Previsualizar",
     enlace: "Enlace para la marca",
     copiarEnlace: "Enlace",
+    /** Sin APP_URL en producción el enlace absoluto no se inventa (lib/auth/origen.ts). */
+    sinOrigen: "falta configurar el dominio público de la aplicación (APP_URL) para mostrar el enlace completo",
+    enlaceBorrador: "Este enlace no abre hasta que marques el reporte como enviado.",
     marcarEnlace: "Enviado por enlace",
     marcarPdf: "Enviado como PDF",
     confirmarEnviado: (via: ReportSentVia) =>
@@ -253,6 +256,7 @@ export const MESSAGES = {
     sinDato: "Sin dato",
     posts: "Los posts",
     post: "Post",
+    metrica: "Métrica",
     principal: "Principal",
     publicado: (fecha: string) => `Publicado el ${fecha}`,
     sinFechaPublicacion: "Sin fecha de publicación",
@@ -300,7 +304,7 @@ export const MESSAGES = {
     enlaceRastreado: "Enlace",
     sinSeguimiento: "Esta campaña no usó código ni enlace rastreado.",
     congelado: (fecha: string) => `Cifras congeladas el ${fecha}`,
-    /** El aviso de un enlace que otra versión enviada dejó atrás (0034 §1). */
+    /** El aviso de un enlace que otra versión enviada dejó atrás (0037 §1). */
     versionAntigua: "Hay una versión más reciente de este reporte. Quien te lo envió tiene el enlace nuevo; este sigue mostrando lo que decía cuando se envió.",
     pie: (creador: string) => (creador ? `Reporte preparado por ${creador} con On Cue` : "Reporte preparado con On Cue"),
   },
