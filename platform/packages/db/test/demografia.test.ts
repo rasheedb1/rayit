@@ -131,7 +131,7 @@ describe('aislamiento', () => {
     assert.ok(mias.every((m) => m.dimensions.every((d) => d.buckets.every((b) => b.absolute !== 7))), 'ni una fila del vecino se cuela');
   });
 
-  test('la web no puede escribir ni borrar lo que mide el worker (0036)', async () => {
+  test('la web no puede escribir ni borrar lo que mide el worker (0038)', async () => {
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`DELETE FROM metric_gap WHERE connection_id = $1`, [CONN_TT])),
       /permiso|permission/i,

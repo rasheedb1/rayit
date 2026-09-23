@@ -64,7 +64,10 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `META_APP_ID`, `META_APP_SECRET` | Las apps con las que se renueva cada token. Sin una app, sus conexiones fallan como `not_configured` (transitorio, sin reintento inmediato) y el arranque lo avisa. | — |
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
-| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10) y `brand.snapshot` (CAM-3): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
+| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10), `brand.snapshot` (CAM-3) y los dos `collect` de publicaciones (CON-5): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
+| `COLLECT_POSTS_MAX` | Publicaciones nuevas por cuenta y corrida de `collect.posts`. | `25` |
+| `COLLECT_MAX_AGE_HOURS` | Hasta qué edad se le sigue tomando lectura a una publicación. Por defecto 720 h (el último corte de `scoring.ts`) más siete días de gracia. | `888` |
+| `COLLECT_YOUTUBE_UNITS_RESERVE` | Unidades de la cuota diaria de YouTube que `collect.post_metrics` no gasta, para que queden para la pantalla y un reintento. | `500` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
@@ -147,6 +150,8 @@ Reglas:
 |---|---|---|
 | `oauth.refresh` | Conexiones (CON-2, CON-3) | Renueva los tokens que vencen pronto. |
 | `collect.account_metrics` | Conexiones (CON-10) | Snapshot diario de las cuentas por @ y de las autorizadas. |
+| `collect.posts` | Conexiones (CON-5) | Cada 6 h descubre las publicaciones nuevas de cada cuenta. Ver abajo. |
+| `collect.post_metrics` | Conexiones (CON-5) | Cada día a las 05:00 UTC deja una lectura por publicación activa. Ver abajo. |
 | `collect.demographics` | Conexiones (CON-7) | Cada día a las 05:20 UTC escribe `audience_breakdown` (scope `account`) con la audiencia de cada cuenta autorizada. Si a la cuenta le falta un prerrequisito **no llama a la API**: escribe el requisito en `metric_gap` (ver abajo). `metadata`: `saved`, `empty`, `alreadyToday`, `gaps`, `unsupported`, `errored`, `transient`. |
 | `campaign.compute` | Campañas (CAM-5) | Cada día a las 07:30 UTC recalcula `campaign_result` de las campañas `live`, `measuring` y `reported` (las cerradas conservan el suyo). La cuenta es `calcularResultado` de `@mc/core`; el job lee con `getResultInputs` y escribe con `upsertResult` (`@mc/db`), con el `workspace_id` de cada campaña en cada consulta y una transacción por campaña. Con `{ workspaceId, campaignId }` en el payload calcula solo esa. `metadata`: `campaigns`, `computed`, `partial` (las que aún no llegan a 30 días), `failed`. |
 
@@ -160,7 +165,7 @@ no la deja vacía: si a la cuenta le falta un prerrequisito —cien
 seguidores, cuenta profesional, el permiso de insights, o sencillamente
 que el dueño autorice la lectura— **no llama a la API** y escribe el
 requisito en `metric_gap`, con el texto en español de
-`metric_requirement` (migraciones `0011` y `0036`).
+`metric_requirement` (migraciones `0011` y `0038`).
 
 ```sql
 -- ¿Por qué esta cuenta no tiene demografía?
@@ -179,6 +184,57 @@ Quien escribe es el worker; la web solo lee (`getAccountAudience` /
 `listAccountAudience` en `@mc/db/queries/conexiones`). Y la demografía
 en sí es append-only: si ya hay filas de hoy para esa cuenta, el job se
 la salta entera y no gasta ni una llamada.
+
+## Los dos recolectores de publicaciones (CON-5)
+
+| | `collect.posts` | `collect.post_metrics` |
+|---|---|---|
+| Cuándo | cada 6 h (`0 */6`) | cada día a las 05:00 UTC (`0 5`) |
+| Qué hace | descubre publicaciones nuevas y hace *upsert* en `post` | deja una fila en `post_metric_snapshot` por publicación activa |
+| Payload | `{ workspaceId?, connectionId?, max?, full? }` | `{ workspaceId?, connectionId?, maxAgeHours? }` |
+| De dónde lee | `social_connection` con `access_mode` en `public_profile` o `direct_oauth`, viva y en estado `active` o `error` | lo mismo, más `post` y `campaign_post` |
+
+`full: true` ignora lo que ya conocemos y vuelve a listar la ventana
+entera; sirve para rellenar después de un fallo largo.
+
+**Lo que dejan en `job_run.metadata`** (ids y conteos, nunca un token):
+
+```
+collect.posts         cuentas, max, nuevos, descubiertos{conexión: n}, revisadas[],
+                      sinFuenteDePosts[], errores[], transitorios[], abortadas[],
+                      diferidas[], sinConfigurar{plataforma: qué falta}
+collect.post_metrics  capturedAt, maxAgeHours, candidatos, viejos, yaMedidos,
+                      snapshots, medidas[], borrados[], sinFuenteDePosts[],
+                      errores[], transitorios[], abortados, diferidos, sinConfigurar
+```
+
+`diferidas`/`diferidos` es «se acabó la cuota, queda para la próxima»
+(y entonces el job devuelve `retry: false`: el siguiente tick del cron
+es el reintento). `abortadas`/`abortados` es «se apagó el worker», que
+sí mejora con un reintento y **no** se le apunta a la cuenta del
+creador.
+
+Reglas que conviene saber antes de tocarlos:
+
+- **`post_metric_snapshot` es append-only.** Dos corridas el mismo día
+  dejan dos filas a propósito: eso es lo que dibuja
+  `post_metrics_daily_delta`. Lo único que no puede pasar es ir hacia
+  atrás: una lectura anterior a la última guardada no entra.
+- **Un reintento (`attempt > 1`) se salta lo que esa corrida ya midió**
+  en los últimos 60 minutos, para retomar por donde iba en vez de
+  empezar de cero.
+- **`first_seen_at` y `last_synced_at` no se tocan.** El primero es la
+  primera vez que vimos la publicación; el segundo es la frescura de la
+  serie de cuenta (CON-10), y moverlo aquí taparía una sincronización
+  rota en `connection_health` y en Resumen.
+- **`deleted_on_platform` solo se marca donde la fuente sabe preguntar
+  por id** (YouTube, y TikTok autorizada). `business_discovery` de
+  Instagram no deja pedir un medio concreto: ahí, no saber no es saber
+  que no está.
+- **Hasta cuándo se mide** lo decide `shouldKeepMeasuring` de
+  `@mc/core`: 888 h, salvo que la publicación esté en una campaña
+  abierta, que se mide hasta `ends_on + 30 días` (CAM-5).
+
 
 ## Qué pasa cuando falla
 
@@ -243,6 +299,39 @@ SELECT c.name, s.platform_id, s.day, s.followers, s.source
  WHERE s.day = current_date ORDER BY c.name;
 ```
 
+## finance.reminders · recordatorios de cobro (FIN-4)
+
+Cada día a las 10:00 UTC recorre las facturas `sent` y `partial` y, para
+cada una, mira en qué paso está respecto a `due_on`: **−7, 0, +7, +21 y
++45 días**, con el tono subiendo en cada uno (recordatorio amable, aviso
+de vencimiento, primer aviso de mora, segundo, aviso formal). Redacta el
+correo con `@mc/core` —`pasosPendientes()` y `redactarRecordatorio()`,
+puras— y lo guarda como `notification` de tipo `invoice_overdue`, con el
+asunto en `title_es` y el cuerpo en `body_es`.
+
+**No envía nada.** El envío real por SMTP es fase 2 y espera a CIM-10;
+cuando llegue, marca `notification.emailed_at`. Hoy el creador lo copia
+desde la bandeja de `/finanzas` y lo manda desde su correo.
+
+Tres cosas que conviene saber antes de tocarlo:
+
+- **Se ponen al día todos los pasos pendientes en una corrida**, no solo
+  el último: no se envía nada, así que no hay a quién inundar. Para
+  cambiarlo es `pendientes.slice(-1)` en `recordatorios.ts`.
+- **El paso −7 caduca al vencer la factura.** Su texto dice «vence en N
+  días»; con 41 días de mora sería falso. Por eso una factura vencida
+  hace 41 días recibe **tres** recordatorios (0, +7 y +21) y no cuatro.
+- **La idempotencia cuelga de `action_url`**
+  (`/finanzas/facturas/<id>?recordatorio=<paso>`), no del título: el
+  título es texto de producto y cambiar una palabra reemitiría todos los
+  recordatorios de todas las facturas. Una segunda corrida el mismo día
+  no escribe nada.
+
+`invoice.reminders_sent` queda igual a cuántos recordatorios hay en la
+bandeja para esa factura, y nunca baja; `last_reminder_at` es la última
+corrida que escribió algo. El día lo pone la zona del workspace
+(`hoyEnZona`), no UTC: a las 10:00 UTC en Bogotá son las 05:00.
+
 ## Cómo leer job_run
 
 ```sql
@@ -280,14 +369,14 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @, brand.snapshot, collect.demographics contra fixtures, y oauth.refresh con el almacén cifrado y los refreshers reales
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @, brand.snapshot y finance.reminders sobre los seeds reales, los dos recolectores de CON-5, collect.demographics contra fixtures (CON-7) y oauth.refresh con el almacén cifrado y los refreshers reales
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
 Las de integración aplican TODAS las migraciones reales (la `0014` da
 los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
-`0036`, `metric_gap`) y corren como `mc_worker`: si un privilegio
+`0038`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan.
 
 **Los tiempos**: cada archivo abre SU propia base embebida en su
@@ -314,7 +403,8 @@ src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
-src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10) · collect.demographics (audiencia, CON-7)
+src/jobs/conexiones/         oauth.refresh · collect.account_metrics (CON-10) · collect.posts y collect.post_metrics (CON-5) · _posts.ts (lo común de los dos) · collect.demographics (audiencia, CON-7)
 src/jobs/campanas/           brand.snapshot (seguidores públicos de la marca de cada campaña, CAM-3)
+src/jobs/finanzas/           finance.reminders (recordatorios de cobro, FIN-4)
 test/                        integración (pglite) y unitarias
 ```

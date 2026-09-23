@@ -16,14 +16,19 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /** Los archivos de consultas de Nicolás. Los de Rasheed entran cuando él adopte la convención (docs/propuestas/ACC-2.md §3). */
-const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'conexiones.ts'] as const;
+const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'campanas/reporte.ts', 'conexiones.ts'] as const;
 
 /**
  * Escrituras sin bitácora, con motivo. Lo que no es un hecho del negocio
  * (dinero, publicación, cuenta conectada) no se audita.
  */
 const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, string>> = {
-  'finanzas.ts': {},
+  'finanzas.ts': {
+    markReminderSent:
+      'read_at de una notificación es «ya lo despaché», el mismo gesto que marcar cualquier aviso como leído: no es dinero, ' +
+      'ni publicación, ni cuenta conectada (FIN-4). El hecho del negocio —que existe un recordatorio y con qué texto— lo ' +
+      'escribe el job finance.reminders, y la propia fila de notification es su constancia, con su fecha',
+  },
   'campanas.ts': {
     upsertResult:
       'campaign_result es la métrica derivada de la campaña (CAM-5): se recalcula entera desde snapshots y aportes cada mañana ' +
@@ -31,6 +36,11 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
     recordBrandSnapshot:
       'métrica append-only de un perfil PÚBLICO de la marca (CAM-3): brand_account_snapshot es su propia bitácora (0035: mc_app solo ' +
       'inserta, nunca corrige ni borra; la fila guarda día, fuente y hora). No es dinero, ni publicación, ni cuenta conectada',
+  },
+  'campanas/reporte.ts': {
+    generateReport:
+      'un reporte generado es un BORRADOR que solo ve el creador (el enlace no abre hasta enviarlo, 0037 §3): congelar ' +
+      'cifras no es publicar. La publicación es markReportSent, que sí deja campaign.report_sent',
   },
   'conexiones.ts': {
     recordAccountSnapshot:
@@ -126,7 +136,7 @@ describe('toda escritura de queries/ deja bitácora (ACC-2)', () => {
     const esperadas = [
       'finanzas.ts:createInvoice', 'finanzas.ts:transitionInvoice',
       'campanas.ts:linkPost', 'campanas.ts:unlinkPost', 'campanas.ts:setPrimaryPost', 'campanas.ts:updateCampaign',
-      'campanas.ts:transitionCampaign', 'campanas.ts:createCampaignFromQuote',
+      'campanas.ts:transitionCampaign', 'campanas.ts:createCampaignFromQuote', 'campanas/reporte.ts:markReportSent',
       'conexiones.ts:upsertConnection', 'conexiones.ts:recordConsent', 'conexiones.ts:disconnectConnection',
       'conexiones.ts:addPublicAccount', 'conexiones.ts:upgradePublicAccountToOAuth',
     ];

@@ -12,6 +12,8 @@
  *   GET /me/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=&timeframe=
  *                                                      instagram.account.demographics (≥ 100 seguidores)
  *   GET /me?fields=business_discovery.username(u){…}   instagram.business_discovery (CAM-3; documentado bajo Facebook Login, ver propuesta 0.5)
+ *   GET /me?fields=business_discovery.username(u){media.limit(n){…}}
+ *                                                      instagram.business_discovery.media (CON-5: posts públicos por @)
  *
  * Errores: { error: { message, type, code, error_subcode, fbtrace_id } }.
  *   190 = token inválido o vencido (auth). 4 / 17 / 32 / 613 / 80002 =
@@ -35,6 +37,24 @@ export const INSTAGRAM_MEDIA_PAGE_MAX = 100;
 
 export const INSTAGRAM_USER_FIELDS: readonly string[] = ['id', 'user_id', 'username', 'name', 'account_type', 'profile_picture_url', 'followers_count', 'follows_count', 'media_count'];
 export const INSTAGRAM_MEDIA_FIELDS: readonly string[] = ['id', 'caption', 'media_type', 'media_product_type', 'media_url', 'permalink', 'thumbnail_url', 'timestamp', 'username', 'like_count', 'comments_count', 'is_shared_to_feed'];
+
+/**
+ * Campos del edge `media` dentro de business_discovery (CON-5).
+ * reference/instagram-media, leída el 23-sep-2026:
+ *   - `view_count` SOLO existe por Business Discovery (vistas de reels,
+ *     paga más orgánica). En feed y carrusel no viene: eso es null.
+ *   - `media_product_type` está marcado «Facebook Login API only», así
+ *     que por graph.instagram.com puede no llegar: `surface` queda null.
+ *   - `like_count` se omite si el dueño oculta los «me gusta».
+ * Alcance, guardados, compartidos y retención NO están aquí: piden el
+ * permiso del dueño (instagram.media.insights).
+ */
+export const INSTAGRAM_DISCOVERY_MEDIA_FIELDS: readonly string[] = [
+  'id', 'caption', 'media_type', 'media_product_type', 'media_url', 'permalink', 'thumbnail_url',
+  'timestamp', 'username', 'like_count', 'comments_count', 'view_count',
+];
+/** Medios por página del edge anidado. Mismo tope que /me/media. */
+export const INSTAGRAM_DISCOVERY_MEDIA_MAX = 100;
 
 export type InstagramProductType = 'REELS' | 'FEED' | 'STORY' | 'AD';
 
@@ -165,14 +185,80 @@ export class InstagramClient {
 
   /** Cuenta pública de una marca: seguidores y número de medios (CAM-3). */
   async businessDiscovery(username: string, opts: CallOptions = {}): Promise<ConnectorResult<BrandAccountSnapshot>> {
-    if (!/^[A-Za-z0-9._]{1,30}$/.test(username)) throw new ConnectorUsageError(`Nombre de usuario de Instagram inválido: ${username}`);
-    const res = await this.#get('instagram.business_discovery', 'me', { fields: `business_discovery.username(${username}){id,username,followers_count,media_count}` }, opts.signal);
+    const clean = assertDiscoveryUsername(username);
+    const res = await this.#get('instagram.business_discovery', 'me', { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count}` }, opts.signal);
     const bd = asRecord(res.body['business_discovery']);
     return {
-      data: { platform_id: 'instagram', external_account_id: strOrNull(bd['id']), handle: strOrNull(bd['username']) ?? username, followers_count: intOrNull(bd['followers_count']), media_count: intOrNull(bd['media_count']) },
+      data: { platform_id: 'instagram', external_account_id: strOrNull(bd['id']), handle: strOrNull(bd['username']) ?? clean, followers_count: intOrNull(bd['followers_count']), media_count: intOrNull(bd['media_count']) },
       raw: res.body,
     };
   }
+
+  /**
+   * Publicaciones públicas de una cuenta profesional por su @ (CON-5).
+   *
+   * El edge anidado se pagina con los modificadores de la expansión de
+   * campos (`media.after(CURSOR).limit(N)`), no con `limit=`/`after=`
+   * sueltos. La respuesta trae `before`/`after` pero, a diferencia de la
+   * paginación normal, NO trae `next`: por eso «hay más» se deduce de
+   * que la página vino llena y hay cursor (documentación leída el
+   * 23-sep-2026, reference/ig-user/business_discovery).
+   *
+   * Una cuenta que no existe, personal o restringida por edad devuelve
+   * `business_discovery` vacío: `found` en false y `items` vacío, para
+   * que el llamador lo diga con palabras en vez de inventar un cero.
+   */
+  async businessDiscoveryMedia(
+    username: string,
+    opts: CallOptions & { after?: string | null; limit?: number } = {},
+  ): Promise<ConnectorResult<Page<NormalizedVideo> & { found: boolean }>> {
+    const clean = assertDiscoveryUsername(username);
+    const limit = opts.limit ?? 25;
+    if (limit < 1 || limit > INSTAGRAM_DISCOVERY_MEDIA_MAX) throw new ConnectorUsageError(`limit debe estar entre 1 y ${INSTAGRAM_DISCOVERY_MEDIA_MAX}`);
+    const after = opts.after ? `.after(${assertDiscoveryCursor(opts.after)})` : '';
+    const media = `media${after}.limit(${limit}){${INSTAGRAM_DISCOVERY_MEDIA_FIELDS.join(',')}}`;
+    const res = await this.#get('instagram.business_discovery.media', 'me', { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count,${media}}` }, opts.signal);
+    const bd = asRecord(res.body['business_discovery']);
+    const found = strOrNull(bd['id']) !== null;
+    const edge = asRecord(bd['media']);
+    const items = asArray(edge['data']).map((m) => normalizeInstagramMedia(asRecord(m)));
+    const cursor = strOrNull(asRecord(asRecord(edge['paging'])['cursors'])['after']);
+    const hasMore = cursor !== null && items.length >= limit;
+    return { data: { items, cursor: hasMore ? cursor : null, hasMore, found }, raw: res.body };
+  }
+
+  /** Páginas del edge `media` de business_discovery, de la más reciente hacia atrás. */
+  async *iterateBusinessDiscoveryMedia(
+    username: string,
+    opts: PageOptions & { limit?: number } = {},
+  ): AsyncIterable<ConnectorResult<Page<NormalizedVideo> & { found: boolean }>> {
+    const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
+    let after: string | null = null;
+    for (let page = 0; page < maxPages; page++) {
+      const res = await this.businessDiscoveryMedia(username, { after, limit: opts.limit, signal: opts.signal });
+      yield res;
+      if (!res.data.hasMore || !res.data.cursor) return;
+      after = res.data.cursor;
+    }
+  }
+}
+
+/**
+ * El cursor también viaja DENTRO de `fields`. Lo devuelve Meta, así que
+ * no es entrada de nadie, pero si un día lo fuera bastaría un paréntesis
+ * para reescribir la expansión entera: se valida aquí y así la regla
+ * «lo que entra en `fields` está validado» vale para toda la expresión.
+ */
+function assertDiscoveryCursor(cursor: string): string {
+  if (!/^[A-Za-z0-9_\-=+/]{1,512}$/.test(cursor)) throw new ConnectorUsageError('Cursor de paginación de Instagram inválido');
+  return cursor;
+}
+
+/** El @ viaja DENTRO de `fields`, no como parámetro: se valida antes para no construir una expansión rota. */
+function assertDiscoveryUsername(username: string): string {
+  const clean = username.replace(/^@+/, '');
+  if (!/^[A-Za-z0-9._]{1,30}$/.test(clean)) throw new ConnectorUsageError(`Nombre de usuario de Instagram inválido: ${username}`);
+  return clean;
 }
 
 function dayRange(day: string): { since: number; until: number } {
@@ -213,6 +299,9 @@ export function normalizeInstagramMedia(m: Record<string, unknown>): NormalizedV
   const metrics = emptyPostMetrics();
   metrics.likes = intOrNull(m['like_count']);
   metrics.comments = intOrNull(m['comments_count']);
+  // Solo business_discovery entrega view_count, y solo de los reels: en
+  // /me/media y en el resto de superficies no viene, y eso es null.
+  metrics.views = intOrNull(m['view_count']);
   return {
     post: {
       external_post_id: String(m['id'] ?? ''),

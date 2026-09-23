@@ -17,16 +17,32 @@ export const META_USER_NOT_FOUND_CODE = '110';
 export const INSTAGRAM_HOUSE_TOKEN_ENV = 'INSTAGRAM_HOUSE_TOKEN';
 export const INSTAGRAM_METRICS_NOTE_ES = 'Instagram publica seguidores y número de publicaciones de las cuentas profesionales. Alcance, guardados y demografía requieren que el dueño autorice la cuenta.';
 
-export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record<string, string | undefined>>): PublicProfileSource {
+/**
+ * El token de la cuenta profesional de On Cue, tal como lo quiere
+ * `InstagramClient`. Sin vencimiento propio: Meta lo renueva por su
+ * cuenta cada 60 días y aquí solo se usa, nunca se refresca.
+ * Lo comparten la fuente de perfiles (CON-10) y la de posts (CON-5).
+ */
+export function instagramHouseTokens(env: Readonly<Record<string, string | undefined>>): OAuthTokens | null {
   const token = env[INSTAGRAM_HOUSE_TOKEN_ENV]?.trim();
-  const house: OAuthTokens | null = token ? { accessToken: token, accessExpiresAt: new Date(8_640_000_000_000_000), scopes: ['instagram_business_basic'] } : null;
+  return token ? { accessToken: token, accessExpiresAt: new Date(8_640_000_000_000_000), scopes: ['instagram_business_basic'] } : null;
+}
+
+export function missingInstagramHouseToken(env: Readonly<Record<string, string | undefined>>): readonly string[] {
+  return instagramHouseTokens(env) ? [] : [INSTAGRAM_HOUSE_TOKEN_ENV];
+}
+
+export const INSTAGRAM_HOUSE_TOKEN_MISSING_ES = `Falta ${INSTAGRAM_HOUSE_TOKEN_ENV}: el token de la cuenta profesional de On Cue con la que se leen las cuentas públicas.`;
+
+export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record<string, string | undefined>>): PublicProfileSource {
+  const house = instagramHouseTokens(env);
   return {
     platformId: 'instagram',
     label: 'Instagram (business_discovery)',
-    missing: house ? [] : [INSTAGRAM_HOUSE_TOKEN_ENV],
+    missing: missingInstagramHouseToken(env),
     async lookup(handle, opts = {}) {
       const clean = assertHandle('instagram', handle);
-      if (!house) throw new PublicLookupError('not_configured', `Falta ${INSTAGRAM_HOUSE_TOKEN_ENV}: el token de la cuenta profesional de On Cue con la que se leen las cuentas públicas.`);
+      if (!house) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_TOKEN_MISSING_ES);
       let res;
       try {
         res = await new InstagramClient(core, { connectionId: null, tokens: house }).businessDiscovery(clean, { signal: opts.signal });

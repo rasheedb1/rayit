@@ -17,7 +17,9 @@ src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas, conexiones
                    (finanzas trae además getCashflowInputs, la ÚNICA consulta del
-                   flujo de caja: devuelve filas en bruto y clasifica @mc/core)
+                   flujo de caja: devuelve filas en bruto y clasifica @mc/core, y
+                   listReminders/markReminderSent, la bandeja de recordatorios de
+                   FIN-4 sobre notification: el texto ya viene redactado del job)
 test/pglite.ts     openTestDb(): la base para las pruebas de cualquier paquete
 scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 ```
@@ -412,6 +414,20 @@ extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
   importa `tlsFor` / `hostOf` / `resolveTls` de aquí en vez de tener su
   copia: era el mismo camino de seguridad escrito dos veces, y solo uno
   tenía prueba.
+
+## El reporte a la marca (CAM-6)
+
+`@mc/db/queries/campanas` reexporta `campanas/reporte.ts` —
+`generateReport`, `listCampaignReports`, `getReport`, `markReportSent`,
+con `WorkspaceTx`— y `campanas/reporte-publico.ts` —`readPublicReport`,
+la cuarta función pública, con `PublicShareTx` como las tres de
+Cotizar—. El payload lo arma `construirReporte` de `@mc/core` (lista
+blanca, versión 1) y se congela en `report.payload`: nada lo reescribe,
+ni un snapshot nuevo ni marcar «enviado» ni la función pública, que
+solo toca `status`, `viewed_at` y `view_count` (0037 §2). Generar sobre
+un borrador lo reemplaza; sobre uno enviado crea otra versión, y al
+enviarla la anterior apunta a ella (`superseded_by`) sin dejar de abrir.
+`test/campanas-reporte.test.ts` tiene la prueba byte a byte.
 
 ## Ciclo de una migración nueva
 

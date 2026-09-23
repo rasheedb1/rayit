@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5, CAM-6) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -57,11 +57,16 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
-                              de cada factura (registrar pago, reserva de impuestos).
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle con los cobros
+                              de cada factura (FIN-2: registrar pago, reserva de
+                              impuestos) y la bandeja de recordatorios de cobro
+                              (FIN-4, bandeja.tsx).
                               index.ts exporta facturarCampana() para Campañas.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
                               calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/finanzas/recordatorios/  Solo actions.ts: «Marcar como enviado». NO es una
+                              ruta (no tiene page.tsx); la carpeta existe para que el
+                              archivo se llame actions.ts y lo mire convencion.test.ts.
 app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
                               (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
                               qué falta y «Recalcular» si la base lo permite) y
@@ -72,6 +77,17 @@ app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado
                               modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
                               _lib/marca-service.ts, con el mismo recordBrandSnapshot que
                               el job brand.snapshot.
+                              «Reporte a la marca» (CAM-6): [id]/reporte-seccion.tsx
+                              (generar, enviar por enlace o PDF, versiones),
+                              [id]/reporte/[reportId]/ (la vista previa del creador) y
+                              _ui/documento-reporte.tsx, EL documento que pintan la
+                              vista previa y la página pública: solo lee el payload
+                              congelado. «Descargar PDF» es el diálogo de impresión
+                              (@media print en globals.css), sin dependencia nueva.
+app/(public)/reporte/[slug]/  El reporte que abre la marca sin sesión (CAM-6), por
+                              public_report() de la migración 0037: noindex, 404 real
+                              para un borrador o un slug desconocido, y la primera
+                              apertura marca viewed_at (los robots de vista previa no).
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona

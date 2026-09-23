@@ -1,11 +1,11 @@
 -- =====================================================================
--- 0036 · Demografía de cuenta: idempotencia, y por qué falta (CON-7)
+-- 0038 · Demografía de cuenta: idempotencia, y por qué falta (CON-7)
 -- ---------------------------------------------------------------------
--- Número: 0035 es la última en main (0034 la tomó ACC-3, ya aplicada en
--- Supabase; 0035, CAM-3). Esta va detrás de las dos y no depende de
--- ninguna: solo toca audience_breakdown (0003), metric_requirement
--- (0011) y una tabla nueva. La rama de ACC-6 trae otra 0034 y pasa a
--- 0036 o 0037 al integrarse; si choca con esta, el integrador renumera.
+-- Número: 0037 es la última en main (CAM-6). La 0036 la reclama FIN-7,
+-- que aún no se fusiona, y main la dejó declarada como hueco; esta se
+-- aparta a 0038 para no disputársela. No depende de nada posterior a
+-- 0011 —solo toca audience_breakdown (0003), metric_requirement (0011)
+-- y una tabla nueva—, así que renumerarla es cambiarle el nombre.
 --
 -- collect.demographics (cron 20 5, ya en job_definition de 0009) escribe
 -- audience_breakdown con scope 'account'. Le faltaban dos cosas al

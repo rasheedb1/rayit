@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { hoyEnZona, rateToPct, INVOICE_STATUS_LABEL_ES } from "@mc/core";
-import { getInvoice, listPayments } from "@mc/db/queries/finanzas";
+import { getInvoice, listPayments, listReminders } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { RecordatoriosDeLaFactura } from "../../bandeja";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../../_lib/messages";
 import { pillForInvoice } from "../../_lib/estado";
@@ -58,11 +59,15 @@ export default async function FacturaPage({
 }) {
   const { id } = await params;
   const { error } = await searchParams;
-  // Una sola transacción para la factura y sus cobros: dos withWorkspace
-  // seguidos podrían leer estados distintos si entra un pago en medio.
-  const { invoice, pagos } = await withWorkspace(async (tx) => ({
+  // Una sola transacción para la factura, sus cobros y sus recordatorios:
+  // dos withWorkspace seguidos podrían leer estados distintos si entra un
+  // pago en medio.
+  const { invoice, pagos, recordatorios } = await withWorkspace(async (tx) => ({
     invoice: await getInvoice(tx, id),
     pagos: await listPayments(tx, id),
+    // Todos los de esta factura, incluidos los ya marcados: la ficha es
+    // el historial de cobro, no la bandeja del día.
+    recordatorios: await listReminders(tx, { invoiceId: id }),
   }));
   if (!invoice) notFound();
   // Locale, moneda y zona horaria del workspace, atados: esta pantalla
@@ -195,6 +200,8 @@ export default async function FacturaPage({
           </section>
 
           <SeccionPagos invoice={invoice} pagos={pagos} f={f} workspace={{ locale: ws.locale }} today={hoy} />
+
+          <RecordatoriosDeLaFactura rows={recordatorios} f={f} />
         </div>
 
         <aside className="lg:sticky lg:top-8 lg:self-start">

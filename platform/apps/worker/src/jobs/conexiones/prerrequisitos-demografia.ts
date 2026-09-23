@@ -1,6 +1,6 @@
 /**
  * Qué se le puede pedir a cada cuenta ANTES de llamar, y qué fila de
- * `metric_requirement` (0011, 0036) explica lo que no.
+ * `metric_requirement` (0011, 0038) explica lo que no.
  *
  * Es el corazón de CON-7 y por eso está aquí, aparte del job y sin nada
  * de base ni de red: se prueba en milisegundos y el job solo la obedece.
