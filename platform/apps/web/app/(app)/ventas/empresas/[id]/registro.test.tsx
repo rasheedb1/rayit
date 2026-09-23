@@ -2,8 +2,16 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const registrarActividad = vi.fn();
-vi.mock("../actions", () => ({ registrarActividad: (...a: unknown[]) => registrarActividad(...a) }));
+const marcarHecha = vi.fn();
+const fijarSiguienteAccion = vi.fn();
+vi.mock("../actions", () => ({
+  registrarActividad: (...a: unknown[]) => registrarActividad(...a),
+  marcarHecha: (...a: unknown[]) => marcarHecha(...a),
+  fijarSiguienteAccion: (...a: unknown[]) => fijarSiguienteAccion(...a),
+}));
 
+import { formatterFor } from "@/lib/format";
+import { siguienteAccionData, type SeguimientoContexto } from "../../_seguimiento/datos";
 import { FICHA } from "../messages";
 import { Bloque } from "./bloque";
 import { RegistroRapido } from "./registro";
@@ -12,6 +20,32 @@ const COMPANY = "00000002-0000-4000-8000-0000000000e1";
 const ABIERTO = "00000006-0000-4000-8000-000000000001";
 const GANADO = "00000006-0000-4000-8000-000000000002";
 const LAURA = "00000007-0000-4000-8000-000000000001";
+
+const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+const ctx: SeguimientoContexto = { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00", zoneName: "hora estándar de Colombia" };
+/** La siguiente acción del negocio abierto, vencida el 21: la del caso de Granos del Valle. */
+const siguientes = {
+  [ABIERTO]: siguienteAccionData(
+    {
+      dealId: ABIERTO,
+      companyId: COMPANY,
+      companyName: "Granos del Valle",
+      dealName: "Historias + 1 Reel",
+      stageLabel: "Contactado",
+      action: "Llamar a Laura Quintero",
+      dueAt: "2026-09-21T20:00:00Z",
+      dueDate: "2026-09-21",
+      dueTime: "15:00",
+      dueState: "vencido",
+      responsibleUserId: null,
+      responsibleName: null,
+      ownerUserId: null,
+    },
+    f,
+    ctx,
+    "Granos del Valle · Historias + 1 Reel",
+  ),
+};
 
 function renderRegistro(
   deals = [
@@ -25,7 +59,14 @@ function renderRegistro(
     <>
       <button type="button">Cambiar</button>
       <Bloque id="actividad" title="Actividad">
-        <RegistroRapido companyId={COMPANY} today="2026-09-23" deals={deals} contacts={[{ id: LAURA, label: "Laura Gómez" }]} />
+        <RegistroRapido
+          companyId={COMPANY}
+          today="2026-09-23"
+          deals={deals}
+          contacts={[{ id: LAURA, label: "Laura Gómez" }]}
+          siguientes={siguientes}
+          ctx={ctx}
+        />
       </Bloque>
     </>,
   );
@@ -38,7 +79,11 @@ function teclaEnElBloque(key: string) {
   fireEvent.keyDown(nota, { key });
 }
 
-beforeEach(() => registrarActividad.mockReset());
+beforeEach(() => {
+  registrarActividad.mockReset();
+  marcarHecha.mockReset();
+  fijarSiguienteAccion.mockReset();
+});
 
 describe("RegistroRapido", () => {
   it("L elige «Llamada» y pone el cursor en «Qué pasó», sin tocar el ratón", () => {
@@ -101,6 +146,60 @@ describe("RegistroRapido", () => {
     // El texto se vacía y el tipo se queda, para registrar la siguiente.
     expect(screen.getByLabelText(/Qué pasó/)).toHaveValue("");
     expect(screen.getByRole("button", { name: "Llamada" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("registrar una llamada en un negocio con la acción vencida pregunta si era esa, y «Marcarla hecha» abre la siguiente", async () => {
+    registrarActividad.mockResolvedValue({
+      ok: true,
+      notice: "Llamada registrada. Cuenta como último contacto.",
+      stamp: 1,
+      pendientes: [{ dealId: ABIERTO, action: "Llamar a Laura Quintero" }],
+    });
+    marcarHecha.mockResolvedValue({ ok: true, notice: FICHA.siguiente.doneNotice, stamp: 2 });
+    renderRegistro();
+    teclaEnElBloque("l");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Registrar" }));
+    });
+
+    const pregunta = await screen.findByRole("group", { name: "Siguiente acción pendiente: «Llamar a Laura Quintero»" });
+    expect(pregunta).toHaveTextContent("¿Era «Llamar a Laura Quintero»?");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Marcar «Llamar a Laura Quintero» como hecha y poner la siguiente" }));
+    });
+    expect(Object.fromEntries(marcarHecha.mock.calls[0]?.[1] as FormData)).toEqual({ dealId: ABIERTO });
+
+    // Se abre el editor de la siguiente, vacío y para mañana, con el foco en «Qué toca hacer».
+    const editor = await screen.findByRole("form", { name: "Siguiente acción de «Granos del Valle · Historias + 1 Reel»" });
+    expect(editor).toHaveTextContent(FICHA.siguiente.doneNotice);
+    expect(screen.getByLabelText(/Qué toca hacer/)).toHaveValue("");
+    expect(document.activeElement).toBe(screen.getByLabelText(/Qué toca hacer/));
+
+    // Esc: se va, y el aviso dice dónde quedó.
+    fireEvent.keyDown(screen.getByLabelText(/Qué toca hacer/), { key: "Escape" });
+    expect(screen.queryByRole("form", { name: /Siguiente acción de/ })).toBeNull();
+    expect(screen.getByText(FICHA.actividad.pendiente.leftWithout)).toBeInTheDocument();
+  });
+
+  it("«No» deja la acción como estaba y no llama a nada", async () => {
+    registrarActividad.mockResolvedValue({ ok: true, notice: "Correo registrado.", stamp: 1, pendientes: [{ dealId: ABIERTO, action: "Llamar a Laura Quintero" }] });
+    renderRegistro();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Registrar" }));
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "No era «Llamar a Laura Quintero»: dejarla como está" }));
+    expect(screen.queryByRole("group", { name: /Siguiente acción pendiente/ })).toBeNull();
+    expect(marcarHecha).not.toHaveBeenCalled();
+  });
+
+  it("sin acción pendiente no pregunta nada", async () => {
+    registrarActividad.mockResolvedValue({ ok: true, notice: "Llamada registrada.", stamp: 1 });
+    renderRegistro();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Registrar" }));
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Llamada registrada.");
+    expect(screen.queryByRole("group", { name: /Siguiente acción pendiente/ })).toBeNull();
   });
 
   it("con varios negocios abiertos no elige por la persona: sin elegir, cuenta para todos", () => {

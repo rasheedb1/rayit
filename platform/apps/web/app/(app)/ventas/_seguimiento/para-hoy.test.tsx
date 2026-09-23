@@ -89,6 +89,17 @@ describe("ParaHoy", () => {
     expect(within(items[1]!).getByRole("button", { name: "Marcar «Enviar propuesta» como hecha" })).toBeInTheDocument();
   });
 
+  it("la etapa va en su propia línea, sin recortar: unida al negocio con « · » se perdía a 1440 px", async () => {
+    due = { rows: [fila({ dealName: "2 Reels + derechos 90 d", stageLabel: "Propuesta enviada" })], overdueCount: 1, todayCount: 0, moreCount: 0, withoutActionCount: 0 };
+    render(<>{await ParaHoy()}</>);
+    const item = within(screen.getByRole("list", { name: "Seguimientos vencidos y de hoy" })).getByRole("listitem");
+    expect(within(item).getByText("2 Reels + derechos 90 d")).not.toHaveClass("truncate");
+    const etapa = within(item).getByText("Propuesta enviada");
+    expect(etapa.tagName).toBe("P");
+    expect(etapa).not.toHaveClass("truncate");
+    expect(item.className).toContain("lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]");
+  });
+
   it("lo que no cabe y los negocios sin siguiente acción llevan al pipeline filtrado a eso", async () => {
     due = { rows: [fila({})], overdueCount: 4, todayCount: 0, moreCount: 3, withoutActionCount: 2 };
     render(<>{await ParaHoy()}</>);
@@ -123,7 +134,8 @@ describe("ParaHoyLista: no suelta la fila que se está tocando", () => {
     dealId: r.dealId,
     companyId: r.companyId,
     companyName: r.companyName,
-    subtitle: r.stageLabel,
+    dealName: null,
+    stageLabel: r.stageLabel,
     data: siguienteAccionData(r, f, ctx, r.companyName),
   });
   const lista = (rows: NextActionRow[]) => (

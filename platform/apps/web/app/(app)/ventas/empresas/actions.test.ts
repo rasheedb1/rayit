@@ -45,7 +45,7 @@ function form(values: Record<string, string>): FormData {
 }
 
 beforeEach(() => {
-  logActivity.mockReset().mockResolvedValue({ activityId: "a1", touchedDealIds: [DEAL] });
+  logActivity.mockReset().mockResolvedValue({ activityId: "a1", touchedDealIds: [DEAL], pendingActions: [] });
   setNextAction.mockReset().mockResolvedValue({ companyId: COMPANY, dueAt: "2026-09-24T14:30:00Z" });
   listCompanyActivity.mockReset();
   getCompanyName.mockReset().mockResolvedValue("Café Alma");
@@ -69,6 +69,23 @@ describe("registrarActividad", () => {
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/ventas/empresas/${COMPANY}`);
     expect(revalidatePath).toHaveBeenCalledWith("/ventas");
+  });
+
+  it("sin acción pendiente en el negocio, no vuelve ninguna que proponer", async () => {
+    const r = await registrarActividad({}, form(llamada));
+    expect(r.pendientes).toBeUndefined();
+  });
+
+  it("si el negocio tenía la siguiente acción vencida o de hoy, vuelve para proponer marcarla hecha", async () => {
+    logActivity.mockResolvedValue({ activityId: "a1", touchedDealIds: [DEAL], pendingActions: [{ dealId: DEAL, action: "Llamar a Laura Quintero" }] });
+    const r = await registrarActividad({}, form(llamada));
+    expect(r).toMatchObject({ ok: true, pendientes: [{ dealId: DEAL, action: "Llamar a Laura Quintero" }] });
+  });
+
+  it("un día que no existe (30 de febrero) va a «Cuándo» sin llegar a la base", async () => {
+    const r = await registrarActividad({}, form({ ...llamada, occurredOn: "2026-02-30" }));
+    expect(r.errors?.occurredOn).toBe(FICHA.errores.InvalidActivityDate);
+    expect(logActivity).not.toHaveBeenCalled();
   });
 
   it("vacíos son «ninguno»: sin negocio, sin contacto, hoy", async () => {
@@ -139,6 +156,12 @@ describe("fijarSiguienteAccion", () => {
   it("valida antes de llegar a la base: sin texto, sin fecha, hora imposible", async () => {
     const r = await fijarSiguienteAccion({}, form({ ...accion, action: " ", dueDate: "mañana", dueTime: "25:00" }));
     expect(r.errors).toEqual({ action: FICHA.errores.InvalidNextAction, dueDate: FICHA.errores.InvalidDueDate, dueTime: FICHA.errores.InvalidDueDate });
+    expect(setNextAction).not.toHaveBeenCalled();
+  });
+
+  it("el 30 de febrero es «Elige un día válido», no el error genérico de Postgres", async () => {
+    const r = await fijarSiguienteAccion({}, form({ ...accion, dueDate: "2026-02-30" }));
+    expect(r.errors).toEqual({ dueDate: FICHA.errores.InvalidDueDate });
     expect(setNextAction).not.toHaveBeenCalled();
   });
 

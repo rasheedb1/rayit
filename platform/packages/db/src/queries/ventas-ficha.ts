@@ -16,7 +16,7 @@
  * Los errores de esta pieza son `FichaError` con un código, sin frase,
  * como VentasError: la web los traduce con su messages.ts.
  */
-import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isCampaignStatus, type CampaignStatus } from '@mc/core';
+import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isCampaignStatus, isClockTime, isIsoDate, type CampaignStatus } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import type { ACTIVITY_KINDS } from '../schema/ventas.ts';
 import { listInvoices, type InvoiceListRow } from './finanzas.ts';
@@ -86,9 +86,6 @@ export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 // importar este módulo.
 /** Cuántas actividades trae la ficha de una vez. */
 export const TIMELINE_LIMIT = 50;
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Un instante como ISO en UTC, para que la web no reciba un Date. */
 const iso = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
@@ -321,7 +318,11 @@ export interface SetNextActionInput {
    * la próxima hora en punto.
    */
   dueTime?: string | null;
-  /** Quién la hace: alguien de este espacio; null la deja sin responsable y sin el campo no se toca. */
+  /**
+   * Quién la hace: alguien de este espacio, o el responsable que ya tenía
+   * aunque haya dejado el espacio (no se le quita por cambiar la fecha).
+   * null la deja sin responsable y sin el campo no se toca.
+   */
   responsibleUserId?: string | null;
 }
 
@@ -351,18 +352,20 @@ export async function setNextAction(
   const action = input.action.trim();
   if (!action || action.length > NEXT_ACTION_MAX) throw new FichaError('InvalidNextAction');
   const dueTime = input.dueTime?.trim() || null;
-  if (
-    !ISO_DATE_RE.test(input.dueDate) ||
-    (dueTime !== null && !TIME_RE.test(dueTime)) ||
-    Number.isNaN(Date.parse(`${input.dueDate}T00:00:00Z`))
-  ) {
+  // isIsoDate hace el viaje de ida y vuelta: '2026-02-30' no pasa aquí
+  // para caer después en Postgres con «date/time field value out of
+  // range» y volver como error desconocido.
+  if (!isIsoDate(input.dueDate) || (dueTime !== null && !isClockTime(dueTime))) {
     throw new FichaError('InvalidDueDate');
   }
   const tocaResponsable = input.responsibleUserId !== undefined;
   const responsible = input.responsibleUserId || null;
-  if (responsible !== null) await assertMember(tx, responsible);
 
   const deal = await readOpenDeal(tx, dealId);
+  // Quien ya es responsable se conserva aunque haya dejado el espacio:
+  // cambiar solo la fecha no puede fallar en «Quién» ni borrarlo. Lo que
+  // se comprueba es un responsable NUEVO.
+  if (responsible !== null && responsible !== deal.responsibleUserId) await assertMember(tx, responsible);
   // El instante, en SQL y en la zona del espacio. Con hora, esa; sin
   // ella, la de siempre o, si hoy ya pasó, la próxima en punto.
   const when = await tx.query<{ due: string; past_day: boolean; past_time: boolean }>(
@@ -422,10 +425,17 @@ export async function completeNextAction(
   return { companyId: deal.companyId };
 }
 
-/** Un negocio abierto de este espacio, con su empresa y su acción; lanza si no existe o está cerrado. */
-async function readOpenDeal(tx: WorkspaceTx, dealId: string): Promise<{ companyId: string; action: string | null }> {
-  const { rows } = await tx.query<{ company_id: string; closed: boolean; action: string | null }>(
-    `SELECT d.company_id, (st.is_won OR st.is_lost) AS closed, nullif(btrim(d.next_action), '') AS action
+/**
+ * Un negocio abierto de este espacio, con su empresa, su acción y quién
+ * la tiene; lanza si no existe o está cerrado.
+ */
+async function readOpenDeal(
+  tx: WorkspaceTx,
+  dealId: string,
+): Promise<{ companyId: string; action: string | null; responsibleUserId: string | null }> {
+  const { rows } = await tx.query<{ company_id: string; closed: boolean; action: string | null; responsible: string | null }>(
+    `SELECT d.company_id, (st.is_won OR st.is_lost) AS closed, nullif(btrim(d.next_action), '') AS action,
+            d.next_action_user_id AS responsible
        FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
       WHERE d.id = $1
       FOR UPDATE OF d`,
@@ -434,7 +444,7 @@ async function readOpenDeal(tx: WorkspaceTx, dealId: string): Promise<{ companyI
   const d = rows[0];
   if (!d) throw new DealNotFound();
   if (d.closed) throw new FichaError('DealClosed');
-  return { companyId: d.company_id, action: d.action };
+  return { companyId: d.company_id, action: d.action, responsibleUserId: d.responsible };
 }
 
 /** Como assertOwner de queries/ventas.ts: el id tiene que ser de alguien con membresía en este espacio. */
@@ -599,6 +609,14 @@ export interface LogActivityResult {
   activityId: string;
   /** Los negocios cuyo last_contact_at se movió (vacío en una nota). */
   touchedDealIds: string[];
+  /**
+   * De esos negocios, los abiertos cuya siguiente acción está vencida o
+   * vence hoy (deal_pipeline.due_state, en la zona del espacio): quien
+   * acaba de llamar probablemente acaba de hacer justo eso, y la ficha
+   * le propone marcarla hecha, como Attio y Close al registrar un
+   * contacto. Nada se marca solo: lo decide la persona.
+   */
+  pendingActions: { dealId: string; action: string }[];
 }
 
 /**
@@ -615,9 +633,7 @@ export async function logActivity(tx: WorkspaceTx, input: LogActivityInput): Pro
   if (body !== null && body.length > ACTIVITY_BODY_MAX) throw new FichaError('InvalidActivityBody');
   if (input.kind === 'note' && body === null) throw new FichaError('InvalidActivityBody');
   const occurredOn = input.occurredOn?.trim() || null;
-  if (occurredOn !== null && (!ISO_DATE_RE.test(occurredOn) || Number.isNaN(Date.parse(`${occurredOn}T00:00:00Z`)))) {
-    throw new FichaError('InvalidActivityDate');
-  }
+  if (occurredOn !== null && !isIsoDate(occurredOn)) throw new FichaError('InvalidActivityDate');
   const dealId = input.dealId || null;
   const contactId = input.contactId || null;
   if (dealId !== null && !isUuid(dealId)) throw new FichaError('DealNotInCompany');
@@ -682,7 +698,21 @@ export async function logActivity(tx: WorkspaceTx, input: LogActivityInput): Pro
     );
     touchedDealIds = touched.rows.map((r) => r.id);
   }
-  return { activityId, touchedDealIds };
+  let pendingActions: LogActivityResult['pendingActions'] = [];
+  if (touchedDealIds.length > 0) {
+    const pend = await tx.query<{ deal_id: string; action: string }>(
+      `SELECT p.id AS deal_id, btrim(p.next_action) AS action
+         FROM deal_pipeline p
+        WHERE p.id = ANY($1::uuid[])
+          AND NOT p.is_won AND NOT p.is_lost
+          AND nullif(btrim(p.next_action), '') IS NOT NULL
+          AND p.due_state IN ('vencido', 'hoy')
+        ORDER BY p.next_action_due ASC, p.name ASC`,
+      [touchedDealIds],
+    );
+    pendingActions = pend.rows.map((r) => ({ dealId: r.deal_id, action: r.action }));
+  }
+  return { activityId, touchedDealIds, pendingActions };
 }
 
 // ---------------------------------------------------------------------

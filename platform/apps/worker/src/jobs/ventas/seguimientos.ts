@@ -16,10 +16,15 @@
  *     a las 20:00 da «Vence hoy» a las 7:05 y, si sigue sin hacerse,
  *     «Seguimiento vencido» mañana a las 7:05; nunca esta noche. Dos
  *     avisos por compromiso como mucho, y en días distintos;
- *   - «Vence hoy» no avisa lo que alguien tocó hoy después de la hora de
- *     aviso (deal.updated_at): quien escribe a las 10:00 una acción para
- *     hoy acaba de decidirla y no necesita que se la recuerden a las
- *     11:05. Si mañana sigue ahí, le llega el vencido;
+ *   - «Vence hoy» no avisa la acción que alguien ESCRIBIÓ hoy después de
+ *     la hora de aviso (deal.next_action_set_at, 0036): quien escribe a
+ *     las 10:00 una acción para hoy acaba de decidirla y no necesita que
+ *     se la recuerden a las 11:05. Si mañana sigue ahí, le llega el
+ *     vencido. Solo cuenta el texto o el vencimiento de la acción, no
+ *     cualquier cambio del negocio: antes se miraba deal.updated_at, que
+ *     también mueve una llamada registrada (last_contact_at), un cambio
+ *     de etapa o el monto, y una corrida atrasada perdía el «Vence hoy»
+ *     de un negocio al que alguien le había registrado una llamada;
  *   - si el worker no corrió en la mañana, la primera corrida del día
  *     pone al día lo que faltaba, aunque sea por la tarde. Es la única
  *     forma de que un aviso llegue fuera de la mañana, y es mejor que
@@ -41,7 +46,10 @@
  * Corre como mc_worker (BYPASSRLS): RLS no filtra, así que cada fila que
  * se escribe lleva el workspace_id del negocio que la origina, nunca
  * otro. A quién va el aviso: al responsable de la acción, si no al del
- * negocio, y si no a todo el espacio (user_id NULL).
+ * negocio, y si no a todo el espacio (user_id NULL). Cada uno cuenta
+ * solo si SIGUE siendo del espacio (membership, sin el rol 'client'):
+ * un aviso a alguien que se fue no lo lee nadie, así que pasa al
+ * siguiente y, al final, a todo el espacio.
  *
  * «Vencido» y «vence hoy» se cuentan aquí con el instante de la corrida
  * ($1) y no se leen de deal_pipeline.due_state, que usa now(): existe
@@ -96,6 +104,9 @@ export interface SeguimientosResult {
  * de los espacios que ya pasaron su hora de aviso. `$1` es el instante de
  * la corrida y `$2` la hora local.
  *
+ *   - `user_id`   a quién va el aviso: el responsable de la acción o el
+ *                 del negocio, el primero que siga en el espacio; NULL
+ *                 (todo el espacio) si ninguno;
  *   - `tz`        la zona del espacio, validada contra el catálogo (UTC si
  *                 no existe);
  *   - `hoy`       el día local de la corrida;
@@ -110,7 +121,13 @@ const CANDIDATOS = `
   ),
   candidatos AS (
     SELECT d.id, d.workspace_id, d.company_id, d.name, btrim(d.next_action) AS next_action, d.next_action_due,
-           d.updated_at, co.name AS company_name, coalesce(d.next_action_user_id, d.owner_user_id) AS user_id,
+           d.next_action_set_at, co.name AS company_name,
+           coalesce(
+             (SELECT m.user_id FROM membership m
+               WHERE m.workspace_id = d.workspace_id AND m.user_id = d.next_action_user_id AND m.role <> 'client'),
+             (SELECT m.user_id FROM membership m
+               WHERE m.workspace_id = d.workspace_id AND m.user_id = d.owner_user_id AND m.role <> 'client')
+           ) AS user_id,
            e.tz,
            ($1::timestamptz AT TIME ZONE e.tz)::date AS hoy,
            (date_trunc('day', $1::timestamptz AT TIME ZONE e.tz) + make_interval(hours => $2::int)) AT TIME ZONE e.tz AS aviso_at
@@ -155,7 +172,7 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
               'deal', c.id, '/ventas/empresas/' || c.company_id, $1::timestamptz
          FROM candidatos c
         WHERE (c.next_action_due AT TIME ZONE c.tz)::date = c.hoy
-          AND ($2::int = 0 OR c.updated_at < c.aviso_at)
+          AND ($2::int = 0 OR c.next_action_set_at IS NULL OR c.next_action_set_at < c.aviso_at)
           AND NOT EXISTS (
             SELECT 1 FROM notification n
              WHERE n.workspace_id = c.workspace_id AND n.kind = 'deal_due'

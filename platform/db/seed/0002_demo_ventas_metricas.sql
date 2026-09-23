@@ -1426,8 +1426,12 @@ FROM (VALUES
     'Pitch por correo', 'Con media kit y la propuesta de historias + 1 reel.', (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', '{}'),
   (28, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000c0009', 'email_sent',
     'Seguimiento 1', 'Se cita el video "Almuerzo por 8 mil pesos" como referencia de formato.', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', '{}'),
-  (29, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000c0010', 'note',
-    'Perdido', 'Eligieron a otra creadora del nicho. Mateo pidió no recibir más correos.', '2026-03-20 15:00:00+00', '{}'),
+  -- La pérdida de marzo es un cambio de etapa, con su motivo, como lo
+  -- escribe moverNegocio: la línea de tiempo de la demo enseña así el
+  -- tipo «Cambio de etapa» sin mover un negocio a mano (VEN-5, r4).
+  (29, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000c0010', 'stage_change',
+    'Propuesta enviada → Perdido', 'Eligieron a otra creadora del nicho. Mateo pidió no recibir más correos.', '2026-03-20 15:00:00+00',
+    '{"from": "propuesta", "to": "perdido", "days_in_stage": 10.00, "lost_reason": "eligio_otro_creador"}'),
   -- Vitalé (relativa)
   (30, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', NULL, 'signal_detected',
     '4 anuncios activos en Meta', 'Categoría bienestar, Colombia. Pauta desde hace un mes.', (CURRENT_DATE - 31 + time '08:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e006"}'),
@@ -1449,9 +1453,27 @@ FROM (VALUES
     'Piden un TikTok y un Short para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m),
     'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q' || extract(quarter FROM CURRENT_DATE + 28) || '. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
   (38, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
-    'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}')
+    'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}'),
+  -- Cambios de etapa (VEN-5, r4): los mismos pasos que deal_stage_history
+  -- (sección 10), con la forma que deja moverNegocio (subject «A → B» y
+  -- metadata {from, to, days_in_stage}). Granos del Valle en marzo…
+  (48, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', NULL, 'stage_change',
+    'Contactado → En conversación', NULL, '2026-03-03 15:00:00+00', '{"from": "contactado", "to": "conversacion", "days_in_stage": 7.04}'),
+  -- …y el pitch de ahora, que pasó el negocio abierto a «Contactado».
+  (49, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', NULL, 'stage_change',
+    'Nuevo → Contactado', NULL, (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', '{"from": "nuevo", "to": "contactado", "days_in_stage": 2.92}')
 ) AS a(n, company_id, deal_id, contact_id, kind, subject, body, occurred_at, metadata)
 ON CONFLICT DO NOTHING;
+
+-- Una base sembrada antes de r4 tiene la pérdida de Granos del Valle
+-- como nota «Perdido» (la 29 de arriba, que ON CONFLICT DO NOTHING no
+-- reescribe). Se convierte en el cambio de etapa, solo si sigue siendo
+-- esa nota: es idempotente y no pisa nada que alguien haya escrito.
+UPDATE activity
+   SET kind = 'stage_change',
+       subject = 'Propuesta enviada → Perdido',
+       metadata = '{"from": "propuesta", "to": "perdido", "days_in_stage": 10.00, "lost_reason": "eligio_otro_creador"}'
+ WHERE id = '00000002-0000-4000-8000-00000ac7001d' AND kind = 'note' AND subject = 'Perdido';
 
 
 -- ---------------------------------------------------------------------
@@ -1662,7 +1684,7 @@ UPDATE app_user
 --                                    de una marca fuera del CRM—, 1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
---   activity                    47  (38 históricas + 9 de seguimiento, sección 11b)
+--   activity                    49  (40 históricas —3 de ellas cambios de etapa— + 9 de seguimiento, sección 11b)
 --   outbound_brief               1
 --   outbound_policy              1
 --   campaign                     4  (las cuatro de 0003, enlazadas aquí a su deal ganado)

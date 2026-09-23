@@ -413,6 +413,25 @@ export function formatTimeZoneName(timeZone: string, opts: LocaleOpts = {}): str
   return nombre("long") ?? timeZone;
 }
 
+const relativeCache = new Map<string, Intl.RelativeTimeFormat>();
+
+/**
+ * Hace cuántos días (o en cuántos), en el idioma del locale y con Intl:
+ * -3 → «hace 3 días», -1 → «ayer», 0 → «hoy» (es) · «3 days ago»,
+ * «yesterday», «today» (en). El número de días lo trae la consulta,
+ * contado en la zona del espacio: aquí no se restan fechas. Añadido por
+ * Ventas (VEN-5): «Último contacto: hace 3 días».
+ */
+export function formatRelativeDays(days: number, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  let rtf = relativeCache.get(locale);
+  if (!rtf) {
+    rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    relativeCache.set(locale, rtf);
+  }
+  return rtf.format(Math.trunc(days), "day");
+}
+
 /** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
 export function formatDaysRelative(days: number): string {
   if (days === 0) return "hoy";
@@ -456,6 +475,8 @@ export function formatterFor(settings: FormatSettings) {
     /** El nombre de la zona del workspace (u otra), para una frase: «hora estándar de Colombia». */
     zoneName: (tz: string = timeZone) => formatTimeZoneName(tz, base),
     daysRelative: formatDaysRelative,
+    /** «hace 3 días», «ayer», «hoy», en el idioma del workspace. Recibe días con signo (negativo es pasado). */
+    relativeDays: (days: number) => formatRelativeDays(days, base),
   };
 }
 

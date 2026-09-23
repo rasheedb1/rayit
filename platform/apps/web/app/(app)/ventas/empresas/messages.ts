@@ -81,6 +81,24 @@ export const FICHA = {
     error: "No se pudo guardar la siguiente acción.",
     doneError: "No se pudo marcar como hecha.",
     shortcut: "Enter guarda · Esc cancela",
+    /**
+     * El responsable de hoy ya no está en el espacio y la base no deja
+     * leer su nombre: se ofrece igual en «Quién», para que guardar la
+     * fecha no lo borre sin avisar.
+     */
+    formerMember: "Alguien que ya no está en el espacio",
+  },
+
+  /**
+   * «Hace cuántos días no le hablo» (VEN-5): la última llamada, correo o
+   * reunión de un negocio abierto, en la ficha, el tablero y la lista.
+   */
+  ultimoContacto: {
+    /** «Último contacto: hace 3 días». El relativo lo pone Intl, en el idioma del espacio. */
+    text: (relativo: string) => `Último contacto: ${relativo}`,
+    none: "Sin contacto todavía",
+    /** La columna de la lista del pipeline. */
+    column: "Último contacto",
   },
 
   /** El bloque de arriba de /ventas: lo vencido y lo de hoy (VEN-4). */
@@ -152,6 +170,24 @@ export const FICHA = {
     teclas: { note: "n", call: "l", email_sent: "c", meeting: "r" } satisfies Record<LoggableActivityKind, string>,
     /** Los atajos de una letra solo valen con el foco en el bloque «Actividad» (WCAG 2.1.4). */
     keys: (atajos: string) => `Con el foco en Actividad: ${atajos}`,
+    /**
+     * Tras registrar una llamada, un correo o una reunión en un negocio
+     * cuya siguiente acción está vencida o es de hoy: probablemente se
+     * acaba de hacer justo eso. Se pregunta, no se marca solo.
+     */
+    pendiente: {
+      question: (action: string) => `¿Era «${action}»?`,
+      markDone: "Marcarla hecha",
+      markDoneLabel: (action: string) => `Marcar «${action}» como hecha y poner la siguiente`,
+      dismiss: "No",
+      dismissLabel: (action: string) => `No era «${action}»: dejarla como está`,
+      /** De qué negocio es, cuando la empresa tiene varios abiertos. */
+      deal: (deal: string) => `En «${deal}».`,
+      /** Tras «Marcarla hecha» y Esc en el editor: se dice dónde quedó, no se calla. */
+      leftWithout: "Hecha. El negocio queda sin siguiente acción: ponla desde su línea en «Negocios».",
+      /** Lo que agrupa la pregunta, para el lector de pantalla. */
+      label: (action: string) => `Siguiente acción pendiente: «${action}»`,
+    },
     logged: {
       note: "Nota guardada.",
       call: "Llamada registrada. Cuenta como último contacto.",

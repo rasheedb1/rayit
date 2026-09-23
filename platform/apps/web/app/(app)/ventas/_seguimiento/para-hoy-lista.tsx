@@ -13,8 +13,13 @@ export interface FilaParaHoy {
   dealId: string;
   companyId: string;
   companyName: string;
-  /** «Renovación Q4 · Propuesta». */
-  subtitle: string;
+  /** «Renovación Q4»; null si el negocio se llama como la marca. */
+  dealName: string | null;
+  /**
+   * «Propuesta enviada», en su propia línea: unida al negocio con « · » y
+   * recortada, a 1440 px se perdía justo la etapa, que es lo útil.
+   */
+  stageLabel: string;
   data: SiguienteAccionData;
 }
 
@@ -121,12 +126,13 @@ export function ParaHoyLista({
       {visibles.length > 0 && (
         <ul ref={listRef} aria-label={t.listLabel} className="divide-y divide-border rounded-md border border-border">
           {visibles.map((r) => (
-            <li key={r.dealId} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-4">
+            <li key={r.dealId} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
               <div className="min-w-0">
                 <Link href={`/ventas/empresas/${r.companyId}`} className="text-sm font-medium text-ink hover:underline">
                   {r.companyName}
                 </Link>
-                {r.subtitle && <p className="mt-0.5 truncate text-xs text-muted">{r.subtitle}</p>}
+                {r.dealName && <p className="mt-0.5 break-words text-xs text-ink-2">{r.dealName}</p>}
+                <p className="mt-0.5 text-xs text-muted">{r.stageLabel}</p>
               </div>
               <SiguienteAccion
                 data={r.data}

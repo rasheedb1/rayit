@@ -39,7 +39,20 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
          AND (SELECT count(*) FROM signal) = 13
          AND (SELECT count(*) FROM deal) = 15
-         AND (SELECT count(*) FROM activity) = 47 AS ok;
+         AND (SELECT count(*) FROM activity) = 49 AS ok;
+
+-- (a2) La línea de tiempo de la demo enseña cambios de etapa (VEN-5):
+--      tres, con la forma de moverNegocio. El de «Perdido» lleva su
+--      motivo, que la ficha pinta en palabras.
+SELECT 'a2_cambios_de_etapa' AS check_id,
+       count(*) AS cambios,
+       count(*) FILTER (WHERE metadata ? 'from' AND metadata ? 'to' AND subject LIKE '% → %') AS con_forma,
+       count(*) FILTER (WHERE metadata->>'to' = 'perdido' AND metadata->>'lost_reason' = 'eligio_otro_creador') AS perdidos_con_motivo,
+       count(*) = 3
+         AND count(*) FILTER (WHERE metadata ? 'from' AND metadata ? 'to' AND subject LIKE '% → %') = 3
+         AND count(*) FILTER (WHERE metadata->>'to' = 'perdido' AND metadata->>'lost_reason' = 'eligio_otro_creador') = 1 AS ok
+FROM activity
+WHERE kind = 'stage_change';
 
 -- El último día de la serie de la cuenta es el ANTERIOR al día en que el
 -- seed corrió por primera vez: el job nocturno solo tiene cerrado ayer

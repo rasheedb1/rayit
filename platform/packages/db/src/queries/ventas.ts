@@ -333,7 +333,14 @@ export interface PipelineDealRow {
   nextActionUserId: string | null;
   nextActionUserName: string | null;
   dueState: DueState;
+  /** La última llamada, correo o reunión con la marca por este negocio, ISO en UTC (logActivity la mueve). */
   lastContactAt: string | null;
+  /**
+   * Hace cuántos días fue, contados por días de calendario en la zona del
+   * espacio (0 hoy, 1 ayer); null sin contacto. Sale de SQL para que la
+   * pantalla no reste fechas: «Último contacto: hace 3 días».
+   */
+  lastContactDays: number | null;
   expectedCloseDate: string | null;
   isWon: boolean;
   isLost: boolean;
@@ -1759,7 +1766,9 @@ export async function listPipeline(
             to_char(p.next_action_due AT TIME ZONE w.tz, 'HH24:MI') AS next_action_due_time,
             d.next_action_user_id, coalesce(nullif(btrim(nu.name), ''), nu.email::text) AS next_action_user_name,
             p.due_state,
-            p.last_contact_at, p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
+            to_char(p.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_contact_at,
+            ((now() AT TIME ZONE w.tz)::date - (p.last_contact_at AT TIME ZONE w.tz)::date) AS last_contact_days,
+            p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
             d.owner_user_id, u.name AS owner_name, d.lost_reason,
             round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0)::int AS days_in_stage
      FROM deal_pipeline p
@@ -2298,7 +2307,7 @@ interface PipelineRowSql {
   probability: string; weighted_amount: string | null; next_action: string | null;
   next_action_due: string | null; next_action_due_date: string | null; next_action_due_time: string | null;
   next_action_user_id: string | null; next_action_user_name: string | null;
-  due_state: DueState; last_contact_at: string | null;
+  due_state: DueState; last_contact_at: string | null; last_contact_days: number | null;
   expected_close_date: string | null; is_won: boolean; is_lost: boolean;
   owner_user_id: string | null; owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
 }
@@ -2324,6 +2333,7 @@ function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
     nextActionUserName: r.next_action_user_name,
     dueState: r.due_state,
     lastContactAt: r.last_contact_at,
+    lastContactDays: r.last_contact_days === null ? null : Number(r.last_contact_days),
     expectedCloseDate: r.expected_close_date,
     isWon: r.is_won,
     isLost: r.is_lost,

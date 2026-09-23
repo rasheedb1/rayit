@@ -45,6 +45,7 @@ const deals: BoardDeal[] = [
     quoteHref: `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
     lostReasonText: null,
     siguiente,
+    lastContact: { text: "Último contacto: hace 2 días", short: "hace 2 días", iso: "2026-09-21T15:00:00Z", date: "21 sep" },
   },
 ];
 
@@ -270,7 +271,7 @@ describe("PipelineBoard", () => {
       <PipelineBoard
         deals={[
           { ...deals[0]!, siguiente: { ...siguiente, action: null, due: null, dueText: null } },
-          { ...deals[0]!, id: "otro", name: "Cerrado", stageId: "ganado", stageLabel: "Ganado", quoteHref: null, siguiente: null },
+          { ...deals[0]!, id: "otro", name: "Cerrado", stageId: "ganado", stageLabel: "Ganado", quoteHref: null, siguiente: null, lastContact: null },
         ]}
         stages={stages}
         ctx={ctx}

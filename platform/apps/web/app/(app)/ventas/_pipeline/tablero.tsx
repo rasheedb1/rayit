@@ -12,8 +12,9 @@ import { moverNegocio } from "../actions";
 import { Aviso } from "../../_lib/aviso";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
-import type { SeguimientoContexto, SiguienteAccionData } from "../_seguimiento/datos";
+import type { SeguimientoContexto, SiguienteAccionData, UltimoContactoData } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
+import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
 
 /** Un negocio listo para pintar: montos y fechas ya formateados en el servidor. */
 export interface BoardDeal {
@@ -36,6 +37,12 @@ export interface BoardDeal {
    * cerrados, que no tienen: a un negocio ganado no le vence nada.
    */
   siguiente: SiguienteAccionData | null;
+  /**
+   * «Último contacto: hace 3 días» (VEN-5), o «Sin contacto todavía»;
+   * null en los cerrados. Hace cuántos días no se le habla es la señal de
+   * que un negocio se enfría.
+   */
+  lastContact: UltimoContactoData | null;
 }
 
 /** Un negocio abierto sin siguiente acción: la tarjeta lo marca en ámbar y lo dice. */
@@ -355,6 +362,7 @@ function DealCard({
 
       {/* La pastilla del vencimiento es la de la siguiente acción, abajo: una sola. */}
       <p className="mt-2 text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</p>
+      {deal.lastContact && <UltimoContacto data={deal.lastContact} className="mt-1" />}
 
       {deal.lostReasonText && <p className="mt-2 text-xs leading-4 text-muted">{deal.lostReasonText}</p>}
 

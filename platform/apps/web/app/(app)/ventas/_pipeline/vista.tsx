@@ -9,8 +9,9 @@ import { dealLabel } from "@/lib/negocio";
 import { FICHA } from "../empresas/messages";
 import { MESSAGES } from "../_lib/messages";
 import { lostReasonText, type PipelineForma } from "../_lib/estado";
-import { siguienteAccionData, type SeguimientoContexto } from "../_seguimiento/datos";
+import { siguienteAccionData, ultimoContacto, type SeguimientoContexto } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
+import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
@@ -95,6 +96,8 @@ export function PipelineView({
       const negocio = dealLabel(d.companyName, d.name);
       return siguienteAccionData(row, f, ctx, negocio ? `${d.companyName} · ${negocio}` : d.companyName);
     })(),
+    // Los días los cuenta listPipeline en SQL; aquí solo se escriben.
+    lastContact: ultimoContacto(d, f),
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,
@@ -200,6 +203,11 @@ function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx: SeguimientoCont
       header: t.columns.nextAction,
       render: (d) => (d.siguiente && ctx ? <SiguienteAccion data={d.siguiente} ctx={ctx} compact /> : ""),
     },
+    {
+      key: "contact",
+      header: FICHA.ultimoContacto.column,
+      render: (d) => (d.lastContact ? <UltimoContacto data={d.lastContact} short /> : ""),
+    },
     { key: "days", header: t.columns.daysInStage, align: "num", render: (d) => t.days(d.daysInStage) },
     {
       key: "quote",
@@ -254,6 +262,7 @@ function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx: SeguimientoContexto
         {d.stageLabel} · <span className="tabular-nums">{t.days(d.daysInStage)}</span>
         {d.lostReasonText && ` · ${d.lostReasonText}`}
       </p>
+      {d.lastContact && <UltimoContacto data={d.lastContact} className="mt-1" />}
       {d.siguiente && ctx && (
         <div className="mt-2">
           <SiguienteAccion data={d.siguiente} ctx={ctx} compact />

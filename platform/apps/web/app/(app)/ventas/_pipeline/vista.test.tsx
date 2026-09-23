@@ -7,7 +7,10 @@ import { formatterFor } from "@/lib/format";
 vi.mock("../actions", () => ({ moverNegocio: vi.fn() }));
 vi.mock("../empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn() }));
 
+import { MESSAGES } from "../_lib/messages";
 import { PipelineView } from "./vista";
+
+const MESSAGES_PIPELINE_LIST = MESSAGES.pipeline.listCaption;
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const CON_ACCION = "00000006-0000-4000-8000-000000000001";
@@ -32,7 +35,8 @@ const deal = (over: Partial<PipelineDealRow>): PipelineDealRow => ({
   nextActionUserId: null,
   nextActionUserName: null,
   dueState: "vencido",
-  lastContactAt: null,
+  lastContactAt: "2026-09-20T20:00:00Z",
+  lastContactDays: 3,
   expectedCloseDate: null,
   isWon: false,
   isLost: false,
@@ -51,6 +55,8 @@ const sinAccion = deal({
   nextActionDueDate: null,
   nextActionDueTime: null,
   dueState: "sin_fecha",
+  lastContactAt: null,
+  lastContactDays: null,
 });
 const deals = [deal({}), sinAccion];
 
@@ -126,10 +132,39 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
     expect(screen.getAllByText("· Laura").length).toBeGreaterThan(0);
   });
 
+  it("el último contacto se ve en la tarjeta: hace cuántos días, con la fecha en <time>; sin contacto, lo dice", () => {
+    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" ctx={ctx} />);
+    const columna = screen.getByTestId("columna-propuesta");
+    const hace = within(columna).getByText("Último contacto: hace 3 días");
+    expect(hace.tagName).toBe("TIME");
+    expect(hace).toHaveAttribute("dateTime", "2026-09-20T20:00:00Z");
+    expect(hace).toHaveAttribute("title", f.date("2026-09-20T20:00:00Z"));
+    expect(within(columna).getByText("Sin contacto todavía")).toHaveClass("text-muted");
+  });
+
+  it("en la lista, «Último contacto» es una columna y dice solo cuánto hace", () => {
+    render(<PipelineView deals={deals} stages={stages} f={f} forma="lista" ctx={ctx} />);
+    const tabla = screen.getByRole("table");
+    expect(within(tabla).getByRole("columnheader", { name: "Último contacto" })).toBeInTheDocument();
+    expect(within(tabla).getByText("hace 3 días")).toBeInTheDocument();
+    expect(within(tabla).getByText("Sin contacto todavía")).toBeInTheDocument();
+    // Y en el teléfono, la tarjeta de la lista lo dice entero.
+    expect(screen.getByRole("list", { name: MESSAGES_PIPELINE_LIST })).toHaveTextContent("Último contacto: hace 3 días");
+  });
+
+  it("ayer y hoy se dicen con palabras, en el idioma del espacio", () => {
+    render(<PipelineView deals={[deal({ lastContactDays: 1 }), deal({ id: SIN_ACCION, lastContactDays: 0 })]} stages={stages} f={f} forma="tablero" ctx={ctx} />);
+    expect(screen.getByText("Último contacto: ayer")).toBeInTheDocument();
+    expect(screen.getByText("Último contacto: hoy")).toBeInTheDocument();
+  });
+
   it("un negocio cerrado no lleva siguiente acción aunque la fila la conserve", () => {
     const ganado = deal({ stageId: "ganado", stageLabel: "Ganado", isWon: true, nextAction: "Enviar pitch" });
     render(<PipelineView deals={[ganado]} stages={stages} f={f} forma="lista" ctx={ctx} />);
     expect(screen.queryByText("Enviar pitch")).toBeNull();
     expect(screen.queryByRole("button", { name: /siguiente acción/ })).toBeNull();
+    // Ni «último contacto»: la señal de que se enfría es de los abiertos.
+    // (el encabezado de la columna sí está: es de la tabla, no de la fila).
+    expect(screen.queryByText(/Último contacto:|Sin contacto todavía|hace 3 días/)).toBeNull();
   });
 });

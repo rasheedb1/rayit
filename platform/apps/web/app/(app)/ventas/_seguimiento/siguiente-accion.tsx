@@ -91,7 +91,7 @@ export function SiguienteAccion({
 
   if (editing) {
     return (
-      <Editor
+      <EditorSiguienteAccion
         data={data}
         ctx={ctx}
         compact={compact}
@@ -151,7 +151,14 @@ export function SiguienteAccion({
   );
 }
 
-function Editor({
+/**
+ * El formulario de la siguiente acción: qué, cuándo (día y hora en la
+ * zona del espacio) y quién. Enter guarda, Esc cancela. Lo abre la línea
+ * de arriba y, tras registrar una llamada que era justo la acción
+ * pendiente, «Marcarla hecha» del registro rápido (cerrar-pendiente.tsx).
+ * `blank` lo abre vacío y para mañana: la acción anterior ya se hizo.
+ */
+export function EditorSiguienteAccion({
   data,
   ctx,
   compact,

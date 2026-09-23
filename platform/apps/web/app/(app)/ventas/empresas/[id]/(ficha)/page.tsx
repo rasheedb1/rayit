@@ -22,8 +22,9 @@ import { RELATIONSHIP_META, lostReasonText } from "../../../_lib/estado";
 import { MESSAGES } from "../../../_lib/messages";
 import { countryOptions } from "../../../_lib/paises";
 import { quoteHref } from "../../../_pipeline/vista";
-import { contextoDeSeguimiento, siguienteAccionData } from "../../../_seguimiento/datos";
+import { contextoDeSeguimiento, siguienteAccionData, ultimoContacto, type SiguienteAccionData } from "../../../_seguimiento/datos";
 import { SiguienteAccion } from "../../../_seguimiento/siguiente-accion";
+import { UltimoContacto } from "../../../_seguimiento/ultimo-contacto";
 import { FICHA } from "../../messages";
 import { Bloque } from "../bloque";
 import { Cadena } from "../cadena";
@@ -102,6 +103,15 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   // que la lista de negocios (listPipeline), no de una segunda.
   const acciones = new Map(deals.flatMap((d) => { const a = nextActionOf(d); return a ? [[d.id, a] as const] : []; }));
   const ctx = contextoDeSeguimiento(owners, [...acciones.values()], dates, f);
+  // La línea de cada negocio abierto, ya formateada: la pinta la lista de
+  // negocios y la usa el registro rápido para proponer «Marcarla hecha».
+  const nombreDe = (d: (typeof deals)[number]) => dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName;
+  const siguientes: Record<string, SiguienteAccionData> = Object.fromEntries(
+    deals.flatMap((d) => {
+      const a = acciones.get(d.id);
+      return a ? [[d.id, siguienteAccionData(a, f, ctx, `${company.name} · ${nombreDe(d)}`)] as const] : [];
+    }),
+  );
   // El nicho en el idioma del espacio, si el catálogo lo tiene; si no, en español.
   const ingles = f.locale.toLowerCase().startsWith("en");
   const nicho = niches.map((n) => (ingles && n.nameEn ? n.nameEn : n.nameEs));
@@ -167,8 +177,9 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                 {deals.map((d) => {
                   const abierto = !d.isWon && !d.isLost;
                   const motivo = lostReasonText(d.lostReason);
-                  const negocio = dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName;
-                  const accion = abierto ? acciones.get(d.id) : undefined;
+                  const negocio = nombreDe(d);
+                  const siguiente = abierto ? siguientes[d.id] : undefined;
+                  const contacto = ultimoContacto(d, f);
                   return (
                     <li key={d.id} className="space-y-3 p-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -178,6 +189,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                             {d.stageLabel}
                             {motivo && <span className="text-muted"> · {motivo}</span>}
                           </p>
+                          {contacto && <UltimoContacto data={contacto} className="mt-0.5" />}
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="whitespace-nowrap text-sm tabular-nums text-ink">
@@ -194,7 +206,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                           )}
                         </div>
                       </div>
-                      {accion && <SiguienteAccion data={siguienteAccionData(accion, f, ctx, `${company.name} · ${negocio}`)} ctx={ctx} />}
+                      {siguiente && <SiguienteAccion data={siguiente} ctx={ctx} />}
                       <Cadena links={chain.byDeal[d.id]} invoices={invoices.byId} f={f} label={x.cadena.label(negocio)} closed={!abierto} />
                     </li>
                   );
@@ -218,10 +230,12 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                 .sort((a, b) => Number(a.isWon || a.isLost) - Number(b.isWon || b.isLost))
                 .map((d) => ({
                   id: d.id,
-                  label: dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName,
+                  label: nombreDe(d),
                   stage: d.stageLabel,
                   open: !d.isWon && !d.isLost,
                 }))}
+              siguientes={siguientes}
+              ctx={ctx}
               contacts={contacts
                 .filter((c) => !c.optedOut)
                 .map((c) => ({ id: c.id, label: c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : MESSAGES.contacto.noName) }))}

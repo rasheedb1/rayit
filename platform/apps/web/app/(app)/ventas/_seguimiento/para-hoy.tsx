@@ -47,8 +47,9 @@ export async function ParaHoy() {
       dealId: r.dealId,
       companyId: r.companyId,
       companyName: r.companyName,
-      subtitle: [negocio, r.stageLabel].filter(Boolean).join(" · "),
-      data: siguienteAccionData(r, f, dates, negocio ? `${r.companyName} · ${negocio}` : r.companyName),
+      dealName: negocio,
+      stageLabel: r.stageLabel,
+      data: siguienteAccionData(r, f, ctx, negocio ? `${r.companyName} · ${negocio}` : r.companyName),
     };
   });
 

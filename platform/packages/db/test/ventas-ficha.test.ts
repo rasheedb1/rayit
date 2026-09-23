@@ -51,6 +51,8 @@ const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000fe01';
 const COMPANY_AJENA = '00000009-0000-4000-8000-0000000000fe';
 const DEAL_AJENO = '00000009-0000-4000-8000-0000000dfe01';
 const USER_AJENO = '00000009-0000-4000-8000-0000000000a1';
+/** Alguien que fue responsable en el espacio de Laura y ya no tiene membresía en ninguno. */
+const USER_EX = '00000009-0000-4000-8000-0000000000a2';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
@@ -87,6 +89,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-ficha', 'Workspace ajeno', 'creator', 'EUR', 'Europe/Madrid')
     ON CONFLICT DO NOTHING;
     INSERT INTO app_user (id, email, name) VALUES ('${USER_AJENO}', 'ajeno@ficha.test', 'Persona Ajena') ON CONFLICT DO NOTHING;
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_EX}', 'ex@ficha.test', 'Se fue') ON CONFLICT DO NOTHING;
     INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'owner') ON CONFLICT DO NOTHING;
     INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${COMPANY_AJENA}', 'Marca de la ficha ajena', 'fichaajena.es', '${WORKSPACE_AJENO}')
     ON CONFLICT DO NOTHING;
@@ -129,6 +132,35 @@ describe('VEN-5 · registrar una actividad', () => {
     assert.ok(despues, 'tiene último contacto');
     assert.ok(!antes || despues > antes, `last_contact_at avanza (${antes} → ${despues})`);
     assert.ok(Math.abs(Date.parse(despues) - Date.now()) < 60_000, 'y es ahora');
+  });
+
+  test('el pipeline dice hace cuántos días fue el último contacto, contado en SQL', async () => {
+    // La llamada de la prueba anterior fue ahora mismo.
+    const fila = (await laura((tx) => listPipeline(tx, { companyId: COMPANY_CAFE_ALMA }))).find((d) => d.id === DEAL_CAFE_RENOVACION);
+    assert.equal(fila?.lastContactDays, 0, 'hoy');
+    assert.match(fila?.lastContactAt ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, 'ISO en UTC, como los demás instantes');
+    // Un negocio abierto que no ha hablado con nadie: sin fecha y sin días.
+    const olla = (await laura((tx) => listPipeline(tx))).find((d) => d.id === DEAL_OLLA);
+    assert.equal(olla?.lastContactAt, null);
+    assert.equal(olla?.lastContactDays, null);
+  });
+
+  test('registrar una llamada en un negocio con la acción vencida la propone para marcarla hecha', async () => {
+    const antes = (await laura((tx) => listPipeline(tx, { companyId: COMPANY_GRANOS }))).find((d) => d.id === DEAL_GRANOS);
+    assert.equal(antes?.dueState, 'vencido', 'el seed deja vencida «Llamar a Laura Quintero por la propuesta»');
+    assert.ok((antes?.lastContactDays ?? 0) > 0);
+    const res = await laura((tx) => logActivity(tx, { companyId: COMPANY_GRANOS, kind: 'call', dealId: DEAL_GRANOS }));
+    assert.deepEqual(res.pendingActions, [{ dealId: DEAL_GRANOS, action: 'Llamar a Laura Quintero por la propuesta' }]);
+    // La llamada cuenta como contacto de hoy, y la acción sigue ahí: nada se marca solo.
+    const despues = (await laura((tx) => listPipeline(tx, { companyId: COMPANY_GRANOS }))).find((d) => d.id === DEAL_GRANOS);
+    assert.equal(despues?.lastContactDays, 0);
+    assert.equal(despues?.nextAction, 'Llamar a Laura Quintero por la propuesta');
+    // Una nota no es contacto: no propone nada.
+    const nota = await laura((tx) => logActivity(tx, { companyId: COMPANY_GRANOS, kind: 'note', body: 'Laura sale de vacaciones.', dealId: DEAL_GRANOS }));
+    assert.deepEqual(nota.pendingActions, []);
+    // Un negocio con la acción para dentro de días tampoco.
+    const futura = await laura((tx) => logActivity(tx, { companyId: COMPANY_VITALE, kind: 'email_sent', dealId: DEAL_VITALE_SNACKS }));
+    assert.deepEqual(futura.pendingActions, []);
   });
 
   test('una nota no es contacto: no mueve last_contact_at', async () => {
@@ -200,6 +232,11 @@ describe('VEN-5 · registrar una actividad', () => {
     await rejects(laura((tx) => logActivity(tx, { companyId: COMPANY_CAFE_ALMA, kind: 'note', body: '   ' })), 'InvalidActivityBody');
     await rejects(
       laura((tx) => logActivity(tx, { companyId: COMPANY_CAFE_ALMA, kind: 'call', occurredOn: diaEnBogota(2) })),
+      'InvalidActivityDate',
+    );
+    // Un día que no existe es su error de campo, no uno de Postgres.
+    await rejects(
+      laura((tx) => logActivity(tx, { companyId: COMPANY_CAFE_ALMA, kind: 'call', occurredOn: '2026-02-30' })),
       'InvalidActivityDate',
     );
     await rejects(
@@ -300,6 +337,11 @@ describe('VEN-4 · la siguiente acción', () => {
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: diaEnBogota(-1), dueTime: '23:00' })), 'PastDueDate');
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: manana, dueTime: '25:00' })), 'InvalidDueDate');
     await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: '2026-02-30x' })), 'InvalidDueDate');
+    // V8 acepta Date.parse('2026-02-30T00:00:00Z') y Postgres no: tiene que
+    // volver InvalidDueDate, no «date/time field value out of range».
+    for (const imposible of ['2026-02-30', '2027-02-31', '2026-04-31']) {
+      await rejects(laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: imposible })), 'InvalidDueDate');
+    }
     await rejects(
       laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'x', dueDate: manana, responsibleUserId: USER_AJENO })),
       'InvalidResponsible',
@@ -378,6 +420,25 @@ describe('VEN-4 · la siguiente acción', () => {
     const paraHoy = await laura((tx) => listPipeline(tx, { seguimiento: 'para_hoy' }));
     assert.deepEqual(paraHoy.map((d) => d.id).sort(), hoy.rows.map((r) => r.dealId).sort());
     assert.ok(paraHoy.every((d) => d.dueState === 'vencido' || d.dueState === 'hoy'));
+  });
+
+  test('un responsable que ya dejó el espacio se conserva al cambiar solo la fecha; uno nuevo tiene que ser del espacio', async () => {
+    const manana = diaEnBogota(1);
+    await t.admin(`UPDATE deal SET next_action = 'Llamar a Sofía', next_action_user_id = '${USER_EX}' WHERE id = '${DEAL_OLLA}'`);
+    // El formulario manda el responsable que ya tenía: guardar no falla en «Quién» ni lo borra.
+    await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Llamar a Sofía', dueDate: manana, dueTime: '10:00', responsibleUserId: USER_EX }));
+    const fila = (await laura((tx) => listPipeline(tx))).find((d) => d.id === DEAL_OLLA);
+    assert.equal(fila?.nextActionUserId, USER_EX);
+    assert.equal(fila?.nextActionDueDate, manana);
+    // Pasárselo a alguien que no es del espacio, no.
+    await rejects(
+      laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Llamar a Sofía', dueDate: manana, responsibleUserId: USER_AJENO })),
+      'InvalidResponsible',
+    );
+    // Y cambiarlo por alguien del espacio, sí.
+    await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Llamar a Sofía', dueDate: manana, responsibleUserId: USER_LAURA }));
+    const ahora = (await laura((tx) => listPipeline(tx))).find((d) => d.id === DEAL_OLLA);
+    assert.equal(ahora?.nextActionUserId, USER_LAURA);
   });
 });
 

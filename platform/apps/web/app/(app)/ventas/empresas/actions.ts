@@ -13,7 +13,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX } from "@mc/core";
+import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
   FichaError,
@@ -59,8 +59,9 @@ function revalidate(companyId: string | null): void {
   if (companyId) revalidatePath(`/ventas/empresas/${companyId}`);
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+// El día y la hora se validan con los mismos predicados que la consulta
+// (@mc/core): isIsoDate rechaza también el 30 de febrero, que una regex
+// dejaba pasar hasta Postgres.
 /** Vacío o un uuid; el mensaje lo pone quien lo usa. */
 const optionalUuid = (message?: string) => z.string().refine((v) => v === "" || UUID_RE.test(v), message);
 
@@ -71,8 +72,8 @@ const optionalUuid = (message?: string) => z.string().refine((v) => v === "" || 
 const siguienteSchema = z.object({
   dealId: z.string().regex(UUID_RE, FICHA.siguiente.error),
   action: z.string().trim().min(1, F.InvalidNextAction).max(NEXT_ACTION_MAX, F.InvalidNextAction),
-  dueDate: z.string().regex(ISO_DATE, F.InvalidDueDate),
-  dueTime: z.string().refine((v) => v === "" || TIME.test(v), F.InvalidDueDate),
+  dueDate: z.string().refine(isIsoDate, F.InvalidDueDate),
+  dueTime: z.string().refine((v) => v === "" || isClockTime(v), F.InvalidDueDate),
   responsibleUserId: optionalUuid(F.InvalidResponsible),
 });
 
@@ -151,15 +152,28 @@ const actividadSchema = z.object({
   body: z.string().trim().max(ACTIVITY_BODY_MAX, F.InvalidActivityBody),
   dealId: optionalUuid(),
   contactId: optionalUuid(),
-  occurredOn: z.string().refine((v) => v === "" || ISO_DATE.test(v), F.InvalidActivityDate),
+  occurredOn: z.string().refine((v) => v === "" || isIsoDate(v), F.InvalidActivityDate),
 });
+
+/** Una siguiente acción vencida o de hoy en un negocio al que se le acaba de registrar un contacto. */
+export interface AccionPendiente {
+  dealId: string;
+  action: string;
+}
+
+/** Lo que vuelve de registrar: lo de siempre y, si las hay, las acciones que ese contacto pudo cumplir. */
+export interface RegistroState extends VentasState {
+  pendientes?: AccionPendiente[];
+}
 
 /**
  * Registra una nota, una llamada, un correo o una reunión en la ficha.
  * Las tres últimas mueven el último contacto del negocio (o de todos los
- * abiertos de la empresa si no se eligió uno): lo hace logActivity.
+ * abiertos de la empresa si no se eligió uno): lo hace logActivity, que
+ * además dice qué negocios tocados tienen la siguiente acción vencida o
+ * de hoy. Esas vuelven en `pendientes` y la ficha pregunta si era esa.
  */
-export async function registrarActividad(_prev: VentasState, formData: FormData): Promise<VentasState> {
+export async function registrarActividad(_prev: RegistroState, formData: FormData): Promise<RegistroState> {
   const t = FICHA.actividad;
   const parsed = actividadSchema.safeParse({
     companyId: field(formData, "companyId"),
@@ -176,8 +190,9 @@ export async function registrarActividad(_prev: VentasState, formData: FormData)
   }
   const v = parsed.data;
   if (v.kind === "note" && v.body === "") return { errors: { body: F.InvalidActivityBody } };
+  let pendientes: AccionPendiente[];
   try {
-    await withWorkspace((tx) =>
+    ({ pendingActions: pendientes } = await withWorkspace((tx) =>
       logActivity(tx, {
         companyId: v.companyId,
         kind: v.kind,
@@ -186,7 +201,7 @@ export async function registrarActividad(_prev: VentasState, formData: FormData)
         contactId: v.contactId || null,
         occurredOn: v.occurredOn || null,
       }),
-    );
+    ));
   } catch (err) {
     const message = messageOf(err, t.error);
     const code = codeOf(err);
@@ -197,7 +212,7 @@ export async function registrarActividad(_prev: VentasState, formData: FormData)
     return { message };
   }
   revalidate(v.companyId);
-  return { ok: true, notice: t.logged[v.kind], stamp: Date.now() };
+  return { ok: true, notice: t.logged[v.kind], stamp: Date.now(), ...(pendientes.length > 0 ? { pendientes } : {}) };
 }
 
 /**

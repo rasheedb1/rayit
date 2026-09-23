@@ -10,7 +10,8 @@ vi.mock("../empresas/actions", () => ({
   marcarHecha: (...a: unknown[]) => marcarHecha(...a),
 }));
 
-import { siguienteAccionData, type SeguimientoContexto } from "./datos";
+import { contextoDeSeguimiento, opcionesDeResponsable, siguienteAccionData, type SeguimientoContexto } from "./datos";
+import { FICHA } from "../empresas/messages";
 import { SiguienteAccion, horaPropuesta } from "./siguiente-accion";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
@@ -66,6 +67,29 @@ describe("siguienteAccionData", () => {
     const d = siguienteAccionData(sinAccion, f, ctx, LABEL);
     expect(d.due).toBeNull();
     expect(d.form).toEqual({ dueDate: "2026-09-24", dueTime: "15:00", responsibleUserId: LAURA });
+  });
+
+  it("no propone como responsable a un dueño que ya dejó el espacio: guardar fallaría en «Quién» sin haberlo tocado", () => {
+    const EX = "00000002-0000-4000-8000-0000000000ff";
+    const d = siguienteAccionData({ ...sinAccion, ownerUserId: EX }, f, ctx, LABEL);
+    expect(d.form.responsibleUserId).toBe("");
+  });
+});
+
+describe("opcionesDeResponsable", () => {
+  const EX = "00000002-0000-4000-8000-0000000000ff";
+  it("el responsable de hoy que ya no está en el espacio se ofrece con su nombre, para no borrarlo al guardar", () => {
+    const opciones = opcionesDeResponsable(ctx.owners, [{ ...vencida, responsibleUserId: EX, responsibleName: "Marta" }]);
+    expect(opciones.at(-1)).toEqual({ userId: EX, label: "Marta" });
+  });
+
+  it("si la base no deja leer su nombre, se ofrece igual: el Select no cae en «Sin responsable»", () => {
+    const opciones = opcionesDeResponsable(ctx.owners, [{ ...vencida, responsibleUserId: EX, responsibleName: null }]);
+    expect(opciones.at(-1)).toEqual({ userId: EX, label: FICHA.siguiente.formerMember });
+    const ctxConEx = contextoDeSeguimiento(ctx.owners, [{ ...vencida, responsibleUserId: EX, responsibleName: null }], { today: "2026-09-23", tomorrow: "2026-09-24", now: "17:10", nextHour: "18:00", tz: "America/Bogota" }, f);
+    render(<SiguienteAccion data={siguienteAccionData({ ...vencida, responsibleUserId: EX, responsibleName: null }, f, ctxConEx, LABEL)} ctx={ctxConEx} />);
+    fireEvent.click(screen.getByRole("button", { name: `Cambiar la siguiente acción de «${LABEL}»` }));
+    expect(screen.getByLabelText("Quién")).toHaveValue(EX);
   });
 });
 

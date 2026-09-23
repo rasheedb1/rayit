@@ -9,7 +9,9 @@ import { Field, Select, Textarea } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
 import { Aviso } from "../../../_lib/aviso";
 import { useVentasForm } from "../../_lib/use-ventas-form";
-import { registrarActividad } from "../actions";
+import { CerrarPendiente } from "../../_seguimiento/cerrar-pendiente";
+import type { SeguimientoContexto, SiguienteAccionData } from "../../_seguimiento/datos";
+import { registrarActividad, type AccionPendiente, type RegistroState } from "../actions";
 import { FICHA } from "../messages";
 import { abrirBloqueDe } from "./bloque";
 
@@ -51,12 +53,18 @@ function escribiendo(target: EventTarget | null): boolean {
  * abiertos (lo decide logActivity en la base). Al registrar, el texto se
  * vacía, el tipo se queda y el aviso lo dice; la actividad aparece arriba
  * de la línea de tiempo cuando la ficha se revalida.
+ *
+ * Si ese contacto cae en un negocio con la siguiente acción vencida o de
+ * hoy, debajo del aviso se pregunta «¿Era “…”?» con «Marcarla hecha», que
+ * la cierra y abre aquí mismo el editor de la siguiente (CerrarPendiente).
  */
 export function RegistroRapido({
   companyId,
   deals,
   contacts,
   today,
+  siguientes,
+  ctx,
 }: {
   companyId: string;
   /**
@@ -69,15 +77,27 @@ export function RegistroRapido({
   contacts: { id: string; label: string }[];
   /** Hoy en la zona del espacio: el valor por defecto y el máximo de «Cuándo». */
   today: string;
+  /**
+   * La siguiente acción de cada negocio abierto, ya formateada (la misma
+   * que pinta la lista de negocios), y el contexto del editor: con ellos se
+   * propone marcar hecha la acción pendiente. Sin ellos, no se propone.
+   */
+  siguientes?: Record<string, SiguienteAccionData>;
+  ctx?: SeguimientoContexto;
 }) {
   const t = FICHA.actividad;
   const [kind, setKind] = useState<LoggableActivityKind>("note");
   const [occurredOn, setOccurredOn] = useState(today);
   const [notice, setNotice] = useState<string | undefined>();
+  /** Las acciones pendientes que el último registro pudo haber cumplido. */
+  const [pendientes, setPendientes] = useState<AccionPendiente[]>([]);
   const bodyId = `registro-${companyId}-body`;
-  const { state, pending, formRef, onSubmit, errors } = useVentasForm(registrarActividad, (s) => {
+  // RegistroState es VentasState con `pendientes` opcional: el hook lo
+  // acepta tal cual y aquí se lee con su tipo.
+  const { state, pending, formRef, onSubmit, errors } = useVentasForm(registrarActividad, (s: RegistroState) => {
     setNotice(s.notice);
     setOccurredOn(today);
+    setPendientes(s.pendientes ?? []);
   });
 
   const abiertos = deals.filter((d) => d.open);
@@ -119,10 +139,12 @@ export function RegistroRapido({
   }
 
   return (
+    <>
     <form
       ref={formRef}
       onSubmit={(e) => {
         setNotice(undefined);
+        setPendientes([]);
         onSubmit(e);
       }}
       noValidate
@@ -183,6 +205,7 @@ export function RegistroRapido({
 
       <Aviso message={state.message} notice={notice} className="mt-3" />
 
+
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
         <Button type="submit" size="sm" variant="primary" loading={pending}>
           {t.submit}
@@ -191,5 +214,31 @@ export function RegistroRapido({
         <span className="hidden text-xs text-muted sm:inline">{t.keys(TECLAS_TEXTO)}</span>
       </div>
     </form>
+    {/* Fuera del <form> del registro: «Marcarla hecha» y el editor de la
+        siguiente son formularios propios, y un formulario no va dentro de
+        otro. La región está siempre montada para que el lector de
+        pantalla anuncie la pregunta cuando aparece. */}
+    {ctx && siguientes && (
+      <div aria-live="polite" className={pendientes.length > 0 ? "mt-3 space-y-2" : undefined}>
+        {pendientes.flatMap((p) => {
+          const data = siguientes[p.dealId];
+          if (!data) return [];
+          return [
+            <CerrarPendiente
+              key={p.dealId}
+              action={p.action}
+              dealName={abiertos.length > 1 ? (deals.find((d) => d.id === p.dealId)?.label ?? null) : null}
+              data={data}
+              ctx={ctx}
+              onClose={(msg) => {
+                setPendientes((prev) => prev.filter((x) => x.dealId !== p.dealId));
+                if (msg) setNotice(msg);
+              }}
+            />,
+          ];
+        })}
+      </div>
+    )}
+    </>
   );
 }
