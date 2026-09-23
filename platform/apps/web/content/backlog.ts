@@ -192,7 +192,7 @@ export const STORIES: readonly Story[] = [
     desc: "pg-boss sobre la base, job_definition cargado, job_run registrando duración y errores. El job oauth.refresh renueva tokens antes de que venzan. Cada job vive en la carpeta de su módulo.",
     done: "make worker toma un job de la cola, lo registra, y un token con access_expires_at cercano se renueva solo.",
     status: "hecho",
-    note: "Hecha el 21-sep; 0014 aplicada en Supabase. Contra Supabase el worker sigue sin correr (23-sep): faltan CREATE SCHEMA pgboss y GRANT mc_worker TO mc_migrator con el token de administración (docs/propuestas/CON-2.md §3.1). Los refreshers reales llegaron con CON-3.",
+    note: "Hecha el 21-sep; 0014 aplicada en Supabase. 23-sep (WRK): el worker sigue sin correr contra Supabase: muere en SET ROLE mc_worker. Con el modo --once (una pasada, sin pg-boss, probado) basta un comando de administración: crear mc_worker_login miembro de mc_worker (docs/propuestas/WRK.md §1, Rasheed). Recomendado: --once cada hora desde GitHub Actions, workflow escrito y apagado hasta acordarlo con Rasheed (CIM-7).",
   },
   {
     id: "CON-2b", module: "CON", owner: "nicolas", size: "S", sprint: 2, deps: ["CIM-2", "CON-2"],
@@ -213,10 +213,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
     title: "Pantalla Conexiones",
-    desc: "Lista sobre connection_health, botón para conectar cada red, estado (activa, vencida, necesita reautorizar), horas desde la última sincronización, y el paso manual «activa Analytics en TikTok».",
+    desc: "Una sola tabla sobre connection_health con las dos clases de fila (por @ y autorizada), estado derivado del reloj (activa, vence pronto, vencida, necesita reautorizar, error), horas desde la última sincronización, «Conectar» por red, «Reautorizar» en rojo y el paso manual «Activa Analytics en TikTok».",
     done: "Una conexión con token vencido se ve en rojo con el botón de reautorizar.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/CON-4-pantalla-conexiones (en GitHub, sin fusionar). Estado calculado con access_expires_at y el reloj, no copiado de social_connection.status; «Conectar» y «Reautorizar» detrás de OAUTH_CONNECT=1, que ya está en producción. Abre con requirePermission (ACC-1); la bitácora queda en TODO(ACC-2). Detalle en docs/propuestas/CON-4.md.",
+    status: "hecho",
+    note: "23-sep: en main y en producción (cierre CON-B). Una tabla con las dos clases de fila; el estado sale del reloj, no de social_connection.status: vencida sin renovación en rojo con «Reautorizar», vencida con renovación viva «Se renueva sola» (depende del worker, que aún no corre en producción; reautorizar queda como salida secundaria). En la fila, «Conectada por» (ACC-8), publicaciones en seguimiento (CON-5) y qué dato falta y por qué (CON-7, metric_gap). Quien solo ve no ve botones; sin conexiones.* es 404 (ACC-5). La bitácora la escriben las consultas (ACC-2). Detalle en docs/propuestas/CIERRE-CON-B.md.",
   },
   {
     id: "CON-10", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1"],

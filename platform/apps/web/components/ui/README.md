@@ -14,7 +14,7 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
 | `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
-| `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
+| `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>`. `opts` toma el locale y la zona del workspace (`formatterFor`); sin él, es-CO y UTC. |
 | `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. `deltaText` opcional para un delta que no es relativo («+2,1 puntos»). |
 | `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, error, fila clicable. Cabecera fija con `maxHeight` (scroll interno). `sort` y `page` previstos sin implementar. |
 | `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. `shades` (CAM-3): varias ventanas con tono `accent` o `muted`, como la línea base y la campaña. Cliente. |

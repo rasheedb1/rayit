@@ -1,199 +1,64 @@
 import type { Metadata } from "next";
-import { loadOAuthApps, type OAuthProviderId } from "@mc/connectors";
-import type { AccountRow, ConnectionPlatformId, ConnectionStatus } from "@mc/db";
+import { getMetricRequirement, type MetricRequirement } from "@mc/db";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
-import { DataAsOf } from "@/components/ui/data-as-of";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
-import { Pill, type PillKind } from "@/components/ui/pill";
 import { flags } from "@/content/flags";
-import { formatDate, formatDelta, formatInt, type Formatter, formatterFor } from "@/lib/format";
-import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions";
-import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
-import { getCuentasService } from "./_lib/cuentas-server";
-import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
-import { displayNameOf, MESSAGES } from "./_lib/messages";
-import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
-import { ConnectDialog } from "./connect-dialog";
+import { formatterFor, type Formatter } from "@/lib/format";
+import { puede } from "@/lib/permisos";
 import { requireModuleAccess } from "@/lib/permisos/modulo";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { agregarCuenta } from "./actions";
+import { getCuentasService } from "./_lib/cuentas-server";
+import { OWNERSHIP_DECLARATION_ES, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
+import { withWorkspace } from "./_lib/db";
+import { entornoDeConexion } from "./_lib/entorno";
+import { accesoDe, filaDeCuenta, type FilaDeCuenta } from "./_lib/estado";
+import { MESSAGES } from "./_lib/messages";
+import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
+import { Conectar } from "./conectar";
+import { PasosManuales } from "./pasos-manuales";
+import { TablaDeCuentas } from "./tabla";
 
-export const metadata: Metadata = { title: "Cuentas" };
+export const metadata: Metadata = { title: MESSAGES.meta.title };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
-const STATUS_PILL: Record<ConnectionStatus, { kind: PillKind; text: string }> = {
-  active: { kind: "good", text: "Activa" },
-  needs_reauth: { kind: "bad", text: "Necesita reautorizar" },
-  expired: { kind: "bad", text: "Vencida" },
-  revoked: { kind: "bad", text: "Revocada" },
-  error: { kind: "bad", text: "No se pudo leer" },
-  disabled: { kind: "neutral", text: "Quitada" },
-};
-
-const SIN_DATO = <span className="text-xs text-muted">Sin dato</span>;
-
-/**
- * Debajo del @: el nombre público de la cuenta y, si la conectó un
- * tercero (ACC-8), quién y cuándo. Cuando la conectó el propio titular
- * no se dice nada: la ausencia de la línea es la información.
- */
-function AccountSub({ row, f }: { row: AccountRow; f: Formatter }) {
-  const by = row.connectedBy;
-  if (!row.displayName && !by) return null;
-  return (
-    <>
-      {row.displayName && <span className="block">{row.displayName}</span>}
-      {by && <span className="block">{MESSAGES.list.connectedBy({ who: displayNameOf(by) ?? MESSAGES.list.someoneFromTheTeam, when: f.date(by.at) })}</span>}
-    </>
-  );
-}
-
-const columns = (f: Formatter): Column<AccountRow>[] => [
-  {
-    key: "account",
-    header: "Cuenta",
-    render: (r) => <CellMain sub={<AccountSub row={r} f={f} />}>{`@${r.handle ?? r.externalAccountId}`}</CellMain>,
-  },
-  { key: "network", header: "Red", render: (r) => PLATFORM_NAME[r.platformId] },
-  {
-    key: "followers",
-    header: "Seguidores",
-    align: "num",
-    render: (r) => {
-      const f = r.latest?.followers ?? null;
-      if (f === null) return SIN_DATO;
-      const prev = r.followersWeekAgo;
-      const delta = prev !== null && prev > 0 ? formatDelta((f - prev) / prev) + " en 7 días" : undefined;
-      return <CellMain sub={delta}>{formatInt(f)}</CellMain>;
-    },
-  },
-  {
-    key: "media",
-    header: "Publicaciones",
-    align: "num",
-    // Dos cifras distintas y a propósito: lo que la red dice que tiene
-    // la cuenta, y cuántas publicaciones seguimos nosotros (CON-5).
-    // «En seguimiento» y no «con métricas»: entre que el recolector las
-    // descubre y las mide pasan horas, y prometer una medida que aún no
-    // existe es peor que no decir nada.
-    render: (r) => {
-      const seguidas = r.postsCount > 0 ? `${formatInt(r.postsCount)} en seguimiento` : undefined;
-      if (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined) {
-        return seguidas ? <CellMain sub={seguidas}>{SIN_DATO}</CellMain> : SIN_DATO;
-      }
-      return <CellMain sub={seguidas}>{formatInt(r.latest.mediaCount)}</CellMain>;
-    },
-  },
-  {
-    key: "views",
-    header: "Vistas",
-    align: "num",
-    render: (r) => (r.latest?.views === null || r.latest?.views === undefined ? SIN_DATO : formatInt(r.latest.views)),
-  },
-  {
-    key: "source",
-    header: "Cifras",
-    render: (r) => {
-      if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
-      // La oferta de autorizar sigue en pie aunque las cifras ya lleguen por
-      // el proveedor de pago (CON-12): autorizar es gratis y trae más datos.
-      if (r.accessMode === "public_profile" || r.accessMode === "aggregator") return <Autorizar row={r} />;
-      return <span className="text-xs text-ink-2">Públicas por @</span>;
-    },
-  },
-  {
-    key: "dataAsOf",
-    header: "Datos",
-    // Cada fecha junto a la cifra que describe, y no la más reciente de
-    // las dos: las cifras de esta fila (seguidores, publicaciones,
-    // vistas) salen de la serie de CUENTA, así que enseñar ahí la
-    // frescura del contenido haría parecer al día unos seguidores de
-    // hace una semana. La del contenido va aparte, con su nombre.
-    render: (r) => {
-      if (!r.latest && !r.lastPostSnapshotAt) return <span className="text-xs text-muted">Sin lectura todavía</span>;
-      return (
-        <div className="flex flex-col">
-          {r.latest ? (
-            <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} />
-          ) : (
-            <span className="text-xs text-muted">Todavía sin cifras de la cuenta</span>
-          )}
-          {r.lastPostSnapshotAt && (
-            <span className="text-xs text-muted">
-              publicaciones hasta el <time dateTime={r.lastPostSnapshotAt}>{formatDate(r.lastPostSnapshotAt)}</time>
-            </span>
-          )}
-        </div>
-      );
-    },
-  },
-  {
-    key: "status",
-    header: "Estado",
-    render: (r) => {
-      const p = STATUS_PILL[r.status];
-      return (
-        <CellMain sub={r.statusDetail ?? undefined}>
-          <Pill kind={p.kind}>{p.text}</Pill>
-        </CellMain>
-      );
-    },
-  },
-  {
-    key: "actions",
-    header: "Acciones",
-    render: (r) => (
-      <div className="flex flex-wrap gap-1">
-        {(r.accessMode === "public_profile" || r.accessMode === "aggregator" || r.accessMode === "direct_oauth") && (
-          <form action={actualizarCuenta.bind(null, r.id)}>
-            <Button type="submit" size="sm" variant="secondary" aria-label={`Actualizar @${r.handle ?? r.externalAccountId}`}>
-              Actualizar
-            </Button>
-          </form>
-        )}
-        <form action={desconectarConexion.bind(null, r.id)}>
-          <Button type="submit" size="sm" variant="ghost" aria-label={`Quitar @${r.handle ?? r.externalAccountId}`}>
-            Quitar
-          </Button>
-        </form>
-      </div>
-    ),
-  },
-];
+/** El prerrequisito que el creador cumple a mano en la app de TikTok (0011). */
+const REQUISITO_ANALYTICS = "tt.insights.optin";
 
 type Search = { agregada?: string; actualizada?: string; sin_metricas?: string; ya_hoy?: string; conectada?: string; error?: string; desconectada?: string; aviso?: string };
 
-function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
+function Notice({ params, rows, f }: { params: Search; rows: FilaDeCuenta[]; f: Formatter }) {
+  const t = MESSAGES.avisos;
   let kind: "good" | "bad" | "neutral" = "neutral";
   let text: string | null = null;
   const find = (id?: string) => rows.find((r) => r.id === id);
+  const arroba = (r: FilaDeCuenta | undefined) => `@${r?.handle ?? ""}`;
   if (params.agregada) {
     const row = find(params.agregada);
     kind = "good";
     text = row
       ? row.latest
-        ? `@${row.handle} agregada. Seguidores hoy: ${row.latest.followers === null ? "sin dato" : formatInt(row.latest.followers)}. Desde mañana se lee cada día.`
-        : `@${row.handle} agregada. ${row.statusDetail ?? "Todavía no hay métricas públicas para esta red."}`
-      : "Cuenta agregada.";
+        ? t.agregadaConCifras(arroba(row), row.latest.followers === null ? MESSAGES.tabla.sinDato.toLowerCase() : f.int(row.latest.followers))
+        : t.agregadaSinCifras(arroba(row), row.statusDetail ?? t.agregadaSinCifrasPorOmision)
+      : t.agregada;
   } else if (params.actualizada) {
     const row = find(params.actualizada);
     kind = params.sin_metricas || params.ya_hoy ? "neutral" : "good";
     text = params.sin_metricas
-      ? `@${row?.handle ?? ""}: ${row?.statusDetail ?? "esta red no publica métricas por @."}`
+      ? t.actualizadaSinMetricas(arroba(row), row?.statusDetail ?? t.actualizadaSinMetricasPorOmision)
       : params.ya_hoy
-        ? `@${row?.handle ?? ""}: la lectura de hoy ya está guardada; mañana se vuelve a leer.`
-        : `@${row?.handle ?? ""} actualizada con los datos de hoy.`;
+        ? t.actualizadaYaHoy(arroba(row))
+        : t.actualizada(arroba(row));
   } else if (params.conectada) {
     kind = "good";
-    text = "Cuenta conectada.";
+    text = t.conectada;
   } else if (params.error) {
     kind = "bad";
-    text = (OAUTH_ERROR_MESSAGES as Record<string, string>)[params.error as OAuthErrorCode] ?? "No se pudo conectar la cuenta.";
+    text = (OAUTH_ERROR_MESSAGES as Record<string, string>)[params.error as OAuthErrorCode] ?? t.sinConectar;
   } else if (params.desconectada) {
-    text = "Cuenta quitada. Su historial se conserva; ya no se leerá.";
+    text = t.desconectada;
   } else if (params.aviso) {
     kind = "bad";
     text = params.aviso.slice(0, 240);
@@ -208,123 +73,96 @@ function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
 }
 
 export default async function CuentasPage({ searchParams }: { searchParams: Promise<Search> }) {
-  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
-  // Next puede no volver a ejecutar el layout del módulo.
+  // ACC-5: la página también cierra, no solo el layout: en una navegación
+  // parcial Next puede no volver a ejecutar el layout del módulo. Sin
+  // conexiones.cuenta.ver (PERMISO_MINIMO.conexiones), 404 antes de leer.
   await requireModuleAccess("conexiones");
   const params = await searchParams;
+  // Qué botones ve este rol. Quien solo ve (Mánager, Editor, Solo
+  // lectura) no ve ninguno; las acciones lo vuelven a comprobar.
+  const [conectar, desconectar] = await Promise.all([puede("conexiones.cuenta.conectar"), puede("conexiones.cuenta.desconectar")]);
   const service = getCuentasService();
-  const f = formatterFor(await getCurrentWorkspace());
-  const rows = await service.listar();
+  // De cada cuenta, solo lo que la pantalla pinta: ni la ref del
+  // secreto ni los scopes bajan al navegador (_lib/estado.ts).
+  const [cuentas, ws] = await Promise.all([service.listar(), getCurrentWorkspace()]);
+  const rows = cuentas.map(filaDeCuenta);
+  const f = formatterFor(ws);
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {
     const a = availability.find((x) => x.platformId === p)!;
-    return { value: p, label: a.missing.length ? `${a.name} (sin configurar)` : a.name };
+    return { value: p, label: a.missing.length ? MESSAGES.agregar.redSinConfigurar(a.name) : a.name };
   });
+
+  // Del entorno solo sale un booleano y nombres de variables: el
+  // client_secret no entra en el árbol de render (_lib/entorno.ts).
+  const entorno = entornoDeConexion(process.env, flags.oauth_connect);
+  const t = MESSAGES.cabecera;
+
+  // El paso manual solo tiene sentido con una cuenta de TikTok autorizada:
+  // sin token no hay API a la que desbloquearle la retención.
+  const tiktokAutorizadas = rows.filter((r) => r.platformId === "tiktok" && accesoDe(r.accessMode).conToken);
+  const requisito: MetricRequirement | null =
+    tiktokAutorizadas.length > 0 ? await withWorkspace((tx) => getMetricRequirement(tx, REQUISITO_ANALYTICS)) : null;
 
   return (
     <>
       <PageHeader
-        eyebrow="Cuentas"
-        title="Las cuentas que alimentan todo lo demás"
-        description="Agrega una cuenta con su @ y On Cue leerá cada día lo que la plataforma publica de ella: seguidores, publicaciones y vistas. Sin contraseñas ni autorizaciones."
+        eyebrow={t.eyebrow}
+        title={t.title}
+        description={entorno.oauthConnect ? t.descripcionConOauth : t.descripcion}
       />
 
-      <Notice params={params} rows={rows} />
+      <Notice params={params} rows={rows} f={f} />
 
-      <section aria-labelledby="agregar" className="mb-10 rounded-md border border-border bg-surface p-5">
-        <SectionTitle>
-          <span id="agregar">Agregar cuenta</span>
-        </SectionTitle>
-        <form action={agregarCuenta} className="grid gap-4 md:grid-cols-[12rem_minmax(0,1fr)_auto] md:items-end">
-          <Field label="Red" htmlFor="red" required>
-            <Select id="red" name="red" options={options} defaultValue="instagram" required />
-          </Field>
-          <Field label="Usuario o enlace del perfil" htmlFor="handle" help="Por ejemplo @nicolasduartea o https://www.tiktok.com/@selvathegolden" required>
-            <Input id="handle" name="handle" placeholder="@usuario" autoComplete="off" required maxLength={120} />
-          </Field>
-          <Button type="submit" variant="primary">
-            Agregar cuenta
-          </Button>
-          <label className="flex items-start gap-2 text-sm md:col-span-3">
-            <input type="checkbox" name="declaro" required className="mt-1 h-4 w-4 accent-[var(--accent)]" />
-            <span>{OWNERSHIP_DECLARATION_ES}</span>
-          </label>
-        </form>
-        <ul className="mt-4 grid gap-2 text-xs text-ink-2 md:grid-cols-3">
-          {availability.map((a) => (
-            <li key={a.platformId} className="rounded-md border border-border px-3 py-2">
-              <span className="font-medium text-ink">{a.name}</span>
-              <span className="block">{a.offersEs}</span>
-              {a.missing.length > 0 && <span className="block text-muted">Sin configurar en este entorno: falta {a.missing.join(", ")}.</span>}
-            </li>
-          ))}
-        </ul>
-      </section>
+      {!conectar && (
+        <p role="note" className="mb-6 rounded-md border border-border bg-surface px-4 py-3 text-sm text-ink-2">
+          {MESSAGES.tabla.soloLectura}
+        </p>
+      )}
+
+      {conectar && (
+        <section aria-labelledby="agregar" className="mb-10 rounded-md border border-border bg-surface p-5">
+          <SectionTitle>
+            <span id="agregar">{MESSAGES.agregar.titulo}</span>
+          </SectionTitle>
+          <form action={agregarCuenta} className="grid gap-4 md:grid-cols-[12rem_minmax(0,1fr)_auto] md:items-end">
+            <Field label={MESSAGES.agregar.red} htmlFor="red" required>
+              <Select id="red" name="red" options={options} defaultValue="instagram" required />
+            </Field>
+            <Field label={MESSAGES.agregar.handle} htmlFor="handle" help={MESSAGES.agregar.handleAyuda} required>
+              <Input id="handle" name="handle" placeholder={MESSAGES.agregar.handlePlaceholder} autoComplete="off" required maxLength={120} />
+            </Field>
+            <Button type="submit" variant="primary">
+              {MESSAGES.agregar.enviar}
+            </Button>
+            <label className="flex items-start gap-2 text-sm md:col-span-3">
+              <input type="checkbox" name="declaro" required className="mt-1 h-4 w-4 accent-[var(--accent)]" />
+              <span>{OWNERSHIP_DECLARATION_ES}</span>
+            </label>
+          </form>
+          <ul className="mt-4 grid gap-2 text-xs text-ink-2 md:grid-cols-3">
+            {availability.map((a) => (
+              <li key={a.platformId} className="rounded-md border border-border px-3 py-2">
+                <span className="font-medium text-ink">{a.name}</span>
+                <span className="block">{a.offersEs}</span>
+                {a.missing.length > 0 && <span className="block text-muted">{MESSAGES.agregar.sinConfigurar(a.missing.join(", "))}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {conectar && entorno.oauthConnect && <Conectar entorno={entorno} />}
 
       <section aria-labelledby="cuentas">
-        <SectionTitle meta={`${rows.length} ${rows.length === 1 ? "cuenta" : "cuentas"}`}>
-          <span id="cuentas">Cuentas</span>
+        <SectionTitle meta={MESSAGES.tabla.cuenta(rows.length)}>
+          <span id="cuentas">{MESSAGES.tabla.titulo}</span>
         </SectionTitle>
-        <DataTable
-          columns={columns(f)}
-          rows={rows}
-          rowKey={(r) => r.id}
-          caption="Cuentas del workspace con su última lectura pública y su estado"
-          emptyState={<EmptyState title="Todavía no hay cuentas" description="Agrega la primera con su @ en el formulario de arriba. Desde ese momento guardamos su historial diario." />}
-        />
+        <TablaDeCuentas rows={rows} ahora={new Date()} f={f} entorno={entorno} permisos={{ conectar, desconectar }} />
+        {rows.length > 0 && <p className="mt-3 text-xs text-muted">{MESSAGES.tabla.huecosCadaManana}</p>}
       </section>
 
+      <PasosManuales requisito={requisito} cuentas={tiktokAutorizadas.map((r) => `@${r.handle ?? r.externalAccountId}`)} />
     </>
-  );
-}
-
-/**
- * Lo que el dueño desbloquea autorizando su cuenta una vez: en TikTok las
- * cifras, que por @ no existen (CON-3); en YouTube la analítica —
- * retención, duración media y demografía—, que la Data API no entrega sin
- * el permiso del canal (CON-8). Instagram no aparece aquí: por @ ya da lo
- * que necesitamos.
- */
-const AUTORIZABLES: Partial<Record<ConnectionPlatformId, { provider: OAuthProviderId; nota: string; notaClass: string; actionLabel: string }>> = {
-  tiktok: { provider: "tiktok", nota: "Sin cifras por @", notaClass: "text-muted", actionLabel: "Autorizar cifras" },
-  youtube: { provider: "youtube", nota: "Públicas por @", notaClass: "text-ink-2", actionLabel: "Autorizar analítica" },
-};
-
-/**
- * Detrás de la bandera oauth_connect. El botón abre el diálogo de
- * consentimiento; el callback convierte esta misma fila, con su id y su
- * historial. Con el proveedor de pago contratado (CON-12) la nota dice de
- * dónde salen ya las cifras, y la oferta se mantiene: autorizar deja de
- * gastar unidades.
- */
-function Autorizar({ row }: { row: AccountRow }) {
-  const conf = AUTORIZABLES[row.platformId];
-  const nota =
-    row.accessMode === "aggregator" ? (
-      <span className="text-xs text-ink-2">Por proveedor de datos</span>
-    ) : conf ? (
-      <span className={`text-xs ${conf.notaClass}`}>{conf.nota}</span>
-    ) : (
-      <span className="text-xs text-ink-2">Públicas por @</span>
-    );
-  if (!conf || !flags.oauth_connect) return nota;
-  const label = PLATFORM_NAME[row.platformId];
-  const { apps, missing } = loadOAuthApps(process.env);
-  const reason = apps[conf.provider] ? undefined : `${label} no está configurado en este entorno: faltan ${(missing[conf.provider] ?? []).join(", ")}.`;
-  return (
-    <div className="flex flex-col gap-1">
-      {nota}
-      <ConnectDialog
-        label={label}
-        actionLabel={conf.actionLabel}
-        text={consentText(conf.provider)}
-        policyVersion={CONSENT_POLICY_VERSION}
-        action={`/conexiones/oauth/${conf.provider}/start`}
-        disabledReason={reason}
-        variant="secondary"
-        size="sm"
-        ariaLabel={`${conf.actionLabel} de @${row.handle ?? row.externalAccountId}`}
-      />
-    </div>
   );
 }

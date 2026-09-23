@@ -13,11 +13,13 @@ export type ConnectDialogProps = {
   action: string;
   /** Si viene, el botón se muestra deshabilitado con este motivo (app sin configurar). */
   disabledReason?: string;
-  variant?: "primary" | "secondary";
+  variant?: "primary" | "secondary" | "danger";
   size?: "sm" | "md";
   /** Texto del botón; por defecto «Conectar {label}». */
   actionLabel?: string;
   ariaLabel?: string;
+  /** Título del diálogo; por defecto «Conectar {label}». Reautorizar no es conectar. */
+  title?: string;
 };
 
 /**
@@ -25,11 +27,17 @@ export type ConnectDialogProps = {
  * obligatoria. Aceptar envía un formulario POST (no un enlace) para que
  * el inicio del flujo lleve evidencia. <dialog> nativo: foco atrapado y
  * Escape cierran solos.
+ *
+ * CON-4 le añadió `variant="danger"` y `title`: el mismo diálogo y la
+ * MISMA ruta `start` sirven para «Reautorizar» una cuenta cuyo permiso
+ * caducó, porque el callback reactiva la fila por su clave natural en
+ * vez de crear otra. Lo único que cambia es lo que se lee y el tono.
  */
-export function ConnectDialog({ label, text, policyVersion, action, disabledReason, variant = "primary", size = "md", actionLabel, ariaLabel }: ConnectDialogProps) {
+export function ConnectDialog({ label, text, policyVersion, action, disabledReason, variant = "primary", size = "md", actionLabel, ariaLabel, title }: ConnectDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descId = useId();
+  const encabezado = title ?? `Conectar ${label}`;
   return (
     <>
       <Button variant={variant} size={size} onClick={() => ref.current?.showModal()} disabled={!!disabledReason} title={disabledReason} aria-label={ariaLabel}>
@@ -44,7 +52,7 @@ export function ConnectDialog({ label, text, policyVersion, action, disabledReas
       >
         <form method="post" action={action} className="flex flex-col gap-4 p-6">
           <h2 id={titleId} className="text-base font-semibold">
-            Conectar {label}
+            {encabezado}
           </h2>
           <p id={descId} className="text-sm leading-6 text-ink-2">
             {text}

@@ -134,9 +134,29 @@ No hay ruta `/api/oauth/*`: las de OAuth viven en
 `.env.example` sigue diciendo `/api/oauth/google/callback`, que no
 existe (§5).
 
-### 1.5 La pantalla no ofrece fuentes apagadas
+### 1.5 La pantalla no ofrece fuentes apagadas (merge de CON-B)
 
-PENDIENTE: se hace sobre la pantalla de CON-B cuando esté en main.
+CON-B (CON-4) entró a main a mitad de este cierre y reescribió
+`/conexiones` en `tabla.tsx`, `conectar.tsx` y `_lib/estado.ts`. El merge
+de `origin/main` se quedó con su `page.tsx` entero y reaplicó encima lo
+de CON-8 y CON-12:
+
+- **«Conectar»**: YouTube entra a `REDES_CONECTABLES`. Una red **sin sus
+  variables ya no tiene botón**, ni deshabilitado: en su lugar, una frase
+  («YouTube todavía no se puede conectar desde aquí: faltan
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.»). Antes CON-4 mostraba el
+  botón deshabilitado con el motivo.
+- **En la fila**: «Autorizar cifras» (TikTok) se generaliza a
+  `Autorizar()`, que en YouTube dice «Autorizar analítica»; aparece solo
+  con la app configurada, también en filas por proveedor.
+- **`aggregator`** se relee con «Actualizar» (`relectura: true`), porque
+  `cuentas-service.actualizar` lo lee con su fuente.
+- **`proveedorDe('youtube')`** es `'youtube'`: un canal autorizado cuyo
+  permiso vence ofrece «Reautorizar».
+
+Pruebas: `pagina.test.tsx` (sin `GOOGLE_CLIENT_*`, ni «Conectar YouTube»
+ni la ruta en el HTML, y sí la frase), `tabla.test.tsx` (YouTube con y
+sin app, fila por proveedor) y `_lib/estado.test.ts`.
 
 ### 1.6 Lo que encontró la revisión, y cómo quedó (`862aefd`)
 

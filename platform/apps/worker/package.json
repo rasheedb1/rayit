@@ -11,6 +11,8 @@
     "start": "node --experimental-strip-types src/index.ts",
     "install-schema": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --install",
     "humo": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/humo.ts",
+    "once": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --once",
+    "salud": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/salud.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=300000 test/*.test.ts"
