@@ -718,3 +718,234 @@ CREATE TABLE outbound_review (
   UNIQUE (touch_id, attempt)
 );
 CREATE INDEX ON outbound_review (workspace_id, created_at);
+
+
+-- =====================================================================
+-- 6 · Límites: política, contadores y disyuntores
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 6.1 · outbound_policy: interruptor, presupuesto, calentamiento y dirección
+-- ---------------------------------------------------------------------
+--   enabled              el interruptor de apagado del workspace. Nace
+--                        APAGADO: el envío se enciende por workspace
+--                        cuando hay un canal conectado y una política
+--                        aceptada (decisión 2 de §8), y
+--                        disable_outreach lo apaga cancelando lo pendiente.
+--   disabled_reason/at   por qué y cuándo se apagó (lo enseña la pantalla).
+--   llm_daily_cap_usd    presupuesto diario del juez y el generador, en
+--                        dólares (la moneda de la factura del proveedor).
+--   warmup_days          días de calentamiento progresivo de una cuenta nueva.
+--   postal_address       la dirección postal del pie de baja (CAN-SPAM).
+--                        Sin ella no se puede encender el envío: lo
+--                        exige un CHECK, no una pantalla.
+--   max_pending_touches  contrapresión: con más toques en cola que esto,
+--                        should_pause_outreach dice que se pare.
+ALTER TABLE outbound_policy
+  ADD COLUMN enabled             boolean NOT NULL DEFAULT false,
+  ADD COLUMN disabled_reason     text,
+  ADD COLUMN disabled_at         timestamptz,
+  ADD COLUMN llm_daily_cap_usd   numeric(14,2) NOT NULL DEFAULT 5.00 CHECK (llm_daily_cap_usd >= 0),
+  ADD COLUMN warmup_days         int NOT NULL DEFAULT 14 CHECK (warmup_days BETWEEN 0 AND 90),
+  ADD COLUMN postal_address      text,
+  ADD COLUMN max_pending_touches int NOT NULL DEFAULT 200 CHECK (max_pending_touches BETWEEN 1 AND 10000),
+  ADD CONSTRAINT outbound_policy_enabled_needs_address
+    CHECK (NOT enabled OR (postal_address IS NOT NULL AND btrim(postal_address) <> ''));
+
+CREATE TRIGGER outbound_policy_updated BEFORE UPDATE ON outbound_policy
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------
+-- 6.2 · outbound_counter: contadores atómicos por periodo y acción
+-- ---------------------------------------------------------------------
+-- Una fila por workspace, periodo y action_type ('email',
+-- 'linkedin_invite', 'linkedin_message', 'instagram_dm', 'llm_call'…).
+-- La semana es SU PROPIA fila (period = 'week', period_start = el lunes)
+-- y no la suma de siete filas diarias: Chief bloqueaba la fila de hoy y
+-- sumaba la semana, así que dos despachadores en días distintos de la
+-- misma semana se colaban a la vez. Aquí cada función bloquea la fila
+-- del periodo que cuenta. El día y la semana son los de la zona del
+-- workspace (la cuenta de «hoy» de un creador en Bogotá no se reinicia
+-- a las 19:00).
+--
+-- No es una métrica: es un semáforo. Por eso se actualiza en su sitio.
+CREATE TABLE outbound_counter (
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  period              text NOT NULL CHECK (period IN ('day','week')),
+  period_start        date NOT NULL,
+  action_type         text NOT NULL CHECK (action_type ~ '^[a-z][a-z0-9_]{1,40}$'),
+  count               int NOT NULL DEFAULT 0 CHECK (count >= 0),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, period, period_start, action_type),
+  CHECK (period = 'day' OR extract(isodow FROM period_start) = 1)
+);
+
+-- ---------------------------------------------------------------------
+-- 6.3 · outbound_breaker: disyuntor por tipo de paso
+-- ---------------------------------------------------------------------
+-- Si en los últimos window_size toques de un tipo (con al menos
+-- min_samples) la tasa de fallos pasa de failure_threshold, el tipo se
+-- abre y el motor deja de despacharlo hasta que alguien lo cierre o
+-- pase al estado half_open de prueba. Lo calcula el worker.
+CREATE TABLE outbound_breaker (
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  step_type           text NOT NULL
+                           CHECK (step_type IN ('email','email_reply','linkedin_connect','linkedin_message',
+                                                'linkedin_comment','linkedin_like','instagram_dm',
+                                                'instagram_comment','instagram_like','whatsapp_message')),
+  state               text NOT NULL DEFAULT 'closed' CHECK (state IN ('closed','open','half_open')),
+  window_size         int NOT NULL DEFAULT 50 CHECK (window_size BETWEEN 5 AND 500),
+  min_samples         int NOT NULL DEFAULT 20 CHECK (min_samples BETWEEN 1 AND 500),
+  failure_threshold   numeric(4,3) NOT NULL DEFAULT 0.300 CHECK (failure_threshold BETWEEN 0 AND 1),
+  failures            int NOT NULL DEFAULT 0 CHECK (failures >= 0),
+  samples             int NOT NULL DEFAULT 0 CHECK (samples >= 0),
+  opened_at           timestamptz,
+  reason              text,
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, step_type),
+  CHECK (min_samples <= window_size),
+  CHECK (state = 'closed' OR opened_at IS NOT NULL)
+);
+CREATE TRIGGER outbound_breaker_updated BEFORE UPDATE ON outbound_breaker
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- =====================================================================
+-- 7 · Aislamiento de las tablas nuevas, referencias y privilegios
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 7.1 · Las tablas con workspace_id: el patrón de 0010
+-- ---------------------------------------------------------------------
+-- ENABLE + FORCE y una política por workspace. Y la misma guardia: si
+-- una tabla de la lista no tiene workspace_id, la migración falla en
+-- vez de dejar una política que no aísla.
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY[
+    'outreach_channel_account', 'outbound_step', 'outbound_enrollment', 'outbound_message',
+    'outbound_review', 'outbound_counter', 'outbound_breaker'
+  ];
+BEGIN
+  FOREACH t IN ARRAY tables LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = t AND column_name = 'workspace_id'
+    ) THEN
+      RAISE EXCEPTION 'La tabla % está en la lista de RLS pero no tiene workspace_id', t;
+    END IF;
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY %I_ws_isolation ON %I USING (workspace_id = current_workspace_id())',
+      t, t);
+  END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 7.2 · Ángulos y rúbrica: catálogos con dueño (0020 §3, 0025 §4)
+-- ---------------------------------------------------------------------
+--   read   lo global y lo mío
+--   write  solo lo mío: nadie edita ni borra lo global ni lo de otro
+--   seed   una fila global solo la crea quien migra (TO CURRENT_USER:
+--          mc_migrator en Supabase, mc_migrator_embedded en pglite), sin
+--          workspace fijado. Desde la aplicación, no.
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['outbound_angle', 'outbound_step_rubric'] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = t AND column_name = 'workspace_id'
+    ) THEN
+      RAISE EXCEPTION 'La tabla % está en la lista de RLS pero no tiene workspace_id', t;
+    END IF;
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY %I_read ON %I FOR SELECT '
+      'USING (workspace_id IS NULL OR workspace_id = current_workspace_id())', t, t);
+    EXECUTE format(
+      'CREATE POLICY %I_write ON %I FOR ALL '
+      'USING (workspace_id = current_workspace_id()) '
+      'WITH CHECK (workspace_id = current_workspace_id())', t, t);
+    EXECUTE format(
+      'CREATE POLICY %I_seed ON %I FOR INSERT TO CURRENT_USER '
+      'WITH CHECK (workspace_id IS NULL AND current_workspace_id() IS NULL)', t, t);
+  END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 7.3 · Plantillas de secuencia: de todos para leer, de nadie para escribir
+-- ---------------------------------------------------------------------
+-- No hay nada de ningún inquilino que aislar: son las mismas para todos.
+-- Aun así llevan RLS, con una política de lectura abierta (declarada con
+-- su motivo en src/esquema.ts, POLITICAS_ABIERTAS_DECLARADAS) y ninguna
+-- de escritura para la aplicación: sin política, ni un GRANT de más
+-- dejaría escribir. El alta es de quien migra, como en 7.2.
+ALTER TABLE outbound_sequence_template ENABLE ROW LEVEL SECURITY;
+ALTER TABLE outbound_sequence_template FORCE ROW LEVEL SECURITY;
+CREATE POLICY outbound_sequence_template_read ON outbound_sequence_template FOR SELECT
+  USING (true);
+CREATE POLICY outbound_sequence_template_seed ON outbound_sequence_template FOR INSERT TO CURRENT_USER
+  WITH CHECK (current_workspace_id() IS NULL);
+
+-- ---------------------------------------------------------------------
+-- 7.4 · Privilegios de mc_app (src/esquema.ts, PRIVILEGIOS_DE_LA_APP)
+-- ---------------------------------------------------------------------
+-- Las tablas nacen con los cuatro privilegios (ALTER DEFAULT PRIVILEGES)
+-- y la política aísla la fila. Aquí se quita lo que una pantalla no
+-- tiene por qué hacer aunque la fila sea suya:
+--   · plantillas: catálogo global de solo lectura;
+--   · contadores y disyuntores: los escribe el despachador (worker) con
+--     increment_if_under_cap e increment_weekly; si la web pudiera
+--     escribirlos, un workspace se reiniciaría sus propios límites y
+--     quemaría su Gmail;
+--   · revisiones: bitácora; se anotan y no se corrigen ni se borran.
+REVOKE INSERT, UPDATE, DELETE ON outbound_sequence_template FROM mc_app;
+REVOKE INSERT, UPDATE, DELETE ON outbound_counter FROM mc_app;
+REVOKE INSERT, UPDATE, DELETE ON outbound_breaker FROM mc_app;
+REVOKE UPDATE, DELETE ON outbound_review FROM mc_app;
+
+-- ---------------------------------------------------------------------
+-- 7.5 · Referencias visibles (0025 §3) en las claves ajenas nuevas
+-- ---------------------------------------------------------------------
+-- El mismo bucle de 0025 §7, sobre las claves que todavía no tienen su
+-- disparador: toda clave ajena hacia una tabla con RLS, en una tabla
+-- que mc_app puede escribir. Va después de 7.3 (las plantillas ya
+-- tienen RLS) y de 7.4 (contadores y disyuntores ya no se escriben
+-- desde la aplicación: ahí el disparador sobraría).
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT hija.relname AS hija, a.attname AS col, padre.relname AS padre, pa.attname AS pcol,
+           array_length(k.conkey, 1) AS columnas
+      FROM pg_constraint k
+      JOIN pg_class hija   ON hija.oid = k.conrelid
+      JOIN pg_namespace n  ON n.oid = hija.relnamespace
+      JOIN pg_class padre  ON padre.oid = k.confrelid
+      JOIN pg_attribute a  ON a.attrelid = hija.oid AND a.attnum = k.conkey[1]
+      JOIN pg_attribute pa ON pa.attrelid = padre.oid AND pa.attnum = k.confkey[1]
+     WHERE n.nspname = 'public'
+       AND k.contype = 'f'
+       AND padre.relrowsecurity
+       AND (has_table_privilege('mc_app', hija.oid, 'INSERT') OR has_table_privilege('mc_app', hija.oid, 'UPDATE'))
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_trigger tg
+          WHERE tg.tgrelid = hija.oid AND tg.tgname = 'ref_visible_' || a.attname
+       )
+     ORDER BY 1, 2
+  LOOP
+    IF r.columnas > 1 THEN
+      RAISE EXCEPTION 'La clave ajena de %.% hacia % es compuesta: assert_reference_visible solo sabe de una columna', r.hija, r.col, r.padre;
+    END IF;
+    EXECUTE format(
+      'CREATE TRIGGER %I BEFORE INSERT OR UPDATE OF %I ON %I FOR EACH ROW WHEN (NEW.%I IS NOT NULL) '
+      'EXECUTE FUNCTION assert_reference_visible(%L, %L, %L)',
+      'ref_visible_' || r.col, r.col, r.hija, r.col, r.col, r.padre, r.pcol);
+  END LOOP;
+END $$;
