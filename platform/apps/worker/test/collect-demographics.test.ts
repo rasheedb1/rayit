@@ -224,44 +224,79 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
 test('la segunda corrida del mismo día no duplica ni una fila, y no llama a nadie', async () => {
   const antes = fetch.calls.length;
   const filasAntes = await h.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown`);
+  // El hueco de la cuenta personal lleva abierto desde el 3 de septiembre.
+  await h.db.query(`UPDATE metric_gap SET day = '2026-09-03', detected_at = '2026-09-03T05:20:00Z' WHERE connection_id = $1`, [ids['ttPersonal']]);
+
   const md = await correr(h, 'segunda corrida') as { saved: string[]; alreadyToday: string[]; gaps: Record<string, string> };
   assert.deepEqual(md.saved, [], 'no se guarda nada nuevo');
   assert.deepEqual([...md.alreadyToday].sort(), [ids['ig'], ids['ttBusiness'], ids['yt']].sort());
   assert.equal(fetch.calls.length, antes, 'cero llamadas: la demografía de hoy ya estaba');
   const filasDespues = await h.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown`);
   assert.equal(filasDespues.rows[0]!.n, filasAntes.rows[0]!.n);
+
+  // `day` es DESDE cuándo falta, no la última vez que se miró: pisarlo
+  // cada mañana convertiría «desde hace tres semanas» en «desde hoy».
+  const g = await h.db.query<{ day: string; detected_at: string }>(
+    `SELECT day::text AS day, detected_at::text AS detected_at FROM metric_gap WHERE connection_id = $1`, [ids['ttPersonal']]);
+  assert.equal(g.rows[0]!.day, '2026-09-03');
+  assert.ok(g.rows[0]!.detected_at > '2026-09-03', 'pero la última comprobación sí se mueve');
 });
 
-test('si la plataforma dice que faltan seguidores, se anota el requisito y no se cuenta como fallo', async () => {
-  const soloUna = async (db: PgliteDatabase) => {
+test('lo que la plataforma contesta: una tabla vacía no es un dato, y «faltan seguidores» no es un fallo', async () => {
+  // Dos cuentas en UN arnés (abrir otro cuesta minuto y medio de
+  // migraciones): los fixtures no chocan porque son hosts distintos.
+  const CANAL = '00000007-0000-4000-8000-0000000000e1';
+  const NUEVA = '00000007-0000-4000-8000-0000000000c1';
+  const dos = async (db: PgliteDatabase) => {
     await db.raw.exec(`
       INSERT INTO workspace (id, slug, name) VALUES ('${WS_A}', 'laura', 'Laura');
       INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREATOR_A}', '${WS_A}', 'Laura');
-      INSERT INTO social_connection (id, workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, account_type)
-      VALUES ('00000007-0000-4000-8000-0000000000c1', '${WS_A}', '${CREATOR_A}', 'instagram', '17841400000000e09', 'reciencreada',
-              'enc:instagram:nueva', '{instagram_business_basic,instagram_business_manage_insights}', 'direct_oauth', 'business');
+      INSERT INTO social_connection (id, workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, account_type) VALUES
+        ('${CANAL}', '${WS_A}', '${CREATOR_A}', 'youtube', 'UCcasinuevo0000000000001', 'casinuevo', 'enc:youtube:vacio',
+         '{https://www.googleapis.com/auth/youtube.readonly,${YOUTUBE_ANALYTICS_SCOPE}}', 'direct_oauth', 'channel'),
+        -- Sin snapshot de seguidores: no sabemos cuántos tiene, y eso no
+        -- es «menos de cien». Se llama, y Meta contesta con el subcódigo.
+        ('${NUEVA}', '${WS_A}', '${CREATOR_A}', 'instagram', '17841400000000e09', 'reciencreada', 'enc:instagram:nueva',
+         '{instagram_business_basic,instagram_business_manage_insights}', 'direct_oauth', 'business');
     `);
   };
-  // Cuenta SIN snapshot: no sabemos cuántos seguidores tiene, y eso no
-  // es «menos de cien». Se llama, y Meta contesta con el subcódigo.
+  const [vacio] = await loadFixtures('youtube', [['analytics.query', 'demographics.empty']]);
   const h2 = await startHarness({
-    jobs: allJobs, now: () => NOW, seed: soloUna,
-    http: { fetch: new FixtureFetch(await loadFixtures('instagram', [['account.demographics', 'insufficient']])).fetch },
+    jobs: allJobs, now: () => NOW, seed: dos,
+    http: { fetch: new FixtureFetch([
+      // El fixture de la tabla vacía se grabó con filtro de video; aquí
+      // vale para cualquier consulta de Analytics de este canal.
+      { ...vacio!, request: { ...vacio!.request, urlPattern: '^https://youtubeanalytics\\.googleapis\\.com/v2/reports' } },
+      ...(await loadFixtures('instagram', [['account.demographics', 'insufficient']])),
+    ]).fetch },
   });
+  await h2.secrets.set('enc:youtube:vacio', TOKENS('vacio', YT_SCOPES));
   await h2.secrets.set('enc:instagram:nueva', TOKENS('nueva', IG_SCOPES));
   try {
-    const md = await correr(h2, 'seguidores insuficientes') as { saved: string[]; gaps: Record<string, string>; errored: string[]; transient: string[] };
+    const md = await correr(h2, 'respuestas de la plataforma') as {
+      saved: string[]; empty: string[]; gaps: Record<string, string>; errored: string[]; transient: string[];
+    };
     assert.deepEqual(md.saved, []);
-    assert.deepEqual(md.errored, [], 'un requisito no es un fallo');
+    assert.deepEqual(md.errored, [], 'ni un requisito ni una tabla vacía son un fallo');
     assert.deepEqual(md.transient, []);
-    assert.deepEqual(Object.values(md.gaps), ['ig.demographics']);
-    const g = await h2.db.query<{ requirement_id: string; message_es: string }>(
-      `SELECT g.requirement_id, r.message_es FROM metric_gap g JOIN metric_requirement r ON r.id = g.requirement_id`,
+
+    // --- YouTube: tabla vacía (el canal tiene pocas vistas) ----------
+    assert.deepEqual(md.empty, [CANAL]);
+    const filas = await h2.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown`);
+    assert.equal(filas.rows[0]!.n, '0', 'sin filas no se inventa una fila vacía');
+
+    // --- Instagram: el subcódigo 2108006 se traduce a su requisito ---
+    assert.deepEqual(md.gaps, { [NUEVA]: 'ig.demographics' });
+    const g = await h2.db.query<{ connection_id: string; requirement_id: string; message_es: string }>(
+      `SELECT g.connection_id, g.requirement_id, r.message_es FROM metric_gap g JOIN metric_requirement r ON r.id = g.requirement_id`,
     );
-    assert.equal(g.rows.length, 1);
+    assert.equal(g.rows.length, 1, 'el canal sin filas NO deja hueco: no le falta ningún requisito');
+    assert.equal(g.rows[0]!.connection_id, NUEVA);
     assert.match(g.rows[0]!.message_es, /cien seguidores/);
-    const llamadas = await h2.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log`);
-    assert.equal(llamadas.rows.length, 1, 'se corta en el primer corte: no se piden los otros tres');
+
+    const llamadas = await h2.db.query<{ endpoint: string }>(`SELECT endpoint FROM api_call_log ORDER BY id`);
+    const ig = llamadas.rows.filter((r) => r.endpoint === 'instagram.account.demographics');
+    assert.equal(ig.length, 1, 'se corta en el primer corte: no se piden los otros tres');
   } finally {
     await h2.stop();
   }

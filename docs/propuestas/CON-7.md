@@ -323,7 +323,55 @@ publicar»), que es otra métrica y otra tabla, y la demografía por post.
 
 ## 5. Verificación (23 de septiembre de 2026)
 
-_(se completa al cerrar la historia)_
+Todo contra respuestas grabadas, sin red (`withoutNetwork()`:
+`guard.attempts === 0`) y sin tocar Supabase.
+
+### 5.1 El worker de verdad, en Postgres embebido
+
+Cinco cuentas de un workspace: Instagram autorizada, TikTok Business,
+TikTok personal, canal de YouTube con el scope de Analytics, y una
+cuenta agregada por `@`. Una corrida de `collect.demographics`:
+
+```
+job_run  status=ok  procesados=5  fallidos=0  ms=2857
+
+audience_breakdown (39 filas, scope account, día 2026-09-23)
+  instagram  cafealma           followers  age         25-34    share=—         personas=164000
+  instagram  cafealma           followers  city        Bogotá, Bogota            personas=141000
+  instagram  cafealma           followers  gender      F                         personas=288000
+  tiktok     laura.cocinafacil  followers  country     CO       share=0.820000  personas=—
+  youtube    NutriveOficial     viewers    age_gender  25-34|F  share=0.279000  personas=—
+  youtube    NutriveOficial     viewers    country     CO       share=—         personas=31000
+  …
+
+metric_gap · por qué NO hay demografía
+  instagram/selvathegolden (public_profile) → owner_authorization
+      «Esta cuenta se agregó por su @, y lo que Instagram publica no
+        incluye la audiencia. Para verla, el dueño tiene que autorizar
+        la lectura de sus cifras.»
+  tiktok/laura.personal (direct_oauth) → scope_video_insights
+      «Falta el permiso de analítica de video. Vuelve a conectar la
+        cuenta y acepta el permiso de insights.»
+
+api_call_log · a quién se llamó
+  instagram.account.demographics  cafealma           ok=true   (×4, un corte cada una)
+  tiktok.business.get             laura.cocinafacil  ok=true
+  youtube.analytics.query         NutriveOficial     ok=true   (×2)
+  fetch fuera de los fixtures: 0
+```
+
+Siete llamadas para tres cuentas con dato. **Cero** para las dos que no
+cumplen el prerrequisito, que es el criterio de terminado.
+
+### 5.2 Pruebas automáticas
+
+| Qué | Dónde |
+|---|---|
+| La decisión de llamar o no, camino por camino, en 2 s | `apps/worker/test/prerrequisitos-demografia.test.ts` (7) |
+| El job de punta a punta sobre fixtures | `apps/worker/test/collect-demographics.test.ts` (4) |
+| El contrato de lectura, el orden y el aislamiento por RLS | `packages/db/test/demografia.test.ts` (4) |
+| Que la tabla nueva está aislada y `mc_app` no la escribe | `packages/db/test/schema.test.ts` (68, ya existían) |
+| El esquema en Postgres embebido | `make db.check` |
 
 ## 6. Qué falta para la prueba en vivo (el bloqueo)
 

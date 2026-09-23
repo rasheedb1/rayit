@@ -109,9 +109,13 @@ CREATE TABLE IF NOT EXISTS metric_gap (
   -- ('demografia_de_cuenta', 'retencion_y_audiencia', …).
   metric_group    text NOT NULL,
   requirement_id  text NOT NULL REFERENCES metric_requirement(id),
-  -- Día (UTC) de la corrida que lo detectó: la pantalla dice «hoy» o
-  -- «desde el 12 de septiembre» sin restar timestamps.
+  -- DESDE qué día (UTC) falta ESTE requisito: mientras sea el mismo, el
+  -- job no lo mueve, así que la pantalla puede decir «desde el 12 de
+  -- septiembre» sin restar timestamps. Si el requisito cambia (la
+  -- cuenta se autoriza y entonces le faltan seguidores), empieza de
+  -- nuevo.
   day             date NOT NULL,
+  -- La última vez que se comprobó. Se mueve en cada corrida.
   detected_at     timestamptz NOT NULL DEFAULT now(),
   UNIQUE (connection_id, metric_group)
 );

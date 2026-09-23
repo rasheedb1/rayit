@@ -99,13 +99,23 @@ async function readDemographics(ctx: JobContext, acc: AccountRow, plan: Demograp
   return data.demographics;
 }
 
-/** Deja escrito el requisito que falta. Una fila viva por (conexión, grupo): la de hoy reemplaza a la de ayer. */
+/**
+ * Deja escrito el requisito que falta. Una fila viva por (conexión,
+ * grupo): la de hoy reemplaza a la de ayer.
+ *
+ * `day` NO se mueve mientras sea el mismo requisito: es «desde cuándo»,
+ * y pisarlo cada mañana convertiría «te falta autorizar desde hace tres
+ * semanas» en «te falta autorizar desde hoy». Lo que sí se mueve en
+ * cada corrida es `detected_at`, la última comprobación.
+ */
 async function writeGap(ctx: JobContext, acc: AccountRow, requirementId: string, day: string): Promise<void> {
   await ctx.db.query(
     `INSERT INTO metric_gap (workspace_id, connection_id, metric_group, requirement_id, day)
      VALUES ($1, $2, $3, $4, $5::date)
      ON CONFLICT (connection_id, metric_group) DO UPDATE
-       SET requirement_id = EXCLUDED.requirement_id, day = EXCLUDED.day, detected_at = now()`,
+       SET requirement_id = EXCLUDED.requirement_id,
+           day = CASE WHEN metric_gap.requirement_id = EXCLUDED.requirement_id THEN metric_gap.day ELSE EXCLUDED.day END,
+           detected_at = now()`,
     [acc.workspace_id, acc.id, DEMOGRAPHICS_GROUP, requirementId, day],
   );
 }
@@ -129,6 +139,7 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
   );
 
   const saved: string[] = [];
+  const empty: string[] = [];
   const alreadyToday: string[] = [];
   const gaps: Record<string, string> = {};
   const unsupported: string[] = [];
@@ -169,21 +180,31 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
         // 3 · Solo ahora se llama.
         try {
           const demographics = await readDemographics(ctx, acc, decision.plan);
+          // Respuesta buena pero sin filas: YouTube Analytics devuelve la
+          // tabla vacía cuando hay muy pocas vistas. No es un dato, así
+          // que no se guarda ni se borra el hueco que hubiera: mañana se
+          // vuelve a preguntar.
+          if (demographics.length === 0) {
+            empty.push(acc.id);
+            log.info('la plataforma respondió sin filas de demografía');
+            return;
+          }
           await ctx.db.transaction(async (tx) => {
-            if (demographics.length > 0) {
-              await tx.query(
-                `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)
-                 SELECT $1, 'account', $2, $3::date, t.population, t.dimension, t.bucket, t.share, t.absolute
-                   FROM unnest($4::text[], $5::text[], $6::text[], $7::numeric[], $8::bigint[])
-                     AS t(population, dimension, bucket, share, absolute)
-                 ON CONFLICT DO NOTHING`,
-                [
-                  acc.workspace_id, acc.id, day,
-                  demographics.map((d) => d.population), demographics.map((d) => d.dimension),
-                  demographics.map((d) => d.bucket), demographics.map((d) => d.share), demographics.map((d) => d.absolute),
-                ],
-              );
-            }
+            // ON CONFLICT DO NOTHING contra audience_breakdown_account_uniq
+            // (0034): la tabla es append-only y dos corridas del mismo día
+            // dejan exactamente las mismas filas.
+            await tx.query(
+              `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)
+               SELECT $1, 'account', $2, $3::date, t.population, t.dimension, t.bucket, t.share, t.absolute
+                 FROM unnest($4::text[], $5::text[], $6::text[], $7::numeric[], $8::bigint[])
+                   AS t(population, dimension, bucket, share, absolute)
+               ON CONFLICT DO NOTHING`,
+              [
+                acc.workspace_id, acc.id, day,
+                demographics.map((d) => d.population), demographics.map((d) => d.dimension),
+                demographics.map((d) => d.bucket), demographics.map((d) => d.share), demographics.map((d) => d.absolute),
+              ],
+            );
             // El hueco de ayer deja de existir en cuanto el dato llega.
             await tx.query(
               `DELETE FROM metric_gap WHERE connection_id = $1 AND workspace_id = $2 AND metric_group = $3`,
@@ -230,11 +251,11 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
   );
 
   return {
-    processed: saved.length + alreadyToday.length + Object.keys(gaps).length + unsupported.length + errored.length,
+    processed: saved.length + empty.length + alreadyToday.length + Object.keys(gaps).length + unsupported.length + errored.length,
     failed: transient.length,
     // Reintentar una cuota agotada en el mismo minuto no ayuda: el
     // siguiente tick del cron es el reintento (README del worker).
     retry: transient.length > 0 && onlyQuota ? false : undefined,
-    metadata: { day, accounts: rows.length, saved, alreadyToday, gaps, unsupported, errored, transient },
+    metadata: { day, accounts: rows.length, saved, empty, alreadyToday, gaps, unsupported, errored, transient },
   };
 });

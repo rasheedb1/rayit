@@ -26,7 +26,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 test/*.test.ts",
+    "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=300000 test/*.test.ts",
     "introspect": "node scripts/introspect.mjs"
   },
   "dependencies": {
