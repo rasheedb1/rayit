@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Dos páginas del edge anidado. La segunda pide media.after(CURSOR).limit(2) y llega sin cursor: ahí se acaba. El mismo patrón casa las dos llamadas y las respuestas se consumen en orden."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28paginada%29[^&]*media(\\.after%28[^&]*%29)?\\.limit%28"
+  },
+  "response": [
+    {
+      "status": 200,
+      "body": {
+        "business_discovery": {
+          "id": "17841400000000e11",
+          "username": "paginada",
+          "followers_count": 91000,
+          "media_count": 3,
+          "media": {
+            "data": [
+              {
+                "id": "1800000000000000p01",
+                "caption": "Uno #serie",
+                "media_type": "VIDEO",
+                "media_product_type": "REELS",
+                "permalink": "https://www.instagram.com/reel/demo-p01/",
+                "timestamp": "2026-09-21T10:00:00+0000",
+                "username": "paginada",
+                "like_count": 100,
+                "comments_count": 10,
+                "view_count": 1000
+              },
+              {
+                "id": "1800000000000000p02",
+                "caption": "Dos #serie",
+                "media_type": "VIDEO",
+                "media_product_type": "REELS",
+                "permalink": "https://www.instagram.com/reel/demo-p02/",
+                "timestamp": "2026-09-20T10:00:00+0000",
+                "username": "paginada",
+                "like_count": 200,
+                "comments_count": 20,
+                "view_count": 2000
+              }
+            ],
+            "paging": { "cursors": { "before": "QVFIU_p_before", "after": "QVFIU_p_after_1" } }
+          }
+        },
+        "id": "17841400000000123"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "business_discovery": {
+          "id": "17841400000000e11",
+          "username": "paginada",
+          "followers_count": 91000,
+          "media_count": 3,
+          "media": {
+            "data": [
+              {
+                "id": "1800000000000000p03",
+                "caption": "Tres #serie",
+                "media_type": "IMAGE",
+                "media_product_type": "FEED",
+                "permalink": "https://www.instagram.com/p/demo-p03/",
+                "timestamp": "2026-09-19T10:00:00+0000",
+                "username": "paginada",
+                "like_count": 300,
+                "comments_count": 30
+              }
+            ],
+            "paging": { "cursors": { "before": "QVFIU_p_before_2" } }
+          }
+        },
+        "id": "17841400000000123"
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Cuenta profesional que existe pero todavía no publicó nada: el edge llega con data vacío y sin cursores."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28reciencreada%29[^&]*media\\.limit%28"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "business_discovery": {
+        "id": "17841400000000e09",
+        "username": "reciencreada",
+        "followers_count": 12,
+        "media_count": 0,
+        "media": { "data": [] }
+      },
+      "id": "17841400000000123"
+    }
+  }
+}

@@ -6,7 +6,7 @@
   },
   "request": {
     "method": "GET",
-    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28"
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28[^&]*media_count%7D$"
   },
   "response": {
     "status": 400,
