@@ -64,7 +64,7 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `META_APP_ID`, `META_APP_SECRET` | Las apps con las que se renueva cada token. Sin una app, sus conexiones fallan como `not_configured` (transitorio, sin reintento inmediato) y el arranque lo avisa. | — |
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
-| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
+| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10) y `brand.snapshot` (CAM-3): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
@@ -168,6 +168,38 @@ larga duración vencido (Instagram, `refresh_expired`) la pasan a
 `needs_reauth`. El job pasa `connectionId` y `secretRef` al refresher:
 con `enc:tiktok-business:…` renueva contra la Accounts API.
 
+## brand.snapshot (CAM-3)
+
+Cada día a las 07:00 UTC (`job_definition`, 0009: cola `campaigns`,
+600 s, concurrencia 2 por plataforma) lee los seguidores públicos de la
+marca de cada campaña `planned`, `live` o `measuring` con
+`brand_accounts` y en ventana: desde `brand_baseline_from` (o
+`starts_on − 14`) hasta `ends_on + 30` (`isBrandSnapshotDue`, core).
+
+- Una marca en varias campañas del mismo workspace se lee **una vez**
+  (workspace, empresa, red, handle) y deja **una fila por campaña**:
+  `brand_account_snapshot` es único por (campaña, red, día) desde 0034.
+- Escribe con `recordBrandSnapshot` de `@mc/db/queries/campanas`, el
+  mismo INSERT que «Actualizar ahora» en la ficha, con
+  `onConflict: 'fill_missing'`: la primera lectura del día queda, y el
+  worker solo reemplaza una fila **sin cifra** por una con cifra.
+- Sin cifra, la fila lleva `followers NULL` y la razón en `source`:
+  `no_public_source` (TikTok, sin llamada), `not_found` (Meta 110, un
+  YouTube vacío) o `not_discoverable` (cuenta personal o privada). Estas
+  no cuentan como fallo; mañana se vuelve a mirar.
+- Transitorio → `failed`, sin fila, pg-boss reintenta. Cuota agotada →
+  `failed` con `retry: false`. Fuente sin credencial → la red va a
+  `metadata.skipped` con un aviso por corrida.
+- `metadata`: `day`, `campaigns`, `targets` y listas de
+  `{ campaignId, platformId }` por resultado. Sin handles ni tokens.
+
+```sql
+-- ¿Qué leyó hoy brand.snapshot y qué no?
+SELECT c.name, s.platform_id, s.day, s.followers, s.source
+  FROM brand_account_snapshot s JOIN campaign c ON c.id = s.campaign_id
+ WHERE s.day = current_date ORDER BY c.name;
+```
+
 ## Cómo leer job_run
 
 ```sql
@@ -205,7 +237,7 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @ y brand.snapshot; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
@@ -230,5 +262,6 @@ src/runner/run.ts            una ejecución: job_run running → ok/partial/fail
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
+src/jobs/campanas/           brand.snapshot (seguidores públicos de la marca de cada campaña, CAM-3)
 test/                        integración (pglite) y unitarias
 ```

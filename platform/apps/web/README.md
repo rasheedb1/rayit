@@ -57,6 +57,11 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
+app/(app)/campanas/           Campañas: lista y ficha. La sección «Seguidores de la marca»
+                              (CAM-3) está en [id]/seguidores.tsx, su modelo puro en
+                              _lib/seguidores.ts y «Actualizar ahora» en _lib/marca-service.ts,
+                              que escribe con el mismo recordBrandSnapshot que el job
+                              brand.snapshot. Textos en _lib/messages.ts.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo

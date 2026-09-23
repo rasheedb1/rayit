@@ -496,7 +496,8 @@ export const STORIES: readonly Story[] = [
     title: "Seguidores de la marca",
     desc: "brand.snapshot diario del perfil público de la marca (Business Discovery en Instagram, canal en YouTube), desde brand_baseline_from.",
     done: "La curva de seguidores de la marca sale del snapshot con su línea base de dos semanas.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Rama nicolas/CAM-3-seguidores-marca. ritmoSeguidores en core (seed: 12,93/día vs 155/día, ×12, 1 240 ganados; línea base corta marcada, nunca inventada), job brand.snapshot en apps/worker/src/jobs/campanas (idempotente por día, TikTok y handles inexistentes dejan la razón), sección de la ficha con curva, «×12 el ritmo» y «Actualizar ahora». Falta aplicar la migración 0034 (unicidad por campaña e INSERT de la web) y el worker desplegado (CIM-7) para la lectura diaria en producción. Detalle en docs/propuestas/CAM-3.md.",
   },
   {
     id: "CAM-4", module: "CAM", owner: "nicolas", size: "S", sprint: 4, deps: ["CAM-1"],
