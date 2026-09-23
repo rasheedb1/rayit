@@ -30,7 +30,9 @@
  *     a mano en ningún INSERT: si apareciera en una lista de columnas
  *     sería un error, no una optimización. El correo es único POR
  *     DUEÑO: que otro workspace tenga a la misma persona no impide
- *     guardarla, y la baja global la aplica la base (contact_suppression).
+ *     guardarla, y la baja global la aplica la base (contact_suppression,
+ *     que solo llena el worker con una baja verificada: la que marca
+ *     un workspace se queda en su contacto, 0029 §1).
  *   - `opted_out` no vuelve a false: un trigger lo impide. La pantalla
  *     lo muestra como estado inamovible y esta capa no ofrece la
  *     operación contraria.

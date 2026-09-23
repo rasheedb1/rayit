@@ -126,17 +126,23 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
     // así que aquí se le pone una de verdad.
     await t.admin(
       'ALTER TABLE platform ENABLE ROW LEVEL SECURITY; ALTER TABLE platform FORCE ROW LEVEL SECURITY; ' +
-        // `id = current_user_id()::text` compara una columna con la
-        // persona de la transacción: aísla (no tiene sentido para
-        // platform, pero la prueba es sobre la lista, no sobre la tabla).
-        'CREATE POLICY platform_todo ON platform USING (id = current_user_id()::text)',
+        // Una clave ajena a workspace(id) comparada con el inquilino
+        // aísla (no tiene sentido para platform, pero la prueba es sobre
+        // la lista, no sobre la tabla). Hasta la ronda 4 valía `id =
+        // current_user_id()::text`, que compara con la persona una
+        // columna que no nombra a ninguna: ya no cuenta (ronda 5).
+        'ALTER TABLE platform ADD COLUMN zz_ws uuid REFERENCES workspace(id); ' +
+        'CREATE POLICY platform_todo ON platform USING (zz_ws = current_workspace_id())',
     );
     try {
       const estado = await estadoDelEsquema(t.db);
       assert.deepEqual(estado.excepcionesObsoletas, ['platform']);
       assert.match(String(explicarEsquema(estado)), /sobran excepciones/);
     } finally {
-      await t.admin('DROP POLICY platform_todo ON platform; ALTER TABLE platform NO FORCE ROW LEVEL SECURITY; ALTER TABLE platform DISABLE ROW LEVEL SECURITY');
+      await t.admin(
+        'DROP POLICY platform_todo ON platform; ALTER TABLE platform DROP COLUMN zz_ws; ' +
+          'ALTER TABLE platform NO FORCE ROW LEVEL SECURITY; ALTER TABLE platform DISABLE ROW LEVEL SECURITY',
+      );
     }
   });
 
@@ -742,6 +748,252 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
       const secuencias = e.privilegiosDeMas.filter((p) => p.tabla.endsWith('_seq') && p.privilegios.includes('SELECT'));
       assert.ok(secuencias.some((p) => p.tabla === 'account_metric_snapshot_id_seq'));
       assert.ok(secuencias.length >= 10, `solo ${secuencias.length} secuencias con SELECT`);
+    } finally {
+      await antes.close();
+    }
+  });
+});
+
+/**
+ * RONDA 5: lo que corre con los privilegios de OTRO sin pasar por un
+ * GRANT —disparadores, reglas, otros esquemas, el propio rol—, y lo que
+ * la forma de una política no decía —la lista del EXISTS, qué columna
+ * se compara, a qué apunta la fila global y qué pasa al borrar su
+ * padre—. Cada caso es el guion de un revisor, y cada uno pasaba en
+ * verde con la guardia de la ronda 4.
+ */
+describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nombra una fila global', () => {
+  async function con<T>(sql: string, deshacer: string, fn: (estado: EstadoDelEsquema) => T | Promise<T>): Promise<T> {
+    await t.admin(sql);
+    try {
+      return await fn(await estadoDelEsquema(t.db));
+    } finally {
+      await t.admin(deshacer);
+    }
+  }
+  const claves = (e: EstadoDelEsquema) => e.politicasAbiertas.map((p) => p.clave);
+  const WS = '0000005a-0000-4000-8000-000000000001';
+  const OTRO_WS = '0000005b-0000-4000-8000-000000000001';
+
+  before(async () => {
+    await t.admin(
+      `INSERT INTO workspace (id, slug, name) VALUES ('${WS}', 'ronda-5', 'Ronda 5'); ` +
+        "INSERT INTO niche (slug, name_es) VALUES ('zz-niche', 'Nicho intacto')",
+    );
+  });
+  after(async () => {
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS}'; DELETE FROM niche WHERE slug = 'zz-niche'`);
+  });
+
+  /** El nombre del nicho de prueba: es un catálogo, así que se lee sin workspace. */
+  const nicho = async () => {
+    const { rows } = await t.db.withCatalogs((tx) =>
+      tx.query<{ name_es: string }>("SELECT name_es FROM niche WHERE slug = 'zz-niche'"),
+    );
+    return rows[0]?.name_es;
+  };
+
+  test('un EXISTS con un agregado en la lista es verdadero para toda fila, y la guardia lo nombra', async () => {
+    // El guion de los revisores: `SELECT count(*)` sin GROUP BY devuelve
+    // siempre una fila. Con la ronda 4, sinAislar=[] y politicasAbiertas=[].
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_b (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), deal_id uuid REFERENCES deal(id), nota text); ' +
+        'ALTER TABLE zz_b ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_b FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_b_p ON zz_b FOR SELECT USING (EXISTS (SELECT count(*) FROM deal d WHERE d.id = zz_b.deal_id)); ' +
+        // Las demás formas que cambian cuántas filas devuelve la subconsulta.
+        'CREATE TABLE zz_b2 (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), deal_id uuid REFERENCES deal(id)); ' +
+        'ALTER TABLE zz_b2 ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_b2 FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_b2_having ON zz_b2 FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM deal d WHERE d.id = zz_b2.deal_id HAVING true)); ' +
+        'CREATE POLICY zz_b2_union ON zz_b2 FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM deal d WHERE d.id = zz_b2.deal_id UNION SELECT 1)); ' +
+        'REVOKE ALL ON zz_b, zz_b2 FROM mc_app; GRANT SELECT ON zz_b, zz_b2 TO mc_app; RESET ROLE; ' +
+        "INSERT INTO zz_b (nota) VALUES ('de A'), ('de A'), ('de A')",
+      'DROP TABLE zz_b, zz_b2',
+      async (e) => {
+        const { rows } = await t.db.withWorkspace(WS, (tx) => tx.query<{ n: number }>('SELECT count(*)::int AS n FROM zz_b'));
+        assert.equal(rows[0]?.n, 3, 'la prueba no vale si la política no abre la tabla');
+        assert.ok(claves(e).includes('zz_b.zz_b_p'), JSON.stringify(claves(e)));
+        assert.ok(claves(e).includes('zz_b2.zz_b2_having'));
+        assert.ok(claves(e).includes('zz_b2.zz_b2_union'));
+      },
+    );
+  });
+
+  test('comparar con el inquilino una columna que no es la del inquilino no aísla', async () => {
+    // `(nota)::uuid = current_workspace_id()` y `created_by =
+    // current_user_id()` en una tabla con workspace_id: el primero deja a
+    // B leer la fila de A con la nota de B; el segundo abre a quien está
+    // en dos workspaces las filas del otro. Con el inquilino en un AND, la
+    // persona sí vale.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_col (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
+        '  nota text, created_by uuid REFERENCES app_user(id)); ' +
+        'ALTER TABLE zz_col ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_col FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_col_nota ON zz_col FOR SELECT USING ((nota)::uuid = current_workspace_id()); ' +
+        'CREATE POLICY zz_col_persona ON zz_col FOR SELECT USING (created_by = current_user_id()); ' +
+        'CREATE POLICY zz_col_ambos ON zz_col FOR SELECT ' +
+        '  USING (workspace_id = current_workspace_id() AND created_by = current_user_id()); ' +
+        'REVOKE ALL ON zz_col FROM mc_app; GRANT SELECT ON zz_col TO mc_app; RESET ROLE; ' +
+        `INSERT INTO zz_col (workspace_id, nota) VALUES ('${WS}', '${OTRO_WS}')`,
+      'DROP TABLE zz_col',
+      async (e) => {
+        const { rows } = await t.db.withWorkspace(OTRO_WS, (tx) =>
+          tx.query<{ n: number }>('SELECT count(*)::int AS n FROM zz_col'),
+        );
+        assert.equal(rows[0]?.n, 1, 'desde B se lee la fila de A: la prueba no vale si no');
+        assert.ok(claves(e).includes('zz_col.zz_col_nota'), JSON.stringify(claves(e)));
+        assert.ok(claves(e).includes('zz_col.zz_col_persona'));
+        assert.ok(!claves(e).includes('zz_col.zz_col_ambos'), 'con el inquilino en un AND, aísla');
+      },
+    );
+  });
+
+  test('una fila global que nombra una privada por otra clave ajena no aísla; correlacionada, sí', async () => {
+    // brand_account_snapshot hasta 0029: `campaign_id IS NULL OR EXISTS
+    // (campaign)` abría a todos company_id, handle y seguidores de
+    // empresas privadas. La guardia aceptaba la rama porque `IS NULL` era
+    // la columna de la otra rama.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_snap (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), campaign_id uuid REFERENCES campaign(id), ' +
+        '  company_id uuid NOT NULL REFERENCES company(id)); ' +
+        'ALTER TABLE zz_snap ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_snap FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_snap_p ON zz_snap FOR SELECT ' +
+        '  USING (campaign_id IS NULL OR EXISTS (SELECT 1 FROM campaign p WHERE p.id = zz_snap.campaign_id)); ' +
+        'CREATE TABLE zz_snap_ok (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), campaign_id uuid REFERENCES campaign(id), ' +
+        '  company_id uuid NOT NULL REFERENCES company(id)); ' +
+        'ALTER TABLE zz_snap_ok ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_snap_ok FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_snap_ok_p ON zz_snap_ok FOR SELECT ' +
+        '  USING ((campaign_id IS NULL AND EXISTS (SELECT 1 FROM company c WHERE c.id = zz_snap_ok.company_id)) ' +
+        '    OR EXISTS (SELECT 1 FROM campaign p WHERE p.id = zz_snap_ok.campaign_id)); ' +
+        'REVOKE ALL ON zz_snap, zz_snap_ok FROM mc_app; GRANT SELECT ON zz_snap, zz_snap_ok TO mc_app; RESET ROLE',
+      'DROP TABLE zz_snap, zz_snap_ok',
+      (e) => {
+        const p = e.politicasAbiertas.find((x) => x.clave === 'zz_snap.zz_snap_p');
+        assert.match(String(p?.trozo), /company_id → company/);
+        assert.ok(!claves(e).includes('zz_snap_ok.zz_snap_ok_p'), JSON.stringify(claves(e)));
+      },
+    );
+  });
+
+  test('ON DELETE SET NULL sobre la columna de una rama «IS NULL»: borrar el padre publica la fila', async () => {
+    // company.owner_workspace_id hasta 0029: se borraba el workspace C y
+    // su «Prospecto secreto» pasaba al catálogo de todos.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_marca (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), ' +
+        '  owner_workspace_id uuid REFERENCES workspace(id) ON DELETE SET NULL); ' +
+        'ALTER TABLE zz_marca ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_marca FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_marca_read ON zz_marca FOR SELECT ' +
+        '  USING (owner_workspace_id IS NULL OR owner_workspace_id = current_workspace_id()); ' +
+        'REVOKE ALL ON zz_marca FROM mc_app; GRANT SELECT ON zz_marca TO mc_app; RESET ROLE',
+      'DROP TABLE zz_marca',
+      (e) => {
+        assert.deepEqual(e.borradosQuePublican, ['zz_marca.owner_workspace_id → workspace (ON DELETE SET NULL)']);
+        assert.match(String(explicarEsquema(e)), /BORRADOS_QUE_PUBLICAN_DECLARADOS/);
+      },
+    );
+  });
+
+  test('un disparador SECURITY DEFINER con EXECUTE revocado reescribe un catálogo, y la guardia lo nombra', async () => {
+    // El guion de los revisores, tal cual: UPDATE niche falla con
+    // permission denied, pero INSERT INTO company deja niche reescrito,
+    // porque Postgres no mira EXECUTE al disparar.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE FUNCTION zz_fuga() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS ' +
+        "$$BEGIN UPDATE niche SET name_es = 'PWN' WHERE slug = 'zz-niche'; RETURN NEW; END$$; " +
+        'REVOKE EXECUTE ON FUNCTION zz_fuga() FROM PUBLIC, mc_app; ' +
+        'CREATE TRIGGER zz_fuga AFTER INSERT ON company FOR EACH ROW EXECUTE FUNCTION zz_fuga(); RESET ROLE',
+      'DROP TRIGGER zz_fuga ON company; DROP FUNCTION zz_fuga(); ' +
+        "UPDATE niche SET name_es = 'Nicho intacto' WHERE slug = 'zz-niche'",
+      async (e) => {
+        await assert.rejects(
+          t.db.withWorkspace(WS, (tx) => tx.query("UPDATE niche SET name_es = 'directo'")),
+          /permission denied/,
+        );
+        await t.db.withWorkspace(WS, (tx) => tx.query("INSERT INTO company (name) VALUES ('Disparadora')"));
+        assert.equal(await nicho(), 'PWN', 'la prueba no vale si el disparador no rodea el privilegio');
+        assert.deepEqual(e.funcionesDefiner, ['zz_fuga()']);
+        assert.deepEqual(e.disparadoresDefiner, ['company.zz_fuga → zz_fuga()']);
+        const msg = String(explicarEsquema(e));
+        assert.match(msg, /DISPARADORES_DEFINER_DECLARADOS/);
+        assert.match(msg, /no mira EXECUTE/);
+      },
+    );
+  });
+
+  test('una regla sobre una tabla aislada reescribe un catálogo, y la guardia la nombra', async () => {
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        "CREATE RULE zz_rule AS ON INSERT TO company DO ALSO UPDATE niche SET name_es = 'RULE' WHERE slug = 'zz-niche'; " +
+        'RESET ROLE',
+      "DROP RULE zz_rule ON company; UPDATE niche SET name_es = 'Nicho intacto' WHERE slug = 'zz-niche'",
+      async (e) => {
+        await t.db.withWorkspace(WS, (tx) => tx.query("INSERT INTO company (name) VALUES ('Reglada')"));
+        assert.equal(await nicho(), 'RULE', 'la prueba no vale si la regla no rodea el privilegio');
+        assert.deepEqual(e.reglas, ['company.zz_rule']);
+        assert.match(String(explicarEsquema(e)), /REGLAS_DECLARADAS/);
+      },
+    );
+  });
+
+  test('un esquema fuera de public al que llega mc_app se nombra, y CREATE en public también', async () => {
+    await con(
+      'CREATE SCHEMA zz_otro; CREATE TABLE zz_otro.secretos (x text); ' +
+        'GRANT USAGE ON SCHEMA zz_otro TO mc_app; GRANT ALL ON zz_otro.secretos TO mc_app; ' +
+        'GRANT CREATE ON SCHEMA public TO mc_app',
+      'DROP SCHEMA zz_otro CASCADE; REVOKE CREATE ON SCHEMA public FROM mc_app',
+      (e) => {
+        assert.deepEqual(e.esquemasDeMas.map((x) => x.split(' ')[0]).sort(), ['public', 'zz_otro']);
+        assert.match(String(explicarEsquema(e)), /ESQUEMAS_DECLARADOS/);
+      },
+    );
+  });
+
+  test('mc_app miembro de mc_worker hereda BYPASSRLS por SET ROLE, y la guardia lo dice con su nombre', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('los roles de una base real no se tocan desde una prueba');
+    await t.admin("INSERT INTO webhook_event (provider, payload, headers) VALUES ('tiktok', '{}', '{}')");
+    await con('GRANT mc_worker TO mc_app', 'REVOKE mc_worker FROM mc_app; DELETE FROM webhook_event', async (e) => {
+      const { rows } = await t.db.withWorkspace(WS, async (tx) => {
+        await tx.query('SET LOCAL ROLE mc_worker');
+        return tx.query<{ n: number }>('SELECT count(*)::int AS n FROM webhook_event');
+      });
+      assert.equal(rows[0]?.n, 1, 'la prueba no vale si mc_app no llega a leer lo que no tiene concedido');
+      assert.equal(e.rolDeLaApp.length, 1, JSON.stringify(e.rolDeLaApp));
+      assert.match(e.rolDeLaApp[0]!, /mc_app es miembro de mc_worker \(BYPASSRLS\)/);
+      assert.match(String(explicarEsquema(e)), /ROLES_DE_LA_APP_DECLARADOS/);
+    });
+  });
+
+  test('y mc_app con BYPASSRLS también se nombra, aunque sus GRANT no cambien', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('los roles de una base real no se tocan desde una prueba');
+    await con('ALTER ROLE mc_app BYPASSRLS', 'ALTER ROLE mc_app NOBYPASSRLS', (e) => {
+      assert.deepEqual(e.rolDeLaApp, ['mc_app tiene BYPASSRLS']);
+    });
+  });
+
+  test('contra la base como estaba en 0026, la guardia nombra lo que 0029 cierra', async (ctx) => {
+    // La prueba de que la guardia ve la CLASE: sin tocarla, contra el
+    // esquema real anterior a 0029, dice los hallazgos de los revisores
+    // (la supresión, brand_account_snapshot, company) y los dos que nadie
+    // había nombrado (contact_read y external_post.analysis_id).
+    if (t.kind !== 'pglite') return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
+    const { createEmbeddedDb } = await import('../src/embedded.ts');
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0026_duenos_unicos_secuencias.sql' });
+    try {
+      const e = await estadoDelEsquema(antes);
+      assert.deepEqual(e.funcionesDefiner, ['contact_suppression_record()']);
+      assert.deepEqual(e.disparadoresDefiner, ['contact.contact_suppression_record → contact_suppression_record()']);
+      assert.deepEqual(e.borradosQuePublican, [
+        'company.owner_workspace_id → workspace (ON DELETE SET NULL)',
+        'external_post.analysis_id → video_analysis (ON DELETE SET NULL)',
+      ]);
+      const abiertas = e.politicasAbiertas.map((p) => p.clave).sort();
+      assert.deepEqual(abiertas, ['brand_account_snapshot.brand_account_snapshot_ws_isolation', 'contact.contact_read']);
     } finally {
       await antes.close();
     }

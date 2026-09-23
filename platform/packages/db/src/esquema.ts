@@ -65,10 +65,46 @@
  *     MATERIALIZED VIEW mv AS SELECT * FROM webhook_event` y mc_app lee
  *     las cabeceras con firmas. Se exige que mc_app no tenga NINGÚN
  *     privilegio sobre ellas, o entrada en RELACIONES_SIN_RLS_DECLARADAS.
- *   · Funciones SECURITY DEFINER de `public` que mc_app puede ejecutar.
- *     Corren con los privilegios de su dueño y rodean los GRANT igual que
- *     una vista. Se exige que no haya ninguna, o entrada en
+ *   · Funciones SECURITY DEFINER de `public`, TODAS, se puedan ejecutar
+ *     o no. Corren con los privilegios de su dueño y rodean los GRANT
+ *     igual que una vista. Hasta la ronda 4 solo se miraban las que
+ *     mc_app podía EJECUTAR, y ese era el punto ciego: Postgres no
+ *     comprueba EXECUTE al disparar, así que una función de disparador
+ *     con EXECUTE revocado corre con su dueño cada vez que mc_app
+ *     escribe en la tabla (medido: un disparador definer en company
+ *     reescribía niche, un catálogo de solo lectura, con la guardia en
+ *     verde). Se exige que no haya ninguna, o entrada en
  *     FUNCIONES_DEFINER_DECLARADAS.
+ *   · Disparadores de tablas de `public` que llaman a una función
+ *     SECURITY DEFINER, de cualquier esquema: se exige su entrada en
+ *     DISPARADORES_DEFINER_DECLARADOS.
+ *   · Reglas (CREATE RULE) que no son el _RETURN de una vista. Su acción
+ *     corre con los privilegios del dueño de la tabla, igual que un
+ *     disparador definer: medido, `CREATE RULE … ON INSERT TO company DO
+ *     ALSO UPDATE niche …` dejaba a B reescribir un catálogo. Se exige
+ *     cero, o entrada en REGLAS_DECLARADAS.
+ *   · Otros esquemas. La guardia mira `public`; una tabla en un esquema
+ *     nuevo con GRANT ALL a mc_app pasaba en silencio. Se exige que
+ *     mc_app no tenga USAGE en ningún esquema fuera de public,
+ *     information_schema, pg_* y extensions (el de Supabase para las
+ *     extensiones), o entrada en ESQUEMAS_DECLARADOS; y que no pueda
+ *     CREAR en public.
+ *   · El propio rol mc_app. Los privilegios se leen de los GRANT, pero un
+ *     rol con BYPASSRLS o SUPERUSER se salta las políticas, y uno que
+ *     pertenece a otro hereda lo suyo: con `GRANT mc_worker TO mc_app`,
+ *     mc_app hace SET ROLE mc_worker y lo lee todo. Se exige que mc_app
+ *     no tenga SUPERUSER, BYPASSRLS ni CREATEROLE, y que no sea miembro
+ *     de ningún rol salvo los de ROLES_DE_LA_APP_DECLARADOS.
+ *
+ * BORRAR EL PADRE NO PUBLICA LA FILA
+ * ----------------------------------
+ * Una lectura «col IS NULL OR <el padre se ve>» dice que NULL es «de
+ * todos». Si la clave ajena de esa columna es ON DELETE SET NULL, borrar
+ * el padre publica la fila: con company.owner_workspace_id así, borrar un
+ * workspace convertía su CRM en catálogo. La guardia cruza las columnas
+ * de esas ramas (src/politicas.ts, `nulos`) con la acción de borrado de
+ * su clave, y exige CASCADE o RESTRICT, o entrada en
+ * BORRADOS_QUE_PUBLICAN_DECLARADOS.
  *
  * LAS REFERENCIAS, QUE LA CLAVE AJENA NO FILTRA
  * ---------------------------------------------
@@ -127,6 +163,7 @@
 import type { CatalogDb } from './client.ts';
 import {
   COLUMNAS_DE_INQUILINO, terminosDelAnd, veredicto, type AislamientoDeLectura, type ContextoDePolitica, type Lado,
+  type ReferenciaDeTabla,
 } from './politicas.ts';
 
 /**
@@ -164,9 +201,10 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
     'bitácora cruda de lo que mandan las plataformas (cuerpo y cabeceras, con firmas). Se cierra por privilegio: ' +
     'mc_app no tiene NINGUNO sobre ella. Es del worker',
   contact_suppression:
-    'la baja global (0007, 0026 §3): correos que nadie en la plataforma vuelve a contactar, sin el workspace que la ' +
-    'registró. No es de ningún inquilino; se cierra por privilegio (mc_app no tiene ninguno) y la llenan y la ' +
-    'aplican los disparadores SECURITY DEFINER de contact y el worker',
+    'la baja global (0007, 0026 §3, 0029 §1): correos que nadie en la plataforma vuelve a contactar, sin el ' +
+    'workspace que la registró. No es de ningún inquilino; se cierra por privilegio (mc_app no tiene ninguno). La ' +
+    'llena SOLO el worker con una baja verificable de la propia persona, y la aplica el disparador ' +
+    'contact_suppression_apply (declarado en DISPARADORES_DEFINER_DECLARADOS)',
   schema_migrations:
     'contabilidad del runner de migraciones (db/lib/aplicar.mjs), no dato del producto. La lee esta misma guardia',
 };
@@ -203,11 +241,73 @@ export const VISTAS_SIN_INVOCADOR: Readonly<Record<string, string>> = {};
 export const RELACIONES_SIN_RLS_DECLARADAS: Readonly<Record<string, string>> = {};
 
 /**
- * Las funciones SECURITY DEFINER de `public` que mc_app puede ejecutar,
- * por su firma (`nombre(tipos)`), y por qué. Vacía: ninguna función del
- * esquema es SECURITY DEFINER.
+ * Las funciones SECURITY DEFINER de `public`, por su firma
+ * (`nombre(tipos)`), y por qué. TODAS, se puedan ejecutar o no: quitarle
+ * EXECUTE a mc_app no cierra nada si la función es de un disparador.
  */
-export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {};
+export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
+  'contact_suppression_apply()':
+    'la baja global (0026 §3, 0029 §1): mc_app no puede leer contact_suppression, y un contacto que nace con un ' +
+    'correo suprimido tiene que nacer dado de baja. Solo LEE la lista y cambia NEW; no escribe ninguna tabla. La ' +
+    'lista la llena solo el worker con una baja verificada, así que lo que aplica no lo puede fabricar un workspace',
+};
+
+/**
+ * Los disparadores de tablas de `public` que llaman a una función
+ * SECURITY DEFINER (de cualquier esquema), como `tabla.disparador`, y por
+ * qué. Postgres no comprueba EXECUTE al disparar: el cuerpo corre con los
+ * privilegios del dueño de la función para CUALQUIERA que escriba en la
+ * tabla. Es la forma de rodear el muro de GRANT que abrió la baja global
+ * de 0026 §3 (cualquier workspace escribía en contact_suppression).
+ */
+export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> = {
+  'contact.contact_suppression_apply':
+    'aplica la baja global al contacto que nace o cambia de correo (0029 §1). Lee contact_suppression, que solo ' +
+    'escribe el worker; lo que aprende quien escribe es que ese correo pidió no ser contactado, que es justo lo que ' +
+    'la baja tiene que decirle, y no quién lo tiene en su CRM',
+};
+
+/**
+ * Las reglas (CREATE RULE) de `public` que no son el _RETURN de una
+ * vista, como `tabla.regla`, y por qué. Su acción corre con los
+ * privilegios del dueño de la tabla. Vacía: el esquema no usa ninguna.
+ */
+export const REGLAS_DECLARADAS: Readonly<Record<string, string>> = {};
+
+/**
+ * Los esquemas, además de public, information_schema, pg_* y extensions,
+ * en los que mc_app puede tener USAGE, y por qué. La guardia solo mira
+ * `public`: un esquema nuevo al que llega mc_app es un sitio donde nadie
+ * pregunta. Vacía.
+ */
+export const ESQUEMAS_DECLARADOS: Readonly<Record<string, string>> = {};
+
+/**
+ * Los roles de los que mc_app puede ser miembro, y por qué. Un miembro
+ * hereda los privilegios del rol —o puede hacer SET ROLE a él—, y esos
+ * no salen en los GRANT de mc_app. Vacía: mc_app no pertenece a ninguno.
+ */
+export const ROLES_DE_LA_APP_DECLARADOS: Readonly<Record<string, string>> = {};
+
+/**
+ * Las columnas de tablas CON inquilino en las que `col =
+ * current_user_id()` aísla por sí sola, como `tabla.columna`, y por qué.
+ * En una tabla con workspace_id, aislar por persona abre a quien está en
+ * dos workspaces las filas del otro; aquí se dice dónde eso es lo que se
+ * quiere.
+ */
+export const AISLADAS_POR_PERSONA_DECLARADAS: Readonly<Record<string, string>> = {
+  'membership.user_id':
+    'cada persona lee SUS membresías en todos sus workspaces: es la lista de a qué workspaces puede entrar (CIM-3). ' +
+    'Una membresía dice solo el par persona–workspace, y la persona es la de la sesión',
+};
+
+/**
+ * Las claves ajenas ON DELETE (o ON UPDATE) SET NULL / SET DEFAULT sobre
+ * una columna cuya rama «IS NULL» abre la fila a todos, como
+ * `tabla.columna`, y por qué. Borrar el padre publica la fila. Vacía.
+ */
+export const BORRADOS_QUE_PUBLICAN_DECLARADOS: Readonly<Record<string, string>> = {};
 
 /**
  * Los roles, además del dueño de cada relación y de mc_app, que pueden
@@ -353,7 +453,9 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
   webhook_event: { permite: [], motivo: 'cuerpos y cabeceras crudos de las plataformas: solo el worker' },
   contact_suppression: {
     permite: [],
-    motivo: 'la baja global la escriben y la leen los disparadores de contact y el worker: la web no la toca',
+    motivo:
+      'la baja global la escribe el worker con una baja verificada y la lee el disparador de contact: la web no la ' +
+      'toca. Con escritura, un workspace daba de baja a cualquier correo en toda la plataforma (0029 §1)',
   },
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
@@ -435,10 +537,20 @@ export interface EstadoDelEsquema {
   relacionesSinRls: string[];
   /** Entradas de RELACIONES_SIN_RLS_DECLARADAS que ya no corresponden. */
   relacionesSinRlsObsoletas: string[];
-  /** Funciones SECURITY DEFINER de `public` que mc_app puede ejecutar sin declararlo. */
+  /** Funciones SECURITY DEFINER de `public` sin declarar, se puedan ejecutar o no. */
   funcionesDefiner: string[];
   /** Entradas de FUNCIONES_DEFINER_DECLARADAS que ya no corresponden. */
   funcionesDefinerObsoletas: string[];
+  /** Disparadores de tablas de `public` que llaman a una función SECURITY DEFINER, sin declarar. */
+  disparadoresDefiner: string[];
+  /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
+  reglas: string[];
+  /** Esquemas fuera de public a los que llega mc_app, o CREATE en public. */
+  esquemasDeMas: string[];
+  /** Lo que el propio rol mc_app no debería tener: atributos que saltan la RLS o roles de los que es miembro. */
+  rolDeLaApp: string[];
+  /** Claves ajenas SET NULL / SET DEFAULT sobre una columna cuya rama «IS NULL» abre la fila a todos. */
+  borradosQuePublican: string[];
   /** Claves ajenas hacia una tabla con RLS, escribibles por mc_app, sin assert_reference_visible. */
   referenciasSinComprobar: string[];
   /** Entradas de REFERENCIAS_SIN_COMPROBAR_DECLARADAS que ya no corresponden. */
@@ -447,7 +559,13 @@ export interface EstadoDelEsquema {
   unicosSinInquilino: string[];
   /** Entradas de UNICOS_GLOBALES_DECLARADOS que ya no corresponden. */
   unicosDeclaradosObsoletos: string[];
-  /** Entradas de HIJAS_CON_GLOBALES_DECLARADAS y SECUENCIAS_DECLARADAS que ya no corresponden. */
+  /**
+   * Entradas de las demás listas (HIJAS_CON_GLOBALES_DECLARADAS,
+   * SECUENCIAS_DECLARADAS, DISPARADORES_DEFINER_DECLARADOS,
+   * REGLAS_DECLARADAS, ESQUEMAS_DECLARADOS, ROLES_DE_LA_APP_DECLARADOS,
+   * AISLADAS_POR_PERSONA_DECLARADAS, BORRADOS_QUE_PUBLICAN_DECLARADOS)
+   * que ya no corresponden, con el nombre de la lista delante.
+   */
   otrasDeclaracionesObsoletas: string[];
   /** Privilegios que mc_app conserva y no debería (de tabla, de columna o de secuencia). */
   privilegiosDeMas: PrivilegioDeMas[];
@@ -540,6 +658,31 @@ interface FilaReferencia extends Record<string, unknown> {
   padre: string;
   columna_padre: string;
   columnas: number;
+  /** confdeltype y confupdtype: a = NO ACTION, r = RESTRICT, c = CASCADE, n = SET NULL, d = SET DEFAULT. */
+  al_borrar: string;
+  al_actualizar: string;
+}
+interface FilaDisparadorDefiner extends Record<string, unknown> {
+  tabla: string;
+  disparador: string;
+  funcion: string;
+}
+interface FilaRegla extends Record<string, unknown> {
+  tabla: string;
+  regla: string;
+}
+interface FilaEsquema extends Record<string, unknown> {
+  esquema: string;
+  uso: boolean;
+  crea: boolean;
+}
+interface FilaRol extends Record<string, unknown> {
+  rol: string;
+  /** Si es el propio mc_app; si no, un rol del que mc_app es miembro. */
+  propio: boolean;
+  super: boolean;
+  bypass: boolean;
+  crea_roles: boolean;
 }
 interface FilaDisparador extends Record<string, unknown> {
   tabla: string;
@@ -665,18 +808,63 @@ const SQL_UNICOS = `
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (x.indisunique OR x.indisexclusion)
    ORDER BY 1, 2`;
 
-/** Las funciones de `public` que corren con los privilegios de su dueño y mc_app puede llamar. */
+/**
+ * TODAS las funciones de `public` que corren con los privilegios de su
+ * dueño. No se filtra por EXECUTE a propósito: una función de disparador
+ * corre aunque quien escribe no pueda ejecutarla (ver la nota de arriba).
+ */
 const SQL_FUNCIONES = `
   SELECT p.oid::regprocedure::text AS firma
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege($1::name, p.oid, 'EXECUTE')
+   WHERE n.nspname = 'public' AND p.prosecdef
    ORDER BY 1`;
 
-/** Las claves ajenas de `public`, con su primera columna y cuántas tiene. */
+/** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
+const SQL_DISPARADORES_DEFINER = `
+  SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_proc f ON f.oid = t.tgfoid
+   WHERE n.nspname = 'public' AND NOT t.tgisinternal AND f.prosecdef
+   ORDER BY 1, 2`;
+
+/** Las reglas de `public` que no son la de una vista (_RETURN). */
+const SQL_REGLAS = `
+  SELECT c.relname::text AS tabla, r.rulename::text AS regla
+    FROM pg_rewrite r
+    JOIN pg_class c ON c.oid = r.ev_class
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND r.rulename <> '_RETURN'
+   ORDER BY 1, 2`;
+
+/**
+ * Los esquemas a los que llega mc_app (USAGE) fuera de los del sistema,
+ * y si puede crear en ellos. has_schema_privilege cuenta también lo que
+ * hereda de los roles de los que es miembro.
+ */
+const SQL_ESQUEMAS = `
+  SELECT n.nspname::text AS esquema,
+         has_schema_privilege($1::name, n.oid, 'USAGE') AS uso,
+         has_schema_privilege($1::name, n.oid, 'CREATE') AS crea
+    FROM pg_namespace n
+   WHERE n.nspname NOT IN ('information_schema', 'extensions') AND n.nspname NOT LIKE 'pg\\_%'
+   ORDER BY 1`;
+
+/** El rol mc_app y cada rol del que es miembro, con los atributos que saltan la RLS. */
+const SQL_ROL_DE_LA_APP = `
+  SELECT r.rolname::text AS rol, (r.rolname = $1::name) AS propio, r.rolsuper AS super,
+         r.rolbypassrls AS bypass, r.rolcreaterole AS crea_roles
+    FROM pg_roles r
+   WHERE r.rolname = $1::name OR pg_has_role($1::name, r.oid, 'MEMBER')
+   ORDER BY 2 DESC, 1`;
+
+/** Las claves ajenas de `public`, con su primera columna, cuántas tiene y qué hacen al borrar el padre. */
 const SQL_REFERENCIAS = `
   SELECT hija.relname AS hija, a.attname::text AS columna, padre.relname AS padre,
-         pa.attname::text AS columna_padre, array_length(k.conkey, 1) AS columnas
+         pa.attname::text AS columna_padre, array_length(k.conkey, 1) AS columnas,
+         k.confdeltype::text AS al_borrar, k.confupdtype::text AS al_actualizar
     FROM pg_constraint k
     JOIN pg_class hija   ON hija.oid = k.conrelid
     JOIN pg_namespace n  ON n.oid = hija.relnamespace
@@ -783,11 +971,15 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const relaciones = await leer<FilaRelacion>(SQL_RELACIONES);
   const politicas = await leer<FilaPolitica>(SQL_POLITICAS, [APP_ROLE]);
   const privilegios = await leer<FilaPrivilegio>(SQL_PRIVILEGIOS);
-  const funciones = await leer<FilaFuncion>(SQL_FUNCIONES, [APP_ROLE]);
+  const funciones = await leer<FilaFuncion>(SQL_FUNCIONES);
   const referencias = await leer<FilaReferencia>(SQL_REFERENCIAS);
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
+  const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
+  const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
+  const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
+  const rolesDeLaApp = await leer<FilaRol>(SQL_ROL_DE_LA_APP, [APP_ROLE]);
 
   const tablas = relaciones.filter((r) => r.relkind === 'r' || r.relkind === 'p');
   const vistas = relaciones.filter((r) => r.relkind === 'v');
@@ -839,6 +1031,20 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     if (lista) lista.push(i.columna);
     else inquilinoPorTabla.set(i.tabla, [i.columna]);
   }
+  // Lo que una fila puede NOMBRAR: sus claves ajenas de una columna hacia
+  // tablas con RLS. Es lo que la rama «IS NULL» de una lectura tiene que
+  // mirar antes de abrir la fila a todos.
+  const referenciasConRls = new Map<string, ReferenciaDeTabla[]>();
+  for (const r of referencias) {
+    if (r.columnas !== 1 || !porNombre.get(r.padre)?.rls) continue;
+    const lista = referenciasConRls.get(r.hija);
+    const ref = { col: r.columna, padre: r.padre };
+    if (lista) lista.push(ref);
+    else referenciasConRls.set(r.hija, [ref]);
+  }
+  // Las declaraciones por persona que alguna política usó de verdad: las
+  // demás sobran.
+  const personasUsadas = new Set<string>();
   const contexto = (tabla: string, lado: Lado): ContextoDePolitica => ({
     tabla,
     lado,
@@ -846,6 +1052,13 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     esReferencia: (hija, col, padre, pcol) => claveAjena.has(`${hija}.${col}→${padre}.${pcol}`),
     inquilinoDe: (t) => inquilinoPorTabla.get(t) ?? [],
     hijaConGlobalesDeclarada: (t) => t in HIJAS_CON_GLOBALES_DECLARADAS,
+    referenciasConRls: (t) => referenciasConRls.get(t) ?? [],
+    personaDeclarada: (t, col) => {
+      const clave = `${t}.${col}`;
+      if (!(clave in AISLADAS_POR_PERSONA_DECLARADAS)) return false;
+      personasUsadas.add(clave);
+      return true;
+    },
   });
 
   const politicasPorTabla = new Map<string, FilaPolitica[]>();
@@ -986,12 +1199,94 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       })
     : [];
 
-  // ---- funciones SECURITY DEFINER
+  // ---- funciones SECURITY DEFINER: todas, se puedan ejecutar o no
   const firmas = new Set(funciones.map((f) => f.firma));
   const funcionesDefiner = funciones.map((f) => f.firma).filter((f) => !(f in FUNCIONES_DEFINER_DECLARADAS));
   const funcionesDefinerObsoletas = inventarioLeido
     ? Object.keys(FUNCIONES_DEFINER_DECLARADAS).filter((f) => !firmas.has(f))
     : [];
+
+  // ---- disparadores que llaman a una función SECURITY DEFINER: corren
+  //      con su dueño para cualquiera que escriba en la tabla, sin que
+  //      Postgres mire EXECUTE
+  const clavesDeDisparadores = new Set(disparadoresDefinerLeidos.map((d) => `${d.tabla}.${d.disparador}`));
+  const disparadoresDefiner = disparadoresDefinerLeidos
+    .filter((d) => !(`${d.tabla}.${d.disparador}` in DISPARADORES_DEFINER_DECLARADOS))
+    .map((d) => `${d.tabla}.${d.disparador} → ${d.funcion}`);
+
+  // ---- reglas: su acción corre con los privilegios del dueño de la tabla
+  const clavesDeReglas = new Set(reglasLeidas.map((r) => `${r.tabla}.${r.regla}`));
+  const reglas = [...clavesDeReglas].filter((k) => !(k in REGLAS_DECLARADAS));
+
+  // ---- otros esquemas, y crear en public
+  const esquemasDeMas: string[] = [];
+  const esquemasConUso = new Set<string>();
+  for (const e of esquemas) {
+    if (e.esquema === 'public') {
+      if (e.crea) esquemasDeMas.push(`public (CREATE: ${APP_ROLE} puede crear tablas, funciones y vistas propias)`);
+      continue;
+    }
+    if (!e.uso && !e.crea) continue;
+    esquemasConUso.add(e.esquema);
+    if (!(e.esquema in ESQUEMAS_DECLARADOS)) {
+      esquemasDeMas.push(`${e.esquema} (${[e.uso ? 'USAGE' : '', e.crea ? 'CREATE' : ''].filter(Boolean).join(', ')})`);
+    }
+  }
+
+  // ---- el propio rol de la aplicación
+  const rolDeLaApp: string[] = [];
+  const rolesDeLosQueEsMiembro = new Set<string>();
+  if (inventarioLeido && !rolesDeLaApp.some((r) => r.propio)) {
+    rolDeLaApp.push(`el rol ${APP_ROLE} no existe en esta base: la guardia no sabe a quién medirle los privilegios`);
+  }
+  for (const r of rolesDeLaApp) {
+    const atributos = [r.super ? 'SUPERUSER' : '', r.bypass ? 'BYPASSRLS' : '', r.crea_roles ? 'CREATEROLE' : ''].filter(Boolean);
+    if (r.propio) {
+      if (atributos.length) rolDeLaApp.push(`${APP_ROLE} tiene ${atributos.join(', ')}`);
+      continue;
+    }
+    rolesDeLosQueEsMiembro.add(r.rol);
+    if (r.rol in ROLES_DE_LA_APP_DECLARADOS) continue;
+    rolDeLaApp.push(
+      `${APP_ROLE} es miembro de ${r.rol}` +
+        (atributos.length ? ` (${atributos.join(', ')})` : '') +
+        ': hereda sus privilegios y puede hacer SET ROLE a él',
+    );
+  }
+
+  // ---- borrar el padre no publica la fila: la columna de una rama
+  //      «IS NULL» aceptada en lectura no puede ser ON DELETE SET NULL
+  const accionPorColumna = new Map<string, { padre: string; borrar: string; actualizar: string }>();
+  for (const r of referencias) {
+    if (r.columnas === 1) {
+      accionPorColumna.set(`${r.hija}.${r.columna}`, { padre: r.padre, borrar: r.al_borrar, actualizar: r.al_actualizar });
+    }
+  }
+  const ACCIONES_QUE_SUELTAN: Record<string, string> = { n: 'SET NULL', d: 'SET DEFAULT' };
+  const borradosQuePublican: string[] = [];
+  const borradosQueAplican = new Set<string>();
+  for (const t of tablas) {
+    if (!t.rls) continue;
+    const ctx = contexto(t.relname, 'lectura');
+    const nulos = new Set<string>();
+    for (const p of alcanzan(t.relname, 'SELECT').filter((x) => x.permisiva)) {
+      const v = veredicto(p.qual, ctx);
+      if (v.aisla) for (const c of v.nulos) nulos.add(c);
+    }
+    for (const col of [...nulos].sort()) {
+      const clave = `${t.relname}.${col}`;
+      const a = accionPorColumna.get(clave);
+      if (!a) continue;
+      const sueltan = [
+        ACCIONES_QUE_SUELTAN[a.borrar] ? `ON DELETE ${ACCIONES_QUE_SUELTAN[a.borrar]}` : '',
+        ACCIONES_QUE_SUELTAN[a.actualizar] ? `ON UPDATE ${ACCIONES_QUE_SUELTAN[a.actualizar]}` : '',
+      ].filter(Boolean);
+      if (!sueltan.length) continue;
+      borradosQueAplican.add(clave);
+      if (clave in BORRADOS_QUE_PUBLICAN_DECLARADOS) continue;
+      borradosQuePublican.push(`${clave} → ${a.padre} (${sueltan.join(', ')})`);
+    }
+  }
 
   // ---- referencias: toda clave hacia una tabla con RLS, en una tabla
   //      que mc_app escribe, lleva el disparador de 0025 §3
@@ -1118,7 +1413,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     }
   }
   const nombresDeSecuencias = new Set(secuencias.map((q) => q.relname));
-  const otrasDeclaracionesObsoletas = relaciones.length
+  const otrasDeclaracionesObsoletas: string[] = relaciones.length
     ? [
         ...Object.keys(SECUENCIAS_DECLARADAS)
           .filter((q) => !nombresDeSecuencias.has(q))
@@ -1128,6 +1423,22 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
           .map((h) => `HIJAS_CON_GLOBALES_DECLARADAS: ${h}`),
       ]
     : [];
+  if (inventarioLeido) {
+    const sobran = (lista: string, declaradas: Readonly<Record<string, string>>, existen: (k: string) => boolean) =>
+      Object.keys(declaradas)
+        .filter((k) => !existen(k))
+        .map((k) => `${lista}: ${k}`);
+    otrasDeclaracionesObsoletas.push(
+      ...sobran('DISPARADORES_DEFINER_DECLARADOS', DISPARADORES_DEFINER_DECLARADOS, (k) => clavesDeDisparadores.has(k)),
+      ...sobran('REGLAS_DECLARADAS', REGLAS_DECLARADAS, (k) => clavesDeReglas.has(k)),
+      ...sobran('ESQUEMAS_DECLARADOS', ESQUEMAS_DECLARADOS, (k) => esquemasConUso.has(k)),
+      ...sobran('ROLES_DE_LA_APP_DECLARADOS', ROLES_DE_LA_APP_DECLARADOS, (k) => rolesDeLosQueEsMiembro.has(k)),
+      ...(politicas.length
+        ? sobran('AISLADAS_POR_PERSONA_DECLARADAS', AISLADAS_POR_PERSONA_DECLARADAS, (k) => personasUsadas.has(k))
+        : []),
+      ...sobran('BORRADOS_QUE_PUBLICAN_DECLARADOS', BORRADOS_QUE_PUBLICAN_DECLARADOS, (k) => borradosQueAplican.has(k)),
+    );
+  }
 
   // ---- los demás roles
   const rolesDeMas: RolDeMas[] = [];
@@ -1165,6 +1476,11 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     relacionesSinRlsObsoletas: siAlDia(relacionesSinRlsObsoletas),
     funcionesDefiner,
     funcionesDefinerObsoletas: siAlDia(funcionesDefinerObsoletas),
+    disparadoresDefiner,
+    reglas,
+    esquemasDeMas,
+    rolDeLaApp,
+    borradosQuePublican,
     referenciasSinComprobar,
     referenciasDeclaradasObsoletas: siAlDia(referenciasDeclaradasObsoletas),
     unicosSinInquilino,
@@ -1195,6 +1511,11 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   relacionesSinRlsObsoletas: [],
   funcionesDefiner: [],
   funcionesDefinerObsoletas: [],
+  disparadoresDefiner: [],
+  reglas: [],
+  esquemasDeMas: [],
+  rolDeLaApp: [],
+  borradosQuePublican: [],
   referenciasSinComprobar: [],
   referenciasDeclaradasObsoletas: [],
   unicosSinInquilino: [],
@@ -1260,9 +1581,50 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   }
   if (estado.funcionesDefiner.length) {
     partes.push(
-      `${APP_ROLE} puede ejecutar funciones SECURITY DEFINER, que corren con los privilegios de su dueño: ` +
+      'hay funciones SECURITY DEFINER en public, que corren con los privilegios de su dueño: ' +
         estado.funcionesDefiner.join(', ') +
-        '. Hazlas SECURITY INVOKER, revócale EXECUTE, o decláralas en FUNCIONES_DEFINER_DECLARADAS',
+        '. Revocar EXECUTE no basta: un disparador la corre igual. Hazlas SECURITY INVOKER, o decláralas en ' +
+        'FUNCIONES_DEFINER_DECLARADAS con su motivo',
+    );
+  }
+  if (estado.disparadoresDefiner.length) {
+    partes.push(
+      'hay disparadores que llaman a una función SECURITY DEFINER: corren con los privilegios de su dueño para ' +
+        `cualquiera que escriba en la tabla, también ${APP_ROLE}, y Postgres no mira EXECUTE al disparar: ` +
+        estado.disparadoresDefiner.join(', ') +
+        '. Quítalos, haz la función SECURITY INVOKER, o decláralos en DISPARADORES_DEFINER_DECLARADOS',
+    );
+  }
+  if (estado.reglas.length) {
+    partes.push(
+      'hay reglas (CREATE RULE) en public: su acción corre con los privilegios del dueño de la tabla y rodea los ' +
+        `GRANT de ${APP_ROLE}: ` +
+        estado.reglas.join(', ') +
+        '. Bórralas (un disparador SECURITY INVOKER hace lo mismo sin rodear nada), o decláralas en REGLAS_DECLARADAS',
+    );
+  }
+  if (estado.esquemasDeMas.length) {
+    partes.push(
+      `${APP_ROLE} llega a esquemas que la guardia no inspecciona, o puede crear objetos: ` +
+        estado.esquemasDeMas.join(', ') +
+        `. Revócaselo (REVOKE USAGE ON SCHEMA … FROM ${APP_ROLE}), o declara el esquema en ESQUEMAS_DECLARADOS`,
+    );
+  }
+  if (estado.rolDeLaApp.length) {
+    partes.push(
+      `el rol ${APP_ROLE} tiene más de lo que dicen sus GRANT: ` +
+        estado.rolDeLaApp.join('; ') +
+        '. Un atributo o una membresía así se salta la RLS o hereda privilegios que la guardia no ve. Corrígelo con ' +
+        './scripts/supabase-admin.sh (mc_migrator no puede alterar roles), o declara el rol en ROLES_DE_LA_APP_DECLARADOS',
+    );
+  }
+  if (estado.borradosQuePublican.length) {
+    partes.push(
+      'hay claves ajenas que, al borrar el padre, dejan a NULL una columna cuya lectura dice «sin padre, es de ' +
+        'todos»: borrar el padre PUBLICA la fila: ' +
+        estado.borradosQuePublican.join(', ') +
+        '. Cámbialas a ON DELETE CASCADE o RESTRICT en una migración (ver 0029 §2), o decláralas en ' +
+        'BORRADOS_QUE_PUBLICAN_DECLARADOS',
     );
   }
   if (estado.referenciasSinComprobar.length) {

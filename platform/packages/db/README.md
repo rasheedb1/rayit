@@ -317,13 +317,33 @@ además más rápido.
   sin política: la protege el `GRANT`. `PRIVILEGIOS_DE_LA_APP` dice qué
   puede hacer sobre cada catálogo y la guardia lo comprueba, también en
   producción. Nunca tiene TRUNCATE, TRIGGER, REFERENCES ni MAINTAIN, ni
-  privilegios sobre una vista materializada o una tabla foránea, ni
-  EXECUTE sobre una función SECURITY DEFINER; y ningún otro rol que no
-  esté en `ROLES_CON_ACCESO_DECLARADOS` tiene nada en `public`. Un
+  privilegios sobre una vista materializada o una tabla foránea; y
+  ningún otro rol que no esté en `ROLES_CON_ACCESO_DECLARADOS` tiene
+  nada en `public`. Un
   `GRANT` **por columna** cuenta como de tabla (un REVOKE de tabla no
   lo quita), y en las **secuencias** `mc_app` no tiene SELECT ni UPDATE
   —`last_value` es el volumen de toda la plataforma— y USAGE solo donde
   inserta (**0026**).
+- **Nada corre con los privilegios de otro sin declararlo** (**0029**).
+  Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
+  corre con su dueño para cualquiera que escriba en la tabla, aunque a
+  `mc_app` se le haya revocado la función. La guardia inventaría TODA
+  función SECURITY DEFINER de `public` (`FUNCIONES_DEFINER_DECLARADAS`),
+  todo disparador que llame a una (`DISPARADORES_DEFINER_DECLARADOS`),
+  las reglas CREATE RULE (`REGLAS_DECLARADAS`), los esquemas fuera de
+  `public` a los que llega `mc_app` y CREATE en `public`
+  (`ESQUEMAS_DECLARADOS`), y el propio rol: sin SUPERUSER, BYPASSRLS ni
+  CREATEROLE, y sin ser miembro de ningún rol
+  (`ROLES_DE_LA_APP_DECLARADOS`).
+- **Una fila global no nombra una privada, y borrar no publica.** La
+  rama «`col IS NULL`» de una lectura abre la fila a todos: tiene que
+  correlacionar con un EXISTS cada otra clave ajena hacia una tabla con
+  RLS, y la clave de `col` no puede ser ON DELETE SET NULL (borrar el
+  padre convertiría la fila privada en global;
+  `BORRADOS_QUE_PUBLICAN_DECLARADOS`). Y `col = current_workspace_id()`
+  solo aísla si `col` es la columna de inquilino; `col =
+  current_user_id()`, si nombra a una persona y va junto al inquilino
+  (o está en `AISLADAS_POR_PERSONA_DECLARADAS`).
 - **La unicidad es por inquilino.** Un índice único se comprueba contra
   todas las filas, las vea quien escribe o no: uno global sobre una
   tabla con dueño le dice a B qué valores tiene A (el 23505) y le
@@ -340,7 +360,10 @@ además más rápido.
   `contact`): se leen desde cualquier workspace y no se editan desde
   ninguno. Lo que guarda un workspace es suyo aunque venga de una
   fuente pública; la baja global de un contacto vive en
-  `contact_suppression`, que la aplicación no lee ni escribe.
+  `contact_suppression`, que la aplicación no lee ni escribe y que solo
+  llena el worker con una baja verificable de la propia persona (enlace
+  de baja, rebote duro o queja). El `opted_out` que marca un workspace
+  es SU baja, no la de la plataforma (**0029**).
 - La moneda, la zona horaria y el locale salen del workspace
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.

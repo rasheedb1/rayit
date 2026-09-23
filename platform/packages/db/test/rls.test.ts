@@ -1786,69 +1786,244 @@ describe('la unicidad es por inquilino: un 23505 ya no dice qué tiene otro work
   });
 });
 
-describe('la baja global vive en una lista de supresión (0026 §3)', () => {
+/**
+ * La baja global (0007) la llena SOLO una baja verificada de la propia
+ * persona, que procesa el worker (0029 §1).
+ *
+ * Con 0026 §3 la llenaba un disparador SECURITY DEFINER desde el
+ * opted_out que cualquier workspace escribe en su CRM. Reproducido por
+ * los revisores como mc_app: B guarda un contacto con el correo de un
+ * cliente de A y opted_out = true, y desde entonces cada contacto que A
+ * guarde con ese correo nace dado de baja, con un motivo inventado, y el
+ * outreach de A a sus propios clientes queda bloqueado para siempre. La
+ * prueba de la ronda 4 —«A registra la baja; el contacto que B guarde
+ * DESPUÉS nace dado de baja»— trataba como funcionalidad justo el
+ * ataque. Aquí está al revés.
+ */
+describe('la baja global la llena solo una baja verificada, no el CRM de un workspace (0029 §1)', () => {
   const EMPRESA_A = '0000026a-0000-4000-8000-000000000002';
   const EMPRESA_B = '0000026b-0000-4000-8000-000000000002';
-  const CORREO = 'no-me-escriban@marca-0026.co';
+  const CLIENTE_DE_A = 'cliente@marca-0029.co';
+  const VERIFICADO = 'pidio-la-baja@marca-0029.co';
 
   before(async () => {
     for (const [ws, empresa] of [[WS_A, EMPRESA_A], [WS_B, EMPRESA_B]] as const) {
       await t.db.withWorkspace(ws, async (tx) => {
-        await tx.query("INSERT INTO company (id, name) VALUES ($1, 'Marca 0026')", [empresa]);
+        await tx.query("INSERT INTO company (id, name) VALUES ($1, 'Marca 0029')", [empresa]);
         await tx.query('INSERT INTO company_link (workspace_id, company_id) VALUES (current_workspace_id(), $1)', [empresa]);
       });
     }
   }, { timeout: 120_000 });
 
-  test('A registra la baja; el contacto que B guarde DESPUÉS con ese correo nace dado de baja', async () => {
-    await t.db.withWorkspace(WS_A, async (tx) => {
-      await tx.query("INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'inbound')", [EMPRESA_A, CORREO]);
-      await tx.query('UPDATE contact SET opted_out = true, opted_out_at = now() WHERE email = $1', [CORREO]);
-    });
-    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
-      tx.query<{ opted_out: boolean; opted_out_reason: string | null }>(
-        "INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'user_provided') RETURNING opted_out, opted_out_reason",
-        [EMPRESA_B, CORREO],
+  /** Guarda un contacto en el CRM de `ws` y devuelve cómo nació. */
+  const guardar = (ws: string, empresa: string, email: string) =>
+    t.db
+      .withWorkspace(ws, (tx) =>
+        tx.query<{ opted_out: boolean; opted_out_reason: string | null }>(
+          "INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'user_provided') RETURNING opted_out, opted_out_reason",
+          [empresa, email],
+        ),
+      )
+      .then((r) => r.rows[0]);
+
+  test('el guion de los revisores: B marca de baja el correo de un cliente de A, y el contacto de A NO nace dado de baja', async () => {
+    // B, con una empresa suya, da de alta a esa persona YA de baja.
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query(
+        "INSERT INTO contact (full_name, email, source, company_id, opted_out, opted_out_at) VALUES ('X', $1, 'user_provided', $2, true, now())",
+        [CLIENTE_DE_A, EMPRESA_B],
       ),
     );
-    assert.equal(rows[0]?.opted_out, true, 'ningún creador de la plataforma lo vuelve a contactar (0007)');
-    assert.match(String(rows[0]?.opted_out_reason), /baja de la plataforma/);
-    // Y no dice quién: B sigue viendo solo el suyo.
-    const vistos = await t.db.withWorkspace(WS_B, (tx) =>
-      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact WHERE email = $1', [CORREO]),
-    );
-    assert.equal(vistos.rows[0]?.n, 1);
+    const deA = await guardar(WS_A, EMPRESA_A, CLIENTE_DE_A);
+    assert.equal(deA?.opted_out, false, 'B daba de baja en toda la plataforma a un cliente de A');
+    assert.equal(deA?.opted_out_reason, null, 'y le inventaba un motivo: «Pidió la baja de la plataforma»');
   });
 
-  test('la lista no la lee ni la escribe la aplicación: solo los disparadores y el worker', async () => {
+  test('ni por UPDATE: B da de baja a alguien en su CRM, A le pone ese correo a un contacto suyo, y sigue sin baja', async () => {
+    // Los otros dos caminos del disparador de 0026: la baja que B marca
+    // con un UPDATE (no al crear), y el contacto de A que CAMBIA a ese
+    // correo (no que nace con él).
+    const OTRO_CLIENTE = 'cliente-2@marca-0029.co';
+    await t.db.withWorkspace(WS_B, async (tx) => {
+      await tx.query("INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'user_provided')", [EMPRESA_B, OTRO_CLIENTE]);
+      await tx.query('UPDATE contact SET opted_out = true, opted_out_at = now() WHERE email = $1', [OTRO_CLIENTE]);
+    });
+    const [otro] = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.db
+        .insert(contact)
+        .values({ companyId: EMPRESA_A, fullName: 'Otro de A', email: 'otro@marca-0029.co', source: 'user_provided' })
+        .returning({ id: contact.id }),
+    );
+    const { rows } = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query<{ opted_out: boolean }>('UPDATE contact SET email = $2 WHERE id = $1 RETURNING opted_out', [
+        otro!.id,
+        OTRO_CLIENTE,
+      ]),
+    );
+    assert.equal(rows[0]?.opted_out, false, 'con 0026, el contacto de A quedaba de baja al cambiarle el correo');
+  });
+
+  test('la baja del CRM de B se queda en SU contacto, y es definitiva para él', async () => {
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ opted_out: boolean }>('SELECT opted_out FROM contact WHERE email = $1', [CLIENTE_DE_A]),
+    );
+    assert.deepEqual(rows, [{ opted_out: true }]);
+  });
+
+  test('una baja VERIFICADA la registra el worker, y entonces el contacto que cualquiera guarde nace dado de baja', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    // El enlace de baja lo pulsó la persona: el worker lo procesa.
+    await t.db.asWorker((tx) =>
+      tx.query("INSERT INTO contact_suppression (email, reason) VALUES ($1, 'unsubscribe_link')", [VERIFICADO]),
+    );
+    for (const [ws, empresa] of [[WS_A, EMPRESA_A], [WS_B, EMPRESA_B]] as const) {
+      const c = await guardar(ws, empresa, VERIFICADO);
+      assert.equal(c?.opted_out, true, 'ningún creador de la plataforma lo vuelve a contactar (0007)');
+      assert.match(String(c?.opted_out_reason), /baja de la plataforma/);
+    }
+  });
+
+  test('la lista no acepta una baja sin procedencia verificable, ni siquiera del worker', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    await assert.rejects(
+      t.db.asWorker((tx) =>
+        tx.query("INSERT INTO contact_suppression (email, reason) VALUES ('alguien@marca-0029.co', 'opted_out')"),
+      ),
+      (err: unknown) => /contact_suppression_reason_check/.test(fullMessage(err)),
+    );
+  });
+
+  test('y el correo que B marcó en su CRM no está en la lista: la llenó solo el worker', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    const { rows } = await t.db.asWorker((tx) =>
+      tx.query<{ email: string }>("SELECT email::text AS email FROM contact_suppression WHERE email LIKE '%marca-0029.co' ORDER BY 1"),
+    );
+    assert.deepEqual(rows.map((r) => r.email), [VERIFICADO]);
+  });
+
+  test('la lista no la lee ni la escribe la aplicación: solo el worker y el disparador que la aplica', async () => {
     for (const sql of [
       'SELECT email FROM contact_suppression',
-      "INSERT INTO contact_suppression (email, reason) VALUES ('alguien@x.co', 'opted_out')",
+      "INSERT INTO contact_suppression (email, reason) VALUES ('alguien@x.co', 'unsubscribe_link')",
       'DELETE FROM contact_suppression',
     ]) {
       await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(sql)), isPermissionDenied, sql);
     }
   });
 
-  test('las funciones SECURITY DEFINER de la lista no las ejecuta mc_app', async () => {
+  test('el disparador que escribía la lista ya no existe; el que la aplica no lo ejecuta mc_app', async () => {
     const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
       tx.query<{ f: string; puede: boolean }>(
         `SELECT p.proname::text AS f, has_function_privilege('mc_app', p.oid, 'EXECUTE') AS puede
            FROM pg_proc p WHERE p.proname IN ('contact_suppression_record', 'contact_suppression_apply') ORDER BY 1`,
       ),
     );
-    assert.deepEqual(rows, [
-      { f: 'contact_suppression_apply', puede: false },
-      { f: 'contact_suppression_record', puede: false },
-    ]);
+    assert.deepEqual(rows, [{ f: 'contact_suppression_apply', puede: false }]);
+  });
+});
+
+/**
+ * Borrar un workspace es la operación del worker, y no puede publicar
+ * nada (0029 §2). Con company.owner_workspace_id ON DELETE SET NULL, cada
+ * empresa privada del inquilino borrado pasaba a owner NULL, que para
+ * company_read es «catálogo compartido». Reproducido por los revisores:
+ * C crea «Prospecto secreto de C», se borra C, y B lee la empresa.
+ */
+describe('borrar un workspace no publica su CRM (0029 §2)', () => {
+  const WS_C = '0000029c-0000-4000-8000-000000000001';
+  const SECRETO = '0000029c-0000-4000-8000-0000000000e1';
+  const VIDEO = '0000029c-0000-4000-8000-0000000000a1';
+  const ANALISIS = '0000029c-0000-4000-8000-0000000000a2';
+  const POST_ANALIZADO = '0000029c-0000-4000-8000-0000000000a3';
+
+  before(async () => {
+    await t.admin(`INSERT INTO workspace (id, slug, name) VALUES ('${WS_C}', 'workspace-c-0029', 'Workspace C')`);
+    await t.db.withWorkspace(WS_C, (tx) =>
+      tx.query("INSERT INTO company (id, name) VALUES ($1, 'Prospecto secreto de C')", [SECRETO]),
+    );
+    // El post ajeno que C pidió analizar: con análisis, es de C.
+    await t.admin(`
+      INSERT INTO video_asset (id, workspace_id) VALUES ('${VIDEO}', '${WS_C}');
+      INSERT INTO video_analysis (id, video_asset_id, workspace_id, analyzer_version)
+        VALUES ('${ANALISIS}', '${VIDEO}', '${WS_C}', 'v1.0.0');
+      INSERT INTO external_post (id, platform_id, external_post_id, analysis_id)
+        VALUES ('${POST_ANALIZADO}', 'tiktok', 'ep-de-c-0029', '${ANALISIS}');
+    `);
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM company WHERE id = $1', [SECRETO]),
+    );
+    assert.equal(rows[0]?.n, 0, 'antes de borrar, B no la ve: la prueba mira lo que cambia al borrar');
+  }, { timeout: 120_000 });
+
+  test('se borra C (como el worker, sin RLS) y B no lee su empresa: se fue con él', async () => {
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS_C}'`);
+    const deB = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM company WHERE id = $1', [SECRETO]),
+    );
+    assert.equal(deB.rows[0]?.n, 0, 'con SET NULL, el «Prospecto secreto de C» pasaba al catálogo de todos');
+    const catalogo = await t.db.withCatalogs((tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM company WHERE id = $1', [SECRETO]),
+    );
+    assert.equal(catalogo.rows[0]?.n, 0, 'ni siquiera sin workspace fijado');
   });
 
-  test('mc_worker sí la lee: es quien la aplica en el outreach', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
-    const { rows } = await t.db.asWorker((tx) =>
-      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact_suppression WHERE email = $1', [CORREO]),
+  test('y el post que C analizó no pasa a ser dato global del radar', async () => {
+    const deB = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM external_post WHERE id = $1', [POST_ANALIZADO]),
+    );
+    assert.equal(deB.rows[0]?.n, 0, 'con SET NULL en analysis_id, el post de C quedaba a la vista de todos');
+  });
+});
+
+/**
+ * Una fila global no nombra una privada (0029 §3). brand_account_snapshot
+ * sin campaña se leía desde cualquier workspace, con el company_id, el
+ * handle y los seguidores de una empresa privada de otro; y un contacto
+ * del catálogo de una empresa privada decía a todos que existe.
+ */
+describe('una fila global no nombra lo que quien lee no ve (0029 §3)', () => {
+  const EMPRESA_DE_A = '0000029a-0000-4000-8000-0000000000e1';
+  const EMPRESA_CATALOGO = '0000029a-0000-4000-8000-0000000000e2';
+
+  before(async () => {
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query("INSERT INTO company (id, name) VALUES ($1, 'Café Alma privada de A')", [EMPRESA_DE_A]),
+    );
+    await t.admin(`
+      INSERT INTO company (id, name) VALUES ('${EMPRESA_CATALOGO}', 'Marca del catálogo 0029');
+      INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, handle, day, followers) VALUES
+        (NULL, '${EMPRESA_DE_A}', 'instagram', '@Café Alma', '2026-09-03', 5000),
+        (NULL, '${EMPRESA_CATALOGO}', 'instagram', '@catalogo', '2026-09-03', 7000);
+      INSERT INTO contact (company_id, owner_workspace_id, full_name, email, source) VALUES
+        ('${EMPRESA_DE_A}', NULL, 'Prensa de la marca de A', 'prensa@cafe-alma-0029.co', 'press'),
+        ('${EMPRESA_CATALOGO}', NULL, 'Prensa del catálogo', 'prensa@catalogo-0029.co', 'press');
+    `);
+  }, { timeout: 120_000 });
+
+  test('B no lee los seguidores de la empresa privada de A; los del catálogo, sí', async () => {
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ handle: string }>(
+        'SELECT handle FROM brand_account_snapshot WHERE company_id = ANY ($1::uuid[]) ORDER BY 1',
+        [[EMPRESA_DE_A, EMPRESA_CATALOGO]],
+      ),
+    );
+    assert.deepEqual(rows.map((r) => r.handle), ['@catalogo'], 'desde B se leía «@Café Alma» con sus seguidores');
+  });
+
+  test('A sí los lee: la empresa es suya', async () => {
+    const { rows } = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM brand_account_snapshot WHERE company_id = $1', [EMPRESA_DE_A]),
     );
     assert.equal(rows[0]?.n, 1);
+  });
+
+  test('un contacto del catálogo de una empresa privada de A no lo ve B; el de una del catálogo, sí', async () => {
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ email: string }>(
+        "SELECT email::text AS email FROM contact WHERE email LIKE '%-0029.co' AND owner_workspace_id IS NULL ORDER BY 1",
+      ),
+    );
+    assert.deepEqual(rows.map((r) => r.email), ['prensa@catalogo-0029.co']);
   });
 });
 
@@ -1959,7 +2134,7 @@ describe('filas heredadas: las empresas que ya existen pasan a su workspace (002
     const forzadasAntes = await viejo.queryAsSuperuser<{ relname: string }>(
       "SELECT relname::text AS relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relforcerowsecurity ORDER BY 1",
     );
-    assert.deepEqual(await viejo.migrar(), ['0026_duenos_unicos_secuencias.sql']);
+    assert.deepEqual(await viejo.migrar('0026_duenos_unicos_secuencias.sql'), ['0026_duenos_unicos_secuencias.sql']);
 
     assert.deepEqual(await nombres(viejo, N), ['Marca del Catálogo'], 'lo que nadie nombra se queda en el catálogo');
     assert.deepEqual(await nombres(viejo, L), ['Marca Compartida', 'Marca de Laura', 'Marca del Catálogo']);

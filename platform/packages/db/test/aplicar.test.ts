@@ -23,6 +23,8 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0022': 'main: 0022_public_profile_access.sql (CON-10), ya aplicada en Supabase',
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  '0027': 'rasheed/CIM-3-auth-workspaces-r4: 0027_sesion_correo_verificado.sql',
+  '0028': 'rasheed/CIM-3-auth-workspaces-r4: 0028_membership_alta_propia.sql',
 };
 
 let dir = '';
