@@ -1051,6 +1051,19 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
     assert.equal(snap.totales.followers, suma);
   });
 
+  test('el «N× su mediana» de cada post cuadra con la mediana que el media kit publica de su red', async () => {
+    const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
+    const conMultiplo = snap.topPosts.filter((p) => p.viewsVsMedian !== null);
+    assert.ok(conMultiplo.length > 0, 'el seed trae posts con múltiplo');
+    for (const p of conMultiplo) {
+      const red = snap.redes.find((r) => r.platformId === p.platformId);
+      assert.ok(red?.medianViews, `la red ${p.platformId} publica su mediana`);
+      // La cuenta que haría la marca con las dos cifras de la página.
+      const esperado = Math.round((p.views! / red.medianViews) * 10) / 10;
+      assert.equal(Number(p.viewsVsMedian), esperado, `${p.platformId}: ${p.views} / ${red.medianViews}`);
+    }
+  });
+
   test('en la audiencia por país, «Otros» va al final aunque pese más que el último país', async () => {
     const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
     const pais = snap.audiencia.find((a) => a.dimension === 'country');

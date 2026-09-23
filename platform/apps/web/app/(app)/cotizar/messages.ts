@@ -608,6 +608,26 @@ export const MESSAGES = {
     label: "Cargando el tarifario",
     section: "Entregables",
   },
+
+  /**
+   * El 404 de una cotización o un media kit que no existe (o es de otro
+   * espacio de trabajo). Sin esto caía en el genérico de (app), que
+   * manda al plan y no a la lista de donde venía.
+   */
+  noEncontrado: {
+    cotizacion: {
+      eyebrow: "Cotizar · Cotizaciones",
+      title: "Esa cotización no está en tu espacio",
+      description: "Puede que la hayas eliminado siendo un borrador, que el enlace esté mal copiado o que sea de otro espacio de trabajo.",
+      accion: "Volver a Cotizaciones",
+    },
+    mediaKit: {
+      eyebrow: "Cotizar · Media kit",
+      title: "Ese media kit no está en tu espacio",
+      description: "Puede que el enlace esté mal copiado o que sea de otro espacio de trabajo.",
+      accion: "Volver a los media kits",
+    },
+  },
 } as const;
 
 /** El nombre de un entregable, o su id si es uno nuevo. */

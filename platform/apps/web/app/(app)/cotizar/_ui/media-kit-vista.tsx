@@ -69,7 +69,14 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
                   <PlatformPill platformId={r.platformId} />
                   {r.handle && <span className="font-mono text-xs text-muted">{r.handle}</span>}
                 </span>
-                <span className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-right">
+                {/* En móvil, rejilla de tres columnas alineadas a la izquierda:
+                    con flex-wrap y text-right, la tercera cifra bajaba de
+                    línea y quedaba con el número a la derecha y la etiqueta
+                    a la izquierda. Desde sm vuelven a ir a la derecha. */}
+                <span
+                  data-cifras-red
+                  className="grid w-full grid-cols-3 gap-x-4 gap-y-1 text-left sm:flex sm:w-auto sm:items-baseline sm:gap-x-6 sm:text-right"
+                >
                   {r.followers !== null && (
                     <span>
                       <span className="block font-mono text-sm tabular-nums">{f.compact(r.followers)}</span>

@@ -131,16 +131,30 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
   );
   const porRed = new Map(baselines.map((b) => [b.platform_id, b]));
 
+  // El «N× su mediana» de cada post se calcula AQUÍ, contra la misma
+  // línea base que el media kit publica en la lista por red (el corte
+  // del tarifario, la mediana redondeada que se enseña). No sale de
+  // post_score.views_vs_median: esa se calculó contra la base vigente
+  // cuando se puntuó el post, y una marca que dividiera las dos cifras
+  // de la página encontraría otro número.
   const { rows: posts } = await tx.query<{
     platform_id: PlatformId; url: string | null; caption: string | null;
     published_at: string; views: string | null; views_vs_median: string | null;
   }>(
-    `SELECT platform_id, url, caption, published_at, views, views_vs_median
-       FROM creator_post_board
-      WHERE creator_id = $1 AND views IS NOT NULL
-      ORDER BY views DESC
+    `WITH base AS (
+       SELECT DISTINCT ON (platform_id) platform_id, round(median_views) AS median_views
+         FROM creator_baseline
+        WHERE creator_id = $1
+        ORDER BY platform_id, (age_hours_cut = $2) DESC, age_hours_cut DESC, computed_at DESC
+     )
+     SELECT p.platform_id, p.url, p.caption, p.published_at, p.views,
+            round(p.views / NULLIF(b.median_views, 0), 1)::text AS views_vs_median
+       FROM creator_post_board p
+       LEFT JOIN base b USING (platform_id)
+      WHERE p.creator_id = $1 AND p.views IS NOT NULL
+      ORDER BY p.views DESC
       LIMIT 6`,
-    [creatorId],
+    [creatorId, CORTE_TARIFARIO_HORAS],
   );
 
   // La audiencia de la red principal (la de más seguidores que tenga
