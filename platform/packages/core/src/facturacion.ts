@@ -357,10 +357,18 @@ export class AmountOutOfRange extends InvoiceError {
   }
 }
 
-/** Un cobro fechado mañana no ha ocurrido. */
+/**
+ * Un cobro fechado mañana no ha ocurrido. Las dos fechas quedan en el
+ * error para que la pantalla las escriba con el formato del espacio:
+ * aquí no hay formateador.
+ */
 export class PaymentDateInFuture extends InvoiceError {
+  readonly receivedOn: string;
+  readonly today: string;
   constructor(receivedOn: string, today: string) {
     super('PaymentDateInFuture', `Un cobro no se puede fechar en el futuro: ${receivedOn} es posterior a hoy (${today}).`);
+    this.receivedOn = receivedOn;
+    this.today = today;
   }
 }
 

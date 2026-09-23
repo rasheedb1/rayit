@@ -70,7 +70,35 @@ export const MESSAGES = {
     pagoParcial: (companyName: string, monto: string, saldo: string) =>
       `${companyName} abonó ${monto}. Quedan ${saldo} por cobrar.`,
   },
+  /**
+   * Por qué el panel de acciones no ofrece nada, por estado. Una frase
+   * por estado y no «Una factura {estado} no admite…»: con FIN-2 el
+   * estado `partial` es alcanzable y esa plantilla decía «Una factura
+   * pago parcial no admite…», que no se lee.
+   */
+  estadoSinAcciones: {
+    draft: "Marca la factura como enviada para poder cobrarla.",
+    sent: "Esta factura está enviada y esperando el cobro.",
+    partial: "Esta factura ya tiene cobros registrados: cambia de estado sola al terminar de cobrarse.",
+    overdue: "Esta factura está vencida: registra el cobro cuando entre el dinero.",
+    paid: "Esta factura ya está cobrada por completo y no admite más cambios.",
+    void: "Esta factura está anulada y no admite más cambios.",
+  },
+  /**
+   * Los errores de dominio de @mc/core llegan con su `messageEs` ya en
+   * español, pero con las cifras y las fechas en crudo: el paquete no
+   * tiene formateador. Los tres que llevan un dato se reescriben aquí
+   * con el del espacio; el resto se muestra tal cual.
+   */
   errores: {
     pago: "No se pudo registrar el pago.",
+    facturaIda: "Esta factura ya no existe en tu espacio.",
+    conflicto: (antes: string, ahora: string) =>
+      `Esta factura cambió mientras registrabas el pago: llevaba ${antes} cobrado y ahora lleva ${ahora}. ` +
+      "Recarga la página y comprueba antes de volver a registrarlo.",
+    excede: (saldo: string) =>
+      `El pago no puede pasar de lo que queda por cobrar (${saldo}). ` +
+      "Si la marca pagó de más, regístralo por lo que debía y avísanos.",
+    futuro: (dia: string, hoy: string) => `Un cobro no se puede fechar en el futuro: ${dia} es posterior a hoy (${hoy}).`,
   },
 } as const;

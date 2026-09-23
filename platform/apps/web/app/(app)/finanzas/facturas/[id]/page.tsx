@@ -102,7 +102,11 @@ export default async function FacturaPage({
       )}
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-8">
+        {/* min-w-0: sin él, el ancho mínimo de una celda de rejilla es su
+            contenido, así que la tabla de cobros —que tiene su propio
+            scroll— estiraba la columna a 536 px y desbordaba la página a
+            390. Medido: scrollWidth 552 sobre clientWidth 390. */}
+        <div className="min-w-0 space-y-8">
           <section className="rounded-md border border-line p-4" aria-labelledby="montos">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 id="montos" className="text-sm font-semibold">
@@ -209,9 +213,7 @@ export default async function FacturaPage({
                 </form>
               )}
               {!puedeEnviar && !puedeAnular && (
-                <p className="text-xs text-fg-3">
-                  Una factura {INVOICE_STATUS_LABEL_ES[invoice.status].toLowerCase()} no admite más cambios de estado desde aquí.
-                </p>
+                <p className="text-xs text-fg-3">{MESSAGES.estadoSinAcciones[invoice.status]}</p>
               )}
             </div>
           </div>

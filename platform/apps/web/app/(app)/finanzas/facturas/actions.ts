@@ -8,7 +8,10 @@ import {
   isPaymentMethod,
   pctToRate,
   InvoiceError,
+  InvoicePaymentConflict,
   MONTO_MAXIMO,
+  PaymentDateInFuture,
+  PaymentExceedsOutstanding,
   type InvoiceStatus,
   type PaymentMethod,
 } from "@mc/core";
@@ -25,6 +28,7 @@ import {
   InvoiceNotFound,
 } from "@mc/db/queries/finanzas";
 import { DECIMAL_RE, firstErrors, formField, isUuid, UUID_RE, type ActionState } from "@/lib/forms";
+import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -168,10 +172,22 @@ const registrarPagoSchema = z.object({
     .regex(DECIMAL_RE, "Recarga la página: el formulario perdió el estado de la factura."),
 });
 
-/** Los errores de dominio llegan en español; cualquier otro se registra y se resume. */
-function messageOfPago(err: unknown): string {
+/**
+ * Los errores de dominio llegan en español desde @mc/core; cualquier
+ * otro se registra y se resume.
+ *
+ * Los tres que llevan una cifra o una fecha se reescriben con el
+ * formateador del espacio: `messageEs` las trae en crudo («llevaba 0.00
+ * cobrado») porque @mc/core no tiene formateador, y el error guarda el
+ * dato aparte justo para esto.
+ */
+function messageOfPago(err: unknown, f: Formatter, currency: string): string {
+  const money = (amount: string) => f.money(amount, currency, { mode: "full" });
+  if (err instanceof InvoicePaymentConflict) return MESSAGES.errores.conflicto(money(err.expected), money(err.actual));
+  if (err instanceof PaymentExceedsOutstanding) return MESSAGES.errores.excede(money(err.outstanding));
+  if (err instanceof PaymentDateInFuture) return MESSAGES.errores.futuro(f.date(err.receivedOn, "long"), f.date(err.today, "long"));
   if (err instanceof InvoiceError) return err.messageEs;
-  if (err instanceof InvoiceNotFound) return "Esta factura ya no existe en tu espacio.";
+  if (err instanceof InvoiceNotFound) return MESSAGES.errores.facturaIda;
   console.error("[finanzas] registrarPago", err);
   return MESSAGES.errores.pago;
 }
@@ -204,11 +220,12 @@ export async function registrarPago(_prev: ActionState, formData: FormData): Pro
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
 
+  // La moneda, el locale y la zona del espacio: para la cifra del aviso
+  // y para reescribir los errores que traen un dato en crudo. Abre su
+  // propia transacción, antes de la del cobro: no se anidan.
+  const ws = await getCurrentWorkspace();
+  const f = formatterFor(ws);
   try {
-    // El locale del espacio, para que la cifra del aviso se escriba como
-    // en el resto del producto. Abre su propia transacción, antes de la
-    // del cobro: las transacciones no se anidan.
-    const { locale } = await getCurrentWorkspace();
     await withWorkspace((tx) =>
       recordPayment(
         tx,
@@ -221,11 +238,11 @@ export async function registrarPago(_prev: ActionState, formData: FormData): Pro
           notes: v.notes || null,
           expectedPaidAmount: v.expectedPaidAmount,
         },
-        textosFinanzas(locale),
+        textosFinanzas(ws.locale),
       ),
     );
   } catch (err) {
-    return { message: messageOfPago(err) };
+    return { message: messageOfPago(err, f, ws.currency) };
   }
   revalidatePath("/finanzas");
   revalidatePath(`/finanzas/facturas/${v.invoiceId}`);
