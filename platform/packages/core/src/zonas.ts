@@ -28,7 +28,7 @@ function partes(timeZone: string): Intl.DateTimeFormat {
 }
 
 /** Cuántos milisegundos va la zona por delante de UTC en ese instante (Bogotá: −5 h). */
-function desfase(instante: number, timeZone: string): number {
+export function desfase(instante: number, timeZone: string): number {
   const p = Object.fromEntries(partes(timeZone).formatToParts(new Date(instante)).map((x) => [x.type, x.value]));
   const comoUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
   return comoUtc - Math.floor(instante / 1000) * 1000;
