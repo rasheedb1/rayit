@@ -125,9 +125,9 @@ export interface JobOptions {
   retryOnItemFailure?: boolean;
   /**
    * Encadenamiento por evento: los jobs DESPUÉS de los cuales corre
-   * este. Cuando uno de ellos termina con datos nuevos (ok o partial),
-   * el runner encola este con el mismo workspaceId del payload (sin él,
-   * para todos). Así compute.baseline corre tras collect.post_metrics
+   * este. Cuando uno de ellos termina con datos nuevos (ok o partial, y
+   * processed > 0), el runner encola este con el mismo workspaceId del
+   * payload (sin él, para todos). Así compute.baseline corre tras collect.post_metrics
    * aunque la recolección se alargue o se reintente más allá de su hora.
    *
    * El cron de job_definition se queda: es la red de seguridad del día

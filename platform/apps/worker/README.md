@@ -142,10 +142,12 @@ Reglas:
 - **Encadenamiento**: si tu job tiene que correr DESPUÉS de otro, no lo
   resuelvas con la hora del cron; decláralo:
   `defineJob('compute.baseline', fn, { after: ['collect.post_metrics'] })`.
-  Cuando el de arriba termina `ok` o `partial` (hubo datos), el runner
+  Cuando el de arriba termina `ok` o `partial` con `processed > 0`
+  (hubo datos), el runner
   encola el tuyo con el mismo `workspaceId` (sin él, para todos),
   `singletonKey` `tras:<workspace>` y `{ source: 'chain', after }` en el
-  payload, que llega a `job_run.metadata.tras`. Un `failed` no encadena.
+  payload, que llega a `job_run.metadata.tras`. Ni un `failed` ni un
+  `ok` que no procesó nada encadenan.
   El cron se queda como red de seguridad, así que el job tiene que ser
   idempotente. Un `after` a un job no registrado o un ciclo impiden
   arrancar.
@@ -401,7 +403,7 @@ SQL suelto ni de una pantalla.
 | `compute.post_score` | Tras cada `compute.baseline`; y `45 5` de red | Una fila de `post_score` por video con `views_vs_median`, `outlier_tier`, `is_outlier` y, la primera vez que llega a cada nivel, una `notification` (`outlier`, `breakout`). |
 
 **Por qué encadenados y no solo por hora.** `collect.post_metrics` corre
-a las 05:00 con `timeout_s` 600 y cuatro intentos: un reintento puede
+a las 05:00 con `timeout_s` 600 y cinco intentos: un reintento puede
 terminar después de las 05:40, y `compute.baseline` (timeout 300 s)
 puede seguir corriendo a las 05:45 cuando arranca `compute.post_score`.
 Con la hora sola, el puntaje del día se calcularía con lecturas o

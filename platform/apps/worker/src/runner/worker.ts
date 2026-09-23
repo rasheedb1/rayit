@@ -101,7 +101,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
   let scheduled = 0;
   // Se mira `all` y no `definitions`: con WORKER_GROUPS, el job de abajo
   // puede vivir en otro proceso; su cola existe igual en pg-boss.
-  const habilitados = new Set(all.filter((d) => d.enabled).map((d) => d.id));
+  const enabledIds = new Set(all.filter((d) => d.enabled).map((d) => d.id));
 
   for (const def of definitions) {
     const registration = registry.get(def.id);
@@ -132,9 +132,9 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
               { definition: def, registration, payload: job.data, attempt: job.retryCount + 1, bossJobId: job.id, signal: job.signal },
               { db, logger, secrets, refreshers, quota, http: opts.http, env, now: opts.now },
             );
-            // Hubo datos nuevos: lo que corre DESPUÉS de este job se encola ya.
-            if (outcome.status !== 'failed') {
-              await encadenar(boss, registry.next(def.id).filter((id) => habilitados.has(id)), def.id, job.data, outcome.runId, logger);
+            // Hubo datos nuevos (terminó y procesó algo): lo que corre DESPUÉS de este job se encola ya.
+            if (outcome.status !== 'failed' && (outcome.result?.processed ?? 0) > 0) {
+              await enqueueChained(boss, registry.next(def.id).filter((id) => enabledIds.has(id)), def.id, job.data, outcome.runId, logger);
             }
             if (outcome.status === 'ok') continue;
             // Lanzar es lo que hace que pg-boss reintente hasta max_attempts.
@@ -167,13 +167,14 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
 
 /**
  * Encola los jobs que corren después de `desde` (JobOptions.after), con
- * el mismo workspaceId. El singletonKey es por alcance: en una cola
+ * el mismo workspaceId. Solo se llama si `desde` terminó ok o partial Y
+ * procesó algo: una recolección vacía no trae nada que recalcular. El singletonKey es por alcance: en una cola
  * 'stately' dos encadenamientos del mismo workspace colapsan en uno
  * (el que ya está en cola corre después y ve los datos nuevos), sin
  * colapsar con el cron ni con el de otro workspace. Un fallo al encolar
  * no tumba el job de arriba, que ya terminó: se anota y el cron cubre.
  */
-async function encadenar(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: number, logger: Logger): Promise<void> {
+async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: number, logger: Logger): Promise<void> {
   if (destinos.length === 0) return;
   const { workspaceId } = payloadContext(payload);
   const alcance = workspaceId ?? 'todos';

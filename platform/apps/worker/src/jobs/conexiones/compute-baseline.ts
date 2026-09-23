@@ -122,9 +122,18 @@ export function num(value: unknown): number | null {
 /** Recorta al tope de la columna. Devuelve también si hubo recorte, para avisarlo. */
 export function cap(value: number | null, max: number): { value: number | null; capped: boolean } {
   if (value === null) return { value: null, capped: false };
-  if (value > max) return { value: max, capped: true };
-  if (value < -max) return { value: -max, capped: true };
+  // Postgres redondea a la escala de la columna ANTES de mirar la
+  // precisión: 99,9999997 en numeric(8,6) se vuelve 100,000000 y
+  // desborda. Se compara lo que de verdad se va a guardar.
+  const guardado = Number(value.toFixed(decimalesDe(max)));
+  if (guardado > max) return { value: max, capped: true };
+  if (guardado < -max) return { value: -max, capped: true };
   return { value, capped: false };
+}
+
+/** Los decimales de un tope de TOPES: la escala de su columna numeric. */
+function decimalesDe(max: number): number {
+  return String(max).split('.')[1]?.length ?? 0;
 }
 
 /** Lo que se escribe en una fila de creator_baseline. */
@@ -252,7 +261,9 @@ export const computeBaselineJob = defineJob<ComputeBaselinePayload>('compute.bas
       entry = { cuenta: { workspaceId: r.workspace_id, creatorId: r.creator_id, platformId: r.platform_id }, cortes: new Map() };
       cuentas.set(clave, entry);
     }
-    entry.cortes.set(r.cut_hours, [...(entry.cortes.get(r.cut_hours) ?? []), r]);
+    const delCorte = entry.cortes.get(r.cut_hours);
+    if (delCorte) delCorte.push(r);
+    else entry.cortes.set(r.cut_hours, [r]);
   }
 
   const computedAt = ctx.now();

@@ -240,22 +240,41 @@ export async function runDemoPosts(opts: {
  */
 export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger; workspaceId: string }): Promise<void> {
   const { db, logger, workspaceId } = opts;
-  const ultimaRecoleccion = await db.query<{ id: string }>(
-    `SELECT max(id)::text AS id FROM job_run WHERE job_id = 'collect.post_metrics' AND status <> 'running'`,
-  );
-  const desde = ultimaRecoleccion.rows[0]?.id ?? '0';
+  // La cadena terminó cuando hay un compute.* después de la última
+  // recolección, nada corriendo y ninguna fila nueva en job_run durante
+  // tres segundos. Mirar solo «un post_score después de la última
+  // recolección» no basta: uno encadenado desde la primera ronda puede
+  // empezar después, y una línea base que no escribe nada no encadena
+  // post_score (no hay qué recalcular).
+  const QUIETO_MS = 3_000;
   const hasta = Date.now() + 60_000;
-  let cadena: Array<Record<string, unknown>> = [];
+  let visto = '';
+  let quietoDesde = Date.now();
+  let terminada = false;
   for (;;) {
-    const { rows } = await db.query<Record<string, unknown>>(
-      `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
-         FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY id`,
+    const ultimos = await db.query<{ ultimo: string | null; collect: string | null; compute: string | null; corriendo: number }>(
+      `SELECT max(id)::text AS ultimo,
+              max(id) FILTER (WHERE job_id = 'collect.post_metrics')::text AS collect,
+              max(id) FILTER (WHERE job_id LIKE 'compute.%')::text AS compute,
+              count(*) FILTER (WHERE status = 'running')::int AS corriendo
+         FROM job_run WHERE job_id IN ('collect.post_metrics', 'compute.baseline', 'compute.post_score')`,
     );
-    cadena = rows;
-    const puntuoTrasLaUltima = rows.some((r) => r['job_id'] === 'compute.post_score' && BigInt(String(r['id'])) > BigInt(desde));
-    if (puntuoTrasLaUltima || Date.now() > hasta) break;
+    const u = ultimos.rows[0];
+    const huella = `${u?.ultimo ?? ''}/${u?.corriendo ?? 0}`;
+    if (huella !== visto) {
+      visto = huella;
+      quietoDesde = Date.now();
+    }
+    const id = (v: string | null | undefined) => BigInt(v ?? '0');
+    terminada = u !== undefined && u.corriendo === 0 && id(u.compute) > id(u.collect) && Date.now() - quietoDesde >= QUIETO_MS;
+    if (terminada || Date.now() > hasta) break;
     await new Promise((r) => setTimeout(r, 500));
   }
+  if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
+  const { rows: cadena } = await db.query<Record<string, unknown>>(
+    `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
+       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY id`,
+  );
   logger.info('demo CON-6: job_run de compute.* (encadenados tras collect.post_metrics: metadata.tras)', { rows: cadena });
 
   const bases = await db.query(

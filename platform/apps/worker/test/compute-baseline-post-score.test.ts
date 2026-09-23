@@ -22,9 +22,10 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findSecretInDump } from '@mc/connectors';
 import { AGE_CUTS_HOURS, MIN_SAMPLE_FOR_BASELINE } from '@mc/core';
-import { debeAvisar, scoreFrom } from '../src/jobs/conexiones/compute-post-score.ts';
+import { cap, TOPES } from '../src/jobs/conexiones/compute-baseline.ts';
+import { debeAvisar, scoreFrom, textoNotificacion } from '../src/jobs/conexiones/compute-post-score.ts';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, sinEncadenar, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
+import { jobRuns, withoutChaining, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-23T05:40:00Z');
@@ -267,7 +268,7 @@ async function notificaciones(postId: string): Promise<NotificationRow[]> {
 before(async () => {
   // Cada job por separado: aquí se cuentan sus corridas una a una. La
   // cadena collect → baseline → post_score va en costuras-con.test.ts.
-  h = await startHarness({ jobs: sinEncadenar(allJobs), now: () => reloj, seed });
+  h = await startHarness({ jobs: withoutChaining(allJobs), now: () => reloj, seed });
 });
 after(async () => {
   await h.stop();
@@ -450,6 +451,25 @@ test('un múltiplo absurdo se recorta en vez de tumbar la corrida del workspace'
   assert.equal(s.viewsVsMedian, 99_999.999);
   assert.deepEqual(s.capped, ['views_vs_median']);
   assert.equal(s.tier, 'breakout');
+});
+
+test('el tope se mira sobre lo que Postgres guarda, ya redondeado a la escala de la columna', () => {
+  // 99,9999997 en numeric(8,6) se redondea a 100,000000 y desborda: se recorta antes.
+  assert.deepEqual(cap(99.9999997, TOPES.engagement), { value: TOPES.engagement, capped: true });
+  assert.deepEqual(cap(9.999996, TOPES.rate), { value: TOPES.rate, capped: true });
+  // Lo que sí cabe se deja tal cual, sin redondear: el job y el seed tienen que dar lo mismo.
+  assert.deepEqual(cap(0.0672431234, TOPES.engagement), { value: 0.0672431234, capped: false });
+  assert.deepEqual(cap(null, TOPES.views), { value: null, capped: false });
+});
+
+test('un locale inválido en el workspace no tumba el aviso: se usa el DEFAULT de la columna', () => {
+  const fila = { sample_size: 8, views: '100000', median_views: '50000', reach: null, median_reach: null,
+    saves: null, median_saves_per_1k: null, total_interactions: null, likes: null, comments: null, shares: null,
+    median_engagement: null, post_id: 'x', workspace_id: 'x', creator_id: 'x', platform_id: 'tiktok',
+    locale: 'es_CO', title: 'Arepa', caption: null, cut_hours: 168, baseline_id: null };
+  const texto = textoNotificacion(fila, scoreFrom(fila), 'outlier');
+  assert.equal(texto.titleEs, 'Un video tuyo hizo 2× tu mediana');
+  assert.match(texto.bodyEs, /100\.000 views en TikTok/);
 });
 
 test('solo se avisa cuando el video SUBE de nivel', () => {

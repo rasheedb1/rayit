@@ -162,10 +162,28 @@ export function scoreFrom(row: CandidateRow): ScoreValues {
   };
 }
 
-/** El texto del aviso, en el locale del workspace: nunca 'es-CO' a mano. */
+/**
+ * El locale de respaldo si el del workspace no es una etiqueta BCP 47
+ * válida: el DEFAULT de workspace.locale en 0001. workspace.locale es
+ * texto libre que mc_app puede editar, y un 'es_CO' haría lanzar a
+ * Intl.NumberFormat dentro de la transacción del workspace, que se
+ * desharía cada noche sin puntuar nada.
+ */
+export const LOCALE_DE_RESPALDO = 'es-CO';
+
+function numberFormat(locale: string, opts?: Intl.NumberFormatOptions): Intl.NumberFormat {
+  try {
+    return new Intl.NumberFormat(locale, opts);
+  } catch (err) {
+    if (err instanceof RangeError) return new Intl.NumberFormat(LOCALE_DE_RESPALDO, opts);
+    throw err;
+  }
+}
+
+/** El texto del aviso, en el locale del workspace (nunca uno escrito a mano; si el suyo no vale, el DEFAULT de la columna). */
 export function textoNotificacion(row: CandidateRow, score: ScoreValues, tramo: TramoAvisable): { titleEs: string; bodyEs: string } {
-  const nf = new Intl.NumberFormat(row.locale);
-  const veces = new Intl.NumberFormat(row.locale, { maximumFractionDigits: 1 });
+  const nf = numberFormat(row.locale);
+  const veces = numberFormat(row.locale, { maximumFractionDigits: 1 });
   const red = isPlatformId(row.platform_id) ? PLATFORM_NAMES[row.platform_id] : row.platform_id;
   const cuando = CORTE_EN_PALABRAS[row.cut_hours as AgeCut] ?? `a las ${row.cut_hours} horas`;
   const multiplo = score.viewsVsMedian === null ? '' : `${veces.format(score.viewsVsMedian)}×`;
@@ -236,7 +254,11 @@ export const computePostScoreJob = defineJob<ComputePostScorePayload>('compute.p
   const rows = await selectScorable(ctx.db, payload, ctx.now());
 
   const porWorkspace = new Map<string, CandidateRow[]>();
-  for (const r of rows) porWorkspace.set(r.workspace_id, [...(porWorkspace.get(r.workspace_id) ?? []), r]);
+  for (const r of rows) {
+    const delWorkspace = porWorkspace.get(r.workspace_id);
+    if (delWorkspace) delWorkspace.push(r);
+    else porWorkspace.set(r.workspace_id, [r]);
+  }
 
   const computedAt = ctx.now();
   let puntuados = 0;

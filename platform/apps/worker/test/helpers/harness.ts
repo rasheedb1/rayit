@@ -94,7 +94,7 @@ export async function startHarness(opts: HarnessOptions): Promise<Harness> {
  * pruebas que ejercitan un job por separado y cuentan sus corridas. La
  * cadena collect → compute la prueba test/costuras-con.test.ts.
  */
-export function sinEncadenar(jobs: readonly JobRegistration[]): JobRegistration[] {
+export function withoutChaining(jobs: readonly JobRegistration[]): JobRegistration[] {
   return jobs.map((j) => ({ ...j, options: { ...j.options, after: [] } }));
 }
 

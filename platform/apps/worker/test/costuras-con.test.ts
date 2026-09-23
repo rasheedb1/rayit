@@ -94,7 +94,8 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
     const pruebas = [
       defineJob('test.fail', async () => { throw new Error('falla a propósito'); }),
       defineJob('test.items', async () => ({ processed: 1, failed: 1, retry: false })),
-      defineJob('test.echo', noop, { after: ['test.fail', 'test.items'] }),
+      defineJob('test.noretry', noop),
+      defineJob('test.echo', noop, { after: ['test.fail', 'test.noretry', 'test.items'] }),
     ];
     h = await startHarness({
       jobs: [...allJobs, ...pruebas], now: () => reloj, env: ENV, http: { fetch: fetch.fetch },
@@ -196,14 +197,17 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
     }
   });
 
-  test('un job que falla entero no encadena; uno parcial sí', async () => {
+  test('un job que falla entero o no procesa nada no encadena; uno parcial sí', async () => {
     // Jobs de prueba sobre las definiciones test.* del arnés: test.fail
-    // lanza siempre, test.items termina parcial sin reintento, y test.echo
-    // corre después de cualquiera de los dos.
+    // lanza siempre, test.noretry termina ok sin procesar nada, test.items
+    // termina parcial sin reintento, y test.echo corre después de los tres.
     await h.worker.boss.send('test.fail', { workspaceId: W });
     await waitFor(async () => (await jobRuns(h.db, 'test.fail')).filter((r) => r.status === 'failed').length >= 3, { label: 'test.fail agota sus intentos', timeoutMs: 60_000 });
+    await h.worker.boss.send('test.noretry', { workspaceId: W });
+    const vacio = await corrida(h, 'test.noretry', 1);
+    assert.deepEqual([vacio.status, vacio.items_processed], ['ok', 0]);
     await new Promise((r) => setTimeout(r, 1_500));
-    assert.equal((await jobRuns(h.db, 'test.echo')).length, 0, 'failed no encadena');
+    assert.equal((await jobRuns(h.db, 'test.echo')).length, 0, 'ni failed ni un ok vacío encadenan');
 
     await h.worker.boss.send('test.items', { workspaceId: W });
     const parcial = await corrida(h, 'test.items', 1);
