@@ -7,7 +7,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '@mc/connectors';
+import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type Fixture, type NetworkGuard } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
@@ -122,5 +122,67 @@ test('sin credenciales, la plataforma se salta y se avisa; nada falla', async ()
     assert.equal(md.skipped['tiktok'], undefined, 'TikTok no necesita credencial');
   } finally {
     await h2.stop();
+  }
+});
+
+test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y vistas, la fila pasa a aggregator y el token no queda en ningún lado', async () => {
+  const ED_TOKEN = 'ed-token-worker-SECRETO';
+  // El proveedor responde en la misma URL para cualquier @: aquí se acota
+  // el patrón por username para que cada cuenta reciba lo suyo.
+  const porUsuario = (fixture: Fixture, username: string): Fixture => ({ ...fixture, request: { ...fixture.request, urlPattern: `${fixture.request.urlPattern}(?=.*username=${username}(&|$))` } });
+  const [ok, posts, noExiste] = await loadFixtures('ensembledata', [['user.info', 'ok'], ['user.posts', 'ok'], ['user.info', 'user_not_found']]);
+  const edFetch = new FixtureFetch([
+    porUsuario(ok!, 'laura\\.cocinafacil'),
+    porUsuario(posts!, 'laura\\.cocinafacil'),
+    porUsuario(noExiste!, 'noexiste\\.zz9'),
+    ...(await loadFixtures('instagram', [['business_discovery', 'ok']])),
+    ...(await loadFixtures('youtube', [['channels.list', 'handle.ok']])),
+    ...(await loadFixtures('tiktok', [['user.info', 'ok']])),
+  ]);
+  const h3 = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: { ...ENV, ENSEMBLEDATA_TOKEN: ED_TOKEN }, http: { fetch: edFetch.fetch } });
+  await h3.secrets.set('vault:tt-auth', AUTH_TOKENS);
+  try {
+    await h3.worker.boss.send('collect.account_metrics', { source: 'test' });
+    const run = await waitFor(async () => (await jobRuns(h3.db, 'collect.account_metrics')).find((r) => r.status !== 'running'), { label: 'con proveedor', timeoutMs: 30_000 });
+    assert.equal(run.status, 'ok', run.error ?? '');
+    const md = run.metadata as { snapshots: string[]; noMetrics: string[]; errored: string[] };
+    assert.ok(md.snapshots.includes(ids.tt), 'la cuenta de TikTok ya deja snapshot');
+    assert.deepEqual(md.noMetrics, [], 'ya no hay cuentas sin métricas');
+    assert.deepEqual(md.errored, [ids.gone], 'la que no existe sigue en error, con el mensaje del proveedor');
+
+    const tt = await h3.db.query<{ followers: string | number | null; views: string | number | null; media_count: string | number | null; source: string; day: string }>(
+      `SELECT followers, views, media_count, source, day::text AS day FROM account_metric_snapshot WHERE connection_id = $1`, [ids.tt]);
+    assert.equal(tt.rows.length, 1);
+    assert.equal(Number(tt.rows[0]!.followers), 128400);
+    assert.equal(Number(tt.rows[0]!.views), 65401);
+    assert.equal(Number(tt.rows[0]!.media_count), 3);
+    assert.equal(tt.rows[0]!.source, 'aggregator');
+    assert.equal(tt.rows[0]!.day, '2026-09-22');
+
+    const bitacora = await h3.db.query<{ actor_kind: string; action: string; before: unknown; after: unknown }>(
+      `SELECT actor_kind, action, before, after FROM audit_log WHERE entity_id = $1 AND action = 'connection.source_changed'`, [ids.tt]);
+    assert.equal(bitacora.rows.length, 1, 'el cambio de fuente queda en la bitácora, como job');
+    assert.equal(bitacora.rows[0]!.actor_kind, 'job');
+    assert.deepEqual(bitacora.rows[0]!.before, { accessMode: 'public_profile' });
+    assert.equal((bitacora.rows[0]!.after as { accessMode: string }).accessMode, 'aggregator');
+
+    const conn = await h3.db.query<{ access_mode: string; status: string; last_synced_at: Date | string | null }>(`SELECT access_mode, status, last_synced_at FROM social_connection WHERE id = $1`, [ids.tt]);
+    assert.equal(conn.rows[0]!.access_mode, 'aggregator', 'la fila cambió de fuente sin perder su id');
+    assert.equal(conn.rows[0]!.status, 'active');
+    assert.ok(conn.rows[0]!.last_synced_at, 'ya hay «datos hasta»');
+
+    const gone = await h3.db.query<{ status: string; status_detail: string | null }>(`SELECT status, status_detail FROM social_connection WHERE id = $1`, [ids.gone]);
+    assert.equal(gone.rows[0]!.status, 'error');
+    assert.match(gone.rows[0]!.status_detail!, /No encontramos @noexiste\.zz9/);
+
+    // R4: el token del proveedor viaja en la query; no puede quedar en ninguna
+    // columna de texto, ni en api_call_log, ni en los logs del worker.
+    const raw = { query: (text: string, params?: readonly unknown[]) => h3.db.raw.query(text, params as unknown[]) };
+    assert.equal(findSecretInDump(await dumpTextColumns(raw, 'public'), [ED_TOKEN]), null);
+    assert.ok(!h3.sink.text().includes(ED_TOKEN));
+    assert.ok(!JSON.stringify(edFetch.calls).includes(ED_TOKEN));
+    assert.equal(guard.attempts, 0);
+  } finally {
+    await h3.stop();
   }
 });

@@ -26,7 +26,9 @@ src/platforms/instagram.ts   createInstagramRefresher(core, app)
 src/platforms/youtube.ts     createYouTubeRefresher (CON-8): renueva contra oauth2.googleapis.com
 src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
 src/public/                  Cuentas por @ (CON-10): PublicProfileSource por plataforma. tiktok = oEmbed (identidad), instagram = business_discovery con INSTAGRAM_HOUSE_TOKEN, youtube = Data API con GOOGLE_API_KEY (YouTubeClient acepta apiKey)
+src/public/tiktok-aggregator.ts  Proveedor de datos de TikTok (CON-12): EnsembleDataClient (tt/user/info, tt/user/posts) y la fuente con accessMode 'aggregator'. Solo existe con ENSEMBLEDATA_TOKEN
 src/posts/                   Publicaciones (CON-5): PostSource con dos estrategias tras la misma interfaz. createPublicPostSources(core, env) da la pública por plataforma; createAuthorizedPostSource(core, platformId) la del token del dueño. El job elige por social_connection.access_mode
+src/posts/tiktok-posts.ts    TikTok sin videos por @, y con ENSEMBLEDATA_TOKEN la fuente del proveedor que sí los lista (CON-12)
 
 src/http/errors.ts           PlatformApiError { kind: transient | permanent | auth | quota } y el clasificador único
 src/http/retry.ts            backoff exponencial con jitter, Retry-After, sleep cancelable
@@ -126,11 +128,64 @@ Fixtures: `fixtures/<plataforma>/oauth.*.json` (`ok`, `invalid`/`invalid_grant`,
 `rate_limit`, `server_error_then_ok`), con `meta.source = 'docs'`; los de
 `tiktok-accounts` se confirman con CON-9.
 
+## Cuentas por @: fuente oficial o proveedor (CON-10 y CON-12)
+
+Una cuenta se agrega escribiendo su **@**, y quien la lee es un
+`PublicProfileSource`. Su `accessMode` es a la vez el
+`social_connection.access_mode` de la cuenta y el
+`account_metric_snapshot.source` de sus lecturas: las dos columnas dicen
+de dónde salió la cifra.
+
+| Red | Fuente | `accessMode` | Qué da |
+|---|---|---|---|
+| Instagram | `business_discovery` con `INSTAGRAM_HOUSE_TOKEN` | `public_profile` | Seguidores y publicaciones de cuentas profesionales públicas |
+| YouTube | Data API con `GOOGLE_API_KEY` | `public_profile` | Suscriptores, vistas acumuladas y videos |
+| TikTok, **sin** `ENSEMBLEDATA_TOKEN` | oEmbed oficial | `public_profile` | Solo identidad: TikTok no publica cifras por @ |
+| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos, videos y vistas — y, a diferencia de las otras, **también la lista de publicaciones** (`posts/tiktok-posts.ts`), así que `collect.posts` y `collect.post_metrics` dejan de decir «TikTok no publica sus videos por @» |
+
+La variable es el interruptor: sin ella no sale una llamada al proveedor
+y TikTok se comporta como en CON-10. Con ella, `createPublicProfileSources`
+devuelve el agregador y la cuenta que ya existía por @ se convierte
+conservando su id, su consentimiento y su historia (el proveedor la
+identifica con el mismo @, no con el `secUid`).
+
+**Las vistas de TikTok son la suma de las reproducciones del catálogo
+completo**, porque TikTok no publica un acumulado de cuenta por ningún
+camino; su diferencia día a día son las vistas del día. Si el catálogo
+no cupo en `ENSEMBLEDATA_MAX_POSTS` (200 por defecto) o algún video vino
+sin `play_count`, las vistas quedan en `null` con la frase que lo
+explica. `coverage` del perfil dice cuántas se leyeron y si se llegó al
+final. Un total a medias no es un total.
+
+**Si el proveedor cambia de forma**, el parseo es tolerante en lo
+accesorio (campos extra, `data.posts` en vez de `data`, cursor numérico)
+y definitivo en lo que sostiene una cifra: sin `uniqueId` o sin
+`followerCount` sale un error permanente que lo dice en español, y no se
+da de alta ni se actualiza nada.
+
+**Qué `source` lleva cada fila.** En `account_metric_snapshot` el
+`source` es el `accessMode` de la fuente, así que una lectura comprada se
+distingue de una gratuita (`'aggregator'` vs `'public_profile'` vs
+`'api'`). En `post_metric_snapshot` NO: CON-5 fijó que ahí el `source`
+dice *cómo* se leyó —`'api'` para cualquier API, `'csv_import'` para el
+archivo— y `collect.post_metrics` busca la última lectura por ese valor.
+Lo que costó dinero se ve donde corresponde: `api_call_log` guarda el
+endpoint `ensembledata.tt.user.posts` y `api_quota_usage` acumula sus
+unidades.
+
+Costo, comparación con Apify y Phyllo, y las variables que hay que meter
+al vault: `docs/propuestas/CON-12.md`.
+
 ## La regla: el token nunca sale de OAuthTokens
 
 - El núcleo pone la credencial en una cabecera (`Authorization: Bearer`
   en TikTok Display, Instagram y Google; `Access-Token` en TikTok
   Accounts). **Nunca en la URL**, aunque Meta acepte `access_token=`.
+  Dos credenciales no son del creador sino de la casa y sus APIs solo
+  las aceptan en la query (`key` de Google, `token` de EnsembleData): van
+  en `secrets` para que `safeErrorMessage` las borre de cualquier
+  mensaje, `api_call_log` no guarda URLs, y `FixtureFetch` las tapa al
+  grabar.
 - Ningún error lleva el token: los mensajes de la plataforma pasan por
   `safeErrorMessage` (borra el valor literal del token) antes de entrar
   a `api_call_log` y a `PlatformApiError`.
@@ -178,6 +233,8 @@ cualquier código del cuerpo.
 | `tiktok` (Display) | 40/min por (conexión, endpoint) · **DECISIÓN PENDIENTE DE NICOLÁS**: la documentación de hoy no distingue por cuenta | docs/arquitectura.md | 22-sep-2026 |
 | `tiktok` (Display) | 600/min por (app, endpoint): `user/info`, `video/list`, `video/query`; ventana deslizante de un minuto; 429 `rate_limit_exceeded` | developers.tiktok.com/doc/tiktok-api-v2-rate-limit | página del 4-ago-2026 |
 | `tiktok-accounts` | 40/min por (conexión, endpoint) | docs/arquitectura.md (el portal de la Accounts API es JavaScript y no se pudo leer; se confirma con CON-9) | 22-sep-2026 |
+| `ensembledata` | 60/min por app · **DECISIÓN PENDIENTE DE NICOLÁS**: el proveedor dice que no impone límite de tasa, pero su SDK reconoce un 429; la ventana es nuestra | ensembledata.com/apis/docs | 23-sep-2026 |
+| `ensembledata` | Presupuesto diario en unidades, `null` hasta que haya plan aprobado (Wood 1 500 · Bronze 5 000 · Silver 11 000 · Gold 25 000 · Platinum 50 000 al día, 00:00 UTC). Cada endpoint de TikTok = 1 unidad; el catálogo cobra una por bloque de diez. Es la única familia de `tiktok` con presupuesto, así que es la que persiste en `api_quota_usage` | ensembledata.com/pricing · docs/propuestas/CON-12.md §0.2 | 23-sep-2026 |
 | `instagram` | 200 llamadas/hora por conexión (fórmula de plataforma: 200 × usuarios). El BUC (4800 × impresiones en 24 h) no se puede calcular: se respeta por sus códigos (`quota`) · **DECISIÓN PENDIENTE DE NICOLÁS** | developers.facebook.com/docs/graph-api/overview/rate-limiting | 22-sep-2026 |
 | `youtube` (Data) | 10 000 unidades/día por proyecto (scope app); `channels.list`, `playlistItems.list`, `videos.list` = 1 unidad; toda petición, aun inválida, cuesta ≥ 1 | developers.google.com/youtube/v3/determine_quota_cost | actualizada 15-sep-2026 |
 | `youtube-search` | `search.list` = 1 unidad en un cubo propio de 100/día (cambió en jun-2026; antes 100 unidades del cubo general). No se usa en el MVP | misma página | 15-sep-2026 |
@@ -289,7 +346,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 180 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
+pnpm --filter @mc/connectors test        # 218 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

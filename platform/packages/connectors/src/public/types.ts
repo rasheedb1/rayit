@@ -10,7 +10,7 @@
  *   youtube    Data API con API key
  *   tiktok     oEmbed: identidad sí, métricas no (pendiente de fuente)
  */
-import type { NormalizedAccountProfile } from '../normalize/types.ts';
+import type { NormalizedAccountProfile, NormalizedVideo } from '../normalize/types.ts';
 import type { PlatformId } from '../types.ts';
 
 export interface PublicAccountMetrics {
@@ -21,15 +21,34 @@ export interface PublicAccountMetrics {
   views: number | null;
 }
 
+/**
+ * Cuando una cifra se arma sumando varias llamadas (las vistas de TikTok
+ * por proveedor son la suma de las reproducciones del catálogo), esto
+ * dice si se leyó entero. `complete: false` obliga a dejar la cifra en
+ * null: un total a medias no es un total (CON-12 §0.4).
+ */
+export interface PublicMetricsCoverage {
+  /** Publicaciones leídas para sumar. */
+  postsRead: number;
+  /** Publicaciones que el perfil dice tener; null si no lo dijo. */
+  postsTotal: number | null;
+  /** Tope de publicaciones que se permitió leer. */
+  maxPosts: number;
+  /** true solo si se llegó al final del catálogo. */
+  complete: boolean;
+}
+
 export interface PublicProfile {
   platformId: PlatformId;
   profile: NormalizedAccountProfile;
   /** null cuando la fuente solo confirma identidad (TikTok por oEmbed). */
   metrics: PublicAccountMetrics | null;
-  /** Por qué no hay métricas, en español, para la pantalla. */
+  /** Por qué no hay métricas (o cuáles faltan), en español, para la pantalla. */
   metricsNote: string | null;
   /** Qué endpoint lo dio: 'instagram.business_discovery', 'youtube.channels.list', 'tiktok.oembed'. */
   source: string;
+  /** Solo las fuentes que suman varias llamadas lo llenan; las demás, null. */
+  coverage: PublicMetricsCoverage | null;
   raw: unknown;
 }
 
@@ -46,12 +65,32 @@ export class PublicLookupError extends Error {
   }
 }
 
+/**
+ * Cómo entra la cuenta a `social_connection.access_mode`. Es también el
+ * valor de `account_metric_snapshot.source` de sus lecturas: las dos
+ * columnas dicen lo mismo —de dónde salió la cifra— y mantenerlas
+ * iguales evita una segunda tabla de equivalencias.
+ *
+ *   public_profile  fuente oficial y gratuita de la plataforma (CON-10)
+ *   aggregator      proveedor de datos de pago (CON-12)
+ */
+export type PublicAccessMode = 'public_profile' | 'aggregator';
+
+/** Lo que una fuente lee del catálogo cuando necesita sumarlo (las vistas de TikTok). */
+export interface PublicPostsPage {
+  posts: NormalizedVideo[];
+  /** true solo si se llegó al final del catálogo dentro del tope. */
+  complete: boolean;
+}
+
 export interface PublicProfileSource {
   readonly platformId: PlatformId;
   /** Nombre corto de la fuente para la pantalla y api_call_log. */
   readonly label: string;
   /** Variables que faltan para que la fuente funcione; vacío si está lista. */
   readonly missing: readonly string[];
+  /** access_mode de las cuentas de esta fuente, y source de sus snapshots. */
+  readonly accessMode: PublicAccessMode;
   lookup(handle: string, opts?: { signal?: AbortSignal }): Promise<PublicProfile>;
 }
 

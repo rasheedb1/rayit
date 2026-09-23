@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "200 con perfil pero sin followerCount: tampoco se guarda nada. Un seguidor ausente no es cero."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/info\\?"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "user": {
+          "id": "6700000000000000d01",
+          "secUid": "MS4wLjABAAAA-anonimo-d01",
+          "uniqueId": "laura.cocinafacil",
+          "nickname": "Laura · Cocina fácil",
+          "signature": "Recetas de 30 segundos",
+          "verified": false,
+          "region": "CO",
+          "avatarLarger": "https://p16-sign.tiktokcdn-us.com/demo/avatar-d01.jpeg"
+        },
+        "stats": {
+          "heartCount": 2310000,
+          "videoCount": 3
+        }
+      },
+      "units_charged": 1
+    }
+  }
+}

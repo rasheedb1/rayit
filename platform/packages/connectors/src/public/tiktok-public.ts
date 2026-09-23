@@ -28,6 +28,7 @@ export function createTikTokPublicSource(core: HttpCore): PublicProfileSource {
     platformId: 'tiktok',
     label: 'oEmbed de TikTok',
     missing: [],
+    accessMode: 'public_profile',
     async lookup(handle, opts = {}) {
       const clean = assertHandle('tiktok', handle);
       const profileUrl = `https://www.tiktok.com/@${clean}`;
@@ -47,6 +48,7 @@ export function createTikTokPublicSource(core: HttpCore): PublicProfileSource {
         metrics: null,
         metricsNote: TIKTOK_METRICS_NOTE_ES,
         source: 'tiktok.oembed',
+        coverage: null,
         raw: res.body,
       };
       return profile;

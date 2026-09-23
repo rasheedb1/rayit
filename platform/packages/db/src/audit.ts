@@ -82,11 +82,13 @@ export const AUDIT_ACTIONS = [
   // Aportes de la marca (CAM-4): con subrecurso, nombres fijados en docs/propuestas/CAM-4.md
   'campaign.brand_input.added',
   'campaign.brand_csv.imported',
-  // Conexiones (CON-3, CON-10)
+  // Conexiones (CON-3, CON-10; CON-12 agrega source_changed)
   'connection.added',
   'connection.reconnected',
   'connection.authorized',
   'connection.disconnected',
+  // De qué fuente salen las cifras de la cuenta: oficial por @ o proveedor de pago (CON-12).
+  'connection.source_changed',
   'consent.recorded',
   'consent.revoked',
 ] as const;

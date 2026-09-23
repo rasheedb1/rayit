@@ -98,7 +98,9 @@ const columns = (f: Formatter): Column<AccountRow>[] => [
     header: "Cifras",
     render: (r) => {
       if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
-      if (r.accessMode === "public_profile") return <Autorizar row={r} />;
+      // La oferta de autorizar sigue en pie aunque las cifras ya lleguen por
+      // el proveedor de pago (CON-12): autorizar es gratis y trae más datos.
+      if (r.accessMode === "public_profile" || r.accessMode === "aggregator") return <Autorizar row={r} />;
       return <span className="text-xs text-ink-2">Públicas por @</span>;
     },
   },
@@ -145,7 +147,7 @@ const columns = (f: Formatter): Column<AccountRow>[] => [
     header: "Acciones",
     render: (r) => (
       <div className="flex flex-wrap gap-1">
-        {(r.accessMode === "public_profile" || r.accessMode === "direct_oauth") && (
+        {(r.accessMode === "public_profile" || r.accessMode === "aggregator" || r.accessMode === "direct_oauth") && (
           <form action={actualizarCuenta.bind(null, r.id)}>
             <Button type="submit" size="sm" variant="secondary" aria-label={`Actualizar @${r.handle ?? r.externalAccountId}`}>
               Actualizar
@@ -291,13 +293,21 @@ const AUTORIZABLES: Partial<Record<ConnectionPlatformId, { provider: OAuthProvid
 /**
  * Detrás de la bandera oauth_connect. El botón abre el diálogo de
  * consentimiento; el callback convierte esta misma fila, con su id y su
- * historial.
+ * historial. Con el proveedor de pago contratado (CON-12) la nota dice de
+ * dónde salen ya las cifras, y la oferta se mantiene: autorizar deja de
+ * gastar unidades.
  */
 function Autorizar({ row }: { row: AccountRow }) {
   const conf = AUTORIZABLES[row.platformId];
-  if (!conf) return <span className="text-xs text-ink-2">Públicas por @</span>;
-  const nota = <span className={`text-xs ${conf.notaClass}`}>{conf.nota}</span>;
-  if (!flags.oauth_connect) return nota;
+  const nota =
+    row.accessMode === "aggregator" ? (
+      <span className="text-xs text-ink-2">Por proveedor de datos</span>
+    ) : conf ? (
+      <span className={`text-xs ${conf.notaClass}`}>{conf.nota}</span>
+    ) : (
+      <span className="text-xs text-ink-2">Públicas por @</span>
+    );
+  if (!conf || !flags.oauth_connect) return nota;
   const label = PLATFORM_NAME[row.platformId];
   const { apps, missing } = loadOAuthApps(process.env);
   const reason = apps[conf.provider] ? undefined : `${label} no está configurado en este entorno: faltan ${(missing[conf.provider] ?? []).join(", ")}.`;
