@@ -71,6 +71,15 @@ interface Fila extends Record<string, unknown> {
 /** count(*) con lo que la transacción actual puede ver. */
 const conteo = (tx: BaseTx, sql: string) => tx.query<Fila>(sql).then((r) => r.rows[0]?.n ?? -1);
 
+/**
+ * Cada bloque espera al `before` que abre la base embebida, y este es el
+ * primer archivo del paquete en abrirla: paga el arranque en frío del
+ * WASM de PGlite. Con la máquina cargada eso pasa de los 120 s de
+ * --test-timeout y, con --test-isolation=none, la cancelación arrastra
+ * la suite entera. Diez minutos por bloque, como el `before`.
+ */
+const TIEMPO_BLOQUE = 600_000;
+
 let t: TestDb;
 let sqlMigracion = '';
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_LAURA });
@@ -89,13 +98,13 @@ before(async () => {
     INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_B}', '${USER_B}', system_role_id('creator', 'owner'));
     INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_AGENCIA}', '${USER_AGENCIA}', system_role_id('agency', 'owner'));
   `);
-}, { timeout: 300_000 });
+}, { timeout: TIEMPO_BLOQUE });
 
 after(async () => {
   await t?.close();
 });
 
-describe('0034: tablas, columnas y semilla', () => {
+describe('0034: tablas, columnas y semilla', { timeout: TIEMPO_BLOQUE }, () => {
   test('las seis tablas nuevas existen, membership cambió de columna y audit_log admite delegados', async () => {
     const { rows } = await t.db.withCatalogs((tx) =>
       tx.query<{ table_name: string; column_name: string }>(
@@ -213,7 +222,7 @@ describe('0034: tablas, columnas y semilla', () => {
   });
 });
 
-describe('0034: invitation', () => {
+describe('0034: invitation', { timeout: TIEMPO_BLOQUE }, () => {
   const token = randomBytes(32).toString('base64url');
   const invitar = (correo: string, hash = sha256(randomBytes(32).toString('base64url'))) => (tx: WorkspaceTx) =>
     tx.query(
@@ -296,7 +305,7 @@ describe('0034: invitation', () => {
   });
 });
 
-describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
+describe('0034: membership_scope, workspace_grant, roles y privilegios', { timeout: TIEMPO_BLOQUE }, () => {
   test('membership_scope: se lee solo en el workspace fijado, y la web no lo escribe ni lo borra', async () => {
     await t.admin(`
       INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
@@ -420,7 +429,7 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
   });
 });
 
-describe('0034: el archivo, dos veces y al revés', () => {
+describe('0034: el archivo, dos veces y al revés', { timeout: TIEMPO_BLOQUE }, () => {
   test('aplicarla otra vez como el rol que migra no falla ni cambia nada', async () => {
     const foto = () =>
       t.db.withCatalogs((tx) =>
