@@ -124,12 +124,61 @@ nada de Rasheed. Reutilizo, sin editarlos, `leerCsv` y `aNumero` de
 
 ## 1. Lo hecho
 
-(Se completa al cerrar.)
+| Paso | Commit | Qué |
+|---|---|---|
+| Plan | `c3b866f` | Esta propuesta, §0. |
+| Core | `fc6e37c` | `BRAND_INPUT_KINDS`, `brandInputSemantics` (la fuente decide: formulario = total, CSV = diario), `brandCsvWindow` (inicio − 7 … fin + 60), `parseBrandCsvDay` (ISO o día/mes/año, nunca mes/día) y `reviewBrandCsvRows` (pura, con motivo por fila). |
+| Consultas | `8d432fc` | `addBrandInput` (idempotente, moneda de la campaña por defecto), `importBrandCsv` (clave natural, sin duplicar, corrige un día con otra cifra), `listBrandInputs` (totales en SQL + serie diaria) y la bitácora (`recordAudit`, `TODO(ACC-2)`). Diez pruebas nuevas en pglite con el seed. |
+| Pantalla | `eb4a3d9` | Sección «Lo que aportó la marca», `aporte.tsx`, `csv-ventas.ts`, `messages.ts` del módulo, las dos Server Actions y los fixtures. |
+| Cierre | `78f4bf9` y siguientes | README, backlog, esta propuesta y lo que salga de la revisión. |
+
+Decisiones que quedaron como **DECISIÓN PENDIENTE DE NICOLÁS**:
+
+1. Un día del CSV que ya estaba con otra cifra **se corrige** (UPDATE) y el
+   resumen lo cuenta como «corregido». La alternativa conservadora sería
+   rechazarlo con motivo `dia_ya_cargado`; elegí corregir porque es la
+   misma regla del formulario (lo último que reporta la marca manda) y
+   porque sin ella una marca que se equivocó no tiene cómo arreglarlo sin
+   que alguien borre filas a mano.
+2. La fecha del formulario no puede ser futura (hoy en la zona del
+   workspace).
 
 ## 2. Lo que necesita Rasheed
 
-(Se completa al cerrar.)
+| # | Qué | Por qué | Urgencia |
+|---|---|---|---|
+| 1 | Índice único parcial en una migración nueva: `CREATE UNIQUE INDEX IF NOT EXISTS campaign_brand_input_csv_day ON campaign_brand_input (campaign_id, kind, day) WHERE source = 'brand_csv';` | Hoy la idempotencia la garantiza `importBrandCsv` (fila de `campaign` con `FOR UPDATE` y `WHERE NOT EXISTS` en la misma transacción). Un escritor que no pase por la función (un script, fase 2) podría duplicar un día. El índice incluye `campaign_id`, que apunta a una tabla aislada, así que cumple «la unicidad es por inquilino». Lo manual NO lleva índice: varias filas por kind son su historia. | Baja: nada lo necesita hoy. |
+| 2 | Nada en `schema/`: `campaign_brand_input` no está en el esquema Drizzle y las consultas usan SQL con parámetros, como el resto de `campanas.ts`. | — | — |
+| 3 | ACC-1 y ACC-2: `registrarAporte` e `importarCsvVentas` llevan `// TODO(ACC-1): requirePermission('campanas.aporte.registrar')`; la ficha, `campanas.campana.ver`. La bitácora la escribe `recordAudit` en `queries/campanas.ts` y se cambia por `audit()` en una línea cuando exista. | — | Cuando llegue ACC. |
+
+Sin migraciones y sin variables de entorno nuevas.
 
 ## 3. Contrato de lectura para CAM-5
 
-(Se completa al cerrar.)
+```ts
+import { listBrandInputs } from '@mc/db';
+const { totals, daily, currency } = await listBrandInputs(tx, campaignId);
+```
+
+- `totals`: una fila por par (kind, fuente) con datos.
+  - `source = 'brand_manual'`, `semantics = 'total'`: `value` es el
+    **último** total reportado (por `received_at`) y `asOf` su fecha.
+  - `source = 'brand_csv'`, `semantics = 'daily'`: `value` es la **suma**
+    de los días, `from`/`asOf` el primer y el último día.
+  - `value` es un decimal en texto (`'318.00'`). Los conteos
+    (`code_redemptions`, `orders`, `signups`) no llevan moneda; `revenue` y
+    `csv_sales` llevan la suya en `currency`.
+- `daily`: las filas del CSV por día (`sales`, `orders`, `redemptions`).
+- `currency`: la de la campaña.
+
+Regla para el resultado (CAM-5, decisión 4 de su plan):
+
+| Qué | De dónde |
+|---|---|
+| `code_redemptions` | la suma de `code_redemptions` del CSV si existe; si no, el último total manual |
+| `attributed_revenue` | la suma de `csv_sales` si existe; si no, el último `revenue` manual |
+| ninguno de los dos | `null` y `brand_inputs` en `missing_inputs` |
+| manual pero sin CSV | el manual, y `brand_csv_sales` en `missing_inputs` (es lo que dice el seed para Café Alma) |
+
+Si hay los dos, manda el CSV y CAM-5 lo anota. Una cifra en otra moneda
+que la de la campaña no se convierte: CAM-5 decide si la usa.
