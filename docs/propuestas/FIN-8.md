@@ -233,3 +233,65 @@ es hoy una convención del código, no un privilegio. Un
 estructural, igual que hicimos con `account_metric_snapshot` en 0025.
 No lo meto aquí porque una migración por una historia talla S que no la
 necesita es alcance que no me toca.
+
+---
+
+## 3 · Lo que quedó hecho (cierre)
+
+### 3.1 Sin migración, confirmado
+
+`0024_aislamiento_por_defecto.sql` §7.6, verificado leyendo el archivo:
+
+```sql
+REVOKE DELETE ON workspace FROM mc_app;
+REVOKE UPDATE ON workspace FROM mc_app;
+GRANT UPDATE (name, slug, country, currency, timezone, locale, niche_slugs, settings, updated_at)
+  ON workspace TO mc_app;
+```
+
+`settings` y `currency` están las dos en la lista, y la política
+`workspace_update` (§2 de la misma migración) aísla la fila. **No hace
+falta ningún SQL tuyo.** `plan`, `kind` y `deleted_at` NO están, y esta
+pantalla no los nombra.
+
+### 3.2 La bitácora, mientras ACC-2 no esté
+
+`updateFinanceSettings` escribe su fila de `audit_log` con SQL directo,
+en la misma transacción del `UPDATE`:
+
+- `workspace_id` = `current_workspace_id()`, `actor_user_id` =
+  `current_user_id()`, los dos en SQL: nada que venga del navegador
+  puede cambiarlos.
+- `actor_kind` = `'user'` si hay identidad, `'system'` si no (una copia
+  sin llaves, las pruebas). Decir `'user'` sin saber cuál sería mentir.
+- `before`/`after` = `{ finanzas: <bloque>, currency: <ISO> }`. Son datos
+  del propio workspace y son exactamente lo que la factura imprime: no
+  hay secreto ni PII de un tercero.
+- No devuelve el id (bigserial, CIM-2 §3). Una prueba comprueba que las
+  llaves del resultado son solo `settings`, `currency` e
+  `invoicesInOtherCurrency`.
+
+Cuando `packages/db/src/audit.ts` entre a `main`, esas ocho líneas se
+cambian por `audit(tx, { action: 'workspace.settings_updated', … })`. La
+acción hay que agregarla a `AUDIT_ACTIONS` (§2.2).
+
+### 3.3 El permiso, mientras ACC-1 no esté
+
+`apps/web/app/(app)/finanzas/_lib/permiso.ts`, 80 líneas con su JSDoc.
+Hoy: `owner` y `admin` pueden; `member` (el Mánager de hoy), `viewer` y
+`client` no. **Falla cerrado**, y la distinción está escrita a propósito:
+«no hay sesión» (modo demo, sin llaves de Supabase Auth) devuelve `true`
+porque no hay roles que consultar; «hay sesión pero no encuentro mi rol
+en este espacio» devuelve `false`. La primera versión resolvía las dos
+ramas con el mismo `rol === null` y abría la pantalla en las dos: lo
+encontró la prueba, no la revisión.
+
+### 3.4 Lo que NO hice, y de quién es
+
+| Qué | De quién |
+|---|---|
+| `REVOKE UPDATE, DELETE ON tax_reserve FROM mc_app` | CIM / endurecimiento (§2.3) |
+| Unificar `settings.taxRate` con `settings.finanzas.iva_pct` | Rasheed, Cotizar (§2.1) |
+| `audit()` de verdad y la acción nueva | ACC-2 (§2.2) |
+| `requirePermission()` de verdad | ACC-1 (§0.3 D) |
+| Facturación electrónica (DIAN), multimoneda con conversión, liberar reservas por periodo | Fuera de alcance (fase 2) |

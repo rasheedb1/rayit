@@ -575,9 +575,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
     title: "Configuración financiera",
-    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, datos fiscales para la factura. En workspace.settings.",
+    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, plazo de pago, y datos fiscales para la factura. En workspace.settings.finanzas, que core tipa con parseFinanceSettings: FIN-1, FIN-2, FIN-4 y FIN-6 leen la misma función.",
     done: "Cambiar el porcentaje cambia la reserva de los pagos siguientes, no de los anteriores.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Hecha sin migración: 0024 §7.6 ya concede a mc_app UPDATE (settings, currency) sobre su propia fila. El bloque se guarda con `settings || $1::jsonb` (merge por llave) para no borrar settings.taxRate, que es de Cotizar —dos fuentes de verdad para el IVA, pendiente de decidir con Rasheed: propuesta §2.1—. El permiso se llama finanzas.ajustes.configurar, como lo nombra ACC-1, no finanzas.configuracion.editar; mientras ACC-1 no esté en main la compuerta es _lib/permiso.ts (owner y admin) y la bitácora es SQL directo en la misma transacción, las dos marcadas con su TODO.",
   },
 
   // ---------------------------------------------------------------- ACC
