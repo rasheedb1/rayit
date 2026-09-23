@@ -226,8 +226,9 @@ quien integra, nunca yo).
 ## 3. Verificación
 
 - `make db.check`: 0035 aplica en Postgres embebido. `make db.seed.check`: seeds idempotentes y comprobaciones en verde.
-- Suites: `core` 107, `connectors` 180, `worker` 53, `web` 762 (+1 todo), `db` completa (ver entrega).
-- En dev (modo demo, puerto 3163): la ficha de Café Alma muestra «×12 el ritmo», «12,9 al día antes · 155 al día en campaña · 1.240 ganados», las dos ventanas y «datos hasta el 2 sep». En Fresko (TikTok, en medición) «Actualizar ahora» por HTTP devolvió 303 a `?marca=guardada` y la segunda vez a `?marca=ya_hoy`; la sección explicó «TikTok no publica los seguidores de @freskomarket…». A 400 px, claro y oscuro, sin desborde (`scrollWidth` 400).
+- Suites: `core` 107, `connectors` 180, `worker` 53, `web` 762 (+1 todo) en 92 archivos, `db` 611, raíz 8. **1 723 pruebas, 0 fallos.** `next build` en verde (`/campanas/[id]` 7,05 kB).
+- `pnpm verificar` en esta máquina cargada (promedio de carga ~40, otras sesiones corriendo) cancela `@mc/db` porque su primera prueba pasa de 120 s arrancando PGlite; corrido por paquete, todo verde. El CI no comparte máquina.
+- En dev (modo demo, puerto 3163): la ficha de Café Alma muestra «×12 el ritmo», «12,9 al día antes · 155 al día en campaña · 1.240 ganados», las dos ventanas y «datos hasta el 2 sep». En Fresko (TikTok, en medición) «Actualizar ahora» por HTTP devolvió 303 a `?marca=guardada` y la segunda vez a `?marca=ya_hoy`; la sección explicó «TikTok no publica los seguidores de @freskomarket…». A 400 px, claro y oscuro, sin desborde (`scrollWidth` 400). Tras la revisión se repitió: 303 a `?marca=guardada` y luego `?marca=ya_hoy`; `?aviso=Tu+cuenta+fue+suspendida` no aparece en pantalla y `transitorio.youtube` sí, traducido.
 - `/code-review` alto: diez hallazgos, todos resueltos (§5). `/security-review`: sin hallazgos.
 
 ## 4. Fuera de alcance
