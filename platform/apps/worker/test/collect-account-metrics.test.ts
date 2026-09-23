@@ -159,6 +159,13 @@ test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y vistas, la fila
     assert.equal(tt.rows[0]!.source, 'aggregator');
     assert.equal(tt.rows[0]!.day, '2026-09-22');
 
+    const bitacora = await h3.db.query<{ actor_kind: string; action: string; before: unknown; after: unknown }>(
+      `SELECT actor_kind, action, before, after FROM audit_log WHERE entity_id = $1 AND action = 'connection.source_changed'`, [ids.tt]);
+    assert.equal(bitacora.rows.length, 1, 'el cambio de fuente queda en la bitácora, como job');
+    assert.equal(bitacora.rows[0]!.actor_kind, 'job');
+    assert.deepEqual(bitacora.rows[0]!.before, { accessMode: 'public_profile' });
+    assert.equal((bitacora.rows[0]!.after as { accessMode: string }).accessMode, 'aggregator');
+
     const conn = await h3.db.query<{ access_mode: string; status: string; last_synced_at: Date | string | null }>(`SELECT access_mode, status, last_synced_at FROM social_connection WHERE id = $1`, [ids.tt]);
     assert.equal(conn.rows[0]!.access_mode, 'aggregator', 'la fila cambió de fuente sin perder su id');
     assert.equal(conn.rows[0]!.status, 'active');

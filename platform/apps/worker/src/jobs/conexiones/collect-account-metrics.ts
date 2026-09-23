@@ -19,6 +19,7 @@
  * me, source 'api'. Los videos y sus métricas son de CON-5.
  */
 import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
+import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from './oauth-refresh.ts';
 
@@ -112,7 +113,15 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
             // Contratar o dar de baja el proveedor mueve la cuenta de fuente
             // sin perder su id ni su historia (CON-12 §0.4).
             if (acc.access_mode !== source!.accessMode) {
-              await ctx.db.query(`UPDATE social_connection SET access_mode = $3 WHERE id = $1 AND workspace_id = $2`, [acc.id, acc.workspace_id, source!.accessMode]);
+              await ctx.db.transaction(async (tx) => {
+                await tx.query(`UPDATE social_connection SET access_mode = $3 WHERE id = $1 AND workspace_id = $2`, [acc.id, acc.workspace_id, source!.accessMode]);
+                // La misma fila de bitácora que deja la pantalla (ACC-2), pero como job.
+                await auditAsJob(tx, {
+                  workspaceId: acc.workspace_id, job: { id: ctx.jobId, runId: ctx.runId },
+                  action: 'connection.source_changed', entityType: 'social_connection', entityId: acc.id,
+                  before: { accessMode: acc.access_mode }, after: { accessMode: source!.accessMode },
+                });
+              });
               log.info('la cuenta cambió de fuente pública', { de: acc.access_mode, a: source!.accessMode });
             }
           }

@@ -377,6 +377,12 @@ export function toAggregatorLookupError(err: unknown, handle: string): PublicLoo
     case 'ed_invalid_token':
     case 'ed_unverified_email':
       return new PublicLookupError('not_configured', `El proveedor de datos de TikTok rechazó la credencial de On Cue; hay que revisar ${ENSEMBLEDATA_TOKEN_ENV}.`, { cause: err });
+    case 'ed_validation_error':
+      // Comprobado en vivo el 23-sep: un token que no mide 16 caracteres sale
+      // por aquí, no por 491. Nuestras llamadas solo mandan username (ya
+      // validado por assertHandle), depth, cursor y token, así que un 422
+      // señala la credencial casi siempre.
+      return new PublicLookupError('not_configured', `El proveedor de datos de TikTok rechazó la petición por un parámetro inválido; lo más probable es que ${ENSEMBLEDATA_TOKEN_ENV} esté mal copiado (su token tiene 16 caracteres).`, { cause: err });
     case 'ed_subscription_expired':
       return new PublicLookupError('not_configured', 'La suscripción con el proveedor de datos de TikTok está vencida; hay que renovarla para volver a leer cifras.', { cause: err });
     case 'ed_units_depleted':

@@ -30,6 +30,17 @@ nueve índices, y el entorno local se levanta con un comando.
 > autorización OAuth a cada creador: una cuenta se agrega por su @ y se
 > lee con fuentes oficiales (CON-10, en `main`). La autorización del
 > dueño (alcance, retención, demografía) pasa a una versión avanzada.
+>
+> **Cierre del sprint 2, 23 de septiembre.** Las cinco historias de
+> Nicolás (CON-1, CAM-1, CAM-2, CON-3 y CON-10) están en `main`; CON-3
+> quedó probada en vivo en producción como «Autorizar cifras» de TikTok
+> (híbrido: la cuenta se agrega por @ y el dueño autoriza una vez).
+> Supabase tiene aplicadas todas las migraciones de `main`; producción
+> sirve `1a524d7` y le falta un commit. `pnpm verificar` sobre `main`
+> pasa 1.623 pruebas sin fallos, pero sale en rojo por un rechazo no
+> manejado en una prueba de Resumen. Detalle, pendientes de Rasheed y
+> lo que sigue en la sección 10 de
+> [backlog-mvp.md](backlog-mvp.md#10-cierre-del-sprint-2-al-23-de-septiembre-de-2026).
 
 ---
 

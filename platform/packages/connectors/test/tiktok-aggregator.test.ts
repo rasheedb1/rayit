@@ -128,6 +128,8 @@ test('cada código del proveedor tiene su frase: no existe, privada, credencial,
     ['invalid_token', 'not_configured', /rechazó la credencial de On Cue/],
     ['units_depleted', 'not_configured', /Se agotaron las unidades del día/],
     ['subscription_expired', 'not_configured', /suscripción .* está vencida/],
+    // Comprobado contra la API real: un token mal copiado sale por 422, no por 491.
+    ['validation_error', 'not_configured', /mal copiado \(su token tiene 16 caracteres\)/],
   ];
   for (const [variante, code, mensaje] of casos) {
     const { src } = await source([['user.info', variante]]);

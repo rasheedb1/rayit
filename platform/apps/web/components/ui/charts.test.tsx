@@ -32,6 +32,25 @@ describe("chart-utils", () => {
 });
 
 describe("LineChart", () => {
+  it("dibuja varias ventanas con su etiqueta y su tono (shades)", () => {
+    const { container } = render(
+      <LineChart
+        series={series}
+        labels={labels}
+        ariaLabel="Seguidores de la marca"
+        shades={[
+          { from: 0, to: 1, label: "Línea base", tone: "muted" },
+          { from: 1, to: 2, label: "Campaña" },
+        ]}
+      />,
+    );
+    expect(container.querySelector("svg")?.textContent).toContain("Línea base");
+    expect(container.querySelector("svg")?.textContent).toContain("Campaña");
+    const fills = [...container.querySelectorAll("rect")].map((r) => r.getAttribute("fill"));
+    expect(fills).toContain("var(--surface-2)");
+    expect(fills).toContain("var(--accent-wash)");
+  });
+
   it("normal: role=img con aria-label, una línea por serie y ventana sombreada", () => {
     const { container } = render(<LineChart series={series} labels={labels} ariaLabel="Seguidores por red" shade={{ from: 1, to: 2, label: "Campaña" }} />);
     expect(screen.getByRole("img", { name: "Seguidores por red" })).toBeInTheDocument();
