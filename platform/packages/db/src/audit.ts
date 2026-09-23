@@ -67,6 +67,9 @@ export const AUDIT_ACTIONS = [
   'campaign.post_unlinked',
   'campaign.primary_post_set',
   'campaign.report_sent',
+  // Aportes de la marca (CAM-4): con subrecurso, nombres fijados en docs/propuestas/CAM-4.md
+  'campaign.brand_input.added',
+  'campaign.brand_csv.imported',
   // Conexiones (CON-3, CON-10)
   'connection.added',
   'connection.reconnected',
@@ -78,7 +81,8 @@ export const AUDIT_ACTIONS = [
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
-const ACTION_RE = /^[a-z][a-z_]*\.[a-z][a-z_]*$/;
+/** '<entidad>.<evento>' o '<entidad>.<recurso>.<evento>' (CAM-4). */
+const ACTION_RE = /^[a-z][a-z_]*(?:\.[a-z][a-z_]*){1,2}$/;
 const ENTITY_TYPE_RE = /^[a-z][a-z_]*$/;
 
 /** Se lanza antes de tocar la base si la acción no tiene la forma '<entidad>.<evento>' o no está en AUDIT_ACTIONS. */

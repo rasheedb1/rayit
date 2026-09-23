@@ -1071,20 +1071,6 @@ interface BrandInputAuditAfter {
   source: BrandInputSource;
 }
 
-/**
- * Anota en audit_log lo que acaba de pasar, en la misma transacción.
- * TODO(ACC-2): reemplazar por audit() de packages/db/src/audit.ts cuando
- * exista; hasta entonces este es el único sitio de Campañas que escribe
- * la bitácora. `after` no lleva notas ni nombres: solo claves y cifras.
- */
-async function recordAudit(tx: WorkspaceTx, action: string, entityType: string, entityId: string, after: Record<string, unknown>): Promise<void> {
-  await tx.query(
-    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, after)
-     VALUES (current_workspace_id(), current_user_id(), 'user', $1, $2, $3, $4::jsonb)`,
-    [action, entityType, entityId, JSON.stringify(after)],
-  );
-}
-
 interface RawBrandInputRow {
   id: string;
   kind: BrandInputKind;
@@ -1169,7 +1155,8 @@ export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput):
   const row = inserted.rows[0];
   if (!row) throw new CampaignError('BrandInputInsertError', 'No se pudo registrar el aporte.');
   const after: BrandInputAuditAfter = { kind: row.kind, day: row.day, value: row.value, currency: row.currency, source: row.source };
-  await recordAudit(tx, 'campaign.brand_input.added', 'campaign_brand_input', row.id, { ...after, campaign_id: input.campaignId });
+  // `after` no lleva notas ni nombres: solo claves y cifras.
+  await audit(tx, { action: 'campaign.brand_input.added', entityType: 'campaign_brand_input', entityId: row.id, before: null, after: { ...after, campaign_id: input.campaignId } });
   return { input: toBrandInputRow(row), created: true, campaignCurrency: campaign.currency };
 }
 
@@ -1260,7 +1247,7 @@ export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput
     result.replaced += r.replaced;
     result.unchanged += r.existing - r.replaced;
   }
-  await recordAudit(tx, 'campaign.brand_csv.imported', 'campaign', input.campaignId, {
+  await audit(tx, { action: 'campaign.brand_csv.imported', entityType: 'campaign', entityId: input.campaignId, before: null, after: {
     source: 'brand_csv',
     currency: campaign.currency,
     days: result.days,
@@ -1269,7 +1256,7 @@ export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput
     inserted: result.inserted,
     replaced: result.replaced,
     unchanged: result.unchanged,
-  });
+  } });
   return result;
 }
 

@@ -24,7 +24,11 @@ const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'conexiones.ts'] as const;
  */
 const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, string>> = {
   'finanzas.ts': {},
-  'campanas.ts': {},
+  'campanas.ts': {
+    upsertResult:
+      'campaign_result es la métrica derivada de la campaña (CAM-5): se recalcula entera desde snapshots y aportes cada mañana ' +
+      'y con «Recalcular»; lo que cambia su valor (aportes de la marca, posts asociados) ya deja su fila, y la tabla no es un hecho del negocio',
+  },
   'conexiones.ts': {
     recordAccountSnapshot:
       'métrica append-only: account_metric_snapshot es su propia bitácora (0025 §5: mc_app ni la corrige ni la borra); ' +

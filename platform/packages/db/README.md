@@ -298,7 +298,9 @@ Qué se audita hoy: `invoice.created / sent / payment_recorded / paid /
 voided / reopened / marked_overdue`, `campaign.created / updated /
 status_changed / post_linked / post_unlinked / primary_post_set`,
 `connection.added / reconnected / authorized / disconnected`,
-`consent.recorded / revoked`. El `before` sale de la fila (leída y
+`consent.recorded / revoked` y, de CAM-4, `campaign.brand_input.added` y
+`campaign.brand_csv.imported` (la forma admite un subrecurso:
+`<entidad>.<recurso>.<evento>`). El `before` sale de la fila (leída y
 bloqueada antes de escribir), no se supone: reconectar dice cómo
 estaba la cuenta, y autorizar una cuenta por @ que retira otra fila deja
 también la de la retirada. Agregar una acción es agregarla a `AUDIT_ACTIONS`
