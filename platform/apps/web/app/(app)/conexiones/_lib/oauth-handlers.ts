@@ -44,6 +44,7 @@ export const OAUTH_ERROR_MESSAGES = {
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
+  sin_canal: "Esa cuenta de Google no tiene ningún canal de YouTube. Entra a YouTube con ella, crea el canal y vuelve a intentarlo.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -202,7 +203,10 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         externalAccountId = profile.external_account_id ?? exchanged.externalAccountId;
       } catch (err) {
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
+        // Una cuenta de Google sin canal no es un code malo ni una caída: se dice con esas palabras (CON-8).
+        const codeOut: OAuthErrorCode = isPlatformApiError(err) && err.code === "no_channel"
+          ? "sin_canal"
+          : isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       if (!externalAccountId) {

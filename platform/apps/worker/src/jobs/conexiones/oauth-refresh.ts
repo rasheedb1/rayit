@@ -197,7 +197,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
 
   const refresher = isPlatformId(conn.platform_id) ? ctx.refreshers.get(conn.platform_id) : undefined;
   if (!refresher) {
-    log.error('no hay TokenRefresher para esta plataforma (llega con CON-3/CON-8)');
+    log.error('no hay TokenRefresher para esta plataforma');
     await markTransient(ctx.db, conn);
     return { kind: 'transient', code: 'no_refresher', retryHelps: false };
   }

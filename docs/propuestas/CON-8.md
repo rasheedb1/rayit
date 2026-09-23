@@ -175,3 +175,128 @@ tampoco cambia: `ConnectionPlatformId` ya incluye `'youtube'` y
 | Recolección de videos y métricas del canal con el token del dueño | el token queda guardado y renovándose; usarlo es otra historia | CON-5 |
 | Demografía y retención con la Analytics API | el scope queda concedido; leerlo es otra historia | CON-7 |
 | Trámite de verificación de la pantalla de consentimiento de Google | es de Rasheed | CON-9 |
+
+---
+
+## 1. Migración: ninguna
+
+CON-8 no toca `db/migrations/` ni `db/seed/`. La fila `youtube` de
+`platform` está desde 0002, `social_connection.platform_id` la referencia
+por clave foránea, y `connection_secret`, `data_consent` y `api_call_log`
+son genéricas. `packages/db/src/queries/conexiones.ts` tampoco cambia.
+Nada que aplicar, nada que revisar en SQL.
+
+La cola de migraciones sigue exactamente como la dejó CIM-2: Supabase va
+por la 0022 y faltan 0024 a 0033.
+
+## 2. La app de Google (lo que hay que registrar)
+
+Proyecto de Google Cloud → **APIs y servicios**:
+
+1. **Habilitar dos APIs**: *YouTube Data API v3* y *YouTube Analytics
+   API*. (La Data API ya está habilitada por CON-10, que la usa con
+   `GOOGLE_API_KEY`; la de Analytics no.)
+2. **Pantalla de consentimiento de OAuth**, tipo *External*. Nombre de
+   la app, correo de soporte, dominio autorizado `vercel.app`, enlaces
+   a la política de privacidad y a los términos (hoy `/legal`).
+3. **Scopes**: `https://www.googleapis.com/auth/youtube.readonly` y
+   `https://www.googleapis.com/auth/yt-analytics.readonly`. Los dos son
+   **sensibles**: hasta que Google verifique la pantalla, el proyecto
+   queda en *Testing*.
+4. **Usuarios de prueba**: mientras esté en *Testing*, solo los correos
+   de esa lista pueden autorizar (hasta 100), y su refresh token vence
+   a los siete días. Ahí van los correos de los canales de prueba.
+5. **Credenciales → ID de cliente de OAuth, tipo «Aplicación web»**, con
+   estas **URI de redireccionamiento autorizadas** (exactas; Google
+   distingue mayúsculas y la barra final):
+
+| Entorno | URI |
+|---|---|
+| Producción | `https://on-cue-web.vercel.app/conexiones/oauth/youtube/callback` |
+| Vista previa | `https://<vista-previa>.vercel.app/conexiones/oauth/youtube/callback` (una por vista previa que se quiera probar) |
+| Local | `http://localhost:31xx/conexiones/oauth/youtube/callback` (Google **sí** acepta `localhost`, a diferencia de TikTok) |
+
+De ahí salen `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET`.
+
+## 3. Variables que necesito en el vault y en Vercel (solo nombres)
+
+| Variable | Dónde | Notas |
+|---|---|---|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | vault → Vercel **y** worker | Del ID de cliente de OAuth del §2. Sin ellas, `/conexiones` muestra «Autorizar analítica» deshabilitado diciendo qué falta, y el worker registra el aviso y falla esas renovaciones como transitorio `not_configured`, sin tocar el estado de ninguna cuenta. |
+| `GOOGLE_REDIRECT_URI` | Vercel, opcional | Si no está, sale de `APP_URL` + `/conexiones/oauth/youtube/callback`. En vistas previas conviene fijarla, porque `APP_URL` cambia. |
+| `OAUTH_CONNECT` | Vercel, opcional | `1` enciende el flujo (CON-3). Sin ella el botón no aparece y las rutas responden 404. |
+| `OAUTH_REFRESH_MARGIN_MINUTES_YOUTUBE` | worker, opcional | 30 minutos por defecto, que es el margen general. Es la palanca si Google se queja del ritmo de renovación (§0.5). |
+
+`TOKEN_ENCRYPTION_KEY` y `APP_URL` ya están en Vercel desde CON-3.
+`GOOGLE_API_KEY` (CON-10) es **otra cosa**: sirve para leer canales
+públicos por @ y no tiene nada que ver con el ID de cliente de OAuth.
+
+**Ninguna dependencia nueva.** El lockfile no cambia.
+
+**`.env.example`:** sigue diciendo
+`GOOGLE_REDIRECT_URI=http://localhost:3000/api/oauth/google/callback`,
+una ruta que no existe (mismo caso que TikTok y Meta, ya señalado en
+`docs/propuestas/CON-3.md` §2). No lo toqué porque es archivo compartido
+y el arreglo vale para los cuatro proveedores a la vez; propongo
+cambiarlo a `/conexiones/oauth/<proveedor>/callback` en un PR propio.
+
+## 4. Lo provisional y qué lo reemplaza
+
+| Qué | Dónde | Cuándo se va |
+|---|---|---|
+| `prompt=consent` en todas las autorizaciones | `packages/connectors/src/oauth/google.ts` | Si algún día se quiere evitar la pantalla a quien ya autorizó, hay que mirar antes si tenemos refresh token para esa cuenta (§0.4) |
+| `refreshExpiresAt` vacío para YouTube | mismo archivo | Cuando el proyecto salga de «Testing» deja de importar; mientras tanto, el vencimiento de siete días se descubre por `invalid_grant` |
+| Ventana de 600 llamadas/minuto de `google-oauth` | `packages/connectors/src/quota/limits.ts` | Cuando se mida el límite real, o se quite si Google no lo tiene |
+
+## 5. Prueba en vivo con un canal de prueba (paso a paso)
+
+Cuando estén `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET`:
+
+1. Añadir el correo del canal de prueba a **Usuarios de prueba** del
+   proyecto (§2 · 4) y esperar unos minutos.
+2. En local: `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… OAUTH_CONNECT=1
+   pnpm --filter @mc/web dev -p 3123`, con
+   `http://localhost:3123/conexiones/oauth/youtube/callback` registrada.
+3. `/conexiones` → agregar el canal por @ (CON-10) → en la columna
+   «Cifras» aparece **Autorizar analítica** → aceptar el consentimiento.
+4. Google pide la cuenta y muestra los dos permisos de solo lectura.
+   Aceptar vuelve a `/conexiones?conectada=<id>`.
+5. Comprobar, con `make db.sql` (solo lectura):
+
+```sql
+SELECT platform_id, external_account_id, handle, access_mode, status,
+       scopes, secret_ref, access_expires_at, refresh_expires_at
+  FROM social_connection WHERE platform_id = 'youtube';
+-- access_mode direct_oauth, secret_ref 'enc:youtube:<uuid>',
+-- access_expires_at ~1 h, refresh_expires_at NULL
+
+SELECT purpose, policy_version, revoked_at FROM data_consent
+ WHERE connection_id = '<id>';
+-- analytics y audience_demographics
+
+SELECT left(encode(ciphertext, 'hex'), 24), key_version
+  FROM connection_secret WHERE secret_ref = 'enc:youtube:<uuid>';
+-- bytes, no un token
+
+SELECT endpoint, ok, http_status FROM api_call_log
+ WHERE connection_id = '<id>' ORDER BY id;
+-- oauth.token, youtube.channels.list
+```
+
+6. Renovación: con el worker arrancado (`TOKEN_REFRESHER=real`,
+   `SECRET_STORE=encrypted`, las dos variables de Google), forzar
+   `oauth.refresh` con `marginMinutes` alto y comprobar que
+   `access_expires_at` se mueve una hora y `secret_ref` **no** cambia.
+
+## 7. Pendiente de ti
+
+1. **`GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` al vault y a Vercel**
+   (producción y vista previa) y al entorno del worker (§3).
+2. **CON-9 · auditoría de Google**: verificación de la pantalla de
+   consentimiento para los dos scopes sensibles. Sin ella solo autorizan
+   los usuarios de prueba del proyecto y su permiso dura siete días.
+   Número de caso a `docs/tramites.md`.
+3. **Revisar el PR.** No toca `db/migrations/`, `lib/auth/`,
+   `lib/workspace/`, `packages/db/src/{client,schema}` ni `db/seed/`.
+   Lo único fuera de mis carpetas es `apps/worker/src/index.ts`
+   (cablear el refresher, dos líneas) y `apps/worker/README.md`.

@@ -1,18 +1,20 @@
 /**
- * CON-3 · Fase 6: oauth.refresh con el EncryptedSecretStore real y los
- * refreshers de TikTok e Instagram sobre fixtures. TikTok rota el refresh
- * token y lo guardado es el nuevo; Instagram a menos de 24 h se renueva;
- * Instagram vencido pasa a needs_reauth con su notification sin llamar a
- * Meta. Al final, ninguna columna de texto de ninguna tabla ni el log del
- * worker contienen un token viejo ni uno nuevo.
+ * CON-3 · Fase 6 (+ CON-8): oauth.refresh con el EncryptedSecretStore
+ * real y los refreshers de TikTok, Instagram y YouTube sobre fixtures.
+ * TikTok rota el refresh token y lo guardado es el nuevo; Instagram a
+ * menos de 24 h se renueva; Instagram vencido pasa a needs_reauth con su
+ * notification sin llamar a Meta; YouTube renueva el access token de una
+ * hora y CONSERVA el refresh token, porque Google no lo rota. Al final,
+ * ninguna columna de texto de ninguna tabla ni el log del worker
+ * contienen un token viejo ni uno nuevo.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import {
-  createInstagramRefresher, createTikTokRefresher, dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, HttpCore,
-  InMemoryCallLogSink, INSTAGRAM_LOGIN_SCOPES, keyringOf, loadFixtures, QuotaManager, TIKTOK_LOGIN_SCOPES, TokenCipher, withoutNetwork,
-  type NetworkGuard, type OAuthAppConfig,
+  createInstagramRefresher, createTikTokRefresher, createYouTubeRefresher, dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch,
+  HttpCore, InMemoryCallLogSink, INSTAGRAM_LOGIN_SCOPES, keyringOf, loadFixtures, QuotaManager, TIKTOK_LOGIN_SCOPES, TokenCipher, withoutNetwork,
+  YOUTUBE_OAUTH_SCOPES, type NetworkGuard, type OAuthAppConfig,
 } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
@@ -25,14 +27,16 @@ const CREATOR = '00000002-0000-4000-8000-000000000003';
 const REF_TT = 'enc:tiktok:11111111-1111-4111-8111-111111111111';
 const REF_IG = 'enc:instagram:22222222-2222-4222-8222-222222222222';
 const REF_IG_OLD = 'enc:instagram:33333333-3333-4333-8333-333333333333';
+const REF_YT = 'enc:youtube:44444444-4444-4444-8444-444444444444';
 
 const OLD = {
   tt: { accessToken: 'act.demo-access-tiktok-0001-SECRETO', refreshToken: 'rft.demo-refresh-tiktok-0001-SECRETO' },
   ig: { accessToken: 'IGAA-long-demo-0001-SECRETO' },
   igOld: { accessToken: 'IGAA-long-demo-VENCIDO-SECRETO' },
+  yt: { accessToken: 'ya29.demo-access-youtube-0001-SECRETO', refreshToken: '1//demo-refresh-youtube-0001-SECRETO' },
 };
-const NEW = { tt: ['act.demo-access-tiktok-0002-SECRETO', 'rft.demo-refresh-tiktok-0002-SECRETO'], ig: ['IGAA-long-demo-0002-SECRETO'] };
-const ALL_SECRETS = [OLD.tt.accessToken, OLD.tt.refreshToken, OLD.ig.accessToken, OLD.igOld.accessToken, ...NEW.tt, ...NEW.ig, 'CLIENT-SECRET-SECRETO'];
+const NEW = { tt: ['act.demo-access-tiktok-0002-SECRETO', 'rft.demo-refresh-tiktok-0002-SECRETO'], ig: ['IGAA-long-demo-0002-SECRETO'], yt: ['ya29.demo-access-youtube-0002-SECRETO'] };
+const ALL_SECRETS = [OLD.tt.accessToken, OLD.tt.refreshToken, OLD.ig.accessToken, OLD.igOld.accessToken, OLD.yt.accessToken, OLD.yt.refreshToken, ...NEW.tt, ...NEW.ig, ...NEW.yt, 'CLIENT-SECRET-SECRETO'];
 
 const cipher = new TokenCipher(keyringOf({ v1: new Uint8Array(randomBytes(32)) }));
 const app = (provider: OAuthAppConfig['provider'], scopes: readonly string[]): OAuthAppConfig => ({ provider, clientId: `id-${provider}`, clientSecret: 'CLIENT-SECRET-SECRETO', redirectUri: 'https://on-cue-web.vercel.app/x', scopes });
@@ -41,7 +45,7 @@ let h: Harness;
 let guard: NetworkGuard;
 let fetch: FixtureFetch;
 let calls: InMemoryCallLogSink;
-let ids: { tt: string; ig: string; igOld: string };
+let ids: { tt: string; ig: string; igOld: string; yt: string };
 
 async function seed(db: PgliteDatabase): Promise<void> {
   const raw = db.raw;
@@ -62,19 +66,26 @@ async function seed(db: PgliteDatabase): Promise<void> {
     tt: await insert('tiktok', 'tt-near', REF_TT, hours(0.2), hours(24 * 300)),
     ig: await insert('instagram', 'ig-soon', REF_IG, hours(20), null),
     igOld: await insert('instagram', 'ig-old', REF_IG_OLD, hours(-1), null),
+    // El access token de YouTube dura una hora; a 10 minutos del vencimiento entra por el margen de 30.
+    yt: await insert('youtube', 'yt-near', REF_YT, hours(1 / 6), null),
   };
   // Los secretos se escriben como el worker (mc_worker) fijando el workspace de la ref nueva.
   const store = new EncryptedSecretStore({ db, cipher, workspaceId: WORKSPACE });
   await store.set(REF_TT, { ...OLD.tt, accessExpiresAt: hours(0.2), refreshExpiresAt: hours(24 * 300), scopes: [...TIKTOK_LOGIN_SCOPES] });
   await store.set(REF_IG, { ...OLD.ig, accessExpiresAt: hours(20), scopes: [...INSTAGRAM_LOGIN_SCOPES] });
   await store.set(REF_IG_OLD, { ...OLD.igOld, accessExpiresAt: hours(-1), scopes: [...INSTAGRAM_LOGIN_SCOPES] });
+  await store.set(REF_YT, { ...OLD.yt, accessExpiresAt: hours(1 / 6), scopes: [...YOUTUBE_OAUTH_SCOPES] });
   // Como en producción: el worker NO tiene app.workspace_id en sesión. Sin esto la prueba taparía un set() que falla por NOT NULL.
   await raw.exec("SELECT set_config('app.workspace_id', '', false)");
 }
 
 before(async () => {
   guard = withoutNetwork();
-  fetch = new FixtureFetch([...(await loadFixtures('tiktok', [['oauth.token', 'refresh.ok']])), ...(await loadFixtures('instagram', [['oauth.refresh', 'ok']]))]);
+  fetch = new FixtureFetch([
+    ...(await loadFixtures('tiktok', [['oauth.token', 'refresh.ok']])),
+    ...(await loadFixtures('instagram', [['oauth.refresh', 'ok']])),
+    ...(await loadFixtures('youtube', [['oauth.token', 'refresh.ok']])),
+  ]);
   calls = new InMemoryCallLogSink();
   const core = new HttpCore({ callLog: calls, fetch: fetch.fetch, now: () => NOW, quota: new QuotaManager({ now: () => NOW }) });
   h = await startHarness({
@@ -82,7 +93,11 @@ before(async () => {
     now: () => NOW,
     seed,
     secrets: (db) => new EncryptedSecretStore({ db, cipher }),
-    refreshers: [createTikTokRefresher(core, { login: app('tiktok', TIKTOK_LOGIN_SCOPES) }), createInstagramRefresher(core, app('instagram', INSTAGRAM_LOGIN_SCOPES))],
+    refreshers: [
+      createTikTokRefresher(core, { login: app('tiktok', TIKTOK_LOGIN_SCOPES) }),
+      createInstagramRefresher(core, app('instagram', INSTAGRAM_LOGIN_SCOPES)),
+      createYouTubeRefresher(core, app('youtube', YOUTUBE_OAUTH_SCOPES)),
+    ],
     env: { OAUTH_REFRESH_MARGIN_MINUTES: '30' },
   });
 }, { timeout: 120_000 });
@@ -98,15 +113,15 @@ async function conn(id: string): Promise<ConnRow> {
   return rows[0]!;
 }
 
-test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; Instagram < 24 h se renueva; Instagram vencido → needs_reauth sin llamar', async () => {
+test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; YouTube conserva el suyo; Instagram < 24 h se renueva; Instagram vencido → needs_reauth sin llamar', async () => {
   await h.worker.boss.send('oauth.refresh', { source: 'test' });
   const run = await waitFor(async () => (await jobRuns(h.db, 'oauth.refresh')).find((r) => r.status !== 'running'), { label: 'oauth.refresh real', timeoutMs: 30_000 });
   assert.equal(run.status, 'ok', run.error ?? '');
-  assert.equal(run.items_processed, 3);
+  assert.equal(run.items_processed, 4);
   assert.equal(run.items_failed, 0);
   const md = run.metadata as { due: number; renewed: string[]; needsReauth: string[] };
-  assert.equal(md.due, 3, 'tiktok dentro de 30 min; las dos de Instagram dentro de los 7 días');
-  assert.deepEqual([...md.renewed].sort(), [ids.tt, ids.ig].sort());
+  assert.equal(md.due, 4, 'tiktok y youtube dentro de 30 min; las dos de Instagram dentro de los 7 días');
+  assert.deepEqual([...md.renewed].sort(), [ids.tt, ids.ig, ids.yt].sort());
   assert.deepEqual(md.needsReauth, [ids.igOld]);
 
   // TikTok: fila y almacén con el token rotado.
@@ -118,6 +133,18 @@ test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; Instagra
   const ttTokens = await h.secrets.get(REF_TT);
   assert.equal(ttTokens!.accessToken, NEW.tt[0]);
   assert.equal(ttTokens!.refreshToken, NEW.tt[1], 'el refresh token nuevo, no el viejo');
+
+  // YouTube: access token nuevo de una hora (reloj falso: 11:00 UTC) y el
+  // MISMO refresh token, porque Google no lo rota (CON-8).
+  const yt = await conn(ids.yt);
+  assert.equal(yt.status, 'active');
+  assert.equal(new Date(yt.access_expires_at).toISOString(), '2026-09-22T10:59:59.000Z');
+  assert.equal(yt.refresh_expires_at, null, 'Google no da fecha de vencimiento del refresh token');
+  assert.deepEqual(yt.scopes, [...YOUTUBE_OAUTH_SCOPES]);
+  const ytTokens = await h.secrets.get(REF_YT);
+  assert.equal(ytTokens!.accessToken, NEW.yt[0]);
+  assert.equal(ytTokens!.refreshToken, OLD.yt.refreshToken, 'el mismo refresh token de antes');
+  assert.equal(ytTokens!.refreshExpiresAt, undefined);
 
   // Instagram: token de 60 días, sin refresh token, scopes conservados.
   const ig = await conn(ids.ig);
@@ -140,11 +167,11 @@ test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; Instagra
   assert.match(notes.rows[0]!.title_es, /Instagram/);
   assert.equal((await h.secrets.get(REF_IG_OLD))!.accessToken, OLD.igOld.accessToken);
 
-  // Dos llamadas HTTP (tiktok, instagram): la vencida no llegó a Meta. Sin red real.
-  assert.equal(fetch.calls.length, 2);
+  // Tres llamadas HTTP (tiktok, instagram, youtube): la vencida no llegó a Meta. Sin red real.
+  assert.equal(fetch.calls.length, 3);
   assert.equal(guard.attempts, 0);
   const log = await h.db.query<{ connection_id: string; ok: boolean; error_code: string | null }>(`SELECT connection_id, ok, error_code FROM api_call_log WHERE endpoint = 'oauth.refresh' ORDER BY id`);
-  assert.equal(log.rows.length, 3, 'una fila por conexión, la escribe el job');
+  assert.equal(log.rows.length, 4, 'una fila por conexión, la escribe el job');
   assert.equal(log.rows.find((r) => r.connection_id === ids.igOld)?.error_code, 'refresh_expired');
 });
 
@@ -152,7 +179,7 @@ test('el worker guarda sin workspace en sesión: la fila de connection_secret co
   const rows = await h.db.query<{ workspace_id: string }>(`SELECT workspace_id FROM connection_secret WHERE secret_ref = $1`, [REF_TT]);
   assert.equal(rows.rows[0]!.workspace_id, WORKSPACE);
   const total = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM connection_secret`);
-  assert.equal(Number(total.rows[0]!.n), 3, 'tres refs sembradas, ninguna duplicada');
+  assert.equal(Number(total.rows[0]!.n), 4, 'cuatro refs sembradas, ninguna duplicada');
   const ws = await h.db.query<{ ws: string | null }>(`SELECT current_setting('app.workspace_id', true) AS ws`);
   assert.ok(!ws.rows[0]!.ws, 'la sesión no tiene workspace');
 });
@@ -163,6 +190,8 @@ test('payload.marginMinutes manda sobre el margen de la plataforma', async () =>
   assert.equal(marginFor('instagram', 30, { OAUTH_REFRESH_MARGIN_MINUTES_INSTAGRAM: '60' }), 60);
   assert.equal(marginFor('instagram', 30, {}, 0), 0);
   assert.equal(marginFor('tiktok', 30, {}), 30);
+  assert.equal(marginFor('youtube', 30, {}), 30, 'el token de YouTube dura una hora: el margen general basta');
+  assert.equal(marginFor('youtube', 30, { OAUTH_REFRESH_MARGIN_MINUTES_YOUTUBE: '10' }), 10);
   const c = cutoffsFor(NOW, 30, {}, 5);
   assert.equal(c.get('instagram')!.toISOString(), new Date(NOW.getTime() + 5 * 60_000).toISOString());
 });

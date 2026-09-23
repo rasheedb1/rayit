@@ -260,8 +260,8 @@ export const STORIES: readonly Story[] = [
     title: "OAuth de YouTube",
     desc: "Mismo flujo que CON-3 para un canal de prueba.",
     done: "Conectar un canal de prueba deja la fila con sus scopes y el token cifrado.",
-    status: "pendiente",
-    note: "Pospuesta con CON-3. En el MVP YouTube se lee por @ con API key (CON-10).",
+    status: "bloqueada",
+    note: "Código completo y probado con respuestas grabadas el 23-sep (rama nicolas/CON-8-oauth-youtube). packages/connectors/src/oauth/google.ts: autorización en accounts.google.com con scope por espacios, access_type=offline y prompt=consent (sin los dos Google no entrega refresh token y reconectar daría una conexión que muere en una hora); intercambio y renovación contra oauth2.googleapis.com; el refresh token NO rota y no tiene vencimiento, así que se conserva y refresh_expires_at queda nulo; identidad por channels.list?mine=true, y una cuenta de Google sin canal vuelve con ?error=sin_canal en vez de un mensaje falso. Scopes: youtube.readonly y yt-analytics.readonly, los dos de solo lectura (fuera el monetario, los de escritura y el de MCN). Las rutas [platform] de CON-3 lo sirven sin tocarlas; en Cuentas, «Autorizar analítica» aparece junto a «Autorizar cifras» de TikTok, detrás de OAUTH_CONNECT=1. Familia de cuota google-oauth aparte: renovar un token de una hora cuarenta veces al día no puede comerse el cupo de 10 000 unidades de la Data API. Bloqueada por dos cosas de otros: GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en el vault y en Vercel, y la verificación de la pantalla de consentimiento de Google (CON-9); hasta entonces la app queda en «Testing», solo autorizan los correos de la lista de prueba y su refresh token dura siete días. Paso a paso en docs/propuestas/CON-8.md §3.",
   },
   {
     id: "CON-9", module: "CON", owner: "rasheed", size: null, sprint: 1, deps: [],

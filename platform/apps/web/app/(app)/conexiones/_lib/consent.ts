@@ -16,6 +16,7 @@ export const PLATFORM_LABEL: Record<OAuthProviderId, string> = {
   tiktok: "TikTok",
   "tiktok-business": "TikTok (analítica avanzada)",
   instagram: "Instagram",
+  youtube: "YouTube",
 };
 
 /** Scopes que habilitan la finalidad audience_demographics; el resto solo analytics. */
@@ -23,6 +24,9 @@ export const DEMOGRAPHICS_SCOPES: Record<OAuthProviderId, readonly string[]> = {
   tiktok: [],
   "tiktok-business": ["user.insights", "video.insights"],
   instagram: ["instagram_business_manage_insights"],
+  // yt-analytics.readonly es lo que abre reports.query, de donde salen la
+  // demografía y la retención del canal (CON-8).
+  youtube: ["https://www.googleapis.com/auth/yt-analytics.readonly"],
 };
 
 export function consentText(provider: OAuthProviderId): string {
