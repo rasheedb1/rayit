@@ -1,16 +1,26 @@
+import type { CsvImportErrorCode } from "@mc/db/queries/resumen";
+import type { ErrorCsvCodigo, ProblemaCodigo } from "./importar/_lib/csv";
+import type { Campo, FormatoId } from "./importar/_lib/formatos";
+
 /**
  * Todos los textos de interfaz del módulo Resumen, en un solo archivo.
  *
  * Por qué aquí y no repartidos por las pantallas: el producto está
  * pensado para salir de Colombia, y traducirlo no puede ser buscar
- * comillas por el árbol. Las cifras y las fechas NO viven aquí: las
- * formatea `lib/format.ts` con el locale, la moneda y la zona del
- * workspace.
+ * comillas por el árbol. Las cifras y las fechas NO se formatean aquí:
+ * las formatea `lib/format.ts` con el locale, la moneda y la zona del
+ * workspace, y llegan ya como texto. Por eso los contadores reciben DOS
+ * argumentos: el número, para elegir singular o plural, y su texto ya
+ * formateado («1.234», no «1234»).
  *
  * Las palabras son las que el creador ya conoce de TikTok Studio y de
  * Instagram Insights —Seguidores, Visualizaciones, Alcance,
  * Guardados—, no las nuestras.
  */
+
+/** «1 video» · «1.234 videos». `n` decide el número gramatical; `txt` es `n` ya formateado. */
+const contar = (n: number, txt: string, uno: string, varios: string) => (n === 1 ? `1 ${uno}` : `${txt} ${varios}`);
+
 export const MESSAGES = {
   page: {
     eyebrow: "Resumen",
@@ -31,19 +41,30 @@ export const MESSAGES = {
       label: "Seguidores en total",
       /** Se usa cuando el filtro deja una sola red. */
       labelRed: (red: string) => `Seguidores en ${red}`,
+      /** Sin serie de cuenta —solo CSV— no hay seguidores que contar. */
+      sinCuenta: "Llegan al conectar la cuenta: un CSV trae métricas por video",
     },
     views: {
       label: (dias: number) => `Visualizaciones en ${dias} días`,
+      /** Con serie de cuenta: cuenta otra cosa que las dos tarjetas de al lado. */
       note: "De tus cuentas, no solo de lo publicado en el periodo",
+      /** Sin serie de cuenta: la suma de lo publicado, y hay que decirlo. */
+      noteContenido: (n: number, txt: string) =>
+        `De ${contar(n, txt, "video publicado", "videos publicados")} en el periodo, con su última lectura`,
     },
     nonFollowerReach: {
       label: "Alcance en no seguidores",
-      note: (posts: number) => (posts === 1 ? "1 video publicado" : `${posts} videos publicados`),
     },
     savesPer1k: {
       label: "Guardados por 1 000 visualizaciones",
-      note: "La señal que más pesa en el alcance",
     },
+    /**
+     * La base de los dos KPIs de contenido: sobre cuántos videos se
+     * calculó la razón y con qué lectura. «Vida completa» porque se usa
+     * la última lectura de cada video en los dos periodos, no un corte
+     * de edad.
+     */
+    base: (n: number, txt: string) => `Sobre ${contar(n, txt, "video", "videos")}, en su vida completa`,
     /** Para las sumas del periodo. */
     deltaLabel: (dias: number) => `vs. los ${dias} días anteriores`,
     /** Para los valores de un instante, como los seguidores. */
@@ -57,7 +78,15 @@ export const MESSAGES = {
       subtitle: (dias: number) => `Un punto por día · ${dias} días`,
       aria: "Seguidores por red, un punto por día",
       labelsHeader: "Fecha",
-      nota: "El eje arranca en cero, así que la curva enseña el tamaño y no solo el movimiento. Una red que empezó a medirse dentro del periodo aparece en cero hasta su primera lectura.",
+      nota: "El eje arranca en cero, así que la curva enseña el tamaño y no solo el movimiento.",
+      /** Solo con todas las redes: con una sola, no hay otras con las que desalinearse. */
+      notaRedes: "Una red que empezó a medirse dentro del periodo aparece en cero hasta su primera lectura.",
+      sinCuenta: {
+        title: "Los seguidores llegan al conectar la cuenta",
+        description:
+          "Tus CSV traen métricas por video; los seguidores y las visualizaciones diarias llegan al conectar la cuenta.",
+        accion: "Conectar una cuenta",
+      },
     },
     views: {
       title: "Visualizaciones por red",
@@ -69,6 +98,9 @@ export const MESSAGES = {
       labelsHeaderDia: "Día",
       nota: (paso: number) =>
         paso === 1 ? undefined : `Cada barra son ${paso} días contados hacia atrás desde el último día cerrado.`,
+      /** Sin serie de cuenta, las barras son otra cosa y se dice. */
+      notaContenido:
+        "Sin cuenta conectada: cada barra suma las visualizaciones de lo publicado en esos días, con su última lectura.",
     },
   },
   frescura: {
@@ -76,10 +108,8 @@ export const MESSAGES = {
     sinLecturas: "Sin lecturas todavía",
     fuente: {
       api: "API",
-      csv_import: "CSV importado",
-      manual: "A mano",
-      aggregator: "Agregador",
-    } as Record<string, string>,
+      csv: "CSV importado",
+    },
     tokenPorVencer: "Permiso por vencer",
     revisar: "Revisar conexiones",
   },
@@ -113,7 +143,8 @@ export const MESSAGES = {
         accion: "Quitar el filtro de red",
       },
       sinSalida: {
-        description: "No hay ninguna lectura de cuenta en los últimos 90 días. En cuanto el recolector cierre un día, o importes un CSV, aparece aquí.",
+        description:
+          "No hay ninguna lectura en los últimos 90 días. En cuanto el recolector cierre un día, o importes un CSV, aparece aquí.",
       },
     },
   },
@@ -147,51 +178,135 @@ export const MESSAGES = {
       elegir: "elige un archivo",
       formatos: "Reconocemos las exportaciones de:",
       cualquiera: "Si tu archivo no es ninguno de estos, también sirve: en el paso siguiente dices qué columna es cada cosa.",
-      demasiadoGrande: (mb: number) => `El archivo pesa más de ${mb} MB. Divídelo por fechas y sube una parte.`,
+      demasiadoGrande: (mb: string) => `El archivo pesa más de ${mb} MB. Divídelo por fechas y sube una parte.`,
       noEsCsv: "Ese archivo no parece un CSV. Si lo exportaste en Excel, guárdalo como CSV y vuelve a subirlo.",
     },
+    /** Por qué un archivo no se puede ni empezar a revisar (ErrorCsv). */
+    errorArchivo: {
+      vacio: () => "El archivo está vacío.",
+      sinEncabezados: () => "No se encontró la fila de encabezados.",
+      sinFilas: () => "El archivo tiene encabezados pero ninguna fila.",
+      demasiadasFilas: (filas: string, max: string) => `El archivo tiene ${filas} filas y el máximo son ${max}. Divídelo por fechas.`,
+    } satisfies Record<ErrorCsvCodigo, (...args: string[]) => string>,
+    /** Las exportaciones que reconocemos: su nombre y de dónde se descargan. */
+    formatos: {
+      instagram_meta: { nombre: "Instagram Insights", donde: "Meta Business Suite → Estadísticas → Contenido → Exportar" },
+      tiktok_studio: { nombre: "TikTok Studio", donde: "TikTok Studio → Analíticas → Contenido → Descargar datos" },
+      youtube_studio: {
+        nombre: "YouTube Studio",
+        donde: "YouTube Studio → Analíticas → Modo avanzado → Exportar (Table data.csv)",
+      },
+    } satisfies Record<FormatoId, { nombre: string; donde: string }>,
+    /** Los campos que sabemos escribir, como se los nombra en el paso 2. */
+    campos: {
+      externalPostId: { label: "Identificador del video", ayuda: "El id de la plataforma. Si no viene, se saca del enlace." },
+      publishedAt: { label: "Fecha de publicación" },
+      title: { label: "Título o descripción" },
+      url: { label: "Enlace" },
+      mediaType: { label: "Tipo de publicación" },
+      durationS: { label: "Duración (segundos)" },
+      views: { label: "Visualizaciones" },
+      reach: { label: "Alcance (cuentas alcanzadas)" },
+      likes: { label: "Me gusta" },
+      comments: { label: "Comentarios" },
+      shares: { label: "Veces compartido" },
+      saves: { label: "Guardados" },
+      followsFromPost: { label: "Seguidores ganados" },
+      reachNonFollowers: { label: "Alcance en no seguidores" },
+    } satisfies Record<Campo, { label: string; ayuda?: string }>,
     formato: {
       title: "Qué es cada columna",
       detectado: (nombre: string) => `Parece una exportación de ${nombre}.`,
       noDetectado: "No reconocimos el formato, así que elige la red y revisa el mapeo.",
       red: "Red",
       cuenta: "¿A qué cuenta pertenece?",
+      /** Una opción del selector de cuenta: «@laura · 17 videos». */
+      cuentaOpcion: (nombre: string, posts: number, postsTxt: string) =>
+        posts > 0 ? `@${nombre} · ${contar(posts, postsTxt, "video", "videos")}` : `@${nombre}`,
       cuentaNueva: "Crear una cuenta importada por CSV",
       cuentaNuevaHandle: "Nombre de usuario de la cuenta",
       cuentaNuevaAyuda: "Sin la arroba. Es como la vas a ver en Resumen y en Conexiones.",
+      cuentaNuevaEjemplo: "tu.cuenta",
       columnas: "Columnas",
       sinAsignar: "Sin asignar",
       obligatorio: "Obligatorio",
       faltan: (campos: string) => `Falta decir qué columna es: ${campos}.`,
       idDelEnlace: "Sin columna de id, se saca del enlace.",
       muestra: "Primera fila del archivo",
+      celdaVacia: "—",
+      /** El orden día/mes de las fechas numéricas, decidido para el archivo entero. */
+      fechas: {
+        label: "Orden de las fechas",
+        dm: "Día/Mes",
+        md: "Mes/Día",
+        ambiguo:
+          "Ninguna fecha del archivo tiene un número mayor que 12, así que sirven en los dos órdenes. Di cuál usa tu exportación.",
+        deducido: {
+          dm: "Las fechas van en orden día/mes: lo demuestra el propio archivo.",
+          md: "Las fechas van en orden mes/día: lo demuestra el propio archivo.",
+        },
+        ejemplo: (crudo: string, leida: string) => `«${crudo}» se lee como ${leida}.`,
+      },
     },
+    /**
+     * Lo que puede estar mal en una fila. `csv.ts` devuelve el código y
+     * la celda cruda; la frase se arma aquí.
+     */
+    validacion: {
+      sinId: () => "Sin identificador: ni columna de id ni enlace del que sacarlo.",
+      sinFecha: () => "Sin fecha de publicación.",
+      fechaIlegible: (p: { valor?: string }) => `No se entiende la fecha «${p.valor ?? ""}».`,
+      fechaFutura: () => "La fecha de publicación está en el futuro.",
+      noEsNumero: (p: { valor?: string; campo?: string }) =>
+        `«${p.valor ?? ""}» no es un número en ${(p.campo ?? "").toLowerCase()}: se importa sin ese dato.`,
+      negativo: (p: { campo?: string }) => `${p.campo ?? ""} no puede ser negativo: se importa sin ese dato.`,
+      noSeguidoresMayor: () => "El alcance en no seguidores supera el alcance total: se importa sin ese dato.",
+      repetidaEnArchivo: () => "Repetida en este mismo archivo: se queda la primera.",
+      yaImportado: () => "Este video ya está: se añade una lectura nueva, no se reemplaza nada.",
+      casiVacia: () => "Sin visualizaciones ni alcance: la lectura entra casi vacía.",
+    } satisfies Record<ProblemaCodigo, (p: { valor?: string; campo?: string }) => string>,
     revisar: {
       title: "Esto es lo que se va a guardar",
-      resumen: (listas: number, total: number) => `${listas} de ${total} filas listas`,
-      errores: (n: number) => (n === 1 ? "1 fila no se puede importar" : `${n} filas no se pueden importar`),
-      avisos: (n: number) => (n === 1 ? "1 aviso" : `${n} avisos`),
-      duplicadas: (n: number) => (n === 1 ? "1 fila repetida en el archivo" : `${n} filas repetidas en el archivo`),
+      resumen: (listas: string, total: string) => `${listas} de ${total} filas listas`,
+      errores: (n: number, txt: string) =>
+        n === 1 ? "1 fila no se puede importar" : `${txt} filas no se pueden importar`,
+      avisos: (n: number, txt: string) => contar(n, txt, "aviso", "avisos"),
+      duplicadas: (n: number, txt: string) =>
+        n === 1 ? "1 fila repetida en el archivo" : `${txt} filas repetidas en el archivo`,
       ninguna: "Ninguna fila se puede importar. Revisa el mapeo del paso anterior.",
       /** Contra los videos que YA están en la cuenta de destino, no contra el propio archivo. */
-      yaEstaban: (n: number) =>
-        n === 1 ? "1 ya estaba: se le añade una lectura" : `${n} ya estaban: se les añade una lectura`,
+      yaEstaban: (n: number, txt: string) =>
+        n === 1 ? "1 ya estaba: se le añade una lectura" : `${txt} ya estaban: se les añade una lectura`,
       columnas: { fila: "Fila", video: "Video", publicado: "Publicado", views: "Visualizaciones", estado: "Estado" },
       estado: { lista: "Lista", error: "No entra", aviso: "Con aviso" },
+      sinDato: "—",
     },
     acciones: { atras: "Atrás", siguiente: "Siguiente", importar: "Importar", importando: "Importando…", otro: "Importar otro archivo" },
     hecho: {
       title: "Listo",
-      resumen: (videos: number, lecturas: number) =>
-        `${videos} ${videos === 1 ? "video" : "videos"}, ${lecturas} ${lecturas === 1 ? "lectura" : "lecturas"}.`,
-      nuevos: (n: number) => `${n} ${n === 1 ? "video nuevo" : "videos nuevos"}`,
-      conocidos: (n: number) => `${n} ya ${n === 1 ? "estaba" : "estaban"}: se les añadió una lectura`,
+      resumen: (videos: number, videosTxt: string, lecturas: number, lecturasTxt: string) =>
+        `${contar(videos, videosTxt, "video", "videos")}, ${contar(lecturas, lecturasTxt, "lectura", "lecturas")}.`,
+      nuevos: (n: number, txt: string) => contar(n, txt, "video nuevo", "videos nuevos"),
+      conocidos: (n: number, txt: string) =>
+        n === 1 ? "1 ya estaba: se le añadió una lectura" : `${txt} ya estaban: se les añadió una lectura`,
       ver: "Ver el resumen",
     },
     error: {
       generico: "No se pudo importar. Vuelve a intentarlo y, si sigue igual, avísanos.",
       sinCuenta: "Elige la cuenta a la que pertenece el archivo.",
       sinFilas: "No hay ninguna fila que se pueda importar.",
+      sinMapeo: "Falta decir qué columna es la fecha de publicación o el identificador. Vuelve al paso 2.",
+      /** Lo que pesa de más ni siquiera llega al servidor: se dice antes de intentarlo. */
+      demasiadoGrande: (mb: string) => `El archivo pasa de ${mb} MB y no se puede enviar. Divídelo por fechas.`,
+      /** Los rechazos de @mc/db, que llegan como código. */
+      base: {
+        invalid_connection: "La cuenta elegida no es válida. Vuelve a elegirla en el paso 2.",
+        connection_not_found: "Esa cuenta ya no existe en este espacio de trabajo. Elige otra en el paso 2.",
+        no_creator: "Este espacio de trabajo aún no tiene un perfil de creador al que colgar la cuenta.",
+        empty_batch: "No hay ninguna fila que se pueda importar.",
+        duplicate_ids: "El archivo trae el mismo video más de una vez. Deja una sola fila por video.",
+        empty_handle: "Escribe el nombre de usuario de la cuenta nueva.",
+      } satisfies Record<CsvImportErrorCode, string>,
     },
     /** La frontera de error del propio asistente: aquí no hay métricas que leer. */
     errorPagina: {

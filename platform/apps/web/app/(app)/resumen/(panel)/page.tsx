@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { getCoberturaResumen } from "@mc/db/queries/resumen";
+import { getResumenCoverage } from "@mc/db/queries/resumen";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
@@ -58,7 +58,7 @@ export default async function ResumenPage({
   searchParams: Promise<{ periodo?: string; red?: string }>;
 }) {
   const filtro = parseFiltro(await searchParams);
-  const cobertura = await withWorkspace((tx) => getCoberturaResumen(tx));
+  const cobertura = await withWorkspace((tx) => getResumenCoverage(tx));
   const t = MESSAGES.page;
 
   return (
@@ -67,23 +67,23 @@ export default async function ResumenPage({
         eyebrow={t.eyebrow}
         title={t.title}
         description={t.description}
-        aside={cobertura.conDatos > 0 ? <Filtros filtro={filtro} /> : undefined}
+        aside={cobertura.withData > 0 ? <Filtros filtro={filtro} /> : undefined}
       />
 
       <div className="-mt-4 mb-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
         <Link href="/plan/resumen" className="underline-offset-2 hover:text-ink hover:underline">
           {t.plan}
         </Link>
-        {cobertura.conDatos > 0 && (
+        {cobertura.withData > 0 && (
           <Link href="/resumen/importar" className="underline-offset-2 hover:text-ink hover:underline">
             {t.importar}
           </Link>
         )}
       </div>
 
-      {cobertura.conexiones === 0 ? (
+      {cobertura.connections === 0 ? (
         <SinConexiones />
-      ) : cobertura.conDatos === 0 ? (
+      ) : cobertura.withData === 0 ? (
         <SinDatos />
       ) : (
         <>
@@ -103,7 +103,7 @@ export default async function ResumenPage({
             esqueletos de arriba no llegan a verse nunca.
           */}
           <Suspense fallback={<FrescuraEsqueleto />}>
-            <Frescura />
+            <Frescura filtro={filtro} />
           </Suspense>
         </>
       )}

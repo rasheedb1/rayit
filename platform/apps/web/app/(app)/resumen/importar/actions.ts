@@ -3,10 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
-  asegurarCuentaCsv,
-  importarLecturasCsv,
+  CsvImportError,
+  ensureCsvConnection,
+  importCsvReadings,
   listExternalPostIds,
-  type ResultadoImportacion,
+  type CsvImportResult,
+  type PlatformId,
 } from "@mc/db/queries/resumen";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
@@ -28,31 +30,33 @@ import { ErrorCsv, faltantesDelMapeo, leerCsv, MAX_BYTES, MAX_FILAS, revisar } f
  * (`withWorkspace`), nunca este archivo, y la cuenta de destino se
  * comprueba contra la base: un connectionId de otro workspace no existe
  * para RLS.
+ *
+ * Lo que devuelve al navegador es siempre `{ ok, error }` con una frase
+ * de `messages.ts`: nunca lanza. Un rechazo de @mc/db llega como código
+ * (CsvImportError) y aquí se traduce; el mensaje crudo de Postgres no
+ * sale del servidor.
  */
 
-/**
- * El techo se mide en BYTES, no en unidades UTF-16: `"á"` ocupa dos
- * bytes y una sola unidad, así que un archivo lleno de tildes pasaba un
- * `.max(MAX_BYTES)` con bastante más de cinco megas reales.
- */
-const textoDelArchivo = z
-  .string()
-  .min(1)
-  .refine((v) => Buffer.byteLength(v, "utf8") <= MAX_BYTES, { message: "demasiado grande" });
+const MEGAS = (MAX_BYTES / 1024 / 1024).toString();
 
 const esquema = z.object({
-  texto: textoDelArchivo,
-  red: z.enum(["tiktok", "instagram", "facebook", "youtube"]),
+  /**
+   * El techo se mide en BYTES, no en unidades UTF-16: `"á"` ocupa dos
+   * bytes y una sola unidad, así que un archivo lleno de tildes pasaba
+   * un `.max(MAX_BYTES)` con bastante más de cinco megas reales.
+   */
+  texto: z.string().min(1),
+  red: z.enum(["tiktok", "instagram", "facebook", "youtube"] satisfies PlatformId[]),
   /** Uno de los dos: la cuenta que ya existe, o el nombre de la que se crea. */
   connectionId: z.string().regex(UUID_RE).optional(),
   handleNuevo: z.string().trim().min(1).max(64).optional(),
   /** campo → encabezado del archivo. Se filtra a los campos conocidos. */
   mapeo: z.record(z.string(), z.string().min(1)),
+  /** El orden de fechas que eligió la persona cuando el archivo no lo demuestra. */
+  ordenFechas: z.enum(["dm", "md"]).optional(),
 });
 
-export type ResultadoAccion =
-  | { ok: true; resultado: ResultadoImportacion }
-  | { ok: false; error: string };
+export type ResultadoAccion = { ok: true; resultado: CsvImportResult } | { ok: false; error: string };
 
 /** Solo los campos que sabemos escribir; lo demás del objeto se ignora. */
 function limpiarMapeo(crudo: Record<string, string>): Mapeo {
@@ -62,6 +66,16 @@ function limpiarMapeo(crudo: Record<string, string>): Mapeo {
     if (encabezado) mapeo[campo as Campo] = encabezado;
   }
   return mapeo;
+}
+
+/** Un ErrorCsv o un CsvImportError, en la frase que le toca. Cualquier otra cosa, el genérico. */
+function mensajeDe(err: unknown): string {
+  const t = MESSAGES.importar;
+  if (err instanceof ErrorCsv) {
+    return t.errorArchivo[err.codigo](String(err.datos.filas ?? ""), String(err.datos.max ?? ""));
+  }
+  if (err instanceof CsvImportError) return t.error.base[err.code];
+  return t.error.generico;
 }
 
 const esquemaConocidos = z.object({
@@ -96,19 +110,21 @@ export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
   const t = MESSAGES.importar.error;
   const parsed = esquema.safeParse(entrada);
   if (!parsed.success) return { ok: false, error: t.generico };
-  const { texto, red, connectionId, handleNuevo } = parsed.data;
+  const { texto, red, connectionId, handleNuevo, ordenFechas } = parsed.data;
+  if (Buffer.byteLength(texto, "utf8") > MAX_BYTES) return { ok: false, error: t.demasiadoGrande(MEGAS) };
   if (!connectionId && !handleNuevo) return { ok: false, error: t.sinCuenta };
 
   const mapeo = limpiarMapeo(parsed.data.mapeo);
-  const ws = await getCurrentWorkspace();
+  if (faltantesDelMapeo(mapeo).length > 0) return { ok: false, error: t.sinMapeo };
 
   let filas;
   try {
+    const ws = await getCurrentWorkspace();
     const tabla = leerCsv(texto);
-    if (faltantesDelMapeo(mapeo).length > 0) return { ok: false, error: t.generico };
-    filas = revisar(tabla, mapeo, { timeZone: ws.timezone, locale: ws.locale }).listas;
+    filas = revisar(tabla, mapeo, { timeZone: ws.timezone, locale: ws.locale, ordenFechas }).listas;
   } catch (err) {
-    return { ok: false, error: err instanceof ErrorCsv ? err.message : t.generico };
+    if (!(err instanceof ErrorCsv)) console.error("[resumen/importar] no se pudo leer el archivo", err);
+    return { ok: false, error: mensajeDe(err) };
   }
   if (filas.length === 0) return { ok: false, error: t.sinFilas };
 
@@ -116,13 +132,13 @@ export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
     const resultado = await withWorkspace(async (tx) => {
       // La cuenta y las lecturas, en la MISMA transacción: si la
       // escritura falla, no queda una cuenta vacía por ahí.
-      const destino = connectionId ?? (await asegurarCuentaCsv(tx, { red, handle: handleNuevo! })).connectionId;
-      return importarLecturasCsv(tx, { connectionId: destino, red, filas });
+      const destino = connectionId ?? (await ensureCsvConnection(tx, { platform: red, handle: handleNuevo! })).connectionId;
+      return importCsvReadings(tx, { connectionId: destino, platform: red, rows: filas });
     });
     revalidatePath("/resumen");
     return { ok: true, resultado };
   } catch (err) {
-    console.error("[resumen/importar] no se pudo escribir el lote", err);
-    return { ok: false, error: t.generico };
+    if (!(err instanceof CsvImportError)) console.error("[resumen/importar] no se pudo escribir el lote", err);
+    return { ok: false, error: mensajeDe(err) };
   }
 }

@@ -9,10 +9,11 @@ import {
   analizar,
   ErrorCsv,
   faltantesDelMapeo,
-  fechaAmbigua,
+  analizarFechas,
   idDesdeUrl,
   leerCsv,
-  mesAntesQueDia,
+  MAX_BYTES,
+  ordenPorLocale,
   revisar,
 } from "./csv";
 import { mapearPorAlias, normalizar } from "./formatos";
@@ -78,7 +79,7 @@ describe("celdas", () => {
   it("lee las fechas de las exportaciones y devuelve UTC", () => {
     // Sin zona, la hora es la del workspace: Bogotá va 5 h detrás de UTC.
     expect(aFechaIso("2026-09-10 15:04:00", BOGOTA)).toBe("2026-09-10T20:04:00.000Z");
-    expect(aFechaIso("10/09/2026 15:04", BOGOTA)).toBe("2026-09-10T20:04:00.000Z");
+    expect(aFechaIso("10/09/2026 15:04", BOGOTA, "dm")).toBe("2026-09-10T20:04:00.000Z");
     // Con zona explícita, se respeta.
     expect(aFechaIso("2026-09-10T15:04:00Z", BOGOTA)).toBe("2026-09-10T15:04:00.000Z");
     // Un día suelto se ancla al mediodía: con medianoche, ±5 h cambiarían el día.
@@ -88,31 +89,49 @@ describe("celdas", () => {
     expect(aFechaIso("13/25/2026", BOGOTA)).toBeNull();
   });
 
-  it("el orden de una fecha numérica lo decide el locale del workspace", () => {
-    // «09/10/2026» es el 9 de octubre para un workspace en español y el
-    // 10 de septiembre para uno en inglés de Estados Unidos. Leerlo
-    // siempre a la española colgaba el video del mes equivocado, sin
-    // error y sin aviso.
-    expect(aFechaIso("09/10/2026", BOGOTA, "es-CO")).toBe(aFechaIso("2026-10-09", BOGOTA));
-    expect(aFechaIso("09/10/2026", BOGOTA, "en-US")).toBe(aFechaIso("2026-09-10", BOGOTA));
-    // Sin locale, día/mes/año: el orden de casi todo el mundo.
+  it("lee una fecha numérica en el orden que se le pide, sin darle la vuelta a escondidas", () => {
+    expect(aFechaIso("09/10/2026", BOGOTA, "dm")).toBe(aFechaIso("2026-10-09", BOGOTA));
+    expect(aFechaIso("09/10/2026", BOGOTA, "md")).toBe(aFechaIso("2026-09-10", BOGOTA));
+    // Sin orden, día/mes/año: el de casi todo el mundo.
     expect(aFechaIso("09/10/2026", BOGOTA)).toBe(aFechaIso("2026-10-09", BOGOTA));
-    // Un número que no puede ser mes se prueba al revés antes de rendirse.
-    expect(aFechaIso("25/12/2026", BOGOTA, "en-US")).toBe(aFechaIso("2026-12-25", BOGOTA));
-    expect(aFechaIso("13/25/2026", BOGOTA, "en-US")).toBeNull();
+    // Antes, «25/12/2026» en mes/día se leía «al revés» por su cuenta.
+    // Ya no: el orden se decide para el archivo entero, y una celda que
+    // no encaja en él es ilegible, no una excepción silenciosa.
+    expect(aFechaIso("25/12/2026", BOGOTA, "md")).toBeNull();
+    expect(aFechaIso("25/12/2026", BOGOTA, "dm")).toBe(aFechaIso("2026-12-25", BOGOTA));
+    expect(aFechaIso("31/02/2026", BOGOTA, "dm")).toBeNull(); // no existe
     expect(aFechaIso("10/45/2026", BOGOTA)).toBeNull();
-
-    expect(mesAntesQueDia("en-US")).toBe(true);
-    expect(mesAntesQueDia("es-CO")).toBe(false);
-    expect(mesAntesQueDia("en-GB")).toBe(false);
-    expect(mesAntesQueDia(undefined)).toBe(false);
   });
 
-  it("sabe cuándo una fecha numérica es ambigua", () => {
-    expect(fechaAmbigua("09/10/2026")).toBe(true);
-    expect(fechaAmbigua("15/09/2026")).toBe(false); // 15 no puede ser mes
-    expect(fechaAmbigua("09/09/2026")).toBe(false); // los dos órdenes dan lo mismo
-    expect(fechaAmbigua("2026-09-10 15:04:00")).toBe(false);
+  it("entiende el reloj de 12 horas y no ignora lo que no entiende", () => {
+    expect(aFechaIso("09/19/2026 8:15 PM", "UTC", "md")).toBe("2026-09-19T20:15:00.000Z");
+    expect(aFechaIso("19/09/2026 8:15 p. m.", "UTC", "dm")).toBe("2026-09-19T20:15:00.000Z");
+    expect(aFechaIso("19/09/2026 12:05 AM", "UTC", "dm")).toBe("2026-09-19T00:05:00.000Z");
+    expect(aFechaIso("19/09/2026 12:05 PM", "UTC", "dm")).toBe("2026-09-19T12:05:00.000Z");
+    // Antes «8:15 PM» salía como las 8:15 de la mañana, sin aviso.
+    expect(aFechaIso("19/09/2026 13:15 PM", "UTC", "dm")).toBeNull();
+    expect(aFechaIso("19/09/2026 8:15 hora del Pacífico", "UTC", "dm")).toBeNull();
+  });
+
+  it("el orden que se propone sale del locale del workspace", () => {
+    expect(ordenPorLocale("en-US")).toBe("md");
+    expect(ordenPorLocale("es-CO")).toBe("dm");
+    expect(ordenPorLocale("en-GB")).toBe("dm");
+    expect(ordenPorLocale("es_US")).toBe("md");
+    expect(ordenPorLocale(undefined)).toBe("dm");
+  });
+
+  it("el orden se decide mirando la columna entera", () => {
+    // Un primer número mayor que 12 en cualquier fila demuestra día/mes.
+    expect(analizarFechas(["09/05/2026", "14/09/2026"])).toEqual({ numericas: 2, orden: "dm" });
+    // Un segundo número mayor que 12 demuestra mes/día.
+    expect(analizarFechas(["09/05/2026 15:04", "09/14/2026 19:00"])).toEqual({ numericas: 2, orden: "md" });
+    // Si ninguna fecha pasa de 12, el archivo no lo dice: hay que preguntar.
+    expect(analizarFechas(["09/05/2026", "10/09/2026"])).toEqual({ numericas: 2, orden: null });
+    // Pruebas en los dos sentidos: tampoco lo dice.
+    expect(analizarFechas(["14/09/2026", "09/14/2026"]).orden).toBeNull();
+    // Las fechas ISO no cuentan: no tienen orden que decidir.
+    expect(analizarFechas(["2026-09-10 15:04:00", ""])).toEqual({ numericas: 0, orden: null });
   });
 
   it("traduce el tipo de publicación y cae en video", () => {
@@ -243,22 +262,61 @@ describe("un archivo que no reconocemos", () => {
     });
   });
 
-  it("avisa de la fecha ambigua y dice cómo la leyó", () => {
+  it("el propio archivo demuestra que es día/mes, aunque el workspace escriba mes/día", () => {
     const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Publicado el" };
-    // «10/09/2026» en es-CO es el 10 de septiembre…
-    const enEspanol = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "es-CO" });
-    expect(enEspanol.errores).toBe(0);
-    const aviso = enEspanol.filas[0]!.problemas.find((p) => p.campo === "publishedAt");
-    expect(aviso).toMatchObject({ gravedad: "aviso" });
-    expect(aviso!.mensaje).toContain("10 de septiembre");
+    // «15/09/2026» solo puede ser día/mes, así que «10/09/2026» es el 10
+    // de septiembre también en un workspace en-US, y aunque alguien
+    // pidiera mes/día: el otro orden dejaría esa fila ilegible.
+    for (const opts of [{ locale: "en-US" }, { locale: "es-CO", ordenFechas: "md" as const }]) {
+      const r = revisar(tabla, aMano, { timeZone: BOGOTA, ...opts });
+      expect(r.ordenFechas).toBe("dm");
+      expect(r.errores).toBe(0);
+      expect(r.listas[0]!.publishedAt).toBe("2026-09-10T20:04:00.000Z");
+    }
+  });
+});
 
-    // …y en en-US, el 9 de octubre. La fila entra en los dos casos: lo
-    // que cambia es el dato, y por eso hay que enseñarlo antes.
-    const enIngles = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "en-US" });
-    expect(enIngles.listas[0]!.publishedAt).not.toBe(enEspanol.listas[0]!.publishedAt);
+describe("una exportación con fechas mes/día (cuenta en inglés de Estados Unidos)", () => {
+  const { tabla, deteccion, mapeo } = analizar(fixture("tiktok-studio-en-us.csv"));
 
-    // «15/09/2026» no es ambigua: 15 no puede ser un mes.
-    expect(enEspanol.filas[2]!.problemas).toHaveLength(0);
+  it("se detecta el orden mes/día por el archivo, sin preguntar", () => {
+    expect(deteccion.formato?.red).toBe("tiktok");
+    expect(analizarFechas(tabla.filas.map((f) => f[mapeo.publishedAt!]!)).orden).toBe("md");
+  });
+
+  it("«09/05/2026» es el 5 de septiembre, no el 9 de mayo, en cualquier workspace", () => {
+    // El caso que entraba en silencio: el workspace es es-CO (día/mes),
+    // pero el archivo trae «09/14/2026» tres filas más abajo.
+    const r = revisar(tabla, mapeo, { timeZone: BOGOTA, locale: "es-CO" });
+    expect(r.ordenFechas).toBe("md");
+    expect(r.errores).toBe(0);
+    expect(r.listas.map((l) => l.publishedAt)).toEqual([
+      "2026-09-06T00:30:00.000Z", // 5 sep, 19:30 en Bogotá
+      "2026-09-15T00:00:00.000Z", // 14 sep, 19:00
+      "2026-09-20T01:15:00.000Z", // 19 sep, 8:15 PM
+    ]);
+  });
+});
+
+describe("una exportación cuyas fechas sirven en los dos órdenes", () => {
+  const { tabla, mapeo } = analizar(fixture("ambiguo.csv"));
+
+  it("el archivo no lo dice: se usa el orden elegido o, si no, el del workspace", () => {
+    expect(analizarFechas(tabla.filas.map((f) => f[mapeo.publishedAt!]!)).orden).toBeNull();
+
+    const porLocale = revisar(tabla, mapeo, { timeZone: "UTC", locale: "es-CO" });
+    expect(porLocale.ordenFechas).toBe("dm");
+    expect(porLocale.listas[0]!.publishedAt).toBe("2025-05-09T15:04:00.000Z");
+
+    const enUs = revisar(tabla, mapeo, { timeZone: "UTC", locale: "en-US" });
+    expect(enUs.ordenFechas).toBe("md");
+    expect(enUs.listas[0]!.publishedAt).toBe("2025-09-05T15:04:00.000Z");
+
+    // La elección de la persona en el paso 2 gana al locale.
+    const elegido = revisar(tabla, mapeo, { timeZone: "UTC", locale: "es-CO", ordenFechas: "md" });
+    expect(elegido.ordenFechas).toBe("md");
+    expect(elegido.listas[0]!.publishedAt).toBe("2025-09-05T15:04:00.000Z");
+    expect(elegido.errores).toBe(0);
   });
 });
 
@@ -297,7 +355,7 @@ describe("filas sucias", () => {
   });
 
   it("avisa de que un video ya conocido recibe una lectura nueva, no un reemplazo", () => {
-    expect(problemasDe(1).some((p) => p.gravedad === "aviso" && /lectura nueva/.test(p.mensaje))).toBe(true);
+    expect(problemasDe(1).some((p) => p.gravedad === "aviso" && p.codigo === "yaImportado")).toBe(true);
   });
 
   it("guarda la celda cruda de las filas que no entran, para poder buscarlas en el archivo", () => {
@@ -313,7 +371,34 @@ describe("filas sucias", () => {
 
 describe("archivos que no son un CSV de métricas", () => {
   it("se rechazan con un motivo, no con una excepción cualquiera", () => {
+    // El motivo viaja como CÓDIGO: la frase la pone messages.ts.
+    const codigoDe = (texto: string) => {
+      try {
+        leerCsv(texto);
+      } catch (err) {
+        return err instanceof ErrorCsv ? err.codigo : "otro";
+      }
+      return "ninguno";
+    };
     expect(() => leerCsv("")).toThrow(ErrorCsv);
-    expect(() => leerCsv("Post ID,Views")).toThrow(/ninguna fila/);
+    expect(codigoDe("")).toBe("vacio");
+    expect(codigoDe("Post ID,Views")).toBe("sinFilas");
+    const demasiadas = ["Post ID,Views", ...Array.from({ length: 5001 }, (_, i) => `p${i},1`)].join("\n");
+    expect(codigoDe(demasiadas)).toBe("demasiadasFilas");
+  });
+});
+
+describe("el techo del navegador y el del servidor", () => {
+  it("la server action acepta cualquier archivo que el navegador deja subir", async () => {
+    // Next corta el cuerpo de una server action en 1 MB por defecto. Si
+    // el techo del asistente (MAX_BYTES) lo supera, un CSV válido de 1,5
+    // MB pasa los tres primeros pasos y muere al pulsar «Importar».
+    const { default: config } = await import("../../../../../next.config");
+    const limite = config.experimental?.serverActions?.bodySizeLimit;
+    const escala = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 } as const;
+    const m = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)$/i.exec(String(limite ?? ""));
+    const bytes =
+      typeof limite === "number" ? limite : m ? Number(m[1]) * escala[m[2]!.toLowerCase() as keyof typeof escala] : 1024 ** 2;
+    expect(bytes).toBeGreaterThan(MAX_BYTES);
   });
 });

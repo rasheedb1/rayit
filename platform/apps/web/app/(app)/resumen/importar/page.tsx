@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { listCuentasImportables } from "@mc/db/queries/resumen";
+import { listImportableAccounts } from "@mc/db/queries/resumen";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { withWorkspace } from "@/lib/db";
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function ImportarPage() {
   const [cuentas, ws] = await Promise.all([
-    withWorkspace((tx) => listCuentasImportables(tx)),
+    withWorkspace((tx) => listImportableAccounts(tx)),
     getCurrentWorkspace(),
   ]);
   const t = MESSAGES.importar;

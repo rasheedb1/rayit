@@ -1,4 +1,4 @@
-import type { RedId } from "@mc/db/queries/resumen";
+import type { PlatformId } from "@mc/db/queries/resumen";
 
 /**
  * Qué columnas buscamos en un CSV exportado de una plataforma, y cómo
@@ -54,36 +54,34 @@ export type Campo = (typeof CAMPOS)[number];
 
 export type TipoCampo = "texto" | "fecha" | "entero" | "decimal" | "tipoMedio";
 
+/**
+ * Qué es cada campo. Su NOMBRE y su ayuda no viven aquí: son texto de
+ * interfaz y están en `MESSAGES.importar.campos`, junto al resto de los
+ * textos del módulo, para que traducir no sea buscar comillas por el
+ * árbol.
+ */
 export interface DefCampo {
   campo: Campo;
-  label: string;
   tipo: TipoCampo;
   /** Sin este campo no se puede escribir la fila. */
   obligatorio: boolean;
-  ayuda?: string;
 }
 
 export const DEF_CAMPOS: readonly DefCampo[] = [
-  {
-    campo: "externalPostId",
-    label: "Identificador del video",
-    tipo: "texto",
-    obligatorio: true,
-    ayuda: "El id de la plataforma. Si no viene, se saca del enlace.",
-  },
-  { campo: "publishedAt", label: "Fecha de publicación", tipo: "fecha", obligatorio: true },
-  { campo: "title", label: "Título o descripción", tipo: "texto", obligatorio: false },
-  { campo: "url", label: "Enlace", tipo: "texto", obligatorio: false },
-  { campo: "mediaType", label: "Tipo de publicación", tipo: "tipoMedio", obligatorio: false },
-  { campo: "durationS", label: "Duración (segundos)", tipo: "decimal", obligatorio: false },
-  { campo: "views", label: "Visualizaciones", tipo: "entero", obligatorio: false },
-  { campo: "reach", label: "Alcance (cuentas alcanzadas)", tipo: "entero", obligatorio: false },
-  { campo: "likes", label: "Me gusta", tipo: "entero", obligatorio: false },
-  { campo: "comments", label: "Comentarios", tipo: "entero", obligatorio: false },
-  { campo: "shares", label: "Veces compartido", tipo: "entero", obligatorio: false },
-  { campo: "saves", label: "Guardados", tipo: "entero", obligatorio: false },
-  { campo: "followsFromPost", label: "Seguidores ganados", tipo: "entero", obligatorio: false },
-  { campo: "reachNonFollowers", label: "Alcance en no seguidores", tipo: "entero", obligatorio: false },
+  { campo: "externalPostId", tipo: "texto", obligatorio: true },
+  { campo: "publishedAt", tipo: "fecha", obligatorio: true },
+  { campo: "title", tipo: "texto", obligatorio: false },
+  { campo: "url", tipo: "texto", obligatorio: false },
+  { campo: "mediaType", tipo: "tipoMedio", obligatorio: false },
+  { campo: "durationS", tipo: "decimal", obligatorio: false },
+  { campo: "views", tipo: "entero", obligatorio: false },
+  { campo: "reach", tipo: "entero", obligatorio: false },
+  { campo: "likes", tipo: "entero", obligatorio: false },
+  { campo: "comments", tipo: "entero", obligatorio: false },
+  { campo: "shares", tipo: "entero", obligatorio: false },
+  { campo: "saves", tipo: "entero", obligatorio: false },
+  { campo: "followsFromPost", tipo: "entero", obligatorio: false },
+  { campo: "reachNonFollowers", tipo: "entero", obligatorio: false },
 ];
 
 export const DEF_POR_CAMPO = new Map(DEF_CAMPOS.map((d) => [d.campo, d]));
@@ -145,12 +143,15 @@ const ALIAS: Record<Campo, readonly string[]> = {
 };
 
 
+export type FormatoId = "instagram_meta" | "tiktok_studio" | "youtube_studio";
+
+/**
+ * Una exportación que sabemos reconocer. Su nombre visible y de dónde
+ * se descarga son texto de interfaz: `MESSAGES.importar.formatos[id]`.
+ */
 export interface FormatoConocido {
-  id: "instagram_meta" | "tiktok_studio" | "youtube_studio";
-  red: RedId;
-  nombre: string;
-  /** De dónde sale el archivo, para decírselo a quien lo sube. */
-  donde: string;
+  id: FormatoId;
+  red: PlatformId;
   /** Encabezados característicos, normalizados. Dos aciertos bastan. */
   firma: readonly string[];
 }
@@ -159,22 +160,16 @@ export const FORMATOS: readonly FormatoConocido[] = [
   {
     id: "instagram_meta",
     red: "instagram",
-    nombre: "Instagram Insights",
-    donde: "Meta Business Suite → Estadísticas → Contenido → Exportar",
     firma: ["account username", "nombre de usuario de la cuenta", "permalink", "accounts reached", "cuentas alcanzadas", "post id"],
   },
   {
     id: "tiktok_studio",
     red: "tiktok",
-    nombre: "TikTok Studio",
-    donde: "TikTok Studio → Analíticas → Contenido → Descargar datos",
     firma: ["video title", "titulo del video", "video link", "enlace del video", "post time", "total views"],
   },
   {
     id: "youtube_studio",
     red: "youtube",
-    nombre: "YouTube Studio",
-    donde: "YouTube Studio → Analíticas → Modo avanzado → Exportar (Table data.csv)",
     firma: ["video publish time", "watch time hours", "impressions", "content", "impressions click through rate %"],
   },
 ];

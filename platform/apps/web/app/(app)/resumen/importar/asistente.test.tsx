@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CuentaImportable } from "@mc/db/queries/resumen";
+import type { ImportableAccount } from "@mc/db/queries/resumen";
 
 // La Server Action se sustituye: aquí importa el recorrido de la
 // pantalla, no lo que escribe Postgres (eso lo prueba @mc/db).
@@ -19,13 +19,13 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push: vi.fn() }
 import { Asistente } from "./asistente";
 
 const WORKSPACE = { locale: "es-CO", currency: "COP", timezone: "America/Bogota" };
-const CUENTA_IG: CuentaImportable = {
+const CUENTA_IG: ImportableAccount = {
   connectionId: "00000002-0000-4000-8000-0000000000c1",
   platformId: "instagram",
   handle: "laura.cocinafacil",
   displayName: "Laura · Cocina fácil",
   accessMode: "direct_oauth",
-  posts: 17,
+  posts: 1234,
 };
 
 const fixture = (nombre: string) => readFileSync(join(__dirname, "../../../../test/fixtures/csv", nombre), "utf8");
@@ -59,6 +59,10 @@ describe("el asistente de importación", () => {
     expect(screen.getByLabelText("Alcance (cuentas alcanzadas)")).toHaveValue("Accounts reached");
     // Con una sola cuenta de Instagram, se elige sola.
     expect(screen.getByLabelText("¿A qué cuenta pertenece?")).toHaveValue(CUENTA_IG.connectionId);
+    // Y su número de videos sale formateado con el locale, no «1234».
+    expect(screen.getByRole("option", { name: "@laura.cocinafacil · 1.234 videos" })).toBeInTheDocument();
+    // Las fechas del archivo son ISO: no hay orden día/mes que preguntar.
+    expect(screen.queryByRole("group", { name: "Orden de las fechas" })).not.toBeInTheDocument();
   });
 
   it("no deja pasar al paso 3 mientras falte una columna obligatoria", async () => {
@@ -90,7 +94,7 @@ describe("el asistente de importación", () => {
 
     importarCsv.mockResolvedValue({
       ok: true,
-      resultado: { postsNuevos: 3, postsConocidos: 0, lecturas: 3, capturadoEn: "2026-09-22T16:00:00Z" },
+      resultado: { newPosts: 3, knownPosts: 0, readings: 3, capturedAt: "2026-09-22T16:00:00.000000Z" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
 
@@ -116,8 +120,53 @@ describe("el asistente de importación", () => {
     expect(screen.getByText("1 fila repetida en el archivo")).toBeInTheDocument();
     const tabla = screen.getByRole("table");
     expect(within(tabla).getAllByText("No entra")).toHaveLength(4);
+    // La fila que no entra enseña lo que traía, para poder buscarla en
+    // el archivo: su fecha cruda y el motivo, no un «—».
+    expect(within(tabla).getByText("el martes pasado")).toBeInTheDocument();
+    expect(within(tabla).getByText(/No se entiende la fecha «el martes pasado»/)).toBeInTheDocument();
+    expect(within(tabla).getByText("Sin id y sin enlace")).toBeInTheDocument();
     // Nada se ha escrito todavía: la acción no se ha llamado.
     expect(importarCsv).not.toHaveBeenCalled();
+  });
+
+  it("un archivo que pasa del techo se rechaza al subirlo, no al final", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    // 5 MB y un byte: más de lo que la server action acepta.
+    const grande = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "enorme.csv", { type: "text/csv" });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [grande] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("El archivo pesa más de 5 MB");
+    expect(screen.getByText("Elige el archivo")).toBeInTheDocument();
+  });
+
+  it("con fechas que sirven en los dos órdenes, pregunta, propone el del workspace y envía el elegido", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("ambiguo.csv");
+
+    const orden = screen.getByRole("group", { name: "Orden de las fechas" });
+    // es-CO: día/mes, y se enseña cómo queda una fecha real del archivo.
+    expect(within(orden).getByRole("button", { name: "Día/Mes" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("«09/05/2025 15:04» se lee como 9 de mayo de 2025.")).toBeInTheDocument();
+
+    fireEvent.click(within(orden).getByRole("button", { name: "Mes/Día" }));
+    expect(screen.getByText("«09/05/2025 15:04» se lee como 5 de septiembre de 2025.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("3 de 3 filas listas");
+    importarCsv.mockResolvedValue({
+      ok: true,
+      resultado: { newPosts: 3, knownPosts: 0, readings: 3, capturedAt: "2026-09-22T16:00:00.000000Z" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+    await waitFor(() => expect(importarCsv).toHaveBeenCalledTimes(1));
+    expect((importarCsv.mock.calls[0]?.[0] as { ordenFechas: string }).ordenFechas).toBe("md");
+  });
+
+  it("si el archivo demuestra su orden, lo dice y no pregunta", async () => {
+    render(<Asistente cuentas={[]} workspace={WORKSPACE} />);
+    await subir("tiktok-studio-en-us.csv");
+    expect(screen.queryByRole("group", { name: "Orden de las fechas" })).not.toBeInTheDocument();
+    expect(screen.getByText(/orden mes\/día: lo demuestra el propio archivo/)).toBeInTheDocument();
+    expect(screen.getByText("«09/05/2026 19:30» se lee como 5 de septiembre de 2026.")).toBeInTheDocument();
   });
 
   it("avisa de los videos que YA están en la cuenta antes de escribir nada", async () => {

@@ -186,6 +186,17 @@ export function formatDate(iso: string, style: "short" | "long" = "short", opts:
   return `${dayOfMonth(d, timeZone)} ${shortMonth(d, locale, timeZone)}`;
 }
 
+/**
+ * Día y mes en números, en el orden del locale: "16/9" en es-CO, "9/16"
+ * en en-US. Para las etiquetas de un eje con poco sitio —siete barras a
+ * 400 px—, donde "16 sep" ya no cabe entre dos marcas. Añadido por
+ * Resumen (RES-1); no cambia nada de lo que ya había.
+ */
+export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  return plain(dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zoneFor(iso, opts) }).format(utcDate(iso)));
+}
+
 /** "2026-08-24", "2026-08-31" → "24–31 ago" · meses distintos → "28 ago – 3 sep". */
 export function formatDateRange(fromIso: string, toIso: string, opts: LocaleOpts = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
@@ -242,6 +253,7 @@ export function formatterFor(settings: FormatSettings) {
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
+    dayMonth: (iso: string) => formatDayMonth(iso, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     daysRelative: formatDaysRelative,

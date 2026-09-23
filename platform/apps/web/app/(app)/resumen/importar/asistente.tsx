@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { CuentaImportable, RedId } from "@mc/db/queries/resumen";
+// Solo tipos de @mc/db/queries/resumen: sus valores arrastrarían el
+// cliente de Postgres al navegador. Las redes salen del módulo sin
+// dependencias.
+import type { ImportableAccount } from "@mc/db/queries/resumen";
+import { PLATFORMS, type PlatformId } from "@mc/db/queries/resumen-constantes";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -11,20 +15,28 @@ import { Field, Input, Select } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import { Segmented } from "@/components/ui/segmented";
-import { formatterFor, type FormatSettings } from "@/lib/format";
+import { formatterFor, type FormatSettings, type Formatter } from "@/lib/format";
 import { MESSAGES } from "../messages";
 import { buscarPostsConocidos, importarCsv } from "./actions";
 import {
+  aFechaIso,
   analizar,
+  analizarFechas,
+  celdasDeFecha,
   ErrorCsv,
+  esFechaNumerica,
   faltantesDelMapeo,
   MAX_BYTES,
+  ordenPorLocale,
   revisar,
+  type AnalisisFechas,
   type FilaRevisada,
+  type OrdenFecha,
+  type Problema,
   type Revision,
   type Tabla,
 } from "./_lib/csv";
-import { DEF_CAMPOS, FORMATOS, type Campo, type Mapeo } from "./_lib/formatos";
+import { DEF_CAMPOS, FORMATOS, type Campo, type FormatoId, type Mapeo } from "./_lib/formatos";
 
 /**
  * Los cuatro pasos de la importación: subir → formato → revisar →
@@ -38,12 +50,24 @@ import { DEF_CAMPOS, FORMATOS, type Campo, type Mapeo } from "./_lib/formatos";
 
 type Paso = 0 | 1 | 2 | 3;
 
-const REDES_UI: RedId[] = ["tiktok", "instagram", "facebook", "youtube"];
 const NUEVA = "__nueva__";
+const MEGAS = (MAX_BYTES / 1024 / 1024).toString();
 
 export interface AsistenteProps {
-  cuentas: CuentaImportable[];
+  cuentas: ImportableAccount[];
   workspace: FormatSettings;
+}
+
+/** El texto de un problema de fila, con el nombre del campo en el idioma de la pantalla. */
+function textoDe(p: Problema): string {
+  const campo = p.campo ? MESSAGES.importar.campos[p.campo].label : undefined;
+  return MESSAGES.importar.validacion[p.codigo]({ valor: p.valor, campo });
+}
+
+/** El texto de un archivo que no se puede ni empezar a revisar. */
+function textoDeArchivo(err: ErrorCsv, f: Formatter): string {
+  const d = err.datos;
+  return MESSAGES.importar.errorArchivo[err.codigo](f.int(d.filas ?? 0), f.int(d.max ?? 0));
 }
 
 export function Asistente({ cuentas, workspace }: AsistenteProps) {
@@ -57,10 +81,12 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [texto, setTexto] = useState("");
   const [tabla, setTabla] = useState<Tabla | null>(null);
   const [mapeo, setMapeo] = useState<Mapeo>({});
-  const [red, setRed] = useState<RedId>("instagram");
+  const [red, setRed] = useState<PlatformId>("instagram");
   const [cuenta, setCuenta] = useState<string>(NUEVA);
   const [handleNuevo, setHandleNuevo] = useState("");
-  const [formato, setFormato] = useState<string | null>(null);
+  const [formato, setFormato] = useState<FormatoId | null>(null);
+  /** El orden de fechas que eligió la persona. null = el que propone el locale. */
+  const [ordenElegido, setOrdenElegido] = useState<OrdenFecha | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resultado, setResultado] = useState<{ videos: number; nuevos: number; conocidos: number; lecturas: number } | null>(null);
   /** Ids que la cuenta de destino ya tiene. null = todavía no se ha preguntado. */
@@ -69,12 +95,19 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const deLaRed = cuentas.filter((c) => c.platformId === red);
   const faltan = faltantesDelMapeo(mapeo);
 
-  // La zona y el idioma del workspace: la zona interpreta las horas sin
-  // zona, el idioma decide si «09/10/2026» es 9 de octubre o 10 de
-  // septiembre. Ninguno de los dos está fijado a Colombia.
+  // El orden día/mes se decide para el ARCHIVO entero, mirando la
+  // columna de fechas antes de leer ninguna: si alguna fecha lo
+  // demuestra, manda el archivo; si todas sirven en los dos órdenes, la
+  // persona elige, con el orden de su workspace como propuesta.
+  const fechas: AnalisisFechas | null = useMemo(
+    () => (tabla ? analizarFechas(celdasDeFecha(tabla, mapeo)) : null),
+    [tabla, mapeo],
+  );
+  const ordenFechas: OrdenFecha = fechas?.orden ?? ordenElegido ?? ordenPorLocale(workspace.locale);
+
   const opciones = useMemo(
-    () => ({ timeZone: workspace.timezone, locale: workspace.locale }),
-    [workspace.timezone, workspace.locale],
+    () => ({ timeZone: workspace.timezone, locale: workspace.locale, ordenFechas }),
+    [workspace.timezone, workspace.locale, ordenFechas],
   );
 
   // Dos pasadas a propósito: la primera saca los ids del archivo, que es
@@ -122,8 +155,10 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
 
   function recibir(archivo: File) {
     setError(null);
+    // El techo se comprueba ANTES de leer: un archivo que no cabe en el
+    // envío no tiene que pasar tres pasos para enterarse al final.
     if (archivo.size > MAX_BYTES) {
-      setError(t.subir.demasiadoGrande(Math.round(MAX_BYTES / 1024 / 1024)));
+      setError(t.subir.demasiadoGrande(MEGAS));
       return;
     }
     // FileReader y no `archivo.text()`: es la lectura que entienden
@@ -139,7 +174,8 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         setTexto(contenido);
         setTabla(leida);
         setMapeo(automatico);
-        setFormato(deteccion.formato?.nombre ?? null);
+        setOrdenElegido(null);
+        setFormato(deteccion.formato?.id ?? null);
         if (deteccion.formato) {
           setRed(deteccion.formato.red);
           const deEsaRed = cuentas.filter((c) => c.platformId === deteccion.formato!.red);
@@ -147,7 +183,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         }
         setPaso(1);
       } catch (err: unknown) {
-        setError(err instanceof ErrorCsv ? err.message : t.subir.noEsCsv);
+        setError(err instanceof ErrorCsv ? textoDeArchivo(err, f) : t.subir.noEsCsv);
       }
     };
     lector.readAsText(archivo, "utf-8");
@@ -163,16 +199,17 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           connectionId: cuenta === NUEVA ? undefined : cuenta,
           handleNuevo: cuenta === NUEVA ? handleNuevo.trim().replace(/^@/, "") : undefined,
           mapeo,
+          ordenFechas,
         });
         if (!r.ok) {
           setError(r.error);
           return;
         }
         setResultado({
-          videos: r.resultado.postsNuevos + r.resultado.postsConocidos,
-          nuevos: r.resultado.postsNuevos,
-          conocidos: r.resultado.postsConocidos,
-          lecturas: r.resultado.lecturas,
+          videos: r.resultado.newPosts + r.resultado.knownPosts,
+          nuevos: r.resultado.newPosts,
+          conocidos: r.resultado.knownPosts,
+          lecturas: r.resultado.readings,
         });
         setPaso(3);
         router.refresh();
@@ -195,6 +232,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     setResultado(null);
     setNombreArchivo("");
     setYaConocidos(null);
+    setOrdenElegido(null);
     setError(null);
   }
 
@@ -232,14 +270,17 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           formato={formato}
           nombreArchivo={nombreArchivo}
           faltan={faltan}
+          fechas={fechas}
+          ordenFechas={ordenFechas}
+          onOrdenFechas={setOrdenElegido}
+          timeZone={workspace.timezone}
+          f={f}
         />
       )}
 
-      {paso === 2 && revision && (
-        <PasoRevisar revision={revision} yaEstaban={yaEstaban} fecha={(iso) => f.date(iso)} entero={(n) => f.int(n)} />
-      )}
+      {paso === 2 && revision && <PasoRevisar revision={revision} yaEstaban={yaEstaban} f={f} />}
 
-      {paso === 3 && resultado && <PasoHecho resultado={resultado} onOtro={reiniciar} />}
+      {paso === 3 && resultado && <PasoHecho resultado={resultado} onOtro={reiniciar} f={f} />}
 
       {paso < 3 && (
         <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -336,7 +377,8 @@ function PasoSubir({ onArchivo }: { onArchivo: (archivo: File) => void }) {
         <ul className="mt-1.5 space-y-1">
           {FORMATOS.map((formato) => (
             <li key={formato.id}>
-              <span className="text-ink-2">{formato.nombre}</span> · {formato.donde}
+              <span className="text-ink-2">{MESSAGES.importar.formatos[formato.id].nombre}</span> ·{" "}
+              {MESSAGES.importar.formatos[formato.id].donde}
             </li>
           ))}
         </ul>
@@ -350,19 +392,25 @@ function PasoFormato(props: {
   tabla: Tabla;
   mapeo: Mapeo;
   onMapeo: (m: Mapeo) => void;
-  red: RedId;
-  onRed: (r: RedId) => void;
-  cuentas: CuentaImportable[];
+  red: PlatformId;
+  onRed: (r: PlatformId) => void;
+  cuentas: ImportableAccount[];
   cuenta: string;
   onCuenta: (c: string) => void;
   handleNuevo: string;
   onHandleNuevo: (h: string) => void;
-  formato: string | null;
+  formato: FormatoId | null;
   nombreArchivo: string;
   faltan: Campo[];
+  fechas: AnalisisFechas | null;
+  ordenFechas: OrdenFecha;
+  onOrdenFechas: (o: OrdenFecha) => void;
+  timeZone: string;
+  f: Formatter;
 }) {
   const t = MESSAGES.importar.formato;
-  const { tabla, mapeo, onMapeo, faltan } = props;
+  const campos = MESSAGES.importar.campos;
+  const { tabla, mapeo, onMapeo, faltan, f } = props;
   const primera = tabla.filas[0];
 
   const cambiar = (campo: Campo, encabezado: string) => {
@@ -380,18 +428,18 @@ function PasoFormato(props: {
         </h2>
         <p className="mt-1 text-sm text-ink-2">
           <span className="font-mono text-xs text-muted">{props.nombreArchivo}</span> ·{" "}
-          {props.formato ? t.detectado(props.formato) : t.noDetectado}
+          {props.formato ? t.detectado(MESSAGES.importar.formatos[props.formato].nombre) : t.noDetectado}
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
         <div>
           <p className="mb-1.5 text-xs text-muted">{t.red}</p>
-          <Segmented<RedId>
+          <Segmented<PlatformId>
             label={t.red}
             size="sm"
             value={props.red}
-            options={REDES_UI.map((r) => ({ value: r, label: PLATFORM_LABEL[r] }))}
+            options={PLATFORMS.map((r) => ({ value: r, label: PLATFORM_LABEL[r] }))}
             onChange={props.onRed}
           />
         </div>
@@ -402,7 +450,7 @@ function PasoFormato(props: {
             options={[
               ...props.cuentas.map((c) => ({
                 value: c.connectionId,
-                label: `@${c.handle ?? c.displayName ?? c.connectionId.slice(0, 8)}${c.posts > 0 ? ` · ${c.posts} videos` : ""}`,
+                label: t.cuentaOpcion(c.handle ?? c.displayName ?? c.connectionId.slice(0, 8), c.posts, f.int(c.posts)),
               })),
               { value: NUEVA, label: t.cuentaNueva },
             ]}
@@ -412,8 +460,23 @@ function PasoFormato(props: {
 
       {props.cuenta === NUEVA && (
         <Field label={t.cuentaNuevaHandle} help={t.cuentaNuevaAyuda} className="max-w-sm">
-          <Input value={props.handleNuevo} onChange={(e) => props.onHandleNuevo(e.target.value)} placeholder="laura.cocinafacil" />
+          <Input
+            value={props.handleNuevo}
+            onChange={(e) => props.onHandleNuevo(e.target.value)}
+            placeholder={t.cuentaNuevaEjemplo}
+          />
         </Field>
+      )}
+
+      {props.fechas && props.fechas.numericas > 0 && (
+        <OrdenDeFechas
+          fechas={props.fechas}
+          orden={props.ordenFechas}
+          onOrden={props.onOrdenFechas}
+          ejemplo={celdasDeFecha(tabla, mapeo).find(esFechaNumerica)}
+          timeZone={props.timeZone}
+          f={f}
+        />
       )}
 
       <div>
@@ -424,32 +487,31 @@ function PasoFormato(props: {
             <span className="ml-2 text-xs font-normal text-muted">{t.muestra}</span>
           </h3>
           {faltan.length > 0 && (
-            <p className="text-xs text-bad">
-              {t.faltan(faltan.map((c) => DEF_CAMPOS.find((d) => d.campo === c)!.label.toLowerCase()).join(", "))}
-            </p>
+            <p className="text-xs text-bad">{t.faltan(faltan.map((c) => campos[c].label.toLowerCase()).join(", "))}</p>
           )}
         </div>
         <ul className="divide-y divide-border overflow-hidden rounded-md border border-border">
           {DEF_CAMPOS.map((def) => {
             const elegido = mapeo[def.campo] ?? "";
             const idDelEnlace = def.campo === "externalPostId" && !elegido && Boolean(mapeo.url);
+            const nombre = campos[def.campo].label;
             return (
               <li key={def.campo} className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
                 <div className="min-w-0">
                   <p className="text-sm text-ink">
-                    {def.label}
+                    {nombre}
                     {def.obligatorio && <span className="ml-1.5 text-[11px] text-muted">({t.obligatorio})</span>}
                   </p>
                   {idDelEnlace ? (
                     <p className="text-xs text-muted">{t.idDelEnlace}</p>
                   ) : elegido && primera ? (
                     <p className="truncate text-xs text-muted" title={primera[elegido]}>
-                      {primera[elegido] || "—"}
+                      {primera[elegido] || t.celdaVacia}
                     </p>
                   ) : null}
                 </div>
                 <Select
-                  aria-label={def.label}
+                  aria-label={nombre}
                   value={elegido}
                   onChange={(e) => cambiar(def.campo, e.target.value)}
                   invalid={faltan.includes(def.campo)}
@@ -467,32 +529,68 @@ function PasoFormato(props: {
   );
 }
 
-function PasoRevisar({
-  revision,
-  yaEstaban,
-  fecha,
-  entero,
-}: {
-  revision: Revision;
-  yaEstaban: number;
-  fecha: (iso: string) => string;
-  entero: (n: number) => string;
+/**
+ * El orden día/mes de las fechas numéricas. Si el archivo lo demuestra
+ * —una fecha con un número mayor que 12—, se dice y no se pregunta. Si
+ * no, se pregunta, con el orden del workspace ya puesto y una fecha del
+ * archivo leída en ese orden, para que la persona vea en claro qué va a
+ * quedar guardado.
+ */
+function OrdenDeFechas(props: {
+  fechas: AnalisisFechas;
+  orden: OrdenFecha;
+  onOrden: (o: OrdenFecha) => void;
+  ejemplo: string | undefined;
+  timeZone: string;
+  f: Formatter;
 }) {
+  const t = MESSAGES.importar.formato.fechas;
+  const leida = props.ejemplo ? aFechaIso(props.ejemplo, props.timeZone, props.orden) : null;
+  return (
+    <div className="rounded-md border border-border px-3 py-2.5">
+      {props.fechas.orden ? (
+        <p className="text-xs text-ink-2">{t.deducido[props.fechas.orden]}</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <p className="text-xs text-ink-2">{t.ambiguo}</p>
+          <Segmented<OrdenFecha>
+            label={t.label}
+            size="sm"
+            value={props.orden}
+            options={[
+              { value: "dm", label: t.dm },
+              { value: "md", label: t.md },
+            ]}
+            onChange={props.onOrden}
+          />
+        </div>
+      )}
+      {props.ejemplo && leida && (
+        <p className="mt-1.5 text-xs text-muted">{t.ejemplo(props.ejemplo, props.f.date(leida, "long"))}</p>
+      )}
+    </div>
+  );
+}
+
+function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban: number; f: Formatter }) {
   const t = MESSAGES.importar.revisar;
+  const noEntran = revision.filas.filter((r) => !r.lectura).length;
   const columnas: Column<FilaRevisada>[] = [
-    { key: "fila", header: t.columnas.fila, align: "num", width: "1%", render: (r) => r.fila },
+    { key: "fila", header: t.columnas.fila, align: "num", width: "1%", render: (r) => f.int(r.fila) },
     {
       key: "video",
       header: t.columnas.video,
       render: (r) => (
-        <CellMain sub={r.problemas.map((p) => p.mensaje).join(" · ") || undefined}>
+        <CellMain sub={r.problemas.map(textoDe).join(" · ") || undefined}>
           {/*
             Cuando la fila no entra, lo que se enseña es la celda CRUDA:
             quien tiene que arreglar el CSV en Excel necesita saber qué
             buscar, y el número de fila solo no basta.
           */}
           {r.lectura?.title ?? r.lectura?.externalPostId ?? (
-            <span className="font-normal text-muted">{r.crudo.title ?? r.crudo.externalPostId ?? "—"}</span>
+            <span className="font-normal text-muted">
+              {r.crudo.title ?? r.crudo.externalPostId ?? r.crudo.url ?? t.sinDato}
+            </span>
           )}
         </CellMain>
       ),
@@ -500,13 +598,20 @@ function PasoRevisar({
     {
       key: "publicado",
       header: t.columnas.publicado,
-      render: (r) => (r.lectura ? fecha(r.lectura.publishedAt) : <span className="text-muted">—</span>),
+      render: (r) =>
+        r.lectura ? (
+          f.date(r.lectura.publishedAt)
+        ) : (
+          // La fecha tal como vino: si es ella la que no se entiende, es
+          // justo lo que hay que ver para arreglarla.
+          <span className="text-muted">{r.crudo.publishedAt ?? t.sinDato}</span>
+        ),
     },
     {
       key: "views",
       header: t.columnas.views,
       align: "num",
-      render: (r) => (r.lectura?.views != null ? entero(r.lectura.views) : <span className="font-sans text-muted">—</span>),
+      render: (r) => (r.lectura?.views != null ? f.int(r.lectura.views) : <span className="font-sans text-muted">{t.sinDato}</span>),
     },
     {
       key: "estado",
@@ -529,11 +634,13 @@ function PasoRevisar({
           {t.title}
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <span className="text-ink-2">{t.resumen(revision.listas.length, revision.filas.length)}</span>
-          {revision.errores > 0 && <Pill kind="bad">{t.errores(revision.filas.filter((f) => !f.lectura).length)}</Pill>}
-          {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos)}</Pill>}
-          {yaEstaban > 0 && <span>{t.yaEstaban(yaEstaban)}</span>}
-          {revision.duplicadasEnArchivo > 0 && <span>{t.duplicadas(revision.duplicadasEnArchivo)}</span>}
+          <span className="text-ink-2">{t.resumen(f.int(revision.listas.length), f.int(revision.filas.length))}</span>
+          {noEntran > 0 && <Pill kind="bad">{t.errores(noEntran, f.int(noEntran))}</Pill>}
+          {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
+          {yaEstaban > 0 && <span>{t.yaEstaban(yaEstaban, f.int(yaEstaban))}</span>}
+          {revision.duplicadasEnArchivo > 0 && (
+            <span>{t.duplicadas(revision.duplicadasEnArchivo, f.int(revision.duplicadasEnArchivo))}</span>
+          )}
         </p>
       </div>
       <DataTable
@@ -552,9 +659,11 @@ function PasoRevisar({
 function PasoHecho({
   resultado,
   onOtro,
+  f,
 }: {
   resultado: { videos: number; nuevos: number; conocidos: number; lecturas: number };
   onOtro: () => void;
+  f: Formatter;
 }) {
   const t = MESSAGES.importar.hecho;
   return (
@@ -563,10 +672,12 @@ function PasoHecho({
         <h2 id="paso-hecho" className="text-sm font-semibold text-ink">
           {t.title}
         </h2>
-        <p className="mt-1 font-mono text-2xl tabular-nums text-ink">{t.resumen(resultado.videos, resultado.lecturas)}</p>
+        <p className="mt-1 font-mono text-2xl tabular-nums text-ink">
+          {t.resumen(resultado.videos, f.int(resultado.videos), resultado.lecturas, f.int(resultado.lecturas))}
+        </p>
         <ul className="mt-2 space-y-0.5 text-sm text-ink-2">
-          {resultado.nuevos > 0 && <li>{t.nuevos(resultado.nuevos)}</li>}
-          {resultado.conocidos > 0 && <li>{t.conocidos(resultado.conocidos)}</li>}
+          {resultado.nuevos > 0 && <li>{t.nuevos(resultado.nuevos, f.int(resultado.nuevos))}</li>}
+          {resultado.conocidos > 0 && <li>{t.conocidos(resultado.conocidos, f.int(resultado.conocidos))}</li>}
         </ul>
         <div className="mt-5 flex flex-wrap gap-2">
           <Button variant="primary" href="/resumen">

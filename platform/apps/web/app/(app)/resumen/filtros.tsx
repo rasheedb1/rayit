@@ -5,7 +5,7 @@ import { useTransition } from "react";
 import { Segmented } from "@/components/ui/segmented";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import { MESSAGES } from "./messages";
-import { hrefDe, PERIODOS, REDES, type Filtro, type Periodo, type RedId } from "./_lib/filtro";
+import { hrefDe, PERIODS, PLATFORMS, type Filtro, type Period, type PlatformId } from "./_lib/filtro";
 
 const TODAS = "todas";
 
@@ -26,22 +26,22 @@ export function Filtros({ filtro }: { filtro: Filtro }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2" aria-busy={pendiente || undefined}>
-      <Segmented<`${Periodo}`>
+      <Segmented<`${Period}`>
         label={t.periodo}
         size="sm"
-        value={`${filtro.dias}`}
-        options={PERIODOS.map((d) => ({ value: `${d}` as `${Periodo}`, label: t.dias(d) }))}
-        onChange={(v) => ir({ ...filtro, dias: Number(v) as Periodo })}
+        value={`${filtro.days}`}
+        options={PERIODS.map((d) => ({ value: `${d}` as `${Period}`, label: t.dias(d) }))}
+        onChange={(v) => ir({ ...filtro, days: Number(v) as Period })}
       />
       <Segmented<string>
         label={t.red}
         size="sm"
-        value={filtro.red ?? TODAS}
+        value={filtro.platform ?? TODAS}
         options={[
           { value: TODAS, label: t.todasLasRedes },
-          ...REDES.map((r) => ({ value: r, label: PLATFORM_LABEL[r] })),
+          ...PLATFORMS.map((r) => ({ value: r, label: PLATFORM_LABEL[r] })),
         ]}
-        onChange={(v) => ir({ ...filtro, red: v === TODAS ? null : (v as RedId) })}
+        onChange={(v) => ir({ ...filtro, platform: v === TODAS ? null : (v as PlatformId) })}
       />
     </div>
   );

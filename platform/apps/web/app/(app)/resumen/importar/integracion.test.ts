@@ -3,12 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  asegurarCuentaCsv,
-  contarPosts,
-  getCoberturaResumen,
-  getFrescuraPorConexion,
+  countPosts,
+  ensureCsvConnection,
+  getFreshnessByConnection,
+  getResumenCoverage,
   getResumenKpis,
-  importarLecturasCsv,
+  getViewsByBucket,
+  importCsvReadings,
 } from "@mc/db/queries/resumen";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
 import { analizar, revisar } from "./_lib/csv";
@@ -22,7 +23,7 @@ import { analizar, revisar } from "./_lib/csv";
  * Las dos mitades se prueban por separado (el parser en csv.test.ts, la
  * escritura en packages/db/test/resumen.test.ts); esto comprueba que
  * encajan: que el `Mapeo` que produce el navegador alimenta sin
- * traducciones el `LecturaCsv[]` que espera la base.
+ * traducciones el `CsvReading[]` que espera la base.
  */
 const fixture = (nombre: string) => readFileSync(join(__dirname, "../../../../test/fixtures/csv", nombre), "utf8");
 
@@ -36,35 +37,55 @@ afterAll(async () => {
 
 describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen", () => {
   it("entra entero, con source csv_import, y suma al workspace", async () => {
-    const { tabla, deteccion, mapeo } = analizar(fixture("instagram-insights.csv"));
+    // Las fechas del fixture son fijas (septiembre de 2026). Se acercan a
+    // hoy conservando su distancia entre sí, para que la prueba no
+    // caduque el día en que esas fechas salgan de la ventana de 90 días.
+    const dia = (atras: number) => new Date(Date.now() - atras * 86_400_000).toISOString().slice(0, 10);
+    const texto = fixture("instagram-insights.csv")
+      .replace("2026-09-10 15:04:00", `${dia(12)} 15:04:00`)
+      .replace("2026-09-12 12:30:00", `${dia(10)} 12:30:00`)
+      .replace("2026-09-15 18:00:00", `${dia(7)} 18:00:00`);
+    const { tabla, deteccion, mapeo } = analizar(texto);
     expect(deteccion.formato?.red).toBe("instagram");
 
     const { listas } = revisar(tabla, mapeo, { timeZone: "America/Bogota", locale: "es-CO" });
     expect(listas).toHaveLength(3);
 
-    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCoberturaResumen(tx));
-    const postsAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => contarPosts(tx));
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenCoverage(tx));
+    const postsAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countPosts(tx));
+
+    const kpisAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenKpis(tx, { days: 90 }));
 
     const resultado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
-      const cuenta = await asegurarCuentaCsv(tx, { red: "instagram", handle: "laura.cocinafacil.csv" });
-      return importarLecturasCsv(tx, { connectionId: cuenta.connectionId, red: "instagram", filas: listas });
+      const cuenta = await ensureCsvConnection(tx, { platform: "instagram", handle: "laura.cocinafacil.csv" });
+      return importCsvReadings(tx, { connectionId: cuenta.connectionId, platform: "instagram", rows: listas });
     });
-    expect(resultado).toMatchObject({ postsNuevos: 3, postsConocidos: 0, lecturas: 3 });
+    expect(resultado).toMatchObject({ newPosts: 3, knownPosts: 0, readings: 3 });
 
-    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCoberturaResumen(tx));
-    expect(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => contarPosts(tx))).toBe(postsAntes + 3);
-    expect(despues.conexiones).toBe(antes.conexiones + 1);
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenCoverage(tx));
+    expect(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countPosts(tx))).toBe(postsAntes + 3);
+    expect(despues.connections).toBe(antes.connections + 1);
 
-    // Y el Resumen cuenta esos videos: los dos KPIs de contenido no
-    // cuelgan de la serie de cuenta, que una importación nunca llena.
-    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenKpis(tx, { dias: 30 }));
-    expect(kpis.nonFollowerReach.value).not.toBeNull();
-    expect(kpis.savesPer1k.value).not.toBeNull();
+    // Y el Resumen CAMBIA: los tres videos entran en los KPIs de
+    // contenido. Guardados por mil con sus tres videos (el CSV sí trae
+    // guardados); el alcance en no seguidores NO los cuenta, porque esta
+    // exportación no trae ese dato y sumar su alcance diluiría la razón.
+    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getResumenKpis(tx, { days: 90 }));
+    expect(kpis.posts).toBe(kpisAntes.posts + 3);
+    expect(kpis.savesPer1k.sample).toBe(kpisAntes.savesPer1k.sample! + 3);
+    expect(kpis.savesPer1k.value).not.toBe(kpisAntes.savesPer1k.value);
+    expect(kpis.nonFollowerReach.sample).toBe(kpisAntes.nonFollowerReach.sample);
+    expect(kpis.nonFollowerReach.value).toBe(kpisAntes.nonFollowerReach.value);
+    // El gráfico de visualizaciones sigue siendo el de la cuenta: el
+    // CSV no inventa visualizaciones diarias.
+    const views = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getViewsByBucket(tx, { days: 90 }));
+    expect(views.source).toBe("account");
 
-    // La cuenta importada dice de dónde salieron sus datos.
-    const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFrescuraPorConexion(tx));
+    // La cuenta importada dice hasta cuándo llegan sus datos, y de dónde.
+    const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFreshnessByConnection(tx, { platform: "instagram" }));
     const importada = frescura.find((c) => c.handle === "laura.cocinafacil.csv");
-    expect(importada?.ultimaFuente).toBe("csv_import");
+    expect(importada?.lastCsvReadingAt).toBeTruthy();
+    expect(importada?.dataUntil).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     // Y las cifras del archivo llegaron tal cual, con age_hours calculada por Postgres.
     const filas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>

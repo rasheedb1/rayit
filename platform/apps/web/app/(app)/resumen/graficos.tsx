@@ -1,4 +1,4 @@
-import { getSeguidoresPorRed, getViewsPorBloque, type SeriePorRed } from "@mc/db/queries/resumen";
+import { getFollowersByPlatform, getViewsByBucket, type PlatformSeries } from "@mc/db/queries/resumen";
 import { ChartCard } from "@/components/ui/chart-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
@@ -18,7 +18,7 @@ import { hrefDe, MAX_PERIODO, salidaDelVacio, type Filtro } from "./_lib/filtro"
  * El nombre de la red viaja como nombre de token de color
  * (`color: "tiktok"`), no como valor: quien pinta es el tema.
  */
-function aSeries(series: SeriePorRed[]): Series[] {
+function aSeries(series: PlatformSeries[]): Series[] {
   return series.map((s) => ({ name: PLATFORM_LABEL[s.platformId], data: s.data, color: s.platformId }));
 }
 
@@ -34,9 +34,9 @@ function SinDatos({ filtro }: { filtro: Filtro }) {
   const cual = salidaDelVacio(filtro);
   const salida =
     cual === "masLargo"
-      ? { ...t.masLargo, href: hrefDe({ ...filtro, dias: MAX_PERIODO }) }
+      ? { ...t.masLargo, href: hrefDe({ ...filtro, days: MAX_PERIODO }) }
       : cual === "quitarRed"
-        ? { ...t.quitarRed, href: hrefDe({ ...filtro, red: null }) }
+        ? { ...t.quitarRed, href: hrefDe({ ...filtro, platform: null }) }
         : null;
 
   return (
@@ -49,11 +49,29 @@ function SinDatos({ filtro }: { filtro: Filtro }) {
   );
 }
 
+/**
+ * Sin serie de cuenta —un workspace que solo importó CSV— no hay
+ * seguidores que dibujar en NINGÚN periodo. Decirle «prueba con 90
+ * días» sería mandarlo a otra pantalla vacía: lo que falta es la
+ * cuenta, y la salida es conectarla.
+ */
+function SinCuenta() {
+  const t = MESSAGES.graficos.seguidores.sinCuenta;
+  return (
+    <EmptyState
+      title={t.title}
+      description={t.description}
+      action={{ label: t.accion, href: "/conexiones" }}
+      className="min-h-[260px]"
+    />
+  );
+}
+
 export async function Graficos({ filtro }: { filtro: Filtro }) {
   const [{ seguidores, views }, ws] = await Promise.all([
     withWorkspace(async (tx) => ({
-      seguidores: await getSeguidoresPorRed(tx, filtro),
-      views: await getViewsPorBloque(tx, filtro),
+      seguidores: await getFollowersByPlatform(tx, filtro),
+      views: await getViewsByBucket(tx, filtro),
     })),
     getCurrentWorkspace(),
   ]);
@@ -61,9 +79,15 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
   const t = MESSAGES.graficos;
 
   const hasta = seguidores.labels.at(-1);
-  // Con paso 1 cada barra es un día; con 2 o 7, un bloque de días.
-  const porBloques = views.paso > 1;
-  const vacio = seguidores.labels.length === 0;
+  // Con paso 1 cada barra es un día; con 4 o 10, un bloque de días.
+  const porBloques = views.step > 1;
+  const porContenido = views.source === "content";
+
+  // Etiquetas del eje en número («16/9»), no «16 sep»: siete barras a
+  // 400 px dejan ~37 px por barra y «24 ago» ya no cabe entre dos
+  // marcas; seis fechas en el eje de la línea, tampoco. El orden
+  // día/mes lo pone el locale del workspace, no este archivo.
+  const etiqueta = (dia: string) => f.dayMonth(dia);
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
@@ -72,35 +96,45 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
         subtitle={t.seguidores.subtitle(seguidores.labels.length)}
         ariaLabel={t.seguidores.aria}
         chart="line"
-        // El eje arranca SIEMPRE en cero. Arrancando en el mínimo, las
-        // marcas dejan de ser redondas —«216,1 mil», «211,1 mil»— y no
-        // caben en los 48 px de margen del eje del kit: la del medio se
-        // corta y se lee «?06,1 mil». Subir ese margen es cambiar la API
-        // de LineChart; el pie de la tarjeta explica la escala.
+        // El eje arranca SIEMPRE en cero, también con una sola red.
+        // Arrancando en el mínimo, las marcas dejan de ser redondas
+        // —«216,1 mil»— y no caben en los 48 px de margen del eje del
+        // kit: se cortaban por la izquierda. En cero salen «100 mil»,
+        // «200 mil». Subir ese margen es cambiar la API de LineChart.
         line={{ fromZero: true }}
-        labels={seguidores.labels.map((d) => f.date(d))}
+        labels={seguidores.labels.map(etiqueta)}
         labelsHeader={t.seguidores.labelsHeader}
         series={aSeries(seguidores.series)}
         format="int"
         axisFormat="compact"
-        note={t.seguidores.nota}
+        // La nota explica la escala; sin curva no hay escala que explicar.
+        // La de las redes desalineadas, solo cuando se ven varias.
+        note={
+          seguidores.labels.length === 0
+            ? undefined
+            : filtro.platform === null
+              ? `${t.seguidores.nota} ${t.seguidores.notaRedes}`
+              : t.seguidores.nota
+        }
         asOf={hasta ? { date: hasta } : undefined}
-        emptyState={vacio ? <SinDatos filtro={filtro} /> : undefined}
+        emptyState={
+          seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
+        }
       />
       <ChartCard
         title={t.views.title}
-        subtitle={t.views.subtitle(views.paso, views.bloques.length)}
+        subtitle={t.views.subtitle(views.step, views.buckets.length)}
         ariaLabel={t.views.aria}
         chart="bar"
         bar={{ mode: "stack" }}
-        labels={views.bloques.map((b) => f.date(b.inicio))}
+        labels={views.buckets.map((b) => etiqueta(b.start))}
         labelsHeader={porBloques ? t.views.labelsHeaderBloque : t.views.labelsHeaderDia}
         series={aSeries(views.series)}
         format="int"
         axisFormat="compact"
-        note={t.views.nota(views.paso)}
-        asOf={views.bloques.length ? { date: views.bloques.at(-1)!.fin } : undefined}
-        emptyState={views.bloques.length === 0 ? <SinDatos filtro={filtro} /> : undefined}
+        note={views.buckets.length === 0 ? undefined : porContenido ? t.views.notaContenido : t.views.nota(views.step)}
+        asOf={views.buckets.length ? { date: views.buckets.at(-1)!.end } : undefined}
+        emptyState={views.buckets.length === 0 ? <SinDatos filtro={filtro} /> : undefined}
       />
     </div>
   );
