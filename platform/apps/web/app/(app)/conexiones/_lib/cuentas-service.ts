@@ -15,7 +15,7 @@ import {
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  addPublicAccount, CreatorNotInWorkspace, disconnectConnection, getDefaultCreatorId, listAccounts, markAccountLookupFailure, NoCreatorProfile,
+  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getDefaultCreatorId, listAccounts, markAccountLookupFailure, NoCreatorProfile,
   recordAccountSnapshot, recordConsent, type AccountRow, type WorkspaceTx,
 } from "@mc/db";
 import { CONSENT_POLICY_VERSION } from "./consent";
@@ -196,7 +196,7 @@ export function createCuentasService(deps: CuentasDeps) {
           throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta (CON-8).");
         });
         await deps.withWorkspace(async (tx) => {
-          await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics });
+          await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics, source: API_SNAPSHOT_SOURCE });
           await flush(callLog, tx, row.id);
         });
         return { ok: true, id: row.id, withMetrics: true, note: null, alreadyReadToday: false };

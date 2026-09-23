@@ -129,6 +129,9 @@ describe('de @ a autorizada', () => {
     assert.equal(row.secretRef, 'enc:tiktok:44444444-4444-4444-8444-444444444444');
     assert.deepEqual(row.scopes, ['user.info.basic', 'video.list']);
     assert.equal(row.latest?.day, '2026-09-22', 'el historial por @ se conserva');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-23', followers: 81, following: 28, mediaCount: 13, views: null, raw: {}, source: 'api' }));
+    const after = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.deepEqual(after.latest, { day: '2026-09-23', followers: 81, following: 28, mediaCount: 13, views: null }, 'la lectura con token (api) también cuenta como última lectura');
     const old = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ status: string; external_account_id: string; deleted_at: string | null }>(`SELECT status, external_account_id, deleted_at FROM social_connection WHERE id = $1`, [previousId]));
     assert.equal(old.rows[0]!.status, 'disabled');
     assert.ok(old.rows[0]!.deleted_at);

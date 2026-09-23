@@ -324,6 +324,10 @@ export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise
 // ---------------------------------------------------------------------
 
 export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
+/** Lectura hecha con el token del dueño (cuenta autorizada): la misma que escribe el worker. */
+export const API_SNAPSHOT_SOURCE = 'api';
+/** Las fuentes que la pantalla considera «la última lectura» de la cuenta. */
+export const ACCOUNT_SNAPSHOT_SOURCES: readonly string[] = [PUBLIC_SNAPSHOT_SOURCE, API_SNAPSHOT_SOURCE];
 
 export interface AddPublicAccountInput {
   creatorId: string;
@@ -379,10 +383,12 @@ export interface AccountSnapshotInput {
   mediaCount: number | null;
   views: number | null;
   raw: unknown;
+  /** 'public_profile' (por @) o 'api' (con el token del dueño). Por defecto, por @. */
+  source?: string;
 }
 
 /**
- * Snapshot diario de la cuenta con source 'public_profile'. UNIQUE
+ * Snapshot diario de la cuenta con source 'public_profile' (o 'api' si se lee con token). UNIQUE
  * (connection_id, day, source): «Actualizar» dos veces el mismo día no
  * duplica la fila ni la corrige; la primera lectura del día es la del
  * día. Las métricas se insertan, nunca se actualizan, y la base lo
@@ -403,7 +409,7 @@ export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnaps
      VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
      ON CONFLICT (connection_id, day, source) DO NOTHING
      RETURNING 1`,
-    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), PUBLIC_SNAPSHOT_SOURCE],
+    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), input.source ?? PUBLIC_SNAPSHOT_SOURCE],
   );
   const saved = inserted.rows.length > 0;
   await tx.query(
@@ -435,17 +441,17 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
     `SELECT c.id, c.access_mode,
             to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
             (SELECT w.followers FROM account_metric_snapshot w
-              WHERE w.connection_id = c.id AND w.source = $1 AND w.day <= l.day - 7
+              WHERE w.connection_id = c.id AND w.source = ANY($1::text[]) AND w.day <= l.day - 7
               ORDER BY w.day DESC LIMIT 1) AS followers_week_ago
        FROM social_connection c
        LEFT JOIN LATERAL (
          SELECT s.day, s.followers, s.following, s.media_count, s.views
            FROM account_metric_snapshot s
-          WHERE s.connection_id = c.id AND s.source = $1
-          ORDER BY s.day DESC LIMIT 1
+          WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
+          ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
       WHERE c.deleted_at IS NULL`,
-    [PUBLIC_SNAPSHOT_SOURCE],
+    [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
   const extra = new Map(rows.map((r) => [r.id, r]));
   return base.map((b) => {
