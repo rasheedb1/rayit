@@ -248,7 +248,7 @@ FROM (
   ) g
 ) a
 -- Sin objetivo: vale con la unicidad de 0008 (empresa, red, día) y con la
--- de 0034 (campaña, red, día).
+-- de 0035 (campaña, red, día).
 ON CONFLICT DO NOTHING;
 
 

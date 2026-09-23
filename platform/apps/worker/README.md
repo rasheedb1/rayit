@@ -178,7 +178,7 @@ marca de cada campaña `planned`, `live` o `measuring` con
 
 - Una marca en varias campañas del mismo workspace se lee **una vez**
   (workspace, empresa, red, handle) y deja **una fila por campaña**:
-  `brand_account_snapshot` es único por (campaña, red, día) desde 0034.
+  `brand_account_snapshot` es único por (campaña, red, día) desde 0035.
 - Escribe con `recordBrandSnapshot` de `@mc/db/queries/campanas`, el
   mismo INSERT que «Actualizar ahora» en la ficha, con
   `onConflict: 'fill_missing'`: la primera lectura del día queda, y el

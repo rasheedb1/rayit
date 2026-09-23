@@ -1,9 +1,11 @@
 -- =====================================================================
--- 0034 · Seguidores de la marca por campaña y «Actualizar ahora» desde la web (CAM-3)
+-- 0035 · Seguidores de la marca por campaña y «Actualizar ahora» desde la web (CAM-3)
 -- ---------------------------------------------------------------------
 -- Qué hace:
 --   1 · la unicidad de brand_account_snapshot pasa a ser POR CAMPAÑA:
---       (campaign_id, platform_id, day) para las filas con campaña y
+--       (campaign_id, platform_id, day, followers IS NOT NULL) para las
+--       filas con campaña —un día admite una lectura SIN cifra (la razón:
+--       not_found, not_discoverable, no_public_source) y una CON cifra— y
 --       (company_id, platform_id, day) solo para las filas sin campaña
 --       (el seed de demostración). Antes era (company_id, platform_id,
 --       day) para todas.
@@ -33,14 +35,22 @@
 --     day): la segunda campaña reutiliza la historia de la primera.
 --     El job hace UNA llamada por (workspace, empresa, red, handle) y
 --     deja una fila por campaña en ventana.
+--   · La tabla es de métricas: se inserta, nunca se actualiza (CLAUDE.md).
+--     Si a las 07:00 el job dejó «no encontramos @x» y a mediodía se
+--     corrige el handle, la lectura buena tiene que poder entrar el mismo
+--     día sin pisar la de la mañana. Por eso la clave distingue «con
+--     cifra» de «sin cifra»: las dos filas quedan, la consulta prefiere la
+--     que trae cifra, y nadie (ni el worker) necesita UPDATE.
 --
 -- Re-ejecutable: DROP … IF EXISTS, CREATE … IF NOT EXISTS, GRANT es
 -- idempotente. El seed 0003 inserta con ON CONFLICT DO NOTHING sin
 -- objetivo, así que sirve con la unicidad vieja y con la nueva.
 --
--- Numeración: 0033 es la más alta en todas las ramas al 23-sep-2026
--- (0023 sigue reservada para ACC). En Supabase van aplicadas hasta 0022:
--- esta entra en la cola del integrador detrás de 0024–0033.
+-- Numeración: 0034 es la más alta en todas las ramas al 23-sep-2026
+-- (nicolas/ACC-3-esquema-accesos y nicolas/ACC-6-alcance-consultas la
+-- usan las dos; 0023 sigue reservada para ACC). En Supabase van
+-- aplicadas hasta 0033: esta entra en la cola del integrador detrás de
+-- las 0034 de ACC. No depende de ellas.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -49,7 +59,7 @@
 ALTER TABLE brand_account_snapshot DROP CONSTRAINT IF EXISTS brand_account_snapshot_company_id_platform_id_day_key;
 
 CREATE UNIQUE INDEX IF NOT EXISTS brand_account_snapshot_campaign_day_idx
-  ON brand_account_snapshot (campaign_id, platform_id, day)
+  ON brand_account_snapshot (campaign_id, platform_id, day, (followers IS NOT NULL))
   WHERE campaign_id IS NOT NULL;
 
 -- Las filas sin campaña son las del seed de demostración (0029: TO
@@ -111,4 +121,4 @@ CREATE TRIGGER ref_visible_company_id
   EXECUTE FUNCTION assert_reference_visible('company_id', 'company', 'id');
 
 COMMENT ON TABLE brand_account_snapshot IS
-  'Seguidores públicos de la marca por día (CAM-3). Una fila por (campaña, red, día); la escribe el worker brand.snapshot y la web con «Actualizar ahora» (solo INSERT, ON CONFLICT DO NOTHING). followers NULL con source not_found / not_discoverable / no_public_source: ese día no hubo cifra, y la razón. Sin campaña: solo el seed.';
+  'Seguidores públicos de la marca por día (CAM-3). Una fila por (campaña, red, día) y como mucho otra sin cifra; la escribe el worker brand.snapshot y la web con «Actualizar ahora» (solo INSERT, ON CONFLICT DO NOTHING). followers NULL con source not_found / not_discoverable / no_public_source: ese día no hubo cifra, y la razón. Sin campaña: solo el seed.';

@@ -450,7 +450,7 @@ además más rápido.
   escribe el worker: `mc_app` solo las lee (**0025**). Dos excepciones, solo
   con INSERT y `ON CONFLICT DO NOTHING`: `account_metric_snapshot`
   («Actualizar» de Conexiones, 0025 §5) y `brand_account_snapshot`
-  («Actualizar ahora» de la ficha de campaña, **0034**, bajo una campaña
+  («Actualizar ahora» de la ficha de campaña, **0035**, bajo una campaña
   visible y de su empresa, único por campaña, red y día).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.

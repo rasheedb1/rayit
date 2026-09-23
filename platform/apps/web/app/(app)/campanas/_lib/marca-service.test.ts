@@ -4,7 +4,7 @@
  * sobre fixtures: deja la fila de hoy con el mismo INSERT que el job; la
  * segunda vez el mismo día no duplica ni corrige; TikTok deja la razón sin
  * llamar; una cuenta que no existe deja la suya; una campaña reportada o de
- * otro workspace no se toca; sin la migración 0034 lo dice en español; y
+ * otro workspace no se toca; sin la migración 0035 lo dice en español; y
  * ninguna credencial queda en la base.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,7 +13,6 @@ import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createMarcaService, type MarcaService } from "./marca-service";
-import { MESSAGES } from "./messages";
 
 const NOW = new Date("2026-09-23T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-marca-SECRETO", GOOGLE_API_KEY: "AIza-marca-key-SECRETO" };
@@ -63,13 +62,15 @@ afterAll(async () => {
 });
 
 describe("actualizar ahora", () => {
-  it("lee a la marca y deja la fila de hoy; la segunda vez el mismo día no duplica ni corrige", async () => {
+  it("lee a la marca y deja la fila de hoy; la segunda vez el mismo día no duplica, no corrige y no gasta cuota", async () => {
     expect(await service.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: true, resultado: "guardada", avisos: [] });
     expect(await filas(CAMPAIGN_LIVE)).toEqual([{ day: "2026-09-23", followers: "267793", source: "instagram.business_discovery", handle: "cafealma" }]);
+    const llamadas = fetch.calls.length;
     expect(await service.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: true, resultado: "ya_hoy", avisos: [] });
+    expect(fetch.calls.length).toBe(llamadas);
     expect(await filas(CAMPAIGN_LIVE)).toHaveLength(1);
     const log = await db.queryAsSuperuser<{ endpoint: string }>("SELECT endpoint FROM api_call_log WHERE endpoint = 'instagram.business_discovery'");
-    expect(log.rows.length).toBe(2);
+    expect(log.rows.length).toBe(1);
   });
 
   it("TikTok: fila sin cifra con su razón, sin llamar a nadie", async () => {
@@ -79,28 +80,27 @@ describe("actualizar ahora", () => {
     expect(fetch.calls.length).toBe(antes);
   });
 
-  it("un handle que no existe deja la fila con la razón, para que la ficha lo explique", async () => {
+  it("un handle que no existe deja la fila con la razón; la segunda pulsación sí vuelve a mirar (se puede estar corrigiendo)", async () => {
     expect(await service.actualizar(CAMPAIGN_GONE)).toEqual({ ok: true, resultado: "guardada", avisos: [] });
     expect(await filas(CAMPAIGN_GONE)).toEqual([{ day: "2026-09-23", followers: null, source: "not_found", handle: "cafe_alma_mal" }]);
+    const llamadas = fetch.calls.length;
+    expect(await service.actualizar(CAMPAIGN_GONE)).toEqual({ ok: true, resultado: "ya_hoy", avisos: [] });
+    expect(fetch.calls.length).toBe(llamadas + 1);
   });
 
   it("una campaña reportada ya no se mide; la de otro workspace no existe para quien pide", async () => {
-    expect(await service.actualizar(CAMPAIGN_CAFE_ALMA_SEED)).toEqual({ ok: false, code: "cerrada", message: MESSAGES.seguidores.errores.cerrada });
+    expect(await service.actualizar(CAMPAIGN_CAFE_ALMA_SEED)).toEqual({ ok: false, code: "cerrada", avisos: [] });
     const otro = createMarcaService({ env: ENV, withWorkspace: (fn) => db.withWorkspace(OTRO_WS, fn), fetch: fetch.fetch, now: () => NOW });
-    expect(await otro.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: false, code: "no_existe", message: MESSAGES.seguidores.errores.no_existe });
+    expect(await otro.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: false, code: "no_existe", avisos: [] });
   });
 
-  it("sin la credencial de Instagram no escribe nada y dice qué falta", async () => {
+  it("sin la credencial de Instagram no escribe nada y lo avisa con un código, no con el nombre de la variable", async () => {
     const sin = createMarcaService({ env: {}, withWorkspace, fetch: fetch.fetch, now: () => new Date("2026-09-24T15:00:00Z") });
-    const out = await sin.actualizar(CAMPAIGN_LIVE);
-    expect(out.ok).toBe(false);
-    if (out.ok) return;
-    expect(out.code).toBe("lectura");
-    expect(out.message).toMatch(/INSTAGRAM_HOUSE_TOKEN/);
+    expect(await sin.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: false, code: "lectura", avisos: [{ code: "sin_credencial", platformId: "instagram" }] });
     expect(await filas(CAMPAIGN_LIVE)).toHaveLength(1);
   });
 
-  it("si la base aún no tiene 0034 (42501), lo dice en español en vez de romper la ficha", async () => {
+  it("si la base aún no tiene 0035 (42501), lo dice en español en vez de romper la ficha", async () => {
     let n = 0;
     const sinPrivilegio = createMarcaService({
       env: ENV,
@@ -111,7 +111,7 @@ describe("actualizar ahora", () => {
         return withWorkspace(fn);
       },
     });
-    expect(await sinPrivilegio.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: false, code: "sin_permiso_base", message: MESSAGES.seguidores.errores.sin_permiso_base });
+    expect(await sinPrivilegio.actualizar(CAMPAIGN_LIVE)).toEqual({ ok: false, code: "sin_permiso_base", avisos: [] });
   });
 
   it("ninguna credencial de la casa en ninguna columna de la base, y sin red", async () => {

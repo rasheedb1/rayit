@@ -5,7 +5,7 @@
  * Aquí no se calcula ninguna cifra: solo se decide qué frase va y dónde
  * cae cada ventana en el eje.
  */
-import { BRAND_BASELINE_DAYS, isBrandNoDataReason } from "@mc/core";
+import { addDays, BRAND_BASELINE_DAYS, isBrandNoDataReason } from "@mc/core";
 import type { BrandFollowersAccount } from "@mc/db";
 import type { ChartShade } from "@/components/ui/line-chart";
 import type { PillKind } from "@/components/ui/pill";
@@ -63,13 +63,6 @@ export function indicesEntre(days: readonly string[], desde: string, hasta: stri
   return from === -1 ? null : { from, to };
 }
 
-/** El día anterior a una fecha YYYY-MM-DD (para cerrar la ventana de línea base en starts_on − 1). */
-function diaAnterior(iso: string): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
 export function vistaCuenta(a: BrandFollowersAccount, w: Ventanas, f: Formatter): CuentaVista {
   const red = redDe(a.platformId);
   // La curva empieza en brand_baseline_from; la lectura anterior solo es el ancla del cálculo.
@@ -78,7 +71,7 @@ export function vistaCuenta(a: BrandFollowersAccount, w: Ventanas, f: Formatter)
 
   const shades: ChartShade[] = [];
   if (w.startsOn) {
-    const base = w.baselineFrom ? indicesEntre(days, w.baselineFrom, diaAnterior(w.startsOn)) : null;
+    const base = w.baselineFrom ? indicesEntre(days, w.baselineFrom, addDays(w.startsOn, -1)) : null;
     const camp = indicesEntre(days, w.startsOn, w.endsOn);
     // La línea base se sombrea hasta el primer día de campaña: las dos ventanas se tocan y no queda un hueco de un día.
     if (base) shades.push({ from: base.from, to: camp && camp.from === base.to + 1 ? camp.from : base.to, label: t.shadeBaseline, tone: "muted" });

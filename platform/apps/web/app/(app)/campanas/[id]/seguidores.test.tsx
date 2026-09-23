@@ -92,7 +92,7 @@ describe("SeguidoresMarca", () => {
   const data = (accounts: BrandFollowersAccount[]): BrandFollowersResult => ({ campaignId: "c", ...W, accounts });
 
   it("pinta la pastilla, el resumen, la curva y «Actualizar ahora» mientras se mide", () => {
-    render(<SeguidoresMarca data={data([cuenta(serieDelSeed())])} status="live" f={f} actualizar={accion} resultado={null} aviso={null} />);
+    render(<SeguidoresMarca data={data([cuenta(serieDelSeed())])} status="live" f={f} actualizar={accion} resultado={null} avisos={[]} />);
     expect(screen.getByText("×12 el ritmo")).toBeInTheDocument();
     expect(screen.getByText("12,9 al día antes · 155 al día en campaña · 1.240 ganados")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Instagram · @cafealma" })).toBeInTheDocument();
@@ -101,21 +101,21 @@ describe("SeguidoresMarca", () => {
   });
 
   it("una campaña reportada no ofrece actualizar y lo explica; el resultado de la acción se anuncia", () => {
-    render(<SeguidoresMarca data={data([cuenta(serieDelSeed())])} status="reported" f={f} actualizar={accion} resultado="ya_hoy" aviso="Falta INSTAGRAM_HOUSE_TOKEN." />);
+    render(<SeguidoresMarca data={data([cuenta(serieDelSeed())])} status="reported" f={f} actualizar={accion} resultado="ya_hoy" avisos={["YouTube no respondió; inténtalo de nuevo en unos minutos."]} />);
     expect(screen.queryByRole("button", { name: "Actualizar ahora" })).toBeNull();
     expect(screen.getByText(/La medición de la marca terminó/)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Ya había una lectura de hoy");
-    expect(screen.getByRole("status")).toHaveTextContent("Falta INSTAGRAM_HOUSE_TOKEN.");
+    expect(screen.getByRole("status")).toHaveTextContent("YouTube no respondió");
   });
 
   it("sin cuentas de la marca: el estado vacío con su frase", () => {
-    render(<SeguidoresMarca data={data([])} status="live" f={f} actualizar={accion} resultado={null} aviso={null} />);
+    render(<SeguidoresMarca data={data([])} status="live" f={f} actualizar={accion} resultado={null} avisos={[]} />);
     expect(screen.getByText("Esta campaña no tiene cuentas de la marca")).toBeInTheDocument();
   });
 
   it("sin cifra: la frase va en el sitio del gráfico, sin «0»", () => {
     const hoy = { day: "2026-09-23", followers: null, source: "not_discoverable", handle: "cafealma", capturedAt: "2026-09-23T07:00:00Z" };
-    const { container } = render(<SeguidoresMarca data={data([cuenta([], hoy)])} status="live" f={f} actualizar={accion} resultado={null} aviso={null} />);
+    const { container } = render(<SeguidoresMarca data={data([cuenta([], hoy)])} status="live" f={f} actualizar={accion} resultado={null} avisos={[]} />);
     expect(screen.getByText(/Instagram no deja leer @cafealma/)).toBeInTheDocument();
     expect(container.querySelector("svg")).toBeNull();
     expect(container.textContent).not.toMatch(/\b0\b/);

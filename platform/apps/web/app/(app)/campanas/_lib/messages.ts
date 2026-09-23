@@ -39,8 +39,6 @@ export const MESSAGES = {
       not_discoverable: (handle: string, red: string) => `${red} no deja leer @${handle} por este camino: solo se leen cuentas profesionales (creador o empresa) y públicas.`,
       no_public_source: (handle: string, red: string) => `${red} no publica los seguidores de @${handle} sin autorización del dueño. La campaña se mide por sus posts; los seguidores de la marca llegan cuando haya una fuente.`,
     },
-    /** Facebook y cualquier red sin fuente pública en esta versión. */
-    sinFuente: (red: string) => `${red} no tiene una fuente pública de seguidores en esta versión.`,
     vacio: {
       title: "Esta campaña no tiene cuentas de la marca",
       description: "Los seguidores de la marca se leen de las redes que tenía la empresa al crear la campaña. Esta campaña no trajo ninguna.",
@@ -57,7 +55,14 @@ export const MESSAGES = {
       sin_cuentas: "Esta campaña no tiene cuentas de la marca que leer.",
       cerrada: "La medición de la marca terminó con la campaña.",
       sin_permiso_base: "Todavía no se puede actualizar desde aquí; la lectura diaria sigue llegando sola.",
+      lectura: "No se pudo leer a la marca.",
       generico: "No se pudo leer a la marca. Inténtalo de nuevo en unos minutos.",
+    },
+    /** Lo que no dejó fila, por red (códigos de marca-service.ts). */
+    avisos: {
+      sin_credencial: (red: string) => `La lectura de ${red} no está configurada todavía; el equipo de On Cue lo tiene anotado.`,
+      transitorio: (red: string) => `${red} no respondió; inténtalo de nuevo en unos minutos.`,
+      sin_fuente: (red: string) => `${red} no tiene una fuente pública de seguidores en esta versión.`,
     },
   },
 } as const;

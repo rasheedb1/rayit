@@ -17,14 +17,24 @@
  * workspace, empresa, red y handle) y deja una fila por campaña.
  *
  * Errores: not_found / not_discoverable / invalid_handle → fila con
- * followers NULL y la razón en source; no cuentan como fallo (mañana se
+ * followers NULL y la razón en source (brandNoDataReasonFor, core: la
+ * misma regla que «Actualizar ahora»); no cuentan como fallo (mañana se
  * vuelve a mirar). Transitorio → failed, sin fila, pg-boss reintenta.
  * Cuota agotada → failed con retry: false (el siguiente tick es el
  * reintento). Fuente sin configurar → la red se salta y se avisa una vez.
+ * Un fallo al ESCRIBIR (la base) cuenta como transitorio de esa marca y
+ * se registra en el log; no corta las demás.
+ *
+ * Solo INSERT (ON CONFLICT DO NOTHING): la segunda corrida del día no
+ * añade nada, y una fila sin cifra de la mañana convive con la cifra que
+ * llegue después (0035).
  * ctx.db corre como mc_worker: cada consulta filtra por workspace_id.
  */
 import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
-import { brandAccountsOf, BRAND_SNAPSHOT_STATUSES, isBrandSnapshotDue, recordBrandSnapshot, type BrandNoDataReason, type BrandSnapshotInput } from '@mc/db/queries/campanas';
+import {
+  brandAccountsOf, brandNoDataReasonFor, BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, BRAND_SNAPSHOT_STATUSES, isBrandSnapshotDue, recordBrandSnapshot,
+  type BrandNoDataReason, type BrandSnapshotInput,
+} from '@mc/db/queries/campanas';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from '../conexiones/oauth-refresh.ts';
 
@@ -58,12 +68,6 @@ type Ref = { campaignId: string; platformId: string };
 
 export const NO_PUBLIC_SOURCE: BrandNoDataReason = 'no_public_source';
 
-function reasonOf(code: PublicLookupError['code']): BrandNoDataReason | null {
-  if (code === 'not_found' || code === 'invalid_handle') return 'not_found';
-  if (code === 'not_discoverable') return 'not_discoverable';
-  return null;
-}
-
 export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot', async (payload, ctx) => {
   const day = ctx.now().toISOString().slice(0, 10);
   const { rows } = await ctx.db.query<CampaignRow>(
@@ -71,7 +75,10 @@ export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot'
             to_char(starts_on, 'YYYY-MM-DD') AS starts_on, to_char(ends_on, 'YYYY-MM-DD') AS ends_on,
             to_char(brand_baseline_from, 'YYYY-MM-DD') AS brand_baseline_from, brand_accounts
        FROM campaign
-      WHERE status = ANY($1::text[]) AND jsonb_array_length(brand_accounts) > 0
+      WHERE status = ANY($1::text[])
+        -- brand_accounts no tiene CHECK de tipo: un objeto o un texto no pueden tumbar la corrida de todos.
+        -- CASE y no AND: Postgres no promete evaluar un AND de izquierda a derecha.
+        AND CASE WHEN jsonb_typeof(brand_accounts) = 'array' THEN jsonb_array_length(brand_accounts) > 0 ELSE false END
         AND ($2::uuid IS NULL OR workspace_id = $2) AND ($3::uuid IS NULL OR id = $3)
       ORDER BY workspace_id, company_id, starts_on NULLS LAST, created_at`,
     [BRAND_SNAPSHOT_STATUSES, payload.workspaceId ?? null, payload.campaignId ?? null],
@@ -103,10 +110,22 @@ export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot'
   const byPlatform = new Map<string, Target[]>();
   for (const t of targets.values()) byPlatform.set(t.platformId, [...(byPlatform.get(t.platformId) ?? []), t]);
 
-  /** Una fila por campaña del objetivo; el worker rellena una marca «sin cifra» del día con una lectura real. */
-  const write = async (t: Target, row: Omit<BrandSnapshotInput, 'campaignId' | 'companyId' | 'platformId' | 'day'>): Promise<void> => {
-    for (const campaignId of t.campaignIds) {
-      await recordBrandSnapshot(ctx.db, { campaignId, companyId: t.companyId, platformId: t.platformId, day, ...row }, { onConflict: 'fill_missing' });
+  const writeErrors: Ref[] = [];
+
+  /**
+   * Una fila por campaña del objetivo. Devuelve false si la base falló:
+   * esa marca cuenta como transitoria (se reintenta) y las demás siguen.
+   */
+  const write = async (t: Target, row: Omit<BrandSnapshotInput, 'campaignId' | 'companyId' | 'platformId' | 'day'>): Promise<boolean> => {
+    try {
+      for (const campaignId of t.campaignIds) {
+        await recordBrandSnapshot(ctx.db, { campaignId, companyId: t.companyId, platformId: t.platformId, day, ...row });
+      }
+      return true;
+    } catch (err) {
+      writeErrors.push(...refs(t));
+      ctx.logger.error('no se pudo guardar el snapshot de la marca', { platform: t.platformId, workspaceId: t.workspaceId, companyId: t.companyId, err });
+      return false;
     }
   };
   const refs = (t: Target): Ref[] => t.campaignIds.map((campaignId) => ({ campaignId, platformId: t.platformId }));
@@ -115,12 +134,11 @@ export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot'
     [...byPlatform.entries()].map(async ([platform, list]) => {
       const source = isPlatformId(platform) ? sources[platform] : undefined;
       const log = ctx.logger.child({ platform });
-      if (platform === 'tiktok') {
+      if (BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE.includes(platform)) {
         // Sin fuente pública de seguidores por @ (CON-10): la fila del día dice por qué, y la ficha lo explica.
         for (const t of list) {
           if (ctx.signal.aborted) { transient.push(...refs(t)); continue; }
-          await write(t, { handle: t.handle, externalAccountId: null, followers: null, mediaCount: null, source: NO_PUBLIC_SOURCE });
-          noSource.push(...refs(t));
+          if (await write(t, { handle: t.handle, externalAccountId: null, followers: null, mediaCount: null, source: NO_PUBLIC_SOURCE })) noSource.push(...refs(t));
         }
         return;
       }
@@ -132,24 +150,16 @@ export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot'
       await mapLimit(list, ctx.definition.maxConcurrency, async (t) => {
         if (ctx.signal.aborted) { transient.push(...refs(t)); return; }
         const tlog = log.child({ workspaceId: t.workspaceId, companyId: t.companyId, campaigns: t.campaignIds.length });
+        let profile;
         try {
-          const profile = await source.lookup(t.handle, { signal: ctx.signal });
-          const m = profile.metrics;
-          await write(t, {
-            handle: profile.profile.handle ?? t.handle,
-            externalAccountId: profile.profile.external_account_id,
-            followers: m?.followers ?? null,
-            mediaCount: m?.mediaCount ?? null,
-            source: m ? profile.source : NO_PUBLIC_SOURCE,
-          });
-          if (m) { snapshots.push(...refs(t)); tlog.info('snapshot de la marca guardado', { day, followers: m.followers }); }
-          else { noSource.push(...refs(t)); tlog.info('la fuente no publica seguidores; fila sin cifra'); }
+          profile = await source.lookup(t.handle, { signal: ctx.signal });
         } catch (err) {
-          const reason = err instanceof PublicLookupError ? reasonOf(err.code) : null;
+          const reason = err instanceof PublicLookupError ? brandNoDataReasonFor(err.code) : null;
           if (reason) {
-            await write(t, { handle: t.handle, externalAccountId: null, followers: null, mediaCount: null, source: reason });
-            errored.push(...refs(t));
-            tlog.warn('la marca no se pudo leer; la fila del día lleva la razón', { code: err instanceof PublicLookupError ? err.code : reason });
+            if (await write(t, { handle: t.handle, externalAccountId: null, followers: null, mediaCount: null, source: reason })) {
+              errored.push(...refs(t));
+              tlog.warn('la marca no se pudo leer; la fila del día lleva la razón', { code: reason });
+            }
             return;
           }
           const cause = err instanceof PublicLookupError ? err.cause : err;
@@ -160,17 +170,29 @@ export const brandSnapshotJob = defineJob<BrandSnapshotPayload>('brand.snapshot'
           }
           transient.push(...refs(t));
           tlog.warn('lectura de la marca con fallo transitorio', { code: err instanceof PublicLookupError ? err.code : 'unexpected', err: err instanceof PublicLookupError ? undefined : err });
+          return;
         }
+        const m = profile.metrics;
+        const saved = await write(t, {
+          handle: profile.profile.handle ?? t.handle,
+          externalAccountId: profile.profile.external_account_id,
+          followers: m?.followers ?? null,
+          mediaCount: m?.mediaCount ?? null,
+          source: m ? profile.source : NO_PUBLIC_SOURCE,
+        });
+        if (!saved) return;
+        if (m) { snapshots.push(...refs(t)); tlog.info('snapshot de la marca guardado', { day, followers: m.followers }); }
+        else { noSource.push(...refs(t)); tlog.info('la fuente no publica seguidores; fila sin cifra'); }
       });
     }),
   );
 
-  const failed = transient.length + quota.length;
+  const failed = transient.length + writeErrors.length + quota.length;
   return {
     processed: snapshots.length + noSource.length + errored.length,
     failed,
-    // Un reintento inmediato no ayuda con la cuota; con un fallo transitorio, sí.
-    ...(failed > 0 && transient.length === 0 ? { retry: false } : {}),
-    metadata: { day, campaigns, targets: targets.size, snapshots, noSource, errored, transient, quota, skipped },
+    // Un reintento inmediato no ayuda con la cuota; con un fallo transitorio o de la base, sí.
+    ...(failed > 0 && transient.length + writeErrors.length === 0 ? { retry: false } : {}),
+    metadata: { day, campaigns, targets: targets.size, snapshots, noSource, errored, transient, writeErrors, quota, skipped },
   };
 });

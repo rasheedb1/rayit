@@ -17,12 +17,13 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { pillForCampaign } from "../_lib/estado";
+import { leerAvisoMarca } from "../_lib/aviso-marca";
 import { MESSAGES } from "../_lib/messages";
 import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
 import { LinkPosts } from "./asociar";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
-import { SeguidoresMarca, type ResultadoMarca } from "./seguidores";
+import { SeguidoresMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ const loadCampaign = cache(async (id: string) =>
       posts: await listCampaignPosts(tx, id),
       suggestions: editable ? await suggestPosts(tx, id) : [],
       linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
-      marca: await listBrandFollowers(tx, id),
+      marca: await listBrandFollowers(tx, id, campaign),
     };
   }),
 );
@@ -187,7 +188,7 @@ export default async function CampanaPage({
   if (!data) notFound();
   const { campaign, editable, posts, suggestions, linkable, marca } = data;
   const f = formatterFor(await getCurrentWorkspace());
-  const resultadoMarca: ResultadoMarca | null = marcaParam === "guardada" || marcaParam === "ya_hoy" ? marcaParam : null;
+  const avisoMarca = leerAvisoMarca(marcaParam, aviso);
 
   const pill = pillForCampaign(campaign.status);
   const invoice = campaign.invoices.find((i) => i.status !== "void") ?? null;
@@ -410,8 +411,8 @@ export default async function CampanaPage({
               status={campaign.status}
               f={f}
               actualizar={actualizarSeguidoresMarca.bind(null, campaign.id)}
-              resultado={resultadoMarca}
-              aviso={typeof aviso === "string" && aviso ? aviso.slice(0, 500) : null}
+              resultado={avisoMarca.resultado}
+              avisos={avisoMarca.mensajes}
             />
           )}
         </Section>

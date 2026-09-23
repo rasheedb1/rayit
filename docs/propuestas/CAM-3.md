@@ -15,7 +15,7 @@ desde `origin/main` (`29460e3`), worktree `rayit-cam3`.
 |---|---|---|
 | Aritmética del ritmo de seguidores (`ritmoSeguidores`), ventana de lectura del job (`isBrandSnapshotDue`), razones por las que una lectura no trae cifra (`BRAND_NO_DATA_REASONS`) | `packages/core/src/campanas.ts` + `test/campanas.test.ts` | mío |
 | `listBrandFollowers` (serie + ritmo, unida a `campaign`), `recordBrandSnapshot` (un INSERT para la web y para el worker) | `packages/db/src/queries/campanas.ts` + `test/campanas.test.ts` | mío |
-| Privilegio de INSERT de `mc_app` sobre `brand_account_snapshot` y su política vía `EXISTS campaign` | `db/migrations/0034_brand_snapshot_desde_la_web.sql` + `packages/db/src/esquema.ts` (la fila de `PRIVILEGIOS_DE_LA_APP`) | migración nueva con precedente (0014, 0015, 0016, 0022): pasa `make db.check` y `make db.guardia`. **Ver 0.2.8** |
+| Privilegio de INSERT de `mc_app` sobre `brand_account_snapshot` y su política vía `EXISTS campaign` | `db/migrations/0035_brand_snapshot_por_campana.sql` + `packages/db/src/esquema.ts` (la fila de `PRIVILEGIOS_DE_LA_APP`) | migración nueva con precedente (0014, 0015, 0016, 0022): pasa `make db.check` y `make db.guardia`. **Ver 0.2.8** |
 | Job `brand.snapshot` | `apps/worker/src/jobs/campanas/brand-snapshot.ts`, `index.ts`; una línea en `jobs/index.ts`; `test/brand-snapshot.test.ts` | carpeta nueva (§3.2 del backlog la daba por creada) |
 | Sección «Seguidores de la marca» de la ficha, «Actualizar ahora» y sus textos | `apps/web/app/(app)/campanas/[id]/seguidores.tsx` (+ test), `actions.ts` (una acción nueva), `_lib/marca-service.ts` (+ test), `_lib/messages.ts` (nuevo: los textos de esta sección), `_lib/db.ts` (reexporta `withWorkspace`, como Conexiones) | mío |
 | `LineChart` con varias ventanas sombreadas (`shades`, aditivo; `shade` no cambia) | `components/ui/line-chart.tsx`, `charts.test.tsx`, `README.md`, `/kit` | componente del kit (mío); solo se agrega una prop opcional |
@@ -24,7 +24,7 @@ desde `origin/main` (`29460e3`), worktree `rayit-cam3`.
 | README del worker y de la web; esta propuesta | `apps/worker/README.md`, `apps/web/README.md`, `docs/propuestas/CAM-3.md` | |
 
 No toco `lib/auth/`, `lib/workspace/`, `packages/db/src/{client,schema}`,
-`db/seed/0001` ni nada de Rasheed. La migración 0034 va en
+`db/seed/0001` ni nada de Rasheed. La migración 0035 va en
 `db/migrations/` por el precedente de 0022 (Rasheed la revisa; la aplica
 quien integra, nunca yo).
 
@@ -66,7 +66,7 @@ quien integra, nunca yo).
    único es global entre inquilinos (0026 §2: el 23505 no pasa por RLS;
    dos workspaces con campaña sobre la misma marca del catálogo
    chocarían y la lectura de uno quedaría bajo la campaña del otro,
-   invisible para el primero). Por eso 0034 cambia la unicidad a
+   invisible para el primero). Por eso 0035 cambia la unicidad a
    `(campaign_id, platform_id, day)` (y `(company_id, platform_id, day)`
    solo para las filas sin campaña, las del seed). El job hace UNA
    llamada por (workspace, empresa, red, handle) y deja una fila por
@@ -120,7 +120,7 @@ quien integra, nunca yo).
    @…»). No se vuelve a llamar a oEmbed cada día para eso: la fila del
    día se escribe sin llamada. Descartado: no escribir nada (la ficha no
    podría distinguir «sin fuente» de «el job no corrió»).
-8. **Migración 0034 · unicidad por campaña y `mc_app` inserta en
+8. **Migración 0035 · unicidad por campaña y `mc_app` inserta en
    `brand_account_snapshot`.** Hoy `mc_app` solo tiene SELECT (0024 §7.2,
    0029) y la política de INSERT de 0029 es `TO CURRENT_USER` (el seed).
    Sin INSERT no existe «Actualizar ahora» desde la web, que es el punto
@@ -140,7 +140,7 @@ quien integra, nunca yo).
    migraciones»; la alternativa sin migración es que «Actualizar ahora»
    no exista y la ficha solo lea lo que dejó el job, con la unicidad
    vieja. Tomé la opción con precedente (0022) y la acción degrada bien:
-   si Supabase aún no tiene 0034, el INSERT falla con `42501` y la ficha
+   si Supabase aún no tiene 0035, el INSERT falla con `42501` y la ficha
    dice que la actualización manual llega con la migración, sin romper
    nada.
 9. **Ventana de lectura del job.** Campañas `planned`, `live` o

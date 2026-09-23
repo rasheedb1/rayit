@@ -16,9 +16,10 @@ import {
   QuotaManager, refresherRegistry, withoutNetwork, type Fixture, type NetworkGuard,
 } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
-import { brandSnapshotJob } from '../src/jobs/campanas/brand-snapshot.ts';
+import { brandSnapshotJob, type BrandSnapshotPayload } from '../src/jobs/campanas/brand-snapshot.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import type { JobContext } from '../src/runner/registry.ts';
+import type { JobDatabase } from '../src/runner/db.ts';
 import { jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
@@ -43,6 +44,7 @@ const CAM = {
   gone: '00000003-0000-4000-8000-0000000ca106',
   personal: '00000003-0000-4000-8000-0000000ca107',
   future: '00000003-0000-4000-8000-0000000ca108',
+  malformada: '00000003-0000-4000-8000-0000000ca109',
 };
 
 let h: Harness;
@@ -72,7 +74,9 @@ async function seed(db: PgliteDatabase): Promise<void> {
       ('${CAM.youtube}',  '${WORKSPACE}', '${COMPANY.nutrive}', 'Nutrivé en YouTube',     'live',      DATE '2026-09-22', DATE '2026-09-29', DATE '2026-09-08', '[{"platform_id": "youtube", "handle": "NutriveOficial"}]'),
       ('${CAM.gone}',     '${WORKSPACE}', '${COMPANY.nadie}',   'Canal que no existe',    'live',      DATE '2026-09-22', DATE '2026-09-29', DATE '2026-09-08', '[{"platform_id": "youtube", "handle": "nadie"}]'),
       ('${CAM.personal}', '${WORKSPACE}', '${COMPANY.hogar}',   'Cuenta personal',        'live',      DATE '2026-09-22', DATE '2026-09-29', DATE '2026-09-08', '[{"platform_id": "instagram", "handle": "cuentapersonal"}]'),
-      ('${CAM.future}',   '${WORKSPACE}', '${COMPANY.cafe}',    'Café Alma en diciembre', 'planned',   DATE '2026-12-01', DATE '2026-12-08', DATE '2026-11-17', '[{"platform_id": "instagram", "handle": "cafealma"}]');
+      ('${CAM.future}',   '${WORKSPACE}', '${COMPANY.cafe}',    'Café Alma en diciembre', 'planned',   DATE '2026-12-01', DATE '2026-12-08', DATE '2026-11-17', '[{"platform_id": "instagram", "handle": "cafealma"}]'),
+      -- brand_accounts sin CHECK de tipo: un objeto no puede tumbar la corrida de todos.
+      ('${CAM.malformada}', '${WORKSPACE}', '${COMPANY.nadie}', 'Cuentas mal guardadas',  'live',      DATE '2026-09-22', DATE '2026-09-29', DATE '2026-09-08', '{"instagram": "nadie"}');
     SELECT set_config('app.workspace_id', '', false);
   `);
 }
@@ -119,6 +123,7 @@ interface Meta {
   errored: Ref[];
   transient: Ref[];
   quota: Ref[];
+  writeErrors: Ref[];
   skipped: Record<string, string>;
 }
 const ids = (refs: Ref[]) => refs.map((r) => r.campaignId).sort();
@@ -144,13 +149,14 @@ test('una fila por campaña en ventana: cifra en Instagram y YouTube, razón en 
   assert.equal(run.status, 'ok', run.error ?? '');
   const md = run.metadata as unknown as Meta;
   assert.equal(md.day, DAY);
-  assert.equal(md.campaigns, 6, 'la cerrada y la de diciembre no cuentan');
+  assert.equal(md.campaigns, 6, 'la cerrada, la de diciembre y la de brand_accounts malformado no cuentan');
   assert.equal(md.targets, 5, '@cafealma en dos campañas es UN objetivo');
   assert.deepEqual(ids(md.snapshots), [CAM.live, CAM.live2, CAM.youtube].sort());
   assert.deepEqual(ids(md.noSource), [CAM.tiktok]);
   assert.deepEqual(ids(md.errored), [CAM.gone, CAM.personal].sort());
   assert.deepEqual(md.transient, []);
   assert.deepEqual(md.quota, []);
+  assert.deepEqual(md.writeErrors, []);
   assert.deepEqual(md.skipped, {});
   assert.equal(run.items_processed, 6);
   assert.equal(run.items_failed, 0);
@@ -214,13 +220,13 @@ test('sin credenciales, Instagram y YouTube se saltan con aviso; TikTok deja su 
 });
 
 /** Un contexto de job a mano, sobre la base del arnés, para los caminos que pg-boss no deja provocar a voluntad. */
-function contexto(overrides: { signal?: AbortSignal; quota?: QuotaManager }): JobContext {
+function contexto(overrides: { signal?: AbortSignal; quota?: QuotaManager; db?: JobDatabase }): JobContext {
   const callLog = new InMemoryCallLogSink();
   const quota = overrides.quota ?? new QuotaManager({ now: () => NOW });
   return {
     jobId: 'brand.snapshot', runId: 0, attempt: 1, workspaceId: undefined,
     definition: { id: 'brand.snapshot', labelEs: 'Seguidores de marcas en campaña', queue: 'campaigns', defaultCron: '0 7 * * *', timeoutS: 600, maxAttempts: 5, maxConcurrency: 2, enabled: true },
-    db: h.db, logger: createLogger({ level: 'debug', sink: new MemorySink() }), signal: overrides.signal ?? new AbortController().signal,
+    db: overrides.db ?? h.db, logger: createLogger({ level: 'debug', sink: new MemorySink() }), signal: overrides.signal ?? new AbortController().signal,
     secrets: new InMemorySecretStore(), refreshers: refresherRegistry([]),
     connectors: createConnectors({ callLog, quota, http: { fetch: fetch.fetch, now: () => NOW } }),
     callLog, now: () => NOW, env: ENV,
@@ -242,10 +248,28 @@ test('con la cuota de YouTube agotada, la marca queda en quota, no se escribe y 
     now: () => NOW,
     limits: { ...DEFAULT_LIMITS, youtube: { ...DEFAULT_LIMITS.youtube, daily: { ...DEFAULT_LIMITS.youtube.daily!, units: 0, persist: false } } },
   });
-  const r = await brandSnapshotJob.handler({ campaignId: CAM.youtube }, contexto({ quota }));
+  const payload: BrandSnapshotPayload = { campaignId: CAM.youtube };
+  const r = await brandSnapshotJob.handler(payload, contexto({ quota }));
   const md = r.metadata as unknown as Meta;
   assert.deepEqual(ids(md.quota), [CAM.youtube]);
   assert.equal(r.failed, 1);
   assert.equal(r.retry, false, 'un reintento inmediato no ayuda con la cuota');
   assert.deepEqual(await snapshots(h.db), antes);
+});
+
+test('si la base falla al escribir una marca, esa cuenta como transitoria y las demás siguen', async () => {
+  const antes = await snapshots(h.db);
+  // Una base que rechaza los INSERT de TikTok (como lo haría un disparador o una restricción).
+  const db: JobDatabase = {
+    query: (text, params) => (/INSERT INTO brand_account_snapshot/.test(text) && params?.[2] === 'tiktok' ? Promise.reject(new Error('fallo simulado de la base')) : h.db.query(text, params)),
+    transaction: (fn) => h.db.transaction(fn),
+  };
+  const r = await brandSnapshotJob.handler({}, contexto({ db }));
+  const md = r.metadata as unknown as Meta;
+  assert.deepEqual(ids(md.writeErrors), [CAM.tiktok]);
+  assert.deepEqual(md.noSource, [], 'TikTok no se anota como hecho si no se guardó');
+  assert.equal(r.failed, 1);
+  assert.equal(r.retry, undefined, 'un fallo de la base se reintenta');
+  assert.deepEqual(ids(md.snapshots), [CAM.live, CAM.live2, CAM.youtube].sort(), 'las demás marcas siguieron');
+  assert.deepEqual(await snapshots(h.db), antes, 'el mismo día: nada nuevo, nada corregido');
 });

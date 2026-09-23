@@ -17,7 +17,7 @@ import { withWorkspace } from "@/lib/db";
 import { UUID_RE, firstErrors, type ActionState } from "@/lib/forms";
 import { requirePermission } from "@/lib/permisos";
 import { getMarcaService } from "../_lib/marca-server";
-import { MESSAGES } from "../_lib/messages";
+import { queryDeMarca } from "../_lib/aviso-marca";
 
 /** Códigos como LAURA15: letras, dígitos, guion y guion bajo. */
 const TRACKING_CODE_RE = /^[A-Za-z0-9_-]+$/;
@@ -224,21 +224,18 @@ export async function cambiarEstadoCampana(campaignId: string, to: CampaignStatu
  * queda). Se usa con bind(null, campaignId).
  */
 export async function actualizarSeguidoresMarca(campaignId: string): Promise<void> {
-  // TODO(ACC-1): requirePermission("campanas.campana.editar") como primera línea cuando ACC-1 esté en main.
+  await requirePermission("campanas.campana.editar");
   if (typeof campaignId !== "string" || !UUID_RE.test(campaignId)) redirect("/campanas");
-  const t = MESSAGES.seguidores;
-  let destino: string;
+  let query: string;
   try {
     const out = await getMarcaService().actualizar(campaignId);
-    if (out.ok) {
-      const aviso = out.avisos.length > 0 ? `&aviso=${encodeURIComponent(out.avisos.join(" "))}` : "";
-      destino = `/campanas/${campaignId}?marca=${out.resultado}${aviso}#seguidores`;
-    } else {
-      destino = `/campanas/${campaignId}?aviso=${encodeURIComponent(out.message)}#seguidores`;
-    }
+    // La credencial que falta no se enseña en pantalla (aviso-marca.ts): va al log del servidor.
+    for (const a of out.avisos) if (a.code === "sin_credencial") console.warn("[campanas] la fuente pública de la marca no está configurada", { platform: a.platformId });
+    query = queryDeMarca(out);
   } catch (err) {
-    destino = `/campanas/${campaignId}?aviso=${encodeURIComponent(messageOf(err, t.errores.generico))}#seguidores`;
+    console.error("[campanas] «Actualizar ahora» de la marca falló", err);
+    query = queryDeMarca({ ok: false, code: "generico", avisos: [] });
   }
   paths(campaignId);
-  redirect(destino);
+  redirect(`/campanas/${campaignId}?${query}#seguidores`);
 }

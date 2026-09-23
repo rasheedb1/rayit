@@ -853,14 +853,16 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
 // Seguidores de la marca (CAM-3)
 // ---------------------------------------------------------------------
 
-/** Lo de core que el job brand.snapshot necesita: el worker depende de @mc/db, no de @mc/core. */
-export { BRAND_SNAPSHOT_STATUSES, isBrandSnapshotDue, type BrandNoDataReason } from '@mc/core';
+/** Lo de core que el job brand.snapshot y «Actualizar ahora» necesitan: el worker depende de @mc/db, no de @mc/core. */
+export {
+  BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, BRAND_SNAPSHOT_STATUSES, brandNoDataReasonFor, isBrandSnapshotDue, type BrandNoDataReason,
+} from '@mc/core';
 
 /** Una lectura de brand_account_snapshot tal como la enseña la ficha. */
 export interface BrandSnapshotRow extends BrandFollowerPoint {
   /** Endpoint que dio la cifra ('instagram.business_discovery', 'youtube.channels.list', 'business_discovery' en el seed) o la razón si no hay cifra (BrandNoDataReason). */
   source: string;
-  /** El handle que se leyó ese día (el de la campaña en ese momento). */
+  /** El handle que se leyó ese día. */
   handle: string | null;
   /** ISO UTC. */
   capturedAt: string;
@@ -872,7 +874,7 @@ export interface BrandFollowersAccount {
   handle: string;
   /** Solo los días con cifra, de más antiguo a más reciente: es lo que dibuja la curva. */
   series: BrandFollowerPoint[];
-  /** La lectura más reciente, con o sin cifra: dice si hoy hubo dato y por qué no. null si nunca se leyó. */
+  /** La lectura del día más reciente (con cifra si ese día la hubo): dice si hoy hubo dato y por qué no. null si nunca se leyó. */
   latest: BrandSnapshotRow | null;
   /** Máximo captured_at de la serie con cifra (ISO UTC); null sin lecturas. */
   dataAsOf: string | null;
@@ -917,32 +919,40 @@ export function brandAccountsOf(raw: unknown): BrandAccount[] {
 /**
  * La serie de seguidores de la marca de una campaña, una por cuenta de
  * brand_accounts, con su ritmo (core). Se lee por la EMPRESA de la
- * campaña a través de brand_account_snapshot, cuya RLS aísla cada fila
- * por la campaña de la que cuelga (0029, 0034): las filas de otra
- * campaña del mismo workspace sobre la misma marca sí entran (la
- * segunda campaña de Café Alma reutiliza la historia de la primera);
- * las de otro workspace, no. Un día con varias filas (dos campañas en
- * ventana) se cuenta una vez: primero la que trae cifra, luego la más
- * antigua. Trae también la lectura anterior a brand_baseline_from, que
- * es el ancla de la línea base (core). null si la campaña no existe en
- * este workspace.
+ * campaña y el handle de cada cuenta (sin distinguir mayúsculas ni @) a
+ * través de brand_account_snapshot, cuya RLS aísla cada fila por la
+ * campaña de la que cuelga (0029, 0035): las filas de otra campaña del
+ * mismo workspace sobre la misma cuenta entran (la segunda campaña de
+ * Café Alma reutiliza la historia de la primera); las de otra cuenta de
+ * la misma empresa en la misma red, no; las de otro workspace, tampoco.
+ * Un día con varias filas se cuenta una vez: primero la que trae cifra,
+ * luego la más antigua. Trae también la lectura anterior a
+ * brand_baseline_from, que es el ancla de la línea base (core).
+ *
+ * `campaign` evita volver a leer la ficha si quien llama ya la tiene (la
+ * página). null si la campaña no existe en este workspace.
  */
-export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string): Promise<BrandFollowersResult | null> {
-  const campaign = await getCampaign(tx, campaignId);
-  if (!campaign) return null;
-  const accounts = brandAccountsOf(campaign.brandAccounts);
-  const windows = { baselineFrom: campaign.brandBaselineFrom, startsOn: campaign.startsOn, endsOn: campaign.endsOn };
-  const { rows } = await tx.query<RawBrandRow>(
-    `SELECT DISTINCT ON (s.platform_id, s.day)
-            s.platform_id, s.handle, ${DATE('s.day')} AS day, s.followers::text AS followers, s.source,
-            ${TS('s.captured_at')} AS captured_at
-       FROM campaign c
-       JOIN brand_account_snapshot s ON s.company_id = c.company_id
-      WHERE c.id = $1
-        AND (c.brand_baseline_from IS NULL OR s.day >= c.brand_baseline_from - 1)
-      ORDER BY s.platform_id, s.day, (s.followers IS NULL), s.captured_at, s.id`,
-    [campaignId],
-  );
+export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string, campaign?: CampaignDetail): Promise<BrandFollowersResult | null> {
+  const c = campaign ?? (await getCampaign(tx, campaignId));
+  if (!c) return null;
+  const accounts = brandAccountsOf(c.brandAccounts);
+  const windows = { baselineFrom: c.brandBaselineFrom, startsOn: c.startsOn, endsOn: c.endsOn };
+  const { rows } =
+    accounts.length === 0
+      ? { rows: [] as RawBrandRow[] }
+      : await tx.query<RawBrandRow>(
+          `SELECT DISTINCT ON (s.platform_id, s.day)
+                  s.platform_id, s.handle, ${DATE('s.day')} AS day, s.followers::text AS followers, s.source,
+                  ${TS('s.captured_at')} AS captured_at
+             FROM campaign c
+             JOIN brand_account_snapshot s ON s.company_id = c.company_id
+             JOIN unnest($2::text[], $3::text[]) AS b(platform_id, handle)
+               ON b.platform_id = s.platform_id AND lower(ltrim(s.handle, '@')) = lower(b.handle)
+            WHERE c.id = $1
+              AND (c.brand_baseline_from IS NULL OR s.day >= c.brand_baseline_from - 1)
+            ORDER BY s.platform_id, s.day, (s.followers IS NULL), s.captured_at, s.id`,
+          [campaignId, accounts.map((a) => a.platform_id), accounts.map((a) => a.handle)],
+        );
   const byPlatform = new Map<string, BrandSnapshotRow[]>();
   for (const r of rows) {
     const row: BrandSnapshotRow = { day: r.day, followers: intOrNull(r.followers), source: r.source, handle: r.handle, capturedAt: r.captured_at };
@@ -967,6 +977,20 @@ export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string): P
   };
 }
 
+/**
+ * Las redes de la campaña que ya tienen una lectura CON cifra ese día.
+ * «Actualizar ahora» no llama a la fuente para esas: la fila no entraría
+ * (ON CONFLICT DO NOTHING) y la llamada gastaría cuota de la casa.
+ */
+export async function brandPlatformsReadOn(tx: WorkspaceTx, campaignId: string, day: string): Promise<string[]> {
+  const { rows } = await tx.query<{ platform_id: string }>(
+    `SELECT DISTINCT platform_id FROM brand_account_snapshot
+      WHERE campaign_id = $1 AND day = $2::date AND followers IS NOT NULL ORDER BY 1`,
+    [campaignId, day],
+  );
+  return rows.map((r) => r.platform_id);
+}
+
 /** Lo mínimo para escribir un snapshot: un WorkspaceTx en la web, ctx.db en el worker. */
 export interface BrandSnapshotWriter {
   query(text: string, params?: readonly unknown[]): Promise<{ rows: unknown[] }>;
@@ -987,41 +1011,28 @@ export interface BrandSnapshotInput {
   source: string;
 }
 
-export interface BrandSnapshotOptions {
-  /**
-   * keep (por defecto): ON CONFLICT DO NOTHING, la primera fila del día
-   * queda. Es lo único que puede hacer mc_app (sin UPDATE, 0034).
-   * fill_missing: el worker (mc_worker) reemplaza una fila SIN cifra del
-   * mismo día por una lectura con cifra; nunca al revés, nunca una
-   * lectura por otra.
-   */
-  onConflict?: 'keep' | 'fill_missing';
-}
-
 export type BrandSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
-
-const INSERT_BRAND_SNAPSHOT = `
-  INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, external_account_id, handle, day, followers, media_count, source)
-  VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9)`;
 
 /**
  * Snapshot del día de la marca de una campaña: el MISMO INSERT desde el
- * job brand.snapshot y desde «Actualizar ahora» en la ficha. Único por
- * (campaign_id, platform_id, day) (0034): dos lecturas el mismo día no
- * duplican la fila ni la corrigen. El id bigserial no sale de aquí
- * (CIM-2 §3). Desde la web, RLS exige que la campaña se vea y que
- * company_id sea el suyo; el worker filtra por workspace antes de llamar.
+ * job brand.snapshot y desde «Actualizar ahora» en la ficha, y nada más
+ * que INSERT (la tabla es de métricas). Único por (campaign_id,
+ * platform_id, day, followers IS NOT NULL) (0035): el día admite una
+ * fila sin cifra y una con cifra, y una segunda lectura del mismo tipo
+ * no duplica ni corrige (ON CONFLICT DO NOTHING). Así, una marca «no
+ * encontrada» a las 07:00 cuyo handle se corrige a mediodía tiene su
+ * cifra ese mismo día, sin borrar la lectura de la mañana. El id
+ * bigserial no sale de aquí (CIM-2 §3). Desde la web, RLS exige que la
+ * campaña se vea y que company_id sea el suyo; el worker filtra por
+ * workspace antes de llamar.
  */
-export async function recordBrandSnapshot(db: BrandSnapshotWriter, input: BrandSnapshotInput, opts: BrandSnapshotOptions = {}): Promise<BrandSnapshotOutcome> {
-  const params = [input.campaignId, input.companyId, input.platformId, input.externalAccountId, input.handle, input.day, input.followers, input.mediaCount, input.source];
-  const tail =
-    opts.onConflict === 'fill_missing'
-      ? `ON CONFLICT (campaign_id, platform_id, day) WHERE campaign_id IS NOT NULL DO UPDATE
-           SET followers = EXCLUDED.followers, media_count = EXCLUDED.media_count, source = EXCLUDED.source,
-               handle = EXCLUDED.handle, external_account_id = EXCLUDED.external_account_id, captured_at = now()
-         WHERE brand_account_snapshot.followers IS NULL AND EXCLUDED.followers IS NOT NULL
-         RETURNING 1`
-      : 'ON CONFLICT DO NOTHING RETURNING 1';
-  const { rows } = await db.query(`${INSERT_BRAND_SNAPSHOT} ${tail}`, params);
+export async function recordBrandSnapshot(db: BrandSnapshotWriter, input: BrandSnapshotInput): Promise<BrandSnapshotOutcome> {
+  const { rows } = await db.query(
+    `INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, external_account_id, handle, day, followers, media_count, source)
+     VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9)
+     ON CONFLICT DO NOTHING
+     RETURNING 1`,
+    [input.campaignId, input.companyId, input.platformId, input.externalAccountId, input.handle, input.day, input.followers, input.mediaCount, input.source],
+  );
   return rows.length > 0 ? 'guardada' : 'ya_hay_lectura_de_hoy';
 }

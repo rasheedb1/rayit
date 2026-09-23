@@ -609,7 +609,7 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'chocar con una exige conocerla, y conocerla ya es tenerla',
   'brand_account_snapshot.brand_account_snapshot_catalog_day_idx':
     'parcial sobre las filas SIN campaña (campaign_id IS NULL), que mc_app no escribe: su política de INSERT ' +
-    '(0034, brand_account_snapshot_write) exige campaign_id, y esas filas son las del seed de demostración (0029, ' +
+    '(0035, brand_account_snapshot_write) exige campaign_id, y esas filas son las del seed de demostración (0029, ' +
     'TO CURRENT_USER). Las que sí escribe van bajo brand_account_snapshot_campaign_day_idx, por campaña (CAM-3)',
 };
 
@@ -694,7 +694,7 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     permite: ['SELECT', 'INSERT'],
     motivo:
       'métrica append-only: la mide el worker (brand.snapshot) y la web la AÑADE con «Actualizar ahora» en la ficha de ' +
-      'campaña (CAM-3, 0034): ON CONFLICT DO NOTHING, bajo una campaña visible y de su empresa. Nadie la corrige ni la borra',
+      'campaña (CAM-3, 0035): ON CONFLICT DO NOTHING, bajo una campaña visible y de su empresa. Nadie la corrige ni la borra',
   },
 
   // Métricas PROPIAS (0025 §5): las mide y las escribe el worker, como

@@ -15,13 +15,9 @@ import {
   type FetchLike, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  brandAccountsOf, BRAND_SNAPSHOT_STATUSES, getCampaign, recordBrandSnapshot, type BrandNoDataReason, type BrandSnapshotInput,
-  type BrandSnapshotOutcome, type WorkspaceTx,
+  brandAccountsOf, brandNoDataReasonFor, BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, brandPlatformsReadOn, BRAND_SNAPSHOT_STATUSES, getCampaign,
+  recordBrandSnapshot, type BrandNoDataReason, type BrandSnapshotInput, type BrandSnapshotOutcome, type WorkspaceTx,
 } from "@mc/db";
-import { isPlatformId as esRedConNombre, PLATFORM_LABEL } from "@/components/ui/platform-pill";
-import { MESSAGES } from "./messages";
-
-const t = MESSAGES.seguidores;
 
 export interface MarcaDeps {
   env: Readonly<Record<string, string | undefined>>;
@@ -32,23 +28,41 @@ export interface MarcaDeps {
   sources?: (core: HttpCore) => PublicProfileSources;
 }
 
+/**
+ * Lo que no dejó fila, por red. Son códigos y no frases: la acción los
+ * pasa por la URL y la página los traduce con messages.ts, así que nadie
+ * puede escribir un aviso a mano en un enlace, y el nombre de una
+ * variable del servidor no llega a la pantalla.
+ *   sin_credencial  la fuente de esa red no está configurada (not_configured)
+ *   transitorio     la plataforma no respondió; se puede volver a intentar
+ *   sin_fuente      la red no tiene fuente pública en esta versión (Facebook)
+ */
+export const AVISO_CODES = ["sin_credencial", "transitorio", "sin_fuente"] as const;
+export type AvisoCode = (typeof AVISO_CODES)[number];
+export interface AvisoMarca {
+  code: AvisoCode;
+  platformId: string;
+}
+
+export const ERROR_CODES = ["no_existe", "sin_cuentas", "cerrada", "sin_permiso_base", "lectura"] as const;
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
 export type ActualizarMarcaResult =
   | {
       ok: true;
-      /** guardada: al menos una fila nueva hoy. ya_hoy: ya había lectura de hoy en todas. */
+      /** guardada: al menos una fila nueva hoy. ya_hoy: todas las redes ya tenían su lectura de hoy. */
       resultado: "guardada" | "ya_hoy";
       /**
-       * Lo que no dejó fila (fuente sin configurar, fallo transitorio, red
-       * sin fuente), en español. Una cuenta que no existe o no se puede leer
+       * Lo que no dejó fila. Una cuenta que no existe o no se puede leer
        * sí deja su fila con la razón, y la sección la explica sola.
        */
-      avisos: string[];
+      avisos: AvisoMarca[];
     }
-  | { ok: false; code: "no_existe" | "sin_cuentas" | "cerrada" | "sin_permiso_base" | "lectura"; message: string };
+  | { ok: false; code: ErrorCode; avisos: AvisoMarca[] };
 
 type Fila = Omit<BrandSnapshotInput, "campaignId" | "companyId" | "day">;
 
-/** Postgres rechazó el INSERT por privilegio (42501): la base aún no tiene 0034. */
+/** Postgres rechazó el INSERT por privilegio (42501): la base aún no tiene 0035. */
 function esSinPrivilegio(err: unknown): boolean {
   for (let e: unknown = err; e && typeof e === "object"; e = (e as { cause?: unknown }).cause) {
     if ((e as { code?: unknown }).code === "42501") return true;
@@ -61,29 +75,36 @@ export function createMarcaService(deps: MarcaDeps) {
 
   return {
     async actualizar(campaignId: string): Promise<ActualizarMarcaResult> {
-      const campaign = await deps.withWorkspace((tx) => getCampaign(tx, campaignId));
-      if (!campaign) return { ok: false, code: "no_existe", message: t.errores.no_existe };
-      if (!BRAND_SNAPSHOT_STATUSES.includes(campaign.status)) return { ok: false, code: "cerrada", message: t.errores.cerrada };
+      const day = now().toISOString().slice(0, 10);
+      const leida = await deps.withWorkspace(async (tx) => {
+        const campaign = await getCampaign(tx, campaignId);
+        return campaign ? { campaign, yaLeidas: await brandPlatformsReadOn(tx, campaignId, day) } : null;
+      });
+      if (!leida) return { ok: false, code: "no_existe", avisos: [] };
+      const { campaign, yaLeidas } = leida;
+      if (!BRAND_SNAPSHOT_STATUSES.includes(campaign.status)) return { ok: false, code: "cerrada", avisos: [] };
       const cuentas = brandAccountsOf(campaign.brandAccounts);
-      if (cuentas.length === 0) return { ok: false, code: "sin_cuentas", message: t.errores.sin_cuentas };
+      if (cuentas.length === 0) return { ok: false, code: "sin_cuentas", avisos: [] };
 
+      // Cuota en memoria, por petición, como «Actualizar» de Conexiones (cuentas-service.ts).
       const callLog = new InMemoryCallLogSink();
       const core = new HttpCore({ callLog, fetch: deps.fetch, now, quota: new QuotaManager({ now }) });
       const sources = deps.sources ? deps.sources(core) : createPublicProfileSources(core, deps.env);
-      const day = now().toISOString().slice(0, 10);
 
       const filas: Fila[] = [];
-      const avisos: string[] = [];
+      const avisos: AvisoMarca[] = [];
+      let yaHoy = 0;
       for (const c of cuentas) {
-        const red = esRedConNombre(c.platform_id) ? PLATFORM_LABEL[c.platform_id] : c.platform_id;
         const sinCifra = (source: BrandNoDataReason): Fila => ({ platformId: c.platform_id, handle: c.handle, externalAccountId: null, followers: null, mediaCount: null, source });
-        if (c.platform_id === "tiktok") {
+        // Ya hay cifra de hoy: la fila no entraría (ON CONFLICT DO NOTHING) y la llamada gastaría cuota de la casa.
+        if (yaLeidas.includes(c.platform_id)) { yaHoy++; continue; }
+        if (BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE.includes(c.platform_id)) {
           filas.push(sinCifra("no_public_source"));
           continue;
         }
         const source = isPlatformId(c.platform_id) ? sources[c.platform_id] : undefined;
         if (!source) {
-          avisos.push(t.sinFuente(red));
+          avisos.push({ code: "sin_fuente", platformId: c.platform_id });
           continue;
         }
         try {
@@ -94,14 +115,9 @@ export function createMarcaService(deps: MarcaDeps) {
           });
         } catch (err) {
           if (!(err instanceof PublicLookupError)) throw err;
-          if (err.code === "not_found" || err.code === "invalid_handle") {
-            filas.push(sinCifra("not_found"));
-          } else if (err.code === "not_discoverable") {
-            filas.push(sinCifra("not_discoverable"));
-          } else {
-            // not_configured o transitorio: sin fila; la frase de la fuente dice qué pasó.
-            avisos.push(err.messageEs);
-          }
+          const reason = brandNoDataReasonFor(err.code);
+          if (reason) filas.push(sinCifra(reason));
+          else avisos.push({ code: err.code === "not_configured" ? "sin_credencial" : "transitorio", platformId: c.platform_id });
         }
       }
 
@@ -115,13 +131,13 @@ export function createMarcaService(deps: MarcaDeps) {
           return out;
         });
       } catch (err) {
-        if (esSinPrivilegio(err)) return { ok: false, code: "sin_permiso_base", message: t.errores.sin_permiso_base };
+        if (esSinPrivilegio(err)) return { ok: false, code: "sin_permiso_base", avisos };
         throw err;
       }
 
       if (resultados.includes("guardada")) return { ok: true, resultado: "guardada", avisos };
-      if (resultados.length > 0) return { ok: true, resultado: "ya_hoy", avisos };
-      return { ok: false, code: "lectura", message: avisos[0] ?? t.errores.generico };
+      if (resultados.length > 0 || yaHoy > 0) return { ok: true, resultado: "ya_hoy", avisos };
+      return { ok: false, code: "lectura", avisos };
     },
   };
 }

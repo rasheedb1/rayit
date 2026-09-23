@@ -19,6 +19,7 @@ import {
   QuoteNotFoundError,
   createCampaignFromQuote,
   brandAccountsOf,
+  brandPlatformsReadOn,
   listBrandFollowers,
   recordBrandSnapshot,
   type WorkspaceTx,
@@ -634,19 +635,36 @@ describe('seguidores de la marca (CAM-3)', () => {
     );
   });
 
-  test('el worker reemplaza una fila SIN cifra por una lectura (fill_missing), y nunca al revés', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('requiere membresía en mc_worker');
+  test('solo INSERT: un día admite una fila sin cifra y una con cifra; la ficha prefiere la que trae cifra', async () => {
     const day = '2026-09-24';
-    const sinCifra = { campaignId: CAMPAIGN_PRUEBA, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day, handle: 'cafealma', externalAccountId: null, followers: null, mediaCount: null, source: 'not_found' };
+    const sinCifra = { campaignId: CAMPAIGN_CAFE_ALMA_2, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day, handle: 'cafealma', externalAccountId: null, followers: null, mediaCount: null, source: 'not_found' };
+    // 07:00: el job no la encontró. Mediodía: se corrige el handle y «Actualizar ahora» sí la lee.
     assert.equal(await laura((tx) => recordBrandSnapshot(tx, sinCifra)), 'guardada');
-    const worker = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.asWorker((tx) => fn(tx as unknown as WorkspaceTx));
-    assert.equal(await worker((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20600, source: 'instagram.business_discovery' }, { onConflict: 'fill_missing' })), 'guardada');
-    assert.equal(await worker((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20700, source: 'instagram.business_discovery' }, { onConflict: 'fill_missing' })), 'ya_hay_lectura_de_hoy');
-    assert.equal(await worker((tx) => recordBrandSnapshot(tx, sinCifra, { onConflict: 'fill_missing' })), 'ya_hay_lectura_de_hoy');
+    assert.deepEqual(await laura((tx) => brandPlatformsReadOn(tx, CAMPAIGN_CAFE_ALMA_2, day)), [], 'sin cifra hoy: todavía se puede leer');
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20600, source: 'instagram.business_discovery' })), 'guardada');
+    assert.deepEqual(await laura((tx) => brandPlatformsReadOn(tx, CAMPAIGN_CAFE_ALMA_2, day)), ['instagram']);
+    // Otra de cada tipo el mismo día: nada entra, nada cambia.
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, { ...sinCifra, followers: 20700, source: 'instagram.business_discovery' })), 'ya_hay_lectura_de_hoy');
+    assert.equal(await laura((tx) => recordBrandSnapshot(tx, sinCifra)), 'ya_hay_lectura_de_hoy');
     const { rows } = await laura((tx) => tx.query<{ followers: string | null; source: string }>(
-      'SELECT followers::text AS followers, source FROM brand_account_snapshot WHERE campaign_id = $1 AND day = $2::date', [CAMPAIGN_PRUEBA, day],
+      'SELECT followers::text AS followers, source FROM brand_account_snapshot WHERE campaign_id = $1 AND day = $2::date ORDER BY followers NULLS FIRST', [CAMPAIGN_CAFE_ALMA_2, day],
     ));
-    assert.deepEqual(rows, [{ followers: '20600', source: 'instagram.business_discovery' }]);
+    assert.deepEqual(rows, [{ followers: null, source: 'not_found' }, { followers: '20600', source: 'instagram.business_discovery' }], 'las dos lecturas quedan: la tabla no se corrige');
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2));
+    const a = r!.accounts[0]!;
+    assert.deepEqual([a.latest?.day, a.latest?.followers, a.latest?.source], [day, 20600, 'instagram.business_discovery']);
+  });
+
+  test('la serie es la de la cuenta de la campaña: otra cuenta de la misma empresa en la misma red no se mezcla', async () => {
+    await laura((tx) => recordBrandSnapshot(tx, {
+      campaignId: CAMPAIGN_CAFE_ALMA_2, companyId: COMPANY_CAFE_ALMA, platformId: 'instagram', day: '2026-08-30', handle: 'cafealma_outlet', externalAccountId: null, followers: 999, mediaCount: null, source: 'instagram.business_discovery',
+    }));
+    const r = await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2));
+    const a = r!.accounts[0]!;
+    assert.ok(!a.series.some((p) => p.followers === 999), 'la lectura de @cafealma_outlet se coló en la curva de @cafealma');
+    // Y la campaña ya cargada evita releer la ficha: el resultado es el mismo.
+    const detalle = await laura((tx) => getCampaign(tx, CAMPAIGN_CAFE_ALMA_2));
+    assert.deepEqual(await laura((tx) => listBrandFollowers(tx, CAMPAIGN_CAFE_ALMA_2, detalle!)), r);
   });
 
   test('brandAccountsOf: solo redes del producto, sin @, sin repetir red, entradas malformadas fuera', () => {

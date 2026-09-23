@@ -6,11 +6,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
+import type { ResultadoMarca } from "../_lib/aviso-marca";
 import { vistaCuenta } from "../_lib/seguidores";
 
 const t = MESSAGES.seguidores;
-
-export type ResultadoMarca = "guardada" | "ya_hoy";
 
 /**
  * La sección «Seguidores de la marca» de la ficha (CAM-3): una curva por
@@ -25,14 +24,15 @@ export function SeguidoresMarca({
   f,
   actualizar,
   resultado,
-  aviso,
+  avisos,
 }: {
   data: BrandFollowersResult;
   status: CampaignStatus;
   f: Formatter;
   actualizar: () => Promise<void>;
   resultado: ResultadoMarca | null;
-  aviso: string | null;
+  /** Frases ya traducidas desde los códigos de la URL (aviso-marca.ts). */
+  avisos: string[];
 }) {
   const w = { baselineFrom: data.baselineFrom, startsOn: data.startsOn, endsOn: data.endsOn };
   const midiendo = BRAND_SNAPSHOT_STATUSES.includes(status);
@@ -43,10 +43,14 @@ export function SeguidoresMarca({
 
   return (
     <div className="space-y-4">
-      {(resultado || aviso) && (
+      {(resultado || avisos.length > 0) && (
         <div role="status" className="space-y-1 text-sm">
           {resultado && <p className="text-fg-2">{t.resultado[resultado]}</p>}
-          {aviso && <p className="text-warn">{aviso}</p>}
+          {avisos.map((m) => (
+            <p key={m} className="text-warn">
+              {m}
+            </p>
+          ))}
         </div>
       )}
       {data.accounts.map((a) => {
