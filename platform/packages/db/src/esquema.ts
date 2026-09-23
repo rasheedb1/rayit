@@ -853,25 +853,33 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   }
 
   const tiene = new Set(aplicadas ?? []);
+  const pendientes = aplicadas === null ? [] : enElRepo.filter((f) => !tiene.has(f));
+  // Contra una base a medio migrar, «esa declaración sobra porque el
+  // objeto no existe» no quiere decir nada: lo crea una migración
+  // pendiente. Medido contra Supabase antes de aplicar 0024: la guardia
+  // pedía borrar la declaración de api_call_log_insert, que es la que
+  // 0024 crea. Con pendientes, las listas de obsoletas se callan; lo que
+  // sí se dice son las pendientes.
+  const siAlDia = (xs: string[]) => (pendientes.length ? [] : xs);
   return {
     aplicadas: aplicadas === null ? -1 : aplicadas.length,
     ultima: aplicadas && aplicadas.length ? (aplicadas[aplicadas.length - 1] ?? null) : null,
-    pendientes: aplicadas === null ? [] : enElRepo.filter((f) => !tiene.has(f)),
+    pendientes,
     sinRls: sinAislar.map((t) => t.tabla),
     sinAislar,
     aisladas,
-    excepcionesObsoletas,
+    excepcionesObsoletas: siAlDia(excepcionesObsoletas),
     excepcionesSinPrivilegios,
     politicasAbiertas,
-    politicasAbiertasObsoletas,
+    politicasAbiertasObsoletas: siAlDia(politicasAbiertasObsoletas),
     vistasSinInvocador,
-    vistasDeclaradasObsoletas,
+    vistasDeclaradasObsoletas: siAlDia(vistasDeclaradasObsoletas),
     relacionesSinRls,
-    relacionesSinRlsObsoletas,
+    relacionesSinRlsObsoletas: siAlDia(relacionesSinRlsObsoletas),
     funcionesDefiner,
-    funcionesDefinerObsoletas,
+    funcionesDefinerObsoletas: siAlDia(funcionesDefinerObsoletas),
     referenciasSinComprobar,
-    referenciasDeclaradasObsoletas,
+    referenciasDeclaradasObsoletas: siAlDia(referenciasDeclaradasObsoletas),
     privilegiosDeMas,
     rolesDeMas,
     comparadoConArchivos: enElRepo.length > 0 && aplicadas !== null,
