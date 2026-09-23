@@ -15,6 +15,7 @@ import {
 } from "@mc/db";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE, firstErrors, type ActionState } from "@/lib/forms";
+import { requirePermission } from "@/lib/permisos";
 
 /** Códigos como LAURA15: letras, dígitos, guion y guion bajo. */
 const TRACKING_CODE_RE = /^[A-Za-z0-9_-]+$/;
@@ -50,6 +51,7 @@ const asociarSchema = z.object({
 
 /** Formulario «Asociar» (por post): valida, asocia y deja la ficha revalidada. */
 export async function asociarPost(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("campanas.post.asociar");
   const parsed = asociarSchema.safeParse({
     campaignId: String(formData.get("campaignId") ?? ""),
     postId: String(formData.get("postId") ?? ""),
@@ -71,6 +73,7 @@ export async function asociarPost(_prev: ActionState, formData: FormData): Promi
 
 /** Botón «Quitar» de la tabla de posts. Se usa con bind(null, campaignId, postId). */
 export async function quitarPost(campaignId: string, postId: string): Promise<void> {
+  await requirePermission("campanas.post.asociar");
   if (!UUID_RE.test(campaignId)) redirect("/campanas");
   let error: string | null = null;
   if (!UUID_RE.test(postId)) error = "El post no es válido.";
@@ -88,6 +91,7 @@ export async function quitarPost(campaignId: string, postId: string): Promise<vo
 
 /** Botón «Marcar principal». Se usa con bind(null, campaignId, postId). */
 export async function marcarPrincipal(campaignId: string, postId: string): Promise<void> {
+  await requirePermission("campanas.post.asociar");
   if (!UUID_RE.test(campaignId)) redirect("/campanas");
   let error: string | null = null;
   if (!UUID_RE.test(postId)) error = "El post no es válido.";
@@ -104,6 +108,7 @@ export async function marcarPrincipal(campaignId: string, postId: string): Promi
 
 /** Pestaña «Buscar»: posts del workspace no asociados, por título o caption. */
 export async function buscarPosts(campaignId: string, q: string): Promise<LinkablePost[]> {
+  await requirePermission("campanas.post.asociar");
   // Es una acción pública: los argumentos no vienen validados por nadie.
   if (typeof campaignId !== "string" || !UUID_RE.test(campaignId)) return [];
   const term = typeof q === "string" ? q.slice(0, 80) : "";
@@ -151,6 +156,7 @@ function optional(formData: FormData, key: string): string | undefined {
  * limpia el valor (salvo el nombre, que es obligatorio).
  */
 export async function editarCampana(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("campanas.campana.editar");
   const parsed = editarSchema.safeParse({
     campaignId: String(formData.get("campaignId") ?? ""),
     name: optional(formData, "name"),
@@ -190,6 +196,7 @@ export async function editarCampana(_prev: ActionState, formData: FormData): Pro
  * bind(null, campaignId, to); la máquina de estados de core decide.
  */
 export async function cambiarEstadoCampana(campaignId: string, to: CampaignStatus): Promise<void> {
+  await requirePermission("campanas.campana.editar");
   if (!UUID_RE.test(campaignId)) redirect("/campanas");
   let error: string | null = null;
   if (!isCampaignStatus(to)) error = "Ese estado no existe.";

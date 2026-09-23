@@ -588,8 +588,8 @@ export const STORIES: readonly Story[] = [
     title: "Catálogo de permisos y can()",
     desc: "packages/core/src/permisos.ts: los permisos con la forma <módulo>.<recurso>.<acción>, los cinco roles de fábrica del creador y los cinco de agencia, y can(). Puro, sin base de datos y sin pantalla. Desde aquí, ninguna Server Action pregunta por el rol.",
     done: "Cada Server Action nueva abre con su requirePermission(); una prueba comprueba que el rol «Mánager» no trae finanzas.flujo.ver.",
-    status: "pendiente",
-    note: "Va en el sprint 3 a propósito: fija los nombres antes de que Campañas y Finanzas tengan sus Server Actions escritas. Después cuesta diez veces más.",
+    status: "hecho",
+    note: "Hecha el 23-sep (rama nicolas/ACC-1-catalogo-permisos). 43 permisos en siete módulos con etiqueta y sensibilidad, diez roles de fábrica con su matriz literal, can(), permisosDeRol(), la intersección «nadie otorga lo que no tiene» y la regla del último dueño; pnpm --filter @mc/core permisos:sql imprime la semilla que ACC-3 pega en su migración (snapshot probado en PGlite). requirePermission() vive en apps/web/lib/permisos/ (no en lib/auth/, que es de Rasheed) y hoy resuelve toda sesión como Dueño (TODO(ACC-3) en sesion.ts); las doce Server Actions de Campañas, Finanzas y Conexiones ya abren con él y una prueba estática falla si una nueva no lo hace. Las de Resumen, Ventas y Cotizar tienen su permiso asignado en docs/propuestas/ACC-1.md §4 para cuando Rasheed las adapte. Tres lecturas conservadoras pendientes de Nicolás en la propuesta §0.2.",
   },
   {
     id: "ACC-2", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-2"],
