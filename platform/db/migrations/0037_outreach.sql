@@ -26,7 +26,7 @@
 --   2 · Cuentas de canal (outreach_channel_account)
 --   3 · Secuencia, pasos y enrolamiento
 --   4 · La cola: outbound_touch extendida
---   5 · Mensajes por hilo y revisiones de calidad
+--   5 · Mensajes por hilo, revisiones de calidad y llamadas al modelo
 --   6 · Límites: política, contadores y disyuntores
 --   7 · Aislamiento de las tablas nuevas, referencias y privilegios
 --   8 · Funciones del motor (límites, apagado, salud, días hábiles)
