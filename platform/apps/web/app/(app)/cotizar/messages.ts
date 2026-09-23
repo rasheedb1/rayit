@@ -45,7 +45,7 @@ export const MESSAGES = {
     eyebrow: "Cotizar",
     title: "Cuánto cobrar, con los números que lo sostienen",
     description:
-      "El rango sale de tus views medianas por red y del CPM de referencia de tu nicho. No es un precio: es dónde empieza y dónde termina la conversación con la marca.",
+      "El rango sale de tus visualizaciones medianas por red y del CPM de referencia de tu nicho. No es un precio: es dónde empieza y dónde termina la conversación con la marca.",
     guardar: "Guardar tarifario",
     guardado: "Guardado",
     recalcular: "Volver a la fórmula",
@@ -54,7 +54,7 @@ export const MESSAGES = {
     tabla: "Entregables del tarifario, con su rango sugerido",
     columnas: {
       entregable: "Entregable",
-      views: "Views por pieza",
+      views: "Visualizaciones por pieza",
       cpm: "CPM de referencia",
       rango: "Rango sugerido",
       estado: "Origen",
@@ -68,14 +68,14 @@ export const MESSAGES = {
     sugerido: "Sugerido",
     cpmPropio: "CPM propio",
     cpmReferencia: (low: string, high: string) => `Referencia del nicho: ${low} – ${high}`,
-    viewsManuales: "Views a mano",
+    viewsManuales: "Visualizaciones a mano",
     viewsBaseline: "Mediana propia",
     viewsPocoFiables: "Mediana con poca muestra",
     /** Placeholder del campo de views vacío. Recibe la cifra ya formateada. */
     viewsEjemplo: (views: string) => `p. ej. ${views}`,
     /** Lo que falta en una fila que todavía no tiene rango. */
     motivos: {
-      sin_views: "Escribe las views de una pieza para ver el rango.",
+      sin_views: "Escribe las visualizaciones de una pieza para ver el rango.",
       views_poco_fiables: (muestra: string, mediana: string) =>
         `Tu mediana sale de solo ${muestra} videos (${mediana}). Confírmala o escribe la tuya.`,
       sin_cpm: (red: string, pais: string) => `No hay CPM de referencia para ${red} en ${pais}. Escribe el tuyo.`,
@@ -94,7 +94,7 @@ export const MESSAGES = {
     vacio: {
       title: "Todavía no hay con qué calcular",
       description:
-        "El tarifario necesita dos cosas: tus views medianas por red (salen solas cuando hay métricas) y el CPM de referencia de tu nicho y tu país.",
+        "El tarifario necesita dos cosas: tus visualizaciones medianas por red (salen solas cuando hay métricas) y el CPM de referencia de tu nicho y tu país.",
       accion: "Ver conexiones",
     },
     sinTarifario: {
@@ -436,6 +436,11 @@ export const MESSAGES = {
     aceptadaEnlace: (numero: string, firma: string | null) =>
       firma ? `Cotización ${numero} aceptada por ${firma} desde el enlace` : `Cotización ${numero} aceptada desde el enlace`,
     firma: (nombre: string, correo: string | null) => (correo ? `${nombre} <${correo}>` : nombre),
+    /** Los montos llegan ya formateados; son sin impuesto, como el pipeline. */
+    monto: (numero: string, antes: string | null, ahora: string) =>
+      antes
+        ? `El monto del negocio pasó de ${antes} a ${ahora}, sin impuesto, como en la cotización ${numero}`
+        : `El monto del negocio quedó en ${ahora}, sin impuesto, como en la cotización ${numero}`,
     avisoTitulo: (marca: string, numero: string) => `${marca} aceptó la cotización ${numero}`,
     avisoConCampana: (firma: string | null, campana: string) =>
       `${firma ? `Aceptada por ${firma}. ` : ""}La campaña «${campana}» ya está planeada.`,
@@ -456,7 +461,7 @@ export const MESSAGES = {
 
   /** Las métricas que se pueden acordar. El valor es lo que se guarda. */
   metricas: {
-    views: "Views",
+    views: "Visualizaciones",
     reach: "Alcance",
     interactions: "Interacciones",
     saves: "Guardados",
@@ -470,12 +475,12 @@ export const MESSAGES = {
       title: "Media kit",
       redes: "Redes",
       seguidores: "Seguidores",
-      viewsMedianas: "Views medianas",
+      viewsMedianas: "Visualizaciones medianas",
       /** La cifra grande de la cabecera: la mediana de la red que más rinde, con su red al lado. */
-      viewsMedianasMejorRed: "Views medianas · mejor red",
+      viewsMedianasMejorRed: "Visualizaciones medianas · mejor red",
       /** Nombre accesible de la cabecera de cifras. */
       cifras: "Cifras principales",
-      engagement: "Interacción por view",
+      engagement: "Interacción por visualización",
       topPosts: "Lo que mejor funciona",
       audiencia: "Audiencia",
       audienciaDe: (dimension: string, red: string) => `${dimension} · ${red}`,
@@ -567,13 +572,13 @@ export const MESSAGES = {
   explicacion: {
     views: (views: string, muestra?: string, corte?: string) =>
       muestra && corte
-        ? `Tus views medianas: ${views} (últimos ${muestra} videos, medidos a las ${corte})`
-        : `Tus views por pieza: ${views} (escritas a mano)`,
+        ? `Tus visualizaciones medianas: ${views} (últimos ${muestra} videos, medidos a las ${corte})`
+        : `Tus visualizaciones por pieza: ${views} (escritas a mano)`,
     viewsPocaMuestra: (muestra: string) => `Con solo ${muestra} videos la mediana todavía se mueve mucho: tómala como un punto de partida.`,
     cpm: (low: string, high: string, nicho: string, pais: string, fuente: string) =>
       `CPM de referencia de ${nicho} en ${pais}: ${low} – ${high} (${fuente})`,
     cpmPropio: (low: string, high: string) => `Tu CPM: ${low} – ${high} (lo escribiste tú)`,
-    base: (low: string, high: string) => `Views ÷ 1.000 × CPM = ${low} – ${high}`,
+    base: (low: string, high: string) => `Visualizaciones ÷ 1.000 × CPM = ${low} – ${high}`,
     cantidad: (cantidad: string, low: string, high: string) => `× ${cantidad} piezas = ${low} – ${high}`,
     modificador: (nombre: string, pct: string, low: string, high: string) => `${nombre} (${pct}): + ${low} – ${high}`,
     descuento: (pct: string, low: string, high: string) => `Descuento del paquete (${pct}): − ${low} – ${high}`,

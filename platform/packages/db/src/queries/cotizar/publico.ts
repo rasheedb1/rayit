@@ -92,6 +92,15 @@ export type PublicQuoteAcceptResult =
        */
       workspaceId: string;
       acceptedAt: string;
+      /**
+       * El monto del negocio pasó a ser el neto de la cotización (0031).
+       * Con el de antes, el servidor deja en la historia del negocio la
+       * actividad que lo cuenta (completePublicAcceptance). Tampoco viaja
+       * a la página pública.
+       */
+      dealAmountChanged?: boolean;
+      dealAmountFrom?: string | null;
+      dealCurrencyFrom?: string | null;
     };
 
 /**

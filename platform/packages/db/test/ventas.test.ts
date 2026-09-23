@@ -29,6 +29,7 @@ import {
   buildDedupeKey,
   countPendingSignals,
   createCompany,
+  createDeal,
   createContact,
   createSignal,
   discardSignal,
@@ -60,6 +61,11 @@ const CONTACT_CAMILA = '00000002-0000-4000-8000-0000000c0001';
 /** Señales pendientes del seed: la bandeja de hoy. */
 const SIGNAL_VITALE = '00000002-0000-4000-8000-00000005e007';
 const SIGNAL_FRESKO = '00000002-0000-4000-8000-00000005e008';
+const SIGNAL_NUTRIVE = '00000002-0000-4000-8000-00000005e010';
+/** Los dos negocios abiertos de Vitalé en el seed («2 Reels…» en propuesta y «Paquete snacks» en contactado). */
+const DEAL_VITALE_PROPUESTA = '00000002-0000-4000-8000-0000000dea08';
+const COMPANY_VITALE = '00000002-0000-4000-8000-0000000000e7';
+const COMPANY_OLLA = '00000002-0000-4000-8000-0000000000e8';
 /** El deal de Olla Fácil, en «nuevo». */
 const DEAL_OLLA = '00000002-0000-4000-8000-0000000dea01';
 
@@ -229,7 +235,7 @@ describe('VEN-1 · empresas', () => {
   test('un dominio ya vinculado se avisa en vez de duplicar la empresa', async () => {
     await assert.rejects(
       () => laura((tx) => createCompany(tx, { name: 'Cafe Alma otra vez', domain: 'cafealma.co' })),
-      (err: unknown) => err instanceof DuplicateDomain && /Café Alma/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof DuplicateDomain && err.params.name === 'Café Alma',
     );
   });
 
@@ -279,7 +285,7 @@ describe('VEN-1 · contactos', () => {
   test('un contacto exige procedencia', async () => {
     await assert.rejects(
       () => laura((tx) => createContact(tx, { companyId: COMPANY_CAFE_ALMA, fullName: 'Sin fuente', source: 'inventada' as never })),
-      (err: unknown) => err instanceof VentasError && /de dónde salió/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidSource',
     );
   });
 
@@ -310,7 +316,7 @@ describe('VEN-1 · contactos', () => {
   test('un contacto sin nombre, correo ni usuario no se guarda', async () => {
     await assert.rejects(
       () => laura((tx) => createContact(tx, { companyId: COMPANY_CAFE_ALMA, source: 'press' })),
-      (err: unknown) => err instanceof VentasError && /al menos nombre/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof VentasError && err.code === 'EmptyContact',
     );
   });
 
@@ -412,42 +418,32 @@ describe('VEN-2 · radar', () => {
     assert.equal(contadas, bandeja.length);
   });
 
-  test('aceptar una señal abre el negocio con «Enviar pitch» a tres días', async () => {
+  test('aceptar la señal de una marca con un negocio abierto la suma a ese negocio, sin abrir otro', async () => {
     const antes = await laura((tx) => getSalesKpis(tx));
-    const { dealId, companyId } = await laura((tx) => acceptSignal(tx, SIGNAL_VITALE));
+    const res = await laura((tx) => acceptSignal(tx, SIGNAL_VITALE));
 
-    const pipeline = await laura((tx) => listPipeline(tx));
-    const nuevo = pipeline.find((d) => d.id === dealId);
-    assert.ok(nuevo, 'el deal aparece en el pipeline');
-    assert.equal(nuevo.stageId, 'nuevo');
-    assert.equal(nuevo.nextAction, PITCH_ACTION);
-    assert.ok(nuevo.nextActionDue, 'con fecha');
-    const dias = Math.round((Date.parse(nuevo.nextActionDue) - Date.now()) / 86_400_000);
-    assert.ok(Math.abs(dias - PITCH_DUE_DAYS) <= 1, `la fecha cae a ~${PITCH_DUE_DAYS} días (fue ${dias})`);
-    assert.equal(nuevo.dueState, 'futuro');
+    // Vitalé ya tiene dos negocios abiertos: la señal no abre un tercero.
+    assert.equal(res.dealCreated, false);
+    assert.equal(res.companyCreated, false);
+    assert.equal(res.companyId, COMPANY_VITALE, 'la empresa ya existía (Vitalé): se reutiliza, no se duplica');
+    assert.equal(res.companyName, 'Vitalé');
+    assert.equal(res.dealId, DEAL_VITALE_PROPUESTA, 'el que va más adelante en el pipeline');
 
     // La señal queda revisada y sale de la bandeja.
     const bandeja = await laura((tx) => listSignals(tx, {}));
     assert.ok(!bandeja.some((s) => s.id === SIGNAL_VITALE));
 
-    // Historia y actividad, para que la ficha pueda contarlo.
-    const { historia, actividad } = await laura(async (tx) => ({
-      historia: (await tx.query<{ to_stage_id: string }>(
-        'SELECT to_stage_id FROM deal_stage_history WHERE deal_id = $1', [dealId],
+    // Y queda en la historia de ESE negocio, para que la ficha la cuente.
+    const actividad = await laura(async (tx) =>
+      (await tx.query<{ kind: string; metadata: Record<string, unknown> }>(
+        "SELECT kind, metadata FROM activity WHERE deal_id = $1 AND kind = 'signal_detected'", [DEAL_VITALE_PROPUESTA],
       )).rows,
-      actividad: (await tx.query<{ kind: string }>(
-        'SELECT kind FROM activity WHERE deal_id = $1', [dealId],
-      )).rows,
-    }));
-    assert.deepEqual(historia.map((h) => h.to_stage_id), ['nuevo']);
-    assert.deepEqual(actividad.map((a) => a.kind), ['signal_detected']);
-
-    // La empresa ya existía (Vitalé): se reutiliza, no se duplica.
-    assert.equal(companyId, '00000002-0000-4000-8000-0000000000e7');
+    );
+    assert.ok(actividad.some((a) => a.metadata.signal_id === SIGNAL_VITALE));
 
     const despues = await laura((tx) => getSalesKpis(tx));
     assert.equal(despues.pendingSignals, antes.pendingSignals - 1, 'una señal menos por revisar');
-    assert.equal(despues.openDeals, antes.openDeals + 1, 'un negocio abierto más');
+    assert.equal(despues.openDeals, antes.openDeals, 'ningún negocio abierto de más');
   });
 
   test('aceptar dos veces la misma señal no abre dos negocios', async () => {
@@ -471,7 +467,8 @@ describe('VEN-2 · radar', () => {
     const otraVez = await laura((tx) =>
       createSignal(tx, { companyId: COMPANY_FRESKO, headlineEs: original.headlineEs, sourceId: original.sourceId, domain: 'freskomarket.co' }),
     );
-    assert.equal(otraVez.duplicate, false, 'con otra clave sí entra (fuente distinta o referencia distinta)');
+    assert.equal(otraVez.duplicate, true, 'ni con otra clave: la marca está descartada');
+    assert.equal(otraVez.reason, 'discarded');
 
     const mismaClave = await laura((tx) =>
       tx.query(
@@ -491,7 +488,7 @@ describe('VEN-2 · radar', () => {
     assert.ok(alguna, 'queda alguna pendiente');
     await assert.rejects(
       () => laura((tx) => discardSignal(tx, alguna.id, '   ')),
-      (err: unknown) => err instanceof VentasError && /por qué/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidReason',
     );
   });
 
@@ -544,13 +541,90 @@ describe('VEN-2 · radar', () => {
     assert.equal(empresa?.relationship, 'prospect');
 
     const pipeline = await laura((tx) => listPipeline(tx));
-    assert.ok(pipeline.some((d) => d.id === dealId && d.companyName === 'Té Sereno'));
+    const nuevo = pipeline.find((d) => d.id === dealId);
+    assert.equal(nuevo?.companyName, 'Té Sereno');
+    assert.equal(nuevo?.stageId, 'nuevo');
+    assert.equal(nuevo?.nextAction, PITCH_ACTION);
+    assert.equal(nuevo?.dueState, 'futuro');
+  });
+
+  test('una marca descartada no vuelve a entrar por otra fuente, por una lista ni a mano con solo su nombre', async () => {
+    await laura((tx) => discardSignal(tx, SIGNAL_NUTRIVE, 'Ya trabaja con otra creadora.'));
+
+    // Por una lista, con su dominio.
+    const lista = await laura((tx) => importSignals(tx, [{ name: 'Nutrivé', domain: 'nutrive.co' }]));
+    assert.equal(lista.created, 0);
+    assert.equal(lista.duplicated, 1);
+
+    // A mano, solo con el nombre y escrito de otra forma.
+    for (const nombre of ['Nutrivé', 'NUTRIVE', ' nutrivé ']) {
+      const aMano = await laura((tx) => createSignal(tx, { companyName: nombre, headlineEs: 'La vi en una feria' }));
+      assert.equal(aMano.duplicate, true, `«${nombre}» es la misma marca`);
+      assert.equal(aMano.reason, 'discarded');
+    }
+
+    // Por otra fuente automática, con otra clave.
+    const otraFuente = await laura((tx) =>
+      createSignal(tx, { domain: 'https://www.nutrive.co/tienda', headlineEs: 'Pauta nueva en Meta', sourceId: 'meta_ad_library' }));
+    assert.equal(otraFuente.duplicate, true);
+
+    const bandeja = await laura((tx) => listSignals(tx, { limit: 200 }));
+    assert.ok(!bandeja.some((s) => s.companyName === 'Nutrivé'), 'la bandeja no la vuelve a enseñar');
+  });
+
+  test('una marca que ya está en la bandeja no entra dos veces, venga por donde venga', async () => {
+    const primera = await laura((tx) => createSignal(tx, { companyName: 'Panadería Trigal', headlineEs: 'Abrió sede en Chapinero' }));
+    assert.equal(primera.duplicate, false);
+    const conDominio = await laura((tx) =>
+      importSignals(tx, [{ name: 'Panaderia Trigal', domain: 'trigal.co' }, { name: 'Panadería Trigal' }]));
+    assert.equal(conDominio.created, 0, 'ni con dominio ni repetida en el mismo archivo');
+    const otra = await laura((tx) => createSignal(tx, { companyName: 'Trigal', headlineEs: 'Otra marca, otro nombre' }));
+    assert.equal(otra.duplicate, false, 'un nombre distinto es otra marca');
+  });
+
+  test('aceptar una señal con solo el nombre reutiliza la empresa del CRM y su negocio abierto', async () => {
+    const creada = await laura((tx) => createSignal(tx, { companyName: 'olla facil', headlineEs: 'Nueva colaboración pagada' }));
+    assert.ok(creada.id, 'Olla Fácil no tiene señales pendientes ni descartadas');
+    const res = await laura((tx) => acceptSignal(tx, creada.id!));
+    assert.equal(res.companyId, COMPANY_OLLA, 'la misma Olla Fácil, no una segunda sin dominio');
+    assert.equal(res.companyCreated, false);
+    assert.equal(res.dealCreated, false);
+    assert.equal(res.dealId, DEAL_OLLA);
+
+    const ollas = await laura(async (tx) =>
+      (await tx.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM company_link cl JOIN company co ON co.id = cl.company_id WHERE brand_key(co.name) = 'ollafacil'",
+      )).rows[0]?.n,
+    );
+    assert.equal(ollas, '1');
+  });
+
+  test('una marca del CRM sin dominio y sin negocios abre su negocio al aceptar, con «Enviar pitch» a las 15:00 locales', async () => {
+    const companyId = await laura((tx) => createCompany(tx, { name: 'Mielera Andina' }));
+    const creada = await laura((tx) => createSignal(tx, { companyName: 'MIELERA ANDINA', headlineEs: 'Lanzó miel con cacao' }));
+    assert.ok(creada.id);
+    const res = await laura((tx) => acceptSignal(tx, creada.id!, { nextAction: 'Mandar propuesta' }));
+    assert.equal(res.companyId, companyId);
+    assert.equal(res.dealCreated, true);
+
+    const fila = await laura(async (tx) =>
+      (await tx.query<{ next_action: string; stage_id: string; hora: number; dias: number }>(
+        `SELECT next_action, stage_id,
+                extract(hour FROM next_action_due AT TIME ZONE 'America/Bogota')::int AS hora,
+                ((next_action_due AT TIME ZONE 'America/Bogota')::date - (now() AT TIME ZONE 'America/Bogota')::date)::int AS dias
+           FROM deal WHERE id = $1`, [res.dealId],
+      )).rows[0],
+    );
+    assert.equal(fila?.stage_id, 'nuevo');
+    assert.equal(fila?.next_action, 'Mandar propuesta', 'la frase la pone la pantalla');
+    assert.equal(fila?.hora, 15, 'a las 15:00 en Bogotá, no a las 15:00 UTC');
+    assert.equal(fila?.dias, PITCH_DUE_DAYS);
   });
 
   test('una señal sin marca no se puede guardar', async () => {
     await assert.rejects(
       () => laura((tx) => createSignal(tx, { headlineEs: 'Algo pasó' })),
-      (err: unknown) => err instanceof VentasError && /de qué marca/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidCompany',
     );
   });
 });
@@ -675,8 +749,61 @@ describe('VEN-3 · pipeline', () => {
   test('una etapa inventada se rechaza', async () => {
     await assert.rejects(
       () => laura((tx) => moveDeal(tx, DEAL_OLLA, 'etapa-que-no-existe')),
-      (err: unknown) => err instanceof VentasError && /etapa no existe/.test((err as VentasError).messageEs),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidStage',
     );
+  });
+
+  test('una etapa privada del workspace (id uuid al azar, 0026 §2) se puede usar; la del vecino no', async () => {
+    await t.admin(`
+      INSERT INTO pipeline_stage (workspace_id, label_es, position, default_probability)
+      VALUES ('${WORKSPACE_LAURA}', 'Piloto pagado', 45, 0.6);
+    `);
+    const privada = (await laura((tx) => listStages(tx))).find((e) => e.labelEs === 'Piloto pagado');
+    assert.ok(privada, 'el tablero la recibe con las demás');
+    assert.match(privada.id, /^[0-9a-f-]{36}$/);
+
+    const res = await laura((tx) => moveDeal(tx, DEAL_OLLA, privada.id));
+    assert.equal(res.moved, true);
+    assert.equal(res.toStageId, privada.id);
+
+    await assert.rejects(
+      () => ajeno((tx) => moveDeal(tx, '00000009-0000-4000-8000-0000000dea01', privada.id)),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidStage',
+      'la etapa de Laura no existe para el vecino',
+    );
+    await laura((tx) => moveDeal(tx, DEAL_OLLA, 'propuesta'));
+  });
+
+  test('abrir un negocio a mano desde la ficha de una empresa de mi CRM', async () => {
+    const id = await laura((tx) => createDeal(tx, { companyId: COMPANY_GRANOS, name: 'Receta de temporada', amount: '2500000' }));
+    const fila = (await laura((tx) => listPipeline(tx))).find((d) => d.id === id);
+    assert.equal(fila?.stageId, 'nuevo');
+    assert.equal(fila?.amount, '2500000.00');
+    assert.equal(fila?.currency, 'COP');
+    assert.equal(fila?.nextAction, PITCH_ACTION);
+
+    await assert.rejects(() => laura((tx) => createDeal(tx, { companyId: COMPANY_AJENA, name: 'x' })), CompanyNotFound);
+    await assert.rejects(
+      () => laura((tx) => createDeal(tx, { companyId: COMPANY_GRANOS, name: '   ' })),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidDealName',
+    );
+  });
+
+  test('«Ganado este trimestre» corta el trimestre en la zona del workspace, no en UTC', async () => {
+    // Dos negocios ganados alrededor del inicio del trimestre EN BOGOTÁ
+    // (UTC−5): uno dos horas antes —aún es el trimestre pasado aunque en
+    // UTC ya sea el nuevo— y otro dos horas después.
+    const antes = await laura((tx) => getSalesKpis(tx));
+    await t.admin(`
+      WITH q AS (SELECT date_trunc('quarter', now() AT TIME ZONE 'America/Bogota') AT TIME ZONE 'America/Bogota' AS inicio)
+      INSERT INTO deal (workspace_id, company_id, name, stage_id, amount, currency, won_at)
+      SELECT '${WORKSPACE_LAURA}', '${COMPANY_GRANOS}', v.nombre, 'ganado', v.monto, 'COP', q.inicio + v.desfase
+        FROM q, (VALUES ('Antes del trimestre', 1000000.00, interval '-2 hours'),
+                        ('Dentro del trimestre', 2000000.00, interval '2 hours')) AS v(nombre, monto, desfase);
+    `);
+    const despues = await laura((tx) => getSalesKpis(tx));
+    assert.equal(despues.wonQuarterCount, antes.wonQuarterCount + 1);
+    assert.equal(Number(despues.wonQuarter) - Number(antes.wonQuarter), 2_000_000);
   });
 
   test('los KPI salen en la moneda del workspace y como texto decimal', async () => {

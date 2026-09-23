@@ -5,6 +5,7 @@
  */
 import { validarRangoPrecio, type Decimal } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import type { MoveDealResult } from '../ventas.ts';
 import type { QuoteDetail, TextosCotizar } from './cotizacion.ts';
 import { MediaKitNotFound, RangoDeTarifaInvalido } from './errores.ts';
 
@@ -33,9 +34,9 @@ export async function assertMediaKitDelCreador(tx: WorkspaceTx, mediaKitId: stri
 export async function registrarActividad(
   tx: WorkspaceTx,
   dealId: string,
-  kind: 'proposal_sent' | 'stage_change',
+  kind: 'proposal_sent' | 'stage_change' | 'note',
   subject: string,
-  metadata: { kind: 'quote_sent' | 'quote_accepted' } & Record<string, unknown>,
+  metadata: { kind: 'quote_sent' | 'quote_accepted' | 'deal_amount_from_quote' } & Record<string, unknown>,
 ): Promise<void> {
   await tx.query(
     `INSERT INTO activity (workspace_id, company_id, deal_id, kind, subject, occurred_at, metadata)
@@ -56,6 +57,29 @@ export async function registrarAceptacion(tx: WorkspaceTx, quote: QuoteDetail, v
   };
   await registrarActividad(tx, quote.dealId, 'stage_change', textos.actividadAceptada(params), {
     kind: 'quote_accepted',
+    quoteId: quote.id,
+    ...params,
+  });
+}
+
+/** La actividad «el monto del negocio pasó a ser el de la cotización», solo si cambió. */
+export async function registrarCambioDeMonto(
+  tx: WorkspaceTx,
+  dealId: string,
+  quote: Pick<QuoteDetail, 'id' | 'number'>,
+  cambio: Pick<MoveDealResult, 'amountChanged' | 'amountFrom' | 'currencyFrom' | 'amountTo' | 'currencyTo'>,
+  textos: TextosCotizar,
+): Promise<void> {
+  if (!cambio.amountChanged || cambio.amountTo === null) return;
+  const params = {
+    quoteNumber: quote.number,
+    amountFrom: cambio.amountFrom,
+    currencyFrom: cambio.currencyFrom,
+    amountTo: cambio.amountTo,
+    currencyTo: cambio.currencyTo,
+  };
+  await registrarActividad(tx, dealId, 'note', textos.actividadMonto(params), {
+    kind: 'deal_amount_from_quote',
     quoteId: quote.id,
     ...params,
   });

@@ -8,7 +8,7 @@ import type { WorkspaceTx } from '../../client.ts';
 import { createCampaignFromQuote } from '../campanas.ts';
 import { acceptQuote, getQuote, type QuoteDetail, type TextosCotizar } from './cotizacion.ts';
 import { CotizarError, QuoteNotFound } from './errores.ts';
-import { registrarAceptacion } from './interno.ts';
+import { registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
 
 // ---------------------------------------------------------------------
 // COT-4 · El cruce con Campañas
@@ -122,13 +122,37 @@ export async function acceptQuoteAndCreateCampaign(
  * campaña de CAM-2. Todo en la misma transacción; si la campaña no se
  * puede crear, el aviso lo dice y el detalle ofrece terminarla.
  */
-export async function completePublicAcceptance(tx: WorkspaceTx, quoteId: string, textos: TextosCotizar): Promise<ResultadoCampana> {
+export async function completePublicAcceptance(
+  tx: WorkspaceTx,
+  quoteId: string,
+  textos: TextosCotizar,
+  cambioMonto: { amountFrom: string | null; currencyFrom: string | null } | null = null,
+): Promise<ResultadoCampana> {
   const quote = await getQuote(tx, quoteId);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'accepted') {
     throw new CotizarError('QuoteNotAccepted', `Solo una cotización aceptada crea campaña; esta está en «${quote.status}».`);
   }
   await registrarAceptacion(tx, quote, 'enlace', textos);
+  // El monto lo cambió public_quote_accept (0031) en la otra
+  // transacción, que no puede escribir actividades: aquí se cuenta, con
+  // el monto de antes que devolvió y el que quedó en el negocio.
+  if (cambioMonto && quote.dealId) {
+    const { rows } = await tx.query<{ amount: string | null; currency: string }>(
+      'SELECT amount::text AS amount, currency::text AS currency FROM deal WHERE id = $1',
+      [quote.dealId],
+    );
+    const ahora = rows[0];
+    if (ahora) {
+      await registrarCambioDeMonto(tx, quote.dealId, quote, {
+        amountChanged: true,
+        amountFrom: cambioMonto.amountFrom,
+        currencyFrom: cambioMonto.currencyFrom ?? ahora.currency,
+        amountTo: ahora.amount,
+        currencyTo: ahora.currency,
+      }, textos);
+    }
+  }
   const campana = await intentarCampana(tx, quoteId);
   const aviso = textos.avisoAceptada({
     companyName: quote.companyName,

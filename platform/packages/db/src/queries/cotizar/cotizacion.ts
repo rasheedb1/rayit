@@ -11,7 +11,8 @@ import {
 import { isUuid, type WorkspaceTx } from '../../client.ts';
 import { nuevoSlug } from './enlace.ts';
 import { CotizarError, QuoteNotDraft, QuoteNotEditable, QuoteNotFound, QuoteTransitionError, ValidezVencida } from './errores.ts';
-import { assertMediaKitDelCreador, registrarActividad, registrarAceptacion } from './interno.ts';
+import { assertMediaKitDelCreador, registrarActividad, registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
+import { DealNotFound, moveDeal, type MoveDealResult } from '../ventas.ts';
 import { getCurrentRateCard } from './tarifario.ts';
 import type { PublicQuoteView } from './publico.ts';
 
@@ -754,6 +755,18 @@ export interface TextosCotizar {
     signerEmail: string | null;
     via: 'panel' | 'enlace';
   }): string;
+  /**
+   * Asunto de la actividad del negocio cuando su monto pasa a ser el de
+   * la cotización (al enviarla o al aceptarla). Los montos llegan como
+   * string decimal, sin impuesto; la web los formatea.
+   */
+  actividadMonto(p: {
+    quoteNumber: string;
+    amountFrom: string | null;
+    currencyFrom: string;
+    amountTo: string;
+    currencyTo: string;
+  }): string;
   /** El aviso al creador cuando la marca acepta desde el enlace. */
   avisoAceptada(p: {
     companyName: string;
@@ -773,8 +786,10 @@ export interface TextosCotizar {
  * no se envía: nacería vencida y la marca abriría un enlace que no
  * acepta. Se corrige la fecha en el borrador y se envía.
  *
- * Efecto en Ventas: el deal pasa a «Propuesta enviada» con su fila de
- * historial y su actividad, como lo haría el CRM a mano.
+ * Efecto en Ventas: el deal pasa a «Propuesta enviada» (si no estaba
+ * ya más adelante) por la misma transición que el tablero —moveDeal,
+ * deal_move_stage de 0031— y su monto pasa a ser el neto de la
+ * cotización, con la actividad que lo cuenta.
  */
 export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuoteForUpdate(tx, id);
@@ -808,48 +823,60 @@ async function moverDealAPropuesta(
   quote: Pick<QuoteDetail, 'id' | 'number'>,
   textos: TextosCotizar,
 ): Promise<void> {
-  const actividad = () =>
-    registrarActividad(tx, dealId, 'proposal_sent', textos.actividadEnviada({ quoteNumber: quote.number }), {
-      kind: 'quote_sent',
-      quoteId: quote.id,
-      quoteNumber: quote.number,
-    });
-
-  const { rows } = await tx.query<{ stage_id: string; is_won: boolean; is_lost: boolean; position: number }>(
-    `SELECT d.stage_id, s.is_won, s.is_lost, s.position
-       FROM deal d JOIN pipeline_stage s ON s.id = d.stage_id
-      WHERE d.id = $1`,
-    [dealId],
-  );
-  const deal = rows[0];
-  if (!deal) return;
   // Un deal ganado o perdido no retrocede a «Propuesta enviada», y uno
-  // que ya está más adelante (negociación) tampoco.
-  const { rows: propuesta } = await tx.query<{ position: number }>(
-    "SELECT position FROM pipeline_stage WHERE id = 'propuesta'",
-  );
-  const posPropuesta = propuesta[0]?.position ?? 4;
-  if (deal.is_won || deal.is_lost || deal.position >= posPropuesta) {
-    await actividad();
-    return;
+  // que ya está más adelante (negociación) tampoco: forwardOnly. El
+  // monto sí se actualiza mientras el negocio esté abierto.
+  const mov = await moverConMontoDeCotizacion(tx, dealId, quote.id, 'propuesta', true);
+  if (mov?.moved) {
+    await tx.query('UPDATE deal SET last_contact_at = now() WHERE id = $1', [dealId]);
   }
+  await registrarActividad(tx, dealId, 'proposal_sent', textos.actividadEnviada({ quoteNumber: quote.number }), {
+    kind: 'quote_sent',
+    quoteId: quote.id,
+    quoteNumber: quote.number,
+  });
+  if (mov) await registrarCambioDeMonto(tx, dealId, quote, mov, textos);
+}
 
-  await tx.query(
-    `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_at, days_in_stage)
-     SELECT $1, $2, 'propuesta', now(),
-            CASE WHEN max(changed_at) IS NULL THEN NULL
-                 ELSE round((extract(epoch FROM (now() - max(changed_at))) / 86400)::numeric, 2) END
-       FROM deal_stage_history WHERE deal_id = $1`,
-    [dealId, deal.stage_id],
+/**
+ * Mueve el negocio de la cotización con la transición única de Ventas
+ * (moveDeal → deal_move_stage de 0031) y le pone el monto NETO de la
+ * cotización: total − impuesto, es decir, el subtotal menos el
+ * descuento. Sin impuesto, como el resto del pipeline. La resta la hace
+ * Postgres sobre numeric, no JavaScript.
+ *
+ * Devuelve null si el negocio ya no se ve (borrado o de otro workspace).
+ */
+async function moverConMontoDeCotizacion(
+  tx: WorkspaceTx,
+  dealId: string,
+  quoteId: string,
+  etapa: 'propuesta' | 'ganado',
+  forwardOnly: boolean,
+): Promise<MoveDealResult | null> {
+  const { rows } = await tx.query<{ neto: string; currency: string }>(
+    'SELECT (total - tax)::numeric(14,2)::text AS neto, currency::text AS currency FROM quote WHERE id = $1',
+    [quoteId],
   );
-  await tx.query("UPDATE deal SET stage_id = 'propuesta', last_contact_at = now() WHERE id = $1", [dealId]);
-  await actividad();
+  const q = rows[0];
+  try {
+    return await moveDeal(tx, dealId, etapa, {
+      forwardOnly,
+      amount: q?.neto ?? null,
+      currency: q?.currency ?? null,
+      logActivity: false,
+    });
+  } catch (err) {
+    if (err instanceof DealNotFound) return null;
+    throw err;
+  }
 }
 
 /**
  * Aceptar desde el panel (la marca dijo que sí por otro canal). Hace lo
- * mismo que la función pública `public_quote_accept` de 0030: deja la
- * cotización en 'accepted' y el deal en «Ganado» con su historial.
+ * mismo que la función pública `public_quote_accept` (0030, reescrita
+ * en 0031): deja la cotización en 'accepted' y el deal en «Ganado» por
+ * la transición única, con el monto neto de la cotización.
  */
 export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuoteForUpdate(tx, id);
@@ -858,8 +885,9 @@ export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCot
 
   await transicionar(tx, id, ['sent', 'viewed'], 'accepted', 'accepted_at = coalesce(accepted_at, now())');
   if (quote.dealId) {
-    await ganarDeal(tx, quote.dealId);
+    const mov = await moverConMontoDeCotizacion(tx, quote.dealId, quote.id, 'ganado', false);
     await registrarAceptacion(tx, quote, 'panel', textos);
+    if (mov) await registrarCambioDeMonto(tx, quote.dealId, quote, mov, textos);
   }
 
   const actualizada = await getQuote(tx, id);
@@ -881,22 +909,4 @@ export async function rejectQuote(tx: WorkspaceTx, id: string): Promise<QuoteDet
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
   return actualizada;
-}
-
-async function ganarDeal(tx: WorkspaceTx, dealId: string): Promise<void> {
-  const { rows } = await tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [dealId]);
-  const deal = rows[0];
-  if (!deal || deal.stage_id === 'ganado') return;
-  await tx.query(
-    `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_at, days_in_stage)
-     SELECT $1, $2, 'ganado', now(),
-            CASE WHEN max(changed_at) IS NULL THEN NULL
-                 ELSE round((extract(epoch FROM (now() - max(changed_at))) / 86400)::numeric, 2) END
-       FROM deal_stage_history WHERE deal_id = $1`,
-    [dealId, deal.stage_id],
-  );
-  await tx.query(
-    "UPDATE deal SET stage_id = 'ganado', probability = NULL, won_at = coalesce(won_at, now()), lost_at = NULL WHERE id = $1",
-    [dealId],
-  );
 }

@@ -26,7 +26,8 @@ import {
   MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { DealLocked, createDeal, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
+import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
 const FIRMA = { name: 'Ana Gómez', email: 'ana@cafealma.co' };
@@ -39,6 +40,7 @@ const FIRMA = { name: 'Ana Gómez', email: 'ana@cafealma.co' };
 const TEXTOS: TextosCotizar = {
   actividadEnviada: ({ quoteNumber }) => `[enviada] ${quoteNumber}`,
   actividadAceptada: ({ quoteNumber, signerName, via }) => `[aceptada:${via}] ${quoteNumber}${signerName ? ` ${signerName}` : ''}`,
+  actividadMonto: ({ quoteNumber, amountFrom, amountTo, currencyTo }) => `[monto] ${quoteNumber} ${amountFrom ?? '-'} → ${amountTo} ${currencyTo}`,
   avisoAceptada: ({ companyName, quoteNumber, signerName, campaignName }) => ({
     title: `[aviso] ${companyName} ${quoteNumber}`,
     body: `${signerName ?? '-'} · ${campaignName ?? 'pendiente'}`,
@@ -420,6 +422,15 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     });
     assert.equal(etapa, 'propuesta');
 
+    // Y el monto del negocio pasa a ser el neto de la cotización:
+    // subtotal 7,1 M − descuento 0,6 M = 6,5 M, sin el IVA (0031).
+    const montoEnviado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ amount: string; currency: string }>(
+        'SELECT amount::text AS amount, currency::text AS currency FROM deal WHERE id = $1', [deal.id]);
+      return rows[0]!;
+    });
+    assert.deepEqual(montoEnviado, { amount: '6500000.00', currency: 'COP' });
+
     // La marca abre el enlace, sin sesión: pasa a «vista».
     const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, creada.slug));
     assert.equal(publica.status, 'ok');
@@ -453,6 +464,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     });
     assert.equal(dealGanado.stage_id, 'ganado');
     assert.ok(dealGanado.won_at, 'queda la fecha en que se ganó');
+    assert.equal(aceptada.status === 'ok' && aceptada.dealAmountChanged, false, 'el monto ya era el de la cotización');
 
     const historial = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ to_stage_id: string }>(
@@ -574,6 +586,11 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
       return rows[0]!.stage_id;
     });
     assert.equal(etapa, 'ganado');
+    const monto = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ amount: string }>('SELECT amount::text AS amount FROM deal WHERE id = $1', [deal.id]);
+      return rows[0]!.amount;
+    });
+    assert.equal(monto, '3000000.00', 'ganado con el neto de la cotización, no con el monto que traía');
   });
 
   test('sin fechas, aceptar desde el panel acepta igual y deja la campaña pendiente con su motivo', async () => {
@@ -1196,5 +1213,115 @@ describe('lo que el precio del tarifario ya incluye (derechos, exclusividad)', (
       assert.equal(reel.usageRightsDays, null);
       await deleteQuoteDraft(tx, c.id);
     });
+  });
+});
+
+// ------------------------------------ 0031 · el negocio de la cotización
+
+describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', () => {
+  test('enviar fija el neto en el negocio y su ponderado; aceptar desde el enlace lo vuelve a dejar en el neto', async () => {
+    // Un negocio abierto a mano en 9,0 M, como el de Vitalé del hallazgo.
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Paquete 0031', amount: '9000000' }));
+    const creada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0.19',
+        items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok dedicado', quantity: 1, unitPrice: '5000000' }],
+        campaignStartsOn: '2026-12-01', campaignEndsOn: '2026-12-15',
+      }));
+    assert.equal(creada.total, '5950000.00');
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, creada.id, TEXTOS));
+    const leer = () => t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ stage_id: string; amount: string; weighted: string; esperado: string }>(
+        `SELECT p.stage_id, p.amount::text AS amount, p.weighted_amount::text AS weighted,
+                round(p.amount * st.default_probability, 6)::text AS esperado
+           FROM deal_pipeline p JOIN pipeline_stage st ON st.id = p.stage_id
+          WHERE p.id = $1`, [dealId]);
+      return rows[0]!;
+    });
+    const enviado = await leer();
+    assert.equal(enviado.stage_id, 'propuesta');
+    assert.equal(enviado.amount, '5000000.00', 'sin impuesto, como el resto del pipeline');
+    assert.equal(Number(enviado.weighted), Number(enviado.esperado), 'el ponderado usa la probabilidad de «Propuesta enviada»');
+
+    // La historia del negocio cuenta el cambio, con los montos en metadata.
+    const actividadMonto = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ subject: string; metadata: Record<string, unknown> }>(
+        "SELECT subject, metadata FROM activity WHERE deal_id = $1 AND metadata->>'kind' = 'deal_amount_from_quote'", [dealId]);
+      return rows;
+    });
+    assert.equal(actividadMonto.length, 1);
+    assert.equal(actividadMonto[0]!.subject, `[monto] ${creada.number} 9000000.00 → 5000000.00 COP`);
+
+    // Alguien lo cambia a mano antes de que la marca acepte…
+    await t.admin(`UPDATE deal SET amount = 7000000 WHERE id = '${dealId}'`);
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getSalesKpis(tx));
+
+    // …y la marca acepta desde el enlace: la base lo deja en el neto.
+    const aceptada = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
+    assert.equal(aceptada.status, 'ok');
+    if (aceptada.status !== 'ok') return;
+    assert.equal(aceptada.dealAmountChanged, true);
+    assert.equal(aceptada.dealAmountFrom, '7000000.00');
+    const ganado = await leer();
+    assert.equal(ganado.stage_id, 'ganado');
+    assert.equal(ganado.amount, '5000000.00');
+
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getSalesKpis(tx));
+    assert.equal(Number(despues.wonQuarter) - Number(antes.wonQuarter), 5_000_000, '«Ganado este trimestre» suma lo cotizado');
+
+    // El servidor termina la aceptación y cuenta el cambio de monto.
+    const terminada = await t.db.withWorkspace(aceptada.workspaceId, (tx) =>
+      completePublicAcceptance(tx, creada.id, TEXTOS, { amountFrom: aceptada.dealAmountFrom ?? null, currencyFrom: aceptada.dealCurrencyFrom ?? null }));
+    assert.ok(terminada.campaign?.created, 'con ventana acordada, la campaña queda planeada');
+    const montos = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ subject: string }>(
+        "SELECT subject FROM activity WHERE deal_id = $1 AND metadata->>'kind' = 'deal_amount_from_quote' ORDER BY occurred_at", [dealId]);
+      return rows.map((r) => r.subject);
+    });
+    assert.deepEqual(montos, [
+      `[monto] ${creada.number} 9000000.00 → 5000000.00 COP`,
+      `[monto] ${creada.number} 7000000.00 → 5000000.00 COP`,
+    ]);
+
+    // La transición es la de Ventas: historial con días y sin huecos.
+    const historia = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ from_stage_id: string | null; to_stage_id: string; days_in_stage: string | null }>(
+        'SELECT from_stage_id, to_stage_id, days_in_stage::text AS days_in_stage FROM deal_stage_history WHERE deal_id = $1 ORDER BY id', [dealId]);
+      return rows;
+    });
+    assert.deepEqual(historia.map((h) => [h.from_stage_id, h.to_stage_id]), [[null, 'nuevo'], ['nuevo', 'propuesta'], ['propuesta', 'ganado']]);
+    assert.ok(historia.slice(1).every((h) => h.days_in_stage !== null), 'cada salida anota sus días en la etapa');
+
+    // Con la cotización firmada y la campaña planeada, el negocio no
+    // vuelve a «Contactado» desde el tablero: los tres módulos dirían
+    // cosas distintas.
+    await assert.rejects(
+      () => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => moveDeal(tx, dealId, 'contactado')),
+      (err: unknown) => err instanceof DealLocked && err.params.reason === 'campaign',
+    );
+    const sigue = await leer();
+    assert.equal(sigue.stage_id, 'ganado');
+  });
+
+  test('enviar una cotización sobre un negocio ganado no le cambia el monto ni la etapa', async () => {
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const id = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Ganado antes', amount: '4000000' });
+      await moveDeal(tx, id, 'ganado');
+      return id;
+    });
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const q = await createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0',
+        items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel extra', quantity: 1, unitPrice: '1000000' }],
+      });
+      await sendQuote(tx, q.id, TEXTOS);
+    });
+    const fila = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ stage_id: string; amount: string }>('SELECT stage_id, amount::text AS amount FROM deal WHERE id = $1', [dealId]);
+      return rows[0]!;
+    });
+    assert.deepEqual(fila, { stage_id: 'ganado', amount: '4000000.00' });
   });
 });
