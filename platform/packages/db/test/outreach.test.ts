@@ -127,6 +127,8 @@ const TOKEN_SOLA = 'z9Yx8Wv7Ut6Sr5Qp4On3Ml2Kj1Ih0Gf9';
 const TOKEN_YO_B = 'yo-b-1234567890-abcdefghijklmnopq';
 const TOKEN_BORRADA = 'borrada-0987654321-zyxwvutsrqponm';
 const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
+/** Los tokens con enlace de los workspaces A y B (los de C se reconocen por su dirección). */
+const TOKENS_DE_ESTE_ARCHIVO = [TOKEN, TOKEN_SOLA, TOKEN_YO_B, TOKEN_BORRADA];
 
 let t: TestDb;
 
@@ -218,8 +220,11 @@ after(async () => {
     await t.admin(`
       DELETE FROM workspace WHERE id IN ('${WS_A}', '${WS_B}', '${WS_C}');
       DELETE FROM company WHERE id IN ('${COMPANY}', '${COMPANY_B}', '${COMPANY_C}');
-      DELETE FROM outbound_optout_link WHERE workspace_id IS NULL AND recipient_address::text LIKE '%@c.outreach.test';
-      DELETE FROM outbound_optout_event WHERE workspace_id IS NULL AND recipient_address::text LIKE '%@c.outreach.test';
+      -- Los enlaces y los clics no se van con el workspace (SET NULL, a propósito): se borran por su token.
+      DELETE FROM outbound_optout_link WHERE token_hash = ANY ('{${TOKENS_DE_ESTE_ARCHIVO.map(sha256).join(',')}}')
+         OR recipient_address::text LIKE '%@c.outreach.test';
+      DELETE FROM outbound_optout_event WHERE token_hash = ANY ('{${TOKENS_DE_ESTE_ARCHIVO.map(sha256).join(',')}}')
+         OR recipient_address::text LIKE '%@c.outreach.test';
       DELETE FROM contact_suppression WHERE email IN
         ('marta@cafe.test', 'sola@cafe.test', 'yo@outreach-b.test', 'borrada@cafe.test')
          OR email::text LIKE '%@c.outreach.test';
@@ -634,7 +639,9 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     const enlaces = await t.db
       .withWorkspace(WS_B, async (tx) => {
         await tx.query("SELECT set_config('app.public_optout', $1, true)", [sha256(TOKEN)]);
-        return (await tx.query('SELECT token_hash FROM outbound_optout_link')).rows.length;
+        // El de A (el de B, en el CI, lo ve su propio workspace).
+        return (await tx.query('SELECT token_hash FROM outbound_optout_link WHERE token_hash = $1', [sha256(TOKEN)])).rows
+          .length;
       })
       .catch((e: { message?: string }) => (/permission denied/.test(e.message ?? '') ? 0 : Promise.reject(e)));
     assert.equal(enlaces, 0);
