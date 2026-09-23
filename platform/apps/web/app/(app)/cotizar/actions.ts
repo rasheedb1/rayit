@@ -14,7 +14,9 @@ import { formatterFor } from "@/lib/format";
 import { DECIMAL_RE, firstErrors, formField, UUID_RE, type ActionState } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, nombreEntregable } from "./messages";
-import { construirFilas, construirPaquetes, modificadoresActivos, precioDe, type BasisTarifario } from "./_lib/tarifario";
+import {
+  construirFilas, construirPaquetes, modificadoresActivos, motivoCpmManual, precioDe, type BasisTarifario,
+} from "./_lib/tarifario";
 import { TEXTOS_COTIZAR } from "./_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -60,6 +62,12 @@ function mensajeDe(err: unknown): string {
  * saveRateCard, y el error vuelve por fila (clave `precio.<entregable>`).
  */
 const rangoSchema = z.object({ low: z.string().max(20), high: z.string().max(20) });
+/**
+ * El CPM propio: aquí solo su forma. Que el bajo no pase al alto lo
+ * decide motivoCpmManual, fuera del esquema, para devolver el error POR
+ * FILA (clave `cpm.<entregable>`): un refine aquí haría fallar el parse
+ * entero y la pantalla solo sabría decir «tarifario ilegible».
+ */
 const rangoCpmSchema = z.object({
   low: z.string().regex(DECIMAL_RE).or(z.literal("")),
   high: z.string().regex(DECIMAL_RE).or(z.literal("")),
@@ -110,6 +118,13 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
   for (const [id, precio] of Object.entries(basis.precios)) {
     const motivo = validarRangoPrecio(precio.low, precio.high);
     if (motivo) erroresRango[`precio.${id}`] = MESSAGES.tarifario.rangoErrores[motivo] ?? E.generico!;
+  }
+  // Un CPM propio al revés dejaba la fila sin rango: el entregable se
+  // omitía de los ítems EN SILENCIO (desaparecía del media kit y de las
+  // cotizaciones) y la pantalla decía «Guardado». Ahora no se guarda.
+  for (const [id, cpm] of Object.entries(basis.cpm)) {
+    const motivo = motivoCpmManual(cpm);
+    if (motivo) erroresRango[`cpm.${id}`] = MESSAGES.tarifario.motivos[motivo];
   }
   if (Object.keys(erroresRango).length > 0) {
     return { errors: erroresRango, message: MESSAGES.tarifario.rangoRevisar };

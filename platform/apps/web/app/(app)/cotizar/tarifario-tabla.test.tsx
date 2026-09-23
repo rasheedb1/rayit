@@ -197,6 +197,68 @@ describe("TarifarioTabla", () => {
     await waitFor(() => expect(rango("p1")).toBe("COP 6.278.800 – COP 9.737.200"));
   });
 
+  it("en el editor de paquetes el nombre de cada entregable se lee entero y marca su casilla", async () => {
+    pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
+    fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
+    const casilla = await screen.findByRole("checkbox", { name: "Reel de Instagram" });
+    expect(casilla).toBeChecked();
+
+    // El nombre es la ETIQUETA de la casilla, completo y sin recortar:
+    // antes salía «Reel de In…» porque la cantidad se comía la fila.
+    const nombre = screen.getByText("Reel de Instagram", { selector: "label" });
+    expect(nombre).toHaveAttribute("for", casilla.id);
+    expect(nombre.className).not.toMatch(/\btruncate\b/);
+    expect(nombre.className).toMatch(/\bflex-1\b/);
+    expect(nombre.className).toMatch(/\bmin-w-0\b/);
+    // La cantidad vive en una caja de ancho fijo que no crece.
+    const cantidad = screen.getByLabelText("Cantidad de Reel de Instagram en el paquete");
+    expect(cantidad.parentElement?.className).toMatch(/\bw-16\b/);
+    expect(cantidad.parentElement?.className).toMatch(/\bshrink-0\b/);
+
+    // Clic en el nombre: desmarca y vuelve a marcar.
+    fireEvent.click(nombre);
+    expect(casilla).not.toBeChecked();
+    expect(cantidad).toHaveValue("");
+    fireEvent.click(nombre);
+    expect(casilla).toBeChecked();
+    expect(cantidad).toHaveValue("1");
+  });
+
+  it("un CPM propio al revés se marca junto a sus campos y no deja guardar", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const bajo = screen.getByLabelText(/CPM bajo · TikTok dedicado/);
+    fireEvent.change(bajo, { target: { value: "90.000" } });
+    fireEvent.blur(bajo);
+
+    const aviso = await screen.findByText("El CPM bajo no puede ser mayor que el alto.");
+    expect(aviso).toHaveAttribute("role", "alert");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(/CPM alto · TikTok dedicado/)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("group", { name: "CPM de referencia · TikTok dedicado" })).toHaveAccessibleDescription(
+      "El CPM bajo no puede ser mayor que el alto.",
+    );
+    expect(screen.getByText("Corrige el CPM para ver el rango.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+
+    // Corregido, vuelve el rango y se puede guardar.
+    fireEvent.change(bajo, { target: { value: "50.000" } });
+    fireEvent.blur(bajo);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeEnabled());
+    expect(screen.queryByText("El CPM bajo no puede ser mayor que el alto.")).not.toBeInTheDocument();
+  });
+
+  it("un CPM propio al revés que ya venía guardado abre sus campos al cargar, no solo «Volver a la fórmula»", () => {
+    // Así quedaba Facebook tras guardar un CPM 30.000 – 20.000.
+    pintar({ ...BASIS_VACIO, viewsManuales: { facebook: 40_000 }, cpm: { facebook: { low: "30000", high: "20000" } } });
+    const bajo = screen.getByLabelText(/CPM bajo · Video en Facebook/);
+    expect(bajo).toHaveValue("30.000");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("El CPM bajo no puede ser mayor que el alto.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("las views se escriben sin separadores y se leen con ellos al salir del campo", async () => {
     pintar();
     const views = screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado");
