@@ -753,7 +753,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   post_impression_source: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_score: { permite: ['SELECT'], motivo: 'lo calcula el worker a partir de las métricas' },
   creator_baseline: { permite: ['SELECT'], motivo: 'lo calcula el worker a partir de las métricas' },
-  campaign_result: { permite: ['SELECT'], motivo: 'lo consolida el worker a partir de las métricas' },
+  campaign_result: {
+    permite: ['SELECT', 'INSERT', 'UPDATE'],
+    motivo:
+      'materializado, no métrica: lo reemplaza el worker (campaign.compute) y la web con «Recalcular» en la ficha ' +
+      '(CAM-5, 0041), con el mismo UPSERT. Las restrictivas de 0041 atan la fila a una campaña visible de su mismo ' +
+      'workspace. Sin DELETE: un resultado no se borra desde la web',
+  },
   job_run: { permite: ['SELECT'], motivo: 'bitácora de trabajos: la escribe el worker, la web solo la lee' },
   account_metric_snapshot: {
     permite: ['SELECT', 'INSERT'],

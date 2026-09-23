@@ -76,7 +76,9 @@ app/(app)/finanzas/recordatorios/  Solo actions.ts: «Marcar como enviado». NO 
                               archivo se llame actions.ts y lo mire convencion.test.ts.
 app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
                               (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
-                              qué falta y «Recalcular» si la base lo permite) y
+                              qué falta y «Recalcular»: aparece solo si la base deja
+                              escribir campaign_result —migración 0041— y el rol tiene
+                              campanas.resultado.calcular) y
                               «Lo que aportó la marca» (CAM-4): aporte.tsx
                               (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
                               de ventas diarias), _lib/messages.ts (los textos).
@@ -91,6 +93,10 @@ app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado
                               vista previa y la página pública: solo lee el payload
                               congelado. «Descargar PDF» es el diálogo de impresión
                               (@media print en globals.css), sin dependencia nueva.
+                              _lib/rutas.ts: las rutas de otros módulos que enlaza la
+                              ficha (la factura de Finanzas), en un solo sitio.
+                              ciclo-db.test.ts: el ciclo entero, de la cotización
+                              aceptada a la apertura pública del reporte, en una prueba.
 app/(public)/reporte/[slug]/  El reporte que abre la marca sin sesión (CAM-6), por
                               public_report() de la migración 0037: noindex, 404 real
                               para un borrador o un slug desconocido, y la primera

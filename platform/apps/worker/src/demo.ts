@@ -9,6 +9,11 @@
  * diferencia, para que post_metrics_daily_delta tenga un crecimiento
  * que enseñar) e imprime post, post_metric_snapshot y la vista.
  *
+ * Y termina con CON-6: tras cada recolección el runner encadena
+ * compute.baseline y compute.post_score (JobOptions.after), y el demo
+ * imprime su job_run.metadata, creator_baseline y post_score. Es el
+ * camino entero collect → compute, sin encolar nada a mano.
+ *
  * Con INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno va contra
  * las APIs de verdad. Sin ellas usa las respuestas GRABADAS
  * (packages/connectors/fixtures) y lo dice en el log: así el demo
@@ -104,9 +109,21 @@ export async function demoNetwork(env: Env): Promise<DemoNetwork> {
   return { grabado: true, env: { ...env, ...DEMO_FAKE_CREDENTIALS }, http: { fetch: fetch.fetch } };
 }
 
+/**
+ * El instante en que arranca el demo con respuestas grabadas: dos días
+ * antes de grabarlas. Con la hora real, que un video llegue a un corte
+ * dependería de a qué hora se corre el demo; con este instante la salida
+ * es siempre la misma. Las publicaciones de Instagram grabadas (20, 18 y
+ * 15 de septiembre) tienen 23, 73,5 y 148 horas en la primera lectura y
+ * 47, 97,5 y 172 en la segunda: la primera se puntúa a 24 h, la tercera a
+ * 168 h, y la segunda y las de YouTube (1 a 3 de septiembre) no tienen
+ * una lectura dentro de la banda de su corte, así que se quedan sin fila.
+ */
+export const DEMO_GRABADO_INICIO = new Date('2026-09-21T16:00:00Z');
+
 /** Reloj del demo: avanza un día entre las dos lecturas para que la vista de delta tenga dos días que comparar. */
-export function demoClock(): { now: () => Date; avanzaUnDia: () => void } {
-  let instante = new Date();
+export function demoClock(inicio: Date = new Date()): { now: () => Date; avanzaUnDia: () => void } {
+  let instante = inicio;
   return {
     now: () => instante,
     avanzaUnDia: () => { instante = new Date(instante.getTime() + 86_400_000); },
@@ -210,14 +227,90 @@ export async function runDemoPosts(opts: {
       ORDER BY p.platform_id, p.external_post_id, d.day LIMIT 12`,
   );
   logger.info('demo CON-5: post_metrics_daily_delta', { rows: delta.rows });
+
+  await runDemoCompute({ db, logger, workspaceId: seed.workspaceId });
+}
+
+/**
+ * CON-6 en la misma demo: compute.baseline y compute.post_score NO se
+ * encolan aquí. Los encola el runner solo, tras cada collect.post_metrics
+ * que trae datos (JobOptions.after). El demo espera a que la cadena
+ * termine después de la última recolección e imprime job_run.metadata,
+ * creator_baseline y post_score.
+ */
+export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger; workspaceId: string }): Promise<void> {
+  const { db, logger, workspaceId } = opts;
+  // La cadena terminó cuando hay un compute.* después de la última
+  // recolección, nada corriendo y ninguna fila nueva en job_run durante
+  // tres segundos. Mirar solo «un post_score después de la última
+  // recolección» no basta: uno encadenado desde la primera ronda puede
+  // empezar después, y una línea base que no escribe nada no encadena
+  // post_score (no hay qué recalcular).
+  const QUIETO_MS = 3_000;
+  const hasta = Date.now() + 60_000;
+  let visto = '';
+  let quietoDesde = Date.now();
+  let terminada = false;
+  for (;;) {
+    const ultimos = await db.query<{ ultimo: string | null; collect: string | null; compute: string | null; corriendo: number }>(
+      `SELECT max(id)::text AS ultimo,
+              max(id) FILTER (WHERE job_id = 'collect.post_metrics')::text AS collect,
+              max(id) FILTER (WHERE job_id LIKE 'compute.%')::text AS compute,
+              count(*) FILTER (WHERE status = 'running')::int AS corriendo
+         FROM job_run WHERE job_id IN ('collect.post_metrics', 'compute.baseline', 'compute.post_score')`,
+    );
+    const u = ultimos.rows[0];
+    const huella = `${u?.ultimo ?? ''}/${u?.corriendo ?? 0}`;
+    if (huella !== visto) {
+      visto = huella;
+      quietoDesde = Date.now();
+    }
+    const id = (v: string | null | undefined) => BigInt(v ?? '0');
+    terminada = u !== undefined && u.corriendo === 0 && id(u.compute) > id(u.collect) && Date.now() - quietoDesde >= QUIETO_MS;
+    if (terminada || Date.now() > hasta) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
+  const { rows: cadena } = await db.query<Record<string, unknown>>(
+    `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
+       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY id`,
+  );
+  logger.info('demo CON-6: job_run de compute.* (encadenados tras collect.post_metrics: metadata.tras)', { rows: cadena });
+
+  const bases = await db.query(
+    `SELECT platform_id, age_hours_cut, sample_size, median_views::text AS median_views, is_reliable,
+            to_char(computed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS computed_at
+       FROM creator_baseline WHERE workspace_id = $1
+      ORDER BY computed_at DESC, platform_id, age_hours_cut LIMIT 12`,
+    [workspaceId],
+  );
+  logger.info('demo CON-6: creator_baseline (con menos de ocho videos, is_reliable = false)', { rows: bases.rows });
+
+  const puntajes = await db.query(
+    `SELECT p.platform_id, p.external_post_id, s.age_hours_cut, s.views_at_cut::text AS views_at_cut,
+            s.views_vs_median::text AS views_vs_median, s.outlier_tier, s.is_outlier
+       FROM post_score s JOIN post p ON p.id = s.post_id
+      WHERE s.workspace_id = $1 ORDER BY p.platform_id, p.external_post_id`,
+    [workspaceId],
+  );
+  const sinFila = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM post p WHERE p.workspace_id = $1 AND NOT EXISTS (SELECT 1 FROM post_score s WHERE s.post_id = p.id)`,
+    [workspaceId],
+  );
+  logger.info('demo CON-6: post_score (views_vs_median null = todavía no hay ocho videos para comparar, nunca cero)', {
+    rows: puntajes.rows,
+    sinCorteMedido: sinFila.rows[0]?.n ?? 0,
+  });
 }
 
 export async function runDemo(opts: {
   db: WorkerDatabase; worker: RunningWorker; secrets: SecretStore; logger: Logger;
-  env?: Env; grabado?: boolean; avanzaUnDia?: () => void;
+  env?: Env; grabado?: boolean; now?: () => Date; avanzaUnDia?: () => void;
 }): Promise<void> {
   const { db, worker, secrets, logger } = opts;
-  const seed = await seedDemo(db, secrets, new Date());
+  // Las conexiones de CON-2 vencen relativas al reloj del worker, no a la hora real: si no, con el reloj fijo
+  // de las respuestas grabadas, la que «vence en 10 minutos» vencería dos días después para oauth.refresh.
+  const seed = await seedDemo(db, secrets, (opts.now ?? (() => new Date()))());
   logger.info('demo: escenario sembrado', { workspaceId: seed.workspaceId, connections: seed.connections.map((c) => c.label) });
   const jobId = await worker.boss.send('oauth.refresh', { source: 'demo', workspaceId: seed.workspaceId });
   logger.info('demo: oauth.refresh encolado', { jobId });

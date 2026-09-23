@@ -3,6 +3,7 @@
  * migraciones del repo (incluida 0014, los privilegios de mc_worker),
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
+import { applySeeds, SEED_DIR, type MigrationExec } from '@mc/db/embedded';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -12,6 +13,20 @@ import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
 
 export async function openTestDatabase(): Promise<PgliteDatabase> {
   return PgliteDatabase.open({ setRole: 'mc_worker' });
+}
+
+/**
+ * Carga db/seed/*.sql con el runner de @mc/db (el mismo de openTestDb y
+ * de `make seed`): cada seed en su transacción, en orden. Para las
+ * pruebas que parten de la demo; se pasa como `seed` a startHarness o se
+ * llama dentro del propio `seed`.
+ */
+export async function applyRepoSeeds(db: PgliteDatabase): Promise<void> {
+  const exec: MigrationExec = async (sql) => {
+    const out = await db.raw.exec(sql);
+    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+  };
+  await applySeeds(exec, { dir: SEED_DIR });
 }
 
 export function testConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
@@ -72,6 +87,15 @@ export async function startHarness(opts: HarnessOptions): Promise<Harness> {
     db, sink, logger, secrets, refresher, worker, now,
     stop: async () => { await worker.stop(); },
   };
+}
+
+/**
+ * Los mismos jobs sin encadenamiento (JobOptions.after vacío): para las
+ * pruebas que ejercitan un job por separado y cuentan sus corridas. La
+ * cadena collect → compute la prueba test/costuras-con.test.ts.
+ */
+export function withoutChaining(jobs: readonly JobRegistration[]): JobRegistration[] {
+  return jobs.map((j) => ({ ...j, options: { ...j.options, after: [] } }));
 }
 
 /** Espera a que `check` devuelva algo distinto de null/undefined/false. */

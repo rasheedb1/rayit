@@ -199,8 +199,8 @@ export const STORIES: readonly Story[] = [
     title: "El worker sobre @mc/db",
     desc: "En apps/worker/src/runner/db-pglite.ts y packages/connectors/test/helpers/pglite.ts reemplazar el bucle «aplicar *.sql en orden como superusuario» por applyMigrations(exec) de db/lib/aplicar.mjs u openTestDb de @mc/db/test/pglite, para tener schema_migrations, checksums y el rol mc_app iguales que en Supabase.",
     done: "apps/worker y packages/connectors no definen un bucle de migraciones propio; sus pruebas siguen en verde.",
-    status: "pendiente",
-    note: "Abierta por Rasheed en la ronda 3 de CIM-2 (22 de septiembre). En la ronda 4 se cerró la parte que sí era un camino de seguridad: apps/worker/src/runner/db.ts importa tlsFor, hostOf y resolveTls de @mc/db y borró sus copias (una línea de montaje en carpeta de Nicolás), con lo que el worker hereda además la guardia contra ?sslmode= en la URL. Queda solo la unificación del bucle de migraciones de PGlite.",
+    status: "hecho",
+    note: "23-sep (cierre CON-A): el worker y las pruebas de connectors migran con applyMigrations de db/lib/aplicar.mjs (el runner de @mc/db, re-exportado en @mc/db/embedded); schema_migrations y checksums iguales que en Supabase, y dos migraciones con el mismo número detienen el arranque. Prueba: apps/worker/test/migraciones.test.ts y packages/connectors/test/migraciones.test.ts. El TLS ya se había cerrado en la ronda 4 de CIM-2; el pool del worker se queda propio a propósito (mc_worker cruza workspaces).",
   },
   {
     id: "CON-3", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1", "CIM-3"],
@@ -247,8 +247,8 @@ export const STORIES: readonly Story[] = [
     title: "Línea base y puntaje",
     desc: "compute.baseline (mediana por red y corte de edad) y compute.post_score. Con menos de ocho videos, is_reliable = false. Usa packages/core/scoring.ts, que ya existe.",
     done: "Un post con el doble de views que la mediana queda con outlier_tier = outlier.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/CON-6-linea-base-puntaje, solo local (sin push). Cada video se puntúa en el mayor corte que alcanzó contra la línea base de ese corte; con menos de ocho videos, null y nunca cero. Sobre el seed da las mismas 16 líneas base y 59 puntajes que db/seed/0002.",
+    status: "hecho",
+    note: "23-sep (cierre CON-A): en main. Cada video se puntúa en el mayor corte que alcanzó y midió (24, 72, 168 o 720 h) contra la línea base de ESE corte; con menos de ocho videos, views_vs_median queda en null y nunca en cero. Corre encadenado tras cada collect.post_metrics con datos (baseline → post_score, sin migración; los crons 05:40 y 05:45 quedan de red). Probado: las 16 líneas base y los 59 puntajes salen idénticos a db/seed/0002, y campaign.compute da 4,496× en Café Alma con la línea base de CON-6. En producción corre cuando esté el worker (WRK): hoy Supabase tiene las filas que sembró 0002.",
   },
   {
     id: "CON-7", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-5"],
@@ -484,7 +484,7 @@ export const STORIES: readonly Story[] = [
     desc: "Estado, entregables, fechas, posts asociados (elegidos a mano de creator_post_board o detectados por fecha y mención), código y enlace de seguimiento. Desde la ficha se crea la factura (FIN-1).",
     done: "Se asocian dos posts a una campaña y aparecen con sus views actuales.",
     status: "hecho",
-    note: "Hecha el 22-sep (PR #8), en producción. Lista con filtro por estado; ficha con lo acordado, entregables, seguimiento, posts asociados, transiciones y «Facturar» (FIN-1); secciones ancladas para CAM-3, CAM-5 y CAM-6 (docs/propuestas/CAM-1.md §7). Pendiente: visto bueno al loading.tsx que puso Rasheed en el pulido.",
+    note: "23-sep, cierre del módulo: en main y en producción. Lista con filtro por estado; ficha con lo acordado, entregables, seguimiento, posts con sus views actuales (prueba de la ficha real contra el seed), transiciones y «Facturar» (FIN-1, ruta en _lib/rutas.ts). El loading.tsx de Rasheed tiene visto bueno. Decisiones en docs/propuestas/CIERRE-CAM.md.",
   },
   {
     id: "CAM-2", module: "CAM", owner: "nicolas", size: "S", sprint: 2, deps: ["CAM-1"],
@@ -492,7 +492,7 @@ export const STORIES: readonly Story[] = [
     desc: "createCampaignFromQuote() en queries/campanas.ts: crea la campaña con quote_id, agreed_metrics, fechas y brand_baseline_from catorce días antes. Es el contrato con Cotizar: Rasheed la llama desde COT-4.",
     done: "Rasheed la usa en COT-4 sin pedir cambios.",
     status: "hecho",
-    note: "Hecha el 22-sep; 0016 aplicada en Supabase el 22-sep. createCampaignFromQuote(tx, { quoteId, startsOn, endsOn, name?, trackingCode? }) en @mc/db, idempotente (índice único de 0016), RLS y errores con messageEs. COT-4 ya la llama desde el panel y desde el enlace público (23-sep). Contrato en docs/propuestas/CAM-2.md.",
+    note: "23-sep, cierre del módulo: createCampaignFromQuote en @mc/db, idempotente (0016). COT-4 la llama desde el panel y el enlace; la prueba del ciclo acepta COT-2026-008 del seed y comprueba una sola campaña con los entregables de la cotización. Contrato en docs/propuestas/CAM-2.md.",
   },
   {
     id: "CAM-3", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CON-1", "CON-2"],
@@ -500,7 +500,7 @@ export const STORIES: readonly Story[] = [
     desc: "brand.snapshot diario del perfil público de la marca (Business Discovery en Instagram, canal en YouTube), desde brand_baseline_from.",
     done: "La curva de seguidores de la marca sale del snapshot con su línea base de dos semanas.",
     status: "hecho",
-    note: "Rama nicolas/CAM-3-seguidores-marca. ritmoSeguidores en core (seed: 12,93/día vs 155/día, ×12, 1 240 ganados; línea base corta marcada, nunca inventada), job brand.snapshot en apps/worker/src/jobs/campanas (idempotente por día, TikTok y handles inexistentes dejan la razón), sección de la ficha con curva, «×12 el ritmo» y «Actualizar ahora». Falta aplicar la migración 0035 (unicidad por campaña e INSERT de la web) y el worker desplegado (CIM-7) para la lectura diaria en producción. Detalle en docs/propuestas/CAM-3.md.",
+    note: "23-sep, cierre del módulo: 0035 aplicada. ritmoSeguidores en core (seed: 12,93/día vs 155/día, ×12, 1 240 ganados; línea base corta marcada), sección de la ficha con curva y «Actualizar ahora». La lectura diaria (brand.snapshot) espera al worker (WRK); la ficha dice que se actualiza cada mañana.",
   },
   {
     id: "CAM-4", module: "CAM", owner: "nicolas", size: "S", sprint: 4, deps: ["CAM-1"],
@@ -508,7 +508,7 @@ export const STORIES: readonly Story[] = [
     desc: "Canjes del código, pedidos, ingresos, por formulario o CSV, en campaign_brand_input.",
     done: "Subir un CSV de ventas diarias llena la tabla y aparece en la ficha.",
     status: "hecho",
-    note: "Sección «Lo que aportó la marca» en la ficha: tabla por concepto (último total del formulario o suma del CSV, calculado en SQL), ventas diarias en barras, «Registrar aporte» e «Importar CSV de ventas» con el resumen de filas aceptadas y rechazadas. La fuente decide la semántica (formulario = total a la fecha, CSV = diario); repetir el CSV no duplica; una campaña cerrada lo rechaza; cada alta deja audit_log desde queries/campanas.ts hasta que exista audit() (ACC-2). Sin migraciones; el índice único de la clave natural y el contrato de lectura para CAM-5 están en docs/propuestas/CAM-4.md.",
+    note: "23-sep, cierre del módulo: «Lo que aportó la marca» con formulario y CSV de ventas diarias (repetir no duplica; una fila fuera de rango se rechaza con motivo), bitácora con audit() dentro de la consulta (ACC-2). Contrato de lectura para CAM-5 en docs/propuestas/CAM-4.md.",
   },
   {
     id: "CAM-5", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CAM-3", "CAM-4", "CON-6"],
@@ -516,7 +516,7 @@ export const STORIES: readonly Story[] = [
     desc: "campaign.compute llena campaign_result con views, alcance, clics, canjes, seguidores ganados por la marca frente a su ritmo previo, CPM y CPA reales, y views_vs_median. missing_inputs dice qué falta.",
     done: "Los seis KPIs salen de la tabla; si no hay datos de la marca, la celda dice «sin datos de la marca», no cero.",
     status: "hecho",
-    note: "calcularResultado (core, pura) con corte común (720 h o el mayor que todos alcanzaron), vs mediana ponderado por views, seguidores de la marca con ritmoSeguidores (CAM-3), canjes e ingresos de CAM-4 (manda el CSV) y CPM/CPA en centavos. Job campaign.compute cada mañana para live/measuring/reported como mc_worker con workspace explícito; «Resultado» en la ficha con los seis KPIs de campaign_result y «Falta: …» con enlace. El seed recalculado da CPM 4.353,93 y CPA 9.748,43 (no los del mock). «Recalcular» espera el GRANT de docs/propuestas/CAM-5.md §2: mc_app solo lee campaign_result desde 0025. Rama encadenada sobre CAM-4.",
+    note: "23-sep, cierre del módulo: los seis KPIs salen de campaign_result; sin datos de la marca dice «Sin datos de la marca». «Recalcular» se enciende con la migración 0041 (GRANT a mc_app, sin DELETE) y el permiso campanas.resultado.calcular; el cálculo de cada mañana (campaign.compute) espera al worker (WRK). EMV sigue null (decisión en CIERRE-CAM.md).",
   },
   {
     id: "CAM-6", module: "CAM", owner: "nicolas", size: "L", sprint: 4, deps: ["CAM-5"],
@@ -524,7 +524,7 @@ export const STORIES: readonly Story[] = [
     desc: "Página pública por slug con el payload congelado, «acordado antes de publicar» arriba, envío por enlace o PDF, sent_at y viewed_at. Registra activity de tipo report_sent.",
     done: "El reporte enviado no cambia aunque lleguen snapshots nuevos; la marca lo abre sin sesión.",
     status: "hecho",
-    note: "ReportPayload v1 armado por construirReporte (core, lista blanca: sin correos, teléfonos, notas, brief, ids ni UTM) y congelado en report.payload. /reporte/[slug] sin sesión por public_report() (migración 0037, patrón 0030): borrador o slug desconocido = 404, la primera apertura marca viewed_at (los robots de vista previa no). Enviar por enlace o PDF (impresión del navegador) deja activity report_sent, notification, bitácora campaign.report_sent y la campaña en «Reporte listo». Regenerar un enviado crea otra versión y la vieja sigue abriendo con «hay una versión más reciente». Permiso nuevo campanas.reporte.generar (sembrado en 0037). Prueba byte a byte en pglite. Falta aplicar 0037 en Supabase.",
+    note: "23-sep, cierre del módulo: 0037 aplicada. ReportPayload v1 congelado; /reporte/[slug] sin sesión, 404 en borrador o slug desconocido, viewed_at en la primera apertura; regenerar crea otra versión y la vieja sigue abriendo. La prueba del ciclo lo recorre de la cotización a la apertura pública.",
   },
 
   // ---------------------------------------------------------------- FIN
@@ -657,7 +657,7 @@ export const STORIES: readonly Story[] = [
     desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
     done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
     status: "hecho",
-    note: "23-sep: en main. Antes de desplegar hay que aplicar la migración 0039 en Supabase (make db.migrate); sin ella la web no arranca. Evidencia v2 (onBehalfOf + actedBy, IP resumida) en los dos caminos (por @ y OAuth), aviso connection_added al titular (migración 0039, pendiente de aplicar), onBehalfOf/actedBy en cada fila de audit() de conexiones y «Conectada por … el …» en /conexiones. El permiso se comprueba además dentro de la transacción leyendo role_permission (requirePermission resuelve Dueño hasta ACC-5). El mánager con la casilla de ACC-4 se prueba con un rol a medida del workspace. Propuesta en docs/propuestas/ACC-8.md.",
+    note: "23-sep: en main, con 0038 (su aviso) y 0039 (CON-7, de la que depende la web) ya aplicadas en Supabase. Evidencia v2 (onBehalfOf + actedBy, IP resumida) en los dos caminos (por @ y OAuth), aviso connection_added al titular (migración 0038), onBehalfOf/actedBy en cada fila de audit() de conexiones y «Conectada por … el …» en /conexiones. El permiso se comprueba además dentro de la transacción leyendo role_permission (requirePermission resuelve Dueño hasta ACC-5). El mánager con la casilla de ACC-4 se prueba con un rol a medida del workspace. Propuesta en docs/propuestas/ACC-8.md.",
   },
   {
     id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],

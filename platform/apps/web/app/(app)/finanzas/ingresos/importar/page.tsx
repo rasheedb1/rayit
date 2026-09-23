@@ -12,9 +12,8 @@ export const dynamic = "force-dynamic";
 export default async function ImportarIngresosPage() {
   // Quien no puede escribir tampoco ve el formulario: la Server Action
   // lo vuelve a comprobar, pero una pantalla que se pinta y falla al
-  // enviar es una promesa rota.
-  // ACC-5: la puerta del módulo y la de esta pantalla, que escribe
-  // dinero: sin finanzas.pago.registrar, 404 y no el error del segmento.
+  // enviar es una promesa rota. ACC-5: puerta del módulo y, sin el
+  // permiso, 404, como /finanzas/flujo.
   await requireModuleAccess("finanzas");
   await requirePagePermission("finanzas.pago.registrar");
   const { currency } = await getCurrentWorkspace();

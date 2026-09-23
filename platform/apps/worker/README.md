@@ -18,17 +18,29 @@ make dev                                # web + worker juntos (turbo)
 Sin Supabase ni Docker, para ver el worker funcionando en esta máquina:
 
 ```bash
-pnpm --filter @mc/worker start -- --pglite   # Postgres embebido vacío con las 13 migraciones
+pnpm --filter @mc/worker start -- --pglite   # Postgres embebido vacío con todas las migraciones del repo
 pnpm --filter @mc/worker start -- --demo     # lo anterior + 3 conexiones y un oauth.refresh en vivo
 ```
 
 `--demo` siembra una conexión que vence en 10 minutos (se renueva), una
 en 3 horas (intacta) y una revocada (pasa a `needs_reauth` con su
 notificación), encola `oauth.refresh` y a los cuatro segundos imprime
-`job_run`, `social_connection` y `notification`. El embebido aplica
-todas las migraciones del repo, incluida `0014` con los privilegios de
-`mc_worker`, y corre las consultas como ese rol: es el mismo reparto que
-en Supabase.
+`job_run`, `social_connection` y `notification`. Después corre los
+recolectores de CON-5 sobre dos cuentas por @ (dos lecturas con un día
+de diferencia) y, sin encolar nada a mano, la cadena de CON-6: tras cada
+`collect.post_metrics` el runner encola `compute.baseline` y este
+`compute.post_score` (ver «Encadenamiento»); el demo imprime su
+`job_run.metadata` (con `tras`), `creator_baseline` y `post_score`. Sin
+`INSTAGRAM_HOUSE_TOKEN` ni `GOOGLE_API_KEY` usa las respuestas grabadas
+y el reloj arranca fijo en `DEMO_GRABADO_INICIO` (21-sep 16:00 UTC), para
+que la salida no dependa de la hora del día.
+
+El embebido aplica las migraciones con el runner de `@mc/db`
+(`db/lib/aplicar.mjs`, el mismo de `openTestDb` y `make db.migrate`;
+CON-2b): mismo orden, `schema_migrations` con los mismos checksums, y
+dos archivos con el mismo número detienen el arranque. Incluye `0014`
+con los privilegios de `mc_worker`, y las consultas corren como ese rol:
+es el mismo reparto que en Supabase.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
@@ -127,6 +139,18 @@ Reglas:
   jamás.
 - Revisa `ctx.signal` en bucles largos: se dispara al vencer `timeout_s`
   y al apagar el worker.
+- **Encadenamiento**: si tu job tiene que correr DESPUÉS de otro, no lo
+  resuelvas con la hora del cron; decláralo:
+  `defineJob('compute.baseline', fn, { after: ['collect.post_metrics'] })`.
+  Cuando el de arriba termina `ok` o `partial` con `processed > 0`
+  (hubo datos), el runner
+  encola el tuyo con el mismo `workspaceId` (sin él, para todos),
+  `singletonKey` `tras:<workspace>` y `{ source: 'chain', after }` en el
+  payload, que llega a `job_run.metadata.tras`. Ni un `failed` ni un
+  `ok` que no procesó nada encadenan.
+  El cron se queda como red de seguridad, así que el job tiene que ser
+  idempotente. Un `after` a un job no registrado o un ciclo impiden
+  arrancar.
 - Para encolar desde fuera del cron: `boss.send('finance.reminders',
   { workspaceId, entityType: 'invoice', entityId })`. Esos tres campos
   del payload se copian a `job_run`.
@@ -372,15 +396,93 @@ SELECT platform_id, endpoint, count(*) FILTER (WHERE ok) AS ok, count(*) FILTER 
 SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_id = 'youtube' AND connection_id IS NULL ORDER BY day DESC LIMIT 1;
 ```
 
+## Línea base y puntaje (CON-6)
+
+Dos jobs nocturnos producen el número central del producto: **cuántas
+veces su propia mediana hizo cada video, medido a la misma edad que los
+demás**. Toda su aritmética sale de `@mc/core` (`scoring.ts`), nunca de
+SQL suelto ni de una pantalla.
+
+| Job | Cuándo | Qué escribe |
+|---|---|---|
+| `compute.baseline` | Tras cada `collect.post_metrics` con datos; y `40 5` de red | Una fila de `creator_baseline` por (workspace, creador, red, corte de edad) con la mediana, el p25 y el p75 de views, y la mediana de alcance, engagement, guardados por mil, completion y skip a 3 s. `is_reliable = sample_size >= 8`. |
+| `compute.post_score` | Tras cada `compute.baseline`; y `45 5` de red | Una fila de `post_score` por video con `views_vs_median`, `outlier_tier`, `is_outlier` y, la primera vez que llega a cada nivel, una `notification` (`outlier`, `breakout`). |
+
+**Por qué encadenados y no solo por hora.** `collect.post_metrics` corre
+a las 05:00 con `timeout_s` 600 y cinco intentos: un reintento puede
+terminar después de las 05:40, y `compute.baseline` (timeout 300 s)
+puede seguir corriendo a las 05:45 cuando arranca `compute.post_score`.
+Con la hora sola, el puntaje del día se calcularía con lecturas o
+medianas de ayer. Con `after`, cada recolección con datos dispara
+línea base → puntaje en ese orden; los crons de `0009` se quedan para el
+día en que la recolección falle entera (la ventana cambia con el paso
+del tiempo aunque no lleguen lecturas). Sin migración: las filas de
+`job_definition` no cambian.
+
+Las reglas que hay que saber antes de tocarlos:
+
+- **El corte manda.** Un video se puntúa en el **mayor** corte de
+  `AGE_CUTS_HOURS` (24, 72, 168, 720 h) que ya alcanzó **y midió**,
+  contra la línea base de ESE corte, y el corte queda escrito en
+  `age_hours_cut`. Un video de menos de 24 h no recibe fila: compararlo
+  sería medirlo a otra edad que los demás.
+- **«Midió» es la banda del corte** (`BANDAS`, en `compute-baseline.ts`):
+  la lectura tiene que tener más horas que el corte anterior. Si a una
+  cuenta se le dejó de recolectar, su video de 31 días con la última
+  lectura a las 60 h se puntúa a las 72 h —lo que de verdad midió— y no
+  a los 30 días con una cifra de hace un mes.
+- **La ventana son los últimos `window_posts` (20) videos** que de
+  verdad llegaron al corte —edad cumplida **y** lectura dentro de la
+  banda—, sin los `deleted_on_platform`.
+- **Un nulo no es un cero.** Sin ocho videos en ese corte,
+  `views_vs_median` y `outlier_tier` quedan en `NULL` (la fila se
+  escribe igual, con sus views reales). `is_outlier` es `NOT NULL`, así
+  que el «todavía no sabemos» vive en las otras dos columnas y la
+  pantalla lee esas.
+- **`creator_baseline` es append-only** (su `UNIQUE` incluye
+  `computed_at`): cada corrida deja su fila y el puntaje apunta con
+  `baseline_id` a la que usó. `post_score` tiene `PRIMARY KEY (post_id)`:
+  es el puntaje vigente y se reemplaza, pero su corte **nunca baja** y
+  `notified_at` sobrevive al recálculo.
+- **Se recalcula siempre**, también sin lecturas nuevas: la ventana
+  cambia con el paso del tiempo (un video de seis días y medio entra
+  mañana en el corte de 168 h con la lectura que ya tiene). Sobre el
+  seed son 889 ms las 16 líneas base y 3,3 s los 59 puntajes.
+- **Un aviso por video, y solo cuando SUBE de nivel.** El registro de
+  «ya avisé» es la propia tabla `notification` (`kind` + `entity_id`),
+  no una fecha: un video que sube de `outlier` a `breakout` avisa la
+  segunda vez, ninguna corrida repite la primera, y uno que BAJA de
+  `breakout` a `outlier` —pasa al cambiar de corte— no manda una buena
+  noticia que no lo es (`debeAvisar()`).
+- **Dependen de la migración `0024`** (`security_invoker` en las
+  vistas), que ya está aplicada: los dos leen `post_metrics_at_cut`, y
+  una vista sin esa opción corre con los privilegios de su dueño, así
+  que `mc_worker` —que se salta RLS por rol— no se la salta a través de
+  la vista y vería cero filas, sin un solo error en el log. Detalle en
+  [docs/propuestas/CON-6.md](../../../docs/propuestas/CON-6.md) §5.
+
+Para probarlos a mano sobre la demo:
+
+```sql
+SELECT platform_id, age_hours_cut, sample_size, median_views, is_reliable
+  FROM creator_baseline ORDER BY computed_at DESC, platform_id, age_hours_cut;
+
+SELECT p.platform_id, p.title, s.age_hours_cut, s.views_at_cut, s.views_vs_median, s.outlier_tier
+  FROM post_score s JOIN post p ON p.id = s.post_id
+ ORDER BY s.views_vs_median DESC NULLS LAST LIMIT 5;
+```
+
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @, brand.snapshot y finance.reminders sobre los seeds reales, los dos recolectores de CON-5, collect.demographics contra fixtures (CON-7) y oauth.refresh con el almacén cifrado y los refreshers reales
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @, brand.snapshot y finance.reminders sobre los seeds reales, los dos recolectores de CON-5 (descubrimiento, fusión con el archivo importado, dos lecturas y su delta, tope de edad, borrados, 401, señal abortada y reintento), compute.baseline + compute.post_score (CON-6) con dos workspaces, las costuras de CON-6 (collect → baseline → post_score encadenados, campaign.compute con la línea base de CON-6 y las 16 líneas base y 59 puntajes del seed), las migraciones con el runner de @mc/db (CON-2b), collect.demographics contra fixtures (CON-7) y oauth.refresh con el almacén cifrado y los refreshers reales
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
-Las de integración aplican TODAS las migraciones reales (la `0014` da
+Las de integración aplican TODAS las migraciones reales con el runner
+de `@mc/db` (`test/migraciones.test.ts` falla si una no queda en
+`schema_migrations`), y los seeds con `applyRepoSeeds()` del arnés (la `0014` da
 los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
 `0039`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan.
@@ -409,7 +511,8 @@ src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
-src/jobs/conexiones/         oauth.refresh · collect.account_metrics (CON-10) · collect.posts y collect.post_metrics (CON-5) · _posts.ts (lo común de los dos) · collect.demographics (audiencia, CON-7)
+src/jobs/conexiones/         oauth.refresh · collect.account_metrics (CON-10) · collect.posts y collect.post_metrics (CON-5) · _posts.ts (lo común de los dos)
+                             compute.baseline · compute.post_score (línea base y puntaje, CON-6) · collect.demographics (audiencia, CON-7)
 src/jobs/campanas/           brand.snapshot (seguidores públicos de la marca de cada campaña, CAM-3)
 src/jobs/finanzas/           finance.reminders (recordatorios de cobro, FIN-4)
 test/                        integración (pglite) y unitarias

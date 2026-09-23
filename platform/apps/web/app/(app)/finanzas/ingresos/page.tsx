@@ -111,14 +111,16 @@ function EntradaAlFlujo({
 }
 
 export default async function IngresosPage() {
+  // ACC-5: la página también cierra, no solo el layout: en una
+  // navegación parcial Next puede no volver a ejecutar el layout.
+  await requireModuleAccess("finanzas");
   // Primero el permiso, antes de leer nada. Lo que paga una plataforma
   // es dinero del espacio y va al mismo sitio que el flujo de caja, así
   // que se mira con `finanzas.flujo.ver`: el rol Mánager NO lo ve
-  // (decisión E de la propuesta ACC). No hay un `finanzas.ingreso.ver`
-  // porque el catálogo viaja en la semilla de la migración 0034, que ya
-  // está aplicada; está propuesto en docs/propuestas/FIN-7.md §1.
-  // Sin él, 404 como el resto del módulo (ACC-5), y la pestaña no se pinta.
-  await requireModuleAccess("finanzas");
+  // (decisión E de la propuesta ACC) y recibe 404, como en /finanzas/flujo.
+  // No hay un `finanzas.ingreso.ver` porque el catálogo viaja en la
+  // semilla de la migración 0034, que ya está aplicada; está propuesto
+  // en docs/propuestas/FIN-7.md §1.
   await requirePagePermission("finanzas.flujo.ver");
   const { kpis, pagos, meses } = await withWorkspace(async (tx) => ({
     kpis: await getPlatformPayoutKpis(tx),

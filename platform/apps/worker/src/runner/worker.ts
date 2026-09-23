@@ -10,7 +10,7 @@ import type { WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
-import { executeRun, JobItemsFailedError } from './run.ts';
+import { CHAIN_SOURCE, executeRun, JobItemsFailedError, payloadContext } from './run.ts';
 
 export interface StartWorkerOptions {
   config: WorkerConfig;
@@ -99,6 +99,9 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
   const summary: JobSummary[] = [];
   let scheduled = 0;
+  // Se mira `all` y no `definitions`: con WORKER_GROUPS, el job de abajo
+  // puede vivir en otro proceso; su cola existe igual en pg-boss.
+  const enabledIds = new Set(all.filter((d) => d.enabled).map((d) => d.id));
 
   for (const def of definitions) {
     const registration = registry.get(def.id);
@@ -112,7 +115,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
       continue;
     }
 
-    const options = registration?.options ?? { instances: 1 as const, retryOnItemFailure: true };
+    const options = registration?.options ?? { instances: 1 as const, retryOnItemFailure: true, after: [] };
     const queueOptions = queueOptionsFor(def, config, options);
     if (await boss.getQueue(def.id)) await boss.updateQueue(def.id, updatableQueueOptions(queueOptions));
     else await boss.createQueue(def.id, queueOptions);
@@ -129,6 +132,10 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
               { definition: def, registration, payload: job.data, attempt: job.retryCount + 1, bossJobId: job.id, signal: job.signal },
               { db, logger, secrets, refreshers, quota, http: opts.http, env, now: opts.now },
             );
+            // Hubo datos nuevos (terminó y procesó algo): lo que corre DESPUÉS de este job se encola ya.
+            if (outcome.status !== 'failed' && (outcome.result?.processed ?? 0) > 0) {
+              await enqueueChained(boss, registry.next(def.id).filter((id) => enabledIds.has(id)), def.id, job.data, outcome.runId, logger);
+            }
             if (outcome.status === 'ok') continue;
             // Lanzar es lo que hace que pg-boss reintente hasta max_attempts.
             const itemFailure = outcome.status === 'partial' || outcome.error instanceof JobItemsFailedError;
@@ -156,6 +163,29 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
     registeredHandlers: registry.ids(),
   });
   return { definitions, summary };
+}
+
+/**
+ * Encola los jobs que corren después de `desde` (JobOptions.after), con
+ * el mismo workspaceId. Solo se llama si `desde` terminó ok o partial Y
+ * procesó algo: una recolección vacía no trae nada que recalcular. El singletonKey es por alcance: en una cola
+ * 'stately' dos encadenamientos del mismo workspace colapsan en uno
+ * (el que ya está en cola corre después y ve los datos nuevos), sin
+ * colapsar con el cron ni con el de otro workspace. Un fallo al encolar
+ * no tumba el job de arriba, que ya terminó: se anota y el cron cubre.
+ */
+async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: number, logger: Logger): Promise<void> {
+  if (destinos.length === 0) return;
+  const { workspaceId } = payloadContext(payload);
+  const alcance = workspaceId ?? 'todos';
+  for (const destino of destinos) {
+    try {
+      const encolado = await boss.send(destino, { source: CHAIN_SOURCE, after: desde, ...(workspaceId ? { workspaceId } : {}) }, { singletonKey: `tras:${alcance}` });
+      logger.info(encolado ? 'encadenado' : 'encadenado: ya había uno en cola', { job: destino, tras: desde, runId, alcance });
+    } catch (err) {
+      logger.warn('no se pudo encadenar; lo cubre su cron', { job: destino, tras: desde, runId, err });
+    }
+  }
 }
 
 /**

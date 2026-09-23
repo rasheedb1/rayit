@@ -105,10 +105,14 @@ function buildRefreshers(): TokenRefresherRegistry {
  */
 async function buildDemo(): Promise<{ now: () => Date; http?: ConnectorHttpOverrides; env: Env; grabado: boolean; avanzaUnDia: () => void } | null> {
   if (!demo) return null;
-  const { demoClock, demoNetwork } = await import('./demo.ts');
-  const reloj = demoClock();
+  const { DEMO_GRABADO_INICIO, demoClock, demoNetwork } = await import('./demo.ts');
   const red = await demoNetwork(process.env);
-  if (red.grabado) logger.warn('demo: sin INSTAGRAM_HOUSE_TOKEN ni GOOGLE_API_KEY; CON-5 corre contra las respuestas grabadas');
+  const reloj = demoClock(red.grabado ? DEMO_GRABADO_INICIO : new Date());
+  if (red.grabado) {
+    logger.warn('demo: sin INSTAGRAM_HOUSE_TOKEN ni GOOGLE_API_KEY; CON-5 corre contra las respuestas grabadas', {
+      reloj: `${DEMO_GRABADO_INICIO.toISOString()} (fijo: el de las respuestas grabadas, para que la salida no dependa de la hora)`,
+    });
+  }
   return { now: reloj.now, http: red.http, env: red.env, grabado: red.grabado, avanzaUnDia: reloj.avanzaUnDia };
 }
 
@@ -134,7 +138,7 @@ async function main(): Promise<void> {
 
   if (demo && demoRed) {
     const { runDemo } = await import('./demo.ts');
-    await runDemo({ db, worker, secrets, logger, env: demoRed.env, grabado: demoRed.grabado, avanzaUnDia: demoRed.avanzaUnDia });
+    await runDemo({ db, worker, secrets, logger, env: demoRed.env, grabado: demoRed.grabado, now: demoRed.now, avanzaUnDia: demoRed.avanzaUnDia });
   }
 
   let stopping: Promise<void> | null = null;

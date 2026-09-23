@@ -16,8 +16,12 @@
  * explícitamente. Un `UPDATE social_connection SET …` sin WHERE toca
  * todos los clientes. Revisa cada escritura con esa lupa.
  *
- * TODO(CIM-2): cuando exista packages/db con el cliente compartido,
- * migrar PostgresDatabase a ese cliente y dejar aquí solo la capa de rol.
+ * Por qué NO usa createPgDb/withWorkspace de @mc/db (cerrado en CON-2b):
+ * ese cliente abre cada transacción con un workspace fijado para RLS, y
+ * el worker corre como mc_worker precisamente para cruzar workspaces;
+ * además pg-boss necesita su propio pool sin cambio de rol. Lo que sí se
+ * comparte con @mc/db es lo que tiene que ser idéntico: el TLS (abajo) y,
+ * en el embebido, el runner de migraciones (db-pglite.ts).
  *
  * El TLS ya no se decide aquí: `hostOf`, `tlsFor` y `resolveTls` salen
  * de @mc/db (una línea de montaje de CIM-2, ronda 4). Antes había dos

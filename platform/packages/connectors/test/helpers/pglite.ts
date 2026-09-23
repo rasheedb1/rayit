@@ -1,14 +1,18 @@
-/** Postgres embebido con las migraciones reales del repo, para las pruebas de persistencia. */
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+/**
+ * Postgres embebido con las migraciones reales del repo, para las pruebas de persistencia.
+ *
+ * Las aplica db/lib/aplicar.mjs, el mismo runner de @mc/db, del worker y
+ * de `make db.migrate` (CON-2b). Se importa por ruta y no por @mc/db
+ * porque @mc/db ya depende de @mc/connectors: el paquete no puede
+ * depender de vuelta.
+ */
 import { PGlite } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { applyMigrations, MIGRATIONS_DIR, type MigrationExec } from '../../../../db/lib/aplicar.mjs';
 import type { SqlExecutor } from '../../src/log/postgres.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const MIGRATIONS_DIR = join(HERE, '..', '..', '..', '..', 'db', 'migrations');
+export { MIGRATIONS_DIR };
 
 export const WORKSPACE_ID = '00000002-0000-4000-8000-000000000001';
 export const CREATOR_ID = '00000002-0000-4000-8000-000000000003';
@@ -17,8 +21,11 @@ export const CONNECTION_YOUTUBE = '00000002-0000-4000-8000-0000000000c3';
 
 export async function openMigratedPglite(): Promise<PGlite> {
   const db = await PGlite.create({ extensions: { citext, pg_trgm } });
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
-  for (const f of files) await db.exec(await readFile(join(MIGRATIONS_DIR, f), 'utf8'));
+  const exec: MigrationExec = async (sql) => {
+    const out = await db.exec(sql);
+    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+  };
+  await applyMigrations(exec, { dir: MIGRATIONS_DIR });
   return db;
 }
 

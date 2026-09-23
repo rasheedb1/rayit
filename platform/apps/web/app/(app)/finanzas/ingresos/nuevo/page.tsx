@@ -13,14 +13,13 @@ export const metadata: Metadata = { title: "Agregar un ingreso de plataforma" };
 export const dynamic = "force-dynamic";
 
 export default async function NuevoIngresoPage() {
-  // ACC-5: la puerta del módulo y la de esta pantalla, que escribe
-  // dinero: sin finanzas.pago.registrar, 404 y no el error del segmento.
+  // ACC-5: puerta del módulo y, sin el permiso de su acción, 404.
   await requireModuleAccess("finanzas");
   await requirePagePermission("finanzas.pago.registrar");
   const { plataformas, hoy } = await withWorkspace(async (tx) => ({
     plataformas: await listPayoutPlatforms(tx),
-    // El día lo dice la BASE (CURRENT_DATE), no el reloj de Node: es el
-    // mismo que usa la ventana del promedio.
+    // El día lo dice la base, en la zona del espacio, no el reloj de
+    // Node: es el mismo que usa la ventana del promedio.
     hoy: (await getPlatformPayoutKpis(tx)).today,
   }));
   const { currency } = await getCurrentWorkspace();

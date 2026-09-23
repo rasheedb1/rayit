@@ -151,7 +151,7 @@ Decisiones que quedaron como **DECISIÓN PENDIENTE DE NICOLÁS**:
 |---|---|---|---|
 | 1 | Índice único parcial en una migración nueva: `CREATE UNIQUE INDEX IF NOT EXISTS campaign_brand_input_csv_day ON campaign_brand_input (campaign_id, kind, day) WHERE source = 'brand_csv';` | Hoy la idempotencia la garantiza `importBrandCsv` (fila de `campaign` con `FOR UPDATE` y `WHERE NOT EXISTS` en la misma transacción). Un escritor que no pase por la función (un script, fase 2) podría duplicar un día. El índice incluye `campaign_id`, que apunta a una tabla aislada, así que cumple «la unicidad es por inquilino». Lo manual NO lleva índice: varias filas por kind son su historia. | Baja: nada lo necesita hoy. |
 | 2 | Nada en `schema/`: `campaign_brand_input` no está en el esquema Drizzle y las consultas usan SQL con parámetros, como el resto de `campanas.ts`. | — | — |
-| 3 | ACC-1 y ACC-2: `registrarAporte` e `importarCsvVentas` llevan `// TODO(ACC-1): requirePermission('campanas.aporte.registrar')`; la ficha, `campanas.campana.ver`. La bitácora la escribe `recordAudit` en `queries/campanas.ts` y se cambia por `audit()` en una línea cuando exista. | — | Cuando llegue ACC. |
+| 3 | **Resuelto** (ACC-1 y ACC-2 en main; los dos comentarios viejos se quitaron en el cierre del módulo, CIERRE-CAM.md). Era: `registrarAporte` e `importarCsvVentas` llevan `// TODO(ACC-1): requirePermission('campanas.aporte.registrar')`; la ficha, `campanas.campana.ver`. La bitácora la escribe `recordAudit` en `queries/campanas.ts` y se cambia por `audit()` en una línea cuando exista. | — | Cuando llegue ACC. |
 
 Sin migraciones y sin variables de entorno nuevas.
 

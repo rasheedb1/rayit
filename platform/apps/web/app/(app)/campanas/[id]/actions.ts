@@ -36,6 +36,7 @@ import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@
 import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, TEXTOS_REPORTE } from "../_lib/messages";
+import { isGrantMissing } from "../_lib/errores-db";
 import { getMarcaService } from "../_lib/marca-server";
 import { queryDeMarca } from "../_lib/aviso-marca";
 import type { Codificacion } from "@/lib/csv";
@@ -295,7 +296,7 @@ export async function registrarAporte(_prev: AporteState, formData: FormData): P
   try {
     const hoy = hoyEnZona((await getCurrentWorkspace()).timezone);
     if (v.day > hoy) return { errors: { day: "La fecha no puede ser futura." } };
-    // TODO(ACC-2): la bitácora la escribe addBrandInput (recordAudit) hasta que exista audit().
+    // La bitácora la escribe addBrandInput con audit() dentro de la consulta (ACC-2).
     const r = await withWorkspace((tx) =>
       addBrandInput(tx, { campaignId: v.campaignId, kind, day: v.day, value: v.value, currency: v.currency || null, notes: v.notes || null }),
     );
@@ -359,7 +360,7 @@ export async function importarCsvVentas(_prev: ImportacionState, formData: FormD
   if (bytes.includes(0)) return { errors: { archivo: t.csv.notCsv } };
   let resumen: ResumenImportacion;
   try {
-    // TODO(ACC-2): la bitácora la escribe importBrandCsv (recordAudit) hasta que exista audit().
+    // La bitácora la escribe importBrandCsv con audit() dentro de la consulta (ACC-2).
     resumen = await withWorkspace(async (tx) => {
       // Bloquea la campaña y comprueba que admite cambios ANTES de leer el
       // archivo: la ventana con la que se revisa es la que se escribe.
@@ -383,17 +384,13 @@ export async function importarCsvVentas(_prev: ImportacionState, formData: FormD
 // Resultado (CAM-5)
 // ---------------------------------------------------------------------
 
-/** Postgres «permission denied» (42501): la base aún no deja a mc_app escribir campaign_result. */
-function isPermissionDenied(err: unknown): boolean {
-  return typeof err === "object" && err !== null && "code" in err && err.code === "42501";
-}
 
 /**
  * Botón «Recalcular» de la sección «Resultado». Se usa con
  * bind(null, campaignId). Calcula con la misma función que el job
- * (computeCampaignResult) dentro de withWorkspace, como mc_app: necesita
- * el GRANT de docs/propuestas/CAM-5.md §2, y la ficha solo enseña el
- * botón si la base lo permite. Una campaña cerrada no se recalcula
+ * (computeCampaignResult) dentro de withWorkspace, como mc_app: con el
+ * GRANT de la migración 0041, y la ficha solo enseña el botón si la base
+ * lo permite (has_table_privilege) y el rol tiene el permiso. Una campaña cerrada no se recalcula
  * (ResultFrozenError, con su frase). El resultado es un derivado: no va
  * a la bitácora, igual que cuando lo escribe el job.
  */
@@ -405,7 +402,7 @@ export async function recalcularResultado(campaignId: string): Promise<void> {
     const values = await withWorkspace((tx) => computeCampaignResult(tx, campaignId));
     if (!values) error = "Esa campaña no existe en este espacio.";
   } catch (err) {
-    error = isPermissionDenied(err) ? MESSAGES.resultado.recomputeDenied : messageOf(err, MESSAGES.resultado.recomputeError);
+    error = isGrantMissing(err) ? MESSAGES.resultado.recomputeDenied : messageOf(err, MESSAGES.resultado.recomputeError);
   }
   paths(campaignId);
   backWithError(campaignId, error);

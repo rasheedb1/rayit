@@ -25,6 +25,14 @@ import type { DbOptions } from './client.ts';
 import type { PgliteDb } from './pglite.ts';
 
 export { MIGRATIONS_DIR, SEED_DIR };
+/**
+ * El runner de migraciones y seeds, para el Postgres embebido del worker
+ * (apps/worker/src/runner/db-pglite.ts), que no puede usar
+ * createEmbeddedDb —necesita su propia sesión para pg-boss— pero sí el
+ * mismo orden, la misma schema_migrations y los mismos checksums.
+ * CON-2b; propuesto a Rasheed en docs/propuestas/CIERRE-CON-A.md.
+ */
+export { applyMigrations, applySeeds, type MigrationExec };
 /** platform/db: migraciones, seeds y certificados. */
 export const DB_DIR = dirname(MIGRATIONS_DIR);
 
