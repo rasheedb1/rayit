@@ -1,14 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { rateToPct } from "@mc/core";
-import { getReceivablesKpis, listInvoices, type InvoiceListRow } from "@mc/db";
+import { getReceivablesKpis, listInvoices, type InvoiceListRow } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
-import { formatDate, formatDaysRelative, formatMoney } from "@/lib/format";
+import { formatterFor, type Formatter } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "./_lib/db";
 import { LIST_FILTERS, filterKey, pillForInvoice, type ListFilterKey } from "./_lib/estado";
 
@@ -16,7 +17,13 @@ export const metadata: Metadata = { title: "Finanzas" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
-const COLUMNS: Column<InvoiceListRow>[] = [
+/**
+ * Las columnas se construyen con el formateador del workspace, no con
+ * el de por defecto. Antes eran una constante de módulo y formateaban
+ * con es-CO fijo: un workspace en MXN/en-US veía los KPI en su locale y
+ * las filas en el de Colombia, en la misma pantalla.
+ */
+const columnas = (f: Formatter): Column<InvoiceListRow>[] => [
   {
     key: "company",
     header: "Marca",
@@ -32,8 +39,8 @@ const COLUMNS: Column<InvoiceListRow>[] = [
     header: "Monto",
     align: "num",
     render: (r) => (
-      <CellMain sub={r.status === "partial" ? `pendiente ${formatMoney(r.outstanding, r.currency, { mode: "full" })}` : undefined}>
-        {formatMoney(r.total, r.currency, { mode: "full" })}
+      <CellMain sub={r.status === "partial" ? `pendiente ${f.money(r.outstanding, r.currency, { mode: "full" })}` : undefined}>
+        {f.money(r.total, r.currency, { mode: "full" })}
       </CellMain>
     ),
   },
@@ -42,9 +49,9 @@ const COLUMNS: Column<InvoiceListRow>[] = [
     header: "Vence",
     render: (r) =>
       r.bucket === "pagada" || r.bucket === "anulada" ? (
-        <span className="text-fg-3">{formatDate(r.dueOn)}</span>
+        <span className="text-fg-3">{f.date(r.dueOn)}</span>
       ) : (
-        <CellMain sub={formatDaysRelative(r.daysToDue)}>{formatDate(r.dueOn)}</CellMain>
+        <CellMain sub={f.daysRelative(r.daysToDue)}>{f.date(r.dueOn)}</CellMain>
       ),
   },
   {
@@ -95,6 +102,11 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
     kpis: await getReceivablesKpis(tx),
     invoices: await listInvoices(tx, { status: statuses ? [...statuses] : undefined, limit: 100 }),
   }));
+  // Los KPI suman facturas de todo el workspace, así que van en SU
+  // moneda (workspace.currency), no en una constante. Cada fila, en
+  // cambio, muestra la moneda con la que se emitió. Locale, moneda y
+  // zona horaria vienen atados en el mismo formateador.
+  const f = formatterFor(await getCurrentWorkspace());
 
   const year = new Date().getUTCFullYear();
   const overdueNote =
@@ -118,21 +130,21 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
       <KpiRow>
         <Kpi
           label="Por cobrar"
-          value={formatMoney(kpis.outstanding, "COP", { mode: "compact" })}
+          value={f.money(kpis.outstanding, undefined, { mode: "compact" })}
           note={`${kpis.openCount} ${kpis.openCount === 1 ? "factura" : "facturas"}`}
           href="/finanzas?estado=por_cobrar"
         />
-        <Kpi label="Vencido" value={formatMoney(kpis.overdue, "COP", { mode: "compact" })} note={overdueNote} />
+        <Kpi label="Vencido" value={f.money(kpis.overdue, undefined, { mode: "compact" })} note={overdueNote} />
         <Kpi
           label={`Cobrado en ${year}`}
-          value={formatMoney(kpis.collectedYtd, "COP", { mode: "compact" })}
+          value={f.money(kpis.collectedYtd, undefined, { mode: "compact" })}
           delta={kpis.collectedDelta ?? undefined}
           deltaLabel={kpis.collectedDelta === null ? undefined : `vs. mismo período ${year - 1}`}
           note={kpis.collectedDelta === null ? `Sin cobros en ${year - 1} para comparar` : undefined}
         />
         <Kpi
           label="Apartado para impuestos"
-          value={formatMoney(kpis.taxReserved, "COP", { mode: "compact" })}
+          value={f.money(kpis.taxReserved, undefined, { mode: "compact" })}
           note={kpis.taxRate ? `${rateToPct(kpis.taxRate)} % de cada cobro` : "Sin reservas todavía"}
         />
       </KpiRow>
@@ -145,7 +157,7 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
           <Filters active={filter} />
         </div>
         <DataTable
-          columns={COLUMNS}
+          columns={columnas(f)}
           rows={invoices.rows}
           rowKey={(r) => r.id}
           caption="Facturas emitidas a marcas, con su estado de cobro"

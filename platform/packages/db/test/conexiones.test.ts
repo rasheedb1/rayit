@@ -1,11 +1,11 @@
-/** CON-3 · queries/conexiones.ts sobre Postgres embebido con el seed 0003 y otro workspace para el aislamiento. */
+/** CON-3 · queries/conexiones.ts sobre Postgres embebido con los seeds de la demo y otro workspace para el aislamiento. */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ConnectionNotFound, CreatorNotInWorkspace, NoCreatorProfile, disconnectConnection, findConnectionByAccount, getDefaultCreatorId,
   listConnections, listConsents, recordConsent, upsertConnection, type UpsertConnectionInput,
 } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './helpers/base.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000002';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -18,7 +18,7 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-conexiones', 'Ajeno') ON CONFLICT DO NOTHING;
   `);
-});
+}, { timeout: 120_000 });
 after(async () => { await t.close(); });
 
 const input = (over: Partial<UpsertConnectionInput> = {}): UpsertConnectionInput => ({
@@ -38,15 +38,21 @@ const input = (over: Partial<UpsertConnectionInput> = {}): UpsertConnectionInput
 });
 
 describe('lectura sobre connection_health', () => {
-  test('el workspace del seed ve sus tres conexiones, con scopes y última sincronización; el ajeno no ve ninguna', async () => {
+  test('el workspace del seed ve sus cuatro conexiones, con scopes y última sincronización; el ajeno no ve ninguna', async () => {
     const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listConnections(tx));
-    assert.equal(rows.length, 3);
-    assert.deepEqual(rows.map((r) => r.platformId), ['instagram', 'tiktok', 'youtube']);
-    const ig = rows[0]!;
+    // Son cuatro desde el seed 0002, que es quien las escribe: 0003
+    // repite tres de ellas con ON CONFLICT DO NOTHING, así que los
+    // scopes y la última sincronización son los de 0002. Y ahí
+    // last_synced_at es relativo al reloj —la demo no puede enseñar
+    // conexiones rancias el día que se siembra— así que se afirma que
+    // están frescas, no la hora exacta.
+    assert.equal(rows.length, 4);
+    assert.deepEqual(rows.map((r) => r.platformId), ['facebook', 'instagram', 'tiktok', 'youtube']);
+    const ig = rows.find((r) => r.platformId === 'instagram')!;
     assert.equal(ig.handle, 'laura.cocinafacil');
-    assert.deepEqual(ig.scopes, ['instagram_basic', 'instagram_manage_insights']);
+    assert.deepEqual(ig.scopes, ['instagram_basic', 'instagram_manage_insights', 'pages_read_engagement']);
     assert.equal(ig.status, 'active');
-    assert.ok(ig.lastSyncedAt && ig.hoursSinceSync !== null && ig.hoursSinceSync >= 26);
+    assert.ok(ig.lastSyncedAt && ig.hoursSinceSync !== null && ig.hoursSinceSync >= 0 && ig.hoursSinceSync < 24);
     assert.ok(ig.postsTracked >= 1);
     assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listConnections(tx)).then((r) => r.length), 0);
   });

@@ -1,5 +1,11 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { formatCompact, formatDate, formatDateRange, formatDelta, formatInt, formatMoney, formatPct, parseDecimal } from "./format";
+import {
+  DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatCountry, formatDate, formatDateRange, formatDelta,
+  formatInt, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
+} from "./format";
 
 describe("formatMoney", () => {
   it("compact: millones con una decimal, coma y M", () => {
@@ -32,6 +38,23 @@ describe("formatMoney", () => {
     expect(() => formatMoney("5.200.000", "COP")).toThrow();
     expect(() => formatMoney("abc", "COP")).toThrow();
     expect(() => parseDecimal("")).toThrow();
+  });
+  it("short abrevia en toda la escala: una columna se lee con un solo formato", () => {
+    // La columna Monto del pipeline mezclaba «COP 6,0 M» con «COP 924.370».
+    expect(formatMoney("6000000.00", "COP", { mode: "short" })).toBe("COP 6,0 M");
+    expect(formatMoney("924370.00", "COP", { mode: "short" })).toBe("COP 924 mil");
+    expect(formatMoney("1500", "COP", { mode: "short" })).toBe("COP 1,5 mil");
+    expect(formatMoney("850", "COP", { mode: "short" })).toBe("COP 850");
+    expect(formatMoney("0", "COP", { mode: "short" })).toBe("COP 0");
+    expect(formatMoney("-924370", "COP", { mode: "short" })).toBe("−COP 924 mil");
+    // Lo que redondeado a miles sería «1000 mil» ya se dice en millones.
+    expect(formatMoney("999400", "COP", { mode: "short" })).toBe("COP 999 mil");
+    expect(formatMoney("999500", "COP", { mode: "short" })).toBe("COP 1,0 M");
+    expect(formatMoney("1234567890", "COP", { mode: "short" })).toBe("COP 1.235 M");
+    // El sufijo de los miles es el del idioma del workspace.
+    expect(formatMoney("924370", "USD", { mode: "short", locale: "en-US" })).toBe("USD 924K");
+    // Y compact no cambia: bajo el millón sigue siendo la cifra entera.
+    expect(formatMoney("924370.00", "COP")).toBe("COP 924.370");
   });
 });
 
@@ -77,5 +100,146 @@ describe("fechas (UTC, es-CO)", () => {
   });
   it("rechaza fechas inválidas", () => {
     expect(() => formatDate("ayer")).toThrow();
+  });
+});
+
+/**
+ * La costura de internacionalización, medida en un workspace que NO es
+ * el de Colombia. Hasta la ronda 5 `formatterFor` existía y no la
+ * llamaba nadie: el locale llegaba suelto a dos pantallas, la zona
+ * horaria no llegaba a ninguna y el detalle de factura formateaba con
+ * es-CO fijo, así que un workspace en MXN/en-US veía dos formatos de
+ * número en el mismo flujo.
+ */
+describe("formatterFor: el workspace manda (locale, moneda y zona)", () => {
+  const MEXICO = { locale: "es-MX", currency: "MXN", timezone: "America/Mexico_City" };
+  const ESTADOS_UNIDOS = { locale: "en-US", currency: "USD", timezone: "America/New_York" };
+
+  it("usa la moneda del workspace sin que la pantalla la pase", () => {
+    const f = formatterFor(MEXICO);
+    expect(f.currency).toBe("MXN");
+    expect(f.money("5200000.00")).toContain("MXN");
+    // Y el separador de miles es el del locale, no el de es-CO.
+    expect(f.money("1234.00", "MXN", { mode: "full" })).toBe("MXN 1,234");
+    expect(formatterFor(ESTADOS_UNIDOS).money("1234.00", "USD", { mode: "full" })).toBe("USD 1,234");
+  });
+
+  it("una factura emitida en otra moneda se muestra en la suya, con el locale del workspace", () => {
+    const f = formatterFor(MEXICO);
+    expect(f.money("1234.50", "COP", { mode: "full" })).toBe("COP 1,234.50");
+  });
+
+  it("las fechas se presentan en la zona del workspace, no en UTC", () => {
+    // 2026-09-21T02:30Z es todavía el 20 en Ciudad de México (UTC−6).
+    expect(formatterFor(MEXICO).date("2026-09-21T02:30:00Z")).toBe("20 sep");
+    expect(formatterFor({ ...MEXICO, timezone: "UTC" }).date("2026-09-21T02:30:00Z")).toBe("21 sep");
+    // Una columna `date` (sin hora) no se corre de día por la zona.
+    expect(formatterFor(MEXICO).date("2026-09-21")).toBe("21 sep");
+  });
+
+  it("dateTime lleva fecha y hora en la zona y el idioma del workspace", () => {
+    const bogota = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    expect(bogota.dateTime("2026-09-21T02:30:00Z")).toBe("20 de septiembre de 2026 a las 9:30 p. m.");
+    expect(formatterFor(MEXICO).dateTime("2026-09-21T02:30:00Z")).toMatch(/20 de septiembre de 2026/);
+    expect(formatterFor(ESTADOS_UNIDOS).dateTime("2026-09-21T02:30:00Z")).toMatch(/September 20, 2026/);
+  });
+
+  it("time es solo la hora, en la zona y el idioma pedidos (COT-2: el bloqueo del media kit)", () => {
+    expect(formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).time("2026-09-21T20:15:00Z")).toBe("3:15 p. m.");
+    // En el idioma de la frase, no en el del navegador: nada de «3:15 PM» dentro de una frase en español.
+    expect(formatTime("2026-09-21T20:15:00Z", { locale: "es", timeZone: "America/Bogota" })).not.toMatch(/PM/);
+    expect(formatTime("2026-09-21T20:15:00Z", { locale: "en-US", timeZone: "America/Bogota" })).toBe("3:15 PM");
+  });
+
+  it("un workspace sin locale, moneda o zona cae a los valores por defecto, que son los de un workspace nuevo", () => {
+    const f = formatterFor({ locale: "", currency: "", timezone: "" });
+    expect(f.locale).toBe(DEFAULT_LOCALE);
+    expect(f.currency).toBe(DEFAULT_CURRENCY);
+    expect(f.timeZone).toBe(DEFAULT_TIME_ZONE);
+  });
+});
+
+/**
+ * Y la barandilla: las pantallas que ya están atadas al workspace no
+ * pueden volver a formatear con los valores por defecto. Se mira el
+ * código, que es la única forma de que esto no se deshaga solo con un
+ * `import` de más en la siguiente historia.
+ */
+describe("las pantallas atadas al workspace no vuelven al formato por defecto", () => {
+  const AQUI = dirname(fileURLToPath(import.meta.url));
+  /** Solo el código: un comentario que EXPLICA el fallo no es el fallo. */
+  const sinComentarios = (codigo: string) => codigo.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const ATADAS = [
+    "app/(app)/finanzas/page.tsx",
+    "app/(app)/finanzas/facturas/[id]/page.tsx",
+  ];
+  /**
+   * Lo que falta por atar, con su dueño. Cada corrida lo deja a la
+   * vista: al pasar una de estas pantallas a formatterFor, se mueve de
+   * lista.
+   */
+  const PENDIENTES_POR_MODULO = [
+    "app/(app)/campanas/page.tsx (CAM)",
+    "app/(app)/campanas/[id]/page.tsx (CAM)",
+    "app/(app)/conexiones/page.tsx (CON)",
+  ];
+
+  for (const rel of ATADAS) {
+    it(`${rel} formatea con formatterFor(getCurrentWorkspace())`, () => {
+      const codigo = sinComentarios(readFileSync(join(AQUI, "..", rel), "utf8"));
+      expect(codigo).toContain("formatterFor");
+      expect(codigo).toContain("getCurrentWorkspace");
+      // Las sueltas usan DEFAULT_LOCALE / DEFAULT_TIME_ZONE si nadie
+      // les pasa el locale, que es exactamente el fallo que se corrigió.
+      for (const suelta of ["formatMoney(", "formatDate(", "formatDaysRelative(", "formatDateTime("]) {
+        expect(codigo.includes(suelta), `${rel} vuelve a llamar a ${suelta}`).toBe(false);
+      }
+      expect(codigo).not.toContain("America/Bogota");
+      expect(codigo).not.toContain('"es-CO"');
+    });
+  }
+
+  it.todo(`atar al workspace las pantallas de los demás módulos: ${PENDIENTES_POR_MODULO.join(", ")}`);
+
+  /**
+   * La portada NO está atada, y es a propósito desde el endurecimiento:
+   * es el plan de construcción, su contenido entero sale de
+   * content/backlog.ts y no pertenece a ningún inquilino. Estaba en la
+   * lista de arriba por una sola fecha en el pie, y eso obligaba a
+   * abrir una transacción contra la base para pintarla: con un
+   * DEMO_WORKSPACE_ID que no corresponde a ninguna fila —lo normal en
+   * un despliegue nuevo— getWorkspace lanzaba y la portada respondía
+   * 500. Lo que sí se le sigue exigiendo es que no invente Colombia.
+   */
+  it("la portada no toca la base, y tampoco fija el locale a mano", () => {
+    const codigo = sinComentarios(readFileSync(join(AQUI, "..", "app/(app)/page.tsx"), "utf8"));
+    expect(codigo).not.toContain("getCurrentWorkspace");
+    expect(codigo).not.toContain("withWorkspace");
+    expect(codigo).not.toContain("America/Bogota");
+    expect(codigo).not.toContain('"es-CO"');
+  });
+});
+
+describe("formatMultiple", () => {
+  it("un múltiplo lleva su signo de veces y el separador del locale", async () => {
+    const { formatMultiple, formatterFor } = await import("./format");
+    expect(formatMultiple(3.57)).toBe("3,6×");
+    expect(formatMultiple(12)).toBe("12×");
+    expect(formatMultiple(3.57, 1, { locale: "en-US" })).toBe("3.6×");
+    expect(formatterFor({ locale: "es-MX", currency: "MXN", timezone: "UTC" }).multiple(2.25)).toBe("2.3×");
+  });
+});
+
+describe("formatCountry: el país por su nombre, en el idioma del workspace", () => {
+  it("dice el nombre y no el código", () => {
+    expect(formatCountry("CO")).toBe("Colombia");
+    expect(formatCountry("mx")).toBe("México");
+    expect(formatCountry("US", { locale: "en-US" })).toBe("United States");
+    expect(formatterFor({ locale: "pt-BR", currency: "BRL", timezone: "UTC" }).country("MX")).toBe("México");
+  });
+
+  it("un código que no es de dos letras vuelve tal cual", () => {
+    expect(formatCountry("Colombia")).toBe("Colombia");
+    expect(formatCountry("")).toBe("");
   });
 });

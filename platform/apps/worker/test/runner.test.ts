@@ -49,7 +49,7 @@ let h: Harness;
 
 before(async () => {
   h = await startHarness({ jobs: [...allJobs, echoJob, failJob, slowJob, itemsJob, noRetryJob], seed: seedTestDefinitions });
-});
+}, { timeout: 120_000 });
 
 after(async () => {
   await h.stop();
@@ -181,7 +181,10 @@ test('4 · un handler que excede timeout_s se aborta por la señal y queda faile
   assert.equal(row.status, 'failed');
   assert.equal(row.error, 'timeout');
   assert.equal(row.metadata['timeoutS'], 1);
-  assert.ok(Number(row.duration_ms) >= 1000 && Number(row.duration_ms) < 2500, `duración ${row.duration_ms}`);
+  // Margen de 100 ms por abajo: es un reloj de pared y el temporizador
+  // puede disparar 1 ms antes del segundo (se vio «duración 999» en una
+  // corrida). Lo que importa es que esperó al timeout, no al handler.
+  assert.ok(Number(row.duration_ms) >= 900 && Number(row.duration_ms) < 2500, `duración ${row.duration_ms}`);
   assert.ok(Date.now() - t0 < 4000, 'no esperó los 3 s del handler');
   assert.equal(slowAborted, true, 'la AbortSignal llegó al handler');
   await sleep(50);

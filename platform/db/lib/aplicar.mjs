@@ -1,0 +1,178 @@
+/**
+ * Aplicar db/migrations en orden y dejar constancia en schema_migrations.
+ *
+ * Es la ÚNICA copia de ese bucle. La usan:
+ *   - db/migrate.mjs                      Supabase, Docker local y --pglite (make db.check)
+ *   - packages/db/src/embedded.ts         Postgres embebido de pruebas y modo demo
+ *   - packages/db/scripts/introspect.mjs  drizzle-kit pull sobre pglite
+ *
+ * Reglas que impone, iguales en los tres sitios:
+ *   - Orden alfabético, una transacción por archivo.
+ *   - schema_migrations guarda nombre y checksum. Una migración ya
+ *     aplicada cuyo archivo cambió detiene todo: es inmutable, se crea
+ *     una nueva.
+ *   - Aplicar dos veces no hace nada.
+ *
+ * `exec` es lo único que cambia entre drivers: recibe SQL (una o varias
+ * sentencias, sin parámetros) y devuelve { rows } de la última. Así el
+ * embebido de las pruebas tiene la misma tabla schema_migrations que
+ * Supabase, con los mismos checksums.
+ */
+import { createHash } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+export const MIGRATIONS_DIR = join(HERE, '..', 'migrations');
+export const SEED_DIR = join(HERE, '..', 'seed');
+
+export const REGISTRY_SQL = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  filename    text PRIMARY KEY,
+  checksum    text NOT NULL,
+  applied_at  timestamptz NOT NULL DEFAULT now()
+);`;
+
+/** Los nombres se interpolan en SQL: solo se admite lo que un nombre de migración puede llevar. */
+const NOMBRE_SQL = /^[A-Za-z0-9_.-]+\.sql$/;
+
+export const checksumOf = (sql) => createHash('sha256').update(sql).digest('hex').slice(0, 16);
+
+export class DuplicateMigrationNumberError extends Error {
+  constructor(files) {
+    super(
+      `Dos migraciones comparten el número ${files[0].slice(0, 4)}: ${files.join(' y ')}. ` +
+        'Renombra la más nueva al siguiente número libre (git fetch y mira todas las ramas activas).',
+    );
+    this.name = 'DuplicateMigrationNumberError';
+    this.files = files;
+  }
+}
+
+/**
+ * Los .sql de `dir`, en orden. Dos archivos con el mismo prefijo
+ * numérico (0015_a.sql y 0015_b.sql) detienen todo: el runner los
+ * aplicaría a ambos sin quejarse, pero rompen la regla «el siguiente
+ * 00NN» y no se sabe cuál fue primero. Pasa cuando dos ramas crean una
+ * migración a la vez; mejor que lo diga `make db.check` y el CI que
+ * Supabase.
+ */
+export async function listSql(dir) {
+  const files = await readdir(dir).catch(() => []);
+  const sql = files.filter((f) => f.endsWith('.sql')).sort();
+  const seen = new Map();
+  for (const f of sql) {
+    if (!NOMBRE_SQL.test(f)) throw new Error(`Nombre de archivo SQL no admitido: ${f}`);
+    const n = f.slice(0, 4);
+    if (/^\d{4}$/.test(n)) {
+      if (seen.has(n)) throw new DuplicateMigrationNumberError([seen.get(n), f]);
+      seen.set(n, f);
+    }
+  }
+  return sql;
+}
+
+export class MigrationChangedError extends Error {
+  constructor(file) {
+    super(`${file} ya está aplicada pero el archivo CAMBIÓ. Una migración aplicada es inmutable: crea una nueva.`);
+    this.name = 'MigrationChangedError';
+    this.file = file;
+  }
+}
+
+export class MigrationFailedError extends Error {
+  constructor(file, cause) {
+    super(`Migración ${file} falló: ${cause?.message ?? String(cause)}`, { cause });
+    this.name = 'MigrationFailedError';
+    this.file = file;
+  }
+}
+
+/**
+ * Aplica las migraciones pendientes de `opts.dir` (por defecto
+ * db/migrations) y las registra. Devuelve qué aplicó y qué saltó.
+ *
+ * `opts.hasta` detiene el recorrido DESPUÉS de ese archivo. Solo lo usan
+ * las pruebas que necesitan una base «como estaba» antes de una
+ * migración —para sembrar filas con la forma vieja y comprobar que la
+ * siguiente las arregla—; `make db.migrate` no lo pasa nunca.
+ *
+ * @param {(sql: string) => Promise<{ rows: any[] }>} exec
+ * @param {{ dir?: string, hasta?: string, onApplied?: (file: string, ms: number) => void, onSkipped?: (file: string) => void }} [opts]
+ */
+export async function applyMigrations(exec, opts = {}) {
+  const dir = opts.dir ?? MIGRATIONS_DIR;
+  await exec(REGISTRY_SQL);
+  const registered = await exec('SELECT filename, checksum FROM schema_migrations');
+  const applied = new Map((registered.rows ?? []).map((r) => [r.filename, r.checksum]));
+
+  const result = { applied: [], skipped: [] };
+  for (const file of await listSql(dir)) {
+    if (opts.hasta !== undefined && file > opts.hasta) break;
+    const sql = await readFile(join(dir, file), 'utf8');
+    const checksum = checksumOf(sql);
+
+    if (applied.has(file)) {
+      if (applied.get(file) !== checksum) throw new MigrationChangedError(file);
+      result.skipped.push(file);
+      opts.onSkipped?.(file);
+      continue;
+    }
+
+    const t0 = Date.now();
+    try {
+      await exec('BEGIN');
+      await exec(sql);
+      await exec(`INSERT INTO schema_migrations (filename, checksum) VALUES ('${file}', '${checksum}')`);
+      await exec('COMMIT');
+    } catch (err) {
+      await exec('ROLLBACK').catch(() => {});
+      throw new MigrationFailedError(file, err);
+    }
+    result.applied.push(file);
+    opts.onApplied?.(file, Date.now() - t0);
+  }
+  return result;
+}
+
+export class SeedFailedError extends Error {
+  constructor(file, cause) {
+    super(`Seed ${file} falló: ${cause?.message ?? String(cause)}`, { cause });
+    this.name = 'SeedFailedError';
+    this.file = file;
+  }
+}
+
+/**
+ * Carga db/seed/*.sql en orden. Los seeds no se registran: son
+ * idempotentes por construcción (ON CONFLICT) y se verifican aparte.
+ *
+ * Cada seed va en su transacción, igual que una migración. Son archivos
+ * de mil líneas y decenas de sentencias: un fallo a mitad (un timeout
+ * del pooler, un CHECK nuevo) dejaba el workspace de demostración a
+ * medias, en un estado que ninguna verificación cubre, y la corrida
+ * siguiente partía de ahí. Con la transacción, o entra el seed entero o
+ * no entra nada.
+ *
+ * @param {(sql: string) => Promise<{ rows: any[] }>} exec
+ * @param {{ dir?: string, onApplied?: (file: string, ms: number) => void }} [opts]
+ */
+export async function applySeeds(exec, opts = {}) {
+  const dir = opts.dir ?? SEED_DIR;
+  const files = await listSql(dir);
+  for (const file of files) {
+    const sql = await readFile(join(dir, file), 'utf8');
+    const t0 = Date.now();
+    try {
+      await exec('BEGIN');
+      await exec(sql);
+      await exec('COMMIT');
+    } catch (err) {
+      await exec('ROLLBACK').catch(() => {});
+      throw new SeedFailedError(file, err);
+    }
+    opts.onApplied?.(file, Date.now() - t0);
+  }
+  return files;
+}

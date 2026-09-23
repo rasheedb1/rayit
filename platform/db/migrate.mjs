@@ -10,33 +10,17 @@
  * esquema está bien ANTES de levantar Docker, y para que el CI valide
  * cada pull request sin necesitar un servicio de base de datos.
  *
- * Las migraciones se aplican en orden alfabético, una transacción por
- * archivo, y se registran en schema_migrations. Aplicar dos veces no
- * hace nada.
+ * El bucle de aplicar (orden alfabético, una transacción por archivo,
+ * registro con checksum en schema_migrations, inmutabilidad) vive en
+ * db/lib/aplicar.mjs y lo comparten packages/db (pruebas y demo) e
+ * introspect. Aquí solo queda la conexión y la salida por consola.
  */
-import { readdir, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyMigrations, applySeeds, MigrationChangedError, MigrationFailedError, SeedFailedError } from './lib/aplicar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = join(HERE, 'migrations');
-const SEED_DIR = join(HERE, 'seed');
-
-const REGISTRY = `
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  filename    text PRIMARY KEY,
-  checksum    text NOT NULL,
-  applied_at  timestamptz NOT NULL DEFAULT now()
-);`;
-
-const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
-
-async function listSql(dir) {
-  const files = await readdir(dir).catch(() => []);
-  return files.filter((f) => f.endsWith('.sql')).sort();
-}
 
 /**
  * TLS. Supabase firma con su propia autoridad ("Supabase Root 2021 CA"),
@@ -99,49 +83,41 @@ async function main() {
   const label = db.kind === 'pglite' ? 'Postgres embebido (verificación)' : target.replace(/:[^:@]+@/, ':***@');
   console.log(`\n  Base: ${label}\n`);
 
-  await db.query(REGISTRY);
-
-  const appliedRows = await db.query('SELECT filename, checksum FROM schema_migrations');
-  const applied = new Map((appliedRows.rows ?? []).map((r) => [r.filename, r.checksum]));
-
   let count = 0;
-  for (const file of await listSql(MIGRATIONS_DIR)) {
-    const sql = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
-    const checksum = sha(sql);
-
-    if (applied.has(file)) {
-      if (applied.get(file) !== checksum) {
-        console.error(`  ✗ ${file} — ya aplicada pero el archivo CAMBIÓ.`);
-        console.error('    Una migración aplicada es inmutable: crea una nueva.');
-        process.exit(1);
-      }
-      console.log(`  · ${file} (ya aplicada)`);
-      continue;
+  try {
+    const { applied } = await applyMigrations(db.query, {
+      onSkipped: (file) => console.log(`  · ${file} (ya aplicada)`),
+      onApplied: (file, ms) => console.log(`  ✓ ${file}  (${ms} ms)`),
+    });
+    count = applied.length;
+  } catch (err) {
+    if (err instanceof MigrationChangedError) {
+      console.error(`  ✗ ${err.file} — ya aplicada pero el archivo CAMBIÓ.`);
+      console.error('    Una migración aplicada es inmutable: crea una nueva.');
+    } else if (err instanceof MigrationFailedError) {
+      console.error(`\n  ✗ ${err.file}\n    ${err.cause?.message ?? err.message}\n`);
+    } else {
+      console.error(err);
     }
-
-    const t0 = Date.now();
-    try {
-      await db.query('BEGIN');
-      await db.query(sql);
-      await db.query(
-        `INSERT INTO schema_migrations (filename, checksum) VALUES ('${file}', '${checksum}')`
-      );
-      await db.query('COMMIT');
-      console.log(`  ✓ ${file}  (${Date.now() - t0} ms)`);
-      count++;
-    } catch (err) {
-      await db.query('ROLLBACK').catch(() => {});
-      console.error(`\n  ✗ ${file}\n    ${err.message}\n`);
-      await db.close();
-      process.exit(1);
-    }
+    await db.close();
+    process.exit(1);
   }
 
   if (withSeed) {
-    for (const file of await listSql(SEED_DIR)) {
-      const sql = await readFile(join(SEED_DIR, file), 'utf8');
-      await db.query(sql);
-      console.log(`  ✓ seed/${file}`);
+    // Cada seed va en su transacción, igual que una migración; el
+    // bucle vive en db/lib/aplicar.mjs. Aquí solo queda la salida.
+    try {
+      await applySeeds(db.query, {
+        onApplied: (file, ms) => console.log(`  ✓ seed/${file}  (${ms} ms)`),
+      });
+    } catch (err) {
+      if (err instanceof SeedFailedError) {
+        console.error(`\n  ✗ seed/${err.file}\n    ${err.cause?.message ?? err.message}\n`);
+      } else {
+        console.error(err);
+      }
+      await db.close();
+      process.exit(1);
     }
   }
 

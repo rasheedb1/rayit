@@ -28,7 +28,8 @@ import {
   type InvoiceStatus,
   type TransitionInput,
 } from '@mc/core';
-import type { WorkspaceTx } from '../provisional/client.ts';
+import { getWorkspaceSettings } from './cimientos.ts';
+import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -97,6 +98,7 @@ export interface CreateInvoiceInput {
   /** YYYY-MM-DD, ≥ issuedOn */
   dueOn: string;
   externalRef?: string | null;
+  /** ISO-4217. Por defecto, la del workspace (workspace.currency). */
   currency?: string;
 }
 
@@ -278,7 +280,13 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
   return { rows: page, nextCursor: rows.length > limit && last ? encodeCursor(last) : null };
 }
 
+/**
+ * Una factura del workspace por su id, o null. El id llega de la ruta:
+ * si no es un UUID no se consulta (Postgres devolvería 22P02, que la
+ * pantalla convertiría en 500 en vez de en su 404).
+ */
 export async function getInvoice(tx: WorkspaceTx, id: string): Promise<InvoiceDetail | null> {
+  if (!isUuid(id)) return null;
   const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1`, [id]);
   const r = rows[0];
   return r ? toDetail(r) : null;
@@ -374,8 +382,16 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   if (!ISO_DATE_RE.test(input.issuedOn)) throw new Error('La fecha de emisión debe ser YYYY-MM-DD.');
   if (!ISO_DATE_RE.test(input.dueOn)) throw new Error('La fecha de vencimiento debe ser YYYY-MM-DD.');
   if (input.dueOn < input.issuedOn) throw new Error('El vencimiento no puede ser anterior a la emisión.');
-  const currency = input.currency ?? 'COP';
-  if (currency !== 'COP') throw new Error('Por ahora solo se facturan pesos colombianos (COP).');
+  // La moneda por defecto es la del workspace, no 'COP': el producto se
+  // vende fuera de Colombia y workspace.currency existe desde 0001.
+  // Una factura en otra moneda que la del workspace mezclaría cifras que
+  // los KPI de /finanzas suman sin convertir, así que se rechaza con un
+  // mensaje que dice cuál es la del workspace.
+  const { currency: wsCurrency } = await getWorkspaceSettings(tx);
+  const currency = (input.currency ?? wsCurrency).toUpperCase();
+  if (currency !== wsCurrency) {
+    throw new Error(`Las facturas van en la moneda del workspace (${wsCurrency}); recibió ${currency}.`);
+  }
 
   const totals = computeInvoiceTotals({
     subtotal: input.subtotal,

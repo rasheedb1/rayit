@@ -64,12 +64,21 @@ decisión; el resto del producto no pide ninguna. Toda migración es un
 archivo nuevo, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
 (CON-2), solo `GRANT`s al rol `mc_worker`, aplicada en Supabase el 21 de
 septiembre; `0015_connection_secret` (CON-3, aplicada) y
-`0016_campaign_quote_unique` (CAM-2, pendiente) y
-`0022_public_profile_access` (CON-10) el 22. **Los números 0017 a 0021
-están aplicados en Supabase pero no en ninguna rama** (§9.4, fila 17):
-no se reciclan. La siguiente libre es `0023_…`, que es la de ACC-3.
-Antes de crear cualquiera, `git fetch` y mirar el número más alto en
-todas las ramas activas.
+`0016_campaign_quote_unique` (CAM-2) y `0022_public_profile_access`
+(CON-10) el 22. 0017 a 0021 (RLS de CIM-2 y de la integración) están
+aplicadas en Supabase y viven en `rasheed/integracion`: no se reciclan.
+Números reservados: `0023_access_control` (ACC-3). En
+`rasheed/integracion`, pendientes de aplicar y en este orden:
+`0024`–`0026` (endurecimiento de RLS), `0027`/`0028` (CIM-3), `0029`
+(endurecimiento), `0030_public_share` (Cotizar, COT-2 a COT-4) y
+`0031_mover_negocio` (Ventas y Cotizar: `deal_move_stage` y `brand_key`;
+va la última porque reescribe `public_quote_accept_impl` de 0030). Sin
+0031, el tablero de Ventas, «Enviar» en Cotizar y la aceptación pública
+fallan; `make db.guardia` lo dice. El orden exacto, con el rol
+`mc_public_share` creado antes, está en la nota de CIM-2 de
+`platform/apps/web/content/backlog.ts`. Antes de crear cualquiera, `git fetch` y mirar el
+número más alto en todas las ramas activas. Desde CIM-2 `make db.check`
+(y el job «esquema» del CI) falla si dos archivos comparten número.
 
 ---
 
@@ -226,7 +235,7 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | CIM-3 | Autenticación con Supabase Auth y enlace mágico; `app_user`, `membership`, workspace de creador por defecto; cambio de workspace. | Rasheed | M | CIM-2 | Se entra con un correo nuevo y aparece un workspace vacío. |
 | CIM-4 | Marco de la aplicación: navegación con los módulos, fase 2 tras bandera, tema claro y oscuro. | Nicolás | M | — | Se navega entre los módulos, el tema se conserva, una bandera apagada quita el módulo. **Hecha, en `main` el 21-sep.** |
 | CIM-5 | Kit de interfaz: KPIs con delta y sparkline, tabla con «Ver tabla», gráficos con tooltip, estado vacío, aviso «datos hasta el {fecha}», formularios. | Nicolás | L | CIM-4 | Una galería (`/kit`) muestra cada componente en claro y oscuro. **Hecha, en `main` el 21-sep.** |
-| CIM-6 | Seed de ventas y métricas: empresas, deals por etapa, actividades; cuatro conexiones, sesenta posts, noventa días de snapshots, línea base. | Rasheed | S | CIM-2 | `make seed` deja Ventas y Resumen con los números del mock. |
+| CIM-6 | Seed de ventas y métricas: empresas, deals por etapa, actividades; cuatro conexiones, sesenta posts, noventa días de snapshots, línea base. | Rasheed | S | CIM-2 | `make seed` deja Ventas y Resumen con los números del mock. **Hecha en rama el 22-sep, pendiente de merge** (`docs/propuestas/CIM-6.md`). |
 | CIM-7 | Despliegue continuo: el repositorio de GitHub conectado al proyecto de Vercel, cada merge a `main` publica; worker en Railway o Fly. | Rasheed | S | CIM-1 | Un merge a `main` aparece solo en la URL, sin comando. |
 | CIM-8 | Seed de finanzas y campañas: tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts y snapshots de la marca. | Nicolás | S | CIM-2 | `make seed` deja Finanzas y Campañas con los números del mock. **Hecha, en `main` el 21-sep (PR #1).** |
 
@@ -268,11 +277,25 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | VEN-7 | Brief de outbound: qué busca y qué no acepta; filtra el radar. | S | VEN-2 | Una señal de una categoría excluida no aparece. |
 | VEN-8 | Deal perdido con motivo y conversión por etapa. | S | VEN-3 | La tasa entre etapas aparece con su número de deals. |
 
+Outreach automático (diseño en [ventas-outreach.md](ventas-outreach.md),
+a partir de CadenceV1.0):
+
+| Id | Historia | Tam. | Depende de | Terminado cuando |
+|---|---|---|---|---|
+| VEN-9 | Canales de outreach: migración `0015`, Unipile (LinkedIn, Instagram) con hosted auth y webhook firmado, OAuth de Google, pantalla de canales, keepalive. | L | CIM-2, CIM-3 | Un creador conecta Gmail y LinkedIn; el token se refresca solo; una cuenta caída se ve en rojo. |
+| VEN-10 | Motor de cadencias: pasos, enrolamiento, cola atómica en `outbound_touch`, despachador por canal, días hábiles y zona horaria, límites, reintentos, apagado, cancelación al responder. | L | VEN-9, CON-2 | Una secuencia de tres pasos corre sola contra un buzón de prueba; una respuesta cancela lo pendiente. |
+| VEN-11 | Perfil comercial del creador con narrativa de afirmaciones enlazadas. | M | CON-6, COT-1 | Cada cifra de la narrativa lleva a su origen. |
+| VEN-12 | Generación con afirmaciones trazables: pre-vuelo, juez con rúbrica por paso, regeneración con pistas, riesgos, revisión humana con calentamiento. | L | VEN-10, VEN-11 | Una cifra sin origen no pasa; similitud entre marcas menor de 0,65; nota, tokens y costo registrados. |
+| VEN-13 | Recomendador de cadencia con guía por paso y plantillas por nicho y señal. | M | VEN-12 | Desde una señal, seis pasos con guía activados en dos clics. |
+| VEN-14 | Bandeja de aprobación y bandeja unificada, con clasificación de intención de la respuesta. | L | VEN-12 | Un retenido se aprueba y sale; un «me interesa» mueve el deal. |
+| VEN-15 | Entregabilidad y cumplimiento: baja pública, `List-Unsubscribe`, rebotes, calentamiento, alertas. | M | VEN-10 | El enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido. |
+| VEN-16 | Actividad y métricas: cola con reintento por tipo, uso por canal, embudo por paso, vista de flujo. | M | VEN-10 | El embudo cuadra con `outbound_touch` fila a fila. |
+
 ### COT · Cotizar (Rasheed)
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
-| COT-1 | Tarifario sugerido: `packages/core/tarifas.ts`, views × CPM con modificadores; views manuales hasta que exista la línea base. | M | CIM-2 | Con las views del mock salen los rangos del mock. |
+| COT-1 | Tarifario sugerido: `packages/core/tarifas.ts`, views × CPM con modificadores; views manuales hasta que exista la línea base. | M | CIM-2 | Con las views del mock salen los rangos del mock, sin los modificadores de engagement y audiencia del mock, que no tienen fuente; ver `tarifas.ts`. |
 | COT-2 | Media kit público con cifras congeladas, `slug`, contraseña y vencimiento opcionales. | M | COT-1, RES-1 | El enlace abre sin sesión y no cambia aunque cambien las métricas. |
 | COT-3 | Cotización: desde un deal, ítems, totales, lo acordado antes de publicar, numeración. | L | COT-1, VEN-3 | Enviar pasa el deal a «Propuesta enviada»; tiene enlace público. |
 | COT-4 | Aceptación: llama a `createCampaignFromQuote()` (CAM-2) y pasa el deal a «Ganado». | M | COT-3, CAM-2 | Aceptar deja una campaña en `planned` que Nicolás ve en su módulo. |
@@ -552,8 +575,10 @@ lista corta, en orden de urgencia:
 | # | Qué | Para qué historia | Dónde está el detalle |
 |---|---|---|---|
 | 1 | Con el token de administración de Supabase, dos comandos: `CREATE SCHEMA pgboss` y `GRANT mc_worker TO mc_migrator`; luego `pnpm --filter @mc/worker install-schema`. | CON-2 en producción; sin esto el worker solo corre en pglite | `docs/propuestas/CON-2.md` §3.1 y §3.3 |
-| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. Nicolás borra `provisional/` y `_lib/workspace.ts` al recibirlo. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
-| 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. Hoy producción muestra el workspace del seed. | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
+| 2 | CIM-2: `packages/db/src/client.ts` con `withWorkspace` (o equivalente) y el esquema Drizzle de `invoice`, `campaign`, `company`, `workspace`. **Entregado** (rama `rasheed/CIM-2-cliente-db-r3`, con `main` integrado): `provisional/`, `lib/db/workspace.ts` y `test/helpers/base.ts` ya no existen; la web abre la base por `apps/web/lib/db` (`withWorkspace`) y el workspace sale solo de `lib/workspace/current.ts`; `queries/campanas.ts` y `queries/conexiones.ts` de CAM-2 y CON-3 se conservaron y solo cambió su importación (`isUuid`/`UUID_RE` ahora salen de `client.ts`). Las consultas se importan por `@mc/db/queries/<módulo>`; la raíz sigue reexportando las de Finanzas, Conexiones y Campañas para no tocar sus pantallas. Contrato en `packages/db/README.md`. Queda para Nicolás (CON-2b): migrar `apps/worker/src/runner/db.ts` a `createPgDb`/`tlsFor` de `@mc/db` y reemplazar la copia del bucle de migraciones de `connectors/test/helpers/pglite.ts` y `worker/src/runner/db-pglite.ts` por `@mc/db/test/pglite` o `db/lib/aplicar.mjs`. | FIN-1, CON-2, CAM-1 | `docs/propuestas/FIN-1.md` §1, §2 y §6 |
+| 2b | **Prioridad 1 de esta lista, junto con la fila 1.** Con la integración de CIM-2 el integrador aplica `make db.migrate` (0017 y 0018; nacieron como 0015 y 0016 y se renumeraron al integrar CON-3 y CAM-2) y comprueba `select relname, relrowsecurity from pg_class where relname in ('outbound_policy','quote_item','rate_card_item','deal_stage_history','campaign_post')` = `true` en todas. Hasta entonces la base real tiene el hueco que la rama cierra (verificado el 22-sep como `mc_app` sin workspace: `campaign_post` devuelve filas y esas cuatro tablas tienen `relrowsecurity = false`): **no cargar datos de clientes reales antes de aplicarlas.** Desde 0017 `outbound_policy` tiene RLS: toda lectura suya fuera de `withWorkspace` devuelve cero filas sin aviso (ia-outreach, ui-cadencias). Desde 0018 las tablas hijas sin `workspace_id` (`quote_item`, `rate_card_item`, `deal_stage_history`, `campaign_post`, hijas de `video_analysis`, `script`, `idea`) heredan la RLS del padre. Las hijas con FK opcional (`brand_account_snapshot`, `trait_lift`, `external_post`, `api_call_log`, `api_quota_usage`) siguen sin RLS: su dueño decide la política. | Ventas, Cotizar, Campañas, CON | `packages/db/test/schema.test.ts` |
+| 2c | Ventas (VEN-1): `contact` y `app_user` son tablas globales con PII (correo, teléfono, LinkedIn, `opted_out`) y hoy cualquier workspace las enumera. Propuesta de migración para el dueño de Ventas: `ALTER TABLE contact ENABLE/FORCE ROW LEVEL SECURITY; CREATE POLICY contact_visibility ON contact USING (source IN ('public_website','public_profile','press') OR EXISTS (SELECT 1 FROM company_link l WHERE l.company_id = contact.company_id AND l.workspace_id = current_workspace_id()))`, con una prueba en `rls.test.ts` (un contacto `user_provided` de A que B no ve). Mientras tanto `contact` y `company` se leen SIEMPRE dentro de `withWorkspace` a través de `company_link`; `test.todo` visible en `schema.test.ts`. | Ventas | `packages/db/README.md` §3 |
+| 3 | CIM-3: `lib/workspace/` con el workspace de la sesión. Hoy el workspace sale de `DEMO_WORKSPACE_ID`; sin la variable, la web usa el del seed y lo avisa en el log (también en producción, para no romper `/finanzas`). | FIN-1 y todas las pantallas | `docs/propuestas/FIN-1.md` §6 |
 | 4 | Seed `0002` usando los ids fijos de la sección 0 de `0003` (workspace, creadora, conexiones, empresas, posts), o avisar para cambiarlos. `0002` debe abrir con `set_config('app.workspace_id', …)` porque RLS está en `FORCE`. | CIM-6, CIM-8 | `docs/propuestas/CIM-8.md` §1 |
 | 5 | CIM-7: conectar GitHub con el proyecto de Vercel (Root Directory y `DATABASE_URL` ya están) y CI en Node 22 corriendo `test` además de migraciones. Con eso `scripts/vercel.sh deploy` deja de hacer falta; si se conserva, aplicar la propuesta de `--cwd "$RAIZ"`. | Despliegue de todo | `docs/propuestas/CIM-4.md`, `CON-2.md` §3.5 |
 | 6 | Migración futura con tres filas en `feature_flag`: `content_metrics`, `niche_radar`, `ideas_scripts`. | CIM-4 (banderas a la base) | `docs/propuestas/CIM-4.md` §1 |
@@ -571,6 +596,21 @@ lista corta, en orden de urgencia:
   y Nicolás no esperó: FIN-1 usa un cliente provisional con la misma
   forma que tendrá `withWorkspace`, y el worker se conecta con `pg`
   directo. Los dos llevan `TODO(CIM-2)` y su reemplazo es mecánico.
+  **Cómo quedó (22-sep):** el provisional de FIN-1 desapareció con
+  CIM-2; el del worker (`apps/worker/src/runner/db.ts`, con su pool y
+  su `tlsFor` propios) sigue y lo migra Nicolás a `createPgDb`/`tlsFor`
+  de `@mc/db` en CON-2b. El bucle «aplicar `*.sql` en orden» vive una
+  sola vez en `db/lib/aplicar.mjs` (lo usan `migrate.mjs`, el embebido
+  de `@mc/db` e `introspect`) y desde CIM-2 se niega si dos archivos
+  comparten número; las copias de `connectors/test/helpers/pglite.ts` y
+  `worker/src/runner/db-pglite.ts` pueden importarlo o usar
+  `@mc/db/test/pglite` en su siguiente cambio.
+- **CIM-1 sigue bloqueada por dos permisos de administración.** El
+  worker contra Supabase necesita `GRANT mc_worker TO mc_migrator` y el
+  esquema `pgboss` (`docs/propuestas/CON-2.md` §3.1), que solo el token
+  de administración puede dar. Mientras tanto `make dev` no se cae:
+  `apps/worker/src/dev.ts` comprueba las dos cosas, imprime los
+  comandos exactos y lista `job_definition`; `make arranque` avisa igual.
 - **Kit duplicado, ya resuelto.** FIN-1 se construyó en paralelo a
   CIM-5 con la API del borrador (`docs/propuestas/CIM-5-kit.md`) y trajo
   su propio kit mínimo. Al integrar `main` en FIN-1 se tomó el kit de

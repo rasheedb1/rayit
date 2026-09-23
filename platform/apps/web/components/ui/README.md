@@ -15,10 +15,10 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
 | `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
-| `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. |
+| `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. `deltaText` opcional para un delta que no es relativo («+2,1 puntos»). |
 | `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, error, fila clicable. Cabecera fija con `maxHeight` (scroll interno). `sort` y `page` previstos sin implementar. |
 | `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. Cliente. |
-| `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. Cliente. |
+| `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. `axisLabels` opcional: etiqueta corta bajo la barra, la categoría entera en tooltip y tabla. Cliente. |
 | `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota, DataAsOf, carga y error. |
 | `chart-utils.ts` | — | Colores por nombre de token y formato por nombre (`int`, `compact`, `pct`, `money`, `money-full`), para que crucen la frontera servidor → cliente. |
 

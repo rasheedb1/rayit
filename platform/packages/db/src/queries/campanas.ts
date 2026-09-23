@@ -35,7 +35,7 @@ import {
   type CampaignStatus,
   type SuggestionReason,
 } from '@mc/core';
-import { isUuid, type WorkspaceTx } from '../provisional/client.ts';
+import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos

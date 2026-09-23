@@ -41,8 +41,33 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verificar que las migraciones aplican en limpio
         run: node db/migrate.mjs --pglite --seed
-      - name: Los seeds son idempotentes (dos pasadas, mismos conteos)
-        run: node db/seed/verify/run-0003.mjs
+      - name: El reloj del harness no confunde el código con los datos
+        # Ocho pruebas sin base de datos sobre db/seed/verify/reloj.mjs,
+        # que es lo que desplaza CURRENT_DATE y now() en las pasadas de
+        # abajo. Si desplazara mal, todo lo que viene después pasaría en
+        # verde midiendo otra cosa.
+        run: pnpm run seed:check:unit
+      - name: Los seeds son idempotentes (hoy, mañana y dentro de seis semanas) y sus cifras son las esperadas
+        # Sin argumento corre todos los verify/NNNN.sql: dos pasadas con
+        # los mismos conteos, las cifras del mock por consulta (0002 y
+        # 0003), una tercera pasada con el reloj adelantado un día, una
+        # CUARTA que vuelve a sembrar la MISMA base seis semanas
+        # después (el `make db.seed` sobre un Supabase que ya tiene la
+        # demo) y una QUINTA que la repite sin mover el reloj. Exige que
+        # la demo siga viva por los dos lados: planes al día, bandeja
+        # fresca y serie hasta ayer, y también videos de los últimos 30
+        # días, tablero con filas, menos de una semana sin publicar y
+        # cero puntajes citando un corte ya superado.
+        run: node db/seed/verify/run.mjs
+      - name: La demo es la misma sembrada en limpio dentro de 40 días
+        # Los seeds y los verify con CURRENT_DATE y now() a +40 días: lo
+        # que ve un Supabase nuevo o la demo de un cliente el mes que
+        # viene; la tercera pasada va a +41 y la cuarta a +81. Solo se
+        # toleran las dos comprobaciones que comparan contra el now()
+        # interno de una vista (i_pipeline_vencimientos y
+        # l_conexiones_frescura); las cifras del pipeline y el recuento
+        # de posts por conexión van en consultas aparte que sí fallan.
+        run: node db/seed/verify/run.mjs --dias 40
       - name: Verificar que ninguna migración aplicada fue modificada
         working-directory: .
         run: |
@@ -85,6 +110,18 @@ jobs:
       - run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
       - name: Aplicar dos veces debe ser inocuo
         run: node db/migrate.mjs "postgres://mc:mc@localhost:5432/oncue" --seed
+      - name: Rol de la aplicación para las pruebas (sin BYPASSRLS, miembro de mc_app y de mc_worker)
+        # mc_app y mc_worker existen desde 0010 y son NOLOGIN; mc_app_ci es
+        # el rol con el que la web se conectaría, más la membresía en
+        # mc_worker para que asWorker también se ejercite sobre pg.
+        run: |
+          psql "postgres://mc:mc@localhost:5432/oncue" -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+      - name: Pruebas de @mc/db contra Postgres real (el runner de pg, no PGlite)
+        env:
+          TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
+          TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
+        run: pnpm --filter @mc/db test
 
   calidad:
     name: Tipos, lint, pruebas y build
@@ -99,6 +136,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run typecheck lint test
+      # `pnpm verificar` = turbo run typecheck lint test --force
+      # --concurrency=2. Está en platform/package.json (y en `make
+      # verificar`) para que el CI y quien trabaja en local corran
+      # EXACTAMENTE lo mismo: cuando los flags vivían solo aquí, el
+      # comando documentado daba falsos verdes (--force: la caché de
+      # turbo es local a la máquina y se comparte entre clones y
+      # worktrees sin distinguir la rama) y falsos rojos
+      # (--concurrency=2: @mc/db, @mc/worker y @mc/web levantan PGlite y
+      # pg-boss a la vez y se quedan sin bucle de eventos).
+      - run: pnpm verificar
       - name: Build del dashboard
         run: pnpm --filter @mc/web build

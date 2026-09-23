@@ -22,6 +22,12 @@ describe("Kpi", () => {
     expect(screen.getByText("+31 %")).toBeInTheDocument();
     expect(screen.getByText("vs. mismo período 2025")).toBeInTheDocument();
   });
+  it("con el delta ya formateado (puntos): el texto es el que llega y la flecha sale de delta", () => {
+    render(<Kpi label="Alcance en no seguidores" value="56 %" delta={0.021} deltaText="+2,1 puntos" deltaLabel="vs. antes" />);
+    expect(screen.getByText("+2,1 puntos")).toBeInTheDocument();
+    expect(screen.queryByText("+2 %")).not.toBeInTheDocument();
+    expect(screen.getByText("+2,1 puntos").parentElement).toHaveClass("text-good");
+  });
   it("con nota y enlace", () => {
     render(<Kpi label="Vencido" value="COP 1,1 M" note="1 factura · 41 días" href="/finanzas" />);
     expect(screen.getByRole("link")).toHaveAttribute("href", "/finanzas");

@@ -1,0 +1,363 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RateCardInputs } from "@mc/db/queries/cotizar";
+
+const guardarTarifario = vi.fn();
+vi.mock("./actions", () => ({ guardarTarifario: (...args: unknown[]) => guardarTarifario(...args) }));
+
+import { TarifarioTabla } from "./tarifario-tabla";
+import { BASIS_VACIO } from "./_lib/tarifario";
+
+const CREADORA = "00000002-0000-4000-8000-000000000003";
+
+const INPUTS: RateCardInputs = {
+  creatorId: CREADORA,
+  currency: "COP",
+  country: "CO",
+  nicheSlugs: ["cocina"],
+  baselines: [
+    { platformId: "tiktok", medianViews: 84_000, sampleSize: 20, ageHoursCut: 168, isReliable: true, computedAt: "2026-09-22T00:00:00Z" },
+    { platformId: "instagram", medianViews: 61_000, sampleSize: 6, ageHoursCut: 168, isReliable: false, computedAt: "2026-09-22T00:00:00Z" },
+  ],
+  benchmarks: [
+    { nicheSlug: "cocina", country: "CO", platform: "tiktok", currency: "COP", cpmLow: "45000", cpmHigh: "70000", source: "manual", sampleSize: 0 },
+    { nicheSlug: "cocina", country: "CO", platform: "instagram", currency: "COP", cpmLow: "55000", cpmHigh: "85000", source: "manual", sampleSize: 0 },
+  ],
+};
+
+const SETTINGS = { locale: "es-CO", currency: "COP", timezone: "America/Bogota" };
+
+function pintar(basis = BASIS_VACIO, inputs = INPUTS) {
+  return render(
+    <TarifarioTabla creatorId={CREADORA} inputs={inputs} basisInicial={basis} settings={SETTINGS} sinGuardar />,
+  );
+}
+
+const rango = (id: string) => screen.getByTestId(`rango-${id}`).textContent?.replace(/\s+/g, " ").trim();
+
+beforeEach(() => guardarTarifario.mockReset());
+
+describe("TarifarioTabla", () => {
+  it("el rango del mock se lee entero, como texto y sin centavos, sin entrar a ningún campo", () => {
+    pintar();
+    // Fuera del campo, las views llevan el separador de miles como todo lo demás.
+    expect(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado")).toHaveValue("84.000");
+    expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000");
+    // Sin «Editar», no hay campos de precio.
+    expect(screen.queryByLabelText(/Rango sugerido bajo · TikTok dedicado/)).not.toBeInTheDocument();
+  });
+
+  it("cambiar las views recalcula el rango en el navegador y marca las views como manuales", async () => {
+    pintar();
+    fireEvent.change(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado"), { target: { value: "168000" } });
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 7.560.000 – COP 11.800.000"));
+    expect(screen.getAllByText("Visualizaciones a mano").length).toBeGreaterThan(0);
+  });
+
+  it("marcar un modificador sube el rango, y el desglose se abre anunciado y con el foco en su título", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000"));
+
+    const boton = screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" });
+    expect(boton).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(boton);
+    const panel = await screen.findByRole("region", { name: /Cómo se calcula · TikTok dedicado/ });
+    const cerrar = screen.getByRole("button", { name: "Cerrar · TikTok dedicado" });
+    expect(cerrar).toHaveAttribute("aria-expanded", "true");
+    expect(cerrar).toHaveAttribute("aria-controls", "tarifario-explicacion-tiktok");
+    // El desglose se abre JUSTO DEBAJO de su fila, no al final de la página.
+    const filaDetalle = document.getElementById("tarifario-explicacion-tiktok")!;
+    expect(filaDetalle.tagName).toBe("TR");
+    expect(filaDetalle.contains(panel)).toBe(true);
+    expect(filaDetalle.previousElementSibling).toHaveTextContent("TikTok dedicado");
+    expect(within(panel).getByRole("heading")).toHaveFocus();
+    expect(within(panel).getByText(/Tus visualizaciones medianas: 84.000/)).toBeInTheDocument();
+    expect(within(panel).getByText(/CPM de referencia de cocina en Colombia/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Derechos de uso · 30 días \(35 %\)/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Rango sugerido: COP 5.100.000 – COP 7.940.000/)).toBeInTheDocument();
+  });
+
+  it("cambiar el CPM en la pantalla cambia el rango y la explicación lo dice", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const bajo = screen.getByLabelText(/CPM bajo · TikTok dedicado/);
+    const alto = screen.getByLabelText(/CPM alto · TikTok dedicado/);
+    fireEvent.change(bajo, { target: { value: "60.000" } });
+    fireEvent.blur(bajo);
+    fireEvent.change(alto, { target: { value: "90.000" } });
+    fireEvent.blur(alto);
+    fireEvent.click(screen.getByRole("button", { name: "Listo · TikTok dedicado" }));
+
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.040.000 – COP 7.560.000"));
+    expect(screen.getByText("CPM propio")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" }));
+    const panel = await screen.findByRole("region", { name: /Cómo se calcula · TikTok dedicado/ });
+    expect(within(panel).getByText("Tu CPM: COP 60.000 – COP 90.000 (lo escribiste tú)")).toBeInTheDocument();
+    expect(within(panel).getByText("Rango sugerido: COP 5.040.000 – COP 7.560.000")).toBeInTheDocument();
+  });
+
+  it("un precio escrito a mano se marca como editado y se puede devolver a la fórmula", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const precio = screen.getByLabelText(/Rango sugerido bajo · TikTok dedicado/);
+    expect(precio).toHaveValue("3.780.000");
+    fireEvent.change(precio, { target: { value: "4.000.000" } });
+    // Salir del campo es lo que hace MoneyInput para reformatear.
+    fireEvent.blur(precio);
+    fireEvent.click(screen.getByRole("button", { name: "Listo · TikTok dedicado" }));
+    expect(await screen.findByText("Editado a mano")).toBeInTheDocument();
+    expect(rango("tiktok")).toBe("COP 4.000.000 – COP 5.880.000");
+
+    fireEvent.click(screen.getByRole("button", { name: "Volver a la fórmula · TikTok dedicado" }));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000"));
+    expect(screen.queryByText("Editado a mano")).not.toBeInTheDocument();
+  });
+
+  it("las filas sin rango dicen qué les falta", () => {
+    pintar();
+    expect(screen.getAllByText("Escribe las visualizaciones de una pieza para ver el rango.").length).toBeGreaterThan(0);
+    expect(screen.getByText("No hay CPM de referencia para Facebook en Colombia. Escribe el tuyo.")).toBeInTheDocument();
+    expect(screen.queryByTestId("rango-historias")).not.toBeInTheDocument();
+  });
+
+  it("a una fila que solo le falta el CPM no se le piden las views: salen de la línea base confiable", () => {
+    pintar(BASIS_VACIO, {
+      ...INPUTS,
+      baselines: [
+        ...INPUTS.baselines,
+        { platformId: "facebook", medianViews: 19_700, sampleSize: 12, ageHoursCut: 168, isReliable: true, computedAt: "2026-09-22T00:00:00Z" },
+      ],
+    });
+    const views = screen.getByLabelText("Visualizaciones por pieza · Video en Facebook");
+    expect(views).toHaveValue("19.700");
+    const celda = views.closest("td")!;
+    expect(within(celda).getByText("Mediana propia")).toBeInTheDocument();
+    expect(within(celda).queryByText("Visualizaciones a mano")).not.toBeInTheDocument();
+    // Lo único que queda a la vista es lo que de verdad falta.
+    const fila = views.closest("tr")!;
+    expect(within(fila).getByText("No hay CPM de referencia para Facebook en Colombia. Escribe el tuyo.")).toBeInTheDocument();
+    expect(within(fila).queryByText("Escribe las visualizaciones de una pieza para ver el rango.")).not.toBeInTheDocument();
+  });
+
+  it("a 400 px las acciones se ven sin desplazar la tabla: van en la primera columna, bajo el nombre", () => {
+    pintar();
+    const boton = screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" });
+    const editar = screen.getByRole("button", { name: "Editar · TikTok dedicado" });
+    const fila = boton.closest("tr")!;
+    const primera = fila.querySelector("td")!;
+    expect(primera).toContainElement(boton);
+    expect(primera).toContainElement(editar);
+    expect(primera).toHaveTextContent("TikTok dedicado");
+    // Y no queda una columna de acciones al final que obligue a desplazarse.
+    expect(screen.queryByRole("columnheader", { name: "Acciones" })).not.toBeInTheDocument();
+  });
+
+  it("en el teléfono cada entregable es una tarjeta: views y CPM debajo del rango, cada uno con su nombre", () => {
+    pintar();
+    const views = screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado");
+    const fila = views.closest("tr")!;
+    const tabla = fila.closest("table")!;
+    // El mismo DOM, otro display: tabla desde sm, bloques apilados debajo.
+    expect(tabla).toHaveClass("block", "sm:table");
+    expect(fila).toHaveClass("flex-col", "sm:table-row");
+    expect(tabla.querySelector("thead")).toHaveClass("hidden", "sm:table-header-group");
+    // La caja no se desplaza de lado en el teléfono: solo desde sm.
+    expect(tabla.parentElement).not.toHaveClass("overflow-x-auto");
+    expect(tabla.parentElement).toHaveClass("sm:overflow-x-auto");
+    // Cada celda, salvo la del nombre, lleva su columna encima (solo en el teléfono).
+    const celdas = Array.from(fila.querySelectorAll("td"));
+    const etiquetas = celdas.map((td) => td.querySelector("span.sm\\:hidden")?.textContent ?? null);
+    expect(etiquetas).toEqual([null, "Rango sugerido", "Visualizaciones por pieza", "CPM de referencia"]);
+    expect(views.closest("td")).toBe(celdas[2]);
+  });
+
+  it("con poca muestra, la mediana se sugiere en el campo pero no entra sola en el precio (D4)", async () => {
+    pintar();
+    const views = screen.getByLabelText("Visualizaciones por pieza · Reel de Instagram");
+    expect(views).toHaveValue("");
+    expect(views).toHaveAttribute("placeholder", "61.000");
+    expect(screen.getByText("Tu mediana sale de solo 6 videos (61.000). Confírmala o escribe la tuya.")).toBeInTheDocument();
+    expect(screen.queryByTestId("rango-reel")).not.toBeInTheDocument();
+
+    fireEvent.change(views, { target: { value: "61000" } });
+    await waitFor(() => expect(rango("reel")).toBe("COP 3.360.000 – COP 5.190.000"));
+  });
+
+  it("un paquete suma sus entregables con descuento y tiene su propio desglose", async () => {
+    pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
+    fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
+    // Arranca con los dos primeros entregables con rango y −10 %.
+    // (3.780.000 + 3.360.000) × 0,9 = 6.426.000 · (5.880.000 + 5.190.000) × 0,9 = 9.963.000, a tres cifras
+    await waitFor(() => expect(rango("p1")).toBe("COP 6.430.000 – COP 9.960.000"));
+    expect(screen.getByText("Paquete: 1 × TikTok dedicado + 1 × Reel de Instagram")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Descuento del paquete (%)"), { target: { value: "12" } });
+    await waitFor(() => expect(rango("p1")).toBe("COP 6.280.000 – COP 9.740.000"));
+  });
+
+  it("en el editor de paquetes el nombre de cada entregable se lee entero y marca su casilla", async () => {
+    pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
+    fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
+    const casilla = await screen.findByRole("checkbox", { name: "Reel de Instagram" });
+    expect(casilla).toBeChecked();
+
+    // El nombre es la ETIQUETA de la casilla, completo y sin recortar:
+    // antes salía «Reel de In…» porque la cantidad se comía la fila.
+    const nombre = screen.getByText("Reel de Instagram", { selector: "label" });
+    expect(nombre).toHaveAttribute("for", casilla.id);
+    expect(nombre.className).not.toMatch(/\btruncate\b/);
+    expect(nombre.className).toMatch(/\bflex-1\b/);
+    expect(nombre.className).toMatch(/\bmin-w-0\b/);
+    // La cantidad vive en una caja de ancho fijo que no crece.
+    const cantidad = screen.getByLabelText("Cantidad de Reel de Instagram en el paquete");
+    expect(cantidad.parentElement?.className).toMatch(/\bw-16\b/);
+    expect(cantidad.parentElement?.className).toMatch(/\bshrink-0\b/);
+
+    // Clic en el nombre: desmarca y vuelve a marcar.
+    fireEvent.click(nombre);
+    expect(casilla).not.toBeChecked();
+    expect(cantidad).toHaveValue("");
+    fireEvent.click(nombre);
+    expect(casilla).toBeChecked();
+    expect(cantidad).toHaveValue("1");
+  });
+
+  it("un CPM propio al revés se marca junto a sus campos y no deja guardar", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const bajo = screen.getByLabelText(/CPM bajo · TikTok dedicado/);
+    fireEvent.change(bajo, { target: { value: "90.000" } });
+    fireEvent.blur(bajo);
+
+    const aviso = await screen.findByText("El CPM bajo no puede ser mayor que el alto.");
+    expect(aviso).toHaveAttribute("role", "alert");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(/CPM alto · TikTok dedicado/)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("group", { name: "CPM de referencia · TikTok dedicado" })).toHaveAccessibleDescription(
+      "El CPM bajo no puede ser mayor que el alto.",
+    );
+    expect(screen.getByText("Corrige el CPM para ver el rango.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+
+    // Corregido, vuelve el rango y se puede guardar.
+    fireEvent.change(bajo, { target: { value: "50.000" } });
+    fireEvent.blur(bajo);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeEnabled());
+    expect(screen.queryByText("El CPM bajo no puede ser mayor que el alto.")).not.toBeInTheDocument();
+  });
+
+  it("un CPM propio al revés que ya venía guardado abre sus campos al cargar, no solo «Volver a la fórmula»", () => {
+    // Así quedaba Facebook tras guardar un CPM 30.000 – 20.000.
+    pintar({ ...BASIS_VACIO, viewsManuales: { facebook: 40_000 }, cpm: { facebook: { low: "30000", high: "20000" } } });
+    const bajo = screen.getByLabelText(/CPM bajo · Video en Facebook/);
+    expect(bajo).toHaveValue("30.000");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("El CPM bajo no puede ser mayor que el alto.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("las views se escriben sin separadores y se leen con ellos al salir del campo", async () => {
+    pintar();
+    const views = screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado");
+    fireEvent.focus(views);
+    expect(views).toHaveValue("84000");
+    fireEvent.change(views, { target: { value: "115446" } });
+    expect(views).toHaveValue("115446");
+    fireEvent.blur(views);
+    expect(views).toHaveValue("115.446");
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.200.000 – COP 8.080.000"));
+  });
+
+  it("un precio a mano al revés se marca en la fila y no se puede cerrar ni guardar", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const bajo = screen.getByLabelText(/Rango sugerido bajo · TikTok dedicado/);
+    fireEvent.change(bajo, { target: { value: "9.000.000" } });
+    fireEvent.blur(bajo);
+
+    const aviso = await screen.findByText("El precio bajo no puede ser mayor que el alto.");
+    expect(aviso).toHaveAttribute("role", "alert");
+    expect(bajo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(/Rango sugerido alto · TikTok dedicado/)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("group", { name: "Rango sugerido · TikTok dedicado" })).toHaveAccessibleDescription(
+      "El precio bajo no puede ser mayor que el alto.",
+    );
+    expect(screen.getByRole("button", { name: "Listo · TikTok dedicado" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+    expect(screen.queryByTestId("rango-tiktok")).not.toBeInTheDocument();
+
+    // Corregido, se cierra y se guarda.
+    fireEvent.change(bajo, { target: { value: "4.000.000" } });
+    fireEvent.blur(bajo);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Listo · TikTok dedicado" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeEnabled();
+  });
+
+  it("un extremo borrado se queda vacío e inválido, no se convierte en cero", async () => {
+    pintar();
+    fireEvent.click(screen.getByRole("button", { name: "Editar · TikTok dedicado" }));
+    const alto = screen.getByLabelText(/Rango sugerido alto · TikTok dedicado/);
+    fireEvent.change(alto, { target: { value: "" } });
+    fireEvent.blur(alto);
+    expect(await screen.findByText("Escribe los dos extremos del rango.")).toBeInTheDocument();
+    expect(alto).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Guardar tarifario" })).toBeDisabled();
+  });
+
+  it("guardar manda el estado completo al servidor, no los precios ya calculados", async () => {
+    guardarTarifario.mockResolvedValue({ ok: true });
+    pintar();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Exclusividad/ }));
+    fireEvent.change(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado"), { target: { value: "90000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar tarifario" }));
+
+    await waitFor(() => expect(guardarTarifario).toHaveBeenCalledTimes(1));
+    const formData = guardarTarifario.mock.calls[0]?.[1] as FormData;
+    expect(formData.get("creatorId")).toBe(CREADORA);
+    expect(JSON.parse(String(formData.get("estado")))).toEqual({
+      viewsManuales: { tiktok: 90_000 },
+      modificadores: ["exclusividad_30d"],
+      precios: {},
+      cpm: {},
+      paquetes: [],
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Guardado");
+  });
+
+  it("después de guardar, las casillas siguen como estaban: guardar no reinicia el formulario", async () => {
+    guardarTarifario.mockResolvedValue({ ok: true });
+    pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
+    const derechos = screen.getByRole("checkbox", { name: /Derechos de uso/ });
+    fireEvent.click(derechos);
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000"));
+    fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
+    const enPaquete = screen.getByRole("checkbox", { name: "TikTok dedicado" });
+    expect(enPaquete).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar tarifario" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Guardado");
+
+    // La casilla dice lo mismo que el rango: marcada, y con el recargo.
+    expect(screen.getByRole("checkbox", { name: /Derechos de uso/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "TikTok dedicado" })).toBeChecked();
+    expect(rango("tiktok")).toBe("COP 5.100.000 – COP 7.940.000");
+    // Y pulsarla otra vez la quita, como dice la casilla.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000"));
+    expect(screen.getByRole("checkbox", { name: /Derechos de uso/ })).not.toBeChecked();
+  });
+
+  it("los campos vacíos no aparentan un cero: las views y el CPM sin valor muestran un ejemplo en texto", () => {
+    pintar();
+    const historias = screen.getByLabelText("Visualizaciones por pieza · Historias (3)");
+    expect(historias).toHaveValue("");
+    expect(historias.getAttribute("placeholder")).not.toBe("0");
+    expect(historias).toHaveAttribute("placeholder", "p. ej. 25.000");
+    // Facebook no tiene CPM de referencia: sus campos se abren vacíos, con su nombre.
+    expect(screen.getByLabelText(/CPM bajo · Video en Facebook/)).toHaveAttribute("placeholder", "CPM bajo");
+    expect(screen.getByLabelText(/CPM alto · Video en Facebook/)).toHaveAttribute("placeholder", "CPM alto");
+  });
+});

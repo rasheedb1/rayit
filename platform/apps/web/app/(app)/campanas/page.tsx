@@ -60,7 +60,12 @@ const COLUMNS: Column<CampaignListRow>[] = [
   },
   {
     key: "amount",
-    header: "Monto",
+    // Total CON impuesto: es lo que se factura (CAM-2, FIN-1). El negocio
+    // de Ventas lleva el mismo acuerdo sin IVA (0031); sin decirlo, las
+    // dos pantallas parecían dar cifras distintas del mismo trabajo.
+    // Pendiente del visto bueno de Nicolás y de moverlo al messages.ts
+    // del módulo cuando exista.
+    header: "Total con impuesto",
     align: "num",
     render: (r) => (r.amount ? formatMoney(r.amount, r.currency, { mode: "full" }) : <span className="font-sans text-fg-3">Sin monto</span>),
   },

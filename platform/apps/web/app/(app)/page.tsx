@@ -10,14 +10,39 @@ import { OwnerAvatar, OwnerName } from "@/components/owner";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Progress, StatsList } from "@/components/progress";
 import { SprintBoard } from "@/components/sprint-board";
+import { formatDate } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Plan" };
+/**
+ * Esta pantalla NO toca la base, y por eso se prerenderiza.
+ *
+ * Antes abría una transacción para leer `workspace` y quedarse con el
+ * locale y la zona horaria… para formatear UNA fecha en el pie. El
+ * precio era que la portada del producto dependía de la base: con un
+ * DEMO_WORKSPACE_ID que no corresponde a ninguna fila —lo normal en un
+ * despliegue recién hecho—, getWorkspace lanza y la portada respondía
+ * 500. Una página cuyo contenido entero sale de content/backlog.ts no
+ * tiene por qué caerse cuando Supabase no contesta.
+ *
+ * La marca de publicación tampoco era del workspace: este plan se
+ * publica con cada merge a main, así que es la fecha de la compilación
+ * y se presenta con los valores por defecto (lib/format.ts), no con los
+ * de un inquilino que aquí no existe.
+ */
+export const dynamic = "force-static";
+const PUBLICADO = formatDate(new Date().toISOString(), "long");
 
+/**
+ * Cada módulo lleva a su plan (/plan/<módulo>), que es lo que resume la
+ * tarjeta. Las pantallas del producto ya no enlazan su plan desde la
+ * cabecera (pulido r8): era un artefacto del equipo delante de la
+ * creadora, así que el camino al plan de un módulo es este.
+ */
 function ModuleCard({ m }: { m: ModuleDef }) {
   const st = stats(m.prefix ? storiesFor(m.prefix) : []);
   return (
     <Link
-      href={`/${m.slug}`}
+      href={m.prefix ? `/plan/${m.slug}` : `/${m.slug}`}
       className="group flex flex-col rounded-md border border-line bg-bg p-4 transition-colors hover:border-line-2 hover:bg-bg-2"
     >
       <div className="flex items-start justify-between gap-3">
@@ -40,11 +65,6 @@ function ModuleCard({ m }: { m: ModuleDef }) {
 
 export default function PlanPage() {
   const all = stats(STORIES);
-  const published = new Intl.DateTimeFormat("es-CO", {
-    dateStyle: "long",
-    timeStyle: "short",
-    timeZone: "America/Bogota",
-  }).format(new Date());
 
   return (
     <>
@@ -143,7 +163,7 @@ export default function PlanPage() {
       </section>
 
       <footer className="mt-12 border-t border-line pt-4 text-xs text-fg-3">
-        Publicado el {published}. El estado vive en apps/web/content/backlog.ts; el plan completo, en docs/backlog-mvp.md.
+        Publicado el {PUBLICADO}. El estado vive en apps/web/content/backlog.ts; el plan completo, en docs/backlog-mvp.md.
       </footer>
     </>
   );

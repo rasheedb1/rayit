@@ -13,10 +13,10 @@ import {
   dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, keyringFromEnv, loadFixtures, TokenCipher, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
 import { listConnections, listConsents, type WorkspaceTx } from "@mc/db";
-import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/provisional/embedded";
+import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { createOAuthHandlers, OAUTH_COOKIE, type OAuthHandlers } from "./oauth-handlers";
 import { CONSENT_POLICY_VERSION } from "./consent";
-import { SEED_WORKSPACE_ID } from "@/lib/db/workspace";
+import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";

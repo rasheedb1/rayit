@@ -146,6 +146,26 @@ titulo "6 · ¿Responde todo?"
 if [[ -f "$RAIZ/.env.local" ]]; then
   if (cd "$RAIZ" && node db/sql.mjs "select 1 as ok" >/dev/null 2>&1); then
     verde "la base de datos de Supabase responde"
+
+    # El worker necesita dos permisos de administración que ninguna
+    # migración puede dar (docs/propuestas/CON-2.md §3.1): membresía en
+    # mc_worker y el esquema pgboss. Se pregunta como mc_migrator, que es
+    # el rol con el que arranca el worker (DATABASE_URL_DIRECT).
+    estado="$(cd "$RAIZ" && node db/sql.mjs --admin \
+      "select case when pg_has_role(current_user, 'mc_worker', 'MEMBER') then 'miembro-ok' else 'miembro-falta' end
+              || ' ' || case when exists (select 1 from pg_namespace where nspname = 'pgboss') then 'pgboss-ok' else 'pgboss-falta' end
+              || ' ' || current_user::text as estado" 2>/dev/null)"
+    if [[ "$estado" == *"miembro-ok"* && "$estado" == *"pgboss-ok"* ]]; then
+      verde "el worker puede arrancar contra Supabase (miembro de mc_worker, esquema pgboss)"
+    else
+      amber "el worker todavía no puede arrancar contra Supabase; 'make dev' lo deja en modo humo"
+      [[ "$estado" == *"miembro-falta"* ]] && \
+        gris "falta:  ./scripts/supabase-admin.sh sql \"GRANT mc_worker TO mc_migrator\""
+      [[ "$estado" == *"pgboss-falta"* ]] && {
+        gris "falta:  ./scripts/supabase-admin.sh sql \"CREATE SCHEMA IF NOT EXISTS pgboss AUTHORIZATION mc_migrator\""
+        gris "        pnpm --filter @mc/worker install-schema"; }
+      gris "los corre Rasheed con el token de administración (docs/propuestas/CON-2.md §3.1)"
+    fi
   else
     fallo "la base de datos no responde" "mira: cd platform && make db.info"
   fi

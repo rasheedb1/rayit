@@ -7,23 +7,41 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./schema": "./src/schema/index.ts",
+    "./embedded": "./src/embedded.ts",
+    "./pglite": "./src/pglite.ts",
+    "./queries/catalogos": "./src/queries/catalogos.ts",
+    "./queries/cimientos": "./src/queries/cimientos.ts",
+    "./queries/identidad": "./src/queries/identidad.ts",
+    "./queries/resumen": "./src/queries/resumen.ts",
+    "./queries/resumen-constantes": "./src/queries/resumen-constantes.ts",
+    "./queries/ventas": "./src/queries/ventas.ts",
+    "./queries/cotizar": "./src/queries/cotizar.ts",
+    "./queries/campanas": "./src/queries/campanas.ts",
     "./queries/finanzas": "./src/queries/finanzas.ts",
     "./queries/conexiones": "./src/queries/conexiones.ts",
-    "./queries/campanas": "./src/queries/campanas.ts",
-    "./provisional/embedded": "./src/provisional/embedded.ts"
+    "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "lint": "eslint .",
+    "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 test/*.test.ts",
+    "introspect": "node scripts/introspect.mjs"
   },
   "dependencies": {
     "@mc/core": "workspace:*",
+    "drizzle-orm": "^0.45.3",
     "pg": "^8.13.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9.39.0",
     "typescript": "^5.6.0"
   }
 }

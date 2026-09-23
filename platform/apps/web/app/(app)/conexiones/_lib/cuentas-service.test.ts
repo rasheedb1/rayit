@@ -2,15 +2,15 @@
 /**
  * CON-10 · el servicio de cuentas por @ contra Postgres embebido con el seed
  * y fuentes sobre fixtures: agregar deja la fila, el consentimiento con la
- * declaración y el snapshot del día; actualizar reemplaza el snapshot;
+ * declaración y el snapshot del día; actualizar el mismo día no duplica el snapshot;
  * TikTok se agrega sin métricas; errores en español; sin credenciales en
  * ninguna tabla.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from "@mc/connectors";
 import { listConsents, type WorkspaceTx } from "@mc/db";
-import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/provisional/embedded";
-import { SEED_WORKSPACE_ID } from "@/lib/db/workspace";
+import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
+import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
@@ -94,11 +94,12 @@ describe("agregar", () => {
 });
 
 describe("actualizar y quitar", () => {
-  it("actualizar el mismo día reemplaza el snapshot; volver a agregar no duplica; quitar conserva la historia", async () => {
+  it("actualizar el mismo día no duplica el snapshot; volver a agregar no duplica; quitar conserva la historia", async () => {
     const rows = await service.listar();
     const ig = rows.find((r) => r.handle === "cafealma")!;
     const upd = await service.actualizar(ig.id);
-    expect(upd).toMatchObject({ ok: true, withMetrics: true });
+    // Ya había lectura de hoy (la del alta): no se guarda otra y la pantalla lo dice.
+    expect(upd).toMatchObject({ ok: true, withMetrics: true, alreadyReadToday: true });
     const n = await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM account_metric_snapshot WHERE connection_id = $1", [ig.id]);
     expect(Number(n.rows[0]!.n)).toBe(1);
     const again = await service.agregar({ platformId: "instagram", handle: "cafealma" }, WHO);
