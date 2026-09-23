@@ -224,8 +224,19 @@ CREATE POLICY app_user_insert ON app_user FOR INSERT
 -- Crear un workspace es crear el de la transacción. El seed ya fija
 -- app.workspace_id antes de insertar su fila; el registro de CIM-3 hará
 -- lo mismo con withWorkspace(nuevoId).
+--
+-- Y nace en el plan gratuito: el plan es facturación, no un campo del
+-- alta. Sin esto, quien se registra elegía 'enterprise' en el INSERT
+-- (0024 §7.6 ya le quita a mc_app el UPDATE de plan; esto cierra la otra
+-- puerta). Los seeds, que corren como el rol que migra, siembran
+-- espacios de demostración con otro plan: su alta va aparte, TO
+-- CURRENT_USER, como las de arriba.
 DROP POLICY workspace_signup ON workspace;
 CREATE POLICY workspace_signup ON workspace FOR INSERT
+  WITH CHECK (id = current_workspace_id() AND plan = 'free');
+
+DROP POLICY IF EXISTS workspace_seed ON workspace;
+CREATE POLICY workspace_seed ON workspace FOR INSERT TO CURRENT_USER
   WITH CHECK (id = current_workspace_id());
 
 

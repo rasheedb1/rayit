@@ -128,6 +128,32 @@
  *     compruebe que borrar el padre no las ponga a NULL (ON DELETE SET
  *     NULL publicaría la fila).
  *
+ * EL PADRE QUE AÍSLA POR PERSONA (pulido, ronda 1)
+ * -------------------------------------------------
+ * Un EXISTS hereda del padre CÓMO aísla, no solo SI aísla. app_user
+ * («soy yo, o comparto workspace con esa persona»), membership («las de
+ * este workspace, o las mías») y workspace («el fijado, o uno del que
+ * soy miembro») aíslan por PERSONA: quien está en A y en B ve, desde B,
+ * filas que son de A. Hasta aquí contaban como «estricto», así que una
+ * tabla con workspace_id que se aislara con
+ *
+ *   EXISTS (SELECT 1 FROM app_user u WHERE u.id = t.created_by)
+ *   EXISTS (SELECT 1 FROM membership m WHERE m.workspace_id = t.workspace_id)
+ *
+ * pasaba en verde, y desde B se leían las filas de A que nombraran a una
+ * persona compartida (medido en pglite). Es la misma clase que la ronda
+ * 5 cerró para `created_by = current_user_id()`, entrando por una
+ * subconsulta.
+ *
+ * Ahora esas tablas son «por-persona»: su lectura aísla, pero no por
+ * inquilino. Un EXISTS sobre ellas vale como uno sobre un padre con
+ * globales: sirve a una tabla SIN columna de inquilino (que hereda la
+ * persona), y a una CON ella solo junto a `col_de_inquilino =
+ * current_workspace_id()` en un AND, o si `tabla.col` —la columna que
+ * correlaciona— está en AISLADAS_POR_PERSONA_DECLARADAS con su motivo.
+ * En escritura no sirve nunca (el mínimo es «estricto»), y un índice
+ * único no se da por aislado por colgar de un padre así.
+ *
  * Esto no demuestra que una política sea CORRECTA —eso lo prueban los
  * ataques de test/rls.test.ts, workspace por workspace—: impide que una
  * abierta pase por cerrada.
@@ -136,8 +162,20 @@
 /** Qué lado de la política se evalúa: USING de un SELECT, o todo lo que escribe o toca filas. */
 export type Lado = 'lectura' | 'escritura';
 
-/** Cómo aísla una tabla sus lecturas, que es lo que hereda un EXISTS sobre ella. */
-export type AislamientoDeLectura = 'estricto' | 'con-globales' | 'no';
+/**
+ * Cómo aísla una tabla sus lecturas, que es lo que hereda un EXISTS sobre ella.
+ *
+ *   estricto       por inquilino: desde B no se ve nada de A
+ *   con-globales   por inquilino, más las filas sin dueño (de todos)
+ *   por-persona    por la persona de la sesión: quien está en A y en B
+ *                  ve desde B filas de A (app_user, membership, workspace)
+ *   no             no aísla
+ *
+ * Una tabla que fuera a la vez con-globales y por-persona cuenta como
+ * por-persona: su única salida es la declaración por columna, que es la
+ * más estrecha.
+ */
+export type AislamientoDeLectura = 'estricto' | 'con-globales' | 'por-persona' | 'no';
 
 /** Una clave ajena de una sola columna: `tabla.col → padre`. */
 export interface ReferenciaDeTabla {
@@ -162,7 +200,11 @@ export interface ContextoDePolitica {
    * que una fila global puede nombrar y quien la lee quizá no ve.
    */
   referenciasConRls: (tabla: string) => readonly ReferenciaDeTabla[];
-  /** ¿Está declarada `tabla.col = current_user_id()` como aislamiento por persona? */
+  /**
+   * ¿Está declarada `tabla.col` como aislamiento por persona? Vale para
+   * `col = current_user_id()` y para un EXISTS sobre un padre por-persona
+   * correlacionado por `col`.
+   */
   personaDeclarada: (tabla: string, col: string) => boolean;
 }
 
@@ -170,8 +212,12 @@ export interface ContextoDePolitica {
 export const COLUMNAS_DE_INQUILINO: readonly string[] = ['workspace_id', 'owner_workspace_id'];
 
 type Resultado =
-  /** `nulos`: las columnas de las ramas «IS NULL» que se aceptaron (la fila global). */
-  | { t: 'aisla'; claves: Set<string>; globales: boolean; nulos: Set<string> }
+  /**
+   * `nulos`: las columnas de las ramas «IS NULL» que se aceptaron (la
+   * fila global). `persona`: alguna rama aísla por persona, no por
+   * inquilino.
+   */
+  | { t: 'aisla'; claves: Set<string>; globales: boolean; persona: boolean; nulos: Set<string> }
   /** `correlaciones`: las columnas que los EXISTS de su AND correlacionan con un padre. */
   | { t: 'nulo'; col: string; correlaciones: Set<string> }
   /** `col = current_user_id()` en una tabla con inquilino: estrecha, no aísla sola. */
@@ -180,7 +226,7 @@ type Resultado =
 
 /** El veredicto sobre una expresión entera. */
 export type Veredicto =
-  | { aisla: true; globales: boolean; nulos: string[] }
+  | { aisla: true; globales: boolean; persona: boolean; nulos: string[] }
   | { aisla: false; trozo: string };
 
 const IDENT = '[a-z_][a-z0-9_$]*';
@@ -313,24 +359,34 @@ function tablasDelFrom(from: string): Array<{ tabla: string; alias: string }> {
   return out;
 }
 
-const ORDEN: Record<AislamientoDeLectura, number> = { no: 0, 'con-globales': 1, estricto: 2 };
+const ORDEN: Record<AislamientoDeLectura, number> = { no: 0, 'con-globales': 1, 'por-persona': 1, estricto: 2 };
 
 const abierta = (trozo: string): Resultado => ({ t: 'abierta', trozo });
-const aisla = (claves: Iterable<string>, globales: boolean, nulos: Iterable<string> = []): Resultado => ({
+const aisla = (
+  claves: Iterable<string>,
+  globales: boolean,
+  nulos: Iterable<string> = [],
+  persona = false,
+): Resultado => ({
   t: 'aisla',
   claves: new Set(claves),
   globales,
+  persona,
   nulos: new Set(nulos),
 });
 
 /**
  * La forma `EXISTS (SELECT 1 FROM padre p WHERE p.x = tabla.y …)`:
- * la columna de la fila con la que se correlaciona, y si el padre tiene
- * filas globales. `null` si no es un EXISTS; 'abierta' si lo es pero no
- * aísla (sin tabla, sin correlación, sobre una tabla sin RLS, con un
- * agregado o una cláusula que cambia cuántas filas devuelve).
+ * la columna de la fila con la que se correlaciona, si el padre tiene
+ * filas globales y si aísla por persona. `null` si no es un EXISTS;
+ * 'abierta' si lo es pero no aísla (sin tabla, sin correlación, sobre
+ * una tabla sin RLS, con un agregado o una cláusula que cambia cuántas
+ * filas devuelve).
  */
-function leerExiste(s: string, ctx: ContextoDePolitica): { col: string; globales: boolean } | 'abierta' | null {
+function leerExiste(
+  s: string,
+  ctx: ContextoDePolitica,
+): { col: string; globales: boolean; persona: boolean } | 'abierta' | null {
   if (!s.startsWith('EXISTS (')) return null;
   const abre = s.indexOf('(');
   if (cierre(s, abre) !== s.length - 1) return null;
@@ -349,10 +405,12 @@ function leerExiste(s: string, ctx: ContextoDePolitica): { col: string; globales
   // EXISTS sobre un catálogo sin RLS es verdadero para cualquiera.
   const minimo: AislamientoDeLectura = ctx.lado === 'lectura' ? 'con-globales' : 'estricto';
   let globales = false;
+  let persona = false;
   for (const { tabla } of tablas) {
     const a = ctx.aislamientoDe(tabla);
     if (ORDEN[a] < ORDEN[minimo]) return 'abierta';
     if (a === 'con-globales') globales = true;
+    if (a === 'por-persona') persona = true;
   }
 
   // Y correlacionada con la fila POR UNA CLAVE AJENA: uno de los
@@ -377,8 +435,8 @@ function leerExiste(s: string, ctx: ContextoDePolitica): { col: string; globales
     const m = CORRELACION.exec(sinParentesis(termino));
     if (!m) continue;
     const [, q1, c1, q2, c2] = m;
-    if (q1 === ctx.tabla && correlaciona(c1!, q2!, c2!)) return { col: c1!, globales };
-    if (q2 === ctx.tabla && correlaciona(c2!, q1!, c1!)) return { col: c2!, globales };
+    if (q1 === ctx.tabla && correlaciona(c1!, q2!, c2!)) return { col: c1!, globales, persona };
+    if (q2 === ctx.tabla && correlaciona(c2!, q1!, c1!)) return { col: c2!, globales, persona };
   }
   return 'abierta';
 }
@@ -392,10 +450,17 @@ function existe(s: string, ctx: ContextoDePolitica): Resultado | null {
   // propio (ver «LOS PADRES CON FILAS GLOBALES» arriba). Dentro de un
   // AND con `workspace_id = current_workspace_id()` la política sigue
   // aislando: el AND toma el término estricto.
-  if (e.globales && ctx.inquilinoDe(ctx.tabla).length > 0 && !ctx.hijaConGlobalesDeclarada(ctx.tabla)) {
+  const conInquilino = ctx.inquilinoDe(ctx.tabla).length > 0;
+  if (e.globales && conInquilino && !ctx.hijaConGlobalesDeclarada(ctx.tabla)) {
     return abierta(s);
   }
-  return aisla([e.col], e.globales);
+  // Un padre que aísla por persona tampoco basta (ver «EL PADRE QUE AÍSLA
+  // POR PERSONA» arriba): quien está en dos workspaces leería desde uno
+  // las filas del otro. Se abre solo declarando `tabla.col`.
+  if (e.persona && conInquilino && !ctx.personaDeclarada(ctx.tabla, e.col)) {
+    return abierta(s);
+  }
+  return aisla([e.col], e.globales, [], e.persona);
 }
 
 /** ¿Dice `col` de qué inquilino es la fila? */
@@ -432,13 +497,13 @@ function atomo(s: string, ctx: ContextoDePolitica): Resultado {
     if (ctx.inquilinoDe(ctx.tabla).length && !ctx.personaDeclarada(ctx.tabla, col)) {
       return { t: 'persona', col, trozo: s };
     }
-    return aisla([col], false);
+    return aisla([col], false, [], true);
   }
 
   // El correo verificado solo nombra a una persona en app_user.email
   // (único): ahí es la misma fila que `id = current_user_id()`.
   const correo = COL_IGUAL_CORREO.exec(s) ?? CORREO_IGUAL_COL.exec(s);
-  if (correo) return ctx.tabla === 'app_user' && correo[1] === 'email' ? aisla(['email'], false) : abierta(s);
+  if (correo) return ctx.tabla === 'app_user' && correo[1] === 'email' ? aisla(['email'], false, [], true) : abierta(s);
 
   const nula = COL_ES_NULA.exec(s);
   if (nula) return { t: 'nulo', col: nula[1]!, correlaciones: new Set() };
@@ -454,10 +519,12 @@ function analizar(expr: string, ctx: ContextoDePolitica): Resultado {
     const claves = new Set<string>();
     for (const r of rs) if (r.t === 'aisla') for (const c of r.claves) claves.add(c);
     let globales = false;
+    let persona = false;
     const nulos = new Set<string>();
     for (const r of rs) {
       if (r.t === 'aisla') {
         globales ||= r.globales;
+        persona ||= r.persona;
         for (const c of r.nulos) nulos.add(c);
         continue;
       }
@@ -479,16 +546,19 @@ function analizar(expr: string, ctx: ContextoDePolitica): Resultado {
       }
       return r.t === 'abierta' ? r : abierta(r.trozo);
     }
-    return aisla(claves, globales, nulos);
+    return aisla(claves, globales, nulos, persona);
   }
 
   const terminos = partir(s, 'AND');
   if (terminos.length > 1) {
     const rs = terminos.map((r) => analizar(r, ctx));
-    const estrictos = rs.filter((r): r is Extract<Resultado, { t: 'aisla' }> => r.t === 'aisla' && !r.globales);
+    const estrictos = rs.filter(
+      (r): r is Extract<Resultado, { t: 'aisla' }> => r.t === 'aisla' && !r.globales && !r.persona,
+    );
     if (estrictos.length) {
       // El AND solo estrecha: con un término estricto la fila es de un
-      // inquilino, y las ramas «IS NULL» de dentro no la hacen global.
+      // inquilino, y las ramas «IS NULL» de dentro no la hacen global
+      // (ni la persona la abre a sus otros workspaces).
       const claves = new Set<string>();
       for (const r of estrictos) for (const c of r.claves) claves.add(c);
       return aisla(claves, false);
@@ -505,8 +575,17 @@ function analizar(expr: string, ctx: ContextoDePolitica): Resultado {
       }
       return { t: 'nulo', col: nulo.col, correlaciones };
     }
-    const conGlobales = rs.find((r) => r.t === 'aisla');
-    if (conGlobales) return conGlobales;
+    // Sin término estricto, lo que aísla lo hace con globales o por
+    // persona: se suman las dos marcas, que es lo prudente.
+    const debiles = rs.filter((r): r is Extract<Resultado, { t: 'aisla' }> => r.t === 'aisla');
+    if (debiles.length) {
+      return aisla(
+        debiles.flatMap((r) => [...r.claves]),
+        debiles.some((r) => r.globales),
+        debiles.flatMap((r) => [...r.nulos]),
+        debiles.some((r) => r.persona),
+      );
+    }
     const persona = rs.find((r) => r.t === 'persona');
     if (persona) return abierta(persona.trozo);
     return abierta(s);
@@ -532,7 +611,7 @@ export function terminosDelAnd(expr: string): string[] {
 export function veredicto(expr: string | null, ctx: ContextoDePolitica): Veredicto {
   if (expr === null || expr.trim() === '') return { aisla: false, trozo: '(sin expresión: equivale a true)' };
   const r = analizar(normalizar(expr), ctx);
-  if (r.t === 'aisla') return { aisla: true, globales: r.globales, nulos: [...r.nulos].sort() };
+  if (r.t === 'aisla') return { aisla: true, globales: r.globales, persona: r.persona, nulos: [...r.nulos].sort() };
   if (r.t === 'nulo') return { aisla: false, trozo: `${r.col} IS NULL` };
   return { aisla: false, trozo: r.trozo };
 }

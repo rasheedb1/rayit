@@ -323,7 +323,10 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
    columna con la base y falla si algo falta o difiere; y comprueba que
    ninguna tabla se quedó sin aislamiento ni excepción declarada, que
    ninguna excepción sobra y que `mc_app` no tiene privilegios de más.
-7. El integrador aplica en Supabase: `make db.migrate`.
+7. El integrador aplica en Supabase: `make db.migrate`, y después
+   `make db.guardia` (la guardia contra Supabase, solo lectura) tiene
+   que dar verde ANTES de `make vercel.deploy PROD=1`: en producción la
+   web no arranca si la guardia reporta algo.
 
 Nunca al revés: no hay `drizzle-kit generate` ni `push`.
 
@@ -376,12 +379,21 @@ además más rápido.
   `GRANT` **por columna** cuenta como de tabla (un REVOKE de tabla no
   lo quita), y en las **secuencias** `mc_app` no tiene SELECT ni UPDATE
   —`last_value` es el volumen de toda la plataforma— y USAGE solo donde
-  inserta (**0026**).
+  inserta (**0026**). Donde la política aísla la fila pero no las
+  columnas, el privilegio va por columna y se declara en `soloColumnas`:
+  `workspace` solo se actualiza en sus columnas de ajustes, así que el
+  plan no se lo cambia el propio workspace (**0024 §7.6**).
+- **Abierto, con plan** (docs/propuestas/CIM-2.md §3): el id bigserial
+  de las tablas donde `mc_app` inserta sigue siendo un contador global
+  (no le devuelvas ese id a la web; el plan es pasarlas a uuid), y
+  `account_metric_snapshot` conserva UPDATE por el upsert de CON-10.
 - **Nada corre con los privilegios de otro sin declararlo** (**0029**).
   Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
   corre con su dueño para cualquiera que escriba en la tabla, aunque a
   `mc_app` se le haya revocado la función. La guardia inventaría TODA
   función SECURITY DEFINER de `public` (`FUNCIONES_DEFINER_DECLARADAS`),
+  y las que `mc_app` puede ejecutar en otro esquema al que llega
+  (`extensions` incluido),
   todo disparador que llame a una (`DISPARADORES_DEFINER_DECLARADOS`),
   las reglas CREATE RULE (`REGLAS_DECLARADAS`), los esquemas fuera de
   `public` a los que llega `mc_app` y CREATE en `public`
@@ -406,9 +418,17 @@ además más rápido.
   global a propósito (el correo de una persona, los enlaces públicos)
   va en `UNICOS_GLOBALES_DECLARADOS` con su motivo.
 - **Un EXISTS aísla solo por una clave ajena de verdad.** Correlacionar
-  por una columna cualquiera (`d.name = t.nota`) no aísla, y un padre
-  con filas globales no aísla una fila que tiene inquilino propio
-  (ver `src/politicas.ts`).
+  por una columna cualquiera (`d.name = t.nota`) no aísla, y ni un padre
+  con filas globales ni uno que aísla por PERSONA (`app_user`,
+  `membership`, `workspace`: quien está en A y en B ve desde B cosas de
+  A) aíslan una fila que tiene inquilino propio; hace falta además
+  `workspace_id = current_workspace_id()` en un AND (ver
+  `src/politicas.ts`).
+- **Lo global del radar sale de fuentes públicas.** Una fila sin dueño
+  derivada de la lista privada de un inquilino (`watch_target`, source
+  'watchlist') no es anónima: deja inferir qué vigila. Esa lleva su
+  `workspace_id` y su política (motivo de `trend_signal` y
+  `external_account_baseline` en `EXCEPCIONES_SIN_AISLAMIENTO`).
 - **Las filas sin dueño son el catálogo compartido** (`company`,
   `contact`): se leen desde cualquier workspace y no se editan desde
   ninguno. Lo que guarda un workspace es suyo aunque venga de una

@@ -74,7 +74,10 @@
  *     escribe en la tabla (medido: un disparador definer en company
  *     reescribía niche, un catálogo de solo lectura, con la guardia en
  *     verde). Se exige que no haya ninguna, o entrada en
- *     FUNCIONES_DEFINER_DECLARADAS.
+ *     FUNCIONES_DEFINER_DECLARADAS. Y fuera de public, las que mc_app
+ *     puede EJECUTAR en un esquema al que llega (extensions incluido):
+ *     la comprobación de esquemas deja pasar extensions de oficio, y
+ *     una función definer allí rodeaba los GRANT con la guardia en verde.
  *   · Disparadores de tablas de `public` que llaman a una función
  *     SECURITY DEFINER, de cualquier esquema: se exige su entrada en
  *     DISPARADORES_DEFINER_DECLARADOS.
@@ -193,8 +196,23 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   metric_requirement: 'qué exige cada red para entregar cada grupo de métricas (0011)',
 
   // ------ observación de terceros: no hay inquilino a quien aislar ---
-  external_account_baseline: 'línea base de cuentas AJENAS que el radar observa: no cuelga de ningún workspace',
-  trend_signal: 'tendencias por red y nicho: observación pública, sin dueño',
+  // OJO, para cuando llegue el radar (fase 2): «sin dueño» no es
+  // «anónimo». Estas filas —y las de external_post por su rama «IS
+  // NULL»— las llena el worker a partir de los watch_target de CADA
+  // inquilino, que son listas privadas. Si una fila existe porque alguien
+  // la vigila, publicarla deja a cualquier workspace inferir qué cuentas
+  // ajenas vigila la plataforma. Regla: sin dueño solo lo que venga de
+  // fuentes públicas (creative_center, hashtag_search); lo que salga de
+  // una lista privada (source 'watchlist') lleva el workspace_id de esa
+  // lista y su política. Hoy las tablas están vacías y el radar no existe.
+  external_account_baseline:
+    'línea base de cuentas AJENAS que el radar observa, sin workspace. Solo vale mientras cada fila venga de una ' +
+    'fuente pública: la derivada de un watch_target (lista privada de un inquilino) no es anónima por construcción ' +
+    'y tiene que llevar su workspace_id y su política (ver la nota de arriba)',
+  trend_signal:
+    'tendencias por red y nicho, sin dueño. Solo las de fuente pública (creative_center, hashtag_search): una fila ' +
+    "con source 'watchlist' sale de la lista privada de un inquilino y dejaría inferir qué vigila; esa tiene que " +
+    'llevar workspace_id y política antes de que el radar escriba la primera (ver la nota de arriba)',
 
   // ------ ni catálogo ni inquilino ------------------------------------
   webhook_event:
@@ -244,6 +262,9 @@ export const RELACIONES_SIN_RLS_DECLARADAS: Readonly<Record<string, string>> = {
  * Las funciones SECURITY DEFINER de `public`, por su firma
  * (`nombre(tipos)`), y por qué. TODAS, se puedan ejecutar o no: quitarle
  * EXECUTE a mc_app no cierra nada si la función es de un disparador.
+ * Las de otro esquema al que llega mc_app (extensions) se declaran con
+ * el esquema delante, `extensions.nombre(tipos)`, y solo si mc_app las
+ * puede ejecutar. Hoy no hay ninguna.
  */
 export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   'contact_suppression_apply()':
@@ -425,7 +446,20 @@ export const PRIVILEGIOS_PROHIBIDOS = ['TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAI
  * revocado, porque un `GRANT … ON ALL TABLES` de cualquier script
  * posterior lo devolvería entero y en silencio.
  */
-export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly Privilegio[]; motivo: string }>> = {
+export interface PrivilegiosDeclarados {
+  permite: readonly Privilegio[];
+  motivo: string;
+  /**
+   * Los privilegios que mc_app tiene SOLO en esas columnas, nunca de la
+   * tabla entera. La política de fila no dice nada de columnas: con
+   * UPDATE de tabla, la fila propia se reescribe entera (el plan del
+   * workspace, por ejemplo). La guardia exige que no haya GRANT de tabla
+   * para ese privilegio y que los de columna no pasen de la lista.
+   */
+  soloColumnas?: Partial<Record<Privilegio, readonly string[]>>;
+}
+
+export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarados>> = {
   // Catálogos globales: la aplicación los lee, los llena una migración
   // o el worker. Con escritura, una transacción cualquiera de la web
   // cambiaba los límites de TikTok o apagaba un job para TODOS.
@@ -468,9 +502,18 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
   job_run: { permite: ['SELECT'], motivo: 'bitácora de trabajos: la escribe el worker, la web solo la lee' },
   account_metric_snapshot: {
     permite: ['SELECT', 'INSERT', 'UPDATE'],
+    // Deuda con dueño: las métricas se insertan, nunca se actualizan. El
+    // UPDATE existe solo por el upsert de CON-10 (recordAccountSnapshot
+    // en queries/conexiones.ts: «Actualizar» dos veces el mismo día
+    // reemplaza la fila, y cuentas-publicas.test.ts lo exige). Es módulo
+    // de Nicolás. Plan en docs/propuestas/CIM-2.md: el upsert pasa a ON
+    // CONFLICT DO NOTHING o al worker y, en la migración siguiente,
+    // REVOKE UPDATE ON account_metric_snapshot FROM mc_app y 'UPDATE' sale
+    // de aquí.
     motivo:
-      'métrica: nadie la borra. CON-10 (en main) guarda desde la web el snapshot público del día con un upsert; ' +
-      'el UPDATE se queda hasta que su dueño lo pase al worker',
+      'métrica: nadie la borra. CON-10 guarda desde la web el snapshot público del día con un upsert ' +
+      '(recordAccountSnapshot); el UPDATE se queda hasta que ese upsert pase a ON CONFLICT DO NOTHING o al worker ' +
+      '(docs/propuestas/CIM-2.md)',
   },
   audit_log: { permite: ['SELECT', 'INSERT'], motivo: 'bitácora de auditoría: se anota, no se corrige ni se borra' },
 
@@ -494,7 +537,15 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
 
   // Tablas de inquilino con un comando de menos.
-  workspace: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'borrar un inquilino es del worker, no de una pantalla' },
+  workspace: {
+    permite: ['SELECT', 'INSERT', 'UPDATE'],
+    motivo: 'borrar un inquilino es del worker, no de una pantalla',
+    // 0024 §7.6: la política de UPDATE aísla la fila, no las columnas.
+    // Con UPDATE de tabla un workspace se subía el plan a enterprise.
+    soloColumnas: {
+      UPDATE: ['name', 'slug', 'country', 'currency', 'timezone', 'locale', 'niche_slugs', 'settings', 'updated_at'],
+    },
+  },
   membership: {
     permite: ['SELECT', 'INSERT'],
     motivo:
@@ -846,15 +897,36 @@ const SQL_UNICOS = `
    ORDER BY 1, 2`;
 
 /**
- * TODAS las funciones de `public` que corren con los privilegios de su
- * dueño. No se filtra por EXECUTE a propósito: una función de disparador
- * corre aunque quien escribe no pueda ejecutarla (ver la nota de arriba).
+ * Las funciones que corren con los privilegios de su dueño:
+ *
+ *   · TODAS las de `public`. No se filtra por EXECUTE a propósito: una
+ *     función de disparador corre aunque quien escribe no pueda
+ *     ejecutarla (ver la nota de arriba).
+ *   · las de cualquier OTRO esquema al que llega mc_app (USAGE), si
+ *     mc_app las puede EJECUTAR. Es `extensions` en Supabase, que la
+ *     comprobación de esquemas deja pasar de oficio, y cualquiera de
+ *     ESQUEMAS_DECLARADOS. Una `extensions.leer_todo() SECURITY DEFINER`
+ *     con el EXECUTE que Postgres da a PUBLIC al nacer rodea el muro de
+ *     GRANT igual que una de public (medido: la guardia daba verde). Las
+ *     de disparador y de evento no se pueden llamar, y un disparador
+ *     sobre una tabla de public que las use ya lo nombra
+ *     SQL_DISPARADORES_DEFINER. Fuera de public la firma lleva el
+ *     esquema delante: `extensions.leer_todo()`.
  */
 const SQL_FUNCIONES = `
-  SELECT p.oid::regprocedure::text AS firma
+  SELECT CASE WHEN n.nspname = 'public' THEN p.oid::regprocedure::text
+              ELSE n.nspname || '.' || p.proname || '(' ||
+                   coalesce((SELECT string_agg(format_type(x.tipo, NULL), ',' ORDER BY x.n)
+                               FROM unnest(p.proargtypes::oid[]) WITH ORDINALITY x(tipo, n)), '') || ')'
+         END AS firma
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname = 'public' AND p.prosecdef
+   WHERE p.prosecdef
+     AND (n.nspname = 'public'
+          OR (n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+              AND has_schema_privilege($1::name, n.oid, 'USAGE')
+              AND has_function_privilege($1::name, p.oid, 'EXECUTE')
+              AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)))
    ORDER BY 1`;
 
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
@@ -1008,7 +1080,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const relaciones = await leer<FilaRelacion>(SQL_RELACIONES);
   const politicas = await leer<FilaPolitica>(SQL_POLITICAS, [APP_ROLE]);
   const privilegios = await leer<FilaPrivilegio>(SQL_PRIVILEGIOS);
-  const funciones = await leer<FilaFuncion>(SQL_FUNCIONES);
+  const funciones = await leer<FilaFuncion>(SQL_FUNCIONES, [APP_ROLE]);
   const referencias = await leer<FilaReferencia>(SQL_REFERENCIAS);
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
@@ -1029,12 +1101,18 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   //      recuerda la columna para decirlo en el mensaje.
   const privilegiosPorRelacion = new Map<string, Map<string, Set<string>>>();
   const porColumna = new Map<string, Map<string, Set<string>>>(); // relación → privilegio → columnas
+  const deTablaEntera = new Map<string, Set<string>>(); // relación → privilegios de mc_app sin columna
   for (const p of privilegios) {
     let roles = privilegiosPorRelacion.get(p.relname);
     if (!roles) privilegiosPorRelacion.set(p.relname, (roles = new Map()));
     let s = roles.get(p.rol);
     if (!s) roles.set(p.rol, (s = new Set()));
     s.add(p.privilegio);
+    if (!p.columna && (p.rol === APP_ROLE || p.rol === 'PUBLIC')) {
+      let enteros = deTablaEntera.get(p.relname);
+      if (!enteros) deTablaEntera.set(p.relname, (enteros = new Set()));
+      enteros.add(p.privilegio);
+    }
     if (p.columna && (p.rol === APP_ROLE || p.rol === 'PUBLIC')) {
       let privs = porColumna.get(p.relname);
       if (!privs) porColumna.set(p.relname, (privs = new Map()));
@@ -1120,13 +1198,19 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     const ps = alcanzan(t.relname, 'SELECT');
     const ctx = contexto(t.relname, 'lectura');
     const restrictivas = ps.filter((p) => !p.permisiva).map((p) => veredicto(p.qual, ctx));
-    if (restrictivas.some((v) => v.aisla && !v.globales)) return 'estricto';
+    if (restrictivas.some((v) => v.aisla && !v.globales && !v.persona)) return 'estricto';
     let globales = false;
+    let persona = false;
     for (const p of ps.filter((x) => x.permisiva)) {
       const v = veredicto(p.qual, ctx);
       if (!v.aisla) return 'no'; // abierta, declarada o no: lo que cuelgue de ella hereda la apertura
       globales ||= v.globales;
+      persona ||= v.persona;
     }
+    // Por persona (app_user, membership, workspace): aísla, pero quien
+    // está en dos workspaces ve desde uno lo del otro. Ver «EL PADRE QUE
+    // AÍSLA POR PERSONA» en src/politicas.ts.
+    if (persona) return 'por-persona';
     return globales ? 'con-globales' : 'estricto';
   };
   for (let vuelta = 0; vuelta <= tablas.length; vuelta++) {
@@ -1422,6 +1506,29 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
           'una aplicación no los necesita en ninguna relación: TRUNCATE se salta la RLS entera' +
           notaDeColumnas(r.relname, prohibidos),
       });
+    }
+    // Los que se permiten solo por columna: ni de tabla entera, ni en
+    // una columna que no esté en la lista.
+    for (const [priv, columnas] of Object.entries(declarado?.soloColumnas ?? {})) {
+      if (!tiene.has(priv) || !columnas) continue;
+      const lista = columnas.join(', ');
+      if (deTablaEntera.get(r.relname)?.has(priv)) {
+        privilegiosDeMas.push({
+          tabla: r.relname,
+          privilegios: [priv],
+          motivo:
+            `concedido de TABLA ENTERA, y solo se permite en (${lista}): la política aísla la fila, no las ` +
+            `columnas. REVOKE ${priv} ON ${r.relname} FROM ${APP_ROLE} y GRANT ${priv} (${lista}) ON ${r.relname}`,
+        });
+      }
+      const deMas = [...(porColumna.get(r.relname)?.get(priv) ?? [])].filter((c) => !columnas.includes(c)).sort();
+      if (deMas.length) {
+        privilegiosDeMas.push({
+          tabla: r.relname,
+          privilegios: [priv],
+          motivo: `concedido POR COLUMNA en ${deMas.join(', ')}, que no están en (${lista})`,
+        });
+      }
     }
   }
 

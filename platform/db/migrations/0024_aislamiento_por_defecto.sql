@@ -512,7 +512,23 @@ END $$;
 -- 7.6 · Borrar un inquilino no es una pantalla (ver sección 1). Sin
 --       política de DELETE ya no se podría, pero el privilegio sobra
 --       igual y dejarlo invita a escribir la política algún día.
+--
+--       Y el UPDATE, solo en las columnas que una pantalla de ajustes
+--       puede tocar. La política de UPDATE aísla la FILA, no las
+--       columnas: con UPDATE de tabla, el propio workspace se subía el
+--       plan a 'enterprise' gratis (reproducido como mc_app: `UPDATE
+--       workspace SET plan = 'enterprise'` tocaba 1 fila), cambiaba su
+--       kind o se marcaba deleted_at. plan y kind los cambia el worker
+--       (facturación, alta de agencia); deleted_at, la baja del worker.
+--       updated_at va en la lista porque renameWorkspace lo fija (el
+--       disparador lo pisa de todos modos). El INSERT se queda de tabla
+--       —Drizzle nombra TODAS las columnas en el INSERT, con `default`
+--       en las que no trae, y un GRANT por columna lo rompería—; el plan
+--       del alta lo acota la política workspace_signup (0025 §4).
 REVOKE DELETE ON workspace FROM mc_app;
+REVOKE UPDATE ON workspace FROM mc_app;
+GRANT UPDATE (name, slug, country, currency, timezone, locale, niche_slugs, settings, updated_at)
+  ON workspace TO mc_app;
 
 -- 7.7 · membership: el alta y la baja de personas las hace el worker
 --       (y el seed, como mc_migrator) hasta que CIM-3 diga quién puede

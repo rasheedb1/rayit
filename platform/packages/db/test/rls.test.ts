@@ -33,6 +33,7 @@ import {
 import { listFeatureFlags, listPipelineStages } from '../src/queries/catalogos.ts';
 import { getWorkspace } from '../src/queries/cimientos.ts';
 import { createEmbeddedDb, type EmbeddedDb } from '../src/embedded.ts';
+import { estadoDelEsquema } from '../src/esquema.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '0000000a-0000-4000-8000-000000000001';
@@ -871,6 +872,46 @@ describe('endurecimiento (0024): workspace, app_user, company, catálogos y la b
       );
       assert.equal(await t.db.withWorkspace(WS_NUEVO, (tx) => countRows(tx, 'workspace')), 1);
     });
+
+    test('el plan no se lo cambia el propio workspace: ni al darse de alta ni después (0024 §7.6, 0025 §4)', async () => {
+      // El hallazgo del pulido: la política de UPDATE aísla la FILA, y con
+      // UPDATE de tabla el propio workspace se subía a enterprise gratis.
+      await assert.rejects(
+        t.db.withWorkspace(WS_A, (tx) => tx.query("UPDATE workspace SET plan = 'enterprise'")),
+        isPermissionDenied,
+        'A se subía el plan a enterprise',
+      );
+      for (const columna of ["kind = 'agency'", 'deleted_at = now()']) {
+        await assert.rejects(
+          t.db.withWorkspace(WS_A, (tx) => tx.query(`UPDATE workspace SET ${columna}`)),
+          isPermissionDenied,
+          `A cambiaba ${columna}`,
+        );
+      }
+      // Lo que sí es una pantalla de ajustes sigue funcionando.
+      const tocados = await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ id: string }>(
+          'UPDATE workspace SET name = name, slug = slug, timezone = timezone, settings = settings, updated_at = now() RETURNING id::text AS id',
+        ),
+      );
+      assert.deepEqual(tocados.rows.map((r) => r.id), [WS_A]);
+      // Y el alta nace en el plan gratuito, sin poder elegir otro.
+      const nuevo = '0000000e-0000-4000-8000-000000000003';
+      await assert.rejects(
+        t.db.withWorkspace(nuevo, (tx) =>
+          tx.query("INSERT INTO workspace (id, slug, name, plan) VALUES (current_workspace_id(), 'gratis-no', 'X', 'enterprise')"),
+        ),
+        isRlsViolation,
+        'el alta elegía el plan',
+      );
+      const { rows } = await t.db.withWorkspace(nuevo, (tx) =>
+        tx.query<{ plan: string }>(
+          "INSERT INTO workspace (id, slug, name) VALUES (current_workspace_id(), 'gratis-si', 'Gratis') RETURNING plan",
+        ),
+      );
+      assert.equal(rows[0]?.plan, 'free');
+      await t.admin(`DELETE FROM workspace WHERE id = '${nuevo}'`);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -1400,6 +1441,78 @@ describe('getWorkspace: nunca sirve al vecino', () => {
     } finally {
       await t.admin(`DELETE FROM membership WHERE user_id = '${persona}'; DELETE FROM app_user WHERE id = '${persona}';`);
     }
+  });
+});
+
+/**
+ * PULIDO, RONDA 1: un padre que aísla por PERSONA no aísla por inquilino.
+ *
+ * app_user («soy yo o comparto workspace con esa persona») y membership
+ * («las de este workspace o las mías») dejan ver, a quien está en A y en
+ * B, cosas de A desde B. Una tabla con workspace_id que se aislara con un
+ * EXISTS sobre ellas filtraba las filas de A. Ninguna tabla del esquema
+ * lo hace; esto prueba que la forma filtra de verdad —con la base, no
+ * con la guardia— y que la guardia la nombra (esquema.test.ts tiene las
+ * sondas de forma).
+ */
+describe('un padre por persona no aísla una tabla con inquilino (pulido, ronda 1)', () => {
+  const PERSONA = '0000009f-0000-4000-8000-000000000001';
+  const FILA = '0000009f-0000-4000-8000-0000000000a1';
+
+  // Las tablas de prueba las crea el rol que migra en pglite; contra un
+  // Postgres real (CI) ese rol no existe y las tres pruebas se saltan.
+  const embebido = () => t.kind === 'pglite';
+
+  before(async () => {
+    if (!embebido()) return;
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${PERSONA}', 'en-a-y-en-b@ejemplo.test', 'En A y en B');
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${PERSONA}', 'member'), ('${WS_B}', '${PERSONA}', 'member');
+      SET ROLE mc_migrator_embedded;
+      CREATE TABLE zz_persona (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id),
+        created_by uuid REFERENCES app_user(id), nota text);
+      ALTER TABLE zz_persona ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_persona FORCE ROW LEVEL SECURITY;
+      CREATE POLICY zz_persona_read ON zz_persona FOR SELECT
+        USING (EXISTS (SELECT 1 FROM app_user u WHERE u.id = zz_persona.created_by));
+      CREATE TABLE zz_miembro (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id), nota text);
+      ALTER TABLE zz_miembro ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_miembro FORCE ROW LEVEL SECURITY;
+      CREATE POLICY zz_miembro_read ON zz_miembro FOR SELECT
+        USING (EXISTS (SELECT 1 FROM membership m WHERE m.workspace_id = zz_miembro.workspace_id));
+      REVOKE ALL ON zz_persona, zz_miembro FROM mc_app;
+      GRANT SELECT ON zz_persona, zz_miembro TO mc_app;
+      RESET ROLE;
+      INSERT INTO zz_persona VALUES ('${FILA}', '${WS_A}', '${PERSONA}', 'secreto de A');
+      INSERT INTO zz_miembro VALUES ('${FILA}', '${WS_A}', 'secreto de A');
+    `);
+  }, { timeout: 120_000 });
+
+  after(async () => {
+    if (!embebido()) return;
+    await t.admin(`
+      DROP TABLE zz_persona, zz_miembro;
+      DELETE FROM membership WHERE user_id = '${PERSONA}'; DELETE FROM app_user WHERE id = '${PERSONA}';
+    `);
+  });
+
+  test('por app_user: desde B, sin identidad fijada, se lee la fila de A que nombra a la persona compartida', async (ctx) => {
+    if (!embebido()) return ctx.skip('las tablas de prueba solo se crean sobre pglite');
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) => tx.query<{ nota: string }>('SELECT nota FROM zz_persona'));
+    assert.deepEqual(rows.map((r) => r.nota), ['secreto de A'], 'la forma filtra: por eso la guardia no la acepta');
+  });
+
+  test('por membership: con la identidad fijada (como corre la web con CIM-3), desde B se lee lo de A', async (ctx) => {
+    if (!embebido()) return ctx.skip('las tablas de prueba solo se crean sobre pglite');
+    const sinIdentidad = await t.db.withWorkspace(WS_B, (tx) => countRows(tx, 'zz_miembro'));
+    assert.equal(sinIdentidad, 0);
+    const conIdentidad = await t.db.withWorkspace(WS_B, (tx) => countRows(tx, 'zz_miembro'), { userId: PERSONA });
+    assert.equal(conIdentidad, 1, 'la forma filtra en cuanto se fija app.user_id');
+  });
+
+  test('y la guardia nombra las dos políticas', async (ctx) => {
+    if (!embebido()) return ctx.skip('las tablas de prueba solo se crean sobre pglite');
+    const claves = (await estadoDelEsquema(t.db)).politicasAbiertas.map((p) => p.clave);
+    assert.ok(claves.includes('zz_persona.zz_persona_read'), JSON.stringify(claves));
+    assert.ok(claves.includes('zz_miembro.zz_miembro_read'), JSON.stringify(claves));
   });
 });
 

@@ -377,8 +377,13 @@ CREATE TRIGGER contact_suppression_apply
 -- sí inserta (audit_log, api_call_log, account_metric_snapshot,
 -- deal_stage_history, idea_evidence, preflight_result,
 -- video_onscreen_text), el id que devuelve el INSERT sigue siendo el
--- contador global. Cerrarlo es cambiar esas claves a uuid, que es otra
--- migración con su propio plan; está anotado para el integrador.
+-- contador global (y el SELECT de sus propias filas también lo
+-- enseña). Cerrarlo es cambiar esas claves a uuid, que es otra
+-- migración con su propio plan; mientras tanto, ninguna consulta de
+-- @mc/db le devuelve esos ids a la web (comprobado con grep el 22-sep).
+-- Queda escrito, con el plan, en
+-- docs/propuestas/CIM-2.md («Lo que queda abierto») y en la nota de
+-- CIM-2 de apps/web/content/backlog.ts.
 --
 -- Y para las secuencias que nazcan mañana, lo mismo: se le quitan SELECT
 -- y UPDATE a los privilegios por defecto del rol que migra. La guardia
