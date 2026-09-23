@@ -188,6 +188,17 @@ llega como `Error` de node-postgres y se muestra genérico.
   `current_workspace_id()`.
 - **Sin aritmética de dinero.** `amount = quote.total` y `currency =
   quote.currency` como string.
+- **Convención de montos (pulido r3, la misma en CIM-6 y 0031).**
+  `campaign.amount` es el **total con impuesto** de la cotización: lo
+  que se factura, y lo que `createInvoiceFromCampaign` (FIN-1) trata
+  como bruto (`subtotalFromTotal`). El negocio de Ventas lleva el mismo
+  acuerdo **sin** impuesto: `deal.amount = quote.total − quote.tax`
+  (subtotal − descuento). Una misma venta vale entonces 5,2 M en la
+  campaña y en la factura y 4 369 747,90 en el pipeline; `/campanas`
+  lo dice en la columna «Total con impuesto». Lo prueba
+  `cotizar.test.ts` («aceptar deja el negocio en el neto… y la campaña
+  en el total con impuesto») y, sobre el seed, `verify/0002.sql` (k2) y
+  `verify/0004.sql` (c).
 - **Qué deja:** `status 'planned'`, `brand_baseline_from = startsOn −
   14`, `brand_accounts = [{ platform_id, handle }]` desde
   `company.socials`, `brief` con lo acordado en texto, `utm = {}`,

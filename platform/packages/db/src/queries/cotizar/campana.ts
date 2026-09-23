@@ -6,6 +6,7 @@
  */
 import type { WorkspaceTx } from '../../client.ts';
 import { createCampaignFromQuote } from '../campanas.ts';
+import { promoteCompanyOnWin } from '../ventas.ts';
 import { acceptQuote, getQuote, type QuoteDetail, type TextosCotizar } from './cotizacion.ts';
 import { CotizarError, QuoteNotFound } from './errores.ts';
 import { registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
@@ -118,9 +119,11 @@ export async function acceptQuoteAndCreateCampaign(
  * (lib/db de la web lo abre con el workspaceId que devolvió la función
  * pública, nunca con uno que venga del navegador).
  *
- * Deja la actividad en el negocio, el aviso para el creador y la
- * campaña de CAM-2. Todo en la misma transacción; si la campaña no se
- * puede crear, el aviso lo dice y el detalle ofrece terminarla.
+ * Deja la actividad en el negocio, la marca como «Cliente» (el negocio
+ * se acaba de ganar; public_quote_accept no puede escribir en
+ * company_link), el aviso para el creador y la campaña de CAM-2. Todo
+ * en la misma transacción; si la campaña no se puede crear, el aviso lo
+ * dice y el detalle ofrece terminarla.
  */
 export async function completePublicAcceptance(
   tx: WorkspaceTx,
@@ -134,6 +137,7 @@ export async function completePublicAcceptance(
     throw new CotizarError('QuoteNotAccepted', `Solo una cotización aceptada crea campaña; esta está en «${quote.status}».`);
   }
   await registrarAceptacion(tx, quote, 'enlace', textos);
+  if (quote.dealId) await promoteCompanyOnWin(tx, quote.dealId);
   // El monto lo cambió public_quote_accept (0031) en la otra
   // transacción, que no puede escribir actividades: aquí se cuenta, con
   // el monto de antes que devolvió y el que quedó en el negocio.

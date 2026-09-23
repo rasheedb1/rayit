@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
@@ -58,6 +59,11 @@ export function NuevaSenalForm({ currency, onCancel }: { currency: string; onCan
       </div>
 
       <Aviso message={state.message} notice={state.notice} className="mt-4" />
+      {state.link && (
+        <Link href={state.link.href} className="mt-2 inline-block text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+          {state.link.label}
+        </Link>
+      )}
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Button type="submit" variant="primary" loading={pending}>

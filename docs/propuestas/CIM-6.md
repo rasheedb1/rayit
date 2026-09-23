@@ -53,7 +53,7 @@ una trae una columna `ok` que el runner evalúa.
 | Views promedio TikTok **138 K** (tarifario) | mediana de TikTok a 30 días | (e) | 121 500 (p25 100 K, p75 156 K) |
 | Deals abiertos **17 · COP 129,3 M · ponderado 49,4 M** | 10 abiertos con ocho marcas | (i) `i_pipeline_cifras` | **10 · COP 95,5 M · ponderado 43,15 M** (§3.1) |
 | Seguimientos vencidos | Granos del Valle (−2 d) y Vitalé (−1 d) | (i3) `i_pipeline_vencimientos` | 2 vencidos, 2 para hoy, 1 sin fecha. **[r4]** Consulta aparte: es lo único del pipeline que depende del reloj de la vista, y así las cifras de arriba no se toleran con `--dias` (§3.17) |
-| Ganado en Q3 **COP 12,8 M · 3 deals** | Fresko 5,2 · Nutrivé **4,7** · Café Alma 3,1 | (i) | 13 000 000. **[r4]** El mock da 4,5 M al de Nutrivé, pero es la misma venta que la campaña `ca0003` y la factura FV-2026-009 de 0003, que valen 4,7 (§3.18) |
+| Ganado en Q3 **COP 12,8 M · 3 deals** | Fresko 5,2 · Nutrivé **4,7** · Café Alma 3,1 (con IVA) | (i) | 10 924 369,75 netos (13 000 000 con IVA). **[r4]** El mock da 4,5 M al de Nutrivé, pero es la misma venta que la campaña `ca0003` y la factura FV-2026-009 de 0003, que valen 4,7 (§3.18). **[pulido r3]** El negocio va sin IVA (§7) |
 | Señales por revisar **5** | 5 pending | (j) | **5** · 6 · 1 · 1. **[r5]** §3.30 |
 | Café Alma: 712 K views, +1 240 seguidores, 318 canjes | `campaign_result` de `ca0001`, enlazada al deal ganado y a la señal de prensa | (k), **[r4]** (k2) | la cadena completa, con la factura de 0003; (k2) exige que las cuatro campañas con factura tengan deal ganado y que `deal.amount = campaign.amount = invoice.total` |
 | Media kit: 71 % entre 18 y 34, 64 % mujeres, Colombia 71 % | `audience_breakdown` de Instagram | (h2) | exacto |
@@ -634,3 +634,27 @@ Lo que antes vivía en la nota de CIM-6 del backlog, que debe ser corta.
   que estaban clavadas al seed sin 0002, pasan a afirmar la banda
   alrededor de la cifra del mock en vez del valor de hoy: la curva
   sigue midiendo hasta los 90 días y el número exacto sube cada día.
+
+## 7. Convención de montos y Cotizar sembrado (pulido r3, 23 de septiembre)
+
+- **Una sola convención, la de 0031 y CAM-2.** `deal.amount` es el
+  **neto** (lo que la marca presupuesta, sin IVA); `campaign.amount` e
+  `invoice.total` son el **total con impuesto**. El seed usaba la
+  contraria en los cuatro ganados con campaña (negocio = campaña =
+  total), y aceptar una cotización en la app daba el neto en el
+  pipeline y el total en la campaña: el mismo acuerdo valía 5,2 M en un
+  módulo y 6,18 M en otro. Ahora los cuatro ganados valen el
+  **subtotal** de su factura de 0003 (Fresko 4 369 747,90 · Nutrivé
+  3 949 579,83 · Café Alma 2 605 042,02 · Hogar Lindo 924 369,75), y
+  una base sembrada antes se corrige sola en la siguiente corrida si
+  conserva la cifra vieja. `verify/0002.sql` (k2) exige
+  `deal.amount = invoice.subtotal` y `campaign.amount = invoice.total`;
+  «Ganado en Q3» pasa a 10 924 369,75 (13 M con IVA).
+- **Seed 0004 · Cotizar.** Un tarifario guardado (v1, con los rangos
+  que da `guardarTarifario` sobre la línea base del seed), un media kit
+  público congelado el 22-sep y ocho cotizaciones COT-2026-001…008:
+  las cuatro aceptadas de los ganados con campaña (enlazadas por
+  `campaign.quote_id`) y una enviada o vista por cada negocio en
+  propuesta o negociación, con el neto que ese negocio ya tiene. Los
+  slugs se sortean en la primera corrida (el repositorio es público).
+  Se verifica con `verify/0004.sql`.

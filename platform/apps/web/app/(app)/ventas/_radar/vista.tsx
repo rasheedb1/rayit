@@ -21,7 +21,7 @@ export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: F
     id: s.id,
     companyName: s.companyName,
     headline: s.headlineEs,
-    fit: pillForFit(s.fitScore),
+    fit: pillForFit(s.fitScore, f),
     sourceLabel: s.sourceLabel,
     detectedText: f.date(s.detectedAt),
     budgetText: s.budgetEstimate ? f.money(s.budgetEstimate, s.budgetCurrency ?? undefined, { mode: "compact" }) : null,

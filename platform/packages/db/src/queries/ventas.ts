@@ -845,18 +845,44 @@ export async function countPendingSignals(tx: WorkspaceTx): Promise<number> {
 /**
  * La clave con la que una señal se reconoce como la misma.
  *
- * Determinista y estable: si una señal descartada vuelve a entrar con
- * la misma clave, el UNIQUE (workspace_id, dedupe_key) la rechaza y no
- * reaparece en la bandeja. Por eso la clave NO lleva la fecha de hoy —
- * eso haría «nueva» a la misma marca cada mañana— sino la fuente, el
+ * Determinista y estable: si una señal vuelve a entrar con la misma
+ * clave, el UNIQUE (workspace_id, dedupe_key) la rechaza y no reaparece
+ * en la bandeja. Por eso la clave NO lleva la fecha de hoy —eso haría
+ * «nueva» a la misma señal cada mañana— sino la fuente, el
  * identificador de la empresa y, si la hay, la referencia propia de la
- * señal.
+ * señal (el anuncio, la vacante, la semana del ranking; en una manual o
+ * de CSV, su titular: ver signalRef).
  */
 export function buildDedupeKey(sourceId: string, companyKey: string, ref?: string | null): string {
   const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, '-');
   const parts = [norm(sourceId), norm(companyKey)];
   if (ref?.trim()) parts.push(norm(ref));
   return parts.join(':');
+}
+
+/**
+ * La referencia propia de una señal escrita a mano o traída de un CSV:
+ * su titular, sin tildes, mayúsculas ni signos, y acotado.
+ *
+ * Sin ella la clave era solo fuente:marca, y el UNIQUE bloqueaba para
+ * siempre cualquier señal nueva de una marca ya aceptada, que es
+ * justo lo que el radar dice que NO hace (findBrandSignal: una señal
+ * nueva de una marca que ya está en el CRM es información). Con el
+ * titular, el UNIQUE solo frena la MISMA señal repetida: «Lanzó cold
+ * brew» dos veces es una; «Lanzó cold brew» y «Abre tienda en Medellín»
+ * son dos. Pendientes y descartadas no dependen de esto: las frena
+ * findBrandSignal por la marca, con cualquier titular.
+ */
+export function signalRef(headline: string): string | null {
+  const ref = headline
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/, '');
+  return ref || null;
 }
 
 export interface CreateSignalInput {
@@ -895,15 +921,23 @@ export interface CreateSignalResult {
   /** No se creó: la marca ya estaba en el radar (ver `reason`). */
   duplicate: boolean;
   /**
-   * Por qué no entró: 'same_key', la misma señal de la misma fuente
-   * (el UNIQUE de la base); 'pending', la marca ya tiene una señal en la
-   * bandeja; 'discarded', la marca se descartó antes. Null si entró.
+   * Por qué no entró: 'pending', la marca ya tiene una señal en la
+   * bandeja; 'discarded', la marca se descartó antes; 'accepted', esa
+   * misma señal ya se aceptó y la marca es un negocio (companyId dice
+   * cuál); 'same_key', la misma señal de la misma fuente en otro estado
+   * (el UNIQUE de la base). Null si entró.
    */
   reason: SignalDuplicateReason | null;
   dedupeKey: string;
+  /**
+   * La empresa de la señal que ya estaba, cuando se conoce (siempre en
+   * 'accepted'): la pantalla enlaza a su ficha en vez de solo decir que
+   * no entró.
+   */
+  companyId: string | null;
 }
 
-export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded';
+export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded' | 'accepted';
 
 /** Una empresa ya conocida, resuelta a partir de lo que se escribió. */
 interface ResolvedCompany {
@@ -999,8 +1033,11 @@ async function findBrandSignal(
  *
  * Antes de insertar se mira la marca, no solo la clave: una marca con
  * una señal pendiente o descartada no entra otra vez por ningún camino
- * (findBrandSignal). La clave (fuente:marca) y su UNIQUE siguen siendo
- * la última palabra para la misma señal de la misma fuente.
+ * (findBrandSignal). Una marca ya ACEPTADA sí admite señales nuevas
+ * (otra campaña, otra temporada): la clave lleva el titular (signalRef)
+ * y su UNIQUE solo frena la misma señal repetida. Cuando frena una que
+ * ya se aceptó, el resultado lo dice ('accepted', con la empresa) para
+ * que la pantalla mande a la ficha y no hable de un descarte que no hubo.
  */
 export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): Promise<CreateSignalResult> {
   const headline = input.headlineEs.trim();
@@ -1018,14 +1055,14 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
 
   const brandDomain = domain ?? normalizeDomain(company?.domain);
   const companyKey = brandDomain ?? companyName ?? company?.name ?? input.companyId ?? '';
-  const dedupeKey = buildDedupeKey(sourceId, companyKey);
+  const dedupeKey = buildDedupeKey(sourceId, companyKey, signalRef(headline));
 
   const previa = await findBrandSignal(tx, {
     companyId: company?.id ?? null,
     domain: brandDomain,
     name: companyName ?? company?.name ?? null,
   });
-  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey };
+  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey, companyId: company?.id ?? null };
 
   const evidence = {
     company_name: companyName ?? company?.name ?? null,
@@ -1056,7 +1093,21 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     ],
   );
   const id = rows[0]?.id ?? null;
-  return { id, duplicate: id === null, reason: id === null ? 'same_key' : null, dedupeKey };
+  if (id) return { id, duplicate: false, reason: null, dedupeKey, companyId: company?.id ?? null };
+
+  // La clave chocó: ¿con qué? La fila que ya la ocupa dice si esa misma
+  // señal se aceptó (la marca es un negocio), sigue en la bandeja o se
+  // descartó; el aviso de la pantalla depende de eso.
+  const { rows: ocupada } = await tx.query<{ status: SignalStatus; company_id: string | null }>(
+    'SELECT status, company_id FROM signal WHERE dedupe_key = $1 LIMIT 1',
+    [dedupeKey],
+  );
+  const previaClave = ocupada[0];
+  const reason: SignalDuplicateReason =
+    previaClave?.status === 'accepted' || previaClave?.status === 'pending' || previaClave?.status === 'discarded'
+      ? previaClave.status
+      : 'same_key';
+  return { id: null, duplicate: true, reason, dedupeKey, companyId: previaClave?.company_id ?? company?.id ?? null };
 }
 
 export interface ImportSignalRow {
@@ -1512,6 +1563,11 @@ export interface MoveDealResult {
   currencyFrom: string;
   amountTo: string | null;
   currencyTo: string;
+  /**
+   * La marca pasó a «Cliente» porque el negocio se ganó (ver
+   * promoteCompanyOnWin). False si ya lo era, o si no se ganó.
+   */
+  companyPromoted: boolean;
 }
 
 export interface MoveDealOptions {
@@ -1593,7 +1649,15 @@ export async function moveDeal(
     currencyFrom: r.currencyFrom ?? '',
     amountTo: r.amountTo ?? null,
     currencyTo: r.currencyTo ?? '',
+    companyPromoted: false,
   };
+
+  // Ganar un negocio hace cliente a la marca, en la misma transacción:
+  // el tablero, Cotizar al aceptar y (en completePublicAcceptance) el
+  // enlace público pasan por aquí o llaman a lo mismo.
+  if (result.moved && result.isWon) {
+    result.companyPromoted = await promoteCompanyOnWin(tx, dealId);
+  }
 
   if (result.moved && (opts.logActivity ?? true)) {
     await tx.query(
@@ -1607,6 +1671,99 @@ export async function moveDeal(
     );
   }
   return result;
+}
+
+/**
+ * Las relaciones que un negocio ganado sube a «Cliente». Nunca baja una:
+ * «Cliente» se queda, y «Bloqueada» es una decisión de la persona que un
+ * negocio no deshace. «Cliente anterior» sí sube: si vuelve a comprar,
+ * vuelve a ser cliente.
+ */
+const PROMOTE_ON_WIN: readonly Relationship[] = ['prospect', 'contacted', 'past_client'];
+
+/**
+ * Un negocio ganado hace cliente a su marca en este workspace.
+ *
+ * La relación la escribía solo la persona, y no seguía al pipeline:
+ * Olla Fácil quedaba «Prospecto» y «Sin negocios abiertos» justo después
+ * de ganarla. Se puede llamar siempre: solo actúa si el negocio está en
+ * una etapa ganada y la relación es una de PROMOTE_ON_WIN. Devuelve si
+ * cambió algo.
+ */
+export async function promoteCompanyOnWin(tx: WorkspaceTx, dealId: string): Promise<boolean> {
+  if (!isUuid(dealId)) return false;
+  const { rows } = await tx.query<{ company_id: string }>(
+    `UPDATE company_link cl
+        SET relationship = 'client', updated_at = now()
+       FROM deal d
+       JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE d.id = $1
+        AND st.is_won
+        AND cl.company_id = d.company_id
+        AND cl.workspace_id = d.workspace_id
+        AND cl.relationship = ANY($2::text[])
+      RETURNING cl.company_id`,
+    [dealId, PROMOTE_ON_WIN],
+  );
+  return rows.length > 0;
+}
+
+/** La siguiente acción que deja enviar una cotización, si la pantalla no da otra. */
+export const FOLLOW_UP_ACTION = 'Seguimiento a la cotización';
+/** Días HÁBILES (lunes a viernes) que se le dan al seguimiento de una cotización enviada. */
+export const FOLLOW_UP_BUSINESS_DAYS = 3;
+
+export interface FollowUpOptions {
+  /** El texto de la siguiente acción nueva, en el idioma de la pantalla. Por defecto, FOLLOW_UP_ACTION. */
+  followUpAction?: string;
+  /**
+   * Las siguientes acciones que una propuesta enviada deja atrás («Enviar
+   * pitch», en el idioma de la pantalla). PITCH_ACTION siempre cuenta.
+   */
+  supersededActions?: readonly string[];
+}
+
+/**
+ * Enviar una cotización supera el pitch: el negocio queda en «Propuesta
+ * enviada» y lo que sigue es hacerle seguimiento, no mandar un pitch que
+ * ya se mandó con precio. Si la siguiente acción del negocio es la del
+ * radar (o no tiene), pasa a «Seguimiento a la cotización» a
+ * FOLLOW_UP_BUSINESS_DAYS días hábiles, a las 15:00 en la zona del
+ * workspace. Una acción que la persona escribió a mano («Llamar a
+ * Sofía») se respeta, y un negocio cerrado no se toca.
+ *
+ * Los festivos no cuentan como no hábiles: dependen del país y el
+ * producto no los conoce todavía. Devuelve si cambió algo.
+ */
+export async function followUpAfterProposal(
+  tx: WorkspaceTx,
+  dealId: string,
+  opts: FollowUpOptions = {},
+): Promise<boolean> {
+  if (!isUuid(dealId)) return false;
+  const superadas = [...new Set([PITCH_ACTION, ...(opts.supersededActions ?? [])].map((a) => a.trim()).filter(Boolean))];
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE deal d
+        SET next_action = $2,
+            next_action_due = (
+              SELECT (dia + ($5::int * interval '1 hour')) AT TIME ZONE w.tz
+                FROM generate_series(date_trunc('day', now() AT TIME ZONE w.tz) + interval '1 day',
+                                     date_trunc('day', now() AT TIME ZONE w.tz) + interval '21 days',
+                                     interval '1 day') AS dia
+               WHERE extract(isodow FROM dia) < 6
+               ORDER BY dia
+              OFFSET $4::int - 1
+               LIMIT 1),
+            updated_at = now()
+       FROM ${WORKSPACE_TZ} w, pipeline_stage st
+      WHERE d.id = $1
+        AND st.id = d.stage_id
+        AND NOT st.is_won AND NOT st.is_lost
+        AND (d.next_action IS NULL OR btrim(d.next_action) = '' OR btrim(d.next_action) = ANY($3::text[]))
+      RETURNING d.id`,
+    [dealId, opts.followUpAction?.trim() || FOLLOW_UP_ACTION, superadas, FOLLOW_UP_BUSINESS_DAYS, PITCH_DUE_HOUR],
+  );
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------

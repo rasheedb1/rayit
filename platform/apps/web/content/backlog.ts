@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0002 determinista e idempotente cualquier día (8 marcas, 13 señales, 15 deals; 60 videos y 90 días de serie que se rellenan hasta ayer), verificado en Postgres embebido con pnpm turbo run test. Sembrado en Supabase el 22-sep; detalle y decisiones en docs/propuestas/CIM-6.md (§6, integración).",
+    note: "Seed 0002 determinista e idempotente cualquier día (8 marcas, 13 señales, 15 deals; 60 videos y 90 días de serie que se rellenan hasta ayer), verificado en Postgres embebido con pnpm turbo run test. Sembrado en Supabase el 22-sep. Pulido r3: negocio en neto y campaña/factura con IVA (verify k2) y seed 0004 de Cotizar (tarifario, media kit, COT-2026-001…008 enlazadas a negocio y campaña). Detalle en docs/propuestas/CIM-6.md §6–§7. Pendiente humano: volver a sembrar tras aplicar 0024–0031.",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
@@ -319,7 +319,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
     status: "hecho",
-    note: "Empresas con búsqueda, ficha, relación y contactos con procedencia obligatoria y baja de una sola dirección. Pulido r2: «Nuevo negocio» desde la ficha (createDeal) y «Cotizar» en cada negocio abierto; todos los textos en ventas/_lib/messages.ts y @mc/db devuelve solo códigos (VentasError.code). Pendiente humano: aplicar 0024–0031 en Supabase.",
+    note: "Empresas con búsqueda, ficha, relación y contactos con procedencia obligatoria y baja de una sola dirección. Pulido r2: «Nuevo negocio» desde la ficha (createDeal) y «Cotizar» en cada negocio abierto; todos los textos en ventas/_lib/messages.ts y @mc/db devuelve solo códigos (VentasError.code). Pulido r3: ganar un negocio sube la relación a «Cliente» (nunca la baja); búsqueda y filtro alineados. Pendiente humano: aplicar 0024–0031 en Supabase.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -327,7 +327,7 @@ export const STORIES: readonly Story[] = [
     desc: "Bandeja de signal con estado pendiente, aceptar (crea o actualiza empresa y deal en nuevo) o descartar con motivo. Fuente manual y carga por CSV de una lista de marcas. Las fuentes automáticas quedan para fase 2.",
     done: "Aceptar una señal crea el deal con «Enviar pitch» como siguiente acción; descartarla la saca de la bandeja y no vuelve a entrar (dedupe_key).",
     status: "hecho",
-    note: "Anotar una marca y cargar una lista (CSV en UTF-8 o Windows-1252, el decodificador de Resumen en lib/csv.ts). Pulido r2: una marca pendiente o descartada no vuelve a entrar por ninguna fuente, lista ni a mano (se reconoce por empresa, dominio o nombre con brand_key); aceptar reutiliza la empresa del CRM por nombre y, si ya hay un negocio abierto, se suma a ese y lo dice. «Enviar pitch» vence a las 15:00 locales. Pendiente humano: aplicar 0031.",
+    note: "Anotar una marca y cargar una lista (CSV en UTF-8 o Windows-1252, el decodificador de Resumen en lib/csv.ts). Pulido r2: una marca pendiente o descartada no vuelve a entrar por ninguna fuente, lista ni a mano (se reconoce por empresa, dominio o nombre con brand_key); aceptar reutiliza la empresa del CRM por nombre y, si ya hay un negocio abierto, se suma a ese y lo dice. «Enviar pitch» vence a las 15:00 locales. Pulido r3: la clave de una señal manual lleva su titular, así que una marca aceptada admite señales nuevas y la misma repetida avisa «ya es un negocio» con enlace; el encaje sale de lib/format.ts. Pendiente humano: aplicar 0031.",
   },
   {
     id: "VEN-3", module: "VEN", owner: "rasheed", size: "L", sprint: 2, deps: ["VEN-1"],
@@ -335,7 +335,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tablero por etapa y vista de lista sobre deal_pipeline. Arrastrar cambia la etapa y escribe deal_stage_history con los días en la etapa. KPIs: deals abiertos, cierre ponderado, ganado en el trimestre.",
     done: "Mover un deal a «Ganado» fija won_at; el cierre ponderado cambia al mover entre etapas.",
     status: "hecho",
-    note: "Tablero con arrastrar y soltar, menú «Mover a», lista y KPI desde SQL. Pulido r2: una sola transición de etapa (deal_move_stage, 0031) para el tablero, Cotizar y el enlace público; enviar y aceptar fijan el monto neto de la cotización; un ganado con campaña o cotización firmada no se reabre; etapas privadas (uuid) aceptadas; el trimestre se corta en la zona del workspace. Pendiente humano: aplicar 0031.",
+    note: "Tablero con arrastrar y soltar, menú «Mover a», lista y KPI desde SQL. Pulido r2: una sola transición de etapa (deal_move_stage, 0031) para el tablero, Cotizar y el enlace público; enviar y aceptar fijan el monto neto de la cotización; un ganado con campaña o cotización firmada no se reabre; etapas privadas (uuid) aceptadas; el trimestre se corta en la zona del workspace. Pulido r3: enviar una cotización cambia «Enviar pitch» por «Seguimiento a la cotización» a 3 días hábiles. Pendiente humano: aplicar 0031.",
   },
   {
     id: "VEN-4", module: "VEN", owner: "rasheed", size: "M", sprint: 3, deps: ["VEN-3", "CON-2"],
@@ -463,7 +463,7 @@ export const STORIES: readonly Story[] = [
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
     status: "hecho",
-    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: crear el rol mc_public_share con supabase-admin y aplicar 0030 y 0031 en Supabase, al final de la cola 0024–0031 (ver la nota de CIM-2). Pulido r2 (desde Ventas): enviar y aceptar fijan en el negocio el monto neto de la cotización y lo mueven con deal_move_stage (0031).",
+    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: crear el rol mc_public_share con supabase-admin y aplicar 0030 y 0031 en Supabase, al final de la cola 0024–0031 (ver la nota de CIM-2). Pulido r2 (desde Ventas): enviar y aceptar fijan en el negocio el monto neto de la cotización y lo mueven con deal_move_stage (0031). Pulido r3: aceptar (panel o enlace) hace cliente a la marca; prueba de negocio = neto y campaña = total. Pendiente humano: visto bueno de Nicolás a «Total con impuesto» en /campanas.",
   },
 
   // ---------------------------------------------------------------- CAM

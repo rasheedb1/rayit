@@ -77,6 +77,12 @@ export const MESSAGES = {
     seeDeal: "Ver el negocio",
     /** La siguiente acción con la que nace un negocio (del radar o a mano). */
     pitchAction: "Enviar pitch",
+    /**
+     * La que la reemplaza cuando se envía una cotización del negocio: el
+     * pitch ya se superó con una propuesta. La escribe Cotizar al enviar
+     * (cotizar/_lib/textos.ts), con este texto.
+     */
+    quoteFollowUpAction: "Seguimiento a la cotización",
     /** El cuerpo de la actividad que deja una señal aceptada. */
     acceptedActivity: "Señal aceptada desde el radar.",
     discard: "Descartar",
@@ -120,9 +126,12 @@ export const MESSAGES = {
       note: "Nota",
       submit: "Anotar",
       created: "Anotada. Ya está en la bandeja.",
-      duplicate: "Esa marca ya había entrado al radar antes (aunque se haya descartado), así que no se repite.",
+      duplicate: "Esa misma señal ya estaba en el radar, así que no se repite.",
       duplicatePending: "Esa marca ya está en tu bandeja: revísala ahí.",
       duplicateDiscarded: "Esa marca la descartaste antes, así que no vuelve a entrar.",
+      /** La misma señal ya se aceptó: la marca es un negocio. Una señal con otro titular sí entra. */
+      duplicateAccepted: "Esa señal ya la aceptaste y la marca es un negocio tuyo. Si viste algo nuevo, anótalo con otro titular.",
+      seeCompany: "Ver la ficha",
       error: "No se pudo anotar la señal.",
     },
 

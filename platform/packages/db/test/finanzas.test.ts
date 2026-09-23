@@ -186,8 +186,9 @@ describe('crear facturas', () => {
     assert.equal(inv.withholding, '286554.62');
     assert.equal(inv.status, 'draft');
     assert.equal(inv.issuedOn, '2026-09-21');
-    assert.equal(inv.dueOn, '2026-10-21', 'sin cotización, vence a 30 días');
-    assert.equal(inv.quoteId, null);
+    assert.equal(inv.dueOn, '2026-10-21', 'la cotización acordó pago a 30 días');
+    // La campaña viene de COT-2026-003 (seed 0004): la factura la cita.
+    assert.equal(inv.quoteId, '00000004-0000-4000-8000-0000000c0703');
   });
 });
 

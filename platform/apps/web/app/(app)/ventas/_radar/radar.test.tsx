@@ -5,13 +5,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // bandeja a lo que devuelven, no la base (eso lo prueba @mc/db).
 const aceptarSenal = vi.fn();
 const descartarSenal = vi.fn();
+const anotarSenal = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 vi.mock("../actions", () => ({
   aceptarSenal: (...a: unknown[]) => aceptarSenal(...a),
   descartarSenal: (...a: unknown[]) => descartarSenal(...a),
-  anotarSenal: vi.fn(async () => ({})),
+  anotarSenal: (...a: unknown[]) => anotarSenal(...a),
   cargarLista: vi.fn(async () => ({})),
 }));
 
+import { MESSAGES } from "../_lib/messages";
 import { Radar, type SignalCardData } from "./radar";
 
 const SIGNAL = "00000005-0000-4000-8000-000000000001";
@@ -30,9 +32,29 @@ const card: SignalCardData = {
 beforeEach(() => {
   aceptarSenal.mockReset();
   descartarSenal.mockReset();
+  anotarSenal.mockReset();
+  anotarSenal.mockResolvedValue({});
 });
 
 describe("Radar", () => {
+  it("anotar una señal que ya se aceptó lo dice sin hablar de descartes y enlaza a la ficha", async () => {
+    const empresa = "/ventas/empresas/00000002-0000-4000-8000-0000000000e1";
+    anotarSenal.mockResolvedValue({
+      message: MESSAGES.radar.form.duplicateAccepted,
+      link: { href: empresa, label: MESSAGES.radar.form.seeCompany },
+    });
+    render(<Radar cards={[card]} currency="COP" />);
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.radar.newSignal }));
+    fireEvent.change(screen.getByLabelText("Marca"), { target: { value: "Café Alma" } });
+    fireEvent.change(screen.getByLabelText(/Qué viste/), { target: { value: "Lanzó cold brew" } });
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.radar.form.submit }));
+
+    const alerta = await screen.findByRole("alert");
+    expect(alerta).toHaveTextContent("ya la aceptaste");
+    expect(alerta).not.toHaveTextContent(/descart/i);
+    expect(screen.getByRole("link", { name: MESSAGES.radar.form.seeCompany })).toHaveAttribute("href", empresa);
+  });
+
   it("aceptar anuncia el negocio abierto y enlaza al pipeline", async () => {
     aceptarSenal.mockResolvedValue({
       ok: true,

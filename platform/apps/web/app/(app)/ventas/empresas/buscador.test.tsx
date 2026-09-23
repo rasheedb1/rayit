@@ -19,6 +19,14 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Buscador de empresas", () => {
+  it("la búsqueda y el filtro de relación se alinean por arriba, con ayuda o sin ella", () => {
+    // Alineada por el fondo, la ayuda de la búsqueda bajaba el select.
+    render(<Buscador minSearch={3} />);
+    const fila = screen.getByRole("search");
+    expect(fila).toHaveClass("items-start");
+    expect(fila).not.toHaveClass("items-end");
+  });
+
   it("con dos letras no busca y dice cuántas faltan", () => {
     render(<Buscador minSearch={3} />);
     fireEvent.change(screen.getByLabelText("Buscar por nombre o dominio"), { target: { value: "ca" } });

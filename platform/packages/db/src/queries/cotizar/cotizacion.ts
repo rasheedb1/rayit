@@ -12,7 +12,7 @@ import { isUuid, type WorkspaceTx } from '../../client.ts';
 import { nuevoSlug } from './enlace.ts';
 import { CotizarError, QuoteNotDraft, QuoteNotEditable, QuoteNotFound, QuoteTransitionError, ValidezVencida } from './errores.ts';
 import { assertMediaKitDelCreador, registrarActividad, registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
-import { DealNotFound, moveDeal, type MoveDealResult } from '../ventas.ts';
+import { DealNotFound, followUpAfterProposal, moveDeal, type MoveDealResult } from '../ventas.ts';
 import { getCurrentRateCard } from './tarifario.ts';
 import type { PublicQuoteView } from './publico.ts';
 
@@ -767,6 +767,18 @@ export interface TextosCotizar {
     amountTo: string;
     currencyTo: string;
   }): string;
+  /**
+   * La siguiente acción que deja enviar la cotización en el negocio
+   * («Seguimiento a la cotización»). Sale del messages.ts de Ventas, que
+   * es quien la enseña en el tablero. Sin ella, FOLLOW_UP_ACTION.
+   */
+  accionSeguimiento?: string;
+  /**
+   * Las siguientes acciones que enviar una cotización deja atrás («Enviar
+   * pitch», la del radar), también del messages.ts de Ventas. PITCH_ACTION
+   * cuenta siempre.
+   */
+  accionesSuperadas?: readonly string[];
   /** El aviso al creador cuando la marca acepta desde el enlace. */
   avisoAceptada(p: {
     companyName: string;
@@ -788,8 +800,10 @@ export interface TextosCotizar {
  *
  * Efecto en Ventas: el deal pasa a «Propuesta enviada» (si no estaba
  * ya más adelante) por la misma transición que el tablero —moveDeal,
- * deal_move_stage de 0031— y su monto pasa a ser el neto de la
- * cotización, con la actividad que lo cuenta.
+ * deal_move_stage de 0031—, su monto pasa a ser el neto de la
+ * cotización, con la actividad que lo cuenta, y si su siguiente acción
+ * era el pitch del radar pasa a «Seguimiento a la cotización» a tres
+ * días hábiles (followUpAfterProposal): el pitch ya se superó.
  */
 export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
   const quote = await getQuoteForUpdate(tx, id);
@@ -829,6 +843,12 @@ async function moverDealAPropuesta(
   const mov = await moverConMontoDeCotizacion(tx, dealId, quote.id, 'propuesta', true);
   if (mov?.moved) {
     await tx.query('UPDATE deal SET last_contact_at = now() WHERE id = $1', [dealId]);
+  }
+  if (mov) {
+    await followUpAfterProposal(tx, dealId, {
+      followUpAction: textos.accionSeguimiento,
+      supersededActions: textos.accionesSuperadas,
+    });
   }
   await registrarActividad(tx, dealId, 'proposal_sent', textos.actividadEnviada({ quoteNumber: quote.number }), {
     kind: 'quote_sent',

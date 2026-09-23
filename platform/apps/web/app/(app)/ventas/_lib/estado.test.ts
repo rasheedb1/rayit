@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatterFor } from "@/lib/format";
 import { CONTACT_SOURCES, RELATIONSHIPS, SIGNAL_STATUSES } from "@mc/db/queries/ventas";
 import {
   RELATIONSHIP_META,
@@ -18,6 +19,9 @@ import {
   tabHref,
   tabKey,
 } from "./estado";
+
+/** El formateador de un workspace de Colombia, como el de la demo. */
+const CO = formatterFor({ locale: "es-CO", timezone: "America/Bogota", currency: "COP" });
 
 describe("pestañas", () => {
   it("la vista vive en la URL y el radar es la de por defecto", () => {
@@ -96,7 +100,7 @@ describe("encaje", () => {
 
   it("sin encaje no se inventa un cero", () => {
     expect(fitPercent(null)).toBeNull();
-    expect(pillForFit(null)).toBeNull();
+    expect(pillForFit(null, CO)).toBeNull();
   });
 
   it("un valor que no es número no se pinta", () => {
@@ -104,10 +108,19 @@ describe("encaje", () => {
   });
 
   it("el color del encaje cambia en 75 y en 50", () => {
-    expect(pillForFit("0.7500")).toEqual({ kind: "good", text: "75 %" });
-    expect(pillForFit("0.7400")).toEqual({ kind: "warn", text: "74 %" });
-    expect(pillForFit("0.5000")).toEqual({ kind: "warn", text: "50 %" });
-    expect(pillForFit("0.4900")).toEqual({ kind: "neutral", text: "49 %" });
+    expect(pillForFit("0.7500", CO)).toEqual({ kind: "good", text: "75 %" });
+    expect(pillForFit("0.7400", CO)).toEqual({ kind: "warn", text: "74 %" });
+    expect(pillForFit("0.5000", CO)).toEqual({ kind: "warn", text: "50 %" });
+    expect(pillForFit("0.4900", CO)).toEqual({ kind: "neutral", text: "49 %" });
+  });
+
+  it("el texto del encaje lo pone el formateador del workspace, no una plantilla", () => {
+    const visto: number[] = [];
+    const f = { pct: (r: number) => (visto.push(r), `pct(${r})`) };
+    expect(pillForFit("0.8200", f)).toEqual({ kind: "good", text: "pct(0.82)" });
+    // El color y el texto usan el mismo porcentaje entero.
+    expect(pillForFit("0.7449", f)).toEqual({ kind: "warn", text: "pct(0.74)" });
+    expect(visto).toEqual([0.82, 0.74]);
   });
 });
 
