@@ -214,6 +214,35 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
     }
   });
 
+  test('sin deal_move_stage (0031) la guardia no da verde, aunque no haya migraciones que comparar', async () => {
+    // El caso de Vercel: el bundle no lleva db/migrations, «pendientes»
+    // sale vacío y la única forma de ver que falta 0031 es preguntar por
+    // la función. Aquí schema_migrations sí la tiene: se quita el
+    // objeto, no el registro, que es lo que la comparación de archivos
+    // no puede ver.
+    assert.deepEqual((await estadoDelEsquema(t.db)).funcionesQueFaltan, []);
+    const firma = 'deal_move_stage(uuid,text,boolean,numeric,text)';
+    await t.admin(`ALTER FUNCTION ${firma} RENAME TO zz_deal_move_stage`);
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.pendientes, []);
+      assert.equal(estado.funcionesQueFaltan.length, 1);
+      assert.match(estado.funcionesQueFaltan[0] ?? '', /deal_move_stage.*no existe.*0031_mover_negocio/);
+      assert.match(String(explicarEsquema(estado)), /faltan funciones que el código llama/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /deal_move_stage/);
+    } finally {
+      await t.admin('ALTER FUNCTION zz_deal_move_stage(uuid,text,boolean,numeric,text) RENAME TO deal_move_stage');
+    }
+    await t.admin(`REVOKE EXECUTE ON FUNCTION ${firma} FROM mc_app`);
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.match(estado.funcionesQueFaltan.join(' '), /deal_move_stage.*mc_app no la puede ejecutar/);
+    } finally {
+      await t.admin(`GRANT EXECUTE ON FUNCTION ${firma} TO mc_app`);
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).funcionesQueFaltan, []);
+  });
+
   test('una excepción declarada sin decir qué puede hacer mc_app con ella se reporta', () => {
     // El invariante estaba escrito en el comentario de
     // EXCEPCIONES_SIN_AISLAMIENTO y no lo comprobaba nadie: una

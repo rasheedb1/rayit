@@ -293,6 +293,23 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Las funciones SECURITY INVOKER de `public` que el CÓDIGO llama por su
+ * nombre, con la migración que las crea. Las DEFINER ya las cubre
+ * FUNCIONES_DEFINER_DECLARADAS (si falta una, sale como declaración
+ * obsoleta); estas no dejan rastro en ningún otro inventario, y en
+ * Vercel —donde el bundle no lleva db/migrations y no hay «pendientes»
+ * que comparar— una base sin 0031 pasaba la guardia en verde y el
+ * tablero de Ventas, «Enviar» en Cotizar y la aceptación pública caían
+ * en el primer clic con «function deal_move_stage does not exist». Se
+ * comprueba que existan con esa firma y que mc_app las pueda ejecutar.
+ */
+export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
+  'deal_move_stage(uuid,text,boolean,numeric,text)':
+    '0031_mover_negocio: el tablero de Ventas, «Enviar» y «Aceptar» en Cotizar y la aceptación pública',
+  'brand_key(text)': '0031_mover_negocio: el radar y las listas de Ventas reconocen una marca por su nombre',
+};
+
+/**
  * Los disparadores de tablas de `public` que llaman a una función
  * SECURITY DEFINER (de cualquier esquema), como `tabla.disparador`, y por
  * qué. Postgres no comprueba EXECUTE al disparar: el cuerpo corre con los
@@ -631,6 +648,8 @@ export interface EstadoDelEsquema {
   funcionesDefiner: string[];
   /** Entradas de FUNCIONES_DEFINER_DECLARADAS que ya no corresponden. */
   funcionesDefinerObsoletas: string[];
+  /** Funciones de FUNCIONES_QUE_USA_EL_CODIGO que no existen o que mc_app no puede ejecutar, con el motivo. */
+  funcionesQueFaltan: string[];
   /** Disparadores de tablas de `public` que llaman a una función SECURITY DEFINER, sin declarar. */
   disparadoresDefiner: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
@@ -741,6 +760,11 @@ interface FilaUnico extends Record<string, unknown> {
 }
 interface FilaFuncion extends Record<string, unknown> {
   firma: string;
+}
+interface FilaFuncionDelCodigo extends Record<string, unknown> {
+  firma: string;
+  existe: boolean;
+  ejecuta: boolean;
 }
 interface FilaReferencia extends Record<string, unknown> {
   hija: string;
@@ -931,6 +955,18 @@ const SQL_FUNCIONES = `
               AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)))
    ORDER BY 1`;
 
+/**
+ * Por cada firma de FUNCIONES_QUE_USA_EL_CODIGO: si existe en public y
+ * si mc_app la puede ejecutar. Con el esquema delante, para no depender
+ * del search_path de quien pregunta.
+ */
+const SQL_FUNCIONES_DEL_CODIGO = `
+  SELECT f AS firma,
+         to_regprocedure('public.' || f) IS NOT NULL AS existe,
+         coalesce(has_function_privilege($2::name, to_regprocedure('public.' || f), 'EXECUTE'), false) AS ejecuta
+    FROM unnest($1::text[]) AS f
+   ORDER BY 1`;
+
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
 const SQL_DISPARADORES_DEFINER = `
   SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
@@ -1083,6 +1119,10 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const politicas = await leer<FilaPolitica>(SQL_POLITICAS, [APP_ROLE]);
   const privilegios = await leer<FilaPrivilegio>(SQL_PRIVILEGIOS);
   const funciones = await leer<FilaFuncion>(SQL_FUNCIONES, [APP_ROLE]);
+  const delCodigo = await leer<FilaFuncionDelCodigo>(SQL_FUNCIONES_DEL_CODIGO, [
+    Object.keys(FUNCIONES_QUE_USA_EL_CODIGO),
+    APP_ROLE,
+  ]);
   const referencias = await leer<FilaReferencia>(SQL_REFERENCIAS);
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
@@ -1328,6 +1368,17 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const funcionesDefinerObsoletas = inventarioLeido
     ? Object.keys(FUNCIONES_DEFINER_DECLARADAS).filter((f) => !firmas.has(f))
     : [];
+
+  // ---- funciones que el código llama por su nombre: que existan y que
+  //      mc_app las pueda ejecutar. Se cuenta solo lo que la base dijo
+  //      que falta; una fila que no llegó no se inventa como falta.
+  const funcionesQueFaltan = delCodigo
+    .filter((f) => !f.existe || !f.ejecuta)
+    .map(
+      (f) =>
+        `${f.firma} (${f.existe ? `${APP_ROLE} no la puede ejecutar` : 'no existe'}; ` +
+        `${FUNCIONES_QUE_USA_EL_CODIGO[f.firma] ?? 'sin motivo declarado'})`,
+    );
 
   // ---- disparadores que llaman a una función SECURITY DEFINER: corren
   //      con su dueño para cualquiera que escriba en la tabla, sin que
@@ -1622,6 +1673,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     relacionesSinRlsObsoletas: siAlDia(relacionesSinRlsObsoletas),
     funcionesDefiner,
     funcionesDefinerObsoletas: siAlDia(funcionesDefinerObsoletas),
+    funcionesQueFaltan,
     disparadoresDefiner,
     reglas,
     esquemasDeMas,
@@ -1657,6 +1709,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   relacionesSinRlsObsoletas: [],
   funcionesDefiner: [],
   funcionesDefinerObsoletas: [],
+  funcionesQueFaltan: [],
   disparadoresDefiner: [],
   reglas: [],
   esquemasDeMas: [],
@@ -1731,6 +1784,12 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         estado.funcionesDefiner.join(', ') +
         '. Revocar EXECUTE no basta: un disparador la corre igual. Hazlas SECURITY INVOKER, o decláralas en ' +
         'FUNCIONES_DEFINER_DECLARADAS con su motivo',
+    );
+  }
+  if (estado.funcionesQueFaltan.length) {
+    partes.push(
+      'faltan funciones que el código llama por su nombre, y las pantallas que las usan fallan al primer clic: ' +
+        estado.funcionesQueFaltan.join('; '),
     );
   }
   if (estado.disparadoresDefiner.length) {
