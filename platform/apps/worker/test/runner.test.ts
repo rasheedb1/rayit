@@ -72,7 +72,7 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(byJob.get('oauth.refresh')?.['group'], 'connections');
   assert.equal(byJob.get('collect.posts')?.['handler'], 'sí', 'CON-5 lo registra');
   assert.equal(byJob.get('collect.post_metrics')?.['handler'], 'sí');
-  assert.equal(byJob.get('collect.demographics')?.['handler'], 'no', 'llega con CON-7');
+  assert.equal(byJob.get('collect.demographics')?.['handler'], 'sí', 'CON-7 lo registra');
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
