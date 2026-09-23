@@ -1,0 +1,92 @@
+[
+ {
+  "severity": "media",
+  "where": "apps/web/app/(app)/cotizar/actions.ts:279 (itemSchema.unitPrice, discount, rangoCpmSchema) · packages/core/src/tarifas.ts:322 (validarRangoPrecio) y calcularTotalesCotizacion",
+  "issue": "Ningún monto de Cotizar tiene tope, aunque las columnas son numeric(14,2) (máximo 999.999.999.999,99). Un precio con ceros de más (lo probé: 999 × 999999999999) se previsualiza con un total de 16 cifras que se sale de la tarjeta. Al guardar, Postgres responde 22003 numeric field overflow y la persona recibe el genérico «No se pudo completar la acción… avísanos», sin marca en ningún campo. Al servidor le llega como error sin código conocido. Lo mismo pasa con el rango manual del tarifario (max(20) caracteres) y con CPM × views.",
+  "fix": "Añadir en @mc/core una constante MONTO_MAXIMO = '999999999999.99' y un TarifaError('MontoFueraDeRango'). calcularTotalesCotizacion y validarRangoPrecio deben comprobar contra ella el unit_price, el total de cada línea, el subtotal, el impuesto y el total, y la pantalla también la usa. En itemSchema/discount/rangoCpmSchema, un .refine con compareDecimal(v, MONTO_MAXIMO) <= 0 y el mensaje en messages.ts («El monto no puede pasar de …» formateado con formatMoney). Una prueba en tarifas.test.ts y otra en actions.test.ts con 999 × 999999999999."
+ },
+ {
+  "severity": "media",
+  "where": "apps/web/app/(app)/ventas/actions.ts:671 (moverNegocio, monto al ganar) · _pipeline/tablero.tsx:262",
+  "issue": "El monto de «Ganado» se valida con DECIMAL_RE y una longitud de hasta 15 caracteres, pero deal.amount es numeric(14,2): «1000000000000» (13 cifras) pasa la validación, la base la rechaza por desbordamiento y la tarjeta dice el genérico moveError, que no apunta al campo del monto, recién enfocado en r8.",
+  "fix": "Usar el mismo MONTO_MAXIMO de @mc/core: en moverOptsSchema, amount: z.string().regex(DECIMAL_RE).refine(v => compareDecimal(v, MONTO_MAXIMO) <= 0), y devolver V.amount con el tope en el texto. En el cliente, win() hace la misma comprobación antes de llamar y deja el foco en el campo. Añadir un caso a actions.test.ts."
+ },
+ {
+  "severity": "baja",
+  "where": "db/migrations/0024_aislamiento_por_defecto.sql, 0025, 0026, 0029, 0030, 0031, 0032",
+  "issue": "Ninguna falla con el runner transaccional (cada archivo es atómico y queda con checksum), pero siete de las diez migraciones de la cola no se pueden volver a correr: CREATE POLICY sin DROP previo, DROP INDEX sin IF EXISTS, ADD CONSTRAINT y ADD COLUMN sin guardia, CREATE FUNCTION sin OR REPLACE. En cambio 0027, 0028 y 0033 sí se pueden repetir, y la nota de CIM-2 lo presenta como virtud de 0033. La cola única pide aplicar 0024–0033 a mano con supabase-admin (crear el rol) y db.migrate: si alguien pega una migración en el SQL Editor para recuperarse de un fallo a medias, la segunda pasada falla en la primera sentencia.",
+  "fix": "No se pueden editar (todavía no están en Supabase, pero el integrador las trata como congeladas; si se decide tocarlas, este es el momento, antes de aplicarlas): DROP POLICY IF EXISTS antes de cada CREATE POLICY, DROP INDEX IF EXISTS, ADD COLUMN IF NOT EXISTS, CREATE OR REPLACE FUNCTION, y ADD CONSTRAINT dentro de un DO con comprobación en pg_constraint. Si no, dejar escrito en la nota de CIM-2 que solo se aplican con make db.migrate y nunca a mano."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/layout.tsx:41 (ThemeSync) · apps/web/app/(app)/page.tsx:45 (ModuleCard)",
+  "issue": "El pulido r8 tocó dos piezas del marco de CIM-4, que es de Nicolás: el layout raíz (ThemeSync, que repite la regla de lib/theme.ts) y la página Plan, cuyas tarjetas de Campañas, Finanzas y Conexiones ahora llevan a /plan/<módulo> y no al módulo. Ni la nota de backlog.ts ni un decisions lo registran como pendiente de su visto bueno, como sí se hizo con el Shell y los loading.tsx.",
+  "fix": "Añadir a la nota de VEN-1 (o de CIM-2, en la cola del integrador) «visto bueno de Nicolás a ThemeSync en app/layout.tsx y al enlace de las tarjetas del Plan a /plan/<módulo>», y explicar el motivo en una línea en el propio archivo, como pide la regla de dueños de carpeta."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/actions.ts:324,334 · apps/web/app/(app)/ventas/actions.ts:304,359,502,553",
+  "issue": "Hay tipos debilitados con casts sobre la salida de zod: `parsed.data as Cotizacion`, `v.items as QuoteItemInput[]` (deliverable llega como z.string() libre), y z.string().refine(v => RELATIONSHIPS.includes(v as Relationship)) seguido de `v.relationship as Relationship`. zod ya puede inferir esos tipos, y los casts ocultan cualquier divergencia futura entre el esquema y la consulta.",
+  "fix": "Usar z.enum(RELATIONSHIPS), z.enum(CONTACT_SOURCES) y z.enum(LOST_REASONS) (arrays as const) y quitar los casts. En cotizar, un unitPrice: decimalSchema que devuelva el tipo Decimal (con .transform o una marca de tipo) para que v.items sea QuoteItemInput[] sin as. leerCotizacion ya es genérica: basta con estrechar sin `as Cotizacion`."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/cotizaciones/[id]/(detalle)/layout.tsx:6 y el resto de Cotizar",
+  "issue": "Cotizar importa withWorkspace directamente de @/lib/db, mientras Ventas y Finanzas (la pantalla de referencia) pasan por su propio _lib/db.ts, que reexporta justo para que «nadie abra el cliente crudo desde una pantalla». Son dos patrones para lo mismo en módulos del mismo dueño.",
+  "fix": "Crear app/(app)/cotizar/_lib/db.ts con `export { withWorkspace } from \"@/lib/db\";` y cambiar los imports de Cotizar, o bien quitar la reexportación de Ventas; lo que sea, uno solo, y anotarlo en el README de la web."
+ },
+ {
+  "severity": "media",
+  "where": "apps/web/app/(app)/resumen/kpis.tsx:147-160 · /resumen?periodo=7&red=facebook",
+  "issue": "Cuando no hay videos en el periodo, «Alcance en no seguidores» y «Guardados por 1 000 visualizaciones» muestran un «—» sin ninguna frase que diga por qué. Solo la tarjeta de seguidores recibe `sinCifra`. Eso contradice la regla que el propio archivo escribe en comparacion(): las cuatro tarjetas deben explicar la ausencia. El (i) tampoco lo explica, porque base() devuelve null si value es null.",
+  "fix": "Añadir en resumen/messages.ts kpis.sinVideos, por ejemplo «Sin videos publicados en estos {n} días». Pasarlo como cuarto argumento de comparacion() en las tarjetas de alcance y guardados cuando serie.value === null. Añadir un caso a page.test.tsx con una red sin posts en 7 días."
+ },
+ {
+  "severity": "media",
+  "where": "apps/web/app/(app)/ventas/_pipeline/tablero.tsx:~241-266 · /ventas?vista=pipeline",
+  "issue": "Al mover un negocio con el menú «Mover a…» a cualquier etapa que no pida monto ni motivo, la tarjeta se desmonta de su columna y el foco cae en <body>. Medido: document.activeElement es BODY tras mover a Ganado o a Negociación. Quien usa teclado pierde su lugar y tiene que volver a tabular desde el principio de la página.",
+  "fix": "Guardar el id del negocio movido y, cuando el tablero se repinte, enfocar el <select> «Mover a» o el enlace de la tarjeta en su nueva columna (por ejemplo, data-deal-id más un useEffect que lo busque). Otra opción: mover el foco al aviso de estado con tabIndex=-1. Añadir en tablero.test.tsx una prueba de que el foco no queda en body."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/cotizaciones/(lista)/page.tsx y media-kit/(lista)/page.tsx · 400 px",
+  "issue": "A 400 px el número «COT-2026-008» se parte en tres líneas por los guiones y la fecha «22 de septiembre de 2026 a las 7:00 a. m.» del media kit ocupa cinco. Estado, Enviada y Acciones quedan detrás del scroll interno de la tabla. La tabla de empresas de Ventas se lee bien a ese ancho.",
+  "fix": "Poner whitespace-nowrap en la celda del número. En la columna Generado, usar f.date(…, 'short') con la hora en una segunda línea atenuada (formatDate ya lo permite). Así la fila cabe y el estado queda a la vista."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/cotizaciones/(lista)/page.tsx (cabecera «Total») · /cotizar/cotizaciones frente a /ventas",
+  "issue": "El mismo acuerdo aparece como COP 6,5 M en el pipeline (sin impuesto) y como COP 7.735.000 en la lista de cotizaciones, bajo una columna que solo dice «Total». Campañas ya rotula su columna «Total con impuesto». Una creadora que compara módulos ve dos cifras sin saber por qué.",
+  "fix": "Renombrar la cabecera en cotizar/messages.ts a «Total con impuesto», igual que Campañas, o mostrar el neto debajo en texto atenuado."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/resumen/kpis.tsx:comparacion() · /resumen?periodo=90&red=instagram",
+  "issue": "La causa es la misma en las cuatro tarjetas: el periodo anterior de 90 días no tiene datos. Aun así, Seguidores y Visualizaciones dicen «Sin periodo anterior con qué comparar» y Alcance y Guardados dicen «Pocos videos para comparar». Esto último sugiere que faltan videos en el periodo actual, que no es el caso.",
+  "fix": "Distinguir en getResumenKpis «el periodo anterior tiene 0 videos» (usar t.sinComparacion) de «tiene 1 o 2» (usar t.pocaMuestra). Puede ir como un campo previousSample o como lowSample: 'none' | 'few'."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/ventas/_pipeline/tablero.tsx (cabecera de columna) · /ventas?vista=pipeline",
+  "issue": "Una columna vacía muestra «COP 0» encima de «Nada aquí». El producto sigue la regla de enseñar el vacío, no un cero, y en Resumen se cumple.",
+  "fix": "Si la columna tiene 0 negocios, omitir el total o mostrar «—». El conteo 0 junto al título basta."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/cotizaciones/[id]/(detalle)/page.tsx · «Enlace para la marca»",
+  "issue": "Se muestra la ruta relativa «/cotizacion/<slug>». El botón copia la URL absoluta, pero quien seleccione el texto a mano, o lo lea para dictarlo, obtiene un enlace que no abre. Lo mismo pasa con «/kit/<slug>» en la lista del media kit.",
+  "fix": "Pintar la URL absoluta con el mismo origen que usa lib/auth/origen.ts (APP_URL o VERCEL_PROJECT_PRODUCTION_URL) y dejar la ruta relativa solo cuando no haya origen fijo."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/ventas/_componentes/aviso.tsx frente a cotizar/tarifario-tabla.tsx:459, cotizaciones/nueva/form.tsx:294 y media-kit/generar-form.tsx:31",
+  "issue": "El mismo recuadro de error (role=alert, border-bad/30, bg-bad-wash) está copiado a mano en al menos cuatro sitios de Cotizar, mientras Ventas tiene su componente Aviso. Es duplicación entre módulos del mismo dueño.",
+  "fix": "Mover Aviso a app/(app)/_lib/aviso.tsx, o proponerlo al kit, y usarlo en los formularios de Cotizar. Así un cambio de estilo o de accesibilidad se hace en un solo lugar."
+ },
+ {
+  "severity": "baja",
+  "where": "db/seed/0002_demo_ventas_metricas.sql · /ventas (Radar)",
+  "issue": "Las cinco señales pendientes del seed llevan «Ya en tu CRM» y se suman a un negocio abierto. Con los datos de demostración no se puede enseñar el camino principal de VEN-2: aceptar una marca nueva, que crea la empresa y el negocio con «Enviar pitch».",
+  "fix": "Dejar al menos una señal pendiente de una marca que no esté en el CRM (sin company_id ni negocio abierto), y actualizar los conteos de db/seed/verify y la nota de CIM-6."
+ }
+]
