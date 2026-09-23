@@ -44,7 +44,7 @@ paso manual.
 | `apps/web/app/(app)/conexiones/pasos-manuales.tsx` | **Nuevo.** El panel del paso manual, con el `message_es` de `tt.insights.optin` leído de la base. |
 | `apps/web/app/(app)/conexiones/connect-dialog.tsx` | Cambia: acepta `variant: "danger"` (el «Reautorizar» en rojo) y un título propio del diálogo. |
 | `apps/web/app/(app)/conexiones/page.tsx` | Cambia: una sola tabla con las dos clases de fila, columna «Acceso», columna «Última lectura» con las horas, estado derivado y acciones por fila. |
-| `apps/web/app/(app)/conexiones/actions.ts` | Cambia: los `TODO(ACC-1)`/`TODO(ACC-2)` de cada acción (ACC-1 no está en `main`). |
+| `apps/web/app/(app)/conexiones/actions.ts` | Cambia: textos a `_lib/messages.ts` y `TODO(ACC-2)` en las escrituras auditables. Los `requirePermission` los puso ACC-1 y se conservan. |
 | `apps/web/app/(app)/conexiones/pagina.test.tsx` | **Nuevo.** La página entera contra Postgres embebido con el escenario del `--demo` del worker. |
 | `packages/db/src/queries/conexiones.ts` | Cambia: `getMetricRequirement(tx, id)` sobre el catálogo `metric_requirement` (0011). |
 | `apps/web/content/backlog.ts` | Cambia: **solo** mi fila CON-4. |
@@ -161,13 +161,23 @@ de verdad de algo que la base ya tiene y que CON-7 volverá a leer.
 *Dónde se ve:* un panel debajo de la tabla, solo si hay al menos una
 cuenta de TikTok **autorizada** (sin token no hay API que desbloquear).
 
-**9. Permisos y bitácora: marcadores, no invención.** ACC-1 no está en
-`main` (no existe `packages/core/src/permisos.ts` en ninguna rama
-remota). Cada Server Action y la ruta `start` llevan
-`// TODO(ACC-1): conexiones.cuenta.<ver|conectar|desconectar>` en la
-primera línea, y las escrituras de cuenta conectada,
-`// TODO(ACC-2): audit(...)`. Inventar aquí un `requirePermission`
-propio sería construir el catálogo de ACC-1 desde el módulo equivocado.
+**9. Permisos: los de ACC-1, que llegaron a mitad de la historia.**
+La rama salió de un `main` sin ACC-1 y llevaba `// TODO(ACC-1)`. ACC-1
+se mergeó el 23-sep (`e52e833`), así que tras el rebase la pantalla
+abre con `requirePermission('conexiones.cuenta.ver')` —el mismo
+`PERMISO_MINIMO.conexiones` que ACC-5 usará para responder 404— y el
+`POST /conexiones/oauth/<red>/start` con
+`'conexiones.cuenta.conectar'`, por ser el punto de entrada del flujo
+que escribe tokens. En `actions.ts` mandan las llamadas que ACC-1 ya
+había puesto; «Actualizar» se queda en `conexiones.cuenta.conectar` y
+no en `.ver` porque pedir una lectura nueva gasta cuota de la
+plataforma y escribe un snapshot.
+
+**La bitácora sigue en marcador.** ACC-2 no está en `main` (no existe
+`packages/db/src/audit.ts` en ninguna rama remota), así que las tres
+escrituras auditables —agregar, quitar y autorizar— llevan
+`// TODO(ACC-2): audit(...)` con el evento y los campos que le tocan,
+sin tokens ni PII.
 
 **10. Formato por `formatterFor`.** La pantalla de CON-10 usaba
 `formatInt`/`formatDelta` sueltos, con el locale por omisión. Pasa a
@@ -202,7 +212,7 @@ producto: un workspace en otro país ve sus cifras y sus fechas.
 - OAuth de YouTube → **CON-8**.
 - Notificaciones de token por vencer → ya las crea **CON-2**
   (`oauth.refresh`); la bandeja es de otra historia.
-- `requirePermission` y `audit()` reales → **ACC-1** y **ACC-2**.
+- `audit()` real → **ACC-2** (`requirePermission` ya entró con ACC-1, ver decisión 9).
 - La prueba en vivo del flujo OAuth → **CON-3 §5** (hecha el 23-sep).
 - Abrir el OAuth a cualquier creador (App Review de Login Kit) → **CON-9**.
 
@@ -238,45 +248,43 @@ lo que ya estaba pedido:
 | `pagina.test.tsx` (10) | La página entera contra Postgres embebido con el seed más el escenario del `--demo` del worker, con y sin bandera. |
 
 ```
-$ pnpm --filter @mc/web exec vitest run "app/(app)/conexiones/"
- Test Files  6 passed (6)
-      Tests  59 passed (59)
+$ pnpm --filter @mc/web exec vitest run "app/(app)/conexiones/" "lib/permisos/"
+ Test Files  8 passed (8)
+      Tests  81 passed (81)
 ```
 
-### 2.2 Verde total
+Las diez de `lib/permisos/` son de ACC-1 e incluyen `convencion.test.ts`,
+que falla si una Server Action de Conexiones deja de abrir con su
+`requirePermission`.
+
+### 2.2 Verde total (rebasada sobre el `main` del 23-sep con ACC-1)
 
 ```
-$ pnpm turbo run typecheck lint test --force --concurrency=2 --continue
- Tasks:    14 successful, 15 total
-Failed:    @mc/web#test
-@mc/web:test:  Test Files  90 passed (90)
-@mc/web:test:       Tests  766 passed | 1 todo (767)
-@mc/web:test:      Errors  1 error
+$ pnpm verificar
+@mc/web:test:  Test Files  93 passed (93)
+@mc/web:test:       Tests  805 passed | 1 todo (806)
+
+$ pnpm --filter @mc/db test
+ℹ tests 615   ℹ pass 615   ℹ fail 0
 
 $ pnpm --filter @mc/web build
-BUILD_EXIT=0        (/conexiones ƒ, server-rendered on demand)
+✓ Compiled successfully in 29.4s
+├ ƒ /conexiones                            4.07 kB         110 kB
+├ ƒ /conexiones/oauth/[platform]/callback    198 B         102 kB
+├ ƒ /conexiones/oauth/[platform]/start       198 B         102 kB
+BUILD_EXIT=0
 ```
 
-**El único rojo no es de esta historia y ya estaba en `main`.** Las 90
-suites y las 766 pruebas pasan; vitest sale 1 por un *unhandled
-rejection* de undici —`TypeError: Invalid state: ReadableStream is
-already closed`— que nace en `app/(app)/resumen/importar/lote.test.ts`
-(RES-6, de Rasheed). Corriendo ese archivo **solo** pasa igual y falla
-igual:
+Una nota sobre la corrida de `pnpm verificar`: con cuatro sesiones
+verificando a la vez en esta máquina (carga media de 120), `@mc/db#test`
+cayó por **tiempo de espera** —`listSql` de `test/aplicar.test.ts`
+tardó 157 s contra un tope de 120 s y arrastró 614 pruebas canceladas—,
+no por un fallo. Corrido solo, el paquete da 615 de 615. Es contención
+de la máquina, no del código.
 
-```
-$ pnpm --filter @mc/web exec vitest run "app/(app)/resumen/importar/lote.test.ts"
- Test Files  1 passed (1)
-      Tests  17 passed (17)
-     Errors  1 error
-```
-
-Esta rama no toca nada del importador (`git diff --name-only
-origin/main...HEAD` no devuelve ningún archivo de `resumen/`).
-**Para Rasheed:** la ruta de la importación deja una respuesta cuyo
-cuerpo se cierra antes de que undici termine de encolar; basta con
-consumir o cancelar el `body` del `Response` en la prueba. Mientras
-tanto, `pnpm verificar` sale 1 en `main` y en toda rama que salga de él.
+El *unhandled rejection* de `lote.test.ts` que rompía `pnpm verificar`
+en `main` ya está arreglado en `main` (`913d465`, RES-6), así que ese
+rojo desapareció.
 
 No se tocó ninguna migración, así que no hay `make db.check` ni `make
 db.guardia` que correr.
