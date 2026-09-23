@@ -1,0 +1,276 @@
+# FIN-2 · Pagos y reserva de impuestos
+
+> Historia FIN-2 (sprint 3, talla M, dueño Nicolás). Depende de FIN-1,
+> que está en `main`. Sin migraciones: `payment` y `tax_reserve` existen
+> desde 0008.
+
+---
+
+## 0 · Plan
+
+### 0.1 Qué hay hoy y qué falta
+
+En `main`, Finanzas sabe crear una factura, numerarla, marcarla enviada
+y anularla (FIN-1), y el detalle tiene el botón «Registrar pago»
+**deshabilitado** con la nota «Sprint 3 · FIN-2». Los KPI de `/finanzas`
+ya leen `payment` (cobrado en el año) y `tax_reserve` (apartado para
+impuestos): hoy esas dos tablas solo las llena el seed 0003. FIN-2 es lo
+que las llena desde el producto.
+
+Lo que **no** está en `main` y esta historia necesitaría:
+
+| Pieza | Dónde estaría | Estado |
+|---|---|---|
+| `requirePermission()` | `apps/web/lib/auth/` (Rasheed) | ACC-1 sin mezclar |
+| `PERMISOS` / `can()` | `packages/core/src/permisos.ts` | ACC-1 sin mezclar |
+| `audit()` | `packages/db/src/audit.ts` | ACC-2 sin mezclar |
+
+Las dos ramas existen (`nicolas/ACC-1-catalogo-permisos`,
+`nicolas/ACC-2-bitacora-obligatoria`) pero no están en `origin/main`, así
+que FIN-2 no puede importarlas sin arrastrarlas. Lo que sí hace es
+**hablar su idioma exacto**, para que integrarlas sea borrar código, no
+reescribirlo:
+
+- El permiso se llama `finanzas.pago.registrar`, que es la clave que
+  ACC-1 ya tiene escrita en `PERMISOS` (`packages/core/src/permisos.ts`,
+  sensibilidad `sensible`).
+- La acción de bitácora se llama `invoice.payment_recorded`, que es la
+  que ACC-2 ya tiene en `AUDIT_ACTIONS` — la lista la escribió pensando
+  en esta historia («Finanzas (FIN-1; FIN-2 agrega payment.*)»).
+
+### 0.2 Decisión 1 · Las reglas del pago viven en core
+
+`packages/core/src/facturacion.ts` gana `applyPayment(invoice, input)`,
+pura, sin base ni red, del mismo corte que `transitionInvoice`: valida y
+**calcula** el resultado, no lo persiste.
+
+```ts
+applyPayment(
+  { status, total, paidAmount },
+  { amount, receivedAt },
+): { amount, paidAmount, outstanding, status: 'partial' | 'paid', paidAt }
+```
+
+Reglas, y por qué cada una:
+
+1. **Estados que admiten pago: `sent`, `partial` y `overdue`.** `overdue`
+   no se persiste (se deriva de `due_on < hoy`), pero la máquina de
+   estados de FIN-1 ya lo acepta como estado de lectura y de origen, y
+   una factura vencida es justo la que más falta hace cobrar. `draft`,
+   `paid` y `void` → `InvoiceNotPayable`. Una factura en borrador no se
+   ha enviado: cobrarla sería registrar dinero contra un documento que
+   la marca no ha visto.
+2. **`amount > 0`** → `PaymentAmountInvalid`. Un pago de cero no es un
+   hecho; un pago negativo es una devolución, que es fase 2.
+3. **`amount <= outstanding`** → `PaymentExceedsOutstanding`.
+   **DECISIÓN conservadora: sin sobrepago.** Un sobrepago obliga a
+   decidir qué es el excedente (saldo a favor, nota crédito, error de
+   digitación) y ninguna de las tres respuestas es obvia; rechazarlo con
+   un mensaje que dice cuánto falta no pierde información y no inventa
+   contabilidad. Va a «fuera de alcance» con su historia destino.
+4. **`paid_amount + amount == total` → `paid`, con `paid_at =
+   received_at`.** Si no llega al total → `partial`.
+5. **`paid_at` solo se fija al quedar pagada.** Aquí FIN-2 se aparta a
+   propósito de `transitionInvoice`, que lo fija también en `partial`:
+   la columna se lee en la pantalla como «Pagada el …», y poner ahí la
+   fecha de un abono del 30 % es decir que la factura se pagó ese día.
+   `transitionInvoice` no cambia (es de FIN-1 y su rama `partial` no
+   tiene botón en la interfaz).
+6. **Tope de monto.** `MONTO_MAXIMO = '999999999999.99'` (el máximo de
+   `numeric(14,2)`) y `AmountOutOfRange`, comprobado sobre `amount` y
+   sobre `paid_amount + amount`. Sin él, un monto con ceros de más llega
+   a Postgres y vuelve como `22003 numeric field overflow`, que la
+   pantalla convierte en un genérico sin campo marcado. Es el pendiente
+   `MONTO_MAXIMO` de `docs/propuestas/pendientes-pulido.json`; FIN-2 pone
+   la constante y el error en `@mc/core` y **solo los aplica en
+   `applyPayment`** (aplicarlos a `computeInvoiceTotals`, a Cotizar y a
+   Ventas es ese pendiente, no esta historia). Ver §1.1.
+
+El redondeo es el de FIN-1: todo pasa por `toCents` / `fromCents`, nunca
+por `number`.
+
+### 0.3 Decisión 2 · La reserva de impuestos, también en core
+
+```ts
+taxReserveFor(amount: Decimal, rate: string): Decimal   // mulRateHalfUp
+reservePeriod(receivedAtIso: string, timeZone: string): string  // '2026-Q3'
+```
+
+- **La tasa es la del momento del cobro.** Sale de
+  `workspace.settings.finanzas.reserva_pct` (11 en los seeds 0002 y
+  0003) convertido con `pctToRate` → `'0.11'`, y se **guarda en la fila**
+  (`tax_reserve.rate`, `numeric(6,4)` → `0.1100`). Cuando FIN-8 cambie el
+  porcentaje, los apartados anteriores no se tocan: cada uno lleva la
+  tasa con la que se calculó. Es la misma forma del seed.
+- **El período es el trimestre del cobro en la zona del workspace**, no
+  en UTC. Un cobro del 31 de diciembre a las 20:00 en Bogotá es
+  `2027-01-01T01:00Z`: en UTC caería en `2027-Q1` y el creador lo
+  declara en `2026-Q4`. Se calcula con `hoyEnZona()` de
+  `packages/core/src/zonas.ts`, que ya resuelve husos y cambios de
+  horario con `Intl`. Prueba de bordes: 31 mar / 1 abr y 31 dic / 1 ene,
+  en Bogotá y en UTC.
+- **`currency` es la de la factura** y `released_at` queda en `null`:
+  liberarla es FIN-8 o fase 2.
+
+**DECISIÓN PENDIENTE DE NICOLÁS · qué pasa si el workspace no tiene
+`reserva_pct`.** `workspace.settings` es `{}` por defecto (0001), así que
+un workspace nuevo no lo tiene. Tres opciones:
+
+| | Qué haría | Por qué no |
+|---|---|---|
+| Bloquear el pago | «Configura el porcentaje antes de cobrar» | Impedir registrar dinero que ya entró por un ajuste que el producto todavía no deja tocar (es FIN-8) es peor que no apartar |
+| Suponer 11 % | Apartar con el valor colombiano | Es la constante escondida que el resto del repo lleva cuatro rondas quitando: el producto se vende fuera de Colombia |
+| **Tasa 0, sin fila, y decirlo** ← elegida | Se registra el pago, no se crea `tax_reserve`, y la pantalla dice «Este espacio no aparta impuestos todavía» | No pierde el cobro, no inventa un número y deja el hueco visible |
+
+Un `reserva_pct` **presente pero inválido** (texto, negativo, > 100) sí
+falla, con `TaxReserveRateInvalid`: una ausencia es una decisión que
+nadie ha tomado; un valor roto es un error que hay que ver.
+
+### 0.4 Decisión 3 · Todo en UNA transacción, en `queries/finanzas.ts`
+
+`recordPayment(tx, input)` hace, en este orden y en una sola
+transacción:
+
+1. `SELECT … FROM invoice WHERE id = $1 FOR UPDATE`. RLS ya filtró: desde
+   otro workspace son cero filas → `InvoiceNotFound`. El `FOR UPDATE`
+   serializa dos pagos concurrentes sobre la misma factura, igual que
+   `transitionInvoice`.
+2. La fila `workspace` (moneda y `settings.finanzas.reserva_pct`) dentro
+   de la misma transacción.
+3. `applyPayment` y `taxReserveFor` — toda la aritmética, pura.
+4. La comprobación de idempotencia (§0.5).
+5. `INSERT INTO payment` (`direction 'in'`, moneda de la factura).
+6. `UPDATE invoice SET paid_amount, status, paid_at`.
+7. `INSERT INTO tax_reserve` si la tasa es mayor que cero.
+8. La fila de `audit_log` (§0.6).
+9. La `notification` `payment_received`, `severity 'success'`,
+   `entity_type 'invoice'`, `action_url` al detalle.
+
+Si algo de esto falla, no queda nada: es una transacción. La prueba del
+exceso lo comprueba contando filas de `payment` y `tax_reserve` después
+del rechazo.
+
+`listPayments(tx, invoiceId)` devuelve los cobros de una factura y la
+suma apartada, para la pantalla. Ninguna de las dos devuelve un
+`bigserial` a la web (CIM-2 §3): `payment` y `tax_reserve` tienen `uuid`.
+
+### 0.5 Decisión 4 · Idempotencia: el formulario dice sobre qué estado paga
+
+El requisito es «un doble envío no registra dos pagos». El caso del pago
+**total** ya se cae solo: el segundo envío encuentra la factura en `paid`
+y `applyPayment` responde `InvoiceNotPayable`. El que hace daño es el
+**parcial**: dos abonos idénticos son un estado de la base perfectamente
+legal, así que nada los distingue de un doble clic… salvo el estado sobre
+el que se calcularon.
+
+La historia proponía dos caminos; los dos tienen un pero:
+
+| Camino | Pero |
+|---|---|
+| Un id de envío en un campo oculto, buscado «en los últimos minutos» | `payment` **no tiene `created_at`**: solo `received_at`, que la elige la persona. No hay ninguna columna con la que medir «los últimos minutos», así que la ventana no se puede implementar |
+| Comparar contenido (monto + método + referencia) | Dos transferencias iguales el mismo día sin referencia son un caso real; rechazarlas es un falso positivo que bloquea un cobro legítimo |
+| Un `UNIQUE` parcial sobre una columna nueva | Es exacto, pero pide migración y la historia dice «sin migraciones» |
+
+**Elegido: control de concurrencia optimista sobre la factura.** El
+formulario lleva en un campo oculto el `paid_amount` que la pantalla vio
+al dibujarse (`expectedPaidAmount`). Ya dentro de la transacción, después
+del `FOR UPDATE`, `recordPayment` comprueba que siga siendo ese; si no,
+lanza `InvoicePaymentConflict` con el mensaje de recargar.
+
+Por qué es mejor que las tres de arriba:
+
+- **Es exacto, no heurístico.** Un doble clic manda dos veces el mismo
+  `expectedPaidAmount`; el primero gana y cambia `paid_amount`, el
+  segundo ve que cambió y no escribe nada. Cero falsos positivos: dos
+  abonos iguales *hechos a propósito* son dos envíos distintos del
+  formulario, el segundo con el `paid_amount` ya actualizado.
+- **Es atómico sin columna nueva.** La comprobación va después del
+  `FOR UPDATE`, así que dos peticiones concurrentes se serializan en la
+  fila de la factura: no hay ventana de carrera entre leer y escribir.
+- **Cubre además el caso de dos personas.** Con ACC en el piloto, el
+  creador y su mánager pueden tener el detalle abierto a la vez; el
+  segundo en enviar ve «esta factura cambió», no un cobro duplicado.
+- **No necesita migración.**
+
+Lo que no cubre: un cliente externo que reintenta la misma llamada (una
+API, un webhook de pasarela). Eso sí pide una clave de idempotencia
+propia, y va a §1.2 como propuesta para Rasheed, no a esta historia.
+
+### 0.6 Decisión 5 · Permiso y bitácora desde el primer commit
+
+- **Permiso.** `requirePermission()` vive en `apps/web/lib/auth/`, que es
+  de Rasheed, y ACC-1 no está en `main`. La Server Action abre con
+  `// TODO(ACC-1): requirePermission('finanzas.pago.registrar')`, con el
+  nombre del permiso ya escrito. No hay prueba que lo cubra: no hay nada
+  que probar todavía, y decirlo es más honesto que una prueba que pasa
+  sin comprobar nada.
+- **Bitácora.** Aquí sí se escribe la fila, no un TODO. `audit_log` no se
+  puede rellenar hacia atrás (es el argumento de ACC-2 §Sprint 3) y esta
+  es la primera escritura de dinero del producto después de la factura.
+  `queries/finanzas.ts` lleva un `anotarPagoEnBitacora()` **local**, con
+  la misma forma exacta que el `audit()` de ACC-2 —
+  `current_workspace_id()`, `current_user_id()`, `actor_kind` `'user'` o
+  `'system'`, `action` `'invoice.payment_recorded'`, `entity_type`
+  `'invoice'`, `before`/`after` con solo los campos de la factura que
+  cambian — y un `// TODO(ACC-2)` que dice que al mezclar ACC-2 esta
+  función se borra y se importa `audit`. La prueba comprueba la fila de
+  verdad, no espera a descomentarse.
+  `before`/`after` llevan `status`, `paidAmount`, `paidAt` y el monto y
+  el id del pago: ni nombres, ni correos, ni referencias bancarias (la
+  `reference` es un dato del banco de la marca; no va a la bitácora).
+
+### 0.7 Decisión 6 · La pantalla
+
+En `/finanzas/facturas/[id]`, una sección **«Pagos»** con:
+
+- La **lista** de cobros (fecha, monto, método, referencia), formateada
+  con `formatterFor(await getCurrentWorkspace())`. Sin cobros, una frase
+  («Todavía no hay cobros registrados»), no una tabla vacía ni un cero.
+- El **formulario «Registrar pago»**: `MoneyInput` con el saldo como
+  valor sugerido, `DateInput` con hoy, método de una lista cerrada
+  (transferencia, efectivo, PSE, tarjeta, otro — `'transferencia'` es lo
+  que usa el seed), referencia y notas. Solo se dibuja si la factura
+  admite pago.
+- En **Montos**, una fila «Apartado para impuestos» con el total
+  apartado por esta factura y la tasa con la que se apartó. Si el
+  workspace no aparta, la frase de §0.3.
+- La cabecera ya dice «Pagada el …» (fila de FIN-1); con FIN-2 deja de
+  estar siempre vacía.
+
+**Sin botón «Anular pago».** No existe en el MVP: anular un cobro obliga
+a decidir qué pasa con su `tax_reserve` (¿se borra?, ¿se libera?, ¿se
+compensa?) y a dejar rastro de la anulación. Es fase 2, y mientras tanto
+el camino es no registrar lo que no ocurrió.
+
+### 0.8 Decisión 7 · Las Server Actions de Finanzas migran a `@/lib/forms`
+
+Pendiente heredado de CAM-1 §7 y anotado en `docs/backlog-mvp.md` §9.5
+(«`apps/web/lib/forms.ts` unifica lo común de las Server Actions y
+Finanzas migra en FIN-2»). `facturas/actions.ts` tiene copias locales de
+`firstErrors`, `DECIMAL_RE` y de la forma del estado. Va en un **commit
+aparte, antes** del de la acción nueva, y sin cambiar comportamiento:
+así el diff de la funcionalidad no se mezcla con el del pulido.
+`CrearFacturaState` se conserva como alias de `ActionState` para no
+romper `nueva/form.tsx` ni su prueba.
+
+### 0.9 Archivos
+
+| Archivo | Qué |
+|---|---|
+| `packages/core/src/facturacion.ts` | `MONTO_MAXIMO`, `InvoiceError` y sus cuatro hijos, `applyPayment`, `taxReserveFor`, `reservePeriod`, `PAYMENT_METHODS` |
+| `packages/core/test/facturacion.test.ts` | Pruebas de todo lo anterior |
+| `packages/db/src/queries/finanzas.ts` | `recordPayment`, `listPayments`, la lectura de `settings.finanzas`, la bitácora local |
+| `packages/db/test/finanzas.test.ts` | Pruebas en pglite contra el seed |
+| `apps/web/app/(app)/finanzas/facturas/actions.ts` | Migración a `@/lib/forms` + `registrarPago` |
+| `apps/web/app/(app)/finanzas/facturas/[id]/pagos.tsx` | La sección «Pagos» (cliente) |
+| `apps/web/app/(app)/finanzas/facturas/[id]/pagos.test.tsx` | Pruebas de componente |
+| `apps/web/app/(app)/finanzas/facturas/[id]/page.tsx` | Enganche de la sección y la fila de apartado |
+| `apps/web/app/(app)/finanzas/_lib/messages.ts` | Textos de la sección |
+| `apps/web/content/backlog.ts` | Estado y nota de FIN-2 |
+| `packages/db/README.md`, `apps/web/README.md` | Lo que cambie del contrato |
+
+### 0.10 Dudas
+
+Ninguna que bloquee. Las dos decisiones que son de Nicolás están
+marcadas: la de §0.3 (workspace sin `reserva_pct`) y, menor, la de §0.2.5
+(`paid_at` solo al quedar pagada).
