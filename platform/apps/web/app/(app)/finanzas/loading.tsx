@@ -22,6 +22,17 @@ export default function FinanzasLoading() {
       </KpiRow>
       <section className="mt-10">
         <div className="mb-3 flex items-baseline justify-between">
+          <span className="text-sm font-medium text-ink">{t.bandeja}</span>
+          <span className="h-3 w-28 animate-pulse rounded-sm bg-hover" />
+        </div>
+        <div className="grid gap-3">
+          {[0, 1].map((i) => (
+            <div key={i} className="h-40 animate-pulse rounded-md border border-border bg-surface" />
+          ))}
+        </div>
+      </section>
+      <section className="mt-10">
+        <div className="mb-3 flex items-baseline justify-between">
           <span className="text-sm font-medium text-ink">{t.section}</span>
           <span className="h-3 w-20 animate-pulse rounded-sm bg-hover" />
         </div>

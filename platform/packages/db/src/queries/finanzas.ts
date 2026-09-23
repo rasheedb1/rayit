@@ -1,5 +1,5 @@
 /**
- * Consultas del módulo Finanzas (FIN-1: facturas).
+ * Consultas del módulo Finanzas (FIN-1: facturas; FIN-4: recordatorios).
  *
  * Reglas:
  *   - Toda función recibe un WorkspaceTx: una transacción con el
@@ -33,6 +33,8 @@ import {
   subtotalFromTotal,
   taxReserveFor,
   transitionInvoice as applyTransition,
+  definicionPaso,
+  pasoDeUrl,
   DEFAULT_TAX_RATE,
   DEFAULT_WITHHOLDING_RATE,
   InvoicePaymentConflict,
@@ -42,7 +44,9 @@ import {
   type GastoRecurrente,
   type InvoiceStatus,
   type NegocioGanado,
+  type NumeroPaso,
   type PaymentMethod,
+  type SeveridadRecordatorio,
   type TransitionInput,
 } from '@mc/core';
 import { getWorkspaceSettings } from './cimientos.ts';
@@ -148,6 +152,43 @@ export interface ReceivablesKpis {
   collectedDelta: number | null;
   taxReserved: string;
   taxRate: string | null;
+}
+
+/** Una fila de la bandeja de recordatorios (FIN-4). */
+export interface ReminderRow {
+  /** El id de la notificación, no el de la factura. */
+  id: string;
+  /** 1..5: el paso, leído del action_url. */
+  paso: NumeroPaso;
+  /** 'Primer aviso de mora'. */
+  etiquetaEs: string;
+  severity: SeveridadRecordatorio;
+  /** El asunto del correo, listo para pegar. */
+  asunto: string;
+  /** El cuerpo del correo, texto plano. */
+  cuerpo: string;
+  actionUrl: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  companyName: string;
+  currency: string;
+  /** Saldo pendiente de la factura, string decimal. */
+  outstanding: string;
+  dueOn: string;
+  /** Días de mora hoy; 0 o negativo si todavía no vence. */
+  daysOverdue: number;
+  createdAt: string;
+  /** Cuándo se marcó como enviado; null si sigue pendiente. */
+  sentAt: string | null;
+}
+
+export interface ListRemindersParams {
+  /** Solo los que todavía no se han marcado como enviados. */
+  pendingOnly?: boolean;
+  /** Solo los de esta factura. */
+  invoiceId?: string;
+  /** 1..200. Por defecto 50. */
+  limit?: number;
 }
 
 export class InvoiceNotFound extends Error {
@@ -1088,4 +1129,105 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
     negocios: r.negocios,
     gastos: r.gastos,
   };
+}
+
+// ---------------------------------------------------------------------
+// Recordatorios de cobro (FIN-4)
+// ---------------------------------------------------------------------
+
+interface ReminderRaw {
+  id: string;
+  /** La columna admite 'success' además de los tres tonos de un recordatorio. */
+  severity: string;
+  title_es: string;
+  body_es: string | null;
+  action_url: string | null;
+  created_at: string;
+  read_at: string | null;
+  invoice_id: string;
+  number: string;
+  company_name: string;
+  currency: string;
+  outstanding: string;
+  due_on: string;
+  days_overdue: number;
+}
+
+/**
+ * La bandeja de recordatorios del workspace. Son filas de
+ * `notification` de tipo `invoice_overdue` que escribió el job
+ * `finance.reminders`: el título es el asunto del correo y el cuerpo,
+ * el correo entero, ya redactado por @mc/core con la moneda y el locale
+ * del workspace. La pantalla no calcula nada.
+ *
+ * `dismissed_at` descarta la fila para siempre; `read_at` es «lo
+ * mandé», que es lo que hace el botón de la bandeja. Un recordatorio
+ * sin paso legible en su `action_url` no es de FIN-4 y se ignora.
+ */
+export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams = {}): Promise<ReminderRow[]> {
+  if (params.invoiceId !== undefined && !isUuid(params.invoiceId)) return [];
+  const limit = Math.min(200, Math.max(1, params.limit ?? 50));
+  const { rows } = await tx.query<ReminderRaw>(
+    `SELECT n.id, n.severity, n.title_es, n.body_es, n.action_url,
+            to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+            to_char(n.read_at    AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS read_at,
+            i.id AS invoice_id, i.number, co.name AS company_name, i.currency,
+            (i.total - i.paid_amount)::text AS outstanding,
+            to_char(i.due_on, 'YYYY-MM-DD') AS due_on,
+            (CURRENT_DATE - i.due_on)::int  AS days_overdue
+       FROM notification n
+       JOIN invoice i  ON i.id = n.entity_id
+       JOIN company co ON co.id = i.company_id
+      WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice' AND n.dismissed_at IS NULL
+        AND ($1::boolean IS NOT TRUE OR n.read_at IS NULL)
+        AND ($2::uuid IS NULL OR n.entity_id = $2)
+      ORDER BY CASE n.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+               i.due_on, i.number, n.created_at
+      LIMIT $3`,
+    [params.pendingOnly ?? false, params.invoiceId ?? null, limit],
+  );
+  const out: ReminderRow[] = [];
+  for (const r of rows) {
+    const paso = pasoDeUrl(r.action_url);
+    if (paso === null || r.action_url === null) continue;
+    out.push({
+      id: r.id,
+      paso,
+      etiquetaEs: definicionPaso(paso).etiquetaEs,
+      // La columna es más ancha que los tres tonos de FIN-4: lo que no
+      // sea de un recordatorio se lee como el más suave, para que una
+      // fila rara no deje la pastilla sin color ni nombre.
+      severity: r.severity === 'critical' || r.severity === 'warning' ? r.severity : 'info',
+      asunto: r.title_es,
+      cuerpo: r.body_es ?? '',
+      actionUrl: r.action_url,
+      invoiceId: r.invoice_id,
+      invoiceNumber: r.number,
+      companyName: r.company_name,
+      currency: r.currency,
+      outstanding: r.outstanding,
+      dueOn: r.due_on,
+      daysOverdue: r.days_overdue,
+      createdAt: r.created_at,
+      sentAt: r.read_at,
+    });
+  }
+  return out;
+}
+
+/**
+ * «Marcar como enviado»: sella `read_at`. Devuelve false si el id no es
+ * de este workspace (RLS no lo deja ver), no es un recordatorio, o ya
+ * estaba marcado — con eso la acción es idempotente y repetir el clic
+ * no mueve la fecha.
+ */
+export async function markReminderSent(tx: WorkspaceTx, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE notification SET read_at = now()
+      WHERE id = $1 AND kind = 'invoice_overdue' AND entity_type = 'invoice' AND read_at IS NULL
+      RETURNING id`,
+    [id],
+  );
+  return rows.length > 0;
 }
