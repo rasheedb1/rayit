@@ -34,6 +34,14 @@ export const APP_ROLE = 'mc_app';
 export interface EmbeddedOptions extends DbOptions {
   /** Cargar db/seed/*.sql después de migrar. Por defecto, sí. */
   seeds?: boolean;
+  /**
+   * Migrar solo hasta este archivo, inclusive (p. ej. '0021_app_user_self_update.sql').
+   * Es para las pruebas que siembran filas con la forma VIEJA del esquema
+   * y comprueban que la migración siguiente las arregla; el resto se
+   * aplica después con `migrar()`. Con `hasta` no se cargan los seeds:
+   * están escritos para el esquema completo.
+   */
+  hasta?: string;
 }
 
 export interface EmbeddedDb extends PgliteDb {
@@ -41,6 +49,12 @@ export interface EmbeddedDb extends PgliteDb {
   execAsSuperuser(sql: string): Promise<void>;
   /** Consulta como superusuario, saltando RLS: para que una prueba mire TODAS las filas de TODAS las tablas. */
   queryAsSuperuser<T = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>;
+  /**
+   * Aplica las migraciones que falten (hasta `hasta`, si se da) con el
+   * mismo rol y el mismo runner que al crearla, y deja la sesión como
+   * mc_app. Devuelve las que aplicó. Pareja de la opción `hasta`.
+   */
+  migrar(hasta?: string): Promise<string[]>;
 }
 
 export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
@@ -71,8 +85,8 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     const out = await pglite.exec(sql);
     return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
   };
-  await applyMigrations(exec, { dir: MIGRATIONS_DIR });
-  if (opts.seeds !== false) await applySeeds(exec, { dir: SEED_DIR });
+  await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta: opts.hasta });
+  if (opts.seeds !== false && opts.hasta === undefined) await applySeeds(exec, { dir: SEED_DIR });
 
   // La sesión queda como mc_app. Los privilegios de filas ya los tiene:
   // se conceden ARRIBA, con ALTER DEFAULT PRIVILEGES, antes de crear
@@ -90,12 +104,13 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
   //
   // Los seeds fijan app.workspace_id para toda la sesión; se limpia
   // para que ninguna consulta herede un workspace por accidente.
-  await pglite.exec(`
+  const volverAMcApp = `
     RESET ROLE;
     SELECT set_config('app.workspace_id', '', false);
     SELECT set_config('app.user_id', '', false);
     SET ROLE ${APP_ROLE};
-  `);
+  `;
+  await pglite.exec(volverAMcApp);
 
   // UTC, explícito y decidido aquí. Los seeds también lo fijan para su
   // sesión (CURRENT_DATE depende de la zona), pero esta base trabaja en
@@ -124,6 +139,16 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
       asSuperuser(async (p) => {
         const r = await p.query<T>(text, params ? [...params] : undefined);
         return { rows: r.rows };
+      }),
+    migrar: (hasta?: string) =>
+      db.raw(async (p) => {
+        await p.exec('RESET ROLE; SET ROLE mc_migrator_embedded');
+        try {
+          const { applied } = await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta });
+          return applied;
+        } finally {
+          await p.exec(volverAMcApp);
+        }
       }),
   };
 }

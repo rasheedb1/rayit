@@ -53,12 +53,17 @@ export const company = pgTable('company', {
   adsPlatforms: text('ads_platforms').array().default([]).notNull(),
   enrichedAt: timestamptz('enriched_at'),
   /**
-   * Quién dio de alta esta empresa. Lo pone la base
-   * (DEFAULT current_workspace_id(), migración 0024) y gobierna solo la
-   * ESCRITURA: el directorio se lee desde cualquier workspace —dos
-   * pueden trabajar con la misma marca— pero renombrarla o borrarla es
-   * de quien la creó. NULL es la fila del catálogo compartido, la que
-   * escribe una migración o el worker.
+   * De qué workspace es esta empresa. Lo pone la base
+   * (DEFAULT current_workspace_id(), migración 0024) y gobierna la
+   * LECTURA y la ESCRITURA: desde 0025 §1, company_read es «sin dueño o
+   * mía», así que la empresa de otro workspace no se ve, ni se nombra
+   * en una fila propia (0025 §3), ni se edita. Si dos workspaces
+   * trabajan con la misma marca, cada uno tiene SU ficha (0025 §2 deja
+   * el dominio único por dueño; 0026 §1 partió así las que ya existían).
+   *
+   * NULL es el catálogo compartido: lo lee cualquiera y no lo edita
+   * nadie desde un workspace. Solo lo escriben el rol que migra y el
+   * worker.
    *
    * Nadie lo pasa a mano: va sin valor en el INSERT, como en contact.
    */
@@ -73,9 +78,12 @@ export const contact = pgTable('contact', {
   /**
    * Quién guardó este contacto. Lo pone la base
    * (DEFAULT current_workspace_id(), migración 0020) y es el candado de
-   * su PII: nadie lo escribe a mano. Admite NULL solo por las filas
-   * anteriores a 0020, que quedan visibles únicamente si su fuente es
-   * pública.
+   * su PII: nadie lo escribe a mano. Lo que guarda un workspace es suyo
+   * aunque la fuente sea pública (0025 §6). NULL es el catálogo
+   * compartido —fuente pública, lo llena el worker—, que lee cualquiera
+   * y no edita nadie; los privados sin dueño anteriores a 0020 los
+   * adjudicó 0026 §1 al dueño de su empresa. El correo es único por
+   * dueño (0026 §2) y la baja global vive aparte, en contact_suppression.
    */
   ownerWorkspaceId: uuid('owner_workspace_id').references(() => workspace.id, { onDelete: 'cascade' }).default(sql`current_workspace_id()`),
   fullName: text('full_name'),
@@ -149,7 +157,13 @@ export const signal = pgTable('signal', {
 // ---------------------------------------------------------------------
 
 export const pipelineStage = pgTable('pipeline_stage', {
-  id: text('id').primaryKey(),
+  /**
+   * Las globales se llaman por su nombre ('nuevo', 'propuesta'…). Las
+   * privadas de un workspace llevan un uuid al azar que pone la base:
+   * el id es la clave primaria de toda la tabla, y uno con nombre le
+   * diría a otro workspace qué etapas tiene (CHECK de 0026 §2).
+   */
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
   /** NULL = etapa por defecto, compartida. */
   workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'cascade' }),
   labelEs: text('label_es').notNull(),

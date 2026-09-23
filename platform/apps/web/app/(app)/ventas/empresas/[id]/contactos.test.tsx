@@ -67,7 +67,7 @@ describe("Contactos", () => {
     const ajeno = { ...base, id: "00000007-0000-4000-8000-000000000002", fullName: "Otro", isOwn: false };
     render(<Contactos companyId={COMPANY} contacts={[base, ajeno]} />);
     expect(screen.queryByRole("button", { name: "Registrar baja: Otro" })).toBeNull();
-    expect(screen.getByText(/Lo guardó otro espacio de trabajo/)).toBeInTheDocument();
+    expect(screen.getByText(/Es del catálogo compartido/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Registrar baja: Laura Gómez" }));
     expect(screen.getByText(/no se puede deshacer/)).toBeInTheDocument();

@@ -13,6 +13,13 @@
  * anida; y asWorker se niega cuando el rol de conexión no es miembro de
  * mc_worker (el caso de mc_app en producción).
  *
+ * Y lo de la ronda 4 del endurecimiento (0026): la unicidad por
+ * inquilino (el correo de un contacto, el hash de un video, el id de
+ * una etapa privada), la baja global en contact_suppression, las
+ * secuencias que ya no se leen, y las FILAS HEREDADAS: una base
+ * reconstruida hasta 0021 con empresas de la forma vieja, que con 0024
+ * y 0025 quedaban a la vista de todos y 0026 adjudica a su workspace.
+ *
  * Corre sobre Postgres embebido como mc_app (sin BYPASSRLS), con las
  * migraciones reales: si RLS o el cliente se rompen, esto se rompe.
  */
@@ -25,6 +32,7 @@ import {
 } from '../src/index.ts';
 import { listFeatureFlags, listPipelineStages } from '../src/queries/catalogos.ts';
 import { getWorkspace } from '../src/queries/cimientos.ts';
+import { createEmbeddedDb, type EmbeddedDb } from '../src/embedded.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '0000000a-0000-4000-8000-000000000001';
@@ -641,7 +649,8 @@ describe('contact: la PII tiene dueño, y la baja es definitiva (0020)', () => {
 });
 
 describe('pipeline_stage y feature_flag: catálogos con dueño (0020)', () => {
-  const ETAPA_A = 'etapa-secreta-a';
+  // El id de una etapa privada es un uuid al azar: 0026 §2 lo exige por CHECK.
+  const ETAPA_A = '0000e7a9-0000-4000-8000-00000000000a';
 
   before(async () => {
     await t.db.withWorkspace(WS_A, (tx) =>
@@ -1398,7 +1407,7 @@ function codigo(err: unknown): string | null {
 describe('las referencias solo nombran lo que quien escribe puede leer (0025)', () => {
   const WS_TESTIGO = '0000002b-0000-4000-8000-000000000001';
   const EMPRESA_DE_A = '0000002a-0000-4000-8000-000000000001';
-  const ETAPA_DE_A = 'etapa-privada-de-a-0025';
+  const ETAPA_DE_A = '0000e7a9-0000-4000-8000-0000000000da';
   let dealDeA = '';
   let creadoraDeB = '';
 
@@ -1674,5 +1683,324 @@ describe('las métricas propias y la auditoría no se reescriben desde la aplica
     await t.db.asWorker((tx) =>
       tx.query("INSERT INTO job_run (job_id, status, attempt) SELECT id, 'skipped', 1 FROM job_definition LIMIT 1"),
     );
+  });
+});
+
+// =====================================================================
+// RONDA 4 (0026): la misma clase, en lo que la ronda 3 dejó abierto
+// =====================================================================
+
+/** El código SQLSTATE, buscado en la cadena de causas. */
+const sqlstate = (err: unknown): string | null => {
+  for (let e = err; e && typeof e === 'object'; e = (e as { cause?: unknown }).cause) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return null;
+};
+
+describe('la unicidad es por inquilino: un 23505 ya no dice qué tiene otro workspace (0026 §2)', () => {
+  const EMPRESA_DE_A = '0000026a-0000-4000-8000-000000000001';
+  /** El correo del guion de los revisores: el de un contacto user_provided de A. */
+  const CORREO = 'andrea.salazar@hogarlindo.co';
+  const HASH = 'sha256:0026-mismo-archivo';
+
+  before(async () => {
+    await t.db.withWorkspace(WS_A, async (tx) => {
+      await tx.query("INSERT INTO company (id, name) VALUES ($1, 'Hogar Lindo (de A)')", [EMPRESA_DE_A]);
+      await tx.query('INSERT INTO company_link (workspace_id, company_id) VALUES (current_workspace_id(), $1)', [EMPRESA_DE_A]);
+      await tx.query(
+        "INSERT INTO contact (company_id, full_name, email, source) VALUES ($1, 'Andrea Salazar', $2, 'user_provided')",
+        [EMPRESA_DE_A, CORREO],
+      );
+      await tx.query('INSERT INTO video_asset (workspace_id, content_hash) VALUES (current_workspace_id(), $1)', [HASH]);
+    });
+  }, { timeout: 120_000 });
+
+  test('el guion de los revisores: B guarda a la misma persona sin chocar con la ficha de A', async () => {
+    // Hasta 0026: «duplicate key value violates unique constraint
+    // contact_email_idx», mientras que un correo que nadie tiene pasaba.
+    // B aprendía que otra agencia tiene a esa persona en su CRM.
+    const { vistosAntes, vistosDespues } = await t.db.withWorkspace(WS_B, async (tx) => {
+      const antes = await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact WHERE email = $1', [CORREO]);
+      const { rows } = await tx.query<{ id: string }>("INSERT INTO company (name) VALUES ('Mi ficha') RETURNING id");
+      const empresa = rows[0]!.id;
+      await tx.query('INSERT INTO company_link (workspace_id, company_id) VALUES (current_workspace_id(), $1)', [empresa]);
+      await tx.query(
+        "INSERT INTO contact (company_id, full_name, email, source) VALUES ($1, 'x', $2, 'user_provided')",
+        [empresa, CORREO],
+      );
+      const despues = await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact WHERE email = $1', [CORREO]);
+      return { vistosAntes: antes.rows[0]!.n, vistosDespues: despues.rows[0]!.n };
+    });
+    assert.equal(vistosAntes, 0, 'B no ve el contacto de A');
+    assert.equal(vistosDespues, 1, 'y ahora ve el suyo, y solo el suyo');
+    const deA = await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query<{ full_name: string }>('SELECT full_name FROM contact WHERE email = $1', [CORREO]),
+    );
+    assert.deepEqual(deA.rows.map((r) => r.full_name), ['Andrea Salazar'], 'y A sigue viendo solo el suyo');
+  });
+
+  test('dentro de un mismo workspace el correo sigue siendo único', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) =>
+        tx.query("INSERT INTO contact (company_id, full_name, email, source) VALUES ($1, 'Otra vez', $2, 'inbound')", [
+          EMPRESA_DE_A,
+          CORREO,
+        ]),
+      ),
+      (err: unknown) => sqlstate(err) === '23505' && /contact_owner_email_idx/.test(fullMessage(err)),
+    );
+  });
+
+  test('video_asset: B registra el mismo archivo que A sin enterarse de que A lo tiene', async () => {
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query('INSERT INTO video_asset (workspace_id, content_hash) VALUES (current_workspace_id(), $1)', [HASH]),
+    );
+    // Y en su propio workspace deduplica igual que antes.
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.query('INSERT INTO video_asset (workspace_id, content_hash) VALUES (current_workspace_id(), $1)', [HASH]),
+      ),
+      (err: unknown) => sqlstate(err) === '23505' && /video_asset_ws_content_hash_idx/.test(fullMessage(err)),
+    );
+  });
+
+  test('una etapa privada no puede llevar un nombre por id: la base le pone uno al azar', async () => {
+    // pipeline_stage.id es la clave primaria de TODA la tabla: con un id
+    // legible, B chocaba con la etapa privada de A y aprendía su nombre.
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.query(
+          "INSERT INTO pipeline_stage (id, workspace_id, label_es, position, default_probability) VALUES ('cierre-cafe-alma', current_workspace_id(), 'x', 60, 0.5)",
+        ),
+      ),
+      (err: unknown) => sqlstate(err) === '23514' && /pipeline_stage_private_id_random/.test(fullMessage(err)),
+    );
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ id: string }>(
+        "INSERT INTO pipeline_stage (workspace_id, label_es, position, default_probability) VALUES (current_workspace_id(), 'Mía', 61, 0.5) RETURNING id",
+      ),
+    );
+    assert.match(rows[0]!.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+});
+
+describe('la baja global vive en una lista de supresión (0026 §3)', () => {
+  const EMPRESA_A = '0000026a-0000-4000-8000-000000000002';
+  const EMPRESA_B = '0000026b-0000-4000-8000-000000000002';
+  const CORREO = 'no-me-escriban@marca-0026.co';
+
+  before(async () => {
+    for (const [ws, empresa] of [[WS_A, EMPRESA_A], [WS_B, EMPRESA_B]] as const) {
+      await t.db.withWorkspace(ws, async (tx) => {
+        await tx.query("INSERT INTO company (id, name) VALUES ($1, 'Marca 0026')", [empresa]);
+        await tx.query('INSERT INTO company_link (workspace_id, company_id) VALUES (current_workspace_id(), $1)', [empresa]);
+      });
+    }
+  }, { timeout: 120_000 });
+
+  test('A registra la baja; el contacto que B guarde DESPUÉS con ese correo nace dado de baja', async () => {
+    await t.db.withWorkspace(WS_A, async (tx) => {
+      await tx.query("INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'inbound')", [EMPRESA_A, CORREO]);
+      await tx.query('UPDATE contact SET opted_out = true, opted_out_at = now() WHERE email = $1', [CORREO]);
+    });
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ opted_out: boolean; opted_out_reason: string | null }>(
+        "INSERT INTO contact (company_id, email, source) VALUES ($1, $2, 'user_provided') RETURNING opted_out, opted_out_reason",
+        [EMPRESA_B, CORREO],
+      ),
+    );
+    assert.equal(rows[0]?.opted_out, true, 'ningún creador de la plataforma lo vuelve a contactar (0007)');
+    assert.match(String(rows[0]?.opted_out_reason), /baja de la plataforma/);
+    // Y no dice quién: B sigue viendo solo el suyo.
+    const vistos = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact WHERE email = $1', [CORREO]),
+    );
+    assert.equal(vistos.rows[0]?.n, 1);
+  });
+
+  test('la lista no la lee ni la escribe la aplicación: solo los disparadores y el worker', async () => {
+    for (const sql of [
+      'SELECT email FROM contact_suppression',
+      "INSERT INTO contact_suppression (email, reason) VALUES ('alguien@x.co', 'opted_out')",
+      'DELETE FROM contact_suppression',
+    ]) {
+      await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(sql)), isPermissionDenied, sql);
+    }
+  });
+
+  test('las funciones SECURITY DEFINER de la lista no las ejecuta mc_app', async () => {
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ f: string; puede: boolean }>(
+        `SELECT p.proname::text AS f, has_function_privilege('mc_app', p.oid, 'EXECUTE') AS puede
+           FROM pg_proc p WHERE p.proname IN ('contact_suppression_record', 'contact_suppression_apply') ORDER BY 1`,
+      ),
+    );
+    assert.deepEqual(rows, [
+      { f: 'contact_suppression_apply', puede: false },
+      { f: 'contact_suppression_record', puede: false },
+    ]);
+  });
+
+  test('mc_worker sí la lee: es quien la aplica en el outreach', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    const { rows } = await t.db.asWorker((tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact_suppression WHERE email = $1', [CORREO]),
+    );
+    assert.equal(rows[0]?.n, 1);
+  });
+});
+
+describe('las secuencias no cuentan lo de los demás (0026 §4)', () => {
+  test('el guion de los revisores: last_value de una secuencia ya no se lee', async () => {
+    // Desde B devolvía 360 en account_metric_snapshot_id_seq: el volumen
+    // de TODA la plataforma.
+    for (const seq of ['account_metric_snapshot_id_seq', 'audit_log_id_seq', 'api_call_log_id_seq']) {
+      await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT last_value FROM ${seq}`)), isPermissionDenied, seq);
+    }
+  });
+
+  test('ni setval, ni nextval en las secuencias de tablas que la aplicación no escribe', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT setval('audit_log_id_seq', 1)")),
+      isPermissionDenied,
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT nextval('post_metric_snapshot_id_seq')")),
+      isPermissionDenied,
+    );
+  });
+
+  test('pero donde sí inserta, el DEFAULT sigue funcionando: USAGE basta', async () => {
+    const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query<{ id: string }>(
+        "INSERT INTO audit_log (workspace_id, action, entity_type) VALUES (current_workspace_id(), 'prueba.0026', 'test') RETURNING id::text AS id",
+      ),
+    );
+    assert.ok(Number(rows[0]?.id) > 0);
+  });
+});
+
+/**
+ * La prueba que pidieron los revisores de la ronda 3: filas HEREDADAS.
+ *
+ * 0024 §4 añadió company.owner_workspace_id y dejó las empresas que ya
+ * existían sin dueño, «porque desde una migración no se puede leer
+ * company_link». En Supabase son 11, todas en el company_link de Laura.
+ * Con 0024 + 0025 tal cual, esas 11 pasaban al catálogo compartido: un
+ * workspace nuevo las leía, y Laura ya no podía editar ninguna.
+ *
+ * Aquí se reconstruye esa base: migrada hasta 0021 (lo que tiene
+ * Supabase), con filas de la forma vieja; luego se aplican 0024 y 0025
+ * —y se comprueba que el agujero EXISTE— y después 0026 —y se comprueba
+ * que se cerró—. Si alguien quita el relleno de 0026, la segunda mitad
+ * falla.
+ */
+describe('filas heredadas: las empresas que ya existen pasan a su workspace (0026 §1)', () => {
+  const L = '0000026c-0000-4000-8000-00000000000a'; // «Laura»: la agencia con todo en company_link
+  const M = '0000026c-0000-4000-8000-00000000000b'; // otra agencia, con una marca en común
+  const N = '0000026c-0000-4000-8000-00000000000c'; // un workspace nuevo, sin nada
+  const DE_L = '0000026c-0000-4000-8000-0000000000e1';
+  const SOLO_DEAL_DE_M = '0000026c-0000-4000-8000-0000000000e2';
+  const COMPARTIDA = '0000026c-0000-4000-8000-0000000000e3';
+  const CATALOGO = '0000026c-0000-4000-8000-0000000000e4';
+  const CONTACTO_PRIVADO = '0000026c-0000-4000-8000-0000000000c1';
+  let viejo: EmbeddedDb | null = null;
+
+  const nombres = (db: EmbeddedDb, ws: string) =>
+    db
+      .withWorkspace(ws, (tx) => tx.query<{ name: string }>('SELECT name FROM company ORDER BY name'))
+      .then((r) => r.rows.map((x) => x.name));
+  const editar = (db: EmbeddedDb, ws: string, id: string) =>
+    db
+      .withWorkspace(ws, (tx) => tx.query("UPDATE company SET legal_name = 'Editada' WHERE id = $1 RETURNING id", [id]))
+      .then((r) => r.rows.length);
+
+  before(async () => {
+    if (t.kind !== 'pglite') return;
+    viejo = await createEmbeddedDb({ hasta: '0021_app_user_self_update.sql' });
+    await viejo.execAsSuperuser(`
+      INSERT INTO workspace (id, slug, name) VALUES
+        ('${L}', 'l-0026', 'Laura'), ('${M}', 'm-0026', 'Otra agencia'), ('${N}', 'n-0026', 'Nuevo');
+      INSERT INTO company (id, name, domain) VALUES
+        ('${DE_L}', 'Marca de Laura', 'marca-de-laura.co'),
+        ('${SOLO_DEAL_DE_M}', 'Marca con deal de M', NULL),
+        ('${COMPARTIDA}', 'Marca Compartida', 'compartida.co'),
+        ('${CATALOGO}', 'Marca del Catálogo', 'catalogo-0026.co');
+      INSERT INTO company_link (workspace_id, company_id) VALUES
+        ('${L}', '${DE_L}'), ('${L}', '${COMPARTIDA}'), ('${M}', '${COMPARTIDA}');
+      INSERT INTO deal (workspace_id, company_id, name, stage_id) VALUES
+        ('${M}', '${SOLO_DEAL_DE_M}', 'Deal sin vínculo', 'nuevo'),
+        ('${M}', '${COMPARTIDA}', 'Deal de M con la compartida', 'nuevo'),
+        ('${L}', '${COMPARTIDA}', 'Deal de L con la compartida', 'nuevo');
+      -- Un contacto privado anterior a 0020: sin dueño.
+      INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+        ('${CONTACTO_PRIVADO}', '${DE_L}', NULL, 'Persona de Laura', 'persona@marca-de-laura.co', 'user_provided');
+    `);
+  }, { timeout: 180_000 });
+
+  after(async () => {
+    await viejo?.close();
+  });
+
+  test('con 0024 y 0025 tal cual, el agujero existe: el workspace nuevo lee las marcas de Laura y Laura no las edita', async (ctx) => {
+    if (!viejo) return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
+    assert.deepEqual(await viejo.migrar('0025_referencias_visibles.sql'), [
+      '0024_aislamiento_por_defecto.sql',
+      '0025_referencias_visibles.sql',
+    ]);
+    assert.ok((await nombres(viejo, N)).includes('Marca de Laura'), 'sin dueño = catálogo: la ve cualquiera');
+    assert.equal(await editar(viejo, L, DE_L), 0, 'y Laura ya no puede editar su propia marca');
+  });
+
+  test('con 0026, cada empresa es de quien la trabaja, y el nuevo solo ve el catálogo', async (ctx) => {
+    if (!viejo) return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
+    const forzadasAntes = await viejo.queryAsSuperuser<{ relname: string }>(
+      "SELECT relname::text AS relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relforcerowsecurity ORDER BY 1",
+    );
+    assert.deepEqual(await viejo.migrar(), ['0026_duenos_unicos_secuencias.sql']);
+
+    assert.deepEqual(await nombres(viejo, N), ['Marca del Catálogo'], 'lo que nadie nombra se queda en el catálogo');
+    assert.deepEqual(await nombres(viejo, L), ['Marca Compartida', 'Marca de Laura', 'Marca del Catálogo']);
+    assert.deepEqual(await nombres(viejo, M), ['Marca Compartida', 'Marca con deal de M', 'Marca del Catálogo']);
+    assert.equal(await editar(viejo, L, DE_L), 1, 'Laura vuelve a editar lo suyo');
+    assert.equal(await editar(viejo, M, SOLO_DEAL_DE_M), 1, 'un deal también es un voto, aunque no haya vínculo');
+    assert.equal(await editar(viejo, L, CATALOGO), 0, 'el catálogo no lo edita nadie desde un workspace');
+
+    // La compartida: la original para uno, una copia para el otro, y las
+    // filas de cada uno apuntan a SU ficha.
+    const fichas = await viejo.queryAsSuperuser<{ id: string; owner: string }>(
+      "SELECT id::text AS id, owner_workspace_id::text AS owner FROM company WHERE name = 'Marca Compartida' ORDER BY owner_workspace_id",
+    );
+    assert.deepEqual(fichas.rows.map((f) => f.owner), [L, M], 'una ficha por workspace');
+    assert.equal(fichas.rows[0]!.id, COMPARTIDA, 'la original, para el primero por id');
+    const copiaDeM = fichas.rows[1]!.id;
+    const apuntan = await viejo.queryAsSuperuser<{ tabla: string; ws: string; company: string }>(`
+      SELECT 'link' AS tabla, workspace_id::text AS ws, company_id::text AS company
+        FROM company_link WHERE company_id IN ('${COMPARTIDA}', '${copiaDeM}')
+      UNION ALL
+      SELECT 'deal', workspace_id::text, company_id::text
+        FROM deal WHERE company_id IN ('${COMPARTIDA}', '${copiaDeM}')
+      ORDER BY 1, 2`);
+    assert.deepEqual(apuntan.rows, [
+      { tabla: 'deal', ws: L, company: COMPARTIDA },
+      { tabla: 'deal', ws: M, company: copiaDeM },
+      { tabla: 'link', ws: L, company: COMPARTIDA },
+      { tabla: 'link', ws: M, company: copiaDeM },
+    ]);
+
+    // El contacto privado sin dueño pasa al dueño de su empresa: desde
+    // 0025 §6 no lo veía NADIE, ni Laura.
+    const suyo = await viejo.withWorkspace(L, (tx) =>
+      tx.query<{ n: number }>('SELECT count(*)::int AS n FROM contact WHERE id = $1', [CONTACTO_PRIVADO]),
+    );
+    assert.equal(suyo.rows[0]?.n, 1);
+
+    // Y el FORCE que el relleno quitó para leer, vuelve: a las mismas.
+    const forzadasDespues = await viejo.queryAsSuperuser<{ relname: string }>(
+      "SELECT relname::text AS relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relforcerowsecurity ORDER BY 1",
+    );
+    assert.deepEqual(forzadasDespues.rows, forzadasAntes.rows);
   });
 });

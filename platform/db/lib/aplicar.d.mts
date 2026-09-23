@@ -6,6 +6,8 @@ export type MigrationExec = (sql: string) => Promise<{ rows: Array<Record<string
 export interface ApplyMigrationsOptions {
   /** Directorio con *.sql; por defecto db/migrations. */
   dir?: string;
+  /** Aplica hasta este archivo inclusive y para (solo pruebas: una base «como estaba»). */
+  hasta?: string;
   onApplied?: (file: string, ms: number) => void;
   onSkipped?: (file: string) => void;
 }

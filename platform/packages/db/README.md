@@ -319,7 +319,28 @@ además más rápido.
   producción. Nunca tiene TRUNCATE, TRIGGER, REFERENCES ni MAINTAIN, ni
   privilegios sobre una vista materializada o una tabla foránea, ni
   EXECUTE sobre una función SECURITY DEFINER; y ningún otro rol que no
-  esté en `ROLES_CON_ACCESO_DECLARADOS` tiene nada en `public`.
+  esté en `ROLES_CON_ACCESO_DECLARADOS` tiene nada en `public`. Un
+  `GRANT` **por columna** cuenta como de tabla (un REVOKE de tabla no
+  lo quita), y en las **secuencias** `mc_app` no tiene SELECT ni UPDATE
+  —`last_value` es el volumen de toda la plataforma— y USAGE solo donde
+  inserta (**0026**).
+- **La unicidad es por inquilino.** Un índice único se comprueba contra
+  todas las filas, las vea quien escribe o no: uno global sobre una
+  tabla con dueño le dice a B qué valores tiene A (el 23505) y le
+  impide guardar los suyos. Todo único de una tabla con RLS que `mc_app`
+  escribe incluye la columna de inquilino, una clave hacia una tabla
+  aislada, se limita a las filas sin dueño o es la clave sustituta; lo
+  global a propósito (el correo de una persona, los enlaces públicos)
+  va en `UNICOS_GLOBALES_DECLARADOS` con su motivo.
+- **Un EXISTS aísla solo por una clave ajena de verdad.** Correlacionar
+  por una columna cualquiera (`d.name = t.nota`) no aísla, y un padre
+  con filas globales no aísla una fila que tiene inquilino propio
+  (ver `src/politicas.ts`).
+- **Las filas sin dueño son el catálogo compartido** (`company`,
+  `contact`): se leen desde cualquier workspace y no se editan desde
+  ninguno. Lo que guarda un workspace es suyo aunque venga de una
+  fuente pública; la baja global de un contacto vive en
+  `contact_suppression`, que la aplicación no lee ni escribe.
 - La moneda, la zona horaria y el locale salen del workspace
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.

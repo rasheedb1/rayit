@@ -539,7 +539,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
   /** Una tabla de inquilino nueva, como la crearía una migración, con una clave hacia deal. */
   const TABLA_NUEVA =
     'SET ROLE mc_migrator_embedded; ' +
-    'CREATE TABLE zz_nota (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id), deal_id uuid REFERENCES deal(id)); ' +
+    'CREATE TABLE zz_nota (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspace(id), deal_id uuid REFERENCES deal(id)); ' +
     'ALTER TABLE zz_nota ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_nota FORCE ROW LEVEL SECURITY; ' +
     'CREATE POLICY zz_nota_ws ON zz_nota USING (workspace_id = current_workspace_id()); ';
 
@@ -574,5 +574,176 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
       'ALTER TABLE deal ENABLE TRIGGER ref_visible_company_id',
       (e) => assert.deepEqual(e.referenciasSinComprobar, ['deal.company_id → company']),
     );
+  });
+});
+
+/**
+ * RONDA 4: la misma clase otra vez, en lo que la guardia de la ronda 3
+ * todavía no miraba. Cada caso lo reprodujeron los revisores contra
+ * pglite con la guardia en verde.
+ */
+describe('ronda 4: columnas, correlaciones, padres con globales, índices únicos y secuencias', () => {
+  async function con<T>(sql: string, deshacer: string, fn: (estado: EstadoDelEsquema) => T | Promise<T>): Promise<T> {
+    await t.admin(sql);
+    try {
+      return await fn(await estadoDelEsquema(t.db));
+    } finally {
+      await t.admin(deshacer);
+    }
+  }
+  const claves = (e: EstadoDelEsquema) => e.politicasAbiertas.map((p) => p.clave);
+  const WS = '0000004a-0000-4000-8000-000000000001';
+
+  test('un GRANT POR COLUMNA sobre un catálogo se reporta: un REVOKE de tabla no lo quita', async () => {
+    // El guion de los revisores: `GRANT UPDATE (slug) ON niche TO mc_app`
+    // dejaba la guardia en verde, y desde withWorkspace mc_app
+    // actualizaba todas las filas de niche, que 0024 §7.1 dejó de solo
+    // lectura.
+    await t.admin("INSERT INTO niche (slug, name_es) VALUES ('zz-nicho', 'Nicho de prueba'); GRANT UPDATE (slug) ON niche TO mc_app");
+    try {
+      const { rows } = await t.db.withWorkspace(WS, (tx) => tx.query('UPDATE niche SET slug = slug RETURNING slug'));
+      assert.ok(rows.length > 0, 'la prueba no vale si mc_app no llega a escribir el catálogo');
+      const e = await estadoDelEsquema(t.db);
+      const niche = e.privilegiosDeMas.find((p) => p.tabla === 'niche');
+      assert.deepEqual(niche?.privilegios, ['UPDATE']);
+      assert.match(String(niche?.motivo), /POR COLUMNA \(slug\)/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /niche \(UPDATE/);
+    } finally {
+      await t.admin("REVOKE UPDATE (slug) ON niche FROM mc_app; DELETE FROM niche WHERE slug = 'zz-nicho'");
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).privilegiosDeMas, []);
+  });
+
+  test('un GRANT por columna a otro rol también se nombra', async () => {
+    await con(
+      'CREATE ROLE zz_col NOLOGIN; GRANT SELECT (email) ON app_user TO zz_col',
+      'REVOKE SELECT (email) ON app_user FROM zz_col; DROP ROLE zz_col',
+      (e) => assert.deepEqual(e.rolesDeMas.map((r) => `${r.rol}:${r.tabla}`), ['zz_col:app_user']),
+    );
+  });
+
+  test('un EXISTS correlacionado por una columna cualquiera no aísla: tiene que ser una clave ajena', async () => {
+    // El guion de los revisores: `d.name = zz_corr.nota` pasaba en verde,
+    // y B leía toda fila de A cuya nota coincidiera con el nombre de un
+    // deal suyo. Lo mismo con membership.user_id = t.created_by, que
+    // abre las filas de otros workspaces de una persona compartida.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_corr (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), nota text); ' +
+        'ALTER TABLE zz_corr ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_corr FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_corr_p ON zz_corr FOR SELECT USING (EXISTS (SELECT 1 FROM deal d WHERE d.name = zz_corr.nota)); ' +
+        'CREATE TABLE zz_corr_persona (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), created_by uuid REFERENCES app_user(id)); ' +
+        'ALTER TABLE zz_corr_persona ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_corr_persona FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_corr_persona_p ON zz_corr_persona FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM membership m WHERE m.user_id = zz_corr_persona.created_by)); ' +
+        // El control: la misma forma, por una clave ajena de verdad, sí aísla.
+        'CREATE TABLE zz_corr_deal (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), deal_id uuid REFERENCES deal(id)); ' +
+        'ALTER TABLE zz_corr_deal ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_corr_deal FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_corr_deal_p ON zz_corr_deal FOR SELECT USING (EXISTS (SELECT 1 FROM deal d WHERE d.id = zz_corr_deal.deal_id)); ' +
+        'REVOKE ALL ON zz_corr, zz_corr_persona, zz_corr_deal FROM mc_app; ' +
+        'GRANT SELECT ON zz_corr, zz_corr_persona, zz_corr_deal TO mc_app; RESET ROLE',
+      'DROP TABLE zz_corr, zz_corr_persona, zz_corr_deal',
+      (e) => {
+        assert.ok(claves(e).includes('zz_corr.zz_corr_p'), JSON.stringify(claves(e)));
+        assert.ok(claves(e).includes('zz_corr_persona.zz_corr_persona_p'));
+        assert.ok(!claves(e).includes('zz_corr_deal.zz_corr_deal_p'), 'por una clave ajena real, sí aísla');
+      },
+    );
+  });
+
+  test('un EXISTS sobre un padre con filas globales no aísla una fila que tiene inquilino propio', async () => {
+    // El guion de los revisores: zz con workspace_id y stage_id, y una
+    // política que solo pregunta por la etapa. Toda fila que apunte a una
+    // etapa GLOBAL la leía cualquier workspace, aunque fuera de A.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_etapa (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
+        '  stage_id text REFERENCES pipeline_stage(id)); ' +
+        'ALTER TABLE zz_etapa ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_etapa FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_etapa_p ON zz_etapa FOR SELECT USING (EXISTS (SELECT 1 FROM pipeline_stage d WHERE d.id = zz_etapa.stage_id)); ' +
+        // Con el inquilino en un AND, la misma política aísla.
+        'CREATE TABLE zz_etapa_ok (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
+        '  stage_id text REFERENCES pipeline_stage(id)); ' +
+        'ALTER TABLE zz_etapa_ok ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_etapa_ok FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_etapa_ok_p ON zz_etapa_ok FOR SELECT USING (workspace_id = current_workspace_id() ' +
+        '  AND EXISTS (SELECT 1 FROM pipeline_stage d WHERE d.id = zz_etapa_ok.stage_id)); ' +
+        // Y una hija SIN inquilino propio hereda las globales, como external_post_score.
+        'CREATE TABLE zz_etapa_global (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), stage_id text REFERENCES pipeline_stage(id)); ' +
+        'ALTER TABLE zz_etapa_global ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_etapa_global FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_etapa_global_p ON zz_etapa_global FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM pipeline_stage d WHERE d.id = zz_etapa_global.stage_id)); ' +
+        'REVOKE ALL ON zz_etapa, zz_etapa_ok, zz_etapa_global FROM mc_app; ' +
+        'GRANT SELECT ON zz_etapa, zz_etapa_ok, zz_etapa_global TO mc_app; RESET ROLE',
+      'DROP TABLE zz_etapa, zz_etapa_ok, zz_etapa_global',
+      (e) => {
+        assert.ok(claves(e).includes('zz_etapa.zz_etapa_p'), JSON.stringify(claves(e)));
+        assert.ok(!claves(e).includes('zz_etapa_ok.zz_etapa_ok_p'));
+        assert.ok(!claves(e).includes('zz_etapa_global.zz_etapa_global_p'));
+      },
+    );
+  });
+
+  test('un índice único global sobre una tabla con dueño se nombra; por inquilino, o solo sobre las filas sin dueño, no', async () => {
+    // contact_email_idx era esto: B chocaba con el correo de un contacto
+    // de A (23505) y aprendía que otra agencia tiene a esa persona.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_u (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid, codigo text, otro text, tercero text); ' +
+        'ALTER TABLE zz_u ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_u FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_u_ws ON zz_u USING (workspace_id = current_workspace_id()); ' +
+        'CREATE UNIQUE INDEX zz_u_global ON zz_u (codigo); ' +
+        'CREATE UNIQUE INDEX zz_u_por_ws ON zz_u (workspace_id, otro); ' +
+        'CREATE UNIQUE INDEX zz_u_catalogo ON zz_u (tercero) WHERE workspace_id IS NULL; ' +
+        'CREATE UNIQUE INDEX zz_u_expresion ON zz_u (lower(tercero)); ' +
+        'RESET ROLE',
+      'DROP TABLE zz_u',
+      (e) => {
+        assert.deepEqual(e.unicosSinInquilino, ['zz_u.zz_u_expresion (lower(tercero))', 'zz_u.zz_u_global (codigo)']);
+        const msg = String(explicarEsquema(e));
+        assert.match(msg, /UNICOS_GLOBALES_DECLARADOS/);
+        assert.match(msg, /zz_u\.zz_u_global/);
+      },
+    );
+  });
+
+  test('las secuencias: SELECT de más se reporta, y una secuencia nueva sin tabla también', async () => {
+    // Desde B, `SELECT last_value FROM account_metric_snapshot_id_seq`
+    // devolvía el volumen de toda la plataforma. 0026 §4 quita SELECT y
+    // UPDATE, y deja USAGE solo donde mc_app inserta.
+    await con(
+      'GRANT SELECT ON audit_log_id_seq TO mc_app; ' +
+        'SET ROLE mc_migrator_embedded; CREATE SEQUENCE zz_seq; RESET ROLE',
+      'REVOKE SELECT ON audit_log_id_seq FROM mc_app; DROP SEQUENCE zz_seq',
+      (e) => {
+        const audit = e.privilegiosDeMas.find((p) => p.tabla === 'audit_log_id_seq');
+        assert.deepEqual(audit?.privilegios, ['SELECT']);
+        const suelta = e.privilegiosDeMas.find((p) => p.tabla === 'zz_seq');
+        assert.deepEqual(suelta?.privilegios, ['USAGE'], 'los privilegios por defecto ya no le dan SELECT, pero USAGE sobra');
+        assert.match(String(suelta?.motivo), /sin tabla/);
+      },
+    );
+  });
+
+  test('contra la base como estaba en 0025, la guardia nombra lo que 0026 cierra', async (ctx) => {
+    // Es la prueba de que la guardia ve la clase y no solo los casos: sin
+    // tocarla, contra el esquema real anterior a 0026, dice los dos
+    // únicos globales y las secuencias que los revisores encontraron. (La
+    // clave de pipeline_stage no sale porque está declarada: su motivo es
+    // el CHECK que pone 0026 §2.)
+    if (t.kind !== 'pglite') return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
+    const { createEmbeddedDb } = await import('../src/embedded.ts');
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0025_referencias_visibles.sql' });
+    try {
+      const e = await estadoDelEsquema(antes);
+      assert.deepEqual(e.unicosSinInquilino, [
+        'contact.contact_email_idx (email)',
+        'video_asset.video_asset_content_hash_idx (content_hash)',
+      ]);
+      const secuencias = e.privilegiosDeMas.filter((p) => p.tabla.endsWith('_seq') && p.privilegios.includes('SELECT'));
+      assert.ok(secuencias.some((p) => p.tabla === 'account_metric_snapshot_id_seq'));
+      assert.ok(secuencias.length >= 10, `solo ${secuencias.length} secuencias con SELECT`);
+    } finally {
+      await antes.close();
+    }
   });
 });

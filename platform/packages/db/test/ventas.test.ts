@@ -6,8 +6,9 @@
  * Lo que estas pruebas cuidan, además del «terminado cuando» de cada
  * historia:
  *   - el aislamiento por workspace de TODO lo que se lee y se escribe,
- *     incluida la parte del esquema que no lo hace igual (company es un
- *     catálogo global, contact se aísla por owner_workspace_id);
+ *     incluida la parte del esquema que no lo hace igual (company y
+ *     contact se aíslan por owner_workspace_id, y sus filas SIN dueño
+ *     son el catálogo compartido: migraciones 0024, 0025 y 0026);
  *   - que la baja de un contacto no se pueda deshacer;
  *   - que una señal descartada no vuelva a entrar por el mismo camino
  *     por el que entró.
@@ -15,7 +16,9 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CompanyNotEditable,
   CompanyNotFound,
+  ContactNotFound,
   ContactNotOwned,
   DuplicateDomain,
   PITCH_ACTION,
@@ -65,6 +68,10 @@ const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000be01';
 const COMPANY_AJENA = '00000009-0000-4000-8000-0000000000f1';
 const CONTACT_AJENO = '00000009-0000-4000-8000-0000000c00f1';
 const CONTACT_AJENO_PUBLICO = '00000009-0000-4000-8000-0000000c00f2';
+/** Un contacto de fuente pública SIN dueño: el catálogo compartido que llena el worker. */
+const CONTACT_CATALOGO = '00000009-0000-4000-8000-0000000c00f3';
+/** Una empresa del catálogo compartido (sin dueño). */
+const COMPANY_CATALOGO = '00000009-0000-4000-8000-0000000000f2';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
@@ -97,12 +104,21 @@ before(async () => {
     VALUES ('00000009-0000-4000-8000-0000000dea01', '${WORKSPACE_AJENO}', '${COMPANY_AJENA}', 'Deal ajeno', 'propuesta', 99000000.00, 'COP')
     ON CONFLICT DO NOTHING;
 
-    -- Público (public_website) pero guardado por el vecino: Laura DEBE
-    -- verlo (la política de lectura de 0020 deja pasar lo público) y NO
-    -- debe poder editarlo.
+    -- Público (public_website) pero guardado por el vecino: es parte de
+    -- SU CRM aunque lo haya sacado de una web pública, así que Laura NO
+    -- lo ve (0025 §6; hasta ahí la lectura de 0020 dejaba pasar lo
+    -- público de cualquiera, y por esa puerta se sacaba qué marcas
+    -- prospecta cada agencia).
     INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source, source_url)
     VALUES ('${CONTACT_AJENO_PUBLICO}', '${COMPANY_AJENA}', '${WORKSPACE_AJENO}', 'Vocera Ajena',
             'prensa@marcaajena.co', 'public_website', 'https://marcaajena.co/prensa')
+    ON CONFLICT DO NOTHING;
+
+    -- Público y SIN dueño: el dato de prospección compartido (lo llena
+    -- el enriquecimiento del worker). Laura lo ve y no lo edita.
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source, source_url)
+    VALUES ('${CONTACT_CATALOGO}', '${COMPANY_AJENA}', NULL, 'Contacto de Catálogo',
+            'hola@marcaajena.co', 'public_website', 'https://marcaajena.co/contacto')
     ON CONFLICT DO NOTHING;
 
     INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, dedupe_key, status, fit_score)
@@ -226,6 +242,24 @@ describe('VEN-1 · empresas', () => {
     assert.equal(intacta[0]?.name, 'Marca Ajena');
   });
 
+  test('una empresa del catálogo compartido se vincula y se trabaja, pero su ficha no se edita', async () => {
+    // Sin dueño: la escribió el worker (enriquecimiento) o una migración.
+    await t.admin(`
+      INSERT INTO company (id, name, domain) VALUES ('${COMPANY_CATALOGO}', 'Catálogo Compartido', 'catalogo-compartido.co')
+      ON CONFLICT DO NOTHING`);
+    // Darla de alta con su dominio la VINCULA en vez de duplicarla.
+    const id = await laura((tx) => createCompany(tx, { name: 'Catálogo', domain: 'catalogo-compartido.co' }));
+    assert.equal(id, COMPANY_CATALOGO);
+    // La relación y las notas son de este workspace: eso sí.
+    await laura((tx) => updateCompany(tx, id, { relationship: 'client', notes: 'La trabajamos.' }));
+    assert.equal((await laura((tx) => getCompany(tx, id)))?.relationship, 'client');
+    // Su nombre es de todos. La política filtraría el UPDATE en silencio
+    // (cero filas) y la pantalla diría «guardado»: la capa lo dice.
+    await assert.rejects(() => laura((tx) => updateCompany(tx, id, { name: 'Renombrada' })), CompanyNotEditable);
+    const intacta = await t.raw<{ name: string }>(`SELECT name FROM company WHERE id = '${COMPANY_CATALOGO}'`);
+    assert.equal(intacta[0]?.name, 'Catálogo Compartido');
+  });
+
   test('editar cambia el catálogo y la relación en una sola llamada', async () => {
     await laura((tx) => updateCompany(tx, COMPANY_GRANOS, { relationship: 'client', city: 'Palmira', notes: 'Segundo intento cerrado.' }));
     const despues = await laura((tx) => getCompany(tx, COMPANY_GRANOS));
@@ -291,22 +325,38 @@ describe('VEN-1 · contactos', () => {
     const suyos = await laura((tx) => listContacts(tx, COMPANY_AJENA));
     assert.ok(!suyos.some((c) => c.id === CONTACT_AJENO), 'user_provided del vecino: ni se lista');
     const desdeSuCasa = await ajeno((tx) => listContacts(tx, COMPANY_AJENA));
-    assert.equal(desdeSuCasa.length, 2, 'en su casa ve el privado y el público');
+    assert.equal(desdeSuCasa.length, 3, 'en su casa ve el privado, el público que guardó y el del catálogo');
     assert.ok(desdeSuCasa.some((c) => c.id === CONTACT_AJENO));
   });
 
-  test('un contacto ajeno de fuente pública se ve pero no se edita', async () => {
+  test('un contacto público que guardó otro workspace no se ve: es parte de su CRM (0025 §6)', async () => {
     const contactos = await laura((tx) => listContacts(tx, COMPANY_AJENA));
-    const vocera = contactos.find((c) => c.id === CONTACT_AJENO_PUBLICO);
-    assert.ok(vocera, 'se ve porque su fuente es pública, aunque la empresa no sea mía');
-    assert.equal(vocera.isOwn, false, 'y no es de este workspace');
+    assert.equal(
+      contactos.some((c) => c.id === CONTACT_AJENO_PUBLICO),
+      false,
+      'que la fuente sea pública no lo hace de todos: por ahí se sabía qué marcas prospecta el vecino',
+    );
+    // Y como no se ve, tampoco se edita ni se da de baja: para esta
+    // transacción no existe, y lo dice igual que con un id inventado.
     await assert.rejects(
       () => laura((tx) => updateContact(tx, CONTACT_AJENO_PUBLICO, { roleTitle: 'Cambiado' })),
+      ContactNotFound,
+    );
+    await assert.rejects(() => laura((tx) => optOutContact(tx, CONTACT_AJENO_PUBLICO, 'x')), ContactNotFound);
+  });
+
+  test('un contacto público del catálogo (sin dueño) se ve pero no se edita', async () => {
+    const contactos = await laura((tx) => listContacts(tx, COMPANY_AJENA));
+    const catalogo = contactos.find((c) => c.id === CONTACT_CATALOGO);
+    assert.ok(catalogo, 'lo público sin dueño es el dato de prospección compartido');
+    assert.equal(catalogo.isOwn, false, 'y no es de este workspace');
+    await assert.rejects(
+      () => laura((tx) => updateContact(tx, CONTACT_CATALOGO, { roleTitle: 'Cambiado' })),
       ContactNotOwned,
     );
-    // Y la baja de un contacto ajeno tampoco la registra la pantalla:
-    // eso lo hace el worker con asWorker (ver 0020).
-    await assert.rejects(() => laura((tx) => optOutContact(tx, CONTACT_AJENO_PUBLICO, 'x')), ContactNotOwned);
+    // La baja de un contacto que no es mío la registra el worker con
+    // asWorker (ver 0020), no una pantalla.
+    await assert.rejects(() => laura((tx) => optOutContact(tx, CONTACT_CATALOGO, 'x')), ContactNotOwned);
   });
 
   test('los contactos del seed son de Laura: los guardó su workspace', async () => {

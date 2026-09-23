@@ -81,6 +81,18 @@
  * en una tabla que mc_app pueda escribir, o su entrada en
  * REFERENCIAS_SIN_COMPROBAR_DECLARADAS.
  *
+ * LOS ÍNDICES ÚNICOS, QUE SE COMPRUEBAN CONTRA TODAS LAS FILAS
+ * ------------------------------------------------------------
+ * Un índice único no pasa por RLS: B choca con la fila de A aunque no
+ * la vea, y el 23505 le dice que ese valor ya lo tiene alguien. Medido
+ * en la ronda 3 con contact.email: B aprendía que otra agencia tiene a
+ * esa persona en su CRM, y no podía guardar la suya. La guardia recorre
+ * TODOS los índices únicos y de exclusión de las tablas con RLS que
+ * mc_app escribe (unicosSinInquilino) y exige que incluyan la columna de
+ * inquilino o una clave ajena hacia una tabla aislada, que se limiten a
+ * las filas sin dueño (esas mc_app no las escribe), o que sean la clave
+ * primaria uuid de la fila; si no, entrada en UNICOS_GLOBALES_DECLARADOS.
+ *
  * Y LOS PRIVILEGIOS, QUE RLS NO CUBRE
  * -----------------------------------
  * Una tabla SIN política no está protegida por RLS: está protegida por
@@ -92,6 +104,14 @@
  *   · Ningún otro rol —PUBLIC incluido— tiene privilegios sobre nada de
  *     `public`, salvo el dueño, mc_app y los de ROLES_CON_ACCESO_DECLARADOS.
  *     En Supabase, anon y authenticated los expone PostgREST a internet.
+ *   · Los GRANT POR COLUMNA cuentan como de tabla. Un REVOKE de tabla no
+ *     los quita, y la ronda 3 solo leía pg_class.relacl: medido, `GRANT
+ *     UPDATE (slug) ON niche TO mc_app` dejaba la guardia en verde y
+ *     mc_app reescribía las 12 filas de un catálogo de solo lectura.
+ *   · Las SECUENCIAS también. Una secuencia es de la tabla entera, no de
+ *     un inquilino: con SELECT, `last_value` de audit_log_id_seq es el
+ *     volumen de toda la plataforma. mc_app no tiene SELECT ni UPDATE en
+ *     ninguna, y USAGE solo en las de tablas donde inserta.
  *
  * LA GUARDIA NO FALLA ABIERTA
  * ---------------------------
@@ -105,7 +125,9 @@
  * que migre una base que solo está caída.
  */
 import type { CatalogDb } from './client.ts';
-import { veredicto, type AislamientoDeLectura, type Lado } from './politicas.ts';
+import {
+  COLUMNAS_DE_INQUILINO, terminosDelAnd, veredicto, type AislamientoDeLectura, type ContextoDePolitica, type Lado,
+} from './politicas.ts';
 
 /**
  * Las tablas de `public` que NO llevan aislamiento por fila, y por qué.
@@ -141,6 +163,10 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   webhook_event:
     'bitácora cruda de lo que mandan las plataformas (cuerpo y cabeceras, con firmas). Se cierra por privilegio: ' +
     'mc_app no tiene NINGUNO sobre ella. Es del worker',
+  contact_suppression:
+    'la baja global (0007, 0026 §3): correos que nadie en la plataforma vuelve a contactar, sin el workspace que la ' +
+    'registró. No es de ningún inquilino; se cierra por privilegio (mc_app no tiene ninguno) y la llenan y la ' +
+    'aplican los disparadores SECURITY DEFINER de contact y el worker',
   schema_migrations:
     'contabilidad del runner de migraciones (db/lib/aplicar.mjs), no dato del producto. La lee esta misma guardia',
 };
@@ -202,6 +228,51 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
  * Vacía: 0025 §7 lo engancha a todas.
  */
 export const REFERENCIAS_SIN_COMPROBAR_DECLARADAS: Readonly<Record<string, string>> = {};
+
+/**
+ * Los índices únicos (o de exclusión) GLOBALES de tablas con RLS que
+ * mc_app escribe, como `tabla.indice`, y por qué no pueden ser por
+ * inquilino. Cada uno es un oráculo aceptado: quien intente el mismo
+ * valor sabe que ya existe. Por eso el motivo tiene que decir por qué
+ * ese saber no le da nada que no tenga ya.
+ */
+export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
+  'app_user.app_user_email_key':
+    'el correo ES la identidad con la que se entra (CIM-3, enlace mágico): una persona es una sola fila en toda ' +
+    'la plataforma. Y el alta solo crea la fila propia (0025 §4), así que desde la web no se tantea el correo de nadie',
+  'workspace.workspace_slug_key':
+    'el slug es la dirección pública del workspace: tiene que resolver a uno solo sin saber de quién es. Que un ' +
+    'slug esté tomado es lo mismo que ver que su dirección responde',
+  'quote.quote_slug_key':
+    'enlace público de la cotización: la URL resuelve sin workspace. Quien lo genere (COT-3) lo hace al azar, ' +
+    'nunca a partir del nombre de la marca: así el choque no dice nada',
+  'report.report_slug_key': 'enlace público del reporte: mismo motivo que quote.quote_slug_key',
+  'media_kit.media_kit_slug_key': 'enlace público del media kit: mismo motivo que quote.quote_slug_key',
+  'pipeline_stage.pipeline_stage_pkey':
+    'el id de una etapa es su clave primaria (deal.stage_id la referencia) y las globales se llaman por su nombre, ' +
+    'que es público. Las PRIVADAS no pueden llevar dato: 0026 §2 las obliga por CHECK a un uuid al azar ' +
+    '(pipeline_stage_private_id_random), así que chocar con una exige conocerla',
+  'connection_secret.connection_secret_pkey':
+    'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
+    'chocar con una exige conocerla, y conocerla ya es tenerla',
+};
+
+/**
+ * Las tablas con inquilino propio (workspace_id, owner_workspace_id) que
+ * se aíslan con un EXISTS sobre un padre CON FILAS GLOBALES y heredan a
+ * propósito esas filas, y por qué. Vacía: hoy las únicas hijas de un
+ * padre con globales (external_post_score y external_post_snapshot, de
+ * external_post) no tienen inquilino propio, así que la regla no las
+ * alcanza. Ver «LOS PADRES CON FILAS GLOBALES» en src/politicas.ts.
+ */
+export const HIJAS_CON_GLOBALES_DECLARADAS: Readonly<Record<string, string>> = {};
+
+/**
+ * Las secuencias sobre las que mc_app puede tener SELECT, UPDATE, o
+ * USAGE sin insertar en su tabla, y por qué. Vacía: 0026 §4 deja a
+ * mc_app solo USAGE, y solo donde inserta.
+ */
+export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
 
 /** La función que comprueba que una referencia nombra una fila visible (0025 §3). */
 export const FUNCION_DE_REFERENCIAS = 'assert_reference_visible';
@@ -280,6 +351,10 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
 
   // Ni leer.
   webhook_event: { permite: [], motivo: 'cuerpos y cabeceras crudos de las plataformas: solo el worker' },
+  contact_suppression: {
+    permite: [],
+    motivo: 'la baja global la escriben y la leen los disparadores de contact y el worker: la web no la toca',
+  },
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
@@ -368,7 +443,13 @@ export interface EstadoDelEsquema {
   referenciasSinComprobar: string[];
   /** Entradas de REFERENCIAS_SIN_COMPROBAR_DECLARADAS que ya no corresponden. */
   referenciasDeclaradasObsoletas: string[];
-  /** Privilegios que mc_app conserva y no debería. */
+  /** Índices únicos o de exclusión sin la columna de inquilino, en tablas con RLS que mc_app escribe. */
+  unicosSinInquilino: string[];
+  /** Entradas de UNICOS_GLOBALES_DECLARADOS que ya no corresponden. */
+  unicosDeclaradosObsoletos: string[];
+  /** Entradas de HIJAS_CON_GLOBALES_DECLARADAS y SECUENCIAS_DECLARADAS que ya no corresponden. */
+  otrasDeclaracionesObsoletas: string[];
+  /** Privilegios que mc_app conserva y no debería (de tabla, de columna o de secuencia). */
   privilegiosDeMas: PrivilegioDeMas[];
   /** Otros roles con privilegios en `public`. */
   rolesDeMas: RolDeMas[];
@@ -401,7 +482,7 @@ interface FilaMigracion extends Record<string, unknown> {
 }
 interface FilaRelacion extends Record<string, unknown> {
   relname: string;
-  /** 'r' y 'p' son tablas; 'v', vistas; 'm', vistas materializadas; 'f', tablas foráneas. */
+  /** 'r' y 'p' son tablas; 'v', vistas; 'm', vistas materializadas; 'f', tablas foráneas; 'S', secuencias. */
   relkind: string;
   rls: boolean;
   forzada: boolean;
@@ -410,6 +491,8 @@ interface FilaRelacion extends Record<string, unknown> {
   invocador: boolean;
   /** El rol dueño: el único, además de los declarados, que puede tener privilegios. */
   dueno: string;
+  /** Secuencias: la tabla cuya columna la usa (serial o identity), o null. */
+  tabla_duena: string | null;
 }
 interface FilaPolitica extends Record<string, unknown> {
   relname: string;
@@ -427,6 +510,26 @@ interface FilaPrivilegio extends Record<string, unknown> {
   /** 'PUBLIC' para el grantee 0. */
   rol: string;
   privilegio: string;
+  /** La columna, si el GRANT es por columna; null si es de la relación entera. */
+  columna: string | null;
+}
+interface FilaInquilino extends Record<string, unknown> {
+  tabla: string;
+  columna: string;
+}
+interface FilaUnico extends Record<string, unknown> {
+  tabla: string;
+  indice: string;
+  primaria: boolean;
+  /** Las columnas del índice, sin las expresiones. */
+  columnas: string[] | null;
+  /**
+   * Una sola columna que la base rellena sola: identity, o un DEFAULT
+   * nextval(…) o gen_random_uuid(). Es la clave sustituta de la fila.
+   */
+  generada: boolean;
+  expresiones: string | null;
+  predicado: string | null;
 }
 interface FilaFuncion extends Record<string, unknown> {
   firma: string;
@@ -459,10 +562,14 @@ const SQL_RELACIONES = `
          c.relforcerowsecurity AS forzada,
          (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)::int AS politicas,
          coalesce(c.reloptions @> ARRAY['security_invoker=on'], false) AS invocador,
-         pg_get_userbyid(c.relowner)::text AS dueno
+         pg_get_userbyid(c.relowner)::text AS dueno,
+         (SELECT t.relname::text FROM pg_depend d JOIN pg_class t ON t.oid = d.refobjid
+           WHERE c.relkind = 'S' AND d.classid = 'pg_class'::regclass AND d.objid = c.oid
+             AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+           LIMIT 1) AS tabla_duena
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
    ORDER BY c.relname`;
 
 /**
@@ -488,24 +595,75 @@ const SQL_POLITICAS = `
 
 /**
  * Todos los privilegios concedidos en `public`, de todos los roles,
- * leídos de pg_class.relacl con aclexplode.
+ * leídos de pg_class.relacl y de pg_attribute.attacl con aclexplode.
  *
  * No se usa information_schema.role_table_grants a propósito: esa vista
  * solo enseña las concesiones en las que el usuario actual es parte, y
- * el worker consulta esto como mc_worker. relacl la ve cualquiera, así
- * que la respuesta es la misma se pregunte desde donde se pregunte. El
- * grantee 0 es PUBLIC.
+ * el worker consulta esto como mc_worker. relacl y attacl los ve
+ * cualquiera, así que la respuesta es la misma se pregunte desde donde
+ * se pregunte. El grantee 0 es PUBLIC.
+ *
+ * La segunda mitad son los GRANT POR COLUMNA: `GRANT UPDATE (slug) ON
+ * niche TO mc_app` no aparece en relacl, un REVOKE de tabla no lo quita,
+ * y con él mc_app actualiza la tabla entera en esa columna. Se tratan
+ * como si fueran de la relación.
  */
 const SQL_PRIVILEGIOS = `
   SELECT c.relname AS relname,
          coalesce(r.rolname::text, 'PUBLIC') AS rol,
-         a.privilege_type AS privilegio
+         a.privilege_type AS privilegio,
+         NULL::text AS columna
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
    CROSS JOIN LATERAL aclexplode(c.relacl) a
     LEFT JOIN pg_roles r ON r.oid = a.grantee
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+  UNION ALL
+  SELECT c.relname AS relname,
+         coalesce(r.rolname::text, 'PUBLIC') AS rol,
+         a.privilege_type AS privilegio,
+         att.attname::text AS columna
+    FROM pg_attribute att
+    JOIN pg_class c ON c.oid = att.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   CROSS JOIN LATERAL aclexplode(att.attacl) a
+    LEFT JOIN pg_roles r ON r.oid = a.grantee
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+     AND att.attnum > 0 AND NOT att.attisdropped
    ORDER BY 1, 2, 3`;
+
+/** Qué tablas llevan columna de inquilino propia, y cuál. */
+const SQL_INQUILINOS = `
+  SELECT c.relname AS tabla, a.attname::text AS columna
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+     AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = ANY ($1::text[])
+   ORDER BY 1, 2`;
+
+/** Los índices únicos y de exclusión de las tablas de `public`, con sus columnas y su predicado. */
+const SQL_UNICOS = `
+  SELECT c.relname AS tabla,
+         i.relname AS indice,
+         x.indisprimary AS primaria,
+         (SELECT array_agg(a.attname::text ORDER BY k.n)
+            FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, n)
+            JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum) AS columnas,
+         (x.indnatts = 1 AND x.indexprs IS NULL AND EXISTS (
+            SELECT 1 FROM pg_attribute a
+              LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+             WHERE a.attrelid = x.indrelid AND a.attnum = x.indkey[0]
+               AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ '^(nextval\\(|gen_random_uuid\\(\\))')
+         )) AS generada,
+         pg_get_expr(x.indexprs, x.indrelid) AS expresiones,
+         pg_get_expr(x.indpred, x.indrelid) AS predicado
+    FROM pg_index x
+    JOIN pg_class i ON i.oid = x.indexrelid
+    JOIN pg_class c ON c.oid = x.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (x.indisunique OR x.indisexclusion)
+   ORDER BY 1, 2`;
 
 /** Las funciones de `public` que corren con los privilegios de su dueño y mc_app puede llamar. */
 const SQL_FUNCIONES = `
@@ -628,25 +786,67 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const funciones = await leer<FilaFuncion>(SQL_FUNCIONES, [APP_ROLE]);
   const referencias = await leer<FilaReferencia>(SQL_REFERENCIAS);
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
+  const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
+  const unicos = await leer<FilaUnico>(SQL_UNICOS);
 
   const tablas = relaciones.filter((r) => r.relkind === 'r' || r.relkind === 'p');
   const vistas = relaciones.filter((r) => r.relkind === 'v');
   const sinRlsPosible = relaciones.filter((r) => r.relkind === 'm' || r.relkind === 'f');
+  const secuencias = relaciones.filter((r) => r.relkind === 'S');
   const porNombre = new Map(relaciones.map((r) => [r.relname, r] as const));
 
-  // ---- privilegios: los de mc_app (directos o por PUBLIC) y los de los demás
+  // ---- privilegios: los de mc_app (directos o por PUBLIC) y los de los
+  //      demás. Uno POR COLUMNA cuenta como de la relación entera; se
+  //      recuerda la columna para decirlo en el mensaje.
   const privilegiosPorRelacion = new Map<string, Map<string, Set<string>>>();
+  const porColumna = new Map<string, Map<string, Set<string>>>(); // relación → privilegio → columnas
   for (const p of privilegios) {
     let roles = privilegiosPorRelacion.get(p.relname);
     if (!roles) privilegiosPorRelacion.set(p.relname, (roles = new Map()));
     let s = roles.get(p.rol);
     if (!s) roles.set(p.rol, (s = new Set()));
     s.add(p.privilegio);
+    if (p.columna && (p.rol === APP_ROLE || p.rol === 'PUBLIC')) {
+      let privs = porColumna.get(p.relname);
+      if (!privs) porColumna.set(p.relname, (privs = new Map()));
+      let cols = privs.get(p.privilegio);
+      if (!cols) privs.set(p.privilegio, (cols = new Set()));
+      cols.add(p.columna);
+    }
   }
   const deLaApp = (relacion: string): Set<string> => {
     const roles = privilegiosPorRelacion.get(relacion);
     return new Set([...(roles?.get(APP_ROLE) ?? []), ...(roles?.get('PUBLIC') ?? [])]);
   };
+  /** «(por columna: slug)» si alguno de esos privilegios le llega a mc_app por columna. */
+  const notaDeColumnas = (relacion: string, privs: readonly string[]): string => {
+    const cols = privs.flatMap((p) => [...(porColumna.get(relacion)?.get(p) ?? [])]);
+    return cols.length
+      ? ` — concedido POR COLUMNA (${[...new Set(cols)].sort().join(', ')}): un REVOKE de la tabla no lo quita; ` +
+          `hace falta REVOKE … (columna) ON … FROM ${APP_ROLE}`
+      : '';
+  };
+
+  // ---- claves ajenas de una columna e inquilinos, para leer las políticas
+  const claveAjena = new Set(
+    referencias.filter((r) => r.columnas === 1).map((r) => `${r.hija}.${r.columna}→${r.padre}.${r.columna_padre}`),
+  );
+  const padreDe = new Map<string, string>();
+  for (const r of referencias) if (r.columnas === 1) padreDe.set(`${r.hija}.${r.columna}`, r.padre);
+  const inquilinoPorTabla = new Map<string, string[]>();
+  for (const i of inquilinos) {
+    const lista = inquilinoPorTabla.get(i.tabla);
+    if (lista) lista.push(i.columna);
+    else inquilinoPorTabla.set(i.tabla, [i.columna]);
+  }
+  const contexto = (tabla: string, lado: Lado): ContextoDePolitica => ({
+    tabla,
+    lado,
+    aislamientoDe,
+    esReferencia: (hija, col, padre, pcol) => claveAjena.has(`${hija}.${col}→${padre}.${pcol}`),
+    inquilinoDe: (t) => inquilinoPorTabla.get(t) ?? [],
+    hijaConGlobalesDeclarada: (t) => t in HIJAS_CON_GLOBALES_DECLARADAS,
+  });
 
   const politicasPorTabla = new Map<string, FilaPolitica[]>();
   for (const p of politicas) {
@@ -662,11 +862,13 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   //      mientras cambie algo. Un ciclo (A mira a B y B a A) se queda en
   //      «no», que es lo prudente.
   const lectura = new Map<string, AislamientoDeLectura>(tablas.map((t) => [t.relname, 'no']));
-  const aislamientoDe = (tabla: string): AislamientoDeLectura => lectura.get(tabla) ?? 'no';
+  function aislamientoDe(tabla: string): AislamientoDeLectura {
+    return lectura.get(tabla) ?? 'no';
+  }
   const calcularLectura = (t: FilaRelacion): AislamientoDeLectura => {
     if (!t.rls || !t.forzada) return 'no';
     const ps = alcanzan(t.relname, 'SELECT');
-    const ctx = { tabla: t.relname, lado: 'lectura' as const, aislamientoDe };
+    const ctx = contexto(t.relname, 'lectura');
     const restrictivas = ps.filter((p) => !p.permisiva).map((p) => veredicto(p.qual, ctx));
     if (restrictivas.some((v) => v.aisla && !v.globales)) return 'estricto';
     let globales = false;
@@ -698,13 +900,13 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       if (!suyos.has(cmd)) continue; // sin el privilegio, Postgres corta antes que la política
       const ps = alcanzan(t.relname, cmd);
       const aislaEntera = (p: FilaPolitica) =>
-        expresionesPara(p, cmd).every(({ expr, lado }) => veredicto(expr, { tabla: t.relname, lado, aislamientoDe }).aisla);
+        expresionesPara(p, cmd).every(({ expr, lado }) => veredicto(expr, contexto(t.relname, lado)).aisla);
       // Una restrictiva que aísla cierra el comando aunque haya una
       // permisiva abierta: las restrictivas se combinan con AND.
       if (ps.some((p) => !p.permisiva && aislaEntera(p))) continue;
       for (const p of ps.filter((x) => x.permisiva)) {
         for (const { expr, lado } of expresionesPara(p, cmd)) {
-          const v = veredicto(expr, { tabla: t.relname, lado, aislamientoDe });
+          const v = veredicto(expr, contexto(t.relname, lado));
           if (v.aisla) continue;
           const clave = `${t.relname}.${p.polname}`;
           const ya = abiertasPorClave.get(clave);
@@ -824,23 +1026,108 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     ? Object.keys(REFERENCIAS_SIN_COMPROBAR_DECLARADAS).filter((k) => !referenciasQueAplican.has(k))
     : [];
 
+  // ---- índices únicos: el 23505 no pasa por RLS. Uno sobre una tabla
+  //      con RLS que mc_app escribe tiene que ser por inquilino.
+  const unicosSinInquilino: string[] = [];
+  const unicosQueAplican = new Set<string>();
+  for (const u of unicos) {
+    const t = porNombre.get(u.tabla);
+    if (!t?.rls) continue;
+    const suyos = deLaApp(u.tabla);
+    if (!suyos.has('INSERT') && !suyos.has('UPDATE')) continue;
+    const clave = `${u.tabla}.${u.indice}`;
+    unicosQueAplican.add(clave);
+    if (clave in UNICOS_GLOBALES_DECLARADOS) continue;
+    const columnas = u.columnas ?? [];
+    const propias = inquilinoPorTabla.get(u.tabla) ?? [];
+    // La clave primaria sustituta de la fila (uuid al azar o bigserial):
+    // la genera la base, no lleva dato, y chocar con ella solo dice que
+    // ese id existe, que es lo que ya sabe quien lo escribe.
+    const sustituta = u.primaria && u.generada;
+    // La columna de inquilino, en las columnas o en una expresión.
+    const conInquilino =
+      columnas.some((c) => propias.includes(c)) ||
+      (u.expresiones !== null && propias.some((c) => new RegExp(`\\b${c}\\b`).test(u.expresiones!)));
+    // Una clave ajena hacia una tabla aislada sin filas globales: el
+    // disparador de 0025 §3 impide nombrar la fila de otro, así que el
+    // choque solo puede ser con lo propio.
+    const conPadreAislado = columnas.some((c) => {
+      const padre = padreDe.get(`${u.tabla}.${c}`);
+      return padre !== undefined && aislamientoDe(padre) === 'estricto';
+    });
+    // Parcial sobre las filas SIN dueño: esas mc_app no las escribe (la
+    // mitad de escritura de la guardia no acepta la rama «IS NULL»).
+    const soloSinDueno =
+      u.predicado !== null && terminosDelAnd(u.predicado).some((x) => propias.some((c) => x === `${c} IS NULL`));
+    if (sustituta || conInquilino || conPadreAislado || soloSinDueno) continue;
+    unicosSinInquilino.push(`${clave} (${[...columnas, ...(u.expresiones ? [u.expresiones] : [])].join(', ')})`);
+  }
+  const unicosDeclaradosObsoletos = unicos.length
+    ? Object.keys(UNICOS_GLOBALES_DECLARADOS).filter((k) => !unicosQueAplican.has(k))
+    : [];
+
   // ---- privilegios de mc_app: los declarados y los prohibidos
   const privilegiosDeMas: PrivilegioDeMas[] = [];
   for (const r of relaciones) {
+    if (r.relkind === 'S') continue; // abajo, con sus propias reglas
     const tiene = deLaApp(r.relname);
     if (!tiene.size) continue;
     const declarado = PRIVILEGIOS_DE_LA_APP[r.relname];
     const sobran = declarado ? PRIVILEGIOS.filter((p) => tiene.has(p) && !declarado.permite.includes(p)) : [];
     const prohibidos = PRIVILEGIOS_PROHIBIDOS.filter((p) => tiene.has(p));
-    if (sobran.length) privilegiosDeMas.push({ tabla: r.relname, privilegios: [...sobran], motivo: declarado!.motivo });
+    if (sobran.length) {
+      privilegiosDeMas.push({
+        tabla: r.relname,
+        privilegios: [...sobran],
+        motivo: declarado!.motivo + notaDeColumnas(r.relname, sobran),
+      });
+    }
     if (prohibidos.length) {
       privilegiosDeMas.push({
         tabla: r.relname,
         privilegios: [...prohibidos],
-        motivo: 'una aplicación no los necesita en ninguna relación: TRUNCATE se salta la RLS entera',
+        motivo:
+          'una aplicación no los necesita en ninguna relación: TRUNCATE se salta la RLS entera' +
+          notaDeColumnas(r.relname, prohibidos),
       });
     }
   }
+
+  // ---- secuencias: son de la tabla entera, no de un inquilino
+  for (const q of secuencias) {
+    if (q.relname in SECUENCIAS_DECLARADAS) continue;
+    const tiene = deLaApp(q.relname);
+    const lee = (['SELECT', 'UPDATE'] as const).filter((p) => tiene.has(p));
+    if (lee.length) {
+      privilegiosDeMas.push({
+        tabla: q.relname,
+        privilegios: [...lee],
+        motivo:
+          'secuencia: con SELECT, last_value es el volumen de TODA la plataforma; UPDATE es setval. ' +
+          'nextval y el DEFAULT solo necesitan USAGE',
+      });
+    }
+    if (tiene.has('USAGE') && !(q.tabla_duena && deLaApp(q.tabla_duena).has('INSERT'))) {
+      privilegiosDeMas.push({
+        tabla: q.relname,
+        privilegios: ['USAGE'],
+        motivo: q.tabla_duena
+          ? `${APP_ROLE} no inserta en ${q.tabla_duena}: nextval() solo le serviría para medir cuánto escribe el worker`
+          : 'secuencia suelta, sin tabla: nadie en la aplicación la necesita',
+      });
+    }
+  }
+  const nombresDeSecuencias = new Set(secuencias.map((q) => q.relname));
+  const otrasDeclaracionesObsoletas = relaciones.length
+    ? [
+        ...Object.keys(SECUENCIAS_DECLARADAS)
+          .filter((q) => !nombresDeSecuencias.has(q))
+          .map((q) => `SECUENCIAS_DECLARADAS: ${q}`),
+        ...Object.keys(HIJAS_CON_GLOBALES_DECLARADAS)
+          .filter((h) => !(inquilinoPorTabla.get(h) ?? []).length)
+          .map((h) => `HIJAS_CON_GLOBALES_DECLARADAS: ${h}`),
+      ]
+    : [];
 
   // ---- los demás roles
   const rolesDeMas: RolDeMas[] = [];
@@ -880,6 +1167,9 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     funcionesDefinerObsoletas: siAlDia(funcionesDefinerObsoletas),
     referenciasSinComprobar,
     referenciasDeclaradasObsoletas: siAlDia(referenciasDeclaradasObsoletas),
+    unicosSinInquilino,
+    unicosDeclaradosObsoletos: siAlDia(unicosDeclaradosObsoletos),
+    otrasDeclaracionesObsoletas: siAlDia(otrasDeclaracionesObsoletas),
     privilegiosDeMas,
     rolesDeMas,
     comparadoConArchivos: enElRepo.length > 0 && aplicadas !== null,
@@ -907,6 +1197,9 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   funcionesDefinerObsoletas: [],
   referenciasSinComprobar: [],
   referenciasDeclaradasObsoletas: [],
+  unicosSinInquilino: [],
+  unicosDeclaradosObsoletos: [],
+  otrasDeclaracionesObsoletas: [],
   privilegiosDeMas: [],
   rolesDeMas: [],
   comparadoConArchivos: true,
@@ -980,6 +1273,14 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         '. Engánchalo en una migración (ver 0025 §7), o decláralas en REFERENCIAS_SIN_COMPROBAR_DECLARADAS',
     );
   }
+  if (estado.unicosSinInquilino.length) {
+    partes.push(
+      'hay índices únicos globales en tablas con dueño: el 23505 no pasa por RLS, así que le dicen a un workspace ' +
+        'qué valores tiene otro y le impiden guardar los suyos: ' +
+        estado.unicosSinInquilino.join(', ') +
+        '. Hazlos por inquilino en una migración (ver 0026 §2), o decláralos en UNICOS_GLOBALES_DECLARADOS',
+    );
+  }
   if (estado.privilegiosDeMas.length) {
     partes.push(
       `${APP_ROLE} tiene privilegios que no le tocan: ` +
@@ -1008,6 +1309,8 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
     ...estado.relacionesSinRlsObsoletas.map((v) => `RELACIONES_SIN_RLS_DECLARADAS: ${v}`),
     ...estado.funcionesDefinerObsoletas.map((v) => `FUNCIONES_DEFINER_DECLARADAS: ${v}`),
     ...estado.referenciasDeclaradasObsoletas.map((v) => `REFERENCIAS_SIN_COMPROBAR_DECLARADAS: ${v}`),
+    ...estado.unicosDeclaradosObsoletos.map((v) => `UNICOS_GLOBALES_DECLARADOS: ${v}`),
+    ...estado.otrasDeclaracionesObsoletas,
   ];
   if (sobran.length) {
     partes.push('sobran excepciones declaradas (el objeto ya no existe, o ya está cerrado): ' + sobran.join(', '));

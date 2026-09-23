@@ -25,7 +25,40 @@
  *           WHERE p.x = tabla.y …)    corre dentro de la subconsulta;
  *                                     exige que el padre esté aislado
  *                                     y que la subconsulta esté
- *                                     CORRELACIONADA con la fila
+ *                                     CORRELACIONADA con la fila por
+ *                                     una CLAVE AJENA de verdad (abajo)
+ *
+ * LA CORRELACIÓN TIENE QUE SER UNA CLAVE AJENA (ronda 4)
+ * ------------------------------------------------------
+ * Hasta la ronda 3 bastaba con que el WHERE igualara CUALQUIER columna
+ * de la subconsulta con CUALQUIER columna de la fila. Medido:
+ * `USING (EXISTS (SELECT 1 FROM deal d WHERE d.name = zz.nota))` pasaba
+ * en verde, y B leía toda fila de A cuya nota coincidiera con el nombre
+ * de algún deal suyo; con `membership.user_id = t.created_by`, B leía
+ * las filas de otros workspaces de una persona compartida. Ahora el par
+ * cuenta solo si es una de estas tres cosas, según pg_constraint:
+ *
+ *   tabla.col → padre.pcol    la fila apunta a su padre (0018, 0024 §6)
+ *   padre.pcol → tabla.col    un hijo visible apunta a la fila
+ *                             (app_user_read: una membresía mía que la
+ *                             nombra). Lo que impide fabricar ese hijo es
+ *                             el disparador de 0025 §3: un hijo solo
+ *                             puede nombrar una fila que ya se ve.
+ *   la clave de inquilino     workspace_id u owner_workspace_id en los
+ *     en los dos lados        dos lados: el padre dice de qué inquilino
+ *                             es la fila
+ *
+ * LOS PADRES CON FILAS GLOBALES (ronda 4)
+ * ---------------------------------------
+ * Un padre «con globales» (pipeline_stage, external_post, company…) deja
+ * ver a todos sus filas sin dueño. Heredar eso está bien para un dato
+ * global (external_post_score cuelga de un post que el radar vio), pero
+ * no para una fila que tiene inquilino propio: `zz.stage_id → etapa
+ * global` la abriría a todos los workspaces aunque lleve workspace_id.
+ * Así que, si la tabla de la política tiene su propia columna de
+ * inquilino, un EXISTS sobre un padre con globales no aísla por sí solo:
+ * hace falta además comparar esa columna con el inquilino (en un AND),
+ * o declarar la tabla en HIJAS_CON_GLOBALES_DECLARADAS con su motivo.
  *
  * En un AND basta con que un término aísle (el AND solo estrecha). En un
  * OR tienen que aislar todos, con UNA excepción, y solo en lectura:
@@ -66,7 +99,16 @@ export interface ContextoDePolitica {
   lado: Lado;
   /** Cómo aísla sus lecturas otra tabla (para los EXISTS). */
   aislamientoDe: (tabla: string) => AislamientoDeLectura;
+  /** ¿Hay una clave ajena de una sola columna `hija.col → padre.pcol`? (pg_constraint) */
+  esReferencia: (hija: string, col: string, padre: string, pcol: string) => boolean;
+  /** Las columnas de inquilino que lleva la tabla (workspace_id, owner_workspace_id). */
+  inquilinoDe: (tabla: string) => readonly string[];
+  /** ¿Está declarada como hija que hereda a propósito las filas globales de su padre? */
+  hijaConGlobalesDeclarada: (tabla: string) => boolean;
 }
+
+/** Las columnas que dicen de qué inquilino es una fila. */
+export const COLUMNAS_DE_INQUILINO: readonly string[] = ['workspace_id', 'owner_workspace_id'];
 
 type Resultado =
   | { t: 'aisla'; claves: Set<string>; globales: boolean }
@@ -197,17 +239,38 @@ function existe(s: string, ctx: ContextoDePolitica): Resultado | null {
     if (a === 'con-globales') globales = true;
   }
 
-  // Y correlacionada con la fila: uno de los términos del AND de su
-  // WHERE tiene que igualar una columna de la subconsulta con una de la
-  // tabla de la política. Sin eso, `EXISTS (SELECT 1 FROM deal)` es
-  // «¿tengo algún deal?», que abre la tabla entera a quien tenga uno.
-  const alias = new Set(tablas.map((x) => x.alias));
+  // Un padre con filas globales no basta para una fila con inquilino
+  // propio (ver «LOS PADRES CON FILAS GLOBALES» arriba). Dentro de un
+  // AND con `workspace_id = current_workspace_id()` la política sigue
+  // aislando: el AND toma el término estricto.
+  if (globales && ctx.inquilinoDe(ctx.tabla).length > 0 && !ctx.hijaConGlobalesDeclarada(ctx.tabla)) {
+    return { t: 'abierta', trozo: s };
+  }
+
+  // Y correlacionada con la fila POR UNA CLAVE AJENA: uno de los
+  // términos del AND de su WHERE tiene que igualar una columna de la
+  // subconsulta con una de la tabla de la política, y ese par tiene que
+  // ser una referencia real (ver «LA CORRELACIÓN…» arriba). Sin
+  // correlación, `EXISTS (SELECT 1 FROM deal)` es «¿tengo algún deal?»;
+  // con una correlación cualquiera, `d.name = t.nota` es «¿tengo algún
+  // deal que se llame como tu nota?». Las dos abren filas ajenas.
+  const tablaDe = new Map(tablas.map((x) => [x.alias, x.tabla] as const));
+  const inquilino = new Set(COLUMNAS_DE_INQUILINO);
+  const correlaciona = (col: string, alias: string, pcol: string): boolean => {
+    const padre = tablaDe.get(alias);
+    if (!padre) return false;
+    return (
+      ctx.esReferencia(ctx.tabla, col, padre, pcol) ||
+      ctx.esReferencia(padre, pcol, ctx.tabla, col) ||
+      (inquilino.has(col) && inquilino.has(pcol))
+    );
+  };
   for (const termino of partir(sinParentesis(where), 'AND')) {
     const m = CORRELACION.exec(sinParentesis(termino));
     if (!m) continue;
     const [, q1, c1, q2, c2] = m;
-    if (q1 === ctx.tabla && alias.has(q2!)) return { t: 'aisla', claves: new Set([c1!]), globales };
-    if (q2 === ctx.tabla && alias.has(q1!)) return { t: 'aisla', claves: new Set([c2!]), globales };
+    if (q1 === ctx.tabla && correlaciona(c1!, q2!, c2!)) return { t: 'aisla', claves: new Set([c1!]), globales };
+    if (q2 === ctx.tabla && correlaciona(c2!, q1!, c1!)) return { t: 'aisla', claves: new Set([c2!]), globales };
   }
   return { t: 'abierta', trozo: s };
 }
@@ -266,6 +329,16 @@ function analizar(expr: string, ctx: ContextoDePolitica): Resultado {
   }
 
   return atomo(s, ctx);
+}
+
+/**
+ * Los términos del AND de más afuera, sin paréntesis: el predicado de un
+ * índice parcial (`((email IS NOT NULL) AND (owner_workspace_id IS
+ * NULL))`) → ['email IS NOT NULL', 'owner_workspace_id IS NULL']. Un OR
+ * de más afuera queda como UN término: no estrecha nada.
+ */
+export function terminosDelAnd(expr: string): string[] {
+  return partir(sinParentesis(normalizar(expr)), 'AND').map(sinParentesis);
 }
 
 /**
