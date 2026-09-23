@@ -611,6 +611,7 @@ async function revisionFinal() {
 
 // ---------------------------------------------------------------------
 // Pulido · args = { pulir: { pendientes: [{ area, severity, where, issue, fix }] } }
+//   o { pulir: { archivo: '/ruta/pendientes.json', areas: ['auth', …] } } para la ronda 1
 // Cierra lo que dejaron abajo de 9,5 las fases ya integradas, sobre la
 // rama integrada. A diferencia de la revisión final (fase 7), solo
 // califica lo que ya existe y el integrador NO aplica migraciones en
@@ -625,7 +626,9 @@ ALCANCE DE ESTE PULIDO (lee con cuidado)
 `
 
 function promptCorregirPulido(area, findings, ronda) {
-  const lista = findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.where}: ${f.issue}\n   Arreglo: ${f.fix}`).join('\n')
+  const lista = typeof findings === 'string'
+    ? `Están en el archivo JSON ${findings}: léelo entero y toma TODAS las entradas con "area": "${area}" (cada una trae severity, where, issue y fix).`
+    : findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.where}: ${f.issue}\n   Arreglo: ${f.fix}`).join('\n')
   const branch = `rasheed/pulir-r${ronda}-${area}`
   return `Eres el corrector del área «${area}» en la ronda ${ronda} del pulido. Estos findings quedaron abiertos y caen en tu área. Resuélvelos todos sin romper nada de lo demás.
 ${CONTEXTO}
@@ -674,10 +677,11 @@ function areaPulido(f) {
 async function pulir(pendientes) {
   phase('Pulido')
   const salida = { rondas: [], ok: false, score: 0 }
-  let findings = pendientes
+  let findings = pendientes.pendientes || []
   for (let ronda = 1; ronda <= MAX_RONDAS_FINAL; ronda++) {
     const grupos = {}
-    for (const f of findings) { const a = areaPulido(f); (grupos[a] ||= []).push(f) }
+    if (ronda === 1 && pendientes.archivo) for (const a of pendientes.areas) grupos[a] = pendientes.archivo
+    else for (const f of findings) { const a = areaPulido(f); (grupos[a] ||= []).push(f) }
     const fixes = (await parallel(Object.keys(grupos).map((area) => () =>
       agent(promptCorregirPulido(area, grupos[area], ronda), { label: `pulir-corregir:${area} r${ronda}`, phase: 'Pulido', isolation: 'worktree', effort: 'high', schema: BUILD })
         .then((r) => (r && r.branch ? { id: area, branch: r.branch } : null))
@@ -715,7 +719,7 @@ if (!prep || !prep.ok) {
 log(`Repositorio listo en ${RAMA_INTEGRACION} (${prep.commit})`)
 
 if (args && args.pulir) {
-  const pul = await pulir(args.pulir.pendientes || [])
+  const pul = await pulir(args.pulir)
   return { ok: pul.ok, umbral: UMBRAL, pulido: pul, siguiente: 'Confirmar con Rasheed: crear el rol mc_public_share, aplicar 0024–0030 en Supabase, correr la guardia contra Supabase, merge a main y deploy.' }
 }
 
