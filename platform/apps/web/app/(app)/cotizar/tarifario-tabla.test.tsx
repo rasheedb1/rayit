@@ -156,7 +156,7 @@ describe("TarifarioTabla", () => {
 
   it("en el teléfono cada entregable es una tarjeta: views y CPM debajo del rango, cada uno con su nombre", () => {
     pintar();
-    const views = screen.getByLabelText("Views por pieza · TikTok dedicado");
+    const views = screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado");
     const fila = views.closest("tr")!;
     const tabla = fila.closest("table")!;
     // El mismo DOM, otro display: tabla desde sm, bloques apilados debajo.
@@ -169,7 +169,7 @@ describe("TarifarioTabla", () => {
     // Cada celda, salvo la del nombre, lleva su columna encima (solo en el teléfono).
     const celdas = Array.from(fila.querySelectorAll("td"));
     const etiquetas = celdas.map((td) => td.querySelector("span.sm\\:hidden")?.textContent ?? null);
-    expect(etiquetas).toEqual([null, "Rango sugerido", "Views por pieza", "CPM de referencia"]);
+    expect(etiquetas).toEqual([null, "Rango sugerido", "Visualizaciones por pieza", "CPM de referencia"]);
     expect(views.closest("td")).toBe(celdas[2]);
   });
 

@@ -463,7 +463,7 @@ export const STORIES: readonly Story[] = [
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
     status: "hecho",
-    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: crear el rol mc_public_share con supabase-admin y aplicar 0030 en Supabase, la última de la cola 0024–0030 (ver la nota de CIM-2).",
+    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: crear el rol mc_public_share con supabase-admin y aplicar 0030 y 0031 en Supabase, al final de la cola 0024–0031 (ver la nota de CIM-2). Pulido r2 (desde Ventas): enviar y aceptar fijan en el negocio el monto neto de la cotización y lo mueven con deal_move_stage (0031).",
   },
 
   // ---------------------------------------------------------------- CAM
