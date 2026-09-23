@@ -385,6 +385,34 @@ export function formatCountry(code: string, opts: LocaleOpts = {}): string {
   }
 }
 
+/**
+ * El nombre de una zona horaria para leerlo en una frase, en el idioma
+ * del locale: «America/Bogota» → «hora estándar de Colombia» (es) ·
+ * «Colombia Standard Time» (en); «Europe/Madrid» → «hora de Europa
+ * central». Es el nombre genérico (sin «de verano»), para que el texto no
+ * cambie dos veces al año. Donde Intl solo sabe dar un desplazamiento
+ * («GMT+00:00», como con UTC) se usa el nombre largo («hora universal
+ * coordinada»); una zona que Intl no conoce vuelve tal cual. Añadido por
+ * Ventas (VEN-4): el campo «Hora» dice en qué zona se escribe.
+ */
+export function formatTimeZoneName(timeZone: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const nombre = (timeZoneName: "longGeneric" | "long"): string | null => {
+    try {
+      return (
+        dateFormat(locale, { timeZone, timeZoneName })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? null
+      );
+    } catch {
+      return null;
+    }
+  };
+  const generico = nombre("longGeneric");
+  if (generico && !/^(GMT|UTC)/.test(generico)) return generico;
+  return nombre("long") ?? timeZone;
+}
+
 /** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
 export function formatDaysRelative(days: number): string {
   if (days === 0) return "hoy";
@@ -425,6 +453,8 @@ export function formatterFor(settings: FormatSettings) {
     time: (iso: string) => formatTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     country: (code: string) => formatCountry(code, base),
+    /** El nombre de la zona del workspace (u otra), para una frase: «hora estándar de Colombia». */
+    zoneName: (tz: string = timeZone) => formatTimeZoneName(tz, base),
     daysRelative: formatDaysRelative,
   };
 }

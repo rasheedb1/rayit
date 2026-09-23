@@ -41,8 +41,8 @@ export function DatosEmpresa({
   const [notice, setNotice] = useState<string | undefined>();
 
   // Un bloque que se pliega, como el resto de la ficha (patrón Attio).
-  // «Editar» va dentro, no en el título: el título es un <summary> y un
-  // botón dentro de otro no se anuncia.
+  // «Editar» va dentro, no en el título: el título es el botón que
+  // pliega el bloque, y un botón dentro de otro no se anuncia.
   return (
     <Bloque id="empresa-datos" title={editing ? MESSAGES.empresas.form.editTitle : t.data}>
       <div className="space-y-3">

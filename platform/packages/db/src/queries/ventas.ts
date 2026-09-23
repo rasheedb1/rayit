@@ -323,7 +323,15 @@ export interface PipelineDealRow {
   probability: string;
   weightedAmount: string | null;
   nextAction: string | null;
+  /** El instante en que vence la siguiente acción, ISO en UTC. */
   nextActionDue: string | null;
+  /** El día en que vence, en la zona del espacio: «2026-09-24». Para el <input type="date"> del editor (VEN-4). */
+  nextActionDueDate: string | null;
+  /** La hora en que vence, en la zona del espacio: «15:00». */
+  nextActionDueTime: string | null;
+  /** Quien tiene que hacer la siguiente acción (deal.next_action_user_id) y su nombre. */
+  nextActionUserId: string | null;
+  nextActionUserName: string | null;
   dueState: DueState;
   lastContactAt: string | null;
   expectedCloseDate: string | null;
@@ -331,6 +339,8 @@ export interface PipelineDealRow {
   isLost: boolean;
   /** Días en la etapa actual: desde el último cambio, o desde que nació. */
   daysInStage: number;
+  /** El responsable del negocio: el que se propone para la siguiente acción cuando no tiene. */
+  ownerUserId: string | null;
   ownerName: string | null;
   /** Por qué se perdió; solo en un negocio en una etapa perdida. */
   lostReason: LostReason | null;
@@ -1721,6 +1731,11 @@ export type PipelineSeguimiento = (typeof PIPELINE_SEGUIMIENTOS)[number];
  * probabilidad, monto ponderado y estado del seguimiento; se le añaden
  * los días en la etapa actual (del historial) y el responsable.
  *
+ * Trae también lo que el editor de la siguiente acción necesita (VEN-4):
+ * el día y la hora del vencimiento en la zona del espacio, y quién la
+ * hace. Así el tablero, la lista y la ficha leen la siguiente acción de
+ * esta única consulta y no de una segunda lectura de deal_pipeline.
+ *
  * Los filtros van en SQL, no en la pantalla (VEN-4/VEN-5):
  *   - `companyId`: solo los negocios de una empresa (la ficha no lee el
  *     pipeline entero para quedarse con tres).
@@ -1738,13 +1753,20 @@ export async function listPipeline(
   const { rows } = await tx.query<PipelineRowSql>(
     `SELECT p.id, p.company_id, p.company_name, p.name, p.stage_id, p.stage_label, p.stage_position,
             p.amount::text AS amount, p.currency::text AS currency, p.probability::text AS probability,
-            p.weighted_amount::text AS weighted_amount, p.next_action, p.next_action_due, p.due_state,
+            p.weighted_amount::text AS weighted_amount, p.next_action,
+            to_char(p.next_action_due AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_action_due,
+            to_char(p.next_action_due AT TIME ZONE w.tz, 'YYYY-MM-DD') AS next_action_due_date,
+            to_char(p.next_action_due AT TIME ZONE w.tz, 'HH24:MI') AS next_action_due_time,
+            d.next_action_user_id, coalesce(nullif(btrim(nu.name), ''), nu.email::text) AS next_action_user_name,
+            p.due_state,
             p.last_contact_at, p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
-            u.name AS owner_name, d.lost_reason,
+            d.owner_user_id, u.name AS owner_name, d.lost_reason,
             round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0)::int AS days_in_stage
      FROM deal_pipeline p
      JOIN deal d ON d.id = p.id
+     CROSS JOIN ${WORKSPACE_TZ} w
      LEFT JOIN app_user u ON u.id = d.owner_user_id
+     LEFT JOIN app_user nu ON nu.id = d.next_action_user_id
      LEFT JOIN LATERAL (
        SELECT changed_at FROM deal_stage_history
        WHERE deal_id = p.id AND to_stage_id = p.stage_id
@@ -2274,9 +2296,11 @@ interface PipelineRowSql {
   id: string; company_id: string; company_name: string; name: string; stage_id: string;
   stage_label: string; stage_position: number; amount: string | null; currency: string;
   probability: string; weighted_amount: string | null; next_action: string | null;
-  next_action_due: string | null; due_state: DueState; last_contact_at: string | null;
+  next_action_due: string | null; next_action_due_date: string | null; next_action_due_time: string | null;
+  next_action_user_id: string | null; next_action_user_name: string | null;
+  due_state: DueState; last_contact_at: string | null;
   expected_close_date: string | null; is_won: boolean; is_lost: boolean;
-  owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
+  owner_user_id: string | null; owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
 }
 
 function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
@@ -2294,12 +2318,17 @@ function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
     weightedAmount: r.weighted_amount,
     nextAction: r.next_action,
     nextActionDue: r.next_action_due,
+    nextActionDueDate: r.next_action_due_date,
+    nextActionDueTime: r.next_action_due_time,
+    nextActionUserId: r.next_action_user_id,
+    nextActionUserName: r.next_action_user_name,
     dueState: r.due_state,
     lastContactAt: r.last_contact_at,
     expectedCloseDate: r.expected_close_date,
     isWon: r.is_won,
     isLost: r.is_lost,
     daysInStage: Number(r.days_in_stage ?? 0),
+    ownerUserId: r.owner_user_id,
     ownerName: r.owner_name,
     lostReason: r.is_lost ? r.lost_reason : null,
   };

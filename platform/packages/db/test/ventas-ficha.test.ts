@@ -17,12 +17,13 @@ import {
   FichaError,
   completeNextAction,
   getCompanyChain,
+  listChainInvoices,
   listCompanyActivity,
   listCompanySignals,
   listDueToday,
-  listNextActions,
   listNicheNames,
   logActivity,
+  nextActionOf,
   setNextAction,
 } from '../src/queries/ventas-ficha.ts';
 import { CompanyNotFound, DealNotFound, listPipeline } from '../src/queries/ventas.ts';
@@ -234,12 +235,26 @@ describe('VEN-5 · registrar una actividad', () => {
 });
 
 describe('VEN-4 · la siguiente acción', () => {
+  /** La siguiente acción de cada negocio abierto, leída como la leen el tablero y la ficha: de listPipeline. */
+  const acciones = async (companyId?: string) =>
+    (await laura((tx) => listPipeline(tx, companyId ? { companyId } : {}))).flatMap((d) => nextActionOf(d) ?? []);
+
+  test('listPipeline trae lo que el editor necesita, y un negocio cerrado no tiene siguiente acción', async () => {
+    const tablero = await laura((tx) => listPipeline(tx));
+    const cerrado = tablero.find((d) => d.id === DEAL_CAFE_COLD_BREW);
+    assert.ok(cerrado && (cerrado.isWon || cerrado.isLost));
+    assert.equal(nextActionOf(cerrado), null);
+    const abierto = tablero.find((d) => d.id === DEAL_CAFE_RENOVACION);
+    assert.ok(abierto);
+    assert.match(abierto.nextActionDue ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, 'el instante sale como ISO en UTC');
+  });
+
   test('se fija con día y hora en la zona del espacio, y el texto nuevo deja de ser «del producto»', async () => {
     const manana = diaEnBogota(1);
     await laura((tx) =>
       setNextAction(tx, DEAL_OLLA, { action: 'Llamar a Sofía', dueDate: manana, dueTime: '09:30', responsibleUserId: USER_LAURA }),
     );
-    const fila = (await laura((tx) => listNextActions(tx))).find((r) => r.dealId === DEAL_OLLA);
+    const fila = (await acciones()).find((r) => r.dealId === DEAL_OLLA);
     assert.ok(fila);
     assert.equal(fila.action, 'Llamar a Sofía');
     assert.equal(fila.dueDate, manana);
@@ -255,7 +270,7 @@ describe('VEN-4 · la siguiente acción', () => {
   test('sin hora, vence a las 15:00 locales, como las que pone el producto', async () => {
     const manana = diaEnBogota(1);
     const r = await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Enviar el pitch', dueDate: manana }));
-    const fila = (await laura((tx) => listNextActions(tx, { companyId: '00000002-0000-4000-8000-0000000000e8' })))[0];
+    const fila = (await acciones('00000002-0000-4000-8000-0000000000e8'))[0];
     assert.equal(fila?.dueTime, '15:00');
     assert.equal(fila?.dueAt, `${manana}T20:00:00Z`);
     assert.equal(r.dueAt, fila?.dueAt, 'devuelve el instante guardado');
@@ -266,7 +281,7 @@ describe('VEN-4 · la siguiente acción', () => {
     const r = await laura((tx) => setNextAction(tx, DEAL_OLLA, { action: 'Enviar el pitch', dueDate: hoy }));
     assert.ok(Date.parse(r.dueAt) > Date.now(), `${r.dueAt} es futuro`);
     assert.match(r.dueAt, /T\d{2}:00:00Z$/, 'en punto');
-    const fila = (await laura((tx) => listNextActions(tx, { companyId: '00000002-0000-4000-8000-0000000000e8' })))[0];
+    const fila = (await acciones('00000002-0000-4000-8000-0000000000e8'))[0];
     assert.notEqual(fila?.dueState, 'vencido');
   });
 
@@ -297,7 +312,7 @@ describe('VEN-4 · la siguiente acción', () => {
   test('«Hecha» la deja en la historia y el negocio queda sin siguiente acción, contado en «Para hoy»', async () => {
     const antes = await laura((tx) => listDueToday(tx));
     await laura((tx) => completeNextAction(tx, DEAL_OLLA, (a) => `Hecho: ${a}`));
-    const fila = (await laura((tx) => listNextActions(tx))).find((r) => r.dealId === DEAL_OLLA);
+    const fila = (await acciones()).find((r) => r.dealId === DEAL_OLLA);
     assert.equal(fila?.action, null);
     assert.equal(fila?.dueState, 'sin_fecha');
     assert.equal(fila?.responsibleUserId, USER_LAURA, 'el responsable se conserva para la siguiente');
@@ -384,6 +399,32 @@ describe('VEN-5 · lo que sabemos y la cadena', () => {
     assert.ok(coldBrew.invoices.some((i) => i.id === INVOICE_FV_2026_010), 'y la factura de la campaña');
     const ajena = await ajeno((tx) => getCompanyChain(tx, COMPANY_CAFE_ALMA));
     assert.deepEqual(ajena, { byDeal: {}, loose: { quotes: [], campaigns: [], invoices: [] } });
+    // El estado de la campaña llega tipado (CampaignStatus), sin cast en la pantalla.
+    assert.ok(coldBrew.campaigns.every((c) => c.status !== null));
+  });
+
+  test('la cadena trae el estado de Finanzas de TODAS sus facturas, aunque la marca tenga más de 200', async () => {
+    // Una agencia con un cliente recurrente: 250 facturas sueltas más las del seed.
+    await t.admin(`
+      INSERT INTO invoice (workspace_id, company_id, number, currency, subtotal, total, issued_on, due_on, status)
+      SELECT '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'REC-' || lpad(n::text, 4, '0'), 'COP', 100, 100,
+             DATE '2024-01-01' + n, DATE '2024-01-31' + n, 'paid'
+        FROM generate_series(1, 250) AS n;
+    `);
+    try {
+      const { chain, invoices } = await laura(async (tx) => {
+        const c = await getCompanyChain(tx, COMPANY_CAFE_ALMA);
+        return { chain: c, invoices: await listChainInvoices(tx, COMPANY_CAFE_ALMA, c) };
+      });
+      const enCadena = [chain.loose, ...Object.values(chain.byDeal)].flatMap((l) => l.invoices.map((i) => i.id));
+      assert.ok(enCadena.length > 250);
+      assert.equal(invoices.missing, 0, 'no se descarta ninguna en silencio');
+      assert.equal(invoices.byId.size, enCadena.length);
+      assert.ok(invoices.byId.get(INVOICE_FV_2026_010), 'la de la campaña, que es de las más recientes');
+      assert.ok([...invoices.byId.values()].some((i) => i.number === 'REC-0001'), 'y la más vieja, que caía fuera de la primera página');
+    } finally {
+      await t.admin(`DELETE FROM invoice WHERE number LIKE 'REC-%'`);
+    }
   });
 
   test('los nombres de los nichos salen del catálogo', async () => {

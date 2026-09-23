@@ -26,6 +26,7 @@ const ctx: SeguimientoContexto = {
   tomorrow: "2026-09-24",
   now: "17:10",
   nextHour: "18:00",
+  zoneName: "hora estándar de Colombia",
 };
 
 const vencida: NextActionRow = {
@@ -121,6 +122,12 @@ describe("SiguienteAccion", () => {
     });
     expect(await screen.findByRole("status")).toHaveTextContent("Siguiente acción guardada.");
     expect(screen.queryByRole("form")).toBeNull();
+  });
+
+  it("el campo «Hora» nombra la zona del espacio, no «tu zona»: quien escribe puede estar en otra", () => {
+    render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    expect(screen.getByLabelText(/Hora/)).toHaveAccessibleDescription("En hora estándar de Colombia.");
   });
 
   it("Esc cancela y el foco vuelve a la línea, no a <body>", () => {

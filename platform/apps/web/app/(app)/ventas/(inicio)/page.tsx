@@ -8,7 +8,7 @@ import {
   listSignals,
   type PipelineSeguimiento,
 } from "@mc/db/queries/ventas";
-import { getLocalDates, listNextActions } from "@mc/db/queries/ventas-ficha";
+import { getLocalDates, nextActionOf } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor } from "@/lib/format";
@@ -23,7 +23,7 @@ import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 import { pipelineForma, tabKey } from "../_lib/estado";
 import { ModuleTabs } from "../_componentes/pestanas";
-import { opcionesDeResponsable } from "../_seguimiento/datos";
+import { contextoDeSeguimiento } from "../_seguimiento/datos";
 import { ParaHoy } from "../_seguimiento/para-hoy";
 
 export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
@@ -48,13 +48,13 @@ export default async function VentasPage({
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, deals, stages, nextActions, owners, dates } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, deals, stages, owners, dates } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
     deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
-    // La siguiente acción de cada negocio abierto, editable en la tarjeta (VEN-4).
-    nextActions: vista === "pipeline" ? await listNextActions(tx) : [],
+    // La siguiente acción de cada negocio abierto, editable en la tarjeta
+    // (VEN-4), sale de listPipeline: aquí solo las personas y el reloj.
     owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
     dates: vista === "pipeline" ? await getLocalDates(tx) : null,
   }));
@@ -110,7 +110,7 @@ export default async function VentasPage({
                   kpis.wonQuarterNoAmountCount > 0 ? f.int(kpis.wonQuarterNoAmountCount) : undefined,
                 )
           }
-          info={[...t.kpis.wonInfo]}
+          info={t.kpis.wonInfo(f.zoneName())}
           infoLabel={t.kpis.infoLabel(t.kpis.won)}
         />
       </KpiRow>
@@ -126,7 +126,7 @@ export default async function VentasPage({
             f={f}
             forma={forma}
             filtro={filtro}
-            seguimiento={dates ? { rows: nextActions, ctx: { owners: opcionesDeResponsable(owners, nextActions), ...dates } } : undefined}
+            ctx={dates ? contextoDeSeguimiento(owners, deals.flatMap((d) => nextActionOf(d) ?? []), dates, f) : null}
           />
         )}
       </div>

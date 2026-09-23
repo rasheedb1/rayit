@@ -2,7 +2,7 @@
  * Corre los seguimientos de Ventas una vez, a mano, sin el runner:
  *
  *   pnpm --filter @mc/worker run job:seguimientos         respeta la hora local de cada espacio
- *   pnpm --filter @mc/worker run job:seguimientos -- --ya avisa ya, a cualquier hora
+ *   pnpm --filter @mc/worker run job:seguimientos -- --ya avisa ya, a cualquier hora, también lo tocado hoy
  *
  * Usa la misma conexión que el worker (DATABASE_URL_DIRECT, sesión
  * estable y SET ROLE mc_worker) y la misma función que el job programado,

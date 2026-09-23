@@ -1,3 +1,4 @@
+import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX } from "@mc/core";
 import type { ActivityKind, FichaErrorCode, LoggableActivityKind } from "@mc/db/queries/ventas-ficha";
 
 /** Las dos formas de un conteo; cuál toca la elige Intl.PluralRules del idioma del espacio. */
@@ -64,7 +65,13 @@ export const FICHA = {
     actionPlaceholder: "Llamar a Sofía para cerrar fechas",
     dueDate: "Cuándo",
     dueTime: "Hora",
-    dueTimeHelp: "En tu zona horaria.",
+    /**
+     * La hora se guarda en la zona del ESPACIO, no en la de quien escribe:
+     * se nombra («En hora estándar de Colombia.»), porque una colaboradora
+     * en Madrid dentro de un espacio de Bogotá agendaría con 7 horas de
+     * diferencia si leyera «tu zona».
+     */
+    dueTimeHelp: (zona: string) => `En ${zona}.`,
     responsible: "Quién",
     noResponsible: "Sin responsable",
     save: "Guardar",
@@ -99,11 +106,12 @@ export const FICHA = {
 
   /** El pipeline filtrado desde «Para hoy» (?seguimiento=…). */
   filtro: {
-    sin_accion: "Solo los negocios abiertos sin siguiente acción",
+    /** Cuenta como «Para hoy»: sin acción, o con acción pero sin fecha (listPipeline, listDueToday). */
+    sin_accion: "Solo los negocios abiertos sin siguiente acción o sin fecha",
     para_hoy: "Solo los seguimientos vencidos y de hoy",
     clear: "Ver todos",
     empty: {
-      sin_accion: { title: "Todos tienen siguiente acción", description: "Cada negocio abierto sabe qué sigue y cuándo." },
+      sin_accion: { title: "Todos tienen siguiente acción con fecha", description: "Cada negocio abierto sabe qué sigue y cuándo." },
       para_hoy: { title: "Nada vencido ni para hoy", description: "Los seguimientos están al día." },
     },
   },
@@ -127,13 +135,23 @@ export const FICHA = {
     dealAll: "Todos los abiertos",
     dealNone: "Ninguno",
     dealHelp: "Una llamada, un correo o una reunión cuentan como último contacto del negocio.",
+    /** La etapa del negocio elegido, debajo del campo: «En conversación.» */
+    dealStage: (stage: string) => `Etapa: ${stage}.`,
     contact: "Con quién",
     contactNone: "Nadie",
     occurredOn: "Cuándo",
     submit: "Registrar",
     shortcut: "⌘ o Ctrl + Enter registra",
+    /**
+     * Las teclas que eligen el tipo, como en Superhuman: la inicial de cada
+     * palabra EN ESTE IDIOMA (Nota, Llamada, Correo, Reunión). Viven aquí,
+     * junto a los nombres, para que al traducir cambien juntos: en inglés
+     * serían N, C, E y M (Note, Call, Email, Meeting). Una letra por tipo y
+     * sin repetir (lo comprueba registro.test.tsx).
+     */
+    teclas: { note: "n", call: "l", email_sent: "c", meeting: "r" } satisfies Record<LoggableActivityKind, string>,
     /** Los atajos de una letra solo valen con el foco en el bloque «Actividad» (WCAG 2.1.4). */
-    keys: "Con el foco en Actividad: N nota · L llamada · C correo · R reunión",
+    keys: (atajos: string) => `Con el foco en Actividad: ${atajos}`,
     logged: {
       note: "Nota guardada.",
       call: "Llamada registrada. Cuenta como último contacto.",
@@ -220,20 +238,23 @@ export const FICHA = {
     /** Un negocio ganado o perdido sin cotización: ya no va a llegar. */
     noQuoteClosed: "Sin cotización",
     loose: "Sin negocio",
+    /** Facturas de la cadena que no se alcanzaron a leer (más de 2.000 de una marca). */
+    moreInvoices: (n: number, c: Conteo) =>
+      contar(n, c.int(n), c.plural, { one: "y {n} factura más en Finanzas", other: "y {n} facturas más en Finanzas" }),
     looseHelp: "Cotizaciones, campañas o facturas de esta marca que no cuelgan de ningún negocio.",
   },
 
   /** Los errores de @mc/db/queries/ventas-ficha, por su código (FichaError.code). */
   errores: {
     DealClosed: "Ese negocio ya se cerró: no tiene siguiente acción.",
-    InvalidNextAction: "Escribe qué toca hacer, en hasta 200 caracteres.",
+    InvalidNextAction: `Escribe qué toca hacer, en hasta ${NEXT_ACTION_MAX} caracteres.`,
     InvalidDueDate: "Elige un día y una hora válidos.",
     PastDueDate: "Ese día ya pasó. Elige hoy o uno que venga.",
     PastDueTime: "Esa hora ya pasó. Elige una más tarde o mañana.",
     InvalidResponsible: "Elige a alguien de tu espacio.",
     NoNextAction: "Ese negocio no tiene una siguiente acción que marcar.",
     InvalidActivityKind: "Elige nota, llamada, correo o reunión.",
-    InvalidActivityBody: "Escribe qué pasó (hasta 4000 caracteres).",
+    InvalidActivityBody: `Escribe qué pasó (hasta ${ACTIVITY_BODY_MAX} caracteres).`,
     InvalidActivityDate: "Elige hoy o un día anterior.",
     DealNotInCompany: "Ese negocio no es de esta empresa.",
     ContactNotInCompany: "Ese contacto no es de esta empresa.",

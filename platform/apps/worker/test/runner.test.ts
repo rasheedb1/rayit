@@ -253,8 +253,18 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     secrets: new InMemorySecretStore(), refreshers: refresherRegistry([]), env: {},
   });
   try {
+    // El esperado sale del catálogo, como en la prueba 1: una migración
+    // que añada un job con cron no tiene que tocar esta prueba.
+    const catalogo = await h.db.query<{ crons: number | string; sin_handler: number | string }>(
+      `SELECT count(*) FILTER (WHERE enabled AND default_cron IS NOT NULL)::int AS crons,
+              count(*) FILTER (WHERE NOT (id = ANY($1::text[])))::int AS sin_handler
+         FROM job_definition WHERE id NOT LIKE 'test.%'`,
+      [allJobs.map((j) => j.id)],
+    );
+    const crons = Number(catalogo.rows[0]!.crons);
+    const sinHandler = Number(catalogo.rows[0]!.sin_handler);
     const after = await second.boss.getSchedules();
-    assert.equal(after.length, 18, 'mismas 18 filas de schedule');
+    assert.equal(after.length, crons, `mismas ${crons} filas de schedule`);
     assert.equal(after.filter((s) => s.name === 'oauth.refresh').length, 1);
     assert.equal(after.find((s) => s.name === 'oauth.refresh')?.cron, '*/5 * * * *');
     const updated = sink.records().find((r) => r['msg'] === 'schedule actualizado');
@@ -262,9 +272,9 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     assert.equal(updated?.['previous'], '*/15 * * * *');
     assert.equal(sink.records().filter((r) => r['msg'] === 'schedule creado').length, 0, 'ningún schedule se creó de nuevo');
     // El segundo worker no registra los jobs test.*: esos 5 sí quedan skipped
-    // (ahora no tienen handler). Los 19 de 0009 sin handler no se repiten.
+    // (ahora no tienen handler). Los del catálogo sin handler no se repiten.
     const skipped = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id NOT LIKE 'test.%'`);
-    assert.equal(Number(skipped.rows[0]!.n), 19, 'el reinicio no vuelve a insertar filas skipped');
+    assert.equal(Number(skipped.rows[0]!.n), sinHandler, 'el reinicio no vuelve a insertar filas skipped');
     const skippedTest = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id LIKE 'test.%'`);
     assert.equal(Number(skippedTest.rows[0]!.n), 5, 'los que perdieron su handler sí se anotan');
   } finally {

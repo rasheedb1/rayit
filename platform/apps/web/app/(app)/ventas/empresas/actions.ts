@@ -13,12 +13,11 @@
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX } from "@mc/core";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
-  ACTIVITY_BODY_MAX,
   FichaError,
   LOGGABLE_ACTIVITY_KINDS,
-  NEXT_ACTION_MAX,
   completeNextAction,
   getCompanyName,
   listCompanyActivity,

@@ -2,15 +2,32 @@
  * sales.follow_ups · los seguimientos de Ventas (VEN-4).
  *
  * Deja en `notification`, para cada negocio ABIERTO con siguiente acción:
- *   - 'deal_due'      cuando la acción vence hoy (en la zona del espacio)
- *   - 'deal_overdue'  cuando ya venció
+ *   - 'deal_due'      la mañana del día en que la acción vence (en la zona
+ *                     del espacio)
+ *   - 'deal_overdue'  la mañana siguiente, si la acción de un día anterior
+ *                     sigue ahí
  * una sola vez por fecha de vencimiento. Si alguien le mueve la fecha y
  * vuelve a vencer, sí hay aviso nuevo: es otro compromiso.
  *
  * «Cada mañana», en la mañana de CADA espacio: job_definition lo corre
  * cada hora (0034) y aquí un espacio solo se procesa desde las
- * SEGUIMIENTOS_HORA_LOCAL de su zona. Las corridas de después no repiten
- * nada; lo que vence a media tarde avisa a la hora siguiente.
+ * SEGUIMIENTOS_HORA_LOCAL de su zona. Por eso:
+ *   - lo vencido se avisa por día, no por hora: una acción que vence hoy
+ *     a las 20:00 da «Vence hoy» a las 7:05 y, si sigue sin hacerse,
+ *     «Seguimiento vencido» mañana a las 7:05; nunca esta noche. Dos
+ *     avisos por compromiso como mucho, y en días distintos;
+ *   - «Vence hoy» no avisa lo que alguien tocó hoy después de la hora de
+ *     aviso (deal.updated_at): quien escribe a las 10:00 una acción para
+ *     hoy acaba de decidirla y no necesita que se la recuerden a las
+ *     11:05. Si mañana sigue ahí, le llega el vencido;
+ *   - si el worker no corrió en la mañana, la primera corrida del día
+ *     pone al día lo que faltaba, aunque sea por la tarde. Es la única
+ *     forma de que un aviso llegue fuera de la mañana, y es mejor que
+ *     perderlo.
+ *
+ * La zona de cada espacio se resuelve contra pg_timezone_names: una zona
+ * mal escrita en un espacio ('Bogota') se cuenta en UTC para ese espacio
+ * y no tumba la corrida de todos (0035 además impide guardarla).
  *
  * Cómo no duplica, sin columna nueva en notification:
  *   - un 'deal_overdue' del negocio creado DESPUÉS de su vencimiento
@@ -27,11 +44,10 @@
  * negocio, y si no a todo el espacio (user_id NULL).
  *
  * «Vencido» y «vence hoy» se cuentan aquí con el instante de la corrida
- * ($1) y no se leen de deal_pipeline.due_state, que usa now(): es la
- * única copia de ese criterio fuera de la vista (0034), y existe para
- * que una corrida con `now` fijo (las pruebas, una corrida atrasada)
- * decida con SU hora. Lo que sí es igual en los tres sitios: un negocio
- * con fecha y sin texto no avisa (tampoco sale en «Para hoy»).
+ * ($1) y no se leen de deal_pipeline.due_state, que usa now(): existe
+ * para que una corrida con `now` fijo (las pruebas, una corrida
+ * atrasada) decida con SU hora. Lo que sí es igual en los tres sitios:
+ * un negocio con fecha y sin texto no avisa (tampoco sale en «Para hoy»).
  *
  * Es una función pura sobre la base (`runSeguimientos(db, now)`) para
  * poder probarla en pglite y correrla a mano
@@ -58,7 +74,11 @@ export const SEGUIMIENTOS_TEXTOS = {
 } as const;
 
 export interface SeguimientosOptions {
-  /** Hora local desde la que se avisa. 0 avisa a cualquier hora (la corrida a mano con --ya). */
+  /**
+   * Hora local desde la que se avisa. 0 avisa a cualquier hora y avisa
+   * también lo tocado hoy: es la corrida a mano con --ya, que quiere ver
+   * todo lo pendiente.
+   */
   horaLocal?: number;
 }
 
@@ -75,20 +95,33 @@ export interface SeguimientosResult {
  * Los negocios abiertos con siguiente acción, con la zona de su espacio,
  * de los espacios que ya pasaron su hora de aviso. `$1` es el instante de
  * la corrida y `$2` la hora local.
+ *
+ *   - `tz`        la zona del espacio, validada contra el catálogo (UTC si
+ *                 no existe);
+ *   - `hoy`       el día local de la corrida;
+ *   - `aviso_at`  el instante de hoy a la hora de aviso, en esa zona.
  */
 const CANDIDATOS = `
+  zonas AS MATERIALIZED (SELECT name FROM pg_timezone_names),
+  espacios AS (
+    SELECT w.id, coalesce(z.name, 'UTC') AS tz
+      FROM workspace w
+      LEFT JOIN zonas z ON z.name = w.timezone
+  ),
   candidatos AS (
     SELECT d.id, d.workspace_id, d.company_id, d.name, btrim(d.next_action) AS next_action, d.next_action_due,
-           co.name AS company_name, coalesce(d.next_action_user_id, d.owner_user_id) AS user_id,
-           coalesce(nullif(w.timezone, ''), 'UTC') AS tz
+           d.updated_at, co.name AS company_name, coalesce(d.next_action_user_id, d.owner_user_id) AS user_id,
+           e.tz,
+           ($1::timestamptz AT TIME ZONE e.tz)::date AS hoy,
+           (date_trunc('day', $1::timestamptz AT TIME ZONE e.tz) + make_interval(hours => $2::int)) AT TIME ZONE e.tz AS aviso_at
       FROM deal d
       JOIN pipeline_stage st ON st.id = d.stage_id
       JOIN company co ON co.id = d.company_id
-      JOIN workspace w ON w.id = d.workspace_id
+      JOIN espacios e ON e.id = d.workspace_id
      WHERE NOT st.is_won AND NOT st.is_lost
        AND nullif(btrim(d.next_action), '') IS NOT NULL
        AND d.next_action_due IS NOT NULL
-       AND ($1::timestamptz AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::time >= make_time($2::int, 0, 0)
+       AND ($1::timestamptz AT TIME ZONE e.tz)::time >= make_time($2::int, 0, 0)
   )`;
 
 export async function runSeguimientos(db: JobDatabase, now: Date, opts: SeguimientosOptions = {}): Promise<SeguimientosResult> {
@@ -104,7 +137,7 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
               format($3::text, c.next_action, c.company_name, c.name), format($4::text, c.next_action, c.company_name, c.name),
               'deal', c.id, '/ventas/empresas/' || c.company_id, $1::timestamptz
          FROM candidatos c
-        WHERE c.next_action_due < $1::timestamptz
+        WHERE (c.next_action_due AT TIME ZONE c.tz)::date < c.hoy
           AND NOT EXISTS (
             SELECT 1 FROM notification n
              WHERE n.workspace_id = c.workspace_id AND n.kind = 'deal_overdue'
@@ -121,8 +154,8 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
               format($3::text, c.next_action, c.company_name, c.name), format($4::text, c.next_action, c.company_name, c.name),
               'deal', c.id, '/ventas/empresas/' || c.company_id, $1::timestamptz
          FROM candidatos c
-        WHERE c.next_action_due >= $1::timestamptz
-          AND (c.next_action_due AT TIME ZONE c.tz)::date = ($1::timestamptz AT TIME ZONE c.tz)::date
+        WHERE (c.next_action_due AT TIME ZONE c.tz)::date = c.hoy
+          AND ($2::int = 0 OR c.updated_at < c.aviso_at)
           AND NOT EXISTS (
             SELECT 1 FROM notification n
              WHERE n.workspace_id = c.workspace_id AND n.kind = 'deal_due'

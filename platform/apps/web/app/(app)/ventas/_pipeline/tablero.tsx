@@ -6,7 +6,6 @@ import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
-import { Pill, type PillKind } from "@/components/ui/pill";
 import { formatMoney } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
@@ -28,20 +27,20 @@ export interface BoardDeal {
   amountText: string | null;
   /** La moneda del negocio: la del monto que se pide al ganarlo si no tiene. */
   currency: string;
-  nextAction: string | null;
-  nextActionDueText: string | null;
-  /** Null en los cerrados: a un negocio ganado no le vence nada. */
-  due: { kind: PillKind; text: string } | null;
-  needsNextAction: boolean;
   /** A dónde lleva «Cotizar»; null en los cerrados. */
   quoteHref: string | null;
   /** Por qué se perdió («Por el precio»); null si no está perdido o no se dijo. */
   lostReasonText: string | null;
   /**
-   * La siguiente acción editable en la tarjeta (VEN-4); null en los
-   * cerrados. Sin ella (o sin `ctx` en el tablero) se lee como texto.
+   * La siguiente acción, editable en la tarjeta (VEN-4); null en los
+   * cerrados, que no tienen: a un negocio ganado no le vence nada.
    */
-  siguiente?: SiguienteAccionData | null;
+  siguiente: SiguienteAccionData | null;
+}
+
+/** Un negocio abierto sin siguiente acción: la tarjeta lo marca en ámbar y lo dice. */
+export function sinSiguienteAccion(deal: Pick<BoardDeal, "siguiente">): boolean {
+  return deal.siguiente !== null && deal.siguiente.action === null;
 }
 
 /** Una columna con su cabecera ya contada y sumada en SQL. */
@@ -95,7 +94,7 @@ export function PipelineBoard({
 }: {
   deals: BoardDeal[];
   stages: BoardStage[];
-  ctx?: SeguimientoContexto;
+  ctx: SeguimientoContexto | null;
   locale?: string;
 }) {
   const t = MESSAGES.pipeline;
@@ -259,7 +258,7 @@ function DealCard({
 }: {
   deal: BoardDeal;
   stages: BoardStage[];
-  ctx?: SeguimientoContexto;
+  ctx: SeguimientoContexto | null;
   locale?: string;
   dragging: boolean;
   onDragStart: () => void;
@@ -281,6 +280,7 @@ function DealCard({
   const askingWon = asking?.kind === "won";
   /** Mientras se escribe la siguiente acción, la tarjeta no se arrastra: seleccionar texto la movía. */
   const [editingNext, setEditingNext] = useState(false);
+  const sinAccion = sinSiguienteAccion(deal);
 
   // «¿Por cuánto lo ganaste?» aparece debajo del menú: el foco va al
   // monto, como el motivo de «Perdido» (que lleva autoFocus en su
@@ -336,14 +336,14 @@ function DealCard({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
-      className={`relative cursor-grab rounded-md border bg-surface p-3 active:cursor-grabbing ${deal.needsNextAction ? "border-warn" : "border-border"} ${
+      className={`relative cursor-grab rounded-md border bg-surface p-3 active:cursor-grabbing ${sinAccion ? "border-warn" : "border-border"} ${
         dragging ? "opacity-50" : ""
       }`}
       // El borde ámbar no puede ser la única señal: quien no distingue
       // el color necesita leerlo. `relative` no es decorativo: sin él, la
       // etiqueta sr-only del menú (absolute) escapa del scroll del
       // tablero y ensancha la página entera en el móvil.
-      aria-label={deal.needsNextAction ? `${deal.companyName}, ${deal.name}. ${t.noNextAction}` : `${deal.companyName}, ${deal.name}`}
+      aria-label={sinAccion ? `${deal.companyName}, ${deal.name}. ${t.noNextAction}` : `${deal.companyName}, ${deal.name}`}
     >
       <Link href={`/ventas/empresas/${deal.companyId}`} className="text-sm font-medium leading-5 text-ink hover:underline" draggable={false}>
         {deal.companyName}
@@ -353,31 +353,15 @@ function DealCard({
 
       <p className="mt-2 whitespace-nowrap text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {/* Con la siguiente acción editable (VEN-4), su pastilla es la
-            única del vencimiento: dos («Al día» aquí y «Hoy» abajo) se
-            contradecían mientras 0034 no estaba aplicada. */}
-        {deal.due && !(deal.siguiente && ctx) && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}
-        <span className="text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</span>
-      </div>
+      {/* La pastilla del vencimiento es la de la siguiente acción, abajo: una sola. */}
+      <p className="mt-2 text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</p>
 
       {deal.lostReasonText && <p className="mt-2 text-xs leading-4 text-muted">{deal.lostReasonText}</p>}
 
-      {deal.siguiente && ctx ? (
+      {deal.siguiente && ctx && (
         <div className="mt-2 cursor-auto">
           <SiguienteAccion data={deal.siguiente} ctx={ctx} compact onEditingChange={setEditingNext} />
         </div>
-      ) : (deal.nextAction || deal.needsNextAction) && (
-        <p className="mt-2 text-xs leading-4 text-ink-2">
-          {deal.nextAction ? (
-            <>
-              {deal.nextAction}
-              {deal.nextActionDueText && <span className="text-muted"> · {deal.nextActionDueText}</span>}
-            </>
-          ) : (
-            <span className="text-warn">{t.noNextAction}</span>
-          )}
-        </p>
       )}
 
       {deal.quoteHref && (

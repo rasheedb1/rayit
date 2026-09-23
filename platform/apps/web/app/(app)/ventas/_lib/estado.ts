@@ -141,13 +141,6 @@ export function lostReasonText(reason: LostReason | null): string | null {
   return reason ? MESSAGES.motivosPerdida[reason] : null;
 }
 
-/**
- * Un negocio abierto sin siguiente acción se marca. Los cerrados no:
- * a un negocio ganado no le falta nada.
- */
-export function needsNextAction(deal: { nextAction: string | null; isWon: boolean; isLost: boolean }): boolean {
-  return !deal.isWon && !deal.isLost && !deal.nextAction;
-}
 
 // ---------------------------------------------------------------------
 // Encaje

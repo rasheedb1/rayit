@@ -6,7 +6,13 @@
  * notificación y volver a correrlo no la duplica. Además: lo que vence
  * hoy avisa como 'deal_due'; lo cerrado, lo futuro y lo que no tiene
  * acción no avisan; cada aviso va al espacio de su negocio y a su
- * responsable; y «cada mañana» es la mañana de cada espacio.
+ * responsable; «cada mañana» es la mañana de cada espacio, y lo vencido
+ * se avisa la mañana siguiente, no la misma noche; una zona mal escrita
+ * en un espacio no deja sin avisos a los demás.
+ *
+ * deal.updated_at lo pone un disparador con el reloj real; las pruebas
+ * corren con un `now` fijo, así que cada negocio lo fija a mano
+ * (`tocar`) para que «lo tocado hoy» no dependa del día en que corren.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,6 +40,14 @@ const DEAL_GANADO = '0000000a-0000-4000-8000-000000000d04';
 const DEAL_SIN_ACCION = '0000000a-0000-4000-8000-000000000d05';
 const DEAL_MADRID = '0000000a-0000-4000-8000-000000000d06';
 const DEAL_HONOLULU = '0000000a-0000-4000-8000-000000000d07';
+const DEAL_ESCRITO_HOY = '0000000a-0000-4000-8000-000000000d08';
+const WS_ROTO = '0000000a-0000-4000-8000-000000000004';
+const COMPANY_ROTO = '0000000a-0000-4000-8000-0000000000c4';
+const DEAL_ROTO = '0000000a-0000-4000-8000-000000000d09';
+const DEAL_BOGOTA_2 = '0000000a-0000-4000-8000-000000000d0a';
+
+/** Antes de todas las corridas de la prueba: nadie tocó los negocios «hoy». */
+const TOCADO_ANTES = '2026-09-01T00:00:00Z';
 
 let db: PgliteDatabase;
 
@@ -57,6 +71,15 @@ async function avisos(): Promise<Aviso[]> {
   return rows;
 }
 
+/** Cambia un negocio fijando updated_at, sin el disparador que lo pone con el reloj real. */
+async function tocar(id: string, set: string, updatedAt: string): Promise<void> {
+  await db.raw.exec(`
+    ALTER TABLE deal DISABLE TRIGGER deal_updated;
+    UPDATE deal SET ${set}, updated_at = '${updatedAt}' WHERE id = '${id}';
+    ALTER TABLE deal ENABLE TRIGGER deal_updated;
+  `);
+}
+
 before(async () => {
   db = await openTestDatabase();
   await db.raw.exec(`
@@ -76,14 +99,14 @@ before(async () => {
       ('${COMPANY_HONOLULU}', 'Marca de Honolulu', '${WS_HONOLULU}');
     INSERT INTO company_link (workspace_id, company_id) VALUES
       ('${WS_BOGOTA}', '${COMPANY}'), ('${WS_MADRID}', '${COMPANY_MADRID}'), ('${WS_HONOLULU}', '${COMPANY_HONOLULU}');
-    INSERT INTO deal (id, workspace_id, company_id, owner_user_id, next_action_user_id, name, stage_id, currency, next_action, next_action_due) VALUES
-      ('${DEAL_VENCIDO}',    '${WS_BOGOTA}', '${COMPANY}', '${USER_LAURA}', '${USER_ANA}', 'Renovación Q4', 'conversacion', 'COP', 'Llamar a Valentina', '2026-09-22T20:00:00Z'),
-      ('${DEAL_HOY}',        '${WS_BOGOTA}', '${COMPANY}', '${USER_LAURA}', NULL, 'Lanzamiento', 'propuesta', 'COP', 'Seguimiento a la cotización', '2026-09-23T20:00:00Z'),
-      ('${DEAL_FUTURO}',     '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Navidad', 'nuevo', 'COP', 'Enviar pitch', '2026-09-26T20:00:00Z'),
-      ('${DEAL_GANADO}',     '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Cold brew', 'ganado', 'COP', 'Cobrar la factura', '2026-09-20T20:00:00Z'),
-      ('${DEAL_SIN_ACCION}', '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Sin plan', 'contactado', 'COP', NULL, '2026-09-20T20:00:00Z'),
-      ('${DEAL_MADRID}',     '${WS_MADRID}', '${COMPANY_MADRID}', NULL, NULL, 'Otoño', 'contactado', 'EUR', 'Enviar propuesta', '2026-09-21T09:00:00Z'),
-      ('${DEAL_HONOLULU}',   '${WS_HONOLULU}', '${COMPANY_HONOLULU}', NULL, NULL, 'Verano', 'contactado', 'USD', 'Escribir a la marca', '2026-09-21T09:00:00Z');
+    INSERT INTO deal (id, workspace_id, company_id, owner_user_id, next_action_user_id, name, stage_id, currency, next_action, next_action_due, updated_at) VALUES
+      ('${DEAL_VENCIDO}',    '${WS_BOGOTA}', '${COMPANY}', '${USER_LAURA}', '${USER_ANA}', 'Renovación Q4', 'conversacion', 'COP', 'Llamar a Valentina', '2026-09-22T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_HOY}',        '${WS_BOGOTA}', '${COMPANY}', '${USER_LAURA}', NULL, 'Lanzamiento', 'propuesta', 'COP', 'Seguimiento a la cotización', '2026-09-23T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_FUTURO}',     '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Navidad', 'nuevo', 'COP', 'Enviar pitch', '2026-10-26T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_GANADO}',     '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Cold brew', 'ganado', 'COP', 'Cobrar la factura', '2026-09-20T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_SIN_ACCION}', '${WS_BOGOTA}', '${COMPANY}', NULL, NULL, 'Sin plan', 'contactado', 'COP', NULL, '2026-09-20T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_MADRID}',     '${WS_MADRID}', '${COMPANY_MADRID}', NULL, NULL, 'Otoño', 'contactado', 'EUR', 'Enviar propuesta', '2026-09-21T09:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_HONOLULU}',   '${WS_HONOLULU}', '${COMPANY_HONOLULU}', NULL, NULL, 'Verano', 'contactado', 'USD', 'Escribir a la marca', '2026-09-21T09:00:00Z', '${TOCADO_ANTES}');
   `);
 });
 after(async () => {
@@ -155,17 +178,88 @@ test('«cada mañana» es la de cada espacio: Honolulu (4:00) espera a sus 7:00'
   assert.deepEqual(ya.dealIds, []);
 });
 
+test('una zona mal escrita en un espacio se cuenta en UTC y no deja sin avisos a los demás', async () => {
+  // Un dato de antes de 0035: el disparador ya no deja guardarlo, así que
+  // se escribe con el disparador apagado, como estaría en una base vieja.
+  await db.raw.exec(`
+    ALTER TABLE workspace DISABLE TRIGGER workspace_timezone_valida;
+    INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_ROTO}', 'seg-roto', 'Zona mal escrita', 'Bogota');
+    ALTER TABLE workspace ENABLE TRIGGER workspace_timezone_valida;
+    INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_ROTO}', 'Marca rota', '${WS_ROTO}');
+    INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_ROTO}', '${COMPANY_ROTO}');
+    INSERT INTO deal (id, workspace_id, company_id, name, stage_id, currency, next_action, next_action_due, updated_at) VALUES
+      ('${DEAL_ROTO}',     '${WS_ROTO}',   '${COMPANY_ROTO}', 'Con zona rota', 'contactado', 'COP', 'Llamar', '2026-09-22T20:00:00Z', '${TOCADO_ANTES}'),
+      ('${DEAL_BOGOTA_2}', '${WS_BOGOTA}', '${COMPANY}',      'Segundo',       'contactado', 'COP', 'Escribir a Juan', '2026-09-22T20:00:00Z', '${TOCADO_ANTES}');
+  `);
+  // 15:00 UTC: 10:00 en Bogotá. Antes, «time zone "Bogota" not recognized»
+  // tumbaba la corrida entera y el espacio de Bogotá tampoco recibía nada.
+  const r = await runSeguimientos(db, new Date('2026-09-23T15:00:00Z'));
+  assert.deepEqual([...r.dealIds].sort(), [DEAL_ROTO, DEAL_BOGOTA_2].sort());
+  const roto = (await avisos()).find((a) => a.entity_id === DEAL_ROTO);
+  assert.equal(roto?.workspace_id, WS_ROTO);
+});
+
+test('0035 no deja guardar una zona que Postgres no conoce, y sí una IANA', async () => {
+  await assert.rejects(
+    db.raw.exec(`UPDATE workspace SET timezone = 'Bogota' WHERE id = '${WS_BOGOTA}'`),
+    /zona horaria desconocida: «Bogota»/,
+  );
+  await assert.rejects(
+    db.raw.exec(`INSERT INTO workspace (id, slug, name, timezone) VALUES (gen_random_uuid(), 'seg-otra', 'Otra', 'UTC-5')`),
+    /zona horaria desconocida/,
+  );
+  // Un espacio con una zona vieja mal escrita puede cambiar otras cosas…
+  await db.raw.exec(`UPDATE workspace SET name = 'Zona mal escrita (renombrada)' WHERE id = '${WS_ROTO}'`);
+  // …y arreglar la zona.
+  await db.raw.exec(`UPDATE workspace SET timezone = 'America/Bogota' WHERE id = '${WS_ROTO}'`);
+  const { rows } = await db.raw.query<{ timezone: string }>(`SELECT timezone FROM workspace WHERE id = '${WS_ROTO}'`);
+  assert.equal(rows[0]?.timezone, 'America/Bogota');
+});
+
+test('lo vencido se avisa la mañana siguiente, nunca la misma tarde ni la misma noche', async () => {
+  // «Lanzamiento» vence hoy a las 15:00 de Bogotá (20:00 UTC) y ya recibió
+  // «Vence hoy» a las 9:00. A las 16:00 y a las 21:00 no se avisa otra vez.
+  for (const hora of ['2026-09-23T21:00:00Z', '2026-09-24T02:00:00Z']) {
+    const r = await runSeguimientos(db, new Date(hora));
+    assert.deepEqual(r.dealIds, [], hora);
+  }
+  // Entre medianoche y las 7:00 locales tampoco.
+  assert.deepEqual((await runSeguimientos(db, new Date('2026-09-24T10:00:00Z'))).dealIds, []);
+  // A las 7:05 de Bogotá del día siguiente (12:05 UTC), sí.
+  const manana = await runSeguimientos(db, new Date('2026-09-24T12:05:00Z'));
+  assert.deepEqual(manana, { dueToday: 0, overdue: 1, dealIds: [DEAL_HOY] });
+});
+
+test('una acción escrita hoy para hoy no avisa «Vence hoy»; si sigue ahí, avisa vencida a la mañana siguiente', async () => {
+  // Escrita a las 10:00 de Bogotá (15:00 UTC) para hoy a las 17:00.
+  await db.raw.exec(`
+    INSERT INTO deal (id, workspace_id, company_id, name, stage_id, currency, next_action, next_action_due, updated_at) VALUES
+      ('${DEAL_ESCRITO_HOY}', '${WS_BOGOTA}', '${COMPANY}', 'Escrito hoy', 'contactado', 'COP', 'Mandar el brief', '2026-09-24T22:00:00Z', '2026-09-24T15:00:00Z');
+  `);
+  const r = await runSeguimientos(db, new Date('2026-09-24T16:05:00Z'));
+  assert.deepEqual(r.dealIds, [], 'quien la acaba de escribir no necesita el recordatorio');
+  // La corrida a mano con --ya sí la avisa: quiere ver todo lo pendiente.
+  const ya = await runSeguimientos(db, new Date('2026-09-24T16:10:00Z'), { horaLocal: 0 });
+  assert.deepEqual(ya, { dueToday: 1, overdue: 0, dealIds: [DEAL_ESCRITO_HOY] });
+  const siguiente = await runSeguimientos(db, new Date('2026-09-25T12:05:00Z'));
+  assert.deepEqual(siguiente, { dueToday: 0, overdue: 1, dealIds: [DEAL_ESCRITO_HOY] });
+});
+
 test('leer o descartar el aviso no lo resucita; reprogramar y volver a vencer sí avisa otra vez', async () => {
   await db.raw.exec(`UPDATE notification SET read_at = now(), dismissed_at = now() WHERE entity_id = '${DEAL_VENCIDO}'`);
-  assert.equal((await runSeguimientos(db, new Date('2026-09-23T18:00:00Z'))).overdue, 0);
+  assert.equal((await runSeguimientos(db, new Date('2026-09-25T13:05:00Z'))).overdue, 0);
 
-  // Le movieron la fecha a mañana a las 10:00 y mañana a las 11:00 sigue sin hacerse.
-  await db.raw.exec(`UPDATE deal SET next_action_due = '2026-09-24T15:00:00Z' WHERE id = '${DEAL_VENCIDO}'`);
-  const manana = await runSeguimientos(db, new Date('2026-09-24T16:00:00Z'));
-  // El reprogramado vence otra vez; el de «vence hoy» de ayer ya venció y avisa como vencido.
-  assert.deepEqual([...manana.dealIds].sort(), [DEAL_VENCIDO, DEAL_HOY].sort());
-  assert.equal(manana.overdue, 2);
-  const otra = await runSeguimientos(db, new Date('2026-09-24T16:00:00Z'));
+  // El 25 por la tarde le movieron la fecha al 26 a las 10:00 de Bogotá.
+  await tocar(DEAL_VENCIDO, `next_action_due = '2026-09-26T15:00:00Z'`, '2026-09-25T20:00:00Z');
+  // La mañana del 26: «Vence hoy», no vencido.
+  const dia = await runSeguimientos(db, new Date('2026-09-26T12:05:00Z'));
+  assert.deepEqual(dia, { dueToday: 1, overdue: 0, dealIds: [DEAL_VENCIDO] });
+  // A las 11:00 ya pasó su hora, pero el vencido espera a la mañana.
+  assert.deepEqual((await runSeguimientos(db, new Date('2026-09-26T16:05:00Z'))).dealIds, []);
+  // La mañana del 27 sigue sin hacerse: aviso nuevo de vencido, es otro compromiso.
+  const despues = await runSeguimientos(db, new Date('2026-09-27T12:05:00Z'));
+  assert.deepEqual(despues, { dueToday: 0, overdue: 1, dealIds: [DEAL_VENCIDO] });
+  const otra = await runSeguimientos(db, new Date('2026-09-27T13:05:00Z'));
   assert.deepEqual(otra.dealIds, []);
 });
 

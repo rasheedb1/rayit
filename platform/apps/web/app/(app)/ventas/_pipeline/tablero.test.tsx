@@ -14,6 +14,23 @@ const stages: BoardStage[] = [
   { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false, isWon: true },
   { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true, isWon: false },
 ];
+const ctx: SeguimientoContexto = {
+  owners: [],
+  today: "2026-09-23",
+  tomorrow: "2026-09-24",
+  now: "20:00",
+  nextHour: "21:00",
+  zoneName: "hora estándar de Colombia",
+};
+const siguiente: SiguienteAccionData = {
+  dealId: DEAL,
+  dealLabel: "Café Alma · Lanzamiento cold brew",
+  action: "Enviar pitch",
+  dueText: "23 sep · 9:00 p. m.",
+  due: { kind: "warn", text: "Hoy" },
+  responsibleName: null,
+  form: { dueDate: "2026-09-23", dueTime: "21:00", responsibleUserId: "" },
+};
 const deals: BoardDeal[] = [
   {
     id: DEAL,
@@ -25,12 +42,9 @@ const deals: BoardDeal[] = [
     daysInStage: 4,
     amountText: "COP 3 M",
     currency: "COP",
-    nextAction: "Enviar pitch",
-    nextActionDueText: "23 sep",
-    due: { kind: "neutral", text: "Al día" },
-    needsNextAction: false,
     quoteHref: `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
     lostReasonText: null,
+    siguiente,
   },
 ];
 
@@ -39,7 +53,7 @@ beforeEach(() => moverNegocio.mockReset());
 describe("PipelineBoard", () => {
   it("el menú «Mover a» mueve la tarjeta de columna y lo anuncia", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -50,7 +64,7 @@ describe("PipelineBoard", () => {
 
   it("si el servidor rechaza, la tarjeta vuelve a su etapa y se dice por qué", async () => {
     moverNegocio.mockResolvedValue({ ok: false, message: "No se pudo mover el negocio. Volvió a su etapa." });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -62,7 +76,7 @@ describe("PipelineBoard", () => {
 
   it("soltar una tarjeta arrastrada en otra columna la mueve", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const store = new Map<string, string>();
     const dataTransfer = {
       setData: (k: string, v: string) => store.set(k, v),
@@ -81,7 +95,7 @@ describe("PipelineBoard", () => {
   });
 
   it("cada negocio abierto lleva a Cotizar con el negocio ya elegido", () => {
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     expect(screen.getByRole("link", { name: "Cotizar el negocio con Café Alma" })).toHaveAttribute(
       "href",
       `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
@@ -89,14 +103,14 @@ describe("PipelineBoard", () => {
   });
 
   it("un negocio cerrado no ofrece Cotizar", () => {
-    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} />);
+    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} ctx={ctx} />);
     expect(screen.queryByRole("link", { name: /Cotizar/ })).toBeNull();
   });
 
   it("si el servidor no deja reabrir un ganado, lo dice con su motivo", async () => {
     const motivo = "Este negocio tiene una campaña en curso: no sale de «Ganado» mientras la campaña siga viva. Cancélala en Campañas si el acuerdo se cayó.";
     moverNegocio.mockResolvedValue({ ok: false, message: motivo });
-    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} />);
+    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "nuevo" } });
     });
@@ -105,14 +119,14 @@ describe("PipelineBoard", () => {
   });
 
   it("el menú no ofrece la etapa en la que ya está", () => {
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const options = within(screen.getByLabelText("Mover «Café Alma» a otra etapa")).getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual(["Mover a…", "Ganado", "Perdido"]);
   });
 
   it("pasar a «Perdido» pregunta por qué y no mueve sin motivo", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "perdido" } });
     });
@@ -137,7 +151,7 @@ describe("PipelineBoard", () => {
 
   it("perder un negocio con cotización enviada avisa de que se cerró", async () => {
     moverNegocio.mockResolvedValue({ ok: true, closedQuotes: ["COT-2026-007"] });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "perdido" } });
     });
@@ -153,7 +167,7 @@ describe("PipelineBoard", () => {
   });
 
   it("soltar en «Perdido» también pregunta, y cancelar lo deja donde estaba", async () => {
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const store = new Map<string, string>();
     const dataTransfer = {
       setData: (k: string, v: string) => store.set(k, v),
@@ -175,7 +189,7 @@ describe("PipelineBoard", () => {
 
   it("ganar un negocio «Sin monto» pregunta por cuánto y no mueve sin monto (pulido r7)", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} />);
+    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -205,7 +219,7 @@ describe("PipelineBoard", () => {
 
   it("un negocio con monto pasa a «Ganado» sin preguntar", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -214,7 +228,7 @@ describe("PipelineBoard", () => {
   });
 
   it("un monto ganado que no cabe en numeric(14,2) se dice en el campo, con el tope, y no llega al servidor (pulido r8)", async () => {
-    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} locale="es-CO" />);
+    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} ctx={ctx} locale="es-CO" />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -232,7 +246,7 @@ describe("PipelineBoard", () => {
 
   it("después de mover con el menú, el foco vuelve al menú de la tarjeta y no cae en <body> (pulido r8)", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
     });
@@ -242,20 +256,8 @@ describe("PipelineBoard", () => {
     expect(document.activeElement).toBe(screen.getByLabelText("Mover «Café Alma» a otra etapa"));
   });
 
-  it("con la siguiente acción editable, la tarjeta lleva UNA sola pastilla de vencimiento (VEN-4)", () => {
-    const ctx: SeguimientoContexto = { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "20:00", nextHour: "21:00" };
-    const siguiente: SiguienteAccionData = {
-      dealId: DEAL,
-      dealLabel: "Café Alma · Lanzamiento cold brew",
-      action: "Enviar pitch",
-      dueText: "23 sep · 9:00 p. m.",
-      due: { kind: "warn", text: "Hoy" },
-      responsibleName: null,
-      form: { dueDate: "2026-09-23", dueTime: "21:00", responsibleUserId: "" },
-    };
-    // La vieja (deal.due, de deal_pipeline) dice «Al día» y la nueva «Hoy»:
-    // antes de 0034 podían contradecirse en la misma tarjeta.
-    render(<PipelineBoard deals={[{ ...deals[0]!, siguiente }]} stages={stages} ctx={ctx} />);
+  it("la tarjeta lleva UNA sola pastilla de vencimiento, la de su siguiente acción (VEN-4)", () => {
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const card = screen.getByRole("listitem", { name: "Café Alma, Lanzamiento cold brew" });
     const pastillas = within(card).queryAllByText(/^(Vencido|Hoy|Al día|Sin fecha)$/);
     expect(pastillas).toHaveLength(1);
@@ -263,11 +265,31 @@ describe("PipelineBoard", () => {
     expect(within(card).getByText("4 días")).toBeInTheDocument();
   });
 
+  it("un negocio abierto sin siguiente acción se marca y lo dice; uno cerrado no", () => {
+    render(
+      <PipelineBoard
+        deals={[
+          { ...deals[0]!, siguiente: { ...siguiente, action: null, due: null, dueText: null } },
+          { ...deals[0]!, id: "otro", name: "Cerrado", stageId: "ganado", stageLabel: "Ganado", quoteHref: null, siguiente: null },
+        ]}
+        stages={stages}
+        ctx={ctx}
+      />,
+    );
+    const abierto = screen.getByRole("listitem", { name: "Café Alma, Lanzamiento cold brew. Sin siguiente acción" });
+    expect(abierto.className).toContain("border-warn");
+    expect(within(abierto).getByText("Sin siguiente acción")).toBeInTheDocument();
+    const cerrado = screen.getByRole("listitem", { name: "Café Alma, Cerrado" });
+    expect(cerrado.className).not.toContain("border-warn");
+    expect(within(cerrado).queryByText("Sin siguiente acción")).toBeNull();
+  });
+
   it("un negocio perdido dice por qué", () => {
     render(
       <PipelineBoard
         deals={[{ ...deals[0]!, stageId: "perdido", stageLabel: "Perdido", quoteHref: null, lostReasonText: "Por el precio" }]}
         stages={stages}
+        ctx={ctx}
       />,
     );
     expect(within(screen.getByTestId("columna-perdido")).getByText("Por el precio")).toBeInTheDocument();

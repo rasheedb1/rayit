@@ -1,15 +1,15 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { listInvoices } from "@mc/db/queries/finanzas";
 import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
 import {
   getCompanyChain,
   getLocalDates,
+  listChainInvoices,
   listCompanyActivity,
   listCompanySignals,
-  listNextActions,
   listNicheNames,
+  nextActionOf,
 } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
@@ -22,7 +22,7 @@ import { RELATIONSHIP_META, lostReasonText } from "../../../_lib/estado";
 import { MESSAGES } from "../../../_lib/messages";
 import { countryOptions } from "../../../_lib/paises";
 import { quoteHref } from "../../../_pipeline/vista";
-import { opcionesDeResponsable, siguienteAccionData, type SeguimientoContexto } from "../../../_seguimiento/datos";
+import { contextoDeSeguimiento, siguienteAccionData } from "../../../_seguimiento/datos";
 import { SiguienteAccion } from "../../../_seguimiento/siguiente-accion";
 import { FICHA } from "../../messages";
 import { Bloque } from "../bloque";
@@ -68,24 +68,24 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   const data = await withWorkspace(async (tx) => {
     const company = await getCompany(tx, id);
     if (!company) return null;
+    const chain = await getCompanyChain(tx, id);
     return {
       company,
       contacts: await listContacts(tx, id),
       // Solo los de esta empresa, filtrados en SQL: la ficha no lee el pipeline entero.
       deals: await listPipeline(tx, { companyId: id }),
       owners: await listOwnerOptions(tx),
-      nextActions: await listNextActions(tx, { companyId: id }),
       activity: await listCompanyActivity(tx, id),
       signals: await listCompanySignals(tx, id),
-      chain: await getCompanyChain(tx, id),
-      invoices: (await listInvoices(tx, { companyId: id, limit: 200 })).rows,
+      chain,
+      invoices: await listChainInvoices(tx, id, chain),
       niches: await listNicheNames(tx, company.nicheSlugs),
       dates: await getLocalDates(tx),
     };
   });
   // Se desvinculó entre la primera lectura y esta.
   if (!data) notFound();
-  const { company, contacts, deals, owners, nextActions, activity, signals, chain, invoices, niches, dates } = data;
+  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates } = data;
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
@@ -98,9 +98,10 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
     company.ownerUserId && !owners.some((o) => o.userId === company.ownerUserId)
       ? [...owners, { userId: company.ownerUserId, label: company.ownerName ?? t.detail.noOwner }]
       : owners;
-  const ctx: SeguimientoContexto = { owners: opcionesDeResponsable(owners, nextActions), ...dates };
-  const acciones = new Map(nextActions.map((r) => [r.dealId, r]));
-  const facturas = new Map(invoices.map((i) => [i.id, i]));
+  // La siguiente acción de cada negocio abierto sale de la misma lectura
+  // que la lista de negocios (listPipeline), no de una segunda.
+  const acciones = new Map(deals.flatMap((d) => { const a = nextActionOf(d); return a ? [[d.id, a] as const] : []; }));
+  const ctx = contextoDeSeguimiento(owners, [...acciones.values()], dates, f);
   // El nicho en el idioma del espacio, si el catálogo lo tiene; si no, en español.
   const ingles = f.locale.toLowerCase().startsWith("en");
   const nicho = niches.map((n) => (ingles && n.nameEn ? n.nameEn : n.nameEs));
@@ -194,7 +195,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                         </div>
                       </div>
                       {accion && <SiguienteAccion data={siguienteAccionData(accion, f, ctx, `${company.name} · ${negocio}`)} ctx={ctx} />}
-                      <Cadena links={chain.byDeal[d.id]} invoices={facturas} f={f} label={x.cadena.label(negocio)} closed={!abierto} />
+                      <Cadena links={chain.byDeal[d.id]} invoices={invoices.byId} f={f} label={x.cadena.label(negocio)} closed={!abierto} />
                     </li>
                   );
                 })}
@@ -204,7 +205,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
               <div className="mt-3 rounded-md border border-dashed border-border p-3">
                 <p className="text-xs font-medium text-ink">{x.cadena.loose}</p>
                 <p className="mb-2 text-xs text-muted">{x.cadena.looseHelp}</p>
-                <Cadena links={chain.loose} invoices={facturas} f={f} label={x.cadena.loose} />
+                <Cadena links={chain.loose} invoices={invoices.byId} f={f} label={x.cadena.loose} />
               </div>
             )}
           </Bloque>
@@ -215,7 +216,12 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
               today={dates.today}
               deals={[...deals]
                 .sort((a, b) => Number(a.isWon || a.isLost) - Number(b.isWon || b.isLost))
-                .map((d) => ({ id: d.id, label: `${dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName} · ${d.stageLabel}`, open: !d.isWon && !d.isLost }))}
+                .map((d) => ({
+                  id: d.id,
+                  label: dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName,
+                  stage: d.stageLabel,
+                  open: !d.isWon && !d.isLost,
+                }))}
               contacts={contacts
                 .filter((c) => !c.optedOut)
                 .map((c) => ({ id: c.id, label: c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : MESSAGES.contacto.noName) }))}

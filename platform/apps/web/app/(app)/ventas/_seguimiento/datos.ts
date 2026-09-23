@@ -8,7 +8,7 @@
  */
 import type { OwnerOption } from "@mc/db/queries/ventas";
 import { PITCH_DUE_HOUR } from "@mc/db/queries/ventas";
-import type { NextActionRow } from "@mc/db/queries/ventas-ficha";
+import type { LocalDates, NextActionRow } from "@mc/db/queries/ventas-ficha";
 import type { PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { pillForDue } from "../_lib/estado";
@@ -45,6 +45,28 @@ export interface SeguimientoContexto {
   now: string;
   /** La próxima hora en punto, «18:00»: la que se propone para hoy si la de la acción ya pasó. */
   nextHour: string;
+  /**
+   * La zona en la que se guarda la hora escrita (la del espacio), por su
+   * nombre en el idioma del espacio: «hora estándar de Colombia». El campo
+   * «Hora» la dice, porque quien escribe puede estar en otra.
+   */
+  zoneName: string;
+}
+
+/**
+ * El contexto del editor para una pantalla: las personas (más quien ya
+ * es responsable y no está en el espacio) y el reloj del espacio, con su
+ * zona nombrada con el formateador.
+ */
+export function contextoDeSeguimiento(owners: OwnerOption[], rows: NextActionRow[], dates: LocalDates, f: Formatter): SeguimientoContexto {
+  return {
+    owners: opcionesDeResponsable(owners, rows),
+    today: dates.today,
+    tomorrow: dates.tomorrow,
+    now: dates.now,
+    nextHour: dates.nextHour,
+    zoneName: f.zoneName(dates.tz),
+  };
 }
 
 /** La hora que se propone sin otra: la misma a la que vencen las acciones que pone el producto. */

@@ -16,9 +16,11 @@
  * Los errores de esta pieza son `FichaError` con un código, sin frase,
  * como VentasError: la web los traduce con su messages.ts.
  */
+import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isCampaignStatus, type CampaignStatus } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import type { ACTIVITY_KINDS } from '../schema/ventas.ts';
-import { CompanyNotFound, DealNotFound, PITCH_DUE_HOUR, WORKSPACE_TZ } from './ventas.ts';
+import { listInvoices, type InvoiceListRow } from './finanzas.ts';
+import { CompanyNotFound, DealNotFound, PITCH_DUE_HOUR, WORKSPACE_TZ, type PipelineDealRow } from './ventas.ts';
 
 // ---------------------------------------------------------------------
 // Errores
@@ -79,8 +81,9 @@ export const CONTACT_ACTIVITY_KINDS: readonly LoggableActivityKind[] = ['call', 
 
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
-export const NEXT_ACTION_MAX = 200;
-export const ACTIVITY_BODY_MAX = 4000;
+// NEXT_ACTION_MAX y ACTIVITY_BODY_MAX viven en @mc/core (ventas.ts): los
+// componentes de cliente los necesitan para su maxLength y no pueden
+// importar este módulo.
 /** Cuántas actividades trae la ficha de una vez. */
 export const TIMELINE_LIMIT = 50;
 
@@ -179,19 +182,32 @@ function toNextActionRow(r: NextActionSql): NextActionRow {
 }
 
 /**
- * La siguiente acción de cada negocio ABIERTO del espacio, o solo de los
- * de una empresa. Los cerrados no tienen: a un negocio ganado no le
- * vence nada.
+ * La siguiente acción de un negocio del pipeline (listPipeline), o null
+ * si está cerrado: a un negocio ganado no le vence nada.
+ *
+ * El tablero, la lista y la ficha ya leen listPipeline, que trae el día,
+ * la hora y el responsable de la acción en la zona del espacio; esto solo
+ * les da la forma que usa el editor, sin una segunda lectura de
+ * deal_pipeline. «Para hoy» sigue con listDueToday, que ordena y cuenta
+ * en SQL.
  */
-export async function listNextActions(tx: WorkspaceTx, opts: { companyId?: string } = {}): Promise<NextActionRow[]> {
-  if (opts.companyId !== undefined && !isUuid(opts.companyId)) return [];
-  const { rows } = await tx.query<NextActionSql>(
-    `${NEXT_ACTION_SELECT}
-       AND ($1::uuid IS NULL OR d.company_id = $1::uuid)
-     ORDER BY d.next_action_due ASC NULLS LAST, p.company_name ASC`,
-    [opts.companyId ?? null],
-  );
-  return rows.map(toNextActionRow);
+export function nextActionOf(d: PipelineDealRow): NextActionRow | null {
+  if (d.isWon || d.isLost) return null;
+  return {
+    dealId: d.id,
+    companyId: d.companyId,
+    companyName: d.companyName,
+    dealName: d.name,
+    stageLabel: d.stageLabel,
+    action: d.nextAction?.trim() || null,
+    dueAt: d.nextActionDue,
+    dueDate: d.nextActionDueDate,
+    dueTime: d.nextActionDueTime,
+    dueState: d.dueState,
+    responsibleUserId: d.nextActionUserId,
+    responsibleName: d.nextActionUserName,
+    ownerUserId: d.ownerUserId,
+  };
 }
 
 /** El reloj del espacio: lo que los formularios necesitan para no proponer algo que ya pasó. */
@@ -204,6 +220,13 @@ export interface LocalDates {
   now: string;
   /** La próxima hora en punto, «18:00»: la que se propone hoy cuando la de siempre ya pasó. */
   nextHour: string;
+  /**
+   * La zona con la que se cuentan todas estas fechas y en la que
+   * setNextAction interpreta la hora escrita: «America/Bogota». La
+   * pantalla la nombra en el campo «Hora», porque quien escribe puede
+   * estar en otra.
+   */
+  tz: string;
 }
 
 /**
@@ -217,7 +240,8 @@ export async function getLocalDates(tx: WorkspaceTx): Promise<LocalDates> {
     `SELECT to_char(l.t::date, 'YYYY-MM-DD') AS today,
             to_char(l.t::date + 1, 'YYYY-MM-DD') AS tomorrow,
             to_char(l.t, 'HH24:MI') AS now,
-            to_char(date_trunc('hour', l.t) + interval '1 hour', 'HH24:MI') AS "nextHour"
+            to_char(date_trunc('hour', l.t) + interval '1 hour', 'HH24:MI') AS "nextHour",
+            w.tz
        FROM ${WORKSPACE_TZ} w, LATERAL (SELECT now() AT TIME ZONE w.tz AS t) l`,
   );
   const r = rows[0];
@@ -229,6 +253,7 @@ export async function getLocalDates(tx: WorkspaceTx): Promise<LocalDates> {
       tomorrow: new Date(ahora.getTime() + 86_400_000).toISOString().slice(0, 10),
       now: ahora.toISOString().slice(11, 16),
       nextHour: `${String((ahora.getUTCHours() + 1) % 24).padStart(2, '0')}:00`,
+      tz: 'UTC',
     };
   }
   return r;
@@ -739,7 +764,8 @@ export interface ChainQuote {
 export interface ChainCampaign {
   id: string;
   name: string;
-  status: string;
+  /** El estado de Campañas; null si la base guardara uno que @mc/core no conoce (el CHECK de 0008 no lo deja). */
+  status: CampaignStatus | null;
   quoteId: string | null;
 }
 
@@ -810,7 +836,7 @@ export async function getCompanyChain(tx: WorkspaceTx, companyId: string): Promi
   for (const c of campaigns.rows) {
     const dealId = c.deal_id ?? (c.quote_id ? quoteDeal.get(c.quote_id) ?? null : null);
     campaignDeal.set(c.id, dealId);
-    bucket(dealId).campaigns.push({ id: c.id, name: c.name, status: c.status, quoteId: c.quote_id });
+    bucket(dealId).campaigns.push({ id: c.id, name: c.name, status: isCampaignStatus(c.status) ? c.status : null, quoteId: c.quote_id });
   }
   for (const i of invoices.rows) {
     const dealId =
@@ -819,6 +845,44 @@ export async function getCompanyChain(tx: WorkspaceTx, companyId: string): Promi
     bucket(dealId).invoices.push({ id: i.id, number: i.number, campaignId: i.campaign_id, quoteId: i.quote_id });
   }
   return { byDeal, loose };
+}
+
+/** Cuántas páginas de Finanzas (de 200) lee la cadena como mucho: 2.000 facturas de una marca. */
+export const CHAIN_INVOICE_PAGES = 10;
+
+/** Las facturas de la cadena como las lee Finanzas, y cuántas no alcanzó a traer. */
+export interface ChainInvoices {
+  /** Por id: estado (con la mora derivada), total y moneda, con la definición de Finanzas. */
+  byId: Map<string, InvoiceListRow>;
+  /** Facturas de la cadena que no están en `byId` (más de CHAIN_INVOICE_PAGES páginas): la pantalla dice «y N más en Finanzas». */
+  missing: number;
+}
+
+/**
+ * El estado, el total y la moneda de cada factura de la cadena, leídos
+ * con listInvoices: la cadena no tiene su propia versión de qué es una
+ * factura vencida (esa la define Finanzas, con la fecha de hoy).
+ *
+ * Pagina por la marca hasta tener todas las de la cadena. Antes leía una
+ * sola página de 200 y descartaba sin decir nada la que no encontraba:
+ * una agencia con un cliente recurrente perdía eslabones. Si aun así una
+ * marca tiene más de CHAIN_INVOICE_PAGES páginas, lo que falta se cuenta
+ * en `missing` y la cadena lo dice.
+ */
+export async function listChainInvoices(tx: WorkspaceTx, companyId: string, chain: CompanyChain): Promise<ChainInvoices> {
+  const wanted = new Set(
+    [chain.loose, ...Object.values(chain.byDeal)].flatMap((l) => l.invoices.map((i) => i.id)),
+  );
+  const byId = new Map<string, InvoiceListRow>();
+  if (wanted.size === 0 || !isUuid(companyId)) return { byId, missing: wanted.size };
+  let cursor: string | null = null;
+  for (let page = 0; page < CHAIN_INVOICE_PAGES; page++) {
+    const r = await listInvoices(tx, { companyId, limit: 200, cursor });
+    for (const row of r.rows) if (wanted.has(row.id)) byId.set(row.id, row);
+    cursor = r.nextCursor;
+    if (!cursor || byId.size === wanted.size) break;
+  }
+  return { byId, missing: wanted.size - byId.size };
 }
 
 function truncate(text: string, max: number): string {

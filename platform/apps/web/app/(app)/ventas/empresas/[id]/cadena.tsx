@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { CAMPAIGN_STATUSES, type CampaignStatus } from "@mc/core";
 import type { InvoiceListRow } from "@mc/db/queries/finanzas";
 import type { ChainLinks } from "@mc/db/queries/ventas-ficha";
 import { Pill, type PillKind } from "@/components/ui/pill";
@@ -44,8 +43,11 @@ export function Cadena({
     const row = invoices.get(i.id);
     return row ? [row] : [];
   });
+  // Las que Finanzas no alcanzó a traer (listChainInvoices lee hasta
+  // 2.000 por marca): se dicen, no se descartan en silencio.
+  const faltan = (links?.invoices.length ?? 0) - facturas.length;
 
-  if (quotes.length === 0 && campaigns.length === 0 && facturas.length === 0) {
+  if (quotes.length === 0 && campaigns.length === 0 && facturas.length === 0 && faltan === 0) {
     return <p className="text-xs text-muted">{closed ? t.noQuoteClosed : t.noQuote}</p>;
   }
 
@@ -72,7 +74,7 @@ export function Cadena({
         title: `${t.campaign} ${c.name}`,
         text: c.name,
         extra: null,
-        pill: (CAMPAIGN_STATUSES as readonly string[]).includes(c.status) ? pillForCampaign(c.status as CampaignStatus) : null,
+        pill: c.status ? pillForCampaign(c.status) : null,
       })),
     },
     {
@@ -108,6 +110,13 @@ export function Cadena({
           ))}
         </li>
       ))}
+      {faltan > 0 && (
+        <li className="flex items-center gap-1.5">
+          <Link href="/finanzas" className="text-muted underline underline-offset-4 hover:text-ink">
+            {t.moreInvoices(faltan, { int: f.int, plural: new Intl.PluralRules(f.locale) })}
+          </Link>
+        </li>
+      )}
     </ol>
   );
 }

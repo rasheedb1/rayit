@@ -19,7 +19,7 @@ vi.mock("@mc/db/queries/ventas", () => ({
 }));
 vi.mock("@mc/db/queries/ventas-ficha", () => ({
   listDueToday: async () => due,
-  getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24", now: "17:10", nextHour: "18:00" }),
+  getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24", now: "17:10", nextHour: "18:00", tz: "America/Bogota" }),
 }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
@@ -118,7 +118,7 @@ describe("ParaHoy", () => {
 
 describe("ParaHoyLista: no suelta la fila que se está tocando", () => {
   const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
-  const ctx: SeguimientoContexto = { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "17:10", nextHour: "18:00" };
+  const ctx: SeguimientoContexto = { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "17:10", nextHour: "18:00", zoneName: "hora estándar de Colombia" };
   const aFila = (r: NextActionRow): FilaParaHoy => ({
     dealId: r.dealId,
     companyId: r.companyId,

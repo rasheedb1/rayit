@@ -2,16 +2,15 @@ import Link from "next/link";
 import type { PipelineDealRow, PipelineSeguimiento, StageTotal } from "@mc/db/queries/ventas";
 import { SectionTitle } from "@/components/page-header";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
+import { nextActionOf } from "@mc/db/queries/ventas-ficha";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { FICHA } from "../empresas/messages";
 import { MESSAGES } from "../_lib/messages";
-import { lostReasonText, needsNextAction, pillForDue, type PipelineForma } from "../_lib/estado";
+import { lostReasonText, type PipelineForma } from "../_lib/estado";
 import { siguienteAccionData, type SeguimientoContexto } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
-import type { NextActionRow } from "@mc/db/queries/ventas-ficha";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
@@ -25,8 +24,11 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
  * los textos ya hechos. Los montos de cada columna llegan de
  * getStageTotals, sumados en SQL.
  *
- * Con `seguimiento` (VEN-4), la siguiente acción de cada negocio abierto
- * se edita en su tarjeta y en su fila; sin él, se lee como antes.
+ * La siguiente acción de cada negocio abierto (VEN-4) se edita en su
+ * tarjeta y en su fila. Sale de la misma lectura que el negocio
+ * (listPipeline trae el día, la hora y el responsable): un solo modelo de
+ * «siguiente acción», sin una segunda consulta ni una versión de solo
+ * lectura que mantener al lado.
  */
 export function PipelineView({
   deals,
@@ -34,7 +36,7 @@ export function PipelineView({
   f,
   forma,
   filtro = null,
-  seguimiento,
+  ctx,
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
@@ -42,7 +44,8 @@ export function PipelineView({
   forma: PipelineForma;
   /** La lista filtrada desde «Para hoy» (VEN-4): ya viene filtrada de SQL; aquí se dice y se ofrece quitarlo. */
   filtro?: PipelineSeguimiento | null;
-  seguimiento?: { rows: NextActionRow[]; ctx: SeguimientoContexto };
+  /** Lo que el editor de la siguiente acción necesita del espacio. Sin él (la vista del radar), no se pinta el pipeline. */
+  ctx: SeguimientoContexto | null;
 }) {
   const t = MESSAGES.pipeline;
   const x = FICHA.filtro;
@@ -70,7 +73,6 @@ export function PipelineView({
     );
   }
 
-  const acciones = new Map((seguimiento?.rows ?? []).map((r) => [r.dealId, r]));
   const boardDeals: BoardDeal[] = deals.map((d) => ({
     id: d.id,
     companyId: d.companyId,
@@ -81,21 +83,17 @@ export function PipelineView({
     daysInStage: d.daysInStage,
     amountText: d.amount ? f.money(d.amount, d.currency, { mode: "short" }) : null,
     currency: d.currency,
-    // Un negocio cerrado no tiene siguiente acción aunque la fila la
-    // conserve: «Enviar pitch» en un ganado solo confunde.
-    nextAction: d.isWon || d.isLost ? null : d.nextAction,
-    nextActionDueText: d.isWon || d.isLost || !d.nextActionDue ? null : f.date(d.nextActionDue),
-    due: d.isWon || d.isLost ? null : pillForDue(d.dueState),
-    needsNextAction: needsNextAction(d),
     // El atajo a Cotizar, solo en los abiertos: son los que Cotizar
     // ofrece (listQuotableDeals) y los que tiene sentido cotizar.
     quoteHref: d.isWon || d.isLost ? null : quoteHref(d.id),
     lostReasonText: lostReasonText(d.lostReason),
+    // Un negocio cerrado no tiene siguiente acción aunque la fila la
+    // conserve: «Enviar pitch» en un ganado solo confunde.
     siguiente: (() => {
-      const row = d.isWon || d.isLost ? undefined : acciones.get(d.id);
-      if (!row || !seguimiento) return null;
+      const row = ctx ? nextActionOf(d) : null;
+      if (!row || !ctx) return null;
       const negocio = dealLabel(d.companyName, d.name);
-      return siguienteAccionData(row, f, seguimiento.ctx, negocio ? `${d.companyName} · ${negocio}` : d.companyName);
+      return siguienteAccionData(row, f, ctx, negocio ? `${d.companyName} · ${negocio}` : d.companyName);
     })(),
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
@@ -126,9 +124,9 @@ export function PipelineView({
       )}
 
       {forma === "tablero" ? (
-        <PipelineBoard deals={boardDeals} stages={boardStages} ctx={seguimiento?.ctx} locale={f.locale} />
+        <PipelineBoard deals={boardDeals} stages={boardStages} ctx={ctx} locale={f.locale} />
       ) : (
-        <PipelineList deals={boardDeals} ctx={seguimiento?.ctx} />
+        <PipelineList deals={boardDeals} ctx={ctx} />
       )}
     </section>
   );
@@ -177,7 +175,7 @@ function FormaSwitch({ forma }: { forma: PipelineForma }) {
  * vencida, que es lo que esta vista existe para enseñar— quedaba fuera de
  * la pantalla. Ahí cada negocio es una tarjeta, como en el tablero.
  */
-function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx?: SeguimientoContexto }) {
+function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx: SeguimientoContexto | null }) {
   const t = MESSAGES.pipeline;
   const columns: Column<BoardDeal>[] = [
     {
@@ -200,22 +198,7 @@ function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx?: SeguimientoCon
     {
       key: "next",
       header: t.columns.nextAction,
-      render: (d) =>
-        d.siguiente && ctx ? (
-          <SiguienteAccion data={d.siguiente} ctx={ctx} compact />
-        ) : d.nextAction ? (
-          <span className="flex flex-wrap items-center gap-1.5">
-            {d.due && <Pill kind={d.due.kind}>{d.due.text}</Pill>}
-            <span>
-              {d.nextAction}
-              {d.nextActionDueText && <span className="text-muted"> · {d.nextActionDueText}</span>}
-            </span>
-          </span>
-        ) : d.needsNextAction ? (
-          <span className="text-warn">{t.noNextAction}</span>
-        ) : (
-          ""
-        ),
+      render: (d) => (d.siguiente && ctx ? <SiguienteAccion data={d.siguiente} ctx={ctx} compact /> : ""),
     },
     { key: "days", header: t.columns.daysInStage, align: "num", render: (d) => t.days(d.daysInStage) },
     {
@@ -251,7 +234,7 @@ function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx?: SeguimientoCon
 }
 
 /** Un negocio de la lista en el teléfono: marca y negocio; etapa y monto; la siguiente acción con su estado. */
-function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx?: SeguimientoContexto }) {
+function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx: SeguimientoContexto | null }) {
   const t = MESSAGES.pipeline;
   const negocio = dealLabel(d.companyName, d.name);
   return (
@@ -271,22 +254,10 @@ function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx?: SeguimientoContext
         {d.stageLabel} · <span className="tabular-nums">{t.days(d.daysInStage)}</span>
         {d.lostReasonText && ` · ${d.lostReasonText}`}
       </p>
-      {d.siguiente && ctx ? (
+      {d.siguiente && ctx && (
         <div className="mt-2">
           <SiguienteAccion data={d.siguiente} ctx={ctx} compact />
         </div>
-      ) : (d.nextAction || d.needsNextAction) && (
-        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
-          {d.due && <Pill kind={d.due.kind}>{d.due.text}</Pill>}
-          {d.nextAction ? (
-            <span>
-              {d.nextAction}
-              {d.nextActionDueText && <span className="text-muted"> · {d.nextActionDueText}</span>}
-            </span>
-          ) : (
-            <span className="text-warn">{t.noNextAction}</span>
-          )}
-        </p>
       )}
       {d.quoteHref && (
         <Link

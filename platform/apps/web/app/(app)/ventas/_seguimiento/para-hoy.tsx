@@ -5,7 +5,7 @@ import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { FICHA, type Conteo } from "../empresas/messages";
 import { withWorkspace } from "../_lib/db";
-import { opcionesDeResponsable, siguienteAccionData, type SeguimientoContexto } from "./datos";
+import { contextoDeSeguimiento, siguienteAccionData } from "./datos";
 import { ParaHoyLista, type FilaParaHoy } from "./para-hoy-lista";
 
 /** Cuántos seguimientos enseña el bloque; el resto se ve en el pipeline. */
@@ -39,7 +39,7 @@ export async function ParaHoy() {
 
   const f = formatterFor(await getCurrentWorkspace());
   const conteo: Conteo = { int: f.int, plural: new Intl.PluralRules(f.locale) };
-  const ctx: SeguimientoContexto = { owners: opcionesDeResponsable(owners, due.rows), ...dates };
+  const ctx = contextoDeSeguimiento(owners, due.rows, dates, f);
 
   const filas: FilaParaHoy[] = due.rows.map((r) => {
     const negocio = dealLabel(r.companyName, r.dealName);

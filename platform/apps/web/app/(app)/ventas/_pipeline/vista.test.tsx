@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PipelineDealRow, StageTotal } from "@mc/db/queries/ventas";
-import type { NextActionRow } from "@mc/db/queries/ventas-ficha";
+import type { SeguimientoContexto } from "../_seguimiento/datos";
 import { formatterFor } from "@/lib/format";
 
 vi.mock("../actions", () => ({ moverNegocio: vi.fn() }));
@@ -27,17 +27,32 @@ const deal = (over: Partial<PipelineDealRow>): PipelineDealRow => ({
   weightedAmount: "1280000.00",
   nextAction: "Llamar a Sofía",
   nextActionDue: "2026-09-22T15:00:00Z",
+  nextActionDueDate: "2026-09-22",
+  nextActionDueTime: "10:00",
+  nextActionUserId: null,
+  nextActionUserName: null,
   dueState: "vencido",
   lastContactAt: null,
   expectedCloseDate: null,
   isWon: false,
   isLost: false,
   daysInStage: 4,
+  ownerUserId: null,
   ownerName: null,
   lostReason: null,
   ...over,
 });
-const deals = [deal({}), deal({ id: SIN_ACCION, companyName: "Fresko", name: "Fresko", nextAction: null, nextActionDue: null, dueState: "sin_fecha" })];
+const sinAccion = deal({
+  id: SIN_ACCION,
+  companyName: "Fresko",
+  name: "Fresko",
+  nextAction: null,
+  nextActionDue: null,
+  nextActionDueDate: null,
+  nextActionDueTime: null,
+  dueState: "sin_fecha",
+});
+const deals = [deal({}), sinAccion];
 
 const stage = (over: Partial<StageTotal>): StageTotal => ({
   stageId: "propuesta",
@@ -53,33 +68,18 @@ const stage = (over: Partial<StageTotal>): StageTotal => ({
 });
 const stages = [stage({}), stage({ stageId: "ganado", labelEs: "Ganado", position: 5, isWon: true, dealCount: 0, amount: "0", weightedAmount: "0" })];
 
-const accion = (dealId: string, over: Partial<NextActionRow>): NextActionRow => ({
-  dealId,
-  companyId: "00000002-0000-4000-8000-0000000000e1",
-  companyName: "Café Alma",
-  dealName: "Renovación Q4",
-  stageLabel: "Propuesta",
-  action: "Llamar a Sofía",
-  dueAt: "2026-09-22T15:00:00Z",
-  dueDate: "2026-09-22",
-  dueTime: "10:00",
-  dueState: "vencido",
-  responsibleUserId: null,
-  responsibleName: null,
-  ownerUserId: null,
-  ...over,
-});
-const seguimiento = {
-  rows: [
-    accion(CON_ACCION, {}),
-    accion(SIN_ACCION, { companyName: "Fresko", dealName: "Fresko", action: null, dueAt: null, dueDate: null, dueTime: null, dueState: "sin_fecha" }),
-  ],
-  ctx: { owners: [], today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00" },
+const ctx: SeguimientoContexto = {
+  owners: [],
+  today: "2026-09-23",
+  tomorrow: "2026-09-24",
+  now: "09:00",
+  nextHour: "10:00",
+  zoneName: "hora estándar de Colombia",
 };
 
 describe("PipelineView con la siguiente acción (VEN-4)", () => {
   it("en el tablero, cada negocio abierto lleva su línea editable, y el que no tiene acción se ve marcado", () => {
-    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" seguimiento={seguimiento} />);
+    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" ctx={ctx} />);
     const columna = screen.getByTestId("columna-propuesta");
     expect(within(columna).getByRole("button", { name: "Cambiar la siguiente acción de «Café Alma · Renovación Q4»" })).toBeInTheDocument();
     expect(within(columna).getByText("Sin siguiente acción")).toHaveClass("text-warn");
@@ -87,7 +87,7 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
   });
 
   it("una columna vacía no dice «COP 0» encima de «Nada aquí» (pulido r8)", () => {
-    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" seguimiento={seguimiento} />);
+    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" ctx={ctx} />);
     expect(within(screen.getByTestId("columna-ganado")).getByText("Nada aquí")).toBeInTheDocument();
     expect(screen.queryByText(f.money("0", undefined, { mode: "short" }))).toBeNull();
     // La columna con negocios sí lleva su total.
@@ -95,20 +95,41 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
   });
 
   it("filtrada desde «Para hoy», dice qué enseña y ofrece ver todos; vacía, lo celebra en vez de «no hay negocios»", () => {
-    render(<PipelineView deals={[deals[1]!]} stages={stages} f={f} forma="lista" filtro="sin_accion" seguimiento={seguimiento} />);
-    expect(screen.getByText("Solo los negocios abiertos sin siguiente acción")).toBeInTheDocument();
+    render(<PipelineView deals={[deals[1]!]} stages={stages} f={f} forma="lista" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.getByText("Solo los negocios abiertos sin siguiente acción o sin fecha")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver todos" })).toHaveAttribute("href", "/ventas?vista=pipeline&forma=lista");
   });
 
   it("filtrada y sin nada que enseñar, no dice que el pipeline está vacío", () => {
-    render(<PipelineView deals={[]} stages={stages} f={f} forma="lista" filtro="para_hoy" />);
+    render(<PipelineView deals={[]} stages={stages} f={f} forma="lista" filtro="para_hoy" ctx={ctx} />);
     expect(screen.getByText("Nada vencido ni para hoy")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver todos" })).toBeInTheDocument();
   });
 
-  it("sin `seguimiento`, la siguiente acción se lee como texto, sin botones", () => {
-    render(<PipelineView deals={deals} stages={stages} f={f} forma="tablero" />);
+  it("el filtro «sin acción» incluye una acción sin fecha, y lo que dice cuadra con la fila que enseña", () => {
+    // «Esperar pago de la mora», sin fecha: listPipeline la deja en el filtro.
+    const sinFecha = deal({ id: SIN_ACCION, nextAction: "Esperar pago de la mora", nextActionDue: null, nextActionDueDate: null, nextActionDueTime: null, dueState: "sin_fecha" });
+    render(<PipelineView deals={[sinFecha]} stages={stages} f={f} forma="lista" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.getByText("Solo los negocios abiertos sin siguiente acción o sin fecha")).toBeInTheDocument();
+    expect(screen.getAllByText("Esperar pago de la mora").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Sin fecha").length).toBeGreaterThan(0);
+  });
+
+  it("filtrada por «sin acción» y vacía, dice que todos tienen acción con fecha", () => {
+    render(<PipelineView deals={[]} stages={stages} f={f} forma="lista" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.getByText("Todos tienen siguiente acción con fecha")).toBeInTheDocument();
+  });
+
+  it("la siguiente acción sale de la misma fila del pipeline: día, hora y responsable para el editor", () => {
+    const conResponsable = deal({ nextActionUserId: "00000007-0000-4000-8000-000000000001", nextActionUserName: "Laura" });
+    render(<PipelineView deals={[conResponsable]} stages={stages} f={f} forma="lista" ctx={ctx} />);
+    expect(screen.getAllByText("· Laura").length).toBeGreaterThan(0);
+  });
+
+  it("un negocio cerrado no lleva siguiente acción aunque la fila la conserve", () => {
+    const ganado = deal({ stageId: "ganado", stageLabel: "Ganado", isWon: true, nextAction: "Enviar pitch" });
+    render(<PipelineView deals={[ganado]} stages={stages} f={f} forma="lista" ctx={ctx} />);
+    expect(screen.queryByText("Enviar pitch")).toBeNull();
     expect(screen.queryByRole("button", { name: /siguiente acción/ })).toBeNull();
-    expect(screen.getAllByText("Llamar a Sofía").length).toBeGreaterThan(0);
   });
 });

@@ -38,7 +38,7 @@ export function Contactos({
 
   // Un bloque que se pliega, como Negocios y Actividad (patrón Attio).
   // «Añadir contacto» va al principio del cuerpo y no junto al título: el
-  // título es un <summary> (role=button) y un botón dentro de otro es
+  // título es el botón que pliega el bloque, y un botón dentro de otro es
   // contenido interactivo anidado, que un lector de pantalla no anuncia.
   return (
     <Bloque id="contactos" title={t.title} meta={contactsMeta}>

@@ -54,8 +54,8 @@ vi.mock("@mc/db/queries/ventas", () => ({
   listOwnerOptions: async () => [],
 }));
 vi.mock("@mc/db/queries/ventas-ficha", () => ({
-  listNextActions: async () => [],
-  getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00" }),
+  nextActionOf: () => null,
+  getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00", tz: "America/Bogota" }),
 }));
 // «Para hoy» es un componente de servidor asíncrono con su propia prueba
 // (_seguimiento/para-hoy.test.tsx); aquí basta con que la portada lo monte.

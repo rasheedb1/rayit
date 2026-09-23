@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type KeyboardEvent } from "react";
+import { ACTIVITY_BODY_MAX } from "@mc/core";
 import type { LoggableActivityKind } from "@mc/db/queries/ventas-ficha";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
@@ -10,10 +11,18 @@ import { Aviso } from "../../../_lib/aviso";
 import { useVentasForm } from "../../_lib/use-ventas-form";
 import { registrarActividad } from "../actions";
 import { FICHA } from "../messages";
+import { abrirBloqueDe } from "./bloque";
 
-/** Las teclas que eligen el tipo sin tocar el ratón, como en Superhuman. */
-const TECLAS: Record<string, LoggableActivityKind> = { n: "note", l: "call", c: "email_sent", r: "meeting" };
 const ORDEN: LoggableActivityKind[] = ["note", "call", "email_sent", "meeting"];
+/**
+ * Las teclas que eligen el tipo sin tocar el ratón, como en Superhuman.
+ * Salen de messages.ts (FICHA.actividad.teclas), junto a los nombres que
+ * explican: al traducir la interfaz, la tecla y su texto cambian juntos.
+ */
+const TECLAS = new Map(ORDEN.map((k) => [FICHA.actividad.teclas[k].toLowerCase(), k]));
+/** «N nota · L llamada · C correo · R reunión», construido con las mismas teclas. */
+const TECLAS_TEXTO = ORDEN.map((k) => `${FICHA.actividad.teclas[k].toUpperCase()} ${FICHA.tiposManuales[k].toLowerCase()}`).join(" · ");
+const TECLAS_ARIA = ORDEN.map((k) => FICHA.actividad.teclas[k].toUpperCase()).join(" ");
 
 /** ¿El foco está en un sitio donde la letra se escribe? Entonces no es un atajo. */
 function escribiendo(target: EventTarget | null): boolean {
@@ -50,8 +59,12 @@ export function RegistroRapido({
   today,
 }: {
   companyId: string;
-  /** Los negocios de la empresa: los abiertos primero. */
-  deals: { id: string; label: string; open: boolean }[];
+  /**
+   * Los negocios de la empresa, los abiertos primero. `label` es solo el
+   * nombre del negocio; su etapa va aparte (`stage`) y se lee debajo del
+   * campo al elegirlo: en la opción cortaba el texto aun a 1400 px.
+   */
+  deals: { id: string; label: string; stage: string; open: boolean }[];
   /** Los contactos a los que se les puede atribuir (los que no pidieron la baja). */
   contacts: { id: string; label: string }[];
   /** Hoy en la zona del espacio: el valor por defecto y el máximo de «Cuándo». */
@@ -71,6 +84,12 @@ export function RegistroRapido({
   // Con un solo negocio abierto, la actividad es de ese. Con varios, la
   // persona elige; sin elegir, una llamada cuenta para todos los abiertos.
   const dealDefault = abiertos.length === 1 ? (abiertos[0]?.id ?? "") : "";
+  const [dealId, setDealId] = useState(dealDefault);
+  // Si la ficha se revalida y cambia el negocio que se propone (se cerró
+  // el único abierto), el campo lo sigue.
+  useEffect(() => setDealId(dealDefault), [dealDefault]);
+  const elegido = deals.find((d) => d.id === dealId);
+  const dealHelp = [elegido ? t.dealStage(elegido.stage) : null, kind === "note" ? null : t.dealHelp].filter(Boolean).join(" ");
 
   useEffect(() => {
     // El ámbito del atajo: la sección que envuelve el registro (el bloque
@@ -80,13 +99,12 @@ export function RegistroRapido({
     if (!ambito) return;
     function onKey(event: globalThis.KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey || escribiendo(event.target)) return;
-      const next = TECLAS[event.key.toLowerCase()];
+      const next = TECLAS.get(event.key.toLowerCase());
       if (!next) return;
       event.preventDefault();
       setKind(next);
       // Plegado, el textarea no se ve y focus() no haría nada: se abre antes.
-      const details = form?.closest("details");
-      if (details && !details.open) details.open = true;
+      abrirBloqueDe(form);
       document.getElementById(bodyId)?.focus();
     }
     ambito.addEventListener("keydown", onKey);
@@ -109,7 +127,7 @@ export function RegistroRapido({
       }}
       noValidate
       aria-label={t.composerLabel}
-      aria-keyshortcuts="N L C R"
+      aria-keyshortcuts={TECLAS_ARIA}
       className="rounded-md border border-border bg-surface p-3"
     >
       <input type="hidden" name="companyId" value={companyId} />
@@ -128,27 +146,29 @@ export function RegistroRapido({
         <Textarea
           name="body"
           rows={3}
-          maxLength={4000}
+          maxLength={ACTIVITY_BODY_MAX}
           placeholder={t.bodyPlaceholder[kind]}
           onKeyDown={onBodyKeyDown}
           aria-keyshortcuts="Meta+Enter Control+Enter"
         />
       </Field>
 
-      {/* «Negocio» ocupa dos de cuatro columnas: sus opciones son largas
-          («Café Alma · Renovación Q4 · Propuesta») y a 1400 px se cortaban. */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-4">
+      {/* «Negocio» va en su propia fila y «Con quién» y «Cuándo» debajo:
+          en una fila de cuatro, la opción elegida («Renovación Q4 · 3
+          meses · En conversación») se cortaba aun a 1400 px. La opción
+          lleva solo el nombre; la etapa se lee en la ayuda al elegirlo. */}
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field
           label={t.deal}
-          help={kind === "note" ? undefined : t.dealHelp}
+          help={dealHelp || undefined}
           error={errors.dealId}
           htmlFor={`registro-${companyId}-deal`}
           className="sm:col-span-2"
         >
           <Select
-            key={dealDefault}
             name="dealId"
-            defaultValue={dealDefault}
+            value={dealId}
+            onChange={(e) => setDealId(e.target.value)}
             placeholder={kind === "note" || abiertos.length === 0 ? t.dealNone : t.dealAll}
             options={deals.map((d) => ({ value: d.id, label: d.label }))}
           />
@@ -168,7 +188,7 @@ export function RegistroRapido({
           {t.submit}
         </Button>
         <span className="text-xs text-muted">{t.shortcut}</span>
-        <span className="hidden text-xs text-muted sm:inline">{t.keys}</span>
+        <span className="hidden text-xs text-muted sm:inline">{t.keys(TECLAS_TEXTO)}</span>
       </div>
     </form>
   );

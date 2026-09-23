@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { NEXT_ACTION_MAX } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -199,7 +200,7 @@ function Editor({
           <Input
             name="action"
             autoFocus
-            maxLength={200}
+            maxLength={NEXT_ACTION_MAX}
             autoComplete="off"
             placeholder={t.actionPlaceholder}
             defaultValue={blank ? "" : (data.action ?? "")}
@@ -215,7 +216,7 @@ function Editor({
             }}
           />
         </Field>
-        <Field label={t.dueTime} help={compact ? undefined : t.dueTimeHelp} error={errors.dueTime} htmlFor={id("time")}>
+        <Field label={t.dueTime} help={compact ? undefined : t.dueTimeHelp(ctx.zoneName)} error={errors.dueTime} htmlFor={id("time")}>
           <Input name="dueTime" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} className="tabular-nums" />
         </Field>
         <Field label={t.responsible} error={errors.responsibleUserId} htmlFor={id("who")}>

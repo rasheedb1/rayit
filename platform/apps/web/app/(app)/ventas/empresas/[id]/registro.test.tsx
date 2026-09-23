@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const registrarActividad = vi.fn();
 vi.mock("../actions", () => ({ registrarActividad: (...a: unknown[]) => registrarActividad(...a) }));
 
+import { FICHA } from "../messages";
 import { Bloque } from "./bloque";
 import { RegistroRapido } from "./registro";
 
@@ -12,7 +13,12 @@ const ABIERTO = "00000006-0000-4000-8000-000000000001";
 const GANADO = "00000006-0000-4000-8000-000000000002";
 const LAURA = "00000007-0000-4000-8000-000000000001";
 
-function renderRegistro(deals = [{ id: ABIERTO, label: "Renovación Q4 · Propuesta", open: true }, { id: GANADO, label: "Lanzamiento · Ganado", open: false }]) {
+function renderRegistro(
+  deals = [
+    { id: ABIERTO, label: "Renovación Q4 · 3 meses", stage: "En conversación", open: true },
+    { id: GANADO, label: "Lanzamiento", stage: "Ganado", open: false },
+  ],
+) {
   // Como en la ficha: el registro dentro del bloque «Actividad», y fuera
   // un botón de otro bloque («Cambiar» de un negocio).
   return render(
@@ -60,13 +66,13 @@ describe("RegistroRapido", () => {
   });
 
   it("con «Actividad» plegado y el foco en su título, la tecla abre el bloque y pone el cursor", () => {
-    const { container } = renderRegistro();
-    const details = container.querySelector("details")!;
-    details.open = false;
-    const titulo = container.querySelector("summary")!;
+    renderRegistro();
+    const titulo = screen.getByRole("button", { name: "Actividad" });
+    fireEvent.click(titulo);
+    expect(titulo).toHaveAttribute("aria-expanded", "false");
     titulo.focus();
     fireEvent.keyDown(titulo, { key: "l" });
-    expect(details.open).toBe(true);
+    expect(titulo).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Llamada" })).toHaveAttribute("aria-pressed", "true");
     expect(document.activeElement).toBe(screen.getByLabelText(/Qué pasó/));
   });
@@ -99,12 +105,33 @@ describe("RegistroRapido", () => {
 
   it("con varios negocios abiertos no elige por la persona: sin elegir, cuenta para todos", () => {
     renderRegistro([
-      { id: ABIERTO, label: "Renovación Q4 · Propuesta", open: true },
-      { id: GANADO, label: "Navidad · Negociación", open: true },
+      { id: ABIERTO, label: "Renovación Q4", stage: "Propuesta", open: true },
+      { id: GANADO, label: "Navidad", stage: "Negociación", open: true },
     ]);
     teclaEnElBloque("r");
     expect(screen.getByLabelText("Negocio")).toHaveValue("");
     expect(screen.getByRole("option", { name: "Todos los abiertos" })).toBeInTheDocument();
+  });
+
+  it("la opción del negocio lleva solo su nombre; la etapa se lee debajo del campo al elegirlo", () => {
+    renderRegistro();
+    teclaEnElBloque("l");
+    expect(screen.getByRole("option", { name: "Renovación Q4 · 3 meses" })).toBeInTheDocument();
+    const negocio = screen.getByLabelText("Negocio");
+    expect(negocio).toHaveValue(ABIERTO);
+    expect(negocio).toHaveAccessibleDescription(/^Etapa: En conversación\./);
+    fireEvent.change(negocio, { target: { value: GANADO } });
+    expect(negocio).toHaveAccessibleDescription(/^Etapa: Ganado\./);
+  });
+
+  it("las teclas y el texto que las explica salen del mismo sitio (messages.ts), sin repetir letra", () => {
+    renderRegistro();
+    const teclas = Object.values(FICHA.actividad.teclas);
+    expect(new Set(teclas.map((k) => k.toLowerCase())).size).toBe(teclas.length);
+    expect(screen.getByText("Con el foco en Actividad: N nota · L llamada · C correo · R reunión")).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "Registrar actividad" })).toHaveAttribute("aria-keyshortcuts", "N L C R");
+    // Qué pasó no deja escribir más de lo que la base acepta.
+    expect(screen.getByLabelText(/Qué pasó/)).toHaveAttribute("maxLength", "4000");
   });
 
   it("el error del servidor se ve en su campo y lo escrito no se pierde", async () => {

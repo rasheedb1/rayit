@@ -56,8 +56,9 @@ export const MESSAGES = {
       "Suma de cada negocio abierto por su probabilidad de cierre.",
       "La probabilidad es la de la etapa en la que está: un negocio en «Propuesta enviada» pesa más que uno «Nuevo».",
     ],
-    wonInfo: [
-      "Los negocios que pasaron a «Ganado» desde el inicio del trimestre, en tu zona horaria.",
+    /** El trimestre se corta en la zona del espacio (getSalesKpis), no en la de quien mira: se nombra. */
+    wonInfo: (zona: string) => [
+      `Los negocios que pasaron a «Ganado» desde el inicio del trimestre, en ${zona}.`,
       "Montos sin impuestos: cuando una cotización se envía o se acepta, el negocio toma su valor antes de IVA. La campaña y la factura llevan el total con impuestos.",
     ],
   },
