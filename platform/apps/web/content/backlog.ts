@@ -435,7 +435,7 @@ export const STORIES: readonly Story[] = [
   // ---------------------------------------------------------------- COT
   {
     id: "COT-1", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["CIM-2"],
-    title: "Tarifario sugerido",
+    title: "Tarifario sugerido Pulido r6: el rango se propone a tres cifras (redondearParaNegociar; el exacto queda en «Sin redondear») y el país del CPM va por su nombre.",
     desc: "packages/core/tarifas.ts calcula el rango por entregable desde views promedio × CPM de niche_cpm_benchmark, con modificadores (derechos de uso, exclusividad). Las views vienen de creator_baseline si existe y es confiable; si no, el creador las escribe y quedan marcadas como manuales.",
     done: "Con las views del mock salen los rangos del mock; cambiar el CPM cambia el rango y la explicación lo dice. Cambio del criterio: sin los modificadores de engagement y audiencia del mock, que no tienen fuente; ver tarifas.ts.",
     status: "hecho",
@@ -443,7 +443,7 @@ export const STORIES: readonly Story[] = [
   },
   {
     id: "COT-2", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["COT-1", "RES-1"],
-    title: "Media kit público",
+    title: "Media kit público Pulido r6: al saltar el techo del enlace el creador recibe un aviso con «Desbloquear» (notification media_kit_locked).",
     desc: "Foto congelada de los números en media_kit.snapshot, página pública por slug, opcional con contraseña y vencimiento. Contador de vistas.",
     done: "El enlace abre sin sesión, muestra las cifras congeladas, y no cambia aunque cambien las métricas.",
     status: "hecho",
@@ -451,7 +451,7 @@ export const STORIES: readonly Story[] = [
   },
   {
     id: "COT-3", module: "COT", owner: "rasheed", size: "L", sprint: 4, deps: ["COT-1", "VEN-3"],
-    title: "Cotización",
+    title: "Cotización Pulido r6: la nueva arranca sin derechos de uso (los sube solo un entregable que los cobra) y el precio propuesto va a tres cifras; enviar deja sin efecto las demás versiones vivas del negocio (0033).",
     desc: "Crear desde un deal, ítems desde el tarifario, subtotal, descuento, impuesto y total. Lo que se acuerda antes de publicar: métricas a reportar, cortes (24 h, 7 d, 30 d), derechos, exclusividad, plazo de pago. Numeración COT-2026-014.",
     done: "Enviar pasa el deal a «Propuesta enviada»; la cotización tiene su enlace público.",
     status: "hecho",
@@ -459,7 +459,7 @@ export const STORIES: readonly Story[] = [
   },
   {
     id: "COT-4", module: "COT", owner: "rasheed", size: "M", sprint: 4, deps: ["COT-3", "CAM-2"],
-    title: "Aceptación crea la campaña",
+    title: "Aceptación crea la campaña Pulido r6: una aceptada por negocio, desde el panel y desde el enlace (0033: DealAlreadyAccepted / «sin efecto»); pendiente humano aplicar 0033 con la cola.",
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
     status: "hecho",

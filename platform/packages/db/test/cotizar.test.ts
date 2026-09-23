@@ -24,6 +24,7 @@ import {
   saveRateCard, sendQuote, unlockMediaKit, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
   listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits, terminosIncluidosEnTarifario,
   MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
+  DealAlreadyAccepted, listMediaKitLockNotices, markMediaKitLockNoticeRead, notifyMediaKitLocked,
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
 import { DealLocked, FOLLOW_UP_ACTION, FOLLOW_UP_BUSINESS_DAYS, PITCH_ACTION, createCompany, createDeal, getCompany, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
@@ -1540,5 +1541,261 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
       return rows[0]!;
     });
     assert.deepEqual(fila, { stage_id: 'ganado', amount: '4000000.00' });
+  });
+});
+
+// ------------------------------------------------ pulido r6 · 0033 y el aviso de bloqueo
+
+describe('0033 · un negocio, una cotización aceptada', () => {
+  const LINEA = { deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok dedicado', quantity: 1, unitPrice: '5200000' };
+
+  async function negocio(nombre: string): Promise<string> {
+    return t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: nombre, amount: '9000000' }));
+  }
+
+  async function borrador(dealId: string, unitPrice = '5200000') {
+    return t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0.19', items: [{ ...LINEA, unitPrice }],
+        campaignStartsOn: '2026-12-01', campaignEndsOn: '2026-12-20',
+      }));
+  }
+
+  const enviar = (id: string) => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, id, TEXTOS));
+
+  /** Lo que dejaba la base antes de 0033: dos versiones vivas del mismo negocio. */
+  async function dosVivas(dealId: string) {
+    const vieja = await borrador(dealId, '5000000');
+    const nueva = await borrador(dealId, '5200000');
+    await enviar(vieja.id);
+    await enviar(nueva.id);
+    await t.admin(`UPDATE quote SET status = 'sent', expired_at = NULL, superseded_by = NULL WHERE id = '${vieja.id}'`);
+    return { vieja: (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id)))!, nueva: (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, nueva.id)))! };
+  }
+
+  async function aceptarDesdeElEnlace(slug: string) {
+    const r = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, slug, FIRMA));
+    if (r.status === 'ok') await t.db.withWorkspace(r.workspaceId, (tx) => completePublicAcceptance(tx, r.quoteId, TEXTOS));
+    return r;
+  }
+
+  async function contar(dealId: string) {
+    return t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ campanas: string; avisos: string; aceptadas: string }>(
+        `SELECT (SELECT count(*) FROM campaign c WHERE c.deal_id = $1 AND c.status <> 'cancelled') AS campanas,
+                (SELECT count(*) FROM notification n JOIN quote q ON q.id = n.entity_id
+                  WHERE n.kind = 'quote_accepted' AND q.deal_id = $1) AS avisos,
+                (SELECT count(*) FROM quote q WHERE q.deal_id = $1 AND q.status = 'accepted') AS aceptadas`,
+        [dealId],
+      );
+      return { campanas: Number(rows[0]!.campanas), avisos: Number(rows[0]!.avisos), aceptadas: Number(rows[0]!.aceptadas) };
+    });
+  }
+
+  test('enviar una versión nueva deja la anterior sin efecto, y el detalle y el enlace lo dicen', async () => {
+    const dealId = await negocio('Paquete snacks · Q4 (r6)');
+    const vieja = await borrador(dealId, '5000000');
+    const nueva = await borrador(dealId, '5200000');
+    await enviar(vieja.id);
+    await enviar(nueva.id);
+
+    const [v, n] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [await getQuote(tx, vieja.id), await getQuote(tx, nueva.id)]);
+    assert.equal(v!.status, 'expired');
+    assert.equal(v!.supersededById, nueva.id);
+    assert.equal(v!.supersededByNumber, nueva.number);
+    assert.ok(v!.expiredAt, 'queda con su fecha de vencida');
+    assert.deepEqual(n!.supersedes, [{ id: vieja.id, number: vieja.number }]);
+    assert.equal(n!.status, 'sent');
+
+    // La marca que abre el enlace viejo lee «sin efecto», no «venció».
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, v!.slug, { count: false }));
+    assert.equal(publica.status, 'ok');
+    if (publica.status === 'ok') {
+      assert.equal(publica.quote.status, 'expired');
+      assert.equal(publica.quote.superseded, true);
+    }
+    assert.deepEqual(await aceptarDesdeElEnlace(v!.slug), { status: 'not_acceptable', quoteStatus: 'superseded' });
+
+    // La vigente se acepta como siempre: una campaña, un aviso.
+    assert.equal((await aceptarDesdeElEnlace(n!.slug)).status, 'ok');
+    assert.deepEqual(await contar(dealId), { campanas: 1, avisos: 1, aceptadas: 1 });
+  });
+
+  test('dos versiones vivas del mismo negocio (datos de antes de 0033): aceptar las dos deja UNA campaña', async () => {
+    const dealId = await negocio('Dos vivas (r6)');
+    const { vieja, nueva } = await dosVivas(dealId);
+
+    assert.equal((await aceptarDesdeElEnlace(nueva.slug)).status, 'ok');
+    const montoGanado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ amount: string }>('SELECT amount::text AS amount FROM deal WHERE id = $1', [dealId])).rows[0]!.amount);
+    // Terminar la aceptación deja sin efecto la que seguía viva.
+    const sinEfecto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id));
+    assert.equal(sinEfecto!.supersededById, nueva.id);
+
+    // La segunda, desde su enlace en otra sesión: no se acepta.
+    assert.deepEqual(await aceptarDesdeElEnlace(vieja.slug), { status: 'not_acceptable', quoteStatus: 'superseded' });
+    assert.deepEqual(await contar(dealId), { campanas: 1, avisos: 1, aceptadas: 1 });
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ amount: string; stage_id: string }>(
+        'SELECT amount::text AS amount, stage_id FROM deal WHERE id = $1', [dealId]);
+      return rows[0]!;
+    });
+    assert.deepEqual(despues, { amount: montoGanado, stage_id: 'ganado' }, 'el monto ganado no se pisa');
+    // Y deja de estar viva: recargar el enlace no vuelve a ofrecer «Aceptar».
+    const v = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id));
+    assert.equal(v!.status, 'expired');
+  });
+
+  test('la base se niega aunque la otra siga viva: la segunda aceptación desde el enlace no pasa', async () => {
+    const dealId = await negocio('Sin terminar (r6)');
+    const { vieja, nueva } = await dosVivas(dealId);
+    // Solo la parte de la base (sin completePublicAcceptance): la otra sigue viva.
+    assert.equal((await t.db.withPublicShare((tx) => acceptPublicQuote(tx, nueva.slug, FIRMA))).status, 'ok');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id)))!.status, 'sent');
+    assert.deepEqual(
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, vieja.slug, FIRMA)),
+      { status: 'not_acceptable', quoteStatus: 'superseded' },
+    );
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id)))!.status, 'expired');
+    assert.equal((await contar(dealId)).aceptadas, 1);
+  });
+
+  test('desde el panel, la misma guardia: DealAlreadyAccepted y nada cambia', async () => {
+    const dealId = await negocio('Panel (r6)');
+    const { vieja, nueva } = await dosVivas(dealId);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuoteAndCreateCampaign(tx, nueva.id, TEXTOS));
+    // Aceptar desde el panel ya la dejó sin efecto; se revive para probar la guardia.
+    await t.admin(`UPDATE quote SET status = 'sent', expired_at = NULL, superseded_by = NULL WHERE id = '${vieja.id}'`);
+
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuoteAndCreateCampaign(tx, vieja.id, TEXTOS)),
+      (err: unknown) => err instanceof DealAlreadyAccepted && err.acceptedNumber === nueva.number,
+    );
+    assert.deepEqual(await contar(dealId), { campanas: 1, avisos: 0, aceptadas: 1 });
+  });
+
+  test('aceptar desde el panel deja sin efecto la versión que siguiera viva', async () => {
+    const dealId = await negocio('Panel con viva (r6)');
+    const { vieja, nueva } = await dosVivas(dealId);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, nueva.id, TEXTOS));
+    const v = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id));
+    assert.equal(v!.status, 'expired');
+    assert.equal(v!.supersededById, nueva.id);
+  });
+
+  test('dos aceptaciones a la vez desde dos enlaces: una gana y la otra queda sin efecto', async () => {
+    const dealId = await negocio('A la vez (r6)');
+    const { vieja, nueva } = await dosVivas(dealId);
+    const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    let soltar!: () => void;
+    const retenida = new Promise<void>((r) => (soltar = r));
+    let yaAcepto!: () => void;
+    const acepto = new Promise<void>((r) => (yaAcepto = r));
+    // La primera acepta y NO confirma todavía: tiene la cotización y el negocio.
+    const primera = t.db.withPublicShare(async (tx) => {
+      const r = await acceptPublicQuote(tx, nueva.slug, FIRMA);
+      yaAcepto();
+      await retenida;
+      return r;
+    });
+    await acepto;
+    const segunda = t.db.withPublicShare((tx) => acceptPublicQuote(tx, vieja.slug, { name: 'Otra persona', email: 'otra@cafealma.co' }));
+    await esperar(t.kind === 'postgres' ? 400 : 10);
+    soltar();
+
+    assert.equal((await primera).status, 'ok');
+    assert.deepEqual(await segunda, { status: 'not_acceptable', quoteStatus: 'superseded' });
+    const estados = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [
+      (await getQuote(tx, nueva.id))!.status, (await getQuote(tx, vieja.id))!.status,
+    ]);
+    assert.deepEqual(estados, ['accepted', 'expired']);
+  });
+
+  test('un negocio ganado con una aceptada no recibe otra versión', async () => {
+    const dealId = await negocio('Ganado (r6)');
+    const primera = await borrador(dealId);
+    await enviar(primera.id);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuoteAndCreateCampaign(tx, primera.id, TEXTOS));
+    // Un borrador que quedó de antes de ganar.
+    const tarde = await borrador(dealId, '6000000');
+    await assert.rejects(enviar(tarde.id), DealAlreadyAccepted);
+    const sigue = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, tarde.id));
+    assert.equal(sigue!.status, 'draft');
+  });
+
+  test('reabierto tras cancelar su campaña, el negocio sí acepta una versión nueva', async () => {
+    const dealId = await negocio('Reabierto (r6)');
+    const primera = await borrador(dealId);
+    await enviar(primera.id);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuoteAndCreateCampaign(tx, primera.id, TEXTOS));
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      await tx.query("UPDATE campaign SET status = 'cancelled' WHERE deal_id = $1", [dealId]);
+      await moveDeal(tx, dealId, 'negociacion');
+    });
+
+    const otra = await borrador(dealId, '6000000');
+    const enviada = await enviar(otra.id);
+    assert.equal((await aceptarDesdeElEnlace(enviada.slug)).status, 'ok');
+    assert.deepEqual(await contar(dealId), { campanas: 1, avisos: 1, aceptadas: 2 });
+  });
+});
+
+describe('pulido r6 · el techo del media kit avisa al creador', () => {
+  const AVISO = { title: '[bloqueo] título', body: '[bloqueo] cuerpo' };
+
+  async function saltarElTecho(slug: string) {
+    let ultimo: Awaited<ReturnType<typeof readPublicMediaKit>> | null = null;
+    for (let o = 0; o < 6 && ultimo?.status !== 'locked'; o++) {
+      for (let i = 0; i < 9 && ultimo?.status !== 'locked'; i++) {
+        ultimo = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, slug, `mala-${o}-${i}`, { origin: `203.0.113.${o}` }));
+      }
+    }
+    return ultimo!;
+  }
+
+  test('al saltar el techo, la base dice qué kit y de qué workspace, y el aviso queda uno solo', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    const r = await saltarElTecho(kit.slug);
+    assert.equal(r.status, 'locked');
+    assert.ok(r.status === 'locked' && r.linkLocked, 'la respuesta que salta el techo lo marca');
+    assert.ok(r.status === 'locked' && r.mediaKitId === kit.id);
+    assert.ok(r.status === 'locked' && r.workspaceId === WORKSPACE_LAURA);
+
+    // Las respuestas siguientes (ya bloqueado) no lo repiten.
+    const despues = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', { origin: '198.51.100.9' }));
+    assert.equal(despues.status, 'locked');
+    assert.ok(despues.status === 'locked' && !despues.linkLocked && !despues.workspaceId);
+
+    // El servidor deja el aviso en el workspace del kit; repetirlo no apila otro.
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => notifyMediaKitLocked(tx, kit.id, AVISO)), true);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => notifyMediaKitLocked(tx, kit.id, AVISO)), false);
+    const avisos = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listMediaKitLockNotices(tx))).filter((a) => a.mediaKitId === kit.id);
+    assert.equal(avisos.length, 1);
+    assert.ok(avisos[0]!.lockedUntil, 'dice hasta cuándo sigue bloqueado');
+
+    // El vecino ni lo ve ni puede dejarle un aviso a un kit que no ve.
+    assert.equal(
+      (await t.db.withWorkspace(WS_VECINO, (tx) => listMediaKitLockNotices(tx))).some((a) => a.mediaKitId === kit.id),
+      false,
+    );
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => notifyMediaKitLocked(tx, kit.id, AVISO)), false);
+
+    // «Desbloquear» abre el enlace y da el aviso por atendido.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => unlockMediaKit(tx, kit.id));
+    const quedan = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listMediaKitLockNotices(tx))).filter((a) => a.mediaKitId === kit.id);
+    assert.equal(quedan.length, 0);
+  });
+
+  test('«Entendido» quita el aviso sin tocar el bloqueo', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    await saltarElTecho(kit.slug);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => notifyMediaKitLocked(tx, kit.id, AVISO));
+    const [aviso] = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listMediaKitLockNotices(tx))).filter((a) => a.mediaKitId === kit.id);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markMediaKitLockNoticeRead(tx, aviso!.id));
+    const quedan = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listMediaKitLockNotices(tx))).filter((a) => a.mediaKitId === kit.id);
+    assert.equal(quedan.length, 0);
+    const k = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, kit.id));
+    assert.ok(k?.lockedUntil, 'el enlace sigue bloqueado: «Entendido» no desbloquea');
   });
 });

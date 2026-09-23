@@ -2,7 +2,9 @@ import "server-only";
 import type { WorkspaceTx } from "@mc/db";
 import { getWorkspace } from "@mc/db/queries/cimientos";
 import {
-  acceptPublicQuote, completePublicAcceptance, type FirmaAceptacion, type PublicQuoteAcceptResult, type TextosCotizar,
+  acceptPublicQuote, completePublicAcceptance, notifyMediaKitLocked, readPublicMediaKit, type FirmaAceptacion,
+  type PublicMediaKitOptions, type PublicMediaKitResult, type PublicQuoteAcceptResult, type TextosBloqueoMediaKit,
+  type TextosCotizar,
 } from "@mc/db/queries/cotizar";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { closeDb as cerrarCliente, withPublicShare, withWorkspaceId } from "./cliente";
@@ -130,6 +132,41 @@ export async function acceptQuoteFromLink(
     console.error("[cotizacion pública] aceptada, pero no se pudo terminar la campaña", err);
     return { status: "ok", quoteNumber: r.quoteNumber, campaignPending: true };
   }
+}
+
+/**
+ * Abrir un media kit con contraseña desde su enlace, y avisar al creador
+ * si ESTE intento es el que salta el techo por enlace (0030, pulido r6).
+ *
+ *   1. Sin workspace: public_media_kit() compara la contraseña y cuenta el
+ *      fallo. Si el fallo número 50 de la hora deja el enlace bloqueado
+ *      para todos, la respuesta trae el kit y su workspace, leídos por la
+ *      base a partir del slug.
+ *   2. Con ese workspace fijado por el cliente de base: el aviso al
+ *      creador, con «Desbloquear» (notifyMediaKitLocked). Sin él, el
+ *      creador se enteraba cuando la marca se quejaba.
+ *
+ * Si el aviso falla, el bloqueo ya quedó y la visita recibe «bloqueado»
+ * igual: el aviso es un extra, no una condición. El workspace y el id
+ * del kit no salen de aquí hacia la página: se quitan de la respuesta.
+ */
+export async function openProtectedMediaKit(
+  slug: string,
+  password: string,
+  opts: PublicMediaKitOptions,
+  textos: TextosBloqueoMediaKit,
+): Promise<PublicMediaKitResult> {
+  const r = await withPublicShare((tx) => readPublicMediaKit(tx, slug, password, opts));
+  if (r.status !== "locked") return r;
+  const { linkLocked, mediaKitId, workspaceId, ...visible } = r;
+  if (linkLocked && mediaKitId && workspaceId) {
+    try {
+      await withWorkspaceId(workspaceId, (tx) => notifyMediaKitLocked(tx, mediaKitId, textos));
+    } catch (err) {
+      console.error("[media kit público] bloqueado, pero no se pudo avisar al creador", err);
+    }
+  }
+  return visible;
 }
 
 export { getDbMode } from "./cliente";

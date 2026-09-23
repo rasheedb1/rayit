@@ -52,7 +52,14 @@ servidor no confía en los precios que llegan del formulario: recalcula y
 solo respeta los que el creador fijó a mano, que se guardan con
 `overridden = true`. Un precio guardado siempre se puede explicar. En
 pesos (y en las monedas de `MONEDAS_SIN_CENTAVOS`) cada paso se redondea
-al peso: un tarifario con centavos parece un prototipo.
+al peso: un tarifario con centavos parece un prototipo. Y el rango final
+se propone a **tres cifras significativas** (`redondearParaNegociar`,
+pulido r6): «COP 5.195.070 – COP 8.081.220» era precisión falsa para una
+negociación y no cuadraba con el media kit («5,2 M – 8,1 M»). El exacto
+sigue en el «Cómo se calcula», en el paso «Sin redondear». La
+cotización propone el mismo número al elegir un entregable
+(`_lib/precio.ts`), también con tarifarios guardados antes del redondeo;
+un precio que el creador escribió a mano se respeta tal cual.
 
 **2 · Lo que se comparte se congela.**
 El media kit guarda `media_kit.snapshot` y la cotización guarda
@@ -238,6 +245,21 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   la tabla, cuyos campos de CPM se quedan abiertos aunque se recargue, y
   `guardarTarifario` lo devuelve por fila (`cpm.<entregable>`) sin tocar
   la base.
+- **Un negocio, una cotización aceptada** (0033, pulido r6). Enviar una
+  versión deja sin efecto las demás vivas del mismo negocio (`expired`
+  con `superseded_by`, «Sin efecto» en la lista y un aviso con enlace en
+  el detalle de las dos), y su enlace dice «quedó sin efecto», no
+  «venció». Aceptar —desde el panel o desde el enlace— bloquea el
+  negocio y se niega si ya está **ganado con otra aceptada**
+  (`DealAlreadyAccepted`; `quoteStatus: 'superseded'` en el enlace):
+  dos aceptadas eran dos campañas y el ingreso contado dos veces. Un
+  negocio reabierto tras cancelar su campaña sí acepta una versión
+  nueva. Desde el enlace, `mc_public_share` ve las aceptadas del negocio
+  solo mientras la función lo comprueba (`app.public_share_deal`).
+- **Una cotización nueva no cede derechos gratis.** Derechos de uso y
+  exclusividad arrancan en «no aplica» y solo los sube un entregable
+  cuyo precio los cobra (pulido r6: antes arrancaba con 30 días de
+  derechos a precio base).
 - **Una cotización con la validez vencida no se envía** (`ValidezVencida`):
   nacería vencida. La numeración COT-AAAA toma el año de la zona del
   workspace, no el de UTC.
@@ -254,6 +276,14 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
     bloquean el enlace entero 15 minutos. Es lo que para a quien rota
     IPs (o falsea `X-Forwarded-For` detrás de un proxy que no lo
     reescribe) para adivinar la contraseña.
+  - **El creador se entera sin esperar a la marca** (pulido r6). Cuando
+    un fallo salta el techo del enlace, `public_media_kit()` devuelve el
+    kit y su workspace (solo en esa respuesta) y el servidor deja una
+    notificación `media_kit_locked` en ese workspace
+    (`lib/db · openProtectedMediaKit` → `notifyMediaKitLocked`, una sin
+    leer por kit). Sale en `/cotizar/media-kit` y en
+    `/cotizar/cotizaciones` (`_ui/avisos-bloqueo.tsx`) con
+    **Desbloquear** y **Entendido**; desbloquear también la da por vista.
   - **El creador lo ve y lo deshace.** `/cotizar/media-kit` pinta
     «Bloqueado» con la hora en la columna Estado (o cuántos visitantes
     tienen su origen bloqueado) y un botón **Desbloquear**
@@ -261,8 +291,9 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
     niveles. Cambiar la contraseña también los pone a cero.
   - **El compromiso que queda**: quien tenga el enlace y reparta sus
     intentos entre cinco o más IPs puede disparar el techo del enlace.
-    Ya no basta una máquina, el creador lo ve, y si se repite la salida
-    es generar otro media kit: el enlace nuevo no lo tiene quien ataca.
+    Ya no basta una máquina, el creador recibe el aviso, y si se repite
+    la salida es generar otro media kit: el enlace nuevo no lo tiene
+    quien ataca.
   - Delante hay un freno en memoria (`_lib/limite.ts`, 5 por minuto por
     enlace e IP) que ahorra el scrypt, **por instancia y de mejor
     esfuerzo**: en Vercel cada instancia tiene el suyo. La barrera es la

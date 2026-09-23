@@ -6,7 +6,8 @@ import { z } from "zod";
 import { calcularItem, finDelDiaEnZona, pctToRate, TarifaError, validarRangoPrecio } from "@mc/core";
 import {
   acceptQuoteAndCreateCampaign, createCampaignForQuote, createMediaKit, createQuote, deleteQuoteDraft,
-  getRateCardInputs, markAcceptanceNoticeRead, rejectQuote, saveRateCard, sendQuote, unlockMediaKit, updateMediaKitShare, updateQuoteDraft,
+  getRateCardInputs, markAcceptanceNoticeRead, markMediaKitLockNoticeRead, rejectQuote, saveRateCard, sendQuote,
+  unlockMediaKit, updateMediaKitShare, updateQuoteDraft,
   CotizarError, type QuoteItemInput, type SaveRateCardItem,
 } from "@mc/db/queries/cotizar";
 import { withWorkspace } from "@/lib/db";
@@ -465,6 +466,27 @@ export async function marcarAvisoVisto(id: string): Promise<void> {
   }
   revalidatePath("/cotizar/cotizaciones");
   redirect("/cotizar/cotizaciones");
+}
+
+/** Las dos listas que enseñan los avisos de bloqueo; a cualquier otra cosa no se vuelve. */
+const VUELTA_AVISO_BLOQUEO = ["/cotizar/media-kit", "/cotizar/cotizaciones"] as const;
+export type VueltaAvisoBloqueo = (typeof VUELTA_AVISO_BLOQUEO)[number];
+
+/**
+ * «Entendido» en un aviso de «tu media kit quedó bloqueado». No
+ * desbloquea: para eso está «Desbloquear». Se usa con bind(null, id, vuelta).
+ */
+export async function marcarAvisoBloqueoVisto(id: string, vuelta: VueltaAvisoBloqueo): Promise<void> {
+  if (UUID_RE.test(id)) {
+    try {
+      await withWorkspace((tx) => markMediaKitLockNoticeRead(tx, id));
+    } catch (err) {
+      console.error("[cotizar] no se pudo marcar el aviso de bloqueo", err);
+    }
+  }
+  const destino = VUELTA_AVISO_BLOQUEO.includes(vuelta) ? vuelta : "/cotizar/media-kit";
+  revalidatePath(destino);
+  redirect(destino);
 }
 
 /** Borra un borrador y vuelve a la lista. */

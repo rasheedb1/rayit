@@ -1,4 +1,4 @@
-import type { TextosCotizar } from "@mc/db/queries/cotizar";
+import type { TextosBloqueoMediaKit, TextosCotizar } from "@mc/db/queries/cotizar";
 import { formatMoney } from "@/lib/format";
 import { MESSAGES } from "../messages";
 import { MESSAGES as VENTAS } from "../../ventas/_lib/messages";
@@ -36,3 +36,10 @@ export const TEXTOS_COTIZAR: TextosCotizar = {
     };
   },
 };
+
+/**
+ * Lo que queda guardado en la notificación «tu media kit quedó
+ * bloqueado» (notifyMediaKitLocked). La pantalla lo recompone con el kit
+ * y la hora de hoy (_ui/avisos-bloqueo.tsx); esto es el respaldo.
+ */
+export const TEXTOS_BLOQUEO_MEDIA_KIT: TextosBloqueoMediaKit = MESSAGES.mediaKit.avisosBloqueo.guardado;

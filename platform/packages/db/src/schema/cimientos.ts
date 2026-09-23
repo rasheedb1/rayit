@@ -23,6 +23,8 @@ export const NOTIFICATION_KINDS = [
   'invoice_overdue', 'connection_error', 'analysis_ready', 'report_sent', 'trend',
   // 0030: la marca aceptó una cotización desde el enlace público (COT-4).
   'quote_accepted',
+  // 0030 (pulido r6): el techo de contraseñas fallidas bloqueó un media kit para todos.
+  'media_kit_locked',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

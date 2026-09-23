@@ -73,7 +73,10 @@
 -- El compromiso que queda, dicho: quien tenga el enlace y reparta sus
 -- intentos entre cinco o más IPs puede disparar el techo y dejar fuera
 -- a la marca 15 minutos cada vez. Ya no basta una máquina, y el creador
--- lo VE: /cotizar/media-kit enseña «Bloqueado hasta …» (y cuántas
+-- se ENTERA sin esperar a que la marca se queje: al saltar el techo la
+-- función devuelve el kit y su workspace, y el servidor le deja un aviso
+-- (notification 'media_kit_locked') con «Desbloquear» en Cotizar
+-- (pulido r6). Y lo VE: /cotizar/media-kit enseña «Bloqueado hasta …» (y cuántas
 -- visitas tienen su origen bloqueado) con un botón «Desbloquear» que
 -- pone a cero los dos niveles (queries/cotizar · unlockMediaKit). Si el
 -- abuso sigue, la salida es generar otro media kit: el enlace nuevo no
@@ -216,13 +219,16 @@ CREATE TRIGGER ref_visible_media_kit_id
   FOR EACH ROW WHEN (NEW.media_kit_id IS NOT NULL)
   EXECUTE FUNCTION assert_reference_visible('media_kit_id', 'media_kit', 'id');
 
--- El aviso al creador cuando la marca acepta desde el enlace. Se añade
--- un valor al CHECK de 0009; los demás quedan igual.
+-- Los avisos al creador que nacen de un enlace público: la marca aceptó
+-- una cotización (quote_accepted), y el techo POR ENLACE de contraseñas
+-- fallidas dejó un media kit bloqueado para todos (media_kit_locked,
+-- pulido r6: sin él, el creador se enteraba cuando la marca se quejaba).
+-- Se añaden dos valores al CHECK de 0009; los demás quedan igual.
 ALTER TABLE notification DROP CONSTRAINT IF EXISTS notification_kind_check;
 ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
   ('outlier','breakout','signal','deal_due','deal_overdue',
    'payment_received','invoice_overdue','connection_error',
-   'analysis_ready','report_sent','trend','quote_accepted'));
+   'analysis_ready','report_sent','trend','quote_accepted','media_kit_locked'));
 
 -- Un rango del tarifario no puede estar al revés ni ser negativo: ese
 -- rango llega al media kit que ve la marca y al aviso «fuera de rango»
@@ -343,6 +349,8 @@ $$;
 --   {"status":"not_found"}
 --   {"status":"expired","expiresAt":"…"}
 --   {"status":"locked","lockedUntil":"…"}
+--   {"status":"locked","lockedUntil":"…","linkLocked":true,"mediaKitId":"…","workspaceId":"…"}
+--       (solo al saltar el techo del enlace; ver más abajo)
 --   {"status":"password_required","algo":"s1","salt":"…"}
 --   {"status":"password_invalid","algo":"s1","salt":"…","attemptsLeft":7}
 --   {"status":"ok","slug":"…","snapshot":{…},"viewCount":12,"createdAt":"…"}
@@ -363,7 +371,7 @@ DECLARE
   del_enlace int;
   vistas int;
 BEGIN
-  SELECT id, slug, snapshot, password_hash, expires_at, view_count, created_at, locked_until
+  SELECT id, workspace_id, slug, snapshot, password_hash, expires_at, view_count, created_at, locked_until
     INTO k
     FROM media_kit
    WHERE slug = p_slug;
@@ -430,7 +438,15 @@ BEGIN
 
       IF del_enlace >= max_por_enlace THEN
         UPDATE media_kit SET failed_attempts = 0, failed_since = NULL, locked_until = now() + bloqueo WHERE id = k.id;
-        RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(now() + bloqueo));
+        -- linkLocked, mediaKitId y workspaceId solo en ESTA respuesta, la
+        -- que salta el techo: con ellos el servidor deja el aviso al
+        -- creador (media_kit_locked, con «Desbloquear») dentro del
+        -- workspace del kit, como hace la aceptación con el suyo. Este
+        -- rol no escribe en notification, y la frase la pone la web. La
+        -- página pública no los recibe (app/(public)/actions.ts).
+        RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(now() + bloqueo),
+                                  'linkLocked', true, 'mediaKitId', to_jsonb(k.id),
+                                  'workspaceId', to_jsonb(k.workspace_id));
       END IF;
       IF intentos >= max_por_origen THEN
         UPDATE media_kit_lockout SET failed_attempts = 0, locked_until = now() + bloqueo, updated_at = now()

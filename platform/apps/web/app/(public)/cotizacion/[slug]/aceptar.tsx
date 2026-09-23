@@ -20,6 +20,9 @@ export function textoNoAceptable(quoteStatus: string): string {
   const t = MESSAGES.publico.cotizacion;
   if (quoteStatus === "accepted") return t.yaAceptada;
   if (quoteStatus === "rejected") return t.rechazada;
+  // Otra versión del mismo acuerdo ya se aceptó, o esta la reemplazó una
+  // más reciente (0033): decir «venció» sería falso.
+  if (quoteStatus === "superseded") return t.sinEfecto;
   return t.vencida;
 }
 
