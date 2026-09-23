@@ -193,20 +193,287 @@ docs/propuestas/ACC-1.md                   este documento
 
 ## 1. El catálogo
 
-(Se completa al cerrar la historia: la tabla sale de `PERMISOS`.)
+43 permisos, generados desde `PERMISOS` (`packages/core/src/permisos.ts`).
+`sensible` = dinero, cuentas conectadas o equipo (decisión E). No existe
+un permiso para leer el token de una cuenta.
+
+| Permiso | Módulo | Etiqueta | Sensibilidad |
+|---|---|---|---|
+| `resumen.panel.ver` | resumen | Ver el resumen | normal |
+| `resumen.metricas.importar` | resumen | Importar métricas por CSV | normal |
+| `ventas.senal.ver` | ventas | Ver el radar de señales | normal |
+| `ventas.senal.registrar` | ventas | Anotar, aceptar y descartar señales | normal |
+| `ventas.senal.importar` | ventas | Cargar una lista de marcas por CSV | normal |
+| `ventas.empresa.ver` | ventas | Ver empresas y contactos | normal |
+| `ventas.empresa.crear` | ventas | Crear empresas | normal |
+| `ventas.empresa.editar` | ventas | Editar empresas y sus contactos | normal |
+| `ventas.negocio.ver` | ventas | Ver el pipeline de negocios | normal |
+| `ventas.negocio.crear` | ventas | Crear negocios | normal |
+| `ventas.negocio.editar` | ventas | Mover negocios de etapa | normal |
+| `cotizar.tarifario.ver` | cotizar | Ver el tarifario | normal |
+| `cotizar.tarifario.editar` | cotizar | Guardar el tarifario | normal |
+| `cotizar.mediakit.ver` | cotizar | Ver los media kits | normal |
+| `cotizar.mediakit.generar` | cotizar | Generar un media kit | normal |
+| `cotizar.mediakit.editar` | cotizar | Publicar, despublicar y desbloquear media kits | normal |
+| `cotizar.cotizacion.ver` | cotizar | Ver las cotizaciones | normal |
+| `cotizar.cotizacion.crear` | cotizar | Crear cotizaciones | normal |
+| `cotizar.cotizacion.editar` | cotizar | Editar y borrar borradores de cotización | normal |
+| `cotizar.cotizacion.enviar` | cotizar | Enviar cotizaciones y registrar la respuesta de la marca | normal |
+| `campanas.campana.ver` | campanas | Ver las campañas | normal |
+| `campanas.campana.crear` | campanas | Crear campañas | normal |
+| `campanas.campana.editar` | campanas | Editar campañas y cambiar su estado | normal |
+| `campanas.post.asociar` | campanas | Asociar posts y marcar entregables | normal |
+| `campanas.aporte.registrar` | campanas | Registrar lo que aporta la marca | normal |
+| `campanas.reporte.enviar` | campanas | Enviar el reporte a la marca | normal |
+| `finanzas.factura.ver` | finanzas | Ver las facturas | sensible |
+| `finanzas.factura.crear` | finanzas | Crear facturas | sensible |
+| `finanzas.factura.editar` | finanzas | Marcar facturas como enviadas o anularlas | sensible |
+| `finanzas.pago.registrar` | finanzas | Registrar pagos | sensible |
+| `finanzas.cobro.ver` | finanzas | Ver el estado de cobro de las campañas | sensible |
+| `finanzas.gasto.ver` | finanzas | Ver los gastos | sensible |
+| `finanzas.gasto.registrar` | finanzas | Registrar gastos | sensible |
+| `finanzas.flujo.ver` | finanzas | Ver el flujo de caja y la reserva de impuestos | sensible |
+| `finanzas.ajustes.configurar` | finanzas | Configurar los parámetros financieros | sensible |
+| `conexiones.cuenta.ver` | conexiones | Ver el estado de las cuentas conectadas | normal |
+| `conexiones.cuenta.conectar` | conexiones | Conectar cuentas y pedir una lectura nueva | sensible |
+| `conexiones.cuenta.desconectar` | conexiones | Quitar cuentas conectadas | sensible |
+| `equipo.miembro.ver` | equipo | Ver quién está en el espacio | sensible |
+| `equipo.miembro.invitar` | equipo | Invitar personas al espacio | sensible |
+| `equipo.miembro.revocar` | equipo | Quitar personas del espacio | sensible |
+| `equipo.rol.editar` | equipo | Cambiar el rol de una persona | sensible |
+| `equipo.workspace.configurar` | equipo | Configurar el espacio y cerrar la cuenta | sensible |
+
+Lo que quedó fuera y quién lo agrega, cuando exista la acción: VEN-4 a
+VEN-16 (seguimientos, pitch, outreach), FIN-4 (recordatorios), FIN-7
+(ingresos por CSV, sprint 6), RES-3, AGE (`equipo.concesion.*`).
+`calcular` está en el vocabulario sin uso hasta que haya un cálculo a
+pedido.
 
 ## 2. La matriz de fábrica
 
-(Se completa al cerrar.)
+Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
+(`test/permisos-sql.test.ts` lo comprueba fila por fila en PGlite).
+
+### Workspace de creador
+
+| Permiso | Dueño (`owner`) | Mánager (`manager`) | Editor (`editor`) | Contador (`finance`) | Solo lectura (`viewer`) |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `resumen.panel.ver` | ● | ● | ● | — | ● |
+| `resumen.metricas.importar` | ● | — | — | — | — |
+| `ventas.senal.ver` | ● | ● | — | — | ● |
+| `ventas.senal.registrar` | ● | ● | — | — | — |
+| `ventas.senal.importar` | ● | ● | — | — | — |
+| `ventas.empresa.ver` | ● | ● | — | — | ● |
+| `ventas.empresa.crear` | ● | ● | — | — | — |
+| `ventas.empresa.editar` | ● | ● | — | — | — |
+| `ventas.negocio.ver` | ● | ● | — | — | ● |
+| `ventas.negocio.crear` | ● | ● | — | — | — |
+| `ventas.negocio.editar` | ● | ● | — | — | — |
+| `cotizar.tarifario.ver` | ● | ● | — | — | ● |
+| `cotizar.tarifario.editar` | ● | ● | — | — | — |
+| `cotizar.mediakit.ver` | ● | ● | — | — | ● |
+| `cotizar.mediakit.generar` | ● | ● | — | — | — |
+| `cotizar.mediakit.editar` | ● | ● | — | — | — |
+| `cotizar.cotizacion.ver` | ● | ● | — | — | ● |
+| `cotizar.cotizacion.crear` | ● | ● | — | — | — |
+| `cotizar.cotizacion.editar` | ● | ● | — | — | — |
+| `cotizar.cotizacion.enviar` | ● | ● | — | — | — |
+| `campanas.campana.ver` | ● | ● | ● | ● | ● |
+| `campanas.campana.crear` | ● | ● | — | — | — |
+| `campanas.campana.editar` | ● | ● | — | — | — |
+| `campanas.post.asociar` | ● | ● | ● | — | — |
+| `campanas.aporte.registrar` | ● | ● | — | — | — |
+| `campanas.reporte.enviar` | ● | ● | — | — | — |
+| `finanzas.factura.ver` | ● | — | — | ● | — |
+| `finanzas.factura.crear` | ● | — | — | ● | — |
+| `finanzas.factura.editar` | ● | — | — | ● | — |
+| `finanzas.pago.registrar` | ● | — | — | ● | — |
+| `finanzas.cobro.ver` | ● | ● | — | ● | — |
+| `finanzas.gasto.ver` | ● | — | — | ● | — |
+| `finanzas.gasto.registrar` | ● | — | — | ● | — |
+| `finanzas.flujo.ver` | ● | — | — | ● | — |
+| `finanzas.ajustes.configurar` | ● | — | — | ● | — |
+| `conexiones.cuenta.ver` | ● | ● | ● | — | ● |
+| `conexiones.cuenta.conectar` | ● | — | — | — | — |
+| `conexiones.cuenta.desconectar` | ● | — | — | — | — |
+| `equipo.miembro.ver` | ● | ● | — | — | — |
+| `equipo.miembro.invitar` | ● | — | — | — | — |
+| `equipo.miembro.revocar` | ● | — | — | — | — |
+| `equipo.rol.editar` | ● | — | — | — | — |
+| `equipo.workspace.configurar` | ● | — | — | — | — |
+| **Total** | 43 | 28 | 4 | 10 | 9 |
+
+### Workspace de agencia
+
+| Permiso | Dueño (`owner`) | Administrador (`admin`) | Ejecutivo de cuenta (`manager`) | Contador (`finance`) | Solo lectura (`viewer`) |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `resumen.panel.ver` | ● | ● | — | — | ● |
+| `resumen.metricas.importar` | ● | ● | — | — | — |
+| `ventas.senal.ver` | ● | ● | ● | — | ● |
+| `ventas.senal.registrar` | ● | ● | ● | — | — |
+| `ventas.senal.importar` | ● | ● | ● | — | — |
+| `ventas.empresa.ver` | ● | ● | ● | — | ● |
+| `ventas.empresa.crear` | ● | ● | ● | — | — |
+| `ventas.empresa.editar` | ● | ● | ● | — | — |
+| `ventas.negocio.ver` | ● | ● | ● | — | ● |
+| `ventas.negocio.crear` | ● | ● | ● | — | — |
+| `ventas.negocio.editar` | ● | ● | ● | — | — |
+| `cotizar.tarifario.ver` | ● | ● | ● | — | ● |
+| `cotizar.tarifario.editar` | ● | ● | ● | — | — |
+| `cotizar.mediakit.ver` | ● | ● | ● | — | ● |
+| `cotizar.mediakit.generar` | ● | ● | ● | — | — |
+| `cotizar.mediakit.editar` | ● | ● | ● | — | — |
+| `cotizar.cotizacion.ver` | ● | ● | ● | — | ● |
+| `cotizar.cotizacion.crear` | ● | ● | ● | — | — |
+| `cotizar.cotizacion.editar` | ● | ● | ● | — | — |
+| `cotizar.cotizacion.enviar` | ● | ● | ● | — | — |
+| `campanas.campana.ver` | ● | ● | ● | ● | ● |
+| `campanas.campana.crear` | ● | ● | ● | — | — |
+| `campanas.campana.editar` | ● | ● | ● | — | — |
+| `campanas.post.asociar` | ● | ● | ● | — | — |
+| `campanas.aporte.registrar` | ● | ● | ● | — | — |
+| `campanas.reporte.enviar` | ● | ● | ● | — | — |
+| `finanzas.factura.ver` | ● | ● | — | ● | — |
+| `finanzas.factura.crear` | ● | ● | — | ● | — |
+| `finanzas.factura.editar` | ● | ● | — | ● | — |
+| `finanzas.pago.registrar` | ● | ● | — | ● | — |
+| `finanzas.cobro.ver` | ● | ● | — | ● | — |
+| `finanzas.gasto.ver` | ● | ● | — | ● | — |
+| `finanzas.gasto.registrar` | ● | ● | — | ● | — |
+| `finanzas.flujo.ver` | ● | ● | — | ● | — |
+| `finanzas.ajustes.configurar` | ● | ● | — | ● | — |
+| `conexiones.cuenta.ver` | ● | ● | — | — | ● |
+| `conexiones.cuenta.conectar` | ● | ● | — | — | — |
+| `conexiones.cuenta.desconectar` | ● | ● | — | — | — |
+| `equipo.miembro.ver` | ● | ● | — | — | — |
+| `equipo.miembro.invitar` | ● | ● | — | — | — |
+| `equipo.miembro.revocar` | ● | ● | — | — | — |
+| `equipo.rol.editar` | ● | ● | — | — | — |
+| `equipo.workspace.configurar` | ● | — | — | — | — |
+| **Total** | 43 | 42 | 24 | 10 | 9 |
+
+Lecturas conservadoras de la fase 5 (una línea cada una si Nicolás las
+cambia): §0.2, punto 5.
 
 ## 3. Lo que Rasheed puede mover a `lib/auth/` cuando quiera
 
-(Se completa al cerrar.)
+`apps/web/lib/permisos/` tiene dos archivos y ninguna otra dependencia
+que `@mc/core` y `server-only`:
+
+| Archivo | Qué es | Al moverlo |
+|---|---|---|
+| `index.ts` | `requirePermission(permiso)`; reexporta `SinPermisoError` y `Permiso` | Cambiar `@/lib/permisos` por la ruta nueva en las tres `actions.ts` de Nicolás, en `convencion.test.ts` (la expresión regular de la importación) y en `require-permission.test.ts`. Nada más la conoce. |
+| `sesion.ts` | `permisosDeLaSesion()`: hoy Dueño, `TODO(ACC-3)` | Es donde ACC-3 lee `membership.role_id → role_permission` del workspace actual (`getCurrentContext`) y lo memoriza por petición con `cache` de React. La firma (`Promise<ReadonlySet<Permiso>>`) no cambia. |
+
+Convenciones que ya están tomadas y conviene conservar al mover:
+`SinPermisoError` vive en core (ACC-2, ACC-5 y el worker lo necesitan
+sin importar la web); en páginas se convierte con `notFound()` (ACC-5,
+`requireModule(slug, permiso)`); en Server Actions hoy cae en la
+frontera del segmento (§0.2, punto 8, decisión pendiente).
 
 ## 4. Los permisos de las Server Actions de Rasheed
 
-(Se completa al cerrar.)
+Sin tocar sus archivos. Cuando adopte la convención, cada función abre
+con `await requirePermission("<permiso>")` como primera línea de código
+y agrega el módulo a `MODULOS_CON_CONVENCION` en
+`apps/web/lib/permisos/convencion.test.ts`, que desde entonces la hace
+cumplir. Si prefiere hacerlo por partes, `// TODO(ACC-1): <permiso>`
+como primera línea del cuerpo también pasa la prueba.
+
+### `resumen/importar/actions.ts`
+
+| Acción | Permiso |
+|---|---|
+| `buscarPostsConocidos` | `resumen.metricas.importar` (es el paso 3 de la importación; el route handler `lote/route.ts` que escribe, el mismo) |
+
+### `ventas/actions.ts`
+
+| Acción | Permiso |
+|---|---|
+| `anotarSenal`, `aceptarSenal`, `descartarSenal` | `ventas.senal.registrar` |
+| `cargarLista` | `ventas.senal.importar` |
+| `crearEmpresa` | `ventas.empresa.crear` |
+| `editarEmpresa`, `cambiarRelacion`, `crearContacto`, `editarContacto`, `darDeBaja` | `ventas.empresa.editar` |
+| `crearNegocio` | `ventas.negocio.crear` |
+| `moverNegocio` | `ventas.negocio.editar` |
+
+### `cotizar/actions.ts`
+
+| Acción | Permiso |
+|---|---|
+| `guardarTarifario` | `cotizar.tarifario.editar` |
+| `generarMediaKit` | `cotizar.mediakit.generar` |
+| `desbloquearMediaKit`, `cambiarPublicacionMediaKit`, `marcarAvisoBloqueoVisto` | `cotizar.mediakit.editar` |
+| `crearCotizacion` | `cotizar.cotizacion.crear` |
+| `editarCotizacion`, `eliminarBorrador`, `marcarAvisoVisto` | `cotizar.cotizacion.editar` |
+| `enviarCotizacion`, `aceptarCotizacion`, `rechazarCotizacion` | `cotizar.cotizacion.enviar` (enviar y registrar la respuesta de la marca) |
+| `crearCampanaDeCotizacion`, `crearCampanaConVentana` | `campanas.campana.crear` (viven en Cotizar pero lo que crean es la campaña, CAM-2) |
+
+Nota sobre `aceptarCotizacion` (COT-4): acepta la cotización, gana el
+negocio y crea la campaña en una transacción. Un solo permiso
+(`cotizar.cotizacion.enviar`) es la lectura de producto: quien negocia
+cierra; el Mánager lo tiene. Si se prefiere exigir también
+`campanas.campana.crear`, son dos líneas.
+
+### `(public)/actions.ts`
+
+`abrirMediaKitProtegido` y `aceptarCotizacionPublica` **no llevan
+permiso**: no hay sesión ni workspace, el slug es la credencial y las
+funciones SECURITY DEFINER de 0030 deciden (`withPublicShare`). Que
+nadie lo «arregle».
+
+### Route handlers (no son Server Actions)
+
+| Archivo | Permiso |
+|---|---|
+| `resumen/importar/lote/route.ts` | `resumen.metricas.importar` |
+| `conexiones/oauth/[platform]/start` y `callback` | `conexiones.cuenta.conectar` (CON-3, pospuesta; lo pone quien la reactive) |
+
+Cómo responde un route handler sin permiso lo decide ACC-5 (404, como
+las páginas).
 
 ## 5. Cómo usa ACC-3 el script
 
-(Se completa al cerrar.)
+```bash
+cd platform
+pnpm --filter @mc/core permisos:sql > /tmp/permisos.sql
+```
+
+Imprime tres `INSERT … ON CONFLICT DO NOTHING` (permission, role,
+role_permission) con el esquema de la fase 4 de la propuesta ACC; el
+`role_id` se resuelve por `(key, workspace_kind) WHERE workspace_id IS
+NULL`, así que `role.id` puede seguir siendo `gen_random_uuid()`. La
+salida es idéntica a `packages/core/test/snapshots/permisos.sql`.
+
+1. La migración `00NN_access_control.sql` crea las tablas (fase 4) y
+   pega la salida al final, o la deja en `db/seed/0001_catalog.sql`
+   (roles de sistema como `feature_flag` en 0009). El número: `git
+   fetch` y el más alto en todas las ramas más uno; `0023` no se
+   recicla sin preguntar a Nicolás.
+2. Después de migrar, contar: `SELECT count(*) FROM permission` → 43;
+   `role` (workspace_id IS NULL) → 10; `role_permission` → 222.
+3. Cada vez que cambie el catálogo o la matriz, se regenera el snapshot
+   (`pnpm --filter @mc/core permisos:sql > packages/core/test/snapshots/
+   permisos.sql`) y una migración nueva vuelve a pegar la salida: las
+   aplicadas son inmutables.
+4. Si se quiere que la semilla **mande** sobre los roles de sistema
+   (que quitar un permiso de la matriz lo quite también en la base), la
+   migración añade antes del tercer INSERT:
+
+   ```sql
+   DELETE FROM role_permission rp
+    USING role r
+    WHERE r.id = rp.role_id AND r.workspace_id IS NULL AND r.is_system
+      AND (r.key, r.workspace_kind, rp.permission_key) NOT IN (VALUES
+        -- las mismas tuplas del tercer INSERT
+      );
+   ```
+
+   No está en el script porque los roles a medida (ACC-9) tienen
+   `workspace_id` y no se tocan; es una decisión de ACC-3.
+5. `membership.role → role_id`: el backfill por `key` mapea `owner →
+   owner`, `admin → manager` (en un workspace de creador no hay
+   `admin`), `member → editor`, `viewer → viewer`, `client → viewer`
+   (decisión D: la marca no tiene cuenta; el valor se deja en el enum
+   pero ninguna fila real lo usa). Hoy no hay filas reales fuera del
+   seed (`demo@oncue.test` es `owner`).
