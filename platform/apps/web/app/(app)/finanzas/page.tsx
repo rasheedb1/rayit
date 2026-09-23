@@ -12,6 +12,7 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "./_lib/db";
 import { LIST_FILTERS, filterKey, pillForInvoice, type ListFilterKey } from "./_lib/estado";
+import { MESSAGES } from "./_lib/messages";
 
 export const metadata: Metadata = { title: "Finanzas" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -121,9 +122,16 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
         title="Quién te debe, cuándo entra la plata y cuánto apartar"
         description="Cada campaña cerrada crea su factura y su fecha esperada de cobro. Los estados de mora salen de la vista receivables; el IVA y la retención, de la misma función que usa el formulario."
         aside={
-          <Button variant="primary" href="/finanzas/facturas/nueva">
-            Nueva factura
-          </Button>
+          // A 400 px los dos botones no caben en una línea con el
+          // título: van en fila propia y se envuelven.
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" href="/finanzas/facturas/nueva">
+              Nueva factura
+            </Button>
+            <Button variant="ghost" href="/finanzas/configuracion">
+              {MESSAGES.configuracion.enlaceDesdeLista}
+            </Button>
+          </div>
         }
       />
 
