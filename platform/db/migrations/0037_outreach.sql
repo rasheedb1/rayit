@@ -329,6 +329,24 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 -- en outbound_counter con channel_account_id (6.2), así que tres
 -- LinkedIn de una agencia en el mismo workspace no comparten plaza.
 -- warmup_started_at arranca el calentamiento progresivo (VEN-15).
+--
+-- Un buzón, una cuenta viva EN TODA LA PLATAFORMA: (provider,
+-- provider_account_id) es único entre las cuentas que no están
+-- desconectadas, cruzando workspaces. Los topes se cuentan por
+-- channel_account_id, así que el mismo Gmail conectado en el workspace
+-- del creador y en el de su agencia tendría dos filas, dos contadores y
+-- podría enviar el doble de lo que el proveedor aguanta. Contar por
+-- (provider, provider_account_id) en vez de por fila obligaría a un
+-- contador que cruza workspaces, que la RLS de outbound_counter no deja
+-- ni leer ni escribir desde el workspace. Se elige la regla simple: el
+-- buzón envía desde UN workspace; para moverlo, se desconecta en el
+-- otro. Dentro del workspace la unicidad es completa (también con la
+-- fila desconectada): reconectar reutiliza la fila, no crea otra.
+--
+-- El índice global es un oráculo aceptado (UNICOS_GLOBALES_DECLARADOS
+-- en src/esquema.ts): la web solo escribe provider_account_id con lo
+-- que devuelve el proveedor al terminar el OAuth de Google o el alta en
+-- Unipile, así que chocar exige haber autenticado esa misma cuenta.
 -- =====================================================================
 CREATE TABLE outreach_channel_account (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -367,6 +385,9 @@ CREATE TABLE outreach_channel_account (
 );
 CREATE UNIQUE INDEX outreach_channel_account_provider_idx
   ON outreach_channel_account (workspace_id, provider, provider_account_id);
+CREATE UNIQUE INDEX outreach_channel_account_live_idx
+  ON outreach_channel_account (provider, provider_account_id)
+  WHERE status <> 'disconnected';
 CREATE INDEX ON outreach_channel_account (workspace_id, channel, status);
 CREATE INDEX ON outreach_channel_account (creator_id);
 CREATE TRIGGER outreach_channel_account_updated BEFORE UPDATE ON outreach_channel_account
@@ -574,6 +595,44 @@ CREATE INDEX ON outbound_enrollment (current_step_id);
 CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- A quien pidió la baja no se le enrola, ni se le reanuda. Sin esto el
+-- alta quedaba 'active' y el motor (VEN-10) chocaba con la regla de
+-- outbound_touch (4.1) en cada vuelta, con el error lejos de su causa.
+-- Mismo mensaje y mismo código que la regla de 0007. Vigila el alta y
+-- los cambios de contacto o de estado hacia uno vivo (active, paused,
+-- cooldown); pasar a opted_out, completed o replied siempre se puede, y
+-- una anotación que no cambia ni el estado ni el contacto (context,
+-- current_step_id) pasa aunque la baja ya esté puesta.
+CREATE FUNCTION enforce_enrollment_optout()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  is_out boolean;
+BEGIN
+  IF NEW.status NOT IN ('active', 'paused', 'cooldown') THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE'
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
+    RETURN NEW;
+  END IF;
+  SELECT opted_out INTO is_out FROM contact WHERE id = NEW.contact_id;
+  IF coalesce(is_out, false) THEN
+    RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', NEW.contact_id
+      USING ERRCODE = 'check_violation',
+            HINT = 'Un enrolamiento de quien pidió la baja solo puede estar en opted_out, completed o replied.';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER outbound_enrollment_optout
+  BEFORE INSERT OR UPDATE OF contact_id, status ON outbound_enrollment
+  FOR EACH ROW EXECUTE FUNCTION enforce_enrollment_optout();
+
 
 -- =====================================================================
 -- 4 · La cola: outbound_touch extendida
@@ -629,13 +688,24 @@ CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
 -- busca por ese resumen.
 --
 -- Y quien escribe la tabla tampoco puede fabricar un toque «enviado»
--- que sirva: optout_token_hash, provider_message_id y message_id_rfc
--- son las pruebas de que la PLATAFORMA envió el mensaje, y solo las
--- escribe el despachador (mc_worker) o quien migra (4.2). Sin eso, un
--- workspace inventaba un token, guardaba su sha256 en un toque suyo en
--- 'sent' a una ficha con el correo de otra persona y, con public_optout,
--- la daba de baja en toda la plataforma sin haberle escrito nunca: el
--- sabotaje que 0029 §1 cerró para el opted_out del CRM.
+-- que sirva: optout_token_hash, provider_message_id, message_id_rfc y
+-- recipient_address son las pruebas de que la PLATAFORMA envió el
+-- mensaje, y solo las escribe el despachador (mc_worker) o quien migra
+-- (4.2). Sin eso, un workspace inventaba un token, guardaba su sha256 en
+-- un toque suyo en 'sent' a una ficha con el correo de otra persona y,
+-- con public_optout, la daba de baja en toda la plataforma sin haberle
+-- escrito nunca: el sabotaje que 0029 §1 cerró para el opted_out del CRM.
+--
+-- recipient_address es la dirección EXACTA a la que salió el mensaje,
+-- escrita por el despachador en el momento del envío. La baja se anota
+-- sobre ella y no sobre contact.email ni sobre el contact_id de hoy: la
+-- ficha se puede editar, borrar o cambiar después del envío, y quien
+-- pulsa el enlace es quien recibió ESE correo. Por la misma razón, un
+-- toque con pruebas de envío no cambia de destinatario (ni de contacto
+-- ni de empresa) desde la aplicación (4.2): antes de este candado, un
+-- workspace se escribía un correo a sí mismo, movía el toque a una
+-- ficha con el correo de otra persona (o le cambiaba el correo a su
+-- propia ficha) y pulsaba su enlace, las veces que quisiera.
 -- =====================================================================
 ALTER TABLE outbound_touch
   ADD COLUMN enrollment_id       uuid REFERENCES outbound_enrollment(id) ON DELETE SET NULL,
@@ -649,8 +719,13 @@ ALTER TABLE outbound_touch
   ADD COLUMN opened_at           timestamptz,
   ADD COLUMN held_reason         text,
   ADD COLUMN optout_token_hash   text CHECK (optout_token_hash ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN recipient_address   citext CHECK (length(recipient_address) BETWEEN 3 AND 320),
   ADD COLUMN status_changed_at   timestamptz NOT NULL DEFAULT now(),
-  ADD COLUMN updated_at          timestamptz NOT NULL DEFAULT now();
+  ADD COLUMN updated_at          timestamptz NOT NULL DEFAULT now(),
+  -- En un correo, la dirección es una dirección (sin espacios, con una
+  -- sola arroba): es lo que public_optout anota en la lista global.
+  ADD CONSTRAINT outbound_touch_recipient_email_check
+    CHECK (recipient_address IS NULL OR channel <> 'email' OR recipient_address ~ '^[^@\s]+@[^@\s]+$');
 
 CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -737,6 +812,14 @@ $$;
 -- superusuario o un rol con BYPASSRLS (quien migra o siembra). mc_app,
 -- no: ni al crear el toque ni después. Poner NULL donde ya había algo
 -- también es escribir.
+--
+-- Y el destinatario de un toque con pruebas de envío (cualquiera de las
+-- cuatro columnas) queda fijo para mc_app: ni contact_id ni company_id
+-- cambian. La única excepción es contact_id → NULL, que es lo que hace
+-- la clave ajena (ON DELETE SET NULL, 0007) al borrar la ficha, y no
+-- redirige nada: public_optout ya no mira la ficha sino
+-- recipient_address. De NULL a otra ficha, en cambio, sí es cambiar de
+-- destinatario, y no se deja.
 CREATE FUNCTION outbound_touch_worker_columns()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -744,14 +827,23 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   puede boolean;
+  pruebas boolean;
+  destinatario boolean := false;
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    IF NEW.optout_token_hash IS NULL AND NEW.provider_message_id IS NULL AND NEW.message_id_rfc IS NULL THEN
-      RETURN NEW;
-    END IF;
-  ELSIF NEW.optout_token_hash IS NOT DISTINCT FROM OLD.optout_token_hash
-        AND NEW.provider_message_id IS NOT DISTINCT FROM OLD.provider_message_id
-        AND NEW.message_id_rfc IS NOT DISTINCT FROM OLD.message_id_rfc THEN
+    pruebas := NEW.optout_token_hash IS NOT NULL OR NEW.provider_message_id IS NOT NULL
+               OR NEW.message_id_rfc IS NOT NULL OR NEW.recipient_address IS NOT NULL;
+  ELSE
+    pruebas := NEW.optout_token_hash IS DISTINCT FROM OLD.optout_token_hash
+               OR NEW.provider_message_id IS DISTINCT FROM OLD.provider_message_id
+               OR NEW.message_id_rfc IS DISTINCT FROM OLD.message_id_rfc
+               OR NEW.recipient_address IS DISTINCT FROM OLD.recipient_address;
+    destinatario := (OLD.optout_token_hash IS NOT NULL OR OLD.provider_message_id IS NOT NULL
+                     OR OLD.message_id_rfc IS NOT NULL OR OLD.recipient_address IS NOT NULL)
+                    AND ((NEW.contact_id IS DISTINCT FROM OLD.contact_id AND NEW.contact_id IS NOT NULL)
+                         OR NEW.company_id IS DISTINCT FROM OLD.company_id);
+  END IF;
+  IF NOT pruebas AND NOT destinatario THEN
     RETURN NEW;
   END IF;
 
@@ -761,15 +853,22 @@ BEGIN
   IF coalesce(puede, false) THEN
     RETURN NEW;
   END IF;
-  RAISE EXCEPTION 'optout_token_hash, provider_message_id y message_id_rfc los escribe solo el despachador (rol %).',
+  IF pruebas THEN
+    RAISE EXCEPTION 'optout_token_hash, provider_message_id, message_id_rfc y recipient_address los escribe solo el '
+                    'despachador (rol %).', current_user
+      USING ERRCODE = 'insufficient_privilege',
+            HINT = 'Son la prueba de que la plataforma envió el mensaje: la escribe el worker con asWorker.';
+  END IF;
+  RAISE EXCEPTION 'Un toque enviado no cambia de destinatario: contact_id y company_id son los del envío (rol %).',
                   current_user
     USING ERRCODE = 'insufficient_privilege',
-          HINT = 'Son la prueba de que la plataforma envió el mensaje: la escribe el worker con asWorker.';
+          HINT = 'La baja del enlace se anota sobre recipient_address; para otro destinatario, otro toque.';
 END;
 $$;
 
 CREATE TRIGGER outbound_touch_worker_columns
-  BEFORE INSERT OR UPDATE OF optout_token_hash, provider_message_id, message_id_rfc ON outbound_touch
+  BEFORE INSERT OR UPDATE OF optout_token_hash, provider_message_id, message_id_rfc, recipient_address,
+                             contact_id, company_id ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_worker_columns();
 
 -- status_changed_at solo se mueve cuando cambia el estado; lo que venga
@@ -841,14 +940,19 @@ ALTER TABLE outbound_touch
 -- Índices de la cola.
 --   · Un enrolamiento no tiene dos toques vivos del mismo paso: es la
 --     tercera capa de deduplicación de Chief y la que para el doble
---     avance de paso de su process-queue.
+--     avance de paso de su process-queue. «Vivo» es lo que todavía puede
+--     salir: scheduled, processing y también held. Un retenido que se
+--     aprueba vuelve a scheduled; si al lado hubiera otro scheduled del
+--     mismo paso, saldrían los dos. Con held en el índice, el motor no
+--     puede programar el paso otra vez mientras uno espera revisión: o
+--     lo aprueba, o lo cancela y programa otro.
 --   · (workspace_id, status, scheduled_for) ya existe desde 0007 y es el
 --     que usan las pantallas; no se duplica.
 --   · El reclamo del worker cruza workspaces: lo que toca salir, por hora.
 --   · Los zombis: lo que lleva reclamado demasiado tiempo.
 --   · Las búsquedas por id del proveedor (webhooks, respuestas, baja).
 CREATE UNIQUE INDEX outbound_touch_live_step_idx ON outbound_touch (enrollment_id, step_id)
-  WHERE status IN ('scheduled', 'processing');
+  WHERE status IN ('scheduled', 'processing', 'held');
 CREATE INDEX outbound_touch_due_idx ON outbound_touch (coalesce(next_retry_at, scheduled_for))
   WHERE status = 'scheduled';
 CREATE INDEX outbound_touch_claimed_idx ON outbound_touch (claimed_at) WHERE status = 'processing';
@@ -1626,10 +1730,23 @@ $$;
 -- el enlace de un correo que la plataforma envió de verdad, así que el
 -- correo entra en contact_suppression con reason 'unsubscribe_link'.
 --
--- «De verdad» quiere decir que el toque está en 'sent' con ese token Y
--- con provider_message_id, y que esas dos columnas solo las escribe el
--- despachador (4.2): un workspace no puede fabricarse un toque «enviado»
--- con un token suyo para dar de baja el correo de otra persona.
+-- «De verdad» quiere decir que el toque es un correo en 'sent' con ese
+-- token, con provider_message_id y con recipient_address, y que esas
+-- columnas solo las escribe el despachador (4.2): un workspace no puede
+-- fabricarse un toque «enviado» con un token suyo para dar de baja el
+-- correo de otra persona.
+--
+-- A QUIÉN se da de baja lo dice recipient_address, la dirección a la
+-- que salió ese correo, y no la ficha tal como esté hoy:
+--   · editar contact.email después del envío no mueve la baja a otra
+--     dirección: se suprime la original;
+--   · mover el toque a otra ficha no se puede (4.2);
+--   · borrar la ficha no rompe el enlace (CAN-SPAM pide que funcione al
+--     menos 30 días): sin contact_id, la dirección igual entra en la
+--     lista global y se marcan las fichas con esa dirección en todos los
+--     workspaces.
+-- La ficha propia (contact_id, si sigue existiendo) también se marca,
+-- tenga hoy el correo que tenga: es la que recibió ese mensaje.
 --
 -- Misma forma que los enlaces de Cotizar (0030): una función SECURITY
 -- DEFINER cuyo dueño es mc_public_share (NOLOGIN, sin BYPASSRLS), y
@@ -1640,8 +1757,9 @@ $$;
 --   app.public_optout_contacts  los ids de los contactos que se dan de
 --                               baja ('{…}'): abre sus fichas, sus
 --                               toques y sus enrolamientos
---   app.public_optout_email     el correo del contacto: abre las fichas
---                               con ese correo en otros workspaces
+--   app.public_optout_email     la dirección a la que salió el correo
+--                               (recipient_address): abre las fichas
+--                               con esa dirección en cualquier workspace
 --
 -- Para mc_app esos parámetros no significan nada: las políticas son solo
 -- de mc_public_share, y fijarlos a mano en una transacción de la
@@ -1744,6 +1862,7 @@ DECLARE
   contacto  uuid;
   correo    citext;
   ya_baja   boolean;
+  todas_de_baja boolean;
   ids       uuid[];
   r         jsonb;
 BEGIN
@@ -1756,36 +1875,38 @@ BEGIN
 
   BEGIN
     PERFORM set_config('app.public_optout', resumen, true);
-    SELECT t.id, t.workspace_id, t.contact_id
-      INTO toque, espacio, contacto
+    -- Ni contact_id ni la ficha hacen falta: la dirección del envío basta.
+    SELECT t.id, t.workspace_id, t.contact_id, t.recipient_address
+      INTO toque, espacio, contacto, correo
       FROM outbound_touch t
      WHERE t.optout_token_hash = resumen
        AND t.status = 'sent'
+       AND t.channel = 'email'
        AND t.provider_message_id IS NOT NULL
-       AND t.contact_id IS NOT NULL
+       AND t.recipient_address IS NOT NULL
      ORDER BY t.sent_at DESC NULLS LAST
      LIMIT 1;
 
     IF toque IS NULL THEN
       r := jsonb_build_object('status', 'not_found');
     ELSE
+      -- La ficha que recibió el correo (si no se borró) y las fichas con
+      -- esa dirección en cualquier workspace. La de contact_id se abre
+      -- primero para leer si ya estaba de baja.
       PERFORM set_config('app.public_optout_contacts', format('{%s}', contacto), true);
-      SELECT c.email, c.opted_out INTO correo, ya_baja FROM contact c WHERE c.id = contacto;
+      PERFORM set_config('app.public_optout_email', correo::text, true);
+      SELECT c.opted_out INTO ya_baja FROM contact c WHERE c.id = contacto;
+      SELECT array_agg(DISTINCT c.id), bool_and(c.opted_out) INTO ids, todas_de_baja
+        FROM contact c
+       WHERE c.id = contacto OR c.email = correo;
+      ids := coalesce(ids, '{}'::uuid[]);
+      ya_baja := coalesce(ya_baja, todas_de_baja, false);
+      PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
 
-      ids := ARRAY[contacto];
-      IF correo IS NOT NULL THEN
-        -- La misma persona en las fichas de otros workspaces.
-        PERFORM set_config('app.public_optout_email', correo::text, true);
-        SELECT array_agg(DISTINCT c.id) INTO ids
-          FROM contact c
-         WHERE c.id = contacto OR c.email = correo;
-        PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
-
-        -- Sin columna en ON CONFLICT a propósito: nombrarla pediría SELECT
-        -- sobre la lista, y este rol solo inserta en ella.
-        INSERT INTO contact_suppression (email, reason) VALUES (correo, 'unsubscribe_link')
-        ON CONFLICT DO NOTHING;
-      END IF;
+      -- Sin columna en ON CONFLICT a propósito: nombrarla pediría SELECT
+      -- sobre la lista, y este rol solo inserta en ella.
+      INSERT INTO contact_suppression (email, reason) VALUES (correo, 'unsubscribe_link')
+      ON CONFLICT DO NOTHING;
 
       UPDATE contact
          SET opted_out = true,
@@ -1821,8 +1942,9 @@ END;
 $$;
 
 COMMENT ON FUNCTION public_optout(text) IS
-  'Baja desde el enlace de un correo (VEN-9, VEN-15): marca contact.opted_out, anota el correo en contact_suppression '
-  'y cancela lo pendiente de ese contacto en cualquier workspace. SECURITY DEFINER de mc_public_share (0037 §9).';
+  'Baja desde el enlace de un correo (VEN-9, VEN-15): anota en contact_suppression la dirección a la que salió ese '
+  'correo (recipient_address), marca contact.opted_out en la ficha que lo recibió y en las fichas con esa dirección, y '
+  'cancela lo pendiente de todas en cualquier workspace. SECURITY DEFINER de mc_public_share (0037 §9).';
 
 -- ---------------------------------------------------------------------
 -- 9.4 · Privilegios y dueño

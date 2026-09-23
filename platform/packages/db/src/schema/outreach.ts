@@ -54,11 +54,20 @@ export const REVIEW_DECISIONS = ['pass', 'regenerate', 'send_best', 'hold', 'rej
 export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend'] as const;
 /**
  * Las columnas de outbound_touch que solo escribe el despachador
- * (mc_worker): las pruebas de que la plataforma envió el mensaje. Desde
- * la web (mc_app) el disparador outbound_touch_worker_columns lo rechaza
- * con 42501 (0037 §4.2).
+ * (mc_worker): las pruebas de que la plataforma envió el mensaje y a qué
+ * dirección. Desde la web (mc_app) el disparador
+ * outbound_touch_worker_columns lo rechaza con 42501 (0037 §4.2).
  */
-export const WORKER_ONLY_TOUCH_COLUMNS = ['optout_token_hash', 'provider_message_id', 'message_id_rfc'] as const;
+export const WORKER_ONLY_TOUCH_COLUMNS = [
+  'optout_token_hash', 'provider_message_id', 'message_id_rfc', 'recipient_address',
+] as const;
+/**
+ * Las columnas que fijan el destinatario de un toque. En cuanto el toque
+ * tiene alguna de WORKER_ONLY_TOUCH_COLUMNS, mc_app ya no las cambia (el
+ * mismo disparador, 42501). contact_id sí puede pasar a NULL: es lo que
+ * hace la clave ajena al borrar la ficha.
+ */
+export const LOCKED_RECIPIENT_TOUCH_COLUMNS = ['contact_id', 'company_id'] as const;
 /**
  * blocked_reason de un toque que SALIÓ aunque la baja llegó mientras el
  * despachador lo enviaba (processing → sent, 0037 §4.1).

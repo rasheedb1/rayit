@@ -360,6 +360,12 @@ export const outboundTouch = pgTable('outbound_touch', {
   heldReason: text('held_reason'),
   /** sha256 (hex) del token del enlace de baja; el token solo va en el correo. Solo lo escribe el worker. */
   optoutTokenHash: text('optout_token_hash'),
+  /**
+   * La dirección exacta a la que salió el mensaje, escrita por el worker al
+   * enviar. La baja del enlace se anota sobre ella, no sobre contact.email
+   * (0037 §4 y §9). Con pruebas de envío, contactId y companyId ya no cambian.
+   */
+  recipientAddress: citext('recipient_address'),
   /** La hora del último cambio de estado; solo se mueve con él (disparador). */
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),

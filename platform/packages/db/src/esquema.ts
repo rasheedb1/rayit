@@ -397,9 +397,13 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
  */
 export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
   'outbound_touch.outbound_touch_worker_columns':
-    'optout_token_hash, provider_message_id y message_id_rfc solo los escribe el despachador (0037 §4.2). Sin él, ' +
-    'un workspace fabricaba un toque «enviado» con un token suyo y, con public_optout, daba de baja el correo de ' +
-    'cualquier persona en toda la plataforma',
+    'optout_token_hash, provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, y ' +
+    'un toque con esas pruebas no cambia de contacto ni de empresa (0037 §4.2). Sin él, un workspace fabricaba un ' +
+    'toque «enviado» con un token suyo, o movía uno enviado de verdad a la ficha de otra persona, y con ' +
+    'public_optout daba de baja ese correo en toda la plataforma',
+  'outbound_enrollment.outbound_enrollment_optout':
+    'no se enrola ni se reanuda a quien pidió la baja (0037 §3.3): sin él, el alta quedaba viva y el motor chocaba ' +
+    'con la regla de outbound_touch en cada vuelta',
   'outbound_touch.outbound_touch_optout':
     'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0037 §4.1)',
 };
@@ -719,6 +723,11 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
   'connection_secret.connection_secret_pkey':
     'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
     'chocar con una exige conocerla, y conocerla ya es tenerla',
+  'outreach_channel_account.outreach_channel_account_live_idx':
+    'un buzón (el Gmail o la cuenta de Unipile) envía desde UN workspace (0037 §2): los topes son por cuenta y, con ' +
+    'dos filas vivas del mismo buzón en dos workspaces, el proveedor recibiría el doble. La web solo escribe ' +
+    'provider_account_id con lo que devuelve el proveedor al terminar el OAuth o el alta en Unipile, así que ' +
+    'chocar exige haber autenticado esa misma cuenta, que ya es tenerla',
 };
 
 /**
