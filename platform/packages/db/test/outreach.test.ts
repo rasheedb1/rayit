@@ -32,8 +32,12 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import type { SqlExecutor } from '../src/client.ts';
-import { OUTREACH_FUNCTIONS, WORKER_ONLY_TOUCH_COLUMNS, type OutboundHealth } from '../src/schema/outreach.ts';
+import type { WorkerTx } from '../src/client.ts';
+import {
+  disableOutreach, enableOutreach, incrementIfUnderCap, incrementWeekly, nextBusinessDay, outboundHealth,
+  OutreachShapeError, parseOutboundHealth, parsePublicOptout, publicOptout, shouldPauseOutreach,
+} from '../src/queries/outreach.ts';
+import { OUTREACH_FUNCTIONS, WORKER_ONLY_TOUCH_COLUMNS } from '../src/schema/outreach.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_A = '00000037-0000-4000-8000-00000000000a';
@@ -69,10 +73,22 @@ const TOUCH_EN_VUELO = '00000037-0000-4000-8000-0000000070b2';
 const ACC_A1 = '00000037-0000-4000-8000-00000000aca1';
 const ACC_A2 = '00000037-0000-4000-8000-00000000aca2';
 const ACC_B1 = '00000037-0000-4000-8000-00000000acb1';
+/** Una empresa propia de B, para intentar mover a ella un toque enviado. */
+const COMPANY_B = '00000037-0000-4000-8000-0000000000c2';
+/** B se escribe a sí mismo por la plataforma: un envío de verdad, con su enlace en la carpeta de enviados. */
+const CONTACT_YO_B = '00000037-0000-4000-8000-0000000000b3';
+const TOUCH_YO_B = '00000037-0000-4000-8000-0000000070b3';
+/** Una persona a la que A le escribió y cuya ficha A borra después; B la tiene con el mismo correo. */
+const CONTACT_BORRADA = '00000037-0000-4000-8000-0000000000a5';
+const CONTACT_BORRADA_B = '00000037-0000-4000-8000-0000000000b4';
+const TOUCH_BORRADA = '00000037-0000-4000-8000-0000000070a7';
+const TOUCH_BORRADA_B = '00000037-0000-4000-8000-0000000070b4';
 
 const TOKEN = 'k2Jd8sQ0pX4vN7bW1eR5tY9uI3oP6aS0';
 const TOKEN_SIN_ID = 'sin-id-del-proveedor-0000000000001';
 const TOKEN_SOLA = 'z9Yx8Wv7Ut6Sr5Qp4On3Ml2Kj1Ih0Gf9';
+const TOKEN_YO_B = 'yo-b-1234567890-abcdefghijklmnopq';
+const TOKEN_BORRADA = 'borrada-0987654321-zyxwvutsrqponm';
 const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 let t: TestDb;
@@ -93,7 +109,12 @@ before(async () => {
       ('${CONTACT_OTRO}', '${COMPANY}', 'Otra persona', 'otra@cafe.test', 'user_provided', '${WS_A}'),
       ('${CONTACT_VICTIMA}', '${COMPANY}', 'Víctima', 'victima@cafe.test', 'user_provided', '${WS_A}'),
       ('${CONTACT_SABOTAJE}', '${COMPANY}', 'Víctima (copia de B)', 'victima@cafe.test', 'user_provided', '${WS_B}'),
-      ('${CONTACT_SOLA}', '${COMPANY}', 'Sola', 'sola@cafe.test', 'user_provided', '${WS_A}');
+      ('${CONTACT_SOLA}', '${COMPANY}', 'Sola', 'sola@cafe.test', 'user_provided', '${WS_A}'),
+      ('${CONTACT_YO_B}', '${COMPANY}', 'Yo mismo (B)', 'yo@outreach-b.test', 'user_provided', '${WS_B}'),
+      ('${CONTACT_BORRADA}', '${COMPANY}', 'Borrada', 'borrada@cafe.test', 'user_provided', '${WS_A}'),
+      ('${CONTACT_BORRADA_B}', '${COMPANY}', 'Borrada (B)', 'borrada@cafe.test', 'user_provided', '${WS_B}');
+    INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_B}', 'Empresa de B', '${WS_B}');
+    INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_B}', '${COMPANY_B}');
     INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES
       ('${SEQ_A}', '${WS_A}', 'Secuencia A', 'email', 'active'),
       ('${SEQ_B}', '${WS_B}', 'Secuencia B', 'email', 'active');
@@ -124,7 +145,16 @@ before(async () => {
        'victima@cafe.test'),
       ('${TOUCH_SOLA}', '${WS_A}', '${COMPANY}', '${CONTACT_SOLA}', NULL, NULL, 'email', 'Hola',
        'sent', now() - interval '1 day', now() - interval '1 day', NULL, '${sha256(TOKEN_SOLA)}', 'gmail-0002',
-       'sola@cafe.test');
+       'sola@cafe.test'),
+      -- Enviados hace cinco días: fuera de la ventana de 72 h de la salud.
+      ('${TOUCH_YO_B}', '${WS_B}', '${COMPANY}', '${CONTACT_YO_B}', NULL, NULL, 'email', 'Prueba',
+       'sent', now() - interval '5 days', now() - interval '5 days', NULL, '${sha256(TOKEN_YO_B)}', 'gmail-b-0003',
+       'yo@outreach-b.test'),
+      ('${TOUCH_BORRADA}', '${WS_A}', '${COMPANY}', '${CONTACT_BORRADA}', NULL, NULL, 'email', 'Hola',
+       'sent', now() - interval '5 days', now() - interval '5 days', NULL, '${sha256(TOKEN_BORRADA)}', 'gmail-0003',
+       'borrada@cafe.test'),
+      ('${TOUCH_BORRADA_B}', '${WS_B}', '${COMPANY}', '${CONTACT_BORRADA_B}', NULL, NULL, 'email', 'Hola',
+       'scheduled', now() + interval '6 days', NULL, NULL, NULL, NULL, NULL);
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, status_changed_at, created_at)
     VALUES ('${TOUCH_FALLIDO}', '${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', 'email', 'Hola', 'failed',
             now() - interval '30 days', now() - interval '31 days');
@@ -136,6 +166,18 @@ before(async () => {
 });
 
 after(async () => {
+  // Contra un Postgres que se queda (TEST_DATABASE_URL), la prueba se
+  // puede volver a correr: se lleva lo suyo. Los workspaces arrastran
+  // fichas, toques y contadores; la empresa compartida y la lista global,
+  // no.
+  if (t.kind === 'postgres') {
+    await t.admin(`
+      DELETE FROM workspace WHERE id IN ('${WS_A}', '${WS_B}');
+      DELETE FROM company WHERE id IN ('${COMPANY}', '${COMPANY_B}');
+      DELETE FROM contact_suppression WHERE email IN
+        ('marta@cafe.test', 'sola@cafe.test', 'yo@outreach-b.test', 'borrada@cafe.test');
+    `);
+  }
   await t.close();
 });
 
@@ -155,7 +197,7 @@ async function toque(id: string) {
 /** La página de baja: public_optout sin sesión, y lo que queda en la transacción al salir. */
 const baja = (token: string) =>
   t.db.withPublicShare(async (tx) => {
-    const r = (await tx.query<{ r: Record<string, unknown> }>('SELECT public_optout($1) AS r', [token])).rows[0]!.r;
+    const r = await publicOptout(tx, token);
     const quedan = (
       await tx.query<{ a: string; b: string; c: string }>(
         "SELECT current_setting('app.public_optout', true) AS a, current_setting('app.public_optout_contacts', true) AS b, " +
@@ -286,21 +328,50 @@ describe('0037 · catálogos', () => {
       );
     await assert.rejects(alta('Laura@Gmail.com'), /outreach_channel_account_gmail_lower_check/);
     await alta('laura@gmail.com');
-    await assert.rejects(alta('laura@gmail.com'), /outreach_channel_account_provider_idx/);
+    await assert.rejects(alta('laura@gmail.com'), /outreach_channel_account_(provider|live)_idx/);
+  });
+
+  test('un buzón vivo es de un solo workspace: la agencia no conecta el Gmail que ya envía desde el creador', async () => {
+    const alta = (ws: string, direccion: string) =>
+      t.db.withWorkspace(ws, (tx) =>
+        tx.query(
+          `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+           VALUES ($1, 'email', 'gmail_oauth', $2, 'connected') RETURNING id`,
+          [ws, direccion],
+        ),
+      );
+    const { id } = (await alta(WS_A, 'creador@gmail.com')).rows[0] as { id: string };
+    // Dos filas vivas del mismo buzón serían dos contadores y el doble de envíos.
+    await assert.rejects(alta(WS_B, 'creador@gmail.com'), /outreach_channel_account_live_idx/);
+    // Lo mismo con una cuenta de Unipile.
+    await assert.rejects(
+      t.db.withWorkspace(WS_B, (tx) =>
+        tx.query(
+          `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+           VALUES ($1, 'linkedin', 'unipile', 'unipile-A1', 'connected')`,
+          [WS_B],
+        ),
+      ),
+      /outreach_channel_account_live_idx/,
+    );
+    // Desconectado en A, B lo puede conectar.
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query(`UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1`, [id]),
+    );
+    await alta(WS_B, 'creador@gmail.com');
   });
 });
 
 describe('0037 · límites atómicos', () => {
+  /** Los envoltorios de queries/outreach.ts, por el nombre de la función SQL. */
+  const envoltorio = { increment_if_under_cap: incrementIfUnderCap, increment_weekly: incrementWeekly } as const;
+  type Fn = keyof typeof envoltorio;
   /** Una llamada del despachador: su propia transacción, como mc_worker. */
-  const llamar = (fn: string, accion: string, tope: number) =>
-    t.db.asWorker(async (tx) =>
-      (await tx.query<{ ok: boolean }>(`SELECT ${fn}($1, $2, $3) AS ok`, [WS_A, accion, tope])).rows[0]!.ok,
-    );
+  const llamar = (fn: Fn, accion: string, tope: number) =>
+    t.db.asWorker((tx) => envoltorio[fn](tx, { workspaceId: WS_A, actionType: accion, cap: tope }));
   /** La misma, con la cuenta que envía. */
-  const llamarCuenta = (fn: string, cuenta: string, accion: string, tope: number) =>
-    t.db.asWorker(async (tx) =>
-      (await tx.query<{ ok: boolean }>(`SELECT ${fn}($1, $2::uuid, $3, $4) AS ok`, [WS_A, cuenta, accion, tope])).rows[0]!.ok,
-    );
+  const llamarCuenta = (fn: Fn, cuenta: string, accion: string, tope: number) =>
+    t.db.asWorker((tx) => envoltorio[fn](tx, { workspaceId: WS_A, accountId: cuenta, actionType: accion, cap: tope }));
   const cuenta = async (periodo: 'day' | 'week', accion: string, cuentaId: string | null = null) =>
     (
       await sinRls<{ count: number }>(
@@ -370,6 +441,24 @@ describe('0037 · límites atómicos', () => {
     assert.deepEqual(await cuenta('week', 'linkedin_invite', ACC_A2), [1]);
   });
 
+  test('los envoltorios validan antes de llamar: acción, cuenta y tope con forma', async () => {
+    const base = { workspaceId: WS_A, actionType: 'email', cap: 1 };
+    for (const malo of [
+      { ...base, actionType: 'Email' },
+      { ...base, actionType: ACC_A1 },
+      { ...base, accountId: 'no-soy-uuid' },
+      { ...base, cap: 1.5 },
+      { ...base, workspaceId: 'laura' },
+    ]) {
+      await assert.rejects(
+        t.db.asWorker((tx) => incrementIfUnderCap(tx, malo)),
+        // Lo rechaza el envoltorio (sin código de Postgres), no la base.
+        (e: { code?: string }) => e instanceof Error && e.code === undefined,
+        JSON.stringify(malo),
+      );
+    }
+  });
+
   test('por cuenta: la cuenta tiene que ser del workspace que cuenta', async () => {
     await assert.rejects(llamarCuenta('increment_if_under_cap', ACC_B1, 'linkedin_invite', 5), /no es del workspace/);
     await assert.rejects(llamarCuenta('increment_weekly', ACC_B1, 'linkedin_invite', 5), /no es del workspace/);
@@ -381,10 +470,8 @@ describe('0037 · límites atómicos', () => {
    * esperando el bloqueo de la fila (no leer el 0 de antes) y, al
    * confirmar la primera, ver la plaza gastada. Solo en Postgres real.
    */
-  const bloqueoDeVerdad = async (fn: string, accion: string, cuentaId: string | null) => {
-    const args = cuentaId ? `$1, '${cuentaId}'::uuid, $2, 1` : '$1, $2, 1';
-    const una = (tx: SqlExecutor) =>
-      tx.query<{ ok: boolean }>(`SELECT ${fn}(${args}) AS ok`, [WS_A, accion]).then((r) => r.rows[0]!.ok);
+  const bloqueoDeVerdad = async (fn: Fn, accion: string, cuentaId: string | null) => {
+    const una = (tx: WorkerTx) => envoltorio[fn](tx, { workspaceId: WS_A, accountId: cuentaId, actionType: accion, cap: 1 });
     let soltar!: () => void;
     const puerta = new Promise<void>((r) => (soltar = r));
     let sumo!: () => void;
@@ -520,7 +607,8 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     }
 
     const enrolamientos = await sinRls<{ id: string; status: string; terminado: boolean }>(
-      'SELECT id, status, finished_at IS NOT NULL AS terminado FROM outbound_enrollment ORDER BY id',
+      `SELECT id, status, finished_at IS NOT NULL AS terminado FROM outbound_enrollment
+        WHERE id IN ('${ENR_A}', '${ENR_B}') ORDER BY id`,
     );
     assert.deepEqual(
       enrolamientos.map((e) => [e.id, e.status, e.terminado]),
@@ -533,6 +621,75 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
 
     const supresion = await sinRls<{ reason: string }>("SELECT reason FROM contact_suppression WHERE email = 'marta@cafe.test'");
     assert.deepEqual(supresion.map((s) => s.reason), ['unsubscribe_link']);
+  });
+
+  test('sabotaje: un toque enviado de verdad no cambia de destinatario desde la web', async () => {
+    const b = (sql: string, params: unknown[]) => t.db.withWorkspace(WS_B, (tx) => tx.query(sql, params));
+    const destinatarioFijo = (e: { code?: string; message?: string }) =>
+      e.code === '42501' && /no cambia de destinatario/.test(e.message ?? '');
+
+    // B se escribió a sí mismo por la plataforma y tiene el enlace en su
+    // carpeta de enviados. Mover ese toque a la ficha con el correo de la
+    // víctima, o a otra empresa, no se deja.
+    await assert.rejects(b('UPDATE outbound_touch SET contact_id = $1 WHERE id = $2', [CONTACT_SABOTAJE, TOUCH_YO_B]), destinatarioFijo);
+    await assert.rejects(b('UPDATE outbound_touch SET company_id = $1 WHERE id = $2', [COMPANY_B, TOUCH_YO_B]), destinatarioFijo);
+    // Tampoco en dos pasos: a NULL sí (es lo que hace borrar la ficha), pero de NULL a otra, no.
+    await b('UPDATE outbound_touch SET contact_id = NULL WHERE id = $1', [TOUCH_YO_B]);
+    await assert.rejects(b('UPDATE outbound_touch SET contact_id = $1 WHERE id = $2', [CONTACT_SABOTAJE, TOUCH_YO_B]), destinatarioFijo);
+    // Escribir el mismo valor no es cambiarlo, y un toque sin pruebas de envío sí se mueve.
+    await b('UPDATE outbound_touch SET company_id = $1 WHERE id = $2', [COMPANY, TOUCH_YO_B]);
+    // El despachador sí puede (es quien fija el destinatario al enviar): deja la ficha como estaba.
+    await t.db.asWorker((tx) => tx.query('UPDATE outbound_touch SET contact_id = $1 WHERE id = $2', [CONTACT_YO_B, TOUCH_YO_B]));
+  });
+
+  test('sabotaje: cambiar el correo de la ficha después del envío no mueve la baja a otra persona', async () => {
+    // B le pone a su propia ficha el correo de una persona que solo A
+    // tiene (Otra) y pulsa su enlace.
+    await t.db.withWorkspace(WS_B, (tx) =>
+      tx.query(`UPDATE contact SET email = 'otra@cafe.test' WHERE id = $1`, [CONTACT_YO_B]),
+    );
+    const { r } = await baja(TOKEN_YO_B);
+    assert.deepEqual(r, { status: 'ok', alreadyOptedOut: false, workspaceId: WS_B, touchId: TOUCH_YO_B });
+    // Se suprime la dirección a la que salió el correo, no la de hoy.
+    const lista = await sinRls<{ email: string }>(
+      `SELECT email::text AS email FROM contact_suppression WHERE email IN ('yo@outreach-b.test', 'otra@cafe.test')`,
+    );
+    assert.deepEqual(lista.map((x) => x.email), ['yo@outreach-b.test']);
+    // Otra sigue igual en A, con lo suyo en cola; la ficha de B que recibió el correo, de baja.
+    const fichas = await sinRls<{ id: string; opted_out: boolean }>(
+      `SELECT id, opted_out FROM contact WHERE id IN ('${CONTACT_OTRO}', '${CONTACT_YO_B}') ORDER BY id`,
+    );
+    assert.deepEqual(
+      fichas.map((f) => [f.id, f.opted_out]),
+      [
+        [CONTACT_OTRO, false],
+        [CONTACT_YO_B, true],
+      ],
+    );
+    assert.equal((await toque(TOUCH_OTRO)).status, 'scheduled');
+    // Y el token no se reutiliza contra otra persona: responde lo mismo y no toca a nadie más.
+    assert.deepEqual((await baja(TOKEN_YO_B)).r, { status: 'ok', alreadyOptedOut: true, workspaceId: WS_B, touchId: TOUCH_YO_B });
+    assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'otra@cafe.test'"), []);
+  });
+
+  test('el enlace sigue funcionando si el workspace borró la ficha después del envío', async () => {
+    await t.db.withWorkspace(WS_A, (tx) => tx.query('DELETE FROM contact WHERE id = $1', [CONTACT_BORRADA]));
+    const [huerfano] = await sinRls<{ contact_id: string | null }>(
+      `SELECT contact_id FROM outbound_touch WHERE id = '${TOUCH_BORRADA}'`,
+    );
+    assert.equal(huerfano?.contact_id, null, 'la clave ajena lo pone a NULL y el candado lo deja');
+
+    const { r } = await baja(TOKEN_BORRADA);
+    assert.deepEqual(r, { status: 'ok', alreadyOptedOut: false, workspaceId: WS_A, touchId: TOUCH_BORRADA });
+    assert.deepEqual(
+      (await sinRls<{ reason: string }>("SELECT reason FROM contact_suppression WHERE email = 'borrada@cafe.test'")).map((x) => x.reason),
+      ['unsubscribe_link'],
+    );
+    // La misma persona en B: de baja, y lo que B tenía en cola para ella, cancelado.
+    const [enB] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_BORRADA_B}'`);
+    assert.equal(enB?.opted_out, true);
+    const x = await toque(TOUCH_BORRADA_B);
+    assert.deepEqual([x.status, x.blocked_reason], ['canceled', 'opted_out']);
   });
 
   test('pulsar el enlace otra vez responde lo mismo y no rompe nada', async () => {
@@ -603,6 +760,79 @@ describe('0037 · la regla de la baja, en las transiciones', () => {
     assert.deepEqual([x.status, x.blocked_reason], ['sent', 'opted_out_in_flight']);
   });
 
+  test('a quien pidió la baja no se le enrola ni se le reanuda; anotar su enrolamiento sí se puede', async () => {
+    const optOut = (e: { code?: string; message?: string }) => e.code === '23514' && /opt-out/.test(e.message ?? '');
+    const seq = (
+      await t.db.withWorkspace(WS_A, (tx) =>
+        tx.query<{ id: string }>(
+          `INSERT INTO outbound_sequence (workspace_id, name, channel, status) VALUES ($1, 'Otra', 'email', 'active') RETURNING id`,
+          [WS_A],
+        ),
+      )
+    ).rows[0]!.id;
+    for (const status of ['active', 'paused']) {
+      await assert.rejects(
+        t.db.withWorkspace(WS_A, (tx) =>
+          tx.query(`INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id, status) VALUES ($1, $2, $3, $4)`, [
+            WS_A, seq, CONTACT_A, status,
+          ]),
+        ),
+        optOut,
+        status,
+      );
+    }
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) =>
+        tx.query(`UPDATE outbound_enrollment SET status = 'cooldown', resume_at = now() + interval '90 days' WHERE id = $1`, [ENR_A]),
+      ),
+      optOut,
+      'reanudar tampoco',
+    );
+    // Lo que no es volver a escribirle pasa: anotar el contexto, o darlo por terminado.
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query(`UPDATE outbound_enrollment SET context = '{"angles_used":["presencia"]}' WHERE id = $1`, [ENR_A]),
+    );
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query(`INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id, status) VALUES ($1, $2, $3, 'opted_out')`, [
+        WS_A, seq, CONTACT_A,
+      ]),
+    );
+    await t.admin(`DELETE FROM outbound_sequence WHERE id = '${seq}'`);
+  });
+
+  test('un paso de un enrolamiento tiene un solo toque vivo, también si uno espera revisión (held)', async () => {
+    const ENR_OTRO = '00000037-0000-4000-8000-00000000e0a2';
+    await t.admin(`
+      INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id) VALUES
+        ('${ENR_OTRO}', '${WS_A}', '${SEQ_A}', '${CONTACT_OTRO}');
+      INSERT INTO outbound_touch (workspace_id, company_id, contact_id, enrollment_id, step_id, channel, body, status, held_reason)
+      VALUES ('${WS_A}', '${COMPANY}', '${CONTACT_OTRO}', '${ENR_OTRO}', '${STEP_A1}', 'email', 'Hola', 'held', 'Cifra sin origen');
+    `);
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) =>
+        tx.query(
+          `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, enrollment_id, step_id, channel, body, status, scheduled_for)
+           VALUES ($1, $2, $3, $4, $5, 'email', 'Hola', 'scheduled', now() + interval '1 day')`,
+          [WS_A, COMPANY, CONTACT_OTRO, ENR_OTRO, STEP_A1],
+        ),
+      ),
+      /outbound_touch_live_step_idx/,
+    );
+    // Cancelado el retenido, el paso se puede programar otra vez.
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'canceled' WHERE enrollment_id = $1 AND status = 'held'`, [ENR_OTRO]),
+    );
+    await t.db.withWorkspace(WS_A, (tx) =>
+      tx.query(
+        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, enrollment_id, step_id, channel, body, status, scheduled_for)
+         VALUES ($1, $2, $3, $4, $5, 'email', 'Hola', 'scheduled', now() + interval '1 day')`,
+        [WS_A, COMPANY, CONTACT_OTRO, ENR_OTRO, STEP_A1],
+      ),
+    );
+    // Lo que sigue (el interruptor) cuenta la cola de A: este escenario no se queda.
+    await t.admin(`DELETE FROM outbound_touch WHERE enrollment_id = '${ENR_OTRO}'; DELETE FROM outbound_enrollment WHERE id = '${ENR_OTRO}';`);
+  });
+
   test('status_changed_at solo se mueve cuando cambia el estado', async () => {
     const antes = (await toque(TOUCH_FALLIDO)).status_changed_at;
     await t.db.withWorkspace(WS_A, (tx) =>
@@ -613,12 +843,11 @@ describe('0037 · la regla de la baja, en las transiciones', () => {
 });
 
 describe('0037 · el interruptor, la salud y los días hábiles', () => {
-  const pausa = (ws: string) =>
-    t.db.withWorkspace(ws, async (tx) => (await tx.query<{ p: boolean }>(`SELECT should_pause_outreach($1) AS p`, [ws])).rows[0]!.p);
+  const pausa = (ws: string) => t.db.withWorkspace(ws, (tx) => shouldPauseOutreach(tx));
 
   test('sin dirección postal no se enciende; con ella, sí, y apagar cancela lo que está en cola', async () => {
     await assert.rejects(
-      t.db.withWorkspace(WS_A, (tx) => tx.query(`SELECT enable_outreach('${WS_A}')`)),
+      t.db.withWorkspace(WS_A, (tx) => enableOutreach(tx)),
       (e: { code?: string; message?: string }) => e.code === '23514' && /Sin dirección postal/.test(e.message ?? ''),
     );
     // Y aunque alguien escriba la fila a mano, el CHECK tampoco lo deja.
@@ -631,7 +860,7 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
         `INSERT INTO outbound_policy (workspace_id, postal_address) VALUES ('${WS_A}', 'Calle 1 # 2-3, Bogotá')
          ON CONFLICT (workspace_id) DO UPDATE SET postal_address = EXCLUDED.postal_address`,
       );
-      await tx.query(`SELECT enable_outreach('${WS_A}')`);
+      await enableOutreach(tx);
     });
     assert.equal(await pausa(WS_A), false, 'encendido y sin atraso: no se para');
 
@@ -648,9 +877,7 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
                     WHERE workspace_id = '${WS_A}' AND status = 'scheduled'`);
     assert.equal(await pausa(WS_A), true, 'tres vencidos sin salir, con tope 1: se para');
 
-    const cancelados = await t.db.withWorkspace(WS_A, async (tx) =>
-      (await tx.query<{ n: number }>(`SELECT disable_outreach('${WS_A}', 'Revisión de la cuenta') AS n`)).rows[0]!.n,
-    );
+    const cancelados = await t.db.withWorkspace(WS_A, (tx) => disableOutreach(tx, 'Revisión de la cuenta'));
     assert.equal(cancelados, 3);
     assert.equal(await pausa(WS_A), true);
     const otro = await toque(TOUCH_OTRO);
@@ -660,9 +887,13 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
   });
 
   test('desde otro workspace no se apaga ni se enciende el de A', async () => {
+    // El envoltorio ni lo intenta: con un WorkspaceTx, el workspace es el de la transacción.
+    await assert.rejects(t.db.withWorkspace(WS_B, (tx) => disableOutreach(tx, 'sabotaje', WS_A)), /es del workspace/);
+    // Y a pelo, la base tampoco: en PGlite salta la referencia visible
+    // (0025); en Postgres, antes, la política de la fila nueva.
     await assert.rejects(
       t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT disable_outreach('${WS_A}', 'sabotaje')`)),
-      /no puede ver/,
+      /no puede ver|row-level security/,
     );
     await assert.rejects(
       t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT enable_outreach('${WS_A}')`)),
@@ -694,11 +925,14 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
       );
     });
 
-    const salud = (ws: string) =>
-      t.db.withWorkspace(ws, async (tx) =>
-        (await tx.query<{ h: OutboundHealth }>(`SELECT outbound_health($1, 72) AS h`, [ws])).rows[0]!.h,
-      );
+    const salud = (ws: string) => t.db.withWorkspace(ws, (tx) => outboundHealth(tx, 72));
     const h = await salud(WS_A);
+    // El worker la lee igual, nombrando el workspace.
+    assert.deepEqual(
+      { ...(await t.db.asWorker((tx) => outboundHealth(tx, 72, WS_A))), since: h.since },
+      h,
+      'la misma salud desde el worker',
+    );
     assert.equal(h.enabled, false);
     assert.equal(h.disabledReason, 'Revisión de la cuenta');
     assert.equal(h.shouldPause, true);
@@ -711,9 +945,26 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
     assert.deepEqual(h.llm, { spentToday: 0.0199, dailyCap: 5, currency: 'USD' });
 
     const hb = await salud(WS_B);
-    assert.equal(hb.window.optedOut, 1);
+    assert.equal(hb.window.optedOut, 2, 'Marta y la ficha propia de B que pulsó su enlace (el sabotaje de arriba)');
     assert.equal(hb.window.sentAfterOptOut, 1, 'el que salió con la baja recién puesta');
     assert.deepEqual(hb.byChannel, { email: { sent: 1, failed: 0 } });
+  });
+
+  test('outboundHealth y publicOptout comprueban la forma del jsonb antes de devolverlo', async () => {
+    const buena = await t.db.withWorkspace(WS_A, (tx) => outboundHealth(tx, 24));
+    assert.equal(parseOutboundHealth(JSON.parse(JSON.stringify(buena))).hours, 24);
+    const rota = (cambio: Record<string, unknown>) => parseOutboundHealth({ ...buena, ...cambio });
+    assert.throws(() => rota({ queue: { ...buena.queue, held: '0' } }), (e) => e instanceof OutreachShapeError && e.path === '$.queue.held');
+    assert.throws(() => rota({ enabled: undefined }), (e) => e instanceof OutreachShapeError && e.path === '$.enabled');
+    assert.throws(() => rota({ byChannel: { fax: { sent: 1, failed: 0 } } }), /canal desconocido/);
+    assert.throws(() => rota({ breakersOpen: ['telepatia'] }), /breakersOpen/);
+    assert.throws(() => rota({ llm: { ...buena.llm, currency: 'COP' } }), /currency/);
+    assert.throws(() => parsePublicOptout({ status: 'quizas' }), /estado desconocido/);
+    assert.throws(() => parsePublicOptout({ status: 'ok', alreadyOptedOut: false, workspaceId: 'x', touchId: TOUCH_SENT }), OutreachShapeError);
+    for (const horas of [0, 721, 1.5]) {
+      await assert.rejects(t.db.withWorkspace(WS_A, (tx) => outboundHealth(tx, horas)), RangeError, String(horas));
+    }
+    await assert.rejects(t.db.asWorker((tx) => shouldPauseOutreach(tx as never)), /hay que decir el workspace/);
   });
 
   test('las llamadas al modelo son una bitácora: la web las anota y no las borra', async (ctx) => {
@@ -740,9 +991,9 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
       ['2026-10-23T21:30:00Z', 'Europe/Madrid', '2026-10-26T22:30:00.000Z'],
     ];
     for (const [ts, tz, esperado] of casos) {
-      const [r] = await sinRls<{ d: string }>(`SELECT next_business_day('${ts}'::timestamptz, '${tz}') AS d`);
-      assert.equal(new Date(r!.d).toISOString(), esperado, `${ts} ${tz}`);
+      const d = await t.db.asWorker((tx) => nextBusinessDay(tx, new Date(ts), tz));
+      assert.equal(d.toISOString(), esperado, `${ts} ${tz}`);
     }
-    await assert.rejects(sinRls(`SELECT next_business_day(now(), 'Bogota')`), /time zone/);
+    await assert.rejects(t.db.asWorker((tx) => nextBusinessDay(tx, new Date(), 'Bogota')), /time zone/);
   });
 });
