@@ -3,7 +3,7 @@
  * reglas puras que la ficha y las consultas comparten. Sin base, sin
  * React, sin fechas locales: todo trabaja sobre 'YYYY-MM-DD'.
  */
-import { addDays, type Decimal } from './facturacion.ts';
+import { addDays, daysBetween, type Decimal } from './facturacion.ts';
 
 // ---------------------------------------------------------------------
 // Estados
@@ -569,4 +569,159 @@ export function reviewBrandCsvRows(rows: readonly BrandCsvRawRow[], window: Date
     accepted.push({ line: r.line, day, sales: sales.toFixed(2), orders: orders.value, redemptions: redemptions.value });
   }
   return { accepted, rejected };
+}
+
+// ---------------------------------------------------------------------
+// Seguidores de la marca (CAM-3)
+// ---------------------------------------------------------------------
+
+/**
+ * Hasta cuántos días después de ends_on se sigue midiendo a la marca:
+ * el reporte se corta a 30 días (campaign_result.cut_hours = 720 h, 0008)
+ * y la historia CAM-3 pide la serie hasta ends_on + 30.
+ */
+export const BRAND_AFTER_DAYS = 30;
+
+/** Estados en los que el job lee a la marca. reported, closed y cancelled ya no. */
+export const BRAND_SNAPSHOT_STATUSES: readonly CampaignStatus[] = ['planned', 'live', 'measuring'];
+
+/**
+ * brand_account_snapshot.source cuando la fila NO trae cifra: por qué.
+ *   no_public_source   la red no publica seguidores por @ (TikTok)
+ *   not_found          la plataforma no encontró el handle
+ *   not_discoverable   la plataforma no deja leerlo por este camino (cuenta personal o privada)
+ * Una fila con cifra lleva el endpoint que la dio ('instagram.business_discovery', 'youtube.channels.list').
+ */
+export const BRAND_NO_DATA_REASONS = ['no_public_source', 'not_found', 'not_discoverable'] as const;
+export type BrandNoDataReason = (typeof BRAND_NO_DATA_REASONS)[number];
+
+export function isBrandNoDataReason(value: string): value is BrandNoDataReason {
+  return (BRAND_NO_DATA_REASONS as readonly string[]).includes(value);
+}
+
+export interface BrandSnapshotDueInput {
+  status: CampaignStatus;
+  startsOn: string | null;
+  endsOn: string | null;
+  brandBaselineFrom: string | null;
+  /** Cuántas cuentas hay en brand_accounts. */
+  brandAccounts: number;
+}
+
+/**
+ * ¿Toca leer a la marca de esta campaña hoy? Estado planned/live/measuring,
+ * al menos una cuenta, y hoy dentro de [coalesce(brand_baseline_from,
+ * starts_on − 14), ends_on + 30]. Sin starts_on no hay límite inferior
+ * (se mide desde que la campaña existe: más historia, no menos); sin
+ * ends_on no hay superior.
+ */
+export function isBrandSnapshotDue(campaign: BrandSnapshotDueInput, today: string): boolean {
+  if (!BRAND_SNAPSHOT_STATUSES.includes(campaign.status)) return false;
+  if (campaign.brandAccounts <= 0) return false;
+  const from = campaign.brandBaselineFrom ?? (campaign.startsOn ? brandBaselineFrom(campaign.startsOn) : null);
+  if (from !== null && today < from) return false;
+  if (campaign.endsOn !== null && today > addDays(campaign.endsOn, BRAND_AFTER_DAYS)) return false;
+  return true;
+}
+
+/** Un día de la serie de seguidores de la marca. followers null: ese día no hubo cifra. */
+export interface BrandFollowerPoint {
+  day: string;
+  followers: number | null;
+}
+
+export interface BrandWindows {
+  /** brand_baseline_from; null si la campaña aún no lo tiene. */
+  baselineFrom: string | null;
+  startsOn: string | null;
+  endsOn: string | null;
+}
+
+export interface BrandFollowerRate {
+  /** Seguidores/día en la línea base [baselineFrom, startsOn − 1]. null si no se puede calcular. */
+  baselineRate: number | null;
+  /** Seguidores/día en la campaña [startsOn, endsOn] (o hasta la última lectura si sigue en curso). */
+  campaignRate: number | null;
+  /** Seguidores ganados en la campaña. */
+  gained: number | null;
+  /** campaignRate / baselineRate: «×12 el ritmo». null si alguna falta o la línea base no crece. */
+  ratio: number | null;
+  /** Días de línea base con datos, de la primera lectura en ventana a la última (ambas incluidas). 0 sin datos. */
+  diasDeLineaBase: number;
+  /** Primer día con lectura dentro de la línea base; null sin datos. */
+  baselineDataFrom: string | null;
+  /** Hay las dos tasas y la línea base cubre BRAND_BASELINE_DAYS. Si no, el ritmo se enseña como «línea base corta». */
+  fiable: boolean;
+}
+
+interface Reading {
+  day: string;
+  followers: number;
+}
+
+interface WindowGrowth {
+  /** F(fin) − F(ancla). null si solo hay una lectura y ninguna anterior. */
+  delta: number | null;
+  /** Días entre el ancla y la última lectura de la ventana. */
+  days: number;
+  rate: number | null;
+  /** Días cubiertos con datos dentro de la ventana, ambos extremos incluidos. */
+  covered: number;
+  dataFrom: string;
+}
+
+/**
+ * Crecimiento de una ventana de días [from, to]: la última lectura dentro
+ * de la ventana menos el ANCLA, que es la última lectura anterior a `from`
+ * (la cifra con la que la ventana arranca). Sin lectura anterior, el
+ * ancla es la primera de la ventana y se pierde un día. Los huecos no
+ * cambian nada: es un promedio entre dos lecturas reales.
+ */
+function windowGrowth(readings: readonly Reading[], from: string, to: string): WindowGrowth | null {
+  if (to < from) return null;
+  const inside = readings.filter((r) => r.day >= from && r.day <= to);
+  const first = inside[0];
+  const end = inside[inside.length - 1];
+  if (!first || !end) return null;
+  const before = readings.filter((r) => r.day < from);
+  const anchor = before[before.length - 1] ?? first;
+  const days = daysBetween(anchor.day, end.day);
+  const delta = days > 0 ? end.followers - anchor.followers : null;
+  return { delta, days, rate: delta === null ? null : delta / days, covered: daysBetween(first.day, end.day) + 1, dataFrom: first.day };
+}
+
+/**
+ * El ritmo de seguidores de la marca antes y durante la campaña, desde la
+ * serie de brand_account_snapshot. Con el seed de Café Alma (60 días desde
+ * el 4 de julio, ancla del 26): 181 / 14 = 12,9286 antes, 1 240 / 8 = 155
+ * en campaña, 1 240 ganados, ratio 11,99 → «×12».
+ *
+ * Una serie vacía, sin lecturas en la ventana o sin fechas de campaña da
+ * null en cada cifra que no se puede calcular; nunca un cero. La ficha no
+ * hace aritmética: solo enseña esto.
+ */
+export function ritmoSeguidores(serie: readonly BrandFollowerPoint[], windows: BrandWindows): BrandFollowerRate {
+  const readings: Reading[] = serie
+    .filter((p): p is { day: string; followers: number } => p.followers !== null && Number.isFinite(p.followers))
+    .map((p) => ({ day: p.day, followers: p.followers }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  const none: BrandFollowerRate = { baselineRate: null, campaignRate: null, gained: null, ratio: null, diasDeLineaBase: 0, baselineDataFrom: null, fiable: false };
+  if (readings.length === 0 || windows.startsOn === null) return none;
+
+  const baseline = windows.baselineFrom === null ? null : windowGrowth(readings, windows.baselineFrom, addDays(windows.startsOn, -1));
+  const campaign = windowGrowth(readings, windows.startsOn, windows.endsOn ?? readings[readings.length - 1]!.day);
+
+  const baselineRate = baseline?.rate ?? null;
+  const campaignRate = campaign?.rate ?? null;
+  const ratio = baselineRate !== null && baselineRate > 0 && campaignRate !== null ? campaignRate / baselineRate : null;
+  const diasDeLineaBase = baseline?.covered ?? 0;
+  return {
+    baselineRate,
+    campaignRate,
+    gained: campaign?.delta ?? null,
+    ratio,
+    diasDeLineaBase,
+    baselineDataFrom: baseline?.dataFrom ?? null,
+    fiable: baselineRate !== null && campaignRate !== null && diasDeLineaBase >= BRAND_BASELINE_DAYS,
+  };
 }
