@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { QUOTE_STATUSES } from "@mc/db/queries/cotizar";
-import { pillDeCotizacion } from "./estado";
+import { pillDeCotizacion, validezYaNoAplica } from "./estado";
 
 describe("pillDeCotizacion", () => {
   it("cada estado del ciclo tiene su etiqueta en español y su color, en un solo sitio", () => {
@@ -16,5 +16,11 @@ describe("pillDeCotizacion", () => {
 
   it("un estado desconocido no rompe la pantalla: se muestra tal cual", () => {
     expect(pillDeCotizacion("inventado")).toEqual({ kind: "neutral", text: "inventado" });
+  });
+});
+
+describe("validezYaNoAplica", () => {
+  it("una cotización cerrada no enseña «Válida hasta»; una abierta sí", () => {
+    expect(QUOTE_STATUSES.filter((s) => validezYaNoAplica(s))).toEqual(["accepted", "rejected", "expired"]);
   });
 });

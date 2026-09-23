@@ -60,11 +60,20 @@
 -- circula entre quienes el creador eligió; (2) el peor caso es una
 -- espera de 15 minutos y la página dice hasta qué hora; (3) delante hay
 -- un límite por enlace e IP en el servidor (5 intentos por minuto,
--- apps/web/app/(app)/cotizar/_lib/limite.ts), que frena a una sola
--- máquina mucho antes de llegar a 10; y (4) la contraseña pide ahora 8
--- signos como mínimo. Contar por IP dentro de la base pediría guardar
--- IPs de visitantes anónimos, que es un dato personal que hoy no
--- guardamos. Si aparece el abuso, el siguiente paso es ese.
+-- apps/web/app/(app)/cotizar/_lib/limite.ts), que ahorra el scrypt a
+-- quien insiste desde una máquina; y (4) la contraseña pide ahora 8
+-- signos como mínimo.
+--
+-- Ese límite del servidor es POR INSTANCIA y de mejor esfuerzo: vive en
+-- la memoria de cada proceso, y en Vercel cada instancia serverless
+-- tiene el suyo y lo pierde al enfriarse. Con N instancias calientes el
+-- techo real es 5 × N por minuto. No es la barrera: la barrera es este
+-- bloqueo en la base, que cuenta igual caiga donde caiga la petición.
+-- Contar por IP dentro de la base pediría guardar IPs de visitantes
+-- anónimos, que es un dato personal que hoy no guardamos. Si aparece el
+-- abuso, el siguiente paso es una tabla public_share_attempt (slug, HASH
+-- de la IP con sal, ventana) consultada desde public_media_kit(): cuenta
+-- entre instancias y no guarda la IP en claro.
 --
 -- REQUISITO EN SUPABASE (mc_migrator no tiene CREATEROLE, a propósito):
 --

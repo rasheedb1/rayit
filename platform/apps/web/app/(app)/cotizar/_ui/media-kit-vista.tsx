@@ -1,7 +1,7 @@
 import type { MediaKitSnapshot, MediaKitSnapshotAudiencia } from "@mc/db/queries/cotizar";
 import { PLATFORM_LABEL, PlatformPill, isPlatformId } from "@/components/ui/platform-pill";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { idiomaDocumento, MESSAGES } from "../messages";
+import { idiomaDocumento, MESSAGES, nombreModificador } from "../messages";
 
 /**
  * El media kit tal como lo ve la marca, en /kit/<slug> y en la vista
@@ -26,6 +26,9 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
   // cualquier pieza. Sigue en la lista por red.
   const mejorRed = snapshot.totales.medianViewsMaxPlatform ?? null;
   const viewsMejorRed = mejorRed && isPlatformId(mejorRed) ? snapshot.totales.medianViewsMax : null;
+  // Lo que los rangos ya cobran (derechos, exclusividad…). Los media kits
+  // anteriores no lo guardaron y no dicen nada.
+  const incluyen = Array.isArray(snapshot.tarifasIncluyen) ? snapshot.tarifasIncluyen : [];
 
   return (
     <article className="space-y-10" lang={idiomaDocumento(snapshot.locale)}>
@@ -62,7 +65,7 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
           <ul className="divide-y divide-border rounded-md border border-border">
             {redes.map((r) => (
               <li key={r.platformId} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <span className="flex flex-col gap-1">
+                <span className="flex flex-col items-start gap-1">
                   <PlatformPill platformId={r.platformId} />
                   {r.handle && <span className="font-mono text-xs text-muted">{r.handle}</span>}
                 </span>
@@ -140,7 +143,7 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
           <ul className="mt-3 divide-y divide-border rounded-md border border-border">
             {snapshot.tarifas.map((tarifa, i) => (
               <li key={`${tarifa.labelEs}-${i}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-4 py-3">
-                <span className="flex min-w-0 flex-col gap-1">
+                <span className="flex min-w-0 flex-col items-start gap-1">
                   <span className="text-sm">{tarifa.labelEs}</span>
                   {tarifa.platformId && <PlatformPill platformId={tarifa.platformId} />}
                 </span>
@@ -152,6 +155,11 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
               </li>
             ))}
           </ul>
+          {incluyen.length > 0 && (
+            <p className="mt-2 text-sm text-ink-2" data-testid="tarifas-incluyen">
+              {t.tarifasIncluyen(incluyen.map(nombreModificador))}
+            </p>
+          )}
           <p className="mt-2 text-xs text-muted">{t.tarifasAyuda}</p>
         </section>
       )}

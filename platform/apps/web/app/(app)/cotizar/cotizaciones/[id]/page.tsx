@@ -13,7 +13,7 @@ import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from 
 import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
-import { pillDeCotizacion } from "../../_lib/estado";
+import { pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
 import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 import { ResumenTotales } from "../../_ui/resumen-totales";
 import { EliminarBorrador } from "./eliminar";
@@ -21,6 +21,14 @@ import { EnviarCotizacion } from "./enviar";
 import { VentanaCampana } from "./ventana";
 
 export const metadata: Metadata = { title: "Cotización" };
+
+/**
+ * Una fila de «Lo acordado» y de «Historia»: el término arriba y el
+ * valor debajo en el teléfono, y lado a lado desde sm. El mismo dibujo en
+ * todas las filas; con flex-wrap unas se partían y otras no, y la de
+ * «Aceptada» quedaba a la derecha cortada a mitad del nombre.
+ */
+const FILA_DL = "flex flex-col gap-0.5 px-4 py-2.5 text-sm sm:flex-row sm:items-baseline sm:justify-between sm:gap-4";
 export const dynamic = "force-dynamic";
 
 export default async function CotizacionPage({
@@ -49,23 +57,31 @@ export default async function CotizacionPage({
   const pill = pillDeCotizacion(quote.status);
   const esBorrador = quote.status === "draft";
   const sePuedeCerrar = quote.status === "sent" || quote.status === "viewed";
+  // Aceptada, rechazada o vencida, la validez ya no dice nada: como en
+  // Stripe Quotes, desaparece en cuanto la cotización se cierra.
+  const validezCerrada = validezYaNoAplica(quote.status);
   const enlace = `/cotizacion/${quote.slug}`;
   const vistaPrevia = `/cotizar/cotizaciones/${quote.id}/vista`;
   const dinero = (v: string) => f.money(v, quote.currency, { mode: "full" });
 
+  // Dos columnas, como la factura alojada de Stripe y como el documento
+  // que ve la marca (DocumentoCotizacion): qué es —con «cantidad ×
+  // precio» debajo— y cuánto suma. Con cuatro columnas, a 400 px el total
+  // de la línea quedaba detrás del scroll horizontal, y es justo lo que
+  // se viene a mirar.
   const columnas: Column<QuoteItemRow>[] = [
     {
       key: "descripcion",
       header: MESSAGES.nueva.descripcion,
       render: (i) => (
-        <span className="flex flex-col gap-1">
-          <CellMain>{i.description}</CellMain>
+        <span className="flex min-w-0 flex-col items-start gap-1 whitespace-normal">
+          <CellMain sub={<span className="tabular-nums">{t.cantidadPorPrecio(f.int(i.quantity), dinero(i.unitPrice))}</span>}>
+            <span className="break-words">{i.description}</span>
+          </CellMain>
           {i.platformId && <PlatformPill platformId={i.platformId} />}
         </span>
       ),
     },
-    { key: "cantidad", header: MESSAGES.nueva.cantidad, align: "num", render: (i) => f.int(i.quantity) },
-    { key: "precio", header: MESSAGES.nueva.precio, align: "num", render: (i) => dinero(i.unitPrice) },
     { key: "total", header: t.totalLinea, align: "num", render: (i) => dinero(i.total) },
   ];
 
@@ -157,9 +173,9 @@ export default async function CotizacionPage({
             </SectionTitle>
             <dl className="divide-y divide-border rounded-md border border-border">
               {acordado.map((linea) => (
-                <div key={linea.termino} className="flex flex-wrap justify-between gap-2 px-4 py-2.5 text-sm">
+                <div key={linea.termino} className={FILA_DL}>
                   <dt className="text-ink-2">{linea.termino}</dt>
-                  <dd className="text-right">{linea.valor}</dd>
+                  <dd className="min-w-0 sm:text-right [overflow-wrap:anywhere]">{linea.valor}</dd>
                 </div>
               ))}
             </dl>
@@ -171,9 +187,9 @@ export default async function CotizacionPage({
             </SectionTitle>
             <dl className="divide-y divide-border rounded-md border border-border">
               {historia.map((linea) => (
-                <div key={linea.termino} className="flex flex-wrap justify-between gap-2 px-4 py-2.5 text-sm">
+                <div key={linea.termino} className={FILA_DL}>
                   <dt className="text-ink-2">{linea.termino}</dt>
-                  <dd className="min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">{linea.valor}</dd>
+                  <dd className="min-w-0 tabular-nums sm:text-right [overflow-wrap:anywhere]">{linea.valor}</dd>
                 </div>
               ))}
             </dl>
@@ -208,7 +224,7 @@ export default async function CotizacionPage({
               <p className="mt-2 text-xs leading-4 text-muted">{t.enlaceAyuda}</p>
               <p className="mt-2 text-xs text-muted">
                 {quote.viewCount > 0 ? t.visitas(quote.viewCount) : t.sinVisitas}
-                {quote.validUntil ? ` · ${MESSAGES.publico.cotizacion.valida(f.date(quote.validUntil))}` : ""}
+                {quote.validUntil && !validezCerrada ? ` · ${MESSAGES.publico.cotizacion.valida(f.date(quote.validUntil))}` : ""}
               </p>
             </div>
           )}

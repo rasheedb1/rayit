@@ -6,6 +6,7 @@ import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor } from "@/lib/format";
 import { idiomaDocumento, MESSAGES } from "../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../_lib/acordado";
+import { validezYaNoAplica } from "../_lib/estado";
 import { ResumenTotales } from "./resumen-totales";
 
 /**
@@ -49,7 +50,7 @@ export function DocumentoCotizacion({
             <Pill kind="good">
               {q.acceptedByName ? t.aceptadaPor(q.acceptedByName, f.date(q.acceptedAt, "long")) : t.aceptada(f.date(q.acceptedAt, "long"))}
             </Pill>
-          ) : q.validUntil ? (
+          ) : q.validUntil && !validezYaNoAplica(q.status) ? (
             <span>{t.valida(f.date(q.validUntil, "long"))}</span>
           ) : null}
         </p>

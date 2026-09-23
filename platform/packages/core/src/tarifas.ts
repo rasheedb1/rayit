@@ -94,6 +94,53 @@ export interface Modificador {
 }
 
 /**
+ * Lo que un modificador compromete en «Lo acordado» de la cotización.
+ * Derechos de uso y exclusividad no son solo un recargo: son una
+ * condición que la marca compra. Si el precio del tarifario ya los lleva
+ * y la cotización dice «Exclusividad: no aplica», la marca paga un 50 %
+ * por algo que el documento que firma le niega.
+ *
+ * Los otros dos (pauta pagada y entrega exprés) no tienen campo propio
+ * en la cotización: la pantalla los nombra como «incluye», nada más.
+ */
+export const TERMINOS_DE_MODIFICADOR: Readonly<Record<string, { campo: 'usageRightsDays' | 'exclusivityDays'; dias: number }>> = {
+  derechos_uso_30d: { campo: 'usageRightsDays', dias: 30 },
+  exclusividad_30d: { campo: 'exclusivityDays', dias: 30 },
+};
+
+export interface TerminosIncluidos {
+  /** Días de derechos de uso que el precio ya incluye, o null si ninguno. */
+  usageRightsDays: number | null;
+  /** Días de exclusividad que el precio ya incluye, o null si ninguno. */
+  exclusivityDays: number | null;
+}
+
+/**
+ * Los días de derechos y de exclusividad que un conjunto de modificadores
+ * ya cobra. Con varios que tocan el mismo campo, gana el más largo: es lo
+ * que la marca pagó.
+ */
+export function terminosDeModificadores(ids: readonly string[]): TerminosIncluidos {
+  const out: TerminosIncluidos = { usageRightsDays: null, exclusivityDays: null };
+  for (const id of ids) {
+    const t = TERMINOS_DE_MODIFICADOR[id];
+    if (!t) continue;
+    out[t.campo] = Math.max(out[t.campo] ?? 0, t.dias);
+  }
+  return out;
+}
+
+/**
+ * Sube un plazo acordado hasta lo que el precio ya incluye, sin bajarlo
+ * nunca: si el creador acordó 60 días de exclusividad, un entregable que
+ * incluye 30 no los recorta. null (no acordado) cuenta como 0.
+ */
+export function plazoConIncluido(acordado: number | null, incluido: number | null): number | null {
+  if (incluido === null) return acordado;
+  return Math.max(acordado ?? 0, incluido);
+}
+
+/**
  * Un entregable del tarifario, tal como entra al cálculo. Las views son
  * por pieza y ya vienen resueltas (línea base o a mano): quién las
  * eligió es cosa de la consulta, no de la fórmula.

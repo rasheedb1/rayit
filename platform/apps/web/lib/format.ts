@@ -307,6 +307,31 @@ export function formatDateTime(iso: string, opts: LocaleOpts = {}): string {
   return plain(dateFormat(locale, { dateStyle: "long", timeStyle: "short", timeZone }).format(utcDate(iso)));
 }
 
+/**
+ * Solo la hora de un instante, en el locale y la zona pedidos: "3:15 p. m."
+ * en es-CO. Para frases que ya dicen el día («podrás volver a probar a
+ * las…»). Añadido por Cotizar (COT-2); no cambia nada de lo que ya había.
+ */
+export function formatTime(iso: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const timeZone = opts.timeZone ?? DEFAULT_TIME_ZONE;
+  return plain(dateFormat(locale, { hour: "numeric", minute: "2-digit", timeZone }).format(utcDate(iso)));
+}
+
+/**
+ * La zona horaria del navegador de quien mira, para las páginas sin
+ * workspace (un enlace público): ahí la hora que importa es la de la
+ * visita. En el servidor devuelve la del proceso, así que solo se llama
+ * después de hidratar. Añadido por Cotizar (COT-2).
+ */
+export function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_TIME_ZONE;
+  } catch {
+    return DEFAULT_TIME_ZONE;
+  }
+}
+
 /** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
 export function formatDaysRelative(days: number): string {
   if (days === 0) return "hoy";
@@ -344,6 +369,7 @@ export function formatterFor(settings: FormatSettings) {
     dayMonth: (iso: string) => formatDayMonth(iso, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
+    time: (iso: string) => formatTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     daysRelative: formatDaysRelative,
   };

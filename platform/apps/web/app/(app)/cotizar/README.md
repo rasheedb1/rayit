@@ -25,7 +25,9 @@ aceptarse, deja una campaña planeada.
 | `_lib/tarifario.ts` | Qué entregables se ofrecen, qué le falta a cada fila, paquetes y el desglose en palabras |
 | `_lib/acordado.ts` | «Lo acordado» y la etiqueta del impuesto con su tasa, iguales en los tres sitios |
 | `_lib/robots.ts` | Los robots de chat que desenrollan enlaces: no cuentan como visita |
-| `_lib/limite.ts` | El freno de intentos de contraseña en memoria |
+| `_lib/limite.ts` | El freno de intentos de contraseña en memoria, **por instancia y de mejor esfuerzo** |
+| `_lib/kits.ts` | Qué media kit llega preseleccionado en una cotización nueva |
+| `_lib/estado.ts` | La pastilla de cada estado y cuándo deja de mostrarse «Válida hasta» |
 | `_lib/textos.ts` | Las frases que la base guarda en tablas de otros módulos (historia del negocio, aviso), compuestas con `messages.ts` |
 | `_ui/confirmar-accion.tsx` | El segundo paso en línea de las acciones que no se deshacen (aceptar, rechazar, eliminar) |
 | `_ui/tabla-con-detalle.tsx` | La tabla del tarifario con el «Cómo se calcula» abierto bajo su fila |
@@ -37,7 +39,7 @@ aceptarse, deja una campaña planeada.
 | `../../lib/db/index.ts` | `withPublicShare` y `acceptQuoteFromLink` |
 | `packages/core/src/tarifas.ts` | La fórmula, los paquetes y la unidad de precio. Pura, sin idioma y sin base |
 | `packages/core/src/zonas.ts` | El fin de un día en la zona del workspace |
-| `packages/db/src/queries/cotizar.ts` | Las consultas, todas con `WorkspaceTx` salvo las tres públicas, que reciben `PublicShareTx` |
+| `packages/db/src/queries/cotizar.ts` | La entrada de `@mc/db/queries/cotizar`: reexporta las consultas, repartidas por pieza en `queries/cotizar/` (errores, enlace, tarifario, media kit, cotización, público, campaña). Todas con `WorkspaceTx` salvo las tres públicas, que reciben `PublicShareTx` |
 | `db/migrations/0030_public_share.sql` | El rol `mc_public_share`, las columnas, las funciones y las políticas del enlace público, y el CHECK del rango del tarifario |
 
 ## Las cuatro decisiones que explican el resto
@@ -197,7 +199,9 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   de SQL. Los media kits generados antes de la ronda 4 no guardaron la
   red y no enseñan esa cifra en la cabecera (sí en la lista por red).
 - **El media kit que acompaña una cotización se elige en el formulario**
-  (públicos y sin vencer, el más reciente preseleccionado). Se congela
+  (públicos y sin vencer; llega preseleccionado el más reciente **sin
+  contraseña**, porque una contraseña no se recupera, y si se elige uno
+  con ella el formulario avisa de que habrá que dársela a la marca). Se congela
   su slug al enviar y la marca lo abre desde el pie del documento; la
   vista previa del panel lo enlaza por su vista previa, que no cuenta
   visitas.
@@ -233,8 +237,27 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
 - **El bloqueo del media kit es por enlace, no por IP** (10 contraseñas
   fallidas → 15 minutos). Es un compromiso aceptado y explicado en la
   cabecera de 0030: quien tiene el enlace puede dispararlo, pero no hay
-  que guardar IPs de visitantes y delante hay un límite por IP en el
-  servidor.
+  que guardar IPs de visitantes. Delante hay un límite por IP en el
+  servidor (`_lib/limite.ts`, 5 por minuto), que es **por instancia y de
+  mejor esfuerzo**: vive en memoria y en Vercel cada instancia tiene el
+  suyo, así que el techo real crece con las instancias. La barrera es la
+  de la base; el paso siguiente si hubiera abuso (una tabla con el hash
+  de la IP, no la IP) está escrito en la cabecera de 0030.
+- **Lo que el precio ya cobra se dice.** Los modificadores del
+  tarifario (derechos de uso, exclusividad, pauta, exprés) se guardan en
+  `rate_card_item.adjustments.modificadores` de cada entregable y cada
+  paquete, y salen como `RateCardItem.modifierIds`. El media kit los
+  congela en `tarifasIncluyen` y los dice bajo las tarifas; la nueva
+  cotización sube «Derechos de uso» y «Exclusividad» a los días que el
+  precio incluye al elegir el entregable (nunca los baja) y lo dice en la
+  línea. `createQuote` y `updateQuoteDraft` hacen lo mismo cuando no se
+  les pasan esos plazos (`terminosIncluidosEnTarifario`); lo que el
+  creador escribe, también «no aplica», se respeta.
+- **Guardar no reinicia el formulario.** El tarifario y la cotización se
+  envían con `onSubmit` + `startTransition`, no con `<form action>`: el
+  reinicio automático de React 19 desmarcaba en el DOM las casillas
+  controladas sin cambiar el estado, y la casilla decía lo contrario del
+  rango.
 - **La fórmula no multiplica por engagement ni por audiencia** como el
   mock (× 1,15 y × 1,10): no hay una referencia en la base contra la que
   medir «sobre la media». La decisión está en la cabecera de

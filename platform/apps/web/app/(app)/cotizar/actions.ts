@@ -14,7 +14,7 @@ import { formatterFor } from "@/lib/format";
 import { firstErrors, UUID_RE, type ActionState } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, nombreEntregable } from "./messages";
-import { construirFilas, construirPaquetes, precioDe, type BasisTarifario } from "./_lib/tarifario";
+import { construirFilas, construirPaquetes, modificadoresActivos, precioDe, type BasisTarifario } from "./_lib/tarifario";
 import { TEXTOS_COTIZAR } from "./_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -124,6 +124,10 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
 
       const items: SaveRateCardItem[] = [];
       const filas = construirFilas(inputs, basis);
+      // Los modificadores que el precio lleva dentro, en cada entregable y
+      // en cada paquete: la cotización y el media kit los leen de aquí
+      // (RateCardItem.modifierIds) para decir qué incluye el precio.
+      const modificadores = modificadoresActivos(basis.modificadores).map((m) => m.id);
       for (const fila of filas) {
         if (!fila.entrada) continue;
         const calculado = calcularItem(fila.entrada);
@@ -142,7 +146,7 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
             cantidad: fila.def.cantidad,
             viewsSource: fila.entrada.viewsSource,
             cpmSource: fila.entrada.cpmSource,
-            modificadores: basis.modificadores,
+            modificadores,
           },
           overridden: precio.editado,
         });
@@ -158,7 +162,7 @@ export async function guardarTarifario(_prev: ActionState, formData: FormData): 
           avgViews: null,
           cpmLow: null,
           cpmHigh: null,
-          adjustments: { pasos: p.item.pasos, componentes: p.componentes, descuentoPct: p.item.descuentoPct },
+          adjustments: { pasos: p.item.pasos, componentes: p.componentes, descuentoPct: p.item.descuentoPct, modificadores },
           overridden: false,
         });
       }

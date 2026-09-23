@@ -9,6 +9,7 @@ import { withWorkspace } from "@/lib/db";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { crearCotizacion } from "../../actions";
 import { MESSAGES } from "../../messages";
+import { mediaKitPorDefecto } from "../../_lib/kits";
 import { CotizacionForm } from "./form";
 
 export const metadata: Metadata = { title: "Nueva cotización" };
@@ -80,9 +81,9 @@ export default async function NuevaCotizacionPage({ searchParams }: { searchPara
           paymentTermsDays: "30",
           campaignStartsOn: addDays(hoy, 14),
           campaignEndsOn: addDays(hoy, 44),
-          // El más reciente que la marca puede abrir: es el que el
-          // creador acaba de generar para esta conversación.
-          mediaKitId: datos.mediaKits[0]?.id ?? "",
+          // El más reciente que la marca puede abrir SIN contraseña: una
+          // contraseña no se recupera, y no se preselecciona un candado.
+          mediaKitId: mediaKitPorDefecto(datos.mediaKits),
         }}
       />
     </>

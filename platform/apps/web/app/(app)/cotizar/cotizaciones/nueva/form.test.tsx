@@ -12,7 +12,7 @@ function item(over: Partial<RateCardItem>): RateCardItem {
   return {
     id: "i1", deliverable: "tiktok", platformId: "tiktok", labelEs: "TikTok dedicado",
     priceLow: "3780000.00", priceHigh: "5880000.00", isModifier: false, modifierPct: null, avgViews: 84_000,
-    cpmLow: "45000.00", cpmHigh: "70000.00", adjustments: {}, overridden: false, position: 0, ...over,
+    cpmLow: "45000.00", cpmHigh: "70000.00", adjustments: {}, modifierIds: [], overridden: false, position: 0, ...over,
   };
 }
 
@@ -123,17 +123,88 @@ describe("CotizacionForm", () => {
     const kit = screen.getByLabelText("Media kit que la acompaña");
     expect(kit).toHaveValue("00000009-0000-4000-8000-00000000c002");
     const opciones = within(kit).getAllByRole("option").map((o) => o.textContent);
+    // Con la hora: dos del mismo día se distinguen.
     expect(opciones).toEqual([
       "Sin media kit",
-      "Generado el 20 sep · con contraseña",
-      "Generado el 2 ago",
+      "Generado el 20 sep · 10:00 a. m. · con contraseña",
+      "Generado el 2 ago · 10:00 a. m.",
     ]);
+    // Uno con contraseña avisa: esa contraseña no se recupera.
+    expect(screen.getByText(/tendrás que dársela a la marca/)).toBeInTheDocument();
+    fireEvent.change(kit, { target: { value: "00000009-0000-4000-8000-00000000c001" } });
+    expect(screen.queryByText(/tendrás que dársela a la marca/)).not.toBeInTheDocument();
 
     fireEvent.change(kit, { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
     await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
     const fd = (action.mock.calls[0] as unknown as [unknown, FormData])[1];
     expect(JSON.parse(String(fd.get("payload"))).mediaKitId).toBe("");
+  });
+
+  it("un entregable cuyo precio ya cobra exclusividad y derechos los lleva a «Lo acordado» y lo dice en la línea", async () => {
+    const conCondiciones = [
+      TARIFAS[0]!,
+      item({
+        id: "i4", deliverable: "reel", platformId: "instagram", labelEs: "Reel de Instagram", position: 1,
+        modifierIds: ["exclusividad_30d", "derechos_uso_30d"],
+      }),
+    ];
+    const action = vi.fn(async () => ({}));
+    render(
+      <CotizacionForm
+        action={action}
+        creatorId="00000002-0000-4000-8000-000000000003"
+        deals={DEALS}
+        tarifas={conCondiciones}
+        mediaKits={KITS}
+        settings={{ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }}
+        currency="COP"
+        iniciales={{ ...INICIALES, usageRightsDays: "", exclusivityDays: "" }}
+        textoGuardar="Guardar borrador"
+        cancelarHref="/cotizar/cotizaciones"
+      />,
+    );
+    // El primero no lleva condiciones: nada se rellena.
+    expect(screen.getByLabelText("Exclusividad (días)")).toHaveValue("");
+    expect(screen.queryByTestId("incluye-0")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "i4" } });
+    expect(screen.getByLabelText("Exclusividad (días)")).toHaveValue("30");
+    expect(screen.getByLabelText("Derechos de uso (días)")).toHaveValue("30");
+    expect(screen.getByTestId("incluye-0")).toHaveTextContent(
+      "El precio del tarifario incluye: Exclusividad de categoría · 30 días, Derechos de uso · 30 días.",
+    );
+
+    // Subir, nunca bajar: 60 días acordados a mano se quedan en 60.
+    fireEvent.change(screen.getByLabelText("Exclusividad (días)"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "i1" } });
+    fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "i4" } });
+    expect(screen.getByLabelText("Exclusividad (días)")).toHaveValue("60");
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(String((action.mock.calls[0] as unknown as [unknown, FormData])[1].get("payload")));
+    expect(payload.exclusivityDays).toBe(60);
+    expect(payload.usageRightsDays).toBe(30);
+  });
+
+  it("una cotización nueva que arranca con un entregable con exclusividad ya la trae acordada", () => {
+    const primero = item({ modifierIds: ["exclusividad_30d"] });
+    render(
+      <CotizacionForm
+        action={vi.fn(async () => ({}))}
+        creatorId="00000002-0000-4000-8000-000000000003"
+        deals={DEALS}
+        tarifas={[primero]}
+        mediaKits={KITS}
+        settings={{ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }}
+        currency="COP"
+        iniciales={{ ...INICIALES, exclusivityDays: "" }}
+        textoGuardar="Guardar borrador"
+        cancelarHref="/cotizar/cotizaciones"
+      />,
+    );
+    expect(screen.getByLabelText("Exclusividad (días)")).toHaveValue("30");
   });
 
   it("sin media kits que compartir, el selector lo explica en vez de ofrecer una lista vacía", () => {

@@ -91,6 +91,28 @@ describe("MediaKitVista", () => {
     expect(within(tarifas).getByText(/El precio final se acuerda en la cotización/)).toBeInTheDocument();
   });
 
+  it("si los rangos ya llevan derechos o exclusividad, lo dice debajo; un kit anterior no dice nada", () => {
+    const { unmount } = render(
+      <MediaKitVista snapshot={{ ...SNAPSHOT, tarifasIncluyen: ["derechos_uso_30d", "exclusividad_30d"] }} />,
+    );
+    const tarifas = screen.getByRole("region", { name: "Tarifas" });
+    expect(within(tarifas).getByTestId("tarifas-incluyen")).toHaveTextContent(
+      "Estos rangos ya incluyen: Derechos de uso · 30 días, Exclusividad de categoría · 30 días.",
+    );
+    unmount();
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    expect(screen.queryByTestId("tarifas-incluyen")).not.toBeInTheDocument();
+  });
+
+  it("la pastilla de la red mide lo que su texto, no el ancho de la columna", () => {
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    const tarifas = screen.getByRole("region", { name: "Tarifas" });
+    // flex-col estira a sus hijos (align-items: stretch) salvo que diga items-start.
+    const pastilla = within(tarifas).getByText("TikTok");
+    const columna = pastilla.closest(".flex-col");
+    expect(columna).toHaveClass("items-start");
+  });
+
   it("sin audiencia ni videos, no pinta las secciones vacías; un snapshot v1 no enseña su audiencia plana", () => {
     render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [], audiencia: [], tarifas: [] }} />);
     expect(screen.queryByRole("region", { name: "Tarifas" })).not.toBeInTheDocument();

@@ -22,3 +22,13 @@ export function pillDeCotizacion(status: string): { kind: PillKind; text: string
       return { kind: "neutral", text };
   }
 }
+
+/**
+ * true cuando la cotización ya se cerró (aceptada, rechazada o vencida)
+ * y «Válida hasta» no dice nada: Stripe Quotes quita la validez en cuanto
+ * la cotización se acepta. La usan el detalle del panel y el documento
+ * que ve la marca.
+ */
+export function validezYaNoAplica(status: string): boolean {
+  return status === "accepted" || status === "rejected" || status === "expired";
+}
