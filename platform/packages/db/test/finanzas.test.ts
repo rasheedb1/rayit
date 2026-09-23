@@ -568,15 +568,20 @@ describe('bandeja de recordatorios (FIN-4)', () => {
   const N_SIN_PASO = '00000004-0000-4000-8000-00000000fa09';
   const N_DESCARTADA = '00000004-0000-4000-8000-00000000fa08';
   const N_AJENA = '00000004-0000-4000-8000-00000000fa07';
+  /** …f1, no …e1: ese es EMPRESA_SIN_RESERVA de FIN-2, con otro dueño. */
+  const EMPRESA_AJENA = '00000009-0000-4000-8000-0000000000f1';
   const FV_007 = '00000003-0000-4000-8000-0000fac26007';
 
   before(async () => {
-    // Una factura del workspace ajeno, para que su recordatorio apunte a algo.
+    // Una factura del workspace ajeno, para que su recordatorio apunte a
+    // algo. La empresa es …f1 y no …e1: ese id es de FIN-2
+    // (EMPRESA_SIN_RESERVA) y lo espera con OTRO dueño, así que el
+    // primero en insertar decidía de quién era la empresa.
     await t.admin(`
       INSERT INTO company (id, name, owner_workspace_id)
-      VALUES ('00000009-0000-4000-8000-0000000000e1', 'Marca Ajena', '${WORKSPACE_AJENO}') ON CONFLICT DO NOTHING;
+      VALUES ('${EMPRESA_AJENA}', 'Marca Ajena', '${WORKSPACE_AJENO}') ON CONFLICT DO NOTHING;
       INSERT INTO invoice (id, workspace_id, company_id, number, currency, subtotal, tax, withholding, total, issued_on, due_on, status, paid_amount)
-      VALUES ('00000009-0000-4000-8000-0000fac26001', '${WORKSPACE_AJENO}', '00000009-0000-4000-8000-0000000000e1',
+      VALUES ('00000009-0000-4000-8000-0000fac26001', '${WORKSPACE_AJENO}', '${EMPRESA_AJENA}',
               'FV-2026-A01', 'COP', 1000000.00, 190000.00, 110000.00, 1190000.00, CURRENT_DATE - 71, CURRENT_DATE - 41, 'sent', 0.00)
       ON CONFLICT DO NOTHING;
 
