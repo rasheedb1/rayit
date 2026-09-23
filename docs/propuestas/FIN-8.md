@@ -295,3 +295,32 @@ encontró la prueba, no la revisión.
 | `audit()` de verdad y la acción nueva | ACC-2 (§2.2) |
 | `requirePermission()` de verdad | ACC-1 (§0.3 D) |
 | Facturación electrónica (DIAN), multimoneda con conversión, liberar reservas por periodo | Fuera de alcance (fase 2) |
+
+### 3.5 Revisión (R9)
+
+**`/code-review` (nivel alto)** — cuatro hallazgos, tres corregidos en
+`5a8ad07` y uno justificado:
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | `facturas/nueva/form.tsx`: llegando con `?campana=`, el subtotal inicial se descomponía con el 19 % por omisión de `subtotalFromTotal`, no con la tasa configurada | Corregido. Verificado en dev: con el workspace al 16 %, 2.672.413,79 + IVA = los 3.100.000 acordados. Prueba de regresión en `form.test.tsx` |
+| 2 | `invoicesInOtherCurrency` se calculaba en todo guardado y el aviso lo etiqueta con `previousCurrency`: en un guardado que solo tocó el IVA, nombraba la moneda propia | Corregido: 0 si la moneda no cambió. Prueba en `packages/db/test/finanzas.test.ts` |
+| 3 | `contarFacturasEnOtraMoneda` era una Server Action exportada (o sea, un endpoint) sin compuerta, y encima sin usar | Borrada |
+| 4 | El `iva_pct` configurado no llega a Cotizar, que sigue leyendo `settings->>'taxRate'` | **Justificado, no corregido**: `cotizar/` es de Rasheed. Es §2.1, y la copia de la pantalla dice «se prellena **una factura** nueva», no promete cotizaciones |
+
+**`/security-review`** — sin hallazgos. Comprobó el merge jsonb (las
+llaves salen de la constante `FINANCE_KEYS`, solo los valores vienen del
+formulario, y todo va como parámetro `$1`), que `guardarConfiguracion` es
+la única función exportada del `"use server"` y que su primera línea es
+la compuerta, que el rol sale de `listMyWorkspaces` dentro de
+`withIdentity` —donde la política `membership_read` de 0028 solo devuelve
+las membresías propias—, y que `before`/`after` no llevan credenciales ni
+filas de otro inquilino.
+
+Dejó una observación que descartó como no explotable (~4/10) y que anoto
+por honestidad: la rama `if (!sesion) return true` de `_lib/permiso.ts`
+es una desviación de endurecimiento respecto de `renombrarEspacio`, que
+hace `redirect('/login')`. Solo se alcanza con `isAuthConfigured()` en
+falso —una copia sin llaves, donde toda la aplicación ya sirve escrituras
+sin sesión—, así que no es un salto de permiso en un despliegue con
+llaves. Si prefieres cerrarla igual, es una línea.
