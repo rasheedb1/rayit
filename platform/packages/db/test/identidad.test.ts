@@ -31,6 +31,10 @@ import {
   listMyWorkspaces, nameFromEmail, renameWorkspace, slugify, updateMyName, upsertAppUserPorCorreo,
 } from '../src/queries/identidad.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
+import { createEmbeddedDb } from '../src/embedded.ts';
 
 /** Drizzle envuelve el error de Postgres; el motivo real va en `cause`. */
 function esViolacionRls(err: unknown): boolean {
@@ -349,5 +353,65 @@ describe('espacios de la persona que entra', () => {
 
   test('un userId que no es UUID lanza antes de tocar la base', async () => {
     await assert.rejects(() => t.db.withIdentity({ userId: 'ana' }, async () => null), /user_id inválido/);
+  });
+});
+
+/**
+ * Los privilegios de mc_app sobre membership, leídos de la base migrada
+ * tal cual. El Postgres embebido NO vuelve a conceder nada después de
+ * migrar (packages/db/src/embedded.ts usa ALTER DEFAULT PRIVILEGES antes
+ * de crear las tablas, como Supabase), así que esto es lo que habría en
+ * Supabase con las mismas migraciones: si mañana alguien quita el GRANT
+ * de membership_alta_propia, o una migración posterior lo revoca, el
+ * primer inicio de sesión fallaría allí y esta prueba lo dice aquí,
+ * antes de que el alta llegue a probarse.
+ */
+describe('el privilegio que necesita el primer inicio de sesión', () => {
+  test('mc_app tiene INSERT sobre membership, y ni UPDATE ni DELETE', async () => {
+    const [fila] = await t.raw<{ insertar: boolean; cambiar: boolean; borrar: boolean }>(
+      `SELECT has_table_privilege(current_user, 'membership', 'INSERT') AS insertar,
+              has_table_privilege(current_user, 'membership', 'UPDATE') AS cambiar,
+              has_table_privilege(current_user, 'membership', 'DELETE') AS borrar`,
+    );
+    assert.deepEqual(fila, { insertar: true, cambiar: false, borrar: false });
+  });
+});
+
+/**
+ * El orden 0024 → 0028 es obligatorio y lo hacen cumplir las dos
+ * migraciones, no un comentario: 0024 §7.7 revoca el INSERT sobre
+ * membership y 0028 lo devuelve. Aplicadas al revés, la base quedaría
+ * sin el privilegio y nadie nuevo podría entrar. Aquí se aplican en el
+ * orden malo, a mano (el runner nunca lo haría), sobre una base
+ * reconstruida hasta 0022 —la que tiene Supabase hoy—.
+ */
+describe('el orden de 0024 y 0028 lo hacen cumplir las migraciones', () => {
+  const sql = (archivo: string) => readFile(join(MIGRATIONS_DIR, archivo), 'utf8');
+
+  test('0028 sobre una base sin 0024 se para con su mensaje', async () => {
+    const base = await createEmbeddedDb({ seeds: false, hasta: '0022_public_profile_access.sql' });
+    try {
+      await assert.rejects(
+        base.execAsSuperuser(await sql('0028_membership_alta_propia.sql')),
+        /0028_membership_alta_propia necesita 0024_aislamiento_por_defecto aplicada antes/,
+      );
+    } finally {
+      await base.close();
+    }
+  });
+
+  test('0024 después de 0028 también se para, en vez de revocar su GRANT', async () => {
+    const base = await createEmbeddedDb({ seeds: false, hasta: '0022_public_profile_access.sql' });
+    try {
+      await base.execAsSuperuser(
+        "INSERT INTO schema_migrations (filename, checksum) VALUES ('0028_membership_alta_propia.sql', 'aplicada-a-mano')",
+      );
+      await assert.rejects(
+        base.execAsSuperuser(await sql('0024_aislamiento_por_defecto.sql')),
+        /tiene que aplicarse ANTES que 0028_membership_alta_propia/,
+      );
+    } finally {
+      await base.close();
+    }
   });
 });

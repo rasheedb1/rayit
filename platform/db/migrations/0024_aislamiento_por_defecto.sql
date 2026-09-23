@@ -116,12 +116,41 @@ CREATE POLICY workspace_signup ON workspace FOR INSERT
 -- membership, así que la web no puede escribirla ni aunque una política
 -- futura se lo permita por descuido. La política existe para el seed y
 -- para mc_migrator.
+--
+-- ORDEN con CIM-3 (0028_membership_alta_propia): 0028 parte esta misma
+-- política con los mismos nombres y le DEVUELVE a mc_app el INSERT que
+-- la sección 7.7 le quita. Si 0028 se hubiera aplicado antes (a mano:
+-- el runner va en orden y 0028 tiene su propia guardia), este archivo
+-- borraría ese GRANT y el primer inicio de sesión de cualquier persona
+-- nueva fallaría. Por eso se para aquí con un mensaje claro, y por eso
+-- todo lo de esta sección lleva IF EXISTS: el bloque es idempotente.
+-- Misma forma que la guardia de 0028: schema_migrations es la tabla del
+-- runner (db/lib/aplicar.mjs) y, si no existe, quien aplica no es él.
 -- =====================================================================
-DROP POLICY membership_ws_isolation ON membership;
+DO $$
+DECLARE
+  posterior boolean;
+BEGIN
+  IF to_regclass('schema_migrations') IS NULL THEN
+    RETURN;
+  END IF;
+  EXECUTE 'SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = $1)'
+    INTO posterior
+    USING '0028_membership_alta_propia.sql';
+  IF posterior THEN
+    RAISE EXCEPTION USING
+      MESSAGE = '0024_aislamiento_por_defecto tiene que aplicarse ANTES que 0028_membership_alta_propia, y 0028 ya está aplicada.',
+      HINT = 'Su REVOKE INSERT ON membership (§7.7) deshace el GRANT de 0028. Vuelve a aplicar 0028 después, o reconstruye la base en orden.';
+  END IF;
+END $$;
 
+DROP POLICY IF EXISTS membership_ws_isolation ON membership;
+
+DROP POLICY IF EXISTS membership_read ON membership;
 CREATE POLICY membership_read ON membership FOR SELECT
   USING (workspace_id = current_workspace_id() OR user_id = current_user_id());
 
+DROP POLICY IF EXISTS membership_alta ON membership;
 CREATE POLICY membership_alta ON membership FOR INSERT
   WITH CHECK (workspace_id = current_workspace_id() AND user_id = current_user_id());
 
