@@ -1,5 +1,15 @@
 # FIN-5 · Gastos — plan, decisiones y lo que necesita Rasheed
 
+> **Nota del cierre del módulo (23-sep, `docs/propuestas/CIERRE-FIN.md`).**
+> Lo que este documento dice de `proyectarGastosRecurrentes` y
+> `listRecurringExpenses` ya no vale: al integrar FIN-5 con FIN-6 quedó
+> UNA sola regla, `proyectarGastos` en `core/flujo-caja.ts` (ritmo del
+> último mes cerrado × 12 / 52, más las series nuevas del mes en curso),
+> alimentada por `getCashflowInputs`. Las listas cerradas viven en
+> `core/src/gastos.ts`. Los `TODO(ACC-1)` y `TODO(ACC-2)` están
+> resueltos: `requirePermission('finanzas.gasto.registrar')`, la puerta
+> `finanzas.gasto.ver` en la página y `audit()` en cada escritura.
+
 Escrito para: Rasheed (integrador de migraciones y de la cola de
 Supabase) y quien revise el PR de FIN-5. Fecha: 23 de septiembre de
 2026. Rama `nicolas/FIN-5-gastos`, sobre `origin/main` (29460e3).

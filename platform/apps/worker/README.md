@@ -309,6 +309,12 @@ correo con `@mc/core` —`pasosPendientes()` y `redactarRecordatorio()`,
 puras— y lo guarda como `notification` de tipo `invoice_overdue`, con el
 asunto en `title_es` y el cuerpo en `body_es`.
 
+Los datos de pago del correo (titular, NIT, banco, cuenta, enlace) salen
+de `workspace.settings->'finanzas'` con `parseFinanceSettings` y
+`datosDePagoDe` (FIN-8); sin banco, cuenta ni enlace, el correo dice
+dónde configurarlos. Ni el banco ni la cuenta van a `job_run.metadata`
+ni al log (hay prueba).
+
 **No envía nada.** El envío real por SMTP es fase 2 y espera a CIM-10;
 cuando llegue, marca `notification.emailed_at`. Hoy el creador lo copia
 desde la bandeja de `/finanzas` y lo manda desde su correo.

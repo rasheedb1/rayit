@@ -320,13 +320,13 @@ a partir de CadenceV1.0):
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
 | FIN-1 | Facturas: desde una campaña o a mano; IVA, retención, vencimiento, numeración, estados, número DIAN. | M | CIM-2, CIM-5 | Una factura desde una campaña trae nombre, empresa y monto solos. **Hecha, en `main` el 21-sep (PR #2) y en producción.** |
-| FIN-2 | Pagos parciales o totales; `tax_reserve` con el porcentaje del workspace. | M | FIN-1 | Un pago parcial deja `partial`; el total pasa a `paid` y aparta el impuesto. |
-| FIN-3 | Cuentas por cobrar sobre `receivables`, con los cuatro KPIs. | M | FIN-1 | La factura vencida sale en rojo con sus días. |
-| FIN-4 | Recordatorios de cobro: job `finanzas/recordatorios.ts` que redacta y deja listo para copiar. | M | FIN-1, CON-2 | Una factura vencida hace 41 días tiene sus tres recordatorios. |
-| FIN-5 | Gastos con recibo en S3, recurrentes, deducibles. | S | CIM-5 | Un gasto recurrente aparece proyectado. |
-| FIN-6 | Flujo de caja proyectado: `packages/core/flujo-caja.ts`, ocho semanas, gráfico y tabla. | M | FIN-2, FIN-5, VEN-3 | El gráfico sale de la función con el seed; un test cubre una semana. |
-| FIN-7 | Ingresos de plataformas por CSV o a mano. | S | FIN-6 | Un CSV de AdSense aparece en su mes. |
-| FIN-8 | Configuración financiera del workspace: moneda, reserva, IVA, retención, datos fiscales. | S | CIM-3 | Cambiar el porcentaje afecta los pagos siguientes, no los anteriores. |
+| FIN-2 | Pagos parciales o totales; `tax_reserve` con el porcentaje del workspace. | M | FIN-1 | Un pago parcial deja `partial`; el total pasa a `paid` y aparta el impuesto. **Cerrada el 23-sep con el módulo** (docs/propuestas/CIERRE-FIN.md). |
+| FIN-3 | Cuentas por cobrar sobre `receivables`, con los cuatro KPIs. | M | FIN-1 | La factura vencida sale en rojo con sus días. **Cerrada el 23-sep con el módulo:** `/finanzas` es el cobro y las facturas viven en `/finanzas/facturas`. |
+| FIN-4 | Recordatorios de cobro: job `finanzas/recordatorios.ts` que redacta y deja listo para copiar. | M | FIN-1, CON-2 | Una factura vencida hace 41 días tiene sus tres recordatorios. **Cerrada el 23-sep con el módulo;** el borrador diario espera al worker en producción (WRK). |
+| FIN-5 | Gastos con recibo en S3, recurrentes, deducibles. | S | CIM-5 | Un gasto recurrente aparece proyectado. **Cerrada el 23-sep con el módulo;** la proyección es la misma regla que el flujo de caja. |
+| FIN-6 | Flujo de caja proyectado: `packages/core/flujo-caja.ts`, ocho semanas, gráfico y tabla. | M | FIN-2, FIN-5, VEN-3 | El gráfico sale de la función con el seed; un test cubre una semana. **Cerrada el 23-sep con el módulo;** una prueba con el seed da las ocho semanas cifra por cifra. |
+| FIN-7 | Ingresos de plataformas por CSV o a mano. | S | FIN-6 | Un CSV de AdSense aparece en su mes. **Cerrada el 23-sep con el módulo.** |
+| FIN-8 | Configuración financiera del workspace: moneda, reserva, IVA, retención, datos fiscales. | S | CIM-3 | Cambiar el porcentaje afecta los pagos siguientes, no los anteriores. **Cerrada el 23-sep con el módulo;** el IVA de Cotizar sigue aparte (Rasheed). |
 
 ### ACC · Accesos y roles dentro de una cuenta
 

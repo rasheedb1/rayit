@@ -1,5 +1,13 @@
 # FIN-8 · Configuración financiera — plan y lo que necesita Rasheed
 
+> **Nota del cierre del módulo (23-sep, `docs/propuestas/CIERRE-FIN.md`).**
+> La pantalla ya no «explica en vez de reventar»: sin
+> `finanzas.ajustes.configurar` responde 404 como el resto del módulo
+> (ACC-5) y su pestaña no se pinta. La bitácora ya no es SQL directo:
+> `audit()` con la acción `workspace.settings_updated`, la cuenta
+> bancaria enmascarada y el correo fuera. Los datos de pago llegan al
+> recordatorio de FIN-4. §2.1 (dos IVA) sigue abierto con Rasheed.
+
 Escrito para: Nicolás (dueño de Finanzas) y Rasheed (dueño de
 `db/migrations/`, `lib/workspace/`, `packages/db/src/{client,schema}` y
 de Cotizar).
