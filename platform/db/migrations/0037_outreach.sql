@@ -676,6 +676,18 @@ CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
 --     después zombi y reintento: un SEGUNDO envío). Se registra, y se
 --     marca con blocked_reason = 'opted_out_in_flight' para que la salud
 --     lo cuente y nadie lo confunda con un envío normal.
+--
+-- Por eso ni public_optout ni disable_outreach cancelan lo que está en
+-- 'processing': es del despachador que lo reclamó. El contrato de ese
+-- despachador (VEN-10), que esta regla hace cumplir:
+--   1. antes de llamar al proveedor, relee el contacto y la política en
+--      la transacción del envío; con la baja o el apagado, pasa el toque
+--      a 'canceled' (processing → canceled siempre se puede) y no envía;
+--   2. después de llamar, processing → sent, aunque la baja haya llegado
+--      en medio;
+--   3. al rescatar un zombi (processing de más de cinco minutos), el
+--      que tenga el contacto dado de baja va a 'canceled' y no a
+--      'scheduled', que la regla rechaza.
 CREATE OR REPLACE FUNCTION enforce_outbound_optout()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1415,11 +1427,13 @@ $$;
 -- ---------------------------------------------------------------------
 -- 8.5 · El interruptor: disable_outreach y enable_outreach
 -- ---------------------------------------------------------------------
--- Apagar deja el motivo y la hora, y cancela lo que está en cola,
--- reclamado o retenido (el despachador relee el toque en la transacción
--- del envío, así que uno reclamado no sale). Los borradores se quedan:
--- son trabajo de una persona y no salen sin programarse. Devuelve
--- cuántos toques canceló.
+-- Apagar deja el motivo y la hora, y cancela lo que está en cola o
+-- retenido. Lo que está en 'processing' es del despachador que lo
+-- reclamó (4.1): antes de llamar al proveedor relee la política y lo
+-- cancela él; si ya lo llamó, lo registra como enviado. Cancelarlo aquí
+-- dejaría la fila diciendo 'canceled' de un mensaje que quizá ya salió.
+-- Los borradores se quedan: son trabajo de una persona y no salen sin
+-- programarse. Devuelve cuántos toques canceló.
 --
 -- Los enrolamientos NO se tocan, a propósito: apagar es una pausa del
 -- workspace, no el fin de ninguna cadencia. Siguen en 'active' (sin
@@ -1448,7 +1462,7 @@ BEGIN
   UPDATE outbound_touch
      SET status = 'canceled', blocked_reason = 'outreach_disabled'
    WHERE workspace_id = p_workspace
-     AND status IN ('scheduled', 'processing', 'held');
+     AND status IN ('scheduled', 'held');
   GET DIAGNOSTICS cancelados = ROW_COUNT;
   RETURN cancelados;
 END;
@@ -1782,7 +1796,7 @@ BEGIN
       UPDATE outbound_touch
          SET status = 'canceled', blocked_reason = 'opted_out'
        WHERE contact_id = ANY (ids)
-         AND status IN ('draft', 'scheduled', 'processing', 'held');
+         AND status IN ('draft', 'scheduled', 'held');
 
       UPDATE outbound_enrollment
          SET status = 'opted_out', finished_at = coalesce(finished_at, now())

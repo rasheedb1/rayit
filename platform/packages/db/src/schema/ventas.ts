@@ -9,15 +9,18 @@
  */
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
-// Referencias en los dos sentidos con outreach.ts (el toque apunta a su
-// enrolamiento y a su paso; el paso, a su secuencia). Las de Drizzle son
-// funciones, así que el ciclo de import no se evalúa al cargar.
-import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
+import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
+import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
+// CICLO DE IMPORT, a propósito: outreach.ts también importa de aquí (el
+// toque apunta a su enrolamiento y a su paso; el paso, a su secuencia).
+// Solo se usa dentro de las funciones de .references(), que Drizzle
+// evalúa después de cargar los dos módulos; nada de outreach.ts se lee
+// al cargar este. Por eso OUTBOUND_CHANNELS, que sí se lee al cargar,
+// vive en _canales.ts y no en ninguno de los dos.
+import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
 
 export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
-import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
-import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 
 export const COMPANY_SIZES = ['micro', 'pyme', 'mediana', 'grande', 'enterprise'] as const;
 export const CONTACT_SOURCES = [
@@ -48,7 +51,12 @@ export const BRIEF_STATUSES = ['draft', 'active', 'paused', 'closed'] as const;
 export const TOUCH_STATUSES = [
   'draft', 'scheduled', 'processing', 'held', 'sent', 'failed', 'skipped', 'canceled',
 ] as const;
-/** Lo que el motor todavía puede enviar: lo que cancelan una baja, una respuesta o el apagado. */
+/**
+ * Lo que todavía puede salir. Una baja, una respuesta o el apagado
+ * cancelan todo menos 'processing', que es del despachador que lo
+ * reclamó: él lo cancela antes de llamar al proveedor, o lo registra como
+ * enviado si ya lo llamó (0037 §4.1).
+ */
 export const PENDING_TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held'] as const;
 export const SEQUENCE_STATUSES = ['draft', 'active', 'paused', 'archived'] as const;
 export const AUTOMATION_MODES = ['manual', 'review', 'auto'] as const;
@@ -350,7 +358,9 @@ export const outboundTouch = pgTable('outbound_touch', {
   messageIdRfc: text('message_id_rfc'),
   openedAt: timestamptz('opened_at'),
   heldReason: text('held_reason'),
-  /** sha256 (hex) del token del enlace de baja; el token solo va en el correo. */
+  /** sha256 (hex) del token del enlace de baja; el token solo va en el correo. Solo lo escribe el worker. */
   optoutTokenHash: text('optout_token_hash'),
+  /** La hora del último cambio de estado; solo se mueve con él (disparador). */
+  statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
 });

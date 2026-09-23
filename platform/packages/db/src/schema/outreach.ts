@@ -10,7 +10,8 @@
  * (workspace_id NULL = la fila por defecto, que se lee desde todos y no
  * se escribe desde ninguno). outbound_sequence_template es global y de
  * solo lectura. outbound_counter y outbound_breaker los escribe solo el
- * worker; outbound_review es una bitácora (se inserta, no se corrige).
+ * worker; outbound_review y outbound_llm_call son bitácoras (se insertan,
+ * no se corrigen).
  *
  * Las funciones de la migración (increment_if_under_cap,
  * increment_weekly, should_pause_outreach, disable_outreach,
@@ -49,6 +50,20 @@ export const RISK_TRIGGERS = [
   'unsourced_figure', 'invented_client', 'false_urgency', 'pressure', 'competitor_mention', 'missing_disclosure',
 ] as const;
 export const REVIEW_DECISIONS = ['pass', 'regenerate', 'send_best', 'hold', 'reject'] as const;
+/** Para qué se llamó al modelo (outbound_llm_call). */
+export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend'] as const;
+/**
+ * Las columnas de outbound_touch que solo escribe el despachador
+ * (mc_worker): las pruebas de que la plataforma envió el mensaje. Desde
+ * la web (mc_app) el disparador outbound_touch_worker_columns lo rechaza
+ * con 42501 (0037 §4.2).
+ */
+export const WORKER_ONLY_TOUCH_COLUMNS = ['optout_token_hash', 'provider_message_id', 'message_id_rfc'] as const;
+/**
+ * blocked_reason de un toque que SALIÓ aunque la baja llegó mientras el
+ * despachador lo enviaba (processing → sent, 0037 §4.1).
+ */
+export const OPTED_OUT_IN_FLIGHT = 'opted_out_in_flight';
 export const COUNTER_PERIODS = ['day', 'week'] as const;
 export const BREAKER_STATES = ['closed', 'open', 'half_open'] as const;
 export const REQUIRED_ASSETS = ['media_kit', 'quote'] as const;
@@ -81,18 +96,30 @@ export interface OutboundHealth {
   since: string;
   hours: number;
   queue: Record<'draft' | 'scheduled' | 'due' | 'processing' | 'stuck' | 'held', number>;
-  window: Record<'sent' | 'failed' | 'canceled' | 'opened' | 'replied' | 'optedOut', number>;
+  /**
+   * Lo ocurrido en la ventana. optedOut son PERSONAS (contactos a los que
+   * se les envió algo y pidieron la baja en la ventana), no toques;
+   * sentAfterOptOut, los toques que salieron con la baja recién puesta.
+   */
+  window: Record<'sent' | 'failed' | 'canceled' | 'opened' | 'replied' | 'optedOut' | 'sentAfterOptOut', number>;
   byChannel: Partial<Record<(typeof OUTBOUND_CHANNELS)[number], { sent: number; failed: number }>>;
-  breakersOpen: string[];
+  breakersOpen: Array<(typeof BREAKER_STEP_TYPES)[number]>;
   accountsDown: number;
   lastSentAt: string | null;
+  /** spentToday suma outbound_llm_call del día local: todas las llamadas, no solo las del juez. */
   llm: { spentToday: number; dailyCap: number; currency: 'USD' };
 }
 
-/** Las funciones de 0037 que el código llama por SQL, con su firma. */
+/**
+ * Las funciones de 0037 que el código llama por SQL, con su firma. Los
+ * límites tienen dos: la del workspace entero y la de una cuenta
+ * (…ForAccount), que cuenta aparte cada cuenta conectada (0037 §6.2).
+ */
 export const OUTREACH_FUNCTIONS = {
   incrementIfUnderCap: 'increment_if_under_cap(uuid,text,integer)',
+  incrementIfUnderCapForAccount: 'increment_if_under_cap(uuid,uuid,text,integer)',
   incrementWeekly: 'increment_weekly(uuid,text,integer)',
+  incrementWeeklyForAccount: 'increment_weekly(uuid,uuid,text,integer)',
   shouldPauseOutreach: 'should_pause_outreach(uuid)',
   disableOutreach: 'disable_outreach(uuid,text)',
   enableOutreach: 'enable_outreach(uuid)',
@@ -170,7 +197,7 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   creatorId: uuid('creator_id').references(() => creatorProfile.id, { onDelete: 'cascade' }),
   channel: text('channel', { enum: OUTBOUND_CHANNELS }).notNull(),
   provider: text('provider', { enum: CHANNEL_PROVIDERS }).notNull(),
-  /** La dirección de Gmail o el account_id de Unipile. */
+  /** La dirección de Gmail (en minúsculas, CHECK) o el account_id de Unipile. */
   providerAccountId: text('provider_account_id').notNull(),
   displayName: text('display_name'),
   /** 'enc:<plataforma>:<uuid>' → connection_secret. */
@@ -287,15 +314,38 @@ export const outboundReview = pgTable('outbound_review', {
   createdAt: createdAt(),
 });
 
+/**
+ * Cada llamada al modelo del outreach, con tokens y costo. outbound_health
+ * suma aquí el gasto del día contra llm_daily_cap_usd. Bitácora.
+ */
+export const outboundLlmCall = pgTable('outbound_llm_call', {
+  id: uuidPk(),
+  workspaceId: workspaceId(),
+  purpose: text('purpose', { enum: LLM_CALL_PURPOSES }).notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').default(0).notNull(),
+  outputTokens: integer('output_tokens').default(0).notNull(),
+  cost: numeric('cost', { precision: 14, scale: 6 }).default('0').notNull(),
+  costCurrency: currency('cost_currency').default('USD').notNull(),
+  touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
+  messageId: uuid('message_id').references(() => outboundMessage.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+});
+
 // ---------------------------------------------------------------------
 // Límites
 // ---------------------------------------------------------------------
 
-/** Contadores atómicos. Los escribe increment_if_under_cap / increment_weekly (worker). */
+/**
+ * Contadores atómicos. Los escribe increment_if_under_cap / increment_weekly
+ * (worker). channelAccountId NULL es el contador del workspace entero.
+ */
 export const outboundCounter = pgTable(
   'outbound_counter',
   {
+    id: uuidPk(),
     workspaceId: workspaceId(),
+    channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'cascade' }),
     period: text('period', { enum: COUNTER_PERIODS }).notNull(),
     /** El día local, o el lunes de la semana local. */
     periodStart: date('period_start', { mode: 'string' }).notNull(),
@@ -303,7 +353,9 @@ export const outboundCounter = pgTable(
     count: integer('count').default(0).notNull(),
     updatedAt: updatedAt(),
   },
-  (t) => [primaryKey({ columns: [t.workspaceId, t.period, t.periodStart, t.actionType] })],
+  // La unicidad (workspace, cuenta, periodo, inicio, acción) NULLS NOT
+  // DISTINCT es el índice outbound_counter_period_idx de la migración:
+  // como el resto de los índices, vive en SQL y no aquí.
 );
 
 export const outboundBreaker = pgTable(

@@ -388,6 +388,23 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
 };
 
 /**
+ * Los disparadores que son un CANDADO de seguridad, como
+ * `tabla.disparador`, y qué cierran. No hay GRANT que los sustituya (un
+ * GRANT por columnas rompería los INSERT de Drizzle, que nombran todas
+ * las columnas), así que la guardia exige en cada arranque que existan y
+ * que estén activos: `ALTER TABLE … DISABLE TRIGGER` no deja rastro en
+ * schema_migrations y abriría el hueco sin que nadie lo viera.
+ */
+export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
+  'outbound_touch.outbound_touch_worker_columns':
+    'optout_token_hash, provider_message_id y message_id_rfc solo los escribe el despachador (0037 §4.2). Sin él, ' +
+    'un workspace fabricaba un toque «enviado» con un token suyo y, con public_optout, daba de baja el correo de ' +
+    'cualquier persona en toda la plataforma',
+  'outbound_touch.outbound_touch_optout':
+    'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0037 §4.1)',
+};
+
+/**
  * Las reglas (CREATE RULE) de `public` que no son el _RETURN de una
  * vista, como `tabla.regla`, y por qué. Su acción corre con los
  * privilegios del dueño de la tabla. Vacía: el esquema no usa ninguna.
@@ -525,8 +542,8 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
   },
   outbound_enrollment: {
     tabla: ['SELECT'],
-    columnas: { UPDATE: ['status'] },
-    motivo: 'pasar a opted_out los enrolamientos de ese contacto (0037 §9)',
+    columnas: { UPDATE: ['finished_at', 'status'] },
+    motivo: 'pasar a opted_out los enrolamientos de ese contacto y anotar cuándo terminaron (0037 §9)',
   },
   contact: {
     tabla: ['SELECT'],
@@ -837,6 +854,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     permite: ['SELECT', 'INSERT'],
     motivo: 'bitácora de la puerta de calidad (nota, tokens y costo): se anota, no se corrige ni se borra',
   },
+  outbound_llm_call: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'bitácora de cada llamada al modelo (tokens y costo): se anota, no se corrige ni se borra. Borrar las de hoy ' +
+      'devolvería el presupuesto llm_daily_cap_usd',
+  },
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
@@ -950,6 +973,8 @@ export interface EstadoDelEsquema {
   columnasQueFaltan: string[];
   /** Disparadores de tablas de `public` que llaman a una función SECURITY DEFINER, sin declarar. */
   disparadoresDefiner: string[];
+  /** Disparadores de DISPARADORES_DE_CANDADO que no existen o están desactivados, con lo que cierran. */
+  candadosQueFaltan: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
   reglas: string[];
   /** Esquemas fuera de public a los que llega mc_app, o CREATE en public. */
@@ -1071,6 +1096,10 @@ interface FilaFuncionDelCodigo extends Record<string, unknown> {
   firma: string;
   existe: boolean;
   ejecuta: boolean;
+}
+interface FilaCandado extends Record<string, unknown> {
+  clave: string;
+  estado: string | null;
 }
 interface FilaColumnaQueFalta extends Record<string, unknown> {
   relacion: string;
@@ -1308,6 +1337,20 @@ const SQL_COLUMNAS_DEL_CODIGO = `
                         AND a.attnum > 0 AND NOT a.attisdropped)
    ORDER BY 1, 2`;
 
+/**
+ * Por cada `tabla.disparador` de DISPARADORES_DE_CANDADO: su estado
+ * (tgenabled) o NULL si no existe. 'O' y 'A' disparan en una sesión
+ * normal; 'D' está desactivado y 'R' solo dispara en réplica.
+ */
+const SQL_CANDADOS = `
+  SELECT k AS clave, t.tgenabled::text AS estado
+    FROM unnest($1::text[]) AS k
+    LEFT JOIN pg_trigger t
+      ON t.tgrelid = to_regclass('public.' || quote_ident(split_part(k, '.', 1)))
+     AND t.tgname = split_part(k, '.', 2)
+     AND NOT t.tgisinternal
+   ORDER BY 1`;
+
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
 const SQL_DISPARADORES_DEFINER = `
   SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
@@ -1502,6 +1545,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
+  const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
   const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
   const rolesDeLaApp = await leer<FilaRol>(SQL_ROL_DE_LA_APP, [APP_ROLE]);
@@ -1754,6 +1798,15 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       (f) =>
         `${f.firma} (${f.existe ? `${APP_ROLE} no la puede ejecutar` : 'no existe'}; ` +
         `${FUNCIONES_QUE_USA_EL_CODIGO[f.firma] ?? 'sin motivo declarado'})`,
+    );
+
+  // ---- candados: que existan y que disparen.
+  const candadosQueFaltan = candados
+    .filter((c) => c.estado !== 'O' && c.estado !== 'A')
+    .map(
+      (c) =>
+        `${c.clave} (${c.estado === null ? 'no existe' : 'desactivado'}; ` +
+        `${DISPARADORES_DE_CANDADO[c.clave] ?? 'sin motivo declarado'})`,
     );
 
   // ---- columnas que el código lee y escribe (src/schema): que existan.
@@ -2173,6 +2226,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     funcionesQueFaltan,
     columnasQueFaltan,
     disparadoresDefiner,
+    candadosQueFaltan,
     reglas,
     esquemasDeMas,
     rolDeLaApp,
@@ -2212,6 +2266,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   funcionesQueFaltan: [],
   columnasQueFaltan: [],
   disparadoresDefiner: [],
+  candadosQueFaltan: [],
   reglas: [],
   esquemasDeMas: [],
   rolDeLaApp: [],
@@ -2308,6 +2363,14 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         `cualquiera que escriba en la tabla, también ${APP_ROLE}, y Postgres no mira EXECUTE al disparar: ` +
         estado.disparadoresDefiner.join(', ') +
         '. Quítalos, haz la función SECURITY INVOKER, o decláralos en DISPARADORES_DEFINER_DECLARADOS',
+    );
+  }
+  if (estado.candadosQueFaltan.length) {
+    partes.push(
+      'faltan o están desactivados disparadores que cierran un hueco de seguridad, y ningún GRANT lo cierra en ' +
+        'su lugar: ' +
+        estado.candadosQueFaltan.join('; ') +
+        '. Vuelve a activarlos (ALTER TABLE … ENABLE TRIGGER) o aplica la migración que los crea',
     );
   }
   if (estado.reglas.length) {
