@@ -208,3 +208,34 @@ Esta rama no lo toca: los INSERT van por SQL.
   fase 2. Hoy queda en la evidencia y en la bitácora.
 - Mover a `messages.ts` los textos anteriores de Conexiones
   (declaración, texto OAuth, errores del flujo): pulido.
+
+---
+
+## 2. Revisiones
+
+### 2.1 `/code-review` (nivel alto): diez hallazgos
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | «Actualizar» no comprobaba el permiso en la transacción: un Editor abría tokens y gastaba cuota | Arreglado: `actualizar` comprueba `conexiones.cuenta.conectar` antes de leer tokens o llamar a la plataforma. Prueba: el Editor recibe `sin_permiso` y `fetch` no se llama |
+| 2 | Quitar fallaba si el `creator_profile` estaba dado de baja | Arreglado: `getConnectionCreator(tx, id)` toma el titular de la propia cuenta, sin filtrar borrados. Prueba en `conexiones-delegado.test.ts` |
+| 3 | «Conectada por» salía del último consentimiento delegado, no del último vigente | Arreglado: el `LATERAL` toma el vigente más reciente. Prueba: la titular reconsiente y la línea desaparece |
+| 4 | El callback de OAuth canjeaba el code antes de mirar el permiso | Arreglado: comprobación antes del canje. Prueba: el Editor no provoca ninguna llamada. Revocar en la plataforma un grant huérfano queda fuera: la comprobación temprana lo evita en la práctica |
+| 5 | `onBehalfOf` de la revocación y de la bitácora podían nombrar perfiles distintos | Arreglado con el mismo cambio que el 2 |
+| 6 | El aviso al titular estaba duplicado en los dos caminos | Arreglado: `notifyOwner` en `_lib/owner-notice.ts` |
+| 7 | `delegationFor` repite consultas que ya hizo el permiso | Justificado: son dos o tres consultas por índice en una acción que se hace pocas veces por cuenta. Mantenerlo dentro de las consultas asegura que ninguna escritura de conexiones se audite sin delegación, venga de donde venga |
+| 8 | Dos fuentes deciden si actúa un tercero (`actedByFor` y `delegationFor`) | Justificado: las dos comparan `current_user_id()` con `creator_profile.user_id`. El caso en que divergirían (sesión sin membresía) no llega a escribir, porque el permiso lo rechaza antes |
+| 9 | `getDefaultCreatorId` ya no se usa en producción; `ownerNotice` no se lee en la acción | `getDefaultCreatorId` se queda: lo usan las pruebas de CON-3 y es API pública de `@mc/db`. `ownerNotice` lo leen las pruebas y queda para el aviso en pantalla |
+| 10 | Identificadores nuevos en español | Arreglado: `notifyOwner`, `OwnerNotice`, `displayNameOf`, `MESSAGES.ownerNotice` y `MESSAGES.list` |
+
+### 2.2 `/security-review`: sin hallazgos
+
+Ninguno supera el umbral de confianza (8/10). Lo que se revisó:
+
+- **SQL.** Todas las consultas nuevas usan parámetros.
+- **Permiso.** Se comprueba en cada transacción que escribe y en cada paso de OAuth, ligado a `current_user_id()` y `current_workspace_id()`.
+- **Delegación.** `actedBy` y `onBehalfOf` salen de la base, nunca del navegador.
+- **Secretos.** No hay tokens ni correos en la bitácora ni en las URL.
+- **XSS.** No hay HTML sin escapar.
+
+Queda anotado, por debajo del umbral, que `ipHash` sin sal se revierte por fuerza bruta sobre IPv4. No es peor que la IP en claro de v1, y es la decisión pendiente de §0.3.1.
