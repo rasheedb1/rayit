@@ -8,7 +8,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { requirePermission } from "@/lib/permisos";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -41,6 +41,15 @@ function paraElGrafico(c: Cashflow) {
     labels: c.semanas.map((s) => s.inicio),
     series: [
       { name: T.grafico.cobros, data: c.semanas.map((s) => Number(s.cobros)), color: "accent" as const },
+      // La barra de los ingresos de plataformas solo existe si hay
+      // estimado: una serie de ceros ocupa leyenda y no dice nada.
+      ...(c.otrosIngresosMensual === null
+        ? []
+        : [{
+            name: T.otrosIngresos.columna,
+            data: c.semanas.map((s) => Number(s.otrosIngresos)),
+            color: "good" as const,
+          }]),
       { name: T.grafico.egresos, data: c.semanas.map((s) => Number(egresosDe(s))), color: "deemph" as const },
     ],
   };
@@ -77,7 +86,14 @@ function Detalle({ cobros, f }: { cobros: CobroDeLaSemana[]; f: Formatter }) {
   );
 }
 
-const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
+/**
+ * Las columnas. «Otros ingresos» (FIN-7) solo aparece cuando HAY un
+ * estimado: sin él la columna sería una fila de ceros, y un cero dice
+ * «no entra nada» cuando lo cierto es «todavía no lo sabemos». Además,
+ * a 400 px una séptima columna no cabe, así que la que no aporta nada
+ * no se pinta.
+ */
+const columnas = (f: Formatter, conOtrosIngresos: boolean): Column<SemanaFlujo>[] => [
   {
     key: "semana",
     header: T.tabla.semana,
@@ -95,6 +111,14 @@ const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
     ),
   },
   { key: "cobros", header: T.tabla.cobros, align: "num", render: (s) => f.money(s.cobros, undefined, { mode: "full" }) },
+  ...(conOtrosIngresos
+    ? [{
+        key: "otros",
+        header: T.tabla.otros,
+        align: "num" as const,
+        render: (s: SemanaFlujo) => f.money(s.otrosIngresos, undefined, { mode: "full" }),
+      }]
+    : []),
   { key: "gastos", header: T.tabla.gastos, align: "num", render: (s) => f.money(s.gastos, undefined, { mode: "full" }) },
   { key: "impuestos", header: T.tabla.impuestos, align: "num", render: (s) => f.money(s.impuestos, undefined, { mode: "full" }) },
   {
@@ -165,15 +189,17 @@ function Excluidos({ c, f }: { c: Cashflow; f: Formatter }) {
 }
 
 export default async function FlujoPage() {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   // Primero el permiso, antes de leer nada: el flujo de caja y la
   // reserva de impuestos son de las cosas más sensibles del espacio, y
   // el rol Mánager NO las ve (packages/core/src/permisos.ts).
   //
-  // Hoy lanza SinPermisoError y la frontera del segmento (error.tsx) lo
-  // enseña; cuando llegue ACC-5, `requireModule` lo convierte en 404
-  // para no confirmar siquiera que la pantalla existe. La diferencia es
-  // dónde se traduce el error, no si se comprueba.
-  await requirePermission("finanzas.flujo.ver");
+  // Sin él, 404 (ACC-5): no se confirma siquiera que la pantalla existe.
+  // El layout de Finanzas ya pidió el mínimo del módulo
+  // (finanzas.factura.ver); esta pantalla pide además el suyo.
+  await requirePagePermission("finanzas.flujo.ver");
   const entradas = await withWorkspace((tx) => getCashflowInputs(tx));
   const c = projectCashflow(entradas);
   const f = formatterFor(await getCurrentWorkspace());
@@ -203,6 +229,8 @@ export default async function FlujoPage() {
 
   const grafico = paraElGrafico(c);
   const ajustada = c.semanaMasAjustada;
+  /** De dónde sale el estimado de los ingresos de plataformas (FIN-7). */
+  const op = entradas.otrosIngresos;
   const nota =
     (c.gastoMes === null
       ? "Todavía no hay gastos recurrentes registrados, así que no restamos ninguno. "
@@ -210,8 +238,15 @@ export default async function FlujoPage() {
         `(${f.money(c.gastoMensual, undefined, { mode: "full" })}), repartido por semana: ` +
         `${f.money(c.gastoSemanal, undefined, { mode: "full" })}. `) +
     (entradas.reservaPct === null
-      ? "Todavía no hay un porcentaje de reserva de impuestos configurado, así que no apartamos nada."
-      : `Los impuestos son el ${entradas.reservaPct} % de los cobros de cada semana.`);
+      ? "Todavía no hay un porcentaje de reserva de impuestos configurado, así que no apartamos nada. "
+      : `Los impuestos son el ${entradas.reservaPct} % de los cobros de cada semana. `) +
+    // FIN-7: la cifra estimada NUNCA sale sin decir de dónde viene.
+    (op.estimado === null
+      ? T.otrosIngresos.sinDatos
+      : `${T.otrosIngresos.fila}: ${f.money(op.estimado, undefined, { mode: "full" })} al mes ` +
+        `(${op.mesesPromediados === op.ventana ? T.otrosIngresos.base(op.ventana) : T.otrosIngresos.baseParcial(op.mesesPromediados)}), ` +
+        `repartidos por semana: ${f.money(c.otrosIngresosSemanal, undefined, { mode: "full" })}. ` +
+        "No se les aparta impuesto: la reserva se calcula sobre los cobros a marcas.");
 
   return (
     <>
@@ -255,7 +290,7 @@ export default async function FlujoPage() {
           <span id="semanas">{T.tabla.seccion}</span>
         </SectionTitle>
         <DataTable
-          columns={columnas(f)}
+          columns={columnas(f, c.otrosIngresosMensual !== null)}
           rows={c.semanas}
           rowKey={(s) => s.inicio}
           caption={T.tabla.caption}

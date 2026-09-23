@@ -27,11 +27,12 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (...a: unknown[]) => withWorkspace(...a) }));
 vi.mock("@/app/(app)/conexiones/_lib/cuentas-server", () => ({ getCuentasService: () => ({ quitar }) }));
 
-import { requirePermission } from "./index";
+import { puede, requirePermission } from "./index";
 import { permisosDeLaSesion } from "./sesion";
 import { editarCampana } from "@/app/(app)/campanas/[id]/actions";
 import { crearFactura } from "@/app/(app)/finanzas/facturas/actions";
 import { desconectarConexion } from "@/app/(app)/conexiones/actions";
+import { crearIngreso, importarCsv } from "@/app/(app)/finanzas/ingresos/actions";
 
 const CONTADOR = permisosDeRol("creator", "finance");
 const EDITOR = permisosDeRol("creator", "editor");
@@ -45,7 +46,7 @@ beforeEach(() => {
 });
 
 describe("requirePermission", () => {
-  it("hoy la sesión resuelve como Dueño: todo pasa (TODO(ACC-3))", async () => {
+  it("en modo demo sin DEMO_USER_ID (las pruebas) la sesión es el Dueño: todo pasa", async () => {
     const permisos = await permisosDeLaSesion();
     expect(permisos.size).toBe(permisosDeRol("creator", "owner").size);
     await expect(requirePermission("finanzas.flujo.ver")).resolves.toBeUndefined();
@@ -59,6 +60,12 @@ describe("requirePermission", () => {
     expect(err).toBeInstanceOf(SinPermisoError);
     expect((err as SinPermisoError).permiso).toBe("campanas.campana.editar");
     expect((err as SinPermisoError).messageEs).toBe("No tienes permiso para editar campañas y cambiar su estado.");
+  });
+
+  it("puede() responde lo mismo sin lanzar (ACC-5)", async () => {
+    sesion.permisos = CONTADOR;
+    expect(await puede("finanzas.factura.ver")).toBe(true);
+    expect(await puede("campanas.campana.ver")).toBe(false);
   });
 });
 
@@ -86,6 +93,24 @@ describe("las Server Actions de Nicolás abren con requirePermission: sin el per
     expect(r.errors?.companyId).toBe("Elige la empresa a la que le facturas.");
   });
 
+  it("Finanzas · ingresos de plataformas: el Editor no carga dinero; el Dueño llega a la validación", async () => {
+    // Las dos escrituras de FIN-7 piden finanzas.pago.registrar. El
+    // Contador lo tiene (lleva todo Finanzas) y el Editor no.
+    sesion.permisos = EDITOR;
+    for (const accion of [() => importarCsv({}, new FormData()), () => crearIngreso({}, new FormData())]) {
+      const err = await accion().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SinPermisoError);
+      expect((err as SinPermisoError).permiso).toBe("finanzas.pago.registrar");
+    }
+    expect(withWorkspace).not.toHaveBeenCalled();
+
+    sesion.permisos = CONTADOR;
+    // Con permiso sí llega a validar, y sin archivo ni campos lo dice.
+    expect((await importarCsv({}, new FormData())).message).toBe("Elige el archivo CSV que descargaste.");
+    expect((await crearIngreso({}, new FormData())).errors?.platformId).toBe("Elige la red que pagó.");
+    expect(withWorkspace).not.toHaveBeenCalled(); // por la validación, no por el permiso
+  });
+
   it("Conexiones · desconectarConexion: el Contador no quita cuentas; el Dueño sí llega al servicio", async () => {
     sesion.permisos = CONTADOR;
     await expect(desconectarConexion(ID)).rejects.toBeInstanceOf(SinPermisoError);
@@ -101,10 +126,22 @@ describe("las Server Actions de Nicolás abren con requirePermission: sin el per
   it("el permiso que pide cada acción es el del catálogo que le corresponde", async () => {
     const pedidos: Permiso[] = [];
     sesion.permisos = new Set<Permiso>();
-    for (const accion of [() => editarCampana({}, new FormData()), () => crearFactura({}, new FormData()), () => desconectarConexion(ID)]) {
+    for (const accion of [
+      () => editarCampana({}, new FormData()),
+      () => crearFactura({}, new FormData()),
+      () => desconectarConexion(ID),
+      () => importarCsv({}, new FormData()),
+      () => crearIngreso({}, new FormData()),
+    ]) {
       const err = await accion().catch((e: unknown) => e);
       pedidos.push((err as SinPermisoError).permiso);
     }
-    expect(pedidos).toEqual(["campanas.campana.editar", "finanzas.factura.crear", "conexiones.cuenta.desconectar"]);
+    expect(pedidos).toEqual([
+      "campanas.campana.editar",
+      "finanzas.factura.crear",
+      "conexiones.cuenta.desconectar",
+      "finanzas.pago.registrar",
+      "finanzas.pago.registrar",
+    ]);
   });
 });

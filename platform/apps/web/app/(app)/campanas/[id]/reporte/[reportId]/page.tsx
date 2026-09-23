@@ -7,6 +7,7 @@ import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { MESSAGES } from "../../../_lib/messages";
 import { DocumentoReporte } from "../../../_ui/documento-reporte";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,9 @@ const leerReporte = cache(async (campaignId: string, reportId: string) => {
 });
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("campanas");
   const { id, reportId } = await params;
   const r = await leerReporte(id, reportId);
   return { title: r ? MESSAGES.meta.vistaPrevia(r.payload.campaign.name) : MESSAGES.meta.reportePublicoSinDatos };
@@ -37,6 +41,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  * campanas.campana.ver (requireModule del segmento, ACC-5).
  */
 export default async function VistaPreviaReportePage({ params }: Props) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("campanas");
   const { id, reportId } = await params;
   const r = await leerReporte(id, reportId);
   if (!r) notFound();

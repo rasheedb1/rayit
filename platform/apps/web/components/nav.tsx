@@ -17,7 +17,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { flags as defaultFlags, type Flags } from "@/content/flags";
-import { isEnabled, moduleBySlug, productModules } from "@/content/modules";
+import type { Permiso } from "@mc/core";
+import { isEnabled, moduleBySlug, productModules, puedeAbrir, type Permisos } from "@/content/modules";
 import { OwnerAvatar } from "./owner";
 
 const ICONS: Partial<Record<string, LucideIcon>> = {
@@ -32,17 +33,33 @@ const ICONS: Partial<Record<string, LucideIcon>> = {
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
-/** Lo que ve el equipo. La galería del kit solo con su bandera encendida. */
-function teamTools(flags: Flags): NavItem[] {
+/**
+ * Lo que ve el equipo. La galería del kit solo con su bandera encendida;
+ * Accesos (hoy el plan del módulo, mañana la pantalla de Equipo) solo
+ * con su permiso, igual que su ruta (ACC-5).
+ */
+function teamTools(flags: Flags, permisos: Permisos): NavItem[] {
   const items: NavItem[] = [
     { href: "/", label: "Plan", icon: ListChecks },
     { href: "/cimientos", label: "Cimientos", icon: Layers },
-    { href: "/accesos", label: "Accesos", icon: KeyRound },
-    { href: "/reglas", label: "Reglas", icon: BookOpen },
   ];
+  const accesos = moduleBySlug("accesos");
+  if (accesos && puedeAbrir(permisos, accesos)) items.push({ href: "/accesos", label: accesos.name, icon: KeyRound });
+  items.push({ href: "/reglas", label: "Reglas", icon: BookOpen });
   const kit = moduleBySlug("kit");
   if (kit && isEnabled(kit, flags)) items.push({ href: "/kit", label: kit.name, icon: Palette });
   return items;
+}
+
+/**
+ * Lo que la navegación recibe del Shell (servidor). `flags` se inyecta
+ * en pruebas; `permisos` llega siempre, como lista porque las props de
+ * un componente cliente viajan serializadas: sin permisos no hay
+ * módulos, nunca al revés (ACC-5).
+ */
+interface NavProps {
+  flags?: Flags;
+  permisos: readonly Permiso[];
 }
 
 function isActive(pathname: string, href: string) {
@@ -53,11 +70,10 @@ const linkBase = "flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-sm tra
 const linkIdle = "text-fg-2 hover:bg-bg-3 hover:text-fg";
 const linkOn = "bg-bg-3 font-medium text-fg";
 
-/** `flags` se inyecta en pruebas; en la app se usan las reales. */
-export function SideNav({ flags = defaultFlags }: { flags?: Flags }) {
+export function SideNav({ flags = defaultFlags, permisos }: NavProps) {
   const pathname = usePathname();
-  const modules = productModules(flags);
-  const tools = teamTools(flags);
+  const modules = productModules(flags, permisos);
+  const tools = teamTools(flags, permisos);
   return (
     <nav className="flex flex-col gap-6" aria-label="Principal">
       <div>
@@ -100,12 +116,12 @@ export function SideNav({ flags = defaultFlags }: { flags?: Flags }) {
 }
 
 /** En pantallas pequeñas la navegación es una fila que se desplaza. */
-export function MobileNav({ flags = defaultFlags }: { flags?: Flags }) {
+export function MobileNav({ flags = defaultFlags, permisos }: NavProps) {
   const pathname = usePathname();
-  const tools = teamTools(flags);
+  const tools = teamTools(flags, permisos);
   const items = [
     ...tools.slice(0, 1),
-    ...productModules(flags).map((m) => ({ href: `/${m.slug}`, label: m.name })),
+    ...productModules(flags, permisos).map((m) => ({ href: `/${m.slug}`, label: m.name })),
     ...tools.slice(1),
   ];
   return (

@@ -74,7 +74,7 @@ describe("sin el permiso no hay escritura ni bitácora (ACC-1 + ACC-2)", () => {
     expect((err as SinPermisoError).permiso).toBe("finanzas.factura.crear");
     expect(await estado()).toEqual({ facturas: [], bitacora: [] });
 
-    sesion.permisos = null; // Dueño (la sesión de hoy, TODO(ACC-3))
+    sesion.permisos = null; // Dueño: modo demo sin DEMO_USER_ID (ACC-5)
     const r = await crearFactura({}, formulario());
     expect(r).toBeUndefined();
     expect(redirect).toHaveBeenCalledTimes(1);

@@ -1,12 +1,13 @@
-# `lib/permisos/` · requirePermission()
+# `lib/permisos/` · qué puede hacer la sesión
 
 La costura entre la sesión y el catálogo de permisos de `@mc/core`
-(`packages/core/src/permisos.ts`, ACC-1). Dos archivos:
+(`packages/core/src/permisos.ts`, ACC-1). Dueño: Nicolás (ACC-1 y ACC-5).
 
 | Archivo | Qué hace |
 |---|---|
-| `index.ts` | `requirePermission(permiso)`: la primera línea de toda Server Action. Lanza `SinPermisoError` (mensaje en español) si la sesión no tiene el permiso. Reexporta `SinPermisoError` y el tipo `Permiso`. |
-| `sesion.ts` | `permisosDeLaSesion()`: de dónde salen los permisos de la sesión actual. **Hoy devuelve siempre los del Dueño** (`TODO(ACC-3)`); cuando exista `role_permission`, lee la membresía del workspace actual. Es el único archivo que ACC-3 cambia. |
+| `index.ts` | `requirePermission(permiso)`: la primera línea de toda Server Action. Lanza `SinPermisoError` (mensaje en español) si la sesión no tiene el permiso. `puede(permiso)` responde sin lanzar. Reexporta `SinPermisoError` y el tipo `Permiso`. |
+| `sesion.ts` | `permisosDeLaSesion()`: los permisos de quien abrió la petición en el workspace actual, **una vez por petición** (`cache` de React), leídos de `membership.role_id → role_permission` con `getSessionPermissions` de `@mc/db/queries/accesos` (ACC-5). Modo demo sin llaves → Dueño, o los permisos reales de `DEMO_USER_ID`; con llaves y sin sesión → ninguno; base caída → lanza (falla cerrado). |
+| `modulo.ts` | `requireModuleAccess(slug)`: `requireModule` de `content/modules.ts` con los permisos de la sesión. Lo llama el `layout.tsx` de cada módulo: sin bandera o sin el permiso mínimo, 404 (ACC-5). `requirePagePermission(permiso)`: lo mismo para una pantalla que pide más que su módulo (`/finanzas/flujo`). |
 
 ## La convención
 
@@ -30,8 +31,20 @@ export async function crearFactura(_prev: ActionState, formData: FormData): Prom
   exportada no cumple. Al adoptar la convención en un módulo, se agrega
   a la lista.
 
-Un route handler (`route.ts`) o una página la llaman igual; cómo
-convierten el error es cosa de ACC-5 (`notFound()` en páginas).
+## Banderas y permisos en el marco (ACC-5)
+
+- Una bandera dice si el módulo **existe**; un permiso, si **esta
+  persona** entra. `requireModule` los evalúa en ese orden y las dos
+  responden **404**, nunca 403.
+- Cada módulo declara su permiso mínimo en `content/modules.ts`
+  (`permission`, de `PERMISO_MINIMO` de `@mc/core`).
+- El menú esconde lo que no se puede abrir: el `Shell` (servidor) pasa
+  los permisos a la navegación (cliente) como lista.
+- Un route handler (`route.ts`) no pasa por el layout: llama a
+  `requirePermission` y convierte el error él mismo.
+- Nadie recibe permisos por omisión: sin sesión, nada; sin membresía,
+  nada; base caída, error. El único «todo» es el modo demo sin llaves,
+  que es el de las pruebas y del dev sin red.
 
 ## Por qué aquí y no en `lib/auth/`
 

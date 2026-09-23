@@ -33,6 +33,11 @@ fixture nuevo y sus nombres de columna entran en `ALIAS`.
 | `ambiguo.csv` | Fechas numéricas que sirven en los dos órdenes (ningún número pasa de 12): el asistente pregunta, con el orden del workspace como propuesta. |
 | `excel-windows-1252.csv` | Un CSV abierto y vuelto a guardar en **Excel para Windows en español**: codificado en Windows-1252 (no UTF-8), con punto y coma y CRLF. Leído a la fuerza como UTF-8, «Duración» salía «Duraci�n» y los alias no casaban; `decodificarCsv` lo reconoce y el paso 2 lo dice. **No lo abras y lo guardes con un editor en UTF-8**: dejaría de probar lo que prueba. |
 
+Los CSV de **ingresos de plataformas** (AdSense, Creator Rewards) son
+otra cosa y viven en [`ingresos/`](ingresos/README.md), con su propio
+README: no son métricas de contenido, sino dinero por periodo, y los
+lee `app/(app)/finanzas/ingresos/_lib/csv.ts` (FIN-7).
+
 ## Lo que no está documentado con certeza
 
 - El orden mes/día de Meta en `Publish time` es lo que se sabe de

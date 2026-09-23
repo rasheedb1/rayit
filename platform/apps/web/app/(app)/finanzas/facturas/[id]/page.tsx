@@ -13,10 +13,14 @@ import { MESSAGES } from "../../_lib/messages";
 import { pillForInvoice } from "../../_lib/estado";
 import { cambiarEstadoFactura } from "../actions";
 import { SeccionPagos } from "./pagos";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   const { id } = await params;
   const invoice = await withWorkspace((tx) => getInvoice(tx, id));
   return { title: invoice ? `Factura ${invoice.number}` : "Factura" };
@@ -57,6 +61,9 @@ export default async function FacturaPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   const { id } = await params;
   const { error } = await searchParams;
   // Una sola transacción para la factura, sus cobros y sus recordatorios:

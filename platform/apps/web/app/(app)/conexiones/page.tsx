@@ -18,6 +18,7 @@ import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_li
 import { displayNameOf, MESSAGES } from "./_lib/messages";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { ConnectDialog } from "./connect-dialog";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: "Cuentas" };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
@@ -205,6 +206,9 @@ function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
 }
 
 export default async function CuentasPage({ searchParams }: { searchParams: Promise<Search> }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("conexiones");
   const params = await searchParams;
   const service = getCuentasService();
   const f = formatterFor(await getCurrentWorkspace());

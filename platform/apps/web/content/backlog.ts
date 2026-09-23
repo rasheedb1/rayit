@@ -581,8 +581,8 @@ export const STORIES: readonly Story[] = [
     title: "Ingresos de plataformas",
     desc: "Carga manual o CSV de Creator Rewards, AdSense y bonos en platform_payout. Entra al flujo de caja.",
     done: "Un CSV de AdSense aparece como ingreso en su mes.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/FIN-7-ingresos-plataformas, solo local. /finanzas/ingresos con import de AdSense y Creator Rewards y la columna «Otros ingresos» en el flujo de caja. Su migración 0036 choca con la de CON-7 y hay que aplicarla en Supabase antes de desplegar.",
+    status: "hecho",
+    note: "En /finanzas/ingresos: importar CSV (AdSense mensual o diario, Creator Rewards y una lista genérica), agregar a mano, lista por mes y el estimado mensual; y en /finanzas/flujo, la columna «Otros ingresos» con su barra y su nota. La idempotencia es de la base: el UNIQUE natural de la migración 0036, PENDIENTE de aplicar en Supabase (CON-7, que no está en origin, eligió también 0036 y es la que renumera, a 0039); hasta entonces el import falla en producción con 42P10. El promedio vive en packages/core/src/ingresos-plataformas.ts y entra a projectCashflow (FIN-6) por otrosIngresosMensual, que es opcional: sin estimado, el flujo se comporta igual que antes. Se reutilizan finanzas.flujo.ver y finanzas.pago.registrar en vez de crear finanzas.ingreso.*: el catálogo viaja en la semilla de 0034 y accesos.test.ts exige que sea idéntica (docs/propuestas/FIN-7.md §1.2). Propuesta: docs/propuestas/FIN-7.md.",
   },
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
@@ -631,10 +631,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
     title: "Permisos en el marco",
-    desc: "requireModule() recibe el permiso mínimo además de la bandera; el menú esconde lo que la persona no puede abrir; la ruta directa responde 404.",
+    desc: "Cada módulo declara su permiso mínimo (permission en content/modules.ts); el layout.tsx de cada módulo hace requireModuleAccess(slug): primero la bandera, después el permiso, y las dos responden 404. El Shell resuelve permisosDeLaSesion() en servidor y el menú esconde lo que no se puede abrir; requirePermission() lee la membresía real (queries/accesos.ts) una vez por petición.",
     done: "Con sesión de «Contador», /campanas responde 404 y no aparece en el menú.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/ACC-5-permisos-en-el-marco, solo local. Los permisos salen de role_permission; Contador 404 en /campanas y Mánager 404 en /finanzas, probado contra Postgres embebido. Antes de ACC-4, Rasheed pone la puerta en Resumen, Ventas y Cotizar (tres layout.tsx propuestos en sus carpetas).",
+    status: "hecho",
+    note: "Hecha el 23-sep sobre ACC-1, ACC-2 y ACC-3 ya en main: los permisos salen de membership.role_id → role_permission (getSessionPermissions, queries/accesos.ts), una vez por petición; sin sesión, ninguno; modo demo sin llaves, el Dueño o los permisos reales de DEMO_USER_ID. Probado contra Postgres embebido con un Contador y un Mánager reales (rol de sistema de 0034): Contador 404 en /campanas y fuera del menú, Mánager 404 en /finanzas y /finanzas/flujo, y editarCampana falla con el Contador sin escribir. /finanzas/flujo pasa de error a 404 (requirePagePermission). Cada página de Campañas, Finanzas y Conexiones repite la puerta (una navegación parcial puede saltarse el layout) y una prueba lo exige. Antes de ACC-4, Rasheed tiene que poner requirePermission en sus Server Actions y la puerta en sus páginas (Resumen, Ventas, Cotizar). Tres layout.tsx nuevos en carpetas de Rasheed (resumen, ventas, cotizar) pendientes de su visto bueno; un Contador y un Mánager en el seed, propuestos. Detalle en docs/propuestas/ACC-5.md.",
   },
   {
     id: "ACC-6", module: "ACC", owner: "nicolas", size: "M", sprint: 6, deps: ["ACC-3"],

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { NuevaFacturaForm } from "./form";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: "Nueva factura" };
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ export default async function NuevaFacturaPage({
 }: {
   searchParams: Promise<{ campana?: string; error?: string }>;
 }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   const params = await searchParams;
   const { companies, campaigns } = await withWorkspace(async (tx) => ({
     companies: await listCompanies(tx),

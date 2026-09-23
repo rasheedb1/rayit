@@ -13,23 +13,26 @@ export { SinPermisoError, type Permiso } from "@mc/core";
  *
  * Pregunta por un permiso del catálogo de @mc/core, nunca por un rol
  * (backlog §7, decisión 7), y lanza SinPermisoError —con el mensaje en
- * español— si la sesión no lo tiene. Quién lo convierte en qué:
+ * español— si la sesión no lo tiene. Desde ACC-5 los permisos son los
+ * REALES de la membresía en el workspace actual (./sesion.ts). Quién
+ * convierte el error en qué:
  *
- *   - páginas y layouts: notFound() (ACC-5, con requireModule(slug,
- *     permiso)): 404 y no 403, para no confirmar que el módulo existe.
- *   - Server Actions: hoy el error cae en la frontera del segmento
+ *   - páginas y layouts: notFound(), por requireModuleAccess (./modulo.ts):
+ *     404 y no 403, para no confirmar que el módulo existe.
+ *   - Server Actions: el error cae en la frontera del segmento
  *     (error.tsx), como cualquier otro no previsto. Es un caso de
- *     borde: ACC-5 esconde antes lo que no se puede abrir.
- *
- * Hasta ACC-3 nunca lanza: la sesión resuelve como Dueño (ver
- * ./sesion.ts). Que las acciones ya lo llamen es lo que hace que ACC-3
- * sea cambiar un archivo y no abrir cuarenta.
+ *     borde: el marco esconde antes lo que no se puede abrir.
  *
  * Vive aquí y no en lib/auth/ (de Rasheed, propuesta ACC fase 6) para no
- * tocar su carpeta; moverlo es cambiar una importación (lib/permisos/
- * README.md). La convención la hace cumplir convencion.test.ts.
+ * tocar su carpeta; moverlo es cambiar una importación (README.md). La
+ * convención la hace cumplir convencion.test.ts.
  */
 export async function requirePermission(permiso: Permiso): Promise<void> {
   const permisos = await permisosDeLaSesion();
   if (!can(permisos, permiso)) throw new SinPermisoError(permiso);
+}
+
+/** ¿La sesión actual tiene este permiso? Para decidir qué pintar sin lanzar. */
+export async function puede(permiso: Permiso): Promise<boolean> {
+  return can(await permisosDeLaSesion(), permiso);
 }

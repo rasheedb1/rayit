@@ -21,6 +21,7 @@
     "./queries/campanas": "./src/queries/campanas.ts",
     "./queries/finanzas": "./src/queries/finanzas.ts",
     "./queries/conexiones": "./src/queries/conexiones.ts",
+    "./queries/accesos": "./src/queries/accesos.ts",
     "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {

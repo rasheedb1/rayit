@@ -342,3 +342,65 @@ describe('entradas inválidas', () => {
     assert.throws(() => projectCashflow(entrada({ facturas: [factura({ dueOn: '30/09/2026' })] })), /YYYY-MM-DD/);
   });
 });
+
+describe('otros ingresos: lo que pagan las plataformas (FIN-7)', () => {
+  test('sin estimado no entran ni como cero, y la fila queda en null', () => {
+    const c = projectCashflow(entrada({ facturas: [factura()] }));
+    assert.equal(c.otrosIngresosMensual, null, 'null y no "0.00": no lo sabemos, no es que no entre nada');
+    assert.equal(c.otrosIngresosSemanal, '0.00');
+    for (const s of c.semanas) assert.equal(s.otrosIngresos, '0.00');
+  });
+
+  test('el estimado mensual se reparte por semana con la misma regla que los gastos', () => {
+    const c = projectCashflow(entrada({ otrosIngresosMensual: '1300000.00' }));
+    assert.equal(c.otrosIngresosMensual, '1300000.00');
+    assert.equal(c.otrosIngresosSemanal, semanalDeMensual('1300000.00'));
+    assert.equal(c.otrosIngresosSemanal, '300000.00', '1 300 000 × 12 / 52');
+    for (const s of c.semanas) assert.equal(s.otrosIngresos, '300000.00');
+  });
+
+  test('suman al neto y al acumulado, semana a semana', () => {
+    const sin = projectCashflow(entrada({ facturas: [factura()], gastos: [gasto()] }));
+    const con = projectCashflow(entrada({ facturas: [factura()], gastos: [gasto()], otrosIngresosMensual: '1300000.00' }));
+    // Ocho semanas × 300 000 = 2 400 000 más de caja proyectada.
+    assert.equal(
+      BigInt(con.proyectado.replace('.', '')) - BigInt(sin.proyectado.replace('.', '')),
+      240000000n,
+    );
+    const primera = con.semanas[0]!;
+    const primeraSin = sin.semanas[0]!;
+    assert.equal(
+      BigInt(primera.neto.replace('.', '')) - BigInt(primeraSin.neto.replace('.', '')),
+      30000000n,
+    );
+  });
+
+  test('NO entran en la base de la reserva de impuestos', () => {
+    const sin = projectCashflow(entrada({ facturas: [factura()] }));
+    const con = projectCashflow(entrada({ facturas: [factura()], otrosIngresosMensual: '1300000.00' }));
+    for (let i = 0; i < sin.semanas.length; i++) {
+      assert.equal(
+        con.semanas[i]!.impuestos,
+        sin.semanas[i]!.impuestos,
+        'la reserva se calcula sobre los cobros a marcas, no sobre una cifra estimada',
+      );
+    }
+  });
+
+  test('con solo ingresos de plataformas la proyección NO está vacía', () => {
+    // El creador que todavía no vende y ya cobra de AdSense: sin esto,
+    // la pantalla le decía «sin cobros ni gastos previstos» con 1,3 M
+    // al mes entrando.
+    const c = projectCashflow(entrada({ otrosIngresosMensual: '1300000.00' }));
+    assert.equal(c.vacio, false);
+    assert.notEqual(c.semanaMasAjustada, null);
+    assert.equal(c.proyectado, '2400000.00');
+  });
+
+  test('un estimado de cero sí es un cero conocido, pero no saca a nadie de vacío', () => {
+    const c = projectCashflow(entrada({ otrosIngresosMensual: '0.00' }));
+    assert.equal(c.otrosIngresosMensual, '0.00');
+    assert.equal(c.otrosIngresosSemanal, '0.00');
+    assert.equal(c.vacio, true, 'sin cobros, sin gastos y con cero de plataformas no hay nada que proyectar');
+  });
+});

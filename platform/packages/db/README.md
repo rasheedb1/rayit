@@ -30,6 +30,7 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 |---|---|---|
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
+| Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionPermissions } from '@mc/db/queries/accesos'` — las llaves de `membership.role_id → role_permission`, con los dos ids de la transacción; la web las convierte en permisos del catálogo (`apps/web/lib/permisos`) |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
 | Bitácora | `@mc/db` | `import { audit, auditAsJob } from '@mc/db'` |
@@ -340,8 +341,8 @@ de creador, o el rol a medida de otro workspace.
 El código pregunta por **permisos**, nunca por roles (backlog §7,
 decisión 7): `listMyWorkspaces` devuelve `role` como la clave del rol
 (`'owner'`, `'manager'`, …) solo para lo que la pantalla de cuenta
-muestra; qué puede hacer una sesión lo responderá `queries/accesos.ts`
-(ACC-5) con la consulta de arriba.
+muestra; qué puede hacer una sesión lo responde `getSessionPermissions` de
+`queries/accesos.ts` (ACC-5) con la consulta de arriba.
 
 Lo demás que deja 0034: `invitation` (una pendiente por correo y
 workspace; el token solo como SHA-256, y el `CHECK` no admite otra
