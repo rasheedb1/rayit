@@ -152,6 +152,14 @@ export const MESSAGES = {
       tooBig: "El archivo pasa de 1 MB. Pártelo en varios.",
       notCsv: "Ese archivo no parece un CSV de texto.",
       result: (created: number, duplicated: number) => {
+        // Cargar la misma lista dos veces no es «entraron 0»: es que ya
+        // estaban todas, y se dice así.
+        if (created === 0) {
+          if (duplicated === 0) return "No entró ninguna marca nueva.";
+          return duplicated === 1
+            ? "No entró ninguna marca nueva: esa ya estaba en el radar."
+            : `No entró ninguna marca nueva: las ${duplicated} ya estaban en el radar.`;
+        }
         const a = created === 1 ? "Entró 1 marca nueva" : `Entraron ${created} marcas nuevas`;
         const b =
           duplicated === 0
@@ -162,6 +170,8 @@ export const MESSAGES = {
         return `${a}${b}.`;
       },
       lineErrors: "Filas que no entraron",
+      /** Filas que sí entraron, pero con algo que se descartó (un país que no se reconoce). */
+      lineWarnings: "Entraron con un aviso",
       line: (n: number) => `Línea ${n}`,
       error: "No se pudo cargar la lista.",
       /** El titular de una marca que entra por lista sin nota. */
@@ -174,6 +184,8 @@ export const MESSAGES = {
         missingName: "Falta el nombre de la marca.",
         nameTooLong: (max: number) => `El nombre de la marca pasa de ${max} caracteres.`,
         onlyHeader: "El archivo solo tiene la cabecera.",
+        unknownCountry: (value: string) =>
+          `País no reconocido: «${value}». La marca entró sin país; usa el nombre o el código de dos letras (CO).`,
       },
     },
   },
@@ -207,6 +219,8 @@ export const MESSAGES = {
     noContacts: "Sin contactos",
     noDeals: "Sin negocios abiertos",
     neverContacted: "Sin actividad",
+    /** Lo que pinta una celda de cifra vacía; el texto de arriba va para el lector de pantalla. */
+    emptyCell: "—",
     optedOut: (n: number) => `${n} con baja`,
     shortSearch: (min: number) => `Escribe al menos ${min} letras para buscar.`,
     relationshipFilter: "Relación",
@@ -229,6 +243,14 @@ export const MESSAGES = {
       notes: "Notas",
       submit: "Crear empresa",
       error: "No se pudo crear la empresa.",
+      /** Editar desde la ficha, con el mismo formulario. */
+      editTitle: "Editar los datos",
+      save: "Guardar cambios",
+      saved: "Datos actualizados.",
+      editError: "No se pudo guardar la empresa.",
+      /** Una empresa del catálogo compartido: sus datos no son de este espacio. */
+      notOwn:
+        "Esta empresa es del catálogo compartido: su nombre, su web y su sector los ven todos los espacios y no se editan desde aquí. Las notas sí son tuyas.",
     },
 
     detail: {
@@ -241,13 +263,15 @@ export const MESSAGES = {
       industry: "Sector",
       owner: "Responsable",
       noOwner: "Sin responsable",
+      edit: "Editar",
+      editLabel: (name: string) => `Editar los datos de ${name}`,
+      save: "Guardar",
+      saved: "Guardado.",
       openDeals: "Negocios abiertos",
       lastActivity: "Última actividad",
       notes: "Notas",
       noNotes: "Sin notas.",
       relationship: "Relación",
-      saveRelationship: "Cambiar",
-      relationshipSaved: "Relación actualizada.",
       error: "No se pudo actualizar la empresa.",
       /** «Nuevo negocio» en la ficha: abrir uno a mano, sin pasar por el radar. */
       newDeal: {
@@ -305,6 +329,12 @@ export const MESSAGES = {
     optOutConfirm: "Sí, registrar la baja",
     optOutDone: "Baja registrada. No se le volverá a escribir.",
     optOutError: "No se pudo registrar la baja.",
+    edit: "Editar",
+    editLabel: (name: string) => `Editar: ${name}`,
+    editTitle: "Editar el contacto",
+    saveEdit: "Guardar cambios",
+    edited: "Contacto actualizado.",
+    editError: "No se pudo actualizar el contacto.",
     bounced: "Correo rebotado",
     sourceLabel: "Fuente",
     seeSource: "ver",
@@ -353,6 +383,25 @@ export const MESSAGES = {
     /** El atajo a Cotizar desde la tarjeta y la fila de un negocio abierto. */
     quote: "Cotizar",
     quoteLabel: (name: string) => `Cotizar el negocio con ${name}`,
+    /** Pasar un negocio a una etapa perdida: el motivo es obligatorio. */
+    lost: {
+      title: "¿Por qué lo pierdes?",
+      help: "Queda anotado en el negocio. Con el tiempo es lo que te dice dónde se caen tus ventas.",
+      placeholder: "Elige el motivo",
+      confirm: (stage: string) => `Pasar a «${stage}»`,
+      formLabel: (name: string) => `Por qué pierdes el negocio con ${name}`,
+    },
+  },
+
+  /** Por qué se perdió un negocio (deal.lost_reason), en la tarjeta y en la ficha: «Perdido · Por el precio». */
+  motivosPerdida: {
+    sin_presupuesto: "No tenía presupuesto",
+    eligio_otro_creador: "Eligió a otro creador",
+    sin_respuesta: "Dejó de responder",
+    fuera_de_tiempo: "Se pasó el momento",
+    precio: "Por el precio",
+    no_encaja: "No encaja con lo que hago",
+    otro: "Otro motivo",
   },
 
   /** Relación del workspace con una empresa (company_link.relationship). */
@@ -411,6 +460,8 @@ export const MESSAGES = {
     reasonRequired: "Di por qué la descartas: es lo que afina el radar.",
     reasonTooLong: "El motivo cabe en 280 caracteres.",
     relationship: "Elige una relación de la lista.",
+    owner: "Elige a alguien de tu espacio.",
+    lostReason: "Di por qué lo pierdes: es lo que te enseña el pipeline.",
     companyName: "La empresa necesita un nombre.",
     companyNameTooLong: "El nombre cabe en 200 caracteres.",
     company: "La empresa no es válida.",
@@ -453,11 +504,12 @@ export const MESSAGES = {
     InvalidDealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     InvalidHeadline: "La señal necesita una línea que diga qué viste.",
     InvalidName: "La empresa necesita un nombre.",
-    InvalidOwner: "El responsable no es válido.",
+    InvalidOwner: "El responsable tiene que ser alguien de tu espacio.",
     InvalidReason: "Di por qué la descartas: es lo que afina el radar.",
     InvalidRelationship: "Esa relación no existe.",
     InvalidSource: "Un contacto no se guarda sin decir de dónde salió.",
     InvalidStage: "Esa etapa no existe.",
+    LostReasonRequired: "Di por qué lo pierdes antes de pasarlo a «Perdido».",
     SignalAlreadyReviewed: "Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó.",
     SignalNotFound: "Esa señal ya no está en tu bandeja.",
     SignalWithoutCompany: "La señal no dice de qué marca es. Edítala antes de aceptarla.",
@@ -493,6 +545,8 @@ export const MESSAGES = {
   loading: {
     label: "Cargando Ventas",
     empresas: "Cargando Empresas",
+    ficha: "Cargando la ficha de la empresa",
+    nueva: "Cargando el formulario de empresa",
     kpis: ["Señales por revisar", "Negocios abiertos", "Cierre ponderado", "Ganado este trimestre"],
     section: "Pipeline",
   },

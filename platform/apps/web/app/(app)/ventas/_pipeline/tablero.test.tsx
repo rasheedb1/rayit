@@ -8,8 +8,9 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
 const stages: BoardStage[] = [
-  { id: "nuevo", label: "Nuevo", countText: "1", amountText: "COP 3 M" },
-  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0" },
+  { id: "nuevo", label: "Nuevo", countText: "1", amountText: "COP 3 M", isLost: false },
+  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false },
+  { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true },
 ];
 const deals: BoardDeal[] = [
   {
@@ -26,6 +27,7 @@ const deals: BoardDeal[] = [
     due: { kind: "neutral", text: "Al día" },
     needsNextAction: false,
     quoteHref: `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
+    lostReasonText: null,
   },
 ];
 
@@ -102,6 +104,62 @@ describe("PipelineBoard", () => {
   it("el menú no ofrece la etapa en la que ya está", () => {
     render(<PipelineBoard deals={deals} stages={stages} />);
     const options = within(screen.getByLabelText("Mover «Café Alma» a otra etapa")).getAllByRole("option").map((o) => o.textContent);
-    expect(options).toEqual(["Mover a…", "Ganado"]);
+    expect(options).toEqual(["Mover a…", "Ganado", "Perdido"]);
+  });
+
+  it("pasar a «Perdido» pregunta por qué y no mueve sin motivo", async () => {
+    moverNegocio.mockResolvedValue({ ok: true });
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "perdido" } });
+    });
+    // Todavía no se movió: la tarjeta sigue en su columna y pregunta.
+    expect(moverNegocio).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId("columna-nuevo")).getByText("Café Alma")).toBeInTheDocument();
+    const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
+
+    // Sin motivo, el error va en el campo y nada llega al servidor.
+    fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
+    expect(await within(form).findByText("Di por qué lo pierdes: es lo que te enseña el pipeline.")).toBeInTheDocument();
+    expect(moverNegocio).not.toHaveBeenCalled();
+
+    fireEvent.change(within(form).getByLabelText(/¿Por qué lo pierdes\?/), { target: { value: "precio" } });
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
+    });
+    expect(moverNegocio).toHaveBeenCalledWith(DEAL, "perdido", "precio");
+    expect(await screen.findByRole("status")).toHaveTextContent("Café Alma pasó a «Perdido».");
+    expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
+  });
+
+  it("soltar en «Perdido» también pregunta, y cancelar lo deja donde estaba", async () => {
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      setData: (k: string, v: string) => store.set(k, v),
+      getData: (k: string) => store.get(k) ?? "",
+      effectAllowed: "",
+      dropEffect: "",
+    };
+    fireEvent.dragStart(screen.getByRole("listitem", { name: "Café Alma, Lanzamiento cold brew" }), { dataTransfer });
+    const target = screen.getByRole("listitem", { name: "Perdido" });
+    fireEvent.dragOver(target, { dataTransfer });
+    await act(async () => {
+      fireEvent.drop(target, { dataTransfer });
+    });
+    const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
+    fireEvent.click(within(form).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
+    expect(moverNegocio).not.toHaveBeenCalled();
+  });
+
+  it("un negocio perdido dice por qué", () => {
+    render(
+      <PipelineBoard
+        deals={[{ ...deals[0]!, stageId: "perdido", stageLabel: "Perdido", quoteHref: null, lostReasonText: "Por el precio" }]}
+        stages={stages}
+      />,
+    );
+    expect(within(screen.getByTestId("columna-perdido")).getByText("Por el precio")).toBeInTheDocument();
   });
 });

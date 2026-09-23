@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatDate, formatDateRange, formatDelta,
+  DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatCountry, formatDate, formatDateRange, formatDelta,
   formatInt, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
 } from "./format";
 
@@ -227,5 +227,19 @@ describe("formatMultiple", () => {
     expect(formatMultiple(12)).toBe("12×");
     expect(formatMultiple(3.57, 1, { locale: "en-US" })).toBe("3.6×");
     expect(formatterFor({ locale: "es-MX", currency: "MXN", timezone: "UTC" }).multiple(2.25)).toBe("2.3×");
+  });
+});
+
+describe("formatCountry: el país por su nombre, en el idioma del workspace", () => {
+  it("dice el nombre y no el código", () => {
+    expect(formatCountry("CO")).toBe("Colombia");
+    expect(formatCountry("mx")).toBe("México");
+    expect(formatCountry("US", { locale: "en-US" })).toBe("United States");
+    expect(formatterFor({ locale: "pt-BR", currency: "BRL", timezone: "UTC" }).country("MX")).toBe("México");
+  });
+
+  it("un código que no es de dos letras vuelve tal cual", () => {
+    expect(formatCountry("Colombia")).toBe("Colombia");
+    expect(formatCountry("")).toBe("");
   });
 });

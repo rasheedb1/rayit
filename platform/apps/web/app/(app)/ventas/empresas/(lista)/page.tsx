@@ -55,9 +55,9 @@ export default async function EmpresasPage({ searchParams }: { searchParams: Pro
       align: "num",
       render: (c) =>
         c.contactCount === 0 ? (
-          <span className="text-muted">{t.noContacts}</span>
+          <CeldaVacia texto={t.noContacts} />
         ) : (
-          <CellMain sub={c.optedOutCount > 0 ? t.optedOut(c.optedOutCount) : undefined}>{f.int(c.contactCount)}</CellMain>
+          <CellMain sub={c.optedOutCount > 0 ? <Texto>{t.optedOut(c.optedOutCount)}</Texto> : undefined}>{f.int(c.contactCount)}</CellMain>
         ),
     },
     {
@@ -66,16 +66,24 @@ export default async function EmpresasPage({ searchParams }: { searchParams: Pro
       align: "num",
       render: (c) =>
         c.openDealCount === 0 ? (
-          <span className="text-muted">{t.noDeals}</span>
+          <CeldaVacia texto={t.noDeals} />
         ) : (
-          <CellMain sub={f.money(c.openDealAmount, undefined, { mode: "short" })}>{f.int(c.openDealCount)}</CellMain>
+          <CellMain
+            sub={
+              // Abiertos sin monto (una señal aceptada sin presupuesto):
+              // «Sin monto», como en el pipeline, y no «COP 0».
+              c.openDealAmount !== null ? f.money(c.openDealAmount, undefined, { mode: "short" }) : <Texto>{MESSAGES.pipeline.noAmount}</Texto>
+            }
+          >
+            {f.int(c.openDealCount)}
+          </CellMain>
         ),
     },
     {
       key: "lastActivity",
       header: t.columns.lastActivity,
       align: "num",
-      render: (c) => (c.lastActivityAt ? f.date(c.lastActivityAt) : <span className="text-muted">{t.neverContacted}</span>),
+      render: (c) => (c.lastActivityAt ? f.date(c.lastActivityAt) : <CeldaVacia texto={t.neverContacted} />),
     },
   ];
 
@@ -108,4 +116,26 @@ export default async function EmpresasPage({ searchParams }: { searchParams: Pro
       </section>
     </>
   );
+}
+
+/**
+ * Una celda de cifra sin valor: una raya, no una frase en la letra
+ * monoespaciada de las cifras, que se leía como un dato y rompía la
+ * columna. La frase («Sin negocios abiertos») sigue ahí para el lector
+ * de pantalla.
+ */
+function CeldaVacia({ texto }: { texto: string }) {
+  return (
+    <>
+      <span aria-hidden="true" className="text-muted">
+        {MESSAGES.empresas.emptyCell}
+      </span>
+      <span className="sr-only">{texto}</span>
+    </>
+  );
+}
+
+/** Un texto dentro de una columna de cifras: con la letra del texto, no con la de los números. */
+function Texto({ children }: { children: string }) {
+  return <span className="font-sans">{children}</span>;
 }

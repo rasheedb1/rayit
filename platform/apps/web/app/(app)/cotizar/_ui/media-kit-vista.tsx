@@ -1,6 +1,6 @@
 import type { MediaKitSnapshot, MediaKitSnapshotAudiencia } from "@mc/db/queries/cotizar";
 import { PLATFORM_LABEL, PlatformPill, isPlatformId } from "@/components/ui/platform-pill";
-import { formatterFor, type Formatter } from "@/lib/format";
+import { formatCountry, formatterFor, type Formatter } from "@/lib/format";
 import { idiomaDocumento, MESSAGES, nombreModificador } from "../messages";
 
 /**
@@ -219,12 +219,6 @@ function nombreSegmento(dimension: string, bucket: string, locale: string): stri
   const t = MESSAGES.publico.kit;
   if (bucket === "OTHER") return t.otros;
   if (dimension === "gender") return t.generos[bucket] ?? bucket;
-  if (dimension === "country" && /^[A-Z]{2}$/.test(bucket)) {
-    try {
-      return new Intl.DisplayNames([locale], { type: "region" }).of(bucket) ?? bucket;
-    } catch {
-      return bucket;
-    }
-  }
+  if (dimension === "country" && /^[A-Z]{2}$/.test(bucket)) return formatCountry(bucket, { locale });
   return bucket;
 }

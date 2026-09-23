@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useOptimistic, useState, useTransition, type DragEvent } from "react";
+import { useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Field, Select } from "@/components/ui/field";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
 import { Aviso } from "../_componentes/aviso";
-import { applyMove } from "../_lib/estado";
+import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 
 /** Un negocio listo para pintar: montos y fechas ya formateados en el servidor. */
@@ -26,6 +28,8 @@ export interface BoardDeal {
   needsNextAction: boolean;
   /** A dónde lleva «Cotizar»; null en los cerrados. */
   quoteHref: string | null;
+  /** Por qué se perdió («Por el precio»); null si no está perdido o no se dijo. */
+  lostReasonText: string | null;
 }
 
 /** Una columna con su cabecera ya contada y sumada en SQL. */
@@ -34,6 +38,8 @@ export interface BoardStage {
   label: string;
   countText: string;
   amountText: string;
+  /** Una etapa perdida: pasar a ella pide el motivo. */
+  isLost: boolean;
 }
 
 type Move = { dealId: string; toStageId: string; toStageLabel: string };
@@ -52,6 +58,11 @@ const DRAG_TYPE = "application/x-oncue-deal";
  *
  * Los montos de cada columna NO se recalculan aquí: llegan de
  * getStageTotals, y la acción revalida la página para traerlos nuevos.
+ *
+ * Soltar (o elegir en el menú) una etapa perdida no mueve todavía: abre
+ * en la tarjeta la misma pregunta que «Descartar» en el radar, «¿Por qué
+ * lo pierdes?», con el motivo obligatorio. Sin motivo el servidor
+ * tampoco lo mueve (LostReasonRequired).
  */
 export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: BoardStage[] }) {
   const t = MESSAGES.pipeline;
@@ -60,15 +71,22 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
   const [aviso, setAviso] = useState<{ notice?: string; message?: string } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  /** El negocio al que se le está preguntando por qué se pierde, y a qué etapa va. */
+  const [perdiendo, setPerdiendo] = useState<{ dealId: string; toStageId: string } | null>(null);
 
-  function move(dealId: string, toStageId: string) {
+  function move(dealId: string, toStageId: string, lostReason?: string) {
     const deal = optimistic.find((d) => d.id === dealId);
     const stage = stages.find((s) => s.id === toStageId);
     if (!deal || !stage || deal.stageId === toStageId) return;
     setAviso(null);
+    if (stage.isLost && !lostReason) {
+      setPerdiendo({ dealId, toStageId });
+      return;
+    }
+    setPerdiendo(null);
     startTransition(async () => {
       addOptimistic({ dealId, toStageId, toStageLabel: stage.label });
-      const res = await moverNegocio(dealId, toStageId);
+      const res = lostReason ? await moverNegocio(dealId, toStageId, lostReason) : await moverNegocio(dealId, toStageId);
       setAviso(res.ok ? { notice: t.moved(deal.companyName, stage.label) } : { message: res.message ?? t.moveError });
     });
   }
@@ -139,6 +157,9 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                             setOver(null);
                           }}
                           onMove={(to) => move(deal.id, to)}
+                          losing={perdiendo?.dealId === deal.id ? stages.find((s) => s.id === perdiendo.toStageId) ?? null : null}
+                          onLose={(reason) => perdiendo && move(deal.id, perdiendo.toStageId, reason)}
+                          onCancelLose={() => setPerdiendo(null)}
                         />
                       ))}
                     </ul>
@@ -160,6 +181,9 @@ function DealCard({
   onDragStart,
   onDragEnd,
   onMove,
+  losing,
+  onLose,
+  onCancelLose,
 }: {
   deal: BoardDeal;
   stages: BoardStage[];
@@ -167,9 +191,25 @@ function DealCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onMove: (toStageId: string) => void;
+  /** La etapa perdida a la que se quiere pasar, mientras se pregunta el motivo. */
+  losing: BoardStage | null;
+  onLose: (reason: string) => void;
+  onCancelLose: () => void;
 }) {
   const t = MESSAGES.pipeline;
   const selectId = `mover-${deal.id}`;
+  const [reasonError, setReasonError] = useState<string | undefined>();
+
+  function lose(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = String(new FormData(event.currentTarget).get("lostReason") ?? "");
+    if (!reason) {
+      setReasonError(MESSAGES.validacion.lostReason);
+      return;
+    }
+    setReasonError(undefined);
+    onLose(reason);
+  }
 
   return (
     <li
@@ -201,6 +241,8 @@ function DealCard({
         {deal.due && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}
         <span className="text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</span>
       </div>
+
+      {deal.lostReasonText && <p className="mt-2 text-xs leading-4 text-muted">{deal.lostReasonText}</p>}
 
       {(deal.nextAction || deal.needsNextAction) && (
         <p className="mt-2 text-xs leading-4 text-ink-2">
@@ -246,6 +288,29 @@ function DealCard({
             </option>
           ))}
       </select>
+
+      {losing && (
+        <form onSubmit={lose} noValidate aria-label={t.lost.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
+          <Field label={t.lost.title} help={t.lost.help} error={reasonError} required htmlFor={`perdido-${deal.id}`}>
+            <Select name="lostReason" defaultValue="" placeholder={t.lost.placeholder} options={LOST_REASON_OPTIONS} autoFocus />
+          </Field>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="submit" variant="danger" size="sm">
+              {t.lost.confirm(losing.label)}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setReasonError(undefined);
+                onCancelLose();
+              }}
+            >
+              {MESSAGES.acciones.cancel}
+            </Button>
+          </div>
+        </form>
+      )}
     </li>
   );
 }

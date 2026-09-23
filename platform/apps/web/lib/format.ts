@@ -356,6 +356,35 @@ export function browserTimeZone(): string {
   }
 }
 
+const regionCache = new Map<string, Intl.DisplayNames | null>();
+
+/**
+ * El nombre de un país por su código ISO-3166-1 alfa-2, en el idioma del
+ * locale: "CO" → "Colombia" (es) · "Colombia" (en) · "MX" → "México".
+ * Un código que no es de dos letras, o que Intl no conoce, vuelve tal
+ * cual: mejor «XK» que una celda vacía. Añadido por Ventas (pulido r5);
+ * lo usan la ficha de empresa y el media kit.
+ */
+export function formatCountry(code: string, opts: LocaleOpts = {}): string {
+  const iso = code.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(iso)) return code;
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  let names = regionCache.get(locale);
+  if (names === undefined) {
+    try {
+      names = new Intl.DisplayNames([locale], { type: "region" });
+    } catch {
+      names = null;
+    }
+    regionCache.set(locale, names);
+  }
+  try {
+    return names?.of(iso) ?? iso;
+  } catch {
+    return iso;
+  }
+}
+
 /** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
 export function formatDaysRelative(days: number): string {
   if (days === 0) return "hoy";
@@ -395,6 +424,7 @@ export function formatterFor(settings: FormatSettings) {
     dateTime: (iso: string) => formatDateTime(iso, base),
     time: (iso: string) => formatTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
+    country: (code: string) => formatCountry(code, base),
     daysRelative: formatDaysRelative,
   };
 }

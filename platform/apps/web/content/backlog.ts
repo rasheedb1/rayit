@@ -319,7 +319,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
     status: "hecho",
-    note: "Empresas con búsqueda, ficha, relación y contactos con procedencia y baja de una sola dirección; «Nuevo negocio» y «Cotizar» desde la ficha; ganar sube la relación a «Cliente». Pulido r4: una empresa inexistente responde 404 de verdad (los esqueletos de lista viven en grupos de rutas). Pendiente humano: aplicar 0024–0031 en Supabase y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
+    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» la empresa (solo notas si es del catálogo) y cada contacto; responsable elegible entre los miembros, y quien crea queda de responsable; país por su nombre; esqueleto de la ficha tras el 404. Pendiente humano: aplicar 0024–0032 en Supabase y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -327,7 +327,7 @@ export const STORIES: readonly Story[] = [
     desc: "Bandeja de signal con estado pendiente, aceptar (crea o actualiza empresa y deal en nuevo) o descartar con motivo. Fuente manual y carga por CSV de una lista de marcas. Las fuentes automáticas quedan para fase 2.",
     done: "Aceptar una señal crea el deal con «Enviar pitch» como siguiente acción; descartarla la saca de la bandeja y no vuelve a entrar (dedupe_key).",
     status: "hecho",
-    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r4: el negocio nuevo se llama como el titular de la señal o «Por definir», nunca como la marca; el presupuesto no se parte a 400 px. Pendiente humano: aplicar 0031.",
+    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r5: el CSV entiende el país por su nombre y avisa del que no reconoce; el pitch se reconoce por deal.next_action_kind (0032), no por su frase. Pendiente humano: aplicar 0031–0032.",
   },
   {
     id: "VEN-3", module: "VEN", owner: "rasheed", size: "L", sprint: 2, deps: ["VEN-1"],
@@ -335,7 +335,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tablero por etapa y vista de lista sobre deal_pipeline. Arrastrar cambia la etapa y escribe deal_stage_history con los días en la etapa. KPIs: deals abiertos, cierre ponderado, ganado en el trimestre.",
     done: "Mover un deal a «Ganado» fija won_at; el cierre ponderado cambia al mover entre etapas.",
     status: "hecho",
-    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031); enviar una cotización cambia «Enviar pitch» por «Seguimiento a la cotización». Pulido r4: montos en un solo formato abreviado (formatMoney mode short: «COP 924 mil», «COP 6,0 M»). Pendiente humano: aplicar 0031.",
+    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031). Pulido r5: pasar a «Perdido» pide el motivo y lo guarda en lost_reason; la lista es de tarjetas a 400 px; un negocio sin monto dice «Sin monto» también en Empresas. Pendiente humano: aplicar 0031–0032.",
   },
   {
     id: "VEN-4", module: "VEN", owner: "rasheed", size: "M", sprint: 3, deps: ["VEN-3", "CON-2"],

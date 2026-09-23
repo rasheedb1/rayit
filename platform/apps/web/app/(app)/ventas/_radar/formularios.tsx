@@ -7,6 +7,7 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { anotarSenal, cargarLista } from "../actions";
 import { Aviso } from "../_componentes/aviso";
+import type { CsvLineError } from "../_lib/csv";
 import { MESSAGES } from "../_lib/messages";
 import { useVentasForm } from "../_lib/use-ventas-form";
 
@@ -77,6 +78,24 @@ export function NuevaSenalForm({ currency, onCancel }: { currency: string; onCan
   );
 }
 
+/** Las filas de un CSV con algo que decir, cada una con su línea del archivo. */
+function LineasCsv({ title, lines }: { title: string; lines: CsvLineError[] | undefined }) {
+  const t = MESSAGES.radar.csv;
+  if (!lines || lines.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-md border border-border px-3 py-2">
+      <p className="text-xs font-medium text-ink">{title}</p>
+      <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-xs text-ink-2">
+        {lines.map((e) => (
+          <li key={`${e.line}:${e.message}`}>
+            <span className="tabular-nums text-muted">{t.line(e.line)}</span> · {e.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * «Cargar una lista»: un CSV subido o pegado. Lo que ya estaba en el
  * radar no se repite, y las filas que no se pudieron leer se listan con
@@ -111,18 +130,8 @@ export function CargarListaForm({ onCancel }: { onCancel: () => void }) {
       </div>
 
       <Aviso message={state.message} notice={state.notice} className="mt-4" />
-      {state.lineErrors && state.lineErrors.length > 0 && (
-        <div className="mt-3 rounded-md border border-border px-3 py-2">
-          <p className="text-xs font-medium text-ink">{t.lineErrors}</p>
-          <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-xs text-ink-2">
-            {state.lineErrors.map((e) => (
-              <li key={`${e.line}:${e.message}`}>
-                <span className="tabular-nums text-muted">{t.line(e.line)}</span> · {e.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <LineasCsv title={t.lineErrors} lines={state.lineErrors} />
+      <LineasCsv title={t.lineWarnings} lines={state.lineWarnings} />
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Button type="submit" variant="primary" loading={pending}>

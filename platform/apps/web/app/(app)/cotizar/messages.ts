@@ -613,6 +613,9 @@ export const MESSAGES = {
     cotizaciones: "Cargando las cotizaciones",
     mediaKits: "Cargando los media kits",
     nueva: "Cargando la nueva cotización",
+    /** El detalle y la edición, detrás de su <Suspense> (pulido r5). */
+    cotizacion: "Cargando la cotización",
+    editar: "Cargando el borrador",
   },
 
   /**

@@ -9,7 +9,7 @@
  * messages.ts y no en cinco pantallas. Aquí se decide el color; el
  * texto sale de messages.ts.
  */
-import type { ContactSource, DueState, Relationship, SignalStatus } from "@mc/db/queries/ventas";
+import type { ContactSource, DueState, LostReason, Relationship, SignalStatus } from "@mc/db/queries/ventas";
 import type { PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "./messages";
@@ -125,6 +125,20 @@ export function pillForDue(state: DueState): { kind: PillKind; text: string } {
     case "futuro":
       return { kind: "neutral", text: MESSAGES.due.futuro };
   }
+}
+
+// ---------------------------------------------------------------------
+// Negocio perdido
+// ---------------------------------------------------------------------
+
+/** Los motivos de pérdida en el orden del selector; las etiquetas viven en messages.ts. */
+export const LOST_REASON_OPTIONS: { value: LostReason; label: string }[] = (
+  ["sin_presupuesto", "precio", "eligio_otro_creador", "sin_respuesta", "fuera_de_tiempo", "no_encaja", "otro"] as const
+).map((value) => ({ value, label: MESSAGES.motivosPerdida[value] }));
+
+/** «Por el precio», o null si el negocio no tiene motivo (no está perdido, o se perdió antes de que se pidiera). */
+export function lostReasonText(reason: LostReason | null): string | null {
+  return reason ? MESSAGES.motivosPerdida[reason] : null;
 }
 
 /**

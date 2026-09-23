@@ -17,6 +17,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
   CONTACT_SOURCES,
+  LOST_REASONS,
   RELATIONSHIPS,
   VentasError,
   acceptSignal,
@@ -29,7 +30,9 @@ import {
   moveDeal,
   optOutContact,
   updateCompany,
+  updateContact,
   type ContactSource,
+  type LostReason,
   type Relationship,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
@@ -48,6 +51,8 @@ export interface VentasState extends ActionState {
   link?: { href: string; label: string };
   /** Filas del CSV que no entraron, con su línea. */
   lineErrors?: CsvLineError[];
+  /** Filas del CSV que entraron con un aviso (un país que no se reconoció). */
+  lineWarnings?: CsvLineError[];
   /** Cambia con cada envío que sale bien: el formulario lo usa para vaciarse. */
   stamp?: number;
 }
@@ -216,6 +221,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
     ok: true,
     notice: t.result(created, duplicated),
     lineErrors: parsed.errors.length > 0 ? parsed.errors : undefined,
+    lineWarnings: parsed.warnings.length > 0 ? parsed.warnings : undefined,
     stamp: Date.now(),
   };
 }
@@ -280,15 +286,29 @@ export async function descartarSenal(_prev: VentasState, formData: FormData): Pr
 
 const relationshipField = z.string().refine((v) => RELATIONSHIPS.includes(v as Relationship), V.relationship);
 
-const empresaSchema = z.object({
+/** La ficha de una empresa: lo que se escribe al crearla y lo que se corrige al editarla. */
+const fichaSchema = z.object({
   name: z.string().trim().min(1, V.companyName).max(200, V.companyNameTooLong),
   domain: optionalText(253, V.campos.domain),
   country: optionalCountry,
   city: optionalText(120, V.campos.city),
   industry: optionalText(120, V.campos.sector),
-  relationship: relationshipField,
   notes: optionalText(2000, V.campos.notes),
 });
+
+const empresaSchema = fichaSchema.extend({ relationship: relationshipField });
+
+/**
+ * Los errores de dominio que son de un campo, no de la pantalla: el
+ * dominio repetido va en «Web o dominio», con el nombre de la empresa
+ * que ya lo tiene; el nombre vacío, en «Nombre».
+ */
+function empresaError(err: unknown, fallback: string): VentasState {
+  const message = messageOf(err, fallback);
+  if (err instanceof VentasError && err.code === "DuplicateDomain") return { errors: { domain: message } };
+  if (err instanceof VentasError && err.code === "InvalidName") return { errors: { name: message } };
+  return { message };
+}
 
 /** «Nueva empresa»: la crea (o vincula la del catálogo) y abre su ficha. */
 export async function crearEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
@@ -317,29 +337,95 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
       }),
     );
   } catch (err) {
-    const message = messageOf(err, MESSAGES.empresas.form.error);
-    // El dominio repetido es un error del campo, no de la pantalla.
-    if (err instanceof VentasError && err.code === "DuplicateDomain") return { errors: { domain: message } };
-    return { message };
+    return empresaError(err, MESSAGES.empresas.form.error);
   }
   revalidateVentas(id);
   redirect(`/ventas/empresas/${id}`);
 }
 
-/** Cambia la relación con la empresa desde su ficha. */
-export async function cambiarRelacion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+/**
+ * «Editar» en la ficha: corrige los datos de la empresa con el mismo
+ * formulario con que se creó.
+ *
+ * Una empresa propia (la creó este espacio) cambia todo: nombre,
+ * dominio, país, ciudad, sector y notas. Una del catálogo compartido
+ * solo cambia sus notas, que son de este espacio (company_link): el
+ * formulario no ofrece lo demás, y si llegara, updateCompany respondería
+ * CompanyNotEditable, que aquí se dice en la pantalla.
+ */
+export async function editarEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = MESSAGES.empresas.form;
   const companyId = field(formData, "companyId");
-  const relationship = field(formData, "relationship");
-  if (!UUID_RE.test(companyId)) return { message: MESSAGES.empresas.detail.error };
-  const parsed = relationshipField.safeParse(relationship);
-  if (!parsed.success) return { errors: { relationship: parsed.error.issues[0]?.message ?? MESSAGES.empresas.detail.error } };
+  if (!UUID_RE.test(companyId)) return { message: t.editError };
+  const soloNotas = field(formData, "scope") === "notes";
+
+  let input: Parameters<typeof updateCompany>[2];
+  if (soloNotas) {
+    const parsed = fichaSchema.pick({ notes: true }).safeParse({ notes: field(formData, "notes") });
+    if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+    input = { notes: parsed.data.notes || null };
+  } else {
+    const parsed = fichaSchema.safeParse({
+      name: field(formData, "name"),
+      domain: field(formData, "domain"),
+      country: field(formData, "country"),
+      city: field(formData, "city"),
+      industry: field(formData, "industry"),
+      notes: field(formData, "notes"),
+    });
+    if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+    const v = parsed.data;
+    input = {
+      name: v.name,
+      domain: v.domain || null,
+      country: v.country || null,
+      city: v.city || null,
+      industry: v.industry || null,
+      notes: v.notes || null,
+    };
+  }
   try {
-    await withWorkspace((tx) => updateCompany(tx, companyId, { relationship: relationship as Relationship }));
+    await withWorkspace((tx) => updateCompany(tx, companyId, input));
   } catch (err) {
-    return { message: messageOf(err, MESSAGES.empresas.detail.error) };
+    return empresaError(err, t.editError);
   }
   revalidateVentas(companyId);
-  return { ok: true, notice: MESSAGES.empresas.detail.relationshipSaved, stamp: Date.now() };
+  return { ok: true, notice: t.saved, stamp: Date.now() };
+}
+
+/**
+ * La relación con la empresa y su responsable, desde la ficha. Las dos
+ * son de este espacio (company_link), así que se cambian también en una
+ * empresa del catálogo compartido.
+ *
+ * El responsable es opcional en el formulario: si el campo no llega, no
+ * se toca; vacío es «Sin responsable». Que sea alguien de este espacio
+ * lo comprueba updateCompany (InvalidOwner).
+ */
+export async function cambiarRelacion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = MESSAGES.empresas.detail;
+  const companyId = field(formData, "companyId");
+  const relationship = field(formData, "relationship");
+  if (!UUID_RE.test(companyId)) return { message: t.error };
+  const parsed = relationshipField.safeParse(relationship);
+  if (!parsed.success) return { errors: { relationship: parsed.error.issues[0]?.message ?? t.error } };
+  const tocaResponsable = formData.has("ownerUserId");
+  const owner = field(formData, "ownerUserId");
+  if (owner !== "" && !UUID_RE.test(owner)) return { errors: { ownerUserId: V.owner } };
+  try {
+    await withWorkspace((tx) =>
+      updateCompany(tx, companyId, {
+        relationship: relationship as Relationship,
+        ...(tocaResponsable ? { ownerUserId: owner || null } : {}),
+      }),
+    );
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    if (err instanceof VentasError && err.code === "InvalidOwner") return { errors: { ownerUserId: message } };
+    return { message };
+  }
+  revalidateVentas(companyId);
+  return { ok: true, notice: t.saved, stamp: Date.now() };
 }
 
 const negocioSchema = z.object({
@@ -404,8 +490,9 @@ const contactoSchema = z
     message: V.contactAtLeastOne,
   });
 
-export async function crearContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
-  const parsed = contactoSchema.safeParse({
+/** Lo que manda el formulario de contacto, igual para crear y para editar. */
+function contactoForm(formData: FormData) {
+  return {
     companyId: field(formData, "companyId"),
     source: field(formData, "source"),
     fullName: field(formData, "fullName"),
@@ -415,7 +502,18 @@ export async function crearContacto(_prev: VentasState, formData: FormData): Pro
     linkedinUrl: field(formData, "linkedinUrl"),
     instagramHandle: field(formData, "instagramHandle"),
     sourceUrl: field(formData, "sourceUrl"),
-  });
+  };
+}
+
+/** El correo repetido es del campo «Correo»; lo demás, de la pantalla. */
+function contactoError(err: unknown, fallback: string): VentasState {
+  const message = messageOf(err, fallback);
+  if (err instanceof VentasError && err.code === "DuplicateEmail") return { errors: { email: message } };
+  return { message };
+}
+
+export async function crearContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const parsed = contactoSchema.safeParse(contactoForm(formData));
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
   try {
@@ -433,12 +531,43 @@ export async function crearContacto(_prev: VentasState, formData: FormData): Pro
       }),
     );
   } catch (err) {
-    const message = messageOf(err, MESSAGES.contacto.error);
-    if (err instanceof VentasError && err.code === "DuplicateEmail") return { errors: { email: message } };
-    return { message };
+    return contactoError(err, MESSAGES.contacto.error);
   }
   revalidateVentas(v.companyId);
   return { ok: true, notice: MESSAGES.contacto.saved, stamp: Date.now() };
+}
+
+/**
+ * «Editar» en un contacto: el mismo formulario del alta, con sus datos.
+ * La procedencia sigue siendo obligatoria —corregir un correo no borra
+ * de dónde salió—, y un contacto que no guardó este espacio no se edita
+ * (ContactNotOwned; la pantalla ni siquiera ofrece el botón).
+ */
+export async function editarContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = MESSAGES.contacto;
+  const contactId = field(formData, "contactId");
+  if (!UUID_RE.test(contactId)) return { message: t.editError };
+  const parsed = contactoSchema.safeParse(contactoForm(formData));
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+  try {
+    await withWorkspace((tx) =>
+      updateContact(tx, contactId, {
+        source: v.source as ContactSource,
+        fullName: v.fullName || null,
+        roleTitle: v.roleTitle || null,
+        email: v.email || null,
+        phone: v.phone || null,
+        linkedinUrl: v.linkedinUrl || null,
+        instagramHandle: v.instagramHandle || null,
+        sourceUrl: v.sourceUrl || null,
+      }),
+    );
+  } catch (err) {
+    return contactoError(err, t.editError);
+  }
+  revalidateVentas(v.companyId);
+  return { ok: true, notice: t.edited, stamp: Date.now() };
 }
 
 export async function darDeBaja(_prev: VentasState, formData: FormData): Promise<VentasState> {
@@ -473,13 +602,21 @@ export interface MoverResult {
  * privadas del workspace, 0026 §2): se aceptan las dos formas y la
  * existencia la decide moveDeal. Sacar de «Ganado» un negocio con
  * campaña o cotización firmada vuelve con el motivo (DealLocked).
+ *
+ * Pasar a una etapa perdida exige el motivo (`lostReason`, uno de
+ * LOST_REASONS): el tablero lo pide antes de llamar, y sin él moveDeal
+ * no mueve (LostReasonRequired).
  */
-export async function moverNegocio(dealId: string, toStageId: string): Promise<MoverResult> {
+export async function moverNegocio(dealId: string, toStageId: string, lostReason?: string): Promise<MoverResult> {
   if (!UUID_RE.test(dealId) || !(STAGE_ID_RE.test(toStageId) || UUID_RE.test(toStageId))) {
     return { ok: false, message: MESSAGES.pipeline.moveError };
   }
+  if (lostReason !== undefined && !LOST_REASONS.includes(lostReason as LostReason)) {
+    return { ok: false, message: V.lostReason };
+  }
+  const reason = lostReason === undefined ? null : (lostReason as LostReason);
   try {
-    await withWorkspace((tx) => moveDeal(tx, dealId, toStageId));
+    await withWorkspace((tx) => moveDeal(tx, dealId, toStageId, { lostReason: reason }));
   } catch (err) {
     return { ok: false, message: messageOf(err, MESSAGES.pipeline.moveError) };
   }
