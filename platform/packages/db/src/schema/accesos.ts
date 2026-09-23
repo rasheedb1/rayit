@@ -22,7 +22,7 @@ import { boolean, jsonb, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-
 import { citext, createdAt, timestamptz, uuidPk } from './_tipos.ts';
 import { appUser, workspace } from './cimientos.ts';
 
-/** Las claves de los roles de sistema (0034 §9). Coinciden con RoleKey de @mc/core (ACC-1). */
+/** Las claves de los roles de sistema (0034 §4). Coinciden con RoleKey de @mc/core (ACC-1). */
 export const ROLE_KEYS = ['owner', 'admin', 'manager', 'editor', 'finance', 'viewer'] as const;
 export type RoleKey = (typeof ROLE_KEYS)[number];
 export const PERMISSION_SENSITIVITIES = ['normal', 'sensible'] as const;

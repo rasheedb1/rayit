@@ -584,7 +584,7 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
  */
 export const REFERENCIAS_SIN_COMPROBAR_DECLARADAS: Readonly<Record<string, string>> = {
   'membership_scope.workspace_id':
-    'clave COMPUESTA (workspace_id, user_id) → membership (0034 §5), que assert_reference_visible no sabe comprobar. ' +
+    'clave COMPUESTA (workspace_id, user_id) → membership (0034 §6), que assert_reference_visible no sabe comprobar. ' +
     'No hace falta: la política de membership_scope fija workspace_id = current_workspace_id() en lectura y escritura, ' +
     'y membership_read muestra TODAS las membresías del workspace fijado, así que un par que pasa la clave ajena es ' +
     'por construcción una fila que quien escribe ve',
@@ -621,7 +621,7 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
     'chocar con una exige conocerla, y conocerla ya es tenerla',
   'invitation.invitation_token_hash_uk':
-    'el SHA-256 del token del enlace de invitación (0034 §6; el CHECK de la columna no admite otra cosa). La ' +
+    'el SHA-256 del token del enlace de invitación (0034 §7; el CHECK de la columna no admite otra cosa). La ' +
     'aceptación busca por el hash sin saber el workspace, así que tiene que resolver a una sola fila; y chocar exige ' +
     'conocer el token (≥128 bits al azar, generado por el código), que ya es tenerlo',
 };
@@ -755,19 +755,19 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   role: {
     permite: ['SELECT'],
     motivo:
-      'los roles de sistema los siembra la migración (0034 §9); los a medida llegan con ACC-9, que traerá su política ' +
+      'los roles de sistema los siembra la migración (0034 §4); los a medida llegan con ACC-9, que traerá su política ' +
       'de escritura por workspace y su GRANT',
   },
   role_permission: { permite: ['SELECT'], motivo: 'la matriz: la siembra la migración; editable solo desde ACC-9' },
   workspace_grant: {
     permite: ['SELECT'],
     motivo:
-      'la concesión creador → agencia (0034 §7) la escribe el worker o una función acotada cuando exista AGE-1; ' +
+      'la concesión creador → agencia (0034 §8) la escribe el worker o una función acotada cuando exista AGE-1; ' +
       'la web la lee por los dos extremos',
   },
   invitation: {
     permite: ['SELECT', 'INSERT', 'UPDATE'],
-    motivo: 'revocar una invitación es revoked_at (0034 §6): nadie borra el rastro de a quién se invitó',
+    motivo: 'revocar una invitación es revoked_at (0034 §7): nadie borra el rastro de a quién se invitó',
   },
 
   // Tablas de inquilino con un comando de menos.
