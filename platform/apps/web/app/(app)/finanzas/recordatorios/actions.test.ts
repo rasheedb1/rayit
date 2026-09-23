@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { permisosDeRol, SinPermisoError } from "@mc/core";
 
 const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
-const withWorkspace = vi.hoisted(() => vi.fn(async (_fn: unknown) => true));
+const withWorkspace = vi.hoisted(() => vi.fn(async () => true));
 const revalidatePath = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
@@ -19,7 +19,7 @@ vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
   return { permisosDeLaSesion: async () => sesion.permisos ?? real.permisosDeLaSesion() };
 });
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
-vi.mock("@/lib/db", () => ({ withWorkspace: (fn: unknown) => withWorkspace(fn) }));
+vi.mock("@/lib/db", () => ({ withWorkspace: () => withWorkspace() }));
 
 import { marcarRecordatorioEnviado } from "./actions";
 

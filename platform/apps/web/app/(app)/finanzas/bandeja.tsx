@@ -1,4 +1,4 @@
-import type { ReminderRow } from "@mc/db/queries/finanzas";
+import { MAX_REMINDERS, type ReminderRow } from "@mc/db/queries/finanzas";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill, type PillKind } from "@/components/ui/pill";
@@ -46,6 +46,12 @@ export function RecordatorioCard({ r, f }: { r: ReminderRow; f: Formatter }) {
           <span className="font-mono tabular-nums">{f.money(r.outstanding, r.currency, { mode: "full" })}</span>
         </span>
       </div>
+      {/* La mora de arriba es la de HOY; el texto de abajo se redactó el
+          día que dice aquí y no se reescribe. Sin esta fecha, un
+          borrador viejo parecería decir hoy algo que dijo hace semanas. */}
+      <p className="mt-1 text-xs text-fg-3">
+        {t.redactadoEl} {f.date(r.createdAt)}
+      </p>
 
       <p className="mt-3 text-sm">
         <span className="text-xs text-fg-3">{t.asunto}: </span>
@@ -91,10 +97,14 @@ export function BandejaRecordatorios({ rows, f }: { rows: readonly ReminderRow[]
           {t.titulo}
         </h2>
         {/* Sin ninguno no se escribe «0 recordatorios»: el cero es lo que
-            el estado vacío explica abajo con una frase. */}
+            el estado vacío explica abajo con una frase. Y si la lista
+            viene al tope, no se dice «200 por enviar» como si fueran
+            todos: son los 200 primeros y hay más. */}
         {rows.length > 0 && (
           <span className="text-xs text-fg-3">
-            {rows.length} {rows.length === 1 ? "recordatorio por enviar" : "recordatorios por enviar"}
+            {rows.length >= MAX_REMINDERS
+              ? `${t.primeros} ${MAX_REMINDERS} recordatorios; hay más`
+              : `${rows.length} ${rows.length === 1 ? "recordatorio por enviar" : "recordatorios por enviar"}`}
           </span>
         )}
       </div>

@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ReminderRow } from "@mc/db/queries/finanzas";
+import { MAX_REMINDERS, type ReminderRow } from "@mc/db/queries/finanzas";
 
 // La Server Action no se ejerce aquí: la bandeja es servidor, y lo que
 // se comprueba es qué pinta y qué manda el formulario.
@@ -60,6 +60,20 @@ describe("bandeja de recordatorios", () => {
   it("uno solo se cuenta en singular", () => {
     render(<BandejaRecordatorios rows={[fila()]} f={f} />);
     expect(screen.getByText("1 recordatorio por enviar")).toBeInTheDocument();
+  });
+
+  it("al tope no dice que son todos: dice que hay más", () => {
+    const muchos = Array.from({ length: MAX_REMINDERS }, (_, i) => fila({ id: `r${i}` }));
+    render(<BandejaRecordatorios rows={muchos} f={f} />);
+    expect(screen.getByText(`Los primeros ${MAX_REMINDERS} recordatorios; hay más`)).toBeInTheDocument();
+    expect(screen.queryByText(`${MAX_REMINDERS} recordatorios por enviar`)).not.toBeInTheDocument();
+  });
+
+  it("cada tarjeta dice cuándo se redactó, porque el texto no se reescribe", () => {
+    render(<BandejaRecordatorios rows={[fila({ createdAt: "2026-09-01T10:00:00Z" })]} f={f} />);
+    // La mora de la cabecera es la de hoy; la fecha, la del borrador.
+    expect(screen.getByText("41 días de mora")).toBeInTheDocument();
+    expect(screen.getByText(`Redactado el ${f.date("2026-09-01T10:00:00Z")}`)).toBeInTheDocument();
   });
 
   it("sin recordatorios explica por qué, sin guion mudo ni un cero suelto", () => {

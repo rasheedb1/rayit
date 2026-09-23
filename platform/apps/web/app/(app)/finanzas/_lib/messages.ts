@@ -34,6 +34,8 @@ export const MESSAGES = {
     vacioDescripcion:
       "Aparecen solos: una semana antes del vencimiento, el día que vence y a los 7, 21 y 45 días de mora. Si no hay ninguno, ninguna factura llegó todavía a uno de esos días.",
     asunto: "Asunto",
+    redactadoEl: "Redactado el",
+    primeros: "Los primeros",
     copiar: "Copiar",
     copiado: "Copiado",
     copiadoAviso: "Asunto y cuerpo copiados",

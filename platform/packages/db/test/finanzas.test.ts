@@ -654,6 +654,33 @@ describe('bandeja de recordatorios (FIN-4)', () => {
     assert.deepEqual(pendientes.map((f) => f.id), [N4, N3], 'el marcado sale de los pendientes');
   });
 
+  test('una factura pagada saca sus recordatorios de la bandeja, pero los deja en su ficha', async () => {
+    const pendientesAntes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { pendingOnly: true }));
+    assert.ok(pendientesAntes.some((r) => r.invoiceId === FV_007), 'antes de pagar sí está en la bandeja');
+
+    await t.admin(`UPDATE invoice SET status = 'paid', paid_amount = total, paid_at = now() WHERE id = '${FV_007}'`);
+    try {
+      const pendientes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { pendingOnly: true }));
+      assert.ok(!pendientes.some((r) => r.invoiceId === FV_007), 'nadie tiene que cobrarle a quien ya pagó');
+      const enLaFicha = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }));
+      assert.equal(enLaFicha.length, 3, 'la ficha sigue siendo el historial del cobro');
+    } finally {
+      await t.admin(`UPDATE invoice SET status = 'sent', paid_amount = 0, paid_at = NULL WHERE id = '${FV_007}'`);
+    }
+  });
+
+  test('los días de mora salen de la zona del workspace, no de la del servidor', async () => {
+    const [r] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listReminders(tx, { invoiceId: FV_007 }));
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query<{ esperado: number }>(
+        `SELECT (((now() AT TIME ZONE w.timezone)::date) - i.due_on)::int AS esperado
+           FROM invoice i JOIN workspace w ON w.id = i.workspace_id WHERE i.id = $1`,
+        [FV_007],
+      ),
+    );
+    assert.equal(r?.daysOverdue, rows[0]?.esperado);
+  });
+
   test('no se marca el recordatorio de otro workspace', async () => {
     assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markReminderSent(tx, N_AJENA)), false);
     const ajenos = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReminders(tx));

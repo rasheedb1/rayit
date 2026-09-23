@@ -183,13 +183,21 @@ export interface ReminderRow {
 }
 
 export interface ListRemindersParams {
-  /** Solo los que todavía no se han marcado como enviados. */
+  /**
+   * Solo los que quedan por mandar: sin marcar Y de una factura que
+   * todavía se cobra (`sent` o `partial`). Cuando la factura se paga o
+   * se anula, sus borradores dejan de ser trabajo pendiente; siguen
+   * visibles en la ficha de la factura, que es su historial.
+   */
   pendingOnly?: boolean;
   /** Solo los de esta factura. */
   invoiceId?: string;
-  /** 1..200. Por defecto 50. */
+  /** 1..{@link MAX_REMINDERS}. Por defecto 50. */
   limit?: number;
 }
+
+/** El tope duro de una página de la bandeja. Quien lo alcanza sabe que hay más. */
+export const MAX_REMINDERS = 200;
 
 export class InvoiceNotFound extends Error {
   constructor(id: string) {
@@ -1163,10 +1171,17 @@ interface ReminderRaw {
  * `dismissed_at` descarta la fila para siempre; `read_at` es «lo
  * mandé», que es lo que hace el botón de la bandeja. Un recordatorio
  * sin paso legible en su `action_url` no es de FIN-4 y se ignora.
+ *
+ * `days_overdue` se calcula en la zona del WORKSPACE, no con
+ * `CURRENT_DATE` (que es el día del servidor, UTC), igual que
+ * `getCashflowInputs`: con `CURRENT_DATE`, en Bogotá pasadas las 19:00
+ * la pastilla diría «1 día de mora» al lado de un cuerpo que dice
+ * «vence hoy». La mora es la de HOY, no la del día en que se redactó el
+ * texto: por eso la tarjeta enseña también cuándo se escribió.
  */
 export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams = {}): Promise<ReminderRow[]> {
   if (params.invoiceId !== undefined && !isUuid(params.invoiceId)) return [];
-  const limit = Math.min(200, Math.max(1, params.limit ?? 50));
+  const limit = Math.min(MAX_REMINDERS, Math.max(1, params.limit ?? 50));
   const { rows } = await tx.query<ReminderRaw>(
     `SELECT n.id, n.severity, n.title_es, n.body_es, n.action_url,
             to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
@@ -1174,12 +1189,13 @@ export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams
             i.id AS invoice_id, i.number, co.name AS company_name, i.currency,
             (i.total - i.paid_amount)::text AS outstanding,
             to_char(i.due_on, 'YYYY-MM-DD') AS due_on,
-            (CURRENT_DATE - i.due_on)::int  AS days_overdue
+            (((now() AT TIME ZONE w.timezone)::date) - i.due_on)::int AS days_overdue
        FROM notification n
-       JOIN invoice i  ON i.id = n.entity_id
-       JOIN company co ON co.id = i.company_id
+       JOIN invoice i   ON i.id = n.entity_id
+       JOIN company co  ON co.id = i.company_id
+       JOIN workspace w ON w.id = i.workspace_id
       WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice' AND n.dismissed_at IS NULL
-        AND ($1::boolean IS NOT TRUE OR n.read_at IS NULL)
+        AND ($1::boolean IS NOT TRUE OR (n.read_at IS NULL AND i.status IN ('sent', 'partial')))
         AND ($2::uuid IS NULL OR n.entity_id = $2)
       ORDER BY CASE n.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
                i.due_on, i.number, n.created_at

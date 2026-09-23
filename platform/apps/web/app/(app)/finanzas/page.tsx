@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { rateToPct } from "@mc/core";
-import { getReceivablesKpis, listInvoices, listReminders, type InvoiceListRow } from "@mc/db/queries/finanzas";
+import { getReceivablesKpis, listInvoices, listReminders, MAX_REMINDERS, type InvoiceListRow } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -104,7 +104,7 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
     invoices: await listInvoices(tx, { status: statuses ? [...statuses] : undefined, limit: 100 }),
     // La bandeja de FIN-4: lo que el job dejó redactado y todavía no se
     // ha marcado como enviado. El filtro de la lista no la toca.
-    recordatorios: await listReminders(tx, { pendingOnly: true }),
+    recordatorios: await listReminders(tx, { pendingOnly: true, limit: MAX_REMINDERS }),
   }));
   // Los KPI suman facturas de todo el workspace, así que van en SU
   // moneda (workspace.currency), no en una constante. Cada fila, en
