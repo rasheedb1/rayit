@@ -25,10 +25,10 @@ test('la semilla es determinista: dos llamadas producen el mismo texto y coincid
   );
 });
 
-test('la semilla trae exactamente N filas: 44 permisos, 10 roles y la suma de la matriz', () => {
+test('la semilla trae exactamente N filas: 45 permisos, 10 roles y la suma de la matriz', () => {
   const n = contarFilas();
   // CAM-5 sumó campanas.resultado.calcular: +1 permiso y +5 filas (los roles con todo el catálogo o todo Campañas).
-  assert.deepEqual(n, { permission: 44, role: 10, rolePermission: 225 });
+  assert.deepEqual(n, { permission: 45, role: 10, rolePermission: 230 });
   const sql = generarSemillaSql();
   // Cada tupla de permission empieza por la clave; cada rol, por NULL; cada fila de la matriz, por la clave del rol.
   assert.equal((sql.match(/^  \('[a-z]+\.[a-z]+\.[a-z]+', '[a-z]+', /gm) ?? []).length, n.permission);

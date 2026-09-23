@@ -415,6 +415,20 @@ extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
   copia: era el mismo camino de seguridad escrito dos veces, y solo uno
   tenía prueba.
 
+## El reporte a la marca (CAM-6)
+
+`@mc/db/queries/campanas` reexporta `campanas/reporte.ts` —
+`generateReport`, `listCampaignReports`, `getReport`, `markReportSent`,
+con `WorkspaceTx`— y `campanas/reporte-publico.ts` —`readPublicReport`,
+la cuarta función pública, con `PublicShareTx` como las tres de
+Cotizar—. El payload lo arma `construirReporte` de `@mc/core` (lista
+blanca, versión 1) y se congela en `report.payload`: nada lo reescribe,
+ni un snapshot nuevo ni marcar «enviado» ni la función pública, que
+solo toca `status`, `viewed_at` y `view_count` (0037 §2). Generar sobre
+un borrador lo reemplaza; sobre uno enviado crea otra versión, y al
+enviarla la anterior apunta a ella (`superseded_by`) sin dejar de abrir.
+`test/campanas-reporte.test.ts` tiene la prueba byte a byte.
+
 ## Ciclo de una migración nueva
 
 1. `db/migrations/00NN_lo_que_sea.sql` (las aplicadas son inmutables).
