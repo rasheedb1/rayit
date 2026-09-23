@@ -1,0 +1,27 @@
+{
+  "_comentario": "Entradas de evaluateOutreachAlerts por workspace, con la forma de outbound_health (0037) más rebotes y enrolamientos activos. «enProblemas» tiene 3 rebotes en 20 intentos (15 %) y una cuenta caída; «sano» no tiene nada que avisar.",
+  "enProblemas": {
+    "health": {
+      "enabled": true,
+      "queue": { "stuck": 0 },
+      "window": { "sent": 18 },
+      "accountsDown": 1,
+      "llm": { "spentToday": 1.4, "dailyCap": 5 }
+    },
+    "emailAttempts": 20,
+    "bounces": 3,
+    "activeEnrollments": 6
+  },
+  "sano": {
+    "health": {
+      "enabled": true,
+      "queue": { "stuck": 0 },
+      "window": { "sent": 30 },
+      "accountsDown": 0,
+      "llm": { "spentToday": 0.8, "dailyCap": 5 }
+    },
+    "emailAttempts": 30,
+    "bounces": 1,
+    "activeEnrollments": 4
+  }
+}
