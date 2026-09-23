@@ -213,10 +213,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
     title: "Pantalla Conexiones",
-    desc: "Lista sobre connection_health, botón para conectar cada red, estado (activa, vencida, necesita reautorizar), horas desde la última sincronización, y el paso manual «activa Analytics en TikTok».",
+    desc: "Una sola tabla sobre connection_health con las dos clases de fila (por @ y autorizada), estado derivado del reloj (activa, vence pronto, vencida, necesita reautorizar, error), horas desde la última sincronización, «Conectar» por red, «Reautorizar» en rojo y el paso manual «Activa Analytics en TikTok».",
     done: "Una conexión con token vencido se ve en rojo con el botón de reautorizar.",
-    status: "pendiente",
-    note: "Pospuesta con CON-3 (versión avanzada). La pantalla de cuentas del MVP la trae CON-10.",
+    status: "hecho",
+    note: "Hecha el 23-sep sobre la pantalla de CON-10. El estado NO se copia de social_connection.status: se compara access_expires_at con el reloj, porque oauth.refresh todavía no corre en producción (CIM-7) y una cuenta con el token ya vencido seguía viéndose verde. «Conectar», «Reautorizar» y el paso manual viven detrás de oauth_connect (OAUTH_CONNECT=1); con la bandera apagada —lo que hay hoy en producción— la pantalla es la de CON-10 con el estado, la frescura y la columna «Acceso» nuevos. Probada con el escenario del --demo del worker contra Postgres embebido (pagina.test.tsx) y 17 pruebas de las funciones puras. Lo único que falta para encenderla es lo de CON-3 §5: la prueba en vivo con las credenciales del sandbox. Detalle en docs/propuestas/CON-4.md.",
   },
   {
     id: "CON-10", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1"],
