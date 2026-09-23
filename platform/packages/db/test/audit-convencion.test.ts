@@ -37,16 +37,27 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
 
 const ESCRITURA_RE = /\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\btx\.db\.(?:insert|update|delete)\(/;
 const BITACORA_RE = /\baudit(?:AsJob)?\(/;
-const FUNCION_RE = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\(/gm;
+/** Declaraciones de nivel superior: `function x(`, y `const x = async (` / `const x = (` / `const x = async x =>`. */
+const FUNCION_RE = /^(?:export\s+)?(?:(?:async\s+)?function\s+(\w+)|const\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\b|\(|\w+\s*=>))/gm;
 
 interface Funcion {
   nombre: string;
   cuerpo: string;
 }
 
+/**
+ * Quita los comentarios (bloque y de línea entera): un JSDoc que dice
+ * «audit(» no cuenta como bitácora. Los `//` dentro de una cadena
+ * (https://…) no empiezan línea, así que no se tocan.
+ */
+function sinComentarios(fuente: string): string {
+  return fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
 /** Parte el fuente por declaración de función; el cuerpo llega hasta la siguiente declaración. */
-function funcionesDe(fuente: string): Funcion[] {
-  const inicios = [...fuente.matchAll(FUNCION_RE)].map((m) => ({ nombre: m[1]!, at: m.index }));
+function funcionesDe(fuenteConComentarios: string): Funcion[] {
+  const fuente = sinComentarios(fuenteConComentarios);
+  const inicios = [...fuente.matchAll(FUNCION_RE)].map((m) => ({ nombre: (m[1] ?? m[2])!, at: m.index }));
   return inicios.map((f, i) => ({ nombre: f.nombre, cuerpo: fuente.slice(f.at, inicios[i + 1]?.at ?? fuente.length) }));
 }
 
@@ -76,6 +87,23 @@ describe('toda escritura de queries/ deja bitácora (ACC-2)', () => {
       }
     });
   }
+
+  test('una escritura en función flecha detrás de una que audita no se esconde, y un comentario no cuenta como audit(', () => {
+    const fuente = [
+      'export async function transitionInvoice(tx) {',
+      "  await tx.query('UPDATE invoice SET status = $2 WHERE id = $1');",
+      '  await audit(tx, {});',
+      '}',
+      '/** Marca pagada. Aquí iría audit( pero no está. */',
+      'export const markPaid = async (tx, id) => {',
+      "  await tx.query('UPDATE invoice SET status = 1 WHERE id = $1', [id]);",
+      '};',
+      'const quiet = (tx) => tx.db.delete(invoice);',
+    ].join('\n');
+    const escriben = funcionesDe(fuente).filter((f) => ESCRITURA_RE.test(f.cuerpo));
+    assert.deepEqual(escriben.map((f) => f.nombre), ['transitionInvoice', 'markPaid', 'quiet']);
+    assert.deepEqual(escriben.filter((f) => !BITACORA_RE.test(f.cuerpo)).map((f) => f.nombre), ['markPaid', 'quiet']);
+  });
 
   test('la búsqueda reconoce las cuatro formas de escribir y no confunde FOR UPDATE ni DO UPDATE', () => {
     assert.ok(ESCRITURA_RE.test('INSERT INTO invoice (a) VALUES (1)'));

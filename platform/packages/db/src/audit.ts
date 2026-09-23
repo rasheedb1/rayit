@@ -36,7 +36,9 @@
  * leer la bitácora (la pantalla es de la fase 2, AGE-2) ni corregirla
  * (mc_app no tiene UPDATE ni DELETE sobre audit_log, 0025 §5).
  */
-import { redactSecrets } from '@mc/connectors';
+// Solo el redactor, por su subruta: el barril de @mc/connectors trae
+// clientes, OAuth y ayudas de prueba que ninguna consulta necesita.
+import { redactSecrets } from '@mc/connectors/redact';
 import { assertWorkspaceId, type WorkspaceTx } from './client.ts';
 
 // ---------------------------------------------------------------------
@@ -71,6 +73,7 @@ export const AUDIT_ACTIONS = [
   'connection.authorized',
   'connection.disconnected',
   'consent.recorded',
+  'consent.revoked',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -113,6 +116,9 @@ export const CORREO_OMITIDO = '[correo omitido]';
  *   secretref   redactSecrets la deja a propósito (es una referencia,
  *               sirve para depurar el almacén); en la bitácora no va ni eso.
  *   ip          PII; la evidencia de consentimiento ya la guarda donde toca.
+ *               También sus variantes (clientip, remoteip, ipaddress,
+ *               remoteaddr, xforwardedfor, xrealip). 'ip' no va como
+ *               fragmento: taparía zip, description o recipient.
  *   raw         la respuesta cruda de una API: trae lo que la API quiera.
  *   evidence    ip, user agent, texto mostrado: vive en data_consent.
  *   email(s)    correos de terceros (contact) o del propio usuario.
@@ -121,13 +127,22 @@ export const CORREO_OMITIDO = '[correo omitido]';
  *   cookie, sessionid, authuserid, password.
  */
 export const CLAVES_PROHIBIDAS_EN_BITACORA: { readonly exactas: readonly string[]; readonly fragmentos: readonly string[] } = {
-  exactas: ['secretref', 'ip', 'raw', 'evidence', 'email', 'emails'],
-  fragmentos: ['email', 'correo', 'phone', 'telefono', 'celular', 'whatsapp', 'useragent', 'cookie', 'sessionid', 'authuserid', 'password'],
+  exactas: ['secretref', 'ip', 'ips', 'clientip', 'remoteip', 'userip', 'raw', 'evidence', 'email', 'emails'],
+  fragmentos: [
+    'email', 'correo', 'phone', 'telefono', 'celular', 'whatsapp', 'useragent', 'cookie', 'sessionid', 'authuserid', 'password',
+    'ipaddr', 'ipaddress', 'direccionip', 'remoteaddr', 'forwardedfor', 'realip',
+  ],
 };
 
 const EXACTAS = new Set(CLAVES_PROHIBIDAS_EN_BITACORA.exactas);
 const FRAGMENTOS = CLAVES_PROHIBIDAS_EN_BITACORA.fragmentos;
-const EMAIL_RE = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+/**
+ * Un correo: parte local de caracteres de correo que NO viene pegada a
+ * otro de esos caracteres ni a '/', y dominio con TLD de letras. Así no
+ * se come una URL con @ (tiktok.com/@selva.thegolden/…) ni una mención
+ * entre paréntesis ((@cafe.alma)): antes de su @ no hay parte local.
+ */
+const EMAIL_RE = /(?<![A-Za-z0-9._%+\-/])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9\-])/g;
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[-_\s]/g, '');

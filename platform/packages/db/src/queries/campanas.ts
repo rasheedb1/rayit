@@ -596,6 +596,21 @@ async function lockEditableCampaign(tx: WorkspaceTx, campaignId: string): Promis
   return row.status;
 }
 
+/** El enlace y el principal de la campaña ANTES de escribir, para el before de la bitácora (ACC-2). */
+async function linkState(tx: WorkspaceTx, campaignId: string, postId: string): Promise<{ link: { deliverable: string | null; isPrimary: boolean } | null; primaryPostId: string | null }> {
+  const { rows } = await tx.query<{ post_id: string; deliverable: string | null; is_primary: boolean }>(
+    `SELECT cp.post_id, cp.deliverable, cp.is_primary
+     FROM campaign_post cp JOIN campaign c ON c.id = cp.campaign_id
+     WHERE cp.campaign_id = $1 AND (cp.post_id = $2 OR cp.is_primary)`,
+    [campaignId, postId],
+  );
+  const own = rows.find((r) => r.post_id === postId);
+  return {
+    link: own ? { deliverable: own.deliverable, isPrimary: own.is_primary } : null,
+    primaryPostId: rows.find((r) => r.is_primary)?.post_id ?? null,
+  };
+}
+
 async function findCampaignPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   const row = (await listCampaignPosts(tx, campaignId)).find((p) => p.postId === postId);
   if (!row) throw new CampaignPostNotFoundError();
@@ -614,6 +629,7 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
   if (post.rows.length === 0) throw new PostNotFoundError(input.postId);
 
   const deliverable = input.deliverable?.trim() || null;
+  const previous = await linkState(tx, input.campaignId, input.postId);
   if (input.isPrimary === true) {
     await tx.query(
       `UPDATE campaign_post SET is_primary = false
@@ -631,12 +647,16 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
     [input.campaignId, input.postId, deliverable, input.isPrimary ?? null],
   );
   const row = await findCampaignPost(tx, input.campaignId, input.postId);
+  // Si ya estaba asociado, before trae el entregable y la marca de antes; si
+  // pasó a principal, el principal anterior (que se desmarcó) queda anotado.
   await audit(tx, {
     action: 'campaign.post_linked',
     entityType: 'campaign',
     entityId: input.campaignId,
-    before: null,
-    after: { postId: row.postId, deliverable: row.deliverable, isPrimary: row.isPrimary },
+    before: previous.link || previous.primaryPostId
+      ? { postId: input.postId, linked: previous.link !== null, deliverable: previous.link?.deliverable ?? null, isPrimary: previous.link?.isPrimary ?? false, primaryPostId: previous.primaryPostId }
+      : null,
+    after: { postId: row.postId, deliverable: row.deliverable, isPrimary: row.isPrimary, primaryPostId: row.isPrimary ? row.postId : previous.primaryPostId },
   });
   return row;
 }
@@ -659,6 +679,7 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
 /** Marca el post como principal y desmarca los demás de la campaña. */
 export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, campaignId);
+  const previous = await linkState(tx, campaignId, postId);
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
      FROM campaign c
@@ -667,7 +688,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
     [campaignId, postId],
   );
   if (!rows.some((r) => r.post_id === postId)) throw new CampaignPostNotFoundError();
-  await audit(tx, { action: 'campaign.primary_post_set', entityType: 'campaign', entityId: campaignId, before: null, after: { postId } });
+  await audit(tx, { action: 'campaign.primary_post_set', entityType: 'campaign', entityId: campaignId, before: { primaryPostId: previous.primaryPostId }, after: { primaryPostId: postId } });
   return findCampaignPost(tx, campaignId, postId);
 }
 

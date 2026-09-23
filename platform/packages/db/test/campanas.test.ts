@@ -211,8 +211,10 @@ describe('asociar y quitar posts', () => {
     // Bitácora (ACC-2): cada asociación y la quitada dejan su fila sobre la campaña; el «ya no estaba» no escribe nada.
     const asociadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked');
     assert.equal(asociadas.length, 2);
-    assert.deepEqual(asociadas[0]?.after, { postId: POST_D05_YOUTUBE_NUTRIVE, deliverable: 'dedicado', isPrimary: false });
-    assert.equal(asociadas[0]?.before, null);
+    const principalFresko = (asociadas[0]?.before as { primaryPostId: string | null }).primaryPostId;
+    assert.deepEqual(asociadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: false, deliverable: null, isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[0]?.after, { postId: POST_D05_YOUTUBE_NUTRIVE, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[1]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: true, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko }, 'la segunda vez ya estaba');
     const quitadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_unlinked');
     assert.equal(quitadas.length, 1);
     assert.deepEqual(quitadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE });
@@ -236,7 +238,10 @@ describe('asociar y quitar posts', () => {
     await laura((tx) => unlinkPost(tx, CAMPAIGN_FRESKO, POST_D05_YOUTUBE_NUTRIVE));
 
     const principal = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.primary_post_set');
-    assert.deepEqual(principal.map((f) => f.after), [{ postId: POST_D03_TIKTOK_FRESKO }], 'el intento sobre un post ajeno a la campaña no escribe');
+    assert.deepEqual(principal.map((f) => [f.before, f.after]), [[{ primaryPostId: POST_D05_YOUTUBE_NUTRIVE }, { primaryPostId: POST_D03_TIKTOK_FRESKO }]], 'el intento sobre un post ajeno a la campaña no escribe');
+    // Asociar D05 como principal desmarcó al anterior: queda en before, no se pierde.
+    const comoPrincipal = (await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked')).at(-1);
+    assert.equal((comoPrincipal?.after as { primaryPostId: string }).primaryPostId, POST_D05_YOUTUBE_NUTRIVE);
   });
 
   test('un post o una campaña de otro workspace no se pueden asociar', async () => {

@@ -180,7 +180,10 @@ describe('redacción', () => {
     for (const k of ['secretRef', 'secret_ref', 'email', 'contactEmail', 'correo_electronico', 'phone', 'telefono', 'ip', 'userAgent', 'user-agent', 'evidence', 'raw', 'cookie', 'sessionId', 'authUserId', 'password']) {
       assert.equal(isForbiddenAuditKey(k), true, k);
     }
-    for (const k of ['handle', 'status', 'zip', 'drawn', 'total', 'scopes', 'tokensCount', '_job', 'name']) {
+    for (const k of ['clientIp', 'ipAddress', 'remote_addr', 'x-forwarded-for', 'X-Real-IP', 'userIp', 'direccion_ip']) {
+      assert.equal(isForbiddenAuditKey(k), true, k);
+    }
+    for (const k of ['handle', 'status', 'zip', 'drawn', 'total', 'scopes', 'tokensCount', '_job', 'name', 'description', 'recipient', 'shipping']) {
       assert.equal(isForbiddenAuditKey(k), false, k);
     }
   });
@@ -212,6 +215,17 @@ describe('redacción', () => {
       status: 'active',
       scopes: ['user.info.basic'],
     });
+    assert.deepEqual(
+      sanitizeForAudit({
+        trackingUrl: 'https://www.tiktok.com/@selva.thegolden/video/7312',
+        brief: 'Mencionar (@cafe.alma) y a @nicolasduartea en el reel',
+      }),
+      {
+        trackingUrl: 'https://www.tiktok.com/@selva.thegolden/video/7312',
+        brief: 'Mencionar (@cafe.alma) y a @nicolasduartea en el reel',
+      },
+      'una URL con @ y una mención no son correos',
+    );
     assert.equal(sanitizeForAudit(undefined), null);
     assert.equal(sanitizeForAudit(null), null);
   });

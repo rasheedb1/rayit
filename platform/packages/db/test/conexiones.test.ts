@@ -87,6 +87,7 @@ describe('alta, reconexión y consentimiento', () => {
     assert.deepEqual(bitacora.map((f) => f.action), ['connection.added', 'connection.reconnected']);
     assert.equal(bitacora[0]?.entity_type, 'social_connection');
     assert.equal(bitacora[0]?.before, null);
+    assert.deepEqual(bitacora[1]?.before, { accessMode: 'direct_oauth', status: 'active', deleted: false }, 'lo que había antes de reconectar');
     assert.deepEqual(bitacora[1]?.after, {
       platformId: 'tiktok', externalAccountId: 'open_id_nueva_cuenta', handle: 'laura.renombrada', accountType: input().accountType,
       accessMode: 'direct_oauth', scopes: ['user.info.basic'], accessExpiresAt: '2026-09-24T12:00:00.000Z',
@@ -132,6 +133,10 @@ describe('alta, reconexión y consentimiento', () => {
     assert.deepEqual(registrados.map((r) => r.length), [1, 1, 1]);
     assert.deepEqual(registrados[0]?.[0]?.after, { connectionId: id, purpose: consents[0]?.purpose, policyVersion: '2026-09-22' });
     assert.equal(JSON.stringify(registrados).includes('203.0.113.7'), false);
+    // La segunda de analytics revocó la primera: esa revocación también queda.
+    const revocada = consents.find((c) => c.purpose === 'analytics' && c.revokedAt !== null)!;
+    const [rev] = await filasDeBitacora(t, WORKSPACE_LAURA, revocada.id, 'consent.revoked');
+    assert.deepEqual(rev?.after, { purpose: 'analytics', revoked: true, reason: 'replaced' });
   });
 });
 
@@ -150,6 +155,11 @@ describe('desconectar', () => {
     assert.equal(desconectada.length, 1, 'el intento desde el workspace ajeno no dejó fila');
     assert.deepEqual(desconectada[0]?.before, { status: 'active', platformId: 'tiktok', accessMode: 'direct_oauth' });
     assert.deepEqual(desconectada[0]?.after, { status: 'disabled', platformId: 'tiktok', accessMode: 'direct_oauth' });
+    // Los dos consentimientos vigentes se revocaron al desconectar, cada uno con su fila.
+    const vigentes = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listConsents(tx, found.id))).filter((c) => c.purpose === 'audience_demographics' || c.revokedAt !== null);
+    const porDesconexion = (await Promise.all(vigentes.map((c) => filasDeBitacora(t, WORKSPACE_LAURA, c.id, 'consent.revoked')))).flat()
+      .filter((f) => (f.after as { reason: string }).reason === 'disconnected');
+    assert.equal(porDesconexion.length, 2);
     assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listConnections(tx))).some((r) => r.id === found.id), false);
     const after = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findConnectionByAccount(tx, 'tiktok', 'open_id_nueva_cuenta'));
     assert.equal(after!.status, 'disabled');
