@@ -96,6 +96,36 @@ CREATE TRIGGER outbound_angle_updated BEFORE UPDATE ON outbound_angle
 -- mínimo («enviar el mejor»); por debajo del mínimo, a revisión humana.
 -- dead_band evita regenerar por décimas: a menos de esa distancia del
 -- umbral, el mensaje pasa.
+--
+-- Los pesos se comprueban en la base, no en el juez: un workspace que
+-- edita su rúbrica no puede dejar una nota ponderada fuera de 0–10 (con
+-- pesos que no suman 1) ni sin alguna de las cuatro dimensiones.
+CREATE FUNCTION outbound_rubric_weights_valid(p_weights jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+  -- CASE y no AND: Postgres no promete el orden de un AND, y el cast a
+  -- numeric de algo que no es un número lanzaría en vez de decir false.
+  SELECT CASE
+           WHEN jsonb_typeof(p_weights) <> 'object'
+                OR NOT (p_weights ?& ARRAY['relevance','quality','structure','voice'])
+                OR (p_weights - ARRAY['relevance','quality','structure','voice']) <> '{}'::jsonb
+                OR jsonb_typeof(p_weights -> 'relevance') <> 'number'
+                OR jsonb_typeof(p_weights -> 'quality') <> 'number'
+                OR jsonb_typeof(p_weights -> 'structure') <> 'number'
+                OR jsonb_typeof(p_weights -> 'voice') <> 'number'
+             THEN false
+           ELSE (p_weights ->> 'relevance')::numeric >= 0
+                AND (p_weights ->> 'quality')::numeric >= 0
+                AND (p_weights ->> 'structure')::numeric >= 0
+                AND (p_weights ->> 'voice')::numeric >= 0
+                AND abs((p_weights ->> 'relevance')::numeric + (p_weights ->> 'quality')::numeric
+                        + (p_weights ->> 'structure')::numeric + (p_weights ->> 'voice')::numeric - 1) < 0.001
+         END;
+$$;
+
 CREATE TABLE outbound_step_rubric (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        uuid REFERENCES workspace(id) ON DELETE CASCADE,  -- NULL = por defecto
@@ -109,8 +139,9 @@ CREATE TABLE outbound_step_rubric (
   dead_band           numeric(3,1) NOT NULL DEFAULT 0.3 CHECK (dead_band BETWEEN 0 AND 2),
   max_attempts        int NOT NULL DEFAULT 5 CHECK (max_attempts BETWEEN 1 AND 10),
   -- Peso de cada dimensión en la nota (relevance, quality, structure,
-  -- voice). Suman 1.
-  weights             jsonb NOT NULL DEFAULT '{"relevance":0.3,"quality":0.25,"structure":0.25,"voice":0.2}'::jsonb,
+  -- voice): las cuatro, ninguna más, no negativas y sumando 1 (CHECK).
+  weights             jsonb NOT NULL DEFAULT '{"relevance":0.3,"quality":0.25,"structure":0.25,"voice":0.2}'::jsonb
+                           CONSTRAINT outbound_step_rubric_weights_check CHECK (outbound_rubric_weights_valid(weights)),
   -- Qué mira el juez en cada dimensión para este paso.
   criteria_es         jsonb NOT NULL DEFAULT '{}'::jsonb,
   max_chars           int CHECK (max_chars BETWEEN 1 AND 10000),
@@ -294,7 +325,9 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 -- token reescribe el secreto con la misma ref, nunca crea otra fila.
 --
 -- daily_cap y weekly_cap son los de la CUENTA (el proveedor castiga a
--- la cuenta, no al workspace); NULL = el de outbound_policy.
+-- la cuenta, no al workspace); NULL = el de outbound_policy. Se cuentan
+-- en outbound_counter con channel_account_id (6.2), así que tres
+-- LinkedIn de una agencia en el mismo workspace no comparten plaza.
 -- warmup_started_at arranca el calentamiento progresivo (VEN-15).
 -- =====================================================================
 CREATE TABLE outreach_channel_account (
@@ -324,7 +357,13 @@ CREATE TABLE outreach_channel_account (
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now(),
   -- Gmail es correo; Unipile es LinkedIn, Instagram o WhatsApp.
-  CHECK ((provider = 'gmail_oauth') = (channel = 'email'))
+  CHECK ((provider = 'gmail_oauth') = (channel = 'email')),
+  -- La dirección de Gmail se guarda normalizada: 'Laura@gmail.com' y
+  -- 'laura@gmail.com' son el mismo buzón, y con dos filas el buzón
+  -- tendría dos topes y podría enviar el doble. El account_id de
+  -- Unipile distingue mayúsculas y se deja tal cual.
+  CONSTRAINT outreach_channel_account_gmail_lower_check
+    CHECK (provider <> 'gmail_oauth' OR provider_account_id = lower(btrim(provider_account_id)))
 );
 CREATE UNIQUE INDEX outreach_channel_account_provider_idx
   ON outreach_channel_account (workspace_id, provider, provider_account_id);
@@ -343,6 +382,8 @@ CREATE TRIGGER outreach_channel_account_updated BEFORE UPDATE ON outreach_channe
 -- `steps` queda por compatibilidad y el motor ya no la lee; `channel`
 -- sigue siendo el canal principal de la secuencia, y `active` convive
 -- con `status` hasta que la pantalla de secuencias (VEN-13) la retire.
+-- Mientras convivan, `status` manda y `active` se deriva de él con un
+-- disparador (3.1): no hay dos verdades que se puedan contradecir.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -386,6 +427,35 @@ BEGIN
     ALTER TABLE outbound_sequence FORCE ROW LEVEL SECURITY;
   END IF;
 END $$;
+
+-- `active` es la sombra de `status` (active ⇔ status = 'active'):
+--   · al crear, o si cambia status, active se recalcula desde status;
+--   · si solo cambia active (código de antes de 0037), status lo sigue:
+--     true → 'active', false → 'paused'. Así una pantalla que escribe
+--     active = false para la secuencia también para el motor, que lee
+--     status;
+--   · si cambian los dos y no concuerdan, gana status.
+-- Un alta que solo diga active (sin status) nace en 'draft' y, por
+-- tanto, con active = false: una secuencia nueva no arranca sola.
+CREATE FUNCTION outbound_sequence_sync_active()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE'
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.active IS DISTINCT FROM OLD.active THEN
+    NEW.status := CASE WHEN NEW.active THEN 'active' ELSE 'paused' END;
+  END IF;
+  NEW.active := (NEW.status = 'active');
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER outbound_sequence_sync_active
+  BEFORE INSERT OR UPDATE OF status, active ON outbound_sequence
+  FOR EACH ROW EXECUTE FUNCTION outbound_sequence_sync_active();
 
 CREATE FUNCTION outbound_sequence_timezone_check()
 RETURNS trigger
@@ -498,6 +568,9 @@ CREATE UNIQUE INDEX outbound_enrollment_contact_idx ON outbound_enrollment (sequ
 CREATE INDEX ON outbound_enrollment (workspace_id, status, resume_at);
 CREATE INDEX ON outbound_enrollment (contact_id);
 CREATE INDEX ON outbound_enrollment (deal_id);
+-- Borrar un paso pone a NULL current_step_id (SET NULL): sin índice,
+-- recorrería todos los enrolamientos.
+CREATE INDEX ON outbound_enrollment (current_step_id);
 CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -535,10 +608,34 @@ CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
 -- Message-ID real, que es lo que va en In-Reply-To y References (Chief
 -- ponía el threadId de Gmail y rompía los hilos fuera de Gmail).
 --
+-- Los dos motivos (hasta que VEN-10 los necesite separados, no hay una
+-- tercera columna):
+--   held_reason     por qué está RETENIDO (status = 'held'): lo lee la
+--                   persona que tiene que aprobarlo.
+--   blocked_reason  (de 0007) por qué TERMINÓ sin salir: el motivo de la
+--                   cancelación o del salto ('opted_out',
+--                   'outreach_disabled', 'replied'…). Y una sola anomalía
+--                   en un toque enviado: 'opted_out_in_flight', la baja
+--                   llegó mientras el despachador lo enviaba (ver 4.2).
+--
+-- status_changed_at es la hora del último CAMBIO de estado, y solo se
+-- mueve con él (4.2). La salud cuenta los fallos y las cancelaciones de
+-- la ventana por esa hora, no por updated_at: anotar opened_at en un
+-- toque que falló hace un mes no lo vuelve a contar como fallo de hoy.
+--
 -- La baja: el enlace de un correo lleva un token al azar que solo va en
 -- el correo; aquí se guarda su sha256 (optout_token_hash), así que quien
 -- lee la tabla no puede fabricar el enlace. public_optout (sección 9) lo
 -- busca por ese resumen.
+--
+-- Y quien escribe la tabla tampoco puede fabricar un toque «enviado»
+-- que sirva: optout_token_hash, provider_message_id y message_id_rfc
+-- son las pruebas de que la PLATAFORMA envió el mensaje, y solo las
+-- escribe el despachador (mc_worker) o quien migra (4.2). Sin eso, un
+-- workspace inventaba un token, guardaba su sha256 en un toque suyo en
+-- 'sent' a una ficha con el correo de otra persona y, con public_optout,
+-- la daba de baja en toda la plataforma sin haberle escrito nunca: el
+-- sabotaje que 0029 §1 cerró para el opted_out del CRM.
 -- =====================================================================
 ALTER TABLE outbound_touch
   ADD COLUMN enrollment_id       uuid REFERENCES outbound_enrollment(id) ON DELETE SET NULL,
@@ -552,12 +649,140 @@ ALTER TABLE outbound_touch
   ADD COLUMN opened_at           timestamptz,
   ADD COLUMN held_reason         text,
   ADD COLUMN optout_token_hash   text CHECK (optout_token_hash ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN status_changed_at   timestamptz NOT NULL DEFAULT now(),
   ADD COLUMN updated_at          timestamptz NOT NULL DEFAULT now();
 
 CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Los estados. El CHECK de 0007 se llama como lo nombró Postgres.
+-- ---------------------------------------------------------------------
+-- 4.1 · La regla de la baja, en las transiciones
+-- ---------------------------------------------------------------------
+-- La regla dura de 0007 (no se programa ni se envía a quien pidió la
+-- baja) se reescribe ANTES de traducir los estados de abajo: la de 0007
+-- saltaba en cualquier UPDATE de un toque en 'sent', y la traducción
+-- misma (replied → sent) fallaría con un contacto dado de baja.
+--
+-- Vigila el alta y los CAMBIOS, no las anotaciones: un UPDATE que no
+-- cambia ni el estado ni el contacto pasa siempre. Si no, después de una
+-- baja ya no se podría anotar replied_at («bórrame» es una respuesta),
+-- opened_at, thread_ref ni provider_message_id en un toque que ya salió.
+--
+--   · entrar en scheduled o processing con un contacto dado de baja: no.
+--   · entrar en sent (un alta, o desde draft, scheduled o held): no; es
+--     registrar como enviado algo que la regla no dejaba enviar.
+--   · processing → sent: SÍ. El despachador ya llamó al proveedor y el
+--     mensaje salió; negarlo dejaría la fila mintiendo (en processing, y
+--     después zombi y reintento: un SEGUNDO envío). Se registra, y se
+--     marca con blocked_reason = 'opted_out_in_flight' para que la salud
+--     lo cuente y nadie lo confunda con un envío normal.
+CREATE OR REPLACE FUNCTION enforce_outbound_optout()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  is_out boolean;
+BEGIN
+  IF NEW.contact_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE'
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.status NOT IN ('scheduled', 'processing', 'sent') THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT opted_out INTO is_out FROM contact WHERE id = NEW.contact_id;
+  IF NOT coalesce(is_out, false) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.status = 'sent' AND TG_OP = 'UPDATE' AND OLD.status = 'processing'
+     AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
+    NEW.blocked_reason := 'opted_out_in_flight';
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', NEW.contact_id
+    USING ERRCODE = 'check_violation';
+END;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 4.2 · Las columnas del despachador y la hora del cambio de estado
+-- ---------------------------------------------------------------------
+-- Candado por COLUMNA y por disparador, no por GRANT: Drizzle escribe
+-- todas las columnas en cada INSERT (las que no lleva, como DEFAULT), y
+-- un GRANT INSERT por columnas rompería cualquier alta de la web. Y un
+-- disparador mira current_user, que es el rol efectivo aunque la
+-- conexión herede otros (el mc_app_ci del CI es miembro de mc_worker).
+--
+-- Pueden escribirlas: mc_worker (el despachador, tras SET ROLE), y un
+-- superusuario o un rol con BYPASSRLS (quien migra o siembra). mc_app,
+-- no: ni al crear el toque ni después. Poner NULL donde ya había algo
+-- también es escribir.
+CREATE FUNCTION outbound_touch_worker_columns()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  puede boolean;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.optout_token_hash IS NULL AND NEW.provider_message_id IS NULL AND NEW.message_id_rfc IS NULL THEN
+      RETURN NEW;
+    END IF;
+  ELSIF NEW.optout_token_hash IS NOT DISTINCT FROM OLD.optout_token_hash
+        AND NEW.provider_message_id IS NOT DISTINCT FROM OLD.provider_message_id
+        AND NEW.message_id_rfc IS NOT DISTINCT FROM OLD.message_id_rfc THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT current_user = 'mc_worker' OR r.rolsuper OR r.rolbypassrls INTO puede
+    FROM pg_catalog.pg_roles r
+   WHERE r.rolname = current_user;
+  IF coalesce(puede, false) THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'optout_token_hash, provider_message_id y message_id_rfc los escribe solo el despachador (rol %).',
+                  current_user
+    USING ERRCODE = 'insufficient_privilege',
+          HINT = 'Son la prueba de que la plataforma envió el mensaje: la escribe el worker con asWorker.';
+END;
+$$;
+
+CREATE TRIGGER outbound_touch_worker_columns
+  BEFORE INSERT OR UPDATE OF optout_token_hash, provider_message_id, message_id_rfc ON outbound_touch
+  FOR EACH ROW EXECUTE FUNCTION outbound_touch_worker_columns();
+
+-- status_changed_at solo se mueve cuando cambia el estado; lo que venga
+-- escrito en un UPDATE que no lo cambia se ignora. Se crea después de
+-- rellenar las filas que ya existen (abajo).
+CREATE FUNCTION outbound_touch_status_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+  ELSE
+    NEW.status_changed_at := OLD.status_changed_at;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- ---------------------------------------------------------------------
+-- 4.3 · Los estados
+-- ---------------------------------------------------------------------
+-- El CHECK de 0007 se llama como lo nombró Postgres. Las filas que ya
+-- existen toman como hora de su último cambio la del envío o la del alta.
 DO $$
 DECLARE
   forzada boolean;
@@ -570,6 +795,10 @@ BEGIN
   END IF;
 
   ALTER TABLE outbound_touch DROP CONSTRAINT outbound_touch_status_check;
+  -- Traducir no es enviar: replied → sent en un contacto que después
+  -- pidió la baja es la misma fila de siempre con otro nombre, y la
+  -- regla de 4.1 lo tomaría por un envío nuevo.
+  ALTER TABLE outbound_touch DISABLE TRIGGER outbound_touch_optout;
   UPDATE outbound_touch
      SET status = CASE status
                     WHEN 'cancelled' THEN 'canceled'
@@ -582,11 +811,16 @@ BEGIN
    WHERE status IN ('cancelled', 'opted_out', 'bounced', 'blocked', 'replied');
   ALTER TABLE outbound_touch ADD CONSTRAINT outbound_touch_status_check
     CHECK (status IN ('draft','scheduled','processing','held','sent','failed','skipped','canceled'));
+  UPDATE outbound_touch SET status_changed_at = coalesce(sent_at, created_at);
+  ALTER TABLE outbound_touch ENABLE TRIGGER outbound_touch_optout;
 
   IF forzada THEN
     ALTER TABLE outbound_touch FORCE ROW LEVEL SECURITY;
   END IF;
 END $$;
+
+CREATE TRIGGER outbound_touch_status_changed BEFORE UPDATE OF status, status_changed_at ON outbound_touch
+  FOR EACH ROW EXECUTE FUNCTION outbound_touch_status_changed();
 
 ALTER TABLE outbound_touch
   ADD CONSTRAINT outbound_touch_held_reason_check CHECK (status <> 'held' OR held_reason IS NOT NULL),
@@ -607,30 +841,16 @@ CREATE INDEX outbound_touch_due_idx ON outbound_touch (coalesce(next_retry_at, s
   WHERE status = 'scheduled';
 CREATE INDEX outbound_touch_claimed_idx ON outbound_touch (claimed_at) WHERE status = 'processing';
 CREATE INDEX outbound_touch_enrollment_idx ON outbound_touch (enrollment_id);
+-- El único de arriba empieza por enrollment_id y solo cubre lo vivo:
+-- borrar un paso (step_id SET NULL) recorrería toda la cola.
+CREATE INDEX outbound_touch_step_idx ON outbound_touch (step_id);
 CREATE INDEX outbound_touch_provider_message_idx ON outbound_touch (provider_message_id)
   WHERE provider_message_id IS NOT NULL;
 CREATE INDEX outbound_touch_message_id_rfc_idx ON outbound_touch (message_id_rfc) WHERE message_id_rfc IS NOT NULL;
 CREATE INDEX outbound_touch_optout_token_idx ON outbound_touch (optout_token_hash)
   WHERE optout_token_hash IS NOT NULL;
-
--- La regla dura de 0007 (no se programa ni se envía a quien pidió la
--- baja) cubre también lo que un despachador tiene reclamado: si la baja
--- llega entre el reclamo y el envío, el UPDATE a processing o a sent
--- falla y el toque no sale.
-CREATE OR REPLACE FUNCTION enforce_outbound_optout() RETURNS trigger AS $$
-DECLARE
-  is_out boolean;
-BEGIN
-  IF NEW.status IN ('scheduled','processing','sent') AND NEW.contact_id IS NOT NULL THEN
-    SELECT opted_out INTO is_out FROM contact WHERE id = NEW.contact_id;
-    IF is_out THEN
-      RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', NEW.contact_id
-        USING ERRCODE = 'check_violation';
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- La salud cuenta fallos y cancelaciones por la hora del cambio de estado.
+CREATE INDEX outbound_touch_status_changed_idx ON outbound_touch (workspace_id, status, status_changed_at);
 
 
 -- =====================================================================
@@ -679,6 +899,9 @@ CREATE INDEX ON outbound_message (workspace_id, thread_ref, occurred_at);
 CREATE INDEX ON outbound_message (workspace_id, occurred_at DESC) WHERE direction = 'inbound' AND read_at IS NULL;
 CREATE INDEX ON outbound_message (enrollment_id);
 CREATE INDEX ON outbound_message (contact_id);
+-- Borrar un toque o una cuenta pone a NULL estas claves (SET NULL).
+CREATE INDEX ON outbound_message (touch_id);
+CREATE INDEX ON outbound_message (channel_account_id);
 
 -- ---------------------------------------------------------------------
 -- 5.2 · outbound_review: cada evaluación de la puerta de calidad
@@ -686,8 +909,10 @@ CREATE INDEX ON outbound_message (contact_id);
 -- Una fila por intento: lo que dijo el pre-vuelo (gates), la nota por
 -- dimensión (scores: relevance, quality, structure, voice, de 0 a 10),
 -- la nota ponderada, la pista para regenerar, los disparadores de riesgo
--- que fuerzan revisión humana y la decisión. Registra el modelo, los
--- tokens y el costo de cada llamada (0 si el intento no llegó al juez).
+-- que fuerzan revisión humana y la decisión. Guarda el modelo, los
+-- tokens y el costo de la llamada al JUEZ de ese intento (0 si no llegó
+-- al juez), como detalle de la revisión. Lo que suma el presupuesto no
+-- es esto: es outbound_llm_call (5.3), donde también está esa llamada.
 -- Es una bitácora: se inserta y no se corrige.
 --
 -- El costo va en numeric(14,6) y no en (14,2): una llamada cuesta
@@ -719,6 +944,36 @@ CREATE TABLE outbound_review (
 );
 CREATE INDEX ON outbound_review (workspace_id, created_at);
 
+-- ---------------------------------------------------------------------
+-- 5.3 · outbound_llm_call: cada llamada al modelo, con su costo
+-- ---------------------------------------------------------------------
+-- La regla del proyecto: se registran los tokens y el costo de CADA
+-- llamada. Una fila por llamada del outreach, sea cual sea el propósito:
+--   generate   el generador (claude-sonnet), también la que no llega al juez
+--   judge      el juez de la puerta de calidad (además de outbound_review)
+--   classify   el clasificador de intención de lo que entra (haiku, §5.7)
+--   recommend  el recomendador de secuencias (VEN-13)
+-- outbound_health suma aquí el gasto del día contra llm_daily_cap_usd:
+-- si una llamada no deja fila, el tope no la ve. Bitácora: se inserta,
+-- no se corrige ni se borra (7.4). touch_id y message_id dicen a qué
+-- toque o a qué mensaje recibido sirvió, si a alguno.
+CREATE TABLE outbound_llm_call (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  purpose             text NOT NULL CHECK (purpose IN ('generate','judge','classify','recommend')),
+  model               text NOT NULL CHECK (length(model) BETWEEN 1 AND 100),
+  input_tokens        int NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens       int NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  cost                numeric(14,6) NOT NULL DEFAULT 0 CHECK (cost >= 0),
+  cost_currency       char(3) NOT NULL DEFAULT 'USD',
+  touch_id            uuid REFERENCES outbound_touch(id) ON DELETE SET NULL,
+  message_id          uuid REFERENCES outbound_message(id) ON DELETE SET NULL,
+  created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ON outbound_llm_call (workspace_id, created_at);
+CREATE INDEX ON outbound_llm_call (touch_id);
+CREATE INDEX ON outbound_llm_call (message_id);
+
 
 -- =====================================================================
 -- 6 · Límites: política, contadores y disyuntores
@@ -739,8 +994,13 @@ CREATE INDEX ON outbound_review (workspace_id, created_at);
 --   postal_address       la dirección postal del pie de baja (CAN-SPAM).
 --                        Sin ella no se puede encender el envío: lo
 --                        exige un CHECK, no una pantalla.
---   max_pending_touches  contrapresión: con más toques en cola que esto,
---                        should_pause_outreach dice que se pare.
+--   max_pending_touches  contrapresión: mide ATRASO, no volumen. Con más
+--                        toques vencidos sin salir (scheduled con su hora
+--                        ya pasada) o en processing que esto,
+--                        should_pause_outreach dice que se pare. Lo
+--                        programado para dentro de unos días no cuenta:
+--                        una cadencia larga con muchas marcas no es un
+--                        atasco.
 ALTER TABLE outbound_policy
   ADD COLUMN enabled             boolean NOT NULL DEFAULT false,
   ADD COLUMN disabled_reason     text,
@@ -758,8 +1018,25 @@ CREATE TRIGGER outbound_policy_updated BEFORE UPDATE ON outbound_policy
 -- ---------------------------------------------------------------------
 -- 6.2 · outbound_counter: contadores atómicos por periodo y acción
 -- ---------------------------------------------------------------------
--- Una fila por workspace, periodo y action_type ('email',
+-- Una fila por workspace, CUENTA, periodo y action_type ('email',
 -- 'linkedin_invite', 'linkedin_message', 'instagram_dm', 'llm_call'…).
+--
+-- channel_account_id es la cuenta que envía. Los topes de §5.1 (80 a
+-- 100 invitaciones de LinkedIn al día, el volumen de un Gmail nuevo) son
+-- de la cuenta, porque el proveedor castiga a la cuenta: una agencia con
+-- tres creadores y tres LinkedIn en el mismo workspace lleva tres
+-- contadores de 'linkedin_invite', y una cuenta no se come la plaza de
+-- otra. NULL es el contador del workspace entero, para los topes que sí
+-- son del workspace (outbound_policy.max_emails_per_day, 'llm_call'). El
+-- despachador cuenta los dos: primero el de la cuenta y después el del
+-- workspace, en la misma transacción.
+--
+-- La clave es un id sustituto y la unicidad va en un índice NULLS NOT
+-- DISTINCT: con NULL en una clave primaria no se podría, y con NULLS
+-- DISTINCT dos filas del workspace entero para el mismo día no
+-- chocarían y el INSERT … ON CONFLICT crearía una segunda en vez de
+-- bloquear la primera.
+--
 -- La semana es SU PROPIA fila (period = 'week', period_start = el lunes)
 -- y no la suma de siete filas diarias: Chief bloqueaba la fila de hoy y
 -- sumaba la semana, así que dos despachadores en días distintos de la
@@ -770,15 +1047,19 @@ CREATE TRIGGER outbound_policy_updated BEFORE UPDATE ON outbound_policy
 --
 -- No es una métrica: es un semáforo. Por eso se actualiza en su sitio.
 CREATE TABLE outbound_counter (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  channel_account_id  uuid REFERENCES outreach_channel_account(id) ON DELETE CASCADE,  -- NULL = el workspace
   period              text NOT NULL CHECK (period IN ('day','week')),
   period_start        date NOT NULL,
   action_type         text NOT NULL CHECK (action_type ~ '^[a-z][a-z0-9_]{1,40}$'),
   count               int NOT NULL DEFAULT 0 CHECK (count >= 0),
   updated_at          timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (workspace_id, period, period_start, action_type),
   CHECK (period = 'day' OR extract(isodow FROM period_start) = 1)
 );
+CREATE UNIQUE INDEX outbound_counter_period_idx
+  ON outbound_counter (workspace_id, channel_account_id, period, period_start, action_type) NULLS NOT DISTINCT;
+CREATE INDEX ON outbound_counter (channel_account_id);
 
 -- ---------------------------------------------------------------------
 -- 6.3 · outbound_breaker: disyuntor por tipo de paso
@@ -825,7 +1106,7 @@ DECLARE
   t text;
   tables text[] := ARRAY[
     'outreach_channel_account', 'outbound_step', 'outbound_enrollment', 'outbound_message',
-    'outbound_review', 'outbound_counter', 'outbound_breaker'
+    'outbound_review', 'outbound_llm_call', 'outbound_counter', 'outbound_breaker'
   ];
 BEGIN
   FOREACH t IN ARRAY tables LOOP
@@ -903,11 +1184,14 @@ CREATE POLICY outbound_sequence_template_seed ON outbound_sequence_template FOR 
 --     increment_if_under_cap e increment_weekly; si la web pudiera
 --     escribirlos, un workspace se reiniciaría sus propios límites y
 --     quemaría su Gmail;
---   · revisiones: bitácora; se anotan y no se corrigen ni se borran.
+--   · revisiones y llamadas al modelo: bitácoras; se anotan y no se
+--     corrigen ni se borran (un workspace que borrara sus llamadas de
+--     hoy se devolvería el presupuesto).
 REVOKE INSERT, UPDATE, DELETE ON outbound_sequence_template FROM mc_app;
 REVOKE INSERT, UPDATE, DELETE ON outbound_counter FROM mc_app;
 REVOKE INSERT, UPDATE, DELETE ON outbound_breaker FROM mc_app;
 REVOKE UPDATE, DELETE ON outbound_review FROM mc_app;
+REVOKE UPDATE, DELETE ON outbound_llm_call FROM mc_app;
 
 -- ---------------------------------------------------------------------
 -- 7.5 · Referencias visibles (0025 §3) en las claves ajenas nuevas
@@ -1024,29 +1308,16 @@ $$;
 -- límites llama a las dos dentro de la MISMA transacción del reclamo y,
 -- si la segunda dice false, deshace: así el día no se come una plaza
 -- que la semana no dio.
-CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_cap int)
-RETURNS boolean
-LANGUAGE plpgsql
-VOLATILE
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-  nuevo int;
-BEGIN
-  IF p_cap IS NULL OR p_cap <= 0 THEN
-    RETURN false;
-  END IF;
-  INSERT INTO outbound_counter AS c (workspace_id, period, period_start, action_type, count)
-  VALUES (p_workspace, 'day', outreach_local_date(p_workspace, now()), p_action_type, 1)
-  ON CONFLICT (workspace_id, period, period_start, action_type)
-  DO UPDATE SET count = c.count + 1, updated_at = now()
-     WHERE c.count < p_cap
-  RETURNING c.count INTO nuevo;
-  RETURN nuevo IS NOT NULL;
-END;
-$$;
-
-CREATE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int)
+--
+-- Dos firmas por función (OUTREACH_FUNCTIONS las nombra):
+--   (workspace, action_type, cap)           el contador del workspace
+--                                           entero (channel_account_id NULL)
+--   (workspace, account, action_type, cap)  el de UNA cuenta (6.2). La
+--                                           cuenta tiene que ser de ese
+--                                           workspace: si no, lanza.
+-- Las cuatro pasan por outbound_counter_bump, que es la sentencia.
+CREATE FUNCTION outbound_counter_bump(p_workspace uuid, p_account uuid, p_period text,
+                                      p_action_type text, p_cap int)
 RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
@@ -1054,15 +1325,23 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   hoy date;
+  inicio date;
   nuevo int;
 BEGIN
   IF p_cap IS NULL OR p_cap <= 0 THEN
     RETURN false;
   END IF;
+  IF p_account IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM outreach_channel_account a WHERE a.id = p_account AND a.workspace_id = p_workspace) THEN
+    RAISE EXCEPTION 'La cuenta % no es del workspace %.', p_account, p_workspace
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
   hoy := outreach_local_date(p_workspace, now());
-  INSERT INTO outbound_counter AS c (workspace_id, period, period_start, action_type, count)
-  VALUES (p_workspace, 'week', hoy - (extract(isodow FROM hoy)::int - 1), p_action_type, 1)
-  ON CONFLICT (workspace_id, period, period_start, action_type)
+  inicio := CASE p_period WHEN 'week' THEN hoy - (extract(isodow FROM hoy)::int - 1) ELSE hoy END;
+
+  INSERT INTO outbound_counter AS c (workspace_id, channel_account_id, period, period_start, action_type, count)
+  VALUES (p_workspace, p_account, p_period, inicio, p_action_type, 1)
+  ON CONFLICT (workspace_id, channel_account_id, period, period_start, action_type)
   DO UPDATE SET count = c.count + 1, updated_at = now()
      WHERE c.count < p_cap
   RETURNING c.count INTO nuevo;
@@ -1070,12 +1349,52 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_account uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+  SELECT outbound_counter_bump(p_workspace, p_account, 'day', p_action_type, p_cap);
+$$;
+
+CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+  SELECT outbound_counter_bump(p_workspace, NULL, 'day', p_action_type, p_cap);
+$$;
+
+CREATE FUNCTION increment_weekly(p_workspace uuid, p_account uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+  SELECT outbound_counter_bump(p_workspace, p_account, 'week', p_action_type, p_cap);
+$$;
+
+CREATE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+  SELECT outbound_counter_bump(p_workspace, NULL, 'week', p_action_type, p_cap);
+$$;
+
 -- ---------------------------------------------------------------------
 -- 8.4 · should_pause_outreach: ¿se para el despacho de este workspace?
 -- ---------------------------------------------------------------------
 -- Sí si el interruptor está apagado (o no hay política: nace apagado) o
--- si la cola pasó la contrapresión (max_pending_touches). El presupuesto
--- de LLM no para el ENVÍO de lo ya aprobado: lo mira el generador, con
+-- si el ATRASO pasó la contrapresión (max_pending_touches): lo vencido
+-- que no ha salido más lo que está en processing, que es lo que
+-- outbound_health llama «due» + «processing». Lo programado para más
+-- adelante no cuenta: 200 marcas en una cadencia de nueve días, con el
+-- siguiente paso ya en cola, no son un atasco. El presupuesto de LLM no
+-- para el ENVÍO de lo ya aprobado: lo mira el generador, con
 -- outbound_health.
 CREATE FUNCTION should_pause_outreach(p_workspace uuid)
 RETURNS boolean
@@ -1085,7 +1404,9 @@ SET search_path = public, pg_temp
 AS $$
   SELECT NOT coalesce(p.enabled, false)
          OR (SELECT count(*) FROM outbound_touch t
-              WHERE t.workspace_id = p_workspace AND t.status IN ('scheduled', 'processing'))
+              WHERE t.workspace_id = p_workspace
+                AND (t.status = 'processing'
+                     OR (t.status = 'scheduled' AND coalesce(t.next_retry_at, t.scheduled_for) <= now())))
             > coalesce(p.max_pending_touches, 200)
     FROM (SELECT 1) AS uno
     LEFT JOIN outbound_policy p ON p.workspace_id = p_workspace;
@@ -1099,6 +1420,12 @@ $$;
 -- del envío, así que uno reclamado no sale). Los borradores se quedan:
 -- son trabajo de una persona y no salen sin programarse. Devuelve
 -- cuántos toques canceló.
+--
+-- Los enrolamientos NO se tocan, a propósito: apagar es una pausa del
+-- workspace, no el fin de ninguna cadencia. Siguen en 'active' (sin
+-- finished_at) y, al encender, el motor vuelve a planificar desde ellos
+-- lo que se canceló. Por eso los toques cancelados llevan blocked_reason
+-- 'outreach_disabled' y no 'opted_out': son reprogramables.
 --
 -- Encender no reprograma nada: el motor vuelve a planificar desde los
 -- enrolamientos. Sin dirección postal no enciende: lo impide el CHECK
@@ -1161,14 +1488,25 @@ $$;
 --   { "enabled", "disabledReason", "disabledAt", "shouldPause",
 --     "since", "hours",
 --     "queue":   { "draft", "scheduled", "due", "processing", "stuck", "held" },
---     "window":  { "sent", "failed", "canceled", "opened", "replied", "optedOut" },
+--     "window":  { "sent", "failed", "canceled", "opened", "replied", "optedOut",
+--                  "sentAfterOptOut" },
 --     "byChannel": { "<canal>": { "sent", "failed" } },
 --     "breakersOpen": ["<step_type>"],
 --     "accountsDown": n, "lastSentAt",
 --     "llm": { "spentToday", "dailyCap", "currency": "USD" } }
 --
 -- «stuck» es lo reclamado hace más de cinco minutos (el zombi de Chief).
--- «spentToday» es el día LOCAL del workspace, el mismo de los contadores.
+-- «failed» y «canceled» se cuentan por status_changed_at, la hora en que
+-- el toque llegó a ese estado; anotar opened_at después no lo mueve.
+-- «optedOut» son PERSONAS, no toques: los contactos a los que este
+-- workspace les envió algo y que pidieron la baja dentro de la ventana,
+-- les quedara algo pendiente o no (lo normal es pulsar el enlace del
+-- último correo, sin nada más en cola). «sentAfterOptOut» son los toques
+-- que salieron con la baja ya puesta, porque llegó mientras el
+-- despachador enviaba (4.1).
+-- «spentToday» es el día LOCAL del workspace, el mismo de los contadores,
+-- y suma outbound_llm_call: todas las llamadas al modelo, no solo las
+-- del juez.
 CREATE FUNCTION outbound_health(p_workspace uuid, p_hours int)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -1202,12 +1540,18 @@ BEGIN
            'held',       count(*) FILTER (WHERE status = 'held')),
          jsonb_build_object(
            'sent',     count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde),
-           'failed',   count(*) FILTER (WHERE status = 'failed' AND updated_at >= desde),
-           'canceled', count(*) FILTER (WHERE status = 'canceled' AND updated_at >= desde),
+           'failed',   count(*) FILTER (WHERE status = 'failed' AND status_changed_at >= desde),
+           'canceled', count(*) FILTER (WHERE status = 'canceled' AND status_changed_at >= desde),
            'opened',   count(*) FILTER (WHERE opened_at >= desde),
            'replied',  count(*) FILTER (WHERE replied_at >= desde),
-           'optedOut', count(*) FILTER (WHERE status = 'canceled' AND blocked_reason = 'opted_out'
-                                          AND updated_at >= desde)),
+           'optedOut', (SELECT count(*)
+                          FROM contact c
+                         WHERE c.opted_out AND c.opted_out_at >= desde
+                           AND EXISTS (SELECT 1 FROM outbound_touch s
+                                        WHERE s.workspace_id = p_workspace AND s.contact_id = c.id
+                                          AND s.status = 'sent')),
+           'sentAfterOptOut', count(*) FILTER (WHERE status = 'sent' AND blocked_reason = 'opted_out_in_flight'
+                                                 AND sent_at >= desde)),
          max(sent_at)
     INTO cola, ventana, ultimo
     FROM outbound_touch
@@ -1217,10 +1561,10 @@ BEGIN
     INTO por_canal
     FROM (SELECT channel,
                  count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde) AS enviados,
-                 count(*) FILTER (WHERE status = 'failed' AND updated_at >= desde) AS fallidos
+                 count(*) FILTER (WHERE status = 'failed' AND status_changed_at >= desde) AS fallidos
             FROM outbound_touch
            WHERE workspace_id = p_workspace
-             AND ((status = 'sent' AND sent_at >= desde) OR (status = 'failed' AND updated_at >= desde))
+             AND ((status = 'sent' AND sent_at >= desde) OR (status = 'failed' AND status_changed_at >= desde))
            GROUP BY channel) AS c;
 
   SELECT coalesce(jsonb_agg(step_type ORDER BY step_type), '[]'::jsonb)
@@ -1233,7 +1577,7 @@ BEGIN
    WHERE workspace_id = p_workspace AND status IN ('needs_reconnect', 'error');
 
   SELECT coalesce(sum(cost), 0) INTO gastado
-    FROM outbound_review
+    FROM outbound_llm_call
    WHERE workspace_id = p_workspace AND cost_currency = 'USD' AND created_at >= inicio_hoy;
 
   RETURN jsonb_build_object(
@@ -1265,9 +1609,13 @@ $$;
 -- lo pendiente de ese contacto en cualquier workspace, y lo mismo con
 -- las fichas de otros workspaces que tengan su mismo correo. Es la baja
 -- verificable que 0029 §1 reservó para la lista global: la persona pulsó
--- el enlace de un correo que la plataforma envió de verdad (un toque en
--- 'sent' con ese token), así que el correo entra en contact_suppression
--- con reason 'unsubscribe_link'.
+-- el enlace de un correo que la plataforma envió de verdad, así que el
+-- correo entra en contact_suppression con reason 'unsubscribe_link'.
+--
+-- «De verdad» quiere decir que el toque está en 'sent' con ese token Y
+-- con provider_message_id, y que esas dos columnas solo las escribe el
+-- despachador (4.2): un workspace no puede fabricarse un toque «enviado»
+-- con un token suyo para dar de baja el correo de otra persona.
 --
 -- Misma forma que los enlaces de Cotizar (0030): una función SECURITY
 -- DEFINER cuyo dueño es mc_public_share (NOLOGIN, sin BYPASSRLS), y
@@ -1284,9 +1632,9 @@ $$;
 -- Para mc_app esos parámetros no significan nada: las políticas son solo
 -- de mc_public_share, y fijarlos a mano en una transacción de la
 -- aplicación no abre ninguna fila. Lo que el rol puede escribir va por
--- COLUMNA: el estado y el motivo de los toques, el estado de los
--- enrolamientos y la baja del contacto; nunca su correo, su nombre ni
--- el cuerpo de un mensaje. La guardia (src/esquema.ts) exige ese
+-- COLUMNA: el estado y el motivo de los toques, el estado y la hora de
+-- fin de los enrolamientos y la baja del contacto; nunca su correo, su
+-- nombre ni el cuerpo de un mensaje. La guardia (src/esquema.ts) exige ese
 -- inventario exacto en cada arranque, igual que el de 0030.
 --
 -- La respuesta no dice a cuántos workspaces afectó (quien pulsa el
@@ -1297,8 +1645,10 @@ $$;
 --
 -- Lo que queda abierto y es de VEN-15: el correo sale del Gmail del
 -- creador, así que el enlace también queda en SU carpeta de enviados;
--- quien lo pulse desde allí da de baja al contacto en toda la
--- plataforma. Ver la nota de docs/ventas-outreach.md que deja VEN-9.
+-- quien lo pulse desde allí da de baja a esa persona en toda la
+-- plataforma. Solo alcanza a alguien a quien la plataforma le escribió
+-- de verdad (no a un correo cualquiera), pero es la persona equivocada
+-- pulsando. Ver la nota de docs/ventas-outreach.md que deja VEN-9.
 -- =====================================================================
 
 GRANT CREATE ON SCHEMA public TO mc_public_share;   -- solo mientras dura la migración (ver 0030 §1)
@@ -1316,7 +1666,7 @@ GRANT SELECT ON outbound_touch, outbound_enrollment, contact TO mc_public_share;
 -- 0010, y sin workspace fijado este rol no ve ninguna fila.
 GRANT SELECT ON company, company_link TO mc_public_share;
 GRANT UPDATE (status, blocked_reason) ON outbound_touch TO mc_public_share;
-GRANT UPDATE (status) ON outbound_enrollment TO mc_public_share;
+GRANT UPDATE (status, finished_at) ON outbound_enrollment TO mc_public_share;
 GRANT UPDATE (opted_out, opted_out_at, opted_out_reason) ON contact TO mc_public_share;
 GRANT INSERT ON contact_suppression TO mc_public_share;
 
@@ -1397,6 +1747,7 @@ BEGIN
       FROM outbound_touch t
      WHERE t.optout_token_hash = resumen
        AND t.status = 'sent'
+       AND t.provider_message_id IS NOT NULL
        AND t.contact_id IS NOT NULL
      ORDER BY t.sent_at DESC NULLS LAST
      LIMIT 1;
@@ -1434,7 +1785,7 @@ BEGIN
          AND status IN ('draft', 'scheduled', 'processing', 'held');
 
       UPDATE outbound_enrollment
-         SET status = 'opted_out'
+         SET status = 'opted_out', finished_at = coalesce(finished_at, now())
        WHERE contact_id = ANY (ids)
          AND status IN ('active', 'paused', 'cooldown');
 
