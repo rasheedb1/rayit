@@ -120,7 +120,7 @@ Los 57 530 salen de las interacciones de las dos lecturas manuales
 
 | Paso | Commit | Qué |
 |---|---|---|
-| Dependencia | `a9c9790` | Cherry-pick del core de CAM-3 (`ritmoSeguidores`). Cuando CAM-3 se integre, el mismo cambio llega dos veces y git lo reconoce. |
+| Dependencia | `a9c9790` | Cherry-pick del core de CAM-3 (`ritmoSeguidores`), con conflicto resuelto a mano: CAM-4 y CAM-3 añadían secciones al final de los mismos dos archivos. Al integrar CAM-3 puede volver a pedir esa misma resolución (conservar las dos secciones). |
 | Plan | `a33819b` | §0 de esta propuesta. |
 | Core | `a3d3c4f` | `calcularResultado`, `MISSING_INPUTS`, `followerRateMultiple`, `isResultComplete`. |
 | Consultas | `f280e7e` | `getResultInputs`, `upsertResult`, `computeCampaignResult`, `listCampaignsToCompute`, `getCampaignResult`, `canRecomputeResult`. |
