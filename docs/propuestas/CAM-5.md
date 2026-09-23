@@ -141,6 +141,8 @@ lecturas manuales).
 | 2 | Nada de esquema: `campaign_result` ya tiene todas las columnas. | — | — |
 | 3 | El GRANT del worker (`mc_worker` sobre `campaign_result`) ya está en 0014. | — | — |
 
+| 4 | Permiso nuevo `campanas.resultado.calcular` en `packages/core/src/permisos.ts` (44 permisos, 225 filas de la matriz; snapshot `test/snapshots/permisos.sql` regenerado). Cuando ACC-3 aplique la semilla, entra con `pnpm --filter @mc/core permisos:sql`. `docs/propuestas/ACC-1.md` sigue diciendo 43: es la foto de ACC-1. | El botón «Recalcular» abre con `requirePermission`. | Con ACC-3. |
+
 Sin migraciones en esta rama y sin variables nuevas.
 
 ## 3. Contrato de lectura para CAM-6 y VEN-6
