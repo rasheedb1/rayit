@@ -22,7 +22,7 @@
 -- Lo que deja esta migración (docs/propuestas/ACC-accesos-y-roles.md,
 -- fase 4, corregida con lo que la base tiene hoy):
 --
---   permission        el catálogo (43 claves <módulo>.<recurso>.<acción>)
+--   permission        el catálogo de claves <módulo>.<recurso>.<acción>
 --   role              los roles: workspace_id NULL = de sistema (patrón
 --                     feature_flag), con workspace_id = a medida (ACC-9)
 --   role_permission   la matriz
@@ -34,7 +34,7 @@
 --                     Va ya para que el modelo quede cerrado de una vez
 --   audit_log         actor_kind 'delegate' y on_behalf_of_workspace_id
 --   + la semilla de los diez roles de fábrica (5 de creador, 5 de
---     agencia) con sus 220 permisos, generada desde el catálogo de
+--     agencia) con su matriz, generada desde el catálogo de
 --     ACC-1 (packages/core/src/permisos.ts). ON CONFLICT DO NOTHING.
 --
 -- Decisiones de esta migración que no están en la fase 4 (todas en
@@ -245,12 +245,12 @@ CREATE POLICY role_permission_ws_isolation ON role_permission
 -- tiene RLS, role admite el INSERT por role_seed y role_permission ve
 -- las filas de sistema por role_read.
 --
--- Conteo esperado (packages/db/test/accesos.test.ts lo comprueba contra
--- ROLES_SISTEMA de @mc/core): 43 permisos; creador owner 43, manager 28,
--- editor 4, finance 9, viewer 9; agencia owner 43, admin 42, manager 24,
--- finance 9, viewer 9; 220 filas de role_permission.
+-- Los conteos (permisos, roles y filas de la matriz) los trae el propio
+-- bloque en sus comentarios; packages/db/test/accesos.test.ts comprueba
+-- que el bloque es la salida del script y que cada rol tiene exactamente
+-- los permisos de ROLES_SISTEMA de @mc/core.
 -- =====================================================================
--- 43 permisos.
+-- 44 permisos.
 INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('resumen.panel.ver', 'resumen', 'Ver el resumen', 'normal'),
   ('resumen.metricas.importar', 'resumen', 'Importar métricas por CSV', 'normal'),
@@ -277,6 +277,7 @@ INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('campanas.campana.editar', 'campanas', 'Editar campañas y cambiar su estado', 'normal'),
   ('campanas.post.asociar', 'campanas', 'Asociar posts y marcar entregables', 'normal'),
   ('campanas.aporte.registrar', 'campanas', 'Registrar lo que aporta la marca', 'normal'),
+  ('campanas.resultado.calcular', 'campanas', 'Recalcular el resultado de una campaña', 'normal'),
   ('campanas.reporte.enviar', 'campanas', 'Enviar el reporte a la marca', 'normal'),
   ('finanzas.factura.ver', 'finanzas', 'Ver las facturas', 'sensible'),
   ('finanzas.factura.crear', 'finanzas', 'Crear facturas', 'sensible'),
@@ -311,7 +312,7 @@ INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, i
   (NULL, 'viewer', 'agency', 'Solo lectura', 'Ver lo que se le asigne. Sin Finanzas ni Equipo.', true)
 ON CONFLICT (key, workspace_kind) WHERE workspace_id IS NULL DO NOTHING;
 
--- 220 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
+-- 225 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
 INSERT INTO role_permission (role_id, permission_key)
 SELECT r.id, m.permission_key
 FROM (VALUES
@@ -340,6 +341,7 @@ FROM (VALUES
   ('owner', 'creator', 'campanas.campana.editar'),
   ('owner', 'creator', 'campanas.post.asociar'),
   ('owner', 'creator', 'campanas.aporte.registrar'),
+  ('owner', 'creator', 'campanas.resultado.calcular'),
   ('owner', 'creator', 'campanas.reporte.enviar'),
   ('owner', 'creator', 'finanzas.factura.ver'),
   ('owner', 'creator', 'finanzas.factura.crear'),
@@ -382,6 +384,7 @@ FROM (VALUES
   ('manager', 'creator', 'campanas.campana.editar'),
   ('manager', 'creator', 'campanas.post.asociar'),
   ('manager', 'creator', 'campanas.aporte.registrar'),
+  ('manager', 'creator', 'campanas.resultado.calcular'),
   ('manager', 'creator', 'campanas.reporte.enviar'),
   ('manager', 'creator', 'finanzas.cobro.ver'),
   ('manager', 'creator', 'conexiones.cuenta.ver'),
@@ -433,6 +436,7 @@ FROM (VALUES
   ('owner', 'agency', 'campanas.campana.editar'),
   ('owner', 'agency', 'campanas.post.asociar'),
   ('owner', 'agency', 'campanas.aporte.registrar'),
+  ('owner', 'agency', 'campanas.resultado.calcular'),
   ('owner', 'agency', 'campanas.reporte.enviar'),
   ('owner', 'agency', 'finanzas.factura.ver'),
   ('owner', 'agency', 'finanzas.factura.crear'),
@@ -476,6 +480,7 @@ FROM (VALUES
   ('admin', 'agency', 'campanas.campana.editar'),
   ('admin', 'agency', 'campanas.post.asociar'),
   ('admin', 'agency', 'campanas.aporte.registrar'),
+  ('admin', 'agency', 'campanas.resultado.calcular'),
   ('admin', 'agency', 'campanas.reporte.enviar'),
   ('admin', 'agency', 'finanzas.factura.ver'),
   ('admin', 'agency', 'finanzas.factura.crear'),
@@ -516,6 +521,7 @@ FROM (VALUES
   ('manager', 'agency', 'campanas.campana.editar'),
   ('manager', 'agency', 'campanas.post.asociar'),
   ('manager', 'agency', 'campanas.aporte.registrar'),
+  ('manager', 'agency', 'campanas.resultado.calcular'),
   ('manager', 'agency', 'campanas.reporte.enviar'),
   ('finance', 'agency', 'finanzas.factura.ver'),
   ('finance', 'agency', 'finanzas.factura.crear'),

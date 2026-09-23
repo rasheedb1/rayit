@@ -12,7 +12,7 @@ todo el workspace» en un modelo de roles y permisos: `permission`,
 `membership_scope`, `invitation`, `workspace_grant`,
 `audit_log.actor_kind = 'delegate'` con `on_behalf_of_workspace_id`, RLS
 para todo lo que lleva inquilino, y la semilla de los cinco roles de
-creador y los cinco de agencia con su matriz (43 permisos, 220 filas de
+creador y los cinco de agencia con su matriz (44 permisos, 225 filas de
 `role_permission`). Todo tal como está en la fase 4 de
 `ACC-accesos-y-roles.md`, corregido con lo que la base tiene hoy
 (0024–0033: guardia invertida, disparadores de referencias, privilegios
@@ -253,7 +253,7 @@ secciones; cada una se puede volver a correr (§1.3).
 | 1 | `permission`: `key` PK, `module`, `label_es`, `description_es`, `sensitivity` con CHECK `normal`/`sensible` | Tal cual la fase 4. Sin RLS: catálogo global, declarado en `EXCEPCIONES_SIN_AISLAMIENTO`. |
 | 2 | `role` + CHECK `role_system_has_no_workspace` (`is_system = (workspace_id IS NULL)`), índices parciales `role_system_uk` y `role_ws_uk`, RLS `role_read` (de sistema o mío) y `role_seed` (`TO CURRENT_USER`, solo filas de sistema sin workspace fijado); función `system_role_id(kind, key)` STABLE, SECURITY INVOKER, `EXECUTE` a `mc_app` y `mc_worker` | Patrón `feature_flag` de 0020/0025 §4. El CHECK nuevo evita un «rol de sistema con dueño», que no significa nada. La función evita repetir el `SELECT` del id en seeds, pruebas, `createCreatorWorkspace` y ACC-4. |
 | 3 | `role_permission` (PK compuesta, FK con `ON DELETE CASCADE`), índice por `permission_key`, política `EXISTS` sobre `role` | Patrón 0018 para hijas sin `workspace_id`. |
-| 4 | **La semilla**: 43 permisos, 10 roles de sistema, 220 filas de matriz. `ON CONFLICT DO NOTHING` | Salida literal del script de ACC-1. Va ANTES del relleno (§1.2). |
+| 4 | **La semilla**: 44 permisos, 10 roles de sistema, 225 filas de matriz (al 23-sep, tras CAM-5). `ON CONFLICT DO NOTHING` | Salida literal del script de ACC-1. Va ANTES del relleno (§1.2). |
 | 5 | `membership.role_id` (FK a `role`), relleno por `workspace.kind` con `NO FORCE` temporal en `membership` y `workspace`, parada si queda alguna fila sin rol, `SET NOT NULL`, `DROP COLUMN role`, índice, disparadores `ref_visible_role_id` y `role_fits_workspace` | Decisión 1 de §0.3. El `NO FORCE` es el patrón de 0026, 0032 y 0033: sin él el `UPDATE` tocaría cero filas en silencio. Las políticas de 0028 no nombran `role`. |
 | 6 | `membership_scope`: PK de cuatro columnas, FK compuesta a `membership` con cascada, política `membership_scope_read` (solo SELECT, por `workspace_id`) | Igual que en la rama de ACC-6. `mc_app` no la escribe, así que la FK compuesta no necesita disparador de referencia. |
 | 7 | `invitation` con CHECK `invitation_token_hash_is_sha256` y `invitation_not_accepted_and_revoked`, índices `invitation_pending_uk` (parcial) e `invitation_token_hash_uk`, políticas de lectura, alta y cambio por `workspace_id`, tres disparadores de referencia | Token solo como hash, una pendiente por correo; sin política ni privilegio de `DELETE`. |
@@ -265,14 +265,14 @@ secciones; cada una se puede volver a correr (§1.3).
 
 | Rol | creador | agencia |
 |---|---|---|
-| `owner` | 43 | 43 |
-| `admin` | — | 42 (todo menos `equipo.workspace.configurar`) |
-| `manager` | 28 (sin `finanzas.flujo.ver`, gastos ni `conexiones.cuenta.conectar`) | 24 |
+| `owner` | 44 | 44 |
+| `admin` | — | 43 (todo menos `equipo.workspace.configurar`) |
+| `manager` | 29 (sin `finanzas.flujo.ver`, gastos ni `conexiones.cuenta.conectar`) | 25 |
 | `editor` | 4 | — |
 | `finance` | 9 (todo Finanzas, sin campañas) | 9 |
 | `viewer` | 9 | 9 |
 
-Total: 220 filas de `role_permission`. La prueba compara cada rol,
+Total: 225 filas de `role_permission`. Mientras 0034 no esté aplicada, cada permiso nuevo que llegue a `main` obliga a regenerar la sección 4 (`pnpm --filter @mc/core permisos:sql`): la prueba lo avisa. Ya pasó dos veces el 23-sep (ACC-1 final y CAM-5). La prueba compara cada rol,
 permiso por permiso, con `ROLES_SISTEMA` de `@mc/core`.
 
 ### 1.2 El error que la prueba encontró

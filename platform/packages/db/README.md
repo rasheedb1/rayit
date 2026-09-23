@@ -253,7 +253,7 @@ VALUES (current_workspace_id(), current_user_id(), system_role_id('creator', 'ow
 Desde `0034_access_control.sql`, `membership.role` (un `text` que nadie
 leía) es `membership.role_id`, clave ajena a `role`. Los diez roles de
 fábrica (`workspace_id IS NULL`: cinco de creador, cinco de agencia) y
-sus 220 permisos los siembra la migración desde el catálogo de
+su matriz los siembra la migración desde el catálogo de
 `@mc/core` (`permisos.ts`, ACC-1): la web los **lee** (`role_read` deja
 ver los de sistema y los a medida del workspace fijado) y no los
 escribe; los roles a medida son ACC-9. `system_role_id(kind, key)`
