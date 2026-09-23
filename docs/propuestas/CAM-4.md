@@ -67,7 +67,7 @@ nada de Rasheed. Reutilizo, sin editarlos, `leerCsv` y `aNumero` de
    Un día repetido dentro del archivo se rechaza la segunda vez.
 3. **Repetir no duplica.** Clave natural `(campaign_id, kind, day,
    source)`. No hay UNIQUE en 0008, así que `importBrandCsv` serializa
-   por campaña con `pg_advisory_xact_lock` (el precedente de CAM-2) y
+   por campaña bloqueando su fila (`SELECT … FOR UPDATE` en `lockEditableCampaign`, que ya comprueba si admite cambios) y
    hace `INSERT … WHERE NOT EXISTS` dentro de la transacción. Si el día
    ya estaba con el **mismo** valor, se cuenta como «sin cambios»; con
    **otro** valor, se reemplaza (UPDATE) y se cuenta como «corregida»:
