@@ -115,13 +115,20 @@ Lo que todos los agentes tienen que respetar (va en su prompt):
    del selector de workspace en `shell.tsx` y la instalación de shadcn
    en `components/ui`, que es código generado.
 3. **En el panel de Supabase**, cuando la pieza auth esté lista:
-   Site URL y Redirect URLs para `localhost:3000` y
-   `multicampaign-web.vercel.app`. El agente deja la lista exacta en
-   `apps/web/README.md`.
-4. **La migración `0014_public_share.sql`** que crea la pieza cotizar
-   (funciones `SECURITY DEFINER` para las páginas públicas) la aplica
-   Rasheed con `make db.migrate` después de revisarla. Los agentes solo
-   la verifican en Postgres embebido.
+   Site URL, Redirect URLs (para `on-cue-web.vercel.app`, sus vistas
+   previas y `localhost`), plantillas y *Confirm email*. La lista exacta
+   vive en un solo sitio:
+   [`platform/apps/web/README.md#autenticación`](../platform/apps/web/README.md#autenticación).
+4. **Las migraciones `0030_public_share.sql` y `0031_mover_negocio.sql`**,
+   detrás de `0024`–`0029` y con el rol `mc_public_share` creado antes
+   con `supabase-admin.sh`. 0030 crea las funciones `SECURITY DEFINER`
+   de las páginas públicas de Cotizar; 0031, `deal_move_stage`, que
+   usan Ventas, Cotizar y la aceptación pública, y va la última porque
+   reescribe `public_quote_accept_impl` de 0030. Las aplica Rasheed con
+   `make db.migrate` después de revisarlas, y `make db.guardia` en
+   verde antes de desplegar; el orden exacto está en la nota de CIM-2
+   de `platform/apps/web/content/backlog.ts`. Los agentes solo las
+   verifican en Postgres embebido.
 
 ## 5. Lo que queda para Rasheed después del workflow
 
@@ -132,8 +139,10 @@ Lo que todos los agentes tienen que respetar (va en su prompt):
    `apps/web` y desplegar desde `platform/`: un cambio en
    `scripts/vercel.sh` y un `PATCH` al proyecto con el token del
    vault. Lo hago yo con un comando cuando toque.
-3. Aplicar `0014` con `make db.migrate`, configurar Supabase Auth, y
-   `make vercel.deploy PROD=1`.
+3. Aplicar `0024`–`0031` con `make db.migrate` (orden en la nota de
+   CIM-2), `make db.guardia` en verde, configurar Supabase Auth
+   ([`apps/web/README.md#autenticación`](../platform/apps/web/README.md#autenticación))
+   y `make vercel.deploy PROD=1`.
 4. Iniciar los trámites (CON-9) y conectar GitHub a Vercel (CIM-7).
 
 ---

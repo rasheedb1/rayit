@@ -57,6 +57,37 @@ test('con 84.000 views y el CPM de cocina del seed (45.000 – 70.000) sale el r
   assert.equal(item.modificadorTotalPct, '0');
 });
 
+test('con las views del mock (Reel 92 K, TikTok 138 K) salen estos rangos, sin los modificadores del mock', () => {
+  // El «terminado cuando» de COT-1 pedía los rangos del mock
+  // (dashboard/creadores-mock.html): Reel 4,8 – 7,2 M y TikTok 7,1 –
+  // 10,6 M. Esa fórmula multiplica además por «1,15 por engagement» y
+  // «1,10 por audiencia», que no tienen fuente en la base y se dejan
+  // fuera a propósito (ver la cabecera de src/tarifas.ts). Esto fija lo
+  // que da ESTA fórmula con las mismas views y el CPM de cocina en
+  // Colombia del seed para cada red, redondeado al peso.
+  const reel = calcularItem(tiktokDeEjemplo({
+    deliverable: 'reel', platformId: 'instagram', views: 92_000, cpmLow: '55000', cpmHigh: '85000', currency: 'COP',
+  }));
+  assert.equal(reel.priceLow, '5060000.00');
+  assert.equal(reel.priceHigh, '7820000.00');
+  assert.equal(reel.modificadorTotalPct, '0');
+
+  const tiktok = calcularItem(tiktokDeEjemplo({ views: 138_000, currency: 'COP' }));
+  assert.equal(tiktok.priceLow, '6210000.00');
+  assert.equal(tiktok.priceHigh, '9660000.00');
+  assert.equal(tiktok.modificadorTotalPct, '0');
+
+  // Con el CPM único que escribe el mock (45.000 – 70.000) el Reel queda
+  // en 4,14 – 6,44 M, por debajo de sus 4,8 – 7,2 M: la diferencia es la
+  // de los modificadores sin fuente (y ni siquiera es el 1,265 entero,
+  // así que los números del mock no salen de su propia fórmula).
+  const reelConCpmDelMock = calcularItem(tiktokDeEjemplo({
+    deliverable: 'reel', platformId: 'instagram', views: 92_000, currency: 'COP',
+  }));
+  assert.equal(reelConCpmDelMock.priceLow, '4140000.00');
+  assert.equal(reelConCpmDelMock.priceHigh, '6440000.00');
+});
+
 test('cambiar el CPM cambia el rango, y la explicación lo dice', () => {
   const antes = calcularItem(tiktokDeEjemplo());
   const despues = calcularItem(tiktokDeEjemplo({ cpmLow: '60000', cpmHigh: '90000' }));

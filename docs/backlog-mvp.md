@@ -70,7 +70,13 @@ aplicadas en Supabase y viven en `rasheed/integracion`: no se reciclan.
 Números reservados: `0023_access_control` (ACC-3). En
 `rasheed/integracion`, pendientes de aplicar y en este orden:
 `0024`–`0026` (endurecimiento de RLS), `0027`/`0028` (CIM-3), `0029`
-(endurecimiento) y `0030_public_share` (Cotizar, COT-2 a COT-4). Antes de crear cualquiera, `git fetch` y mirar el
+(endurecimiento), `0030_public_share` (Cotizar, COT-2 a COT-4) y
+`0031_mover_negocio` (Ventas y Cotizar: `deal_move_stage` y `brand_key`;
+va la última porque reescribe `public_quote_accept_impl` de 0030). Sin
+0031, el tablero de Ventas, «Enviar» en Cotizar y la aceptación pública
+fallan; `make db.guardia` lo dice. El orden exacto, con el rol
+`mc_public_share` creado antes, está en la nota de CIM-2 de
+`platform/apps/web/content/backlog.ts`. Antes de crear cualquiera, `git fetch` y mirar el
 número más alto en todas las ramas activas. Desde CIM-2 `make db.check`
 (y el job «esquema» del CI) falla si dos archivos comparten número.
 
@@ -289,7 +295,7 @@ a partir de CadenceV1.0):
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
-| COT-1 | Tarifario sugerido: `packages/core/tarifas.ts`, views × CPM con modificadores; views manuales hasta que exista la línea base. | M | CIM-2 | Con las views del mock salen los rangos del mock. |
+| COT-1 | Tarifario sugerido: `packages/core/tarifas.ts`, views × CPM con modificadores; views manuales hasta que exista la línea base. | M | CIM-2 | Con las views del mock salen los rangos del mock, sin los modificadores de engagement y audiencia del mock, que no tienen fuente; ver `tarifas.ts`. |
 | COT-2 | Media kit público con cifras congeladas, `slug`, contraseña y vencimiento opcionales. | M | COT-1, RES-1 | El enlace abre sin sesión y no cambia aunque cambien las métricas. |
 | COT-3 | Cotización: desde un deal, ítems, totales, lo acordado antes de publicar, numeración. | L | COT-1, VEN-3 | Enviar pasa el deal a «Propuesta enviada»; tiene enlace público. |
 | COT-4 | Aceptación: llama a `createCampaignFromQuote()` (CAM-2) y pasa el deal a «Ganado». | M | COT-3, CAM-2 | Aceptar deja una campaña en `planned` que Nicolás ve en su módulo. |
