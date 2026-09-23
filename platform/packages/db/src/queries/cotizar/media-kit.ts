@@ -303,16 +303,33 @@ export interface MediaKitRow {
   viewCount: number;
   createdAt: string;
   snapshot: MediaKitSnapshot;
+  /**
+   * Hasta cuándo está bloqueado el enlace ENTERO por contraseñas
+   * fallidas (el techo por enlace de 0030), solo si sigue vigente.
+   */
+  lockedUntil: string | null;
+  /** Cuántos orígenes (visitas desde una IP) tienen hoy el bloqueo propio de 0030 vigente. */
+  lockedOrigins: number;
 }
 
 interface RawMediaKit {
   id: string; slug: string; creator_id: string; rate_card_id: string | null;
   is_public: boolean; password_hash: string | null; expires_at: string | null;
   view_count: number; created_at: string; snapshot: MediaKitSnapshot;
+  locked_until: string | null; locked_origins: number;
 }
 
-const SELECT_KIT = `SELECT id, slug, creator_id, rate_card_id, is_public, password_hash, expires_at,
-                           view_count, created_at, snapshot FROM media_kit`;
+// El bloqueo solo se enseña mientras dura: uno vencido no dice nada.
+// Las columnas van con el nombre de la tabla porque la subconsulta
+// también tiene un locked_until.
+const COLUMNAS_KIT = `media_kit.id, media_kit.slug, media_kit.creator_id, media_kit.rate_card_id,
+  media_kit.is_public, media_kit.password_hash, media_kit.expires_at, media_kit.view_count,
+  media_kit.created_at, media_kit.snapshot,
+  CASE WHEN media_kit.locked_until > now() THEN media_kit.locked_until END AS locked_until,
+  (SELECT count(*) FROM media_kit_lockout l
+    WHERE l.media_kit_id = media_kit.id AND l.locked_until > now())::int AS locked_origins`;
+
+const SELECT_KIT = `SELECT ${COLUMNAS_KIT} FROM media_kit`;
 
 function mapKit(r: RawMediaKit): MediaKitRow {
   return {
@@ -326,6 +343,8 @@ function mapKit(r: RawMediaKit): MediaKitRow {
     viewCount: r.view_count,
     createdAt: r.created_at,
     snapshot: r.snapshot,
+    lockedUntil: r.locked_until,
+    lockedOrigins: r.locked_origins,
   };
 }
 
@@ -347,7 +366,7 @@ export async function createMediaKit(tx: WorkspaceTx, input: CreateMediaKitInput
   const { rows } = await tx.query<RawMediaKit>(
     `INSERT INTO media_kit (workspace_id, creator_id, rate_card_id, slug, snapshot, is_public, password_hash, expires_at)
      VALUES (current_workspace_id(), $1, $2, $3, $4::jsonb, $5, $6, $7)
-     RETURNING id, slug, creator_id, rate_card_id, is_public, password_hash, expires_at, view_count, created_at, snapshot`,
+     RETURNING ${COLUMNAS_KIT}`,
     [
       input.creatorId, tarifario?.card.id ?? null, nuevoSlug(), JSON.stringify(snapshot),
       input.isPublic ?? true, passwordHash, input.expiresAt ?? null,
@@ -425,6 +444,9 @@ export async function updateMediaKitShare(tx: WorkspaceTx, id: string, input: Up
   if (input.password !== undefined) {
     values.push(input.password === null ? null : await hashSharePassword(input.password));
     sets.push(`password_hash = $${values.length}`);
+    // Contraseña nueva, cuenta nueva: los fallos contra la anterior no
+    // dicen nada de la nueva.
+    sets.push('failed_attempts = 0', 'failed_since = NULL', 'locked_until = NULL');
   }
   if (input.expiresAt !== undefined) {
     values.push(input.expiresAt);
@@ -437,10 +459,35 @@ export async function updateMediaKitShare(tx: WorkspaceTx, id: string, input: Up
   }
   const { rows } = await tx.query<RawMediaKit>(
     `UPDATE media_kit SET ${sets.join(', ')} WHERE id = $1
-     RETURNING id, slug, creator_id, rate_card_id, is_public, password_hash, expires_at, view_count, created_at, snapshot`,
+     RETURNING ${COLUMNAS_KIT}`,
     values,
   );
   const row = rows[0];
   if (!row) throw new MediaKitNotFound();
+  if (input.password !== undefined) {
+    await tx.query('DELETE FROM media_kit_lockout WHERE media_kit_id = $1', [id]);
+    row.locked_origins = 0;
+  }
   return mapKit(row);
+}
+
+/**
+ * «Desbloquear»: pone a cero los dos niveles del bloqueo por
+ * contraseñas fallidas de 0030 —el techo del enlace y el de cada
+ * origen—. Es la salida del creador cuando alguien con el enlace lo
+ * mantiene bloqueado para la marca; si el abuso sigue, lo que lo corta
+ * es generar otro media kit (el enlace nuevo no lo tiene quien ataca).
+ */
+export async function unlockMediaKit(tx: WorkspaceTx, id: string): Promise<MediaKitRow> {
+  if (!isUuid(id)) throw new MediaKitNotFound();
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE media_kit SET failed_attempts = 0, failed_since = NULL, locked_until = NULL
+      WHERE id = $1 RETURNING id`,
+    [id],
+  );
+  if (!rows[0]) throw new MediaKitNotFound();
+  await tx.query('DELETE FROM media_kit_lockout WHERE media_kit_id = $1', [id]);
+  const kit = await getMediaKitById(tx, id);
+  if (!kit) throw new MediaKitNotFound();
+  return kit;
 }

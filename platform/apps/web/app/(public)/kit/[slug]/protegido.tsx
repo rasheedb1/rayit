@@ -18,8 +18,9 @@ import { abrirMediaKitProtegido, type AbrirKitResultado } from "../../actions";
  * el snapshot vuelve ya recortado y se pinta con el mismo componente
  * que la versión abierta.
  *
- * Con demasiados fallos, la base bloquea el enlace 15 minutos: la
- * página dice hasta qué hora, en la hora del navegador de quien mira.
+ * Con demasiados fallos, la base bloquea 15 minutos a ESTE origen (o
+ * al enlace entero si llegó a su techo; migración 0030): la página dice
+ * hasta qué hora, en la hora del navegador de quien mira.
  */
 export function MediaKitProtegido({ slug, bloqueadoHasta }: { slug: string; bloqueadoHasta?: string }) {
   const t = MESSAGES.publico.kit.password;

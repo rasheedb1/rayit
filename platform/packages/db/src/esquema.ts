@@ -287,10 +287,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   // Los enlaces públicos de Cotizar (0030, COT-2 a COT-4). La web los abre
   // sin sesión y sin workspace (Db.withPublicShare), y estas tres son lo
   // ÚNICO que esa transacción puede hacer.
-  'public_media_kit(text,text,boolean)':
+  'public_media_kit(text,text,boolean,text)':
     'abre /kit/<slug> sin sesión (0030). Corre como mc_public_share —NOLOGIN, sin BYPASSRLS, sin ninguna tabla ' +
     'entera—, cuyas políticas `TO mc_public_share` abren solo la fila cuyo slug fija la propia función y restaura ' +
-    'al salir. Devuelve jsonb recortado, nunca la fila; la contraseña se compara por derivado. No es de ningún ' +
+    'al salir. Devuelve jsonb recortado, nunca la fila; la contraseña se compara por derivado y los fallos se ' +
+    'cuentan por origen (resumen de la IP, nunca la IP) y por enlace, en media_kit_lockout y media_kit. No es de ningún ' +
     'disparador',
   'public_quote(text,boolean)':
     'abre /cotizacion/<slug> sin sesión (0030), con el mismo rol y la misma cerradura que public_media_kit: lee el ' +
@@ -426,8 +427,15 @@ export interface PrivilegiosDelEnlace {
 export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PrivilegiosDelEnlace>> = {
   media_kit: {
     tabla: ['SELECT'],
-    columnas: { UPDATE: ['failed_attempts', 'locked_until', 'view_count'] },
-    motivo: 'abrir /kit/<slug>, sumar la visita y contar las contraseñas fallidas (0030 §3)',
+    columnas: { UPDATE: ['failed_attempts', 'failed_since', 'locked_until', 'view_count'] },
+    motivo: 'abrir /kit/<slug>, sumar la visita y contar las contraseñas fallidas del enlace (0030 §3)',
+  },
+  media_kit_lockout: {
+    tabla: ['DELETE', 'INSERT', 'SELECT'],
+    columnas: { UPDATE: ['failed_attempts', 'locked_until', 'updated_at'] },
+    motivo:
+      'el bloqueo POR ORIGEN del media kit (0030 §2 y §3): contar el fallo, borrar la fila al acertar y podar las ' +
+      'viejas. Solo las filas del kit compartido: su política hereda de media_kit, que para este rol es la del slug',
   },
   quote: {
     tabla: ['SELECT'],
@@ -701,6 +709,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'único que deja membership_alta. Cambiar roles o echar a alguien sigue siendo del worker',
   },
   app_user: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'nadie borra a una persona desde una pantalla' },
+  media_kit_lockout: {
+    permite: ['SELECT', 'DELETE'],
+    motivo:
+      'el bloqueo por origen del media kit (0030 §2) lo escribe solo public_media_kit(). El creador cuenta los ' +
+      'orígenes bloqueados y los borra con «Desbloquear»; no lee el resumen del origen',
+    soloColumnas: { SELECT: ['locked_until', 'media_kit_id'] },
+  },
 };
 
 /** El rol con el que se conecta la aplicación. Es a quien se le miden los privilegios. */

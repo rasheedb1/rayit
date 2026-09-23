@@ -19,9 +19,9 @@ import { calcularItem } from '@mc/core';
 import {
   acceptPublicQuote, acceptQuote, acceptQuoteAndCreateCampaign, buildMediaKitSnapshot, completePublicAcceptance,
   createMediaKit, createQuote, createCampaignForQuote, deleteQuoteDraft, getCurrentRateCard, getDefaultTaxRate,
-  getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
+  getMediaKitById, getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
   nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
-  saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
+  saveRateCard, sendQuote, unlockMediaKit, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
   listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits, terminosIncluidosEnTarifario,
   MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
   type TextosCotizar,
@@ -407,28 +407,111 @@ describe('COT-2 · media kit', () => {
     assert.equal(buena.status === 'ok' && buena.viewCount, 1);
   });
 
-  test('diez contraseñas fallidas bloquean el enlace quince minutos, también para la buena', async () => {
+  test('diez contraseñas fallidas bloquean ESE origen quince minutos, también con la buena', async () => {
     const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    const atacante = { origin: '203.0.113.7' };
     let ultimo = '';
     for (let i = 0; i < 10; i++) {
-      const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`));
+      const r = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`, atacante));
       ultimo = r.status;
     }
     assert.equal(ultimo, 'locked');
-    const conLaBuena = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    const conLaBuena = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', atacante));
     assert.equal(conLaBuena.status, 'locked');
+    const soloAbrir = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, null, atacante));
+    assert.equal(soloAbrir.status, 'locked', 'recargar la página desde el mismo origen sigue bloqueado');
 
-    // Pasado el bloqueo, la buena entra y la cuenta vuelve a cero.
-    await t.admin(`UPDATE media_kit SET locked_until = now() - interval '1 second' WHERE id = '${kit.id}'`);
-    const despues = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    // La marca, desde otro origen, ni se entera: el bloqueo no es del enlace.
+    const marca = { origin: '198.51.100.20' };
+    const pide = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, null, marca));
+    assert.equal(pide.status, 'password_required');
+    const entra = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', marca));
+    assert.equal(entra.status, 'ok');
+
+    // Pasado el bloqueo, el origen bloqueado entra con la buena y su cuenta desaparece.
+    await t.admin(`UPDATE media_kit_lockout SET locked_until = now() - interval '1 second' WHERE media_kit_id = '${kit.id}'`);
+    const despues = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', atacante));
     assert.equal(despues.status, 'ok');
-    const estado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
-      const { rows } = await tx.query<{ failed_attempts: number; locked_until: string | null }>(
-        'SELECT failed_attempts, locked_until FROM media_kit WHERE id = $1', [kit.id]);
-      return rows[0]!;
+    const libre = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, kit.id));
+    assert.equal(libre?.lockedOrigins, 0);
+    await t.admin(`DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM media_kit_lockout WHERE media_kit_id = '${kit.id}') THEN
+        RAISE EXCEPTION 'el acierto no borró la cuenta del origen';
+      END IF; END $$`);
+  });
+
+  test('el origen se guarda resumido, nunca la IP', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'mala', { origin: '203.0.113.99' }));
+    // Una sola fila, y lo guardado es sha256(id del kit | IP) en hex.
+    await t.admin(`DO $$ BEGIN
+      IF (SELECT count(*) FROM media_kit_lockout WHERE media_kit_id = '${kit.id}') <> 1
+         OR NOT EXISTS (SELECT 1 FROM media_kit_lockout
+                         WHERE media_kit_id = '${kit.id}'
+                           AND origin_hash = encode(sha256(convert_to('${kit.id}|203.0.113.99', 'UTF8')), 'hex')) THEN
+        RAISE EXCEPTION 'el origen no se guardó como su resumen';
+      END IF; END $$`);
+
+    // Y el creador (mc_app) no puede leer ese resumen: solo contar y borrar.
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      try {
+        await tx.query('SELECT origin_hash FROM media_kit_lockout');
+        return 'leyó';
+      } catch (err) {
+        return (err as Error).message;
+      }
     });
-    assert.deepEqual(estado, { failed_attempts: 0, locked_until: null });
+    assert.match(r, /permission denied/);
+  });
+
+  test('cincuenta fallos en una hora, repartidos entre orígenes, bloquean el enlace entero', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    // Nueve por origen: ninguno llega a su propio bloqueo.
+    let ultimo = '';
+    for (let o = 0; o < 6 && ultimo !== 'locked'; o++) {
+      for (let i = 0; i < 9 && ultimo !== 'locked'; i++) {
+        const r = await t.db.withPublicShare((tx) =>
+          readPublicMediaKit(tx, kit.slug, `mala-${o}-${i}`, { origin: `192.0.2.${o}` }));
+        ultimo = r.status;
+      }
+    }
+    assert.equal(ultimo, 'locked');
+    const otro = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', { origin: '198.51.100.1' }));
+    assert.equal(otro.status, 'locked', 'el techo del enlace vale para todos los orígenes');
+
+    // El creador lo ve en su lista, y «Desbloquear» lo pone a cero.
+    const enLaLista = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, kit.id));
+    assert.ok(enLaLista?.lockedUntil, 'la lista dice hasta cuándo');
+    const libre = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => unlockMediaKit(tx, kit.id));
+    assert.equal(libre.lockedUntil, null);
+    assert.equal(libre.lockedOrigins, 0);
+    const entra = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', { origin: '198.51.100.1' }));
+    assert.equal(entra.status, 'ok');
+  });
+
+  test('el creador ve cuántos orígenes están bloqueados y los desbloquea', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    const marca = { origin: '198.51.100.30' };
+    for (let i = 0; i < 10; i++) {
+      await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`, marca));
+    }
+    const visto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, kit.id));
+    assert.equal(visto?.lockedOrigins, 1);
+    assert.equal(visto?.lockedUntil, null, 'el enlace sigue abierto para los demás');
+
+    // Otro workspace no desbloquea lo que no ve.
+    await assert.rejects(
+      t.db.withWorkspace(WS_VECINO, (tx) => unlockMediaKit(tx, kit.id)),
+      MediaKitNotFound,
+    );
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => unlockMediaKit(tx, kit.id));
+    const entra = await t.db.withPublicShare((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena', marca));
+    assert.equal(entra.status, 'ok');
   });
 
   test('un enlace vencido no entrega el snapshot', async () => {

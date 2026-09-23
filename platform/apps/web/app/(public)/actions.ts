@@ -6,6 +6,7 @@ import { readPublicMediaKit, type MediaKitSnapshot, type QuoteStatus } from "@mc
 import { acceptQuoteFromLink, withPublicShare } from "@/lib/db";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
 import { LimiteDeIntentos } from "@/app/(app)/cotizar/_lib/limite";
+import { origenDeLaPeticion } from "@/app/(app)/cotizar/_lib/origen";
 import { esRobotDePrevisualizacion } from "@/app/(app)/cotizar/_lib/robots";
 import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 
@@ -21,11 +22,6 @@ import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 
 /** 5 contraseñas por minuto, por enlace y por IP, antes de gastar un scrypt. */
 const intentos = new LimiteDeIntentos(5, 60_000);
-
-async function ipDeLaPeticion(): Promise<string> {
-  const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || "sin-ip";
-}
 
 export type AbrirKitResultado =
   | { status: "ok"; snapshot: MediaKitSnapshot }
@@ -44,12 +40,17 @@ export async function abrirMediaKitProtegido(slug: string, password: string): Pr
   if (typeof password !== "string" || password.length === 0 || password.length > 200) {
     return { status: "password_invalid", attemptsLeft: -1 };
   }
-  if (!intentos.permitir(`${slug}|${await ipDeLaPeticion()}`)) return { status: "too_many" };
+  const h = await headers();
+  // El mismo origen para el freno en memoria y para el bloqueo de la
+  // base, que es POR ORIGEN: diez fallos desde aquí no dejan fuera a la
+  // marca que entra desde otro sitio (0030).
+  const origin = origenDeLaPeticion(h);
+  if (!intentos.permitir(`${slug}|${origin}`)) return { status: "too_many" };
 
-  const robot = esRobotDePrevisualizacion((await headers()).get("user-agent"));
+  const robot = esRobotDePrevisualizacion(h.get("user-agent"));
   let r: Awaited<ReturnType<typeof readPublicMediaKit>>;
   try {
-    r = await withPublicShare((tx) => readPublicMediaKit(tx, slug, password, { count: !robot }));
+    r = await withPublicShare((tx) => readPublicMediaKit(tx, slug, password, { count: !robot, origin }));
   } catch (err) {
     console.error("[media kit público] no se pudo abrir", err);
     return { status: "error" };

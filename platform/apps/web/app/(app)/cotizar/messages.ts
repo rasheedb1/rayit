@@ -174,6 +174,18 @@ export const MESSAGES = {
     abrir: "Vista previa",
     despublicar: "Despublicar",
     publicar: "Publicar",
+    /**
+     * El bloqueo por contraseñas fallidas (migración 0030): el del enlace
+     * entero deja fuera a todos; el de un origen, solo a quien falló.
+     */
+    bloqueado: "Bloqueado",
+    bloqueadoHasta: (hora: string) => `Nadie puede entrar hasta las ${hora}: demasiadas contraseñas fallidas.`,
+    origenesBloqueados: (n: number) =>
+      n === 1
+        ? "1 visitante bloqueado 15 minutos por contraseñas fallidas."
+        : `${n} visitantes bloqueados 15 minutos por contraseñas fallidas.`,
+    desbloquear: "Desbloquear",
+    desbloquearAria: "Desbloquear este media kit: borra la cuenta de contraseñas fallidas",
     vacio: {
       title: "Todavía no has generado ningún media kit",
       description: "Se genera con las cifras de hoy y no vuelve a cambiar. Puedes generar otro cuando tus números crezcan.",

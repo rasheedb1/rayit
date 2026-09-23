@@ -8,7 +8,7 @@ import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { cambiarPublicacionMediaKit } from "../../actions";
+import { cambiarPublicacionMediaKit, desbloquearMediaKit } from "../../actions";
 import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { GenerarMediaKitForm } from "../generar-form";
@@ -16,11 +16,18 @@ import { GenerarMediaKitForm } from "../generar-form";
 export const metadata: Metadata = { title: "Media kit" };
 export const dynamic = "force-dynamic";
 
-function estadoDe(kit: MediaKitRow, ahora: number): { kind: "good" | "warn" | "neutral"; text: string } {
+function estadoDe(kit: MediaKitRow, ahora: number): { kind: "good" | "warn" | "bad" | "neutral"; text: string } {
   const t = MESSAGES.mediaKit;
   if (!kit.isPublic) return { kind: "neutral", text: t.privado };
   if (kit.expiresAt && new Date(kit.expiresAt).getTime() <= ahora) return { kind: "warn", text: t.vencido };
+  // lockedUntil llega solo si el bloqueo sigue vigente (queries/cotizar).
+  if (kit.lockedUntil) return { kind: "bad", text: t.bloqueado };
   return { kind: "good", text: t.publico };
+}
+
+/** Hay algo que «Desbloquear»: el enlace entero o algún origen. */
+function tieneBloqueo(kit: MediaKitRow): boolean {
+  return kit.lockedUntil !== null || kit.lockedOrigins > 0;
 }
 
 export default async function MediaKitPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
@@ -73,7 +80,16 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
       header: t.columnas.estado,
       render: (k) => {
         const e = estadoDe(k, ahora);
-        return <Pill kind={e.kind}>{e.text}</Pill>;
+        return (
+          <span className="flex flex-col items-start gap-1">
+            <Pill kind={e.kind}>{e.text}</Pill>
+            {k.lockedUntil ? (
+              <span className="text-xs text-muted">{t.bloqueadoHasta(f.time(k.lockedUntil))}</span>
+            ) : k.lockedOrigins > 0 ? (
+              <span className="text-xs text-muted">{t.origenesBloqueados(k.lockedOrigins)}</span>
+            ) : null}
+          </span>
+        );
       },
     },
     {
@@ -91,6 +107,13 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
               {k.isPublic ? t.despublicar : t.publicar}
             </Button>
           </form>
+          {tieneBloqueo(k) && (
+            <form action={desbloquearMediaKit.bind(null, k.id)}>
+              <Button size="sm" variant="ghost" type="submit" aria-label={t.desbloquearAria}>
+                {t.desbloquear}
+              </Button>
+            </form>
+          )}
         </span>
       ),
     },

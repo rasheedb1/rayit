@@ -51,8 +51,17 @@ export const mediaKit = pgTable('media_kit', {
   passwordHash: text('password_hash'),
   expiresAt: timestamptz('expires_at'),
   viewCount: integer('view_count').default(0).notNull(),
-  /** Contraseñas fallidas seguidas y hasta cuándo está bloqueado el enlace (migración 0030). */
+  /**
+   * El techo POR ENLACE de contraseñas fallidas (migración 0030): los
+   * fallos de todos los orígenes desde `failedSince` (ventana de una
+   * hora) y hasta cuándo está bloqueado el enlace entero. El bloqueo
+   * POR ORIGEN vive en media_kit_lockout, que no se declara aquí (como
+   * contact_suppression): mc_app no puede leer su origin_hash, y la
+   * comparación de schema.test.ts lee las columnas como mc_app. Solo la
+   * tocan public_media_kit() y queries/cotizar/media-kit.ts, en SQL.
+   */
   failedAttempts: integer('failed_attempts').default(0).notNull(),
+  failedSince: timestamptz('failed_since'),
   lockedUntil: timestamptz('locked_until'),
   createdAt: createdAt(),
 });
