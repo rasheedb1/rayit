@@ -233,7 +233,19 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
 
   it("un cuerpo por encima del techo se corta con 413 y no llega a la base", async () => {
     const texto = `Post ID,Views\n${"y".repeat(MAX_CUERPO)}\n`;
-    const r = await POST(peticion(texto, { red: "tiktok", handleNuevo: "ruta.enorme", mapeo: MAPEO_IG }));
+    // El multipart se serializa a bytes antes de armar la petición, como
+    // llega de la red. Con el FormData en memoria, al cortar la lectura
+    // a mitad el generador de undici seguía encolando en un flujo ya
+    // cerrado y dejaba un rechazo sin manejar (ERR_INVALID_STATE) que
+    // tumbaba `pnpm verificar` aunque la prueba pasara.
+    const enMemoria = peticion(texto, { red: "tiktok", handleNuevo: "ruta.enorme", mapeo: MAPEO_IG });
+    const r = await POST(
+      new Request(enMemoria.url, {
+        method: "POST",
+        headers: enMemoria.headers,
+        body: new Uint8Array(await enMemoria.arrayBuffer()),
+      }),
+    );
     expect(r.status).toBe(413);
     expect(await r.json()).toEqual({ ok: false, error: expect.stringMatching(/5 MB/) });
     const cuentas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
