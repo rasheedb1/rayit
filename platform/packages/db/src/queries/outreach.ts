@@ -326,3 +326,9 @@ export async function nextBusinessDay(tx: SqlExecutor, at: Date, timeZone: strin
   }
   return fecha;
 }
+
+// ---------------------------------------------------------------------
+// El motor de cadencias (VEN-10): enrolar, reclamar, enviar, responder.
+// Vive en su archivo por tamaño; se importa desde aquí igual.
+// ---------------------------------------------------------------------
+export * from './outreach-motor.ts';
