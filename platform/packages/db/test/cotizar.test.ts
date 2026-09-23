@@ -1526,15 +1526,20 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
   // Hallazgo r6: Vitalé perdido «por el precio» y su COT-2026-007 todavía
   // aceptable desde el enlace; al aceptarla, el negocio volvía a «Ganado»
   // y el motivo se borraba. Perder cierra lo que está sobre la mesa.
+  //
+  // Con 0033 (una aceptada por negocio) enviar la segunda versión deja
+  // sin efecto la primera, así que sobre la mesa hay como mucho UNA viva:
+  // perder cierra esa (vista o solo enviada), no toca el borrador ni la
+  // que ya quedó sin efecto, y cada enlace dice lo suyo.
   test('perder un negocio cierra sus cotizaciones abiertas: el enlace ya no lo gana ni borra el motivo', async () => {
     const ITEM = { deliverable: 'reel', platformId: 'instagram' as const, description: 'Reel', quantity: 1, unitPrice: '2000000' };
     const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Para perder con cotización', amount: '2000000' }));
-    const { enviada, vista, borrador } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+    const { anterior, vista, borrador } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const a = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
       const b = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
       const c = await createQuote(tx, { dealId, creatorId: creadora, taxRate: '0', items: [ITEM] });
-      return { enviada: await sendQuote(tx, a.id, TEXTOS), vista: await sendQuote(tx, b.id, TEXTOS), borrador: c };
+      return { anterior: await sendQuote(tx, a.id, TEXTOS), vista: await sendQuote(tx, b.id, TEXTOS), borrador: c };
     });
     // La marca abrió la segunda: queda 'viewed'.
     assert.equal((await t.db.withPublicShare((tx) => readPublicQuote(tx, vista.slug))).status, 'ok');
@@ -1543,32 +1548,36 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
       moveDeal(tx, dealId, 'perdido', { lostReason: 'precio', quoteClosedActivity: (n) => `[cerrada] ${n}` }));
     assert.equal(res.isLost, true);
     assert.deepEqual(
-      res.closedQuotes.map((q) => q.number).sort(),
-      [enviada.number, vista.number].sort(),
-      'se cierran la enviada y la vista, no el borrador',
+      res.closedQuotes.map((q) => q.number),
+      [vista.number],
+      'se cierra la viva, no el borrador ni la que ya quedó sin efecto',
     );
 
     const estado = async (id: string) => (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, id)))!;
-    for (const q of [enviada, vista]) {
-      const final = await estado(q.id);
-      assert.equal(final.status, 'rejected');
-      assert.ok(final.rejectedAt, 'con su fecha');
-    }
+    const final = await estado(vista.id);
+    assert.equal(final.status, 'rejected');
+    assert.ok(final.rejectedAt, 'con su fecha');
+    assert.equal((await estado(anterior.id)).status, 'expired', 'la primera sigue sin efecto');
     assert.equal((await estado(borrador.id)).status, 'draft');
 
-    // Cada una deja su línea en la historia del negocio, con el motivo.
+    // Deja su línea en la historia del negocio, con el motivo.
     const lineas = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ subject: string; lost_reason: string }>(
         `SELECT subject, metadata->>'lost_reason' AS lost_reason FROM activity
           WHERE deal_id = $1 AND metadata->>'kind' = 'quote_closed_on_loss' ORDER BY subject`, [dealId]);
       return rows;
     });
-    assert.deepEqual(lineas, [enviada.number, vista.number].sort().map((n) => ({ subject: `[cerrada] ${n}`, lost_reason: 'precio' })));
+    assert.deepEqual(lineas, [{ subject: `[cerrada] ${vista.number}`, lost_reason: 'precio' }]);
 
-    // La marca intenta aceptar después: el enlace dice «rechazada».
+    // La marca intenta aceptar después: la vista dice «rechazada» y la
+    // anterior, «sin efecto».
     assert.deepEqual(
-      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, enviada.slug, FIRMA)),
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, vista.slug, FIRMA)),
       { status: 'not_acceptable', quoteStatus: 'rejected' },
+    );
+    assert.deepEqual(
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, anterior.slug, FIRMA)),
+      { status: 'not_acceptable', quoteStatus: 'superseded' },
     );
     const fila = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ stage_id: string; lost_reason: string | null }>(
@@ -1576,6 +1585,20 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
       return rows[0]!;
     });
     assert.deepEqual(fila, { stage_id: 'perdido', lost_reason: 'precio' }, 'sigue perdido y con su motivo');
+
+    // Una solo enviada (la marca no la abrió) también se cierra.
+    const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const id = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Perdido sin abrir', amount: '1000000' });
+      const q = await sendQuote(tx, (await createQuote(tx, { dealId: id, creatorId: creadora, taxRate: '0', items: [ITEM] })).id, TEXTOS);
+      const r = await moveDeal(tx, id, 'perdido', { lostReason: 'precio' });
+      return { r, q };
+    });
+    assert.deepEqual(enviada.r.closedQuotes.map((q) => q.number), [enviada.q.number]);
+    assert.equal((await estado(enviada.q.id)).status, 'rejected');
+    assert.deepEqual(
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, enviada.q.slug, FIRMA)),
+      { status: 'not_acceptable', quoteStatus: 'rejected' },
+    );
 
     // Mover entre etapas abiertas no cierra nada.
     const otro = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
