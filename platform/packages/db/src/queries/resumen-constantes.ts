@@ -8,10 +8,16 @@
  * `resumen.ts` los reexporta: en el servidor da igual de dónde se tomen.
  */
 
-/** platform.id (catálogo de 0002). Las cuatro redes del MVP. */
-export type PlatformId = 'tiktok' | 'instagram' | 'facebook' | 'youtube';
-
-export const PLATFORMS: readonly PlatformId[] = ['tiktok', 'instagram', 'facebook', 'youtube'];
+/**
+ * platform.id (catálogo de 0002). Las cuatro redes del MVP.
+ *
+ * Es una tupla NO vacía y de solo lectura (`as const`), así que
+ * `z.enum(PLATFORMS)` la toma tal cual en la frontera de validación, sin
+ * forzar el tipo. PlatformId sale de ella: una red nueva se agrega en un
+ * solo sitio y no hay forma de que el tipo y la lista se separen.
+ */
+export const PLATFORMS = ['tiktok', 'instagram', 'facebook', 'youtube'] as const;
+export type PlatformId = (typeof PLATFORMS)[number];
 
 /** Los tres periodos que ofrece la pantalla. Van en la URL, así que se validan. */
 export const PERIODS = [7, 30, 90] as const;

@@ -7,7 +7,6 @@ import {
   importCsvReadings,
   PLATFORMS,
   type CsvImportResult,
-  type PlatformId,
 } from "@mc/db/queries/resumen";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
@@ -73,9 +72,10 @@ const esquema = z.object({
   /**
    * Las redes salen de la misma lista que el resto del módulo
    * (resumen-constantes.ts): escritas a mano aquí, una red nueva no
-   * llegaba a la escritura. PLATFORMS nunca está vacía.
+   * llegaba a la escritura. PLATFORMS es una tupla no vacía (`as const`),
+   * así que entra a `z.enum` sin forzar el tipo.
    */
-  red: z.enum(PLATFORMS as unknown as [PlatformId, ...PlatformId[]]),
+  red: z.enum(PLATFORMS),
   /** Uno de los dos: la cuenta que ya existe, o el nombre de la que se crea. */
   connectionId: z.string().regex(UUID_RE).optional(),
   handleNuevo: z.string().trim().min(1).max(64).optional(),

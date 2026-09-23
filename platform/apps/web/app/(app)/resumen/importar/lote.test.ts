@@ -123,6 +123,18 @@ describe("importarLote, la escritura", () => {
     expect(r.ok && Date.parse(r.resultado.capturedAt)).toBe(Date.parse("2026-09-16T17:00:00Z"));
   }, 60_000);
 
+  it("una red que no está en PLATFORMS no pasa del esquema", async () => {
+    // z.enum(PLATFORMS) toma la tupla tal cual: ni un doble cast que
+    // esconda un cambio de forma, ni una lista escrita a mano aparte.
+    const r = await importarCsv({
+      texto: fixture("instagram-insights.csv"),
+      red: "myspace",
+      handleNuevo: "accion.red",
+      mapeo: MAPEO_IG,
+    });
+    expect(r).toEqual({ ok: false, error: "No se pudo importar. Vuelve a intentarlo y, si sigue igual, avísanos." });
+  });
+
   it("un connectionId que no es un UUID no pasa del esquema", async () => {
     const r = await importarCsv({
       texto: fixture("instagram-insights.csv"),
