@@ -199,8 +199,8 @@ export const STORIES: readonly Story[] = [
     title: "El worker sobre @mc/db",
     desc: "En apps/worker/src/runner/db-pglite.ts y packages/connectors/test/helpers/pglite.ts reemplazar el bucle «aplicar *.sql en orden como superusuario» por applyMigrations(exec) de db/lib/aplicar.mjs u openTestDb de @mc/db/test/pglite, para tener schema_migrations, checksums y el rol mc_app iguales que en Supabase.",
     done: "apps/worker y packages/connectors no definen un bucle de migraciones propio; sus pruebas siguen en verde.",
-    status: "pendiente",
-    note: "Abierta por Rasheed en la ronda 3 de CIM-2 (22 de septiembre). En la ronda 4 se cerró la parte que sí era un camino de seguridad: apps/worker/src/runner/db.ts importa tlsFor, hostOf y resolveTls de @mc/db y borró sus copias (una línea de montaje en carpeta de Nicolás), con lo que el worker hereda además la guardia contra ?sslmode= en la URL. Queda solo la unificación del bucle de migraciones de PGlite.",
+    status: "hecho",
+    note: "23-sep (cierre CON-A): el worker y las pruebas de connectors migran con applyMigrations de db/lib/aplicar.mjs (el runner de @mc/db, re-exportado en @mc/db/embedded); schema_migrations y checksums iguales que en Supabase, y dos migraciones con el mismo número detienen el arranque. Prueba: apps/worker/test/migraciones.test.ts y packages/connectors/test/migraciones.test.ts. El TLS ya se había cerrado en la ronda 4 de CIM-2; el pool del worker se queda propio a propósito (mc_worker cruza workspaces).",
   },
   {
     id: "CON-3", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1", "CIM-3"],
@@ -248,7 +248,7 @@ export const STORIES: readonly Story[] = [
     desc: "compute.baseline (mediana por red y corte de edad) y compute.post_score. Con menos de ocho videos, is_reliable = false. Usa packages/core/scoring.ts, que ya existe.",
     done: "Un post con el doble de views que la mediana queda con outlier_tier = outlier.",
     status: "hecho",
-    note: "Cada video se puntúa en el mayor corte que alcanzó (24, 72, 168 o 720 h) contra la línea base de ESE corte; con menos de ocho videos, views_vs_median queda en null y nunca en cero. La línea base es append-only y se recalcula siempre (la ventana cambia con el paso del tiempo aunque no lleguen lecturas). El aviso de outlier o breakout se manda una vez por video y por nivel. Sobre el seed, las 16 líneas base y los 59 puntajes salen idénticos a los que calcula db/seed/0002 en SQL. No se hizo sin CON-5: los jobs leen post_metric_snapshot, que hoy llenan el seed y el CSV de RES-2. Tras /code-review: el corte tiene que estar medido (la lectura cae en la banda del corte, no la de hace un mes de una cuenta a la que se le dejó de recolectar), los múltiplos se recortan al tope de su columna y solo se avisa cuando el video SUBE de nivel.",
+    note: "23-sep (cierre CON-A): en main. Cada video se puntúa en el mayor corte que alcanzó y midió (24, 72, 168 o 720 h) contra la línea base de ESE corte; con menos de ocho videos, views_vs_median queda en null y nunca en cero. Corre encadenado tras cada collect.post_metrics con datos (baseline → post_score, sin migración; los crons 05:40 y 05:45 quedan de red). Probado: las 16 líneas base y los 59 puntajes salen idénticos a db/seed/0002, y campaign.compute da 4,496× en Café Alma con la línea base de CON-6. En producción corre cuando esté el worker (WRK): hoy Supabase tiene las filas que sembró 0002.",
   },
   {
     id: "CON-7", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-5"],

@@ -466,3 +466,35 @@ todavía no lee `post_score`; lo hará RES-3.
    `post_score` en Supabase son las que sembró `0002`. Los dos jobs son
    idempotentes: el día que el worker arranque, la primera corrida
    refresca lo que haya sin duplicar nada.
+
+---
+
+## 6. Cierre (23 de septiembre, CON-A)
+
+Integrada en `main` desde la rama `nicolas/CON-A-datos` (el cierre del
+módulo, parte A: `docs/propuestas/CIERRE-CON-A.md`). Lo que cambió
+respecto a lo escrito arriba:
+
+1. **El punto 6 de §5 ya no aplica.** CON-5 entró a `main` antes; el
+   merge solo chocó en los tres sitios de unión previstos, y con CON-7
+   de por medio los conteos del runner quedaron en 15 con handler y 11
+   sin handler.
+2. **§0.3 y §1 decían «cron `40 5` / `45 5`, cinco minutos después».**
+   Ahora los dos jobs corren **encadenados** en el runner
+   (`JobOptions.after`): cada `collect.post_metrics` que procesa algo
+   encola `compute.baseline`, y este `compute.post_score`, con el mismo
+   `workspaceId`. Los crons de `0009` se quedan como red de seguridad.
+   Sin migración.
+3. **La verificación de §4 es ahora una prueba**
+   (`apps/worker/test/costuras-con.test.ts`): las 16 líneas base y los
+   59 puntajes que escribe el job son idénticos a los de `db/seed/0002`,
+   y `campaign.compute` da 4,496× en Café Alma con la línea base de
+   CON-6. El contrato de §2 para RES-3 también se prueba sobre el seed.
+4. **Tras `/code-review` del cierre**: `cap()` compara el valor ya
+   redondeado a la escala de la columna, y un `workspace.locale`
+   inválido cae al DEFAULT de la columna en vez de deshacer el puntaje
+   del workspace.
+5. **En producción corre cuando esté el worker (WRK).** Hasta entonces,
+   `creator_baseline` y `post_score` en Supabase son las que sembró
+   `0002`.
+
