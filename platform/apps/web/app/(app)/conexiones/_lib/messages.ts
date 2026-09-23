@@ -105,6 +105,13 @@ export const MESSAGES = {
     autorizarCifras: "Autorizar cifras",
     autorizarCifrasAria: (cuenta: string) => `Autorizar cifras de ${cuenta}`,
     delta: (texto: string) => `${texto} en 7 días`,
+    /**
+     * Cuando la cuenta pide reautorizar y esta versión no puede: la
+     * bandera oauth_connect está apagada (es lo que hay hoy en
+     * producción) o esa red todavía no tiene app de OAuth (YouTube y
+     * Facebook, CON-8). Es una instrucción, no un callejón sin salida.
+     */
+    sinReautorizar: "Para volver a leerla, quítala y agrégala por su @.",
     actualizar: "Actualizar",
     actualizarAria: (cuenta: string) => `Actualizar ${cuenta}`,
     quitar: "Quitar",

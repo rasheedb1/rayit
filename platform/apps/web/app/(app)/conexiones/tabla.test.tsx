@@ -2,8 +2,9 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { AccountRow } from "@mc/db";
 import { formatterFor } from "@/lib/format";
+import type { EntornoDeConexion } from "./_lib/entorno";
 import { MESSAGES } from "./_lib/messages";
-import { TablaDeCuentas, type EntornoDeConexion } from "./tabla";
+import { TablaDeCuentas } from "./tabla";
 
 /**
  * CON-4 · lo que se ve en la tabla, sin base y sin red. La prueba de
@@ -17,16 +18,13 @@ const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "UTC" });
 
 const CONFIGURADO: EntornoDeConexion = {
   oauthConnect: true,
-  oauth: {
-    apps: {
-      tiktok: { provider: "tiktok", clientId: "x", clientSecret: "y", redirectUri: "http://localhost/cb", scopes: ["user.info.basic"] },
-      instagram: { provider: "instagram", clientId: "x", clientSecret: "y", redirectUri: "http://localhost/cb", scopes: ["instagram_business_basic"] },
-    },
-    missing: {},
-  },
+  apps: { tiktok: { configurada: true, faltan: [] }, instagram: { configurada: true, faltan: [] } },
 };
-const APAGADO: EntornoDeConexion = { oauthConnect: false, oauth: { apps: {}, missing: {} } };
-const SIN_CREDENCIALES: EntornoDeConexion = { oauthConnect: true, oauth: { apps: {}, missing: { tiktok: ["TIKTOK_LOGIN_CLIENT_KEY"], instagram: ["META_APP_ID"] } } };
+const APAGADO: EntornoDeConexion = { oauthConnect: false, apps: {} };
+const SIN_CREDENCIALES: EntornoDeConexion = {
+  oauthConnect: true,
+  apps: { tiktok: { configurada: false, faltan: ["TIKTOK_LOGIN_CLIENT_KEY"] }, instagram: { configurada: false, faltan: ["META_APP_ID"] } },
+};
 
 function fila(over: Partial<AccountRow> & { id: string }): AccountRow {
   return {
@@ -147,5 +145,21 @@ describe("la tabla con oauth_connect apagada (lo que hay hoy en producción)", (
     expect(screen.queryByRole("button", { name: MESSAGES.tabla.autorizarCifrasAria("@cafealma.recetas") })).not.toBeInTheDocument();
     // Y «Quitar» sigue ahí: una cuenta rota se puede retirar sin la bandera.
     expect(screen.getByRole("button", { name: MESSAGES.tabla.quitarAria("@cafealma.tienda") })).toBeInTheDocument();
+  });
+
+  it("la fila vencida no se queda sin salida: dice qué hacer en su lugar", () => {
+    pintar([VENCIDA], APAGADO);
+    expect(celdas("@cafealma.tienda").getByText(MESSAGES.tabla.sinReautorizar)).toBeInTheDocument();
+  });
+});
+
+describe("una red que todavía no tiene app de OAuth (YouTube, CON-8)", () => {
+  it("con el token vencido dice qué hacer en vez de ofrecer un botón que no existe", () => {
+    const youtube = fila({ id: "9", platformId: "youtube", handle: "LauraPostres", accessExpiresAt: "2026-09-22T00:00:00.000Z" });
+    pintar([youtube], CONFIGURADO);
+    const r = celdas("@LauraPostres");
+    expect(r.getByText(MESSAGES.tabla.estado.vencida)).toBeInTheDocument();
+    expect(r.getByText(MESSAGES.tabla.sinReautorizar)).toBeInTheDocument();
+    expect(r.queryByRole("button", { name: MESSAGES.conectar.reautorizarAria("@LauraPostres") })).not.toBeInTheDocument();
   });
 });

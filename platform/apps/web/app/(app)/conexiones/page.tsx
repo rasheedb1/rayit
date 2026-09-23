@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { loadOAuthApps } from "@mc/connectors";
 import { getMetricRequirement, type AccountRow, type MetricRequirement } from "@mc/db";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,15 +7,16 @@ import { flags } from "@/content/flags";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { agregarCuenta } from "./actions";
-import { withWorkspace } from "./_lib/db";
 import { getCuentasService } from "./_lib/cuentas-server";
+import { OWNERSHIP_DECLARATION_ES, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
+import { withWorkspace } from "./_lib/db";
+import { entornoDeConexion } from "./_lib/entorno";
 import { accesoDe } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
-import { OWNERSHIP_DECLARATION_ES, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { Conectar } from "./conectar";
 import { PasosManuales } from "./pasos-manuales";
-import { TablaDeCuentas, type EntornoDeConexion } from "./tabla";
+import { TablaDeCuentas } from "./tabla";
 
 export const metadata: Metadata = { title: MESSAGES.meta.title };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
@@ -83,7 +83,9 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
     return { value: p, label: a.missing.length ? MESSAGES.agregar.redSinConfigurar(a.name) : a.name };
   });
 
-  const entorno: EntornoDeConexion = { oauthConnect: flags.oauth_connect, oauth: loadOAuthApps(process.env) };
+  // Del entorno solo sale un booleano y nombres de variables: el
+  // client_secret no entra en el árbol de render (_lib/entorno.ts).
+  const entorno = entornoDeConexion(process.env, flags.oauth_connect);
   const t = MESSAGES.cabecera;
 
   // El paso manual solo tiene sentido con una cuenta de TikTok autorizada:

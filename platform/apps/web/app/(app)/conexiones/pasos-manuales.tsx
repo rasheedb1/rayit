@@ -18,7 +18,7 @@ const t = MESSAGES.pasosManuales;
 export function PasosManuales({ requisito, cuentas }: { requisito: MetricRequirement | null; cuentas: readonly string[] }) {
   if (!requisito || cuentas.length === 0) return null;
   return (
-    <section aria-labelledby="pasos-manuales" className="mt-10 rounded-md border border-warn bg-warn-wash p-5">
+    <section aria-labelledby="pasos-manuales" className="mt-10 rounded-md border border-warn/40 bg-warn-wash p-5">
       <SectionTitle>
         <span id="pasos-manuales">{t.titulo}</span>
       </SectionTitle>

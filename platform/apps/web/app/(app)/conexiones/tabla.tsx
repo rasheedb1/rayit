@@ -1,4 +1,4 @@
-import type { OAuthApps } from "@mc/connectors";
+import type { OAuthProviderId } from "@mc/connectors";
 import type { AccountRow } from "@mc/db";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -9,19 +9,12 @@ import { PlatformPill } from "@/components/ui/platform-pill";
 import type { Formatter } from "@/lib/format";
 import { actualizarCuenta, desconectarConexion } from "./actions";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL } from "./_lib/consent";
+import { appDeRed, type EntornoDeConexion } from "./_lib/entorno";
 import { accesoDe, estadoDeCuenta, frescura, proveedorDe, type Acceso } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
 import { ConnectDialog } from "./connect-dialog";
 
 const t = MESSAGES.tabla;
-
-/** Lo que la tabla necesita saber del entorno, resuelto una vez en la página. */
-export interface EntornoDeConexion {
-  /** flags.oauth_connect: sin ella no se ofrece ni conectar ni reautorizar. */
-  oauthConnect: boolean;
-  /** loadOAuthApps(process.env): qué app está configurada y qué le falta a la que no. */
-  oauth: OAuthApps;
-}
 
 export interface TablaDeCuentasProps {
   rows: AccountRow[];
@@ -73,13 +66,10 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * conserva. Si la app de esa red no está configurada en el entorno, el
  * botón sale deshabilitado diciendo qué falta, nunca desaparece.
  */
-function Reautorizar({ row, entorno }: { row: AccountRow; entorno: EntornoDeConexion }) {
-  if (!entorno.oauthConnect) return null;
-  const provider = proveedorDe(row.platformId);
-  if (!provider) return null;
+function Reautorizar({ row, provider, entorno }: { row: AccountRow; provider: OAuthProviderId; entorno: EntornoDeConexion }) {
   const red = PLATFORM_LABEL[provider];
-  const configurada = entorno.oauth.apps[provider];
-  const motivo = configurada ? undefined : MESSAGES.conectar.sinConfigurar(red, (entorno.oauth.missing[provider] ?? []).join(", "));
+  const app = appDeRed(entorno, provider);
+  const motivo = app.configurada ? undefined : MESSAGES.conectar.sinConfigurar(red, app.faltan.join(", "));
   return (
     <ConnectDialog
       label={red}
@@ -103,7 +93,8 @@ function Reautorizar({ row, entorno }: { row: AccountRow; entorno: EntornoDeCone
  */
 function AutorizarCifras({ row, entorno }: { row: AccountRow; entorno: EntornoDeConexion }) {
   if (!entorno.oauthConnect || row.platformId !== "tiktok") return null;
-  const motivo = entorno.oauth.apps.tiktok ? undefined : MESSAGES.conectar.sinConfigurar(PLATFORM_LABEL.tiktok, (entorno.oauth.missing.tiktok ?? []).join(", "));
+  const app = appDeRed(entorno, "tiktok");
+  const motivo = app.configurada ? undefined : MESSAGES.conectar.sinConfigurar(PLATFORM_LABEL.tiktok, app.faltan.join(", "));
   return (
     <ConnectDialog
       label={PLATFORM_LABEL.tiktok}
@@ -192,9 +183,18 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion):
       render: (r) => {
         const estado = estadoDeCuenta(r, ahora);
         const acceso = accesoDe(r.accessMode);
+        // Con la bandera apagada, o en una red que todavía no tiene app
+        // de OAuth (YouTube y Facebook, CON-8), no hay botón que ofrecer:
+        // en vez de dejar la fila sin salida, se dice qué hacer.
+        const provider = entorno.oauthConnect ? proveedorDe(r.platformId) : null;
         return (
-          <div className="flex flex-wrap gap-1">
-            {estado.accion === "reautorizar" && <Reautorizar row={r} entorno={entorno} />}
+          <div className="flex flex-wrap items-center gap-1">
+            {estado.accion === "reautorizar" &&
+              (provider ? (
+                <Reautorizar row={r} provider={provider} entorno={entorno} />
+              ) : (
+                <span className="max-w-[16rem] text-xs text-ink-2">{t.sinReautorizar}</span>
+              ))}
             {estado.accion === "actualizar" && (
               <form action={actualizarCuenta.bind(null, r.id)}>
                 <Button type="submit" size="sm" variant="secondary" aria-label={t.actualizarAria(nombre(r))}>

@@ -1,8 +1,8 @@
 import type { OAuthProviderId } from "@mc/connectors";
 import { SectionTitle } from "@/components/page-header";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL } from "./_lib/consent";
+import { appDeRed, type EntornoDeConexion } from "./_lib/entorno";
 import { MESSAGES } from "./_lib/messages";
-import type { EntornoDeConexion } from "./tabla";
 import { ConnectDialog } from "./connect-dialog";
 
 const t = MESSAGES.conectar;
@@ -35,8 +35,8 @@ export function Conectar({ entorno }: { entorno: EntornoDeConexion }) {
       <div className="mt-4 flex flex-wrap gap-2">
         {REDES_CONECTABLES.map((provider) => {
           const red = PLATFORM_LABEL[provider];
-          const configurada = entorno.oauth.apps[provider];
-          const motivo = configurada ? undefined : t.sinConfigurar(red, (entorno.oauth.missing[provider] ?? []).join(", "));
+          const app = appDeRed(entorno, provider);
+          const motivo = app.configurada ? undefined : t.sinConfigurar(red, app.faltan.join(", "));
           return (
             <ConnectDialog
               key={provider}
