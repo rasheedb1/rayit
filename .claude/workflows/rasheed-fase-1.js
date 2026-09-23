@@ -126,12 +126,13 @@ CONTEXTO DEL PROYECTO
 - Producto pensado para escalar globalmente: todos los textos de interfaz en un solo lugar por módulo (un archivo messages.ts), moneda y zona horaria desde el workspace, fechas y montos con Intl, nada hardcodeado a Colombia salvo los valores por defecto del workspace.
 - Llaves externas: las de Google (GOOGLE_CLIENT_ID/SECRET), Unipile (UNIPILE_DSN/UNIPILE_ACCESS_TOKEN) y Anthropic (ANTHROPIC_API_KEY) pueden no existir en el entorno. Construye contra fixtures grabados y una implementación falsa detrás de la misma interfaz; las pruebas automatizadas nunca necesitan red; la interfaz muestra un estado claro de «canal no configurado» cuando falta la llave. Nunca inventes credenciales. Documenta en platform/.env.example qué llave hace falta y cómo se consigue.
 - Modelos de lenguaje: usa @anthropic-ai/sdk; claude-sonnet-5 para generar y juzgar, claude-haiku-4-5-20251001 para clasificar. Registra tokens y costo de cada llamada. Consulta la documentación actual del SDK antes de escribir la integración.
+- **Escribe por partes.** El orquestador da por colgado a un agente que pasa unos minutos sin ejecutar ninguna herramienta, lo reinicia y se pierde lo no commiteado. Nunca escribas un archivo de más de ~250 líneas en una sola llamada: crea el archivo con la primera parte y añade el resto con ediciones sucesivas. Haz commits intermedios en tu rama cada vez que algo compile, para que un reinicio no te haga empezar de cero (si al empezar tu rama ya existe con commits, continúa desde ahí).
 - Otros agentes trabajan en paralelo en esta máquina: para levantar la web usa un puerto libre entre 3100 y 3999 (\`pnpm --filter @mc/web dev --port NNNN\`), nunca el 3000.
 `
 
 const PROTOCOLO_RAMA = (branch) => `
 PROTOCOLO DE TRABAJO (obligatorio)
-1. Estás en un worktree limpio. Crea tu rama: \`git checkout -b ${branch}\`.
+1. Estás en un worktree limpio. Crea tu rama, o retómala si ya existe por un reinicio: \`git checkout ${branch} 2>/dev/null || git checkout -b ${branch}\`.
 2. Instala: \`cd platform && pnpm install\`. Si necesitas credenciales de Supabase, corre \`make db.unlock\` en platform/ (la frase está en el Llavero; escribe .env.local, que no se versiona). Las pruebas automatizadas NO deben necesitar red: usa Postgres embebido (pglite, ya es dependencia) aplicando db/migrations como hace db/migrate.mjs.
 3. Trabaja hasta cumplir el «terminado cuando» de cada historia. No dejes TODOs sin dueño, ni código muerto, ni datos de ejemplo pasando por reales.
 4. Antes de terminar, en platform/: \`pnpm verificar\` y \`pnpm --filter @mc/web build\` en verde. Si algo no pasa, arréglalo; no lo silencies.
