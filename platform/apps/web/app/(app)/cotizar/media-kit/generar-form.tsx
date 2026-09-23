@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { DateInput } from "@/components/ui/date-input";
+import { FechaInput } from "../_ui/fecha";
 import { Field, Input } from "@/components/ui/field";
 import type { ActionState } from "@/lib/forms";
 import { generarMediaKit } from "../actions";
@@ -55,7 +55,7 @@ export function GenerarMediaKitForm({ creatorId }: { creatorId: string }) {
           </span>
         </Field>
         <Field label={t.opciones.expira} help={t.opciones.expiraAyuda} error={errors.expiresOn} htmlFor="mk-expira">
-          <DateInput name="expiresOn" value={expiresOn} onChange={setExpiresOn} />
+          <FechaInput name="expiresOn" value={expiresOn} onChange={setExpiresOn} />
         </Field>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">

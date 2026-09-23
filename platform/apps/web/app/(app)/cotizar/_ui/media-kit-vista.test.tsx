@@ -113,6 +113,23 @@ describe("MediaKitVista", () => {
     expect(columna).toHaveClass("items-start");
   });
 
+  it("a 400 px las cifras de cada red van en tres columnas, número y etiqueta con la misma alineación", () => {
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    const redes = screen.getByRole("region", { name: "Redes" });
+    const bloques = redes.querySelectorAll("[data-cifras-red]");
+    expect(bloques).toHaveLength(2);
+    for (const b of bloques) {
+      // jsdom no mide cajas: lo que se comprueba es la regla. En móvil,
+      // rejilla de tres a la izquierda (con flex-wrap y text-right, la
+      // tercera cifra bajaba sola con el número a la derecha); desde sm,
+      // en fila y a la derecha.
+      expect(b).toHaveClass("grid", "grid-cols-3", "text-left", "sm:flex", "sm:text-right");
+      expect(b).not.toHaveClass("flex-wrap");
+    }
+    const tiktok = bloques[0]!;
+    expect(within(tiktok as HTMLElement).getByText("7,4 %")).toBeInTheDocument();
+  });
+
   it("sin audiencia ni videos, no pinta las secciones vacías; un snapshot v1 no enseña su audiencia plana", () => {
     render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [], audiencia: [], tarifas: [] }} />);
     expect(screen.queryByRole("region", { name: "Tarifas" })).not.toBeInTheDocument();
