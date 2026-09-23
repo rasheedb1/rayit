@@ -33,6 +33,7 @@ import {
   ResultFrozenError,
   type WorkspaceTx,
 } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
@@ -206,6 +207,19 @@ describe('asociar y quitar posts', () => {
     posts = await laura((tx) => listCampaignPosts(tx, CAMPAIGN_FRESKO));
     assert.equal(posts.length, 2);
     assert.equal((await laura((tx) => listCampaignPosts(tx, CAMPAIGN_NUTRIVE))).length, 1, 'el post sigue en Nutrivé');
+
+    // Bitácora (ACC-2): cada asociación y la quitada dejan su fila sobre la campaña; el «ya no estaba» no escribe nada.
+    const asociadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked');
+    assert.equal(asociadas.length, 2);
+    const principalFresko = (asociadas[0]?.before as { primaryPostId: string | null }).primaryPostId;
+    assert.deepEqual(asociadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: false, deliverable: null, isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[0]?.after, { postId: POST_D05_YOUTUBE_NUTRIVE, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[1]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: true, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko }, 'la segunda vez ya estaba');
+    const quitadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_unlinked');
+    assert.equal(quitadas.length, 1);
+    assert.deepEqual(quitadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE });
+    assert.equal(quitadas[0]?.after, null);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, CAMPAIGN_FRESKO), [], 'desde otro workspace no se ve');
   });
 
   test('un solo principal por campaña', async () => {
@@ -222,6 +236,12 @@ describe('asociar y quitar posts', () => {
 
     await assert.rejects(laura((tx) => setPrimaryPost(tx, CAMPAIGN_FRESKO, POST_D01_REEL_CAFE_ALMA)), CampaignPostNotFoundError);
     await laura((tx) => unlinkPost(tx, CAMPAIGN_FRESKO, POST_D05_YOUTUBE_NUTRIVE));
+
+    const principal = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.primary_post_set');
+    assert.deepEqual(principal.map((f) => [f.before, f.after]), [[{ primaryPostId: POST_D05_YOUTUBE_NUTRIVE }, { primaryPostId: POST_D03_TIKTOK_FRESKO }]], 'el intento sobre un post ajeno a la campaña no escribe');
+    // Asociar D05 como principal desmarcó al anterior: queda en before, no se pierde.
+    const comoPrincipal = (await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked')).at(-1);
+    assert.equal((comoPrincipal?.after as { primaryPostId: string }).primaryPostId, POST_D05_YOUTUBE_NUTRIVE);
   });
 
   test('un post o una campaña de otro workspace no se pueden asociar', async () => {
@@ -321,6 +341,16 @@ describe('editar y cambiar de estado', () => {
     assert.equal(d.trackingUrl, null, 'null limpia');
     assert.equal(d.trackingCode, 'LAURAPRUEBA');
     assert.equal(d.endsOn, '2026-10-10');
+
+    // Bitácora (ACC-2): los dos cambios, con lo anterior y lo nuevo; los rechazados no escriben.
+    // La prueba «sin fechas» ya editó esta campaña dos veces (vaciar y restaurar fechas): esas filas también quedan.
+    const todas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_PRUEBA, 'campaign.updated');
+    assert.equal(todas.length, 4, 'dos de «sin fechas» y dos de aquí; los tres rechazos no escriben');
+    assert.deepEqual((todas[0]?.after as { startsOn: string | null }).startsOn, null);
+    const cambios = todas.slice(2);
+    assert.deepEqual(cambios[0]?.before, { name: c.name, brief: null, startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: null, trackingUrl: null });
+    assert.deepEqual(cambios[0]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: 'LAURAPRUEBA', trackingUrl: 'https://ejemplo.co/?utm_campaign=prueba' });
+    assert.deepEqual(cambios[1]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-10', trackingCode: 'LAURAPRUEBA', trackingUrl: null });
   });
 
   test('transiciones válidas e inválidas; al pasar a live se fija la línea base', async () => {
@@ -343,6 +373,16 @@ describe('editar y cambiar de estado', () => {
     const closed = await laura((tx) => transitionCampaign(tx, CAMPAIGN_PRUEBA, 'closed'));
     assert.equal(closed.status, 'closed');
     await assert.rejects(laura((tx) => transitionCampaign(tx, CAMPAIGN_PRUEBA, 'live')), InvalidCampaignTransition);
+
+    // Bitácora (ACC-2): solo las cuatro válidas, en orden, con el estado anterior.
+    const estados = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_PRUEBA, 'campaign.status_changed');
+    assert.deepEqual(estados.map((f) => f.after), [
+      { status: 'live', brandBaselineFrom: '2026-09-17' },
+      { status: 'measuring', brandBaselineFrom: '2026-09-17' },
+      { status: 'reported', brandBaselineFrom: '2026-09-17' },
+      { status: 'closed', brandBaselineFrom: '2026-09-17' },
+    ]);
+    assert.deepEqual(estados[0]?.before, { status: 'planned', brandBaselineFrom: null });
   });
 
   test('una campaña cerrada no admite asociar, quitar ni editar', async () => {
@@ -414,6 +454,16 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     assert.equal(campaign.postsCount, 0);
     assert.equal(campaign.viewsTotal, null);
     assert.equal(campaign.hasInvoice, false);
+
+    // Bitácora (ACC-2): la campaña nace con su fila, aunque la llame COT-4 sin saberlo.
+    const nacida = await filasDeBitacora(t, WORKSPACE_LAURA, campaign.id);
+    assert.equal(nacida.length, 1);
+    assert.equal(nacida[0]?.action, 'campaign.created');
+    assert.equal(nacida[0]?.before, null);
+    assert.deepEqual(nacida[0]?.after, {
+      quoteId: QUOTE_ACCEPTED, companyId: COMPANY_CAFE_ALMA, creatorId: CREATOR_LAURA, dealId: null, name: 'Café Alma · 1 reel de cold brew',
+      amount: '6069000.00', currency: 'COP', startsOn: '2026-11-03', endsOn: '2026-11-10', status: 'planned',
+    });
   });
 
   test('aparece en la lista y la ficha muestra lo acordado y los entregables desde la cotización', async () => {
@@ -518,15 +568,18 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
 
   test('el flujo de COT-4 de punta a punta: aceptar y crear en UNA transacción, y si algo falla no queda nada', async () => {
     // Primer intento: la acción de Rasheed falla después de crear la campaña → rollback de todo.
+    let idPerdido = '';
     await assert.rejects(
       laura(async (tx) => {
         await tx.query("UPDATE quote SET status = 'accepted', accepted_at = now() WHERE id = $1", [QUOTE_FLOW]);
         const r = await createCampaignFromQuote(tx, { quoteId: QUOTE_FLOW, startsOn: '2026-12-01', endsOn: '2026-12-08' });
         assert.equal(r.created, true);
+        idPerdido = r.campaign.id;
         throw new Error('falló el UPDATE de deal');
       }),
       /falló el UPDATE de deal/,
     );
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_LAURA, idPerdido), [], 'la bitácora se fue con el rollback');
     const after = await laura((tx) => tx.query<{ status: string; n: number }>(
       'SELECT q.status, (SELECT count(*)::int FROM campaign c WHERE c.quote_id = q.id) AS n FROM quote q WHERE q.id = $1',
       [QUOTE_FLOW],
@@ -544,6 +597,7 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     const planned = await laura((tx) => listCampaigns(tx, { status: 'planned' }));
     assert.ok(planned.some((c) => c.id === campaign.id));
     assert.equal((await laura((tx) => getCampaign(tx, campaign.id)))?.agreed?.quoteNumber, 'COT-2026-017');
+    assert.deepEqual((await filasDeBitacora(t, WORKSPACE_LAURA, campaign.id)).map((f) => f.action), ['campaign.created']);
   });
 });
 

@@ -17,6 +17,10 @@
  *     (intOrNull). No son dinero: number está bien.
  *   - Las cifras derivadas salen de las vistas de 0010
  *     (post_metrics_latest, creator_post_board), no de aritmética aquí.
+ *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
+ *     misma transacción y antes de devolver; test/audit-convencion.test.ts
+ *     lo exige. La entidad es siempre la campaña: campaign_post no tiene
+ *     id propio.
  */
 import {
   assertCampaignDates,
@@ -57,6 +61,7 @@ import {
   type ResultInputs,
   type ResultPost,
 } from '@mc/core';
+import { audit } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -591,6 +596,21 @@ async function lockEditableCampaign(tx: WorkspaceTx, campaignId: string): Promis
   return row.status;
 }
 
+/** El enlace y el principal de la campaña ANTES de escribir, para el before de la bitácora (ACC-2). */
+async function linkState(tx: WorkspaceTx, campaignId: string, postId: string): Promise<{ link: { deliverable: string | null; isPrimary: boolean } | null; primaryPostId: string | null }> {
+  const { rows } = await tx.query<{ post_id: string; deliverable: string | null; is_primary: boolean }>(
+    `SELECT cp.post_id, cp.deliverable, cp.is_primary
+     FROM campaign_post cp JOIN campaign c ON c.id = cp.campaign_id
+     WHERE cp.campaign_id = $1 AND (cp.post_id = $2 OR cp.is_primary)`,
+    [campaignId, postId],
+  );
+  const own = rows.find((r) => r.post_id === postId);
+  return {
+    link: own ? { deliverable: own.deliverable, isPrimary: own.is_primary } : null,
+    primaryPostId: rows.find((r) => r.is_primary)?.post_id ?? null,
+  };
+}
+
 async function findCampaignPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   const row = (await listCampaignPosts(tx, campaignId)).find((p) => p.postId === postId);
   if (!row) throw new CampaignPostNotFoundError();
@@ -609,6 +629,7 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
   if (post.rows.length === 0) throw new PostNotFoundError(input.postId);
 
   const deliverable = input.deliverable?.trim() || null;
+  const previous = await linkState(tx, input.campaignId, input.postId);
   if (input.isPrimary === true) {
     await tx.query(
       `UPDATE campaign_post SET is_primary = false
@@ -625,7 +646,19 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
            is_primary = coalesce($4::boolean, campaign_post.is_primary)`,
     [input.campaignId, input.postId, deliverable, input.isPrimary ?? null],
   );
-  return findCampaignPost(tx, input.campaignId, input.postId);
+  const row = await findCampaignPost(tx, input.campaignId, input.postId);
+  // Si ya estaba asociado, before trae el entregable y la marca de antes; si
+  // pasó a principal, el principal anterior (que se desmarcó) queda anotado.
+  await audit(tx, {
+    action: 'campaign.post_linked',
+    entityType: 'campaign',
+    entityId: input.campaignId,
+    before: previous.link || previous.primaryPostId
+      ? { postId: input.postId, linked: previous.link !== null, deliverable: previous.link?.deliverable ?? null, isPrimary: previous.link?.isPrimary ?? false, primaryPostId: previous.primaryPostId }
+      : null,
+    after: { postId: row.postId, deliverable: row.deliverable, isPrimary: row.isPrimary, primaryPostId: row.isPrimary ? row.postId : previous.primaryPostId },
+  });
+  return row;
 }
 
 /** Quita el post de la campaña. Devuelve false si no estaba. */
@@ -638,12 +671,15 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
-  return rows.length > 0;
+  if (rows.length === 0) return false;
+  await audit(tx, { action: 'campaign.post_unlinked', entityType: 'campaign', entityId: campaignId, before: { postId }, after: null });
+  return true;
 }
 
 /** Marca el post como principal y desmarca los demás de la campaña. */
 export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, campaignId);
+  const previous = await linkState(tx, campaignId, postId);
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
      FROM campaign c
@@ -652,6 +688,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
     [campaignId, postId],
   );
   if (!rows.some((r) => r.post_id === postId)) throw new CampaignPostNotFoundError();
+  await audit(tx, { action: 'campaign.primary_post_set', entityType: 'campaign', entityId: campaignId, before: { primaryPostId: previous.primaryPostId }, after: { primaryPostId: postId } });
   return findCampaignPost(tx, campaignId, postId);
 }
 
@@ -666,8 +703,11 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
  */
 export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateCampaignInput): Promise<CampaignDetail> {
   await lockEditableCampaign(tx, id);
-  const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null }>(
-    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on FROM campaign WHERE id = $1`,
+  const { rows } = await tx.query<{
+    name: string; brief: string | null; starts_on: string | null; ends_on: string | null; tracking_code: string | null; tracking_url: string | null;
+  }>(
+    `SELECT name, brief, ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, tracking_code, tracking_url
+     FROM campaign WHERE id = $1`,
     [id],
   );
   const current = rows[0];
@@ -698,7 +738,21 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
       input.trackingUrl !== undefined, input.trackingUrl?.trim() || null,
     ],
   );
-  return requireCampaign(tx, id);
+  const updated = await requireCampaign(tx, id);
+  await audit(tx, {
+    action: 'campaign.updated',
+    entityType: 'campaign',
+    entityId: id,
+    before: {
+      name: current.name, brief: current.brief, startsOn: current.starts_on, endsOn: current.ends_on,
+      trackingCode: current.tracking_code, trackingUrl: current.tracking_url,
+    },
+    after: {
+      name: updated.name, brief: updated.brief, startsOn: updated.startsOn, endsOn: updated.endsOn,
+      trackingCode: updated.trackingCode, trackingUrl: updated.trackingUrl,
+    },
+  });
+  return updated;
 }
 
 /**
@@ -716,6 +770,13 @@ export async function transitionCampaign(tx: WorkspaceTx, id: string, to: Campai
   if (!row) throw new CampaignNotFoundError(id);
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
   await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [id, result.status, result.brandBaselineFrom]);
+  await audit(tx, {
+    action: 'campaign.status_changed',
+    entityType: 'campaign',
+    entityId: id,
+    before: { status: row.status, brandBaselineFrom: row.brand_baseline_from },
+    after: { status: result.status, brandBaselineFrom: result.brandBaselineFrom },
+  });
   return requireCampaign(tx, id);
 }
 
@@ -863,6 +924,17 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   );
   const id = inserted.rows[0]?.id;
   if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
+  // Audita aquí y no en COT-4: quien llame a esta función deja la fila sin saberlo.
+  await audit(tx, {
+    action: 'campaign.created',
+    entityType: 'campaign',
+    entityId: id,
+    before: null,
+    after: {
+      quoteId: q.id, companyId: q.company_id, creatorId: q.creator_id, dealId: q.deal_id, name: campaignName,
+      amount: q.total, currency: q.currency, startsOn: input.startsOn, endsOn: input.endsOn, status: 'planned',
+    },
+  });
   return { campaign: await requireCampaign(tx, id), created: true };
 }
 
@@ -999,20 +1071,6 @@ interface BrandInputAuditAfter {
   source: BrandInputSource;
 }
 
-/**
- * Anota en audit_log lo que acaba de pasar, en la misma transacción.
- * TODO(ACC-2): reemplazar por audit() de packages/db/src/audit.ts cuando
- * exista; hasta entonces este es el único sitio de Campañas que escribe
- * la bitácora. `after` no lleva notas ni nombres: solo claves y cifras.
- */
-async function recordAudit(tx: WorkspaceTx, action: string, entityType: string, entityId: string, after: Record<string, unknown>): Promise<void> {
-  await tx.query(
-    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, after)
-     VALUES (current_workspace_id(), current_user_id(), 'user', $1, $2, $3, $4::jsonb)`,
-    [action, entityType, entityId, JSON.stringify(after)],
-  );
-}
-
 interface RawBrandInputRow {
   id: string;
   kind: BrandInputKind;
@@ -1097,7 +1155,8 @@ export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput):
   const row = inserted.rows[0];
   if (!row) throw new CampaignError('BrandInputInsertError', 'No se pudo registrar el aporte.');
   const after: BrandInputAuditAfter = { kind: row.kind, day: row.day, value: row.value, currency: row.currency, source: row.source };
-  await recordAudit(tx, 'campaign.brand_input.added', 'campaign_brand_input', row.id, { ...after, campaign_id: input.campaignId });
+  // `after` no lleva notas ni nombres: solo claves y cifras.
+  await audit(tx, { action: 'campaign.brand_input.added', entityType: 'campaign_brand_input', entityId: row.id, before: null, after: { ...after, campaign_id: input.campaignId } });
   return { input: toBrandInputRow(row), created: true, campaignCurrency: campaign.currency };
 }
 
@@ -1188,7 +1247,7 @@ export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput
     result.replaced += r.replaced;
     result.unchanged += r.existing - r.replaced;
   }
-  await recordAudit(tx, 'campaign.brand_csv.imported', 'campaign', input.campaignId, {
+  await audit(tx, { action: 'campaign.brand_csv.imported', entityType: 'campaign', entityId: input.campaignId, before: null, after: {
     source: 'brand_csv',
     currency: campaign.currency,
     days: result.days,
@@ -1197,7 +1256,7 @@ export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput
     inserted: result.inserted,
     replaced: result.replaced,
     unchanged: result.unchanged,
-  });
+  } });
   return result;
 }
 

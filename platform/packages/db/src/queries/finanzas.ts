@@ -11,6 +11,9 @@
  *     depender de la zona horaria del driver.
  *   - `overdue` no se persiste: se deriva (packages/core deriveStatus) y
  *     la vista receivables ya lo hace con aging_bucket.
+ *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
+ *     misma transacción y antes de devolver; test/audit-convencion.test.ts
+ *     lo exige.
  */
 import {
   addDays,
@@ -34,6 +37,7 @@ import {
   type TransitionInput,
 } from '@mc/core';
 import { getWorkspaceSettings } from './cimientos.ts';
+import { audit, type AuditAction } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -442,8 +446,31 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   if (!id) throw new Error('No se pudo crear la factura.');
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  // La bitácora guarda la factura tal como nació: su número, su empresa y
+  // sus cifras. Es dinero de ESTA entidad, no de otra.
+  await audit(tx, {
+    action: 'invoice.created',
+    entityType: 'invoice',
+    entityId: id,
+    before: null,
+    after: {
+      number: detail.number, companyId: detail.companyId, campaignId: detail.campaignId, quoteId: detail.quoteId,
+      currency: detail.currency, subtotal: detail.subtotal, tax: detail.tax, withholding: detail.withholding, total: detail.total,
+      issuedOn: detail.issuedOn, dueOn: detail.dueOn, status: detail.status, externalRef: detail.externalRef,
+    },
+  });
   return detail;
 }
+
+/** Qué evento de bitácora es cada estado al que llega una factura (ACC-2). */
+const INVOICE_TRANSITION_ACTION: Record<InvoiceStatus, AuditAction> = {
+  draft: 'invoice.reopened',
+  sent: 'invoice.sent',
+  partial: 'invoice.payment_recorded',
+  paid: 'invoice.paid',
+  overdue: 'invoice.marked_overdue',
+  void: 'invoice.voided',
+};
 
 /**
  * Cambia el estado validando con la máquina de estados de core. Lee la
@@ -475,6 +502,13 @@ export async function transitionInvoice(
   );
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  await audit(tx, {
+    action: INVOICE_TRANSITION_ACTION[result.status],
+    entityType: 'invoice',
+    entityId: id,
+    before: { status: row.status, paidAmount: row.paid_amount },
+    after: { status: detail.status, paidAmount: detail.paidAmount, paidAt: detail.paidAt },
+  });
   return detail;
 }
 
