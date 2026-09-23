@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatCountry, formatDate, formatDateRange, formatDelta,
-  formatInt, formatMonth, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
+  formatInt, formatMonth, formatMoney, formatNumber, formatPct, formatterFor, formatTime, parseDecimal,
 } from "./format";
 
 describe("formatMoney", () => {
@@ -263,5 +263,16 @@ describe("formatMonth", () => {
   it("lo que no es un mes ISO lanza", () => {
     expect(() => formatMonth("agosto")).toThrow(/mes ISO/);
     expect(() => formatMonth("2026")).toThrow(/mes ISO/);
+  });
+});
+
+describe("formatNumber (CAM-3)", () => {
+  it("decimales como máximo, en el locale, sin ceros de relleno", () => {
+    expect(formatNumber(181 / 14)).toBe("12,9");
+    expect(formatNumber(155)).toBe("155");
+    expect(formatNumber(1240.5)).toBe("1.240,5");
+    expect(formatNumber(11.99, 0)).toBe("12");
+    expect(formatNumber(12.9286, 1, { locale: "en-US" })).toBe("12.9");
+    expect(formatterFor({ locale: "es-CO", currency: "COP", timezone: "UTC" }).number(12.9286)).toBe("12,9");
   });
 });

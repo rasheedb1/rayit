@@ -3,7 +3,7 @@ import Link from "next/link";
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import { CAMPAIGN_STATUS_META, CAMPAIGN_TRANSITIONS, canEditCampaign, cutHoursLabel, deliverableLabel, INVOICE_STATUS_LABEL_ES, type InvoiceStatus } from "@mc/core";
-import { getCampaign, listCampaignPosts, listLinkablePosts, suggestPosts, type CampaignDetail, type CampaignPostRow } from "@mc/db";
+import { getCampaign, listBrandFollowers, listCampaignPosts, listLinkablePosts, suggestPosts, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -12,14 +12,17 @@ import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
-import { formatDate, formatDateRange, formatInt, formatMoney } from "@/lib/format";
+import { formatDate, formatDateRange, formatInt, formatMoney, formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { pillForCampaign } from "../_lib/estado";
-import { cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
+import { MESSAGES } from "../_lib/messages";
+import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
 import { LinkPosts } from "./asociar";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
+import { SeguidoresMarca, type ResultadoMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +42,7 @@ const loadCampaign = cache(async (id: string) =>
       posts: await listCampaignPosts(tx, id),
       suggestions: editable ? await suggestPosts(tx, id) : [],
       linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
+      marca: await listBrandFollowers(tx, id),
     };
   }),
 );
@@ -173,21 +177,22 @@ export default async function CampanaPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; marca?: string; aviso?: string }>;
 }) {
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, marca: marcaParam, aviso } = await searchParams;
   if (!UUID_RE.test(id)) notFound();
 
   const data = await loadCampaign(id);
   if (!data) notFound();
-  const { campaign, editable, posts, suggestions, linkable } = data;
+  const { campaign, editable, posts, suggestions, linkable, marca } = data;
+  const f = formatterFor(await getCurrentWorkspace());
+  const resultadoMarca: ResultadoMarca | null = marcaParam === "guardada" || marcaParam === "ya_hoy" ? marcaParam : null;
 
   const pill = pillForCampaign(campaign.status);
   const invoice = campaign.invoices.find((i) => i.status !== "void") ?? null;
   const transitions = CAMPAIGN_TRANSITIONS[campaign.status];
   const rango = dateRange(campaign);
-  const brandHandle = (campaign.brandAccounts as { handle?: unknown }[]).map((a) => (typeof a?.handle === "string" ? a.handle : null)).find(Boolean) ?? null;
 
   return (
     <>
@@ -398,13 +403,17 @@ export default async function CampanaPage({
           />
         </Section>
 
-        <Section id="seguidores" title="Seguidores de la marca">
-          <EmptyState
-            title="Llega con la medición"
-            description={`La curva de seguidores${brandHandle ? ` de @${brandHandle}` : " de la marca"}${
-              campaign.brandBaselineFrom ? ` desde el ${formatDate(campaign.brandBaselineFrom, "long")}` : ""
-            } se toma del snapshot público diario. Todavía no hay serie que dibujar.`}
-          />
+        <Section id="seguidores" title={MESSAGES.seguidores.title}>
+          {marca && (
+            <SeguidoresMarca
+              data={marca}
+              status={campaign.status}
+              f={f}
+              actualizar={actualizarSeguidoresMarca.bind(null, campaign.id)}
+              resultado={resultadoMarca}
+              aviso={typeof aviso === "string" && aviso ? aviso.slice(0, 500) : null}
+            />
+          )}
         </Section>
       </div>
     </>
