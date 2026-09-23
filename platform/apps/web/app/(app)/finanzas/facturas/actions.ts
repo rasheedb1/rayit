@@ -114,6 +114,8 @@ export async function crearFactura(_prev: CrearFacturaState, formData: FormData)
 function revalidarFinanzas(): void {
   revalidatePath("/finanzas");
   revalidatePath("/finanzas/facturas");
+  // Una factura nueva, enviada o anulada cambia los cobros esperados del flujo (FIN-6).
+  revalidatePath("/finanzas/flujo");
 }
 
 const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];

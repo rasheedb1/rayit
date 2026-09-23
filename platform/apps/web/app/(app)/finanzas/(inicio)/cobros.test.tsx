@@ -118,7 +118,16 @@ vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
+const redirect = vi.hoisted(() =>
+  vi.fn((url: string) => {
+    throw Object.assign(new Error("NEXT_REDIRECT"), { url });
+  }),
+);
 vi.mock("next/navigation", () => ({
+  redirect,
+  notFound: () => {
+    throw Object.assign(new Error("NEXT_HTTP_ERROR_FALLBACK;404"), { digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  },
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/finanzas",
   useSearchParams: () => new URLSearchParams(),
@@ -126,7 +135,7 @@ vi.mock("next/navigation", () => ({
 
 import CuentasPorCobrarPage from "./page";
 
-const pintar = (searchParams: { bucket?: string; q?: string } = {}) =>
+const pintar = (searchParams: { bucket?: string; q?: string; estado?: string } = {}) =>
   CuentasPorCobrarPage({ searchParams: Promise.resolve(searchParams) });
 
 /**
@@ -353,5 +362,13 @@ describe("la pantalla de cobro reúne lo que hay que hacer hoy", () => {
     const nombres = within(tabs).getAllByRole("link").map((a) => a.textContent);
     expect(nombres).toEqual(["Cobro", "Facturas", "Gastos", "Flujo", "Ingresos", "Configuración"]);
     expect(within(tabs).getByRole("link", { name: "Cobro" })).toHaveAttribute("aria-current", "page");
+  });
+});
+
+describe("los enlaces viejos siguen llevando a algún sitio", () => {
+  it("/finanzas?estado=… (el archivo de antes de FIN-3) redirige al archivo con el mismo filtro", async () => {
+    await expect(pintar({ estado: "borradores" })).rejects.toMatchObject({ url: "/finanzas/facturas?estado=borradores" });
+    await expect(pintar({ estado: "algo-inventado" })).rejects.toMatchObject({ url: "/finanzas/facturas" });
+    expect(redirect).toHaveBeenCalledTimes(2);
   });
 });

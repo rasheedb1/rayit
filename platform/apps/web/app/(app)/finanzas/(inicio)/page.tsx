@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { compareDecimal, rateToPct } from "@mc/core";
 import {
   MAX_REMINDERS,
@@ -27,6 +28,8 @@ import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import {
   RECEIVABLE_FILTERS,
+  filterKey,
+  invoiceFilterHref,
   pillForReceivable,
   receivableFilterKey,
   receivableHref,
@@ -136,12 +139,16 @@ const PAGE_LIMIT = 200;
 export default async function CuentasPorCobrarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ bucket?: string; q?: string }>;
+  searchParams: Promise<{ bucket?: string; q?: string; estado?: string }>;
 }) {
   // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
   // Next puede no volver a ejecutar el layout del módulo.
   await requireModuleAccess("finanzas");
   const params = await searchParams;
+  // Hasta FIN-3, /finanzas era el archivo de facturas y su filtro iba en
+  // ?estado=. Un enlace guardado con esa forma no cae en el cobro sin
+  // filtro: vuelve a donde apuntaba, el archivo con el mismo filtro.
+  if (params.estado !== undefined) redirect(invoiceFilterHref(filterKey(params.estado)));
   const filter = receivableFilterKey(params.bucket);
   const q = receivablesSearchTerm(params.q);
 
