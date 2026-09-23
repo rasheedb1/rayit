@@ -594,3 +594,43 @@ cambian en esta ronda: `signal` 12 → 13 y `activity` 38 → 47.
   empresa se arma con `company_link`, `contact`, `activity` y
   `deal_stage_history`. Todo está bajo RLS: sin `app.workspace_id`
   fijado por el cliente de base, cero filas.
+
+## 6. Integración en `rasheed/integracion` (22 de septiembre)
+
+Lo que antes vivía en la nota de CIM-6 del backlog, que debe ser corta.
+
+- **Qué hace el seed, en una línea por pieza.** 60 videos con curvas
+  ancladas a la primera corrida y una parrilla que se rellena sola (un
+  video cada dos días desde el último guardado hasta ayer); la serie de
+  la cuenta extendida hasta ayer; demografía cuyas personas salen de la
+  última lectura de seguidores; línea base por día de cálculo y puntaje
+  que sube al corte alcanzado con la regla de `scoring.ts`; y el CRM con
+  8 marcas, 13 señales (5 por revisar, como el mock) y 15 deals (10
+  abiertos · COP 95,5 M · ponderado 43,15 M). Volver a sembrar refresca
+  lo que la demo mira hoy —cierre esperado, próxima acción y último
+  contacto de los deals abiertos con su actividad de seguimiento,
+  señales pendientes, ventana del brief, frescura de las conexiones,
+  foto de la audiencia— y congela lo que ya pasó. Las cuatro campañas
+  llevan su deal, así que la cadena señal → deal → campaña → factura se
+  recorre entera.
+- **Verificación.** Postgres embebido, colgada del comando estándar
+  (`pnpm turbo run test` → tarea raíz `//#test`): cifras, la baja en
+  `outbound_touch`, tercera pasada con el reloj a +1 y cuarta que
+  resiembra la misma base a +41 exigiendo videos recientes, tablero vivo
+  y cero puntajes obsoletos; más la siembra en limpio a +40 días
+  (`node db/seed/verify/run.mjs [--dias 40]`, también en CI). El reloj
+  del harness vive en `reloj.mjs` y no puede reescribir un dato que se
+  parezca a `now()` (§4).
+- **0003 (de Nicolás), tocado lo mínimo.** Línea de tiempo de Café
+  Alma y las dos lecturas de Fresko condicionadas a su fecha (§3.10).
+- **Supabase.** 0001, 0002 y 0003 sembrados con `make db.seed`. El
+  conflicto conocido de 0003 quedó con la clave `platform_id` de `main`
+  y las fechas de esta rama, y las cuatro campañas de 0002 pasaron
+  también a `platform_id`. Se borraron a mano cinco lecturas manuales
+  que había dejado la versión anterior de 0003 —cuatro con
+  `captured_at` en el futuro, justo lo que esta historia vino a quitar—:
+  un seed solo inserta, así que no podían desaparecer solas.
+- **Pruebas de Nicolás.** `campanas.test.ts` y `conexiones.test.ts`,
+  que estaban clavadas al seed sin 0002, pasan a afirmar la banda
+  alrededor de la cifra del mock en vez del valor de hoy: la curva
+  sigue midiendo hasta los 90 días y el número exacto sube cada día.
