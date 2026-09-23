@@ -87,6 +87,11 @@ const idDesglose = (id: string) => `tarifario-explicacion-${id}`;
  * no se cierra con «Listo» y el tarifario no se guarda hasta corregirlo.
  * La regla es validarRangoPrecio de @mc/core, la misma del servidor.
  *
+ * En el teléfono cada entregable es una tarjeta apilada (nombre y red,
+ * rango, views y CPM uno debajo de otro; ver TablaConDetalle): el campo
+ * de views, que es lo que se viene a escribir, se ve entero sin
+ * desplazar nada de lado.
+ *
  * Las celdas con textos sr-only llevan `relative`: un sr-only es
  * `position: absolute`, y sin un ancestro posicionado dentro de la
  * tabla escapa del scroll horizontal y ensancha la página a 400 px.
@@ -359,7 +364,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
       header: t.columnas.views,
       align: "num",
       render: (r) => (
-        <span className="flex flex-col items-end gap-1">
+        <span className="flex flex-col items-start gap-1 sm:items-end">
           <ViewsInput
             label={`${t.columnas.views} · ${r.nombre}`}
             value={r.views}
@@ -379,7 +384,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
         const sinCpm = r.cpmLow === null || r.cpmHigh === null;
         if (editando === r.id || sinCpm) {
           return (
-            <span className="relative flex flex-col items-end gap-1.5 font-sans">
+            <span className="relative flex flex-col items-start gap-1.5 font-sans sm:items-end">
               <label className="contents">
                 <span className="sr-only">{`${t.cpmBajo} · ${r.nombre}`}</span>
                 <MoneyInput
@@ -407,7 +412,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
           );
         }
         return (
-          <span className="flex flex-col items-end gap-1">
+          <span className="flex flex-col items-start gap-1 sm:items-end">
             <span>
               {dinero(r.cpmLow!)} – {dinero(r.cpmHigh!)}
             </span>

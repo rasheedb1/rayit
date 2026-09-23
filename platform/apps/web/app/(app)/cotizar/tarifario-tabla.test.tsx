@@ -154,6 +154,25 @@ describe("TarifarioTabla", () => {
     expect(screen.queryByRole("columnheader", { name: "Acciones" })).not.toBeInTheDocument();
   });
 
+  it("en el teléfono cada entregable es una tarjeta: views y CPM debajo del rango, cada uno con su nombre", () => {
+    pintar();
+    const views = screen.getByLabelText("Views por pieza · TikTok dedicado");
+    const fila = views.closest("tr")!;
+    const tabla = fila.closest("table")!;
+    // El mismo DOM, otro display: tabla desde sm, bloques apilados debajo.
+    expect(tabla).toHaveClass("block", "sm:table");
+    expect(fila).toHaveClass("flex-col", "sm:table-row");
+    expect(tabla.querySelector("thead")).toHaveClass("hidden", "sm:table-header-group");
+    // La caja no se desplaza de lado en el teléfono: solo desde sm.
+    expect(tabla.parentElement).not.toHaveClass("overflow-x-auto");
+    expect(tabla.parentElement).toHaveClass("sm:overflow-x-auto");
+    // Cada celda, salvo la del nombre, lleva su columna encima (solo en el teléfono).
+    const celdas = Array.from(fila.querySelectorAll("td"));
+    const etiquetas = celdas.map((td) => td.querySelector("span.sm\\:hidden")?.textContent ?? null);
+    expect(etiquetas).toEqual([null, "Rango sugerido", "Views por pieza", "CPM de referencia"]);
+    expect(views.closest("td")).toBe(celdas[2]);
+  });
+
   it("con poca muestra, la mediana se sugiere en el campo pero no entra sola en el precio (D4)", async () => {
     pintar();
     const views = screen.getByLabelText("Views por pieza · Reel de Instagram");

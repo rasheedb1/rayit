@@ -33,24 +33,35 @@ export interface TablaConDetalleProps<Row> {
  * una fila de detalle, esta tabla se borra y el tarifario vuelve a
  * DataTable.
  *
- * A 400 px la tabla hace scroll horizontal dentro de su caja, y una celda
- * con colSpan mide lo que la tabla entera: el contenido del detalle va
- * `sticky left-0` y con el ancho de la pantalla, así que se lee sin
+ * En el teléfono (por debajo de sm) NO es una tabla que se desplaza de
+ * lado: cada fila se pinta como una tarjeta apilada, una celda debajo de
+ * otra y cada una con el nombre de su columna encima (la cabecera se
+ * oculta). Con cuatro columnas en 400 px, el campo que el creador edita
+ * —las views de la fila del tarifario— quedaba cortado a la mitad y el
+ * CPM fuera de la vista. Es el mismo DOM con otro `display` (block en
+ * vez de table): una sola copia de cada campo, sin duplicar ids ni
+ * etiquetas, y las pruebas que buscan la celda o la fila siguen valiendo.
+ *
+ * Desde sm es la tabla de siempre; si no cabe, hace scroll dentro de su
+ * caja, y el detalle (una celda con colSpan, que mide lo que la tabla
+ * entera) va `sticky` y con el ancho de la pantalla, así que se lee sin
  * desplazarse aunque la tabla esté corrida.
  */
 export function TablaConDetalle<Row>({ columns, rows, rowKey, caption, emptyState, detalle, detalleId }: TablaConDetalleProps<Row>) {
   const pad = "px-2.5 py-2";
+  // En el teléfono todo va a la izquierda y puede partirse en líneas: la
+  // tarjeta es estrecha. La alineación de cifras vuelve desde sm.
   const alignCls = (c: Column<Row>) =>
-    c.align === "num" ? "text-right font-mono text-[12.5px] tabular-nums whitespace-nowrap" : "text-left";
+    c.align === "num" ? "text-left font-mono text-[12.5px] tabular-nums sm:text-right sm:whitespace-nowrap" : "text-left";
   return (
     <div
-      className="overflow-x-auto rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+      className="rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink sm:overflow-x-auto"
       tabIndex={0}
       aria-label={caption}
     >
-      <table className="w-full border-collapse text-sm">
+      <table className="block w-full border-collapse text-sm sm:table">
         <caption className="sr-only">{caption}</caption>
-        <thead className="sticky top-0 z-[1]">
+        <thead className="hidden sm:sticky sm:top-0 sm:z-[1] sm:table-header-group">
           <tr className="bg-surface-2">
             {columns.map((c) => (
               <th
@@ -64,10 +75,10 @@ export function TablaConDetalle<Row>({ columns, rows, rowKey, caption, emptyStat
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="block sm:table-row-group">
           {rows.length === 0 && (
-            <tr>
-              <td colSpan={columns.length} className="p-3">
+            <tr className="block sm:table-row">
+              <td colSpan={columns.length} className="block p-3 sm:table-cell">
                 {emptyState}
               </td>
             </tr>
@@ -75,17 +86,25 @@ export function TablaConDetalle<Row>({ columns, rows, rowKey, caption, emptyStat
           {rows.map((row) => {
             const abierto = detalle(row);
             return [
-              <tr key={rowKey(row)} className={`border-b border-grid last:border-b-0 hover:bg-surface-2 ${abierto ? "bg-surface-2" : ""}`}>
-                {columns.map((c) => (
-                  <td key={c.key} className={`${pad} align-middle ${alignCls(c)}`}>
+              <tr
+                key={rowKey(row)}
+                className={`flex flex-col gap-3 border-b border-grid px-3 py-3 last:border-b-0 hover:bg-surface-2 sm:table-row sm:p-0 ${abierto ? "bg-surface-2" : ""}`}
+              >
+                {columns.map((c, i) => (
+                  <td key={c.key} className={`block min-w-0 p-0 align-middle sm:table-cell sm:px-2.5 sm:py-2 ${alignCls(c)}`}>
+                    {/* En la tarjeta, cada celda lleva el nombre de su columna encima.
+                        La primera es el nombre de la fila: no lo necesita. */}
+                    {i > 0 && !c.srOnlyHeader && (
+                      <span className="mb-1 block font-sans text-xs font-medium text-muted sm:hidden">{c.header}</span>
+                    )}
                     {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key] ?? "")}
                   </td>
                 ))}
               </tr>,
               abierto ? (
-                <tr key={`${rowKey(row)}-detalle`} id={detalleId(row)} className="border-b border-grid bg-surface-2 last:border-b-0">
-                  <td colSpan={columns.length} className="px-2.5 pb-3 pt-0">
-                    <div className="sticky left-2.5 w-[min(100%,calc(100vw-3.25rem))] min-w-0">{abierto}</div>
+                <tr key={`${rowKey(row)}-detalle`} id={detalleId(row)} className="block border-b border-grid bg-surface-2 last:border-b-0 sm:table-row">
+                  <td colSpan={columns.length} className="block px-3 pb-3 pt-0 sm:table-cell sm:px-2.5">
+                    <div className="min-w-0 sm:sticky sm:left-2.5 sm:w-[min(100%,calc(100vw-3.25rem))]">{abierto}</div>
                   </td>
                 </tr>
               ) : null,
