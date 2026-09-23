@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { loadOAuthApps } from "@mc/connectors";
-import type { AccountRow, ConnectionStatus } from "@mc/db";
+import { loadOAuthApps, type OAuthProviderId } from "@mc/connectors";
+import type { AccountRow, ConnectionPlatformId, ConnectionStatus } from "@mc/db";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -98,7 +98,7 @@ const columns = (f: Formatter): Column<AccountRow>[] => [
     header: "Cifras",
     render: (r) => {
       if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
-      if (r.platformId === "tiktok" && r.accessMode === "public_profile") return <TikTokAuthorize row={r} />;
+      if (r.accessMode === "public_profile") return <Autorizar row={r} />;
       return <span className="text-xs text-ink-2">Públicas por @</span>;
     },
   },
@@ -277,18 +277,44 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
 }
 
 /**
- * TikTok no publica cifras por @: el dueño las desbloquea autorizando una
- * vez (CON-3, detrás de la bandera oauth_connect). El botón abre el
- * diálogo de consentimiento; el callback convierte esta misma fila.
+ * Lo que el dueño desbloquea autorizando su cuenta una vez: en TikTok las
+ * cifras, que por @ no existen (CON-3); en YouTube la analítica —
+ * retención, duración media y demografía—, que la Data API no entrega sin
+ * el permiso del canal (CON-8). Instagram no aparece aquí: por @ ya da lo
+ * que necesitamos.
  */
-function TikTokAuthorize({ row }: { row: AccountRow }) {
-  if (!flags.oauth_connect) return <span className="text-xs text-muted">Sin cifras por @</span>;
+const AUTORIZABLES: Partial<Record<ConnectionPlatformId, { provider: OAuthProviderId; nota: string; notaClass: string; actionLabel: string }>> = {
+  tiktok: { provider: "tiktok", nota: "Sin cifras por @", notaClass: "text-muted", actionLabel: "Autorizar cifras" },
+  youtube: { provider: "youtube", nota: "Públicas por @", notaClass: "text-ink-2", actionLabel: "Autorizar analítica" },
+};
+
+/**
+ * Detrás de la bandera oauth_connect. El botón abre el diálogo de
+ * consentimiento; el callback convierte esta misma fila, con su id y su
+ * historial.
+ */
+function Autorizar({ row }: { row: AccountRow }) {
+  const conf = AUTORIZABLES[row.platformId];
+  if (!conf) return <span className="text-xs text-ink-2">Públicas por @</span>;
+  const nota = <span className={`text-xs ${conf.notaClass}`}>{conf.nota}</span>;
+  if (!flags.oauth_connect) return nota;
+  const label = PLATFORM_NAME[row.platformId];
   const { apps, missing } = loadOAuthApps(process.env);
-  const reason = apps.tiktok ? undefined : `TikTok no está configurado en este entorno: faltan ${(missing.tiktok ?? []).join(", ")}.`;
+  const reason = apps[conf.provider] ? undefined : `${label} no está configurado en este entorno: faltan ${(missing[conf.provider] ?? []).join(", ")}.`;
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-xs text-muted">Sin cifras por @</span>
-      <ConnectDialog label="TikTok" actionLabel="Autorizar cifras" text={consentText("tiktok")} policyVersion={CONSENT_POLICY_VERSION} action="/conexiones/oauth/tiktok/start" disabledReason={reason} variant="secondary" size="sm" ariaLabel={`Autorizar cifras de @${row.handle ?? row.externalAccountId}`} />
+      {nota}
+      <ConnectDialog
+        label={label}
+        actionLabel={conf.actionLabel}
+        text={consentText(conf.provider)}
+        policyVersion={CONSENT_POLICY_VERSION}
+        action={`/conexiones/oauth/${conf.provider}/start`}
+        disabledReason={reason}
+        variant="secondary"
+        size="sm"
+        ariaLabel={`${conf.actionLabel} de @${row.handle ?? row.externalAccountId}`}
+      />
     </div>
   );
 }

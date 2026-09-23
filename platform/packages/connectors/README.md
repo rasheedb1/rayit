@@ -17,13 +17,13 @@ src/encrypted-secret-store.ts   EncryptedSecretStore: el real (CON-3), connectio
 src/crypto/master-key.ts     TOKEN_ENCRYPTION_KEY (32 bytes en base64 o hex) y llavero por versión (_V2, _CURRENT)
 src/crypto/token-cipher.ts   AES-256-GCM con HKDF (info on-cue/token/<versión>), IV por escritura, AAD = secret_ref, rotación
 src/crypto/sealed-cookie.ts  sello HMAC-SHA256 con TTL para la cookie del flujo OAuth
-src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login):
+src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login), youtube (Google, CON-8):
                              authorizationUrl, exchangeCode, identity, refresh; loadOAuthApps(env) solo con nombres de variables
 src/token-refresher.ts       TokenRefresher, TokenRefreshError, kindFromHttp (CON-2)
 src/redact.ts                redactSecrets: lo usan el logger del worker y este paquete
 src/platforms/tiktok.ts      createTikTokRefresher(core, { login, business }): elige la app por el prefijo del secret_ref
 src/platforms/instagram.ts   createInstagramRefresher(core, app)
-src/platforms/youtube.ts     refresher sin implementar hasta CON-8
+src/platforms/youtube.ts     createYouTubeRefresher (CON-8): renueva contra oauth2.googleapis.com
 src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
 src/public/                  Cuentas por @ (CON-10): PublicProfileSource por plataforma. tiktok = oEmbed (identidad), instagram = business_discovery con INSTAGRAM_HOUSE_TOKEN, youtube = Data API con GOOGLE_API_KEY (YouTubeClient acepta apiKey)
 src/posts/                   Publicaciones (CON-5): PostSource con dos estrategias tras la misma interfaz. createPublicPostSources(core, env) da la pública por plataforma; createAuthorizedPostSource(core, platformId) la del token del dueño. El job elige por social_connection.access_mode
@@ -74,7 +74,7 @@ const core = new HttpCore({ callLog: new PostgresCallLogSink(tx), quota: new Quo
 const brand = await new InstagramClient(core, { connectionId: conn.id, tokens }).businessDiscovery('cafealma');
 ```
 
-## OAuth y el token en reposo (CON-3)
+## OAuth y el token en reposo (CON-3, CON-8)
 
 ```
 POST /conexiones/oauth/<proveedor>/start   →  state (32 bytes) + cookie sellada  →  authorizationUrl(cfg, { state })
@@ -90,8 +90,20 @@ oauth.refresh (worker)                     →  ctx.secrets.get(ref) → refresh
   duración (60 días) como `accessToken`, `refreshToken` vacío, y
   `instagramRefresh` pide otro mientras queden más de 24 h; vencido es
   definitivo (`refresh_expired`).
-- **Sin PKCE en web**: ninguna de las tres plataformas lo documenta para
-  web; la cookie deja el campo `verifier` para cuando alguna lo admita.
+- **YouTube (CON-8)** pide `access_type=offline` y `prompt=consent`:
+  Google entrega el `refresh_token` solo con el primero y solo la
+  primera vez que esa cuenta autoriza la app, así que sin el segundo
+  reconectar daría una conexión que muere en una hora. El refresh token
+  **no rota** y **no tiene fecha de vencimiento** (`refreshExpiresAt`
+  vacío): lo revoca el usuario, seis meses de inactividad, o siete días
+  si el proyecto sigue en «Testing». El id del canal no sale del
+  endpoint de token: lo dice `channels.list?mine=true`; una cuenta de
+  Google sin canal falla con `no_channel`, no con «no sabemos quién
+  eres». Scopes: `youtube.readonly` y `yt-analytics.readonly`, los dos
+  de solo lectura.
+- **Sin PKCE en web**: ninguna de las cuatro plataformas lo documenta
+  para web; la cookie deja el campo `verifier` para cuando alguna lo
+  admita.
 - **`EncryptedSecretStore`** recibe `{ query(text, params) }`: en la web
   el `WorkspaceTx` (RLS pone el workspace en el INSERT con
   `current_workspace_id()`); en el worker `ctx.db` (`mc_worker`, la fila
@@ -170,6 +182,7 @@ cualquier código del cuerpo.
 | `youtube` (Data) | 10 000 unidades/día por proyecto (scope app); `channels.list`, `playlistItems.list`, `videos.list` = 1 unidad; toda petición, aun inválida, cuesta ≥ 1 | developers.google.com/youtube/v3/determine_quota_cost | actualizada 15-sep-2026 |
 | `youtube-search` | `search.list` = 1 unidad en un cubo propio de 100/día (cambió en jun-2026; antes 100 unidades del cubo general). No se usa en el MVP | misma página | 15-sep-2026 |
 | `youtube-analytics` | cuota aparte; Google no publica el número · **DECISIÓN PENDIENTE DE NICOLÁS**: leerlo del proyecto en Google Cloud | developers.google.com/youtube/analytics/reference/reports/query | 22-sep-2026 |
+| `google-oauth` | `oauth2.googleapis.com/token` no gasta unidades de la Data API: familia propia para que renovar un token de una hora cuarenta veces al día no se coma el cupo diario. 600/min de app es NUESTRO freno, no un límite publicado · **DECISIÓN PENDIENTE DE NICOLÁS** | developers.google.com/identity/protocols/oauth2/web-server | 23-sep-2026 |
 
 Cómo se aplica: `acquire()` **espera** (con el `sleep` inyectado)
 cuando la siguiente llamada superaría una ventana, y **lanza `quota`

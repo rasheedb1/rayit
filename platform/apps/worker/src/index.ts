@@ -10,8 +10,8 @@
  * activos hasta WORKER_STOP_TIMEOUT_S) → cierra el pool → sale con 0.
  */
 import {
-  createInstagramRefresher, createTikTokRefresher, EncryptedSecretStore, EnvSecretStore, FakeTokenRefresher, HttpCore, InMemorySecretStore,
-  keyringFromEnv, loadOAuthApps, MasterKeyError, NULL_CALL_LOG, PLATFORM_IDS, refresherRegistry, TokenCipher, youtubeRefresher,
+  createInstagramRefresher, createTikTokRefresher, createYouTubeRefresher, EncryptedSecretStore, EnvSecretStore, FakeTokenRefresher, HttpCore,
+  InMemorySecretStore, keyringFromEnv, loadOAuthApps, MasterKeyError, NULL_CALL_LOG, PLATFORM_IDS, refresherRegistry, TokenCipher,
   type ConnectorHttpOverrides, type SecretStore, type TokenRefresherRegistry,
 } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
@@ -84,7 +84,7 @@ function buildRefreshers(): TokenRefresherRegistry {
     logger.warn('TOKEN_REFRESHER=fake: los tokens se "renuevan" con un refresher falso. Solo para desarrollo.');
     return refresherRegistry(PLATFORM_IDS.map((p) => new FakeTokenRefresher(p)));
   }
-  // TikTok e Instagram reales (CON-3) sobre el cliente HTTP de CON-1; YouTube llega con CON-8.
+  // TikTok e Instagram (CON-3) y YouTube (CON-8) reales, sobre el cliente HTTP de CON-1.
   // El sink es nulo porque el job oauth.refresh escribe su propia fila en api_call_log.
   const { apps, missing } = loadOAuthApps(process.env);
   for (const [provider, vars] of Object.entries(missing)) {
@@ -94,7 +94,7 @@ function buildRefreshers(): TokenRefresherRegistry {
   return refresherRegistry([
     createTikTokRefresher(core, { login: apps.tiktok, business: apps['tiktok-business'] }),
     createInstagramRefresher(core, apps.instagram),
-    youtubeRefresher,
+    createYouTubeRefresher(core, apps.youtube),
   ]);
 }
 

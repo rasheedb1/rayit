@@ -30,14 +30,18 @@ const ENV = {
   TIKTOK_LOGIN_CLIENT_SECRET: "TT-CLIENT-SECRET-SECRETO",
   META_APP_ID: "meta-app-id",
   META_APP_SECRET: "META-APP-SECRET-SECRETO",
+  GOOGLE_CLIENT_ID: "google-client-id",
+  GOOGLE_CLIENT_SECRET: "GOOGLE-CLIENT-SECRET-SECRETO",
 };
 const CODE_TT = "CODE-TIKTOK-SECRETO-1234567890";
 const CODE_IG = "CODE-INSTAGRAM-SECRETO-0987654321";
+const CODE_YT = "4/0AY-CODE-YOUTUBE-SECRETO-1122334455";
 /** Lo que los fixtures devuelven y que no puede aparecer en ninguna tabla ni salir en una URL nuestra. */
 const SECRETS = [
-  ENV.TIKTOK_LOGIN_CLIENT_SECRET, ENV.META_APP_SECRET, CODE_TT, CODE_IG,
+  ENV.TIKTOK_LOGIN_CLIENT_SECRET, ENV.META_APP_SECRET, ENV.GOOGLE_CLIENT_SECRET, CODE_TT, CODE_IG, CODE_YT,
   "act.demo-access-tiktok-0001-SECRETO", "rft.demo-refresh-tiktok-0001-SECRETO",
   "IGQVJ-short-demo-0001-SECRETO", "IGAA-long-demo-0001-SECRETO",
+  "ya29.demo-access-youtube-0001-SECRETO", "1//demo-refresh-youtube-0001-SECRETO",
 ];
 
 const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
@@ -65,6 +69,7 @@ beforeAll(async () => {
   fetch = new FixtureFetch([
     ...(await loadFixtures("tiktok", [["oauth.token", "code.ok"], ["user.info", "ok"]])),
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),
+    ...(await loadFixtures("youtube", [["oauth.token", "code.ok"], ["channels.list", "mine.ok"]])),
   ]);
   handlers = createOAuthHandlers({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => clock });
   await db.execAsSuperuser(`
@@ -83,8 +88,8 @@ beforeAll(async () => {
 }, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 afterAll(async () => {
-  await db.close();
-  guard.restore();
+  await db?.close();
+  guard?.restore();
 });
 
 function startRequest(provider: string, body: Record<string, string>): Request {
@@ -255,6 +260,63 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(active).toEqual(["analytics", "audience_demographics"]);
   });
 
+  it("YouTube (CON-8): 303 a Google con access_type=offline y prompt=consent; el callback deja el canal con sus dos scopes y el token cifrado", async () => {
+    const { location, cookie, state } = await start("youtube");
+    expect(location.origin + location.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(location.searchParams.get("client_id")).toBe("google-client-id");
+    expect(location.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/conexiones/oauth/youtube/callback`);
+    expect(location.searchParams.get("access_type")).toBe("offline");
+    expect(location.searchParams.get("prompt")).toBe("consent");
+    expect(location.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly");
+
+    const res = await handlers.callback(callbackRequest("youtube", { code: CODE_YT, state, scope: "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly" }, cookie), "youtube");
+    expect(res.status).toBe(303);
+    const id = new URL(res.headers.get("location")!).searchParams.get("conectada")!;
+    for (const s of SECRETS) expect(res.headers.get("location")!).not.toContain(s);
+
+    const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === id)!;
+    expect(row.platformId).toBe("youtube");
+    // El id del canal sale de channels.list?mine=true: el endpoint de token de Google no lo dice.
+    expect(row.externalAccountId).toBe("UCdemo000000000000000001");
+    expect(row.handle).toBe("lauracocinafacil");
+    expect(row.status).toBe("active");
+    expect(row.scopes).toEqual(["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"]);
+    // Una hora: expires_in 3599 del fixture. Google no da vencimiento del refresh token.
+    expect(row.accessExpiresAt).toBe("2026-09-22T10:59:59.000Z");
+    const expiry = await db.queryAsSuperuser<{ refresh_expires_at: unknown }>("SELECT refresh_expires_at FROM social_connection WHERE id = $1", [id]);
+    expect(expiry.rows[0]!.refresh_expires_at).toBeNull();
+    // El seed traía el canal con ref 'seed://…': se reconectó con una ref cifrada, no se duplicó.
+    expect(row.secretRef).toMatch(/^enc:youtube:[0-9a-f-]{36}$/);
+
+    // yt-analytics.readonly abre reports.query: dos finalidades consentidas.
+    const active = (await withWorkspace((tx) => listConsents(tx, id))).filter((c) => c.revokedAt === null).map((c) => c.purpose).sort();
+    expect(active).toEqual(["analytics", "audience_demographics"]);
+
+    // El token queda cifrado y se descifra con la clave del entorno; el refresh token es el de Google.
+    const tokens = await withWorkspace((tx) => new EncryptedSecretStore({ db: tx, cipher: new TokenCipher(keyringFromEnv(ENV)) }).get(row.secretRef));
+    expect(tokens?.accessToken).toBe("ya29.demo-access-youtube-0001-SECRETO");
+    expect(tokens?.refreshToken).toBe("1//demo-refresh-youtube-0001-SECRETO");
+
+    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean }>("SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY id", [id]);
+    expect(log.rows.map((r) => r.endpoint)).toEqual(["oauth.token", "youtube.channels.list"]);
+    expect(log.rows.every((r) => r.ok)).toBe(true);
+  });
+
+  it("YouTube: una cuenta de Google sin canal no crea nada y vuelve con ?error=sin_canal", async () => {
+    const sinCanal = new FixtureFetch([
+      ...(await loadFixtures("youtube", [["oauth.token", "code.ok"], ["channels.list", "mine.empty"]])),
+    ]);
+    const otros = createOAuthHandlers({ env: ENV, withWorkspace, fetch: sinCanal.fetch, now: () => clock });
+    const startRes = await otros.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    const state = new URL(startRes.headers.get("location")!).searchParams.get("state")!;
+    const before = await countConnections();
+    const res = await otros.callback(callbackRequest("youtube", { code: CODE_YT, state }, cookieOf(startRes)), "youtube");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_canal`);
+    expect(await countConnections()).toBe(before);
+    for (const s of SECRETS) expect(JSON.stringify(sinCanal.calls)).not.toContain(s);
+  });
+
   it("reconectar TikTok reutiliza la misma fila y la misma ref: una sola fila en connection_secret", async () => {
     const { cookie, state } = await start("tiktok");
     const res = await handlers.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookie), "tiktok");
@@ -306,7 +368,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     const recorded = JSON.stringify(fetch.calls);
     for (const s of SECRETS) expect(recorded).not.toContain(s);
     expect(guard.attempts).toBe(0);
-  });
+  }, 60_000);
 });
 
 describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma evidencia", () => {

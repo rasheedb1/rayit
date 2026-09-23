@@ -4,13 +4,15 @@
  * Un "proveedor" es una app: TikTok son DOS (Login Kit para el sandbox,
  * Accounts API cuando CON-9 dé acceso) sobre el mismo platform_id
  * 'tiktok'; el secret_ref ('enc:<proveedor>:<uuid>') las distingue.
+ * 'youtube' es la app de Google Cloud (CON-8): un proveedor, un
+ * platform_id.
  */
 import type { HttpCore } from '../http/client.ts';
 import type { NormalizedAccountProfile } from '../normalize/types.ts';
 import type { OAuthTokens, PlatformId } from '../types.ts';
 
-export type OAuthProviderId = 'tiktok' | 'tiktok-business' | 'instagram';
-export const OAUTH_PROVIDER_IDS: readonly OAuthProviderId[] = ['tiktok', 'tiktok-business', 'instagram'];
+export type OAuthProviderId = 'tiktok' | 'tiktok-business' | 'instagram' | 'youtube';
+export const OAUTH_PROVIDER_IDS: readonly OAuthProviderId[] = ['tiktok', 'tiktok-business', 'instagram', 'youtube'];
 
 export function isOAuthProviderId(value: unknown): value is OAuthProviderId {
   return typeof value === 'string' && (OAUTH_PROVIDER_IDS as readonly string[]).includes(value);
@@ -60,7 +62,7 @@ export interface RefreshCallOptions {
 export interface OAuthProvider {
   readonly id: OAuthProviderId;
   readonly platformId: PlatformId;
-  /** Nombre en la interfaz: «TikTok», «TikTok (analítica avanzada)», «Instagram». */
+  /** Nombre en la interfaz: «TikTok», «TikTok (analítica avanzada)», «Instagram», «YouTube». */
   readonly labelEs: string;
   readonly defaultScopes: readonly string[];
   readonly usesPkce: boolean;
