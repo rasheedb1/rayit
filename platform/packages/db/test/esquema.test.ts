@@ -14,7 +14,8 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
-  explicarEsquema, migracionesDelRepositorio, PRIVILEGIOS_DE_LA_APP, type EstadoDelEsquema,
+  explicarEsquema, migracionesDelRepositorio, POLITICAS_DEL_ENLACE_PUBLICO, PRIVILEGIOS_DE_LA_APP,
+  PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import type { CatalogDb } from '../src/client.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
@@ -40,6 +41,7 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
     assert.deepEqual(estado.sinAislar, []);
     assert.deepEqual(estado.excepcionesObsoletas, []);
     assert.deepEqual(estado.privilegiosDeMas, [], JSON.stringify(estado.privilegiosDeMas));
+    assert.deepEqual(estado.enlacePublico, [], 'mc_public_share tiene exactamente lo que conceden 0030 y 0031');
     assert.equal(estado.aplicadas, (await migracionesDelRepositorio()).length);
     assert.equal(estado.ultima, (await migracionesDelRepositorio()).at(-1));
     assert.equal(explicarEsquema(estado), null);
@@ -1164,5 +1166,131 @@ describe('pulido, ronda 1: persona, extensions y privilegios por columna', () =>
       assert.match(ws[0]!.motivo, /POR COLUMNA en plan/);
     });
     assert.deepEqual((await estadoDelEsquema(t.db)).privilegiosDeMas, [], 'y al deshacerlo vuelve a verde');
+  });
+});
+
+/**
+ * PULIDO, RONDA 4: el rol de los enlaces públicos. mc_public_share
+ * atiende /kit/<slug> y /cotizacion/<slug>, que se abren desde internet
+ * sin sesión, y está en ROLES_CON_ACCESO_DECLARADOS, así que la
+ * comprobación de «otros roles» lo dejaba pasar entero. Las cuatro
+ * sondas del revisor dejaban la guardia en verde: UPDATE del total de
+ * una cotización, SELECT de contact, una política `TO mc_public_share
+ * USING (true)` en invoice y BYPASSRLS. Lo que 0030 promete del rol solo
+ * lo comprobaba 0030 al aplicarse.
+ */
+describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030', () => {
+  async function con<T>(sql: string, deshacer: string, fn: (estado: EstadoDelEsquema) => T | Promise<T>): Promise<T> {
+    await t.admin(sql);
+    try {
+      return await fn(await estadoDelEsquema(t.db));
+    } finally {
+      await t.admin(deshacer);
+    }
+  }
+  /** Que la guardia lo diga del rol, y que explicarEsquema lo cuente. */
+  const dice = (e: EstadoDelEsquema, re: RegExp) => {
+    assert.ok(e.enlacePublico.some((x) => re.test(x)), JSON.stringify(e.enlacePublico));
+    const msg = String(explicarEsquema(e));
+    assert.match(msg, /enlaces públicos \(mc_public_share\)/);
+    assert.match(msg, /PRIVILEGIOS_DEL_ENLACE_PUBLICO/);
+  };
+  const DEAL_PUBLIC_SHARE =
+    "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
+
+  test('el inventario declarado es el de 0030 y 0031, y la base recién migrada lo cumple', async () => {
+    assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
+      'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'pipeline_stage', 'quote',
+    ]);
+    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 7);
+    assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
+    assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
+  });
+
+  test('UPDATE del total de una cotización, por columna, se reporta', async () => {
+    await con('GRANT UPDATE (total) ON quote TO mc_public_share', 'REVOKE UPDATE (total) ON quote FROM mc_public_share', (e) =>
+      dice(e, /^quote: UPDATE en total$/),
+    );
+  });
+
+  test('SELECT de una tabla que 0030 no le da (contact) se reporta', async () => {
+    await con('GRANT SELECT ON contact TO mc_public_share', 'REVOKE SELECT ON contact FROM mc_public_share', (e) =>
+      dice(e, /^contact: SELECT de la relación entera$/),
+    );
+  });
+
+  test('UPDATE de tabla entera donde 0030 lo concede por columna se reporta', async () => {
+    await con(
+      'GRANT UPDATE ON media_kit TO mc_public_share',
+      'REVOKE UPDATE ON media_kit FROM mc_public_share; ' +
+        'GRANT UPDATE (view_count, failed_attempts, locked_until) ON media_kit TO mc_public_share',
+      (e) => dice(e, /^media_kit: UPDATE de la relación entera \(solo se concede por columna: UPDATE\)$/),
+    );
+  });
+
+  test('una política `TO mc_public_share USING (true)` en invoice se reporta', async () => {
+    await con(
+      'CREATE POLICY zz_invoice_publica ON invoice FOR SELECT TO mc_public_share USING (true)',
+      'DROP POLICY zz_invoice_publica ON invoice',
+      (e) => dice(e, /^política invoice\.zz_invoice_publica TO mc_public_share, que 0030 no crea/),
+    );
+  });
+
+  test('una de las siete reescrita con `true OR …` también: el nombre no basta', async () => {
+    await con(
+      `ALTER POLICY deal_public_share ON deal USING (true OR ${DEAL_PUBLIC_SHARE})`,
+      `ALTER POLICY deal_public_share ON deal USING (${DEAL_PUBLIC_SHARE})`,
+      (e) => dice(e, /^política deal\.deal_public_share ya no abre solo el negocio de esa cotización: USING/),
+    );
+    await con(
+      'ALTER POLICY deal_public_share_won ON deal WITH CHECK (true)',
+      `ALTER POLICY deal_public_share_won ON deal WITH CHECK (${DEAL_PUBLIC_SHARE})`,
+      (e) => dice(e, /^política deal\.deal_public_share_won ya no abre solo .*: WITH CHECK true$/),
+    );
+    assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, [], 'y al deshacerlo vuelve a verde');
+  });
+
+  test('mc_public_share con BYPASSRLS o LOGIN se reporta, aunque sus GRANT no cambien', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('los roles de una base real no se tocan desde una prueba');
+    await con('ALTER ROLE mc_public_share BYPASSRLS', 'ALTER ROLE mc_public_share NOBYPASSRLS', (e) =>
+      dice(e, /^mc_public_share tiene BYPASSRLS: tiene que ser NOLOGIN/),
+    );
+    await con('ALTER ROLE mc_public_share LOGIN', 'ALTER ROLE mc_public_share NOLOGIN', (e) =>
+      dice(e, /^mc_public_share tiene LOGIN/),
+    );
+  });
+
+  test('mc_public_share miembro de otro rol se reporta: heredaría lo suyo', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('los roles de una base real no se tocan desde una prueba');
+    await con('GRANT mc_worker TO mc_public_share', 'REVOKE mc_worker FROM mc_public_share', (e) =>
+      dice(e, /^mc_public_share es miembro de mc_worker/),
+    );
+  });
+
+  test('lo que le falta también se dice con la base al día: la aceptación dejaría de funcionar', async () => {
+    await con(
+      'REVOKE INSERT ON deal_stage_history FROM mc_public_share; DROP POLICY pipeline_stage_public_share ON pipeline_stage',
+      'GRANT INSERT ON deal_stage_history TO mc_public_share; ' +
+        'CREATE POLICY pipeline_stage_public_share ON pipeline_stage FOR SELECT TO mc_public_share USING (EXISTS ' +
+        '(SELECT 1 FROM deal d WHERE d.stage_id = pipeline_stage.id AND d.workspace_id = pipeline_stage.workspace_id))',
+      (e) => {
+        dice(e, /^deal_stage_history: le falta INSERT/);
+        dice(e, /^falta la política pipeline_stage\.pipeline_stage_public_share/);
+      },
+    );
+    assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, [], 'y al deshacerlo vuelve a verde');
+  });
+
+  test('contra una base anterior a 0030 (Supabase hoy) no dice que falte el rol: lo que dice son las pendientes', async () => {
+    // Una base que contesta con una sola migración y ningún objeto: el rol
+    // no existe porque 0030 está pendiente, no porque se haya perdido.
+    const tx = {
+      query: (sql: string) =>
+        Promise.resolve({ rows: /FROM schema_migrations/.test(sql) ? [{ filename: '0001_core.sql' }] : [] }),
+    };
+    const vieja = { withCatalogs: (fn: (t: unknown) => Promise<unknown>) => fn(tx) } as unknown as CatalogDb;
+    const e = await estadoDelEsquema(vieja);
+    assert.ok(e.pendientes.length > 0);
+    assert.deepEqual(e.enlacePublico, []);
   });
 });

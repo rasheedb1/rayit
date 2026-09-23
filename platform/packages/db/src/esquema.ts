@@ -98,6 +98,19 @@
  *     mc_app hace SET ROLE mc_worker y lo lee todo. Se exige que mc_app
  *     no tenga SUPERUSER, BYPASSRLS ni CREATEROLE, y que no sea miembro
  *     de ningún rol salvo los de ROLES_DE_LA_APP_DECLARADOS.
+ *   · El rol de los enlaces públicos, mc_public_share (0030). Es la
+ *     frontera de /kit/<slug> y /cotizacion/<slug>, que se abren desde
+ *     internet sin sesión, y está en ROLES_CON_ACCESO_DECLARADOS, así
+ *     que la comprobación de «otros roles» lo deja pasar. Medido en el
+ *     pulido 4: `GRANT UPDATE (total) ON quote`, `GRANT SELECT ON
+ *     contact`, una política `TO mc_public_share USING (true)` en invoice
+ *     y `ALTER ROLE … BYPASSRLS` dejaban la guardia en verde; lo que 0030
+ *     promete del rol solo lo comprobaba 0030 al aplicarse. Ahora se
+ *     exige, en cada arranque: sus privilegios y columnas exactamente los
+ *     de PRIVILEGIOS_DEL_ENLACE_PUBLICO, sus políticas exactamente las de
+ *     POLITICAS_DEL_ENLACE_PUBLICO y con su forma, NOLOGIN, sin
+ *     SUPERUSER, BYPASSRLS ni CREATEROLE, sin ser miembro de ningún rol
+ *     y sin ser dueño de ninguna relación.
  *
  * BORRAR EL PADRE NO PUBLICA LA FILA
  * ----------------------------------
@@ -379,9 +392,125 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
   mc_public_share:
     'dueño de las tres funciones de los enlaces públicos de Cotizar (0030). NOLOGIN, sin BYPASSRLS: ninguna ' +
-    'conexión entra con él. SELECT de media_kit, quote, deal, deal_stage_history y pipeline_stage, pero solo ve ' +
-    'las filas que abren sus políticas `TO mc_public_share` (la del slug de la llamada); UPDATE solo de columnas ' +
-    'contadas e INSERT en deal_stage_history (el paso a «Ganado»). La migración comprueba sus atributos',
+    'conexión entra con él. Lo que puede, privilegio por privilegio y columna por columna, lo dice ' +
+    'PRIVILEGIOS_DEL_ENLACE_PUBLICO; sus políticas, POLITICAS_DEL_ENLACE_PUBLICO; y la guardia comprueba las dos ' +
+    'listas y sus atributos en cada arranque, no solo la migración al aplicarse',
+};
+
+/** El rol que atiende los enlaces públicos de Cotizar (0030): dueño de sus funciones SECURITY DEFINER. */
+export const PUBLIC_SHARE_ROLE = 'mc_public_share';
+
+/** Lo que el rol de los enlaces públicos puede hacer sobre una relación de `public`. */
+export interface PrivilegiosDelEnlace {
+  /** Privilegios de la relación entera (SELECT, INSERT; USAGE en una secuencia). */
+  tabla: readonly string[];
+  /** Privilegios que tiene SOLO en esas columnas. */
+  columnas?: Readonly<Record<string, readonly string[]>>;
+  motivo: string;
+}
+
+/**
+ * TODO lo que mc_public_share puede hacer en `public`, exacto. Es la
+ * promesa de la cabecera de 0030 —«aunque una función tuviera un error,
+ * no podría tocar el total de una cotización ni el nombre de un deal:
+ * Postgres se lo niega»—, y esa promesa solo vale mientras los GRANT
+ * sean estos. La migración comprueba los atributos del rol una vez, al
+ * aplicarse; esta lista es lo que la guardia vuelve a mirar en cada
+ * arranque y en `make db.guardia`. Un privilegio de más (una tabla, una
+ * columna, un GRANT de tabla entera donde se concede por columna) se
+ * reporta siempre; uno de menos, solo con la base al día, porque contra
+ * una base anterior a 0030/0031 no existe todavía.
+ *
+ * Un cambio aquí va con la migración que lo concede o lo revoca.
+ */
+export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PrivilegiosDelEnlace>> = {
+  media_kit: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['failed_attempts', 'locked_until', 'view_count'] },
+    motivo: 'abrir /kit/<slug>, sumar la visita y contar las contraseñas fallidas (0030 §3)',
+  },
+  quote: {
+    tabla: ['SELECT'],
+    columnas: {
+      UPDATE: ['accepted_at', 'accepted_by_email', 'accepted_by_name', 'expired_at', 'status', 'view_count', 'viewed_at'],
+    },
+    motivo: 'abrir /cotizacion/<slug> y marcarla vista, vencida o aceptada; nunca sus montos ni sus partidas (0030 §3)',
+  },
+  deal: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['amount', 'currency', 'lost_at', 'lost_reason', 'probability', 'stage_id', 'won_at'] },
+    motivo:
+      'pasar a «Ganado» el negocio de la cotización aceptada (0030 §3) con deal_move_stage, que escribe también el ' +
+      'monto y la moneda de la cotización (0031). Nunca el nombre, la empresa, el dueño ni la siguiente acción',
+  },
+  deal_stage_history: {
+    tabla: ['INSERT', 'SELECT'],
+    motivo: 'el paso de etapa de la aceptación queda en el historial (0030 §3)',
+  },
+  deal_stage_history_id_seq: { tabla: ['USAGE'], motivo: 'el id del INSERT en deal_stage_history (0030 §3)' },
+  pipeline_stage: {
+    tabla: ['SELECT'],
+    motivo: 'leer la etapa del negocio: la pide assert_reference_visible de 0025 al cambiar deal.stage_id (0030 §3)',
+  },
+};
+
+/** Cómo tiene que ser una política `TO mc_public_share`. */
+export interface PoliticaDelEnlace {
+  /** polcmd: r = SELECT, w = UPDATE. */
+  cmd: string;
+  /**
+   * Lo que tiene que decir la expresión. USING y, si lo trae, WITH CHECK
+   * necesitan un término de su AND de primer nivel, sin ningún OR, que
+   * cumpla TODAS estas expresiones. Es una comprobación de forma, no un
+   * demostrador: basta para que `USING (true)`, `true OR …` o un EXISTS
+   * sin correlación no pasen en verde.
+   */
+  exige: readonly RegExp[];
+  motivo: string;
+}
+
+const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share'/;
+const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
+
+/**
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030. Una
+ * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
+ * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
+ * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
+ * esas ya las mide la guardia de tablas.
+ */
+export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEnlace>> = {
+  'media_kit.media_kit_public_share': {
+    cmd: 'r',
+    exige: [SLUG_DE_LA_LLAMADA],
+    motivo: 'el media kit público cuyo slug fija la función',
+  },
+  'media_kit.media_kit_public_share_views': {
+    cmd: 'w',
+    exige: [SLUG_DE_LA_LLAMADA],
+    motivo: 'sumar la visita y las contraseñas fallidas de ese media kit',
+  },
+  'quote.quote_public_share': { cmd: 'r', exige: [SLUG_DE_LA_LLAMADA], motivo: 'la cotización enviada de ese slug' },
+  'quote.quote_public_share_state': {
+    cmd: 'w',
+    exige: [SLUG_DE_LA_LLAMADA],
+    motivo: 'marcar vista, vencida o aceptada esa cotización',
+  },
+  'deal.deal_public_share': { cmd: 'r', exige: DEAL_DE_LA_COTIZACION, motivo: 'el negocio de esa cotización' },
+  'deal.deal_public_share_won': {
+    cmd: 'w',
+    exige: DEAL_DE_LA_COTIZACION,
+    motivo: 'pasar a «Ganado» el negocio de esa cotización',
+  },
+  'pipeline_stage.pipeline_stage_public_share': {
+    cmd: 'r',
+    exige: [
+      /^EXISTS \(SELECT 1 FROM deal d WHERE/,
+      /\bd\.stage_id = pipeline_stage\.id\b/,
+      /\bd\.workspace_id = pipeline_stage\.workspace_id\b/,
+    ],
+    motivo: 'la etapa en la que está un negocio que el rol ya ve (deal_public_share decide cuál)',
+  },
 };
 
 /**
@@ -680,6 +809,14 @@ export interface EstadoDelEsquema {
   privilegiosDeMas: PrivilegioDeMas[];
   /** Otros roles con privilegios en `public`. */
   rolesDeMas: RolDeMas[];
+  /**
+   * Lo que mc_public_share tiene y no le promete 0030: privilegios o
+   * columnas fuera de PRIVILEGIOS_DEL_ENLACE_PUBLICO, políticas `TO
+   * mc_public_share` fuera de POLITICAS_DEL_ENLACE_PUBLICO o reescritas,
+   * atributos que saltan la RLS o dejan entrar, membresías y relaciones
+   * de las que es dueño. Con la base al día, también lo que le falta.
+   */
+  enlacePublico: string[];
   /** Si la comprobación de archivos se pudo hacer. */
   comparadoConArchivos: boolean;
   /**
@@ -797,6 +934,20 @@ interface FilaRol extends Record<string, unknown> {
   super: boolean;
   bypass: boolean;
   crea_roles: boolean;
+}
+interface FilaRolDelEnlace extends Record<string, unknown> {
+  super: boolean;
+  bypass: boolean;
+  entra: boolean;
+  crea_roles: boolean;
+  /** Los roles de los que mc_public_share es miembro. */
+  miembro_de: string[] | null;
+}
+interface FilaPoliticaDelEnlace extends Record<string, unknown> {
+  clave: string;
+  cmd: string;
+  qual: string | null;
+  with_check: string | null;
 }
 interface FilaDisparador extends Record<string, unknown> {
   tabla: string;
@@ -1007,6 +1158,36 @@ const SQL_ROL_DE_LA_APP = `
    WHERE r.rolname = $1::name OR pg_has_role($1::name, r.oid, 'MEMBER')
    ORDER BY 2 DESC, 1`;
 
+/**
+ * El rol de los enlaces públicos: los atributos que saltan la RLS o
+ * dejan abrir una conexión con él, y los roles de los que es miembro
+ * (heredaría sus privilegios, o haría SET ROLE a ellos). Sin fila, el
+ * rol no existe.
+ */
+const SQL_ROL_DEL_ENLACE = `
+  SELECT r.rolsuper AS super, r.rolbypassrls AS bypass, r.rolcanlogin AS entra, r.rolcreaterole AS crea_roles,
+         (SELECT array_agg(b.rolname::text ORDER BY b.rolname)
+            FROM pg_auth_members m JOIN pg_roles b ON b.oid = m.roleid
+           WHERE m.member = r.oid) AS miembro_de
+    FROM pg_roles r
+   WHERE r.rolname = $1::name`;
+
+/**
+ * Las políticas que nombran al rol de los enlaces públicos en su TO, de
+ * cualquier esquema. Fuera de public la clave lleva el esquema delante.
+ */
+const SQL_POLITICAS_DEL_ENLACE = `
+  SELECT CASE WHEN n.nspname = 'public' THEN '' ELSE n.nspname || '.' END || c.relname || '.' || p.polname AS clave,
+         p.polcmd::text AS cmd,
+         pg_get_expr(p.polqual, p.polrelid) AS qual,
+         pg_get_expr(p.polwithcheck, p.polrelid) AS with_check
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_roles r ON r.oid = ANY (p.polroles)
+   WHERE r.rolname = $1::name
+   ORDER BY 1`;
+
 /** Las claves ajenas de `public`, con su primera columna, cuántas tiene y qué hacen al borrar el padre. */
 const SQL_REFERENCIAS = `
   SELECT hija.relname AS hija, a.attname::text AS columna, padre.relname AS padre,
@@ -1131,6 +1312,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
   const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
   const rolesDeLaApp = await leer<FilaRol>(SQL_ROL_DE_LA_APP, [APP_ROLE]);
+  const rolDelEnlace = await leer<FilaRolDelEnlace>(SQL_ROL_DEL_ENLACE, [PUBLIC_SHARE_ROLE]);
+  const politicasDelEnlace = await leer<FilaPoliticaDelEnlace>(SQL_POLITICAS_DEL_ENLACE, [PUBLIC_SHARE_ROLE]);
 
   const tablas = relaciones.filter((r) => r.relkind === 'r' || r.relkind === 'p');
   const vistas = relaciones.filter((r) => r.relkind === 'v');
@@ -1647,6 +1830,114 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     }
   }
 
+  // ---- el rol de los enlaces públicos. Está en ROLES_CON_ACCESO_DECLARADOS,
+  //      así que el bucle de arriba lo deja pasar; lo que puede se mide
+  //      aquí, contra su inventario exacto. `deMas` se dice siempre;
+  //      `faltan`, solo con la base al día (antes de 0030 no existe nada).
+  const enlaceDeMas: string[] = [];
+  const enlaceFaltan: string[] = [];
+  const rolEnlace = rolDelEnlace[0];
+  if (inventarioLeido && !rolEnlace) {
+    enlaceFaltan.push(`el rol ${PUBLIC_SHARE_ROLE} no existe: las funciones de los enlaces públicos no tienen dueño`);
+  }
+  if (rolEnlace) {
+    const atributos = [
+      rolEnlace.super ? 'SUPERUSER' : '',
+      rolEnlace.bypass ? 'BYPASSRLS' : '',
+      rolEnlace.entra ? 'LOGIN' : '',
+      rolEnlace.crea_roles ? 'CREATEROLE' : '',
+    ].filter(Boolean);
+    if (atributos.length) {
+      enlaceDeMas.push(
+        `${PUBLIC_SHARE_ROLE} tiene ${atributos.join(', ')}: tiene que ser NOLOGIN, sin BYPASSRLS, sin SUPERUSER y ` +
+          'sin CREATEROLE (0030 §1)',
+      );
+    }
+    const miembroDe = rolEnlace.miembro_de ?? [];
+    if (miembroDe.length) {
+      enlaceDeMas.push(
+        `${PUBLIC_SHARE_ROLE} es miembro de ${miembroDe.join(', ')}: sus funciones heredarían esos privilegios o ` +
+          'harían SET ROLE a ellos',
+      );
+    }
+  }
+  // Privilegios: los de tabla entera y los de columna, contra el inventario.
+  const delEnlace = new Map<string, { tabla: Set<string>; columnas: Map<string, Set<string>> }>();
+  for (const p of privilegios) {
+    if (p.rol !== PUBLIC_SHARE_ROLE) continue;
+    let r = delEnlace.get(p.relname);
+    if (!r) delEnlace.set(p.relname, (r = { tabla: new Set(), columnas: new Map() }));
+    if (!p.columna) r.tabla.add(p.privilegio);
+    else {
+      let cols = r.columnas.get(p.privilegio);
+      if (!cols) r.columnas.set(p.privilegio, (cols = new Set()));
+      cols.add(p.columna);
+    }
+  }
+  for (const [relacion, tiene] of [...delEnlace].sort(([a], [b]) => a.localeCompare(b))) {
+    const declarado = PRIVILEGIOS_DEL_ENLACE_PUBLICO[relacion];
+    const deTabla = [...tiene.tabla].filter((p) => !declarado?.tabla.includes(p)).sort();
+    if (deTabla.length) {
+      const porColumnas = deTabla.filter((p) => declarado?.columnas?.[p]);
+      enlaceDeMas.push(
+        `${relacion}: ${deTabla.join(', ')} de la relación entera` +
+          (porColumnas.length ? ` (solo se concede por columna: ${porColumnas.join(', ')})` : ''),
+      );
+    }
+    for (const [priv, cols] of [...tiene.columnas].sort(([a], [b]) => a.localeCompare(b))) {
+      // Un GRANT de columna de un privilegio que ya tiene de tabla entera no añade nada.
+      if (declarado?.tabla.includes(priv)) continue;
+      const permitidas = declarado?.columnas?.[priv] ?? [];
+      const deMas = [...cols].filter((c) => !permitidas.includes(c)).sort();
+      if (deMas.length) enlaceDeMas.push(`${relacion}: ${priv} en ${deMas.join(', ')}`);
+    }
+  }
+  for (const [relacion, declarado] of Object.entries(PRIVILEGIOS_DEL_ENLACE_PUBLICO)) {
+    const tiene = delEnlace.get(relacion);
+    const faltaTabla = declarado.tabla.filter((p) => !tiene?.tabla.has(p));
+    const faltaColumnas = Object.entries(declarado.columnas ?? {}).flatMap(([priv, cols]) =>
+      tiene?.tabla.has(priv) ? [] : cols.filter((c) => !tiene?.columnas.get(priv)?.has(c)).map((c) => `${priv} (${c})`),
+    );
+    const falta = [...faltaTabla, ...faltaColumnas];
+    if (falta.length) enlaceFaltan.push(`${relacion}: le falta ${falta.join(', ')} (${declarado.motivo})`);
+  }
+  // Dueño de una relación: tendría todos los privilegios sin que salgan
+  // en la ACL.
+  for (const r of relaciones) {
+    if (r.dueno === PUBLIC_SHARE_ROLE) {
+      enlaceDeMas.push(`${r.relname}: ${PUBLIC_SHARE_ROLE} es su dueño, y el dueño lo puede todo sin GRANT`);
+    }
+  }
+  // Políticas: exactamente las declaradas, y cada una con su forma.
+  const politicasVistas = new Set<string>();
+  for (const p of politicasDelEnlace) {
+    politicasVistas.add(p.clave);
+    const declarada = POLITICAS_DEL_ENLACE_PUBLICO[p.clave];
+    if (!declarada) {
+      enlaceDeMas.push(
+        `política ${p.clave} TO ${PUBLIC_SHARE_ROLE}, que 0030 no crea (USING ${p.qual ?? '—'})`,
+      );
+      continue;
+    }
+    if (p.cmd !== declarada.cmd) {
+      enlaceDeMas.push(`política ${p.clave}: es para el comando «${p.cmd}» y 0030 la crea para «${declarada.cmd}»`);
+      continue;
+    }
+    const cumple = (expr: string | null) =>
+      expr !== null &&
+      terminosDelAnd(expr).some((t) => !/ OR /i.test(t) && declarada.exige.every((re) => re.test(t)));
+    const malas = [
+      cumple(p.qual) ? '' : `USING ${p.qual ?? '(sin expresión)'}`,
+      p.with_check === null || cumple(p.with_check) ? '' : `WITH CHECK ${p.with_check}`,
+    ].filter(Boolean);
+    if (malas.length) {
+      enlaceDeMas.push(`política ${p.clave} ya no abre solo ${declarada.motivo}: ${malas.join('; ')}`);
+    }
+  }
+  for (const [clave, declarada] of Object.entries(POLITICAS_DEL_ENLACE_PUBLICO)) {
+    if (!politicasVistas.has(clave)) enlaceFaltan.push(`falta la política ${clave} (${declarada.motivo})`);
+  }
+
   const tiene = new Set(aplicadas ?? []);
   const pendientes = aplicadas === null ? [] : enElRepo.filter((f) => !tiene.has(f));
   // Contra una base a medio migrar, «esa declaración sobra porque el
@@ -1686,6 +1977,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     otrasDeclaracionesObsoletas: siAlDia(otrasDeclaracionesObsoletas),
     privilegiosDeMas,
     rolesDeMas,
+    // Lo que falta solo dice algo en una base migrada y al día.
+    enlacePublico: [...enlaceDeMas, ...(aplicadas === null ? [] : siAlDia(enlaceFaltan))],
     comparadoConArchivos: enElRepo.length > 0 && aplicadas !== null,
     inventarioLeido,
   };
@@ -1722,6 +2015,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   otrasDeclaracionesObsoletas: [],
   privilegiosDeMas: [],
   rolesDeMas: [],
+  enlacePublico: [],
   comparadoConArchivos: true,
   inventarioLeido: true,
 };
@@ -1859,6 +2153,15 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
       'hay roles con privilegios en public que no son el dueño, ni la aplicación, ni uno declarado: ' +
         estado.rolesDeMas.map((r) => `${r.rol} en ${r.tabla} (${r.privilegios.join(', ')})`).join('; ') +
         '. Revócalos, o declara el rol en ROLES_CON_ACCESO_DECLARADOS con su motivo',
+    );
+  }
+  if (estado.enlacePublico.length) {
+    partes.push(
+      `el rol de los enlaces públicos (${PUBLIC_SHARE_ROLE}), que atiende /kit y /cotizacion sin sesión, no es el ` +
+        'que promete 0030: ' +
+        estado.enlacePublico.join('; ') +
+        '. Revoca lo que sobra (los atributos y las membresías, con ./scripts/supabase-admin.sh), o cambia ' +
+        'PRIVILEGIOS_DEL_ENLACE_PUBLICO / POLITICAS_DEL_ENLACE_PUBLICO junto con la migración que lo concede',
     );
   }
   if (estado.excepcionesSinPrivilegios.length) {

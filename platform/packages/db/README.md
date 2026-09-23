@@ -375,7 +375,11 @@ además más rápido.
   producción. Nunca tiene TRUNCATE, TRIGGER, REFERENCES ni MAINTAIN, ni
   privilegios sobre una vista materializada o una tabla foránea; y
   ningún otro rol que no esté en `ROLES_CON_ACCESO_DECLARADOS` tiene
-  nada en `public`. Un
+  nada en `public`. El de los enlaces públicos, `mc_public_share`, se
+  mide aparte y exacto: sus privilegios y columnas contra
+  `PRIVILEGIOS_DEL_ENLACE_PUBLICO`, sus políticas contra las siete de
+  `POLITICAS_DEL_ENLACE_PUBLICO` (y su forma), NOLOGIN, sin BYPASSRLS,
+  SUPERUSER ni CREATEROLE y sin membresías. Un
   `GRANT` **por columna** cuenta como de tabla (un REVOKE de tabla no
   lo quita), y en las **secuencias** `mc_app` no tiene SELECT ni UPDATE
   —`last_value` es el volumen de toda la plataforma— y USAGE solo donde
