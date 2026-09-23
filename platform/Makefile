@@ -3,7 +3,7 @@ SHELL := /bin/bash
 DB_URL ?= postgres://mc:mc@localhost:5432/oncue
 
 .PHONY: help up down logs reset migrate migrate-check seed psql web worker worker.humo media dev fmt test \
-        db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check db.seed.check \
+        db.unlock db.lock db.status db.migrate db.sql db.info db.cert db.check db.guardia db.seed.check \
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
@@ -109,6 +109,10 @@ db.info: ## Estado de la base: tablas, filas, migraciones aplicadas
 
 db.check: ## Verifica el esquema en Postgres embebido, sin tocar Supabase
 	@node db/migrate.mjs --pglite
+
+db.guardia: ## La guardia de aislamiento contra Supabase, solo lectura. Va entre db.migrate y vercel.deploy PROD=1
+	@test -f .env.local || { echo "  Corre primero: make db.unlock"; exit 1; }
+	@node --env-file=.env.local --experimental-strip-types --no-warnings packages/db/scripts/guardia.ts
 
 db.seed.check: ## Verifica los seeds en Postgres embebido: cuatro pasadas, conteos y cifras (DIAS=40 adelanta el reloj)
 	@node db/seed/verify/run.mjs $(SEED) $(if $(DIAS),--dias $(DIAS))
