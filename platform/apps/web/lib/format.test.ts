@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatCountry, formatDate, formatDateRange, formatDelta,
-  formatInt, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
+  formatInt, formatMonth, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
 } from "./format";
 
 describe("formatMoney", () => {
@@ -241,5 +241,27 @@ describe("formatCountry: el país por su nombre, en el idioma del workspace", ()
   it("un código que no es de dos letras vuelve tal cual", () => {
     expect(formatCountry("Colombia")).toBe("Colombia");
     expect(formatCountry("")).toBe("");
+  });
+});
+
+describe("formatMonth", () => {
+  it("nombra el mes y su año en el locale del espacio", () => {
+    expect(formatMonth("2026-08")).toBe("agosto de 2026");
+    expect(formatMonth("2026-01")).toBe("enero de 2026");
+    expect(formatMonth("2026-08", { locale: "en-US" })).toBe("August 2026");
+  });
+
+  it("acepta una fecha entera y se queda con el mes", () => {
+    expect(formatMonth("2026-08-31")).toBe("agosto de 2026");
+  });
+
+  it("no se corre de mes por la zona del espacio: un mes es calendario, no un instante", () => {
+    expect(formatMonth("2026-08", { timeZone: "America/Bogota" })).toBe("agosto de 2026");
+    expect(formatMonth("2026-08", { timeZone: "Pacific/Kiritimati" })).toBe("agosto de 2026");
+  });
+
+  it("lo que no es un mes ISO lanza", () => {
+    expect(() => formatMonth("agosto")).toThrow(/mes ISO/);
+    expect(() => formatMonth("2026")).toThrow(/mes ISO/);
   });
 });

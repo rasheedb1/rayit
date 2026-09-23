@@ -564,7 +564,8 @@ export const STORIES: readonly Story[] = [
     title: "Flujo de caja proyectado",
     desc: "packages/core/flujo-caja.ts combina cobros esperados (facturas por due_on, deals ganados sin factura por expected_close_date y plazo de pago) menos gastos recurrentes y reserva de impuestos, por semana, ocho semanas. Gráfico y tabla.",
     done: "El gráfico sale de la función con los datos del seed; un test cubre una semana con cobro, gasto e impuesto.",
-    status: "pendiente",
+    status: "hecho",
+    note: "projectCashflow() en packages/core/src/flujo-caja.ts (34 pruebas), getCashflowInputs() —una sola consulta— en queries/finanzas.ts (25 en PGlite con el seed, con la negativa de RLS) y /finanzas/flujo (13). La pantalla abre con requirePermission(\'finanzas.flujo.ver\') y una prueba comprueba que el rol Mánager no la abre y que ni siquiera se lee la base. FIN-2 y FIN-5 no hacían falta: lo que FIN-6 necesita de ellas son las tablas payment/expense (0008) y el seed 0003, no sus pantallas; flujo-caja.ts lo crea esta historia. Sin migración. Falta solo el 404 de ACC-5 (hoy el error cae en error.tsx) y la decisión de docs/propuestas/FIN-6.md §0.2.4: el cobro esperado es el bruto de la factura, no el neto de retención.",
   },
   {
     id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 6, deps: ["FIN-6"],
@@ -590,8 +591,8 @@ export const STORIES: readonly Story[] = [
     title: "Catálogo de permisos y can()",
     desc: "packages/core/src/permisos.ts: los permisos con la forma <módulo>.<recurso>.<acción>, los cinco roles de fábrica del creador y los cinco de agencia, y can(). Puro, sin base de datos y sin pantalla. Desde aquí, ninguna Server Action pregunta por el rol.",
     done: "Cada Server Action nueva abre con su requirePermission(); una prueba comprueba que el rol «Mánager» no trae finanzas.flujo.ver.",
-    status: "pendiente",
-    note: "Va en el sprint 3 a propósito: fija los nombres antes de que Campañas y Finanzas tengan sus Server Actions escritas. Después cuesta diez veces más.",
+    status: "hecho",
+    note: "Hecha el 23-sep (rama nicolas/ACC-1-catalogo-permisos). 43 permisos en siete módulos con etiqueta y sensibilidad, diez roles de fábrica con su matriz literal, can(), permisosDeRol(), la intersección «nadie otorga lo que no tiene» y la regla del último dueño; pnpm --filter @mc/core permisos:sql imprime la semilla que ACC-3 pega en su migración (snapshot probado en PGlite). requirePermission() vive en apps/web/lib/permisos/ (no en lib/auth/, que es de Rasheed) y hoy resuelve toda sesión como Dueño (TODO(ACC-3) en sesion.ts); las doce Server Actions de Campañas, Finanzas y Conexiones ya abren con él y una prueba estática falla si una nueva no lo hace. Las de Resumen, Ventas y Cotizar tienen su permiso asignado en docs/propuestas/ACC-1.md §4 para cuando Rasheed las adapte. Tres lecturas conservadoras pendientes de Nicolás en la propuesta §0.2.",
   },
   {
     id: "ACC-2", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-2"],

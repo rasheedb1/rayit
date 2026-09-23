@@ -58,7 +58,7 @@ const loadCampaign = cache(async (id: string) =>
       posts: await listCampaignPosts(tx, id),
       suggestions: editable ? await suggestPosts(tx, id) : [],
       linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
-      // TODO(ACC-1): campanas.campana.ver
+      // Ver la ficha (campanas.campana.ver) lo exige ACC-5 con requireModule en el segmento.
       brandInputs: await listBrandInputs(tx, id),
       result: await getCampaignResult(tx, id),
       canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,

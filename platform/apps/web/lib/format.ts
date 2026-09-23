@@ -281,6 +281,24 @@ export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
 }
 
 /**
+ * Un mes con su año, en el locale del espacio: "2026-08" → "agosto de
+ * 2026". Acepta también una fecha entera ("2026-08-01"), y se queda con
+ * el mes. Para nombrar de qué período sale una cifra derivada —el ritmo
+ * de gastos recurrentes del flujo de caja (FIN-6)—, donde decir solo
+ * «el último mes» deja la cifra sin fuente comprobable.
+ *
+ * Un mes es una fecha de calendario, no un instante: se presenta en UTC
+ * igual que una columna `date`, para que "2026-08" no se vea como julio
+ * en una zona al oeste.
+ */
+export function formatMonth(isoMonth: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  if (!/^\d{4}-\d{2}(-\d{2})?$/.test(isoMonth)) throw new Error(`No es un mes ISO: "${isoMonth}"`);
+  const d = utcDate(`${isoMonth.slice(0, 7)}-01`);
+  return plain(dateFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(d));
+}
+
+/**
  * Un rango de días en números, lo más corto posible y en el orden del
  * locale: "26–30/8" en es-CO ("8/26–30" en en-US) dentro del mismo mes,
  * "28/8–1/9" entre dos. Para la etiqueta de una barra que cubre varios
@@ -420,6 +438,7 @@ export function formatterFor(settings: FormatSettings) {
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
+    month: (isoMonth: string) => formatMonth(isoMonth, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
     time: (iso: string) => formatTime(iso, base),

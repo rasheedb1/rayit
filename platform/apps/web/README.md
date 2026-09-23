@@ -59,6 +59,8 @@ app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
+                              calcula projectCashflow() de @mc/core; la pantalla pinta.
 app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
                               (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
                               qué falta y «Recalcular» si la base lo permite) y
