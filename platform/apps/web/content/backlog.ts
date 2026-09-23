@@ -552,7 +552,8 @@ export const STORIES: readonly Story[] = [
     title: "Recordatorios de cobro",
     desc: "Job finanzas/recordatorios.ts que, a los 7 días antes, el día y a los 7, 21 y 45 después del vencimiento, redacta el correo, lo guarda como notification de tipo invoice_overdue y lo deja listo para copiar. Envío automático real en fase 2.",
     done: "Una factura vencida hace 41 días tiene sus tres recordatorios en la bandeja con reminders_sent = 3.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Sin migración: job_definition finance.reminders ya estaba en 0009 y notification.invoice_overdue en 0009. El paso −7 caduca al vencer la factura (su texto dice «vence en N días»), y por eso una vencida hace 41 días recibe TRES recordatorios (0, +7, +21) y no cuatro; reminders_sent cuenta los que hay en la bandeja y nunca baja. La idempotencia cuelga de action_url (…?recordatorio=<paso>), no del título, que es texto de producto. No envía nada: el SMTP es fase 2 sobre notification.emailed_at (CIM-10). Sin FIN-8, el correo dice dónde se configuran los datos de pago en vez de dejar un hueco.",
   },
   {
     id: "FIN-5", module: "FIN", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-5"],
