@@ -16,7 +16,8 @@ import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000ac08';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
 const USER_LAURA = '00000002-0000-4000-8000-000000000002';
-const USER_MANAGER = '00000009-0000-4000-8000-0000000000a1';
+/** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
+const USER_MANAGER = '00000002-0000-4000-8000-000000000004';
 const USER_EDITOR = '00000009-0000-4000-8000-0000000000a2';
 const USER_AJENO = '00000009-0000-4000-8000-0000000000a3';
 
@@ -26,17 +27,15 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-acc8', 'Ajeno') ON CONFLICT DO NOTHING;
     INSERT INTO app_user (id, email, name) VALUES
-      ('${USER_MANAGER}', 'andres@ejemplo.com', 'Andrés Pardo'),
       ('${USER_EDITOR}', 'edita@ejemplo.com', 'Edita Ruiz'),
       ('${USER_AJENO}', 'ajeno@ejemplo.com', 'Otro')
     ON CONFLICT DO NOTHING;
     INSERT INTO membership (workspace_id, user_id, role) VALUES
-      ('${WORKSPACE_LAURA}', '${USER_MANAGER}', 'admin'),
       ('${WORKSPACE_LAURA}', '${USER_EDITOR}', 'viewer'),
       ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'owner')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+}, { timeout: 600_000 }); // Postgres embebido con migraciones y seeds: con la máquina cargada pasa de los dos minutos.
 after(async () => { await t.close(); });
 
 const asManager = <T,>(fn: Parameters<typeof t.db.withWorkspace<T>>[1]) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_MANAGER });
@@ -67,11 +66,12 @@ describe('aviso al titular y bitácora', () => {
     assert.equal(first, true);
     assert.equal(second, false, 'ya había un aviso sin leer para esa cuenta y esa persona');
     const mine = await asLaura((tx) => tx.query<{ kind: string; user_id: string; entity_id: string; action_url: string; body_es: string }>(
-      `SELECT kind, user_id, entity_id, action_url, body_es FROM notification WHERE kind = 'connection_added'`,
+      `SELECT kind, user_id, entity_id, action_url, body_es FROM notification WHERE kind = 'connection_added' AND entity_id = $1`, [id],
     ));
     assert.equal(mine.rows.length, 1);
     assert.deepEqual(mine.rows[0], { kind: 'connection_added', user_id: USER_LAURA, entity_id: id, action_url: '/conexiones', body_es: 'Andrés Pardo conectó @cafealma.' });
     const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => tx.query(`SELECT 1 FROM notification WHERE kind = 'connection_added'`), { userId: USER_AJENO });
+    // El seed también trae el aviso de la demo (c1): tampoco lo ve.
     assert.equal(ajeno.rows.length, 0, 'RLS: el otro workspace no ve el aviso');
 
     await asManager((tx) => recordConnectionAudit(tx, { action: 'connection.added', connectionId: id, after: { connectionId: id, platformId: 'instagram', handle: 'cafealma', onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: 'admin' } } }));
@@ -94,8 +94,10 @@ describe('aviso al titular y bitácora', () => {
     assert.equal(row.connectedBy!.name, 'Andrés Pardo');
     assert.equal(row.connectedBy!.email, 'andres@ejemplo.com');
     assert.match(row.connectedBy!.at, /^\d{4}-\d{2}-\d{2}T/);
-    const own = (await asLaura(listAccounts)).find((r) => r.handle === 'laura.cocinafacil' && r.platformId === 'instagram')!;
-    assert.equal(own.connectedBy, null, 'la del seed la conectó la propia titular: null, no un guion');
+    const own = (await asLaura(listAccounts)).find((r) => r.handle === 'laura.cocinafacil' && r.platformId === 'tiktok')!;
+    assert.equal(own.connectedBy, null, 'la de TikTok del seed la conectó la propia titular: null, no un guion');
+    const seeded = (await asLaura(listAccounts)).find((r) => r.handle === 'laura.cocinafacil' && r.platformId === 'instagram')!;
+    assert.equal(seeded.connectedBy?.name, 'Andrés Pardo', 'la de Instagram del seed la conectó el mánager de la demo (seed 0003)');
     await t.admin(`DELETE FROM membership WHERE workspace_id = '${WORKSPACE_LAURA}' AND user_id = '${USER_MANAGER}';`);
     const later = (await asLaura(listAccounts)).find((r) => r.handle === 'cafealma')!;
     assert.equal(later.connectedBy!.name, null, 'app_user ya no es visible desde este workspace');
