@@ -149,11 +149,28 @@ export const MESSAGES = {
       cobros: "Cobros esperados",
       egresos: "Gastos e impuestos",
     },
+    /**
+     * Los ingresos de plataformas (FIN-7): entran como «otros ingresos»
+     * y SIEMPRE dicen que son un estimado. Una cifra proyectada que se
+     * presenta igual que una factura firmada es una promesa que nadie
+     * hizo.
+     */
+    otrosIngresos: {
+      fila: "Ingresos de plataformas (estimado)",
+      columna: "Otros ingresos",
+      base: (meses: number) => `estimado por promedio de los últimos ${meses} meses`,
+      baseParcial: (promediados: number) =>
+        `estimado por promedio de ${promediados} ${promediados === 1 ? "mes" : "meses"}: es lo que llevas cargado`,
+      sinDatos:
+        "Todavía no hay meses cerrados con ingresos de plataformas, así que no entran al flujo: no se inventa una cifra.",
+      cargar: "Cargar ingresos de plataformas",
+    },
     tabla: {
       seccion: "Semana a semana",
       caption: "Flujo de caja proyectado, semana a semana",
       semana: "Semana",
       cobros: "Cobros",
+      otros: "Otros ingresos",
       gastos: "Gastos",
       impuestos: "Impuestos",
       neto: "Neto",

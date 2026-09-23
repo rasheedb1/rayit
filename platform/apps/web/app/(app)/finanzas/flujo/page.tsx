@@ -41,6 +41,15 @@ function paraElGrafico(c: Cashflow) {
     labels: c.semanas.map((s) => s.inicio),
     series: [
       { name: T.grafico.cobros, data: c.semanas.map((s) => Number(s.cobros)), color: "accent" as const },
+      // La barra de los ingresos de plataformas solo existe si hay
+      // estimado: una serie de ceros ocupa leyenda y no dice nada.
+      ...(c.otrosIngresosMensual === null
+        ? []
+        : [{
+            name: T.otrosIngresos.columna,
+            data: c.semanas.map((s) => Number(s.otrosIngresos)),
+            color: "good" as const,
+          }]),
       { name: T.grafico.egresos, data: c.semanas.map((s) => Number(egresosDe(s))), color: "deemph" as const },
     ],
   };
@@ -77,7 +86,14 @@ function Detalle({ cobros, f }: { cobros: CobroDeLaSemana[]; f: Formatter }) {
   );
 }
 
-const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
+/**
+ * Las columnas. «Otros ingresos» (FIN-7) solo aparece cuando HAY un
+ * estimado: sin él la columna sería una fila de ceros, y un cero dice
+ * «no entra nada» cuando lo cierto es «todavía no lo sabemos». Además,
+ * a 400 px una séptima columna no cabe, así que la que no aporta nada
+ * no se pinta.
+ */
+const columnas = (f: Formatter, conOtrosIngresos: boolean): Column<SemanaFlujo>[] => [
   {
     key: "semana",
     header: T.tabla.semana,
@@ -95,6 +111,14 @@ const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
     ),
   },
   { key: "cobros", header: T.tabla.cobros, align: "num", render: (s) => f.money(s.cobros, undefined, { mode: "full" }) },
+  ...(conOtrosIngresos
+    ? [{
+        key: "otros",
+        header: T.tabla.otros,
+        align: "num" as const,
+        render: (s: SemanaFlujo) => f.money(s.otrosIngresos, undefined, { mode: "full" }),
+      }]
+    : []),
   { key: "gastos", header: T.tabla.gastos, align: "num", render: (s) => f.money(s.gastos, undefined, { mode: "full" }) },
   { key: "impuestos", header: T.tabla.impuestos, align: "num", render: (s) => f.money(s.impuestos, undefined, { mode: "full" }) },
   {
@@ -205,6 +229,8 @@ export default async function FlujoPage() {
 
   const grafico = paraElGrafico(c);
   const ajustada = c.semanaMasAjustada;
+  /** De dónde sale el estimado de los ingresos de plataformas (FIN-7). */
+  const op = entradas.otrosIngresos;
   const nota =
     (c.gastoMes === null
       ? "Todavía no hay gastos recurrentes registrados, así que no restamos ninguno. "
@@ -212,8 +238,15 @@ export default async function FlujoPage() {
         `(${f.money(c.gastoMensual, undefined, { mode: "full" })}), repartido por semana: ` +
         `${f.money(c.gastoSemanal, undefined, { mode: "full" })}. `) +
     (entradas.reservaPct === null
-      ? "Todavía no hay un porcentaje de reserva de impuestos configurado, así que no apartamos nada."
-      : `Los impuestos son el ${entradas.reservaPct} % de los cobros de cada semana.`);
+      ? "Todavía no hay un porcentaje de reserva de impuestos configurado, así que no apartamos nada. "
+      : `Los impuestos son el ${entradas.reservaPct} % de los cobros de cada semana. `) +
+    // FIN-7: la cifra estimada NUNCA sale sin decir de dónde viene.
+    (op.estimado === null
+      ? T.otrosIngresos.sinDatos
+      : `${T.otrosIngresos.fila}: ${f.money(op.estimado, undefined, { mode: "full" })} al mes ` +
+        `(${op.mesesPromediados === op.ventana ? T.otrosIngresos.base(op.ventana) : T.otrosIngresos.baseParcial(op.mesesPromediados)}), ` +
+        `repartidos por semana: ${f.money(c.otrosIngresosSemanal, undefined, { mode: "full" })}. ` +
+        "No se les aparta impuesto: la reserva se calcula sobre los cobros a marcas.");
 
   return (
     <>
@@ -257,7 +290,7 @@ export default async function FlujoPage() {
           <span id="semanas">{T.tabla.seccion}</span>
         </SectionTitle>
         <DataTable
-          columns={columnas(f)}
+          columns={columnas(f, c.otrosIngresosMensual !== null)}
           rows={c.semanas}
           rowKey={(s) => s.inicio}
           caption={T.tabla.caption}

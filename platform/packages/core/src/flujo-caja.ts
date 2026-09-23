@@ -88,6 +88,13 @@ export interface CashflowInput {
   facturas: readonly FacturaPorCobrar[];
   negocios: readonly NegocioGanado[];
   gastos: readonly GastoRecurrente[];
+  /**
+   * Lo que pagan las plataformas al mes (FIN-7), ya estimado y en la
+   * moneda del espacio: la salida de `proyeccionDePlataformas`. `null`
+   * o ausente = no hay con qué estimarlo, y entonces NO entra ni como
+   * cero: la fila desaparece en vez de prometer que no entra nada.
+   */
+  otrosIngresosMensual?: Decimal | null;
   /** Cuántas semanas hacia adelante. Por defecto, ocho. */
   semanas?: number;
 }
@@ -114,9 +121,11 @@ export interface SemanaFlujo {
   /** Domingo de la semana, 'YYYY-MM-DD'. */
   fin: string;
   cobros: Decimal;
+  /** La parte semanal de lo que pagan las plataformas (FIN-7). '0.00' si no hay estimado. */
+  otrosIngresos: Decimal;
   gastos: Decimal;
   impuestos: Decimal;
-  /** cobros − gastos − impuestos. */
+  /** cobros + otrosIngresos − gastos − impuestos. */
   neto: Decimal;
   /** Suma de los netos desde la primera semana hasta esta. */
   acumulado: Decimal;
@@ -158,6 +167,10 @@ export interface Cashflow {
   gastoMensual: Decimal;
   /** `gastoMensual × 12 / 52`: lo que se resta cada semana. */
   gastoSemanal: Decimal;
+  /** El estimado mensual de los ingresos de plataformas, o null si no lo hay (FIN-7). */
+  otrosIngresosMensual: Decimal | null;
+  /** `otrosIngresosMensual × 12 / 52`: lo que se suma cada semana. '0.00' con null. */
+  otrosIngresosSemanal: Decimal;
   /** La tasa usada para la reserva, tal cual entró ('0.11'). */
   reservaRate: string;
   /** true si no hay ni un cobro ni un gasto que proyectar. */
@@ -354,6 +367,21 @@ export function projectCashflow(input: CashflowInput): Cashflow {
   const gastoMensual = fromCents(mensualCents);
   const gastoSemanal = semanalDeMensual(gastoMensual);
 
+  // --- Otros ingresos: lo que pagan las plataformas (FIN-7) -----------
+  // Entra ya estimado desde `proyeccionDePlataformas`, que es quien sabe
+  // promediar los meses cerrados y quien decide que sin datos el
+  // resultado es null y no cero. Aquí solo se reparte por semana, con la
+  // misma regla que los gastos recurrentes (× 12 / 52).
+  //
+  // NO entra en la base de la reserva de impuestos: `impuestos` se
+  // calcula sobre los cobros a marcas, cuya retención y cuyo IVA sí
+  // conocemos (FIN-1). Lo que paga una plataforma extranjera tributa de
+  // otra forma, y apartar un porcentaje sobre una cifra ESTIMADA sería
+  // inventar dos veces (docs/propuestas/FIN-7.md §0.5.8).
+  const otrosIngresosMensual = input.otrosIngresosMensual ?? null;
+  const otrosIngresosSemanal = otrosIngresosMensual === null ? CERO : semanalDeMensual(otrosIngresosMensual);
+  const otrosCents = toCents(otrosIngresosSemanal);
+
   // --- Las semanas ----------------------------------------------------
   let acumuladoCents = 0n;
   const filas: SemanaFlujo[] = inicios.map((inicioSemana, i) => {
@@ -361,12 +389,13 @@ export function projectCashflow(input: CashflowInput): Cashflow {
     const cobrosCents = detalle.reduce((acc, c) => acc + toCents(c.amount), 0n);
     const cobros = fromCents(cobrosCents);
     const impuestos = cobrosCents === 0n ? CERO : mulRateHalfUp(cobros, input.reservaRate);
-    const netoCents = cobrosCents - toCents(gastoSemanal) - toCents(impuestos);
+    const netoCents = cobrosCents + otrosCents - toCents(gastoSemanal) - toCents(impuestos);
     acumuladoCents += netoCents;
     return {
       inicio: inicioSemana,
       fin: addDays(inicioSemana, 6),
       cobros,
+      otrosIngresos: otrosIngresosSemanal,
       gastos: gastoSemanal,
       impuestos,
       neto: fromCents(netoCents),
@@ -376,7 +405,10 @@ export function projectCashflow(input: CashflowInput): Cashflow {
   });
 
   const hayCobros = filas.some((s) => toCents(s.cobros) !== 0n);
-  const vacio = !hayCobros && mensualCents === 0n;
+  // Con un estimado de plataformas hay algo que proyectar aunque no haya
+  // ni una factura ni un gasto: es el caso del creador que todavía no
+  // vende y ya cobra de AdSense.
+  const vacio = !hayCobros && mensualCents === 0n && otrosCents === 0n;
 
   // La semana más ajustada es el fondo de caja: el acumulado más bajo.
   // Con empate gana la primera, que es la que hay que resolver antes.
@@ -400,6 +432,8 @@ export function projectCashflow(input: CashflowInput): Cashflow {
     gastoMes,
     gastoMensual,
     gastoSemanal,
+    otrosIngresosMensual,
+    otrosIngresosSemanal,
     reservaRate: input.reservaRate,
     vacio,
   };

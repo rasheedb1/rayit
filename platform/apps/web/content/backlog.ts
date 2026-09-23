@@ -581,8 +581,8 @@ export const STORIES: readonly Story[] = [
     title: "Ingresos de plataformas",
     desc: "Carga manual o CSV de Creator Rewards, AdSense y bonos en platform_payout. Entra al flujo de caja.",
     done: "Un CSV de AdSense aparece como ingreso en su mes.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/FIN-7-ingresos-plataformas, solo local. /finanzas/ingresos con import de AdSense y Creator Rewards y la columna «Otros ingresos» en el flujo de caja. Su migración 0036 choca con la de CON-7 y hay que aplicarla en Supabase antes de desplegar.",
+    status: "hecho",
+    note: "En /finanzas/ingresos: importar CSV (AdSense mensual o diario, Creator Rewards y una lista genérica), agregar a mano, lista por mes y el estimado mensual; y en /finanzas/flujo, la columna «Otros ingresos» con su barra y su nota. La idempotencia es de la base: el UNIQUE natural de la migración 0036, PENDIENTE de aplicar en Supabase (CON-7, que no está en origin, eligió también 0036 y es la que renumera, a 0039); hasta entonces el import falla en producción con 42P10. El promedio vive en packages/core/src/ingresos-plataformas.ts y entra a projectCashflow (FIN-6) por otrosIngresosMensual, que es opcional: sin estimado, el flujo se comporta igual que antes. Se reutilizan finanzas.flujo.ver y finanzas.pago.registrar en vez de crear finanzas.ingreso.*: el catálogo viaja en la semilla de 0034 y accesos.test.ts exige que sea idéntica (docs/propuestas/FIN-7.md §1.2). Propuesta: docs/propuestas/FIN-7.md.",
   },
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],

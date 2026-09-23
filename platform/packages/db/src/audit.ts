@@ -59,6 +59,11 @@ export const AUDIT_ACTIONS = [
   'invoice.voided',
   'invoice.reopened',
   'invoice.marked_overdue',
+  // Ingresos de plataformas (FIN-7). `imported` es un LOTE: su entityId
+  // es null porque el hecho son n filas, y el `after` lleva los conteos
+  // y el rango de periodos, nunca las filas.
+  'platform_payout.created',
+  'platform_payout.imported',
   // Campañas (CAM-1, CAM-2; CAM-6 usa report_sent)
   'campaign.created',
   'campaign.updated',

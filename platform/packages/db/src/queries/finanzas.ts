@@ -27,11 +27,13 @@ import {
   normalizeDecimal,
   parseInvoiceNumber,
   pctToRate,
+  proyeccionDePlataformas,
   reservePeriod,
   reserveRateFrom,
   subDecimal,
   subtotalFromTotal,
   taxReserveFor,
+  toCents,
   transitionInvoice as applyTransition,
   definicionPaso,
   pasoDeUrl,
@@ -46,9 +48,11 @@ import {
   type NegocioGanado,
   type NumeroPaso,
   type PaymentMethod,
+  type ProyeccionDePlataformas,
   type SeveridadRecordatorio,
   type TransitionInput,
 } from '@mc/core';
+import { PAYOUT_SOURCES } from '../schema/finanzas.ts';
 import { getWorkspaceSettings } from './cimientos.ts';
 import { audit, type AuditAction } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
@@ -996,6 +1000,13 @@ export async function listPayments(tx: WorkspaceTx, invoiceId: string): Promise<
 export interface CashflowInputs extends CashflowInput {
   /** `settings.finanzas.reserva_pct`, o null si el workspace no lo ha configurado (FIN-8). */
   reservaPct: string | null;
+  /**
+   * De dónde sale `otrosIngresosMensual` (FIN-7): cuántos meses cerrados
+   * se promediaron y cuáles. La pantalla lo escribe en la nota del
+   * gráfico, porque una cifra estimada sin su fuente no se puede
+   * comprobar.
+   */
+  otrosIngresos: ProyeccionDePlataformas;
 }
 
 interface CashflowRawRow {
@@ -1007,6 +1018,7 @@ interface CashflowRawRow {
   facturas: FacturaPorCobrar[];
   negocios: NegocioGanado[];
   gastos: GastoRecurrente[];
+  plataformas: { mes: string; monto: string }[];
 }
 
 /** El plazo de pago cuando el workspace no tiene uno: el mismo de `createInvoiceFromCampaign`. */
@@ -1108,10 +1120,25 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
         FROM expense e, ws
        WHERE e.is_recurring
          AND e.incurred_on > ws.hoy - 120
+    ), plataformas AS (
+      -- Los ingresos de plataformas por mes (FIN-7), solo en la moneda
+      -- del espacio y de los últimos doce meses: quien promedia es
+      -- proyeccionDePlataformas, que sabe cuáles están cerrados y que
+      -- sin ninguno el estimado es null y no cero. Aquí no se rellenan
+      -- los meses vacíos: un mes sin fila no viaja como "0".
+      SELECT coalesce(json_agg(json_build_object('mes', m.mes, 'monto', m.monto) ORDER BY m.mes DESC), '[]'::json) AS v
+        FROM (
+          SELECT to_char(p.period_start, 'YYYY-MM') AS mes, sum(p.amount)::text AS monto
+            FROM platform_payout p, ws
+           WHERE p.currency = ws.currency
+             AND p.period_start >= (date_trunc('month', ws.hoy) - interval '12 months')::date
+           GROUP BY 1
+        ) m
     )
     SELECT ws.currency, to_char(ws.hoy, 'YYYY-MM-DD') AS today, ws.reserva_pct, ws.plazo_dias,
-           facturas.v AS facturas, negocios.v AS negocios, gastos.v AS gastos
-      FROM ws, facturas, negocios, gastos
+           facturas.v AS facturas, negocios.v AS negocios, gastos.v AS gastos,
+           plataformas.v AS plataformas
+      FROM ws, facturas, negocios, gastos, plataformas
   `);
 
   const r = rows[0];
@@ -1124,9 +1151,15 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
   }
 
   const plazo = Number.parseInt(r.plazo_dias ?? '', 10);
+  const currency = r.currency.toUpperCase();
+  // El estimado de los ingresos de plataformas lo calcula @mc/core, con
+  // el día del WORKSPACE (ws.hoy), que es el mismo con el que se
+  // reparten las semanas: dos relojes distintos dejarían el promedio y
+  // la proyección hablando de meses distintos.
+  const otrosIngresos = proyeccionDePlataformas(r.plataformas, { hoy: r.today, currency });
   return {
     today: r.today,
-    currency: r.currency.toUpperCase(),
+    currency,
     reservaPct: r.reserva_pct,
     // Sin porcentaje configurado (FIN-8 todavía no existe) no se
     // inventa uno: la reserva es cero y la pantalla lo dice con una
@@ -1136,6 +1169,538 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
     facturas: r.facturas,
     negocios: r.negocios,
     gastos: r.gastos,
+    otrosIngresos,
+    otrosIngresosMensual: otrosIngresos.estimado,
+  };
+}
+
+// ---------------------------------------------------------------------
+// FIN-7 · Ingresos de plataformas (platform_payout)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que paga una plataforma por un periodo: AdSense, Creator Rewards,
+ * bonos. La tabla es de 0008 y el UNIQUE natural, de 0036.
+ *
+ * El mes de un pago es el de su `period_start`. Un periodo que cruza el
+ * cambio de mes (solo puede llegar por el formato genérico, donde la
+ * persona escribe inicio y fin) cuenta entero en el mes en que empieza:
+ * repartirlo por días sería inventar una distribución que el archivo no
+ * dice.
+ */
+export interface PlatformPayoutRow {
+  id: string;
+  platformId: string;
+  platformName: string;
+  creatorId: string | null;
+  creatorName: string | null;
+  /** 'YYYY-MM-DD'. */
+  periodStart: string;
+  periodEnd: string;
+  /** 'YYYY-MM' del period_start. */
+  month: string;
+  amount: string;
+  currency: string;
+  source: PayoutSource;
+  /** ISO en UTC. */
+  createdAt: string;
+}
+
+/** 'api' | 'csv_import' | 'manual'. La lista es la del esquema (0008), no una copia. */
+export type PayoutSource = (typeof PAYOUT_SOURCES)[number];
+
+export interface ListPlatformPayoutsResult {
+  rows: PlatformPayoutRow[];
+}
+
+export interface PlatformPayoutInput {
+  platformId: string;
+  creatorId?: string | null;
+  /** 'YYYY-MM-DD'. */
+  periodStart: string;
+  periodEnd: string;
+  amount: string;
+  currency: string;
+  source: PayoutSource;
+}
+
+/**
+ * Lo que la persona puede arreglar en su archivo o en su formulario: una
+ * red que no existe, un periodo al revés, otra moneda. Se distingue por
+ * su clase para que la pantalla enseñe SU frase y no la de Postgres: un
+ * «numeric field overflow» no le dice nada a nadie y puede filtrar la
+ * forma de una consulta.
+ */
+export class PlatformPayoutInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformPayoutInputError';
+  }
+}
+
+/** Un pago que no se escribió porque su periodo ya existe con OTRO monto. */
+export interface ConflictingPayout {
+  platformId: string;
+  /** El nombre del catálogo («YouTube»), para la frase: un id no es un texto de interfaz. */
+  platformName: string;
+  periodStart: string;
+  periodEnd: string;
+  currency: string;
+  /** Lo que trae el archivo. */
+  amount: string;
+  /** Lo que ya está guardado. */
+  existingAmount: string;
+}
+
+export interface ImportPlatformPayoutsResult {
+  /** Filas nuevas que quedaron escritas. */
+  inserted: number;
+  /** Filas idénticas a una que ya estaba: el UNIQUE de 0034 las descartó. */
+  duplicated: number;
+  /** Mismo periodo y misma red, monto distinto: no se escriben ni se pisan. */
+  conflicting: ConflictingPayout[];
+}
+
+/**
+ * Las redes del catálogo (0002), para el selector de «Agregar a mano» y
+ * para validar la columna de plataforma de un CSV.
+ *
+ * Se lee DENTRO de la transacción del workspace y no por
+ * `withCatalogs`: `platform` es un catálogo global sin RLS (está en
+ * EXCEPCIONES_SIN_AISLAMIENTO con su motivo) y mc_app solo tiene SELECT,
+ * así que leerlo aquí no abre nada y le ahorra a la pantalla una
+ * conexión más. La web no tiene un `CatalogDb` a mano: `@/lib/db` solo
+ * expone `withWorkspace`, y ese es el punto.
+ */
+export async function listPayoutPlatforms(tx: WorkspaceTx): Promise<{ id: string; name: string }[]> {
+  const { rows } = await tx.query<{ id: string; name: string }>('SELECT id, name FROM platform ORDER BY name');
+  return rows;
+}
+
+/**
+ * Hoy en la zona del ESPACIO, 'YYYY-MM-DD'.
+ *
+ * No `CURRENT_DATE`, que es la fecha del servidor de base: a las 02:00
+ * UTC en Bogotá todavía es ayer, y con esa fecha un periodo que acaba de
+ * cerrar parecería abierto. Es la misma regla que `getCashflowInputs`
+ * (FIN-6), escrita una vez.
+ */
+export async function getWorkspaceToday(tx: WorkspaceTx): Promise<string> {
+  const { rows } = await tx.query<{ hoy: string }>(
+    `SELECT to_char((now() AT TIME ZONE w.timezone)::date, 'YYYY-MM-DD') AS hoy
+       FROM workspace w WHERE w.id = current_workspace_id()`,
+  );
+  const hoy = rows[0]?.hoy;
+  if (!hoy) throw new Error(`El workspace ${tx.workspaceId} no existe en esta base.`);
+  return hoy;
+}
+
+/** Los ids del catálogo. Se lee una vez por importación, no una por fila. */
+async function knownPlatformIds(tx: WorkspaceTx): Promise<Set<string>> {
+  return new Set((await listPayoutPlatforms(tx)).map((p) => p.id));
+}
+
+/**
+ * Valida un lote contra el catálogo, la moneda del workspace y el
+ * formato de las fechas. Lanza con una frase que nombra la fila: un
+ * error que dice «fila 4» se arregla en el archivo; uno que dice
+ * «violates check constraint» se lleva a soporte.
+ */
+function assertPayoutShape(input: PlatformPayoutInput, platforms: Set<string>, wsCurrency: string, where: string): void {
+  if (!platforms.has(input.platformId)) {
+    throw new PlatformPayoutInputError(`${where}: «${input.platformId}» no es una red conocida.`);
+  }
+  if (!ISO_DATE_RE.test(input.periodStart) || !ISO_DATE_RE.test(input.periodEnd)) {
+    throw new PlatformPayoutInputError(`${where}: las fechas del periodo deben ser YYYY-MM-DD.`);
+  }
+  if (input.periodEnd < input.periodStart) {
+    throw new PlatformPayoutInputError(`${where}: el fin del periodo no puede ser anterior a su inicio.`);
+  }
+  if (input.currency.toUpperCase() !== wsCurrency) {
+    throw new PlatformPayoutInputError(
+      `${where}: los ingresos de plataformas van en la moneda del espacio (${wsCurrency}); recibió ${input.currency.toUpperCase()}.`,
+    );
+  }
+  if (!(PAYOUT_SOURCES as readonly string[]).includes(input.source)) {
+    throw new PlatformPayoutInputError(`${where}: origen desconocido «${input.source}».`);
+  }
+}
+
+const SELECT_PAYOUT = `
+  SELECT p.id,
+         p.platform_id,
+         pl.name AS platform_name,
+         p.creator_id,
+         cp.display_name AS creator_name,
+         to_char(p.period_start, 'YYYY-MM-DD') AS period_start,
+         to_char(p.period_end, 'YYYY-MM-DD') AS period_end,
+         to_char(p.period_start, 'YYYY-MM') AS month,
+         p.amount::text,
+         p.currency,
+         p.source,
+         p.created_at
+  FROM platform_payout p
+  JOIN platform pl ON pl.id = p.platform_id
+  LEFT JOIN creator_profile cp ON cp.id = p.creator_id`;
+
+interface RawPayout {
+  id: string;
+  platform_id: string;
+  platform_name: string;
+  creator_id: string | null;
+  creator_name: string | null;
+  period_start: string;
+  period_end: string;
+  month: string;
+  amount: string;
+  currency: string;
+  source: PayoutSource;
+  created_at: Date | string;
+}
+
+function toPayoutRow(r: RawPayout): PlatformPayoutRow {
+  return {
+    id: r.id,
+    platformId: r.platform_id,
+    platformName: r.platform_name,
+    creatorId: r.creator_id,
+    creatorName: r.creator_name,
+    periodStart: r.period_start,
+    periodEnd: r.period_end,
+    month: r.month,
+    amount: r.amount,
+    currency: r.currency,
+    source: r.source,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+/**
+ * Los ingresos de plataformas del workspace, del periodo más reciente al
+ * más viejo. RLS filtra: desde otro workspace, cero filas.
+ *
+ * Los totales POR MES no salen de aquí: los pide quien los necesita, con
+ * `getPlatformPayoutMonths` (el promedio) o `getPlatformPayoutKpis` (las
+ * cifras de cabecera). Llegó a devolverlos siempre, con un `GROUP BY`
+ * sin límite que ninguna pantalla leía.
+ */
+export async function listPlatformPayouts(
+  tx: WorkspaceTx,
+  params: { limit?: number } = {},
+): Promise<ListPlatformPayoutsResult> {
+  const limit = Math.min(500, Math.max(1, params.limit ?? 200));
+  const { rows } = await tx.query<RawPayout>(
+    `${SELECT_PAYOUT} ORDER BY p.period_start DESC, pl.name, p.created_at DESC LIMIT $1`,
+    [limit],
+  );
+  return { rows: rows.map(toPayoutRow) };
+}
+
+/**
+ * Los totales por mes en la moneda del workspace, listos para
+ * `proyeccionDePlataformas` de @mc/core.
+ *
+ * Devuelve `{ mes, monto }` —el contrato de `MesConIngreso`— y NO
+ * rellena los meses vacíos: un mes sin fila no viaja como "0". Quién
+ * cuenta como cero y quién como «sin medir» lo decide la función de
+ * core, que es donde está probado.
+ */
+export async function getPlatformPayoutMonths(
+  tx: WorkspaceTx,
+  params: { months?: number } = {},
+): Promise<{ mes: string; monto: string }[]> {
+  const months = Math.min(36, Math.max(1, params.months ?? 12));
+  const { currency } = await getWorkspaceSettings(tx);
+  // El día sale de la zona del ESPACIO y no de CURRENT_DATE, que es la
+  // del servidor de base: a las 02:00 UTC en Bogotá todavía es ayer, y
+  // un pago del mes pasado no puede caerse de la ventana por eso. Es la
+  // misma regla que getCashflowInputs (FIN-6).
+  const { rows } = await tx.query<{ mes: string; monto: string }>(
+    `WITH ws AS (
+       SELECT (now() AT TIME ZONE w.timezone)::date AS hoy
+         FROM workspace w WHERE w.id = current_workspace_id()
+     )
+     SELECT to_char(p.period_start, 'YYYY-MM') AS mes, sum(p.amount)::text AS monto
+     FROM platform_payout p, ws
+     WHERE p.currency = $1
+       AND p.period_start >= (date_trunc('month', ws.hoy) - make_interval(months => $2))::date
+     GROUP BY 1
+     ORDER BY 1 DESC`,
+    [currency, months],
+  );
+  return rows;
+}
+
+export interface PlatformPayoutKpis {
+  /** Lo que llevan pagado las plataformas en el año en curso, en la moneda del espacio. */
+  ytd: string;
+  /** Cuántos pagos lo componen. */
+  ytdPayouts: number;
+  /** El total del último mes CERRADO, o null si ese mes no tiene ninguna fila. Nunca "0". */
+  lastMonth: string | null;
+  /** 'YYYY-MM' de ese mes cerrado. */
+  lastMonthLabel: string;
+  currency: string;
+  /**
+   * 'YYYY-MM-DD' de hoy en la zona del ESPACIO (no `CURRENT_DATE`, que
+   * es la del servidor): la ventana del promedio se calcula con este
+   * día, igual que el flujo de caja de FIN-6.
+   */
+  today: string;
+}
+
+/** Las cifras de cabecera de /finanzas/ingresos. Las suma la base; la pantalla no hace aritmética. */
+export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPayoutKpis> {
+  const { currency } = await getWorkspaceSettings(tx);
+  const { rows } = await tx.query<{
+    ytd: string; ytd_payouts: string; last_month: string | null; last_month_label: string; today: string;
+  }>(
+    `WITH ws AS (
+       SELECT (now() AT TIME ZONE w.timezone)::date AS hoy
+         FROM workspace w WHERE w.id = current_workspace_id()
+     ), ultimo AS (
+       SELECT (date_trunc('month', ws.hoy) - interval '1 month')::date AS inicio,
+              date_trunc('month', ws.hoy)::date AS mes_en_curso,
+              date_trunc('year', ws.hoy)::date AS anio,
+              (date_trunc('year', ws.hoy) + interval '1 year')::date AS anio_siguiente,
+              ws.hoy
+         FROM ws
+     )
+     -- Con tope por arriba: sin él, un pago fechado por error en el año
+     -- que viene se sumaba a «Recibido en <este año>». El de abajo ya lo
+     -- tenía; este no, y eran la misma cifra mal contada.
+     SELECT coalesce((SELECT sum(p.amount) FROM platform_payout p, ultimo
+                       WHERE p.currency = $1
+                         AND p.period_start >= ultimo.anio
+                         AND p.period_start < ultimo.anio_siguiente), 0)::text AS ytd,
+            (SELECT count(*) FROM platform_payout p, ultimo
+              WHERE p.currency = $1
+                AND p.period_start >= ultimo.anio
+                AND p.period_start < ultimo.anio_siguiente)::text AS ytd_payouts,
+            -- Sin coalesce a propósito: sum() de cero filas es NULL, que
+            -- es justo lo que queremos. Un mes sin pago no vale cero.
+            (SELECT sum(p.amount)::text FROM platform_payout p, ultimo
+              WHERE p.currency = $1
+                AND p.period_start >= ultimo.inicio
+                AND p.period_start < ultimo.mes_en_curso) AS last_month,
+            to_char(ultimo.inicio, 'YYYY-MM') AS last_month_label,
+            to_char(ultimo.hoy, 'YYYY-MM-DD') AS today
+     FROM ultimo`,
+    [currency],
+  );
+  const r = rows[0];
+  return {
+    ytd: r?.ytd ?? '0',
+    ytdPayouts: Number(r?.ytd_payouts ?? '0'),
+    lastMonth: r?.last_month ?? null,
+    lastMonthLabel: r?.last_month_label ?? '',
+    currency,
+    today: r?.today ?? '',
+  };
+}
+
+/** El uuid con el que `coalesce` normaliza «sin creador» en el UNIQUE de 0036. */
+const SIN_CREADOR = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Escribe un lote de pagos, UNA sola vez cada uno.
+ *
+ * La idempotencia la pone el UNIQUE natural de 0036 y el `ON CONFLICT DO
+ * NOTHING`, no una lectura previa: deduplicar comparando en TypeScript
+ * es una condición de carrera con dos pestañas abiertas, y la
+ * idempotencia de una cifra de dinero no puede depender de que nadie
+ * pulse dos veces.
+ *
+ * Antes de escribir se aparta un caso que el UNIQUE no ve: un archivo
+ * CORREGIDO, con el mismo periodo y la misma red pero otro monto. Como
+ * el monto entra en la clave, ese pago se escribiría como una fila
+ * NUEVA y el mes valdría el doble, en silencio. Sale en `conflicting` y
+ * no se escribe ni se pisa: corregir un monto ya cargado es otra
+ * historia (docs/propuestas/FIN-7.md §0.7), y sobrescribir dinero sin
+ * pedir permiso no es una opción.
+ */
+export async function importPlatformPayouts(
+  tx: WorkspaceTx,
+  inputs: readonly PlatformPayoutInput[],
+): Promise<ImportPlatformPayoutsResult> {
+  if (inputs.length === 0) return { inserted: 0, duplicated: 0, conflicting: [] };
+
+  // Una detrás de otra, NO con Promise.all: las dos corren sobre la
+  // MISMA transacción, que es una sola conexión. Lanzarlas a la vez
+  // encola la segunda detrás de la primera en el cliente de PGlite y la
+  // prueba se quedaba colgada hasta el timeout, sin decir por qué.
+  const platforms = await knownPlatformIds(tx);
+  const { currency: wsCurrency } = await getWorkspaceSettings(tx);
+  inputs.forEach((input, i) => assertPayoutShape(input, platforms, wsCurrency, `Fila ${i + 1}`));
+
+  // Qué periodos de este lote ya existen, y con qué monto. Una sola
+  // consulta para todo el lote, no una por fila.
+  const existentes = await tx.query<{
+    platform_id: string; platform_name: string; creator_id: string | null; period_start: string; period_end: string;
+    currency: string; amount: string;
+  }>(
+    `SELECT p.platform_id,
+            pl.name AS platform_name,
+            p.creator_id,
+            to_char(p.period_start, 'YYYY-MM-DD') AS period_start,
+            to_char(p.period_end, 'YYYY-MM-DD') AS period_end,
+            p.currency,
+            p.amount::text
+     FROM platform_payout p
+     JOIN platform pl ON pl.id = p.platform_id
+     WHERE (p.platform_id, coalesce(p.creator_id, $1::uuid), p.period_start, p.period_end, p.currency)
+           IN (SELECT platform_id, coalesce(creator_id, $1::uuid), period_start, period_end, currency
+               FROM unnest($2::text[], $3::uuid[], $4::date[], $5::date[], $6::text[])
+                 AS l(platform_id, creator_id, period_start, period_end, currency))`,
+    [
+      SIN_CREADOR,
+      inputs.map((i) => i.platformId),
+      inputs.map((i) => i.creatorId ?? SIN_CREADOR),
+      inputs.map((i) => i.periodStart),
+      inputs.map((i) => i.periodEnd),
+      inputs.map((i) => i.currency.toUpperCase()),
+    ],
+  );
+  const guardado = new Map(
+    existentes.rows.map((r) => [
+      clavePeriodo(r.platform_id, r.creator_id, r.period_start, r.period_end, r.currency),
+      { amount: r.amount, name: r.platform_name },
+    ]),
+  );
+
+  const conflicting: ConflictingPayout[] = [];
+  const escribibles: PlatformPayoutInput[] = [];
+  for (const input of inputs) {
+    const currency = input.currency.toUpperCase();
+    const existente = guardado.get(
+      clavePeriodo(input.platformId, input.creatorId ?? null, input.periodStart, input.periodEnd, currency),
+    );
+    if (existente !== undefined && toCents(existente.amount) !== toCents(input.amount)) {
+      conflicting.push({
+        platformId: input.platformId,
+        platformName: existente.name,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+        currency,
+        amount: normalizeDecimal(input.amount),
+        existingAmount: existente.amount,
+      });
+      continue;
+    }
+    escribibles.push(input);
+  }
+  if (escribibles.length === 0) return { inserted: 0, duplicated: 0, conflicting };
+
+  const { rows } = await tx.query<{ id: string }>(
+    `INSERT INTO platform_payout (workspace_id, creator_id, platform_id, period_start, period_end, amount, currency, source)
+     SELECT current_workspace_id(), l.creator_id, l.platform_id, l.period_start, l.period_end, l.amount, l.currency, l.source
+     FROM unnest($1::text[], $2::uuid[], $3::date[], $4::date[], $5::numeric[], $6::text[], $7::text[])
+       AS l(platform_id, creator_id, period_start, period_end, amount, currency, source)
+     -- CON objetivo, y con el objetivo ESCRITO: un ON CONFLICT DO
+     -- NOTHING a secas no falla cuando el índice no existe, se limita a
+     -- no deduplicar. Sobre una base sin 0036 eso es lo peor de los dos
+     -- mundos: reimportar el mismo CSV duplicaría el dinero y la
+     -- pantalla diría «listo». Nombrando las columnas, Postgres exige un
+     -- índice único que las cubra y, si no lo hay, lanza 42P10 con un
+     -- mensaje que dice exactamente qué falta aplicar.
+     --
+     -- El uuid va LITERAL y no como $n: Postgres infiere el índice
+     -- comparando la expresión del ON CONFLICT con la del índice, y un
+     -- parámetro no es la misma expresión que la constante de 0036. Es
+     -- una constante nuestra (SIN_CREADOR), no un dato de nadie, así que
+     -- interpolarla no abre nada; la comprobación de que son la misma la
+     -- hace la prueba que borra el índice y espera 42P10.
+     ON CONFLICT (workspace_id, platform_id, coalesce(creator_id, '${SIN_CREADOR}'::uuid), period_start, period_end, currency, amount)
+       DO NOTHING
+     RETURNING id`,
+    [
+      escribibles.map((i) => i.platformId),
+      escribibles.map((i) => i.creatorId ?? null),
+      escribibles.map((i) => i.periodStart),
+      escribibles.map((i) => i.periodEnd),
+      escribibles.map((i) => i.amount),
+      escribibles.map((i) => i.currency.toUpperCase()),
+      escribibles.map((i) => i.source),
+    ],
+  );
+  // La bitácora. Qué hecho es lo dice la columna `source`, que es el
+  // dato, no un parámetro nuevo: un pago escrito a mano es
+  // 'platform_payout.created' y nombra su fila; un lote de CSV es
+  // 'platform_payout.imported' y va sin entityId, porque el hecho son n
+  // pagos y ninguno es «el» pago (audit.ts: «null si el hecho no tiene
+  // una»). En el `after` van conteos y el rango de periodos, nunca las
+  // filas: el dinero de cada pago ya está en su fila.
+  // Si el UNIQUE lo descartó TODO no se escribió nada, y lo que no se
+  // escribe no es un hecho del negocio: subir dos veces el mismo archivo
+  // no deja dos filas en la bitácora.
+  if (rows.length === 0) return { inserted: 0, duplicated: escribibles.length, conflicting };
+  const aMano = escribibles.every((i) => i.source === 'manual');
+  const periodos = escribibles.map((i) => i.periodStart).sort();
+  await audit(tx, {
+    action: aMano ? 'platform_payout.created' : 'platform_payout.imported',
+    entityType: 'platform_payout',
+    entityId: aMano && rows.length === 1 ? (rows[0]?.id ?? null) : null,
+    before: null,
+    after: {
+      source: aMano ? 'manual' : 'csv_import',
+      currency: wsCurrency,
+      platforms: [...new Set(escribibles.map((i) => i.platformId))].sort(),
+      from: periodos[0] ?? null,
+      to: periodos[periodos.length - 1] ?? null,
+      inserted: rows.length,
+      duplicated: escribibles.length - rows.length,
+      conflicting: conflicting.length,
+    },
+  });
+  return { inserted: rows.length, duplicated: escribibles.length - rows.length, conflicting };
+}
+
+function clavePeriodo(
+  platformId: string,
+  creatorId: string | null,
+  periodStart: string,
+  periodEnd: string,
+  currency: string,
+): string {
+  return [platformId, creatorId ?? SIN_CREADOR, periodStart, periodEnd, currency].join('|');
+}
+
+export interface CreatePlatformPayoutResult {
+  payout: PlatformPayoutRow | null;
+  /** Ya existía una fila idéntica: no se escribió nada. */
+  duplicated: boolean;
+  /** Mismo periodo y misma red, otro monto. No se escribió nada. */
+  conflicting: ConflictingPayout | null;
+}
+
+/**
+ * «Agregar a mano»: un solo pago, con las mismas tres salidas que el
+ * import (escrito / ya estaba / choca con otro monto), para que la
+ * pantalla no tenga que distinguir de dónde vino.
+ */
+export async function createPlatformPayout(
+  tx: WorkspaceTx,
+  input: PlatformPayoutInput,
+): Promise<CreatePlatformPayoutResult> {
+  const r = await importPlatformPayouts(tx, [input]);
+  if (r.conflicting[0]) return { payout: null, duplicated: false, conflicting: r.conflicting[0] };
+  const { rows } = await tx.query<RawPayout>(
+    `${SELECT_PAYOUT}
+     WHERE p.platform_id = $1
+       AND coalesce(p.creator_id, $2::uuid) = coalesce($3::uuid, $2::uuid)
+       AND p.period_start = $4::date AND p.period_end = $5::date
+       AND p.currency = $6 AND p.amount = $7::numeric
+     LIMIT 1`,
+    [
+      input.platformId, SIN_CREADOR, input.creatorId ?? null,
+      input.periodStart, input.periodEnd, input.currency.toUpperCase(), input.amount,
+    ],
+  );
+  const fila = rows[0];
+  return {
+    payout: fila ? toPayoutRow(fila) : null,
+    duplicated: r.inserted === 0,
+    conflicting: null,
   };
 }
 

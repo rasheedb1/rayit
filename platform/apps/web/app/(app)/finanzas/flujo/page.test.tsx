@@ -42,9 +42,26 @@ function entradas(over: Partial<CashflowInputs> = {}): CashflowInputs {
     facturas: [],
     negocios: [],
     gastos: [],
+    // FIN-7: sin ingresos de plataformas cargados. `estimado: null` es
+    // lo que devuelve proyeccionDePlataformas cuando no hay ni un mes
+    // cerrado con datos, y con él la columna «Otros ingresos» no existe.
+    otrosIngresos: {
+      estimado: null, mesesConDatos: 0, mesesPromediados: 0, desde: null, hasta: "2026-08", total: null,
+      currency: "COP", base: "promedio_meses", ventana: 3,
+    },
+    otrosIngresosMensual: null,
     ...over,
   };
 }
+
+/** Con tres meses cargados: 1 300 000 al mes → 300 000 por semana. */
+const CON_PLATAFORMAS: Partial<CashflowInputs> = {
+  otrosIngresos: {
+    estimado: "1300000.00", mesesConDatos: 3, mesesPromediados: 3, desde: "2026-06", hasta: "2026-08",
+    total: "3900000.00", currency: "COP", base: "promedio_meses", ventana: 3,
+  },
+  otrosIngresosMensual: "1300000.00",
+};
 
 const FACTURA = {
   id: "f1", number: "FV-2026-010", companyName: "Café Alma", currency: "COP",
@@ -200,5 +217,50 @@ describe("sin porcentaje de reserva configurado", () => {
     await pintar(entradas({ reservaPct: null, reservaRate: "0", facturas: [FACTURA], gastos: [GASTO] }));
     expect(screen.getByText(/Todavía no hay un porcentaje de reserva de impuestos configurado/)).toBeInTheDocument();
     expect(screen.queryByText(/% de los cobros de cada semana/)).not.toBeInTheDocument();
+  });
+});
+
+describe("otros ingresos: lo que pagan las plataformas (FIN-7)", () => {
+  it("sin estimado no hay columna, ni barra, ni cifra: se explica con una frase", async () => {
+    await pintar(entradas({ facturas: [FACTURA], gastos: [GASTO] }));
+    expect(screen.queryByRole("columnheader", { name: "Otros ingresos" })).toBeNull();
+    expect(
+      screen.getByText(/Todavía no hay meses cerrados con ingresos de plataformas/),
+    ).toBeInTheDocument();
+  });
+
+  it("con estimado sale la columna, la cifra semanal y de dónde viene", async () => {
+    await pintar(entradas({ facturas: [FACTURA], gastos: [GASTO], ...CON_PLATAFORMAS }));
+    expect(screen.getByRole("columnheader", { name: "Otros ingresos" })).toBeInTheDocument();
+    // 1 300 000 × 12 / 52 = 300 000 exactos, en las ocho semanas (sin
+    // centavos, formatMoney no escribe ",00"). La tabla de las semanas
+    // es la que tiene nueve filas; el ChartCard monta otra.
+    const tablas = screen.getAllByRole("table");
+    const semanas = tablas.find((t) => within(t).queryAllByRole("row").length === 9);
+    expect(semanas).toBeDefined();
+    expect(within(semanas!).getAllByText("COP 300.000")).toHaveLength(8);
+    expect(
+      screen.getByText(/Ingresos de plataformas \(estimado\): COP 1\.300\.000 al mes/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/promedio de los últimos 3 meses/)).toBeInTheDocument();
+    expect(screen.getByText(/No se les aparta impuesto/)).toBeInTheDocument();
+  });
+
+  it("con menos meses cargados que la ventana, la frase lo dice", async () => {
+    await pintar(
+      entradas({
+        facturas: [FACTURA],
+        otrosIngresos: { ...CON_PLATAFORMAS.otrosIngresos!, mesesConDatos: 1, mesesPromediados: 1, desde: "2026-08" },
+        otrosIngresosMensual: "1300000.00",
+      }),
+    );
+    expect(screen.getByText(/promedio de 1 mes: es lo que llevas cargado/)).toBeInTheDocument();
+  });
+
+  it("solo con ingresos de plataformas la pantalla YA proyecta, no dice «nada que proyectar»", async () => {
+    // El creador que todavía no vende y ya cobra de AdSense.
+    await pintar(entradas(CON_PLATAFORMAS));
+    expect(screen.queryByText("Sin cobros ni gastos previstos")).toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Otros ingresos" })).toBeInTheDocument();
   });
 });

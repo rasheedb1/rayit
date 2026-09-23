@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import {
   addDays,
   hoyEnZona,
-  projectCashflow,
-  reservePeriod,
   InvalidTransition,
   InvoiceNotPayable,
   InvoicePaymentConflict,
   PaymentDateInFuture,
   PaymentExceedsOutstanding,
+  projectCashflow,
+  proyeccionDePlataformas,
+  reservePeriod,
   TaxReserveRateInvalid,
   type Cashflow,
   type PaymentMethod,
@@ -17,9 +18,14 @@ import {
 import {
   createInvoice,
   createInvoiceFromCampaign,
+  createPlatformPayout,
   getInvoice,
   getCashflowInputs,
+  getPlatformPayoutKpis,
+  getPlatformPayoutMonths,
   getReceivablesKpis,
+  importPlatformPayouts,
+  listPlatformPayouts,
   listCampaignsForInvoice,
   listCompanies,
   listInvoices,
@@ -1086,5 +1092,307 @@ describe('pagos (FIN-2)', () => {
       ),
       /Método de pago desconocido/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------
+// FIN-7 · Ingresos de plataformas
+// ---------------------------------------------------------------------
+
+describe('ingresos de plataformas (FIN-7)', () => {
+  /** Los periodos se construyen desde el día que dice la BASE, no desde el reloj de Node. */
+  let hoy: string;
+  let mesAnterior: string;
+  let dosAntes: string;
+  let tresAntes: string;
+
+  const periodo = (mes: string) => ({
+    periodStart: `${mes}-01`,
+    periodEnd: `${mes}-${String(ultimoDia(mes)).padStart(2, '0')}`,
+  });
+  const ultimoDia = (mes: string) => {
+    const [a, m] = mes.split('-').map(Number);
+    return new Date(Date.UTC(a!, m!, 0)).getUTCDate();
+  };
+  const desplazar = (mes: string, n: number) => {
+    const [a, m] = mes.split('-').map(Number);
+    const total = a! * 12 + (m! - 1) + n;
+    return `${String(Math.floor(total / 12)).padStart(4, '0')}-${String((total % 12) + 1).padStart(2, '0')}`;
+  };
+
+  before(async () => {
+    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    hoy = kpis.today;
+    mesAnterior = desplazar(hoy.slice(0, 7), -1);
+    dosAntes = desplazar(hoy.slice(0, 7), -2);
+    tresAntes = desplazar(hoy.slice(0, 7), -3);
+  });
+
+  test('el seed no trae ninguno: la lista arranca vacía y el estimado es null, no cero', async () => {
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(rows.length, 0);
+
+    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    assert.equal(kpis.ytd, '0');
+    assert.equal(kpis.lastMonth, null, 'un mes sin pago no vale cero');
+    assert.equal(kpis.currency, 'COP');
+
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    assert.deepEqual(meses, []);
+    assert.equal(proyeccionDePlataformas(meses, { hoy, currency: 'COP' }).estimado, null);
+  });
+
+  test('un CSV de AdSense entra y aparece como ingreso de su mes', async () => {
+    const lote = [
+      { platformId: 'youtube', ...periodo(tresAntes), amount: '900000.00', currency: 'COP', source: 'csv_import' as const },
+      { platformId: 'youtube', ...periodo(dosAntes), amount: '770000.00', currency: 'COP', source: 'csv_import' as const },
+      { platformId: 'youtube', ...periodo(mesAnterior), amount: '1101500.50', currency: 'COP', source: 'csv_import' as const },
+    ];
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => importPlatformPayouts(tx, lote));
+    assert.deepEqual(r, { inserted: 3, duplicated: 0, conflicting: [] });
+
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(rows.length, 3);
+    const ultimo = rows[0];
+    assert.equal(ultimo?.month, mesAnterior, 'el mes de un pago es el de su period_start');
+    assert.equal(ultimo?.amount, '1101500.50');
+    assert.equal(ultimo?.platformName, 'YouTube');
+    assert.equal(ultimo?.source, 'csv_import');
+    assert.equal(ultimo?.creatorId, null);
+    assert.equal(ultimo?.periodEnd, periodo(mesAnterior).periodEnd);
+    assert.match(ultimo?.createdAt ?? '', /^\d{4}-\d{2}-\d{2}T.*Z$/, 'timestamptz en UTC y como ISO');
+
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    assert.equal(meses.find((m) => m.mes === mesAnterior)?.monto, '1101500.50');
+  });
+
+  test('repetir la importación no duplica: las tres ya estaban', async () => {
+    const lote = [
+      { platformId: 'youtube', ...periodo(tresAntes), amount: '900000.00', currency: 'COP', source: 'csv_import' as const },
+      { platformId: 'youtube', ...periodo(dosAntes), amount: '770000.00', currency: 'COP', source: 'csv_import' as const },
+      { platformId: 'youtube', ...periodo(mesAnterior), amount: '1101500.50', currency: 'COP', source: 'csv_import' as const },
+    ];
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => importPlatformPayouts(tx, lote));
+    assert.deepEqual(r, { inserted: 0, duplicated: 3, conflicting: [] });
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(rows.length, 3, 'siguen siendo tres');
+  });
+
+  test('el mismo periodo con OTRO monto no se escribe ni se pisa', async () => {
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      importPlatformPayouts(tx, [
+        { platformId: 'youtube', ...periodo(mesAnterior), amount: '1250000.00', currency: 'COP', source: 'csv_import' },
+      ]),
+    );
+    assert.equal(r.inserted, 0);
+    assert.equal(r.conflicting.length, 1);
+    assert.deepEqual(r.conflicting[0], {
+      platformId: 'youtube',
+      platformName: 'YouTube',
+      ...periodo(mesAnterior),
+      currency: 'COP',
+      amount: '1250000.00',
+      existingAmount: '1101500.50',
+    });
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(rows.length, 3, 'no se creó una cuarta fila que doblaría el mes');
+    assert.equal(rows[0]?.amount, '1101500.50', 'el monto guardado no se pisó');
+  });
+
+  test('otra red en el mismo periodo sí es otro pago', async () => {
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      importPlatformPayouts(tx, [
+        { platformId: 'tiktok', ...periodo(mesAnterior), amount: '415250.75', currency: 'COP', source: 'csv_import' },
+      ]),
+    );
+    assert.equal(r.inserted, 1);
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    assert.equal(meses.find((m) => m.mes === mesAnterior)?.monto, '1516751.25', 'la base suma las dos redes');
+  });
+
+  test('una moneda que no es la del espacio y una red que no existe se rechazan con una frase que nombra la fila', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        importPlatformPayouts(tx, [
+          { platformId: 'youtube', ...periodo(tresAntes), amount: '900000.00', currency: 'COP', source: 'csv_import' },
+          { platformId: 'youtube', ...periodo(dosAntes), amount: '210.40', currency: 'USD', source: 'csv_import' },
+        ]),
+      ),
+      /Fila 2: .*moneda del espacio \(COP\); recibió USD/,
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        importPlatformPayouts(tx, [
+          { platformId: 'twitch', ...periodo(dosAntes), amount: '100000.00', currency: 'COP', source: 'csv_import' },
+        ]),
+      ),
+      /Fila 1: «twitch» no es una red conocida/,
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        importPlatformPayouts(tx, [
+          { platformId: 'youtube', periodStart: `${dosAntes}-28`, periodEnd: `${dosAntes}-01`, amount: '1.00', currency: 'COP', source: 'csv_import' },
+        ]),
+      ),
+      /Fila 1: el fin del periodo no puede ser anterior/,
+    );
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(rows.length, 4, 'un lote que se rechaza no escribe la parte buena');
+  });
+
+  test('«agregar a mano» distingue escrito, ya estaba y choca', async () => {
+    const entrada = {
+      platformId: 'instagram' as const,
+      ...periodo(mesAnterior),
+      amount: '260000.00',
+      currency: 'COP',
+      source: 'manual' as const,
+    };
+    const nuevo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPlatformPayout(tx, entrada));
+    assert.equal(nuevo.duplicated, false);
+    assert.equal(nuevo.conflicting, null);
+    assert.equal(nuevo.payout?.platformName, 'Instagram');
+    assert.equal(nuevo.payout?.source, 'manual');
+    assert.equal(nuevo.payout?.month, mesAnterior);
+
+    const otraVez = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPlatformPayout(tx, entrada));
+    assert.equal(otraVez.duplicated, true);
+    assert.equal(otraVez.payout?.id, nuevo.payout?.id, 'devuelve la que ya estaba, no una nueva');
+
+    const choque = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createPlatformPayout(tx, { ...entrada, amount: '300000.00' }),
+    );
+    assert.equal(choque.payout, null);
+    assert.equal(choque.conflicting?.existingAmount, '260000.00');
+  });
+
+  test('los meses alimentan el promedio de core y el estimado sale de ahí', async () => {
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    // El contrato de MesConIngreso: { mes, monto }, sin rellenar los vacíos.
+    assert.deepEqual(Object.keys(meses[0] ?? {}).sort(), ['mes', 'monto']);
+    const p = proyeccionDePlataformas(meses, { hoy, currency: 'COP' });
+    // mesAnterior: 1 101 500,50 + 415 250,75 + 260 000 = 1 776 751,25
+    // dosAntes:      770 000,00 · tresAntes: 900 000,00 → /3
+    assert.equal(p.estimado, '1148917.08');
+    assert.equal(p.mesesConDatos, 3);
+    assert.equal(p.hasta, mesAnterior);
+    assert.equal(p.currency, 'COP');
+  });
+
+  test('los KPI los suma la base, y el último mes cerrado tiene su total', async () => {
+    const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    assert.equal(kpis.lastMonthLabel, mesAnterior);
+    assert.equal(kpis.lastMonth, '1776751.25');
+    assert.equal(typeof kpis.ytdPayouts, 'number');
+    assert.match(kpis.today, /^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('la bitácora: el lote deja una fila sin entityId y el pago a mano deja la suya', async () => {
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query<{ action: string; entity_type: string; entity_id: string | null; after: Record<string, unknown> }>(
+        `SELECT action, entity_type, entity_id::text, after
+           FROM audit_log
+          WHERE entity_type = 'platform_payout'
+          ORDER BY created_at, action`,
+      ),
+    );
+    const lotes = rows.filter((r) => r.action === 'platform_payout.imported');
+    const aMano = rows.filter((r) => r.action === 'platform_payout.created');
+
+    // Tres importaciones escribieron algo: las tres de AdSense, la de
+    // TikTok y (desde el espacio ajeno, que no se ve aquí) ninguna. La
+    // segunda vez del mismo lote NO dejó fila: no se escribió nada.
+    assert.equal(lotes.length, 2, 'el lote repetido no deja una segunda fila');
+    for (const fila of lotes) {
+      assert.equal(fila.entity_id, null, 'un lote son n pagos y ninguno es «el» pago');
+      assert.equal(fila.after.source, 'csv_import');
+      assert.equal(fila.after.currency, 'COP');
+      assert.ok(Array.isArray(fila.after.platforms));
+      assert.ok(typeof fila.after.inserted === 'number');
+      // Ni un monto en la bitácora: el dinero de cada pago está en su fila.
+      assert.equal(Object.keys(fila.after).includes('amount'), false);
+    }
+
+    assert.equal(aMano.length, 1, 'el pago a mano repetido tampoco deja una segunda fila');
+    assert.match(aMano[0]?.entity_id ?? '', /^[0-9a-f-]{36}$/, 'el pago a mano nombra SU fila');
+    assert.equal(aMano[0]?.after.source, 'manual');
+  });
+
+  test('el ON CONFLICT nombra sus columnas: sobre una base sin 0036 falla, no deduplica en silencio', async () => {
+    // Un `ON CONFLICT DO NOTHING` a secas NO falla cuando el índice no
+    // existe: se limita a no deduplicar. Sobre una base sin 0036 eso
+    // duplicaría el dinero y la pantalla diría «listo». Con el objetivo
+    // escrito, Postgres exige el índice y lanza 42P10.
+    await t.admin('DROP INDEX platform_payout_natural_uidx');
+    try {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+          importPlatformPayouts(tx, [
+            { platformId: 'facebook', ...periodo(tresAntes), amount: '1.00', currency: 'COP', source: 'csv_import' },
+          ]),
+        ),
+        (err: unknown) => (err as { code?: string }).code === '42P10',
+      );
+      const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+      assert.equal(rows.length, 5, 'y no escribió nada');
+    } finally {
+      await t.admin(`
+        CREATE UNIQUE INDEX IF NOT EXISTS platform_payout_natural_uidx
+          ON platform_payout (workspace_id, platform_id,
+            coalesce(creator_id, '00000000-0000-0000-0000-000000000000'::uuid),
+            period_start, period_end, currency, amount);
+      `);
+    }
+  });
+
+  test('un periodo fechado en el año que viene no se suma al «recibido en este año»', async () => {
+    const elAnioQueViene = `${+hoy.slice(0, 4) + 1}-01`;
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      importPlatformPayouts(tx, [
+        { platformId: 'facebook', ...periodo(elAnioQueViene), amount: '999999.00', currency: 'COP', source: 'manual' },
+      ]),
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    assert.equal(despues.ytd, antes.ytd, 'el año tiene tope por arriba, no solo por abajo');
+    assert.equal(despues.ytdPayouts, antes.ytdPayouts);
+  });
+
+  test('ninguna fila devuelve un id bigserial a la web', async () => {
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    for (const r of rows) {
+      assert.match(r.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'platform_payout.id es uuid');
+    }
+  });
+
+  test('aislamiento: el workspace ajeno no ve nada y sus pagos no se mezclan', async () => {
+    const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listPlatformPayouts(tx));
+    assert.equal(ajeno.rows.length, 0);
+
+    assert.deepEqual(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getPlatformPayoutMonths(tx)), []);
+    const kpisAjeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getPlatformPayoutKpis(tx));
+    assert.equal(kpisAjeno.ytd, '0');
+    assert.equal(kpisAjeno.lastMonth, null);
+
+    // El MISMO pago, desde el otro workspace: no choca con el de Laura
+    // (el UNIQUE abre por workspace_id) y sigue sin verse desde el suyo.
+    const suyo = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      importPlatformPayouts(tx, [
+        { platformId: 'youtube', ...periodo(mesAnterior), amount: '1101500.50', currency: 'COP', source: 'csv_import' },
+      ]),
+    );
+    assert.equal(suyo.inserted, 1, 'dos espacios pueden tener el mismo pago sin saber el uno del otro');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listPlatformPayouts(tx))).rows.length, 1);
+    const deLaura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    assert.equal(
+      deLaura.rows.length,
+      6,
+      'los tres de AdSense, el de TikTok, el de Instagram a mano y el fechado en el año que viene',
+    );
+  });
+
+  test('sin workspace fijado, RLS no deja ver ni escribir un solo pago', async () => {
+    const vistos = await t.raw<{ n: string }>('SELECT count(*)::text AS n FROM platform_payout');
+    assert.equal(vistos[0]?.n, '0', 'la sesión de mc_app sin workspace no ve ninguna fila');
   });
 });

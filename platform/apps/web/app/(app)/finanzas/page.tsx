@@ -131,6 +131,9 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
         aside={
           <div className="flex flex-wrap gap-2">
             <Button href="/finanzas/flujo">Flujo de caja</Button>
+            {/* FIN-7: lo que pagan las plataformas no es una factura, pero es
+                la misma caja, y su estimado ya entra al flujo. */}
+            <Button href="/finanzas/ingresos">Ingresos</Button>
             <Button variant="primary" href="/finanzas/facturas/nueva">
               Nueva factura
             </Button>
