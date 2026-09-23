@@ -22,6 +22,12 @@ export const SIGNAL_STATUSES = ['pending', 'accepted', 'discarded', 'expired', '
 export const LOST_REASONS = [
   'sin_presupuesto', 'eligio_otro_creador', 'sin_respuesta', 'fuera_de_tiempo', 'precio', 'no_encaja', 'otro',
 ] as const;
+/**
+ * Qué es una siguiente acción que puso el producto (0032). NULL es una
+ * escrita por una persona. El texto está en el idioma del espacio; esto
+ * es lo que se compara.
+ */
+export const NEXT_ACTION_KINDS = ['pitch', 'quote_follow_up'] as const;
 export const ACTIVITY_KINDS = [
   'note', 'email_sent', 'email_received', 'dm_sent', 'dm_received', 'call', 'meeting', 'proposal_sent',
   'contract_sent', 'signal_detected', 'stage_change', 'report_sent', 'payment_received',
@@ -188,6 +194,8 @@ export const deal = pgTable('deal', {
   probability: numeric('probability', { precision: 5, scale: 4 }),
   expectedCloseDate: date('expected_close_date', { mode: 'string' }),
   nextAction: text('next_action'),
+  /** 'pitch' / 'quote_follow_up' si la puso el producto; NULL si la escribió una persona (0032). */
+  nextActionKind: text('next_action_kind', { enum: NEXT_ACTION_KINDS }),
   nextActionDue: timestamptz('next_action_due'),
   nextActionUserId: uuid('next_action_user_id').references(() => appUser.id, { onDelete: 'set null' }),
   lastContactAt: timestamptz('last_contact_at'),
