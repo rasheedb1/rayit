@@ -1550,6 +1550,11 @@ describe('0037 · techo por canal, processing del despachador, baja global al en
     const despachador = (err: { code?: string; message?: string }) =>
       err.code === '42501' && /processing es del despachador/.test(err.message ?? '');
     assert.equal(WORKER_ONLY_TOUCH_STATUS, 'processing');
+    // Quién cuenta como despachador: el worker sí; la web no (ni con el mc_app_ci del CI, que hereda mc_worker).
+    const esDespachador = async (q: typeof e) =>
+      ((await q('SELECT outreach_is_dispatcher() AS si')).rows[0] as { si: boolean }).si;
+    assert.equal(await esDespachador(e), false);
+    assert.equal(await esDespachador(w), true);
     // Un toque de LinkedIn (sin correo, el CHECK de recipient_address no aplica) que nace en processing desde la web.
     await assert.rejects(
       e(
