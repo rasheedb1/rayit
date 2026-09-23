@@ -9,13 +9,21 @@
  *   - Las fechas timestamptz se devuelven como ISO 8601 (UTC).
  *   - Los tokens NUNCA pasan por aquí: solo `secret_ref`. Quien los
  *     guarda es el SecretStore de @mc/connectors, en la misma transacción.
+ *   - Toda escritura de cuenta conectada o consentimiento deja su fila en
+ *     audit_log con audit() (ACC-2), en la misma transacción y antes de
+ *     devolver, sin secret_ref ni evidencia; test/audit-convencion.test.ts
+ *     lo exige. Los snapshots y la salud técnica de la lectura pública no
+ *     auditan (declarado ahí con su motivo).
  *   - Consentimiento delegado (ACC-8): el titular es creator_profile
  *     (getConsentCreator); quien actúa es current_user_id()
- *     (getSessionMember). Si no son la misma persona, la evidencia lleva
- *     actedBy, el titular recibe notification 'connection_added' (0034)
- *     y audit_log dice quién fue. Los textos de los avisos los arma la
- *     web: aquí no se escriben frases.
+ *     (getSessionMember). Cada fila de bitácora de conexiones y
+ *     consentimientos lleva en `after` a nombre de quién (onBehalfOf) y,
+ *     si actuó un tercero, quién (actedBy: id y rol, sin correo). La
+ *     evidencia la arma la web; el aviso al titular es
+ *     notifyConnectionAdded (kind connection_added, 0038). Aquí no se
+ *     escriben frases.
  */
+import { audit } from '../audit.ts';
 import type { WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -254,9 +262,9 @@ export interface SessionMember {
   email: string;
   name: string | null;
   /**
-   * membership.role de 0001 ('owner', 'admin', 'member', 'viewer',
-   * 'client'). Con ACC-3 pasa a ser role.key: el campo se llama igual
-   * para que la evidencia (evidence.actedBy.roleKey) no cambie de forma.
+   * role.key del rol de su membresía (0034): 'owner', 'manager',
+   * 'editor', 'finance', 'viewer' o la clave de un rol a medida del
+   * workspace. Es lo que queda en evidence.actedBy.roleKey.
    */
   roleKey: string;
 }
@@ -270,13 +278,63 @@ export interface SessionMember {
  */
 export async function getSessionMember(tx: WorkspaceTx): Promise<SessionMember | null> {
   const { rows } = await tx.query<{ user_id: string; email: string; name: string | null; role: string }>(
-    `SELECT u.id AS user_id, u.email::text AS email, u.name, m.role
+    `SELECT u.id AS user_id, u.email::text AS email, u.name, r.key AS role
        FROM app_user u
        JOIN membership m ON m.user_id = u.id AND m.workspace_id = current_workspace_id()
+       JOIN role r ON r.id = m.role_id
       WHERE u.id = current_user_id() AND u.deleted_at IS NULL`,
   );
   const r = rows[0];
   return r ? { userId: r.user_id, email: r.email, name: r.name, roleKey: r.role } : null;
+}
+
+/**
+ * ¿Tiene la persona de la sesión este permiso en el workspace actual?
+ * Se lee de role_permission (0034) por su membresía, dentro de la misma
+ * transacción que va a escribir: así el permiso y la escritura ven la
+ * misma membresía. Sin identidad (modo demo) o sin membresía, false.
+ *
+ * TODO(ACC-5): cuando permisosDeLaSesion() (apps/web/lib/permisos) lea
+ * la base, las dos preguntas son la misma; esta queda como la
+ * comprobación dentro de la transacción.
+ */
+export async function sessionHasPermission(tx: WorkspaceTx, permissionKey: string): Promise<boolean> {
+  const { rows } = await tx.query<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM membership m
+         JOIN role_permission rp ON rp.role_id = m.role_id
+        WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id() AND rp.permission_key = $1
+     ) AS ok`,
+    [permissionKey],
+  );
+  return rows[0]?.ok === true;
+}
+
+/** Lo que cada fila de bitácora de conexiones dice de la delegación. Sin correo: la bitácora no lleva PII. */
+export interface ConnectionDelegation {
+  onBehalfOf: { creatorId: string };
+  actedBy?: { userId: string; roleKey: string };
+}
+
+/**
+ * A nombre de quién y, si no es el titular, quién actuó: se añade al
+ * `after` de toda fila de audit_log de conexiones y consentimientos
+ * (ACC-8). El actor ya va en audit_log.actor_user_id; `actedBy` repite
+ * su id junto al rol de ese día, que la bitácora no guarda en otro sitio.
+ */
+async function delegationFor(tx: WorkspaceTx, creatorId: string): Promise<ConnectionDelegation> {
+  const { rows } = await tx.query<{ creator_user_id: string | null; actor_id: string | null; role_key: string | null }>(
+    `SELECT cp.user_id AS creator_user_id, current_user_id() AS actor_id, r.key AS role_key
+       FROM creator_profile cp
+       LEFT JOIN membership m ON m.workspace_id = current_workspace_id() AND m.user_id = current_user_id()
+       LEFT JOIN role r ON r.id = m.role_id
+      WHERE cp.id = $1`,
+    [creatorId],
+  );
+  const r = rows[0];
+  const out: ConnectionDelegation = { onBehalfOf: { creatorId } };
+  if (r?.actor_id && r.actor_id !== r.creator_user_id) out.actedBy = { userId: r.actor_id, roleKey: r.role_key ?? 'sin_membresia' };
+  return out;
 }
 
 export async function listConsents(tx: WorkspaceTx, connectionId: string): Promise<ConsentRow[]> {
@@ -291,6 +349,40 @@ export async function listConsents(tx: WorkspaceTx, connectionId: string): Promi
 // Escrituras
 // ---------------------------------------------------------------------
 
+/** Lo que la bitácora necesita saber de una fila antes de tocarla. */
+interface PriorConnection {
+  id: string;
+  access_mode: string;
+  status: ConnectionStatus;
+  deleted: boolean;
+}
+
+/**
+ * La fila de esa cuenta en este workspace (viva o no), bloqueada, ANTES
+ * del upsert: el ON CONFLICT no devuelve el estado anterior, y sin él la
+ * bitácora no distingue un alta, una reconexión o una cuenta por @ que
+ * pasa a autorizada (ACC-2).
+ */
+async function lockPriorConnection(tx: WorkspaceTx, platformId: ConnectionPlatformId, externalAccountId: string): Promise<PriorConnection | null> {
+  const { rows } = await tx.query<PriorConnection>(
+    `SELECT id, access_mode, status, deleted_at IS NOT NULL AS deleted
+       FROM social_connection WHERE platform_id = $1 AND external_account_id = $2 FOR UPDATE`,
+    [platformId, externalAccountId],
+  );
+  return rows[0] ?? null;
+}
+
+function priorState(p: PriorConnection): Record<string, unknown> {
+  return { accessMode: p.access_mode, status: p.status, deleted: p.deleted };
+}
+
+/** Una fila 'consent.revoked' por consentimiento que dejó de estar vigente. */
+async function auditRevokedConsents(tx: WorkspaceTx, revoked: readonly { id: string; purpose: string }[], reason: 'replaced' | 'disconnected', delegation: ConnectionDelegation): Promise<void> {
+  for (const c of revoked) {
+    await audit(tx, { action: 'consent.revoked', entityType: 'data_consent', entityId: c.id, before: { purpose: c.purpose, revoked: false }, after: { purpose: c.purpose, revoked: true, reason, ...delegation } });
+  }
+}
+
 /**
  * Alta o reactivación por el UNIQUE (platform_id, external_account_id,
  * workspace_id): al reconectar se actualizan identidad, scopes y fechas,
@@ -301,6 +393,7 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
   // workspace podría colgar su conexión del creador de otro.
   const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
   if (creator.rows.length === 0) throw new CreatorNotInWorkspace(input.creatorId);
+  const prior = await lockPriorConnection(tx, input.platformId, input.externalAccountId);
   const { rows } = await tx.query<{ id: string; created: boolean }>(
     `INSERT INTO social_connection
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
@@ -331,7 +424,21 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
     ],
   );
   const r = rows[0]!;
-  return { id: r.id, created: r.created === true };
+  const created = r.created === true;
+  // Sin secretRef: la bitácora recuerda qué cuenta y con qué permisos, nunca dónde está el token.
+  // Si la fila era una cuenta por @, esto la convierte en autorizada: se dice así.
+  await audit(tx, {
+    action: created || !prior ? 'connection.added' : prior.access_mode === 'public_profile' ? 'connection.authorized' : 'connection.reconnected',
+    entityType: 'social_connection',
+    entityId: r.id,
+    before: prior && !created ? priorState(prior) : null,
+    after: {
+      platformId: input.platformId, externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType,
+      accessMode: 'direct_oauth', scopes: [...input.scopes], accessExpiresAt: input.accessExpiresAt,
+      ...(await delegationFor(tx, input.creatorId)),
+    },
+  });
+  return { id: r.id, created };
 }
 
 /**
@@ -340,16 +447,27 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
  * una sola activa.
  */
 export async function recordConsent(tx: WorkspaceTx, input: RecordConsentInput): Promise<string> {
-  await tx.query(
-    `UPDATE data_consent SET revoked_at = now() WHERE connection_id = $1 AND purpose = $2 AND revoked_at IS NULL`,
+  const revoked = await tx.query<{ id: string; purpose: string }>(
+    `UPDATE data_consent SET revoked_at = now() WHERE connection_id = $1 AND purpose = $2 AND revoked_at IS NULL RETURNING id, purpose`,
     [input.connectionId, input.purpose],
   );
+  const delegation = await delegationFor(tx, input.creatorId);
+  await auditRevokedConsents(tx, revoked.rows, 'replaced', delegation);
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO data_consent (workspace_id, creator_id, connection_id, purpose, granted, policy_version, evidence)
      VALUES (current_workspace_id(), $1, $2, $3, true, $4, $5::jsonb) RETURNING id`,
     [input.creatorId, input.connectionId, input.purpose, input.policyVersion, JSON.stringify(input.evidence)],
   );
-  return rows[0]!.id;
+  const id = rows[0]!.id;
+  // La evidencia (ip, user agent, texto mostrado) vive en data_consent; la bitácora solo dice qué se consintió.
+  await audit(tx, {
+    action: 'consent.recorded',
+    entityType: 'data_consent',
+    entityId: id,
+    before: null,
+    after: { connectionId: input.connectionId, purpose: input.purpose, policyVersion: input.policyVersion, ...delegation },
+  });
+  return id;
 }
 
 export const DISCONNECTED_DETAIL_ES = 'Desconectada por el creador.';
@@ -374,28 +492,46 @@ export interface DisconnectedConnection {
  * llamador la pasa por redactSecrets.
  */
 export async function disconnectConnection(tx: WorkspaceTx, id: string, revocation?: Record<string, unknown>): Promise<DisconnectedConnection> {
-  const { rows } = await tx.query<{ secret_ref: string; platform_id: ConnectionPlatformId; handle: string | null; access_mode: string; creator_id: string }>(
+  // El estado anterior se lee en la misma fila que se bloquea: la bitácora dice de dónde venía.
+  const previous = await tx.query<{ status: ConnectionStatus; platform_id: ConnectionPlatformId; access_mode: string; handle: string | null; creator_id: string }>(
+    `SELECT status, platform_id, access_mode, handle, creator_id FROM social_connection WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+    [id],
+  );
+  const before = previous.rows[0];
+  if (!before) throw new ConnectionNotFound(id);
+  const { rows } = await tx.query<{ secret_ref: string }>(
     `UPDATE social_connection
         SET deleted_at = now(), status = 'disabled', status_detail = $2
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING secret_ref, platform_id, handle, access_mode, creator_id`,
     [id, DISCONNECTED_DETAIL_ES],
   );
-  const r = rows[0];
-  if (!r) throw new ConnectionNotFound(id);
-  await tx.query(
+  const secretRef = rows[0]?.secret_ref;
+  if (!secretRef) throw new ConnectionNotFound(id);
+  // La revocación (quién, cuándo, a nombre de quién) se anexa como evidence.revocation; el otorgamiento no se toca.
+  const revoked = await tx.query<{ id: string; purpose: string }>(
     `UPDATE data_consent
         SET revoked_at = now(),
             evidence = CASE WHEN $2::jsonb IS NULL THEN evidence ELSE evidence || jsonb_build_object('revocation', $2::jsonb) END
-      WHERE connection_id = $1 AND revoked_at IS NULL`,
+      WHERE connection_id = $1 AND revoked_at IS NULL
+      RETURNING id, purpose`,
     [id, revocation ? JSON.stringify(revocation) : null],
   );
-  await tx.query(`DELETE FROM connection_secret WHERE secret_ref = $1`, [r.secret_ref]);
-  return { id, secretRef: r.secret_ref, platformId: r.platform_id, handle: r.handle, accessMode: r.access_mode, creatorId: r.creator_id };
+  await tx.query(`DELETE FROM connection_secret WHERE secret_ref = $1`, [secretRef]);
+  const delegation = await delegationFor(tx, before.creator_id);
+  await auditRevokedConsents(tx, revoked.rows, 'disconnected', delegation);
+  await audit(tx, {
+    action: 'connection.disconnected',
+    entityType: 'social_connection',
+    entityId: id,
+    before: { status: before.status, platformId: before.platform_id, accessMode: before.access_mode },
+    after: { status: 'disabled', platformId: before.platform_id, accessMode: before.access_mode, ...delegation },
+  });
+  return { id, secretRef, platformId: before.platform_id, handle: before.handle, accessMode: before.access_mode, creatorId: before.creator_id };
 }
 
 // ---------------------------------------------------------------------
-// Consentimiento delegado (ACC-8): aviso al titular y bitácora
+// Consentimiento delegado (ACC-8): el aviso al titular
 // ---------------------------------------------------------------------
 
 export interface NotifyConnectionAddedInput {
@@ -407,12 +543,13 @@ export interface NotifyConnectionAddedInput {
 }
 
 /**
- * Aviso 'connection_added' (0034) al titular: alguien conectó una cuenta
+ * Aviso 'connection_added' (0038) al titular: alguien conectó una cuenta
  * en su nombre. `user_id` tiene que ser visible para la transacción
  * (0025 §3): el titular es miembro del workspace, así que lo es. No se
  * duplica mientras haya uno sin leer ni descartar para la misma
  * conexión y persona: «Agregar» dos veces la misma cuenta deja UN
- * aviso. Devuelve true si se creó.
+ * aviso. Devuelve true si se creó. No audita: el hecho (connection.added
+ * con actedBy) ya dejó su fila; el aviso es su consecuencia.
  */
 export async function notifyConnectionAdded(tx: WorkspaceTx, input: NotifyConnectionAddedInput): Promise<boolean> {
   const { rows } = await tx.query<{ id: string }>(
@@ -425,34 +562,6 @@ export async function notifyConnectionAdded(tx: WorkspaceTx, input: NotifyConnec
     [input.userId, input.connectionId, input.titleEs, input.bodyEs],
   );
   return rows.length > 0;
-}
-
-export type ConnectionAuditAction = 'connection.added' | 'connection.removed';
-
-export interface ConnectionAuditInput {
-  action: ConnectionAuditAction;
-  connectionId: string;
-  /**
-   * Lo que quedó: connectionId, platformId, handle, accessMode,
-   * onBehalfOf { creatorId } y, si actuó un tercero, actedBy { userId,
-   * roleKey }. Sin correo, IP ni tokens: la bitácora no lleva PII.
-   */
-  after: Record<string, unknown>;
-}
-
-/**
- * Fila de audit_log por conectar o quitar una cuenta, con
- * actor_user_id = current_user_id() (NULL en modo demo sin sesión).
- *
- * TODO(ACC-2): cuando withAudit() esté en @mc/db, esta función se
- * reemplaza por esa llamada; la forma de `after` se conserva.
- */
-export async function recordConnectionAudit(tx: WorkspaceTx, input: ConnectionAuditInput): Promise<void> {
-  await tx.query(
-    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, after)
-     VALUES (current_workspace_id(), current_user_id(), 'user', $1, 'social_connection', $2, $3::jsonb)`,
-    [input.action, input.connectionId, JSON.stringify(input.after)],
-  );
 }
 
 // ---------------------------------------------------------------------
@@ -490,7 +599,8 @@ export function publicSecretRef(platformId: ConnectionPlatformId, handle: string
 export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountInput): Promise<UpsertConnectionResult> {
   const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
   if (creator.rows.length === 0) throw new CreatorNotInWorkspace(input.creatorId);
-  const { rows } = await tx.query<{ id: string; created: boolean }>(
+  const prior = await lockPriorConnection(tx, input.platformId, input.externalAccountId);
+  const { rows } = await tx.query<{ id: string; created: boolean; access_mode: string }>(
     `INSERT INTO social_connection
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
         account_type, secret_ref, scopes, access_mode, status, connected_at)
@@ -503,11 +613,23 @@ export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountI
            account_type = EXCLUDED.account_type,
            status = 'active', status_detail = NULL, deleted_at = NULL, last_error_at = NULL, consecutive_failures = 0,
            connected_at = CASE WHEN social_connection.deleted_at IS NULL THEN social_connection.connected_at ELSE now() END
-     RETURNING id, (xmax = 0) AS created`,
+     RETURNING id, (xmax = 0) AS created, access_mode`,
     [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle)],
   );
   const r = rows[0]!;
-  return { id: r.id, created: r.created === true };
+  const created = r.created === true;
+  // El ON CONFLICT no cambia access_mode: una cuenta ya autorizada que se vuelve a agregar por @ sigue autorizada, y la bitácora dice la de la fila.
+  await audit(tx, {
+    action: created || !prior ? 'connection.added' : 'connection.reconnected',
+    entityType: 'social_connection',
+    entityId: r.id,
+    before: prior && !created ? priorState(prior) : null,
+    after: {
+      platformId: input.platformId, externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType, accessMode: r.access_mode,
+      ...(await delegationFor(tx, input.creatorId)),
+    },
+  });
+  return { id: r.id, created };
 }
 
 export interface AccountSnapshotInput {
@@ -674,15 +796,29 @@ export interface UpgradeToOAuthInput {
  * autorización anterior), se desactiva para no chocar con el UNIQUE.
  */
 export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, input: UpgradeToOAuthInput): Promise<void> {
+  // El modo de antes se lee de la fila (bloqueada), no se supone: la bitácora dice lo que había.
+  const own = await tx.query<{ access_mode: string; creator_id: string }>(
+    `SELECT access_mode, creator_id FROM social_connection WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+    [id],
+  );
+  const ownBefore = own.rows[0];
+  if (!ownBefore) throw new ConnectionNotFound(id);
   // El UNIQUE (platform_id, external_account_id, workspace_id) cuenta también
   // las filas con deleted_at: la fila anterior con ese open_id se retira y su
   // id externo se marca como sustituido para liberar la clave.
-  await tx.query(
-    `UPDATE social_connection
-        SET deleted_at = COALESCE(deleted_at, now()), status = 'disabled',
+  // RETURNING con el estado de antes (subconsulta sobre la fila previa a este UPDATE): la retirada deja su propia fila en la bitácora.
+  const retired = await tx.query<{ id: string; prev_status: ConnectionStatus; prev_access_mode: string; was_deleted: boolean }>(
+    `WITH prev AS (
+       SELECT id, status, access_mode, deleted_at IS NOT NULL AS was_deleted FROM social_connection
+        WHERE platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND external_account_id = $2 AND id <> $1
+        FOR UPDATE
+     )
+     UPDATE social_connection s
+        SET deleted_at = COALESCE(s.deleted_at, now()), status = 'disabled',
             status_detail = 'Reemplazada por la cuenta agregada por @ al autorizarla.',
-            external_account_id = external_account_id || '~sustituida~' || left(id::text, 8)
-      WHERE platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND external_account_id = $2 AND id <> $1`,
+            external_account_id = s.external_account_id || '~sustituida~' || left(s.id::text, 8)
+       FROM prev WHERE s.id = prev.id
+     RETURNING s.id, prev.status AS prev_status, prev.access_mode AS prev_access_mode, prev.was_deleted`,
     [id, input.externalAccountId],
   );
   const { rows } = await tx.query<{ id: string }>(
@@ -697,5 +833,22 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
     [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
   );
   if (rows.length === 0) throw new ConnectionNotFound(id);
+  const delegation = await delegationFor(tx, ownBefore.creator_id);
+  for (const old of retired.rows) {
+    await audit(tx, {
+      action: 'connection.disconnected',
+      entityType: 'social_connection',
+      entityId: old.id,
+      before: { status: old.prev_status, accessMode: old.prev_access_mode, deleted: old.was_deleted },
+      after: { status: 'disabled', accessMode: old.prev_access_mode, deleted: true, replacedBy: id, ...delegation },
+    });
+  }
+  await audit(tx, {
+    action: 'connection.authorized',
+    entityType: 'social_connection',
+    entityId: id,
+    before: { accessMode: ownBefore.access_mode },
+    after: { accessMode: 'direct_oauth', externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType, scopes: [...input.scopes], accessExpiresAt: input.accessExpiresAt, ...delegation },
+  });
 }
 

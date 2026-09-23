@@ -3,71 +3,67 @@
 Escrito para: Rasheed (dueño de `db/migrations/`, `packages/db/src/schema`,
 `lib/auth/` y `lib/workspace/`) y quien revise el PR de ACC-8.
 Fecha: 23 de septiembre de 2026. Rama `nicolas/ACC-8-consentimiento-delegado`,
-worktree `rayit-acc8`, creada desde `origin/main` (`29460e3`).
+worktree `rayit-acc8`, creada desde `origin/main` (`29460e3`) e
+integrada después con `origin/main` (`f7466a8`), que ya traía ACC-1,
+ACC-2 y ACC-3.
 
 ---
 
 ## 0. Plan (fase 1)
 
-### 0.1 El punto de partida, y lo que NO está en main
+### 0.1 El punto de partida
 
-ACC-8 se escribió suponiendo ACC-1 (`requirePermission`), ACC-2
-(`withAudit`), ACC-3 (migración de roles) y ACC-5 (`getPermisosSesion`).
-El 23 de septiembre **ninguna de las cuatro está en `main`** (las ramas
-locales `nicolas/ACC-1-…`, `ACC-2-…` y `ACC-3-…` existen, sin commits).
-La regla del repositorio para ese caso es explícita: `// TODO(ACC-1)` y
-`// TODO(ACC-2)` donde irían la llamada real, y nada a medias. Así que
-ACC-8 se construye sobre lo que sí hay:
+El plan se escribió primero sobre `29460e3`, sin ACC-1, ACC-2 ni ACC-3.
+A mitad de la historia `main` recibió las tres, y la rama se integró y
+se rehízo sobre lo real:
 
-| Necesita | Hay en main | Cómo se puentea |
+| Necesita | Hay en main | Cómo lo usa ACC-8 |
 |---|---|---|
-| Quién actúa | `app.user_id` fijado por la sesión (CIM-3); `current_user_id()` (0019) | `getSessionMember(tx)`: la fila de `app_user` + `membership` del workspace actual para `current_user_id()` |
-| Su rol | `membership.role` de 0001: `owner`, `admin`, `member`, `viewer`, `client` | `roleKey = membership.role` hasta que ACC-3 lo convierta en `role.key` |
-| El permiso `conexiones.cuenta.conectar` | nada | tabla mínima en `conexiones/_lib/permisos.ts` (`owner`, `admin` → conectar y desconectar; el resto no), marcada `TODO(ACC-1)`; **el nombre del permiso ya es el del catálogo** |
-| La bitácora | `audit_log` de 0001 (mc_app tiene INSERT; 0025 le quitó UPDATE/DELETE) | `recordConnectionAudit(tx, …)` en `queries/conexiones.ts`, marcada `TODO(ACC-2)`: cuando llegue `withAudit()` se reemplaza la llamada, no el dato |
-| El titular | `creator_profile.user_id` (0001) | `getConsentCreator(tx)`: el perfil del workspace con su `user_id`. Cierra el `TODO(CIM-3)` de `getDefaultCreatorId` |
-| El aviso | `notification` (0009) sin ningún `kind` para «cuenta conectada» | migración **0034** que amplía el CHECK con `connection_added` (precedente 0030) |
+| Quién actúa | `current_user_id()` fijado por la sesión (CIM-3) | `getSessionMember(tx)`: `app_user` + `membership` + `role.key` del workspace actual |
+| Su rol | `membership.role_id` → `role` (0034, ACC-3); `membership.role` ya no existe | `roleKey = role.key`, lo que queda en `evidence.actedBy.roleKey` |
+| El permiso | `requirePermission()` (ACC-1) en `lib/permisos`; `role_permission` (0034) | la acción abre con `requirePermission`; la transacción que escribe comprueba `role_permission` con `sessionHasPermission` (ver 0.3.5) |
+| La bitácora | `audit()` (ACC-2) dentro de cada consulta de `queries/conexiones.ts` | cada fila de conexiones y consentimientos suma `onBehalfOf` y `actedBy` al `after` |
+| El titular | `creator_profile.user_id` (0001) | `getConsentCreator(tx)`; cierra el `TODO(CIM-3)` de `getDefaultCreatorId` |
+| El aviso | `notification` (0009 y 0030) sin `kind` para «cuenta conectada» | migración **0038** con `connection_added` |
 
-El «Mánager con la casilla de ACC-4» no existe todavía como rol. En las
-pruebas y en el seed lo representa una membresía `admin`; el «Editor
-sin permiso», una `viewer`. Cuando ACC-3 y ACC-4 lleguen, la tabla de
-`permisos.ts` desaparece y `roleKey` pasa a ser `manager`/`editor` sin
-tocar la evidencia (es un `text` libre dentro del jsonb).
+**La casilla de ACC-4 no existe todavía.** En un workspace de creador,
+solo el rol `owner` trae `conexiones.cuenta.conectar` de fábrica; el
+`manager` no (decisión E). Las pruebas representan «el mánager con la
+casilla» con un **rol a medida del workspace** (`manager_conecta`: los
+permisos del Mánager más conectar y desconectar), que 0034 ya admite.
+Es lo que la casilla otorga; cómo la materializa ACC-4 es de Rasheed.
 
 ### 0.2 Qué se construye y dónde
 
 ```
-db/migrations/0034_notification_connection_added.sql
+db/migrations/0038_notification_connection_added.sql
                                     CHECK de notification.kind + 'connection_added'. Re-ejecutable.
 db/seed/0003_demo_finanzas_campanas.sql (mío)
-                                    + Andrés Pardo (mánager, membership admin), un data_consent v2 con
-                                      actedBy sobre la cuenta de Instagram del seed y su notification,
-                                      para VER la fila «Conectada por …» en dev con el seed (fase 3).
+                                    + Andrés Pardo, mánager de la demo (rol de fábrica 'manager'),
+                                      un data_consent v2 con actedBy sobre el Instagram del seed y su aviso.
 
 packages/db/src/queries/conexiones.ts
-  getSessionMember(tx)              { userId, email, name, role } | null de current_user_id()
-  getConsentCreator(tx)             { id, userId, displayName } del creator_profile del workspace
-  recordConsent(tx, …)              sin cambios de firma; la evidencia v2 la arma la web
-  disconnectConnection(tx, id, rev) + evidencia de la revocación (evidence.revocation)
-  notifyConnectionAdded(tx, …)      kind connection_added al titular; sin duplicar un aviso sin leer
-  recordConnectionAudit(tx, …)      audit_log connection.added / connection.removed  (TODO(ACC-2))
-  listAccounts(tx)                  + connectedBy { userId, name, email, at } | null (de la evidencia)
+  getConsentCreator(tx)             el titular: creator_profile del workspace con su user_id
+  getSessionMember(tx)              quien actúa: { userId, email, name, roleKey } | null
+  sessionHasPermission(tx, key)     role_permission por la membresía de la sesión
+  delegationFor(tx, creatorId)      privada: { onBehalfOf, actedBy? } para el `after` de cada audit()
+  disconnectConnection(tx, id, rev) + evidence.revocation en cada consentimiento revocado
+  notifyConnectionAdded(tx, …)      kind connection_added al titular, sin duplicar uno sin leer
+  listAccounts(tx)                  + connectedBy { userId, name, email, at } | null
 packages/db/test/conexiones-delegado.test.ts
-                                    pglite: mánager, titular, editor, otro workspace, revocación
+packages/db/test/audit-convencion.test.ts   notifyConnectionAdded declarada sin bitácora, con motivo
 
 apps/web/app/(app)/conexiones/
-  _lib/consent.ts                   evidencia v2: buildConsentEvidence(), ipHash(), tipos
-  _lib/permisos.ts                  requireConexionesPermission(tx, 'conectar'|'desconectar')  (TODO(ACC-1))
-  _lib/messages.ts                  textos nuevos: aviso al titular, «Conectada por», sin permiso
-  _lib/cuentas-service.ts           agregar/quitar con actor, evidencia v2, aviso y bitácora
-  _lib/oauth-handlers.ts            start comprueba el permiso; callback deja la misma evidencia v2
-  _lib/cuentas-service.test.ts      + mánager / titular / editor / dump-text
-  _lib/oauth-handlers.test.ts       + callback con identidad de mánager
-  actions.ts                        // TODO(ACC-1) en cada Server Action; código sin_permiso
+  _lib/consent.ts                   evidencia v2: buildConsentEvidence, buildRevocationEvidence, ipHash
+  _lib/permisos.ts                  requireConexionesPermission(tx, permiso) con SinPermisoError de @mc/core
+  _lib/messages.ts                  el aviso al titular y «Conectada por … el …»
+  _lib/cuentas-service.ts           agregar y quitar con permiso, evidencia v2 y aviso
+  _lib/oauth-handlers.ts            start y callback con permiso, evidencia v2 y aviso
+  _lib/*.test.ts                    mánager / titular / editor / dump-text, en los dos caminos
+  actions.ts                        requirePermission (ACC-1, ya en main) + SinPermisoError al quitar
   page.tsx                          «Conectada por <nombre> el <fecha>» con formatterFor
-apps/web/README.md                  §Conexiones: consentimiento delegado
+apps/web/README.md                  §Conexiones: quién conecta y quién consiente
 apps/web/content/backlog.ts         entrada ACC-8
-docs/propuestas/ACC-8.md            este archivo
 ```
 
 ### 0.3 Decisiones
@@ -78,173 +74,137 @@ docs/propuestas/ACC-8.md            este archivo
 {
   "v": 2,
   "method": "public_handle" | "oauth",
-  "declaredOwner": true,            // solo por @: la casilla; en OAuth es false (lo prueba la plataforma)
-  "ipHash": "sha256 hex" | null,    // antes iba la IP en claro (v1); v2 no guarda PII de red
+  "declaredOwner": true,            // por @: la casilla; en OAuth, false (la titularidad la prueba la plataforma)
+  "ipHash": "sha256 hex" | null,    // v1 guardaba la IP en claro
   "userAgent": "…" | null,
   "textShown": "…", "policyVersion": "2026-09-22", "at": "ISO",
   "onBehalfOf": { "creatorId": "<creator_profile.id>" },
-  "actedBy": { "userId": "…", "email": "…", "roleKey": "admin" },   // se OMITE si actúa el titular
-  // extras que ya llevaba v1 y siguen: handle, platformId, source | scopesRequested, scopesGranted
+  "actedBy": { "userId": "…", "email": "…", "roleKey": "manager_conecta" },   // se OMITE si actúa el titular
+  // lo que v1 ya llevaba: handle, platformId, source | scopesRequested, scopesGranted
 }
 ```
 
-- `actedBy` se omite cuando `current_user_id() = creator_profile.user_id`
-  (el titular actúa por sí mismo) y también en modo demo sin sesión
-  (no hay nadie que nombrar; queda escrito en la evidencia como
-  ausencia, no como cero). `onBehalfOf` va siempre: es la respuesta a
-  «¿de quién son los datos?».
+- `actedBy` se omite cuando actúa el titular y en modo demo sin sesión.
+  `onBehalfOf` va siempre.
 - **Descartado**: una columna `acted_by_user_id` en `data_consent`. El
-  prompt lo excluye, y la evidencia tiene que ser un registro completo
-  y autónomo (si mañana el mánager deja de ser miembro, su correo y rol
-  de ese día siguen en la fila).
-- **Descartado**: guardar el nombre del actor en la evidencia. El
-  nombre cambia; el `userId` no. La pantalla lo resuelve al leer
-  (`app_user` es visible para los miembros del workspace, 0020) y cae
-  al correo si la persona ya no es miembro.
-- `ipHash` es `sha256(ip)` en hex. Sin sal: una sal por despliegue
-  haría la evidencia inverificable cuando rote. Es un compromiso: sirve
-  para confirmar una IP conocida, no oculta una IPv4 ante fuerza bruta.
-  **DECISIÓN PENDIENTE DE NICOLÁS**: si prefiere la IP en claro (v1)
-  como evidencia de habeas data, es cambiar una línea en `consent.ts`.
+  encargo la excluye, y la evidencia tiene que ser un registro autónomo:
+  si mañana el mánager deja de ser miembro, su correo y su rol de ese
+  día siguen en la fila.
+- **Descartado**: el nombre del actor en la evidencia. El nombre cambia
+  y el id no. La pantalla lo resuelve al leer y cae al correo guardado
+  si la persona ya no es miembro.
+- `ipHash` es `sha256(ip)` sin sal: una sal por despliegue volvería
+  inverificable la evidencia al rotar. Confirma una IP conocida, pero
+  no oculta una IPv4 ante fuerza bruta. **DECISIÓN PENDIENTE DE
+  NICOLÁS**: volver a la IP en claro de v1 es cambiar una línea en
+  `consent.ts`.
 
 **(2) Aviso al titular.** `notification` con `user_id =
-creator_profile.user_id`, `kind = 'connection_added'`, `severity
-'info'`, `entity_type 'social_connection'`, `entity_id` la conexión,
-`action_url '/conexiones'`. Título y cuerpo los arma la web
-(`messages.ts`) con red, @, quién (nombre, o correo si no lo puso) y cuándo
-(`formatterFor(settings).dateTime`); `@mc/db` no escribe frases
-(precedente `TextosCotizar`). No se crea si el titular no tiene
-`app_user` (`user_id` NULL): el servicio lo devuelve como
-`aviso: 'sin_titular'` y queda en la bitácora. No se duplica si ya
-hay uno sin leer para la misma conexión y persona (idempotencia de
-«Agregar» repetido; patrón `notifyMediaKitLocked`).
+creator_profile.user_id`, `kind 'connection_added'`, `severity 'info'`,
+`entity_type 'social_connection'`, `action_url '/conexiones'`. Título y
+cuerpo los arma la web (`messages.ts`) con quién, qué cuenta, qué red y
+cuándo, en la zona y el locale del workspace; `@mc/db` no escribe
+frases. No se crea si el titular no tiene `app_user`: el servicio
+devuelve `aviso: 'sin_titular'`. No se duplica mientras haya uno sin
+leer para la misma cuenta y persona.
 
-- **Descartado**: correo. Es fase 2 (fuera de alcance del prompt).
-- **Descartado**: un `kind` genérico reutilizado (`connection_error`).
-  Cambiaría el significado de un valor que el worker ya usa.
+- **Descartado**: el correo. Es fase 2.
+- **Descartado**: reutilizar `connection_error`, que el worker ya usa
+  con el sentido contrario.
 
-**(3) Bitácora.** `connection.added` y `connection.removed` en
-`audit_log` con `actor_user_id = current_user_id()`, `actor_kind
-'user'`, `entity_type 'social_connection'`, `after = { connectionId,
-platformId, handle, accessMode, onBehalfOf, actedBy?: { userId, roleKey } }`.
-Sin correo ni IP en `after` (regla de PII de la bitácora). Se escribe
-desde `queries/conexiones.ts` con `TODO(ACC-2)`; `withAudit()` la
-reemplazará. `actor_kind 'delegate'` y `on_behalf_of_workspace_id` son
-de ACC-3 (AGE-2): aquí el mánager actúa DENTRO del workspace del
-creador, así que `after.onBehalfOf` basta.
+**(3) Bitácora.** No hay función propia: las consultas ya auditan con
+`audit()` (ACC-2), con `actor_user_id = current_user_id()`. ACC-8 añade
+al `after` de cada fila de conexiones y consentimientos
+(`connection.added`, `.reconnected`, `.authorized`, `.disconnected`,
+`consent.recorded`, `consent.revoked`) el `onBehalfOf` y, si actuó un
+tercero, `actedBy { userId, roleKey }`. Sin correo: `sanitizeForAudit`
+lo taparía igual. `actor_kind 'delegate'` y `on_behalf_of_workspace_id`
+(0034) quedan para AGE-2, cuando alguien actúe desde OTRO workspace;
+aquí el mánager actúa dentro del del creador.
 
-**(4) Desconectar por un tercero.** `disconnectConnection` recibe la
-revocación y la anexa a cada consentimiento que revoca:
-`evidence = evidence || { revocation: { at, actedBy?, onBehalfOf } }`.
-La evidencia del otorgamiento no se toca. Bitácora
-`connection.removed`. Sin aviso al titular (el prompt no lo pide; queda
-en «fuera de alcance» con ACC-8 fase 2, y sería otro `kind`).
+**(4) Desconectar por un tercero.** `disconnectConnection` anexa
+`evidence.revocation = { v, at, onBehalfOf, actedBy? }` a cada
+consentimiento que revoca. El otorgamiento no se toca, y la bitácora
+lleva `connection.disconnected` con la delegación.
 
-**(5) El rol se lee de la sesión.** `getSessionMember(tx)` dentro de la
-misma transacción: `app_user` por `current_user_id()` y `membership`
-del `current_workspace_id()`. Nada viene del navegador. Es lo que
-`getPermisosSesion` (ACC-5) hará con la tabla `role`; hasta entonces el
-rol es `membership.role`.
+**(5) Dónde se comprueba el permiso.** `requirePermission()` es la
+primera línea de cada Server Action (convención de ACC-1, ya en main).
+Hasta ACC-5 esa función resuelve toda sesión como Dueño, así que no
+distingue al Editor. Por eso la transacción que escribe comprueba otra
+vez, como primera sentencia, con `sessionHasPermission`, que lee
+`role_permission` por la membresía de la sesión. Esa es también la
+única comprobación de los route handlers de OAuth, que no son Server
+Actions. Además corre antes de gastar una llamada a la plataforma y
+antes de redirigir al diálogo de OAuth.
 
-**(6) Dónde se comprueba el permiso.** Como PRIMERA sentencia de cada
-transacción que escribe (`requireConexionesPermission(tx, 'conectar')`),
-y además antes de la llamada HTTP en `agregar` (una transacción corta:
-un editor sin permiso no gasta cuota de Instagram) y en `start` de
-OAuth (no se manda a la plataforma a quien no puede volver). Sin
-identidad (copia sin llaves, modo demo) no hay a quién negarle nada y
-se deja pasar sin actor: es el mismo atajo de desarrollo de
-`lib/workspace/current.ts`, y con Supabase Auth configurado nunca se
-llega sin sesión (falla cerrado).
+- **Descartado**: esperar a ACC-5. El encargo pide la prueba de que el
+  Editor no puede, y hoy `requirePermission` no lo impediría.
+- **Descartado**: una tabla de roles en TypeScript. La matriz ya está
+  en la base y en `@mc/core`; una tercera copia se desincroniza.
 
-**(7) Número de la migración.** `git fetch` el 23 de septiembre: la más
-alta en TODAS las ramas (remotas y locales) es
-`0033_una_aceptada_por_negocio.sql`. La nueva es **0034**. `0023` no se
-recicla. **Riesgo**: ACC-3 corre en paralelo y podría tomar 0034; si
-pasa, esta se renumera (es una sola sentencia sin dependencias).
+**(6) Número de la migración.** Tras `git fetch` el 23 de septiembre,
+en todas las ramas están tomados 0034 (ACC-3), 0035 (CAM-3, ACC-6),
+0036 (CON-7, FIN-7) y 0037 (CAM-6). La nueva es **0038**; `0023` no se
+recicla. Es una sola sentencia sin dependencias: si otra rama toma
+0038, se renumera. Si otra rama amplía también el CHECK de
+`notification.kind`, la segunda en aplicarse tiene que incluir los
+valores de la primera.
 
-**(8) Seed.** Se agrega a `0003` (mío) un mánager de la demo con
-membresía `admin` y un consentimiento v2 sobre la cuenta de Instagram
-del seed, con su aviso. Es lo que hace visible la fase 3 en dev sin
-sesión. Ids fijos, `ON CONFLICT DO NOTHING` (el verificador de seeds
-exige idempotencia). **DECISIÓN PENDIENTE DE NICOLÁS**: si no quiere
-al mánager en la demo pública, se quita el bloque y la fase 3 se
-verifica solo con la prueba automática.
-
-### 0.4 Dudas
-
-- `NOTIFICATION_KINDS` en `packages/db/src/schema/cimientos.ts` (de
-  Rasheed) no lleva `connection_added`. No lo toca esta rama: mis
-  INSERT van por SQL. Va en §1 para Rasheed.
-- Si ACC-2 define `after` con otra forma, `recordConnectionAudit` se
-  adapta; los nombres `connection.added` / `connection.removed` son
-  los que el backlog nombra desde ACC-2.
+**(7) Seed.** Andrés Pardo entra con el rol `manager` de fábrica, sin
+la casilla, porque un seed no puede crear roles a medida (política
+`role_seed` de 0034). La demo cuenta una historia pasada: con la
+casilla, Andrés conectó el Instagram de Laura, y eso queda en la
+evidencia y en el aviso. Hoy, con su rol de fábrica, no podría. Ids
+fijos y `ON CONFLICT DO NOTHING`. **DECISIÓN PENDIENTE DE NICOLÁS**:
+si no lo quiere en la demo pública, se quita el bloque, que está
+delimitado.
 
 ---
 
 ## 1. Lo que necesita Rasheed
 
-### 1.1 Migración 0034 (revisar y aplicar; `make db.migrate` lo corre Nicolás o Rasheed, nunca esta rama)
+### 1.1 Migración 0038 (revisar y aplicar; esta rama no corre `make db.migrate`)
 
-`platform/db/migrations/0034_notification_connection_added.sql`: una
-sola sentencia, re-ejecutable, que amplía el CHECK de
-`notification.kind` con `connection_added`. Pasa `make db.check`; la
-guardia contra Supabase (`make db.guardia`, solo lectura) reporta
-exactamente «falta 0034», que es lo esperado. Si ACC-3 tomó también el
-0034, esta se renumera sin más.
+`platform/db/migrations/0038_notification_connection_added.sql` es una
+sola sentencia re-ejecutable que amplía el CHECK de
+`notification.kind` con `connection_added`. Pasa `make db.check`. El
+seed 0003 la necesita aplicada antes de sembrar en Supabase.
 
-### 1.2 Esquema Drizzle (`packages/db/src/schema/cimientos.ts`, de Rasheed)
+### 1.2 Esquema Drizzle (`packages/db/src/schema/cimientos.ts`)
 
-Añadir `'connection_added'` a `NOTIFICATION_KINDS`, con su comentario
-(`// 0034 (ACC-8): un tercero conectó una cuenta en nombre del titular`).
-Esta rama no lo toca: los INSERT de `notifyConnectionAdded` van por SQL
-y no dependen del enum de TypeScript.
+Añadir `'connection_added'` a `NOTIFICATION_KINDS` con su comentario
+(`// 0038 (ACC-8): un tercero conectó una cuenta en nombre del titular`).
+Esta rama no lo toca: los INSERT van por SQL.
 
-### 1.3 Seed (para leerlo, no para hacer nada)
+### 1.3 La casilla de ACC-4
 
-`db/seed/0003` (mío) trae ahora a **Andrés Pardo** (`app_user`
-`…000000000004`, `andres@ejemplo.com`), mánager de la demo con
-`membership 'admin'`, un `data_consent` v2 con `actedBy` sobre la
-cuenta de Instagram del seed (`…0000000000c1`) y un `notification`
-`connection_added` sin leer para Laura. Ids fijos, `ON CONFLICT DO
-NOTHING`. Si el seed se aplica en Supabase, 0034 tiene que ir antes
-(el CHECK). Si no queremos al mánager en la demo pública, se quita el
-bloque entero (está delimitado con su cabecera).
+- **Qué otorga**: exactamente `conexiones.cuenta.conectar` y
+  `conexiones.cuenta.desconectar`, además de los permisos del Mánager.
+- **Cómo lo lee ACC-8**: `sessionHasPermission` pregunta a
+  `role_permission` por el rol de la membresía. Si ACC-4 materializa la
+  casilla como un rol a medida del workspace, como hacen las pruebas,
+  no hay que tocar nada. Si la materializa de otra forma (permisos por
+  membresía), `sessionHasPermission` tiene que leer también de ahí.
+- **Qué queda en la evidencia**: `actedBy.roleKey` es la `role.key` de
+  ese día.
 
-### 1.4 Lo que ACC-1, ACC-3, ACC-4 y ACC-5 heredan de aquí
+### 1.4 Lo que ACC-5 y AGE-2 heredan
 
-- **Nombres de permiso ya en uso**: `conexiones.cuenta.conectar` y
-  `conexiones.cuenta.desconectar` (`apps/web/app/(app)/conexiones/_lib/permisos.ts`).
-  Cuando `requirePermission` exista, cada `// TODO(ACC-1)` de
-  `actions.ts`, `cuentas-service.ts` y `oauth-handlers.ts` se
-  reemplaza por esa llamada y `permisos.ts` se reduce a reexportarla.
-- **La casilla de ACC-4** («también puede conectar mis cuentas»)
-  otorga exactamente `conexiones.cuenta.conectar` y
-  `conexiones.cuenta.desconectar` al mánager. Sin ella, el rol
-  «Mánager» de fábrica no los trae (decisión E). Hasta ACC-3, el puente
-  es `membership.role IN ('owner','admin')`.
-- **`roleKey` en la evidencia** es `membership.role` hoy y `role.key`
-  con ACC-3; el campo no cambia de nombre ni de forma.
-- **ACC-2**: `recordConnectionAudit` (`queries/conexiones.ts`) escribe
-  `connection.added` / `connection.removed` con `after = { connectionId,
-  platformId, handle, accessMode, onBehalfOf, actedBy? }`. Cuando
-  `withAudit()` exista, se reemplaza la llamada; la forma de `after` es
-  la que las pruebas ya comprueban.
-- **AGE-2** (sesión delegada entre workspaces) hereda el modelo entero:
-  el actor sigue siendo `current_user_id()` y el titular
-  `creator_profile`; lo que cambia es que `audit_log` pasa a llevar
-  `actor_kind 'delegate'` y `on_behalf_of_workspace_id` (ACC-3), y la
-  evidencia puede sumar `actedBy.workspaceId`. Nada de lo de aquí se
-  reescribe.
+- **ACC-5**: cuando `permisosDeLaSesion()` lea la base,
+  `requirePermission` y `requireConexionesPermission` responderán lo
+  mismo. La segunda se queda como comprobación dentro de la transacción
+  que escribe (hay un `TODO(ACC-5)` en `sessionHasPermission`).
+- **AGE-2**: el modelo no cambia. El actor sigue siendo
+  `current_user_id()` y el titular sigue siendo `creator_profile`. Lo
+  nuevo es `actor_kind 'delegate'` y `on_behalf_of_workspace_id` en
+  `audit_log`, y quizá `actedBy.workspaceId` en la evidencia.
 
-### 1.5 Fuera de alcance (con su historia)
+### 1.5 Fuera de alcance
 
 - La casilla al invitar: ACC-4 (Rasheed).
 - Sesión delegada entre workspaces: AGE-2.
-- Envío del aviso por correo: ACC-8 fase 2 (`notification.emailed_at`
-  ya existe para cuando llegue).
-- Aviso al titular cuando un tercero QUITA la cuenta: otro `kind`
-  (`connection_removed`); queda para ACC-8 fase 2 junto con el correo.
-  Hoy queda en la evidencia y en la bitácora.
-- Recolocar los textos anteriores de Conexiones en `messages.ts`
-  (declaración de propiedad, texto OAuth, errores del flujo): pulido,
-  no ACC-8.
+- Envío del aviso por correo: fase 2 (`notification.emailed_at` ya existe).
+- Aviso al titular cuando un tercero QUITA la cuenta: otro `kind`,
+  fase 2. Hoy queda en la evidencia y en la bitácora.
+- Mover a `messages.ts` los textos anteriores de Conexiones
+  (declaración, texto OAuth, errores del flujo): pulido.

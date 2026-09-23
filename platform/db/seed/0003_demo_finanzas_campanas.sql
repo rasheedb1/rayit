@@ -70,8 +70,8 @@ INSERT INTO app_user (id, email, name, locale)
 VALUES ('00000002-0000-4000-8000-000000000002', 'laura@ejemplo.com', 'Laura Méndez', 'es-CO')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO membership (workspace_id, user_id, role)
-VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', 'owner')
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', system_role_id('creator', 'owner'))
 ON CONFLICT DO NOTHING;
 
 INSERT INTO creator_profile (id, workspace_id, user_id, display_name, handle, bio, country, languages, niche_slugs)
@@ -247,7 +247,9 @@ FROM (
     FROM generate_series(0, 59) AS d
   ) g
 ) a
-ON CONFLICT (company_id, platform_id, day) DO NOTHING;
+-- Sin objetivo: vale con la unicidad de 0008 (empresa, red, día) y con la
+-- de 0035 (campaña, red, día, con o sin cifra).
+ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
@@ -447,11 +449,12 @@ ON CONFLICT (id) DO UPDATE SET
 -- =====================================================================
 -- Consentimiento delegado (ACC-8): el mánager de la demo
 -- ---------------------------------------------------------------------
--- Andrés Pardo es el mánager de Laura (membership 'admin': hasta ACC-3
--- es el rol que lleva conexiones.cuenta.conectar). Conectó él la cuenta
--- de Instagram de Laura: el consentimiento queda a nombre de Laura con
+-- Andrés Pardo es el mánager de Laura (rol de fábrica 'manager', 0034).
+-- Ese rol NO trae conexiones.cuenta.conectar (decisión E): se lo da la
+-- casilla de ACC-4 al invitarlo. La demo cuenta una historia pasada: con
+-- esa casilla, Andrés conectó la cuenta de Instagram de Laura: el consentimiento queda a nombre de Laura con
 -- Andrés en evidence.actedBy (evidencia v2), Laura tiene el aviso
--- connection_added (0034) sin leer, y /conexiones dice «Conectada por
+-- connection_added (0038) sin leer, y /conexiones dice «Conectada por
 -- Andrés Pardo el …». Es lo que hace visible ACC-8 en dev con el seed.
 -- Ids fijos y ON CONFLICT DO NOTHING: el verificador exige idempotencia.
 --
@@ -465,8 +468,8 @@ INSERT INTO app_user (id, email, name, locale)
 VALUES ('00000002-0000-4000-8000-000000000004', 'andres@ejemplo.com', 'Andrés Pardo', 'es-CO')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO membership (workspace_id, user_id, role)
-VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000004', 'admin')
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000004', system_role_id('creator', 'manager'))
 ON CONFLICT DO NOTHING;
 
 SELECT set_config('app.user_id', '00000002-0000-4000-8000-000000000002', false);
@@ -480,7 +483,7 @@ VALUES (
     'textShown', 'Texto de consentimiento de la demo.', 'policyVersion', '2026-09-22',
     'at', to_char(now() - interval '140 days', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
     'onBehalfOf', jsonb_build_object('creatorId', '00000002-0000-4000-8000-000000000003'),
-    'actedBy', jsonb_build_object('userId', '00000002-0000-4000-8000-000000000004', 'email', 'andres@ejemplo.com', 'roleKey', 'admin')
+    'actedBy', jsonb_build_object('userId', '00000002-0000-4000-8000-000000000004', 'email', 'andres@ejemplo.com', 'roleKey', 'manager')
   )
 )
 ON CONFLICT (id) DO NOTHING;

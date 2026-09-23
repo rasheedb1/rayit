@@ -19,7 +19,7 @@ import { listConsents, type WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
-import { PermisoDenegado } from "./permisos";
+import { SinPermisoError } from "./permisos";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-web-SECRETO", GOOGLE_API_KEY: "AIza-web-key-SECRETO" };
@@ -31,6 +31,7 @@ const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
 const USER_LAURA = "00000002-0000-4000-8000-000000000002";
 /** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
 const USER_MANAGER = "00000002-0000-4000-8000-000000000004";
+const ROLE_MANAGER_CONECTA = "00000009-0000-4000-8000-00000000ac81";
 const USER_EDITOR = "00000009-0000-4000-8000-0000000000b2";
 
 let db: EmbeddedDb;
@@ -48,8 +49,19 @@ beforeAll(async () => {
     ...(await loadFixtures("tiktok", [["oembed.profile", "ok"], ["oembed.profile", "not_found"]])),
   ]);
   service = createCuentasService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
-  await db.queryAsSuperuser(`INSERT INTO app_user (id, email, name) VALUES ($1, 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING`, [USER_EDITOR]);
-  await db.queryAsSuperuser(`INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'viewer') ON CONFLICT DO NOTHING`, [SEED_WORKSPACE_ID, USER_EDITOR]);
+  await db.execAsSuperuser(`
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_EDITOR}', 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING;
+    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${USER_EDITOR}', system_role_id('creator', 'editor')) ON CONFLICT DO NOTHING;
+    -- «El mánager con la casilla de ACC-4» (ACC-4 aún no existe): un rol a medida del workspace con los permisos del
+    -- Mánager de fábrica más conectar y desconectar. Andrés (seed 0003) es 'manager' de fábrica y pasa a este rol.
+    INSERT INTO role (id, workspace_id, key, workspace_kind, label_es, is_system)
+    VALUES ('${ROLE_MANAGER_CONECTA}', '${SEED_WORKSPACE_ID}', 'manager_conecta', 'creator', 'Mánager (también conecta mis cuentas)', false) ON CONFLICT DO NOTHING;
+    INSERT INTO role_permission (role_id, permission_key)
+      SELECT '${ROLE_MANAGER_CONECTA}', permission_key FROM role_permission WHERE role_id = system_role_id('creator', 'manager')
+      UNION VALUES ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.conectar'), ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.desconectar')
+    ON CONFLICT DO NOTHING;
+    UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
+  `);
 }, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 /** El mismo servicio con la sesión de una persona: withWorkspace fija app.user_id como lo hace lib/db con CIM-3. */
@@ -163,7 +175,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(ev.rows[0]!.creator_id).toBe(CREATOR_LAURA);
     expect(ev.rows[0]!.evidence).toMatchObject({
       v: 2, declaredOwner: true, onBehalfOf: { creatorId: CREATOR_LAURA },
-      actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "admin" },
+      actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "manager_conecta" },
     });
     const notice = await db.queryAsSuperuser<{ user_id: string; kind: string; title_es: string; body_es: string; action_url: string; entity_id: string }>(
       "SELECT user_id, kind, title_es, body_es, action_url, entity_id FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id],
@@ -171,11 +183,12 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(notice.rows.length).toBe(1);
     expect(notice.rows[0]).toMatchObject({ user_id: USER_LAURA, kind: "connection_added", title_es: "Una cuenta se conectó en tu nombre", action_url: "/conexiones", entity_id: out.id });
     expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @cafealma de Instagram el .+ en tu nombre\./);
-    // La última fila de la bitácora de esa cuenta (las pruebas de arriba ya la agregaron y quitaron en modo demo, sin actor).
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.added' AND entity_id = $1 ORDER BY id DESC LIMIT 1", [out.id]);
+    // La última fila de alta de esa cuenta: las pruebas de arriba ya la agregaron y la quitaron en modo demo, así que ahora es una reconexión (ACC-2).
+    const audit = await db.queryAsSuperuser<{ action: string; actor_user_id: string; after: Record<string, unknown> }>("SELECT action, actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [out.id]);
+    expect(audit.rows[0]!.action).toBe("connection.reconnected");
     expect(audit.rows.length).toBe(1);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
-    expect(audit.rows[0]!.after).toMatchObject({ onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "admin" } });
+    expect(audit.rows[0]!.after).toMatchObject({ onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
     expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");
     // La lista lo dice.
     const row = (await manager.listar()).find((r) => r.id === out.id)!;
@@ -197,7 +210,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, onBehalfOf: { creatorId: CREATOR_LAURA } });
     expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
     expect((await db.queryAsSuperuser("SELECT 1 FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id])).rows.length).toBe(0);
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.added' AND entity_id = $1 ORDER BY id DESC", [out.id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC", [out.id]);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_LAURA);
     expect(audit.rows[0]!.after).not.toHaveProperty("actedBy");
     expect((await laura.listar()).find((r) => r.id === out.id)!.connectedBy).toBeNull();
@@ -213,7 +226,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(fetch.calls.length).toBe(calls);
     const ig = (await editor.listar()).find((r) => r.handle === "cafealma")!;
     expect(ig, "sí puede VER la lista").toBeTruthy();
-    await expect(editor.quitar(ig.id)).rejects.toBeInstanceOf(PermisoDenegado);
+    await expect(editor.quitar(ig.id)).rejects.toBeInstanceOf(SinPermisoError);
     const after = await db.queryAsSuperuser<{ n: number }>("SELECT (SELECT count(*) FROM social_connection) + (SELECT count(*) FROM data_consent) + (SELECT count(*) FROM notification) + (SELECT count(*) FROM audit_log) + (SELECT count(*) FROM api_call_log) AS n");
     expect(Number(after.rows[0]!.n)).toBe(Number(before.rows[0]!.n));
     expect(ig.status).toBe("active");
@@ -225,13 +238,13 @@ describe("consentimiento delegado (ACC-8)", () => {
     await manager.quitar(ig.id);
     const ev = await db.queryAsSuperuser<{ evidence: Record<string, unknown>; revoked_at: string | null }>("SELECT evidence, revoked_at FROM data_consent WHERE connection_id = $1 ORDER BY granted_at DESC LIMIT 1", [ig.id]);
     expect(ev.rows[0]!.revoked_at).not.toBeNull();
-    expect(ev.rows[0]!.evidence["revocation"]).toMatchObject({ v: 2, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "admin" } });
+    expect(ev.rows[0]!.evidence["revocation"]).toMatchObject({ v: 2, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
     expect(ev.rows[0]!.evidence["actedBy"], "el otorgamiento no se toca").toMatchObject({ userId: USER_MANAGER });
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string | null; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.removed' AND entity_id = $1 ORDER BY id DESC", [ig.id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string | null; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.disconnected' AND entity_id = $1 ORDER BY id DESC", [ig.id]);
     expect(audit.rows.length, "la de arriba en modo demo (sin actor) y esta").toBe(2);
     expect(audit.rows[1]!.actor_user_id).toBeNull();
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
-    expect(audit.rows[0]!.after).toMatchObject({ handle: "cafealma", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "admin" } });
+    expect(audit.rows[0]!.after).toMatchObject({ status: "disabled", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
   });
 
   it("R4: ni el token casa ni la API key ni una IP en claro aparecen en ninguna evidencia ni en ningún aviso", async () => {

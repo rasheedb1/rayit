@@ -5,8 +5,9 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ConnectionNotFound } from "@mc/db";
+import { requirePermission } from "@/lib/permisos";
 import { getCuentasService } from "./_lib/cuentas-server";
-import { PermisoDenegado } from "./_lib/permisos";
+import { SinPermisoError } from "./_lib/permisos";
 
 const idSchema = z.string().uuid();
 const agregarSchema = z.object({
@@ -32,7 +33,7 @@ async function requester(): Promise<{ ip: string | null; userAgent: string | nul
  * (ACC-8).
  */
 export async function agregarCuenta(formData: FormData): Promise<void> {
-  // TODO(ACC-1): requirePermission('conexiones.cuenta.conectar'). Hoy lo comprueba el servicio como primera sentencia de su transacción (_lib/permisos.ts).
+  await requirePermission("conexiones.cuenta.conectar");
   const parsed = agregarSchema.safeParse({ red: formData.get("red"), handle: formData.get("handle"), declaro: formData.get("declaro") });
   if (!parsed.success) aviso(parsed.error.issues[0]?.message ?? "Revisa el formulario.");
   const who = await requester();
@@ -44,7 +45,7 @@ export async function agregarCuenta(formData: FormData): Promise<void> {
 
 /** «Actualizar»: vuelve a leer la fuente pública y deja el snapshot del día (si ya lo había, lo dice). */
 export async function actualizarCuenta(id: string): Promise<void> {
-  // TODO(ACC-1): requirePermission('conexiones.cuenta.ver').
+  await requirePermission("conexiones.cuenta.conectar");
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
   const out = await getCuentasService().actualizar(id);
   revalidatePath("/conexiones");
@@ -55,14 +56,14 @@ export async function actualizarCuenta(id: string): Promise<void> {
 
 /** «Quitar»: deleted_at, status 'disabled', consentimiento revocado con quién lo quitó. La historia se conserva. */
 export async function desconectarConexion(id: string): Promise<void> {
-  // TODO(ACC-1): requirePermission('conexiones.cuenta.desconectar'). Hoy lo comprueba el servicio como primera sentencia de su transacción.
+  await requirePermission("conexiones.cuenta.desconectar");
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
   let error: string | null = null;
   try {
     await getCuentasService().quitar(id);
   } catch (err) {
     error = err instanceof ConnectionNotFound ? "Esa cuenta ya no está en la lista."
-      : err instanceof PermisoDenegado ? err.messageEs
+      : err instanceof SinPermisoError ? err.message
       : "No se pudo quitar la cuenta. Inténtalo de nuevo.";
   }
   revalidatePath("/conexiones");

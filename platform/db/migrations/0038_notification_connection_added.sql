@@ -1,8 +1,8 @@
 -- =====================================================================
--- 0034 · Aviso al titular cuando un tercero conecta su cuenta (ACC-8)
+-- 0038 · Aviso al titular cuando un tercero conecta su cuenta (ACC-8)
 -- ---------------------------------------------------------------------
--- Número: la más alta en todas las ramas el 23 de septiembre es 0033.
--- Si otra área (ACC-3) eligió también 0034, el integrador renumera:
+-- Número: la más alta en todas las ramas el 23 de septiembre es 0037 (CAM-6); 0034_access_control es de ACC-3.
+-- Si otra área eligió también 0038, el integrador renumera:
 -- esta no depende de nada que venga después ni nada depende de ella.
 --
 -- Quien conecta una cuenta ajena no es quien consiente. El mánager

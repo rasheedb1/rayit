@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -57,8 +57,26 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle con los cobros
+                              de cada factura (FIN-2: registrar pago, reserva de
+                              impuestos) y la bandeja de recordatorios de cobro
+                              (FIN-4, bandeja.tsx).
                               index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
+                              calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/finanzas/recordatorios/  Solo actions.ts: «Marcar como enviado». NO es una
+                              ruta (no tiene page.tsx); la carpeta existe para que el
+                              archivo se llame actions.ts y lo mire convencion.test.ts.
+app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
+                              (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
+                              qué falta y «Recalcular» si la base lo permite) y
+                              «Lo que aportó la marca» (CAM-4): aporte.tsx
+                              (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
+                              de ventas diarias), _lib/messages.ts (los textos).
+                              «Seguidores de la marca» (CAM-3): [id]/seguidores.tsx, su
+                              modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
+                              _lib/marca-service.ts, con el mismo recordBrandSnapshot que
+                              el job brand.snapshot.
 app/(app)/conexiones/         Cuentas por @ (CON-10) y OAuth (CON-3, detrás de
                               oauth_connect). _lib/permisos.ts, _lib/consent.ts y
                               _lib/messages.ts: quién puede conectar, la evidencia
@@ -383,14 +401,16 @@ responden por separado dentro de la misma transacción:
 - **A nombre de quién** queda el consentimiento: el `creator_profile`
   del workspace (`getConsentCreator`). Siempre. Es de quien son los
   datos, y es la respuesta el día que Meta o TikTok pregunten.
-- **Quién actuó**: la persona de la sesión, `current_user_id()`, con su
-  rol de `membership` (`getSessionMember`). Si no es el titular, la
-  fila de `data_consent` lo dice en `evidence.actedBy` (id, correo y
-  rol de ese día), el titular recibe el aviso `connection_added`
-  (migración 0034) con quién, qué cuenta y cuándo, y `audit_log` lleva
-  `connection.added` con `actor_user_id` = quien actuó. Quitar la
-  cuenta deja la misma huella en `evidence.revocation` y
-  `connection.removed`.
+- **Quién actuó**: la persona de la sesión, `current_user_id()`, con el
+  rol de su membresía (`getSessionMember`, `role.key` de 0034). Si no es
+  el titular, la fila de `data_consent` lo dice en `evidence.actedBy`
+  (id, correo y rol de ese día) y el titular recibe el aviso
+  `connection_added` (migración 0038) con quién, qué cuenta y cuándo.
+  La bitácora la escriben las consultas con `audit()` (ACC-2):
+  `actor_user_id` es quien actuó, y el `after` de cada fila de
+  conexiones y consentimientos lleva `onBehalfOf` y, si actuó un
+  tercero, `actedBy { userId, roleKey }`, sin correo. Quitar la cuenta
+  deja la misma huella en `evidence.revocation` y `connection.disconnected`.
 
 La evidencia es la **v2** (`_lib/consent.ts`): `v`, `method`
 (`public_handle` u `oauth`), `declaredOwner`, `ipHash` (sha256; la IP
@@ -398,13 +418,17 @@ ya no va en claro), `userAgent`, `textShown`, `policyVersion`, `at`,
 `onBehalfOf { creatorId }` y, solo si actúa un tercero, `actedBy`.
 Aplica a los dos caminos: «Agregar cuenta» por @ y el callback de OAuth.
 
-**El permiso.** `conexiones.cuenta.conectar` y `…desconectar` se
+**El permiso.** Cada Server Action abre con `requirePermission()`
+(ACC-1). Además, `conexiones.cuenta.conectar` y `…desconectar` se
 comprueban como primera sentencia de la transacción que escribe
-(`requireConexionesPermission`, `_lib/permisos.ts`), y además antes de
-gastar una llamada a la plataforma y antes de mandar a nadie al
-diálogo de OAuth. Hasta ACC-1/ACC-3 el puente es `membership.role` de
-0001: `owner` y `admin` pueden; `member`, `viewer` y `client` ven el
-estado y no tocan. **No existe el permiso de ver un token**: la lista
+(`requireConexionesPermission`, `_lib/permisos.ts`), leyendo
+`role_permission` por la membresía de la sesión. Esa segunda barrera es
+la que hoy decide, porque hasta ACC-5 `requirePermission` resuelve toda
+sesión como Dueño, y es la única que ven los route handlers de OAuth.
+También corre antes de gastar una llamada a la plataforma y antes de
+mandar a nadie al diálogo de OAuth. En un workspace de creador solo el
+Dueño trae esos permisos de fábrica; el Mánager los recibe con la
+casilla de ACC-4. **No existe el permiso de ver un token**: la lista
 muestra estado y @, y el almacén cifrado solo lo abren los jobs y
 «Actualizar».
 

@@ -30,14 +30,14 @@ import {
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
 import {
-  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, notifyConnectionAdded, recordConnectionAudit, recordConsent,
+  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, notifyConnectionAdded, recordConsent,
   upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
 import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
 import { formatterFor } from "@/lib/format";
 import { buildConsentEvidence, CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
 import { MESSAGES, nombreDe } from "./messages";
-import { PermisoDenegado, requireConexionesPermission } from "./permisos";
+import { requireConexionesPermission, SinPermisoError } from "./permisos";
 
 export const OAUTH_COOKIE = "oc_oauth";
 export const OAUTH_COOKIE_PATH = "/conexiones/oauth";
@@ -54,7 +54,7 @@ export const OAUTH_ERROR_MESSAGES = {
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
-  sin_permiso: MESSAGES.permiso.conectar,
+  sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -156,13 +156,13 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       let creatorId: string;
       try {
         creatorId = await deps.withWorkspace(async (tx) => {
-          // TODO(ACC-1): requirePermission('conexiones.cuenta.conectar'). A quien no puede conectar no se le manda a la plataforma.
+          // Un route handler no es una Server Action: esta es su comprobación de permiso (ver _lib/permisos.ts). A quien no puede conectar no se le manda a la plataforma.
           await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
           return (await getConsentCreator(tx)).id;
         });
       } catch (err) {
         if (err instanceof NoCreatorProfile) return redirect(req, "/conexiones?error=sin_creador");
-        if (err instanceof PermisoDenegado) return redirect(req, "/conexiones?error=sin_permiso");
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso");
         throw err;
       }
 
@@ -233,7 +233,7 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       let connectionId: string;
       try {
         connectionId = await deps.withWorkspace(async (tx) => {
-        // TODO(ACC-1): requirePermission('conexiones.cuenta.conectar'): primera sentencia, antes de guardar nada.
+        // Primera sentencia, antes de guardar nada: el permiso de quien vuelve de la plataforma (ver _lib/permisos.ts).
         const actor = await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
         // El titular es el perfil del workspace, el mismo que start guardó en la cookie; si no coincide, alguien cambió de espacio a mitad del flujo.
         const creator = await getConsentCreator(tx);
@@ -267,14 +267,6 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
           await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose, policyVersion: saved.policyVersion, evidence });
         }
         const delegated = actor !== null && actor.userId !== creator.userId;
-        // TODO(ACC-2): withAudit() cuando esté en @mc/db; la forma de `after` se conserva.
-        await recordConnectionAudit(tx, {
-          action: "connection.added", connectionId: id,
-          after: {
-            connectionId: id, platformId: prov.platformId, handle: profile.handle, accessMode: "direct_oauth", onBehalfOf: { creatorId: creator.id },
-            ...(delegated ? { actedBy: { userId: actor.userId, roleKey: actor.roleKey } } : {}),
-          },
-        });
         if (delegated && creator.userId) {
           const f = formatterFor(await getWorkspaceSettings(tx));
           const body = MESSAGES.aviso.body({ who: nombreDe(actor) ?? actor.email, handle: profile.handle ?? externalAccountId, network: PLATFORM_LABEL[provider], when: f.dateTime(at.toISOString()) });
@@ -288,7 +280,7 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
         await flushCallLog(deps, callLog).catch(() => undefined);
         const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador"
-          : err instanceof PermisoDenegado ? "sin_permiso" : "temporal";
+          : err instanceof SinPermisoError ? "sin_permiso" : "temporal";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);

@@ -44,6 +44,7 @@ const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
 const USER_LAURA = "00000002-0000-4000-8000-000000000002";
 /** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
 const USER_MANAGER = "00000002-0000-4000-8000-000000000004";
+const ROLE_MANAGER_CONECTA = "00000009-0000-4000-8000-00000000ac81";
 const USER_EDITOR = "00000009-0000-4000-8000-0000000000c2";
 
 let db: EmbeddedDb;
@@ -66,8 +67,19 @@ beforeAll(async () => {
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),
   ]);
   handlers = createOAuthHandlers({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => clock });
-  await db.queryAsSuperuser(`INSERT INTO app_user (id, email, name) VALUES ($1, 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING`, [USER_EDITOR]);
-  await db.queryAsSuperuser(`INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'viewer') ON CONFLICT DO NOTHING`, [SEED_WORKSPACE_ID, USER_EDITOR]);
+  await db.execAsSuperuser(`
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_EDITOR}', 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING;
+    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${USER_EDITOR}', system_role_id('creator', 'editor')) ON CONFLICT DO NOTHING;
+    -- «El mánager con la casilla de ACC-4» (ACC-4 aún no existe): un rol a medida del workspace con los permisos del
+    -- Mánager de fábrica más conectar y desconectar. Andrés (seed 0003) es 'manager' de fábrica y pasa a este rol.
+    INSERT INTO role (id, workspace_id, key, workspace_kind, label_es, is_system)
+    VALUES ('${ROLE_MANAGER_CONECTA}', '${SEED_WORKSPACE_ID}', 'manager_conecta', 'creator', 'Mánager (también conecta mis cuentas)', false) ON CONFLICT DO NOTHING;
+    INSERT INTO role_permission (role_id, permission_key)
+      SELECT '${ROLE_MANAGER_CONECTA}', permission_key FROM role_permission WHERE role_id = system_role_id('creator', 'manager')
+      UNION VALUES ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.conectar'), ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.desconectar')
+    ON CONFLICT DO NOTHING;
+    UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
+  `);
 }, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 afterAll(async () => {
@@ -310,15 +322,15 @@ describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma ev
     for (const c of active) {
       const ev = await db.queryAsSuperuser<{ creator_id: string; evidence: Record<string, unknown> }>("SELECT creator_id, evidence FROM data_consent WHERE id = $1", [c.id]);
       expect(ev.rows[0]!.creator_id).toBe(CREATOR_LAURA);
-      expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, method: "oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "admin" } });
+      expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, method: "oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "manager_conecta" } });
     }
     const notice = await db.queryAsSuperuser<{ user_id: string; body_es: string }>("SELECT user_id, body_es FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [id]);
     expect(notice.rows.length).toBe(1);
     expect(notice.rows[0]!.user_id).toBe(USER_LAURA);
     expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @laura\.cocinafacil de Instagram el .+ en tu nombre\./);
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.added' AND entity_id = $1 ORDER BY id DESC LIMIT 1", [id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected', 'connection.authorized') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [id]);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
-    expect(audit.rows[0]!.after).toMatchObject({ accessMode: "direct_oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "admin" } });
+    expect(audit.rows[0]!.after).toMatchObject({ accessMode: "direct_oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
     expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");
     const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === id)!;
     expect(row.secretRef).toMatch(/^enc:instagram:/);

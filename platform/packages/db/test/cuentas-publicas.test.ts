@@ -2,6 +2,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, upgradePublicAccountToOAuth } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
@@ -33,6 +34,16 @@ describe('alta por @', () => {
     assert.equal(mine.lastSyncedAt, null);
     await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => addPublicAccount(tx, input)), CreatorNotInWorkspace);
     assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0);
+
+    // Bitácora (ACC-2): conectar una cuenta por @ deja su fila; volver a agregarla, la de reconexión. Sin secret_ref.
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, a.id);
+    assert.deepEqual(bitacora.map((f) => f.action), ['connection.added', 'connection.reconnected']);
+    assert.deepEqual(bitacora[1]?.before, { accessMode: 'public_profile', status: 'active', deleted: false });
+    assert.equal(bitacora[0]?.actor_kind, 'system', 'sin identidad en la transacción no se inventa un usuario');
+    assert.equal(bitacora[0]?.before, null);
+    assert.deepEqual(bitacora[0]?.after, { platformId: 'instagram', externalAccountId: '17841400000009999', handle: 'nicolasduartea', accountType: 'business', accessMode: 'public_profile', onBehalfOf: { creatorId: CREATOR_LAURA } });
+    assert.equal(JSON.stringify(bitacora).includes('public:instagram'), false);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, a.id), []);
   });
 
   test('el consentimiento de una cuenta pública guarda la declaración de propiedad', async () => {
@@ -137,6 +148,22 @@ describe('de @ a autorizada', () => {
     assert.ok(old.rows[0]!.deleted_at);
     assert.match(old.rows[0]!.external_account_id, /^open_id_selva~sustituida~/);
     assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'selvathegolden')), null, 'ya no es pública');
+    // Bitácora (ACC-2): la autorización deja de dónde venía y a dónde llegó, sin secret_ref.
+    const autorizada = await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.authorized');
+    assert.equal(autorizada.length, 1);
+    assert.deepEqual(autorizada[0]?.before, { accessMode: 'public_profile' });
+    assert.deepEqual(autorizada[0]?.after, { accessMode: 'direct_oauth', externalAccountId: 'open_id_selva', handle: 'selvathegolden', accountType: 'creator', scopes: ['user.info.basic', 'video.list'], accessExpiresAt: '2026-09-24T00:00:00.000Z', onBehalfOf: { creatorId: CREATOR_LAURA } });
+    assert.equal(JSON.stringify(autorizada).includes('enc:tiktok'), false);
+    // La autorización anterior que se retiró tiene su propia fila: la bitácora explica por qué desapareció.
+    const retirada = await filasDeBitacora(t, WORKSPACE_LAURA, previousId, 'connection.disconnected');
+    assert.equal(retirada.length, 1);
+    assert.deepEqual(retirada[0]?.before, { status: 'active', accessMode: 'direct_oauth', deleted: false });
+    assert.deepEqual(retirada[0]?.after, { status: 'disabled', accessMode: 'direct_oauth', deleted: true, replacedBy: id, onBehalfOf: { creatorId: CREATOR_LAURA } });
+    // Volver a agregar por @ una cuenta ya autorizada no la baja a pública, y la bitácora lo dice así.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'tiktok', handle: 'selvathegolden', externalAccountId: 'open_id_selva', profileUrl: null, accountType: 'creator' }));
+    const [otraVez] = (await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.reconnected')).slice(-1);
+    assert.equal((otraVez?.after as { accessMode: string }).accessMode, 'direct_oauth');
+    assert.equal((otraVez?.before as { accessMode: string }).accessMode, 'direct_oauth');
     await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => upgradePublicAccountToOAuth(tx, id, { externalAccountId: 'x', handle: null, displayName: null, avatarUrl: null, profileUrl: null, accountType: 'unknown', secretRef: 'enc:tiktok:55555555-5555-4555-8555-555555555555', scopes: [], accessExpiresAt: new Date(), refreshExpiresAt: null })));
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Textos de Conexiones que nacen con ACC-8 (consentimiento delegado):
- * el aviso al titular, la línea «Conectada por …» de la lista y el
- * mensaje de «sin permiso». Un solo sitio por módulo para que
+ * el aviso al titular y la línea «Conectada por …» de la lista. El texto
+ * de «sin permiso» es el de SinPermisoError (@mc/core), que sale de la
+ * etiqueta del catálogo. Un solo sitio por módulo para que
  * traducirlos o corregirlos no sea buscar por el árbol.
  *
  * Las funciones reciben cifras y fechas YA formateadas por
@@ -11,11 +12,6 @@
  * nacieron: consent.ts, cuentas-service.ts y oauth-handlers.ts.
  */
 export const MESSAGES = {
-  permiso: {
-    /** Server Action o ruta OAuth con un rol que no tiene conexiones.cuenta.conectar / .desconectar. */
-    conectar: "No tienes permiso para conectar cuentas en este espacio. Pídeselo a su dueño.",
-    desconectar: "No tienes permiso para quitar cuentas en este espacio. Pídeselo a su dueño.",
-  },
   aviso: {
     /** notification.title_es del kind connection_added. */
     title: "Una cuenta se conectó en tu nombre",
