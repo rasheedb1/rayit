@@ -38,7 +38,9 @@ nada de Rasheed. Reutilizo, sin editarlos, `leerCsv` y `aNumero` de
 1. **Semántica por `kind` y por `source`** (core, `brandInputSemantics`):
    - `source = 'brand_manual'` (formulario) → **total acumulado** a la
      fecha `day`. Vale para `code_redemptions`, `orders`, `revenue` y
-     `signups`. El último por `received_at` manda (no se suma).
+     `signups`. Manda el de la fecha más reciente y, en la misma fecha,
+     el último por `received_at` (no se suma). Un dato atrasado cargado
+     después no hace retroceder el acumulado (cambio tras la revisión).
    - `source = 'brand_csv'` (CSV de ventas diarias) → **diario**, se
      suma. `csv_sales` es la columna «ventas» del CSV (dinero, en la
      moneda de la campaña). Las columnas opcionales «pedidos» y «canjes»
@@ -162,7 +164,8 @@ const { totals, daily, currency } = await listBrandInputs(tx, campaignId);
 
 - `totals`: una fila por par (kind, fuente) con datos.
   - `source = 'brand_manual'`, `semantics = 'total'`: `value` es el
-    **último** total reportado (por `received_at`) y `asOf` su fecha.
+    total de la **fecha más reciente** (en la misma fecha, el último por
+    `received_at`) y `asOf` esa fecha.
   - `source = 'brand_csv'`, `semantics = 'daily'`: `value` es la **suma**
     de los días, `from`/`asOf` el primer y el último día.
   - `value` es un decimal en texto (`'318.00'`). Los conteos
@@ -182,3 +185,20 @@ Regla para el resultado (CAM-5, decisión 4 de su plan):
 
 Si hay los dos, manda el CSV y CAM-5 lo anota. Una cifra en otra moneda
 que la de la campaña no se convierte: CAM-5 decide si la usa.
+
+## 4. Revisión (`/code-review` en nivel alto)
+
+Diez hallazgos. Seis corregidos con su prueba, cuatro justificados.
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | La idempotencia del formulario comparaba con cualquier fila anterior: 318 → 320 → 318 perdía la vuelta a 318. | **Corregido.** Se compara con el último reporte de ese día. Prueba «una corrección de vuelta…». Al escribirla apareció un segundo defecto: el `ORDER BY received_at` ordenaba por el alias de texto de `to_char` (resolución de segundo). Ahora ordena por la columna, y `received_at` es estrictamente creciente por campaña, kind y día. |
+| 2 | El total manual tomaba el último recibido aunque fuera de una fecha anterior: el acumulado podía retroceder. | **Corregido.** Manda la fecha más reciente. Misma prueba. |
+| 3 | Reimportar un CSV corregido no borra los días o columnas que el archivo nuevo ya no trae. | **Justificado.** Lo normal es que la marca mande un archivo por semana: borrar lo que no viene en el último archivo destruiría las semanas anteriores. Retirar un día es otra acción («Quitar día»), fuera de esta historia; queda anotado para CAM-6 o un pulido. |
+| 4 | `importBrandCsv` no rechazaba días repetidos si otro llamador no pasaba por la revisión. | **Corregido.** `InvalidBrandInputError`. Prueba en «la ventana…». |
+| 5 | Los campos no controlados se vaciaban cuando la acción volvía con errores (React 19). | **Corregido.** Cifra y nota controladas. Prueba de componente «lo escrito sobrevive…». |
+| 6 | La acción calculaba la ventana con una lectura sin bloqueo, y una campaña cerrada con todas las filas rechazadas respondía «ok». | **Corregido.** `openBrandCsvImport` bloquea la campaña, exige que admita cambios y da la ventana antes de leer el archivo. Pruebas en pglite (cerrada, sin fechas). |
+| 7 | Una campaña cerrada no admite las ventas tardías que la ventana de +60 días permitiría. | **Justificado.** La historia lo pide («una campaña cerrada lo rechaza con mensaje»). Una campaña en `reported` sí admite aportes: la marca los manda antes de cerrar. Si Nicolás quiere aportes tras cerrar, es decisión suya y es cambiar `lockEditableCampaign` por una comprobación propia. |
+| 8 | Las fechas se leen siempre día/mes/año; un archivo mes/día se lee mal. | **Justificado.** Es el formato que fija la historia (ISO o dd/mm/aaaa). Un 09/14 se rechaza como ilegible; un 09/10 ambiguo se leería como 9 de octubre. Se documenta en la ayuda del formulario. Si llega una marca de Estados Unidos, se reutiliza la detección por archivo de Resumen. |
+| 9 | «Las métricas son append-only» y «el dinero nunca en float». | **Justificado.** `campaign_brand_input` no es una tabla de métricas (0025 le deja UPDATE a `mc_app`) y la corrección de un día es la decisión pendiente §0.2.3; la bitácora guarda los conteos. El importe pasa por un double solo con un techo de 1e12: con los centavos son 15 dígitos significativos, que van y vuelven de double sin cambio (comentario en core). |
+| 10 | El mensaje «tiene que ser un CSV» no se usaba. | **Corregido.** Un archivo con bytes nulos (un .xlsx renombrado) responde con ese mensaje. |
