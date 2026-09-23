@@ -234,22 +234,63 @@ piezas siguientes tienen que conocer:
   lunes local del workspace): cada función bloquea la fila del periodo
   que cuenta. Los contadores y los disyuntores los escribe solo el
   worker.
+- Los topes se cuentan **por cuenta** además de por workspace:
+  `outbound_counter.channel_account_id` (NULL = el workspace entero) y
+  dos firmas por función, `increment_if_under_cap(workspace, action,
+  cap)` e `increment_if_under_cap(workspace, account, action, cap)`
+  (igual `increment_weekly`). El despachador llama a la de la cuenta con
+  `outreach_channel_account.daily_cap`/`weekly_cap` y a la del workspace
+  con los topes de `outbound_policy`, en la misma transacción. Tres
+  LinkedIn de una agencia no comparten plaza. `action_type` es la
+  acción (`email`, `linkedin_invite`…), nunca una cuenta.
 - `outbound_policy.enabled` nace apagado y no se enciende sin
-  `postal_address` (lo exige un `CHECK`).
+  `postal_address` (lo exige un `CHECK`). `max_pending_touches` mide
+  atraso (lo vencido sin salir más lo que está en `processing`), no lo
+  programado para dentro de unos días.
+- Toda llamada al modelo del outreach deja una fila en
+  `outbound_llm_call` (propósito `generate`, `judge`, `classify` o
+  `recommend`, modelo, tokens y costo). `outbound_health` suma ahí el
+  gasto del día contra `llm_daily_cap_usd`; `outbound_review.cost` es
+  el detalle del intento y no se suma aparte.
+- `outbound_sequence.status` manda; `active` se deriva de él con un
+  disparador hasta que VEN-13 retire la columna.
+- En `outbound_touch`, `held_reason` es por qué está retenido y
+  `blocked_reason` por qué terminó sin salir (`opted_out`,
+  `outreach_disabled`…), más una anomalía: `opted_out_in_flight`, un
+  envío que salió con la baja recién puesta. `status_changed_at` es la
+  hora del último cambio de estado y solo se mueve con él.
+- La regla de la baja (0007) vigila el alta y las transiciones, no las
+  anotaciones: tras la baja se sigue pudiendo escribir `replied_at` u
+  `opened_at` en un toque enviado. Ni la baja ni el apagado cancelan lo
+  que está en `processing`: es del despachador, que lo cancela él antes
+  de llamar al proveedor o lo registra como enviado después
+  (`processing → sent` siempre se puede). Al rescatar un zombi con el
+  contacto dado de baja, va a `canceled`, no a `scheduled`.
 - El enlace de baja lleva un token al azar; la base guarda solo su
   sha256 en `outbound_touch.optout_token_hash`. `public_optout` es de
   `mc_public_share`, como los enlaces de Cotizar, y da de baja a la
   persona en toda la plataforma: todas sus fichas con el mismo correo,
-  lo pendiente en cualquier workspace y el correo en
-  `contact_suppression` con `unsubscribe_link`.
+  lo pendiente en cualquier workspace (los enrolamientos, con
+  `finished_at`) y el correo en `contact_suppression` con
+  `unsubscribe_link`.
+- **La baja no se puede fabricar.** `public_optout` solo acepta un toque
+  en `sent` con `provider_message_id`, y `optout_token_hash`,
+  `provider_message_id` y `message_id_rfc` solo los escribe el
+  despachador (`mc_worker`): el disparador
+  `outbound_touch_worker_columns` rechaza a `mc_app` con 42501, al crear
+  y al actualizar. Es un disparador y no un GRANT por columnas porque
+  Drizzle nombra todas las columnas en cada INSERT; la guardia
+  (`DISPARADORES_DE_CANDADO`) exige en cada arranque que exista y esté
+  activo. Sin esto, un workspace inventaba un token, guardaba su sha256
+  en un toque suyo «enviado» a una ficha con el correo de otra persona y
+  la daba de baja en toda la plataforma sin escribirle nunca.
 - **Abierto para VEN-15:** el correo sale del Gmail del creador, así que
   el enlace de baja también queda en su carpeta de enviados, y quien lo
-  pulse desde ahí da de baja a esa persona en toda la plataforma. Es la
-  forma de sabotaje que 0029 cerró para el `opted_out` del CRM, ahora
-  con un paso más (hace falta enviarle un correo de verdad). La página
-  de baja tiene que pedir una confirmación que un clic automático no
-  dé, y el despachador no debe volver a mostrar el enlace en la
-  aplicación.
+  pulse desde ahí da de baja a esa persona en toda la plataforma. Solo
+  alcanza a alguien a quien la plataforma le escribió de verdad, pero
+  es la persona equivocada pulsando. La página de baja tiene que pedir
+  una confirmación que un clic automático no dé, y el despachador no
+  debe volver a mostrar el enlace en la aplicación.
 
 ### 5.3 La cadencia recomendada para un creador
 

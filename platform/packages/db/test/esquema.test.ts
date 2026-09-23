@@ -13,7 +13,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertSchemaUpToDate, COLUMNAS_QUE_USA_EL_CODIGO, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
+  assertSchemaUpToDate, COLUMNAS_QUE_USA_EL_CODIGO, DISPARADORES_DE_CANDADO, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
   explicarEsquema, migracionesDelRepositorio, POLITICAS_DEL_ENLACE_PUBLICO, PRIVILEGIOS_DE_LA_APP,
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
@@ -243,6 +243,30 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
       await t.admin(`GRANT EXECUTE ON FUNCTION ${firma} TO mc_app`);
     }
     assert.deepEqual((await estadoDelEsquema(t.db)).funcionesQueFaltan, []);
+  });
+
+  test('un candado desactivado o borrado (0037 §4.2) no da verde: ningún GRANT lo sustituye', async () => {
+    // DISABLE TRIGGER no deja rastro en schema_migrations: la comparación
+    // de archivos lo vería todo en orden y el sabotaje de la baja volvería.
+    assert.ok('outbound_touch.outbound_touch_worker_columns' in DISPARADORES_DE_CANDADO);
+    assert.deepEqual((await estadoDelEsquema(t.db)).candadosQueFaltan, []);
+    await t.admin('ALTER TABLE outbound_touch DISABLE TRIGGER outbound_touch_worker_columns');
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.equal(estado.candadosQueFaltan.length, 1);
+      assert.match(estado.candadosQueFaltan[0] ?? '', /outbound_touch_worker_columns \(desactivado; .*despachador/);
+      assert.match(String(explicarEsquema(estado)), /disparadores que cierran un hueco de seguridad/);
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /outbound_touch_worker_columns/);
+    } finally {
+      await t.admin('ALTER TABLE outbound_touch ENABLE TRIGGER outbound_touch_worker_columns');
+    }
+    await t.admin('ALTER TRIGGER outbound_touch_optout ON outbound_touch RENAME TO zz_outbound_touch_optout');
+    try {
+      assert.match((await estadoDelEsquema(t.db)).candadosQueFaltan.join(' '), /outbound_touch_optout \(no existe/);
+    } finally {
+      await t.admin('ALTER TRIGGER zz_outbound_touch_optout ON outbound_touch RENAME TO outbound_touch_optout');
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).candadosQueFaltan, []);
   });
 
   test('sin deal.next_action_kind (0032) la guardia no da verde, aunque no haya migraciones que comparar', async () => {
