@@ -936,7 +936,7 @@ export interface AudienceDimension {
   buckets: AudienceBucket[];
 }
 
-/** Por qué NO hay un dato, con el texto que la persona lee (metric_requirement, 0011 y 0038). */
+/** Por qué NO hay un dato, con el texto que la persona lee (metric_requirement, 0011 y 0039). */
 export interface AudienceGap {
   /** 'demografia_de_cuenta', 'retencion_y_audiencia'… */
   metricGroup: string;

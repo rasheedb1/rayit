@@ -25,7 +25,7 @@ necesita para no pintar una celda vacía.
 
 | Archivo | Qué |
 |---|---|
-| `platform/db/migrations/0038_demografia_de_cuenta.sql` | `metric_gap`, el UNIQUE que le faltaba a `audience_breakdown`, y las filas nuevas de `metric_requirement` |
+| `platform/db/migrations/0039_demografia_de_cuenta.sql` | `metric_gap`, el UNIQUE que le faltaba a `audience_breakdown`, y las filas nuevas de `metric_requirement` |
 | `platform/apps/worker/src/jobs/conexiones/prerrequisitos-demografia.ts` | Función **pura**: qué puede pedirse a cada cuenta y, si no, qué `metric_requirement` lo explica |
 | `platform/apps/worker/src/jobs/conexiones/collect-demographics.ts` | El job `collect.demographics` (cron `20 5`, ya en `job_definition` de 0009) |
 | `platform/packages/db/src/queries/conexiones.ts` | El contrato de lectura para RES-4: `getAccountAudience` / `listAccountAudience` |
@@ -95,7 +95,7 @@ frescura. Antes de evaluar nada, el job pregunta si ya hay filas de
 `day` de hoy. Si las hay, la cuenta se salta entera: cero llamadas.
 
 Para que eso sea idempotente de verdad hace falta un UNIQUE que la
-tabla **no tenía** (0003 solo dejó dos índices no únicos). 0038 añade
+tabla **no tenía** (0003 solo dejó dos índices no únicos). 0039 añade
 
 ```sql
 CREATE UNIQUE INDEX audience_breakdown_account_uniq
@@ -147,7 +147,7 @@ columna de texto libre es `status_detail`, y **no sirve**:
 - No tiene ni el día ni la referencia a `metric_requirement`, así que la
   pantalla no puede enlazar el `fix_url` ni saber si la razón es de hoy.
 
-0038 crea `metric_gap`: **una fila viva por (conexión, grupo de
+0039 crea `metric_gap`: **una fila viva por (conexión, grupo de
 métricas)**, con el `requirement_id`, el día y el instante en que se
 detectó. Se reemplaza en cada corrida (`ON CONFLICT … DO UPDATE`) y se
 borra en cuanto el dato llega. Es la tabla que hace que «la última
@@ -172,7 +172,7 @@ pierde INSERT/UPDATE/DELETE: la escribe el worker, que es quien mide
 Las siete filas de 0011 no cubren el caso del MVP: una cuenta agregada
 por `@` (`access_mode = 'public_profile'`, CON-10) no puede dar
 demografía **porque nadie autorizó**, y eso no es ni «cuenta business»
-ni «cien seguidores». 0038 amplía el CHECK con `owner_authorization` y
+ni «cien seguidores». 0039 amplía el CHECK con `owner_authorization` y
 añade cinco filas:
 
 | id | red | `requirement` | Qué dice |
@@ -277,7 +277,7 @@ workspace y toma **una** de estas cuatro salidas:
 (id de conexión → requisito), `unsupported`, `errored`, `transient`. No
 lleva ni un token: `metadata` pasa por el redactor del logger.
 
-## 2. La migración `0038_demografia_de_cuenta.sql` (para revisar y aplicar)
+## 2. La migración `0039_demografia_de_cuenta.sql` (para revisar y aplicar)
 
 Tres cosas, todas re-ejecutables. Va detrás de 0037 (CAM-6) y no depende de ninguna anterior a 0011.
 
@@ -298,7 +298,7 @@ Comprobado con `make db.check` (Postgres embebido: 35 migraciones,
 `workspace_id` y se negaría a pasar si `metric_gap` no la tuviera.
 
 **Choque de números, resuelto.** Nació como `0034`, pasó a `0036` y
-acabó en `0038`: `0034` se la quedó ACC-3, `0035` CAM-3, `0036` la
+acabó en `0039`: `0034` se la quedó ACC-3, `0035` CAM-3, `0036` la
 reclama FIN-7 (sin fusionar, y main ya la declaró como hueco) y `0037`
 es de CAM-6. No depende de nada posterior a `0011`, así que moverla es
 cambiarle el nombre al archivo.
@@ -310,7 +310,7 @@ tenerla tipada, es un `pgTable` de siete columnas.
 
 ## 3. Lo que necesito de ti, Rasheed
 
-1. **Aplicar 0038** en la cola única, detrás de 0037 (CAM-6). La 0036 es de FIN-7; por eso esta se apartó.
+1. **Aplicar 0039** en la cola única, detrás de 0037 (CAM-6). La 0036 es de FIN-7; por eso esta se apartó.
 2. **Nada más en el código.** `queries/conexiones.ts`,
    `apps/worker/src/jobs/conexiones/` y `packages/connectors/` son míos,
    y la migración es del tipo que ya firmamos con 0014, 0015, 0016 y

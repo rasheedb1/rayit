@@ -4,7 +4,7 @@
  *
  * Escribe `audience_breakdown` con scope 'account' y, cuando la
  * plataforma no entrega el dato, escribe POR QUÉ en `metric_gap`
- * (migración 0038) con el `message_es` de `metric_requirement`. Esa es
+ * (migración 0039) con el `message_es` de `metric_requirement`. Esa es
  * la historia entera: una celda vacía manda a la persona a WhatsApp; una
  * frase que dice qué le falta, no.
  *
@@ -23,7 +23,7 @@
  *
  * Idempotencia: si ya hay filas de hoy para esa cuenta, se salta entera
  * y no se gasta ni una llamada. La tabla es append-only —nunca se borra
- * ni se corrige una fila— y el UNIQUE parcial de 0038 respalda el
+ * ni se corrige una fila— y el UNIQUE parcial de 0039 respalda el
  * `ON CONFLICT DO NOTHING`.
  *
  * ctx.db corre como mc_worker y se salta RLS: cada SELECT, INSERT,
@@ -126,7 +126,7 @@ async function readDemographics(ctx: JobContext, acc: AccountRow, plan: Demograp
   return { rows: data.demographics };
 }
 
-/** Guarda las filas del día. Append-only: el UNIQUE parcial de 0038 respalda el ON CONFLICT DO NOTHING. */
+/** Guarda las filas del día. Append-only: el UNIQUE parcial de 0039 respalda el ON CONFLICT DO NOTHING. */
 async function saveRows(tx: Queryable, acc: AccountRow, day: string, rows: NormalizedDemographics): Promise<void> {
   await tx.query(
     `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)

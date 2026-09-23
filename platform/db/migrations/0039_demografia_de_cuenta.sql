@@ -1,11 +1,11 @@
 -- =====================================================================
--- 0038 · Demografía de cuenta: idempotencia, y por qué falta (CON-7)
+-- 0039 · Demografía de cuenta: idempotencia, y por qué falta (CON-7)
 -- ---------------------------------------------------------------------
--- Número: 0037 es la última en main (CAM-6). La 0036 la reclama FIN-7,
--- que aún no se fusiona, y main la dejó declarada como hueco; esta se
--- aparta a 0038 para no disputársela. No depende de nada posterior a
--- 0011 —solo toca audience_breakdown (0003), metric_requirement (0011)
--- y una tabla nueva—, así que renumerarla es cambiarle el nombre.
+-- Número: 0038 la fusionó ACC-8 mientras esta historia se verificaba, y
+-- 0036 la reclama FIN-7, sin fusionar. Esta se aparta a 0039. No
+-- depende de nada posterior a 0011 —solo toca audience_breakdown
+-- (0003), metric_requirement (0011) y una tabla nueva—, así que
+-- moverla es cambiarle el nombre al archivo.
 --
 -- collect.demographics (cron 20 5, ya en job_definition de 0009) escribe
 -- audience_breakdown con scope 'account'. Le faltaban dos cosas al

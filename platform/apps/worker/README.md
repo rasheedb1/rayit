@@ -165,7 +165,7 @@ no la deja vacía: si a la cuenta le falta un prerrequisito —cien
 seguidores, cuenta profesional, el permiso de insights, o sencillamente
 que el dueño autorice la lectura— **no llama a la API** y escribe el
 requisito en `metric_gap`, con el texto en español de
-`metric_requirement` (migraciones `0011` y `0038`).
+`metric_requirement` (migraciones `0011` y `0039`).
 
 ```sql
 -- ¿Por qué esta cuenta no tiene demografía?
@@ -376,7 +376,7 @@ pnpm --filter @mc/worker typecheck lint
 
 Las de integración aplican TODAS las migraciones reales (la `0014` da
 los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
-`0038`, `metric_gap`) y corren como `mc_worker`: si un privilegio
+`0039`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan.
 
 **Los tiempos**: cada archivo abre SU propia base embebida en su
