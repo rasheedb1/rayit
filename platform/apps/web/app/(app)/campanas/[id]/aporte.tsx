@@ -1,12 +1,11 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { BRAND_INPUT_KIND_LABEL_ES, isMoneyBrandInputKind, MANUAL_BRAND_INPUT_KINDS, type DateWindow, type ManualBrandInputKind } from "@mc/core";
+import { BRAND_INPUT_KIND_LABEL_ES, isMoneyBrandInputKind, MANUAL_BRAND_INPUT_KINDS, type ManualBrandInputKind } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
-import { formatDate } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
 import { importarCsvVentas, registrarAporte, type AporteState, type ImportacionState } from "./actions";
 
@@ -170,7 +169,12 @@ function Resumen({ resumen, onAnother }: { resumen: NonNullable<ImportacionState
   );
 }
 
-export function ImportarCsvForm({ campaignId, window }: { campaignId: string; window: DateWindow | null }) {
+/**
+ * `window` llega ya formateada por la página con el formateador del
+ * workspace (formatterFor): este componente no decide locale ni zona.
+ * null si la campaña no tiene fechas: sin ventana no se importa.
+ */
+export function ImportarCsvForm({ campaignId, window }: { campaignId: string; window: { from: string; to: string } | null }) {
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState<ImportacionState, FormData>(importarCsvVentas, {});
   const [shown, setShown] = useState<ImportacionState["resumen"] | null>(null);
@@ -197,16 +201,18 @@ export function ImportarCsvForm({ campaignId, window }: { campaignId: string; wi
   }
   if (!open) {
     return (
-      <Button size="sm" onClick={() => setOpen(true)}>
-        {t.csv.open}
-      </Button>
+      <div>
+        <Button size="sm" onClick={() => setOpen(true)}>
+          {t.csv.open}
+        </Button>
+      </div>
     );
   }
   return (
     <form ref={formRef} action={formAction} noValidate aria-busy={pending || undefined} className="rounded-md border border-line bg-surface-2 p-3" role="group" aria-label={t.csv.title}>
       <input type="hidden" name="campaignId" value={campaignId} />
       <p className="mb-1 text-xs text-fg-3">{t.csv.help}</p>
-      <p className="mb-3 text-xs text-fg-3">{window ? t.csv.window(formatDate(window.from), formatDate(window.to)) : t.csv.noDates}</p>
+      <p className="mb-3 text-xs text-fg-3">{window ? t.csv.window(window.from, window.to) : t.csv.noDates}</p>
       <Alert message={state.message} />
       <Field label={t.csv.file} required error={errors.archivo} htmlFor="aporte-archivo" className={state.message ? "mt-3" : ""}>
         <Input name="archivo" type="file" accept=".csv,text/csv" required disabled={!window} className="h-auto py-1.5 file:mr-3 file:rounded-sm file:border-0 file:bg-surface file:px-2 file:py-1 file:text-xs file:text-ink" />

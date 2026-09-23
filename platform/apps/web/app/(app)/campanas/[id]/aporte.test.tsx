@@ -21,7 +21,8 @@ vi.mock("./actions", () => ({
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 
 const CAMPANA = "00000003-0000-4000-8000-000000ca0002";
-const FRESKO = { from: "2026-08-26", to: "2026-11-08" };
+/** La ventana de Fresko, ya formateada como la pasa la página. */
+const FRESKO = { from: "26 ago", to: "8 nov" };
 
 beforeEach(() => {
   registrarAporte.mockReset();

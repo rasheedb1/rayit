@@ -187,16 +187,24 @@ function brandValue(f: Formatter, x: BrandInputTotal): string {
 }
 
 function brandInputColumns(f: Formatter): Column<BrandInputTotal>[] {
+  // Tres columnas: a 400 px cinco no caben. La fuente y si es un total o una
+  // suma van debajo del concepto; cuántas filas hay detrás, junto a la fuente.
   return [
-    { key: "kind", header: AP.table.kind, render: (x) => <CellMain sub={x.semantics === "total" ? AP.table.lastTotal : AP.table.sum}>{BRAND_INPUT_KIND_LABEL_ES[x.kind]}</CellMain> },
+    {
+      key: "kind",
+      header: AP.table.kind,
+      render: (x) => (
+        <CellMain sub={`${x.semantics === "total" ? AP.table.lastTotal : AP.table.sum} · ${BRAND_INPUT_SOURCE_LABEL_ES[x.source]}${x.count > 1 ? ` · ${AP.table.rows(f.int(x.count))}` : ""}`}>
+          {BRAND_INPUT_KIND_LABEL_ES[x.kind]}
+        </CellMain>
+      ),
+    },
     { key: "value", header: AP.table.value, align: "num", render: (x) => brandValue(f, x) },
     {
       key: "asOf",
       header: AP.table.asOf,
-      render: (x) => (x.semantics === "daily" && x.from && x.from !== x.asOf ? AP.table.dailyRange(f.dateRange(x.from, x.asOf)) : f.date(x.asOf, "long")),
+      render: (x) => (x.semantics === "daily" && x.from && x.from !== x.asOf ? f.dayMonthRange(x.from, x.asOf) : f.date(x.asOf)),
     },
-    { key: "source", header: AP.table.source, render: (x) => BRAND_INPUT_SOURCE_LABEL_ES[x.source] },
-    { key: "count", header: AP.table.count, align: "num", render: (x) => f.int(x.count) },
   ];
 }
 
@@ -226,6 +234,8 @@ function BrandInputsSection({ campaign, editable, inputs, f, today }: { campaign
           series={[{ name: AP.chart.series, data: days.map((d) => parseDecimal(d.sales ?? "0")), color: "accent" }]}
           ariaLabel={AP.chart.ariaLabel}
           format="money"
+          // «COP 1,5 M» no cabe en el margen del eje a 400 px: el eje va compacto; tooltip y tabla, en dinero.
+          axisFormat="compact"
           currency={inputs.currency}
           bar={{ showTotal: false }}
           asOf={lastCsv ? { date: lastCsv.asOf, source: AP.chart.source } : undefined}
@@ -234,7 +244,7 @@ function BrandInputsSection({ campaign, editable, inputs, f, today }: { campaign
       {editable && (
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <RegistrarAporteForm campaignId={campaign.id} currency={inputs.currency} today={today} />
-          <ImportarCsvForm campaignId={campaign.id} window={window} />
+          <ImportarCsvForm campaignId={campaign.id} window={window ? { from: f.date(window.from), to: f.date(window.to) } : null} />
         </div>
       )}
     </Section>

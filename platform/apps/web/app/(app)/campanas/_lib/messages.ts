@@ -15,13 +15,11 @@ export const MESSAGES = {
       kind: "Concepto",
       value: "Cifra",
       asOf: "A qué fecha",
-      source: "Fuente",
-      count: "Filas",
       /** «total» es el último reportado; «daily» es la suma de los días. */
       lastTotal: "último total",
       sum: "suma",
-      /** Con desde y hasta: «del 2 al 9 sep». */
-      dailyRange: (range: string) => `días ${range}`,
+      /** Cuántas filas hay detrás de la cifra, cuando son más de una. */
+      rows: (n: string) => `${n} filas`,
     },
     empty: {
       title: "La marca todavía no reportó nada",
