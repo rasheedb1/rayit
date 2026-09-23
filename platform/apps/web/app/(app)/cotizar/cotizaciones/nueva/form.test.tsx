@@ -24,7 +24,7 @@ const TARIFAS = [
 
 const INICIALES: ValoresCotizacion = {
   dealId: "", lineas: [], discount: "0", taxPct: "19", validUntil: "2026-10-06",
-  metricas: ["views"], cortes: [24, 168, 720], usageRightsDays: "30", exclusivityDays: "", exclusivityScope: "",
+  metricas: ["views"], cortes: [24, 168, 720], usageRightsDays: "", exclusivityDays: "", exclusivityScope: "",
   paymentTermsDays: "30", campaignStartsOn: "2026-10-06", campaignEndsOn: "2026-11-05",
   mediaKitId: "00000009-0000-4000-8000-00000000c002",
 };
@@ -82,8 +82,10 @@ describe("CotizacionForm", () => {
     render(formulario());
     fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "i2" } });
     expect(screen.getByLabelText("Descripción")).toHaveValue("Reel de Instagram");
-    expect(screen.getByLabelText("Precio por unidad")).toHaveValue("3.355.000");
-    expect(screen.getByText("Tarifario: COP 3.355.000 – COP 5.185.000")).toBeInTheDocument();
+    // Guardado al peso (3.355.000 – 5.185.000), se propone a tres cifras:
+    // lo mismo que enseña el tarifario (pulido r6).
+    expect(screen.getByLabelText("Precio por unidad")).toHaveValue("3.360.000");
+    expect(screen.getByText("Tarifario: COP 3.360.000 – COP 5.190.000")).toBeInTheDocument();
     expect(screen.queryByText("Fuera del rango")).not.toBeInTheDocument();
 
     const precio = screen.getByLabelText("Precio por unidad");
@@ -95,6 +97,49 @@ describe("CotizacionForm", () => {
     const opciones = within(screen.getByLabelText("Entregable")).getAllByRole("option").map((o) => o.textContent);
     expect(opciones).toContain("Paquete: 1 × TikTok dedicado + 1 × Reel de Instagram");
     expect(opciones.at(-1)).toBe("Otro entregable");
+  });
+
+  it("una línea del tarifario no propone un precio al peso: la marca lo leería como calculado", () => {
+    const alPeso = [item({ priceLow: "3419735.00", priceHigh: "5285045.00" })];
+    render(formulario(undefined, KITS, INICIALES, alPeso));
+    expect(screen.getByLabelText("Precio por unidad")).toHaveValue("3.420.000");
+    expect(screen.getByText("Tarifario: COP 3.420.000 – COP 5.290.000")).toBeInTheDocument();
+    expect(screen.queryByText("Fuera del rango")).not.toBeInTheDocument();
+    // 3.420.000 + 19 % = 4.069.800: el total tampoco sale al peso.
+    const resumen = screen.getByRole("complementary", { name: "Total de la cotización" });
+    expect(within(resumen).getAllByText("COP 4.069.800").length).toBeGreaterThan(0);
+  });
+
+  it("un precio que el creador fijó a mano en el tarifario se propone tal cual", () => {
+    render(formulario(undefined, KITS, INICIALES, [item({ priceLow: "4123456.00", priceHigh: "6000000.00", overridden: true })]));
+    expect(screen.getByLabelText("Precio por unidad")).toHaveValue("4.123.456");
+  });
+
+  it("los derechos de uso arrancan en «no aplica» y solo los sube un entregable que los cobra", async () => {
+    const conDerechos = item({
+      id: "i5", deliverable: "reel", platformId: "instagram", labelEs: "Reel de Instagram", position: 1,
+      modifierIds: ["derechos_uso_30d"],
+    });
+    const action = vi.fn(async () => ({}));
+    render(formulario(action, KITS, INICIALES, [TARIFAS[0]!, conDerechos]));
+    // Un TikTok a precio base no cede derechos que el tarifario cobra aparte.
+    expect(screen.getByLabelText("Derechos de uso (días)")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Entregable"), { target: { value: "i5" } });
+    expect(screen.getByLabelText("Derechos de uso (días)")).toHaveValue("30");
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(String((action.mock.calls[0] as unknown as [unknown, FormData])[1].get("payload")));
+    expect(payload.usageRightsDays).toBe(30);
+  });
+
+  it("sin entregable con derechos, la cotización viaja con derechos «no aplica» (null)", async () => {
+    const action = vi.fn(async () => ({}));
+    render(formulario(action));
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(String((action.mock.calls[0] as unknown as [unknown, FormData])[1].get("payload")));
+    expect(payload.usageRightsDays).toBeNull();
   });
 
   it("el impuesto por defecto es el que llega del workspace y se nombra con su tasa", () => {

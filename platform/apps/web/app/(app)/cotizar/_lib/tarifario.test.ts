@@ -82,6 +82,15 @@ describe("construirFilas", () => {
     expect(reel.entrada).toBeNull();
     expect(reel.motivos).toEqual([{ tipo: "views_poco_fiables", muestra: 6, mediana: 61_000 }]);
     expect(reel.baseline?.medianViews).toBe(61_000);
+    // El país va por su nombre, en el idioma del workspace (pulido r6).
+    const youtube = construirFilas(INPUTS, BASIS_VACIO).find((x) => x.def.id === "youtube")!;
+    expect(textoMotivo({ tipo: "sin_cpm" }, youtube, "CO", "YouTube", f)).toBe(
+      "No hay CPM de referencia para YouTube en Colombia. Escribe el tuyo.",
+    );
+    const enIngles = formatterFor({ locale: "en-US", currency: "COP", timezone: "America/Bogota" });
+    expect(textoMotivo({ tipo: "sin_cpm" }, youtube, "MX", "YouTube", enIngles)).toBe(
+      "No hay CPM de referencia para YouTube en Mexico. Escribe el tuyo.",
+    );
     expect(textoMotivo(reel.motivos[0]!, reel, "CO", "Instagram", f)).toBe(
       "Tu mediana sale de solo 6 videos (61.000). Confírmala o escribe la tuya.",
     );
@@ -157,9 +166,9 @@ describe("construirPaquetes", () => {
     expect(p!.componentes.map((c) => c.deliverable)).toEqual(["tiktok", "historias"]);
     expect(p!.nombre).toBe("Paquete: 1 × TikTok dedicado + 1 × Historias (3)");
     // TikTok 3.780.000 – 5.880.000 + historias (3 × 10.000 views × 55.000–85.000) 1.650.000 – 2.550.000.
-    // 5.430.000 – 8.430.000, −12 %: 4.778.400 – 7.418.400.
-    expect(p!.item?.priceLow).toBe("4778400.00");
-    expect(p!.item?.priceHigh).toBe("7418400.00");
+    // 5.430.000 – 8.430.000, −12 %: 4.778.400 – 7.418.400, a tres cifras 4.780.000 – 7.420.000.
+    expect(p!.item?.priceLow).toBe("4780000.00");
+    expect(p!.item?.priceHigh).toBe("7420000.00");
     const pasos = explicarPasos(p!.item!.pasos, "COP", f);
     expect(pasos[0]).toBe("1 × TikTok dedicado: COP 3.780.000 – COP 5.880.000");
     expect(pasos).toContain("Piezas sueltas: COP 5.430.000 – COP 8.430.000");
@@ -189,10 +198,14 @@ describe("explicarPasos", () => {
     const pasos = explicarPasos(calcularItem(fila.entrada!).pasos, "COP", f);
 
     expect(pasos[0]).toBe("Tus visualizaciones medianas: 84.000 (últimos 20 videos, medidos a las 168 h)");
-    expect(pasos[1]).toBe("CPM de referencia de cocina en CO: COP 45.000 – COP 70.000 (estimación de mercado)");
+    expect(pasos[1]).toBe("CPM de referencia de cocina en Colombia: COP 45.000 – COP 70.000 (estimación de mercado)");
     expect(pasos[2]).toBe("Visualizaciones ÷ 1.000 × CPM = COP 3.780.000 – COP 5.880.000");
     expect(pasos[3]).toBe("Derechos de uso · 30 días (35 %): + COP 1.323.000 – COP 2.058.000");
-    expect(pasos.at(-1)).toBe("Rango sugerido: COP 5.103.000 – COP 7.938.000");
+    // El exacto queda a la vista; el rango que se propone va a tres cifras.
+    expect(pasos.at(-2)).toBe(
+      "Sin redondear: COP 5.103.000 – COP 7.938.000. Se propone a tres cifras, como se negocia un precio.",
+    );
+    expect(pasos.at(-1)).toBe("Rango sugerido: COP 5.100.000 – COP 7.940.000");
   });
 
   it("cambiar el CPM cambia el rango y su explicación, que dice que el CPM es tuyo", () => {

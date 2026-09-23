@@ -313,7 +313,7 @@ export function explicarPasos(pasos: readonly PasoCalculo[], moneda: string, f: 
         out.push(
           paso.fuente === "creador"
             ? t.cpmPropio(low, high)
-            : t.cpm(low, high, paso.nicheSlug, paso.country, MESSAGES.fuentesCpm[paso.fuente] ?? paso.fuente),
+            : t.cpm(low, high, paso.nicheSlug, f.country(paso.country), MESSAGES.fuentesCpm[paso.fuente] ?? paso.fuente),
         );
         break;
       }
@@ -347,6 +347,11 @@ export function explicarPasos(pasos: readonly PasoCalculo[], moneda: string, f: 
         out.push(t.subtotal(low, high));
         break;
       }
+      case "redondeo": {
+        const [low, high] = rango(paso.exactoLow, paso.exactoHigh);
+        out.push(t.redondeo(low, high));
+        break;
+      }
       case "total": {
         const [low, high] = rango(paso.low, paso.high);
         out.push(t.total(low, high));
@@ -357,8 +362,18 @@ export function explicarPasos(pasos: readonly PasoCalculo[], moneda: string, f: 
   return out;
 }
 
-/** El texto de lo que le falta a una fila, en el idioma de messages.ts. */
-export function textoMotivo(m: MotivoFila, fila: FilaTarifario, pais: string, redNombre: string, f: Pick<Formatter, "int">): string {
+/**
+ * El texto de lo que le falta a una fila, en el idioma de messages.ts.
+ * El país va por su nombre en el idioma del workspace («Colombia», no
+ * «CO»), con el mismo formateador que usa Ventas.
+ */
+export function textoMotivo(
+  m: MotivoFila,
+  fila: FilaTarifario,
+  pais: string,
+  redNombre: string,
+  f: Pick<Formatter, "int" | "country">,
+): string {
   const t = MESSAGES.tarifario.motivos;
   switch (m.tipo) {
     case "sin_views":
@@ -366,7 +381,7 @@ export function textoMotivo(m: MotivoFila, fila: FilaTarifario, pais: string, re
     case "views_poco_fiables":
       return t.views_poco_fiables(f.int(m.muestra), f.int(m.mediana));
     case "sin_cpm":
-      return m.moneda ? t.sin_cpm_moneda(m.moneda, redNombre) : t.sin_cpm(redNombre, fila.benchmark?.country ?? pais);
+      return m.moneda ? t.sin_cpm_moneda(m.moneda, redNombre) : t.sin_cpm(redNombre, f.country(fila.benchmark?.country ?? pais));
     case "cpm_invertido":
       return t.cpm_invertido;
   }

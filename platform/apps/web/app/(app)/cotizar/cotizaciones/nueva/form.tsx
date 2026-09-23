@@ -17,6 +17,7 @@ import { dealLabel } from "@/lib/negocio";
 import type { ActionState } from "@/lib/forms";
 import { MESSAGES, nombreMetrica, nombreModificador } from "../../messages";
 import { etiquetaImpuesto } from "../../_lib/acordado";
+import { precioPropuesto, rangoPropuesto } from "../../_lib/precio";
 import { ResumenTotales } from "../../_ui/resumen-totales";
 
 /** Una línea como la escribe el formulario. La cantidad es TEXTO: se tiene que poder vaciar. */
@@ -142,7 +143,7 @@ export function CotizacionForm({
       platformId: tarifa?.platformId ?? null,
       description: tarifa?.labelEs ?? "",
       quantity: "1",
-      unitPrice: tarifa?.priceLow ?? "0",
+      unitPrice: precioPropuesto(tarifa),
     };
   }
 
@@ -239,7 +240,7 @@ export function CotizacionForm({
       deliverable: tarifa.deliverable,
       platformId: tarifa.platformId,
       description: tarifa.labelEs,
-      unitPrice: tarifa.priceLow ?? "0",
+      unitPrice: precioPropuesto(tarifa),
     });
     aplicarIncluidos(tarifa);
   }
@@ -328,9 +329,13 @@ export function CotizacionForm({
               // servidor y en el navegador. La key de React es aparte.
               const idLinea = `${base}l${idx}`;
               const tarifa = porId.get(l.tarifaId);
+              // El rango tal como lo propone el tarifario (a tres cifras,
+              // salvo un precio escrito a mano): el mismo con el que se
+              // precarga el precio, así que precargar nunca sale «fuera».
+              const rango = rangoPropuesto(tarifa);
               const fuera =
-                tarifa?.priceLow && tarifa.priceHigh && l.unitPrice
-                  ? compareDecimal(l.unitPrice, tarifa.priceLow) < 0 || compareDecimal(l.unitPrice, tarifa.priceHigh) > 0
+                rango && l.unitPrice
+                  ? compareDecimal(l.unitPrice, rango.low) < 0 || compareDecimal(l.unitPrice, rango.high) > 0
                   : false;
               return (
                 // Dos filas: qué es (entregable y descripción, a lo ancho) y
@@ -377,12 +382,12 @@ export function CotizacionForm({
                         currency={currency}
                         onChange={(v) => cambiar(l.key, { unitPrice: v })}
                       />
-                      {tarifa?.priceLow && tarifa.priceHigh && (
+                      {rango && (
                         <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                           <span className="tabular-nums">
                             {t.rangoTarifario(
-                              f.money(tarifa.priceLow, currency, { mode: "full" }),
-                              f.money(tarifa.priceHigh, currency, { mode: "full" }),
+                              f.money(rango.low, currency, { mode: "full" }),
+                              f.money(rango.high, currency, { mode: "full" }),
                             )}
                           </span>
                           {fuera && <Pill kind="warn">{t.fueraDeRango}</Pill>}

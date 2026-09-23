@@ -36,9 +36,17 @@
  *     y CLP, al centavo en USD o EUR. Un tarifario en pesos con
  *     centavos («COP 7.013.344,50») parece un prototipo; ninguna
  *     referencia (Passionfroot, Stripe Quotes en COP) los muestra.
- *   - No se redondea a cifras «bonitas» (50.000, 100.000): un tarifario
- *     que redondea esconde que cambiar el CPM cambió el precio, y ese
- *     es justo el número que el creador está aprendiendo a mover.
+ *   - El RANGO final se redondea a tres cifras significativas
+ *     (`redondearParaNegociar`, pulido r6): 5.195.070 sale 5.200.000.
+ *     Un rango de negociación al peso es una precisión falsa —la marca
+ *     lo lee como un número calculado, no como un precio— y además no
+ *     cuadraba con el media kit, que lo enseña compacto («5,2 M»). Tres
+ *     cifras y no cifras «bonitas» fijas (50.000, 100.000): cualquier
+ *     cambio de CPM de más de medio por ciento se sigue viendo en el
+ *     rango, y el número exacto no desaparece: queda en el «Cómo se
+ *     calcula», en el paso de redondeo, que es donde el creador aprende
+ *     a moverlo. Lo mismo vale para los paquetes. Un precio escrito a
+ *     mano no se redondea: lo decidió el creador.
  *
  * Lo que la fórmula del mock trae y esta NO: «× 1,15 por engagement
  * sobre la media» y «× 1,10 por audiencia 25 a 34»
@@ -188,6 +196,12 @@ export type PasoCalculo =
   | { tipo: 'descuento'; pct: string; low: Decimal; high: Decimal }
   | { tipo: 'componente'; deliverable: string; cantidad: number; low: Decimal; high: Decimal }
   | { tipo: 'subtotal'; low: Decimal; high: Decimal }
+  /**
+   * El rango antes de redondearlo para negociar (`redondearParaNegociar`).
+   * Solo aparece si el redondeo cambió algo; el rango redondeado es el
+   * del paso 'total' que lo sigue.
+   */
+  | { tipo: 'redondeo'; exactoLow: Decimal; exactoHigh: Decimal; low: Decimal; high: Decimal }
   | { tipo: 'total'; low: Decimal; high: Decimal };
 
 export interface ItemTarifa {
@@ -241,6 +255,50 @@ export function redondearAUnidad(valor: Decimal, unidad: Decimal): Decimal {
   const c = toCents(valor);
   if (c < 0n) throw new TarifaError('MontoNegativo', `No se redondea un monto negativo: "${valor}".`);
   return fromCents(((c + u / 2n) / u) * u);
+}
+
+/** Cuántas cifras significativas conserva un precio de negociación. */
+export const CIFRAS_DE_NEGOCIACION = 3;
+
+/**
+ * El precio que se le PROPONE a una marca: tres cifras significativas,
+ * mitad hacia arriba, y nunca más fino que la unidad entera de la
+ * moneda (ni centavos ni pesos sueltos). 5.195.070 → 5.200.000;
+ * 3.419.735 → 3.420.000; 45,67 → 46; 987 → 987.
+ *
+ * Es relativo a la cifra y no un paso fijo por moneda («a 10.000 en
+ * COP»), porque el mismo paso que sirve para un TikTok de 5 M destroza
+ * una historia de 30.000, y un paso fijo por moneda obligaría a
+ * mantener una tabla por cada una: tres cifras valen igual en pesos,
+ * dólares o yenes.
+ *
+ * Lo usan el rango del tarifario (`calcularItem`, `calcularPaquete`) y
+ * el precio que la cotización propone al elegir un entregable, así que
+ * tarifario, cotización y media kit dicen el mismo número. Aplicado a un
+ * número ya redondeado lo deja igual. Un monto positivo nunca baja a
+ * cero: un rango «0 – 0» no es una tarifa.
+ */
+export function redondearParaNegociar(valor: Decimal): Decimal {
+  const c = toCents(valor);
+  if (c < 0n) throw new TarifaError('MontoNegativo', `No se redondea un monto negativo: "${valor}".`);
+  const unidades = c / 100n;
+  const digitos = unidades === 0n ? 1 : unidades.toString().length;
+  const paso = 100n * 10n ** BigInt(Math.max(0, digitos - CIFRAS_DE_NEGOCIACION));
+  const redondeado = ((c + paso / 2n) / paso) * paso;
+  return fromCents(redondeado === 0n && c > 0n ? c : redondeado);
+}
+
+/**
+ * Añade a `pasos` el de redondeo si cambia algo, y devuelve el rango
+ * redondeado. Es el último paso antes de 'total'.
+ */
+function redondearRango(pasos: PasoCalculo[], low: Decimal, high: Decimal): { low: Decimal; high: Decimal } {
+  const rLow = redondearParaNegociar(low);
+  const rHigh = redondearParaNegociar(high);
+  if (compareDecimal(rLow, low) !== 0 || compareDecimal(rHigh, high) !== 0) {
+    pasos.push({ tipo: 'redondeo', exactoLow: low, exactoHigh: high, low: rLow, high: rHigh });
+  }
+  return { low: rLow, high: rHigh };
 }
 
 /**
@@ -390,6 +448,8 @@ export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
     high = subDecimal(high, descHigh);
   }
 
+  // 5 · Tres cifras para negociar (ver la cabecera).
+  ({ low, high } = redondearRango(pasos, low, high));
   pasos.push({ tipo: 'total', low, high });
 
   return {
@@ -479,6 +539,7 @@ export function calcularPaquete(input: {
     low = subDecimal(low, descLow);
     high = subDecimal(high, descHigh);
   }
+  ({ low, high } = redondearRango(pasos, low, high));
   pasos.push({ tipo: 'total', low, high });
   return { priceLow: low, priceHigh: high, descuentoPct, pasos };
 }
