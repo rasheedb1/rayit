@@ -138,6 +138,30 @@ existe (§5).
 
 PENDIENTE: se hace sobre la pantalla de CON-B cuando esté en main.
 
+### 1.6 Lo que encontró la revisión, y cómo quedó (`862aefd`)
+
+`/code-review` en nivel alto sobre `origin/main...nicolas/CON-C-fuentes`
+dio diez hallazgos. Todos se comprobaron contra el código antes de
+tocarlo; siete se arreglaron con su prueba y tres se justifican (§6.2).
+Los que cambian cómo se enciende una fuente:
+
+- **Las vistas de cuenta son las del día.** `account_metric_snapshot.
+  views` se llena así en la semilla y Resumen la suma día por día
+  (`resumen.ts`, CTE `vistas`). YouTube por @ (CON-10, ya en main),
+  YouTube autorizado y el proveedor de TikTok guardaban el **acumulado**:
+  el día que se encendiera cualquiera de las tres, Resumen contaría el
+  total de la cuenta una vez por cada día de la ventana. Ahora las tres
+  guardan `null` (el acumulado de YouTube sigue en `raw`) y las vistas
+  llegan video por video. Guardar el acumulado aparte es **D20** (§4).
+- **Autorizar un canal de YouTube ya no le congela los suscriptores.**
+  El worker y «Actualizar» leen `channels.list?mine=true` con su token.
+- **El proveedor cuesta mucho menos.** La lectura de cuenta ya no
+  recorre el catálogo (1 unidad en vez de hasta 21) y la lista de posts
+  pide solo los bloques que faltan para el `max` de quien pregunta.
+- **Una cuenta autorizada a mitad de una corrida no se degrada** a
+  `aggregator`, y un 401 del proveedor no le pide al creador que
+  reautorice algo que nunca autorizó.
+
 ---
 
 ## 2. Tabla de ENCENDIDO (F2)
@@ -177,7 +201,7 @@ make db.sql Q="with ws as (select set_config('app.workspace_id','00000002-0000-4
 | **Qué se enciende en la pantalla** | `/conexiones`: la tarjeta de Instagram deja de decir que falta la variable; «Agregar cuenta» de un @ profesional deja seguidores, publicaciones y «datos hasta»; «Actualizar» en su fila lee de inmediato | Igual para YouTube: suscriptores, videos y vistas del canal | En la fila de un canal de YouTube, columna «Cifras»: aparece **«Autorizar analítica»** (ya está `OAUTH_CONNECT=1` en producción). Sin las variables, la fila no ofrece el botón y dice qué falta (§1.5) | La tarjeta de TikTok pasa a «Seguidores, vistas acumuladas y número de videos, por el proveedor de datos contratado»; la fila de @selvathegolden no cambia porque ya está autorizada (§2.1) |
 | **Qué job empieza a leer** | `collect.account_metrics` (05:10 UTC), `collect.posts` (cada 6 h), `collect.post_metrics` (05:00) y `brand.snapshot` (07:00, seguidores de las marcas en campaña, CAM-3). **Solo cuando el worker corra (WRK)**; hasta entonces, lo que la web lee al agregar o con «Actualizar» | Los mismos cuatro | `oauth.refresh` (cada 15 min: renueva el access token de una hora) y `collect.demographics` (05:20) para ese canal. Con el worker apagado, el token caduca a la hora y la analítica no se lee | `collect.account_metrics` (convierte la fila a `aggregator` conservando id e historia), `collect.posts` y `collect.post_metrics` para TikTok |
 | **Cómo compruebo que funcionó** (solo lectura) | `select c.handle, c.status, c.status_detail, s.day::text, s.followers, s.source from ws, social_connection c left join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'instagram' and c.access_mode = 'public_profile' order by s.day desc nulls last` → una fila con `followers` y `source = 'public_profile'`, `status = 'active'`. Y `select l.endpoint, l.ok, l.http_status from ws, api_call_log l join social_connection c on c.id = l.connection_id where l.endpoint = 'instagram.business_discovery' order by l.called_at desc limit 3` → `ok = true` | La misma con `platform_id = 'youtube'` y `l.endpoint = 'youtube.channels.list'` | `select c.handle, c.access_mode, c.status, c.scopes, c.secret_ref like 'enc:youtube:%' as cifrada, to_char(c.access_expires_at at time zone 'UTC','YYYY-MM-DD HH24:MI') as vence, c.refresh_expires_at from ws, social_connection c where c.platform_id = 'youtube' and c.handle <> 'LauraCocinaFacil'` → `direct_oauth`, `active`, los dos scopes, `cifrada = true`, vence en ~1 h, `refresh_expires_at` nulo. Consentimiento: `select d.purpose, d.policy_version from ws, data_consent d join social_connection c on c.id = d.connection_id where c.platform_id = 'youtube' and d.revoked_at is null` → `analytics` y `audience_demographics` | `select c.handle, c.access_mode, s.day::text, s.followers, s.views, s.source from ws, social_connection c join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'tiktok' and s.source = 'aggregator'` → seguidores y vistas. Consumo: `select day::text, units_used, calls from api_quota_usage where platform_id = 'tiktok' order by day desc limit 7` |
-| **Costo** | Gratis. Límite de Meta: 200 llamadas/hora por usuario de la app; con **un** token casa, todo `business_discovery` comparte ese cupo (§4, D3) | Gratis. **10 000 unidades/día** por proyecto; `channels.list` y `videos.list` cuestan 1; `collect.post_metrics` guarda 500 de reserva (`COLLECT_YOUTUBE_UNITS_RESERVE`) | Gratis. El endpoint de token no gasta unidades de la Data API (familia propia `google-oauth`); la Analytics API tiene cuota aparte que Google no publica | **Wood, 100 USD/mes = 1 500 unidades/día** ≈ 70–115 cuentas leídas a diario (1 unidad de perfil + 1 por cada 10 videos; con el tope de 200 videos, 21/día/cuenta = 1,41 USD/cuenta/mes). Bronze 200 USD = 5 000/día |
+| **Costo** | Gratis. Límite de Meta: 200 llamadas/hora por usuario de la app; con **un** token casa, todo `business_discovery` comparte ese cupo (§4, D3) | Gratis. **10 000 unidades/día** por proyecto; `channels.list` y `videos.list` cuestan 1; `collect.post_metrics` guarda 500 de reserva (`COLLECT_YOUTUBE_UNITS_RESERVE`) | Gratis. El endpoint de token no gasta unidades de la Data API (familia propia `google-oauth`); la Analytics API tiene cuota aparte que Google no publica | **Wood, 100 USD/mes = 1 500 unidades/día.** Por cuenta y día, tras la revisión: 1 (perfil) + 4 × 3 (`collect.posts` cada 6 h, 25 posts = 3 bloques, aunque no haya nada nuevo) + ≥ 5 (`collect.post_metrics`, primer tramo de 50) ≈ **18 unidades** → unas **80 cuentas** en Wood, ~1,20 USD/cuenta/mes. Con `collect.posts` una vez al día serían ~9 (D21). Bronze 200 USD = 5 000/día. Cada «Agregar» o «Actualizar» en la pantalla gasta 1 más |
 
 ### 2.1 Cosas que pasan al encender y conviene saber
 
@@ -273,13 +297,15 @@ contrario» dice qué archivo cambia y cuánto.
 | D10 | `CON-7.md:190` | Una cuenta personal de TikTok queda con `tt.audience.account_type` / `tt.audience.scope` y no con `tt.insights.scope` / `tt.audience_age` del enunciado | Las dos filas propias | Dejarlo: la del enunciado manda a una puerta que no abre | `apps/worker/src/jobs/conexiones/prerrequisitos-demografia.ts`, dos `return` |
 | D11 | `CON-10.md:56` | Fuente de TikTok por @: proveedor de pago, CSV o esperar la autorización | CSV de TikTok Studio (RES-2) y autorización; el proveedor, integrado y apagado | Ver D12 | — |
 | D12 | `CON-12.md:94` | **Contratar EnsembleData** | Apagado sin `ENSEMBLEDATA_TOKEN` | **No contratar todavía**: @selvathegolden ya da cifras autorizando gratis y el CSV cubre el resto. Contratar Wood (100 USD/mes) el día que haya más de ~5 cuentas de TikTok que no puedan autorizar | Solo la variable (§2) |
-| D13 | `CON-12.md:153` | Tope de 200 videos por cuenta (21 unidades/día) | 200 | Dejarlo; revisar con el consumo real de `api_quota_usage` | Variable `ENSEMBLEDATA_MAX_POSTS` |
+| D13 | `CON-12.md:153` | Tope de 200 videos por cuenta. Tras la revisión ya no se recorre en cada lectura de cuenta: solo acota cuánto relee `collect.post_metrics` para emparejar | 200 | Dejarlo; revisar con el consumo real de `api_quota_usage` | Variable `ENSEMBLEDATA_MAX_POSTS` |
 | D14 | `CON-12.md:185` | Ventana de 60 llamadas/min al proveedor (nuestra, no suya) | 60/min | Dejarlo | `limits.ts`, un número |
 | D15 | `CON-8.md:142` (§0.4) | `prompt=consent` en cada autorización de Google | Siempre | Dejarlo: sin él reconectar da una conexión que muere en una hora | `packages/connectors/src/oauth/google.ts`, una constante + mirar la base antes de construir la URL, ~30 líneas |
 | D16 | `CON-8.md` §0.4 | Sin `yt-analytics-monetary.readonly` | Fuera | Dejarlo: más auditoría de Google por datos que no mostramos | `google.ts`, un scope, y otra vuelta de verificación (CON-9) |
 | D17 | `CON-8.md` §0.4 | `refresh_expires_at` vacío en YouTube (en «Testing» vence a los 7 días) | Vacío; se aprende por `invalid_grant` | Dejarlo | `google.ts` + una variable, ~10 líneas |
 | D18 | `connectors/src/quota/limits.ts` (familia `google-oauth`) | Freno de 600/min al endpoint de token de Google | 600/min | Dejarlo | `limits.ts`, un número |
 | D19 | Este cierre, §1.4 | Una red apagada responde 404 (antes 503) | 404 con la frase | Dejarlo (lo pide el prompt: nada de 5xx en rutas vivas) | `oauth-handlers.ts`, dos líneas |
+| D20 | Este cierre, §1.6 | ¿Dónde vive el acumulado de vistas de una cuenta (YouTube lo publica; TikTok por proveedor se podría sumar)? `account_metric_snapshot.views` es la vista del día | En ninguna columna: `views` = null para esas fuentes; el de YouTube queda en `raw` | Una migración que añada `account_metric_snapshot.views_total` (acumulado) y que las vistas del día salgan de la diferencia entre dos días en una vista SQL. Es de Rasheed (esquema y Resumen) | `db/migrations/00xx` (~15 líneas) + `recordAccountSnapshot` y el INSERT del worker (~10) + la CTE `vistas` de `resumen.ts` si se quiere mostrar |
+| D21 | Este cierre, §2 | `collect.posts` corre cada 6 h también para las cuentas por proveedor, y cada corrida paga al menos 3 unidades aunque no haya nada nuevo | Cada 6 h, como las demás | Dejarlo mientras no se contrate; si se contrata, una vez al día para `aggregator` (de ~18 a ~9 unidades por cuenta) | `apps/worker/src/jobs/conexiones/collect-posts.ts`, saltar las `aggregator` fuera de la corrida de las 00:00, ~10 líneas y su prueba |
 
 Las decisiones de CON-6 (mediana por red, a quién avisar, videos viejos)
 están en `CIERRE-CON-A.md` §6 y no se repiten.

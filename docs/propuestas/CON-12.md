@@ -361,3 +361,26 @@ Sin SSRF: la URL base es una constante y ni el @ (validado por
 ruta. El aislamiento por workspace no se toca: la web escribe dentro de
 `withWorkspace` (RLS) y el worker lleva `workspace_id` explícito en cada
 escritura nueva.
+
+## 6. Lo que cambió al cerrar (CON-C, 23-sep)
+
+Integrada en `main` con el cierre de CON-C (`docs/propuestas/CIERRE-CON-C.md`).
+La revisión del cierre cambió tres cosas de lo escrito arriba:
+
+- **Las vistas de cuenta ya no se suman.** `account_metric_snapshot.views`
+  es la vista del día (la semilla y Resumen la tratan así); guardar la
+  suma del catálogo la habría contado una vez por día. La lectura de
+  cuenta es ahora UNA llamada a `tt/user/info` (seguidores, seguidos,
+  videos) con `views = null`, y las vistas llegan video por video por
+  `collect.posts` / `collect.post_metrics`. Se fueron `sumViews`,
+  `coverage` y el recorrido del catálogo en `lookup()`, con sus pruebas;
+  las de paginación pasaron a la fuente de posts. Contradice §0.4 · 2 y
+  la cuenta de costo de §0.2: el costo real está en el cierre, §2.
+- **El gasto sigue al que pide**: la fuente de posts pide los bloques
+  que faltan para el `max` de quien lista (25 = 3 unidades), no cinco.
+- **Un 401/403 del proveedor** es la credencial de On Cue
+  (`not_configured`), nunca un `needs_reauth` del creador.
+
+Y una costura que ninguna de las dos ramas veía sola: `collect.posts`
+no elegía las cuentas `aggregator`, así que una cuenta convertida no
+volvía a listar videos (arreglado, `fuentes-tiktok-proveedor.test.ts`).
