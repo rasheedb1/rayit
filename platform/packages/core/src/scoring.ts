@@ -43,6 +43,74 @@ export function percentile(values: number[], p: number): number {
   return lo === hi ? vLo : vLo + (vHi - vLo) * (idx - lo);
 }
 
+/** Lo que queda de una lista después de quitar lo que no se midió. */
+function medibles(values: readonly (number | null | undefined)[]): number[] {
+  return values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+}
+
+/**
+ * Mediana de lo que se midió, o null si no se midió nada.
+ *
+ * `median([])` devuelve 0, que dentro de un promedio no molesta y
+ * escrito en `creator_baseline.median_completion` es una cifra
+ * inventada: YouTube no publica `skip_rate_3s` y TikTok no publica
+ * `saves`, así que la lista vacía es el caso normal, no el raro.
+ */
+export function medianOf(values: readonly (number | null | undefined)[]): number | null {
+  const v = medibles(values);
+  return v.length === 0 ? null : median(v);
+}
+
+/** Percentil de lo que se midió, o null si no se midió nada. Pareja de medianOf(). */
+export function percentileOf(values: readonly (number | null | undefined)[], p: number): number | null {
+  const v = medibles(values);
+  return v.length === 0 ? null : percentile(v, p);
+}
+
+/** Las interacciones de una lectura de `post_metric_snapshot`. */
+export interface InteractionCounts {
+  totalInteractions?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  saves?: number | null;
+}
+
+/**
+ * Cuántas interacciones tuvo un video. La plataforma manda cuando da el
+ * total; si no lo da, se suma lo que sí dio. Null cuando no dio nada:
+ * un video sin datos no es un video sin interacciones.
+ */
+export function interactionsOf(counts: InteractionCounts): number | null {
+  if (typeof counts.totalInteractions === 'number') return counts.totalInteractions;
+  const partes = medibles([counts.likes, counts.comments, counts.shares, counts.saves]);
+  return partes.length === 0 ? null : partes.reduce((a, b) => a + b, 0);
+}
+
+/**
+ * Engagement: interacciones por view. Null si no hay views (o son cero)
+ * o si la plataforma no reportó ninguna interacción.
+ *
+ * Se divide entre views y no entre alcance porque views es la única de
+ * las dos que dan las cuatro redes.
+ */
+export function engagementRate(counts: InteractionCounts, views: number | null | undefined): number | null {
+  if (typeof views !== 'number' || views <= 0) return null;
+  const total = interactionsOf(counts);
+  return total === null ? null : total / views;
+}
+
+/**
+ * Guardados por cada mil views. Es la métrica que mejor predice que un
+ * video siga rindiendo semanas después, y la que una marca entiende sin
+ * explicación. Null si no hay views o la red no publica `saves`.
+ */
+export function savesPer1k(saves: number | null | undefined, views: number | null | undefined): number | null {
+  if (typeof views !== 'number' || views <= 0) return null;
+  if (typeof saves !== 'number') return null;
+  return (saves * 1000) / views;
+}
+
 /**
  * El número central del producto: cuántas veces la mediana propia hizo
  * este video, medido a la misma edad que los demás.
@@ -64,6 +132,23 @@ export function outlierTier(vsMedian: number | null): OutlierTier | null {
   if (vsMedian >= 1.2) return 'good';
   if (vsMedian >= 0.7) return 'normal';
   return 'under';
+}
+
+/** Los tramos que cuentan como outlier, de menor a mayor. El orden importa: es el que decide si un video SUBIÓ de nivel. */
+export const OUTLIER_TIERS = ['outlier', 'breakout'] as const;
+export type OutlierNotifiableTier = (typeof OUTLIER_TIERS)[number];
+
+/**
+ * `post_score.is_outlier`. Sale del mismo tramo que 'outlier' (≥ 2×) y
+ * no de una constante suelta: el umbral vive en un solo sitio, que es
+ * outlierTier().
+ *
+ * Sin tramo (sin muestra suficiente) es `false`, no `null`: la columna
+ * es NOT NULL en 0003. El «todavía no sabemos» vive en
+ * `views_vs_median` y en `outlier_tier`, que sí admiten nulo.
+ */
+export function isOutlier(tier: OutlierTier | null): boolean {
+  return tier !== null && (OUTLIER_TIERS as readonly string[]).includes(tier);
 }
 
 /**
