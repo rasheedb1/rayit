@@ -215,6 +215,39 @@ SELECT c.name, s.platform_id, s.day, s.followers, s.source
  WHERE s.day = current_date ORDER BY c.name;
 ```
 
+## finance.reminders · recordatorios de cobro (FIN-4)
+
+Cada día a las 10:00 UTC recorre las facturas `sent` y `partial` y, para
+cada una, mira en qué paso está respecto a `due_on`: **−7, 0, +7, +21 y
++45 días**, con el tono subiendo en cada uno (recordatorio amable, aviso
+de vencimiento, primer aviso de mora, segundo, aviso formal). Redacta el
+correo con `@mc/core` —`pasosPendientes()` y `redactarRecordatorio()`,
+puras— y lo guarda como `notification` de tipo `invoice_overdue`, con el
+asunto en `title_es` y el cuerpo en `body_es`.
+
+**No envía nada.** El envío real por SMTP es fase 2 y espera a CIM-10;
+cuando llegue, marca `notification.emailed_at`. Hoy el creador lo copia
+desde la bandeja de `/finanzas` y lo manda desde su correo.
+
+Tres cosas que conviene saber antes de tocarlo:
+
+- **Se ponen al día todos los pasos pendientes en una corrida**, no solo
+  el último: no se envía nada, así que no hay a quién inundar. Para
+  cambiarlo es `pendientes.slice(-1)` en `recordatorios.ts`.
+- **El paso −7 caduca al vencer la factura.** Su texto dice «vence en N
+  días»; con 41 días de mora sería falso. Por eso una factura vencida
+  hace 41 días recibe **tres** recordatorios (0, +7 y +21) y no cuatro.
+- **La idempotencia cuelga de `action_url`**
+  (`/finanzas/facturas/<id>?recordatorio=<paso>`), no del título: el
+  título es texto de producto y cambiar una palabra reemitiría todos los
+  recordatorios de todas las facturas. Una segunda corrida el mismo día
+  no escribe nada.
+
+`invoice.reminders_sent` queda igual a cuántos recordatorios hay en la
+bandeja para esa factura, y nunca baja; `last_reminder_at` es la última
+corrida que escribió algo. El día lo pone la zona del workspace
+(`hoyEnZona`), no UTC: a las 10:00 UTC en Bogotá son las 05:00.
+
 ## Cómo leer job_run
 
 ```sql
@@ -252,7 +285,7 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @ y brand.snapshot; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @, brand.snapshot y finance.reminders sobre los seeds reales; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
@@ -278,5 +311,6 @@ src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
 src/jobs/campanas/           brand.snapshot (seguidores públicos de la marca de cada campaña, CAM-3)
+src/jobs/finanzas/           finance.reminders (recordatorios de cobro, FIN-4)
 test/                        integración (pglite) y unitarias
 ```

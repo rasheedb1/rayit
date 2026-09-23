@@ -9,6 +9,7 @@ catálogo de permisos. Todo se prueba en milisegundos con `node --test`.
 | `scoring.ts` | Nicolás | Puntajes y umbrales de métricas (CON-6). |
 | `facturacion.ts` | Nicolás | Dinero: `Decimal` como string, `BigInt` de centavos solo aquí (`toCents`, `fromCents`, `mulRateHalfUp`), estados de factura (FIN-1). |
 | `campanas.ts` | Nicolás | Estados y transiciones de campaña, errores con `messageEs` (CAM-1, CAM-2). |
+| `recordatorios.ts` | Nicolás | Recordatorios de cobro: en qué paso está una factura respecto a su vencimiento y el texto del correo de cada paso (FIN-4). |
 | `tarifas.ts` | Rasheed | Cálculo del tarifario (COT-1). |
 | `zonas.ts` | Rasheed | Zonas horarias y fin de día. |
 | `permisos.ts` | Nicolás | Permisos, roles de fábrica y `can()` (ACC-1). Abajo. |

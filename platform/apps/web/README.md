@@ -57,11 +57,16 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
-                              de cada factura (registrar pago, reserva de impuestos).
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle con los cobros
+                              de cada factura (FIN-2: registrar pago, reserva de
+                              impuestos) y la bandeja de recordatorios de cobro
+                              (FIN-4, bandeja.tsx).
                               index.ts exporta facturarCampana() para Campañas.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
                               calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/finanzas/recordatorios/  Solo actions.ts: «Marcar como enviado». NO es una
+                              ruta (no tiene page.tsx); la carpeta existe para que el
+                              archivo se llame actions.ts y lo mire convencion.test.ts.
 app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
                               (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
                               qué falta y «Recalcular» si la base lo permite) y

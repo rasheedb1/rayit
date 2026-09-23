@@ -19,6 +19,33 @@ export const MESSAGES = {
     label: "Cargando facturas",
     kpis: ["Por cobrar", "Vencido", "Cobrado este año", "Apartado para impuestos"],
     section: "Facturas",
+    bandeja: "Recordatorios por enviar",
+  },
+  /**
+   * La bandeja de recordatorios (FIN-4). El texto del correo NO está
+   * aquí: lo redacta @mc/core y lo guarda el job, para que la pantalla
+   * no escriba dos veces lo mismo. Aquí solo está el marco.
+   */
+  bandeja: {
+    titulo: "Recordatorios por enviar",
+    descripcion:
+      "El cobro se redacta solo cada día, con el tono que toca según los días de mora. Cópialo, mándalo desde tu correo y márcalo como enviado. Todavía no se envía solo: eso llega cuando la plataforma tenga correo saliente.",
+    vacioTitulo: "No hay recordatorios por enviar",
+    vacioDescripcion:
+      "Aparecen solos: una semana antes del vencimiento, el día que vence y a los 7, 21 y 45 días de mora. Si no hay ninguno, ninguna factura llegó todavía a uno de esos días.",
+    asunto: "Asunto",
+    redactadoEl: "Redactado el",
+    primeros: "Los primeros",
+    copiar: "Copiar",
+    copiado: "Copiado",
+    copiadoAviso: "Asunto y cuerpo copiados",
+    copiarFalló: "No se pudo copiar: selecciónalo y cópialo a mano",
+    marcar: "Marcar como enviado",
+    enviadoEl: "Marcado como enviado el",
+    verFactura: "Ver la factura",
+    enLaFactura: "Recordatorios de esta factura",
+    sinRecordatorios:
+      "Esta factura no tiene recordatorios todavía: se escriben solos desde una semana antes del vencimiento.",
   },
   /** La sección «Pagos» del detalle de una factura (FIN-2). */
   pagos: {
