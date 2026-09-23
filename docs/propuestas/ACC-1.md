@@ -518,10 +518,23 @@ Verificación del 23-sep sobre `f51ae29`:
 | `next build` | compila; 44 rutas |
 | En dev (puerto 3141, base embebida) | `marcarPrincipal` 303 y el post cambia de principal; `cambiarEstadoFactura(…, "void")` 303 y la factura queda «Anulada»; `desconectarConexion` con un id inexistente 303 a `?aviso=Esa cuenta ya no está en la lista.`: el mismo comportamiento que antes de ACC-1 |
 
-**Un error previo, no de esta rama.** `pnpm verificar` marca
-`@mc/web#test` como fallida por un rechazo no manejado de undici
-(`ERR_INVALID_STATE: ReadableStream is already closed`) que se origina en
-`app/(app)/resumen/importar/lote.test.ts` (RES-6, Rasheed). Las 17
-pruebas del archivo pasan; el rechazo sale siempre, también sobre
-`origin/main` `29460e3` sin ningún cambio de ACC-1. Para Rasheed: cerrar
-o consumir el cuerpo de la respuesta en esa prueba.
+**Un error previo de `main`, arreglado aquí.** `pnpm verificar` salía en
+rojo, también sobre `origin/main` `29460e3`, por un rechazo no manejado
+de undici (`ERR_INVALID_STATE: ReadableStream is already closed`) en la
+prueba del 413 de `app/(app)/resumen/importar/lote.test.ts` (RES-6).
+Las 17 pruebas pasaban, pero vitest salía con código 1. La causa es de
+la prueba, no de la ruta: el cuerpo era un `FormData` en memoria y, al
+cortar la lectura a mitad, el generador de undici seguía encolando. El
+commit `913d465` serializa el multipart a bytes antes de armar la
+petición, como llega de la red; la copia no lleva `Content-Length`, así
+que sigue midiendo el contador. **Para Rasheed:** es tu archivo; el
+cambio es solo de la prueba y se revierte con un commit si prefieres
+otra solución.
+
+Después del arreglo, `pnpm verificar` da 15 de 15 tareas en verde: core
+95, db 603, connectors 180, worker 47, raíz 8 y web 739, sin errores no
+manejados. En una corrida intermedia, con la máquina cargada por otras
+sesiones, dos pruebas de `oauth-refresh.test.ts` (CON-2) fallaron por
+orden de filas; solas pasan 47 de 47 dos veces y la corrida siguiente
+salió limpia. Es la intermitencia bajo carga ya anotada en el backlog
+§9.2.
