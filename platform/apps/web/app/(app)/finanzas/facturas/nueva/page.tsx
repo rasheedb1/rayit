@@ -7,7 +7,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../../_lib/messages";
 import { NuevaFacturaForm } from "./form";
-import { requireModuleAccess } from "@/lib/permisos/modulo";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: "Nueva factura" };
 export const dynamic = "force-dynamic";
@@ -20,6 +20,9 @@ export default async function NuevaFacturaPage({
   // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
   // Next puede no volver a ejecutar el layout del módulo.
   await requireModuleAccess("finanzas");
+  // El formulario solo sirve para crear: sin el permiso de su acción
+  // (crearFactura), 404 en vez de un formulario que luego se rechaza.
+  await requirePagePermission("finanzas.factura.crear");
   const params = await searchParams;
   // Los porcentajes y el plazo salen de la configuración del workspace
   // (FIN-8), no de las constantes de @mc/core: cambiarlos en

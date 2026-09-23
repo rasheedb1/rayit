@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { compareDecimal, rateToPct } from "@mc/core";
+import { can, compareDecimal, rateToPct } from "@mc/core";
 import {
   MAX_REMINDERS,
   RECEIVABLES_MIN_SEARCH,
@@ -179,9 +179,12 @@ export default async function CuentasPorCobrarPage({
         title={t.title}
         description={t.description}
         aside={
-          <Button variant="primary" href="/finanzas/facturas/nueva">
-            {t.newInvoice}
-          </Button>
+          // Solo a quien puede crear: el formulario pide finanzas.factura.crear.
+          can(permisos, "finanzas.factura.crear") ? (
+            <Button variant="primary" href="/finanzas/facturas/nueva">
+              {t.newInvoice}
+            </Button>
+          ) : undefined
         }
       />
       <ModuleTabs active="/finanzas" permisos={permisos} />

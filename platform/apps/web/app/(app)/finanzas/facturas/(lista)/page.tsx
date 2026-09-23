@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { can } from "@mc/core";
 import { listInvoices, type InvoiceListRow } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -139,9 +140,12 @@ export default async function FacturasPage({ searchParams }: { searchParams: Pro
         title={t.title}
         description={t.description}
         aside={
-          <Button variant="primary" href="/finanzas/facturas/nueva">
-            {t.newInvoice}
-          </Button>
+          // Solo a quien puede crear: el formulario pide finanzas.factura.crear.
+          can(permisos, "finanzas.factura.crear") ? (
+            <Button variant="primary" href="/finanzas/facturas/nueva">
+              {t.newInvoice}
+            </Button>
+          ) : undefined
         }
       />
       <ModuleTabs active="/finanzas/facturas" permisos={permisos} />
