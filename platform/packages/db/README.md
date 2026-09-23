@@ -266,9 +266,10 @@ y después, desde `platform/`, `node db/migrate.mjs
 "postgres://mc:mc@localhost:55437/oncue" --seed`, el mismo `CREATE ROLE
 mc_app_ci …` (con cualquier cliente) y las variables de arriba con el
 puerto 55437. Así se corrió `outreach.test.ts` el 23 de septiembre de
-2026 (Postgres 16.14, VEN-9 ronda 3): 34 en verde, dos saltadas (las de
+2026 (Postgres 16.14, VEN-9 ronda 4): 43 en verde, dos saltadas (las de
 GRANT, que solo se miden en PGlite), y dos veces seguidas sobre la misma
-base. `esquema.test.ts` no pasa en ese montaje ni en `rasheed/integracion`
+base (los enlaces de baja no se van con su workspace, así que la prueba
+los borra por su token al terminar). `esquema.test.ts` no pasa en ese montaje ni en `rasheed/integracion`
 (la guardia da por cerradas las excepciones declaradas): es anterior a
 VEN-9 y queda para quien mantenga la guardia.
 
