@@ -1,0 +1,152 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, loadGoogleOAuthConfig, shortScope,
+} from '../src/gmail.ts';
+import type { OutreachApiError } from '../src/outreach/errors.ts';
+import { FakeGmail } from '../src/outreach/fake-gmail.ts';
+import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
+import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
+import type { OAuthTokens } from '../src/types.ts';
+
+let guard: NetworkGuard;
+before(() => { guard = withoutNetwork(); });
+after(() => {
+  guard.restore();
+  assert.equal(guard.attempts, 0, 'ninguna prueba de Gmail salió a la red');
+});
+
+const NOW = new Date('2026-09-23T12:00:00Z');
+const CFG = { clientId: 'client-id.apps.googleusercontent.com', clientSecret: 'GOCSPX-SECRETO-DEL-CLIENTE', redirectUri: 'https://app.test/api/oauth/google/callback' };
+const CA = '00000005-0000-4000-8000-0000000ac001';
+const TOKENS: OAuthTokens = {
+  accessToken: 'ya29.ACCESO-VIEJO-123456', refreshToken: '1//REFRESH-SECRETO-123456',
+  accessExpiresAt: new Date(NOW.getTime() + 60 * 60_000), scopes: [...GMAIL_SCOPES],
+};
+
+async function setup(names: ReadonlyArray<[string, string?]>) {
+  const log = new InMemoryOutreachCallLog();
+  const fetch = new FixtureFetch(await loadFixtures('gmail', names));
+  const http = { callLog: log, fetch: fetch.fetch, now: () => NOW, sleep: async () => {}, random: () => 0 };
+  return { log, fetch, http, oauth: new GoogleOAuth(CFG, http) };
+}
+
+async function failure(p: Promise<unknown>): Promise<OutreachApiError> {
+  return p.then(() => { throw new Error('esperaba un error'); }, (e: unknown) => e as OutreachApiError);
+}
+
+test('loadGoogleOAuthConfig: dice qué falta y deduce la redirección del origen', () => {
+  assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
+  const ok = loadGoogleOAuthConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' }, 'https://app.test/');
+  assert.deepEqual(ok, { config: { clientId: 'a', clientSecret: 'b', redirectUri: 'https://app.test/api/oauth/google/callback' } });
+});
+
+test('authorizationUrl: offline, consent, los tres alcances y el state', async () => {
+  const { oauth } = await setup([]);
+  const u = new URL(oauth.authorizationUrl('ESTADO', 'laura@x.test'));
+  assert.equal(u.origin + u.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
+  assert.equal(u.searchParams.get('access_type'), 'offline');
+  assert.equal(u.searchParams.get('prompt'), 'consent');
+  assert.equal(u.searchParams.get('state'), 'ESTADO');
+  assert.deepEqual(u.searchParams.get('scope')!.split(' ').map(shortScope), ['gmail.send', 'gmail.modify', 'userinfo.email']);
+  assert.ok(!u.toString().includes(CFG.clientSecret));
+});
+
+test('exchangeCode + userEmail: tokens con refresh, alcances concedidos y el buzón en minúsculas', async () => {
+  const { oauth, log, fetch } = await setup([['oauth.token.code', 'ok'], ['userinfo', 'ok']]);
+  const { tokens, scopesGranted } = await oauth.exchangeCode('4/CODIGO-DE-UN-USO');
+  assert.equal(tokens.refreshToken, '1//demo-refresh');
+  assert.equal(tokens.accessExpiresAt.getTime(), NOW.getTime() + 3599_000);
+  assert.ok(scopesGranted.includes('https://www.googleapis.com/auth/gmail.modify'));
+  assert.deepEqual(await oauth.userEmail(tokens), { email: 'laura@cocina-facil.test', verified: true });
+  assert.deepEqual(log.entries.map((e) => [e.provider, e.endpoint, e.ok]), [['gmail', 'google.oauth.token', true], ['gmail', 'google.userinfo', true]]);
+  assert.equal((fetch.calls[0]!.body as Record<string, string>)['code'], '[REDACTADO]');
+});
+
+test('refresh: conserva el refresh token; invalid_grant → not_connected sin filtrar secretos', async () => {
+  const { oauth } = await setup([['oauth.token.refresh', 'ok']]);
+  const t = await oauth.refresh(TOKENS);
+  assert.equal(t.accessToken, 'ya29.demo-access-2');
+  assert.equal(t.refreshToken, TOKENS.refreshToken);
+
+  const bad = await setup([['oauth.token.refresh', 'invalid_grant']]);
+  const err = await failure(bad.oauth.refresh(TOKENS, { channelAccountId: CA }));
+  assert.equal(err.kind, 'not_connected');
+  assert.equal(err.code, 'invalid_grant');
+  assert.equal(bad.log.entries[0]!.channel_account_id, CA);
+  const dump = JSON.stringify(bad.log.entries) + err.message;
+  for (const s of [TOKENS.refreshToken!, CFG.clientSecret]) assert.ok(!dump.includes(s));
+});
+
+test('freshGoogleTokens: con más de dos minutos no refresca; con menos, sí', async () => {
+  let calls = 0;
+  const refresh = async (t: OAuthTokens) => { calls += 1; return { ...t, accessToken: 'nuevo', accessExpiresAt: new Date(NOW.getTime() + 3600_000) }; };
+  const lejos = { ...TOKENS, accessExpiresAt: new Date(NOW.getTime() + GMAIL_REFRESH_MARGIN_MS + 1000) };
+  assert.equal((await freshGoogleTokens(lejos, NOW, refresh)).refreshed, false);
+  const cerca = { ...TOKENS, accessExpiresAt: new Date(NOW.getTime() + GMAIL_REFRESH_MARGIN_MS - 1000) };
+  const r = await freshGoogleTokens(cerca, NOW, refresh);
+  assert.equal(r.refreshed, true);
+  assert.equal(r.tokens.accessToken, 'nuevo');
+  assert.equal(calls, 1);
+});
+
+test('send: MIME en raw, threadId, y el Message-ID real leído después; refresca antes si el token vence', async () => {
+  const { http, oauth, fetch, log } = await setup([['oauth.token.refresh', 'ok'], ['messages.send', 'ok'], ['messages.get', 'metadata.ok']]);
+  const saved: OAuthTokens[] = [];
+  const gmail = new GmailClient({
+    ...http, oauth, channelAccountId: CA, tokens: { ...TOKENS, accessExpiresAt: new Date(NOW.getTime() + 60_000) },
+    onTokens: async (t) => { saved.push(t); }, mime: { boundary: (n) => `b${n}` },
+  });
+  const sent = await gmail.send({
+    from: { address: 'laura@cocina-facil.test', name: 'Laura Gómez' }, to: { address: 'marta@cafealma.test' },
+    subject: 'Re: Una idea para Café Alma', text: 'Sigo con la idea.', threadId: '18c1f0a0b0c0d0e1', inReplyTo: '<CAPrev@mail.gmail.com>',
+    unsubscribeUrl: 'https://app.test/baja/tok',
+  });
+  assert.deepEqual(sent, { providerMessageId: '18c1f0a0b0c0d0e1', threadId: '18c1f0a0b0c0d0e1', messageIdRfc: '<CADemo123@mail.gmail.com>' });
+  assert.equal(saved.length, 1, 'el token renovado se entrega para guardarlo con la misma ref');
+  const body = fetch.calls[1]!.body as { raw: string; threadId: string };
+  assert.equal(body.threadId, '18c1f0a0b0c0d0e1');
+  const mime = Buffer.from(body.raw, 'base64url').toString('utf8');
+  assert.match(mime, /^In-Reply-To: <CAPrev@mail\.gmail\.com>\r$/m);
+  assert.match(mime, /^List-Unsubscribe-Post: List-Unsubscribe=One-Click\r$/m);
+  assert.equal(fetch.calls[1]!.headers['Authorization'], '[REDACTADO]');
+  assert.deepEqual(log.entries.map((e) => e.endpoint), ['google.oauth.refresh', 'gmail.messages.send', 'gmail.messages.get']);
+  assert.ok(log.entries.every((e) => e.channel_account_id === CA));
+});
+
+test('send con 429: limit, con Retry-After, y no se reintenta dentro de la llamada', async () => {
+  const { http, oauth, log } = await setup([['messages.send', 'rate_limited']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
+  const err = await failure(gmail.send({ from: { address: 'a@b.test' }, to: { address: 'c@d.test' }, subject: 'x', text: 'y' }));
+  assert.equal(err.kind, 'limit');
+  assert.equal(err.retryAfterS, 120);
+  assert.equal(log.entries.length, 1);
+});
+
+test('getThread, searchReplies, searchBounces y getMessage de un rebote', async () => {
+  const { http, oauth } = await setup([['threads.get', 'ok'], ['messages.list', 'replies.ok'], ['messages.list', 'bounces.ok'], ['messages.get', 'bounce']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
+  const thread = await gmail.getThread('18c1f0a0b0c0d0e1');
+  assert.equal(thread.length, 2);
+  assert.equal(thread[1]!.inReplyTo, '<CADemo123@mail.gmail.com>');
+  assert.equal(thread[1]!.text, 'Me interesa, ¿tienes media kit?');
+  assert.deepEqual(await gmail.searchReplies({ since: NOW, threadId: '18c1f0a0b0c0d0e1' }), [{ id: '18c1f0a0b0c0d0f2', threadId: '18c1f0a0b0c0d0e1' }]);
+  const bounces = await gmail.searchBounces({ since: NOW });
+  assert.equal(bounces.length, 1);
+  const bounce = await gmail.getMessage(bounces[0]!.id);
+  assert.equal(bounce.failedRecipient, 'nadie@cafealma.test');
+});
+
+test('FakeGmail: refresca con un token nuevo y responde invalid_grant a un refresh token revocado', async () => {
+  const fake = new FakeGmail({ now: () => NOW, email: 'Laura@X.test' });
+  const { tokens } = await fake.exchangeCode('code');
+  const renewed = await fake.refresh(tokens);
+  assert.notEqual(renewed.accessToken, tokens.accessToken);
+  assert.equal(renewed.refreshToken, tokens.refreshToken);
+  fake.revoked.add(tokens.refreshToken!);
+  assert.equal((await failure(fake.refresh(tokens))).kind, 'not_connected');
+  assert.deepEqual(await fake.userEmail(), { email: 'laura@x.test', verified: true });
+  const sent = await fake.send({ from: { address: 'laura@x.test' }, to: { address: 'm@y.test' }, subject: 'Hola', text: 'x' });
+  assert.match(sent.messageIdRfc!, /^<.+@mail\.gmail\.test>$/);
+  assert.equal(fake.sent.length, 1);
+});
