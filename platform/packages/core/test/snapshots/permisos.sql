@@ -3,7 +3,7 @@
 -- No se edita a mano: se cambia el catálogo y se vuelve a generar
 -- con `pnpm --filter @mc/core permisos:sql`. Re-ejecutable.
 
--- 43 permisos.
+-- 44 permisos.
 INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('resumen.panel.ver', 'resumen', 'Ver el resumen', 'normal'),
   ('resumen.metricas.importar', 'resumen', 'Importar métricas por CSV', 'normal'),
@@ -30,6 +30,7 @@ INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('campanas.campana.editar', 'campanas', 'Editar campañas y cambiar su estado', 'normal'),
   ('campanas.post.asociar', 'campanas', 'Asociar posts y marcar entregables', 'normal'),
   ('campanas.aporte.registrar', 'campanas', 'Registrar lo que aporta la marca', 'normal'),
+  ('campanas.resultado.calcular', 'campanas', 'Recalcular el resultado de una campaña', 'normal'),
   ('campanas.reporte.enviar', 'campanas', 'Enviar el reporte a la marca', 'normal'),
   ('finanzas.factura.ver', 'finanzas', 'Ver las facturas', 'sensible'),
   ('finanzas.factura.crear', 'finanzas', 'Crear facturas', 'sensible'),
@@ -64,7 +65,7 @@ INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, i
   (NULL, 'viewer', 'agency', 'Solo lectura', 'Ver lo que se le asigne. Sin Finanzas ni Equipo.', true)
 ON CONFLICT (key, workspace_kind) WHERE workspace_id IS NULL DO NOTHING;
 
--- 220 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
+-- 225 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
 INSERT INTO role_permission (role_id, permission_key)
 SELECT r.id, m.permission_key
 FROM (VALUES
@@ -93,6 +94,7 @@ FROM (VALUES
   ('owner', 'creator', 'campanas.campana.editar'),
   ('owner', 'creator', 'campanas.post.asociar'),
   ('owner', 'creator', 'campanas.aporte.registrar'),
+  ('owner', 'creator', 'campanas.resultado.calcular'),
   ('owner', 'creator', 'campanas.reporte.enviar'),
   ('owner', 'creator', 'finanzas.factura.ver'),
   ('owner', 'creator', 'finanzas.factura.crear'),
@@ -135,6 +137,7 @@ FROM (VALUES
   ('manager', 'creator', 'campanas.campana.editar'),
   ('manager', 'creator', 'campanas.post.asociar'),
   ('manager', 'creator', 'campanas.aporte.registrar'),
+  ('manager', 'creator', 'campanas.resultado.calcular'),
   ('manager', 'creator', 'campanas.reporte.enviar'),
   ('manager', 'creator', 'finanzas.cobro.ver'),
   ('manager', 'creator', 'conexiones.cuenta.ver'),
@@ -186,6 +189,7 @@ FROM (VALUES
   ('owner', 'agency', 'campanas.campana.editar'),
   ('owner', 'agency', 'campanas.post.asociar'),
   ('owner', 'agency', 'campanas.aporte.registrar'),
+  ('owner', 'agency', 'campanas.resultado.calcular'),
   ('owner', 'agency', 'campanas.reporte.enviar'),
   ('owner', 'agency', 'finanzas.factura.ver'),
   ('owner', 'agency', 'finanzas.factura.crear'),
@@ -229,6 +233,7 @@ FROM (VALUES
   ('admin', 'agency', 'campanas.campana.editar'),
   ('admin', 'agency', 'campanas.post.asociar'),
   ('admin', 'agency', 'campanas.aporte.registrar'),
+  ('admin', 'agency', 'campanas.resultado.calcular'),
   ('admin', 'agency', 'campanas.reporte.enviar'),
   ('admin', 'agency', 'finanzas.factura.ver'),
   ('admin', 'agency', 'finanzas.factura.crear'),
@@ -269,6 +274,7 @@ FROM (VALUES
   ('manager', 'agency', 'campanas.campana.editar'),
   ('manager', 'agency', 'campanas.post.asociar'),
   ('manager', 'agency', 'campanas.aporte.registrar'),
+  ('manager', 'agency', 'campanas.resultado.calcular'),
   ('manager', 'agency', 'campanas.reporte.enviar'),
   ('finance', 'agency', 'finanzas.factura.ver'),
   ('finance', 'agency', 'finanzas.factura.crear'),

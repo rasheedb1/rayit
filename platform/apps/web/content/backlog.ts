@@ -503,14 +503,16 @@ export const STORIES: readonly Story[] = [
     title: "Lo que aporta la marca",
     desc: "Canjes del código, pedidos, ingresos, por formulario o CSV, en campaign_brand_input.",
     done: "Subir un CSV de ventas diarias llena la tabla y aparece en la ficha.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Sección «Lo que aportó la marca» en la ficha: tabla por concepto (último total del formulario o suma del CSV, calculado en SQL), ventas diarias en barras, «Registrar aporte» e «Importar CSV de ventas» con el resumen de filas aceptadas y rechazadas. La fuente decide la semántica (formulario = total a la fecha, CSV = diario); repetir el CSV no duplica; una campaña cerrada lo rechaza; cada alta deja audit_log desde queries/campanas.ts hasta que exista audit() (ACC-2). Sin migraciones; el índice único de la clave natural y el contrato de lectura para CAM-5 están en docs/propuestas/CAM-4.md.",
   },
   {
     id: "CAM-5", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CAM-3", "CAM-4", "CON-6"],
     title: "Resultado de campaña",
     desc: "campaign.compute llena campaign_result con views, alcance, clics, canjes, seguidores ganados por la marca frente a su ritmo previo, CPM y CPA reales, y views_vs_median. missing_inputs dice qué falta.",
     done: "Los seis KPIs salen de la tabla; si no hay datos de la marca, la celda dice «sin datos de la marca», no cero.",
-    status: "pendiente",
+    status: "hecho",
+    note: "calcularResultado (core, pura) con corte común (720 h o el mayor que todos alcanzaron), vs mediana ponderado por views, seguidores de la marca con ritmoSeguidores (CAM-3), canjes e ingresos de CAM-4 (manda el CSV) y CPM/CPA en centavos. Job campaign.compute cada mañana para live/measuring/reported como mc_worker con workspace explícito; «Resultado» en la ficha con los seis KPIs de campaign_result y «Falta: …» con enlace. El seed recalculado da CPM 4.353,93 y CPA 9.748,43 (no los del mock). «Recalcular» espera el GRANT de docs/propuestas/CAM-5.md §2: mc_app solo lee campaign_result desde 0025. Rama encadenada sobre CAM-4.",
   },
   {
     id: "CAM-6", module: "CAM", owner: "nicolas", size: "L", sprint: 4, deps: ["CAM-5"],

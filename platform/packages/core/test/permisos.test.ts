@@ -22,9 +22,9 @@ test('cada clave tiene la forma <módulo>.<recurso>.<acción> con módulo y acci
   }
 });
 
-test('las claves son únicas y hay 43', () => {
+test('las claves son únicas y hay 44', () => {
   assert.equal(new Set(TODOS_LOS_PERMISOS).size, PERMISOS.length);
-  assert.equal(PERMISOS.length, 43);
+  assert.equal(PERMISOS.length, 44);
 });
 
 test('cada etiqueta empieza en infinitivo y en mayúscula; cada sensibilidad es normal o sensible', () => {
