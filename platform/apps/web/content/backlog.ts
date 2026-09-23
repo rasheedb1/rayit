@@ -597,10 +597,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "ACC-2", module: "ACC", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-2"],
     title: "Bitácora obligatoria",
-    desc: "withAudit() en packages/db: toda escritura de dinero, publicación o cuenta conectada deja su fila en audit_log con actor, before y after.",
+    desc: "audit() en packages/db/src/audit.ts: toda escritura de dinero, publicación o cuenta conectada deja su fila en audit_log con actor, before y after redactados, en la misma transacción.",
     done: "Crear una factura y conectar una cuenta dejan su fila; una prueba recorre las escrituras de queries/ y falla si alguna no audita.",
-    status: "pendiente",
-    note: "audit_log no se puede rellenar hacia atrás: o se escribe desde la primera Server Action o no existe.",
+    status: "hecho",
+    note: "Hecha el 23-sep. Sin migración: 0010 y 0025 ya dejaban audit_log lista. audit(tx, …) va DENTRO de la consulta que escribe (no en la Server Action), así COT-4 audita al crear la campaña sin saberlo; el actor sale de current_user_id() en SQL ('system' si la transacción no tiene identidad; 'job' desde el worker con auditAsJob). Redacción en dos capas (redactSecrets + claves prohibidas: secret_ref, correos, ip, evidence, raw) con prueba de volcado. Las 13 escrituras de finanzas, campanas y conexiones auditan; test/audit-convencion.test.ts lo exige. Fuera: la pantalla (AGE-2), 'delegate' (ACC-3) y las escrituras de Rasheed (docs/propuestas/ACC-2.md §3).",
   },
   {
     id: "ACC-3", module: "ACC", owner: "nicolas", size: "M", sprint: 4, deps: ["ACC-1", "CIM-3"],

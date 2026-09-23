@@ -11,6 +11,7 @@ src/client.ts      withWorkspace / withIdentity / asWorker / withCatalogs sobre 
 src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
+src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritura (uso 7)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
@@ -29,6 +30,7 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
+| Bitácora | `@mc/db` | `import { audit, auditAsJob } from '@mc/db'` |
 
 El tipo `Db` que entrega el barril **no** tiene `withCatalogs`: una
 transacción sin workspace sobre una tabla con RLS devuelve cero filas sin
@@ -47,7 +49,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los seis usos
+## Los siete usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -234,6 +236,72 @@ devolución al pool) que PGlite no toca. Los paquetes con su propia copia
 del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 `worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
 (CON-2b).
+
+### 7. Bitácora: `audit()` en toda escritura de dinero, publicación o cuenta conectada
+
+```ts
+import { audit } from '../audit.ts';   // desde queries/<módulo>.ts
+
+export async function transitionInvoice(tx: WorkspaceTx, id: string, to: InvoiceStatus) {
+  const row = …;                        // SELECT … FOR UPDATE
+  await tx.query('UPDATE invoice SET status = $2 … WHERE id = $1', [id, to]);
+  await audit(tx, {
+    action: 'invoice.sent',             // '<entidad>.<evento>', de AUDIT_ACTIONS
+    entityType: 'invoice',              // la tabla
+    entityId: id,
+    before: { status: row.status },     // solo lo que cambia, de ESTA entidad
+    after: { status: to },
+  });
+  return getInvoice(tx, id);
+}
+```
+
+Se llama **dentro de la función de consulta que escribe, con el mismo
+`tx`**, no desde la Server Action: así audita igual quien llame a la
+consulta (COT-4 crea la campaña con `createCampaignFromQuote` y la fila
+queda sin que Cotizar sepa nada), y si la transacción hace rollback la
+bitácora se va con ella. Lo que la fila guarda lo pone la base, no un
+parámetro: `workspace_id = current_workspace_id()` (RLS rechaza otro),
+`actor_user_id = current_user_id()` (la identidad que `withWorkspace(…,
+identity)` fijó desde la sesión) y `actor_kind = 'user'`, o `'system'`
+con actor nulo si la transacción no tiene identidad (copia sin llaves,
+pruebas): decir «user» sin saber cuál sería mentir. Desde un job,
+`auditAsJob(ctx.db, { workspaceId, job: { id, runId }, …entrada })`:
+`actor_kind = 'job'`, `workspace_id` explícito y el job en `after._job`.
+
+`before` y `after` se construyen **a mano con los campos permitidos de
+la entidad** (nunca `...row`) y aun así pasan por `sanitizeForAudit`:
+`redactSecrets` de `@mc/connectors` (tokens, secretos, contraseñas,
+`OAuthTokens` por forma) y después `CLAVES_PROHIBIDAS_EN_BITACORA`
+(`secret_ref`, `ip`, `raw`, `evidence`, correos y teléfonos, user agent,
+cookies) que se **eliminan** a cualquier profundidad; todo lo que parezca
+un correo dentro de un string queda como `[correo omitido]`.
+`test/audit.test.ts` lo demuestra con el volcado de columnas de texto
+(`dumpTextColumns`, el precedente de CON-3).
+
+`audit()` no devuelve nada (el id de `audit_log` es un bigserial que no
+sale de la base; CIM-2 §3), no hay función que la lea (la pantalla es de
+AGE-2) y nadie la corrige: `mc_app` tiene SELECT + INSERT y nada más
+(**0025 §5**; la guardia lo exige en `PRIVILEGIOS_DE_LA_APP`).
+
+**La convención se hace cumplir con una prueba**, no con el tipo:
+`test/audit-convencion.test.ts` recorre `queries/{finanzas, campanas,
+conexiones}.ts`, encuentra cada función —exportada o no— que contiene
+`INSERT INTO`, `UPDATE … SET`, `DELETE FROM` o `tx.db.insert|update|
+delete(` y falla si no contiene `audit(`, salvo que esté en
+`SIN_BITACORA_DECLARADAS` con su motivo (métricas append-only, salud
+técnica de una lectura). Una función declarada ahí que ya no escriba
+también falla. Para sumar un archivo de consultas a la lista basta con
+agregarlo a `ARCHIVOS`.
+
+Qué se audita hoy: `invoice.created / sent / payment_recorded / paid /
+voided / reopened / marked_overdue`, `campaign.created / updated /
+status_changed / post_linked / post_unlinked / primary_post_set`,
+`connection.added / reconnected / authorized / disconnected`,
+`consent.recorded`. Agregar una acción es agregarla a `AUDIT_ACTIONS`
+(`src/audit.ts`): una acción fuera de la lista lanza
+`InvalidAuditActionError` antes de tocar la base, aunque venga con un
+cast.
 
 ## Lo que hace el cliente por ti
 
@@ -453,3 +521,7 @@ además más rápido.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas
   `timestamptz` en UTC.
 - Los tokens nunca tocan la base en claro (`secret_ref`).
+- Toda escritura de dinero, publicación o cuenta conectada deja su fila
+  en `audit_log` con `audit()` (uso 7), en la misma transacción, con
+  `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige
+  en los archivos de consultas que adoptaron la convención.

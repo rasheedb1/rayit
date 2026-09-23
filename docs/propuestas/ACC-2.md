@@ -201,4 +201,89 @@ FIN-8, CAM-4, CAM-6 (`campaign.report_sent`).
 
 ## 1. La firma
 
-(Se completa al cerrar.)
+```ts
+import { audit, auditAsJob, AUDIT_ACTIONS, type AuditAction, type AuditEntry } from '@mc/db';
+
+interface AuditEntry {
+  action: AuditAction;                       // '<entidad>.<evento>', lista cerrada
+  entityType: string;                        // la tabla: 'invoice', 'campaign', 'social_connection', 'data_consent'
+  entityId: string | null;                   // uuid de la fila
+  before?: Record<string, unknown> | null;   // solo lo que cambia, de ESTA entidad
+  after?: Record<string, unknown> | null;
+}
+
+audit(tx: WorkspaceTx, entry: AuditEntry): Promise<void>;   // web: actor desde current_user_id()
+auditAsJob(exec: { query(text, params?) }, entry: AuditEntry & {
+  workspaceId: string;                       // explícito: mc_worker salta RLS
+  job: { id: string; runId: number };        // va en after._job
+}): Promise<void>;                            // worker: actor_kind 'job', actor_user_id null
+```
+
+- Se llama **dentro** de la función de consulta que escribe, con el
+  mismo `tx`, después del INSERT/UPDATE y antes de devolver. Nunca
+  desde la Server Action.
+- No devuelve nada. No hay función que lea la bitácora.
+- `before`/`after` pasan por `sanitizeForAudit` (redacción, §0.3.3) y
+  se guardan como `jsonb`; un `before` omitido es SQL `NULL`.
+- Una acción fuera de `AUDIT_ACTIONS` lanza `InvalidAuditActionError`
+  antes de tocar la base, aunque llegue con un cast.
+- Contrato completo con ejemplo: `packages/db/README.md`, uso 7.
+
+## 2. Lo que necesito de ti (Rasheed)
+
+### 2.1 Revisar `packages/db/src/audit.ts`
+
+La propuesta ACC (fase 6) daba `withAudit` a tu columna de §3.1. Lo
+escribí yo como archivo NUEVO junto a `queries/` —no toca `client.ts`
+ni `schema/`— con la firma `audit(tx, entrada)` en vez del wrapper
+(§0.3.1 explica por qué). **DECISIÓN PENDIENTE DE NICOLÁS / a
+confirmar contigo**: si prefieres que el archivo pase a tu columna en
+§3.1, es una línea en el backlog; el código no cambia.
+
+### 2.2 Privilegios de `audit_log`: nada que aplicar
+
+Ya están bien y la guardia los exige:
+
+| Rol | Tiene | Dónde |
+|---|---|---|
+| `mc_app` | SELECT + INSERT; sin UPDATE ni DELETE; USAGE sobre `audit_log_id_seq` (sin SELECT: `last_value` es volumen de toda la plataforma) | 0025 §5, 0026 §4; `src/esquema.ts` `PRIVILEGIOS_DE_LA_APP.audit_log` |
+| `mc_worker` | SELECT/INSERT/UPDATE/DELETE por 0014 (BYPASSRLS) | `auditAsJob` solo INSERT; que el worker pueda editar la bitácora es lo mismo que pueda editar cualquier tabla: no es un privilegio nuevo |
+| RLS | `audit_log_ws_isolation USING (workspace_id = current_workspace_id())` aplica a INSERT (WITH CHECK hereda USING) | 0010 |
+
+Sin migración en esta historia. Lo comprobé antes de diseñar (§0.1) y
+`test/audit.test.ts` («mc_app no corrige ni borra la bitácora») lo
+prueba además de `rls.test.ts:1800`.
+
+### 2.3 Lo que sí cambia después, y en qué historia
+
+| Qué | Historia | Nota |
+|---|---|---|
+| `audit_log.id` bigserial → uuid | **CIM-11** (tuya) | Mientras tanto ninguna consulta lo devuelve; `audit()` no devuelve nada y `auditAsJob` guarda `job_run.id` dentro de `after._job` (no sale de la base). Cuando `job_run.id` pase a uuid, `runId` pasa a `string`: un cambio de tipo en `JobAuditEntry`. |
+| `actor_kind` + `'delegate'`, `on_behalf_of_workspace_id` | **ACC-3** (SQL mío, revisión tuya), **AGE-2** | `audit()` no los toca; cuando existan, la sesión delegada los fija en SQL igual que hoy `current_user_id()`. |
+| Pantalla de bitácora («qué hizo mi mánager») | **AGE-2** / fase 2 | Necesita etiquetas en español por acción: la lista cerrada `AUDIT_ACTIONS` está pensada para eso. |
+| `ip` en `audit_log` | no se escribe | PII; la evidencia de consentimiento ya la guarda `data_consent.evidence`. Si un día hace falta, es una decisión de §7 del backlog. |
+
+## 3. Tus escrituras que deberían auditar (cuando adoptes la convención)
+
+`audit()` está en `@mc/db` y `test/audit-convencion.test.ts` acepta
+archivos nuevos en `ARCHIVOS`. Por el criterio de ACC-2 —dinero,
+publicación o cuenta conectada— estas son las tuyas, con la acción que
+propongo (se agregan a `AUDIT_ACTIONS`):
+
+| Archivo | Función | Acción propuesta | `after` (sin PII: sin correos ni teléfonos de contactos) |
+|---|---|---|---|
+| `queries/ventas.ts` | marcar un deal como ganado / perdido | `deal.won`, `deal.lost` | stageId anterior y nuevo, amount, currency, motivo |
+| `queries/ventas.ts` | cambio de etapa | `deal.stage_changed` | stageId anterior y nuevo |
+| `queries/cotizar.ts` | `sendQuote` | `quote.sent` | number, total, currency |
+| `queries/cotizar.ts` | aceptar (`acceptPublicQuote`, `completePublicAcceptance`) | `quote.accepted` | number, total, currency, acceptedByName (**sin** el correo de quien aceptó) |
+| `queries/cotizar.ts` | media kit publicado / bloqueado / enlace | `media_kit.published`, `media_kit.unpublished`, `media_kit.share_updated` | slug, isPublic, expiresAt (**sin** la contraseña ni su hash) |
+| `queries/resumen.ts` | importar CSV de Insights (RES-2) | no: métricas append-only | — |
+
+Las tres funciones SECURITY DEFINER de 0030 corren como
+`mc_public_share` **sin workspace en la transacción**: ahí `audit()`
+no sirve tal cual (`current_workspace_id()` es NULL y RLS rechazaría el
+INSERT). Para `quote.accepted` desde el enlace, la fila la tendría que
+dejar la propia función SECURITY DEFINER (con el `workspace_id` de la
+cotización) o la Server Action de aceptación que corre después con
+workspace. Lo decides tú al adoptarla; te recomiendo la función, porque
+es la única que sabe que la aceptación ocurrió.
