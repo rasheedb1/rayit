@@ -370,6 +370,15 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
       esCheckViolado,
       'el rol a medida de B en el workspace C',
     );
+    // Un rol a medida sí vale en su propio workspace, y la pantalla de
+    // cuenta lo muestra como «Solo lectura» (nunca como más).
+    const USER_BECARIO = '00000034-0000-4000-8000-0000000000b2';
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${USER_BECARIO}', 'becario@acc3.test', 'Becario');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_B}', '${USER_BECARIO}', (SELECT id FROM role WHERE key = 'becario'));
+    `);
+    const suyos = await t.db.withWorkspace(WS_B, (tx) => listMyWorkspaces(tx), { userId: USER_BECARIO });
+    assert.deepEqual(suyos.map((w) => [w.id, w.role]), [[WS_B, 'viewer']]);
     // Y sin DEFAULT: una membresía sin rol no entra.
     await assert.rejects(
       t.admin(`INSERT INTO membership (workspace_id, user_id) VALUES ('${WS_C}', '${USER_B}')`),

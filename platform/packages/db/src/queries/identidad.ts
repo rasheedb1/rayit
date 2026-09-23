@@ -27,7 +27,7 @@
  */
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { IdentityTx, WorkspaceTx } from '../client.ts';
-import { appUser, creatorProfile, membership, role, workspace, type RoleKey } from '../schema/index.ts';
+import { appUser, creatorProfile, isRoleKey, membership, role, workspace, type RoleKey } from '../schema/index.ts';
 
 export type AppUser = typeof appUser.$inferSelect;
 /** La clave del rol de sistema de una membresía (0034: membership.role_id → role.key). */
@@ -350,7 +350,10 @@ export async function listMyWorkspaces(tx: IdentityTx | WorkspaceTx): Promise<My
     .innerJoin(workspace, eq(workspace.id, membership.workspaceId))
     .innerJoin(role, eq(role.id, membership.roleId))
     .orderBy(asc(membership.createdAt), asc(workspace.name));
-  return rows.map(({ createdAt: _createdAt, role: rol, ...ws }) => ({ ...ws, role: rol as RoleKey }));
+  // Un rol a medida (ACC-9, todavía no existe) no tiene etiqueta en la
+  // pantalla de cuenta: se muestra como «Solo lectura», que nunca da más
+  // de lo que la persona tiene. Lo que puede hacer lo dicen sus permisos.
+  return rows.map(({ createdAt: _createdAt, role: rol, ...ws }) => ({ ...ws, role: isRoleKey(rol) ? rol : 'viewer' }));
 }
 
 /** ¿Tengo membresía en este espacio? Es la pregunta que valida la cookie mc.workspace. */

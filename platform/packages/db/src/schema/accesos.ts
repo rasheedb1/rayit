@@ -25,6 +25,10 @@ import { appUser, workspace } from './cimientos.ts';
 /** Las claves de los roles de sistema (0034 §4). Coinciden con RoleKey de @mc/core (ACC-1). */
 export const ROLE_KEYS = ['owner', 'admin', 'manager', 'editor', 'finance', 'viewer'] as const;
 export type RoleKey = (typeof ROLE_KEYS)[number];
+/** ¿Es la clave de un rol de sistema? Un rol a medida (ACC-9) puede llevar cualquier otra. */
+export function isRoleKey(key: string): key is RoleKey {
+  return (ROLE_KEYS as readonly string[]).includes(key);
+}
 export const PERMISSION_SENSITIVITIES = ['normal', 'sensible'] as const;
 export const SCOPE_TYPES = ['creator', 'company', 'campaign'] as const;
 export const GRANT_STATUSES = ['pending', 'active', 'revoked', 'expired'] as const;
