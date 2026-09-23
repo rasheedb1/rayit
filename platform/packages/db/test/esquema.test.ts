@@ -1227,11 +1227,14 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   const DEAL_PUBLIC_SHARE =
     "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
 
-  test('el inventario declarado es el de 0030 y 0031, y la base recién migrada lo cumple', async () => {
+  test('el inventario declarado es el de 0030, 0031, 0033 y 0034, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'pipeline_stage', 'quote',
+      'report',
     ]);
-    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 8, 'las siete de 0030 y la aceptada del negocio de 0033');
+    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 10, 'las siete de 0030, la aceptada del negocio de 0033 y las dos del reporte de 0034');
+    // El reporte (CAM-6): nunca el payload congelado.
+    assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.report!.columnas!.UPDATE!.includes('payload'));
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
   });

@@ -21,7 +21,14 @@
  *     misma transacción y antes de devolver; test/audit-convencion.test.ts
  *     lo exige. La entidad es siempre la campaña: campaign_post no tiene
  *     id propio.
+ *
+ * El reporte a la marca (CAM-6) vive en la carpeta campanas/ y se
+ * reexporta desde aquí, como hace cotizar.ts con la suya:
+ *   campanas/reporte.ts          generar, listar, leer y marcar enviado
+ *   campanas/reporte-publico.ts  la lectura sin sesión (PublicShareTx)
  */
+export * from './campanas/reporte.ts';
+export * from './campanas/reporte-publico.ts';
 import {
   assertCampaignDates,
   brandAccountsFromSocials,

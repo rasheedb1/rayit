@@ -1,8 +1,12 @@
-import type { BrandCsvRejectReason, MissingInput } from "@mc/core";
+import type { BrandCsvRejectReason, MissingInput, ReportSentVia } from "@mc/core";
+import { REPORT_SENT_VIA_LABEL_ES } from "@mc/core";
+import type { TextosReporte } from "@mc/db";
 
 /**
  * Textos de interfaz del módulo Campañas que no viven en una pantalla
- * concreta. Empieza con «Lo que aportó la marca» (CAM-4); las pantallas
+ * concreta. Empieza con «Lo que aportó la marca» (CAM-4); el reporte a la
+ * marca (CAM-6) trae los de su sección, su documento y su página pública,
+ * y las frases que enviar deja en otras tablas. Las pantallas
  * de CAM-1 conservan sus frases en el JSX hasta que las toque una
  * historia.
  */
@@ -162,4 +166,163 @@ export const MESSAGES = {
     recomputeError: "No se pudo recalcular el resultado.",
     recomputeDenied: "Desde la ficha todavía no se puede recalcular: el resultado se actualiza cada mañana.",
   },
+  meta: {
+    /** La pestaña de la marca: la campaña y quién la manda, como el asunto de una factura. Nunca se indexa. */
+    reportePublico: (campana: string, creador: string) => (creador ? `${campana} · ${creador}` : campana),
+    reportePublicoSinDatos: "Reporte",
+    vistaPrevia: (campana: string) => `Vista previa del reporte · ${campana}`,
+  },
+
+  reporte: {
+    title: "Reporte a la marca",
+    generar: "Generar reporte",
+    regenerar: "Generar de nuevo",
+    /** Bajo el botón: qué hace generar según lo que hay. */
+    ayudaSinReporte: "Congela lo acordado, los posts con sus cortes, el resultado, la curva de la marca y lo que aportó. Nace en borrador: nadie lo ve hasta que lo marques enviado.",
+    ayudaBorrador: "El borrador se reemplaza con las cifras de ahora. Su enlace no abre hasta que lo marques enviado.",
+    ayudaEnviado: "El reporte enviado no cambia aunque lleguen lecturas nuevas. Generar de nuevo crea otra versión con otro enlace; el anterior sigue abriendo y avisa que hay una más reciente.",
+    noDisponible: {
+      planned: "El reporte llega cuando la campaña esté en curso: hasta entonces no hay nada que congelar.",
+      cancelled: "Una campaña cancelada no se reporta.",
+    },
+    confirmarRegenerar: "¿Generar de nuevo? El borrador actual se reemplaza con las cifras de ahora.",
+    confirmarNuevaVersion: "¿Generar otra versión? La enviada seguirá abriendo con el aviso de que hay una más reciente.",
+    previsualizar: "Previsualizar",
+    enlace: "Enlace para la marca",
+    copiarEnlace: "Enlace",
+    marcarEnlace: "Enviado por enlace",
+    marcarPdf: "Enviado como PDF",
+    confirmarEnviado: (via: ReportSentVia) =>
+      `¿Marcar el reporte como enviado ${REPORT_SENT_VIA_LABEL_ES[via]}? Desde ahora el enlace abre para la marca y las cifras quedan congeladas.`,
+    estado: "Estado",
+    generado: (fecha: string) => `Cifras congeladas el ${fecha}`,
+    enviado: (via: ReportSentVia, fecha: string) => `Enviado ${REPORT_SENT_VIA_LABEL_ES[via]} el ${fecha}`,
+    visto: (fecha: string) => `Abierto por la marca el ${fecha}`,
+    sinAbrir: "La marca todavía no lo abre",
+    visitas: (n: number) => (n === 1 ? "1 apertura" : `${n} aperturas`),
+    versiones: "Versiones",
+    version: (n: number) => `Versión ${n}`,
+    versionReemplazada: "Reemplazada por una más reciente",
+    versionVigente: "Vigente",
+    descargarPdf: "Descargar PDF",
+    descargarPdfAyuda: "Abre el diálogo de impresión: elige «Guardar como PDF».",
+    /** El aviso de la vista previa, arriba del documento. */
+    vistaPreviaBorrador: "Vista previa. Es un borrador: la marca no puede abrirlo todavía.",
+    vistaPreviaEnviado: "Vista previa. Es lo que la marca ve en su enlace.",
+    volver: "Volver a la campaña",
+    errores: {
+      generar: "No se pudo generar el reporte.",
+      enviar: "No se pudo marcar el reporte como enviado.",
+      reporte: "El reporte no es válido.",
+      via: "Elige cómo lo enviaste: por enlace o como PDF.",
+    },
+  },
+
+  /** La página que abre la marca (y la vista previa del creador). Solo lee el payload. */
+  documento: {
+    eyebrow: "Reporte de campaña",
+    de: "De",
+    para: "Para",
+    fechas: (rango: string) => `Campaña del ${rango}`,
+    sinFechas: "Campaña sin fechas acordadas",
+    /** Arriba, antes que cualquier cifra: lo que se acordó antes de publicar. */
+    acordado: "Acordado antes de publicar",
+    acordadoDe: (numero: string) => `Cotización ${numero}`,
+    sinCotizacion: "Los términos se acordaron fuera de On Cue: no hay cotización que citar.",
+    resultado: "Resultado",
+    resultadoCorte: (corte: string) => `Consolidado al corte de ${corte}`,
+    resultadoCalculado: (fecha: string) => `calculado el ${fecha}`,
+    sinResultado: "El resultado consolidado todavía no está: las cifras de cada post, abajo, sí.",
+    faltantes: "Para completarlo falta:",
+    kpi: {
+      views: "Visualizaciones",
+      reach: "Alcance",
+      interactions: "Interacciones",
+      saves: "Guardados",
+      shares: "Compartidos",
+      linkClicks: "Clics al enlace",
+      reachNonFollowers: "Alcance fuera de seguidores",
+      brandFollowersGained: "Seguidores ganados por la marca",
+      codeRedemptions: "Canjes del código",
+      attributedRevenue: "Ventas atribuidas",
+      cpm: "CPM",
+      costPerFollower: "Costo por seguidor",
+      cpa: "Costo por canje",
+      emv: "Valor mediático (EMV)",
+    },
+    sinDato: "Sin dato",
+    posts: "Los posts",
+    post: "Post",
+    principal: "Principal",
+    publicado: (fecha: string) => `Publicado el ${fecha}`,
+    sinFechaPublicacion: "Sin fecha de publicación",
+    corte: (corte: string) => `A ${corte}`,
+    ultimaLectura: (fecha: string) => `Última lectura: ${fecha}`,
+    sinLectura: "Todavía sin lectura en este corte",
+    sinPosts: "El reporte se generó sin posts asociados.",
+    metricaPost: {
+      views: "Visualizaciones",
+      reach: "Alcance",
+      likes: "Me gusta",
+      comments: "Comentarios",
+      shares: "Compartidos",
+      saves: "Guardados",
+      totalInteractions: "Interacciones",
+    },
+    seguidores: "Seguidores de la marca",
+    seguidoresDe: (handle: string) => `@${handle}`,
+    seguidoresSerie: "Seguidores",
+    seguidoresVentana: (rango: string) => `Campaña ${rango}`,
+    seguidoresLineaBase: (fecha: string) => `Línea base desde el ${fecha}`,
+    seguidoresAria: (handle: string) => `Seguidores de @${handle} por día, con la ventana de la campaña sombreada`,
+    sinSeguidores: (handle: string | null) =>
+      handle ? `Todavía no hay serie de seguidores de @${handle}: se toma del perfil público cada día.` : "La campaña no tiene una cuenta de la marca que medir.",
+    seguidoresSinCuenta: "Sin cuenta de la marca",
+    aportes: "Lo que aportó la marca",
+    aporte: {
+      code_redemptions: "Canjes del código",
+      orders: "Pedidos",
+      revenue: "Ingresos",
+      signups: "Registros",
+      csv_sales: "Ventas diarias (CSV)",
+      postback: "Conversiones (postback)",
+    } as Record<string, string>,
+    aporteFuente: {
+      brand_manual: "reportado por la marca",
+      brand_csv: "CSV de la marca",
+      integration: "integración",
+      postback: "postback",
+    } as Record<string, string>,
+    aporteDia: (fecha: string) => `al ${fecha}`,
+    sinAportes: "La marca no ha compartido canjes, pedidos ni ingresos.",
+    seguimiento: "Seguimiento",
+    codigo: "Código",
+    enlaceRastreado: "Enlace",
+    sinSeguimiento: "Esta campaña no usó código ni enlace rastreado.",
+    congelado: (fecha: string) => `Cifras congeladas el ${fecha}`,
+    /** El aviso de un enlace que otra versión enviada dejó atrás (0034 §1). */
+    versionAntigua: "Hay una versión más reciente de este reporte. Quien te lo envió tiene el enlace nuevo; este sigue mostrando lo que decía cuando se envió.",
+    pie: (creador: string) => (creador ? `Reporte preparado por ${creador} con On Cue` : "Reporte preparado con On Cue"),
+  },
+
+  publico: {
+    noExiste: {
+      title: "Este enlace no existe",
+      description: "Puede haberse retirado o estar mal copiado. Pídele uno nuevo a quien te lo compartió.",
+    },
+  },
 } as const;
+
+
+/**
+ * Las frases que marcar «enviado» deja en la historia de la empresa
+ * (Ventas la enseña en la ficha) y en el aviso al creador. Se pasan a
+ * @mc/db, que no tiene idioma.
+ */
+export const TEXTOS_REPORTE: TextosReporte = {
+  actividadEnviado: ({ campaignName, via }) => `Reporte de «${campaignName}» enviado ${REPORT_SENT_VIA_LABEL_ES[via]}`,
+  avisoEnviado: ({ companyName, campaignName, via }) => ({
+    title: `Reporte enviado a ${companyName}`,
+    body: `«${campaignName}», ${REPORT_SENT_VIA_LABEL_ES[via]}. Cuando la marca lo abra, la ficha lo dirá.`,
+  }),
+};

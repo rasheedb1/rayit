@@ -229,3 +229,42 @@ summary::-webkit-details-marker {
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------
+   Impresión (CAM-6): «Descargar PDF» es el diálogo de impresión del
+   navegador sobre la propia página. El papel es blanco: en tema oscuro
+   se vuelve a los tokens del tema claro de arriba (copiados aquí, no
+   inventados). Fuera lo que no es documento: botones, avisos de la
+   vista previa, tooltips.
+   ------------------------------------------------------------------ */
+@media print {
+  @page {
+    margin: 16mm;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #fafafa;
+    --hover: #f4f4f4;
+    --ink: #171717;
+    --ink-2: #525252;
+    --muted: #737373;
+    --grid: #f0f0f0;
+    --axis: #d4d4d4;
+    --border: #eaeaea;
+    --accent: #171717;
+    --accent-ink: #ffffff;
+    --deemph: #d4d4d4;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .doc-seccion,
+  .doc-bloque {
+    break-inside: avoid;
+  }
+  a {
+    text-decoration: none;
+  }
+}
