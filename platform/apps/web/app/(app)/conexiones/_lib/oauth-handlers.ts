@@ -15,6 +15,12 @@
  *                    /conexiones?conectada=<id>.
  *
  * Ni el code ni los tokens tocan logs, errores, URLs nuestras ni la cookie.
+ *
+ * Consentimiento delegado (ACC-8): start comprueba el permiso
+ * conexiones.cuenta.conectar antes de mandar a la plataforma; el
+ * callback lo vuelve a comprobar como primera sentencia de la
+ * transacción, deja la evidencia v2 (onBehalfOf el creador, actedBy si
+ * actúa un tercero), la bitácora y el aviso al titular.
  */
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -24,10 +30,12 @@ import {
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
 import {
-  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getDefaultCreatorId, NoCreatorProfile, recordConsent, upgradePublicAccountToOAuth,
-  upsertConnection, type ConsentPurpose, type WorkspaceTx,
+  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, recordConsent,
+  upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
-import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
+import { buildConsentEvidence, CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
+import { notifyOwner } from "./owner-notice";
+import { requireConexionesPermission, SinPermisoError } from "./permisos";
 
 export const OAUTH_COOKIE = "oc_oauth";
 export const OAUTH_COOKIE_PATH = "/conexiones/oauth";
@@ -44,6 +52,7 @@ export const OAUTH_ERROR_MESSAGES = {
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
+  sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -144,9 +153,14 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
 
       let creatorId: string;
       try {
-        creatorId = await deps.withWorkspace((tx) => getDefaultCreatorId(tx));
+        creatorId = await deps.withWorkspace(async (tx) => {
+          // Un route handler no es una Server Action: esta es su comprobación de permiso (ver _lib/permisos.ts). A quien no puede conectar no se le manda a la plataforma.
+          await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          return (await getConsentCreator(tx)).id;
+        });
       } catch (err) {
         if (err instanceof NoCreatorProfile) return redirect(req, "/conexiones?error=sin_creador");
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso");
         throw err;
       }
 
@@ -187,6 +201,15 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       if (!cfg) return redirect(req, "/conexiones?error=no_configurada", headers);
       const prov = OAUTH_PROVIDERS[provider];
 
+      // Antes de canjear el code: quien ya no puede conectar (su rol cambió desde start, o la cookie es de otra sesión)
+      // no obtiene tokens que luego habría que tirar. La transacción que escribe lo vuelve a comprobar.
+      try {
+        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+      } catch (err) {
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso", headers);
+        throw err;
+      }
+
       // Fase HTTP fuera de la transacción; el log se acumula y se escribe con la fila.
       const callLog = new InMemoryCallLogSink();
       const core = new HttpCore({ callLog, fetch: deps.fetch, now, quota: new QuotaManager({ now }) });
@@ -210,15 +233,22 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         return redirect(req, "/conexiones?error=identidad", headers);
       }
 
-      const at = now().toISOString();
-      const evidence = redactSecrets({
-        ip: clientIp(req), userAgent: req.headers.get("user-agent"), textShown: saved.textShown, policyVersion: saved.policyVersion,
-        scopesRequested: saved.scopesRequested, scopesGranted, at,
-      }) as Record<string, unknown>;
+      const at = now();
+      const ip = clientIp(req);
+      const userAgent = req.headers.get("user-agent");
       const cipher = keys.cipher;
       let connectionId: string;
       try {
         connectionId = await deps.withWorkspace(async (tx) => {
+        // Primera sentencia, antes de guardar nada: el permiso de quien vuelve de la plataforma (ver _lib/permisos.ts).
+        const actor = await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+        // El titular es el perfil del workspace, el mismo que start guardó en la cookie; si no coincide, alguien cambió de espacio a mitad del flujo.
+        const creator = await getConsentCreator(tx);
+        if (creator.id !== saved.creatorId) throw new CreatorNotInWorkspace(saved.creatorId);
+        const evidence = redactSecrets(buildConsentEvidence({
+          method: "oauth", declaredOwner: false, ip, userAgent, textShown: saved.textShown, policyVersion: saved.policyVersion, at,
+          creatorId: creator.id, creatorUserId: creator.userId, actor, extra: { scopesRequested: saved.scopesRequested, scopesGranted },
+        })) as Record<string, unknown>;
         const existing = await findConnectionByAccount(tx, prov.platformId, externalAccountId);
         // Híbrido CON-10: si la cuenta ya se agregó por @, «Autorizar» convierte ESA fila (mismo id, mismo historial).
         const publicRow = provider !== "tiktok-business" && profile.handle ? await findPublicAccountByHandle(tx, prov.platformId, profile.handle) : null;
@@ -234,15 +264,16 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
           });
         } else {
           id = (await upsertConnection(tx, {
-            creatorId: saved.creatorId, platformId: prov.platformId, externalAccountId,
+            creatorId: creator.id, platformId: prov.platformId, externalAccountId,
             handle: profile.handle, displayName: profile.display_name, avatarUrl: profile.avatar_url, profileUrl: profile.profile_url, accountType: profile.account_type,
             secretRef, scopes: scopesGranted, accessExpiresAt: tokens.accessExpiresAt, refreshExpiresAt: tokens.refreshExpiresAt ?? null, connectedAt: now(),
           })).id;
         }
         const purposes: ConsentPurpose[] = purposesFor(provider, scopesGranted);
         for (const purpose of purposes) {
-          await recordConsent(tx, { connectionId: id, creatorId: saved.creatorId, purpose, policyVersion: saved.policyVersion, evidence });
+          await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose, policyVersion: saved.policyVersion, evidence });
         }
+        await notifyOwner(tx, { creator, actor, connectionId: id, network: PLATFORM_LABEL[provider], handle: profile.handle ?? externalAccountId, at });
         const sink = new PostgresCallLogSink(tx);
         for (const entry of callLog.entries) await sink.record({ ...entry, connection_id: entry.connection_id ?? id });
         return id;
@@ -250,7 +281,8 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       } catch (err) {
         // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador" : "temporal";
+        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador"
+          : err instanceof SinPermisoError ? "sin_permiso" : "temporal";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);

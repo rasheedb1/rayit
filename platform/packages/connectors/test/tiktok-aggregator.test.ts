@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { HttpCore } from '../src/http/client.ts';
 import { InMemoryCallLogSink } from '../src/log/memory.ts';
 import { QuotaManager } from '../src/quota/manager.ts';
+import { createPublicPostSources } from '../src/posts/index.ts';
 import { createPublicProfileSources, PublicLookupError } from '../src/public/index.ts';
 import { ENSEMBLEDATA_TOKEN_ENV, TIKTOK_AGGREGATOR_LABEL } from '../src/public/tiktok-aggregator.ts';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
@@ -35,7 +36,6 @@ test('sin ENSEMBLEDATA_TOKEN, TikTok sigue siendo el oEmbed de CON-10: el provee
   const { src, fetch } = await source([], { GOOGLE_API_KEY: 'x' });
   assert.equal(src.accessMode, 'public_profile');
   assert.equal(src.label, 'oEmbed de TikTok');
-  assert.equal(src.listPosts, undefined);
   assert.equal(fetch.calls.length, 0);
 });
 
@@ -181,19 +181,36 @@ test('la cuota del proveedor se contabiliza por unidades y con su propia familia
   assert.deepEqual(quota.usedToday({ family: 'tiktok', platformId: 'tiktok', connectionId: null }), { unitsUsed: 0, calls: 0 });
 });
 
-test('listPosts entrega el catálogo normalizado para CON-5, sin pasar por el perfil', async () => {
-  const { src, log } = await source([['user.posts', 'ok']]);
-  const { posts, complete } = await src.listPosts!('@laura.cocinafacil');
-  assert.equal(complete, true);
-  assert.equal(posts.length, 3);
-  assert.equal(posts[0]!.metrics.views, 50001);
-  assert.equal(posts[0]!.post.external_post_id, '7400000000000000d01');
-  assert.equal(posts[0]!.post.url, 'https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01');
-  assert.equal(posts[0]!.post.duration_s, 31, 'video.duration del aweme viene en milisegundos');
-  assert.deepEqual(posts[0]!.post.hashtags, ['recetafacil']);
-  assert.deepEqual(posts[0]!.post.mentions, ['cafealma.co']);
-  assert.equal(posts[0]!.post.published_at?.toISOString(), '2026-08-28T16:00:00.000Z');
+test('con el proveedor, TikTok SÍ tiene fuente de publicaciones para CON-5', async () => {
+  const clock = new FakeClock();
+  const log = new InMemoryCallLogSink();
+  const fetch = new FixtureFetch(await loadFixtures('ensembledata', [['user.posts', 'ok']]));
+  const core = new HttpCore({ callLog: log, quota: new QuotaManager({ now: clock.now, sleep: clock.sleep }), fetch: fetch.fetch, now: clock.now, sleep: clock.sleep, random: () => 1 });
+  const target = { connectionId: null, handle: 'laura.cocinafacil', externalAccountId: 'laura.cocinafacil', tokens: null };
+
+  const conProveedor = createPublicPostSources(core, ENV).tiktok!;
+  assert.equal(conProveedor.noPostsNoteEs, null, 'ya no hay que explicar por qué no hay videos');
+  assert.equal(conProveedor.supportsLookupById, false, 'no se puede preguntar por un video suelto: un ausente no es un borrado');
+
+  const videos = [];
+  for await (const v of conProveedor.listRecentPosts(target, { max: 10 })) videos.push(v);
+  assert.equal(videos.length, 3);
+  assert.equal(videos[0]!.post.external_post_id, '7400000000000000d01');
+  assert.equal(videos[0]!.post.url, 'https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01');
+  assert.equal(videos[0]!.post.duration_s, 31, 'video.duration del aweme viene en milisegundos');
+  assert.deepEqual(videos[0]!.post.hashtags, ['recetafacil']);
+  assert.deepEqual(videos[0]!.post.mentions, ['cafealma.co']);
+  assert.equal(videos[0]!.post.published_at?.toISOString(), '2026-08-28T16:00:00.000Z');
+  assert.equal(videos[0]!.metrics.views, 50001);
+
+  const medidas = await conProveedor.postMetrics(target, [{ externalPostId: '7400000000000000d02', surface: 'feed', mediaType: 'video' }]);
+  assert.deepEqual(medidas.readings.map((r) => [r.externalPostId, r.metrics.views]), [['7400000000000000d02', 12000]]);
+  assert.deepEqual(medidas.missingIds, [], 'no preguntar por un id no prueba que ya no exista');
   assert.ok(log.entries.every((e) => e.endpoint === 'ensembledata.tt.user.posts'));
+
+  // Sin la variable, la fuente de CON-5 vuelve a ser la que explica por qué no hay videos.
+  const sinProveedor = createPublicPostSources(core, {}).tiktok!;
+  assert.match(sinProveedor.noPostsNoteEs!, /no publica los videos/);
 });
 
 test('un @ mal escrito no gasta una unidad: se rechaza antes de llamar', async () => {

@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5, CAM-6) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -77,6 +77,21 @@ app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado
                               modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
                               _lib/marca-service.ts, con el mismo recordBrandSnapshot que
                               el job brand.snapshot.
+                              «Reporte a la marca» (CAM-6): [id]/reporte-seccion.tsx
+                              (generar, enviar por enlace o PDF, versiones),
+                              [id]/reporte/[reportId]/ (la vista previa del creador) y
+                              _ui/documento-reporte.tsx, EL documento que pintan la
+                              vista previa y la página pública: solo lee el payload
+                              congelado. «Descargar PDF» es el diálogo de impresión
+                              (@media print en globals.css), sin dependencia nueva.
+app/(public)/reporte/[slug]/  El reporte que abre la marca sin sesión (CAM-6), por
+                              public_report() de la migración 0037: noindex, 404 real
+                              para un borrador o un slug desconocido, y la primera
+                              apertura marca viewed_at (los robots de vista previa no).
+app/(app)/conexiones/         Cuentas por @ (CON-10) y OAuth (CON-3, detrás de
+                              oauth_connect). _lib/permisos.ts, _lib/consent.ts y
+                              _lib/messages.ts: quién puede conectar, la evidencia
+                              del consentimiento y los textos (ver «Conexiones»).
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
@@ -387,6 +402,53 @@ cumplir las dos: 0028 se para si 0024 no está en `schema_migrations`, y
 aplica las dos en el orden malo y comprueba el mensaje, y además lee de
 la base migrada que `mc_app` tenga INSERT (y no UPDATE ni DELETE) sobre
 membership.
+
+## Conexiones: quién conecta y quién consiente
+
+Quien conecta una cuenta ajena no es quien consiente (ACC-8, decisión E
+de `docs/propuestas/ACC-accesos-y-roles.md`). Las dos preguntas se
+responden por separado dentro de la misma transacción:
+
+- **A nombre de quién** queda el consentimiento: el `creator_profile`
+  del workspace (`getConsentCreator`). Siempre. Es de quien son los
+  datos, y es la respuesta el día que Meta o TikTok pregunten.
+- **Quién actuó**: la persona de la sesión, `current_user_id()`, con el
+  rol de su membresía (`getSessionMember`, `role.key` de 0034). Si no es
+  el titular, la fila de `data_consent` lo dice en `evidence.actedBy`
+  (id, correo y rol de ese día) y el titular recibe el aviso
+  `connection_added` (migración 0038) con quién, qué cuenta y cuándo.
+  La bitácora la escriben las consultas con `audit()` (ACC-2):
+  `actor_user_id` es quien actuó, y el `after` de cada fila de
+  conexiones y consentimientos lleva `onBehalfOf` y, si actuó un
+  tercero, `actedBy { userId, roleKey }`, sin correo. Quitar la cuenta
+  deja la misma huella en `evidence.revocation` y `connection.disconnected`.
+
+La evidencia es la **v2** (`_lib/consent.ts`): `v`, `method`
+(`public_handle` u `oauth`), `declaredOwner`, `ipHash` (sha256; la IP
+ya no va en claro), `userAgent`, `textShown`, `policyVersion`, `at`,
+`onBehalfOf { creatorId }` y, solo si actúa un tercero, `actedBy`.
+Aplica a los dos caminos: «Agregar cuenta» por @ y el callback de OAuth.
+
+**El permiso.** Cada Server Action abre con `requirePermission()`
+(ACC-1). Además, `conexiones.cuenta.conectar` y `…desconectar` se
+comprueban como primera sentencia de la transacción que escribe
+(`requireConexionesPermission`, `_lib/permisos.ts`), leyendo
+`role_permission` por la membresía de la sesión. Esa segunda barrera es
+la que hoy decide, porque hasta ACC-5 `requirePermission` resuelve toda
+sesión como Dueño, y es la única que ven los route handlers de OAuth.
+También corre antes de gastar una llamada a la plataforma y antes de
+mandar a nadie al diálogo de OAuth. En un workspace de creador solo el
+Dueño trae esos permisos de fábrica; el Mánager los recibe con la
+casilla de ACC-4. **No existe el permiso de ver un token**: la lista
+muestra estado y @, y el almacén cifrado solo lo abren los jobs y
+«Actualizar».
+
+En la lista, una cuenta conectada por un tercero dice «Conectada por
+<nombre> el <fecha>» debajo del @ (nombre de `app_user` mientras sea
+miembro; si ya no lo es, el correo que la evidencia guardó ese día).
+Cuando la conectó el propio titular no se dice nada: la ausencia de la
+línea es la información. El seed trae ese caso: Andrés Pardo, mánager
+de la demo (`db/seed/0003`), conectó el Instagram de Laura.
 
 ## Reglas del marco
 

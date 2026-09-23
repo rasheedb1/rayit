@@ -3,6 +3,7 @@
  * 22-sep-2026 (developers.google.com/youtube/v3 y /youtube/analytics):
  *
  *   GET https://www.googleapis.com/youtube/v3/channels?mine=true|forHandle=@x&part=…   youtube.channels.list        1 unidad
+ *       (con part=contentDetails llega relatedPlaylists.uploads, por donde CON-5 lista los videos)
  *   GET …/youtube/v3/playlistItems?playlistId=&maxResults≤50&pageToken=              youtube.playlist_items.list  1 unidad
  *   GET …/youtube/v3/videos?id=a,b,c(≤50)&part=…                                      youtube.videos.list          1 unidad
  *   GET https://youtubeanalytics.googleapis.com/v2/reports?ids=channel==MINE&…        youtube.analytics.query      cuota aparte
@@ -132,8 +133,7 @@ export class YouTubeClient {
 
   /** Canal público por handle (CAM-3: seguidores de la marca). null si no existe. */
   async channelByHandle(handle: string, opts: CallOptions = {}): Promise<ConnectorResult<BrandAccountSnapshot | null>> {
-    const clean = handle.replace(/^@/, '');
-    if (!/^[\w.-]{3,30}$/.test(clean)) throw new ConnectorUsageError(`Handle de YouTube inválido: ${handle}`);
+    const clean = assertYouTubeHandle(handle);
     const res = await this.#get('youtube.channels.list', 'youtube', `${this.#data}/channels`, { part: 'snippet,statistics', forHandle: `@${clean}` }, opts.signal);
     const item = asArray(res.body['items'])[0];
     if (item === undefined) return { data: null, raw: res.body };
@@ -142,6 +142,19 @@ export class YouTubeClient {
       data: { platform_id: 'youtube', external_account_id: ch.profile.external_account_id, handle: ch.profile.handle ?? clean, followers_count: ch.metrics.followers, media_count: ch.metrics.media_count },
       raw: res.body,
     };
+  }
+
+  /**
+   * Canal público por handle CON su lista de subidas (CON-5). Es
+   * `channelByHandle` más `contentDetails`: sin esa parte no llega
+   * `relatedPlaylists.uploads`, que es por donde se listan los videos.
+   * Cuesta 1 unidad, igual que pedir solo snippet y statistics.
+   */
+  async channelWithUploadsByHandle(handle: string, opts: CallOptions = {}): Promise<ConnectorResult<YouTubeChannel | null>> {
+    const clean = assertYouTubeHandle(handle);
+    const res = await this.#get('youtube.channels.list', 'youtube', `${this.#data}/channels`, { part: CHANNEL_PARTS, forHandle: `@${clean}` }, opts.signal);
+    const item = asArray(res.body['items'])[0];
+    return { data: item === undefined ? null : normalizeYouTubeChannel(asRecord(item)), raw: res.body };
   }
 
   async uploadsPlaylistItems(playlistId: string, opts: CallOptions & { pageToken?: string | null; maxResults?: number } = {}): Promise<ConnectorResult<Page<YouTubePlaylistItem>>> {
@@ -213,6 +226,12 @@ export class YouTubeClient {
     const rows = tableRows(res.data).map((r) => ({ population: 'viewers' as const, dimension: 'country' as const, bucket: String(r['country'] ?? ''), share: null, absolute: intOrNull(r['views']) })).filter((r) => r.bucket !== '');
     return { data: rows, raw: res.raw };
   }
+}
+
+function assertYouTubeHandle(handle: string): string {
+  const clean = handle.replace(/^@/, '');
+  if (!/^[\w.-]{3,30}$/.test(clean)) throw new ConnectorUsageError(`Handle de YouTube inválido: ${handle}`);
+  return clean;
 }
 
 function tableRows(t: AnalyticsTable): Array<Record<string, unknown>> {

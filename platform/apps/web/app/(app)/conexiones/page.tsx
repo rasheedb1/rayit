@@ -9,11 +9,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { flags } from "@/content/flags";
-import { formatDelta, formatInt } from "@/lib/format";
+import { formatDate, formatDelta, formatInt, type Formatter, formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions";
 import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
 import { getCuentasService } from "./_lib/cuentas-server";
 import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
+import { displayNameOf, MESSAGES } from "./_lib/messages";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { ConnectDialog } from "./connect-dialog";
 
@@ -32,11 +34,27 @@ const STATUS_PILL: Record<ConnectionStatus, { kind: PillKind; text: string }> = 
 
 const SIN_DATO = <span className="text-xs text-muted">Sin dato</span>;
 
-const COLUMNS: Column<AccountRow>[] = [
+/**
+ * Debajo del @: el nombre público de la cuenta y, si la conectó un
+ * tercero (ACC-8), quién y cuándo. Cuando la conectó el propio titular
+ * no se dice nada: la ausencia de la línea es la información.
+ */
+function AccountSub({ row, f }: { row: AccountRow; f: Formatter }) {
+  const by = row.connectedBy;
+  if (!row.displayName && !by) return null;
+  return (
+    <>
+      {row.displayName && <span className="block">{row.displayName}</span>}
+      {by && <span className="block">{MESSAGES.list.connectedBy({ who: displayNameOf(by) ?? MESSAGES.list.someoneFromTheTeam, when: f.date(by.at) })}</span>}
+    </>
+  );
+}
+
+const columns = (f: Formatter): Column<AccountRow>[] => [
   {
     key: "account",
     header: "Cuenta",
-    render: (r) => <CellMain sub={r.displayName ?? undefined}>{`@${r.handle ?? r.externalAccountId}`}</CellMain>,
+    render: (r) => <CellMain sub={<AccountSub row={r} f={f} />}>{`@${r.handle ?? r.externalAccountId}`}</CellMain>,
   },
   { key: "network", header: "Red", render: (r) => PLATFORM_NAME[r.platformId] },
   {
@@ -55,7 +73,18 @@ const COLUMNS: Column<AccountRow>[] = [
     key: "media",
     header: "Publicaciones",
     align: "num",
-    render: (r) => (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined ? SIN_DATO : formatInt(r.latest.mediaCount)),
+    // Dos cifras distintas y a propósito: lo que la red dice que tiene
+    // la cuenta, y cuántas publicaciones seguimos nosotros (CON-5).
+    // «En seguimiento» y no «con métricas»: entre que el recolector las
+    // descubre y las mide pasan horas, y prometer una medida que aún no
+    // existe es peor que no decir nada.
+    render: (r) => {
+      const seguidas = r.postsCount > 0 ? `${formatInt(r.postsCount)} en seguimiento` : undefined;
+      if (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined) {
+        return seguidas ? <CellMain sub={seguidas}>{SIN_DATO}</CellMain> : SIN_DATO;
+      }
+      return <CellMain sub={seguidas}>{formatInt(r.latest.mediaCount)}</CellMain>;
+    },
   },
   {
     key: "views",
@@ -78,7 +107,28 @@ const COLUMNS: Column<AccountRow>[] = [
   {
     key: "dataAsOf",
     header: "Datos",
-    render: (r) => (r.latest ? <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} /> : <span className="text-xs text-muted">Sin lectura todavía</span>),
+    // Cada fecha junto a la cifra que describe, y no la más reciente de
+    // las dos: las cifras de esta fila (seguidores, publicaciones,
+    // vistas) salen de la serie de CUENTA, así que enseñar ahí la
+    // frescura del contenido haría parecer al día unos seguidores de
+    // hace una semana. La del contenido va aparte, con su nombre.
+    render: (r) => {
+      if (!r.latest && !r.lastPostSnapshotAt) return <span className="text-xs text-muted">Sin lectura todavía</span>;
+      return (
+        <div className="flex flex-col">
+          {r.latest ? (
+            <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} />
+          ) : (
+            <span className="text-xs text-muted">Todavía sin cifras de la cuenta</span>
+          )}
+          {r.lastPostSnapshotAt && (
+            <span className="text-xs text-muted">
+              publicaciones hasta el <time dateTime={r.lastPostSnapshotAt}>{formatDate(r.lastPostSnapshotAt)}</time>
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
     key: "status",
@@ -160,6 +210,7 @@ function Notice({ params, rows }: { params: Search; rows: AccountRow[] }) {
 export default async function CuentasPage({ searchParams }: { searchParams: Promise<Search> }) {
   const params = await searchParams;
   const service = getCuentasService();
+  const f = formatterFor(await getCurrentWorkspace());
   const rows = await service.listar();
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {
@@ -212,7 +263,7 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
           <span id="cuentas">Cuentas</span>
         </SectionTitle>
         <DataTable
-          columns={COLUMNS}
+          columns={columns(f)}
           rows={rows}
           rowKey={(r) => r.id}
           caption="Cuentas del workspace con su última lectura pública y su estado"

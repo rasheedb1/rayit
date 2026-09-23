@@ -239,8 +239,8 @@ export const STORIES: readonly Story[] = [
     title: "Recolector de posts y métricas",
     desc: "collect.posts descubre videos nuevos; collect.post_metrics y collect.account_metrics guardan el snapshot con age_hours. Append-only.",
     done: "Dos corridas seguidas producen dos filas por post y post_metrics_daily_delta muestra el crecimiento.",
-    status: "en_curso",
-    note: "23-sep: terminada en la rama nicolas/CON-5-recolector-posts, solo local (sin push). Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null hasta que el dueño autorice. TikTok por @ no publica videos: entran por el CSV de RES-2. Para cuentas reales faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en Vercel.",
+    status: "hecho",
+    note: "collect.account_metrics ya venía de CON-10. Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null (nunca en cero) hasta que el dueño autorice la cuenta. TikTok por @ no publica videos: entran por el CSV de RES-2. Para leer cuentas reales faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno y en Vercel."
   },
   {
     id: "CON-6", module: "CON", owner: "nicolas", size: "M", sprint: 3, deps: ["CON-5"],
@@ -523,8 +523,8 @@ export const STORIES: readonly Story[] = [
     title: "Reporte a la marca",
     desc: "Página pública por slug con el payload congelado, «acordado antes de publicar» arriba, envío por enlace o PDF, sent_at y viewed_at. Registra activity de tipo report_sent.",
     done: "El reporte enviado no cambia aunque lleguen snapshots nuevos; la marca lo abre sin sesión.",
-    status: "en_curso",
-    note: "23-sep: rama nicolas/CAM-6-reporte-marca, solo local, con cambios sin commitear. Sección «Reporte a la marca» en la ficha, vista previa, /reporte/[slug] público y PDF por impresión; verificada en dev a 400 px. Trae la migración 0037 (public_report), sin aplicar.",
+    status: "hecho",
+    note: "ReportPayload v1 armado por construirReporte (core, lista blanca: sin correos, teléfonos, notas, brief, ids ni UTM) y congelado en report.payload. /reporte/[slug] sin sesión por public_report() (migración 0037, patrón 0030): borrador o slug desconocido = 404, la primera apertura marca viewed_at (los robots de vista previa no). Enviar por enlace o PDF (impresión del navegador) deja activity report_sent, notification, bitácora campaign.report_sent y la campaña en «Reporte listo». Regenerar un enviado crea otra versión y la vieja sigue abriendo con «hay una versión más reciente». Permiso nuevo campanas.reporte.generar (sembrado en 0037). Prueba byte a byte en pglite. Falta aplicar 0037 en Supabase.",
   },
 
   // ---------------------------------------------------------------- FIN
@@ -656,8 +656,8 @@ export const STORIES: readonly Story[] = [
     title: "Consentimiento delegado",
     desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
     done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
-    status: "en_curso",
-    note: "23-sep: rama nicolas/ACC-8-consentimiento-delegado, solo local y con muchos cambios sin commitear. Evidencia v2 (a nombre de quién y quién actúa) por @ y por OAuth, aviso al titular y «Conectada por … el …» en /conexiones. Migración 0038, sin aplicar.",
+    status: "hecho",
+    note: "23-sep: en main. Antes de desplegar hay que aplicar la migración 0038 en Supabase (make db.migrate); sin ella la web no arranca. Evidencia v2 (onBehalfOf + actedBy, IP resumida) en los dos caminos (por @ y OAuth), aviso connection_added al titular (migración 0038, pendiente de aplicar), onBehalfOf/actedBy en cada fila de audit() de conexiones y «Conectada por … el …» en /conexiones. El permiso se comprueba además dentro de la transacción leyendo role_permission (requirePermission resuelve Dueño hasta ACC-5). El mánager con la casilla de ACC-4 se prueba con un rol a medida del workspace. Propuesta en docs/propuestas/ACC-8.md.",
   },
   {
     id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],

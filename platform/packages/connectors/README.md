@@ -27,6 +27,8 @@ src/platforms/youtube.ts     refresher sin implementar hasta CON-8
 src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
 src/public/                  Cuentas por @ (CON-10): PublicProfileSource por plataforma. tiktok = oEmbed (identidad), instagram = business_discovery con INSTAGRAM_HOUSE_TOKEN, youtube = Data API con GOOGLE_API_KEY (YouTubeClient acepta apiKey)
 src/public/tiktok-aggregator.ts  Proveedor de datos de TikTok (CON-12): EnsembleDataClient (tt/user/info, tt/user/posts) y la fuente con accessMode 'aggregator'. Solo existe con ENSEMBLEDATA_TOKEN
+src/posts/                   Publicaciones (CON-5): PostSource con dos estrategias tras la misma interfaz. createPublicPostSources(core, env) da la pública por plataforma; createAuthorizedPostSource(core, platformId) la del token del dueño. El job elige por social_connection.access_mode
+src/posts/tiktok-posts.ts    TikTok sin videos por @, y con ENSEMBLEDATA_TOKEN la fuente del proveedor que sí los lista (CON-12)
 
 src/http/errors.ts           PlatformApiError { kind: transient | permanent | auth | quota } y el clasificador único
 src/http/retry.ts            backoff exponencial con jitter, Retry-After, sleep cancelable
@@ -41,8 +43,8 @@ src/normalize/values.ts      intOrNull, numOrNull, …: nunca inventan un cero
 src/platforms/base.ts        ConnectionAuth, CallOptions, PageOptions
 src/platforms/tiktok-display.ts    userInfo, listVideos, iterateVideos, queryVideos
 src/platforms/tiktok-accounts.ts   accountInfo, listVideos, iterateVideos, videoInsights
-src/platforms/instagram-api.ts     me, media, iterateMedia, mediaInsights, accountInsights, followerCountSeries, audienceDemographics, businessDiscovery
-src/platforms/youtube-api.ts       channelMine, channelByHandle, uploadsPlaylistItems, iterateUploads, videosById, analyticsReport, videoDailyMetrics, videoDemographics, channelDemographics, countryBreakdown
+src/platforms/instagram-api.ts     me, media, iterateMedia, mediaInsights, accountInsights, followerCountSeries, audienceDemographics, businessDiscovery, businessDiscoveryMedia, iterateBusinessDiscoveryMedia
+src/platforms/youtube-api.ts       channelMine, channelByHandle, channelWithUploadsByHandle, uploadsPlaylistItems, iterateUploads, videosById, analyticsReport, videoDailyMetrics, videoDemographics, channelDemographics, countryBreakdown
 src/factory.ts               createConnectors(): lo que el worker cuelga en ctx.connectors; loadPlatformLimits()
 src/testing/fixture-fetch.ts FixtureFetch, loadFixture(s), withoutNetwork()
 fixtures/<plataforma>/<endpoint>[.<caso>].json
@@ -127,7 +129,7 @@ de dónde salió la cifra.
 | Instagram | `business_discovery` con `INSTAGRAM_HOUSE_TOKEN` | `public_profile` | Seguidores y publicaciones de cuentas profesionales públicas |
 | YouTube | Data API con `GOOGLE_API_KEY` | `public_profile` | Suscriptores, vistas acumuladas y videos |
 | TikTok, **sin** `ENSEMBLEDATA_TOKEN` | oEmbed oficial | `public_profile` | Solo identidad: TikTok no publica cifras por @ |
-| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos, videos y vistas |
+| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos, videos y vistas — y, a diferencia de las otras, **también la lista de publicaciones** (`posts/tiktok-posts.ts`), así que `collect.posts` y `collect.post_metrics` dejan de decir «TikTok no publica sus videos por @» |
 
 La variable es el interruptor: sin ella no sale una llamada al proveedor
 y TikTok se comporta como en CON-10. Con ella, `createPublicProfileSources`
@@ -148,6 +150,16 @@ accesorio (campos extra, `data.posts` en vez de `data`, cursor numérico)
 y definitivo en lo que sostiene una cifra: sin `uniqueId` o sin
 `followerCount` sale un error permanente que lo dice en español, y no se
 da de alta ni se actualiza nada.
+
+**Qué `source` lleva cada fila.** En `account_metric_snapshot` el
+`source` es el `accessMode` de la fuente, así que una lectura comprada se
+distingue de una gratuita (`'aggregator'` vs `'public_profile'` vs
+`'api'`). En `post_metric_snapshot` NO: CON-5 fijó que ahí el `source`
+dice *cómo* se leyó —`'api'` para cualquier API, `'csv_import'` para el
+archivo— y `collect.post_metrics` busca la última lectura por ese valor.
+Lo que costó dinero se ve donde corresponde: `api_call_log` guarda el
+endpoint `ensembledata.tt.user.posts` y `api_quota_usage` acumula sus
+unidades.
 
 Costo, comparación con Apify y Phyllo, y las variables que hay que meter
 al vault: `docs/propuestas/CON-12.md`.
@@ -224,6 +236,32 @@ tabla por familia (`loadPlatformLimits`); el JSON propuesto está en
 Campos y endpoints, con su fuente, en la cabecera de cada
 `src/platforms/*.ts` y en `docs/propuestas/CON-1.md` §0.3.
 
+## Fuentes públicas de publicaciones (CON-5), con fecha y enlace
+
+Qué se puede leer de las publicaciones de una cuenta **sin permiso de
+su dueño**. Documentación leída el **23-sep-2026**.
+
+| Fuente | Endpoint | Qué entrega | Qué NO |
+|---|---|---|---|
+| Instagram por @ | `GET /me?fields=business_discovery.username(u){media.limit(n){…}}` · [reference/instagram-media](https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/) y [business-discovery](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login/business-discovery/) | `id`, `caption`, `media_type` (`IMAGE`·`VIDEO`·`CAROUSEL_ALBUM`), `media_product_type` (`AD`·`FEED`·`STORY`·`REELS`), `media_url`, `permalink`, `thumbnail_url` (solo VIDEO), `timestamp` (ISO 8601 UTC), `username`, `like_count`, `comments_count`, `view_count` | alcance, guardados, compartidos, retención, conversión. `view_count` **solo en reels**; en feed y carrusel las vistas son `null`. `like_count` se omite si el dueño oculta los «me gusta». `media_product_type` está marcado «Facebook Login API only»: si no llega, `surface` queda `null` |
+| YouTube por @ | `channels.list?forHandle=&part=snippet,contentDetails,statistics` → `playlistItems.list` → `videos.list` · [determine_quota_cost](https://developers.google.com/youtube/v3/determine_quota_cost) y [docs/videos](https://developers.google.com/youtube/v3/docs/videos) | título, descripción, portada, `contentDetails.duration` (ISO 8601), `statistics.viewCount`, `likeCount`, `commentCount` | alcance, retención y tráfico (son de Analytics, que exige OAuth del canal). `dislikeCount` solo para el dueño autenticado desde el 13-dic-2021; `favoriteCount` está deprecado (siempre 0): ninguno se usa |
+| TikTok por @ | — | nada | TikTok no publica los videos de una cuenta por @. Entran por el archivo de TikTok Studio (RES-2) o autorizando la cuenta |
+
+Dos detalles que rompen si no se saben:
+
+- **El edge `media` de business_discovery se pagina con los
+  modificadores de la expansión de campos** (`media.after(CURSOR).limit(N)`),
+  no con `limit=`/`after=` sueltos. Y la respuesta trae `before`/`after`
+  pero **no trae `next`**, así que «hay más» se deduce de que la página
+  vino llena y hay cursor.
+- **`channelByHandle` no sirve para listar videos**: sin
+  `part=contentDetails` no llega `relatedPlaylists.uploads`. Para eso
+  está `channelWithUploadsByHandle`, que cuesta la misma unidad.
+
+El corte de la ventana (`since`) es **por página, no por elemento**: una
+página ya pedida se entrega entera. Cuesta lo mismo y es lo que permite
+fusionar un video que ya había entrado por un archivo importado.
+
 ## Cómo agregar un endpoint (cinco pasos)
 
 1. **Léelo en la documentación oficial** y anota en la cabecera del
@@ -282,7 +320,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 194 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
+pnpm --filter @mc/connectors test        # 218 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

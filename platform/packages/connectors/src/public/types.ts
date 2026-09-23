@@ -76,7 +76,7 @@ export class PublicLookupError extends Error {
  */
 export type PublicAccessMode = 'public_profile' | 'aggregator';
 
-/** Lo que una fuente devuelve de la lista de publicaciones, para CON-5. */
+/** Lo que una fuente lee del catálogo cuando necesita sumarlo (las vistas de TikTok). */
 export interface PublicPostsPage {
   posts: NormalizedVideo[];
   /** true solo si se llegó al final del catálogo dentro del tope. */
@@ -92,8 +92,6 @@ export interface PublicProfileSource {
   /** access_mode de las cuentas de esta fuente, y source de sus snapshots. */
   readonly accessMode: PublicAccessMode;
   lookup(handle: string, opts?: { signal?: AbortSignal }): Promise<PublicProfile>;
-  /** Solo las fuentes que publican la lista de videos (hoy, el proveedor de TikTok). La usa CON-5. */
-  listPosts?(handle: string, opts?: { signal?: AbortSignal; maxPosts?: number }): Promise<PublicPostsPage>;
 }
 
 /** Quita @, espacios y la URL del perfil si el usuario pegó una. */

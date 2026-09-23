@@ -295,15 +295,6 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
     missing: [],
     accessMode: 'aggregator',
 
-    async listPosts(handle, o = {}) {
-      const clean = assertHandle('tiktok', handle);
-      try {
-        return await readPosts(clean, o.maxPosts ?? defaultMaxPosts, o.signal);
-      } catch (err) {
-        throw toAggregatorLookupError(err, clean);
-      }
-    },
-
     async lookup(handle, o = {}) {
       const clean = assertHandle('tiktok', handle);
       let profile: ConnectorResult<EnsembleDataProfile>;
