@@ -176,7 +176,10 @@
  * de «la base no tiene schema_migrations»: al que opera no se le dice
  * que migre una base que solo está caída.
  */
+import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
+import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
 import type { CatalogDb } from './client.ts';
+import * as schema from './schema/index.ts';
 import {
   COLUMNAS_DE_INQUILINO, terminosDelAnd, veredicto, type AislamientoDeLectura, type ContextoDePolitica, type Lado,
   type ReferenciaDeTabla,
@@ -322,6 +325,40 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
     '0031_mover_negocio: el tablero de Ventas, «Enviar» y «Aceptar» en Cotizar y la aceptación pública',
   'brand_key(text)': '0031_mover_negocio: el radar y las listas de Ventas reconocen una marca por su nombre',
 };
+
+/**
+ * Las columnas que el CÓDIGO lee y escribe, como `relación.columna`:
+ * todas las de las tablas y vistas de src/schema, sacadas del propio
+ * esquema Drizzle y no de una lista a mano.
+ *
+ * Es el mismo punto ciego que FUNCIONES_QUE_USA_EL_CODIGO, con columnas.
+ * En Vercel no hay «pendientes» que comparar, y 0032 no crea funciones
+ * ni tablas: añade deal.next_action_kind (y su disparador). Una base
+ * con 0031 y sin 0032 pasaba la guardia en verde y caía en el primer
+ * «Aceptar» del radar, y en cualquier `select().from(deal)`, con
+ * «column next_action_kind does not exist». Escrita a mano, la lista
+ * volvería a quedarse atrás en la siguiente migración que añada una
+ * columna; derivada del esquema, crece sola, y test/schema.test.ts ya
+ * exige que src/schema sea exactamente lo que deja db/migrations.
+ *
+ * Solo se comprueba que existan: lo que mc_app puede hacer con ellas lo
+ * miden los privilegios de tabla (PRIVILEGIOS_DE_LA_APP y el aislamiento).
+ */
+export const COLUMNAS_QUE_USA_EL_CODIGO: readonly string[] = (() => {
+  const claves = new Set<string>();
+  for (const valor of Object.values(schema) as unknown[]) {
+    if (is(valor, PgTable)) {
+      const tabla = getTableName(valor);
+      for (const col of Object.values(getTableColumns(valor))) claves.add(`${tabla}.${col.name}`);
+    } else if (is(valor, PgView)) {
+      const vista = getViewName(valor);
+      for (const campo of Object.values(getViewSelectedFields(valor))) {
+        if (is(campo, PgColumn)) claves.add(`${vista}.${campo.name}`);
+      }
+    }
+  }
+  return [...claves].sort();
+})();
 
 /**
  * Los disparadores de tablas de `public` que llaman a una función
@@ -794,6 +831,11 @@ export interface EstadoDelEsquema {
   funcionesDefinerObsoletas: string[];
   /** Funciones de FUNCIONES_QUE_USA_EL_CODIGO que no existen o que mc_app no puede ejecutar, con el motivo. */
   funcionesQueFaltan: string[];
+  /**
+   * Relaciones y columnas de COLUMNAS_QUE_USA_EL_CODIGO que la base no
+   * tiene: `tabla.columna`, o `tabla (no existe)` si falta entera.
+   */
+  columnasQueFaltan: string[];
   /** Disparadores de tablas de `public` que llaman a una función SECURITY DEFINER, sin declarar. */
   disparadoresDefiner: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
@@ -917,6 +959,11 @@ interface FilaFuncionDelCodigo extends Record<string, unknown> {
   firma: string;
   existe: boolean;
   ejecuta: boolean;
+}
+interface FilaColumnaQueFalta extends Record<string, unknown> {
+  relacion: string;
+  columna: string;
+  existe_relacion: boolean;
 }
 interface FilaReferencia extends Record<string, unknown> {
   hija: string;
@@ -1133,6 +1180,22 @@ const SQL_FUNCIONES_DEL_CODIGO = `
     FROM unnest($1::text[]) AS f
    ORDER BY 1`;
 
+/**
+ * De COLUMNAS_QUE_USA_EL_CODIGO, las que NO están en public: la
+ * relación, la columna y si al menos la relación existe. Una columna
+ * borrada (attisdropped) no cuenta como presente.
+ */
+const SQL_COLUMNAS_DEL_CODIGO = `
+  SELECT x.relacion, x.columna, x.oid IS NOT NULL AS existe_relacion
+    FROM (SELECT split_part(k, '.', 1) AS relacion,
+                 split_part(k, '.', 2) AS columna,
+                 to_regclass('public.' || quote_ident(split_part(k, '.', 1))) AS oid
+            FROM unnest($1::text[]) AS k) x
+   WHERE NOT EXISTS (SELECT 1 FROM pg_attribute a
+                      WHERE a.attrelid = x.oid AND a.attname = x.columna
+                        AND a.attnum > 0 AND NOT a.attisdropped)
+   ORDER BY 1, 2`;
+
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
 const SQL_DISPARADORES_DEFINER = `
   SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
@@ -1318,6 +1381,9 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const delCodigo = await leer<FilaFuncionDelCodigo>(SQL_FUNCIONES_DEL_CODIGO, [
     Object.keys(FUNCIONES_QUE_USA_EL_CODIGO),
     APP_ROLE,
+  ]);
+  const columnasDelCodigo = await leer<FilaColumnaQueFalta>(SQL_COLUMNAS_DEL_CODIGO, [
+    [...COLUMNAS_QUE_USA_EL_CODIGO],
   ]);
   const referencias = await leer<FilaReferencia>(SQL_REFERENCIAS);
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
@@ -1577,6 +1643,19 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
         `${f.firma} (${f.existe ? `${APP_ROLE} no la puede ejecutar` : 'no existe'}; ` +
         `${FUNCIONES_QUE_USA_EL_CODIGO[f.firma] ?? 'sin motivo declarado'})`,
     );
+
+  // ---- columnas que el código lee y escribe (src/schema): que existan.
+  //      Una relación que falta entera se dice una vez, no columna por
+  //      columna.
+  const relacionesQueFaltan = new Set<string>();
+  const columnasQueFaltan: string[] = [];
+  for (const c of columnasDelCodigo) {
+    if (c.existe_relacion) columnasQueFaltan.push(`${c.relacion}.${c.columna}`);
+    else if (!relacionesQueFaltan.has(c.relacion)) {
+      relacionesQueFaltan.add(c.relacion);
+      columnasQueFaltan.push(`${c.relacion} (no existe)`);
+    }
+  }
 
   // ---- disparadores que llaman a una función SECURITY DEFINER: corren
   //      con su dueño para cualquiera que escriba en la tabla, sin que
@@ -1980,6 +2059,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     funcionesDefiner,
     funcionesDefinerObsoletas: siAlDia(funcionesDefinerObsoletas),
     funcionesQueFaltan,
+    columnasQueFaltan,
     disparadoresDefiner,
     reglas,
     esquemasDeMas,
@@ -2018,6 +2098,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   funcionesDefiner: [],
   funcionesDefinerObsoletas: [],
   funcionesQueFaltan: [],
+  columnasQueFaltan: [],
   disparadoresDefiner: [],
   reglas: [],
   esquemasDeMas: [],
@@ -2099,6 +2180,14 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
     partes.push(
       'faltan funciones que el código llama por su nombre, y las pantallas que las usan fallan al primer clic: ' +
         estado.funcionesQueFaltan.join('; '),
+    );
+  }
+  if (estado.columnasQueFaltan.length) {
+    partes.push(
+      'faltan columnas o relaciones que el código lee y escribe (las declara src/schema), y la primera consulta que ' +
+        'las nombre falla: ' +
+        estado.columnasQueFaltan.join(', ') +
+        '. Aplica las migraciones que faltan con make db.migrate',
     );
   }
   if (estado.disparadoresDefiner.length) {

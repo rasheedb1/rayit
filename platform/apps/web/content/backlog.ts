@@ -101,7 +101,7 @@ export const STORIES: readonly Story[] = [
     done: "Un test crea dos workspaces, inserta un deal en cada uno y comprueba que ninguno ve el del otro. Sin workspace_id fijado, la consulta devuelve cero filas.",
     status: "hecho",
     note:
-      "ESTADO (23-sep, pulido r4): guardia de esquema en verde sobre 0001–0031 en embebido; ahora mide también a mc_public_share contra su inventario exacto (privilegios y columnas, las siete políticas de 0030 y su forma, NOLOGIN sin BYPASSRLS ni membresías), en cada arranque y en make db.guardia. Pulido r5: el bloqueo del media kit pasa a ser por origen (media_kit_lockout en 0030, IP resumida y sin lectura para mc_app) con techo por enlace y «Desbloquear»; AUTH_SECRET sale de .env.example (nada la leía). PENDIENTE DEL INTEGRADOR, en este orden: crear mc_public_share con supabase-admin.sh; make db.migrate (0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031; Supabase va por 0022; 0031 va al final porque reescribe public_quote_accept_impl de 0030); make db.guardia en verde (pulido r3: también falla si falta deal_move_stage o brand_key, aunque no haya archivos que comparar) ANTES de make vercel.deploy PROD=1 (en producción la web no arranca si la guardia reporta algo), y pegar aquí su salida. ABIERTO, con plan en docs/propuestas/CIM-2.md §3: ids bigserial como contador global (pasar a uuid), UPDATE de account_metric_snapshot por el upsert de CON-10 (a DO NOTHING o al worker, luego REVOKE) y el radar, que no puede publicar sin dueño lo que salga de una lista privada. Historia por rondas: docs/propuestas/CIM-2.md §6.1.",
+      "ESTADO (23-sep, pulido r4): guardia de esquema en verde sobre 0001–0032 en embebido; ahora mide también a mc_public_share contra su inventario exacto (privilegios y columnas, las siete políticas de 0030 y su forma, NOLOGIN sin BYPASSRLS ni membresías), en cada arranque y en make db.guardia. Pulido r5: el bloqueo del media kit pasa a ser por origen (media_kit_lockout en 0030, IP resumida y sin lectura para mc_app) con techo por enlace y «Desbloquear»; AUTH_SECRET sale de .env.example (nada la leía). Pulido r6: la guardia exige además cada columna de src/schema (deal.next_action_kind de 0032 incluida), sin lista a mano. COLA ÚNICA DEL INTEGRADOR (las demás historias remiten aquí), en este orden: 1) crear mc_public_share con supabase-admin.sh; 2) make db.migrate, que aplica 0024…0032 en orden (Supabase va por 0022; 0031 reescribe public_quote_accept_impl de 0030 y 0032 reescribe brand_key de 0031 y añade deal.next_action_kind con su disparador deal_next_action_kind_reset); 3) make db.guardia en verde ANTES de make vercel.deploy PROD=1, y pegar aquí su salida; 4) volver a sembrar (CIM-6). ABIERTO, con plan en docs/propuestas/CIM-2.md §3: ids bigserial como contador global (pasar a uuid), UPDATE de account_metric_snapshot por el upsert de CON-10 (a DO NOTHING o al worker, luego REVOKE) y el radar, que no puede publicar sin dueño lo que salga de una lista privada. Historia por rondas: docs/propuestas/CIM-2.md §6.1.",
   },
   {
     id: "CIM-3", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-2"],
@@ -110,7 +110,7 @@ export const STORIES: readonly Story[] = [
     done: "Se entra con un correo nuevo y aparece un workspace vacío con nombre; se entra con uno del seed y aparece la creadora ficticia.",
     status: "hecho",
     note:
-      "Hecha e integrada con el endurecimiento. Pulido r1 (22-sep): CAPTCHA Turnstile listo en /login, el correo de la sesión en el selector y /auth/comprobar contra el login CSRF, /auth/salir cierra una sesión en conflicto, contacto de soporte en los errores, y 0024/0028 se paran si se aplican al revés. Pendiente de aplicar: 0027 y 0028, detrás de 0024–0026, en la cola 0024–0031 de la nota de CIM-2. A mano: panel de Supabase (Redirect URLs, plantilla, Confirm email), SUPPORT_EMAIL y APP_URL en Vercel, y SMTP + CAPTCHA en CIM-10; visto bueno de Nicolás al Shell bajado a app/(app)/layout.tsx y a <Marca enMarco /> en shell.tsx. Detalle: apps/web/README.md#autenticación.",
+      "Hecha e integrada con el endurecimiento. Pulido r1 (22-sep): CAPTCHA Turnstile listo en /login, el correo de la sesión en el selector y /auth/comprobar contra el login CSRF, /auth/salir cierra una sesión en conflicto, contacto de soporte en los errores, y 0024/0028 se paran si se aplican al revés. Pendiente de aplicar: 0027 y 0028, en la cola única de la nota de CIM-2. A mano: panel de Supabase (Redirect URLs, plantilla, Confirm email), SUPPORT_EMAIL y APP_URL en Vercel, y SMTP + CAPTCHA en CIM-10; visto bueno de Nicolás al Shell bajado a app/(app)/layout.tsx y a <Marca enMarco /> en shell.tsx. Detalle: apps/web/README.md#autenticación.",
   },
   {
     id: "CIM-9", module: "CIM", owner: "rasheed", size: "S", sprint: 3, deps: ["CIM-3"],
@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0002 determinista e idempotente cualquier día (8 marcas, 13 señales, 15 deals; 60 videos y 90 días de serie que se rellenan hasta ayer), verificado en Postgres embebido con pnpm turbo run test. Sembrado en Supabase el 22-sep. Pulido r3: negocio en neto y campaña/factura con IVA (verify k2) y seed 0004 de Cotizar (tarifario, media kit, COT-2026-001…008 enlazadas a negocio y campaña). Detalle en docs/propuestas/CIM-6.md §6–§7. Pendiente humano: volver a sembrar tras aplicar 0024–0031.",
+    note: "Seed 0002 determinista e idempotente cualquier día (8 marcas, 13 señales, 15 deals; 60 videos y 90 días de serie que se rellenan hasta ayer), verificado en Postgres embebido con pnpm turbo run test. Sembrado en Supabase el 22-sep. Pulido r3: negocio en neto y campaña/factura con IVA (verify k2) y seed 0004 de Cotizar (tarifario, media kit, COT-2026-001…008 enlazadas a negocio y campaña). Detalle en docs/propuestas/CIM-6.md §6–§7. Pendiente humano: volver a sembrar tras la cola única de la nota de CIM-2.",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
@@ -319,7 +319,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
     status: "hecho",
-    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» la empresa (solo notas si es del catálogo) y cada contacto; responsable elegible entre los miembros, y quien crea queda de responsable; país por su nombre; esqueleto de la ficha tras el 404. Pendiente humano: aplicar 0024–0032 en Supabase y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
+    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» la empresa (solo notas si es del catálogo) y cada contacto; responsable elegible entre los miembros, y quien crea queda de responsable; país por su nombre; esqueleto de la ficha tras el 404. Pendiente humano: la cola única de la nota de CIM-2 y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -327,7 +327,7 @@ export const STORIES: readonly Story[] = [
     desc: "Bandeja de signal con estado pendiente, aceptar (crea o actualiza empresa y deal en nuevo) o descartar con motivo. Fuente manual y carga por CSV de una lista de marcas. Las fuentes automáticas quedan para fase 2.",
     done: "Aceptar una señal crea el deal con «Enviar pitch» como siguiente acción; descartarla la saca de la bandeja y no vuelve a entrar (dedupe_key).",
     status: "hecho",
-    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r5: el CSV entiende el país por su nombre y avisa del que no reconoce; el pitch se reconoce por deal.next_action_kind (0032), no por su frase. Pendiente humano: aplicar 0031–0032.",
+    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r5: el CSV entiende el país por su nombre y avisa del que no reconoce; el pitch se reconoce por deal.next_action_kind (0032), no por su frase. Pendiente humano: la cola única de la nota de CIM-2 (0031–0032 incluidas).",
   },
   {
     id: "VEN-3", module: "VEN", owner: "rasheed", size: "L", sprint: 2, deps: ["VEN-1"],
@@ -335,7 +335,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tablero por etapa y vista de lista sobre deal_pipeline. Arrastrar cambia la etapa y escribe deal_stage_history con los días en la etapa. KPIs: deals abiertos, cierre ponderado, ganado en el trimestre.",
     done: "Mover un deal a «Ganado» fija won_at; el cierre ponderado cambia al mover entre etapas.",
     status: "hecho",
-    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031). Pulido r5: pasar a «Perdido» pide el motivo y lo guarda en lost_reason; la lista es de tarjetas a 400 px; un negocio sin monto dice «Sin monto» también en Empresas. Pendiente humano: aplicar 0031–0032.",
+    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031). Pulido r5: pasar a «Perdido» pide el motivo y lo guarda en lost_reason; la lista es de tarjetas a 400 px; un negocio sin monto dice «Sin monto» también en Empresas. Pendiente humano: la cola única de la nota de CIM-2 (0031–0032 incluidas).",
   },
   {
     id: "VEN-4", module: "VEN", owner: "rasheed", size: "M", sprint: 3, deps: ["VEN-3", "CON-2"],
@@ -463,7 +463,7 @@ export const STORIES: readonly Story[] = [
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
     status: "hecho",
-    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: crear el rol mc_public_share con supabase-admin y aplicar 0030 y 0031 en Supabase, al final de la cola 0024–0031 (ver la nota de CIM-2). Pulido r2 (desde Ventas): enviar y aceptar fijan en el negocio el monto neto de la cotización y lo mueven con deal_move_stage (0031). Pulido r3: aceptar (panel o enlace) hace cliente a la marca; prueba de negocio = neto y campaña = total. Pendiente humano: visto bueno de Nicolás a «Total con impuesto» en /campanas.",
+    note: "Aceptar crea la campaña de CAM-2 sin segundo clic, desde el panel (misma transacción, con SAVEPOINT si faltan fechas) y desde el enlace con firma; aviso al creador y la marca que llega tarde lee qué pasó. Pendiente humano: mc_public_share y 0030–0032, en la cola única de la nota de CIM-2. Pulido r2 (desde Ventas): enviar y aceptar fijan en el negocio el monto neto de la cotización y lo mueven con deal_move_stage (0031). Pulido r3: aceptar (panel o enlace) hace cliente a la marca; prueba de negocio = neto y campaña = total. Pendiente humano: visto bueno de Nicolás a «Total con impuesto» en /campanas.",
   },
 
   // ---------------------------------------------------------------- CAM
