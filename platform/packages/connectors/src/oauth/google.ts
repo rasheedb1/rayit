@@ -122,9 +122,11 @@ export async function googleExchangeCode(core: HttpCore, cfg: OAuthAppConfig, co
   if (!tokens.refreshToken) {
     // Sin refresh token la conexión duraría una hora. Pasa si la app pide
     // access_type=online o si Google no repitió el consentimiento; en los
-    // dos casos es configuración nuestra, no culpa de la cuenta.
+    // dos casos es configuración nuestra, no culpa de la cuenta. Es
+    // definitivo: reintentar el mismo code da lo mismo, y el callback lo
+    // dice con su propia frase (sin_renovacion), no como una caída.
     throw new PlatformApiError({
-      platformId: 'youtube', endpoint: OAUTH_ENDPOINTS.token, kind: 'transient', code: 'no_refresh_token',
+      platformId: 'youtube', endpoint: OAUTH_ENDPOINTS.token, kind: 'permanent', code: 'no_refresh_token',
       messageEs: 'Google no entregó permiso de renovación para este canal. Vuelve a intentar conectarlo.',
     });
   }

@@ -86,7 +86,7 @@ test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta 
   assert.equal(ig.source, 'public_profile');
   const yt = snaps.rows.find((s) => s.connection_id === ids.yt)!;
   assert.equal(Number(yt.followers), 38400);
-  assert.ok(yt.views !== null);
+  assert.equal(yt.views, null, 'YouTube da el acumulado del canal; la columna es la del día (Resumen la suma por día)');
 
   const conns = await h.db.query<{ id: string; status: string; status_detail: string | null; last_synced_at: Date | string | null }>(`SELECT id, status, status_detail, last_synced_at FROM social_connection`);
   const by = new Map(conns.rows.map((c) => [c.id, c]));
@@ -125,7 +125,7 @@ test('sin credenciales, la plataforma se salta y se avisa; nada falla', async ()
   }
 });
 
-test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y vistas, la fila pasa a aggregator y el token no queda en ningún lado', async () => {
+test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y videos (las vistas llegan por video), la fila pasa a aggregator y el token no queda en ningún lado', async () => {
   const ED_TOKEN = 'ed-token-worker-SECRETO';
   // El proveedor responde en la misma URL para cualquier @: aquí se acota
   // el patrón por username para que cada cuenta reciba lo suyo.
@@ -154,7 +154,7 @@ test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y vistas, la fila
       `SELECT followers, views, media_count, source, day::text AS day FROM account_metric_snapshot WHERE connection_id = $1`, [ids.tt]);
     assert.equal(tt.rows.length, 1);
     assert.equal(Number(tt.rows[0]!.followers), 128400);
-    assert.equal(Number(tt.rows[0]!.views), 65401);
+    assert.equal(tt.rows[0]!.views, null, 'TikTok no publica vistas de cuenta: llegan por video');
     assert.equal(Number(tt.rows[0]!.media_count), 3);
     assert.equal(tt.rows[0]!.source, 'aggregator');
     assert.equal(tt.rows[0]!.day, '2026-09-22');

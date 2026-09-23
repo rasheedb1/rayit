@@ -2,7 +2,7 @@
   "meta": {
     "source": "docs",
     "recordedAt": "2026-09-23",
-    "notes": "El catálogo sigue (nextCursor) cuando ya se llegó al tope de lectura: las vistas quedan en null."
+    "notes": "El catálogo sigue (nextCursor) cuando ya se llegó al tope de ENSEMBLEDATA_MAX_POSTS: la lista se corta ahí y no se piden más bloques."
   },
   "request": {
     "method": "GET",

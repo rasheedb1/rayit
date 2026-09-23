@@ -139,9 +139,9 @@ de dónde salió la cifra.
 | Red | Fuente | `accessMode` | Qué da |
 |---|---|---|---|
 | Instagram | `business_discovery` con `INSTAGRAM_HOUSE_TOKEN` | `public_profile` | Seguidores y publicaciones de cuentas profesionales públicas |
-| YouTube | Data API con `GOOGLE_API_KEY` | `public_profile` | Suscriptores, vistas acumuladas y videos |
+| YouTube | Data API con `GOOGLE_API_KEY` | `public_profile` | Suscriptores y videos (el acumulado de vistas del canal queda en `raw`, no como vistas del día) |
 | TikTok, **sin** `ENSEMBLEDATA_TOKEN` | oEmbed oficial | `public_profile` | Solo identidad: TikTok no publica cifras por @ |
-| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos, videos y vistas — y, a diferencia de las otras, **también la lista de publicaciones** (`posts/tiktok-posts.ts`), así que `collect.posts` y `collect.post_metrics` dejan de decir «TikTok no publica sus videos por @» |
+| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos y número de videos (una unidad) — y, a diferencia de las otras, **también la lista de publicaciones** (`posts/tiktok-posts.ts`), así que `collect.posts` y `collect.post_metrics` dejan de decir «TikTok no publica sus videos por @» |
 
 La variable es el interruptor: sin ella no sale una llamada al proveedor
 y TikTok se comporta como en CON-10. Con ella, `createPublicProfileSources`
@@ -149,13 +149,21 @@ devuelve el agregador y la cuenta que ya existía por @ se convierte
 conservando su id, su consentimiento y su historia (el proveedor la
 identifica con el mismo @, no con el `secUid`).
 
-**Las vistas de TikTok son la suma de las reproducciones del catálogo
-completo**, porque TikTok no publica un acumulado de cuenta por ningún
-camino; su diferencia día a día son las vistas del día. Si el catálogo
-no cupo en `ENSEMBLEDATA_MAX_POSTS` (200 por defecto) o algún video vino
-sin `play_count`, las vistas quedan en `null` con la frase que lo
-explica. `coverage` del perfil dice cuántas se leyeron y si se llegó al
-final. Un total a medias no es un total.
+**Las vistas de una cuenta por @ van en `null`.** `PublicAccountMetrics.views`
+es lo que se guarda en `account_metric_snapshot.views`, y esa columna son
+las vistas **del día**: así la llena la semilla y así la suma Resumen.
+Ninguna fuente por @ las da —YouTube publica el acumulado del canal y
+TikTok nada—, así que las vistas llegan video por video (`collect.posts`
+y `collect.post_metrics`). Hasta el cierre de CON-C el proveedor sumaba el
+`play_count` de todo el catálogo en cada lectura de cuenta (hasta 21
+unidades por cuenta y día) para guardar un acumulado que Resumen habría
+contado una vez por día; guardar el acumulado aparte es la decisión D20
+de `docs/propuestas/CIERRE-CON-C.md`.
+
+**El gasto sigue al que pide.** La fuente de posts del proveedor pide en
+cada llamada solo los bloques de diez que le faltan para el `max` de
+quien lista (25 en `collect.posts` = 3 unidades), nunca más de
+`ENSEMBLEDATA_MAX_POSTS` (200) en total.
 
 **Si el proveedor cambia de forma**, el parseo es tolerante en lo
 accesorio (campos extra, `data.posts` en vez de `data`, cursor numérico)
@@ -234,7 +242,7 @@ cualquier código del cuerpo.
 | `tiktok` (Display) | 600/min por (app, endpoint): `user/info`, `video/list`, `video/query`; ventana deslizante de un minuto; 429 `rate_limit_exceeded` | developers.tiktok.com/doc/tiktok-api-v2-rate-limit | página del 4-ago-2026 |
 | `tiktok-accounts` | 40/min por (conexión, endpoint) | docs/arquitectura.md (el portal de la Accounts API es JavaScript y no se pudo leer; se confirma con CON-9) | 22-sep-2026 |
 | `ensembledata` | 60/min por app · **DECISIÓN PENDIENTE DE NICOLÁS**: el proveedor dice que no impone límite de tasa, pero su SDK reconoce un 429; la ventana es nuestra | ensembledata.com/apis/docs | 23-sep-2026 |
-| `ensembledata` | Presupuesto diario en unidades, `null` hasta que haya plan aprobado (Wood 1 500 · Bronze 5 000 · Silver 11 000 · Gold 25 000 · Platinum 50 000 al día, 00:00 UTC). Cada endpoint de TikTok = 1 unidad; el catálogo cobra una por bloque de diez. Es la única familia de `tiktok` con presupuesto, así que es la que persiste en `api_quota_usage` | ensembledata.com/pricing · docs/propuestas/CON-12.md §0.2 | 23-sep-2026 |
+| `ensembledata` | Presupuesto diario en unidades, `null` hasta que haya plan aprobado (Wood 1 500 · Bronze 5 000 · Silver 11 000 · Gold 25 000 · Platinum 50 000 al día, 00:00 UTC). Cada endpoint de TikTok = 1 unidad; la lista de publicaciones cobra una por bloque de diez. Es la única familia de `tiktok` con presupuesto, así que es la que persiste en `api_quota_usage` | ensembledata.com/pricing · docs/propuestas/CON-12.md §0.2 | 23-sep-2026 |
 | `instagram` | 200 llamadas/hora por conexión (fórmula de plataforma: 200 × usuarios). El BUC (4800 × impresiones en 24 h) no se puede calcular: se respeta por sus códigos (`quota`) · **DECISIÓN PENDIENTE DE NICOLÁS** | developers.facebook.com/docs/graph-api/overview/rate-limiting | 22-sep-2026 |
 | `youtube` (Data) | 10 000 unidades/día por proyecto (scope app); `channels.list`, `playlistItems.list`, `videos.list` = 1 unidad; toda petición, aun inválida, cuesta ≥ 1 | developers.google.com/youtube/v3/determine_quota_cost | actualizada 15-sep-2026 |
 | `youtube-search` | `search.list` = 1 unidad en un cubo propio de 100/día (cambió en jun-2026; antes 100 unidades del cubo general). No se usa en el MVP | misma página | 15-sep-2026 |

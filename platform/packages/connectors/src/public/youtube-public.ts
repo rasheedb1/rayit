@@ -1,7 +1,9 @@
 /**
  * YouTube por @: Data API v3 con la API key del proyecto (GOOGLE_API_KEY),
  * sin OAuth ni trámite. channels.list?forHandle da canal, suscriptores,
- * vistas acumuladas y número de videos (CON-1, channelByHandle).
+ * vistas acumuladas y número de videos (CON-1, channelByHandle). Las
+ * acumuladas NO se guardan como vistas de la cuenta: esa columna es la del
+ * día (ver PublicAccountMetrics.views); las del canal llegan por video.
  */
 import type { HttpCore } from '../http/client.ts';
 import { normalizeYouTubeChannel, YouTubeClient } from '../platforms/youtube-api.ts';
@@ -10,7 +12,7 @@ import { toLookupError } from './tiktok-public.ts';
 import { assertHandle, PublicLookupError, type PublicProfile, type PublicProfileSource } from './types.ts';
 
 export const GOOGLE_API_KEY_ENV = 'GOOGLE_API_KEY';
-export const YOUTUBE_METRICS_NOTE_ES = 'YouTube publica suscriptores, vistas acumuladas y número de videos. Retención, tráfico y demografía requieren que el dueño autorice el canal.';
+export const YOUTUBE_METRICS_NOTE_ES = 'YouTube publica por @ los suscriptores y el número de videos. Sus vistas son el acumulado del canal y no las del día, así que llegan video por video. Retención, tráfico y demografía requieren que el dueño autorice el canal.';
 
 export function createYouTubePublicSource(core: HttpCore, env: Readonly<Record<string, string | undefined>>): PublicProfileSource {
   const apiKey = env[GOOGLE_API_KEY_ENV]?.trim();
@@ -34,10 +36,9 @@ export function createYouTubePublicSource(core: HttpCore, env: Readonly<Record<s
       const profile: PublicProfile = {
         platformId: 'youtube',
         profile: { ...ch.profile, handle: ch.profile.handle ?? clean },
-        metrics: { followers: ch.metrics.followers, following: null, mediaCount: ch.metrics.media_count, views: ch.metrics.views },
+        metrics: { followers: ch.metrics.followers, following: null, mediaCount: ch.metrics.media_count, views: null },
         metricsNote: YOUTUBE_METRICS_NOTE_ES,
         source: 'youtube.channels.list',
-        coverage: null,
         raw: res.raw,
       };
       return profile;

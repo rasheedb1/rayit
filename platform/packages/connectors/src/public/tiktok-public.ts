@@ -48,7 +48,6 @@ export function createTikTokPublicSource(core: HttpCore): PublicProfileSource {
         metrics: null,
         metricsNote: TIKTOK_METRICS_NOTE_ES,
         source: 'tiktok.oembed',
-        coverage: null,
         raw: res.body,
       };
       return profile;

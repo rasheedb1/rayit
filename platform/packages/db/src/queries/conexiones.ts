@@ -678,15 +678,15 @@ export async function setAccountAccessMode(tx: WorkspaceTx, id: string, accessMo
       RETURNING (SELECT c.access_mode FROM social_connection c WHERE c.id = $1) AS access_mode`,
     [id, accessMode],
   );
-  const antes = rows[0];
-  if (!antes) return false;
+  const previous = rows[0];
+  if (!previous) return false;
   // De dónde salen las cifras de una cuenta conectada —y si se pagan— es
   // un hecho del negocio, no salud técnica de la lectura (ACC-2).
   await audit(tx, {
     action: 'connection.source_changed',
     entityType: 'social_connection',
     entityId: id,
-    before: { accessMode: antes.access_mode },
+    before: { accessMode: previous.access_mode },
     after: { accessMode },
   });
   return true;

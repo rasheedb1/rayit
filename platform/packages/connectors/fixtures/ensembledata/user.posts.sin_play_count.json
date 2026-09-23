@@ -2,7 +2,7 @@
   "meta": {
     "source": "docs",
     "recordedAt": "2026-09-23",
-    "notes": "Un video sin play_count: el total no se guarda a medias, las vistas quedan en null."
+    "notes": "Un video sin play_count: su lectura queda con views null, nunca en cero."
   },
   "request": {
     "method": "GET",

@@ -1,7 +1,7 @@
 /**
  * TikTok por @ con un proveedor de datos de pago: EnsembleData (CON-12).
  *
- * Es el único camino que deja seguidores y vistas de un @ de TikTok sin
+ * Es el único camino que deja seguidores y videos de un @ de TikTok sin
  * que el dueño autorice nada: la plataforma no publica nada de eso por
  * un endpoint oficial (CON-10 §0.1), y raspar el HTML falla desde
  * servidor y va contra sus términos.
@@ -25,11 +25,14 @@
  * `safeErrorMessage` lo borre de cualquier mensaje, y `FixtureFetch` lo
  * tapa al grabar.
  *
- * TikTok no publica vistas acumuladas de una cuenta por ningún camino.
- * El equivalente honesto es la suma de `play_count` de su catálogo, y su
- * diferencia día a día son las vistas del día. Si el catálogo no cupo en
- * el tope, o algún video vino sin `play_count`, las vistas quedan en
- * `null` con la frase que lo explica: un total a medias no es un total.
+ * La lectura de la cuenta es UNA llamada (`tt/user/info`, 1 unidad):
+ * seguidores, seguidos y número de videos. TikTok no publica vistas de
+ * una cuenta, y `account_metric_snapshot.views` son las vistas DEL DÍA
+ * (Resumen las suma por día), así que van en null: las vistas llegan
+ * video por video por `createTikTokAggregatorPostSource` (CON-5). Hasta
+ * el cierre CON-C esta lectura sumaba el `play_count` de todo el
+ * catálogo —hasta 21 unidades por cuenta y día— para guardar un
+ * acumulado que Resumen habría contado una vez por día.
  *
  * Costo y planes: docs/propuestas/CON-12.md §0.2.
  */
@@ -38,10 +41,7 @@ import type { ParsedApiError } from '../http/errors.ts';
 import { isPlatformApiError } from '../http/errors.ts';
 import { emptyPostMetrics, type ConnectorResult, type NormalizedVideo, type Page } from '../normalize/types.ts';
 import { asArray, asRecord, boolOrNull, dateFromUnixS, extractHashtags, extractMentions, intOrNull, strOrNull } from '../normalize/values.ts';
-import {
-  assertHandle, PublicLookupError,
-  type PublicMetricsCoverage, type PublicPostsPage, type PublicProfile, type PublicProfileSource,
-} from './types.ts';
+import { assertHandle, PublicLookupError, type PublicProfile, type PublicProfileSource } from './types.ts';
 
 export const ENSEMBLEDATA_TOKEN_ENV = 'ENSEMBLEDATA_TOKEN';
 export const ENSEMBLEDATA_MAX_POSTS_ENV = 'ENSEMBLEDATA_MAX_POSTS';
@@ -50,11 +50,11 @@ export const ENSEMBLEDATA_BASE_URL = 'https://ensembledata.com/apis';
 /** El proveedor entrega la lista de publicaciones en bloques de diez, y cobra una unidad por bloque. */
 export const ENSEMBLEDATA_POSTS_PER_CHUNK = 10;
 /**
- * Cuántas publicaciones se leen como mucho para sumar las vistas. 200 son
- * 21 unidades al día por cuenta (1 de perfil + 20 de catálogo): con el
- * plan Wood entran unas 70 cuentas diarias por 100 USD/mes.
- * DECISIÓN PENDIENTE DE NICOLÁS (CON-12 §0.4): subirlo cubre creadores
- * más grandes y cuesta en proporción. Se cambia con ENSEMBLEDATA_MAX_POSTS.
+ * Cuántas publicaciones se recorren como mucho al MEDIR (collect.post_
+ * metrics vuelve a listar para emparejar, porque el proveedor no deja
+ * preguntar por un video suelto). 200 son hasta 20 unidades por cuenta y
+ * corrida. DECISIÓN PENDIENTE DE NICOLÁS (CON-12 §0.4, cierre CON-C D13):
+ * se cambia con ENSEMBLEDATA_MAX_POSTS.
  */
 export const ENSEMBLEDATA_DEFAULT_MAX_POSTS = 200;
 /** Bloques por llamada: 5 = 50 publicaciones. Paginar de verdad deja respetar la señal entre llamadas. */
@@ -258,36 +258,6 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
   const token = env[ENSEMBLEDATA_TOKEN_ENV]?.trim();
   if (!token) return null;
   const client = new EnsembleDataClient(core, token, opts);
-  const defaultMaxPosts = readMaxPosts(env);
-
-  /**
-   * `maxPosts` es un tope de GASTO, no de datos: acota cuántos bloques se
-   * piden, y lo que el proveedor devuelva de más se conserva —ya se pagó,
-   * y recortarlo daría un total más bajo que el real. `complete` es true
-   * solo cuando el proveedor dijo que no hay más; si el tope cortó la
-   * paginación, o si dijo «hay más» pero no mandó nada, queda en false y
-   * las vistas no se guardan.
-   */
-  async function readPosts(handle: string, maxPosts: number, signal?: AbortSignal): Promise<PublicPostsPage> {
-    const posts: NormalizedVideo[] = [];
-    let cursor: string | null = null;
-    let complete = false;
-    while (posts.length < maxPosts) {
-      const pending = maxPosts - posts.length;
-      const depth = Math.min(ENSEMBLEDATA_MAX_DEPTH_PER_CALL, Math.ceil(pending / ENSEMBLEDATA_POSTS_PER_CHUNK));
-      const page: ConnectorResult<Page<NormalizedVideo>> = await client.userPosts(handle, { cursor, depth, signal });
-      posts.push(...page.data.items);
-      if (!page.data.hasMore || !page.data.cursor) {
-        complete = true;
-        break;
-      }
-      // Dice que hay más y no manda nada: seguir sería un bucle. No se
-      // afirma que el catálogo esté entero.
-      if (page.data.items.length === 0) break;
-      cursor = page.data.cursor;
-    }
-    return { posts, complete };
-  }
 
   return {
     platformId: 'tiktok',
@@ -306,16 +276,6 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
       const p = profile.data;
       if (p.followers === null) throw shapeChanged(clean, 'el perfil no trae followerCount');
 
-      const maxPosts = defaultMaxPosts;
-      let catalogue: PublicPostsPage;
-      try {
-        catalogue = await readPosts(clean, maxPosts, o.signal);
-      } catch (err) {
-        throw toAggregatorLookupError(err, clean);
-      }
-      const { views, note } = sumViews(catalogue, p.videoCount, maxPosts);
-      const coverage: PublicMetricsCoverage = { postsRead: catalogue.posts.length, postsTotal: p.videoCount, maxPosts, complete: catalogue.complete };
-
       return {
         platformId: 'tiktok',
         profile: {
@@ -330,45 +290,17 @@ export function createTikTokAggregatorSource(core: HttpCore, env: Readonly<Recor
           profile_url: `https://www.tiktok.com/@${p.uniqueId}`,
           account_type: p.verified === true ? 'creator' : 'unknown',
         },
-        metrics: { followers: p.followers, following: p.following, mediaCount: p.videoCount, views },
-        metricsNote: note,
+        metrics: { followers: p.followers, following: p.following, mediaCount: p.videoCount, views: null },
+        metricsNote: AGGREGATOR_METRICS_NOTE_ES,
         source: 'ensembledata.tt.user.info',
-        coverage,
         raw: profile.raw,
       } satisfies PublicProfile;
     },
   };
 }
 
-export const AGGREGATOR_VIEWS_NOTE_ES =
-  'Las vistas son la suma de las reproducciones de todo el catálogo del creador, leídas del proveedor de datos. TikTok no publica un acumulado de cuenta.';
-
-/**
- * Suma las reproducciones solo si el catálogo se leyó entero y todos los
- * videos trajeron `play_count`. En cualquier otro caso devuelve null con
- * la frase que lo explica: una cifra a medias engaña más que su ausencia.
- */
-export function sumViews(catalogue: PublicPostsPage, videoCount: number | null, maxPosts: number): { views: number | null; note: string } {
-  if (!catalogue.complete) {
-    return {
-      views: null,
-      note: `Seguidores al día. Las vistas quedan sin dato: el catálogo pasa de ${maxPosts} videos y solo leímos ${catalogue.posts.length}; un total a medias no es un total. Súbelo con ${ENSEMBLEDATA_MAX_POSTS_ENV} si quieres cubrirlo entero.`,
-    };
-  }
-  if (catalogue.posts.some((v) => v.metrics.views === null)) {
-    return {
-      views: null,
-      note: 'Seguidores al día. Las vistas quedan sin dato: el proveedor no dio las reproducciones de alguno de los videos, y un total incompleto no se guarda.',
-    };
-  }
-  if (catalogue.posts.length === 0 && videoCount !== 0) {
-    return {
-      views: null,
-      note: 'Seguidores al día. Las vistas quedan sin dato: el proveedor no devolvió ningún video de esta cuenta.',
-    };
-  }
-  return { views: catalogue.posts.reduce((acc, v) => acc + (v.metrics.views ?? 0), 0), note: AGGREGATOR_VIEWS_NOTE_ES };
-}
+export const AGGREGATOR_METRICS_NOTE_ES =
+  'Seguidores, seguidos y número de videos por el proveedor de datos. TikTok no publica vistas de una cuenta: llegan video por video.';
 
 /**
  * Cada código del proveedor tiene su frase: quien lee la pantalla
@@ -404,6 +336,12 @@ export function toAggregatorLookupError(err: unknown, handle: string): PublicLoo
       return new PublicLookupError('not_discoverable', `TikTok no deja leer @${handle}: la cuenta es privada o está restringida.`, { cause: err });
     default:
       break;
+  }
+  // Un 401/403 del proveedor que no es uno de sus códigos es NUESTRA
+  // credencial, nunca la del creador: nadie autorizó nada en una cuenta por
+  // @, así que no puede acabar en needs_reauth (revisión del cierre CON-C).
+  if (err.kind === 'auth') {
+    return new PublicLookupError('not_configured', `El proveedor de datos de TikTok rechazó la credencial de On Cue (${err.code}); hay que revisar ${ENSEMBLEDATA_TOKEN_ENV}.`, { cause: err });
   }
   if (err.kind === 'permanent') {
     return new PublicLookupError('not_discoverable', `El proveedor de datos de TikTok rechazó la consulta de @${handle} (${err.code}).`, { cause: err });

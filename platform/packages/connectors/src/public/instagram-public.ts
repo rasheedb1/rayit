@@ -63,7 +63,6 @@ export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record
         metrics: { followers: d.followers_count, following: null, mediaCount: d.media_count, views: null },
         metricsNote: INSTAGRAM_METRICS_NOTE_ES,
         source: 'instagram.business_discovery',
-        coverage: null,
         raw: res.raw,
       };
       return profile;

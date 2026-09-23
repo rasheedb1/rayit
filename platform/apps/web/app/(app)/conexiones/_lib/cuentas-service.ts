@@ -19,7 +19,7 @@
  */
 import {
   createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
-  MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher,
+  MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher, YouTubeClient,
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
 } from "@mc/connectors";
 import {
@@ -210,9 +210,11 @@ export function createCuentasService(deps: CuentasDeps) {
     },
 
     /**
-     * Cuenta autorizada (CON-3): se lee con su propio token desde el almacén
-     * cifrado (userInfo de TikTok, me de Instagram). Un token que la
-     * plataforma rechaza deja el aviso; la renovación es de oauth.refresh.
+     * Cuenta autorizada (CON-3, CON-8): se lee con su propio token desde el
+     * almacén cifrado (userInfo de TikTok, me de Instagram, channels.list?
+     * mine=true de YouTube, cuyas vistas son el acumulado del canal y van en
+     * null: la columna es la del día). Un token que la plataforma rechaza
+     * deja el aviso; la renovación es de oauth.refresh.
      */
     async actualizarAutorizada(row: AccountRow, callLog: InMemoryCallLogSink): Promise<ActualizarResult> {
       let cipher: TokenCipher;
@@ -235,7 +237,12 @@ export function createCuentasService(deps: CuentasDeps) {
             const { data, raw } = await new InstagramClient(core, auth).me();
             return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
           }
-          throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta (CON-8).");
+          if (row.platformId === "youtube") {
+            const { data, raw } = await new YouTubeClient(core, auth).channelMine();
+            if (!data) throw new PublicLookupError("not_found", "La cuenta de Google autorizada ya no tiene canal de YouTube; hay que volver a autorizarla.");
+            return { followers: data.metrics.followers, following: null, mediaCount: data.metrics.media_count, views: null, raw };
+          }
+          throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta.");
         });
         await deps.withWorkspace(async (tx) => {
           await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics, source: API_SNAPSHOT_SOURCE });

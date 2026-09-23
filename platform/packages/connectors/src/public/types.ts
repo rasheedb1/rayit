@@ -8,34 +8,25 @@
  *
  *   instagram  business_discovery con el token de la cuenta casa
  *   youtube    Data API con API key
- *   tiktok     oEmbed: identidad sí, métricas no (pendiente de fuente)
+ *   tiktok     oEmbed: identidad sí, métricas no; con ENSEMBLEDATA_TOKEN,
+ *              el proveedor de datos de pago (CON-12)
  */
-import type { NormalizedAccountProfile, NormalizedVideo } from '../normalize/types.ts';
+import type { NormalizedAccountProfile } from '../normalize/types.ts';
 import type { PlatformId } from '../types.ts';
 
 export interface PublicAccountMetrics {
   followers: number | null;
   following: number | null;
   mediaCount: number | null;
-  /** Vistas acumuladas de la cuenta cuando la plataforma las publica (YouTube). */
+  /**
+   * Vistas DEL DÍA de la cuenta, que es lo que guarda
+   * `account_metric_snapshot.views` y lo que Resumen suma día por día.
+   * Ninguna fuente por @ las publica: YouTube da el acumulado del canal y
+   * TikTok no da nada, así que aquí va null y las vistas llegan video por
+   * video (CON-5). Un acumulado guardado aquí se contaría una vez por día
+   * en Resumen (cierre CON-C, D20).
+   */
   views: number | null;
-}
-
-/**
- * Cuando una cifra se arma sumando varias llamadas (las vistas de TikTok
- * por proveedor son la suma de las reproducciones del catálogo), esto
- * dice si se leyó entero. `complete: false` obliga a dejar la cifra en
- * null: un total a medias no es un total (CON-12 §0.4).
- */
-export interface PublicMetricsCoverage {
-  /** Publicaciones leídas para sumar. */
-  postsRead: number;
-  /** Publicaciones que el perfil dice tener; null si no lo dijo. */
-  postsTotal: number | null;
-  /** Tope de publicaciones que se permitió leer. */
-  maxPosts: number;
-  /** true solo si se llegó al final del catálogo. */
-  complete: boolean;
 }
 
 export interface PublicProfile {
@@ -47,8 +38,6 @@ export interface PublicProfile {
   metricsNote: string | null;
   /** Qué endpoint lo dio: 'instagram.business_discovery', 'youtube.channels.list', 'tiktok.oembed'. */
   source: string;
-  /** Solo las fuentes que suman varias llamadas lo llenan; las demás, null. */
-  coverage: PublicMetricsCoverage | null;
   raw: unknown;
 }
 
@@ -75,13 +64,6 @@ export class PublicLookupError extends Error {
  *   aggregator      proveedor de datos de pago (CON-12)
  */
 export type PublicAccessMode = 'public_profile' | 'aggregator';
-
-/** Lo que una fuente lee del catálogo cuando necesita sumarlo (las vistas de TikTok). */
-export interface PublicPostsPage {
-  posts: NormalizedVideo[];
-  /** true solo si se llegó al final del catálogo dentro del tope. */
-  complete: boolean;
-}
 
 export interface PublicProfileSource {
   readonly platformId: PlatformId;

@@ -73,9 +73,9 @@ test('exchangeCode: formulario con el code, token de una hora, refresh token, sc
   assert.equal(assertNoSecrets([JSON.stringify(log.entries)], SECRETS), null);
 });
 
-test('exchangeCode sin refresh_token (la cuenta ya había autorizado): transitorio, no se guarda una conexión que muere en una hora', async () => {
+test('exchangeCode sin refresh_token (la cuenta ya había autorizado): definitivo y con su código, no se guarda una conexión que muere en una hora', async () => {
   const { core } = await oauthCore('youtube', [['oauth.token', 'code.sin_refresh']]);
-  await assert.rejects(googleExchangeCode(core, CFG, CODE), (e: unknown) => e instanceof PlatformApiError && e.kind === 'transient' && e.code === 'no_refresh_token' && /renovación/.test(e.messageEs));
+  await assert.rejects(googleExchangeCode(core, CFG, CODE), (e: unknown) => e instanceof PlatformApiError && e.kind === 'permanent' && e.code === 'no_refresh_token' && /renovación/.test(e.messageEs));
 });
 
 test('exchangeCode con code inválido: PlatformApiError permanente (invalid_grant), sin secretos', async () => {

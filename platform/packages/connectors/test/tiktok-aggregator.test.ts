@@ -1,8 +1,9 @@
 /**
  * CON-12 · proveedor de datos de TikTok (EnsembleData): seguidores y
- * vistas por @, errores del proveedor con su frase, parseo tolerante en
- * lo accesorio y definitivo cuando cambia de forma, y el token fuera de
- * todo log y de toda URL grabada.
+ * videos por @ (las vistas llegan por video: la de cuenta es la del día y
+ * TikTok no la publica), errores del proveedor con su frase, parseo
+ * tolerante en lo accesorio y definitivo cuando cambia de forma, el gasto
+ * acotado al que pide, y el token fuera de todo log y de toda URL grabada.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,8 +40,8 @@ test('sin ENSEMBLEDATA_TOKEN, TikTok sigue siendo el oEmbed de CON-10: el provee
   assert.equal(fetch.calls.length, 0);
 });
 
-test('con el token: seguidores del perfil y vistas sumadas del catálogo completo; access_mode aggregator', async () => {
-  const { src, log, fetch } = await source([['user.info', 'ok'], ['user.posts', 'ok']]);
+test('con el token: una sola llamada de perfil, seguidores y videos, vistas en null; access_mode aggregator', async () => {
+  const { src, log, fetch } = await source([['user.info', 'ok']]);
   assert.equal(src.accessMode, 'aggregator');
   assert.equal(src.label, TIKTOK_AGGREGATOR_LABEL);
   const p = await src.lookup('@laura.cocinafacil');
@@ -49,83 +50,24 @@ test('con el token: seguidores del perfil y vistas sumadas del catálogo complet
   assert.equal(p.profile.display_name, 'Laura · Cocina fácil');
   assert.equal(p.profile.external_account_id, 'laura.cocinafacil', 'el mismo id externo que el oEmbed de CON-10: contratar el proveedor no duplica la cuenta');
   assert.equal(p.profile.profile_url, 'https://www.tiktok.com/@laura.cocinafacil');
-  assert.deepEqual(p.metrics, { followers: 128400, following: 312, mediaCount: 3, views: 65401 });
-  assert.deepEqual(p.coverage, { postsRead: 3, postsTotal: 3, maxPosts: 200, complete: true });
+  // views es la columna de las vistas DEL DÍA (Resumen la suma por día) y
+  // TikTok no publica vistas de cuenta: null, y llegan video por video.
+  assert.deepEqual(p.metrics, { followers: 128400, following: 312, mediaCount: 3, views: null });
   assert.equal(p.source, 'ensembledata.tt.user.info');
-  assert.match(p.metricsNote!, /suma de las reproducciones/);
+  assert.match(p.metricsNote!, /llegan video por video/);
 
-  assert.deepEqual(log.entries.map((e) => e.endpoint), ['ensembledata.tt.user.info', 'ensembledata.tt.user.posts']);
-  // El catálogo se cobra por bloques de diez: 200 publicaciones de tope = 5 bloques en la primera llamada.
-  assert.deepEqual(log.entries.map((e) => e.request_units), [1, 5]);
+  // Cierre CON-C: la lectura de cuenta ya no recorre el catálogo (hasta 21 unidades por cuenta y día).
+  assert.deepEqual(log.entries.map((e) => [e.endpoint, e.request_units]), [['ensembledata.tt.user.info', 1]]);
   // R4: el token va en la query del proveedor, y no aparece ni en el log ni en la URL grabada.
   assert.ok(fetch.calls[0]!.url.includes('token=REDACTADO'), fetch.calls[0]!.url);
   assert.ok(!JSON.stringify(fetch.calls).includes(TOKEN));
   assert.ok(!JSON.stringify(log.entries).includes(TOKEN));
 });
 
-test('un nulo no es un cero: sin followingCount ni videoCount quedan en null y las vistas se siguen sumando', async () => {
-  const { src } = await source([['user.info', 'nulls'], ['user.posts', 'ok']]);
+test('un nulo no es un cero: sin followingCount ni videoCount quedan en null', async () => {
+  const { src } = await source([['user.info', 'nulls']]);
   const p = await src.lookup('laura.cocinafacil');
-  assert.deepEqual(p.metrics, { followers: 128400, following: null, mediaCount: null, views: 65401 });
-});
-
-test('lista vacía sin un cero declarado en el perfil: las vistas quedan sin dato, no en cero', async () => {
-  const { src } = await source([['user.info', 'nulls'], ['user.posts', 'empty']]);
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.views, null);
-  assert.match(p.metricsNote!, /no devolvió ningún video/);
-});
-
-test('el catálogo pagina: dos llamadas, cursor consumido y las vistas suman el total', async () => {
-  const { src, log } = await source([['user.info', 'ok'], ['user.posts', 'paginated']]);
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.views, 65401);
-  assert.equal(p.coverage!.complete, true);
-  assert.equal(log.entries.filter((e) => e.endpoint === 'ensembledata.tt.user.posts').length, 2);
-});
-
-test('forma anidada (data.posts y cursor dentro): se tolera y da el mismo total', async () => {
-  const { src } = await source([['user.info', 'ok'], ['user.posts', 'forma_anidada']]);
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.views, 65401);
-  assert.equal(p.coverage!.complete, true);
-});
-
-test('catálogo más largo que el tope: seguidores sí, vistas null con la razón; nunca un total a medias', async () => {
-  const { src } = await source([['user.info', 'ok'], ['user.posts', 'truncado']], { ...ENV, ENSEMBLEDATA_MAX_POSTS: '3' });
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.followers, 128400);
-  assert.equal(p.metrics!.views, null);
-  assert.deepEqual(p.coverage, { postsRead: 3, postsTotal: 3, maxPosts: 3, complete: false });
-  assert.match(p.metricsNote!, /pasa de 3 videos/);
-  assert.match(p.metricsNote!, /ENSEMBLEDATA_MAX_POSTS/);
-});
-
-test('el tope es de gasto, no de datos: lo que el proveedor mande de más se suma, no se recorta', async () => {
-  // Con el tope en 2 el proveedor igual manda sus 10 (un bloque) y cierra
-  // el catálogo: recortar a 2 daría un total MÁS BAJO que el real,
-  // etiquetado como «todo el catálogo».
-  const { src } = await source([['user.info', 'ok'], ['user.posts', 'ok']], { ...ENV, ENSEMBLEDATA_MAX_POSTS: '2' });
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.views, 65401);
-  assert.deepEqual(p.coverage, { postsRead: 3, postsTotal: 3, maxPosts: 2, complete: true });
-});
-
-test('el proveedor dice que hay más y no manda nada: no se afirma un total', async () => {
-  const { src, log } = await source([['user.info', 'ok'], ['user.posts', 'vacia_con_cursor']]);
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.followers, 128400);
-  assert.equal(p.metrics!.views, null);
-  assert.equal(p.coverage!.complete, false);
-  assert.equal(log.entries.filter((e) => e.endpoint === 'ensembledata.tt.user.posts').length, 1, 'no se queda en bucle gastando unidades');
-});
-
-test('un video sin play_count: el total tampoco se guarda', async () => {
-  const { src } = await source([['user.info', 'ok'], ['user.posts', 'sin_play_count']]);
-  const p = await src.lookup('laura.cocinafacil');
-  assert.equal(p.metrics!.followers, 128400);
-  assert.equal(p.metrics!.views, null);
-  assert.match(p.metricsNote!, /no dio las reproducciones/);
+  assert.deepEqual(p.metrics, { followers: 128400, following: null, mediaCount: null, views: null });
 });
 
 test('el proveedor cambia de forma: error definitivo con mensaje, no una cuenta a medias', async () => {
@@ -136,7 +78,6 @@ test('el proveedor cambia de forma: error definitivo con mensaje, no una cuenta 
   const sinSeguidores = await source([['user.info', 'sin_seguidores']]);
   await assert.rejects(sinSeguidores.src.lookup('laura.cocinafacil'), (e: unknown) =>
     e instanceof PublicLookupError && e.code === 'not_discoverable' && /followerCount/.test(e.messageEs));
-  // No se llegó a pedir el catálogo: un perfil que no se entiende no gasta más unidades.
   assert.equal(sinSeguidores.log.entries.length, 1);
 });
 
@@ -161,39 +102,63 @@ test('cada código del proveedor tiene su frase: no existe, privada, credencial,
   }
 });
 
+test('un 401 del proveedor fuera de sus códigos es NUESTRA credencial: not_configured, nunca un «vuelve a autorizar» al creador', async () => {
+  const clock = new FakeClock();
+  const log = new InMemoryCallLogSink();
+  const fetch = new FixtureFetch([{
+    meta: { source: 'docs', recordedAt: '2026-09-23', notes: 'Un 401 genérico de la pasarela del proveedor.' },
+    request: { method: 'GET', urlPattern: '^https://ensembledata\\.com/apis/tt/user/info\\?' },
+    response: { status: 401, body: { detail: 'Unauthorized' } },
+  }]);
+  const core = new HttpCore({ callLog: log, quota: new QuotaManager({ now: clock.now, sleep: clock.sleep }), fetch: fetch.fetch, now: clock.now, sleep: clock.sleep, random: () => 1 });
+  const src = createPublicProfileSources(core, ENV).tiktok!;
+  await assert.rejects(src.lookup('laura.cocinafacil'), (e: unknown) =>
+    e instanceof PublicLookupError && e.code === 'not_configured' && /credencial de On Cue/.test(e.messageEs) && /ENSEMBLEDATA_TOKEN/.test(e.messageEs) && !e.messageEs.includes(TOKEN));
+});
+
 test('429 y 500 son transitorios: el núcleo reintenta solo y la cuenta se lee igual', async () => {
-  const limitada = await source([['user.info', 'rate_limited'], ['user.posts', 'ok']]);
+  const limitada = await source([['user.info', 'rate_limited']]);
   const p = await limitada.src.lookup('laura.cocinafacil');
   assert.equal(p.metrics!.followers, 128400);
   assert.equal(limitada.log.entries.filter((e) => e.endpoint === 'ensembledata.tt.user.info').length, 2);
   assert.equal(limitada.log.entries[0]!.rate_limited, true);
   assert.equal(limitada.log.entries[0]!.retry_after_s, 3);
 
-  const caida = await source([['user.info', 'server_error_then_ok'], ['user.posts', 'ok']]);
+  const caida = await source([['user.info', 'server_error_then_ok']]);
   assert.equal((await caida.src.lookup('laura.cocinafacil')).metrics!.followers, 128400);
 });
 
 test('la cuota del proveedor se contabiliza por unidades y con su propia familia', async () => {
-  const { src, quota } = await source([['user.info', 'ok'], ['user.posts', 'ok']]);
+  const { src, quota } = await source([['user.info', 'ok']]);
   await src.lookup('laura.cocinafacil');
-  assert.deepEqual(quota.usedToday({ family: 'ensembledata', platformId: 'tiktok', connectionId: null }), { unitsUsed: 6, calls: 2 });
+  assert.deepEqual(quota.usedToday({ family: 'ensembledata', platformId: 'tiktok', connectionId: null }), { unitsUsed: 1, calls: 1 });
   // La Display API de TikTok es otro contrato: no comparte presupuesto.
   assert.deepEqual(quota.usedToday({ family: 'tiktok', platformId: 'tiktok', connectionId: null }), { unitsUsed: 0, calls: 0 });
 });
 
-test('con el proveedor, TikTok SÍ tiene fuente de publicaciones para CON-5', async () => {
+const TARGET = { connectionId: null, handle: 'laura.cocinafacil', externalAccountId: 'laura.cocinafacil', tokens: null };
+
+async function postSource(variant: string, env: Record<string, string | undefined> = ENV) {
   const clock = new FakeClock();
   const log = new InMemoryCallLogSink();
-  const fetch = new FixtureFetch(await loadFixtures('ensembledata', [['user.posts', 'ok']]));
+  const fetch = new FixtureFetch(await loadFixtures('ensembledata', [['user.posts', variant]]));
   const core = new HttpCore({ callLog: log, quota: new QuotaManager({ now: clock.now, sleep: clock.sleep }), fetch: fetch.fetch, now: clock.now, sleep: clock.sleep, random: () => 1 });
-  const target = { connectionId: null, handle: 'laura.cocinafacil', externalAccountId: 'laura.cocinafacil', tokens: null };
+  return { log, core, src: createPublicPostSources(core, env).tiktok! };
+}
 
-  const conProveedor = createPublicPostSources(core, ENV).tiktok!;
+async function listAll(src: Awaited<ReturnType<typeof postSource>>['src'], max?: number) {
+  const out = [];
+  for await (const v of src.listRecentPosts(TARGET, max === undefined ? {} : { max })) out.push(v);
+  return out;
+}
+
+test('con el proveedor, TikTok SÍ tiene fuente de publicaciones para CON-5', async () => {
+  const { log, core, src: conProveedor } = await postSource('ok');
+  const target = TARGET;
   assert.equal(conProveedor.noPostsNoteEs, null, 'ya no hay que explicar por qué no hay videos');
   assert.equal(conProveedor.supportsLookupById, false, 'no se puede preguntar por un video suelto: un ausente no es un borrado');
 
-  const videos = [];
-  for await (const v of conProveedor.listRecentPosts(target, { max: 10 })) videos.push(v);
+  const videos = await listAll(conProveedor, 10);
   assert.equal(videos.length, 3);
   assert.equal(videos[0]!.post.external_post_id, '7400000000000000d01');
   assert.equal(videos[0]!.post.url, 'https://www.tiktok.com/@laura.cocinafacil/video/7400000000000000d01');
@@ -202,6 +167,7 @@ test('con el proveedor, TikTok SÍ tiene fuente de publicaciones para CON-5', as
   assert.deepEqual(videos[0]!.post.mentions, ['cafealma.co']);
   assert.equal(videos[0]!.post.published_at?.toISOString(), '2026-08-28T16:00:00.000Z');
   assert.equal(videos[0]!.metrics.views, 50001);
+  assert.deepEqual(log.entries.map((e) => e.request_units), [1], 'max 10 pide un solo bloque de diez, no cinco');
 
   const medidas = await conProveedor.postMetrics(target, [{ externalPostId: '7400000000000000d02', surface: 'feed', mediaType: 'video' }]);
   assert.deepEqual(medidas.readings.map((r) => [r.externalPostId, r.metrics.views]), [['7400000000000000d02', 12000]]);
@@ -211,6 +177,44 @@ test('con el proveedor, TikTok SÍ tiene fuente de publicaciones para CON-5', as
   // Sin la variable, la fuente de CON-5 vuelve a ser la que explica por qué no hay videos.
   const sinProveedor = createPublicPostSources(core, {}).tiktok!;
   assert.match(sinProveedor.noPostsNoteEs!, /no publica los videos/);
+});
+
+test('el gasto sigue al max de quien lista: 25 son 3 bloques; sin max, 5 (el tope por llamada)', async () => {
+  const veinticinco = await postSource('ok');
+  await listAll(veinticinco.src, 25);
+  assert.deepEqual(veinticinco.log.entries.map((e) => e.request_units), [3]);
+  const sinMax = await postSource('ok');
+  await listAll(sinMax.src);
+  assert.deepEqual(sinMax.log.entries.map((e) => e.request_units), [5]);
+});
+
+test('el catálogo pagina: dos llamadas, el cursor se consume y llegan los tres videos', async () => {
+  const { src, log } = await postSource('paginated');
+  const videos = await listAll(src);
+  assert.deepEqual(videos.map((v) => v.metrics.views), [50001, 12000, 3400]);
+  assert.equal(log.entries.length, 2);
+});
+
+test('forma anidada (data.posts y cursor dentro): se tolera y da los mismos videos', async () => {
+  const { src } = await postSource('forma_anidada');
+  assert.deepEqual((await listAll(src)).map((v) => v.metrics.views), [50001, 12000, 3400]);
+});
+
+test('ENSEMBLEDATA_MAX_POSTS corta el gasto: con 3 y más catálogo por delante no se pide otro bloque', async () => {
+  const { src, log } = await postSource('truncado', { ...ENV, ENSEMBLEDATA_MAX_POSTS: '3' });
+  assert.equal((await listAll(src)).length, 3);
+  assert.deepEqual(log.entries.map((e) => e.request_units), [1]);
+});
+
+test('el proveedor dice que hay más y no manda nada: no se queda en bucle gastando unidades', async () => {
+  const { src, log } = await postSource('vacia_con_cursor');
+  assert.deepEqual(await listAll(src), []);
+  assert.equal(log.entries.length, 1);
+});
+
+test('un video sin play_count: su lectura queda en null, nunca en cero', async () => {
+  const { src } = await postSource('sin_play_count');
+  assert.deepEqual((await listAll(src)).map((v) => v.metrics.views), [50001, null]);
 });
 
 test('un @ mal escrito no gasta una unidad: se rechaza antes de llamar', async () => {

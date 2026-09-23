@@ -63,19 +63,26 @@ export function createTikTokAggregatorPostSource(core: HttpCore, env: Readonly<R
   const client = new EnsembleDataClient(core, token);
   const maxPosts = readMaxPosts(env);
 
-  async function* pages(target: PostSourceTarget, signal?: AbortSignal): AsyncIterable<readonly NormalizedVideo[]> {
+  /**
+   * El catálogo en tramos, del más reciente al más antiguo. `limit` es el
+   * tope de GASTO de quien pregunta: cada llamada pide solo los bloques de
+   * diez que le faltan para llegar a él (el proveedor cobra una unidad por
+   * bloque), nunca más de ENSEMBLEDATA_MAX_POSTS en total.
+   */
+  async function* pages(target: PostSourceTarget, limit: number, signal?: AbortSignal): AsyncIterable<readonly NormalizedVideo[]> {
     const handle = assertHandle('tiktok', target.handle ?? target.externalAccountId);
+    const cap = Math.min(limit, maxPosts);
     let cursor: string | null = null;
-    let leidos = 0;
-    while (leidos < maxPosts) {
-      const depth = Math.min(ENSEMBLEDATA_MAX_DEPTH_PER_CALL, Math.ceil((maxPosts - leidos) / ENSEMBLEDATA_POSTS_PER_CHUNK));
+    let read = 0;
+    while (read < cap) {
+      const depth = Math.min(ENSEMBLEDATA_MAX_DEPTH_PER_CALL, Math.ceil((cap - read) / ENSEMBLEDATA_POSTS_PER_CHUNK));
       let res;
       try {
         res = await client.userPosts(handle, { cursor, depth, signal });
       } catch (err) {
         throw toAggregatorLookupError(err, handle);
       }
-      leidos += res.data.items.length;
+      read += res.data.items.length;
       yield res.data.items;
       // Sin más páginas, o una página vacía que aun así trae cursor:
       // seguir sería un bucle que gasta unidades.
@@ -92,20 +99,20 @@ export function createTikTokAggregatorPostSource(core: HttpCore, env: Readonly<R
     noPostsNoteEs: null,
 
     listRecentPosts(target: PostSourceTarget, listOpts: PostListOptions = {}): AsyncIterable<NormalizedVideo> {
-      return flattenPages(pages(target, listOpts.signal), listOpts);
+      return flattenPages(pages(target, listOpts.max ?? maxPosts, listOpts.signal), listOpts);
     },
 
     async postMetrics(target: PostSourceTarget, posts: readonly PostRef[], metricOpts: { signal?: AbortSignal } = {}): Promise<PostMetricsResult> {
       if (posts.length === 0) return EMPTY_METRICS_RESULT;
-      const pendientes = new Set(posts.map((p) => p.externalPostId));
+      const pending = new Set(posts.map((p) => p.externalPostId));
       const readings: PostMetricsResult['readings'] = [];
-      for await (const page of pages(target, metricOpts.signal)) {
+      for await (const page of pages(target, maxPosts, metricOpts.signal)) {
         for (const video of page) {
           const id = video.post.external_post_id;
-          if (!pendientes.delete(id)) continue;
+          if (!pending.delete(id)) continue;
           readings.push({ externalPostId: id, metrics: video.metrics, raw: video.raw });
         }
-        if (pendientes.size === 0) break;
+        if (pending.size === 0) break;
       }
       // missingIds vacío siempre: no preguntar por un id no prueba que ya no exista.
       return { readings, missingIds: [] };

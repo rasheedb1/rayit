@@ -349,6 +349,18 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     for (const s of SECRETS) expect(JSON.stringify(sinCanal.calls)).not.toContain(s);
   });
 
+  it("YouTube: Google no entrega refresh token → ?error=sin_renovacion, no «la plataforma no respondió», y nada se guarda", async () => {
+    const sinRenovacion = new FixtureFetch(await loadFixtures("youtube", [["oauth.token", "code.sin_refresh"]]));
+    const otros = createOAuthHandlers({ env: ENV, withWorkspace, fetch: sinRenovacion.fetch, now: () => clock });
+    const startRes = await otros.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    const state = new URL(startRes.headers.get("location")!).searchParams.get("state")!;
+    const before = await countConnections();
+    const res = await otros.callback(callbackRequest("youtube", { code: CODE_YT, state }, cookieOf(startRes)), "youtube");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_renovacion`);
+    expect(await countConnections()).toBe(before);
+  });
+
   it("reconectar TikTok reutiliza la misma fila y la misma ref: una sola fila en connection_secret", async () => {
     const { cookie, state } = await start("tiktok");
     const res = await handlers.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookie), "tiktok");
