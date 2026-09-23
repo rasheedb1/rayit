@@ -49,6 +49,9 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
     markAccountLookupFailure:
       'salud técnica de la lectura pública (consecutive_failures, status_detail, status error si es definitivo): lo mismo ' +
       'que anota el recolector como mc_worker sin bitácora; el estado visible sale de connection_health',
+    notifyConnectionAdded:
+      'el aviso al titular es la CONSECUENCIA de un hecho que ya dejó su fila: connection.added / connection.authorized con ' +
+      'onBehalfOf y actedBy en `after`, en la misma transacción (ACC-8). La fila de notification es un mensaje, no un hecho del negocio',
   },
 };
 

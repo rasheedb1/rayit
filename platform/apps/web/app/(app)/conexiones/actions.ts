@@ -7,6 +7,7 @@ import { z } from "zod";
 import { ConnectionNotFound } from "@mc/db";
 import { requirePermission } from "@/lib/permisos";
 import { getCuentasService } from "./_lib/cuentas-server";
+import { SinPermisoError } from "./_lib/permisos";
 
 const idSchema = z.string().uuid();
 const agregarSchema = z.object({
@@ -25,7 +26,12 @@ async function requester(): Promise<{ ip: string | null; userAgent: string | nul
   return { ip: fwd ? fwd.split(",")[0]!.trim() || null : h.get("x-real-ip"), userAgent: h.get("user-agent") };
 }
 
-/** «Agregar cuenta»: red + @ + declaración de propiedad. Lee la fuente pública y guarda la cuenta con su primer snapshot. */
+/**
+ * «Agregar cuenta»: red + @ + declaración de propiedad. Lee la fuente
+ * pública y guarda la cuenta con su primer snapshot. Si quien agrega no
+ * es el titular, el consentimiento lo dice y el titular recibe el aviso
+ * (ACC-8).
+ */
 export async function agregarCuenta(formData: FormData): Promise<void> {
   await requirePermission("conexiones.cuenta.conectar");
   const parsed = agregarSchema.safeParse({ red: formData.get("red"), handle: formData.get("handle"), declaro: formData.get("declaro") });
@@ -48,7 +54,7 @@ export async function actualizarCuenta(id: string): Promise<void> {
   redirect(`/conexiones?actualizada=${encodeURIComponent(id)}${extra}`);
 }
 
-/** «Quitar»: deleted_at, status 'disabled', consentimiento revocado. La historia se conserva. */
+/** «Quitar»: deleted_at, status 'disabled', consentimiento revocado con quién lo quitó. La historia se conserva. */
 export async function desconectarConexion(id: string): Promise<void> {
   await requirePermission("conexiones.cuenta.desconectar");
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
@@ -56,7 +62,9 @@ export async function desconectarConexion(id: string): Promise<void> {
   try {
     await getCuentasService().quitar(id);
   } catch (err) {
-    error = err instanceof ConnectionNotFound ? "Esa cuenta ya no está en la lista." : "No se pudo quitar la cuenta. Inténtalo de nuevo.";
+    error = err instanceof ConnectionNotFound ? "Esa cuenta ya no está en la lista."
+      : err instanceof SinPermisoError ? err.message
+      : "No se pudo quitar la cuenta. Inténtalo de nuevo.";
   }
   revalidatePath("/conexiones");
   redirect(error ? `/conexiones?aviso=${encodeURIComponent(error)}` : "/conexiones?desconectada=1");

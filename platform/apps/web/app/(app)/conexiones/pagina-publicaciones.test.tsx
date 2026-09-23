@@ -13,6 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { AccountRow } from "@mc/db";
 
 vi.mock("./_lib/cuentas-server", () => ({ getCuentasService: () => servicio }));
+// ACC-8: la página formatea «Conectada por … el …» con los ajustes del workspace.
+vi.mock("@/lib/workspace/settings", () => ({
+  getCurrentWorkspace: () => Promise.resolve({ id: "w1", name: "Demo", currency: "COP", timezone: "America/Bogota", locale: "es-CO", country: "CO" }),
+}));
 vi.mock("./actions", () => ({
   actualizarCuenta: vi.fn(),
   agregarCuenta: vi.fn(),
@@ -28,7 +32,7 @@ const BASE: AccountRow = {
   lastSyncedAt: "2026-09-23T05:10:00.000Z", hoursSinceSync: 1, accessExpiresAt: null, tokenExpiringSoon: false,
   consecutiveFailures: 0, postsTracked: 3, failedCalls24h: 0, accessMode: "public_profile",
   latest: { day: "2026-09-22", followers: 38400, mediaCount: 140, following: null, views: 1200000 },
-  followersWeekAgo: null, postsCount: 0, lastPostSnapshotAt: null,
+  followersWeekAgo: null, postsCount: 0, lastPostSnapshotAt: null, connectedBy: null,
 };
 
 let servicio: { listar: () => Promise<AccountRow[]>; availability: () => Array<{ platformId: string; name: string; offersEs: string; missing: string[] }> };
@@ -90,5 +94,16 @@ describe("la fila de Cuentas después de que corre el recolector", () => {
     expect(within(r).getByText("5 en seguimiento")).toBeInTheDocument();
     expect(within(r).getByText("Todavía sin cifras de la cuenta")).toBeInTheDocument();
     expect(within(r).getByText(/publicaciones hasta el/).textContent).toContain("23 sep");
+  });
+
+  it("ACC-8: si la conectó un tercero lo dice debajo del @; si la conectó el titular, no dice nada", async () => {
+    await pintar([
+      { ...BASE, connectedBy: { userId: "u2", name: "Andrés Pardo", email: "andres@ejemplo.com", at: "2026-09-20T15:00:00.000Z" } },
+      { ...BASE, id: "c2", handle: "propia" },
+      { ...BASE, id: "c3", handle: "sinnombre", connectedBy: { userId: "u3", name: null, email: null, at: "2026-09-20T15:00:00.000Z" } },
+    ]);
+    expect(within(fila("nutriveoficial")).getByText(/^Conectada por Andrés Pardo el 20/)).toBeInTheDocument();
+    expect(within(fila("propia")).queryByText(/Conectada por/)).toBeNull();
+    expect(within(fila("sinnombre")).getByText(/^Conectada por alguien del equipo el 20/)).toBeInTheDocument();
   });
 });

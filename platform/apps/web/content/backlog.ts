@@ -656,8 +656,8 @@ export const STORIES: readonly Story[] = [
     title: "Consentimiento delegado",
     desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
     done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
-    status: "en_curso",
-    note: "23-sep: rama nicolas/ACC-8-consentimiento-delegado, solo local y con muchos cambios sin commitear. Evidencia v2 (a nombre de quién y quién actúa) por @ y por OAuth, aviso al titular y «Conectada por … el …» en /conexiones. Migración 0038, sin aplicar.",
+    status: "hecho",
+    note: "23-sep: en main. Antes de desplegar hay que aplicar la migración 0038 en Supabase (make db.migrate); sin ella la web no arranca. Evidencia v2 (onBehalfOf + actedBy, IP resumida) en los dos caminos (por @ y OAuth), aviso connection_added al titular (migración 0038, pendiente de aplicar), onBehalfOf/actedBy en cada fila de audit() de conexiones y «Conectada por … el …» en /conexiones. El permiso se comprueba además dentro de la transacción leyendo role_permission (requirePermission resuelve Dueño hasta ACC-5). El mánager con la casilla de ACC-4 se prueba con un rol a medida del workspace. Propuesta en docs/propuestas/ACC-8.md.",
   },
   {
     id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],

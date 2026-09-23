@@ -445,3 +445,54 @@ ON CONFLICT (id) DO UPDATE SET
   category = EXCLUDED.category, vendor = EXCLUDED.vendor, description = EXCLUDED.description, amount = EXCLUDED.amount,
   currency = EXCLUDED.currency, incurred_on = EXCLUDED.incurred_on, is_recurring = EXCLUDED.is_recurring,
   recurrence = EXCLUDED.recurrence, deductible = EXCLUDED.deductible;
+
+-- =====================================================================
+-- Consentimiento delegado (ACC-8): el mánager de la demo
+-- ---------------------------------------------------------------------
+-- Andrés Pardo es el mánager de Laura (rol de fábrica 'manager', 0034).
+-- Ese rol NO trae conexiones.cuenta.conectar (decisión E): se lo da la
+-- casilla de ACC-4 al invitarlo. La demo cuenta una historia pasada: con
+-- esa casilla, Andrés conectó la cuenta de Instagram de Laura: el consentimiento queda a nombre de Laura con
+-- Andrés en evidence.actedBy (evidencia v2), Laura tiene el aviso
+-- connection_added (0038) sin leer, y /conexiones dice «Conectada por
+-- Andrés Pardo el …». Es lo que hace visible ACC-8 en dev con el seed.
+-- Ids fijos y ON CONFLICT DO NOTHING: el verificador exige idempotencia.
+--
+-- app_user y membership solo admiten la fila PROPIA (0025 §4 y 0028):
+-- la sesión pasa a ser Andrés para darlo de alta y vuelve a ser Laura
+-- (que fijó 0002) para el resto.
+-- =====================================================================
+SELECT set_config('app.user_id', '00000002-0000-4000-8000-000000000004', false);
+
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('00000002-0000-4000-8000-000000000004', 'andres@ejemplo.com', 'Andrés Pardo', 'es-CO')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000004', system_role_id('creator', 'manager'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '00000002-0000-4000-8000-000000000002', false);
+
+INSERT INTO data_consent (id, workspace_id, creator_id, connection_id, purpose, granted, granted_at, policy_version, evidence)
+VALUES (
+  '00000003-0000-4000-8000-0000ac080001', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000003',
+  '00000002-0000-4000-8000-0000000000c1', 'analytics', true, now() - interval '140 days', '2026-09-22',
+  jsonb_build_object(
+    'v', 2, 'method', 'oauth', 'declaredOwner', false, 'ipHash', NULL, 'userAgent', 'seed',
+    'textShown', 'Texto de consentimiento de la demo.', 'policyVersion', '2026-09-22',
+    'at', to_char(now() - interval '140 days', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+    'onBehalfOf', jsonb_build_object('creatorId', '00000002-0000-4000-8000-000000000003'),
+    'actedBy', jsonb_build_object('userId', '00000002-0000-4000-8000-000000000004', 'email', 'andres@ejemplo.com', 'roleKey', 'manager')
+  )
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
+VALUES (
+  '00000003-0000-4000-8000-0000ac080002', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002',
+  'connection_added', 'info', 'Una cuenta se conectó en tu nombre',
+  'Andrés Pardo conectó la cuenta @laura.cocinafacil de Instagram el ' || to_char(now() - interval '140 days', 'DD/MM/YYYY') || ' en tu nombre. Puedes quitarla cuando quieras desde Cuentas.',
+  'social_connection', '00000002-0000-4000-8000-0000000000c1', '/conexiones', now() - interval '140 days'
+)
+ON CONFLICT (id) DO NOTHING;

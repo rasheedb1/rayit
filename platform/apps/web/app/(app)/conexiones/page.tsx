@@ -9,11 +9,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { flags } from "@/content/flags";
-import { formatDate, formatDelta, formatInt } from "@/lib/format";
+import { formatDate, formatDelta, formatInt, type Formatter, formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions";
 import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
 import { getCuentasService } from "./_lib/cuentas-server";
 import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
+import { displayNameOf, MESSAGES } from "./_lib/messages";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { ConnectDialog } from "./connect-dialog";
 import { requireModuleAccess } from "@/lib/permisos/modulo";
@@ -33,11 +35,27 @@ const STATUS_PILL: Record<ConnectionStatus, { kind: PillKind; text: string }> = 
 
 const SIN_DATO = <span className="text-xs text-muted">Sin dato</span>;
 
-const COLUMNS: Column<AccountRow>[] = [
+/**
+ * Debajo del @: el nombre público de la cuenta y, si la conectó un
+ * tercero (ACC-8), quién y cuándo. Cuando la conectó el propio titular
+ * no se dice nada: la ausencia de la línea es la información.
+ */
+function AccountSub({ row, f }: { row: AccountRow; f: Formatter }) {
+  const by = row.connectedBy;
+  if (!row.displayName && !by) return null;
+  return (
+    <>
+      {row.displayName && <span className="block">{row.displayName}</span>}
+      {by && <span className="block">{MESSAGES.list.connectedBy({ who: displayNameOf(by) ?? MESSAGES.list.someoneFromTheTeam, when: f.date(by.at) })}</span>}
+    </>
+  );
+}
+
+const columns = (f: Formatter): Column<AccountRow>[] => [
   {
     key: "account",
     header: "Cuenta",
-    render: (r) => <CellMain sub={r.displayName ?? undefined}>{`@${r.handle ?? r.externalAccountId}`}</CellMain>,
+    render: (r) => <CellMain sub={<AccountSub row={r} f={f} />}>{`@${r.handle ?? r.externalAccountId}`}</CellMain>,
   },
   { key: "network", header: "Red", render: (r) => PLATFORM_NAME[r.platformId] },
   {
@@ -193,6 +211,7 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
   await requireModuleAccess("conexiones");
   const params = await searchParams;
   const service = getCuentasService();
+  const f = formatterFor(await getCurrentWorkspace());
   const rows = await service.listar();
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {
@@ -245,7 +264,7 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
           <span id="cuentas">Cuentas</span>
         </SectionTitle>
         <DataTable
-          columns={COLUMNS}
+          columns={columns(f)}
           rows={rows}
           rowKey={(r) => r.id}
           caption="Cuentas del workspace con su última lectura pública y su estado"
