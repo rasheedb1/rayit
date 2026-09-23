@@ -451,3 +451,17 @@ además más rápido.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas
   `timestamptz` en UTC.
 - Los tokens nunca tocan la base en claro (`secret_ref`).
+- **Este paquete no tiene idioma.** Cuando una consulta deja una frase
+  en una tabla de otro módulo (`activity.subject`, `notification.title_es`,
+  que es NOT NULL desde 0009), la recibe de quien la llama por un tipo
+  `Textos…` —`TextosCotizar`, `TextosFinanzas`— y guarda junto a ella su
+  código y su entidad (`kind` + `entity_id`) para poder recomponerla.
+  Así la cifra sale con el `formatterFor` del espacio y no con un
+  `es-CO` escrito aquí.
+- **La bitácora se escribe dentro de la transacción que escribe**, en
+  `queries/<módulo>.ts` y no en la Server Action: así audita igual quien
+  llame a la consulta (un job, una API, otro módulo) y, si la escritura
+  se deshace, la fila de `audit_log` se va con ella. El actor y el
+  workspace los pone la base (`current_user_id()`,
+  `current_workspace_id()`), nunca un parámetro. Toda escritura de
+  dinero, publicación o cuenta conectada lleva la suya.

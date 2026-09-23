@@ -57,7 +57,8 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
+                              de cada factura (registrar pago, reserva de impuestos).
                               index.ts exporta facturarCampana() para Campañas.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).

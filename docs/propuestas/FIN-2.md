@@ -274,3 +274,139 @@ romper `nueva/form.tsx` ni su prueba.
 Ninguna que bloquee. Las dos decisiones que son de Nicolás están
 marcadas: la de §0.3 (workspace sin `reserva_pct`) y, menor, la de §0.2.5
 (`paid_at` solo al quedar pagada).
+
+---
+
+## 1 · Lo que necesita Rasheed
+
+Nada de esto bloquea FIN-2, que está terminada y en verde. Son tres
+cosas que le tocan a él o que valen para su carril.
+
+### 1.1 `MONTO_MAXIMO` ya está en `@mc/core`
+
+El pendiente `MONTO_MAXIMO` de `docs/propuestas/pendientes-pulido.json`
+pedía una constante y un error para que un monto con ceros de más no
+llegue a Postgres y vuelva como `22003 numeric field overflow` (que la
+pantalla convierte en un genérico sin marcar ningún campo). FIN-2 los
+pone:
+
+```ts
+import { MONTO_MAXIMO, AmountOutOfRange, compareDecimal } from '@mc/core';
+// MONTO_MAXIMO === '999999999999.99'  (el máximo de numeric(14,2))
+```
+
+y los aplica **solo** en `applyPayment`, que es lo que cabe en esta
+historia. Cuando toques ese pendiente en Cotizar y en Ventas, impórtalos
+de ahí en vez de definir otra constante: el tope de la columna es uno
+solo y tres copias terminan divergiendo, que es exactamente lo que
+acabamos de arreglar con `DECIMAL_RE`.
+
+Los sitios que lo esperan, según el pendiente: `tarifas.ts`
+(`calcularTotalesCotizacion`, `validarRangoPrecio`), `cotizar/actions.ts`
+(`itemSchema.unitPrice`, `discount`, `rangoCpmSchema`) y
+`ventas/actions.ts` (`moverOptsSchema.amount`). `computeInvoiceTotals` y
+`createInvoice` de Finanzas **no** lo usan todavía: es el mismo pendiente
+y lo atiendo con el resto, no dentro de FIN-2.
+
+### 1.2 La clave de idempotencia de `payment`, cuando haya API
+
+El doble envío del formulario lo resuelve el control de concurrencia
+optimista de §0.5 sin tocar el esquema, y con eso basta para el MVP: el
+único cliente es una pantalla que sabe qué saldo vio.
+
+No basta el día que un cliente **externo** reintente la misma llamada (la
+API de la fase 2, el webhook de una pasarela): ahí no hay «lo que vio la
+pantalla», hay una petición repetida. Para eso sí hace falta una clave
+propia, y como `payment` **no tiene `created_at`** tampoco se puede
+acotar por tiempo:
+
+```sql
+-- Migración de la fase 2, cuando exista el primer cliente externo.
+ALTER TABLE payment ADD COLUMN IF NOT EXISTS idempotency_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS payment_idempotency
+  ON payment (workspace_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+```
+
+No la escribo ahora porque la historia dice «sin migraciones» y porque
+una columna sin cliente que la llene es una columna muerta. Queda aquí
+para que la decisión esté tomada cuando haga falta.
+
+Si al mirarlo prefieres que entre ya, dímelo: son diez líneas de
+migración y tres de `recordPayment`.
+
+### 1.3 `payment` sin `created_at`, anotado
+
+Merece una línea en su propio inventario: `payment` guarda `received_at`
+—el día que la persona dice que entró el dinero— y nada más. No hay
+forma de saber **cuándo se registró** una fila, así que no se puede:
+
+- ordenar dos cobros del mismo día por orden de captura (hoy desempata
+  `received_at`, que para un cobro de hoy es `now()` con microsegundos, y
+  para un cobro pasado es el comienzo del día);
+- acotar una comprobación a «los últimos minutos»;
+- auditar la latencia entre el cobro real y su registro.
+
+Lo tapa a medias la bitácora (`audit_log.created_at` con la acción
+`invoice.payment_recorded`), que sí lleva la hora de captura. Si algún
+día `payment` gana `created_at`, la columna de la bitácora deja de ser
+el único sitio donde está.
+
+---
+
+## 2 · Lo que queda listo para otras historias
+
+### FIN-6 · Flujo de caja proyectado
+
+`tax_reserve` por fin se llena desde el producto, con `period`
+('2026-Q3') y `released_at NULL`, que es lo que `flujo-caja.ts` necesita
+para restar la reserva de la semana. `listPayments` devuelve el apartado
+por cobro y el total por factura; `getReceivablesKpis` ya suma el
+apartado vivo (`released_at IS NULL`).
+
+### FIN-8 · Configurar el porcentaje
+
+La tasa se guarda **en cada apartado** (`tax_reserve.rate`), así que
+FIN-8 puede cambiar `settings.finanzas.reserva_pct` sin recalcular nada:
+los apartados anteriores conservan la tasa con la que se hicieron. Lo que
+FIN-8 tiene que resolver, y FIN-2 deja escrito pero sin pantalla:
+
+- **El espacio sin porcentaje** (`settings` es `{}` por defecto). Hoy
+  cobra igual y la ficha dice «Este espacio todavía no aparta un
+  porcentaje para impuestos». La decisión está en §0.3 y está marcada
+  como pendiente de Nicolás.
+- **Liberar la reserva** (`released_at`), que el seed 0003 ya usa para
+  las de 2025 y que ninguna pantalla toca todavía.
+
+### FIN-4 · Recordatorios
+
+`invoice.reminders_sent` y `last_reminder_at` siguen sin escribirse.
+`recordPayment` no los toca a propósito: un cobro no cancela el contador
+de recordatorios, lo cancela el estado de la factura.
+
+### ACC-1 y ACC-2
+
+- `registrarPago` abre con `// TODO(ACC-1): requirePermission('finanzas.pago.registrar')`.
+  El permiso es el que ACC-1 ya tiene en su catálogo, con sensibilidad
+  `sensible`. Cambiar el comentario por la llamada es una línea.
+- La bitácora se escribe desde `recordPayment` con
+  `anotarPagoEnBitacora()`, una función **local** a
+  `queries/finanzas.ts` con la forma exacta del `audit()` de ACC-2 y la
+  acción `invoice.payment_recorded`, que la rama de ACC-2 ya tiene en
+  `AUDIT_ACTIONS`. Al mezclar ACC-2: borrar la función local, importar
+  `audit` y pasarle el mismo objeto. La prueba
+  «cada cobro deja bitácora con actor y before/after» no cambia.
+
+---
+
+## 3 · Fuera de alcance, con su historia
+
+| Qué | Por qué | Dónde va |
+|---|---|---|
+| Sobrepagos | Obligan a decidir qué es el excedente (saldo a favor, nota crédito, error); ninguna respuesta es obvia | Fase 2 |
+| Pagos sin factura (`payment.invoice_id` es nullable) | Un ingreso suelto es otro flujo, no este formulario | Fase 2 |
+| Anular un cobro | Obliga a decidir qué pasa con su `tax_reserve` y a dejar rastro de la anulación. La ficha lo dice en vez de esconderlo | Fase 2 |
+| Liberar la reserva (`released_at`) y su pantalla | Es el otro lado de FIN-8 | FIN-8 o fase 2 |
+| Recordatorios de cobro | — | FIN-4 |
+| Configurar `reserva_pct` | — | FIN-8 |
+| `MONTO_MAXIMO` en Cotizar, Ventas y `computeInvoiceTotals` | Es el pendiente de pulido, no esta historia (§1.1) | `pendientes-pulido.json` |
