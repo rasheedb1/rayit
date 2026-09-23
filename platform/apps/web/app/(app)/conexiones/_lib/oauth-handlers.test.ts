@@ -171,7 +171,8 @@ describe("CON-8 apagado: YouTube sin GOOGLE_CLIENT_ID ni GOOGLE_CLIENT_SECRET", 
     expect(inicio.headers.get("set-cookie")).toBeNull();
 
     // Con code y state (alguien que vuelve de Google con un enlace viejo), con error de la plataforma y sin nada.
-    for (const query of [{ code: CODE_YT, state: "x" }, { error: "access_denied" }, {}]) {
+    const consultas: Record<string, string>[] = [{ code: CODE_YT, state: "x" }, { error: "access_denied" }, {}];
+    for (const query of consultas) {
       const res = await h.callback(callbackRequest("youtube", query), "youtube");
       expect(res.status).toBe(404);
       expect(await res.text()).toMatch(frase);
