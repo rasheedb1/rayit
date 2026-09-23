@@ -503,7 +503,8 @@ export const STORIES: readonly Story[] = [
     title: "Lo que aporta la marca",
     desc: "Canjes del código, pedidos, ingresos, por formulario o CSV, en campaign_brand_input.",
     done: "Subir un CSV de ventas diarias llena la tabla y aparece en la ficha.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Sección «Lo que aportó la marca» en la ficha: tabla por concepto (último total del formulario o suma del CSV, calculado en SQL), ventas diarias en barras, «Registrar aporte» e «Importar CSV de ventas» con el resumen de filas aceptadas y rechazadas. La fuente decide la semántica (formulario = total a la fecha, CSV = diario); repetir el CSV no duplica; una campaña cerrada lo rechaza; cada alta deja audit_log desde queries/campanas.ts hasta que exista audit() (ACC-2). Sin migraciones; el índice único de la clave natural y el contrato de lectura para CAM-5 están en docs/propuestas/CAM-4.md.",
   },
   {
     id: "CAM-5", module: "CAM", owner: "nicolas", size: "M", sprint: 4, deps: ["CAM-3", "CAM-4", "CON-6"],
