@@ -3,7 +3,8 @@ import { calcularItem } from "@mc/core";
 import type { RateCardInputs } from "@mc/db/queries/cotizar";
 import { formatterFor } from "@/lib/format";
 import {
-  BASIS_VACIO, construirFilas, construirPaquetes, explicarPasos, leerBasis, modificadoresActivos, precioDe, textoMotivo,
+  BASIS_VACIO, construirFilas, construirPaquetes, explicarPasos, leerBasis, modificadoresActivos, motivoCpmManual, precioDe,
+  textoMotivo,
 } from "./tarifario";
 
 /** Las entradas de la creadora del seed: cocina, Colombia, COP. */
@@ -127,6 +128,14 @@ describe("construirFilas", () => {
     const invertido = construirFilas(INPUTS, { ...BASIS_VACIO, cpm: { tiktok: { low: "90000.00", high: "60000.00" } } }).find((x) => x.def.id === "tiktok")!;
     expect(invertido.entrada).toBeNull();
     expect(invertido.motivos).toEqual([{ tipo: "cpm_invertido" }]);
+  });
+
+  it("motivoCpmManual solo marca el CPM propio invertido, no el que está a medio escribir", () => {
+    expect(motivoCpmManual({ low: "30000", high: "20000" })).toBe("cpm_invertido");
+    expect(motivoCpmManual({ low: "20000", high: "30000" })).toBeNull();
+    expect(motivoCpmManual({ low: "20000", high: "20000" })).toBeNull();
+    expect(motivoCpmManual({ low: "30000", high: "" })).toBeNull();
+    expect(motivoCpmManual(undefined)).toBeNull();
   });
 
   it("los modificadores activos llegan a cada entrada", () => {

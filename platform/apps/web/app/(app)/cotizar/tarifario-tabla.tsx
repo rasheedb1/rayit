@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState, useTransition, type FormEvent, type RefObject } from "react";
+import { useActionState, useEffect, useId, useMemo, useRef, useState, useTransition, type FormEvent, type RefObject } from "react";
 import { calcularItem, MODIFICADORES_POR_DEFECTO, pctToRate, rateToPct, type EntradaTarifa, type PlatformId } from "@mc/core";
 import type { RateCardInputs } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,8 @@ import type { ActionState } from "@/lib/forms";
 import { guardarTarifario } from "./actions";
 import { MESSAGES, nombreEntregable, nombreModificador } from "./messages";
 import {
-  construirFilas, construirPaquetes, ENTREGABLES, explicarPasos, motivoRangoManual, precioDe, textoMotivo,
-  type BasisTarifario,
+  construirFilas, construirPaquetes, ENTREGABLES, explicarPasos, motivoCpmManual, motivoRangoManual, precioDe,
+  textoMotivo, type BasisTarifario,
 } from "./_lib/tarifario";
 import { TablaConDetalle, type ColumnaConDetalle } from "./_ui/tabla-con-detalle";
 
@@ -49,6 +49,8 @@ interface Fila {
   editado: boolean;
   /** Por qué el precio escrito a mano no vale (al revés, vacío, en cero), o null. */
   errorRango: string | null;
+  /** Por qué el CPM escrito a mano no vale (el bajo mayor que el alto), o null. */
+  errorCpm: string | null;
   motivos: string[];
   pasos: string[];
 }
@@ -86,6 +88,10 @@ const idDesglose = (id: string) => `tarifario-explicacion-${id}`;
  * vacío, el alto en cero) se marca en la fila con aria-invalid, la fila
  * no se cierra con «Listo» y el tarifario no se guarda hasta corregirlo.
  * La regla es validarRangoPrecio de @mc/core, la misma del servidor.
+ * Un CPM propio al revés, igual: sus campos se quedan abiertos y
+ * marcados, y no se guarda (motivoCpmManual, la misma regla de la
+ * acción). Antes se guardaba y el entregable salía del tarifario sin
+ * avisar.
  *
  * En el teléfono cada entregable es una tarjeta apilada (nombre y red,
  * rango, views y CPM uno debajo de otro; ver TablaConDetalle): el campo
@@ -106,6 +112,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
   const [pendingEnvio, startTransition] = useTransition();
   const pending = pendingAccion || pendingEnvio;
   const tituloDesglose = useRef<HTMLHeadingElement>(null);
+  const uid = useId();
   const moneda = inputs.currency;
   const dinero = (v: string) => f.money(v, moneda, { mode: "full" });
 
@@ -128,6 +135,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
         cpmHigh: fila.cpmManual?.high ?? fila.benchmark?.cpmHigh ?? null,
         viewsPlaceholder: fila.baseline && !fila.baseline.isReliable ? fila.baseline.medianViews : null,
         errorRango,
+        errorCpm: motivoCpmManual(fila.cpmManual ?? undefined) ? t.motivos.cpm_invertido : null,
       };
       if (!fila.entrada) {
         const manual = basis.viewsManuales[fila.def.id];
@@ -135,7 +143,11 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
         // si la línea base es confiable, el campo las enseña como en las
         // demás filas, y lo único que queda a la vista es lo que falta.
         const deBaseline = manual === undefined && fila.baseline?.isReliable ? fila.baseline.medianViews : null;
-        const motivos = fila.motivos.map((m) => textoMotivo(m, fila, inputs.country, red, f));
+        // El CPM al revés se dice junto a sus campos; aquí basta con
+        // decir qué hace falta para ver el rango.
+        const motivos = fila.motivos.map((m) =>
+          m.tipo === "cpm_invertido" && comun.errorCpm ? t.cpmRevisar : textoMotivo(m, fila, inputs.country, red, f),
+        );
         // Un precio a mano que no vale también se dice aquí: si la fila
         // perdió sus views, es el único sitio donde se ve.
         if (errorRango) motivos.push(errorRango);
@@ -180,7 +192,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
   const conPrecio = filas.filter((r) => r.precioLow !== null && !r.errorRango);
   // La acción de guardar aplica la MISMA regla (validarRangoPrecio) y
   // devuelve su propio aviso; aquí basta con la de la pantalla.
-  const hayInvalidos = filas.some((r) => r.errorRango !== null);
+  const hayInvalidos = filas.some((r) => r.errorRango !== null || r.errorCpm !== null);
 
   // Al abrir un desglose, el foco va a su título: con teclado o lector
   // de pantalla se sabe que algo se abrió, y dónde (justo debajo).
@@ -382,15 +394,24 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
       align: "num",
       render: (r) => {
         const sinCpm = r.cpmLow === null || r.cpmHigh === null;
-        if (editando === r.id || sinCpm) {
+        // Un CPM que no vale se queda abierto aunque se edite otra fila o
+        // se recargue la página: si no, solo quedaría «Volver a la fórmula».
+        if (editando === r.id || sinCpm || r.errorCpm) {
+          const errorId = `cpm-error-${r.id}`;
           return (
-            <span className="relative flex flex-col items-start gap-1.5 font-sans sm:items-end">
+            <span
+              className="relative flex flex-col items-start gap-1.5 font-sans sm:items-end"
+              role="group"
+              aria-label={`${t.columnas.cpm} · ${r.nombre}`}
+              aria-describedby={r.errorCpm ? errorId : undefined}
+            >
               <label className="contents">
                 <span className="sr-only">{`${t.cpmBajo} · ${r.nombre}`}</span>
                 <MoneyInput
                   value={r.cpmLow ?? ""}
                   currency={moneda}
                   placeholder={t.cpmBajo}
+                  invalid={Boolean(r.errorCpm)}
                   onChange={(v) => cambiarCpm(r.id, "low", v)}
                   className="w-36 min-w-[8rem]"
                 />
@@ -401,10 +422,16 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
                   value={r.cpmHigh ?? ""}
                   currency={moneda}
                   placeholder={t.cpmAlto}
+                  invalid={Boolean(r.errorCpm)}
                   onChange={(v) => cambiarCpm(r.id, "high", v)}
                   className="w-36 min-w-[8rem]"
                 />
               </label>
+              {r.errorCpm && (
+                <span id={errorId} role="alert" className="block max-w-[11rem] whitespace-normal text-left text-xs leading-4 text-bad sm:text-right">
+                  {r.errorCpm}
+                </span>
+              )}
               {r.benchmark && r.cpmEditado && (
                 <span className="text-xs text-muted">{t.cpmReferencia(dinero(r.benchmark.low), dinero(r.benchmark.high))}</span>
               )}
@@ -539,12 +566,18 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
                 <ul className="grid gap-2 sm:grid-cols-2">
                   {ENTREGABLES.filter((d) => conPrecio.some((r) => r.id === d.id)).map((d) => {
                     const cantidad = p.basis.componentes[d.id] ?? 0;
+                    const idCasilla = `${uid}-paquete-${p.basis.id}-${d.id}`;
+                    // La cantidad va en una caja de ancho fijo: el Input del
+                    // kit es w-full y, suelto en la fila, se comía el ancho y
+                    // dejaba el nombre en «TikTok de…». El nombre es la
+                    // ETIQUETA de la casilla (clic en él la marca) y, si no
+                    // cabe, baja a otra línea en vez de cortarse.
                     return (
-                      <li key={d.id} className="flex items-center gap-2 text-sm">
+                      <li key={d.id} className="flex min-w-0 items-center gap-2 text-sm">
                         <input
+                          id={idCasilla}
                           type="checkbox"
                           className="h-4 w-4 shrink-0 accent-[var(--accent)]"
-                          aria-label={nombreEntregable(d.id)}
                           checked={cantidad > 0}
                           onChange={() =>
                             cambiarPaquete(p.basis.id, (x) => {
@@ -555,22 +588,27 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
                             })
                           }
                         />
-                        <Input
-                          aria-label={MESSAGES.paquetes.cantidad(nombreEntregable(d.id))}
-                          inputMode="numeric"
-                          className="w-14 text-right font-mono tabular-nums"
-                          value={cantidad > 0 ? String(cantidad) : ""}
-                          onChange={(e) =>
-                            cambiarPaquete(p.basis.id, (x) => {
-                              const n = Number(e.target.value.replace(/\D/g, "").slice(0, 2));
-                              const componentes = { ...x.componentes };
-                              if (!n) delete componentes[d.id];
-                              else componentes[d.id] = n;
-                              return { ...x, componentes };
-                            })
-                          }
-                        />
-                        <span className="min-w-0 truncate">{nombreEntregable(d.id)}</span>
+                        <span className="w-16 shrink-0" data-cantidad-paquete={d.id}>
+                          <Input
+                            aria-label={MESSAGES.paquetes.cantidad(nombreEntregable(d.id))}
+                            inputMode="numeric"
+                            autoComplete="off"
+                            className="text-right font-mono tabular-nums"
+                            value={cantidad > 0 ? String(cantidad) : ""}
+                            onChange={(e) =>
+                              cambiarPaquete(p.basis.id, (x) => {
+                                const n = Number(e.target.value.replace(/\D/g, "").slice(0, 2));
+                                const componentes = { ...x.componentes };
+                                if (!n) delete componentes[d.id];
+                                else componentes[d.id] = n;
+                                return { ...x, componentes };
+                              })
+                            }
+                          />
+                        </span>
+                        <label htmlFor={idCasilla} className="min-w-0 flex-1 cursor-pointer break-words leading-5">
+                          {nombreEntregable(d.id)}
+                        </label>
                       </li>
                     );
                   })}

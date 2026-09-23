@@ -192,6 +192,22 @@ function cpmValido(cpm: { low: string; high: string } | undefined): { low: strin
   return cpm;
 }
 
+const CPM_RE = /^\d+(\.\d{1,2})?$/;
+
+/**
+ * Por qué el CPM escrito a mano de una fila no vale, o null. Hoy solo
+ * hay un motivo: el bajo mayor que el alto. Con ese CPM la fila se queda
+ * sin rango y el entregable no entra en el tarifario, así que la tabla
+ * lo marca y NO deja guardar, y la acción de guardar lo rechaza por fila
+ * (clave `cpm.<entregable>`) en vez de guardarlo y decir «Guardado».
+ * Un CPM a medio escribir no es un error: no cuenta (ver cpmValido).
+ */
+export function motivoCpmManual(cpm: { low: string; high: string } | undefined): "cpm_invertido" | null {
+  const manual = cpmValido(cpm);
+  if (!manual || !CPM_RE.test(manual.low) || !CPM_RE.test(manual.high)) return null;
+  return compareDecimal(manual.low, manual.high) > 0 ? "cpm_invertido" : null;
+}
+
 /** El precio que se muestra: el de la fórmula, o el que el creador fijó. */
 export function precioDe(item: ItemTarifa, manual: { low: string; high: string } | null): { low: string; high: string; editado: boolean } {
   if (manual) return { low: manual.low, high: manual.high, editado: true };

@@ -68,6 +68,8 @@ export const MESSAGES = {
     sugerido: "Sugerido",
     cpmPropio: "CPM propio",
     cpmReferencia: (low: string, high: string) => `Referencia del nicho: ${low} – ${high}`,
+    /** En la columna del rango, cuando el CPM propio está al revés (el error va junto a sus campos). */
+    cpmRevisar: "Corrige el CPM para ver el rango.",
     viewsManuales: "Visualizaciones a mano",
     viewsBaseline: "Mediana propia",
     viewsPocoFiables: "Mediana con poca muestra",
@@ -90,7 +92,7 @@ export const MESSAGES = {
       invertido: "El precio bajo no puede ser mayor que el alto.",
       cero: "El precio alto tiene que ser mayor que cero.",
     } as Record<string, string>,
-    rangoRevisar: "Hay rangos que no valen. Corrígelos (van marcados en la tabla) y vuelve a guardar.",
+    rangoRevisar: "Hay rangos o CPM que no valen. Corrígelos (van marcados en la tabla) y vuelve a guardar.",
     vacio: {
       title: "Todavía no hay con qué calcular",
       description:

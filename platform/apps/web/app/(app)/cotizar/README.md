@@ -231,6 +231,12 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   `validarRangoPrecio` de `@mc/core` y se aplica en la tabla (la fila no
   se cierra ni se guarda), en `guardarTarifario` y en `saveRateCard`; el
   CHECK `rate_card_item_price_range_check` de 0030 es la última red.
+- **Un CPM propio tampoco.** Con el CPM al revés la fila no tiene rango
+  y el entregable no entraría en el tarifario (ni en el media kit ni en
+  las cotizaciones). `motivoCpmManual` (`_lib/tarifario.ts`) lo marca en
+  la tabla, cuyos campos de CPM se quedan abiertos aunque se recargue, y
+  `guardarTarifario` lo devuelve por fila (`cpm.<entregable>`) sin tocar
+  la base.
 - **Una cotización con la validez vencida no se envía** (`ValidezVencida`):
   nacería vencida. La numeración COT-AAAA toma el año de la zona del
   workspace, no el de UTC.
