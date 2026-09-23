@@ -96,6 +96,17 @@ export function trackingUrlSinParametros(url: string | null | undefined): string
   return `${u.origin}${u.pathname}`;
 }
 
+/** Solo un enlace http(s) va a un href que ve la marca; cualquier otro esquema, fuera. */
+export function urlHttp(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------
 // Errores (con messageEs, como el resto de campanas.ts)
 // ---------------------------------------------------------------------
@@ -368,7 +379,7 @@ export function construirReporte(entradas: ReportInputs): ReportPayload {
     platformId: p.platformId,
     deliverable: p.deliverable,
     title: tituloParaLaMarca(p.title, p.caption),
-    url: p.url,
+    url: urlHttp(p.url),
     publishedAt: p.publishedAt,
     isPrimary: p.isPrimary,
     cuts: cutsHours.map((h) => {

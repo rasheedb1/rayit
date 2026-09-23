@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canGenerateReport, construirReporte, isReportPayloadV1, isReportSentViaMvp, reportCutsHours, reportForbiddenMatch,
-  trackingUrlSinParametros, tituloParaLaMarca, DATO_OMITIDO, ReportPayloadRejectedError, ReportAlreadySentError, ReportNotAvailableError, ReportNotSendableError,
+  trackingUrlSinParametros, tituloParaLaMarca, urlHttp, DATO_OMITIDO, ReportPayloadRejectedError, ReportAlreadySentError, ReportNotAvailableError, ReportNotSendableError,
   REPORT_PAYLOAD_VERSION, REPORT_STATUS_META, REPORT_SENT_VIA_LABEL_ES, REPORTABLE_CAMPAIGN_STATUSES,
   type ReportInputs, type ReportPostCut,
 } from '../src/reporte.ts';
@@ -219,4 +219,14 @@ test('el título de un post sin título es la primera línea de la caption, sin 
   e.posts[1]!.caption = 'Pedidos a laura@gmail.com';
   assert.equal(reportForbiddenMatch(JSON.stringify(construirReporte(e))), null);
   assert.match(new ReportPayloadRejectedError('correo').messageEs, /correo/);
+});
+
+test('el enlace de un post solo pasa si es http(s)', () => {
+  assert.equal(urlHttp('https://www.instagram.com/reel/x/'), 'https://www.instagram.com/reel/x/');
+  assert.equal(urlHttp('javascript:alert(1)'), null);
+  assert.equal(urlHttp('data:text/html,x'), null);
+  assert.equal(urlHttp('no es url'), null);
+  const e = entradasCafeAlma();
+  e.posts[0]!.url = 'javascript:alert(1)';
+  assert.equal(construirReporte(e).posts[0]!.url, null);
 });
