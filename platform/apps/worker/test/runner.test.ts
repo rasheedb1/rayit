@@ -70,12 +70,17 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(byJob.get('oauth.refresh')?.['handler'], 'sí');
   assert.equal(byJob.get('oauth.refresh')?.['cron'], '*/15 * * * *');
   assert.equal(byJob.get('oauth.refresh')?.['group'], 'connections');
-  assert.equal(byJob.get('collect.posts')?.['handler'], 'no');
+  assert.equal(byJob.get('collect.posts')?.['handler'], 'sí', 'CON-5 lo registra');
+  assert.equal(byJob.get('collect.post_metrics')?.['handler'], 'sí');
+  assert.equal(byJob.get('collect.demographics')?.['handler'], 'no', 'llega con CON-7');
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
-  assert.equal(listo?.['withHandler'], 12);      // oauth.refresh + collect.account_metrics + compute.baseline y compute.post_score (CON-6) + brand.snapshot (CAM-3) + campaign.compute (CAM-5) + finance.reminders (FIN-4) + 5 de prueba (test.off está apagado)
-  assert.equal(listo?.['withoutHandler'], 14);
+  // oauth.refresh + collect.account_metrics + collect.posts y collect.post_metrics (CON-5)
+  // + compute.baseline y compute.post_score (CON-6) + brand.snapshot (CAM-3)
+  // + campaign.compute (CAM-5) + finance.reminders (FIN-4) + 5 de prueba (test.off está apagado).
+  assert.equal(listo?.['withHandler'], 14);
+  assert.equal(listo?.['withoutHandler'], 12);   // las 21 definiciones de 0009 menos las 9 que ya tienen handler
   assert.equal(listo?.['disabled'], 1);
   assert.equal(listo?.['crons'], 17);           // las 21 menos las 4 de video
 
@@ -83,9 +88,10 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   const skipped = await h.db.query<{ job_id: string; error: string; n: number | string }>(
     `SELECT job_id, error, count(*)::int AS n FROM job_run WHERE status = 'skipped' GROUP BY 1, 2 ORDER BY 1`,
   );
-  assert.equal(skipped.rows.length, 14);
+  assert.equal(skipped.rows.length, 12);
   assert.ok(skipped.rows.every((r) => r.error === 'sin handler' && Number(r.n) === 1));
-  assert.ok(!skipped.rows.some((r) => ['oauth.refresh', 'collect.account_metrics', 'compute.baseline', 'compute.post_score', 'brand.snapshot', 'campaign.compute', 'finance.reminders', 'test.off'].includes(r.job_id)));
+  const conHandler = ['oauth.refresh', 'collect.account_metrics', 'collect.posts', 'collect.post_metrics', 'compute.baseline', 'compute.post_score', 'brand.snapshot', 'campaign.compute', 'finance.reminders', 'test.off'];
+  assert.ok(!skipped.rows.some((r) => conHandler.includes(r.job_id)));
 
   // Los crons viven en pg-boss, con la clave 'cron' y el payload que identifica al job.
   const schedules = await h.worker.boss.getSchedules();
@@ -249,9 +255,9 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     assert.equal(updated?.['previous'], '*/15 * * * *');
     assert.equal(sink.records().filter((r) => r['msg'] === 'schedule creado').length, 0, 'ningún schedule se creó de nuevo');
     // El segundo worker no registra los jobs test.*: esos 5 sí quedan skipped
-    // (ahora no tienen handler). Los 14 de 0009 sin handler no se repiten.
+    // (ahora no tienen handler). Los 12 de 0009 sin handler no se repiten.
     const skipped = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id NOT LIKE 'test.%'`);
-    assert.equal(Number(skipped.rows[0]!.n), 14, 'el reinicio no vuelve a insertar filas skipped');
+    assert.equal(Number(skipped.rows[0]!.n), 12, 'el reinicio no vuelve a insertar filas skipped');
     const skippedTest = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id LIKE 'test.%'`);
     assert.equal(Number(skippedTest.rows[0]!.n), 5, 'los que perdieron su handler sí se anotan');
   } finally {

@@ -12,10 +12,10 @@
 import {
   createInstagramRefresher, createTikTokRefresher, EncryptedSecretStore, EnvSecretStore, FakeTokenRefresher, HttpCore, InMemorySecretStore,
   keyringFromEnv, loadOAuthApps, MasterKeyError, NULL_CALL_LOG, PLATFORM_IDS, refresherRegistry, TokenCipher, youtubeRefresher,
-  type SecretStore, type TokenRefresherRegistry,
+  type ConnectorHttpOverrides, type SecretStore, type TokenRefresherRegistry,
 } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
-import { ConfigError, loadConfig, type WorkerConfig } from './runner/config.ts';
+import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, type Logger } from './runner/logger.ts';
 import { startWorker, type RunningWorker } from './runner/worker.ts';
@@ -98,14 +98,29 @@ function buildRefreshers(): TokenRefresherRegistry {
   ]);
 }
 
+/**
+ * Piezas que solo existen en --demo: el reloj que avanza un día entre
+ * las dos lecturas de CON-5, y las respuestas grabadas cuando no hay
+ * credenciales de la casa. Fuera del demo es null y no se toca nada.
+ */
+async function buildDemo(): Promise<{ now: () => Date; http?: ConnectorHttpOverrides; env: Env; grabado: boolean; avanzaUnDia: () => void } | null> {
+  if (!demo) return null;
+  const { demoClock, demoNetwork } = await import('./demo.ts');
+  const reloj = demoClock();
+  const red = await demoNetwork(process.env);
+  if (red.grabado) logger.warn('demo: sin INSTAGRAM_HOUSE_TOKEN ni GOOGLE_API_KEY; CON-5 corre contra las respuestas grabadas');
+  return { now: reloj.now, http: red.http, env: red.env, grabado: red.grabado, avanzaUnDia: reloj.avanzaUnDia };
+}
+
 async function main(): Promise<void> {
   const db = await openDatabase();
   const secrets = buildSecrets(db);
   const refreshers = buildRefreshers();
+  const demoRed = await buildDemo();
 
   let worker: RunningWorker;
   try {
-    worker = await startWorker({ config, db, logger, jobs: allJobs, secrets, refreshers, installOnly: install });
+    worker = await startWorker({ config, db, logger, jobs: allJobs, secrets, refreshers, installOnly: install, now: demoRed?.now, http: demoRed?.http, env: demoRed?.env });
   } catch (err) {
     await db.close().catch(() => undefined);
     throw err;
@@ -117,9 +132,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (demo) {
+  if (demo && demoRed) {
     const { runDemo } = await import('./demo.ts');
-    await runDemo({ db, worker, secrets, logger });
+    await runDemo({ db, worker, secrets, logger, env: demoRed.env, grabado: demoRed.grabado, avanzaUnDia: demoRed.avanzaUnDia });
   }
 
   let stopping: Promise<void> | null = null;
