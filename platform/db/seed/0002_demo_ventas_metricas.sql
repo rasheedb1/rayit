@@ -182,8 +182,8 @@ INSERT INTO app_user (id, email, name, locale, last_seen_at)
 VALUES ('00000002-0000-4000-8000-000000000002', 'demo@oncue.test', 'Laura Méndez', 'es-CO', now() - interval '2 hours')
 ON CONFLICT (id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at;
 
-INSERT INTO membership (workspace_id, user_id, role)
-VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', 'owner')
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', system_role_id('creator', 'owner'))
 ON CONFLICT DO NOTHING;
 
 -- media_kit: las cifras que el pitch del mock cita, con su procedencia.
