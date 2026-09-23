@@ -10,20 +10,38 @@
  *     cada cuenta tiene su plaza;
  *   · public_optout: la baja desde el enlace cruza workspaces, anota la
  *     supresión global y no deja nada pendiente; el token que no salió, o
- *     uno inventado, no encuentra nada; y un workspace no puede fabricarse
- *     un toque «enviado» para dar de baja el correo de otro;
+ *     uno inventado, no encuentra nada; un workspace no puede fabricarse
+ *     un toque «enviado», ni mover uno enviado de verdad a otra ficha, ni
+ *     cambiarle el correo a la ficha para dar de baja a otra persona (se
+ *     suprime recipient_address); y el enlace funciona aunque la ficha se
+ *     haya borrado;
  *   · la regla de la baja en las transiciones: tras la baja se sigue
- *     anotando la respuesta, y lo que estaba saliendo se registra;
+ *     anotando la respuesta, lo que estaba saliendo se registra, y no se
+ *     enrola ni se reanuda a quien la pidió; un paso tiene un solo toque
+ *     vivo, contando el retenido (held);
  *   · el interruptor (disable/enable/should_pause), la salud y los días
- *     hábiles.
+ *     hábiles, todo por los envoltorios de queries/outreach.ts, que
+ *     además comprueban la forma del jsonb.
  *
  * CONCURRENCIA. PGlite serializa las transacciones (test/pglite.ts), así
  * que aquí los Promise.all de los límites no se pisan de verdad: pasarían
  * igual con una función que leyera y luego escribiera. La garantía real
  * (la segunda llamada ESPERA el bloqueo de la fila y ve la plaza gastada)
- * la prueba «el bloqueo es de verdad», que solo corre con
- * TEST_DATABASE_URL: el job contra-postgres-real del CI corre
- * `pnpm --filter @mc/db test`, que incluye este archivo.
+ * la prueba «el bloqueo es de verdad», que solo corre contra Postgres. El
+ * job contra-postgres-real del CI la corre en cada PR; en local, con el
+ * Postgres de Docker (desde platform/):
+ *
+ *   make up && make seed
+ *   docker compose exec -T db psql -U mc -d oncue -c \
+ *     "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+ *   TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
+ *   TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
+ *     pnpm --filter @mc/db exec node --test --experimental-strip-types --test-isolation=none \
+ *       test/outreach.test.ts
+ *
+ * Sin Docker vale cualquier Postgres 16 (packages/db/README.md, «Contra
+ * Postgres real»). Contra una base que se queda, el archivo se lleva lo
+ * suyo al terminar y se puede volver a correr.
  *
  * Sin red y sin seeds: cada escenario se siembra como superusuario
  * (admin) y se ejercita con el rol de verdad (mc_app en withWorkspace o
@@ -493,7 +511,7 @@ describe('0037 · límites atómicos', () => {
 
   test('el bloqueo es de verdad: la segunda llamada espera a la primera (solo Postgres real)', async (ctx) => {
     if (t.kind !== 'postgres') {
-      return ctx.skip('PGlite serializa las transacciones; lo corre el job contra-postgres-real con TEST_DATABASE_URL');
+      return ctx.skip('PGlite serializa las transacciones; con TEST_DATABASE_URL (ver la cabecera) sí corre');
     }
     await bloqueoDeVerdad('increment_if_under_cap', 'email_real', null);
     await bloqueoDeVerdad('increment_weekly', 'email_real', null);

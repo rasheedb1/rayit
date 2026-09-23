@@ -75,7 +75,7 @@ el suyo.
 | Pieza de Chief | Dónde queda en MultiCampaign | Qué cambia |
 |---|---|---|
 | Cola `schedules`: reclamo atómico con `UPDATE … WHERE status='scheduled'`, índice único parcial, recuperación de zombis a los cinco minutos, deduplicación en tres capas, guardia de tiempo de ejecución | `outbound_touch` deja de ser solo el registro del envío y pasa a ser la cola: una fila por contacto y paso, con `status` de máquina de estados | Se añade `attempt_count` y `next_retry_at`: Chief no reintenta nada, un fallo de red mata el paso |
-| Funciones `increment_if_under_cap` e `increment_weekly_*` por `action_type` | Migración `0015_outreach.sql`, mismas funciones por workspace | Se corrige el bloqueo: el `FOR UPDATE` de la semanal bloquea la fila de hoy pero cuenta la semana entera |
+| Funciones `increment_if_under_cap` e `increment_weekly_*` por `action_type` | Migración `0037_outreach.sql`, mismas funciones por workspace | Se corrige el bloqueo: el `FOR UPDATE` de la semanal bloquea la fila de hoy pero cuenta la semana entera |
 | Cliente de Unipile: petición genérica, clasificación de errores («no conectado», «ya conectado») | `packages/connectors/unipile.ts` | Se extiende a `INSTAGRAM`; hosted auth con estado firmado, nunca «reclamar cuentas sin dueño» |
 | Envío por Gmail: MIME con RFC 2047 para acentos, multipart para adjuntos, refresco perezoso del token con dos minutos de margen | `packages/connectors/gmail.ts` | `In-Reply-To` y `References` con el `Message-ID` real, no con el `threadId` de Gmail (bug que rompe hilos fuera de Gmail) |
 | Keepalive diario del token de Google | Job `ventas/canales.keepalive` | Una sola fila por concesión; Chief guarda el mismo refresh token en cuatro sitios y el keepalive deja uno caducado |
@@ -190,7 +190,7 @@ ciento ochenta días de enfriamiento tras un no, revisión humana
 obligatoria, afirmaciones con origen) son más conservadores que los de
 Chief. Se mantienen.
 
-### 5.2 El modelo de datos: migración `0015_outreach.sql`
+### 5.2 El modelo de datos: migración `0037_outreach.sql` (en el plan original, «0015»)
 
 Lo que ya existe y se queda: `company`, `contact` (con `opted_out`
 global y `source` obligatoria), `company_link`, `signal`, `deal`,
@@ -273,17 +273,58 @@ piezas siguientes tienen que conocer:
   lo pendiente en cualquier workspace (los enrolamientos, con
   `finished_at`) y el correo en `contact_suppression` con
   `unsubscribe_link`.
-- **La baja no se puede fabricar.** `public_optout` solo acepta un toque
-  en `sent` con `provider_message_id`, y `optout_token_hash`,
-  `provider_message_id` y `message_id_rfc` solo los escribe el
-  despachador (`mc_worker`): el disparador
-  `outbound_touch_worker_columns` rechaza a `mc_app` con 42501, al crear
-  y al actualizar. Es un disparador y no un GRANT por columnas porque
-  Drizzle nombra todas las columnas en cada INSERT; la guardia
-  (`DISPARADORES_DE_CANDADO`) exige en cada arranque que exista y esté
-  activo. Sin esto, un workspace inventaba un token, guardaba su sha256
-  en un toque suyo «enviado» a una ficha con el correo de otra persona y
-  la daba de baja en toda la plataforma sin escribirle nunca.
+- **La baja no se puede fabricar.** `public_optout` solo acepta un
+  correo en `sent` con `provider_message_id` y `recipient_address`, y
+  `optout_token_hash`, `provider_message_id`, `message_id_rfc` y
+  `recipient_address` solo los escribe el despachador (`mc_worker`): el
+  disparador `outbound_touch_worker_columns` rechaza a `mc_app` con
+  42501, al crear y al actualizar. Es un disparador y no un GRANT por
+  columnas porque Drizzle nombra todas las columnas en cada INSERT; la
+  guardia (`DISPARADORES_DE_CANDADO`) exige en cada arranque que exista
+  y esté activo. Sin esto, un workspace inventaba un token, guardaba su
+  sha256 en un toque suyo «enviado» a una ficha con el correo de otra
+  persona y la daba de baja en toda la plataforma sin escribirle nunca.
+- **La baja es de la dirección a la que salió el correo**, no de la
+  ficha. El despachador escribe `outbound_touch.recipient_address` al
+  enviar, y `public_optout` suprime esa dirección y marca las fichas que
+  la tienen en cualquier workspace, más la ficha que recibió el correo
+  (`contact_id`, si sigue existiendo). Un toque con pruebas de envío no
+  cambia de `contact_id` ni de `company_id` desde la web (el mismo
+  disparador, 42501; `contact_id` → NULL sí, que es lo que hace borrar
+  la ficha). Así, cambiarle el correo a la ficha después del envío, o
+  mover el toque a otra ficha, ya no da de baja a otra persona, y el
+  enlace sigue funcionando si el workspace borra la ficha (CAN-SPAM pide
+  30 días). **El despachador de VEN-10 tiene que escribir
+  `recipient_address` en la misma escritura que `provider_message_id`:**
+  un correo sin ella no tiene enlace de baja que funcione.
+- A quien pidió la baja no se le enrola ni se le reanuda: el disparador
+  `outbound_enrollment_optout` rechaza (23514, el mensaje de 0007) un
+  enrolamiento nuevo o que vuelve a `active`, `paused` o `cooldown`.
+- Un paso tiene un solo toque vivo por enrolamiento, y vivo es
+  `scheduled`, `processing` **y `held`**: mientras uno espera revisión,
+  el motor no programa el mismo paso otra vez; lo aprueba (vuelve a
+  `scheduled`) o lo cancela y programa otro.
+- Un buzón (el Gmail o la cuenta de Unipile) envía desde **un solo
+  workspace**: `(provider, provider_account_id)` es único entre las
+  cuentas no desconectadas de toda la plataforma. Los topes son por
+  cuenta, y el mismo Gmail en el workspace del creador y en el de su
+  agencia habría enviado el doble. Para moverlo, se desconecta en uno.
+  La pantalla de canales (VEN-9) tiene que traducir ese 23505 en «esta
+  cuenta ya está conectada en otro espacio».
+- `outbound_step` no tiene `template_id`: el texto fijo del paso va en
+  `subject_template` y `body_template`, y la plantilla de secuencia de
+  origen está en `outbound_sequence.template_id`.
+- Las funciones se llaman por `@mc/db/queries/outreach`, no con SQL
+  suelto: `incrementIfUnderCap` e `incrementWeekly` (WorkerTx; eligen la
+  firma según venga o no `accountId`), `shouldPauseOutreach`,
+  `disableOutreach`, `enableOutreach` y `outboundHealth` (con un
+  WorkspaceTx el workspace es el de la transacción; con un WorkerTx se
+  nombra), `publicOptout` (PublicShareTx) y `nextBusinessDay`. El jsonb
+  de `outbound_health` y `public_optout` se comprueba en ejecución
+  (`OutreachShapeError` con la ruta del campo).
+- La concurrencia real de los límites está probada contra Postgres 16
+  («el bloqueo es de verdad», que PGlite salta); cómo correrla en local
+  está en `platform/packages/db/README.md`.
 - **Abierto para VEN-15:** el correo sale del Gmail del creador, así que
   el enlace de baja también queda en su carpeta de enviados, y quien lo
   pulse desde ahí da de baja a esa persona en toda la plataforma. Solo
@@ -398,7 +439,7 @@ absorbe en VEN-12. Se agregan ocho:
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
-| VEN-9 | **Canales de outreach.** Migración `0015` (tablas de la sección 5.2), conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con `gmail.send` y `gmail.modify`, pantalla de canales con estado, límites y keepalive diario. | L | CIM-2, CIM-3 | Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar. |
+| VEN-9 | **Canales de outreach.** Migración `0037_outreach` (tablas de la sección 5.2), conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con `gmail.send` y `gmail.modify`, pantalla de canales con estado, límites y keepalive diario. | L | CIM-2, CIM-3 | Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar. |
 | VEN-10 | **Motor de cadencias.** Pasos normalizados, enrolamiento, cola en `outbound_touch` con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar. | L | VEN-9, CON-2 | Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente. |
 | VEN-11 | **Perfil comercial del creador.** Cálculo del perfil de la sección 5.4 y su pantalla; narrativa con afirmaciones enlazadas. | M | CON-6, COT-1 | Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen. |
 | VEN-12 | **Generación con afirmaciones trazables.** El generador de la sección 5.3 y la puerta de calidad de la 5.6: prompt con perfil, señal, ángulo del día y toques enviados; pre-vuelo, juez con rúbrica en tabla, regeneración con pistas, riesgos. | L | VEN-10, VEN-11 | Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo. |
@@ -429,7 +470,7 @@ escribe `packages/connectors/{unipile,gmail}.ts` y
 `app/(app)/ventas/canales/`; `motor` escribe
 `apps/worker/src/jobs/ventas/` y `queries/ventas.ts`; `entregabilidad`
 escribe las páginas públicas de baja y el job de alertas. La
-migración `0015` la escribe `canales` en su primer día y las demás
+migración (`0037_outreach`) la escribe `canales` en su primer día y las demás
 piezas la consumen.
 
 Referencias de interfaz para los agentes, además de las de Chief:

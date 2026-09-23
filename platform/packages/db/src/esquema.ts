@@ -315,8 +315,8 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   'public_optout(text)':
     'la baja desde el enlace de un correo (0037 §9): la página se abre sin sesión y la baja cruza workspaces (0007: ' +
     'nadie en la plataforma vuelve a escribirle). Corre como mc_public_share, cuyas políticas `TO mc_public_share` ' +
-    'abren solo el toque ENVIADO cuyo sha256 del token fija la función, y después las fichas de ese contacto y las ' +
-    'de su mismo correo. Escribe por COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, ' +
+    'abren solo el toque ENVIADO cuyo sha256 del token fija la función, y después la ficha que lo recibió y las ' +
+    'que tienen la dirección a la que salió (recipient_address, que solo escribe el worker). Escribe por COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, ' +
     'el estado de sus enrolamientos, y el correo en contact_suppression (reason unsubscribe_link, la baja ' +
     'verificable de 0029 §1). No es de ningún disparador',
 };
@@ -553,8 +553,8 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['SELECT'],
     columnas: { UPDATE: ['opted_out', 'opted_out_at', 'opted_out_reason'] },
     motivo:
-      'leer el correo del contacto que pide la baja y marcar la baja en sus fichas y en las de su mismo correo (0037 ' +
-      '§9). Nunca el correo, el nombre ni el dueño',
+      'leer si la ficha que recibió el correo ya estaba de baja y marcar la baja en ella y en las fichas con la ' +
+      'dirección a la que salió (0037 §9). Nunca el correo, el nombre ni el dueño',
   },
   company: {
     tabla: ['SELECT'],
@@ -677,7 +677,7 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
   'contact.contact_public_optout_email': {
     cmd: 'r',
     exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
-    motivo: 'las fichas con el mismo correo del contacto que pide la baja, en otros workspaces',
+    motivo: 'las fichas con la dirección a la que salió el correo del enlace (recipient_address), en cualquier workspace',
   },
   'contact.contact_public_optout_mark': {
     cmd: 'w',

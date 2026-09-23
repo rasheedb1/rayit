@@ -233,6 +233,45 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 `worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
 (CON-2b).
 
+#### Contra Postgres real, en local
+
+Lo que PGlite no puede probar —dos transacciones que se pisan de
+verdad, como «el bloqueo es de verdad» de `test/outreach.test.ts`— se
+corre contra un Postgres 16 con el mismo montaje que el CI. Con Docker,
+desde `platform/`:
+
+```bash
+make up && make seed
+docker compose exec -T db psql -U mc -d oncue -c \
+  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
+TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
+  pnpm --filter @mc/db exec node --test --experimental-strip-types \
+    --test-isolation=none test/outreach.test.ts
+```
+
+Sin Docker, cualquier Postgres 16 sirve. El paquete `embedded-postgres`
+trae los binarios y no se instala en el repositorio (en una carpeta
+temporal, `npm i embedded-postgres@16.14.0-beta.17`):
+
+```js
+// arranca.mjs, en esa carpeta: Postgres 16 en el puerto 55437, usuario mc
+import EmbeddedPostgres from 'embedded-postgres';
+const pg = new EmbeddedPostgres({ databaseDir: './data', user: 'mc', password: 'mc', port: 55437, persistent: false });
+await pg.initialise(); await pg.start(); await pg.createDatabase('oncue');
+setInterval(() => {}, 1 << 30);   // Ctrl+C lo apaga
+```
+
+y después, desde `platform/`, `node db/migrate.mjs
+"postgres://mc:mc@localhost:55437/oncue" --seed`, el mismo `CREATE ROLE
+mc_app_ci …` (con cualquier cliente) y las variables de arriba con el
+puerto 55437. Así se corrió `outreach.test.ts` el 23 de septiembre de
+2026 (Postgres 16.14, VEN-9 ronda 3): 34 en verde, dos saltadas (las de
+GRANT, que solo se miden en PGlite), y dos veces seguidas sobre la misma
+base. `esquema.test.ts` no pasa en ese montaje ni en `rasheed/integracion`
+(la guardia da por cerradas las excepciones declaradas): es anterior a
+VEN-9 y queda para quien mantenga la guardia.
+
 ## Lo que hace el cliente por ti
 
 - **Timeouts.** Toda transacción arranca con `SET LOCAL statement_timeout`
