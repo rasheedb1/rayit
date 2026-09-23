@@ -105,7 +105,7 @@ creator_profile.user_id`, `kind 'connection_added'`, `severity 'info'`,
 cuerpo los arma la web (`messages.ts`) con quién, qué cuenta, qué red y
 cuándo, en la zona y el locale del workspace; `@mc/db` no escribe
 frases. No se crea si el titular no tiene `app_user`: el servicio
-devuelve `aviso: 'sin_titular'`. No se duplica mientras haya uno sin
+devuelve `ownerNotice: 'no_owner_account'`. No se duplica mientras haya uno sin
 leer para la misma cuenta y persona.
 
 - **Descartado**: el correo. Es fase 2.
