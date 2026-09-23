@@ -166,7 +166,8 @@ export interface Db {
    *
    *   app_user     la propia fila, por id o por el correo verificado
    *   membership   las propias membresías (user_id = current_user_id())
-   *   workspace    que no lleva RLS
+   *   workspace    los espacios de los que soy miembro (workspace_read_member, 0028)
+   *                y el alta de uno nuevo (workspace_signup, 0024)
    *
    * En cualquier otra tabla con RLS devuelve CERO FILAS sin avisar,
    * igual que withCatalogs: current_workspace_id() es NULL. No es un
