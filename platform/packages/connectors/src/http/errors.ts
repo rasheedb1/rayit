@@ -33,6 +33,14 @@ export interface PlatformApiErrorInit {
   kind: ApiErrorKind;
   /** Código de la plataforma (o nuestro: 'network', 'aborted', 'quota_exhausted'). */
   code: string;
+  /**
+   * Subcódigo de la plataforma, cuando lo da (Meta: `error_subcode`). El
+   * `code` de Meta es genérico —100 es «parámetro»— y el subcódigo es lo
+   * único que distingue «a la cuenta le faltan seguidores» (2108006) de
+   * un error nuestro. CON-7 lo necesita para saber si un fallo es un
+   * requisito que explicar o un defecto que arreglar.
+   */
+  subcode?: string;
   /** Explicación corta en español, apta para status_detail y para la UI. */
   messageEs: string;
   httpStatus?: number;
@@ -51,6 +59,8 @@ export class PlatformApiError extends Error {
   readonly httpStatus: number | undefined;
   readonly retryAfterS: number | undefined;
   readonly requestId: string | undefined;
+  /** Subcódigo de la plataforma, si lo dio (ver PlatformApiErrorInit). */
+  readonly subcode: string | undefined;
 
   constructor(init: PlatformApiErrorInit) {
     super(`${init.platformId} ${init.endpoint} ${init.code}: ${init.messageEs}`, init.cause === undefined ? undefined : { cause: init.cause });
@@ -63,6 +73,7 @@ export class PlatformApiError extends Error {
     this.httpStatus = init.httpStatus;
     this.retryAfterS = init.retryAfterS;
     this.requestId = init.requestId;
+    this.subcode = init.subcode;
   }
 
   get isRetryable(): boolean {
@@ -83,6 +94,8 @@ export interface ParsedApiError {
   code: string;
   message?: string;
   requestId?: string;
+  /** `error_subcode` de Meta y equivalentes; ver PlatformApiErrorInit.subcode. */
+  subcode?: string;
 }
 
 export interface ClassifyInput {
@@ -129,7 +142,7 @@ const TIKTOK_BUSINESS_AUTH_RANGE: readonly [number, number] = [40100, 40199];
 export function classifyApiError(input: ClassifyInput): PlatformApiError {
   const { platformId, endpoint, httpStatus, parsed } = input;
   const code = parsed?.code ?? (input.failure ?? (httpStatus !== undefined ? `http_${httpStatus}` : 'unknown'));
-  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, cause: input.cause };
+  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, subcode: parsed?.subcode, cause: input.cause };
 
   if (input.failure === 'aborted') {
     return new PlatformApiError({ ...base, kind: 'transient', messageEs: 'La llamada se canceló antes de terminar.' });

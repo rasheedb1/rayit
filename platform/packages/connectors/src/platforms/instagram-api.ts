@@ -51,12 +51,21 @@ export const INSTAGRAM_ACCOUNT_METRICS: readonly string[] = ['reach', 'views', '
 export type InstagramTimeframe = 'this_month' | 'this_week' | 'prev_month' | 'last_14_days' | 'last_30_days' | 'last_90_days';
 export type InstagramBreakdown = 'age' | 'gender' | 'country' | 'city';
 
+/**
+ * `error_subcode` con el que Meta contesta a `follower_demographics`
+ * cuando la cuenta no llega a cien seguidores (ni a cien interacciones
+ * en el período). El `code` es 100, que Meta usa para todo; el subcódigo
+ * es lo que distingue un requisito de un defecto nuestro.
+ */
+export const INSTAGRAM_NOT_ENOUGH_FOLLOWERS_SUBCODE = '2108006';
+
 export function parseInstagramError(status: number, body: unknown): ParsedApiError | null {
   const error = asRecord(asRecord(body)['error']);
   if (error['code'] !== undefined || error['message'] !== undefined) {
     const code = error['code'] === undefined ? `http_${status}` : String(error['code']);
     const sub = error['error_subcode'] === undefined ? '' : ` (subcódigo ${String(error['error_subcode'])})`;
-    return { code, message: `${strOrNull(error['message']) ?? ''}${sub}`.trim() || undefined, requestId: strOrNull(error['fbtrace_id']) ?? undefined };
+    const subcode = error['error_subcode'] === undefined ? undefined : String(error['error_subcode']);
+    return { code, message: `${strOrNull(error['message']) ?? ''}${sub}`.trim() || undefined, requestId: strOrNull(error['fbtrace_id']) ?? undefined, subcode };
   }
   return status >= 400 ? { code: `http_${status}` } : null;
 }

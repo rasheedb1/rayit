@@ -30,6 +30,14 @@ import { ConnectorUsageError, DEFAULT_MAX_PAGES, type CallOptions, type Connecti
 export const YOUTUBE_DATA_BASE_URL = 'https://www.googleapis.com/youtube/v3';
 export const YOUTUBE_ANALYTICS_URL = 'https://youtubeanalytics.googleapis.com/v2/reports';
 export const YOUTUBE_VIDEOS_MAX = 50;
+
+/**
+ * El scope de OAuth sin el cual `analyticsReport` devuelve 403: la Data
+ * API y la Analytics API se autorizan por separado, y un canal conectado
+ * solo con `youtube.readonly` da videos pero no audiencia (CON-7 lo
+ * comprueba antes de llamar).
+ */
+export const YOUTUBE_ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly';
 export const YOUTUBE_PLAYLIST_PAGE_MAX = 50;
 
 export interface YouTubeOptions {
