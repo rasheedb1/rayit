@@ -58,6 +58,18 @@ describe("BarChart", () => {
     expect(screen.getByRole("img", { name: "Views por semana" })).toBeInTheDocument();
     expect(container.querySelectorAll("g[opacity] > path, g[opacity] > rect:not([fill='transparent'])")).toHaveLength(8);
   });
+  it("axisLabels: una etiqueta corta bajo la barra, la categoría entera en el tooltip", () => {
+    const { container } = render(
+      <BarChart cats={["1–5/9", "6–10/9", "11–15/9", "16–20/9"]} axisLabels={["5/9", "10/9", "15/9", "20/9"]} series={series} ariaLabel="Views" format="int" />,
+    );
+    const eje = [...container.querySelectorAll("svg text")].map((t) => t.textContent);
+    expect(eje).toEqual(expect.arrayContaining(["5/9", "10/9", "15/9", "20/9"]));
+    expect(eje).not.toContain("1–5/9");
+    const hot = screen.getByLabelText("Explorar los valores con las flechas");
+    fireEvent.focus(hot);
+    fireEvent.keyDown(hot, { key: "Home" });
+    expect(screen.getByText(/1–5\/9: TikTok 10/)).toBeInTheDocument();
+  });
   it("vacío", () => {
     render(<BarChart cats={[]} series={[]} ariaLabel="Views" />);
     expect(screen.getByText("Sin datos")).toBeInTheDocument();

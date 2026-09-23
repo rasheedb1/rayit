@@ -116,7 +116,7 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
               ? `${t.seguidores.nota} ${t.seguidores.notaRedes}`
               : t.seguidores.nota
         }
-        asOf={hasta ? { date: hasta } : undefined}
+        asOf={hasta ? { date: hasta, source: MESSAGES.zona.asOf } : undefined}
         emptyState={
           seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
         }
@@ -126,17 +126,20 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
         subtitle={t.views.subtitle(views.step, views.buckets.length)}
         ariaLabel={t.views.aria}
         chart="bar"
-        bar={{ mode: "stack" }}
-        // Con bloques, la etiqueta ES el rango («7–10/9»): el kit usa la
-        // misma para el eje, el tooltip y la tabla, y solo con el primer
-        // día nadie podía saber que 317.846 es la suma de cuatro.
+        bar={{ mode: "stack", axisLabels: porBloques ? views.buckets.map((b) => etiqueta(b.end)) : undefined }}
+        // Con bloques, la categoría ES el rango («7–10/9») en el tooltip
+        // y en la tabla: solo con el primer día nadie podía saber que
+        // 317.846 es la suma de cuatro. Bajo la barra, en cambio, va solo
+        // el día final («10/9», axisLabels): a 400 px y seis barras, dos
+        // rangos seguidos se pisaban («24–28/829/8–2/9»). El subtítulo
+        // dice cuántos días cubre cada barra.
         labels={views.buckets.map((b) => (porBloques ? f.dayMonthRange(b.start, b.end) : etiqueta(b.start)))}
         labelsHeader={porBloques ? t.views.labelsHeaderBloque : t.views.labelsHeaderDia}
         series={aSeries(views.series)}
         format="int"
         axisFormat="compact"
         note={views.buckets.length === 0 ? undefined : porContenido ? t.views.notaContenido : t.views.nota(views.step)}
-        asOf={views.buckets.length ? { date: views.buckets.at(-1)!.end } : undefined}
+        asOf={views.buckets.length ? { date: views.buckets.at(-1)!.end, source: MESSAGES.zona.asOf } : undefined}
         emptyState={views.buckets.length === 0 ? <SinDatos filtro={filtro} /> : undefined}
       />
     </div>

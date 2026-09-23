@@ -68,6 +68,38 @@ describe("el asistente de importación", () => {
     expect(screen.queryByRole("group", { name: "Orden de las fechas" })).not.toBeInTheDocument();
   });
 
+  it("un archivo no reconocido después de uno reconocido no hereda su red", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    expect(within(screen.getByRole("group", { name: "Red" })).getByRole("button", { name: "Instagram" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Atrás" }));
+    await subir("desconocido.csv");
+    const red = screen.getByRole("group", { name: "Red" });
+    for (const opcion of within(red).getAllByRole("button")) expect(opcion).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Siguiente" })).toBeDisabled();
+  });
+
+  it("cambiar una columna que no es el id no vuelve a preguntar a la base", async () => {
+    buscarPostsConocidos.mockResolvedValue({ ok: true, ids: [] });
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalledTimes(1));
+    // Otra columna para los guardados: la revisión cambia, los ids no.
+    fireEvent.change(screen.getByLabelText("Guardados"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Me gusta"), { target: { value: "" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(buscarPostsConocidos).toHaveBeenCalledTimes(1);
+  });
+
+  it("el input de archivo no es una parada de Tab: el botón visible ya lo abre", () => {
+    render(<Asistente cuentas={[]} workspace={WORKSPACE} />);
+    expect(document.querySelector('input[type="file"]')).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "elige un archivo" })).toBeInTheDocument();
+  });
+
   it("no deja pasar al paso 3 mientras falte una columna obligatoria", async () => {
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
     await subir("instagram-insights.csv");
@@ -86,9 +118,23 @@ describe("el asistente de importación", () => {
 
     expect(screen.getByText(/No reconocimos el formato/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Siguiente" })).toBeDisabled();
+    // Las etiquetas en español que sí conocemos ya vienen mapeadas.
+    expect(screen.getByLabelText("Alcance (cuentas alcanzadas)")).toHaveValue("Personas alcanzadas");
+    expect(screen.getByLabelText("Título o descripción")).toHaveValue("Texto");
 
     fireEvent.change(screen.getByLabelText("Identificador del video"), { target: { value: "Referencia interna" } });
-    fireEvent.change(screen.getByLabelText("Fecha de publicación"), { target: { value: "Publicado el" } });
+    fireEvent.change(screen.getByLabelText("Fecha de publicación"), { target: { value: "Día de salida" } });
+
+    // Con el mapeo completo, TODAVÍA no se puede seguir: la red no se da por supuesta.
+    const red = screen.getByRole("group", { name: "Red" });
+    for (const opcion of within(red).getAllByRole("button")) expect(opcion).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("Elige la red del archivo antes de seguir.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("¿A qué cuenta pertenece?")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Siguiente" })).toBeDisabled();
+
+    fireEvent.click(within(red).getByRole("button", { name: "TikTok" }));
+    expect(within(red).getByRole("button", { name: "TikTok" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("Elige la red del archivo antes de seguir.")).not.toBeInTheDocument();
     // Sin cuentas en la base hay que nombrar la que se crea.
     fireEvent.change(screen.getByLabelText("Nombre de usuario de la cuenta"), { target: { value: "@laura.cocinafacil" } });
 
@@ -107,7 +153,9 @@ describe("el asistente de importación", () => {
     expect(enviado.texto).toContain("Referencia interna");
     expect(enviado.handleNuevo).toBe("laura.cocinafacil"); // sin la arroba
     expect(enviado.connectionId).toBeUndefined();
-    expect(enviado.mapeo).toMatchObject({ externalPostId: "Referencia interna", publishedAt: "Publicado el" });
+    expect(enviado.mapeo).toMatchObject({ externalPostId: "Referencia interna", publishedAt: "Día de salida" });
+    // La red que eligió la persona, no una por defecto.
+    expect(enviado.red).toBe("tiktok");
 
     expect(await screen.findByText("3 videos, 3 lecturas.")).toBeInTheDocument();
     expect(refresh).toHaveBeenCalled();
@@ -150,6 +198,7 @@ describe("el asistente de importación", () => {
 
     fireEvent.change(screen.getByLabelText("Identificador del video"), { target: { value: "Referencia" } });
     fireEvent.change(screen.getByLabelText("Fecha de publicación"), { target: { value: "Publicado el" } });
+    fireEvent.click(within(screen.getByRole("group", { name: "Red" })).getByRole("button", { name: "Instagram" }));
     fireEvent.change(screen.getByLabelText("Nombre de usuario de la cuenta"), { target: { value: "propia" } });
 
     const orden = screen.getByRole("group", { name: "Orden de las fechas" });
@@ -330,6 +379,16 @@ describe("teclado y lector de pantalla", () => {
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
     await screen.findByText("3 videos, 3 lecturas.");
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Listo" })));
+  });
+
+  it("el título que recibe el foco no pinta el anillo de un campo", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    // La utilidad es importante: el anillo global de globals.css no vive
+    // en ninguna capa y gana a una utilidad normal.
+    for (const id of ["paso-formato"]) {
+      expect(document.getElementById(id)?.className).toMatch(/(^|\s)outline-none!(\s|$)/);
+    }
   });
 
   it("en la revisión, el estado es la segunda columna: a 400 px no queda cortado en el borde", async () => {

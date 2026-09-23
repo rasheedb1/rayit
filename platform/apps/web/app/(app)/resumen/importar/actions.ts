@@ -7,6 +7,7 @@ import {
   ensureCsvConnection,
   importCsvReadings,
   listExternalPostIds,
+  PLATFORMS,
   type CsvImportResult,
   type PlatformId,
 } from "@mc/db/queries/resumen";
@@ -56,7 +57,12 @@ const esquema = z.object({
    * un `.max(MAX_BYTES)` con bastante más de cinco megas reales.
    */
   texto: z.string().min(1),
-  red: z.enum(["tiktok", "instagram", "facebook", "youtube"] satisfies PlatformId[]),
+  /**
+   * Las redes salen de la misma lista que el resto del módulo
+   * (resumen-constantes.ts): escritas a mano aquí, una red nueva no
+   * llegaba a la acción. PLATFORMS nunca está vacía.
+   */
+  red: z.enum(PLATFORMS as unknown as [PlatformId, ...PlatformId[]]),
   /** Uno de los dos: la cuenta que ya existe, o el nombre de la que se crea. */
   connectionId: z.string().regex(UUID_RE).optional(),
   handleNuevo: z.string().trim().min(1).max(64).optional(),

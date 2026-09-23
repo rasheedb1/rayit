@@ -34,6 +34,21 @@
  * movía el reloj a un día que la serie de cuenta aún no tiene y la suma
  * de visualizaciones perdía un día entero contra el periodo anterior.
  *
+ * Pero el reloj del módulo NO es el final de las sumas de la cuenta. Las
+ * visualizaciones y los seguidores de la serie de cuenta terminan en el
+ * último día que ESA serie cerró, en las conexiones del filtro. Entre las
+ * 00:00 UTC y el cierre de madrugada del recolector, cualquier lectura de
+ * contenido (el propio recolector, un CSV) lleva el reloj a D mientras la
+ * cuenta sigue en D-1: con el reloj como final, la ventana actual perdía
+ * un día entero y el periodo anterior no, y salía una caída falsa (cerca
+ * de -14 % con 7 días) justo en el KPI principal. Con `?red=tiktok` y
+ * TikTok atrasado, la ventana arrastraba los días que puso otra red.
+ *
+ * Y los días son días cerrados en UTC, por convención del repositorio
+ * («la app trabaja en UTC»): `account_metric_snapshot.day` es el día de
+ * la plataforma y no se puede pasar a otra zona. La pantalla lo dice
+ * junto a cada «datos hasta el…».
+ *
  * Las fechas `date` salen como 'YYYY-MM-DD' (to_char) para no depender
  * de la zona horaria del driver; los timestamptz, como ISO 8601 en UTC.
  */
@@ -91,14 +106,37 @@ export interface ResumenFilter {
 export interface KpiSeries {
   /** null cuando no hay ninguna lectura con la que calcularlo. */
   value: number | null;
+  /**
+   * El valor del periodo anterior, de las MISMAS cuentas con las que se
+   * calcula `delta` (ver `newAccounts`). null si no existe.
+   */
   previous: number | null;
   /**
-   * Relativo: 0.31 = +31 %. null si el periodo anterior es cero o no
-   * existe. Lo calcula Postgres (SQL_KPIS), no este archivo.
+   * La variación contra el periodo anterior. null si el periodo anterior
+   * es cero o no existe. Lo calcula Postgres (SQL_KPIS), no este archivo.
+   * Qué unidad lleva lo dice `deltaKind`.
    */
   delta: number | null;
-  /** El tramo final sin huecos. Con menos de dos puntos, no se dibuja. */
+  /**
+   * 'relative': 0.31 = +31 % (las sumas y los guardados por mil).
+   * 'points': diferencia de dos razones, 0.021 = +2,1 puntos. Es la del
+   * alcance en no seguidores: un KPI que ya es un porcentaje y cuya
+   * variación relativa («56 %  ▲ +4 %») se leía como puntos.
+   */
+  deltaKind: 'relative' | 'points';
+  /**
+   * El tramo final sin huecos. Con menos de dos puntos, no se dibuja. En
+   * los KPIs de la cuenta sale de las mismas cuentas que `delta`, así que
+   * una cuenta recién conectada no dibuja una subida que nunca pasó.
+   */
   spark: number[];
+  /**
+   * En los KPIs de la cuenta: cuántas conexiones suman en `value` pero NO
+   * en `previous`, `delta` ni `spark`, porque empezaron a medirse dentro
+   * del tramo que se compara. Conectar un canal de 300 000 seguidores no
+   * es crecer un 79 %.
+   */
+  newAccounts?: number;
   /**
    * Sobre cuántos videos se calculó `value`, en los KPIs de contenido.
    * Es la base REAL de la razón: los videos que no traen los dos
@@ -126,6 +164,13 @@ export interface ResumenKpis {
    */
   views: KpiSeries;
   viewsSource: ViewsSource | null;
+  /**
+   * Los días que suman las visualizaciones, 'YYYY-MM-DD' inclusive. Con
+   * serie de cuenta terminan en el último día que la cuenta cerró, que
+   * puede ir por detrás de `end`; sin ella, coinciden con start/end.
+   * null si no hay cifra.
+   */
+  viewsWindow: { start: string; end: string } | null;
   /** Razón 0..1: alcance en no seguidores sobre alcance, de lo publicado en el periodo. */
   nonFollowerReach: KpiSeries;
   /** Guardados por cada mil visualizaciones de lo publicado en el periodo. */
@@ -245,6 +290,39 @@ async function hasAccountSeries(tx: WorkspaceTx, platform: PlatformId | null): P
  * `paso` es fraccionario a propósito (dias / 11): con 7 días, once
  * pasos de 0,64 días dan una línea con la misma forma que con 90.
  *
+ * DOS finales de ventana, no uno (ver la cabecera):
+ *
+ *   - `fin_b`, el reloj del módulo, para el contenido publicado;
+ *   - `fin_c`, el último día que cerró la serie de cuenta de las
+ *     conexiones DEL FILTRO, para seguidores y visualizaciones de la
+ *     cuenta. Es el mismo desplazamiento en los doce buckets, así que el
+ *     periodo anterior se corre igual que el actual y siguen siendo
+ *     comparables.
+ *
+ * Comparación ENTRE IGUALES en los KPIs de la cuenta. El valor que se
+ * enseña suma todas las cuentas, pero el periodo anterior, la variación
+ * y la sparkline salen solo de las cuentas que ya se medían al principio
+ * del tramo comparado:
+ *
+ *   - seguidores: las que tenían una lectura antes del instante del
+ *     bucket 0;
+ *   - visualizaciones: las que cubren la ventana del bucket 0 ENTERA.
+ *
+ * Sin esto, conectar un canal de 300 000 seguidores hace diez días
+ * pasaba la tarjeta de «+3 %» a «+79 %», con una subida en la sparkline
+ * que nunca pasó, y conectar las cuentas una a una es justo el primer
+ * uso de un cliente nuevo. Las que quedan fuera se cuentan
+ * (`nuevas_*`) para que la tarjeta lo diga.
+ *
+ * Si NINGUNA cuenta es comparable no hay periodo anterior. La sparkline
+ * sale entonces de un conjunto fijo —las que cubren el periodo actual,
+ * en visualizaciones; todas, en seguidores— y solo en los buckets que
+ * ese conjunto cubre entero: el tramo final, sin escalones.
+ *
+ * Una suma de visualizaciones cuya ventana actual no cubre NINGUNA
+ * cuenta vale NULL, no cero: sería una suma a medias que se lee como
+ * una caída.
+ *
  * Los dos KPIs de contenido son RAZONES, y cada una se calcula SOLO
  * sobre los videos que traen sus dos términos. Sumar en el denominador
  * el alcance de un video que no trae alcance en no seguidores (el CSV
@@ -258,54 +336,102 @@ async function hasAccountSeries(tx: WorkspaceTx, platform: PlatformId | null): P
  * importado quedaba fuera. Al ser razones y no sumas, la edad pesa
  * poco: los guardados y las visualizaciones crecen juntos. La nota del
  * KPI lo dice.
+ *
+ * La variación del alcance en no seguidores va en PUNTOS (diferencia de
+ * las dos razones), no relativa: es un porcentaje, y «56 %  ▲ +4 %» se
+ * leía como «de 52 % a 56 %» cuando era de 53,8 % a 56 %. Los guardados
+ * por mil no son un porcentaje y su variación sigue siendo relativa.
  */
 const SQL_KPIS = `
 WITH ventana AS (
   SELECT ${SQL_ULTIMO_DIA} AS fin
 ),
+-- La serie de cuenta de cada conexión viva del filtro: desde y hasta cuándo.
+cuenta AS (
+  SELECT a.connection_id AS id, min(a.day) AS primer_dia, max(a.day) AS ultimo_dia
+  FROM account_metric_snapshot a
+  JOIN social_connection sc ON sc.id = a.connection_id AND sc.deleted_at IS NULL
+  WHERE ($2::text IS NULL OR sc.platform_id = $2::text)
+  GROUP BY a.connection_id
+),
 corte AS (
   SELECT $1::int AS dias, $2::text AS red,
          ((v.fin + 1)::timestamp AT TIME ZONE 'UTC') AS hasta,
+         -- El final de las sumas de la cuenta: su último día cerrado en
+         -- el filtro. Sin serie de cuenta da igual (nadie lo lee).
+         ((COALESCE((SELECT max(c.ultimo_dia) FROM cuenta c), v.fin) + 1)::timestamp AT TIME ZONE 'UTC') AS hasta_cuenta,
          $1::int / 11.0 AS paso
   FROM ventana v
   WHERE v.fin IS NOT NULL
 ),
--- Desde cuándo hay datos. Las SUMAS (visualizaciones) de una ventana
--- que empieza antes de ese día no valen cero, no valen nada: serían una
--- suma a medias que se lee como una caída.
-origen AS (
-  SELECT (SELECT min(a.day) FROM account_metric_snapshot a
-            JOIN social_connection sc ON sc.id = a.connection_id AND sc.deleted_at IS NULL
-           WHERE ($2::text IS NULL OR sc.platform_id = $2::text)) AS dia_cuenta
-),
 bucket AS (
   SELECT g.i, c.dias, c.red,
-         c.hasta - make_interval(secs => (11 - g.i) * c.paso * 86400) AS fin_b
+         c.hasta        - make_interval(secs => (11 - g.i) * c.paso * 86400) AS fin_b,
+         c.hasta_cuenta - make_interval(secs => (11 - g.i) * c.paso * 86400) AS fin_c
   FROM corte c CROSS JOIN generate_series(0, 11) AS g(i)
 ),
--- Seguidores: el último valor conocido de cada conexión en ese instante.
-seguidores AS (
-  SELECT b.i, sum(u.followers)::bigint AS followers
+-- Los días de la serie de cuenta que mira cada bucket: [desde, antes_de).
+dia AS (
+  SELECT b.i,
+         ((b.fin_c - make_interval(days => b.dias)) AT TIME ZONE 'UTC')::date AS desde,
+         (b.fin_c AT TIME ZONE 'UTC')::date                                   AS antes_de
   FROM bucket b
+),
+-- Qué cuenta entra en qué comparación.
+conjunto AS (
+  SELECT c.id, c.primer_dia,
+         c.primer_dia <= d0.desde    AS compara_vistas,
+         c.primer_dia <  d0.antes_de AS compara_seguidores,
+         c.primer_dia <= d11.desde   AS cubre_actual
+  FROM cuenta c
+  CROSS JOIN (SELECT * FROM dia WHERE i = 0)  d0
+  CROSS JOIN (SELECT * FROM dia WHERE i = 11) d11
+),
+ref AS (
+  SELECT count(*) > 0                                 AS hay_cuenta,
+         COALESCE(bool_or(compara_vistas), false)     AS hay_vistas,
+         COALESCE(bool_or(compara_seguidores), false) AS hay_seguidores,
+         COALESCE(bool_or(cubre_actual), false)       AS cubre_actual,
+         count(*)::int                                AS cuentas
+  FROM conjunto
+),
+-- El conjunto fijo del que salen el periodo anterior, la variación y la sparkline.
+ref_vistas AS (
+  SELECT k.id, k.primer_dia FROM conjunto k CROSS JOIN ref r
+  WHERE CASE WHEN r.hay_vistas THEN k.compara_vistas ELSE k.cubre_actual END
+),
+ref_seguidores AS (
+  SELECT k.id, k.primer_dia FROM conjunto k CROSS JOIN ref r
+  WHERE CASE WHEN r.hay_seguidores THEN k.compara_seguidores ELSE true END
+),
+-- Seguidores: el último valor conocido de cada conexión en ese instante.
+-- El total, de todas; el comparable, solo de las del conjunto fijo.
+seguidores AS (
+  SELECT d.i,
+         sum(u.followers)::bigint                         AS followers,
+         sum(u.followers) FILTER (WHERE u.en_ref)::bigint AS followers_ref,
+         count(*) FILTER (WHERE u.en_ref)::int            AS con_lectura
+  FROM dia d
   CROSS JOIN LATERAL (
-    SELECT DISTINCT ON (a.connection_id) a.followers
+    SELECT DISTINCT ON (a.connection_id) a.followers,
+           EXISTS (SELECT 1 FROM ref_seguidores r WHERE r.id = a.connection_id) AS en_ref
     FROM account_metric_snapshot a
-    JOIN social_connection sc ON sc.id = a.connection_id AND sc.deleted_at IS NULL
-    WHERE (b.red IS NULL OR sc.platform_id = b.red)
-      AND a.day < (b.fin_b AT TIME ZONE 'UTC')::date
+    JOIN cuenta c ON c.id = a.connection_id
+    WHERE a.day < d.antes_de
     ORDER BY a.connection_id, a.day DESC
   ) u
-  GROUP BY b.i
+  GROUP BY d.i
 ),
 -- Visualizaciones de la cuenta: suma de los días dentro de la ventana.
 vistas AS (
-  SELECT b.i, sum(a.views)::bigint AS views
-  FROM bucket b
-  JOIN social_connection sc ON sc.deleted_at IS NULL AND (b.red IS NULL OR sc.platform_id = b.red)
-  JOIN account_metric_snapshot a ON a.connection_id = sc.id
-   AND a.day <  (b.fin_b AT TIME ZONE 'UTC')::date
-   AND a.day >= ((b.fin_b - make_interval(days => b.dias)) AT TIME ZONE 'UTC')::date
-  GROUP BY b.i
+  SELECT d.i,
+         sum(a.views)::bigint                                 AS views,
+         sum(a.views) FILTER (WHERE r.id IS NOT NULL)::bigint AS views_ref
+  FROM dia d
+  JOIN account_metric_snapshot a ON a.day >= d.desde AND a.day < d.antes_de
+  JOIN cuenta c ON c.id = a.connection_id
+  LEFT JOIN ref_vistas r ON r.id = a.connection_id
+  GROUP BY d.i
 ),
 -- Contenido publicado dentro de la ventana, con su última lectura. Cada
 -- razón lleva su propio FILTER: solo los videos con los dos términos.
@@ -330,42 +456,53 @@ contenido AS (
 ),
 punto AS (
   SELECT b.i,
-         -- Los seguidores son un valor de un instante: basta con que
-         -- haya una lectura antes, y de eso ya se ocupa la CTE seguidores.
          s.followers,
-         -- Con serie de cuenta, las visualizaciones son las de la cuenta
-         -- y la ventana tiene que estar entera dentro de la historia.
+         -- Solo si TODAS las del conjunto fijo tenían ya una lectura.
+         CASE WHEN s.con_lectura = (SELECT count(*) FROM ref_seguidores) THEN s.followers_ref END AS followers_cmp,
+         -- Con serie de cuenta, las visualizaciones son las de la cuenta.
          -- Sin ella, las de lo publicado en la ventana: una suma sobre
          -- los videos que conocemos, que vale NULL si no hay ninguno.
-         CASE WHEN o.dia_cuenta IS NOT NULL
-              THEN CASE WHEN (b.fin_b - make_interval(days => b.dias)) AT TIME ZONE 'UTC' >= o.dia_cuenta
-                        THEN v.views END
+         CASE WHEN r.hay_cuenta
+              THEN CASE WHEN r.cubre_actual THEN v.views END
               ELSE c.post_views END AS views,
+         CASE WHEN r.hay_cuenta
+              THEN CASE WHEN d.desde >= (SELECT max(x.primer_dia) FROM ref_vistas x) THEN v.views_ref END
+              ELSE c.post_views END AS views_cmp,
          CASE WHEN c.reach > 0      THEN c.reach_nf::numeric / c.reach END AS no_seguidores,
          CASE WHEN c.views_sv > 0   THEN c.saves::numeric * 1000 / c.views_sv END AS guardados_1k,
          COALESCE(c.posts_nf, 0) AS posts_nf,
          COALESCE(c.posts_sv, 0) AS posts_sv,
          COALESCE(c.posts, 0)    AS posts,
-         o.dia_cuenta IS NOT NULL AS hay_cuenta
+         r.hay_cuenta,
+         r.cuentas - (SELECT count(*) FROM ref_seguidores)::int AS nuevas_seguidores,
+         r.cuentas - (SELECT count(*) FROM ref_vistas)::int     AS nuevas_vistas,
+         d.desde, d.antes_de
   FROM bucket b
-  CROSS JOIN origen o
+  JOIN dia d ON d.i = b.i
+  CROSS JOIN ref r
   LEFT JOIN seguidores s ON s.i = b.i
   LEFT JOIN vistas     v ON v.i = b.i
   LEFT JOIN contenido  c ON c.i = b.i
 )
-SELECT p.i, p.followers, p.views, p.no_seguidores, p.guardados_1k, p.posts, p.posts_nf, p.posts_sv, p.hay_cuenta,
-       a.followers     AS followers_prev,
-       a.views         AS views_prev,
+SELECT p.i, p.followers, p.followers_cmp, p.views, p.views_cmp, p.no_seguidores, p.guardados_1k,
+       p.posts, p.posts_nf, p.posts_sv, p.hay_cuenta, p.nuevas_seguidores, p.nuevas_vistas,
+       a.followers_cmp AS followers_prev,
+       a.views_cmp     AS views_prev,
        a.no_seguidores AS no_seguidores_prev,
        a.guardados_1k  AS guardados_1k_prev,
-       -- La variación relativa contra el periodo anterior, también aquí:
-       -- sin periodo anterior, o con un cero detrás, no hay variación.
-       CASE WHEN a.followers > 0     THEN p.followers::numeric / a.followers - 1 END AS followers_delta,
-       CASE WHEN a.views > 0         THEN p.views::numeric / a.views - 1         END AS views_delta,
-       CASE WHEN a.no_seguidores > 0 THEN p.no_seguidores / a.no_seguidores - 1  END AS no_seguidores_delta,
-       CASE WHEN a.guardados_1k > 0  THEN p.guardados_1k / a.guardados_1k - 1    END AS guardados_1k_delta,
+       -- La variación contra el periodo anterior, también aquí, y SIEMPRE
+       -- entre las mismas cuentas: el actual comparable contra el anterior
+       -- comparable. Sin periodo anterior, o con un cero detrás, no hay.
+       CASE WHEN a.followers_cmp > 0 THEN p.followers_cmp::numeric / a.followers_cmp - 1 END AS followers_delta,
+       CASE WHEN a.views_cmp > 0     THEN p.views_cmp::numeric / a.views_cmp - 1         END AS views_delta,
+       -- En puntos: la diferencia de las dos razones.
+       p.no_seguidores - a.no_seguidores                                                   AS no_seguidores_delta,
+       CASE WHEN a.guardados_1k > 0  THEN p.guardados_1k / a.guardados_1k - 1              END AS guardados_1k_delta,
        to_char((SELECT fin FROM ventana), 'YYYY-MM-DD')                 AS hasta,
-       to_char((SELECT fin FROM ventana) - ($1::int - 1), 'YYYY-MM-DD') AS desde
+       to_char((SELECT fin FROM ventana) - ($1::int - 1), 'YYYY-MM-DD') AS desde,
+       -- Los días que suman las visualizaciones de la cuenta: [desde, antes_de).
+       to_char(p.desde, 'YYYY-MM-DD')        AS vistas_desde,
+       to_char(p.antes_de - 1, 'YYYY-MM-DD') AS vistas_hasta
 FROM punto p
 CROSS JOIN (SELECT * FROM punto WHERE i = 0) a
 ORDER BY p.i`;
@@ -373,13 +510,17 @@ ORDER BY p.i`;
 interface FilaKpi {
   i: number;
   followers: string | number | null;
+  followers_cmp: string | number | null;
   views: string | number | null;
+  views_cmp: string | number | null;
   no_seguidores: string | null;
   guardados_1k: string | null;
   posts: number;
   posts_nf: number;
   posts_sv: number;
   hay_cuenta: boolean;
+  nuevas_seguidores: number;
+  nuevas_vistas: number;
   followers_prev: string | number | null;
   views_prev: string | number | null;
   no_seguidores_prev: string | null;
@@ -390,6 +531,8 @@ interface FilaKpi {
   guardados_1k_delta: string | null;
   hasta: string;
   desde: string;
+  vistas_desde: string;
+  vistas_hasta: string;
 }
 
 /** Postgres devuelve bigint y numeric como texto; aquí se convierten una sola vez. */
@@ -402,11 +545,23 @@ function num(v: string | number | null | undefined): number | null {
 type CampoKpi = 'followers' | 'views' | 'no_seguidores' | 'guardados_1k';
 
 /**
+ * De qué columna sale la sparkline de cada KPI. En los de la cuenta, de
+ * la comparable (las mismas cuentas que el delta); en los de contenido,
+ * del propio valor.
+ */
+const COLUMNA_SPARK = {
+  followers: 'followers_cmp',
+  views: 'views_cmp',
+  no_seguidores: 'no_seguidores',
+  guardados_1k: 'guardados_1k',
+} as const satisfies Record<CampoKpi, keyof FilaKpi>;
+
+/**
  * Las doce filas de SQL_KPIS → un KpiSeries. Aquí no se calcula nada:
  * el valor, el del periodo anterior y la variación llegan hechos de
  * Postgres; esto solo los convierte a número y recorta la sparkline.
  */
-function serie(filas: FilaKpi[], campo: CampoKpi): KpiSeries {
+function serie(filas: FilaKpi[], campo: CampoKpi, deltaKind: KpiSeries['deltaKind'] = 'relative'): KpiSeries {
   const ultima = filas[filas.length - 1];
   const value = ultima ? num(ultima[campo]) : null;
   const previous = ultima ? num(ultima[`${campo}_prev`]) : null;
@@ -414,16 +569,16 @@ function serie(filas: FilaKpi[], campo: CampoKpi): KpiSeries {
   // Solo el tramo FINAL sin huecos: una ventana que la historia no
   // cubre vuelve NULL, y unir los puntos por encima del hueco dibujaría
   // una subida que nunca pasó.
-  const puntos = filas.map((f) => num(f[campo]));
+  const puntos = filas.map((f) => num(f[COLUMNA_SPARK[campo]]));
   let trasElUltimoHueco = 0;
   puntos.forEach((v, i) => {
     if (v === null) trasElUltimoHueco = i + 1;
   });
   const spark = puntos.slice(trasElUltimoHueco).filter((v): v is number => v !== null);
-  return { value, previous, delta, spark };
+  return { value, previous, delta, deltaKind, spark };
 }
 
-const KPI_VACIO: KpiSeries = { value: null, previous: null, delta: null, spark: [] };
+const KPI_VACIO: KpiSeries = { value: null, previous: null, delta: null, deltaKind: 'relative', spark: [] };
 
 /** Los cuatro KPIs del Resumen, con su comparación contra el periodo anterior. */
 export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Promise<ResumenKpis> {
@@ -433,21 +588,28 @@ export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Pr
   if (rows.length === 0) {
     return {
       end: null, start: null,
-      followers: KPI_VACIO, views: KPI_VACIO, viewsSource: null,
-      nonFollowerReach: KPI_VACIO, savesPer1k: KPI_VACIO,
+      followers: KPI_VACIO, views: KPI_VACIO, viewsSource: null, viewsWindow: null,
+      nonFollowerReach: { ...KPI_VACIO, deltaKind: 'points' }, savesPer1k: KPI_VACIO,
       posts: 0,
       hasAccountSeries: false,
     };
   }
   const ultima = rows[rows.length - 1]!;
   const views = serie(rows, 'views');
+  const viewsSource: ViewsSource | null = views.value === null ? null : ultima.hay_cuenta ? 'account' : 'content';
   return {
     end: ultima.hasta,
     start: ultima.desde,
-    followers: serie(rows, 'followers'),
-    views,
-    viewsSource: views.value === null ? null : ultima.hay_cuenta ? 'account' : 'content',
-    nonFollowerReach: { ...serie(rows, 'no_seguidores'), sample: ultima.posts_nf },
+    followers: { ...serie(rows, 'followers'), newAccounts: ultima.nuevas_seguidores },
+    views: ultima.hay_cuenta ? { ...views, newAccounts: ultima.nuevas_vistas } : views,
+    viewsSource,
+    viewsWindow:
+      viewsSource === null
+        ? null
+        : viewsSource === 'account'
+          ? { start: ultima.vistas_desde, end: ultima.vistas_hasta }
+          : { start: ultima.desde, end: ultima.hasta },
+    nonFollowerReach: { ...serie(rows, 'no_seguidores', 'points'), sample: ultima.posts_nf },
     savesPer1k: { ...serie(rows, 'guardados_1k'), sample: ultima.posts_sv },
     posts: ultima.posts,
     hasAccountSeries: ultima.hay_cuenta,
@@ -476,15 +638,23 @@ export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Pr
  * Los seguidores solo existen en la serie de cuenta: un CSV trae
  * métricas por video, no de la cuenta. Sin serie, la respuesta sale
  * vacía y `hasAccountSeries` le dice a la pantalla por qué.
+ *
+ * Y la curva termina donde termina la serie de cuenta DEL FILTRO, igual
+ * que la tarjeta de seguidores (ver SQL_KPIS): una lectura de contenido
+ * que adelanta el reloj del módulo no añade un día que la cuenta aún no
+ * ha cerrado.
  */
 const SQL_SEGUIDORES = `
 WITH conexion AS (
-  SELECT sc.id, sc.platform_id,
-         (SELECT min(a.day) FROM account_metric_snapshot a WHERE a.connection_id = sc.id) AS primer_dia
+  SELECT sc.id, sc.platform_id, a.primer_dia, a.ultimo_dia
   FROM social_connection sc
+  CROSS JOIN LATERAL (
+    SELECT min(x.day) AS primer_dia, max(x.day) AS ultimo_dia
+    FROM account_metric_snapshot x WHERE x.connection_id = sc.id
+  ) a
   WHERE sc.deleted_at IS NULL AND ($2::text IS NULL OR sc.platform_id = $2::text)
 ),
-reloj AS (SELECT ${SQL_ULTIMO_DIA} AS fin),
+reloj AS (SELECT max(c.ultimo_dia) AS fin FROM conexion c),
 rango AS (
   SELECT greatest(
            (SELECT fin FROM reloj) - ($1::int - 1),
@@ -542,9 +712,15 @@ export async function getFollowersByPlatform(tx: WorkspaceTx, filter: ResumenFil
  * a medias —se leería como una caída— y se descarta. Por fecha de
  * publicación no hay «a medias»: lo publicado en ese bloque es un hecho,
  * y descartarlo dejaba fuera justo el video más antiguo del archivo.
+ *
+ * Y el último bloque termina en días distintos. Las barras de la cuenta
+ * terminan en el último día que cerró la serie de cuenta DEL FILTRO, como
+ * la tarjeta de visualizaciones (SQL_KPIS): con el reloj del módulo, una
+ * lectura de contenido de madrugada dejaba la última barra a medias. Las
+ * de lo publicado, en el reloj del módulo, como las tarjetas de contenido.
  */
-const SQL_BLOQUES = (desdeDatos: string, bloqueParcial: 'descartar' | 'incluir') => `
-reloj AS (SELECT ${SQL_ULTIMO_DIA} AS fin),
+const SQL_BLOQUES = (finDatos: string, desdeDatos: string, bloqueParcial: 'descartar' | 'incluir') => `
+reloj AS (SELECT (${finDatos}) AS fin),
 rango AS (
   SELECT (SELECT fin FROM reloj) AS hasta,
          greatest((SELECT fin FROM reloj) - ($1::int - 1), (${desdeDatos})) AS desde
@@ -563,12 +739,15 @@ bloque AS (
 
 const SQL_VIEWS_CUENTA = `
 WITH conexion AS (
-  SELECT sc.id, sc.platform_id,
-         (SELECT min(a.day) FROM account_metric_snapshot a WHERE a.connection_id = sc.id) AS primer_dia
+  SELECT sc.id, sc.platform_id, a.primer_dia, a.ultimo_dia
   FROM social_connection sc
+  CROSS JOIN LATERAL (
+    SELECT min(x.day) AS primer_dia, max(x.day) AS ultimo_dia
+    FROM account_metric_snapshot x WHERE x.connection_id = sc.id
+  ) a
   WHERE sc.deleted_at IS NULL AND ($2::text IS NULL OR sc.platform_id = $2::text)
 ),
-${SQL_BLOQUES('SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL', 'descartar')}
+${SQL_BLOQUES('SELECT max(c.ultimo_dia) FROM conexion c', 'SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL', 'descartar')}
 SELECT to_char(b.inicio, 'YYYY-MM-DD') AS inicio,
        to_char(b.fin, 'YYYY-MM-DD')    AS fin,
        c.platform_id,
@@ -587,7 +766,7 @@ WITH publicado AS (
   WHERE p.deleted_on_platform = false AND ($2::text IS NULL OR p.platform_id = $2::text)
     AND EXISTS (SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = p.id)
 ),
-${SQL_BLOQUES('SELECT min(dia) FROM publicado', 'incluir')},
+${SQL_BLOQUES(SQL_ULTIMO_DIA, 'SELECT min(dia) FROM publicado', 'incluir')},
 red AS (SELECT DISTINCT platform_id FROM publicado)
 SELECT to_char(b.inicio, 'YYYY-MM-DD') AS inicio,
        to_char(b.fin, 'YYYY-MM-DD')    AS fin,
@@ -770,13 +949,20 @@ export async function getFreshnessByConnection(
  * Lo que la pantalla necesita para elegir entre "estado vacío" y
  * "cifras": cuántas conexiones hay y cuántas traen datos. Un workspace
  * sin conexiones ve el estado vacío, no cuatro ceros.
+ *
+ * «Con datos» es con alguna LECTURA: una fila de la serie de cuenta o un
+ * post con al menos un snapshot. Un post sin lecturas no cuenta: es la
+ * conexión OAuth que ya descubrió sus videos y aún no midió nada, y con
+ * ella la página pintaba cuatro «—» y dos gráficos vacíos en vez del
+ * estado «conectadas pero sin lecturas».
  */
 export async function getResumenCoverage(tx: WorkspaceTx): Promise<ResumenCoverage> {
   const { rows } = await tx.query<{ conexiones: number; con_datos: number }>(`
     SELECT count(*)::int AS conexiones,
            count(*) FILTER (
              WHERE EXISTS (SELECT 1 FROM account_metric_snapshot a WHERE a.connection_id = sc.id)
-                OR EXISTS (SELECT 1 FROM post p WHERE p.connection_id = sc.id)
+                OR EXISTS (SELECT 1 FROM post p JOIN post_metric_snapshot s ON s.post_id = p.id
+                            WHERE p.connection_id = sc.id)
            )::int AS con_datos
     FROM social_connection sc
     WHERE sc.deleted_at IS NULL`);
@@ -1138,7 +1324,12 @@ export async function importCsvReadings(
        SELECT p.id, current_workspace_id(), $2::timestamptz,
               round(EXTRACT(EPOCH FROM ($2::timestamptz - p.published_at)) / 3600.0, 2),
               e.views, e.reach, e.likes, e.comments, e.shares, e.saves,
-              COALESCE(e.likes, 0) + COALESCE(e.comments, 0) + COALESCE(e.shares, 0) + COALESCE(e.saves, 0),
+              -- «No lo sabemos» no es «fue cero»: un archivo sin ninguna
+              -- columna de interacción deja NULL, no una interacción de 0
+              -- que nunca se midió y que leerían las tasas de interacción.
+              CASE WHEN num_nonnulls(e.likes, e.comments, e.shares, e.saves) = 0 THEN NULL
+                   ELSE COALESCE(e.likes, 0) + COALESCE(e.comments, 0) + COALESCE(e.shares, 0) + COALESCE(e.saves, 0)
+              END,
               e.follows_from_post,
               CASE WHEN e.reach IS NOT NULL AND e.reach_non_followers IS NOT NULL
                    THEN e.reach - e.reach_non_followers END,

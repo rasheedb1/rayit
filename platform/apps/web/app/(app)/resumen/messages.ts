@@ -23,6 +23,8 @@ const contar = (n: number, txt: string, uno: string, varios: string) => (n === 1
 
 export const MESSAGES = {
   page: {
+    /** El título de la pestaña del navegador. */
+    metaTitle: "Resumen",
     eyebrow: "Resumen",
     title: "Todas tus redes en una sola lectura",
     description:
@@ -46,6 +48,11 @@ export const MESSAGES = {
     },
     views: {
       label: (dias: number) => `Visualizaciones en ${dias} días`,
+      /**
+       * Cuando la serie de cuenta aún no cerró el último día del reloj:
+       * la suma termina antes, y se dice hasta cuándo. `fecha` ya formateada.
+       */
+      hastaCuenta: (fecha: string) => `Hasta el ${fecha}, el último día que cerró la cuenta`,
       /** Con serie de cuenta: cuenta otra cosa que las dos tarjetas de al lado. */
       note: "De tus cuentas, no solo de lo publicado en el periodo",
       /** Sin serie de cuenta: la suma de lo publicado, y hay que decirlo. */
@@ -70,6 +77,14 @@ export const MESSAGES = {
     /** Para los valores de un instante, como los seguidores. */
     deltaLabelPunto: (dias: number) => `vs. hace ${dias} días`,
     sinComparacion: "Sin periodo anterior con qué comparar",
+    /** El delta de un KPI que ya es un porcentaje: diferencia en puntos. `txt` = «+2,1». */
+    puntos: (txt: string) => `${txt} puntos`,
+    /**
+     * Cuentas que suman en la cifra pero no en la comparación ni en la
+     * línea: empezaron a medirse dentro del tramo comparado.
+     */
+    nuevas: (n: number, txt: string) =>
+      n === 1 ? "1 cuenta nueva no entra en la comparación" : `${txt} cuentas nuevas no entran en la comparación`,
     sinDato: "—",
   },
   graficos: {
@@ -103,6 +118,19 @@ export const MESSAGES = {
       notaContenido:
         "Sin cuenta conectada: cada barra suma las visualizaciones de lo publicado en esos días, con su última lectura.",
     },
+  },
+  /**
+   * Los días del módulo son días cerrados en UTC (la convención del
+   * repositorio: `account_metric_snapshot.day` es el día de la plataforma
+   * y no se puede pasar a otra zona). Se dice junto a cada «datos hasta
+   * el…»: en Bogotá, a las 21:30 del 22, «hasta el 22» se leía como
+   * «incluye hoy».
+   */
+  zona: {
+    /** Va como `source` de DataAsOf: «datos hasta el 22 sep · día cerrado en UTC». */
+    asOf: "día cerrado en UTC",
+    /** Una sola vez, bajo el título del aviso de frescura. */
+    frescura: "Cada fecha es un día cerrado en UTC.",
   },
   frescura: {
     title: "Hasta cuándo llegan los datos",
@@ -178,6 +206,8 @@ export const MESSAGES = {
 
   /** Los cuatro pasos de la importación por CSV (RES-2). */
   importar: {
+    /** El título de la pestaña del navegador. */
+    metaTitle: "Importar un CSV",
     eyebrow: "Resumen · Importar",
     title: "Sube la exportación de tu plataforma",
     description:
@@ -231,7 +261,9 @@ export const MESSAGES = {
     formato: {
       title: "Qué es cada columna",
       detectado: (nombre: string) => `Parece una exportación de ${nombre}.`,
-      noDetectado: "No reconocimos el formato, así que elige la red y revisa el mapeo.",
+      noDetectado: "No reconocimos el formato: elige la red a la que pertenece y revisa el mapeo.",
+      /** Sin formato reconocido, la red no se da por supuesta: se elige. */
+      faltaRed: "Elige la red del archivo antes de seguir.",
       red: "Red",
       cuenta: "¿A qué cuenta pertenece?",
       /** Una opción del selector de cuenta: «@laura · 17 videos». */

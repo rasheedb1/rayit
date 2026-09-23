@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ModulePlan } from "@/components/module-plan";
 import { MODULES, requireModule } from "@/content/modules";
+import { MESSAGES } from "./messages";
 
 /**
  * El plan de construcción de cualquier módulo, en una ruta aparte.
@@ -20,7 +21,7 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ modulo: string }> }): Promise<Metadata> {
   const { modulo } = await params;
   // requireModule hace 404 si el módulo no existe o su bandera está apagada.
-  return { title: `Plan · ${requireModule(modulo).name}` };
+  return { title: MESSAGES.metaTitle(requireModule(modulo).name) };
 }
 
 export default async function PlanPage({ params }: { params: Promise<{ modulo: string }> }) {

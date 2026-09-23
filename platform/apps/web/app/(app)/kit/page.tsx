@@ -174,6 +174,12 @@ export default function Page() {
             <Kpi label="Guardados por mil" value="14,2" trend="up" delta={0.08} note="Mejor semana del trimestre" />
           </KpiRow>
         </Variant>
+        <Variant label="Delta en puntos: la diferencia de dos porcentajes, con deltaText">
+          <KpiRow>
+            <Kpi label="Alcance en no seguidores" value="56 %" delta={0.021} deltaText="+2,1 puntos" trend="up" deltaLabel="vs. los 30 días anteriores" />
+            <Kpi label="Tasa de interacción" value="4,8 %" delta={-0.004} deltaText="−0,4 puntos" trend="down" deltaLabel="vs. los 30 días anteriores" />
+          </KpiRow>
+        </Variant>
         <Variant label="Cargando y valores largos">
           <KpiRow>
             <Kpi label="Por cobrar" value="" loading />
@@ -280,6 +286,15 @@ export default function Page() {
       <Section id="bar-chart" title="BarChart" usage={`<BarChart cats={weeks} series={series} mode="stack" format="compact" ariaLabel="Views por semana y red" />`}>
         <Variant label="Apiladas: views por semana y red, 12 semanas">
           <BarChart cats={views.cats} series={views.series} mode="stack" ariaLabel="Views por semana y red en las últimas 12 semanas" />
+        </Variant>
+        <Variant label="Con axisLabels: bloques de cinco días, el día final bajo la barra y el rango en el tooltip">
+          <BarChart
+            cats={["4–8/8", "9–13/8", "14–18/8", "19–23/8", "24–28/8", "29/8–2/9"]}
+            axisLabels={["8/8", "13/8", "18/8", "23/8", "28/8", "2/9"]}
+            series={views.series.map((s) => ({ ...s, data: s.data.slice(0, 6) }))}
+            mode="stack"
+            ariaLabel="Views por bloques de cinco días y red"
+          />
         </Variant>
         <Variant label="Agrupadas: flujo de caja, en dinero">
           <BarChart cats={CASH.cats} series={CASH.series} mode="group" format="money" axisFormat="compact" ariaLabel="Flujo de caja proyectado a ocho semanas" />

@@ -59,6 +59,15 @@ type Paso = 0 | 1 | 2 | 3;
 /** El título de cada paso: al cambiar de paso, el foco va a él. */
 const TITULO_DE_PASO = ["paso-subir", "paso-formato", "paso-revisar", "paso-hecho"] as const;
 
+/**
+ * La clase del título de cada paso. Recibe el foco por programa
+ * (tabIndex={-1}), y el anillo global `:focus-visible` de globals.css —que
+ * no vive en ninguna capa y por eso gana a las utilidades— le dibujaba un
+ * recuadro como si fuera un campo. `outline-none!` es importante y sí
+ * gana. El cambio de paso se sigue anunciando por el aria-live de <Pasos>.
+ */
+const TITULO_PASO = "text-sm font-semibold text-ink outline-none!";
+
 interface Resultado {
   videos: number;
   nuevos: number;
@@ -100,7 +109,12 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [texto, setTexto] = useState("");
   const [tabla, setTabla] = useState<Tabla | null>(null);
   const [mapeo, setMapeo] = useState<Mapeo>({});
-  const [red, setRed] = useState<PlatformId>("instagram");
+  /**
+   * La red del archivo. null hasta que la dice el formato reconocido o la
+   * persona: dar una por supuesta dejaba importar una exportación de
+   * TikTok a la cuenta de Instagram sin que nadie lo notara.
+   */
+  const [red, setRed] = useState<PlatformId | null>(null);
   const [cuenta, setCuenta] = useState<string>(NUEVA);
   const [handleNuevo, setHandleNuevo] = useState("");
   const [formato, setFormato] = useState<FormatoId | null>(null);
@@ -114,7 +128,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [yaConocidos, setYaConocidos] = useState<readonly string[] | null>(null);
 
   const deLaRed = cuentas.filter((c) => c.platformId === red);
-  const faltan = faltantesDelMapeo(mapeo);
+  const faltan = useMemo(() => faltantesDelMapeo(mapeo), [mapeo]);
 
   // El orden día/mes se decide para el ARCHIVO entero, mirando la
   // columna de fechas antes de leer ninguna: si alguna fecha lo
@@ -141,14 +155,21 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   // avisar «este video ya está» ANTES de escribir nada.
   const revisionBase: Revision | null = useMemo(
     () => (tabla && faltan.length === 0 ? revisar(tabla, mapeo, opciones) : null),
-    // `faltan` se recalcula con `mapeo`, así que no hace falta en las dependencias.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tabla, mapeo, opciones],
+    [tabla, mapeo, opciones, faltan],
+  );
+
+  // Los ids que hay que preguntarle a la base, como una clave ESTABLE:
+  // cambiar el select de «Guardados» rehace la revisión pero no los ids,
+  // y con la revisión como dependencia cada select tocado era un viaje
+  // al servidor con la misma pregunta.
+  const idsConsulta = useMemo(
+    () => JSON.stringify([...new Set(revisionBase?.listas.map((l) => l.externalPostId) ?? [])].sort()),
+    [revisionBase],
   );
 
   useEffect(() => {
     setYaConocidos(null);
-    const ids = revisionBase?.listas.map((l) => l.externalPostId) ?? [];
+    const ids = JSON.parse(idsConsulta) as string[];
     // Una cuenta que todavía no existe no puede tener nada repetido.
     if (cuenta === NUEVA || ids.length === 0) return;
     let vivo = true;
@@ -163,7 +184,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     return () => {
       vivo = false;
     };
-  }, [cuenta, revisionBase]);
+  }, [cuenta, idsConsulta]);
 
   const conocidos = useMemo(() => (yaConocidos ? new Set(yaConocidos) : null), [yaConocidos]);
 
@@ -237,6 +258,11 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           setRed(deteccion.formato.red);
           const deEsaRed = cuentas.filter((c) => c.platformId === deteccion.formato!.red);
           setCuenta(deEsaRed.length === 1 ? deEsaRed[0]!.connectionId : NUEVA);
+        } else {
+          // Sin formato reconocido, la red la elige la persona: ni la del
+          // archivo anterior ni ninguna por defecto.
+          setRed(null);
+          setCuenta(NUEVA);
         }
         setPaso(1);
       } catch (err: unknown) {
@@ -248,6 +274,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
 
   function importar() {
     setError(null);
+    if (!red) return;
     empezar(async () => {
       try {
         const r = await importarCsv({
@@ -294,11 +321,13 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     setYaConocidos(null);
     setOrdenElegido(null);
     setFechaElegida(null);
+    setRed(null);
     setError(null);
   }
 
   const puedeSeguir =
     paso === 1 &&
+    red !== null &&
     faltan.length === 0 &&
     problemaFecha === null &&
     (cuenta !== NUEVA || handleNuevo.trim().length > 0);
@@ -321,7 +350,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           mapeo={mapeo}
           onMapeo={setMapeo}
           red={red}
-          onRed={(r) => {
+          onRed={(r: PlatformId) => {
             setRed(r);
             const unica = cuentas.filter((c) => c.platformId === r);
             setCuenta(unica.length === 1 ? unica[0]!.connectionId : NUEVA);
@@ -407,7 +436,7 @@ function PasoSubir({ onArchivo }: { onArchivo: (archivo: File) => void }) {
 
   return (
     <section className="mt-6" aria-labelledby="paso-subir">
-      <h2 id="paso-subir" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
+      <h2 id="paso-subir" tabIndex={-1} className={TITULO_PASO}>
         {t.title}
       </h2>
       <div
@@ -436,11 +465,18 @@ function PasoSubir({ onArchivo }: { onArchivo: (archivo: File) => void }) {
             {t.elegir}
           </button>
         </p>
+        {/*
+          Fuera del orden de Tab: el botón visible ya lo abre con click(),
+          y como segunda parada dejaba el foco en un control invisible y
+          sin anillo.
+        */}
         <input
           ref={input}
           type="file"
           accept=".csv,text/csv,text/plain"
           className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
           onChange={(e) => {
             const archivo = e.target.files?.[0];
             if (archivo) onArchivo(archivo);
@@ -469,7 +505,7 @@ function PasoFormato(props: {
   tabla: Tabla;
   mapeo: Mapeo;
   onMapeo: (m: Mapeo) => void;
-  red: PlatformId;
+  red: PlatformId | null;
   onRed: (r: PlatformId) => void;
   cuentas: ImportableAccount[];
   cuenta: string;
@@ -506,7 +542,7 @@ function PasoFormato(props: {
   return (
     <section className="mt-6 space-y-5" aria-labelledby="paso-formato">
       <div>
-        <h2 id="paso-formato" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
+        <h2 id="paso-formato" tabIndex={-1} className={TITULO_PASO}>
           {t.title}
         </h2>
         <p className="mt-1 text-sm text-ink-2">
@@ -518,30 +554,37 @@ function PasoFormato(props: {
       <div className="flex flex-wrap items-end gap-4">
         <div>
           <p className="mb-1.5 text-xs text-muted">{t.red}</p>
-          <Segmented<PlatformId>
+          {/* Sin red elegida no hay ninguna opción pulsada: "" no es ninguna red. */}
+          <Segmented<PlatformId | "">
             label={t.red}
             size="sm"
-            value={props.red}
+            value={props.red ?? ""}
             options={PLATFORMS.map((r) => ({ value: r, label: PLATFORM_LABEL[r] }))}
-            onChange={props.onRed}
+            onChange={(r) => {
+              if (r) props.onRed(r);
+            }}
           />
+          {props.red === null && <p className="mt-1.5 text-xs text-bad">{t.faltaRed}</p>}
         </div>
-        <Field label={t.cuenta} className="min-w-56 flex-1">
-          <Select
-            value={props.cuenta}
-            onChange={(e) => props.onCuenta(e.target.value)}
-            options={[
-              ...props.cuentas.map((c) => ({
-                value: c.connectionId,
-                label: t.cuentaOpcion(c.handle ?? c.displayName ?? c.connectionId.slice(0, 8), c.posts, f.int(c.posts)),
-              })),
-              { value: NUEVA, label: t.cuentaNueva },
-            ]}
-          />
-        </Field>
+        {/* La cuenta depende de la red: sin red, no hay de dónde elegirla. */}
+        {props.red !== null && (
+          <Field label={t.cuenta} className="min-w-56 flex-1">
+            <Select
+              value={props.cuenta}
+              onChange={(e) => props.onCuenta(e.target.value)}
+              options={[
+                ...props.cuentas.map((c) => ({
+                  value: c.connectionId,
+                  label: t.cuentaOpcion(c.handle ?? c.displayName ?? c.connectionId.slice(0, 8), c.posts, f.int(c.posts)),
+                })),
+                { value: NUEVA, label: t.cuentaNueva },
+              ]}
+            />
+          </Field>
+        )}
       </div>
 
-      {props.cuenta === NUEVA && (
+      {props.red !== null && props.cuenta === NUEVA && (
         <Field label={t.cuentaNuevaHandle} help={t.cuentaNuevaAyuda} className="max-w-sm">
           <Input
             value={props.handleNuevo}
@@ -747,7 +790,7 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
   return (
     <section className="mt-6" aria-labelledby="paso-revisar">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 id="paso-revisar" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
+        <h2 id="paso-revisar" tabIndex={-1} className={TITULO_PASO}>
           {t.title}
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -795,7 +838,7 @@ function PasoHecho({
   return (
     <section className="mt-6" aria-labelledby="paso-hecho">
       <div className="rounded-md border border-border bg-surface px-5 py-6">
-        <h2 id="paso-hecho" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
+        <h2 id="paso-hecho" tabIndex={-1} className={TITULO_PASO}>
           {t.title}
         </h2>
         <p className="mt-1 font-mono text-2xl tabular-nums text-ink">

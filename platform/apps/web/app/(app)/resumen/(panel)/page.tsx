@@ -12,7 +12,7 @@ import { Kpis, KpisEsqueleto } from "../kpis";
 import { MESSAGES } from "../messages";
 import { parseFiltro } from "../_lib/filtro";
 
-export const metadata: Metadata = { title: "Resumen" };
+export const metadata: Metadata = { title: MESSAGES.page.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 

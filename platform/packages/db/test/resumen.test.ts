@@ -33,7 +33,7 @@ import {
   type CsvImportErrorCode,
   type CsvReading,
 } from '../src/queries/resumen.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, POST_D02_TIKTOK_CAFE_ALMA, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 /** Un workspace vecino, vacío salvo su creador: el estado "sin datos" tiene que ser NULL, no cero. */
 const WS_VECINO = '0000000c-0000-4000-8000-000000000042';
@@ -125,8 +125,21 @@ describe('Resumen · los cuatro KPIs', () => {
     assert.equal(kpis.viewsSource, 'account');
     assert.equal(kpis.hasAccountSeries, true);
 
+    // Sin cuentas nuevas en el tramo, nadie se queda fuera de la comparación.
+    assert.equal(kpis.followers.newAccounts, 0);
+    assert.equal(kpis.views.newAccounts, 0);
+    assert.equal(kpis.followers.deltaKind, 'relative');
+
     // Razones, no porcentajes ya formateados, y la base sobre la que se calcularon.
     assert.ok(kpis.nonFollowerReach.value! > 0.4 && kpis.nonFollowerReach.value! < 0.8);
+    // El alcance en no seguidores YA es un porcentaje: su variación va en
+    // puntos (diferencia de las dos razones), no en variación relativa.
+    assert.equal(kpis.nonFollowerReach.deltaKind, 'points');
+    assert.ok(kpis.nonFollowerReach.previous !== null);
+    assert.ok(
+      Math.abs(kpis.nonFollowerReach.delta! - (kpis.nonFollowerReach.value! - kpis.nonFollowerReach.previous!)) < 1e-9,
+    );
+    assert.equal(kpis.savesPer1k.deltaKind, 'relative');
     assert.ok(kpis.savesPer1k.value! > 5 && kpis.savesPer1k.value! < 40);
     assert.ok(kpis.posts > 0);
     assert.ok(kpis.nonFollowerReach.sample! > 0 && kpis.nonFollowerReach.sample! <= kpis.posts);
@@ -173,6 +186,92 @@ describe('Resumen · los cuatro KPIs', () => {
     // Ningún hueco dentro de la sparkline: siempre es el tramo final.
     for (const s of [noventa.views.spark, noventa.savesPer1k.spark]) {
       assert.ok(s.every((v) => typeof v === 'number' && Number.isFinite(v)));
+    }
+  });
+
+  test('una lectura de contenido que adelanta el reloj no le quita un día a las cifras de la cuenta', async () => {
+    // Entre las 00:00 UTC y el cierre del recolector, una lectura de un
+    // video (el propio recolector, o un CSV) lleva el reloj a un día que
+    // la serie de cuenta aún no tiene. La ventana de visualizaciones
+    // perdía ese día y el periodo anterior no: una caída falsa.
+    const leer = () =>
+      Promise.all([
+        enLaura((tx) => getResumenKpis(tx, { days: 7 })),
+        enLaura((tx) => getResumenKpis(tx, { days: 7, platform: 'tiktok' })),
+        enLaura((tx) => getResumenKpis(tx, { days: 30 })),
+      ]);
+    const [antes7, antesTiktok, antes30] = await leer();
+    const dias = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+    await t.admin(`
+      INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+      SELECT p.id, p.workspace_id,
+             ((SELECT max(a.day) FROM account_metric_snapshot a WHERE a.workspace_id = p.workspace_id) + 2)::timestamp
+               AT TIME ZONE 'UTC' + interval '30 minutes',
+             1, 1, 'api'
+        FROM post p WHERE p.id = '${POST_D02_TIKTOK_CAFE_ALMA}'`);
+    try {
+      const [despues7, despuesTiktok, despues30] = await leer();
+      // El reloj del módulo sí avanza: la lectura existe.
+      assert.equal(dias(despues7.end!), dias(antes7.end!) + 1);
+      // Pero las visualizaciones de la cuenta siguen terminando en su último día cerrado.
+      for (const [antes, despues] of [[antes7, despues7], [antesTiktok, despuesTiktok], [antes30, despues30]] as const) {
+        assert.equal(despues.views.value, antes.views.value, 'la ventana de visualizaciones perdió un día');
+        assert.equal(despues.views.delta, antes.views.delta, 'salió una variación falsa');
+        assert.deepEqual(despues.viewsWindow, antes.viewsWindow);
+        assert.equal(despues.followers.value, antes.followers.value);
+        assert.equal(despues.followers.delta, antes.followers.delta);
+      }
+      // Y la ventana de la tarjeta va por detrás del reloj, lo que la pantalla dice.
+      assert.equal(dias(despues7.viewsWindow!.end), dias(despues7.end!) - 1);
+      // Las barras terminan donde termina la tarjeta y suman lo mismo.
+      const barras = await enLaura((tx) => getViewsByBucket(tx, { days: 7 }));
+      assert.equal(barras.buckets.at(-1)!.end, despues7.viewsWindow!.end);
+      assert.equal(barras.buckets[0]!.start, despues7.viewsWindow!.start);
+      assert.equal(barras.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0), despues7.views.value);
+      // Y la curva de seguidores tampoco inventa un día.
+      const curva = await enLaura((tx) => getFollowersByPlatform(tx, { days: 7 }));
+      assert.equal(curva.labels.at(-1), despues7.viewsWindow!.end);
+    } finally {
+      await t.admin(
+        `DELETE FROM post_metric_snapshot WHERE post_id = '${POST_D02_TIKTOK_CAFE_ALMA}' AND captured_at > now()`,
+      );
+    }
+  });
+
+  test('una cuenta conectada dentro del periodo suma en la cifra pero no mueve la comparación', async () => {
+    // Conectar un canal de 300 000 seguidores hace diez días pasaba la
+    // tarjeta de «+3 %» a «+79 %», con una subida que nunca pasó.
+    const antes = await enLaura((tx) => getResumenKpis(tx, { days: 30 }));
+    const nueva = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'canal.nuevo' }));
+    try {
+      await enLaura((tx) =>
+        tx.query(
+          `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, views)
+           SELECT $1, current_workspace_id(), d::date, 300000, 5000
+             FROM generate_series((SELECT max(day) - 9 FROM account_metric_snapshot),
+                                  (SELECT max(day) FROM account_metric_snapshot), interval '1 day') AS d`,
+          [nueva.connectionId],
+        ),
+      );
+      const despues = await enLaura((tx) => getResumenKpis(tx, { days: 30 }));
+
+      // La cifra es el total de hoy, con la cuenta nueva…
+      assert.equal(despues.followers.value, antes.followers.value! + 300_000);
+      assert.equal(despues.views.value, antes.views.value! + 10 * 5000);
+      // …pero la comparación y la línea son entre las mismas cuentas.
+      assert.equal(despues.followers.delta, antes.followers.delta);
+      assert.equal(despues.followers.previous, antes.followers.previous);
+      assert.deepEqual(despues.followers.spark, antes.followers.spark);
+      assert.equal(despues.views.delta, antes.views.delta);
+      assert.deepEqual(despues.views.spark, antes.views.spark);
+      // Y la tarjeta puede decir cuántas se quedaron fuera.
+      assert.equal(despues.followers.newAccounts, 1);
+      assert.equal(despues.views.newAccounts, 1);
+      // Las barras la cuentan, como la cifra.
+      const barras = await enLaura((tx) => getViewsByBucket(tx, { days: 30 }));
+      assert.equal(barras.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0), despues.views.value);
+    } finally {
+      await t.admin(`DELETE FROM social_connection WHERE id = '${nueva.connectionId}'`);
     }
   });
 
@@ -257,8 +356,10 @@ describe('Resumen · las dos series', () => {
       assert.equal(days % bucketStep(days), 0, `${days} días no se reparten en barras de ${bucketStep(days)}`);
       const serie = await enLaura((tx) => getViewsByBucket(tx, { days }));
       const kpis = await enLaura((tx) => getResumenKpis(tx, { days }));
-      assert.equal(serie.buckets[0]!.start, kpis.start, `con ${days} días el gráfico empieza otro día que la tarjeta`);
-      assert.equal(serie.buckets.at(-1)!.end, kpis.end);
+      assert.equal(serie.buckets[0]!.start, kpis.viewsWindow!.start, `con ${days} días el gráfico empieza otro día que la tarjeta`);
+      assert.equal(serie.buckets.at(-1)!.end, kpis.viewsWindow!.end);
+      // Con la cuenta al día, la ventana de la tarjeta es la del periodo.
+      assert.deepEqual(kpis.viewsWindow, { start: kpis.start, end: kpis.end });
       // Y suman lo mismo: el total de las barras ES la cifra de la tarjeta.
       const total = serie.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0);
       assert.equal(total, kpis.views.value, `con ${days} días las barras y la tarjeta no cuadran`);
@@ -334,6 +435,27 @@ describe('Resumen · frescura y cobertura', () => {
     const vecino = await t.db.withWorkspace(WS_VECINO, (tx) => getResumenCoverage(tx));
     assert.deepEqual(vecino, { connections: 0, withData: 0 });
     assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => countPosts(tx)), 0);
+  });
+
+  test('una conexión que ya descubrió sus videos pero no midió nada sigue «sin datos»', async () => {
+    // La conexión OAuth recién hecha: el recolector ya listó los posts y
+    // todavía no tomó ninguna lectura. La página tiene que pintar el vacío
+    // «conectadas pero sin lecturas», no cuatro «—» y dos gráficos vacíos.
+    const cuenta = await t.db.withWorkspace(WS_VECINO, (tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'sin.lecturas' }));
+    try {
+      await t.db.withWorkspace(WS_VECINO, (tx) =>
+        tx.query(
+          `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, published_at)
+           SELECT current_workspace_id(), sc.creator_id, sc.id, sc.platform_id, 'descubierto_1', now() - interval '2 days'
+             FROM social_connection sc WHERE sc.id = $1`,
+          [cuenta.connectionId],
+        ),
+      );
+      assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => countPosts(tx)), 1);
+      assert.deepEqual(await t.db.withWorkspace(WS_VECINO, (tx) => getResumenCoverage(tx)), { connections: 1, withData: 0 });
+    } finally {
+      await t.admin(`DELETE FROM social_connection WHERE id = '${cuenta.connectionId}'`);
+    }
   });
 });
 
@@ -464,6 +586,39 @@ describe('Resumen · importación por CSV', () => {
     // total_interactions e interacciones de seguidores salen derivadas, no del archivo.
     assert.equal(Number(filas[0]!.total_interactions), 80 + 4 + 9 + 22);
     assert.equal(Number(filas[0]!.reach_followers), 900 - 600);
+  });
+
+  test('una fila sin ninguna interacción no guarda una interacción de cero', async () => {
+    // Un archivo mapeado a mano solo con Visualizaciones: «no lo sabemos»
+    // no es «fue cero», y las tasas de interacción leen esta columna.
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'solo.visualizaciones' }));
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'tiktok',
+        rows: [
+          fila('solo_views', {
+            reach: null, likes: null, comments: null, shares: null, saves: null,
+            followsFromPost: null, reachNonFollowers: null,
+          }),
+          // Con una sola interacción conocida, las demás cuentan como cero.
+          fila('solo_likes', { likes: 7, comments: null, shares: null, saves: null }),
+        ],
+      }),
+    );
+    const filas = await enLaura((tx) =>
+      tx.query<{ external_post_id: string; total_interactions: string | null; views: string }>(
+        `SELECT p.external_post_id, s.total_interactions, s.views
+           FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+          WHERE p.connection_id = $1 ORDER BY p.external_post_id`,
+        [cuenta.connectionId],
+      ).then((r) => r.rows),
+    );
+    assert.deepEqual(
+      filas.map((f) => [f.external_post_id, f.total_interactions === null ? null : Number(f.total_interactions)]),
+      [['solo_likes', 7], ['solo_views', null]],
+    );
+    assert.equal(Number(filas[1]!.views), 1000);
   });
 
   test('el mismo archivo dos veces añade lecturas y no duplica el video', async () => {

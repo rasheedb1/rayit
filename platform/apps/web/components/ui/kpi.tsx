@@ -14,6 +14,14 @@ export type KpiProps = {
   delta?: number;
   /** "vs. mismo período 2025". */
   deltaLabel?: string;
+  /**
+   * El delta ya formateado, cuando no es una variación relativa: la
+   * diferencia de dos porcentajes se dice en puntos («+2,1 puntos»), no
+   * en «+4 %». Si falta, se escribe formatDelta(delta). La flecha y el
+   * color siguen saliendo de `delta` (o de `trend`): pasa `trend` si el
+   * texto redondea con otras cifras que las de formatDelta.
+   */
+  deltaText?: string;
   /** Si falta, se deduce del signo de delta: si el texto redondea a "0 %", es flat. */
   trend?: Trend;
   /** Serie corta, decorativa: el valor ya está en texto. */
@@ -63,7 +71,7 @@ export function Sparkline({ values, className = "" }: { values: number[]; classN
 
 const CARD = "flex min-w-0 flex-col gap-0.5 bg-surface px-4 pb-3 pt-3.5";
 
-export function Kpi({ label, value, note, delta, deltaLabel, trend, sparkline, href, loading = false, className = "" }: KpiProps) {
+export function Kpi({ label, value, note, delta, deltaLabel, deltaText, trend, sparkline, href, loading = false, className = "" }: KpiProps) {
   if (loading) {
     return (
       <div className={`${CARD} ${className}`} aria-busy="true" aria-label={`${label}: cargando`}>
@@ -81,7 +89,7 @@ export function Kpi({ label, value, note, delta, deltaLabel, trend, sparkline, h
       {delta !== undefined ? (
         <span className={`inline-flex flex-wrap items-center gap-x-1.5 text-xs font-medium ${TREND_COLOR[t]}`}>
           <Arrow trend={t} />
-          <span>{formatDelta(delta, 0)}</span>
+          <span>{deltaText ?? formatDelta(delta, 0)}</span>
           {deltaLabel && <span className="font-normal text-muted">{deltaLabel}</span>}
         </span>
       ) : null}

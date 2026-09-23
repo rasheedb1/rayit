@@ -141,6 +141,21 @@ export function formatDelta(ratio: number, digits = 0, opts: LocaleOpts = {}): s
   return `${rounded > 0 ? "+" : MINUS}${decimals(Math.abs(pct), digits, locale)} %`;
 }
 
+/**
+ * La diferencia entre dos razones, en puntos porcentuales y con signo:
+ * 0.021 → "+2,1" · −0.004 → "−0,4" · 0 → "0,0". Sin unidad: la pone el
+ * archivo de textos del módulo («+2,1 puntos»). Para el delta de un KPI
+ * que ya es un porcentaje, donde «+4 %» se lee como puntos aunque sea
+ * una variación relativa. Añadido por Resumen (RES-1).
+ */
+export function formatPoints(diff: number, digits = 1, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const pts = diff * 100;
+  const rounded = Number(pts.toFixed(digits));
+  if (rounded === 0) return decimals(0, digits, locale);
+  return `${rounded > 0 ? "+" : MINUS}${decimals(Math.abs(pts), digits, locale)}`;
+}
+
 function utcDate(iso: string): Date {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
   if (Number.isNaN(d.getTime())) throw new Error(`No es una fecha ISO: "${iso}"`);
@@ -203,7 +218,13 @@ export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
  * "28/8–1/9" entre dos. Para la etiqueta de una barra que cubre varios
  * días: cabe donde "26–30 ago" no, y el tooltip y la tabla dicen el
  * rango exacto y no solo el primer día. Añadido por Resumen (RES-1).
+ *
+ * El guion va entre dos WORD JOINER (U+2060, invisibles): el navegador
+ * puede partir la línea después de un guion, y en la tabla de «Ver
+ * tabla» el rango salía en dos líneas («24–» y «28/8») aun a 1440 px.
  */
+export const RANGE_DASH = "⁠–⁠";
+
 export function formatDayMonthRange(fromIso: string, toIso: string, opts: LocaleOpts = {}): string {
   if (fromIso === toIso) return formatDayMonth(fromIso, opts);
   const locale = opts.locale ?? DEFAULT_LOCALE;
@@ -213,9 +234,9 @@ export function formatDayMonthRange(fromIso: string, toIso: string, opts: Locale
   if (zoneFor(fromIso, opts) === zone && sameMonthIn(a, b, zone)) {
     const parts = dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zone }).formatToParts(b);
     const desde = dayOfMonth(a, zone);
-    return plain(parts.map((p) => (p.type === "day" ? `${desde}–${p.value}` : p.value)).join(""));
+    return plain(parts.map((p) => (p.type === "day" ? `${desde}${RANGE_DASH}${p.value}` : p.value)).join(""));
   }
-  return `${formatDayMonth(fromIso, opts)}–${formatDayMonth(toIso, opts)}`;
+  return `${formatDayMonth(fromIso, opts)}${RANGE_DASH}${formatDayMonth(toIso, opts)}`;
 }
 
 /** "2026-08-24", "2026-08-31" → "24–31 ago" · meses distintos → "28 ago – 3 sep". */
@@ -273,6 +294,7 @@ export function formatterFor(settings: FormatSettings) {
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
+    points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),

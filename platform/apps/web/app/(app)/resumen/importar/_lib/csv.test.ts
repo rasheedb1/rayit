@@ -333,6 +333,20 @@ describe("un archivo que no reconocemos", () => {
     expect(mapeo.views).toBe("Reproducciones");
     expect(mapeo.likes).toBe("Me gusta");
     expect(mapeo.saves).toBe("Veces guardado");
+    // Las etiquetas de Meta y TikTok en español también.
+    expect(mapeo.reach).toBe("Personas alcanzadas");
+    expect(mapeo.title).toBe("Texto");
+  });
+
+  it("las etiquetas habituales en español se mapean solas", () => {
+    expect(
+      mapearPorAlias(["Publicado el", "Texto", "Personas alcanzadas", "Reproducciones", "Enlace"]),
+    ).toMatchObject({ publishedAt: "Publicado el", title: "Texto", reach: "Personas alcanzadas", views: "Reproducciones", url: "Enlace" });
+    expect(mapearPorAlias(["Fecha de publicación", "Descripción", "Cuentas alcanzadas"])).toMatchObject({
+      publishedAt: "Fecha de publicación",
+      title: "Descripción",
+      reach: "Cuentas alcanzadas",
+    });
   });
 
   it("dice qué falta antes de dejar importar", () => {
@@ -340,7 +354,7 @@ describe("un archivo que no reconocemos", () => {
   });
 
   it("con el mapeo hecho a mano, importa", () => {
-    const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Publicado el", reach: "Personas alcanzadas" };
+    const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Día de salida" };
     expect(faltantesDelMapeo(aMano)).toEqual([]);
     const r = revisar(tabla, aMano, { timeZone: BOGOTA, locale: "es-CO" });
     expect(r.errores).toBe(0);
@@ -354,7 +368,7 @@ describe("un archivo que no reconocemos", () => {
   });
 
   it("el propio archivo demuestra que es día/mes, aunque el workspace escriba mes/día", () => {
-    const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Publicado el" };
+    const aMano = { ...mapeo, externalPostId: "Referencia interna", publishedAt: "Día de salida" };
     // «15/09/2026» solo puede ser día/mes, así que «10/09/2026» es el 10
     // de septiembre también en un workspace en-US, y aunque alguien
     // pidiera mes/día: el otro orden dejaría esa fila ilegible.

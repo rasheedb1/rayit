@@ -223,6 +223,22 @@ que hace falta saber para tocar el módulo sin romperlo.
   contenido (una lectura tomada el día D, en UTC, cubre hasta D-1). El
   aviso de frescura usa la misma regla y devuelve días, no instantes,
   para que ninguna fecha de la página se corra por la zona horaria.
+- Pero las **sumas de la cuenta** (visualizaciones, seguidores, sus dos
+  gráficos) terminan en el último día que cerró la serie de cuenta *de
+  las conexiones del filtro*, no en el reloj: una lectura de contenido
+  de madrugada adelantaba el reloj y la ventana perdía un día (una caída
+  falsa de ~14 % con 7 días). Cuando va por detrás, la tarjeta lo dice.
+- La **comparación es entre las mismas cuentas**: la cifra suma todas,
+  pero el periodo anterior, la variación y la sparkline salen solo de
+  las que ya se medían al empezar el tramo comparado. Conectar un canal
+  de 300 000 seguidores no es crecer un 79 %; la tarjeta dice cuántas
+  cuentas nuevas quedan fuera.
+- Los días son **días cerrados en UTC**, por convención del repositorio:
+  `account_metric_snapshot.day` es el día de la plataforma y no se puede
+  pasar a otra zona. Cada «datos hasta el…» lo dice.
+- El alcance en no seguidores ya es un porcentaje: su variación va en
+  **puntos** («+2,1 puntos»), no relativa. Los guardados por mil siguen
+  en variación relativa.
 - Una ventana que la historia no cubre sale **NULL, no cero**. Un
   workspace sin conexiones ve el estado vacío; uno conectado sin
   lecturas, el que ofrece importar. Lo prueba `resumen/page.test.tsx`.
@@ -231,14 +247,18 @@ que hace falta saber para tocar el módulo sin romperlo.
   lectura de cada video: `post_metrics_at_cut` no trae alcance en no
   seguidores y un video importado tiene una sola lectura.
 - Las barras **cubren exactamente el periodo** y su total cuadra con la
-  tarjeta: 7 × 1 día, 6 × 5 días, 9 × 10 días. Las doce semanas del mock
-  no caben: son 84 días, y la última etiqueta se pisa con la anterior en
-  la rejilla de `BarChart`. Tenerlas pide que el kit acepte elegir qué
-  etiquetas pinta (pendiente con Nicolás). Cada barra de varios días se
-  etiqueta con su rango («26–30/8»), que es lo que dicen el tooltip y la
-  tabla.
+  tarjeta: 7 × 1 día, 6 × 5 días, 9 × 10 días. **No cumple tal cual el
+  criterio del mock** (12 semanas): son 84 días, y la última etiqueta se
+  pisa con la anterior en la rejilla de `BarChart`. Tenerlas pide que el
+  kit deje elegir qué etiquetas pinta (Nicolás): RES-5, bloqueada. Cada
+  barra de varios días lleva su rango («26–30/8») en el tooltip y en la
+  tabla, con el guion unido a sus lados para que no se parta, y bajo la
+  barra solo el día final (`axisLabels`, añadido al kit sin cambiar su
+  API): a 400 px dos rangos seguidos se pisaban.
 - La frescura señala la conexión que no está sana (vencida, revocada,
   con error, pausada) y la que va más de dos días por detrás del resto.
+- «Con datos» es con alguna **lectura**: una conexión que descubrió sus
+  videos y no midió nada ve el vacío «conectadas pero sin lecturas».
 
 **La importación (RES-2).**
 
@@ -264,6 +284,13 @@ que hace falta saber para tocar el módulo sin romperlo.
   duración hasta lo que cabe en `numeric(8,2)`, enlaces solo http(s),
   títulos de 2 200 caracteres e ids de 256. La fila «Total» se descarta
   sin contarse como error.
+- Sin formato reconocido, **la red no se da por supuesta**: la elige la
+  persona antes de seguir, igual que las columnas obligatorias.
+- Un archivo sin ninguna columna de interacción deja
+  `total_interactions` en NULL, no en 0.
+- El techo de 6 MB de las server actions es **global** en Next: sube el
+  de todas. Mover la importación a un route handler con su límite es
+  RES-6.
 - El archivo se valida en el navegador para la vista previa y otra vez
   en la server action, que no se fía del navegador. `importCsvReadings`
   se protege sola: valida la cuenta, la fecha y los duplicados, y los

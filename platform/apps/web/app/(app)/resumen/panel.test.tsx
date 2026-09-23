@@ -41,6 +41,7 @@ const serie = (value: number | null, extra: Partial<KpiSeries> = {}): KpiSeries 
   value,
   previous: null,
   delta: null,
+  deltaKind: "relative",
   spark: [],
   ...extra,
 });
@@ -52,7 +53,8 @@ const KPIS_SOLO_CSV: ResumenKpis = {
   followers: serie(null),
   views: serie(4000),
   viewsSource: "content",
-  nonFollowerReach: serie(0.6667, { sample: 2 }),
+  viewsWindow: { start: "2026-08-23", end: "2026-09-21" },
+  nonFollowerReach: serie(0.6667, { sample: 2, deltaKind: "points" }),
   savesPer1k: serie(13, { sample: 1234 }),
   posts: 2,
   hasAccountSeries: false,
@@ -79,7 +81,7 @@ describe("los KPIs", () => {
   });
 
   it("con cuenta: las visualizaciones son de la cuenta y los cuatro comparan", async () => {
-    const con = (v: number): KpiSeries => ({ value: v, previous: v / 2, delta: 1, spark: [v / 2, v], sample: 10 });
+    const con = (v: number): KpiSeries => ({ value: v, previous: v / 2, delta: 1, deltaKind: "relative", spark: [v / 2, v], sample: 10 });
     consultas.getResumenKpis.mockResolvedValue({
       ...KPIS_SOLO_CSV,
       followers: con(412_000),
@@ -93,6 +95,50 @@ describe("los KPIs", () => {
     expect(screen.getByText("De tus cuentas, no solo de lo publicado en el periodo")).toBeInTheDocument();
     expect(screen.queryByText(/Llegan al conectar la cuenta/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/vs\. /)).toHaveLength(4);
+  });
+
+  it("el alcance en no seguidores, que ya es un porcentaje, compara en puntos y no en «%»", async () => {
+    consultas.getResumenKpis.mockResolvedValue({
+      ...KPIS_SOLO_CSV,
+      // De 53,9 % a 56 %: +2,1 puntos (relativo serían +4 %).
+      nonFollowerReach: serie(0.56, { previous: 0.539, delta: 0.021, deltaKind: "points", sample: 12, spark: [0.539, 0.56] }),
+    } satisfies ResumenKpis);
+    render(await Kpis({ filtro: FILTRO }));
+    expect(screen.getByText("56 %")).toBeInTheDocument();
+    expect(screen.getByText("+2,1 puntos")).toBeInTheDocument();
+    expect(screen.queryByText("+4 %")).not.toBeInTheDocument();
+    expect(screen.getByText("+2,1 puntos").parentElement).toHaveClass("text-good");
+  });
+
+  it("las cuentas nuevas suman en la cifra y la tarjeta dice que no entran en la comparación", async () => {
+    consultas.getResumenKpis.mockResolvedValue({
+      ...KPIS_SOLO_CSV,
+      followers: serie(712_000, { previous: 400_000, delta: 0.03, spark: [400_000, 412_000], newAccounts: 1 }),
+      views: serie(2_650_000, { previous: 2_200_000, delta: 0.2, spark: [1, 2], newAccounts: 2 }),
+      viewsSource: "account",
+      hasAccountSeries: true,
+    } satisfies ResumenKpis);
+    render(await Kpis({ filtro: FILTRO }));
+    expect(screen.getByText("+3 %")).toBeInTheDocument();
+    expect(screen.getByText("1 cuenta nueva no entra en la comparación")).toBeInTheDocument();
+    expect(
+      screen.getByText("De tus cuentas, no solo de lo publicado en el periodo · 2 cuentas nuevas no entran en la comparación"),
+    ).toBeInTheDocument();
+  });
+
+  it("si la cuenta aún no cerró el último día, la tarjeta de visualizaciones dice hasta cuándo suma", async () => {
+    consultas.getResumenKpis.mockResolvedValue({
+      ...KPIS_SOLO_CSV,
+      end: "2026-09-21",
+      views: serie(2_600_000, { previous: 2_500_000, delta: 0.04, spark: [1, 2] }),
+      viewsSource: "account",
+      viewsWindow: { start: "2026-08-22", end: "2026-09-20" },
+      hasAccountSeries: true,
+    } satisfies ResumenKpis);
+    render(await Kpis({ filtro: FILTRO }));
+    expect(
+      screen.getByText("De tus cuentas, no solo de lo publicado en el periodo · Hasta el 20 sep, el último día que cerró la cuenta"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -122,17 +168,27 @@ describe("los dos gráficos", () => {
     expect(screen.getByRole("img", { name: "Visualizaciones por red y periodo" })).toBeInTheDocument();
   });
 
-  it("una barra de varios días dice su rango exacto, en el eje y en la tabla", async () => {
+  it("una barra de varios días: el día final bajo la barra y el rango exacto en la tabla, sin partirse", async () => {
     consultas.getFollowersByPlatform.mockResolvedValue(SIN_SEGUIDORES);
     consultas.getViewsByBucket.mockResolvedValue(VIEWS_POR_CONTENIDO);
     render(await Graficos({ filtro: FILTRO }));
-    // El eje ya lo dice: no «14/9», que se leía como un solo día.
-    expect(screen.getByText("14–17/9")).toBeInTheDocument();
     const tarjeta = screen.getByRole("heading", { name: "Visualizaciones por red" }).closest("article")!;
+    // Bajo la barra, solo el día final: dos rangos seguidos se pisaban a 400 px.
+    const eje = [...tarjeta.querySelectorAll("svg text")].map((t) => t.textContent);
+    expect(eje).toEqual(expect.arrayContaining(["17/9", "21/9"]));
+    expect(eje.some((t) => t?.includes("–"))).toBe(false);
     within(tarjeta).getByRole("button", { name: "Ver tabla" }).click();
     const tabla = await within(tarjeta).findByRole("table");
     expect(within(tabla).getByRole("columnheader", { name: "Días" })).toBeInTheDocument();
-    expect(within(tabla).getByRole("rowheader", { name: "18–21/9" })).toBeInTheDocument();
+    // El rango, con el guion unido a sus dos lados (WORD JOINER): no se parte en dos líneas.
+    expect(within(tabla).getByRole("rowheader", { name: "18\u2060–\u206021/9" })).toBeInTheDocument();
+  });
+
+  it("cada «datos hasta el…» dice que es un día cerrado en UTC", async () => {
+    consultas.getFollowersByPlatform.mockResolvedValue(SIN_SEGUIDORES);
+    consultas.getViewsByBucket.mockResolvedValue(VIEWS_POR_CONTENIDO);
+    render(await Graficos({ filtro: FILTRO }));
+    expect(screen.getByText(/día cerrado en UTC/)).toBeInTheDocument();
   });
 
   it("con cuenta pero sin datos en el periodo: el vacío de siempre, con su salida", async () => {
@@ -216,6 +272,11 @@ describe("el aviso de frescura", () => {
     const lineas = screen.getAllByText(/datos hasta el/).map((p) => p.textContent);
     // La de la API sigue diciendo el 15: el CSV de hoy no la tapa.
     expect(lineas).toEqual(["datos hasta el 15 sep · API", "datos hasta el 21 sep · CSV importado"]);
+  });
+
+  it("dice una vez, bajo el título, que cada fecha es un día cerrado en UTC", () => {
+    render(<FrescuraLista filas={[base]} f={f} />);
+    expect(screen.getAllByText("Cada fecha es un día cerrado en UTC.")).toHaveLength(1);
   });
 
   it("sin ninguna lectura, lo dice", () => {

@@ -7,7 +7,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../messages";
 import { Asistente } from "./asistente";
 
-export const metadata: Metadata = { title: "Importar un CSV" };
+export const metadata: Metadata = { title: MESSAGES.importar.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 

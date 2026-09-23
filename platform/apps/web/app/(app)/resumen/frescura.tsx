@@ -70,6 +70,8 @@ export function FrescuraLista({ filas, f }: { filas: readonly ConnectionFreshnes
       >
         <span id="frescura">{t.title}</span>
       </SectionTitle>
+      {/* Una vez para toda la lista: cada «datos hasta el…» es un día cerrado en UTC. */}
+      <p className="-mt-1 mb-3 text-xs text-muted">{MESSAGES.zona.frescura}</p>
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {filas.map((c) => {
           const sincronizado = c.lastAccountDay ?? c.lastSyncedReadingDay;
