@@ -1,13 +1,18 @@
 -- =====================================================================
--- 0026 · Enlaces públicos de Cotizar: media kit y cotización
+-- 0030 · Enlaces públicos de Cotizar: media kit y cotización
 --        (COT-2, COT-3, COT-4)
 -- ---------------------------------------------------------------------
 -- Número: 0022 es de CON-10 (0022_public_profile_access, en main y
--- aplicada), 0023 está reservada para ACC-3, 0024 y 0025 para el pase
--- de endurecimiento de RLS y 0027/0028 para CIM-3. Esta migración nació
--- en dos archivos (0022 + 0023 de las rondas 1 y 2 de Cotizar, ninguno
--- aplicado); aquí van fundidos en el estado final, sin el paso
--- intermedio de políticas abiertas que el segundo corregía.
+-- aplicada), 0023 está reservada para ACC-3, 0024–0026 y 0029 son del
+-- pase de endurecimiento de RLS y 0027/0028 de CIM-3. Esta migración
+-- nació en dos archivos (0022 + 0023 de las rondas 1 y 2 de Cotizar,
+-- ninguno aplicado), llegó a rasheed/integracion como 0026 y pasó a
+-- 0030 al integrar el endurecimiento, que ya tenía su propia 0026. No
+-- se había aplicado en ninguna base persistente. Aquí van fundidos en
+-- el estado final, sin el paso intermedio de políticas abiertas que el
+-- segundo corregía. Va la última: cuenta con 0024 (aislamiento por
+-- defecto: sus políticas llevan TO), 0025 (disparadores de referencias)
+-- y 0029.
 --
 -- El problema: /kit/<slug> y /cotizacion/<slug> se abren SIN sesión y
 -- sin workspace, y media_kit, quote y deal llevan RLS con FORCE. Sin

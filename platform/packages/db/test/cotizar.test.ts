@@ -182,7 +182,7 @@ describe('COT-1 · tarifario', () => {
       RangoDeTarifaInvalido,
     );
 
-    // Y si alguien escribe sin pasar por las consultas, el CHECK de 0026 lo para.
+    // Y si alguien escribe sin pasar por las consultas, el CHECK de 0030 lo para.
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
         tx.query('UPDATE rate_card_item SET price_low = 9000000, price_high = 1 WHERE id = $1', [primero.id])),
@@ -636,9 +636,9 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
   });
 });
 
-// ------------------------------------------------ la cerradura (0026)
+// ------------------------------------------------ la cerradura (0030)
 
-describe('0026 · el enlace público corre con su propio rol', () => {
+describe('0030 · el enlace público corre con su propio rol', () => {
   test('la sonda: mc_app con el parámetro fijado a mano no ve ni escribe nada', async () => {
     const [una] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['accepted'] }));
     assert.ok(una);
@@ -1080,21 +1080,19 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
   });
 });
 
-describe('0026 con los disparadores de referencias de 0025', () => {
-  test('aceptar desde el enlace sigue funcionando cuando cada clave ajena exige ver a su padre', async (ctx) => {
-    // 0025 (pase de endurecimiento, otra rama) crea assert_reference_visible()
-    // y un disparador por clave ajena hacia una tabla con RLS. Corre con los
+describe('0030 con los disparadores de referencias de 0025', () => {
+  test('aceptar desde el enlace sigue funcionando cuando cada clave ajena exige ver a su padre', async () => {
+    // 0025 (pase de endurecimiento) crea assert_reference_visible() y un
+    // disparador por clave ajena hacia una tabla con RLS. Corre con los
     // permisos de quien escribe: al aceptar, mc_public_share tiene que poder
-    // LEER la etapa del negocio (GRANT y política de 0026). Hasta que 0025
-    // llegue a esta rama, la prueba se salta sola.
+    // LEER la etapa del negocio (GRANT y política de 0030). Desde que el
+    // endurecimiento está integrado la función tiene que existir: ya no se
+    // salta.
     const existe = await t.db.withCatalogs(async (tx) => {
       const { rows } = await tx.query<{ f: string | null }>("SELECT to_regproc('public.assert_reference_visible')::text AS f");
       return rows[0]!.f !== null;
     });
-    if (!existe) {
-      ctx.skip('assert_reference_visible() no existe todavía (0025 no está en esta rama)');
-      return;
-    }
+    assert.ok(existe, 'assert_reference_visible() no existe: falta 0025_referencias_visibles.sql');
     // En PGlite mc_app recibe sus privilegios DESPUÉS de migrar, así que el
     // bucle de 0025 no encontró tablas; se crean aquí los de estas tres.
     await t.admin(`

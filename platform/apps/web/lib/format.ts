@@ -72,6 +72,32 @@ function decimals(n: number, digits: number, locale: string): string {
   return plain(numberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n));
 }
 
+/**
+ * Lo mismo, pero desde el TEXTO del decimal y sin pasar por double.
+ *
+ * Es la regla del repositorio aplicada hasta el final: el dinero es
+ * `numeric(14,2)` y viaja como texto precisamente para no perder
+ * centavos, así que convertirlo a `number` para presentarlo deshace lo
+ * que la columna protege — numeric(14,2) admite valores que un double
+ * no representa exacto. Intl.NumberFormat acepta un texto decimal desde
+ * su versión 3 (Node 20) y lo formatea tal cual; los tipos de
+ * TypeScript todavía declaran solo number|bigint, de ahí el aserto.
+ */
+function decimalsFromText(amount: string, digits: number, locale: string): string {
+  const f = numberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return plain((f.format as (value: string) => string)(amount));
+}
+
+/**
+ * Los centavos de un decimal, leídos del texto (que es donde están) y
+ * no de `Math.round(abs * 100) % 100`, que primero lo rompe y luego
+ * pregunta. "" cuando no hay ninguno distinto de cero.
+ */
+function centsOf(amount: string): string {
+  const dot = amount.indexOf('.');
+  return dot === -1 ? '' : amount.slice(dot + 1).replace(/0+$/, '');
+}
+
 /** "1234567" → 1234567. Lanza si el texto no es un decimal. */
 export function parseDecimal(amountDecimal: string): number {
   const s = amountDecimal.trim();
@@ -95,20 +121,27 @@ export function formatMoney(
 ): string {
   const mode = opts.mode ?? "compact";
   const locale = opts.locale ?? DEFAULT_LOCALE;
-  const value = parseDecimal(amountDecimal);
+  const text = amountDecimal.trim();
+  const value = parseDecimal(text);
   const sign = value < 0 ? MINUS : "";
   const abs = Math.abs(value);
+  // El texto sin signo: es lo que se formatea, para no perder centavos.
+  const absText = text.replace(/^-/, "");
   const code = currency.toUpperCase();
 
+  // La notación compacta ("5,2 M") es una aproximación a un decimal
+  // por definición, así que ahí el double no quita nada: la cifra ya
+  // está redondeada a propósito.
   if (mode === "compact" && abs >= 1e6) {
     const millions = abs / 1e6;
     const body = millions >= 1000 ? decimals(Math.round(millions), 0, locale) : decimals(millions, 1, locale);
     return `${sign}${code} ${body} M`;
   }
-  if (mode === "compact") return `${sign}${code} ${decimals(Math.round(abs), 0, locale)}`;
+  if (mode === "compact") return `${sign}${code} ${decimalsFromText(absText, 0, locale)}`;
 
-  const cents = Math.round(abs * 100) % 100;
-  return `${sign}${code} ${decimals(abs, cents === 0 ? 0 : 2, locale)}`;
+  // En "full" se enseña la cifra entera, y ahí sí importa cada centavo:
+  // se formatea desde el texto y los centavos se leen del texto.
+  return `${sign}${code} ${decimalsFromText(absText, centsOf(absText) === "" ? 0 : 2, locale)}`;
 }
 
 /** 1234567 → "1.234.567" */

@@ -8,10 +8,15 @@
 --   0022  main: 0022_public_profile_access.sql (CON-10), YA APLICADA en
 --         Supabase.
 --   0023  reservada en main para ACC-3 (accesos y roles).
---   0024  rasheed/endurecer-db: 0024_aislamiento_por_defecto.sql
---   0025  rasheed/endurecer-db: 0025_referencias_visibles.sql
---   0026  rasheed/COT-1-cotizar: hoy 0022_public_share.sql en su rama,
---         pendiente de renumerar (choca con la de main).
+--   0024  endurecimiento: 0024_aislamiento_por_defecto.sql
+--   0025  endurecimiento: 0025_referencias_visibles.sql
+--   0026  endurecimiento: 0026_duenos_unicos_secuencias.sql
+--
+-- Y detrás: 0029_supresion_verificada_filas_que_nombran.sql
+-- (endurecimiento) y 0030_public_share.sql (Cotizar, que fue 0026
+-- hasta integrar el endurecimiento). Así quedó al integrar
+-- rasheed/endurecer-db-r5 en rasheed/integracion; ninguna de 0024 a
+-- 0030 está aplicada en Supabase todavía.
 --
 -- Estas dos de CIM-3 van DETRÁS de todas, y el orden importa de verdad,
 -- no solo por no chocar: 0024 §7 hace REVOKE INSERT ON membership FROM

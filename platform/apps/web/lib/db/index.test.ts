@@ -47,11 +47,16 @@ describe("withWorkspace toma el workspace de lib/workspace/current", () => {
     expect(rows.map((r) => r.number).sort()).toEqual(["FV-2026-007", "FV-2026-010", "FV-2026-011"]);
   });
 
-  test("con DEMO_WORKSPACE_ID apuntando a otro workspace, la lista sale vacía", async () => {
+  test("con DEMO_WORKSPACE_ID apuntando a un workspace que no existe, no pinta una lista vacía: lanza", async () => {
+    // Hasta la ronda 5 salía vacía, y Campañas y Conexiones pintaban
+    // «Todavía no hay campañas» como si fuera un workspace nuevo. Ahora
+    // withWorkspace comprueba la fila y el error cae en la frontera.
     process.env.DEMO_WORKSPACE_ID = OTRO;
-    const { rows } = await withWorkspace((tx) => listInvoices(tx));
-    expect(rows).toEqual([]);
-    delete process.env.DEMO_WORKSPACE_ID;
+    try {
+      await expect(withWorkspace((tx) => listInvoices(tx))).rejects.toThrow(/no existe en esta base/);
+    } finally {
+      delete process.env.DEMO_WORKSPACE_ID;
+    }
   });
 
   test("con DEMO_WORKSPACE_ID igual al del seed vuelve a verse todo", async () => {

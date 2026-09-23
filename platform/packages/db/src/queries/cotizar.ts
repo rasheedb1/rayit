@@ -22,7 +22,7 @@
  * readPublicQuote, acceptPublicQuote) son la excepción explicada: no
  * reciben WorkspaceTx porque la marca abre el enlace sin sesión, sino un
  * PublicShareTx, que solo abre `db.withPublicShare`. No consultan
- * tablas: llaman a las funciones SECURITY DEFINER de la migración 0026,
+ * tablas: llaman a las funciones SECURITY DEFINER de la migración 0030,
  * que corren como mc_public_share y son a la vez la puerta y el registro
  * de la visita. Ver su cabecera para por qué las políticas llevan
  * `TO mc_public_share`.
@@ -174,7 +174,7 @@ function scryptAsync(secreto: string, salt: Buffer): Promise<Buffer> {
 /**
  * Deriva la contraseña de un enlace. Formato: 's1:<sal hex>:<scrypt hex>'.
  * La contraseña en claro no se guarda ni viaja a la base: la base
- * compara derivados (ver la migración 0026).
+ * compara derivados (ver la migración 0030).
  */
 export async function hashSharePassword(secreto: string, saltHex = randomBytes(16).toString('hex')): Promise<string> {
   const clave = await scryptAsync(secreto.normalize('NFKC'), Buffer.from(saltHex, 'hex'));
@@ -1029,7 +1029,7 @@ interface RawQuote {
  * Bogotá, no a las 19:00. La fecha de vencimiento derivada es el
  * principio del día siguiente en esa zona, que es cuando dejó de valer.
  *
- * Es la misma regla que aplica public_quote() (0026) al abrir el enlace,
+ * Es la misma regla que aplica public_quote() (0030) al abrir el enlace,
  * que además la persiste. Aquí solo se lee: un GET del panel no escribe.
  */
 const SELECT_QUOTE = `
@@ -1138,7 +1138,7 @@ export async function getQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail
  * panel (enviar, aceptar, rechazar, editar el borrador) lee con esta y
  * no con getQuote.
  *
- * Por qué: el enlace público (public_quote_accept, 0026) también toma la
+ * Por qué: el enlace público (public_quote_accept, 0030) también toma la
  * fila con FOR UPDATE. Si el panel leyera sin bloquear, el creador
  * podría ver 'sent', la marca aceptar en ese instante, y el UPDATE del
  * panel —que esperaba el bloqueo— escribir 'rejected' encima de una
@@ -1484,7 +1484,7 @@ export async function deleteQuoteDraft(tx: WorkspaceTx, id: string): Promise<voi
  * Lo que la marca verá en el enlace, congelado al enviarlo. Editar la
  * cotización después no cambia un documento ya entregado, y la página
  * pública no necesita leer quote_item, company ni creator_profile en
- * vivo (una política menos por tabla; ver 0026).
+ * vivo (una política menos por tabla; ver 0030).
  */
 export interface QuotePublicSnapshot {
   version: 1;
@@ -1759,7 +1759,7 @@ async function registrarAceptacion(tx: WorkspaceTx, quote: QuoteDetail, via: 'pa
 
 /**
  * Aceptar desde el panel (la marca dijo que sí por otro canal). Hace lo
- * mismo que la función pública `public_quote_accept` de 0026: deja la
+ * mismo que la función pública `public_quote_accept` de 0030: deja la
  * cotización en 'accepted' y el deal en «Ganado» con su historial.
  */
 export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {

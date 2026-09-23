@@ -14,7 +14,7 @@ import { TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
  * y sin workspace: escribir la contraseña de un media kit y aceptar una
  * cotización.
  *
- * Pasan por las funciones SECURITY DEFINER de la migración 0026 (que
+ * Pasan por las funciones SECURITY DEFINER de la migración 0030 (que
  * corren como mc_public_share): el slug es la credencial y la base es
  * quien decide qué se ve. Aquí no se consulta ninguna tabla.
  */

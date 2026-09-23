@@ -13,6 +13,7 @@
  * handler se equivoque y devuelva un token, no llega a la base.
  */
 import { createConnectors, PostgresCallLogSink, redactSecrets, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresherRegistry } from '@mc/connectors';
+import { isUuid } from '@mc/db/client';
 import type { Env } from './config.ts';
 import type { JobDatabase } from './db.ts';
 import type { Logger } from './logger.ts';
@@ -72,7 +73,6 @@ export class JobItemsFailedError extends Error {
   }
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_COLUMN_MAX = 1000;
 
 interface PayloadContext {
@@ -83,7 +83,9 @@ interface PayloadContext {
 
 export function payloadContext(payload: unknown): PayloadContext {
   const p = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const uuid = (v: unknown) => (typeof v === 'string' && UUID.test(v) ? v : null);
+  // isUuid es la única definición del repositorio (@mc/db/client): las copias
+  // divergían, y esta era la cuarta.
+  const uuid = (v: unknown) => (typeof v === 'string' && isUuid(v) ? v : null);
   return {
     workspaceId: uuid(p['workspaceId']),
     entityType: typeof p['entityType'] === 'string' ? p['entityType'].slice(0, 80) : null,

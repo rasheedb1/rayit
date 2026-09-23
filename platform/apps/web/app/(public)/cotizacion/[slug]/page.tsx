@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
  *
  * Lo que se ve es el snapshot congelado al enviarla —lo que se envió,
  * no lo que el creador haya editado después— más el estado de hoy, que
- * es lo único vivo. Lo entrega `public_quote(slug)` (migración 0026), que
+ * es lo único vivo. Lo entrega `public_quote(slug)` (migración 0030), que
  * además la marca como vista… salvo si quien pide es el robot de
  * WhatsApp o Slack pintando la vista previa del enlace: eso no es la
  * marca. Un enlace que no existe es un 404 (not-found.tsx).

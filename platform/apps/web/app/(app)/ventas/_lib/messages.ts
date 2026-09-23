@@ -206,7 +206,7 @@ export const MESSAGES = {
     optOutTitle: "Registrar la baja de este contacto",
     optOutHelp:
       "Deja de recibir cualquier mensaje tuyo, por cualquier canal, para siempre. Esto no se puede deshacer.",
-    notOwn: "Lo guardó otro espacio de trabajo. Puedes verlo porque su fuente es pública, pero no editarlo.",
+    notOwn: "Es del catálogo compartido: sale de una fuente pública y lo ven todos los espacios. Puedes consultarlo, pero no editarlo.",
     empty: {
       title: "Sin contactos todavía",
       description: "Añade a quien decide, con la fuente de donde salió su dato.",
@@ -276,14 +276,24 @@ export const MESSAGES = {
     sin_fecha: "Sin fecha",
   },
 
+  /** El nombre y el título de la frontera de error; el resto es el de la aplicación (ver finanzas/_lib/messages.ts). */
   error: {
     eyebrow: "Ventas",
     title: "No pudimos leer tu pipeline",
-    description:
-      "La base de datos no respondió a tiempo o rechazó la conexión. Tus datos no cambiaron; vuelve a intentarlo y, si sigue igual, avísanos.",
-    retry: "Reintentar",
-    /** Solo se muestra cuando Next entrega un identificador del error (producción). */
-    reference: "Referencia",
+  },
+
+  /**
+   * Las fronteras de las pantallas de Empresas. Sin ellas, /ventas/empresas
+   * y la ficha caían en la de Ventas y decían «No pudimos leer tu
+   * pipeline» cuando lo que no se leyó son las empresas o la ficha.
+   */
+  errorEmpresas: {
+    eyebrow: "Ventas · Empresas",
+    title: "No pudimos leer tus empresas",
+  },
+  errorFicha: {
+    eyebrow: "Ventas · Empresas",
+    title: "No pudimos leer la ficha de esta empresa",
   },
 
   loading: {

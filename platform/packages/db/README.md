@@ -114,17 +114,40 @@ lo hacía JavaScript: quien pasara el id de otro tenant leía sus etapas
 o le encendía una bandera. Ahora el filtro lo pone la base.
 
 `company` y `contact` **no** son catálogos aunque no tengan
-`workspace_id`. Desde la migración 0019 `contact` lleva RLS propia: se
-ve si su fuente es pública (`public_website`, `public_profile`,
-`press`) o si la empresa está vinculada a mi workspace por
-`company_link`. `company` sí es global a propósito: nombre, dominio y
-sector, sin PII. `app_user` tiene la suya desde 0020, 0021 y la de CIM-3
-(`*_sesion_correo_verificado.sql`): se ve y se edita la fila propia,
-por `current_user_id()` o por el correo verificado de la sesión. Desde
-esa misma migración la fila guarda además `auth_user_id`, el id de la
-cuenta de Supabase Auth que entró con ella la primera vez: una cuenta
-distinta con el mismo correo ya no la hereda
-(`AuthIdentityMismatchError`).
+`workspace_id`.
+
+- `contact` (PII: correo, teléfono, LinkedIn) lleva `owner_workspace_id`
+  desde **0020**, puesto por la base: se ve si es mío, o si no tiene
+  dueño y su fuente es pública (`public_website`, `public_profile`,
+  `press`) —el catálogo que llena el worker—, y solo lo escribe su
+  dueño (**0025**: hasta entonces se veían los públicos de cualquiera,
+  y eso decía qué marcas prospectaba cada quien). Y la baja es
+  definitiva: un trigger impide que `opted_out` vuelva a `false`.
+- `company` lleva `owner_workspace_id` desde **0024** y se lee «sin
+  dueño o mía» desde **0025**: sin dueño es el catálogo compartido; con
+  dueño, la ficha de un workspace. Si dos workspaces trabajan con la
+  misma marca, cada uno tiene su ficha (el dominio es único por dueño,
+  no en toda la base). Solo su dueño la renombra o la borra.
+- `app_user` lleva RLS desde **0020**: se ve uno mismo y quien comparta
+  workspace; el alta es la fila de `current_user_id()` (**0025**) y no
+  hay política de `DELETE`. Desde **0027** (CIM-3) se ve y se edita
+  también por el correo verificado de la sesión (`current_user_email()`),
+  y la fila guarda `auth_user_id`, el id de la cuenta de Supabase Auth
+  que entró con ella la primera vez: una cuenta distinta con el mismo
+  correo ya no la hereda (`AuthIdentityMismatchError`).
+- `workspace`, la raíz del inquilino, lleva RLS desde **0024**. Se ve
+  la fila de la transacción y, desde **0028** (`workspace_read_member`),
+  las de los espacios a los que pertenezco (el selector de CIM-3); por
+  eso `getWorkspace` filtra por `current_workspace_id()`. Se renombra
+  la propia; se crea la de la transacción (el alta de CIM-3 es
+  `withWorkspace(nuevoId)`); no hay política de `DELETE` ni privilegio
+  para hacerlo.
+- **Una fila no puede nombrar otra que su transacción no ve** (**0025**).
+  La clave ajena la comprueba Postgres sin RLS; el disparador
+  `assert_reference_visible`, enganchado a cada clave hacia una tabla
+  con RLS, rechaza con 23503 —el mismo error que un id que no existe—
+  un `company_id`, un `stage_id` o un `deal_id` que quien escribe no
+  puede leer.
 
 ### 4. Quién entra, con `withIdentity`
 
@@ -152,7 +175,7 @@ política de UPDATE ni de DELETE: cambiar roles o echar a alguien es del
 worker hasta que exista la pantalla de equipo.
 
 Sirve para **tres tablas y ninguna más**: `app_user`, `membership` y
-`workspace` (que no lleva RLS). En cualquier otra devuelve cero filas en
+`workspace` (la rama `workspace_read_member` de 0028). En cualquier otra devuelve cero filas en
 silencio, porque `current_workspace_id()` es NULL. El correo es la llave
 del primer inicio de sesión, cuando todavía no se sabe el id; lo fija
 la web solo con lo que Supabase verificó.
@@ -242,9 +265,11 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
   `PoolOptions.onError` lo manda quien construye el pool a su logger.
 - **Que la base tenga el esquema del repositorio.** `createDbFromEnv`
   lo comprueba una vez al construir el cliente
-  (`assertSchemaUpToDate`): migraciones aplicadas vs. `db/migrations` y
-  `relrowsecurity` de todas las tablas que `src/esquema.ts` declara
-  aisladas. En desarrollo avisa con `make db.migrate`; con
+  (`assertSchemaUpToDate`): migraciones aplicadas vs. `db/migrations`;
+  **todas** las tablas de `public` que la base declara, aisladas salvo
+  las de `EXCEPCIONES_SIN_AISLAMIENTO`; y los privilegios que `mc_app`
+  conserva sobre lo que `PRIVILEGIOS_DE_LA_APP` declara de solo
+  lectura. En desarrollo avisa con `make db.migrate`; con
   `NODE_ENV=production`, lanza (salida explícita:
   `ALLOW_STALE_SCHEMA=1`, que lo baja a aviso). El contrato de este paquete —RLS aísla
   cada workspace— lo cumplen las políticas, no el código: contra una
@@ -282,12 +307,22 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
    deja `.introspect/schema.ts` (no se versiona).
 4. Curar `src/schema/<dominio>.ts` a mano con el estilo de los demás
    (helpers en `src/schema/_tipos.ts`).
-5. Si la tabla es nueva y lleva aislamiento, añadirla a la lista que
-   corresponda en `src/esquema.ts`: es la que usan a la vez
-   `test/schema.test.ts` y la comprobación en tiempo de ejecución.
+5. Si la tabla es nueva, **no hay que apuntarla en ninguna lista**: la
+   guardia de `src/esquema.ts` está invertida y exige aislamiento a
+   todo lo que encuentre en `public`. Lo que sí hay que escribir es la
+   política, en la misma migración, y que **cada** política permisiva
+   aísle por sí sola (`col = current_workspace_id()`, o un `EXISTS`
+   correlacionado sobre el padre; ver `src/politicas.ts`). Si la tabla
+   tiene claves ajenas hacia tablas con RLS, engancha
+   `assert_reference_visible` a cada una (el bucle de 0025 §7 sirve de
+   modelo). Si de verdad es global —un catálogo que llena una migración,
+   una observación sin inquilino— se declara en
+   `EXCEPCIONES_SIN_AISLAMIENTO` **con su motivo**, y se le quita a
+   `mc_app` lo que no necesite en `PRIVILEGIOS_DE_LA_APP`.
 6. `pnpm --filter @mc/db test` — `test/schema.test.ts` compara columna a
    columna con la base y falla si algo falta o difiere; y comprueba que
-   toda tabla de tenant (o hija de una) tiene RLS.
+   ninguna tabla se quedó sin aislamiento ni excepción declarada, que
+   ninguna excepción sobra y que `mc_app` no tiene privilegios de más.
 7. El integrador aplica en Supabase: `make db.migrate`.
 
 Nunca al revés: no hay `drizzle-kit generate` ni `push`.
@@ -319,12 +354,74 @@ además más rápido.
 ## Reglas del proyecto que este paquete impone
 
 - El workspace lo fija el cliente por transacción, nunca la pantalla.
-- Toda tabla con `workspace_id` lleva RLS. Sin excepciones desde 0019;
-  `test/schema.test.ts` lo comprueba en cada corrida.
+- **Toda tabla de `public` lleva aislamiento** (ENABLE + FORCE + al
+  menos una política), no solo las que tienen `workspace_id`. Las
+  excepciones se declaran una a una, con su motivo, en
+  `EXCEPCIONES_SIN_AISLAMIENTO`; una tabla nueva sin política y sin
+  excepción rompe la prueba. La regla anterior —«toda tabla con
+  `workspace_id`»— se leyó al pie de la letra durante cinco rondas y
+  por eso `workspace`, cuya clave se llama `id`, se quedó sin política
+  hasta 0024.
+- **Cada política permisiva aísla por sí sola.** Se combinan con OR:
+  una abierta junto a una buena abre la tabla. La guardia las evalúa
+  una por una y comando por comando; las abiertas a propósito van en
+  `POLITICAS_ABIERTAS_DECLARADAS` con su motivo.
+- **`mc_app` tiene los privilegios mínimos.** RLS no protege una tabla
+  sin política: la protege el `GRANT`. `PRIVILEGIOS_DE_LA_APP` dice qué
+  puede hacer sobre cada catálogo y la guardia lo comprueba, también en
+  producción. Nunca tiene TRUNCATE, TRIGGER, REFERENCES ni MAINTAIN, ni
+  privilegios sobre una vista materializada o una tabla foránea; y
+  ningún otro rol que no esté en `ROLES_CON_ACCESO_DECLARADOS` tiene
+  nada en `public`. Un
+  `GRANT` **por columna** cuenta como de tabla (un REVOKE de tabla no
+  lo quita), y en las **secuencias** `mc_app` no tiene SELECT ni UPDATE
+  —`last_value` es el volumen de toda la plataforma— y USAGE solo donde
+  inserta (**0026**).
+- **Nada corre con los privilegios de otro sin declararlo** (**0029**).
+  Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
+  corre con su dueño para cualquiera que escriba en la tabla, aunque a
+  `mc_app` se le haya revocado la función. La guardia inventaría TODA
+  función SECURITY DEFINER de `public` (`FUNCIONES_DEFINER_DECLARADAS`),
+  todo disparador que llame a una (`DISPARADORES_DEFINER_DECLARADOS`),
+  las reglas CREATE RULE (`REGLAS_DECLARADAS`), los esquemas fuera de
+  `public` a los que llega `mc_app` y CREATE en `public`
+  (`ESQUEMAS_DECLARADOS`), y el propio rol: sin SUPERUSER, BYPASSRLS ni
+  CREATEROLE, y sin ser miembro de ningún rol
+  (`ROLES_DE_LA_APP_DECLARADOS`).
+- **Una fila global no nombra una privada, y borrar no publica.** La
+  rama «`col IS NULL`» de una lectura abre la fila a todos: tiene que
+  correlacionar con un EXISTS cada otra clave ajena hacia una tabla con
+  RLS, y la clave de `col` no puede ser ON DELETE SET NULL (borrar el
+  padre convertiría la fila privada en global;
+  `BORRADOS_QUE_PUBLICAN_DECLARADOS`). Y `col = current_workspace_id()`
+  solo aísla si `col` es la columna de inquilino; `col =
+  current_user_id()`, si nombra a una persona y va junto al inquilino
+  (o está en `AISLADAS_POR_PERSONA_DECLARADAS`).
+- **La unicidad es por inquilino.** Un índice único se comprueba contra
+  todas las filas, las vea quien escribe o no: uno global sobre una
+  tabla con dueño le dice a B qué valores tiene A (el 23505) y le
+  impide guardar los suyos. Todo único de una tabla con RLS que `mc_app`
+  escribe incluye la columna de inquilino, una clave hacia una tabla
+  aislada, se limita a las filas sin dueño o es la clave sustituta; lo
+  global a propósito (el correo de una persona, los enlaces públicos)
+  va en `UNICOS_GLOBALES_DECLARADOS` con su motivo.
+- **Un EXISTS aísla solo por una clave ajena de verdad.** Correlacionar
+  por una columna cualquiera (`d.name = t.nota`) no aísla, y un padre
+  con filas globales no aísla una fila que tiene inquilino propio
+  (ver `src/politicas.ts`).
+- **Las filas sin dueño son el catálogo compartido** (`company`,
+  `contact`): se leen desde cualquier workspace y no se editan desde
+  ninguno. Lo que guarda un workspace es suyo aunque venga de una
+  fuente pública; la baja global de un contacto vive en
+  `contact_suppression`, que la aplicación no lee ni escribe y que solo
+  llena el worker con una baja verificable de la propia persona (enlace
+  de baja, rebote duro o queja). El `opted_out` que marca un workspace
+  es SU baja, no la de la plataforma (**0029**).
 - La moneda, la zona horaria y el locale salen del workspace
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.
-- Las métricas se insertan, no se actualizan (`*_snapshot`).
+- Las métricas se insertan, no se actualizan (`*_snapshot`), y las
+  escribe el worker: `mc_app` solo las lee (**0025**).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas

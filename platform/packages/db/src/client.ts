@@ -37,7 +37,7 @@
  *                           aceptan las tres funciones públicas de
  *                           queries/cotizar.ts. Por sí sola no abre
  *                           nada: lo que se ve lo deciden las funciones
- *                           SECURITY DEFINER de la migración 0026, que
+ *                           SECURITY DEFINER de la migración 0030, que
  *                           corren como mc_public_share. Es una
  *                           operación con nombre para que la web no
  *                           tenga que forzar el tipo Db a CatalogDb.

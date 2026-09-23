@@ -17,16 +17,22 @@
  *     imposible, igual que cuando no existe.
  *
  * Sobre el aislamiento de esta parte del esquema, que no es uniforme y
- * es fácil de leer mal (ver migraciones 0019 y 0020):
- *   - `company` es un catálogo GLOBAL sin RLS: nombre, dominio y sector,
- *     sin datos personales. Que una empresa sea «mía» lo dice
- *     `company_link`, que sí está aislada. Por eso cada lectura de
- *     empresas entra por company_link con un JOIN, nunca por company
- *     suelta: sin eso se verían las ocho mil empresas de todos.
+ * es fácil de leer mal (migraciones 0020, 0024, 0025 y 0026):
+ *   - `company` tiene dueño (`owner_workspace_id`, que pone la base) y
+ *     se lee «sin dueño o mía»: la empresa de otro workspace no se ve
+ *     ni se nombra. Las filas sin dueño son el catálogo compartido: se
+ *     leen, se vinculan, y no se editan desde aquí. Que una empresa esté
+ *     en MI CRM lo sigue diciendo `company_link`, y por eso cada lectura
+ *     de empresas entra por company_link con un JOIN: el catálogo solo
+ *     no es mi lista.
  *   - `contact` lleva PII y su candado es `owner_workspace_id`, que pone
  *     la base sola (DEFAULT current_workspace_id()). Aquí NO se escribe
  *     a mano en ningún INSERT: si apareciera en una lista de columnas
- *     sería un error, no una optimización.
+ *     sería un error, no una optimización. El correo es único POR
+ *     DUEÑO: que otro workspace tenga a la misma persona no impide
+ *     guardarla, y la baja global la aplica la base (contact_suppression,
+ *     que solo llena el worker con una baja verificada: la que marca
+ *     un workspace se queda en su contacto, 0029 §1).
  *   - `opted_out` no vuelve a false: un trigger lo impide. La pantalla
  *     lo muestra como estado inamovible y esta capa no ofrece la
  *     operación contraria.
@@ -62,6 +68,21 @@ export class VentasError extends Error {
 export class CompanyNotFound extends VentasError {
   constructor() {
     super('CompanyNotFound', 'Esa empresa no existe en tu espacio.');
+  }
+}
+
+/**
+ * Editar el nombre, el dominio o la ficha de una empresa del catálogo
+ * compartido (sin dueño). Se puede vincular y trabajar con ella —su
+ * relación y sus notas son de este workspace—, pero sus datos son de
+ * todos y solo los escribe el worker (0024 §4, company_write).
+ */
+export class CompanyNotEditable extends VentasError {
+  constructor() {
+    super(
+      'CompanyNotEditable',
+      'Esta empresa es del catálogo compartido: sus datos no se editan desde tu espacio. Puedes cambiar la relación y las notas.',
+    );
   }
 }
 
@@ -452,9 +473,11 @@ export interface UpdateCompanyInput extends Partial<CreateCompanyInput> {}
 /**
  * Edita la empresa y su relación con este workspace.
  *
- * Lo del catálogo (nombre, dominio, ciudad…) se toca solo si la empresa
- * está vinculada aquí: sin ese guardia, `company` no tiene RLS y
- * cualquiera podría renombrar la empresa de otro.
+ * La ficha (nombre, dominio, ciudad…) se toca solo si la empresa está
+ * vinculada aquí y es de este workspace. La base ya lo impone
+ * (company_write: solo el dueño), pero un UPDATE que la política filtra
+ * no falla: toca cero filas y la pantalla diría «guardado». Por eso,
+ * sobre una empresa del catálogo compartido, CompanyNotEditable.
  */
 export async function updateCompany(tx: WorkspaceTx, companyId: string, input: UpdateCompanyInput): Promise<void> {
   if (!isUuid(companyId)) throw new CompanyNotFound();
@@ -474,7 +497,15 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
     if (other) throw new DuplicateDomain(other.name);
   }
 
-  await tx.query(
+  const tocaFicha = [
+    input.name, input.domain, input.country, input.city, input.industry, input.nicheSlugs, input.sizeBucket,
+  ].some((v) => v !== undefined);
+  if (!tocaFicha) {
+    await updateCompanyLink(tx, companyId, input);
+    return;
+  }
+
+  const { rows: editadas } = await tx.query<{ id: string }>(
     `UPDATE company SET
        name        = COALESCE($2, name),
        domain      = CASE WHEN $3::boolean THEN $4::citext ELSE domain END,
@@ -484,7 +515,8 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
        niche_slugs = COALESCE($10::text[], niche_slugs),
        size_bucket = CASE WHEN $11::boolean THEN $12 ELSE size_bucket END,
        updated_at  = now()
-     WHERE id = $1`,
+     WHERE id = $1
+     RETURNING id`,
     [
       companyId,
       input.name?.trim() ?? null,
@@ -496,7 +528,13 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
       input.sizeBucket !== undefined, input.sizeBucket || null,
     ],
   );
+  if (editadas.length === 0) throw new CompanyNotEditable();
 
+  await updateCompanyLink(tx, companyId, input);
+}
+
+/** La relación de este workspace con la empresa: su company_link. */
+async function updateCompanyLink(tx: WorkspaceTx, companyId: string, input: UpdateCompanyInput): Promise<void> {
   if (input.relationship !== undefined || input.notes !== undefined || input.ownerUserId !== undefined) {
     if (input.relationship !== undefined && !RELATIONSHIPS.includes(input.relationship)) {
       throw new VentasError('InvalidRelationship', 'Esa relación no existe.');
@@ -527,8 +565,10 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
 
 /**
  * Los contactos visibles de una empresa: los que guardó este workspace
- * y los de fuente pública de cualquiera (política de lectura de 0020).
- * `isOwn` dice cuáles se pueden editar; la base rechazaría el resto.
+ * y los del catálogo compartido (fuente pública y sin dueño, 0025 §6).
+ * Lo que guardó OTRO workspace no se ve, aunque su fuente sea pública.
+ * `isOwn` dice cuáles se pueden editar (false, nunca null, en los del
+ * catálogo); la base rechazaría el resto.
  */
 export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<ContactRow[]> {
   if (!isUuid(companyId)) return [];
@@ -536,7 +576,7 @@ export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<
     `SELECT id, company_id, full_name, role_title, email::text AS email, phone, linkedin_url,
             instagram_handle, source, source_url, opted_out, opted_out_at, opted_out_reason,
             bounced, created_at,
-            (owner_workspace_id = current_workspace_id()) AS is_own
+            coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own
      FROM contact
      WHERE company_id = $1
      ORDER BY opted_out ASC, full_name ASC NULLS LAST, created_at ASC`,
@@ -575,10 +615,13 @@ export async function createContact(tx: WorkspaceTx, input: CreateContactInput):
 
   const email = normalizeEmail(input.email);
   if (email) {
-    // contact tiene un índice único global por correo: si ya existe y no
-    // es visible desde aquí, el INSERT fallaría con un 23505 que no dice
-    // nada. Mejor decirlo antes, sin revelar de quién es.
-    const clash = await tx.query('SELECT 1 FROM contact WHERE email = $1 LIMIT 1', [email]);
+    // El correo es único por dueño (0026 §2): choca solo con MIS
+    // contactos. Uno del catálogo o de otro workspace con el mismo
+    // correo no lo impide —antes el índice era global y era un oráculo—.
+    const clash = await tx.query(
+      'SELECT 1 FROM contact WHERE email = $1 AND owner_workspace_id = current_workspace_id() LIMIT 1',
+      [email],
+    );
     if (clash.rows.length > 0) {
       throw new VentasError('DuplicateEmail', 'Ya hay un contacto con ese correo.');
     }
@@ -627,7 +670,7 @@ export async function updateContact(tx: WorkspaceTx, contactId: string, input: U
     throw new VentasError('InvalidSource', 'Esa procedencia no existe.');
   }
   const own = await tx.query<{ is_own: boolean }>(
-    'SELECT (owner_workspace_id = current_workspace_id()) AS is_own FROM contact WHERE id = $1',
+    'SELECT coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own FROM contact WHERE id = $1',
     [contactId],
   );
   const row = own.rows[0];
@@ -636,7 +679,10 @@ export async function updateContact(tx: WorkspaceTx, contactId: string, input: U
 
   const email = input.email === undefined ? undefined : normalizeEmail(input.email);
   if (email) {
-    const clash = await tx.query('SELECT 1 FROM contact WHERE email = $1 AND id <> $2 LIMIT 1', [email, contactId]);
+    const clash = await tx.query(
+      'SELECT 1 FROM contact WHERE email = $1 AND id <> $2 AND owner_workspace_id = current_workspace_id() LIMIT 1',
+      [email, contactId],
+    );
     if (clash.rows.length > 0) throw new VentasError('DuplicateEmail', 'Ya hay un contacto con ese correo.');
   }
 

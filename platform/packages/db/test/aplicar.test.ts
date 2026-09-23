@@ -18,20 +18,13 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
 /**
  * Números que ya tiene otra rama, y que esta todavía no: un hueco
  * declarado. Cuando la rama que los tiene se integre, el archivo llega
- * y la entrada sobra (no rompe nada, pero bórrala). Mismo mecanismo que
- * rasheed/endurecer-db. En la integración de la fase 2 llegaron 0022
- * (main, por Cotizar), 0026 (Cotizar), 0027 y 0028 (auth), y sus
- * entradas se fueron.
- *
- * OJO: rasheed/endurecer-db trae también una 0026
- * (0026_duenos_unicos_secuencias.sql). La de Cotizar llegó antes a
- * rasheed/integracion; al integrar el endurecimiento, esa se renumera
- * al siguiente libre y listSql lo avisa si no.
+ * y la entrada sobra (no rompe nada, pero bórrala). Al integrar el
+ * endurecimiento en rasheed/integracion llegaron 0024, 0025, 0026 y 0029,
+ * y la 0026 de Cotizar pasó a 0030_public_share.sql; ya no queda más
+ * hueco que el de ACC-3.
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
-  '0024': 'rasheed/endurecer-db: 0024_aislamiento_por_defecto.sql',
-  '0025': 'rasheed/endurecer-db: 0025_referencias_visibles.sql',
 };
 
 let dir = '';

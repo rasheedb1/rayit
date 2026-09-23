@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import type { Identity } from "@mc/db";
+import { isUuid, type Identity } from "@mc/db";
 import { AuthIdentityMismatchError, type MyWorkspace } from "@mc/db/queries/identidad";
 import { isAuthConfigured, type Env } from "@/lib/auth/config";
 import { getSesion, type Sesion } from "@/lib/auth/session";
@@ -62,8 +62,6 @@ import { espacioDeLaCookie } from "./elegir";
 /** Workspace de la creadora ficticia del seed (db/seed/0002 y 0003). Se entra a él con demo@multicampaign.test. */
 export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Lo que una petición necesita saber antes de abrir una transacción. */
 export interface Contexto {
   workspaceId: string;
@@ -103,7 +101,7 @@ export function workspaceDeDesarrollo(env: Env = process.env, warn: (message: st
   const id = env.DEMO_WORKSPACE_ID?.trim();
   const produccion = env.NODE_ENV === "production";
   if (id) {
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       throw new Error(`DEMO_WORKSPACE_ID no es un UUID: "${id}". Debe ser el id de una fila de workspace.`);
     }
     if (produccion && !avisado) {

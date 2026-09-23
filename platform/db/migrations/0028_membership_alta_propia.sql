@@ -41,8 +41,8 @@
 -- es el daño marginal. La web solo fija un espacio que la base devolvió
 -- como mío (lib/workspace/current.ts) o uno que acaba de crear.
 --
--- CONVIVENCIA con el pase de endurecimiento (rama rasheed/endurecer-db,
--- su 0024_aislamiento_por_defecto.sql): parte esta misma política con
+-- CONVIVENCIA con el pase de endurecimiento
+-- (0024_aislamiento_por_defecto.sql): parte esta misma política con
 -- los MISMOS nombres y las MISMAS condiciones, pero la crea sin
 -- IF EXISTS (DROP POLICY membership_ws_isolation a secas). Por eso esta
 -- va DETRÁS: aquí todo lleva DROP … IF EXISTS antes de crear, así que
@@ -51,10 +51,33 @@
 -- que el alta del primer espacio necesita. Comprobado en PGlite.
 --
 -- NUMERACIÓN: ver la cabecera de 0027_sesion_correo_verificado.sql. En
--- corto: 0022 ya está en Supabase (main), 0023 es de ACC-3, 0024 y 0025
--- de endurecer-db, 0026 de COT-1; las de CIM-3 van al siguiente número
--- libre DESPUÉS de todo eso, y se renumeran ANTES de aplicar nada.
+-- corto: 0022 ya está en Supabase (main), 0023 es de ACC-3, 0024–0026
+-- del endurecimiento; las de CIM-3 van detrás, y 0029 (endurecimiento)
+-- y 0030 (Cotizar) detrás de ellas.
 -- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Guardia: 0024 tiene que estar aplicada ANTES
+-- ---------------------------------------------------------------------
+-- Si esta corriera sobre una base sin 0024, el REVOKE INSERT de 0024 §7
+-- llegaría después y dejaría el alta del primer espacio sin privilegio
+-- (y 0024 fallaría además en su DROP POLICY sin IF EXISTS). El runner
+-- aplica en orden y no debería pasar nunca; si pasa —alguien aplicó
+-- este archivo a mano, o reordenó los números—, mejor parar aquí con un
+-- mensaje claro que descubrirlo en el primer inicio de sesión.
+-- schema_migrations es la tabla del runner (db/lib/aplicar.mjs); si no
+-- existe, quien aplica no es el runner y no hay nada que comprobar.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM schema_migrations WHERE filename = '0024_aislamiento_por_defecto.sql'
+     ) THEN
+    RAISE EXCEPTION USING
+      MESSAGE = '0028_membership_alta_propia necesita 0024_aislamiento_por_defecto aplicada antes.',
+      HINT = 'Aplica las migraciones en orden con make db.migrate (0024, 0025, 0026, 0027, 0028, …).';
+  END IF;
+END $$;
 
 DROP POLICY IF EXISTS membership_ws_isolation ON membership;
 

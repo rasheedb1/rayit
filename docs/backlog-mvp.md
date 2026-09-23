@@ -67,9 +67,10 @@ septiembre; `0015_connection_secret` (CON-3, aplicada) y
 `0016_campaign_quote_unique` (CAM-2) y `0022_public_profile_access`
 (CON-10) el 22. 0017 a 0021 (RLS de CIM-2 y de la integración) están
 aplicadas en Supabase y viven en `rasheed/integracion`: no se reciclan.
-Números reservados: `0023_access_control` (ACC-3), `0024` y `0025`
-(endurecimiento de RLS), `0026_public_share` (Cotizar, COT-2 a COT-4) y
-`0027`/`0028` (CIM-3). Antes de crear cualquiera, `git fetch` y mirar el
+Números reservados: `0023_access_control` (ACC-3). En
+`rasheed/integracion`, pendientes de aplicar y en este orden:
+`0024`–`0026` (endurecimiento de RLS), `0027`/`0028` (CIM-3), `0029`
+(endurecimiento) y `0030_public_share` (Cotizar, COT-2 a COT-4). Antes de crear cualquiera, `git fetch` y mirar el
 número más alto en todas las ramas activas. Desde CIM-2 `make db.check`
 (y el job «esquema» del CI) falla si dos archivos comparten número.
 

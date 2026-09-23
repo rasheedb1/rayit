@@ -38,7 +38,7 @@ aceptarse, deja una campaña planeada.
 | `packages/core/src/tarifas.ts` | La fórmula, los paquetes y la unidad de precio. Pura, sin idioma y sin base |
 | `packages/core/src/zonas.ts` | El fin de un día en la zona del workspace |
 | `packages/db/src/queries/cotizar.ts` | Las consultas, todas con `WorkspaceTx` salvo las tres públicas, que reciben `PublicShareTx` |
-| `db/migrations/0026_public_share.sql` | El rol `mc_public_share`, las columnas, las funciones y las políticas del enlace público, y el CHECK del rango del tarifario |
+| `db/migrations/0030_public_share.sql` | El rol `mc_public_share`, las columnas, las funciones y las políticas del enlace público, y el CHECK del rango del tarifario |
 
 ## Las cuatro decisiones que explican el resto
 
@@ -62,7 +62,7 @@ la página pública no tiene workspace que consultar.
 **3 · El enlace es la credencial, y la base es quien la valida.**
 `/kit/<slug>` y `/cotizacion/<slug>` se abren sin sesión. No consultan
 tablas: llaman a `public_media_kit()`, `public_quote()` y
-`public_quote_accept()`, que son **de `mc_public_share`** (0026): un rol
+`public_quote_accept()`, que son **de `mc_public_share`** (0030): un rol
 sin login, sin BYPASSRLS y con privilegios de columna (sumar una visita,
 marcar vista o aceptada, pasar el deal a «Ganado»; nada más). Las
 políticas del enlace son `TO mc_public_share`: para `mc_app`, fijar a
@@ -202,10 +202,11 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   vista previa del panel lo enlaza por su vista previa, que no cuenta
   visitas.
 
-- **La migración 0026 no está aplicada en Supabase.** La aplica el
+- **La migración 0030 no está aplicada en Supabase.** La aplica el
   integrador con `make db.migrate`. Su número sale de la reserva de
-  ramas: 0022 es de CON-10 (en main), 0023 de ACC-3, 0024 y 0025 del
-  endurecimiento de RLS, 0027 y 0028 de CIM-3. Nació como dos archivos
+  ramas: 0022 es de CON-10 (en main), 0023 de ACC-3, 0024–0026 y 0029
+  del endurecimiento de RLS, 0027 y 0028 de CIM-3; fue 0026 hasta que
+  el endurecimiento se integró con la suya. Nació como dos archivos
   (0022 + 0023 de las rondas 1 y 2, nunca aplicados) y va fundida, sin
   el paso intermedio de políticas abiertas. **Necesita antes el rol**,
   que `mc_migrator` no puede crear:
@@ -217,22 +218,21 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   Sin eso, la migración se detiene con ese mismo comando en el mensaje.
   En PGlite (`make db.check`, pruebas) y en el Postgres del CI no hace
   falta: allí corre como superusuario o el embebido crea el rol antes.
-- **0026 ya cuenta con el endurecimiento (0025).** Los disparadores de
+- **0030 ya cuenta con el endurecimiento (0025).** Los disparadores de
   referencias de 0025 corren con los permisos de quien escribe; al
   aceptar desde el enlace, `mc_public_share` tiene que poder leer la
-  etapa del negocio, y 0026 se lo da (GRANT y política acotada). Lo
-  comprueba la última prueba de `packages/db/test/cotizar.test.ts`, que
-  se salta sola hasta que 0025 llegue a la rama.
+  etapa del negocio, y 0030 se lo da (GRANT y política acotada). Lo
+  comprueba la última prueba de `packages/db/test/cotizar.test.ts`.
 - **Un rango del tarifario no puede ir al revés.** La regla es
   `validarRangoPrecio` de `@mc/core` y se aplica en la tabla (la fila no
   se cierra ni se guarda), en `guardarTarifario` y en `saveRateCard`; el
-  CHECK `rate_card_item_price_range_check` de 0026 es la última red.
+  CHECK `rate_card_item_price_range_check` de 0030 es la última red.
 - **Una cotización con la validez vencida no se envía** (`ValidezVencida`):
   nacería vencida. La numeración COT-AAAA toma el año de la zona del
   workspace, no el de UTC.
 - **El bloqueo del media kit es por enlace, no por IP** (10 contraseñas
   fallidas → 15 minutos). Es un compromiso aceptado y explicado en la
-  cabecera de 0026: quien tiene el enlace puede dispararlo, pero no hay
+  cabecera de 0030: quien tiene el enlace puede dispararlo, pero no hay
   que guardar IPs de visitantes y delante hay un límite por IP en el
   servidor.
 - **La fórmula no multiplica por engagement ni por audiencia** como el

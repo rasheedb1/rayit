@@ -34,6 +34,14 @@ export const APP_ROLE = 'mc_app';
 export interface EmbeddedOptions extends DbOptions {
   /** Cargar db/seed/*.sql después de migrar. Por defecto, sí. */
   seeds?: boolean;
+  /**
+   * Migrar solo hasta este archivo, inclusive (p. ej. '0021_app_user_self_update.sql').
+   * Es para las pruebas que siembran filas con la forma VIEJA del esquema
+   * y comprueban que la migración siguiente las arregla; el resto se
+   * aplica después con `migrar()`. Con `hasta` no se cargan los seeds:
+   * están escritos para el esquema completo.
+   */
+  hasta?: string;
 }
 
 export interface EmbeddedDb extends PgliteDb {
@@ -41,6 +49,12 @@ export interface EmbeddedDb extends PgliteDb {
   execAsSuperuser(sql: string): Promise<void>;
   /** Consulta como superusuario, saltando RLS: para que una prueba mire TODAS las filas de TODAS las tablas. */
   queryAsSuperuser<T = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>;
+  /**
+   * Aplica las migraciones que falten (hasta `hasta`, si se da) con el
+   * mismo rol y el mismo runner que al crearla, y deja la sesión como
+   * mc_app. Devuelve las que aplicó. Pareja de la opción `hasta`.
+   */
+  migrar(hasta?: string): Promise<string[]>;
 }
 
 export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
@@ -56,7 +70,7 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     CREATE ROLE mc_migrator_embedded NOSUPERUSER;
     CREATE ROLE mc_worker NOLOGIN BYPASSRLS;
     CREATE ROLE ${APP_ROLE} NOLOGIN;
-    -- El rol de los enlaces públicos de Cotizar (migración 0026). Lo
+    -- El rol de los enlaces públicos de Cotizar (migración 0030). Lo
     -- crea el superusuario, como en Supabase lo hace supabase-admin.sh,
     -- porque el migrador no tiene CREATEROLE; la membresía es la que le
     -- deja pasarle el dueño de las funciones.
@@ -64,7 +78,11 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     GRANT mc_public_share TO mc_migrator_embedded;
     ALTER SCHEMA public OWNER TO mc_migrator_embedded;
     GRANT mc_migrator_embedded TO postgres;
+    GRANT USAGE ON SCHEMA public TO ${APP_ROLE};
     SET ROLE mc_migrator_embedded;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${APP_ROLE};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${APP_ROLE};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ${APP_ROLE};
   `);
 
   // exec() admite varias sentencias y devuelve un resultado por cada
@@ -73,22 +91,32 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     const out = await pglite.exec(sql);
     return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
   };
-  await applyMigrations(exec, { dir: MIGRATIONS_DIR });
-  if (opts.seeds !== false) await applySeeds(exec, { dir: SEED_DIR });
+  await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta: opts.hasta });
+  if (opts.seeds !== false && opts.hasta === undefined) await applySeeds(exec, { dir: SEED_DIR });
 
-  // Los mismos privilegios de filas que mc_app tiene en Supabase, y la
-  // sesión queda como ese rol. Los seeds fijan app.workspace_id para
-  // toda la sesión; se limpia para que ninguna consulta herede un
-  // workspace por accidente.
-  await pglite.exec(`
+  // La sesión queda como mc_app. Los privilegios de filas ya los tiene:
+  // se conceden ARRIBA, con ALTER DEFAULT PRIVILEGES, antes de crear
+  // ninguna tabla. Eso no es un detalle de estilo.
+  //
+  // Antes se concedían aquí, con un `GRANT … ON ALL TABLES` DESPUÉS de
+  // migrar, y eso devolvía en silencio todo lo que una migración
+  // hubiera revocado: la 0024 le quita a mc_app la escritura de los
+  // catálogos y de webhook_event, y sobre el embebido esa rebaja
+  // duraba hasta esta línea. La prueba pasaba en pglite y el
+  // privilegio real de Supabase era otro, que es justo lo que este
+  // módulo existe para evitar («lo que pasa aquí es lo que pasa en
+  // producción»). Con las DEFAULT PRIVILEGES, mc_app recibe lo mismo
+  // que en Supabase según nace cada tabla y la migración manda.
+  //
+  // Los seeds fijan app.workspace_id para toda la sesión; se limpia
+  // para que ninguna consulta herede un workspace por accidente.
+  const volverAMcApp = `
     RESET ROLE;
-    GRANT USAGE ON SCHEMA public TO ${APP_ROLE};
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE};
-    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};
-    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${APP_ROLE};
     SELECT set_config('app.workspace_id', '', false);
+    SELECT set_config('app.user_id', '', false);
     SET ROLE ${APP_ROLE};
-  `);
+  `;
+  await pglite.exec(volverAMcApp);
 
   // UTC, explícito y decidido aquí. Los seeds también lo fijan para su
   // sesión (CURRENT_DATE depende de la zona), pero esta base trabaja en
@@ -117,6 +145,16 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
       asSuperuser(async (p) => {
         const r = await p.query<T>(text, params ? [...params] : undefined);
         return { rows: r.rows };
+      }),
+    migrar: (hasta?: string) =>
+      db.raw(async (p) => {
+        await p.exec('RESET ROLE; SET ROLE mc_migrator_embedded');
+        try {
+          const { applied } = await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta });
+          return applied;
+        } finally {
+          await p.exec(volverAMcApp);
+        }
       }),
   };
 }

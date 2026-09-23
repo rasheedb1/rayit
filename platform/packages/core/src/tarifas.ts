@@ -207,7 +207,7 @@ export function redondearAUnidad(valor: Decimal, unidad: Decimal): Decimal {
  * Es UNA regla para las tres capas —la tabla del tarifario mientras se
  * escribe, la Server Action que guarda y saveRateCard en @mc/db—, así
  * que un rango invertido no puede pasar por ninguna, y el CHECK de la
- * migración 0026 es la última red. El CPM invertido tiene su propio
+ * migración 0030 es la última red. El CPM invertido tiene su propio
  * motivo en la pantalla (la fila no se calcula); este es el del precio.
  */
 export type RangoInvalido = 'vacio' | 'no_numero' | 'invertido' | 'cero';

@@ -13,6 +13,7 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ESQUEMA_AL_DIA } from '@mc/db';
 import { openTestDb, type TestDb } from '@mc/db/test/pglite';
 import { explainConnectionError, explainMissing, formatJobDefinitions, runPreflight, type PreflightResult } from '../src/preflight.ts';
 
@@ -39,6 +40,7 @@ describe('runPreflight contra una base de verdad', () => {
     // El esquema sí está al día: lo acaba de aplicar el mismo runner.
     assert.deepEqual(p.esquema.pendientes, []);
     assert.deepEqual(p.esquema.sinRls, []);
+    assert.deepEqual(p.esquema.privilegiosDeMas, [], JSON.stringify(p.esquema.privilegiosDeMas));
   });
 
   test('sin rol que comprobar (WORKER_SET_ROLE=none), memberOfRole es true', async () => {
@@ -62,7 +64,7 @@ describe('explainMissing: qué falta y el comando exacto', () => {
     currentUser: 'mc_migrator',
     memberOfRole: true,
     bossSchemaExists: true,
-    esquema: { aplicadas: 20, ultima: '0020_x.sql', pendientes: [], sinRls: [], comparadoConArchivos: true },
+    esquema: { ...ESQUEMA_AL_DIA, aplicadas: 22, ultima: '0022_x.sql' },
   };
 
   test('sin nada que falte, no dice nada', () => {
@@ -86,7 +88,14 @@ describe('explainMissing: qué falta y el comando exacto', () => {
     const lines = explainMissing(
       {
         ...base,
-        esquema: { aplicadas: 15, ultima: '0015_connection_secret.sql', pendientes: ['0019_a.sql', '0020_b.sql'], sinRls: ['contact'], comparadoConArchivos: true },
+        esquema: {
+          ...ESQUEMA_AL_DIA,
+          aplicadas: 15,
+          ultima: '0015_connection_secret.sql',
+          pendientes: ['0019_a.sql', '0020_b.sql'],
+          sinRls: ['contact'],
+          sinAislar: [{ tabla: 'contact', falta: 'sin ENABLE ROW LEVEL SECURITY' }],
+        },
       },
       OPTS,
     ).join('\n');

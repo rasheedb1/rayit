@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
  * El media kit público (COT-2). Se abre SIN sesión y sin workspace: lo
  * único que se sabe de quien entra es que tiene el enlace.
  *
- * La lectura pasa por `public_media_kit(slug)` (migración 0026), que
+ * La lectura pasa por `public_media_kit(slug)` (migración 0030), que
  * decide si hay algo que enseñar, valida el vencimiento y
  * suma la visita — salvo si quien pide es el robot de un chat pintando
  * la vista previa del enlace. Esta página no consulta ninguna tabla.

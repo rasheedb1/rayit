@@ -146,7 +146,6 @@ describe("las pantallas atadas al workspace no vuelven al formato por defecto", 
   /** Solo el código: un comentario que EXPLICA el fallo no es el fallo. */
   const sinComentarios = (codigo: string) => codigo.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const ATADAS = [
-    "app/(app)/page.tsx",
     "app/(app)/finanzas/page.tsx",
     "app/(app)/finanzas/facturas/[id]/page.tsx",
   ];
@@ -177,6 +176,24 @@ describe("las pantallas atadas al workspace no vuelven al formato por defecto", 
   }
 
   it.todo(`atar al workspace las pantallas de los demás módulos: ${PENDIENTES_POR_MODULO.join(", ")}`);
+
+  /**
+   * La portada NO está atada, y es a propósito desde el endurecimiento:
+   * es el plan de construcción, su contenido entero sale de
+   * content/backlog.ts y no pertenece a ningún inquilino. Estaba en la
+   * lista de arriba por una sola fecha en el pie, y eso obligaba a
+   * abrir una transacción contra la base para pintarla: con un
+   * DEMO_WORKSPACE_ID que no corresponde a ninguna fila —lo normal en
+   * un despliegue nuevo— getWorkspace lanzaba y la portada respondía
+   * 500. Lo que sí se le sigue exigiendo es que no invente Colombia.
+   */
+  it("la portada no toca la base, y tampoco fija el locale a mano", () => {
+    const codigo = sinComentarios(readFileSync(join(AQUI, "..", "app/(app)/page.tsx"), "utf8"));
+    expect(codigo).not.toContain("getCurrentWorkspace");
+    expect(codigo).not.toContain("withWorkspace");
+    expect(codigo).not.toContain("America/Bogota");
+    expect(codigo).not.toContain('"es-CO"');
+  });
 });
 
 describe("formatMultiple", () => {

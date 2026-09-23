@@ -82,7 +82,7 @@ mc_worker     el worker              NOLOGIN, BYPASSRLS
                                      se asume con SET ROLE desde mc_migrator
 
 mc_public_share  los enlaces públicos   NOLOGIN, SIN BYPASSRLS
-   (0026)                               dueño de public_media_kit(),
+   (0030)                               dueño de public_media_kit(),
                                         public_quote() y public_quote_accept();
                                         solo SELECT y UPDATE de columnas
                                         contadas en media_kit, quote y deal
@@ -95,7 +95,7 @@ funciones SECURITY DEFINER de Cotizar, y las políticas del enlace
 público llevan `TO mc_public_share`, así que ni `mc_app` fijando
 `app.public_share` a mano abre una fila. La web la abre con la
 operación con nombre `db.withPublicShare` de `@mc/db`. Se crea antes de
-aplicar 0026 (ver la cabecera de esa migración y
+aplicar 0030 (ver la cabecera de esa migración y
 `apps/web/app/(app)/cotizar/README.md`).
 
 La app corre como `mc_app`. Un error en el código de la aplicación —un

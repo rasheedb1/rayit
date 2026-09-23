@@ -1,10 +1,11 @@
 import "server-only";
 import type { WorkspaceTx } from "@mc/db";
+import { getWorkspace } from "@mc/db/queries/cimientos";
 import {
   acceptPublicQuote, completePublicAcceptance, type FirmaAceptacion, type PublicQuoteAcceptResult, type TextosCotizar,
 } from "@mc/db/queries/cotizar";
 import { getCurrentContext } from "@/lib/workspace/current";
-import { withPublicShare, withWorkspaceId } from "./cliente";
+import { closeDb as cerrarCliente, withPublicShare, withWorkspaceId } from "./cliente";
 
 /**
  * La base de datos de la web y la ÚNICA forma en que una pantalla abre
@@ -19,9 +20,50 @@ import { withPublicShare, withWorkspaceId } from "./cliente";
  * Si algún día una pantalla necesita un catálogo, va con nombre en
  * `@mc/db/queries/catalogos`, no por el cliente crudo.
  */
+/**
+ * Los workspaces que ya se comprobó que existen en esta base, en este
+ * proceso. Se vacía con closeDb: otra base, otra comprobación.
+ */
+const existentes = new Set<string>();
+
+/**
+ * Abre una transacción con el workspace y la identidad actuales fijados
+ * y ejecuta fn.
+ *
+ * La PRIMERA vez que ve un workspace en el proceso, comprueba dentro de
+ * la misma transacción que la fila exista (getWorkspace lanza «El
+ * workspace … no existe en esta base» si no). Sin esto, un
+ * DEMO_WORKSPACE_ID que no corresponde a ninguna fila se veía de dos
+ * formas según el módulo: Finanzas y Ventas leen la fila workspace para
+ * formatear y caían en su frontera, pero Campañas y Conexiones no la
+ * leen y pintaban «Todavía no hay campañas» como si fuera un workspace
+ * nuevo. Aquí se decide una vez, para todos los módulos —también para
+ * el próximo—, y el error cae en la frontera del segmento (app).
+ *
+ * Con sesión (CIM-3) el workspace sale de membership y la fila existe;
+ * la comprobación cuesta una consulta la primera vez y nada más. El
+ * alta de un espacio (crearEspacio) no pasa por aquí: va por
+ * withWorkspaceId de lib/db/cliente, así que la fila recién creada no
+ * choca con la comprobación, y la siguiente pantalla ya la encuentra.
+ *
+ * La comprobación va aquí y no en el layout de (app) porque un error del
+ * layout lo recoge la frontera del segmento PADRE, que ya no pinta el
+ * Shell. Y se recuerda el éxito por proceso para no pagar una consulta
+ * más en cada transacción.
+ */
 export async function withWorkspace<T>(fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
   const { workspaceId, identity } = await getCurrentContext();
-  return withWorkspaceId(workspaceId, fn, identity);
+  return withWorkspaceId(
+    workspaceId,
+    async (tx) => {
+      if (!existentes.has(workspaceId)) {
+        await getWorkspace(tx);
+        existentes.add(workspaceId);
+      }
+      return fn(tx);
+    },
+    identity,
+  );
 }
 
 /**
@@ -32,7 +74,7 @@ export async function withWorkspace<T>(fn: (tx: WorkspaceTx) => Promise<T>): Pro
  * acotada por los dos lados: quien la abre no tiene sesión —la marca
  * que recibió el enlace no es nadie en el producto—, y lo único que se
  * puede hacer con ella son las tres funciones SECURITY DEFINER de la
- * migración 0026, que corren como mc_public_share, reciben el slug y
+ * migración 0030, que corren como mc_public_share, reciben el slug y
  * devuelven jsonb ya recortado. Sobre cualquier tabla con RLS y
  * sin workspace fijado, esta transacción no ve NADA, ni siquiera
  * fijando a mano el parámetro del enlace: las políticas del enlace son
@@ -87,4 +129,10 @@ export async function acceptQuoteFromLink(
   }
 }
 
-export { closeDb, getDbMode } from "./cliente";
+export { getDbMode } from "./cliente";
+
+/** Cierra la base del proceso. Solo para pruebas y para el apagado; una pantalla nunca la cierra. */
+export async function closeDb(): Promise<void> {
+  existentes.clear();
+  await cerrarCliente();
+}

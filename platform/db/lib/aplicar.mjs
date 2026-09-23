@@ -93,8 +93,13 @@ export class MigrationFailedError extends Error {
  * Aplica las migraciones pendientes de `opts.dir` (por defecto
  * db/migrations) y las registra. Devuelve qué aplicó y qué saltó.
  *
+ * `opts.hasta` detiene el recorrido DESPUÉS de ese archivo. Solo lo usan
+ * las pruebas que necesitan una base «como estaba» antes de una
+ * migración —para sembrar filas con la forma vieja y comprobar que la
+ * siguiente las arregla—; `make db.migrate` no lo pasa nunca.
+ *
  * @param {(sql: string) => Promise<{ rows: any[] }>} exec
- * @param {{ dir?: string, onApplied?: (file: string, ms: number) => void, onSkipped?: (file: string) => void }} [opts]
+ * @param {{ dir?: string, hasta?: string, onApplied?: (file: string, ms: number) => void, onSkipped?: (file: string) => void }} [opts]
  */
 export async function applyMigrations(exec, opts = {}) {
   const dir = opts.dir ?? MIGRATIONS_DIR;
@@ -104,6 +109,7 @@ export async function applyMigrations(exec, opts = {}) {
 
   const result = { applied: [], skipped: [] };
   for (const file of await listSql(dir)) {
+    if (opts.hasta !== undefined && file > opts.hasta) break;
     const sql = await readFile(join(dir, file), 'utf8');
     const checksum = checksumOf(sql);
 

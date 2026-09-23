@@ -6,7 +6,7 @@
  * correr scrypt, así que tampoco sirve para gastar la CPU del servidor.
  * La barrera que no depende de en qué instancia caiga la petición está
  * en la base: public_media_kit() bloquea el enlace 15 minutos tras 10
- * fallos (migración 0026). Esta de aquí vive en la memoria de cada
+ * fallos (migración 0030). Esta de aquí vive en la memoria de cada
  * instancia y se pierde al reiniciar, y está bien: es el freno rápido.
  * Por qué el bloqueo de la base es por enlace y no por IP (y por qué se
  * acepta que alguien con el enlace pueda dispararlo) está en la
