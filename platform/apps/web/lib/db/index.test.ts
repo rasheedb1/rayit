@@ -8,7 +8,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { listInvoices } from "@mc/db/queries/finanzas";
-import { closeDb, getDbMode, withWorkspace } from "./index";
+import { createQuote, getPrimaryCreator, getQuote, listQuotableDeals, sendQuote } from "@mc/db/queries/cotizar";
+import { acceptQuoteFromLink, closeDb, getDbMode, withWorkspace } from "./index";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 /** Un workspace que no existe en el seed: RLS no devuelve nada suyo. */
@@ -63,5 +64,40 @@ describe("withWorkspace toma el workspace de lib/workspace/current", () => {
     const { rows } = await withWorkspace((tx) => listInvoices(tx, { status: [...POR_COBRAR.status] }));
     expect(rows).toHaveLength(3);
     delete process.env.MC_WORKSPACE_ID;
+  });
+});
+
+describe("acceptQuoteFromLink: aceptar desde el enlace deja la campaña planeada (COT-4)", () => {
+  test("la marca acepta con su nombre, el negocio queda ganado y Campañas ve la campaña sin otro clic", async () => {
+    const creada = await withWorkspace(async (tx) => {
+      const creador = await getPrimaryCreator(tx);
+      const [deal] = await listQuotableDeals(tx);
+      const q = await createQuote(tx, {
+        dealId: deal!.id,
+        creatorId: creador!.id,
+        items: [{ deliverable: "tiktok", platformId: "tiktok", description: "TikTok dedicado", quantity: 1, unitPrice: "4000000" }],
+        taxRate: "0.19",
+        campaignStartsOn: "2026-11-02",
+        campaignEndsOn: "2026-11-30",
+      });
+      return sendQuote(tx, q.id);
+    });
+
+    const r = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" });
+    expect(r).toEqual({ status: "ok", quoteNumber: creada.number, campaignPending: false });
+
+    const despues = await withWorkspace((tx) => getQuote(tx, creada.id));
+    expect(despues?.status).toBe("accepted");
+    expect(despues?.acceptedByName).toBe("Ana Gómez");
+    expect(despues?.campaignId).toBeTruthy();
+    const campana = await withWorkspace(async (tx) => {
+      const { rows } = await tx.query<{ status: string }>("SELECT status FROM campaign WHERE quote_id = $1", [creada.id]);
+      return rows;
+    });
+    expect(campana).toEqual([{ status: "planned" }]);
+
+    // Otra vez: ya no es aceptable, y no hay segunda campaña.
+    const otra = await acceptQuoteFromLink(creada.slug, { name: "Ana Gómez", email: "ana@cafealma.co" });
+    expect(otra.status).toBe("not_acceptable");
   });
 });

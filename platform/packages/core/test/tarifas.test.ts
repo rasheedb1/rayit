@@ -9,8 +9,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  calcularItem, calcularTarifario, calcularTotalesCotizacion, precioPorViews, sumarPct,
-  MODIFICADORES_POR_DEFECTO, TarifaError, type EntradaTarifa,
+  calcularItem, calcularPaquete, calcularTarifario, calcularTotalesCotizacion, precioPorViews, redondearAUnidad,
+  sumarPct, unidadDePrecio, MODIFICADORES_POR_DEFECTO, TarifaError, type EntradaTarifa,
 } from '../src/tarifas.ts';
 
 /** TikTok dedicado de la creadora del seed, sin modificadores. */
@@ -187,4 +187,71 @@ test('una cotización sin ítems vale cero, y el descuento no puede pasarse', ()
   assert.equal(calcularTotalesCotizacion({ items: [] }).total, '0.00');
   assert.throws(() => calcularTotalesCotizacion({ items: [{ quantity: 1, unitPrice: '100' }], discount: '200' }), /DescuentoMayorQueSubtotal|mayor que el subtotal/);
   assert.throws(() => calcularTotalesCotizacion({ items: [{ quantity: 0, unitPrice: '100' }] }), TarifaError);
+});
+
+// ------------------------------------------------------ unidad de precio
+
+test('en pesos el tarifario no lleva centavos; en dólares sí', () => {
+  assert.equal(unidadDePrecio('COP'), '1.00');
+  assert.equal(unidadDePrecio('cop'), '1.00');
+  assert.equal(unidadDePrecio('USD'), '0.01');
+  assert.equal(unidadDePrecio(undefined), '0.01');
+  assert.equal(redondearAUnidad('7013344.50', '1.00'), '7013345.00');
+  assert.equal(redondearAUnidad('7013344.49', '1.00'), '7013344.00');
+  assert.equal(redondearAUnidad('7013344.49', '0.01'), '7013344.49');
+
+  // 1.001 views × 45.000 da 45.045 exactos, pero con un modificador de
+  // +35 % el aporte sería 15.765,75: en COP sube al peso.
+  const cop = calcularItem(tiktokDelSeed({
+    views: 1_001, currency: 'COP', modificadores: [{ id: 'derechos_uso_30d', pct: '0.35' }],
+  }));
+  const aporte = cop.pasos.find((p) => p.tipo === 'modificador');
+  assert.equal(aporte?.tipo === 'modificador' && aporte.low, '15766.00');
+  assert.match(cop.priceLow, /\.00$/);
+  assert.match(cop.priceHigh, /\.00$/);
+
+  const usd = calcularItem(tiktokDelSeed({
+    views: 1_001, cpmLow: '10.37', cpmHigh: '12.41', currency: 'USD',
+  }));
+  assert.equal(usd.priceLow, '10.38');
+});
+
+// --------------------------------------------------------------- paquetes
+
+test('un paquete suma sus entregables y descuenta al final', () => {
+  const tiktok = calcularItem(tiktokDelSeed({ currency: 'COP' }));
+  const paquete = calcularPaquete({
+    componentes: [
+      { deliverable: 'tiktok', cantidad: 1, priceLow: tiktok.priceLow, priceHigh: tiktok.priceHigh },
+      { deliverable: 'historias', cantidad: 3, priceLow: '500000', priceHigh: '700000' },
+    ],
+    descuentoPct: '0.12',
+    currency: 'COP',
+  });
+  // 3.780.000 + 1.500.000 = 5.280.000 → −12 % = 4.646.400
+  assert.equal(paquete.priceLow, '4646400.00');
+  // 5.880.000 + 2.100.000 = 7.980.000 → −12 % = 7.022.400
+  assert.equal(paquete.priceHigh, '7022400.00');
+  assert.deepEqual(paquete.pasos.map((p) => p.tipo), ['componente', 'componente', 'subtotal', 'descuento', 'total']);
+  const desc = paquete.pasos.find((p) => p.tipo === 'descuento');
+  assert.equal(desc?.tipo === 'descuento' && desc.pct, '0.12');
+});
+
+test('un paquete sin descuento no inventa un paso de descuento, y uno vacío no existe', () => {
+  const p = calcularPaquete({ componentes: [{ deliverable: 'reel', cantidad: 2, priceLow: '100', priceHigh: '200' }], descuentoPct: '0' });
+  assert.equal(p.priceLow, '200.00');
+  assert.equal(p.priceHigh, '400.00');
+  assert.equal(p.pasos.some((x) => x.tipo === 'descuento'), false);
+  assert.throws(() => calcularPaquete({ componentes: [], descuentoPct: '0.1' }), TarifaError);
+  assert.throws(() => calcularPaquete({ componentes: [{ deliverable: 'reel', cantidad: 1, priceLow: '1', priceHigh: '2' }], descuentoPct: '1.5' }), TarifaError);
+});
+
+test('en pesos el impuesto de la cotización tampoco lleva centavos', () => {
+  const cop = calcularTotalesCotizacion({ items: [{ quantity: 1, unitPrice: '5195070' }], taxRate: '0.19', currency: 'COP' });
+  assert.equal(cop.tax, '987063.00');
+  assert.equal(cop.total, '6182133.00');
+  const usd = calcularTotalesCotizacion({ items: [{ quantity: 1, unitPrice: '5195.07' }], taxRate: '0.19', currency: 'USD' });
+  assert.equal(usd.tax, '987.06');
+  // Sin moneda, como hasta ahora: al centavo.
+  assert.equal(calcularTotalesCotizacion({ items: [{ quantity: 1, unitPrice: '5195070' }], taxRate: '0.19' }).tax, '987063.30');
 });

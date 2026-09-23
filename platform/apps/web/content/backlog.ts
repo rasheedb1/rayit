@@ -373,7 +373,7 @@ export const STORIES: readonly Story[] = [
     desc: "packages/core/tarifas.ts calcula el rango por entregable desde views promedio × CPM de niche_cpm_benchmark, con modificadores (derechos de uso, exclusividad). Las views vienen de creator_baseline si existe y es confiable; si no, el creador las escribe y quedan marcadas como manuales.",
     done: "Con las views del mock salen los rangos del mock; cambiar el CPM cambia el rango y la explicación lo dice.",
     status: "hecho",
-    note: "packages/core/src/tarifas.ts (15 pruebas) y /cotizar con el kit: rango por entregable, panel «Cómo se calcula» paso a paso y edición en línea marcada como «editado». Con las views del seed (84.000 en TikTok) salen COP 3,78–5,88 M; subir el CPM a 60.000–90.000 los deja en 5,04–7,56 M. Las historias no se miden: sus views van a mano (D4).",
+    note: "packages/core/src/tarifas.ts (rango por entregable, paquetes con descuento y redondeo a la unidad de la moneda: en pesos, sin centavos) y /cotizar con el kit. El rango se lee como texto; «Editar» abre precio y CPM a mano, marcados como «editado» y «CPM propio». Con las views del seed (84.000 en TikTok) salen COP 3.780.000 – 5.880.000; subir el CPM a 60.000 – 90.000 en la pantalla los deja en 5.040.000 – 7.560.000 y el «Cómo se calcula» dice «Tu CPM». La línea base con poca muestra no entra sola (D4): se sugiere y el creador la confirma.",
   },
   {
     id: "COT-2", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["COT-1", "RES-1"],
@@ -381,7 +381,7 @@ export const STORIES: readonly Story[] = [
     desc: "Foto congelada de los números en media_kit.snapshot, página pública por slug, opcional con contraseña y vencimiento. Contador de vistas.",
     done: "El enlace abre sin sesión, muestra las cifras congeladas, y no cambia aunque cambien las métricas.",
     status: "hecho",
-    note: "/kit/<slug> sin sesión, sobre public_media_kit() de la migración 0022. Contraseña con scrypt y sal por fila (en claro no toca la base), vencimiento y contador de visitas. Prueba: subir los seguidores después de generarlo no cambia lo que ve la marca.",
+    note: "/kit/<slug> sin sesión, sobre public_media_kit() (0022 + 0023, rol mc_public_share). Contraseña con scrypt asíncrono y sal por fila, 5 intentos por minuto por IP y bloqueo de 15 minutos tras 10 fallos en la base. Vence al final del día en la zona del workspace. La vista previa del panel y los robots de WhatsApp o Slack no cuentan visitas. Audiencia por red y dimensión. Prueba: subir los seguidores después de generarlo no cambia lo que ve la marca.",
   },
   {
     id: "COT-3", module: "COT", owner: "rasheed", size: "L", sprint: 4, deps: ["COT-1", "VEN-3"],
@@ -389,7 +389,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear desde un deal, ítems desde el tarifario, subtotal, descuento, impuesto y total. Lo que se acuerda antes de publicar: métricas a reportar, cortes (24 h, 7 d, 30 d), derechos, exclusividad, plazo de pago. Numeración COT-2026-014.",
     done: "Enviar pasa el deal a «Propuesta enviada»; la cotización tiene su enlace público.",
     status: "hecho",
-    note: "Ciclo draft → sent → viewed → accepted/rejected/expired con sus fechas. Numeración COT-AAAA-NNN por workspace con bloqueo consultivo dentro de la transacción. Enviar congela public_snapshot, copia el enlace y mueve el deal a «Propuesta enviada» con su historial y su actividad. Página pública en /cotizacion/<slug>.",
+    note: "Ciclo draft → sent → viewed → accepted/rejected/expired, con una fecha por estado; el estado de hoy lo deriva la consulta (una vencida sale vencida sin que la marca abra el enlace). Borrador editable y borrable, vista previa antes de enviar, «Enviar y copiar enlace» copia de verdad. Entregables elegidos del tarifario, con su rango y aviso si el precio se sale. Impuesto por defecto del workspace. Numeración COT-AAAA-NNN con bloqueo consultivo. Enviar mueve el deal a «Propuesta enviada». Acepta ?negocio=<id>.",
   },
   {
     id: "COT-4", module: "COT", owner: "rasheed", size: "M", sprint: 4, deps: ["COT-3", "CAM-2"],
@@ -397,7 +397,7 @@ export const STORIES: readonly Story[] = [
     desc: "Al marcar aceptada, llama a createCampaignFromQuote() de queries/campanas.ts (la escribe Nicolás en CAM-2) y pasa el deal a «Ganado». Es el punto de cruce entre las dos cadenas.",
     done: "Aceptar una cotización deja una campaña en planned y Nicolás la ve en su módulo sin tocar nada.",
     status: "hecho",
-    note: "CAM-2 ya estaba en main, así que la llamada es real, no un hueco: createCampaignForQuote() envuelve a createCampaignFromQuote() con la ventana acordada en la cotización. Aceptar (desde el panel o desde el enlace) deja el deal en «Ganado» con su historial; desde el enlace público la campaña queda «pendiente de Campañas» y se crea con un clic, porque CAM-2 necesita el workspace que esa petición no tiene. Contrato en app/(app)/cotizar/README.md. Falta aplicar la migración 0022 en Supabase.",
+    note: "Aceptar crea la campaña de CAM-2 sin segundo clic. Desde el panel, acceptQuote y createCampaignFromQuote en la misma transacción (con SAVEPOINT: sin fechas acordadas, acepta y deja la campaña pendiente con su motivo). Desde el enlace, la marca firma con nombre, correo y términos; public_quote_accept() devuelve el workspace de la cotización y lib/db abre esa transacción para la campaña, la actividad y el aviso al creador. Falta aplicar 0022 y 0023 en Supabase; 0023 pide crear antes el rol mc_public_share con supabase-admin (ver la cabecera de la migración).",
   },
 
   // ---------------------------------------------------------------- CAM

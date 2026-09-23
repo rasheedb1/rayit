@@ -51,6 +51,9 @@ export const mediaKit = pgTable('media_kit', {
   passwordHash: text('password_hash'),
   expiresAt: timestamptz('expires_at'),
   viewCount: integer('view_count').default(0).notNull(),
+  /** Contraseñas fallidas seguidas y hasta cuándo está bloqueado el enlace (migración 0023). */
+  failedAttempts: integer('failed_attempts').default(0).notNull(),
+  lockedUntil: timestamptz('locked_until'),
   createdAt: createdAt(),
 });
 
@@ -68,6 +71,8 @@ export const quote = pgTable('quote', {
   discount: money('discount').default('0').notNull(),
   tax: money('tax').default('0').notNull(),
   total: money('total').default('0').notNull(),
+  /** La tasa con la que se calculó `tax`, como fracción (0023). */
+  taxRate: numeric('tax_rate', { precision: 7, scale: 6 }),
   agreedMetrics: text('agreed_metrics').array().default([]).notNull(),
   reportCutsHours: integer('report_cuts_hours').array().default([24, 168, 720]).notNull(),
   usageRightsDays: integer('usage_rights_days'),
@@ -89,6 +94,12 @@ export const quote = pgTable('quote', {
   sentAt: timestamptz('sent_at'),
   viewedAt: timestamptz('viewed_at'),
   acceptedAt: timestamptz('accepted_at'),
+  /** Una fecha por estado (0023): rechazada y vencida. */
+  rejectedAt: timestamptz('rejected_at'),
+  expiredAt: timestamptz('expired_at'),
+  /** Quién aceptó desde el enlace público (0023). */
+  acceptedByName: text('accepted_by_name'),
+  acceptedByEmail: text('accepted_by_email'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

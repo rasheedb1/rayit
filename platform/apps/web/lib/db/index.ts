@@ -1,6 +1,9 @@
 import "server-only";
 import { createDbFromEnv, type BaseTx, type Db, type DbMode, type WorkspaceTx } from "@mc/db";
 import type { CatalogDb } from "@mc/db/client";
+import {
+  acceptPublicQuote, completePublicAcceptance, type FirmaAceptacion, type PublicQuoteAcceptResult,
+} from "@mc/db/queries/cotizar";
 import { getCurrentWorkspaceId } from "@/lib/workspace/current";
 
 /**
@@ -60,11 +63,13 @@ export async function withWorkspace<T>(fn: (tx: WorkspaceTx) => Promise<T>): Pro
  * Es la única excepción a «toda pantalla abre withWorkspace», y está
  * acotada por los dos lados: quien la abre no tiene sesión —la marca
  * que recibió el enlace no es nadie en el producto—, y lo único que se
- * puede hacer con ella son las tres funciones SECURITY DEFINER de la
- * migración 0022, que reciben el slug y devuelven jsonb ya recortado.
- * Sobre cualquier tabla con RLS y sin workspace fijado, esta
- * transacción no ve NADA: la prueba «el permiso del enlace no
- * sobrevive a la llamada» (packages/db/test/cotizar.test.ts) lo fija.
+ * puede hacer con ella son las tres funciones SECURITY DEFINER de las
+ * migraciones 0022 y 0023, que corren como mc_public_share, reciben el
+ * slug y devuelven jsonb ya recortado. Sobre cualquier tabla con RLS y
+ * sin workspace fijado, esta transacción no ve NADA, ni siquiera
+ * fijando a mano el parámetro del enlace: las políticas del enlace son
+ * `TO mc_public_share`. Lo fijan «el permiso del enlace no sobrevive a
+ * la llamada» y «la sonda» (packages/db/test/cotizar.test.ts).
  *
  * Por eso recibe las consultas por su nombre (@mc/db/queries/cotizar) y
  * no el cliente crudo, igual que los catálogos.
@@ -74,6 +79,42 @@ export async function withPublicShare<T>(fn: (tx: BaseTx) => Promise<T>): Promis
   // createDbFromEnv construye siempre un CatalogDb (pg o embebido); el
   // tipo público lo estrecha a Db a propósito (ver @mc/db/src/client.ts).
   return (db as CatalogDb).withCatalogs(fn);
+}
+
+export type AceptacionDesdeEnlace =
+  | Exclude<PublicQuoteAcceptResult, { status: "ok" }>
+  | { status: "ok"; quoteNumber: string; campaignPending: boolean };
+
+/**
+ * «Aceptar cotización» desde el enlace público, de punta a punta (COT-4).
+ *
+ *   1. Sin workspace: public_quote_accept() deja la cotización aceptada
+ *      con la firma y el negocio en «Ganado», y devuelve el workspace de
+ *      ESA cotización. Es un dato que lee la base a partir del slug; el
+ *      navegador no lo manda ni lo recibe.
+ *   2. Con ese workspace fijado por el cliente de base (como cualquier
+ *      withWorkspace): la actividad en el negocio, el aviso al creador y
+ *      la campaña de CAM-2 (createCampaignFromQuote), sin un segundo clic.
+ *
+ * Son dos transacciones porque la primera no puede saber el workspace
+ * antes de validar el slug. Si la segunda falla, la aceptación ya quedó
+ * (es lo que la marca hizo) y el detalle del panel ofrece terminar la
+ * campaña: CAM-2 es idempotente por quote_id.
+ *
+ * Es una operación con nombre, no un «withWorkspace(id)» suelto: la
+ * web sigue sin poder abrir el workspace que quiera.
+ */
+export async function acceptQuoteFromLink(slug: string, firma: FirmaAceptacion): Promise<AceptacionDesdeEnlace> {
+  const { db } = await getDb();
+  const r = await (db as CatalogDb).withCatalogs((tx) => acceptPublicQuote(tx, slug, firma));
+  if (r.status !== "ok") return r;
+  try {
+    const campana = await db.withWorkspace(r.workspaceId, (tx) => completePublicAcceptance(tx, r.quoteId));
+    return { status: "ok", quoteNumber: r.quoteNumber, campaignPending: campana.campaign === null };
+  } catch (err) {
+    console.error("[cotizacion pública] aceptada, pero no se pudo terminar la campaña", err);
+    return { status: "ok", quoteNumber: r.quoteNumber, campaignPending: true };
+  }
 }
 
 /** Contra qué corre la web: 'postgres' (DATABASE_URL) o 'embedded' (modo demo). */

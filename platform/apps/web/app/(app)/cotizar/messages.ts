@@ -27,7 +27,10 @@ export const MESSAGES = {
     description:
       "El rango sale de tus views medianas por red y del CPM de referencia de tu nicho. No es un precio: es dónde empieza y dónde termina la conversación con la marca.",
     guardar: "Guardar tarifario",
-    recalcular: "Recalcular con mis métricas",
+    guardado: "Guardado",
+    recalcular: "Volver a la fórmula",
+    editar: "Editar",
+    listo: "Listo",
     tabla: "Entregables del tarifario, con su rango sugerido",
     columnas: {
       entregable: "Entregable",
@@ -36,11 +39,26 @@ export const MESSAGES = {
       rango: "Rango sugerido",
       estado: "Origen",
     },
+    piezas: (n: string) => `${n} piezas`,
+    rangoBajo: "bajo",
+    rangoAlto: "alto",
+    cpmBajo: "CPM bajo",
+    cpmAlto: "CPM alto",
     editado: "Editado a mano",
     sugerido: "Sugerido",
+    cpmPropio: "CPM propio",
+    cpmReferencia: (low: string, high: string) => `Referencia del nicho: ${low} – ${high}`,
     viewsManuales: "Views a mano",
     viewsBaseline: "Mediana propia",
-    pocaMuestra: "Muestra corta",
+    viewsPocoFiables: "Mediana con poca muestra",
+    /** Lo que falta en una fila que todavía no tiene rango. */
+    motivos: {
+      sin_views: "Escribe las views de una pieza para ver el rango.",
+      views_poco_fiables: (muestra: string, mediana: string) =>
+        `Tu mediana sale de solo ${muestra} videos (${mediana}). Confírmala o escribe la tuya.`,
+      sin_cpm: (red: string, pais: string) => `No hay CPM de referencia para ${red} en ${pais}. Escribe el tuyo.`,
+      cpm_invertido: "El CPM bajo no puede ser mayor que el alto.",
+    },
     vacio: {
       title: "Todavía no hay con qué calcular",
       description:
@@ -57,6 +75,24 @@ export const MESSAGES = {
     },
     comoSeCalcula: "Cómo se calcula",
     cerrar: "Cerrar",
+  },
+
+  paquetes: {
+    title: "Paquetes",
+    description:
+      "Varios entregables juntos con un descuento. El rango es la suma de sus piezas sueltas menos el descuento, y se guarda en el tarifario como un entregable más.",
+    agregar: "Agregar paquete",
+    quitar: "Quitar paquete",
+    descuento: "Descuento del paquete (%)",
+    descuentoError: "El descuento es un porcentaje entre 0 y 100.",
+    cantidad: (nombre: string) => `Cantidad de ${nombre} en el paquete`,
+    incluye: "Incluye",
+    vacio: "Marca al menos un entregable con rango para armar el paquete.",
+    sinPrecios: "Primero hace falta el rango de algún entregable.",
+    /** «Paquete: 1 TikTok dedicado + 3 Historias (3)». Recibe las partes ya compuestas. */
+    nombre: (partes: readonly string[]) => `Paquete: ${partes.join(" + ")}`,
+    parte: (cantidad: string, nombre: string) => `${cantidad} × ${nombre}`,
+    etiqueta: (n: number) => `Paquete ${n}`,
   },
 
   /** Nombre de cada entregable del tarifario. El id es el que guarda la base. */
@@ -80,6 +116,7 @@ export const MESSAGES = {
     manual: "estimación de mercado",
     deals: "negocios cerrados en On Cue",
     "informe-externo": "informe del sector",
+    creador: "tu CPM",
   } as Record<string, string>,
 
   mediaKit: {
@@ -88,8 +125,9 @@ export const MESSAGES = {
     description:
       "Un media kit es una foto fija: lo que la marca ve hoy es lo que verá dentro de tres meses, aunque tus métricas cambien. Se comparte por enlace, con contraseña y vencimiento si hace falta.",
     generar: "Generar media kit",
+    generado: "Media kit generado. Cópialo desde la lista.",
     tabla: "Media kits generados, con su enlace y sus visitas",
-    columnas: { creado: "Generado", enlace: "Enlace", visitas: "Visitas", estado: "Estado" },
+    columnas: { creado: "Generado", enlace: "Enlace", visitas: "Visitas", estado: "Estado", acciones: "Acciones" },
     publico: "Público",
     privado: "Despublicado",
     conPassword: "Con contraseña",
@@ -97,7 +135,7 @@ export const MESSAGES = {
     vencido: "Vencido",
     copiar: "Copiar enlace",
     copiado: "Copiado",
-    abrir: "Abrir",
+    abrir: "Vista previa",
     despublicar: "Despublicar",
     publicar: "Publicar",
     vacio: {
@@ -108,8 +146,18 @@ export const MESSAGES = {
       title: "Cómo se comparte",
       password: "Contraseña (opcional)",
       passwordAyuda: "Quien abra el enlace tendrá que escribirla. Se guarda cifrada, nunca en claro.",
+      placeholder: "Sin contraseña",
+      mostrar: "Mostrar",
+      ocultar: "Ocultar",
+      mostrarAria: "Mostrar la contraseña",
+      ocultarAria: "Ocultar la contraseña",
       expira: "Vence el (opcional)",
-      expiraAyuda: "Después de esa fecha el enlace deja de abrir. Las cifras siguen guardadas.",
+      expiraAyuda: "El enlace deja de abrir al terminar ese día, en tu zona horaria. Las cifras siguen guardadas.",
+    },
+    vistaPrevia: {
+      eyebrow: "Cotizar · Media kit · Vista previa",
+      aviso: "Vista previa: así lo ve la marca. Abrirla aquí no cuenta como visita.",
+      volver: "Volver a los media kits",
     },
   },
 
@@ -141,19 +189,30 @@ export const MESSAGES = {
     eyebrow: "Cotizar",
     title: "Nueva cotización",
     description: "Elige el negocio, arma los entregables desde tu tarifario y acuerda lo que se va a reportar antes de enviarla.",
+    editarTitle: "Editar borrador",
+    editarDescription: "Mientras no la envíes, la cotización se corrige aquí sin gastar otro número.",
+    sinNegocios: {
+      title: "No hay negocios abiertos para cotizar",
+      description: "Una cotización nace de un negocio del embudo que todavía no está ganado ni perdido.",
+      accion: "Ir a Ventas",
+    },
     negocio: "Negocio",
     negocioAyuda: "La marca sale del negocio. Enviar la cotización lo pasa a «Propuesta enviada».",
     sinNegocio: "Elige el negocio que estás cotizando",
     entregables: "Entregables",
+    entregable: "Entregable",
+    otro: "Otro entregable",
     agregar: "Agregar entregable",
     quitar: "Quitar",
     descripcion: "Descripción",
     descripcionVacia: "Qué entregas (Reel, TikTok dedicado…)",
     cantidad: "Cantidad",
     precio: "Precio por unidad",
+    rangoTarifario: (low: string, high: string) => `Tarifario: ${low} – ${high}`,
+    fueraDeRango: "Fuera del rango",
     descuento: "Descuento",
     impuesto: "Impuesto %",
-    impuestoAplicado: (pct: string) => `Impuesto (${pct} %)`,
+    impuestoAplicado: (pct: string) => `Impuesto (${pct})`,
     impuestoAyuda: "Se calcula sobre el subtotal ya con descuento, igual que en la factura.",
     validez: "Válida hasta",
     validezAyuda: "Después de esa fecha el enlace deja de aceptar.",
@@ -165,12 +224,14 @@ export const MESSAGES = {
     derechos: "Derechos de uso (días)",
     exclusividad: "Exclusividad (días)",
     exclusividadAmbito: "Ámbito de la exclusividad",
+    exclusividadEjemplo: "Ej.: bebidas calientes",
     pago: "Plazo de pago (días)",
     ventana: "Ventana de la campaña",
     ventanaAyuda: "Cuándo se publica. Al aceptar la cotización, la campaña nace con estas fechas.",
     desde: "Desde",
     hasta: "Hasta",
     guardar: "Guardar borrador",
+    guardarCambios: "Guardar cambios",
     cancelar: "Cancelar",
     total: "Total de la cotización",
     subtotal: "Subtotal",
@@ -180,23 +241,42 @@ export const MESSAGES = {
   detalle: {
     eyebrow: "Cotizar",
     enviar: "Enviar y copiar enlace",
+    enviando: "Enviando…",
+    enviadaCopiado: "Enviada · enlace copiado",
+    enviadaSinCopiar: "Enviada. Copia el enlace desde aquí:",
     copiar: "Copiar enlace",
     copiado: "Copiado",
-    abrir: "Ver como la marca",
+    verVistaPrevia: "Vista previa",
+    editar: "Editar",
+    eliminar: "Eliminar borrador",
+    eliminarConfirmar: "¿Eliminar este borrador? No se puede deshacer.",
     aceptar: "Marcar aceptada",
     rechazar: "Marcar rechazada",
     crearCampana: "Crear la campaña",
     campanaPendiente: "Campaña: pendiente de Campañas",
     campanaPendienteAyuda:
       "La cotización está aceptada y el negocio, ganado. La campaña la crea el módulo Campañas con la ventana acordada.",
+    campanaSinFechas: "Falta la ventana de la campaña: sin inicio y fin acordados, Campañas no la crea.",
     campanaCreada: "Campaña creada",
     verCampana: "Ver la campaña",
     entregables: "Entregables",
     acordado: "Lo acordado",
+    historia: "Historia",
     enlace: "Enlace para la marca",
     enlaceAyuda: "En el MVP no hay correo: se copia y se pega donde ya estás hablando con la marca.",
     visitas: (n: number) => (n === 1 ? "1 visita" : `${n} visitas`),
     sinVisitas: "Todavía sin abrir",
+    totalLinea: "Total",
+    aceptadaPor: (nombre: string, correo: string | null) => (correo ? `${nombre} · ${correo}` : nombre),
+    /** Las fechas del ciclo, en el orden en que pasan. */
+    fechas: {
+      creada: "Creada",
+      enviada: "Enviada",
+      vista: "Vista por la marca",
+      aceptada: "Aceptada",
+      rechazada: "Rechazada",
+      vencida: "Vencida",
+    },
     metricas: "Métricas a reportar",
     cortes: "Cortes",
     derechos: "Derechos de uso",
@@ -208,6 +288,51 @@ export const MESSAGES = {
     horas: (n: number) => (n < 48 || n % 24 !== 0 ? `${n} h` : n === 24 ? "1 día" : `${n / 24} días`),
     sinAcordar: "Sin acordar",
     noAplica: "No aplica",
+    vistaPrevia: {
+      eyebrow: (numero: string) => `Cotizar · ${numero} · Vista previa`,
+      aviso: "Vista previa: así la ve la marca. Abrirla aquí no cuenta como visita ni la marca como vista.",
+      avisoBorrador: "Vista previa del borrador: así la verá la marca cuando la envíes.",
+      volver: "Volver a la cotización",
+    },
+  },
+
+  /**
+   * Los errores que una acción del panel puede enseñar. La URL lleva el
+   * CÓDIGO (?error=QuoteNotEditable), nunca el texto: así nadie puede
+   * fabricar un enlace que muestre una alerta inventada, y un error de
+   * Postgres en inglés no llega a la pantalla.
+   */
+  errores: {
+    QuoteNotFound: "Esa cotización no existe en este espacio de trabajo.",
+    QuoteNotEditable: "Una cotización enviada ya no se edita. Si hace falta cambiarla, crea otra.",
+    QuoteNotDraft: "Solo un borrador se puede eliminar.",
+    QuoteTransitionError: "La cotización ya no está en un estado que permita esa acción. Recarga para ver cómo quedó.",
+    QuoteSinItems: "Una cotización necesita al menos un entregable.",
+    QuoteNotAccepted: "Solo una cotización aceptada crea campaña.",
+    FechasDeCampanaFaltan: "Falta la ventana de la campaña. Acuérdala en la cotización (inicio y fin) antes de crearla.",
+    MediaKitNotFound: "Ese media kit no existe en este espacio de trabajo.",
+    CreatorNotFound: "No encontramos tu perfil de creador.",
+    DealNotFound: "Ese negocio no existe en este espacio de trabajo.",
+    CompanyNotFound: "Elige la marca a la que le cotizas.",
+    TasaInvalida: "El impuesto es un porcentaje entre 0 y 100.",
+    TarifarioVacio: "Todavía no hay ningún entregable que se pueda calcular.",
+    DescuentoMayorQueSubtotal: "El descuento no puede ser mayor que el subtotal.",
+    formularioIlegible: "No pudimos leer el formulario. Recarga la página e inténtalo otra vez.",
+    tarifarioIlegible: "No pudimos leer los cambios del tarifario. Recarga la página e inténtalo otra vez.",
+    generico: "No se pudo completar la acción. Vuelve a intentarlo; si sigue igual, avísanos.",
+  } as Record<string, string>,
+
+  /** Los mensajes de validación de los formularios del panel. */
+  validacion: {
+    negocio: "Elige el negocio que estás cotizando.",
+    entregables: "Agrega al menos un entregable.",
+    descripcion: "Cada entregable necesita una descripción.",
+    cantidad: "La cantidad va de 1 a 999.",
+    precio: "El precio tiene que ser un número.",
+    descuento: "El descuento tiene que ser un número.",
+    impuesto: "El impuesto es un porcentaje entre 0 y 100.",
+    fecha: "Elige una fecha válida.",
+    finAntesDeInicio: "El fin de la campaña no puede ser anterior al inicio.",
   },
 
   /** Las métricas que se pueden acordar. El valor es lo que se guarda. */
@@ -224,25 +349,33 @@ export const MESSAGES = {
   publico: {
     kit: {
       title: "Media kit",
+      redes: "Redes",
       seguidores: "Seguidores",
       viewsMedianas: "Views medianas",
       engagement: "Interacción por view",
       topPosts: "Lo que mejor funciona",
       audiencia: "Audiencia",
+      audienciaDe: (dimension: string, red: string) => `${dimension} · ${red}`,
+      dimensiones: { age: "Edad", gender: "Género", country: "País" } as Record<string, string>,
+      generos: { F: "Mujeres", M: "Hombres", U: "Sin dato" } as Record<string, string>,
+      otros: "Otros",
       tarifas: "Tarifas",
       tarifasAyuda: "Rangos de referencia. El precio final se acuerda en la cotización.",
       congelado: (fecha: string) => `Cifras congeladas el ${fecha}`,
-      vsMediana: "× su mediana",
+      vsMediana: (multiplo: string) => `${multiplo} su mediana`,
       password: {
         title: "Este media kit pide contraseña",
         description: "Quien te compartió el enlace también te dio la contraseña.",
         label: "Contraseña",
         enviar: "Entrar",
+        mostrar: "Mostrar",
+        ocultar: "Ocultar",
+        mostrarAria: "Mostrar la contraseña",
+        ocultarAria: "Ocultar la contraseña",
         error: "Esa contraseña no es.",
-      },
-      noExiste: {
-        title: "Este enlace ya no existe",
-        description: "Puede haberse despublicado. Pídele uno nuevo a quien te lo compartió.",
+        errorQuedan: (n: number) => (n === 1 ? "Esa contraseña no es. Te queda 1 intento." : `Esa contraseña no es. Te quedan ${n} intentos.`),
+        bloqueado: (hora: string) => `Demasiados intentos. Podrás volver a probar a las ${hora}.`,
+        demasiados: "Demasiados intentos seguidos. Espera un minuto y vuelve a probar.",
       },
       vencido: {
         title: "Este enlace venció",
@@ -259,22 +392,42 @@ export const MESSAGES = {
       subtotal: "Subtotal",
       descuento: "Descuento",
       impuesto: "Impuesto",
+      impuestoConTasa: (pct: string) => `Impuesto (${pct})`,
       total: "Total",
       acordado: "Lo que se acuerda",
       valida: (fecha: string) => `Válida hasta el ${fecha}`,
       aceptar: "Aceptar cotización",
       aceptando: "Aceptando…",
       aceptada: (fecha: string) => `Aceptada el ${fecha}`,
+      aceptadaPor: (nombre: string, fecha: string) => `Aceptada por ${nombre} el ${fecha}`,
       rechazada: "Esta cotización fue rechazada.",
       vencida: "Esta cotización venció. Pide una nueva a quien te la envió.",
-      graciasTitle: "Listo: cotización aceptada",
-      graciasDescription: "Quien te la envió ya lo sabe y va a preparar la campaña con las fechas acordadas.",
-      noExiste: {
-        title: "Este enlace ya no existe",
-        description: "Puede haberse retirado. Pídele uno nuevo a quien te lo compartió.",
+      firma: {
+        title: "Para aceptarla, deja tu nombre",
+        description: "Queda registrado quién la aceptó y cuándo, como en una propuesta firmada.",
+        nombre: "Tu nombre",
+        correo: "Tu correo",
+        terminos: "Leí la cotización y acepto sus términos",
+        errores: {
+          nombre: "Escribe tu nombre.",
+          correo: "Escribe un correo válido.",
+          terminos: "Marca la casilla para aceptar los términos.",
+        },
       },
+      graciasTitle: "Listo: cotización aceptada",
+      graciasDescription: "Quedó registrada a tu nombre. Quien te la envió ya tiene el aviso en su panel.",
       error: "No pudimos registrar la aceptación. Vuelve a intentarlo en un momento.",
       pie: "Documento generado con On Cue",
+    },
+    noExiste: {
+      title: "Este enlace no existe",
+      description: "Puede haberse retirado o estar mal copiado. Pídele uno nuevo a quien te lo compartió.",
+    },
+    error: {
+      title: "No pudimos abrir este documento",
+      description: "Algo falló de nuestro lado, no del enlace. Vuelve a intentarlo en un momento.",
+      retry: "Reintentar",
+      reference: "Referencia",
     },
   },
 
@@ -291,10 +444,13 @@ export const MESSAGES = {
     viewsPocaMuestra: (muestra: string) => `Con solo ${muestra} videos la mediana todavía se mueve mucho: tómala como un punto de partida.`,
     cpm: (low: string, high: string, nicho: string, pais: string, fuente: string) =>
       `CPM de referencia de ${nicho} en ${pais}: ${low} – ${high} (${fuente})`,
+    cpmPropio: (low: string, high: string) => `Tu CPM: ${low} – ${high} (lo escribiste tú)`,
     base: (low: string, high: string) => `Views ÷ 1.000 × CPM = ${low} – ${high}`,
     cantidad: (cantidad: string, low: string, high: string) => `× ${cantidad} piezas = ${low} – ${high}`,
     modificador: (nombre: string, pct: string, low: string, high: string) => `${nombre} (${pct}): + ${low} – ${high}`,
     descuento: (pct: string, low: string, high: string) => `Descuento del paquete (${pct}): − ${low} – ${high}`,
+    componente: (cantidad: string, nombre: string, low: string, high: string) => `${cantidad} × ${nombre}: ${low} – ${high}`,
+    subtotal: (low: string, high: string) => `Piezas sueltas: ${low} – ${high}`,
     total: (low: string, high: string) => `Rango sugerido: ${low} – ${high}`,
     editado: (low: string, high: string) => `Tú lo dejaste en ${low} – ${high}`,
   },
@@ -330,4 +486,10 @@ export function nombreMetrica(id: string): string {
 
 export function nombreEstadoCotizacion(status: string): string {
   return MESSAGES.cotizaciones.estados[status] ?? status;
+}
+
+/** El texto de un código de error de una acción; si el código no es conocido, el genérico. */
+export function mensajeDeError(code: string | undefined | null): string | null {
+  if (!code) return null;
+  return Object.hasOwn(MESSAGES.errores, code) ? MESSAGES.errores[code]! : MESSAGES.errores.generico!;
 }

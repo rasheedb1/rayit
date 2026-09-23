@@ -9,10 +9,14 @@ import { PlatformPill } from "@/components/ui/platform-pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { aceptarCotizacion, crearCampanaDeCotizacion, enviarCotizacion, rechazarCotizacion } from "../../actions";
+import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from "../../actions";
 import { CopiarEnlace } from "../../copiar-enlace";
-import { MESSAGES, nombreMetrica } from "../../messages";
+import { MESSAGES, mensajeDeError } from "../../messages";
+import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
 import { pillDeCotizacion } from "../../_lib/estado";
+import { ResumenTotales } from "../../_ui/resumen-totales";
+import { EliminarBorrador } from "./eliminar";
+import { EnviarCotizacion } from "./enviar";
 
 export const metadata: Metadata = { title: "Cotización" };
 export const dynamic = "force-dynamic";
@@ -22,11 +26,18 @@ export default async function CotizacionPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; enviada?: string }>;
 }) {
   const t = MESSAGES.detalle;
   const { id } = await params;
-  const { error } = await searchParams;
+  // ?error= lleva un CÓDIGO; el texto sale de messages.ts. Un código que
+  // no conocemos se enseña como el genérico, nunca tal cual.
+  const sp = await searchParams;
+  const error = mensajeDeError(sp.error);
+  // ?enviada= también es un código: el botón de enviar ya no existe
+  // cuando la página vuelve pintada como enviada, así que el aviso de
+  // «enlace copiado» lo da el detalle.
+  const enviada = sp.enviada === "copiado" || sp.enviada === "manual" ? sp.enviada : null;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
 
@@ -37,6 +48,8 @@ export default async function CotizacionPage({
   const esBorrador = quote.status === "draft";
   const sePuedeCerrar = quote.status === "sent" || quote.status === "viewed";
   const enlace = `/cotizacion/${quote.slug}`;
+  const vistaPrevia = `/cotizar/cotizaciones/${quote.id}/vista`;
+  const dinero = (v: string) => f.money(v, quote.currency, { mode: "full" });
 
   const columnas: Column<QuoteItemRow>[] = [
     {
@@ -50,45 +63,41 @@ export default async function CotizacionPage({
       ),
     },
     { key: "cantidad", header: MESSAGES.nueva.cantidad, align: "num", render: (i) => f.int(i.quantity) },
-    {
-      key: "precio",
-      header: MESSAGES.nueva.precio,
-      align: "num",
-      render: (i) => f.money(i.unitPrice, quote.currency, { mode: "full" }),
-    },
-    {
-      key: "total",
-      header: MESSAGES.nueva.total,
-      align: "num",
-      render: (i) => f.money(i.total, quote.currency, { mode: "full" }),
-    },
+    { key: "precio", header: MESSAGES.nueva.precio, align: "num", render: (i) => dinero(i.unitPrice) },
+    { key: "total", header: t.totalLinea, align: "num", render: (i) => dinero(i.total) },
   ];
 
-  const acordado: { termino: string; valor: string }[] = [
+  const acordado = lineasAcordado(
     {
-      termino: t.metricas,
-      valor: quote.agreedMetrics.length > 0 ? quote.agreedMetrics.map(nombreMetrica).join(" · ") : t.sinAcordar,
+      metrics: quote.agreedMetrics,
+      cutsHours: quote.reportCutsHours,
+      usageRightsDays: quote.usageRightsDays,
+      exclusivityDays: quote.exclusivityDays,
+      exclusivityScope: quote.exclusivityScope,
+      paymentTermsDays: quote.paymentTermsDays,
+      campaignStartsOn: quote.campaignStartsOn,
+      campaignEndsOn: quote.campaignEndsOn,
     },
-    {
-      termino: t.cortes,
-      valor: quote.reportCutsHours.length > 0 ? quote.reportCutsHours.map((h) => t.horas(h)).join(" · ") : t.sinAcordar,
-    },
-    { termino: t.derechos, valor: quote.usageRightsDays === null ? t.noAplica : t.dias(quote.usageRightsDays) },
-    {
-      termino: t.exclusividad,
-      valor:
-        quote.exclusivityDays === null
-          ? t.noAplica
-          : `${t.dias(quote.exclusivityDays)}${quote.exclusivityScope ? ` · ${quote.exclusivityScope}` : ""}`,
-    },
-    { termino: t.pago, valor: t.dias(quote.paymentTermsDays) },
-    {
-      termino: t.ventana,
-      valor:
-        quote.campaignStartsOn && quote.campaignEndsOn
-          ? f.dateRange(quote.campaignStartsOn, quote.campaignEndsOn)
-          : t.sinAcordar,
-    },
+    f,
+  );
+
+  // La historia de la cotización, una fecha por estado (Stripe Quotes).
+  const historia: { termino: string; valor: string }[] = [
+    { termino: t.fechas.creada, valor: f.dateTime(quote.createdAt) },
+    ...(quote.sentAt ? [{ termino: t.fechas.enviada, valor: f.dateTime(quote.sentAt) }] : []),
+    ...(quote.viewedAt ? [{ termino: t.fechas.vista, valor: f.dateTime(quote.viewedAt) }] : []),
+    ...(quote.acceptedAt
+      ? [
+          {
+            termino: t.fechas.aceptada,
+            valor: quote.acceptedByName
+              ? `${f.dateTime(quote.acceptedAt)} · ${t.aceptadaPor(quote.acceptedByName, quote.acceptedByEmail)}`
+              : f.dateTime(quote.acceptedAt),
+          },
+        ]
+      : []),
+    ...(quote.rejectedAt ? [{ termino: t.fechas.rechazada, valor: f.dateTime(quote.rejectedAt) }] : []),
+    ...(quote.expiredAt ? [{ termino: t.fechas.vencida, valor: f.dateTime(quote.expiredAt) }] : []),
   ];
 
   return (
@@ -100,17 +109,14 @@ export default async function CotizacionPage({
         aside={
           <div className="flex flex-wrap items-center gap-2">
             <Pill kind={pill.kind}>{pill.text}</Pill>
+            <Button href={vistaPrevia}>{t.verVistaPrevia}</Button>
             {esBorrador ? (
-              <form action={enviarCotizacion.bind(null, quote.id)}>
-                <Button type="submit" variant="primary">
-                  {t.enviar}
-                </Button>
-              </form>
-            ) : (
               <>
-                <CopiarEnlace path={enlace} size="md" />
-                <Button href={enlace}>{t.abrir}</Button>
+                <Button href={`/cotizar/cotizaciones/${quote.id}/editar`}>{t.editar}</Button>
+                <EnviarCotizacion id={quote.id} />
               </>
+            ) : (
+              <CopiarEnlace path={enlace} size="md" />
             )}
           </div>
         }
@@ -121,9 +127,15 @@ export default async function CotizacionPage({
           {error}
         </p>
       )}
+      {enviada && !esBorrador && (
+        <div role="status" className="mb-6 flex flex-wrap items-center gap-3 rounded-md border border-good/30 bg-good-wash px-3 py-2 text-sm">
+          <span className="font-medium text-good">{enviada === "copiado" ? t.enviadaCopiado : t.enviadaSinCopiar}</span>
+          {enviada === "manual" && <CopiarEnlace path={enlace} />}
+        </div>
+      )}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-8">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-8">
           <section aria-labelledby="entregables">
             <SectionTitle>
               <span id="entregables">{t.entregables}</span>
@@ -132,7 +144,7 @@ export default async function CotizacionPage({
               columns={columnas}
               rows={quote.items}
               rowKey={(i) => i.id}
-              caption={`${t.entregables} de ${quote.number}`}
+              caption={`${t.entregables} · ${quote.number}`}
               emptyState={<span className="text-sm text-muted">—</span>}
             />
           </section>
@@ -150,28 +162,41 @@ export default async function CotizacionPage({
               ))}
             </dl>
           </section>
+
+          <section aria-labelledby="historia">
+            <SectionTitle>
+              <span id="historia">{t.historia}</span>
+            </SectionTitle>
+            <dl className="divide-y divide-border rounded-md border border-border">
+              {historia.map((linea) => (
+                <div key={linea.termino} className="flex flex-wrap justify-between gap-2 px-4 py-2.5 text-sm">
+                  <dt className="text-ink-2">{linea.termino}</dt>
+                  <dd className="min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">{linea.valor}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          {esBorrador && (
+            <div>
+              <EliminarBorrador id={quote.id} />
+            </div>
+          )}
         </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-8 lg:self-start">
+        <aside className="min-w-0 space-y-4 lg:sticky lg:top-8 lg:self-start">
           <div className="rounded-md border border-border p-4">
             <p className="text-xs text-muted">{MESSAGES.nueva.total}</p>
-            <p className="mt-1 font-mono text-2xl font-medium tabular-nums">
-              {f.money(quote.total, quote.currency, { mode: "full" })}
-            </p>
-            <dl className="mt-4 space-y-1.5 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-2">{MESSAGES.nueva.subtotal}</dt>
-                <dd className="font-mono tabular-nums">{f.money(quote.subtotal, quote.currency, { mode: "full" })}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-2">{MESSAGES.nueva.descuento}</dt>
-                <dd className="font-mono tabular-nums">−{f.money(quote.discount, quote.currency, { mode: "full" })}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-ink-2">{MESSAGES.nueva.impuesto}</dt>
-                <dd className="font-mono tabular-nums">{f.money(quote.tax, quote.currency, { mode: "full" })}</dd>
-              </div>
-            </dl>
+            <p className="mt-1 font-mono text-2xl font-medium tabular-nums">{dinero(quote.total)}</p>
+            <div className="mt-4">
+              <ResumenTotales
+                totales={quote}
+                currency={quote.currency}
+                f={f}
+                etiquetaImpuesto={etiquetaImpuesto(quote.taxRate, f)}
+                destacarTotal={false}
+              />
+            </div>
           </div>
 
           {!esBorrador && (
@@ -216,12 +241,16 @@ export default async function CotizacionPage({
               ) : (
                 <>
                   <p className="text-sm font-medium">{t.campanaPendiente}</p>
-                  <p className="mt-1 text-xs leading-4 text-muted">{t.campanaPendienteAyuda}</p>
-                  <form className="mt-3" action={crearCampanaDeCotizacion.bind(null, quote.id)}>
-                    <Button size="sm" variant="primary" type="submit">
-                      {t.crearCampana}
-                    </Button>
-                  </form>
+                  <p className="mt-1 text-xs leading-4 text-muted">
+                    {quote.campaignStartsOn && quote.campaignEndsOn ? t.campanaPendienteAyuda : t.campanaSinFechas}
+                  </p>
+                  {quote.campaignStartsOn && quote.campaignEndsOn && (
+                    <form className="mt-3" action={crearCampanaDeCotizacion.bind(null, quote.id)}>
+                      <Button size="sm" variant="primary" type="submit">
+                        {t.crearCampana}
+                      </Button>
+                    </form>
+                  )}
                 </>
               )}
             </div>

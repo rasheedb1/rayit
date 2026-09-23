@@ -10,7 +10,7 @@ import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { cambiarPublicacionMediaKit } from "../actions";
 import { CopiarEnlace } from "../copiar-enlace";
-import { MESSAGES } from "../messages";
+import { MESSAGES, mensajeDeError } from "../messages";
 import { GenerarMediaKitForm } from "./generar-form";
 
 export const metadata: Metadata = { title: "Media kit" };
@@ -25,7 +25,8 @@ function estadoDe(kit: MediaKitRow, ahora: number): { kind: "good" | "warn" | "n
 
 export default async function MediaKitPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const t = MESSAGES.mediaKit;
-  const params = await searchParams;
+  // ?error= lleva un código, no texto: messages.ts decide qué se lee.
+  const error = mensajeDeError((await searchParams).error);
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
   const ahora = Date.now();
@@ -75,11 +76,12 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
     },
     {
       key: "acciones",
-      header: " ",
+      header: t.columnas.acciones,
       render: (k) => (
         <span className="flex flex-wrap items-center gap-2">
           <CopiarEnlace path={`/kit/${k.slug}`} label={t.copiar} />
-          <Button size="sm" variant="ghost" href={`/kit/${k.slug}`}>
+          {/* La vista previa es del panel: abrir el enlace público sumaría una visita. */}
+          <Button size="sm" variant="ghost" href={`/cotizar/media-kit/${k.id}`}>
             {t.abrir}
           </Button>
           <form action={cambiarPublicacionMediaKit.bind(null, k.id, !k.isPublic)}>
@@ -106,9 +108,9 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
         }
       />
 
-      {params.error && (
+      {error && (
         <p role="alert" className="mb-6 rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-          {params.error}
+          {error}
         </p>
       )}
 

@@ -21,14 +21,14 @@
  * Y las TRES funciones públicas del final (readPublicMediaKit,
  * readPublicQuote, acceptPublicQuote) son la excepción explicada: no
  * reciben WorkspaceTx porque la marca abre el enlace sin sesión. No
- * consultan tablas: llaman a las funciones SECURITY DEFINER de la
- * migración 0022, que son a la vez la puerta y el registro de la
- * visita. Ver la cabecera de esa migración para por qué hace falta una
- * política además de la función.
+ * consultan tablas: llaman a las funciones SECURITY DEFINER de las
+ * migraciones 0022 y 0023, que corren como mc_public_share y son a la
+ * vez la puerta y el registro de la visita. Ver la cabecera de 0023
+ * para por qué las políticas llevan `TO mc_public_share`.
  */
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import {
-  calcularTotalesCotizacion, type Decimal, type PasoCalculo, type PlatformId,
+  calcularTotalesCotizacion, DEFAULT_TAX_RATE, type Decimal, type PasoCalculo, type PlatformId,
 } from '@mc/core';
 import { isUuid, type BaseTx, type WorkspaceTx } from '../client.ts';
 import { createCampaignFromQuote } from './campanas.ts';
@@ -79,42 +79,69 @@ export class MediaKitNotFound extends CotizarError {
   }
 }
 
+export class QuoteNotDraft extends CotizarError {
+  constructor(status: string) {
+    super('QuoteNotDraft', `Solo un borrador se borra; esta cotización está en «${status}».`);
+  }
+}
+
 // ---------------------------------------------------------------------
 // Enlaces compartidos: slug y contraseña
 // ---------------------------------------------------------------------
 
 /**
  * El slug es la credencial del enlace, así que se sortea, no se deriva
- * del nombre: 26 caracteres de un alfabeto sin vocales ni parecidos
- * (nada de 0/O ni 1/l) son 128 bits largos, no se enumeran y no
- * componen palabras por accidente.
+ * del nombre. El alfabeto (31 signos) deja fuera los que se confunden al
+ * dictarlos o copiarlos a mano (0/o, 1/l/i). 26 signos de 31 son
+ * 26 × log2(31) ≈ 128,8 bits: no se enumeran.
  */
 const ALFABETO = '23456789abcdefghjkmnpqrstuvwxyz';
+export const LARGO_SLUG = 26;
 
-export function nuevoSlug(bytes = 16): string {
-  const buf = randomBytes(bytes);
+/**
+ * Muestreo por rechazo: un byte vale 0–255 y 256 no es múltiplo de 31,
+ * así que `b % 31` favorecería a los primeros ocho signos. Se descartan
+ * los bytes ≥ 248 (el mayor múltiplo de 31 que cabe) y cada signo sale
+ * con la misma probabilidad.
+ */
+export function nuevoSlug(largo = LARGO_SLUG): string {
+  const n = ALFABETO.length;
+  const limite = 256 - (256 % n);
   let out = '';
-  for (const b of buf) out += ALFABETO[b % ALFABETO.length];
+  while (out.length < largo) {
+    for (const b of randomBytes(largo * 2)) {
+      if (b >= limite) continue;
+      out += ALFABETO[b % n];
+      if (out.length === largo) break;
+    }
+  }
   return out;
 }
 
 const SCRYPT_KEYLEN = 32;
 
+/** scrypt sin bloquear el bucle de eventos: cada intento de contraseña cuesta CPU de verdad. */
+function scryptAsync(secreto: string, salt: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(secreto, salt, SCRYPT_KEYLEN, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
 /**
  * Deriva la contraseña de un enlace. Formato: 's1:<sal hex>:<scrypt hex>'.
  * La contraseña en claro no se guarda ni viaja a la base: la base
- * compara derivados (ver migración 0022).
+ * compara derivados (ver migraciones 0022 y 0023).
  */
-export function hashSharePassword(password: string, saltHex = randomBytes(16).toString('hex')): string {
-  const clave = scryptSync(password.normalize('NFKC'), Buffer.from(saltHex, 'hex'), SCRYPT_KEYLEN);
+export async function hashSharePassword(secreto: string, saltHex = randomBytes(16).toString('hex')): Promise<string> {
+  const clave = await scryptAsync(secreto.normalize('NFKC'), Buffer.from(saltHex, 'hex'));
   return `s1:${saltHex}:${clave.toString('hex')}`;
 }
 
 /** true si la contraseña deriva en el hash guardado. Comparación en tiempo constante. */
-export function verifySharePassword(password: string, stored: string): boolean {
+export async function verifySharePassword(secreto: string, stored: string): Promise<boolean> {
   const [algo, saltHex] = stored.split(':');
   if (algo !== 's1' || !saltHex) return false;
-  const a = Buffer.from(hashSharePassword(password, saltHex));
+  const a = Buffer.from(await hashSharePassword(secreto, saltHex));
   const b = Buffer.from(stored);
   return a.length === b.length && timingSafeEqual(a, b);
 }
@@ -466,8 +493,21 @@ export interface MediaKitSnapshotTarifa {
   priceHigh: Decimal | null;
 }
 
+/**
+ * La audiencia de UNA red y UNA dimensión («Edad · Instagram»). Mezclar
+ * cuentas y dimensiones en una sola lista dejaba pastillas repetidas y
+ * sin contexto («25-34 · 40 %» tres veces).
+ */
+export interface MediaKitSnapshotAudiencia {
+  platformId: PlatformId;
+  /** 'age' | 'gender' | 'country' | … Tal cual la guarda audience_breakdown. */
+  dimension: string;
+  buckets: { bucket: string; share: string | null }[];
+}
+
 export interface MediaKitSnapshot {
-  version: 1;
+  /** 2 desde que la audiencia va agrupada por red y dimensión. */
+  version: 2;
   /** Cuándo se congeló. Lo que se enseña como «datos hasta…». */
   capturedAt: string;
   creator: { displayName: string; handle: string | null; bio: string | null; country: string | null; nicheSlugs: string[] };
@@ -478,7 +518,8 @@ export interface MediaKitSnapshot {
   redes: MediaKitSnapshotRed[];
   totales: { followers: number | null; medianViewsMax: number | null };
   topPosts: MediaKitSnapshotPost[];
-  audiencia: { dimension: string; bucket: string; share: string | null }[];
+  /** De la red con más seguidores que tenga demografía; una entrada por dimensión. */
+  audiencia: MediaKitSnapshotAudiencia[];
   tarifas: MediaKitSnapshotTarifa[];
 }
 
@@ -537,18 +578,51 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
     [creatorId],
   );
 
-  const { rows: audiencia } = await tx.query<{ dimension: string; bucket: string; share: string | null }>(
-    `SELECT a.dimension, a.bucket, a.share
-       FROM audience_breakdown a
-       JOIN social_connection c ON c.id = a.connection_id
-      WHERE c.creator_id = $1 AND a.scope = 'account' AND a.population = 'followers'
-        AND a.day = (SELECT max(day) FROM audience_breakdown b
-                      JOIN social_connection c2 ON c2.id = b.connection_id
-                     WHERE c2.creator_id = $1 AND b.scope = 'account')
-      ORDER BY a.dimension, a.share DESC NULLS LAST
-      LIMIT 24`,
+  // La audiencia de la red principal (la de más seguidores que tenga
+  // demografía), su último día, una fila por dimensión y segmento. La
+  // edad va en orden de edad; el resto, de mayor a menor.
+  const { rows: audiencia } = await tx.query<{
+    platform_id: PlatformId; dimension: string; bucket: string; share: string | null;
+  }>(
+    `WITH principal AS (
+       SELECT c.id, c.platform_id
+         FROM social_connection c
+         LEFT JOIN LATERAL (
+           SELECT s.followers FROM account_metric_snapshot s
+            WHERE s.connection_id = c.id ORDER BY s.day DESC LIMIT 1
+         ) f ON true
+        WHERE c.creator_id = $1
+          AND EXISTS (SELECT 1 FROM audience_breakdown a
+                       WHERE a.connection_id = c.id AND a.scope = 'account' AND a.population = 'followers')
+        ORDER BY f.followers DESC NULLS LAST, c.platform_id
+        LIMIT 1
+     ), ultimo AS (
+       SELECT DISTINCT ON (a.dimension, a.bucket) p.platform_id, a.dimension, a.bucket, a.share
+         FROM principal p
+         JOIN audience_breakdown a
+           ON a.connection_id = p.id AND a.scope = 'account' AND a.population = 'followers'
+        WHERE a.day = (SELECT max(b.day) FROM audience_breakdown b
+                        WHERE b.connection_id = p.id AND b.scope = 'account' AND b.population = 'followers')
+        ORDER BY a.dimension, a.bucket, a.captured_at DESC
+     )
+     SELECT platform_id, dimension, bucket, share
+       FROM ultimo
+      ORDER BY CASE dimension WHEN 'age' THEN 1 WHEN 'gender' THEN 2 WHEN 'country' THEN 3 ELSE 4 END,
+               dimension,
+               CASE WHEN dimension = 'age' THEN bucket END,
+               share DESC NULLS LAST`,
     [creatorId],
   );
+  const audienciaAgrupada: MediaKitSnapshotAudiencia[] = [];
+  for (const a of audiencia) {
+    let grupo = audienciaAgrupada.at(-1);
+    if (!grupo || grupo.dimension !== a.dimension) {
+      grupo = { platformId: a.platform_id, dimension: a.dimension, buckets: [] };
+      audienciaAgrupada.push(grupo);
+    }
+    // Ocho segmentos por dimensión bastan para una página que se lee de pie.
+    if (grupo.buckets.length < 8) grupo.buckets.push({ bucket: a.bucket, share: a.share });
+  }
 
   const tarifario = await getCurrentRateCard(tx, creatorId);
 
@@ -576,7 +650,7 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
   );
 
   return {
-    version: 1,
+    version: 2,
     capturedAt: new Date().toISOString(),
     creator: {
       displayName: creador.display_name,
@@ -598,7 +672,7 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
       views: p.views === null ? null : Number(p.views),
       viewsVsMedian: p.views_vs_median,
     })),
-    audiencia: audiencia.map((a) => ({ dimension: a.dimension, bucket: a.bucket, share: a.share })),
+    audiencia: audienciaAgrupada,
     tarifas: (tarifario?.items ?? [])
       .filter((i) => !i.isModifier)
       .map((i) => ({ labelEs: i.labelEs, platformId: i.platformId, priceLow: i.priceLow, priceHigh: i.priceHigh })),
@@ -655,7 +729,7 @@ export interface CreateMediaKitInput {
 export async function createMediaKit(tx: WorkspaceTx, input: CreateMediaKitInput): Promise<MediaKitRow> {
   const snapshot = await buildMediaKitSnapshot(tx, input.creatorId);
   const tarifario = await getCurrentRateCard(tx, input.creatorId);
-  const passwordHash = input.password ? hashSharePassword(input.password) : null;
+  const passwordHash = input.password ? await hashSharePassword(input.password) : null;
 
   const { rows } = await tx.query<RawMediaKit>(
     `INSERT INTO media_kit (workspace_id, creator_id, rate_card_id, slug, snapshot, is_public, password_hash, expires_at)
@@ -700,7 +774,7 @@ export async function updateMediaKitShare(tx: WorkspaceTx, id: string, input: Up
     sets.push(`is_public = $${values.length}`);
   }
   if (input.password !== undefined) {
-    values.push(input.password === null ? null : hashSharePassword(input.password));
+    values.push(input.password === null ? null : await hashSharePassword(input.password));
     sets.push(`password_hash = $${values.length}`);
   }
   if (input.expiresAt !== undefined) {
@@ -744,6 +818,11 @@ export interface QuoteListRow {
   id: string;
   number: string;
   slug: string;
+  /**
+   * El estado de HOY: una enviada o vista cuya validez ya pasó sale
+   * 'expired' aunque la marca nunca haya vuelto a abrir el enlace.
+   * Lo deriva la consulta (ver SELECT_QUOTE), no la pantalla.
+   */
   status: QuoteStatus;
   companyId: string;
   companyName: string;
@@ -755,6 +834,8 @@ export interface QuoteListRow {
   sentAt: string | null;
   viewedAt: string | null;
   acceptedAt: string | null;
+  rejectedAt: string | null;
+  expiredAt: string | null;
   viewCount: number;
   createdAt: string;
 }
@@ -764,6 +845,8 @@ export interface QuoteDetail extends QuoteListRow {
   subtotal: Decimal;
   discount: Decimal;
   tax: Decimal;
+  /** La tasa con la que se calculó `tax`, como fracción ('0.19'). null en cotizaciones anteriores a 0023. */
+  taxRate: string | null;
   agreedMetrics: string[];
   reportCutsHours: number[];
   usageRightsDays: number | null;
@@ -772,6 +855,10 @@ export interface QuoteDetail extends QuoteListRow {
   paymentTermsDays: number;
   campaignStartsOn: string | null;
   campaignEndsOn: string | null;
+  mediaKitId: string | null;
+  /** Quién aceptó desde el enlace (nombre y correo que dejó la marca). */
+  acceptedByName: string | null;
+  acceptedByEmail: string | null;
   items: QuoteItemRow[];
   /** La campaña que nació de esta cotización (CAM-2), si ya existe. */
   campaignId: string | null;
@@ -784,29 +871,53 @@ interface RawQuote {
   id: string; number: string; slug: string; status: QuoteStatus;
   company_id: string; company_name: string; deal_id: string | null; deal_name: string | null;
   creator_id: string; currency: string; subtotal: string; discount: string; tax: string; total: string;
+  tax_rate: string | null;
   agreed_metrics: string[]; report_cuts_hours: number[];
   usage_rights_days: number | null; exclusivity_days: number | null; exclusivity_scope: string | null;
   payment_terms_days: number; campaign_starts_on: string | null; campaign_ends_on: string | null;
+  media_kit_id: string | null;
   valid_until: string | null; sent_at: string | null; viewed_at: string | null; accepted_at: string | null;
+  rejected_at: string | null; expired_at: string | null;
+  accepted_by_name: string | null; accepted_by_email: string | null;
   view_count: number; created_at: string;
   campaign_id: string | null; campaign_name: string | null;
 }
 
+/**
+ * La cotización con su estado DE HOY. `vencida` se evalúa en la zona del
+ * workspace: «válida hasta el 30» quiere decir hasta el final del 30 en
+ * Bogotá, no a las 19:00. La fecha de vencimiento derivada es el
+ * principio del día siguiente en esa zona, que es cuando dejó de valer.
+ *
+ * Es la misma regla que aplica public_quote() (0023) al abrir el enlace,
+ * que además la persiste. Aquí solo se lee: un GET del panel no escribe.
+ */
 const SELECT_QUOTE = `
-  SELECT q.id, q.number, q.slug, q.status, q.company_id, co.name AS company_name,
+  SELECT q.id, q.number, q.slug,
+         CASE WHEN v.vencida THEN 'expired' ELSE q.status END AS status,
+         q.company_id, co.name AS company_name,
          q.deal_id, d.name AS deal_name, q.creator_id, q.currency,
-         q.subtotal, q.discount, q.tax, q.total,
+         q.subtotal, q.discount, q.tax, q.total, q.tax_rate,
          q.agreed_metrics, q.report_cuts_hours, q.usage_rights_days, q.exclusivity_days,
-         q.exclusivity_scope, q.payment_terms_days,
+         q.exclusivity_scope, q.payment_terms_days, q.media_kit_id,
          to_char(q.campaign_starts_on, 'YYYY-MM-DD') AS campaign_starts_on,
          to_char(q.campaign_ends_on, 'YYYY-MM-DD')   AS campaign_ends_on,
          to_char(q.valid_until, 'YYYY-MM-DD')        AS valid_until,
-         q.sent_at, q.viewed_at, q.accepted_at, q.view_count, q.created_at,
+         q.sent_at, q.viewed_at, q.accepted_at, q.rejected_at,
+         CASE WHEN v.vencida THEN coalesce(q.expired_at, (q.valid_until + 1)::timestamp AT TIME ZONE w.timezone)
+              ELSE q.expired_at END AS expired_at,
+         q.accepted_by_name, q.accepted_by_email,
+         q.view_count, q.created_at,
          ca.id AS campaign_id, ca.name AS campaign_name
     FROM quote q
+    JOIN workspace w ON w.id = q.workspace_id
     JOIN company co ON co.id = q.company_id
     LEFT JOIN deal d ON d.id = q.deal_id
-    LEFT JOIN campaign ca ON ca.quote_id = q.id AND ca.status <> 'cancelled'`;
+    LEFT JOIN campaign ca ON ca.quote_id = q.id AND ca.status <> 'cancelled'
+    CROSS JOIN LATERAL (
+      SELECT q.status IN ('sent', 'viewed') AND q.valid_until IS NOT NULL
+             AND q.valid_until < (now() AT TIME ZONE w.timezone)::date AS vencida
+    ) v`;
 
 function mapQuote(r: RawQuote): QuoteDetail {
   return {
@@ -823,6 +934,7 @@ function mapQuote(r: RawQuote): QuoteDetail {
     subtotal: r.subtotal,
     discount: r.discount,
     tax: r.tax,
+    taxRate: r.tax_rate === null ? null : normalizarTasa(r.tax_rate),
     total: r.total,
     agreedMetrics: r.agreed_metrics ?? [],
     reportCutsHours: r.report_cuts_hours ?? [],
@@ -832,10 +944,15 @@ function mapQuote(r: RawQuote): QuoteDetail {
     paymentTermsDays: r.payment_terms_days,
     campaignStartsOn: r.campaign_starts_on,
     campaignEndsOn: r.campaign_ends_on,
+    mediaKitId: r.media_kit_id,
     validUntil: r.valid_until,
     sentAt: r.sent_at,
     viewedAt: r.viewed_at,
     acceptedAt: r.accepted_at,
+    rejectedAt: r.rejected_at,
+    expiredAt: r.expired_at,
+    acceptedByName: r.accepted_by_name,
+    acceptedByEmail: r.accepted_by_email,
     viewCount: r.view_count,
     createdAt: r.created_at,
     items: [],
@@ -845,10 +962,22 @@ function mapQuote(r: RawQuote): QuoteDetail {
   };
 }
 
+/** '0.190000' → '0.19'. Postgres devuelve numeric(7,6) con sus seis decimales. */
+function normalizarTasa(tasa: string): string {
+  const [i = '0', f = ''] = tasa.split('.');
+  const frac = f.replace(/0+$/, '');
+  return frac ? `${i}.${frac}` : i;
+}
+
 export async function listQuotes(tx: WorkspaceTx, opts: { status?: readonly QuoteStatus[] } = {}): Promise<QuoteListRow[]> {
-  const where = opts.status && opts.status.length > 0 ? ' WHERE q.status = ANY($1::text[])' : '';
-  const params = where ? [[...opts.status!]] : [];
-  const { rows } = await tx.query<RawQuote>(`${SELECT_QUOTE}${where} ORDER BY q.created_at DESC LIMIT 200`, params);
+  // El filtro va sobre el estado de hoy, no sobre la columna: «vencidas»
+  // tiene que traer también las que nadie ha vuelto a abrir.
+  const filtrar = opts.status && opts.status.length > 0;
+  const { rows } = await tx.query<RawQuote>(
+    `SELECT * FROM (${SELECT_QUOTE}) x${filtrar ? ' WHERE x.status = ANY($1::text[])' : ''}
+      ORDER BY x.created_at DESC LIMIT 200`,
+    filtrar ? [[...opts.status!]] : [],
+  );
   return rows.map(mapQuote);
 }
 
@@ -896,15 +1025,23 @@ export interface QuotableDeal {
   currency: string;
 }
 
+/**
+ * Los negocios ABIERTOS: ni ganados ni perdidos. Cotizar un negocio
+ * ganado no lo movía a «Propuesta enviada» ni hacía nada en Ventas al
+ * aceptarse, y encabezaba la lista porque se ordenaba por etapa.
+ * El orden es el del último movimiento: el negocio que se tocó hoy es
+ * el que se está cotizando.
+ */
 export async function listQuotableDeals(tx: WorkspaceTx): Promise<QuotableDeal[]> {
   const { rows } = await tx.query<{
     id: string; name: string; company_id: string; company_name: string;
     stage_id: string; stage_label: string; amount: string | null; currency: string;
   }>(
-    `SELECT id, name, company_id, company_name, stage_id, stage_label, amount, currency
-       FROM deal_pipeline
-      WHERE NOT is_lost
-      ORDER BY stage_position DESC, name`,
+    `SELECT p.id, p.name, p.company_id, p.company_name, p.stage_id, p.stage_label, p.amount, p.currency
+       FROM deal_pipeline p
+       LEFT JOIN LATERAL (SELECT max(h.changed_at) AS ultimo FROM deal_stage_history h WHERE h.deal_id = p.id) h ON true
+      WHERE NOT p.is_lost AND NOT p.is_won
+      ORDER BY greatest(h.ultimo, p.last_contact_at) DESC NULLS LAST, p.name`,
   );
   return rows.map((r) => ({
     id: r.id,
@@ -916,6 +1053,27 @@ export async function listQuotableDeals(tx: WorkspaceTx): Promise<QuotableDeal[]
     amount: r.amount,
     currency: r.currency.toUpperCase(),
   }));
+}
+
+const TASA_RE = /^(0(\.\d{1,6})?|1(\.0{1,6})?)$/;
+
+/**
+ * La tasa de impuesto con la que arranca una cotización nueva, como
+ * fracción. Sale del workspace: `settings.taxRate` si el creador la
+ * fijó; si no, el IVA general cuando el workspace es de Colombia (el
+ * único valor por defecto que el producto puede tener fijado a un
+ * país), y 0 en cualquier otro sitio, donde es mejor que el creador la
+ * escriba a que la cotización salga con el IVA de otro país.
+ */
+export async function getDefaultTaxRate(tx: WorkspaceTx): Promise<string> {
+  const { rows } = await tx.query<{ tax_rate: string | null; country: string | null }>(
+    "SELECT settings->>'taxRate' AS tax_rate, country FROM workspace WHERE id = $1",
+    [tx.workspaceId],
+  );
+  const fila = rows[0];
+  const propia = fila?.tax_rate?.trim();
+  if (propia && TASA_RE.test(propia)) return propia;
+  return fila?.country?.toUpperCase() === 'CO' ? DEFAULT_TAX_RATE : '0';
 }
 
 export interface QuoteItemInput {
@@ -968,6 +1126,15 @@ export async function nextQuoteNumber(tx: WorkspaceTx, year = new Date().getUTCF
   return `${prefijo}${String(siguiente).padStart(3, '0')}`;
 }
 
+function tasaParaGuardar(taxRate: string | undefined): string | null {
+  if (!taxRate || taxRate.trim() === '') return null;
+  const t = taxRate.trim();
+  if (!/^\d+(\.\d{1,6})?$/.test(t) || Number(t) > 1) {
+    throw new CotizarError('TasaInvalida', 'El impuesto es un porcentaje entre 0 y 100.');
+  }
+  return t;
+}
+
 /** Crea la cotización en borrador, con sus ítems y sus totales ya calculados por core. */
 export async function createQuote(tx: WorkspaceTx, input: CreateQuoteInput): Promise<QuoteDetail> {
   if (!isUuid(input.creatorId)) throw new CotizarError('CreatorNotFound', 'Elige el creador que firma la cotización.');
@@ -987,28 +1154,31 @@ export async function createQuote(tx: WorkspaceTx, input: CreateQuoteInput): Pro
     throw new CotizarError('QuoteSinItems', 'Una cotización necesita al menos un entregable.');
   }
 
+  const { rows: ws } = await tx.query<{ currency: string }>('SELECT currency FROM workspace WHERE id = $1', [tx.workspaceId]);
+  const moneda = (ws[0]?.currency ?? 'COP').toUpperCase();
+  const taxRate = tasaParaGuardar(input.taxRate);
   const totales = calcularTotalesCotizacion({
     items: input.items.map((i) => ({ quantity: i.quantity, unitPrice: i.unitPrice })),
     discount: input.discount,
-    taxRate: input.taxRate,
+    taxRate: taxRate ?? undefined,
+    currency: moneda,
   });
 
-  const { rows: ws } = await tx.query<{ currency: string }>('SELECT currency FROM workspace WHERE id = $1', [tx.workspaceId]);
   const number = await nextQuoteNumber(tx);
 
   const { rows: creadas } = await tx.query<{ id: string }>(
     `INSERT INTO quote (workspace_id, deal_id, company_id, creator_id, media_kit_id, number, slug, currency,
-                        subtotal, discount, tax, total, agreed_metrics, report_cuts_hours,
+                        subtotal, discount, tax, total, tax_rate, agreed_metrics, report_cuts_hours,
                         usage_rights_days, exclusivity_days, exclusivity_scope, payment_terms_days,
                         campaign_starts_on, campaign_ends_on, valid_until, status)
      VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7,
-             $8, $9, $10, $11, $12::text[], $13::int[],
-             $14, $15, $16, $17, $18::date, $19::date, $20::date, 'draft')
+             $8, $9, $10, $11, $12, $13::text[], $14::int[],
+             $15, $16, $17, $18, $19::date, $20::date, $21::date, 'draft')
      RETURNING id`,
     [
       dealId, companyId, input.creatorId, input.mediaKitId ?? null, number, nuevoSlug(),
-      (ws[0]?.currency ?? 'COP').toUpperCase(),
-      totales.subtotal, totales.discount, totales.tax, totales.total,
+      moneda,
+      totales.subtotal, totales.discount, totales.tax, totales.total, taxRate,
       input.agreedMetrics ?? [], input.reportCutsHours ?? [24, 168, 720],
       input.usageRightsDays ?? null, input.exclusivityDays ?? null, input.exclusivityScope ?? null,
       input.paymentTermsDays ?? 30,
@@ -1038,29 +1208,34 @@ export interface UpdateQuoteInput extends Omit<CreateQuoteInput, 'creatorId' | '
   items: QuoteItemInput[];
 }
 
-/** Reescribe un borrador entero: ítems y lo acordado. Una enviada ya no se toca. */
+/**
+ * Reescribe un borrador entero: ítems y lo acordado. Una enviada ya no
+ * se toca. Corregir un precio no quema otro número COT-AAAA-NNN.
+ */
 export async function updateQuoteDraft(tx: WorkspaceTx, id: string, input: UpdateQuoteInput): Promise<QuoteDetail> {
   const actual = await getQuote(tx, id);
   if (!actual) throw new QuoteNotFound();
   if (actual.status !== 'draft') throw new QuoteNotEditable(actual.status);
   if (input.items.length === 0) throw new CotizarError('QuoteSinItems', 'Una cotización necesita al menos un entregable.');
 
+  const taxRate = tasaParaGuardar(input.taxRate);
   const totales = calcularTotalesCotizacion({
     items: input.items.map((i) => ({ quantity: i.quantity, unitPrice: i.unitPrice })),
     discount: input.discount,
-    taxRate: input.taxRate,
+    taxRate: taxRate ?? undefined,
+    currency: actual.currency,
   });
 
   await tx.query(
     `UPDATE quote
-        SET subtotal = $2, discount = $3, tax = $4, total = $5,
-            agreed_metrics = $6::text[], report_cuts_hours = $7::int[],
-            usage_rights_days = $8, exclusivity_days = $9, exclusivity_scope = $10,
-            payment_terms_days = $11, campaign_starts_on = $12::date, campaign_ends_on = $13::date,
-            valid_until = $14::date
-      WHERE id = $1`,
+        SET subtotal = $2, discount = $3, tax = $4, total = $5, tax_rate = $6,
+            agreed_metrics = $7::text[], report_cuts_hours = $8::int[],
+            usage_rights_days = $9, exclusivity_days = $10, exclusivity_scope = $11,
+            payment_terms_days = $12, campaign_starts_on = $13::date, campaign_ends_on = $14::date,
+            valid_until = $15::date
+      WHERE id = $1 AND status = 'draft'`,
     [
-      id, totales.subtotal, totales.discount, totales.tax, totales.total,
+      id, totales.subtotal, totales.discount, totales.tax, totales.total, taxRate,
       input.agreedMetrics ?? actual.agreedMetrics, input.reportCutsHours ?? actual.reportCutsHours,
       input.usageRightsDays ?? null, input.exclusivityDays ?? null, input.exclusivityScope ?? null,
       input.paymentTermsDays ?? actual.paymentTermsDays,
@@ -1073,6 +1248,18 @@ export async function updateQuoteDraft(tx: WorkspaceTx, id: string, input: Updat
   const quote = await getQuote(tx, id);
   if (!quote) throw new QuoteNotFound();
   return quote;
+}
+
+/**
+ * Borra un borrador. Una cotización enviada ya es un documento que la
+ * marca tiene: esa no se borra, se rechaza o vence. Si el borrador era
+ * el último número del año, el siguiente lo reutiliza.
+ */
+export async function deleteQuoteDraft(tx: WorkspaceTx, id: string): Promise<void> {
+  const actual = await getQuote(tx, id);
+  if (!actual) throw new QuoteNotFound();
+  if (actual.status !== 'draft') throw new QuoteNotDraft(actual.status);
+  await tx.query("DELETE FROM quote WHERE id = $1 AND status = 'draft'", [id]);
 }
 
 /**
@@ -1093,6 +1280,8 @@ export interface QuotePublicSnapshot {
   subtotal: Decimal;
   discount: Decimal;
   tax: Decimal;
+  /** Fracción. Opcional: los snapshots anteriores a 0023 no la traen. */
+  taxRate?: string | null;
   total: Decimal;
   acordado: {
     metrics: string[];
@@ -1139,6 +1328,7 @@ async function buildQuoteSnapshot(tx: WorkspaceTx, quote: QuoteDetail): Promise<
     subtotal: quote.subtotal,
     discount: quote.discount,
     tax: quote.tax,
+    taxRate: quote.taxRate,
     total: quote.total,
     acordado: {
       metrics: quote.agreedMetrics,
@@ -1151,6 +1341,42 @@ async function buildQuoteSnapshot(tx: WorkspaceTx, quote: QuoteDetail): Promise<
       campaignEndsOn: quote.campaignEndsOn,
     },
     mediaKitSlug: kit[0]?.slug ?? null,
+  };
+}
+
+/**
+ * La cotización tal como la ve (o la verá) la marca, para la vista
+ * previa del panel. NO pasa por public_quote(): el creador mirando su
+ * propio documento no es una visita, ni la marca como vista.
+ *
+ * Enviada: el snapshot congelado, que es lo que la marca tiene. Borrador:
+ * el snapshot que se congelaría si se enviara ahora, para revisarlo
+ * antes de «Enviar».
+ */
+export async function getQuotePreview(tx: WorkspaceTx, id: string): Promise<PublicQuoteView | null> {
+  const quote = await getQuote(tx, id);
+  if (!quote) return null;
+  let snapshot: QuotePublicSnapshot;
+  if (quote.status === 'draft') {
+    snapshot = await buildQuoteSnapshot(tx, quote);
+  } else {
+    const { rows } = await tx.query<{ public_snapshot: QuotePublicSnapshot | null }>(
+      'SELECT public_snapshot FROM quote WHERE id = $1',
+      [id],
+    );
+    snapshot = rows[0]?.public_snapshot ?? (await buildQuoteSnapshot(tx, quote));
+  }
+  return {
+    ...snapshot,
+    slug: quote.slug,
+    status: quote.status,
+    validUntil: quote.validUntil,
+    sentAt: quote.sentAt,
+    viewedAt: quote.viewedAt,
+    acceptedAt: quote.acceptedAt,
+    acceptedByName: quote.acceptedByName,
+    rejectedAt: quote.rejectedAt,
+    expiredAt: quote.expiredAt,
   };
 }
 
@@ -1197,7 +1423,7 @@ async function moverDealAPropuesta(tx: WorkspaceTx, dealId: string, quoteNumber:
   );
   const posPropuesta = propuesta[0]?.position ?? 4;
   if (deal.is_won || deal.is_lost || deal.position >= posPropuesta) {
-    await registrarActividad(tx, dealId, quoteNumber);
+    await registrarActividad(tx, dealId, 'proposal_sent', `Cotización ${quoteNumber} enviada`);
     return;
   }
 
@@ -1210,21 +1436,27 @@ async function moverDealAPropuesta(tx: WorkspaceTx, dealId: string, quoteNumber:
     [dealId, deal.stage_id],
   );
   await tx.query("UPDATE deal SET stage_id = 'propuesta', last_contact_at = now() WHERE id = $1", [dealId]);
-  await registrarActividad(tx, dealId, quoteNumber);
+  await registrarActividad(tx, dealId, 'proposal_sent', `Cotización ${quoteNumber} enviada`);
 }
 
-async function registrarActividad(tx: WorkspaceTx, dealId: string, quoteNumber: string): Promise<void> {
+async function registrarActividad(
+  tx: WorkspaceTx,
+  dealId: string,
+  kind: 'proposal_sent' | 'stage_change',
+  subject: string,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
   await tx.query(
-    `INSERT INTO activity (workspace_id, company_id, deal_id, kind, subject, occurred_at)
-     SELECT current_workspace_id(), d.company_id, d.id, 'proposal_sent', $2, now()
+    `INSERT INTO activity (workspace_id, company_id, deal_id, kind, subject, occurred_at, metadata)
+     SELECT current_workspace_id(), d.company_id, d.id, $2, $3, now(), $4::jsonb
        FROM deal d WHERE d.id = $1`,
-    [dealId, `Cotización ${quoteNumber} enviada`],
+    [dealId, kind, subject, JSON.stringify(metadata)],
   );
 }
 
 /**
  * Aceptar desde el panel (la marca dijo que sí por otro canal). Hace lo
- * mismo que la función pública `public_quote_accept` de 0022: deja la
+ * mismo que la función pública `public_quote_accept` de 0023: deja la
  * cotización en 'accepted' y el deal en «Ganado» con su historial.
  */
 export async function acceptQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail> {
@@ -1233,7 +1465,10 @@ export async function acceptQuote(tx: WorkspaceTx, id: string): Promise<QuoteDet
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'accepted');
 
   await tx.query("UPDATE quote SET status = 'accepted', accepted_at = coalesce(accepted_at, now()) WHERE id = $1", [id]);
-  if (quote.dealId) await ganarDeal(tx, quote.dealId);
+  if (quote.dealId) {
+    await ganarDeal(tx, quote.dealId);
+    await registrarActividad(tx, quote.dealId, 'stage_change', `Cotización ${quote.number} aceptada`, { quoteId: quote.id });
+  }
 
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
@@ -1244,7 +1479,7 @@ export async function rejectQuote(tx: WorkspaceTx, id: string): Promise<QuoteDet
   const quote = await getQuote(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'rejected');
-  await tx.query("UPDATE quote SET status = 'rejected' WHERE id = $1", [id]);
+  await tx.query("UPDATE quote SET status = 'rejected', rejected_at = coalesce(rejected_at, now()) WHERE id = $1", [id]);
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
   return actualizada;
@@ -1275,23 +1510,37 @@ async function ganarDeal(tx: WorkspaceTx, dealId: string): Promise<void> {
 export type PublicMediaKitResult =
   | { status: 'not_found' }
   | { status: 'expired'; expiresAt: string }
-  | { status: 'password_required' | 'password_invalid'; algo: string; salt: string }
+  | { status: 'locked'; lockedUntil: string }
+  | { status: 'password_required'; algo: string; salt: string }
+  | { status: 'password_invalid'; algo: string; salt: string; attemptsLeft: number }
   | { status: 'ok'; slug: string; snapshot: MediaKitSnapshot; viewCount: number; createdAt: string };
+
+/** Qué cuenta como visita. La vista previa del panel y los robots que desenrollan enlaces, no. */
+export interface PublicReadOptions {
+  /** false: leer sin sumar visita ni marcar la cotización como vista. Por defecto, true. */
+  count?: boolean;
+}
 
 /**
  * Abre un media kit por su enlace. `password` es la que escribió la
  * visita: se deriva AQUÍ con la sal que devuelve la base, para que la
  * contraseña en claro no salga de este proceso.
  */
-export async function readPublicMediaKit(tx: BaseTx, slug: string, password?: string | null): Promise<PublicMediaKitResult> {
-  const primera = await llamarPublicMediaKit(tx, slug, null);
+export async function readPublicMediaKit(
+  tx: BaseTx,
+  slug: string,
+  password?: string | null,
+  opts: PublicReadOptions = {},
+): Promise<PublicMediaKitResult> {
+  const count = opts.count ?? true;
+  const primera = await llamarPublicMediaKit(tx, slug, null, count);
   if (primera.status !== 'password_required' || !password) return primera;
-  const hash = hashSharePassword(password, primera.salt);
-  return llamarPublicMediaKit(tx, slug, hash);
+  const hash = await hashSharePassword(password, primera.salt);
+  return llamarPublicMediaKit(tx, slug, hash, count);
 }
 
-async function llamarPublicMediaKit(tx: BaseTx, slug: string, hash: string | null): Promise<PublicMediaKitResult> {
-  const { rows } = await tx.query<{ r: PublicMediaKitResult }>('SELECT public_media_kit($1, $2) AS r', [slug, hash]);
+async function llamarPublicMediaKit(tx: BaseTx, slug: string, hash: string | null, count: boolean): Promise<PublicMediaKitResult> {
+  const { rows } = await tx.query<{ r: PublicMediaKitResult }>('SELECT public_media_kit($1, $2, $3) AS r', [slug, hash, count]);
   return rows[0]?.r ?? { status: 'not_found' };
 }
 
@@ -1302,32 +1551,54 @@ export interface PublicQuoteView extends QuotePublicSnapshot {
   sentAt: string | null;
   viewedAt: string | null;
   acceptedAt: string | null;
+  acceptedByName?: string | null;
+  rejectedAt?: string | null;
+  expiredAt?: string | null;
 }
 
 export type PublicQuoteResult = { status: 'not_found' } | { status: 'ok'; quote: PublicQuoteView };
 
-/** Abre una cotización por su enlace. La marca queda registrada como vista. */
-export async function readPublicQuote(tx: BaseTx, slug: string): Promise<PublicQuoteResult> {
-  const { rows } = await tx.query<{ r: PublicQuoteResult }>('SELECT public_quote($1) AS r', [slug]);
+/** Abre una cotización por su enlace. Con `count` (por defecto), la marca queda registrada como vista. */
+export async function readPublicQuote(tx: BaseTx, slug: string, opts: PublicReadOptions = {}): Promise<PublicQuoteResult> {
+  const { rows } = await tx.query<{ r: PublicQuoteResult }>('SELECT public_quote($1, $2) AS r', [slug, opts.count ?? true]);
   return rows[0]?.r ?? { status: 'not_found' };
+}
+
+/** Quién acepta: la firma mínima que piden Bonsai y HoneyBook. */
+export interface FirmaAceptacion {
+  name: string;
+  email: string;
 }
 
 export type PublicQuoteAcceptResult =
   | { status: 'not_found' }
+  | { status: 'invalid_signer' }
   | { status: 'not_acceptable'; quoteStatus: QuoteStatus }
-  | { status: 'ok'; quoteId: string; dealId: string | null; acceptedAt: string; campaignPending: boolean };
+  | {
+      status: 'ok';
+      quoteId: string;
+      quoteNumber: string;
+      dealId: string | null;
+      /**
+       * El workspace de la cotización, leído por la función de la base.
+       * Solo lo usa el servidor para abrir la transacción que crea la
+       * campaña (COT-4); nunca viaja a la página pública.
+       */
+      workspaceId: string;
+      acceptedAt: string;
+    };
 
 /**
  * «Aceptar cotización» desde el enlace público. Deja la cotización
- * aceptada y el deal en «Ganado» en una sola transacción.
- *
- * NO crea la campaña: createCampaignFromQuote() (CAM-2) corre con el
- * workspace del creador, que esta petición no tiene. Por eso devuelve
- * campaignPending, y el panel la crea con un clic (ver el README del
- * módulo).
+ * aceptada (con nombre y correo de quien acepta) y el deal en «Ganado»
+ * en una sola transacción. La campaña la crea después
+ * `completePublicAcceptance` con el workspace que devuelve.
  */
-export async function acceptPublicQuote(tx: BaseTx, slug: string): Promise<PublicQuoteAcceptResult> {
-  const { rows } = await tx.query<{ r: PublicQuoteAcceptResult }>('SELECT public_quote_accept($1) AS r', [slug]);
+export async function acceptPublicQuote(tx: BaseTx, slug: string, firma: FirmaAceptacion): Promise<PublicQuoteAcceptResult> {
+  const { rows } = await tx.query<{ r: PublicQuoteAcceptResult }>(
+    'SELECT public_quote_accept($1, $2, $3) AS r',
+    [slug, firma.name, firma.email],
+  );
   return rows[0]?.r ?? { status: 'not_found' };
 }
 
@@ -1377,6 +1648,91 @@ export async function createCampaignForQuote(
   }
   const { campaign, created } = await createCampaignFromQuote(tx, { quoteId: quote.id, startsOn, endsOn });
   return { campaignId: campaign.id, campaignName: campaign.name, created };
+}
+
+/** Lo que dejó una aceptación en Campañas: la campaña, o por qué quedó pendiente. */
+export interface ResultadoCampana {
+  campaign: CampanaDeCotizacion | null;
+  /** El código del error si no se pudo crear (p. ej. 'FechasDeCampanaFaltan'); null si se creó. */
+  pendingReason: string | null;
+}
+
+/**
+ * Intenta crear la campaña DENTRO de la transacción de quien llama, sin
+ * arriesgar lo demás: si CAM-2 la rechaza (faltan fechas, un conflicto),
+ * se deshace solo su parte con un SAVEPOINT y la aceptación sigue en
+ * pie. La cotización queda entonces con «Campaña: pendiente» y el
+ * creador la termina desde el detalle.
+ */
+async function intentarCampana(tx: WorkspaceTx, quoteId: string): Promise<ResultadoCampana> {
+  await tx.query('SAVEPOINT cotizar_campana');
+  try {
+    const campaign = await createCampaignForQuote(tx, quoteId);
+    await tx.query('RELEASE SAVEPOINT cotizar_campana');
+    return { campaign, pendingReason: null };
+  } catch (err) {
+    await tx.query('ROLLBACK TO SAVEPOINT cotizar_campana');
+    const code = err && typeof err === 'object' && 'code' in err && typeof err.code === 'string' ? err.code : 'CampaignError';
+    return { campaign: null, pendingReason: code };
+  }
+}
+
+/**
+ * COT-4 desde el panel: aceptar y crear la campaña en UNA transacción.
+ * Es lo que dice el criterio del backlog —«aceptar deja una campaña en
+ * planned que Nicolás ve sin tocar nada»— sin un segundo clic.
+ */
+export async function acceptQuoteAndCreateCampaign(
+  tx: WorkspaceTx,
+  id: string,
+): Promise<{ quote: QuoteDetail } & ResultadoCampana> {
+  await acceptQuote(tx, id);
+  const campana = await intentarCampana(tx, id);
+  const quote = await getQuote(tx, id);
+  if (!quote) throw new QuoteNotFound();
+  return { quote, ...campana };
+}
+
+/**
+ * COT-4 desde el enlace: lo que queda después de `acceptPublicQuote`,
+ * ya con el workspace de la cotización fijado por el cliente de base
+ * (lib/db de la web lo abre con el workspaceId que devolvió la función
+ * pública, nunca con uno que venga del navegador).
+ *
+ * Deja la actividad en el negocio, el aviso para el creador y la
+ * campaña de CAM-2. Todo en la misma transacción; si la campaña no se
+ * puede crear, el aviso lo dice y el detalle ofrece terminarla.
+ */
+export async function completePublicAcceptance(tx: WorkspaceTx, quoteId: string): Promise<ResultadoCampana> {
+  const quote = await getQuote(tx, quoteId);
+  if (!quote) throw new QuoteNotFound();
+  if (quote.status !== 'accepted') {
+    throw new CotizarError('QuoteNotAccepted', `Solo una cotización aceptada crea campaña; esta está en «${quote.status}».`);
+  }
+  const firma = quote.acceptedByName
+    ? `${quote.acceptedByName}${quote.acceptedByEmail ? ` <${quote.acceptedByEmail}>` : ''}`
+    : null;
+  if (quote.dealId) {
+    await registrarActividad(
+      tx, quote.dealId, 'stage_change',
+      `Cotización ${quote.number} aceptada${firma ? ` por ${firma}` : ''} desde el enlace`,
+      { quoteId: quote.id, acceptedByName: quote.acceptedByName, acceptedByEmail: quote.acceptedByEmail },
+    );
+  }
+  const campana = await intentarCampana(tx, quoteId);
+  await tx.query(
+    `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+     VALUES (current_workspace_id(), 'quote_accepted', 'success', $1, $2, 'quote', $3, $4)`,
+    [
+      `${quote.companyName} aceptó la cotización ${quote.number}`,
+      campana.campaign
+        ? `Aceptada${firma ? ` por ${firma}` : ''}. La campaña «${campana.campaign.campaignName}» ya está planeada.`
+        : `Aceptada${firma ? ` por ${firma}` : ''}. La campaña quedó pendiente: termínala desde la cotización.`,
+      quote.id,
+      `/cotizar/cotizaciones/${quote.id}`,
+    ],
+  );
+  return campana;
 }
 
 /** Los pasos del cálculo guardados en un ítem del tarifario, si los tiene. */

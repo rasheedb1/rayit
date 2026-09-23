@@ -178,3 +178,13 @@ describe("las pantallas atadas al workspace no vuelven al formato por defecto", 
 
   it.todo(`atar al workspace las pantallas de los demás módulos: ${PENDIENTES_POR_MODULO.join(", ")}`);
 });
+
+describe("formatMultiple", () => {
+  it("un múltiplo lleva su signo de veces y el separador del locale", async () => {
+    const { formatMultiple, formatterFor } = await import("./format");
+    expect(formatMultiple(3.57)).toBe("3,6×");
+    expect(formatMultiple(12)).toBe("12×");
+    expect(formatMultiple(3.57, 1, { locale: "en-US" })).toBe("3.6×");
+    expect(formatterFor({ locale: "es-MX", currency: "MXN", timezone: "UTC" }).multiple(2.25)).toBe("2.3×");
+  });
+});

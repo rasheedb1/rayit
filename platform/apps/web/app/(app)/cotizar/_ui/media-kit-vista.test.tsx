@@ -1,11 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { MediaKitSnapshot } from "@mc/db/queries/cotizar";
-import { MediaKitVista } from "./vista";
+import { MediaKitVista } from "./media-kit-vista";
 
 /** Un snapshot como el que congela `buildMediaKitSnapshot`. */
 const SNAPSHOT: MediaKitSnapshot = {
-  version: 1,
+  version: 2,
   capturedAt: "2026-09-20T12:00:00Z",
   creator: { displayName: "Laura Cocina", handle: "@lauracocina", bio: "Recetas de 30 segundos", country: "CO", nicheSlugs: ["cocina"] },
   currency: "COP",
@@ -19,7 +19,11 @@ const SNAPSHOT: MediaKitSnapshot = {
   topPosts: [
     { platformId: "tiktok", url: "https://tiktok.com/x", caption: "Arepas en 30 s", publishedAt: "2026-09-01T15:00:00Z", views: 412_000, viewsVsMedian: "3.570" },
   ],
-  audiencia: [{ dimension: "country", bucket: "Colombia", share: "0.62" }],
+  audiencia: [
+    { platformId: "tiktok", dimension: "age", buckets: [{ bucket: "18-24", share: "0.34" }, { bucket: "25-34", share: "0.37" }] },
+    { platformId: "tiktok", dimension: "gender", buckets: [{ bucket: "F", share: "0.61" }, { bucket: "M", share: "0.39" }] },
+    { platformId: "tiktok", dimension: "country", buckets: [{ bucket: "CO", share: "0.69" }, { bucket: "OTHER", share: "0.03" }] },
+  ],
   tarifas: [{ labelEs: "TikTok dedicado", platformId: "tiktok", priceLow: "5195070.00", priceHigh: "8081220.00" }],
 };
 
@@ -35,6 +39,24 @@ describe("MediaKitVista", () => {
     expect(screen.getByText("7,4 %")).toBeInTheDocument();
   });
 
+  it("el video que despegó dice cuántas veces su mediana, como multiplicador", () => {
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    expect(screen.getByText("3,6× su mediana")).toBeInTheDocument();
+  });
+
+  it("la audiencia va por dimensión y con su red, sin pastillas repetidas", () => {
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    const audiencia = screen.getByRole("region", { name: "Audiencia" });
+    expect(within(audiencia).getByText("Edad · TikTok")).toBeInTheDocument();
+    expect(within(audiencia).getByText("Género · TikTok")).toBeInTheDocument();
+    expect(within(audiencia).getByText("País · TikTok")).toBeInTheDocument();
+    expect(within(audiencia).getByText("Mujeres")).toBeInTheDocument();
+    expect(within(audiencia).getByText("Colombia")).toBeInTheDocument();
+    expect(within(audiencia).getByText("Otros")).toBeInTheDocument();
+    expect(within(audiencia).getAllByText("25-34")).toHaveLength(1);
+    expect(within(audiencia).getByText("37 %")).toBeInTheDocument();
+  });
+
   it("las tarifas van al final y son un rango, no un precio", () => {
     render(<MediaKitVista snapshot={SNAPSHOT} />);
     const tarifas = screen.getByRole("region", { name: "Tarifas" });
@@ -42,12 +64,18 @@ describe("MediaKitVista", () => {
     expect(within(tarifas).getByText(/El precio final se acuerda en la cotización/)).toBeInTheDocument();
   });
 
-  it("sin audiencia ni videos, no pinta las secciones vacías", () => {
+  it("sin audiencia ni videos, no pinta las secciones vacías; un snapshot v1 no enseña su audiencia plana", () => {
     render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [], audiencia: [], tarifas: [] }} />);
     expect(screen.queryByRole("region", { name: "Tarifas" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Audiencia" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Lo que mejor funciona" })).not.toBeInTheDocument();
     // Lo que sí queda: quién es y sus redes.
     expect(screen.getByRole("heading", { level: 1, name: "Laura Cocina" })).toBeInTheDocument();
+  });
+
+  it("un snapshot de la primera versión (audiencia plana) no enseña la sección", () => {
+    const v1 = { ...SNAPSHOT, audiencia: [{ dimension: "age", bucket: "25-34", share: "0.4" }] } as unknown as MediaKitSnapshot;
+    render(<MediaKitVista snapshot={v1} />);
+    expect(screen.queryByRole("region", { name: "Audiencia" })).not.toBeInTheDocument();
   });
 });

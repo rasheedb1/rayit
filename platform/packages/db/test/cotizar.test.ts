@@ -16,15 +16,17 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  acceptPublicQuote, acceptQuote, buildMediaKitSnapshot, createMediaKit, createQuote,
-  createCampaignForQuote, getCurrentRateCard, getQuote, getRateCardInputs, hashSharePassword,
-  listMediaKits, listQuotableDeals, listQuotes, nextQuoteNumber, overrideRateCardItemPrice,
-  readPublicMediaKit, readPublicQuote, saveRateCard, sendQuote, updateMediaKitShare,
-  verifySharePassword, QuoteNotEditable,
+  acceptPublicQuote, acceptQuote, acceptQuoteAndCreateCampaign, buildMediaKitSnapshot, completePublicAcceptance,
+  createMediaKit, createQuote, createCampaignForQuote, deleteQuoteDraft, getCurrentRateCard, getDefaultTaxRate,
+  getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
+  nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
+  saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
+  QuoteNotDraft, QuoteNotEditable,
 } from '../src/queries/cotizar.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
+const FIRMA = { name: 'Ana Gómez', email: 'ana@cafealma.co' };
 
 let t: TestDb;
 let creadora = '';
@@ -119,7 +121,7 @@ describe('COT-1 · tarifario', () => {
 describe('COT-2 · media kit', () => {
   test('el snapshot congela seguidores, views y tarifas', async () => {
     const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
-    assert.equal(snap.version, 1);
+    assert.equal(snap.version, 2);
     assert.ok(snap.creator.displayName.length > 0);
     assert.ok(snap.redes.length > 0, 'la creadora del seed tiene cuentas conectadas');
     assert.ok(snap.tarifas.length > 0, 'lleva las tarifas vigentes');
@@ -153,6 +155,31 @@ describe('COT-2 · media kit', () => {
     assert.equal(otraVez.status === 'ok' && otraVez.viewCount, 2);
   });
 
+  test('la audiencia va agrupada: una red, una entrada por dimensión, sin repetir segmentos', async () => {
+    const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
+    assert.ok(snap.audiencia.length > 0, 'el seed trae demografía');
+    const redes = new Set(snap.audiencia.map((a) => a.platformId));
+    assert.equal(redes.size, 1, 'una sola red: la principal');
+    const dimensiones = snap.audiencia.map((a) => a.dimension);
+    assert.deepEqual(dimensiones, [...new Set(dimensiones)], 'cada dimensión aparece una vez');
+    assert.equal(dimensiones[0], 'age', 'la edad primero');
+    for (const a of snap.audiencia) {
+      const buckets = a.buckets.map((b) => b.bucket);
+      assert.deepEqual(buckets, [...new Set(buckets)], `sin segmentos repetidos en ${a.dimension}`);
+    }
+    const edad = snap.audiencia.find((a) => a.dimension === 'age')!;
+    assert.deepEqual(edad.buckets.map((b) => b.bucket), [...edad.buckets.map((b) => b.bucket)].sort(), 'la edad en orden de edad');
+  });
+
+  test('la vista previa del panel no cuenta como visita', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora }));
+    const previa = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, null, { count: false }));
+    assert.equal(previa.status, 'ok');
+    assert.equal(previa.status === 'ok' && previa.viewCount, 0);
+    const marca = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug));
+    assert.equal(marca.status === 'ok' && marca.viewCount, 1);
+  });
+
   test('un slug que no existe es not_found, no un error', async () => {
     const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, 'esto-no-existe'));
     assert.deepEqual(r, { status: 'not_found' });
@@ -168,12 +195,37 @@ describe('COT-2 · media kit', () => {
 
     const mala = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'otra'));
     assert.equal(mala.status, 'password_invalid');
+    assert.equal(mala.status === 'password_invalid' && mala.attemptsLeft, 9);
 
     const buena = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'cafe-con-leche'));
     assert.equal(buena.status, 'ok');
 
     // Una contraseña fallida no cuenta como visita.
     assert.equal(buena.status === 'ok' && buena.viewCount, 1);
+  });
+
+  test('diez contraseñas fallidas bloquean el enlace quince minutos, también para la buena', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createMediaKit(tx, { creatorId: creadora, password: 'la-buena' }));
+    let ultimo = '';
+    for (let i = 0; i < 10; i++) {
+      const r = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, `mala-${i}`));
+      ultimo = r.status;
+    }
+    assert.equal(ultimo, 'locked');
+    const conLaBuena = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    assert.equal(conLaBuena.status, 'locked');
+
+    // Pasado el bloqueo, la buena entra y la cuenta vuelve a cero.
+    await t.admin(`UPDATE media_kit SET locked_until = now() - interval '1 second' WHERE id = '${kit.id}'`);
+    const despues = await t.db.withCatalogs((tx) => readPublicMediaKit(tx, kit.slug, 'la-buena'));
+    assert.equal(despues.status, 'ok');
+    const estado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ failed_attempts: number; locked_until: string | null }>(
+        'SELECT failed_attempts, locked_until FROM media_kit WHERE id = $1', [kit.id]);
+      return rows[0]!;
+    });
+    assert.deepEqual(estado, { failed_attempts: 0, locked_until: null });
   });
 
   test('un enlace vencido no entrega el snapshot', async () => {
@@ -202,10 +254,19 @@ describe('COT-2 · media kit', () => {
     });
     assert.match(guardado, /^s1:[0-9a-f]{32}:[0-9a-f]{64}$/);
     assert.equal(guardado.includes('secreto-de-prueba'), false);
-    assert.equal(verifySharePassword('secreto-de-prueba', guardado), true);
-    assert.equal(verifySharePassword('otra', guardado), false);
+    assert.equal(await verifySharePassword('secreto-de-prueba', guardado), true);
+    assert.equal(await verifySharePassword('otra', guardado), false);
     // Misma sal, mismo derivado: es lo que permite comparar en la base.
-    assert.equal(hashSharePassword('secreto-de-prueba', guardado.split(':')[1]!), guardado);
+    assert.equal(await hashSharePassword('secreto-de-prueba', guardado.split(':')[1]!), guardado);
+  });
+
+  test('el slug tiene 26 signos del alfabeto sin parecidos', () => {
+    const slugs = Array.from({ length: 200 }, () => nuevoSlug());
+    for (const s of slugs) {
+      assert.equal(s.length, LARGO_SLUG);
+      assert.match(s, /^[23456789abcdefghjkmnpqrstuvwxyz]+$/);
+    }
+    assert.equal(new Set(slugs).size, slugs.length);
   });
 });
 
@@ -275,14 +336,20 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
       assert.equal(publica.quote.company.name, deal.companyName);
     }
 
-    // Y acepta.
-    const aceptada = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug));
+    // Sin nombre o con un correo que no es correo, no acepta.
+    const sinFirma = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, { name: ' ', email: 'x' }));
+    assert.deepEqual(sinFirma, { status: 'invalid_signer' });
+
+    // Y acepta, con nombre y correo. El workspace lo dice la base.
+    const aceptada = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
     assert.equal(aceptada.status, 'ok');
-    assert.equal(aceptada.status === 'ok' && aceptada.campaignPending, true);
+    assert.equal(aceptada.status === 'ok' && aceptada.workspaceId, WORKSPACE_LAURA);
 
     const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, creada.id));
     assert.equal(despues!.status, 'accepted');
-    assert.equal(despues!.campaignPending, true);
+    assert.equal(despues!.acceptedByName, FIRMA.name);
+    assert.equal(despues!.acceptedByEmail, FIRMA.email);
+    assert.equal(despues!.campaignPending, true, 'hasta que el servidor termina la aceptación');
 
     const dealGanado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ stage_id: string; won_at: string | null }>(
@@ -299,9 +366,23 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     });
     assert.equal(historial, 'ganado');
 
-    // COT-4: la campaña la crea CAM-2, con la ventana acordada.
-    const campana = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createCampaignForQuote(tx, creada.id));
+    // COT-4: el servidor termina la aceptación con ESE workspace: la
+    // campaña la crea CAM-2 con la ventana acordada, y queda el aviso.
+    const terminada = await t.db.withWorkspace(
+      aceptada.status === 'ok' ? aceptada.workspaceId : '',
+      (tx) => completePublicAcceptance(tx, creada.id),
+    );
+    assert.equal(terminada.pendingReason, null);
+    const campana = terminada.campaign!;
     assert.equal(campana.created, true);
+    const aviso = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ kind: string; title_es: string; body_es: string }>(
+        "SELECT kind, title_es, body_es FROM notification WHERE entity_id = $1", [creada.id]);
+      return rows;
+    });
+    assert.equal(aviso.length, 1);
+    assert.equal(aviso[0]!.kind, 'quote_accepted');
+    assert.match(aviso[0]!.body_es, /Ana Gómez/);
     const otraVez = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createCampaignForQuote(tx, creada.id));
     assert.equal(otraVez.created, false, 'idempotente: no crea una segunda campaña');
     assert.equal(otraVez.campaignId, campana.campaignId);
@@ -320,7 +401,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     assert.equal(planeada.starts_on, '2026-10-01');
 
     // Aceptada dos veces: la segunda no es aceptable.
-    const otraAceptacion = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug));
+    const otraAceptacion = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
     assert.equal(otraAceptacion.status, 'not_acceptable');
   });
 
@@ -334,26 +415,49 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     );
   });
 
-  test('aceptar desde el panel hace lo mismo que el enlace', async () => {
+  test('aceptar desde el panel gana el negocio y crea la campaña en la misma transacción', async () => {
     const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))
       .find((d) => d.stageId === 'contactado');
     assert.ok(deal);
 
-    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const creada = await createQuote(tx, {
         dealId: deal.id, creatorId: creadora,
         items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '3000000' }],
+        campaignStartsOn: '2026-11-02', campaignEndsOn: '2026-11-20',
       });
       await sendQuote(tx, creada.id);
-      return acceptQuote(tx, creada.id);
+      return acceptQuoteAndCreateCampaign(tx, creada.id);
     });
-    assert.equal(q.status, 'accepted');
+    assert.equal(r.quote.status, 'accepted');
+    assert.equal(r.pendingReason, null);
+    assert.ok(r.campaign?.created);
+    assert.equal(r.quote.campaignId, r.campaign?.campaignId);
+    assert.equal(r.quote.campaignPending, false);
 
     const etapa = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [deal.id]);
       return rows[0]!.stage_id;
     });
     assert.equal(etapa, 'ganado');
+  });
+
+  test('sin fechas, aceptar desde el panel acepta igual y deja la campaña pendiente con su motivo', async () => {
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))
+      .find((d) => d.stageId !== 'contactado' && d.stageId !== 'conversacion');
+    assert.ok(deal);
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const creada = await createQuote(tx, {
+        dealId: deal.id, creatorId: creadora,
+        items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
+      });
+      await sendQuote(tx, creada.id);
+      return acceptQuoteAndCreateCampaign(tx, creada.id);
+    });
+    assert.equal(r.quote.status, 'accepted', 'el SAVEPOINT deshizo solo la campaña');
+    assert.equal(r.campaign, null);
+    assert.equal(r.pendingReason, 'FechasDeCampanaFaltan');
+    assert.equal(r.quote.campaignPending, true);
   });
 
   test('sin fechas acordadas, crear la campaña pide la ventana en vez de inventarla', async () => {
@@ -364,6 +468,7 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
       const creada = await createQuote(tx, {
         dealId: deal.id, creatorId: creadora,
         items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '2000000' }],
+        campaignStartsOn: null, campaignEndsOn: null,
       });
       await sendQuote(tx, creada.id);
       return acceptQuote(tx, creada.id);
@@ -394,5 +499,184 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
       return Number(rows[0]!.n);
     });
     assert.equal(fuga, 0);
+  });
+});
+
+// ------------------------------------------------ la cerradura (0023)
+
+describe('0023 · el enlace público corre con su propio rol', () => {
+  test('la sonda: mc_app con el parámetro fijado a mano no ve ni escribe nada', async () => {
+    const [una] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['accepted'] }));
+    assert.ok(una);
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora }));
+
+    const sonda = await t.db.withCatalogs(async (tx) => {
+      await tx.query("SELECT set_config('app.public_share', $1, true)", [una.slug]);
+      const quotes = await tx.query<{ n: string }>('SELECT count(*) AS n FROM quote');
+      const deals = await tx.query<{ n: string }>('SELECT count(*) AS n FROM deal');
+      const upd = await tx.query("UPDATE quote SET total = 1, status = 'accepted' WHERE slug = $1 RETURNING id", [una.slug]);
+      const updDeal = await tx.query("UPDATE deal SET name = 'hackeado' RETURNING id");
+      await tx.query("SELECT set_config('app.public_share', $1, true)", [kit.slug]);
+      const kits = await tx.query<{ n: string }>('SELECT count(*) AS n FROM media_kit');
+      const updKit = await tx.query("UPDATE media_kit SET snapshot = '{}'::jsonb RETURNING id");
+      return {
+        quotes: Number(quotes.rows[0]!.n), deals: Number(deals.rows[0]!.n), kits: Number(kits.rows[0]!.n),
+        escritas: (upd.rows.length) + (updDeal.rows.length) + (updKit.rows.length),
+      };
+    });
+    assert.deepEqual(sonda, { quotes: 0, deals: 0, kits: 0, escritas: 0 });
+
+    // Y lo que había sigue intacto.
+    const intacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, una.id));
+    assert.equal(intacta!.total, una.total);
+  });
+
+  test('mc_app no puede hacerse pasar por mc_public_share ni llamar al cuerpo de las funciones con permiso', async () => {
+    // (Con pg_has_role y no con SET ROLE: en PGlite la sesión es del
+    // superusuario, que puede cambiar a cualquier rol; en Supabase la
+    // abre mc_app y lo que cuenta es su membresía.)
+    const miembro = await t.db.withCatalogs(async (tx) => {
+      const { rows } = await tx.query<{ m: boolean }>("SELECT pg_has_role('mc_app', 'mc_public_share', 'MEMBER') AS m");
+      return rows[0]!.m;
+    });
+    assert.equal(miembro, false);
+    const [una] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['accepted'] }));
+    // Si el cuerpo se ejecutara como mc_app (SECURITY INVOKER), las
+    // políticas del enlace no le aplican: no encuentra nada.
+    const r = await t.db.withCatalogs(async (tx) => {
+      try {
+        const { rows } = await tx.query<{ r: { status: string } }>('SELECT public_quote_impl($1, false) AS r', [una!.slug]);
+        return rows[0]!.r.status;
+      } catch (err) {
+        return (err as Error).message;
+      }
+    });
+    assert.match(r, /not_found|permission denied/);
+  });
+
+  test('las funciones son de mc_public_share, un rol sin BYPASSRLS ni login', async () => {
+    const filas = await t.db.withCatalogs(async (tx) => {
+      const { rows } = await tx.query<{ proname: string; owner: string; secdef: boolean }>(
+        `SELECT p.proname, pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS secdef
+           FROM pg_proc p
+          WHERE p.proname IN ('public_media_kit', 'public_quote', 'public_quote_accept')`);
+      return rows;
+    });
+    assert.equal(filas.length, 3);
+    for (const f of filas) {
+      assert.equal(f.owner, 'mc_public_share', `${f.proname} es de mc_public_share`);
+      assert.equal(f.secdef, true);
+    }
+    const rol = await t.db.withCatalogs(async (tx) => {
+      const { rows } = await tx.query<{ rolbypassrls: boolean; rolcanlogin: boolean }>(
+        "SELECT rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname = 'mc_public_share'");
+      return rows[0]!;
+    });
+    assert.deepEqual(rol, { rolbypassrls: false, rolcanlogin: false });
+  });
+});
+
+// ----------------------------------------------- el ciclo, con fechas
+
+describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
+  async function dealAbierto() {
+    const deals = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx));
+    return deals[0]!;
+  }
+  const ITEM = { deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok', quantity: 1, unitPrice: '1000000' };
+
+  test('los negocios ganados o perdidos no se ofrecen para cotizar', async () => {
+    const deals = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx));
+    assert.ok(deals.length > 0);
+    const etapas = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ id: string; is_won: boolean; is_lost: boolean }>(
+        'SELECT id, is_won, is_lost FROM deal_pipeline WHERE id = ANY($1::uuid[])', [deals.map((d) => d.id)]);
+      return rows;
+    });
+    assert.equal(etapas.some((e) => e.is_won || e.is_lost), false);
+  });
+
+  test('rechazar deja su fecha', async () => {
+    const deal = await dealAbierto();
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
+      await sendQuote(tx, c.id);
+      return rejectQuote(tx, c.id);
+    });
+    assert.equal(q.status, 'rejected');
+    assert.ok(q.rejectedAt);
+  });
+
+  test('una enviada con la validez vencida sale vencida en el panel, sin que nadie abra el enlace', async () => {
+    const deal = await dealAbierto();
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM], validUntil: '2020-01-31' });
+      return sendQuote(tx, c.id);
+    });
+    assert.equal(q.status, 'expired');
+    assert.ok(q.expiredAt, 'con la fecha en que dejó de valer');
+    const vencidas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotes(tx, { status: ['expired'] }));
+    assert.ok(vencidas.some((x) => x.id === q.id));
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, q.id)), /vencida|expired/i);
+
+    // El enlace la persiste con su fecha, y ya no se puede aceptar.
+    const publica = await t.db.withCatalogs((tx) => readPublicQuote(tx, q.slug));
+    assert.equal(publica.status === 'ok' && publica.quote.status, 'expired');
+    const aceptar = await t.db.withCatalogs((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
+    assert.equal(aceptar.status, 'not_acceptable');
+  });
+
+  test('un borrador se edita sin gastar otro número, y se borra', async () => {
+    const deal = await dealAbierto();
+    const creada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM], taxRate: '0.19' }));
+    assert.equal(creada.taxRate, '0.19');
+    const editada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateQuoteDraft(tx, creada.id, { items: [{ ...ITEM, quantity: 3 }], taxRate: '0.16' }));
+    assert.equal(editada.number, creada.number);
+    assert.equal(editada.subtotal, '3000000.00');
+    assert.equal(editada.taxRate, '0.16');
+    assert.equal(editada.tax, '480000.00');
+
+    // La vista previa de un borrador no abre el enlace ni lo registra.
+    const previa = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuotePreview(tx, creada.id));
+    assert.equal(previa?.status, 'draft');
+    assert.equal(previa?.total, editada.total);
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => deleteQuoteDraft(tx, creada.id));
+    const borrada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, creada.id));
+    assert.equal(borrada, null);
+  });
+
+  test('una enviada no se borra', async () => {
+    const deal = await dealAbierto();
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
+      return sendQuote(tx, c.id);
+    });
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => deleteQuoteDraft(tx, q.id)), QuoteNotDraft);
+  });
+
+  test('la vista previa de una enviada no la marca como vista ni suma visitas', async () => {
+    const deal = await dealAbierto();
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] });
+      return sendQuote(tx, c.id);
+    });
+    const previa = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuotePreview(tx, q.id));
+    assert.equal(previa?.status, 'sent');
+    const robot = await t.db.withCatalogs((tx) => readPublicQuote(tx, q.slug, { count: false }));
+    assert.equal(robot.status === 'ok' && robot.quote.status, 'sent');
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
+    assert.equal(despues!.status, 'sent');
+    assert.equal(despues!.viewCount, 0);
+    assert.equal(despues!.viewedAt, null);
+  });
+
+  test('el impuesto por defecto sale del workspace: IVA en Colombia, cero donde no se sabe', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getDefaultTaxRate(tx)), '0.19');
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getDefaultTaxRate(tx)), '0');
+    await t.admin(`UPDATE workspace SET settings = settings || '{"taxRate":"0.16"}' WHERE id = '${WS_VECINO}'`);
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getDefaultTaxRate(tx)), '0.16');
   });
 });

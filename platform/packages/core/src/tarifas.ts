@@ -31,8 +31,11 @@
  *   - Las views son por PIEZA. Un paquete de tres historias multiplica
  *     por cantidad al final, no antes, para que el paso «base» se pueda
  *     leer como «lo que vale una».
- *   - El redondeo es al centavo, mitad hacia arriba, una sola vez por
- *     multiplicación (mulRateHalfUp), igual que en facturación.
+ *   - El redondeo es mitad hacia arriba, una sola vez por paso, a la
+ *     UNIDAD DE PRECIO de la moneda (`unidadDePrecio`): al peso en COP
+ *     y CLP, al centavo en USD o EUR. Un tarifario en pesos con
+ *     centavos («COP 7.013.344,50») parece un prototipo; ninguna
+ *     referencia (Passionfroot, Stripe Quotes en COP) los muestra.
  *   - No se redondea a cifras «bonitas» (50.000, 100.000): un tarifario
  *     que redondea esconde que cambiar el CPM cambió el precio, y ese
  *     es justo el número que el creador está aprendiendo a mover.
@@ -103,6 +106,8 @@ export interface EntradaTarifa {
   modificadores?: readonly Modificador[];
   /** Descuento del paquete, como fracción ('0.10' es −10 %). */
   descuentoPct?: string;
+  /** ISO-4217. Decide la unidad a la que se redondea (`unidadDePrecio`). Sin ella, al centavo. */
+  currency?: string;
 }
 
 /**
@@ -117,6 +122,8 @@ export type PasoCalculo =
   | { tipo: 'cantidad'; cantidad: number; low: Decimal; high: Decimal }
   | { tipo: 'modificador'; id: ModificadorId; pct: string; low: Decimal; high: Decimal }
   | { tipo: 'descuento'; pct: string; low: Decimal; high: Decimal }
+  | { tipo: 'componente'; deliverable: string; cantidad: number; low: Decimal; high: Decimal }
+  | { tipo: 'subtotal'; low: Decimal; high: Decimal }
   | { tipo: 'total'; low: Decimal; high: Decimal };
 
 export interface ItemTarifa {
@@ -149,6 +156,28 @@ export class TarifaError extends Error {
 // ---------------------------------------------------------------------
 
 const FRACCION_RE = /^\d+(\.\d{1,6})?$/;
+
+/**
+ * Monedas que en la práctica no se cotizan con centavos, aunque ISO-4217
+ * les dé dos decimales (COP) o ninguno (CLP, JPY). Es una tabla y no
+ * `Intl…resolvedOptions().maximumFractionDigits` porque Intl dice 2 para
+ * el peso colombiano, y nadie le cobra 50 centavos a una marca.
+ */
+const MONEDAS_SIN_CENTAVOS = new Set(['CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF']);
+
+/** La unidad mínima de un precio de tarifario: '1' (al peso) o '0.01' (al centavo). */
+export function unidadDePrecio(currency: string | undefined): Decimal {
+  return currency && MONEDAS_SIN_CENTAVOS.has(currency.trim().toUpperCase()) ? '1.00' : '0.01';
+}
+
+/** Redondea un monto ≥ 0 al múltiplo más cercano de `unidad`, mitad hacia arriba. */
+export function redondearAUnidad(valor: Decimal, unidad: Decimal): Decimal {
+  const u = toCents(unidad);
+  if (u <= 1n) return normalizeDecimal(valor);
+  const c = toCents(valor);
+  if (c < 0n) throw new TarifaError('MontoNegativo', `No se redondea un monto negativo: "${valor}".`);
+  return fromCents(((c + u / 2n) / u) * u);
+}
 
 /**
  * (views ÷ 1000) × cpm, al centavo y mitad hacia arriba.
@@ -226,9 +255,12 @@ export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
     },
   ];
 
+  const unidad = unidadDePrecio(entrada.currency);
+  const r = (v: Decimal) => redondearAUnidad(v, unidad);
+
   // 1 · La pieza suelta.
-  let low = precioPorViews(cpmLow, views);
-  let high = precioPorViews(cpmHigh, views);
+  let low = r(precioPorViews(cpmLow, views));
+  let high = r(precioPorViews(cpmHigh, views));
   pasos.push({ tipo: 'base', low, high });
 
   // 2 · Por cuántas piezas.
@@ -246,8 +278,8 @@ export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
   const baseHigh = high;
   for (const m of modificadores) {
     normalizarPct(m.pct); // valida rango y formato antes de multiplicar
-    const aporteLow = mulRateHalfUp(baseLow, m.pct);
-    const aporteHigh = mulRateHalfUp(baseHigh, m.pct);
+    const aporteLow = r(mulRateHalfUp(baseLow, m.pct));
+    const aporteHigh = r(mulRateHalfUp(baseHigh, m.pct));
     pasos.push({ tipo: 'modificador', id: m.id, pct: normalizarPct(m.pct), low: aporteLow, high: aporteHigh });
     low = addDecimal(low, aporteLow);
     high = addDecimal(high, aporteHigh);
@@ -259,8 +291,8 @@ export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
     if (compareDecimal(normalizarPct(entrada.descuentoPct), '1') > 0) {
       throw new TarifaError('DescuentoInvalido', `Un descuento no puede pasar del 100 %: "${entrada.descuentoPct}".`);
     }
-    const descLow = mulRateHalfUp(low, entrada.descuentoPct);
-    const descHigh = mulRateHalfUp(high, entrada.descuentoPct);
+    const descLow = r(mulRateHalfUp(low, entrada.descuentoPct));
+    const descHigh = r(mulRateHalfUp(high, entrada.descuentoPct));
     pasos.push({ tipo: 'descuento', pct: normalizarPct(entrada.descuentoPct), low: descLow, high: descHigh });
     low = subDecimal(low, descLow);
     high = subDecimal(high, descHigh);
@@ -286,6 +318,77 @@ export function calcularItem(entrada: EntradaTarifa): ItemTarifa {
 /** El tarifario completo: un ítem por entregable, en el orden que llegan. */
 export function calcularTarifario(entradas: readonly EntradaTarifa[]): ItemTarifa[] {
   return entradas.map(calcularItem);
+}
+
+// ---------------------------------------------------------------------
+// Paquetes
+// ---------------------------------------------------------------------
+
+/** Un entregable dentro de un paquete, con el precio de UNA pieza ya calculado por calcularItem. */
+export interface ComponentePaquete {
+  deliverable: string;
+  /** Cuántas veces entra en el paquete. Entero ≥ 1. */
+  cantidad: number;
+  priceLow: Decimal;
+  priceHigh: Decimal;
+}
+
+export interface ItemPaquete {
+  priceLow: Decimal;
+  priceHigh: Decimal;
+  descuentoPct: string;
+  pasos: PasoCalculo[];
+}
+
+/**
+ * Un paquete («1 TikTok + 1 Reel + 3 historias −12 %»): la suma de los
+ * rangos de sus entregables, con el descuento al final y sobre el total,
+ * igual que el paso de descuento de `calcularItem`.
+ *
+ * Los precios de cada componente son los que ya salieron de
+ * `calcularItem` (o los que el creador fijó a mano): el paquete no
+ * vuelve a mirar views ni CPM, y por eso el desglose se lee como «esto
+ * cuestan las piezas sueltas, esto te ahorras».
+ */
+export function calcularPaquete(input: {
+  componentes: readonly ComponentePaquete[];
+  /** Fracción: '0.12' es −12 %. */
+  descuentoPct: string;
+  currency?: string;
+}): ItemPaquete {
+  if (input.componentes.length === 0) {
+    throw new TarifaError('PaqueteVacio', 'Un paquete necesita al menos un entregable.');
+  }
+  const unidad = unidadDePrecio(input.currency);
+  const descuentoPct = normalizarPct(input.descuentoPct || '0');
+  if (compareDecimal(descuentoPct, '1') > 0) {
+    throw new TarifaError('DescuentoInvalido', `Un descuento no puede pasar del 100 %: "${input.descuentoPct}".`);
+  }
+
+  const pasos: PasoCalculo[] = [];
+  let low = '0.00';
+  let high = '0.00';
+  for (const c of input.componentes) {
+    if (!Number.isInteger(c.cantidad) || c.cantidad < 1) {
+      throw new TarifaError('CantidadInvalida', `La cantidad tiene que ser un entero ≥ 1: ${c.cantidad}.`);
+    }
+    const cLow = multiplicarPorEntero(normalizeDecimal(c.priceLow), c.cantidad);
+    const cHigh = multiplicarPorEntero(normalizeDecimal(c.priceHigh), c.cantidad);
+    pasos.push({ tipo: 'componente', deliverable: c.deliverable, cantidad: c.cantidad, low: cLow, high: cHigh });
+    low = addDecimal(low, cLow);
+    high = addDecimal(high, cHigh);
+  }
+  pasos.push({ tipo: 'subtotal', low, high });
+
+  if (descuentoPct !== '0') {
+    const descLow = redondearAUnidad(mulRateHalfUp(low, descuentoPct), unidad);
+    const descHigh = redondearAUnidad(mulRateHalfUp(high, descuentoPct), unidad);
+    pasos.push({ tipo: 'descuento', pct: descuentoPct, low: descLow, high: descHigh });
+    low = subDecimal(low, descLow);
+    high = subDecimal(high, descHigh);
+  }
+  pasos.push({ tipo: 'total', low, high });
+  return { priceLow: low, priceHigh: high, descuentoPct, pasos };
 }
 
 function multiplicarPorEntero(valor: Decimal, veces: number): Decimal {
@@ -325,12 +428,18 @@ export interface TotalesCotizacion {
  * misma cadena que después reproduce la factura (FIN-1), y por eso
  * `total` de la cotización se puede comparar con `total` de la factura
  * sin traducir nada.
+ *
+ * Con `currency`, el impuesto se redondea a la unidad de precio de la
+ * moneda (`unidadDePrecio`): en pesos, 19 % de 5.195.070 son 987.063 y
+ * no 987.063,30. Un documento para una marca en COP no lleva centavos.
  */
 export function calcularTotalesCotizacion(input: {
   items: readonly LineaCotizacion[];
   discount?: Decimal;
   /** Fracción: '0.19' es 19 %. */
   taxRate?: string;
+  /** ISO-4217: decide a qué unidad se redondea el impuesto. Sin ella, al centavo. */
+  currency?: string;
 }): TotalesCotizacion {
   const lineTotals: Decimal[] = [];
   let subtotalCents = 0n;
@@ -350,6 +459,8 @@ export function calcularTotalesCotizacion(input: {
     throw new TarifaError('DescuentoMayorQueSubtotal', 'El descuento no puede ser mayor que el subtotal.');
   }
   const base = subDecimal(subtotal, discount);
-  const tax = input.taxRate ? mulRateHalfUp(base, input.taxRate) : '0.00';
+  const tax = input.taxRate
+    ? redondearAUnidad(mulRateHalfUp(base, input.taxRate), unidadDePrecio(input.currency))
+    : '0.00';
   return { subtotal, discount, tax, total: addDecimal(base, tax), lineTotals };
 }
