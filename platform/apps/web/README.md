@@ -35,10 +35,11 @@ pnpm --filter @mc/web build
 pnpm --filter @mc/web test        # vitest
 ```
 
-Y en producción hay que decir qué workspace se sirve: `DEMO_WORKSPACE_ID`
-es obligatoria hasta CIM-3 (`lib/workspace/current.ts` lanza si falta).
-Se fija con `make vercel.run ARGS="env add DEMO_WORKSPACE_ID production"`
-(y otra vez con `preview`). Para servir el workspace del seed a
+Desde CIM-3 el workspace sale de la **sesión**, no de una variable.
+`DEMO_WORKSPACE_ID` sigue existiendo como atajo de desarrollo y solo se
+mira cuando **no hay sesión** (modo demo, o una ruta pública). En
+producción sin sesión y sin esa variable, `lib/workspace/current.ts`
+lanza diciendo qué falta; para servir el workspace del seed a
 propósito, `ALLOW_SEED_WORKSPACE=1`.
 
 Desplegar: `make vercel.deploy` (vista previa) o `make vercel.deploy
@@ -55,7 +56,16 @@ app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
                               llegan del workspace; es-CO solo es el valor por defecto.
+lib/auth/                     Sesión de Supabase: configuración, cliente de servidor,
+                              sincronización de la persona y sus espacios, server
+                              actions (cambiar de espacio, salir) y messages.ts.
+middleware.ts                 Refresca la sesión y protege todo (app)/.
+app/login/                    La entrada: un campo y un botón.
+app/auth/callback/            Donde aterriza el enlace del correo.
+app/(app)/cuenta/             Nombre, correo, espacios y cerrar sesión.
+components/workspace-switcher.tsx  El selector de espacio, montado en el marco.
 lib/workspace/current.ts      El único sitio que sabe cuál es el workspace.
+lib/workspace/cookie.ts       La cookie firmada `mc.workspace`.
 lib/workspace/settings.ts     Su moneda, zona horaria y locale (cacheado por petición).
 lib/db/index.ts               withWorkspace(fn): la única forma de abrir una transacción.
 app/(app)/page.tsx            El plan completo (inicio).
@@ -79,6 +89,219 @@ note: "Rama abierta, falta el test de RLS.",
 
 Va en el mismo PR de la historia. Al mergear a `main`, el despliegue
 lo publica: es la forma de ver en la URL lo que cada quien va haciendo.
+
+## Autenticación
+
+Supabase Auth con **enlace mágico**: un correo, sin contraseñas. Todo el
+flujo corre en el servidor (`@supabase/ssr`), la sesión vive en cookies
+httpOnly y `middleware.ts` la refresca en cada petición y manda a
+`/login` lo que no sea público (`lib/auth/rutas.ts`).
+
+**Una sola llamada a Supabase Auth por petición.** El middleware tiene
+que llamar a `getUser()` para refrescar la sesión; el usuario que
+devuelve ya está verificado, así que lo deja en una cabecera interna
+(`x-on-cue-sesion`, `lib/auth/sesion-base.ts`) y `getSesion()` la lee en
+vez de volver a preguntar. Antes eran dos idas y vueltas a Supabase por
+navegación. La cabecera que traiga el navegador se **borra** en todos
+los caminos del middleware (`middleware.test.ts` lo prueba con una
+falsificada), y `NextResponse.next({ request: { headers } })` sustituye
+las cabeceras que ve la aplicación, así que solo puede venir de él.
+
+Lo de «httpOnly» hay que decírselo a `@supabase/ssr`: por defecto
+escribe `sb-…-auth-token` **sin** `HttpOnly` y **sin** `Secure`, y
+dentro de esa cookie van el access token y el refresh token. Los dos
+clientes que la escriben —`lib/auth/supabase.ts` y `middleware.ts`—
+pasan el mismo `cookieOptions` desde `lib/auth/cookies.ts`. Hay un
+cliente **de navegador** (`lib/auth/supabase-browser.ts`) pero ninguna
+pantalla lo usa y, con la cookie httpOnly, no ve la sesión: es a
+propósito. Si algún día hace falta la sesión en el navegador, se decide
+con él.
+
+**Falla cerrado.** Con las llaves puestas, `lib/workspace/current.ts`
+manda a `/login` a cualquier petición sin sesión que intente leer o
+escribir, aunque el middleware no la haya mirado (una server action,
+un route handler, una ruta pública). `DEMO_WORKSPACE_ID` solo existe en
+una copia **sin** llaves. Y si Supabase no contesta (red, 5xx, 429), no
+se convierte en «no hay sesión»: el middleware deja pasar la petición
+marcada como «sin verificar» —no la manda a `/login`, donde el POST de
+una server action se perdería en un 307— y la pantalla cae en su
+`error.tsx` con «Reintentar».
+
+### Quién eres, y en qué espacio estás
+
+Son dos cosas distintas y se resuelven por separado:
+
+- **quién eres** sale SIEMPRE del correo que Supabase verificó —con
+  `email_confirmed_at`; un usuario sin él no cuenta como sesión, ni en
+  el middleware, ni en `getSesion`, ni en el callback—. La
+  transacción fija `app.user_email` y la fila de `app_user` se busca con
+  `email = current_user_email()` (migración
+  `*_sesion_correo_verificado.sql`). Nada que venga del navegador entra
+  en esa respuesta. Además la fila guarda `auth_user_id`, el id de la
+  cuenta de Supabase Auth que entró con ella la primera vez: si otra
+  cuenta llega con el mismo correo (un buzón de empresa reasignado, un
+  dominio que caducó), no hereda la fila ni sus espacios; `/login` dice
+  «Ese correo ya está ligado a otra cuenta» y el log del servidor lo
+  registra. Las filas que crea el seed nacen sin cuenta y se ligan en el
+  primer inicio de sesión.
+- **en qué espacio estás** sale de la cookie firmada `mc.workspace`,
+  que es una **preferencia**: solo se respeta si ese espacio está en la
+  lista que la base devuelve para tu correo. Una cookie falsificada no
+  te mete en el espacio de nadie; lo más que puede hacer es elegir
+  entre los tuyos.
+
+Pintar una pantalla **no escribe** en la base: el camino de lectura son
+dos `SELECT` en una transacción. Lo único que escribe es
+`/auth/callback` (alta de `app_user`, `last_seen_at`, y el primer
+espacio si no hay ninguno) y las acciones del selector.
+
+### Variables
+
+Las que hacen falta ya están en el vault (`make db.unlock` las escribe
+en `platform/.env.local`) y en Vercel:
+
+| Variable | Para qué |
+|---|---|
+| `SUPABASE_URL` | el cliente de servidor; `next.config.ts` la copia a `NEXT_PUBLIC_SUPABASE_URL` (el `env:` define el valor; para que además llegue al navegador hay que leerlo con acceso estático, y eso lo hace `lib/auth/config.ts`) |
+| `SUPABASE_ANON_KEY` | igual, a `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No es un secreto: viaja al navegador por diseño |
+| `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
+| `APP_URL` | a qué origen vuelve el enlace del correo. Sin ella se deduce de las cabeceras de la petición |
+| `SUPPORT_EMAIL` | el correo de contacto que publica `/legal` (datos personales, soporte). Sin él, la página dice que se publicará; no se inventa ninguno |
+
+Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
+dice cuáles faltan y el resto sigue sirviendo `DEMO_WORKSPACE_ID`. Eso
+es lo que permite que `pnpm verificar` corra sin red y sin llaves.
+
+### Lo que hay que configurar en el panel de Supabase
+
+Una persona, una vez, en **Authentication → URL Configuration**:
+
+- **Site URL**: `https://on-cue-web.vercel.app`
+- **Redirect URLs**, una por línea:
+  - `https://on-cue-web.vercel.app/**`
+  - `http://localhost:*/**` (los agentes trabajan entre el 3100 y el
+    3999)
+
+Las entradas son **globs que tienen que casar con la URL entera**, query
+incluida, y el enlace siempre vuelve con `?next=…`
+(`/auth/callback?next=%2Ffinanzas`). Por eso terminan en `/**`: una
+entrada como `http://localhost:3000/auth/callback` NO casa, Supabase cae
+en silencio al Site URL, el `?code=` nunca llega a `/auth/callback` y la
+persona acaba en producción sin sesión.
+
+**Nunca un comodín sobre un dominio compartido**, como
+`https://*.vercel.app/**`. Cualquiera puede publicar `lo-que-sea.vercel.app`,
+y con esa entrada un atacante pide un enlace para el correo de la víctima
+(la anon key es pública) con `redirect_to` a su subdominio: la víctima
+recibe un correo legítimo de On Cue, pulsa, y el código llega al
+atacante, que lo canjea. Toma de cuenta y de espacio.
+
+Las **vistas previas** de Vercel no entran por defecto. Para probar una,
+añade su URL exacta de rama mientras la pruebas y quítala después:
+`https://on-cue-web-git-<rama>-influ3.vercel.app/**`. El patrón de equipo
+que sugiere la guía de Supabase (`https://*-influ3.vercel.app/**`)
+depende de que nadie más pueda crear un proyecto cuyo dominio acabe en
+`-influ3`, y eso lo decide Vercel, no nosotros: no lo usamos.
+
+En **Authentication → Emails → Templates**, en «Magic Link» **y** en
+«Confirm signup», el enlace tiene que ser:
+
+```html
+<a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=email">Entrar a On Cue</a>
+```
+
+Por qué no la de por defecto: manda `?code=` (PKCE), y el verificador de
+ese código vive en una cookie del navegador donde se **pidió** el
+enlace. Si se pide en el portátil y se abre en el teléfono —o en el
+navegador interno de Gmail o de Outlook, que es lo normal—, no hay
+verificador y la entrada falla (`/login` lo dice: «Abre el enlace en el
+mismo navegador donde lo pediste…»). Con `token_hash` el enlace sirve
+en cualquier dispositivo. El `&` va bien porque `{{ .RedirectTo }}`
+siempre trae ya su `?next=`.
+
+**El enlace no abre la sesión al cargarse.** Un `token_hash` es de un
+solo uso, y los escáneres de enlaces del correo corporativo (Outlook
+Safe Links, Mimecast, habituales en agencias) abren con un GET todo
+enlace que llega, antes que la persona: si ese GET canjeara el token,
+ella vería «Ese enlace ya no sirve» sin haberlo tocado. Por eso
+`/auth/callback` con `token_hash` no canjea nada: reenvía a
+`/auth/confirm`, una pantalla con un solo botón, «Entrar a On Cue», que
+canjea por POST (`app/auth/confirm/acciones.ts`). Es lo que recomienda
+Supabase para enlaces de un solo uso. La plantilla de arriba no cambia:
+sigue apuntando a `{{ .RedirectTo }}` (que es `/auth/callback?next=…`)
+y el reenvío lo hace la aplicación.
+
+Si un enlace caducó o ya se usó, Supabase vuelve con
+`?error=access_denied&error_code=otp_expired`; `/login` dice «Ese enlace
+ya no sirve. Pide uno nuevo.», no «Se canceló la entrada» (ese texto es
+solo para `access_denied` sin `error_code`).
+
+Y en **Authentication → Sign In / Providers → Email**: proveedor de
+correo encendido, contraseñas **apagadas** y **Confirm email
+encendido**. La aplicación ya rechaza un usuario sin correo verificado;
+este ajuste es la segunda barrera, no la única.
+
+### El límite del correo integrado
+
+El proveedor de correo que trae Supabase es para desarrollo y tiene un
+**límite bajo por hora**, por proyecto y no por persona. Al pasarlo
+responde 429 y `/login` lo dice con su propio texto («ya mandamos varios
+enlaces a ese correo…»). Para uso real hay que conectar un SMTP propio
+en **Project Settings → Auth → SMTP Settings**; hasta entonces, no
+probar el login en bucle.
+
+Además Supabase no deja pedir otro enlace para el **mismo correo**
+antes de 60 s (también 429). Por eso «Reenviar el enlace» sale
+desactivado con su cuenta atrás, como en Linear y Vercel; y si aun así
+el reenvío falla, el error aparece debajo de «Revisa tu correo» con el
+correo conservado, sin volver al formulario vacío.
+
+### Cómo probarlo sin esperar un correo
+
+**El correo de la creadora demo del seed es `demo@multicampaign.test`**
+(`db/seed/0002`). El seed `0003` escribe `laura@ejemplo.com`, pero con
+`ON CONFLICT DO NOTHING`, así que no cambia nada: entrar con ese
+otro correo crea un espacio **nuevo y vacío** llamado «Laura». Y un
+dominio `.test` nunca recibe correo, así que el de la demo solo se abre
+con `generate_link`.
+
+`generate_link` de la API de administración devuelve el enlace sin
+mandarlo:
+
+```bash
+curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
+  -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"magiclink","email":"demo@multicampaign.test",
+       "options":{"redirect_to":"http://localhost:3100/auth/callback"}}'
+```
+
+De la respuesta salen `hashed_token` y `verification_type` —para quien
+no existía todavía es `signup`, no `magiclink`— y con los dos se abre
+`http://localhost:3100/auth/callback?token_hash=…&type=…`, que lleva a
+`/auth/confirm`: se pulsa «Entrar a On Cue». Con el correo de la demo
+aparece «Laura · Cocina fácil» con sus facturas; con uno nuevo, un
+espacio vacío con el nombre sacado del correo. La clave de
+servicio no se usa en el código de la web: solo aquí, a mano.
+
+Lo mismo está cubierto sin red en las pruebas: `middleware.test.ts`
+(sin sesión, `/resumen` → `/login?next=%2Fresumen`),
+`lib/auth/acciones.test.ts` (el correo del seed entra a la creadora
+demo y no crea nada; cambiar de espacio cambia lo que se sirve; otra
+cuenta de Auth con el mismo correo no entra), `app/auth/callback/route.test.ts`
+y `app/auth/confirm/acciones.test.ts`.
+
+### Migraciones de esta pieza
+
+Dos, **sin aplicar en Supabase** hasta que las integre quien integra:
+`*_sesion_correo_verificado.sql` (la política «mi fila por el correo
+verificado» y `app_user.auth_user_id`) y `*_membership_alta_propia.sql`.
+Hoy llevan los números 0027 y 0028 porque van detrás de lo que otras
+ramas ya tomaron (la cabecera de la primera lo detalla). El código las
+cita por su nombre y no por su número: renumerarlas es mover dos
+archivos. Sin la primera, el inicio de sesión falla y el log de Vercel
+dice cuál falta.
 
 ## Reglas del marco
 

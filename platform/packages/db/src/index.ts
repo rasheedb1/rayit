@@ -2,7 +2,7 @@
  * @mc/db · acceso a datos de MultiCampaign. El contrato completo, con
  * ejemplos, está en README.md.
  *
- *   client.ts      withWorkspace / asWorker sobre pg (y withCatalogs, por @mc/db/client)
+ *   client.ts      withWorkspace / withIdentity / asWorker sobre pg (y withCatalogs, por @mc/db/client)
  *   pglite.ts      lo mismo sobre Postgres embebido (pruebas y demo)
  *   embedded.ts    Postgres embebido con migraciones, seeds y rol mc_app
  *   from-env.ts    cómo la web elige entre los dos
@@ -29,11 +29,12 @@
  * hace aritmética de métricas (para eso están las vistas).
  */
 export type {
-  BaseTx, Db, DbOptions, Orm, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
+  BaseTx, Db, DbOptions, Identity, IdentityTx, Orm, QueryResult, Schema, SqlExecutor, WorkerTx, WorkspaceTx,
 } from './client.ts';
 export {
-  assertWorkspaceId, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, DEFAULT_STATEMENT_TIMEOUT_MS,
-  isInTransaction, isUuid, NestedTransactionError, TransactionClosedError, UUID_RE, WORKER_ROLE,
+  assertWorkspaceId, CURRENT_USER_ID, CURRENT_WORKSPACE, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+  DEFAULT_STATEMENT_TIMEOUT_MS, isInTransaction, isUuid, NestedTransactionError, TransactionClosedError,
+  UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
 export {

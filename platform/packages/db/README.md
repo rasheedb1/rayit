@@ -7,7 +7,7 @@ Ninguna pantalla, server action ni job recibe `workspace_id` como
 parámetro suelto.
 
 ```
-src/client.ts      withWorkspace / asWorker / withCatalogs sobre pg
+src/client.ts      withWorkspace / withIdentity / asWorker / withCatalogs sobre pg
 src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
@@ -45,7 +45,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los cinco usos
+## Los seis usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -118,11 +118,61 @@ o le encendía una bandera. Ahora el filtro lo pone la base.
 ve si su fuente es pública (`public_website`, `public_profile`,
 `press`) o si la empresa está vinculada a mi workspace por
 `company_link`. `company` sí es global a propósito: nombre, dominio y
-sector, sin PII. `app_user` es lo único que sigue sin política, y va con
-CIM-3 (necesita `app.user_id`); `test/schema.test.ts` lo deja a la vista
-como `todo`.
+sector, sin PII. `app_user` tiene la suya desde 0020, 0021 y la de CIM-3
+(`*_sesion_correo_verificado.sql`): se ve y se edita la fila propia,
+por `current_user_id()` o por el correo verificado de la sesión. Desde
+esa misma migración la fila guarda además `auth_user_id`, el id de la
+cuenta de Supabase Auth que entró con ella la primera vez: una cuenta
+distinta con el mismo correo ya no la hereda
+(`AuthIdentityMismatchError`).
 
-### 4. Job global con `asWorker`
+### 4. Quién entra, con `withIdentity`
+
+```ts
+// Solo la capa de sesión (apps/web/lib/auth y lib/workspace).
+// userId: el id que tendrá la fila SI es nueva (la política de alta exige id = current_user_id()).
+const persona = await db.withIdentity({ email, userId: randomUUID() }, (tx) =>
+  upsertAppUserPorCorreo(tx, { email, authUserId: sesion.authUserId }));
+const mios    = await db.withIdentity({ userId: persona.id }, (tx) => listMyWorkspaces(tx));
+```
+
+Transacción **sin workspace y con identidad**: fija `app.user_id` y
+`app.user_email` igual que `withWorkspace` fija `app.workspace_id`, y
+con eso valen las ramas «soy yo» de las políticas de `app_user` (0020,
+0021 y `*_sesion_correo_verificado.sql`) y de `membership`
+(`*_membership_alta_propia.sql`). Así se responde «¿a qué espacios
+pertenezco?» como `mc_app`, sin `asWorker` ni una función
+`SECURITY DEFINER`.
+
+Esa rama «soy yo» es **solo de lectura**. Desde `*_membership_alta_propia.sql`, en `membership`
+solo se da de alta una fila con `user_id = current_user_id()` Y
+`workspace_id = current_workspace_id()`: fijar mi id no me deja
+colgarme de un espacio ajeno, ni colgar a otra persona del mío. No hay
+política de UPDATE ni de DELETE: cambiar roles o echar a alguien es del
+worker hasta que exista la pantalla de equipo.
+
+Sirve para **tres tablas y ninguna más**: `app_user`, `membership` y
+`workspace` (que no lleva RLS). En cualquier otra devuelve cero filas en
+silencio, porque `current_workspace_id()` es NULL. El correo es la llave
+del primer inicio de sesión, cuando todavía no se sabe el id; lo fija
+la web solo con lo que Supabase verificó.
+
+`withWorkspace` también acepta la identidad como tercer argumento
+—`withWorkspace(wsId, fn, { userId, email })`— y es como la web abre
+todas sus transacciones desde CIM-3.
+
+Las dos preguntas de cada petición con sesión van juntas en
+`getMyIdentityAndWorkspaces(tx)` (`queries/identidad.ts`): busca la fila
+de `app_user` con `email = current_user_email()` —el correo NO se pasa
+por parámetro: se compara contra lo que la transacción fijó, así que el
+id no puede venir de nada que mande el navegador—, fija `app.user_id`
+con ese id y lee las membresías. Solo `SELECT`: pintar una pantalla no
+escribe. El alta (`upsertAppUserPorCorreo`, `createCreatorWorkspace`) es
+otro camino y lo llama solo `/auth/callback`, con `lockByEmail(tx,
+email)` —un `pg_advisory_xact_lock`— para que dos peticiones a la vez no
+creen dos espacios a la misma persona.
+
+### 5. Job global con `asWorker`
 
 ```ts
 const porVencer = await db.asWorker((tx) =>
@@ -136,7 +186,7 @@ rol de conexión es miembro de `mc_worker` (`mc_migrator` en Supabase,
 tras `GRANT mc_worker TO mc_migrator` con `scripts/supabase-admin.sh`;
 `mc_app` no lo es a propósito). En PGlite embebido siempre funciona.
 
-### 5. Prueba con `openTestDb`
+### 6. Prueba con `openTestDb`
 
 ```ts
 import { openTestDb, WORKSPACE_LAURA } from '@mc/db/test/pglite';

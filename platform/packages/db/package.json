@@ -13,6 +13,7 @@
     "./pglite": "./src/pglite.ts",
     "./queries/catalogos": "./src/queries/catalogos.ts",
     "./queries/cimientos": "./src/queries/cimientos.ts",
+    "./queries/identidad": "./src/queries/identidad.ts",
     "./queries/resumen": "./src/queries/resumen.ts",
     "./queries/ventas": "./src/queries/ventas.ts",
     "./queries/cotizar": "./src/queries/cotizar.ts",

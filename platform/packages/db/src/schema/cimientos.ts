@@ -55,6 +55,8 @@ export const appUser = pgTable('app_user', {
   id: uuidPk(),
   email: citext('email').notNull().unique(),
   name: text('name'),
+  /** Cuenta de Supabase Auth dueña de la fila (migración sesion_correo_verificado). NULL hasta su primer inicio de sesión. */
+  authUserId: uuid('auth_user_id').unique(),
   avatarUrl: text('avatar_url'),
   locale: text('locale').default('es-CO').notNull(),
   lastSeenAt: timestamptz('last_seen_at'),

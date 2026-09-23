@@ -24,7 +24,7 @@ no-op y se puede borrar. Si 0002 usa otros ids, hay que cambiar los de
 | Fila | id que usa 0003 | Notas |
 |---|---|---|
 | `workspace` | `00000002-0000-4000-8000-000000000001` | slug `laura-cocina-facil`, COP, `America/Bogota`. `settings.finanzas` con IVA 19, retención 11, reserva 11, plazo 30 (lo leerá FIN-8). |
-| `app_user` | `…-000000000002` | `laura@ejemplo.com` |
+| `app_user` | `…-000000000002` | 0003 escribe `laura@ejemplo.com`, pero 0002 crea antes la fila con `demo@multicampaign.test` y el `ON CONFLICT DO NOTHING` de 0003 la deja así: **el correo con el que se entra a la creadora demo es `demo@multicampaign.test`** (ver apps/web/README.md, «Cómo probarlo sin esperar un correo»). Unificarlo pide un seed nuevo. |
 | `creator_profile` | `…-000000000003` | Laura Méndez, `@laura.cocinafacil`, nicho `cocina` |
 | `social_connection` | `…-0000000000c1` instagram · `…c2` tiktok · `…c3` youtube | `secret_ref` ficticio `vault://demo/...` |
 | `company` | `…-0000000000e1` Café Alma · `…e2` Fresko Market · `…e3` Hogar Lindo · `…e4` Nutrivé | Con `domain` (índice único) y `socials` |

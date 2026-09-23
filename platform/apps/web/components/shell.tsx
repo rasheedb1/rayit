@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { MobileNav, SideNav } from "./nav";
 import { ThemeToggle } from "./theme-toggle";
+// CIM-3: el selector de espacio. Se monta en una línea aquí y en la
+// cabecera móvil; todo lo suyo (datos, menú, acciones) vive en
+// components/workspace-switcher.tsx.
+import { WorkspaceSwitcher } from "./workspace-switcher";
 
 function Brand() {
   return (
@@ -22,6 +26,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <Brand />
           <ThemeToggle />
         </div>
+        <WorkspaceSwitcher />
         <div className="flex-1 overflow-y-auto px-2 py-2">
           <SideNav />
         </div>
@@ -37,6 +42,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Brand />
             <ThemeToggle />
           </div>
+          <WorkspaceSwitcher />
           <MobileNav />
         </header>
         <main className="mx-auto w-full max-w-5xl px-4 py-8 md:px-10 md:py-12">{children}</main>
