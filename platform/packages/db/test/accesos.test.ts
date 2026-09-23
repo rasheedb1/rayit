@@ -7,9 +7,9 @@
  *   - las seis tablas nuevas y las columnas que cambian (membership
  *     sin `role` y con `role_id`; audit_log con on_behalf_of_workspace_id
  *     y 'delegate');
- *   - los diez roles de sistema con EXACTAMENTE la matriz del catálogo
- *     de ACC-1 (test/fixtures/accesos-matriz.ts, generado de
- *     permisos.ts; TODO(ACC-1): importar ROLES_SISTEMA cuando llegue);
+ *   - los diez roles de sistema con EXACTAMENTE la matriz de @mc/core
+ *     (ROLES_SISTEMA, ACC-1), y la semilla de 0034 §4 idéntica a la
+ *     salida de `pnpm --filter @mc/core permisos:sql`;
  *   - la membresía del seed queda como Dueño de creador;
  *   - invitation: una pendiente por correo, token solo como SHA-256,
  *     y el token en claro no aparece en ninguna columna de texto;
@@ -36,7 +36,8 @@ import type { BaseTx, WorkspaceTx } from '../src/client.ts';
 import { createEmbeddedDb } from '../src/embedded.ts';
 import { listMyWorkspaces } from '../src/queries/identidad.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
-import { PERMISOS_ESPERADOS, ROLES_ESPERADOS } from './fixtures/accesos-matriz.ts';
+import { PERMISOS, ROLES_SISTEMA } from '@mc/core';
+import { generarSemillaSql } from '@mc/core/scripts/permisos-sql.ts';
 
 const MIGRACION = '0034_access_control.sql';
 /** Ids fijos del seed 0002. */
@@ -132,7 +133,7 @@ describe('0034: tablas, columnas y semilla', () => {
     const permisos = await t.db.withCatalogs((tx) => tx.query<{ key: string }>('SELECT key FROM permission ORDER BY key'));
     assert.deepEqual(
       permisos.rows.map((r) => r.key).sort(),
-      [...PERMISOS_ESPERADOS].sort(),
+      PERMISOS.map((p) => p.key).sort(),
       'el catálogo sembrado no es el de permisos.ts',
     );
 
@@ -147,8 +148,8 @@ describe('0034: tablas, columnas y semilla', () => {
           ORDER BY r.workspace_kind, r.key`,
       ),
     );
-    assert.equal(roles.rows.length, ROLES_ESPERADOS.length, 'no hay diez roles de sistema');
-    for (const esperado of ROLES_ESPERADOS) {
+    assert.equal(roles.rows.length, ROLES_SISTEMA.length, 'no hay diez roles de sistema');
+    for (const esperado of ROLES_SISTEMA) {
       const fila = roles.rows.find((r) => r.workspace_kind === esperado.workspaceKind && r.key === esperado.key);
       assert.ok(fila, `falta el rol ${esperado.workspaceKind}/${esperado.key}`);
       assert.equal(fila.label_es, esperado.labelEs);
@@ -160,7 +161,17 @@ describe('0034: tablas, columnas y semilla', () => {
       );
     }
     const total = await t.db.withCatalogs((tx) => conteo(tx, 'SELECT count(*)::int AS n FROM role_permission'));
-    assert.equal(total, ROLES_ESPERADOS.reduce((n, r) => n + r.permisos.length, 0));
+    assert.equal(total, ROLES_SISTEMA.reduce((n, r) => n + r.permisos.length, 0));
+  });
+
+  test('la semilla de 0034 §4 es, línea por línea, la salida del script de ACC-1', () => {
+    // Si alguien cambia el catálogo de core sin traer una migración nueva,
+    // o edita la semilla a mano, esto falla. La cabecera del script (sus
+    // comentarios iniciales) no viaja a la migración.
+    const delScript = generarSemillaSql().slice(generarSemillaSql().indexOf('INSERT INTO permission')).trim();
+    const desde = sqlMigracion.indexOf('INSERT INTO permission');
+    const hasta = sqlMigracion.indexOf('ON CONFLICT DO NOTHING;', sqlMigracion.indexOf('INSERT INTO role_permission')) + 'ON CONFLICT DO NOTHING;'.length;
+    assert.equal(sqlMigracion.slice(desde, hasta).trim(), delScript);
   });
 
   test('decisión E: el Mánager de creador no ve el flujo de caja ni conecta cuentas; el Contador no edita campañas', async () => {

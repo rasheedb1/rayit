@@ -12,7 +12,7 @@ todo el workspace» en un modelo de roles y permisos: `permission`,
 `membership_scope`, `invitation`, `workspace_grant`,
 `audit_log.actor_kind = 'delegate'` con `on_behalf_of_workspace_id`, RLS
 para todo lo que lleva inquilino, y la semilla de los cinco roles de
-creador y los cinco de agencia con su matriz (43 permisos, 222 filas de
+creador y los cinco de agencia con su matriz (43 permisos, 220 filas de
 `role_permission`). Todo tal como está en la fase 4 de
 `ACC-accesos-y-roles.md`, corregido con lo que la base tiene hoy
 (0024–0033: guardia invertida, disparadores de referencias, privilegios
@@ -34,7 +34,7 @@ mínimos).
 | `audit_log` hoy | `actor_kind` con CHECK `audit_log_actor_kind_check` (`user`,`system`,`job`,`webhook`); política `audit_log_ws_isolation` FOR ALL por `workspace_id`; mc_app con SELECT + INSERT (0025 §5); disparadores `ref_visible_workspace_id` y `ref_visible_actor_user_id`; **no está en `src/schema`** | La columna nueva lleva su disparador de referencia y no toca el esquema Drizzle. |
 | Seeds 0002/0003 | Insertan `membership (…, role) VALUES (…, 'owner')` fijando antes `app.workspace_id` y `app.user_id`; corren DESPUÉS de las migraciones | El backfill no los cubre: el INSERT nombra una columna que ya no existe. Hay que tocar los dos seeds (§0.3, decisión 7). |
 | Supabase (solo lectura, `make db.sql`) | `membership`: 1 fila, `owner`; `workspace`: 1, `creator`. Aplicada hasta 0022 al empezar y hasta **0033** al cerrar (el integrador aplicó la cola el 23-sep) | El relleno de `admin`, `member`, `viewer` y `client` es teórico: la opción conservadora no cambia a nadie real. Pero **sí hay una membresía que rellenar**, y eso es lo que destapó el error de §1.2. |
-| ACC-1 | No está en `main`. Está en curso en `rayit-acc1` (plan en su §0 y `packages/core/src/permisos.ts` sin commitear): 43 permisos, 10 roles, script `scripts/permisos-sql.ts` todavía sin escribir | La semilla de 0034 se generó desde ese `permisos.ts` con un script desechable con el formato que ACC-1 promete (§0.3, decisión 6). Cuando ACC-1 llegue, su snapshot tiene que coincidir con el bloque de 0034, y `test/accesos.test.ts` pasa a importar `ROLES_SISTEMA`. |
+| ACC-1 | Al empezar, en curso en `rayit-acc1`. **Se integró en `main` (`88f339e`) antes de cerrar ACC-3**, con `scripts/permisos-sql.ts` y un catálogo final algo distinto del borrador (el Contador ya no ve campañas) | La sección 4 de 0034 es la salida literal de `pnpm --filter @mc/core permisos:sql`, y `test/accesos.test.ts` importa `ROLES_SISTEMA` y comprueba que la semilla y el script coinciden línea por línea (§0.3, decisión 6). |
 
 ### 0.2 Archivos
 
@@ -48,7 +48,6 @@ platform/packages/db/src/esquema.ts                   declaraciones de la guardi
 platform/packages/db/src/queries/identidad.ts         role → role_id: listMyWorkspaces (JOIN role), isMemberOf, createCreatorWorkspace (Rasheed)
 platform/packages/db/src/queries/ventas.ts            listOwnerOptions sin `m.role <> 'client'` (Rasheed; decisión D)
 platform/packages/db/test/accesos.test.ts             NUEVO · la prueba de la historia
-platform/packages/db/test/fixtures/accesos-matriz.ts  NUEVO · la matriz esperada, generada de permisos.ts (TODO(ACC-1))
 platform/packages/db/test/{rls,identidad,ventas}.test.ts   INSERT INTO membership con role_id (siete sitios)
 platform/packages/db/test/aplicar.test.ts             la nota del hueco 0023
 platform/packages/db/README.md                        § roles y permisos
@@ -183,13 +182,12 @@ lo necesita.
    `role_permission` resolviendo `role_id` con un `JOIN` por `(key,
    workspace_kind)`. Sin `DELETE` de lo que sobre: una migración
    aplicada es inmutable, así que un cambio de matriz será otra
-   migración, que borrará lo que toque. **Contrato con ACC-1**: el
-   snapshot de su script tiene que ser byte a byte el bloque de la
-   sección 4 de 0034; su prueba lo hará cumplir cuando exista.
-   `test/accesos.test.ts` lleva hoy la matriz esperada como fixture
-   (`test/fixtures/accesos-matriz.ts`, generada del mismo archivo) con
-   `TODO(ACC-1)`: cuando `@mc/core` exporte `ROLES_SISTEMA`, el fixture
-   se borra y la prueba importa.
+   migración, que borrará lo que toque. **Contrato con ACC-1, cumplido**:
+   la sección 4 de 0034 es la salida literal de `pnpm --filter @mc/core
+   permisos:sql`, y `test/accesos.test.ts` lo comprueba línea por línea
+   contra `generarSemillaSql()`, además de comparar cada rol con
+   `ROLES_SISTEMA`. Cambiar el catálogo sin traer una migración nueva
+   rompe esa prueba.
 
 7. **Seeds 0002 y 0003.** El relleno NO los cubre (corren después y
    nombran la columna `role`). Cambian a `role_id` con
@@ -255,7 +253,7 @@ secciones; cada una se puede volver a correr (§1.3).
 | 1 | `permission`: `key` PK, `module`, `label_es`, `description_es`, `sensitivity` con CHECK `normal`/`sensible` | Tal cual la fase 4. Sin RLS: catálogo global, declarado en `EXCEPCIONES_SIN_AISLAMIENTO`. |
 | 2 | `role` + CHECK `role_system_has_no_workspace` (`is_system = (workspace_id IS NULL)`), índices parciales `role_system_uk` y `role_ws_uk`, RLS `role_read` (de sistema o mío) y `role_seed` (`TO CURRENT_USER`, solo filas de sistema sin workspace fijado); función `system_role_id(kind, key)` STABLE, SECURITY INVOKER, `EXECUTE` a `mc_app` y `mc_worker` | Patrón `feature_flag` de 0020/0025 §4. El CHECK nuevo evita un «rol de sistema con dueño», que no significa nada. La función evita repetir el `SELECT` del id en seeds, pruebas, `createCreatorWorkspace` y ACC-4. |
 | 3 | `role_permission` (PK compuesta, FK con `ON DELETE CASCADE`), índice por `permission_key`, política `EXISTS` sobre `role` | Patrón 0018 para hijas sin `workspace_id`. |
-| 4 | **La semilla**: 43 permisos, 10 roles de sistema, 222 filas de matriz. `ON CONFLICT DO NOTHING` | Generada desde `permisos.ts` de ACC-1. Va ANTES del relleno (§1.2). |
+| 4 | **La semilla**: 43 permisos, 10 roles de sistema, 220 filas de matriz. `ON CONFLICT DO NOTHING` | Salida literal del script de ACC-1. Va ANTES del relleno (§1.2). |
 | 5 | `membership.role_id` (FK a `role`), relleno por `workspace.kind` con `NO FORCE` temporal en `membership` y `workspace`, parada si queda alguna fila sin rol, `SET NOT NULL`, `DROP COLUMN role`, índice, disparadores `ref_visible_role_id` y `role_fits_workspace` | Decisión 1 de §0.3. El `NO FORCE` es el patrón de 0026, 0032 y 0033: sin él el `UPDATE` tocaría cero filas en silencio. Las políticas de 0028 no nombran `role`. |
 | 6 | `membership_scope`: PK de cuatro columnas, FK compuesta a `membership` con cascada, política `membership_scope_read` (solo SELECT, por `workspace_id`) | Igual que en la rama de ACC-6. `mc_app` no la escribe, así que la FK compuesta no necesita disparador de referencia. |
 | 7 | `invitation` con CHECK `invitation_token_hash_is_sha256` y `invitation_not_accepted_and_revoked`, índices `invitation_pending_uk` (parcial) e `invitation_token_hash_uk`, políticas de lectura, alta y cambio por `workspace_id`, tres disparadores de referencia | Token solo como hash, una pendiente por correo; sin política ni privilegio de `DELETE`. |
@@ -271,11 +269,11 @@ secciones; cada una se puede volver a correr (§1.3).
 | `admin` | — | 42 (todo menos `equipo.workspace.configurar`) |
 | `manager` | 28 (sin `finanzas.flujo.ver`, gastos ni `conexiones.cuenta.conectar`) | 24 |
 | `editor` | 4 | — |
-| `finance` | 10 | 10 |
+| `finance` | 9 (todo Finanzas, sin campañas) | 9 |
 | `viewer` | 9 | 9 |
 
-Total: 222 filas de `role_permission`. La prueba compara cada rol,
-permiso por permiso, con `test/fixtures/accesos-matriz.ts`.
+Total: 220 filas de `role_permission`. La prueba compara cada rol,
+permiso por permiso, con `ROLES_SISTEMA` de `@mc/core`.
 
 ### 1.2 El error que la prueba encontró
 
@@ -436,7 +434,7 @@ eso es ACC-5; esta historia solo deja las tablas y la matriz.
 | 5 | `invitation.role_id` y `workspace_grant.role_id` no comprueban el tipo del workspace | **Arreglado.** Disparador genérico `role_fits_workspace` en las tres tablas, con pruebas. |
 | 6 | El comentario decía que el control de tipo corría después de los `ref_visible_*`, y no era así | **Arreglado.** El disparador se llama `role_fits_workspace`: por orden alfabético corre después, como dice el comentario. |
 | 7 | Las etiquetas de rol de `lib/auth/messages.ts` no coinciden con `role.label_es` | **Justificado.** Son etiquetas neutras de Rasheed para `/cuenta`; Equipo (ACC-4) debe leer `role.label_es` (§4). |
-| 8 | La cabecera de la semilla decía «generada por `scripts/permisos-sql.ts`», que todavía no existe | **Arreglado.** La cabecera dice de dónde salió y qué la vigila mientras llega ACC-1. |
+| 8 | La cabecera de la semilla decía «generada por `scripts/permisos-sql.ts`», que todavía no existía | **Arreglado.** ACC-1 llegó a `main`: la semilla es ahora su salida literal y una prueba lo comprueba. |
 | 9 | `workspace.kind` editable dejaría membresías con un rol del tipo equivocado | **Falso positivo.** `mc_app` solo tiene UPDATE por columnas y `kind` no está (0024 §7.6). |
 | 10 | `listMyWorkspaces` con `INNER JOIN` escondía un espacio con rol a medida al pedirlo con `withIdentity` (encontrado al probar) | **Arreglado.** `LEFT JOIN` y «Solo lectura» como etiqueta; prueba con `withIdentity`. |
 

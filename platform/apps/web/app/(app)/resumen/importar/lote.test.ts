@@ -207,40 +207,6 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
     });
   }
 
-  /**
-   * La misma petición, pero con el multipart ya serializado y enviado por
-   * trozos, sin Content-Length: el techo lo tiene que poner el contador.
-   * Con un FormData como cuerpo, cuando la ruta cancela la lectura a
-   * mitad, undici (Node 24) sigue serializando sobre un flujo ya cerrado
-   * y el error («ReadableStream is already closed») escapa como rechazo
-   * sin manejar: las pruebas pasan, pero vitest termina con código 1. En
-   * producción el cuerpo llega de la red, no de un FormData en memoria.
-   */
-  async function peticionPorTrozos(texto: string, datos: object) {
-    const base = peticion(texto, datos);
-    const bytes = new Uint8Array(await base.arrayBuffer());
-    const TROZO = 64 * 1024;
-    let enviados = 0;
-    let cancelado = false;
-    const flujo = new ReadableStream<Uint8Array>({
-      pull(c) {
-        if (cancelado) return;
-        if (enviados >= bytes.byteLength) return c.close();
-        c.enqueue(bytes.subarray(enviados, enviados + TROZO));
-        enviados += TROZO;
-      },
-      cancel() {
-        cancelado = true;
-      },
-    });
-    return new Request(base.url, {
-      method: "POST",
-      body: flujo,
-      duplex: "half",
-      headers: { "content-type": base.headers.get("content-type") ?? "", origin: ORIGEN, "x-forwarded-host": "on-cue.test" },
-    } as RequestInit);
-  }
-
   /** Un CSV de casi 5 MB: 2 385 videos con el pie de foto más largo que admite Instagram. */
   function csvDeCincoMegas(): string {
     const dia = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
@@ -267,7 +233,19 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
 
   it("un cuerpo por encima del techo se corta con 413 y no llega a la base", async () => {
     const texto = `Post ID,Views\n${"y".repeat(MAX_CUERPO)}\n`;
-    const r = await POST(await peticionPorTrozos(texto, { red: "tiktok", handleNuevo: "ruta.enorme", mapeo: MAPEO_IG }));
+    // El multipart se serializa a bytes antes de armar la petición, como
+    // llega de la red. Con el FormData en memoria, al cortar la lectura
+    // a mitad el generador de undici seguía encolando en un flujo ya
+    // cerrado y dejaba un rechazo sin manejar (ERR_INVALID_STATE) que
+    // tumbaba `pnpm verificar` aunque la prueba pasara.
+    const enMemoria = peticion(texto, { red: "tiktok", handleNuevo: "ruta.enorme", mapeo: MAPEO_IG });
+    const r = await POST(
+      new Request(enMemoria.url, {
+        method: "POST",
+        headers: enMemoria.headers,
+        body: new Uint8Array(await enMemoria.arrayBuffer()),
+      }),
+    );
     expect(r.status).toBe(413);
     expect(await r.json()).toEqual({ ok: false, error: expect.stringMatching(/5 MB/) });
     const cuentas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
