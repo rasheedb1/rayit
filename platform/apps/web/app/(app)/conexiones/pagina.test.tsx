@@ -134,11 +134,15 @@ describe("CON-4 · la pantalla Cuentas con la bandera oauth_connect encendida", 
     expect(html).toContain("Sin leer todavía");
   });
 
-  test("«Conectar» aparece por red, con el diálogo de consentimiento", () => {
+  test("«Conectar» aparece con el diálogo de consentimiento, y solo para TikTok", () => {
     expect(html).toContain("Conectar una cuenta autorizada");
     expect(html).toContain("Conectar TikTok");
-    expect(html).toContain("Conectar Instagram");
     expect(html).toContain("/conexiones/oauth/tiktok/start");
+    // Instagram está configurada en este entorno y aun así no se ofrece
+    // como cuenta nueva: por @ ya entrega seguidores y publicaciones
+    // (decisión 6 de CON-4.md). Reparar una autorización de Instagram
+    // que ya existe sí sigue siendo posible; eso es otra cosa.
+    expect(html).not.toContain("Conectar Instagram");
   });
 
   test("el paso manual sale del catálogo de la base, no de una constante de la pantalla", () => {

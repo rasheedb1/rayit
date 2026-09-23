@@ -96,11 +96,18 @@ describe("la tabla con oauth_connect encendida", () => {
     expect(screen.getByText(MESSAGES.conectar.reautorizarTitulo("TikTok"))).toBeInTheDocument();
   });
 
-  it("sin credenciales en el entorno el botón no desaparece: queda desactivado diciendo qué falta", () => {
+  it("sin la app configurada no se ofrece un botón muerto: la fila dice qué hacer, y no nombra variables de servidor", () => {
     pintar([VENCIDA], SIN_CREDENCIALES);
-    const boton = screen.getByRole("button", { name: MESSAGES.conectar.reautorizarAria("@cafealma.tienda") });
-    expect(boton).toBeDisabled();
-    expect(boton).toHaveAttribute("title", expect.stringContaining("TIKTOK_LOGIN_CLIENT_KEY"));
+    const r = celdas("@cafealma.tienda");
+    expect(r.queryByRole("button", { name: MESSAGES.conectar.reautorizarAria("@cafealma.tienda") })).not.toBeInTheDocument();
+    expect(r.getByText(MESSAGES.tabla.sinReautorizar)).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("TIKTOK_LOGIN_CLIENT_KEY");
+  });
+
+  it("una cuenta de TikTok por @ tampoco ofrece «Autorizar cifras» si la app no está configurada", () => {
+    pintar([POR_ARROBA], SIN_CREDENCIALES);
+    expect(screen.queryByRole("button", { name: MESSAGES.tabla.autorizarCifrasAria("@cafealma.recetas") })).not.toBeInTheDocument();
+    expect(celdas("@cafealma.recetas").getByText(MESSAGES.tabla.sinCifrasPorArroba)).toBeInTheDocument();
   });
 
   it("una cuenta por @ y una autorizada de la misma red se distinguen leyendo, no por el color", () => {

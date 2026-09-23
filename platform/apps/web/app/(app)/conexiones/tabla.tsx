@@ -66,10 +66,8 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * conserva. Si la app de esa red no está configurada en el entorno, el
  * botón sale deshabilitado diciendo qué falta, nunca desaparece.
  */
-function Reautorizar({ row, provider, entorno }: { row: AccountRow; provider: OAuthProviderId; entorno: EntornoDeConexion }) {
+function Reautorizar({ row, provider }: { row: AccountRow; provider: OAuthProviderId }) {
   const red = PLATFORM_LABEL[provider];
-  const app = appDeRed(entorno, provider);
-  const motivo = app.configurada ? undefined : MESSAGES.conectar.sinConfigurar(red, app.faltan.join(", "));
   return (
     <ConnectDialog
       label={red}
@@ -79,7 +77,6 @@ function Reautorizar({ row, provider, entorno }: { row: AccountRow; provider: OA
       text={MESSAGES.conectar.reautorizarTexto(red)}
       policyVersion={CONSENT_POLICY_VERSION}
       action={`/conexiones/oauth/${provider}/start`}
-      disabledReason={motivo}
       variant="danger"
       size="sm"
     />
@@ -92,9 +89,10 @@ function Reautorizar({ row, provider, entorno }: { row: AccountRow; provider: OA
  * desbloquea autorizando una vez.
  */
 function AutorizarCifras({ row, entorno }: { row: AccountRow; entorno: EntornoDeConexion }) {
-  if (!entorno.oauthConnect || row.platformId !== "tiktok") return null;
-  const app = appDeRed(entorno, "tiktok");
-  const motivo = app.configurada ? undefined : MESSAGES.conectar.sinConfigurar(PLATFORM_LABEL.tiktok, app.faltan.join(", "));
+  // Sin la app configurada no hay nada que autorizar. La fila ya dice
+  // «Sin cifras por @»; qué variable falta se ve en la sección de
+  // conectar, que es donde mira quien despliega.
+  if (!entorno.oauthConnect || row.platformId !== "tiktok" || !appDeRed(entorno, "tiktok").configurada) return null;
   return (
     <ConnectDialog
       label={PLATFORM_LABEL.tiktok}
@@ -103,7 +101,6 @@ function AutorizarCifras({ row, entorno }: { row: AccountRow; entorno: EntornoDe
       text={consentText("tiktok")}
       policyVersion={CONSENT_POLICY_VERSION}
       action="/conexiones/oauth/tiktok/start"
-      disabledReason={motivo}
       variant="secondary"
       size="sm"
     />
@@ -183,15 +180,19 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion):
       render: (r) => {
         const estado = estadoDeCuenta(r, ahora);
         const acceso = accesoDe(r.accessMode);
-        // Con la bandera apagada, o en una red que todavía no tiene app
-        // de OAuth (YouTube y Facebook, CON-8), no hay botón que ofrecer:
-        // en vez de dejar la fila sin salida, se dice qué hacer.
-        const provider = entorno.oauthConnect ? proveedorDe(r.platformId) : null;
+        // Reautorizar solo se ofrece si de verdad se puede: con la
+        // bandera encendida, en una red que tiene app de OAuth (YouTube
+        // y Facebook todavía no, CON-8) y con esa app configurada en
+        // este entorno. Si no, la fila no se queda sin salida: dice qué
+        // hacer. Un botón deshabilitado con el nombre de una variable
+        // de servidor le sirve a quien despliega, no a quien mira.
+        const posible = entorno.oauthConnect ? proveedorDe(r.platformId) : null;
+        const provider = posible && appDeRed(entorno, posible).configurada ? posible : null;
         return (
           <div className="flex flex-wrap items-center gap-1">
             {estado.accion === "reautorizar" &&
               (provider ? (
-                <Reautorizar row={r} provider={provider} entorno={entorno} />
+                <Reautorizar row={r} provider={provider} />
               ) : (
                 <span className="max-w-[16rem] text-xs text-ink-2">{t.sinReautorizar}</span>
               ))}

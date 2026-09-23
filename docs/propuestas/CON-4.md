@@ -5,17 +5,27 @@ Escrito para: Nicolás (dueño del módulo) y Rasheed (dueño de
 Fecha: 23 de septiembre de 2026. Rama `nicolas/CON-4-pantalla-conexiones`,
 worktree `rayit-con4`.
 
-**Condición de apertura, y por qué se construye igual.** La fila de
-CON-4 en `docs/backlog-mvp.md` §5 pide CON-3 *probada en vivo*
-(CON-3.md §5) y `OAUTH_CONNECT=1` con credenciales en el vault. Eso
-sigue **sin ocurrir**: no hay sandbox de TikTok ni app de Instagram en
-modo desarrollo, y `oauth_connect` está apagada en producción (decisión
-del 22-sep). Lo que se construye aquí es la pantalla, no el flujo: el
-flujo ya está escrito y probado con respuestas grabadas en CON-3. La
-pantalla se escribe para que **con la bandera apagada** sea la de
-CON-10 (mejorada) y **con la bandera encendida** aparezcan «Conectar»,
-«Reautorizar» y el paso manual. Así la prueba en vivo del día que
-existan las credenciales es abrir la pantalla, no escribirla.
+**Condición de apertura: cumplida.** La fila de CON-4 en
+`docs/backlog-mvp.md` §5 pide CON-3 *probada en vivo* (CON-3.md §5) y
+`OAUTH_CONNECT=1` con credenciales en el vault. Ocurrió el **23 de
+septiembre**: Nicolás creó la app de TikTok (Login Kit, sandbox con su
+cuenta como usuario de prueba), verificó el dominio y puso
+`OAUTH_CONNECT=1`, `TIKTOK_LOGIN_CLIENT_KEY` y
+`TIKTOK_LOGIN_CLIENT_SECRET` en Vercel producción; `@selvathegolden`
+quedó `direct_oauth`/`active` a las 15:09 UTC. Instagram Login no se
+probó y **queda fuera del MVP**: Instagram va por @ (CON-10 §3).
+
+Eso tiene dos consecuencias para esta historia, y las dos están en las
+decisiones de abajo: la bandera está **encendida en producción**, así
+que lo que se escriba aquí se ve de verdad (no detrás de una puerta
+cerrada); y la única red que se ofrece conectar es **TikTok**, porque
+es la única donde autorizar añade algo que el @ no da.
+
+La pantalla se escribe igual para los dos estados de la bandera: **con
+`oauth_connect` apagada** (una copia sin las variables, o el día que se
+apague) es la de CON-10 con el estado, la frescura y la columna
+«Acceso» nuevos; **encendida**, aparecen «Conectar», «Reautorizar» y el
+paso manual.
 
 ---
 
@@ -101,15 +111,35 @@ Va **debajo** del formulario «Agregar cuenta» (el camino del MVP) y
 *Descartado:* un botón «Conectar» en la barra de la tabla: no cabe el
 diálogo ni el motivo de «sin configurar» a 400 px.
 
-**6. Qué redes ofrecen «Conectar»: TikTok e Instagram.** Son los dos
-proveedores de CON-3 pensados para el creador. `tiktok-business` (la
-Accounts API, «analítica avanzada») se queda fuera de esta pantalla:
-depende de un trámite que no está hecho (CON-9) y, presentada como una
-cuarta «red», haría que una creadora eligiera entre dos TikToks.
-YouTube no tiene OAuth todavía (CON-8, pospuesta) y sigue por @.
-*Consecuencia:* si una red está en `oauth_connect` pero sin variables,
-el botón sale deshabilitado diciendo exactamente qué falta
-(`loadOAuthApps().missing`), nunca desaparece en silencio.
+**6. Qué red ofrece «Conectar»: solo TikTok.** No por falta de código
+—CON-3 tiene tres proveedores escritos y probados con respuestas
+grabadas— sino porque es la única donde autorizar **añade algo**:
+TikTok no publica seguidores ni vistas por @ (CON-10 §7), así que el
+permiso del dueño es lo que desbloquea las cifras, y es lo que se probó
+en vivo el 23-sep. Instagram entrega seguidores y publicaciones por @
+con `business_discovery`: poner ahí un botón que pide permisos para
+conseguir lo que ya tenemos es pedir de más, y su Login no se ha
+probado nunca. `tiktok-business` (la Accounts API) no es otra red, es
+otra app de la misma, depende del trámite de CON-9 y haría elegir entre
+dos TikToks. YouTube no tiene OAuth todavía (CON-8) y sigue por @.
+Añadir una red es añadirla a `REDES_CONECTABLES`: el diálogo, la ruta y
+el callback ya existen para las tres.
+
+*Y dónde se dice que falta una variable.* En la **sección** de
+conectar, el botón de una red sin configurar sale deshabilitado con el
+nombre de lo que falta: ahí mira quien despliega. En una **fila** de la
+tabla, no: a una creadora «faltan TIKTOK_LOGIN_CLIENT_KEY» no le dice
+nada y no le sirve de nada, así que en su lugar va la instrucción que
+sí puede seguir —«Para volver a leerla, quítala y agrégala por su @»—.
+Es la misma regla que `(app)/_lib/messages.ts` aplica a la pista de
+despliegue de la frontera de error.
+
+**6 bis. Ninguna fila sin salida.** Cuando una cuenta pide reautorizar
+y esta versión no puede hacerlo —la bandera apagada, una red sin app de
+OAuth (YouTube y Facebook, CON-8), o la app sin configurar en este
+entorno— la celda de acciones no se queda con «Quitar» y nada más: dice
+qué hacer en su lugar. Sin esa rama, una conexión de YouTube del seed
+con el token vencido se veía roja y sin ninguna acción posible.
 
 **7. «Reautorizar» reusa el mismo `POST …/start`.** No hay ruta nueva:
 el callback de CON-3 hace `upsertConnection`, que por el UNIQUE
@@ -159,6 +189,11 @@ producto: un workspace en otro país ve sus cifras y sus fechas.
 3. **DECISIÓN PENDIENTE DE NICOLÁS · ¿`tiktok-business` en la
    pantalla?** Se deja fuera (decisión 6). Si el trámite de CON-9 sale
    antes de lo previsto, entra con una línea.
+4. **DECISIÓN PENDIENTE DE NICOLÁS · ¿Instagram conectable?** Se deja
+   fuera por lo de la decisión 6. Si algún día quieres el alcance y la
+   retención por video de Instagram (que `business_discovery` no da),
+   se enciende añadiendo `"instagram"` a `REDES_CONECTABLES` y metiendo
+   `META_APP_ID` y `META_APP_SECRET` al vault.
 
 ### 0.4 Fuera de alcance (y a qué historia va)
 
@@ -168,7 +203,8 @@ producto: un workspace en otro país ve sus cifras y sus fechas.
 - Notificaciones de token por vencer → ya las crea **CON-2**
   (`oauth.refresh`); la bandeja es de otra historia.
 - `requirePermission` y `audit()` reales → **ACC-1** y **ACC-2**.
-- Desplegar con `OAUTH_CONNECT=1` y la prueba en vivo → **CON-3 §5**.
+- La prueba en vivo del flujo OAuth → **CON-3 §5** (hecha el 23-sep).
+- Abrir el OAuth a cualquier creador (App Review de Login Kit) → **CON-9**.
 
 ---
 

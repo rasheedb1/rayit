@@ -9,12 +9,25 @@ const t = MESSAGES.conectar;
 
 /**
  * Las redes que un creador conecta desde esta pantalla (decisión 6 de
- * docs/propuestas/CON-4.md). `tiktok-business` es la Accounts API: no
- * es otra red, es otra app de la misma, depende del trámite de CON-9 y
- * presentada aquí haría elegir entre dos TikToks. YouTube todavía no
- * tiene OAuth (CON-8) y sigue por @.
+ * docs/propuestas/CON-4.md). Hoy es una sola, y no por falta de código:
+ *
+ *   - **TikTok** es la única red donde autorizar añade algo que el @ no
+ *     da. TikTok no publica seguidores ni vistas por @ (CON-10 §7), así
+ *     que el permiso del dueño es lo que desbloquea las cifras. Es lo
+ *     que se probó en vivo el 23-sep.
+ *   - **Instagram** entrega seguidores y publicaciones por @ con
+ *     `business_discovery` (CON-10 §3). Autorizarla está escrito en
+ *     CON-3 pero quedó fuera del MVP: ofrecer aquí un botón que pide
+ *     permisos para conseguir lo que ya tenemos es pedir de más.
+ *   - **`tiktok-business`** (la Accounts API) no es otra red, es otra
+ *     app de la misma; depende del trámite de CON-9 y aquí haría elegir
+ *     entre dos TikToks.
+ *   - **YouTube** todavía no tiene OAuth (CON-8) y sigue por @.
+ *
+ * Añadir una es añadirla a esta lista: el diálogo, la ruta y el
+ * callback ya existen para las tres de CON-3.
  */
-export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok", "instagram"];
+export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok"];
 
 /**
  * «Conectar una cuenta autorizada»: un botón por red, cada uno con su
