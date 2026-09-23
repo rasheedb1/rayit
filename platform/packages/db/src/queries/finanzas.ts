@@ -609,10 +609,25 @@ export interface ImportPlatformPayoutsResult {
   conflicting: ConflictingPayout[];
 }
 
-/** Las redes del catálogo (0002). Se lee una vez por importación, no una por fila. */
+/**
+ * Las redes del catálogo (0002), para el selector de «Agregar a mano» y
+ * para validar la columna de plataforma de un CSV.
+ *
+ * Se lee DENTRO de la transacción del workspace y no por
+ * `withCatalogs`: `platform` es un catálogo global sin RLS (está en
+ * EXCEPCIONES_SIN_AISLAMIENTO con su motivo) y mc_app solo tiene SELECT,
+ * así que leerlo aquí no abre nada y le ahorra a la pantalla una
+ * conexión más. La web no tiene un `CatalogDb` a mano: `@/lib/db` solo
+ * expone `withWorkspace`, y ese es el punto.
+ */
+export async function listPayoutPlatforms(tx: WorkspaceTx): Promise<{ id: string; name: string }[]> {
+  const { rows } = await tx.query<{ id: string; name: string }>('SELECT id, name FROM platform ORDER BY name');
+  return rows;
+}
+
+/** Los ids del catálogo. Se lee una vez por importación, no una por fila. */
 async function knownPlatformIds(tx: WorkspaceTx): Promise<Set<string>> {
-  const { rows } = await tx.query<{ id: string }>('SELECT id FROM platform');
-  return new Set(rows.map((r) => r.id));
+  return new Set((await listPayoutPlatforms(tx)).map((p) => p.id));
 }
 
 /**
@@ -828,7 +843,12 @@ export async function importPlatformPayouts(
 ): Promise<ImportPlatformPayoutsResult> {
   if (inputs.length === 0) return { inserted: 0, duplicated: 0, conflicting: [] };
 
-  const [platforms, { currency: wsCurrency }] = await Promise.all([knownPlatformIds(tx), getWorkspaceSettings(tx)]);
+  // Una detrás de otra, NO con Promise.all: las dos corren sobre la
+  // MISMA transacción, que es una sola conexión. Lanzarlas a la vez
+  // encola la segunda detrás de la primera en el cliente de PGlite y la
+  // prueba se quedaba colgada hasta el timeout, sin decir por qué.
+  const platforms = await knownPlatformIds(tx);
+  const { currency: wsCurrency } = await getWorkspaceSettings(tx);
   inputs.forEach((input, i) => assertPayoutShape(input, platforms, wsCurrency, `Fila ${i + 1}`));
 
   // Qué periodos de este lote ya existen, y con qué monto. Una sola

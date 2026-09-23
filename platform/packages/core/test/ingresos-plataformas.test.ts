@@ -1,21 +1,21 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mesDe,
+  mesDelPeriodo,
   mesDesplazado,
   promedioMensual,
   proyeccionDePlataformas,
   ultimoMesCerrado,
   ventanaDeMeses,
   VENTANA_PROMEDIO_MESES,
-} from '../src/flujo-caja.ts';
+} from '../src/ingresos-plataformas.ts';
 
 describe('meses como strings', () => {
   test("mesDe recorta 'YYYY-MM-DD' y rechaza lo que no es una fecha", () => {
-    assert.equal(mesDe('2026-09-30'), '2026-09');
-    assert.throws(() => mesDe('2026-09'), /Fecha inválida/);
-    assert.throws(() => mesDe('2026-13-01'), /Fecha inválida/);
-    assert.throws(() => mesDe('30/09/2026'), /Fecha inválida/);
+    assert.equal(mesDelPeriodo('2026-09-30'), '2026-09');
+    assert.throws(() => mesDelPeriodo('2026-09'), /Fecha inválida/);
+    assert.throws(() => mesDelPeriodo('2026-13-01'), /Fecha inválida/);
+    assert.throws(() => mesDelPeriodo('30/09/2026'), /Fecha inválida/);
   });
 
   test('mesDesplazado cruza el año en los dos sentidos', () => {

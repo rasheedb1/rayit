@@ -1,12 +1,15 @@
 /**
- * Flujo de caja: la aritmética pura de lo que entra y lo que sale.
+ * Ingresos de plataformas (FIN-7): la aritmética pura de lo que pagan
+ * AdSense, Creator Rewards y los bonos, y de cómo se proyecta.
  *
- * Hoy aquí vive SOLO la parte de FIN-7 —los ingresos de las plataformas
- * (AdSense, Creator Rewards, bonos) proyectados como «otros ingresos»—,
- * porque FIN-6 todavía no está escrita. FIN-6 le añadirá los cobros
- * esperados, los gastos recurrentes y la reserva de impuestos, y
- * consumirá `proyeccionDePlataformas()` tal como está: es el punto de
- * entrada acordado en docs/propuestas/FIN-7.md §0.6.
+ * POR QUÉ ESTÁ EN SU PROPIO ARCHIVO Y NO EN flujo-caja.ts
+ * ------------------------------------------------------
+ * `flujo-caja.ts` es de FIN-6 (`projectCashflow`: cobros esperados,
+ * gastos recurrentes y reserva de impuestos por semana). Esto es la
+ * entrada de «otros ingresos» a esa proyección, y es lo único de FIN-7
+ * que es aritmética. Separarlos deja un único dueño por archivo y una
+ * costura explícita: FIN-6 llama a `proyeccionDePlataformas()` y reparte
+ * su `estimado` con `semanalDeMensual()`, que ya tiene.
  *
  * Nada de aquí toca la base ni la red, y el dinero NUNCA pasa por
  * `number`: entra string decimal, sale string decimal, y por dentro son
@@ -43,8 +46,16 @@ export interface MesConIngreso {
   monto: Decimal;
 }
 
-/** 'YYYY-MM-DD' → 'YYYY-MM'. Lanza si la fecha no es una fecha ISO de solo día. */
-export function mesDe(fechaIso: string): Mes {
+/**
+ * 'YYYY-MM-DD' → 'YYYY-MM': el mes al que pertenece un periodo, por su
+ * día de inicio. Lanza si la fecha no es una fecha ISO de solo día.
+ *
+ * El nombre lleva «DelPeriodo» y no es un `mesDe` a secas porque el
+ * barril de @mc/core aplana todos los módulos en un solo espacio de
+ * nombres, y `flujo-caja.ts` (FIN-6) tiene su propio `mesDe` para los
+ * gastos.
+ */
+export function mesDelPeriodo(fechaIso: string): Mes {
   const s = fechaIso.trim();
   if (!FECHA_RE.test(s)) {
     throw new Error(`Fecha inválida: "${fechaIso}". Se espera 'YYYY-MM-DD'.`);
@@ -74,7 +85,7 @@ export function mesDesplazado(mes: Mes, n: number): Mes {
  * media hundiría el estimado justo al empezar el mes.
  */
 export function ultimoMesCerrado(hoyIso: string): Mes {
-  return mesDesplazado(mesDe(hoyIso), -1);
+  return mesDesplazado(mesDelPeriodo(hoyIso), -1);
 }
 
 /** Los `meses` meses consecutivos que terminan en `hasta`, del más viejo al más nuevo. */

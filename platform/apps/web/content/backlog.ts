@@ -569,8 +569,8 @@ export const STORIES: readonly Story[] = [
     title: "Ingresos de plataformas",
     desc: "Carga manual o CSV de Creator Rewards, AdSense y bonos en platform_payout. Entra al flujo de caja.",
     done: "Un CSV de AdSense aparece como ingreso en su mes.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-5 y ACC-8: no la toca ningún creador en un piloto de dos semanas.",
+    status: "hecho",
+    note: "En /finanzas/ingresos: importar CSV (AdSense mensual o diario, Creator Rewards y una lista genérica), agregar a mano, lista por mes y el estimado mensual. La idempotencia es de la base: el UNIQUE natural de la migración 0034, que está PENDIENTE de aplicar en Supabase con 0024–0033; hasta entonces el import falla en producción con 42P10. Se adelantó packages/core/src/flujo-caja.ts con el promedio de tres meses porque FIN-6 no existe en ninguna rama: la fila «Ingresos de plataformas (estimado)» se ve hoy en la propia pantalla y FIN-6 la moverá a su tabla sin recalcularla. Propuesta: docs/propuestas/FIN-7.md.",
   },
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],

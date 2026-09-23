@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatCountry, formatDate, formatDateRange, formatDelta,
-  formatInt, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
+  formatInt, formatMonth, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
 } from "./format";
 
 describe("formatMoney", () => {
@@ -241,5 +241,32 @@ describe("formatCountry: el país por su nombre, en el idioma del workspace", ()
   it("un código que no es de dos letras vuelve tal cual", () => {
     expect(formatCountry("Colombia")).toBe("Colombia");
     expect(formatCountry("")).toBe("");
+  });
+});
+
+describe("formatMonth: un pago mensual se anuncia por su mes (FIN-7)", () => {
+  it("acepta 'YYYY-MM' y 'YYYY-MM-DD', en largo y en corto", () => {
+    expect(formatMonth("2026-09")).toBe("septiembre de 2026");
+    expect(formatMonth("2026-09-01")).toBe("septiembre de 2026");
+    expect(formatMonth("2026-09-30")).toBe("septiembre de 2026");
+    expect(formatMonth("2026-09", "short")).toBe("sep 2026");
+    expect(formatMonth("2026-01", "short")).toBe("ene 2026");
+  });
+
+  it("habla el idioma del workspace", () => {
+    expect(formatMonth("2026-09", "long", { locale: "en-US" })).toBe("September 2026");
+    expect(formatterFor({ locale: "pt-BR", currency: "BRL", timezone: "UTC" }).month("2026-09")).toBe("setembro de 2026");
+  });
+
+  it("no se corre de mes por la zona horaria del workspace", () => {
+    // Con la zona de Bogotá (UTC-5), el 1 de septiembre a las 00:00 UTC
+    // es el 31 de agosto: el pago de septiembre saldría como de agosto.
+    const bogota = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    expect(bogota.month("2026-09-01")).toBe("septiembre de 2026");
+    expect(formatMonth("2026-09-01", "long", { timeZone: "Pacific/Kiritimati" })).toBe("septiembre de 2026");
+  });
+
+  it("un texto que no es una fecha lanza, en vez de pintar «Invalid Date»", () => {
+    expect(() => formatMonth("septiembre")).toThrow(/No es una fecha ISO/);
   });
 });

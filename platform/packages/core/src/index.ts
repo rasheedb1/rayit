@@ -3,4 +3,4 @@ export * from './facturacion.ts';
 export * from './campanas.ts';
 export * from './tarifas.ts';
 export * from './zonas.ts';
-export * from './flujo-caja.ts';
+export * from './ingresos-plataformas.ts';
