@@ -16,7 +16,7 @@
 // corre el CI. Nunca hace push, nunca toca main, nunca despliega.
 //
 // Se lanza fase por fase:  args = { fases: [1] } … { fases: [7] }
-// Argumentos: umbral (9.5), maxRondas (5), maxRondasFinal (4), fases.
+// Argumentos: umbral (9.5), maxRondas (5), maxRondasFinal (4), fases, piezas (solo esas piezas paralelas).
 // Pulido de lo ya integrado: args = { pulir: { pendientes: [...] } } (ver pulir()).
 // El plan está en docs/fases-rasheed.md y docs/ventas-outreach.md.
 // =====================================================================
@@ -248,6 +248,7 @@ TERMINADO CUANDO: se crea una empresa con dos contactos y aparece en la búsqued
   ficha: {
     id: 'ficha', historias: 'VEN-4 y VEN-5', branch: 'rasheed/VEN-5-ficha-empresa',
     brief: `
+ESTADO AL 23-SEP (léelo antes de empezar): la pieza crm (VEN-1..3) YA está integrada, pulida y en producción, y parte de lo que sigue puede existir ya: la ficha /ventas/empresas/[id] con edición de empresa y contactos, responsable, relación; deal.next_action y su vencimiento (migraciones 0031 mover_negocio, 0032 siguiente_accion_y_marca, 0033); motivo al perder. Lee el código actual de apps/web/app/(app)/ventas/ y packages/db/src/queries/ventas.ts y construye ENCIMA: no dupliques, no reescribas lo que funciona, y monta tú mismo en /ventas y en el pipeline los componentes que antes iba a montar la pieza crm. Si necesitas esquema, la siguiente migración libre es 0034. Los 15 hallazgos abiertos del pulido están en docs/propuestas/pendientes-pulido.json: resuelve los que caen en Ventas.
 QUÉ CONSTRUYES: la ficha de empresa y el sistema de siguiente acción.
 - apps/web/app/(app)/ventas/empresas/[id]/: cabecera con nombre, dominio, nicho, relación y dueño; contactos (con source y opted_out visibles); línea de tiempo de activity (nota, correo, llamada, reunión, cambio de etapa, señal detectada) con registro rápido desde la misma pantalla; «lo que sabemos» (las señales de esa empresa); y la cadena deal → cotización → campaña → factura con enlaces a lo que exista. Consultas en packages/db/src/queries/ventas-ficha.ts (archivo propio para no chocar con la pieza crm, que escribe queries/ventas.ts).
 - VEN-4 siguiente acción: cada deal abierto tiene acción, fecha y responsable, editables desde la ficha y desde el pipeline (solo lectura aquí del pipeline: el componente de edición lo expones tú y crm lo puede montar después). Lista «vencidos hoy» como bloque arriba de /ventas (un componente exportado que la pieza crm monta con una línea). Job apps/worker/src/jobs/ventas/seguimientos.ts que cada mañana crea notification de tipo deal_due (vence hoy) y deal_overdue (vencido) sin duplicar; como el runner de Nicolás puede no existir, expón el job como función pura \`runSeguimientos(db, now)\` con prueba en pglite y un comando \`pnpm --filter @mc/worker run job:seguimientos\` para correrlo a mano.
@@ -394,10 +395,15 @@ const EXTRA_FASE_1 = `2b. CONFLICTO CONOCIDO en platform/db/seed/0003_demo_finan
 // pieza auth también toca. Su integración suele llegar antes.
 const EXTRA_FASE_2 = `2b. OJO: en paralelo a esta fase corrió un pase de endurecimiento del esquema que probablemente ya esté integrado en ${RAMA_INTEGRACION}. Toca estos archivos, que la pieza auth también toca: packages/db/src/esquema.ts (guardia de esquema invertida), packages/db/src/queries/cimientos.ts (getWorkspace sin filtro en JavaScript), apps/web/lib/workspace/current.ts, apps/web/app/(app)/error.tsx y loading.tsx, apps/web/lib/format.ts, y una migración de RLS. Regla para resolver esos conflictos: **en seguridad y aislamiento gana el endurecimiento** (sus políticas, su guardia, su getWorkspace sin filtro en JavaScript, sus revocaciones de privilegios); **en sesión y workspace actual gana auth** (getCurrentWorkspaceId leyendo sesión y cookie firmada, la validación de la membresía). No son alternativas: se combinan. Si dos migraciones reclaman el mismo número, renumera la de auth a la siguiente libre (el runner se niega si dos archivos comparten número, así que lo verás). Después del merge corre la prueba de RLS y la de auth juntas.`
 
+// Desde el 23-sep main está en producción sobre Supabase: una migración
+// nueva aplicada antes que su código hace fallar la guardia de esquema de
+// la web desplegada. Se aplica junto con el deploy, no al integrar.
+const EXTRA_FASE_3 = `4b. EXCEPCIÓN AL PASO 4: NO corras \`make db.migrate\` ni \`make db.seed\` contra Supabase. main ya está en producción sobre esa base (hasta 0033) y la guardia de esquema de la web desplegada rechazaría objetos nuevos. Verifica con \`make db.check\` y deja escrito en notes qué migraciones quedan pendientes de aplicar junto con el próximo deploy.`
+
 const FASES_DEF = [
   { n: 1, titulo: 'Fase 1 · cimientos', primero: [], paralelo: ['db', 'seed'], extra: EXTRA_FASE_1 },
   { n: 2, titulo: 'Fase 2 · pantallas', primero: [], paralelo: ['auth', 'resumen', 'cotizar'], extra: EXTRA_FASE_2 },
-  { n: 3, titulo: 'Fase 3 · CRM', primero: [], paralelo: ['crm', 'ficha'] },
+  { n: 3, titulo: 'Fase 3 · CRM', primero: [], paralelo: ['crm', 'ficha'], extra: EXTRA_FASE_3 },
   { n: 4, titulo: 'Fase 4 · tubería de outreach', primero: ['esquema'], paralelo: ['canales', 'motor', 'entregabilidad'] },
   { n: 5, titulo: 'Fase 5 · inteligencia', primero: [], paralelo: ['perfil', 'generacion', 'recomendador'] },
   { n: 6, titulo: 'Fase 6 · operación', primero: [], paralelo: ['bandejas', 'metricas', 'cierre'] },
@@ -555,7 +561,9 @@ async function correrFase(def) {
     }
   }
   // Barrera legítima: la integración necesita todas las ramas de la fase.
-  const paralelas = (await parallel(def.paralelo.map((id) => () => construirConCalidad(PIEZAS[id], def.titulo)))).filter(Boolean)
+  const soloPiezas = args && args.piezas
+  const ids = soloPiezas ? def.paralelo.filter((id) => soloPiezas.includes(id)) : def.paralelo
+  const paralelas = (await parallel(ids.map((id) => () => construirConCalidad(PIEZAS[id], def.titulo)))).filter(Boolean)
   hechas.push(...paralelas)
   if (paralelas.some((x) => !x.ok)) log(`Fase ${def.n}: alguna pieza no alcanzó el umbral; se integra igual y queda señalada en el informe`)
   const listas = paralelas.filter((x) => x.branch)
