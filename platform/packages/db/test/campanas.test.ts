@@ -125,7 +125,7 @@ describe('lista y ficha', () => {
     assert.deepEqual(varios.map((r) => r.companyName), ['Fresko Market', 'Nutrivé']);
   });
 
-  test('la ficha de Café Alma: sin cotización, entregables desde los posts, factura enlazada', async () => {
+  test('la ficha de Café Alma: con su cotización del seed 0004, entregables desde ella, factura enlazada', async () => {
     const c = await laura((tx) => getCampaign(tx, CAMPAIGN_CAFE_ALMA));
     assert.ok(c);
     assert.equal(c.name, 'Lanzamiento cold brew');
@@ -133,9 +133,13 @@ describe('lista y ficha', () => {
     assert.match(c.trackingUrl ?? '', /^https:\/\/cafealma\.co\//);
     assert.deepEqual(c.utm, { utm_source: 'instagram', utm_medium: 'creator', utm_campaign: 'laura_coldbrew' });
     assert.equal(c.brandBaselineFrom, '2026-07-27');
-    assert.equal(c.agreed, null, 'la campaña del seed se creó a mano');
-    assert.equal(c.deliverablesSource, 'posts');
-    assert.deepEqual(c.deliverables.map((d) => [d.deliverable, d.quantity]), [['reel', 1], ['tiktok', 1]]);
+    // El seed 0004 la enlaza a la cotización que la originó (COT-2026-003):
+    // lo acordado y los entregables salen de ahí, como en una creada con
+    // createCampaignFromQuote.
+    assert.equal(c.agreed?.quoteNumber, 'COT-2026-003');
+    assert.equal(c.agreed?.quoteStatus, 'accepted');
+    assert.equal(c.deliverablesSource, 'quote');
+    assert.deepEqual(c.deliverables.map((d) => [d.deliverable, d.quantity]), [['reel', 1], ['tiktok', 1], ['historias', 1]]);
     assert.deepEqual(c.invoices.map((i) => [i.number, i.status, i.total]), [['FV-2026-010', 'sent', '3100000.00']]);
     cercaDelMock(c.viewsTotal, 412000 + 300000, 'la ficha de Café Alma');
     assert.equal(await laura((tx) => getCampaign(tx, '00000003-0000-4000-8000-000000000000')), null);

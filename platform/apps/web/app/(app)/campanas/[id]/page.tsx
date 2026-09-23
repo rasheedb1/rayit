@@ -331,7 +331,7 @@ export default async function CampanaPage({
             <dl className="grid gap-3">
               <DataItem label="Marca">{campaign.companyName}</DataItem>
               <DataItem label="Fechas">{rango ?? <None>Sin fechas</None>}</DataItem>
-              <DataItem label="Monto acordado">{campaign.amount ? formatMoney(campaign.amount, campaign.currency, { mode: "full" }) : <None>Sin monto</None>}</DataItem>
+              <DataItem label="Monto acordado (con impuesto)">{campaign.amount ? formatMoney(campaign.amount, campaign.currency, { mode: "full" }) : <None>Sin monto</None>}</DataItem>
               <DataItem label="Línea base de la marca desde">{campaign.brandBaselineFrom ? formatDate(campaign.brandBaselineFrom, "long") : <None>Se fija al iniciar</None>}</DataItem>
               <DataItem label="Creada">{formatDate(campaign.createdAt, "long")}</DataItem>
             </dl>

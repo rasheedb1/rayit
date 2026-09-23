@@ -26,6 +26,7 @@ let t: TestDb;
 let creadoraLaura = '';
 let creadoraVecina = '';
 let tarifarioVigente = '';
+let versionVigente = 0;
 
 before(async () => {
   t = await openTestDb();
@@ -40,19 +41,26 @@ before(async () => {
   );
   creadoraLaura = laura!.id;
 
-  // Laura tiene tarifario: uno vigente (v2) y uno viejo (v1). El viejo
-  // existe para que `isCurrent` tenga algo que descartar.
+  // Laura tiene tarifario: uno vigente y uno viejo, DESPUÉS del que trae
+  // el seed 0004 (v1), que deja de estar vigente como lo haría
+  // saveRateCard. El viejo existe para que `isCurrent` tenga algo que
+  // descartar además del del seed.
   await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+    const { rows } = await tx.query<{ v: number }>(
+      'SELECT coalesce(max(version), 0)::int AS v FROM rate_card WHERE creator_id = $1', [creadoraLaura]);
+    const base = rows[0]?.v ?? 0;
+    versionVigente = base + 2;
+    await tx.query('UPDATE rate_card SET is_current = false WHERE creator_id = $1', [creadoraLaura]);
     const [viejo] = await tx.db
       .insert(rateCard)
-      .values({ workspaceId: CURRENT_WORKSPACE, creatorId: creadoraLaura, version: 1, isCurrent: false })
+      .values({ workspaceId: CURRENT_WORKSPACE, creatorId: creadoraLaura, version: base + 1, isCurrent: false })
       .returning({ id: rateCard.id });
     await tx.db.insert(rateCardItem).values({
       rateCardId: viejo!.id, deliverable: 'reel', labelEs: 'Reel (tarifa vieja)', priceLow: '1000000.00', priceHigh: '1500000.00', position: 0,
     });
     const [vigente] = await tx.db
       .insert(rateCard)
-      .values({ workspaceId: CURRENT_WORKSPACE, creatorId: creadoraLaura, version: 2, isCurrent: true })
+      .values({ workspaceId: CURRENT_WORKSPACE, creatorId: creadoraLaura, version: versionVigente, isCurrent: true })
       .returning({ id: rateCard.id });
     tarifarioVigente = vigente!.id;
     // A propósito en desorden: el helper tiene que devolverlos por position.
@@ -82,7 +90,7 @@ describe('queries/cotizar · getCurrentRateCard', () => {
     const found = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, creadoraLaura));
     assert.ok(found, 'Laura tiene tarifario vigente');
     assert.equal(found.card.id, tarifarioVigente);
-    assert.equal(found.card.version, 2);
+    assert.equal(found.card.version, versionVigente);
     assert.deepEqual(
       found.items.map((i) => i.deliverable),
       ['reel', 'historias', 'pack'],
