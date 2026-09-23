@@ -12,12 +12,22 @@ import type { CashflowInputs } from "@mc/db/queries/finanzas";
  */
 
 const consulta = vi.hoisted(() => ({ getCashflowInputs: vi.fn() }));
+const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
 vi.mock("@mc/db/queries/finanzas", () => consulta);
+// El rol se inyecta sustituyendo lib/permisos/sesion, que es el archivo
+// que ACC-3 cambiará cuando los permisos salgan de role_permission: la
+// prueba sigue valiendo entonces (mismo patrón que
+// lib/permisos/require-permission.test.ts).
+vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/permisos/sesion")>();
+  return { permisosDeLaSesion: async () => sesion.permisos ?? real.permisosDeLaSesion() };
+});
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ currency: "COP", locale: "es-CO", timezone: "America/Bogota" }),
 }));
 
+import { permisosDeRol, SinPermisoError } from "@mc/core";
 import FlujoPage from "./page";
 
 const HOY = "2026-09-23";
@@ -49,6 +59,29 @@ async function pintar(input: CashflowInputs) {
 
 beforeEach(() => {
   consulta.getCashflowInputs.mockReset();
+  sesion.permisos = null; // Dueño: todo
+});
+
+describe("el permiso finanzas.flujo.ver manda (ACC-1)", () => {
+  it("el rol Mánager no abre la pantalla, y NI SIQUIERA se lee la base", async () => {
+    sesion.permisos = permisosDeRol("creator", "manager");
+    expect(permisosDeRol("creator", "manager").has("finanzas.flujo.ver")).toBe(false);
+
+    consulta.getCashflowInputs.mockResolvedValue(entradas({ facturas: [FACTURA], gastos: [GASTO] }));
+    const err = await FlujoPage().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SinPermisoError);
+    expect((err as SinPermisoError).permiso).toBe("finanzas.flujo.ver");
+    // El permiso es la PRIMERA línea: si se leyera antes, un rol sin
+    // permiso ya habría visto pasar las cifras por el servidor.
+    expect(consulta.getCashflowInputs).not.toHaveBeenCalled();
+  });
+
+  it("el Contador sí lo abre: el permiso es del catálogo, no del rol", async () => {
+    sesion.permisos = permisosDeRol("creator", "finance");
+    expect(permisosDeRol("creator", "finance").has("finanzas.flujo.ver")).toBe(true);
+    await pintar(entradas({ facturas: [FACTURA], gastos: [GASTO] }));
+    expect(screen.getByText("Caja proyectada a 8 semanas")).toBeInTheDocument();
+  });
 });
 
 describe("sin nada que proyectar", () => {

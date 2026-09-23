@@ -168,22 +168,38 @@ Todo pasa por `withWorkspace`: RLS filtra `invoice`, `deal`, `campaign`,
 `quote`, `expense` y `workspace`. La prueba negativa abre la misma
 consulta con un workspace ajeno y exige cero filas y cero cobros.
 
-### 0.4 Permiso `finanzas.flujo.ver`
+### 0.4 Permiso `finanzas.flujo.ver` — cerrado
 
-ACC-1 no está en `origin/main`, así que la pantalla abre con
-`// TODO(ACC-1): finanzas.flujo.ver` y `getCashflowInputs` lleva el
-mismo comentario. Cuando ACC-1 entre a `main`, el cambio es una línea
-en `app/(app)/finanzas/flujo/page.tsx`:
+Cuando se escribió el plan, ACC-1 no estaba en `main`. Entró el mismo
+día, así que la pantalla ya no lleva el `TODO(ACC-1)`: abre con
 
 ```ts
-await requirePermission("finanzas.flujo.ver");   // ACC-1 + ACC-5
+await requirePermission("finanzas.flujo.ver");
 ```
 
-Lo que **sí** queda probado hoy es el aislamiento por workspace (§0.3).
-Lo que **no** se puede probar hoy es que el rol «Mánager» reciba 404:
-`permisosDeRol('creator','manager')` vive en la rama de ACC-1 y
-`requirePermission` todavía no existe en ninguna (es ACC-5/ACC-6).
-Queda anotado en §2 como el único criterio abierto de esta historia.
+como **primera línea**, antes de leer nada. `getCashflowInputs` no
+vuelve a comprobarlo: este paquete no conoce la sesión —su barandilla
+es la RLS— y duplicarlo daría dos sitios donde equivocarse; el
+comentario de la función lo dice.
+
+Probado en `app/(app)/finanzas/flujo/page.test.tsx`:
+
+- con `permisosDeRol('creator','manager')` la página lanza
+  `SinPermisoError` con `permiso === 'finanzas.flujo.ver'`, **y
+  `getCashflowInputs` no llega a llamarse**: si se leyera antes del
+  permiso, un rol sin él ya habría visto pasar las cifras por el
+  servidor;
+- con `permisosDeRol('creator','finance')` sí abre, que es lo que hace
+  la diferencia entre probar el permiso y probar el rol.
+
+El rol se inyecta sustituyendo `lib/permisos/sesion`, el mismo archivo
+que ACC-3 cambiará cuando los permisos salgan de `role_permission`: la
+prueba sigue valiendo entonces.
+
+**Lo que falta y no es de esta historia:** hoy el error cae en la
+frontera del segmento (`error.tsx`). Con **ACC-5** (`requireModule`)
+será un 404, para no confirmar siquiera que la pantalla existe. La
+comprobación no cambia; cambia dónde se traduce el error.
 
 ### 0.5 Fuera de alcance
 
@@ -281,22 +297,16 @@ ni `queries/ventas.ts`. Lo que sí le pido, por orden de urgencia:
    con Nicolás antes de que FIN-2 registre pagos: si cambia, cambia
    también qué escribe FIN-2 en `tax_reserve`.
 
-## 2. El criterio que queda abierto
+## 2. Los tres criterios, cerrados
 
-«El rol Mánager no puede abrir `/finanzas/flujo`». Hoy no se puede
-cerrar y no es por esta historia:
+| «Terminado cuando…» | Cómo se comprueba |
+|---|---|
+| El gráfico sale de la función con los datos del seed | `packages/db/test/finanzas.test.ts` §FIN-6, y en dev las ocho filas con el seed |
+| Un test cubre una semana con cobro, gasto e impuesto | `packages/core/test/flujo-caja.test.ts` › «una semana con cobro, gasto e impuesto» |
+| El rol Mánager no puede abrir `/finanzas/flujo` | `app/(app)/finanzas/flujo/page.test.tsx` › «el rol Mánager no abre la pantalla, y NI SIQUIERA se lee la base» (§0.4) |
 
-- `ACC-1` (el catálogo con `finanzas.flujo.ver` y los roles de fábrica)
-  no está en `origin/main`.
-- `requirePermission` no existe todavía en ninguna rama: es `ACC-5` /
-  `ACC-6`.
-
-Lo que hay en su lugar: `// TODO(ACC-1): finanzas.flujo.ver` en
-`app/(app)/finanzas/flujo/page.tsx` y en `getCashflowInputs`, y el
-aislamiento por workspace sí probado (`packages/db/test/finanzas.test.ts`,
-«desde otro workspace no hay facturas, ni negocios, ni gastos»). Cuando
-ACC-1 y ACC-5 entren a `main`, cerrar el criterio es una línea y una
-prueba.
+Lo único que queda para ACC-5 es convertir ese `SinPermisoError` en un
+404; el permiso ya se comprueba.
 
 ## 3. Si FIN-5 cambia el modelo de gastos
 

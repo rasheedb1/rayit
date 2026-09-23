@@ -8,6 +8,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -164,9 +165,15 @@ function Excluidos({ c, f }: { c: Cashflow; f: Formatter }) {
 }
 
 export default async function FlujoPage() {
-  // TODO(ACC-1): finanzas.flujo.ver — cuando ACC-1 y ACC-5 estén en
-  // main, esta línea es `await requirePermission("finanzas.flujo.ver")`
-  // y el rol Mánager recibe 404 aquí (docs/propuestas/FIN-6.md §0.4).
+  // Primero el permiso, antes de leer nada: el flujo de caja y la
+  // reserva de impuestos son de las cosas más sensibles del espacio, y
+  // el rol Mánager NO las ve (packages/core/src/permisos.ts).
+  //
+  // Hoy lanza SinPermisoError y la frontera del segmento (error.tsx) lo
+  // enseña; cuando llegue ACC-5, `requireModule` lo convierte en 404
+  // para no confirmar siquiera que la pantalla existe. La diferencia es
+  // dónde se traduce el error, no si se comprueba.
+  await requirePermission("finanzas.flujo.ver");
   const entradas = await withWorkspace((tx) => getCashflowInputs(tx));
   const c = projectCashflow(entradas);
   const f = formatterFor(await getCurrentWorkspace());

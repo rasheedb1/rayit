@@ -588,8 +588,13 @@ const PLAZO_DIAS_POR_DEFECTO = 30;
  * Ningún id que vuelve es `bigserial` (CIM-2 §3): son los uuid de
  * `invoice`, `deal` y `expense`.
  */
-// TODO(ACC-1): finanzas.flujo.ver — quien llame a esta consulta tiene
-// que haber pasado por requirePermission('finanzas.flujo.ver').
+/*
+ * Quien la llama tiene que haber pasado por
+ * requirePermission('finanzas.flujo.ver') (ACC-1): lo hace
+ * app/(app)/finanzas/flujo/page.tsx en su primera línea. Aquí no se
+ * comprueba porque este paquete no conoce la sesión —su barandilla es
+ * la RLS del workspace—, y duplicarlo daría dos sitios donde equivocarse.
+ */
 export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs> {
   const { rows } = await tx.query<CashflowRawRow>(`
     WITH ws AS (
