@@ -57,7 +57,7 @@ import {
   type ResultInputs,
   type ResultPost,
 } from '@mc/core';
-import { isUuid, type SqlExecutor, type WorkspaceTx } from '../client.ts';
+import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -1265,7 +1265,7 @@ export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Prom
  * porque también lo lee el worker (CAM-5), que corre como mc_worker.
  */
 async function readBrandTotals(q: ResultExecutor, campaignId: string): Promise<RawTotalRow[]> {
-  const { rows } = await q.query<RawTotalRow>(
+  const { rows } = await queryRows<RawTotalRow>(q,
     `SELECT * FROM (
        SELECT DISTINCT ON (kind)
               kind, source, value_num::text AS value, currency, ${DATE('day')} AS as_of, NULL::text AS from_day,
@@ -1302,8 +1302,26 @@ async function readBrandTotals(q: ResultExecutor, campaignId: string): Promise<R
  * qué workspace. WorkspaceTx lo cumple; el worker lo arma con su
  * transacción y el workspace de la campaña.
  */
-export interface ResultExecutor extends SqlExecutor {
+export interface ResultExecutor extends PlainExecutor {
   readonly workspaceId: string;
+}
+
+/**
+ * Ejecutar SQL, sin más. No es genérico a propósito: así lo cumplen tal
+ * cual WorkspaceTx, la transacción de asWorker y ctx.db del worker, cuyas
+ * firmas genéricas no coinciden entre sí.
+ */
+export interface PlainExecutor {
+  query(text: string, params?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+}
+
+/**
+ * Las filas con la forma que pide el SQL. Es la misma afirmación que
+ * hace tx.query<T>() sin decirlo; aquí está escrita una sola vez.
+ */
+async function queryRows<T>(q: PlainExecutor, text: string, params?: readonly unknown[]): Promise<{ rows: T[] }> {
+  const r = await q.query(text, params);
+  return { rows: r.rows as unknown as T[] };
 }
 
 /** Lo que la ficha lee de campaign_result. Conteos como number; dinero y proporciones como texto. */
@@ -1370,10 +1388,10 @@ interface RawPostCutRow {
  */
 export async function getResultInputs(q: ResultExecutor, campaignId: string): Promise<{ campaign: ResultCampaign; inputs: ResultInputs } | null> {
   const ws = q.workspaceId;
-  const { rows: camps } = await q.query<{
+  const { rows: camps } = await queryRows<{
     id: string; workspace_id: string; status: CampaignStatus; amount: string | null; currency: string;
     starts_on: string | null; ends_on: string | null; brand_baseline_from: string | null; creator_id: string | null;
-  }>(
+  }>(q,
     `SELECT id, workspace_id, status, amount::text AS amount, currency,
             ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on,
             ${DATE('brand_baseline_from')} AS brand_baseline_from, creator_id
@@ -1384,7 +1402,7 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
   if (!c) return null;
 
   const [posts, baselines, brand, totals] = await Promise.all([
-    q.query<RawPostCutRow>(
+    queryRows<RawPostCutRow>(q,
       `WITH cp AS (
          SELECT p.id, p.platform_id
          FROM campaign_post x
@@ -1417,7 +1435,7 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
     ),
     c.creator_id === null
       ? Promise.resolve({ rows: [] })
-      : q.query<{ platform_id: string; cut: number; median_views: string | null; sample_size: number; is_reliable: boolean }>(
+      : queryRows<{ platform_id: string; cut: number; median_views: string | null; sample_size: number; is_reliable: boolean }>(q,
           `SELECT DISTINCT ON (platform_id, age_hours_cut)
                   platform_id, age_hours_cut AS cut, median_views::text AS median_views, sample_size, is_reliable
            FROM creator_baseline
@@ -1425,7 +1443,7 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
            ORDER BY platform_id, age_hours_cut, computed_at DESC`,
           [ws, c.creator_id],
         ),
-    q.query<{ platform_id: string; day: string; followers: string | null }>(
+    queryRows<{ platform_id: string; day: string; followers: string | null }>(q,
       `SELECT s.platform_id, ${DATE('s.day')} AS day, s.followers::text AS followers
        FROM brand_account_snapshot s
        JOIN campaign c ON c.id = $2 AND c.workspace_id = $1
@@ -1496,7 +1514,7 @@ function isAgeCut(n: number): n is AgeCut {
  * now() de la base (la web); el worker pasa ctx.now().
  */
 export async function upsertResult(q: ResultExecutor, campaignId: string, v: CampaignResultValues, computedAt: string | null): Promise<boolean> {
-  const { rows } = await q.query<{ campaign_id: string }>(
+  const { rows } = await queryRows<{ campaign_id: string }>(q,
     `INSERT INTO campaign_result (campaign_id, workspace_id, computed_at, cut_hours, views, reach, interactions, saves, shares, link_clicks,
                                   reach_non_followers_pct, views_vs_median, brand_followers_gained, brand_followers_baseline_rate,
                                   brand_followers_campaign_rate, code_redemptions, attributed_revenue, currency, cpm, cost_per_follower,
@@ -1547,8 +1565,8 @@ export async function computeCampaignResult(q: ResultExecutor, campaignId: strin
  * los workspaces o de uno, o una sola. Solo para el worker: como mc_app,
  * RLS la limita al workspace de la transacción.
  */
-export async function listCampaignsToCompute(q: SqlExecutor, filter: { workspaceId?: string; campaignId?: string } = {}): Promise<{ id: string; workspaceId: string }[]> {
-  const { rows } = await q.query<{ id: string; workspace_id: string }>(
+export async function listCampaignsToCompute(q: PlainExecutor, filter: { workspaceId?: string; campaignId?: string } = {}): Promise<{ id: string; workspaceId: string }[]> {
+  const { rows } = await queryRows<{ id: string; workspace_id: string }>(q,
     `SELECT id, workspace_id FROM campaign
      WHERE status = ANY($1::text[]) AND ($2::uuid IS NULL OR workspace_id = $2) AND ($3::uuid IS NULL OR id = $3)
      ORDER BY workspace_id, starts_on NULLS LAST, id`,
