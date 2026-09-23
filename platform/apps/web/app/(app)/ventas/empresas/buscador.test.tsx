@@ -35,6 +35,16 @@ describe("Buscador de empresas", () => {
     expect(screen.getByText("Escribe al menos 3 letras para buscar.")).toBeInTheDocument();
   });
 
+  it("borrar de «nan» a «na» quita la búsqueda de la URL: la lista no queda filtrada por lo que ya no está (pulido r6)", () => {
+    search = "q=nan&rel=client";
+    render(<Buscador minSearch={3} />);
+    fireEvent.change(screen.getByLabelText("Buscar por nombre o dominio"), { target: { value: "na" } });
+    act(() => vi.advanceTimersByTime(300));
+    expect(replace).toHaveBeenCalledWith("/ventas/empresas?rel=client", { scroll: false });
+    expect(screen.getByLabelText("Buscar por nombre o dominio")).toHaveValue("na");
+    expect(screen.getByText("Escribe al menos 3 letras para buscar.")).toBeInTheDocument();
+  });
+
   it("al tercer carácter pone la búsqueda en la URL", () => {
     render(<Buscador minSearch={3} />);
     fireEvent.change(screen.getByLabelText("Buscar por nombre o dominio"), { target: { value: "caf" } });

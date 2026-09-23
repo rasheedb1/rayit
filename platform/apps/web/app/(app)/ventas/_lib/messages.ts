@@ -127,7 +127,8 @@ export const MESSAGES = {
       fitHelp: "De 0 a 100. Vacío si todavía no lo sabes.",
       budget: "Presupuesto estimado",
       country: "País",
-      countryHelp: "Dos letras: CO, MX, PE.",
+      /** La opción vacía del <Select> de país (la lista sale de _lib/paises.ts). */
+      countryPlaceholder: "Sin país",
       industry: "Sector",
       note: "Nota",
       submit: "Anotar",
@@ -236,7 +237,8 @@ export const MESSAGES = {
       name: "Nombre",
       domain: "Web o dominio",
       country: "País",
-      countryHelp: "Dos letras: CO, MX, PE.",
+      /** La opción vacía del <Select> de país (la lista sale de _lib/paises.ts). */
+      countryPlaceholder: "Sin país",
       city: "Ciudad",
       industry: "Sector",
       relationship: "Relación",
@@ -370,6 +372,16 @@ export const MESSAGES = {
     noNextActionHelp: "Un negocio sin siguiente acción se enfría. Ponle una.",
     noAmount: "Sin monto",
     moved: (name: string, stage: string) => `${name} pasó a «${stage}».`,
+    /**
+     * Perder un negocio cierra sus cotizaciones enviadas o vistas (0031):
+     * el aviso lo dice, para que nadie espere que la marca todavía firme.
+     */
+    quotesClosed: (numbers: string[]) =>
+      numbers.length === 1
+        ? `También se cerró ${numbers[0]}: la marca ya no puede aceptarla.`
+        : `También se cerraron ${new Intl.ListFormat("es", { type: "conjunction" }).format(numbers)}: la marca ya no puede aceptarlas.`,
+    /** La línea que deja en la historia del negocio cada cotización cerrada al perderlo. */
+    quoteClosedActivity: (quoteNumber: string) => `${quoteNumber} se cerró al perder el negocio`,
     days: (n: number) => `${n} ${n === 1 ? "día" : "días"}`,
     dragHint: "Arrastra una tarjeta a otra columna, o usa el menú de la tarjeta.",
     moveTo: "Mover a",
@@ -386,7 +398,7 @@ export const MESSAGES = {
     /** Pasar un negocio a una etapa perdida: el motivo es obligatorio. */
     lost: {
       title: "¿Por qué lo pierdes?",
-      help: "Queda anotado en el negocio. Con el tiempo es lo que te dice dónde se caen tus ventas.",
+      help: "Queda anotado en el negocio. Con el tiempo es lo que te dice dónde se caen tus ventas. Si le enviaste una cotización, se cierra y la marca ya no podrá aceptarla.",
       placeholder: "Elige el motivo",
       confirm: (stage: string) => `Pasar a «${stage}»`,
       formLabel: (name: string) => `Por qué pierdes el negocio con ${name}`,
@@ -439,7 +451,7 @@ export const MESSAGES = {
   /** Lo que dicen los formularios cuando un campo no vale (zod, en actions.ts). */
   validacion: {
     tooLong: (label: string, max: number) => `${label} no puede pasar de ${max} caracteres.`,
-    country: "El país va en dos letras: CO, MX, PE.",
+    country: "Elige el país de la lista.",
     campos: {
       brand: "La marca",
       domain: "El dominio",

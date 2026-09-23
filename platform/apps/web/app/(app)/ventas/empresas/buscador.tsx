@@ -15,8 +15,10 @@ const DEBOUNCE_MS = 250;
  * consulta la hace la página, en el servidor.
  *
  * Busca desde el tercer carácter (MIN_SEARCH en la capa de datos):
- * con una o dos letras no cambia la URL y lo dice, en vez de mostrar
- * todas las empresas y que parezca que el filtro no funciona.
+ * con una o dos letras no filtra y lo dice. Si la URL todavía traía una
+ * búsqueda más larga (se borró de «nan» a «na»), la quita: la lista
+ * vuelve a ser la entera y nunca queda filtrada por un texto que ya no
+ * está en la caja (pulido r6).
  */
 export function Buscador({ minSearch }: { minSearch: number }) {
   const t = MESSAGES.empresas;
@@ -45,9 +47,11 @@ export function Buscador({ minSearch }: { minSearch: number }) {
     setQ(value);
     if (timer.current) clearTimeout(timer.current);
     const trimmed = value.trim();
-    // Con 1 o 2 letras no se busca: se queda la lista como estaba.
-    if (trimmed.length > 0 && trimmed.length < minSearch) return;
-    timer.current = setTimeout(() => navigate({ q: trimmed }), DEBOUNCE_MS);
+    // Con 1 o 2 letras no se busca. Si la URL filtraba por un texto más
+    // largo que ya se borró, se vuelve a la lista entera; si no, nada.
+    const next = trimmed.length >= minSearch ? trimmed : "";
+    if (next === (params.get("q") ?? "")) return;
+    timer.current = setTimeout(() => navigate({ q: next }), DEBOUNCE_MS);
   }
 
   const short = q.trim().length > 0 && q.trim().length < minSearch;

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Aviso } from "../../_componentes/aviso";
 import { MESSAGES } from "../../_lib/messages";
+import type { CountryOption } from "../../_lib/paises";
 import { EmpresaForm, type EmpresaEditable } from "../nueva/form";
 
 /** Una fila de la tarjeta de datos, ya formateada en el servidor. */
@@ -23,10 +24,13 @@ export interface DatoFila {
  */
 export function DatosEmpresa({
   company,
+  countries,
   filas,
   signalsLink,
 }: {
   company: EmpresaEditable;
+  /** Las opciones de país del formulario, con el nombre en el idioma del workspace. */
+  countries: CountryOption[];
   filas: DatoFila[];
   /** «2 señales en el radar», si las hay. */
   signalsLink: string | null;
@@ -59,6 +63,7 @@ export function DatosEmpresa({
       {editing ? (
         <EmpresaForm
           company={company}
+          countries={countries}
           onCancel={() => setEditing(false)}
           onSaved={(msg) => {
             setNotice(msg);

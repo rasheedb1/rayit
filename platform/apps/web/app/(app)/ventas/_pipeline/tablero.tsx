@@ -87,7 +87,15 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
     startTransition(async () => {
       addOptimistic({ dealId, toStageId, toStageLabel: stage.label });
       const res = lostReason ? await moverNegocio(dealId, toStageId, lostReason) : await moverNegocio(dealId, toStageId);
-      setAviso(res.ok ? { notice: t.moved(deal.companyName, stage.label) } : { message: res.message ?? t.moveError });
+      setAviso(
+        res.ok
+          ? {
+              notice: res.closedQuotes?.length
+                ? `${t.moved(deal.companyName, stage.label)} ${t.quotesClosed(res.closedQuotes)}`
+                : t.moved(deal.companyName, stage.label),
+            }
+          : { message: res.message ?? t.moveError },
+      );
     });
   }
 

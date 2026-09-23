@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Textarea } from "@/components/ui/field";
+import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { anotarSenal, cargarLista } from "../actions";
 import { Aviso } from "../_componentes/aviso";
 import type { CsvLineError } from "../_lib/csv";
 import { MESSAGES } from "../_lib/messages";
+import type { CountryOption } from "../_lib/paises";
 import { useVentasForm } from "../_lib/use-ventas-form";
 
 /**
@@ -16,7 +17,16 @@ import { useVentasForm } from "../_lib/use-ventas-form";
  * falta para decidir después (la marca y qué se vio); el resto es
  * opcional y viaja a la empresa si la señal se acepta.
  */
-export function NuevaSenalForm({ currency, onCancel }: { currency: string; onCancel: () => void }) {
+export function NuevaSenalForm({
+  currency,
+  countries,
+  onCancel,
+}: {
+  currency: string;
+  /** Las opciones de país, con el nombre en el idioma del workspace (countryOptions, en el servidor). */
+  countries: CountryOption[];
+  onCancel: () => void;
+}) {
   const t = MESSAGES.radar.form;
   const [budget, setBudget] = useState("");
   const { state, pending, formRef, onSubmit, errors } = useVentasForm(anotarSenal, () => setBudget(""));
@@ -48,8 +58,8 @@ export function NuevaSenalForm({ currency, onCancel }: { currency: string; onCan
           <MoneyInput value={budget} currency={currency} onChange={(v) => setBudget(v)} />
           <input type="hidden" name="budget" value={budget} />
         </Field>
-        <Field label={t.country} help={t.countryHelp} error={errors.country} htmlFor="senal-country">
-          <Input name="country" maxLength={2} autoComplete="off" className="uppercase" />
+        <Field label={t.country} error={errors.country} htmlFor="senal-country">
+          <Select name="country" defaultValue="" placeholder={t.countryPlaceholder} options={countries} autoComplete="country" />
         </Field>
         <Field label={t.industry} error={errors.industry} htmlFor="senal-industry">
           <Input name="industry" maxLength={120} />

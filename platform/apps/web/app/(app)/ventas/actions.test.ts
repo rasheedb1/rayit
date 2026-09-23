@@ -52,7 +52,7 @@ describe("editarEmpresa", () => {
     expect(updateCompany).toHaveBeenCalledWith({}, COMPANY, {
       name: "Café Alma Tostadores",
       domain: "cafealma.co",
-      country: "co",
+      country: "CO",
       city: "Bogotá",
       industry: "Café",
       notes: null,
@@ -62,7 +62,7 @@ describe("editarEmpresa", () => {
 
   it("valida como el alta: sin nombre no llega a la base", async () => {
     const r = await editarEmpresa({}, form({ ...ficha, name: "  ", country: "Colombia" }));
-    expect(r.errors).toEqual({ name: "La empresa necesita un nombre.", country: "El país va en dos letras: CO, MX, PE." });
+    expect(r.errors).toEqual({ name: "La empresa necesita un nombre.", country: "Elige el país de la lista." });
     expect(updateCompany).not.toHaveBeenCalled();
   });
 
@@ -129,11 +129,33 @@ describe("editarContacto", () => {
   });
 });
 
+describe("el país de la ficha (pulido r6)", () => {
+  it("dos letras que no son un país no se guardan: el error va en el campo", async () => {
+    const r = await editarEmpresa({}, form({ ...ficha, country: "XX" }));
+    expect(r.errors).toEqual({ country: "Elige el país de la lista." });
+    expect(updateCompany).not.toHaveBeenCalled();
+  });
+
+  it("vacío es «sin país»", async () => {
+    await editarEmpresa({}, form({ ...ficha, country: "" }));
+    expect(updateCompany).toHaveBeenCalledWith({}, COMPANY, expect.objectContaining({ country: null }));
+  });
+});
+
 describe("moverNegocio", () => {
   it("pasa el motivo de la pérdida a moveDeal", async () => {
     const r = await moverNegocio(DEAL, "perdido", "precio");
     expect(r).toEqual({ ok: true });
-    expect(moveDeal).toHaveBeenCalledWith({}, DEAL, "perdido", { lostReason: "precio" });
+    expect(moveDeal).toHaveBeenCalledWith({}, DEAL, "perdido", expect.objectContaining({ lostReason: "precio" }));
+    const { quoteClosedActivity } = moveDeal.mock.calls[0]![3] as { quoteClosedActivity: (n: string) => string };
+    expect(quoteClosedActivity("COT-2026-007")).toBe("COT-2026-007 se cerró al perder el negocio");
+  });
+
+  it("perder un negocio con cotización enviada devuelve cuál se cerró, para decirlo en el aviso", async () => {
+    moveDeal.mockResolvedValue({ closedQuotes: [{ id: "q1", number: "COT-2026-007" }] });
+    const r = await moverNegocio(DEAL, "perdido", "precio");
+    expect(r).toEqual({ ok: true, closedQuotes: ["COT-2026-007"] });
+    expect(revalidatePath).toHaveBeenCalledWith("/cotizar", "layout");
   });
 
   it("un motivo que no existe no llega a la base", async () => {
