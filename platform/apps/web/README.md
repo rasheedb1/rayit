@@ -38,10 +38,11 @@ pnpm --filter @mc/web test        # vitest
 
 Desde CIM-3 el workspace sale de la **sesión**, no de una variable.
 `DEMO_WORKSPACE_ID` sigue existiendo como atajo de desarrollo y solo se
-mira cuando **no hay sesión** (modo demo, o una ruta pública). En
-producción sin sesión y sin esa variable, `lib/workspace/current.ts`
-lanza diciendo qué falta; para servir el workspace del seed a
-propósito, `ALLOW_SEED_WORKSPACE=1`.
+lee en una copia **sin** llaves de Supabase Auth; con las llaves, sin
+sesión se va a `/login` en cualquier ruta (ver «Falla cerrado» abajo).
+En una copia sin llaves, en producción y sin esa variable,
+`lib/workspace/current.ts` lanza diciendo qué falta; para servir el
+workspace del seed a propósito, `ALLOW_SEED_WORKSPACE=1`.
 
 Desplegar: `make vercel.deploy` (vista previa) o `make vercel.deploy
 PROD=1` (producción). El token vive en el vault; ver el CLAUDE.md de la
@@ -66,8 +67,11 @@ lib/auth/                     Sesión de Supabase: configuración, cliente de se
                               sincronización de la persona y sus espacios, server
                               actions (cambiar de espacio, salir) y messages.ts.
 middleware.ts                 Refresca la sesión y protege todo (app)/.
-app/login/                    La entrada: un campo y un botón.
+app/login/                    La entrada: un campo, el CAPTCHA y un botón.
 app/auth/callback/            Donde aterriza el enlace del correo.
+app/auth/confirm/             El clic que canjea el enlace con token_hash.
+app/auth/comprobar/           «Entraste como x@y»: el enlace no se pidió en este navegador.
+app/auth/salir/               Cierra una sesión con la identidad en conflicto.
 app/(app)/cuenta/             Nombre, correo, espacios y cerrar sesión.
 components/workspace-switcher.tsx  El selector de espacio, montado en el marco.
 lib/workspace/current.ts      El único sitio que sabe cuál es el workspace.
@@ -147,8 +151,12 @@ Son dos cosas distintas y se resuelven por separado:
   cuenta de Supabase Auth que entró con ella la primera vez: si otra
   cuenta llega con el mismo correo (un buzón de empresa reasignado, un
   dominio que caducó), no hereda la fila ni sus espacios; `/login` dice
-  «Ese correo ya está ligado a otra cuenta» y el log del servidor lo
-  registra. Las filas que crea el seed nacen sin cuenta y se ligan en el
+  «Ese correo ya está ligado a otra cuenta» —con el correo de soporte
+  si hay `SUPPORT_EMAIL`, o «entra con otro correo» si no— y el log del
+  servidor lo registra. Si la que cae en conflicto es una sesión que ya
+  existía, pasa antes por `/auth/salir`, que la cierra de verdad (un
+  Server Component no puede borrar cookies) solo si la base confirma el
+  conflicto. Las filas que crea el seed nacen sin cuenta y se ligan en el
   primer inicio de sesión.
 - **en qué espacio estás** sale de la cookie firmada `mc.workspace`,
   que es una **preferencia**: solo se respeta si ese espacio está en la
@@ -171,8 +179,9 @@ en `platform/.env.local`) y en Vercel:
 | `SUPABASE_URL` | el cliente de servidor; `next.config.ts` la copia a `NEXT_PUBLIC_SUPABASE_URL` (el `env:` define el valor; para que además llegue al navegador hay que leerlo con acceso estático, y eso lo hace `lib/auth/config.ts`) |
 | `SUPABASE_ANON_KEY` | igual, a `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No es un secreto: viaja al navegador por diseño |
 | `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
-| `APP_URL` | a qué origen vuelve el enlace del correo. Sin ella se deduce de las cabeceras de la petición |
-| `SUPPORT_EMAIL` | el correo de contacto que publica `/legal` (datos personales, soporte). Sin él, la página dice que se publicará; no se inventa ninguno |
+| `APP_URL` | a qué origen vuelve el enlace del correo. En desarrollo y en las vistas previas, sin ella se deduce de las cabeceras de la petición; en **producción** nunca (las manda el cliente): sin `APP_URL` ni `VERCEL_PROJECT_PRODUCTION_URL`, `/login` no manda el enlace y el log dice por qué (`lib/auth/origen.ts`) |
+| `SUPPORT_EMAIL` | el correo de contacto que publican `/legal`, el error «ese correo ya está ligado a otra cuenta» de `/login` y el tope de espacios del selector. Sin él ninguno promete «escríbenos»: `/legal` dice que se publicará y `/login` ofrece entrar con otro correo. En producción, que falte se avisa en el log |
+| `TURNSTILE_SITE_KEY` | la clave **de sitio** (pública) de Cloudflare Turnstile para el CAPTCHA de `/login` (CIM-10). La secreta va en el panel de Supabase, no aquí. Sin ella, `/login` funciona sin CAPTCHA: fuera de producción lo dice en una línea, en producción lo avisa el log |
 
 Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
 dice cuáles faltan y el resto sigue sirviendo `DEMO_WORKSPACE_ID`. Eso
@@ -247,7 +256,7 @@ correo encendido, contraseñas **apagadas** y **Confirm email
 encendido**. La aplicación ya rechaza un usuario sin correo verificado;
 este ajuste es la segunda barrera, no la única.
 
-### El límite del correo integrado
+### El límite del correo, y por qué hace falta un CAPTCHA
 
 El proveedor de correo que trae Supabase es para desarrollo y tiene un
 **límite bajo por hora**, por proyecto y no por persona. Al pasarlo
@@ -255,6 +264,25 @@ responde 429 y `/login` lo dice con su propio texto («ya mandamos varios
 enlaces a ese correo…»). Para uso real hay que conectar un SMTP propio
 en **Project Settings → Auth → SMTP Settings**; hasta entonces, no
 probar el login en bucle.
+
+Un SMTP propio también tiene un tope por hora para todo el proyecto, y
+el endpoint del enlace (`/auth/v1/otp`) es público: la anon key viaja
+al navegador, así que un script puede pedir enlaces sin pasar por esta
+aplicación y agotar el cupo, y entonces **nadie** puede entrar. Un
+límite por IP en la app no lo para. Lo que lo para es que Supabase exija
+un CAPTCHA (historia **CIM-10**, antes del primer cliente que pague):
+
+1. En Cloudflare → Turnstile, un sitio con los dominios de la app
+   (`on-cue-web.vercel.app` y `localhost`). Da una clave de sitio y una
+   secreta.
+2. `TURNSTILE_SITE_KEY` = la clave **de sitio**, en Vercel (production y
+   preview) y en `platform/.env.local` si quieres verlo en local.
+   Despliega: `/login` ya pinta el widget y manda el token.
+3. **Después**, en Supabase → Authentication → Attack Protection →
+   *Enable Captcha protection*, proveedor Turnstile y la clave
+   **secreta**. En este orden: con el CAPTCHA encendido y sin el widget
+   desplegado, cada envío falla («No pudimos comprobar que no eres un
+   robot»).
 
 Además Supabase no deja pedir otro enlace para el **mismo correo**
 antes de 60 s (también 429). Por eso «Reenviar el enlace» sale
@@ -298,6 +326,31 @@ demo y no crea nada; cambiar de espacio cambia lo que se sirve; otra
 cuenta de Auth con el mismo correo no entra), `app/auth/callback/route.test.ts`
 y `app/auth/confirm/acciones.test.ts`.
 
+### Si el enlace lo pidió otra persona
+
+Con `token_hash`, el enlace sirve en cualquier navegador (es a lo que
+se renunció para que funcione del portátil al teléfono). Eso abre el
+*login CSRF*: alguien pide un enlace para **su** correo, se lo manda a
+la víctima, y ella entra sin notarlo en la cuenta del atacante, donde
+acaba todo lo que registre. Dos defensas:
+
+- `/login` deja una cookie con la huella del correo pedido
+  (`lib/auth/pedido.ts`). Si `/auth/confirm` canjea un enlace para OTRO
+  correo, o en un navegador que no pidió ninguno, no entra directo: pasa
+  por `/auth/comprobar`, «Entraste como x@y», con «No soy yo, cerrar
+  sesión».
+- El menú del selector de espacio dice siempre con qué correo se entró,
+  bajo «Tu cuenta».
+
+### Antes de desplegar a producción
+
+- [ ] `APP_URL` fijada (o `VERCEL_PROJECT_PRODUCTION_URL`, que pone Vercel).
+- [ ] `SUPPORT_EMAIL` fijado: es el único contacto de una persona con la
+      cuenta bloqueada.
+- [ ] `TURNSTILE_SITE_KEY` y, después, el CAPTCHA en Supabase (arriba).
+- [ ] SMTP propio en Supabase.
+- [ ] Redirect URLs, plantillas y *Confirm email* en el panel (arriba).
+
 ### Migraciones de esta pieza
 
 Dos, **sin aplicar en Supabase** hasta que las integre quien integra:
@@ -308,6 +361,14 @@ ramas ya tomaron (la cabecera de la primera lo detalla). El código las
 cita por su nombre y no por su número: renumerarlas es mover dos
 archivos. Sin la primera, el inicio de sesión falla y el log de Vercel
 dice cuál falta.
+
+El orden con `0024_aislamiento_por_defecto` es obligatorio (0024 quita
+a `mc_app` el INSERT sobre membership y 0028 se lo devuelve) y lo hacen
+cumplir las dos: 0028 se para si 0024 no está en `schema_migrations`, y
+0024 se para si 0028 ya lo está. `packages/db/test/identidad.test.ts`
+aplica las dos en el orden malo y comprueba el mensaje, y además lee de
+la base migrada que `mc_app` tenga INSERT (y no UPDATE ni DELETE) sobre
+membership.
 
 ## Reglas del marco
 
