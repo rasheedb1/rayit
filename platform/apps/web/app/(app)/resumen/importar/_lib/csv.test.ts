@@ -492,6 +492,7 @@ describe("filas sucias", () => {
     expect(problemasDe(1).some((p) => p.gravedad === "aviso" && p.codigo === "yaImportado")).toBe(true);
     expect(r.yaEstaban).toBe(1);
     expect(r.sinNovedad).toBe(0);
+    expect(r.conNovedad).toBe(r.listas.length);
   });
 
   it("un video que ya tiene una lectura de esta fecha o posterior se anuncia como «sin novedad», no como lectura nueva", () => {
@@ -511,6 +512,8 @@ describe("filas sucias", () => {
     expect(codigos("ig_nofol_alto")).toContain("yaImportado");
     expect(codigos("ig_nofol_alto")).not.toContain("sinNovedad");
     expect({ yaEstaban: otra.yaEstaban, sinNovedad: otra.sinNovedad }).toEqual({ yaEstaban: 1, sinNovedad: 2 });
+    // Lo que el paso 3 resume y lo que decide si hay algo que importar.
+    expect(otra.conNovedad).toBe(1);
     // Se siguen enviando: quien decide es la base, y los cuenta en staleReadings.
     expect(otra.listas).toHaveLength(3);
   });

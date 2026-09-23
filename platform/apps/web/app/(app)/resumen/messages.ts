@@ -384,7 +384,41 @@ export const MESSAGES = {
     } satisfies Record<ProblemaCodigo, (p: { valor?: string; campo?: string }) => string>,
     revisar: {
       title: "Esto es lo que se va a guardar",
-      resumen: (listas: string, total: string) => `${listas} de ${total} filas listas`,
+      /**
+       * Cuántas filas van a escribir algo, de cuántas trae el archivo.
+       * Si alguna ya tiene una lectura igual de reciente o más, no se
+       * llaman «listas»: al subir el mismo archivo dos veces decía a la
+       * vez «3 de 3 filas listas» y «3 no se guardarán».
+       */
+      resumen: (n: number, txt: string, total: string, haySinNovedad: boolean) =>
+        !haySinNovedad
+          ? `${txt} de ${total} filas listas`
+          : n === 1
+            ? `1 de ${total} filas trae algo nuevo`
+            : `${txt} de ${total} filas traen algo nuevo`,
+      /**
+       * La pastilla corta de cada problema, bajo el título del video. La
+       * frase completa (`validacion`) la lee el lector de pantalla y sale
+       * al pasar el puntero; se enseña entera cuando cita la celda que lo
+       * causó, que es lo que hay que buscar en el archivo.
+       */
+      etiqueta: {
+        sinId: "Sin identificador",
+        idDemasiadoLargo: "Id demasiado largo",
+        sinFecha: "Sin fecha",
+        fechaIlegible: "Fecha ilegible",
+        fechaFutura: "Fecha futura",
+        fechaLejana: "Fecha lejana",
+        noEsNumero: "No es un número",
+        fueraDeRango: "Cifra demasiado grande",
+        negativo: "Cifra negativa",
+        noSeguidoresMayor: "No seguidores > alcance",
+        enlaceInvalido: "Enlace no válido",
+        repetidaEnArchivo: "Repetida",
+        yaImportado: "Ya estaba",
+        sinNovedad: "Nada nuevo",
+        casiVacia: "Casi vacía",
+      } satisfies Record<ProblemaCodigo, string>,
       errores: (n: number, txt: string) =>
         n === 1 ? "1 fila no se puede importar" : `${txt} filas no se pueden importar`,
       avisos: (n: number, txt: string) => contar(n, txt, "aviso", "avisos"),
@@ -426,7 +460,15 @@ export const MESSAGES = {
       estado: { lista: "Lista", error: "No entra", aviso: "Con aviso" },
       sinDato: "—",
     },
-    acciones: { atras: "Atrás", siguiente: "Siguiente", importar: "Importar", importando: "Importando…", otro: "Importar otro archivo" },
+    acciones: {
+      atras: "Atrás",
+      siguiente: "Siguiente",
+      importar: "Importar",
+      importando: "Importando…",
+      otro: "Importar otro archivo",
+      /** El botón del paso 3 cuando ninguna fila trae una lectura más reciente que la guardada. */
+      nadaNuevo: "No hay nada nuevo que importar",
+    },
     hecho: {
       title: "Listo",
       resumen: (videos: number, videosTxt: string, lecturas: number, lecturasTxt: string) =>

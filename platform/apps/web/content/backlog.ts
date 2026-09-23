@@ -278,7 +278,7 @@ export const STORIES: readonly Story[] = [
     desc: "El creador exporta desde TikTok Studio, Instagram Insights o YouTube Studio y sube el archivo; se convierte en snapshots con source = csv_import. Es la vía mientras no hay aprobaciones.",
     done: "Un CSV real de Instagram Insights llena post_metric_snapshot y aparece en Resumen.",
     status: "hecho",
-    note: "Asistente de 4 pasos en /resumen/importar: guarda con la fecha de exportación y nunca hacia atrás (el paso 3 ya avisa qué no se guardará), lee Windows-1252 y no duplica una cuenta que ya existe. El mapeo manual es el camino: ninguna plataforma documenta su cabecera (docs/fases-rasheed.md §8).",
+    note: "Asistente de 4 pasos en /resumen/importar: guarda con la fecha de exportación y nunca hacia atrás (el paso 3 ya avisa qué no se guardará), lee Windows-1252 y no duplica una cuenta que ya existe. El mapeo manual es el camino: ninguna plataforma documenta su cabecera (docs/fases-rasheed.md §8). Pulido r4: el paso 3 cuenta solo las filas con algo nuevo y, con cero, el botón dice «No hay nada nuevo que importar»; la columna Video tiene ancho mínimo y cada aviso es una pastilla bajo el título.",
   },
   {
     id: "RES-5", module: "RES", owner: "rasheed", size: "S", sprint: 3, deps: ["RES-1", "CIM-5"],
