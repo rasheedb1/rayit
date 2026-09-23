@@ -550,6 +550,16 @@ export interface FinanceSettingsSaved {
   /** La moneda que quedó en workspace.currency, en mayúsculas. */
   currency: string;
   /**
+   * La que había ANTES, en mayúsculas. Igual a `currency` si no cambió.
+   *
+   * Va aquí porque el aviso de abajo tiene que nombrar la moneda en la
+   * que están las facturas, no la nueva. Sin este dato, la pantalla que
+   * se repinta después de guardar ya tiene la moneda nueva en sus props
+   * y decía «tienes 17 facturas vivas en MXN» de unas que están en COP.
+   * Lo encontró la verificación en dev, no una prueba.
+   */
+  previousCurrency: string;
+  /**
    * Cuántas facturas quedaron en una moneda distinta de la del
    * workspace. Cambiar la moneda NO convierte nada (FIN-8 §0.3 F), y
    * los KPI de /finanzas suman sin convertir: la pantalla lo dice.
@@ -692,6 +702,7 @@ export async function updateFinanceSettings(
   return {
     settings: parseFinanceSettings(bloque),
     currency: monedaFinal,
+    previousCurrency: monedaPrevia,
     invoicesInOtherCurrency: otras.rows[0]?.n ?? 0,
   };
 }

@@ -312,8 +312,12 @@ describe('configuración financiera (FIN-8)', () => {
     const salida = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       updateFinanceSettings(tx, { settings: { ...base, retencionPct: '10' } }),
     );
+    assert.equal(salida.previousCurrency, 'COP', 'sin cambiar la moneda, la anterior es la misma');
     // La función no devuelve ningún id de audit_log (CIM-2 §3).
-    assert.deepEqual(Object.keys(salida).sort(), ['currency', 'invoicesInOtherCurrency', 'settings']);
+    assert.deepEqual(
+      Object.keys(salida).sort(),
+      ['currency', 'invoicesInOtherCurrency', 'previousCurrency', 'settings'],
+    );
 
     const despues = await leer<{ n: number }>(WORKSPACE_LAURA,
       `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
@@ -405,6 +409,7 @@ describe('configuración financiera (FIN-8)', () => {
       updateFinanceSettings(tx, { settings: base, currency: 'mxn' }),
     );
     assert.equal(salida.currency, 'MXN', 'se normaliza a mayúsculas');
+    assert.equal(salida.previousCurrency, 'COP', 'la anterior vuelve: es la moneda en la que están esas facturas');
     assert.ok(salida.invoicesInOtherCurrency > 0, 'avisa que hay facturas en COP que nadie convirtió');
 
     // Los montos de las facturas no se tocaron: cambiar la moneda del
@@ -417,6 +422,7 @@ describe('configuración financiera (FIN-8)', () => {
       updateFinanceSettings(tx, { settings: base, currency: 'COP' }),
     );
     assert.equal(vuelta.currency, 'COP');
+    assert.equal(vuelta.previousCurrency, 'MXN');
     assert.equal(vuelta.invoicesInOtherCurrency, 0);
     const ws = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
     assert.equal(ws.currency, 'COP');

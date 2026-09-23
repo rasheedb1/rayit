@@ -66,6 +66,13 @@ export interface ConfiguracionState extends ActionState {
   facturasEnOtraMoneda?: number;
   /** La moneda que quedó, para el mensaje de éxito. */
   moneda?: string;
+  /**
+   * La que había antes. El aviso nombra ESTA, porque es la moneda en la
+   * que están las facturas que nadie convirtió. Sin JavaScript la
+   * pantalla se repinta con la moneda nueva ya en sus props, así que
+   * tomarla de ahí decía la equivocada.
+   */
+  monedaAnterior?: string;
 }
 
 /**
@@ -139,6 +146,7 @@ export async function guardarConfiguracion(
   return {
     ok: true,
     moneda: guardado.currency,
+    monedaAnterior: guardado.previousCurrency,
     facturasEnOtraMoneda: guardado.invoicesInOtherCurrency,
   };
 }

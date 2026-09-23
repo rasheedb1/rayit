@@ -67,6 +67,7 @@ beforeEach(() => {
   updateFinanceSettings.mockResolvedValue({
     settings: FINANCE_SETTINGS_DEFAULTS,
     currency: "COP",
+    previousCurrency: "COP",
     invoicesInOtherCurrency: 0,
   });
 });
@@ -167,14 +168,20 @@ describe("guardarConfiguracion · lo que guarda", () => {
     expect(entrada.currency).toBe("mxn");
   });
 
-  it("al guardar bien revalida el segmento y devuelve la moneda y el aviso", async () => {
+  it("al guardar bien revalida el segmento y devuelve la moneda, la ANTERIOR y el aviso", async () => {
+    // La anterior es la que el aviso tiene que nombrar: es la moneda en
+    // la que están las facturas que nadie convirtió. Sin ella, la
+    // pantalla repintada sin JavaScript (que ya tiene la moneda nueva en
+    // sus props) decía «17 facturas vivas en MXN» de unas que están en
+    // COP. Lo encontró la verificación en dev.
     updateFinanceSettings.mockResolvedValue({
       settings: FINANCE_SETTINGS_DEFAULTS,
       currency: "MXN",
+      previousCurrency: "COP",
       invoicesInOtherCurrency: 11,
     });
     const r = await guardarConfiguracion({}, datos({ currency: "MXN" }));
-    expect(r).toEqual({ ok: true, moneda: "MXN", facturasEnOtraMoneda: 11 });
+    expect(r).toEqual({ ok: true, moneda: "MXN", monedaAnterior: "COP", facturasEnOtraMoneda: 11 });
     expect(revalidatePath).toHaveBeenCalledWith("/finanzas", "layout");
   });
 

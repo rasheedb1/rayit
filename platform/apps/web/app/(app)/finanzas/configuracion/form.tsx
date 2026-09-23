@@ -186,14 +186,19 @@ export function ConfiguracionForm({ settings, currency, facturasVivas }: Configu
         </Button>
         {estado.ok && (
           <p role="status" className="text-sm text-good">
-            {estado.moneda && estado.moneda !== currency ? t.guardadoConMoneda(estado.moneda) : t.guardado}
+            {estado.moneda && estado.monedaAnterior && estado.moneda !== estado.monedaAnterior
+              ? t.guardadoConMoneda(estado.moneda)
+              : t.guardado}
           </p>
         )}
       </div>
 
       {estado.ok && (estado.facturasEnOtraMoneda ?? 0) > 0 && (
+        // La moneda del aviso es la ANTERIOR: es la que tienen esas
+        // facturas. `currency` ya es la nueva cuando la pantalla se
+        // repinta sin JavaScript.
         <p role="status" className="rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-sm leading-5 text-ink-2">
-          {t.moneda.aviso(estado.facturasEnOtraMoneda ?? 0, currency)}
+          {t.moneda.aviso(estado.facturasEnOtraMoneda ?? 0, estado.monedaAnterior ?? currency)}
         </p>
       )}
     </form>
