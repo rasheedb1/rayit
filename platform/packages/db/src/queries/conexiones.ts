@@ -324,6 +324,10 @@ export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise
 // ---------------------------------------------------------------------
 
 export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
+/** Lectura hecha con el token del dueño (cuenta autorizada): la misma que escribe el worker. */
+export const API_SNAPSHOT_SOURCE = 'api';
+/** Las fuentes que la pantalla considera «la última lectura» de la cuenta. */
+export const ACCOUNT_SNAPSHOT_SOURCES: readonly string[] = [PUBLIC_SNAPSHOT_SOURCE, API_SNAPSHOT_SOURCE];
 
 export interface AddPublicAccountInput {
   creatorId: string;
@@ -379,10 +383,12 @@ export interface AccountSnapshotInput {
   mediaCount: number | null;
   views: number | null;
   raw: unknown;
+  /** 'public_profile' (por @) o 'api' (con el token del dueño). Por defecto, por @. */
+  source?: string;
 }
 
 /**
- * Snapshot diario de la cuenta con source 'public_profile'. UNIQUE
+ * Snapshot diario de la cuenta con source 'public_profile' (o 'api' si se lee con token). UNIQUE
  * (connection_id, day, source): «Actualizar» dos veces el mismo día no
  * duplica la fila ni la corrige; la primera lectura del día es la del
  * día. Las métricas se insertan, nunca se actualizan, y la base lo
@@ -403,7 +409,7 @@ export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnaps
      VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
      ON CONFLICT (connection_id, day, source) DO NOTHING
      RETURNING 1`,
-    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), PUBLIC_SNAPSHOT_SOURCE],
+    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), input.source ?? PUBLIC_SNAPSHOT_SOURCE],
   );
   const saved = inserted.rows.length > 0;
   await tx.query(
@@ -435,17 +441,17 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
     `SELECT c.id, c.access_mode,
             to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
             (SELECT w.followers FROM account_metric_snapshot w
-              WHERE w.connection_id = c.id AND w.source = $1 AND w.day <= l.day - 7
+              WHERE w.connection_id = c.id AND w.source = ANY($1::text[]) AND w.day <= l.day - 7
               ORDER BY w.day DESC LIMIT 1) AS followers_week_ago
        FROM social_connection c
        LEFT JOIN LATERAL (
          SELECT s.day, s.followers, s.following, s.media_count, s.views
            FROM account_metric_snapshot s
-          WHERE s.connection_id = c.id AND s.source = $1
-          ORDER BY s.day DESC LIMIT 1
+          WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
+          ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
       WHERE c.deleted_at IS NULL`,
-    [PUBLIC_SNAPSHOT_SOURCE],
+    [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
   const extra = new Map(rows.map((r) => [r.id, r]));
   return base.map((b) => {
@@ -469,5 +475,70 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
       WHERE id = $1 AND deleted_at IS NULL`,
     [connectionId, detailEs, permanent],
   );
+}
+
+// ---------------------------------------------------------------------
+// De cuenta por @ a cuenta autorizada (híbrido de CON-10 + CON-3)
+// ---------------------------------------------------------------------
+
+/**
+ * La fila 'public_profile' de esa red con ese handle, si existe y está
+ * viva: es la que «Autorizar» debe convertir, para conservar id e historial.
+ */
+export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
+  const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
+    `SELECT id, secret_ref, deleted_at, status FROM social_connection
+      WHERE platform_id = $1 AND access_mode = 'public_profile' AND deleted_at IS NULL AND lower(handle) = lower($2)`,
+    [platformId, handle],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, secretRef: r.secret_ref, deletedAt: iso(r.deleted_at), status: r.status } : null;
+}
+
+export interface UpgradeToOAuthInput {
+  /** El open_id / user_id que la plataforma dio al autorizar; reemplaza al handle como id externo. */
+  externalAccountId: string;
+  handle: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  accountType: ConnectionAccountType;
+  secretRef: string;
+  scopes: readonly string[];
+  accessExpiresAt: Date;
+  refreshExpiresAt: Date | null;
+  connectedAt?: Date;
+}
+
+/**
+ * Convierte una cuenta agregada por @ en una autorizada: misma fila
+ * (mismo id, mismos snapshots), access_mode 'direct_oauth', tokens en el
+ * almacén bajo secretRef. Si ya existía otra fila con ese open_id (una
+ * autorización anterior), se desactiva para no chocar con el UNIQUE.
+ */
+export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, input: UpgradeToOAuthInput): Promise<void> {
+  // El UNIQUE (platform_id, external_account_id, workspace_id) cuenta también
+  // las filas con deleted_at: la fila anterior con ese open_id se retira y su
+  // id externo se marca como sustituido para liberar la clave.
+  await tx.query(
+    `UPDATE social_connection
+        SET deleted_at = COALESCE(deleted_at, now()), status = 'disabled',
+            status_detail = 'Reemplazada por la cuenta agregada por @ al autorizarla.',
+            external_account_id = external_account_id || '~sustituida~' || left(id::text, 8)
+      WHERE platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND external_account_id = $2 AND id <> $1`,
+    [id, input.externalAccountId],
+  );
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE social_connection
+        SET external_account_id = $2, handle = COALESCE($3, handle), display_name = COALESCE($4, display_name),
+            avatar_url = COALESCE($5, avatar_url), profile_url = COALESCE($6, profile_url), account_type = $7,
+            secret_ref = $8, scopes = $9::text[], access_expires_at = $10, refresh_expires_at = $11,
+            access_mode = 'direct_oauth', status = 'active', status_detail = NULL, last_error_at = NULL, consecutive_failures = 0,
+            connected_at = COALESCE($12, now())
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id`,
+    [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
+  );
+  if (rows.length === 0) throw new ConnectionNotFound(id);
 }
 

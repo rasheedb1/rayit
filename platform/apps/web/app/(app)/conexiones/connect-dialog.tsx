@@ -14,6 +14,10 @@ export type ConnectDialogProps = {
   /** Si viene, el botón se muestra deshabilitado con este motivo (app sin configurar). */
   disabledReason?: string;
   variant?: "primary" | "secondary";
+  size?: "sm" | "md";
+  /** Texto del botón; por defecto «Conectar {label}». */
+  actionLabel?: string;
+  ariaLabel?: string;
 };
 
 /**
@@ -22,14 +26,14 @@ export type ConnectDialogProps = {
  * el inicio del flujo lleve evidencia. <dialog> nativo: foco atrapado y
  * Escape cierran solos.
  */
-export function ConnectDialog({ label, text, policyVersion, action, disabledReason, variant = "primary" }: ConnectDialogProps) {
+export function ConnectDialog({ label, text, policyVersion, action, disabledReason, variant = "primary", size = "md", actionLabel, ariaLabel }: ConnectDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descId = useId();
   return (
     <>
-      <Button variant={variant} onClick={() => ref.current?.showModal()} disabled={!!disabledReason} title={disabledReason}>
-        Conectar {label}
+      <Button variant={variant} size={size} onClick={() => ref.current?.showModal()} disabled={!!disabledReason} title={disabledReason} aria-label={ariaLabel}>
+        {actionLabel ?? `Conectar ${label}`}
       </Button>
       {disabledReason && <span className="sr-only">{disabledReason}</span>}
       <dialog

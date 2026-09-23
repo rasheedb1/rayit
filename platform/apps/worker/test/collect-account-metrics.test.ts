@@ -20,7 +20,8 @@ const ENV = { INSTAGRAM_HOUSE_TOKEN: 'IGAA-house-worker-SECRETO', GOOGLE_API_KEY
 let h: Harness;
 let guard: NetworkGuard;
 let fetch: FixtureFetch;
-let ids: { ig: string; yt: string; tt: string; gone: string };
+let ids: { ig: string; yt: string; tt: string; gone: string; auth: string };
+const AUTH_TOKENS = { accessToken: 'act.demo-access-tiktok-AUTH-SECRETO', refreshToken: 'rft.demo-refresh-AUTH-SECRETO', accessExpiresAt: new Date('2026-09-23T05:00:00Z'), scopes: ['user.info.basic', 'user.info.stats'] };
 
 async function seed(db: PgliteDatabase): Promise<void> {
   const raw = db.raw;
@@ -37,7 +38,12 @@ async function seed(db: PgliteDatabase): Promise<void> {
     );
     return r.rows[0]!.id;
   };
-  ids = { ig: await add('instagram', 'cafealma', '17841400000000e01'), yt: await add('youtube', 'NutriveOficial', 'UCnutrive00000000000000e4'), tt: await add('tiktok', 'laura.cocinafacil', 'laura.cocinafacil'), gone: await add('tiktok', 'noexiste.zz9', 'noexiste.zz9') };
+  const authRow = await raw.query<{ id: string }>(
+    `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, access_expires_at)
+     VALUES ($1, $2, 'tiktok', 'open_id_demo_laura', 'laura.cocinafacil.auth', 'vault:tt-auth', '{user.info.basic}', 'direct_oauth', $3) RETURNING id`,
+    [WORKSPACE, CREATOR, AUTH_TOKENS.accessExpiresAt],
+  );
+  ids = { ig: await add('instagram', 'cafealma', '17841400000000e01'), yt: await add('youtube', 'NutriveOficial', 'UCnutrive00000000000000e4'), tt: await add('tiktok', 'laura.cocinafacil', 'laura.cocinafacil'), gone: await add('tiktok', 'noexiste.zz9', 'noexiste.zz9'), auth: authRow.rows[0]!.id };
   await raw.exec("SELECT set_config('app.workspace_id', '', false)");
 }
 
@@ -47,9 +53,10 @@ before(async () => {
     ...(await loadFixtures('instagram', [['business_discovery', 'ok']])),
     ...(await loadFixtures('youtube', [['channels.list', 'handle.ok']])),
     // El oEmbed casa por handle: la cuenta buena tiene su fixture; cualquier otra cae en not_found.
-    ...(await loadFixtures('tiktok', [['oembed.profile', 'ok'], ['oembed.profile', 'not_found']])),
+    ...(await loadFixtures('tiktok', [['oembed.profile', 'ok'], ['oembed.profile', 'not_found'], ['user.info', 'ok']])),
   ]);
   h = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: ENV, http: { fetch: fetch.fetch } });
+  await h.secrets.set('vault:tt-auth', AUTH_TOKENS);
 });
 after(async () => { await h.stop(); guard.restore(); });
 
@@ -58,7 +65,7 @@ test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta 
   const run = await waitFor(async () => (await jobRuns(h.db, 'collect.account_metrics')).find((r) => r.status !== 'running'), { label: 'collect.account_metrics', timeoutMs: 30_000 });
   assert.equal(run.status, 'ok', run.error ?? '');
   const md = run.metadata as { snapshots: string[]; noMetrics: string[]; errored: string[]; transient: string[]; skipped: Record<string, string> };
-  assert.deepEqual([...md.snapshots].sort(), [ids.ig, ids.yt].sort());
+  assert.deepEqual([...md.snapshots].sort(), [ids.ig, ids.yt, ids.auth].sort(), 'la autorizada se lee con su token (userInfo)');
   assert.deepEqual(md.noMetrics, [ids.tt]);
   assert.deepEqual(md.errored, [ids.gone]);
   assert.deepEqual(md.transient, []);
@@ -67,7 +74,10 @@ test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta 
   const snaps = await h.db.query<{ connection_id: string; day: string; followers: string | number | null; media_count: string | number | null; views: string | number | null; source: string }>(
     `SELECT connection_id, day::text AS day, followers, media_count, views, source FROM account_metric_snapshot ORDER BY connection_id`,
   );
-  assert.equal(snaps.rows.length, 2);
+  assert.equal(snaps.rows.length, 3);
+  const auth = snaps.rows.find((s) => s.connection_id === ids.auth)!;
+  assert.equal(Number(auth.followers), 412000);
+  assert.equal(auth.source, 'api');
   const ig = snaps.rows.find((s) => s.connection_id === ids.ig)!;
   assert.equal(Number(ig.followers), 267793);
   assert.equal(Number(ig.media_count), 1205);
@@ -88,24 +98,25 @@ test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta 
   assert.match(by.get(ids.gone)!.status_detail!, /No encontramos @noexiste.zz9/);
 
   const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log ORDER BY id`);
-  assert.deepEqual(log.rows.map((r) => r.endpoint).sort(), ['instagram.business_discovery', 'tiktok.oembed', 'tiktok.oembed', 'youtube.channels.list']);
+  assert.deepEqual(log.rows.map((r) => r.endpoint).sort(), ['instagram.business_discovery', 'tiktok.oembed', 'tiktok.oembed', 'tiktok.user.info', 'youtube.channels.list']);
   assert.equal(guard.attempts, 0);
 
   const raw = { query: (text: string, params?: readonly unknown[]) => h.db.raw.query(text, params as unknown[]) };
   const dump = await dumpTextColumns(raw, 'public');
-  assert.equal(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY]), null);
+  assert.equal(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY, AUTH_TOKENS.accessToken, AUTH_TOKENS.refreshToken]), null);
   const text = h.sink.text();
-  assert.ok(!text.includes(ENV.INSTAGRAM_HOUSE_TOKEN) && !text.includes(ENV.GOOGLE_API_KEY));
+  for (const s of [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY, AUTH_TOKENS.accessToken, AUTH_TOKENS.refreshToken]) assert.ok(!text.includes(s));
 });
 
 test('sin credenciales, la plataforma se salta y se avisa; nada falla', async () => {
   const h2 = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: {}, http: { fetch: fetch.fetch } });
+  await h2.secrets.set('vault:tt-auth', AUTH_TOKENS);
   try {
     await h2.worker.boss.send('collect.account_metrics', { source: 'test' });
     const run = await waitFor(async () => (await jobRuns(h2.db, 'collect.account_metrics')).find((r) => r.status !== 'running'), { label: 'sin credenciales', timeoutMs: 30_000 });
-    assert.equal(run.status, 'ok');
+    assert.equal(run.status, 'ok', run.error ?? '');
     const md = run.metadata as { snapshots: string[]; skipped: Record<string, string> };
-    assert.deepEqual(md.snapshots, []);
+    assert.deepEqual(md.snapshots, [ids.auth], 'la autorizada no depende de las credenciales de la casa: se lee con su propio token');
     assert.match(md.skipped['instagram']!, /INSTAGRAM_HOUSE_TOKEN/);
     assert.match(md.skipped['youtube']!, /GOOGLE_API_KEY/);
     assert.equal(md.skipped['tiktok'], undefined, 'TikTok no necesita credencial');
