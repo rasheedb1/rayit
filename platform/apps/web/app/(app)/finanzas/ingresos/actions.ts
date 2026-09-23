@@ -9,6 +9,7 @@ import {
   type ConflictingPayout,
   type PlatformPayoutInput,
 } from "@mc/db/queries/finanzas";
+import { requirePermission } from "@/lib/permisos";
 import { withWorkspace } from "@/lib/db";
 import { DECIMAL_RE, firstErrors, formField } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -26,9 +27,18 @@ import {
 import { MESSAGES } from "./_lib/messages";
 
 /**
- * Las dos escrituras de FIN-7. Las dos son dinero, así que las dos
- * pasan por la bitácora en cuanto ACC-2 exista, y por el permiso en
- * cuanto exista ACC-1.
+ * Las dos escrituras de FIN-7. Las dos son dinero: las dos abren con
+ * `requirePermission` (ACC-1) y las dos dejan su fila en `audit_log`,
+ * que la pone `importPlatformPayouts` dentro de la misma transacción
+ * (ACC-2).
+ *
+ * El permiso es `finanzas.pago.registrar` («Registrar pagos») y el de
+ * lectura, `finanzas.flujo.ver`. No hay un `finanzas.ingreso.*` porque
+ * el catálogo de permisos viaja en la semilla de la migración 0034, que
+ * ya está en `main`, y `packages/db/test/accesos.test.ts` exige que esa
+ * semilla sea, línea por línea, la salida del script de ACC-1: añadir
+ * dos permisos obligaría a editar una migración aplicada. Está propuesto
+ * en docs/propuestas/FIN-7.md §1 y marcado DECISIÓN PENDIENTE DE NICOLÁS.
  *
  * El CSV entra por el CUERPO de la Server Action y no por un route
  * handler como el lote de Resumen (RES-6): aquel son 5 MB de métricas y
@@ -74,7 +84,7 @@ function frasePara(err: ErrorCsv): string {
 }
 
 export async function importarCsv(_prev: ImportarState, formData: FormData): Promise<ImportarState> {
-  // TODO(ACC-1): requirePermission('finanzas.ingresos.crear') como PRIMERA línea.
+  await requirePermission("finanzas.pago.registrar");
   const t = MESSAGES.importar.archivo;
   const archivo = formData.get("archivo");
   if (!(archivo instanceof File) || archivo.size === 0) return { message: t.sinArchivo };
@@ -119,7 +129,8 @@ export async function importarCsv(_prev: ImportarState, formData: FormData): Pro
 
   let escrito;
   try {
-    // TODO(ACC-2): audit('finanzas.platform_payout.import', { after: revision.listas }).
+    // La bitácora la pone importPlatformPayouts, dentro de la misma
+    // transacción que el INSERT (ACC-2).
     escrito = await withWorkspace((tx) => importPlatformPayouts(tx, revision.listas));
   } catch (err) {
     console.error("[finanzas/ingresos] no se pudo escribir el lote", err);
@@ -182,7 +193,7 @@ export interface NuevoIngresoState {
 }
 
 export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData): Promise<NuevoIngresoState> {
-  // TODO(ACC-1): requirePermission('finanzas.ingresos.crear') como PRIMERA línea.
+  await requirePermission("finanzas.pago.registrar");
   const parsed = nuevoIngresoSchema.safeParse({
     platformId: formField(formData, "platformId"),
     mes: formField(formData, "mes"),
@@ -213,7 +224,6 @@ export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData)
 
   let r;
   try {
-    // TODO(ACC-2): audit('finanzas.platform_payout.create', { after: entrada }).
     r = await withWorkspace((tx) => createPlatformPayout(tx, entrada));
   } catch (err) {
     console.error("[finanzas/ingresos] no se pudo guardar el ingreso", err);

@@ -270,25 +270,6 @@ export function formatDate(iso: string, style: "short" | "long" = "short", opts:
 }
 
 /**
- * Un MES, en el locale del workspace: "septiembre de 2026" en es-CO,
- * "September 2026" en en-US. Acepta 'YYYY-MM' y 'YYYY-MM-DD' (se queda
- * con el mes). `style: "short"` da "sep 2026".
- *
- * Lo pide Finanzas (FIN-7): los ingresos de plataformas se listan por
- * mes, y un pago mensual no se anuncia con el día 1 ("1 de septiembre
- * de 2026") ni con el rango entero, que a 400 px no cabe.
- */
-export function formatMonth(iso: string, style: "short" | "long" = "long", opts: LocaleOpts = {}): string {
-  const locale = opts.locale ?? DEFAULT_LOCALE;
-  // Un mes es una fecha de calendario: se presenta en UTC, como las
-  // columnas `date`. Con la zona del workspace, "2026-09-01" leído desde
-  // Bogotá sería el 31 de agosto y el pago cambiaría de mes.
-  const d = utcDate(iso.length === 7 ? `${iso}-01` : iso);
-  if (style === "short") return `${shortMonth(d, locale, "UTC")} ${d.getUTCFullYear()}`;
-  return plain(dateFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(d));
-}
-
-/**
  * Día y mes en números, en el orden del locale: "16/9" en es-CO, "9/16"
  * en en-US. Para las etiquetas de un eje con poco sitio —siete barras a
  * 400 px—, donde "16 sep" ya no cabe entre dos marcas. Añadido por
@@ -297,6 +278,24 @@ export function formatMonth(iso: string, style: "short" | "long" = "long", opts:
 export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
   return plain(dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zoneFor(iso, opts) }).format(utcDate(iso)));
+}
+
+/**
+ * Un mes con su año, en el locale del espacio: "2026-08" → "agosto de
+ * 2026". Acepta también una fecha entera ("2026-08-01"), y se queda con
+ * el mes. Para nombrar de qué período sale una cifra derivada —el ritmo
+ * de gastos recurrentes del flujo de caja (FIN-6)—, donde decir solo
+ * «el último mes» deja la cifra sin fuente comprobable.
+ *
+ * Un mes es una fecha de calendario, no un instante: se presenta en UTC
+ * igual que una columna `date`, para que "2026-08" no se vea como julio
+ * en una zona al oeste.
+ */
+export function formatMonth(isoMonth: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  if (!/^\d{4}-\d{2}(-\d{2})?$/.test(isoMonth)) throw new Error(`No es un mes ISO: "${isoMonth}"`);
+  const d = utcDate(`${isoMonth.slice(0, 7)}-01`);
+  return plain(dateFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(d));
 }
 
 /**
@@ -438,8 +437,8 @@ export function formatterFor(settings: FormatSettings) {
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
-    month: (iso: string, style: "short" | "long" = "long") => formatMonth(iso, style, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
+    month: (isoMonth: string) => formatMonth(isoMonth, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
     time: (iso: string) => formatTime(iso, base),

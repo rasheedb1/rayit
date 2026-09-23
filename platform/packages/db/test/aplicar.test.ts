@@ -24,7 +24,9 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
  * hueco que el de ACC-3.
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
-  '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  '0023':
+    'reservada en main para ACC-3 y sin usar: 0024–0033 llegaron antes y ACC-3 se escribió como ' +
+    '0034_access_control.sql (cabecera de 0034). Queda como hueco declarado; rellenarlo con un archivo vacío es decisión de Nicolás',
 };
 
 let dir = '';

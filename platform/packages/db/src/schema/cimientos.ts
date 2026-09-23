@@ -14,7 +14,6 @@ import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uu
 
 export const WORKSPACE_KINDS = ['creator', 'agency'] as const;
 export const WORKSPACE_PLANS = ['free', 'creator', 'agency', 'enterprise'] as const;
-export const MEMBERSHIP_ROLES = ['owner', 'admin', 'member', 'viewer', 'client'] as const;
 export const CREATOR_STATUSES = ['active', 'paused', 'archived'] as const;
 export const PLATFORM_IDS = ['tiktok', 'instagram', 'facebook', 'youtube'] as const;
 export const JOB_RUN_STATUSES = ['running', 'ok', 'failed', 'skipped', 'partial'] as const;
@@ -74,7 +73,15 @@ export const membership = pgTable(
   {
     workspaceId: workspaceId(),
     userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
-    role: text('role', { enum: MEMBERSHIP_ROLES }).default('member').notNull(),
+    /**
+     * El rol en el workspace (0034, ACC-3): FK a role.id (schema/accesos.ts).
+     * Sin `references()` a propósito: accesos.ts importa workspace y
+     * appUser de aquí, y el ciclo dejaría `workspaceId()` sin inicializar.
+     * La clave ajena, el disparador de referencia y el de tipo de
+     * workspace los pone la migración. Sin DEFAULT: quien inserta lo dice,
+     * normalmente con system_role_id(kind, key).
+     */
+    roleId: uuid('role_id').notNull(),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.userId] })],

@@ -39,6 +39,10 @@ export {
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
 export {
+  audit, auditAsJob, assertAuditAction, AUDIT_ACTIONS, CLAVES_PROHIBIDAS_EN_BITACORA, CORREO_OMITIDO, InvalidAuditActionError,
+  isForbiddenAuditKey, sanitizeForAudit, type AuditAction, type AuditEntry, type AuditExecutor, type JobAuditEntry,
+} from './audit.ts';
+export {
   APP_ROLE, assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
   explicarEsquema, FUNCION_DE_REFERENCIAS, migracionesDelRepositorio, POLITICAS_ABIERTAS_DECLARADAS, PRIVILEGIOS,
   PRIVILEGIOS_DE_LA_APP, PRIVILEGIOS_PROHIBIDOS, ROLES_CON_ACCESO_DECLARADOS, UNICOS_GLOBALES_DECLARADOS,

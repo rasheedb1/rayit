@@ -122,13 +122,13 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
         description="Cada campaña cerrada crea su factura y su fecha esperada de cobro. Los estados de mora salen de la vista receivables; el IVA y la retención, de la misma función que usa el formulario."
         aside={
           <div className="flex flex-wrap gap-2">
+            <Button href="/finanzas/flujo">Flujo de caja</Button>
+            {/* FIN-7: lo que pagan las plataformas no es una factura, pero es
+                la misma caja, y su estimado ya entra al flujo. */}
+            <Button href="/finanzas/ingresos">Ingresos</Button>
             <Button variant="primary" href="/finanzas/facturas/nueva">
               Nueva factura
             </Button>
-            {/* FIN-7: lo que pagan las plataformas no es una factura, pero es
-                la misma caja. Desde aquí se llega a cargarlo y a ver su
-                estimado mensual. */}
-            <Button href="/finanzas/ingresos">Ingresos de plataformas</Button>
           </div>
         }
       />

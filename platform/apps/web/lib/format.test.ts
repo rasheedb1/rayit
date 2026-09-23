@@ -244,29 +244,24 @@ describe("formatCountry: el país por su nombre, en el idioma del workspace", ()
   });
 });
 
-describe("formatMonth: un pago mensual se anuncia por su mes (FIN-7)", () => {
-  it("acepta 'YYYY-MM' y 'YYYY-MM-DD', en largo y en corto", () => {
-    expect(formatMonth("2026-09")).toBe("septiembre de 2026");
-    expect(formatMonth("2026-09-01")).toBe("septiembre de 2026");
-    expect(formatMonth("2026-09-30")).toBe("septiembre de 2026");
-    expect(formatMonth("2026-09", "short")).toBe("sep 2026");
-    expect(formatMonth("2026-01", "short")).toBe("ene 2026");
+describe("formatMonth", () => {
+  it("nombra el mes y su año en el locale del espacio", () => {
+    expect(formatMonth("2026-08")).toBe("agosto de 2026");
+    expect(formatMonth("2026-01")).toBe("enero de 2026");
+    expect(formatMonth("2026-08", { locale: "en-US" })).toBe("August 2026");
   });
 
-  it("habla el idioma del workspace", () => {
-    expect(formatMonth("2026-09", "long", { locale: "en-US" })).toBe("September 2026");
-    expect(formatterFor({ locale: "pt-BR", currency: "BRL", timezone: "UTC" }).month("2026-09")).toBe("setembro de 2026");
+  it("acepta una fecha entera y se queda con el mes", () => {
+    expect(formatMonth("2026-08-31")).toBe("agosto de 2026");
   });
 
-  it("no se corre de mes por la zona horaria del workspace", () => {
-    // Con la zona de Bogotá (UTC-5), el 1 de septiembre a las 00:00 UTC
-    // es el 31 de agosto: el pago de septiembre saldría como de agosto.
-    const bogota = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
-    expect(bogota.month("2026-09-01")).toBe("septiembre de 2026");
-    expect(formatMonth("2026-09-01", "long", { timeZone: "Pacific/Kiritimati" })).toBe("septiembre de 2026");
+  it("no se corre de mes por la zona del espacio: un mes es calendario, no un instante", () => {
+    expect(formatMonth("2026-08", { timeZone: "America/Bogota" })).toBe("agosto de 2026");
+    expect(formatMonth("2026-08", { timeZone: "Pacific/Kiritimati" })).toBe("agosto de 2026");
   });
 
-  it("un texto que no es una fecha lanza, en vez de pintar «Invalid Date»", () => {
-    expect(() => formatMonth("septiembre")).toThrow(/No es una fecha ISO/);
+  it("lo que no es un mes ISO lanza", () => {
+    expect(() => formatMonth("agosto")).toThrow(/mes ISO/);
+    expect(() => formatMonth("2026")).toThrow(/mes ISO/);
   });
 });

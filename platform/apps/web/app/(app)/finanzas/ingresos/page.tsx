@@ -13,8 +13,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
+import { MESSAGES as MESSAGES_FINANZAS } from "../_lib/messages";
 import { MESSAGES } from "./_lib/messages";
 
 export const metadata: Metadata = { title: "Ingresos de plataformas" };
@@ -22,6 +24,8 @@ export const metadata: Metadata = { title: "Ingresos de plataformas" };
 export const dynamic = "force-dynamic";
 
 const T = MESSAGES;
+/** El texto de la fila lo pone el módulo, para que las dos pantallas la nombren igual. */
+const FLUJO = MESSAGES_FINANZAS.flujo;
 
 /**
  * Las columnas se construyen con el formateador del workspace, nunca
@@ -53,9 +57,11 @@ const columnas = (f: Formatter): Column<PlatformPayoutRow>[] => [
 ];
 
 /**
- * La fila que FIN-6 llevará a su tabla de flujo de caja. Hasta entonces
- * se ve aquí, con la misma cifra y el mismo texto: la calcula
- * `proyeccionDePlataformas` de @mc/core (docs/propuestas/FIN-7.md §0.6).
+ * Lo que de aquí entra al flujo de caja de FIN-6, con la MISMA cifra:
+ * las dos pantallas llaman a `proyeccionDePlataformas` de @mc/core, que
+ * es donde está probada. Se enseña aquí porque quien acaba de cargar un
+ * CSV quiere ver el efecto sin cambiar de pantalla, y porque una cifra
+ * estimada tiene que decir de dónde sale allí donde se carga su fuente.
  */
 function EntradaAlFlujo({
   proyeccion,
@@ -64,6 +70,10 @@ function EntradaAlFlujo({
   proyeccion: ReturnType<typeof proyeccionDePlataformas>;
   f: Formatter;
 }) {
+  const base =
+    proyeccion.mesesPromediados === proyeccion.ventana
+      ? T.flujo.base
+      : T.flujo.baseParcial(proyeccion.mesesPromediados);
   return (
     <section className="mt-10" aria-labelledby="flujo">
       <SectionTitle>
@@ -73,22 +83,36 @@ function EntradaAlFlujo({
         {proyeccion.estimado === null ? (
           <p className="text-sm leading-5 text-ink-2">{T.flujo.sinDatos}</p>
         ) : (
-          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <span className="text-sm font-medium text-ink">{T.flujo.fila}</span>
-            <span className="font-mono text-lg font-medium tabular-nums text-ink">
-              {f.money(proyeccion.estimado, proyeccion.currency, { mode: "full" })}
-              <span className="ml-1 text-xs font-normal text-muted">/ mes</span>
-            </span>
-            <span className="w-full text-xs text-muted">{T.flujo.base}</span>
-          </div>
+          <>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <span className="text-sm font-medium text-ink">{FLUJO.otrosIngresos.fila}</span>
+              <span className="font-mono text-lg font-medium tabular-nums text-ink">
+                {f.money(proyeccion.estimado, proyeccion.currency, { mode: "full" })}
+                <span className="ml-1 text-xs font-normal text-muted">/ mes</span>
+              </span>
+              <span className="w-full text-xs text-muted">{base}</span>
+            </div>
+            <p className="mt-3 border-t border-border pt-3 text-xs leading-4 text-muted">{T.flujo.comoEntra}</p>
+          </>
         )}
-        <p className="mt-3 border-t border-border pt-3 text-xs leading-4 text-muted">{T.flujo.pendienteFin6}</p>
+        <div className="mt-3">
+          <Button size="sm" href="/finanzas/flujo">
+            {T.flujo.verFlujo}
+          </Button>
+        </div>
       </div>
     </section>
   );
 }
 
 export default async function IngresosPage() {
+  // Primero el permiso, antes de leer nada. Lo que paga una plataforma
+  // es dinero del espacio y va al mismo sitio que el flujo de caja, así
+  // que se mira con `finanzas.flujo.ver`: el rol Mánager NO lo ve
+  // (decisión E de la propuesta ACC). No hay un `finanzas.ingreso.ver`
+  // porque el catálogo viaja en la semilla de la migración 0034, que ya
+  // está aplicada; está propuesto en docs/propuestas/FIN-7.md §1.
+  await requirePermission("finanzas.flujo.ver");
   const { kpis, pagos, meses } = await withWorkspace(async (tx) => ({
     kpis: await getPlatformPayoutKpis(tx),
     pagos: await listPlatformPayouts(tx, { limit: 200 }),

@@ -11,6 +11,9 @@
  *     depender de la zona horaria del driver.
  *   - `overdue` no se persiste: se deriva (packages/core deriveStatus) y
  *     la vista receivables ya lo hace con aging_bucket.
+ *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
+ *     misma transacción y antes de devolver; test/audit-convencion.test.ts
+ *     lo exige.
  */
 import {
   addDays,
@@ -20,6 +23,8 @@ import {
   nextInvoiceNumber,
   parseInvoiceNumber,
   normalizeDecimal,
+  pctToRate,
+  proyeccionDePlataformas,
   subDecimal,
   subtotalFromTotal,
   toCents,
@@ -27,11 +32,17 @@ import {
   DEFAULT_TAX_RATE,
   DEFAULT_WITHHOLDING_RATE,
   type AgingBucket,
+  type CashflowInput,
+  type FacturaPorCobrar,
+  type GastoRecurrente,
   type InvoiceStatus,
+  type NegocioGanado,
+  type ProyeccionDePlataformas,
   type TransitionInput,
 } from '@mc/core';
 import { PAYOUT_SOURCES } from '../schema/finanzas.ts';
 import { getWorkspaceSettings } from './cimientos.ts';
+import { audit, type AuditAction } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -440,8 +451,31 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   if (!id) throw new Error('No se pudo crear la factura.');
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  // La bitácora guarda la factura tal como nació: su número, su empresa y
+  // sus cifras. Es dinero de ESTA entidad, no de otra.
+  await audit(tx, {
+    action: 'invoice.created',
+    entityType: 'invoice',
+    entityId: id,
+    before: null,
+    after: {
+      number: detail.number, companyId: detail.companyId, campaignId: detail.campaignId, quoteId: detail.quoteId,
+      currency: detail.currency, subtotal: detail.subtotal, tax: detail.tax, withholding: detail.withholding, total: detail.total,
+      issuedOn: detail.issuedOn, dueOn: detail.dueOn, status: detail.status, externalRef: detail.externalRef,
+    },
+  });
   return detail;
 }
+
+/** Qué evento de bitácora es cada estado al que llega una factura (ACC-2). */
+const INVOICE_TRANSITION_ACTION: Record<InvoiceStatus, AuditAction> = {
+  draft: 'invoice.reopened',
+  sent: 'invoice.sent',
+  partial: 'invoice.payment_recorded',
+  paid: 'invoice.paid',
+  overdue: 'invoice.marked_overdue',
+  void: 'invoice.voided',
+};
 
 /**
  * Cambia el estado validando con la máquina de estados de core. Lee la
@@ -473,6 +507,13 @@ export async function transitionInvoice(
   );
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  await audit(tx, {
+    action: INVOICE_TRANSITION_ACTION[result.status],
+    entityType: 'invoice',
+    entityId: id,
+    before: { status: row.status, paidAmount: row.paid_amount },
+    after: { status: detail.status, paidAmount: detail.paidAmount, paidAt: detail.paidAt },
+  });
   return detail;
 }
 
@@ -528,12 +569,198 @@ export async function createInvoiceFromCampaign(
 }
 
 // ---------------------------------------------------------------------
+// Flujo de caja proyectado (FIN-6)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que `projectCashflow` de `@mc/core` necesita, más el porcentaje de
+ * reserva tal cual lo guarda el workspace ('11'), que la pantalla
+ * enseña en la nota del gráfico.
+ */
+export interface CashflowInputs extends CashflowInput {
+  /** `settings.finanzas.reserva_pct`, o null si el workspace no lo ha configurado (FIN-8). */
+  reservaPct: string | null;
+  /**
+   * De dónde sale `otrosIngresosMensual` (FIN-7): cuántos meses cerrados
+   * se promediaron y cuáles. La pantalla lo escribe en la nota del
+   * gráfico, porque una cifra estimada sin su fuente no se puede
+   * comprobar.
+   */
+  otrosIngresos: ProyeccionDePlataformas;
+}
+
+interface CashflowRawRow {
+  currency: string;
+  /** Hoy en la zona del workspace, 'YYYY-MM-DD'. */
+  today: string;
+  reserva_pct: string | null;
+  plazo_dias: string | null;
+  facturas: FacturaPorCobrar[];
+  negocios: NegocioGanado[];
+  gastos: GastoRecurrente[];
+  plataformas: { mes: string; monto: string }[];
+}
+
+/** El plazo de pago cuando el workspace no tiene uno: el mismo de `createInvoiceFromCampaign`. */
+const PLAZO_DIAS_POR_DEFECTO = 30;
+
+/**
+ * Todo lo que el flujo de caja necesita, en UNA consulta y en bruto: la
+ * clasificación —qué está vencido, qué ya se facturó, qué no tiene
+ * fecha, qué viene en otra moneda— la hace la función pura de core,
+ * que se prueba en milisegundos (docs/propuestas/FIN-6.md §0.2.10).
+ *
+ * Qué trae:
+ *   - Facturas que todavía deben plata (`sent`, `partial`, `overdue`,
+ *     con `total > paid_amount`). El monto es `total − paid_amount`,
+ *     que es lo que FIN-2 mantendrá al registrar pagos.
+ *   - Negocios en una etapa con `is_won` —nunca por el literal
+ *     'ganado': lo dice la vista `deal_pipeline` y el propio seed—,
+ *     con la marca de si ya tienen factura por su campaña o por su
+ *     cotización. Una factura anulada o en borrador no cuenta como
+ *     facturado: si contara, el monto del negocio se caería de la
+ *     proyección mientras la factura está en borrador, porque tampoco
+ *     está entre las que deben plata.
+ *   - Gastos recurrentes de los últimos 120 días, con su `incurred_on`:
+ *     core se queda con los del mes más reciente, porque la misma
+ *     suscripción está registrada una vez por mes.
+ *
+ * `today` sale de la zona del WORKSPACE —`(now() AT TIME ZONE
+ * w.timezone)::date`— y no de `CURRENT_DATE`, que es la fecha del
+ * servidor de base: a las 02:00 UTC en Bogotá todavía es ayer, y una
+ * factura que vence hoy no puede aparecer vencida por eso. La prueba
+ * comprueba que ese día coincide con `hoyEnZona()` de `@mc/core`, que
+ * es la misma regla escrita en TypeScript.
+ *
+ * Ningún id que vuelve es `bigserial` (CIM-2 §3): son los uuid de
+ * `invoice`, `deal` y `expense`.
+ */
+/*
+ * Quien la llama tiene que haber pasado por
+ * requirePermission('finanzas.flujo.ver') (ACC-1): lo hace
+ * app/(app)/finanzas/flujo/page.tsx en su primera línea. Aquí no se
+ * comprueba porque este paquete no conoce la sesión —su barandilla es
+ * la RLS del workspace—, y duplicarlo daría dos sitios donde equivocarse.
+ */
+export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs> {
+  const { rows } = await tx.query<CashflowRawRow>(`
+    WITH ws AS (
+      SELECT w.currency,
+             (now() AT TIME ZONE w.timezone)::date            AS hoy,
+             w.settings #>> '{finanzas,reserva_pct}' AS reserva_pct,
+             w.settings #>> '{finanzas,plazo_dias}'  AS plazo_dias
+        FROM workspace w
+       WHERE w.id = current_workspace_id()
+    ), facturas AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',          i.id,
+               'number',      i.number,
+               'companyName', co.name,
+               'currency',    i.currency,
+               'outstanding', (i.total - i.paid_amount)::text,
+               'dueOn',       to_char(i.due_on, 'YYYY-MM-DD')
+             ) ORDER BY i.due_on, i.number), '[]'::json) AS v
+        FROM invoice i
+        JOIN company co ON co.id = i.company_id
+       WHERE i.status IN ('sent', 'partial', 'overdue')
+         AND i.total > i.paid_amount
+    ), negocios AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',                d.id,
+               'name',              d.name,
+               'companyName',       co.name,
+               'currency',          d.currency,
+               'amount',            d.amount::text,
+               'expectedCloseDate', to_char(d.expected_close_date, 'YYYY-MM-DD'),
+               'hasInvoice',        EXISTS (
+                 -- Ni 'void' ni 'draft': un borrador todavía no le debe
+                 -- nada a nadie, y el CTE de arriba tampoco lo trae. Si
+                 -- contara como «ya facturado», el monto del negocio
+                 -- desaparecería de la proyección entre que se crea la
+                 -- factura y se marca enviada, que es el camino normal
+                 -- (createInvoice siempre inserta en borrador).
+                 SELECT 1 FROM invoice i
+                  WHERE i.status NOT IN ('void', 'draft')
+                    AND (i.campaign_id IN (SELECT c.id FROM campaign c WHERE c.deal_id = d.id)
+                      OR i.quote_id    IN (SELECT q.id FROM quote    q WHERE q.deal_id = d.id))
+               )
+             ) ORDER BY d.expected_close_date NULLS LAST, d.name), '[]'::json) AS v
+        FROM deal d
+        JOIN pipeline_stage st ON st.id = d.stage_id
+        JOIN company co        ON co.id = d.company_id
+       WHERE st.is_won
+    ), gastos AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',         e.id,
+               'label',      coalesce(nullif(e.description, ''), e.category),
+               'currency',   e.currency,
+               'amount',     e.amount::text,
+               'incurredOn', to_char(e.incurred_on, 'YYYY-MM-DD')
+             ) ORDER BY e.incurred_on DESC, e.amount DESC), '[]'::json) AS v
+        FROM expense e, ws
+       WHERE e.is_recurring
+         AND e.incurred_on > ws.hoy - 120
+    ), plataformas AS (
+      -- Los ingresos de plataformas por mes (FIN-7), solo en la moneda
+      -- del espacio y de los últimos doce meses: quien promedia es
+      -- proyeccionDePlataformas, que sabe cuáles están cerrados y que
+      -- sin ninguno el estimado es null y no cero. Aquí no se rellenan
+      -- los meses vacíos: un mes sin fila no viaja como "0".
+      SELECT coalesce(json_agg(json_build_object('mes', m.mes, 'monto', m.monto) ORDER BY m.mes DESC), '[]'::json) AS v
+        FROM (
+          SELECT to_char(p.period_start, 'YYYY-MM') AS mes, sum(p.amount)::text AS monto
+            FROM platform_payout p, ws
+           WHERE p.currency = ws.currency
+             AND p.period_start >= (date_trunc('month', ws.hoy) - interval '12 months')::date
+           GROUP BY 1
+        ) m
+    )
+    SELECT ws.currency, to_char(ws.hoy, 'YYYY-MM-DD') AS today, ws.reserva_pct, ws.plazo_dias,
+           facturas.v AS facturas, negocios.v AS negocios, gastos.v AS gastos,
+           plataformas.v AS plataformas
+      FROM ws, facturas, negocios, gastos, plataformas
+  `);
+
+  const r = rows[0];
+  // Sin fila no hay workspace que proyectar: es un error de
+  // configuración (un DEMO_WORKSPACE_ID viejo), no una lista vacía.
+  if (!r) {
+    throw new Error(
+      `El workspace ${tx.workspaceId} no existe en esta base: el flujo de caja no tiene de dónde salir.`,
+    );
+  }
+
+  const plazo = Number.parseInt(r.plazo_dias ?? '', 10);
+  const currency = r.currency.toUpperCase();
+  // El estimado de los ingresos de plataformas lo calcula @mc/core, con
+  // el día del WORKSPACE (ws.hoy), que es el mismo con el que se
+  // reparten las semanas: dos relojes distintos dejarían el promedio y
+  // la proyección hablando de meses distintos.
+  const otrosIngresos = proyeccionDePlataformas(r.plataformas, { hoy: r.today, currency });
+  return {
+    today: r.today,
+    currency,
+    reservaPct: r.reserva_pct,
+    // Sin porcentaje configurado (FIN-8 todavía no existe) no se
+    // inventa uno: la reserva es cero y la pantalla lo dice con una
+    // frase, que es distinto de apartar el 11 % de nadie.
+    reservaRate: r.reserva_pct === null ? '0' : pctToRate(r.reserva_pct),
+    plazoDias: Number.isInteger(plazo) && plazo >= 0 ? plazo : PLAZO_DIAS_POR_DEFECTO,
+    facturas: r.facturas,
+    negocios: r.negocios,
+    gastos: r.gastos,
+    otrosIngresos,
+    otrosIngresosMensual: otrosIngresos.estimado,
+  };
+}
+
+// ---------------------------------------------------------------------
 // FIN-7 · Ingresos de plataformas (platform_payout)
 // ---------------------------------------------------------------------
 
 /**
  * Lo que paga una plataforma por un periodo: AdSense, Creator Rewards,
- * bonos. La tabla es de 0008 y el UNIQUE natural, de 0034.
+ * bonos. La tabla es de 0008 y el UNIQUE natural, de 0036.
  *
  * El mes de un pago es el de su `period_start`. Un periodo que cruza el
  * cambio de mes (solo puede llegar por el formato genérico, donde la
@@ -757,11 +984,19 @@ export async function getPlatformPayoutMonths(
 ): Promise<{ mes: string; monto: string }[]> {
   const months = Math.min(36, Math.max(1, params.months ?? 12));
   const { currency } = await getWorkspaceSettings(tx);
+  // El día sale de la zona del ESPACIO y no de CURRENT_DATE, que es la
+  // del servidor de base: a las 02:00 UTC en Bogotá todavía es ayer, y
+  // un pago del mes pasado no puede caerse de la ventana por eso. Es la
+  // misma regla que getCashflowInputs (FIN-6).
   const { rows } = await tx.query<{ mes: string; monto: string }>(
-    `SELECT to_char(period_start, 'YYYY-MM') AS mes, sum(amount)::text AS monto
-     FROM platform_payout
-     WHERE currency = $1
-       AND period_start >= (date_trunc('month', CURRENT_DATE) - make_interval(months => $2))::date
+    `WITH ws AS (
+       SELECT (now() AT TIME ZONE w.timezone)::date AS hoy
+         FROM workspace w WHERE w.id = current_workspace_id()
+     )
+     SELECT to_char(p.period_start, 'YYYY-MM') AS mes, sum(p.amount)::text AS monto
+     FROM platform_payout p, ws
+     WHERE p.currency = $1
+       AND p.period_start >= (date_trunc('month', ws.hoy) - make_interval(months => $2))::date
      GROUP BY 1
      ORDER BY 1 DESC`,
     [currency, months],
@@ -779,7 +1014,11 @@ export interface PlatformPayoutKpis {
   /** 'YYYY-MM' de ese mes cerrado. */
   lastMonthLabel: string;
   currency: string;
-  /** 'YYYY-MM-DD' de hoy según la base: la ventana del promedio se calcula con este día. */
+  /**
+   * 'YYYY-MM-DD' de hoy en la zona del ESPACIO (no `CURRENT_DATE`, que
+   * es la del servidor): la ventana del promedio se calcula con este
+   * día, igual que el flujo de caja de FIN-6.
+   */
   today: string;
 }
 
@@ -789,24 +1028,29 @@ export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPa
   const { rows } = await tx.query<{
     ytd: string; ytd_payouts: string; last_month: string | null; last_month_label: string; today: string;
   }>(
-    `WITH ultimo AS (
-       SELECT (date_trunc('month', CURRENT_DATE) - interval '1 month')::date AS inicio
+    `WITH ws AS (
+       SELECT (now() AT TIME ZONE w.timezone)::date AS hoy
+         FROM workspace w WHERE w.id = current_workspace_id()
+     ), ultimo AS (
+       SELECT (date_trunc('month', ws.hoy) - interval '1 month')::date AS inicio,
+              date_trunc('month', ws.hoy)::date AS mes_en_curso,
+              date_trunc('year', ws.hoy)::date AS anio,
+              ws.hoy
+         FROM ws
      )
-     SELECT coalesce(sum(amount) FILTER (
-              WHERE currency = $1 AND period_start >= date_trunc('year', CURRENT_DATE)::date
-            ), 0)::text AS ytd,
-            count(*) FILTER (
-              WHERE currency = $1 AND period_start >= date_trunc('year', CURRENT_DATE)::date
-            )::text AS ytd_payouts,
-            -- Sin FILTER, sum() de cero filas es NULL, que es justo lo
-            -- que queremos: un mes sin pago no vale cero.
-            (SELECT sum(amount)::text FROM platform_payout, ultimo
-             WHERE currency = $1
-               AND period_start >= ultimo.inicio
-               AND period_start < date_trunc('month', CURRENT_DATE)::date) AS last_month,
-            (SELECT to_char(inicio, 'YYYY-MM') FROM ultimo) AS last_month_label,
-            to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today
-     FROM platform_payout`,
+     SELECT coalesce((SELECT sum(p.amount) FROM platform_payout p, ultimo
+                       WHERE p.currency = $1 AND p.period_start >= ultimo.anio), 0)::text AS ytd,
+            (SELECT count(*) FROM platform_payout p, ultimo
+              WHERE p.currency = $1 AND p.period_start >= ultimo.anio)::text AS ytd_payouts,
+            -- Sin coalesce a propósito: sum() de cero filas es NULL, que
+            -- es justo lo que queremos. Un mes sin pago no vale cero.
+            (SELECT sum(p.amount)::text FROM platform_payout p, ultimo
+              WHERE p.currency = $1
+                AND p.period_start >= ultimo.inicio
+                AND p.period_start < ultimo.mes_en_curso) AS last_month,
+            to_char(ultimo.inicio, 'YYYY-MM') AS last_month_label,
+            to_char(ultimo.hoy, 'YYYY-MM-DD') AS today
+     FROM ultimo`,
     [currency],
   );
   const r = rows[0];
@@ -823,7 +1067,7 @@ export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPa
 /**
  * Escribe un lote de pagos, UNA sola vez cada uno.
  *
- * La idempotencia la pone el UNIQUE natural de 0034 y el `ON CONFLICT DO
+ * La idempotencia la pone el UNIQUE natural de 0036 y el `ON CONFLICT DO
  * NOTHING`, no una lectura previa: deduplicar comparando en TypeScript
  * es una condición de carrera con dos pestañas abiertas, y la
  * idempotencia de una cifra de dinero no puede depender de que nadie
@@ -923,10 +1167,39 @@ export async function importPlatformPayouts(
       escribibles.map((i) => i.source),
     ],
   );
+  // La bitácora. Qué hecho es lo dice la columna `source`, que es el
+  // dato, no un parámetro nuevo: un pago escrito a mano es
+  // 'platform_payout.created' y nombra su fila; un lote de CSV es
+  // 'platform_payout.imported' y va sin entityId, porque el hecho son n
+  // pagos y ninguno es «el» pago (audit.ts: «null si el hecho no tiene
+  // una»). En el `after` van conteos y el rango de periodos, nunca las
+  // filas: el dinero de cada pago ya está en su fila.
+  // Si el UNIQUE lo descartó TODO no se escribió nada, y lo que no se
+  // escribe no es un hecho del negocio: subir dos veces el mismo archivo
+  // no deja dos filas en la bitácora.
+  if (rows.length === 0) return { inserted: 0, duplicated: escribibles.length, conflicting };
+  const aMano = escribibles.every((i) => i.source === 'manual');
+  const periodos = escribibles.map((i) => i.periodStart).sort();
+  await audit(tx, {
+    action: aMano ? 'platform_payout.created' : 'platform_payout.imported',
+    entityType: 'platform_payout',
+    entityId: aMano && rows.length === 1 ? (rows[0]?.id ?? null) : null,
+    before: null,
+    after: {
+      source: aMano ? 'manual' : 'csv_import',
+      currency: wsCurrency,
+      platforms: [...new Set(escribibles.map((i) => i.platformId))].sort(),
+      from: periodos[0] ?? null,
+      to: periodos[periodos.length - 1] ?? null,
+      inserted: rows.length,
+      duplicated: escribibles.length - rows.length,
+      conflicting: conflicting.length,
+    },
+  });
   return { inserted: rows.length, duplicated: escribibles.length - rows.length, conflicting };
 }
 
-/** El uuid con el que `coalesce` normaliza «sin creador» en el UNIQUE de 0034. */
+/** El uuid con el que `coalesce` normaliza «sin creador» en el UNIQUE de 0036. */
 const SIN_CREADOR = '00000000-0000-0000-0000-000000000000';
 
 function clavePeriodo(

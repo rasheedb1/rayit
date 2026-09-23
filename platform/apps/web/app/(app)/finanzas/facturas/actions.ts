@@ -9,6 +9,7 @@ import { pctToRate, type InvoiceStatus } from "@mc/core";
 // divergiendo (una acepta mayúsculas, otra no).
 import { isUuid, UUID_RE } from "@mc/db";
 import { createInvoice, createInvoiceFromCampaign, transitionInvoice } from "@mc/db/queries/finanzas";
+import { requirePermission } from "@/lib/permisos";
 import { withWorkspace } from "../_lib/db";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -54,6 +55,7 @@ function firstErrors(issues: { path: PropertyKey[]; message: string }[]): Record
 
 /** Server Action del formulario: valida, crea en borrador y redirige al detalle. */
 export async function crearFactura(_prev: CrearFacturaState, formData: FormData): Promise<CrearFacturaState> {
+  await requirePermission("finanzas.factura.crear");
   const parsed = nuevaFacturaSchema.safeParse({
     companyId: String(formData.get("companyId") ?? ""),
     campaignId: String(formData.get("campaignId") ?? ""),
@@ -97,6 +99,7 @@ const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];
  * Si la máquina de estados rechaza, vuelve al detalle con el mensaje.
  */
 export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promise<void> {
+  await requirePermission("finanzas.factura.editar");
   if (!isUuid(id)) redirect("/finanzas");
   if (!TRANSICIONES_UI.includes(to)) {
     redirect(`/finanzas/facturas/${id}?error=${encodeURIComponent("Esa acción todavía no está disponible.")}`);
@@ -119,6 +122,7 @@ export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promi
  * Importarla desde app/(app)/finanzas (índice), no desde aquí.
  */
 export async function facturarCampana(campaignId: string): Promise<void> {
+  await requirePermission("finanzas.factura.crear");
   if (!isUuid(campaignId)) redirect("/finanzas");
   let id: string;
   try {

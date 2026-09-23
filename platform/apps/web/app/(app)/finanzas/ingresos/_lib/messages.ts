@@ -42,18 +42,21 @@ export const MESSAGES = {
   },
 
   /**
-   * La fila que FIN-6 llevará a la tabla del flujo de caja. El texto va
-   * aquí y no en @mc/core porque core no escribe frases; FIN-6 lo
-   * importará de este archivo o lo moverá al suyo.
+   * Lo que de aquí entra al flujo de caja (FIN-6). La cifra es la misma
+   * —`proyeccionDePlataformas` de @mc/core—, y el texto de la fila vive
+   * en el messages.ts del módulo (`MESSAGES.flujo.otrosIngresos`), para
+   * que las dos pantallas la nombren igual.
    */
   flujo: {
     titulo: "Entrada al flujo de caja",
-    fila: "Ingresos de plataformas (estimado)",
     base: `estimado por promedio de los últimos ${VENTANA_PROMEDIO_MESES} meses`,
+    baseParcial: (promediados: number) =>
+      `estimado por promedio de ${promediados} ${promediados === 1 ? "mes" : "meses"}: es lo que llevas cargado`,
     sinDatos:
-      "Cuando cierres tu primer mes con un pago cargado, esta fila entra al flujo de caja con su estimado. Hasta entonces no se inventa una cifra.",
-    pendienteFin6:
-      "El flujo de caja proyectado (FIN-6) todavía no está construido: cuando llegue, leerá esta misma cifra de packages/core/src/flujo-caja.ts.",
+      "Cuando cierres tu primer mes con un pago cargado, esta cifra entra al flujo de caja. Hasta entonces no se inventa una.",
+    verFlujo: "Ver el flujo de caja",
+    comoEntra:
+      "En el flujo de caja se reparte por semana (× 12 ÷ 52) y no se le aparta impuesto: la reserva se calcula sobre los cobros a marcas.",
   },
 
   tabla: {

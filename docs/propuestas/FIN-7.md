@@ -3,7 +3,10 @@
 Escrito para: Nicolás (las decisiones marcadas) y Rasheed (dueño de
 `db/migrations/`, del despliegue y de la cola de migraciones).
 Fecha: 23 de septiembre de 2026. Rama `nicolas/FIN-7-ingresos-plataformas`,
-worktree `rayit-fin7`, creada desde `origin/main` (29460e3).
+worktree `rayit-fin7`. Creada desde `origin/main` en 29460e3 y con
+`origin/main` integrado después, cuando entraron **ACC-1** (permisos),
+**ACC-2** (bitácora) y **FIN-6** (flujo de caja). Lo que ese merge
+cambió del plan está en §0.6.
 
 ---
 
@@ -16,9 +19,10 @@ worktree `rayit-fin7`, creada desde `origin/main` (29460e3).
 | `platform_payout` | `db/migrations/0008_quotes_campaigns_finance.sql:337` | Existe con `creator_id`, `platform_id`, `period_start`, `period_end`, `amount numeric(14,2)`, `currency char(3)`, `source IN ('api','csv_import','manual')`. **No tiene ningún índice ni UNIQUE.** |
 | RLS de `platform_payout` | `db/migrations/0010_views_rls.sql:242` | Está en la lista: `ENABLE` + `FORCE` + política `workspace_id = current_workspace_id()`. `mc_app` conserva los cuatro privilegios (no está en `PRIVILEGIOS_DE_LA_APP`, así que no se le revocó nada en 0024/0025). |
 | Esquema Drizzle | `packages/db/src/schema/finanzas.ts:75` | `platformPayout` ya está declarado y `schema.test.ts` solo compara columnas, no índices. |
-| `packages/core/src/flujo-caja.ts` | `git ls-tree` sobre **todas** las ramas de `origin` | **No existe en ninguna rama.** FIN-6 está `pendiente` en `content/backlog.ts` y en §5 del backlog. Ver 0.6. |
+| `packages/core/src/flujo-caja.ts` | `git ls-tree` sobre todas las ramas | Al escribir el plan no existía. **Mientras se implementaba FIN-7, FIN-6 entró en `main`** con su propio `flujo-caja.ts` (`projectCashflow`), su pantalla `/finanzas/flujo` y su `getCashflowInputs`. Ver 0.6. |
 | Parser de CSV | `apps/web/lib/csv.ts`, `app/(app)/resumen/importar/_lib/csv.ts` y `_lib/formatos.ts` | `decodificarCsv` (UTF-8 estricto → Windows-1252), `leerCsv` (Papaparse, delimitador autodetectado, `MAX_FILAS`), `aNumero` (miles/decimales de hoja de cálculo), `normalizar` (encabezado → clave comparable). Se **reutilizan**, no se copian. |
-| Número de migración libre | `git fetch` + `git ls-tree origin/<rama> platform/db/migrations/` en las 20 ramas | El más alto es `0033_una_aceptada_por_negocio.sql` (en `main` y en `rasheed/integracion`). El siguiente libre es **0034**. `0023` sigue reservado por la propuesta ACC y no se recicla. |
+| Número de migración libre | `git fetch` + `git ls-tree` en TODAS las ramas, dos veces (antes y después del merge) | La primera vez el más alto era `0033`; la segunda, `0035` (`0034_access_control` ya en `main`, `0035_membership_scope` en ACC-6 y `0035_brand_snapshot_por_campana` en CAM-3). La migración de FIN-7 es **0036**. `0023` sigue reservado por la propuesta ACC y no se recicla. |
+| Permisos y bitácora | `packages/core/src/permisos.ts`, `packages/db/src/audit.ts`, `packages/db/test/accesos.test.ts` | ACC-1 y ACC-2 ya están en `main`, así que FIN-7 no lleva ningún `TODO(ACC-…)`. El catálogo de permisos viaja en la semilla de `0034_access_control` y `accesos.test.ts` exige que esa semilla sea, línea por línea, la salida del script de ACC-1: **añadir un permiso obligaría a editar una migración ya escrita en `main`**. Ver 0.5.9. |
 
 ### 0.2 Lo que dice la documentación oficial de los dos formatos
 
@@ -52,15 +56,24 @@ documentamos nosotros.
 ### 0.3 Qué se construye
 
 ```
-platform/db/migrations/0034_platform_payout_unico.sql      UNIQUE natural (idempotencia del import)
+platform/db/migrations/0036_platform_payout_unico.sql      UNIQUE natural (idempotencia del import)
 
-platform/packages/core/src/flujo-caja.ts                   NUEVO. promedioMensual(), proyeccionDePlataformas()
+platform/packages/core/src/ingresos-plataformas.ts         NUEVO. promedioMensual(), proyeccionDePlataformas()
 platform/packages/core/src/index.ts                        + export
-platform/packages/core/test/flujo-caja.test.ts
+platform/packages/core/test/ingresos-plataformas.test.ts
+platform/packages/core/src/flujo-caja.ts                   (FIN-6) + otrosIngresosMensual de entrada y
+                                                             otrosIngresos por semana en la salida
+platform/packages/core/test/flujo-caja.test.ts             + describe «otros ingresos»
 
+platform/packages/db/src/audit.ts                          + platform_payout.created / .imported
 platform/packages/db/src/queries/finanzas.ts               + listPlatformPayouts, getPlatformPayoutMonths,
-                                                             importPlatformPayouts, createPlatformPayout
+                                                             getPlatformPayoutKpis, listPayoutPlatforms,
+                                                             importPlatformPayouts, createPlatformPayout;
+                                                             getCashflowInputs alimenta otrosIngresosMensual
 platform/packages/db/test/finanzas.test.ts                 + describe «ingresos de plataformas»
+
+platform/apps/web/app/(app)/finanzas/flujo/page.tsx        (FIN-6) columna, barra y nota de «Otros ingresos»
+platform/apps/web/app/(app)/finanzas/_lib/messages.ts      + flujo.otrosIngresos y tabla.otros
 
 platform/apps/web/app/(app)/finanzas/ingresos/
   page.tsx  loading.tsx  error.tsx  actions.ts
@@ -72,7 +85,7 @@ platform/apps/web/app/(app)/finanzas/ingresos/
   integracion.test.ts    el «terminado cuando», de punta a punta contra pglite
 
 platform/apps/web/test/fixtures/csv/ingresos/              un fixture por formato + README
-platform/apps/web/app/(app)/finanzas/page.tsx              + botón «Ingresos de plataformas»
+platform/apps/web/app/(app)/finanzas/page.tsx              + botón «Ingresos»
 platform/apps/web/content/backlog.ts                       estado y nota de FIN-7 (solo mi entrada)
 docs/propuestas/FIN-7.md                                   este archivo
 ```
@@ -105,7 +118,7 @@ de YouTube. **DECISIÓN PENDIENTE DE NICOLÁS** si quieres separarlas.
 ### 0.5 Decisiones
 
 1. **Filas duplicadas: UNIQUE natural en la base, no en el código.**
-   `0034` crea
+   `0036` crea
    `platform_payout_natural_uidx` sobre
    `(workspace_id, platform_id, coalesce(creator_id, uuid cero), period_start, period_end, currency, amount)`
    y el import escribe con `ON CONFLICT DO NOTHING`. Es lo que pide la
@@ -159,61 +172,128 @@ de YouTube. **DECISIÓN PENDIENTE DE NICOLÁS** si quieres separarlas.
    resultado se cuenta después de escribir: cuántas entraron, cuántas ya
    estaban, cuántas quedaron fuera y por qué.
 
-### 0.6 FIN-6 no existe: qué se entrega y qué queda esperando
+8. **El estimado NO entra en la base de la reserva de impuestos.** En
+   `projectCashflow`, `impuestos` se calcula sobre los cobros a marcas,
+   cuya retención y cuyo IVA conocemos (FIN-1, FIN-8). Lo que paga una
+   plataforma extranjera tributa de otra forma, y apartar un porcentaje
+   sobre una cifra **estimada** sería inventar dos veces. La nota del
+   gráfico lo dice con esas palabras. **DECISIÓN PENDIENTE DE NICOLÁS**
+   si quieres que sí entre.
+9. **Permisos: se reutilizan, no se inventan.** Ver
+   `/finanzas/ingresos` pide `finanzas.flujo.ver` y escribir pide
+   `finanzas.pago.registrar`. Lo natural sería un par
+   `finanzas.ingreso.ver` / `finanzas.ingreso.registrar`, pero el
+   catálogo viaja en la semilla de `0034_access_control`, que ya está en
+   `main`, y `packages/db/test/accesos.test.ts` exige que esa semilla
+   sea **línea por línea** la salida del script de ACC-1: añadir dos
+   permisos obligaría a editar una migración escrita y aplicada. Lo que
+   haría falta está en §1.2. Con los que se usan, el reparto sale
+   correcto igual: el **Contador** los tiene (lleva todo Finanzas) y el
+   **Mánager** no (decisión E), que es lo que se quiere.
+   **DECISIÓN PENDIENTE DE NICOLÁS.**
+10. **`today` sale de la zona del ESPACIO, no de `CURRENT_DATE`.** Es la
+   regla que ya fijó FIN-6 (`(now() AT TIME ZONE w.timezone)::date`): a
+   las 02:00 UTC en Bogotá todavía es ayer, y con dos relojes distintos
+   el promedio y la proyección hablarían de meses distintos.
 
-El prompt de la historia dice «depende de FIN-6 (main)». **FIN-6 no está
-en `main` ni en ninguna rama de `origin`**: `packages/core/src/flujo-caja.ts`
-no existe (comprobado rama por rama, 0.1), y `content/backlog.ts` la
-tiene en `pendiente`. Así que el tercer «terminado cuando» —«el flujo de
-caja muestra la fila *ingresos de plataformas (estimado)*»— no se puede
-cumplir donde dice, porque no hay pantalla de flujo de caja.
+### 0.6 FIN-6 llegó a mitad de camino: qué cambió
 
-Lo que se hace en su lugar, sin inventar FIN-6:
+Cuando se escribió §0, `packages/core/src/flujo-caja.ts` no existía en
+ninguna rama y el plan era crearlo con solo la parte de FIN-7. Mientras
+se implementaba, **FIN-6 entró en `main`** con ese archivo, su pantalla
+`/finanzas/flujo` y `getCashflowInputs`. Lo que se hizo entonces:
 
-- **Se crea `packages/core/src/flujo-caja.ts`** (archivo mío según el
-  reparto) con **solo** la parte de FIN-7: `promedioMensual()` y
-  `proyeccionDePlataformas()`, puras y probadas. Es el punto de entrada
-  que FIN-6 consumirá; FIN-6 le añadirá cobros, gastos y reserva.
-- **La fila se pinta en `/finanzas/ingresos`**, en una tarjeta
-  «Entrada al flujo de caja» con el texto exacto
-  «Ingresos de plataformas (estimado)» y, debajo, «estimado por promedio
-  de los últimos 3 meses». Es la misma función y el mismo texto que
-  FIN-6 moverá a su tabla.
+- **El core de FIN-7 se mudó a `packages/core/src/ingresos-plataformas.ts`.**
+  `flujo-caja.ts` es la proyección semanal (cobros, gastos, reserva) y
+  esto es la entrada de «otros ingresos» a esa proyección: dos cosas, dos
+  archivos, un dueño por archivo y ningún conflicto de fusión. `mesDe` se
+  llama aquí `mesDelPeriodo` porque el barril de `@mc/core` aplana los
+  módulos en un espacio de nombres y `flujo-caja.ts` ya tiene su `mesDe`.
+- **`projectCashflow` aceptó un parámetro nuevo y opcional**,
+  `otrosIngresosMensual: Decimal | null`. Sin él se comporta exactamente
+  igual que antes —las 30 pruebas de FIN-6 pasan sin tocarlas—, y con él
+  cada semana gana `otrosIngresos` (`× 12 ÷ 52`, la misma
+  `semanalDeMensual` que ya usaban los gastos) y el neto lo suma.
+- **`getCashflowInputs` lo rellena** con una CTE más, en la misma
+  consulta, y expone en `otrosIngresos` de dónde sale el número
+  (cuántos meses se promediaron) para que la pantalla lo escriba.
+- **`/finanzas/flujo` pinta la fila de verdad**: una columna «Otros
+  ingresos», una barra en el gráfico y una frase en la nota. Las tres
+  solo aparecen si HAY estimado: una columna de ceros diría «no entra
+  nada» cuando lo cierto es «todavía no lo sabemos».
+- **`/finanzas/ingresos` sigue enseñando la cifra** en su tarjeta
+  «Entrada al flujo de caja», con el mismo texto y la misma función:
+  quien acaba de subir un CSV quiere ver el efecto sin cambiar de
+  pantalla. Y un botón lleva al flujo.
 
-**DECISIÓN PENDIENTE DE NICOLÁS:** si prefieres que FIN-7 espere a FIN-6
-en vez de adelantar `flujo-caja.ts`, se revierte el archivo de core y la
-tarjeta, y queda solo la carga y la lista.
+Con esto, el tercer «terminado cuando» —«el flujo de caja muestra la
+fila *ingresos de plataformas (estimado)*»— se cumple donde dice, y ya
+no hace falta la salida provisional que proponía §0 original.
 
 ### 0.7 Fuera de alcance (con su historia)
 
 | Qué | A dónde va |
 |---|---|
 | Lectura por API de AdSense y de TikTok (`source = 'api'`) | Fase 2, como dice la historia |
-| La tabla y el gráfico de flujo de caja a ocho semanas | **FIN-6** |
 | Editar o borrar un `platform_payout` ya cargado | Historia nueva de Finanzas; hoy se corrige por SQL |
 | Conversión entre monedas (tasa con fecha) | Historia nueva; hoy la moneda distinta se avisa y se deja fuera |
 | Asignar el pago a un creador concreto (`creator_id`) | Con varios creadores por espacio (AGE-1); hoy entra `null` |
 | `adsense` como fila propia del catálogo `platform` | Decisión de producto pendiente (0.4) |
+| Los permisos `finanzas.ingreso.*` | Necesitan tocar la semilla de 0034: §1.2 |
 
 ### 0.8 Dudas para Nicolás
 
 1. ¿AdSense se guarda como `youtube` o quieres una plataforma aparte? (0.4)
 2. ¿Tres meses es la ventana correcta, o prefieres seis? (0.5.4)
-3. ¿FIN-7 adelanta `flujo-caja.ts` o espera a FIN-6? (0.6)
+3. ¿El estimado de plataformas entra en la base de la reserva de
+   impuestos? Hoy NO. (0.5.8)
+4. ¿Se crean los permisos `finanzas.ingreso.*` o se quedan los
+   reutilizados? (0.5.9, §1.2)
 
 ---
 
 ## 1. Lo que necesita Rasheed
 
+### 1.1 Aplicar la migración (bloqueante para producción)
+
 | # | Qué | Por qué | Bloquea |
 |---|---|---|---|
-| 1 | Aplicar **`0034_platform_payout_unico.sql`** en Supabase, detrás de `0024`–`0033`, que siguen pendientes | Sin el UNIQUE, el `ON CONFLICT DO NOTHING` del import falla con `42P10` y **repetir la importación duplica el dinero** | `/finanzas/ingresos/importar` en producción |
+| 1 | Aplicar **`0036_platform_payout_unico.sql`** en Supabase, detrás de `0034_access_control` y de las `0035` que estén en cola | Sin el UNIQUE, el `ON CONFLICT DO NOTHING` del import falla con `42P10` y **repetir la importación duplica el dinero** | `/finanzas/ingresos/importar` en producción |
 
 La migración es re-ejecutable (`CREATE UNIQUE INDEX IF NOT EXISTS`) y no
-toca ninguna fila existente. Si al aplicarla fallara por datos previos
-duplicados, la base está vacía de `platform_payout` en los seeds y en
-Supabase (comprobado: no hay INSERT de `platform_payout` en `db/seed/`).
+toca ninguna fila existente. No hay filas de `platform_payout` en
+`db/seed/` ni en Supabase, así que no puede fallar por datos previos.
+No depende de ninguna otra migración salvo `0008` (la tabla), así que se
+puede renumerar si otra área eligió también `0036`.
 
-No hay variables de entorno nuevas, ni roles, ni permisos, ni nada que
-tocar en `lib/auth/`, `lib/workspace/` ni `packages/db/src/{client,schema}`
-más allá de `queries/finanzas.ts`, que es mío.
+No hay variables de entorno nuevas, ni roles, ni permisos de Postgres, ni
+nada que tocar en `lib/auth/`, `lib/workspace/` ni
+`packages/db/src/{client,schema}`.
+
+### 1.2 Si Nicolás quiere los permisos propios (no bloqueante)
+
+Hoy `/finanzas/ingresos` se mira con `finanzas.flujo.ver` y se escribe
+con `finanzas.pago.registrar` (0.5.9). Para tener
+`finanzas.ingreso.ver` y `finanzas.ingreso.registrar` hacen falta tres
+cosas, y **ninguna la puede hacer FIN-7 sola** porque la tercera cambia
+una prueba que es de ACC-3:
+
+1. Dos entradas en `PERMISOS` de `packages/core/src/permisos.ts` y el
+   snapshot regenerado
+   (`pnpm --filter @mc/core permisos:sql > test/snapshots/permisos.sql`),
+   más el conteo de `permisos-sql.test.ts`.
+2. Una migración nueva con los dos `INSERT INTO permission` y sus
+   `role_permission` para los roles que llevan todo Finanzas (Dueño,
+   Administrador de agencia, Contador de las dos), con
+   `ON CONFLICT DO NOTHING`. **No** se edita `0034`.
+3. Relajar `packages/db/test/accesos.test.ts` §«la semilla de 0034 §4
+   es, línea por línea, la salida del script de ACC-1»: hoy compara el
+   catálogo ENTERO contra la migración, así que un permiso añadido
+   después la rompe aunque su migración exista. Lo que debería
+   comprobar es que la base tiene **todos** los permisos del catálogo
+   (venga cada uno de la migración que venga), no que una migración
+   concreta sea el catálogo completo de hoy.
+
+El punto 3 es el que hay que decidir con Rasheed: mientras esa prueba
+exija igualdad exacta, **ningún módulo puede añadir un permiso** sin
+editar una migración aplicada.
