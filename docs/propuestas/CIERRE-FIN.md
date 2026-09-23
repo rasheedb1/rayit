@@ -10,7 +10,7 @@ de `main`, cosidas entre sí y con Campañas, Cotizar y ACC, cada costura
 con su prueba. `/finanzas` es la pantalla de cobro, y seis pestañas
 (Cobro, Facturas, Gastos, Flujo, Ingresos y Configuración) llevan a las
 vistas del módulo, cada una detrás de su permiso. La proyección de
-gastos tiene UNA sola regla, la del flujo de caja. Quedan once
+gastos tiene UNA sola regla, la del flujo de caja. Quedan trece
 decisiones que son tuyas (§3), todas con la opción conservadora en el
 código, y una conversación con Rasheed sobre el IVA de Cotizar (§4).
 
