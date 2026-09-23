@@ -3,18 +3,39 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { CampaignError, isCampaignStatus, isDeliverable, isIsoDate, type CampaignStatus } from "@mc/core";
 import {
+  brandCsvWindow,
+  CampaignError,
+  hoyEnZona,
+  isCampaignStatus,
+  isDeliverable,
+  isIsoDate,
+  isManualBrandInputKind,
+  isMoneyBrandInputKind,
+  type BrandCsvRejectedRow,
+  type CampaignStatus,
+} from "@mc/core";
+import {
+  addBrandInput,
+  CampaignNotFoundError,
+  CampaignWithoutDatesError,
+  getCampaign,
+  importBrandCsv,
   linkPost,
   listLinkablePosts,
   setPrimaryPost,
   transitionCampaign,
   unlinkPost,
   updateCampaign,
+  type ImportBrandCsvResult,
   type LinkablePost,
 } from "@mc/db";
 import { withWorkspace } from "@/lib/db";
-import { UUID_RE, firstErrors, type ActionState } from "@/lib/forms";
+import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { MESSAGES } from "../_lib/messages";
+import type { Codificacion } from "@/lib/csv";
+import { ErrorCsvVentas, leerCsvVentas, MAX_BYTES_VENTAS, MAX_FILAS_VENTAS } from "./_lib/csv-ventas";
 
 /** Códigos como LAURA15: letras, dígitos, guion y guion bajo. */
 const TRACKING_CODE_RE = /^[A-Za-z0-9_-]+$/;
@@ -202,4 +223,146 @@ export async function cambiarEstadoCampana(campaignId: string, to: CampaignStatu
   }
   paths(campaignId);
   backWithError(campaignId, error);
+}
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+
+const t = MESSAGES.aporte;
+
+/** Lo que devuelve «Registrar aporte»: además del estado común, una frase informativa tras guardar. */
+export interface AporteState extends ActionState {
+  /** «Aporte registrado.», «Se guardó en USD; la campaña está en COP.» */
+  notice?: string;
+}
+
+const COUNT_RE = /^\d{1,14}$/;
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+const aporteSchema = z
+  .object({
+    campaignId: z.string().regex(UUID_RE, "La campaña no es válida."),
+    kind: z.string().refine(isManualBrandInputKind, "Elige qué reporta la marca."),
+    day: z.string().refine(isIsoDate, "Elige una fecha válida."),
+    value: z.string().trim().min(1, "Escribe la cifra."),
+    currency: z.string().trim().toUpperCase().refine((v) => v === "" || CURRENCY_RE.test(v), "La moneda debe ser un código de tres letras (COP, USD)."),
+    notes: z.string().trim().max(500, "La nota no puede pasar de 500 caracteres."),
+  })
+  .superRefine((v, ctx) => {
+    // El refine de kind ya falló si no es manual; aquí solo se decide la forma de la cifra.
+    if (!isManualBrandInputKind(v.kind)) return;
+    if (isMoneyBrandInputKind(v.kind) ? !DECIMAL_RE.test(v.value) : !COUNT_RE.test(v.value)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["value"],
+        message: isMoneyBrandInputKind(v.kind) ? "El importe debe ser un número con hasta dos decimales." : "La cifra debe ser un número entero, sin decimales.",
+      });
+    }
+  });
+
+/**
+ * Formulario «Registrar aporte»: un total acumulado a una fecha, tal
+ * como lo reporta la marca. La fecha no puede ser futura (hoy en la
+ * zona del workspace). La consulta es idempotente: repetir la misma alta
+ * no duplica, y la respuesta lo dice.
+ */
+export async function registrarAporte(_prev: AporteState, formData: FormData): Promise<AporteState> {
+  // TODO(ACC-1): requirePermission('campanas.aporte.registrar')
+  const parsed = aporteSchema.safeParse({
+    campaignId: formField(formData, "campaignId"),
+    kind: formField(formData, "kind"),
+    day: formField(formData, "day"),
+    value: formField(formData, "value"),
+    currency: formField(formData, "currency"),
+    notes: formField(formData, "notes"),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+  if (!isManualBrandInputKind(v.kind)) return { errors: { kind: "Elige qué reporta la marca." } };
+  const kind = v.kind;
+  let notice: string;
+  try {
+    const hoy = hoyEnZona((await getCurrentWorkspace()).timezone);
+    if (v.day > hoy) return { errors: { day: "La fecha no puede ser futura." } };
+    // TODO(ACC-2): la bitácora la escribe addBrandInput (recordAudit) hasta que exista audit().
+    const r = await withWorkspace((tx) =>
+      addBrandInput(tx, { campaignId: v.campaignId, kind, day: v.day, value: v.value, currency: v.currency || null, notes: v.notes || null }),
+    );
+    if (!r.created) notice = t.form.savedAgain;
+    else if (r.input.currency !== null && r.input.currency !== r.campaignCurrency) notice = t.form.currencyWarning(r.input.currency, r.campaignCurrency);
+    else notice = t.form.saved;
+  } catch (err) {
+    return { message: messageOf(err, t.form.error) };
+  }
+  paths(v.campaignId);
+  return { ok: true, notice };
+}
+
+/** El resumen que ve la persona tras importar. Sin frases: la pantalla las pone. */
+export interface ResumenImportacion extends ImportBrandCsvResult {
+  rejected: BrandCsvRejectedRow[];
+  codificacion: Codificacion;
+}
+
+export interface ImportacionState extends ActionState {
+  resumen?: ResumenImportacion;
+}
+
+const KIB = 1024;
+
+/** Un ErrorCsvVentas en su frase. */
+function mensajeCsv(err: ErrorCsvVentas): string {
+  switch (err.codigo) {
+    case "vacio":
+      return t.csv.empty;
+    case "sinEncabezados":
+      return t.csv.noHeader;
+    case "sinFilas":
+      return t.csv.noRows;
+    case "demasiadasFilas":
+      return t.csv.tooManyRows(MAX_FILAS_VENTAS);
+    case "demasiadoGrande":
+      return t.csv.tooBig(MAX_BYTES_VENTAS / KIB);
+    case "faltaColumna":
+      return t.csv.missingColumns(err.columna === "day" ? "día" : "ventas");
+  }
+}
+
+/**
+ * Formulario «Importar CSV de ventas». El archivo se lee y se revisa en
+ * el servidor, dentro de la misma transacción que escribe: la ventana
+ * sale de las fechas de la campaña tal como están en la base en ese
+ * momento. Una fila mala se rechaza con motivo y las demás entran;
+ * repetir el archivo no duplica.
+ */
+export async function importarCsvVentas(_prev: ImportacionState, formData: FormData): Promise<ImportacionState> {
+  // TODO(ACC-1): requirePermission('campanas.aporte.registrar')
+  const campaignId = formField(formData, "campaignId");
+  if (!UUID_RE.test(campaignId)) return { message: "La campaña no es válida." };
+  const archivo = formData.get("archivo");
+  if (!(archivo instanceof File) || archivo.size === 0) return { errors: { archivo: t.csv.missing } };
+  if (archivo.size > MAX_BYTES_VENTAS) return { errors: { archivo: t.csv.tooBig(MAX_BYTES_VENTAS / KIB) } };
+  const bytes = new Uint8Array(await archivo.arrayBuffer());
+  let resumen: ResumenImportacion;
+  try {
+    // TODO(ACC-2): la bitácora la escribe importBrandCsv (recordAudit) hasta que exista audit().
+    resumen = await withWorkspace(async (tx) => {
+      const campaign = await getCampaign(tx, campaignId);
+      if (!campaign) throw new CampaignNotFoundError(campaignId);
+      const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+      if (!window) throw new CampaignWithoutDatesError();
+      const lectura = leerCsvVentas(bytes, window);
+      const result: ImportBrandCsvResult =
+        lectura.accepted.length > 0
+          ? await importBrandCsv(tx, { campaignId, rows: lectura.accepted })
+          : { inserted: 0, unchanged: 0, replaced: 0, days: 0, from: null, to: null };
+      return { ...result, rejected: lectura.rejected, codificacion: lectura.codificacion };
+    });
+  } catch (err) {
+    if (err instanceof ErrorCsvVentas) return { errors: { archivo: mensajeCsv(err) } };
+    return { message: messageOf(err, t.csv.error) };
+  }
+  paths(campaignId);
+  return { ok: true, resumen };
 }
