@@ -3,7 +3,7 @@ import { ultimoMesCerrado } from "@mc/core";
 import { getPlatformPayoutKpis, listPayoutPlatforms } from "@mc/db/queries/finanzas";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { requirePermission } from "@/lib/permisos";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -13,7 +13,10 @@ export const metadata: Metadata = { title: "Agregar un ingreso de plataforma" };
 export const dynamic = "force-dynamic";
 
 export default async function NuevoIngresoPage() {
-  await requirePermission("finanzas.pago.registrar");
+  // ACC-5: la puerta del módulo y la de esta pantalla, que escribe
+  // dinero: sin finanzas.pago.registrar, 404 y no el error del segmento.
+  await requireModuleAccess("finanzas");
+  await requirePagePermission("finanzas.pago.registrar");
   const { plataformas, hoy } = await withWorkspace(async (tx) => ({
     plataformas: await listPayoutPlatforms(tx),
     // El día lo dice la BASE (CURRENT_DATE), no el reloj de Node: es el

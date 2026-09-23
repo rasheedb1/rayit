@@ -6,16 +6,19 @@ import {
   InvalidTransition,
   InvoiceNotPayable,
   InvoicePaymentConflict,
+  mulRateHalfUp,
   PaymentDateInFuture,
   PaymentExceedsOutstanding,
   projectCashflow,
   proyeccionDePlataformas,
+  pctToRate,
   reservePeriod,
   TaxReserveRateInvalid,
   type Cashflow,
   type PaymentMethod,
 } from '@mc/core';
 import {
+  countInvoicesInOtherCurrency,
   createInvoice,
   createInvoiceFromCampaign,
   createPlatformPayout,
@@ -26,17 +29,23 @@ import {
   getReceivablesKpis,
   importPlatformPayouts,
   listPlatformPayouts,
+  getFinanceSettings,
+  InvoiceNotFound,
   listCampaignsForInvoice,
   listCompanies,
   listInvoices,
   listPayments,
   listReminders,
   markReminderSent,
+  listReceivables,
+  RECEIVABLE_BUCKETS,
   recordPayment,
   transitionInvoice,
-  InvoiceNotFound,
+  updateFinanceSettings,
+  type ReceivableRow,
   type TextosFinanzas,
 } from '../src/queries/finanzas.ts';
+import { getWorkspaceSettings } from '../src/queries/cimientos.ts';
 import { assertWorkspaceId } from '../src/index.ts';
 import { filasDeBitacora } from './bitacora.ts';
 import {
@@ -160,6 +169,178 @@ describe('los KPIs de Finanzas salen de la vista receivables', () => {
       assert.equal(k.collectedPrevYtd, '29500000.00');
       assert.equal(k.collectedDelta, 0.308);
     }
+  });
+});
+
+describe('FIN-3 · cuentas por cobrar (vista receivables)', () => {
+  const laura = <T,>(fn: (tx: Parameters<Parameters<typeof t.db.withWorkspace>[1]>[0]) => Promise<T>) =>
+    t.db.withWorkspace(WORKSPACE_LAURA, fn);
+
+  test('sin filtro devuelve las 3 abiertas del seed, con su campaña y su mora', async () => {
+    const { rows, nextCursor } = await laura((tx) => listReceivables(tx));
+    assert.equal(rows.length, 3);
+    assert.equal(nextCursor, null);
+
+    const porNumero = Object.fromEntries(rows.map((r) => [r.number, r]));
+    const vencida = porNumero['FV-2026-007'];
+    assert.equal(vencida?.companyName, 'Hogar Lindo');
+    assert.equal(vencida?.campaignName, '3 historias · jun');
+    assert.equal(vencida?.bucket, 'vencida');
+    assert.equal(vencida?.daysOverdue, 41, 'vencida hace 41 días, como el mock');
+    assert.equal(vencida?.outstanding, '1100000.00');
+    assert.equal(vencida?.status, 'sent', 'overdue no se persiste');
+
+    assert.equal(porNumero['FV-2026-010']?.bucket, 'vence_pronto');
+    assert.equal(porNumero['FV-2026-010']?.daysOverdue, -7, 'vence en 7 días');
+    assert.equal(porNumero['FV-2026-011']?.bucket, 'al_dia');
+    assert.equal(porNumero['FV-2026-011']?.daysOverdue, -23);
+
+    // El KPI «Por cobrar» del mock: 9,4 M en tres facturas. La tabla y el
+    // KPI leen la misma vista, así que tienen que sumar lo mismo.
+    const centavos = rows.reduce((acc, r) => acc + BigInt(r.outstanding.replace('.', '')), 0n);
+    assert.equal(centavos, 940000000n, '9 400 000,00');
+    const kpis = await laura((tx) => getReceivablesKpis(tx));
+    assert.equal(kpis.outstanding, '9400000.00');
+    assert.equal(kpis.openCount, rows.length);
+  });
+
+  test('la forma de la fila es la que espera la pantalla: si la vista cambia, esto falla', async () => {
+    const { rows } = await laura((tx) => listReceivables(tx, { bucket: 'vencida' }));
+    const fila = rows[0];
+    assert.ok(fila);
+    assert.deepEqual(
+      Object.keys(fila).sort(),
+      [
+        'bucket', 'campaignId', 'campaignName', 'companyId', 'companyName', 'currency',
+        'daysOverdue', 'dueOn', 'id', 'number', 'outstanding', 'paidAmount', 'status', 'total',
+      ],
+      'ni una columna de más ni de menos',
+    );
+    // Los tipos de verdad, no los de TypeScript: el dinero es texto y
+    // los días son un número. Un driver que devolviera numeric como
+    // number, o date como Date, rompe aquí y no en la pantalla.
+    assert.equal(typeof fila.outstanding, 'string');
+    assert.equal(typeof fila.total, 'string');
+    assert.equal(typeof fila.paidAmount, 'string');
+    assert.equal(typeof fila.daysOverdue, 'number');
+    assert.match(fila.dueOn, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(RECEIVABLE_BUCKETS.includes(fila.bucket));
+    // Ningún bigserial cruza a la web (CIM-2 §3): la vista no trae ninguno.
+    assert.equal('rank' in fila, false);
+  });
+
+  test('cada bucket por su cuenta, y «pagada» solo si se pide', async () => {
+    const conteo = async (bucket: ReceivableRow['bucket']) =>
+      (await laura((tx) => listReceivables(tx, { bucket }))).rows;
+
+    const vencidas = await conteo('vencida');
+    assert.equal(vencidas.length, 1);
+    assert.equal(vencidas[0]?.number, 'FV-2026-007');
+    assert.equal((await conteo('vence_pronto')).length, 1);
+    assert.equal((await conteo('al_dia')).length, 1);
+
+    const pagadas = await conteo('pagada');
+    assert.equal(pagadas.length, 14, 'seis de 2025 y ocho de 2026');
+    assert.equal(pagadas.every((r) => r.status === 'paid' && r.outstanding === '0.00'), true);
+
+    // Sin bucket NO salen las pagadas: la pantalla de cobro no las lista.
+    const abiertas = await laura((tx) => listReceivables(tx));
+    assert.equal(abiertas.rows.some((r) => r.bucket === 'pagada'), false);
+
+    // Y los borradores y las anuladas no están en ningún bucket: la
+    // vista los excluye. Esa es la diferencia con /finanzas/facturas.
+    const todos = (await Promise.all(RECEIVABLE_BUCKETS.map(conteo))).flat();
+    assert.equal(todos.some((r) => r.status === 'draft' || r.status === 'void'), false);
+    const archivo = await laura((tx) => listInvoices(tx, { limit: 200 }));
+    assert.ok(archivo.rows.length >= todos.length, 'el archivo es al menos tan grande');
+  });
+
+  test('el orden es el de cobro: lo vencido primero, y dentro lo más viejo', async () => {
+    const { rows } = await laura((tx) => listReceivables(tx));
+    assert.deepEqual(
+      rows.map((r) => r.number),
+      ['FV-2026-007', 'FV-2026-010', 'FV-2026-011'],
+      'vencida → vence pronto → al día (al revés que el mock, a propósito)',
+    );
+
+    // Con las pagadas incluidas, el criterio dentro del grupo es
+    // due_on ascendente, que es days_overdue descendente.
+    const pagadas = await laura((tx) => listReceivables(tx, { bucket: 'pagada' }));
+    for (let i = 1; i < pagadas.rows.length; i++) {
+      const previo = pagadas.rows[i - 1];
+      const actual = pagadas.rows[i];
+      assert.ok(previo && actual);
+      assert.ok(previo.dueOn <= actual.dueOn, 'due_on ascendente');
+      assert.ok(previo.daysOverdue >= actual.daysOverdue, 'y por tanto days_overdue descendente');
+    }
+  });
+
+  test('el buscador encuentra por empresa y por número, desde el tercer carácter', async () => {
+    const porEmpresa = await laura((tx) => listReceivables(tx, { q: 'Hogar' }));
+    assert.deepEqual(porEmpresa.rows.map((r) => r.number), ['FV-2026-007']);
+
+    const minusculas = await laura((tx) => listReceivables(tx, { q: 'hogar lindo' }));
+    assert.deepEqual(minusculas.rows.map((r) => r.number), ['FV-2026-007']);
+
+    const porNumero = await laura((tx) => listReceivables(tx, { q: '2026-011' }));
+    assert.deepEqual(porNumero.rows.map((r) => r.number), ['FV-2026-011']);
+
+    // Con una o dos letras no filtra: devuelve la lista entera y lo dice
+    // la pantalla, no una lista recortada al azar.
+    const corta = await laura((tx) => listReceivables(tx, { q: 'ho' }));
+    assert.equal(corta.rows.length, 3);
+
+    // Un comodín de LIKE es texto, no un patrón: si no se escapara,
+    // '%' devolvería las tres y parecería que el filtro no sirve.
+    const comodin = await laura((tx) => listReceivables(tx, { q: '%%%' }));
+    assert.equal(comodin.rows.length, 0);
+
+    // El filtro por bucket y la búsqueda se acumulan.
+    const juntos = await laura((tx) => listReceivables(tx, { bucket: 'al_dia', q: 'Hogar' }));
+    assert.equal(juntos.rows.length, 0);
+  });
+
+  test('la paginación no salta ni repite filas', async () => {
+    const enteras = await laura((tx) => listReceivables(tx, { bucket: 'pagada', limit: 200 }));
+    const numeros: string[] = [];
+    let cursor: string | null = null;
+    for (let pagina = 0; pagina < 10; pagina++) {
+      const r: Awaited<ReturnType<typeof listReceivables>> = await laura((tx) =>
+        listReceivables(tx, { bucket: 'pagada', limit: 3, cursor }),
+      );
+      numeros.push(...r.rows.map((x) => x.number));
+      cursor = r.nextCursor;
+      if (!cursor) break;
+    }
+    assert.equal(cursor, null, 'termina');
+    assert.deepEqual(numeros, enteras.rows.map((r) => r.number), 'mismo orden, sin huecos ni repetidos');
+    assert.equal(new Set(numeros).size, numeros.length);
+
+    await assert.rejects(
+      laura((tx) => listReceivables(tx, { cursor: 'no-es-un-cursor' })),
+      /cursor de paginación/,
+    );
+  });
+
+  test('desde otro workspace no hay ni una fila, ni con bucket ni con búsqueda', async () => {
+    const vacio = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx));
+    assert.deepEqual(vacio.rows, []);
+    assert.equal(vacio.nextCursor, null);
+    for (const bucket of RECEIVABLE_BUCKETS) {
+      const r = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx, { bucket }));
+      assert.deepEqual(r.rows, [], `bucket ${bucket}`);
+    }
+    const buscando = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listReceivables(tx, { q: 'Hogar' }));
+    assert.deepEqual(buscando.rows, [], 'la búsqueda no es una rendija a otro workspace');
+
+    // Y los KPIs no inventan una cifra: cero facturas, y lo que de
+    // verdad se desconoce (la tasa de reserva, la comparación con el
+    // año anterior) viaja como null, no como 0.
+    const kpis = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getReceivablesKpis(tx));
+    assert.equal(kpis.openCount, 0);
+    assert.equal(kpis.overdueCount, 0);
+    assert.equal(kpis.taxRate, null);
+    assert.equal(kpis.collectedDelta, null);
   });
 });
 
@@ -563,6 +744,314 @@ describe('FIN-6 · aislamiento', () => {
       assert.equal(s.impuestos, '0.00');
       assert.deepEqual(s.detalle, []);
     }
+  });
+});
+
+// ------------------------------------------- configuración financiera (FIN-8)
+
+/**
+ * Leer una tabla con RLS hay que hacerlo DENTRO de una transacción con
+ * el workspace fijado: `t.raw` corre como mc_app sin
+ * `app.workspace_id`, así que `current_workspace_id()` es NULL y las
+ * políticas de 0010 y 0024 devuelven cero filas sin avisar. Es
+ * exactamente lo que estas pruebas comprueban en otras, así que aquí se
+ * usa la puerta buena.
+ */
+function leer<T extends Record<string, unknown>>(workspaceId: string, sql: string, params: unknown[] = []): Promise<T[]> {
+  return t.db.withWorkspace(workspaceId, async (tx) => (await tx.query<T>(sql, params)).rows);
+}
+
+describe('configuración financiera (FIN-8)', () => {
+  test('el bloque del seed se lee con la misma función que usarán FIN-1, FIN-2, FIN-4 y FIN-6', async () => {
+    const s = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.retencionPct, '11');
+    assert.equal(s.reservaPct, '11');
+    assert.equal(s.plazoDias, 30);
+    assert.equal(s.razonSocial, null, 'el seed no trae datos fiscales: es una ausencia, no ""');
+  });
+
+  test('un workspace sin bloque devuelve los valores por defecto de Colombia, no un error', async () => {
+    const s = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.plazoDias, 30);
+    // Y su settings sigue siendo '{}': leer no escribe nada.
+    const [fila] = await leer<{ settings: unknown }>(WORKSPACE_AJENO, 'SELECT settings FROM workspace WHERE id = current_workspace_id()');
+    assert.deepEqual(fila?.settings, {});
+  });
+
+  test('guardar hace MERGE por llave: no borra lo que otro módulo dejó en settings', async () => {
+    // Cotizar guarda settings.taxRate en la RAÍZ (queries/cotizar/cotizacion.ts,
+    // getDefaultTaxRate). Un reemplazo del jsonb entero lo borraría.
+    await t.admin(`
+      UPDATE workspace
+      SET settings = settings || '{"taxRate": "0.19", "otroModulo": {"a": 1}}'::jsonb
+      WHERE id = '${WORKSPACE_AJENO}';
+    `);
+    const base = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, ivaPct: '16', razonSocial: 'Ajeno S.A. de C.V.' } }),
+    );
+    const [fila] = await leer<{ settings: Record<string, unknown> }>(
+      WORKSPACE_AJENO, 'SELECT settings FROM workspace WHERE id = current_workspace_id()');
+    assert.equal(fila?.settings['taxRate'], '0.19', 'la llave de Cotizar sigue ahí');
+    assert.deepEqual(fila?.settings['otroModulo'], { a: 1 });
+    const guardado = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    assert.equal(guardado.ivaPct, '16');
+    assert.equal(guardado.razonSocial, 'Ajeno S.A. de C.V.');
+  });
+
+  test('guardar deja su fila en audit_log, con before y after y sin el id bigserial', async () => {
+    const [previo] = await leer<{ n: number }>(WORKSPACE_LAURA,
+      `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    const salida = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, retencionPct: '10' } }),
+    );
+    assert.equal(salida.previousCurrency, 'COP', 'sin cambiar la moneda, la anterior es la misma');
+    // La función no devuelve ningún id de audit_log (CIM-2 §3).
+    assert.deepEqual(
+      Object.keys(salida).sort(),
+      ['currency', 'invoicesInOtherCurrency', 'previousCurrency', 'settings'],
+    );
+
+    const despues = await leer<{ n: number }>(WORKSPACE_LAURA,
+      `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
+    assert.equal((despues[0]?.n ?? 0) - (previo?.n ?? 0), 1, 'un guardado, una fila');
+
+    const [fila] = await leer<{
+      actor_user_id: string | null; actor_kind: string; entity_type: string; entity_id: string;
+      before: Record<string, unknown>; after: Record<string, unknown>;
+    }>(WORKSPACE_LAURA,
+      `SELECT actor_user_id, actor_kind, entity_type, entity_id, before, after FROM audit_log
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+    assert.ok(fila, 'hay fila de bitácora');
+    assert.equal(fila.actor_kind, 'system', 'sin identidad en la transacción no se dice "user"');
+    assert.equal(fila.actor_user_id, null);
+    assert.equal(fila.entity_type, 'workspace');
+    assert.equal(fila.entity_id, WORKSPACE_LAURA);
+    const antes = fila.before['finanzas'] as Record<string, unknown>;
+    const ahora = fila.after['finanzas'] as Record<string, unknown>;
+    assert.equal(antes['retencion_pct'], '11');
+    assert.equal(ahora['retencion_pct'], '10');
+    assert.equal(fila.before['currency'], 'COP');
+    assert.equal(fila.after['currency'], 'COP');
+    // Deshacer, para no arrastrar el cambio a las otras pruebas del archivo.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+
+  test('la bitácora no copia la cuenta bancaria entera ni el correo de facturación (R4)', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, {
+        settings: { ...base, cuenta: 'Ahorros 123-456789-01', correoFacturacion: 'cobros@laura.example' },
+      }),
+    );
+    const [fila] = await leer<{ after: Record<string, unknown> }>(WORKSPACE_LAURA,
+      `SELECT after FROM audit_log
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+    const ahora = fila?.after['finanzas'] as Record<string, unknown>;
+    assert.equal(ahora['cuenta'], '••••8901', 'la cuenta, en sus cuatro últimos');
+    assert.equal(ahora['correo_facturacion'], undefined, 'el correo no entra a la bitácora');
+    const crudo = JSON.stringify(fila?.after);
+    assert.ok(!crudo.includes('456789'), 'ni un pedazo del número');
+    assert.ok(!crudo.includes('laura.example'), 'ni el dominio del correo');
+    // La fila del workspace sí guarda la cuenta entera: es lo que imprime la factura.
+    const guardado = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(guardado.cuenta, 'Ahorros 123-456789-01');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+
+  test('con identidad, la bitácora guarda el actor que fijó la transacción, no un parámetro', async () => {
+    const [persona] = await leer<{ id: string }>(WORKSPACE_LAURA,
+      `SELECT u.id FROM app_user u JOIN membership m ON m.user_id = u.id
+       WHERE m.workspace_id = current_workspace_id() LIMIT 1`);
+    assert.ok(persona, 'el seed trae una persona en el workspace');
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => updateFinanceSettings(tx, { settings: { ...base, banco: 'Bancolombia' } }),
+      { userId: persona.id },
+    );
+    const [fila] = await leer<{ actor_user_id: string; actor_kind: string }>(WORKSPACE_LAURA,
+      `SELECT actor_user_id, actor_kind FROM audit_log
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+    assert.equal(fila?.actor_user_id, persona.id);
+    assert.equal(fila?.actor_kind, 'user');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+
+  test('un workspace no puede leer ni escribir la configuración de otro', async () => {
+    // Leer: dentro de la transacción del ajeno sale SU bloque (16 %, de
+    // la prueba del merge), no el de Laura (19 %).
+    const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    const laura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(ajeno.ivaPct, '16');
+    assert.equal(laura.ivaPct, '19');
+
+    // Escribir desde el ajeno no mueve la de Laura: el UPDATE filtra por
+    // current_workspace_id() y la política workspace_update (0024) aísla
+    // la fila.
+    await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...ajeno, reservaPct: '0' } }),
+    );
+    const lauraDespues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(lauraDespues.reservaPct, '11', 'la configuración de Laura no se movió');
+
+    // Y nombrar la fila de Laura a pelo desde el workspace ajeno no toca
+    // ninguna fila.
+    const tocadas = await t.db.withWorkspace(WORKSPACE_AJENO, async (tx) => {
+      const r = await tx.query<{ id: string }>(
+        `UPDATE workspace SET settings = settings || '{"finanzas": {"reserva_pct": "99"}}'::jsonb
+         WHERE id = $1 RETURNING id`,
+        [WORKSPACE_LAURA],
+      );
+      return r.rows.length;
+    });
+    assert.equal(tocadas, 0, 'RLS: cero filas');
+    const lauraIntacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(lauraIntacta.reservaPct, '11');
+
+    // Ni su bitácora se ve desde el otro espacio.
+    const [ajenoVe] = await leer<{ n: number }>(WORKSPACE_AJENO,
+      `SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1`, [WORKSPACE_LAURA]);
+    assert.equal(ajenoVe?.n, 0, 'la bitácora de Laura no se lee desde el workspace ajeno');
+  });
+
+  test('la moneda se puede cambiar, no convierte nada, y dice cuántas facturas quedaron en otra', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countInvoicesInOtherCurrency(tx, 'COP'));
+    assert.equal(antes, 0, 'el seed factura todo en la moneda del workspace');
+
+    const salida = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'mxn' }),
+    );
+    assert.equal(salida.currency, 'MXN', 'se normaliza a mayúsculas');
+    assert.equal(salida.previousCurrency, 'COP', 'la anterior vuelve: es la moneda en la que están esas facturas');
+    assert.ok(salida.invoicesInOtherCurrency > 0, 'avisa que hay facturas en COP que nadie convirtió');
+
+    // Los montos de las facturas no se tocaron: cambiar la moneda del
+    // workspace no es una conversión (FIN-8 §0.3 F).
+    const factura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, INVOICE_FV_2026_010));
+    assert.equal(factura?.currency, 'COP');
+
+    // Y volver atrás deja el aviso en cero.
+    const vuelta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'COP' }),
+    );
+    assert.equal(vuelta.currency, 'COP');
+    assert.equal(vuelta.previousCurrency, 'MXN');
+    assert.equal(vuelta.invoicesInOtherCurrency, 0);
+    const ws = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(ws.currency, 'COP');
+  });
+
+  test('un guardado que NO toca la moneda no saca el aviso, aunque haya facturas en otra', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+
+    // Escenario: el workspace pasa a MXN y sus facturas siguen en COP.
+    // Sin la guardia, cualquier guardado POSTERIOR volvería a sacar el
+    // aviso —y etiquetado con previousCurrency, que ya es MXN: nombraría
+    // la moneda en la que esas facturas NO están—.
+    //
+    // Todo se mide primero y se restaura la moneda ANTES de afirmar
+    // nada: una aserción que falla a mitad dejaría el workspace en MXN y
+    // tumbaría las pruebas siguientes, que es justo lo que pasó la
+    // primera vez que se escribió.
+    const cambio = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'MXN' }),
+    );
+    const soloElIva = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, ivaPct: '16' }, currency: 'MXN' }),
+    );
+    const sinMoneda = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base }),
+    );
+    // Las de COP siguen ahí: nadie las convirtió. El número exacto
+    // depende de cuántas hayan creado las pruebas de arriba, así que se
+    // compara con la cuenta real, no con una constante.
+    const enCop = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countInvoicesInOtherCurrency(tx, 'MXN'));
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base, currency: 'COP' }));
+
+    assert.ok(enCop > 0, 'hay facturas en COP que el cambio de moneda dejó atrás');
+    assert.equal(cambio.invoicesInOtherCurrency, enCop, 'el cambio de moneda sí avisa, y de todas');
+    assert.equal(soloElIva.previousCurrency, 'MXN');
+    assert.equal(soloElIva.invoicesInOtherCurrency, 0, 'la moneda no cambió: no hay nada que advertir');
+    assert.equal(sinMoneda.currency, 'MXN', 'sin moneda se conserva la que había');
+    assert.equal(sinMoneda.invoicesInOtherCurrency, 0);
+
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(final.currency, 'COP', 'la prueba deja el workspace como lo encontró');
+  });
+
+  test('una moneda que no es ISO-4217 de tres letras se rechaza antes de tocar la base', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    for (const mala of ['PESOS', 'C0P', '', 'co ']) {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base, currency: mala })),
+        /ISO-4217/,
+        `«${mala}» no es una moneda`,
+      );
+    }
+    const intacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(intacta.currency, 'COP');
+  });
+
+  test('cambiar el porcentaje cambia la reserva de los pagos SIGUIENTES, no la de los anteriores', async () => {
+    // El contrato que FIN-8 le deja a FIN-2: la tasa que se estampa en
+    // tax_reserve es pctToRate(getFinanceSettings(tx).reservaPct) EN EL
+    // MOMENTO DEL PAGO, y la fila la guarda para siempre
+    // (tax_reserve.rate, numeric(6,4), 0008).
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(base.reservaPct, '11', 'el seed arranca en 11 %');
+
+    // 1 · Un cobro con la configuración de hoy.
+    const primera = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const s = await getFinanceSettings(tx);
+      const { rows } = await tx.query<{ id: string; rate: string; amount: string }>(
+        `INSERT INTO tax_reserve (workspace_id, rate, amount, currency, period)
+         VALUES (current_workspace_id(), $1::numeric, $2::numeric, 'COP', '2026-Q3')
+         RETURNING id, rate::text, amount::text`,
+        [pctToRate(s.reservaPct), mulRateHalfUp('1000000.00', pctToRate(s.reservaPct))],
+      );
+      return rows[0]!;
+    });
+    assert.equal(primera.rate, '0.1100');
+    assert.equal(primera.amount, '110000.00');
+
+    // 2 · El creador sube la reserva al 15 % en /finanzas/configuracion.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, reservaPct: '15' } }),
+    );
+
+    // 3 · El cobro siguiente aparta el 15 %.
+    const segunda = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const s = await getFinanceSettings(tx);
+      assert.equal(s.reservaPct, '15');
+      const { rows } = await tx.query<{ id: string; rate: string; amount: string }>(
+        `INSERT INTO tax_reserve (workspace_id, rate, amount, currency, period)
+         VALUES (current_workspace_id(), $1::numeric, $2::numeric, 'COP', '2026-Q4')
+         RETURNING id, rate::text, amount::text`,
+        [pctToRate(s.reservaPct), mulRateHalfUp('1000000.00', pctToRate(s.reservaPct))],
+      );
+      return rows[0]!;
+    });
+    assert.equal(segunda.rate, '0.1500');
+    assert.equal(segunda.amount, '150000.00');
+
+    // 4 · LO QUE IMPORTA: la primera sigue en 0.1100.
+    const [revisada] = await leer<{ rate: string; amount: string }>(WORKSPACE_LAURA,
+      'SELECT rate::text, amount::text FROM tax_reserve WHERE id = $1', [primera.id]);
+    assert.equal(revisada?.rate, '0.1100', 'el pago anterior conserva SU tasa');
+    assert.equal(revisada?.amount, '110000.00', 'y su monto');
+
+    // Limpieza: el KPI «Apartado para impuestos» de otras pruebas suma
+    // tax_reserve, así que estas dos filas no se quedan.
+    await t.admin(`DELETE FROM tax_reserve WHERE id IN ('${primera.id}', '${segunda.id}');`);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(final.reservaPct, '11');
   });
 });
 

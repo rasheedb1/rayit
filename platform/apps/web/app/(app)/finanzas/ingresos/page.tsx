@@ -13,8 +13,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { requirePermission } from "@/lib/permisos";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
+import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES as MESSAGES_FINANZAS } from "../_lib/messages";
 import { MESSAGES } from "./_lib/messages";
@@ -115,13 +117,16 @@ export default async function IngresosPage() {
   // (decisión E de la propuesta ACC). No hay un `finanzas.ingreso.ver`
   // porque el catálogo viaja en la semilla de la migración 0034, que ya
   // está aplicada; está propuesto en docs/propuestas/FIN-7.md §1.
-  await requirePermission("finanzas.flujo.ver");
+  // Sin él, 404 como el resto del módulo (ACC-5), y la pestaña no se pinta.
+  await requireModuleAccess("finanzas");
+  await requirePagePermission("finanzas.flujo.ver");
   const { kpis, pagos, meses } = await withWorkspace(async (tx) => ({
     kpis: await getPlatformPayoutKpis(tx),
     pagos: await listPlatformPayouts(tx, { limit: 200 }),
     meses: await getPlatformPayoutMonths(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
+  const permisos = await permisosDeLaSesion();
 
   // El promedio lo calcula @mc/core, no la pantalla. `hoy` sale de la
   // base (CURRENT_DATE) y no del reloj de Node: la ventana de meses
@@ -144,6 +149,7 @@ export default async function IngresosPage() {
           </div>
         }
       />
+      <ModuleTabs active="/finanzas/ingresos" permisos={permisos} />
 
       <KpiRow>
         <Kpi

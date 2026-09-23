@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { requirePermission } from "@/lib/permisos";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../_lib/messages";
 import { ImportarForm } from "./form";
@@ -13,7 +13,10 @@ export default async function ImportarIngresosPage() {
   // Quien no puede escribir tampoco ve el formulario: la Server Action
   // lo vuelve a comprobar, pero una pantalla que se pinta y falla al
   // enviar es una promesa rota.
-  await requirePermission("finanzas.pago.registrar");
+  // ACC-5: la puerta del módulo y la de esta pantalla, que escribe
+  // dinero: sin finanzas.pago.registrar, 404 y no el error del segmento.
+  await requireModuleAccess("finanzas");
+  await requirePagePermission("finanzas.pago.registrar");
   const { currency } = await getCurrentWorkspace();
   const t = MESSAGES.importar;
   return (

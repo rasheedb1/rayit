@@ -649,3 +649,209 @@ export function parseInvoiceNumber(number: string): { year: number; seq: number 
   // Son enteros de un formato controlado, no dinero.
   return { year: parseInt(m[1] ?? '0', 10), seq: parseInt(m[2] ?? '0', 10) };
 }
+
+// ---------------------------------------------------------------------
+// Configuración financiera del workspace (FIN-8)
+// ---------------------------------------------------------------------
+
+/**
+ * El bloque `settings.finanzas` de la fila `workspace`: los porcentajes
+ * y el plazo con los que nace una factura, y los datos fiscales que la
+ * factura imprime.
+ *
+ * Vive en core y no en la consulta para que FIN-1 (la cabecera de la
+ * factura), FIN-2 (la reserva de cada pago), FIN-4 (el correo de cobro)
+ * y FIN-6 lean LA MISMA función y no cuatro copias del valor por
+ * defecto. Antes de FIN-8 los porcentajes eran DEFAULT_TAX_RATE y
+ * DEFAULT_WITHHOLDING_RATE, dos constantes del código: Colombia no es
+ * una constante del producto, es el valor por defecto de un workspace.
+ *
+ * Los porcentajes son strings decimales EN PORCENTAJE ("19", "19.5"),
+ * no fracciones: es lo que la persona escribe y lo que el formulario
+ * muestra. `pctToRate` los convierte a la fracción que multiplica
+ * dinero ("0.19") en el único sitio donde eso hace falta. Y son strings
+ * y no `number` porque 19.99 no es exacto en IEEE-754 y la regla del
+ * repo es que nada que multiplique dinero pase por `number`.
+ */
+export interface FinanceSettings {
+  /** Versión del bloque. Un bloque sin `v` (el de los seeds) es 1. */
+  v: number;
+  /** IVA por defecto de una factura nueva, en porcentaje: "19". */
+  ivaPct: string;
+  /** Retención en la fuente por defecto, en porcentaje: "11". */
+  retencionPct: string;
+  /** Porcentaje que se aparta de cada cobro para impuestos (FIN-2): "11". */
+  reservaPct: string;
+  /** Plazo de pago por defecto, en días: emisión + plazoDias = vencimiento. */
+  plazoDias: number;
+  /** Razón social que imprime la factura. `null` si no se ha configurado. */
+  razonSocial: string | null;
+  /** NIT o identificación fiscal. */
+  identificacion: string | null;
+  direccion: string | null;
+  /** Régimen tributario, tal como lo escribe el creador. */
+  regimen: string | null;
+  /** A dónde escriben las marcas por temas de facturación. */
+  correoFacturacion: string | null;
+  /** Cómo pagar: banco… */
+  banco: string | null;
+  /** …y número de cuenta. */
+  cuenta: string | null;
+  /** …o un enlace de pago, para quien cobra por pasarela. */
+  enlacePago: string | null;
+}
+
+/** La versión que escribe esta build. */
+export const FINANCE_SETTINGS_VERSION = 1;
+
+/**
+ * Colombia, que es donde arranca el piloto. Son los valores por defecto
+ * de un WORKSPACE, no constantes del producto: un workspace en México
+ * los cambia en /finanzas/configuracion y nada del código lo sabe.
+ */
+export const FINANCE_SETTINGS_DEFAULTS: Readonly<FinanceSettings> = Object.freeze({
+  v: FINANCE_SETTINGS_VERSION,
+  ivaPct: '19',
+  retencionPct: '11',
+  reservaPct: '11',
+  plazoDias: 30,
+  razonSocial: null,
+  identificacion: null,
+  direccion: null,
+  regimen: null,
+  correoFacturacion: null,
+  banco: null,
+  cuenta: null,
+  enlacePago: null,
+});
+
+/** Tope de un campo de texto del bloque. El mismo que valida el zod de la pantalla. */
+export const FINANCE_TEXT_MAX = 200;
+/** Plazo de pago máximo, en días. Medio año ya es un caso raro; un año es un error de tecleo. */
+export const FINANCE_PLAZO_MAX = 180;
+
+/** Un porcentaje de 0 a 100 con hasta dos decimales, con coma o punto. */
+const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
+
+/**
+ * Las llaves del jsonb, en español y snake_case. No son identificadores
+ * de código ni columnas: son datos que los seeds 0002 y 0003 ya
+ * escribieron con estos nombres (y que hay en dos filas de la Supabase
+ * real). Renombrarlas al inglés de la convención sería una migración de
+ * datos a cambio de coherencia de estilo; las nuevas siguen a las que
+ * ya estaban para no mezclar los dos idiomas dentro del mismo objeto.
+ * Ver docs/propuestas/FIN-8.md §0.3, decisión A.
+ */
+const FINANCE_KEYS = {
+  ivaPct: 'iva_pct',
+  retencionPct: 'retencion_pct',
+  reservaPct: 'reserva_pct',
+  plazoDias: 'plazo_dias',
+  razonSocial: 'razon_social',
+  identificacion: 'identificacion',
+  direccion: 'direccion',
+  regimen: 'regimen',
+  correoFacturacion: 'correo_facturacion',
+  banco: 'banco',
+  cuenta: 'cuenta',
+  enlacePago: 'enlace_pago',
+} as const satisfies Record<Exclude<keyof FinanceSettings, 'v'>, string>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Un porcentaje guardado, normalizado a string con punto. Acepta el
+ * número JSON que dejaron los seeds (19) y el string que escribe esta
+ * build ("19"). Devuelve null si no es un porcentaje válido, para que
+ * quien llama use el valor por defecto.
+ */
+function readPct(value: unknown): string | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+    // Un número JSON solo llega desde los seeds, que escriben enteros.
+    // Se pasa por String una vez y se valida como cualquier otro.
+    const s = String(value);
+    return PCT_RE.test(s) ? s : null;
+  }
+  if (typeof value !== 'string') return null;
+  const s = value.trim().replace(',', '.');
+  return PCT_RE.test(s) ? s : null;
+}
+
+function readDays(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
+  if (!Number.isInteger(n) || n < 0 || n > FINANCE_PLAZO_MAX) return null;
+  return n;
+}
+
+/** Un texto guardado: recortado, con tope, y null cuando está vacío. Una ausencia no es "". */
+function readText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+  return s.length > FINANCE_TEXT_MAX ? s.slice(0, FINANCE_TEXT_MAX) : s;
+}
+
+/**
+ * El bloque `settings.finanzas` tal como lo lee el producto. NUNCA
+ * lanza: lo que no entiende lo reemplaza por su valor por defecto.
+ *
+ * Es a propósito, y es la mitad lenient de la división que ya usan
+ * Ventas y Cotizar: leer es tolerante, escribir es estricto. Negarse a
+ * pintar /finanzas porque alguien guardó un campo del futuro —o porque
+ * una versión posterior escribió una llave que esta no conoce— sería
+ * peor que ignorarlo. La validación con rangos, topes y mensajes por
+ * campo está en el zod de la Server Action, que es el único camino que
+ * escribe.
+ */
+export function parseFinanceSettings(raw: unknown): FinanceSettings {
+  const d = FINANCE_SETTINGS_DEFAULTS;
+  if (!isRecord(raw)) return { ...d };
+  const v = typeof raw['v'] === 'number' && Number.isInteger(raw['v']) && raw['v'] > 0 ? raw['v'] : FINANCE_SETTINGS_VERSION;
+  return {
+    v,
+    ivaPct: readPct(raw[FINANCE_KEYS.ivaPct]) ?? d.ivaPct,
+    retencionPct: readPct(raw[FINANCE_KEYS.retencionPct]) ?? d.retencionPct,
+    reservaPct: readPct(raw[FINANCE_KEYS.reservaPct]) ?? d.reservaPct,
+    plazoDias: readDays(raw[FINANCE_KEYS.plazoDias]) ?? d.plazoDias,
+    razonSocial: readText(raw[FINANCE_KEYS.razonSocial]),
+    identificacion: readText(raw[FINANCE_KEYS.identificacion]),
+    direccion: readText(raw[FINANCE_KEYS.direccion]),
+    regimen: readText(raw[FINANCE_KEYS.regimen]),
+    correoFacturacion: readText(raw[FINANCE_KEYS.correoFacturacion]),
+    banco: readText(raw[FINANCE_KEYS.banco]),
+    cuenta: readText(raw[FINANCE_KEYS.cuenta]),
+    enlacePago: readText(raw[FINANCE_KEYS.enlacePago]),
+  };
+}
+
+/**
+ * El bloque listo para `settings = settings || '{"finanzas": …}'::jsonb`.
+ * Los porcentajes salen como STRING (ver el JSDoc de FinanceSettings);
+ * en SQL no cambia nada, porque `->>` devuelve "19" venga de un número
+ * o de un string, así que ningún lector anterior se entera.
+ */
+export function financeSettingsToJson(s: FinanceSettings): Record<string, unknown> {
+  return {
+    v: FINANCE_SETTINGS_VERSION,
+    [FINANCE_KEYS.ivaPct]: s.ivaPct,
+    [FINANCE_KEYS.retencionPct]: s.retencionPct,
+    [FINANCE_KEYS.reservaPct]: s.reservaPct,
+    [FINANCE_KEYS.plazoDias]: s.plazoDias,
+    [FINANCE_KEYS.razonSocial]: s.razonSocial,
+    [FINANCE_KEYS.identificacion]: s.identificacion,
+    [FINANCE_KEYS.direccion]: s.direccion,
+    [FINANCE_KEYS.regimen]: s.regimen,
+    [FINANCE_KEYS.correoFacturacion]: s.correoFacturacion,
+    [FINANCE_KEYS.banco]: s.banco,
+    [FINANCE_KEYS.cuenta]: s.cuenta,
+    [FINANCE_KEYS.enlacePago]: s.enlacePago,
+  };
+}
+
+/** true si el bloque trae lo que la cabecera de una factura necesita imprimir (FIN-1). */
+export function hasFiscalIdentity(s: FinanceSettings): boolean {
+  return s.razonSocial !== null && s.identificacion !== null;
+}

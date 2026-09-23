@@ -587,7 +587,7 @@ export const STORIES: readonly Story[] = [
   {
     id: "FIN-8", module: "FIN", owner: "nicolas", size: "S", sprint: 5, deps: ["CIM-3"],
     title: "Configuración financiera",
-    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, datos fiscales para la factura. En workspace.settings.",
+    desc: "Moneda, porcentaje de reserva de impuestos, IVA y retención por defecto, plazo de pago, y datos fiscales para la factura. En workspace.settings.finanzas, que core tipa con parseFinanceSettings: FIN-1, FIN-2, FIN-4 y FIN-6 leen la misma función.",
     done: "Cambiar el porcentaje cambia la reserva de los pagos siguientes, no de los anteriores.",
     status: "en_curso",
     note: "23-sep: terminada en la rama nicolas/FIN-8-configuracion-financiera (en GitHub, sin fusionar; también va en nicolas/FIN-integracion). Sin migración. Pendiente con Rasheed: dos fuentes de verdad del IVA (settings.taxRate de Cotizar y la de Finanzas), propuesta §2.1.",

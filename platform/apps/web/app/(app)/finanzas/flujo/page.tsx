@@ -2,14 +2,15 @@ import type { Metadata } from "next";
 import { addDecimal, projectCashflow, toCents, type Cashflow, type CobroDeLaSemana, type Decimal, type SemanaFlujo } from "@mc/core";
 import { getCashflowInputs } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/ui/chart-card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
+import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 
@@ -203,14 +204,16 @@ export default async function FlujoPage() {
   const entradas = await withWorkspace((tx) => getCashflowInputs(tx));
   const c = projectCashflow(entradas);
   const f = formatterFor(await getCurrentWorkspace());
+  const permisos = await permisosDeLaSesion();
 
+  // La tira de pestañas del módulo (FIN-3) sustituye al botón «Volver a
+  // Finanzas»: desde que hay tres vistas con URL propia, volver es una
+  // pestaña más y no una acción.
   const cabecera = (
-    <PageHeader
-      eyebrow={T.eyebrow}
-      title={T.title}
-      description={T.description}
-      aside={<Button href="/finanzas">{T.volver}</Button>}
-    />
+    <>
+      <PageHeader eyebrow={T.eyebrow} title={T.title} description={T.description} />
+      <ModuleTabs active="/finanzas/flujo" permisos={permisos} />
+    </>
   );
 
   if (c.vacio) {

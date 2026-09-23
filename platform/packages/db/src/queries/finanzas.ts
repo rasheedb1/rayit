@@ -37,13 +37,14 @@ import {
   transitionInvoice as applyTransition,
   definicionPaso,
   pasoDeUrl,
-  DEFAULT_TAX_RATE,
-  DEFAULT_WITHHOLDING_RATE,
+  financeSettingsToJson,
+  parseFinanceSettings,
   InvoicePaymentConflict,
   type AgingBucket,
   type CashflowInput,
   type FacturaPorCobrar,
   type GastoRecurrente,
+  type FinanceSettings,
   type InvoiceStatus,
   type NegocioGanado,
   type NumeroPaso,
@@ -202,6 +203,54 @@ export interface ListRemindersParams {
 
 /** El tope duro de una página de la bandeja. Quien lo alcanza sabe que hay más. */
 export const MAX_REMINDERS = 200;
+/**
+ * Los cuatro estados de mora que devuelve la vista `receivables`
+ * (0010). No están `borrador` ni `anulada` de `AgingBucket`: la vista
+ * excluye draft y void a propósito, porque una factura que no se ha
+ * enviado no es algo que nadie te deba.
+ */
+export const RECEIVABLE_BUCKETS = ['vencida', 'vence_pronto', 'al_dia', 'pagada'] as const;
+export type ReceivableBucket = (typeof RECEIVABLE_BUCKETS)[number];
+
+/** Una fila de cuentas por cobrar: la vista `receivables` más el nombre de la campaña. */
+export interface ReceivableRow {
+  id: string;
+  number: string;
+  /** El persistido: sent, partial o paid (la vista excluye draft y void). */
+  status: InvoiceStatus;
+  bucket: ReceivableBucket;
+  companyId: string;
+  companyName: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  currency: string;
+  total: string;
+  paidAmount: string;
+  /** total − paid_amount. Es lo que se cobra, no lo que se facturó. */
+  outstanding: string;
+  dueOn: string;
+  /** CURRENT_DATE − due_on. Negativo mientras no venza; 41 es «vencida hace 41 días». */
+  daysOverdue: number;
+}
+
+export interface ListReceivablesParams {
+  /**
+   * Un `aging_bucket` concreto. Sin él —lo normal en la pantalla de
+   * cobro— devuelve TODO lo que sigue abierto (`status <> 'paid'`), que
+   * es lo que suma el KPI «Por cobrar».
+   */
+  bucket?: ReceivableBucket | null;
+  /** Empresa o número de factura. Se ignora con menos de RECEIVABLES_MIN_SEARCH caracteres. */
+  q?: string | null;
+  /** 1..200. Por defecto 50. */
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface ListReceivablesResult {
+  rows: ReceivableRow[];
+  nextCursor: string | null;
+}
 
 export class InvoiceNotFound extends Error {
   constructor(id: string) {
@@ -437,6 +486,168 @@ export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKp
 }
 
 // ---------------------------------------------------------------------
+// FIN-3 · Cuentas por cobrar
+// ---------------------------------------------------------------------
+
+/** Desde cuántos caracteres filtra el buscador de cobros. El mismo criterio que Ventas. */
+export const RECEIVABLES_MIN_SEARCH = 3;
+
+/**
+ * El texto del buscador, listo para la consulta, o null si no llega al
+ * mínimo. Es la misma regla que `searchTerm` de queries/ventas.ts y se
+ * repite a propósito: son dos módulos con dueños distintos y un cambio
+ * de criterio en uno no debe mover el del otro sin que nadie lo vea.
+ *
+ * Lleva el prefijo del módulo porque este archivo SÍ se reexporta desde
+ * la raíz de @mc/db (src/index.ts) y `searchTerm` a secas chocaría con
+ * el de Ventas el día que también se reexporte (TS2308).
+ */
+export function receivablesSearchTerm(raw: string | undefined | null): string | null {
+  const q = (raw ?? '').trim();
+  return q.length >= RECEIVABLES_MIN_SEARCH ? q : null;
+}
+
+/** El texto del usuario con los comodines de LIKE escapados: un `%` suelto no devuelve todo. */
+const ESCAPE_LIKE = `replace(replace(replace($2, '\\', '\\\\'), '%', '\\%'), '_', '\\_')`;
+
+/**
+ * El orden de cobro, en SQL y en un solo sitio: primero lo vencido,
+ * después lo que vence pronto, después lo que está al día y al final lo
+ * cobrado. Dentro de cada grupo, `due_on` ascendente —lo que venció
+ * hace más tiempo va arriba— y el número descendente para desempatar.
+ *
+ * `due_on ASC` es exactamente `days_overdue DESC` (days_overdue es
+ * CURRENT_DATE − due_on), pero `due_on` no cambia al pasar la
+ * medianoche: por eso el cursor se ancla a él y no al número de días,
+ * y una página pedida a las 23:59 y la siguiente a las 00:01 no se
+ * saltan ni repiten una fila.
+ */
+const URGENCY_RANK = `CASE v.aging_bucket
+        WHEN 'vencida' THEN 0
+        WHEN 'vence_pronto' THEN 1
+        WHEN 'al_dia' THEN 2
+        ELSE 3
+      END`;
+
+interface RawReceivable {
+  id: string;
+  number: string;
+  status: InvoiceStatus;
+  aging_bucket: ReceivableBucket;
+  company_id: string;
+  company_name: string;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  currency: string;
+  total: string;
+  paid_amount: string;
+  outstanding: string;
+  due_on: string;
+  days_overdue: number;
+  rank: number;
+}
+
+function toReceivableRow(r: RawReceivable): ReceivableRow {
+  return {
+    id: r.id,
+    number: r.number,
+    status: r.status,
+    bucket: r.aging_bucket,
+    companyId: r.company_id,
+    companyName: r.company_name,
+    campaignId: r.campaign_id,
+    campaignName: r.campaign_name,
+    currency: r.currency,
+    total: r.total,
+    paidAmount: r.paid_amount,
+    outstanding: r.outstanding,
+    dueOn: r.due_on,
+    // El único sitio donde un entero de la vista deja de ser texto.
+    daysOverdue: r.days_overdue,
+  };
+}
+
+function encodeReceivableCursor(r: RawReceivable): string {
+  return Buffer.from(`${r.rank}|${r.due_on}|${r.number}`, 'utf8').toString('base64url');
+}
+
+function decodeReceivableCursor(cursor: string): { rank: number; dueOn: string; number: string } {
+  const [rank, dueOn, number] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  if (!rank || !dueOn || !number || !/^[0-3]$/.test(rank) || !/^\d{4}-\d{2}-\d{2}$/.test(dueOn)) {
+    throw new Error('El cursor de paginación no es válido.');
+  }
+  return { rank: Number(rank), dueOn, number };
+}
+
+/**
+ * Cuentas por cobrar del workspace, ordenadas por urgencia de cobro
+ * (URGENCY_RANK). Lee la vista `receivables` (0010), que ya excluye
+ * borradores y anuladas y ya clasifica la mora; lo único que se le suma
+ * es el nombre de la campaña, que la vista no trae.
+ *
+ * Sin `bucket` devuelve todo lo que sigue abierto (`status <> 'paid'`),
+ * que es lo que suma el KPI «Por cobrar»; con `bucket` devuelve ese
+ * grupo, `'pagada'` incluida.
+ *
+ * Ninguna cifra se calcula en la pantalla: `outstanding` y
+ * `days_overdue` salen de la vista, el dinero viaja como texto y el
+ * único número que se convierte es `days_overdue`, aquí.
+ */
+export async function listReceivables(
+  tx: WorkspaceTx,
+  params: ListReceivablesParams = {},
+): Promise<ListReceivablesResult> {
+  const limit = Math.min(200, Math.max(1, params.limit ?? 50));
+  const bucket = params.bucket && RECEIVABLE_BUCKETS.includes(params.bucket) ? params.bucket : null;
+  const q = receivablesSearchTerm(params.q);
+  const values: unknown[] = [bucket, q];
+  const where: string[] = [
+    // Sin bucket, lo abierto; con bucket, ese grupo (aging_bucket = 'pagada' ⟺ status = 'paid').
+    `CASE WHEN $1::text IS NULL THEN v.status <> 'paid' ELSE v.aging_bucket = $1 END`,
+    `($2::text IS NULL OR v.company_name ILIKE '%' || ${ESCAPE_LIKE} || '%'
+                       OR v.number       ILIKE '%' || ${ESCAPE_LIKE} || '%')`,
+  ];
+
+  if (params.cursor) {
+    const c = decodeReceivableCursor(params.cursor);
+    values.push(c.rank, c.dueOn, c.number);
+    const [r, d, n] = [values.length - 2, values.length - 1, values.length];
+    // El mismo orden, escrito como desigualdad: el número va DESC, así
+    // que no cabe en una comparación de tuplas y se dice a mano.
+    where.push(`(${URGENCY_RANK} > $${r}::int
+                 OR (${URGENCY_RANK} = $${r}::int
+                     AND (v.due_on > $${d}::date
+                          OR (v.due_on = $${d}::date AND v.number < $${n}))))`);
+  }
+  values.push(limit + 1);
+
+  const { rows } = await tx.query<RawReceivable>(
+    `
+    SELECT v.id, v.number, v.status, v.aging_bucket,
+           v.company_id, v.company_name,
+           v.campaign_id, ca.name AS campaign_name,
+           v.currency, v.total::text, v.paid_amount::text, v.outstanding::text,
+           to_char(v.due_on, 'YYYY-MM-DD') AS due_on,
+           v.days_overdue::int AS days_overdue,
+           ${URGENCY_RANK} AS rank
+    FROM receivables v
+    LEFT JOIN campaign ca ON ca.id = v.campaign_id
+    WHERE ${where.join('\n      AND ')}
+    ORDER BY rank, v.due_on ASC, v.number DESC
+    LIMIT $${values.length}
+    `,
+    values,
+  );
+
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page.map(toReceivableRow),
+    nextCursor: rows.length > limit && last ? encodeReceivableCursor(last) : null,
+  };
+}
+
+// ---------------------------------------------------------------------
 // Escritura
 // ---------------------------------------------------------------------
 
@@ -464,10 +675,18 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
     throw new Error(`Las facturas van en la moneda del workspace (${wsCurrency}); recibió ${currency}.`);
   }
 
+  // Los porcentajes por defecto son los CONFIGURADOS (FIN-8), no las
+  // constantes de core: DEFAULT_TAX_RATE y DEFAULT_WITHHOLDING_RATE
+  // siguen existiendo como el valor de fábrica de un workspace nuevo, y
+  // es parseFinanceSettings quien los pone. Quien llama puede seguir
+  // pasando los suyos —el formulario lo hace, campo a campo—.
+  const finanzas = input.taxRate === undefined || input.withholdingRate === undefined
+    ? await getFinanceSettings(tx)
+    : null;
   const totals = computeInvoiceTotals({
     subtotal: input.subtotal,
-    taxRate: input.taxRate ?? DEFAULT_TAX_RATE,
-    withholdingRate: input.withholdingRate ?? DEFAULT_WITHHOLDING_RATE,
+    taxRate: input.taxRate ?? pctToRate(finanzas!.ivaPct),
+    withholdingRate: input.withholdingRate ?? pctToRate(finanzas!.retencionPct),
   });
 
   // La empresa tiene que estar vinculada a ESTE workspace: la FK de
@@ -607,9 +826,15 @@ export async function createInvoiceFromCampaign(
   if (!camp) throw new Error('La campaña no existe en este workspace.');
   if (!camp.amount) throw new Error(`La campaña «${camp.name}» no tiene monto acordado: escríbelo a mano.`);
 
-  const taxRate = overrides.taxRate ?? DEFAULT_TAX_RATE;
+  // La configuración manda también aquí: es el camino del botón
+  // «Facturar» de Campañas (CAM-1), y una factura creada desde una
+  // campaña no puede nacer con otros porcentajes que una escrita a mano.
+  // El plazo de la cotización, si lo hay, gana al del workspace: es lo
+  // que se le prometió a ESA marca.
+  const finanzas = await getFinanceSettings(tx);
+  const taxRate = overrides.taxRate ?? pctToRate(finanzas.ivaPct);
   const issuedOn = overrides.issuedOn ?? camp.today;
-  const dueOn = overrides.dueOn ?? addDays(issuedOn, camp.payment_terms_days ?? 30);
+  const dueOn = overrides.dueOn ?? addDays(issuedOn, camp.payment_terms_days ?? finanzas.plazoDias);
 
   return createInvoice(tx, {
     companyId: camp.company_id,
@@ -617,12 +842,218 @@ export async function createInvoiceFromCampaign(
     quoteId: camp.quote_id,
     subtotal: subtotalFromTotal(camp.amount, taxRate),
     taxRate,
-    withholdingRate: overrides.withholdingRate ?? DEFAULT_WITHHOLDING_RATE,
+    withholdingRate: overrides.withholdingRate ?? pctToRate(finanzas.retencionPct),
     issuedOn,
     dueOn,
     externalRef: overrides.externalRef ?? null,
     currency: camp.currency,
   });
+}
+
+// ---------------------------------------------------------------------
+// Configuración financiera del workspace (FIN-8)
+// ---------------------------------------------------------------------
+
+/**
+ * El bloque `settings.finanzas` tal como entra a la bitácora: igual que
+ * el guardado salvo la cuenta bancaria, que queda en sus cuatro últimos
+ * caracteres («••••8901»). Basta para ver que cambió y a cuál; el número
+ * entero ya está en la fila del workspace y no hace falta copiarlo.
+ */
+export function bloqueParaBitacora(bloque: Record<string, unknown>): Record<string, unknown> {
+  const cuenta = bloque.cuenta;
+  if (typeof cuenta !== 'string' || cuenta.length === 0) return bloque;
+  const digitos = cuenta.replace(/[^0-9A-Za-z]/g, '');
+  return { ...bloque, cuenta: `••••${digitos.slice(-4)}` };
+}
+
+/** Lo que devuelve un guardado: el bloque que quedó, su moneda y lo que hay que advertir. */
+export interface FinanceSettingsSaved {
+  settings: FinanceSettings;
+  /** La moneda que quedó en workspace.currency, en mayúsculas. */
+  currency: string;
+  /**
+   * La que había ANTES, en mayúsculas. Igual a `currency` si no cambió.
+   *
+   * Va aquí porque el aviso de abajo tiene que nombrar la moneda en la
+   * que están las facturas, no la nueva. Sin este dato, la pantalla que
+   * se repinta después de guardar ya tiene la moneda nueva en sus props
+   * y decía «tienes 17 facturas vivas en MXN» de unas que están en COP.
+   * Lo encontró la verificación en dev, no una prueba.
+   */
+  previousCurrency: string;
+  /**
+   * Cuántas facturas quedaron en una moneda distinta de la del
+   * workspace POR ESTE CAMBIO. Cambiar la moneda NO convierte nada
+   * (FIN-8 §0.3 F), y los KPI de /finanzas suman sin convertir: la
+   * pantalla lo dice.
+   *
+   * Es 0 cuando la moneda no cambió, aunque haya facturas viejas en
+   * otra. El aviso que alimenta dice «cambiar la moneda no las
+   * convierte», así que sacarlo en un guardado que solo tocó el IVA
+   * sería ruido, y encima lo etiqueta con previousCurrency —que ahí es
+   * la moneda propia—, o sea que nombraría la moneda en la que esas
+   * facturas NO están.
+   */
+  invoicesInOtherCurrency: number;
+}
+
+/** Se lanza si el UPDATE no tocó ninguna fila: la política de 0024 no está en esa base. */
+export class WorkspaceNotWritable extends Error {
+  constructor(workspaceId: string) {
+    super(
+      `No se pudo guardar la configuración del workspace ${workspaceId}: el UPDATE no tocó ninguna fila. ` +
+        'Falta la política workspace_update o el GRANT UPDATE (settings, currency) de la migración 0024 §7.6 ' +
+        'en esta base. Corre: make db.migrate',
+    );
+    this.name = 'WorkspaceNotWritable';
+  }
+}
+
+/**
+ * El bloque `settings.finanzas` del workspace de la transacción, ya
+ * tipado y con los valores por defecto puestos (core:
+ * parseFinanceSettings).
+ *
+ * ES LA ÚNICA PUERTA. FIN-1 (la cabecera y los porcentajes de una
+ * factura nueva), FIN-2 (la tasa que estampa cada `tax_reserve`), FIN-4
+ * (el correo de cobro) y FIN-6 leen de aquí; ninguno vuelve a escribir
+ * `19` ni `'0.11'` a mano. Hasta FIN-8, `settings.finanzas` lo escribían
+ * los seeds 0002 y 0003 y no lo leía nadie.
+ *
+ * El filtro es `id = current_workspace_id()` y no `tx.workspaceId`, por
+ * el mismo motivo que `getWorkspace` (queries/cimientos.ts): desde 0028
+ * una transacción con identidad ve además los espacios de su persona, y
+ * sin filtro `limit 1` podía devolver el bloque del vecino.
+ */
+export async function getFinanceSettings(tx: WorkspaceTx): Promise<FinanceSettings> {
+  const { rows } = await tx.query<{ finanzas: unknown }>(
+    "SELECT settings->'finanzas' AS finanzas FROM workspace WHERE id = current_workspace_id()",
+  );
+  if (rows.length === 0) {
+    throw new Error(
+      `El workspace ${tx.workspaceId} no existe en esta base o la RLS no lo deja ver. ` +
+        'Revisa que la base tenga el seed aplicado.',
+    );
+  }
+  // Sin bloque (un workspace nuevo, que nace con settings '{}') salen
+  // los valores por defecto. No es un error: es un workspace sin
+  // configurar, y la pantalla lo dice con una frase.
+  return parseFinanceSettings(rows[0]?.finanzas);
+}
+
+/**
+ * Guarda el bloque `finanzas` y, si viene, la moneda del workspace.
+ *
+ * El UPDATE es un MERGE POR LLAVE —`settings = settings || $1::jsonb`—,
+ * no un reemplazo del jsonb entero. `||` en jsonb es superficial:
+ * reemplaza la llave `finanzas` completa y deja intactas las hermanas.
+ * Hoy la hermana que hay es `taxRate`, que escribe y lee Cotizar
+ * (queries/cotizar/cotizacion.ts, getDefaultTaxRate). Escribir
+ * `settings` entero desde JavaScript haría que una pantalla de Finanzas
+ * borrara lo que guardó Cotizar en la petición de al lado.
+ *
+ * Los privilegios ya están: 0024 §7.6 concede a mc_app
+ * `UPDATE (name, slug, country, currency, timezone, locale,
+ * niche_slugs, settings, updated_at)` y la política `workspace_update`
+ * aísla la fila. `plan`, `kind` y `deleted_at` NO están en esa lista, a
+ * propósito, y esta función no los nombra.
+ *
+ * Cambiar la moneda no convierte nada. Se permite (un workspace mal
+ * configurado tiene que poder corregirse) y se devuelve cuántas
+ * facturas quedaron en otra, para que la pantalla lo advierta.
+ */
+export async function updateFinanceSettings(
+  tx: WorkspaceTx,
+  input: { settings: FinanceSettings; currency?: string },
+): Promise<FinanceSettingsSaved> {
+  const currency = input.currency?.trim().toUpperCase();
+  if (currency !== undefined && !/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`La moneda debe ser un código ISO-4217 de tres letras, no "${input.currency}".`);
+  }
+
+  // El antes, para la bitácora y para saber si la moneda cambió de
+  // verdad. Va con FOR UPDATE: entre leerlo y escribirlo no se cuela
+  // otro guardado que se pierda sin que nadie se entere.
+  const antes = await tx.query<{ finanzas: unknown; currency: string }>(
+    `SELECT settings->'finanzas' AS finanzas, currency
+     FROM workspace WHERE id = current_workspace_id() FOR UPDATE`,
+  );
+  const previo = antes.rows[0];
+  if (!previo) throw new WorkspaceNotWritable(tx.workspaceId);
+  const previas = parseFinanceSettings(previo.finanzas);
+  const monedaPrevia = previo.currency.toUpperCase();
+
+  const bloque = financeSettingsToJson(input.settings);
+  // `RETURNING id` y no rowCount: tx.query devuelve solo `rows`
+  // (client.ts, QueryResult). El id del workspace es un uuid, no un
+  // bigserial, así que devolverlo no rompe la regla de CIM-2 §3.
+  const actualizado = await tx.query<{ id: string }>(
+    `UPDATE workspace
+     SET settings = settings || $1::jsonb,
+         currency = coalesce($2, currency)
+     WHERE id = current_workspace_id()
+     RETURNING id`,
+    [JSON.stringify({ finanzas: bloque }), currency ?? null],
+  );
+  if (actualizado.rows.length === 0) throw new WorkspaceNotWritable(tx.workspaceId);
+
+  // La bitácora (ACC-2), en la MISMA transacción: si el UPDATE hace
+  // rollback, la fila se va con él. before/after llevan el bloque y la
+  // moneda, con dos cuidados: el correo lo quita sanitizeForAudit (la
+  // llave contiene «correo») y la cuenta bancaria viaja enmascarada
+  // (bloqueParaBitacora). Que alguien cambie la cuenta a la que pagan
+  // las marcas es justo lo que la bitácora tiene que dejar ver, pero no
+  // hace falta el número entero para verlo.
+  await audit(tx, {
+    action: 'workspace.settings_updated',
+    entityType: 'workspace',
+    entityId: tx.workspaceId,
+    before: { finanzas: bloqueParaBitacora(financeSettingsToJson(previas)), currency: monedaPrevia },
+    after: { finanzas: bloqueParaBitacora(bloque), currency: currency ?? monedaPrevia },
+  });
+
+  const monedaFinal = currency ?? monedaPrevia;
+  // Solo se cuenta si la moneda cambió: ver el JSDoc de
+  // invoicesInOtherCurrency. Y de paso es una consulta menos en el
+  // guardado normal, que es el que pasa siempre.
+  const cambio = monedaFinal !== monedaPrevia;
+  const otras = cambio ? await countInvoicesInOtherCurrency(tx, monedaFinal) : 0;
+
+  return {
+    settings: parseFinanceSettings(bloque),
+    currency: monedaFinal,
+    previousCurrency: monedaPrevia,
+    invoicesInOtherCurrency: otras,
+  };
+}
+
+/**
+ * Cuántas facturas vivas hay en una moneda distinta de la indicada. Es
+ * el número que el guardado devuelve DESPUÉS de cambiar la moneda: las
+ * que se quedaron atrás. Las anuladas no cuentan: ya no suman en ningún
+ * KPI.
+ */
+export async function countInvoicesInOtherCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) <> $1 AND status <> 'void'",
+    [currency.trim().toUpperCase()],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Cuántas facturas vivas hay EN esa moneda. Es lo que la pantalla de
+ * configuración pregunta al pintar: son las que se quedarían atrás si
+ * alguien cambia la moneda del workspace, y decirlo antes es la mitad
+ * del punto de la advertencia.
+ */
+export async function countLiveInvoicesInCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) = $1 AND status <> 'void'",
+    [currency.trim().toUpperCase()],
+  );
+  return rows[0]?.n ?? 0;
 }
 
 // ---------------------------------------------------------------------
