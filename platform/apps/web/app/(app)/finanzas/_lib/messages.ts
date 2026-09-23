@@ -48,7 +48,6 @@ export const MESSAGES = {
       impuestos: "Impuestos",
       neto: "Neto",
       acumulado: "Acumulado",
-      detalle: "Detalle",
       sinCobros: "Sin cobros previstos",
       verDetalle: (n: number) => `${n} ${n === 1 ? "cobro" : "cobros"}`,
     },

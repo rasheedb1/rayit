@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { projectCashflow, toCents, type Cashflow, type CobroDeLaSemana, type SemanaFlujo } from "@mc/core";
+import { addDecimal, projectCashflow, toCents, type Cashflow, type CobroDeLaSemana, type Decimal, type SemanaFlujo } from "@mc/core";
 import { getCashflowInputs } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/ui/chart-card";
-import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor, type Formatter } from "@/lib/format";
@@ -20,10 +20,13 @@ const T = MESSAGES.flujo;
 
 /**
  * Lo que la barra «Gastos e impuestos» enseña: los dos egresos juntos,
- * como el mock. La tabla los separa en dos columnas.
+ * como el mock. La tabla los separa en dos columnas. La suma la hace
+ * `addDecimal` (centavos en BigInt) y no `Number(a) + Number(b)`:
+ * aunque el resultado acabe en píxeles, sumar dinero en coma flotante
+ * en esta capa es exactamente la costumbre que el repo no quiere.
  */
-function egresosDe(s: SemanaFlujo): string {
-  return String(Number(s.gastos) + Number(s.impuestos));
+function egresosDe(s: SemanaFlujo): Decimal {
+  return addDecimal(s.gastos, s.impuestos);
 }
 
 /**
@@ -42,11 +45,19 @@ function paraElGrafico(c: Cashflow) {
   };
 }
 
-/** El detalle de una semana: qué factura y qué negocio la componen. */
+/**
+ * El detalle de una semana: qué factura y qué negocio la componen. Va
+ * DENTRO de la celda de la semana y no en una columna propia: a 400 px
+ * una séptima columna empujaba el acumulado —la cifra que más importa—
+ * fuera de la pantalla, y `DataTable` no tiene filas expandibles
+ * (cambiarle la API pide un PR aparte, components/ui/README.md).
+ * `<details>` nativo: sin JavaScript, sin estado y accesible por
+ * teclado.
+ */
 function Detalle({ cobros, f }: { cobros: CobroDeLaSemana[]; f: Formatter }) {
-  if (cobros.length === 0) return <span className="text-fg-3">{T.tabla.sinCobros}</span>;
+  if (cobros.length === 0) return <span className="block text-xs text-fg-3">{T.tabla.sinCobros}</span>;
   return (
-    <details>
+    <details className="mt-0.5">
       <summary className="cursor-pointer list-none text-xs text-fg-2 underline decoration-line underline-offset-2 hover:text-fg">
         {T.tabla.verDetalle(cobros.length)}
       </summary>
@@ -69,7 +80,17 @@ const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
   {
     key: "semana",
     header: T.tabla.semana,
-    render: (s) => <CellMain sub={f.dayMonthRange(s.inicio, s.fin)}>{f.dateRange(s.inicio, s.fin)}</CellMain>,
+    // Ancho fijo: sin él, a 400 px la columna se encoge hasta partir
+    // «21–27 sep» en dos líneas y «Sin cobros previstos» en tres.
+    width: "11rem",
+    render: (s) => (
+      // No es `CellMain`: su `sub` envuelve el contenido en un <span>, y
+      // un <details> dentro de un <span> no es HTML válido.
+      <span className="block min-w-0">
+        <span className="block whitespace-nowrap font-medium text-ink">{f.dateRange(s.inicio, s.fin)}</span>
+        <Detalle cobros={s.detalle} f={f} />
+      </span>
+    ),
   },
   { key: "cobros", header: T.tabla.cobros, align: "num", render: (s) => f.money(s.cobros, undefined, { mode: "full" }) },
   { key: "gastos", header: T.tabla.gastos, align: "num", render: (s) => f.money(s.gastos, undefined, { mode: "full" }) },
@@ -86,7 +107,6 @@ const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
     align: "num",
     render: (s) => <span className={toCents(s.acumulado) < 0n ? "text-bad" : ""}>{f.money(s.acumulado, undefined, { mode: "full" })}</span>,
   },
-  { key: "detalle", header: T.tabla.detalle, render: (s) => <Detalle cobros={s.detalle} f={f} /> },
 ];
 
 /**

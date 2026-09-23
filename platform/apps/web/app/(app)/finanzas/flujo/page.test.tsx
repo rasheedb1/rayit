@@ -78,6 +78,11 @@ describe("con cobros y gastos", () => {
     const tabla = screen.getByRole("table");
     // Ocho filas de datos, más la de cabecera.
     expect(within(tabla).getAllByRole("row")).toHaveLength(9);
+    // Seis columnas y no siete: el detalle vive dentro de la celda de
+    // la semana para que a 400 px el acumulado siga en pantalla.
+    expect(within(tabla).getAllByRole("columnheader").map((th) => th.textContent)).toEqual([
+      "Semana", "Cobros", "Gastos", "Impuestos", "Neto", "Acumulado",
+    ]);
     expect(within(tabla).getByText("21–27 sep")).toBeInTheDocument();
     expect(within(tabla).getByText("9–15 nov")).toBeInTheDocument();
   });
