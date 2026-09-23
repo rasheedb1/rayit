@@ -31,12 +31,12 @@ import {
   optOutContact,
   updateCompany,
   updateContact,
-  type ContactSource,
-  type LostReason,
-  type Relationship,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
+import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { decodificarCsv } from "@/lib/csv";
+import { formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField as field, type ActionState } from "@/lib/forms";
 import { withWorkspace } from "./_lib/db";
 import { parseBrandCsv, type CsvLineError } from "./_lib/csv";
@@ -76,6 +76,17 @@ const STAGE_ID_RE = /^[a-z_]{1,40}$/;
 
 const V = MESSAGES.validacion;
 const E = MESSAGES.errores;
+
+/**
+ * «El monto no puede pasar de COP 999.999.999.999,99»: el tope de
+ * numeric(14,2), en la moneda y el locale del espacio. Sin él, un monto
+ * con ceros de más llegaba a la base, que lo rechazaba con un error
+ * genérico que no señalaba el campo (pulido r8). Solo se lee el espacio
+ * cuando hace falta el texto.
+ */
+async function montoMaximoError(): Promise<string> {
+  return V.amountMax(formatterFor(await getCurrentWorkspace()).money(MONTO_MAXIMO, undefined, { mode: "full" }));
+}
 
 /**
  * El texto de un error: el de su código si es de Ventas, el genérico de
@@ -161,6 +172,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
+  if (excedeMontoMaximo(v.budget)) return { errors: { budget: await montoMaximoError() } };
 
   let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null };
   try {
@@ -301,7 +313,7 @@ export async function descartarSenal(_prev: VentasState, formData: FormData): Pr
 // Empresas
 // ---------------------------------------------------------------------
 
-const relationshipField = z.string().refine((v) => RELATIONSHIPS.includes(v as Relationship), V.relationship);
+const relationshipField = z.enum(RELATIONSHIPS, V.relationship);
 
 /** La ficha de una empresa: lo que se escribe al crearla y lo que se corrige al editarla. */
 const fichaSchema = z.object({
@@ -356,7 +368,7 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
         country: v.country || null,
         city: v.city || null,
         industry: v.industry || null,
-        relationship: v.relationship as Relationship,
+        relationship: v.relationship,
         notes: v.notes || null,
         // El nombre por el que se preguntó: «Crear igual» vale para él y
         // no para otro que se escriba después (pulido r8).
@@ -445,7 +457,7 @@ export async function cambiarRelacion(_prev: VentasState, formData: FormData): P
   try {
     await withWorkspace((tx) =>
       updateCompany(tx, companyId, {
-        relationship: relationship as Relationship,
+        relationship: parsed.data,
         ...(tocaResponsable ? { ownerUserId: owner || null } : {}),
       }),
     );
@@ -461,7 +473,7 @@ export async function cambiarRelacion(_prev: VentasState, formData: FormData): P
 const negocioSchema = z.object({
   companyId: z.string().regex(UUID_RE, V.company),
   name: z.string().trim().min(1, V.dealName).max(120, V.dealName),
-  amount: z.string().trim().refine((v) => v === "" || (DECIMAL_RE.test(v) && v.length <= 15), V.amount),
+  amount: z.string().trim().refine((v) => v === "" || DECIMAL_RE.test(v), V.amount),
 });
 
 /**
@@ -478,6 +490,7 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
+  if (excedeMontoMaximo(v.amount)) return { errors: { amount: await montoMaximoError() } };
   try {
     await withWorkspace((tx) =>
       createDeal(tx, { companyId: v.companyId, name: v.name, amount: v.amount || null, nextAction: MESSAGES.radar.pitchAction }),
@@ -499,7 +512,7 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
 const contactoSchema = z
   .object({
     companyId: z.string().regex(UUID_RE, V.company),
-    source: z.string().refine((v) => CONTACT_SOURCES.includes(v as ContactSource), V.source),
+    source: z.enum(CONTACT_SOURCES, V.source),
     fullName: optionalText(200, V.campos.name),
     roleTitle: optionalText(120, V.campos.role),
     email: z
@@ -550,7 +563,7 @@ export async function crearContacto(_prev: VentasState, formData: FormData): Pro
     await withWorkspace((tx) =>
       createContact(tx, {
         companyId: v.companyId,
-        source: v.source as ContactSource,
+        source: v.source,
         fullName: v.fullName || null,
         roleTitle: v.roleTitle || null,
         email: v.email || null,
@@ -583,7 +596,7 @@ export async function editarContacto(_prev: VentasState, formData: FormData): Pr
   try {
     await withWorkspace((tx) =>
       updateContact(tx, contactId, {
-        source: v.source as ContactSource,
+        source: v.source,
         fullName: v.fullName || null,
         roleTitle: v.roleTitle || null,
         email: v.email || null,
@@ -625,6 +638,9 @@ export interface MoverResult {
   closedQuotes?: string[];
 }
 
+/** El motivo de pérdida: uno de LOST_REASONS, o nada si la etapa no lo pide. */
+const lostReasonField = z.enum(LOST_REASONS).optional();
+
 /** La forma de `opts` en moverNegocio: nada más que dos textos opcionales. */
 const moverOptsSchema = z.strictObject({ lostReason: z.string().optional(), amount: z.string().optional() }).nullish();
 
@@ -665,14 +681,18 @@ export async function moverNegocio(
     return { ok: false, message: MESSAGES.pipeline.moveError };
   }
   const { lostReason, amount: rawAmount } = shape.data ?? {};
-  if (lostReason !== undefined && !LOST_REASONS.includes(lostReason as LostReason)) {
-    return { ok: false, message: V.lostReason };
-  }
+  const reasonParsed = lostReasonField.safeParse(lostReason);
+  if (!reasonParsed.success) return { ok: false, message: V.lostReason };
+  const reason = reasonParsed.data ?? null;
   const amount = rawAmount?.trim() || null;
-  if (amount !== null && !(DECIMAL_RE.test(amount) && amount.length <= 15)) {
+  if (amount !== null && !DECIMAL_RE.test(amount)) {
     return { ok: false, message: V.amount };
   }
-  const reason = lostReason === undefined ? null : (lostReason as LostReason);
+  // Un monto que no cabe en numeric(14,2) se dice aquí, con el tope, y
+  // no como el genérico de «no se pudo mover» (pulido r8).
+  if (amount !== null && excedeMontoMaximo(amount)) {
+    return { ok: false, message: await montoMaximoError() };
+  }
   let closedQuotes: string[];
   try {
     const res = await withWorkspace((tx) =>

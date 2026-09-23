@@ -37,6 +37,9 @@ const PUBLICADO = formatDate(new Date().toISOString(), "long");
  * tarjeta. Las pantallas del producto ya no enlazan su plan desde la
  * cabecera (pulido r8): era un artefacto del equipo delante de la
  * creadora, así que el camino al plan de un módulo es este.
+ *
+ * Esta página es del marco de CIM-4 (Nicolás): el cambio del enlace lo
+ * hizo Rasheed en el pulido r8 y espera su visto bueno (nota de VEN-1).
  */
 function ModuleCard({ m }: { m: ModuleDef }) {
   const st = stats(m.prefix ? storiesFor(m.prefix) : []);

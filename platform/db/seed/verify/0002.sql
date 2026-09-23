@@ -346,12 +346,13 @@ FROM deal_pipeline
 ORDER BY stage_position, amount DESC;
 
 -- (j) Radar: 5 por revisar —las cinco del mock, que su Resumen cita
---     con todas las letras («Hay 5 señales por revisar»)—, 6 aceptadas
---     (cada una con su deal), 1 duplicada, 1 descartada con motivo.
---     dedupe_key única.
+--     con todas las letras («Hay 5 señales por revisar»), y una de ellas
+--     de una marca que no está en el CRM (sin company_id), para enseñar
+--     aceptar una marca nueva (pulido r8)—, 6 aceptadas (cada una con su
+--     deal), 1 duplicada, 1 descartada con motivo. dedupe_key única.
 SELECT 'j_radar' AS check_id, status, count(*) AS senales,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) AS con_deal,
-       CASE status WHEN 'pending' THEN count(*) = 5
+       CASE status WHEN 'pending' THEN count(*) = 5 AND count(*) FILTER (WHERE s.company_id IS NULL) = 1
                    WHEN 'accepted' THEN count(*) = 6 AND count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) = 6
                    WHEN 'duplicate' THEN count(*) = 1
                    WHEN 'discarded' THEN count(*) = 1 AND bool_and(discard_reason IS NOT NULL)

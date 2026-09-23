@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
 import { crearContacto, darDeBaja, editarContacto } from "../../actions";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { SOURCE_META, SOURCE_OPTIONS } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
 import { useVentasForm } from "../../_lib/use-ventas-form";

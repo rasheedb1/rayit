@@ -7,7 +7,7 @@ import { Field, Input, Select } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
 import { fijarSiguienteAccion, marcarHecha } from "../empresas/actions";
 import { FICHA } from "../empresas/messages";
-import { Aviso } from "../_componentes/aviso";
+import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
 import { useVentasForm } from "../_lib/use-ventas-form";
 import type { SeguimientoContexto, SiguienteAccionData } from "./datos";
@@ -121,7 +121,7 @@ export function SiguienteAccion({
           </form>
         )}
       </div>
-      <Aviso message={hecha.state.message} notice={notice} className="mt-2 text-xs" />
+      <Aviso message={hecha.state.message} notice={notice} size="xs" className="mt-2" />
     </div>
   );
 }
@@ -167,7 +167,7 @@ function Editor({
     >
       <input type="hidden" name="dealId" value={data.dealId} />
       <input type="hidden" name="dueDate" value={dueDate} />
-      {notice && <Aviso notice={notice} className="mb-3 text-xs" />}
+      {notice && <Aviso notice={notice} size="xs" className="mb-3" />}
       <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.2fr)]"}`}>
         <Field label={t.action} error={errors.action} required htmlFor={id("action")}>
           <Input
@@ -189,7 +189,7 @@ function Editor({
           <Select name="responsibleUserId" defaultValue={data.form.responsibleUserId} placeholder={t.noResponsible} options={ownerOptions} />
         </Field>
       </div>
-      <Aviso message={state.message} className="mt-3 text-xs" />
+      <Aviso message={state.message} size="xs" className="mt-3" />
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button type="submit" size="sm" variant="primary" loading={pending}>
           {t.save}

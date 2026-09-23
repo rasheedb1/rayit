@@ -211,6 +211,35 @@ describe("PipelineBoard", () => {
     expect(moverNegocio).toHaveBeenCalledWith(DEAL, "ganado");
   });
 
+  it("un monto ganado que no cabe en numeric(14,2) se dice en el campo, con el tope, y no llega al servidor (pulido r8)", async () => {
+    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} locale="es-CO" />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
+    });
+    const form = screen.getByRole("form", { name: "Por cuánto ganas el negocio con Café Alma" });
+    const monto = within(form).getByLabelText(/¿Por cuánto lo ganaste\?/);
+    fireEvent.change(monto, { target: { value: "1000000000000" } });
+    fireEvent.blur(monto);
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Ganado»" }));
+    });
+    expect(within(form).getByText("El monto no puede pasar de COP 999.999.999.999,99.")).toBeInTheDocument();
+    expect(document.activeElement).toBe(monto);
+    expect(moverNegocio).not.toHaveBeenCalled();
+  });
+
+  it("después de mover con el menú, el foco vuelve al menú de la tarjeta y no cae en <body> (pulido r8)", async () => {
+    moverNegocio.mockResolvedValue({ ok: true });
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
+    });
+    // La tarjeta se desmontó de una columna y se montó en otra (aquí, sin
+    // revalidar, vuelve a la suya): el foco la sigue a donde quede.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByLabelText("Mover «Café Alma» a otra etapa"));
+  });
+
   it("un negocio perdido dice por qué", () => {
     render(
       <PipelineBoard

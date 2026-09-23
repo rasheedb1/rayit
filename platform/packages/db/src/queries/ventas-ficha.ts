@@ -17,7 +17,7 @@
  * como VentasError: la web los traduce con su messages.ts.
  */
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { ACTIVITY_KINDS } from '../schema/ventas.ts';
+import type { ACTIVITY_KINDS } from '../schema/ventas.ts';
 import { CompanyNotFound, DealNotFound, PITCH_DUE_HOUR, WORKSPACE_TZ } from './ventas.ts';
 
 // ---------------------------------------------------------------------

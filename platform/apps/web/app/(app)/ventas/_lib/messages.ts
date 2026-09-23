@@ -519,6 +519,8 @@ export const MESSAGES = {
     contactAtLeastOne: "Escribe al menos el nombre, el correo o el Instagram.",
     dealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     amount: "El monto no es válido: solo números, con hasta dos decimales.",
+    /** El tope de numeric(14,2), ya formateado en la moneda del espacio. */
+    amountMax: (max: string) => `El monto no puede pasar de ${max}.`,
   },
 
   /**

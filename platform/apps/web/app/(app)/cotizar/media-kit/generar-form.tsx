@@ -7,6 +7,7 @@ import { Field, Input } from "@/components/ui/field";
 import type { ActionState } from "@/lib/forms";
 import { generarMediaKit } from "../actions";
 import { MESSAGES } from "../messages";
+import { Aviso } from "../../_lib/aviso";
 
 /**
  * Generar un media kit: contraseña y vencimiento opcionales, como el
@@ -27,11 +28,7 @@ export function GenerarMediaKitForm({ creatorId }: { creatorId: string }) {
     <form action={formAction} className="min-w-0 rounded-md border border-border p-4">
       <input type="hidden" name="creatorId" value={creatorId} />
       <h2 className="text-sm font-semibold">{t.opciones.title}</h2>
-      {state.message && (
-        <p role="alert" className="mt-3 rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-          {state.message}
-        </p>
-      )}
+      <Aviso message={state.message} className="mt-3" />
       <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label={t.opciones.password} help={t.opciones.passwordAyuda} error={errors.password} htmlFor="mk-password">
           <span className="flex gap-2">

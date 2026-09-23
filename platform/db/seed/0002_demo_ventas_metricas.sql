@@ -1082,12 +1082,19 @@ VALUES
   -- aviso de Resumen lo dice con todas las letras («Hay 5 señales por
   -- revisar en el radar»); con cuatro, la pantalla que RES-1 copie del
   -- mock y el radar dirían números distintos el primer día.
-  ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', 'meta_ad_library',
+  -- Es la única de una marca que NO está en el CRM (sin company_id: el
+  -- nombre y el dominio van en evidence, como una señal que el radar
+  -- trae de fuera). Las otras cuatro son de marcas con negocio abierto, y
+  -- sin esta la demo no enseñaba el camino principal de VEN-2: aceptar
+  -- una marca nueva crea la empresa y el negocio con «Enviar pitch»
+  -- (pulido r8). Molino Andino es inventada, como todas las del seed.
+  ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', NULL, 'meta_ad_library',
    '5 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 4, 'FMDD') || ' '
-     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · salsas',
-   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=saborescaseros',
-   jsonb_build_object('active_ads', 5, 'country', 'CO', 'category', 'salsas', 'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
-   'meta_ad_library:saborescaseros.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · harinas',
+   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=molinoandino',
+   jsonb_build_object('company_name', 'Molino Andino', 'domain', 'molinoandino.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
+                      'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
+   'meta_ad_library:molinoandino.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -1104,12 +1111,16 @@ VALUES
 -- (titular, fecha, evidence y dedupe_key salen de la misma
 -- CURRENT_DATE), para que nunca diga "hace 2 horas" de algo de hace un
 -- mes. Las aceptadas, la duplicada y la descartada ya ocurrieron y no
--- se tocan.
+-- se tocan. company_id y evidence_url también se refrescan: así una base
+-- sembrada antes del pulido r8, con la quinta todavía de Sabores
+-- Caseros, pasa a la marca nueva al volver a sembrar.
 ON CONFLICT (id) DO UPDATE SET
-  headline_es = EXCLUDED.headline_es,
-  detected_at = EXCLUDED.detected_at,
-  evidence    = EXCLUDED.evidence,
-  dedupe_key  = EXCLUDED.dedupe_key
+  company_id   = EXCLUDED.company_id,
+  headline_es  = EXCLUDED.headline_es,
+  detected_at  = EXCLUDED.detected_at,
+  evidence_url = EXCLUDED.evidence_url,
+  evidence     = EXCLUDED.evidence,
+  dedupe_key   = EXCLUDED.dedupe_key
 WHERE signal.status = 'pending';
 
 
@@ -1620,8 +1631,8 @@ UPDATE app_user
 --   company                      8
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
---   signal                      13  (6 accepted, 5 pending —las cinco del mock—,
---                                    1 duplicate, 1 discarded)
+--   signal                      13  (6 accepted, 5 pending —las cinco del mock, una
+--                                    de una marca fuera del CRM—, 1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
 --   activity                    47  (38 históricas + 9 de seguimiento, sección 11b)

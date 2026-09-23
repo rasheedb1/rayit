@@ -11,11 +11,16 @@ const updateContact = vi.fn();
 const moveDeal = vi.fn();
 const importSignals = vi.fn();
 const createCompany = vi.fn();
+const createDeal = vi.fn();
+const createSignal = vi.fn();
 const revalidatePath = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("./_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
+vi.mock("@/lib/workspace/settings", () => ({
+  getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
+}));
 vi.mock("@mc/db/queries/ventas", async (original) => ({
   ...(await original<typeof import("@mc/db/queries/ventas")>()),
   updateCompany: (...a: unknown[]) => updateCompany(...a),
@@ -23,11 +28,13 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
   moveDeal: (...a: unknown[]) => moveDeal(...a),
   importSignals: (...a: unknown[]) => importSignals(...a),
   createCompany: (...a: unknown[]) => createCompany(...a),
+  createDeal: (...a: unknown[]) => createDeal(...a),
+  createSignal: (...a: unknown[]) => createSignal(...a),
 }));
 
 import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./_lib/messages";
-import { cambiarRelacion, cargarLista, crearEmpresa, editarContacto, editarEmpresa, moverNegocio } from "./actions";
+import { anotarSenal, cambiarRelacion, cargarLista, crearEmpresa, crearNegocio, editarContacto, editarEmpresa, moverNegocio } from "./actions";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
 const CONTACT = "00000007-0000-4000-8000-000000000001";
@@ -49,6 +56,8 @@ beforeEach(() => {
   moveDeal.mockReset().mockResolvedValue({});
   importSignals.mockReset();
   createCompany.mockReset().mockResolvedValue(COMPANY);
+  createDeal.mockReset().mockResolvedValue(DEAL);
+  createSignal.mockReset().mockResolvedValue({ duplicate: false, reason: null, companyId: null });
   revalidatePath.mockReset();
 });
 
@@ -205,6 +214,14 @@ describe("moverNegocio", () => {
     expect(moveDeal).toHaveBeenCalledTimes(1);
   });
 
+  it("un monto que no cabe en numeric(14,2) se dice con el tope y no llega a la base (pulido r8)", async () => {
+    const r = await moverNegocio(DEAL, "ganado", { amount: "1000000000000" });
+    expect(r).toEqual({ ok: false, message: "El monto no puede pasar de COP 999.999.999.999,99." });
+    expect(moveDeal).not.toHaveBeenCalled();
+    // El tope mismo sí pasa.
+    expect(await moverNegocio(DEAL, "ganado", { amount: "999999999999.99" })).toEqual({ ok: true });
+  });
+
   it("ganar sin monto: la base no lo mueve y se dice por qué", async () => {
     moveDeal.mockRejectedValue(new VentasError("AmountRequired"));
     const r = await moverNegocio(DEAL, "ganado");
@@ -254,5 +271,19 @@ describe("crearEmpresa con un nombre que ya está en el CRM (pulido r7)", () => 
     await crearEmpresa({}, form({ ...nueva, sameName: "Zumos Ñandú" }));
     // createCompany solo lo respeta si la empresa que choca tiene ese brand_key.
     expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ allowSameNameAs: "Zumos Ñandú" }));
+  });
+});
+
+describe("el tope de los montos de Ventas (pulido r8)", () => {
+  it("«Nuevo negocio» con ceros de más: el error va en el campo del monto", async () => {
+    const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Renovación", amount: "1000000000000" }));
+    expect(r.errors).toEqual({ amount: "El monto no puede pasar de COP 999.999.999.999,99." });
+    expect(createDeal).not.toHaveBeenCalled();
+  });
+
+  it("«Anotar marca» con un presupuesto que no cabe: el error va en el campo del presupuesto", async () => {
+    const r = await anotarSenal({}, form({ companyName: "Fresko", headline: "Pauta en TikTok", fit: "", budget: "99999999999999" }));
+    expect(r.errors).toEqual({ budget: "El monto no puede pasar de COP 999.999.999.999,99." });
+    expect(createSignal).not.toHaveBeenCalled();
   });
 });

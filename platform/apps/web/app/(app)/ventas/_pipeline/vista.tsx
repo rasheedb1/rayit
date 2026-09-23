@@ -100,7 +100,7 @@ export function PipelineView({
       <FormaSwitch forma={forma} />
 
       {forma === "tablero" ? (
-        <PipelineBoard deals={boardDeals} stages={boardStages} ctx={seguimiento?.ctx} />
+        <PipelineBoard deals={boardDeals} stages={boardStages} ctx={seguimiento?.ctx} locale={f.locale} />
       ) : (
         <PipelineList deals={boardDeals} ctx={seguimiento?.ctx} />
       )}

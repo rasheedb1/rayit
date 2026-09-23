@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { anotarSenal, cargarLista } from "../actions";
-import { Aviso } from "../_componentes/aviso";
+import { Aviso } from "../../_lib/aviso";
 import type { CsvLineError } from "../_lib/csv";
 import { MESSAGES } from "../_lib/messages";
 import type { CountryOption } from "../_lib/paises";

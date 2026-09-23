@@ -37,7 +37,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-dvh bg-bg font-sans text-fg antialiased">
-        {/* Respaldo del script: el 404 de notFound() monta un <html> sin data-theme. */}
+        {/* Respaldo del script: el 404 de notFound() monta un <html> sin data-theme.
+            Montado por Rasheed en el pulido r8 dentro del marco de CIM-4 (de Nicolás):
+            pendiente de su visto bueno, anotado en la nota de VEN-1 del backlog. */}
         <ThemeSync />
         {children}
       </body>

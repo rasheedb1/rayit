@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { MESSAGES } from "../../_lib/messages";
 import type { CountryOption } from "../../_lib/paises";
 import { EmpresaForm, type EmpresaEditable } from "../nueva/form";

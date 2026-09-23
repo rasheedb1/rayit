@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
+import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Pill, type PillKind } from "@/components/ui/pill";
+import { formatMoney } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
-import { Aviso } from "../_componentes/aviso";
+import { Aviso } from "../../_lib/aviso";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 import type { SeguimientoContexto, SiguienteAccionData } from "../_seguimiento/datos";
@@ -81,8 +83,21 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * todavía: pregunta «¿Por cuánto lo ganaste?» en la tarjeta. Sin monto el
  * servidor no lo mueve (AmountRequired): si no, «N cerrados» subía y
  * «Ganado este trimestre» no, y las dos cifras dejaban de cuadrar.
+ *
+ * `locale` es el del espacio: con él se escribe el tope del monto ganado
+ * cuando alguien pone ceros de más (pulido r8).
  */
-export function PipelineBoard({ deals, stages, ctx }: { deals: BoardDeal[]; stages: BoardStage[]; ctx?: SeguimientoContexto }) {
+export function PipelineBoard({
+  deals,
+  stages,
+  ctx,
+  locale,
+}: {
+  deals: BoardDeal[];
+  stages: BoardStage[];
+  ctx?: SeguimientoContexto;
+  locale?: string;
+}) {
   const t = MESSAGES.pipeline;
   const [optimistic, addOptimistic] = useOptimistic(deals, (current: BoardDeal[], move: Move) => applyMove(current, move));
   const [pending, startTransition] = useTransition();
@@ -197,6 +212,7 @@ export function PipelineBoard({ deals, stages, ctx }: { deals: BoardDeal[]; stag
                           deal={deal}
                           stages={stages}
                           ctx={ctx}
+                          locale={locale}
                           dragging={dragging === deal.id}
                           onDragStart={() => setDragging(deal.id)}
                           onDragEnd={() => {
@@ -232,6 +248,7 @@ function DealCard({
   deal,
   stages,
   ctx,
+  locale,
   dragging,
   onDragStart,
   onDragEnd,
@@ -243,6 +260,7 @@ function DealCard({
   deal: BoardDeal;
   stages: BoardStage[];
   ctx?: SeguimientoContexto;
+  locale?: string;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -289,6 +307,13 @@ function DealCard({
     if (!amount || amount.startsWith("-")) {
       setAskError(t.won.required);
       // Con el error, el foco vuelve al campo que lo tiene, no se queda en el botón.
+      document.getElementById(amountId)?.focus();
+      return;
+    }
+    // numeric(14,2): con ceros de más la base lo rechazaría. Se dice en
+    // el campo, con el tope, y el foco se queda en él (pulido r8).
+    if (excedeMontoMaximo(amount)) {
+      setAskError(MESSAGES.validacion.amountMax(formatMoney(MONTO_MAXIMO, deal.currency, { mode: "full", locale })));
       document.getElementById(amountId)?.focus();
       return;
     }

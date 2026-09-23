@@ -20,6 +20,7 @@ import { AvisoEnviada } from "../aviso-enviada";
 import { EliminarBorrador } from "../eliminar";
 import { EnviarCotizacion } from "../enviar";
 import { VentanaCampana } from "../ventana";
+import { Aviso } from "../../../../_lib/aviso";
 
 // El título de la pestaña lo pone layout.tsx con el número y la marca
 // (generateMetadata): uno estático aquí lo pisaría (pulido r8).
@@ -169,11 +170,7 @@ export default async function CotizacionPage({ params, searchParams }: Props) {
         }
       />
 
-      {error && (
-        <p role="alert" className="mb-6 rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-          {error}
-        </p>
-      )}
+      <Aviso message={error} className="mb-6" />
       {enviada && !esBorrador && <AvisoEnviada enviada={enviada} enlace={enlace} />}
       {vivas.length > 0 && (
         <div

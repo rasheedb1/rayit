@@ -7,6 +7,7 @@ import { Field } from "@/components/ui/field";
 import type { ActionState } from "@/lib/forms";
 import { crearCampanaConVentana } from "../../actions";
 import { MESSAGES } from "../../messages";
+import { Aviso } from "../../../_lib/aviso";
 
 /**
  * COT-4 · La salida de una cotización que se aceptó sin la ventana de la
@@ -23,11 +24,7 @@ export function VentanaCampana({ id }: { id: string }) {
 
   return (
     <form action={formAction} className="mt-3 space-y-3" noValidate>
-      {state.message && (
-        <p role="alert" className="rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-xs text-bad">
-          {state.message}
-        </p>
-      )}
+      <Aviso message={state.message} size="xs" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
         <Field label={t.ventanaDesde} required error={errors.startsOn} htmlFor={`ventana-desde-${id}`}>
           <FechaInput name="startsOn" value={desde} onChange={setDesde} />

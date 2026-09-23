@@ -62,10 +62,10 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(rol?.['bypassRls'], true);
 
   const seeded = h.worker.definitions.filter((d) => !d.id.startsWith('test.'));
-  assert.equal(seeded.length, 21, 'las 21 definiciones de 0009');
+  assert.equal(seeded.length, 22, 'las 21 definiciones de 0009 y sales.follow_ups de 0034');
 
   const registered = records.filter((r) => r['msg'] === 'job registrado');
-  assert.equal(registered.length, 21 + 6);
+  assert.equal(registered.length, 22 + 6);
   const byJob = new Map(registered.map((r) => [r['job'], r]));
   assert.equal(byJob.get('oauth.refresh')?.['handler'], 'sí');
   assert.equal(byJob.get('oauth.refresh')?.['cron'], '*/15 * * * *');
@@ -74,10 +74,10 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
-  assert.equal(listo?.['withHandler'], 7);       // oauth.refresh + collect.account_metrics + 5 de prueba (test.off está apagado)
+  assert.equal(listo?.['withHandler'], 8);       // oauth.refresh + collect.account_metrics + sales.follow_ups + 5 de prueba (test.off está apagado)
   assert.equal(listo?.['withoutHandler'], 19);
   assert.equal(listo?.['disabled'], 1);
-  assert.equal(listo?.['crons'], 17);           // las 21 menos las 4 de video
+  assert.equal(listo?.['crons'], 18);           // las 22 menos las 4 de video
 
   // Sin handler → una fila skipped por arranque, y nada más.
   const skipped = await h.db.query<{ job_id: string; error: string; n: number | string }>(
@@ -89,7 +89,7 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
 
   // Los crons viven en pg-boss, con la clave 'cron' y el payload que identifica al job.
   const schedules = await h.worker.boss.getSchedules();
-  assert.equal(schedules.length, 17);
+  assert.equal(schedules.length, 18);
   const oauth = schedules.find((s) => s.name === 'oauth.refresh');
   assert.equal(oauth?.cron, '*/15 * * * *');
   assert.equal(oauth?.timezone, 'UTC');
@@ -241,7 +241,7 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
   });
   try {
     const after = await second.boss.getSchedules();
-    assert.equal(after.length, 17, 'mismas 17 filas de schedule');
+    assert.equal(after.length, 18, 'mismas 18 filas de schedule');
     assert.equal(after.filter((s) => s.name === 'oauth.refresh').length, 1);
     assert.equal(after.find((s) => s.name === 'oauth.refresh')?.cron, '*/5 * * * *');
     const updated = sink.records().find((r) => r['msg'] === 'schedule actualizado');

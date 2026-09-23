@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { crearEmpresa, editarEmpresa } from "../../actions";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { RELATIONSHIP_OPTIONS } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
 import type { CountryOption } from "../../_lib/paises";

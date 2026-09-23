@@ -24,16 +24,11 @@ export const FICHA = {
     deals: "Negocios",
     activity: "Actividad",
     known: "Lo que sabemos",
-    contacts: "Contactos",
-    /** El nombre accesible del botón que pliega un bloque. */
-    toggle: (bloque: string) => `Mostrar u ocultar «${bloque}»`,
   },
 
   /** La siguiente acción de un negocio, en una línea y editable (VEN-4). */
   siguiente: {
-    label: "Siguiente acción",
     none: "Sin siguiente acción",
-    noneHelp: "Un negocio sin siguiente acción se enfría.",
     set: "Poner siguiente acción",
     setLabel: (deal: string) => `Poner la siguiente acción de «${deal}»`,
     edit: "Cambiar",
@@ -55,8 +50,6 @@ export const FICHA = {
     saved: "Siguiente acción guardada.",
     error: "No se pudo guardar la siguiente acción.",
     doneError: "No se pudo marcar como hecha.",
-    /** «Llamar a Sofía · 24 sep, 9:30 a. m. · Ana» */
-    by: (name: string) => `a cargo de ${name}`,
     shortcut: "Enter guarda · Esc cancela",
   },
 
@@ -70,13 +63,11 @@ export const FICHA = {
       return partes.join(" · ");
     },
     more: (n: number) => `y ${n} más en el pipeline`,
-    seePipeline: "Ver el pipeline",
     withoutAction: (n: number) =>
       n === 1
         ? "1 negocio abierto no tiene siguiente acción con fecha."
         : `${n} negocios abiertos no tienen siguiente acción con fecha.`,
     fixWithoutAction: "Ponérsela",
-    clear: "Nada vencido ni para hoy.",
     listLabel: "Seguimientos vencidos y de hoy",
   },
 
@@ -113,7 +104,6 @@ export const FICHA = {
     } satisfies Record<LoggableActivityKind, string>,
     error: "No se pudo registrar la actividad.",
     hasMore: (n: number) => `Se ven las ${n} más recientes.`,
-    by: (name: string) => name,
     system: "On Cue",
     with: (name: string) => `con ${name}`,
     minutes: (n: number) => `${n} min`,

@@ -13,6 +13,7 @@ import { CopiarEnlace } from "../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../messages";
 import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 import { GenerarMediaKitForm } from "../generar-form";
+import { Aviso } from "../../../_lib/aviso";
 
 export const metadata: Metadata = { title: MESSAGES.meta.mediaKits };
 export const dynamic = "force-dynamic";
@@ -135,11 +136,7 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
         }
       />
 
-      {error && (
-        <p role="alert" className="mb-6 rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-          {error}
-        </p>
-      )}
+      <Aviso message={error} className="mb-6" />
 
       <AvisosBloqueo avisos={avisos} f={f} vuelta="/cotizar/media-kit" />
 

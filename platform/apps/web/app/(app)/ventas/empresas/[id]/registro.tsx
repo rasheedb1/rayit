@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Select, Textarea } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { useVentasForm } from "../../_lib/use-ventas-form";
 import { registrarActividad } from "../actions";
 import { FICHA } from "../messages";

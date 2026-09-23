@@ -19,6 +19,7 @@ import { MESSAGES, nombreMetrica, nombreModificador } from "../../messages";
 import { etiquetaImpuesto } from "../../_lib/acordado";
 import { precioPropuesto, rangoPropuesto } from "../../_lib/precio";
 import { ResumenTotales } from "../../_ui/resumen-totales";
+import { Aviso } from "../../../_lib/aviso";
 
 /** Una línea como la escribe el formulario. La cantidad es TEXTO: se tiene que poder vaciar. */
 export interface LineaInicial {
@@ -290,11 +291,7 @@ export function CotizacionForm({
       <input type="hidden" name="payload" value={JSON.stringify(payload)} />
 
       <div className="min-w-0 space-y-6 lg:col-start-1 lg:row-start-1">
-        {state.message && (
-          <p role="alert" className="rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-            {state.message}
-          </p>
-        )}
+        <Aviso message={state.message} />
 
         {deals && (
           <Field label={t.negocio} required help={ayudaNegocio} error={errors.dealId} htmlFor={`${base}deal`}>
