@@ -134,7 +134,8 @@ describe("TikTok con el proveedor de datos contratado (CON-12)", () => {
   });
 
   it("con la variable, la cuenta que ya estaba por @ pasa a aggregator con sus cifras, sin duplicarse ni perder su id", async () => {
-    const antes = (await service.listar()).find((r) => r.handle === "laura.cocinafacil" && r.accessMode === "public_profile")!;
+    const todasAntes = await service.listar();
+    const antes = todasAntes.find((r) => r.handle === "laura.cocinafacil" && r.accessMode === "public_profile")!;
     expect(antes.latest).toBeNull();
 
     const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
@@ -147,7 +148,10 @@ describe("TikTok con el proveedor de datos contratado (CON-12)", () => {
     const despues = filas.find((r) => r.id === antes.id)!;
     expect(despues.accessMode).toBe("aggregator");
     expect(despues.latest).toEqual({ day: "2026-09-22", followers: 128400, following: 312, mediaCount: 3, views: 65401 });
-    expect(filas.filter((r) => r.handle === "laura.cocinafacil").length).toBe(1);
+    // El seed ya traía otra fila de TikTok con ese @ (open_id distinto, autorizada):
+    // lo que importa es que cambiar de fuente no agregó ninguna.
+    expect(filas.length).toBe(todasAntes.length);
+    expect(filas.filter((r) => r.accessMode === "aggregator").map((r) => r.id)).toEqual([antes.id]);
 
     const src = await db.queryAsSuperuser<{ source: string }>("SELECT source FROM account_metric_snapshot WHERE connection_id = $1", [antes.id]);
     expect(src.rows.map((r) => r.source)).toEqual(["aggregator"]);

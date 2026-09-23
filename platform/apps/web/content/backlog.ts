@@ -231,8 +231,8 @@ export const STORIES: readonly Story[] = [
     title: "Proveedor de datos de TikTok (opción futura)",
     desc: "Seguidores, vistas y videos de TikTok por @ a través de un proveedor de pago (Apify, EnsembleData o Phyllo) sobre la interfaz PublicProfileSource de CON-10, con access_mode = aggregator. Solo si el CSV de TikTok Studio (RES-2) se queda corto o la fricción de subir archivos frena a los creadores.",
     done: "Agregar un @ de TikTok deja seguidores y vistas del día sin que el creador suba nada; el costo mensual del proveedor está aprobado y anotado.",
-    status: "pendiente",
-    note: "Decisión del 22-sep: por ahora TikTok va por CSV gratuito (RES-2). Esta historia se abre solo si hace falta; no bloquea nada.",
+    status: "en_curso",
+    note: "Construida el 23-sep y apagada: falta lo único que la abre, que es la decisión de Nicolás. El proveedor elegido es EnsembleData (precio publicado, todos los endpoints de TikTok a una unidad, errores documentados); Apify se descartó por depender de actores de terceros y ser asíncrono, y Phyllo por cobrar desde ~199 USD/mes con cotización a medida por la conexión autorizada que CON-3 ya hace gratis. Costo recomendado: plan Wood, 100 USD/mes, unas 70 a 115 cuentas de TikTok leídas cada día; la comparación y las cuentas están en docs/propuestas/CON-12.md §0.2. Sin ENSEMBLEDATA_TOKEN en el vault no cambia nada: TikTok se queda con el oEmbed de CON-10 y no sale una llamada al proveedor. Con la variable, la cuenta que ya estaba por @ se convierte a access_mode aggregator conservando id, consentimiento e historia, y su snapshot diario trae seguidores y vistas. Las vistas son la suma de las reproducciones del catálogo completo (TikTok no publica un acumulado de cuenta); si el catálogo pasa del tope o falta un play_count, quedan en «sin dato» con la razón, nunca a medias. No hace falta migración: aggregator ya estaba en el CHECK de access_mode. collect.posts con source aggregator queda para CON-5, que puede usar listPosts de la fuente.",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],

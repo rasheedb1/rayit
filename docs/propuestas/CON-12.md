@@ -206,3 +206,99 @@ Las tres van al entorno de la web (Vercel) **y** al del worker (CIM-7).
 - Demografía de audiencia por proveedor: **CON-7**.
 - Instagram y YouTube por proveedor: no hacen falta, tienen camino
   oficial y gratuito (CON-10).
+
+---
+
+## 1. Cómo se ve, antes y después de la variable
+
+**Hoy (sin `ENSEMBLEDATA_TOKEN`)** `/conexiones` no cambia ni un píxel:
+la tarjeta de TikTok sigue diciendo «Confirmamos la cuenta; TikTok no
+publica seguidores ni vistas por @ (métricas pendientes de fuente)», la
+fila de una cuenta de TikTok sigue con «Sin cifras por @» y el botón
+«Autorizar cifras» de CON-3.
+
+**Con la variable**, en la misma pantalla y sin desplegar nada nuevo:
+
+- la tarjeta de TikTok pasa a «Seguidores, vistas acumuladas y número de
+  videos, por el proveedor de datos contratado»;
+- una cuenta de TikTok que ya estaba por @ se convierte a `aggregator`
+  la primera vez que se lee (con «Actualizar», o con el barrido diario
+  de las 05:10 UTC), **conservando su id, su consentimiento y su
+  historial**, y su fila muestra seguidores, publicaciones, vistas y
+  «datos hasta el …»;
+- la columna «Cifras» dice «Por proveedor de datos» en vez de ofrecer
+  «Autorizar cifras»;
+- un @ nuevo de TikTok entra directamente como `aggregator` con las
+  cifras del día.
+
+Si el proveedor falla, cada caso tiene su frase y ninguna se parece a
+otra: «No encontramos @x en TikTok», «la cuenta es privada o está
+restringida», «rechazó la credencial de On Cue; hay que revisar
+ENSEMBLEDATA_TOKEN», «la suscripción está vencida», «se agotaron las
+unidades del día». Y si el proveedor cambia de formato, sale un error
+definitivo que lo dice, en vez de guardar una cuenta a medias.
+
+## 2. Lo que necesita Rasheed
+
+**Nada en `db/migrations/`.** `access_mode = 'aggregator'` ya está en el
+CHECK de `social_connection` desde la migración 0002, y
+`account_metric_snapshot.source` es `text` libre con su
+`UNIQUE (connection_id, day, source)`. Esta historia no toca el esquema.
+
+Lo único que hay que sumar al entorno cuando Nicolás apruebe el plan
+(§0.5): `ENSEMBLEDATA_TOKEN` en Vercel **y** en el entorno del worker
+(CIM-7), y, si se quieren afinar, `ENSEMBLEDATA_MAX_POSTS` y el
+presupuesto diario por `platform.limits`.
+
+`.env.example` (archivo compartido, no lo toco): faltan
+`INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` de CON-10, y ahora
+`ENSEMBLEDATA_TOKEN` y `ENSEMBLEDATA_MAX_POSTS`.
+
+## 3. Cuando llegue el token, esto es lo que hay que confirmar
+
+Los fixtures salen de la documentación (`meta.source: "docs"`), que es
+la convención del repositorio hasta que haya una credencial real. Con el
+token en la mano, tres cosas se comprueban en una tarde y se regraban:
+
+1. **La forma de `tt/user/info`.** La guía del proveedor muestra
+   `data.user` + `data.stats`, y su SDK expone `units_charged` en la
+   raíz; el parseo tolera las dos. Confirmar cuál es.
+2. **Si `tt/user/posts` cobra una unidad por llamada o una por bloque de
+   diez.** El código declara `units = depth` (lo caro), que es el
+   supuesto conservador; si resulta ser una por llamada, el costo real
+   baja mucho y el tope de 200 videos se puede subir sin pensarlo.
+3. **Si existe un campo de vistas acumuladas de cuenta** en algún
+   endpoint (por ejemplo un «user detailed info»). Si existe, las vistas
+   dejan de necesitar el catálogo entero y el costo por cuenta cae a una
+   o dos unidades al día.
+
+Para regrabarlos: `pnpm --filter @mc/connectors record -- --platform
+ensembledata --ref env:ENSEMBLEDATA_TOKEN` (el script anonimiza ids y
+handles, y no guarda cabeceras de petición).
+
+## 4. Verificación (23 de septiembre)
+
+- `pnpm --filter @mc/connectors test`: **194** (14 nuevas de CON-12:
+  la fuente apagada sin la variable, seguidores y vistas del catálogo
+  completo, nulos que no son ceros, catálogo paginado, forma anidada,
+  catálogo truncado, video sin `play_count`, dos formas cambiadas, los
+  cinco códigos del proveedor con su frase, 429 y 500 transitorios, la
+  cuota por familia, `listPosts` para CON-5, y el @ mal escrito que no
+  gasta una unidad).
+- `pnpm --filter @mc/db test`: **605** (3 nuevas: alta con `aggregator`
+  y su snapshot, contratar y dar de baja el proveedor conservando id e
+  historia, y la cuenta autorizada que no se degrada).
+- `pnpm --filter @mc/worker test`: `collect-account-metrics` en verde con
+  una prueba nueva: con `ENSEMBLEDATA_TOKEN`, la fila de TikTok pasa a
+  `aggregator`, deja seguidores 128 400 y vistas 65 401 con
+  `source = 'aggregator'`, la cuenta inexistente queda en `error` con el
+  mensaje del proveedor, y el token no aparece en ninguna columna de
+  texto, ni en `api_call_log`, ni en los logs del worker.
+- `pnpm --filter @mc/web test`: 9 en `cuentas-service` (4 nuevas de
+  CON-12, incluida la R4 del token del proveedor).
+
+**Nota del entorno:** con la máquina cargada por varias sesiones a la
+vez (carga media por encima de 100), las pruebas de `@mc/db` y las de la
+web se cancelan por tiempo *antes* de llegar a correr —le pasa igual a
+archivos que esta historia no toca. Con la máquina tranquila, todo va en
+verde.
