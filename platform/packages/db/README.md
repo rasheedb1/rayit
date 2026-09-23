@@ -233,6 +233,48 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 `worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
 (CON-2b).
 
+### 7. Roles y permisos (0034, ACC-3)
+
+```sql
+-- El rol de una membresía es una fila de role; su matriz, role_permission.
+SELECT p.key
+  FROM membership m
+  JOIN role_permission rp ON rp.role_id = m.role_id
+  JOIN permission p ON p.key = rp.permission_key
+ WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id();
+
+-- Dar de alta a alguien con un rol de fábrica: system_role_id(kind, key).
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES (current_workspace_id(), current_user_id(), system_role_id('creator', 'owner'));
+```
+
+Desde `0034_access_control.sql`, `membership.role` (un `text` que nadie
+leía) es `membership.role_id`, clave ajena a `role`. Los diez roles de
+fábrica (`workspace_id IS NULL`: cinco de creador, cinco de agencia) y
+sus 222 permisos los siembra la migración desde el catálogo de
+`@mc/core` (`permisos.ts`, ACC-1): la web los **lee** (`role_read` deja
+ver los de sistema y los a medida del workspace fijado) y no los
+escribe; los roles a medida son ACC-9. `system_role_id(kind, key)`
+devuelve el id de uno de fábrica, o `NULL` si esa clave no existe para
+ese tipo de workspace (no hay «admin» de creador). El disparador
+`membership_role_fits` impide colgar un rol de agencia en un workspace
+de creador, o el rol a medida de otro workspace.
+
+El código pregunta por **permisos**, nunca por roles (backlog §7,
+decisión 7): `listMyWorkspaces` devuelve `role` como la clave del rol
+(`'owner'`, `'manager'`, …) solo para lo que la pantalla de cuenta
+muestra; qué puede hacer una sesión lo responderá `queries/accesos.ts`
+(ACC-5) con la consulta de arriba.
+
+Lo demás que deja 0034: `invitation` (una pendiente por correo y
+workspace; el token solo como SHA-256, y el `CHECK` no admite otra
+cosa; revocar es `revoked_at`, `mc_app` no borra), `membership_scope`
+(el alcance, ACC-6: sin filas, todo el workspace), `workspace_grant`
+(la concesión creador → agencia, AGE-1: la web la lee por los dos
+extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
+`actor_kind = 'delegate'`. Detalle y decisiones:
+`docs/propuestas/ACC-3.md`.
+
 ## Lo que hace el cliente por ti
 
 - **Timeouts.** Toda transacción arranca con `SET LOCAL statement_timeout`

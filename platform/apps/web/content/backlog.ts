@@ -601,11 +601,11 @@ export const STORIES: readonly Story[] = [
   },
   {
     id: "ACC-3", module: "ACC", owner: "nicolas", size: "M", sprint: 4, deps: ["ACC-1", "CIM-3"],
-    title: "Esquema de accesos (migración 0023)",
-    desc: "0023_access_control.sql: permission, role, role_permission, membership.role → role_id, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los roles de fábrica.",
-    done: "Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz.",
-    status: "pendiente",
-    note: "El SQL y la semilla los escribe Nicolás y los revisa y aplica Rasheed (regla de db/migrations/ en §3.1); el esquema Drizzle es de Rasheed. Va en el sprint 4 y no en el 5 por riesgo: ACC-4 no puede empezar sin la tabla.",
+    title: "Esquema de accesos (migración 0034)",
+    desc: "0034_access_control.sql (era 0023: 0024–0033 llegaron antes y el runner aplica en orden): permission, role, role_permission, membership.role → role_id con relleno, membership_scope, invitation, workspace_grant y audit_log.on_behalf_of_workspace_id. Más la semilla de los diez roles de fábrica con su matriz (43 permisos, 222 filas).",
+    done: "Migra en limpio en embebido (db.check y guardia) y está lista para Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz; las pruebas de CIM-3 siguen en verde.",
+    status: "hecho",
+    note: "ESTADO (23-sep). Hecha en embebido: make db.check en verde (33 migraciones, 97 tablas), guardia de esquema en verde con las declaraciones nuevas (permission como catálogo; role, role_permission y workspace_grant de solo lectura para mc_app; invitation sin DELETE), packages/db/test/accesos.test.ts (matriz exacta contra el catálogo de ACC-1, relleno por tipo de workspace sin subir a nadie, RLS, privilegios, token solo como SHA-256, dos pasadas y guardia de orden) y las pruebas de identidad/rls/ventas adaptadas a role_id. PENDIENTE HUMANO: aplicar en Supabase al final de la cola única de la nota de CIM-2 (0024…0033 y luego 0034), y revisar lo que tocó carpetas de Rasheed (docs/propuestas/ACC-3.md §6: schema/accesos.ts propuesto, membership.roleId, identidad.ts, ventas.ts, seed 0002, etiquetas de rol). Contrato con ACC-1: el snapshot de su script tiene que coincidir con la sección 4 de 0034. DECISIONES PENDIENTES DE NICOLÁS: admin de creador → Mánager (nunca subir; cambiarlo es una línea) y si 0023 se rellena con un archivo vacío o queda como hueco declarado.",
   },
   {
     id: "ACC-4", module: "ACC", owner: "rasheed", size: "M", sprint: 5, deps: ["ACC-3"],
