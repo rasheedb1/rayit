@@ -49,6 +49,24 @@
 -- identifica por post_id, no por connection_id, y su UNIQUE será otro.
 -- population entra en la clave: la misma cuenta puede tener la
 -- demografía de sus seguidores y la de quienes la vieron.
+--
+-- Primero se limpia lo que el índice no admitiría. Sin este paso, una
+-- base con duplicados —que es justo lo que esta sección viene a impedir,
+-- así que darla por limpia sería contradictorio— aborta la migración
+-- ENTERA y se queda sin metric_gap, mientras el worker ya registra el
+-- job. De cada grupo repetido sobrevive la lectura más reciente
+-- (captured_at, y ctid para desempatar), que es la que la pantalla
+-- enseñaría de todos modos. Es saneamiento de una migración, no una
+-- corrección de métricas: el append-only lo mantiene el código.
+DELETE FROM audience_breakdown a
+ WHERE a.scope = 'account'
+   AND EXISTS (
+     SELECT 1 FROM audience_breakdown b
+      WHERE b.scope = 'account' AND b.connection_id = a.connection_id AND b.day = a.day
+        AND b.population = a.population AND b.dimension = a.dimension AND b.bucket = a.bucket
+        AND (b.captured_at, b.ctid) > (a.captured_at, a.ctid)
+   );
+
 CREATE UNIQUE INDEX IF NOT EXISTS audience_breakdown_account_uniq
   ON audience_breakdown (connection_id, day, population, dimension, bucket)
   WHERE scope = 'account';
@@ -91,7 +109,17 @@ INSERT INTO metric_requirement (id, platform_id, metric_group, requirement, mess
   ('ig.insights.account_type', 'instagram', 'demografia_de_cuenta', 'business_account',
    'Instagram solo entrega la audiencia de cuentas profesionales. Cambia la cuenta a Empresa o Creador en Instagram y vuelve a autorizarla.'),
   ('yt.analytics.scope',       'youtube',   'demografia_de_cuenta', 'scope_video_insights',
-   'Falta el permiso de YouTube Analytics. Vuelve a autorizar el canal y acepta el acceso a las estadísticas.')
+   'Falta el permiso de YouTube Analytics. Vuelve a autorizar el canal y acepta el acceso a las estadísticas.'),
+  -- Las dos de TikTok existen porque tt.insights.scope (0011) es del
+  -- grupo 'retencion_y_audiencia' y su texto habla de analítica de
+  -- VIDEO: decirle a una cuenta personal que vuelva a conectarse y
+  -- acepte ese permiso es mandarla a una puerta que no abre. El scope
+  -- de audiencia de cuenta es de la app de negocio, y una cuenta
+  -- personal no puede tenerlo sin pasar antes a Business.
+  ('tt.audience.account_type', 'tiktok',    'demografia_de_cuenta', 'business_account',
+   'La demografía de TikTok solo existe en cuentas Business. Cámbiala en la app de TikTok (Ajustes, Cuenta, Cambiar a cuenta Business) y vuelve a autorizarla; ten en cuenta que una cuenta Business pierde Creator Rewards.'),
+  ('tt.audience.scope',        'tiktok',    'demografia_de_cuenta', 'scope_video_insights',
+   'Falta el permiso de audiencia de la cuenta. Vuelve a autorizar la cuenta de TikTok y acepta el permiso de estadísticas de audiencia.')
 ON CONFLICT (id) DO NOTHING;
 
 -- ---------------------------------------------------------------------

@@ -31,9 +31,10 @@
  */
 import { isPlatformApiError, type NormalizedDemographics } from '@mc/connectors';
 import { mapLimit } from '../../runner/concurrency.ts';
+import type { Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import {
-  analyticsWindow, DEMOGRAPHICS_GROUP, planDemographics, requirementFromApiError,
+  analyticsWindow, DEMOGRAPHICS_GROUP, dimensionsOf, planDemographics, requirementFromApiError,
   type DemographicsPlan,
 } from './prerrequisitos-demografia.ts';
 
@@ -50,10 +51,12 @@ interface AccountRow extends Record<string, unknown> {
   external_account_id: string;
   access_mode: string;
   account_type: string | null;
+  status: string;
   scopes: string[] | string;
   secret_ref: string;
   followers: string | number | null;
-  has_today: boolean;
+  /** Las dimensiones que YA tienen fila de hoy para esta cuenta. */
+  today_dimensions: string[] | string;
 }
 
 /** pg devuelve text[] como arreglo; alguna capa lo devuelve como '{a,b}'. */
@@ -69,34 +72,74 @@ function numOrNull(v: string | number | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Lo que la plataforma entregó, y el fallo si lo hubo. Las dos cosas
+ * juntas a propósito: Instagram son cuatro llamadas, y si la cuarta
+ * falla, tirar las tres que ya respondieron gasta la cuota dos veces y
+ * deja la pantalla sin lo que sí se pudo leer.
+ */
+interface DemographicsRead {
+  rows: NormalizedDemographics;
+  error?: unknown;
+}
+
 /** Las llamadas del plan, ya normalizadas a filas de audience_breakdown. */
-async function readDemographics(ctx: JobContext, acc: AccountRow, plan: DemographicsPlan): Promise<NormalizedDemographics> {
+async function readDemographics(ctx: JobContext, acc: AccountRow, plan: DemographicsPlan, pendientes: ReadonlySet<string>): Promise<DemographicsRead> {
   const tokens = await ctx.secrets.get(acc.secret_ref);
   if (!tokens) throw new Error(`El almacén no tiene el permiso de la conexión ${acc.id}; hay que volver a autorizarla.`);
   const auth = { connectionId: acc.id, tokens };
   const opts = { signal: ctx.signal };
+  const rows: NormalizedDemographics = [];
 
   if (plan.platform === 'instagram') {
     const client = ctx.connectors.instagram(auth);
-    const rows: NormalizedDemographics = [];
     // En serie a propósito: son cuatro llamadas a la MISMA conexión y el
     // límite de Instagram se cuenta por conexión y hora (CON-1 §0.4).
     for (const breakdown of plan.breakdowns) {
-      const { data } = await client.audienceDemographics('followers', breakdown, opts);
-      rows.push(...data);
+      if (!pendientes.has(breakdown)) continue;
+      try {
+        const { data } = await client.audienceDemographics('followers', breakdown, opts);
+        rows.push(...data);
+      } catch (error) {
+        // El primer fallo corta: los cuatro cortes comparten token,
+        // cuota y cuenta, así que lo que tumbó a uno tumbará a los demás.
+        return { rows, error };
+      }
     }
-    return rows;
+    return { rows };
   }
   const { startDate, endDate } = analyticsWindow(ctx.now());
   if (plan.platform === 'youtube') {
     const client = ctx.connectors.youtube(auth);
-    const byAge = await client.channelDemographics(startDate, endDate, opts);
-    const byCountry = await client.countryBreakdown(null, startDate, endDate, opts);
-    return [...byAge.data, ...byCountry.data];
+    try {
+      if (pendientes.has('age_gender')) rows.push(...(await client.channelDemographics(startDate, endDate, opts)).data);
+      if (pendientes.has('country')) rows.push(...(await client.countryBreakdown(null, startDate, endDate, opts)).data);
+    } catch (error) {
+      return { rows, error };
+    }
+    return { rows };
   }
+  // TikTok entrega las tres dimensiones en UNA llamada: no hay nada
+  // parcial que salvar, y `pendientes` ya dijo que falta alguna.
   const client = ctx.connectors.tiktokAccounts(auth, acc.external_account_id);
   const { data } = await client.accountInfo({ ...opts, startDate, endDate });
-  return data.demographics;
+  return { rows: data.demographics };
+}
+
+/** Guarda las filas del día. Append-only: el UNIQUE parcial de 0036 respalda el ON CONFLICT DO NOTHING. */
+async function saveRows(tx: Queryable, acc: AccountRow, day: string, rows: NormalizedDemographics): Promise<void> {
+  await tx.query(
+    `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)
+     SELECT $1, 'account', $2, $3::date, t.population, t.dimension, t.bucket, t.share, t.absolute
+       FROM unnest($4::text[], $5::text[], $6::text[], $7::numeric[], $8::bigint[])
+         AS t(population, dimension, bucket, share, absolute)
+     ON CONFLICT DO NOTHING`,
+    [
+      acc.workspace_id, acc.id, day,
+      rows.map((d) => d.population), rows.map((d) => d.dimension),
+      rows.map((d) => d.bucket), rows.map((d) => d.share), rows.map((d) => d.absolute),
+    ],
+  );
 }
 
 /**
@@ -124,15 +167,15 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
   const day = ctx.now().toISOString().slice(0, 10);
   const { rows } = await ctx.db.query<AccountRow>(
     `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.external_account_id, c.access_mode,
-            c.account_type, c.scopes, c.secret_ref,
+            c.account_type, c.status, c.scopes, c.secret_ref,
             (SELECT s.followers FROM account_metric_snapshot s
               WHERE s.connection_id = c.id AND s.workspace_id = c.workspace_id
               ORDER BY s.day DESC, s.captured_at DESC LIMIT 1) AS followers,
-            EXISTS (SELECT 1 FROM audience_breakdown a
-                     WHERE a.scope = 'account' AND a.connection_id = c.id
-                       AND a.workspace_id = c.workspace_id AND a.day = $3::date) AS has_today
+            COALESCE((SELECT array_agg(DISTINCT a.dimension) FROM audience_breakdown a
+                       WHERE a.scope = 'account' AND a.connection_id = c.id
+                         AND a.workspace_id = c.workspace_id AND a.day = $3::date), '{}') AS today_dimensions
        FROM social_connection c
-      WHERE c.deleted_at IS NULL AND c.status IN ('active', 'error')
+      WHERE c.deleted_at IS NULL AND c.status IN ('active', 'error', 'needs_reauth')
         AND ($1::uuid IS NULL OR c.id = $1) AND ($2::uuid IS NULL OR c.workspace_id = $2)
       ORDER BY c.platform_id, c.connected_at`,
     [payload.connectionId ?? null, payload.workspaceId ?? null, day],
@@ -156,14 +199,10 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
         if (ctx.signal.aborted) { transient.push(acc.id); onlyQuota = false; return; }
         const log = ctx.logger.child({ connectionId: acc.id, workspaceId: acc.workspace_id, platform, accessMode: acc.access_mode });
 
-        // 1 · Ya hay demografía de hoy: la tabla es append-only y el dato
-        //     cambia despacio. Ni una llamada más.
-        if (acc.has_today) { alreadyToday.push(acc.id); log.debug('ya hay demografía de hoy'); return; }
-
-        // 2 · Los prerrequisitos, con lo que ya está en la base.
+        // 1 · Los prerrequisitos, con lo que ya está en la base.
         const decision = planDemographics({
           platformId: acc.platform_id, accessMode: acc.access_mode, accountType: acc.account_type,
-          scopes: textArray(acc.scopes), followers: numOrNull(acc.followers),
+          status: acc.status, scopes: textArray(acc.scopes), followers: numOrNull(acc.followers),
         });
         if (!decision.ok) {
           if (decision.requirementId === null) {
@@ -177,42 +216,46 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
           return;
         }
 
+        // 2 · Lo que YA hay de hoy no se vuelve a pedir. Por dimensión y
+        //     no por cuenta: una corrida que se cortó a medias (el cuarto
+        //     corte de Instagram) la completa la siguiente, en vez de
+        //     darse por hecha porque había «algo» del día.
+        const yaHoy = new Set(textArray(acc.today_dimensions));
+        const pendientes = new Set(dimensionsOf(decision.plan).filter((d) => !yaHoy.has(d)));
+        if (pendientes.size === 0) { alreadyToday.push(acc.id); log.debug('ya está toda la demografía de hoy'); return; }
+
         // 3 · Solo ahora se llama.
+        let leido: DemographicsRead;
         try {
-          const demographics = await readDemographics(ctx, acc, decision.plan);
-          // Respuesta buena pero sin filas: YouTube Analytics devuelve la
-          // tabla vacía cuando hay muy pocas vistas. No es un dato, así
-          // que no se guarda ni se borra el hueco que hubiera: mañana se
-          // vuelve a preguntar.
-          if (demographics.length === 0) {
-            empty.push(acc.id);
-            log.info('la plataforma respondió sin filas de demografía');
-            return;
-          }
+          leido = await readDemographics(ctx, acc, decision.plan, pendientes);
+        } catch (err) {
+          leido = { rows: [], error: err };
+        }
+        // Lo que sí respondió se guarda, aunque después algo fallara: la
+        // cuota ya se gastó y la pantalla puede enseñarlo.
+        if (leido.rows.length > 0) {
           await ctx.db.transaction(async (tx) => {
-            // ON CONFLICT DO NOTHING contra audience_breakdown_account_uniq
-            // (0036): la tabla es append-only y dos corridas del mismo día
-            // dejan exactamente las mismas filas.
-            await tx.query(
-              `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)
-               SELECT $1, 'account', $2, $3::date, t.population, t.dimension, t.bucket, t.share, t.absolute
-                 FROM unnest($4::text[], $5::text[], $6::text[], $7::numeric[], $8::bigint[])
-                   AS t(population, dimension, bucket, share, absolute)
-               ON CONFLICT DO NOTHING`,
-              [
-                acc.workspace_id, acc.id, day,
-                demographics.map((d) => d.population), demographics.map((d) => d.dimension),
-                demographics.map((d) => d.bucket), demographics.map((d) => d.share), demographics.map((d) => d.absolute),
-              ],
-            );
+            await saveRows(tx, acc, day, leido.rows);
             // El hueco de ayer deja de existir en cuanto el dato llega.
             await tx.query(
               `DELETE FROM metric_gap WHERE connection_id = $1 AND workspace_id = $2 AND metric_group = $3`,
               [acc.id, acc.workspace_id, DEMOGRAPHICS_GROUP],
             );
           });
+        }
+        try {
+          if (leido.error !== undefined) throw leido.error;
+          // Respuesta buena pero sin filas: YouTube Analytics devuelve la
+          // tabla vacía cuando hay muy pocas vistas. No es un dato, así
+          // que no se guarda ni se borra el hueco que hubiera: mañana se
+          // vuelve a preguntar.
+          if (leido.rows.length === 0) {
+            empty.push(acc.id);
+            log.info('la plataforma respondió sin filas de demografía');
+            return;
+          }
           saved.push(acc.id);
-          log.info('demografía guardada', { day, filas: demographics.length });
+          log.info('demografía guardada', { day, filas: leido.rows.length });
         } catch (err) {
           // 3a · La plataforma corrige nuestra evaluación previa: es un
           //      requisito, no un fallo. Se anota igual que si lo
@@ -237,8 +280,10 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
             return;
           }
           if (isPlatformApiError(err) && err.kind === 'permanent') {
+            // No toca onlyQuota: esta cuenta no entra en `transient`, y
+            // un rechazo suyo no puede decidir si conviene reintentar la
+            // cuota agotada de OTRA.
             errored.push(acc.id);
-            onlyQuota = false;
             log.warn('la plataforma rechazó la petición de demografía', { code: err.code, subcode: err.subcode });
             return;
           }

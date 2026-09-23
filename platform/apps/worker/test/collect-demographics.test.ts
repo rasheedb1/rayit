@@ -64,6 +64,8 @@ interface SeedCuenta {
   secretRef: string;
   /** Seguidores del último snapshot; null = la cuenta nunca se leyó. */
   followers: number | null;
+  /** social_connection.status; 'active' si no se dice otra cosa. */
+  status?: string;
 }
 
 const CUENTAS: SeedCuenta[] = [
@@ -81,6 +83,11 @@ const CUENTAS: SeedCuenta[] = [
     accessMode: 'public_profile', accountType: 'unknown', scopes: [], secretRef: 'public:instagram:selvathegolden', followers: 12_300 },
   { clave: 'vecina', workspace: WS_B, creator: CREATOR_B, platform: 'instagram', handle: 'vecina', externalId: '17841400000000f01',
     accessMode: 'direct_oauth', accountType: 'business', scopes: IG_SCOPES, secretRef: 'enc:instagram:vecina', followers: 80 },
+  // Token caído: autorizada en su día, hoy inservible. Sin esto se
+  // quedaba fuera del job y su celda vacía no tenía explicación.
+  { clave: 'caida', workspace: WS_A, creator: CREATOR_A, platform: 'youtube', handle: 'CanalCaido', externalId: 'UCcaido000000000000000e5',
+    accessMode: 'direct_oauth', accountType: 'channel', scopes: YT_SCOPES, secretRef: 'enc:youtube:caida', followers: 9_100,
+    status: 'needs_reauth' },
 ];
 
 async function seed(db: PgliteDatabase): Promise<void> {
@@ -93,9 +100,9 @@ async function seed(db: PgliteDatabase): Promise<void> {
   ids = {};
   for (const c of CUENTAS) {
     const r = await raw.query<{ id: string }>(
-      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, account_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9) RETURNING id`,
-      [c.workspace, c.creator, c.platform, c.externalId, c.handle, c.secretRef, c.scopes, c.accessMode, c.accountType],
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, account_type, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10) RETURNING id`,
+      [c.workspace, c.creator, c.platform, c.externalId, c.handle, c.secretRef, c.scopes, c.accessMode, c.accountType, c.status ?? 'active'],
     );
     ids[c.clave] = r.rows[0]!.id;
     if (c.followers !== null) {
@@ -188,12 +195,16 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
        FROM metric_gap g JOIN metric_requirement r ON r.id = g.requirement_id ORDER BY g.connection_id`,
   );
   const porCuenta = new Map(gaps.rows.map((g) => [g.connection_id, g]));
-  assert.deepEqual([...porCuenta.keys()].sort(), [id('igPocos'), id('ttPersonal'), id('porArroba'), id('vecina')].sort());
+  assert.deepEqual([...porCuenta.keys()].sort(), [id('igPocos'), id('ttPersonal'), id('porArroba'), id('vecina'), id('caida')].sort());
+  assert.equal(porCuenta.get(id('caida'))!.requirement, 'owner_authorization', 'un token caído se explica, no desaparece');
+  assert.match(porCuenta.get(id('caida'))!.message_es, /autorizar/);
   assert.ok(gaps.rows.every((g) => g.metric_group === DEMOGRAPHICS_GROUP && g.day === DAY));
 
   const personal = porCuenta.get(id('ttPersonal'))!;
-  assert.equal(personal.requirement_id, 'tt.insights.scope');
-  assert.match(personal.message_es, /permiso de analítica de video/);
+  assert.equal(personal.requirement_id, 'tt.audience.account_type');
+  assert.equal(personal.requirement, 'business_account');
+  assert.match(personal.message_es, /solo existe en cuentas Business/);
+  assert.match(personal.message_es, /Creator Rewards/, 'y avisa de lo que cuesta el cambio');
   assert.equal(porCuenta.get(id('igPocos'))!.requirement_id, 'ig.demographics');
   assert.match(porCuenta.get(id('igPocos'))!.message_es, /al menos cien seguidores|cien interacciones/);
   assert.equal(porCuenta.get(id('porArroba'))!.requirement, 'owner_authorization');
@@ -207,7 +218,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
       'tiktok.business.get', 'youtube.analytics.query', 'youtube.analytics.query'],
     'siete llamadas: cuatro cortes de Instagram, una de TikTok y dos de YouTube. Ninguna por una cuenta sin prerrequisito',
   );
-  assert.ok(!log.rows.some((r) => [id('ttPersonal'), id('igPocos'), id('porArroba'), id('vecina')].includes(r.connection_id)));
+  assert.ok(!log.rows.some((r) => [id('ttPersonal'), id('igPocos'), id('porArroba'), id('vecina'), id('caida')].includes(r.connection_id)));
   assert.equal(guard.attempts, 0);
 
   // --- 5 · dos workspaces, sin cruce --------------------------------
@@ -246,6 +257,27 @@ test('la segunda corrida del mismo día no duplica ni una fila, y no llama a nad
     `SELECT day::text AS day, detected_at::text AS detected_at FROM metric_gap WHERE connection_id = $1`, [id('ttPersonal')]);
   assert.equal(g.rows[0]!.day, '2026-09-03');
   assert.ok(g.rows[0]!.detected_at > '2026-09-03', 'pero la última comprobación sí se mueve');
+});
+
+test('una corrida que se cortó a medias la completa la siguiente, y solo pide lo que falta', async () => {
+  // Como si el cuarto corte de Instagram no hubiera llegado: los otros
+  // tres sí se guardaron, y eso NO puede dar el día por hecho.
+  await h.db.query(`DELETE FROM audience_breakdown WHERE connection_id = $1 AND dimension = 'city'`, [id('ig')]);
+  const antes = fetch.calls.length;
+  const filasOtras = await h.db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM audience_breakdown WHERE connection_id = $1 AND dimension <> 'city'`, [id('ig')]);
+
+  const md = await correr(h, 'completar lo que falta') as { saved: string[]; alreadyToday: string[] };
+  assert.deepEqual(md.saved, [id('ig')]);
+  assert.ok(!md.alreadyToday.includes(id('ig')), 'tener «algo» del día no es tenerlo todo');
+  assert.equal(fetch.calls.length - antes, 1, 'una sola llamada: el corte que faltaba, no los cuatro');
+
+  const ciudad = await h.db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM audience_breakdown WHERE connection_id = $1 AND dimension = 'city'`, [id('ig')]);
+  assert.equal(ciudad.rows[0]!.n, '4', 'y las ciudades vuelven a estar');
+  const otras = await h.db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM audience_breakdown WHERE connection_id = $1 AND dimension <> 'city'`, [id('ig')]);
+  assert.equal(otras.rows[0]!.n, filasOtras.rows[0]!.n, 'sin duplicar ni una de las que ya estaban');
 });
 
 test('lo que la plataforma contesta: una tabla vacía no es un dato, y «faltan seguidores» no es un fallo', async () => {

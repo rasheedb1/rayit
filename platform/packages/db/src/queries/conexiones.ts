@@ -692,6 +692,13 @@ export interface AudienceBucket {
 export interface AudienceDimension {
   population: AudiencePopulation;
   dimension: AudienceDimensionId;
+  /**
+   * 'YYYY-MM-DD' del último día con datos DE ESTA dimensión. No tiene
+   * por qué ser el mismo de las demás: si hoy la plataforma entregó la
+   * edad pero no el país, el país sigue siendo el de la última vez que
+   * llegó, y la pantalla lo dice con su propio «datos hasta».
+   */
+  day: string;
   /** Por tamaño, salvo edad y edad×género, que van en su orden natural. */
   buckets: AudienceBucket[];
 }
@@ -720,7 +727,7 @@ export interface AccountAudience {
   connectionId: string;
   platformId: ConnectionPlatformId;
   handle: string | null;
-  /** 'YYYY-MM-DD' del último día con demografía, o null si nunca hubo. */
+  /** El más reciente de los `day` de `dimensions`, o null si nunca hubo demografía. */
   day: string | null;
   dimensions: AudienceDimension[];
   /** Vacío si no falta nada. */
@@ -769,17 +776,22 @@ async function readAudience(tx: WorkspaceTx, owners: AudienceOwnerRow[]): Promis
   if (owners.length === 0) return [];
   const ids = owners.map((o) => o.id);
 
+  // El último día se busca POR DIMENSIÓN y población, no por cuenta: una
+  // corrida en la que la plataforma entrega menos cortes que la anterior
+  // —el país de YouTube volviendo vacío— no puede borrar de la pantalla
+  // el corte que sí se leyó ayer.
   const breakdown = await tx.query<AudienceRow>(
     `WITH ultimo AS (
-       SELECT connection_id, max(day) AS day
+       SELECT connection_id, population, dimension, max(day) AS day
          FROM audience_breakdown
         WHERE scope = 'account' AND connection_id = ANY($1::uuid[])
-        GROUP BY connection_id
+        GROUP BY connection_id, population, dimension
      )
      SELECT a.connection_id, to_char(a.day, 'YYYY-MM-DD') AS day, a.population, a.dimension, a.bucket,
             a.share::text AS share, a.absolute::text AS absolute
        FROM audience_breakdown a
-       JOIN ultimo u ON u.connection_id = a.connection_id AND u.day = a.day
+       JOIN ultimo u ON u.connection_id = a.connection_id AND u.population = a.population
+                    AND u.dimension = a.dimension AND u.day = a.day
       WHERE a.scope = 'account'
       ORDER BY a.connection_id, a.dimension, a.population,
                CASE WHEN a.dimension IN ('age', 'age_gender') THEN a.bucket END ASC NULLS LAST,
@@ -804,10 +816,11 @@ async function readAudience(tx: WorkspaceTx, owners: AudienceOwnerRow[]): Promis
   for (const r of breakdown.rows) {
     const acc = porConexion.get(r.connection_id);
     if (!acc) continue;
-    acc.day = r.day;
+    // El día de la cuenta es el más reciente de sus dimensiones.
+    if (acc.day === null || r.day > acc.day) acc.day = r.day;
     let dim = acc.dimensions.find((d) => d.dimension === r.dimension && d.population === r.population);
     if (!dim) {
-      dim = { population: r.population, dimension: r.dimension, buckets: [] };
+      dim = { population: r.population, dimension: r.dimension, day: r.day, buckets: [] };
       acc.dimensions.push(dim);
     }
     dim.buckets.push({ bucket: r.bucket, share: decimalOrNull(r.share), absolute: decimalOrNull(r.absolute) });

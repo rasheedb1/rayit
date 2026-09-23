@@ -43,6 +43,8 @@ export interface DemographicsAccount {
   platformId: string;
   accessMode: string;
   accountType: string | null;
+  /** social_connection.status: 'needs_reauth' es una autorización que se cayó. */
+  status: string;
   scopes: readonly string[];
   /** Seguidores del último snapshot, o null si nunca se leyó. */
   followers: number | null;
@@ -70,7 +72,11 @@ function missing(requirementId: string): DemographicsDecision {
  * autorizado la cuenta.
  */
 export function planDemographics(acc: DemographicsAccount): DemographicsDecision {
-  const authorized = acc.accessMode === 'direct_oauth';
+  // Una cuenta con el token caído está tan lejos del dato como una que
+  // nunca se autorizó, y por la misma razón: hace falta que el dueño
+  // vuelva a autorizarla. Sin esto, la cuenta se quedaba fuera del job y
+  // su celda vacía no tenía ninguna explicación.
+  const authorized = acc.accessMode === 'direct_oauth' && acc.status !== 'needs_reauth';
   const fewFollowers = acc.followers !== null && acc.followers < MIN_FOLLOWERS;
 
   switch (acc.platformId) {
@@ -83,10 +89,13 @@ export function planDemographics(acc: DemographicsAccount): DemographicsDecision
     }
     case 'tiktok': {
       if (!authorized) return missing('tt.audience.auth');
-      // Una cuenta personal jamás consigue este scope: es de la app de
-      // negocio (TIKTOK_BUSINESS_SCOPES), y conseguirlo exige el trámite
-      // CON-9. Por eso el hueco de una cuenta personal se explica aquí.
-      if (!acc.scopes.includes(TIKTOK_AUDIENCE_SCOPE)) return missing('tt.insights.scope');
+      // Una cuenta personal no puede conseguir el scope de audiencia: es
+      // de la app de negocio, y para eso hay que pasar la cuenta a
+      // Business (y renunciar a Creator Rewards). Decirle «vuelve a
+      // conectarte y acepta el permiso» sería mandarla a una puerta que
+      // no abre, así que tiene su propia fila.
+      if (acc.accountType === 'personal') return missing('tt.audience.account_type');
+      if (!acc.scopes.includes(TIKTOK_AUDIENCE_SCOPE)) return missing('tt.audience.scope');
       if (fewFollowers) return missing('tt.audience_age');
       return { ok: true, plan: { platform: 'tiktok' } };
     }
@@ -121,6 +130,18 @@ export function requirementFromApiError(platformId: string, err: unknown): strin
   if (err.kind !== 'permanent') return null;
   if (platformId === 'instagram' && err.subcode === INSTAGRAM_NOT_ENOUGH_FOLLOWERS_SUBCODE) return 'ig.demographics';
   return null;
+}
+
+/**
+ * Qué dimensiones deja escritas cada plan si la API responde entera. El
+ * job compara con lo que ya hay de hoy: así una corrida que se cortó a
+ * medias (un corte de Instagram que falló) la completa la siguiente, en
+ * vez de darse por hecha porque había «algo» del día.
+ */
+export function dimensionsOf(plan: DemographicsPlan): readonly string[] {
+  if (plan.platform === 'instagram') return plan.breakdowns;
+  if (plan.platform === 'tiktok') return ['country', 'gender', 'age'];
+  return ['age_gender', 'country'];
 }
 
 /** El rango que se le pide a TikTok y a YouTube: [hace 28 días, ayer], en 'YYYY-MM-DD' UTC. */

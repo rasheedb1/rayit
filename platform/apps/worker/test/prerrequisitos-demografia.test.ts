@@ -8,12 +8,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { YOUTUBE_ANALYTICS_SCOPE, classifyApiError } from '@mc/connectors';
 import {
-  analyticsWindow, INSTAGRAM_BREAKDOWNS, MIN_FOLLOWERS, planDemographics, requirementFromApiError,
+  analyticsWindow, dimensionsOf, INSTAGRAM_BREAKDOWNS, MIN_FOLLOWERS, planDemographics, requirementFromApiError,
   type DemographicsAccount,
 } from '../src/jobs/conexiones/prerrequisitos-demografia.ts';
 
 const base: DemographicsAccount = {
-  platformId: 'instagram', accessMode: 'direct_oauth', accountType: 'business',
+  platformId: 'instagram', accessMode: 'direct_oauth', accountType: 'business', status: 'active',
   scopes: ['instagram_business_basic', 'instagram_business_manage_insights'], followers: 5_000,
 };
 
@@ -40,12 +40,32 @@ test('un nulo no es un cero: sin snapshot se llama y decide la plataforma', () =
   assert.equal(requisito({ platformId: 'tiktok', scopes: ['user.insights'], followers: null }), undefined);
 });
 
-test('TikTok: sin el scope de la Accounts API no hay audiencia, y una cuenta personal nunca lo tiene', () => {
-  const personal = { platformId: 'tiktok', accountType: 'personal', scopes: ['user.info.basic', 'video.list'] };
-  assert.equal(requisito(personal), 'tt.insights.scope');
+test('TikTok: una cuenta personal no puede dar audiencia, y sin el scope tampoco', () => {
+  // Distintas puertas: la personal tiene que pasar a Business (y perder
+  // Creator Rewards); la Business solo tiene que volver a autorizar.
+  assert.equal(requisito({ platformId: 'tiktok', accountType: 'personal', scopes: ['user.info.basic', 'video.list'] }), 'tt.audience.account_type');
+  assert.equal(requisito({ platformId: 'tiktok', scopes: ['user.info.basic'] }), 'tt.audience.scope');
   assert.equal(requisito({ platformId: 'tiktok', scopes: ['user.insights'] }), undefined);
   assert.equal(requisito({ platformId: 'tiktok', scopes: ['user.insights'], followers: 99 }), 'tt.audience_age');
   assert.equal(requisito({ platformId: 'tiktok', accessMode: 'public_profile', scopes: [] }), 'tt.audience.auth');
+});
+
+test('una autorización caída está tan lejos del dato como una que nunca hubo', () => {
+  assert.equal(requisito({ status: 'needs_reauth' }), 'ig.demographics.auth');
+  assert.equal(requisito({ platformId: 'tiktok', scopes: ['user.insights'], status: 'needs_reauth' }), 'tt.audience.auth');
+  assert.equal(requisito({ platformId: 'youtube', scopes: [YOUTUBE_ANALYTICS_SCOPE], status: 'needs_reauth' }), 'yt.demographics.auth');
+  assert.equal(requisito({ status: 'error' }), undefined, 'un error de lectura no es una autorización rota');
+});
+
+test('cada plan dice qué dimensiones promete: es lo que deja completar una corrida a medias', () => {
+  const plan = (acc: Partial<DemographicsAccount>) => {
+    const d = planDemographics({ ...base, ...acc });
+    assert.ok(d.ok);
+    return dimensionsOf(d.plan);
+  };
+  assert.deepEqual(plan({}), INSTAGRAM_BREAKDOWNS);
+  assert.deepEqual(plan({ platformId: 'tiktok', scopes: ['user.insights'] }), ['country', 'gender', 'age']);
+  assert.deepEqual(plan({ platformId: 'youtube', scopes: [YOUTUBE_ANALYTICS_SCOPE] }), ['age_gender', 'country']);
 });
 
 test('YouTube: la Data API no abre Analytics; sin ese scope no se llama', () => {

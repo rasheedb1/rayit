@@ -53,13 +53,14 @@ la fila de `metric_requirement` que lo explica:
 
 | Red | Se comprueba, en este orden | Si falla |
 |---|---|---|
-| Instagram | `access_mode = 'direct_oauth'` | `ig.demographics.auth` |
+| Instagram | `access_mode = 'direct_oauth'` y el token vivo | `ig.demographics.auth` |
 | | `account_type ≠ 'personal'` | `ig.insights.account_type` |
 | | seguidores conocidos ≥ 100 | `ig.demographics` |
-| TikTok | `access_mode = 'direct_oauth'` | `tt.audience.auth` |
-| | `scopes` incluye `user.insights` | `tt.insights.scope` |
+| TikTok | `access_mode = 'direct_oauth'` y el token vivo | `tt.audience.auth` |
+| | `account_type ≠ 'personal'` | `tt.audience.account_type` |
+| | `scopes` incluye `user.insights` | `tt.audience.scope` |
 | | seguidores conocidos ≥ 100 | `tt.audience_age` |
-| YouTube | `access_mode = 'direct_oauth'` | `yt.demographics.auth` |
+| YouTube | `access_mode = 'direct_oauth'` y el token vivo | `yt.demographics.auth` |
 | | `scopes` incluye `yt-analytics.readonly` | `yt.analytics.scope` |
 | Facebook | — | fuera de alcance (§0.4) |
 
@@ -68,6 +69,12 @@ tuvo snapshot, el prerrequisito de los cien seguidores **no** se da por
 fallado: se llama, y si la plataforma responde que no hay bastantes
 (Meta: `code 100`, `error_subcode 2108006`), *ahí* se escribe
 `ig.demographics`. Un nulo no es un cero, tampoco aquí.
+
+**«El token vivo» es parte de la autorización.** Una conexión en
+`needs_reauth` está tan lejos del dato como una que nunca se autorizó, y
+por la misma razón. Antes se quedaba fuera de la consulta del job y su
+celda vacía no tenía ninguna explicación; ahora entra y se lleva su
+`owner_authorization`.
 
 Cuando la API responde con un error de permiso pese a haber pasado la
 evaluación previa, el error se traduce a la misma fila de
@@ -100,6 +107,18 @@ y el INSERT va con `ON CONFLICT DO NOTHING`. **No se borra ni se
 reescribe nada**: la tabla es append-only (regla del repo) y `mc_app` ni
 siquiera tiene INSERT sobre ella (0025 §5). Dos corridas el mismo día
 dejan exactamente las mismas filas.
+
+El corto-circuito es **por dimensión, no por cuenta**: si la corrida de
+esta mañana se cortó en el cuarto corte de Instagram, la siguiente pide
+solo ese y no da el día por hecho porque hubiera «algo». Y lo que sí
+respondió antes del fallo se guarda igual: la cuota ya se gastó, y tirar
+tres cortes buenos porque el cuarto falló los hace pagar dos veces.
+
+La migración además **desduplica antes de crear el índice**. Darla por
+limpia sería contradictorio —el motivo de la sección es que los
+duplicados eran posibles—, y sin ese paso una base sucia aborta la
+migración entera y se queda sin `metric_gap` mientras el worker ya
+registra el job.
 
 *Alternativa descartada*: `DELETE` de las filas del día y reinsertar.
 Rompe el append-only y deja una ventana en la que la pantalla no ve nada.
@@ -163,10 +182,22 @@ añade cinco filas:
 | `yt.demographics.auth` | youtube | `owner_authorization` | ídem |
 | `ig.insights.account_type` | instagram | `business_account` | «Instagram solo entrega audiencia en cuentas profesionales…» |
 | `yt.analytics.scope` | youtube | `scope_video_insights` | «Falta el permiso de YouTube Analytics…» |
+| `tt.audience.account_type` | tiktok | `business_account` | «La demografía de TikTok solo existe en cuentas Business… ten en cuenta que pierde Creator Rewards.» |
+| `tt.audience.scope` | tiktok | `scope_video_insights` | «Falta el permiso de audiencia de la cuenta…» |
 
 Las siete de 0011 se dejan intactas: son inmutables y siguen valiendo.
-Para la cuenta personal de TikTok se usa `tt.insights.scope`, que es lo
-que el criterio de terminado de la historia nombra.
+
+> **DESVÍO DEL CRITERIO DE TERMINADO, PENDIENTE DE NICOLÁS.** El
+> enunciado decía que una cuenta personal de TikTok quedara con
+> `tt.insights.scope` o `tt.audience_age`. No se hace, y esta es la
+> razón: `tt.insights.scope` es del grupo `retencion_y_audiencia` y su
+> texto dice «vuelve a conectar la cuenta y acepta el permiso de
+> insights». A una cuenta **personal** eso la manda a una puerta que no
+> abre —el scope es de la app de negocio y antes hay que pasar la cuenta
+> a Business, perdiendo Creator Rewards—, y además el `metric_group`
+> guardado (`demografia_de_cuenta`) contradiría el de la fila. De ahí
+> las dos filas propias. Si prefieres la letra del criterio, es cambiar
+> dos `return` en `prerrequisitos-demografia.ts`.
 
 **(6) El contrato de lectura para RES-4.**
 
@@ -192,6 +223,11 @@ interface AccountAudience {
 `gaps` trae el `messageEs` y el `fixUrl` de `metric_requirement`: la
 pantalla no escribe ni una frase propia, y si mañana cambia el texto de
 un requisito, cambia en la migración y no en el JSX. Detalle en §2.
+
+El «último día» se busca **por dimensión**, no por cuenta: un día en que
+la plataforma entrega la edad pero no el país no puede borrar de la
+pantalla el país que sí se leyó ayer. Por eso cada `dimensions[]` lleva
+su propio `day`.
 
 ### 0.3 Lo que se decide al llamar a cada API
 
@@ -401,3 +437,42 @@ darla por terminada de verdad hace falta, por este orden:
 Mientras no llegue (1), lo que el producto enseña de demografía es la
 frase que explica por qué no la hay — que es el 100 % de lo que puede
 enseñar hoy con honestidad, y era el objetivo de la historia.
+
+---
+
+## 7. Las dos revisiones
+
+### 7.1 `/code-review` en nivel alto · seis hallazgos, seis arreglados
+
+| # | Qué | Qué se hizo |
+|---|---|---|
+| 1 | Un error **definitivo** de una cuenta apagaba el `retry: false` de la cuota agotada de **otra**, y pg-boss quemaba los reintentos contra el mismo muro | `onlyQuota` solo lo decide lo que de verdad entra en `transient`. La rama `permanent` ya no lo toca |
+| 2 | Los cuatro cortes de Instagram se acumulaban en memoria: si fallaba el cuarto, los tres buenos se tiraban, la cuota se gastaba dos veces y no se escribía nada | `readDemographics` devuelve `{ rows, error }`. Lo que respondió se guarda, y el fallo se trata después |
+| 3 | El índice único se creaba sin desduplicar, en una migración cuyo motivo es justamente que había duplicados. En una base sucia, 0036 abortaba entera y `metric_gap` no llegaba a existir | Un `DELETE` previo que conserva la lectura más reciente de cada grupo, explicado en la cabecera |
+| 4 | `tt.insights.scope` es del grupo `retencion_y_audiencia` y su texto manda a una cuenta personal a una puerta que no abre | Dos filas propias: `tt.audience.account_type` y `tt.audience.scope`. Es el desvío del criterio que está marcado en §0.2 (5) |
+| 5 | Una conexión en `needs_reauth` quedaba fuera de la consulta del job, así que su celda vacía no tenía explicación **ninguna** | Entra en el `SELECT`, y `planDemographics` la trata como lo que es: una autorización que hay que rehacer |
+| 6 | `max(day)` por cuenta: un día en que la plataforma entregaba menos cortes **borraba** de la pantalla el corte que sí se leyó ayer, y el hueco que lo explicaría se borraba en la misma escritura | El último día se busca por dimensión, y cada dimensión lleva su propio `day` |
+
+Los seis tienen prueba: la 1 y la 4 en `prerrequisitos-demografia.test.ts`
+(milisegundos), la 2 y la 5 en `collect-demographics.test.ts`, la 3 en
+`make db.check`, y la 6 en `packages/db/test/demografia.test.ts`
+(«el corte que hoy no llegó sigue siendo el de la última vez»).
+
+### 7.2 `/security-review` · cero hallazgos
+
+Se corrió porque la historia toca privilegios (`REVOKE` sobre una tabla
+nueva), RLS y la clasificación de errores de las plataformas. Comprobó
+el aislamiento de `metric_gap`, que las cinco escrituras del worker
+—que corre como `mc_worker` y se salta RLS— llevan su `workspace_id`
+explícito, que no hay una sola concatenación de SQL, y que ni el token
+ni el cuerpo crudo de la plataforma llegan a la base, al log ni a
+`job_run.metadata`.
+
+De las dos observaciones que dejó por debajo del umbral se adoptó una:
+`metric_gap` queda declarada en `PRIVILEGIOS_DE_LA_APP`
+(`packages/db/src/esquema.ts`). Sin esa línea, la guardia solo vigila
+los privilegios de las tablas declaradas, y un `GRANT … ON ALL TABLES`
+futuro le habría devuelto a `mc_app` la escritura sin que nadie lo
+notara. La otra —que el `ON CONFLICT` de `writeGap` no refresca
+`workspace_id`— solo importaría si una `social_connection` cambiara de
+workspace, cosa que hoy ningún código hace.

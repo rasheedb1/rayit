@@ -718,6 +718,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'assert_reference_visible en post_id',
   },
   audience_breakdown: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
+  metric_gap: {
+    permite: ['SELECT'],
+    motivo:
+      'por qué NO hay un dato (CON-7, 0036): lo escribe collect.demographics, que es quien intenta medir, y la ' +
+      'pantalla solo lo lee. Sin esta línea, un GRANT … ON ALL TABLES futuro le devolvería a mc_app la escritura ' +
+      'sin que la guardia lo notara, y una pantalla podría borrar la explicación de un hueco',
+  },
   post_engagement_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_retention_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_impression_source: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },

@@ -66,6 +66,8 @@ describe('la última demografía de una cuenta', () => {
 
     const pais = a.dimensions.find((d) => d.dimension === 'country')!;
     assert.deepEqual(pais.buckets.map((b) => b.bucket), ['CO', 'MX'], 'el país va por tamaño');
+    assert.equal(edad.day, '2026-09-23');
+    assert.equal(pais.day, '2026-09-23');
 
     const edadGenero = a.dimensions.find((d) => d.dimension === 'age_gender')!;
     assert.equal(edadGenero.population, 'viewers', 'la misma cuenta puede tener dos poblaciones');
@@ -85,6 +87,31 @@ describe('la última demografía de una cuenta', () => {
     assert.equal(g!.day, '2026-09-23');
     assert.match(g!.messageEs, /el dueño tiene que autorizarla/);
     assert.ok(g!.detectedAt.endsWith('Z'), 'las timestamptz salen como ISO en UTC');
+  });
+});
+
+describe('un día en que la plataforma entrega menos', () => {
+  test('el corte que hoy no llegó sigue siendo el de la última vez, y no desaparece de la pantalla', async () => {
+    // El 24 llega la edad, pero no el país: Analytics devolvió su tabla
+    // vacía. Si el contrato mirara solo el último día de la CUENTA, el
+    // país que sí se leyó el 23 se borraría de la pantalla sin que nadie
+    // lo pudiera explicar.
+    await t.admin(`
+      INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute) VALUES
+        ('${WORKSPACE_LAURA}', 'account', '${CONN_IG}', '2026-09-24', 'followers', 'age', '25-34', NULL, 170000),
+        ('${WORKSPACE_LAURA}', 'account', '${CONN_IG}', '2026-09-24', 'followers', 'age', '18-24', NULL, 99000),
+        ('${WORKSPACE_LAURA}', 'account', '${CONN_IG}', '2026-09-24', 'followers', 'age', '13-17', NULL, 8300);
+    `);
+    const a = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getAccountAudience(tx, CONN_IG)))!;
+    assert.equal(a.day, '2026-09-24', 'el de la cuenta es el más reciente de sus dimensiones');
+
+    const edad = a.dimensions.find((d) => d.dimension === 'age')!;
+    assert.equal(edad.day, '2026-09-24');
+    assert.deepEqual(edad.buckets.map((b) => b.absolute), [8300, 99000, 170000], 'la edad es la de hoy, sin mezclarse con la de ayer');
+
+    const pais = a.dimensions.find((d) => d.dimension === 'country')!;
+    assert.equal(pais.day, '2026-09-23', 'y el país sigue ahí, con su propio «datos hasta»');
+    assert.deepEqual(pais.buckets.map((b) => b.bucket), ['CO', 'MX']);
   });
 });
 
