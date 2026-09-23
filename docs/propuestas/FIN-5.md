@@ -154,3 +154,59 @@ No toco `db/migrations/`, `db/seed/`, `lib/auth/`, `lib/workspace/`,
   marqué pendientes.
 
 ---
+
+## 1. Lo que FIN-5 deja en la base: nada
+
+No hay migración. `expense` viene de **0008** con todas las columnas que
+la historia usa (`category`, `vendor`, `description`, `amount`,
+`currency`, `incurred_on`, `is_recurring`, `recurrence`, `receipt_url`,
+`deductible`) y con el índice que la lista por mes necesita:
+
+```sql
+CREATE INDEX ON expense (workspace_id, incurred_on DESC);   -- 0008
+```
+
+Su política de RLS entró en **0010** con las demás
+(`expense_ws_isolation`), y `mc_app` conserva SELECT / INSERT / UPDATE
+sobre ella (no está en las revocaciones de 0024–0026). La bitácora usa
+`audit_log`, donde `mc_app` tiene SELECT + INSERT y ni UPDATE ni DELETE
+(**0025 §5**), que es justamente lo que queremos.
+
+**No hay nada que aplicar en Supabase por esta historia.** Si `make
+db.guardia` se queja de algo después de mergear, no viene de aquí.
+
+## 2. Lo que necesito de ti (Rasheed): nada bloqueante
+
+Solo una cosa, y no bloquea: si el índice
+`expense (workspace_id, incurred_on DESC)` se quedara corto cuando haya
+años de gastos, el que ayudaría a `getExpenseMonth` es el mismo, así que
+no propongo ninguno nuevo. Lo digo para que no lo propongas tú desde el
+otro lado.
+
+## 3. Historias nuevas que salen de aquí
+
+| Propuesta | Por qué | Talla |
+|---|---|---|
+| **FIN-9 · Subir el recibo** | El backlog decía «foto del recibo en S3» y la plataforma **no tiene almacenamiento de archivos**: el laboratorio de video es fase 2 y no hay bucket, ni firma de subida, ni política de retención. FIN-5 deja `receipt_url` como enlace (Drive, Dropbox, el correo del proveedor). Subir el archivo es una historia propia: bucket, límite de tamaño, tipos permitidos, borrado al borrar el gasto y quién puede ver el enlace. | M |
+| **FIN-10 · Importar gastos por CSV** | Lo dijo el enunciado como fuera de alcance (fase 2). El importador de Resumen (`RES-2`) ya tiene el asistente y el lote: reusarlo. | M |
+| **`expense.series_id`** | Hoy la serie de un gasto recurrente se deduce de (categoría, proveedor, recurrencia, moneda) porque `expense` no tiene columna de serie, y dos gastos recurrentes de verdad distintos con el mismo proveedor y categoría se funden en uno (`seriesDeGastosRecurrentes`, con su límite en el JSDoc). La columna lo arregla de raíz. **Va en FIN-6**, que es quien va a depender de que la proyección sea exacta. | S, dentro de FIN-6 |
+
+## 4. Lo que tengo que hacer yo cuando ACC-1 y ACC-2 entren a `main`
+
+Dos cambios pequeños, marcados en el código con su `TODO`:
+
+1. **ACC-1.** `requirePermission('finanzas.gasto.ver')` como primera
+   línea de `app/(app)/finanzas/gastos/page.tsx` y
+   `requirePermission('finanzas.gasto.registrar')` como primera línea de
+   `guardarGasto` en `actions.ts`. Las dos claves existen ya en el
+   catálogo de la rama `nicolas/ACC-1-catalogo-permisos`; el enunciado de
+   la historia decía `finanzas.gasto.crear`, que no está en el catálogo
+   (ver §0.2.1). Con eso entra también la prueba negativa de rol que hoy
+   falta (R3).
+2. **ACC-2.** Cambiar `anotarGasto()` de
+   `packages/db/src/queries/finanzas.ts` por `audit(tx, …)` de
+   `packages/db/src/audit.ts` y borrar el helper: el INSERT es el mismo
+   letra por letra. Hay que **agregar `'expense.created'` y
+   `'expense.updated'` a `AUDIT_ACTIONS`**, y la prueba de convención de
+   ACC-2 (`test/audit-convencion.test.ts`) empezará a exigirlas, que es
+   lo que queremos.

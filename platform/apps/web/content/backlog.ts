@@ -553,9 +553,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "FIN-5", module: "FIN", owner: "nicolas", size: "S", sprint: 3, deps: ["CIM-5"],
     title: "Gastos",
-    desc: "Registro con categoría, proveedor, monto, fecha, recurrente o no, foto del recibo en S3, deducible. Lista por mes.",
+    desc: "Registro con categoría, proveedor, monto, fecha, recurrente o no, enlace del recibo, deducible. Lista por mes con total y desglose por categoría, y la proyección de lo recurrente a ocho semanas (packages/core/src/flujo-caja.ts, que FIN-6 completa).",
     done: "Un gasto recurrente aparece proyectado en las ocho semanas siguientes.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Sin migración: expense ya existe (0008) con su índice (workspace_id, incurred_on). El recibo es un ENLACE, no un archivo: no hay almacenamiento en la plataforma, así que subirlo queda para una historia nueva (propuesta en docs/propuestas/FIN-5.md §3). Los gastos no se borran: corregir es editar, y cada alta y cada edición dejan bitácora. Con ACC-1 y ACC-2 fuera de main, el permiso queda como TODO(ACC-1) finanzas.gasto.registrar/ver y la bitácora la escribe hoy queries/finanzas.ts con el mismo INSERT que audit().",
   },
   {
     id: "FIN-6", module: "FIN", owner: "nicolas", size: "M", sprint: 4, deps: ["FIN-2", "FIN-5", "VEN-3"],

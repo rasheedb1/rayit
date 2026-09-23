@@ -36,3 +36,11 @@ Formato de cifras y fechas: `lib/format.ts` (`formatMoney`, `formatInt`, `format
 ## Regla del plan
 
 Agregar un componente es libre. Cambiar la API de uno existente pide PR revisado por Nicolás: una vez que Resumen, Ventas o Cotizar lo usan, cambiarlo cuesta dos PR.
+
+## Lo que un módulo todavía tiene en casa
+
+`Casilla` (la casilla de «se repite cada mes» y «es deducible») vive en
+`app/(app)/finanzas/gastos/form.tsx`, no aquí: FIN-5 es el primer módulo
+que la necesita y cambiar la API de un componente del kit cuesta dos PR.
+Sube al kit —con su `Section` en `/kit` y su prueba— cuando un segundo
+módulo la pida.

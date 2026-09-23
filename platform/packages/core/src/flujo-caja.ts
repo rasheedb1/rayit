@@ -173,8 +173,12 @@ export interface GastoRecurrente {
   currency: string;
   /** 'YYYY-MM-DD': la fecha de la plantilla, no la de la próxima vez. */
   incurredOn: string;
-  /** 'monthly' en el MVP; cualquier otra no se proyecta. */
-  recurrence: string;
+  /**
+   * 'monthly' en el MVP. Es la columna tal como la devuelve la base, así
+   * que puede ser null (un gasto puntual) o cualquier texto: la fila
+   * entra como está y `seriesDeGastosRecurrentes` decide si se proyecta.
+   */
+  recurrence: string | null;
 }
 
 export interface OcurrenciaProyectada {
@@ -233,7 +237,7 @@ export const SEMANAS_PROYECCION = 8;
 
 /** La clave con la que dos filas son «el mismo gasto de todos los meses». */
 function claveDeSerie(g: GastoRecurrente): string {
-  return [g.category, g.vendor ?? '', g.recurrence, g.currency.toUpperCase()].join('\u0000');
+  return [g.category, g.vendor ?? '', g.recurrence ?? '', g.currency.toUpperCase()].join('\u0000');
 }
 
 /**
@@ -255,7 +259,9 @@ function claveDeSerie(g: GastoRecurrente): string {
 export function seriesDeGastosRecurrentes(gastos: readonly GastoRecurrente[]): GastoRecurrente[] {
   const porSerie = new Map<string, GastoRecurrente>();
   for (const g of gastos) {
-    if (!esRecurrencia(g.recurrence)) continue;
+    // Sin recurrencia no hay nada que repetir, y una que el MVP no conoce
+    // ('weekly', 'yearly') tampoco se proyecta: la pantalla lo dice.
+    if (g.recurrence === null || !esRecurrencia(g.recurrence)) continue;
     const clave = claveDeSerie(g);
     const actual = porSerie.get(clave);
     if (!actual || g.incurredOn > actual.incurredOn || (g.incurredOn === actual.incurredOn && g.id > actual.id)) {

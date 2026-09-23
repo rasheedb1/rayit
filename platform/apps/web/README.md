@@ -59,6 +59,9 @@ app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/gastos/    Gastos (FIN-5): lista por mes, alta y corrección en la
+                              misma pantalla, y la proyección de lo recurrente a ocho
+                              semanas (packages/core/src/flujo-caja.ts). No hay borrado.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona

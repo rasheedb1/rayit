@@ -270,6 +270,21 @@ export function formatDate(iso: string, style: "short" | "long" = "short", opts:
 }
 
 /**
+ * Un MES en el locale del espacio: "septiembre de 2026" en es-CO,
+ * "September 2026" en en-US. Acepta 'YYYY-MM' o 'YYYY-MM-DD'.
+ *
+ * Es la cabecera de la lista de gastos por mes (FIN-5), que necesita el
+ * nombre del mes y no un día. Se presenta en UTC, como cualquier columna
+ * `date`: cambiarla de zona la correría un mes en el día 1.
+ */
+export function formatMonth(month: string, opts: LocaleOpts = {}): string {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])/.exec(month);
+  if (!m) throw new Error(`No es un mes ISO: "${month}"`);
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  return plain(dateFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(utcDate(`${m[1]}-${m[2]}-01`)));
+}
+
+/**
  * Día y mes en números, en el orden del locale: "16/9" en es-CO, "9/16"
  * en en-US. Para las etiquetas de un eje con poco sitio —siete barras a
  * 400 px—, donde "16 sep" ya no cabe entre dos marcas. Añadido por
@@ -419,6 +434,7 @@ export function formatterFor(settings: FormatSettings) {
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
+    month: (month: string) => formatMonth(month, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),

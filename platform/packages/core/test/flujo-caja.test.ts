@@ -200,6 +200,13 @@ test('una plantilla vieja no cuesta años de iteraciones y proyecta bien', () =>
   assert.deepEqual(fechas, ['2026-10-10', '2026-11-10']);
 });
 
+test('una fila sin recurrencia (un gasto puntual) no se proyecta', () => {
+  const p = proyectarGastosRecurrentes([gasto({ id: 'p', amount: '890000.00', incurredOn: '2026-09-14', recurrence: null })], '2026-09-23');
+  assert.equal(p.total, '0.00');
+  assert.equal(p.currency, null);
+  assert.equal(seriesDeGastosRecurrentes([gasto({ id: 'p', amount: '1.00', incurredOn: '2026-09-14', recurrence: null })]).length, 0);
+});
+
 test('una recurrencia que el MVP no conoce no se proyecta', () => {
   const p = proyectarGastosRecurrentes([gasto({ id: 'w', amount: '10000.00', incurredOn: '2026-09-01', recurrence: 'weekly' })], '2026-09-23');
   assert.equal(p.total, '0.00');
