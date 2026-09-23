@@ -13,7 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { requirePermission } from "@/lib/permisos";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES as MESSAGES_FINANZAS } from "../_lib/messages";
@@ -109,13 +109,17 @@ function EntradaAlFlujo({
 }
 
 export default async function IngresosPage() {
+  // ACC-5: la página también cierra, no solo el layout: en una
+  // navegación parcial Next puede no volver a ejecutar el layout.
+  await requireModuleAccess("finanzas");
   // Primero el permiso, antes de leer nada. Lo que paga una plataforma
   // es dinero del espacio y va al mismo sitio que el flujo de caja, así
   // que se mira con `finanzas.flujo.ver`: el rol Mánager NO lo ve
-  // (decisión E de la propuesta ACC). No hay un `finanzas.ingreso.ver`
-  // porque el catálogo viaja en la semilla de la migración 0034, que ya
-  // está aplicada; está propuesto en docs/propuestas/FIN-7.md §1.
-  await requirePermission("finanzas.flujo.ver");
+  // (decisión E de la propuesta ACC) y recibe 404, como en /finanzas/flujo.
+  // No hay un `finanzas.ingreso.ver` porque el catálogo viaja en la
+  // semilla de la migración 0034, que ya está aplicada; está propuesto
+  // en docs/propuestas/FIN-7.md §1.
+  await requirePagePermission("finanzas.flujo.ver");
   const { kpis, pagos, meses } = await withWorkspace(async (tx) => ({
     kpis: await getPlatformPayoutKpis(tx),
     pagos: await listPlatformPayouts(tx, { limit: 200 }),
