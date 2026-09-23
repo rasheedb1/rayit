@@ -24,7 +24,7 @@ export default function FlujoLoading() {
       <div className="mt-10 h-[340px] animate-pulse rounded-md border border-line bg-bg-2" />
       <section className="mt-10">
         <div className="mb-3 flex items-baseline justify-between">
-          <span className="text-sm font-medium text-fg">{t.section}</span>
+          <span className="text-sm font-medium text-fg">{MESSAGES.flujo.tabla.seccion}</span>
           <span className="h-3 w-20 animate-pulse rounded-sm bg-bg-3" />
         </div>
         <div className="overflow-hidden rounded-md border border-line">

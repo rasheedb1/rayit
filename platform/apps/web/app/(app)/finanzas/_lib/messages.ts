@@ -40,6 +40,7 @@ export const MESSAGES = {
       egresos: "Gastos e impuestos",
     },
     tabla: {
+      seccion: "Semana a semana",
       caption: "Flujo de caja proyectado, semana a semana",
       semana: "Semana",
       cobros: "Cobros",
@@ -58,7 +59,6 @@ export const MESSAGES = {
     loading: {
       label: "Calculando el flujo de caja",
       kpis: ["Caja proyectada a 8 semanas", "Semana más ajustada"],
-      section: "Semana a semana",
     },
     vacio: {
       title: "Sin cobros ni gastos previstos",

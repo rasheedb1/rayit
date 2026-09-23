@@ -46,7 +46,7 @@ function paraElGrafico(c: Cashflow) {
 function Detalle({ cobros, f }: { cobros: CobroDeLaSemana[]; f: Formatter }) {
   if (cobros.length === 0) return <span className="text-fg-3">{T.tabla.sinCobros}</span>;
   return (
-    <details className="group">
+    <details>
       <summary className="cursor-pointer list-none text-xs text-fg-2 underline decoration-line underline-offset-2 hover:text-fg">
         {T.tabla.verDetalle(cobros.length)}
       </summary>
@@ -212,7 +212,7 @@ export default async function FlujoPage() {
 
       <section className="mt-10" aria-labelledby="semanas">
         <SectionTitle meta={`${c.semanas.length} semanas`}>
-          <span id="semanas">{T.loading.section}</span>
+          <span id="semanas">{T.tabla.seccion}</span>
         </SectionTitle>
         <DataTable
           columns={columnas(f)}
