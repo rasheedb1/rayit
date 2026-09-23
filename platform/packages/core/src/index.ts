@@ -5,3 +5,4 @@ export * from './tarifas.ts';
 export * from './zonas.ts';
 export * from './permisos.ts';
 export * from './flujo-caja.ts';
+export * from './reporte.ts';
