@@ -17,6 +17,10 @@
  *     (intOrNull). No son dinero: number está bien.
  *   - Las cifras derivadas salen de las vistas de 0010
  *     (post_metrics_latest, creator_post_board), no de aritmética aquí.
+ *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
+ *     misma transacción y antes de devolver; test/audit-convencion.test.ts
+ *     lo exige. La entidad es siempre la campaña: campaign_post no tiene
+ *     id propio.
  */
 import {
   assertCampaignDates,
@@ -26,20 +30,43 @@ import {
   canEditCampaign,
   defaultCampaignName,
   handlesFromSocials,
-  isPlatformId,
-  ritmoSeguidores,
   suggestionReasons,
   transitionCampaign as applyTransition,
   CampaignError,
   CampaignLockedError,
   InvalidNameError,
   SUGGESTION_WINDOW_DAYS,
+  BRAND_INPUT_KINDS,
+  brandCsvWindow,
+  brandInputSemantics,
+  isIsoDate,
+  isManualBrandInputKind,
+  isMoneyBrandInputKind,
+  type BrandCsvRow,
+  type BrandInputKind,
+  type BrandInputSemantics,
+  type BrandInputSource,
+  type CampaignStatus,
+  type DateWindow,
+  type ManualBrandInputKind,
+  type SuggestionReason,
+  AGE_CUTS_HOURS,
+  CAMPAIGN_STATUS_META,
+  calcularResultado,
+  isMissingInput,
+  RESULT_COMPUTE_STATUSES,
+  type AgeCut,
+  type CampaignResultValues,
+  type MissingInput,
+  type ResultInputs,
+  type ResultPost,
+  isPlatformId,
+  ritmoSeguidores,
   type BrandAccount,
   type BrandFollowerPoint,
   type BrandFollowerRate,
-  type CampaignStatus,
-  type SuggestionReason,
 } from '@mc/core';
+import { audit } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -574,6 +601,21 @@ async function lockEditableCampaign(tx: WorkspaceTx, campaignId: string): Promis
   return row.status;
 }
 
+/** El enlace y el principal de la campaña ANTES de escribir, para el before de la bitácora (ACC-2). */
+async function linkState(tx: WorkspaceTx, campaignId: string, postId: string): Promise<{ link: { deliverable: string | null; isPrimary: boolean } | null; primaryPostId: string | null }> {
+  const { rows } = await tx.query<{ post_id: string; deliverable: string | null; is_primary: boolean }>(
+    `SELECT cp.post_id, cp.deliverable, cp.is_primary
+     FROM campaign_post cp JOIN campaign c ON c.id = cp.campaign_id
+     WHERE cp.campaign_id = $1 AND (cp.post_id = $2 OR cp.is_primary)`,
+    [campaignId, postId],
+  );
+  const own = rows.find((r) => r.post_id === postId);
+  return {
+    link: own ? { deliverable: own.deliverable, isPrimary: own.is_primary } : null,
+    primaryPostId: rows.find((r) => r.is_primary)?.post_id ?? null,
+  };
+}
+
 async function findCampaignPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   const row = (await listCampaignPosts(tx, campaignId)).find((p) => p.postId === postId);
   if (!row) throw new CampaignPostNotFoundError();
@@ -592,6 +634,7 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
   if (post.rows.length === 0) throw new PostNotFoundError(input.postId);
 
   const deliverable = input.deliverable?.trim() || null;
+  const previous = await linkState(tx, input.campaignId, input.postId);
   if (input.isPrimary === true) {
     await tx.query(
       `UPDATE campaign_post SET is_primary = false
@@ -608,7 +651,19 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
            is_primary = coalesce($4::boolean, campaign_post.is_primary)`,
     [input.campaignId, input.postId, deliverable, input.isPrimary ?? null],
   );
-  return findCampaignPost(tx, input.campaignId, input.postId);
+  const row = await findCampaignPost(tx, input.campaignId, input.postId);
+  // Si ya estaba asociado, before trae el entregable y la marca de antes; si
+  // pasó a principal, el principal anterior (que se desmarcó) queda anotado.
+  await audit(tx, {
+    action: 'campaign.post_linked',
+    entityType: 'campaign',
+    entityId: input.campaignId,
+    before: previous.link || previous.primaryPostId
+      ? { postId: input.postId, linked: previous.link !== null, deliverable: previous.link?.deliverable ?? null, isPrimary: previous.link?.isPrimary ?? false, primaryPostId: previous.primaryPostId }
+      : null,
+    after: { postId: row.postId, deliverable: row.deliverable, isPrimary: row.isPrimary, primaryPostId: row.isPrimary ? row.postId : previous.primaryPostId },
+  });
+  return row;
 }
 
 /** Quita el post de la campaña. Devuelve false si no estaba. */
@@ -621,12 +676,15 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
-  return rows.length > 0;
+  if (rows.length === 0) return false;
+  await audit(tx, { action: 'campaign.post_unlinked', entityType: 'campaign', entityId: campaignId, before: { postId }, after: null });
+  return true;
 }
 
 /** Marca el post como principal y desmarca los demás de la campaña. */
 export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, campaignId);
+  const previous = await linkState(tx, campaignId, postId);
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
      FROM campaign c
@@ -635,6 +693,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
     [campaignId, postId],
   );
   if (!rows.some((r) => r.post_id === postId)) throw new CampaignPostNotFoundError();
+  await audit(tx, { action: 'campaign.primary_post_set', entityType: 'campaign', entityId: campaignId, before: { primaryPostId: previous.primaryPostId }, after: { primaryPostId: postId } });
   return findCampaignPost(tx, campaignId, postId);
 }
 
@@ -649,8 +708,11 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
  */
 export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateCampaignInput): Promise<CampaignDetail> {
   await lockEditableCampaign(tx, id);
-  const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null }>(
-    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on FROM campaign WHERE id = $1`,
+  const { rows } = await tx.query<{
+    name: string; brief: string | null; starts_on: string | null; ends_on: string | null; tracking_code: string | null; tracking_url: string | null;
+  }>(
+    `SELECT name, brief, ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, tracking_code, tracking_url
+     FROM campaign WHERE id = $1`,
     [id],
   );
   const current = rows[0];
@@ -681,7 +743,21 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
       input.trackingUrl !== undefined, input.trackingUrl?.trim() || null,
     ],
   );
-  return requireCampaign(tx, id);
+  const updated = await requireCampaign(tx, id);
+  await audit(tx, {
+    action: 'campaign.updated',
+    entityType: 'campaign',
+    entityId: id,
+    before: {
+      name: current.name, brief: current.brief, startsOn: current.starts_on, endsOn: current.ends_on,
+      trackingCode: current.tracking_code, trackingUrl: current.tracking_url,
+    },
+    after: {
+      name: updated.name, brief: updated.brief, startsOn: updated.startsOn, endsOn: updated.endsOn,
+      trackingCode: updated.trackingCode, trackingUrl: updated.trackingUrl,
+    },
+  });
+  return updated;
 }
 
 /**
@@ -699,6 +775,13 @@ export async function transitionCampaign(tx: WorkspaceTx, id: string, to: Campai
   if (!row) throw new CampaignNotFoundError(id);
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
   await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [id, result.status, result.brandBaselineFrom]);
+  await audit(tx, {
+    action: 'campaign.status_changed',
+    entityType: 'campaign',
+    entityId: id,
+    before: { status: row.status, brandBaselineFrom: row.brand_baseline_from },
+    after: { status: result.status, brandBaselineFrom: result.brandBaselineFrom },
+  });
   return requireCampaign(tx, id);
 }
 
@@ -846,7 +929,796 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   );
   const id = inserted.rows[0]?.id;
   if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
+  // Audita aquí y no en COT-4: quien llame a esta función deja la fila sin saberlo.
+  await audit(tx, {
+    action: 'campaign.created',
+    entityType: 'campaign',
+    entityId: id,
+    before: null,
+    after: {
+      quoteId: q.id, companyId: q.company_id, creatorId: q.creator_id, dealId: q.deal_id, name: campaignName,
+      amount: q.total, currency: q.currency, startsOn: input.startsOn, endsOn: input.endsOn, status: 'planned',
+    },
+  });
   return { campaign: await requireCampaign(tx, id), created: true };
+}
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+//
+// campaign_brand_input (0008) tiene workspace_id y su política RLS; mc_app
+// conserva INSERT y UPDATE (0025 no la toca). La semántica la decide la
+// fuente (core, brandInputSemantics): lo del formulario es un total
+// acumulado a la fecha `day` y manda el de la fecha más reciente (en la
+// misma fecha, el último por received_at); lo del
+// CSV es de ese día y se suma. No hay UNIQUE sobre la clave natural
+// (campaign_id, kind, day, source): la idempotencia se hace aquí, dentro
+// de la transacción y con la fila de campaign bloqueada (FOR UPDATE en
+// lockEditableCampaign serializa dos importaciones a la vez). El índice
+// que lo garantiza en la base para cualquier escritor está propuesto en
+// docs/propuestas/CAM-4.md §2.
+
+export interface AddBrandInputInput {
+  campaignId: string;
+  kind: ManualBrandInputKind;
+  /** 'YYYY-MM-DD': el total es «a esta fecha». */
+  day: string;
+  /** Decimal como texto ('318' o '8400000.00'). Un conteo va sin decimales. */
+  value: string;
+  /** Solo para revenue. Si falta, la de la campaña. */
+  currency?: string | null;
+  /** Texto libre de la persona. Nunca va a la bitácora. */
+  notes?: string | null;
+}
+
+export interface BrandInputRow {
+  id: string;
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  day: string;
+  /** Decimal como texto, con dos cifras ('318.00'). */
+  value: string;
+  currency: string | null;
+  receivedAt: string;
+  notes: string | null;
+}
+
+export interface AddBrandInputResult {
+  input: BrandInputRow;
+  /** false si la misma alta (kind, día, valor, moneda) ya estaba: no se duplica. */
+  created: boolean;
+  /** Para que la pantalla avise si la moneda del aporte es otra. */
+  campaignCurrency: string;
+}
+
+/** Un total por par (kind, fuente), calculado en SQL. */
+export interface BrandInputTotal {
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  semantics: BrandInputSemantics;
+  /** total: el último valor reportado. daily: la suma de todos los días. Decimal como texto. */
+  value: string;
+  currency: string | null;
+  /** total: el día al que corresponde. daily: el último día con datos. */
+  asOf: string;
+  /** daily: el primer día con datos. total: null. */
+  from: string | null;
+  /** Cuántas filas hay detrás. */
+  count: number;
+}
+
+/** Un día del CSV: las ventas y, si vinieron, pedidos y canjes. */
+export interface BrandDailyRow {
+  day: string;
+  sales: string | null;
+  orders: number | null;
+  redemptions: number | null;
+}
+
+export interface BrandInputs {
+  totals: BrandInputTotal[];
+  daily: BrandDailyRow[];
+  /** La moneda de la campaña: la que asume el CSV y propone el formulario. */
+  currency: string;
+}
+
+export interface ImportBrandCsvInput {
+  campaignId: string;
+  /** Las filas aceptadas por reviewBrandCsvRows (core). */
+  rows: readonly BrandCsvRow[];
+}
+
+export interface ImportBrandCsvResult {
+  /** Filas de campaign_brand_input nuevas (un día con ventas, pedidos y canjes son tres). */
+  inserted: number;
+  /** Ya estaban con el mismo valor. */
+  unchanged: number;
+  /** Ya estaban con otro valor y se reemplazaron. */
+  replaced: number;
+  /** Días distintos del archivo. */
+  days: number;
+  from: string | null;
+  to: string | null;
+}
+
+export class InvalidBrandInputError extends CampaignError {
+  constructor(messageEs: string) {
+    super('InvalidBrandInputError', messageEs);
+  }
+}
+
+export class CampaignWithoutDatesError extends CampaignError {
+  constructor() {
+    super('CampaignWithoutDatesError', 'La campaña no tiene fechas de inicio y fin: ponlas antes de importar el CSV de ventas.');
+  }
+}
+
+export class BrandCsvOutOfWindowError extends CampaignError {
+  readonly day: string;
+  constructor(day: string, window: DateWindow) {
+    super('BrandCsvOutOfWindowError', `El día ${day} queda fuera del rango que admite la campaña (${window.from} a ${window.to}).`);
+    this.day = day;
+  }
+}
+
+/** Un conteo ('318') o un importe con hasta dos decimales ('8400000.50'). */
+const BRAND_VALUE_RE = /^\d{1,14}(\.\d{1,2})?$/;
+const COUNT_RE = /^\d{1,14}$/;
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+/** Lo que la bitácora guarda de un aporte: cifras y claves, nunca el texto libre. */
+interface BrandInputAuditAfter {
+  kind: BrandInputKind;
+  day: string;
+  value: string;
+  currency: string | null;
+  source: BrandInputSource;
+}
+
+interface RawBrandInputRow {
+  id: string;
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  day: string;
+  value: string;
+  currency: string | null;
+  received_at: string;
+  notes: string | null;
+}
+
+function toBrandInputRow(r: RawBrandInputRow): BrandInputRow {
+  return { id: r.id, kind: r.kind, source: r.source, day: r.day, value: r.value, currency: r.currency, receivedAt: r.received_at, notes: r.notes };
+}
+
+async function campaignDatesAndCurrency(tx: WorkspaceTx, campaignId: string): Promise<{ startsOn: string | null; endsOn: string | null; currency: string }> {
+  const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null; currency: string }>(
+    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, currency FROM campaign WHERE id = $1`,
+    [campaignId],
+  );
+  const row = rows[0];
+  if (!row) throw new CampaignNotFoundError(campaignId);
+  return { startsOn: row.starts_on, endsOn: row.ends_on, currency: row.currency };
+}
+
+/**
+ * Registra un aporte de la marca por formulario: un TOTAL acumulado a la
+ * fecha. Valida kind, fecha, valor y moneda antes de escribir; la moneda
+ * solo cuenta para revenue (los conteos van sin ella) y si falta es la
+ * de la campaña. Una campaña cerrada o cancelada lanza
+ * CampaignLockedError. Idempotente: la misma alta (kind, día, valor,
+ * moneda) repetida devuelve la fila existente con created: false. Cada
+ * alta nueva deja una entrada en audit_log.
+ */
+export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput): Promise<AddBrandInputResult> {
+  if (!isManualBrandInputKind(input.kind)) throw new InvalidBrandInputError('Elige qué reporta la marca.');
+  if (!isIsoDate(input.day)) throw new InvalidBrandInputError('La fecha del aporte debe ser YYYY-MM-DD.');
+  const value = input.value.trim();
+  const money = isMoneyBrandInputKind(input.kind);
+  if (money ? !BRAND_VALUE_RE.test(value) : !COUNT_RE.test(value)) {
+    throw new InvalidBrandInputError(money ? 'El importe debe ser un número con hasta dos decimales.' : 'La cifra debe ser un número entero, sin decimales.');
+  }
+  await lockEditableCampaign(tx, input.campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, input.campaignId);
+  let currency: string | null = null;
+  if (money) {
+    currency = (input.currency?.trim() || campaign.currency).toUpperCase();
+    if (!CURRENCY_RE.test(currency)) throw new InvalidBrandInputError('La moneda debe ser un código de tres letras (COP, USD).');
+  }
+  const notes = input.notes?.trim() || null;
+
+  // Idempotente contra el ÚLTIMO reporte de ese día, no contra cualquiera:
+  // 318 → 320 → 318 es una corrección de vuelta y tiene que quedar.
+  const existing = await tx.query<RawBrandInputRow & { same: boolean }>(
+    `SELECT id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes,
+            (value_num = $4::numeric AND currency IS NOT DISTINCT FROM $5) AS same
+     FROM campaign_brand_input b
+     WHERE campaign_id = $1 AND kind = $2 AND day = $3::date AND source = 'brand_manual'
+     -- b.received_at y no received_at: ese nombre es el alias de texto de
+     -- arriba (resolución de segundo) y ordenaría mal dos altas seguidas.
+     ORDER BY b.received_at DESC, b.id DESC LIMIT 1`,
+    [input.campaignId, input.kind, input.day, value, currency],
+  );
+  const latest = existing.rows[0];
+  if (latest?.same) return { input: toBrandInputRow(latest), created: false, campaignCurrency: campaign.currency };
+
+  // received_at estrictamente creciente por (campaña, kind, día): «la
+  // última manda» no puede depender de un empate. clock_timestamp() y no
+  // now() para que dos altas en una transacción se ordenen, y además un
+  // microsegundo por encima de la última ya guardada, porque el reloj
+  // puede tener resolución de milisegundo (PGlite) o repetir valor. Es
+  // seguro: la fila de la campaña está bloqueada (lockEditableCampaign).
+  const inserted = await tx.query<RawBrandInputRow>(
+    `INSERT INTO campaign_brand_input (workspace_id, campaign_id, kind, day, value_num, currency, source, received_at, notes)
+     VALUES (current_workspace_id(), $1, $2, $3::date, $4::numeric, $5, 'brand_manual',
+             greatest(clock_timestamp(), (SELECT max(received_at) + interval '1 microsecond' FROM campaign_brand_input
+                                          WHERE campaign_id = $1 AND kind = $2 AND day = $3::date AND source = 'brand_manual')),
+             $6)
+     RETURNING id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes`,
+    [input.campaignId, input.kind, input.day, value, currency, notes],
+  );
+  const row = inserted.rows[0];
+  if (!row) throw new CampaignError('BrandInputInsertError', 'No se pudo registrar el aporte.');
+  const after: BrandInputAuditAfter = { kind: row.kind, day: row.day, value: row.value, currency: row.currency, source: row.source };
+  // `after` no lleva notas ni nombres: solo claves y cifras.
+  await audit(tx, { action: 'campaign.brand_input.added', entityType: 'campaign_brand_input', entityId: row.id, before: null, after: { ...after, campaign_id: input.campaignId } });
+  return { input: toBrandInputRow(row), created: true, campaignCurrency: campaign.currency };
+}
+
+/**
+ * Abre la importación de un CSV: bloquea la campaña (FOR UPDATE), exige
+ * que admita cambios (CampaignLockedError) y que tenga fechas, y devuelve
+ * la ventana y la moneda. La Server Action revisa el archivo con ESTA
+ * ventana y después llama a importBrandCsv en la misma transacción: las
+ * fechas no pueden cambiar entre la revisión y la escritura.
+ */
+export async function openBrandCsvImport(tx: WorkspaceTx, campaignId: string): Promise<{ window: DateWindow; currency: string }> {
+  await lockEditableCampaign(tx, campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, campaignId);
+  const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+  if (!window) throw new CampaignWithoutDatesError();
+  return { window, currency: campaign.currency };
+}
+
+/** Las columnas del CSV y el kind con el que se guardan (source brand_csv, diarias). */
+const CSV_COLUMNS: readonly { kind: BrandInputKind; pick: (r: BrandCsvRow) => string | null; money: boolean }[] = [
+  { kind: 'csv_sales', pick: (r) => r.sales, money: true },
+  { kind: 'orders', pick: (r) => (r.orders === null ? null : String(r.orders)), money: false },
+  { kind: 'code_redemptions', pick: (r) => (r.redemptions === null ? null : String(r.redemptions)), money: false },
+];
+
+/**
+ * Importa las filas aceptadas del CSV de ventas diarias. Cada día deja
+ * hasta tres filas (csv_sales, y orders / code_redemptions si vinieron),
+ * todas con source 'brand_csv' y la moneda de la campaña. Vuelve a
+ * comprobar la ventana starts_on − 7 … ends_on + 60 (una campaña sin
+ * fechas no importa). Idempotente por (campaign_id, kind, day, source):
+ * un día que ya estaba con el mismo valor no se toca; con otro valor se
+ * reemplaza (lo último que reporta la marca manda, como en el
+ * formulario). Deja UNA entrada en audit_log con los conteos.
+ */
+export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput): Promise<ImportBrandCsvResult> {
+  await lockEditableCampaign(tx, input.campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, input.campaignId);
+  const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+  if (!window) throw new CampaignWithoutDatesError();
+  const days = new Set<string>();
+  for (const r of input.rows) {
+    if (!isIsoDate(r.day)) throw new InvalidBrandInputError(`El día «${r.day}» no es una fecha YYYY-MM-DD.`);
+    if (r.day < window.from || r.day > window.to) throw new BrandCsvOutOfWindowError(r.day, window);
+    if (!BRAND_VALUE_RE.test(r.sales)) throw new InvalidBrandInputError(`Las ventas del ${r.day} no son un importe válido.`);
+    // reviewBrandCsvRows ya los rechaza; otro llamador podría no hacerlo, y dos
+    // filas del mismo día sumarían doble o harían ambiguo el UPDATE.
+    if (days.has(r.day)) throw new InvalidBrandInputError(`El día ${r.day} viene dos veces: deja una sola fila por día.`);
+    days.add(r.day);
+  }
+  const result: ImportBrandCsvResult = { inserted: 0, unchanged: 0, replaced: 0, days: days.size, from: null, to: null };
+  if (days.size === 0) return result;
+  const sorted = [...days].sort();
+  result.from = sorted[0] ?? null;
+  result.to = sorted[sorted.length - 1] ?? null;
+
+  for (const col of CSV_COLUMNS) {
+    const pairs = input.rows.map((r) => [r.day, col.pick(r)] as const).filter((p): p is readonly [string, string] => p[1] !== null);
+    if (pairs.length === 0) continue;
+    const { rows } = await tx.query<{ inserted: number; replaced: number; existing: number }>(
+      `WITH incoming AS (
+         SELECT t.day, t.value FROM unnest($3::date[], $4::numeric[]) AS t(day, value)
+       ), existing AS (
+         SELECT b.id, b.day, b.value_num
+         FROM campaign_brand_input b JOIN incoming i ON i.day = b.day
+         WHERE b.campaign_id = $1 AND b.kind = $2 AND b.source = 'brand_csv'
+       ), upd AS (
+         UPDATE campaign_brand_input b
+         SET value_num = i.value, currency = $5, received_at = clock_timestamp()
+         FROM incoming i
+         WHERE b.id IN (SELECT id FROM existing) AND b.day = i.day AND b.value_num IS DISTINCT FROM i.value
+         RETURNING b.id
+       ), ins AS (
+         INSERT INTO campaign_brand_input (workspace_id, campaign_id, kind, day, value_num, currency, source, received_at)
+         SELECT current_workspace_id(), $1, $2, i.day, i.value, $5, 'brand_csv', clock_timestamp()
+         FROM incoming i
+         WHERE NOT EXISTS (SELECT 1 FROM existing e WHERE e.day = i.day)
+         RETURNING id
+       )
+       SELECT (SELECT count(*) FROM ins)::int AS inserted,
+              (SELECT count(*) FROM upd)::int AS replaced,
+              (SELECT count(DISTINCT day) FROM existing)::int AS existing`,
+      [input.campaignId, col.kind, pairs.map((p) => p[0]), pairs.map((p) => p[1]), col.money ? campaign.currency : null],
+    );
+    const r = rows[0];
+    if (!r) throw new CampaignError('BrandCsvImportError', 'No se pudo importar el CSV.');
+    result.inserted += r.inserted;
+    result.replaced += r.replaced;
+    result.unchanged += r.existing - r.replaced;
+  }
+  await audit(tx, { action: 'campaign.brand_csv.imported', entityType: 'campaign', entityId: input.campaignId, before: null, after: {
+    source: 'brand_csv',
+    currency: campaign.currency,
+    days: result.days,
+    from: result.from,
+    to: result.to,
+    inserted: result.inserted,
+    replaced: result.replaced,
+    unchanged: result.unchanged,
+  } });
+  return result;
+}
+
+interface RawTotalRow {
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  value: string;
+  currency: string | null;
+  as_of: string;
+  from_day: string | null;
+  n: number;
+}
+
+interface RawDailyRow {
+  day: string;
+  sales: string | null;
+  orders: string | null;
+  redemptions: string | null;
+}
+
+/**
+ * Lo que aportó la marca, totalizado en SQL: para lo manual, el total
+ * de la fecha más reciente (y en la misma fecha, el último recibido): es
+ * un acumulado, así que un dato atrasado cargado después no lo hace
+ * retroceder; para el CSV, la
+ * suma por kind con el primer y el último día. Más la serie diaria del
+ * CSV para el gráfico. Es también la lectura de CAM-5 (docs/propuestas/
+ * CAM-4.md §3). Una campaña de otro workspace es CampaignNotFoundError.
+ */
+export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Promise<BrandInputs> {
+  const campaign = await campaignDatesAndCurrency(tx, campaignId);
+  const [totals, daily] = await Promise.all([
+    readBrandTotals(tx, campaignId),
+    tx.query<RawDailyRow>(
+      `SELECT ${DATE('day')} AS day,
+              max(value_num) FILTER (WHERE kind = 'csv_sales')::text AS sales,
+              max(value_num) FILTER (WHERE kind = 'orders')::text AS orders,
+              max(value_num) FILTER (WHERE kind = 'code_redemptions')::text AS redemptions
+       FROM campaign_brand_input
+       WHERE campaign_id = $1 AND workspace_id = $2 AND source = 'brand_csv' AND day IS NOT NULL
+       GROUP BY day
+       ORDER BY day`,
+      [campaignId, tx.workspaceId],
+    ),
+  ]);
+  return {
+    currency: campaign.currency,
+    totals: totals.map((r) => ({
+      kind: r.kind,
+      source: r.source,
+      semantics: brandInputSemantics(r.source),
+      value: r.value,
+      currency: r.currency,
+      asOf: r.as_of,
+      from: r.from_day,
+      count: r.n,
+    })),
+    daily: daily.rows.map((r) => ({ day: r.day, sales: r.sales, orders: intOrNull(r.orders), redemptions: intOrNull(r.redemptions) })),
+  };
+}
+
+/**
+ * Los totales por (kind, fuente), en SQL: lo manual, el de la fecha más
+ * reciente; el CSV, la suma. Con workspace_id explícito además de RLS,
+ * porque también lo lee el worker (CAM-5), que corre como mc_worker.
+ */
+async function readBrandTotals(q: ResultExecutor, campaignId: string): Promise<RawTotalRow[]> {
+  const { rows } = await queryRows<RawTotalRow>(q,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (kind)
+              kind, source, value_num::text AS value, currency, ${DATE('day')} AS as_of, NULL::text AS from_day,
+              count(*) OVER (PARTITION BY kind)::int AS n
+       FROM campaign_brand_input
+       WHERE campaign_id = $1 AND workspace_id = $3 AND source = 'brand_manual' AND kind = ANY($2::text[]) AND day IS NOT NULL
+       ORDER BY kind, day DESC, received_at DESC, id DESC
+     ) manual
+     UNION ALL
+     SELECT kind, source, sum(value_num)::text AS value, max(currency) AS currency,
+            ${DATE('max(day)')} AS as_of, ${DATE('min(day)')} AS from_day, count(*)::int AS n
+     FROM campaign_brand_input
+     WHERE campaign_id = $1 AND workspace_id = $3 AND source = 'brand_csv' AND kind = ANY($2::text[]) AND day IS NOT NULL
+     GROUP BY kind, source
+     ORDER BY source, kind`,
+    [campaignId, [...BRAND_INPUT_KINDS], q.workspaceId],
+  );
+  return rows;
+}
+
+// ---------------------------------------------------------------------
+// Resultado de campaña (CAM-5)
+// ---------------------------------------------------------------------
+//
+// campaign_result (0008) es un materializado: una fila por campaña que se
+// reemplaza. La calcula calcularResultado (core, pura) desde lo que leen
+// estas consultas. Las leen dos: la web (WorkspaceTx, mc_app con RLS) y
+// el worker (campaign.compute, mc_worker, que se salta RLS). Por eso cada
+// SELECT y el UPSERT llevan workspace_id EXPLÍCITO además de la política:
+// el mismo SQL es seguro en los dos roles.
+
+/**
+ * Lo que necesitan las consultas del resultado: ejecutar SQL y saber de
+ * qué workspace. WorkspaceTx lo cumple; el worker lo arma con su
+ * transacción y el workspace de la campaña.
+ */
+export interface ResultExecutor extends PlainExecutor {
+  readonly workspaceId: string;
+}
+
+/**
+ * Ejecutar SQL, sin más. No es genérico a propósito: así lo cumplen tal
+ * cual WorkspaceTx, la transacción de asWorker y ctx.db del worker, cuyas
+ * firmas genéricas no coinciden entre sí.
+ */
+export interface PlainExecutor {
+  query(text: string, params?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+}
+
+/**
+ * Las filas con la forma que pide el SQL. Es la misma afirmación que
+ * hace tx.query<T>() sin decirlo; aquí está escrita una sola vez.
+ */
+async function queryRows<T>(q: PlainExecutor, text: string, params?: readonly unknown[]): Promise<{ rows: T[] }> {
+  const r = await q.query(text, params);
+  return { rows: r.rows as unknown as T[] };
+}
+
+/** Lo que la ficha lee de campaign_result. Conteos como number; dinero y proporciones como texto. */
+export interface CampaignResultRow {
+  campaignId: string;
+  computedAt: string;
+  cutHours: number;
+  views: number | null;
+  reach: number | null;
+  interactions: number | null;
+  saves: number | null;
+  shares: number | null;
+  linkClicks: number | null;
+  reachNonFollowersPct: string | null;
+  viewsVsMedian: string | null;
+  brandFollowersGained: number | null;
+  brandFollowersBaselineRate: string | null;
+  brandFollowersCampaignRate: string | null;
+  codeRedemptions: number | null;
+  attributedRevenue: string | null;
+  currency: string | null;
+  cpm: string | null;
+  costPerFollower: string | null;
+  cpa: string | null;
+  emv: string | null;
+  /** Solo los nombres que core conoce; uno desconocido se descarta. */
+  missingInputs: MissingInput[];
+}
+
+export interface ResultCampaign {
+  id: string;
+  workspaceId: string;
+  status: CampaignStatus;
+}
+
+export class ResultNotWrittenError extends CampaignError {
+  constructor() {
+    super('ResultNotWrittenError', 'No se pudo guardar el resultado de la campaña.');
+  }
+}
+
+export class ResultFrozenError extends CampaignError {
+  constructor(status: CampaignStatus) {
+    super('ResultFrozenError', `Una campaña ${CAMPAIGN_STATUS_META[status].label.toLowerCase()} no recalcula su resultado.`);
+  }
+}
+
+interface RawPostCutRow {
+  post_id: string;
+  platform_id: string;
+  max_age: string | null;
+  cut: number | null;
+  views: string | null;
+  reach: string | null;
+  interactions: string | null;
+  saves: string | null;
+  shares: string | null;
+  link_clicks: string | null;
+  reach_non_followers: string | null;
+}
+
+/**
+ * Todo lo que calcularResultado necesita de una campaña, en cinco
+ * lecturas con workspace_id explícito. null si la campaña no existe en
+ * ese workspace.
+ *
+ * El valor de un post a un corte es la lectura más cercana sin pasarse
+ * y, a igual edad, la capturada más tarde (una lectura manual que
+ * corrige la de la API: el seed 0003 hace eso a las 720 h).
+ */
+export async function getResultInputs(q: ResultExecutor, campaignId: string): Promise<{ campaign: ResultCampaign; inputs: ResultInputs } | null> {
+  const ws = q.workspaceId;
+  const { rows: camps } = await queryRows<{
+    id: string; workspace_id: string; status: CampaignStatus; amount: string | null; currency: string;
+    starts_on: string | null; ends_on: string | null; brand_baseline_from: string | null; creator_id: string | null;
+  }>(q,
+    `SELECT id, workspace_id, status, amount::text AS amount, currency,
+            ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on,
+            ${DATE('brand_baseline_from')} AS brand_baseline_from, creator_id
+     FROM campaign WHERE id = $2 AND workspace_id = $1`,
+    [ws, campaignId],
+  );
+  const c = camps[0];
+  if (!c) return null;
+
+  const [posts, baselines, brand, totals] = await Promise.all([
+    queryRows<RawPostCutRow>(q,
+      `WITH cp AS (
+         SELECT p.id, p.platform_id
+         FROM campaign_post x
+         JOIN campaign c ON c.id = x.campaign_id AND c.workspace_id = $1
+         JOIN post p ON p.id = x.post_id AND p.workspace_id = $1
+         WHERE c.id = $2
+       ), ages AS (
+         SELECT s.post_id, max(s.age_hours) AS max_age
+         FROM post_metric_snapshot s JOIN cp ON cp.id = s.post_id
+         WHERE s.workspace_id = $1
+         GROUP BY s.post_id
+       ), at_cut AS (
+         SELECT DISTINCT ON (s.post_id, k.cut)
+                s.post_id, k.cut, s.views, s.reach, s.total_interactions, s.saves, s.shares, s.link_clicks, s.reach_non_followers
+         FROM post_metric_snapshot s
+         JOIN cp ON cp.id = s.post_id
+         CROSS JOIN unnest($3::int[]) AS k(cut)
+         WHERE s.workspace_id = $1 AND s.age_hours <= k.cut
+         ORDER BY s.post_id, k.cut, s.age_hours DESC, s.captured_at DESC
+       )
+       SELECT cp.id AS post_id, cp.platform_id, a.max_age::text AS max_age, x.cut,
+              x.views::text AS views, x.reach::text AS reach, x.total_interactions::text AS interactions,
+              x.saves::text AS saves, x.shares::text AS shares, x.link_clicks::text AS link_clicks,
+              x.reach_non_followers::text AS reach_non_followers
+       FROM cp
+       LEFT JOIN ages a ON a.post_id = cp.id
+       LEFT JOIN at_cut x ON x.post_id = cp.id
+       ORDER BY cp.id, x.cut`,
+      [ws, campaignId, [...AGE_CUTS_HOURS]],
+    ),
+    c.creator_id === null
+      ? Promise.resolve({ rows: [] })
+      : queryRows<{ platform_id: string; cut: number; median_views: string | null; sample_size: number; is_reliable: boolean }>(q,
+          `SELECT DISTINCT ON (platform_id, age_hours_cut)
+                  platform_id, age_hours_cut AS cut, median_views::text AS median_views, sample_size, is_reliable
+           FROM creator_baseline
+           WHERE workspace_id = $1 AND creator_id = $2
+           ORDER BY platform_id, age_hours_cut, computed_at DESC`,
+          [ws, c.creator_id],
+        ),
+    queryRows<{ platform_id: string; day: string; followers: string | null }>(q,
+      // La misma lectura que la ficha (listBrandFollowers, CAM-3): la cuenta de la campaña por red Y handle, y
+      // un día una vez aunque dos campañas lo hayan leído o convivan una fila sin cifra y otra con cifra (0035).
+      `SELECT DISTINCT ON (s.platform_id, s.day) s.platform_id, ${DATE('s.day')} AS day, s.followers::text AS followers
+       FROM brand_account_snapshot s
+       JOIN campaign c ON c.id = $2 AND c.workspace_id = $1
+       JOIN jsonb_array_elements(CASE WHEN jsonb_typeof(c.brand_accounts) = 'array' THEN c.brand_accounts ELSE '[]'::jsonb END) a
+         ON a->>'platform_id' = s.platform_id AND lower(ltrim(s.handle, '@')) = lower(ltrim(a->>'handle', '@'))
+       WHERE s.company_id = c.company_id
+         AND (s.campaign_id IS NULL OR s.campaign_id IN (SELECT id FROM campaign WHERE workspace_id = $1))
+       ORDER BY s.platform_id, s.day, (s.followers IS NULL), s.captured_at, s.id`,
+      [ws, campaignId],
+    ),
+    readBrandTotals(q, campaignId),
+  ]);
+
+  const byPost = new Map<string, ResultPost & { cuts: ResultPost['cuts'][number][] }>();
+  for (const r of posts.rows) {
+    let p = byPost.get(r.post_id);
+    if (!p) {
+      p = { postId: r.post_id, platformId: r.platform_id, maxAgeHours: numOrNull(r.max_age), cuts: [] };
+      byPost.set(r.post_id, p);
+    }
+    if (r.cut !== null && isAgeCut(r.cut)) {
+      p.cuts.push({
+        cutHours: r.cut,
+        views: intOrNull(r.views),
+        reach: intOrNull(r.reach),
+        interactions: intOrNull(r.interactions),
+        saves: intOrNull(r.saves),
+        shares: intOrNull(r.shares),
+        linkClicks: intOrNull(r.link_clicks),
+        reachNonFollowers: intOrNull(r.reach_non_followers),
+      });
+    }
+  }
+  const series = new Map<string, { day: string; followers: number | null }[]>();
+  for (const r of brand.rows) {
+    const points = series.get(r.platform_id) ?? [];
+    points.push({ day: r.day, followers: intOrNull(r.followers) });
+    series.set(r.platform_id, points);
+  }
+
+  return {
+    campaign: { id: c.id, workspaceId: c.workspace_id, status: c.status },
+    inputs: {
+      amount: c.amount,
+      currency: c.currency,
+      startsOn: c.starts_on,
+      endsOn: c.ends_on,
+      brandBaselineFrom: c.brand_baseline_from,
+      posts: [...byPost.values()],
+      baselines: baselines.rows.map((b) => ({
+        platformId: b.platform_id, cutHours: b.cut, medianViews: numOrNull(b.median_views), sampleSize: b.sample_size, reliable: b.is_reliable,
+      })),
+      brandSeries: [...series.entries()].map(([platformId, points]) => ({ platformId, points })),
+      brandTotals: totals.map((t) => ({ kind: t.kind, source: t.source, value: t.value, currency: t.currency })),
+    },
+  };
+}
+
+function numOrNull(v: string | null): number | null {
+  if (v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isAgeCut(n: number): n is AgeCut {
+  return (AGE_CUTS_HOURS as readonly number[]).includes(n);
+}
+
+/**
+ * Escribe (o reemplaza) la fila de campaign_result. UPSERT por
+ * campaign_id con workspace_id explícito: la fila nace con el workspace
+ * de la campaña y el UPDATE no toca una fila de otro. computedAt null =
+ * now() de la base (la web); el worker pasa ctx.now().
+ */
+export async function upsertResult(q: ResultExecutor, campaignId: string, v: CampaignResultValues, computedAt: string | null): Promise<boolean> {
+  const { rows } = await queryRows<{ campaign_id: string }>(q,
+    `INSERT INTO campaign_result (campaign_id, workspace_id, computed_at, cut_hours, views, reach, interactions, saves, shares, link_clicks,
+                                  reach_non_followers_pct, views_vs_median, brand_followers_gained, brand_followers_baseline_rate,
+                                  brand_followers_campaign_rate, code_redemptions, attributed_revenue, currency, cpm, cost_per_follower,
+                                  cpa, emv, missing_inputs)
+     SELECT c.id, c.workspace_id, coalesce($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10,
+            $11::numeric, $12::numeric, $13, $14::numeric, $15::numeric, $16, $17::numeric, $18, $19::numeric, $20::numeric,
+            $21::numeric, NULL, $22::text[]
+     FROM campaign c WHERE c.id = $2 AND c.workspace_id = $1
+     ON CONFLICT (campaign_id) DO UPDATE SET
+       computed_at = EXCLUDED.computed_at, cut_hours = EXCLUDED.cut_hours, views = EXCLUDED.views, reach = EXCLUDED.reach,
+       interactions = EXCLUDED.interactions, saves = EXCLUDED.saves, shares = EXCLUDED.shares, link_clicks = EXCLUDED.link_clicks,
+       reach_non_followers_pct = EXCLUDED.reach_non_followers_pct, views_vs_median = EXCLUDED.views_vs_median,
+       brand_followers_gained = EXCLUDED.brand_followers_gained,
+       brand_followers_baseline_rate = EXCLUDED.brand_followers_baseline_rate,
+       brand_followers_campaign_rate = EXCLUDED.brand_followers_campaign_rate,
+       code_redemptions = EXCLUDED.code_redemptions, attributed_revenue = EXCLUDED.attributed_revenue, currency = EXCLUDED.currency,
+       cpm = EXCLUDED.cpm, cost_per_follower = EXCLUDED.cost_per_follower, cpa = EXCLUDED.cpa, emv = EXCLUDED.emv,
+       missing_inputs = EXCLUDED.missing_inputs
+     WHERE campaign_result.workspace_id = EXCLUDED.workspace_id
+     RETURNING campaign_id`,
+    [
+      q.workspaceId, campaignId, computedAt, v.cutHours, v.views, v.reach, v.interactions, v.saves, v.shares, v.linkClicks,
+      v.reachNonFollowersPct, v.viewsVsMedian, v.brandFollowersGained, v.brandFollowersBaselineRate,
+      v.brandFollowersCampaignRate, v.codeRedemptions, v.attributedRevenue, v.currency, v.cpm, v.costPerFollower,
+      v.cpa, v.missingInputs,
+    ],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Lee, calcula y escribe el resultado de una campaña, en la transacción
+ * de quien llama. Solo live, measuring y reported: una cerrada o
+ * cancelada conserva el suyo (ResultFrozenError). null si la campaña no
+ * existe en el workspace.
+ */
+export async function computeCampaignResult(q: ResultExecutor, campaignId: string, computedAt: string | null = null): Promise<CampaignResultValues | null> {
+  const read = await getResultInputs(q, campaignId);
+  if (!read) return null;
+  if (!RESULT_COMPUTE_STATUSES.includes(read.campaign.status)) throw new ResultFrozenError(read.campaign.status);
+  const values = calcularResultado(read.inputs);
+  // false = el UPSERT no escribió: la fila existente es de otro workspace
+  // (la guarda del ON CONFLICT) o la campaña desapareció entre la lectura
+  // y la escritura. No es un éxito.
+  if (!(await upsertResult(q, campaignId, values, computedAt))) throw new ResultNotWrittenError();
+  return values;
+}
+
+/**
+ * Las campañas que el job recalcula (live, measuring, reported), de todos
+ * los workspaces o de uno, o una sola. Solo para el worker: como mc_app,
+ * RLS la limita al workspace de la transacción.
+ */
+export async function listCampaignsToCompute(q: PlainExecutor, filter: { workspaceId?: string; campaignId?: string } = {}): Promise<{ id: string; workspaceId: string }[]> {
+  const { rows } = await queryRows<{ id: string; workspace_id: string }>(q,
+    `SELECT id, workspace_id FROM campaign
+     WHERE status = ANY($1::text[]) AND ($2::uuid IS NULL OR workspace_id = $2) AND ($3::uuid IS NULL OR id = $3)
+     ORDER BY workspace_id, starts_on NULLS LAST, id`,
+    [[...RESULT_COMPUTE_STATUSES], filter.workspaceId ?? null, filter.campaignId ?? null],
+  );
+  return rows.map((r) => ({ id: r.id, workspaceId: r.workspace_id }));
+}
+
+interface RawResultRow {
+  campaign_id: string; computed_at: string; cut_hours: number;
+  views: string | null; reach: string | null; interactions: string | null; saves: string | null; shares: string | null; link_clicks: string | null;
+  reach_non_followers_pct: string | null; views_vs_median: string | null;
+  brand_followers_gained: string | null; brand_followers_baseline_rate: string | null; brand_followers_campaign_rate: string | null;
+  code_redemptions: string | null; attributed_revenue: string | null; currency: string | null;
+  cpm: string | null; cost_per_follower: string | null; cpa: string | null; emv: string | null; missing_inputs: string[];
+}
+
+/** La fila de campaign_result de la ficha. null si todavía no se calculó. */
+export async function getCampaignResult(tx: WorkspaceTx, campaignId: string): Promise<CampaignResultRow | null> {
+  const { rows } = await tx.query<RawResultRow>(
+    `SELECT campaign_id, ${TS('computed_at')} AS computed_at, cut_hours,
+            views::text AS views, reach::text AS reach, interactions::text AS interactions, saves::text AS saves,
+            shares::text AS shares, link_clicks::text AS link_clicks,
+            reach_non_followers_pct::text AS reach_non_followers_pct, views_vs_median::text AS views_vs_median,
+            brand_followers_gained::text AS brand_followers_gained,
+            brand_followers_baseline_rate::text AS brand_followers_baseline_rate,
+            brand_followers_campaign_rate::text AS brand_followers_campaign_rate,
+            code_redemptions::text AS code_redemptions, attributed_revenue::text AS attributed_revenue, currency,
+            cpm::text AS cpm, cost_per_follower::text AS cost_per_follower, cpa::text AS cpa, emv::text AS emv,
+            to_jsonb(missing_inputs) AS missing_inputs
+     FROM campaign_result WHERE campaign_id = $1 AND workspace_id = $2`,
+    [campaignId, tx.workspaceId],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    campaignId: r.campaign_id,
+    computedAt: r.computed_at,
+    cutHours: r.cut_hours,
+    views: intOrNull(r.views),
+    reach: intOrNull(r.reach),
+    interactions: intOrNull(r.interactions),
+    saves: intOrNull(r.saves),
+    shares: intOrNull(r.shares),
+    linkClicks: intOrNull(r.link_clicks),
+    reachNonFollowersPct: r.reach_non_followers_pct,
+    viewsVsMedian: r.views_vs_median,
+    brandFollowersGained: intOrNull(r.brand_followers_gained),
+    brandFollowersBaselineRate: r.brand_followers_baseline_rate,
+    brandFollowersCampaignRate: r.brand_followers_campaign_rate,
+    codeRedemptions: intOrNull(r.code_redemptions),
+    attributedRevenue: r.attributed_revenue,
+    currency: r.currency?.trim() ?? null,
+    cpm: r.cpm,
+    costPerFollower: r.cost_per_follower,
+    cpa: r.cpa,
+    emv: r.emv,
+    missingInputs: r.missing_inputs.filter(isMissingInput),
+  };
+}
+
+/**
+ * ¿Puede la web escribir campaign_result? Desde 0025 mc_app solo la lee
+ * (la consolida el worker). El botón «Recalcular» se enseña solo si la
+ * base lo permite: el día que se aplique el GRANT propuesto en
+ * docs/propuestas/CAM-5.md §2, aparece sin tocar código.
+ */
+export async function canRecomputeResult(tx: WorkspaceTx): Promise<boolean> {
+  const { rows } = await tx.query<{ ok: boolean }>(
+    `SELECT has_table_privilege('campaign_result', 'INSERT') AND has_table_privilege('campaign_result', 'UPDATE') AS ok`,
+  );
+  return rows[0]?.ok === true;
 }
 
 // ---------------------------------------------------------------------

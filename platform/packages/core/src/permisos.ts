@@ -93,12 +93,13 @@ export const PERMISOS = [
   { key: 'cotizar.cotizacion.editar', module: 'cotizar', labelEs: 'Editar y borrar borradores de cotización', sensitivity: 'normal' },
   { key: 'cotizar.cotizacion.enviar', module: 'cotizar', labelEs: 'Enviar cotizaciones y registrar la respuesta de la marca', sensitivity: 'normal' },
 
-  // Campañas (Nicolás): CAM-1, CAM-2; CAM-4 y CAM-6 por la matriz.
+  // Campañas (Nicolás): CAM-1, CAM-2; CAM-4, CAM-5 y CAM-6 por la matriz.
   { key: 'campanas.campana.ver', module: 'campanas', labelEs: 'Ver las campañas', sensitivity: 'normal' },
   { key: 'campanas.campana.crear', module: 'campanas', labelEs: 'Crear campañas', sensitivity: 'normal' },
   { key: 'campanas.campana.editar', module: 'campanas', labelEs: 'Editar campañas y cambiar su estado', sensitivity: 'normal' },
   { key: 'campanas.post.asociar', module: 'campanas', labelEs: 'Asociar posts y marcar entregables', sensitivity: 'normal' },
   { key: 'campanas.aporte.registrar', module: 'campanas', labelEs: 'Registrar lo que aporta la marca', sensitivity: 'normal' },
+  { key: 'campanas.resultado.calcular', module: 'campanas', labelEs: 'Recalcular el resultado de una campaña', sensitivity: 'normal' },
   { key: 'campanas.reporte.enviar', module: 'campanas', labelEs: 'Enviar el reporte a la marca', sensitivity: 'normal' },
 
   // Finanzas (Nicolás): FIN-1; FIN-2, FIN-3, FIN-5, FIN-6 y FIN-8 por la matriz. Todo es dinero: sensible.

@@ -141,6 +141,17 @@ Reglas:
   por un conector se registra con `ctx.callLog.record(...)`. Detalle en
   `packages/connectors/README.md`.
 
+## Los jobs que hay
+
+| Job | Módulo | Qué hace |
+|---|---|---|
+| `oauth.refresh` | Conexiones (CON-2, CON-3) | Renueva los tokens que vencen pronto. |
+| `collect.account_metrics` | Conexiones (CON-10) | Snapshot diario de las cuentas por @ y de las autorizadas. |
+| `campaign.compute` | Campañas (CAM-5) | Cada día a las 07:30 UTC recalcula `campaign_result` de las campañas `live`, `measuring` y `reported` (las cerradas conservan el suyo). La cuenta es `calcularResultado` de `@mc/core`; el job lee con `getResultInputs` y escribe con `upsertResult` (`@mc/db`), con el `workspace_id` de cada campaña en cada consulta y una transacción por campaña. Con `{ workspaceId, campaignId }` en el payload calcula solo esa. `metadata`: `campaigns`, `computed`, `partial` (las que aún no llegan a 30 días), `failed`. |
+
+`mapLimit` (concurrencia dentro de una corrida) vive en
+`src/runner/concurrency.ts`; `oauth-refresh.ts` la reexporta.
+
 ## Qué pasa cuando falla
 
 | Situación | job_run | pg-boss |

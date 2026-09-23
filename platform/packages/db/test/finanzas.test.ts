@@ -14,6 +14,7 @@ import {
   InvoiceNotFound,
 } from '../src/queries/finanzas.ts';
 import { assertWorkspaceId } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
@@ -163,6 +164,44 @@ describe('crear facturas', () => {
     assert.equal(a.companyName, 'Café Alma');
   });
 
+  test('crear una factura deja su fila en la bitácora: actor de la sesión, before null y after solo con lo permitido (ACC-2)', async () => {
+    const USER_LAURA = '00000002-0000-4000-8000-000000000002';
+    const creada = await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, subtotal: '250000.00', issuedOn: '2026-09-23', dueOn: '2026-10-23', externalRef: ' DIAN-77 ' }),
+      { userId: USER_LAURA },
+    );
+    const filas = await filasDeBitacora(t, WORKSPACE_LAURA, creada.id);
+    assert.equal(filas.length, 1);
+    const [fila] = filas;
+    assert.equal(fila?.action, 'invoice.created');
+    assert.equal(fila?.entity_type, 'invoice');
+    assert.equal(fila?.actor_kind, 'user');
+    assert.equal(fila?.actor_user_id, USER_LAURA);
+    assert.equal(fila?.before, null);
+    assert.deepEqual(fila?.after, {
+      number: creada.number, companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, quoteId: null, currency: 'COP',
+      subtotal: '250000.00', tax: '47500.00', withholding: '27500.00', total: '297500.00',
+      issuedOn: '2026-09-23', dueOn: '2026-10-23', status: 'draft', externalRef: 'DIAN-77',
+    });
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, creada.id), [], 'desde otro workspace no se ve');
+  });
+
+  test('si crear falla después de escribir, no queda ni factura ni bitácora', async () => {
+    // Una moneda distinta a la del workspace se rechaza ANTES de escribir; aquí se fuerza el fallo después.
+    let id = '';
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+        const inv = await createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '1.00', issuedOn: '2026-09-23', dueOn: '2026-09-23' });
+        id = inv.id;
+        throw new Error('algo falló después');
+      }),
+      /algo falló después/,
+    );
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, id)), null);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_LAURA, id), []);
+  });
+
   test('la numeración sigue a la última del seed (FV-2026-011) y no la reinicia', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listInvoices(tx, { status: 'draft' }));
     const seqs = rows.map((r) => parseInt(r.number.slice(-3), 10));
@@ -246,6 +285,20 @@ describe('transiciones', () => {
     const anulada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, otra.id, 'void'));
     assert.equal(anulada.status, 'void');
     assert.equal(anulada.bucket, 'anulada');
+
+    // Cada transición dejó su fila, con el estado anterior y el nuevo; la inválida (paid con 1.00) no.
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, nueva.id);
+    assert.deepEqual(bitacora.map((f) => f.action), ['invoice.created', 'invoice.sent', 'invoice.payment_recorded', 'invoice.paid']);
+    assert.deepEqual(bitacora[1]?.before, { status: 'draft', paidAmount: '0.00' });
+    assert.deepEqual(bitacora[1]?.after, { status: 'sent', paidAmount: '0.00', paidAt: null });
+    assert.deepEqual(bitacora[2]?.before, { status: 'sent', paidAmount: '0.00' });
+    assert.deepEqual(bitacora[2]?.after, { status: 'partial', paidAmount: '100000.00', paidAt: '2026-09-22T10:00:00Z' });
+    // paid sin paidAt fija now(): la bitácora guarda el instante real.
+    const pagoTotal = bitacora[3]?.after as { status: string; paidAmount: string; paidAt: string };
+    assert.equal(pagoTotal.status, 'paid');
+    assert.equal(pagoTotal.paidAmount, '595000.00');
+    assert.match(pagoTotal.paidAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    assert.deepEqual((await filasDeBitacora(t, WORKSPACE_LAURA, otra.id)).map((f) => f.action), ['invoice.created', 'invoice.voided']);
   });
 
   test('una factura inexistente da InvoiceNotFound', async () => {

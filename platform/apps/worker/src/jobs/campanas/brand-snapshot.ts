@@ -36,7 +36,7 @@ import {
   type BrandNoDataReason, type BrandSnapshotInput,
 } from '@mc/db/queries/campanas';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';
-import { mapLimit } from '../conexiones/oauth-refresh.ts';
+import { mapLimit } from '../../runner/concurrency.ts';
 
 export interface BrandSnapshotPayload extends JobPayload {
   /** Solo esta campaña (desde una pantalla o una prueba). */

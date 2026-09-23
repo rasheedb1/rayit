@@ -2,25 +2,42 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache } from "react";
 import { notFound } from "next/navigation";
-import { CAMPAIGN_STATUS_META, CAMPAIGN_TRANSITIONS, canEditCampaign, cutHoursLabel, deliverableLabel, INVOICE_STATUS_LABEL_ES, type InvoiceStatus } from "@mc/core";
-import { getCampaign, listBrandFollowers, listCampaignPosts, listLinkablePosts, suggestPosts, type CampaignDetail, type CampaignPostRow } from "@mc/db";
+import {
+  BRAND_INPUT_KIND_LABEL_ES,
+  BRAND_INPUT_SOURCE_LABEL_ES,
+  brandCsvWindow,
+  CAMPAIGN_STATUS_META,
+  CAMPAIGN_TRANSITIONS,
+  canEditCampaign,
+  cutHoursLabel,
+  deliverableLabel,
+  hoyEnZona,
+  INVOICE_STATUS_LABEL_ES,
+  RESULT_COMPUTE_STATUSES,
+  isMoneyBrandInputKind,
+  type InvoiceStatus,
+} from "@mc/core";
+import { canRecomputeResult, getCampaign, getCampaignResult, listBrandFollowers, listBrandInputs, listCampaignPosts, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { ChartCard } from "@/components/ui/chart-card";
 import { DataAsOf } from "@/components/ui/data-as-of";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
-import { formatDate, formatDateRange, formatInt, formatMoney, formatterFor } from "@/lib/format";
-import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { formatDate, formatDateRange, formatInt, formatMoney, formatterFor, parseDecimal, type Formatter } from "@/lib/format";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
 import { leerAvisoMarca } from "../_lib/aviso-marca";
 import { MESSAGES } from "../_lib/messages";
-import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
+import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
+import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
+import { Resultado } from "./resultado";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
 import { SeguidoresMarca } from "./seguidores";
@@ -43,6 +60,10 @@ const loadCampaign = cache(async (id: string) =>
       posts: await listCampaignPosts(tx, id),
       suggestions: editable ? await suggestPosts(tx, id) : [],
       linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
+      // Ver la ficha (campanas.campana.ver) lo exige ACC-5 con requireModule en el segmento.
+      brandInputs: await listBrandInputs(tx, id),
+      result: await getCampaignResult(tx, id),
+      canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
       marca: await listBrandFollowers(tx, id, campaign),
     };
   }),
@@ -165,6 +186,78 @@ function postColumns(campaign: CampaignDetail, editable: boolean): Column<Campai
   return cols;
 }
 
+const AP = MESSAGES.aporte;
+
+/** La cifra de un total: dinero con su moneda o un conteo entero. Nada se calcula aquí: viene sumado de SQL. */
+function brandValue(f: Formatter, x: BrandInputTotal): string {
+  return isMoneyBrandInputKind(x.kind) ? f.money(x.value, x.currency ?? undefined, { mode: "full" }) : f.int(parseDecimal(x.value));
+}
+
+function brandInputColumns(f: Formatter): Column<BrandInputTotal>[] {
+  // Tres columnas: a 400 px cinco no caben. La fuente y si es un total o una
+  // suma van debajo del concepto; cuántas filas hay detrás, junto a la fuente.
+  return [
+    {
+      key: "kind",
+      header: AP.table.kind,
+      render: (x) => (
+        <CellMain sub={`${x.semantics === "total" ? AP.table.lastTotal : AP.table.sum} · ${BRAND_INPUT_SOURCE_LABEL_ES[x.source]}${x.count > 1 ? ` · ${AP.table.rows(f.int(x.count))}` : ""}`}>
+          {BRAND_INPUT_KIND_LABEL_ES[x.kind]}
+        </CellMain>
+      ),
+    },
+    { key: "value", header: AP.table.value, align: "num", render: (x) => brandValue(f, x) },
+    {
+      key: "asOf",
+      header: AP.table.asOf,
+      render: (x) => (x.semantics === "daily" && x.from && x.from !== x.asOf ? f.dayMonthRange(x.from, x.asOf) : f.date(x.asOf)),
+    },
+  ];
+}
+
+/**
+ * «Lo que aportó la marca» (CAM-4): la tabla por concepto, las ventas
+ * diarias del CSV si las hay y, si la campaña admite cambios, los dos
+ * formularios. Es la entrada del resultado (CAM-5).
+ */
+function BrandInputsSection({ campaign, editable, inputs, f, today }: { campaign: CampaignDetail; editable: boolean; inputs: BrandInputs; f: Formatter; today: string }) {
+  const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+  const days = inputs.daily.filter((d) => d.sales !== null);
+  const lastCsv = inputs.totals.find((x) => x.source === "brand_csv");
+  return (
+    <Section id="aporte" title={AP.title} meta={inputs.totals.length > 0 ? `${f.int(inputs.totals.length)} ${inputs.totals.length === 1 ? "concepto" : "conceptos"}` : undefined}>
+      {inputs.totals.length === 0 ? (
+        <EmptyState title={AP.empty.title} description={editable ? AP.empty.editable : AP.empty.locked} />
+      ) : (
+        <DataTable columns={brandInputColumns(f)} rows={inputs.totals} rowKey={(x) => `${x.source}:${x.kind}`} caption={AP.table.caption} emptyState={null} />
+      )}
+      {days.length > 0 && (
+        <ChartCard
+          className="mt-4"
+          title={AP.chart.title}
+          chart="bar"
+          labels={days.map((d) => f.dayMonth(d.day))}
+          labelsHeader={AP.chart.labelsHeader}
+          series={[{ name: AP.chart.series, data: days.map((d) => parseDecimal(d.sales ?? "0")), color: "accent" }]}
+          ariaLabel={AP.chart.ariaLabel}
+          format="money"
+          // «COP 1,5 M» no cabe en el margen del eje a 400 px: el eje va compacto; tooltip y tabla, en dinero.
+          axisFormat="compact"
+          currency={inputs.currency}
+          bar={{ showTotal: false }}
+          asOf={lastCsv ? { date: lastCsv.asOf, source: AP.chart.source } : undefined}
+        />
+      )}
+      {editable && (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <RegistrarAporteForm campaignId={campaign.id} currency={inputs.currency} today={today} />
+          <ImportarCsvForm campaignId={campaign.id} window={window ? { from: f.date(window.from), to: f.date(window.to) } : null} />
+        </div>
+      )}
+    </Section>
+  );
+}
+
 const CONFIRM: Record<string, string> = {
   live: "¿Iniciar la campaña? Desde hoy se mide a la marca (línea base desde 14 días antes del inicio).",
   measuring: "¿Pasar a medición? Los posts ya están publicados y empiezan los cortes de métricas.",
@@ -186,8 +279,10 @@ export default async function CampanaPage({
 
   const data = await loadCampaign(id);
   if (!data) notFound();
-  const { campaign, editable, posts, suggestions, linkable, marca } = data;
-  const f = formatterFor(await getCurrentWorkspace());
+  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute, marca } = data;
+  const ws = await getCurrentWorkspace();
+  const f = formatterFor(ws);
+  const today = hoyEnZona(ws.timezone);
   const avisoMarca = leerAvisoMarca(marcaParam, aviso);
 
   const pill = pillForCampaign(campaign.status);
@@ -396,13 +491,23 @@ export default async function CampanaPage({
         )}
       </div>
 
-      <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">
+      <div className="mt-8 min-w-0 space-y-8">
         <Section id="resultado" title="Resultado">
-          <EmptyState
-            title="Llega con la medición"
-            description="Alcance, views, clics, canjes, seguidores para la marca, CPM y CPA se calculan desde los snapshots y lo que aporta la marca. Hasta entonces no hay cifras que mostrar."
+          <Resultado
+            campaignId={campaign.id}
+            status={campaign.status}
+            editable={editable}
+            result={result}
+            brandInputs={brandInputs}
+            canRecompute={canRecompute}
+            recompute={recalcularResultado.bind(null, campaign.id)}
+            f={f}
           />
         </Section>
+        <BrandInputsSection campaign={campaign} editable={editable} inputs={brandInputs} f={f} today={today} />
+      </div>
+
+      <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">
 
         <Section id="seguidores" title={MESSAGES.seguidores.title}>
           {marca && (

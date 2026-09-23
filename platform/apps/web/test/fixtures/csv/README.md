@@ -59,3 +59,16 @@ elegido —el del formato reconocido si lo tiene (Meta: mes/día), si no
 el del locale del workspace— y una fecha del archivo leída en ese
 orden. El paso 3 avisa si en el otro orden las fechas se juntarían en
 unos días en vez de repartirse en meses.
+
+## El CSV de ventas de la marca (CAM-4)
+
+Distinto de las exportaciones de arriba: no lo escribe una plataforma
+sino la marca, a mano, con una fila por día. Lo lee
+`campanas/[id]/_lib/csv-ventas.ts` y las cabeceras válidas son
+`día`/`fecha`/`date`, `ventas`/`ingresos`/`sales`, y opcionales
+`pedidos`/`orders` y `canjes`/`redemptions`.
+
+| Archivo | Qué prueba |
+|---|---|
+| `ventas-marca.csv` | Para Fresko (2 al 9 de septiembre, ventana del 26 de agosto al 8 de noviembre): fechas ISO y día/mes/año mezcladas, un importe con miles («1.100.000»), una fila sin pedidos ni canjes, y cinco que se rechazan cada una por un motivo distinto (fuera de rango, fecha ilegible, día repetido, sin ventas, ventas ilegibles). Es el que se importa en dev sobre Fresko. |
+| `ventas-marca-excel.csv` | El mismo tipo de archivo guardado desde Excel en español: punto y coma, coma decimal, comillas y CRLF. |
