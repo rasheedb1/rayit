@@ -148,10 +148,41 @@ describe("start", () => {
     expect(cookie).not.toContain(ENV.TOKEN_ENCRYPTION_KEY);
   });
 
-  it("una red sin app configurada responde 503 nombrando las variables", async () => {
+  it("una red sin app configurada responde 404 nombrando las variables", async () => {
     const res = await handlers.start(startRequest("tiktok-business", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok-business");
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(404);
     expect(await res.text()).toMatch(/TIKTOK_BUSINESS_APP_ID/);
+  });
+});
+
+describe("CON-8 apagado: YouTube sin GOOGLE_CLIENT_ID ni GOOGLE_CLIENT_SECRET", () => {
+  const SIN_GOOGLE = Object.fromEntries(Object.entries(ENV).filter(([k]) => !k.startsWith("GOOGLE_CLIENT_")));
+  const apagado = () => createOAuthHandlers({ env: SIN_GOOGLE, withWorkspace, fetch: fetch.fetch, now: () => clock });
+
+  it("start y callback responden 404 con la frase, sin llamar a Google ni tocar la base; nunca 500", async () => {
+    const h = apagado();
+    const before = await countConnections();
+    const calls = fetch.calls.length;
+    const frase = /YouTube no está configurado en este entorno: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET/;
+
+    const inicio = await h.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    expect(inicio.status).toBe(404);
+    expect(await inicio.text()).toMatch(frase);
+    expect(inicio.headers.get("set-cookie")).toBeNull();
+
+    // Con code y state (alguien que vuelve de Google con un enlace viejo), con error de la plataforma y sin nada.
+    for (const query of [{ code: CODE_YT, state: "x" }, { error: "access_denied" }, {}]) {
+      const res = await h.callback(callbackRequest("youtube", query), "youtube");
+      expect(res.status).toBe(404);
+      expect(await res.text()).toMatch(frase);
+      expect(res.headers.get("set-cookie")).toMatch(/Max-Age=0/);
+    }
+    expect(fetch.calls.length).toBe(calls);
+    expect(await countConnections()).toBe(before);
+  });
+
+  it("las otras redes siguen vivas: TikTok arranca igual", async () => {
+    await start("tiktok", apagado());
   });
 });
 

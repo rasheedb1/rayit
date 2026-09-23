@@ -14,6 +14,10 @@
  *                    data_consent por finalidad, api_call_log → 303 a
  *                    /conexiones?conectada=<id>.
  *
+ * Una red sin sus variables en este entorno (YouTube sin GOOGLE_CLIENT_*,
+ * por ejemplo) está apagada: start y callback responden 404 con la frase
+ * que nombra lo que falta, y la pantalla no ofrece su botón.
+ *
  * Ni el code ni los tokens tocan logs, errores, URLs nuestras ni la cookie.
  *
  * Consentimiento delegado (ACC-8): start comprueba el permiso
@@ -138,15 +142,18 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
   }
 
   const clear = cookieHeader("", 0, secure);
+  /** La frase de una red sin app en este entorno: nombra las variables que faltan, nunca sus valores. */
+  const notConfigured = (provider: OAuthProviderId) =>
+    `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}. Vuelve a /conexiones.`;
 
   return {
     async start(req, providerRaw) {
       if (req.method !== "POST") return text(405, "Usa el botón «Conectar» de /conexiones: el inicio del flujo va por POST con tu consentimiento.", { Allow: "POST" });
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.");
       const provider = providerRaw;
-      if ("error" in keys) return text(503, keys.error);
       const cfg = apps[provider];
-      if (!cfg) return text(503, `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}.`);
+      if (!cfg) return text(404, notConfigured(provider));
+      if ("error" in keys) return text(503, keys.error);
 
       const form = await req.formData();
       const parsed = startSchema.safeParse({ acepto: form.get("acepto"), policy_version: form.get("policy_version") });
@@ -176,6 +183,9 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const headers = { "Set-Cookie": clear };
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.", headers);
       const provider = providerRaw;
+      // Una red apagada (sin sus variables, p. ej. YouTube sin GOOGLE_CLIENT_*) no tiene callback vivo: la frase y 404, nunca un 500.
+      const cfg = apps[provider];
+      if (!cfg) return text(404, notConfigured(provider), headers);
       const params = new URL(req.url).searchParams;
 
       // El creador canceló (Instagram: error=access_denied&error_reason=user_denied; TikTok: error + error_description).
@@ -198,8 +208,6 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const code = params.get("code");
       if (!code) return text(400, "La plataforma no devolvió un código de autorización.", headers);
 
-      const cfg = apps[provider];
-      if (!cfg) return redirect(req, "/conexiones?error=no_configurada", headers);
       const prov = OAUTH_PROVIDERS[provider];
 
       // Antes de canjear el code: quien ya no puede conectar (su rol cambió desde start, o la cookie es de otra sesión)
