@@ -9,6 +9,7 @@ import {
   type TerminosIncluidos,
 } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { nuevoSlug } from './enlace.ts';
 import { CotizarError, QuoteNotDraft, QuoteNotEditable, QuoteNotFound, QuoteTransitionError, ValidezVencida } from './errores.ts';
 import { assertMediaKitDelCreador, registrarActividad, registrarAceptacion, registrarCambioDeMonto } from './interno.ts';
@@ -199,6 +200,19 @@ export async function listQuotes(tx: WorkspaceTx, opts: { status?: readonly Quot
     filtrar ? [[...opts.status!]] : [],
   );
   return rows.map(mapQuote);
+}
+
+/**
+ * El estado de una cotización de este workspace, o null si no existe (o
+ * no es suya). Una sola fila: el detalle y la edición lo preguntan ANTES
+ * de abrir su límite de Suspense, para que un id desconocido responda
+ * 404 —y un enviado que se quiere editar, su redirección— antes de que
+ * salga nada, y lo demás cargue detrás de un esqueleto (pulido r5).
+ */
+export async function getQuoteStatus(tx: WorkspaceTx, id: string): Promise<QuoteStatus | null> {
+  if (!isUuid(id)) return null;
+  const { rows } = await tx.query<{ status: QuoteStatus }>('SELECT status FROM quote WHERE id = $1 LIMIT 1', [id]);
+  return rows[0]?.status ?? null;
 }
 
 /** Una cotización con sus ítems, o null si no existe (o no es de este workspace). */
@@ -491,7 +505,7 @@ export async function createQuote(tx: WorkspaceTx, input: CreateQuoteInput): Pro
   await assertMediaKitDelCreador(tx, input.mediaKitId, input.creatorId);
 
   const { rows: ws } = await tx.query<{ currency: string }>('SELECT currency FROM workspace WHERE id = $1', [tx.workspaceId]);
-  const moneda = (ws[0]?.currency ?? 'COP').toUpperCase();
+  const moneda = (ws[0]?.currency ?? WORKSPACE_DEFAULTS.currency).toUpperCase();
   const taxRate = tasaParaGuardar(input.taxRate);
   const totales = calcularTotalesCotizacion({
     items: input.items.map((i) => ({ quantity: i.quantity, unitPrice: i.unitPrice })),
@@ -658,8 +672,8 @@ async function buildQuoteSnapshot(tx: WorkspaceTx, quote: QuoteDetail): Promise<
     version: 1,
     number: quote.number,
     currency: quote.currency,
-    locale: ws[0]?.locale ?? 'es-CO',
-    timezone: ws[0]?.timezone ?? 'UTC',
+    locale: ws[0]?.locale ?? WORKSPACE_DEFAULTS.locale,
+    timezone: ws[0]?.timezone ?? WORKSPACE_DEFAULTS.timeZone,
     company: { name: quote.companyName },
     creator: { displayName: creador[0]?.display_name ?? '', handle: creador[0]?.handle ?? null },
     items: quote.items.map((i) => ({

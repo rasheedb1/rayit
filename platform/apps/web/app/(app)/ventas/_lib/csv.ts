@@ -15,6 +15,11 @@
  *     orden. Sin cabecera reconocible, la primera columna es la marca y
  *     la segunda el dominio.
  *   - BOM al principio y finales de línea de Windows.
+ *   - El país como código de dos letras («CO») o por su nombre, en
+ *     español, inglés o portugués, con o sin tildes («Colombia», «México»,
+ *     «Peru»). Uno que no se reconoce no tumba la fila: la marca entra
+ *     sin país y la fila sale en los avisos, en vez de perderse el dato
+ *     en silencio.
  */
 import type { ImportSignalRow } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./messages";
@@ -36,6 +41,8 @@ export interface CsvLineError {
 export interface ParsedBrandCsv {
   rows: ImportSignalRow[];
   errors: CsvLineError[];
+  /** Filas que entraron, pero con un dato que no se pudo usar (un país desconocido). */
+  warnings: CsvLineError[];
   /** Hubo cabecera y se usó para ubicar las columnas. */
   hasHeader: boolean;
 }
@@ -66,6 +73,69 @@ function columnOf(cell: string): Column | null {
     if (aliases.includes(h)) return col;
   }
   return null;
+}
+
+/** «México», «MEXICO» y « mexico » son la misma palabra. */
+function nameKey(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/** Los idiomas en los que se reconoce el nombre de un país. */
+const COUNTRY_NAME_LOCALES = ["es", "en", "pt"];
+/** Los nombres cortos que la gente escribe y Intl no da. */
+const COUNTRY_ALIASES: Record<string, string> = { eeuu: "US", eua: "US", usa: "US", uk: "GB" };
+
+let countryIndex: Map<string, string> | null = null;
+
+/**
+ * Nombre de país (sin tildes ni espacios) → código ISO. Se arma una vez
+ * con Intl.DisplayNames, recorriendo los códigos de dos letras, para no
+ * mantener a mano una tabla de países que Intl ya sabe en cada idioma.
+ */
+function countryNames(): Map<string, string> {
+  if (countryIndex) return countryIndex;
+  const index = new Map<string, string>(Object.entries(COUNTRY_ALIASES));
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (const locale of COUNTRY_NAME_LOCALES) {
+    let names: Intl.DisplayNames;
+    try {
+      names = new Intl.DisplayNames([locale], { type: "region", fallback: "none" });
+    } catch {
+      continue;
+    }
+    // «Región desconocida» (ZZ) no es el nombre de ningún país.
+    const unknown = names.of("ZZ");
+    for (const a of letters) {
+      for (const b of letters) {
+        const code = a + b;
+        let name: string | undefined;
+        try {
+          name = names.of(code);
+        } catch {
+          name = undefined;
+        }
+        if (!name || name === code || name === unknown) continue;
+        const key = nameKey(name);
+        if (key && !index.has(key)) index.set(key, code);
+      }
+    }
+  }
+  countryIndex = index;
+  return index;
+}
+
+/**
+ * El país de una celda como código ISO de dos letras, o null si no se
+ * reconoce. «co» y «CO» son CO; «Colombia», «Perú» o «Brazil», su código.
+ */
+export function countryCode(value: string): string | null {
+  const v = value.trim();
+  if (/^[A-Za-z]{2}$/.test(v)) return v.toUpperCase();
+  return countryNames().get(nameKey(v)) ?? null;
 }
 
 /** El separador de la primera línea: el que más aparece fuera de comillas. */
@@ -139,7 +209,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   const text = raw.replace(/^﻿/, "");
   const records = splitCsv(text, detectDelimiter(text)).filter((r) => r.cells.some((c) => c.trim() !== ""));
   if (records.length === 0) {
-    return { rows: [], errors: [{ line: 1, message: T.empty }], hasHeader: false };
+    return { rows: [], errors: [{ line: 1, message: T.empty }], warnings: [], hasHeader: false };
   }
 
   // Cabecera: la primera fila, si al menos una celda es un nombre de
@@ -160,6 +230,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   const body = hasHeader ? records.slice(1) : records;
   const rows: ImportSignalRow[] = [];
   const errors: CsvLineError[] = [];
+  const warnings: CsvLineError[] = [];
   const cell = (cells: string[], col: Column) => {
     const i = index[col];
     const v = i === undefined ? "" : (cells[i] ?? "").trim();
@@ -183,10 +254,13 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
       errors.push({ line: record.line, message: T.nameTooLong(MAX_BRAND_NAME) });
       continue;
     }
+    const pais = cell(record.cells, "country");
+    const country = pais === null ? null : countryCode(pais);
+    if (pais !== null && country === null) warnings.push({ line: record.line, message: T.unknownCountry(pais) });
     rows.push({
       name,
       domain: cell(record.cells, "domain"),
-      country: cell(record.cells, "country"),
+      country,
       industry: cell(record.cells, "industry"),
       note: cell(record.cells, "note"),
     });
@@ -195,5 +269,5 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   if (rows.length === 0 && errors.length === 0) {
     errors.push({ line: 1, message: T.onlyHeader });
   }
-  return { rows, errors, hasHeader };
+  return { rows, errors, warnings, hasHeader };
 }

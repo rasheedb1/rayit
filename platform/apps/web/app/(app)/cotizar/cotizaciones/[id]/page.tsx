@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { getQuote, type QuoteItemRow } from "@mc/db/queries/cotizar";
+import { Suspense } from "react";
+import { getQuote, getQuoteStatus, type QuoteItemRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -16,6 +17,7 @@ import { MESSAGES, mensajeDeError } from "../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
 import { pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
 import { ConfirmarAccion } from "../../_ui/confirmar-accion";
+import { EsqueletoLista } from "../../_ui/esqueleto-lista";
 import { ResumenTotales } from "../../_ui/resumen-totales";
 import { AvisoEnviada } from "./aviso-enviada";
 import { EliminarBorrador } from "./eliminar";
@@ -33,13 +35,28 @@ export const metadata: Metadata = { title: "Cotización" };
 const FILA_DL = "flex flex-col gap-0.5 px-4 py-2.5 text-sm sm:flex-row sm:items-baseline sm:justify-between sm:gap-4";
 export const dynamic = "force-dynamic";
 
-export default async function CotizacionPage({
-  params,
-  searchParams,
-}: {
+type Props = {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string; enviada?: string }>;
-}) {
+};
+
+/**
+ * Primero una sola fila —¿existe la cotización en este espacio?— y, si
+ * no, notFound() antes de que salga nada: 404 de verdad, sin loading.tsx
+ * por encima. Después, el detalle detrás de un esqueleto, para que al
+ * llegar desde la lista se vea que carga (pulido r5).
+ */
+export default async function CotizacionPage({ params, searchParams }: Props) {
+  const { id } = await params;
+  if ((await withWorkspace((tx) => getQuoteStatus(tx, id))) === null) notFound();
+  return (
+    <Suspense fallback={<EsqueletoLista label={MESSAGES.loading.cotizacion} filas={4} />}>
+      <CotizacionDetalle params={params} searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function CotizacionDetalle({ params, searchParams }: Props) {
   const t = MESSAGES.detalle;
   const { id } = await params;
   // ?error= lleva un CÓDIGO; el texto sale de messages.ts. Un código que

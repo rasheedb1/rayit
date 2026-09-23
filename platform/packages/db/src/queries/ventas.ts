@@ -38,14 +38,17 @@
  *     operación contraria.
  */
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { CONTACT_SOURCES, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
+import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
+import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
-export { CONTACT_SOURCES, RELATIONSHIPS, SIGNAL_STATUSES };
+export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
 
 /** Procedencia de un contacto. Sin ella no se guarda (VEN-1). */
 export type ContactSource = (typeof CONTACT_SOURCES)[number];
 /** Relación del workspace con la empresa (company_link). */
 export type Relationship = (typeof RELATIONSHIPS)[number];
+/** Por qué se perdió un negocio (deal.lost_reason, CHECK de 0007). */
+export type LostReason = (typeof LOST_REASONS)[number];
 
 // ---------------------------------------------------------------------
 // Errores
@@ -80,6 +83,7 @@ export const VENTAS_ERROR_CODES = [
   'InvalidRelationship',
   'InvalidSource',
   'InvalidStage',
+  'LostReasonRequired',
   'SignalAlreadyReviewed',
   'SignalNotFound',
   'SignalWithoutCompany',
@@ -198,8 +202,13 @@ export interface CompanyListRow {
   optedOutCount: number;
   /** Negocios ni ganados ni perdidos. */
   openDealCount: number;
-  /** Suma de los abiertos, en la moneda del workspace, como string decimal. */
-  openDealAmount: string;
+  /**
+   * Suma de los abiertos que tienen monto, en la moneda del workspace,
+   * como string decimal. NULL si ninguno lo tiene (un negocio que nace
+   * de una señal sin presupuesto): la pantalla dice «Sin monto», no
+   * «COP 0», igual que el pipeline.
+   */
+  openDealAmount: string | null;
   /** Última actividad registrada para la empresa, ISO o null. */
   lastActivityAt: string | null;
   /** Señales pendientes de revisar de esta empresa. */
@@ -208,6 +217,13 @@ export interface CompanyListRow {
 }
 
 export interface CompanyDetail extends CompanyListRow {
+  /**
+   * La ficha es de este workspace (company.owner_workspace_id) y se
+   * edita desde aquí. False en una empresa del catálogo compartido: de
+   * ella solo son de este workspace la relación, el responsable y las
+   * notas (company_link).
+   */
+  isOwn: boolean;
   legalName: string | null;
   socials: Record<string, string>;
   runsAds: boolean | null;
@@ -287,6 +303,8 @@ export interface PipelineDealRow {
   /** Días en la etapa actual: desde el último cambio, o desde que nació. */
   daysInStage: number;
   ownerName: string | null;
+  /** Por qué se perdió; solo en un negocio en una etapa perdida. */
+  lostReason: LostReason | null;
 }
 
 export type DueState = 'sin_fecha' | 'vencido' | 'hoy' | 'futuro';
@@ -351,6 +369,14 @@ export interface ListCompaniesParams {
  * que existe desde la migración 0007, y añade el dominio por si se pega
  * una URL. `%` y `_` del usuario se escapan: sin eso un `%` solo
  * devolvería todo y parecería que el filtro no sirve.
+ *
+ * Y no distingue tildes, eñes, mayúsculas ni espacios: «cafe alma»
+ * encuentra «Café Alma» y «nandu» encuentra «Zeta Bebidas Ñandú».
+ * ILIKE sí los distingue, así que se compara además la llave de marca
+ * (brand_key, 0031/0032), que es la misma con la que el radar reconoce
+ * una marca por su nombre. brand_key solo deja letras y números, así
+ * que ahí no hay comodín de LIKE que escapar. El orden sigue siendo el
+ * de similitud con lo escrito.
  */
 export async function listCompanies(tx: WorkspaceTx, params: ListCompaniesParams = {}): Promise<CompanyListRow[]> {
   const q = searchTerm(params.search);
@@ -381,7 +407,8 @@ export async function listCompanies(tx: WorkspaceTx, params: ListCompaniesParams
     JOIN company co       ON co.id = cl.company_id
     LEFT JOIN app_user u  ON u.id = cl.owner_user_id
     WHERE ($1::text IS NULL OR co.name ILIKE '%' || ${ESCAPE_LIKE} || '%'
-                            OR co.domain ILIKE '%' || ${ESCAPE_LIKE} || '%')
+                            OR co.domain ILIKE '%' || ${ESCAPE_LIKE} || '%'
+                            OR brand_key(co.name) LIKE '%' || brand_key($1) || '%')
       AND ($2::text IS NULL OR cl.relationship = $2)
     ORDER BY ${q ? `similarity(co.name, $1) DESC,` : ''} co.name ASC
     LIMIT $3
@@ -389,6 +416,19 @@ export async function listCompanies(tx: WorkspaceTx, params: ListCompaniesParams
     [q, relationship, limit],
   );
   return rows.map(toCompanyRow);
+}
+
+/**
+ * ¿Está esta empresa en el CRM de este workspace? Una sola fila de
+ * company_link y nada más: la ficha lo pregunta ANTES de abrir su
+ * límite de Suspense, para que una empresa que no existe (o de otro
+ * espacio) responda 404 y el resto de la ficha, que es lo que tarda,
+ * cargue detrás de un esqueleto.
+ */
+export async function companyInCrm(tx: WorkspaceTx, companyId: string): Promise<boolean> {
+  if (!isUuid(companyId)) return false;
+  const { rows } = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1 LIMIT 1', [companyId]);
+  return rows.length > 0;
 }
 
 /** Una empresa de este workspace por su id, o null si no es suya (o el id es imposible). */
@@ -410,6 +450,7 @@ export async function getCompany(tx: WorkspaceTx, companyId: string): Promise<Co
            co.ads_platforms,
            co.logo_url,
            co.enriched_at,
+           coalesce(co.owner_workspace_id = current_workspace_id(), false) AS is_own,
            cl.relationship,
            cl.fit_score::text                    AS fit_score,
            cl.owner_user_id,
@@ -432,6 +473,7 @@ export async function getCompany(tx: WorkspaceTx, companyId: string): Promise<Co
   if (!row) return null;
   return {
     ...toCompanyRow(row),
+    isOwn: row.is_own,
     legalName: row.legal_name,
     socials: (row.socials ?? {}) as Record<string, string>,
     runsAds: row.runs_ads,
@@ -462,15 +504,18 @@ export interface CreateCompanyInput {
  * para el catálogo y lo que evita dos «Café Alma» con la misma web;
  * pero si ya está vinculada a este workspace, se avisa, porque quien la
  * está creando no la encontró y probablemente escribió mal el nombre.
+ *
+ * El responsable (company_link.owner_user_id) es el que se pida o, si
+ * no se pide ninguno, quien la crea: la persona de la transacción
+ * (current_user_id(); NULL sin sesión, en el modo demo). Así una
+ * empresa nueva nunca nace «Sin responsable» cuando alguien la creó.
  */
 export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput): Promise<string> {
   const name = input.name.trim();
   if (!name) throw new VentasError('InvalidName');
   const domain = normalizeDomain(input.domain);
   const relationship = input.relationship && RELATIONSHIPS.includes(input.relationship) ? input.relationship : 'prospect';
-  if (input.ownerUserId && !isUuid(input.ownerUserId)) {
-    throw new VentasError('InvalidOwner');
-  }
+  if (input.ownerUserId) await assertOwner(tx, input.ownerUserId);
 
   let companyId: string | undefined;
   if (domain) {
@@ -507,7 +552,7 @@ export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput):
 
   await tx.query(
     `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship, notes)
-     VALUES (current_workspace_id(), $1, $2, $3, $4)
+     VALUES (current_workspace_id(), $1, COALESCE($2::uuid, current_user_id()), $3, $4)
      ON CONFLICT (workspace_id, company_id) DO NOTHING`,
     [companyId, input.ownerUserId ?? null, relationship, input.notes?.trim() || null],
   );
@@ -555,7 +600,7 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
     `UPDATE company SET
        name        = COALESCE($2, name),
        domain      = CASE WHEN $3::boolean THEN $4::citext ELSE domain END,
-       country     = COALESCE($5, country),
+       country     = CASE WHEN $13::boolean THEN $5 ELSE country END,
        city        = CASE WHEN $6::boolean THEN $7 ELSE city END,
        industry    = CASE WHEN $8::boolean THEN $9 ELSE industry END,
        niche_slugs = COALESCE($10::text[], niche_slugs),
@@ -572,6 +617,7 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
       input.industry !== undefined, input.industry?.trim() || null,
       input.nicheSlugs ?? null,
       input.sizeBucket !== undefined, input.sizeBucket || null,
+      input.country !== undefined,
     ],
   );
   if (editadas.length === 0) throw new CompanyNotEditable();
@@ -585,9 +631,7 @@ async function updateCompanyLink(tx: WorkspaceTx, companyId: string, input: Upda
     if (input.relationship !== undefined && !RELATIONSHIPS.includes(input.relationship)) {
       throw new VentasError('InvalidRelationship');
     }
-    if (input.ownerUserId && !isUuid(input.ownerUserId)) {
-      throw new VentasError('InvalidOwner');
-    }
+    if (input.ownerUserId) await assertOwner(tx, input.ownerUserId);
     await tx.query(
       `UPDATE company_link SET
          relationship  = COALESCE($2, relationship),
@@ -603,6 +647,45 @@ async function updateCompanyLink(tx: WorkspaceTx, companyId: string, input: Upda
       ],
     );
   }
+}
+
+/**
+ * El responsable de una empresa tiene que ser alguien de este espacio.
+ * La columna solo exige que la persona exista (FK a app_user); sin esta
+ * comprobación se podía dejar como responsable a alguien de otro
+ * workspace con solo conocer su id.
+ */
+async function assertOwner(tx: WorkspaceTx, userId: string): Promise<void> {
+  if (!isUuid(userId)) throw new VentasError('InvalidOwner');
+  const { rows } = await tx.query(
+    'SELECT 1 FROM membership WHERE workspace_id = current_workspace_id() AND user_id = $1',
+    [userId],
+  );
+  if (rows.length === 0) throw new VentasError('InvalidOwner');
+}
+
+export interface OwnerOption {
+  userId: string;
+  /** El nombre, o el correo si todavía no tiene. */
+  label: string;
+}
+
+/**
+ * Las personas que pueden ser responsables de una empresa: los miembros
+ * de este espacio (membership), salvo las marcas con acceso de cliente
+ * a su portal, que no llevan el CRM. Las lee la RLS de membership y de
+ * app_user (0020, 0028): nadie de otro espacio.
+ */
+export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> {
+  const { rows } = await tx.query<{ user_id: string; label: string }>(
+    `SELECT m.user_id, coalesce(nullif(btrim(u.name), ''), u.email::text) AS label
+       FROM membership m
+       JOIN app_user u ON u.id = m.user_id
+      WHERE m.workspace_id = current_workspace_id()
+        AND m.role <> 'client'
+      ORDER BY label ASC`,
+  );
+  return rows.map((r) => ({ userId: r.user_id, label: r.label }));
 }
 
 // ---------------------------------------------------------------------
@@ -1230,7 +1313,14 @@ export function dealNameFromSignal(
 
 /** Días que se le dan al primer pitch cuando se acepta una señal. */
 export const PITCH_DUE_DAYS = 3;
-/** La siguiente acción con la que nace un deal aceptado desde el radar si la pantalla no da otra. */
+/**
+ * El TEXTO de la siguiente acción con la que nace un negocio si la
+ * pantalla no da otro. Solo es un respaldo: la web pasa siempre el suyo
+ * (MESSAGES.radar.pitchAction) y nada compara contra este literal. Lo
+ * que dice «esta siguiente acción es el pitch» es la columna
+ * deal.next_action_kind = 'pitch' (0032), no la frase: un espacio en
+ * otro idioma guarda su frase y el marcador sigue siendo el mismo.
+ */
 export const PITCH_ACTION = 'Enviar pitch';
 /** A qué hora LOCAL del workspace vence la siguiente acción de un negocio nuevo. */
 export const PITCH_DUE_HOUR = 15;
@@ -1313,10 +1403,11 @@ export async function acceptSignal(
   }
 
   // Vincular es idempotente: si ya era una empresa del workspace, se
-  // deja la relación como estaba (podía ser cliente).
+  // deja la relación como estaba (podía ser cliente) y su responsable.
+  // Si es nueva, su responsable es quien aceptó la señal.
   await tx.query(
-    `INSERT INTO company_link (workspace_id, company_id, relationship)
-     VALUES (current_workspace_id(), $1, 'prospect')
+    `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship)
+     VALUES (current_workspace_id(), $1, current_user_id(), 'prospect')
      ON CONFLICT (workspace_id, company_id) DO NOTHING`,
     [companyId],
   );
@@ -1354,8 +1445,8 @@ export async function acceptSignal(
   const dealName = dealNameFromSignal(sig.headline_es, ev, [company.name, evName], opts.pendingDealName);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, name, stage_id, amount, currency,
-                       next_action, next_action_due)
-     SELECT current_workspace_id(), $1, $2, $3, 'nuevo', $4::numeric, w.currency, $5,
+                       next_action, next_action_kind, next_action_due)
+     SELECT current_workspace_id(), $1, $2, $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
             ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$6').replace('$HOUR', '$7')}
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
@@ -1410,8 +1501,8 @@ export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promi
 
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_due)
-     SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4,
+                       next_action, next_action_kind, next_action_due)
+     SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4, 'pitch',
             ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$5').replace('$HOUR', '$6')}
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
@@ -1465,7 +1556,7 @@ export async function listPipeline(tx: WorkspaceTx): Promise<PipelineDealRow[]> 
             p.amount::text AS amount, p.currency::text AS currency, p.probability::text AS probability,
             p.weighted_amount::text AS weighted_amount, p.next_action, p.next_action_due, p.due_state,
             p.last_contact_at, p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
-            u.name AS owner_name,
+            u.name AS owner_name, d.lost_reason,
             round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0)::int AS days_in_stage
      FROM deal_pipeline p
      JOIN deal d ON d.id = p.id
@@ -1533,7 +1624,7 @@ export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
     wonQuarterCount: Number(r?.won_quarter_count ?? 0),
     noNextActionCount: Number(r?.no_next_action ?? 0),
     overdueCount: Number(r?.overdue ?? 0),
-    currency: r?.currency ?? 'COP',
+    currency: r?.currency ?? WORKSPACE_DEFAULTS.currency,
   };
 }
 
@@ -1623,6 +1714,12 @@ export interface MoveDealOptions {
    * apaga porque deja la suya, con el número de la cotización.
    */
   logActivity?: boolean;
+  /**
+   * Por qué se pierde. OBLIGATORIO al pasar a una etapa perdida: sin él
+   * la transición no se hace (LostReasonRequired) y nada queda escrito.
+   * Se ignora en cualquier otra etapa.
+   */
+  lostReason?: LostReason | null;
 }
 
 interface MoveStageJson {
@@ -1668,6 +1765,8 @@ export async function moveDeal(
   if (!toStageId || toStageId.length > 64) throw new VentasError('InvalidStage');
   const amount = opts.amount?.trim() || null;
   if (amount !== null && !/^\d{1,12}(\.\d{1,2})?$/.test(amount)) throw new VentasError('InvalidAmount');
+  const lostReason = opts.lostReason ?? null;
+  if (lostReason !== null && !LOST_REASONS.includes(lostReason)) throw new VentasError('InvalidReason');
 
   const { rows } = await tx.query<{ r: MoveStageJson }>(
     'SELECT deal_move_stage($1::uuid, $2::text, $3::boolean, $4::numeric, $5::text) AS r',
@@ -1694,6 +1793,17 @@ export async function moveDeal(
     companyPromoted: false,
   };
 
+  // Perder un negocio pide su motivo: es el dato con el que el pipeline
+  // aprende dónde se caen las ventas, y la columna existía vacía. Se
+  // escribe en la misma transacción que el paso de etapa; sin motivo se
+  // lanza y la transacción entera (el paso incluido) se deshace.
+  // deal_move_stage conserva lost_reason al entrar en «Perdido» y lo
+  // borra al salir, así que aquí solo hace falta escribirlo.
+  if (result.moved && result.isLost) {
+    if (lostReason === null) throw new VentasError('LostReasonRequired');
+    await tx.query('UPDATE deal SET lost_reason = $2 WHERE id = $1', [dealId, lostReason]);
+  }
+
   // Ganar un negocio hace cliente a la marca, en la misma transacción:
   // el tablero, Cotizar al aceptar y (en completePublicAcceptance) el
   // enlace público pasan por aquí o llaman a lo mismo.
@@ -1707,9 +1817,10 @@ export async function moveDeal(
        SELECT current_workspace_id(), d.company_id, d.id, current_user_id(), 'stage_change',
               (SELECT label_es FROM pipeline_stage WHERE id = $2) || ' → ' ||
               (SELECT label_es FROM pipeline_stage WHERE id = $3),
-              jsonb_build_object('from', $2::text, 'to', $3::text, 'days_in_stage', $4::numeric)
+              jsonb_strip_nulls(jsonb_build_object('from', $2::text, 'to', $3::text, 'days_in_stage', $4::numeric,
+                                                   'lost_reason', $5::text))
        FROM deal d WHERE d.id = $1`,
-      [dealId, result.fromStageId, result.toStageId, result.daysInStage],
+      [dealId, result.fromStageId, result.toStageId, result.daysInStage, result.isLost ? lostReason : null],
     );
   }
   return result;
@@ -1750,8 +1861,15 @@ export async function promoteCompanyOnWin(tx: WorkspaceTx, dealId: string): Prom
   return rows.length > 0;
 }
 
-/** La siguiente acción que deja enviar una cotización, si la pantalla no da otra. */
+/** El texto de la siguiente acción que deja enviar una cotización, si la pantalla no da otro (respaldo, como PITCH_ACTION). */
 export const FOLLOW_UP_ACTION = 'Seguimiento a la cotización';
+
+/**
+ * Qué es una siguiente acción que puso el producto (deal.next_action_kind,
+ * 0032). NULL es una escrita por una persona: esa no la reemplaza nadie.
+ * Un disparador la vuelve a NULL cuando alguien cambia el texto a mano.
+ */
+export type NextActionKind = (typeof NEXT_ACTION_KINDS)[number];
 /** Días HÁBILES (lunes a viernes) que se le dan al seguimiento de una cotización enviada. */
 export const FOLLOW_UP_BUSINESS_DAYS = 3;
 
@@ -1759,8 +1877,10 @@ export interface FollowUpOptions {
   /** El texto de la siguiente acción nueva, en el idioma de la pantalla. Por defecto, FOLLOW_UP_ACTION. */
   followUpAction?: string;
   /**
-   * Las siguientes acciones que una propuesta enviada deja atrás («Enviar
-   * pitch», en el idioma de la pantalla). PITCH_ACTION siempre cuenta.
+   * Textos que también cuentan como el pitch, SOLO para los negocios sin
+   * marcador (next_action_kind NULL): los que nacieron antes de 0032 y
+   * las filas del seed. Lo normal es el marcador 'pitch', que no depende
+   * del idioma; PITCH_ACTION siempre cuenta para esas filas viejas.
    */
   supersededActions?: readonly string[];
 }
@@ -1768,8 +1888,9 @@ export interface FollowUpOptions {
 /**
  * Enviar una cotización supera el pitch: el negocio queda en «Propuesta
  * enviada» y lo que sigue es hacerle seguimiento, no mandar un pitch que
- * ya se mandó con precio. Si la siguiente acción del negocio es la del
- * radar (o no tiene), pasa a «Seguimiento a la cotización» a
+ * ya se mandó con precio. Si la siguiente acción del negocio es el pitch
+ * (next_action_kind = 'pitch', en el idioma que sea) o no tiene, pasa a
+ * «Seguimiento a la cotización» (marcador 'quote_follow_up') a
  * FOLLOW_UP_BUSINESS_DAYS días hábiles, a las 15:00 en la zona del
  * workspace. Una acción que la persona escribió a mano («Llamar a
  * Sofía») se respeta, y un negocio cerrado no se toca.
@@ -1787,6 +1908,7 @@ export async function followUpAfterProposal(
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE deal d
         SET next_action = $2,
+            next_action_kind = 'quote_follow_up',
             next_action_due = (
               SELECT (dia + ($5::int * interval '1 hour')) AT TIME ZONE w.tz
                 FROM generate_series(date_trunc('day', now() AT TIME ZONE w.tz) + interval '1 day',
@@ -1801,7 +1923,9 @@ export async function followUpAfterProposal(
       WHERE d.id = $1
         AND st.id = d.stage_id
         AND NOT st.is_won AND NOT st.is_lost
-        AND (d.next_action IS NULL OR btrim(d.next_action) = '' OR btrim(d.next_action) = ANY($3::text[]))
+        AND (d.next_action IS NULL OR btrim(d.next_action) = ''
+             OR d.next_action_kind = 'pitch'
+             OR (d.next_action_kind IS NULL AND btrim(d.next_action) = ANY($3::text[])))
       RETURNING d.id`,
     [dealId, opts.followUpAction?.trim() || FOLLOW_UP_ACTION, superadas, FOLLOW_UP_BUSINESS_DAYS, PITCH_DUE_HOUR],
   );
@@ -1817,11 +1941,12 @@ interface CompanyRowSql {
   industry: string | null; niche_slugs: string[] | null; size_bucket: string | null;
   relationship: Relationship; fit_score: string | null; owner_user_id: string | null;
   owner_name: string | null; notes: string | null; linked_at: string;
-  contact_count: string; opted_out_count: string; open_deal_count: string; open_deal_amount: string;
+  contact_count: string; opted_out_count: string; open_deal_count: string; open_deal_amount: string | null;
   pending_signal_count: string; last_activity_at: string | null;
 }
 
 interface CompanyDetailSql {
+  is_own: boolean;
   legal_name: string | null; socials: Record<string, string> | null; runs_ads: boolean | null;
   ads_platforms: string[] | null; logo_url: string | null; enriched_at: string | null;
 }
@@ -1917,7 +2042,7 @@ interface PipelineRowSql {
   probability: string; weighted_amount: string | null; next_action: string | null;
   next_action_due: string | null; due_state: DueState; last_contact_at: string | null;
   expected_close_date: string | null; is_won: boolean; is_lost: boolean;
-  owner_name: string | null; days_in_stage: number;
+  owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
 }
 
 function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
@@ -1942,6 +2067,7 @@ function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
     isLost: r.is_lost,
     daysInStage: Number(r.days_in_stage ?? 0),
     ownerName: r.owner_name,
+    lostReason: r.is_lost ? r.lost_reason : null,
   };
 }
 
@@ -1993,10 +2119,14 @@ const CONTACT_COUNTS = `
   (SELECT count(*) FROM contact c WHERE c.company_id = co.id)::text                       AS contact_count,
   (SELECT count(*) FROM contact c WHERE c.company_id = co.id AND c.opted_out)::text       AS opted_out_count`;
 
+/**
+ * Los negocios abiertos y su suma. `sum` sin COALESCE a propósito: si
+ * ninguno tiene monto, la suma es NULL («Sin monto») y no 0.
+ */
 const DEAL_COUNTS = `
   (SELECT count(*) FROM deal_pipeline dp
     WHERE dp.company_id = co.id AND NOT dp.is_won AND NOT dp.is_lost)::text               AS open_deal_count,
-  (SELECT COALESCE(sum(dp.amount), 0) FROM deal_pipeline dp
+  (SELECT sum(dp.amount) FROM deal_pipeline dp
     WHERE dp.company_id = co.id AND NOT dp.is_won AND NOT dp.is_lost)::text               AS open_deal_amount`;
 
 const PENDING_SIGNALS = `

@@ -6,6 +6,7 @@
  */
 import type { Decimal, PasoCalculo, PlatformId } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { CotizarError, RateCardNotFound } from './errores.ts';
 import { assertRango } from './interno.ts';
 
@@ -187,8 +188,8 @@ export async function getRateCardInputs(tx: WorkspaceTx, creatorId: string): Pro
     'SELECT currency, country, niche_slugs FROM workspace WHERE id = $1',
     [tx.workspaceId],
   );
-  const currency = (ws[0]?.currency ?? 'COP').toUpperCase();
-  const country = (creador[0].country ?? ws[0]?.country ?? 'CO').toUpperCase();
+  const currency = (ws[0]?.currency ?? WORKSPACE_DEFAULTS.currency).toUpperCase();
+  const country = (creador[0].country ?? ws[0]?.country ?? WORKSPACE_DEFAULTS.country).toUpperCase();
   const nichos = creador[0].niche_slugs.length > 0 ? creador[0].niche_slugs : (ws[0]?.niche_slugs ?? []);
 
   // La línea base más reciente de cada red al corte del tarifario; si

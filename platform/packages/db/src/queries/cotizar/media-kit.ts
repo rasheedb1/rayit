@@ -6,6 +6,7 @@
  */
 import type { Decimal, PlatformId } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { hashSharePassword, nuevoSlug } from './enlace.ts';
 import { CotizarError, MediaKitNotFound } from './errores.ts';
 import { CORTE_TARIFARIO_HORAS, getCurrentRateCard } from './tarifario.ts';
@@ -270,9 +271,9 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
       country: creador.country,
       nicheSlugs: creador.niche_slugs,
     },
-    currency: (ws[0]?.currency ?? 'COP').toUpperCase(),
-    locale: ws[0]?.locale ?? 'es-CO',
-    timezone: ws[0]?.timezone ?? 'UTC',
+    currency: (ws[0]?.currency ?? WORKSPACE_DEFAULTS.currency).toUpperCase(),
+    locale: ws[0]?.locale ?? WORKSPACE_DEFAULTS.locale,
+    timezone: ws[0]?.timezone ?? WORKSPACE_DEFAULTS.timeZone,
     redes: redesSnapshot,
     totales: { followers, medianViewsMax, medianViewsMaxPlatform },
     topPosts: posts.map((p) => ({

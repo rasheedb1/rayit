@@ -28,6 +28,7 @@ import {
   VentasError,
   acceptSignal,
   buildDedupeKey,
+  companyInCrm,
   countPendingSignals,
   createCompany,
   createDeal,
@@ -39,6 +40,7 @@ import {
   importSignals,
   listCompanies,
   listContacts,
+  listOwnerOptions,
   listPipeline,
   listSignals,
   listStages,
@@ -51,6 +53,7 @@ import {
   updateCompany,
   updateContact,
 } from '../src/queries/ventas.ts';
+import { WORKSPACE_DEFAULTS } from '../src/queries/cimientos.ts';
 import type { WorkspaceTx } from '../src/client.ts';
 import { openTestDb, type TestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA } from './pglite.ts';
 
@@ -933,5 +936,182 @@ describe('VEN-3 · pipeline', () => {
     const suyos = await ajeno((tx) => getSalesKpis(tx));
     assert.equal(suyos.openDeals, 1);
     assert.equal(Number(suyos.openAmount), 99_000_000);
+  });
+});
+
+// =====================================================================
+// Pulido r5
+// =====================================================================
+
+/** Laura Méndez, la persona del seed (dueña del workspace). */
+const USER_LAURA = '00000002-0000-4000-8000-000000000002';
+/** Alguien del workspace vecino: no puede ser responsable de nada de Laura. */
+const USER_AJENO = '00000009-0000-4000-8000-0000000a0001';
+const conLaura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_LAURA });
+
+describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', () => {
+  test('la búsqueda no distingue tildes, eñes ni espacios', async () => {
+    const nandu = await laura((tx) => createCompany(tx, { name: 'Zeta Bebidas Ñandú' }));
+    const gritada = await laura((tx) => createCompany(tx, { name: 'CAFÉ ÉPICO' }));
+
+    const alma = await laura((tx) => listCompanies(tx, { search: 'cafe alma' }));
+    assert.ok(alma.some((c) => c.id === COMPANY_CAFE_ALMA), '«cafe alma» encuentra «Café Alma»');
+    const n = await laura((tx) => listCompanies(tx, { search: 'nandu' }));
+    assert.ok(n.some((c) => c.id === nandu), '«nandu» encuentra la marca con Ñ');
+    const e = await laura((tx) => listCompanies(tx, { search: 'cafe epico' }));
+    assert.ok(e.some((c) => c.id === gritada), 'y las mayúsculas con tilde también');
+    // Lo que no se parece sigue fuera.
+    assert.ok(!n.some((c) => c.id === COMPANY_CAFE_ALMA));
+  });
+
+  test('una empresa con un negocio abierto sin monto suma NULL («Sin monto»), no 0', async () => {
+    const id = await laura((tx) => createCompany(tx, { name: 'Kombu Prueba', domain: 'kombuprueba.co' }));
+    await laura((tx) => createDeal(tx, { companyId: id, name: 'Sin presupuesto todavía', nextAction: 'Enviar pitch' }));
+    const sinMonto = (await laura((tx) => listCompanies(tx, { search: 'kombu prueba' }))).find((c) => c.id === id);
+    assert.equal(sinMonto?.openDealCount, 1);
+    assert.equal(sinMonto?.openDealAmount, null, 'nada que sumar no es cero');
+    assert.equal((await laura((tx) => getCompany(tx, id)))?.openDealAmount, null);
+
+    await laura((tx) => createDeal(tx, { companyId: id, name: 'Con monto', amount: '1500000', nextAction: 'Enviar pitch' }));
+    const conMonto = await laura((tx) => getCompany(tx, id));
+    assert.equal(conMonto?.openDealCount, 2);
+    assert.equal(Number(conMonto?.openDealAmount), 1_500_000, 'suma lo que tiene monto');
+  });
+
+  test('quien crea la empresa queda de responsable; sin sesión, ninguno', async () => {
+    const conSesion = await conLaura((tx) => createCompany(tx, { name: 'Responsable Uno', domain: 'responsable-uno.co' }));
+    const fila = await laura((tx) => getCompany(tx, conSesion));
+    assert.equal(fila?.ownerUserId, USER_LAURA);
+    assert.equal(fila?.ownerName, 'Laura Méndez');
+
+    const sinSesion = await laura((tx) => createCompany(tx, { name: 'Responsable Dos', domain: 'responsable-dos.co' }));
+    assert.equal((await laura((tx) => getCompany(tx, sinSesion)))?.ownerUserId, null);
+  });
+
+  test('el responsable es alguien del espacio: se asigna, se quita, y uno de fuera no vale', async () => {
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${USER_AJENO}', 'vecina@marcaajena.co', 'Vecina')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'owner')
+      ON CONFLICT DO NOTHING;`);
+    const opciones = await laura((tx) => listOwnerOptions(tx));
+    assert.deepEqual(opciones, [{ userId: USER_LAURA, label: 'Laura Méndez' }], 'solo las personas de este espacio');
+
+    const id = await laura((tx) => createCompany(tx, { name: 'Con Responsable', domain: 'con-responsable.co' }));
+    await laura((tx) => updateCompany(tx, id, { ownerUserId: USER_LAURA }));
+    assert.equal((await laura((tx) => getCompany(tx, id)))?.ownerName, 'Laura Méndez');
+
+    await assert.rejects(
+      () => laura((tx) => updateCompany(tx, id, { ownerUserId: USER_AJENO })),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidOwner',
+    );
+    await assert.rejects(
+      () => laura((tx) => createCompany(tx, { name: 'Otra', domain: 'otra-responsable.co', ownerUserId: USER_AJENO })),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidOwner',
+    );
+
+    await laura((tx) => updateCompany(tx, id, { ownerUserId: null }));
+    assert.equal((await laura((tx) => getCompany(tx, id)))?.ownerUserId, null);
+  });
+
+  test('una empresa propia se corrige entera, y el país se puede vaciar', async () => {
+    const id = await laura((tx) =>
+      createCompany(tx, { name: 'Nutrivé Errata', domain: 'nutrive-errata.co', country: 'MX', city: 'CDMX', industry: 'snaks' }),
+    );
+    const creada = await laura((tx) => getCompany(tx, id));
+    assert.equal(creada?.isOwn, true, 'la creó este espacio: es suya');
+
+    await laura((tx) =>
+      updateCompany(tx, id, { name: 'Nutrivé', domain: 'nutrive-bien.co', country: null, city: null, industry: 'snacks', notes: 'Corregida.' }),
+    );
+    const corregida = await laura((tx) => getCompany(tx, id));
+    assert.equal(corregida?.name, 'Nutrivé');
+    assert.equal(corregida?.domain, 'nutrive-bien.co');
+    assert.equal(corregida?.country, null, 'vaciar el país lo borra, no lo deja como estaba');
+    assert.equal(corregida?.city, null);
+    assert.equal(corregida?.industry, 'snacks');
+    assert.equal(corregida?.notes, 'Corregida.');
+  });
+
+  test('una empresa del catálogo compartido no es propia: solo sus notas', async () => {
+    const CATALOGO_R5 = '00000009-0000-4000-8000-0000000000f5';
+    await t.admin(`
+      INSERT INTO company (id, name, domain) VALUES ('${CATALOGO_R5}', 'Catálogo R5', 'catalogo-r5.co')
+      ON CONFLICT DO NOTHING`);
+    const id = await laura((tx) => createCompany(tx, { name: 'Catálogo R5', domain: 'catalogo-r5.co' }));
+    assert.equal(id, CATALOGO_R5, 'se vincula la del catálogo');
+    assert.equal((await laura((tx) => getCompany(tx, id)))?.isOwn, false);
+    // Las del seed las adjudicó 0026 al único espacio que las nombra.
+    assert.equal((await laura((tx) => getCompany(tx, COMPANY_CAFE_ALMA)))?.isOwn, true);
+  });
+
+  test('la ficha pregunta primero si la empresa está en el CRM', async () => {
+    assert.equal(await laura((tx) => companyInCrm(tx, COMPANY_CAFE_ALMA)), true);
+    assert.equal(await laura((tx) => companyInCrm(tx, COMPANY_AJENA)), false, 'la del vecino no');
+    assert.equal(await laura((tx) => companyInCrm(tx, 'no-soy-un-uuid')), false);
+  });
+
+  test('un contacto propio se corrige y conserva su procedencia', async () => {
+    const id = await laura((tx) =>
+      createContact(tx, { companyId: COMPANY_GRANOS, source: 'user_provided', fullName: 'Andres Mal Escrito', email: 'andres@granos.cm' }),
+    );
+    await laura((tx) => updateContact(tx, id, { fullName: 'Andrés Ruiz', email: 'andres@granos.co' }));
+    const fila = (await laura((tx) => listContacts(tx, COMPANY_GRANOS))).find((c) => c.id === id);
+    assert.equal(fila?.fullName, 'Andrés Ruiz');
+    assert.equal(fila?.email, 'andres@granos.co');
+    assert.equal(fila?.source, 'user_provided');
+  });
+});
+
+describe('VEN-3 · perder un negocio pide su motivo (pulido r5)', () => {
+  test('sin motivo no se mueve a «Perdido»; con motivo queda escrito y lo lee el pipeline', async () => {
+    const id = await laura((tx) => createDeal(tx, { companyId: COMPANY_GRANOS, name: 'Para perder', nextAction: 'Enviar pitch' }));
+
+    await assert.rejects(
+      () => laura((tx) => moveDeal(tx, id, 'perdido')),
+      (err: unknown) => err instanceof VentasError && err.code === 'LostReasonRequired',
+    );
+    const intacto = await laura(async (tx) => (await tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [id])).rows[0]);
+    assert.equal(intacto?.stage_id, 'nuevo', 'sin motivo, el paso se deshace entero');
+
+    await assert.rejects(
+      // @ts-expect-error: un motivo que no está en el CHECK
+      () => laura((tx) => moveDeal(tx, id, 'perdido', { lostReason: 'me cayó mal' })),
+      (err: unknown) => err instanceof VentasError && err.code === 'InvalidReason',
+    );
+
+    const res = await laura((tx) => moveDeal(tx, id, 'perdido', { lostReason: 'precio' }));
+    assert.equal(res.isLost, true);
+    const fila = (await laura((tx) => listPipeline(tx))).find((d) => d.id === id);
+    assert.equal(fila?.lostReason, 'precio');
+    const actividad = await laura(async (tx) =>
+      (await tx.query<{ metadata: Record<string, unknown> }>(
+        `SELECT metadata FROM activity WHERE deal_id = $1 AND kind = 'stage_change' ORDER BY occurred_at DESC LIMIT 1`, [id],
+      )).rows[0]);
+    assert.equal(actividad?.metadata.lost_reason, 'precio', 'la actividad del cambio también lo cuenta');
+
+    // Reabrirlo borra el motivo (0031): ya no está perdido.
+    await laura((tx) => moveDeal(tx, id, 'contactado'));
+    assert.equal((await laura((tx) => listPipeline(tx))).find((d) => d.id === id)?.lostReason, null);
+  });
+});
+
+describe('VEN-2 · la siguiente acción del producto se reconoce por su marcador (pulido r5)', () => {
+  test('el negocio nace con el marcador de pitch, y reescribirla a mano lo quita', async () => {
+    const id = await laura((tx) => createDeal(tx, { companyId: COMPANY_GRANOS, name: 'Con marcador', nextAction: 'Send pitch' }));
+    const kind = async () =>
+      (await laura(async (tx) => (await tx.query<{ k: string | null }>('SELECT next_action_kind AS k FROM deal WHERE id = $1', [id])).rows[0]))?.k;
+    assert.equal(await kind(), 'pitch', 'la frase está en inglés, el marcador no tiene idioma');
+
+    // Cambiar otra columna no toca el marcador.
+    await laura((tx) => tx.query(`UPDATE deal SET amount = 1000 WHERE id = $1`, [id]));
+    assert.equal(await kind(), 'pitch');
+
+    await laura((tx) => tx.query(`UPDATE deal SET next_action = 'Llamar a Sofía' WHERE id = $1`, [id]));
+    assert.equal(await kind(), null, 'una frase escrita a mano no es el pitch');
+  });
+
+  test('los respaldos de moneda y locale salen de un solo sitio', () => {
+    assert.deepEqual({ ...WORKSPACE_DEFAULTS }, { currency: 'COP', locale: 'es-CO', timeZone: 'UTC', country: 'CO' });
   });
 });

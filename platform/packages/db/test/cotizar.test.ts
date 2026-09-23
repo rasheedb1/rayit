@@ -162,10 +162,15 @@ describe('el mismo acuerdo dice lo mismo en Ventas, Cotizar y Campañas', () => 
   });
 
   test('una siguiente acción escrita a mano se respeta, y el texto nuevo lo pone la pantalla', async () => {
-    const [aMano, conPitch] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [
-      await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con llamada', nextAction: 'Llamar a Valentina' }),
-      await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con pitch en otro idioma', nextAction: 'Send pitch' }),
-    ]);
+    // «A mano» es una siguiente acción que la persona REESCRIBIÓ después
+    // de abrir el negocio: el disparador de 0032 le quita el marcador de
+    // pitch. La que nace en otro idioma sigue siendo el pitch (marcador
+    // 'pitch'), diga lo que diga su frase.
+    const [aMano, conPitch] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const llamada = await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con llamada' });
+      await tx.query(`UPDATE deal SET next_action = 'Llamar a Valentina' WHERE id = $1`, [llamada]);
+      return [llamada, await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con pitch en otro idioma', nextAction: 'Send pitch' })];
+    });
     const textos: TextosCotizar = { ...TEXTOS, accionSeguimiento: 'Follow up on the quote', accionesSuperadas: ['Send pitch'] };
     for (const dealId of [aMano, conPitch]) {
       await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {

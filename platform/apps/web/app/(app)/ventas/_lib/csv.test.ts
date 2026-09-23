@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decodificarCsv } from "@/lib/csv";
-import { MAX_CSV_ROWS, parseBrandCsv, splitCsv } from "./csv";
+import { MAX_CSV_ROWS, countryCode, parseBrandCsv, splitCsv } from "./csv";
 
 describe("parseBrandCsv", () => {
   it("lee la cabecera en español con tildes y en cualquier orden", () => {
@@ -90,5 +90,37 @@ describe("splitCsv", () => {
   it("la línea de cada registro es donde empieza, aunque una celda ocupe dos", () => {
     const out = splitCsv('a,"b\nc"\nd,e', ",");
     expect(out.map((r) => r.line)).toEqual([1, 3]);
+  });
+});
+
+describe("el país de una lista", () => {
+  it("acepta el código o el nombre, en español, inglés o portugués y sin tildes", () => {
+    expect(countryCode("co")).toBe("CO");
+    expect(countryCode("Colombia")).toBe("CO");
+    expect(countryCode("México")).toBe("MX");
+    expect(countryCode("mexico")).toBe("MX");
+    expect(countryCode("Perú")).toBe("PE");
+    expect(countryCode("Brazil")).toBe("BR");
+    expect(countryCode("Estados Unidos")).toBe("US");
+    expect(countryCode("EE. UU.")).toBe("US");
+    expect(countryCode("Narnia")).toBeNull();
+  });
+
+  it("«Colombia» en la columna país entra como CO", () => {
+    const r = parseBrandCsv("marca;país\nCafé Alma;Colombia\n");
+    expect(r.rows).toEqual([{ name: "Café Alma", domain: null, country: "CO", industry: null, note: null }]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("un país que no se reconoce no se pierde en silencio: la marca entra sin país y la fila avisa", () => {
+    const r = parseBrandCsv("marca,país\nCafé Alma,Narnia\nFresko,CO\n");
+    expect(r.rows.map((x) => [x.name, x.country])).toEqual([
+      ["Café Alma", null],
+      ["Fresko", "CO"],
+    ]);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([
+      { line: 2, message: "País no reconocido: «Narnia». La marca entró sin país; usa el nombre o el código de dos letras (CO)." },
+    ]);
   });
 });

@@ -20,6 +20,26 @@ import { workspace } from '../schema/index.ts';
 
 export type Workspace = typeof workspace.$inferSelect;
 
+/**
+ * El único respaldo de moneda, locale, zona y país cuando una consulta
+ * no encuentra la fila `workspace` (no debería pasar: la RLS la deja ver
+ * siempre dentro de su transacción). Antes cada consulta que la leía
+ * llevaba su copia de 'COP' y 'es-CO' escrita a mano —cinco sitios en
+ * Ventas y Cotizar—, y un cambio del valor por defecto habría dejado
+ * cinco respuestas distintas.
+ *
+ * `currency`, `locale` y `country` son los valores por defecto de un
+ * workspace nuevo (0001). `timeZone` es 'UTC' y no 'America/Bogota' a
+ * propósito: una zona desconocida se presenta en UTC, igual que en
+ * apps/web/lib/format.ts (DEFAULT_TIME_ZONE).
+ */
+export const WORKSPACE_DEFAULTS = Object.freeze({
+  currency: 'COP',
+  locale: 'es-CO',
+  timeZone: 'UTC',
+  country: 'CO',
+});
+
 /** Lo que la interfaz necesita para formatear cifras y fechas. */
 export interface WorkspaceSettings {
   id: string;
