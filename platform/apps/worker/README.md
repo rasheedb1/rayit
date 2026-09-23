@@ -42,6 +42,27 @@ dos archivos con el mismo número detienen el arranque. Incluye `0014`
 con los privilegios de `mc_worker`, y las consultas corren como ese rol:
 es el mismo reparto que en Supabase.
 
+### Una pasada: `--once` (WRK)
+
+```bash
+pnpm --filter @mc/worker once        # corre lo vencido según job_definition y job_run, y sale
+pnpm --filter @mc/worker salud       # última corrida de cada job, sin correr nada
+```
+
+Sin proceso largo ni pg-boss: por cada definición habilitada con cron y
+handler calcula su último tick (`src/runner/cron.ts`, UTC) y la corre si
+no hay una corrida global (`workspace_id` NULL) `ok`, `partial` o
+`skipped` desde ese tick. Una `running` dentro de `timeout_s + 30 s` no
+se pisa; un fallo se reintenta en la pasada siguiente con `attempt + 1`
+hasta `max_attempts`; lo encadenado (`after`) corre enseguida si hubo
+datos. Sale con 1 si alguna corrida terminó `failed`. Al terminar
+imprime la salud (`getWorkerHealth` de `@mc/db/queries/worker`) con
+«Datos al <fecha>». No necesita el esquema `pgboss`, solo que el rol de
+conexión pueda hacer `SET ROLE mc_worker`. Es el camino recomendado para
+producción: `.github/workflows/worker-once.yml`, cada hora, hoy apagado.
+Por qué, costos y cómo encenderlo: [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md).
+No se corre a la vez que el proceso largo.
+
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
 `pgboss` y membresía de `mc_worker`). Hasta entonces, `make worker` y

@@ -192,7 +192,7 @@ export const STORIES: readonly Story[] = [
     desc: "pg-boss sobre la base, job_definition cargado, job_run registrando duración y errores. El job oauth.refresh renueva tokens antes de que venzan. Cada job vive en la carpeta de su módulo.",
     done: "make worker toma un job de la cola, lo registra, y un token con access_expires_at cercano se renueva solo.",
     status: "hecho",
-    note: "Hecha el 21-sep; 0014 aplicada en Supabase. Contra Supabase el worker sigue sin correr (23-sep): faltan CREATE SCHEMA pgboss y GRANT mc_worker TO mc_migrator con el token de administración (docs/propuestas/CON-2.md §3.1). Los refreshers reales llegaron con CON-3.",
+    note: "Hecha el 21-sep; 0014 aplicada en Supabase. 23-sep (WRK): el worker sigue sin correr contra Supabase: muere en SET ROLE mc_worker. Con el modo --once (una pasada, sin pg-boss, probado) basta un comando de administración: crear mc_worker_login miembro de mc_worker (docs/propuestas/WRK.md §1, Rasheed). Recomendado: --once cada hora desde GitHub Actions, workflow escrito y apagado hasta acordarlo con Rasheed (CIM-7).",
   },
   {
     id: "CON-2b", module: "CON", owner: "nicolas", size: "S", sprint: 2, deps: ["CIM-2", "CON-2"],
