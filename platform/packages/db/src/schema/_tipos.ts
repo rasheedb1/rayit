@@ -14,6 +14,16 @@ export const citext = customType<{ data: string; driverData: string }>({
   dataType: () => 'citext',
 });
 
+/**
+ * Hora de reloj sin fecha ni zona ('09:30:00'), como string. Es la hora
+ * LOCAL de un paso de una cadencia: la zona la pone la secuencia. El
+ * tipo se declara con su nombre largo porque así lo escribe
+ * information_schema, que es contra lo que se compara el esquema.
+ */
+export const localTime = customType<{ data: string; driverData: string }>({
+  dataType: () => 'time without time zone',
+});
+
 /** timestamptz que viaja como string ISO, nunca como Date del driver. */
 export const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'string' });
 

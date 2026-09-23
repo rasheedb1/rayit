@@ -9,6 +9,13 @@
  */
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+// Referencias en los dos sentidos con outreach.ts (el toque apunta a su
+// enrolamiento y a su paso; el paso, a su secuencia). Las de Drizzle son
+// funciones, así que el ciclo de import no se evalúa al cargar.
+import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
+import { OUTBOUND_CHANNELS } from './_canales.ts';
+
+export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
 import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 
@@ -33,10 +40,18 @@ export const ACTIVITY_KINDS = [
   'contract_sent', 'signal_detected', 'stage_change', 'report_sent', 'payment_received',
 ] as const;
 export const BRIEF_STATUSES = ['draft', 'active', 'paused', 'closed'] as const;
-export const OUTBOUND_CHANNELS = ['email', 'linkedin', 'instagram_dm', 'whatsapp'] as const;
+/**
+ * La máquina de estados de la cola (0037 §4). Los de 0007 que no están
+ * aquí (bounced, replied, opted_out, blocked, cancelled) los tradujo la
+ * migración.
+ */
 export const TOUCH_STATUSES = [
-  'draft', 'scheduled', 'sent', 'bounced', 'replied', 'opted_out', 'blocked', 'cancelled',
+  'draft', 'scheduled', 'processing', 'held', 'sent', 'failed', 'skipped', 'canceled',
 ] as const;
+/** Lo que el motor todavía puede enviar: lo que cancelan una baja, una respuesta o el apagado. */
+export const PENDING_TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held'] as const;
+export const SEQUENCE_STATUSES = ['draft', 'active', 'paused', 'archived'] as const;
+export const AUTOMATION_MODES = ['manual', 'review', 'auto'] as const;
 
 // ---------------------------------------------------------------------
 // Empresas y contactos (globales)
@@ -269,6 +284,17 @@ export const outboundPolicy = pgTable('outbound_policy', {
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
   allowedChannels: text('allowed_channels').array().default(['email', 'linkedin', 'instagram_dm']).notNull(),
   updatedAt: updatedAt(),
+  /** El interruptor de apagado (0037 §6.1). Nace apagado; sin postal_address no se puede encender (CHECK). */
+  enabled: boolean('enabled').default(false).notNull(),
+  disabledReason: text('disabled_reason'),
+  disabledAt: timestamptz('disabled_at'),
+  /** Presupuesto diario del juez y el generador, en dólares. */
+  llmDailyCapUsd: numeric('llm_daily_cap_usd', { precision: 14, scale: 2 }).default('5.00').notNull(),
+  warmupDays: integer('warmup_days').default(14).notNull(),
+  /** Dirección postal del pie de baja (CAN-SPAM). */
+  postalAddress: text('postal_address'),
+  /** Contrapresión: con más toques en cola, should_pause_outreach dice que se pare. */
+  maxPendingTouches: integer('max_pending_touches').default(200).notNull(),
 });
 
 export const outboundSequence = pgTable('outbound_sequence', {
@@ -277,9 +303,16 @@ export const outboundSequence = pgTable('outbound_sequence', {
   briefId: uuid('brief_id').references(() => outboundBrief.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   channel: text('channel', { enum: OUTBOUND_CHANNELS }).notNull(),
+  /** Pasos de 0007 en jsonb. El motor lee outbound_step (0037). */
   steps: jsonb('steps').default([]).notNull(),
   active: boolean('active').default(true).notNull(),
   createdAt: createdAt(),
+  /** Zona IANA de la cadencia; NULL = la del workspace (0037 §3.1). */
+  timezone: text('timezone'),
+  automationMode: text('automation_mode', { enum: AUTOMATION_MODES }).default('review').notNull(),
+  status: text('status', { enum: SEQUENCE_STATUSES }).default('draft').notNull(),
+  templateId: uuid('template_id').references(() => outboundSequenceTemplate.id, { onDelete: 'set null' }),
+  updatedAt: updatedAt(),
 });
 
 export const outboundTouch = pgTable('outbound_touch', {
@@ -304,4 +337,20 @@ export const outboundTouch = pgTable('outbound_touch', {
   blockedReason: text('blocked_reason'),
   externalRef: text('external_ref'),
   createdAt: createdAt(),
+  // La cola (0037 §4).
+  enrollmentId: uuid('enrollment_id').references(() => outboundEnrollment.id, { onDelete: 'set null' }),
+  stepId: uuid('step_id').references(() => outboundStep.id, { onDelete: 'set null' }),
+  attemptCount: integer('attempt_count').default(0).notNull(),
+  nextRetryAt: timestamptz('next_retry_at'),
+  /** Cuándo lo reclamó un despachador; más de cinco minutos en processing es un zombi. */
+  claimedAt: timestamptz('claimed_at'),
+  providerMessageId: text('provider_message_id'),
+  threadRef: text('thread_ref'),
+  /** La cabecera Message-ID real: la que va en In-Reply-To y References. */
+  messageIdRfc: text('message_id_rfc'),
+  openedAt: timestamptz('opened_at'),
+  heldReason: text('held_reason'),
+  /** sha256 (hex) del token del enlace de baja; el token solo va en el correo. */
+  optoutTokenHash: text('optout_token_hash'),
+  updatedAt: updatedAt(),
 });

@@ -21,6 +21,7 @@ export * from './cimientos.ts';
 export * from './conexiones.ts';
 export * from './contenido.ts';
 export * from './ventas.ts';
+export * from './outreach.ts';
 export * from './cotizar.ts';
 export * from './campanas.ts';
 export * from './finanzas.ts';
