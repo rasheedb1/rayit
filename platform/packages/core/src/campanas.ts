@@ -851,6 +851,15 @@ export interface CampaignResultValues {
   revenueSource: BrandFigureSource | null;
 }
 
+/**
+ * Los topes de las columnas de campaign_result (0008): un valor que no
+ * cabe haría fallar el UPSERT entero y la campaña se quedaría sin
+ * resultado para siempre. Se recorta al máximo que la columna admite.
+ */
+const MAX_VS_MEDIAN = 99999.999; // numeric(8,3)
+const MAX_RATE = 999999.9999; // numeric(10,4)
+const MAX_PCT = 9.99999; // numeric(6,5)
+
 /** a / b redondeado al entero, mitad hacia arriba. b > 0 y a ≥ 0. */
 function divHalfUp(a: bigint, b: bigint): bigint {
   return (a * 2n + b) / (b * 2n);
@@ -865,6 +874,43 @@ function fixed(n: number | null, digits: number): string | null {
 function countOf(value: string): number | null {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/** Una cifra de la marca y de dónde salió. */
+export interface BrandFigure {
+  value: string;
+  source: BrandFigureSource;
+  /** Había también la otra fuente y se descartó (manda el CSV). */
+  overrode: boolean;
+}
+
+export interface BrandFigures {
+  redemptions: BrandFigure | null;
+  revenue: BrandFigure | null;
+  /** Ingresos manuales en otra moneda que la de la campaña: no se atribuyen. La moneda, para decirlo. */
+  revenueSkippedCurrency: string | null;
+}
+
+/**
+ * Canjes e ingresos del resultado desde los totales de CAM-4, por
+ * separado: el CSV de ese concepto si existe; si no, el último total
+ * manual. Ingresos manuales en otra moneda no se atribuyen (no hay tipo
+ * de cambio) y se devuelve la moneda para que la ficha lo diga. La usan
+ * calcularResultado y la ficha, así la frase «salen del CSV» dice lo
+ * mismo que la cuenta.
+ */
+export function brandFigures(totals: readonly ResultBrandTotal[], currency: string): BrandFigures {
+  const find = (kind: BrandInputKind, source: BrandInputSource) => totals.find((t) => t.kind === kind && t.source === source);
+  const pick = (csv: ResultBrandTotal | undefined, manual: ResultBrandTotal | undefined): BrandFigure | null =>
+    csv ? { value: csv.value, source: 'csv', overrode: manual !== undefined } : manual ? { value: manual.value, source: 'manual', overrode: false } : null;
+  const manualRevenue = find('revenue', 'brand_manual');
+  const otherCurrency = manualRevenue !== undefined && (manualRevenue.currency ?? currency) !== currency;
+  const csvSales = find('csv_sales', 'brand_csv');
+  return {
+    redemptions: pick(find('code_redemptions', 'brand_csv'), find('code_redemptions', 'brand_manual')),
+    revenue: pick(csvSales, otherCurrency ? undefined : manualRevenue),
+    revenueSkippedCurrency: otherCurrency && !csvSales ? (manualRevenue?.currency ?? null) : null,
+  };
 }
 
 /** El corte común: el mayor que todos los posts alcanzaron, con views en todos. null si ninguno. */
@@ -913,7 +959,7 @@ export function calcularResultado(inputs: ResultInputs): CampaignResultValues {
       nfDen += m.reach;
     }
   }
-  const reachNonFollowersPct = nfDen > 0 ? fixed(Math.min(nfNum / nfDen, 9.99999), 5) : null;
+  const reachNonFollowersPct = nfDen > 0 ? fixed(Math.min(nfNum / nfDen, MAX_PCT), 5) : null;
 
   // Contra la mediana del creador, ponderado por views.
   let viewsVsMedian: string | null = null;
@@ -931,7 +977,7 @@ export function calcularResultado(inputs: ResultInputs): CampaignResultValues {
       totalViews += m.views;
     }
     if (!ok) missing.add('baseline');
-    else if (totalViews > 0) viewsVsMedian = fixed(weighted / totalViews, 3);
+    else if (totalViews > 0) viewsVsMedian = fixed(Math.min(weighted / totalViews, MAX_VS_MEDIAN), 3);
   }
 
   // Seguidores de la marca (CAM-3), sumados entre redes.
@@ -944,39 +990,26 @@ export function calcularResultado(inputs: ResultInputs): CampaignResultValues {
     const r = ritmoSeguidores(series.points, windows);
     if (r.gained === null) continue;
     gained = (gained ?? 0) + r.gained;
-    if (r.campaignRate !== null) campaignRate = (campaignRate ?? 0) + r.campaignRate;
-    if (r.baselineRate !== null) baselineRate = (baselineRate ?? 0) + r.baselineRate;
+    // Los dos ritmos se suman sobre las MISMAS redes: una red sin línea base
+    // no entra en ninguno, o el «×N» compararía campaña de dos redes con
+    // la línea base de una.
+    if (r.campaignRate !== null && r.baselineRate !== null) {
+      campaignRate = (campaignRate ?? 0) + r.campaignRate;
+      baselineRate = (baselineRate ?? 0) + r.baselineRate;
+    }
     if (!r.fiable) short = true;
   }
   if (gained === null) missing.add('brand_followers');
   else if (short || baselineRate === null) missing.add('brand_followers_baseline_short');
 
   // Canjes e ingresos (CAM-4): el CSV si existe; si no, el último total manual.
-  const total = (kind: BrandInputKind, source: BrandInputSource) => inputs.brandTotals.find((t) => t.kind === kind && t.source === source);
-  let codeRedemptions: number | null = null;
-  let redemptionsSource: BrandFigureSource | null = null;
-  const csvRedemptions = total('code_redemptions', 'brand_csv');
-  const manualRedemptions = total('code_redemptions', 'brand_manual');
-  if (csvRedemptions) {
-    codeRedemptions = countOf(csvRedemptions.value);
-    redemptionsSource = 'csv';
-  } else if (manualRedemptions) {
-    codeRedemptions = countOf(manualRedemptions.value);
-    redemptionsSource = 'manual';
-  }
-  let attributedRevenue: Decimal | null = null;
-  let revenueSource: BrandFigureSource | null = null;
-  const csvSales = total('csv_sales', 'brand_csv');
-  const manualRevenue = total('revenue', 'brand_manual');
-  if (csvSales) {
-    attributedRevenue = fromCents(toCents(csvSales.value));
-    revenueSource = 'csv';
-  } else if (manualRevenue && (manualRevenue.currency ?? inputs.currency) === inputs.currency) {
-    attributedRevenue = fromCents(toCents(manualRevenue.value));
-    revenueSource = 'manual';
-  }
+  const figures = brandFigures(inputs.brandTotals, inputs.currency);
+  const codeRedemptions = figures.redemptions?.value === undefined ? null : countOf(figures.redemptions.value);
+  const redemptionsSource = figures.redemptions?.source ?? null;
+  const attributedRevenue = figures.revenue ? fromCents(toCents(figures.revenue.value)) : null;
+  const revenueSource = figures.revenue?.source ?? null;
   if (inputs.brandTotals.length === 0) missing.add('brand_inputs');
-  else if (!csvSales) missing.add('brand_csv_sales');
+  else if (!inputs.brandTotals.some((t) => t.kind === 'csv_sales' && t.source === 'brand_csv')) missing.add('brand_csv_sales');
 
   // Eficiencia: dinero en centavos, mitad hacia arriba; sin divisor, null.
   let cpm: Decimal | null = null;
@@ -1005,8 +1038,8 @@ export function calcularResultado(inputs: ResultInputs): CampaignResultValues {
     reachNonFollowersPct,
     viewsVsMedian,
     brandFollowersGained: gained,
-    brandFollowersBaselineRate: fixed(baselineRate, 4),
-    brandFollowersCampaignRate: fixed(campaignRate, 4),
+    brandFollowersBaselineRate: fixed(baselineRate === null ? null : Math.min(baselineRate, MAX_RATE), 4),
+    brandFollowersCampaignRate: fixed(campaignRate === null ? null : Math.min(campaignRate, MAX_RATE), 4),
     codeRedemptions,
     attributedRevenue,
     currency: inputs.currency,

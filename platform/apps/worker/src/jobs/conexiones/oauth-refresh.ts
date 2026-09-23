@@ -33,6 +33,7 @@ import { PLATFORM_IDS, TokenRefreshError, type OAuthTokens, type PlatformId, isP
 import { envInt } from '../../runner/config.ts';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
+import { mapLimit } from '../../runner/concurrency.ts';
 
 export interface OAuthRefreshPayload extends JobPayload {
   /** Renovar solo esta conexión (p. ej. desde la pantalla Conexiones), sin mirar el margen. */
@@ -305,16 +306,5 @@ async function logApiCall(ctx: JobContext, conn: ConnectionRow, call: ApiCall): 
   }
 }
 
-/** Ejecuta fn sobre items con a lo sumo `limit` en paralelo, conservando el orden de arranque. */
-export async function mapLimit<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const width = Math.max(1, Math.min(limit, items.length));
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: width }, async () => {
-      while (next < items.length) {
-        const item = items[next++]!;
-        await fn(item);
-      }
-    }),
-  );
-}
+/** Se mudó al runner (CAM-5 también la usa); se reexporta para no tocar a quien la importa de aquí. */
+export { mapLimit } from '../../runner/concurrency.ts';

@@ -91,7 +91,9 @@ describe("Resultado", () => {
   it("sin posts medidos lo dice en views, alcance, clics y CPM; «posts» sin enlace si la campaña no admite cambios", () => {
     pintar({ result: { ...NUTRIVE, views: null, reach: null, linkClicks: null, cpm: null, reachNonFollowersPct: null, viewsVsMedian: null, missingInputs: ["posts"] }, editable: false });
     for (const label of ["Views", "Alcance", "Clics al enlace", "CPM"]) valor(label).getByText("Sin posts medidos");
-    expect(screen.getByText("posts medidos: asocia los posts de la campaña").closest("a")).toBeNull();
+    expect(screen.getByText(/^posts con lecturas/).closest("a")).toBeNull();
+    expect(screen.getByText(/resultado calculado sin posts medidos/)).toBeInTheDocument();
+    expect(screen.queryByText(/a 30 días/)).toBeNull();
   });
 
   it("un CPM vacío dice por qué solo si missing_inputs lo sabe", () => {
@@ -103,6 +105,29 @@ describe("Resultado", () => {
     pintar({ result: { ...NUTRIVE, cpm: null } });
     valor("CPM").getByText("Sin calcular");
     expect(screen.queryByText("Sin monto acordado")).toBeNull();
+  });
+
+  it("con línea base corta no presume un «×N»; la nota del CPA dice la causa real", () => {
+    pintar({ result: { ...CAFE_ALMA, cpa: null, missingInputs: ["amount", "brand_followers_baseline_short"] } });
+    valor("Seguidores ganados por la marca").getByText("línea base corta: sin ritmo comparable");
+    expect(screen.queryByText(/su ritmo previo/)).toBeNull();
+    valor("CPM").getByText("CPA sin monto acordado");
+  });
+
+  it("dice qué concepto sale del CSV y qué ingresos no se atribuyen por la moneda", () => {
+    pintar({
+      brandInputs: {
+        currency: "COP",
+        daily: [],
+        totals: [
+          { kind: "code_redemptions", source: "brand_manual", semantics: "total", value: "318.00", currency: null, asOf: "2026-09-11", from: null, count: 1 },
+          { kind: "revenue", source: "brand_manual", semantics: "total", value: "400.00", currency: "USD", asOf: "2026-09-11", from: null, count: 1 },
+          { kind: "code_redemptions", source: "brand_csv", semantics: "daily", value: "5.00", currency: null, asOf: "2026-09-08", from: "2026-09-02", count: 4 },
+        ],
+      },
+    });
+    expect(screen.getByText("Los canjes salen del CSV de ventas; el total por formulario queda como respaldo.")).toBeInTheDocument();
+    expect(screen.getByText(/están en USD: no se atribuyen a un resultado en COP/)).toBeInTheDocument();
   });
 
   it("un resultado a 7 días se marca parcial", () => {

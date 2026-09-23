@@ -1357,6 +1357,12 @@ export interface ResultCampaign {
   status: CampaignStatus;
 }
 
+export class ResultNotWrittenError extends CampaignError {
+  constructor() {
+    super('ResultNotWrittenError', 'No se pudo guardar el resultado de la campaña.');
+  }
+}
+
 export class ResultFrozenError extends CampaignError {
   constructor(status: CampaignStatus) {
     super('ResultFrozenError', `Una campaña ${CAMPAIGN_STATUS_META[status].label.toLowerCase()} no recalcula su resultado.`);
@@ -1477,7 +1483,11 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
     }
   }
   const series = new Map<string, { day: string; followers: number | null }[]>();
-  for (const r of brand.rows) series.set(r.platform_id, [...(series.get(r.platform_id) ?? []), { day: r.day, followers: intOrNull(r.followers) }]);
+  for (const r of brand.rows) {
+    const points = series.get(r.platform_id) ?? [];
+    points.push({ day: r.day, followers: intOrNull(r.followers) });
+    series.set(r.platform_id, points);
+  }
 
   return {
     campaign: { id: c.id, workspaceId: c.workspace_id, status: c.status },
@@ -1556,7 +1566,10 @@ export async function computeCampaignResult(q: ResultExecutor, campaignId: strin
   if (!read) return null;
   if (!RESULT_COMPUTE_STATUSES.includes(read.campaign.status)) throw new ResultFrozenError(read.campaign.status);
   const values = calcularResultado(read.inputs);
-  await upsertResult(q, campaignId, values, computedAt);
+  // false = el UPSERT no escribió: la fila existente es de otro workspace
+  // (la guarda del ON CONFLICT) o la campaña desapareció entre la lectura
+  // y la escritura. No es un éxito.
+  if (!(await upsertResult(q, campaignId, values, computedAt))) throw new ResultNotWrittenError();
   return values;
 }
 

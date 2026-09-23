@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { cutHoursLabel, followerRateMultiple, isResultComplete, RESULT_COMPUTE_STATUSES, RESULT_FULL_CUT_HOURS, type CampaignStatus, type MissingInput } from "@mc/core";
+import { brandFigures, cutHoursLabel, followerRateMultiple, isResultComplete, RESULT_COMPUTE_STATUSES, RESULT_FULL_CUT_HOURS, type CampaignStatus, type MissingInput } from "@mc/core";
 import type { BrandInputs, CampaignResultRow } from "@mc/db";
 import { Button } from "@/components/ui/button";
 import { DataAsOf } from "@/components/ui/data-as-of";
@@ -74,8 +74,19 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
   const exact = (v: string) => f.money(v, r.currency ?? undefined, { mode: "full" });
   const multiple = followerRateMultiple(r.brandFollowersBaselineRate, r.brandFollowersCampaignRate);
   const cutLabel = cutHoursLabel(r.cutHours);
-  const fromCsv =
-    brandInputs.totals.some((x) => x.source === "brand_csv") && brandInputs.totals.some((x) => x.source === "brand_manual");
+  const noPosts = r.missingInputs.includes("posts");
+  const shortBaseline = r.missingInputs.includes("brand_followers_baseline_short");
+  // La misma elección que hizo la cuenta (core): qué concepto salió del CSV pisando un total manual.
+  const figures = brandFigures(brandInputs.totals, r.currency ?? brandInputs.currency);
+  const overrode = figures.redemptions?.overrode && figures.revenue?.overrode ? "both" : figures.redemptions?.overrode ? "redemptions" : figures.revenue?.overrode ? "revenue" : null;
+  const cpaNote =
+    r.cpa !== null
+      ? t.note.cpa(exact(r.cpa))
+      : r.missingInputs.includes("amount")
+        ? t.note.cpaNoAmount
+        : r.codeRedemptions === 0
+          ? t.note.cpaNoRedemptions
+          : t.note.cpaAbsent;
   // Por qué no hay CPM: lo dice missing_inputs, no se deduce de otra celda.
   const cpmAbsent = r.missingInputs.includes("amount") ? t.absent.amount : r.views === null ? t.absent.posts : t.absent.notComputed;
   // «Asociar post» solo existe si la campaña admite cambios: sin ella, «posts» va sin enlace.
@@ -103,20 +114,23 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
         <Kpi
           label={t.kpi.followers}
           value={brandValue(r.brandFollowersGained, f)}
-          note={multiple === null ? undefined : t.note.rate(f.multiple(multiple, 0))}
+          note={shortBaseline ? (r.brandFollowersGained === null ? undefined : t.note.rateShort) : multiple === null ? undefined : t.note.rate(f.multiple(multiple, 0))}
         />
         <Kpi
           label={t.kpi.cpm}
           value={r.cpm === null ? cpmAbsent : exact(r.cpm)}
-          note={r.cpa === null ? t.note.cpaAbsent : t.note.cpa(exact(r.cpa))}
+          note={cpaNote}
         />
       </KpiRow>
 
       <DataAsOf
         date={r.computedAt}
-        source={t.asOfSource(r.cutHours < RESULT_FULL_CUT_HOURS ? t.partialCut(cutLabel) : t.cut(cutLabel))}
+        source={t.asOfSource(noPosts ? t.noCut : r.cutHours < RESULT_FULL_CUT_HOURS ? t.partialCut(cutLabel) : t.cut(cutLabel))}
       />
-      {fromCsv && <p className="text-xs text-fg-3">{t.fromCsv}</p>}
+      {overrode && <p className="text-xs text-fg-3">{t.fromCsv(t.concepts[overrode])}</p>}
+      {figures.revenueSkippedCurrency && (
+        <p className="text-xs text-fg-3">{t.otherCurrency(figures.revenueSkippedCurrency, r.currency ?? brandInputs.currency)}</p>
+      )}
 
       {r.missingInputs.length > 0 && (
         <div>

@@ -24,7 +24,7 @@
 import { computeCampaignResult, listCampaignsToCompute, type ResultExecutor } from '@mc/db';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';
 import type { Queryable } from '../../runner/db.ts';
-import { mapLimit } from '../conexiones/oauth-refresh.ts';
+import { mapLimit } from '../../runner/concurrency.ts';
 
 export interface CampaignComputePayload extends JobPayload {
   /** Solo esta campaña (con su workspaceId). */

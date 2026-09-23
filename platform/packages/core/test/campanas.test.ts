@@ -8,7 +8,7 @@ import {
   brandAccountsFromSocials, defaultCampaignName, briefFromQuote, cutHoursLabel,
   BRAND_INPUT_KINDS, BRAND_INPUT_KIND_LABEL_ES, MANUAL_BRAND_INPUT_KINDS, brandInputSemantics, isBrandInputKind,
   isManualBrandInputKind, isMoneyBrandInputKind, brandCsvWindow, parseBrandCsvDay, reviewBrandCsvRows,
-  calcularResultado, followerRateMultiple, isResultComplete, MISSING_INPUTS, type ResultInputs, type ResultPost,
+  calcularResultado, brandFigures, followerRateMultiple, isResultComplete, MISSING_INPUTS, type ResultInputs, type ResultPost,
   ritmoSeguidores, isBrandSnapshotDue, isBrandNoDataReason, BRAND_AFTER_DAYS, BRAND_BASELINE_DAYS, type BrandFollowerPoint,
 } from '../src/campanas.ts';
 import { addDays } from '../src/facturacion.ts';
@@ -548,4 +548,42 @@ test('calcularResultado: línea base de la marca corta → «brand_followers_bas
   assert.ok(r.brandFollowersGained !== null);
   assert.ok(r.missingInputs.includes('brand_followers_baseline_short'));
   assert.deepEqual([...MISSING_INPUTS], ['posts', 'amount', 'baseline', 'brand_followers', 'brand_followers_baseline_short', 'brand_inputs', 'brand_csv_sales']);
+});
+
+test('calcularResultado: una razón que no cabe en numeric(8,3) se recorta en vez de tumbar el UPSERT', () => {
+  const r = calcularResultado({
+    ...resultadoCafeAlma(),
+    posts: [post('viral', 'instagram', 800, { 720: { views: 2_000_000_000 } })],
+    baselines: [{ platformId: 'instagram', cutHours: 720, medianViews: 15, sampleSize: 20, reliable: true }],
+  });
+  assert.equal(r.viewsVsMedian, '99999.999');
+});
+
+test('calcularResultado: los dos ritmos se suman sobre las mismas redes', () => {
+  // Instagram con línea base (la del seed) y una segunda red que empieza a medirse con la campaña.
+  const sinLineaBase = serieDelSeed().filter((p) => p.day >= '2026-08-10').map((p) => ({ ...p, followers: p.followers === null ? null : p.followers * 2 }));
+  const r = calcularResultado({
+    ...resultadoCafeAlma(),
+    brandSeries: [{ platformId: 'instagram', points: serieDelSeed() }, { platformId: 'tiktok', points: sinLineaBase }],
+  });
+  assert.equal(r.brandFollowersBaselineRate, '12.9286');
+  assert.equal(r.brandFollowersCampaignRate, '155.0000', 'la red sin línea base no infla el ritmo en campaña');
+  assert.ok((r.brandFollowersGained ?? 0) > 1240, 'sus seguidores ganados sí cuentan');
+  assert.ok(r.missingInputs.includes('brand_followers_baseline_short'));
+});
+
+test('brandFigures: cada concepto elige su fuente; ingresos en otra moneda se nombran, no se atribuyen', () => {
+  const f = brandFigures(
+    [
+      { kind: 'code_redemptions', source: 'brand_manual', value: '318.00', currency: null },
+      { kind: 'csv_sales', source: 'brand_csv', value: '100.00', currency: 'COP' },
+      { kind: 'revenue', source: 'brand_manual', value: '9.00', currency: 'COP' },
+    ],
+    'COP',
+  );
+  assert.deepEqual(f.redemptions, { value: '318.00', source: 'manual', overrode: false }, 'el CSV no trae canjes: manda el manual');
+  assert.deepEqual(f.revenue, { value: '100.00', source: 'csv', overrode: true });
+  assert.equal(f.revenueSkippedCurrency, null);
+  const usd = brandFigures([{ kind: 'revenue', source: 'brand_manual', value: '400.00', currency: 'USD' }], 'COP');
+  assert.deepEqual([usd.revenue, usd.revenueSkippedCurrency], [null, 'USD']);
 });
