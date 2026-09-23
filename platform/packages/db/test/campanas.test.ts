@@ -18,6 +18,12 @@ import {
   QuoteNotAcceptedError,
   QuoteNotFoundError,
   createCampaignFromQuote,
+  addBrandInput,
+  importBrandCsv,
+  listBrandInputs,
+  BrandCsvOutOfWindowError,
+  CampaignWithoutDatesError,
+  InvalidBrandInputError,
   type WorkspaceTx,
 } from '../src/index.ts';
 import {
@@ -33,6 +39,8 @@ const CAMPAIGN_AJENA = '00000009-0000-4000-8000-0000000ca001';
 const EMPRESA_AJENA = '00000009-0000-4000-8000-0000000000e1';
 /** Una campaña nueva de Laura, en planned, para las transiciones. */
 const CAMPAIGN_PRUEBA = '00000003-0000-4000-8000-00000ca0f001';
+/** Otra de Laura, sin fechas: no puede importar un CSV de ventas (CAM-4). */
+const CAMPAIGN_SIN_FECHAS = '00000003-0000-4000-8000-00000ca0f002';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
@@ -57,6 +65,9 @@ before(async () => {
     ON CONFLICT DO NOTHING;
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, amount, currency)
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')
+    ON CONFLICT DO NOTHING;
+    INSERT INTO campaign (id, workspace_id, company_id, name, status, amount, currency)
+    VALUES ('${CAMPAIGN_SIN_FECHAS}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña sin fechas', 'planned', 500000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
 }, { timeout: 120_000 });
@@ -95,7 +106,7 @@ const lecturaReciente = (iso: string | null | undefined, que: string) => {
 describe('lista y ficha', () => {
   test('la lista da las cuatro campañas del mock con sus cifras', async () => {
     const rows = await laura((tx) => listCampaigns(tx));
-    const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA);
+    const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA && r.id !== CAMPAIGN_SIN_FECHAS);
     assert.deepEqual(
       seed.map((r) => [r.companyName, r.status, r.postsCount, r.amount, r.hasInvoice]),
       [
@@ -526,5 +537,181 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     const planned = await laura((tx) => listCampaigns(tx, { status: 'planned' }));
     assert.ok(planned.some((c) => c.id === campaign.id));
     assert.equal((await laura((tx) => getCampaign(tx, campaign.id)))?.agreed?.quoteNumber, 'COT-2026-017');
+  });
+});
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+
+describe('lo que aporta la marca', () => {
+  const ajeno = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_AJENO, fn);
+  const filasDe = (campaignId: string) =>
+    laura((tx) => tx.query<{ kind: string; source: string; day: string; value: string; currency: string | null }>(
+      `SELECT kind, source, to_char(day, 'YYYY-MM-DD') AS day, value_num::text AS value, currency
+       FROM campaign_brand_input WHERE campaign_id = $1 ORDER BY source, kind, day, received_at`,
+      [campaignId],
+    )).then((r) => r.rows);
+  const bitacora = (action: string) =>
+    laura((tx) => tx.query<{ entity_type: string; entity_id: string; actor_user_id: string | null; after: Record<string, unknown> }>(
+      `SELECT entity_type, entity_id, actor_user_id, after FROM audit_log WHERE action = $1 ORDER BY created_at, id`,
+      [action],
+    )).then((r) => r.rows);
+
+  test('Café Alma trae del seed los dos totales manuales: 318 canjes y 8,4 M al 11 de septiembre', async () => {
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_CAFE_ALMA));
+    assert.equal(r.currency, 'COP');
+    assert.deepEqual(
+      r.totals.map((x) => [x.kind, x.source, x.semantics, x.value, x.currency, x.asOf, x.from, x.count]),
+      [
+        ['code_redemptions', 'brand_manual', 'total', '318.00', null, '2026-09-11', null, 1],
+        ['revenue', 'brand_manual', 'total', '8400000.00', 'COP', '2026-09-11', null, 1],
+      ],
+    );
+    assert.deepEqual(r.daily, [], 'sin CSV no hay serie diaria');
+    const fresko = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(fresko.totals, [], 'Fresko no tiene aportes: lista vacía, no ceros');
+  });
+
+  test('registrar un total por formulario: la misma alta no duplica, otra cifra manda por ser la última', async () => {
+    const primera = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '40', notes: 'Correo de la marca, lunes' }));
+    assert.equal(primera.created, true);
+    assert.equal(primera.campaignCurrency, 'COP');
+    assert.deepEqual([primera.input.kind, primera.input.source, primera.input.day, primera.input.value, primera.input.currency], ['code_redemptions', 'brand_manual', '2026-09-20', '40.00', null]);
+
+    const repetida = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '40' }));
+    assert.equal(repetida.created, false);
+    assert.equal(repetida.input.id, primera.input.id, 'devuelve la que ya estaba');
+
+    const corregida = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '45' }));
+    assert.equal(corregida.created, true);
+
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(r.totals.map((x) => [x.kind, x.value, x.asOf, x.count]), [['code_redemptions', '45.00', '2026-09-20', 2]], 'la última alta manda; hay dos filas detrás');
+  });
+
+  test('ingresos: sin moneda toma la de la campaña; con otra se guarda tal cual y la respuesta dice cuál es la de la campaña', async () => {
+    const cop = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1500000.50' }));
+    assert.equal(cop.input.currency, 'COP');
+    assert.equal(cop.input.value, '1500000.50');
+    const usd = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-21', value: '400', currency: 'usd' }));
+    assert.equal(usd.input.currency, 'USD');
+    assert.equal(usd.campaignCurrency, 'COP');
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    const revenue = r.totals.find((x) => x.kind === 'revenue');
+    assert.deepEqual([revenue?.value, revenue?.currency, revenue?.asOf, revenue?.count], ['400.00', 'USD', '2026-09-21', 2]);
+  });
+
+  test('valida antes de escribir: kind, fecha, cifra y moneda', async () => {
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'csv_sales' as 'orders', day: '2026-09-20', value: '1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '20/09/2026', value: '1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '2026-09-20', value: '1.5' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1.555' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '-1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1', currency: 'pesos' })), InvalidBrandInputError);
+  });
+
+  test('una campaña cerrada no admite aportes ni CSV', async () => {
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_NUTRIVE, kind: 'orders', day: '2026-08-01', value: '3' })), CampaignLockedError);
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_NUTRIVE, rows: [{ line: 2, day: '2026-07-20', sales: '10.00', orders: null, redemptions: null }] })),
+      CampaignLockedError,
+    );
+    assert.deepEqual(await filasDe(CAMPAIGN_NUTRIVE), [], 'no quedó nada escrito');
+  });
+
+  test('desde otro workspace la campaña no existe: ni leer, ni registrar, ni importar', async () => {
+    const antes = await filasDe(CAMPAIGN_FRESKO);
+    await assert.rejects(ajeno((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO)), CampaignNotFoundError);
+    await assert.rejects(ajeno((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '2026-09-20', value: '1' })), CampaignNotFoundError);
+    await assert.rejects(
+      ajeno((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-09-02', sales: '10.00', orders: null, redemptions: null }] })),
+      CampaignNotFoundError,
+    );
+    assert.deepEqual(await filasDe(CAMPAIGN_FRESKO), antes, 'Fresko sigue igual');
+    const desdeAjeno = await ajeno((tx) => tx.query('SELECT 1 FROM campaign_brand_input WHERE campaign_id = $1', [CAMPAIGN_FRESKO]));
+    assert.equal(desdeAjeno.rows.length, 0, 'RLS: las filas de Laura no se ven desde el workspace ajeno');
+  });
+
+  const csv = [
+    { line: 2, day: '2026-09-02', sales: '1250000.50', orders: 12, redemptions: 3 },
+    { line: 3, day: '2026-09-03', sales: '980000.00', orders: 9, redemptions: 2 },
+    { line: 4, day: '2026-09-04', sales: '640000.00', orders: null, redemptions: null },
+  ];
+
+  test('importar el CSV llena la tabla por día; repetirlo no duplica; una cifra corregida se reemplaza', async () => {
+    const primera = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: csv }));
+    assert.deepEqual(primera, { inserted: 7, unchanged: 0, replaced: 0, days: 3, from: '2026-09-02', to: '2026-09-04' });
+
+    const segunda = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: csv }));
+    assert.deepEqual(segunda, { inserted: 0, unchanged: 7, replaced: 0, days: 3, from: '2026-09-02', to: '2026-09-04' });
+    const filas = (await filasDe(CAMPAIGN_FRESKO)).filter((f) => f.source === 'brand_csv');
+    assert.equal(filas.length, 7, 'siete filas, no catorce');
+
+    const corregido = csv.map((r) => (r.day === '2026-09-03' ? { ...r, sales: '990000.00' } : r));
+    const tercera = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: corregido }));
+    assert.deepEqual(tercera, { inserted: 0, unchanged: 6, replaced: 1, days: 3, from: '2026-09-02', to: '2026-09-04' });
+
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(
+      r.totals.filter((x) => x.source === 'brand_csv').map((x) => [x.kind, x.semantics, x.value, x.currency, x.from, x.asOf, x.count]),
+      [
+        ['code_redemptions', 'daily', '5.00', null, '2026-09-02', '2026-09-03', 2],
+        ['csv_sales', 'daily', '2880000.50', 'COP', '2026-09-02', '2026-09-04', 3],
+        ['orders', 'daily', '21.00', null, '2026-09-02', '2026-09-03', 2],
+      ],
+      'sumas por kind desde SQL, con la moneda de la campaña en las ventas',
+    );
+    assert.deepEqual(r.daily, [
+      { day: '2026-09-02', sales: '1250000.50', orders: 12, redemptions: 3 },
+      { day: '2026-09-03', sales: '990000.00', orders: 9, redemptions: 2 },
+      { day: '2026-09-04', sales: '640000.00', orders: null, redemptions: null },
+    ]);
+    // Los totales manuales de las pruebas anteriores siguen aparte: la fuente los separa.
+    assert.deepEqual(r.totals.filter((x) => x.source === 'brand_manual').map((x) => x.kind), ['code_redemptions', 'revenue']);
+  });
+
+  test('la ventana starts_on − 7 … ends_on + 60 se vuelve a comprobar en la base; sin fechas no hay importación', async () => {
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-08-25', sales: '1.00', orders: null, redemptions: null }] })),
+      BrandCsvOutOfWindowError,
+    );
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-11-09', sales: '1.00', orders: null, redemptions: null }] })),
+      BrandCsvOutOfWindowError,
+    );
+    const limites = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [
+      { line: 2, day: '2026-08-26', sales: '1.00', orders: null, redemptions: null },
+      { line: 3, day: '2026-11-08', sales: '2.00', orders: null, redemptions: null },
+    ] }));
+    assert.equal(limites.inserted, 2, 'los dos extremos entran');
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_SIN_FECHAS, rows: [{ line: 2, day: '2026-09-02', sales: '1.00', orders: null, redemptions: null }] })),
+      CampaignWithoutDatesError,
+    );
+    const vacio = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [] }));
+    assert.deepEqual(vacio, { inserted: 0, unchanged: 0, replaced: 0, days: 0, from: null, to: null });
+  });
+
+  test('cada alta y cada importación dejan bitácora, sin el texto libre de la persona', async () => {
+    const altas = await bitacora('campaign.brand_input.added');
+    assert.ok(altas.length >= 4, `una entrada por alta nueva (hay ${altas.length})`);
+    for (const a of altas) {
+      assert.equal(a.entity_type, 'campaign_brand_input');
+      assert.deepEqual(Object.keys(a.after).sort(), ['campaign_id', 'currency', 'day', 'kind', 'source', 'value']);
+      assert.equal(a.actor_user_id, null, 'sin identidad en la transacción no se inventa un actor');
+    }
+    const texto = JSON.stringify(altas);
+    assert.doesNotMatch(texto, /Correo de la marca/, 'las notas no viajan a la bitácora');
+
+    const importaciones = await bitacora('campaign.brand_csv.imported');
+    assert.ok(importaciones.length >= 3);
+    const primera = importaciones.find((i) => i.after.inserted === 7);
+    assert.ok(primera, 'la primera importación con sus conteos');
+    assert.deepEqual(primera.after, { source: 'brand_csv', currency: 'COP', days: 3, from: '2026-09-02', to: '2026-09-04', inserted: 7, replaced: 0, unchanged: 0 });
+    assert.equal(primera.entity_id, CAMPAIGN_FRESKO);
+    // La bitácora del workspace ajeno no ve nada de esto.
+    const desdeAjeno = await ajeno((tx) => tx.query("SELECT 1 FROM audit_log WHERE action LIKE 'campaign.brand%'"));
+    assert.equal(desdeAjeno.rows.length, 0);
   });
 });

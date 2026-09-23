@@ -32,7 +32,19 @@ import {
   CampaignLockedError,
   InvalidNameError,
   SUGGESTION_WINDOW_DAYS,
+  BRAND_INPUT_KINDS,
+  brandCsvWindow,
+  brandInputSemantics,
+  isIsoDate,
+  isManualBrandInputKind,
+  isMoneyBrandInputKind,
+  type BrandCsvRow,
+  type BrandInputKind,
+  type BrandInputSemantics,
+  type BrandInputSource,
   type CampaignStatus,
+  type DateWindow,
+  type ManualBrandInputKind,
   type SuggestionReason,
 } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
@@ -842,4 +854,386 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   const id = inserted.rows[0]?.id;
   if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
   return { campaign: await requireCampaign(tx, id), created: true };
+}
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+//
+// campaign_brand_input (0008) tiene workspace_id y su política RLS; mc_app
+// conserva INSERT y UPDATE (0025 no la toca). La semántica la decide la
+// fuente (core, brandInputSemantics): lo del formulario es un total
+// acumulado a la fecha `day` y manda el último por received_at; lo del
+// CSV es de ese día y se suma. No hay UNIQUE sobre la clave natural
+// (campaign_id, kind, day, source): la idempotencia se hace aquí, dentro
+// de la transacción y con la fila de campaign bloqueada (FOR UPDATE en
+// lockEditableCampaign serializa dos importaciones a la vez). El índice
+// que lo garantiza en la base para cualquier escritor está propuesto en
+// docs/propuestas/CAM-4.md §2.
+
+export interface AddBrandInputInput {
+  campaignId: string;
+  kind: ManualBrandInputKind;
+  /** 'YYYY-MM-DD': el total es «a esta fecha». */
+  day: string;
+  /** Decimal como texto ('318' o '8400000.00'). Un conteo va sin decimales. */
+  value: string;
+  /** Solo para revenue. Si falta, la de la campaña. */
+  currency?: string | null;
+  /** Texto libre de la persona. Nunca va a la bitácora. */
+  notes?: string | null;
+}
+
+export interface BrandInputRow {
+  id: string;
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  day: string;
+  /** Decimal como texto, con dos cifras ('318.00'). */
+  value: string;
+  currency: string | null;
+  receivedAt: string;
+  notes: string | null;
+}
+
+export interface AddBrandInputResult {
+  input: BrandInputRow;
+  /** false si la misma alta (kind, día, valor, moneda) ya estaba: no se duplica. */
+  created: boolean;
+  /** Para que la pantalla avise si la moneda del aporte es otra. */
+  campaignCurrency: string;
+}
+
+/** Un total por par (kind, fuente), calculado en SQL. */
+export interface BrandInputTotal {
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  semantics: BrandInputSemantics;
+  /** total: el último valor reportado. daily: la suma de todos los días. Decimal como texto. */
+  value: string;
+  currency: string | null;
+  /** total: el día al que corresponde. daily: el último día con datos. */
+  asOf: string;
+  /** daily: el primer día con datos. total: null. */
+  from: string | null;
+  /** Cuántas filas hay detrás. */
+  count: number;
+}
+
+/** Un día del CSV: las ventas y, si vinieron, pedidos y canjes. */
+export interface BrandDailyRow {
+  day: string;
+  sales: string | null;
+  orders: number | null;
+  redemptions: number | null;
+}
+
+export interface BrandInputs {
+  totals: BrandInputTotal[];
+  daily: BrandDailyRow[];
+  /** La moneda de la campaña: la que asume el CSV y propone el formulario. */
+  currency: string;
+}
+
+export interface ImportBrandCsvInput {
+  campaignId: string;
+  /** Las filas aceptadas por reviewBrandCsvRows (core). */
+  rows: readonly BrandCsvRow[];
+}
+
+export interface ImportBrandCsvResult {
+  /** Filas de campaign_brand_input nuevas (un día con ventas, pedidos y canjes son tres). */
+  inserted: number;
+  /** Ya estaban con el mismo valor. */
+  unchanged: number;
+  /** Ya estaban con otro valor y se reemplazaron. */
+  replaced: number;
+  /** Días distintos del archivo. */
+  days: number;
+  from: string | null;
+  to: string | null;
+}
+
+export class InvalidBrandInputError extends CampaignError {
+  constructor(messageEs: string) {
+    super('InvalidBrandInputError', messageEs);
+  }
+}
+
+export class CampaignWithoutDatesError extends CampaignError {
+  constructor() {
+    super('CampaignWithoutDatesError', 'La campaña no tiene fechas de inicio y fin: ponlas antes de importar el CSV de ventas.');
+  }
+}
+
+export class BrandCsvOutOfWindowError extends CampaignError {
+  readonly day: string;
+  constructor(day: string, window: DateWindow) {
+    super('BrandCsvOutOfWindowError', `El día ${day} queda fuera del rango que admite la campaña (${window.from} a ${window.to}).`);
+    this.day = day;
+  }
+}
+
+/** Un conteo ('318') o un importe con hasta dos decimales ('8400000.50'). */
+const BRAND_VALUE_RE = /^\d{1,14}(\.\d{1,2})?$/;
+const COUNT_RE = /^\d{1,14}$/;
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+/** Lo que la bitácora guarda de un aporte: cifras y claves, nunca el texto libre. */
+interface BrandInputAuditAfter {
+  kind: BrandInputKind;
+  day: string;
+  value: string;
+  currency: string | null;
+  source: BrandInputSource;
+}
+
+/**
+ * Anota en audit_log lo que acaba de pasar, en la misma transacción.
+ * TODO(ACC-2): reemplazar por audit() de packages/db/src/audit.ts cuando
+ * exista; hasta entonces este es el único sitio de Campañas que escribe
+ * la bitácora. `after` no lleva notas ni nombres: solo claves y cifras.
+ */
+async function recordAudit(tx: WorkspaceTx, action: string, entityType: string, entityId: string, after: Record<string, unknown>): Promise<void> {
+  await tx.query(
+    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, after)
+     VALUES (current_workspace_id(), current_user_id(), 'user', $1, $2, $3, $4::jsonb)`,
+    [action, entityType, entityId, JSON.stringify(after)],
+  );
+}
+
+interface RawBrandInputRow {
+  id: string;
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  day: string;
+  value: string;
+  currency: string | null;
+  received_at: string;
+  notes: string | null;
+}
+
+const SELECT_BRAND_INPUT = `
+  SELECT id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes
+  FROM campaign_brand_input
+`;
+
+function toBrandInputRow(r: RawBrandInputRow): BrandInputRow {
+  return { id: r.id, kind: r.kind, source: r.source, day: r.day, value: r.value, currency: r.currency, receivedAt: r.received_at, notes: r.notes };
+}
+
+async function campaignDatesAndCurrency(tx: WorkspaceTx, campaignId: string): Promise<{ startsOn: string | null; endsOn: string | null; currency: string }> {
+  const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null; currency: string }>(
+    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, currency FROM campaign WHERE id = $1`,
+    [campaignId],
+  );
+  const row = rows[0];
+  if (!row) throw new CampaignNotFoundError(campaignId);
+  return { startsOn: row.starts_on, endsOn: row.ends_on, currency: row.currency };
+}
+
+/**
+ * Registra un aporte de la marca por formulario: un TOTAL acumulado a la
+ * fecha. Valida kind, fecha, valor y moneda antes de escribir; la moneda
+ * solo cuenta para revenue (los conteos van sin ella) y si falta es la
+ * de la campaña. Una campaña cerrada o cancelada lanza
+ * CampaignLockedError. Idempotente: la misma alta (kind, día, valor,
+ * moneda) repetida devuelve la fila existente con created: false. Cada
+ * alta nueva deja una entrada en audit_log.
+ */
+export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput): Promise<AddBrandInputResult> {
+  if (!isManualBrandInputKind(input.kind)) throw new InvalidBrandInputError('Elige qué reporta la marca.');
+  if (!isIsoDate(input.day)) throw new InvalidBrandInputError('La fecha del aporte debe ser YYYY-MM-DD.');
+  const value = input.value.trim();
+  const money = isMoneyBrandInputKind(input.kind);
+  if (money ? !BRAND_VALUE_RE.test(value) : !COUNT_RE.test(value)) {
+    throw new InvalidBrandInputError(money ? 'El importe debe ser un número con hasta dos decimales.' : 'La cifra debe ser un número entero, sin decimales.');
+  }
+  await lockEditableCampaign(tx, input.campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, input.campaignId);
+  let currency: string | null = null;
+  if (money) {
+    currency = (input.currency?.trim() || campaign.currency).toUpperCase();
+    if (!CURRENCY_RE.test(currency)) throw new InvalidBrandInputError('La moneda debe ser un código de tres letras (COP, USD).');
+  }
+  const notes = input.notes?.trim() || null;
+
+  const existing = await tx.query<RawBrandInputRow>(
+    `${SELECT_BRAND_INPUT}
+     WHERE campaign_id = $1 AND kind = $2 AND day = $3::date AND source = 'brand_manual'
+       AND value_num = $4::numeric AND currency IS NOT DISTINCT FROM $5
+     ORDER BY received_at DESC LIMIT 1`,
+    [input.campaignId, input.kind, input.day, value, currency],
+  );
+  const already = existing.rows[0];
+  if (already) return { input: toBrandInputRow(already), created: false, campaignCurrency: campaign.currency };
+
+  // clock_timestamp() y no now(): dos altas en la misma transacción
+  // (o dos pruebas seguidas) quedan en orden y «la última manda» es cierto.
+  const inserted = await tx.query<RawBrandInputRow>(
+    `INSERT INTO campaign_brand_input (workspace_id, campaign_id, kind, day, value_num, currency, source, received_at, notes)
+     VALUES (current_workspace_id(), $1, $2, $3::date, $4::numeric, $5, 'brand_manual', clock_timestamp(), $6)
+     RETURNING id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes`,
+    [input.campaignId, input.kind, input.day, value, currency, notes],
+  );
+  const row = inserted.rows[0];
+  if (!row) throw new CampaignError('BrandInputInsertError', 'No se pudo registrar el aporte.');
+  const after: BrandInputAuditAfter = { kind: row.kind, day: row.day, value: row.value, currency: row.currency, source: row.source };
+  await recordAudit(tx, 'campaign.brand_input.added', 'campaign_brand_input', row.id, { ...after, campaign_id: input.campaignId });
+  return { input: toBrandInputRow(row), created: true, campaignCurrency: campaign.currency };
+}
+
+/** Las columnas del CSV y el kind con el que se guardan (source brand_csv, diarias). */
+const CSV_COLUMNS: readonly { kind: BrandInputKind; pick: (r: BrandCsvRow) => string | null; money: boolean }[] = [
+  { kind: 'csv_sales', pick: (r) => r.sales, money: true },
+  { kind: 'orders', pick: (r) => (r.orders === null ? null : String(r.orders)), money: false },
+  { kind: 'code_redemptions', pick: (r) => (r.redemptions === null ? null : String(r.redemptions)), money: false },
+];
+
+/**
+ * Importa las filas aceptadas del CSV de ventas diarias. Cada día deja
+ * hasta tres filas (csv_sales, y orders / code_redemptions si vinieron),
+ * todas con source 'brand_csv' y la moneda de la campaña. Vuelve a
+ * comprobar la ventana starts_on − 7 … ends_on + 60 (una campaña sin
+ * fechas no importa). Idempotente por (campaign_id, kind, day, source):
+ * un día que ya estaba con el mismo valor no se toca; con otro valor se
+ * reemplaza (lo último que reporta la marca manda, como en el
+ * formulario). Deja UNA entrada en audit_log con los conteos.
+ */
+export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput): Promise<ImportBrandCsvResult> {
+  await lockEditableCampaign(tx, input.campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, input.campaignId);
+  const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+  if (!window) throw new CampaignWithoutDatesError();
+  const days = new Set<string>();
+  for (const r of input.rows) {
+    if (!isIsoDate(r.day)) throw new InvalidBrandInputError(`El día «${r.day}» no es una fecha YYYY-MM-DD.`);
+    if (r.day < window.from || r.day > window.to) throw new BrandCsvOutOfWindowError(r.day, window);
+    if (!BRAND_VALUE_RE.test(r.sales)) throw new InvalidBrandInputError(`Las ventas del ${r.day} no son un importe válido.`);
+    days.add(r.day);
+  }
+  const result: ImportBrandCsvResult = { inserted: 0, unchanged: 0, replaced: 0, days: days.size, from: null, to: null };
+  if (days.size === 0) return result;
+  const sorted = [...days].sort();
+  result.from = sorted[0] ?? null;
+  result.to = sorted[sorted.length - 1] ?? null;
+
+  for (const col of CSV_COLUMNS) {
+    const pairs = input.rows.map((r) => [r.day, col.pick(r)] as const).filter((p): p is readonly [string, string] => p[1] !== null);
+    if (pairs.length === 0) continue;
+    const { rows } = await tx.query<{ inserted: number; replaced: number; existing: number }>(
+      `WITH incoming AS (
+         SELECT t.day, t.value FROM unnest($3::date[], $4::numeric[]) AS t(day, value)
+       ), existing AS (
+         SELECT b.id, b.day, b.value_num
+         FROM campaign_brand_input b JOIN incoming i ON i.day = b.day
+         WHERE b.campaign_id = $1 AND b.kind = $2 AND b.source = 'brand_csv'
+       ), upd AS (
+         UPDATE campaign_brand_input b
+         SET value_num = i.value, currency = $5, received_at = clock_timestamp()
+         FROM incoming i
+         WHERE b.id IN (SELECT id FROM existing) AND b.day = i.day AND b.value_num IS DISTINCT FROM i.value
+         RETURNING b.id
+       ), ins AS (
+         INSERT INTO campaign_brand_input (workspace_id, campaign_id, kind, day, value_num, currency, source, received_at)
+         SELECT current_workspace_id(), $1, $2, i.day, i.value, $5, 'brand_csv', clock_timestamp()
+         FROM incoming i
+         WHERE NOT EXISTS (SELECT 1 FROM existing e WHERE e.day = i.day)
+         RETURNING id
+       )
+       SELECT (SELECT count(*) FROM ins)::int AS inserted,
+              (SELECT count(*) FROM upd)::int AS replaced,
+              (SELECT count(DISTINCT day) FROM existing)::int AS existing`,
+      [input.campaignId, col.kind, pairs.map((p) => p[0]), pairs.map((p) => p[1]), col.money ? campaign.currency : null],
+    );
+    const r = rows[0];
+    if (!r) throw new CampaignError('BrandCsvImportError', 'No se pudo importar el CSV.');
+    result.inserted += r.inserted;
+    result.replaced += r.replaced;
+    result.unchanged += r.existing - r.replaced;
+  }
+  await recordAudit(tx, 'campaign.brand_csv.imported', 'campaign', input.campaignId, {
+    source: 'brand_csv',
+    currency: campaign.currency,
+    days: result.days,
+    from: result.from,
+    to: result.to,
+    inserted: result.inserted,
+    replaced: result.replaced,
+    unchanged: result.unchanged,
+  });
+  return result;
+}
+
+interface RawTotalRow {
+  kind: BrandInputKind;
+  source: BrandInputSource;
+  value: string;
+  currency: string | null;
+  as_of: string;
+  from_day: string | null;
+  n: number;
+}
+
+interface RawDailyRow {
+  day: string;
+  sales: string | null;
+  orders: string | null;
+  redemptions: string | null;
+}
+
+/**
+ * Lo que aportó la marca, totalizado en SQL: para lo manual, el último
+ * valor de cada kind (por received_at) con su fecha; para el CSV, la
+ * suma por kind con el primer y el último día. Más la serie diaria del
+ * CSV para el gráfico. Es también la lectura de CAM-5 (docs/propuestas/
+ * CAM-4.md §3). Una campaña de otro workspace es CampaignNotFoundError.
+ */
+export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Promise<BrandInputs> {
+  const campaign = await campaignDatesAndCurrency(tx, campaignId);
+  const [totals, daily] = await Promise.all([
+    tx.query<RawTotalRow>(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (kind)
+                kind, source, value_num::text AS value, currency, ${DATE('day')} AS as_of, NULL::text AS from_day,
+                count(*) OVER (PARTITION BY kind)::int AS n
+         FROM campaign_brand_input
+         WHERE campaign_id = $1 AND source = 'brand_manual' AND kind = ANY($2::text[]) AND day IS NOT NULL
+         ORDER BY kind, received_at DESC, id
+       ) manual
+       UNION ALL
+       SELECT kind, source, sum(value_num)::text AS value, max(currency) AS currency,
+              ${DATE('max(day)')} AS as_of, ${DATE('min(day)')} AS from_day, count(*)::int AS n
+       FROM campaign_brand_input
+       WHERE campaign_id = $1 AND source = 'brand_csv' AND kind = ANY($2::text[]) AND day IS NOT NULL
+       GROUP BY kind, source
+       ORDER BY source, kind`,
+      [campaignId, [...BRAND_INPUT_KINDS]],
+    ),
+    tx.query<RawDailyRow>(
+      `SELECT ${DATE('day')} AS day,
+              max(value_num) FILTER (WHERE kind = 'csv_sales')::text AS sales,
+              max(value_num) FILTER (WHERE kind = 'orders')::text AS orders,
+              max(value_num) FILTER (WHERE kind = 'code_redemptions')::text AS redemptions
+       FROM campaign_brand_input
+       WHERE campaign_id = $1 AND source = 'brand_csv' AND day IS NOT NULL
+       GROUP BY day
+       ORDER BY day`,
+      [campaignId],
+    ),
+  ]);
+  return {
+    currency: campaign.currency,
+    totals: totals.rows.map((r) => ({
+      kind: r.kind,
+      source: r.source,
+      semantics: brandInputSemantics(r.source),
+      value: r.value,
+      currency: r.currency,
+      asOf: r.as_of,
+      from: r.from_day,
+      count: r.n,
+    })),
+    daily: daily.rows.map((r) => ({ day: r.day, sales: r.sales, orders: intOrNull(r.orders), redemptions: intOrNull(r.redemptions) })),
+  };
 }
