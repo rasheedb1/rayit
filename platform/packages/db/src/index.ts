@@ -38,8 +38,9 @@ export {
 export { createDbFromEnv, type DbMode } from './from-env.ts';
 export {
   APP_ROLE, assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
-  explicarEsquema, migracionesDelRepositorio, PRIVILEGIOS, PRIVILEGIOS_DE_LA_APP,
-  type EstadoDelEsquema, type Privilegio, type PrivilegioDeMas, type TablaSinAislar,
+  explicarEsquema, FUNCION_DE_REFERENCIAS, migracionesDelRepositorio, POLITICAS_ABIERTAS_DECLARADAS, PRIVILEGIOS,
+  PRIVILEGIOS_DE_LA_APP, PRIVILEGIOS_PROHIBIDOS, ROLES_CON_ACCESO_DECLARADOS,
+  type EstadoDelEsquema, type PoliticaAbierta, type Privilegio, type PrivilegioDeMas, type RolDeMas, type TablaSinAislar,
 } from './esquema.ts';
 export { hostOf, isSupabaseHost, resolveTls, tlsFor, TlsConfigError, TLS_URL_PARAMS, PLATFORM_ROOT, type Ssl, type Tls, type TlsDecision } from './tls.ts';
 export * from './schema/index.ts';

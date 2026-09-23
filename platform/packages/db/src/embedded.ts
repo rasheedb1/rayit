@@ -80,7 +80,7 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
   //
   // Antes se concedían aquí, con un `GRANT … ON ALL TABLES` DESPUÉS de
   // migrar, y eso devolvía en silencio todo lo que una migración
-  // hubiera revocado: la 0022 le quita a mc_app la escritura de los
+  // hubiera revocado: la 0024 le quita a mc_app la escritura de los
   // catálogos y de webhook_event, y sobre el embebido esa rebaja
   // duraba hasta esta línea. La prueba pasaba en pglite y el
   // privilegio real de Supabase era otro, que es justo lo que este

@@ -117,21 +117,30 @@ o le encendía una bandera. Ahora el filtro lo pone la base.
 `workspace_id`.
 
 - `contact` (PII: correo, teléfono, LinkedIn) lleva `owner_workspace_id`
-  desde **0020**, puesto por la base: se ve si su fuente es pública
-  (`public_website`, `public_profile`, `press`) o si es mío, y solo lo
-  escribe su dueño. Y la baja es definitiva: un trigger impide que
-  `opted_out` vuelva a `false`.
-- `company` se lee como directorio compartido —dos workspaces pueden
-  trabajar con la misma marca, y ahí no hay PII— pero desde **0022**
-  también lleva `owner_workspace_id` y solo su dueño la renombra o la
-  borra. Antes cualquiera podía borrar una empresa ajena, y con ella
-  sus contactos por `ON DELETE CASCADE`.
+  desde **0020**, puesto por la base: se ve si es mío, o si no tiene
+  dueño y su fuente es pública (`public_website`, `public_profile`,
+  `press`) —el catálogo que llena el worker—, y solo lo escribe su
+  dueño (**0025**: hasta entonces se veían los públicos de cualquiera,
+  y eso decía qué marcas prospectaba cada quien). Y la baja es
+  definitiva: un trigger impide que `opted_out` vuelva a `false`.
+- `company` lleva `owner_workspace_id` desde **0024** y se lee «sin
+  dueño o mía» desde **0025**: sin dueño es el catálogo compartido; con
+  dueño, la ficha de un workspace. Si dos workspaces trabajan con la
+  misma marca, cada uno tiene su ficha (el dominio es único por dueño,
+  no en toda la base). Solo su dueño la renombra o la borra.
 - `app_user` lleva RLS desde **0020**: se ve uno mismo y quien comparta
-  workspace; el alta solo pasa sin workspace fijado o siendo uno mismo
-  (**0022**), y no hay política de `DELETE`.
-- `workspace`, la raíz del inquilino, lleva RLS desde **0022**. Se ve
-  una fila, la de la transacción; se renombra la propia; no hay
-  política de `DELETE` ni privilegio para hacerlo.
+  workspace; el alta es la fila de `current_user_id()` (**0025**) y no
+  hay política de `DELETE`.
+- `workspace`, la raíz del inquilino, lleva RLS desde **0024**. Se ve
+  una fila, la de la transacción; se renombra la propia; se crea la de
+  la transacción (el registro de CIM-3 será `withWorkspace(nuevoId)`);
+  no hay política de `DELETE` ni privilegio para hacerlo.
+- **Una fila no puede nombrar otra que su transacción no ve** (**0025**).
+  La clave ajena la comprueba Postgres sin RLS; el disparador
+  `assert_reference_visible`, enganchado a cada clave hacia una tabla
+  con RLS, rechaza con 23503 —el mismo error que un id que no existe—
+  un `company_id`, un `stage_id` o un `deal_id` que quien escribe no
+  puede leer.
 
 ### 4. Job global con `asWorker`
 
@@ -248,9 +257,14 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 5. Si la tabla es nueva, **no hay que apuntarla en ninguna lista**: la
    guardia de `src/esquema.ts` está invertida y exige aislamiento a
    todo lo que encuentre en `public`. Lo que sí hay que escribir es la
-   política, en la misma migración. Si de verdad es global —un catálogo
-   que llena una migración, una observación sin inquilino— se declara
-   en `EXCEPCIONES_SIN_AISLAMIENTO` **con su motivo**, y se le quita a
+   política, en la misma migración, y que **cada** política permisiva
+   aísle por sí sola (`col = current_workspace_id()`, o un `EXISTS`
+   correlacionado sobre el padre; ver `src/politicas.ts`). Si la tabla
+   tiene claves ajenas hacia tablas con RLS, engancha
+   `assert_reference_visible` a cada una (el bucle de 0025 §7 sirve de
+   modelo). Si de verdad es global —un catálogo que llena una migración,
+   una observación sin inquilino— se declara en
+   `EXCEPCIONES_SIN_AISLAMIENTO` **con su motivo**, y se le quita a
    `mc_app` lo que no necesite en `PRIVILEGIOS_DE_LA_APP`.
 6. `pnpm --filter @mc/db test` — `test/schema.test.ts` compara columna a
    columna con la base y falla si algo falta o difiere; y comprueba que
@@ -294,15 +308,23 @@ además más rápido.
   excepción rompe la prueba. La regla anterior —«toda tabla con
   `workspace_id`»— se leyó al pie de la letra durante cinco rondas y
   por eso `workspace`, cuya clave se llama `id`, se quedó sin política
-  hasta 0022.
+  hasta 0024.
+- **Cada política permisiva aísla por sí sola.** Se combinan con OR:
+  una abierta junto a una buena abre la tabla. La guardia las evalúa
+  una por una y comando por comando; las abiertas a propósito van en
+  `POLITICAS_ABIERTAS_DECLARADAS` con su motivo.
 - **`mc_app` tiene los privilegios mínimos.** RLS no protege una tabla
   sin política: la protege el `GRANT`. `PRIVILEGIOS_DE_LA_APP` dice qué
   puede hacer sobre cada catálogo y la guardia lo comprueba, también en
-  producción.
+  producción. Nunca tiene TRUNCATE, TRIGGER, REFERENCES ni MAINTAIN, ni
+  privilegios sobre una vista materializada o una tabla foránea, ni
+  EXECUTE sobre una función SECURITY DEFINER; y ningún otro rol que no
+  esté en `ROLES_CON_ACCESO_DECLARADOS` tiene nada en `public`.
 - La moneda, la zona horaria y el locale salen del workspace
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.
-- Las métricas se insertan, no se actualizan (`*_snapshot`).
+- Las métricas se insertan, no se actualizan (`*_snapshot`), y las
+  escribe el worker: `mc_app` solo las lee (**0025**).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas

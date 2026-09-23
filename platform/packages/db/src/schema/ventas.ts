@@ -54,7 +54,7 @@ export const company = pgTable('company', {
   enrichedAt: timestamptz('enriched_at'),
   /**
    * Quién dio de alta esta empresa. Lo pone la base
-   * (DEFAULT current_workspace_id(), migración 0022) y gobierna solo la
+   * (DEFAULT current_workspace_id(), migración 0024) y gobierna solo la
    * ESCRITURA: el directorio se lee desde cualquier workspace —dos
    * pueden trabajar con la misma marca— pero renombrarla o borrarla es
    * de quien la creó. NULL es la fila del catálogo compartido, la que

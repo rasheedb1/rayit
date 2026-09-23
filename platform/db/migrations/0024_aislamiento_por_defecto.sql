@@ -1,6 +1,15 @@
 -- =====================================================================
--- 0022 · Aislamiento por defecto: se cierra la CLASE, no los casos
---        (CIM-1 / CIM-2, endurecimiento ronda 1)
+-- 0024 · Aislamiento por defecto: se cierra la CLASE, no los casos
+--        (CIM-1 / CIM-2, endurecimiento rondas 1 y 2)
+-- ---------------------------------------------------------------------
+-- Numeración: nació como 0022 en rasheed/endurecer-db y nunca se aplicó
+-- en ninguna base persistente. Mientras tanto main aplicó en Supabase
+-- 0022_public_profile_access (CON-10) y reservó 0023 para ACC-3, así
+-- que esta pasa a 0024: con dos archivos 0022 el runner se niega a
+-- correr (DuplicateMigrationNumberError).
+--
+-- La lectura de `company` de la sección 4 (las cuatro puertas) la
+-- sustituye 0025 §1 por «sin dueño o mía»: ver allí por qué.
 -- ---------------------------------------------------------------------
 -- La fase 1 gastó cinco rondas tapando agujeros de RLS de uno en uno
 -- (0017, 0018, 0019, 0020, 0021) y cada ronda encontró los siguientes,
@@ -226,7 +235,9 @@ ALTER TABLE company FORCE ROW LEVEL SECURITY;
 -- que 0020 cerró—, y signal, activity, outbound_touch y
 -- brand_account_snapshot cuelgan siempre de una de las de arriba. (Las
 -- dos de reportes salieron de esa misma prueba: nadie las había
--- mencionado, y un reporte nombra al cliente igual que una factura.) packages/db/test/rls.test.ts recorre pg_constraint y exige
+-- mencionado, y un reporte nombra al cliente igual que una factura.)
+--
+-- packages/db/test/rls.test.ts recorre pg_constraint y exige
 -- que cada tabla que apunte a company esté nombrada aquí o declarada
 -- allí con su motivo: si mañana alguien añade una y la une con JOIN a
 -- company, la prueba lo dice en vez de que la fila desaparezca.

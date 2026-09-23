@@ -29,6 +29,8 @@ import {
 /** Un workspace ajeno con una campaña propia, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';
 const CAMPAIGN_AJENA = '00000009-0000-4000-8000-0000000ca001';
+/** Su propia ficha de la marca: el mismo dominio que la de Laura, sin chocar (0025 §2). */
+const EMPRESA_AJENA = '00000009-0000-4000-8000-0000000000e1';
 /** Una campaña nueva de Laura, en planned, para las transiciones. */
 const CAMPAIGN_PRUEBA = '00000003-0000-4000-8000-00000ca0f001';
 
@@ -37,14 +39,21 @@ const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WOR
 
 before(async () => {
   t = await openTestDb();
-  // Como superusuario (sin RLS): el workspace ajeno y su campaña, que
-  // apunta a la misma empresa porque company no tiene workspace.
+  // Como superusuario (sin RLS): el workspace ajeno y su campaña. La
+  // campaña apunta a SU ficha de Café Alma, no a la de Laura: desde
+  // 0025 una empresa con dueño solo la lee su dueño, y ningún workspace
+  // puede nombrar en sus filas una empresa que no lee (§3). Antes
+  // apuntaba a la de Laura «porque company no tenía workspace», que es
+  // justo la puerta lateral que 0025 cierra.
   await t.admin(`
     INSERT INTO workspace (id, slug, name, kind, currency)
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-campanas', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
+    INSERT INTO company (id, name, domain, owner_workspace_id)
+    VALUES ('${EMPRESA_AJENA}', 'Café Alma', 'cafealma.co', '${WORKSPACE_AJENO}')
+    ON CONFLICT DO NOTHING;
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on)
-    VALUES ('${CAMPAIGN_AJENA}', '${WORKSPACE_AJENO}', '${COMPANY_CAFE_ALMA}', 'Campaña ajena', 'planned', DATE '2026-08-24', DATE '2026-08-31')
+    VALUES ('${CAMPAIGN_AJENA}', '${WORKSPACE_AJENO}', '${EMPRESA_AJENA}', 'Campaña ajena', 'planned', DATE '2026-08-24', DATE '2026-08-31')
     ON CONFLICT DO NOTHING;
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, amount, currency)
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')

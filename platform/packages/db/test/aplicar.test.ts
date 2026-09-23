@@ -15,6 +15,16 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 
+/**
+ * Números que ya tiene otra rama, y que esta todavía no: un hueco
+ * declarado. Cuando la rama que los tiene se integre, el archivo llega
+ * y la entrada sobra (no rompe nada, pero bórrala).
+ */
+const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
+  '0022': 'main: 0022_public_profile_access.sql (CON-10), ya aplicada en Supabase',
+  '0023': 'reservada en main para ACC-3 (accesos y roles)',
+};
+
 let dir = '';
 
 before(async () => {
@@ -54,7 +64,17 @@ describe('listSql', () => {
     const files = await listSql(MIGRATIONS_DIR);
     assert.ok(files.length >= 18, `hay ${files.length} migraciones; se esperaban al menos 18`);
     // Y son consecutivas desde 0001: un hueco sería una migración que
-    // alguien borró o renumeró después de aplicarla.
-    files.forEach((f, i) => assert.equal(f.slice(0, 4), String(i + 1).padStart(4, '0'), `hueco antes de ${f}`));
+    // alguien borró o renumeró después de aplicarla. Salvo los números
+    // que otra rama ya tomó y esta todavía no tiene: esos se declaran,
+    // con quién los tiene, para que el hueco sea una decisión y no un
+    // olvido.
+    const numeros = new Set(files.map((f) => Number(f.slice(0, 4))));
+    const ultimo = Math.max(...numeros);
+    const huecos: string[] = [];
+    for (let n = 1; n <= ultimo; n++) {
+      const nn = String(n).padStart(4, '0');
+      if (!numeros.has(n) && !(nn in NUMEROS_DE_OTRAS_RAMAS)) huecos.push(nn);
+    }
+    assert.deepEqual(huecos, [], `huecos sin declarar en db/migrations: ${huecos.join(', ')}`);
   });
 });

@@ -22,6 +22,7 @@ import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is }
 import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
 import {
   APP_ROLE, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO, explicarEsquema, PRIVILEGIOS, PRIVILEGIOS_DE_LA_APP,
+  type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import * as schema from '../src/schema/index.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
@@ -105,8 +106,14 @@ const relations = new Map<string, RelRow>();
 let childrenWithoutRls: FkRow[] = [];
 /** Lo que mc_app puede hacer, tabla por tabla, leído de pg_class.relacl. */
 const privilegiosDeLaApp = new Map<string, Set<string>>();
-/** Lo que DICE cada política, no cuántas hay: `USING (true)` no aísla nada. */
-const expresionesPorTabla = new Map<string, string[]>();
+/**
+ * Lo que dice la guardia de src/esquema.ts sobre esta base. Las pruebas
+ * de aislamiento NO tienen su propio criterio de «aislada»: la ronda 2
+ * tenía aquí una copia de la regex de la guardia, y las dos daban por
+ * buena una tabla con una política abierta junto a una cerrada. Ahora
+ * solo hay un criterio, el de src/politicas.ts.
+ */
+let estado: EstadoDelEsquema;
 
 before(async () => {
   t = await openTestDb({ seeds: false });
@@ -150,20 +157,6 @@ before(async () => {
   // leían los endpoints y los errores de A). La rama «fk IS NULL» es
   // parte de la política, no una excusa para no tenerla.
   childrenWithoutRls = fks.rows;
-  const pols = await t.db.withCatalogs((tx) =>
-    tx.query<{ relname: string; expr: string | null }>(`
-      SELECT c.relname AS relname, e.expr AS expr
-        FROM pg_policy p
-        JOIN pg_class c ON c.oid = p.polrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-       CROSS JOIN LATERAL (VALUES (pg_get_expr(p.polqual, p.polrelid)), (pg_get_expr(p.polwithcheck, p.polrelid))) AS e(expr)
-       WHERE n.nspname = 'public' AND e.expr IS NOT NULL`),
-  );
-  for (const row of pols.rows) {
-    const lista = expresionesPorTabla.get(row.relname);
-    if (lista) lista.push(row.expr!);
-    else expresionesPorTabla.set(row.relname, [row.expr!]);
-  }
   const grants = await t.db.withCatalogs((tx) =>
     tx.query<GrantRow>(
       `SELECT c.relname AS relname, a.privilege_type AS privilegio
@@ -183,6 +176,7 @@ before(async () => {
     }
     s.add(g.privilegio);
   }
+  estado = await estadoDelEsquema(t.db);
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -256,20 +250,13 @@ describe('el esquema Drizzle coincide con db/migrations', () => {
  */
 describe('aislamiento por workspace en la base', () => {
   /**
-   * Aislada = ENABLE + FORCE + al menos una política + que la política
-   * DIGA algo. Las cuatro cosas.
-   *
-   * Contar no bastaba: una tabla con `USING (true)` tiene RLS, FORCE y
-   * una política, y desde el workspace B se lee la fila de A. El
-   * criterio es el mismo de src/esquema.ts, y aquí se comprueba contra
-   * el esquema entero.
+   * Aislada = ENABLE + FORCE + al menos una política + que CADA política
+   * permisiva aísle por sí sola, en cada comando que mc_app tiene. Es el
+   * criterio de src/esquema.ts, sin copia: la ronda 2 tenía aquí su
+   * propia regex («alguna política menciona el inquilino») y aceptaba
+   * `USING (1 = 1)` junto a una buena.
    */
-  const aislada = (name: string) => {
-    const r = relations.get(name);
-    if (!(r?.rls === true && r.forzada === true && r.politicas > 0)) return false;
-    const exprs = expresionesPorTabla.get(name) ?? [];
-    return exprs.some((e) => /current_workspace_id\(\)|current_user_id\(\)|\bSELECT\b/i.test(e));
-  };
+  const aislada = (name: string) => estado.aisladas.includes(name);
   const tablas = () => [...relations.values()].filter((r) => r.kind === 'table').map((r) => r.name).sort();
 
   test('TODA tabla de public está aislada, o declarada como excepción con su motivo', () => {
@@ -316,7 +303,7 @@ describe('aislamiento por workspace en la base', () => {
       const sobran = PRIVILEGIOS.filter((p) => tiene.has(p) && !permite.includes(p));
       if (sobran.length) deMas.push(`${tabla}: ${sobran.join(', ')}`);
     }
-    assert.deepEqual(deMas, [], `privilegios que la migración 0022 revocó y alguien devolvió: ${deMas.join(' · ')}`);
+    assert.deepEqual(deMas, [], `privilegios que la migración 0024 revocó y alguien devolvió: ${deMas.join(' · ')}`);
   });
 
   test('ninguna tabla sin RLS apunta con una clave ajena a una tabla con RLS, ni siquiera opcional', () => {
@@ -360,7 +347,7 @@ describe('aislamiento por workspace en la base', () => {
     // company se describía como «catálogo global sin PII» y por eso se
     // quedó sin RLS: pero el CRM la escribe, y desde B se renombraba y
     // se BORRABA una empresa que dio de alta A (y borrarla arrastra sus
-    // contactos por ON DELETE CASCADE). Desde 0022 lleva el mismo dueño
+    // contactos por ON DELETE CASCADE). Desde 0024 lleva el mismo dueño
     // explícito que contact desde 0020.
     for (const name of ['contact', 'company']) {
       const owner = columns.get(name)?.get('owner_workspace_id');
@@ -377,24 +364,23 @@ describe('aislamiento por workspace en la base', () => {
     assert.equal(rows[0]?.uid, null);
   });
 
-  test('ninguna política del esquema dice `true`: eso es RLS puesta que no aísla', () => {
-    // La primera versión de company_read era exactamente eso, y era la
-    // única política del esquema cuya expresión no mencionaba ni
-    // current_workspace_id(), ni current_user_id(), ni un EXISTS sobre
-    // el padre. Mientras el criterio fuera «cuenta > 0», la ronda
-    // siguiente podía ser «tenía política, pero la política era true».
-    const abiertas: string[] = [];
-    for (const [tabla, exprs] of expresionesPorTabla) {
-      if (exprs.every((e) => e.trim().toLowerCase() === 'true')) abiertas.push(tabla);
-    }
-    assert.deepEqual(abiertas, [], `políticas que no filtran nada: ${abiertas.join(', ')}`);
+  test('ninguna política permisiva del esquema está abierta sin declararlo', () => {
+    // La primera versión de company_read era `true`, y la ronda 2 solo
+    // buscaba ese literal. Una política permisiva abierta anula a las
+    // demás de su tabla (se combinan con OR), así que la guardia evalúa
+    // cada una: `1 = 1`, `current_workspace_id() IS NOT NULL` o un
+    // EXISTS sin correlación tampoco pasan.
+    assert.deepEqual(
+      estado.politicasAbiertas.map((p) => `${p.clave} [${p.comandos.join(', ')}] por «${p.trozo}»`),
+      [],
+    );
   });
 
   test('toda vista corre con security_invoker: si no, rodea los GRANT de mc_app', () => {
     // En Postgres una vista es SECURITY DEFINER por omisión y lee sus
     // tablas base con los privilegios de su DUEÑO (mc_migrator, que
     // puede todo). Reproducido: una vista sobre `niche` deja hacer
-    // UPDATE a mc_app, que 0022 §7.1 acaba de dejar sin escritura.
+    // UPDATE a mc_app, que 0024 §7.1 acaba de dejar sin escritura.
     const sinInvocador = [...relations.values()]
       .filter((r) => r.kind === 'view' && !r.invocador)
       .map((r) => r.name);
@@ -402,7 +388,7 @@ describe('aislamiento por workspace en la base', () => {
       sinInvocador,
       [],
       `vistas que leen con los privilegios de mc_migrator: ${sinInvocador.join(', ')}. ` +
-        'Ponles ALTER VIEW … SET (security_invoker = on) en una migración (0022 §8 lo hace en bucle sobre pg_class).',
+        'Ponles ALTER VIEW … SET (security_invoker = on) en una migración (0024 §8 lo hace en bucle sobre pg_class).',
     );
     const vistas = [...relations.values()].filter((r) => r.kind === 'view');
     assert.ok(vistas.length >= 10, `solo ${vistas.length} vistas: la prueba no está mirando nada`);
@@ -422,10 +408,12 @@ describe('aislamiento por workspace en la base', () => {
     // Es literalmente lo que corre assertSchemaUpToDate al construir el
     // cliente contra Supabase: si esto pasa aquí y allá falla, es que
     // allá falta una migración.
-    const estado = await estadoDelEsquema(t.db);
-    assert.deepEqual(estado.sinAislar, [], JSON.stringify(estado.sinAislar));
-    assert.deepEqual(estado.excepcionesObsoletas, []);
-    assert.deepEqual(estado.privilegiosDeMas, [], JSON.stringify(estado.privilegiosDeMas));
-    assert.equal(explicarEsquema(estado), null, String(explicarEsquema(estado)));
+    const ahora = await estadoDelEsquema(t.db);
+    assert.deepEqual(ahora.sinAislar, [], JSON.stringify(ahora.sinAislar));
+    assert.deepEqual(ahora.excepcionesObsoletas, []);
+    assert.deepEqual(ahora.privilegiosDeMas, [], JSON.stringify(ahora.privilegiosDeMas));
+    assert.deepEqual(ahora.referenciasSinComprobar, []);
+    assert.deepEqual(ahora.rolesDeMas, [], JSON.stringify(ahora.rolesDeMas));
+    assert.equal(explicarEsquema(ahora), null, String(explicarEsquema(ahora)));
   });
 });
