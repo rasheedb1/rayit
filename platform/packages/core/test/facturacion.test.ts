@@ -6,6 +6,8 @@ import {
   transitionInvoice, InvalidTransition, canTransition, INVOICE_TRANSITIONS, INVOICE_STATUSES,
   deriveStatus, agingBucket, daysBetween, addDays,
   nextInvoiceNumber, parseInvoiceNumber,
+  parseFinanceSettings, financeSettingsToJson, hasFiscalIdentity,
+  FINANCE_SETTINGS_DEFAULTS, FINANCE_SETTINGS_VERSION, FINANCE_TEXT_MAX, type FinanceSettings,
 } from '../src/facturacion.ts';
 
 // ---------------------------------------------------------------- decimales
@@ -210,4 +212,117 @@ test('la numeración sigue el formato del seed 0003', () => {
   assert.equal(parseInvoiceNumber('COT-2026-014'), null);
   assert.equal(parseInvoiceNumber('FV-26-1'), null);
   assert.throws(() => nextInvoiceNumber(2026, -1), /Secuencia inválida/);
+});
+
+// ------------------------------------------------- configuración financiera
+
+test('el bloque del seed se lee sin cambiarlo: números JSON y sin v', () => {
+  // Tal cual lo dejan db/seed/0002 y 0003.
+  const s = parseFinanceSettings({ iva_pct: 19, retencion_pct: 11, reserva_pct: 11, plazo_dias: 30 });
+  assert.equal(s.v, 1, 'un bloque sin v es v1');
+  assert.equal(s.ivaPct, '19');
+  assert.equal(s.retencionPct, '11');
+  assert.equal(s.reservaPct, '11');
+  assert.equal(s.plazoDias, 30);
+  assert.equal(s.razonSocial, null, 'lo que el seed no trae es una ausencia, no ""');
+});
+
+test('sin bloque, los valores por defecto son los de Colombia', () => {
+  for (const vacio of [undefined, null, {}, 'no es un objeto', [1, 2], 42]) {
+    const s = parseFinanceSettings(vacio);
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.retencionPct, '11');
+    assert.equal(s.reservaPct, '11');
+    assert.equal(s.plazoDias, 30);
+  }
+  assert.deepEqual(parseFinanceSettings({}), FINANCE_SETTINGS_DEFAULTS);
+});
+
+test('parseFinanceSettings no lanza nunca: lo que no entiende usa el valor por defecto', () => {
+  const s = parseFinanceSettings({
+    v: 99,
+    iva_pct: 'muchísimo',
+    retencion_pct: -5,
+    reserva_pct: 101,
+    plazo_dias: 3650,
+    razon_social: '   ',
+    identificacion: 12345, // no es string
+    llave_del_futuro: { a: 1 },
+  });
+  assert.equal(s.v, 99, 'la versión desconocida se conserva, no se pisa');
+  assert.equal(s.ivaPct, '19');
+  assert.equal(s.retencionPct, '11', 'un porcentaje negativo no es un porcentaje');
+  assert.equal(s.reservaPct, '11', '101 % tampoco');
+  assert.equal(s.plazoDias, 30, 'diez años de plazo es un error de tecleo');
+  assert.equal(s.razonSocial, null, 'solo espacios es una ausencia');
+  assert.equal(s.identificacion, null);
+});
+
+test('los porcentajes aceptan coma y decimales, y se normalizan con punto', () => {
+  assert.equal(parseFinanceSettings({ iva_pct: '19,5' }).ivaPct, '19.5');
+  assert.equal(parseFinanceSettings({ iva_pct: ' 8.25 ' }).ivaPct, '8.25');
+  assert.equal(parseFinanceSettings({ iva_pct: '0' }).ivaPct, '0', 'cero por ciento es válido: no todo país tiene IVA');
+  assert.equal(parseFinanceSettings({ iva_pct: '100' }).ivaPct, '100');
+  assert.equal(parseFinanceSettings({ iva_pct: '19.555' }).ivaPct, '19', 'tres decimales no: el valor por defecto');
+  // Y lo que sale de ahí es lo que multiplica dinero.
+  assert.equal(pctToRate(parseFinanceSettings({ reserva_pct: '15' }).reservaPct), '0.15');
+  assert.equal(pctToRate(parseFinanceSettings({ iva_pct: '19,5' }).ivaPct), '0.195');
+});
+
+test('los textos se recortan al tope y no se guardan vacíos', () => {
+  const largo = 'a'.repeat(FINANCE_TEXT_MAX + 50);
+  const s = parseFinanceSettings({ razon_social: `  Laura Méndez S.A.S.  `, direccion: largo, banco: '' });
+  assert.equal(s.razonSocial, 'Laura Méndez S.A.S.');
+  assert.equal(s.direccion?.length, FINANCE_TEXT_MAX);
+  assert.equal(s.banco, null);
+});
+
+test('ida y vuelta: lo que se escribe es lo que se vuelve a leer', () => {
+  const original: FinanceSettings = {
+    v: 1,
+    ivaPct: '19.5',
+    retencionPct: '11',
+    reservaPct: '15',
+    plazoDias: 45,
+    razonSocial: 'Laura Méndez S.A.S.',
+    identificacion: 'NIT 901.234.567-8',
+    direccion: 'Calle 93 #12-34, Bogotá',
+    regimen: 'Responsable de IVA',
+    correoFacturacion: 'facturacion@lauramendez.co',
+    banco: 'Bancolombia',
+    cuenta: 'Ahorros 123-456789-01',
+    enlacePago: null,
+  };
+  // El viaje real: objeto → jsonb → texto → objeto.
+  const vuelta = parseFinanceSettings(JSON.parse(JSON.stringify(financeSettingsToJson(original))));
+  assert.deepEqual(vuelta, original);
+});
+
+test('financeSettingsToJson escribe las llaves del seed y los porcentajes como string', () => {
+  const json = financeSettingsToJson({ ...FINANCE_SETTINGS_DEFAULTS, reservaPct: '15' });
+  assert.equal(json['reserva_pct'], '15');
+  assert.equal(typeof json['iva_pct'], 'string', 'nada que multiplique dinero viaja como number');
+  assert.equal(json['plazo_dias'], 30, 'los días sí son un entero');
+  assert.equal(json['v'], FINANCE_SETTINGS_VERSION);
+  // Las llaves son exactamente las que ya escribió el seed.
+  assert.deepEqual(
+    Object.keys(json).sort(),
+    ['banco', 'correo_facturacion', 'cuenta', 'direccion', 'enlace_pago', 'identificacion',
+     'iva_pct', 'plazo_dias', 'razon_social', 'regimen', 'reserva_pct', 'retencion_pct', 'v'],
+  );
+});
+
+test('hasFiscalIdentity dice si la factura puede imprimir su cabecera (FIN-1)', () => {
+  assert.equal(hasFiscalIdentity(FINANCE_SETTINGS_DEFAULTS), false);
+  assert.equal(hasFiscalIdentity({ ...FINANCE_SETTINGS_DEFAULTS, razonSocial: 'X S.A.S.' }), false);
+  assert.equal(
+    hasFiscalIdentity({ ...FINANCE_SETTINGS_DEFAULTS, razonSocial: 'X S.A.S.', identificacion: 'NIT 1-2' }),
+    true,
+  );
+});
+
+test('el vencimiento por defecto sale del plazo configurado, no de un 30 escrito a mano', () => {
+  const s = parseFinanceSettings({ plazo_dias: 45 });
+  assert.equal(addDays('2026-09-23', s.plazoDias), '2026-11-07');
+  assert.equal(addDays('2026-09-23', parseFinanceSettings({ plazo_dias: 0 }).plazoDias), '2026-09-23', 'pago contra entrega');
 });
