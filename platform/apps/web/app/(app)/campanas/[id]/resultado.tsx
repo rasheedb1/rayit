@@ -76,6 +76,8 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
   const cutLabel = cutHoursLabel(r.cutHours);
   const fromCsv =
     brandInputs.totals.some((x) => x.source === "brand_csv") && brandInputs.totals.some((x) => x.source === "brand_manual");
+  // Por qué no hay CPM: lo dice missing_inputs, no se deduce de otra celda.
+  const cpmAbsent = r.missingInputs.includes("amount") ? t.absent.amount : r.views === null ? t.absent.posts : t.absent.notComputed;
   // «Asociar post» solo existe si la campaña admite cambios: sin ella, «posts» va sin enlace.
   const hrefOf = (m: MissingInput) => (m === "posts" && !editable ? undefined : FIX_HREF[m]);
 
@@ -105,7 +107,7 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
         />
         <Kpi
           label={t.kpi.cpm}
-          value={r.cpm === null ? (r.views === null ? t.absent.posts : t.absent.amount) : exact(r.cpm)}
+          value={r.cpm === null ? cpmAbsent : exact(r.cpm)}
           note={r.cpa === null ? t.note.cpaAbsent : t.note.cpa(exact(r.cpa))}
         />
       </KpiRow>
@@ -125,7 +127,7 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
               return (
                 <li key={m}>
                   {href ? (
-                    <Link href={href.startsWith("#") ? `/campanas/${campaignId}${href}` : href} className="underline-offset-2 hover:underline">
+                    <Link href={href.startsWith("#") ? `/campanas/${campaignId}${href}` : href} className="underline underline-offset-2">
                       {t.missing[m]}
                     </Link>
                   ) : (

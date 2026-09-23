@@ -94,6 +94,17 @@ describe("Resultado", () => {
     expect(screen.getByText("posts medidos: asocia los posts de la campaña").closest("a")).toBeNull();
   });
 
+  it("un CPM vacío dice por qué solo si missing_inputs lo sabe", () => {
+    pintar({ result: { ...NUTRIVE, cpm: null, missingInputs: ["amount"] } });
+    valor("CPM").getByText("Sin monto acordado");
+  });
+
+  it("un CPM vacío sin causa registrada (la fila del seed de Nutrivé) no inventa el porqué", () => {
+    pintar({ result: { ...NUTRIVE, cpm: null } });
+    valor("CPM").getByText("Sin calcular");
+    expect(screen.queryByText("Sin monto acordado")).toBeNull();
+  });
+
   it("un resultado a 7 días se marca parcial", () => {
     pintar({ result: { ...CAFE_ALMA, cutHours: 168 } });
     expect(screen.getByText(/parcial, a 7 días/)).toBeInTheDocument();

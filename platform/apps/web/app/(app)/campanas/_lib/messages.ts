@@ -116,6 +116,8 @@ export const MESSAGES = {
       posts: "Sin posts medidos",
       clicks: "Sin datos de clics",
       amount: "Sin monto acordado",
+      /** Una cifra vacía sin causa registrada (una fila antigua): no se inventa el porqué. */
+      notComputed: "Sin calcular",
     },
     note: {
       vsMedian: (x: string) => `${x} tu mediana`,
