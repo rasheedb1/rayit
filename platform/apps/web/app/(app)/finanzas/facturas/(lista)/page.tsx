@@ -7,6 +7,7 @@ import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { CeldaVacia } from "../../_componentes/celda-vacia";
 import { ModuleTabs } from "../../_componentes/pestanas";
@@ -117,6 +118,10 @@ function Filters({ active }: { active: ListFilterKey }) {
 }
 
 export default async function FacturasPage({ searchParams }: { searchParams: Promise<{ estado?: string }> }) {
+  // La PRIMERA línea, antes de leer nada (ACC-1): el archivo enseña las
+  // mismas facturas que /finanzas y pide el mismo permiso.
+  await requirePermission("finanzas.factura.ver");
+
   const params = await searchParams;
   const filter = filterKey(params.estado);
   const statuses = LIST_FILTERS[filter].statuses;

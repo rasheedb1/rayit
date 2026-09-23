@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { CeldaVacia } from "../_componentes/celda-vacia";
 import { Filtros } from "../_componentes/filtros";
@@ -133,6 +134,13 @@ export default async function CuentasPorCobrarPage({
 }: {
   searchParams: Promise<{ bucket?: string; q?: string }>;
 }) {
+  // La PRIMERA línea, antes de leer nada (ACC-1). Si la lectura fuera
+  // antes, un rol sin el permiso ya habría hecho pasar las cifras por
+  // el servidor. `finanzas.factura.ver` es el permiso raíz del módulo
+  // (ROOT_PERMISSION en @mc/core). Convertirlo en 404 es de ACC-5; hoy
+  // cae en error.tsx.
+  await requirePermission("finanzas.factura.ver");
+
   const params = await searchParams;
   const filter = receivableFilterKey(params.bucket);
   const q = receivablesSearchTerm(params.q);
