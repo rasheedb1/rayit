@@ -1,10 +1,12 @@
 import Papa from "papaparse";
 import type { CsvMediaType, CsvReading } from "@mc/db/queries/resumen";
 import {
+  ALIAS_DIA_INFORME,
   CAMPOS_METRICA,
   DEF_POR_CAMPO,
   detectarFormato,
   mapearPorAlias,
+  normalizar,
   type Campo,
   type Deteccion,
   type Mapeo,
@@ -142,7 +144,60 @@ export function ordenPorLocale(locale: string | undefined): OrdenFecha {
  * se leía como las 8:15 de la mañana y el resto se ignoraba en silencio.
  */
 const NUMERICA =
-  /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:[T ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?\s?m\.?)?)?\s*$/i;
+  /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?:[T ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?\s?m\.?)?)?\s*$/i;
+
+/** La hora que puede seguir a una fecha con el mes en texto: «7:30 PM», «19:30», «a las 3:04 p. m.». */
+const HORA = String.raw`(?:[,\s]+(?:a las\s+|at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?\s?m\.?)?)?`;
+
+/** «Sep 5, 2026» · «September 5 2026 7:30 PM»: como exporta YouTube Studio en inglés. */
+const MES_PRIMERO = new RegExp(String.raw`^([a-zà-ÿ.]+)\s+(\d{1,2}),?\s+(\d{4})${HORA}\s*$`, "i");
+
+/** «5 sept 2026» · «5 de septiembre de 2026» · «05-Sep-2026»: como exporta en español, o Excel. */
+const DIA_PRIMERO = new RegExp(String.raw`^(\d{1,2})(?:\s+de)?[\s-]+([a-zà-ÿ.]+)(?:\s+de)?[\s-]+(\d{4})${HORA}\s*$`, "i");
+
+/** Un año de dos cifras es de este siglo: lo que deja Excel en en-US al volver a guardar («9/5/26»). */
+const anioCompleto = (a: string) => (a.length === 2 ? 2000 + +a : +a);
+
+/** Sin tildes, sin puntos, en minúsculas: «Sept.» → «sept», «SEPTIEMBRE» → «septiembre». */
+const normalizarMes = (s: string) => normalizar(s).replace(/\s+/g, "");
+
+let MESES: ReadonlyMap<string, number> | null = null;
+
+/**
+ * Nombre de mes → número, en inglés y en español, corto y largo, y
+ * además sus tres primeras letras («sep» y «sept» valen igual). La
+ * tabla la escribe Intl, no este archivo: así no hay que acertar a mano
+ * si el corto de septiembre es «sep» o «sept» en cada versión de ICU.
+ * Los dos idiomas no chocan: donde coinciden («mar», «may», «jun»,
+ * «jul») es el mismo mes.
+ */
+function meses(): ReadonlyMap<string, number> {
+  if (MESES) return MESES;
+  const tabla = new Map<string, number>();
+  for (const locale of ["en", "es"]) {
+    for (const month of ["short", "long"] as const) {
+      const fmt = new Intl.DateTimeFormat(locale, { month, timeZone: "UTC" });
+      for (let i = 0; i < 12; i++) {
+        const nombre = normalizarMes(fmt.format(new Date(Date.UTC(2026, i, 15))));
+        tabla.set(nombre, i + 1);
+        tabla.set(nombre.slice(0, 3), i + 1);
+      }
+    }
+  }
+  MESES = tabla;
+  return tabla;
+}
+
+/** La hora de una celda, en 24 h. null si no es una hora posible. */
+function aHora(hh?: string, mm?: string, ss?: string, meridiano?: string): [number, number, number] | null {
+  let hora = hh === undefined ? 12 : +hh;
+  if (meridiano) {
+    if (hora < 1 || hora > 12) return null;
+    hora = (hora % 12) + (meridiano.toLowerCase() === "p" ? 12 : 0);
+  }
+  if (hora > 23 || +(mm ?? 0) > 59 || +(ss ?? 0) > 59) return null;
+  return [hora, +(mm ?? 0), +(ss ?? 0)];
+}
 
 /** ¿Tiene la celda forma de fecha numérica («10/09/2026», «09-14-2026 19:00»)? */
 export function esFechaNumerica(celda: string): boolean {
@@ -185,9 +240,16 @@ export function analizarFechas(celdas: readonly string[]): AnalisisFechas {
 
 /**
  * Una fecha de exportación. Se aceptan:
- *   ISO 8601 con o sin zona   2026-09-10T15:00:00Z · 2026-09-10 15:00
- *   numérica                  10/09/2026 15:04  (en el orden que se le diga)
+ *   ISO 8601 con o sin zona   2026-09-10T15:00:00Z · 2026-09-10 15:00:00.123
+ *   numérica                  10/09/2026 15:04 · 9/5/26 19:30  (en el orden que se le diga)
+ *   con el mes en texto       Sep 5, 2026 · 5 sept 2026 · 5 de septiembre de 2026
  *   solo fecha                2026-09-10 → mediodía
+ *
+ * El mes en texto es lo que escribe YouTube Studio («Video publish
+ * time»): sin él, un archivo real de YouTube salía entero como «fecha
+ * ilegible», y el mapeo manual no sirve de salida para una fecha que no
+ * se sabe leer. El año de dos cifras es lo que deja Excel en en-US al
+ * volver a guardar un CSV.
  *
  * Sin zona horaria, la hora se lee en la del workspace: la exportación
  * la escribió la plataforma con el reloj de la cuenta. Lo que se
@@ -205,15 +267,18 @@ export function aFechaIso(celda: string, timeZone: string, orden: OrdenFecha = "
   const s = celda.trim();
   if (!s) return null;
 
-  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
+  // La fracción de segundo se acepta y se descarta: ninguna métrica
+  // depende de milisegundos, y con zona la lee Date.parse entera.
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
   if (iso) {
     const [, a, m, d, hh, mm, ss, zona] = iso;
     if (zona) {
-      const t = Date.parse(s.replace(" ", "T"));
+      const t = Date.parse(s.replace(" ", "T").replace(",", "."));
       return Number.isFinite(t) ? new Date(t).toISOString() : null;
     }
     if (+m! < 1 || +m! > 12 || +d! < 1 || +d! > 31) return null;
-    return desdeZona(+a!, +m!, +d!, hh === undefined ? 12 : +hh, +(mm ?? 0), +(ss ?? 0), timeZone);
+    const hora = aHora(hh, mm, ss);
+    return hora ? desdeZona(+a!, +m!, +d!, ...hora, timeZone) : null;
   }
 
   const numerica = NUMERICA.exec(s);
@@ -222,16 +287,35 @@ export function aFechaIso(celda: string, timeZone: string, orden: OrdenFecha = "
     const d = orden === "md" ? +p2! : +p1!;
     const m = orden === "md" ? +p1! : +p2!;
     if (m < 1 || m > 12 || d < 1 || d > 31) return null;
-    let hora = hh === undefined ? 12 : +hh;
-    if (meridiano) {
-      if (hora < 1 || hora > 12) return null;
-      hora = (hora % 12) + (meridiano.toLowerCase() === "p" ? 12 : 0);
-    }
-    if (hora > 23 || +(mm ?? 0) > 59 || +(ss ?? 0) > 59) return null;
-    return desdeZona(+a!, m, d, hora, +(mm ?? 0), +(ss ?? 0), timeZone);
+    const hora = aHora(hh, mm, ss, meridiano);
+    return hora ? desdeZona(anioCompleto(a!), m, d, ...hora, timeZone) : null;
+  }
+
+  // Con el mes en texto no hay orden que decidir: el nombre lo dice.
+  const mesPrimero = MES_PRIMERO.exec(s);
+  const diaPrimero = mesPrimero ? null : DIA_PRIMERO.exec(s);
+  const texto = mesPrimero
+    ? { mes: mesPrimero[1]!, dia: mesPrimero[2]!, resto: mesPrimero.slice(3) }
+    : diaPrimero
+      ? { mes: diaPrimero[2]!, dia: diaPrimero[1]!, resto: [diaPrimero[3], ...diaPrimero.slice(4)] }
+      : null;
+  if (texto) {
+    const m = meses().get(normalizarMes(texto.mes));
+    const [a, hh, mm, ss, meridiano] = texto.resto;
+    const d = +texto.dia;
+    if (!m || d < 1 || d > 31) return null;
+    const hora = aHora(hh, mm, ss, meridiano);
+    return hora ? desdeZona(+a!, m, d, ...hora, timeZone) : null;
   }
 
   return null;
+}
+
+/** 'YYYY-MM-DD' del instante en esa zona: el día del calendario de quien mira. */
+export function diaEnZona(instante: number | string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    new Date(instante),
+  );
 }
 
 /**
@@ -273,6 +357,46 @@ export function aTipoMedio(celda: string): CsvMediaType {
   return TIPOS_MEDIO[k] ?? "video";
 }
 
+/** Techos de las celdas: lo que pasa de aquí no es una exportación, es un error o un ataque. */
+export const MAX_ID = 256;
+/** El pie de foto más largo que admite Instagram, y más que cualquier título de TikTok o YouTube. */
+export const MAX_TITULO = 2200;
+const MAX_URL = 2048;
+/**
+ * Una cifra por encima de esto no es real (ningún video tiene mil
+ * billones de visualizaciones), y más arriba ya no cabe entera en un
+ * double: el cast a bigint de la base reventaba la importación ENTERA
+ * sin decir qué fila lo causó.
+ */
+const MAX_CIFRA = 1e15;
+/** post.duration_s es numeric(8,2): 999 999,99 segundos como mucho. */
+const MAX_DURACION = 999_999;
+
+/**
+ * El enlace, solo si es http o https. `post.url` lo leen otras
+ * pantallas y otros módulos (creator_post_board), así que un
+ * «javascript:…» no se guarda aunque React sepa neutralizarlo en un
+ * href. Un enlace sin esquema («www.tiktok.com/@x/video/1») se completa
+ * con https, que es como lo escribe quien lo copia de la barra.
+ */
+export function urlSegura(celda: string): string | null {
+  const s = celda.trim();
+  if (!s || s.length > MAX_URL) return null;
+  const conEsquema = /^[a-z][a-z\d+.-]*:/i.test(s) ? s : /^(www\.)?[\w-]+(\.[\w-]+)+(\/|$)/i.test(s) ? `https://${s}` : s;
+  try {
+    const u = new URL(conEsquema);
+    return u.protocol === "http:" || u.protocol === "https:" ? conEsquema : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Un texto sin partir un emoji por la mitad. */
+function recortar(texto: string, max: number): string {
+  if (texto.length <= max) return texto;
+  return Array.from(texto).slice(0, max).join("");
+}
+
 /**
  * El id dentro de un enlace: el último tramo con pinta de id. Sirve
  * para TikTok (…/video/7400000000000000123) y para Instagram
@@ -297,12 +421,16 @@ export type GravedadProblema = "error" | "aviso";
 /** Todo lo que puede estar mal en una fila. La frase de cada uno está en MESSAGES.importar.validacion. */
 export type ProblemaCodigo =
   | "sinId"
+  | "idDemasiadoLargo"
   | "sinFecha"
   | "fechaIlegible"
   | "fechaFutura"
+  | "fechaLejana"
   | "noEsNumero"
+  | "fueraDeRango"
   | "negativo"
   | "noSeguidoresMayor"
+  | "enlaceInvalido"
   | "repetidaEnArchivo"
   | "yaImportado"
   | "casiVacia";
@@ -339,8 +467,20 @@ export interface Revision {
   avisos: number;
   /** Repetidas dentro del propio archivo: se queda la primera. */
   duplicadasEnArchivo: number;
+  /**
+   * Filas de totales («Total» bajo los encabezados, como la de YouTube
+   * Studio): se descartan sin contarlas como error, porque no son un
+   * video que falte sino la suma de los que sí están.
+   */
+  filasTotales: number;
   /** El orden día/mes con el que se leyeron las fechas numéricas. */
   ordenFechas: OrdenFecha;
+  /**
+   * El otro orden, cuando el archivo no demuestra el suyo y leído así
+   * sus fechas se juntan en días en vez de repartirse en meses: es lo
+   * que pasa al leer día/mes un archivo mes/día. La pantalla lo avisa.
+   */
+  ordenAlternativo: OrdenFecha | null;
 }
 
 export interface OpcionesRevision {
@@ -377,16 +517,36 @@ export function celdasDeFecha(tabla: Tabla, mapeo: Mapeo): string[] {
   return col ? tabla.filas.map((f) => f[col] ?? "") : [];
 }
 
-/** El orden con el que se van a leer las fechas: el que demuestra el archivo, el elegido o el del locale. */
-export function ordenEfectivo(tabla: Tabla, mapeo: Mapeo, opts: Pick<OpcionesRevision, "locale" | "ordenFechas">): OrdenFecha {
-  return analizarFechas(celdasDeFecha(tabla, mapeo)).orden ?? opts.ordenFechas ?? ordenPorLocale(opts.locale);
+/** «Total», «Totales», «Grand total»: el nombre de una fila que suma las demás. */
+const TOTALES = new Set(["total", "totales", "totals", "total general", "grand total"]);
+
+/**
+ * ¿Es la fila de totales? YouTube Studio pone una bajo los encabezados,
+ * con «Total» en la columna del id y la fecha vacía. Otras exportaciones
+ * la ponen al final y con el «Total» en otra columna: por eso también
+ * cuenta una fila sin id ni fecha cuya primera celda con algo diga
+ * «Total».
+ */
+function esFilaDeTotales(cruda: Record<string, string>, idCrudo: string, fechaCruda: string): boolean {
+  if (TOTALES.has(normalizar(idCrudo))) return true;
+  if (idCrudo || fechaCruda) return false;
+  const primera = Object.values(cruda).find((v) => v.length > 0);
+  return primera !== undefined && TOTALES.has(normalizar(primera));
 }
+
+/** Lo que se enseña de una celda que causó un problema: nunca un megabyte de texto. */
+const muestra = (celda: string) => (celda.length > 80 ? `${recortar(celda, 80)}…` : celda);
+
+/** Medio año: más lejos que esto del resto del archivo, una fecha huele a día y mes cruzados. */
+const LEJANA_MS = 180 * 86_400_000;
 
 export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Revision {
   const filas: FilaRevisada[] = [];
   const vistos = new Set<string>();
   let duplicadasEnArchivo = 0;
-  const ordenFechas = ordenEfectivo(tabla, mapeo, opts);
+  let filasTotales = 0;
+  const analisis = analizarFechas(celdasDeFecha(tabla, mapeo));
+  const ordenFechas = analisis.orden ?? opts.ordenFechas ?? ordenPorLocale(opts.locale);
 
   const celda = (fila: Record<string, string>, campo: Campo): string => {
     const col = mapeo[campo];
@@ -396,17 +556,26 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
   tabla.filas.forEach((cruda, i) => {
     const n = i + 1;
     const problemas: Problema[] = [];
-    const error = (campo: Campo | null, codigo: ProblemaCodigo, valor?: string) =>
-      problemas.push({ fila: n, campo, gravedad: "error", codigo, valor });
-    const aviso = (campo: Campo | null, codigo: ProblemaCodigo, valor?: string) =>
-      problemas.push({ fila: n, campo, gravedad: "aviso", codigo, valor });
+    const anotar = (gravedad: GravedadProblema) => (campo: Campo | null, codigo: ProblemaCodigo, valor?: string) =>
+      problemas.push({ fila: n, campo, gravedad, codigo, valor: valor === undefined ? undefined : muestra(valor) });
+    const error = anotar("error");
+    const aviso = anotar("aviso");
 
-    const url = celda(cruda, "url") || null;
     const idCrudo = celda(cruda, "externalPostId");
+    const fechaCruda = celda(cruda, "publishedAt");
+    if (esFilaDeTotales(cruda, idCrudo, fechaCruda)) {
+      filasTotales++;
+      return;
+    }
+
+    const urlCruda = celda(cruda, "url");
+    const url = urlCruda ? urlSegura(urlCruda) : null;
+    if (urlCruda && !url) aviso("url", "enlaceInvalido", urlCruda);
+    // El id sale del enlace solo si el enlace es de fiar.
     const externalPostId = idCrudo || (url ? idDesdeUrl(url) : null);
     if (!externalPostId) error("externalPostId", "sinId");
+    else if (externalPostId.length > MAX_ID) error("externalPostId", "idDemasiadoLargo", externalPostId);
 
-    const fechaCruda = celda(cruda, "publishedAt");
     const publishedAt = fechaCruda ? aFechaIso(fechaCruda, opts.timeZone, ordenFechas) : null;
     if (!fechaCruda) error("publishedAt", "sinFecha");
     else if (!publishedAt) error("publishedAt", "fechaIlegible", fechaCruda);
@@ -425,6 +594,11 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
         aviso(campo, "negativo", bruto);
         return null;
       }
+      const techo = campo === "durationS" ? MAX_DURACION : MAX_CIFRA;
+      if (v > techo || (def.tipo === "entero" && !Number.isSafeInteger(v))) {
+        aviso(campo, "fueraDeRango", bruto);
+        return null;
+      }
       return v;
     };
 
@@ -434,13 +608,14 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     const noSeguidoresImposible = reach !== null && reachNonFollowers !== null && reachNonFollowers > reach;
     if (noSeguidoresImposible) aviso("reachNonFollowers", "noSeguidoresMayor");
 
+    const titulo = celda(cruda, "title");
     const lectura: CsvReading | null =
       externalPostId && publishedAt && !problemas.some((p) => p.gravedad === "error")
         ? {
             externalPostId,
             publishedAt,
             mediaType: aTipoMedio(celda(cruda, "mediaType")),
-            title: celda(cruda, "title") || null,
+            title: titulo ? recortar(titulo, MAX_TITULO) : null,
             url,
             durationS: numero("durationS"),
             views,
@@ -455,10 +630,10 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
         : null;
 
     const crudo = {
-      title: celda(cruda, "title") || null,
-      externalPostId: idCrudo || null,
-      url,
-      publishedAt: fechaCruda || null,
+      title: titulo ? muestra(titulo) : null,
+      externalPostId: idCrudo ? muestra(idCrudo) : null,
+      url: urlCruda ? muestra(urlCruda) : null,
+      publishedAt: fechaCruda ? muestra(fechaCruda) : null,
     };
 
     if (lectura) {
@@ -476,14 +651,155 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     filas.push({ fila: n, lectura, crudo, problemas });
   });
 
+  // Cuando el archivo NO demuestra su orden día/mes, un orden equivocado
+  // no da error: da fechas posibles en el mes equivocado. Lo que sí lo
+  // delata es la distancia, de dos maneras:
+  //   - una fila medio año antes que el resto (aviso en esa fila);
+  //   - el archivo entero: si en el otro orden las fechas se juntan en
+  //     unos días y en el elegido se reparten en meses, lo probable es
+  //     que el elegido esté mal (`ordenAlternativo`).
+  let ordenAlternativo: OrdenFecha | null = null;
+  if (analisis.orden === null && analisis.numericas > 1) {
+    const otro: OrdenFecha = ordenFechas === "dm" ? "md" : "dm";
+    const numericas = celdasDeFecha(tabla, mapeo).filter(esFechaNumerica);
+    const amplitud = (orden: OrdenFecha) => {
+      const t = numericas.map((c) => Date.parse(aFechaIso(c, opts.timeZone, orden) ?? "")).filter(Number.isFinite);
+      return { dias: (Math.max(...t) - Math.min(...t)) / 86_400_000, futuras: t.some((x) => x > Date.now()) };
+    };
+    const elegido = amplitud(ordenFechas);
+    const alternativo = amplitud(otro);
+    if (elegido.dias > 60 && alternativo.dias * 4 < elegido.dias && !alternativo.futuras) ordenAlternativo = otro;
+  }
+  if (analisis.orden === null && analisis.numericas > 0) {
+    const listas = filas.filter((f) => f.lectura);
+    const tiempos = listas.map((f) => Date.parse(f.lectura!.publishedAt)).sort((a, b) => a - b);
+    const mediana = tiempos[Math.floor(tiempos.length / 2)];
+    if (mediana !== undefined) {
+      for (const f of listas) {
+        const cruda = f.crudo.publishedAt ?? "";
+        if (Date.parse(f.lectura!.publishedAt) < mediana - LEJANA_MS && esFechaNumerica(cruda)) {
+          f.problemas.push({ fila: f.fila, campo: "publishedAt", gravedad: "aviso", codigo: "fechaLejana", valor: cruda });
+        }
+      }
+    }
+  }
+
   return {
     filas,
     listas: filas.map((f) => f.lectura).filter((l): l is CsvReading => l !== null),
     errores: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "error").length, 0),
     avisos: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "aviso").length, 0),
     duplicadasEnArchivo,
+    filasTotales,
     ordenFechas,
+    ordenAlternativo,
   };
+}
+
+// ---------------------------------------------------------------------
+// La fecha de la exportación: CUÁNDO se sacó el archivo
+// ---------------------------------------------------------------------
+
+/**
+ * De dónde salió la fecha que el paso 2 propone. La propuesta sigue
+ * este orden y se queda con la primera que sea posible:
+ *
+ *   1. una columna con el día del informe («Date» en Meta Business
+ *      Suite), que no sea la de publicación;
+ *   2. una fecha en el nombre del archivo (la última: YouTube nombra el
+ *      archivo con el rango, y lo que importa es dónde acaba);
+ *   3. hoy.
+ */
+export type OrigenFechaExportacion = "columna" | "nombreArchivo" | "hoy";
+
+export interface PropuestaFechaExportacion {
+  /** 'YYYY-MM-DD', en la zona del workspace. */
+  fecha: string;
+  origen: OrigenFechaExportacion;
+  /** El encabezado del que salió, si salió de una columna. */
+  columna?: string;
+}
+
+export type ProblemaFechaExportacion = "ilegible" | "futura" | "anteriorAPublicacion";
+
+export interface OpcionesFechaExportacion {
+  timeZone: string;
+  /** Las filas que se van a escribir: ninguna puede ser posterior a la exportación. */
+  listas: readonly CsvReading[];
+  /** Para las pruebas. */
+  ahora?: number;
+}
+
+const DIA_ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** El día más reciente en que se publicó algo del archivo, en la zona del workspace. */
+function ultimoDiaPublicado(listas: readonly CsvReading[], timeZone: string): string | null {
+  if (listas.length === 0) return null;
+  return diaEnZona(Math.max(...listas.map((l) => Date.parse(l.publishedAt))), timeZone);
+}
+
+/** null si la fecha vale; si no, por qué no. */
+export function validarFechaExportacion(fecha: string, opts: OpcionesFechaExportacion): ProblemaFechaExportacion | null {
+  const m = DIA_ISO.exec(fecha);
+  // «2026-02-31» tiene la forma pero no existe: Date.UTC lo mueve a marzo.
+  if (!m || diaEnZona(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, 12), "UTC") !== fecha) return "ilegible";
+  if (fecha > diaEnZona(opts.ahora ?? Date.now(), opts.timeZone)) return "futura";
+  const ultimo = ultimoDiaPublicado(opts.listas, opts.timeZone);
+  if (ultimo && fecha < ultimo) return "anteriorAPublicacion";
+  return null;
+}
+
+/** Las fechas ISO dentro de un nombre de archivo: «Content 2026-08-01_2026-08-31», «export_20260922.csv». */
+function fechasDelNombre(nombre: string): string[] {
+  const patron = /(20\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)/g;
+  return Array.from(nombre.matchAll(patron), (m) => `${m[1]}-${m[2]}-${m[3]}`);
+}
+
+export function proponerFechaExportacion(
+  tabla: Tabla,
+  mapeo: Mapeo,
+  opts: OpcionesFechaExportacion & { nombreArchivo: string; ordenFechas: OrdenFecha },
+): PropuestaFechaExportacion {
+  const candidatas: PropuestaFechaExportacion[] = [];
+
+  const columna = tabla.encabezados.find((h) => h !== mapeo.publishedAt && ALIAS_DIA_INFORME.includes(normalizar(h)));
+  if (columna) {
+    const celdas = tabla.filas.map((f) => f[columna] ?? "").filter(Boolean);
+    const orden = analizarFechas(celdas).orden ?? opts.ordenFechas;
+    const instantes = celdas.map((c) => aFechaIso(c, opts.timeZone, orden)).filter((x): x is string => x !== null);
+    if (instantes.length > 0) {
+      const ultima = Math.max(...instantes.map((x) => Date.parse(x)));
+      candidatas.push({ fecha: diaEnZona(ultima, opts.timeZone), origen: "columna", columna });
+    }
+  }
+  const delNombre = fechasDelNombre(opts.nombreArchivo).at(-1);
+  if (delNombre) candidatas.push({ fecha: delNombre, origen: "nombreArchivo" });
+
+  const valida = candidatas.find((c) => validarFechaExportacion(c.fecha, opts) === null);
+  return valida ?? { fecha: diaEnZona(opts.ahora ?? Date.now(), opts.timeZone), origen: "hoy" };
+}
+
+/**
+ * El captured_at de la importación, a partir del día de la exportación.
+ *
+ *   - Si es HOY: undefined, y la base pone now() al microsegundo. Así
+ *     dos exportaciones del mismo día, a distintas horas, no empatan y
+ *     la segunda es la última.
+ *   - Si es otro día: mediodía de ese día en la zona del workspace, como
+ *     las fechas sin hora de las filas. A mediodía, un desfase de zona
+ *     no lo lleva a otro día en UTC, que es donde el reloj del módulo lo
+ *     lee («una lectura del día D cubre hasta D-1»).
+ *   - Nunca antes del último video publicado (una lectura de antes de
+ *     publicar no existe) ni después de ahora.
+ */
+export function instanteDeCaptura(fecha: string, opts: OpcionesFechaExportacion): string | undefined {
+  const ahora = opts.ahora ?? Date.now();
+  if (fecha === diaEnZona(ahora, opts.timeZone)) return undefined;
+  const m = DIA_ISO.exec(fecha);
+  const mediodia = m ? desdeZona(+m[1]!, +m[2]!, +m[3]!, 12, 0, 0, opts.timeZone) : null;
+  if (!mediodia) return undefined;
+  const ultimoPublicado = opts.listas.length ? Math.max(...opts.listas.map((l) => Date.parse(l.publishedAt))) : -Infinity;
+  return new Date(Math.min(Math.max(Date.parse(mediodia), ultimoPublicado), ahora)).toISOString();
 }
 
 /** Lo que hace la pantalla en cuanto llega un archivo: leer, detectar y premapear. */

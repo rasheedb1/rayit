@@ -86,6 +86,38 @@ describe("importarCsv, la server action", () => {
     expect(ids.sort()).toEqual(["ig_18001122334455001", "ig_18001122334455003"]);
   }, 60_000);
 
+  it("la fecha de exportación se vuelve a validar en el servidor y marca la lectura", async () => {
+    // Del futuro: no llega a la base.
+    const futura = await importarCsv({
+      texto: fixture("instagram-insights.csv"),
+      red: "instagram",
+      handleNuevo: "accion.fecha",
+      mapeo: MAPEO_IG,
+      fechaExportacion: "2099-01-01",
+    });
+    expect(futura).toEqual({ ok: false, error: expect.stringMatching(/fecha de la exportación no vale/) });
+    // Anterior a un video del archivo (el último es del 15 de septiembre de 2026): tampoco.
+    const antes = await importarCsv({
+      texto: fixture("instagram-insights.csv"),
+      red: "instagram",
+      handleNuevo: "accion.fecha",
+      mapeo: MAPEO_IG,
+      fechaExportacion: "2026-09-14",
+    });
+    expect(antes.ok).toBe(false);
+
+    // Una que vale: la lectura queda al mediodía de ese día en la zona del workspace.
+    const r = await importarCsv({
+      texto: fixture("instagram-insights.csv"),
+      red: "instagram",
+      handleNuevo: "accion.fecha",
+      mapeo: MAPEO_IG,
+      fechaExportacion: "2026-09-16",
+    });
+    expect(r).toMatchObject({ ok: true, resultado: { newPosts: 3, readings: 3, staleReadings: 0 } });
+    expect(r.ok && Date.parse(r.resultado.capturedAt)).toBe(Date.parse("2026-09-16T17:00:00Z"));
+  }, 60_000);
+
   it("un connectionId que no es un UUID no pasa del esquema", async () => {
     const r = await importarCsv({
       texto: fixture("instagram-insights.csv"),

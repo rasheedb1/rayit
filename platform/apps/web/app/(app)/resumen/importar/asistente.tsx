@@ -10,6 +10,7 @@ import type { ImportableAccount } from "@mc/db/queries/resumen";
 import { PLATFORMS, type PlatformId } from "@mc/db/queries/resumen-constantes";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
+import { DateInput } from "@/components/ui/date-input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
@@ -23,16 +24,21 @@ import {
   analizar,
   analizarFechas,
   celdasDeFecha,
+  diaEnZona,
   ErrorCsv,
   esFechaNumerica,
   faltantesDelMapeo,
   MAX_BYTES,
   ordenPorLocale,
+  proponerFechaExportacion,
   revisar,
+  validarFechaExportacion,
   type AnalisisFechas,
   type FilaRevisada,
   type OrdenFecha,
   type Problema,
+  type ProblemaFechaExportacion,
+  type PropuestaFechaExportacion,
   type Revision,
   type Tabla,
 } from "./_lib/csv";
@@ -49,6 +55,19 @@ import { DEF_CAMPOS, FORMATOS, type Campo, type FormatoId, type Mapeo } from "./
  */
 
 type Paso = 0 | 1 | 2 | 3;
+
+/** El título de cada paso: al cambiar de paso, el foco va a él. */
+const TITULO_DE_PASO = ["paso-subir", "paso-formato", "paso-revisar", "paso-hecho"] as const;
+
+interface Resultado {
+  videos: number;
+  nuevos: number;
+  conocidos: number;
+  lecturas: number;
+  antiguas: number;
+  /** 'YYYY-MM-DD': el día de la exportación con el que quedaron. */
+  fecha: string;
+}
 
 const NUEVA = "__nueva__";
 const MEGAS = (MAX_BYTES / 1024 / 1024).toString();
@@ -85,10 +104,12 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [cuenta, setCuenta] = useState<string>(NUEVA);
   const [handleNuevo, setHandleNuevo] = useState("");
   const [formato, setFormato] = useState<FormatoId | null>(null);
-  /** El orden de fechas que eligió la persona. null = el que propone el locale. */
+  /** El orden de fechas que eligió la persona. null = el que propone el formato o el locale. */
   const [ordenElegido, setOrdenElegido] = useState<OrdenFecha | null>(null);
+  /** El día de la exportación que escribió la persona. null = el propuesto. */
+  const [fechaElegida, setFechaElegida] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resultado, setResultado] = useState<{ videos: number; nuevos: number; conocidos: number; lecturas: number } | null>(null);
+  const [resultado, setResultado] = useState<Resultado | null>(null);
   /** Ids que la cuenta de destino ya tiene. null = todavía no se ha preguntado. */
   const [yaConocidos, setYaConocidos] = useState<readonly string[] | null>(null);
 
@@ -103,7 +124,11 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     () => (tabla ? analizarFechas(celdasDeFecha(tabla, mapeo)) : null),
     [tabla, mapeo],
   );
-  const ordenFechas: OrdenFecha = fechas?.orden ?? ordenElegido ?? ordenPorLocale(workspace.locale);
+  // Si el archivo no lo demuestra, manda lo que elija la persona; si no
+  // eligió, el orden fijo del formato reconocido (Meta escribe mes/día
+  // en cualquier idioma) y, solo si no lo hay, el del workspace.
+  const ordenDelFormato = FORMATOS.find((x) => x.id === formato)?.ordenFechas ?? null;
+  const ordenFechas: OrdenFecha = fechas?.orden ?? ordenElegido ?? ordenDelFormato ?? ordenPorLocale(workspace.locale);
 
   const opciones = useMemo(
     () => ({ timeZone: workspace.timezone, locale: workspace.locale, ordenFechas }),
@@ -147,6 +172,37 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     [tabla, mapeo, opciones, revisionBase, conocidos],
   );
 
+  // El día de la exportación: el momento de la lectura. Se propone a
+  // partir del archivo y se valida contra sus propias fechas.
+  const listasBase = useMemo(() => revisionBase?.listas ?? [], [revisionBase]);
+  const propuestaFecha: PropuestaFechaExportacion | null = useMemo(
+    () =>
+      tabla
+        ? proponerFechaExportacion(tabla, mapeo, {
+            timeZone: workspace.timezone,
+            listas: listasBase,
+            nombreArchivo,
+            ordenFechas,
+          })
+        : null,
+    [tabla, mapeo, workspace.timezone, listasBase, nombreArchivo, ordenFechas],
+  );
+  const fechaExportacion = fechaElegida ?? propuestaFecha?.fecha ?? "";
+  const problemaFecha = validarFechaExportacion(fechaExportacion, { timeZone: workspace.timezone, listas: listasBase });
+
+  // Al cambiar de paso, el título del nuevo recibe el foco: sin esto el
+  // botón pulsado desaparece y el foco cae a <body>, y quien usa teclado
+  // o lector de pantalla vuelve al principio de la página.
+  const contenedor = useRef<HTMLDivElement>(null);
+  const primerPaso = useRef(true);
+  useEffect(() => {
+    if (primerPaso.current) {
+      primerPaso.current = false;
+      return;
+    }
+    contenedor.current?.querySelector<HTMLElement>(`#${TITULO_DE_PASO[paso]}`)?.focus();
+  }, [paso]);
+
   /** De las filas que se van a escribir, cuántas ya estaban en la cuenta. */
   const yaEstaban = useMemo(
     () => (conocidos && revision ? revision.listas.filter((l) => conocidos.has(l.externalPostId)).length : 0),
@@ -175,6 +231,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         setTabla(leida);
         setMapeo(automatico);
         setOrdenElegido(null);
+        setFechaElegida(null);
         setFormato(deteccion.formato?.id ?? null);
         if (deteccion.formato) {
           setRed(deteccion.formato.red);
@@ -200,6 +257,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           handleNuevo: cuenta === NUEVA ? handleNuevo.trim().replace(/^@/, "") : undefined,
           mapeo,
           ordenFechas,
+          fechaExportacion,
         });
         if (!r.ok) {
           setError(r.error);
@@ -210,6 +268,8 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           nuevos: r.resultado.newPosts,
           conocidos: r.resultado.knownPosts,
           lecturas: r.resultado.readings,
+          antiguas: r.resultado.staleReadings,
+          fecha: fechaExportacion,
         });
         setPaso(3);
         router.refresh();
@@ -233,14 +293,18 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     setNombreArchivo("");
     setYaConocidos(null);
     setOrdenElegido(null);
+    setFechaElegida(null);
     setError(null);
   }
 
   const puedeSeguir =
-    paso === 1 && faltan.length === 0 && (cuenta !== NUEVA || handleNuevo.trim().length > 0);
+    paso === 1 &&
+    faltan.length === 0 &&
+    problemaFecha === null &&
+    (cuenta !== NUEVA || handleNuevo.trim().length > 0);
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-3xl" ref={contenedor}>
       <Pasos actual={paso} />
 
       {error && (
@@ -273,6 +337,12 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           fechas={fechas}
           ordenFechas={ordenFechas}
           onOrdenFechas={setOrdenElegido}
+          ordenDelFormato={ordenDelFormato}
+          fechaExportacion={fechaExportacion}
+          onFechaExportacion={setFechaElegida}
+          propuestaFecha={propuestaFecha}
+          // Sin mapeo completo aún no hay filas contra las que validarla.
+          problemaFecha={faltan.length === 0 ? problemaFecha : null}
           timeZone={workspace.timezone}
           f={f}
         />
@@ -306,20 +376,27 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
 }
 
 function Pasos({ actual }: { actual: Paso }) {
+  const t = MESSAGES.importar;
   return (
-    <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-      {MESSAGES.importar.pasos.map((nombre, i) => (
-        <li key={nombre} className="flex items-center gap-2">
-          {i > 0 && <span aria-hidden="true">·</span>}
-          <span
-            aria-current={i === actual ? "step" : undefined}
-            className={i === actual ? "font-medium text-ink" : i < actual ? "text-ink-2" : undefined}
-          >
-            {i + 1}. {nombre}
-          </span>
-        </li>
-      ))}
-    </ol>
+    <>
+      {/* El cambio de paso se anuncia: el foco ya va al título, pero el lector tiene que saber en qué paso está. */}
+      <p className="sr-only" aria-live="polite">
+        {t.pasoActual(actual + 1, t.pasos.length, t.pasos[actual]!)}
+      </p>
+      <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+        {t.pasos.map((nombre, i) => (
+          <li key={nombre} className="flex items-center gap-2">
+            {i > 0 && <span aria-hidden="true">·</span>}
+            <span
+              aria-current={i === actual ? "step" : undefined}
+              className={i === actual ? "font-medium text-ink" : i < actual ? "text-ink-2" : undefined}
+            >
+              {i + 1}. {nombre}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }
 
@@ -330,7 +407,7 @@ function PasoSubir({ onArchivo }: { onArchivo: (archivo: File) => void }) {
 
   return (
     <section className="mt-6" aria-labelledby="paso-subir">
-      <h2 id="paso-subir" className="text-sm font-semibold text-ink">
+      <h2 id="paso-subir" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
         {t.title}
       </h2>
       <div
@@ -405,10 +482,16 @@ function PasoFormato(props: {
   fechas: AnalisisFechas | null;
   ordenFechas: OrdenFecha;
   onOrdenFechas: (o: OrdenFecha) => void;
+  ordenDelFormato: OrdenFecha | null;
+  fechaExportacion: string;
+  onFechaExportacion: (fecha: string) => void;
+  propuestaFecha: PropuestaFechaExportacion | null;
+  problemaFecha: ProblemaFechaExportacion | null;
   timeZone: string;
   f: Formatter;
 }) {
   const t = MESSAGES.importar.formato;
+  const tf = t.fechaExportacion;
   const campos = MESSAGES.importar.campos;
   const { tabla, mapeo, onMapeo, faltan, f } = props;
   const primera = tabla.filas[0];
@@ -423,7 +506,7 @@ function PasoFormato(props: {
   return (
     <section className="mt-6 space-y-5" aria-labelledby="paso-formato">
       <div>
-        <h2 id="paso-formato" className="text-sm font-semibold text-ink">
+        <h2 id="paso-formato" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
           {t.title}
         </h2>
         <p className="mt-1 text-sm text-ink-2">
@@ -468,11 +551,32 @@ function PasoFormato(props: {
         </Field>
       )}
 
+      <Field
+        label={tf.label}
+        help={`${tf.ayuda} ${
+          props.propuestaFecha && props.fechaExportacion === props.propuestaFecha.fecha
+            ? props.propuestaFecha.origen === "columna"
+              ? tf.origen.columna(props.propuestaFecha.columna ?? "")
+              : tf.origen[props.propuestaFecha.origen]
+            : ""
+        }`.trim()}
+        error={props.problemaFecha ? tf.problema[props.problemaFecha] : undefined}
+        className="max-w-xs"
+      >
+        <DateInput
+          value={props.fechaExportacion}
+          onChange={props.onFechaExportacion}
+          max={diaEnZona(Date.now(), props.timeZone)}
+        />
+      </Field>
+
       {props.fechas && props.fechas.numericas > 0 && (
         <OrdenDeFechas
           fechas={props.fechas}
           orden={props.ordenFechas}
           onOrden={props.onOrdenFechas}
+          ordenDelFormato={props.ordenDelFormato}
+          formato={props.formato}
           ejemplo={celdasDeFecha(tabla, mapeo).find(esFechaNumerica)}
           timeZone={props.timeZone}
           f={f}
@@ -532,14 +636,16 @@ function PasoFormato(props: {
 /**
  * El orden día/mes de las fechas numéricas. Si el archivo lo demuestra
  * —una fecha con un número mayor que 12—, se dice y no se pregunta. Si
- * no, se pregunta, con el orden del workspace ya puesto y una fecha del
- * archivo leída en ese orden, para que la persona vea en claro qué va a
- * quedar guardado.
+ * no, se pregunta, con un orden ya puesto —el del formato reconocido si
+ * lo tiene, si no el del workspace— y una fecha del archivo leída en ese
+ * orden, para que la persona vea en claro qué va a quedar guardado.
  */
 function OrdenDeFechas(props: {
   fechas: AnalisisFechas;
   orden: OrdenFecha;
   onOrden: (o: OrdenFecha) => void;
+  ordenDelFormato: OrdenFecha | null;
+  formato: FormatoId | null;
   ejemplo: string | undefined;
   timeZone: string;
   f: Formatter;
@@ -552,7 +658,11 @@ function OrdenDeFechas(props: {
         <p className="text-xs text-ink-2">{t.deducido[props.fechas.orden]}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <p className="text-xs text-ink-2">{t.ambiguo}</p>
+          <p className="text-xs text-ink-2">
+            {props.ordenDelFormato && props.formato
+              ? t.ambiguoFormato(MESSAGES.importar.formatos[props.formato].nombre, t.nombreOrden[props.ordenDelFormato])
+              : t.ambiguo}
+          </p>
           <Segmented<OrdenFecha>
             label={t.label}
             size="sm"
@@ -575,8 +685,24 @@ function OrdenDeFechas(props: {
 function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban: number; f: Formatter }) {
   const t = MESSAGES.importar.revisar;
   const noEntran = revision.filas.filter((r) => !r.lectura).length;
+  // «Estado» va segunda, justo después de la fila: es lo que se mira en
+  // este paso, y a 400 px la tabla se desplaza dentro de sí misma y la
+  // última columna quedaba cortada en el borde.
   const columnas: Column<FilaRevisada>[] = [
     { key: "fila", header: t.columnas.fila, align: "num", width: "1%", render: (r) => f.int(r.fila) },
+    {
+      key: "estado",
+      header: t.columnas.estado,
+      width: "1%",
+      render: (r) =>
+        !r.lectura ? (
+          <Pill kind="bad">{t.estado.error}</Pill>
+        ) : r.problemas.length > 0 ? (
+          <Pill kind="warn">{t.estado.aviso}</Pill>
+        ) : (
+          <Pill kind="good">{t.estado.lista}</Pill>
+        ),
+    },
     {
       key: "video",
       header: t.columnas.video,
@@ -600,11 +726,14 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
       header: t.columnas.publicado,
       render: (r) =>
         r.lectura ? (
-          f.date(r.lectura.publishedAt)
+          <span className="whitespace-nowrap">{f.date(r.lectura.publishedAt)}</span>
         ) : (
           // La fecha tal como vino: si es ella la que no se entiende, es
-          // justo lo que hay que ver para arreglarla.
-          <span className="text-muted">{r.crudo.publishedAt ?? t.sinDato}</span>
+          // justo lo que hay que ver para arreglarla. En una línea, y
+          // entera en el title.
+          <span className="block max-w-[9rem] truncate whitespace-nowrap text-muted" title={r.crudo.publishedAt ?? undefined}>
+            {r.crudo.publishedAt ?? t.sinDato}
+          </span>
         ),
     },
     {
@@ -613,24 +742,12 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
       align: "num",
       render: (r) => (r.lectura?.views != null ? f.int(r.lectura.views) : <span className="font-sans text-muted">{t.sinDato}</span>),
     },
-    {
-      key: "estado",
-      header: t.columnas.estado,
-      render: (r) =>
-        !r.lectura ? (
-          <Pill kind="bad">{t.estado.error}</Pill>
-        ) : r.problemas.length > 0 ? (
-          <Pill kind="warn">{t.estado.aviso}</Pill>
-        ) : (
-          <Pill kind="good">{t.estado.lista}</Pill>
-        ),
-    },
   ];
 
   return (
     <section className="mt-6" aria-labelledby="paso-revisar">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 id="paso-revisar" className="text-sm font-semibold text-ink">
+        <h2 id="paso-revisar" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
           {t.title}
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -641,8 +758,17 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
           {revision.duplicadasEnArchivo > 0 && (
             <span>{t.duplicadas(revision.duplicadasEnArchivo, f.int(revision.duplicadasEnArchivo))}</span>
           )}
+          {revision.filasTotales > 0 && <span>{t.totales(revision.filasTotales, f.int(revision.filasTotales))}</span>}
         </p>
       </div>
+      {revision.ordenAlternativo && (
+        <p className="mb-3 rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-xs text-ink-2">
+          {t.ordenDudoso(
+            MESSAGES.importar.formato.fechas.nombreOrden[revision.ordenFechas],
+            MESSAGES.importar.formato.fechas.nombreOrden[revision.ordenAlternativo],
+          )}
+        </p>
+      )}
       <DataTable
         columns={columnas}
         rows={revision.filas}
@@ -661,7 +787,7 @@ function PasoHecho({
   onOtro,
   f,
 }: {
-  resultado: { videos: number; nuevos: number; conocidos: number; lecturas: number };
+  resultado: Resultado;
   onOtro: () => void;
   f: Formatter;
 }) {
@@ -669,7 +795,7 @@ function PasoHecho({
   return (
     <section className="mt-6" aria-labelledby="paso-hecho">
       <div className="rounded-md border border-border bg-surface px-5 py-6">
-        <h2 id="paso-hecho" className="text-sm font-semibold text-ink">
+        <h2 id="paso-hecho" tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
           {t.title}
         </h2>
         <p className="mt-1 font-mono text-2xl tabular-nums text-ink">
@@ -678,6 +804,8 @@ function PasoHecho({
         <ul className="mt-2 space-y-0.5 text-sm text-ink-2">
           {resultado.nuevos > 0 && <li>{t.nuevos(resultado.nuevos, f.int(resultado.nuevos))}</li>}
           {resultado.conocidos > 0 && <li>{t.conocidos(resultado.conocidos, f.int(resultado.conocidos))}</li>}
+          {resultado.antiguas > 0 && <li>{t.antiguas(resultado.antiguas, f.int(resultado.antiguas))}</li>}
+          <li className="text-muted">{t.fecha(f.date(resultado.fecha, "long"))}</li>
         </ul>
         <div className="mt-5 flex flex-wrap gap-2">
           <Button variant="primary" href="/resumen">

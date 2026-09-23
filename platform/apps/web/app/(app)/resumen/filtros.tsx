@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useEffect, useOptimistic, useRef, useTransition } from "react";
 import { Segmented } from "@/components/ui/segmented";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import { MESSAGES } from "./messages";
@@ -16,32 +16,54 @@ const TODAS = "todas";
  * consultar. `useTransition` mantiene la pantalla anterior visible
  * mientras llega la nueva —con aria-busy— en vez de parpadear a
  * esqueleto en cada clic.
+ *
+ * Lo elegido se ve ELEGIDO en el acto (`useOptimistic`): pintar el
+ * valor del servidor dejaba la pastilla anterior marcada hasta que
+ * llegaba la respuesta, y con el teclado una segunda flecha —o un
+ * Enter— salía de la opción vieja y devolvía al periodo de antes.
  */
 export function Filtros({ filtro }: { filtro: Filtro }) {
   const router = useRouter();
   const [pendiente, empezar] = useTransition();
+  const [actual, fijar] = useOptimistic(filtro);
+  const grupo = useRef<HTMLDivElement>(null);
   const t = MESSAGES.filtros;
 
-  const ir = (siguiente: Filtro) => empezar(() => router.push(hrefDe(siguiente), { scroll: false }));
+  const ir = (siguiente: Filtro) =>
+    empezar(() => {
+      fijar(siguiente);
+      router.push(hrefDe(siguiente), { scroll: false });
+    });
+
+  // Segmented cambia el valor con las flechas pero deja el foco en la
+  // opción de antes. Mientras el kit no lo haga (avisado a Nicolás),
+  // el foco sigue a la opción elegida SOLO si ya estaba dentro de ese
+  // grupo: con el ratón no se mueve nada que no se haya tocado.
+  useEffect(() => {
+    const activo = document.activeElement;
+    if (!(activo instanceof HTMLElement) || !grupo.current?.contains(activo)) return;
+    const elegida = activo.closest('[role="group"]')?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (elegida && elegida !== activo) elegida.focus();
+  }, [actual.days, actual.platform]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2" aria-busy={pendiente || undefined}>
+    <div ref={grupo} className="flex flex-wrap items-center gap-2" aria-busy={pendiente || undefined}>
       <Segmented<`${Period}`>
         label={t.periodo}
         size="sm"
-        value={`${filtro.days}`}
+        value={`${actual.days}`}
         options={PERIODS.map((d) => ({ value: `${d}` as `${Period}`, label: t.dias(d) }))}
-        onChange={(v) => ir({ ...filtro, days: Number(v) as Period })}
+        onChange={(v) => ir({ ...actual, days: Number(v) as Period })}
       />
       <Segmented<string>
         label={t.red}
         size="sm"
-        value={filtro.platform ?? TODAS}
+        value={actual.platform ?? TODAS}
         options={[
           { value: TODAS, label: t.todasLasRedes },
           ...PLATFORMS.map((r) => ({ value: r, label: PLATFORM_LABEL[r] })),
         ]}
-        onChange={(v) => ir({ ...filtro, platform: v === TODAS ? null : (v as PlatformId) })}
+        onChange={(v) => ir({ ...actual, platform: v === TODAS ? null : (v as PlatformId) })}
       />
     </div>
   );

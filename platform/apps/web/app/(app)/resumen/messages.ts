@@ -1,5 +1,5 @@
 import type { CsvImportErrorCode } from "@mc/db/queries/resumen";
-import type { ErrorCsvCodigo, ProblemaCodigo } from "./importar/_lib/csv";
+import type { ErrorCsvCodigo, ProblemaCodigo, ProblemaFechaExportacion } from "./importar/_lib/csv";
 import type { Campo, FormatoId } from "./importar/_lib/formatos";
 
 /**
@@ -94,10 +94,11 @@ export const MESSAGES = {
       subtitle: (paso: number, bloques: number) =>
         paso === 1 ? `Por día · ${bloques} días` : `Cada ${paso} días · ${bloques} barras`,
       aria: "Visualizaciones por red y periodo",
-      labelsHeaderBloque: "Desde el",
+      /** Con bloques, cada etiqueta ES el rango: «26–30/8». */
+      labelsHeaderBloque: "Días",
       labelsHeaderDia: "Día",
       nota: (paso: number) =>
-        paso === 1 ? undefined : `Cada barra son ${paso} días contados hacia atrás desde el último día cerrado.`,
+        paso === 1 ? undefined : `Cada barra son ${paso} días contados hacia atrás desde el último día cerrado; juntas cubren el periodo entero.`,
       /** Sin serie de cuenta, las barras son otra cosa y se dice. */
       notaContenido:
         "Sin cuenta conectada: cada barra suma las visualizaciones de lo publicado en esos días, con su última lectura.",
@@ -111,6 +112,17 @@ export const MESSAGES = {
       csv: "CSV importado",
     },
     tokenPorVencer: "Permiso por vencer",
+    /** Cuando la conexión no está sana: lo primero que hay que ver. */
+    estado: {
+      expired: "Permiso vencido",
+      revoked: "Acceso revocado",
+      error: "Con error",
+      needs_reauth: "Hay que volver a conectarla",
+      disabled: "Pausada",
+    } as Record<string, string>,
+    estadoDesconocido: "Con problemas",
+    /** Cuando sus datos van por detrás del último día cerrado del resto. */
+    atrasada: (n: number, txt: string) => (n === 1 ? "1 día por detrás" : `${txt} días por detrás`),
     revisar: "Revisar conexiones",
   },
   vacio: {
@@ -172,6 +184,8 @@ export const MESSAGES = {
       "Mientras las plataformas aprueban el acceso automático, tus cifras pueden entrar desde el CSV que ya sabes exportar. Se leen en tu navegador, las revisas y solo entonces se guardan.",
     volver: "Volver al resumen",
     pasos: ["Subir", "Formato", "Revisar", "Importar"],
+    /** Lo que anuncia un lector de pantalla al cambiar de paso. */
+    pasoActual: (n: number, total: number, nombre: string) => `Paso ${n} de ${total}: ${nombre}`,
     subir: {
       title: "Elige el archivo",
       suelta: "Arrastra aquí tu CSV o",
@@ -241,11 +255,34 @@ export const MESSAGES = {
         md: "Mes/Día",
         ambiguo:
           "Ninguna fecha del archivo tiene un número mayor que 12, así que sirven en los dos órdenes. Di cuál usa tu exportación.",
+        /** Cuando el formato reconocido escribe siempre en el mismo orden. */
+        ambiguoFormato: (formato: string, orden: string) =>
+          `Ninguna fecha del archivo tiene un número mayor que 12. ${formato} las escribe en orden ${orden}, así que proponemos ese; cámbialo si tu archivo usa otro.`,
+        nombreOrden: { dm: "día/mes", md: "mes/día" },
         deducido: {
           dm: "Las fechas van en orden día/mes: lo demuestra el propio archivo.",
           md: "Las fechas van en orden mes/día: lo demuestra el propio archivo.",
         },
         ejemplo: (crudo: string, leida: string) => `«${crudo}» se lee como ${leida}.`,
+      },
+      /**
+       * CUÁNDO se exportó el archivo: es el momento de la lectura. Con el
+       * de la importación, un archivo viejo haría parecer más viejos los
+       * videos y más nuevas las cifras.
+       */
+      fechaExportacion: {
+        label: "Fecha de la exportación",
+        ayuda: "El día en que descargaste el archivo de la plataforma. Las cifras son las de ese día.",
+        origen: {
+          columna: (columna: string) => `Propuesta a partir de la columna «${columna}» del archivo.`,
+          nombreArchivo: "Propuesta a partir del nombre del archivo.",
+          hoy: "Si lo descargaste otro día, cámbiala.",
+        },
+        problema: {
+          ilegible: "Escribe una fecha completa.",
+          futura: "No puede ser posterior a hoy.",
+          anteriorAPublicacion: "No puede ser anterior al video más reciente del archivo.",
+        } satisfies Record<ProblemaFechaExportacion, string>,
       },
     },
     /**
@@ -257,6 +294,13 @@ export const MESSAGES = {
       sinFecha: () => "Sin fecha de publicación.",
       fechaIlegible: (p: { valor?: string }) => `No se entiende la fecha «${p.valor ?? ""}».`,
       fechaFutura: () => "La fecha de publicación está en el futuro.",
+      fechaLejana: (p: { valor?: string }) =>
+        `«${p.valor ?? ""}» queda más de seis meses antes que el resto del archivo: comprueba el orden día/mes del paso 2.`,
+      idDemasiadoLargo: () => "El identificador es demasiado largo para ser el de un video.",
+      fueraDeRango: (p: { valor?: string; campo?: string }) =>
+        `«${p.valor ?? ""}» es demasiado grande para ${(p.campo ?? "").toLowerCase()}: se importa sin ese dato.`,
+      enlaceInvalido: (p: { valor?: string }) =>
+        `«${p.valor ?? ""}» no es un enlace web (http o https): se importa sin enlace.`,
       noEsNumero: (p: { valor?: string; campo?: string }) =>
         `«${p.valor ?? ""}» no es un número en ${(p.campo ?? "").toLowerCase()}: se importa sin ese dato.`,
       negativo: (p: { campo?: string }) => `${p.campo ?? ""} no puede ser negativo: se importa sin ese dato.`,
@@ -273,11 +317,17 @@ export const MESSAGES = {
       avisos: (n: number, txt: string) => contar(n, txt, "aviso", "avisos"),
       duplicadas: (n: number, txt: string) =>
         n === 1 ? "1 fila repetida en el archivo" : `${txt} filas repetidas en el archivo`,
+      /** Leídas en el orden elegido las fechas se reparten en meses; en el otro, en días. */
+      ordenDudoso: (elegido: string, otro: string) =>
+        `Leídas en orden ${elegido}, las fechas de este archivo quedan a meses de distancia; en orden ${otro} caben en pocos días. Si tu exportación usa ${otro}, vuelve al paso 2 y cámbialo.`,
+      /** La fila «Total» de YouTube Studio: no es un error, es la suma de las demás. */
+      totales: (n: number, txt: string) =>
+        n === 1 ? "1 fila de totales ignorada" : `${txt} filas de totales ignoradas`,
       ninguna: "Ninguna fila se puede importar. Revisa el mapeo del paso anterior.",
       /** Contra los videos que YA están en la cuenta de destino, no contra el propio archivo. */
       yaEstaban: (n: number, txt: string) =>
         n === 1 ? "1 ya estaba: se le añade una lectura" : `${txt} ya estaban: se les añade una lectura`,
-      columnas: { fila: "Fila", video: "Video", publicado: "Publicado", views: "Visualizaciones", estado: "Estado" },
+      columnas: { fila: "Fila", estado: "Estado", video: "Video", publicado: "Publicado", views: "Visualizaciones" },
       estado: { lista: "Lista", error: "No entra", aviso: "Con aviso" },
       sinDato: "—",
     },
@@ -289,6 +339,13 @@ export const MESSAGES = {
       nuevos: (n: number, txt: string) => contar(n, txt, "video nuevo", "videos nuevos"),
       conocidos: (n: number, txt: string) =>
         n === 1 ? "1 ya estaba: se le añadió una lectura" : `${txt} ya estaban: se les añadió una lectura`,
+      /** Lecturas que no se escribieron porque el video ya tenía una igual de reciente o más. */
+      antiguas: (n: number, txt: string) =>
+        n === 1
+          ? "1 lectura era más antigua que la que ya había: no se guardó, para no mover las cifras hacia atrás"
+          : `${txt} lecturas eran más antiguas que las que ya había: no se guardaron, para no mover las cifras hacia atrás`,
+      /** La fecha con la que quedaron las lecturas. */
+      fecha: (fecha: string) => `Con fecha de exportación ${fecha}.`,
       ver: "Ver el resumen",
     },
     error: {
@@ -296,6 +353,8 @@ export const MESSAGES = {
       sinCuenta: "Elige la cuenta a la que pertenece el archivo.",
       sinFilas: "No hay ninguna fila que se pueda importar.",
       sinMapeo: "Falta decir qué columna es la fecha de publicación o el identificador. Vuelve al paso 2.",
+      /** La fecha de exportación que llegó al servidor no vale (un POST a mano, o el día cambió). */
+      fechaExportacion: "La fecha de la exportación no vale: tiene que ser de hoy o anterior, y no anterior a ningún video del archivo. Revísala en el paso 2.",
       /** Lo que pesa de más ni siquiera llega al servidor: se dice antes de intentarlo. */
       demasiadoGrande: (mb: string) => `El archivo pasa de ${mb} MB y no se puede enviar. Divídelo por fechas.`,
       /** Los rechazos de @mc/db, que llegan como código. */
@@ -306,6 +365,8 @@ export const MESSAGES = {
         empty_batch: "No hay ninguna fila que se pueda importar.",
         duplicate_ids: "El archivo trae el mismo video más de una vez. Deja una sola fila por video.",
         empty_handle: "Escribe el nombre de usuario de la cuenta nueva.",
+        invalid_captured_at:
+          "La fecha de la exportación no vale: tiene que ser de hoy o anterior, y no anterior a ningún video del archivo. Revísala en el paso 2.",
       } satisfies Record<CsvImportErrorCode, string>,
     },
     /** La frontera de error del propio asistente: aquí no hay métricas que leer. */

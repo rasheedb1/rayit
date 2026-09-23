@@ -32,6 +32,7 @@ vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
 
+import { formatterFor } from "@/lib/format";
 import { Frescura, FrescuraLista } from "./frescura";
 import { Graficos } from "./graficos";
 import { Kpis } from "./kpis";
@@ -121,6 +122,19 @@ describe("los dos gráficos", () => {
     expect(screen.getByRole("img", { name: "Visualizaciones por red y periodo" })).toBeInTheDocument();
   });
 
+  it("una barra de varios días dice su rango exacto, en el eje y en la tabla", async () => {
+    consultas.getFollowersByPlatform.mockResolvedValue(SIN_SEGUIDORES);
+    consultas.getViewsByBucket.mockResolvedValue(VIEWS_POR_CONTENIDO);
+    render(await Graficos({ filtro: FILTRO }));
+    // El eje ya lo dice: no «14/9», que se leía como un solo día.
+    expect(screen.getByText("14–17/9")).toBeInTheDocument();
+    const tarjeta = screen.getByRole("heading", { name: "Visualizaciones por red" }).closest("article")!;
+    within(tarjeta).getByRole("button", { name: "Ver tabla" }).click();
+    const tabla = await within(tarjeta).findByRole("table");
+    expect(within(tabla).getByRole("columnheader", { name: "Días" })).toBeInTheDocument();
+    expect(within(tabla).getByRole("rowheader", { name: "18–21/9" })).toBeInTheDocument();
+  });
+
   it("con cuenta pero sin datos en el periodo: el vacío de siempre, con su salida", async () => {
     consultas.getFollowersByPlatform.mockResolvedValue({ ...SIN_SEGUIDORES, hasAccountSeries: true });
     consultas.getViewsByBucket.mockResolvedValue({ ...VIEWS_POR_CONTENIDO, source: "account", buckets: [], series: [] });
@@ -151,6 +165,7 @@ describe("los dos gráficos", () => {
 });
 
 describe("el aviso de frescura", () => {
+  const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
   const base: ConnectionFreshness = {
     connectionId: "00000000-0000-4000-8000-000000000001",
     platformId: "instagram",
@@ -160,17 +175,26 @@ describe("el aviso de frescura", () => {
     accessMode: "manual_csv",
     lastSyncedAt: "2026-09-22T16:00:00Z",
     lastAccountDay: null,
-    lastSyncedReadingAt: null,
-    lastCsvReadingAt: "2026-09-22T16:00:00Z",
-    dataUntil: "2026-09-22",
+    lastSyncedReadingDay: null,
+    lastCsvDay: "2026-09-21",
+    dataUntil: "2026-09-21",
+    daysBehind: 0,
     tokenExpiringSoon: false,
   };
 
   it("una cuenta alimentada solo por CSV tiene fecha, no «Sin lecturas todavía»", () => {
-    render(<FrescuraLista filas={[base]} />);
+    render(<FrescuraLista filas={[base]} f={f} />);
     const tarjeta = screen.getByText("@revisor.csv").closest("li")!;
     expect(within(tarjeta).queryByText("Sin lecturas todavía")).not.toBeInTheDocument();
-    expect(within(tarjeta).getByText(/datos hasta el/).textContent).toBe("datos hasta el 22 sep · CSV importado");
+    expect(within(tarjeta).getByText(/datos hasta el/).textContent).toBe("datos hasta el 21 sep · CSV importado");
+  });
+
+  it("la fecha es el día cerrado que manda la base, sin correrse por la zona", () => {
+    // La base ya aplicó la regla del reloj: «2026-09-22» es el 22, se
+    // mire desde Bogotá o desde Tokio. Un instante en UTC sí se corría.
+    render(<FrescuraLista filas={[{ ...base, lastCsvDay: "2026-09-22", dataUntil: "2026-09-22" }]} f={f} />);
+    expect(screen.getByText(/datos hasta el/).textContent).toBe("datos hasta el 22 sep · CSV importado");
+    expect(screen.getByText(/datos hasta el/).querySelector("time")).toHaveAttribute("dateTime", "2026-09-22");
   });
 
   it("una cuenta OAuth con un CSV encima enseña las dos fuentes por separado", () => {
@@ -182,19 +206,45 @@ describe("el aviso de frescura", () => {
             handle: "laura.cocinafacil",
             accessMode: "direct_oauth",
             lastAccountDay: "2026-09-15",
-            lastSyncedReadingAt: "2026-09-15T23:00:00Z",
+            lastSyncedReadingDay: "2026-09-15",
+            daysBehind: 6,
           },
         ]}
+        f={f}
       />,
     );
     const lineas = screen.getAllByText(/datos hasta el/).map((p) => p.textContent);
     // La de la API sigue diciendo el 15: el CSV de hoy no la tapa.
-    expect(lineas).toEqual(["datos hasta el 15 sep · API", "datos hasta el 22 sep · CSV importado"]);
+    expect(lineas).toEqual(["datos hasta el 15 sep · API", "datos hasta el 21 sep · CSV importado"]);
   });
 
   it("sin ninguna lectura, lo dice", () => {
-    render(<FrescuraLista filas={[{ ...base, lastCsvReadingAt: null, dataUntil: null }]} />);
+    render(<FrescuraLista filas={[{ ...base, lastCsvDay: null, dataUntil: null, daysBehind: null }]} f={f} />);
     expect(screen.getByText("Sin lecturas todavía")).toBeInTheDocument();
+  });
+
+  it("una conexión que no está sana lo dice con una pastilla, no solo con una fecha vieja", () => {
+    render(<FrescuraLista filas={[{ ...base, status: "revoked" }, { ...base, connectionId: "x2", handle: "otra", status: "error" }]} f={f} />);
+    expect(screen.getByText("Acceso revocado")).toBeInTheDocument();
+    expect(screen.getByText("Con error")).toBeInTheDocument();
+  });
+
+  it("una sana y al día no lleva ninguna pastilla", () => {
+    render(<FrescuraLista filas={[{ ...base, daysBehind: 2 }]} f={f} />);
+    const tarjeta = screen.getByText("@revisor.csv").closest("li")!;
+    expect(within(tarjeta).queryByText(/por detrás|Con error|Permiso/)).not.toBeInTheDocument();
+  });
+
+  it("la que va más de dos días por detrás del resto se señala, con los días", () => {
+    render(<FrescuraLista filas={[{ ...base, daysBehind: 12 }]} f={f} />);
+    expect(screen.getByText("12 días por detrás")).toBeInTheDocument();
+  });
+
+  it("con una sola conexión no hay celdas pintadas de gris: cada tarjeta lleva su borde", () => {
+    render(<FrescuraLista filas={[base]} f={f} />);
+    const lista = screen.getByText("@revisor.csv").closest("ul")!;
+    expect(lista.className).not.toMatch(/bg-border/);
+    expect(screen.getByText("@revisor.csv").closest("li")!.className).toMatch(/border/);
   });
 
   it("respeta el filtro por red: se lo pasa a la consulta", async () => {

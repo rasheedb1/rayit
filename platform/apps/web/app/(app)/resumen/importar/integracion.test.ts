@@ -12,7 +12,7 @@ import {
   importCsvReadings,
 } from "@mc/db/queries/resumen";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
-import { analizar, revisar } from "./_lib/csv";
+import { analizar, instanteDeCaptura, proponerFechaExportacion, revisar } from "./_lib/csv";
 
 /**
  * El «terminado cuando» de RES-2, de punta a punta y sin red: un CSV de
@@ -84,7 +84,7 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     // La cuenta importada dice hasta cuándo llegan sus datos, y de dónde.
     const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFreshnessByConnection(tx, { platform: "instagram" }));
     const importada = frescura.find((c) => c.handle === "laura.cocinafacil.csv");
-    expect(importada?.lastCsvReadingAt).toBeTruthy();
+    expect(importada?.lastCsvDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(importada?.dataUntil).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     // Y las cifras del archivo llegaron tal cual, con age_hours calculada por Postgres.
@@ -106,5 +106,62 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     expect(Number(filas[0]!.age_hours)).toBeGreaterThan(0);
     // El carrusel no se importa como video.
     expect(filas[2]!.media_type).toBe("carousel");
+  }, 180_000);
+
+  it("el archivo tal como lo escribe Meta (mes/día, «Reach», día del informe) entra con su fecha de exportación", async () => {
+    // Fechas relativas a hoy, escritas como las escribe Meta: MM/DD/YYYY HH:mm.
+    const mdy = (atras: number) => {
+      const d = new Date(Date.now() - atras * 86_400_000);
+      const dos = (n: number) => String(n).padStart(2, "0");
+      return `${dos(d.getUTCMonth() + 1)}/${dos(d.getUTCDate())}/${d.getUTCFullYear()}`;
+    };
+    // Primero el día del informe: así ninguna fecha nueva puede chocar con él.
+    const texto = fixture("instagram-insights-meta.csv")
+      .replaceAll(",09/12/2026,", `,${mdy(5)},`)
+      .replace("09/03/2026 15:04", `${mdy(14)} 15:04`)
+      .replace("09/05/2026 12:30", `${mdy(12)} 12:30`)
+      .replace("09/10/2026 18:00", `${mdy(9)} 18:00`);
+    const { tabla, deteccion, mapeo } = analizar(texto);
+    expect(deteccion.formato?.id).toBe("instagram_meta");
+    expect(mapeo.reach).toBe("Reach");
+
+    // Lo que hace el asistente: el orden del formato si el archivo no lo
+    // demuestra, y la fecha de exportación propuesta desde «Date».
+    const opciones = { timeZone: "America/Bogota", locale: "es-CO", ordenFechas: deteccion.formato?.ordenFechas };
+    const { listas } = revisar(tabla, mapeo, opciones);
+    expect(listas).toHaveLength(3);
+    const propuesta = proponerFechaExportacion(tabla, mapeo, {
+      timeZone: "America/Bogota",
+      listas,
+      nombreArchivo: "Instagram Insights.csv",
+      ordenFechas: "md",
+    });
+    expect(propuesta.origen).toBe("columna");
+    const capturedAt = instanteDeCaptura(propuesta.fecha, { timeZone: "America/Bogota", listas });
+    expect(capturedAt).toBeDefined();
+
+    const resultado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const cuenta = await ensureCsvConnection(tx, { platform: "instagram", handle: "laura.meta.csv" });
+      return importCsvReadings(tx, { connectionId: cuenta.connectionId, platform: "instagram", rows: listas, capturedAt });
+    });
+    expect(resultado).toMatchObject({ newPosts: 3, readings: 3, staleReadings: 0 });
+
+    // Cada video se leyó el día de la exportación: el primero tenía nueve
+    // días (publicado hace 14, exportado hace 5), no catorce.
+    const [primera] = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx
+        .query<{ age_hours: string; reach: string }>(
+          `SELECT s.age_hours, s.reach FROM post p JOIN post_metric_snapshot s ON s.post_id = p.id
+            WHERE p.external_post_id = '18001122334455101'`,
+        )
+        .then((r) => r.rows),
+    );
+    expect(Number(primera!.reach)).toBe(9310);
+    expect(Number(primera!.age_hours) / 24).toBeGreaterThan(8);
+    expect(Number(primera!.age_hours) / 24).toBeLessThan(10);
+
+    // Y aparece en Resumen, dentro de la ventana de 30 días.
+    const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFreshnessByConnection(tx, { platform: "instagram" }));
+    expect(frescura.find((c) => c.handle === "laura.meta.csv")?.lastCsvDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   }, 180_000);
 });

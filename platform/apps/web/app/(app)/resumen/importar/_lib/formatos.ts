@@ -1,4 +1,5 @@
 import type { PlatformId } from "@mc/db/queries/resumen";
+import type { OrdenFecha } from "./csv";
 
 /**
  * Qué columnas buscamos en un CSV exportado de una plataforma, y cómo
@@ -142,6 +143,15 @@ const ALIAS: Record<Campo, readonly string[]> = {
   reachNonFollowers: ["non follower reach", "alcance en no seguidores", "reach from non followers", "non followers", "no seguidores"],
 };
 
+/**
+ * Encabezados que traen el DÍA DEL INFORME, no el de publicación: la
+ * exportación de Meta lleva «Date» junto a «Publish time». No son un
+ * campo de la fila; sirven para proponer la fecha de la exportación en
+ * el paso 2 (`proponerFechaExportacion`). Normalizados.
+ */
+export const ALIAS_DIA_INFORME: readonly string[] = [
+  "date", "fecha", "report date", "fecha del informe", "day", "dia", "data date",
+];
 
 export type FormatoId = "instagram_meta" | "tiktok_studio" | "youtube_studio";
 
@@ -154,6 +164,15 @@ export interface FormatoConocido {
   red: PlatformId;
   /** Encabezados característicos, normalizados. Dos aciertos bastan. */
   firma: readonly string[];
+  /**
+   * El orden de las fechas numéricas que escribe esta exportación, si
+   * es fijo. Meta Business Suite escribe «Publish time» en mes/día
+   * («09/10/2026 15:04») sea cual sea el idioma de la cuenta: en un
+   * archivo de los primeros doce días del mes, que no demuestra su
+   * orden, proponer el del workspace (día/mes en es-CO) guardaba el 3
+   * de septiembre como 9 de marzo, fuera de la ventana y sin error.
+   */
+  ordenFechas?: OrdenFecha;
 }
 
 export const FORMATOS: readonly FormatoConocido[] = [
@@ -161,6 +180,7 @@ export const FORMATOS: readonly FormatoConocido[] = [
     id: "instagram_meta",
     red: "instagram",
     firma: ["account username", "nombre de usuario de la cuenta", "permalink", "accounts reached", "cuentas alcanzadas", "post id"],
+    ordenFechas: "md",
   },
   {
     id: "tiktok_studio",

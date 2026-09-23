@@ -79,7 +79,7 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
   const t = MESSAGES.graficos;
 
   const hasta = seguidores.labels.at(-1);
-  // Con paso 1 cada barra es un día; con 4 o 10, un bloque de días.
+  // Con paso 1 cada barra es un día; con 5 o 10, un bloque de días.
   const porBloques = views.step > 1;
   const porContenido = views.source === "content";
 
@@ -127,7 +127,10 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
         ariaLabel={t.views.aria}
         chart="bar"
         bar={{ mode: "stack" }}
-        labels={views.buckets.map((b) => etiqueta(b.start))}
+        // Con bloques, la etiqueta ES el rango («7–10/9»): el kit usa la
+        // misma para el eje, el tooltip y la tabla, y solo con el primer
+        // día nadie podía saber que 317.846 es la suma de cuatro.
+        labels={views.buckets.map((b) => (porBloques ? f.dayMonthRange(b.start, b.end) : etiqueta(b.start)))}
         labelsHeader={porBloques ? t.views.labelsHeaderBloque : t.views.labelsHeaderDia}
         series={aSeries(views.series)}
         format="int"

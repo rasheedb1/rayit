@@ -197,6 +197,27 @@ export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
   return plain(dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zoneFor(iso, opts) }).format(utcDate(iso)));
 }
 
+/**
+ * Un rango de días en números, lo más corto posible y en el orden del
+ * locale: "26–30/8" en es-CO ("8/26–30" en en-US) dentro del mismo mes,
+ * "28/8–1/9" entre dos. Para la etiqueta de una barra que cubre varios
+ * días: cabe donde "26–30 ago" no, y el tooltip y la tabla dicen el
+ * rango exacto y no solo el primer día. Añadido por Resumen (RES-1).
+ */
+export function formatDayMonthRange(fromIso: string, toIso: string, opts: LocaleOpts = {}): string {
+  if (fromIso === toIso) return formatDayMonth(fromIso, opts);
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const zone = zoneFor(toIso, opts);
+  const a = utcDate(fromIso);
+  const b = utcDate(toIso);
+  if (zoneFor(fromIso, opts) === zone && sameMonthIn(a, b, zone)) {
+    const parts = dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zone }).formatToParts(b);
+    const desde = dayOfMonth(a, zone);
+    return plain(parts.map((p) => (p.type === "day" ? `${desde}–${p.value}` : p.value)).join(""));
+  }
+  return `${formatDayMonth(fromIso, opts)}–${formatDayMonth(toIso, opts)}`;
+}
+
 /** "2026-08-24", "2026-08-31" → "24–31 ago" · meses distintos → "28 ago – 3 sep". */
 export function formatDateRange(fromIso: string, toIso: string, opts: LocaleOpts = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
@@ -254,6 +275,7 @@ export function formatterFor(settings: FormatSettings) {
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
+    dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     daysRelative: formatDaysRelative,

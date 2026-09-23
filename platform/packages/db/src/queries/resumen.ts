@@ -92,7 +92,10 @@ export interface KpiSeries {
   /** null cuando no hay ninguna lectura con la que calcularlo. */
   value: number | null;
   previous: number | null;
-  /** Relativo: 0.31 = +31 %. null si el periodo anterior es cero o no existe. */
+  /**
+   * Relativo: 0.31 = +31 %. null si el periodo anterior es cero o no
+   * existe. Lo calcula Postgres (SQL_KPIS), no este archivo.
+   */
   delta: number | null;
   /** El tramo final sin huecos. Con menos de dos puntos, no se dibuja. */
   spark: number[];
@@ -155,7 +158,7 @@ export interface Bucket {
 
 export interface BucketSeries {
   buckets: Bucket[];
-  /** Cuántos días cubre cada bloque: 1, 4 o 10 (ver bucketStep). */
+  /** Cuántos días cubre cada bloque: 1, 5 o 10 (ver bucketStep). */
   step: number;
   series: PlatformSeries[];
   /** 'account': visualizaciones diarias de la cuenta. 'content': de lo publicado en cada bloque. */
@@ -167,18 +170,28 @@ export interface ConnectionFreshness {
   platformId: PlatformId;
   handle: string | null;
   displayName: string | null;
+  /** social_connection.status: 'active', 'expired', 'revoked', 'error', 'needs_reauth' o 'disabled'. */
   status: string;
   accessMode: string;
   /** ISO, o null si nunca se sincronizó. */
   lastSyncedAt: string | null;
   /** Último día cerrado de la serie de cuenta, 'YYYY-MM-DD'. */
   lastAccountDay: string | null;
-  /** Última lectura de contenido que NO vino de un CSV (API, agregador, a mano), ISO. */
-  lastSyncedReadingAt: string | null;
-  /** Última lectura importada por CSV, ISO. Una conexión OAuth también puede tenerla. */
-  lastCsvReadingAt: string | null;
+  /**
+   * Último día cerrado que cubre una lectura de contenido que NO vino de
+   * un CSV (API, agregador, a mano), 'YYYY-MM-DD'. Con la regla del
+   * reloj: una lectura tomada el día D (en UTC) cubre hasta D-1.
+   */
+  lastSyncedReadingDay: string | null;
+  /** Lo mismo para la última lectura importada por CSV. Una conexión OAuth también puede tenerla. */
+  lastCsvDay: string | null;
   /** El más reciente de los tres, 'YYYY-MM-DD'. null = sin ninguna lectura. */
   dataUntil: string | null;
+  /**
+   * Cuántos días va esta conexión por detrás del reloj del módulo (el
+   * último día cerrado del workspace). 0 = al día. null = sin lecturas.
+   */
+  daysBehind: number | null;
   tokenExpiringSoon: boolean;
 }
 
@@ -345,6 +358,12 @@ SELECT p.i, p.followers, p.views, p.no_seguidores, p.guardados_1k, p.posts, p.po
        a.views         AS views_prev,
        a.no_seguidores AS no_seguidores_prev,
        a.guardados_1k  AS guardados_1k_prev,
+       -- La variación relativa contra el periodo anterior, también aquí:
+       -- sin periodo anterior, o con un cero detrás, no hay variación.
+       CASE WHEN a.followers > 0     THEN p.followers::numeric / a.followers - 1 END AS followers_delta,
+       CASE WHEN a.views > 0         THEN p.views::numeric / a.views - 1         END AS views_delta,
+       CASE WHEN a.no_seguidores > 0 THEN p.no_seguidores / a.no_seguidores - 1  END AS no_seguidores_delta,
+       CASE WHEN a.guardados_1k > 0  THEN p.guardados_1k / a.guardados_1k - 1    END AS guardados_1k_delta,
        to_char((SELECT fin FROM ventana), 'YYYY-MM-DD')                 AS hasta,
        to_char((SELECT fin FROM ventana) - ($1::int - 1), 'YYYY-MM-DD') AS desde
 FROM punto p
@@ -365,6 +384,10 @@ interface FilaKpi {
   views_prev: string | number | null;
   no_seguidores_prev: string | null;
   guardados_1k_prev: string | null;
+  followers_delta: string | null;
+  views_delta: string | null;
+  no_seguidores_delta: string | null;
+  guardados_1k_delta: string | null;
   hasta: string;
   desde: string;
 }
@@ -376,14 +399,18 @@ function num(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function serie(
-  filas: FilaKpi[],
-  campo: 'followers' | 'views' | 'no_seguidores' | 'guardados_1k',
-  campoPrev: 'followers_prev' | 'views_prev' | 'no_seguidores_prev' | 'guardados_1k_prev',
-): KpiSeries {
+type CampoKpi = 'followers' | 'views' | 'no_seguidores' | 'guardados_1k';
+
+/**
+ * Las doce filas de SQL_KPIS → un KpiSeries. Aquí no se calcula nada:
+ * el valor, el del periodo anterior y la variación llegan hechos de
+ * Postgres; esto solo los convierte a número y recorta la sparkline.
+ */
+function serie(filas: FilaKpi[], campo: CampoKpi): KpiSeries {
   const ultima = filas[filas.length - 1];
   const value = ultima ? num(ultima[campo]) : null;
-  const previous = ultima ? num(ultima[campoPrev]) : null;
+  const previous = ultima ? num(ultima[`${campo}_prev`]) : null;
+  const delta = ultima ? num(ultima[`${campo}_delta`]) : null;
   // Solo el tramo FINAL sin huecos: una ventana que la historia no
   // cubre vuelve NULL, y unir los puntos por encima del hueco dibujaría
   // una subida que nunca pasó.
@@ -393,8 +420,6 @@ function serie(
     if (v === null) trasElUltimoHueco = i + 1;
   });
   const spark = puntos.slice(trasElUltimoHueco).filter((v): v is number => v !== null);
-  // Sin periodo anterior, o con un cero detrás, no hay variación que contar.
-  const delta = value !== null && previous !== null && previous !== 0 ? (value - previous) / previous : null;
   return { value, previous, delta, spark };
 }
 
@@ -415,15 +440,15 @@ export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Pr
     };
   }
   const ultima = rows[rows.length - 1]!;
-  const views = serie(rows, 'views', 'views_prev');
+  const views = serie(rows, 'views');
   return {
     end: ultima.hasta,
     start: ultima.desde,
-    followers: serie(rows, 'followers', 'followers_prev'),
+    followers: serie(rows, 'followers'),
     views,
     viewsSource: views.value === null ? null : ultima.hay_cuenta ? 'account' : 'content',
-    nonFollowerReach: { ...serie(rows, 'no_seguidores', 'no_seguidores_prev'), sample: ultima.posts_nf },
-    savesPer1k: { ...serie(rows, 'guardados_1k', 'guardados_1k_prev'), sample: ultima.posts_sv },
+    nonFollowerReach: { ...serie(rows, 'no_seguidores'), sample: ultima.posts_nf },
+    savesPer1k: { ...serie(rows, 'guardados_1k'), sample: ultima.posts_sv },
     posts: ultima.posts,
     hasAccountSeries: ultima.hay_cuenta,
   };
@@ -601,23 +626,28 @@ export async function getViewsByBucket(tx: WorkspaceTx, filter: ResumenFilter): 
 }
 
 /**
- * Cuántos días cubre cada barra. No es una regla estética: BarChart
- * etiqueta el eje x cada `ceil(n/8)` categorías Y ADEMÁS fuerza la
- * última, así que si la última no cae en esa rejilla sus dos etiquetas
- * se pisan. La condición es `(n - 1) % (n > 8 ? ceil(n / 8) : 1) === 0`,
- * y la comprueba `lastLabelOnGrid` en las pruebas.
+ * Cuántos días cubre cada barra. Dos condiciones, y las dos se prueban:
  *
- * Con doce barras de siete días —las doce semanas del mock— eso NO se
- * cumple: ceil(12/8) = 2 marca 0,2,4,6,8,10 y luego fuerza la 11. Subir
- * el número de etiquetas es cambiar la API del kit, así que lo que se
- * mueve es el número de barras:
+ *   1. Las barras cubren EXACTAMENTE el periodo: `dias % paso === 0`.
+ *      Con siete barras de cuatro días, el gráfico de «30 días» cubría
+ *      28 y su total no cuadraba con la tarjeta de visualizaciones de al
+ *      lado.
+ *   2. La última barra cae en la rejilla de etiquetas del kit. BarChart
+ *      etiqueta cada `ceil(n/8)` categorías Y ADEMÁS fuerza la última,
+ *      así que si esa no cae en la rejilla sus dos etiquetas se pisan:
+ *      `(n - 1) % (n > 8 ? ceil(n / 8) : 1) === 0` (lastLabelOnGrid).
  *
  *    7 días →  7 barras de un día      (n ≤ 8: se etiquetan todas)
- *   30 días →  7 barras de cuatro días (n ≤ 8: se etiquetan todas)
+ *   30 días →  6 barras de cinco días  (n ≤ 8: se etiquetan todas)
  *   90 días →  9 barras de diez días   (cada 2: 0,2,4,6,8 y 8 es la última)
+ *
+ * Las doce semanas del mock no cumplen NINGUNA de las dos: doce por
+ * siete son 84 días, no 90, y ceil(12/8) = 2 deja la 11 fuera de la
+ * rejilla. Para tenerlas, BarChart necesita decidir qué etiquetas
+ * pinta, y eso es cambiar la API del kit (pendiente con Nicolás).
  */
 export function bucketStep(days: Period): number {
-  return days >= 90 ? 10 : days >= 30 ? 4 : 1;
+  return days >= 90 ? 10 : days >= 30 ? 5 : 1;
 }
 
 /**
@@ -663,8 +693,20 @@ function buildSeries(filas: { label: string; platformId: PlatformId; value: numb
  * se le subió un CSV tiene que seguir enseñando cuándo sincronizó por
  * última vez el recolector. Mezclarlas tapaba justo lo que este aviso
  * existe para destapar: una sincronización rota.
+ *
+ * Las fechas salen como DÍA CERRADO y con la misma regla que el reloj
+ * del módulo (SQL_ULTIMO_DIA): una lectura tomada el día D, en UTC,
+ * cubre hasta D-1. Devolver el instante y dejar que la pantalla lo
+ * formatease daba otra fecha que el resto de la página: una importación
+ * a las 21:55 en Bogotá (02:55 UTC del día siguiente) salía como «datos
+ * hasta el 23» el 22, un día en el futuro para el creador y uno por
+ * delante del reloj.
+ *
+ * `dias_atras` compara cada conexión con ese mismo reloj: es lo que deja
+ * a la pantalla señalar la que se quedó atrás sin hacer cuentas.
  */
 const SQL_FRESCURA = `
+WITH reloj AS (SELECT ${SQL_ULTIMO_DIA} AS fin)
 SELECT h.id,
        h.platform_id,
        h.handle,
@@ -672,25 +714,26 @@ SELECT h.id,
        sc.access_mode,
        h.status,
        to_char(h.last_synced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_synced_at,
-       to_char(d.dia_cuenta, 'YYYY-MM-DD')                                         AS last_account_day,
-       to_char(l.sincronizada AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')    AS last_synced_reading_at,
-       to_char(l.csv AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')             AS last_csv_reading_at,
-       to_char(greatest(d.dia_cuenta,
-                        (l.sincronizada AT TIME ZONE 'UTC')::date,
-                        (l.csv AT TIME ZONE 'UTC')::date), 'YYYY-MM-DD')           AS data_until,
+       to_char(d.dia_cuenta, 'YYYY-MM-DD')   AS last_account_day,
+       to_char(l.dia_api, 'YYYY-MM-DD')      AS last_synced_reading_day,
+       to_char(l.dia_csv, 'YYYY-MM-DD')      AS last_csv_day,
+       to_char(u.hasta, 'YYYY-MM-DD')        AS data_until,
+       (r.fin - u.hasta)::int                AS dias_atras,
        h.token_expiring_soon
 FROM connection_health h
 JOIN social_connection sc ON sc.id = h.id AND sc.deleted_at IS NULL
+CROSS JOIN reloj r
 CROSS JOIN LATERAL (
   SELECT max(a.day) AS dia_cuenta FROM account_metric_snapshot a WHERE a.connection_id = h.id
 ) d
 CROSS JOIN LATERAL (
-  SELECT max(s.captured_at) FILTER (WHERE s.source <> 'csv_import') AS sincronizada,
-         max(s.captured_at) FILTER (WHERE s.source =  'csv_import') AS csv
+  SELECT (max(s.captured_at) FILTER (WHERE s.source <> 'csv_import') AT TIME ZONE 'UTC')::date - 1 AS dia_api,
+         (max(s.captured_at) FILTER (WHERE s.source =  'csv_import') AT TIME ZONE 'UTC')::date - 1 AS dia_csv
   FROM post_metric_snapshot s
   JOIN post p ON p.id = s.post_id
   WHERE p.connection_id = h.id
 ) l
+CROSS JOIN LATERAL (SELECT greatest(d.dia_cuenta, l.dia_api, l.dia_csv) AS hasta) u
 WHERE ($1::text IS NULL OR h.platform_id = $1::text)
 ORDER BY h.platform_id, h.handle NULLS LAST`;
 
@@ -703,8 +746,8 @@ export async function getFreshnessByConnection(
   const { rows } = await tx.query<{
     id: string; platform_id: PlatformId; handle: string | null; display_name: string | null; access_mode: string;
     status: string; last_synced_at: string | null; last_account_day: string | null;
-    last_synced_reading_at: string | null; last_csv_reading_at: string | null; data_until: string | null;
-    token_expiring_soon: boolean | null;
+    last_synced_reading_day: string | null; last_csv_day: string | null; data_until: string | null;
+    dias_atras: number | null; token_expiring_soon: boolean | null;
   }>(SQL_FRESCURA, [filter.platform ?? null]);
   return rows.map((r) => ({
     connectionId: r.id,
@@ -715,9 +758,10 @@ export async function getFreshnessByConnection(
     accessMode: r.access_mode,
     lastSyncedAt: r.last_synced_at,
     lastAccountDay: r.last_account_day,
-    lastSyncedReadingAt: r.last_synced_reading_at,
-    lastCsvReadingAt: r.last_csv_reading_at,
+    lastSyncedReadingDay: r.last_synced_reading_day,
+    lastCsvDay: r.last_csv_day,
     dataUntil: r.data_until,
+    daysBehind: r.dias_atras,
     tokenExpiringSoon: r.token_expiring_soon === true,
   }));
 }
@@ -777,7 +821,8 @@ export type CsvImportErrorCode =
   | 'no_creator'
   | 'empty_batch'
   | 'duplicate_ids'
-  | 'empty_handle';
+  | 'empty_handle'
+  | 'invalid_captured_at';
 
 export class CsvImportError extends Error {
   readonly code: CsvImportErrorCode;
@@ -961,20 +1006,39 @@ export interface CsvImportResult {
   knownPosts: number;
   /** Filas escritas en post_metric_snapshot. */
   readings: number;
+  /**
+   * Filas que NO se escribieron porque el video ya tenía una lectura
+   * igual de reciente o más: un archivo exportado antes que el último
+   * que se subió, o una conexión OAuth que ya leyó ese video después.
+   */
+  staleReadings: number;
   /** ISO del captured_at con el que entraron todas. */
   capturedAt: string;
 }
 
 /**
- * Escribe el lote: un post por fila nueva y SIEMPRE una lectura.
- * `age_hours` sale de la propia base —captured_at menos published_at—,
- * no del navegador: es la columna que hace comparables dos videos
- * publicados en momentos distintos y no puede depender del reloj de
- * quien sube el archivo.
+ * Escribe el lote: un post por fila nueva y, si no hay ya una más
+ * reciente, una lectura. `age_hours` sale de la propia base
+ * —captured_at menos published_at—, no del navegador.
+ *
+ * `capturedAt` es CUÁNDO SE EXPORTÓ el archivo, no cuándo se importa:
+ * un archivo exportado el 1 de septiembre y subido el 20 describe los
+ * videos como estaban el 1, y con el reloj de la importación cada video
+ * parecía 19 días más viejo al leerse. Sin `capturedAt` —un archivo
+ * exportado hoy— vale now() de la base, al microsegundo.
+ *
+ * Una lectura que llega más vieja que la última del video NO se
+ * escribe: se cuenta en `staleReadings`. Las lecturas son append-only y
+ * post_metrics_latest se queda con la de captured_at más alto, así que
+ * escribirla no cambiaría la «última», pero sí contaría como importada
+ * algo que no aporta nada. Y el reloj del módulo nunca retrocede.
  *
  * Es API pública de @mc/db, así que se protege sola y no confía en que
  * quien llama haya pasado por la revisión de la pantalla:
  *   - el id de la cuenta se valida con isUuid antes de consultar;
+ *   - `capturedAt` tiene que ser un instante, no del futuro y no
+ *     anterior a ningún video del lote (una lectura de antes de
+ *     publicar no existe);
  *   - un lote con el mismo externalPostId dos veces se RECHAZA entero:
  *     serían dos lecturas del mismo video con el mismo captured_at, y
  *     no hay forma honesta de elegir cuál vale;
@@ -983,7 +1047,7 @@ export interface CsvImportResult {
  */
 export async function importCsvReadings(
   tx: WorkspaceTx,
-  input: { connectionId: string; platform: PlatformId; rows: readonly CsvReading[] },
+  input: { connectionId: string; platform: PlatformId; rows: readonly CsvReading[]; capturedAt?: string },
 ): Promise<CsvImportResult> {
   assertPlatform(input.platform);
   if (!isUuid(input.connectionId)) throw new CsvImportError('invalid_connection', input.connectionId);
@@ -993,6 +1057,14 @@ export async function importCsvReadings(
   if (distintos.size !== ids.length) {
     const repetidos = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
     throw new CsvImportError('duplicate_ids', repetidos.slice(0, 5).join(', '));
+  }
+  if (input.capturedAt !== undefined) {
+    const instante = Date.parse(input.capturedAt);
+    const ultimoPublicado = Math.max(...input.rows.map((f) => Date.parse(f.publishedAt)));
+    // Un minuto de margen para los relojes de la máquina y de la base.
+    if (!Number.isFinite(instante) || instante > Date.now() + 60_000 || instante < ultimoPublicado) {
+      throw new CsvImportError('invalid_captured_at', input.capturedAt);
+    }
   }
 
   // La cuenta de destino se comprueba ANTES que nada: es la frontera
@@ -1006,14 +1078,15 @@ export async function importCsvReadings(
 
   // Un solo captured_at para todo el lote: las lecturas de un mismo
   // archivo son la misma foto, y así age_hours queda coherente entre ellas.
-  // Con microsegundos, no con segundos: dos importaciones del mismo
-  // archivo en el mismo segundo empataban en captured_at, y la «última
-  // lectura» de post_metrics_latest (DISTINCT ON … ORDER BY captured_at)
-  // pasaba a ser cualquiera de las dos.
-  const { rows: reloj } = await tx.query<{ ahora: string }>(
-    `SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ahora`,
+  // Sin fecha de exportación, now() con microsegundos y no con segundos:
+  // dos importaciones del mismo archivo en el mismo segundo empataban en
+  // captured_at, y la «última lectura» de post_metrics_latest (DISTINCT
+  // ON … ORDER BY captured_at) pasaba a ser cualquiera de las dos.
+  const { rows: reloj } = await tx.query<{ instante: string }>(
+    `SELECT to_char(COALESCE($1::timestamptz, now()) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS instante`,
+    [input.capturedAt ?? null],
   );
-  const capturedAt = reloj[0]!.ahora;
+  const capturedAt = reloj[0]!.instante;
 
   // jsonb_to_recordset casa por NOMBRE de campo, así que el lote viaja
   // con las claves de la tabla (snake_case), no con las del tipo.
@@ -1048,7 +1121,11 @@ export async function importCsvReadings(
     [creador, input.connectionId, input.platform, datos],
   );
 
-  const { rows: escritas } = await tx.query<{ n: number }>(
+  // El NOT EXISTS es la regla de «nunca hacia atrás»: si el video ya
+  // tiene una lectura de este instante o posterior, esta no entra. El
+  // conteo de `emparejadas` ve la tabla ANTES del INSERT (así funcionan
+  // las CTE que escriben), que es justo lo que se quiere comparar.
+  const { rows: escritas } = await tx.query<{ n: number; emparejadas: number }>(
     `WITH entrada AS (
        SELECT * FROM jsonb_to_recordset($3::jsonb) AS f(
          external_post_id text, published_at timestamptz, views bigint, reach bigint, likes bigint,
@@ -1069,19 +1146,27 @@ export async function importCsvReadings(
               'csv_import'
        FROM entrada e
        JOIN post p ON p.connection_id = $1 AND p.external_post_id = e.external_post_id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = p.id AND s.captured_at >= $2::timestamptz
+       )
        RETURNING 1
      )
-     SELECT count(*)::int AS n FROM escritas`,
+     SELECT (SELECT count(*) FROM escritas)::int AS n,
+            (SELECT count(*) FROM entrada e
+               JOIN post p ON p.connection_id = $1 AND p.external_post_id = e.external_post_id)::int AS emparejadas`,
     [input.connectionId, capturedAt, datos],
   );
+  const escritasN = escritas[0]?.n ?? 0;
 
   // Solo una cuenta importada queda "sincronizada" al momento del
   // archivo. Una conexión OAuth NO: su last_synced_at es la última vez
   // que el recolector habló con la API, y moverlo aquí tapaba una
   // sincronización rota en connection_health y en Conexiones. La
   // frescura del contenido importado ya sale de post_metric_snapshot.
+  // Y nunca hacia atrás: un archivo viejo no hace parecer más vieja la
+  // última sincronización (greatest ignora el NULL de la primera vez).
   await tx.query(
-    `UPDATE social_connection SET last_synced_at = $2::timestamptz
+    `UPDATE social_connection SET last_synced_at = greatest(last_synced_at, $2::timestamptz)
       WHERE id = $1 AND access_mode = 'manual_csv'`,
     [input.connectionId, capturedAt],
   );
@@ -1089,7 +1174,8 @@ export async function importCsvReadings(
   return {
     newPosts: nuevos.length,
     knownPosts: ids.length - nuevos.length,
-    readings: escritas[0]?.n ?? 0,
+    readings: escritasN,
+    staleReadings: (escritas[0]?.emparejadas ?? 0) - escritasN,
     capturedAt,
   };
 }

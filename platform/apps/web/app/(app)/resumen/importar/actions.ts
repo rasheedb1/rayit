@@ -15,7 +15,17 @@ import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../messages";
 import { CAMPOS, type Campo, type Mapeo } from "./_lib/formatos";
-import { ErrorCsv, faltantesDelMapeo, leerCsv, MAX_BYTES, MAX_FILAS, revisar } from "./_lib/csv";
+import {
+  ErrorCsv,
+  faltantesDelMapeo,
+  instanteDeCaptura,
+  leerCsv,
+  MAX_BYTES,
+  MAX_FILAS,
+  MAX_ID,
+  revisar,
+  validarFechaExportacion,
+} from "./_lib/csv";
 
 /**
  * La escritura de la importación por CSV.
@@ -54,6 +64,12 @@ const esquema = z.object({
   mapeo: z.record(z.string(), z.string().min(1)),
   /** El orden de fechas que eligió la persona cuando el archivo no lo demuestra. */
   ordenFechas: z.enum(["dm", "md"]).optional(),
+  /**
+   * El día en que se exportó el archivo, 'YYYY-MM-DD' en la zona del
+   * workspace. Es el momento de la lectura. Sin él, hoy: el asistente
+   * siempre lo manda; un POST a mano puede no hacerlo.
+   */
+  fechaExportacion: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export type ResultadoAccion = { ok: true; resultado: CsvImportResult } | { ok: false; error: string };
@@ -80,7 +96,7 @@ function mensajeDe(err: unknown): string {
 
 const esquemaConocidos = z.object({
   connectionId: z.string().regex(UUID_RE),
-  ids: z.array(z.string().min(1).max(256)).max(MAX_FILAS),
+  ids: z.array(z.string().min(1).max(MAX_ID)).max(MAX_FILAS),
 });
 
 export type ResultadoConocidos = { ok: true; ids: string[] } | { ok: false };
@@ -110,7 +126,7 @@ export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
   const t = MESSAGES.importar.error;
   const parsed = esquema.safeParse(entrada);
   if (!parsed.success) return { ok: false, error: t.generico };
-  const { texto, red, connectionId, handleNuevo, ordenFechas } = parsed.data;
+  const { texto, red, connectionId, handleNuevo, ordenFechas, fechaExportacion } = parsed.data;
   if (Buffer.byteLength(texto, "utf8") > MAX_BYTES) return { ok: false, error: t.demasiadoGrande(MEGAS) };
   if (!connectionId && !handleNuevo) return { ok: false, error: t.sinCuenta };
 
@@ -118,22 +134,33 @@ export async function importarCsv(entrada: unknown): Promise<ResultadoAccion> {
   if (faltantesDelMapeo(mapeo).length > 0) return { ok: false, error: t.sinMapeo };
 
   let filas;
+  let timeZone;
   try {
     const ws = await getCurrentWorkspace();
+    timeZone = ws.timezone;
     const tabla = leerCsv(texto);
-    filas = revisar(tabla, mapeo, { timeZone: ws.timezone, locale: ws.locale, ordenFechas }).listas;
+    filas = revisar(tabla, mapeo, { timeZone, locale: ws.locale, ordenFechas }).listas;
   } catch (err) {
     if (!(err instanceof ErrorCsv)) console.error("[resumen/importar] no se pudo leer el archivo", err);
     return { ok: false, error: mensajeDe(err) };
   }
   if (filas.length === 0) return { ok: false, error: t.sinFilas };
 
+  // La fecha de la exportación se vuelve a validar aquí, con las filas
+  // que de verdad se van a escribir y el reloj del servidor.
+  let capturedAt: string | undefined;
+  if (fechaExportacion) {
+    const opcionesFecha = { timeZone, listas: filas };
+    if (validarFechaExportacion(fechaExportacion, opcionesFecha)) return { ok: false, error: t.fechaExportacion };
+    capturedAt = instanteDeCaptura(fechaExportacion, opcionesFecha);
+  }
+
   try {
     const resultado = await withWorkspace(async (tx) => {
       // La cuenta y las lecturas, en la MISMA transacción: si la
       // escritura falla, no queda una cuenta vacía por ahí.
       const destino = connectionId ?? (await ensureCsvConnection(tx, { platform: red, handle: handleNuevo! })).connectionId;
-      return importCsvReadings(tx, { connectionId: destino, platform: red, rows: filas });
+      return importCsvReadings(tx, { connectionId: destino, platform: red, rows: filas, capturedAt });
     });
     revalidatePath("/resumen");
     return { ok: true, resultado };

@@ -11,11 +11,16 @@ import {
   faltantesDelMapeo,
   analizarFechas,
   idDesdeUrl,
+  instanteDeCaptura,
   leerCsv,
   MAX_BYTES,
   ordenPorLocale,
+  proponerFechaExportacion,
   revisar,
+  urlSegura,
+  validarFechaExportacion,
 } from "./csv";
+import type { CsvReading } from "@mc/db/queries/resumen";
 import { mapearPorAlias, normalizar } from "./formatos";
 
 /**
@@ -101,6 +106,33 @@ describe("celdas", () => {
     expect(aFechaIso("25/12/2026", BOGOTA, "dm")).toBe(aFechaIso("2026-12-25", BOGOTA));
     expect(aFechaIso("31/02/2026", BOGOTA, "dm")).toBeNull(); // no existe
     expect(aFechaIso("10/45/2026", BOGOTA)).toBeNull();
+  });
+
+  it("entiende el mes en texto, en inglés y en español", () => {
+    const cinco = aFechaIso("2026-09-05", BOGOTA);
+    expect(aFechaIso("Sep 5, 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("September 5, 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("5 sept 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("5 sept. 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("5 sep 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("5 de septiembre de 2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("05-Sep-2026", BOGOTA)).toBe(cinco);
+    expect(aFechaIso("1 ene 2026", BOGOTA)).toBe(aFechaIso("2026-01-01", BOGOTA));
+    expect(aFechaIso("Dec 31, 2025", BOGOTA)).toBe(aFechaIso("2025-12-31", BOGOTA));
+    // Con hora, en los dos relojes.
+    expect(aFechaIso("Sep 5, 2026, 7:30 PM", "UTC")).toBe("2026-09-05T19:30:00.000Z");
+    expect(aFechaIso("5 de septiembre de 2026 19:30", "UTC")).toBe("2026-09-05T19:30:00.000Z");
+    // Un mes que no existe, o un día imposible, no se adivina.
+    expect(aFechaIso("Smarch 5, 2026", BOGOTA)).toBeNull();
+    expect(aFechaIso("31 feb 2026", BOGOTA)).toBeNull();
+  });
+
+  it("entiende el año de dos cifras y el ISO con fracción de segundo", () => {
+    // Lo que deja Excel en en-US al volver a guardar.
+    expect(aFechaIso("9/5/26 19:30", "UTC", "md")).toBe("2026-09-05T19:30:00.000Z");
+    expect(analizarFechas(["9/5/26 19:30", "9/14/26 10:00"]).orden).toBe("md");
+    expect(aFechaIso("2026-09-05T19:30:00.123Z", BOGOTA)).toBe("2026-09-05T19:30:00.123Z");
+    expect(aFechaIso("2026-09-05 19:30:00.123", "UTC")).toBe("2026-09-05T19:30:00.000Z");
   });
 
   it("entiende el reloj de 12 horas y no ignora lo que no entiende", () => {
@@ -214,21 +246,80 @@ describe("TikTok Studio", () => {
   });
 });
 
-describe("YouTube Studio", () => {
+describe("YouTube Studio (Table data.csv, tal como sale)", () => {
   const { tabla, deteccion, mapeo } = analizar(fixture("youtube-studio.csv"));
 
-  it("usa Content como identificador y la fecha sin hora", () => {
+  it("usa Content como identificador y lee «Sep 5, 2026»", () => {
     expect(deteccion.formato?.red).toBe("youtube");
     expect(mapeo.externalPostId).toBe("Content");
     expect(mapeo.followsFromPost).toBe("Subscribers");
+    expect(mapeo.durationS).toBe("Duration");
     const r = revisar(tabla, mapeo, { timeZone: BOGOTA });
     expect(r.errores).toBe(0);
+    expect(r.listas).toHaveLength(3);
     expect(r.listas[0]).toMatchObject({
       externalPostId: "dQw4w9WgXc1",
+      // Sin hora: mediodía en la zona del workspace.
       publishedAt: "2026-09-05T17:00:00.000Z",
       views: 41820,
       followsFromPost: 318,
+      durationS: 58,
     });
+  });
+
+  it("la fila «Total» bajo los encabezados se descarta sin contarla como error", () => {
+    const r = revisar(tabla, mapeo, { timeZone: BOGOTA });
+    expect(r.filasTotales).toBe(1);
+    expect(r.filas).toHaveLength(3);
+    expect(r.filas.every((f) => f.lectura !== null)).toBe(true);
+    // Las filas conservan su número en el archivo: la primera de datos es la 2.
+    expect(r.filas[0]!.fila).toBe(2);
+    expect(r.avisos).toBe(0);
+  });
+
+  it("también con el «Totales» en otra columna: una fila sin id ni fecha que lo dice", () => {
+    const t = leerCsv("Título,Fecha,Id,Vistas\nUno,2026-09-05,a1,10\nTotales,,,10\n");
+    const r = revisar(t, { title: "Título", publishedAt: "Fecha", externalPostId: "Id", views: "Vistas" }, { timeZone: BOGOTA });
+    expect(r.filasTotales).toBe(1);
+    expect(r.errores).toBe(0);
+  });
+});
+
+describe("Instagram Insights tal como lo escribe Meta Business Suite", () => {
+  // Fechas en mes/día («09/03/2026 15:04») y «Reach» en vez de
+  // «Accounts reached». Ninguna fecha pasa de 12: el archivo no
+  // demuestra su orden, y el formato manda antes que el workspace.
+  const { tabla, deteccion, mapeo } = analizar(fixture("instagram-insights-meta.csv"));
+
+  it("se detecta como Instagram, propone mes/día y mapea Reach como alcance", () => {
+    expect(deteccion.formato?.id).toBe("instagram_meta");
+    expect(deteccion.formato?.ordenFechas).toBe("md");
+    expect(mapeo.reach).toBe("Reach");
+    expect(mapeo.publishedAt).toBe("Publish time");
+    expect(analizarFechas(tabla.filas.map((f) => f["Publish time"]!)).orden).toBeNull();
+  });
+
+  it("con el orden del formato, el 09/03 es el 3 de septiembre y no el 9 de marzo", () => {
+    const r = revisar(tabla, mapeo, { timeZone: BOGOTA, locale: "es-CO", ordenFechas: deteccion.formato?.ordenFechas });
+    expect(r.errores).toBe(0);
+    expect(r.listas.map((l) => l.publishedAt)).toEqual([
+      "2026-09-03T20:04:00.000Z",
+      "2026-09-05T17:30:00.000Z",
+      "2026-09-10T23:00:00.000Z",
+    ]);
+    expect(r.listas[0]!.reach).toBe(9310);
+  });
+
+  it("propone como fecha de exportación el día del informe, leído con el mismo orden", () => {
+    const r = revisar(tabla, mapeo, { timeZone: BOGOTA, ordenFechas: "md" });
+    const propuesta = proponerFechaExportacion(tabla, mapeo, {
+      timeZone: BOGOTA,
+      listas: r.listas,
+      nombreArchivo: "Instagram.csv",
+      ordenFechas: "md",
+      ahora: Date.parse("2026-09-22T15:00:00Z"),
+    });
+    expect(propuesta).toEqual({ fecha: "2026-09-12", origen: "columna", columna: "Date" });
   });
 });
 
@@ -366,6 +457,132 @@ describe("filas sucias", () => {
     expect(sinId.crudo.title).toBe("Sin id y sin enlace");
     const malaFecha = r.filas.find((f) => f.fila === 3)!;
     expect(malaFecha.crudo.externalPostId).toBe("ig_mala_fecha");
+  });
+});
+
+describe("celdas fuera de lo posible", () => {
+  const cabecera = "Post ID,Description,Publish time,Permalink,Views,Duration (sec)";
+  const revisarUna = (fila: string) => {
+    const t = leerCsv(`${cabecera}\n${fila}\n`);
+    return revisar(t, mapearPorAlias(t.encabezados), { timeZone: BOGOTA });
+  };
+
+  it("una cifra enorme es un aviso de esa fila, no un fallo de la importación entera", () => {
+    const r = revisarUna("ig_1,Enorme,2026-09-10 15:04,https://www.instagram.com/reel/A/,99999999999999999999999,30");
+    expect(r.listas[0]!.views).toBeNull();
+    expect(r.filas[0]!.problemas).toContainEqual(
+      expect.objectContaining({ codigo: "fueraDeRango", campo: "views", gravedad: "aviso" }),
+    );
+    expect(r.errores).toBe(0);
+    // Y una duración que no cabe en la columna (numeric(8,2)) tampoco.
+    const d = revisarUna("ig_2,Larga,2026-09-10 15:04,https://www.instagram.com/reel/B/,10,1000000");
+    expect(d.listas[0]!.durationS).toBeNull();
+    expect(d.filas[0]!.problemas[0]?.codigo).toBe("fueraDeRango");
+  });
+
+  it("solo guarda enlaces http o https", () => {
+    const r = revisarUna("ig_3,Enlace raro,2026-09-10 15:04,javascript:alert(1),10,30");
+    expect(r.listas[0]!.url).toBeNull();
+    expect(r.filas[0]!.problemas[0]).toMatchObject({ codigo: "enlaceInvalido", gravedad: "aviso" });
+    expect(urlSegura("https://www.tiktok.com/@x/video/1")).toBe("https://www.tiktok.com/@x/video/1");
+    expect(urlSegura("www.tiktok.com/@x/video/1")).toBe("https://www.tiktok.com/@x/video/1");
+    expect(urlSegura("data:text/html,hola")).toBeNull();
+    expect(urlSegura("ftp://ejemplo.com/a")).toBeNull();
+  });
+
+  it("un enlace inválido no presta su último tramo como identificador", () => {
+    const t = leerCsv("Video link,Post time,Total views\njavascript:alert(1),2026-09-10 15:04,10\n");
+    const r = revisar(t, mapearPorAlias(t.encabezados), { timeZone: BOGOTA });
+    expect(r.listas).toHaveLength(0);
+    expect(r.filas[0]!.problemas.map((p) => p.codigo)).toEqual(["enlaceInvalido", "sinId"]);
+  });
+
+  it("recorta el título a 2 200 caracteres y rechaza un id de más de 256", () => {
+    const largo = "a".repeat(5000);
+    const r = revisarUna(`ig_4,${largo},2026-09-10 15:04,https://www.instagram.com/reel/C/,10,30`);
+    expect(r.listas[0]!.title).toHaveLength(2200);
+    // Lo que se enseña en la revisión tampoco es el texto entero.
+    expect(r.filas[0]!.crudo.title!.length).toBeLessThanOrEqual(81);
+
+    const id = revisarUna(`${"x".repeat(257)},Id largo,2026-09-10 15:04,https://www.instagram.com/reel/D/,10,30`);
+    expect(id.listas).toHaveLength(0);
+    expect(id.filas[0]!.problemas[0]).toMatchObject({ codigo: "idDemasiadoLargo", gravedad: "error" });
+  });
+
+  it("una fecha medio año antes que el resto, en un archivo que no demuestra su orden, lleva aviso", () => {
+    const t = leerCsv("Post ID,Publish time,Views\na,10/09/2026 10:00,1\nb,11/09/2026 10:00,1\nc,12/09/2026 10:00,1\nd,01/03/2026 10:00,1\n");
+    const r = revisar(t, mapearPorAlias(t.encabezados), { timeZone: BOGOTA, ordenFechas: "dm" });
+    // Tres del 10 al 12 de septiembre y una del 1 de marzo: esa se señala, sin bloquearla.
+    expect(r.filas.find((f) => f.fila === 4)!.problemas.map((p) => p.codigo)).toEqual(["fechaLejana"]);
+    expect(r.listas).toHaveLength(4);
+    expect(r.filas.filter((f) => f.problemas.length > 0)).toHaveLength(1);
+  });
+
+  it("si en el otro orden las fechas se juntan en días, el archivo entero lo avisa", () => {
+    // Un archivo de Meta (mes/día) de los primeros días del mes, leído
+    // día/mes: 9 de marzo, 9 de mayo y 9 de octubre. En mes/día, del 3
+    // al 10 de septiembre.
+    const t = leerCsv("Post ID,Publish time,Views\na,09/03/2026 10:00,1\nb,09/05/2026 10:00,1\nc,09/08/2026 10:00,1\n");
+    const dm = revisar(t, mapearPorAlias(t.encabezados), { timeZone: BOGOTA, ordenFechas: "dm" });
+    expect(dm.ordenAlternativo).toBe("md");
+    const md = revisar(t, mapearPorAlias(t.encabezados), { timeZone: BOGOTA, ordenFechas: "md" });
+    expect(md.ordenAlternativo).toBeNull();
+    expect(md.avisos).toBe(0);
+  });
+});
+
+describe("la fecha de la exportación", () => {
+  const AHORA = Date.parse("2026-09-22T15:00:00Z"); // las 10:00 en Bogotá
+  const lectura = (externalPostId: string, publishedAt: string): CsvReading => ({
+    externalPostId,
+    publishedAt,
+    mediaType: "video",
+    title: null,
+    url: null,
+    durationS: null,
+    views: 1,
+    reach: null,
+    likes: null,
+    comments: null,
+    shares: null,
+    saves: null,
+    followsFromPost: null,
+    reachNonFollowers: null,
+  });
+
+  it("propone, en orden: la columna del informe, la fecha del nombre del archivo y hoy", () => {
+    const t = leerCsv("Post ID,Publish time,Views\nx,2026-09-01 10:00,1\n");
+    const mapeo = mapearPorAlias(t.encabezados);
+    const base = { timeZone: BOGOTA, listas: [lectura("x", "2026-09-01T15:00:00.000Z")], ordenFechas: "dm" as const, ahora: AHORA };
+    // YouTube nombra el archivo con el rango: manda dónde acaba.
+    expect(proponerFechaExportacion(t, mapeo, { ...base, nombreArchivo: "Content 2026-08-01_2026-09-15 Laura.csv" })).toEqual({
+      fecha: "2026-09-15",
+      origen: "nombreArchivo",
+    });
+    expect(proponerFechaExportacion(t, mapeo, { ...base, nombreArchivo: "export_20260910.csv" }).fecha).toBe("2026-09-10");
+    expect(proponerFechaExportacion(t, mapeo, { ...base, nombreArchivo: "datos.csv" })).toEqual({ fecha: "2026-09-22", origen: "hoy" });
+    // Una fecha del nombre imposible (anterior a un video del archivo) no se propone.
+    expect(proponerFechaExportacion(t, mapeo, { ...base, nombreArchivo: "export 2026-08-20.csv" }).origen).toBe("hoy");
+  });
+
+  it("vale de hoy hacia atrás, y nunca antes del último video del archivo", () => {
+    const opts = { timeZone: BOGOTA, listas: [lectura("x", "2026-09-10T20:00:00.000Z")], ahora: AHORA };
+    expect(validarFechaExportacion("2026-09-22", opts)).toBeNull();
+    expect(validarFechaExportacion("2026-09-10", opts)).toBeNull();
+    expect(validarFechaExportacion("2026-09-23", opts)).toBe("futura");
+    expect(validarFechaExportacion("2026-09-09", opts)).toBe("anteriorAPublicacion");
+    expect(validarFechaExportacion("2026-02-31", opts)).toBe("ilegible");
+    expect(validarFechaExportacion("", opts)).toBe("ilegible");
+  });
+
+  it("hoy es «ahora» (lo pone la base); otro día, su mediodía, sin quedar antes de un video", () => {
+    const opts = { timeZone: BOGOTA, listas: [lectura("x", "2026-09-10T20:00:00.000Z")], ahora: AHORA };
+    expect(instanteDeCaptura("2026-09-22", opts)).toBeUndefined();
+    // Mediodía en Bogotá son las 17:00 UTC: el mismo día en UTC.
+    expect(instanteDeCaptura("2026-09-15", opts)).toBe("2026-09-15T17:00:00.000Z");
+    // Publicado el 10 a las 15:00 de Bogotá y exportado ese mismo día:
+    // la lectura no puede ser de antes de publicarlo.
+    expect(instanteDeCaptura("2026-09-10", opts)).toBe("2026-09-10T20:00:00.000Z");
   });
 });
 

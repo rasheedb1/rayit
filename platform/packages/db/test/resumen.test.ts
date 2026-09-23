@@ -116,6 +116,9 @@ describe('Resumen · los cuatro KPIs', () => {
     assert.equal(kpis.followers.spark.length, 12);
     assert.equal(kpis.followers.spark.at(-1), kpis.followers.value);
     assert.equal(kpis.followers.spark[0], kpis.followers.previous);
+    // La variación llega hecha de Postgres y cuadra con el valor y el anterior.
+    assert.ok(Math.abs(kpis.followers.delta! - (kpis.followers.value! / kpis.followers.previous! - 1)) < 1e-9);
+    assert.ok(kpis.savesPer1k.delta === null || Number.isFinite(kpis.savesPer1k.delta));
 
     // El mock: ~2,6 M de visualizaciones en treinta días, de la cuenta.
     assert.ok(kpis.views.value! > 2_000_000 && kpis.views.value! < 3_500_000);
@@ -214,13 +217,13 @@ describe('Resumen · las dos series', () => {
 
   test('visualizaciones por bloque: el paso lo marca el periodo y el último bloque está completo', async () => {
     assert.equal(bucketStep(7), 1);
-    assert.equal(bucketStep(30), 4);
+    assert.equal(bucketStep(30), 5);
     assert.equal(bucketStep(90), 10);
 
     const mes = await enLaura((tx) => getViewsByBucket(tx, { days: 30 }));
-    assert.equal(mes.step, 4);
+    assert.equal(mes.step, 5);
     assert.equal(mes.source, 'account');
-    assert.equal(mes.buckets.length, 7);
+    assert.equal(mes.buckets.length, 6);
 
     const trimestre = await enLaura((tx) => getViewsByBucket(tx, { days: 90 }));
     assert.equal(trimestre.step, 10);
@@ -246,6 +249,19 @@ describe('Resumen · las dos series', () => {
         lastLabelOnGrid(serie.buckets.length),
         `con ${days} días salen ${serie.buckets.length} barras y la última etiqueta se pisa con la anterior`,
       );
+    }
+  });
+
+  test('las barras cubren exactamente el periodo: el gráfico y la tarjeta cuentan los mismos días', async () => {
+    for (const days of [7, 30, 90] as const) {
+      assert.equal(days % bucketStep(days), 0, `${days} días no se reparten en barras de ${bucketStep(days)}`);
+      const serie = await enLaura((tx) => getViewsByBucket(tx, { days }));
+      const kpis = await enLaura((tx) => getResumenKpis(tx, { days }));
+      assert.equal(serie.buckets[0]!.start, kpis.start, `con ${days} días el gráfico empieza otro día que la tarjeta`);
+      assert.equal(serie.buckets.at(-1)!.end, kpis.end);
+      // Y suman lo mismo: el total de las barras ES la cifra de la tarjeta.
+      const total = serie.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0);
+      assert.equal(total, kpis.views.value, `con ${days} días las barras y la tarjeta no cuadran`);
     }
   });
 
@@ -289,9 +305,12 @@ describe('Resumen · frescura y cobertura', () => {
     assert.equal(filas.length, 4);
     for (const f of filas) {
       assert.match(f.lastAccountDay!, /^\d{4}-\d{2}-\d{2}$/);
-      assert.ok(f.lastSyncedReadingAt, 'el seed trae lecturas de la API');
-      assert.equal(f.lastCsvReadingAt, null);
+      assert.match(f.lastSyncedReadingDay!, /^\d{4}-\d{2}-\d{2}$/, 'el seed trae lecturas de la API');
+      assert.equal(f.lastCsvDay, null);
       assert.match(f.dataUntil!, /^\d{4}-\d{2}-\d{2}$/);
+      // Todas al día con el reloj del módulo, o casi.
+      assert.ok(f.daysBehind !== null && f.daysBehind >= 0 && f.daysBehind <= 2, `daysBehind = ${f.daysBehind}`);
+      assert.equal(f.status, 'active');
       assert.ok(f.lastSyncedAt);
     }
     // El seed deja el token de YouTube a punto de vencer: connection_health lo marca.
@@ -371,8 +390,8 @@ describe('Resumen · un workspace que SOLO importó CSV', () => {
     const frescura = await enSoloCsv((tx) => getFreshnessByConnection(tx));
     assert.equal(frescura.length, 1);
     assert.equal(frescura[0]!.lastAccountDay, null);
-    assert.equal(frescura[0]!.lastSyncedReadingAt, null);
-    assert.ok(frescura[0]!.lastCsvReadingAt);
+    assert.equal(frescura[0]!.lastSyncedReadingDay, null);
+    assert.match(frescura[0]!.lastCsvDay!, /^\d{4}-\d{2}-\d{2}$/);
     assert.match(frescura[0]!.dataUntil!, /^\d{4}-\d{2}-\d{2}$/);
   });
 });
@@ -534,7 +553,7 @@ describe('Resumen · importación por CSV', () => {
 
     const frescura = await enLaura((tx) => getFreshnessByConnection(tx, { platform: 'facebook' }));
     const importada = frescura.find((f) => f.connectionId === cuenta.connectionId);
-    assert.ok(importada?.lastCsvReadingAt);
+    assert.ok(importada?.lastCsvDay);
     assert.ok(importada?.dataUntil);
   });
 
@@ -585,10 +604,10 @@ describe('Resumen · importación por CSV', () => {
     const frescura = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === oauth.connectionId)!;
     // Las dos fuentes, por separado: la de la API no cambió; la del CSV aparece.
     assert.equal(frescura.lastSyncedAt, frescuraAntes.lastSyncedAt);
-    assert.equal(frescura.lastSyncedReadingAt, frescuraAntes.lastSyncedReadingAt);
+    assert.equal(frescura.lastSyncedReadingDay, frescuraAntes.lastSyncedReadingDay);
     assert.equal(frescura.lastAccountDay, frescuraAntes.lastAccountDay);
-    assert.equal(frescuraAntes.lastCsvReadingAt, null);
-    assert.ok(frescura.lastCsvReadingAt);
+    assert.equal(frescuraAntes.lastCsvDay, null);
+    assert.ok(frescura.lastCsvDay);
   });
 
   test('una cuenta importada sí queda sincronizada al momento del archivo', async () => {
@@ -610,6 +629,142 @@ describe('Resumen · importación por CSV', () => {
     assert.deepEqual(hay, ['ig_ya_2']);
     // Sin ids que preguntar, ni siquiera se consulta.
     assert.deepEqual(await enLaura((tx) => listExternalPostIds(tx, cuenta.connectionId, [])), []);
+  });
+
+  test('la lectura lleva la fecha de la exportación: age_hours y la cuenta la usan, no el reloj de la importación', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'instagram', handle: 'exportado.antes' }));
+    const exportado = haceDias(4);
+    const r = await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'instagram',
+        rows: [fila('exp_1', { publishedAt: haceDias(10) })],
+        capturedAt: exportado,
+      }),
+    );
+    assert.equal(r.readings, 1);
+    assert.equal(r.staleReadings, 0);
+    assert.equal(Date.parse(r.capturedAt), Date.parse(exportado));
+    const [lectura] = await enLaura((tx) =>
+      tx.query<{ age_hours: string; captured_at: string }>(
+        `SELECT s.age_hours, to_char(s.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS captured_at
+           FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id WHERE p.connection_id = $1`,
+        [cuenta.connectionId],
+      ).then((x) => x.rows),
+    );
+    // Seis días entre publicar y exportar, no diez.
+    assert.ok(Math.abs(Number(lectura!.age_hours) - 6 * 24) < 0.1, `age_hours = ${lectura!.age_hours}`);
+    assert.equal(lectura!.captured_at, exportado);
+    // Y la cuenta importada queda sincronizada a esa fecha, no a la de hoy.
+    const frescura = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === cuenta.connectionId)!;
+    assert.equal(Date.parse(frescura.lastSyncedAt!), Math.floor(Date.parse(exportado) / 1000) * 1000);
+  });
+
+  test('un archivo exportado ANTES que la última lectura no cambia la última ni mueve el reloj', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'orden.de.llegada' }));
+    // Primero el archivo nuevo, exportado hace un día…
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'tiktok',
+        rows: [fila('ord_1', { publishedAt: haceDias(20), views: 9_000 })],
+        capturedAt: haceDias(1),
+      }),
+    );
+    const ultima = () =>
+      enLaura((tx) =>
+        tx.query<{ views: string; captured_at: string }>(
+          `SELECT m.views, m.captured_at::text AS captured_at FROM post_metrics_latest m JOIN post p ON p.id = m.post_id
+            WHERE p.connection_id = $1 AND p.external_post_id = 'ord_1'`,
+          [cuenta.connectionId],
+        ).then((x) => x.rows[0]!),
+      );
+    const antes = await ultima();
+    const kpisAntes = await enLaura((tx) => getResumenKpis(tx, { days: 30 }));
+    const frescuraAntes = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === cuenta.connectionId)!;
+
+    // …y después uno viejo, exportado hace doce días, con cifras menores.
+    const r = await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'tiktok',
+        rows: [fila('ord_1', { publishedAt: haceDias(20), views: 2_000 }), fila('ord_2', { publishedAt: haceDias(15) })],
+        capturedAt: haceDias(12),
+      }),
+    );
+    // El video conocido NO recibe la lectura vieja; el nuevo sí entra.
+    assert.deepEqual(
+      { newPosts: r.newPosts, knownPosts: r.knownPosts, readings: r.readings, staleReadings: r.staleReadings },
+      { newPosts: 1, knownPosts: 1, readings: 1, staleReadings: 1 },
+    );
+    assert.deepEqual(await ultima(), antes, 'la lectura vieja pasó a ser la «última»');
+    const kpisDespues = await enLaura((tx) => getResumenKpis(tx, { days: 30 }));
+    assert.equal(kpisDespues.end, kpisAntes.end, 'un archivo viejo movió el reloj del módulo');
+    const frescura = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === cuenta.connectionId)!;
+    assert.equal(frescura.lastCsvDay, frescuraAntes.lastCsvDay);
+    assert.equal(frescura.lastSyncedAt, frescuraAntes.lastSyncedAt, 'last_synced_at no puede ir hacia atrás');
+  });
+
+  test('una fecha de exportación imposible se rechaza: del futuro, o anterior a un video del archivo', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'fechas.imposibles' }));
+    const importar = (capturedAt: string) =>
+      enLaura((tx) =>
+        importCsvReadings(tx, {
+          connectionId: cuenta.connectionId,
+          platform: 'tiktok',
+          rows: [fila('imp_1', { publishedAt: haceDias(3) })],
+          capturedAt,
+        }),
+      );
+    await assert.rejects(() => importar(new Date(Date.now() + 86_400_000).toISOString()), conCodigo('invalid_captured_at'));
+    await assert.rejects(() => importar(haceDias(5)), conCodigo('invalid_captured_at'));
+    await assert.rejects(() => importar('el martes'), conCodigo('invalid_captured_at'));
+    assert.deepEqual(await enLaura((tx) => listExternalPostIds(tx, cuenta.connectionId, ['imp_1'])), []);
+  });
+
+  test('la frescura dice el DÍA CERRADO con la regla del reloj, no el instante en UTC', async () => {
+    // Una importación a las 21:55 en Bogotá son las 02:55 UTC del día
+    // siguiente. Con el instante formateado en UTC salía un día en el
+    // futuro para el creador; con la regla del reloj sale el día anterior
+    // al de la lectura en UTC, igual que el resto de la página.
+    const cuenta = await t.db.withWorkspace(WS_VECINO, (tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'madrugada' }));
+    try {
+      const dia = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+      await t.db.withWorkspace(WS_VECINO, (tx) =>
+        importCsvReadings(tx, {
+          connectionId: cuenta.connectionId,
+          platform: 'youtube',
+          rows: [fila('mad_1', { publishedAt: haceDias(9) })],
+          capturedAt: `${dia}T02:00:00.000Z`,
+        }),
+      );
+      const [frescura] = await t.db.withWorkspace(WS_VECINO, (tx) => getFreshnessByConnection(tx));
+      const anterior = new Date(Date.parse(`${dia}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+      assert.equal(frescura!.lastCsvDay, anterior);
+      assert.equal(frescura!.dataUntil, anterior);
+      // Es la única conexión del vecino, así que es la que marca su reloj: al día.
+      assert.equal(frescura!.daysBehind, 0);
+      const kpis = await t.db.withWorkspace(WS_VECINO, (tx) => getResumenKpis(tx, { days: 30 }));
+      assert.equal(kpis.end, anterior, 'la frescura y el reloj del módulo dicen días distintos');
+    } finally {
+      await t.admin(`DELETE FROM social_connection WHERE id = '${cuenta.connectionId}'`);
+    }
+  });
+
+  test('una conexión que se quedó atrás lo dice en días, y su estado viaja', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'facebook', handle: 'rezagada' }));
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'facebook',
+        rows: [fila('rez_1', { publishedAt: haceDias(40) })],
+        capturedAt: haceDias(20),
+      }),
+    );
+    await t.admin(`UPDATE social_connection SET status = 'error' WHERE id = '${cuenta.connectionId}'`);
+    const frescura = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === cuenta.connectionId)!;
+    assert.ok(frescura.daysBehind! >= 18, `daysBehind = ${frescura.daysBehind}`);
+    assert.equal(frescura.status, 'error');
   });
 
   test('un lote vacío o una cuenta de otro workspace se rechazan', async () => {
