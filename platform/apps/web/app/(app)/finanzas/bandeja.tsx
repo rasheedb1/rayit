@@ -5,7 +5,7 @@ import { Pill, type PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { CopiarCorreo } from "./copiar";
 import { MESSAGES } from "./_lib/messages";
-import { marcarRecordatorioEnviado } from "./recordatorios-actions";
+import { marcarRecordatorioEnviado } from "./recordatorios/actions";
 
 /**
  * La bandeja de recordatorios de cobro (FIN-4).

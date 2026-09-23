@@ -4,7 +4,7 @@ import type { ReminderRow } from "@mc/db/queries/finanzas";
 
 // La Server Action no se ejerce aquí: la bandeja es servidor, y lo que
 // se comprueba es qué pinta y qué manda el formulario.
-vi.mock("./recordatorios-actions", () => ({ marcarRecordatorioEnviado: vi.fn() }));
+vi.mock("./recordatorios/actions", () => ({ marcarRecordatorioEnviado: vi.fn() }));
 
 import { BandejaRecordatorios, RecordatoriosDeLaFactura } from "./bandeja";
 import { formatterFor } from "@/lib/format";
