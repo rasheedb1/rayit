@@ -153,6 +153,8 @@ Decisiones que quedaron como **DECISIÓN PENDIENTE DE NICOLÁS**:
 | 2 | Nada en `schema/`: `campaign_brand_input` no está en el esquema Drizzle y las consultas usan SQL con parámetros, como el resto de `campanas.ts`. | — | — |
 | 3 | ACC-1 y ACC-2: `registrarAporte` e `importarCsvVentas` llevan `// TODO(ACC-1): requirePermission('campanas.aporte.registrar')`; la ficha, `campanas.campana.ver`. La bitácora la escribe `recordAudit` en `queries/campanas.ts` y se cambia por `audit()` en una línea cuando exista. | — | Cuando llegue ACC. |
 
+| 4 | `pnpm verificar` sale en rojo por un error que ya está en `main`: `app/(app)/resumen/importar/lote.test.ts` (RES-6) deja un rechazo no manejado de `undici` («ReadableStream is already closed», `ERR_INVALID_STATE`). Los 88 archivos y las 734 pruebas pasan; vitest cuenta el rechazo como error del proceso. Comprobado en un checkout limpio de `origin/main` (29460e3) con `pnpm vitest run resumen/importar`: el mismo error. | Es el único rojo del repositorio y tapa cualquier fallo nuevo. | Media. |
+
 Sin migraciones y sin variables de entorno nuevas.
 
 ## 3. Contrato de lectura para CAM-5
