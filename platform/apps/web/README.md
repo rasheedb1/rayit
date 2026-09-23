@@ -57,11 +57,6 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/campanas/           Campañas: lista y ficha. La sección «Seguidores de la marca»
-                              (CAM-3) está en [id]/seguidores.tsx, su modelo puro en
-                              _lib/seguidores.ts y «Actualizar ahora» en _lib/marca-service.ts,
-                              que escribe con el mismo recordBrandSnapshot que el job
-                              brand.snapshot. Textos en _lib/messages.ts.
 app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
                               de cada factura (registrar pago, reserva de impuestos).
                               index.ts exporta facturarCampana() para Campañas.
@@ -73,6 +68,10 @@ app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado
                               «Lo que aportó la marca» (CAM-4): aporte.tsx
                               (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
                               de ventas diarias), _lib/messages.ts (los textos).
+                              «Seguidores de la marca» (CAM-3): [id]/seguidores.tsx, su
+                              modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
+                              _lib/marca-service.ts, con el mismo recordBrandSnapshot que
+                              el job brand.snapshot.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
