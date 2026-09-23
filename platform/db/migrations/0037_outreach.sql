@@ -23,9 +23,13 @@
 --
 -- ÍNDICE
 --   1 · Catálogos: ángulos, rúbrica y plantillas de secuencia
---   2 · Cuentas de canal (outreach_channel_account)
---   3 · Secuencia, pasos y enrolamiento
---   4 · La cola: outbound_touch extendida
+--   2 · Cuentas de canal (outreach_channel_account); 2.1 lo que solo
+--       escribe el callback del proveedor
+--   3 · Secuencia, pasos y enrolamiento; 3.4 coherencia con la secuencia
+--   4 · La cola: outbound_touch extendida; 4.1 la regla de la baja (con
+--       la lista global); 4.2 las columnas del despachador; 4.4
+--       coherencia del toque; 4.5 outbound_optout_link, la prueba del
+--       enlace de baja; 4.6 outbound_optout_event, quién provocó cada baja
 --   5 · Mensajes por hilo, revisiones de calidad y llamadas al modelo
 --   6 · Límites: política, contadores y disyuntores
 --   7 · Aislamiento de las tablas nuevas, referencias y privilegios

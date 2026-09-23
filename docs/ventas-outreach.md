@@ -221,9 +221,11 @@ Funciones: `increment_if_under_cap`, `increment_weekly`,
 `platform/db/migrations/0037_outreach.sql`: el número 0015 lo tomó
 `connection_secret` y las fases 1 a 3 llegaron hasta 0036. Además de lo
 de arriba trae `outbound_sequence_template` (plantillas globales de solo
-lectura, con «Marca con campaña activa»), `enable_outreach`,
-`next_business_day(ts, tz)` y `public_optout(token)`. Decisiones que las
-piezas siguientes tienen que conocer:
+lectura, con «Marca con campaña activa»), `outbound_llm_call` (cada
+llamada al modelo), `outbound_optout_link` (la prueba del enlace de
+baja) y `outbound_optout_event` (quién provocó cada baja),
+`enable_outreach`, `next_business_day(ts, tz)` y `public_optout(token)`.
+Decisiones que las piezas siguientes tienen que conocer:
 
 - El vocabulario de canales es el de 0007 en todas partes: `email`,
   `linkedin`, `instagram_dm`, `whatsapp`, también en las cuentas.
@@ -252,6 +254,12 @@ piezas siguientes tienen que conocer:
   `recommend`, modelo, tokens y costo). `outbound_health` suma ahí el
   gasto del día contra `llm_daily_cap_usd`; `outbound_review.cost` es
   el detalle del intento y no se suma aparte.
+- `llm_daily_cap_usd` protege la factura de la plataforma (la llave de
+  Anthropic es de On Cue): lo cambia solo el worker o un operador. El
+  disparador `outbound_policy_llm_cap` rechaza con 42501 que `mc_app` lo
+  cambie o cree la política con otro valor que el de
+  `outreach_default_llm_daily_cap()` (5,00 USD). Sin política,
+  `outbound_health` devuelve ese mismo valor, no 0.
 - `outbound_sequence.status` manda; `active` se deriva de él con un
   disparador hasta que VEN-13 retire la columna.
 - En `outbound_touch`, `held_reason` es por qué está retenido y
@@ -266,37 +274,72 @@ piezas siguientes tienen que conocer:
   de llamar al proveedor o lo registra como enviado después
   (`processing → sent` siempre se puede). Al rescatar un zombi con el
   contacto dado de baja, va a `canceled`, no a `scheduled`.
-- El enlace de baja lleva un token al azar; la base guarda solo su
-  sha256 en `outbound_touch.optout_token_hash`. `public_optout` es de
-  `mc_public_share`, como los enlaces de Cotizar, y da de baja a la
-  persona en toda la plataforma: todas sus fichas con el mismo correo,
-  lo pendiente en cualquier workspace (los enrolamientos, con
-  `finished_at`) y el correo en `contact_suppression` con
-  `unsubscribe_link`.
-- **La baja no se puede fabricar.** `public_optout` solo acepta un
-  correo en `sent` con `provider_message_id` y `recipient_address`, y
-  `optout_token_hash`, `provider_message_id`, `message_id_rfc` y
-  `recipient_address` solo los escribe el despachador (`mc_worker`): el
-  disparador `outbound_touch_worker_columns` rechaza a `mc_app` con
-  42501, al crear y al actualizar. Es un disparador y no un GRANT por
-  columnas porque Drizzle nombra todas las columnas en cada INSERT; la
-  guardia (`DISPARADORES_DE_CANDADO`) exige en cada arranque que exista
-  y esté activo. Sin esto, un workspace inventaba un token, guardaba su
-  sha256 en un toque suyo «enviado» a una ficha con el correo de otra
-  persona y la daba de baja en toda la plataforma sin escribirle nunca.
-- **La baja es de la dirección a la que salió el correo**, no de la
-  ficha. El despachador escribe `outbound_touch.recipient_address` al
-  enviar, y `public_optout` suprime esa dirección y marca las fichas que
-  la tienen en cualquier workspace, más la ficha que recibió el correo
-  (`contact_id`, si sigue existiendo). Un toque con pruebas de envío no
-  cambia de `contact_id` ni de `company_id` desde la web (el mismo
-  disparador, 42501; `contact_id` → NULL sí, que es lo que hace borrar
-  la ficha). Así, cambiarle el correo a la ficha después del envío, o
-  mover el toque a otra ficha, ya no da de baja a otra persona, y el
-  enlace sigue funcionando si el workspace borra la ficha (CAN-SPAM pide
-  30 días). **El despachador de VEN-10 tiene que escribir
-  `recipient_address` en la misma escritura que `provider_message_id`:**
-  un correo sin ella no tiene enlace de baja que funcione.
+- **El enlace de baja vive fuera de la cola.** Lleva un token al azar;
+  la base guarda solo su sha256, en `outbound_optout_link` (clave
+  primaria: un token repetido falla al escribirlo), con la dirección a
+  la que salió el correo, el workspace, el toque, la ficha y `sent_at`.
+  Esa tabla la escribe **solo el despachador**, en la misma transacción
+  en la que anota `provider_message_id`; `mc_app` no tiene ningún
+  privilegio sobre ella y su RLS solo tiene políticas de lectura. Sus
+  claves ajenas son `ON DELETE SET NULL`, así que el enlace no depende
+  de la cola: ni del estado del toque, ni de que el toque, su empresa,
+  su ficha o su workspace sigan existiendo (CAN-SPAM pide al menos 30
+  días; aquí no caduca). `public_optout` busca ahí y solo ahí.
+- `public_optout` es de `mc_public_share`, como los enlaces de Cotizar,
+  y da de baja a la persona en toda la plataforma: la dirección entra en
+  `contact_suppression` con `unsubscribe_link`, se marcan la ficha que
+  recibió el correo y todas las fichas con esa dirección en cualquier
+  workspace, y se cancela lo pendiente (los enrolamientos, con
+  `finished_at`). Cancela exactamente `CANCELABLE_TOUCH_STATUSES`
+  (`draft`, `scheduled`, `held`): todo lo vivo (`LIVE_TOUCH_STATUSES`)
+  menos `processing`. Responde `workspaceId` y `touchId`, que son `null`
+  si ya no existen.
+- **Cada baja global es atribuible y reversible.** `public_optout` deja
+  cada clic en `outbound_optout_event` (token, workspace y toque que lo
+  originaron, dirección, `sent_at`, si ya estaba de baja). Un operador
+  (worker) puede ver qué workspace provocó cada entrada de
+  `contact_suppression` y deshacerla, y VEN-15 puede alertar de un
+  workspace cuyos destinatarios se dan de baja a los pocos minutos del
+  envío (en una vista: ninguna pantalla hace esa resta).
+- **Las pruebas de envío las escribe el despachador.**
+  `provider_message_id`, `message_id_rfc` y `recipient_address` solo los
+  escribe `mc_worker`: el disparador `outbound_touch_worker_columns`
+  rechaza a `mc_app` con 42501, al crear y al actualizar. Además, para
+  `mc_app`, un toque en `sent` no vuelve atrás (volver a la cola era un
+  segundo envío del mismo correo), un toque con pruebas no cambia de
+  `contact_id` ni de `company_id` (`contact_id` → NULL sí, que es lo que
+  hace borrar la ficha), y no se borra (`outbound_touch_keep_sent`; las
+  cascadas de empresa y workspace sí pasan). Son disparadores y no GRANT
+  por columnas porque Drizzle nombra todas las columnas en cada INSERT;
+  la guardia (`DISPARADORES_DE_CANDADO`) exige en cada arranque que
+  existan y estén activos.
+- **`recipient_address` se escribe al reclamar.** Es la dirección exacta
+  a la que sale el mensaje, y el despachador de VEN-10 la escribe en la
+  misma sentencia que pasa el toque de `scheduled` a `processing`: un
+  correo en `processing` o con `provider_message_id` sin ella no entra
+  (CHECK `outbound_touch_email_recipient_check`). La baja se anota
+  sobre ella y no sobre la ficha: cambiarle el correo a la ficha después
+  del envío, o mover el toque a otra ficha, no da de baja a otra
+  persona.
+- **La regla de la baja mira la lista global.** Un toque no entra en
+  `scheduled`, `processing` ni `sent` si su ficha tiene `opted_out`, si
+  el correo de la ficha está en `contact_suppression` (un rebote duro o
+  una queja que todavía no se reflejó en esa ficha), o si
+  `recipient_address` está en la lista aunque no coincida con
+  `contact.email`. La excepción es `processing → sent` (lo que ya salió
+  se registra, marcado `opted_out_in_flight`). La consulta de reclamo de
+  VEN-10 tiene que filtrar esas filas y pasarlas a `canceled`, porque la
+  base rechaza el reclamo entero. `mc_app` no lee la lista: la regla usa
+  `address_is_suppressed(citext)`, SECURITY DEFINER, que responde sí o
+  no para una dirección (lo mismo que ya enseña crear una ficha con ese
+  correo).
+- **Un toque es coherente con su enrolamiento.** El disparador
+  `outbound_touch_enrollment_check` exige, también al worker, que el
+  enrolamiento sea del mismo workspace y del mismo contacto que el
+  toque, y que el paso sea del mismo workspace y de la secuencia del
+  enrolamiento; un toque con enrolamiento siempre lleva contacto. Pasos
+  y enrolamientos tienen el workspace de su secuencia, y el paso actual
+  de un enrolamiento es de su secuencia.
 - A quien pidió la baja no se le enrola ni se le reanuda: el disparador
   `outbound_enrollment_optout` rechaza (23514, el mensaje de 0007) un
   enrolamiento nuevo o que vuelve a `active`, `paused` o `cooldown`.
@@ -306,32 +349,46 @@ piezas siguientes tienen que conocer:
   `scheduled`) o lo cancela y programa otro.
 - Un buzón (el Gmail o la cuenta de Unipile) envía desde **un solo
   workspace**: `(provider, provider_account_id)` es único entre las
-  cuentas no desconectadas de toda la plataforma. Los topes son por
-  cuenta, y el mismo Gmail en el workspace del creador y en el de su
-  agencia habría enviado el doble. Para moverlo, se desconecta en uno.
-  La pantalla de canales (VEN-9) tiene que traducir ese 23505 en «esta
-  cuenta ya está conectada en otro espacio».
+  cuentas **autenticadas** (`connected`, `needs_reconnect`, `error`) de
+  toda la plataforma. Los topes son por cuenta, y el mismo Gmail en el
+  workspace del creador y en el de su agencia habría enviado el doble.
+  Para moverlo, se desconecta en uno. Una fila `pending` no ocupa nada,
+  y a un estado autenticado solo llega el **callback del proveedor**
+  (OAuth de Google o alta en Unipile, en el servidor con `asWorker`):
+  `outreach_channel_account_worker_columns` rechaza con 42501 que
+  `mc_app` escriba `status` autenticado, `provider_account_id` en una
+  fila existente, `secret_ref` o `scopes`. Desde la web se crea la fila
+  `pending` o se desconecta. El callback escribe `provider_account_id`
+  con lo que **devuelve el proveedor**, en la misma sentencia que pasa a
+  `connected`. La pantalla de canales (VEN-9) tiene que traducir el
+  23505 en «esta cuenta ya está conectada en otro espacio».
 - `outbound_step` no tiene `template_id`: el texto fijo del paso va en
   `subject_template` y `body_template`, y la plantilla de secuencia de
   origen está en `outbound_sequence.template_id`.
 - Las funciones se llaman por `@mc/db/queries/outreach`, no con SQL
-  suelto: `incrementIfUnderCap` e `incrementWeekly` (WorkerTx; eligen la
-  firma según venga o no `accountId`), `shouldPauseOutreach`,
-  `disableOutreach`, `enableOutreach` y `outboundHealth` (con un
-  WorkspaceTx el workspace es el de la transacción; con un WorkerTx se
-  nombra), `publicOptout` (PublicShareTx) y `nextBusinessDay`. El jsonb
-  de `outbound_health` y `public_optout` se comprueba en ejecución
-  (`OutreachShapeError` con la ruta del campo).
+  suelto: `incrementIfUnderCap` e `incrementWeekly` (WorkerTx, que ahora
+  lleva marca de tipo como PublicShareTx: un WorkspaceTx no compila
+  ahí; eligen la firma según venga o no `accountId`),
+  `shouldPauseOutreach`, `disableOutreach`, `enableOutreach` y
+  `outboundHealth` (con un WorkspaceTx el workspace es el de la
+  transacción; con un WorkerTx se nombra), `publicOptout`
+  (PublicShareTx) y `nextBusinessDay`. El jsonb de `outbound_health` y
+  `public_optout` se comprueba en ejecución (`OutreachShapeError` con la
+  ruta del campo).
 - La concurrencia real de los límites está probada contra Postgres 16
   («el bloqueo es de verdad», que PGlite salta); cómo correrla en local
   está en `platform/packages/db/README.md`.
-- **Abierto para VEN-15:** el correo sale del Gmail del creador, así que
-  el enlace de baja también queda en su carpeta de enviados, y quien lo
-  pulse desde ahí da de baja a esa persona en toda la plataforma. Solo
-  alcanza a alguien a quien la plataforma le escribió de verdad, pero
-  es la persona equivocada pulsando. La página de baja tiene que pedir
-  una confirmación que un clic automático no dé, y el despachador no
-  debe volver a mostrar el enlace en la aplicación.
+- **Obligatorio para VEN-15:** el correo sale del Gmail del creador,
+  así que el enlace de baja también queda en su carpeta de enviados.
+  Quien envía podría pulsar su propio enlace y suprimir a una marca en
+  toda la plataforma. La página de baja **rechaza el clic que llega con
+  una sesión de un miembro del workspace que envió** (el servidor lo
+  sabe antes de llamar a `publicOptout`: `outbound_optout_link` no se
+  lee desde la web, así que lo pregunta el servidor con `asWorker` por
+  el sha256 del token), pide una confirmación que un clic automático no
+  dé, y el despachador no vuelve a mostrar el enlace en la aplicación.
+  Lo que se escape queda en `outbound_optout_event` para la alerta y
+  para deshacerlo.
 
 ### 5.3 La cadencia recomendada para un creador
 
