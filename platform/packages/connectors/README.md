@@ -137,7 +137,15 @@ Fixtures: `fixtures/<plataforma>/oauth.*.json` (`ok`, `invalid`/`invalid_grant`,
 
 ## Taxonomía de errores y qué hace cada consumidor
 
-Todo sale como `PlatformApiError { platformId, endpoint, httpStatus, code, kind, messageEs, retryAfterS, requestId }`.
+Todo sale como `PlatformApiError { platformId, endpoint, httpStatus, code, kind, messageEs, retryAfterS, requestId, subcode }`.
+
+`subcode` es el `error_subcode` de Meta cuando lo da, y hoy solo lo
+llena el parser de Instagram. Hace falta porque el `code` de Meta es
+genérico —`100` vale para cualquier parámetro— y el subcódigo es lo
+único que distingue un requisito de la cuenta de un defecto nuestro:
+CON-7 traduce `100/2108006` («no llega a cien seguidores») a la fila
+`ig.demographics` de `metric_requirement`, y deja pasar cualquier otro
+`100` como el error que es.
 
 | kind | Qué es | Ejemplos | Núcleo | CON-5 (recolector) | CON-3 / oauth.refresh | CAM-3 (marca) |
 |---|---|---|---|---|---|---|
@@ -212,6 +220,11 @@ Formato: `fixtures/<plataforma>/<endpoint>[.<caso>].json`
   "request": { "method": "POST", "urlPattern": "^https://open\\.tiktokapis\\.com/v2/video/list/\\?fields=", "body": { "max_count": 20 } },
   "response": { "status": 200, "headers": { "retry-after": "7" }, "body": { … } } }
 ```
+
+Un `urlPattern` distingue endpoints que solo se diferencian por un
+parámetro: `analytics.query.demographics.ok` (por video) exige
+`filters=video%3D%3D…` y `analytics.query.channel_demographics.ok` (el
+canal entero, CON-7) ancla con `$` para no casar con el primero.
 
 `response` puede ser una **lista** que se consume en orden (para
 `server_error_then_ok`, `paginated`); `networkError: "fetch failed"`

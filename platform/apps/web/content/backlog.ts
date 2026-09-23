@@ -253,7 +253,8 @@ export const STORIES: readonly Story[] = [
     title: "Demografía de audiencia",
     desc: "collect.demographics por cuenta, respetando metric_requirement: si falta un prerrequisito, lo explica en vez de dejar la celda vacía.",
     done: "Con la respuesta grabada, la tabla coincide con el fixture; con una cuenta personal de TikTok, dice por qué no hay demografía.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "Construida y probada el 23-sep contra respuestas grabadas (worker 10, db 4, la lógica de prerrequisitos en milisegundos). Falta SOLO la prueba en vivo: ninguna fuente pública da demografía —business_discovery no la trae, YouTube la da por Analytics con OAuth y TikTok por la Accounts API con el trámite CON-9—, y OAUTH_CONNECT sigue apagado desde la decisión del 22-sep, así que hoy no hay ninguna conexión autorizada con los permisos de insights. El job escribe audience_breakdown con scope 'account' y, cuando falta un prerrequisito, NO llama a la API: escribe el requisito en metric_gap (migración 0034) con el message_es de metric_requirement, que es lo que lee RES-4 por getAccountAudience. 0034 añade además el UNIQUE que le faltaba a audience_breakdown y cinco filas de metric_requirement, entre ellas el requisito nuevo owner_authorization para las cuentas agregadas por @. Detalle en docs/propuestas/CON-7.md.",
   },
   {
     id: "CON-8", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3"],

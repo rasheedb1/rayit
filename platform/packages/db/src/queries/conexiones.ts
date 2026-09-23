@@ -542,3 +542,191 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
   if (rows.length === 0) throw new ConnectionNotFound(id);
 }
 
+
+// ---------------------------------------------------------------------
+// Demografía de audiencia (CON-7) · el contrato de lectura para RES-4
+// ---------------------------------------------------------------------
+
+/** `audience_breakdown.population` (CHECK de 0003). */
+export type AudiencePopulation = 'followers' | 'reached' | 'engaged' | 'viewers';
+/** `audience_breakdown.dimension` (CHECK de 0003, ampliado en 0011). */
+export type AudienceDimensionId =
+  | 'age' | 'gender' | 'country' | 'city' | 'language' | 'device' | 'follow_type' | 'age_gender' | 'viewer_type';
+
+export interface AudienceBucket {
+  /** '25-34' | 'F' | 'CO' | 'Bogotá, Bogota' | '25-34|F'. */
+  bucket: string;
+  /**
+   * 0..1 TAL COMO lo dio la plataforma, o null si dio absolutos. Los
+   * `share` de una dimensión no tienen por qué sumar 1: YouTube omite
+   * los tramos con pocas vistas y TikTok redondea. Normalizarlos sería
+   * inventar, así que quien los pinte dice sobre qué total lo hace.
+   */
+  share: number | null;
+  /** Personas, o null si la plataforma dio porcentajes. Un nulo no es un cero. */
+  absolute: number | null;
+}
+
+export interface AudienceDimension {
+  population: AudiencePopulation;
+  dimension: AudienceDimensionId;
+  /** Por tamaño, salvo edad y edad×género, que van en su orden natural. */
+  buckets: AudienceBucket[];
+}
+
+/** Por qué NO hay un dato, con el texto que la persona lee (metric_requirement, 0011 y 0034). */
+export interface AudienceGap {
+  /** 'demografia_de_cuenta', 'retencion_y_audiencia'… */
+  metricGroup: string;
+  requirementId: string;
+  /** 'min_followers_100' | 'business_account' | 'owner_authorization' | … */
+  requirement: string;
+  /** La frase que va en pantalla. Sale de la migración, no del JSX. */
+  messageEs: string;
+  fixUrl: string | null;
+  /** 'YYYY-MM-DD' de la corrida que lo detectó. */
+  day: string;
+  detectedAt: string;
+}
+
+/**
+ * La última demografía de una cuenta, o la razón de que no haya. Las dos
+ * cosas a la vez: una cuenta puede tener la edad de sus seguidores y no
+ * tener su país, y la pantalla tiene que poder decir las dos.
+ */
+export interface AccountAudience {
+  connectionId: string;
+  platformId: ConnectionPlatformId;
+  handle: string | null;
+  /** 'YYYY-MM-DD' del último día con demografía, o null si nunca hubo. */
+  day: string | null;
+  dimensions: AudienceDimension[];
+  /** Vacío si no falta nada. */
+  gaps: AudienceGap[];
+}
+
+interface AudienceRow {
+  connection_id: string;
+  day: string;
+  population: AudiencePopulation;
+  dimension: AudienceDimensionId;
+  bucket: string;
+  /** numeric y bigint se piden ::text y se convierten aquí, en un solo sitio. */
+  share: string | null;
+  absolute: string | null;
+}
+
+interface GapRow {
+  connection_id: string;
+  metric_group: string;
+  requirement_id: string;
+  requirement: string;
+  message_es: string;
+  fix_url: string | null;
+  day: string;
+  detected_at: string | Date;
+}
+
+interface AudienceOwnerRow {
+  id: string;
+  platform_id: ConnectionPlatformId;
+  handle: string | null;
+}
+
+function decimalOrNull(v: string | null): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * El grueso de las dos funciones públicas. `ids` acota a una conexión o
+ * a todas las vivas; RLS ya filtró el workspace en las tres consultas.
+ */
+async function readAudience(tx: WorkspaceTx, owners: AudienceOwnerRow[]): Promise<AccountAudience[]> {
+  if (owners.length === 0) return [];
+  const ids = owners.map((o) => o.id);
+
+  const breakdown = await tx.query<AudienceRow>(
+    `WITH ultimo AS (
+       SELECT connection_id, max(day) AS day
+         FROM audience_breakdown
+        WHERE scope = 'account' AND connection_id = ANY($1::uuid[])
+        GROUP BY connection_id
+     )
+     SELECT a.connection_id, to_char(a.day, 'YYYY-MM-DD') AS day, a.population, a.dimension, a.bucket,
+            a.share::text AS share, a.absolute::text AS absolute
+       FROM audience_breakdown a
+       JOIN ultimo u ON u.connection_id = a.connection_id AND u.day = a.day
+      WHERE a.scope = 'account'
+      ORDER BY a.connection_id, a.dimension, a.population,
+               CASE WHEN a.dimension IN ('age', 'age_gender') THEN a.bucket END ASC NULLS LAST,
+               COALESCE(a.absolute::numeric, a.share) DESC NULLS LAST,
+               a.bucket`,
+    [ids],
+  );
+
+  const gaps = await tx.query<GapRow>(
+    `SELECT g.connection_id, g.metric_group, g.requirement_id, r.requirement, r.message_es, r.fix_url,
+            to_char(g.day, 'YYYY-MM-DD') AS day, g.detected_at
+       FROM metric_gap g
+       JOIN metric_requirement r ON r.id = g.requirement_id
+      WHERE g.connection_id = ANY($1::uuid[])
+      ORDER BY g.connection_id, g.metric_group`,
+    [ids],
+  );
+
+  const porConexion = new Map<string, { day: string | null; dimensions: AudienceDimension[]; gaps: AudienceGap[] }>();
+  for (const o of owners) porConexion.set(o.id, { day: null, dimensions: [], gaps: [] });
+
+  for (const r of breakdown.rows) {
+    const acc = porConexion.get(r.connection_id);
+    if (!acc) continue;
+    acc.day = r.day;
+    let dim = acc.dimensions.find((d) => d.dimension === r.dimension && d.population === r.population);
+    if (!dim) {
+      dim = { population: r.population, dimension: r.dimension, buckets: [] };
+      acc.dimensions.push(dim);
+    }
+    dim.buckets.push({ bucket: r.bucket, share: decimalOrNull(r.share), absolute: decimalOrNull(r.absolute) });
+  }
+
+  for (const g of gaps.rows) {
+    const acc = porConexion.get(g.connection_id);
+    if (!acc) continue;
+    acc.gaps.push({
+      metricGroup: g.metric_group,
+      requirementId: g.requirement_id,
+      requirement: g.requirement,
+      messageEs: g.message_es,
+      fixUrl: g.fix_url,
+      day: g.day,
+      detectedAt: iso(g.detected_at)!,
+    });
+  }
+
+  return owners.map((o) => {
+    const acc = porConexion.get(o.id)!;
+    return { connectionId: o.id, platformId: o.platform_id, handle: o.handle, day: acc.day, dimensions: acc.dimensions, gaps: acc.gaps };
+  });
+}
+
+/** La audiencia de una cuenta viva, o null si ese id no es de este workspace. */
+export async function getAccountAudience(tx: WorkspaceTx, connectionId: string): Promise<AccountAudience | null> {
+  const { rows } = await tx.query<AudienceOwnerRow>(
+    `SELECT id, platform_id, handle FROM social_connection WHERE id = $1 AND deleted_at IS NULL`,
+    [connectionId],
+  );
+  if (rows.length === 0) return null;
+  const [audiencia] = await readAudience(tx, rows);
+  return audiencia ?? null;
+}
+
+/** Lo mismo para todas las cuentas vivas del workspace, en el orden de la lista de Conexiones. */
+export async function listAccountAudience(tx: WorkspaceTx): Promise<AccountAudience[]> {
+  const { rows } = await tx.query<AudienceOwnerRow>(
+    `SELECT id, platform_id, handle FROM social_connection
+      WHERE deleted_at IS NULL ORDER BY platform_id, connected_at DESC`,
+  );
+  return readAudience(tx, rows);
+}

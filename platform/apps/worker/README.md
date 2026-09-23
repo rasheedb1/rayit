@@ -141,6 +141,33 @@ Reglas:
   por un conector se registra con `ctx.callLog.record(...)`. Detalle en
   `packages/connectors/README.md`.
 
+## Cuando la plataforma NO da el dato: `metric_gap` (CON-7)
+
+Una celda vacía manda a la persona a WhatsApp. `collect.demographics`
+no la deja vacía: si a la cuenta le falta un prerrequisito —cien
+seguidores, cuenta profesional, el permiso de insights, o sencillamente
+que el dueño autorice la lectura— **no llama a la API** y escribe el
+requisito en `metric_gap`, con el texto en español de
+`metric_requirement` (migraciones `0011` y `0034`).
+
+```sql
+-- ¿Por qué esta cuenta no tiene demografía?
+SELECT c.handle, r.requirement, r.message_es, g.day
+  FROM metric_gap g
+  JOIN metric_requirement r ON r.id = g.requirement_id
+  JOIN social_connection c  ON c.id = g.connection_id
+ WHERE g.metric_group = 'demografia_de_cuenta';
+```
+
+Es **una fila viva por (conexión, grupo)**: la corrida de hoy reemplaza
+la de ayer y, en cuanto el dato llega, el job la borra. La historia de
+qué se intentó vive en `job_run` y `api_call_log`, no aquí.
+
+Quien escribe es el worker; la web solo lee (`getAccountAudience` /
+`listAccountAudience` en `@mc/db/queries/conexiones`). Y la demografía
+en sí es append-only: si ya hay filas de hoy para esa cuenta, el job se
+la salta entera y no gasta ni una llamada.
+
 ## Qué pasa cuando falla
 
 | Situación | job_run | pg-boss |
@@ -205,13 +232,14 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~4 min; incluye collect.account_metrics por @, collect.demographics contra fixtures, y oauth.refresh con el almacén cifrado y los refreshers reales
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
-Las de integración aplican las 15 migraciones reales (la `0014` da los
-privilegios a `mc_worker`; la `0015` crea `connection_secret`) y corren como `mc_worker`: si un privilegio
+Las de integración aplican TODAS las migraciones reales (la `0014` da
+los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
+`0034`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
@@ -229,6 +257,6 @@ src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
-src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
+src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10) · collect.demographics (audiencia, CON-7)
 test/                        integración (pglite) y unitarias
 ```

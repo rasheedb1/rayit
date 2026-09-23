@@ -217,3 +217,130 @@ móvil que usa la propia pantalla de TikTok y encaja con el
   Facebook en el MVP. El job las cuenta como «sin fuente» y no llama.
 - **`seguidores conectados por hora`** (el «cuándo publicar» de RES-4):
   es `online_followers`, otra métrica y otra tabla. No es demografía.
+
+---
+
+## 1. Qué recolecta y qué escribe, cuenta por cuenta
+
+Una corrida de `collect.demographics` mira cada conexión viva del
+workspace y toma **una** de estas cuatro salidas:
+
+| Salida | Cuándo | Qué queda escrito | Llamadas |
+|---|---|---|---|
+| **Ya estaba** | Hay filas de `audience_breakdown` de hoy para esa cuenta | nada | 0 |
+| **Dato** | Pasa los prerrequisitos y la API responde | las filas del día en `audience_breakdown`, y se borra su `metric_gap` | 1 (TikTok), 2 (YouTube), 4 (Instagram) |
+| **Hueco** | Falta un prerrequisito, o la API confirma que falta | una fila en `metric_gap` con el `requirement_id` | **0** si se detectó antes; 1 si lo dijo la API |
+| **Fallo** | Red, 5xx, cuota, token muerto | nada nuevo; `auth` pasa la conexión a `needs_reauth` | 1 |
+
+`job_run.metadata` los separa: `saved`, `alreadyToday`, `gaps`
+(id de conexión → requisito), `unsupported`, `errored`, `transient`. No
+lleva ni un token: `metadata` pasa por el redactor del logger.
+
+## 2. La migración `0034_demografia_de_cuenta.sql` (para revisar y aplicar)
+
+Tres cosas, todas re-ejecutables. Va detrás de 0024–0033, que siguen
+pendientes en Supabase, y no depende de ninguna de ellas.
+
+1. `audience_breakdown_account_uniq`: índice único parcial sobre
+   `(connection_id, day, population, dimension, bucket) WHERE scope = 'account'`.
+   Sin él, dos corridas el mismo día duplicaban cada bucket y la
+   pantalla sumaba el doble.
+2. `metric_requirement`: el CHECK de `requirement` acepta
+   `owner_authorization`, y entran cinco filas nuevas (§0.2 (5)).
+3. `metric_gap`: tabla nueva, con `workspace_id`, su política de RLS en
+   `FORCE`, y `REVOKE INSERT, UPDATE, DELETE … FROM mc_app` —la escribe
+   el worker, que es quien mide; la web solo la lee, como con
+   `audience_breakdown` (0025 §5).
+
+Comprobado con `make db.check` (Postgres embebido, 33 migraciones,
+92 tablas) y con las 68 pruebas de la guardia de aislamiento de
+`packages/db` (`test/schema.test.ts`), que exige política a toda tabla
+nueva con `workspace_id` y se negaría a pasar si `metric_gap` no la
+tuviera.
+
+**No hace falta tocar `packages/db/src/schema/`** (tuyo): la guardia no
+exige que una tabla nueva esté en el esquema Drizzle mientras esté
+aislada —es el mismo caso de `connection_secret` (0015)—. Si prefieres
+tenerla tipada, es un `pgTable` de siete columnas.
+
+## 3. Lo que necesito de ti, Rasheed
+
+1. **Aplicar 0034** en la cola única, detrás de 0024–0033.
+2. **Nada más en el código.** `queries/conexiones.ts`,
+   `apps/worker/src/jobs/conexiones/` y `packages/connectors/` son míos,
+   y la migración es del tipo que ya firmamos con 0014, 0015, 0016 y
+   0022 (pasa `db.check`; `db.guardia` va contra Supabase y no puedo
+   correrla sin el vault).
+
+## 4. El contrato de lectura para RES-4 (tuyo, sprint 6)
+
+Ya está en `@mc/db`, importable por subruta como el resto del módulo:
+
+```ts
+import { getAccountAudience, listAccountAudience } from '@mc/db/queries/conexiones';
+
+const a = await withWorkspace((tx) => getAccountAudience(tx, connectionId));
+```
+
+Devuelve, por cuenta:
+
+```ts
+{
+  connectionId, platformId, handle,
+  day: '2026-09-23' | null,        // null = nunca hubo demografía
+  dimensions: [                     // solo las que SÍ llegaron
+    { population: 'followers', dimension: 'age',
+      buckets: [{ bucket: '13-17', share: null, absolute: 8200 }, …] },
+    { population: 'viewers', dimension: 'age_gender',
+      buckets: [{ bucket: '25-34|F', share: 0.279, absolute: null }, …] },
+  ],
+  gaps: [                           // vacío si no falta nada
+    { metricGroup: 'demografia_de_cuenta', requirementId: 'tt.audience.auth',
+      requirement: 'owner_authorization', messageEs: 'Esta cuenta se agregó por su @…',
+      fixUrl: null, day: '2026-09-23', detectedAt: '2026-09-23T05:20:00.000Z' },
+  ],
+}
+```
+
+Cuatro cosas que te ahorran decisiones en la pantalla:
+
+- **`messageEs` ya viene escrito**, de la migración. La pantalla no
+  redacta la frase; si mañana cambia, cambia en una migración y no en
+  el JSX. Es la regla de «una ausencia se explica con una frase».
+- **Los buckets llegan ordenados** como se pintan: la edad y edad×género
+  en su orden natural (`13-17`, `18-24`, …), y el país y la ciudad por
+  tamaño, de mayor a menor.
+- **`share` y `absolute` no son intercambiables y uno de los dos es
+  `null` siempre**: Instagram da personas, YouTube y TikTok dan
+  porcentajes. Un nulo no es un cero, y no lo conviertas: si enseñas
+  porcentajes sobre los absolutos de Instagram, di sobre qué total.
+- **Los `share` no suman 1** (§0.2 (3)). En el fixture de YouTube suman
+  0,91 porque Analytics omite los tramos con pocas vistas. No los
+  normalices: la diferencia es información.
+
+Lo que **no** trae y sigue siendo de RES-4: `online_followers` («cuándo
+publicar»), que es otra métrica y otra tabla, y la demografía por post.
+
+## 5. Verificación (23 de septiembre de 2026)
+
+_(se completa al cerrar la historia)_
+
+## 6. Qué falta para la prueba en vivo (el bloqueo)
+
+La historia está construida y probada contra respuestas grabadas. Para
+darla por terminada de verdad hace falta, por este orden:
+
+1. **Una conexión autorizada de verdad.** `OAUTH_CONNECT=1` y el flujo
+   de CON-3 con una cuenta profesional de Instagram. Es el camino más
+   corto: el de Meta no depende de ningún trámite y `me/insights` con
+   `instagram_business_manage_insights` ya está implementado y grabado.
+2. **YouTube**: depende de CON-8 (OAuth del canal) y de que el consentimiento
+   incluya `yt-analytics.readonly`, que **no** viene con `youtube.readonly`.
+3. **TikTok**: depende del trámite **CON-9** (Accounts API Access
+   Application Form). Sin él no hay `user.insights` y toda cuenta de
+   TikTok queda con su `metric_gap`, que es exactamente lo que la
+   pantalla debe enseñar mientras tanto.
+
+Mientras no llegue (1), lo que el producto enseña de demografía es la
+frase que explica por qué no la hay — que es el 100 % de lo que puede
+enseñar hoy con honestidad, y era el objetivo de la historia.
