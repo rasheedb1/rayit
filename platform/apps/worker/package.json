@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@mc/connectors": "workspace:*",
+    "@mc/core": "workspace:*",
     "@mc/db": "workspace:^",
     "pg": "^8.23.0",
     "pg-boss": "^12.33.4"
