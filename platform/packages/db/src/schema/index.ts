@@ -24,4 +24,5 @@ export * from './ventas.ts';
 export * from './cotizar.ts';
 export * from './campanas.ts';
 export * from './finanzas.ts';
+export * from './accesos.ts';
 export * from './vistas.ts';
