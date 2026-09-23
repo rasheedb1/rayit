@@ -5,7 +5,9 @@ import {
   pasoRecordatorio,
   pasoVigente,
   pasosPendientes,
+  pasoDeUrl,
   redactarRecordatorio,
+  urlRecordatorio,
   PASOS_RECORDATORIO,
   type EntradaRecordatorio,
   type NumeroPaso,
@@ -202,5 +204,27 @@ describe('el texto de cada paso', () => {
   test('los centavos no se pierden: el monto se formatea desde el texto', () => {
     const r = redactarRecordatorio({ ...base, moneda: 'USD', locale: 'en-US', total: '9007199254740.99', pendiente: '9007199254740.99' });
     assert.match(r.cuerpo, /USD 9,007,199,254,740\.99/);
+  });
+});
+
+describe('el enlace y el paso que codifica', () => {
+  test('el enlace lleva la factura y el paso', () => {
+    assert.equal(urlRecordatorio('abc', 4), '/finanzas/facturas/abc?recordatorio=4');
+  });
+
+  test('pasoDeUrl solo acepta los cinco pasos', () => {
+    assert.equal(pasoDeUrl('/finanzas/facturas/x?recordatorio=4'), 4);
+    assert.equal(pasoDeUrl('/finanzas/facturas/x?recordatorio=1&otro=2'), 1);
+    assert.equal(pasoDeUrl('/finanzas/facturas/x?recordatorio=0'), null);
+    assert.equal(pasoDeUrl('/finanzas/facturas/x?recordatorio=6'), null);
+    assert.equal(pasoDeUrl('/finanzas/facturas/x'), null);
+    assert.equal(pasoDeUrl(null), null);
+    assert.equal(pasoDeUrl(undefined), null);
+  });
+
+  test('ida y vuelta para los cinco pasos', () => {
+    for (const p of PASOS_RECORDATORIO) {
+      assert.equal(pasoDeUrl(urlRecordatorio('00000000-0000-4000-8000-000000000001', p.numero)), p.numero);
+    }
   });
 });

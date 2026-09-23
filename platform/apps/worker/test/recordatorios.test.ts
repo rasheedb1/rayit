@@ -11,8 +11,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { pasoDeUrl } from '@mc/core';
 import { allJobs } from '../src/jobs/index.ts';
-import { pasoDeUrl } from '../src/jobs/finanzas/recordatorios.ts';
 import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 

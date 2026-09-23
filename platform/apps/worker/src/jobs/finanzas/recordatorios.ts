@@ -20,7 +20,7 @@
  * ctx.db corre como mc_worker y se salta RLS: cada SELECT, INSERT y
  * UPDATE lleva `workspace_id` explícito.
  */
-import { definicionPaso, hoyEnZona, pasosPendientes, redactarRecordatorio, type DefinicionPaso } from '@mc/core';
+import { definicionPaso, hoyEnZona, pasoDeUrl, pasosPendientes, redactarRecordatorio, urlRecordatorio, type DefinicionPaso } from '@mc/core';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 
 export interface RecordatoriosPayload extends JobPayload {
@@ -71,19 +71,6 @@ const FACTURAS = `
      AND ($1::uuid IS NULL OR i.workspace_id = $1)
      AND ($2::uuid IS NULL OR i.id = $2)
    ORDER BY i.due_on, i.number`;
-
-/** El enlace de la bandeja, que además es la clave de idempotencia del paso. */
-export function urlRecordatorio(invoiceId: string, paso: number): string {
-  return `/finanzas/facturas/${invoiceId}?recordatorio=${paso}`;
-}
-
-/** El paso que lleva codificado un action_url; null si no es de un recordatorio. */
-export function pasoDeUrl(actionUrl: string | null): number | null {
-  const m = /[?&]recordatorio=(\d+)(?:&|$)/.exec(actionUrl ?? '');
-  if (!m?.[1]) return null;
-  const paso = Number(m[1]);
-  return Number.isInteger(paso) && paso >= 1 && paso <= 5 ? paso : null;
-}
 
 /** Los pasos que ya tienen su recordatorio escrito, por factura. */
 async function emitidosPorFactura(ctx: JobContext, facturas: readonly FacturaRow[]): Promise<Map<string, number[]>> {

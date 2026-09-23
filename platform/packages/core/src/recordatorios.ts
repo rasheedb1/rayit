@@ -176,10 +176,21 @@ const llano = (s: string): string => s.replace(/[  ]/g, ' ');
 
 const DECIMAL_RE = /^-?\d+(\.\d+)?$/;
 
-/** El literal numérico que pide Intl v3, comprobado antes de afirmarlo. */
-function literal(monto: Decimal): Intl.StringNumericLiteral {
+/**
+ * Intl.NumberFormat v3 (Node 20) formatea un decimal desde su TEXTO,
+ * pero el tipo que lo declara (`Intl.StringNumericLiteral`) solo existe
+ * con `lib: ES2023`, y este paquete lo compila todo el que lo importa:
+ * exigirles a todos esa bandera sería contagiar un detalle de aquí. La
+ * conversión se queda encerrada en esta función, con el decimal
+ * comprobado antes.
+ */
+interface FormateaTexto {
+  format(value: string): string;
+}
+
+function comoTexto(f: Intl.NumberFormat, monto: Decimal): string {
   if (!DECIMAL_RE.test(monto)) throw new Error(`No es un decimal: "${monto}".`);
-  return monto as Intl.StringNumericLiteral;
+  return (f as unknown as FormateaTexto).format(monto);
 }
 
 /**
@@ -198,7 +209,7 @@ function dinero(monto: Decimal, moneda: string, locale: string): string {
     f = new Intl.NumberFormat(locale, { minimumFractionDigits: digitos, maximumFractionDigits: digitos });
     numeroCache.set(clave, f);
   }
-  return `${moneda.toUpperCase()} ${llano(f.format(literal(monto)))}`;
+  return `${moneda.toUpperCase()} ${llano(comoTexto(f, monto))}`;
 }
 
 /** '13 de agosto de 2026'. Siempre en UTC: una fecha de calendario no tiene hora. */
@@ -319,4 +330,27 @@ export function redactarRecordatorio(e: EntradaRecordatorio): Recordatorio {
   ].join('\n');
 
   return { asunto: asuntoDe(e, diasHasta, mora), cuerpo, severity, diasDeMora: mora };
+}
+
+// ---------------------------------------------------------------------
+// El enlace, que además es la clave de idempotencia
+// ---------------------------------------------------------------------
+
+/**
+ * El enlace de la fila en la bandeja. El paso va codificado aquí —y no
+ * en el título, que es texto de producto y se va a reescribir— porque
+ * es lo que hace única la pareja (factura, paso): si la idempotencia
+ * colgara del título, cambiar una palabra reemitiría todos los
+ * recordatorios de todas las facturas.
+ */
+export function urlRecordatorio(invoiceId: string, paso: NumeroPaso): string {
+  return `/finanzas/facturas/${invoiceId}?recordatorio=${paso}`;
+}
+
+/** El paso que lleva codificado un `action_url`; null si no es de un recordatorio. */
+export function pasoDeUrl(actionUrl: string | null | undefined): NumeroPaso | null {
+  const m = /[?&]recordatorio=(\d+)(?:&|$)/.exec(actionUrl ?? '');
+  if (!m?.[1]) return null;
+  const paso = Number(m[1]);
+  return PASOS_RECORDATORIO.some((p) => p.numero === paso) ? (paso as NumeroPaso) : null;
 }
