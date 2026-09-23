@@ -148,6 +148,12 @@ export function CotizacionForm({
   }
 
   const [dealId, setDealId] = useState(iniciales.dealId);
+  // Si el negocio ya tiene una cotización que la marca puede aceptar,
+  // enviar esta la deja sin efecto (0033): se dice al elegirlo, en la
+  // ayuda del campo, y no después de enviar (pulido r7).
+  const vivasDelNegocio = deals?.find((d) => d.id === dealId)?.liveQuotes ?? [];
+  const ayudaNegocio =
+    vivasDelNegocio.length > 0 ? t.negocioConViva(vivasDelNegocio.map((v) => v.number)) : t.negocioAyuda;
   const [lineas, setLineas] = useState<Linea[]>(() =>
     iniciales.lineas.length > 0
       ? iniciales.lineas.map((l) => ({
@@ -291,7 +297,7 @@ export function CotizacionForm({
         )}
 
         {deals && (
-          <Field label={t.negocio} required help={t.negocioAyuda} error={errors.dealId} htmlFor={`${base}deal`}>
+          <Field label={t.negocio} required help={ayudaNegocio} error={errors.dealId} htmlFor={`${base}deal`}>
             <Select
               name="dealId"
               required

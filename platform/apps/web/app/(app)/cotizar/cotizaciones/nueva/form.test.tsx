@@ -5,7 +5,12 @@ import type { MediaKitAdjuntable, QuotableDeal, RateCardItem } from "@mc/db/quer
 import { CotizacionForm, type ValoresCotizacion } from "./form";
 
 const DEALS: QuotableDeal[] = [
-  { id: "00000002-0000-4000-8000-0000000de001", name: "Lanzamiento", companyId: "c1", companyName: "Café Alma", stageId: "conversacion", stageLabel: "En conversación", amount: null, currency: "COP" },
+  { id: "00000002-0000-4000-8000-0000000de001", name: "Lanzamiento", companyId: "c1", companyName: "Café Alma", stageId: "conversacion", stageLabel: "En conversación", amount: null, currency: "COP", liveQuotes: [] },
+  {
+    id: "00000002-0000-4000-8000-0000000de002", name: "Temporada", companyId: "c2", companyName: "Fresko Market", stageId: "propuesta",
+    stageLabel: "Propuesta enviada", amount: "9000000.00", currency: "COP",
+    liveQuotes: [{ id: "00000009-0000-4000-8000-0000000c0005", number: "COT-2026-005", status: "viewed" }],
+  },
 ];
 
 function item(over: Partial<RateCardItem>): RateCardItem {
@@ -52,6 +57,19 @@ function formulario(action = vi.fn(async () => ({})), mediaKits = KITS, iniciale
 }
 
 describe("CotizacionForm", () => {
+  it("al elegir un negocio con otra cotización viva, la ayuda del campo avisa que quedará sin efecto (pulido r7)", () => {
+    render(formulario());
+    const negocio = screen.getByLabelText(/Negocio/);
+    expect(negocio).toHaveAccessibleDescription(/Enviar la cotización lo pasa a «Propuesta enviada»/);
+    fireEvent.change(negocio, { target: { value: DEALS[1]!.id } });
+    expect(negocio).toHaveAccessibleDescription(
+      "Este negocio ya tiene COT-2026-005 enviada. Cuando envíes esta, COT-2026-005 dejará de poder aceptarse.",
+    );
+    // Otro negocio sin versión viva vuelve a la ayuda de siempre.
+    fireEvent.change(negocio, { target: { value: DEALS[0]!.id } });
+    expect(negocio).toHaveAccessibleDescription(/Enviar la cotización lo pasa a «Propuesta enviada»/);
+  });
+
   it("los ids salen iguales en cada render del servidor: la hidratación no choca", () => {
     const ids = (html: string) => [...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
     const primero = ids(renderToString(formulario()));

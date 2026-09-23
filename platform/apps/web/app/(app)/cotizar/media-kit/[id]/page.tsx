@@ -6,7 +6,7 @@ import { withWorkspace } from "@/lib/db";
 import { MESSAGES } from "../../messages";
 import { MediaKitVista } from "../../_ui/media-kit-vista";
 
-export const metadata: Metadata = { title: "Vista previa del media kit" };
+export const metadata: Metadata = { title: MESSAGES.meta.mediaKitVistaPrevia };
 export const dynamic = "force-dynamic";
 
 /**

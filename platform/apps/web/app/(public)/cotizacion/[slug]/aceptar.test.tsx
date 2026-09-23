@@ -6,7 +6,7 @@ vi.mock("../../actions", () => ({
   aceptarCotizacionPublica: (...args: unknown[]) => aceptarCotizacionPublica(...args),
 }));
 
-import { AceptarCotizacion } from "./aceptar";
+import { AceptarCotizacion, CotizacionYaAceptada } from "./aceptar";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
 
 const t = MESSAGES.publico.cotizacion;
@@ -40,18 +40,20 @@ describe("AceptarCotizacion: lo que ya no se puede aceptar dice por qué", () =>
     expect(await screen.findByRole("alert")).toHaveTextContent(t.vencida);
   });
 
-  it("aceptada en otra pestaña: no es un error, ya estaba aceptada", async () => {
+  it("aceptada en otra pestaña (o por otra persona): no es un error, y no se le dice «a tu nombre»", async () => {
     await aceptarCon({ status: "no_aceptable", quoteStatus: "accepted" });
     const estado = await screen.findByRole("status");
-    expect(estado).toHaveTextContent(t.graciasTitle);
+    expect(estado).toHaveTextContent(t.aceptadaTitle);
     expect(estado).toHaveTextContent(t.yaAceptada);
+    expect(estado).not.toHaveTextContent(t.graciasDescription);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("aceptada ahora: gracias, sin prometer lo que el panel no enseña", async () => {
+  it("aceptada ahora: la respuesta a la propia firma, «a tu nombre»", async () => {
     await aceptarCon({ status: "ok", campaignPending: false });
     const estado = await screen.findByRole("status");
-    expect(estado).toHaveTextContent("Le avisamos a quien te la envió");
+    expect(estado).toHaveTextContent(t.graciasTitle);
+    expect(estado).toHaveTextContent("Quedó registrada a tu nombre. Le avisamos a quien te la envió.");
   });
 
   it("con la firma incompleta, el foco va al primer campo con error y los campos llevan aria-invalid", async () => {
@@ -82,5 +84,21 @@ describe("AceptarCotizacion: lo que ya no se puede aceptar dice por qué", () =>
     await aceptarCon({ status: "error" });
     const alerta = await screen.findByText(t.error);
     await waitFor(() => expect(alerta).toHaveFocus());
+  });
+});
+
+describe("CotizacionYaAceptada: el enlace de una aceptada, leído al abrirlo (pulido r7)", () => {
+  it("en tercera persona, con quién y cuándo: quien recarga puede no ser quien firmó", () => {
+    render(<CotizacionYaAceptada nombre="Ana Pérez" fecha="27 de agosto de 2026" />);
+    const estado = screen.getByRole("status");
+    expect(estado).toHaveTextContent(t.aceptadaTitle);
+    expect(estado).toHaveTextContent("Aceptada por Ana Pérez el 27 de agosto de 2026. Quien te la envió ya lo sabe.");
+    expect(estado).not.toHaveTextContent(t.graciasTitle);
+    expect(estado).not.toHaveTextContent("a tu nombre");
+  });
+
+  it("aceptada desde el panel, sin firma: dice cuándo, sin inventar quién", () => {
+    render(<CotizacionYaAceptada nombre={null} fecha="27 de agosto de 2026" />);
+    expect(screen.getByRole("status")).toHaveTextContent("Aceptada el 27 de agosto de 2026. Quien te la envió ya lo sabe.");
   });
 });

@@ -15,7 +15,7 @@ import { MESSAGES } from "../../messages";
 import { estadoVisible, pillDeCotizacion } from "../../_lib/estado";
 import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 
-export const metadata: Metadata = { title: "Cotizaciones" };
+export const metadata: Metadata = { title: MESSAGES.meta.cotizaciones };
 export const dynamic = "force-dynamic";
 
 export default async function CotizacionesPage() {

@@ -1741,6 +1741,33 @@ describe('0033 · un negocio, una cotización aceptada', () => {
     assert.deepEqual(await contar(dealId), { campanas: 1, avisos: 1, aceptadas: 1 });
   });
 
+  test('antes de enviar, el borrador y el negocio saben qué versión viva quedará sin efecto (pulido r7)', async () => {
+    const dealId = await negocio('Aviso antes de enviar (r7)');
+    const vieja = await borrador(dealId, '5000000');
+    const nueva = await borrador(dealId, '5200000');
+    await enviar(vieja.id);
+
+    const leer = (id: string) => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, id));
+    // El borrador ve la viva; la viva no se ve a sí misma.
+    assert.deepEqual((await leer(nueva.id))!.liveSiblings, [{ id: vieja.id, number: vieja.number, status: 'sent' }]);
+    assert.deepEqual((await leer(vieja.id))!.liveSiblings, []);
+    // El formulario de nueva cotización también la ve, en el negocio.
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx))).find((d) => d.id === dealId);
+    assert.deepEqual(deal!.liveQuotes, [{ id: vieja.id, number: vieja.number, status: 'sent' }]);
+
+    // Una enviada cuya validez ya pasó no se puede aceptar: no se anuncia.
+    await t.admin(`UPDATE quote SET valid_until = current_date - 3 WHERE id = '${vieja.id}'`);
+    assert.deepEqual((await leer(nueva.id))!.liveSiblings, []);
+    await t.admin(`UPDATE quote SET valid_until = current_date + 14 WHERE id = '${vieja.id}'`);
+
+    // Enviada la nueva, la vieja sabe cómo está su sucesora HOY.
+    await enviar(nueva.id);
+    assert.equal((await leer(vieja.id))!.supersededByStatus, 'sent');
+    assert.deepEqual((await leer(nueva.id))!.liveSiblings, []);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, nueva.id, TEXTOS));
+    assert.equal((await leer(vieja.id))!.supersededByStatus, 'accepted');
+  });
+
   test('dos versiones vivas del mismo negocio (datos de antes de 0033): aceptar las dos deja UNA campaña', async () => {
     const dealId = await negocio('Dos vivas (r6)');
     const { vieja, nueva } = await dosVivas(dealId);

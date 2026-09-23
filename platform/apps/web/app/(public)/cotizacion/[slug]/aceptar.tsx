@@ -26,6 +26,25 @@ export function textoNoAceptable(quoteStatus: string): string {
   return t.vencida;
 }
 
+/**
+ * Una cotización YA aceptada, tal como se lee al abrir el enlace. En
+ * tercera persona y con quién y cuándo: quien recarga puede ser otra
+ * persona del equipo de la marca, que no firmó, y «quedó registrada a tu
+ * nombre» le diría algo falso. «Listo… a tu nombre» es solo la respuesta
+ * a la propia firma, dentro de AceptarCotizacion (pulido r7).
+ *
+ * `fecha` llega ya formateada con el locale y la zona del documento.
+ */
+export function CotizacionYaAceptada({ nombre, fecha }: { nombre: string | null; fecha: string | null }) {
+  const t = MESSAGES.publico.cotizacion;
+  return (
+    <div role="status" className="rounded-md border border-good/30 bg-good-wash px-4 py-3">
+      <p className="text-sm font-medium text-good">{t.aceptadaTitle}</p>
+      <p className="mt-1 text-sm text-ink-2">{fecha ? t.aceptadaLeida(nombre, fecha) : t.yaAceptada}</p>
+    </div>
+  );
+}
+
 export function AceptarCotizacion({ slug }: { slug: string }) {
   const t = MESSAGES.publico.cotizacion;
   const id = useId();
@@ -60,14 +79,10 @@ export function AceptarCotizacion({ slug }: { slug: string }) {
     );
   }
   // Aceptada en otra pestaña (o por otra persona de la marca): no es un
-  // error, y decir «venció» sería falso.
+  // error, y decir «venció» sería falso. Tampoco es la firma de quien
+  // pulsó: no se le dice «Listo… a tu nombre».
   if (resultado?.status === "no_aceptable" && resultado.quoteStatus === "accepted") {
-    return (
-      <div role="status" className="rounded-md border border-good/30 bg-good-wash px-4 py-3">
-        <p className="text-sm font-medium text-good">{t.graciasTitle}</p>
-        <p className="mt-1 text-sm text-ink-2">{t.yaAceptada}</p>
-      </div>
-    );
+    return <CotizacionYaAceptada nombre={null} fecha={null} />;
   }
 
   const errores = resultado?.status === "invalid" ? resultado.errors : {};

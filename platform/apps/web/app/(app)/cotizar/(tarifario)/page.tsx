@@ -9,7 +9,7 @@ import { MESSAGES } from "../messages";
 import { TarifarioTabla } from "../tarifario-tabla";
 import { BASIS_VACIO, leerBasis } from "../_lib/tarifario";
 
-export const metadata: Metadata = { title: "Cotizar" };
+export const metadata: Metadata = { title: MESSAGES.meta.tarifario };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
