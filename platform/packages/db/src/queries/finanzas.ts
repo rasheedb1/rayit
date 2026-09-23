@@ -22,9 +22,11 @@ import {
   subDecimal,
   subtotalFromTotal,
   transitionInvoice as applyTransition,
-  DEFAULT_TAX_RATE,
-  DEFAULT_WITHHOLDING_RATE,
+  financeSettingsToJson,
+  parseFinanceSettings,
+  pctToRate,
   type AgingBucket,
+  type FinanceSettings,
   type InvoiceStatus,
   type TransitionInput,
 } from '@mc/core';
@@ -393,10 +395,18 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
     throw new Error(`Las facturas van en la moneda del workspace (${wsCurrency}); recibió ${currency}.`);
   }
 
+  // Los porcentajes por defecto son los CONFIGURADOS (FIN-8), no las
+  // constantes de core: DEFAULT_TAX_RATE y DEFAULT_WITHHOLDING_RATE
+  // siguen existiendo como el valor de fábrica de un workspace nuevo, y
+  // es parseFinanceSettings quien los pone. Quien llama puede seguir
+  // pasando los suyos —el formulario lo hace, campo a campo—.
+  const finanzas = input.taxRate === undefined || input.withholdingRate === undefined
+    ? await getFinanceSettings(tx)
+    : null;
   const totals = computeInvoiceTotals({
     subtotal: input.subtotal,
-    taxRate: input.taxRate ?? DEFAULT_TAX_RATE,
-    withholdingRate: input.withholdingRate ?? DEFAULT_WITHHOLDING_RATE,
+    taxRate: input.taxRate ?? pctToRate(finanzas!.ivaPct),
+    withholdingRate: input.withholdingRate ?? pctToRate(finanzas!.retencionPct),
   });
 
   // La empresa tiene que estar vinculada a ESTE workspace: la FK de
@@ -506,9 +516,15 @@ export async function createInvoiceFromCampaign(
   if (!camp) throw new Error('La campaña no existe en este workspace.');
   if (!camp.amount) throw new Error(`La campaña «${camp.name}» no tiene monto acordado: escríbelo a mano.`);
 
-  const taxRate = overrides.taxRate ?? DEFAULT_TAX_RATE;
+  // La configuración manda también aquí: es el camino del botón
+  // «Facturar» de Campañas (CAM-1), y una factura creada desde una
+  // campaña no puede nacer con otros porcentajes que una escrita a mano.
+  // El plazo de la cotización, si lo hay, gana al del workspace: es lo
+  // que se le prometió a ESA marca.
+  const finanzas = await getFinanceSettings(tx);
+  const taxRate = overrides.taxRate ?? pctToRate(finanzas.ivaPct);
   const issuedOn = overrides.issuedOn ?? camp.today;
-  const dueOn = overrides.dueOn ?? addDays(issuedOn, camp.payment_terms_days ?? 30);
+  const dueOn = overrides.dueOn ?? addDays(issuedOn, camp.payment_terms_days ?? finanzas.plazoDias);
 
   return createInvoice(tx, {
     companyId: camp.company_id,
@@ -516,10 +532,194 @@ export async function createInvoiceFromCampaign(
     quoteId: camp.quote_id,
     subtotal: subtotalFromTotal(camp.amount, taxRate),
     taxRate,
-    withholdingRate: overrides.withholdingRate ?? DEFAULT_WITHHOLDING_RATE,
+    withholdingRate: overrides.withholdingRate ?? pctToRate(finanzas.retencionPct),
     issuedOn,
     dueOn,
     externalRef: overrides.externalRef ?? null,
     currency: camp.currency,
   });
+}
+
+// ---------------------------------------------------------------------
+// Configuración financiera del workspace (FIN-8)
+// ---------------------------------------------------------------------
+
+/** Lo que devuelve un guardado: el bloque que quedó, su moneda y lo que hay que advertir. */
+export interface FinanceSettingsSaved {
+  settings: FinanceSettings;
+  /** La moneda que quedó en workspace.currency, en mayúsculas. */
+  currency: string;
+  /**
+   * Cuántas facturas quedaron en una moneda distinta de la del
+   * workspace. Cambiar la moneda NO convierte nada (FIN-8 §0.3 F), y
+   * los KPI de /finanzas suman sin convertir: la pantalla lo dice.
+   */
+  invoicesInOtherCurrency: number;
+}
+
+/** Se lanza si el UPDATE no tocó ninguna fila: la política de 0024 no está en esa base. */
+export class WorkspaceNotWritable extends Error {
+  constructor(workspaceId: string) {
+    super(
+      `No se pudo guardar la configuración del workspace ${workspaceId}: el UPDATE no tocó ninguna fila. ` +
+        'Falta la política workspace_update o el GRANT UPDATE (settings, currency) de la migración 0024 §7.6 ' +
+        'en esta base. Corre: make db.migrate',
+    );
+    this.name = 'WorkspaceNotWritable';
+  }
+}
+
+/**
+ * El bloque `settings.finanzas` del workspace de la transacción, ya
+ * tipado y con los valores por defecto puestos (core:
+ * parseFinanceSettings).
+ *
+ * ES LA ÚNICA PUERTA. FIN-1 (la cabecera y los porcentajes de una
+ * factura nueva), FIN-2 (la tasa que estampa cada `tax_reserve`), FIN-4
+ * (el correo de cobro) y FIN-6 leen de aquí; ninguno vuelve a escribir
+ * `19` ni `'0.11'` a mano. Hasta FIN-8, `settings.finanzas` lo escribían
+ * los seeds 0002 y 0003 y no lo leía nadie.
+ *
+ * El filtro es `id = current_workspace_id()` y no `tx.workspaceId`, por
+ * el mismo motivo que `getWorkspace` (queries/cimientos.ts): desde 0028
+ * una transacción con identidad ve además los espacios de su persona, y
+ * sin filtro `limit 1` podía devolver el bloque del vecino.
+ */
+export async function getFinanceSettings(tx: WorkspaceTx): Promise<FinanceSettings> {
+  const { rows } = await tx.query<{ finanzas: unknown }>(
+    "SELECT settings->'finanzas' AS finanzas FROM workspace WHERE id = current_workspace_id()",
+  );
+  if (rows.length === 0) {
+    throw new Error(
+      `El workspace ${tx.workspaceId} no existe en esta base o la RLS no lo deja ver. ` +
+        'Revisa que la base tenga el seed aplicado.',
+    );
+  }
+  // Sin bloque (un workspace nuevo, que nace con settings '{}') salen
+  // los valores por defecto. No es un error: es un workspace sin
+  // configurar, y la pantalla lo dice con una frase.
+  return parseFinanceSettings(rows[0]?.finanzas);
+}
+
+/**
+ * Guarda el bloque `finanzas` y, si viene, la moneda del workspace.
+ *
+ * El UPDATE es un MERGE POR LLAVE —`settings = settings || $1::jsonb`—,
+ * no un reemplazo del jsonb entero. `||` en jsonb es superficial:
+ * reemplaza la llave `finanzas` completa y deja intactas las hermanas.
+ * Hoy la hermana que hay es `taxRate`, que escribe y lee Cotizar
+ * (queries/cotizar/cotizacion.ts, getDefaultTaxRate). Escribir
+ * `settings` entero desde JavaScript haría que una pantalla de Finanzas
+ * borrara lo que guardó Cotizar en la petición de al lado.
+ *
+ * Los privilegios ya están: 0024 §7.6 concede a mc_app
+ * `UPDATE (name, slug, country, currency, timezone, locale,
+ * niche_slugs, settings, updated_at)` y la política `workspace_update`
+ * aísla la fila. `plan`, `kind` y `deleted_at` NO están en esa lista, a
+ * propósito, y esta función no los nombra.
+ *
+ * Cambiar la moneda no convierte nada. Se permite (un workspace mal
+ * configurado tiene que poder corregirse) y se devuelve cuántas
+ * facturas quedaron en otra, para que la pantalla lo advierta.
+ */
+export async function updateFinanceSettings(
+  tx: WorkspaceTx,
+  input: { settings: FinanceSettings; currency?: string },
+): Promise<FinanceSettingsSaved> {
+  const currency = input.currency?.trim().toUpperCase();
+  if (currency !== undefined && !/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`La moneda debe ser un código ISO-4217 de tres letras, no "${input.currency}".`);
+  }
+
+  // El antes, para la bitácora y para saber si la moneda cambió de
+  // verdad. Va con FOR UPDATE: entre leerlo y escribirlo no se cuela
+  // otro guardado que se pierda sin que nadie se entere.
+  const antes = await tx.query<{ finanzas: unknown; currency: string }>(
+    `SELECT settings->'finanzas' AS finanzas, currency
+     FROM workspace WHERE id = current_workspace_id() FOR UPDATE`,
+  );
+  const previo = antes.rows[0];
+  if (!previo) throw new WorkspaceNotWritable(tx.workspaceId);
+  const previas = parseFinanceSettings(previo.finanzas);
+  const monedaPrevia = previo.currency.toUpperCase();
+
+  const bloque = financeSettingsToJson(input.settings);
+  // `RETURNING id` y no rowCount: tx.query devuelve solo `rows`
+  // (client.ts, QueryResult). El id del workspace es un uuid, no un
+  // bigserial, así que devolverlo no rompe la regla de CIM-2 §3.
+  const actualizado = await tx.query<{ id: string }>(
+    `UPDATE workspace
+     SET settings = settings || $1::jsonb,
+         currency = coalesce($2, currency)
+     WHERE id = current_workspace_id()
+     RETURNING id`,
+    [JSON.stringify({ finanzas: bloque }), currency ?? null],
+  );
+  if (actualizado.rows.length === 0) throw new WorkspaceNotWritable(tx.workspaceId);
+
+  // TODO(ACC-2): reemplazar por audit(tx, { action: 'workspace.settings_updated',
+  // entityType: 'workspace', entityId: tx.workspaceId, before, after }) cuando
+  // packages/db/src/audit.ts esté en main (rama nicolas/ACC-2-bitacora-obligatoria;
+  // hay que agregar la acción a AUDIT_ACTIONS: docs/propuestas/FIN-8.md §2.2).
+  // Hasta entonces la fila se escribe aquí, en la MISMA transacción: si el
+  // UPDATE hace rollback, la bitácora se va con él.
+  //
+  // El actor sale de current_user_id() en SQL, no de un parámetro: nada
+  // que venga del navegador puede cambiarlo. Sin identidad (una copia sin
+  // llaves, las pruebas) es 'system', porque decir 'user' sin saber cuál
+  // sería mentir. No se devuelve el id: es bigserial (CIM-2 §3).
+  //
+  // before/after llevan el bloque y la moneda, que son del propio
+  // workspace y son exactamente lo que la factura imprime: no hay
+  // secreto ni PII de un tercero.
+  await tx.query(
+    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
+     VALUES (current_workspace_id(), current_user_id(),
+             CASE WHEN current_user_id() IS NULL THEN 'system' ELSE 'user' END,
+             'workspace.settings_updated', 'workspace', current_workspace_id(), $1::jsonb, $2::jsonb)`,
+    [
+      JSON.stringify({ finanzas: financeSettingsToJson(previas), currency: monedaPrevia }),
+      JSON.stringify({ finanzas: bloque, currency: currency ?? monedaPrevia }),
+    ],
+  );
+
+  const monedaFinal = currency ?? monedaPrevia;
+  const otras = await tx.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) <> $1 AND status <> 'void'",
+    [monedaFinal],
+  );
+
+  return {
+    settings: parseFinanceSettings(bloque),
+    currency: monedaFinal,
+    invoicesInOtherCurrency: otras.rows[0]?.n ?? 0,
+  };
+}
+
+/**
+ * Cuántas facturas vivas hay en una moneda distinta de la indicada. Es
+ * el número que el guardado devuelve DESPUÉS de cambiar la moneda: las
+ * que se quedaron atrás. Las anuladas no cuentan: ya no suman en ningún
+ * KPI.
+ */
+export async function countInvoicesInOtherCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) <> $1 AND status <> 'void'",
+    [currency.trim().toUpperCase()],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Cuántas facturas vivas hay EN esa moneda. Es lo que la pantalla de
+ * configuración pregunta al pintar: son las que se quedarían atrás si
+ * alguien cambia la moneda del workspace, y decirlo antes es la mitad
+ * del punto de la advertencia.
+ */
+export async function countLiveInvoicesInCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) = $1 AND status <> 'void'",
+    [currency.trim().toUpperCase()],
+  );
+  return rows[0]?.n ?? 0;
 }

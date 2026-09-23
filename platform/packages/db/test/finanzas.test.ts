@@ -1,6 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { InvalidTransition } from '@mc/core';
+import { InvalidTransition, mulRateHalfUp, pctToRate } from '@mc/core';
 import {
   createInvoice,
   createInvoiceFromCampaign,
@@ -10,8 +10,12 @@ import {
   listCompanies,
   listInvoices,
   transitionInvoice,
+  countInvoicesInOtherCurrency,
+  getFinanceSettings,
+  updateFinanceSettings,
   InvoiceNotFound,
 } from '../src/queries/finanzas.ts';
+import { getWorkspaceSettings } from '../src/queries/cimientos.ts';
 import { assertWorkspaceId } from '../src/index.ts';
 import {
   openTestDb, type TestDb,
@@ -244,5 +248,246 @@ describe('transiciones', () => {
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, '00000000-0000-4000-8000-000000000000', 'sent')),
       InvoiceNotFound,
     );
+  });
+});
+
+// ------------------------------------------- configuración financiera (FIN-8)
+
+/**
+ * Leer una tabla con RLS hay que hacerlo DENTRO de una transacción con
+ * el workspace fijado: `t.raw` corre como mc_app sin
+ * `app.workspace_id`, así que `current_workspace_id()` es NULL y las
+ * políticas de 0010 y 0024 devuelven cero filas sin avisar. Es
+ * exactamente lo que estas pruebas comprueban en otras, así que aquí se
+ * usa la puerta buena.
+ */
+function leer<T extends Record<string, unknown>>(workspaceId: string, sql: string, params: unknown[] = []): Promise<T[]> {
+  return t.db.withWorkspace(workspaceId, async (tx) => (await tx.query<T>(sql, params)).rows);
+}
+
+describe('configuración financiera (FIN-8)', () => {
+  test('el bloque del seed se lee con la misma función que usarán FIN-1, FIN-2, FIN-4 y FIN-6', async () => {
+    const s = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.retencionPct, '11');
+    assert.equal(s.reservaPct, '11');
+    assert.equal(s.plazoDias, 30);
+    assert.equal(s.razonSocial, null, 'el seed no trae datos fiscales: es una ausencia, no ""');
+  });
+
+  test('un workspace sin bloque devuelve los valores por defecto de Colombia, no un error', async () => {
+    const s = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.plazoDias, 30);
+    // Y su settings sigue siendo '{}': leer no escribe nada.
+    const [fila] = await leer<{ settings: unknown }>(WORKSPACE_AJENO, 'SELECT settings FROM workspace WHERE id = current_workspace_id()');
+    assert.deepEqual(fila?.settings, {});
+  });
+
+  test('guardar hace MERGE por llave: no borra lo que otro módulo dejó en settings', async () => {
+    // Cotizar guarda settings.taxRate en la RAÍZ (queries/cotizar/cotizacion.ts,
+    // getDefaultTaxRate). Un reemplazo del jsonb entero lo borraría.
+    await t.admin(`
+      UPDATE workspace
+      SET settings = settings || '{"taxRate": "0.19", "otroModulo": {"a": 1}}'::jsonb
+      WHERE id = '${WORKSPACE_AJENO}';
+    `);
+    const base = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, ivaPct: '16', razonSocial: 'Ajeno S.A. de C.V.' } }),
+    );
+    const [fila] = await leer<{ settings: Record<string, unknown> }>(
+      WORKSPACE_AJENO, 'SELECT settings FROM workspace WHERE id = current_workspace_id()');
+    assert.equal(fila?.settings['taxRate'], '0.19', 'la llave de Cotizar sigue ahí');
+    assert.deepEqual(fila?.settings['otroModulo'], { a: 1 });
+    const guardado = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    assert.equal(guardado.ivaPct, '16');
+    assert.equal(guardado.razonSocial, 'Ajeno S.A. de C.V.');
+  });
+
+  test('guardar deja su fila en audit_log, con before y after y sin el id bigserial', async () => {
+    const [previo] = await leer<{ n: number }>(WORKSPACE_LAURA,
+      `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    const salida = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, retencionPct: '10' } }),
+    );
+    // La función no devuelve ningún id de audit_log (CIM-2 §3).
+    assert.deepEqual(Object.keys(salida).sort(), ['currency', 'invoicesInOtherCurrency', 'settings']);
+
+    const despues = await leer<{ n: number }>(WORKSPACE_LAURA,
+      `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
+    assert.equal((despues[0]?.n ?? 0) - (previo?.n ?? 0), 1, 'un guardado, una fila');
+
+    const [fila] = await leer<{
+      actor_user_id: string | null; actor_kind: string; entity_type: string; entity_id: string;
+      before: Record<string, unknown>; after: Record<string, unknown>;
+    }>(WORKSPACE_LAURA,
+      `SELECT actor_user_id, actor_kind, entity_type, entity_id, before, after FROM audit_log
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+    assert.ok(fila, 'hay fila de bitácora');
+    assert.equal(fila.actor_kind, 'system', 'sin identidad en la transacción no se dice "user"');
+    assert.equal(fila.actor_user_id, null);
+    assert.equal(fila.entity_type, 'workspace');
+    assert.equal(fila.entity_id, WORKSPACE_LAURA);
+    const antes = fila.before['finanzas'] as Record<string, unknown>;
+    const ahora = fila.after['finanzas'] as Record<string, unknown>;
+    assert.equal(antes['retencion_pct'], '11');
+    assert.equal(ahora['retencion_pct'], '10');
+    assert.equal(fila.before['currency'], 'COP');
+    assert.equal(fila.after['currency'], 'COP');
+    // Deshacer, para no arrastrar el cambio a las otras pruebas del archivo.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+
+  test('con identidad, la bitácora guarda el actor que fijó la transacción, no un parámetro', async () => {
+    const [persona] = await leer<{ id: string }>(WORKSPACE_LAURA,
+      `SELECT u.id FROM app_user u JOIN membership m ON m.user_id = u.id
+       WHERE m.workspace_id = current_workspace_id() LIMIT 1`);
+    assert.ok(persona, 'el seed trae una persona en el workspace');
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => updateFinanceSettings(tx, { settings: { ...base, banco: 'Bancolombia' } }),
+      { userId: persona.id },
+    );
+    const [fila] = await leer<{ actor_user_id: string; actor_kind: string }>(WORKSPACE_LAURA,
+      `SELECT actor_user_id, actor_kind FROM audit_log
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+    assert.equal(fila?.actor_user_id, persona.id);
+    assert.equal(fila?.actor_kind, 'user');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+
+  test('un workspace no puede leer ni escribir la configuración de otro', async () => {
+    // Leer: dentro de la transacción del ajeno sale SU bloque (16 %, de
+    // la prueba del merge), no el de Laura (19 %).
+    const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getFinanceSettings(tx));
+    const laura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(ajeno.ivaPct, '16');
+    assert.equal(laura.ivaPct, '19');
+
+    // Escribir desde el ajeno no mueve la de Laura: el UPDATE filtra por
+    // current_workspace_id() y la política workspace_update (0024) aísla
+    // la fila.
+    await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...ajeno, reservaPct: '0' } }),
+    );
+    const lauraDespues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(lauraDespues.reservaPct, '11', 'la configuración de Laura no se movió');
+
+    // Y nombrar la fila de Laura a pelo desde el workspace ajeno no toca
+    // ninguna fila.
+    const tocadas = await t.db.withWorkspace(WORKSPACE_AJENO, async (tx) => {
+      const r = await tx.query<{ id: string }>(
+        `UPDATE workspace SET settings = settings || '{"finanzas": {"reserva_pct": "99"}}'::jsonb
+         WHERE id = $1 RETURNING id`,
+        [WORKSPACE_LAURA],
+      );
+      return r.rows.length;
+    });
+    assert.equal(tocadas, 0, 'RLS: cero filas');
+    const lauraIntacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(lauraIntacta.reservaPct, '11');
+
+    // Ni su bitácora se ve desde el otro espacio.
+    const [ajenoVe] = await leer<{ n: number }>(WORKSPACE_AJENO,
+      `SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1`, [WORKSPACE_LAURA]);
+    assert.equal(ajenoVe?.n, 0, 'la bitácora de Laura no se lee desde el workspace ajeno');
+  });
+
+  test('la moneda se puede cambiar, no convierte nada, y dice cuántas facturas quedaron en otra', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => countInvoicesInOtherCurrency(tx, 'COP'));
+    assert.equal(antes, 0, 'el seed factura todo en la moneda del workspace');
+
+    const salida = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'mxn' }),
+    );
+    assert.equal(salida.currency, 'MXN', 'se normaliza a mayúsculas');
+    assert.ok(salida.invoicesInOtherCurrency > 0, 'avisa que hay facturas en COP que nadie convirtió');
+
+    // Los montos de las facturas no se tocaron: cambiar la moneda del
+    // workspace no es una conversión (FIN-8 §0.3 F).
+    const factura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, INVOICE_FV_2026_010));
+    assert.equal(factura?.currency, 'COP');
+
+    // Y volver atrás deja el aviso en cero.
+    const vuelta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: base, currency: 'COP' }),
+    );
+    assert.equal(vuelta.currency, 'COP');
+    assert.equal(vuelta.invoicesInOtherCurrency, 0);
+    const ws = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(ws.currency, 'COP');
+  });
+
+  test('una moneda que no es ISO-4217 de tres letras se rechaza antes de tocar la base', async () => {
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    for (const mala of ['PESOS', 'C0P', '', 'co ']) {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base, currency: mala })),
+        /ISO-4217/,
+        `«${mala}» no es una moneda`,
+      );
+    }
+    const intacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getWorkspaceSettings(tx));
+    assert.equal(intacta.currency, 'COP');
+  });
+
+  test('cambiar el porcentaje cambia la reserva de los pagos SIGUIENTES, no la de los anteriores', async () => {
+    // El contrato que FIN-8 le deja a FIN-2: la tasa que se estampa en
+    // tax_reserve es pctToRate(getFinanceSettings(tx).reservaPct) EN EL
+    // MOMENTO DEL PAGO, y la fila la guarda para siempre
+    // (tax_reserve.rate, numeric(6,4), 0008).
+    const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(base.reservaPct, '11', 'el seed arranca en 11 %');
+
+    // 1 · Un cobro con la configuración de hoy.
+    const primera = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const s = await getFinanceSettings(tx);
+      const { rows } = await tx.query<{ id: string; rate: string; amount: string }>(
+        `INSERT INTO tax_reserve (workspace_id, rate, amount, currency, period)
+         VALUES (current_workspace_id(), $1::numeric, $2::numeric, 'COP', '2026-Q3')
+         RETURNING id, rate::text, amount::text`,
+        [pctToRate(s.reservaPct), mulRateHalfUp('1000000.00', pctToRate(s.reservaPct))],
+      );
+      return rows[0]!;
+    });
+    assert.equal(primera.rate, '0.1100');
+    assert.equal(primera.amount, '110000.00');
+
+    // 2 · El creador sube la reserva al 15 % en /finanzas/configuracion.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateFinanceSettings(tx, { settings: { ...base, reservaPct: '15' } }),
+    );
+
+    // 3 · El cobro siguiente aparta el 15 %.
+    const segunda = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const s = await getFinanceSettings(tx);
+      assert.equal(s.reservaPct, '15');
+      const { rows } = await tx.query<{ id: string; rate: string; amount: string }>(
+        `INSERT INTO tax_reserve (workspace_id, rate, amount, currency, period)
+         VALUES (current_workspace_id(), $1::numeric, $2::numeric, 'COP', '2026-Q4')
+         RETURNING id, rate::text, amount::text`,
+        [pctToRate(s.reservaPct), mulRateHalfUp('1000000.00', pctToRate(s.reservaPct))],
+      );
+      return rows[0]!;
+    });
+    assert.equal(segunda.rate, '0.1500');
+    assert.equal(segunda.amount, '150000.00');
+
+    // 4 · LO QUE IMPORTA: la primera sigue en 0.1100.
+    const [revisada] = await leer<{ rate: string; amount: string }>(WORKSPACE_LAURA,
+      'SELECT rate::text, amount::text FROM tax_reserve WHERE id = $1', [primera.id]);
+    assert.equal(revisada?.rate, '0.1100', 'el pago anterior conserva SU tasa');
+    assert.equal(revisada?.amount, '110000.00', 'y su monto');
+
+    // Limpieza: el KPI «Apartado para impuestos» de otras pruebas suma
+    // tax_reserve, así que estas dos filas no se quedan.
+    await t.admin(`DELETE FROM tax_reserve WHERE id IN ('${primera.id}', '${segunda.id}');`);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
+    assert.equal(final.reservaPct, '11');
   });
 });
