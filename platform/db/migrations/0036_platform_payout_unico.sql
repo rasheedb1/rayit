@@ -16,12 +16,13 @@
 -- moneda, este monto—, y esa identidad es la que trae el archivo: los
 -- CSV no dan un identificador de transacción.
 --
--- Número: 0035 es la más alta de TODAS las ramas (0034_access_control
--- está en main; 0035_membership_scope en ACC-6 y
--- 0035_brand_snapshot_por_campana en CAM-3), así que esta es 0036. No
--- depende de ninguna de las anteriores —solo de platform_payout, que es
--- de 0008—, así que el integrador puede renumerarla si otra área eligió
--- también 0036.
+-- Número: cuando se escribió, la más alta de todas las ramas de origin
+-- era 0035 (0034_access_control y 0035_brand_snapshot_por_campana ya
+-- están en main), así que esta es 0036. CON-7 eligió también 0036, pero
+-- su rama NO está en origin y esta sí, así que renumera CON-7 (a 0039:
+-- 0037 es CAM-6 y 0038 es ACC-8). No depende de ninguna migración
+-- anterior —solo de platform_payout, que es de 0008—, así que se puede
+-- renumerar sin mirar el orden.
 --
 -- Re-ejecutable: CREATE UNIQUE INDEX IF NOT EXISTS. No toca ninguna fila
 -- y no hay filas que romper (no existe ningún INSERT de platform_payout

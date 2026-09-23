@@ -484,13 +484,8 @@ describe('0034: el archivo, dos veces y al revés', { timeout: TIEMPO_BLOQUE }, 
       }
       await db.execAsSuperuser(sql.join('\n'));
       const aplicadas = await db.migrar();
-      // La primera que corre desde 0033 es la de accesos, que es la que
-      // hace el relleno. No se exige que sea la ÚNICA: detrás vienen las
-      // migraciones de otras historias (FIN-7 trajo 0036), y afirmar
-      // aquí cuál es la última hacía fallar esta prueba a cualquiera que
-      // agregara una.
+      // La primera pendiente es 0034; las que vengan detrás (0035 de CAM-3, …) también se aplican y no cambian el relleno.
       assert.equal(aplicadas[0], MIGRACION);
-      assert.ok(aplicadas.includes(MIGRACION));
 
       const { rows } = await db.queryAsSuperuser<{ kind: string; user_id: string; key: string }>(
         `SELECT w.kind, m.user_id, r.key FROM membership m JOIN workspace w ON w.id = m.workspace_id JOIN role r ON r.id = m.role_id

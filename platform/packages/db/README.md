@@ -17,7 +17,9 @@ src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas, conexiones
                    (finanzas trae además getCashflowInputs, la ÚNICA consulta del
-                   flujo de caja: devuelve filas en bruto y clasifica @mc/core)
+                   flujo de caja: devuelve filas en bruto y clasifica @mc/core, y
+                   listReminders/markReminderSent, la bandeja de recordatorios de
+                   FIN-4 sobre notification: el texto ya viene redactado del job)
 test/pglite.ts     openTestDb(): la base para las pruebas de cualquier paquete
 scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 ```
@@ -562,12 +564,23 @@ además más rápido.
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.
 - Las métricas se insertan, no se actualizan (`*_snapshot`), y las
-  escribe el worker: `mc_app` solo las lee (**0025**).
+  escribe el worker: `mc_app` solo las lee (**0025**). Dos excepciones, solo
+  con INSERT y `ON CONFLICT DO NOTHING`: `account_metric_snapshot`
+  («Actualizar» de Conexiones, 0025 §5) y `brand_account_snapshot`
+  («Actualizar ahora» de la ficha de campaña, **0035**, bajo una campaña
+  visible y de su empresa, único por campaña, red y día).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas
   `timestamptz` en UTC.
 - Los tokens nunca tocan la base en claro (`secret_ref`).
+- **Este paquete no tiene idioma.** Cuando una consulta deja una frase
+  en una tabla de otro módulo (`activity.subject`, `notification.title_es`,
+  que es NOT NULL desde 0009), la recibe de quien la llama por un tipo
+  `Textos…` —`TextosCotizar`, `TextosFinanzas`— y guarda junto a ella su
+  código y su entidad (`kind` + `entity_id`) para poder recomponerla.
+  Así la cifra sale con el `formatterFor` del espacio y no con un
+  `es-CO` escrito aquí.
 - Toda escritura de dinero, publicación o cuenta conectada deja su fila
   en `audit_log` con `audit()` (uso 7), en la misma transacción, con
   `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige

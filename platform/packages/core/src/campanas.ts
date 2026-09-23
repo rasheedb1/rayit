@@ -600,6 +600,25 @@ export function isBrandNoDataReason(value: string): value is BrandNoDataReason {
   return (BRAND_NO_DATA_REASONS as readonly string[]).includes(value);
 }
 
+/**
+ * Redes sin fuente pública de seguidores por @ (CON-10: TikTok solo
+ * confirma identidad por oEmbed). La fila del día se escribe sin llamar,
+ * con source 'no_public_source', para que la ficha explique la ausencia.
+ */
+export const BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE: readonly string[] = ['tiktok'];
+
+/**
+ * El código de un error de la fuente pública (PublicLookupError.code, de
+ * @mc/connectors) → la razón que se guarda en la fila del día. null: el
+ * error no deja fila (not_configured, transient) y se reintenta. Es la
+ * misma regla para el job brand.snapshot y para «Actualizar ahora».
+ */
+export function brandNoDataReasonFor(lookupErrorCode: string): BrandNoDataReason | null {
+  if (lookupErrorCode === 'not_found' || lookupErrorCode === 'invalid_handle') return 'not_found';
+  if (lookupErrorCode === 'not_discoverable') return 'not_discoverable';
+  return null;
+}
+
 export interface BrandSnapshotDueInput {
   status: CampaignStatus;
   startsOn: string | null;

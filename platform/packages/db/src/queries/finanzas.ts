@@ -1,5 +1,5 @@
 /**
- * Consultas del módulo Finanzas (FIN-1: facturas).
+ * Consultas del módulo Finanzas (FIN-1: facturas; FIN-4: recordatorios).
  *
  * Reglas:
  *   - Toda función recibe un WorkspaceTx: una transacción con el
@@ -18,26 +18,38 @@
 import {
   addDays,
   agingBucket,
+  applyPayment,
+  compareDecimal,
   computeInvoiceTotals,
   deriveStatus,
+  isPaymentMethod,
   nextInvoiceNumber,
-  parseInvoiceNumber,
   normalizeDecimal,
+  parseInvoiceNumber,
   pctToRate,
   proyeccionDePlataformas,
+  reservePeriod,
+  reserveRateFrom,
   subDecimal,
   subtotalFromTotal,
+  taxReserveFor,
   toCents,
   transitionInvoice as applyTransition,
+  definicionPaso,
+  pasoDeUrl,
   DEFAULT_TAX_RATE,
   DEFAULT_WITHHOLDING_RATE,
+  InvoicePaymentConflict,
   type AgingBucket,
   type CashflowInput,
   type FacturaPorCobrar,
   type GastoRecurrente,
   type InvoiceStatus,
   type NegocioGanado,
+  type NumeroPaso,
+  type PaymentMethod,
   type ProyeccionDePlataformas,
+  type SeveridadRecordatorio,
   type TransitionInput,
 } from '@mc/core';
 import { PAYOUT_SOURCES } from '../schema/finanzas.ts';
@@ -145,6 +157,51 @@ export interface ReceivablesKpis {
   taxReserved: string;
   taxRate: string | null;
 }
+
+/** Una fila de la bandeja de recordatorios (FIN-4). */
+export interface ReminderRow {
+  /** El id de la notificación, no el de la factura. */
+  id: string;
+  /** 1..5: el paso, leído del action_url. */
+  paso: NumeroPaso;
+  /** 'Primer aviso de mora'. */
+  etiquetaEs: string;
+  severity: SeveridadRecordatorio;
+  /** El asunto del correo, listo para pegar. */
+  asunto: string;
+  /** El cuerpo del correo, texto plano. */
+  cuerpo: string;
+  actionUrl: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  companyName: string;
+  currency: string;
+  /** Saldo pendiente de la factura, string decimal. */
+  outstanding: string;
+  dueOn: string;
+  /** Días de mora hoy; 0 o negativo si todavía no vence. */
+  daysOverdue: number;
+  createdAt: string;
+  /** Cuándo se marcó como enviado; null si sigue pendiente. */
+  sentAt: string | null;
+}
+
+export interface ListRemindersParams {
+  /**
+   * Solo los que quedan por mandar: sin marcar Y de una factura que
+   * todavía se cobra (`sent` o `partial`). Cuando la factura se paga o
+   * se anula, sus borradores dejan de ser trabajo pendiente; siguen
+   * visibles en la ficha de la factura, que es su historial.
+   */
+  pendingOnly?: boolean;
+  /** Solo los de esta factura. */
+  invoiceId?: string;
+  /** 1..{@link MAX_REMINDERS}. Por defecto 50. */
+  limit?: number;
+}
+
+/** El tope duro de una página de la bandeja. Quien lo alcanza sabe que hay más. */
+export const MAX_REMINDERS = 200;
 
 export class InvoiceNotFound extends Error {
   constructor(id: string) {
@@ -566,6 +623,369 @@ export async function createInvoiceFromCampaign(
     externalRef: overrides.externalRef ?? null,
     currency: camp.currency,
   });
+}
+
+// ---------------------------------------------------------------------
+// Pagos (FIN-2)
+// ---------------------------------------------------------------------
+
+/**
+ * Las frases que Finanzas deja escritas en tablas de otros módulos.
+ * Igual que `TextosCotizar` (queries/cotizar/cotizacion.ts): las compone
+ * la web con su messages.ts y llegan aquí ya en el idioma y el formato
+ * de la pantalla, porque este paquete no tiene idioma y `formatterFor`
+ * vive en la web. `notification.title_es` es NOT NULL desde 0009, así
+ * que hace falta una frase, no solo un código; junto a ella se guardan
+ * el código y la entidad (`kind` + `entity_id`) para que quien quiera
+ * otra frase la recomponga.
+ */
+export interface TextosFinanzas {
+  /** El aviso al creador cuando entra un cobro. */
+  avisoPagoRecibido(p: {
+    invoiceNumber: string;
+    companyName: string;
+    amount: string;
+    currency: string;
+    /** En qué quedó la factura. */
+    status: 'partial' | 'paid';
+    /** Lo que sigue debiendo. '0.00' si quedó pagada. */
+    outstanding: string;
+  }): { title: string; body: string };
+}
+
+export interface RecordPaymentInput {
+  invoiceId: string;
+  /** Decimal como string. Mayor que cero y no más que el saldo. */
+  amount: string;
+  /** El día del cobro, 'YYYY-MM-DD', en la zona del workspace. */
+  receivedOn: string;
+  method: PaymentMethod;
+  /** Lo que dice el extracto del banco. Opcional; no llega a la bitácora. */
+  reference?: string | null;
+  notes?: string | null;
+  /**
+   * El `paid_amount` que la pantalla vio al dibujar el formulario. Si
+   * cambió, el pago no se registra: o entró otro cobro en medio, o es el
+   * mismo formulario enviado dos veces (docs/propuestas/FIN-2.md §0.5).
+   */
+  expectedPaidAmount: string;
+}
+
+export interface PaymentRow {
+  id: string;
+  amount: string;
+  currency: string;
+  method: string | null;
+  /** Instante ISO en UTC. */
+  receivedAt: string;
+  /** El día del cobro en la zona del workspace, 'YYYY-MM-DD'. */
+  receivedOn: string;
+  reference: string | null;
+  notes: string | null;
+  /** Lo apartado por este cobro, o null si el espacio no aparta impuestos. */
+  reserved: string | null;
+  /** La tasa con la que se apartó ('0.1100'), o null. */
+  reserveRate: string | null;
+  /** '2026-Q3', o null. */
+  reservePeriod: string | null;
+}
+
+export interface InvoicePayments {
+  rows: PaymentRow[];
+  /** Suma de lo apartado por los cobros de esta factura. '0.00' si no hay nada. */
+  reservedTotal: string;
+  /** La tasa del último apartado, para escribir «(11 %)». null si no hay ninguno. */
+  reserveRate: string | null;
+}
+
+export interface RecordPaymentResult {
+  invoice: InvoiceDetail;
+  payment: PaymentRow;
+}
+
+/** Lo que la fila `workspace` aporta a un cobro, leído en la misma transacción. */
+interface WorkspacePaymentContext {
+  currency: string;
+  /** El valor crudo de settings.finanzas.reserva_pct, tal como está en el jsonb. */
+  reservaPct: unknown;
+  /** La zona del espacio, ya resuelta ('America/Bogota', o 'UTC' si no tiene). */
+  timeZone: string;
+  /** Hoy en la zona del workspace, 'YYYY-MM-DD'. */
+  today: string;
+  /**
+   * El instante del cobro, ISO en UTC y con precisión de segundo, para
+   * las reglas de core. El que se GUARDA lo calcula el propio INSERT con
+   * la misma expresión: así conserva los microsegundos de `now()` y dos
+   * cobros del mismo segundo siguen teniendo un orden.
+   */
+  receivedAt: string;
+}
+
+/**
+ * El instante que se guarda en `payment.received_at`, como expresión SQL.
+ *
+ * Si el día elegido es HOY en la zona del espacio, el instante es
+ * `now()` —el cobro se está registrando ahora—; si es un día pasado, es
+ * el comienzo de ese día en su zona. Así ningún `received_at` queda en
+ * el futuro (lo que rompería «cobrado este año» y la verificación del
+ * seed) y el día que la pantalla enseña es el que la persona eligió.
+ *
+ * Es una expresión y no un valor calculado en JavaScript porque depende
+ * de la zona del espacio, que vive en la base, y porque al escribirla
+ * directamente en el INSERT conserva los microsegundos de `now()`: dos
+ * cobros del mismo segundo siguen teniendo un orden en la lista.
+ *
+ * @param fecha  el marcador del día elegido ('$1'), 'YYYY-MM-DD'
+ * @param zona   la expresión SQL con la zona ya resuelta
+ */
+function instanteDelCobro(fecha: string, zona: string): string {
+  return `CASE WHEN ${fecha}::date = (now() AT TIME ZONE ${zona})::date
+               THEN now()
+               ELSE (${fecha}::date)::timestamp AT TIME ZONE ${zona}
+          END`;
+}
+
+/**
+ * Moneda, porcentaje de reserva, hoy y el instante del cobro, todo de la
+ * fila `workspace` y en una sola ida a la base.
+ *
+ * El instante se resuelve aquí y no en JavaScript porque depende de la
+ * zona del espacio: si el día elegido es HOY, el instante es `now()` —el
+ * cobro se está registrando ahora—; si es un día pasado, es el comienzo
+ * de ese día en su zona. Así ningún `received_at` queda en el futuro (lo
+ * que rompería «cobrado este año» y la verificación del seed) y el día
+ * que la pantalla enseña es el que la persona eligió.
+ */
+async function readWorkspaceForPayment(tx: WorkspaceTx, receivedOn: string): Promise<WorkspacePaymentContext> {
+  const { rows } = await tx.query<{
+    currency: string; reserva_pct: unknown; time_zone: string; today: string; received_at: string;
+  }>(
+    `SELECT w.currency,
+            w.settings #> '{finanzas,reserva_pct}' AS reserva_pct,
+            coalesce(nullif(w.timezone, ''), 'UTC') AS time_zone,
+            to_char((now() AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::date, 'YYYY-MM-DD') AS today,
+            to_char(${instanteDelCobro('$1', "coalesce(nullif(w.timezone, ''), 'UTC')")} AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS received_at
+       FROM workspace w
+      WHERE w.id = current_workspace_id()`,
+    [receivedOn],
+  );
+  const r = rows[0];
+  if (!r) throw new Error('No se encontró el espacio de trabajo de esta transacción.');
+  return {
+    currency: r.currency,
+    reservaPct: r.reserva_pct,
+    timeZone: r.time_zone,
+    today: r.today,
+    receivedAt: r.received_at,
+  };
+}
+
+/**
+ * Registra un cobro contra una factura, parcial o total, y aparta el
+ * porcentaje de impuestos del espacio.
+ *
+ * Todo ocurre en la transacción de quien llama: la factura se bloquea
+ * con FOR UPDATE, se valida con `applyPayment` (@mc/core) y solo entonces
+ * se escriben las cuatro filas —cobro, factura, apartado y bitácora— más
+ * el aviso. Si algo falla, no queda nada.
+ *
+ * Aislamiento: la factura se busca sin `workspace_id` porque RLS ya lo
+ * fijó; desde otro espacio son cero filas y sale `InvoiceNotFound`, que
+ * es también lo que la pantalla convierte en su 404.
+ *
+ * Idempotencia: `expectedPaidAmount` es el `paid_amount` que la pantalla
+ * vio. Si ya no es ese, sale `InvoicePaymentConflict` y no se escribe
+ * nada; un doble envío del mismo formulario cae ahí (§0.5 de la
+ * propuesta).
+ */
+export async function recordPayment(
+  tx: WorkspaceTx,
+  input: RecordPaymentInput,
+  textos: TextosFinanzas,
+): Promise<RecordPaymentResult> {
+  if (!isUuid(input.invoiceId)) throw new InvoiceNotFound(input.invoiceId);
+  if (!ISO_DATE_RE.test(input.receivedOn)) throw new Error('La fecha del cobro debe ser YYYY-MM-DD.');
+  if (!isPaymentMethod(input.method)) {
+    throw new Error(`Método de pago desconocido: "${input.method}".`);
+  }
+
+  // 1 · La factura, bloqueada hasta el final de la transacción: dos
+  //     cobros concurrentes sobre la misma se serializan aquí.
+  const { rows } = await tx.query<{ status: InvoiceStatus; total: string; paid_amount: string; currency: string }>(
+    'SELECT status, total::text, paid_amount::text, currency FROM invoice WHERE id = $1 FOR UPDATE',
+    [input.invoiceId],
+  );
+  const row = rows[0];
+  if (!row) throw new InvoiceNotFound(input.invoiceId);
+
+  // 2 · El espacio: moneda, porcentaje de reserva, hoy y el instante.
+  const ws = await readWorkspaceForPayment(tx, input.receivedOn);
+
+  // 3 · ¿Sigue siendo la factura que vio la pantalla? (§0.5)
+  if (compareDecimal(input.expectedPaidAmount, row.paid_amount) !== 0) {
+    throw new InvoicePaymentConflict(normalizeDecimal(input.expectedPaidAmount), normalizeDecimal(row.paid_amount));
+  }
+
+  // 4 · Las reglas, puras.
+  const result = applyPayment(
+    { status: row.status, total: row.total, paidAmount: row.paid_amount },
+    { amount: input.amount, receivedOn: input.receivedOn, receivedAt: ws.receivedAt, today: ws.today },
+  );
+
+  // 5 · El cobro. La moneda es la de la factura: mezclar monedas en una
+  //     misma factura rompería los KPI, que suman sin convertir.
+  const inserted = await tx.query<{ id: string }>(
+    `INSERT INTO payment (workspace_id, invoice_id, direction, amount, currency, method, received_at, reference, notes)
+     VALUES (current_workspace_id(), $1, 'in', $2, $3, $4, ${instanteDelCobro('$5', '$6')}, $7, $8)
+     RETURNING id`,
+    [
+      input.invoiceId, result.amount, row.currency, input.method, input.receivedOn, ws.timeZone,
+      input.reference?.trim() || null, input.notes?.trim() || null,
+    ],
+  );
+  const paymentId = inserted.rows[0]?.id;
+  if (!paymentId) throw new Error('No se pudo registrar el pago.');
+
+  // 6 · La factura. `updated_at` lo pone el disparador invoice_updated (0008).
+  await tx.query(
+    `UPDATE invoice
+        SET status = $2,
+            paid_amount = $3,
+            paid_at = CASE WHEN $4::boolean
+                           THEN (SELECT p.received_at FROM payment p WHERE p.id = $5)
+                           ELSE paid_at END
+      WHERE id = $1`,
+    [input.invoiceId, result.status, result.paidAmount, result.paidAt !== null, paymentId],
+  );
+
+  // 7 · El apartado, con la tasa de ESTE momento: cuando FIN-8 cambie el
+  //     porcentaje, los apartados anteriores no se tocan.
+  const rate = reserveRateFrom(ws.reservaPct);
+  if (rate !== null) {
+    await tx.query(
+      `INSERT INTO tax_reserve (workspace_id, payment_id, rate, amount, currency, period, released_at)
+       VALUES (current_workspace_id(), $1, $2, $3, $4, $5, NULL)`,
+      [paymentId, rate, taxReserveFor(result.amount, rate), row.currency, reservePeriod(input.receivedOn)],
+    );
+  }
+
+  // 8 · La bitácora y el aviso, sobre lo que quedó escrito de verdad.
+  const invoice = await getInvoice(tx, input.invoiceId);
+  if (!invoice) throw new InvoiceNotFound(input.invoiceId);
+  const payment = await getPayment(tx, paymentId);
+  if (!payment) throw new Error('El pago se registró pero no se pudo leer de vuelta.');
+
+  // La bitácora (ACC-2), en esta misma transacción: si la escritura se
+  // deshace, la fila se va con ella. `before`/`after` llevan solo lo que
+  // cambia de la factura y los datos del cobro que no son de nadie: ni
+  // nombres, ni correos, ni la `reference` del banco de la marca.
+  await audit(tx, {
+    action: 'invoice.payment_recorded',
+    entityType: 'invoice',
+    entityId: invoice.id,
+    before: { status: row.status, paidAmount: normalizeDecimal(row.paid_amount) },
+    after: {
+      status: invoice.status,
+      paidAmount: invoice.paidAmount,
+      paidAt: invoice.paidAt,
+      payment: { id: payment.id, amount: payment.amount, currency: payment.currency, method: payment.method, receivedAt: payment.receivedAt },
+      taxReserve: payment.reserved === null ? null : { amount: payment.reserved, rate: payment.reserveRate, period: payment.reservePeriod },
+    },
+  });
+
+  // 9 · El aviso al creador. Las frases las pone la web (TextosFinanzas).
+  const aviso = textos.avisoPagoRecibido({
+    invoiceNumber: invoice.number,
+    companyName: invoice.companyName,
+    amount: payment.amount,
+    currency: payment.currency,
+    status: result.status,
+    outstanding: invoice.outstanding,
+  });
+  await tx.query(
+    `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+     VALUES (current_workspace_id(), 'payment_received', 'success', $1, $2, 'invoice', $3, $4)`,
+    [aviso.title, aviso.body, invoice.id, `/finanzas/facturas/${invoice.id}`],
+  );
+
+  return { invoice, payment };
+}
+
+const SELECT_PAYMENT = `
+  SELECT p.id, p.amount::text, p.currency, p.method,
+         to_char(p.received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS received_at,
+         to_char(p.received_at AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'), 'YYYY-MM-DD') AS received_on,
+         p.reference, p.notes,
+         tr.amount::text AS reserved, tr.rate::text AS reserve_rate, tr.period AS reserve_period
+    FROM payment p
+    JOIN workspace w ON w.id = current_workspace_id()
+    LEFT JOIN tax_reserve tr ON tr.payment_id = p.id
+`;
+
+interface RawPayment {
+  id: string; amount: string; currency: string; method: string | null;
+  received_at: string; received_on: string; reference: string | null; notes: string | null;
+  reserved: string | null; reserve_rate: string | null; reserve_period: string | null;
+}
+
+function toPaymentRow(r: RawPayment): PaymentRow {
+  return {
+    id: r.id,
+    amount: r.amount,
+    currency: r.currency,
+    method: r.method,
+    receivedAt: r.received_at,
+    receivedOn: r.received_on,
+    reference: r.reference,
+    notes: r.notes,
+    reserved: r.reserved,
+    reserveRate: r.reserve_rate,
+    reservePeriod: r.reserve_period,
+  };
+}
+
+/** Un cobro por su id, con lo que apartó. Null si no es de este workspace. */
+export async function getPayment(tx: WorkspaceTx, id: string): Promise<PaymentRow | null> {
+  if (!isUuid(id)) return null;
+  const { rows } = await tx.query<RawPayment>(`${SELECT_PAYMENT} WHERE p.id = $1`, [id]);
+  const r = rows[0];
+  return r ? toPaymentRow(r) : null;
+}
+
+/**
+ * Los cobros de una factura, el más reciente primero, y lo que se
+ * apartó por ellos. La suma la hace Postgres: ninguna pantalla hace
+ * aritmética de dinero.
+ */
+export async function listPayments(tx: WorkspaceTx, invoiceId: string): Promise<InvoicePayments> {
+  if (!isUuid(invoiceId)) return { rows: [], reservedTotal: '0.00', reserveRate: null };
+  const { rows } = await tx.query<RawPayment>(
+    `${SELECT_PAYMENT} WHERE p.invoice_id = $1 AND p.direction = 'in'
+      ORDER BY p.received_at DESC, p.id DESC`,
+    [invoiceId],
+  );
+  const total = await tx.query<{ reserved_total: string; reserve_rate: string | null }>(
+    // El total sale con dos decimales como cualquier otro monto (sin el
+    // cast, `sum` de cero valores devuelve '0' y no '0.00'). La tasa es
+    // la del apartado más reciente, con el id como desempate: dos cobros
+    // del mismo día se guardan a la misma hora, y desde FIN-8 dos
+    // apartados pueden tener tasas distintas.
+    `SELECT coalesce(sum(tr.amount), 0)::numeric(14,2)::text AS reserved_total,
+            (SELECT tr2.rate::text
+               FROM tax_reserve tr2 JOIN payment p2 ON p2.id = tr2.payment_id
+              WHERE p2.invoice_id = $1
+              ORDER BY p2.received_at DESC, p2.id DESC LIMIT 1) AS reserve_rate
+       FROM tax_reserve tr JOIN payment p ON p.id = tr.payment_id
+      WHERE p.invoice_id = $1`,
+    [invoiceId],
+  );
+  const t = total.rows[0];
+  return {
+    rows: rows.map(toPaymentRow),
+    reservedTotal: t?.reserved_total ?? '0.00',
+    reserveRate: t?.reserve_rate ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -1282,4 +1702,113 @@ export async function createPlatformPayout(
     duplicated: r.inserted === 0,
     conflicting: null,
   };
+}
+
+// ---------------------------------------------------------------------
+// Recordatorios de cobro (FIN-4)
+// ---------------------------------------------------------------------
+
+interface ReminderRaw {
+  id: string;
+  /** La columna admite 'success' además de los tres tonos de un recordatorio. */
+  severity: string;
+  title_es: string;
+  body_es: string | null;
+  action_url: string | null;
+  created_at: string;
+  read_at: string | null;
+  invoice_id: string;
+  number: string;
+  company_name: string;
+  currency: string;
+  outstanding: string;
+  due_on: string;
+  days_overdue: number;
+}
+
+/**
+ * La bandeja de recordatorios del workspace. Son filas de
+ * `notification` de tipo `invoice_overdue` que escribió el job
+ * `finance.reminders`: el título es el asunto del correo y el cuerpo,
+ * el correo entero, ya redactado por @mc/core con la moneda y el locale
+ * del workspace. La pantalla no calcula nada.
+ *
+ * `dismissed_at` descarta la fila para siempre; `read_at` es «lo
+ * mandé», que es lo que hace el botón de la bandeja. Un recordatorio
+ * sin paso legible en su `action_url` no es de FIN-4 y se ignora.
+ *
+ * `days_overdue` se calcula en la zona del WORKSPACE, no con
+ * `CURRENT_DATE` (que es el día del servidor, UTC), igual que
+ * `getCashflowInputs`: con `CURRENT_DATE`, en Bogotá pasadas las 19:00
+ * la pastilla diría «1 día de mora» al lado de un cuerpo que dice
+ * «vence hoy». La mora es la de HOY, no la del día en que se redactó el
+ * texto: por eso la tarjeta enseña también cuándo se escribió.
+ */
+export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams = {}): Promise<ReminderRow[]> {
+  if (params.invoiceId !== undefined && !isUuid(params.invoiceId)) return [];
+  const limit = Math.min(MAX_REMINDERS, Math.max(1, params.limit ?? 50));
+  const { rows } = await tx.query<ReminderRaw>(
+    `SELECT n.id, n.severity, n.title_es, n.body_es, n.action_url,
+            to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+            to_char(n.read_at    AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS read_at,
+            i.id AS invoice_id, i.number, co.name AS company_name, i.currency,
+            (i.total - i.paid_amount)::text AS outstanding,
+            to_char(i.due_on, 'YYYY-MM-DD') AS due_on,
+            (((now() AT TIME ZONE w.timezone)::date) - i.due_on)::int AS days_overdue
+       FROM notification n
+       JOIN invoice i   ON i.id = n.entity_id
+       JOIN company co  ON co.id = i.company_id
+       JOIN workspace w ON w.id = i.workspace_id
+      WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice' AND n.dismissed_at IS NULL
+        AND ($1::boolean IS NOT TRUE OR (n.read_at IS NULL AND i.status IN ('sent', 'partial')))
+        AND ($2::uuid IS NULL OR n.entity_id = $2)
+      ORDER BY CASE n.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+               i.due_on, i.number, n.created_at
+      LIMIT $3`,
+    [params.pendingOnly ?? false, params.invoiceId ?? null, limit],
+  );
+  const out: ReminderRow[] = [];
+  for (const r of rows) {
+    const paso = pasoDeUrl(r.action_url);
+    if (paso === null || r.action_url === null) continue;
+    out.push({
+      id: r.id,
+      paso,
+      etiquetaEs: definicionPaso(paso).etiquetaEs,
+      // La columna es más ancha que los tres tonos de FIN-4: lo que no
+      // sea de un recordatorio se lee como el más suave, para que una
+      // fila rara no deje la pastilla sin color ni nombre.
+      severity: r.severity === 'critical' || r.severity === 'warning' ? r.severity : 'info',
+      asunto: r.title_es,
+      cuerpo: r.body_es ?? '',
+      actionUrl: r.action_url,
+      invoiceId: r.invoice_id,
+      invoiceNumber: r.number,
+      companyName: r.company_name,
+      currency: r.currency,
+      outstanding: r.outstanding,
+      dueOn: r.due_on,
+      daysOverdue: r.days_overdue,
+      createdAt: r.created_at,
+      sentAt: r.read_at,
+    });
+  }
+  return out;
+}
+
+/**
+ * «Marcar como enviado»: sella `read_at`. Devuelve false si el id no es
+ * de este workspace (RLS no lo deja ver), no es un recordatorio, o ya
+ * estaba marcado — con eso la acción es idempotente y repetir el clic
+ * no mueve la fecha.
+ */
+export async function markReminderSent(tx: WorkspaceTx, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE notification SET read_at = now()
+      WHERE id = $1 AND kind = 'invoice_overdue' AND entity_type = 'invoice' AND read_at IS NULL
+      RETURNING id`,
+    [id],
+  );
+  return rows.length > 0;
 }

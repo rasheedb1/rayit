@@ -10,12 +10,16 @@ cambió a pedido de Rasheed). Reemplaza el alcance de
 reglas de trabajo de ese documento (ramas, revisión, integración,
 migraciones inmutables) siguen vigentes.
 
-**Actualizado el 22 de septiembre de 2026** con el avance del sprint 2
-de Nicolás: CON-1, CAM-1 y CAM-2 están en `main`, verificadas y
-desplegadas en producción; CON-3 sigue bloqueada. El detalle está en la
-[sección 9](#9-estado-del-sprint-2-al-22-de-septiembre-de-2026). El
+**Actualizado el 23 de septiembre de 2026** con el cierre del sprint 2
+de Nicolás: CON-1, CAM-1, CAM-2, CON-3 (TikTok, probada en vivo) y
+CON-10 están en `main`; producción sirve `1a524d7` y le falta un
+commit; Supabase tiene aplicadas todas las migraciones de `main`
+(0001–0022 y 0024–0033). El detalle está en la
+[sección 10](#10-cierre-del-sprint-2-al-23-de-septiembre-de-2026). La
+foto del 22 de septiembre queda en la
+[sección 9](#9-estado-del-sprint-2-al-22-de-septiembre-de-2026) y el
 cierre del sprint 1 (las cinco historias en `main` y en producción el
-21 de septiembre) queda en la
+21 de septiembre) en la
 [sección 8](#8-estado-del-sprint-1-al-21-de-septiembre-de-2026).
 
 **Dónde se ve:** https://on-cue-web.vercel.app. Es el marco real
@@ -387,6 +391,20 @@ el quinto es lo que depende de aprobaciones, más el piloto.
 
 Carga estimada por sprint antes de los roles (extremo bajo, sobre 10
 días): Rasheed 12 · 12 · 11 · 9 · 5. Nicolás 12 · 13 · 12 · 12 · 10.
+
+**Movimientos de Nicolás al cierre del sprint 2 (23 de septiembre; el
+detalle en §10).** CON-10 (L, cuentas por @) entró al sprint 2 sin
+estar en la tabla: la decisión de producto del 22-sep sacó el OAuth por
+creador del MVP y hacía falta otra forma de agregar cuentas. CON-3 se
+queda en el sprint 2 como «Autorizar cifras» de TikTok (híbrido del
+23-sep, probado en vivo); su parte de Instagram Login no se hizo porque
+Instagram va por @. CON-4 y CON-8 salen del sprint 5: la pantalla de
+cuentas del MVP la trae CON-10 y YouTube se lee por @ con API key;
+vuelven con la versión avanzada. CON-12 (proveedor de datos de TikTok)
+es opcional y no tiene sprint fijo (el tablero lo deja en el 5). CON-2b
+(S, el worker sobre `@mc/db`) la abrió Rasheed en el sprint 2 y sigue
+pendiente sin bloquear nada. El sprint 5 de Nicolás queda en CON-7 ·
+FIN-4, FIN-8 · ACC-5, ACC-8.
 
 **Lo que se corrió para que quepan los roles.** Que los creadores del
 piloto tengan mánager mete ~7 días nuevos en un plan que ya iba al
@@ -771,3 +789,189 @@ reforzada: **producción solo se despliega desde `main`**.
 - **Sprint 3 de Nicolás (§6):** CON-5, CON-6, FIN-2, FIN-3 y FIN-5.
 - **Sprint 4:** CAM-3, CAM-4, CAM-5 y CAM-6 tienen sus anclajes en la
   ficha (`docs/propuestas/CAM-1.md` §7); COT-4 usa el contrato de CAM-2.
+
+## 10. Cierre del sprint 2 al 23 de septiembre de 2026
+
+Escrito el 23 de septiembre a las 10:30 (hora local, UTC−6), con
+`origin/main` en `29460e3`. Cierra el sprint 2 de Nicolás; §9 fue la
+foto del 22 de septiembre. Fuentes: `git fetch` y `git log
+fc447f0..origin/main` (156 commits desde el estado de §9: 23 de
+Nicolás y 133 de Rasheed), las ramas `nicolas/*` (ninguna con commits
+sin integrar), `content/backlog.ts` en `origin/main`, `pnpm verificar`
+corrido sobre `origin/main` en un worktree limpio (`rayit-main-check`),
+`make db.guardia` contra Supabase y consultas de solo lectura.
+
+### 10.1 Historias, una por una
+
+| Id | Historia | Estado | Cómo llegó a `main` | Terminado cuando… y cómo se comprobó |
+|---|---|---|---|---|
+| CON-1 | Conectores con respuestas grabadas | **Hecha** (sin cambios desde §9.1) | Push directo el 21-sep | «`pnpm test` pasa sin red y cada llamada deja su fila»: `connectors` 180 pruebas en la corrida de §10.2 (137 en §9 más las de CON-10). En Supabase, `api_call_log` tiene 9 filas: las llamadas reales de la prueba en vivo del 23-sep dejaron su rastro. Sigue pendiente `platform.limits` (§9.4 fila 13). |
+| CAM-1 | Lista y ficha de campaña | **Hecha** (sin cambios) | Avance rápido a `main` el 22-sep | Sin cambios de código propios; Rasheed le puso `loading.tsx` en el pulido y pide el visto bueno (§10.6). `/campanas` responde 200 en producción con las cuatro campañas del seed. |
+| CAM-2 | Crear campaña desde la cotización | **Hecha, y ya en uso por COT-4** | Avance rápido a `main` el 22-sep | El contrato se cumplió antes del «lunes del sprint 4»: COT-4 (Rasheed, en `main`) llama a `createCampaignFromQuote()` desde el panel y desde el enlace público, en la misma transacción, con `SAVEPOINT` si faltan fechas (nota de COT-4 en `backlog.ts`). La migración `0016_campaign_quote_unique.sql` **quedó aplicada en Supabase el 22-sep a las 10:14** (era la pendiente de §9.6). Rasheed pide el visto bueno a «Total con impuesto» en `/campanas` (§10.6). |
+| CON-3 | OAuth de TikTok e Instagram en sandbox | **Hecha para TikTok y probada en vivo en producción el 23-sep**; Instagram Login sin probar (fuera del MVP: Instagram va por @) | Rama `nicolas/CON-3-oauth-sandbox` con `main` integrado (`13ed109`) y push a `main`: `331be49`, `7406952`, `1a524d7`, `29460e3` | «Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro»: en Supabase (lectura como `mc_app` con el workspace del seed) `@selvathegolden` de TikTok está `direct_oauth` / `active` desde el 23-sep 15:09 UTC, con su lectura del día (81 seguidores); `connection_secret` tiene una fila (`secret_ref`, `workspace_id`, `ciphertext`, `iv`: no hay columna donde quepa un token en claro) y la prueba automática que vuelca todas las columnas de texto sigue en verde. Para llegar ahí Nicolás creó la app de TikTok con Login Kit y sandbox (ya no depende de la decisión 5 de §7), verificó el dominio con un archivo de firma en `apps/web/public` (`7406952`) y puso `OAUTH_CONNECT`, `TIKTOK_LOGIN_CLIENT_KEY` y `TIKTOK_LOGIN_CLIENT_SECRET` en Vercel. Para abrirlo a cualquier creador falta el App Review de Login Kit. |
+| CON-10 | Cuentas por @ con datos públicos | **Hecha** (22-sep) **y ampliada con el híbrido** (23-sep) | Push directo `d39acd1` (22-sep), `331be49` (híbrido), `1a524d7` y `29460e3` (23-sep) | «Agregar un @ deja la fila con su snapshot del día y el worker la actualiza a diario»: pruebas de `db` (`cuentas-publicas.test.ts`: alta sin duplicar, RLS, snapshot del día, Δ7d, conversión a autorizada conservando el historial), `worker` (`collect-account-metrics.test.ts`: públicas y autorizadas, sin credencial se salta, cuenta inexistente en error) y `web` (`cuentas-service.test.ts` contra pglite con el seed). En producción, `@selvathegolden` se agregó por @ y se autorizó con «Autorizar cifras» el 23-sep. Lo que falta para la prueba real de Instagram y YouTube por @: `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` no están en Vercel (lista de nombres de `vercel env ls`; `docs/propuestas/CON-10.md` §3). El «a diario» solo está probado en pglite: el worker sigue sin correr contra Supabase (§8.4 fila 1). |
+| ACC | Accesos y roles: el plan | **Publicado** (no es código) | `f06f79c` y `405c98b` (22-sep) | Épico ACC en §5, decisiones 6 a 10 en §7, sexto sprint en §6 y en el tablero (`/accesos`), diseño completo en `docs/propuestas/ACC-accesos-y-roles.md`; la migración de ACC-3 reservó el número `0023`, que no existe en ninguna rama. |
+| CON-2b | El worker sobre `@mc/db` | **Pendiente** (S) | Abierta por Rasheed en la ronda 3 de CIM-2 | Rasheed cerró en la ronda 4 la mitad que era camino de seguridad (`runner/db.ts` importa `tlsFor`, `hostOf` y `resolveTls` de `@mc/db`); queda unificar el bucle de migraciones de PGlite. No bloquea nada del sprint 3. |
+
+**Cambio de producto, cerrado.** La cadena del 22-sep (sin OAuth por
+creador) y la del 23-sep (híbrido: TikTok se agrega por @ y el dueño
+autoriza las cifras con un clic, gratis y oficial) están las dos en
+`main` y en producción. CON-4 y CON-8 siguen pospuestas; CON-12 sigue
+como opción futura; RES-2 (CSV) deja de ser el camino de TikTok.
+
+**Sprint 3, ya preparado.** Los prompts de los sprints 3 a 6 están en
+`docs/prompts/sprint-3-a-6/` (sin commitear, como los de los sprints 1
+y 2) y el 23-sep se crearon desde `origin/main` los worktrees de ACC-1,
+ACC-2, ACC-3, ACC-8, CAM-3, CAM-4, CAM-6 y CON-3, todos en `29460e3`
+y sin commits: el sprint 3 arranca desde `main` limpio.
+
+### 10.2 Verificación sobre `main`
+
+Corrida el 23 de septiembre a las 10:08 sobre `29460e3` en el worktree
+`rayit-main-check` (detached), con `pnpm install --frozen-lockfile` y
+Node 24.21:
+
+| Qué | Resultado |
+|---|---|
+| `pnpm verificar` (`turbo run typecheck lint test --force --concurrency=2`) | **14 de 15 tareas en verde.** `typecheck` en los cinco paquetes y `lint` en `connectors`, `db`, `worker` y `web` sin avisos. La tarea que falla es `@mc/web#test`, y no por una prueba (ver abajo). |
+| Pruebas | `core` 71 · `connectors` 180 · `db` 602 · `worker` 47 · `web` 723 (+1 `todo`) en 86 archivos. **1.623 pruebas, 0 fallos.** |
+| El fallo de `@mc/web#test` | vitest termina con «Unhandled Rejection: TypeError: Invalid state: ReadableStream is already closed» (`ERR_INVALID_STATE`), originado en `app/(app)/resumen/importar/lote.test.ts` (RES-6, de Rasheed), y sale con 1 aunque las 17 pruebas del archivo pasen. Reproducible tres de tres veces, también corriendo solo ese archivo. El CI corre Node 24 (`ci.yml`) y `pnpm verificar`, así que debería verlo igual; no se pudo mirar desde aquí (`gh` sin sesión). Fila 19 de §10.4. |
+| Primera corrida, descartada | Falló en `@mc/web#typecheck` porque el worktree traía un `.next/` de un build viejo (`712e3bd`) y `tsc` lee `.next/types`, que apuntaba a rutas que ya no existen. Se borró `.next/` y se repitió. Regla: en un worktree reutilizado, `rm -rf apps/web/.next` antes de verificar (fila 23 de §10.4). |
+| `make db.check` | 32 migraciones en Postgres embebido (0001–0022 y 0024–0033); 91 tablas, 10 vistas, 227 índices. |
+| `make db.guardia` (contra Supabase, solo lectura, desde el clon principal) | «Guardia en verde: 32 migraciones (la última, `0033_una_aceptada_por_negocio.sql`), 77 tablas aisladas, nada sin declarar.» |
+| Supabase (`schema_migrations`) | 32 filas: 0001–0022 y **0024–0033, aplicadas el 23-sep a las 06:13** por la cola única del integrador (lo que §9 y el bloque común de los prompts daban por pendiente). 0016 aplicada el 22-sep 10:14; 0017–0021 el 22-sep 10:14; 0022 el 22-sep 17:28. **No hay ninguna migración de `main` sin aplicar.** 0023 no existe (reservada por ACC-3). |
+| Revisión | Sin código nuevo en este cierre. CON-10 y el híbrido llevan su revisión en `docs/propuestas/CON-10.md` §5 y §7. |
+
+### 10.3 Producción
+
+https://on-cue-web.vercel.app sirve el commit **`1a524d7`**, no la
+punta de `main`: el despliegue `dpl_HNAu5CWshm6Fc6iAH61qSC3L7o1G` se
+creó el 23-sep a las 09:05 (hora local) desde la rama
+`nicolas/CON-3-oauth-sandbox` (`meta.gitCommitRef` del deploy), que en
+ese momento coincidía con `main`. **`29460e3` (09:14) no está
+desplegado:** es el arreglo por el que, tras autorizar una cuenta, la
+lista lee la última lectura venga por @ o con el token del dueño.
+Comando en §10.6. El 23-sep hubo cinco despliegues a producción en
+verde (06:13, 08:34, 08:59, 09:01 y 09:05) y uno fallido a las 08:31:
+el build se rompió tras integrar `main` en CON-3 (`ActualizarResult`
+ganó `alreadyReadToday` y la rama de la cuenta autorizada no lo
+devolvía; `1a524d7`). El `pnpm verificar` de esa rama no lo vio porque
+la suite de la web cae antes por el rechazo no manejado de §10.2, y
+turbo no llega al `typecheck`: otra razón para la fila 19.
+
+Comprobado hoy sobre producción, sin sesión:
+
+- Rutas: `/`, `/login`, `/campanas`, `/finanzas`, `/conexiones`,
+  `/cotizar`, `/ventas`, `/resumen` y `/accesos` responden 200; `/kit`
+  404 (bandera apagada); el archivo de verificación de dominio de
+  TikTok responde 200; `/conexiones/oauth/tiktok/start` responde 405 a
+  un `GET` (la ruta existe: `oauth_connect` está encendida; apagada
+  daría 404). Título «Plan · On Cue».
+- Variables en producción (solo nombres): `DATABASE_URL`, `APP_URL`,
+  `TOKEN_ENCRYPTION_KEY`, `DEMO_WORKSPACE_ID`, `OAUTH_CONNECT`,
+  `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`. Faltan
+  `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY`.
+- Base (lectura): `social_connection` 5 filas vivas (las cuatro del
+  seed más `@selvathegolden`), `account_metric_snapshot` 365,
+  `connection_secret` 1, `data_consent` 5, `api_call_log` 9;
+  `audit_log` y `job_run` vacías, como corresponde: ACC-2 no existe
+  todavía y el worker no corre contra Supabase.
+
+Las escrituras de dinero no se ejercitaron contra datos reales. Los
+cuatro hallazgos de §9.3 siguen igual salvo el último: 0016 ya está
+aplicada; `turbo.json` sigue sin declarar `DATABASE_URL`.
+
+### 10.4 Lo que Nicolás necesita de Rasheed (lo nuevo respecto a §9.4)
+
+Lo que se cerró de §8.4 y §9.4 desde el 22-sep: filas 2, 2b, 2c, 3 y 4
+(CIM-2, 0017–0021, RLS de `contact`, CIM-3 y el seed 0002), 9 (0016
+aplicada), 10 (COT-4 llama a `createCampaignFromQuote`), 14 (0018 dio
+RLS a `campaign_post`), 17 (0017–0021 y 0022 en `main` y aplicadas) y
+la mitad de TikTok de las filas 8 y 15 (Nicolás creó su propia app con
+sandbox). Siguen abiertas: 1 (`pgboss` y `GRANT mc_worker TO
+mc_migrator`: el worker no corre contra Supabase), 5 (CIM-7: GitHub
+con Vercel y el worker desplegado), 6, 7, 11 (por confirmar), 12
+(`turbo.json`), 13 (`platform.limits`, CON-9 y `docs/tramites.md`, que
+no existe), 15 solo para Meta, 16, y 18 (`.env.example` sigue con
+`/api/oauth/…` y sin `INSTAGRAM_HOUSE_TOKEN` ni `GOOGLE_API_KEY`).
+
+| # | Qué | Para qué historia | Dónde está el detalle |
+|---|---|---|---|
+| 19 | `app/(app)/resumen/importar/lote.test.ts` deja un rechazo no manejado (`ReadableStream is already closed`) que hace salir a `pnpm verificar` con 1 en Node 24 aunque las 723 pruebas pasen, y tumba la suite antes del `typecheck` en turbo. Arreglar el cierre doble del stream (`engines` dice `>=20` y el CI corre 24: la versión no lo explica). | Verificación de todo el repo | §10.2 |
+| 20 | Entorno del worker (CIM-7): además de `DATABASE_URL` y `TOKEN_ENCRYPTION_KEY`, `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY`, `TIKTOK_LOGIN_CLIENT_KEY` y `TIKTOK_LOGIN_CLIENT_SECRET`, para que `collect.account_metrics` y `oauth.refresh` corran a diario. Depende de la fila 1. | CON-10, CON-3, CON-5 | `docs/propuestas/CON-10.md` §3 y §7 |
+| 21 | Desplegar solo desde `main` y por GitHub (CIM-7): el deploy de hoy salió de la rama de CON-3 con el mismo commit que `main`, y `main` quedó un commit por delante de producción. Con el `gitCommitRef` en Vercel esto deja de depender de quién corre el comando. | Despliegue | §10.3 |
+| 22 | ACC-3 (sprint 4): reservar de verdad `0023` (hoy es un hueco entre 0022 y 0024) o confirmar que el número de la migración de accesos será el más alto en todas las ramas más uno; y el esquema Drizzle de `permission`, `role`, `role_permission`, `membership_scope`, `invitation` y `workspace_grant`, que es de Rasheed. | ACC-3 | `docs/propuestas/ACC-accesos-y-roles.md` fase 4 |
+| 23 | `apps/web/tsconfig.json`: excluir `.next/types` del `typecheck` (o que `pnpm verificar` limpie `.next/` antes), para que un build viejo no rompa `tsc --noEmit` en un worktree reutilizado. | Verificación | §10.2 |
+| 24 | `.env.example`: además de la fila 18, quitar `TIKTOK_LOGIN_REDIRECT_URI` y compañía con `/api/oauth/…`: la redirect URI real es `<APP_URL>/conexiones/oauth/tiktok/callback` y ya está registrada en la app de TikTok. | CON-3 | `docs/propuestas/CON-3.md` §2 |
+
+### 10.5 Desvíos respecto al plan, y por qué
+
+- **CON-10 no estaba en el plan y fue la historia más grande del
+  sprint.** Nació de la decisión de producto del 22-sep (sin OAuth por
+  creador) y se hizo en un día porque CON-1 y CON-3 ya traían el
+  cliente HTTP, el cifrado y `data_consent`. §6 la da por movida al
+  sprint 2 con su razón.
+- **CON-3 cambió de sentido dos veces en 24 horas:** pospuesta a una
+  versión avanzada el 22-sep (noche) y de vuelta al MVP el 23-sep como
+  «Autorizar cifras» de TikTok. Con el híbrido la fila por @ se
+  convierte en autorizada sin perder historial
+  (`upgradePublicAccountToOAuth`), así que las dos decisiones conviven
+  en la misma tabla.
+- **La prueba en vivo de CON-3 no esperó la decisión 5 de §7.** Nicolás
+  creó la app de TikTok (Login Kit, sandbox con su cuenta como usuario
+  de prueba) y verificó el dominio con un archivo de firma servido desde
+  `apps/web/public`. Meta sigue pendiente, pero Instagram va por @ en
+  el MVP y no lo bloquea.
+- **Producción se desplegó desde la rama de CON-3** (aunque con el
+  mismo commit que `main`) y el último commit de `main` no salió. La
+  regla de §9.3 se cumplió en el contenido y no en la forma; fila 21.
+- **ACC entró al MVP el 22-sep** (decisión 10): ~7 días nuevos; los
+  sprints 3 y 4 de Nicolás quedan en 14 sobre 10. Para hacerle sitio se
+  corrieron FIN-7 (Nicolás), RES-4, VEN-7 y VEN-8 (Rasheed) al sprint 6.
+- **Rasheed integró 133 commits en dos días** (CIM-3, RES, VEN, COT,
+  ocho rondas de pulido y las migraciones 0024–0033) y las aplicó en
+  Supabase el 23-sep a las 06:13. Lo que §9 daba por «pendiente de
+  aplicar» ya no lo está; el bloque común de los prompts del sprint 3
+  (`docs/prompts/sprint-3-a-6/`) tiene esa frase vieja y hay que
+  leerla con este §10 delante.
+- **`pnpm verificar` no está en verde en `main` por una prueba de
+  Rasheed** (RES-6) que no falla pero deja un rechazo sin manejar. Las
+  1.623 pruebas pasan; el semáforo dice rojo. No se tocó porque el
+  archivo es suyo.
+- **Los `job_definition` de todos los jobs de Nicolás ya existen en
+  0009**, así que ninguna historia de los sprints 3 a 5 necesita
+  migración para registrar su job; y `mc_app` perdió `UPDATE` y `DELETE`
+  sobre `account_metric_snapshot` (0025): «Actualizar» dos veces el
+  mismo día ya no reemplaza la lectura desde la web (solo el worker).
+  Rasheed pide el visto bueno a ese cambio (§10.6).
+- **El clon principal quedó con `node_modules` viejos** tras traer los
+  156 commits: `make db.guardia` falló con `ERR_MODULE_NOT_FOUND`
+  (`drizzle-orm`) hasta correr `pnpm install`. Tras un `git pull`
+  grande, `pnpm install` es parte del pull.
+
+### 10.6 Lo que sigue
+
+- **Ya (Nicolás, tres comandos):** `git pull` en el clon principal
+  (ya está en `29460e3`, pero con `pnpm install` después); no hay
+  migraciones pendientes (`make db.info` debe decir 32); desplegar
+  `29460e3` desde `main`: `cd platform && make db.guardia && make
+  vercel.deploy PROD=1`.
+- **Ya (Nicolás):** `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` en
+  Vercel (`docs/propuestas/CON-10.md` §3) y probar `@nicolasduartea`
+  por @; App Review de Login Kit cuando el híbrido tenga que abrirse a
+  otros creadores.
+- **Lo que Rasheed pide de Nicolás** (notas de sus historias en
+  `backlog.ts`): visto bueno a `Kpi.deltaText` y `BarChart.axisLabels`
+  (rama `rasheed/kit-axislabels-deltatext`), a los `loading.tsx` de
+  `campanas/` y `conexiones/`, a «Total con impuesto» en `/campanas`
+  (COT-4) y a que `recordAccountSnapshot` conserve la primera lectura
+  del día (`ON CONFLICT DO NOTHING`, CIM-2 §3).
+- **Sprint 3 de Nicolás (§6), en cuatro carriles sin carpetas en
+  común:** ACC-1 y ACC-2 el primer día (fijan `requirePermission()` y
+  `audit()` antes de las Server Actions de dinero); B Finanzas FIN-3 →
+  FIN-2 → FIN-5; A Datos CON-5 → CON-6; C Campañas puede adelantar
+  CAM-4 y CAM-3 si hay aire. Prompts en `docs/prompts/sprint-3-a-6/`.
+- **Sprint 4:** CAM-3 a CAM-6 (el ciclo completo de la demo 4), FIN-6 y
+  el SQL de ACC-3; COT-4 ya llama al contrato de CAM-2, así que el
+  «lunes del sprint 4» de `docs/propuestas/CAM-2.md` es una prueba
+  conjunta, no una integración.

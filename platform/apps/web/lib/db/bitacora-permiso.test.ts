@@ -20,7 +20,7 @@ vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: (...a: unknown[]) => redirect(...a) }));
 
-import { crearFactura } from "@/app/(app)/finanzas/facturas/actions";
+import { crearFactura, registrarPago } from "@/app/(app)/finanzas/facturas/actions";
 import { closeDb, getDbMode, withWorkspace } from "./index";
 
 /** Café Alma, vinculada al workspace del seed (0002). */
@@ -82,5 +82,49 @@ describe("sin el permiso no hay escritura ni bitácora (ACC-1 + ACC-2)", () => {
     expect(despues.facturas).toHaveLength(1);
     expect(despues.bitacora).toEqual(["invoice.created"]);
     expect(redirect).toHaveBeenCalledWith(`/finanzas/facturas/${despues.facturas[0]}`);
+  });
+
+  /**
+   * FIN-2. El mánager es el caso que importa del piloto: ve el estado de
+   * cobro de sus campañas (`finanzas.cobro.ver`) y NO puede registrar un
+   * cobro, que es dinero. Sobre la factura de FIN-1, recién enviada.
+   */
+  test("el Mánager no cobra: SinPermisoError, sin pago, sin apartado y sin bitácora; el Dueño sí", async () => {
+    const id = (await estado()).facturas[0];
+    expect(id).toBeDefined();
+    await withWorkspace((tx) => tx.query("UPDATE invoice SET status = 'sent' WHERE id = $1", [id]));
+    const cobro = () => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries({
+        invoiceId: id ?? "", amount: "100000.00", receivedOn: "2026-09-23",
+        method: "transferencia", reference: "", notes: "", expectedPaidAmount: "0.00",
+      })) f.set(k, v);
+      return f;
+    };
+    const cobros = async () =>
+      withWorkspace(async (tx) => {
+        const p = await tx.query<{ id: string }>("SELECT id FROM payment WHERE invoice_id = $1", [id]);
+        const r = await tx.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM tax_reserve tr JOIN payment p ON p.id = tr.payment_id WHERE p.invoice_id = $1",
+          [id],
+        );
+        const b = await tx.query<{ action: string }>(
+          "SELECT action FROM audit_log WHERE entity_id = $1::uuid AND action = 'invoice.payment_recorded'",
+          [id],
+        );
+        return { pagos: p.rows.length, apartados: r.rows[0]?.n ?? -1, bitacora: b.rows.map((x) => x.action) };
+      });
+
+    sesion.permisos = permisosDeRol("creator", "manager");
+    expect(sesion.permisos.has("finanzas.cobro.ver")).toBe(true);
+    expect(sesion.permisos.has("finanzas.pago.registrar")).toBe(false);
+    const err = await registrarPago({}, cobro()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SinPermisoError);
+    expect((err as SinPermisoError).permiso).toBe("finanzas.pago.registrar");
+    expect(await cobros()).toEqual({ pagos: 0, apartados: 0, bitacora: [] });
+
+    sesion.permisos = null; // Dueño
+    expect(await registrarPago({}, cobro())).toEqual({ ok: true });
+    expect(await cobros()).toEqual({ pagos: 1, apartados: 1, bitacora: ["invoice.payment_recorded"] });
   });
 });

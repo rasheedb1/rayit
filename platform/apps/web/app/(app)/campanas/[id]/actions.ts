@@ -33,6 +33,8 @@ import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@
 import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../_lib/messages";
+import { getMarcaService } from "../_lib/marca-server";
+import { queryDeMarca } from "../_lib/aviso-marca";
 import type { Codificacion } from "@/lib/csv";
 import { ErrorCsvVentas, leerCsvVentas, MAX_BYTES_VENTAS, MAX_FILAS_VENTAS } from "./_lib/csv-ventas";
 
@@ -404,4 +406,31 @@ export async function recalcularResultado(campaignId: string): Promise<void> {
   }
   paths(campaignId);
   backWithError(campaignId, error);
+}
+
+// ---------------------------------------------------------------------
+// Seguidores de la marca (CAM-3)
+// ---------------------------------------------------------------------
+
+/**
+ * «Actualizar ahora» de la sección «Seguidores de la marca»: lee la
+ * fuente pública de cada cuenta de la marca y deja la fila de hoy con el
+ * mismo INSERT que el job brand.snapshot (la primera lectura del día
+ * queda). Se usa con bind(null, campaignId).
+ */
+export async function actualizarSeguidoresMarca(campaignId: string): Promise<void> {
+  await requirePermission("campanas.campana.editar");
+  if (typeof campaignId !== "string" || !UUID_RE.test(campaignId)) redirect("/campanas");
+  let query: string;
+  try {
+    const out = await getMarcaService().actualizar(campaignId);
+    // La credencial que falta no se enseña en pantalla (aviso-marca.ts): va al log del servidor.
+    for (const a of out.avisos) if (a.code === "sin_credencial") console.warn("[campanas] la fuente pública de la marca no está configurada", { platform: a.platformId });
+    query = queryDeMarca(out);
+  } catch (err) {
+    console.error("[campanas] «Actualizar ahora» de la marca falló", err);
+    query = queryDeMarca({ ok: false, code: "generico", avisos: [] });
+  }
+  paths(campaignId);
+  redirect(`/campanas/${campaignId}?${query}#seguidores`);
 }

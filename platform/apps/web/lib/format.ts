@@ -174,6 +174,16 @@ export function formatInt(n: number, opts: LocaleOpts = {}): string {
 }
 
 /**
+ * Un número con decimales fijos como máximo, en el locale: 12.9286 →
+ * "12,9" · 155 → "155" · 1240.5 → "1.240,5". Para tasas («12,9 al día»),
+ * donde formatInt redondea de más y formatCompact abrevia. Añadido por
+ * Campañas (CAM-3); no cambia nada de lo que ya había.
+ */
+export function formatNumber(n: number, maxDigits = 1, opts: LocaleOpts = {}): string {
+  return plain(numberFormat(opts.locale ?? DEFAULT_LOCALE, { maximumFractionDigits: maxDigits }).format(n));
+}
+
+/**
  * 214000 → "214 mil" · 1200000 → "1,2 M". Para ejes y sparklines.
  * La notación compacta usa el idioma del locale sin la variante de país
  * ("es" en vez de "es-CO"): los sufijos son los mismos y el resultado
@@ -431,6 +441,7 @@ export function formatterFor(settings: FormatSettings) {
       return formatMoney(amountDecimal, currency ?? settings.currency, { ...opts, ...base });
     },
     int: (n: number) => formatInt(n, base),
+    number: (n: number, maxDigits = 1) => formatNumber(n, maxDigits, base),
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     multiple: (ratio: number, digits = 1) => formatMultiple(ratio, digits, base),
