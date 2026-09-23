@@ -52,8 +52,12 @@ export function Buscador({ minSearch }: { minSearch: number }) {
 
   const short = q.trim().length > 0 && q.trim().length < minSearch;
 
+  // items-start y no items-end: la ayuda («Desde el tercer carácter»)
+  // alarga solo la columna de la búsqueda, y alineada por el fondo la
+  // fila bajaba el select unos 22 px. Por arriba, las dos etiquetas y los
+  // dos controles quedan a la misma altura con ayuda o sin ella.
   return (
-    <div role="search" className="flex flex-wrap items-end gap-3" aria-busy={pending || undefined}>
+    <div role="search" className="flex flex-wrap items-start gap-3" aria-busy={pending || undefined}>
       <Field label={t.search} help={short ? t.shortSearch(minSearch) : t.searchHelp} htmlFor="empresas-q" className="min-w-0 flex-1 basis-64">
         <Input type="search" value={q} onChange={(e) => onChange(e.target.value)} autoComplete="off" placeholder={MESSAGES.empresas.searchPlaceholder} />
       </Field>

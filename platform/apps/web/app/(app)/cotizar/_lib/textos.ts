@@ -1,6 +1,7 @@
 import type { TextosCotizar } from "@mc/db/queries/cotizar";
 import { formatMoney } from "@/lib/format";
 import { MESSAGES } from "../messages";
+import { MESSAGES as VENTAS } from "../../ventas/_lib/messages";
 
 /**
  * Las frases que @mc/db guarda en tablas de otros módulos (la historia
@@ -23,6 +24,10 @@ export const TEXTOS_COTIZAR: TextosCotizar = {
       amountFrom ? formatMoney(amountFrom, currencyFrom, { mode: "full" }) : null,
       formatMoney(amountTo, currencyTo, { mode: "full" }),
     ),
+  // La siguiente acción del negocio es de Ventas, que la enseña en el
+  // tablero: el texto sale de su messages.ts, no de uno propio.
+  accionSeguimiento: VENTAS.radar.quoteFollowUpAction,
+  accionesSuperadas: [VENTAS.radar.pitchAction],
   avisoAceptada: ({ companyName, quoteNumber, signerName, signerEmail, campaignName }) => {
     const firma = signerName ? MESSAGES.actividad.firma(signerName, signerEmail) : null;
     return {

@@ -11,6 +11,7 @@
  */
 import type { ContactSource, DueState, Relationship, SignalStatus } from "@mc/db/queries/ventas";
 import type { PillKind } from "@/components/ui/pill";
+import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "./messages";
 
 // ---------------------------------------------------------------------
@@ -150,12 +151,22 @@ export function fitPercent(fitScore: string | null): number | null {
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 }
 
-/** Verde de 75 % para arriba, ámbar de 50 a 74, y por debajo sin color. */
-export function pillForFit(fitScore: string | null): { kind: PillKind; text: string } | null {
+/**
+ * Verde de 75 % para arriba, ámbar de 50 a 74, y por debajo sin color.
+ *
+ * El texto lo pone el formateador del workspace (lib/format.ts), no una
+ * plantilla: el espacio antes del signo, la coma o el punto son cosa
+ * del locale. Recibe la fracción redondeada al porcentaje entero, para
+ * que el color y el texto digan lo mismo («74 %» nunca en verde).
+ */
+export function pillForFit(
+  fitScore: string | null,
+  f: Pick<Formatter, "pct">,
+): { kind: PillKind; text: string } | null {
   const pct = fitPercent(fitScore);
   if (pct === null) return null;
   const kind: PillKind = pct >= 75 ? "good" : pct >= 50 ? "warn" : "neutral";
-  return { kind, text: `${pct} %` };
+  return { kind, text: f.pct(pct / 100) };
 }
 
 /**

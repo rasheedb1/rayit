@@ -127,6 +127,7 @@ function duplicateMessage(reason: SignalDuplicateReason | null): string {
   const t = MESSAGES.radar.form;
   if (reason === "pending") return t.duplicatePending;
   if (reason === "discarded") return t.duplicateDiscarded;
+  if (reason === "accepted") return t.duplicateAccepted;
   return t.duplicate;
 }
 
@@ -145,7 +146,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
 
-  let res: { duplicate: boolean; reason: SignalDuplicateReason | null };
+  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null };
   try {
     res = await withWorkspace((tx) =>
       createSignal(tx, {
@@ -164,7 +165,15 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   } catch (err) {
     return { message: messageOf(err, MESSAGES.radar.form.error) };
   }
-  if (res.duplicate) return { message: duplicateMessage(res.reason) };
+  if (res.duplicate) {
+    // Una señal que ya se aceptó (o una marca ya en la bandeja con su
+    // empresa) lleva a la ficha: ahí está el negocio.
+    const link =
+      (res.reason === "accepted" || res.reason === "pending") && res.companyId
+        ? { href: `/ventas/empresas/${res.companyId}`, label: MESSAGES.radar.form.seeCompany }
+        : undefined;
+    return { message: duplicateMessage(res.reason), link };
+  }
   revalidateVentas();
   return { ok: true, notice: MESSAGES.radar.form.created, stamp: Date.now() };
 }

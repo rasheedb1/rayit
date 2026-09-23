@@ -43,6 +43,8 @@ import {
   listStages,
   moveDeal,
   normalizeDomain,
+  promoteCompanyOnWin,
+  signalRef,
   optOutContact,
   searchTerm,
   updateCompany,
@@ -165,6 +167,14 @@ describe('normalización de entradas', () => {
     assert.equal(a, b, 'la misma marca escrita distinto da la misma clave');
     assert.equal(a, 'meta_ad_library:café-alma');
     assert.equal(buildDedupeKey('manual', 'x.co', 'ref-1'), 'manual:x.co:ref-1');
+  });
+
+  test('la referencia de una señal manual es su titular, sin tildes ni signos', () => {
+    assert.equal(signalRef('Lanzó café de origen, ¡en Bogotá!'), 'lanzo-cafe-de-origen-en-bogota');
+    assert.equal(signalRef('  LANZÓ   café de origen en Bogotá '), 'lanzo-cafe-de-origen-en-bogota', 'el mismo titular escrito distinto');
+    assert.equal(signalRef('¡¡!!'), null);
+    assert.ok((signalRef('palabra '.repeat(40)) ?? '').length <= 80, 'acotada: la clave no crece con el titular');
+    assert.ok(!(signalRef('palabra '.repeat(40)) ?? '').endsWith('-'));
   });
 });
 
@@ -621,6 +631,42 @@ describe('VEN-2 · radar', () => {
     assert.equal(fila?.dias, PITCH_DUE_DAYS);
   });
 
+  test('una marca aceptada admite una señal nueva; la MISMA señal repetida avisa que ya es un negocio', async () => {
+    // El caso del hallazgo: se acepta «Café Altura Andina» y se vuelve a
+    // anotar. Antes la clave era solo fuente:marca y el UNIQUE la frenaba
+    // para siempre, con un aviso que hablaba de un descarte que no hubo.
+    const marca = { companyName: 'Café Altura Andina', domain: 'cafealturaandina.co' };
+    const primera = await laura((tx) => createSignal(tx, { ...marca, headlineEs: 'Lanzó café de origen en Meta' }));
+    assert.ok(primera.id);
+    const aceptada = await laura((tx) => acceptSignal(tx, primera.id!));
+
+    // La misma señal otra vez (el mismo titular, escrito distinto): no entra,
+    // y el motivo dice que ya es un negocio, con la empresa para enlazarla.
+    const repetida = await laura((tx) => createSignal(tx, { ...marca, headlineEs: '  LANZÓ café de origen en Meta ' }));
+    assert.equal(repetida.duplicate, true);
+    assert.equal(repetida.reason, 'accepted');
+    assert.equal(repetida.companyId, aceptada.companyId);
+
+    // Lo mismo si vuelve por una lista con ese titular.
+    const porLista = await laura((tx) =>
+      importSignals(tx, [{ ...{ name: marca.companyName, domain: marca.domain }, note: 'Lanzó café de origen en Meta' }]));
+    assert.equal(porLista.created, 0);
+
+    // Una señal NUEVA de la misma marca (otra campaña, otra temporada) sí
+    // entra: es información, como dice la regla del radar.
+    const nueva = await laura((tx) => createSignal(tx, { ...marca, headlineEs: 'Abre tienda en Medellín' }));
+    assert.equal(nueva.duplicate, false);
+    assert.equal(nueva.reason, null);
+    const bandeja = await laura((tx) => listSignals(tx, { limit: 200 }));
+    const enBandeja = bandeja.find((s) => s.id === nueva.id);
+    assert.equal(enBandeja?.companyId, aceptada.companyId, 'enlazada a la empresa que ya está en el CRM');
+    assert.equal(enBandeja?.companyLinked, true);
+
+    // Y con esa en la bandeja, la marca ya no entra otra vez por ningún camino.
+    const otraMas = await laura((tx) => createSignal(tx, { ...marca, headlineEs: 'Otra cosa más' }));
+    assert.equal(otraMas.reason, 'pending');
+  });
+
   test('una señal sin marca no se puede guardar', async () => {
     await assert.rejects(
       () => laura((tx) => createSignal(tx, { headlineEs: 'Algo pasó' })),
@@ -701,6 +747,50 @@ describe('VEN-3 · pipeline', () => {
     );
     assert.equal(despues.wonQuarterCount, antes.wonQuarterCount + 1);
     assert.ok(Number(despues.wonQuarter) > Number(antes.wonQuarter));
+
+    // Olla Fácil era «Prospecto»: ganarla la hace cliente, en la misma
+    // transacción. Antes quedaba «Prospecto» y «Sin negocios abiertos».
+    assert.equal(res.companyPromoted, true);
+    const empresa = await laura((tx) => getCompany(tx, COMPANY_OLLA));
+    assert.equal(empresa?.relationship, 'client');
+  });
+
+  test('ganar sube la relación a «Cliente» sin bajar nunca otra', async () => {
+    const casos: { relationship: 'prospect' | 'contacted' | 'client' | 'past_client' | 'blocked'; queda: string; sube: boolean }[] = [
+      { relationship: 'contacted', queda: 'client', sube: true },
+      { relationship: 'past_client', queda: 'client', sube: true },
+      { relationship: 'client', queda: 'client', sube: false },
+      { relationship: 'blocked', queda: 'blocked', sube: false },
+    ];
+    for (const [i, caso] of casos.entries()) {
+      const companyId = await laura((tx) => createCompany(tx, { name: `Marca Relación ${i}`, relationship: caso.relationship }));
+      const dealId = await laura((tx) => createDeal(tx, { companyId, name: 'Un trabajo' }));
+      const abierto = await laura((tx) => moveDeal(tx, dealId, 'propuesta'));
+      assert.equal(abierto.companyPromoted, false, 'un negocio abierto no toca la relación');
+      const ganado = await laura((tx) => moveDeal(tx, dealId, 'ganado'));
+      assert.equal(ganado.companyPromoted, caso.sube, caso.relationship);
+      assert.equal((await laura((tx) => getCompany(tx, companyId)))?.relationship, caso.queda, caso.relationship);
+      // Reabrirlo no la devuelve a donde estaba: la relación no baja sola.
+      await laura((tx) => moveDeal(tx, dealId, 'negociacion'));
+      assert.equal((await laura((tx) => getCompany(tx, companyId)))?.relationship, caso.queda);
+    }
+    // Llamarla sobre un negocio abierto, o sobre uno que no existe, no hace nada.
+    const abierta = await laura((tx) => createCompany(tx, { name: 'Marca Sin Ganar', relationship: 'prospect' }));
+    const dealAbierto = await laura((tx) => createDeal(tx, { companyId: abierta, name: 'Por ganar' }));
+    assert.equal(await laura((tx) => promoteCompanyOnWin(tx, dealAbierto)), false);
+    assert.equal(await laura((tx) => promoteCompanyOnWin(tx, 'no-es-uuid')), false);
+    assert.equal((await laura((tx) => getCompany(tx, abierta)))?.relationship, 'prospect');
+  });
+
+  test('un negocio ganado del vecino no sube la relación de Laura con la misma marca', async () => {
+    // El vecino gana su negocio con Marca Ajena; Laura no la tiene en su CRM
+    // y, aunque la tuviera, la relación es de cada workspace.
+    await ajeno((tx) => moveDeal(tx, '00000009-0000-4000-8000-0000000dea01', 'ganado'));
+    const suya = await ajeno((tx) => getCompany(tx, COMPANY_AJENA));
+    assert.equal(suya?.relationship, 'client');
+    assert.equal(await laura((tx) => promoteCompanyOnWin(tx, '00000009-0000-4000-8000-0000000dea01')), false);
+    // Se deja como estaba: las pruebas de KPI del vecino lo cuentan abierto.
+    await ajeno((tx) => moveDeal(tx, '00000009-0000-4000-8000-0000000dea01', 'propuesta'));
   });
 
   test('sacarlo de «Ganado» limpia won_at: el trimestre no puede contar un negocio reabierto', async () => {

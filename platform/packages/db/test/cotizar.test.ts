@@ -26,7 +26,7 @@ import {
   MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
-import { DealLocked, createDeal, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
+import { DealLocked, FOLLOW_UP_ACTION, FOLLOW_UP_BUSINESS_DAYS, PITCH_ACTION, createCompany, createDeal, getCompany, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
 import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
@@ -66,6 +66,122 @@ before(async () => {
 
 after(async () => {
   await t.close();
+});
+
+// ------------------------- una sola convención de montos, y lo que sigue
+
+describe('el mismo acuerdo dice lo mismo en Ventas, Cotizar y Campañas', () => {
+  test('aceptar deja el negocio en el neto (subtotal − descuento) y la campaña en el total con impuesto', async () => {
+    // La convención (0031, CAM-2 y CIM-6): el negocio es lo que la marca
+    // presupuesta sin IVA; la campaña y la factura, lo que se cobra.
+    const companyId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createCompany(tx, { name: 'Marca Convención', domain: 'marcaconvencion.co', relationship: 'prospect' }));
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createDeal(tx, { companyId, name: 'Paquete convención', amount: '8000000' }));
+    const creada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0.19', discount: '500000',
+        items: [
+          { deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 2, unitPrice: '2500000' },
+          { deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '1500000' },
+        ],
+        campaignStartsOn: '2026-12-01', campaignEndsOn: '2026-12-10',
+      }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, creada.id, TEXTOS));
+    const { quote, campaign } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      acceptQuoteAndCreateCampaign(tx, creada.id, TEXTOS));
+    assert.ok(campaign, 'con ventana acordada nace la campaña');
+
+    const fila = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ deal: string; campana: string; neto: string; total: string }>(
+        `SELECT d.amount::text AS deal, c.amount::text AS campana,
+                (q.subtotal - q.discount)::text AS neto, q.total::text AS total
+           FROM quote q JOIN deal d ON d.id = q.deal_id JOIN campaign c ON c.quote_id = q.id
+          WHERE q.id = $1`, [quote.id]);
+      return rows[0]!;
+    });
+    assert.equal(quote.subtotal, '6500000.00');
+    assert.equal(fila.neto, '6000000.00');
+    assert.equal(fila.deal, fila.neto, 'deal.amount = quote.subtotal − quote.discount');
+    assert.equal(fila.total, '7140000.00');
+    assert.equal(fila.campana, fila.total, 'campaign.amount = quote.total');
+
+    // Y la marca, que era «Prospecto», queda como cliente al ganarse.
+    const empresa = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCompany(tx, companyId));
+    assert.equal(empresa?.relationship, 'client');
+  });
+
+  test('aceptar desde el enlace también hace cliente a la marca', async () => {
+    const companyId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createCompany(tx, { name: 'Marca Enlace', domain: 'marcaenlace.co', relationship: 'contacted' }));
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createDeal(tx, { companyId, name: 'Por enlace' }));
+    const creada = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const q = await createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0.19',
+        items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '2000000' }],
+      });
+      return sendQuote(tx, q.id, TEXTOS);
+    });
+    const aceptada = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, creada.slug, FIRMA));
+    assert.equal(aceptada.status, 'ok');
+    if (aceptada.status !== 'ok') return;
+    // public_quote_accept no puede escribir company_link: lo hace el servidor al terminar.
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCompany(tx, companyId)))?.relationship, 'contacted');
+    await t.db.withWorkspace(aceptada.workspaceId, (tx) => completePublicAcceptance(tx, creada.id, TEXTOS));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCompany(tx, companyId)))?.relationship, 'client');
+  });
+
+  test('enviar la cotización cambia «Enviar pitch» por «Seguimiento a la cotización» a tres días hábiles', async () => {
+    const dealId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con pitch pendiente' }));
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ next_action: string }>('SELECT next_action FROM deal WHERE id = $1', [dealId])).rows[0]!);
+    assert.equal(antes.next_action, PITCH_ACTION);
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const q = await createQuote(tx, {
+        dealId, creatorId: creadora, taxRate: '0.19',
+        items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '1000000' }],
+      });
+      await sendQuote(tx, q.id, TEXTOS);
+    });
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ next_action: string; hora: number; dow: number; habiles: number }>(
+        `SELECT d.next_action,
+                extract(hour FROM d.next_action_due AT TIME ZONE 'America/Bogota')::int AS hora,
+                extract(isodow FROM d.next_action_due AT TIME ZONE 'America/Bogota')::int AS dow,
+                (SELECT count(*)::int
+                   FROM generate_series((now() AT TIME ZONE 'America/Bogota')::date + 1,
+                                        (d.next_action_due AT TIME ZONE 'America/Bogota')::date, interval '1 day') AS dia
+                  WHERE extract(isodow FROM dia) < 6) AS habiles
+           FROM deal d WHERE d.id = $1`, [dealId])).rows[0]!);
+    assert.equal(despues.next_action, FOLLOW_UP_ACTION, 'el pitch ya se superó con una propuesta');
+    assert.equal(despues.hora, 15, 'a las 15:00 en la zona del workspace');
+    assert.ok(despues.dow <= 5, 'vence un día hábil');
+    assert.equal(despues.habiles, FOLLOW_UP_BUSINESS_DAYS);
+  });
+
+  test('una siguiente acción escrita a mano se respeta, y el texto nuevo lo pone la pantalla', async () => {
+    const [aMano, conPitch] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [
+      await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con llamada', nextAction: 'Llamar a Valentina' }),
+      await createDeal(tx, { companyId: COMPANY_CAFE_ALMA, name: 'Con pitch en otro idioma', nextAction: 'Send pitch' }),
+    ]);
+    const textos: TextosCotizar = { ...TEXTOS, accionSeguimiento: 'Follow up on the quote', accionesSuperadas: ['Send pitch'] };
+    for (const dealId of [aMano, conPitch]) {
+      await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+        const q = await createQuote(tx, {
+          dealId, creatorId: creadora, taxRate: '0',
+          items: [{ deliverable: 'reel', platformId: 'instagram', description: 'Reel', quantity: 1, unitPrice: '1000000' }],
+        });
+        await sendQuote(tx, q.id, textos);
+      });
+    }
+    const acciones = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ id: string; next_action: string }>('SELECT id, next_action FROM deal WHERE id = ANY($1::uuid[])', [[aMano, conPitch]])).rows);
+    const por = new Map(acciones.map((a) => [a.id, a.next_action]));
+    assert.equal(por.get(aMano), 'Llamar a Valentina');
+    assert.equal(por.get(conPitch), 'Follow up on the quote');
+  });
 });
 
 // ------------------------------------------------------------- COT-1
