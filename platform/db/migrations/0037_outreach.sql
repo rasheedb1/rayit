@@ -329,7 +329,9 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 -- token reescribe el secreto con la misma ref, nunca crea otra fila.
 --
 -- daily_cap y weekly_cap son los de la CUENTA (el proveedor castiga a
--- la cuenta, no al workspace); NULL = el de outbound_policy. Se cuentan
+-- la cuenta, no al workspace); NULL = el de outbound_policy. Cada canal
+-- tiene un techo que nadie pasa (outreach_channel_account_channel_caps_check,
+-- con los números de §5.1: 100 al día y 200 a la semana en LinkedIn). Se cuentan
 -- en outbound_counter con channel_account_id (6.2), así que tres
 -- LinkedIn de una agencia en el mismo workspace no comparten plaza.
 -- warmup_started_at arranca el calentamiento progresivo (VEN-15).
@@ -422,7 +424,27 @@ CREATE TABLE outreach_channel_account (
   -- tendría dos topes y podría enviar el doble. El account_id de
   -- Unipile distingue mayúsculas y se deja tal cual.
   CONSTRAINT outreach_channel_account_gmail_lower_check
-    CHECK (provider <> 'gmail_oauth' OR provider_account_id = lower(btrim(provider_account_id)))
+    CHECK (provider <> 'gmail_oauth' OR provider_account_id = lower(btrim(provider_account_id))),
+  -- El techo de cada canal (§5.1): lo que el proveedor aguanta antes de
+  -- castigar la cuenta. Es un CHECK y no un candado de rol porque vale
+  -- para todos: ni la web, ni el worker, ni un operador sube una cuenta
+  -- de LinkedIn por encima de lo que LinkedIn tolera. Por debajo, el
+  -- tope es de la persona (VEN-15 lo baja durante el calentamiento).
+  -- Los mismos números en CHANNEL_CAP_LIMITS (src/schema/outreach.ts),
+  -- que la pantalla de canales usa como máximo del campo.
+  --   email         2000 / día, 10000 / semana (el cupo de Google Workspace)
+  --   linkedin       100 / día,   200 / semana (invitaciones en cuenta activa)
+  --   instagram_dm   100 / día,   700 / semana (100 acciones al día)
+  --   whatsapp       100 / día,   700 / semana (fase 2; el mismo techo
+  --                  que Instagram hasta medir el de Unipile)
+  CONSTRAINT outreach_channel_account_channel_caps_check CHECK (
+    CASE channel
+      WHEN 'email'        THEN coalesce(daily_cap, 0) <= 2000 AND coalesce(weekly_cap, 0) <= 10000
+      WHEN 'linkedin'     THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 200
+      WHEN 'instagram_dm' THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 700
+      WHEN 'whatsapp'     THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 700
+      ELSE false
+    END)
 );
 CREATE UNIQUE INDEX outreach_channel_account_provider_idx
   ON outreach_channel_account (workspace_id, provider, provider_account_id);
@@ -683,7 +705,8 @@ CREATE INDEX ON outbound_enrollment (current_step_id);
 CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- A quien pidió la baja no se le enrola, ni se le reanuda. Sin esto el
+-- A quien pidió la baja (la ficha, o su correo en la lista global, como
+-- en 4.1) no se le enrola, ni se le reanuda. Sin esto el
 -- alta quedaba 'active' y el motor (VEN-10) chocaba con la regla de
 -- outbound_touch (4.1) en cada vuelta, con el error lejos de su causa.
 -- Mismo mensaje y mismo código que la regla de 0007. Vigila el alta y
@@ -698,6 +721,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   is_out boolean;
+  correo citext;
 BEGIN
   IF NEW.status NOT IN ('active', 'paused', 'cooldown') THEN
     RETURN NEW;
@@ -707,11 +731,16 @@ BEGIN
      AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
     RETURN NEW;
   END IF;
-  SELECT opted_out INTO is_out FROM contact WHERE id = NEW.contact_id;
-  IF coalesce(is_out, false) THEN
+  -- La misma definición de «dado de baja» que la regla del toque (4.1):
+  -- la ficha, o su correo en la lista global (un rebote o una queja que
+  -- el worker anotó y que todavía no se reflejó en la ficha).
+  -- address_is_suppressed se crea en 4.1; plpgsql la resuelve al correr.
+  SELECT c.opted_out, c.email INTO is_out, correo FROM contact c WHERE c.id = NEW.contact_id;
+  IF coalesce(is_out, false) OR address_is_suppressed(correo) THEN
     RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', NEW.contact_id
       USING ERRCODE = 'check_violation',
-            HINT = 'Un enrolamiento de quien pidió la baja solo puede estar en opted_out, completed o replied.';
+            HINT = 'La ficha está dada de baja o su correo está en la baja global. Un enrolamiento de quien '
+                   'pidió la baja solo puede estar en opted_out, completed o replied.';
   END IF;
   RETURN NEW;
 END;
@@ -917,9 +946,11 @@ CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
 -- 'processing': es del despachador que lo reclamó. El contrato de ese
 -- despachador (VEN-10), que esta regla hace cumplir:
 --   1. al reclamar (scheduled → processing) escribe recipient_address
---      en la misma sentencia; si la dirección o la ficha están dadas de
---      baja la base rechaza el reclamo, así que la consulta de reclamo
---      las filtra y las pasa a 'canceled';
+--      y sube attempt_count en la misma sentencia, y en la misma
+--      transacción el enlace de baja de ese intento (4.5; la base no
+--      confirma un correo reclamado sin él); si la dirección o la ficha
+--      están dadas de baja la base rechaza el reclamo, así que la
+--      consulta de reclamo las filtra y las pasa a 'canceled';
 --   2. antes de llamar al proveedor, relee el contacto, la lista y la
 --      política en la transacción del envío; con la baja o el apagado,
 --      pasa el toque a 'canceled' (processing → canceled siempre se
@@ -1028,8 +1059,15 @@ $$;
 --   · 'sent' es terminal: un toque enviado no vuelve a draft, scheduled
 --     ni a ningún otro estado (volver a la cola era un segundo envío del
 --     mismo correo);
---   · un toque con pruebas de envío no se borra (outbound_touch_keep_sent,
---     abajo): es el registro de lo que la plataforma envió. Borrar la
+--   · 'processing' es del despachador (4.1): la aplicación no crea un
+--     toque en ese estado, no lleva uno a él y no saca uno de él. Si
+--     pudiera, un toque de LinkedIn puesto en processing desde la web
+--     (sin correo, el CHECK de recipient_address no aplica) quedaba
+--     fuera de public_optout y de disable_outreach, que no tocan lo
+--     reclamado, y podía pasar a sent sin que nadie lo hubiera enviado;
+--   · un toque con pruebas de envío, o reclamado, no se borra
+--     (outbound_touch_keep_sent, abajo): es el registro de lo que la
+--     plataforma envió, o de lo que está enviando. Borrar la
 --     empresa o el workspace sí lo arrastra en cascada, y no rompe nada:
 --     el enlace de baja vive en outbound_optout_link.
 CREATE FUNCTION outbound_touch_worker_columns()
@@ -1041,11 +1079,16 @@ DECLARE
   pruebas boolean;
   destinatario boolean := false;
   vuelve boolean := false;
+  reclamo boolean;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     pruebas := NEW.provider_message_id IS NOT NULL OR NEW.message_id_rfc IS NOT NULL
                OR NEW.recipient_address IS NOT NULL;
+    reclamo := NEW.status = 'processing';
   ELSE
+    -- Entrar en processing o salir de él: las dos puntas del reclamo.
+    reclamo := NEW.status IS DISTINCT FROM OLD.status
+               AND (NEW.status = 'processing' OR OLD.status = 'processing');
     pruebas := NEW.provider_message_id IS DISTINCT FROM OLD.provider_message_id
                OR NEW.message_id_rfc IS DISTINCT FROM OLD.message_id_rfc
                OR NEW.recipient_address IS DISTINCT FROM OLD.recipient_address;
@@ -1055,8 +1098,15 @@ BEGIN
                          OR NEW.company_id IS DISTINCT FROM OLD.company_id);
     vuelve := OLD.status = 'sent' AND NEW.status IS DISTINCT FROM 'sent';
   END IF;
-  IF NOT (pruebas OR destinatario OR vuelve) OR outreach_is_dispatcher() THEN
+  IF NOT (pruebas OR destinatario OR vuelve OR reclamo) OR outreach_is_dispatcher() THEN
     RETURN NEW;
+  END IF;
+  IF reclamo THEN
+    RAISE EXCEPTION 'El estado processing es del despachador: la aplicación no pone un toque en él ni lo saca '
+                    '(de ''%'' a ''%'', rol %).', CASE WHEN TG_OP = 'UPDATE' THEN OLD.status END, NEW.status, current_user
+      USING ERRCODE = 'insufficient_privilege',
+            HINT = 'Lo reclamado no lo cancelan ni la baja ni el apagado (4.1); si la web pudiera ponerlo, el toque '
+                   'quedaría fuera de los dos. Para programar, scheduled; el worker lo reclama.';
   END IF;
   IF pruebas THEN
     RAISE EXCEPTION 'provider_message_id, message_id_rfc y recipient_address los escribe solo el despachador (rol %).',
@@ -1082,7 +1132,7 @@ CREATE TRIGGER outbound_touch_worker_columns
                              contact_id, company_id, status ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_worker_columns();
 
--- Borrar un toque con pruebas de envío: solo el despachador, o una
+-- Borrar un toque con pruebas de envío, o en processing: solo el despachador, o una
 -- cascada (borrar la empresa o el workspace). La cascada la ejecuta un
 -- disparador de clave ajena, así que llega aquí con pg_trigger_depth()
 -- mayor que 1; un DELETE de la aplicación llega con 1.
@@ -1092,12 +1142,14 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF (OLD.provider_message_id IS NULL AND OLD.message_id_rfc IS NULL AND OLD.recipient_address IS NULL)
+  IF (OLD.provider_message_id IS NULL AND OLD.message_id_rfc IS NULL AND OLD.recipient_address IS NULL
+      AND OLD.status <> 'processing')
      OR pg_trigger_depth() > 1
      OR outreach_is_dispatcher() THEN
     RETURN OLD;
   END IF;
-  RAISE EXCEPTION 'Un toque enviado por la plataforma no se borra desde la aplicación (toque %, rol %).', OLD.id, current_user
+  RAISE EXCEPTION 'Un toque enviado o reclamado por la plataforma no se borra desde la aplicación (toque %, rol %).',
+                  OLD.id, current_user
     USING ERRCODE = 'insufficient_privilege',
           HINT = 'Es el registro de lo que salió: la salud, los rebotes y la baja lo necesitan.';
 END;
@@ -1171,7 +1223,11 @@ CREATE TRIGGER outbound_touch_status_changed BEFORE UPDATE OF status, status_cha
 
 ALTER TABLE outbound_touch
   ADD CONSTRAINT outbound_touch_held_reason_check CHECK (status <> 'held' OR held_reason IS NOT NULL),
-  ADD CONSTRAINT outbound_touch_processing_claimed_check CHECK (status <> 'processing' OR claimed_at IS NOT NULL);
+  ADD CONSTRAINT outbound_touch_processing_claimed_check CHECK (status <> 'processing' OR claimed_at IS NOT NULL),
+  -- Reclamar es un intento: el despachador sube attempt_count en la
+  -- misma sentencia, y el enlace de baja de ese intento lleva el número
+  -- (4.5, outbound_touch_optout_link_required).
+  ADD CONSTRAINT outbound_touch_processing_attempt_check CHECK (status <> 'processing' OR attempt_count >= 1);
 
 -- Índices de la cola.
 --   · Un enrolamiento no tiene dos toques vivos del mismo paso: es la
@@ -1199,8 +1255,13 @@ CREATE INDEX outbound_touch_step_idx ON outbound_touch (step_id);
 CREATE INDEX outbound_touch_provider_message_idx ON outbound_touch (provider_message_id)
   WHERE provider_message_id IS NOT NULL;
 CREATE INDEX outbound_touch_message_id_rfc_idx ON outbound_touch (message_id_rfc) WHERE message_id_rfc IS NOT NULL;
--- La salud cuenta fallos y cancelaciones por la hora del cambio de estado.
+-- La salud (8.6) lee la ventana por la hora de cada cosa, no la historia
+-- entera: fallos y cancelaciones por la hora del cambio de estado; lo
+-- enviado, lo abierto y lo respondido por su propia hora.
 CREATE INDEX outbound_touch_status_changed_idx ON outbound_touch (workspace_id, status, status_changed_at);
+CREATE INDEX outbound_touch_sent_idx ON outbound_touch (workspace_id, sent_at) WHERE status = 'sent';
+CREATE INDEX outbound_touch_opened_idx ON outbound_touch (workspace_id, opened_at) WHERE opened_at IS NOT NULL;
+CREATE INDEX outbound_touch_replied_idx ON outbound_touch (workspace_id, replied_at) WHERE replied_at IS NOT NULL;
 
 -- ---------------------------------------------------------------------
 -- 4.4 · Un toque es coherente con su enrolamiento y con su paso
@@ -1280,46 +1341,74 @@ CREATE TRIGGER outbound_touch_enrollment_check
 -- ---------------------------------------------------------------------
 -- 4.5 · outbound_optout_link: la prueba del enlace de baja, fuera de la cola
 -- ---------------------------------------------------------------------
--- Una fila por correo enviado con enlace de baja. La escribe el
--- despachador en la MISMA transacción en la que anota
--- provider_message_id, y no la escribe nadie más: mc_app no tiene
--- ningún privilegio sobre ella (7.4) y su RLS solo tiene políticas de
--- lectura, así que ni un GRANT de más dejaría escribir desde la web.
+-- Una fila por INTENTO de envío de un correo con enlace de baja. La
+-- escribe el despachador AL RECLAMAR el toque (scheduled → processing),
+-- en la misma transacción que recipient_address y ANTES de llamar al
+-- proveedor; nadie más la escribe: mc_app no tiene ningún privilegio
+-- sobre ella (7.4) y su RLS solo tiene políticas de lectura, así que ni
+-- un GRANT de más dejaría escribir desde la web.
+--
+-- Por qué al reclamar y no al confirmar: si el despachador cae entre la
+-- llamada a Gmail y el COMMIT, o la respuesta del proveedor se pierde
+-- por un timeout, el correo ya salió. Con el enlace guardado después,
+-- ese correo llevaba un token que la base nunca supo, y «darme de baja»
+-- respondía not_found (CAN-SPAM, a nombre del creador). Guardado antes,
+-- el peor caso es un enlace de un correo que al final no salió: nadie
+-- tiene ese token, así que no da de baja a nadie.
+--
+-- Y la base lo exige: un correo no queda en 'processing' sin el enlace
+-- de ESE intento (outbound_touch_optout_link_required, abajo), salvo que
+-- el workspace haya apagado require_optout_link en su política.
 --
 --   token_hash         sha256 (hex) del token al azar que solo va en el
 --                      correo: quien lee la tabla no puede fabricar el
 --                      enlace. Clave primaria: un token repetido por un
 --                      error del despachador falla al escribirlo, en vez
 --                      de dar de baja en silencio a otra dirección.
---   recipient_address  la dirección a la que salió: lo que se suprime.
+--   attempt            el intento del toque (outbound_touch.attempt_count
+--                      después de reclamarlo). Cada reintento lleva un
+--                      token nuevo en su propia fila, y los de los
+--                      intentos anteriores siguen funcionando: el correo
+--                      del primero quizá salió aunque nadie lo confirmara.
+--   recipient_address  la dirección a la que sale: lo que se suprime.
+--   claimed_at         cuándo se reclamó el intento (el enlace existe
+--                      desde entonces).
+--   sent_at            cuándo confirmó el proveedor; NULL si no confirmó
+--                      (falló, o se perdió la respuesta). El enlace
+--                      funciona igual: no se sabe si el correo salió.
 --   workspace_id, touch_id, contact_id
 --                      quién lo envió, desde qué toque y a qué ficha. Son
 --                      ON DELETE SET NULL: borrar el toque, la empresa, la
 --                      ficha o el workspace entero no rompe el enlace
 --                      (CAN-SPAM pide al menos 30 días; aquí no caduca).
 --
--- public_optout (sección 9) busca aquí y solo aquí.
+-- public_optout (sección 9) busca aquí y solo aquí, sin mirar sent_at.
 CREATE TABLE outbound_optout_link (
   token_hash          text PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
   workspace_id        uuid REFERENCES workspace(id) ON DELETE SET NULL,
   touch_id            uuid REFERENCES outbound_touch(id) ON DELETE SET NULL,
   contact_id          uuid REFERENCES contact(id) ON DELETE SET NULL,
+  attempt             int NOT NULL DEFAULT 1 CHECK (attempt BETWEEN 1 AND 20),
   channel             text NOT NULL DEFAULT 'email' CHECK (channel = 'email'),
   recipient_address   citext NOT NULL
                            CHECK (length(recipient_address) BETWEEN 3 AND 320
                                   AND recipient_address ~ '^[^@\s]+@[^@\s]+$'),
-  sent_at             timestamptz NOT NULL,
+  claimed_at          timestamptz NOT NULL DEFAULT now(),
+  sent_at             timestamptz,
   created_at          timestamptz NOT NULL DEFAULT now()
 );
--- Un correo, un enlace.
-CREATE UNIQUE INDEX outbound_optout_link_touch_idx ON outbound_optout_link (touch_id) WHERE touch_id IS NOT NULL;
+-- Un intento, un enlace.
+CREATE UNIQUE INDEX outbound_optout_link_touch_idx ON outbound_optout_link (touch_id, attempt)
+  WHERE touch_id IS NOT NULL;
 CREATE INDEX ON outbound_optout_link (contact_id);
-CREATE INDEX ON outbound_optout_link (workspace_id, sent_at);
+CREATE INDEX ON outbound_optout_link (workspace_id, claimed_at);
 
 -- Al escribirlo, el enlace dice lo mismo que su toque: el mismo
 -- workspace, la misma ficha, un correo, y la dirección a la que el toque
--- salió. Solo al crear: los ON DELETE SET NULL de después (borrar el
--- toque, la ficha o el workspace) lo dejan distinto a propósito.
+-- sale. Después, lo único que cambia es sent_at (de NULL a la hora que
+-- confirmó el proveedor) y las claves que los ON DELETE SET NULL ponen a
+-- NULL al borrar el toque, la ficha o el workspace. Ni el despachador
+-- reescribe la dirección o el token de un enlace que ya pudo salir.
 CREATE FUNCTION outbound_optout_link_check()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1328,6 +1417,23 @@ AS $$
 DECLARE
   t record;
 BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.token_hash IS DISTINCT FROM OLD.token_hash
+       OR NEW.attempt IS DISTINCT FROM OLD.attempt
+       OR NEW.channel IS DISTINCT FROM OLD.channel
+       OR NEW.recipient_address IS DISTINCT FROM OLD.recipient_address
+       OR NEW.claimed_at IS DISTINCT FROM OLD.claimed_at
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR (OLD.sent_at IS NOT NULL AND NEW.sent_at IS DISTINCT FROM OLD.sent_at)
+       OR (NEW.workspace_id IS DISTINCT FROM OLD.workspace_id AND NEW.workspace_id IS NOT NULL)
+       OR (NEW.touch_id IS DISTINCT FROM OLD.touch_id AND NEW.touch_id IS NOT NULL)
+       OR (NEW.contact_id IS DISTINCT FROM OLD.contact_id AND NEW.contact_id IS NOT NULL) THEN
+      RAISE EXCEPTION 'Un enlace de baja no se reescribe: solo se anota sent_at una vez (enlace del toque %).', OLD.touch_id
+        USING ERRCODE = 'check_violation',
+              HINT = 'El correo pudo salir con ese token y esa dirección. Para otro intento, otro enlace.';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF NEW.touch_id IS NULL THEN
     RETURN NEW;
   END IF;
@@ -1342,15 +1448,67 @@ BEGIN
      OR (t.recipient_address IS NOT NULL AND t.recipient_address IS DISTINCT FROM NEW.recipient_address) THEN
     RAISE EXCEPTION 'El enlace de baja no concuerda con su toque %: workspace, contacto, canal o dirección.', NEW.touch_id
       USING ERRCODE = 'check_violation',
-            HINT = 'El enlace se escribe con los datos del correo que sale, en la misma transacción.';
+            HINT = 'El enlace se escribe al reclamar, con los datos del correo que va a salir, en la misma transacción.';
   END IF;
   RETURN NEW;
 END;
 $$;
 
 CREATE TRIGGER outbound_optout_link_check
-  BEFORE INSERT ON outbound_optout_link
+  BEFORE INSERT OR UPDATE ON outbound_optout_link
   FOR EACH ROW EXECUTE FUNCTION outbound_optout_link_check();
+
+-- Un correo reclamado lleva el enlace de su intento. Se comprueba al
+-- COMMIT (DEFERRABLE INITIALLY DEFERRED): el despachador reclama y
+-- escribe el enlace en la misma transacción, en el orden que quiera, y
+-- lo que se confirma nunca es un correo en 'processing' cuyo enlace la
+-- base no sabe. Al comprobar se relee la fila: si en la misma
+-- transacción el toque ya salió de 'processing' (lo canceló antes de
+-- llamar al proveedor, 4.1), no se exige nada.
+--
+-- Un intento es un reclamo: el despachador sube attempt_count al
+-- reclamar (lo exige outbound_touch_processing_attempt_check, 4.3), y
+-- el enlace lleva ese número. Sin política, o con require_optout_link
+-- (0007, true por defecto), el enlace es obligatorio.
+CREATE FUNCTION outbound_touch_optout_link_required()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  x record;
+  exige boolean;
+BEGIN
+  SELECT o.status, o.channel, o.attempt_count, o.workspace_id INTO x FROM outbound_touch o WHERE o.id = NEW.id;
+  IF NOT FOUND OR x.status <> 'processing' OR x.channel <> 'email' THEN
+    RETURN NULL;
+  END IF;
+  SELECT p.require_optout_link INTO exige FROM outbound_policy p WHERE p.workspace_id = x.workspace_id;
+  IF NOT coalesce(exige, true) THEN
+    RETURN NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM outbound_optout_link l WHERE l.touch_id = NEW.id AND l.attempt = x.attempt_count) THEN
+    RAISE EXCEPTION 'El correo % se reclamó (intento %) sin su enlace de baja en outbound_optout_link.', NEW.id, x.attempt_count
+      USING ERRCODE = 'check_violation',
+            HINT = 'El despachador escribe el enlace del intento al reclamar, antes de llamar al proveedor (0037 §4.5).';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+-- Dos disparadores y no uno: en un UPDATE la condición es el CAMBIO a
+-- processing (un UPDATE que nombra status sin cambiarlo no exige nada),
+-- y en un INSERT no hay OLD.
+CREATE CONSTRAINT TRIGGER outbound_touch_optout_link_required
+  AFTER UPDATE OF status ON outbound_touch
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.status = 'processing' AND NEW.channel = 'email' AND OLD.status IS DISTINCT FROM NEW.status)
+  EXECUTE FUNCTION outbound_touch_optout_link_required();
+CREATE CONSTRAINT TRIGGER outbound_touch_optout_link_required_insert
+  AFTER INSERT ON outbound_touch
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.status = 'processing' AND NEW.channel = 'email')
+  EXECUTE FUNCTION outbound_touch_optout_link_required();
 
 -- ---------------------------------------------------------------------
 -- 4.6 · outbound_optout_event: quién provocó cada baja global
@@ -1366,9 +1524,10 @@ CREATE TRIGGER outbound_optout_link_check
 --     contact_suppression (por recipient_address y created_at);
 --   · reversible: un operador (worker) borra la entrada de la lista y
 --     deshace el opted_out de las fichas de los demás workspaces;
---   · vigilable: sent_at y created_at dan la alerta «workspace cuyos
---     destinatarios se dan de baja a los pocos minutos del envío»
---     (VEN-15, en una vista; ninguna pantalla hace esa resta).
+--   · vigilable: claimed_at (o sent_at, si el proveedor confirmó) y
+--     created_at dan la alerta «workspace cuyos destinatarios se dan de
+--     baja a los pocos minutos del envío» (VEN-15, en una vista; ninguna
+--     pantalla hace esa resta).
 -- Bitácora: se inserta y no se corrige. mc_app no tiene ningún
 -- privilegio sobre ella (7.4).
 CREATE TABLE outbound_optout_event (
@@ -1377,7 +1536,10 @@ CREATE TABLE outbound_optout_event (
   workspace_id        uuid REFERENCES workspace(id) ON DELETE SET NULL,
   touch_id            uuid REFERENCES outbound_touch(id) ON DELETE SET NULL,
   recipient_address   citext NOT NULL,
-  sent_at             timestamptz NOT NULL,
+  -- Copiados del enlace (4.5): sent_at es NULL si el proveedor no llegó
+  -- a confirmar ese intento.
+  claimed_at          timestamptz NOT NULL,
+  sent_at             timestamptz,
   -- La persona ya estaba de baja (un segundo clic): no suprimió nada nuevo.
   already_opted_out   boolean NOT NULL,
   created_at          timestamptz NOT NULL DEFAULT now()
@@ -2113,6 +2275,11 @@ $$;
 --     "accountsDown": n, "lastSentAt",
 --     "llm": { "spentToday", "dailyCap", "currency": "USD" } }
 --
+-- outbound_touch es la cola y también el registro de todo lo enviado,
+-- así que nada aquí recorre la historia: la cola se lee por su estado
+-- vivo y cada cifra de la ventana por el índice de su propia hora (4.3).
+-- «lastSentAt» es el último toque en 'sent', por su índice.
+--
 -- «stuck» es lo reclamado hace más de cinco minutos (el zombi de Chief).
 -- «failed» y «canceled» se cuentan por status_changed_at, la hora en que
 -- el toque llegó a ese estado; anotar opened_at después no lo mueve.
@@ -2150,6 +2317,9 @@ DECLARE
 BEGIN
   SELECT * INTO pol FROM outbound_policy WHERE workspace_id = p_workspace;
 
+  -- La cola: solo lo vivo, por (workspace_id, status, scheduled_for) de
+  -- 0007. outbound_touch es también el registro de todo lo enviado; la
+  -- salud no lo recorre entero en cada llamada.
   SELECT jsonb_build_object(
            'draft',      count(*) FILTER (WHERE status = 'draft'),
            'scheduled',  count(*) FILTER (WHERE status = 'scheduled'),
@@ -2158,34 +2328,52 @@ BEGIN
            'processing', count(*) FILTER (WHERE status = 'processing'),
            'stuck',      count(*) FILTER (WHERE status = 'processing'
                                             AND claimed_at < now() - interval '5 minutes'),
-           'held',       count(*) FILTER (WHERE status = 'held')),
-         jsonb_build_object(
-           'sent',     count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde),
-           'failed',   count(*) FILTER (WHERE status = 'failed' AND status_changed_at >= desde),
-           'canceled', count(*) FILTER (WHERE status = 'canceled' AND status_changed_at >= desde),
-           'opened',   count(*) FILTER (WHERE opened_at >= desde),
-           'replied',  count(*) FILTER (WHERE replied_at >= desde),
+           'held',       count(*) FILTER (WHERE status = 'held'))
+    INTO cola
+    FROM outbound_touch
+   WHERE workspace_id = p_workspace
+     AND status IN ('draft', 'scheduled', 'processing', 'held');
+
+  -- La ventana: cada cifra por el índice de su hora, sin tocar lo que
+  -- pasó antes de «desde».
+  SELECT jsonb_build_object(
+           'sent',     (SELECT count(*) FROM outbound_touch
+                         WHERE workspace_id = p_workspace AND status = 'sent' AND sent_at >= desde),
+           'failed',   (SELECT count(*) FROM outbound_touch
+                         WHERE workspace_id = p_workspace AND status = 'failed' AND status_changed_at >= desde),
+           'canceled', (SELECT count(*) FROM outbound_touch
+                         WHERE workspace_id = p_workspace AND status = 'canceled' AND status_changed_at >= desde),
+           'opened',   (SELECT count(*) FROM outbound_touch
+                         WHERE workspace_id = p_workspace AND opened_at >= desde),
+           'replied',  (SELECT count(*) FROM outbound_touch
+                         WHERE workspace_id = p_workspace AND replied_at >= desde),
            'optedOut', (SELECT count(*)
                           FROM contact c
                          WHERE c.opted_out AND c.opted_out_at >= desde
                            AND EXISTS (SELECT 1 FROM outbound_touch s
                                         WHERE s.workspace_id = p_workspace AND s.contact_id = c.id
                                           AND s.status = 'sent')),
-           'sentAfterOptOut', count(*) FILTER (WHERE status = 'sent' AND blocked_reason = 'opted_out_in_flight'
-                                                 AND sent_at >= desde)),
-         max(sent_at)
-    INTO cola, ventana, ultimo
-    FROM outbound_touch
-   WHERE workspace_id = p_workspace;
+           'sentAfterOptOut', (SELECT count(*) FROM outbound_touch
+                                WHERE workspace_id = p_workspace AND status = 'sent' AND sent_at >= desde
+                                  AND blocked_reason = 'opted_out_in_flight'))
+    INTO ventana;
+
+  SELECT t.sent_at INTO ultimo
+    FROM outbound_touch t
+   WHERE t.workspace_id = p_workspace AND t.status = 'sent' AND t.sent_at IS NOT NULL
+   ORDER BY t.sent_at DESC
+   LIMIT 1;
 
   SELECT coalesce(jsonb_object_agg(channel, jsonb_build_object('sent', enviados, 'failed', fallidos)), '{}'::jsonb)
     INTO por_canal
-    FROM (SELECT channel,
-                 count(*) FILTER (WHERE status = 'sent' AND sent_at >= desde) AS enviados,
-                 count(*) FILTER (WHERE status = 'failed' AND status_changed_at >= desde) AS fallidos
-            FROM outbound_touch
-           WHERE workspace_id = p_workspace
-             AND ((status = 'sent' AND sent_at >= desde) OR (status = 'failed' AND status_changed_at >= desde))
+    FROM (SELECT channel, sum(enviado) AS enviados, sum(fallido) AS fallidos
+            FROM (SELECT channel, 1 AS enviado, 0 AS fallido
+                    FROM outbound_touch
+                   WHERE workspace_id = p_workspace AND status = 'sent' AND sent_at >= desde
+                  UNION ALL
+                  SELECT channel, 0, 1
+                    FROM outbound_touch
+                   WHERE workspace_id = p_workspace AND status = 'failed' AND status_changed_at >= desde) AS x
            GROUP BY channel) AS c;
 
   SELECT coalesce(jsonb_agg(step_type ORDER BY step_type), '[]'::jsonb)
@@ -2235,7 +2423,7 @@ $$;
 -- correo entra en contact_suppression con reason 'unsubscribe_link'.
 --
 -- «De verdad» quiere decir que el sha256 del token está en
--- outbound_optout_link (4.5), que solo escribe el despachador al enviar:
+-- outbound_optout_link (4.5), que solo escribe el despachador al reclamar el envío:
 -- un workspace no puede fabricarse un enlace para dar de baja el correo
 -- de otra persona. Y el enlace no depende de la cola: ni el estado del
 -- toque, ni que el toque, su empresa, su ficha o su workspace sigan
@@ -2418,9 +2606,10 @@ BEGIN
       ya_baja := ya_baja OR nuevas = 0;
 
       -- Quién la provocó: el workspace y el toque del correo (4.6).
-      INSERT INTO outbound_optout_event (token_hash, workspace_id, touch_id, recipient_address, sent_at,
-                                         already_opted_out)
-      VALUES (resumen, enlace.workspace_id, enlace.touch_id, enlace.recipient_address, enlace.sent_at, ya_baja);
+      INSERT INTO outbound_optout_event (token_hash, workspace_id, touch_id, recipient_address, claimed_at,
+                                         sent_at, already_opted_out)
+      VALUES (resumen, enlace.workspace_id, enlace.touch_id, enlace.recipient_address, enlace.claimed_at,
+              enlace.sent_at, ya_baja);
 
       UPDATE contact
          SET opted_out = true,
