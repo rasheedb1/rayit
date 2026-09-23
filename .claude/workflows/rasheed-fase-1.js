@@ -32,7 +32,7 @@ export const meta = {
     { title: 'Integración 2', detail: 'merge, migraciones, CI' },
     { title: 'Fase 3 · CRM', detail: 'empresas, radar, pipeline · ficha y seguimientos' },
     { title: 'Integración 3', detail: 'merge y CI' },
-    { title: 'Fase 4 · tubería de outreach', detail: 'esquema 0015 → canales · motor · entregabilidad' },
+    { title: 'Fase 4 · tubería de outreach', detail: 'esquema de outreach → canales · motor · entregabilidad' },
     { title: 'Integración 4', detail: 'merge, migración de outreach, CI' },
     { title: 'Fase 5 · inteligencia', detail: 'perfil comercial · generación · recomendador' },
     { title: 'Integración 5', detail: 'merge y CI' },
@@ -540,6 +540,8 @@ async function construirConCalidad(p, etiqueta) {
 
 async function integrar(etiqueta, fase, listas, extra) {
   phase(`Integración ${fase}`)
+  // Desde la fase 3, main está en producción: nadie migra Supabase al integrar.
+  if (fase >= 3 && !(extra || '').includes('4b.')) extra = [EXTRA_FASE_3, extra || ''].filter(Boolean).join('\n')
   const int = await agent(promptIntegrar(etiqueta, listas, extra), {
     label: `integrar:${etiqueta}`, phase: `Integración ${fase}`, effort: 'high', schema: MERGE,
   })
