@@ -121,9 +121,12 @@ export default async function FinanzasPage({ searchParams }: { searchParams: Pro
         title="Quién te debe, cuándo entra la plata y cuánto apartar"
         description="Cada campaña cerrada crea su factura y su fecha esperada de cobro. Los estados de mora salen de la vista receivables; el IVA y la retención, de la misma función que usa el formulario."
         aside={
-          <Button variant="primary" href="/finanzas/facturas/nueva">
-            Nueva factura
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button href="/finanzas/flujo">Flujo de caja</Button>
+            <Button variant="primary" href="/finanzas/facturas/nueva">
+              Nueva factura
+            </Button>
+          </div>
         }
       />
 

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ConnectionNotFound } from "@mc/db";
+import { requirePermission } from "@/lib/permisos";
 import { getCuentasService } from "./_lib/cuentas-server";
 
 const idSchema = z.string().uuid();
@@ -26,6 +27,7 @@ async function requester(): Promise<{ ip: string | null; userAgent: string | nul
 
 /** «Agregar cuenta»: red + @ + declaración de propiedad. Lee la fuente pública y guarda la cuenta con su primer snapshot. */
 export async function agregarCuenta(formData: FormData): Promise<void> {
+  await requirePermission("conexiones.cuenta.conectar");
   const parsed = agregarSchema.safeParse({ red: formData.get("red"), handle: formData.get("handle"), declaro: formData.get("declaro") });
   if (!parsed.success) aviso(parsed.error.issues[0]?.message ?? "Revisa el formulario.");
   const who = await requester();
@@ -37,6 +39,7 @@ export async function agregarCuenta(formData: FormData): Promise<void> {
 
 /** «Actualizar»: vuelve a leer la fuente pública y deja el snapshot del día (si ya lo había, lo dice). */
 export async function actualizarCuenta(id: string): Promise<void> {
+  await requirePermission("conexiones.cuenta.conectar");
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
   const out = await getCuentasService().actualizar(id);
   revalidatePath("/conexiones");
@@ -47,6 +50,7 @@ export async function actualizarCuenta(id: string): Promise<void> {
 
 /** «Quitar»: deleted_at, status 'disabled', consentimiento revocado. La historia se conserva. */
 export async function desconectarConexion(id: string): Promise<void> {
+  await requirePermission("conexiones.cuenta.desconectar");
   if (!idSchema.safeParse(id).success) redirect("/conexiones");
   let error: string | null = null;
   try {

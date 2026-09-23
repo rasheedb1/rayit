@@ -174,6 +174,16 @@ export function formatInt(n: number, opts: LocaleOpts = {}): string {
 }
 
 /**
+ * Un número con decimales fijos como máximo, en el locale: 12.9286 →
+ * "12,9" · 155 → "155" · 1240.5 → "1.240,5". Para tasas («12,9 al día»),
+ * donde formatInt redondea de más y formatCompact abrevia. Añadido por
+ * Campañas (CAM-3); no cambia nada de lo que ya había.
+ */
+export function formatNumber(n: number, maxDigits = 1, opts: LocaleOpts = {}): string {
+  return plain(numberFormat(opts.locale ?? DEFAULT_LOCALE, { maximumFractionDigits: maxDigits }).format(n));
+}
+
+/**
  * 214000 → "214 mil" · 1200000 → "1,2 M". Para ejes y sparklines.
  * La notación compacta usa el idioma del locale sin la variante de país
  * ("es" en vez de "es-CO"): los sufijos son los mismos y el resultado
@@ -278,6 +288,24 @@ export function formatDate(iso: string, style: "short" | "long" = "short", opts:
 export function formatDayMonth(iso: string, opts: LocaleOpts = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
   return plain(dateFormat(locale, { day: "numeric", month: "numeric", timeZone: zoneFor(iso, opts) }).format(utcDate(iso)));
+}
+
+/**
+ * Un mes con su año, en el locale del espacio: "2026-08" → "agosto de
+ * 2026". Acepta también una fecha entera ("2026-08-01"), y se queda con
+ * el mes. Para nombrar de qué período sale una cifra derivada —el ritmo
+ * de gastos recurrentes del flujo de caja (FIN-6)—, donde decir solo
+ * «el último mes» deja la cifra sin fuente comprobable.
+ *
+ * Un mes es una fecha de calendario, no un instante: se presenta en UTC
+ * igual que una columna `date`, para que "2026-08" no se vea como julio
+ * en una zona al oeste.
+ */
+export function formatMonth(isoMonth: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  if (!/^\d{4}-\d{2}(-\d{2})?$/.test(isoMonth)) throw new Error(`No es un mes ISO: "${isoMonth}"`);
+  const d = utcDate(`${isoMonth.slice(0, 7)}-01`);
+  return plain(dateFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(d));
 }
 
 /**
@@ -413,6 +441,7 @@ export function formatterFor(settings: FormatSettings) {
       return formatMoney(amountDecimal, currency ?? settings.currency, { ...opts, ...base });
     },
     int: (n: number) => formatInt(n, base),
+    number: (n: number, maxDigits = 1) => formatNumber(n, maxDigits, base),
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     multiple: (ratio: number, digits = 1) => formatMultiple(ratio, digits, base),
@@ -420,6 +449,7 @@ export function formatterFor(settings: FormatSettings) {
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
     dayMonth: (iso: string) => formatDayMonth(iso, base),
+    month: (isoMonth: string) => formatMonth(isoMonth, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
     time: (iso: string) => formatTime(iso, base),

@@ -1,18 +1,36 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { InvalidTransition } from '@mc/core';
+import {
+  addDays,
+  hoyEnZona,
+  projectCashflow,
+  reservePeriod,
+  InvalidTransition,
+  InvoiceNotPayable,
+  InvoicePaymentConflict,
+  PaymentDateInFuture,
+  PaymentExceedsOutstanding,
+  TaxReserveRateInvalid,
+  type Cashflow,
+  type PaymentMethod,
+} from '@mc/core';
 import {
   createInvoice,
   createInvoiceFromCampaign,
   getInvoice,
+  getCashflowInputs,
   getReceivablesKpis,
   listCampaignsForInvoice,
   listCompanies,
   listInvoices,
+  listPayments,
+  recordPayment,
   transitionInvoice,
   InvoiceNotFound,
+  type TextosFinanzas,
 } from '../src/queries/finanzas.ts';
 import { assertWorkspaceId } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
@@ -30,10 +48,18 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-pruebas', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+  // 300 s y no 120: levantar PGlite (WASM), aplicar las 33 migraciones y
+  // los cuatro seeds tarda ~75 s en una máquina ociosa y bastante más en
+  // una cargada, y el timeout explícito de un hook GANA sobre el
+  // --test-timeout de la línea de órdenes, así que subirlo ahí no
+  // alcanza. Cuando este hook se pasa, el archivo entero se cancela y
+  // el `after` falla con «Cannot read properties of undefined», que no
+  // dice nada de la causa. `ventas.test.ts` ya tenía el precedente con
+  // 180 s.
+}, { timeout: 300_000 });
 
 after(async () => {
-  await t.close();
+  await t?.close();
 });
 
 describe('aislamiento por workspace', () => {
@@ -154,6 +180,44 @@ describe('crear facturas', () => {
     assert.equal(a.companyName, 'Café Alma');
   });
 
+  test('crear una factura deja su fila en la bitácora: actor de la sesión, before null y after solo con lo permitido (ACC-2)', async () => {
+    const USER_LAURA = '00000002-0000-4000-8000-000000000002';
+    const creada = await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, subtotal: '250000.00', issuedOn: '2026-09-23', dueOn: '2026-10-23', externalRef: ' DIAN-77 ' }),
+      { userId: USER_LAURA },
+    );
+    const filas = await filasDeBitacora(t, WORKSPACE_LAURA, creada.id);
+    assert.equal(filas.length, 1);
+    const [fila] = filas;
+    assert.equal(fila?.action, 'invoice.created');
+    assert.equal(fila?.entity_type, 'invoice');
+    assert.equal(fila?.actor_kind, 'user');
+    assert.equal(fila?.actor_user_id, USER_LAURA);
+    assert.equal(fila?.before, null);
+    assert.deepEqual(fila?.after, {
+      number: creada.number, companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, quoteId: null, currency: 'COP',
+      subtotal: '250000.00', tax: '47500.00', withholding: '27500.00', total: '297500.00',
+      issuedOn: '2026-09-23', dueOn: '2026-10-23', status: 'draft', externalRef: 'DIAN-77',
+    });
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, creada.id), [], 'desde otro workspace no se ve');
+  });
+
+  test('si crear falla después de escribir, no queda ni factura ni bitácora', async () => {
+    // Una moneda distinta a la del workspace se rechaza ANTES de escribir; aquí se fuerza el fallo después.
+    let id = '';
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+        const inv = await createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '1.00', issuedOn: '2026-09-23', dueOn: '2026-09-23' });
+        id = inv.id;
+        throw new Error('algo falló después');
+      }),
+      /algo falló después/,
+    );
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, id)), null);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_LAURA, id), []);
+  });
+
   test('la numeración sigue a la última del seed (FV-2026-011) y no la reinicia', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listInvoices(tx, { status: 'draft' }));
     const seqs = rows.map((r) => parseInt(r.number.slice(-3), 10));
@@ -237,12 +301,646 @@ describe('transiciones', () => {
     const anulada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, otra.id, 'void'));
     assert.equal(anulada.status, 'void');
     assert.equal(anulada.bucket, 'anulada');
+
+    // Cada transición dejó su fila, con el estado anterior y el nuevo; la inválida (paid con 1.00) no.
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, nueva.id);
+    assert.deepEqual(bitacora.map((f) => f.action), ['invoice.created', 'invoice.sent', 'invoice.payment_recorded', 'invoice.paid']);
+    assert.deepEqual(bitacora[1]?.before, { status: 'draft', paidAmount: '0.00' });
+    assert.deepEqual(bitacora[1]?.after, { status: 'sent', paidAmount: '0.00', paidAt: null });
+    assert.deepEqual(bitacora[2]?.before, { status: 'sent', paidAmount: '0.00' });
+    assert.deepEqual(bitacora[2]?.after, { status: 'partial', paidAmount: '100000.00', paidAt: '2026-09-22T10:00:00Z' });
+    // paid sin paidAt fija now(): la bitácora guarda el instante real.
+    const pagoTotal = bitacora[3]?.after as { status: string; paidAmount: string; paidAt: string };
+    assert.equal(pagoTotal.status, 'paid');
+    assert.equal(pagoTotal.paidAmount, '595000.00');
+    assert.match(pagoTotal.paidAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    assert.deepEqual((await filasDeBitacora(t, WORKSPACE_LAURA, otra.id)).map((f) => f.action), ['invoice.created', 'invoice.voided']);
   });
 
   test('una factura inexistente da InvoiceNotFound', async () => {
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, '00000000-0000-4000-8000-000000000000', 'sent')),
       InvoiceNotFound,
+    );
+  });
+});
+
+// =====================================================================
+// FIN-6 · Flujo de caja proyectado
+// =====================================================================
+
+/** Un negocio ganado que la prueba inserta, para el caso que el seed no tiene. */
+const DEAL_SIN_FACTURA = '00000009-0000-4000-8000-0000000dea99';
+/** Y otro cuya única factura está en borrador. */
+const DEAL_CON_BORRADOR = '00000009-0000-4000-8000-0000000dea98';
+const CAMPANA_BORRADOR = '00000009-0000-4000-8000-000000ca0098';
+const FACTURA_BORRADOR = '00000009-0000-4000-8000-0000fac26098';
+
+/** La semana de `fecha`, o undefined si cae fuera de la ventana. */
+function semanaDe(c: Cashflow, fecha: string) {
+  return c.semanas.find((s) => s.inicio <= fecha && fecha <= s.fin);
+}
+
+describe('FIN-6 · getCashflowInputs con el seed', () => {
+  test('trae las tres facturas por cobrar, con lo que cada marca todavía debe', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const numeros = i.facturas.map((f) => f.number).sort();
+    assert.deepEqual(numeros, ['FV-2026-007', 'FV-2026-010', 'FV-2026-011']);
+    const porNumero = Object.fromEntries(i.facturas.map((f) => [f.number, f]));
+    assert.equal(porNumero['FV-2026-010']?.outstanding, '3100000.00');
+    assert.equal(porNumero['FV-2026-010']?.companyName, 'Café Alma');
+    assert.equal(porNumero['FV-2026-011']?.outstanding, '5200000.00');
+    assert.equal(porNumero['FV-2026-007']?.outstanding, '1100000.00');
+    // El dinero llega como string decimal, nunca como number.
+    for (const f of i.facturas) assert.equal(typeof f.outstanding, 'string');
+  });
+
+  test('trae los cuatro negocios ganados del seed, todos ya facturados', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.equal(i.negocios.length, 4);
+    for (const n of i.negocios) {
+      assert.equal(n.hasInvoice, true, `${n.name} está enlazado a su campaña y su factura`);
+      assert.equal(typeof n.amount, 'string');
+    }
+    assert.ok(i.negocios.some((n) => n.name === '2 TikTok · septiembre'));
+    // Los perdidos y los abiertos no entran: la etapa se mira por is_won.
+    assert.ok(!i.negocios.some((n) => n.name.includes('granola')), 'el perdido queda fuera');
+  });
+
+  test('trae los gastos recurrentes de la ventana, con su fecha y sin los puntuales', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    // El seed 0003 escribe sus gastos con fechas ABSOLUTAS (julio, agosto
+    // y septiembre de 2026), no relativas como las facturas, así que en
+    // algún momento se salen de la ventana de 120 días. Cuando eso pase,
+    // esta prueba tiene que decirlo con claridad y no callar.
+    assert.ok(
+      i.gastos.length > 0,
+      `Ningún gasto recurrente en la ventana de 120 días desde ${i.today}. Los del seed 0003 ` +
+        'están con fechas absolutas de 2026: hay que pasarlos a fechas relativas (CURRENT_DATE) ' +
+        'como las facturas, o esta lectura ya no prueba nada.',
+    );
+    assert.ok(!i.gastos.some((g) => g.label.includes('Micrófono')), 'un gasto puntual no es recurrente');
+    assert.ok(!i.gastos.some((g) => g.label.includes('finca')), 'un viaje puntual tampoco');
+
+    // Cinco recurrentes por mes, 3 700 000 cada mes: se comprueba mes a
+    // mes sobre lo que vino, sin fijar cuál es el mes.
+    const porMes = new Map<string, bigint>();
+    for (const g of i.gastos) {
+      const mes = g.incurredOn.slice(0, 7);
+      porMes.set(mes, (porMes.get(mes) ?? 0n) + BigInt(g.amount.replace('.', '')));
+    }
+    for (const [mes, suma] of porMes) {
+      assert.equal(i.gastos.filter((g) => g.incurredOn.startsWith(mes)).length, 5, `cinco recurrentes en ${mes}`);
+      assert.equal(suma, 370000000n, `3 700 000,00 en ${mes}`);
+    }
+  });
+
+  test('la moneda, el plazo y el 11 % de reserva salen del workspace, no de una constante', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.equal(i.currency, 'COP');
+    assert.equal(i.reservaPct, '11');
+    assert.equal(i.reservaRate, '0.11');
+    assert.equal(i.plazoDias, 30);
+  });
+
+  test('hoy sale de la zona del workspace, no de CURRENT_DATE del servidor', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.equal(i.today, hoyEnZona('America/Bogota'));
+    assert.match(i.today, /^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('FIN-6 · el gráfico sale de la función con los datos del seed', () => {
+  test('ocho semanas, con la factura de cada marca en la semana en que vence', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const c = projectCashflow(i);
+    assert.equal(c.semanas.length, 8);
+    assert.equal(c.vacio, false);
+
+    const porNumero = Object.fromEntries(i.facturas.map((f) => [f.number, f]));
+    for (const numero of ['FV-2026-010', 'FV-2026-011']) {
+      const f = porNumero[numero]!;
+      const s = semanaDe(c, f.dueOn);
+      assert.ok(s, `${numero} cae dentro de las ocho semanas`);
+      assert.ok(s.detalle.some((d) => d.label === numero), `${numero} está en la semana del ${s.inicio}`);
+    }
+    const cobrados = c.semanas.reduce((acc, s) => acc + BigInt(s.cobros.replace('.', '')), 0n);
+    assert.equal(cobrados, 830000000n, '3 100 000 + 5 200 000: la vencida no suma');
+  });
+
+  test('los gastos y la reserva del seed: 853 846,15 por semana y el 11 % de cada cobro', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const c = projectCashflow(i);
+    // El ritmo sale del último mes CERRADO con recurrentes, que es el que
+    // haya en la ventana: el seed pone los mismos 3 700 000 en cada uno.
+    assert.ok(c.gastoMes !== null && c.gastoMes < i.today.slice(0, 7), `${c.gastoMes} es un mes cerrado`);
+    assert.equal(c.gastoMensual, '3700000.00');
+    assert.equal(c.gastoSemanal, '853846.15');
+    for (const s of c.semanas) {
+      assert.equal(s.gastos, '853846.15');
+      const esperado = BigInt(s.cobros.replace('.', '')) * 11n / 100n;
+      assert.equal(BigInt(s.impuestos.replace('.', '')), esperado, `la reserva de la semana del ${s.inicio}`);
+    }
+    // El mock: «Gastos e impuestos entre 1,1 y 1,7 M por semana» en las
+    // semanas con cobro. Sin cobro es solo el gasto.
+    const conCobro = c.semanas.filter((s) => s.cobros !== '0.00');
+    assert.equal(conCobro.length, 2);
+  });
+
+  test('los cuatro ganados del seed no se cuentan dos veces: ya tienen factura', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const c = projectCashflow(i);
+    assert.equal(c.excluidos.yaFacturados.count, 4);
+    for (const s of c.semanas) {
+      assert.ok(!s.detalle.some((d) => d.kind === 'negocio'), `ningún negocio en la semana del ${s.inicio}`);
+    }
+  });
+
+  test('la factura vencida del seed queda fuera de las semanas y se explica aparte', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const c = projectCashflow(i);
+    assert.deepEqual(c.excluidos.vencidas, { count: 1, amount: '1100000.00' });
+  });
+
+  test('un negocio ganado SIN factura sí entra, en expected_close_date + plazo', async () => {
+    await t.admin(`
+      INSERT INTO deal (id, workspace_id, company_id, name, stage_id, amount, currency, expected_close_date, won_at)
+      VALUES ('${DEAL_SIN_FACTURA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}',
+              'Serie sin facturar', 'ganado', 7000000.00, 'COP', CURRENT_DATE - 5, now())
+      ON CONFLICT (id) DO UPDATE SET expected_close_date = EXCLUDED.expected_close_date;
+    `);
+    try {
+      const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+      const nuevo = i.negocios.find((n) => n.id === DEAL_SIN_FACTURA);
+      assert.ok(nuevo, 'el negocio ganado nuevo viene en la consulta');
+      assert.equal(nuevo.hasInvoice, false, 'no tiene campaña ni cotización con factura');
+
+      const c = projectCashflow(i);
+      const esperadoEl = addDays(nuevo.expectedCloseDate!, i.plazoDias);
+      const s = semanaDe(c, esperadoEl);
+      assert.ok(s, `el cobro del ${esperadoEl} cae dentro de las ocho semanas`);
+      const linea = s.detalle.find((d) => d.id === DEAL_SIN_FACTURA);
+      assert.ok(linea, 'y está en el detalle de su semana');
+      assert.equal(linea.kind, 'negocio');
+      assert.equal(linea.amount, '7000000.00');
+      assert.equal(c.excluidos.yaFacturados.count, 4, 'los cuatro del seed siguen fuera');
+    } finally {
+      await t.admin(`DELETE FROM deal WHERE id = '${DEAL_SIN_FACTURA}'`);
+    }
+  });
+
+  test('un ganado cuya ÚNICA factura está en borrador sigue contando: el borrador no debe nada', async () => {
+    // El agujero: la factura en borrador no está entre las que deben
+    // plata, así que si además marcara el negocio como «ya facturado»,
+    // su monto desaparecía de la proyección entre crear la factura y
+    // marcarla enviada, que es el camino normal de FIN-1.
+    await t.admin(`
+      INSERT INTO deal (id, workspace_id, company_id, name, stage_id, amount, currency, expected_close_date, won_at)
+      VALUES ('${DEAL_CON_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}',
+              'Ganado con factura en borrador', 'ganado', 2000000.00, 'COP', CURRENT_DATE - 5, now());
+      INSERT INTO campaign (id, workspace_id, company_id, deal_id, name, amount, currency, status)
+      VALUES ('${CAMPANA_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${DEAL_CON_BORRADOR}',
+              'Campaña del borrador', 2000000.00, 'COP', 'planned');
+      INSERT INTO invoice (id, workspace_id, company_id, campaign_id, number, currency,
+                           subtotal, tax, withholding, total, issued_on, due_on, status)
+      VALUES ('${FACTURA_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CAMPANA_BORRADOR}',
+              'FV-2026-900', 'COP', 1680672.27, 319327.73, 184873.95, 2000000.00,
+              CURRENT_DATE, CURRENT_DATE + 30, 'draft');
+    `);
+    try {
+      const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+      const n = i.negocios.find((x) => x.id === DEAL_CON_BORRADOR);
+      assert.ok(n, 'el negocio viene en la consulta');
+      assert.equal(n.hasInvoice, false, 'un borrador no cuenta como facturado');
+      assert.ok(!i.facturas.some((f) => f.number === 'FV-2026-900'), 'y tampoco está entre las que deben plata');
+
+      const c = projectCashflow(i);
+      const enAlgunaSemana = c.semanas.some((s) => s.detalle.some((d) => d.id === DEAL_CON_BORRADOR));
+      assert.ok(enAlgunaSemana, 'su monto sigue en la proyección, no se evapora');
+
+      // Y al marcarla enviada, pasa a contar la factura y no el negocio.
+      await t.admin(`UPDATE invoice SET status = 'sent' WHERE id = '${FACTURA_BORRADOR}'`);
+      const j = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+      assert.equal(j.negocios.find((x) => x.id === DEAL_CON_BORRADOR)?.hasInvoice, true);
+      assert.ok(j.facturas.some((f) => f.number === 'FV-2026-900'), 'ahora sí debe plata');
+      const d = projectCashflow(j);
+      assert.ok(!d.semanas.some((s) => s.detalle.some((x) => x.id === DEAL_CON_BORRADOR)), 'el negocio ya no suma');
+      assert.ok(d.semanas.some((s) => s.detalle.some((x) => x.label === 'FV-2026-900')), 'suma la factura');
+    } finally {
+      await t.admin(`DELETE FROM invoice WHERE id = '${FACTURA_BORRADOR}'`);
+      await t.admin(`DELETE FROM campaign WHERE id = '${CAMPANA_BORRADOR}'`);
+      await t.admin(`DELETE FROM deal WHERE id = '${DEAL_CON_BORRADOR}'`);
+    }
+  });
+});
+
+describe('FIN-6 · aislamiento', () => {
+  test('desde otro workspace no hay facturas, ni negocios, ni gastos: el flujo está vacío', async () => {
+    const i = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getCashflowInputs(tx));
+    assert.deepEqual(i.facturas, []);
+    assert.deepEqual(i.negocios, []);
+    assert.deepEqual(i.gastos, []);
+    assert.equal(i.currency, 'COP', 'la moneda es la SUYA, no la del vecino');
+    assert.equal(i.reservaPct, null, 'el workspace ajeno no tiene ajustes de finanzas');
+    assert.equal(i.reservaRate, '0', 'sin porcentaje configurado no se inventa uno');
+    assert.equal(i.plazoDias, 30, 'el plazo por defecto');
+
+    const c = projectCashflow(i);
+    assert.equal(c.vacio, true);
+    assert.equal(c.semanaMasAjustada, null);
+    assert.equal(c.proyectado, '0.00');
+    for (const s of c.semanas) {
+      assert.equal(s.cobros, '0.00');
+      assert.equal(s.gastos, '0.00');
+      assert.equal(s.impuestos, '0.00');
+      assert.deepEqual(s.detalle, []);
+    }
+  });
+});
+
+// =====================================================================
+// FIN-2 · Pagos y reserva de impuestos
+// ---------------------------------------------------------------------
+// Van al final del archivo a propósito: cobran FV-2026-010, y tanto los
+// KPI de arriba como las pruebas de FIN-6 la leen con las cifras del
+// seed. node:test corre las pruebas de un archivo en orden, así que
+// primero se comprueba el seed intacto y después se mueve.
+// =====================================================================
+
+/**
+ * Las frases del aviso las pone la web (TextosFinanzas): este paquete no
+ * tiene idioma. Aquí van las mínimas para comprobar que llegan tal cual.
+ */
+const TEXTOS: TextosFinanzas = {
+  avisoPagoRecibido: (p) => ({
+    title: `Pago recibido · ${p.invoiceNumber}`,
+    body:
+      p.status === 'paid'
+        ? `${p.companyName} pagó ${p.currency} ${p.amount}. La factura queda pagada.`
+        : `${p.companyName} abonó ${p.currency} ${p.amount}. Quedan ${p.currency} ${p.outstanding}.`,
+  }),
+};
+
+/** La persona del seed 0002, para que la bitácora tenga actor. */
+const USUARIO_LAURA = '00000002-0000-4000-8000-000000000002';
+
+/** Un espacio sin `settings.finanzas.reserva_pct`, con su propia empresa y factura. */
+const WORKSPACE_SIN_RESERVA = '00000009-0000-4000-8000-000000000002';
+const EMPRESA_SIN_RESERVA = '00000009-0000-4000-8000-0000000000e1';
+const FACTURA_SIN_RESERVA = '00000009-0000-4000-8000-0000fac00001';
+
+/** Hoy en la zona del espacio: es el día que la pantalla propone y el que acepta el cobro. */
+async function hoyEnElEspacio(workspaceId = WORKSPACE_LAURA): Promise<string> {
+  const rows = await t.db.withWorkspace(workspaceId, async (tx) => {
+    const r = await tx.query<{ hoy: string }>(
+      `SELECT to_char((now() AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::date, 'YYYY-MM-DD') AS hoy
+         FROM workspace w WHERE w.id = current_workspace_id()`,
+    );
+    return r.rows;
+  });
+  return rows[0]?.hoy ?? '';
+}
+
+/** Cuántas filas hay de cada tabla que toca un cobro, para comprobar que un rechazo no deja nada. */
+async function conteos(workspaceId = WORKSPACE_LAURA): Promise<Record<string, number>> {
+  const rows = await t.db.withWorkspace(workspaceId, async (tx) => {
+    const r = await tx.query<{ pagos: number; reservas: number; bitacora: number; avisos: number }>(`
+      SELECT (SELECT count(*)::int FROM payment) AS pagos,
+             (SELECT count(*)::int FROM tax_reserve) AS reservas,
+             (SELECT count(*)::int FROM audit_log WHERE action = 'invoice.payment_recorded') AS bitacora,
+             (SELECT count(*)::int FROM notification WHERE kind = 'payment_received') AS avisos
+    `);
+    return r.rows;
+  });
+  const c = rows[0];
+  return { pagos: c?.pagos ?? -1, reservas: c?.reservas ?? -1, bitacora: c?.bitacora ?? -1, avisos: c?.avisos ?? -1 };
+}
+
+/** Una factura enviada, recién creada, para no ensuciar las del seed. */
+async function facturaEnviada(subtotal: string): Promise<{ id: string; total: string }> {
+  const nueva = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal, issuedOn: '2026-09-01', dueOn: '2026-10-01' }),
+  );
+  const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, nueva.id, 'sent'));
+  return { id: enviada.id, total: enviada.total };
+}
+
+describe('pagos (FIN-2)', () => {
+  test('un pago parcial deja FV-2026-010 en partial y aparta el 11 % del espacio', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { invoice, payment } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      recordPayment(tx, {
+        invoiceId: INVOICE_FV_2026_010,
+        amount: '1000000',
+        receivedOn: hoy,
+        method: 'transferencia',
+        reference: 'TRF-260923-CAFEALMA',
+        expectedPaidAmount: '0.00',
+      }, TEXTOS),
+    );
+
+    assert.equal(invoice.status, 'partial');
+    assert.equal(invoice.paidAmount, '1000000.00');
+    assert.equal(invoice.outstanding, '2100000.00');
+    assert.equal(invoice.paidAt, null, 'un abono no es «pagada el …»');
+    assert.equal(invoice.bucket, 'vence_pronto');
+
+    assert.equal(payment.amount, '1000000.00');
+    assert.equal(payment.currency, 'COP');
+    assert.equal(payment.method, 'transferencia');
+    assert.equal(payment.receivedOn, hoy);
+    assert.equal(payment.reserved, '110000.00', '11 % de 1 000 000');
+    assert.equal(payment.reserveRate, '0.1100', 'la tasa del momento queda en la fila');
+    assert.equal(payment.reservePeriod, reservePeriod(hoy));
+
+    const pagos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPayments(tx, INVOICE_FV_2026_010));
+    assert.equal(pagos.rows.length, 1);
+    assert.equal(pagos.reservedTotal, '110000.00');
+    assert.equal(pagos.reserveRate, '0.1100');
+  });
+
+  test('el resto la pasa a pagada, con paid_at, y suma el apartado', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { invoice } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      recordPayment(tx, {
+        invoiceId: INVOICE_FV_2026_010,
+        amount: '2100000',
+        receivedOn: hoy,
+        method: 'pse',
+        expectedPaidAmount: '1000000.00',
+      }, TEXTOS),
+    );
+
+    assert.equal(invoice.status, 'paid');
+    assert.equal(invoice.paidAmount, '3100000.00');
+    assert.equal(invoice.outstanding, '0.00');
+    assert.equal(invoice.bucket, 'pagada');
+    assert.ok(invoice.paidAt !== null, 'al quedar pagada sí se fija paid_at');
+    assert.match(invoice.paidAt ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
+    const pagos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPayments(tx, INVOICE_FV_2026_010));
+    assert.equal(pagos.rows.length, 2);
+    assert.equal(pagos.reservedTotal, '341000.00', '110 000 + 231 000');
+    assert.equal(pagos.rows[0]?.method, 'pse', 'el más reciente primero');
+  });
+
+  test('y los KPI de Finanzas se mueven con el cobro', async () => {
+    const k = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getReceivablesKpis(tx));
+    // Eran 9 400 000 con 3 facturas abiertas; FV-2026-010 (3 100 000) ya está cobrada.
+    assert.equal(k.outstanding, '6300000.00');
+    assert.equal(k.openCount, 2);
+    // Y el apartado subió en los 341 000 de los dos cobros.
+    assert.equal(k.taxReserved, '4587000.00', '4 246 000 del seed + 341 000');
+  });
+
+  test('una factura ya pagada no admite otro cobro', async () => {
+    const hoy = await hoyEnElEspacio();
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, {
+          invoiceId: INVOICE_FV_2026_010, amount: '1', receivedOn: hoy, method: 'efectivo', expectedPaidAmount: '3100000.00',
+        }, TEXTOS),
+      ),
+      (e: unknown) => e instanceof InvoiceNotPayable && /pagada/i.test(e.messageEs),
+    );
+  });
+
+  test('un cobro mayor que el saldo se rechaza y no deja NADA escrito', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id } = await facturaEnviada('100000.00');
+    const antes = await conteos();
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, { invoiceId: id, amount: '200000', receivedOn: hoy, method: 'transferencia', expectedPaidAmount: '0.00' }, TEXTOS),
+      ),
+      PaymentExceedsOutstanding,
+    );
+    assert.deepEqual(await conteos(), antes, 'la transacción se deshizo entera');
+    const factura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, id));
+    assert.equal(factura?.status, 'sent');
+    assert.equal(factura?.paidAmount, '0.00');
+  });
+
+  test('una factura en borrador o anulada no se cobra', async () => {
+    const hoy = await hoyEnElEspacio();
+    const borrador = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '50000.00', issuedOn: '2026-09-01', dueOn: '2026-10-01' }),
+    );
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, { invoiceId: borrador.id, amount: '1000', receivedOn: hoy, method: 'efectivo', expectedPaidAmount: '0.00' }, TEXTOS),
+      ),
+      (e: unknown) => e instanceof InvoiceNotPayable && /Márcala enviada/.test(e.messageEs),
+    );
+    const anulada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, borrador.id, 'void'));
+    assert.equal(anulada.status, 'void');
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, { invoiceId: borrador.id, amount: '1000', receivedOn: hoy, method: 'efectivo', expectedPaidAmount: '0.00' }, TEXTOS),
+      ),
+      InvoiceNotPayable,
+    );
+  });
+
+  test('un cobro fechado mañana no se registra', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id } = await facturaEnviada('100000.00');
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, { invoiceId: id, amount: '1000', receivedOn: addDays(hoy, 1), method: 'efectivo', expectedPaidAmount: '0.00' }, TEXTOS),
+      ),
+      PaymentDateInFuture,
+    );
+  });
+
+  test('desde otro workspace no se puede cobrar una factura ajena', async () => {
+    const hoy = await hoyEnElEspacio();
+    const antes = await conteos();
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+        recordPayment(tx, {
+          invoiceId: INVOICE_FV_2026_001, amount: '1000', receivedOn: hoy, method: 'transferencia', expectedPaidAmount: '4700000.00',
+        }, TEXTOS),
+      ),
+      InvoiceNotFound,
+      'RLS deja la consulta en cero filas y eso es un 404, no un 403',
+    );
+    assert.deepEqual(await conteos(), antes);
+    // Y la factura de Laura sigue como estaba.
+    const intacta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, INVOICE_FV_2026_001));
+    assert.equal(intacta?.paidAmount, '4700000.00');
+  });
+
+  test('el mismo formulario enviado dos veces registra UN pago', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id } = await facturaEnviada('1000000.00');
+
+    const registrar = () =>
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, {
+          invoiceId: id, amount: '100000', receivedOn: hoy, method: 'transferencia', expectedPaidAmount: '0.00',
+        }, TEXTOS),
+      );
+
+    const primero = await registrar();
+    assert.equal(primero.invoice.paidAmount, '100000.00');
+    // El segundo envío lleva el mismo paid_amount que vio la pantalla.
+    await assert.rejects(registrar(), (e: unknown) => {
+      assert.ok(e instanceof InvoicePaymentConflict);
+      assert.equal(e.expected, '0.00');
+      assert.equal(e.actual, '100000.00');
+      assert.match(e.messageEs, /Recarga la página/);
+      return true;
+    });
+    const pagos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPayments(tx, id));
+    assert.equal(pagos.rows.length, 1, 'un doble envío no duplica el cobro');
+
+    // Con el saldo actualizado —que es lo que la pantalla ve tras
+    // revalidar— el segundo abono sí entra.
+    const segundo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      recordPayment(tx, {
+        invoiceId: id, amount: '100000', receivedOn: hoy, method: 'transferencia', expectedPaidAmount: '100000.00',
+      }, TEXTOS),
+    );
+    assert.equal(segundo.invoice.paidAmount, '200000.00');
+  });
+
+  test('cada cobro deja bitácora con actor y before/after, y un aviso', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id, total } = await facturaEnviada('200000.00');
+    await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) =>
+        recordPayment(tx, {
+          invoiceId: id, amount: total, receivedOn: hoy, method: 'tarjeta',
+          reference: 'AUTH-998877', notes: 'pago en línea', expectedPaidAmount: '0.00',
+        }, TEXTOS),
+      { userId: USUARIO_LAURA },
+    );
+
+    const { bitacora, aviso } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const b = await tx.query<{
+        actor_user_id: string | null; actor_kind: string; entity_type: string; before: Record<string, unknown>; after: Record<string, unknown>;
+      }>(
+        `SELECT actor_user_id, actor_kind, entity_type, before, after
+           FROM audit_log WHERE action = 'invoice.payment_recorded' AND entity_id = $1`,
+        [id],
+      );
+      const a = await tx.query<{ kind: string; severity: string; title_es: string; body_es: string; action_url: string; entity_type: string }>(
+        `SELECT kind, severity, title_es, body_es, action_url, entity_type
+           FROM notification WHERE kind = 'payment_received' AND entity_id = $1`,
+        [id],
+      );
+      return { bitacora: b.rows, aviso: a.rows };
+    });
+
+    assert.equal(bitacora.length, 1, 'una fila por cobro');
+    const fila = bitacora[0];
+    assert.equal(fila?.actor_user_id, USUARIO_LAURA, 'el actor sale de current_user_id(), no de un parámetro');
+    assert.equal(fila?.actor_kind, 'user');
+    assert.equal(fila?.entity_type, 'invoice');
+    assert.deepEqual(fila?.before, { status: 'sent', paidAmount: '0.00' });
+    assert.equal(fila?.after?.status, 'paid');
+    assert.equal(fila?.after?.paidAmount, total);
+
+    // Ni la referencia del banco, ni las notas, ni el nombre de la marca.
+    const texto = JSON.stringify({ before: fila?.before, after: fila?.after });
+    for (const prohibido of ['AUTH-998877', 'pago en línea', 'Café Alma', 'reference', 'notes']) {
+      assert.equal(texto.includes(prohibido), false, `la bitácora no debe llevar «${prohibido}»`);
+    }
+
+    assert.equal(aviso.length, 1);
+    assert.equal(aviso[0]?.severity, 'success');
+    assert.equal(aviso[0]?.entity_type, 'invoice');
+    assert.equal(aviso[0]?.action_url, `/finanzas/facturas/${id}`);
+    assert.equal(aviso[0]?.title_es, `Pago recibido · ${(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getInvoice(tx, id)))?.number}`);
+    assert.match(aviso[0]?.body_es ?? '', /La factura queda pagada/);
+  });
+
+  test('sin identidad en la transacción, la bitácora dice «system» y no inventa una persona', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id, total } = await facturaEnviada('30000.00');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      recordPayment(tx, { invoiceId: id, amount: total, receivedOn: hoy, method: 'efectivo', expectedPaidAmount: '0.00' }, TEXTOS),
+    );
+    const rows = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const r = await tx.query<{ actor_user_id: string | null; actor_kind: string }>(
+        `SELECT actor_user_id, actor_kind FROM audit_log WHERE action = 'invoice.payment_recorded' AND entity_id = $1`,
+        [id],
+      );
+      return r.rows;
+    });
+    assert.equal(rows[0]?.actor_user_id, null);
+    assert.equal(rows[0]?.actor_kind, 'system');
+  });
+
+  test('un espacio sin reserva_pct cobra igual y no aparta nada', async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, kind, currency, timezone)
+      VALUES ('${WORKSPACE_SIN_RESERVA}', 'espacio-sin-reserva', 'Sin reserva', 'creator', 'COP', 'America/Bogota')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company (id, name, owner_workspace_id)
+      VALUES ('${EMPRESA_SIN_RESERVA}', 'Marca sin reserva', '${WORKSPACE_SIN_RESERVA}')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id)
+      VALUES ('${WORKSPACE_SIN_RESERVA}', '${EMPRESA_SIN_RESERVA}')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO invoice (id, workspace_id, company_id, number, currency, subtotal, tax, withholding, total,
+                           issued_on, due_on, status, paid_amount)
+      VALUES ('${FACTURA_SIN_RESERVA}', '${WORKSPACE_SIN_RESERVA}', '${EMPRESA_SIN_RESERVA}', 'FV-2026-001', 'COP',
+              1000000.00, 190000.00, 110000.00, 1190000.00, CURRENT_DATE - 10, CURRENT_DATE + 20, 'sent', 0.00)
+      ON CONFLICT DO NOTHING;
+    `);
+    // settings es '{}' por defecto (0001): no hay finanzas.reserva_pct.
+    const hoy = await hoyEnElEspacio(WORKSPACE_SIN_RESERVA);
+    const { invoice, payment } = await t.db.withWorkspace(WORKSPACE_SIN_RESERVA, (tx) =>
+      recordPayment(tx, {
+        invoiceId: FACTURA_SIN_RESERVA, amount: '1190000', receivedOn: hoy, method: 'transferencia', expectedPaidAmount: '0.00',
+      }, TEXTOS),
+    );
+    assert.equal(invoice.status, 'paid', 'no apartar no impide cobrar');
+    assert.equal(payment.reserved, null, 'una ausencia no es un cero');
+    assert.equal(payment.reserveRate, null);
+    const pagos = await t.db.withWorkspace(WORKSPACE_SIN_RESERVA, (tx) => listPayments(tx, FACTURA_SIN_RESERVA));
+    assert.equal(pagos.reservedTotal, '0.00', 'un monto siempre tiene dos decimales');
+    assert.equal(pagos.reserveRate, null);
+  });
+
+  test('un reserva_pct roto se ve: falla y no escribe nada', async () => {
+    await t.admin(`
+      UPDATE workspace SET settings = '{"finanzas": {"reserva_pct": "once"}}'::jsonb
+       WHERE id = '${WORKSPACE_SIN_RESERVA}';
+      INSERT INTO invoice (id, workspace_id, company_id, number, currency, subtotal, tax, withholding, total,
+                           issued_on, due_on, status, paid_amount)
+      VALUES ('00000009-0000-4000-8000-0000fac00002', '${WORKSPACE_SIN_RESERVA}', '${EMPRESA_SIN_RESERVA}', 'FV-2026-002', 'COP',
+              100000.00, 19000.00, 11000.00, 119000.00, CURRENT_DATE - 10, CURRENT_DATE + 20, 'sent', 0.00)
+      ON CONFLICT DO NOTHING;
+    `);
+    const hoy = await hoyEnElEspacio(WORKSPACE_SIN_RESERVA);
+    const antes = await conteos(WORKSPACE_SIN_RESERVA);
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_SIN_RESERVA, (tx) =>
+        recordPayment(tx, {
+          invoiceId: '00000009-0000-4000-8000-0000fac00002', amount: '119000', receivedOn: hoy,
+          method: 'transferencia', expectedPaidAmount: '0.00',
+        }, TEXTOS),
+      ),
+      TaxReserveRateInvalid,
+    );
+    assert.deepEqual(await conteos(WORKSPACE_SIN_RESERVA), antes);
+  });
+
+  test('un método de pago que no está en la lista no llega a la base', async () => {
+    const hoy = await hoyEnElEspacio();
+    const { id } = await facturaEnviada('10000.00');
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        recordPayment(tx, {
+          invoiceId: id, amount: '1000', receivedOn: hoy,
+          method: 'bitcoin' as PaymentMethod, expectedPaidAmount: '0.00',
+        }, TEXTOS),
+      ),
+      /Método de pago desconocido/,
     );
   });
 });

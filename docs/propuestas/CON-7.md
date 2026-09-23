@@ -25,7 +25,7 @@ necesita para no pintar una celda vacía.
 
 | Archivo | Qué |
 |---|---|
-| `platform/db/migrations/0034_demografia_de_cuenta.sql` | `metric_gap`, el UNIQUE que le faltaba a `audience_breakdown`, y las filas nuevas de `metric_requirement` |
+| `platform/db/migrations/0036_demografia_de_cuenta.sql` | `metric_gap`, el UNIQUE que le faltaba a `audience_breakdown`, y las filas nuevas de `metric_requirement` |
 | `platform/apps/worker/src/jobs/conexiones/prerrequisitos-demografia.ts` | Función **pura**: qué puede pedirse a cada cuenta y, si no, qué `metric_requirement` lo explica |
 | `platform/apps/worker/src/jobs/conexiones/collect-demographics.ts` | El job `collect.demographics` (cron `20 5`, ya en `job_definition` de 0009) |
 | `platform/packages/db/src/queries/conexiones.ts` | El contrato de lectura para RES-4: `getAccountAudience` / `listAccountAudience` |
@@ -83,7 +83,7 @@ frescura. Antes de evaluar nada, el job pregunta si ya hay filas de
 `day` de hoy. Si las hay, la cuenta se salta entera: cero llamadas.
 
 Para que eso sea idempotente de verdad hace falta un UNIQUE que la
-tabla **no tenía** (0003 solo dejó dos índices no únicos). 0034 añade
+tabla **no tenía** (0003 solo dejó dos índices no únicos). 0036 añade
 
 ```sql
 CREATE UNIQUE INDEX audience_breakdown_account_uniq
@@ -123,7 +123,7 @@ columna de texto libre es `status_detail`, y **no sirve**:
 - No tiene ni el día ni la referencia a `metric_requirement`, así que la
   pantalla no puede enlazar el `fix_url` ni saber si la razón es de hoy.
 
-0034 crea `metric_gap`: **una fila viva por (conexión, grupo de
+0036 crea `metric_gap`: **una fila viva por (conexión, grupo de
 métricas)**, con el `requirement_id`, el día y el instante en que se
 detectó. Se reemplaza en cada corrida (`ON CONFLICT … DO UPDATE`) y se
 borra en cuanto el dato llega. Es la tabla que hace que «la última
@@ -148,7 +148,7 @@ pierde INSERT/UPDATE/DELETE: la escribe el worker, que es quien mide
 Las siete filas de 0011 no cubren el caso del MVP: una cuenta agregada
 por `@` (`access_mode = 'public_profile'`, CON-10) no puede dar
 demografía **porque nadie autorizó**, y eso no es ni «cuenta business»
-ni «cien seguidores». 0034 amplía el CHECK con `owner_authorization` y
+ni «cien seguidores». 0036 amplía el CHECK con `owner_authorization` y
 añade cinco filas:
 
 | id | red | `requirement` | Qué dice |
@@ -236,10 +236,10 @@ workspace y toma **una** de estas cuatro salidas:
 (id de conexión → requisito), `unsupported`, `errored`, `transient`. No
 lleva ni un token: `metadata` pasa por el redactor del logger.
 
-## 2. La migración `0034_demografia_de_cuenta.sql` (para revisar y aplicar)
+## 2. La migración `0036_demografia_de_cuenta.sql` (para revisar y aplicar)
 
-Tres cosas, todas re-ejecutables. Va detrás de 0024–0033, que siguen
-pendientes en Supabase, y no depende de ninguna de ellas.
+Tres cosas, todas re-ejecutables. Va detrás de 0034 (ACC-3, ya aplicada) y 0035 (CAM-3), y no depende de
+ninguna de las dos.
 
 1. `audience_breakdown_account_uniq`: índice único parcial sobre
    `(connection_id, day, population, dimension, bucket) WHERE scope = 'account'`.
@@ -252,8 +252,7 @@ pendientes en Supabase, y no depende de ninguna de ellas.
    el worker, que es quien mide; la web solo la lee, como con
    `audience_breakdown` (0025 §5).
 
-Comprobado con `make db.check` (Postgres embebido, 33 migraciones,
-92 tablas) y con las 68 pruebas de la guardia de aislamiento de
+Comprobado con `make db.check` (Postgres embebido) y con las 68 pruebas de la guardia de aislamiento de
 `packages/db` (`test/schema.test.ts`), que exige política a toda tabla
 nueva con `workspace_id` y se negaría a pasar si `metric_gap` no la
 tuviera.
@@ -265,7 +264,7 @@ tenerla tipada, es un `pgTable` de siete columnas.
 
 ## 3. Lo que necesito de ti, Rasheed
 
-1. **Aplicar 0034** en la cola única, detrás de 0024–0033.
+1. **Aplicar 0036** en la cola única, detrás de 0034 (ACC-3) y 0035 (CAM-3).
 2. **Nada más en el código.** `queries/conexiones.ts`,
    `apps/worker/src/jobs/conexiones/` y `packages/connectors/` son míos,
    y la migración es del tipo que ya firmamos con 0014, 0015, 0016 y

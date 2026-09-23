@@ -761,9 +761,10 @@ export interface OwnerOption {
 
 /**
  * Las personas que pueden ser responsables de una empresa: los miembros
- * de este espacio (membership), salvo las marcas con acceso de cliente
- * a su portal, que no llevan el CRM. Las lee la RLS de membership y de
- * app_user (0020, 0028): nadie de otro espacio.
+ * de este espacio (membership). Las lee la RLS de membership y de
+ * app_user (0020, 0028): nadie de otro espacio. Desde 0034 (ACC-3) no
+ * hay membresías de marca que excluir: la marca no tiene cuenta, tiene
+ * un enlace (backlog §7, decisión 8).
  */
 export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> {
   const { rows } = await tx.query<{ user_id: string; label: string }>(
@@ -771,7 +772,6 @@ export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> 
        FROM membership m
        JOIN app_user u ON u.id = m.user_id
       WHERE m.workspace_id = current_workspace_id()
-        AND m.role <> 'client'
       ORDER BY label ASC`,
   );
   return rows.map((r) => ({ userId: r.user_id, label: r.label }));

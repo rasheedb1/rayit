@@ -4,7 +4,7 @@
  *
  * Escribe `audience_breakdown` con scope 'account' y, cuando la
  * plataforma no entrega el dato, escribe POR QUÉ en `metric_gap`
- * (migración 0034) con el `message_es` de `metric_requirement`. Esa es
+ * (migración 0036) con el `message_es` de `metric_requirement`. Esa es
  * la historia entera: una celda vacía manda a la persona a WhatsApp; una
  * frase que dice qué le falta, no.
  *
@@ -23,15 +23,15 @@
  *
  * Idempotencia: si ya hay filas de hoy para esa cuenta, se salta entera
  * y no se gasta ni una llamada. La tabla es append-only —nunca se borra
- * ni se corrige una fila— y el UNIQUE parcial de 0034 respalda el
+ * ni se corrige una fila— y el UNIQUE parcial de 0036 respalda el
  * `ON CONFLICT DO NOTHING`.
  *
  * ctx.db corre como mc_worker y se salta RLS: cada SELECT, INSERT,
  * UPDATE y DELETE de aquí lleva su workspace_id explícito.
  */
 import { isPlatformApiError, type NormalizedDemographics } from '@mc/connectors';
+import { mapLimit } from '../../runner/concurrency.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
-import { mapLimit } from './oauth-refresh.ts';
 import {
   analyticsWindow, DEMOGRAPHICS_GROUP, planDemographics, requirementFromApiError,
   type DemographicsPlan,
@@ -191,7 +191,7 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
           }
           await ctx.db.transaction(async (tx) => {
             // ON CONFLICT DO NOTHING contra audience_breakdown_account_uniq
-            // (0034): la tabla es append-only y dos corridas del mismo día
+            // (0036): la tabla es append-only y dos corridas del mismo día
             // dejan exactamente las mismas filas.
             await tx.query(
               `INSERT INTO audience_breakdown (workspace_id, scope, connection_id, day, population, dimension, bucket, share, absolute)

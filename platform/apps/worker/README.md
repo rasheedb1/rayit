@@ -64,7 +64,7 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TIKTOK_BUSINESS_APP_ID`, `TIKTOK_BUSINESS_APP_SECRET`, `META_APP_ID`, `META_APP_SECRET` | Las apps con las que se renueva cada token. Sin una app, sus conexiones fallan como `not_configured` (transitorio, sin reintento inmediato) y el arranque lo avisa. | — |
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
-| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
+| `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10) y `brand.snapshot` (CAM-3): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
@@ -141,6 +141,18 @@ Reglas:
   por un conector se registra con `ctx.callLog.record(...)`. Detalle en
   `packages/connectors/README.md`.
 
+## Los jobs que hay
+
+| Job | Módulo | Qué hace |
+|---|---|---|
+| `oauth.refresh` | Conexiones (CON-2, CON-3) | Renueva los tokens que vencen pronto. |
+| `collect.account_metrics` | Conexiones (CON-10) | Snapshot diario de las cuentas por @ y de las autorizadas. |
+| `collect.demographics` | Conexiones (CON-7) | Cada día a las 05:20 UTC escribe `audience_breakdown` (scope `account`) con la audiencia de cada cuenta autorizada. Si a la cuenta le falta un prerrequisito **no llama a la API**: escribe el requisito en `metric_gap` (ver abajo). `metadata`: `saved`, `empty`, `alreadyToday`, `gaps`, `unsupported`, `errored`, `transient`. |
+| `campaign.compute` | Campañas (CAM-5) | Cada día a las 07:30 UTC recalcula `campaign_result` de las campañas `live`, `measuring` y `reported` (las cerradas conservan el suyo). La cuenta es `calcularResultado` de `@mc/core`; el job lee con `getResultInputs` y escribe con `upsertResult` (`@mc/db`), con el `workspace_id` de cada campaña en cada consulta y una transacción por campaña. Con `{ workspaceId, campaignId }` en el payload calcula solo esa. `metadata`: `campaigns`, `computed`, `partial` (las que aún no llegan a 30 días), `failed`. |
+
+`mapLimit` (concurrencia dentro de una corrida) vive en
+`src/runner/concurrency.ts`; `oauth-refresh.ts` la reexporta.
+
 ## Cuando la plataforma NO da el dato: `metric_gap` (CON-7)
 
 Una celda vacía manda a la persona a WhatsApp. `collect.demographics`
@@ -148,7 +160,7 @@ no la deja vacía: si a la cuenta le falta un prerrequisito —cien
 seguidores, cuenta profesional, el permiso de insights, o sencillamente
 que el dueño autorice la lectura— **no llama a la API** y escribe el
 requisito en `metric_gap`, con el texto en español de
-`metric_requirement` (migraciones `0011` y `0034`).
+`metric_requirement` (migraciones `0011` y `0036`).
 
 ```sql
 -- ¿Por qué esta cuenta no tiene demografía?
@@ -195,6 +207,42 @@ larga duración vencido (Instagram, `refresh_expired`) la pasan a
 `needs_reauth`. El job pasa `connectionId` y `secretRef` al refresher:
 con `enc:tiktok-business:…` renueva contra la Accounts API.
 
+## brand.snapshot (CAM-3)
+
+Cada día a las 07:00 UTC (`job_definition`, 0009: cola `campaigns`,
+600 s, concurrencia 2 por plataforma) lee los seguidores públicos de la
+marca de cada campaña `planned`, `live` o `measuring` con
+`brand_accounts` y en ventana: desde `brand_baseline_from` (o
+`starts_on − 14`) hasta `ends_on + 30` (`isBrandSnapshotDue`, core).
+
+- Una marca en varias campañas del mismo workspace se lee **una vez**
+  (workspace, empresa, red, handle) y deja **una fila por campaña**:
+  `brand_account_snapshot` es único por (campaña, red, día, con o sin
+  cifra) desde 0035.
+- Escribe con `recordBrandSnapshot` de `@mc/db/queries/campanas`, el
+  mismo INSERT que «Actualizar ahora» en la ficha: solo INSERT, `ON
+  CONFLICT DO NOTHING`. La primera lectura del día queda; una fila sin
+  cifra de la mañana convive con la cifra que llegue después, y la ficha
+  prefiere la que trae cifra. Nadie hace UPDATE.
+- Sin cifra, la fila lleva `followers NULL` y la razón en `source`:
+  `no_public_source` (TikTok, sin llamada), `not_found` (Meta 110, un
+  YouTube vacío) o `not_discoverable` (cuenta personal o privada). Estas
+  no cuentan como fallo; mañana se vuelve a mirar.
+- Transitorio o fallo de la base al escribir → `failed`, sin fila,
+  pg-boss reintenta (un fallo de escritura no corta las demás marcas).
+  Cuota agotada → `failed` con `retry: false`. Fuente sin credencial → la red va a
+  `metadata.skipped` con un aviso por corrida.
+- `metadata`: `day`, `campaigns`, `targets` y listas de
+  `{ campaignId, platformId }` por resultado (`snapshots`, `noSource`,
+  `errored`, `transient`, `writeErrors`, `quota`). Sin handles ni tokens.
+
+```sql
+-- ¿Qué leyó hoy brand.snapshot y qué no?
+SELECT c.name, s.platform_id, s.day, s.followers, s.source
+  FROM brand_account_snapshot s JOIN campaign c ON c.id = s.campaign_id
+ WHERE s.day = current_date ORDER BY c.name;
+```
+
 ## Cómo leer job_run
 
 ```sql
@@ -232,14 +280,14 @@ SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_i
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~4 min; incluye collect.account_metrics por @, collect.demographics contra fixtures, y oauth.refresh con el almacén cifrado y los refreshers reales
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @, brand.snapshot, collect.demographics contra fixtures, y oauth.refresh con el almacén cifrado y los refreshers reales
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
 
 Las de integración aplican TODAS las migraciones reales (la `0014` da
 los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
-`0034`, `metric_gap`) y corren como `mc_worker`: si un privilegio
+`0036`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
@@ -258,5 +306,6 @@ src/runner/run.ts            una ejecución: job_run running → ok/partial/fail
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10) · collect.demographics (audiencia, CON-7)
+src/jobs/campanas/           brand.snapshot (seguidores públicos de la marca de cada campaña, CAM-3)
 test/                        integración (pglite) y unitarias
 ```

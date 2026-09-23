@@ -173,6 +173,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@mc/connectors':
+        specifier: workspace:*
+        version: link:../connectors
       '@mc/core':
         specifier: workspace:*
         version: link:../core

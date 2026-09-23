@@ -62,6 +62,8 @@ test('Instagram por business_discovery con el token casa: seguidores y publicaci
   await assert.rejects(sin.src.instagram!.lookup('cafealma'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_configured' && /INSTAGRAM_HOUSE_TOKEN/.test(e.messageEs));
   const personal = await sources([['instagram', 'business_discovery', 'personal']]);
   await assert.rejects(personal.src.instagram!.lookup('cuentapersonal'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_discoverable' && /cuenta personal/.test(e.messageEs));
+  const nf = await sources([['instagram', 'business_discovery', 'not_found']]);
+  await assert.rejects(nf.src.instagram!.lookup('cafe_alma_mal'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_found' && /No encontramos @cafe_alma_mal en Instagram/.test(e.messageEs));
 });
 
 test('YouTube con API key: suscriptores, vistas y videos; la key va en la query pero no en el log ni en la URL grabada; sin key → not_configured', async () => {
