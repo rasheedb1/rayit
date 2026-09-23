@@ -31,7 +31,12 @@ export const COOKIE_SESION: CookieOptions = {
 /** El prefijo de las cookies de Supabase Auth: `sb-<ref>-auth-token`. */
 export const PREFIJO_COOKIE_SESION = "sb-";
 
-/** ¿Trae esta petición alguna cookie de sesión de Supabase? */
-export function hayCookieDeSesion(cookies: readonly { name: string }[]): boolean {
-  return cookies.some((c) => c.name.startsWith(PREFIJO_COOKIE_SESION));
+/**
+ * ¿Trae esta petición alguna cookie de sesión de Supabase con valor?
+ * Vacía no cuenta: así la deja `signOut()` (valor "" y Max-Age=0), y en
+ * la misma petición de «Cerrar sesión» la cookie borrada sigue en la
+ * lista con el valor vacío.
+ */
+export function hayCookieDeSesion(cookies: readonly { name: string; value?: string }[]): boolean {
+  return cookies.some((c) => c.name.startsWith(PREFIJO_COOKIE_SESION) && c.value !== "");
 }

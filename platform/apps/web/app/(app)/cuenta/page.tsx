@@ -6,15 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { cerrarSesion } from "@/lib/auth/acciones";
 import { MESSAGES } from "@/lib/auth/messages";
+import { PUEDEN_RENOMBRAR } from "@/lib/auth/reglas";
 import { withIdentity } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { FormularioCuenta } from "./formulario";
 import { RenombrarEspacio } from "./renombrar";
 
-/** Los roles que pueden renombrar un espacio; el servidor lo vuelve a comprobar. */
-const PUEDEN_RENOMBRAR: ReadonlySet<string> = new Set(["owner", "admin"]);
-
-export const metadata: Metadata = { title: "Tu cuenta" };
+export const metadata: Metadata = { title: MESSAGES.cuenta.meta };
 // Lee la sesión y la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
@@ -56,7 +54,13 @@ export default async function CuentaPage() {
         <p className="mb-3 text-xs text-muted">{t.renombrar.ayuda}</p>
         <ul className="overflow-hidden rounded-md border border-border">
           {espacios.map((e) => (
-            <li key={e.id} className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 last:border-b-0">
+            // A 400 px no caben en una línea el nombre, «Renombrar», el rol y
+            // la pastilla: el nombre —lo que se viene a ver aquí— quedaba
+            // cortado. En móvil va arriba y el resto debajo.
+            <li
+              key={e.id}
+              className="flex flex-col gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+            >
               {PUEDEN_RENOMBRAR.has(e.role) ? (
                 <RenombrarEspacio id={e.id} nombre={e.name} />
               ) : (

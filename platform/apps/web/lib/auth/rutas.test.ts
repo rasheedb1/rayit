@@ -11,6 +11,11 @@ describe("esRutaPublica", () => {
     }
   });
 
+  test("/auth/confirm (el clic que canjea el enlace) se abre sin sesión: es justo donde se consigue", () => {
+    expect(esRutaPublica("/auth/confirm")).toBe(true);
+    expect(esRutaPublica("/auth/callback")).toBe(true);
+  });
+
   test("la aplicación entera pide sesión", () => {
     for (const ruta of ["/", "/resumen", "/finanzas", "/finanzas/facturas/abc", "/conexiones", "/cuenta", "/campanas"]) {
       expect(esRutaPublica(ruta)).toBe(false);

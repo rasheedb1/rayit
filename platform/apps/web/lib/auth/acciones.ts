@@ -12,6 +12,7 @@ import { getCurrentContext } from "@/lib/workspace/current";
 import { olvidarEspacio, recordarEspacio } from "@/lib/workspace/elegir";
 import { isAuthConfigured } from "./config";
 import { MESSAGES } from "./messages";
+import { MAX_ESPACIOS_PROPIOS, MAX_NOMBRE, PUEDEN_RENOMBRAR } from "./reglas";
 import { createServerSupabase } from "./supabase";
 
 /**
@@ -29,15 +30,17 @@ import { createServerSupabase } from "./supabase";
 const DESPUES_DE_CAMBIAR = "/resumen";
 
 /**
- * Cuántos espacios puede tener una persona como propietaria. Sin tope,
- * un script con sesión crea miles de workspaces con su creator_profile.
- * Veinte cubre de sobra a una creadora que separa marcas; una agencia
- * con más clientes no crea espacios de creadora, crea el suyo (AGE-1).
- *
- * No se exporta: este archivo lleva "use server" y Next solo admite
- * funciones async como exports (ver app/login/acciones.ts).
+ * Por qué no se pudo recordar el espacio, para el log y no para la
+ * persona: la cookie `mc.workspace` se firma con TOKEN_ENCRYPTION_KEY y
+ * este servidor no la tiene (`make db.unlock` en local; en Vercel, la
+ * variable del proyecto). A quien usa la aplicación le basta con saber
+ * que no se pudo.
  */
-const MAX_ESPACIOS_PROPIOS = 20;
+function avisarSinFirma(): void {
+  console.error(
+    "[auth] no se pudo firmar la cookie mc.workspace: falta TOKEN_ENCRYPTION_KEY en este servidor (make db.unlock, o la variable en Vercel)",
+  );
+}
 
 export interface EstadoEspacio {
   error?: string;
@@ -55,7 +58,10 @@ export async function cambiarEspacio(_prev: EstadoEspacio, formData: FormData): 
   if (!esMiembro) return { error: MESSAGES.selector.errores.sinMembresia };
 
   const recordado = await recordarEspacio({ w: workspaceId, u: identity.userId, e: identity.email ?? "" });
-  if (!recordado) return { error: MESSAGES.selector.errores.sinFirma };
+  if (!recordado) {
+    avisarSinFirma();
+    return { error: MESSAGES.selector.errores.sinFirma };
+  }
 
   revalidatePath("/", "layout");
   redirect(DESPUES_DE_CAMBIAR);
@@ -65,7 +71,7 @@ export async function cambiarEspacio(_prev: EstadoEspacio, formData: FormData): 
 export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Promise<EstadoEspacio> {
   const nombre = String(formData.get("nombre") ?? "").trim();
   if (!nombre) return { error: MESSAGES.selector.errores.nombreVacio };
-  if (nombre.length > 80) return { error: MESSAGES.cuenta.errores.nombreLargo };
+  if (nombre.length > MAX_NOMBRE) return { error: MESSAGES.cuenta.errores.nombreLargo };
 
   const { identity, workspaces } = await getCurrentContext();
   if (!identity?.userId) redirect("/login");
@@ -98,7 +104,10 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
   // aterrizaba en /resumen y seguía viendo el viejo sin saber por qué.
   const recordado = await recordarEspacio({ w: workspaceId, u: userId, e: identity.email ?? "" });
   revalidatePath("/", "layout");
-  if (!recordado) return { error: MESSAGES.selector.errores.creadoSinRecordar };
+  if (!recordado) {
+    avisarSinFirma();
+    return { error: MESSAGES.selector.errores.creadoSinRecordar };
+  }
 
   redirect(DESPUES_DE_CAMBIAR);
 }
@@ -132,7 +141,7 @@ export interface EstadoCuenta {
 export async function guardarNombre(_prev: EstadoCuenta, formData: FormData): Promise<EstadoCuenta> {
   const nombre = String(formData.get("nombre") ?? "").trim();
   if (!nombre) return { error: MESSAGES.cuenta.errores.nombreVacio };
-  if (nombre.length > 80) return { error: MESSAGES.cuenta.errores.nombreLargo };
+  if (nombre.length > MAX_NOMBRE) return { error: MESSAGES.cuenta.errores.nombreLargo };
 
   const { identity } = await getCurrentContext();
   if (!identity?.userId) redirect("/login");
@@ -154,9 +163,6 @@ export interface EstadoRenombrar {
   guardado?: boolean;
 }
 
-/** Los roles que pueden cambiarle el nombre a un espacio. */
-const PUEDEN_RENOMBRAR = new Set(["owner", "admin"]);
-
 /**
  * Renombra un espacio y la ficha de creador que nació con él.
  *
@@ -172,7 +178,7 @@ export async function renombrarEspacio(_prev: EstadoRenombrar, formData: FormDat
   const workspaceId = String(formData.get("workspaceId") ?? "").trim();
   const nombre = String(formData.get("nombre") ?? "").trim();
   if (!nombre) return { error: t.nombreVacio };
-  if (nombre.length > 80) return { error: t.nombreLargo };
+  if (nombre.length > MAX_NOMBRE) return { error: t.nombreLargo };
   if (!isUuid(workspaceId)) return { error: t.sinPermiso };
 
   const { identity } = await getCurrentContext();

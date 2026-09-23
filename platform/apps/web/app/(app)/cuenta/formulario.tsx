@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { guardarNombre, type EstadoCuenta } from "@/lib/auth/acciones";
 import { MESSAGES } from "@/lib/auth/messages";
+import { MAX_NOMBRE } from "@/lib/auth/reglas";
 
 const ESTADO: EstadoCuenta = {};
 
@@ -16,7 +17,7 @@ export function FormularioCuenta({ nombre, correo }: { nombre: string; correo: s
   return (
     <form action={action} className="flex max-w-md flex-col gap-5">
       <Field label={t.nombre} help={t.nombreAyuda} error={estado.error} required>
-        <Input name="nombre" defaultValue={nombre} maxLength={80} required autoComplete="name" />
+        <Input name="nombre" defaultValue={nombre} maxLength={MAX_NOMBRE} required autoComplete="name" />
       </Field>
       <Field label={t.correo} help={t.correoAyuda}>
         <Input name="correo" defaultValue={correo} disabled readOnly />

@@ -29,6 +29,13 @@ export interface EstadoLogin {
   error?: string;
   /** Solo tras pulsar «Reenviar», para confirmarlo sin cambiar de pantalla. */
   reenviado?: boolean;
+  /**
+   * Cuándo salió el último enlace (ms desde epoch, reloj del servidor).
+   * El formulario lo usa como llave de la cuenta atrás de «Reenviar»:
+   * cambia con cada enlace que sale y NO cambia cuando reenviar falla,
+   * así que un error no reinicia el minuto de espera.
+   */
+  enviadoEn?: number;
 }
 
 /** Un correo con forma de correo. La verdad la dice el enlace que llega, no esto. */
@@ -64,15 +71,21 @@ export async function enviarEnlace(_prev: EstadoLogin, formData: FormData): Prom
 
   if (error) {
     // El correo integrado de Supabase tiene un límite bajo por hora
-    // (ver apps/web/README.md): 429 es el caso que la gente ve de
-    // verdad, y merece su propio texto en vez del genérico.
+    // (ver apps/web/README.md), y además no deja pedir otro enlace para
+    // el mismo correo antes de 60 s: los dos responden 429, que es el
+    // caso que la gente ve de verdad y merece su propio texto.
     const limite = error.status === 429 || /rate limit|too many/i.test(error.message);
-    return {
-      estado: "inicio",
-      email,
-      error: limite ? MESSAGES.login.errores.limite : MESSAGES.login.errores.generico,
-    };
+    const texto = limite ? MESSAGES.login.errores.limite : MESSAGES.login.errores.generico;
+
+    // Si falla REENVIAR, la persona se queda en «Revisa tu correo», con
+    // su correo y el error debajo: el primer enlace sigue en camino y
+    // devolverla al formulario vacío parecía un reinicio (ronda 4).
+    if (accion === "reenviar") {
+      const previo = Number(formData.get("enviadoEn"));
+      return { estado: "enviado", email, error: texto, ...(Number.isFinite(previo) && previo > 0 ? { enviadoEn: previo } : {}) };
+    }
+    return { estado: "inicio", email, error: texto };
   }
 
-  return { estado: "enviado", email, reenviado: accion === "reenviar" };
+  return { estado: "enviado", email, reenviado: accion === "reenviar", enviadoEn: Date.now() };
 }

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { renombrarEspacio, type EstadoRenombrar } from "@/lib/auth/acciones";
 import { MESSAGES } from "@/lib/auth/messages";
+import { MAX_NOMBRE } from "@/lib/auth/reglas";
 
 const ESTADO: EstadoRenombrar = {};
 
@@ -58,7 +59,7 @@ export function RenombrarEspacio({ id, nombre }: { id: string; nombre: string })
         defaultValue={nombre}
         aria-label={t.etiqueta(nombre)}
         invalid={Boolean(estado.error)}
-        maxLength={80}
+        maxLength={MAX_NOMBRE}
         required
         autoFocus
         className="min-w-0 flex-1"

@@ -1,145 +1,74 @@
 import { NextResponse } from "next/server";
-import { isAuthPKCECodeVerifierMissingError, type EmailOtpType, type User } from "@supabase/supabase-js";
+import { isAuthPKCECodeVerifierMissingError } from "@supabase/supabase-js";
 import { isAuthConfigured } from "@/lib/auth/config";
+import { codigoDeError, completarEntrada, enlaceInvalido, type CodigoDeEntrada } from "@/lib/auth/entrada";
 import { destinoSeguro } from "@/lib/auth/rutas";
-import { sesionDeUsuario } from "@/lib/auth/session";
-import { registrarEntrada } from "@/lib/auth/sincronizar";
 import { createServerSupabase } from "@/lib/auth/supabase";
-import { elegirWorkspaceId } from "@/lib/workspace/current";
-import { espacioDeLaCookie, recordarEspacio } from "@/lib/workspace/elegir";
 
 /**
  * Donde aterriza el enlace del correo.
  *
- * Dos formas, porque Supabase manda una u otra según la plantilla del
- * correo: `?code=` (PKCE, la de por defecto desde @supabase/ssr) y
- * `?token_hash=&type=`. Las dos terminan igual: sesión abierta en
- * cookies httpOnly (lib/auth/cookies.ts) y persona sincronizada.
+ * Tres formas de llegar, según la plantilla del correo y lo que pasó
+ * por el camino:
  *
- * Sincronizar es lo que convierte «un correo verificado» en «alguien
- * que puede trabajar»: su fila de app_user, sus membresías y, si no
- * tenía ninguna, su primer espacio de creadora con su ficha. Todo
- * dentro de transacciones con identidad (ver lib/auth/sincronizar.ts);
- * nada de esto pasa por el navegador. Este es además el ÚNICO sitio del
- * camino normal que escribe: las pantallas solo leen.
+ *   ?code=              PKCE, la plantilla por defecto de Supabase. Se
+ *                       canjea aquí mismo: un escáner de enlaces no
+ *                       tiene la cookie del verificador, así que su GET
+ *                       no gasta nada (supabase-js ni llega a llamar).
+ *   ?token_hash=&type=  la plantilla que recomienda el README. NO se
+ *                       canjea aquí (ronda 4): un GET de un solo uso lo
+ *                       gastan los escáneres del correo corporativo
+ *                       (Outlook Safe Links, Mimecast) antes que la
+ *                       persona. Se reenvía a /auth/confirm, que pide un
+ *                       clic y canjea por POST.
+ *   ?error=&error_code= Supabase no pudo verificar el enlace y lo dice
+ *                       en la URL (lib/auth/entrada.ts, `codigoDeError`).
  *
- * Y antes de redirigir se deja firmada la cookie `mc.workspace`, para
- * que la siguiente petición sirva el espacio en el que se estaba
- * trabajando y no el más antiguo.
- *
+ * Lo que pasa después de abrir la sesión —sincronizar la persona y su
+ * espacio— está en lib/auth/entrada.ts, compartido con /auth/confirm.
  * Los errores van a /login?error=… con un código corto: lo que dice el
  * proveedor no se enseña ni se registra tal cual.
  */
-
-/**
- * Los `type` que Supabase pone en un enlace de correo. Lista blanca
- * explícita porque el valor llega de la URL: `verifyOtp` recibe una
- * unión de tipos y un `as EmailOtpType` sobre un parámetro sin validar
- * es exactamente la clase de cosa que este archivo comprueba en `code`,
- * en `error` y en `next`.
- */
-const TIPOS = ["magiclink", "signup", "email", "recovery", "invite", "email_change"] as const;
-
-function esTipoDeCorreo(tipo: string | null): tipo is EmailOtpType {
-  return tipo !== null && (TIPOS as readonly string[]).includes(tipo);
-}
-
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const destino = destinoSeguro(url.searchParams.get("next"));
-  const alLogin = (error?: string) =>
+  const alLogin = (error?: CodigoDeEntrada) =>
     NextResponse.redirect(new URL(`/login${error ? `?error=${error}` : ""}`, url.origin));
 
   if (!isAuthConfigured()) return alLogin();
-  // La persona canceló en la pantalla del proveedor, o el enlace ya se usó.
-  if (url.searchParams.get("error")) return alLogin("cancelado");
+
+  const errorDeUrl = codigoDeError(url.searchParams);
+  if (errorDeUrl) return alLogin(errorDeUrl);
 
   const code = url.searchParams.get("code");
   const tokenHash = url.searchParams.get("token_hash");
-  const tipo = url.searchParams.get("type");
+
+  if (!code && tokenHash) {
+    // A la página del clic, con los mismos parámetros (y `next` ya
+    // saneado). 303: lo que sigue es un GET que no canjea nada.
+    const confirmar = new URL("/auth/confirm", url.origin);
+    confirmar.searchParams.set("token_hash", tokenHash);
+    confirmar.searchParams.set("type", url.searchParams.get("type") ?? "");
+    confirmar.searchParams.set("next", destino);
+    return NextResponse.redirect(confirmar, 303);
+  }
+
+  if (!code) return alLogin(enlaceInvalido("la URL no trae ni code ni token_hash"));
 
   const supabase = await createServerSupabase();
-  let usuario: User | null = null;
-
-  if (code) {
-    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    // El enlace se pidió en OTRO navegador (el portátil, y se abre en el
-    // teléfono o en el navegador interno de Gmail): el verificador PKCE
-    // vive en una cookie del navegador donde se pidió y aquí no está.
-    // Decir «ese enlace ya no sirve» era falso —pedir otro y abrirlo en
-    // el mismo sitio vuelve a fallar—, así que tiene su propio texto. La
-    // cura de fondo es la plantilla del correo con token_hash (README,
-    // «Autenticación»), que no depende del navegador.
-    if (error && isAuthPKCECodeVerifierMissingError(error)) return enlaceInvalido(alLogin, error.message, "otro_navegador");
-    if (error) return enlaceInvalido(alLogin, error.message);
-    usuario = data.user;
-  } else if (tokenHash && tipo) {
-    if (!esTipoDeCorreo(tipo)) return enlaceInvalido(alLogin, "type desconocido");
-    const { data, error } = await supabase.auth.verifyOtp({ type: tipo, token_hash: tokenHash });
-    if (error) return enlaceInvalido(alLogin, error.message);
-    usuario = data.user;
-  } else {
-    return enlaceInvalido(alLogin, "la URL no trae ni code ni token_hash");
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+  // El enlace se pidió en OTRO navegador (el portátil, y se abre en el
+  // teléfono o en el navegador interno de Gmail): el verificador PKCE
+  // vive en una cookie del navegador donde se pidió y aquí no está.
+  // Decir «ese enlace ya no sirve» era falso —pedir otro y abrirlo en
+  // el mismo sitio vuelve a fallar—, así que tiene su propio texto. La
+  // cura de fondo es la plantilla del correo con token_hash (README,
+  // «Autenticación»), que no depende del navegador.
+  if (error && isAuthPKCECodeVerifierMissingError(error)) {
+    return alLogin(enlaceInvalido(error.message, "otro_navegador"));
   }
+  if (error) return alLogin(enlaceInvalido(error.message));
 
-  // Sin correo verificado no hay identidad (lib/auth/session.ts,
-  // `sesionDeUsuario`). El intercambio de arriba YA abrió la sesión, así
-  // que se cierra antes de mandar a /login: si no, quedaría una cookie
-  // viva que ninguna pantalla acepta.
-  const sesion = sesionDeUsuario(usuario);
-  if (!sesion) {
-    await cerrarAMedias(supabase);
-    return enlaceInvalido(alLogin, "usuario sin correo verificado");
-  }
-  const { email, nombre } = sesion;
-
-  try {
-    const { userId, workspaces } = await registrarEntrada({ email, nombre });
-    // Volver a entrar por el enlace mágico no debería devolver a nadie
-    // a su espacio más antiguo si estaba trabajando en otro: la regla
-    // de preferencia es la misma de cada petición.
-    const previo = await espacioDeLaCookie(email);
-    const workspaceId = elegirWorkspaceId(previo?.w ?? null, workspaces);
-    if (workspaceId) await recordarEspacio({ w: workspaceId, u: userId, e: email });
-  } catch (err) {
-    console.error("[auth] no se pudo sincronizar la sesión", err);
-    // La sesión ya está abierta (el intercambio de arriba escribió la
-    // cookie sb-…), así que hay que cerrarla ANTES de mandar a /login:
-    // si no, /login ve una sesión viva, redirige a /resumen y la
-    // persona se queda dentro, sin espacio y sin ver el error. Este
-    // caso no es teórico: es lo que pasa contra una base sin la
-    // migración 0022.
-    await cerrarAMedias(supabase);
-    return alLogin("sesion");
-  }
-
-  return NextResponse.redirect(new URL(destino, url.origin));
-}
-
-/**
- * Un enlace que no abre es lo primero que se pregunta cuando alguien no
- * puede entrar: caducó, ya se usó, se abrió en otro navegador, o la
- * plantilla del correo manda algo que no esperamos. El motivo va al log
- * del servidor —sin el token, que sí es secreto— y a la persona le
- * llega el texto de /login para ese código.
- */
-function enlaceInvalido(
-  alLogin: (error?: string) => Response,
-  motivo?: string,
-  codigo: "enlace" | "otro_navegador" = "enlace",
-): Response {
-  console.warn(`[auth] enlace no válido: ${motivo ?? "sin detalle"}`);
-  return alLogin(codigo);
-}
-
-/**
- * Cierra la sesión que el intercambio acaba de abrir, SOLO en este
- * navegador (`scope: 'local'`): si la persona tiene otra sesión buena
- * en otro dispositivo, un callback fallido aquí no tiene por qué
- * tumbarla.
- */
-async function cerrarAMedias(supabase: Awaited<ReturnType<typeof createServerSupabase>>): Promise<void> {
-  await supabase.auth
-    .signOut({ scope: "local" })
-    .catch((e: unknown) => console.error("[auth] no se pudo cerrar la sesión a medias", e));
+  const fallo = await completarEntrada(supabase, data.user);
+  return fallo ? alLogin(fallo) : NextResponse.redirect(new URL(destino, url.origin));
 }

@@ -24,7 +24,9 @@
  *   - dos altas a la vez del mismo correo nuevo dejan UN espacio, no dos;
  *   - (ronda 3) el correo del seed entra a la creadora demo y no crea
  *     nada; renombrar solo vale en un espacio propio; y crear espacios
- *     tiene tope.
+ *     tiene tope;
+ *   - (ronda 4) la fila de app_user queda ligada a la cuenta de Auth que
+ *     entró primero: otra cuenta con el mismo correo no la hereda.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -78,13 +80,23 @@ import { COOKIE_WORKSPACE } from "@/lib/workspace/cookie";
 import { getCurrentContext, SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { closeDb, withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
-import { listMyWorkspaces } from "@mc/db/queries/identidad";
+import { AuthIdentityMismatchError, listMyWorkspaces } from "@mc/db/queries/identidad";
 import { registrarEntrada } from "./sincronizar";
 import { cambiarEspacio, crearEspacio, renombrarEspacio } from "./acciones";
 import { MESSAGES } from "./messages";
 
 const ANA = "ana@ejemplo.test";
 const BRUNO = "bruno@ejemplo.test";
+
+/** Ids de auth.users de cada persona (Supabase Auth), que NO son los de app_user. */
+const AUTH = {
+  ana: "a0000000-0000-4000-8000-00000000000a",
+  bruno: "a0000000-0000-4000-8000-00000000000b",
+  carla: "a0000000-0000-4000-8000-00000000000c",
+  diego: "a0000000-0000-4000-8000-00000000000d",
+  seed: "a0000000-0000-4000-8000-0000000000ee",
+  intrusa: "a0000000-0000-4000-8000-0000000000ff",
+} as const;
 
 /** 32 bytes: solo firma la cookie del espacio, no abre nada. */
 const CLAVE = Buffer.alloc(32, 3).toString("base64");
@@ -107,11 +119,11 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   process.env.TOKEN_ENCRYPTION_KEY = CLAVE;
 
-  const ana = await registrarEntrada({ email: ANA });
+  const ana = await registrarEntrada({ email: ANA, authUserId: AUTH.ana });
   anaUserId = ana.userId;
   anaWs = ana.workspaces[0]!.id;
 
-  const bruno = await registrarEntrada({ email: BRUNO });
+  const bruno = await registrarEntrada({ email: BRUNO, authUserId: AUTH.bruno });
   brunoUserId = bruno.userId;
   brunoWs = bruno.workspaces[0]!.id;
 
@@ -133,14 +145,14 @@ beforeEach(() => {
 
 describe("cambiarEspacio", () => {
   test("el espacio de otra persona se rechaza y la cookie no se escribe", async () => {
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
     const estado = await cambiarEspacio({}, form({ workspaceId: brunoWs }));
     expect(estado).toEqual({ error: MESSAGES.selector.errores.sinMembresia });
     expect(cookies.has(COOKIE_WORKSPACE)).toBe(false);
   });
 
   test("un uuid inventado o basura tampoco", async () => {
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
     for (const malo of ["", "no-soy-un-uuid", "00000000-0000-4000-8000-00000000dead"]) {
       const estado = await cambiarEspacio({}, form({ workspaceId: malo }));
       expect(estado).toEqual({ error: MESSAGES.selector.errores.sinMembresia });
@@ -155,7 +167,7 @@ describe("cambiarEspacio", () => {
   });
 
   test("el propio se sella y la petición siguiente lo sirve", async () => {
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
 
     // Un espacio más, para que haya de dónde elegir.
     await expect(crearEspacio({}, form({ nombre: "Segundo espacio" }))).rejects.toBeInstanceOf(Redireccion);
@@ -182,7 +194,7 @@ describe("la identidad no sale de la cookie", () => {
     // está entre los espacios que la base devuelve para mi correo.
     const falsa = sellarEspacio({ w: brunoWs, u: brunoUserId, e: ANA })!;
     cookies.set(COOKIE_WORKSPACE, { name: COOKIE_WORKSPACE, value: falsa });
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
 
     const contexto = await getCurrentContext();
     expect(contexto.workspaceId).not.toBe(brunoWs);
@@ -190,8 +202,16 @@ describe("la identidad no sale de la cookie", () => {
     expect(contexto.workspaces.map((w) => w.id)).not.toContain(brunoWs);
   });
 
+  test("otra cuenta de Auth con el correo de Ana no hereda su fila ni sus espacios", async () => {
+    // El buzón se reasignó: la cuenta de Auth de Ana se borró y otra
+    // persona se registró con el mismo correo. Su sesión trae otro id.
+    sesion = { authUserId: AUTH.intrusa, email: ANA, nombre: null };
+    await expect(getCurrentContext()).rejects.toMatchObject({ destino: "/login?error=identidad" });
+    await expect(registrarEntrada({ email: ANA, authUserId: AUTH.intrusa })).rejects.toBeInstanceOf(AuthIdentityMismatchError);
+  });
+
   test("la sesión de Bruno sigue viendo lo suyo", async () => {
-    sesion = { authUserId: "auth-bruno", email: BRUNO, nombre: null };
+    sesion = { authUserId: AUTH.bruno, email: BRUNO, nombre: null };
     const contexto = await getCurrentContext();
     expect(contexto.workspaceId).toBe(brunoWs);
     expect(contexto.identity?.userId).toBe(brunoUserId);
@@ -204,13 +224,13 @@ describe("el primer espacio se crea una sola vez", () => {
     // dentro de la transacción son lo que lo impide: sin ellos, las dos
     // llamadas leen «no tengo espacios» y crean uno cada una.
     const nuevo = "carla@ejemplo.test";
-    const [a, b] = await Promise.all([registrarEntrada({ email: nuevo }), registrarEntrada({ email: nuevo })]);
+    const [a, b] = await Promise.all([registrarEntrada({ email: nuevo, authUserId: AUTH.carla }), registrarEntrada({ email: nuevo, authUserId: AUTH.carla })]);
     expect(a.userId).toBe(b.userId);
     expect(a.workspaces).toHaveLength(1);
     expect(b.workspaces).toHaveLength(1);
     expect(a.workspaces[0]!.id).toBe(b.workspaces[0]!.id);
 
-    sesion = { authUserId: "auth-carla", email: nuevo, nombre: null };
+    sesion = { authUserId: AUTH.carla, email: nuevo, nombre: null };
     expect((await getCurrentContext()).workspaces).toHaveLength(1);
   }, 60_000);
 });
@@ -225,10 +245,10 @@ describe("el correo del seed (terminado cuando: «se entra con el correo del see
   const CORREO_SEED = "demo@multicampaign.test";
 
   test("entra a la creadora demo, con sus datos, y no crea ningún espacio", async () => {
-    const entrada = await registrarEntrada({ email: CORREO_SEED });
+    const entrada = await registrarEntrada({ email: CORREO_SEED, authUserId: AUTH.seed });
     expect(entrada.workspaces.map((w) => w.id)).toEqual([SEED_WORKSPACE_ID]);
 
-    sesion = { authUserId: "auth-seed", email: CORREO_SEED, nombre: null };
+    sesion = { authUserId: AUTH.seed, email: CORREO_SEED, nombre: null };
     const contexto = await getCurrentContext();
     expect(contexto.workspaceId).toBe(SEED_WORKSPACE_ID);
     expect(contexto.workspaces).toHaveLength(1);
@@ -246,7 +266,7 @@ describe("el correo del seed (terminado cuando: «se entra con el correo del see
 
 describe("renombrarEspacio", () => {
   test("el propio cambia de nombre, y el selector lo ve", async () => {
-    sesion = { authUserId: "auth-bruno", email: BRUNO, nombre: null };
+    sesion = { authUserId: AUTH.bruno, email: BRUNO, nombre: null };
     const estado = await renombrarEspacio({}, form({ workspaceId: brunoWs, nombre: "Bruno · Viajes" }));
     expect(estado).toEqual({ guardado: true });
     const suyos = await withIdentity({ userId: brunoUserId, email: BRUNO }, (tx) => listMyWorkspaces(tx));
@@ -254,7 +274,7 @@ describe("renombrarEspacio", () => {
   });
 
   test("el de otra persona no: ni aunque mande su id", async () => {
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
     const estado = await renombrarEspacio({}, form({ workspaceId: brunoWs, nombre: "Tomado" }));
     expect(estado).toEqual({ error: MESSAGES.cuenta.renombrar.errores.sinPermiso });
     const suyos = await withIdentity({ userId: brunoUserId, email: BRUNO }, (tx) => listMyWorkspaces(tx));
@@ -262,7 +282,7 @@ describe("renombrarEspacio", () => {
   });
 
   test("valida el nombre antes de tocar nada", async () => {
-    sesion = { authUserId: "auth-ana", email: ANA, nombre: null };
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
     expect(await renombrarEspacio({}, form({ workspaceId: anaWs, nombre: "  " }))).toEqual({
       error: MESSAGES.cuenta.renombrar.errores.nombreVacio,
     });
@@ -275,8 +295,8 @@ describe("renombrarEspacio", () => {
 describe("crearEspacio tiene tope", () => {
   test("a los 20 espacios propios dice que no, y no crea el 21", async () => {
     const correo = "diego@ejemplo.test";
-    await registrarEntrada({ email: correo });
-    sesion = { authUserId: "auth-diego", email: correo, nombre: null };
+    await registrarEntrada({ email: correo, authUserId: AUTH.diego });
+    sesion = { authUserId: AUTH.diego, email: correo, nombre: null };
 
     let respuesta: unknown = null;
     for (let i = 0; i < 25 && respuesta === null; i++) {

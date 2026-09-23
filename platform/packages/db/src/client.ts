@@ -97,7 +97,7 @@ export interface BaseTx extends SqlExecutor {
 /**
  * Quién abre la transacción (CIM-3). Se fija en la transacción igual
  * que el workspace, con set_config(…, true), y lo leen las políticas
- * por current_user_id() (0019) y current_user_email() (0022).
+ * por current_user_id() (0019) y current_user_email() (migración sesion_correo_verificado).
  *
  *   userId  la fila de app_user. Con él valen las ramas «soy yo» de
  *           app_user y de membership, así que «a qué workspaces

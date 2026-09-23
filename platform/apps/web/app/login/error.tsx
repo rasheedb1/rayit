@@ -5,8 +5,10 @@ import { Button } from "@/components/ui/button";
 import { MESSAGES } from "@/lib/auth/messages";
 
 /**
- * Lo que se ve cuando /login no puede pintarse: `getSesion()` que no
- * responde, `cookies()` que lanza, o la server action del formulario.
+ * Lo que se ve cuando /login no puede pintarse: `searchParams` o la
+ * cabecera de la petición que lanzan, o la server action del
+ * formulario. (Desde la ronda 4 la página ya no pregunta por la
+ * sesión: con Supabase caído, /login se pinta igual.)
  *
  * Es la única pantalla del producto que ve alguien que todavía no ha
  * entrado, así que caer en la página genérica de Next —en inglés, sin

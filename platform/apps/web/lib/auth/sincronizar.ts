@@ -34,7 +34,7 @@ import { MESSAGES } from "./messages";
  *
  * Nada de esto corre en el navegador ni salta RLS: el correo y el id
  * viajan como identidad de la transacción (@mc/db, `withIdentity`) y
- * las políticas de 0019 a 0023 deciden qué se puede ver y escribir.
+ * las políticas de 0019 a 0021 y las de CIM-3 (sesion_correo_verificado, membership_alta_propia) deciden qué se puede ver y escribir.
  */
 export interface ContextoDeSesion {
   /** Fila de app_user. NO es el id de Supabase. */
@@ -45,11 +45,26 @@ export interface ContextoDeSesion {
   workspaces: MyWorkspace[];
 }
 
-/** Lo mínimo que hace falta: el correo que Supabase verificó, y el nombre si vino. */
+/**
+ * Lo mínimo que hace falta: el correo que Supabase verificó, el id de
+ * su cuenta de Auth (auth.users) y el nombre si vino. El id de Auth es
+ * el que ata la fila de app_user a UNA cuenta: otra cuenta con el mismo
+ * correo no la hereda (AuthIdentityMismatchError, @mc/db).
+ */
 export interface QuienEntra {
   email: string;
+  authUserId: string;
   nombre?: string | null;
 }
+
+/**
+ * La migración que hace posible el inicio de sesión, nombrada por lo
+ * que crea y por el final de su archivo, NO por su número: el número
+ * lo decide el integrador al ordenar las ramas y cambió ya una vez
+ * (0022 → 0027). Si se renombra el archivo, esto es lo único que hay
+ * que tocar.
+ */
+export const MIGRACION_DE_SESION = "la que crea current_user_email() (db/migrations/*_sesion_correo_verificado.sql)";
 
 /** Drizzle envuelve el error de Postgres ("Failed query: …") y deja el original en cause. */
 function mensajeCompleto(err: unknown): string {
@@ -60,15 +75,16 @@ function mensajeCompleto(err: unknown): string {
 
 /**
  * El fallo que va a pasar de verdad: la base todavía no tiene la
- * migración 0022, así que no existe la política «mi fila por el correo
- * verificado» y el alta choca contra el único de email. Sin esta pista,
- * el mensaje es un «row-level security» pelado en un log de Vercel.
+ * migración de sesión, así que no existe la política «mi fila por el
+ * correo verificado» (ni la columna auth_user_id) y el alta choca
+ * contra el único de email. Sin esta pista, el mensaje es un
+ * «row-level security» pelado en un log de Vercel.
  */
 function conPista(err: unknown): never {
-  if (/row-level security|duplicate key|current_user_email/.test(mensajeCompleto(err))) {
+  if (/row-level security|duplicate key|current_user_email|auth_user_id/.test(mensajeCompleto(err))) {
     throw new Error(
-      "No se pudo registrar la sesión. Lo más probable: falta aplicar la migración 0022 " +
-        "(db/migrations/0022_sesion_correo_verificado.sql) en esta base. `make db.migrate` desde platform/.",
+      `No se pudo registrar la sesión. Lo más probable: falta aplicar en esta base la migración ${MIGRACION_DE_SESION}. ` +
+        "`make db.migrate` desde platform/.",
       { cause: err },
     );
   }
@@ -79,9 +95,9 @@ function conPista(err: unknown): never {
  * SOLO LECTURA: quién soy y a qué espacios pertenezco, según el correo
  * verificado de la sesión. null si ese correo todavía no tiene fila.
  */
-export async function leerSesion(email: string): Promise<ContextoDeSesion | null> {
+export async function leerSesion({ email, authUserId }: QuienEntra): Promise<ContextoDeSesion | null> {
   const limpio = email.trim();
-  const mio = await withIdentity({ email: limpio }, (tx) => getMyIdentityAndWorkspaces(tx)).catch(conPista);
+  const mio = await withIdentity({ email: limpio }, (tx) => getMyIdentityAndWorkspaces(tx, authUserId)).catch(conPista);
   if (!mio) return null;
   return { userId: mio.user.id, email: limpio, nombre: mio.user.name, workspaces: mio.workspaces };
 }
@@ -93,8 +109,11 @@ export async function leerSesion(email: string): Promise<ContextoDeSesion | null
  */
 export async function registrarEntrada(quien: QuienEntra): Promise<ContextoDeSesion> {
   const email = quien.email.trim();
-  const persona = await withIdentity({ email }, (tx) =>
-    upsertAppUserPorCorreo(tx, { email, name: quien.nombre ?? null }),
+  // `userId` es el id que tendrá la fila SI es nueva: la política de alta
+  // de app_user del pase de endurecimiento exige id = current_user_id().
+  // Si el correo ya tenía fila, se devuelve la suya y este se descarta.
+  const persona = await withIdentity({ email, userId: randomUUID() }, (tx) =>
+    upsertAppUserPorCorreo(tx, { email, name: quien.nombre ?? null, authUserId: quien.authUserId }),
   ).catch(conPista);
 
   const identity = { userId: persona.id, email };
@@ -154,7 +173,7 @@ async function crearPrimerEspacio({
  * lib/workspace/current.ts.
  */
 export async function leerOCrearSesion(quien: QuienEntra): Promise<ContextoDeSesion> {
-  const mio = await leerSesion(quien.email);
+  const mio = await leerSesion(quien);
   if (mio && mio.workspaces.length > 0) return mio;
   return registrarEntrada(quien);
 }

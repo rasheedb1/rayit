@@ -118,26 +118,33 @@ o le encendía una bandera. Ahora el filtro lo pone la base.
 ve si su fuente es pública (`public_website`, `public_profile`,
 `press`) o si la empresa está vinculada a mi workspace por
 `company_link`. `company` sí es global a propósito: nombre, dominio y
-sector, sin PII. `app_user` tiene la suya desde 0020, 0021 y 0022: se ve
-y se edita la fila propia, por `current_user_id()` o por el correo
-verificado de la sesión.
+sector, sin PII. `app_user` tiene la suya desde 0020, 0021 y la de CIM-3
+(`*_sesion_correo_verificado.sql`): se ve y se edita la fila propia,
+por `current_user_id()` o por el correo verificado de la sesión. Desde
+esa misma migración la fila guarda además `auth_user_id`, el id de la
+cuenta de Supabase Auth que entró con ella la primera vez: una cuenta
+distinta con el mismo correo ya no la hereda
+(`AuthIdentityMismatchError`).
 
 ### 4. Quién entra, con `withIdentity`
 
 ```ts
 // Solo la capa de sesión (apps/web/lib/auth y lib/workspace).
-const persona = await db.withIdentity({ email }, (tx) => upsertAppUserPorCorreo(tx, { email }));
+// userId: el id que tendrá la fila SI es nueva (la política de alta exige id = current_user_id()).
+const persona = await db.withIdentity({ email, userId: randomUUID() }, (tx) =>
+  upsertAppUserPorCorreo(tx, { email, authUserId: sesion.authUserId }));
 const mios    = await db.withIdentity({ userId: persona.id }, (tx) => listMyWorkspaces(tx));
 ```
 
 Transacción **sin workspace y con identidad**: fija `app.user_id` y
 `app.user_email` igual que `withWorkspace` fija `app.workspace_id`, y
 con eso valen las ramas «soy yo» de las políticas de `app_user` (0020,
-0021 y 0022) y de `membership` (0023). Así se responde «¿a qué espacios
+0021 y `*_sesion_correo_verificado.sql`) y de `membership`
+(`*_membership_alta_propia.sql`). Así se responde «¿a qué espacios
 pertenezco?» como `mc_app`, sin `asWorker` ni una función
 `SECURITY DEFINER`.
 
-Esa rama «soy yo» es **solo de lectura**. Desde 0023, en `membership`
+Esa rama «soy yo» es **solo de lectura**. Desde `*_membership_alta_propia.sql`, en `membership`
 solo se da de alta una fila con `user_id = current_user_id()` Y
 `workspace_id = current_workspace_id()`: fijar mi id no me deja
 colgarme de un espacio ajeno, ni colgar a otra persona del mío. No hay

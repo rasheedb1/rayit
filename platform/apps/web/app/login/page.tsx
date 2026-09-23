@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { faltantesAuth, isAuthConfigured } from "@/lib/auth/config";
+import { Marca } from "@/components/marca";
+import { faltantesAuth } from "@/lib/auth/config";
 import { MESSAGES } from "@/lib/auth/messages";
 import { destinoSeguro } from "@/lib/auth/rutas";
-import { getSesion } from "@/lib/auth/session";
 import { FormularioLogin } from "./formulario";
 
-export const metadata: Metadata = { title: "Entrar" };
+export const metadata: Metadata = { title: MESSAGES.login.meta };
 
 /** Los errores que /auth/callback puede poner en la URL, ya en español. */
 const ERRORES: Record<string, string> = {
@@ -15,6 +14,7 @@ const ERRORES: Record<string, string> = {
   otro_navegador: MESSAGES.callback.errores.otroNavegador,
   cancelado: MESSAGES.callback.errores.cancelado,
   sesion: MESSAGES.callback.errores.sesion,
+  identidad: MESSAGES.callback.errores.identidad,
 };
 
 type Props = { searchParams: Promise<{ next?: string; error?: string }> };
@@ -23,36 +23,22 @@ type Props = { searchParams: Promise<{ next?: string; error?: string }> };
  * La puerta. Vive fuera del grupo (app) a propósito: sin barra lateral,
  * sin navegación y sin selector de espacio, porque todavía no hay
  * espacio ninguno.
+ *
+ * Quien ya tiene sesión no llega a pintarla: el middleware lo manda a
+ * su destino con un 307 (ronda 4). Antes lo hacía esta página, y como
+ * /login tenía loading.tsx la redirección salía como un 200 con el
+ * esqueleto y un meta refresh de un segundo. El loading.tsx tampoco
+ * está: es una pantalla estática, no hay nada que esperar.
  */
 export default async function LoginPage({ searchParams }: Props) {
   const { next, error } = await searchParams;
   const destino = destinoSeguro(next);
   const t = MESSAGES.login;
-
-  // Quien ya entró no tiene nada que hacer aquí... salvo cuando viene
-  // con un error. /auth/callback abre la sesión ANTES de sincronizar,
-  // así que un fallo al sincronizar dejaba sesión viva y este redirect
-  // se tragaba el mensaje: la persona iba a /resumen sin enterarse de
-  // nada. El callback ya cierra la sesión en ese caso, y esto es el
-  // cinturón: con ?error= la pantalla SIEMPRE se pinta.
-  if (isAuthConfigured() && !error) {
-    const sesion = await getSesion();
-    if (sesion) redirect(destino);
-  }
-
   const faltan = faltantesAuth();
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-4 py-12">
-      <div className="mb-8 flex items-center gap-2.5">
-        <span
-          className="grid h-7 w-7 place-items-center rounded-md bg-accent text-xs font-bold text-accent-ink"
-          aria-hidden="true"
-        >
-          O
-        </span>
-        <span className="text-base font-semibold tracking-tight text-ink">{MESSAGES.marca}</span>
-      </div>
+      <Marca />
 
       <h1 className="text-xl font-semibold tracking-tight text-ink">{t.titulo}</h1>
       <p className="mt-2 mb-8 text-sm leading-5 text-ink-2">{t.descripcion}</p>

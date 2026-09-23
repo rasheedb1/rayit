@@ -97,6 +97,16 @@ flujo corre en el servidor (`@supabase/ssr`), la sesión vive en cookies
 httpOnly y `middleware.ts` la refresca en cada petición y manda a
 `/login` lo que no sea público (`lib/auth/rutas.ts`).
 
+**Una sola llamada a Supabase Auth por petición.** El middleware tiene
+que llamar a `getUser()` para refrescar la sesión; el usuario que
+devuelve ya está verificado, así que lo deja en una cabecera interna
+(`x-on-cue-sesion`, `lib/auth/sesion-base.ts`) y `getSesion()` la lee en
+vez de volver a preguntar. Antes eran dos idas y vueltas a Supabase por
+navegación. La cabecera que traiga el navegador se **borra** en todos
+los caminos del middleware (`middleware.test.ts` lo prueba con una
+falsificada), y `NextResponse.next({ request: { headers } })` sustituye
+las cabeceras que ve la aplicación, así que solo puede venir de él.
+
 Lo de «httpOnly» hay que decírselo a `@supabase/ssr`: por defecto
 escribe `sb-…-auth-token` **sin** `HttpOnly` y **sin** `Secure`, y
 dentro de esa cookie van el access token y el refresh token. Los dos
@@ -112,8 +122,10 @@ manda a `/login` a cualquier petición sin sesión que intente leer o
 escribir, aunque el middleware no la haya mirado (una server action,
 un route handler, una ruta pública). `DEMO_WORKSPACE_ID` solo existe en
 una copia **sin** llaves. Y si Supabase no contesta (red, 5xx, 429), no
-se convierte en «no hay sesión»: la pantalla cae en su `error.tsx` con
-«Reintentar».
+se convierte en «no hay sesión»: el middleware deja pasar la petición
+marcada como «sin verificar» —no la manda a `/login`, donde el POST de
+una server action se perdería en un 307— y la pantalla cae en su
+`error.tsx` con «Reintentar».
 
 ### Quién eres, y en qué espacio estás
 
@@ -123,8 +135,15 @@ Son dos cosas distintas y se resuelven por separado:
   `email_confirmed_at`; un usuario sin él no cuenta como sesión, ni en
   el middleware, ni en `getSesion`, ni en el callback—. La
   transacción fija `app.user_email` y la fila de `app_user` se busca con
-  `email = current_user_email()` (migración 0022). Nada que venga del
-  navegador entra en esa respuesta.
+  `email = current_user_email()` (migración
+  `*_sesion_correo_verificado.sql`). Nada que venga del navegador entra
+  en esa respuesta. Además la fila guarda `auth_user_id`, el id de la
+  cuenta de Supabase Auth que entró con ella la primera vez: si otra
+  cuenta llega con el mismo correo (un buzón de empresa reasignado, un
+  dominio que caducó), no hereda la fila ni sus espacios; `/login` dice
+  «Ese correo ya está ligado a otra cuenta» y el log del servidor lo
+  registra. Las filas que crea el seed nacen sin cuenta y se ligan en el
+  primer inicio de sesión.
 - **en qué espacio estás** sale de la cookie firmada `mc.workspace`,
   que es una **preferencia**: solo se respeta si ese espacio está en la
   lista que la base devuelve para tu correo. Una cookie falsificada no
@@ -147,6 +166,7 @@ en `platform/.env.local`) y en Vercel:
 | `SUPABASE_ANON_KEY` | igual, a `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No es un secreto: viaja al navegador por diseño |
 | `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
 | `APP_URL` | a qué origen vuelve el enlace del correo. Sin ella se deduce de las cabeceras de la petición |
+| `SUPPORT_EMAIL` | el correo de contacto que publica `/legal` (datos personales, soporte). Sin él, la página dice que se publicará; no se inventa ninguno |
 
 Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
 dice cuáles faltan y el resto sigue sirviendo `DEMO_WORKSPACE_ID`. Eso
@@ -190,14 +210,31 @@ En **Authentication → Emails → Templates**, en «Magic Link» **y** en
 <a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=email">Entrar a On Cue</a>
 ```
 
-La plantilla por defecto manda `?code=` (PKCE), y el verificador de ese
-código vive en una cookie del navegador donde se **pidió** el enlace. Si
-se pide en el portátil y se abre en el teléfono —o en el navegador
-interno de Gmail o de Outlook, que es lo normal—, no hay verificador y
-la entrada falla (`/login` lo dice: «Abre el enlace en el mismo
-navegador donde lo pediste…»). Con `token_hash` el enlace sirve en
-cualquier dispositivo; `/auth/callback` ya sabe canjearlo. El `&` va
-bien porque `{{ .RedirectTo }}` siempre trae ya su `?next=`.
+Por qué no la de por defecto: manda `?code=` (PKCE), y el verificador de
+ese código vive en una cookie del navegador donde se **pidió** el
+enlace. Si se pide en el portátil y se abre en el teléfono —o en el
+navegador interno de Gmail o de Outlook, que es lo normal—, no hay
+verificador y la entrada falla (`/login` lo dice: «Abre el enlace en el
+mismo navegador donde lo pediste…»). Con `token_hash` el enlace sirve
+en cualquier dispositivo. El `&` va bien porque `{{ .RedirectTo }}`
+siempre trae ya su `?next=`.
+
+**El enlace no abre la sesión al cargarse.** Un `token_hash` es de un
+solo uso, y los escáneres de enlaces del correo corporativo (Outlook
+Safe Links, Mimecast, habituales en agencias) abren con un GET todo
+enlace que llega, antes que la persona: si ese GET canjeara el token,
+ella vería «Ese enlace ya no sirve» sin haberlo tocado. Por eso
+`/auth/callback` con `token_hash` no canjea nada: reenvía a
+`/auth/confirm`, una pantalla con un solo botón, «Entrar a On Cue», que
+canjea por POST (`app/auth/confirm/acciones.ts`). Es lo que recomienda
+Supabase para enlaces de un solo uso. La plantilla de arriba no cambia:
+sigue apuntando a `{{ .RedirectTo }}` (que es `/auth/callback?next=…`)
+y el reenvío lo hace la aplicación.
+
+Si un enlace caducó o ya se usó, Supabase vuelve con
+`?error=access_denied&error_code=otp_expired`; `/login` dice «Ese enlace
+ya no sirve. Pide uno nuevo.», no «Se canceló la entrada» (ese texto es
+solo para `access_denied` sin `error_code`).
 
 Y en **Authentication → Sign In / Providers → Email**: proveedor de
 correo encendido, contraseñas **apagadas** y **Confirm email
@@ -212,6 +249,12 @@ responde 429 y `/login` lo dice con su propio texto («ya mandamos varios
 enlaces a ese correo…»). Para uso real hay que conectar un SMTP propio
 en **Project Settings → Auth → SMTP Settings**; hasta entonces, no
 probar el login en bucle.
+
+Además Supabase no deja pedir otro enlace para el **mismo correo**
+antes de 60 s (también 429). Por eso «Reenviar el enlace» sale
+desactivado con su cuenta atrás, como en Linear y Vercel; y si aun así
+el reenvío falla, el error aparece debajo de «Revisa tu correo» con el
+correo conservado, sin volver al formulario vacío.
 
 ### Cómo probarlo sin esperar un correo
 
@@ -236,16 +279,29 @@ curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
 
 De la respuesta salen `hashed_token` y `verification_type` —para quien
 no existía todavía es `signup`, no `magiclink`— y con los dos se abre
-`http://localhost:3100/auth/callback?token_hash=…&type=…`. Con el correo
-de la demo aparece «Laura · Cocina fácil» con sus facturas; con uno
-nuevo, un espacio vacío con el nombre sacado del correo. La clave de
+`http://localhost:3100/auth/callback?token_hash=…&type=…`, que lleva a
+`/auth/confirm`: se pulsa «Entrar a On Cue». Con el correo de la demo
+aparece «Laura · Cocina fácil» con sus facturas; con uno nuevo, un
+espacio vacío con el nombre sacado del correo. La clave de
 servicio no se usa en el código de la web: solo aquí, a mano.
 
 Lo mismo está cubierto sin red en las pruebas: `middleware.test.ts`
 (sin sesión, `/resumen` → `/login?next=%2Fresumen`),
 `lib/auth/acciones.test.ts` (el correo del seed entra a la creadora
-demo y no crea nada; cambiar de espacio cambia lo que se sirve) y
-`app/auth/callback/route.test.ts`.
+demo y no crea nada; cambiar de espacio cambia lo que se sirve; otra
+cuenta de Auth con el mismo correo no entra), `app/auth/callback/route.test.ts`
+y `app/auth/confirm/acciones.test.ts`.
+
+### Migraciones de esta pieza
+
+Dos, **sin aplicar en Supabase** hasta que las integre quien integra:
+`*_sesion_correo_verificado.sql` (la política «mi fila por el correo
+verificado» y `app_user.auth_user_id`) y `*_membership_alta_propia.sql`.
+Hoy llevan los números 0027 y 0028 porque van detrás de lo que otras
+ramas ya tomaron (la cabecera de la primera lo detalla). El código las
+cita por su nombre y no por su número: renumerarlas es mover dos
+archivos. Sin la primera, el inicio de sesión falla y el log de Vercel
+dice cuál falta.
 
 ## Reglas del marco
 

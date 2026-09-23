@@ -31,6 +31,7 @@
  * por defecto, que sería una firma que cualquiera puede reproducir.
  */
 import { currentMasterKey, deriveKey, keyringFromEnv, openSealedValue, sealValue } from "@mc/connectors";
+import type { Env } from "@/lib/auth/config";
 
 export const COOKIE_WORKSPACE = "mc.workspace";
 
@@ -51,8 +52,6 @@ export interface EspacioElegido {
   /** Correo de la sesión que lo eligió. */
   e: string;
 }
-
-export type Env = Readonly<Record<string, string | undefined>>;
 
 /** La clave del sello, o null si la máquina no tiene la clave maestra. */
 function sello(env: Env): Uint8Array | null {

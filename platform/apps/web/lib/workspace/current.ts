@@ -2,8 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { Identity } from "@mc/db";
-import type { MyWorkspace } from "@mc/db/queries/identidad";
-import { isAuthConfigured } from "@/lib/auth/config";
+import { AuthIdentityMismatchError, type MyWorkspace } from "@mc/db/queries/identidad";
+import { isAuthConfigured, type Env } from "@/lib/auth/config";
 import { getSesion, type Sesion } from "@/lib/auth/session";
 import { leerOCrearSesion } from "@/lib/auth/sincronizar";
 import { espacioDeLaCookie } from "./elegir";
@@ -19,7 +19,7 @@ import { espacioDeLaCookie } from "./elegir";
  *      sesión (ver abajo).
  *   2. ¿quién soy? Se resuelve SIEMPRE desde el correo verificado de la
  *      sesión: `withIdentity({ email })` y `email = current_user_email()`
- *      (política de 0022). Nunca desde la cookie.
+ *      (migración sesion_correo_verificado). Nunca desde la cookie.
  *   3. ¿a qué espacios pertenezco? Sale de membership, en la misma
  *      transacción, por `user_id = current_user_id()` (0019).
  *   4. ¿cuál sirvo? El de la cookie SI ESTÁ EN ESA LISTA, y si no el
@@ -63,8 +63,6 @@ import { espacioDeLaCookie } from "./elegir";
 export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type Env = Readonly<Record<string, string | undefined>>;
 
 /** Lo que una petición necesita saber antes de abrir una transacción. */
 export interface Contexto {
@@ -159,7 +157,19 @@ export const getCurrentContext = cache(async (): Promise<Contexto> => {
   // Quién soy y qué es mío, desde el correo verificado. Solo da de alta
   // si no hay absolutamente nada que leer (primer inicio de sesión, o
   // un callback que falló a medias).
-  const { userId, workspaces } = await leerOCrearSesion(sesion);
+  const mio = await leerOCrearSesion(sesion).catch((err: unknown) => {
+    // Otra cuenta de Auth con el correo de alguien (un buzón
+    // reasignado): no se le sirve nada. A /login con su texto, no a un
+    // error genérico; el callback ya no deja entrar así, esto cubre una
+    // sesión que existiera de antes.
+    if (err instanceof AuthIdentityMismatchError) {
+      console.error(`[auth] identidad en conflicto (${err.motivo}): cuenta de Auth ${sesion.authUserId}`);
+      return null;
+    }
+    throw err;
+  });
+  if (!mio) redirect("/login?error=identidad");
+  const { userId, workspaces } = mio;
 
   const preferido = await espacioDeLaCookie(sesion.email);
   const workspaceId = elegirWorkspaceId(preferido?.w ?? null, workspaces);

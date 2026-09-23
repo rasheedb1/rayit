@@ -6,7 +6,7 @@
  * porque responde justo lo que hay antes de tener uno. Por eso sus
  * lecturas reciben una IdentityTx (`db.withIdentity`, que fija
  * app.user_id y app.user_email) y no una WorkspaceTx: lo que puede ver
- * lo decide la RLS de app_user (0020, 0021, 0022) y la de membership
+ * lo decide la RLS de app_user (0020, 0021 y sesion_correo_verificado) y la de membership
  * (0019), no un filtro escrito aquí.
  *
  * El orden del primer inicio de sesión, y por qué es ese:
@@ -107,6 +107,50 @@ export async function freeSlug(tx: IdentityTx | WorkspaceTx, name: string): Prom
 // ---------------------------------------------------------------------
 
 /**
+ * Una cuenta de Supabase Auth distinta de la que es dueña de la fila de
+ * app_user de ese correo (migración sesion_correo_verificado,
+ * `auth_user_id`). Pasa cuando un buzón se reasigna: la cuenta anterior
+ * se borró en Auth y otra persona se registró con el mismo correo. La
+ * cuenta nueva NO hereda la fila ni sus membresías; quien llama lo deja
+ * en el log y cierra la sesión.
+ *
+ * No lleva el correo en el mensaje: va a los logs, y el id de app_user
+ * basta para encontrar la fila.
+ */
+export class AuthIdentityMismatchError extends Error {
+  readonly appUserId: string | null;
+  /**
+   * `correo_ajeno`: la fila de ese correo es de otra cuenta de Auth.
+   * `otro_correo`: esta cuenta de Auth ya tiene fila con OTRO correo (lo
+   * cambió en Supabase); el índice único de auth_user_id lo impide.
+   */
+  readonly motivo: 'correo_ajeno' | 'otro_correo';
+  constructor(appUserId: string | null, motivo: 'correo_ajeno' | 'otro_correo' = 'correo_ajeno', options?: { cause?: unknown }) {
+    super(
+      motivo === 'otro_correo'
+        ? 'Esta cuenta de Supabase Auth ya está ligada a otra fila de app_user con otro correo: cambiar de correo todavía no se admite.'
+        : appUserId
+          ? `La fila de app_user ${appUserId} pertenece a otra cuenta de Supabase Auth: no se entrega a esta sesión.`
+          : 'La fila de app_user de este correo pertenece a otra cuenta de Supabase Auth: no se entrega a esta sesión.',
+      options,
+    );
+    this.name = 'AuthIdentityMismatchError';
+    this.appUserId = appUserId;
+    this.motivo = motivo;
+  }
+}
+
+/** ¿Es el choque contra el índice único de app_user.auth_user_id? */
+function esOtroCorreo(err: unknown): boolean {
+  for (let e: unknown = err; e instanceof Error; e = e.cause) {
+    if (/app_user_auth_user_id_key/.test(e.message)) return true;
+    const c = (e as { constraint?: unknown }).constraint;
+    if (c === 'app_user_auth_user_id_key') return true;
+  }
+  return false;
+}
+
+/**
  * La fila de app_user del correo de la sesión; la crea si no existía.
  *
  * Una sola sentencia: el SELECT-y-si-no-INSERT tenía una carrera real
@@ -118,17 +162,41 @@ export async function freeSlug(tx: IdentityTx | WorkspaceTx, name: string): Prom
  *
  * El nombre solo se rellena si la fila no tenía: el que la persona
  * escribió en /cuenta manda sobre el que se deduce del correo.
+ *
+ * `authUserId` es el id de auth.users de la sesión. Se guarda la
+ * primera vez (la fila del seed o de una invitación llega vacía) y, a
+ * partir de ahí, el `setWhere` hace que el UPDATE solo ocurra si la
+ * fila es de ESA cuenta: con otra, Postgres no toca nada, RETURNING no
+ * devuelve fila y esto lanza AuthIdentityMismatchError. La comprobación
+ * vive en la sentencia y no en un SELECT previo para que dos callbacks
+ * a la vez no puedan colarse entre la lectura y la escritura.
+ *
+ * El id de la fila NUEVA lo pone quien llama, en la identidad de la
+ * transacción: `withIdentity({ email, userId: randomUUID() }, …)`. Es lo
+ * que pide la política de alta de app_user del pase de endurecimiento
+ * (rasheed/endurecer-db, 0025 §4: `WITH CHECK (id = current_user_id())`,
+ * «registrarse es crear TU fila»), y con la de hoy (WITH CHECK (true))
+ * da igual. Si el correo ya tenía fila, ese id se descarta y se devuelve
+ * el de la fila que ya existía: quien llama usa SIEMPRE el id devuelto.
  */
 export async function upsertAppUserPorCorreo(
   tx: IdentityTx,
-  { email, name, locale }: { email: string; name?: string | null; locale?: string },
+  { email, name, locale, authUserId }: { email: string; name?: string | null; locale?: string; authUserId: string },
 ): Promise<AppUser> {
   const limpio = email.trim();
+  const idNuevo = tx.identity.userId;
+  if (!idNuevo) {
+    throw new Error(
+      'upsertAppUserPorCorreo necesita withIdentity({ email, userId: <id nuevo> }): la fila se crea con el id de la transacción.',
+    );
+  }
   const [row] = await tx.db
     .insert(appUser)
     .values({
+      id: idNuevo,
       email: limpio,
       name: name ?? nameFromEmail(limpio),
+      authUserId,
       ...(locale ? { locale } : {}),
       lastSeenAt: sql`now()`,
     })
@@ -137,11 +205,17 @@ export async function upsertAppUserPorCorreo(
       set: {
         lastSeenAt: sql`now()`,
         name: sql`coalesce(${appUser.name}, excluded.name)`,
+        authUserId: sql`coalesce(${appUser.authUserId}, excluded.auth_user_id)`,
         updatedAt: sql`now()`,
       },
+      setWhere: sql`${appUser.authUserId} IS NULL OR ${appUser.authUserId} = excluded.auth_user_id`,
     })
-    .returning();
-  if (!row) throw new Error(`No se pudo registrar la sesión de ${limpio}: la base no devolvió la fila de app_user.`);
+    .returning()
+    .catch((err: unknown) => {
+      if (esOtroCorreo(err)) throw new AuthIdentityMismatchError(null, 'otro_correo', { cause: err });
+      throw err;
+    });
+  if (!row) throw new AuthIdentityMismatchError(null);
   return row;
 }
 
@@ -157,21 +231,29 @@ export async function getAppUser(tx: IdentityTx | WorkspaceTx, id: string): Prom
  * El correo no se pasa por parámetro a propósito: se compara contra
  * `current_user_email()`, que es lo que `withIdentity` fijó en la
  * transacción a partir de la sesión de Supabase (política
- * app_user_read_self_email, 0022). Así el id de app_user que la web
- * usa como identidad no puede venir de nada que mande el navegador —ni
- * de una cookie firmada—, sino solo del correo que el proveedor
- * verificó.
+ * app_user_read_self_email, migración sesion_correo_verificado). Así el
+ * id de app_user que la web usa como identidad no puede venir de nada
+ * que mande el navegador —ni de una cookie firmada—, sino solo del
+ * correo que el proveedor verificó.
+ *
+ * Y el correo no basta: si la fila ya está ligada a una cuenta de
+ * Supabase Auth (`auth_user_id`) y no es la de esta sesión, lanza
+ * AuthIdentityMismatchError en vez de devolverla. Una fila todavía sin
+ * cuenta (la del seed, la de una invitación) se devuelve: la enlaza
+ * /auth/callback la primera vez, y leer no escribe.
  *
  * Es el camino de LECTURA del inicio de sesión: un SELECT por un índice
  * único, sin UPDATE, para que pintar una pantalla no escriba en la base.
  */
-export async function getMyAppUserByVerifiedEmail(tx: IdentityTx): Promise<AppUser | null> {
+export async function getMyAppUserByVerifiedEmail(tx: IdentityTx, authUserId: string): Promise<AppUser | null> {
   const [row] = await tx.db
     .select()
     .from(appUser)
     .where(sql`${appUser.email} = current_user_email()`)
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  if (row.authUserId && row.authUserId !== authUserId) throw new AuthIdentityMismatchError(row.id);
+  return row;
 }
 
 /** Quién soy y a qué espacios pertenezco. */
@@ -182,8 +264,8 @@ export interface MiSesion {
 
 /**
  * Las dos preguntas de cada petición con sesión, en UNA transacción y
- * sin escribir: quién soy (por el correo verificado) y a qué espacios
- * pertenezco.
+ * sin escribir: quién soy (por el correo verificado, y solo si la fila
+ * es de esta cuenta de Auth) y a qué espacios pertenezco.
  *
  * El `set_config` de en medio es necesario: la transacción se abre
  * sabiendo solo el correo, y la política de membership filtra por
@@ -193,8 +275,8 @@ export interface MiSesion {
  * Devuelve null si ese correo todavía no tiene fila: es el primer
  * inicio de sesión, y de darlo de alta se encarga quien llama.
  */
-export async function getMyIdentityAndWorkspaces(tx: IdentityTx): Promise<MiSesion | null> {
-  const user = await getMyAppUserByVerifiedEmail(tx);
+export async function getMyIdentityAndWorkspaces(tx: IdentityTx, authUserId: string): Promise<MiSesion | null> {
+  const user = await getMyAppUserByVerifiedEmail(tx, authUserId);
   if (!user) return null;
   await tx.query("SELECT set_config('app.user_id', $1, true)", [user.id]);
   const workspaces = await listMyWorkspaces(tx);
@@ -222,7 +304,7 @@ export async function lockByEmail(tx: IdentityTx | WorkspaceTx, email: string): 
 }
 
 /**
- * Cambia MI nombre. La política de UPDATE de app_user (0021, 0022) es
+ * Cambia MI nombre. La política de UPDATE de app_user (0021 y sesion_correo_verificado) es
  * la que comprueba que la fila sea mía; aquí no se filtra por sesión a
  * mano, y por eso no hay forma de editar la de otra persona.
  */

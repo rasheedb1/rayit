@@ -8,10 +8,14 @@
  * salen del workspace (moneda, zona, locale) y se formatean con Intl en
  * lib/format.ts.
  */
+import { MAX_NOMBRE } from "./reglas";
+
 export const MESSAGES = {
   marca: "On Cue",
 
   login: {
+    /** El <title> de la pestaña. */
+    meta: "Entrar",
     titulo: "Entra a On Cue",
     descripcion: "Te mandamos un enlace al correo. Sin contraseñas.",
     correo: "Correo",
@@ -38,6 +42,12 @@ export const MESSAGES = {
       descripcion: "Te mandamos un enlace para entrar. Se abre una sola vez y caduca en una hora.",
       spam: "Si no llega en un par de minutos, mira en correo no deseado.",
       reenviar: "Reenviar el enlace",
+      /**
+       * Supabase no deja pedir otro enlace para el mismo correo hasta
+       * pasados 60 s; el botón espera ese minuto a la vista, como en
+       * Linear y Vercel, en vez de dejar pulsar y devolver un error.
+       */
+      reenviarEn: (segundos: number) => `Reenviar en ${segundos} s`,
       reenviado: "Enlace reenviado.",
       cambiar: "Usar otro correo",
     },
@@ -68,10 +78,32 @@ export const MESSAGES = {
         "Abre el enlace en el mismo navegador donde lo pediste, o pide uno nuevo desde aquí y ábrelo en este.",
       cancelado: "Se canceló la entrada.",
       sesion: "No pudimos abrir tu sesión. Vuelve a intentarlo.",
+      // Otra cuenta con el mismo correo: un buzón reasignado, o un
+      // correo que se cambió en el proveedor. No se entra, y no se dice
+      // de quién es la otra cuenta.
+      identidad:
+        "Ese correo ya está ligado a otra cuenta de On Cue. Escríbenos desde la página de términos y privacidad y lo resolvemos.",
     },
   },
 
+  /**
+   * /auth/confirm: la parada de un clic entre el correo y la sesión. El
+   * enlace del correo NO abre la sesión al cargarse, porque los
+   * escáneres de enlaces del correo corporativo (Outlook Safe Links,
+   * Mimecast) lo abren antes que la persona y lo gastaban.
+   */
+  confirmar: {
+    meta: "Confirmar la entrada",
+    titulo: "Entra a On Cue",
+    descripcion: "Pulsa el botón para terminar de entrar. El enlace sirve una sola vez.",
+    boton: "Entrar a On Cue",
+    entrando: "Entrando…",
+    invalido: "Este enlace está incompleto. Pide uno nuevo.",
+    pedirOtro: "Pedir otro enlace",
+  },
+
   cuenta: {
+    meta: "Tu cuenta",
     titulo: "Tu cuenta",
     descripcion: "Cómo te ve el equipo y a qué correo llegan los enlaces de acceso.",
     nombre: "Nombre",
@@ -83,7 +115,7 @@ export const MESSAGES = {
     guardado: "Guardado.",
     errores: {
       nombreVacio: "Escribe tu nombre.",
-      nombreLargo: "El nombre no puede pasar de 80 caracteres.",
+      nombreLargo: `El nombre no puede pasar de ${MAX_NOMBRE} caracteres.`,
       generico: "No pudimos guardar el cambio. Vuelve a intentarlo.",
     },
     sesion: "Sesión",
@@ -111,7 +143,7 @@ export const MESSAGES = {
         "Quien administra un espacio puede renombrarlo. Si tu ficha de creador lleva el mismo nombre que el espacio, cambia con él.",
       errores: {
         nombreVacio: "Escribe un nombre para el espacio.",
-        nombreLargo: "El nombre no puede pasar de 80 caracteres.",
+        nombreLargo: `El nombre no puede pasar de ${MAX_NOMBRE} caracteres.`,
         sinPermiso: "Solo quien administra el espacio puede cambiarle el nombre.",
         generico: "No pudimos cambiar el nombre. Vuelve a intentarlo.",
       },
@@ -175,13 +207,15 @@ export const MESSAGES = {
     crearNombre: "Nombre del espacio",
     crearBoton: "Crear",
     creando: "Creando…",
+    cancelar: "Cancelar",
     cuenta: "Tu cuenta",
     cerrarSesion: "Cerrar sesión",
     errores: {
       sinMembresia: "Ese espacio ya no es tuyo.",
-      sinFirma: "No podemos recordar el espacio elegido en esta máquina: falta TOKEN_ENCRYPTION_KEY (make db.unlock).",
-      creadoSinRecordar:
-        "El espacio se creó, pero no podemos recordarlo en esta máquina: falta TOKEN_ENCRYPTION_KEY (make db.unlock). Entra a él desde la lista.",
+      // Lo que ve la persona. El motivo técnico (la clave de firma que
+      // falta en el servidor) va al log, desde lib/auth/acciones.ts.
+      sinFirma: "No pudimos recordar el espacio elegido. Vuelve a intentarlo.",
+      creadoSinRecordar: "El espacio se creó, pero no pudimos abrirlo. Elígelo en la lista.",
       nombreVacio: "Escribe un nombre.",
       limite: (tope: number) => `Ya eres propietario/a de ${tope} espacios, el máximo por persona. Escríbenos si necesitas más.`,
       generico: "No pudimos cambiar de espacio. Vuelve a intentarlo.",
@@ -194,30 +228,43 @@ export const MESSAGES = {
   },
 
   /**
-   * La página pública a la que apunta el pie de /login. No es un texto
-   * legal: es lo que hoy es cierto, escrito sin adornos, hasta que haya
-   * unos términos y una política redactados por alguien que sepa. Vale
-   * más una frase honesta que una plantilla copiada.
+   * La página pública a la que apunta el pie de /login.
+   *
+   * PENDIENTE DE REDACCIÓN (historia CIM-9 en content/backlog.ts, con
+   * dueño y fecha: antes del primer cliente que pague). Esto no son
+   * unos términos: es lo que hoy es cierto, dicho sin prometer lo que
+   * todavía no está escrito. Lo que NO puede decir es que usar On Cue
+   * «no obliga a nada»: eso es una cláusula, y mala.
+   *
+   * El correo de contacto no se escribe aquí: sale de SUPPORT_EMAIL
+   * (lib/soporte.ts), porque cambia por despliegue y no es texto.
    */
   legal: {
+    meta: "Términos y privacidad",
     titulo: "Términos y privacidad",
-    descripcion: "On Cue está en construcción. Esto es lo que hoy es cierto, sin letra pequeña.",
+    descripcion: "On Cue está en construcción. Esto es lo que hoy es cierto sobre tus datos.",
+    pendiente:
+      "Los términos de servicio y la política de privacidad completos están en redacción y se publicarán en esta página antes de que abramos On Cue a clientes de pago.",
     terminos: {
       id: "terminos",
       titulo: "Términos",
       parrafos: [
-        "Todavía no hay unos términos de servicio redactados. Mientras no los haya, usar On Cue no te obliga a nada y tampoco te promete disponibilidad: es software en desarrollo y puede cambiar o dejar de funcionar sin aviso.",
-        "Los datos que subas o conectes son tuyos. Puedes pedir que los borremos escribiendo a rasheed@y.uno.",
+        "On Cue es software en desarrollo y puede cambiar mientras lo construimos.",
+        "Los datos que subas o conectes son tuyos.",
       ],
     },
     privacidad: {
       id: "privacidad",
       titulo: "Privacidad",
       parrafos: [
-        "Guardamos tu correo para identificarte y para mandarte el enlace de acceso. Nada más: no hay contraseñas que guardar y no vendemos ni cedemos esa dirección.",
+        "Guardamos tu correo para identificarte y para mandarte el enlace de acceso. No hay contraseñas que guardar y no vendemos ni cedemos esa dirección.",
         "Si conectas una cuenta de TikTok, Instagram, Facebook o YouTube, guardamos sus credenciales cifradas y las métricas que esa plataforma nos deja leer, para enseñártelas a ti y a nadie más.",
-        "Escribe a rasheed@y.uno para pedir una copia de tus datos o su borrado.",
       ],
+    },
+    contacto: {
+      titulo: "Contacto",
+      conCorreo: "Para pedir una copia de tus datos, su borrado o cualquier aclaración, escribe a",
+      sinCorreo: "El correo de contacto se publicará aquí junto con los términos.",
     },
     volver: "Volver a entrar",
   },

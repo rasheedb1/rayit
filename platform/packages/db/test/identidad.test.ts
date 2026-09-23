@@ -2,29 +2,33 @@
  * La costura de la sesión (CIM-3) contra las políticas reales.
  *
  * Todo corre sobre Postgres embebido como mc_app, sin BYPASSRLS y con
- * las migraciones del repositorio aplicadas: si 0019, 0020, 0021, 0022 o 0023
- * cambian, esto se rompe. Lo que se comprueba:
+ * las migraciones del repositorio aplicadas: si 0019, 0020, 0021,
+ * sesion_correo_verificado o membership_alta_propia cambian, esto se
+ * rompe. Lo que se comprueba:
  *
  *   - con el correo fijado se encuentra (o se crea) la propia fila de
  *     app_user, y solo la propia: el correo de otra persona sigue
  *     invisible;
  *   - el alta es idempotente y no choca contra el único de email;
+ *   - la fila queda ligada a la cuenta de Auth que entró primero: otra
+ *     cuenta con el mismo correo no la hereda, ni al leer ni al entrar;
  *   - «a qué espacios pertenezco» sale de membership como mc_app, sin
  *     asWorker, y no enseña los de nadie más;
  *   - el espacio nuevo nace completo (workspace, membresía de dueña,
  *     creator_profile) dentro de una sola transacción;
  *   - sin identidad fijada, ninguna de esas lecturas devuelve nada;
- *   - (0023) fijar mi id me deja LEER mis membresías, no escribir: no
+ *   - (membership_alta_propia) fijar mi id me deja LEER mis membresías, no escribir: no
  *     me cuelgo de un espacio ajeno, no cuelgo a otra persona del mío,
  *     y no me cambio el rol;
  *   - renombrar un espacio arrastra la ficha que nació con su nombre.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { appUser, creatorProfile, eq, membership, workspace } from '../src/index.ts';
 import {
-  createCreatorWorkspace, freeSlug, getAppUser, isMemberOf, listMyWorkspaces, nameFromEmail, renameWorkspace, slugify,
-  updateMyName, upsertAppUserPorCorreo,
+  AuthIdentityMismatchError, createCreatorWorkspace, freeSlug, getAppUser, getMyIdentityAndWorkspaces, isMemberOf,
+  listMyWorkspaces, nameFromEmail, renameWorkspace, slugify, updateMyName, upsertAppUserPorCorreo,
 } from '../src/queries/identidad.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -37,6 +41,10 @@ function esViolacionRls(err: unknown): boolean {
 
 const CORREO_A = 'ana@ejemplo.test';
 const CORREO_B = 'bruno@ejemplo.test';
+/** Ids de auth.users (Supabase Auth), que NO son los de app_user. */
+const AUTH_A = '0000000a-0000-4000-8000-00000000000a';
+const AUTH_B = '0000000a-0000-4000-8000-00000000000b';
+const AUTH_INTRUSA = '0000000a-0000-4000-8000-0000000000ff';
 const WS_NUEVO = '0000000f-0000-4000-8000-000000000001';
 
 let t: TestDb;
@@ -74,18 +82,19 @@ describe('nombres y slugs a partir del correo', () => {
 
 describe('app_user con el correo de la sesión', () => {
   test('crea la fila la primera vez y la devuelve la segunda', async () => {
-    const primera = await t.db.withIdentity({ email: CORREO_A }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_A }));
+    const primera = await t.db.withIdentity({ email: CORREO_A, userId: randomUUID() }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_A, authUserId: AUTH_A }));
     idA = primera.id;
+    assert.equal(primera.authUserId, AUTH_A);
     assert.equal(primera.email, CORREO_A);
     assert.equal(primera.name, 'Ana');
 
     // Mismo correo con otras mayúsculas: citext, así que es la misma persona.
-    const segunda = await t.db.withIdentity({ email: 'ANA@Ejemplo.test' }, (tx) =>
-      upsertAppUserPorCorreo(tx, { email: 'ANA@Ejemplo.test' }),
+    const segunda = await t.db.withIdentity({ email: 'ANA@Ejemplo.test', userId: randomUUID() }, (tx) =>
+      upsertAppUserPorCorreo(tx, { email: 'ANA@Ejemplo.test', authUserId: AUTH_A }),
     );
     assert.equal(segunda.id, idA);
 
-    const otra = await t.db.withIdentity({ email: CORREO_B }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_B }));
+    const otra = await t.db.withIdentity({ email: CORREO_B, userId: randomUUID() }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_B, authUserId: AUTH_B }));
     idB = otra.id;
     assert.notEqual(idB, idA);
   });
@@ -119,10 +128,63 @@ describe('app_user con el correo de la sesión', () => {
   });
 
   test('el alta no pisa un nombre ya escrito', async () => {
-    const otra = await t.db.withIdentity({ email: CORREO_A }, (tx) =>
-      upsertAppUserPorCorreo(tx, { email: CORREO_A, name: 'Del correo' }),
+    const otra = await t.db.withIdentity({ email: CORREO_A, userId: randomUUID() }, (tx) =>
+      upsertAppUserPorCorreo(tx, { email: CORREO_A, name: 'Del correo', authUserId: AUTH_A }),
     );
     assert.equal(otra.name, 'Ana Restrepo');
+  });
+});
+
+describe('la fila es de la cuenta de Auth que entró primero', () => {
+  test('otra cuenta con el mismo correo no hereda la fila al LEER', async () => {
+    // El buzón se reasignó: la cuenta de Auth vieja se borró y otra
+    // persona se registró con el mismo correo. Su sesión trae otro id.
+    await assert.rejects(
+      () => t.db.withIdentity({ email: CORREO_A }, (tx) => getMyIdentityAndWorkspaces(tx, AUTH_INTRUSA)),
+      (err: unknown) => err instanceof AuthIdentityMismatchError && err.appUserId === idA,
+    );
+    // La dueña sigue entrando.
+    const mia = await t.db.withIdentity({ email: CORREO_A }, (tx) => getMyIdentityAndWorkspaces(tx, AUTH_A));
+    assert.equal(mia?.user.id, idA);
+  });
+
+  test('ni al ENTRAR: el upsert no toca la fila y lanza', async () => {
+    await assert.rejects(
+      () => t.db.withIdentity({ email: CORREO_A, userId: randomUUID() }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_A, authUserId: AUTH_INTRUSA })),
+      AuthIdentityMismatchError,
+    );
+    const sigue = await t.db.withIdentity({ email: CORREO_A, userId: idA }, (tx) => getAppUser(tx, idA));
+    assert.equal(sigue?.authUserId, AUTH_A);
+  });
+
+  test('una fila sin cuenta todavía (seed, invitación) se enlaza con la primera que entra', async () => {
+    const correo = 'invitada@ejemplo.test';
+    // Así la deja un seed: sin auth_user_id.
+    const idInvitada = randomUUID();
+    await t.db.withIdentity({ email: correo, userId: idInvitada }, (tx) => tx.db.insert(appUser).values({ id: idInvitada, email: correo }));
+    const leida = await t.db.withIdentity({ email: correo }, (tx) => getMyIdentityAndWorkspaces(tx, AUTH_INTRUSA));
+    assert.equal(leida?.user.authUserId, null, 'leer no escribe');
+    const enlazada = await t.db.withIdentity({ email: correo, userId: randomUUID() }, (tx) =>
+      upsertAppUserPorCorreo(tx, { email: correo, authUserId: AUTH_INTRUSA }),
+    );
+    assert.equal(enlazada.authUserId, AUTH_INTRUSA);
+  });
+
+  test('sin id nuevo en la identidad no hay alta (la política de endurecer-db lo exige)', async () => {
+    await assert.rejects(
+      () => t.db.withIdentity({ email: CORREO_B }, (tx) => upsertAppUserPorCorreo(tx, { email: CORREO_B, authUserId: AUTH_B })),
+      /userId: <id nuevo>/,
+    );
+  });
+
+  test('la misma cuenta de Auth no puede tener dos filas (cambio de correo en Supabase)', async () => {
+    await assert.rejects(
+      () =>
+        t.db.withIdentity({ email: 'ana.nueva@ejemplo.test', userId: randomUUID() }, (tx) =>
+          upsertAppUserPorCorreo(tx, { email: 'ana.nueva@ejemplo.test', authUserId: AUTH_A }),
+        ),
+      (err: unknown) => err instanceof AuthIdentityMismatchError && err.motivo === 'otro_correo',
+    );
   });
 });
 
@@ -187,7 +249,7 @@ describe('espacios de la persona que entra', () => {
     assert.deepEqual(filas, []);
   });
 
-  test('con mi userId no puedo insertar membresía en un espacio ajeno (0023)', async () => {
+  test('con mi userId no puedo insertar membresía en un espacio ajeno (membership_alta_propia)', async () => {
     // Era la rama «user_id = current_user_id()» de 0019, FOR ALL y sin
     // WITH CHECK: con CIM-3 fijando app.user_id, esto pasaba sin error.
     await assert.rejects(
@@ -200,7 +262,7 @@ describe('espacios de la persona que entra', () => {
     assert.equal(await t.db.withIdentity({ userId: idB }, (tx) => isMemberOf(tx, WS_NUEVO, idB)), false);
   });
 
-  test('dentro de mi espacio no puedo dar de alta a otra persona (0023)', async () => {
+  test('dentro de mi espacio no puedo dar de alta a otra persona (membership_alta_propia)', async () => {
     await assert.rejects(
       () =>
         t.db.withWorkspace(
@@ -212,7 +274,7 @@ describe('espacios de la persona que entra', () => {
     );
   });
 
-  test('ni cambiar roles ni borrar membresías desde la web (0023)', async () => {
+  test('ni cambiar roles ni borrar membresías desde la web (membership_alta_propia)', async () => {
     // Sin política de UPDATE ni de DELETE, las dos sentencias no ven
     // ninguna fila: no fallan, pero no tocan nada.
     const cambiadas = await t.db.withWorkspace(

@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0023 · membership: leer lo mío, escribir solo en el espacio fijado (CIM-3)
+-- 0028 · membership: leer lo mío, escribir solo en el espacio fijado (CIM-3)
 -- ---------------------------------------------------------------------
 -- 0019 dejó en membership UNA política, FOR ALL y sin WITH CHECK:
 --
@@ -42,16 +42,18 @@
 -- como mío (lib/workspace/current.ts) o uno que acaba de crear.
 --
 -- CONVIVENCIA con el pase de endurecimiento (rama rasheed/endurecer-db,
--- su 0022_aislamiento_por_defecto.sql): parte esta misma política con
--- los MISMOS nombres y las MISMAS condiciones. Por eso aquí todo va con
--- DROP … IF EXISTS antes de crear: da igual cuál de las dos se aplique
--- primero, el estado final es uno solo (comprobado en PGlite con las
--- dos). NUMERACIÓN: en esta rama las de CIM-3 son 0022 y 0023 porque
--- db/migrations no admite huecos (packages/db/test/aplicar.test.ts),
--- pero endurecer-db y COT-1 también reclaman el 0022. En la
--- integración van DETRÁS de esas dos, renumeradas al siguiente número
--- libre, y ANTES de aplicar nada en Supabase: el runner guarda el
--- nombre del archivo y una aplicada ya no se renombra.
+-- su 0024_aislamiento_por_defecto.sql): parte esta misma política con
+-- los MISMOS nombres y las MISMAS condiciones, pero la crea sin
+-- IF EXISTS (DROP POLICY membership_ws_isolation a secas). Por eso esta
+-- va DETRÁS: aquí todo lleva DROP … IF EXISTS antes de crear, así que
+-- sobre una base con 0024 aplicada deja el mismo estado final, y el
+-- GRANT INSERT de abajo es posterior al REVOKE de 0024 §7, que es lo
+-- que el alta del primer espacio necesita. Comprobado en PGlite.
+--
+-- NUMERACIÓN: ver la cabecera de 0027_sesion_correo_verificado.sql. En
+-- corto: 0022 ya está en Supabase (main), 0023 es de ACC-3, 0024 y 0025
+-- de endurecer-db, 0026 de COT-1; las de CIM-3 van al siguiente número
+-- libre DESPUÉS de todo eso, y se renumeran ANTES de aplicar nada.
 -- =====================================================================
 
 DROP POLICY IF EXISTS membership_ws_isolation ON membership;

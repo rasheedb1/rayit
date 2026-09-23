@@ -16,8 +16,9 @@
  *      función. Las interfaces no cuentan porque no existen compiladas;
  *      una constante, sí;
  *   2. `enviarEnlace` de verdad, con un Supabase de mentira: correo
- *      inválido, «usar otro correo», el 429 del límite de correo y el
- *      camino feliz.
+ *      inválido, «usar otro correo», el 429 del límite de correo, el
+ *      camino feliz y (ronda 4) un «reenviar» que falla sin sacar a la
+ *      persona de «Revisa tu correo».
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -98,7 +99,7 @@ describe("enviarEnlace", () => {
 
   test("el camino feliz deja la pantalla en «revisa tu correo», con el destino saneado", async () => {
     const estado = await enviarEnlace(INICIAL, form({ email: " Ana@Ejemplo.test ", next: "/finanzas" }));
-    expect(estado).toEqual({ estado: "enviado", email: "Ana@Ejemplo.test", reenviado: false });
+    expect(estado).toEqual({ estado: "enviado", email: "Ana@Ejemplo.test", reenviado: false, enviadoEn: expect.any(Number) });
     expect(signInWithOtp).toHaveBeenCalledTimes(1);
     const args = signInWithOtp.mock.calls[0]![0] as { email: string; options: { emailRedirectTo: string } };
     expect(args.email).toBe("Ana@Ejemplo.test");
@@ -118,7 +119,32 @@ describe("enviarEnlace", () => {
       { estado: "enviado", email: "ana@ejemplo.test" },
       form({ email: "ana@ejemplo.test", accion: "reenviar" }),
     );
-    expect(estado).toEqual({ estado: "enviado", email: "ana@ejemplo.test", reenviado: true });
+    expect(estado).toEqual({ estado: "enviado", email: "ana@ejemplo.test", reenviado: true, enviadoEn: expect.any(Number) });
+  });
+
+  test("reenviar con 429 se queda en «enviado», con el correo, el error y la misma cuenta atrás", async () => {
+    signInWithOtp.mockResolvedValue({ error: { status: 429, message: "For security purposes, you can only request this after 42 seconds." } });
+    const estado = await enviarEnlace(
+      { estado: "enviado", email: "ana@ejemplo.test", enviadoEn: 1_700_000_000_000 },
+      form({ email: "ana@ejemplo.test", accion: "reenviar", enviadoEn: "1700000000000" }),
+    );
+    expect(estado).toEqual({
+      estado: "enviado",
+      email: "ana@ejemplo.test",
+      error: MESSAGES.login.errores.limite,
+      enviadoEn: 1_700_000_000_000,
+    });
+  });
+
+  test("reenviar con cualquier otro fallo tampoco vuelve al formulario vacío", async () => {
+    signInWithOtp.mockResolvedValue({ error: { status: 500, message: "boom" } });
+    const estado = await enviarEnlace(
+      { estado: "enviado", email: "ana@ejemplo.test" },
+      form({ email: "ana@ejemplo.test", accion: "reenviar" }),
+    );
+    expect(estado.estado).toBe("enviado");
+    expect(estado.email).toBe("ana@ejemplo.test");
+    expect(estado.error).toBe(MESSAGES.login.errores.generico);
   });
 
   test("el 429 del correo integrado tiene su propio texto", async () => {
