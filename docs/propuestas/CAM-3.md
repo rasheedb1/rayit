@@ -13,7 +13,7 @@ desde `origin/main` (`29460e3`), worktree `rayit-cam3`.
 
 | Qué | Dónde | Estado |
 |---|---|---|
-| Aritmética del ritmo de seguidores (`ritmoSeguidores`), ventana de lectura del job (`brandSnapshotWindow`), razones por las que una lectura no trae cifra (`BRAND_SNAPSHOT_REASONS`) | `packages/core/src/campanas.ts` + `test/campanas.test.ts` | mío |
+| Aritmética del ritmo de seguidores (`ritmoSeguidores`), ventana de lectura del job (`isBrandSnapshotDue`), razones por las que una lectura no trae cifra (`BRAND_NO_DATA_REASONS`) | `packages/core/src/campanas.ts` + `test/campanas.test.ts` | mío |
 | `listBrandFollowers` (serie + ritmo, unida a `campaign`), `recordBrandSnapshot` (un INSERT para la web y para el worker) | `packages/db/src/queries/campanas.ts` + `test/campanas.test.ts` | mío |
 | Privilegio de INSERT de `mc_app` sobre `brand_account_snapshot` y su política vía `EXISTS campaign` | `db/migrations/0034_brand_snapshot_desde_la_web.sql` + `packages/db/src/esquema.ts` (la fila de `PRIVILEGIOS_DE_LA_APP`) | migración nueva con precedente (0014, 0015, 0016, 0022): pasa `make db.check` y `make db.guardia`. **Ver 0.2.8** |
 | Job `brand.snapshot` | `apps/worker/src/jobs/campanas/brand-snapshot.ts`, `index.ts`; una línea en `jobs/index.ts`; `test/brand-snapshot.test.ts` | carpeta nueva (§3.2 del backlog la daba por creada) |
@@ -57,15 +57,29 @@ quien integra, nunca yo).
      cifras; un hueco de un día no cambia la tasa porque es un promedio
      entre dos lecturas reales).
    - Serie vacía, o sin lecturas dentro de la ventana → `null`.
-2. **Una marca en varias campañas del mismo workspace.** La fila es única
-   por `(company_id, platform_id, day)` (0008), así que un snapshot sirve
-   a todas las campañas de esa empresa: `campaign_id` guarda la que lo
-   pidió (la más antigua por `starts_on` entre las que estaban en ventana
-   ese día, o `NULL` en el seed). `listBrandFollowers` lee por
-   `(company_id, platform_id)` de la campaña y no por `campaign_id`; la
-   prueba crea una segunda campaña de Café Alma y comprueba que ve la
-   misma serie. Entre workspaces no hay conflicto: desde 0024/0025 cada
-   workspace tiene su propia ficha de `company`.
+2. **Una marca en varias campañas del mismo workspace: una fila por
+   campaña, la historia se lee por empresa.** La historia proponía una
+   fila por `(company_id, platform_id, day)` compartida por todas las
+   campañas con `campaign_id` = la que la pidió. La guardia de `@mc/db`
+   lo rechaza en cuanto `mc_app` inserta: `company` tiene filas de
+   catálogo (sin dueño, 0025) que ven todos los workspaces, así que ese
+   único es global entre inquilinos (0026 §2: el 23505 no pasa por RLS;
+   dos workspaces con campaña sobre la misma marca del catálogo
+   chocarían y la lectura de uno quedaría bajo la campaña del otro,
+   invisible para el primero). Por eso 0034 cambia la unicidad a
+   `(campaign_id, platform_id, day)` (y `(company_id, platform_id, day)`
+   solo para las filas sin campaña, las del seed). El job hace UNA
+   llamada por (workspace, empresa, red, handle) y deja una fila por
+   campaña en ventana; `listBrandFollowers` lee por `company_id` de la
+   campaña a través de `brand_account_snapshot` (RLS por la campaña de
+   cada fila) con `DISTINCT ON (platform, day)`, así que la segunda
+   campaña de Café Alma ve la historia de la primera. La prueba lo
+   comprueba. Descartado: declarar el único global «porque en la
+   práctica cada workspace tiene su copia de la empresa» (no vale para
+   las del catálogo) o escribir filas sin campaña para las marcas del
+   catálogo (una fila global derivada de una campaña privada deja
+   inferir quién mide a quién: `politicas.ts`, «lo global del radar sale
+   de fuentes públicas»).
 3. **El job no reconstruye el pasado.** `business_discovery` y
    `channels.list` dan solo el conteo de hoy, así que la línea base
    existe si la campaña se creó con tiempo. Si no, la curva empieza cuando
@@ -106,29 +120,36 @@ quien integra, nunca yo).
    @…»). No se vuelve a llamar a oEmbed cada día para eso: la fila del
    día se escribe sin llamada. Descartado: no escribir nada (la ficha no
    podría distinguir «sin fuente» de «el job no corrió»).
-8. **Migración 0034 · `mc_app` inserta en `brand_account_snapshot`.**
-   Hoy `mc_app` solo tiene SELECT (0024 §7.2, 0029) y la política de
-   INSERT de 0029 es `TO CURRENT_USER` (el seed). Sin INSERT no existe
-   «Actualizar ahora» desde la web, que es el punto (6) de la historia.
-   La migración da `INSERT` (no UPDATE ni DELETE: append-only como
+8. **Migración 0034 · unicidad por campaña y `mc_app` inserta en
+   `brand_account_snapshot`.** Hoy `mc_app` solo tiene SELECT (0024 §7.2,
+   0029) y la política de INSERT de 0029 es `TO CURRENT_USER` (el seed).
+   Sin INSERT no existe «Actualizar ahora» desde la web, que es el punto
+   (6) de la historia. La migración (a) cambia la unicidad como dice la
+   decisión 2, (b) da `INSERT` (no UPDATE ni DELETE: append-only como
    `account_metric_snapshot` en 0025 §5), `USAGE` sobre
-   `brand_account_snapshot_id_seq` (0026 §4: USAGE solo donde inserta) y
+   `brand_account_snapshot_id_seq` (0026 §4: USAGE solo donde inserta),
    una política `FOR INSERT TO mc_app` que exige `campaign_id NOT NULL`,
    que la campaña se vea (RLS de `campaign`) y que `company_id` sea el de
-   esa campaña. Re-ejecutable, con cabecera. **DECISIÓN PENDIENTE DE
-   NICOLÁS**: la historia decía «sin migraciones»; la alternativa sin
-   migración es que «Actualizar ahora» no exista hasta CAM-5 y la ficha
-   solo lea lo que dejó el job. Tomé la opción con precedente (0022) y
-   la acción degrada bien: si Supabase aún no tiene 0034, el INSERT
-   falla con `42501` y la ficha dice que la actualización manual llega
-   con la migración, sin romper nada.
+   esa campaña, y (c) engancha `assert_reference_visible` a
+   `campaign_id` y `company_id` (0025 §7 solo lo puso donde `mc_app`
+   escribía entonces). Re-ejecutable, con cabecera. En `esquema.ts`:
+   la fila de privilegios pasa a `SELECT, INSERT` y el índice parcial de
+   las filas sin campaña se declara en `UNICOS_GLOBALES_DECLARADOS` con
+   su motivo (la guardia no sabe que `mc_app` no escribe esas filas).
+   **DECISIÓN PENDIENTE DE NICOLÁS**: la historia decía «sin
+   migraciones»; la alternativa sin migración es que «Actualizar ahora»
+   no exista y la ficha solo lea lo que dejó el job, con la unicidad
+   vieja. Tomé la opción con precedente (0022) y la acción degrada bien:
+   si Supabase aún no tiene 0034, el INSERT falla con `42501` y la ficha
+   dice que la actualización manual llega con la migración, sin romper
+   nada.
 9. **Ventana de lectura del job.** Campañas `planned`, `live` o
    `measuring` con `brand_accounts` no vacío y hoy dentro de
    `[coalesce(brand_baseline_from, starts_on − 14), ends_on + 30]`; sin
    `starts_on` no hay límite inferior (se mide desde que existe: más
    historia, no menos) y sin `ends_on` no hay superior. `reported`,
    `closed` y `cancelled` no se leen aunque estén en ventana. La regla
-   es `brandSnapshotWindow` en core, probada sola. `BRAND_AFTER_DAYS =
+   es `isBrandSnapshotDue` en core, probada sola. `BRAND_AFTER_DAYS =
    30` con su fuente (la historia y `campaign_result.cut_hours` = 720 h).
 10. **Varias redes por campaña.** `brand_accounts` es una lista; la
     sección pinta una curva por cuenta (Café Alma tiene una). Facebook no
