@@ -490,6 +490,14 @@ export interface Revision {
    * (`sinNovedad`): se envían, pero la base no las guardará.
    */
   sinNovedad: number;
+  /**
+   * Las filas que SÍ van a escribir algo: las listas menos las
+   * `sinNovedad`. Es lo que resume el paso 3 y lo que decide si hay algo
+   * que importar: al subir el mismo archivo dos veces, las tres filas
+   * están «listas» pero ninguna trae nada nuevo, y el botón no puede
+   * prometer una importación que la base va a descartar entera.
+   */
+  conNovedad: number;
   /** El orden día/mes con el que se leyeron las fechas numéricas. */
   ordenFechas: OrdenFecha;
   /**
@@ -726,15 +734,17 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     }
   }
 
+  const escribibles = filas.map((f) => f.lectura).filter((l): l is CsvReading => l !== null);
   return {
     filas,
-    listas: filas.map((f) => f.lectura).filter((l): l is CsvReading => l !== null),
+    listas: escribibles,
     errores: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "error").length, 0),
     avisos: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "aviso").length, 0),
     duplicadasEnArchivo,
     filasTotales,
     yaEstaban,
     sinNovedad,
+    conNovedad: escribibles.length - sinNovedad,
     ordenFechas,
     ordenAlternativo,
   };

@@ -441,9 +441,18 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
               {t.acciones.siguiente}
             </Button>
           )}
+          {/*
+            Solo cuenta lo que va a escribir algo: con el mismo archivo
+            subido dos veces, todas las filas están «listas» pero la base
+            las descartaría todas, y el botón no puede prometer lo contrario.
+          */}
           {paso === 2 && (
-            <Button variant="primary" onClick={importar} loading={enviando} disabled={!revision || revision.listas.length === 0}>
-              {enviando ? t.acciones.importando : t.acciones.importar}
+            <Button variant="primary" onClick={importar} loading={enviando} disabled={!revision || revision.conNovedad === 0}>
+              {enviando
+                ? t.acciones.importando
+                : revision && revision.listas.length > 0 && revision.conNovedad === 0
+                  ? t.acciones.nadaNuevo
+                  : t.acciones.importar}
             </Button>
           )}
         </div>
@@ -828,20 +837,11 @@ function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo;
     {
       key: "video",
       header: t.columnas.video,
-      render: (r) => (
-        <CellMain sub={r.problemas.map(textoDe).join(" · ") || undefined}>
-          {/*
-            Cuando la fila no entra, lo que se enseña es la celda CRUDA:
-            quien tiene que arreglar el CSV en Excel necesita saber qué
-            buscar, y el número de fila solo no basta.
-          */}
-          {r.lectura?.title ?? r.lectura?.externalPostId ?? (
-            <span className="font-normal text-muted">
-              {r.crudo.title ?? r.crudo.externalPostId ?? r.crudo.url ?? t.sinDato}
-            </span>
-          )}
-        </CellMain>
-      ),
+      // Con un ancho mínimo: entre la fila, el estado, la fecha y hasta
+      // nueve cifras, a 1280 px la columna quedaba en unos 90 px y cada
+      // título ocupaba diez líneas. Por debajo de eso la tabla se desplaza
+      // dentro de sí misma (DataTable), no la página.
+      render: (r) => <CeldaVideo fila={r} />,
     },
     {
       key: "publicado",
@@ -880,7 +880,9 @@ function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo;
           {t.title}
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <span className="text-ink-2">{t.resumen(f.int(revision.listas.length), f.int(revision.filas.length))}</span>
+          <span className="text-ink-2">
+            {t.resumen(revision.conNovedad, f.int(revision.conNovedad), f.int(revision.filas.length), revision.sinNovedad > 0)}
+          </span>
           {noEntran > 0 && <Pill kind="bad">{t.errores(noEntran, f.int(noEntran))}</Pill>}
           {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
           {revision.yaEstaban > 0 && <span>{t.yaEstaban(revision.yaEstaban, f.int(revision.yaEstaban))}</span>}
@@ -909,6 +911,43 @@ function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo;
         emptyState={<EmptyState title={t.ninguna} />}
       />
     </section>
+  );
+}
+
+/**
+ * El video de una fila de la revisión: el título, en dos líneas como
+ * mucho, y debajo una pastilla por problema. La frase completa de cada
+ * problema va en el `title` y para el lector de pantalla; se enseña
+ * entera solo cuando cita la celda que lo causó, que es lo que hay que
+ * buscar en el archivo para arreglarlo.
+ */
+function CeldaVideo({ fila }: { fila: FilaRevisada }) {
+  const t = MESSAGES.importar.revisar;
+  // Cuando la fila no entra, lo que se enseña es la celda CRUDA: quien
+  // tiene que arreglar el CSV en Excel necesita saber qué buscar, y el
+  // número de fila solo no basta.
+  const titulo = fila.lectura?.title ?? fila.lectura?.externalPostId ?? null;
+  const crudo = fila.crudo.title ?? fila.crudo.externalPostId ?? fila.crudo.url ?? t.sinDato;
+  const conCelda = fila.problemas.filter((p) => p.valor !== undefined);
+  return (
+    <span className="block min-w-[14rem]">
+      <CellMain>
+        <span className={`line-clamp-2 ${titulo ? "" : "font-normal text-muted"}`} title={titulo ?? crudo}>
+          {titulo ?? crudo}
+        </span>
+      </CellMain>
+      {fila.problemas.length > 0 && (
+        <span className="mt-1 flex flex-wrap gap-1">
+          {fila.problemas.map((p, i) => (
+            <span key={`${p.codigo}-${p.campo ?? ""}-${String(i)}`} title={textoDe(p)}>
+              <Pill kind={p.gravedad === "error" ? "bad" : "warn"}>{t.etiqueta[p.codigo]}</Pill>
+              {p.valor === undefined && <span className="sr-only">{`: ${textoDe(p)}`}</span>}
+            </span>
+          ))}
+        </span>
+      )}
+      {conCelda.length > 0 && <span className="mt-1 block text-xs text-muted">{conCelda.map(textoDe).join(" · ")}</span>}
+    </span>
   );
 }
 

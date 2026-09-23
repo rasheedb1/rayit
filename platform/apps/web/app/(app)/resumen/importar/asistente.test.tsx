@@ -343,10 +343,10 @@ describe("la fecha de la exportación", () => {
     expect(screen.queryByText(/ya estaban: se les añadió una lectura/)).not.toBeInTheDocument();
   });
 
-  it("reimportar con la misma fecha: el paso 3 avisa de que no se guardará, y el paso 4 no se contradice", async () => {
+  it("reimportar con la misma fecha: el paso 3 dice que no hay nada nuevo y no deja importar", async () => {
     // Lo que pasaba subiendo el mismo archivo dos veces: el paso 3 decía
-    // «se añade una lectura» y el 4, a la vez, «3 ya estaban: se les
-    // añadió una lectura» y «3 lecturas eran más antiguas».
+    // a la vez «3 de 3 filas listas» y «3 no se guardarán», y el botón
+    // «Importar» seguía activo aunque la base iba a descartarlo todo.
     const mismaFecha = "2026-09-16T17:00:00.000000Z"; // mediodía del 16 en Bogotá: lo que guardó la primera vez
     buscarPostsConocidos.mockResolvedValue({
       ok: true,
@@ -362,20 +362,55 @@ describe("la fecha de la exportación", () => {
     fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-16" } });
     fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
 
-    expect(await screen.findByText("3 ya tienen una lectura de esta fecha o posterior: no se guardarán")).toBeInTheDocument();
+    expect(await screen.findByText("0 de 3 filas traen algo nuevo")).toBeInTheDocument();
+    expect(screen.queryByText(/filas listas/)).not.toBeInTheDocument();
+    expect(screen.getByText("3 ya tienen una lectura de esta fecha o posterior: no se guardarán")).toBeInTheDocument();
     expect(screen.queryByText(/se les añade una lectura/)).not.toBeInTheDocument();
     const tabla = screen.getByRole("table");
+    // Una pastilla corta bajo cada título; la frase entera, para el lector de pantalla.
+    expect(within(tabla).getAllByText("Nada nuevo")).toHaveLength(3);
     expect(within(tabla).getAllByText(/ya tiene una lectura de esta fecha o posterior: esta no se guardará/)).toHaveLength(3);
     expect(within(tabla).queryByText(/Este video ya está/)).not.toBeInTheDocument();
 
-    importarCsv.mockResolvedValue({
+    // No hay nada que guardar: el botón lo dice y no se puede pulsar.
+    expect(screen.queryByRole("button", { name: "Importar" })).not.toBeInTheDocument();
+    const boton = screen.getByRole("button", { name: "No hay nada nuevo que importar" });
+    expect(boton).toBeDisabled();
+    fireEvent.click(boton);
+    expect(importarCsv).not.toHaveBeenCalled();
+  });
+
+  it("si solo algunas filas traen algo nuevo, el resumen cuenta esas y deja importar", async () => {
+    const mismaFecha = "2026-09-16T17:00:00.000000Z";
+    buscarPostsConocidos.mockResolvedValue({
       ok: true,
-      resultado: { newPosts: 0, knownPosts: 3, readings: 0, staleReadings: 3, capturedAt: mismaFecha },
+      conocidos: [
+        { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
+        { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
+        // Anterior a esta exportación: esta sí recibe lectura.
+        { id: "ig_18001122334455003", ultimaLectura: "2026-09-10T17:00:00.000000Z" },
+      ],
     });
-    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
-    expect(await screen.findByText("3 videos, 0 lecturas.")).toBeInTheDocument();
-    expect(screen.getByText(/3 videos no traían nada más reciente que lo que ya había: no se guardaron/)).toBeInTheDocument();
-    expect(screen.queryByText(/ya estaban: se les añadió una lectura/)).not.toBeInTheDocument();
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-16" } });
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+
+    expect(await screen.findByText("1 de 3 filas trae algo nuevo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Importar" })).toBeEnabled();
+  });
+
+  it("la columna Video tiene un ancho mínimo y el título no pasa de dos líneas", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("3 de 3 filas listas");
+    const celdas = within(screen.getByRole("table")).getAllByRole("row").slice(1).map((fila) => within(fila).getAllByRole("cell")[2]!);
+    for (const celda of celdas) {
+      expect(celda.firstElementChild?.className).toMatch(/(^|\s)min-w-\[14rem\](\s|$)/);
+      expect(celda.querySelector(".line-clamp-2")).not.toBeNull();
+    }
   });
 
   it("una fecha del futuro no deja seguir", async () => {
