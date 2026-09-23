@@ -356,3 +356,39 @@ describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma ev
     expect(Number(consents.rows[0]!.n)).toBe(0);
   });
 });
+
+describe("alcance (ACC-6): un miembro acotado no se queda con la cuenta de otra creadora", () => {
+  const MIEMBRO = "0000000a-0000-4000-8000-0000000000f2";
+  const SOFIA = "0000000a-0000-4000-8000-0000000000f3";
+
+  it("la cuenta de TikTok ya es de Sofía y el miembro (que sí puede conectar) solo tiene alcance a Laura: ?error=fuera_de_alcance y la fila no cambia", async () => {
+    await db.execAsSuperuser(`
+      INSERT INTO app_user (id, email) VALUES ('${MIEMBRO}', 'miembro.oauth@ejemplo.com') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${MIEMBRO}', '${ROLE_MANAGER_CONECTA}') ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES ('${SEED_WORKSPACE_ID}', '${MIEMBRO}', 'creator', '${CREATOR_LAURA}') ON CONFLICT DO NOTHING;
+      INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${SOFIA}', '${SEED_WORKSPACE_ID}', 'Sofía') ON CONFLICT DO NOTHING;
+    `);
+    // La autorización viva de open_id_demo_laura pasa a ser de Sofía (una agencia que reparte cuentas).
+    await db.queryAsSuperuser(`UPDATE social_connection SET creator_id = $1 WHERE external_account_id = 'open_id_demo_laura'`, [SOFIA]);
+    const antes = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+      "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+    );
+    expect(antes.rows).toHaveLength(1);
+
+    try {
+      const acotado = handlersAs(MIEMBRO);
+      const s = await acotado.start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+      const state = new URL(s.headers.get("location")!).searchParams.get("state")!;
+      const res = await acotado.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookieOf(s)), "tiktok");
+      expect(res.status).toBe(303);
+      expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("fuera_de_alcance");
+
+      const despues = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+        "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+      );
+      expect(despues.rows).toEqual(antes.rows);
+    } finally {
+      await db.queryAsSuperuser(`UPDATE social_connection SET creator_id = $1 WHERE external_account_id = 'open_id_demo_laura'`, [CREATOR_LAURA]);
+    }
+  });
+});

@@ -14,6 +14,19 @@
  *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
  *     misma transacción y antes de devolver; test/audit-convencion.test.ts
  *     lo exige.
+ *   - Alcance (ACC-6): toda lectura y escritura compone scopeFilter()
+ *     (../scope.ts). Una factura se acota por su marca, su campaña y, a
+ *     través de la campaña, su creadora: una factura sin campaña no es
+ *     de ninguna creadora y no la ve quien tenga alcance por creador.
+ *     Los pagos, la reserva de impuestos y los recordatorios llegan por
+ *     su factura. Las marcas (company_link) por las campañas que tienen
+ *     con la creadora o la campaña del alcance. Un pago de plataforma
+ *     solo tiene creadora (sin marca ni campaña: se oculta a quien tenga
+ *     alcance por marca o campaña); un gasto no es de nadie y solo lo ve
+ *     y lo toca quien no tiene alcance (UNSCOPED_ONLY). La configuración
+ *     y los catálogos del espacio no llevan filtro: no son datos de nadie.
+ *     test/alcance-finanzas.test.ts recorre TODAS las funciones
+ *     exportadas de este archivo.
  */
 import {
   addDays,
@@ -60,6 +73,7 @@ import { PAYOUT_SOURCES } from '../schema/finanzas.ts';
 import { getWorkspaceSettings } from './cimientos.ts';
 import { audit, type AuditAction } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
+import { assertScopeAllows, assertUnscoped, scopeFilter, UNSCOPED_ONLY } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -263,6 +277,84 @@ export class InvoiceNotFound extends Error {
 }
 
 // ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/** La factura `i` con su campaña `ca` (LEFT JOIN): la creadora llega por la campaña. */
+const SCOPE_INVOICE = scopeFilter({ creator: 'ca.creator_id', company: 'i.company_id', campaign: 'i.campaign_id' });
+
+/** La fila `v` de la vista receivables (no expone la creadora: se busca en su campaña). */
+const SCOPE_RECEIVABLE = scopeFilter({
+  creator: '(SELECT c.creator_id FROM campaign c WHERE c.id = v.campaign_id)',
+  company: 'v.company_id',
+  campaign: 'v.campaign_id',
+});
+
+/** El pago `p`, por su factura. Un pago sin factura no cae en ningún alcance. */
+const SCOPE_PAYMENT = scopeFilter({
+  creator: '(SELECT c.creator_id FROM invoice i JOIN campaign c ON c.id = i.campaign_id WHERE i.id = p.invoice_id)',
+  company: '(SELECT i.company_id FROM invoice i WHERE i.id = p.invoice_id)',
+  campaign: '(SELECT i.campaign_id FROM invoice i WHERE i.id = p.invoice_id)',
+});
+
+/** La reserva `t`, por su pago → su factura. */
+const SCOPE_TAX_RESERVE = scopeFilter({
+  creator: '(SELECT c.creator_id FROM payment p JOIN invoice i ON i.id = p.invoice_id JOIN campaign c ON c.id = i.campaign_id WHERE p.id = t.payment_id)',
+  company: '(SELECT i.company_id FROM payment p JOIN invoice i ON i.id = p.invoice_id WHERE p.id = t.payment_id)',
+  campaign: '(SELECT i.campaign_id FROM payment p JOIN invoice i ON i.id = p.invoice_id WHERE p.id = t.payment_id)',
+});
+
+/** La campaña `ca`: su creadora, su marca y ella misma. */
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'ca.creator_id', company: 'ca.company_id', campaign: 'ca.id' });
+
+/**
+ * La marca vinculada `l` (company_link). Es la única derivación que va
+ * del padre al hijo: con alcance por creadora o por campaña, la marca
+ * se ve si tiene una campaña de esa creadora o esa campaña. Ocultarlas
+ * todas dejaría sin marca a la factura de una campaña que sí se ve;
+ * enseñarlas todas es lo que AGE-4 quiere acotar.
+ */
+const SCOPE_COMPANY_LINK = scopeFilter({
+  creator: { any: 'SELECT c.creator_id FROM campaign c WHERE c.company_id = l.company_id' },
+  company: 'l.company_id',
+  campaign: { any: 'SELECT c.id FROM campaign c WHERE c.company_id = l.company_id' },
+});
+
+/** La cotización `q` que enlaza una factura: su creadora, su marca y las campañas que salieron de ella. */
+const SCOPE_QUOTE = scopeFilter({
+  creator: 'q.creator_id',
+  company: 'q.company_id',
+  campaign: { any: 'SELECT c.id FROM campaign c WHERE c.quote_id = q.id' },
+});
+
+/**
+ * El negocio `d` (deal) del flujo de caja: su creadora, su marca y las
+ * campañas que salieron de él (campaign.deal_id). Sin campaña, no cae en
+ * ningún alcance por campaña.
+ */
+const SCOPE_DEAL = scopeFilter({
+  creator: 'd.creator_id',
+  company: 'd.company_id',
+  campaign: { any: 'SELECT c.id FROM campaign c WHERE c.deal_id = d.id' },
+});
+
+/**
+ * El pago de plataforma `p` (platform_payout): solo tiene creadora. No
+ * tiene camino a una marca ni a una campaña, así que se oculta a quien
+ * tenga alcance de esos tipos; sin creadora (NULL) no es de nadie.
+ */
+const SCOPE_PAYOUT = scopeFilter({ creator: 'p.creator_id', company: null, campaign: null });
+
+/**
+ * El recordatorio (notification que nombra una factura), por esa
+ * factura. Es un EXISTS y no un JOIN para poder ir en el WHERE del
+ * UPDATE de markReminderSent, que nombra la tabla sin alias (la prueba
+ * de convención de ACC-2 reconoce la escritura por `UPDATE <tabla> SET`).
+ */
+const SCOPE_REMINDER = `EXISTS (SELECT 1 FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+                 WHERE i.id = notification.entity_id AND ${SCOPE_INVOICE})`;
+
+// ---------------------------------------------------------------------
 // Lectura
 // ---------------------------------------------------------------------
 
@@ -374,7 +466,7 @@ function decodeCursor(cursor: string): { issuedOn: string; number: string } {
  */
 export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams = {}): Promise<ListInvoicesResult> {
   const limit = Math.min(200, Math.max(1, params.limit ?? 50));
-  const where: string[] = [];
+  const where: string[] = [SCOPE_INVOICE];
   const values: unknown[] = [];
 
   if (params.status) {
@@ -394,7 +486,7 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
   values.push(limit + 1);
 
   const sql = `${SELECT_INVOICE}
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    WHERE ${where.join(' AND ')}
     ORDER BY i.issued_on DESC, i.number DESC
     LIMIT $${values.length}`;
   const { rows } = await tx.query<RawRow>(sql, values);
@@ -410,17 +502,18 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
  */
 export async function getInvoice(tx: WorkspaceTx, id: string): Promise<InvoiceDetail | null> {
   if (!isUuid(id)) return null;
-  const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1`, [id]);
+  const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1 AND ${SCOPE_INVOICE}`, [id]);
   const r = rows[0];
   return r ? toDetail(r) : null;
 }
 
-/** Empresas vinculadas al workspace (company_link tiene RLS; company no). */
+/** Empresas vinculadas al workspace (company_link tiene RLS; company no), dentro del alcance. */
 export async function listCompanies(tx: WorkspaceTx): Promise<CompanyOption[]> {
   const { rows } = await tx.query<CompanyOption>(`
     SELECT c.id, c.name
     FROM company_link l
     JOIN company c ON c.id = l.company_id
+    WHERE ${SCOPE_COMPANY_LINK}
     ORDER BY c.name
   `);
   return rows;
@@ -436,7 +529,7 @@ export async function listCampaignsForInvoice(tx: WorkspaceTx): Promise<Campaign
            ca.amount::text, ca.currency, ca.quote_id
     FROM campaign ca
     JOIN company co ON co.id = ca.company_id
-    WHERE ca.status <> 'cancelled'
+    WHERE ca.status <> 'cancelled' AND ${SCOPE_CAMPAIGN}
     ORDER BY ca.starts_on DESC NULLS LAST, ca.name
   `);
   return rows.map((r) => ({
@@ -445,32 +538,35 @@ export async function listCampaignsForInvoice(tx: WorkspaceTx): Promise<Campaign
   }));
 }
 
-/** Los cuatro KPIs de Finanzas, desde la vista receivables, payment y tax_reserve. */
+/** Los cuatro KPIs de Finanzas, desde la vista receivables, payment y tax_reserve, dentro del alcance. */
 export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKpis> {
   const { rows } = await tx.query<{
     outstanding: string; open_count: number; overdue: string; overdue_count: number; max_days_overdue: number;
     collected_ytd: string; collected_prev: string; delta_permille: number | null; tax_reserved: string; tax_rate: string | null;
   }>(`
-    WITH ytd AS (
-      SELECT coalesce(sum(amount), 0) AS v FROM payment
-      WHERE direction = 'in' AND received_at >= date_trunc('year', CURRENT_DATE)
+    WITH scoped_receivables AS (
+      SELECT v.* FROM receivables v WHERE ${SCOPE_RECEIVABLE}
+    ), ytd AS (
+      SELECT coalesce(sum(p.amount), 0) AS v FROM payment p
+      WHERE p.direction = 'in' AND p.received_at >= date_trunc('year', CURRENT_DATE) AND ${SCOPE_PAYMENT}
     ), prev AS (
-      SELECT coalesce(sum(amount), 0) AS v FROM payment
-      WHERE direction = 'in'
-        AND received_at >= date_trunc('year', CURRENT_DATE) - interval '1 year'
-        AND received_at < (CURRENT_DATE - interval '1 year') + interval '1 day'
+      SELECT coalesce(sum(p.amount), 0) AS v FROM payment p
+      WHERE p.direction = 'in'
+        AND p.received_at >= date_trunc('year', CURRENT_DATE) - interval '1 year'
+        AND p.received_at < (CURRENT_DATE - interval '1 year') + interval '1 day'
+        AND ${SCOPE_PAYMENT}
     )
     SELECT
-      (SELECT coalesce(sum(outstanding), 0)::text FROM receivables WHERE status <> 'paid') AS outstanding,
-      (SELECT count(*)::int FROM receivables WHERE status <> 'paid') AS open_count,
-      (SELECT coalesce(sum(outstanding), 0)::text FROM receivables WHERE aging_bucket = 'vencida') AS overdue,
-      (SELECT count(*)::int FROM receivables WHERE aging_bucket = 'vencida') AS overdue_count,
-      (SELECT coalesce(max(days_overdue), 0)::int FROM receivables WHERE aging_bucket = 'vencida') AS max_days_overdue,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM scoped_receivables WHERE status <> 'paid') AS outstanding,
+      (SELECT count(*)::int FROM scoped_receivables WHERE status <> 'paid') AS open_count,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM scoped_receivables WHERE aging_bucket = 'vencida') AS overdue,
+      (SELECT count(*)::int FROM scoped_receivables WHERE aging_bucket = 'vencida') AS overdue_count,
+      (SELECT coalesce(max(days_overdue), 0)::int FROM scoped_receivables WHERE aging_bucket = 'vencida') AS max_days_overdue,
       (SELECT v::text FROM ytd) AS collected_ytd,
       (SELECT v::text FROM prev) AS collected_prev,
       (SELECT CASE WHEN prev.v > 0 THEN round((ytd.v / prev.v - 1) * 1000)::int END FROM ytd, prev) AS delta_permille,
-      (SELECT coalesce(sum(amount), 0)::text FROM tax_reserve WHERE released_at IS NULL) AS tax_reserved,
-      (SELECT max(rate)::text FROM tax_reserve WHERE released_at IS NULL) AS tax_rate
+      (SELECT coalesce(sum(t.amount), 0)::text FROM tax_reserve t WHERE t.released_at IS NULL AND ${SCOPE_TAX_RESERVE}) AS tax_reserved,
+      (SELECT max(t.rate)::text FROM tax_reserve t WHERE t.released_at IS NULL AND ${SCOPE_TAX_RESERVE}) AS tax_rate
   `);
   const r = rows[0];
   if (!r) throw new Error('La consulta de KPIs no devolvió filas.');
@@ -609,6 +705,7 @@ export async function listReceivables(
     `CASE WHEN $1::text IS NULL THEN v.status <> 'paid' ELSE v.aging_bucket = $1 END`,
     `($2::text IS NULL OR v.company_name ILIKE '%' || ${ESCAPE_LIKE} || '%'
                        OR v.number       ILIKE '%' || ${ESCAPE_LIKE} || '%')`,
+    SCOPE_RECEIVABLE,
   ];
 
   if (params.cursor) {
@@ -693,14 +790,30 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   });
 
   // La empresa tiene que estar vinculada a ESTE workspace: la FK de
-  // invoice.company_id no lo garantiza, company_link (con RLS) sí.
-  const link = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
+  // invoice.company_id no lo garantiza, company_link (con RLS) sí. Y
+  // dentro del alcance de quien factura.
+  const link = await tx.query(`SELECT 1 FROM company_link l WHERE l.company_id = $1 AND ${SCOPE_COMPANY_LINK}`, [input.companyId]);
   if (link.rows.length === 0) throw new Error('La empresa no existe en este workspace.');
 
+  let creatorId: string | null = null;
   if (input.campaignId) {
-    const camp = await tx.query('SELECT 1 FROM campaign WHERE id = $1', [input.campaignId]);
+    const camp = await tx.query<{ creator_id: string | null }>(
+      `SELECT ca.creator_id FROM campaign ca WHERE ca.id = $1 AND ${SCOPE_CAMPAIGN}`,
+      [input.campaignId],
+    );
     if (camp.rows.length === 0) throw new Error('La campaña no existe en este workspace.');
+    creatorId = camp.rows[0]?.creator_id ?? null;
   }
+  // La cotización que se enlaza también tiene que caer en el alcance: si
+  // no, la factura nombraría (y la ficha devolvería) una cotización ajena.
+  if (input.quoteId) {
+    const quote = await tx.query(`SELECT 1 FROM quote q WHERE q.id = $1 AND ${SCOPE_QUOTE}`, [input.quoteId]);
+    if (quote.rows.length === 0) throw new Error('La cotización no existe en este workspace.');
+  }
+  // La factura que se va a crear tiene que caer en el alcance de quien
+  // la crea, o nunca podría verla: sin campaña, no es de ninguna
+  // creadora; bajo alcance por campaña, tiene que ser de una de ellas.
+  await assertScopeAllows(tx, { creator: creatorId, company: input.companyId, campaign: input.campaignId ?? null });
 
   // Es un entero de un formato controlado (YYYY), no dinero.
   const year = parseInt(input.issuedOn.slice(0, 4), 10);
@@ -768,7 +881,10 @@ export async function transitionInvoice(
   input: TransitionInput = {},
 ): Promise<InvoiceDetail> {
   const { rows } = await tx.query<{ status: InvoiceStatus; total: string; paid_amount: string }>(
-    'SELECT status, total::text, paid_amount::text FROM invoice WHERE id = $1 FOR UPDATE',
+    `SELECT i.status, i.total::text, i.paid_amount::text
+     FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+     WHERE i.id = $1 AND ${SCOPE_INVOICE}
+     FOR UPDATE OF i`,
     [id],
   );
   const row = rows[0];
@@ -823,7 +939,7 @@ export async function createInvoiceFromCampaign(
            q.payment_terms_days, to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today
     FROM campaign ca
     LEFT JOIN quote q ON q.id = ca.quote_id
-    WHERE ca.id = $1
+    WHERE ca.id = $1 AND ${SCOPE_CAMPAIGN}
   `, [campaignId]);
   const camp = rows[0];
   if (!camp) throw new Error('La campaña no existe en este workspace.');
@@ -883,6 +999,7 @@ export function bloqueParaBitacora(bloque: Record<string, unknown>): Record<stri
  */
 export type ReserveState = 'configurada' | 'sin_configurar' | 'invalida';
 
+/** Sin alcance (ACC-6): es configuración del espacio, no un dato de ninguna creadora, marca ni campaña. */
 export async function getReserveState(tx: WorkspaceTx): Promise<ReserveState> {
   const { rows } = await tx.query<{ reserva_pct: unknown }>(
     `SELECT settings #> '{finanzas,reserva_pct}' AS reserva_pct FROM workspace WHERE id = current_workspace_id()`,
@@ -952,6 +1069,9 @@ export class WorkspaceNotWritable extends Error {
  * el mismo motivo que `getWorkspace` (queries/cimientos.ts): desde 0028
  * una transacción con identidad ve además los espacios de su persona, y
  * sin filtro `limit 1` podía devolver el bloque del vecino.
+ *
+ * Sin alcance (ACC-6): es configuración del espacio, no un dato de nadie;
+ * quien tiene alcance la necesita igual para facturar con sus porcentajes.
  */
 export async function getFinanceSettings(tx: WorkspaceTx): Promise<FinanceSettings> {
   const { rows } = await tx.query<{ finanzas: unknown }>(
@@ -989,6 +1109,9 @@ export async function getFinanceSettings(tx: WorkspaceTx): Promise<FinanceSettin
  * Cambiar la moneda no convierte nada. Se permite (un workspace mal
  * configurado tiene que poder corregirse) y se devuelve cuántas
  * facturas quedaron en otra, para que la pantalla lo advierta.
+ *
+ * Alcance (ACC-6): lo que cambia es de todo el espacio, así que quien
+ * tiene alcance no lo toca (assertUnscoped, antes de escribir).
  */
 export async function updateFinanceSettings(
   tx: WorkspaceTx,
@@ -998,6 +1121,7 @@ export async function updateFinanceSettings(
   if (currency !== undefined && !/^[A-Z]{3}$/.test(currency)) {
     throw new Error(`La moneda debe ser un código ISO-4217 de tres letras, no "${input.currency}".`);
   }
+  await assertUnscoped(tx);
 
   // El antes, para la bitácora y para saber si la moneda cambió de
   // verdad. Va con FOR UPDATE: entre leerlo y escribirlo no se cuela
@@ -1060,6 +1184,10 @@ export async function updateFinanceSettings(
  * el número que el guardado devuelve DESPUÉS de cambiar la moneda: las
  * que se quedaron atrás. Las anuladas no cuentan: ya no suman en ningún
  * KPI.
+ *
+ * Sin alcance (ACC-6), a propósito: solo la llama updateFinanceSettings,
+ * que ya pasó assertUnscoped (una persona sin alcance). Contar dentro de
+ * un alcance sería mentir sobre lo que deja atrás el cambio de moneda.
  */
 export async function countInvoicesInOtherCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
   const { rows } = await tx.query<{ n: number }>(
@@ -1074,10 +1202,15 @@ export async function countInvoicesInOtherCurrency(tx: WorkspaceTx, currency: st
  * configuración pregunta al pintar: son las que se quedarían atrás si
  * alguien cambia la moneda del workspace, y decirlo antes es la mitad
  * del punto de la advertencia.
+ *
+ * Con alcance (ACC-6): la llama la pantalla de configuración al pintar,
+ * y una persona con alcance no cuenta facturas que no ve.
  */
 export async function countLiveInvoicesInCurrency(tx: WorkspaceTx, currency: string): Promise<number> {
   const { rows } = await tx.query<{ n: number }>(
-    "SELECT count(*)::int AS n FROM invoice WHERE upper(currency) = $1 AND status <> 'void'",
+    `SELECT count(*)::int AS n
+     FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+     WHERE upper(i.currency) = $1 AND i.status <> 'void' AND ${SCOPE_INVOICE}`,
     [currency.trim().toUpperCase()],
   );
   return rows[0]?.n ?? 0;
@@ -1271,7 +1404,12 @@ export async function recordPayment(
   // 1 · La factura, bloqueada hasta el final de la transacción: dos
   //     cobros concurrentes sobre la misma se serializan aquí.
   const { rows } = await tx.query<{ status: InvoiceStatus; total: string; paid_amount: string; currency: string }>(
-    'SELECT status, total::text, paid_amount::text, currency FROM invoice WHERE id = $1 FOR UPDATE',
+    // Dentro del alcance (ACC-6): una factura que no se ve es «no existe».
+    // El UPDATE de abajo va sobre esta misma fila, ya bloqueada.
+    `SELECT i.status, i.total::text, i.paid_amount::text, i.currency
+     FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+     WHERE i.id = $1 AND ${SCOPE_INVOICE}
+     FOR UPDATE OF i`,
     [input.invoiceId],
   );
   const row = rows[0];
@@ -1403,10 +1541,10 @@ function toPaymentRow(r: RawPayment): PaymentRow {
   };
 }
 
-/** Un cobro por su id, con lo que apartó. Null si no es de este workspace. */
+/** Un cobro por su id, con lo que apartó. Null si no es de este workspace o cae fuera del alcance. */
 export async function getPayment(tx: WorkspaceTx, id: string): Promise<PaymentRow | null> {
   if (!isUuid(id)) return null;
-  const { rows } = await tx.query<RawPayment>(`${SELECT_PAYMENT} WHERE p.id = $1`, [id]);
+  const { rows } = await tx.query<RawPayment>(`${SELECT_PAYMENT} WHERE p.id = $1 AND ${SCOPE_PAYMENT}`, [id]);
   const r = rows[0];
   return r ? toPaymentRow(r) : null;
 }
@@ -1417,9 +1555,18 @@ export async function getPayment(tx: WorkspaceTx, id: string): Promise<PaymentRo
  * aritmética de dinero.
  */
 export async function listPayments(tx: WorkspaceTx, invoiceId: string): Promise<InvoicePayments> {
-  if (!isUuid(invoiceId)) return { rows: [], reservedTotal: '0.00', reserveRate: null };
+  const vacio: InvoicePayments = { rows: [], reservedTotal: '0.00', reserveRate: null };
+  if (!isUuid(invoiceId)) return vacio;
+  // Alcance (ACC-6): una factura fuera del alcance no tiene cobros que
+  // enseñar. Se pregunta antes porque el total de abajo es un agregado
+  // que devuelve fila aunque no haya ninguna.
+  const visible = await tx.query(
+    `SELECT 1 FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id WHERE i.id = $1 AND ${SCOPE_INVOICE}`,
+    [invoiceId],
+  );
+  if (visible.rows.length === 0) return vacio;
   const { rows } = await tx.query<RawPayment>(
-    `${SELECT_PAYMENT} WHERE p.invoice_id = $1 AND p.direction = 'in'
+    `${SELECT_PAYMENT} WHERE p.invoice_id = $1 AND p.direction = 'in' AND ${SCOPE_PAYMENT}
       ORDER BY p.received_at DESC, p.id DESC`,
     [invoiceId],
   );
@@ -1519,6 +1666,12 @@ const PLAZO_DIAS_POR_DEFECTO = 30;
  * app/(app)/finanzas/flujo/page.tsx en su primera línea. Aquí no se
  * comprueba porque este paquete no conoce la sesión —su barandilla es
  * la RLS del workspace—, y duplicarlo daría dos sitios donde equivocarse.
+ *
+ * Alcance (ACC-6): cada insumo con el filtro de su tabla —facturas por
+ * SCOPE_INVOICE, negocios por SCOPE_DEAL, gastos solo sin alcance,
+ * pagos de plataforma por su creadora—. El «ya facturado» de un negocio
+ * mira todas sus facturas: es un booleano que solo puede QUITAR monto de
+ * la proyección, nunca enseñar una factura ajena.
  */
 export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs> {
   const { rows } = await tx.query<CashflowRawRow>(`
@@ -1540,8 +1693,10 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
              ) ORDER BY i.due_on, i.number), '[]'::json) AS v
         FROM invoice i
         JOIN company co ON co.id = i.company_id
+        LEFT JOIN campaign ca ON ca.id = i.campaign_id
        WHERE i.status IN ('sent', 'partial', 'overdue')
          AND i.total > i.paid_amount
+         AND ${SCOPE_INVOICE}
     ), negocios AS (
       SELECT coalesce(json_agg(json_build_object(
                'id',                d.id,
@@ -1566,7 +1721,7 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
         FROM deal d
         JOIN pipeline_stage st ON st.id = d.stage_id
         JOIN company co        ON co.id = d.company_id
-       WHERE st.is_won
+       WHERE st.is_won AND ${SCOPE_DEAL}
     ), gastos AS (
       SELECT coalesce(json_agg(json_build_object(
                'id',         e.id,
@@ -1588,6 +1743,7 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
          -- formulario solo escribe 'monthly') no se suma como si lo fuera.
          AND coalesce(e.recurrence, 'monthly') = 'monthly'
          AND e.incurred_on > ws.hoy - 120
+         AND ${UNSCOPED_ONLY}
     ), plataformas AS (
       -- Los ingresos de plataformas por mes (FIN-7), solo en la moneda
       -- del espacio y de los últimos doce meses: quien promedia es
@@ -1600,6 +1756,7 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
             FROM platform_payout p, ws
            WHERE p.currency = ws.currency
              AND p.period_start >= (date_trunc('month', ws.hoy) - interval '12 months')::date
+             AND ${SCOPE_PAYOUT}
            GROUP BY 1
         ) m
     )
@@ -1739,6 +1896,8 @@ export interface ImportPlatformPayoutsResult {
  * así que leerlo aquí no abre nada y le ahorra a la pantalla una
  * conexión más. La web no tiene un `CatalogDb` a mano: `@/lib/db` solo
  * expone `withWorkspace`, y ese es el punto.
+ *
+ * Sin alcance (ACC-6): es el catálogo global de redes, no un dato de nadie.
  */
 export async function listPayoutPlatforms(tx: WorkspaceTx): Promise<{ id: string; name: string }[]> {
   const { rows } = await tx.query<{ id: string; name: string }>('SELECT id, name FROM platform ORDER BY name');
@@ -1752,6 +1911,8 @@ export async function listPayoutPlatforms(tx: WorkspaceTx): Promise<{ id: string
  * UTC en Bogotá todavía es ayer, y con esa fecha un periodo que acaba de
  * cerrar parecería abierto. Es la misma regla que `getCashflowInputs`
  * (FIN-6), escrita una vez.
+ *
+ * Sin alcance (ACC-6): es la fecha del espacio, no un dato de nadie.
  */
 export async function getWorkspaceToday(tx: WorkspaceTx): Promise<string> {
   const { rows } = await tx.query<{ hoy: string }>(
@@ -1851,6 +2012,8 @@ function toPayoutRow(r: RawPayout): PlatformPayoutRow {
  * `getPlatformPayoutMonths` (el promedio) o `getPlatformPayoutKpis` (las
  * cifras de cabecera). Llegó a devolverlos siempre, con un `GROUP BY`
  * sin límite que ninguna pantalla leía.
+ *
+ * Alcance (ACC-6): solo los de las creadoras del alcance (SCOPE_PAYOUT).
  */
 export async function listPlatformPayouts(
   tx: WorkspaceTx,
@@ -1858,7 +2021,7 @@ export async function listPlatformPayouts(
 ): Promise<ListPlatformPayoutsResult> {
   const limit = Math.min(500, Math.max(1, params.limit ?? 200));
   const { rows } = await tx.query<RawPayout>(
-    `${SELECT_PAYOUT} ORDER BY p.period_start DESC, pl.name, p.created_at DESC LIMIT $1`,
+    `${SELECT_PAYOUT} WHERE ${SCOPE_PAYOUT} ORDER BY p.period_start DESC, pl.name, p.created_at DESC LIMIT $1`,
     [limit],
   );
   return { rows: rows.map(toPayoutRow) };
@@ -1892,6 +2055,7 @@ export async function getPlatformPayoutMonths(
      FROM platform_payout p, ws
      WHERE p.currency = $1
        AND p.period_start >= (date_trunc('month', ws.hoy) - make_interval(months => $2))::date
+       AND ${SCOPE_PAYOUT}
      GROUP BY 1
      ORDER BY 1 DESC`,
     [currency, months],
@@ -1917,7 +2081,7 @@ export interface PlatformPayoutKpis {
   today: string;
 }
 
-/** Las cifras de cabecera de /finanzas/ingresos. Las suma la base; la pantalla no hace aritmética. */
+/** Las cifras de cabecera de /finanzas/ingresos, dentro del alcance. Las suma la base; la pantalla no hace aritmética. */
 export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPayoutKpis> {
   const { currency } = await getWorkspaceSettings(tx);
   const { rows } = await tx.query<{
@@ -1940,17 +2104,20 @@ export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPa
      SELECT coalesce((SELECT sum(p.amount) FROM platform_payout p, ultimo
                        WHERE p.currency = $1
                          AND p.period_start >= ultimo.anio
-                         AND p.period_start < ultimo.anio_siguiente), 0)::text AS ytd,
+                         AND p.period_start < ultimo.anio_siguiente
+                         AND ${SCOPE_PAYOUT}), 0)::text AS ytd,
             (SELECT count(*) FROM platform_payout p, ultimo
               WHERE p.currency = $1
                 AND p.period_start >= ultimo.anio
-                AND p.period_start < ultimo.anio_siguiente)::text AS ytd_payouts,
+                AND p.period_start < ultimo.anio_siguiente
+                AND ${SCOPE_PAYOUT})::text AS ytd_payouts,
             -- Sin coalesce a propósito: sum() de cero filas es NULL, que
             -- es justo lo que queremos. Un mes sin pago no vale cero.
             (SELECT sum(p.amount)::text FROM platform_payout p, ultimo
               WHERE p.currency = $1
                 AND p.period_start >= ultimo.inicio
-                AND p.period_start < ultimo.mes_en_curso) AS last_month,
+                AND p.period_start < ultimo.mes_en_curso
+                AND ${SCOPE_PAYOUT}) AS last_month,
             to_char(ultimo.inicio, 'YYYY-MM') AS last_month_label,
             to_char(ultimo.hoy, 'YYYY-MM-DD') AS today
      FROM ultimo`,
@@ -1986,6 +2153,13 @@ const SIN_CREADOR = '00000000-0000-0000-0000-000000000000';
  * no se escribe ni se pisa: corregir un monto ya cargado es otra
  * historia (docs/propuestas/FIN-7.md §0.7), y sobrescribir dinero sin
  * pedir permiso no es una opción.
+ *
+ * Alcance (ACC-6): cada pago tiene que caer en el alcance de quien lo
+ * escribe, y un pago de plataforma solo tiene creadora. Antes de
+ * escribir nada se comprueba cada creadora del lote con marca y campaña
+ * en NULL: quien tenga alcance por marca o por campaña no carga ninguno,
+ * y quien lo tenga por creadora, solo los de las suyas (y ninguno «sin
+ * creadora»).
  */
 export async function importPlatformPayouts(
   tx: WorkspaceTx,
@@ -2000,6 +2174,9 @@ export async function importPlatformPayouts(
   const platforms = await knownPlatformIds(tx);
   const { currency: wsCurrency } = await getWorkspaceSettings(tx);
   inputs.forEach((input, i) => assertPayoutShape(input, platforms, wsCurrency, `Fila ${i + 1}`));
+  for (const creator of new Set(inputs.map((i) => i.creatorId ?? null))) {
+    await assertScopeAllows(tx, { creator, company: null, campaign: null });
+  }
 
   // Qué periodos de este lote ya existen, y con qué monto. Una sola
   // consulta para todo el lote, no una por fila.
@@ -2019,7 +2196,8 @@ export async function importPlatformPayouts(
      WHERE (p.platform_id, coalesce(p.creator_id, $1::uuid), p.period_start, p.period_end, p.currency)
            IN (SELECT platform_id, coalesce(creator_id, $1::uuid), period_start, period_end, currency
                FROM unnest($2::text[], $3::uuid[], $4::date[], $5::date[], $6::text[])
-                 AS l(platform_id, creator_id, period_start, period_end, currency))`,
+                 AS l(platform_id, creator_id, period_start, period_end, currency))
+       AND ${SCOPE_PAYOUT}`,
     [
       SIN_CREADOR,
       inputs.map((i) => i.platformId),
@@ -2158,6 +2336,7 @@ export async function createPlatformPayout(
        AND coalesce(p.creator_id, $2::uuid) = coalesce($3::uuid, $2::uuid)
        AND p.period_start = $4::date AND p.period_end = $5::date
        AND p.currency = $6 AND p.amount = $7::numeric
+       AND ${SCOPE_PAYOUT}
      LIMIT 1`,
     [
       input.platformId, SIN_CREADOR, input.creatorId ?? null,
@@ -2211,6 +2390,8 @@ interface ReminderRaw {
  * la pastilla diría «1 día de mora» al lado de un cuerpo que dice
  * «vence hoy». La mora es la de HOY, no la del día en que se redactó el
  * texto: por eso la tarjeta enseña también cuándo se escribió.
+ *
+ * Alcance (ACC-6): solo los recordatorios de facturas del alcance.
  */
 export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams = {}): Promise<ReminderRow[]> {
   if (params.invoiceId !== undefined && !isUuid(params.invoiceId)) return [];
@@ -2227,7 +2408,9 @@ export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams
        JOIN invoice i   ON i.id = n.entity_id
        JOIN company co  ON co.id = i.company_id
        JOIN workspace w ON w.id = i.workspace_id
+       LEFT JOIN campaign ca ON ca.id = i.campaign_id
       WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice' AND n.dismissed_at IS NULL
+        AND ${SCOPE_INVOICE}
         AND ($1::boolean IS NOT TRUE OR (n.read_at IS NULL AND i.status IN ('sent', 'partial')))
         AND ($2::uuid IS NULL OR n.entity_id = $2)
       ORDER BY CASE n.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
@@ -2268,13 +2451,15 @@ export async function listReminders(tx: WorkspaceTx, params: ListRemindersParams
  * «Marcar como enviado»: sella `read_at`. Devuelve false si el id no es
  * de este workspace (RLS no lo deja ver), no es un recordatorio, o ya
  * estaba marcado — con eso la acción es idempotente y repetir el clic
- * no mueve la fecha.
+ * no mueve la fecha. Tampoco marca uno cuya factura cae fuera del
+ * alcance (ACC-6): devuelve false como si no existiera.
  */
 export async function markReminderSent(tx: WorkspaceTx, id: string): Promise<boolean> {
   if (!isUuid(id)) return false;
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE notification SET read_at = now()
       WHERE id = $1 AND kind = 'invoice_overdue' AND entity_type = 'invoice' AND read_at IS NULL
+        AND ${SCOPE_REMINDER}
       RETURNING id`,
     [id],
   );
@@ -2298,6 +2483,9 @@ export async function markReminderSent(tx: WorkspaceTx, id: string): Promise<boo
 //     espacio: las demás se cuentan y se dicen.
 //   - No hay borrado. Corregir un gasto es editarlo, y la edición deja
 //     bitácora con before/after (decisión 7 de docs/propuestas/FIN-5.md).
+//   - Alcance (ACC-6): un gasto no es de ninguna creadora, marca ni
+//     campaña. Solo lo ve (UNSCOPED_ONLY) y lo escribe (assertUnscoped)
+//     quien no tiene alcance.
 // =====================================================================
 
 /**
@@ -2468,7 +2656,7 @@ function gastoParaBitacora(e: ExpenseRow): Record<string, unknown> {
 /** Un gasto del espacio por su id, o null. Un id que no es UUID no se consulta (22P02 → 500). */
 export async function getExpense(tx: WorkspaceTx, id: string): Promise<ExpenseRow | null> {
   if (!isUuid(id)) return null;
-  const { rows } = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1`, [id]);
+  const { rows } = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1 AND ${UNSCOPED_ONLY}`, [id]);
   const r = rows[0];
   return r ? toExpense(r) : null;
 }
@@ -2492,6 +2680,7 @@ export async function getExpenseMonth(tx: WorkspaceTx, month?: string | null): P
   const filas = await tx.query<RawExpense>(
     `${SELECT_EXPENSE}
      WHERE e.incurred_on >= $1::date AND e.incurred_on < ($1::date + interval '1 month')
+       AND ${UNSCOPED_ONLY}
      ORDER BY e.incurred_on DESC, e.created_at DESC, e.id`,
     [primero],
   );
@@ -2505,7 +2694,7 @@ export async function getExpenseMonth(tx: WorkspaceTx, month?: string | null): P
      ), g AS (
        SELECT e.amount, e.currency, e.is_recurring, e.deductible
        FROM expense e, mes
-       WHERE e.incurred_on >= mes.d1 AND e.incurred_on < mes.d2
+       WHERE e.incurred_on >= mes.d1 AND e.incurred_on < mes.d2 AND ${UNSCOPED_ONLY}
      )
      SELECT to_char((SELECT d1 FROM mes), 'YYYY-MM-DD') AS from_on,
             to_char((SELECT d2 FROM mes) - 1, 'YYYY-MM-DD') AS to_on,
@@ -2527,7 +2716,7 @@ export async function getExpenseMonth(tx: WorkspaceTx, month?: string | null): P
     `SELECT e.category, sum(e.amount)::numeric(14,2)::text AS total, count(*)::int AS count
      FROM expense e
      WHERE e.incurred_on >= $1::date AND e.incurred_on < ($1::date + interval '1 month')
-       AND e.currency = $2
+       AND e.currency = $2 AND ${UNSCOPED_ONLY}
      GROUP BY e.category
      ORDER BY sum(e.amount) DESC, e.category`,
     [primero, currency],
@@ -2608,6 +2797,7 @@ async function validarGasto(tx: WorkspaceTx, input: CreateExpenseInput): Promise
 
 /** Registra un gasto y deja su línea de bitácora en la misma transacción. */
 export async function createExpense(tx: WorkspaceTx, input: CreateExpenseInput): Promise<ExpenseRow> {
+  await assertUnscoped(tx);
   const v = await validarGasto(tx, input);
   const inserted = await tx.query<{ id: string }>(
     `INSERT INTO expense (workspace_id, category, vendor, description, amount, currency,
@@ -2633,9 +2823,10 @@ export async function createExpense(tx: WorkspaceTx, input: CreateExpenseInput):
  */
 export async function updateExpense(tx: WorkspaceTx, id: string, input: UpdateExpenseInput): Promise<ExpenseRow> {
   if (!isUuid(id)) throw new ExpenseNotFound(id);
+  await assertUnscoped(tx);
   // FOR UPDATE en la misma transacción: si la validación falla, no se
   // escribe nada, y nadie más mueve la fila mientras se compara.
-  const actual = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1 FOR UPDATE OF e`, [id]);
+  const actual = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1 AND ${UNSCOPED_ONLY} FOR UPDATE OF e`, [id]);
   const antes = actual.rows[0] ? toExpense(actual.rows[0]) : null;
   if (!antes) throw new ExpenseNotFound(id);
 
@@ -2652,7 +2843,7 @@ export async function updateExpense(tx: WorkspaceTx, id: string, input: UpdateEx
     `UPDATE expense
      SET category = $2, vendor = $3, description = $4, amount = $5, currency = $6,
          incurred_on = $7::date, is_recurring = $8, recurrence = $9, receipt_url = $10, deductible = $11
-     WHERE id = $1`,
+     WHERE id = $1 AND ${UNSCOPED_ONLY}`,
     [id, v.category, v.vendor, v.description, v.amount, v.currency, v.incurredOn, v.isRecurring, v.recurrence, v.receiptUrl, v.deductible],
   );
   const despues = await getExpense(tx, id);

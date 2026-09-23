@@ -21,6 +21,16 @@
  *     misma transacción y antes de devolver; test/audit-convencion.test.ts
  *     lo exige. La entidad es siempre la campaña: campaign_post no tiene
  *     id propio.
+ *   - Alcance (ACC-6): toda lectura y escritura compone scopeFilter()
+ *     (../scope.ts). Una campaña se acota por su creadora, su marca y
+ *     ella misma; un post por su creadora y, a través de campaign_post,
+ *     por las marcas y campañas que lo asocian. Todo lo que cuelga de una
+ *     campaña (aportes y CSV de la marca, resultado, seguidores de la
+ *     marca, reportes) se acota por SU campaña. Fuera del alcance es «no
+ *     existe», igual que fuera del workspace. Lo que solo llama el worker
+ *     (mc_worker, sin persona ni alcance) no lo lleva y lo dice.
+ *     test/alcance-campanas.test.ts recorre TODAS las funciones
+ *     exportadas de este archivo y de campanas/reporte.ts.
  *
  * El reporte a la marca (CAM-6) vive en la carpeta campanas/ y se
  * reexporta desde aquí, como hace cotizar.ts con la suya:
@@ -75,6 +85,7 @@ import {
 } from '@mc/core';
 import { audit } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
+import { ScopeError, scopeFilter } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -254,13 +265,41 @@ interface RawListRow {
   has_invoice: boolean;
 }
 
+// ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/** La campaña `c`: su creadora, su marca y ella misma. */
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
+
+/** Una factura `i` de la campaña `c` (la creadora llega por la campaña). */
+const SCOPE_INVOICE_OF_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'i.company_id', campaign: 'i.campaign_id' });
+
+/**
+ * Un post: por su creadora, y por marca y campaña a través de las
+ * campañas que lo asocian (campaign_post). Recibe las expresiones del
+ * id y de la creadora porque la vista creator_post_board las llama
+ * post_id / creator_id y la tabla post, id / creator_id.
+ */
+function scopePost(postId: string, creatorId: string): string {
+  return scopeFilter({
+    creator: creatorId,
+    company: { any: `SELECT c2.company_id FROM campaign_post cp2 JOIN campaign c2 ON c2.id = cp2.campaign_id WHERE cp2.post_id = ${postId}` },
+    campaign: { any: `SELECT cp2.campaign_id FROM campaign_post cp2 WHERE cp2.post_id = ${postId}` },
+  });
+}
+
 /** Agregados de posts y facturas, comunes a la lista y a la ficha (con FROM_CAMPAIGN). */
 const CAMPAIGN_AGGREGATES = `
   agg.posts_count, agg.views_total, agg.data_as_of,
-  EXISTS (SELECT 1 FROM invoice i WHERE i.campaign_id = c.id AND i.status <> 'void') AS has_invoice
+  EXISTS (SELECT 1 FROM invoice i WHERE i.campaign_id = c.id AND i.status <> 'void' AND ${SCOPE_INVOICE_OF_CAMPAIGN}) AS has_invoice
 `;
 
-/** Una sola pasada por los posts de cada campaña para contar y sumar views. */
+/**
+ * Una sola pasada por los posts de cada campaña para contar y sumar
+ * views. Solo los posts del alcance: la misma regla que listCampaignPosts,
+ * para que la lista no cuente lo que la ficha no enseña.
+ */
 const FROM_CAMPAIGN = `
   FROM campaign c
   JOIN company co ON co.id = c.company_id
@@ -270,7 +309,7 @@ const FROM_CAMPAIGN = `
            ${TS('max(m.captured_at)')} AS data_as_of
     FROM campaign_post cp
     LEFT JOIN post_metrics_latest m ON m.post_id = cp.post_id
-    WHERE cp.campaign_id = c.id
+    WHERE cp.campaign_id = c.id AND ${scopePost('cp.post_id', '(SELECT p.creator_id FROM post p WHERE p.id = cp.post_id)')}
   ) agg ON true
 `;
 
@@ -303,14 +342,14 @@ function toListRow(r: RawListRow): CampaignListRow {
 /** Campañas del workspace, las más recientes primero. */
 export async function listCampaigns(tx: WorkspaceTx, params: ListCampaignsParams = {}): Promise<CampaignListRow[]> {
   const values: unknown[] = [];
-  let where = '';
+  const where = [SCOPE_CAMPAIGN];
   if (params.status) {
     const statuses = Array.isArray(params.status) ? params.status : [params.status];
     values.push(statuses);
-    where = `WHERE c.status = ANY($1::text[])`;
+    where.push(`c.status = ANY($1::text[])`);
   }
   const { rows } = await tx.query<RawListRow>(
-    `${SELECT_LIST} ${where} ORDER BY c.starts_on DESC NULLS LAST, c.created_at DESC, c.name`,
+    `${SELECT_LIST} WHERE ${where.join(' AND ')} ORDER BY c.starts_on DESC NULLS LAST, c.created_at DESC, c.name`,
     values,
   );
   return rows.map(toListRow);
@@ -359,13 +398,15 @@ const SELECT_DETAIL = `
          (SELECT coalesce(jsonb_agg(jsonb_build_object('deliverable', d.deliverable, 'quantity', d.n) ORDER BY d.deliverable), '[]'::jsonb)
           FROM (SELECT cp.deliverable, count(*)::int AS n FROM campaign_post cp
                  WHERE cp.campaign_id = c.id AND cp.deliverable IS NOT NULL
+                   -- Solo los posts del alcance: los entregables no cuentan lo que la ficha no enseña.
+                   AND ${scopePost('cp.post_id', '(SELECT p.creator_id FROM post p WHERE p.id = cp.post_id)')}
                  GROUP BY cp.deliverable) d) AS post_deliverables,
          (SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', i.id, 'number', i.number, 'status', i.status, 'total', i.total::text, 'currency', i.currency)
             ORDER BY i.issued_on DESC, i.number DESC), '[]'::jsonb)
-          FROM invoice i WHERE i.campaign_id = c.id) AS invoices
+          FROM invoice i WHERE i.campaign_id = c.id AND ${SCOPE_INVOICE_OF_CAMPAIGN}) AS invoices
   ${FROM_CAMPAIGN}
-  WHERE c.id = $1
+  WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}
 `;
 
 function toDetail(r: RawDetailRow): CampaignDetail {
@@ -429,9 +470,9 @@ async function requireCampaign(tx: WorkspaceTx, id: string): Promise<CampaignDet
   return c;
 }
 
-/** Existe en este workspace (RLS), sin cargar la ficha entera. */
+/** Existe en este workspace (RLS) y en el alcance, sin cargar la ficha entera. */
 async function assertCampaignExists(tx: WorkspaceTx, id: string): Promise<void> {
-  const { rows } = await tx.query('SELECT 1 FROM campaign WHERE id = $1', [id]);
+  const { rows } = await tx.query(`SELECT 1 FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [id]);
   if (rows.length === 0) throw new CampaignNotFoundError(id);
 }
 
@@ -458,8 +499,10 @@ interface RawPostRow {
 
 /**
  * Posts de la campaña desde creator_post_board (views actuales de
- * post_metrics_latest), unidos a campaign para que RLS aplique.
- * Principal primero, luego por fecha de publicación.
+ * post_metrics_latest), unidos a campaign para que RLS aplique, y solo
+ * los del alcance (un post de otra creadora asociado a esta campaña no
+ * se enseña a quien no la ve). Principal primero, luego por fecha de
+ * publicación.
  */
 export async function listCampaignPosts(tx: WorkspaceTx, campaignId: string): Promise<CampaignPostRow[]> {
   const { rows } = await tx.query<RawPostRow>(
@@ -472,7 +515,7 @@ export async function listCampaignPosts(tx: WorkspaceTx, campaignId: string): Pr
      JOIN campaign_post cp ON cp.campaign_id = c.id
      JOIN creator_post_board b ON b.post_id = cp.post_id
      LEFT JOIN post_metrics_latest m ON m.post_id = b.post_id
-     WHERE c.id = $1
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} AND ${scopePost('b.post_id', 'b.creator_id')}
      ORDER BY cp.is_primary DESC, b.published_at ASC NULLS LAST, b.post_id`,
     [campaignId],
   );
@@ -546,6 +589,7 @@ export async function listLinkablePosts(
             ${TS('b.published_at')} AS published_at, b.views::text AS views
      FROM creator_post_board b
      WHERE NOT EXISTS (SELECT 1 FROM campaign_post cp WHERE cp.campaign_id = $1 AND cp.post_id = b.post_id)
+       AND ${scopePost('b.post_id', 'b.creator_id')}
        ${search}
      ORDER BY b.published_at DESC NULLS LAST, b.post_id
      LIMIT $${values.length}`,
@@ -564,7 +608,7 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
   const { rows: camps } = await tx.query<{ starts_on: string | null; ends_on: string | null; tracking_code: string | null; name: string; socials: unknown }>(
     `SELECT ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, co.name, co.socials
      FROM campaign c JOIN company co ON co.id = c.company_id
-     WHERE c.id = $1`,
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [campaignId],
   );
   const camp = camps[0];
@@ -581,6 +625,7 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
      WHERE b.published_at >= ($2::date - $4::int)::timestamptz
        AND b.published_at < ($3::date + $4::int + 1)::timestamptz
        AND NOT EXISTS (SELECT 1 FROM campaign_post cp WHERE cp.campaign_id = $1 AND cp.post_id = b.post_id)
+       AND ${scopePost('b.post_id', 'b.creator_id')}
      ORDER BY b.published_at ASC, b.post_id`,
     [campaignId, camp.starts_on, camp.ends_on, SUGGESTION_WINDOW_DAYS],
   );
@@ -599,9 +644,12 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
 // Escritura sobre campaign_post
 // ---------------------------------------------------------------------
 
-/** La campaña existe aquí y admite cambios; bloquea la fila mientras dura la transacción. */
+/** La campaña existe aquí (workspace y alcance) y admite cambios; bloquea la fila mientras dura la transacción. */
 async function lockEditableCampaign(tx: WorkspaceTx, campaignId: string): Promise<CampaignStatus> {
-  const { rows } = await tx.query<{ status: CampaignStatus }>('SELECT status FROM campaign WHERE id = $1 FOR UPDATE', [campaignId]);
+  const { rows } = await tx.query<{ status: CampaignStatus }>(
+    `SELECT c.status FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} FOR UPDATE OF c`,
+    [campaignId],
+  );
   const row = rows[0];
   if (!row) throw new CampaignNotFoundError(campaignId);
   if (!canEditCampaign(row.status)) throw new CampaignLockedError(row.status);
@@ -637,7 +685,7 @@ async function findCampaignPost(tx: WorkspaceTx, campaignId: string, postId: str
  */
 export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, input.campaignId);
-  const post = await tx.query('SELECT 1 FROM post WHERE id = $1', [input.postId]);
+  const post = await tx.query(`SELECT 1 FROM post p WHERE p.id = $1 AND ${scopePost('p.id', 'p.creator_id')}`, [input.postId]);
   if (post.rows.length === 0) throw new PostNotFoundError(input.postId);
 
   const deliverable = input.deliverable?.trim() || null;
@@ -646,7 +694,8 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
     await tx.query(
       `UPDATE campaign_post SET is_primary = false
        FROM campaign c
-       WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id <> $2`,
+       WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id <> $2
+         AND ${SCOPE_CAMPAIGN}`,
       [input.campaignId, input.postId],
     );
   }
@@ -680,6 +729,7 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
     `DELETE FROM campaign_post
      USING campaign c
      WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id = $2
+       AND ${SCOPE_CAMPAIGN}
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
@@ -695,7 +745,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
      FROM campaign c
-     WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1
+     WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND ${SCOPE_CAMPAIGN}
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
@@ -718,8 +768,8 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   const { rows } = await tx.query<{
     name: string; brief: string | null; starts_on: string | null; ends_on: string | null; tracking_code: string | null; tracking_url: string | null;
   }>(
-    `SELECT name, brief, ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, tracking_code, tracking_url
-     FROM campaign WHERE id = $1`,
+    `SELECT c.name, c.brief, ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, c.tracking_url
+     FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [id],
   );
   const current = rows[0];
@@ -733,6 +783,7 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   if (input.name !== undefined && !name) throw new InvalidNameError();
 
   await tx.query(
+    // Sin alias en UPDATE: test/audit-convencion.test.ts reconoce «UPDATE <tabla> SET».
     `UPDATE campaign SET
        name = coalesce($2, name),
        brief = CASE WHEN $3::boolean THEN $4 ELSE brief END,
@@ -740,7 +791,7 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
        ends_on = $6::date,
        tracking_code = CASE WHEN $7::boolean THEN $8 ELSE tracking_code END,
        tracking_url = CASE WHEN $9::boolean THEN $10 ELSE tracking_url END
-     WHERE id = $1`,
+     WHERE id = $1 AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = campaign.id AND ${SCOPE_CAMPAIGN})`,
     [
       id,
       name ?? null,
@@ -774,14 +825,18 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
  */
 export async function transitionCampaign(tx: WorkspaceTx, id: string, to: CampaignStatus): Promise<CampaignDetail> {
   const { rows } = await tx.query<{ status: CampaignStatus; starts_on: string | null; brand_baseline_from: string | null }>(
-    `SELECT status, ${DATE('starts_on')} AS starts_on, ${DATE('brand_baseline_from')} AS brand_baseline_from
-     FROM campaign WHERE id = $1 FOR UPDATE`,
+    `SELECT c.status, ${DATE('c.starts_on')} AS starts_on, ${DATE('c.brand_baseline_from')} AS brand_baseline_from
+     FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} FOR UPDATE OF c`,
     [id],
   );
   const row = rows[0];
   if (!row) throw new CampaignNotFoundError(id);
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
-  await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [id, result.status, result.brandBaselineFrom]);
+  await tx.query(
+    `UPDATE campaign SET status = $2, brand_baseline_from = $3::date
+      WHERE id = $1 AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = campaign.id AND ${SCOPE_CAMPAIGN})`,
+    [id, result.status, result.brandBaselineFrom],
+  );
   await audit(tx, {
     action: 'campaign.status_changed',
     entityType: 'campaign',
@@ -867,10 +922,14 @@ interface RawQuoteRow {
  *     'campaign-from-quote:' || quote_id) y el índice único parcial de
  *     0016 lo garantiza en la base para cualquier escritor. Una campaña
  *     cancelada libera la cotización: se puede crear otra.
- *   - RLS: una cotización de otro workspace es QuoteNotFoundError.
+ *   - RLS: una cotización de otro workspace es QuoteNotFoundError. Y el
+ *     alcance (ACC-6): una cotización cuya creadora o marca no caen en
+ *     el alcance de quien acepta, o cualquiera bajo alcance por campaña
+ *     (una campaña nueva no está en ninguna lista), también.
  *   - Valida antes de escribir: InvalidDatesError (fechas), InvalidNameError
- *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError. Todos
- *     con messageEs.
+ *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError, y
+ *     ScopeError si la campaña que ya existe de esa cotización está fuera
+ *     del alcance. Todos con messageEs.
  */
 export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCampaignFromQuoteInput): Promise<CreateCampaignFromQuoteResult> {
   assertCampaignDates(input.startsOn, input.endsOn);
@@ -888,7 +947,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
             (SELECT qi.description FROM quote_item qi WHERE qi.quote_id = q.id ORDER BY qi.position, qi.id LIMIT 1) AS first_item
      FROM quote q
      JOIN company co ON co.id = q.company_id
-     WHERE q.id = $1`,
+     WHERE q.id = $1 AND ${scopeFilter({ creator: 'q.creator_id', company: 'q.company_id', campaign: null })}`,
     [input.quoteId],
   );
   const q = rows[0];
@@ -900,13 +959,19 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   // garantía en la base; el bloqueo evita que la segunda llamada choque
   // con él y pueda devolver la campaña de la primera.
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${q.id}`]);
-  const existing = await tx.query<{ id: string }>(
-    "SELECT id FROM campaign WHERE quote_id = $1 AND status <> 'cancelled' ORDER BY created_at LIMIT 1",
+  // Sin filtro de alcance a propósito: el índice único parcial cuenta
+  // TODAS las campañas vivas de la cotización. Si la que existe está
+  // fuera del alcance (se reasignó a otra creadora o marca), se dice con
+  // ScopeError en vez de chocar con el índice en el INSERT.
+  const existing = await tx.query<{ id: string; visible: boolean }>(
+    `SELECT c.id, (${SCOPE_CAMPAIGN}) AS visible FROM campaign c
+      WHERE c.quote_id = $1 AND c.status <> 'cancelled' ORDER BY c.created_at LIMIT 1`,
     [q.id],
   );
-  const existingId = existing.rows[0]?.id;
-  if (existingId) {
-    return { campaign: await requireCampaign(tx, existingId), created: false };
+  const found = existing.rows[0];
+  if (found) {
+    if (!found.visible) throw new ScopeError();
+    return { campaign: await requireCampaign(tx, found.id), created: false };
   }
 
   const campaignName = name ?? defaultCampaignName(q.company_name, q.first_item, q.number);
@@ -1098,9 +1163,14 @@ function toBrandInputRow(r: RawBrandInputRow): BrandInputRow {
   return { id: r.id, kind: r.kind, source: r.source, day: r.day, value: r.value, currency: r.currency, receivedAt: r.received_at, notes: r.notes };
 }
 
+/**
+ * Fechas y moneda de la campaña, en el alcance: es la puerta de toda
+ * lectura y escritura de campaign_brand_input (fuera del alcance,
+ * CampaignNotFoundError antes de tocar la tabla).
+ */
 async function campaignDatesAndCurrency(tx: WorkspaceTx, campaignId: string): Promise<{ startsOn: string | null; endsOn: string | null; currency: string }> {
   const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null; currency: string }>(
-    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on, currency FROM campaign WHERE id = $1`,
+    `SELECT ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.currency FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [campaignId],
   );
   const row = rows[0];
@@ -1299,6 +1369,7 @@ interface RawDailyRow {
  * CAM-4.md §3). Una campaña de otro workspace es CampaignNotFoundError.
  */
 export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Promise<BrandInputs> {
+  // La puerta del alcance: fuera de él, CampaignNotFoundError antes de leer aportes.
   const campaign = await campaignDatesAndCurrency(tx, campaignId);
   const [totals, daily] = await Promise.all([
     readBrandTotals(tx, campaignId),
@@ -1334,6 +1405,8 @@ export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Prom
  * Los totales por (kind, fuente), en SQL: lo manual, el de la fecha más
  * reciente; el CSV, la suma. Con workspace_id explícito además de RLS,
  * porque también lo lee el worker (CAM-5), que corre como mc_worker.
+ * Sin filtro de alcance propio: sus dos llamadores (listBrandInputs y
+ * getResultInputs) ya comprobaron la campaña con SCOPE_CAMPAIGN.
  */
 async function readBrandTotals(q: ResultExecutor, campaignId: string): Promise<RawTotalRow[]> {
   const { rows } = await queryRows<RawTotalRow>(q,
@@ -1457,7 +1530,8 @@ interface RawPostCutRow {
 /**
  * Todo lo que calcularResultado necesita de una campaña, en cinco
  * lecturas con workspace_id explícito. null si la campaña no existe en
- * ese workspace.
+ * ese workspace o no cae en el alcance de quien pregunta (ACC-6; el
+ * worker, sin persona, lo ve todo).
  *
  * El valor de un post a un corte es la lectura más cercana sin pasarse
  * y, a igual edad, la capturada más tarde (una lectura manual que
@@ -1469,10 +1543,13 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
     id: string; workspace_id: string; status: CampaignStatus; amount: string | null; currency: string;
     starts_on: string | null; ends_on: string | null; brand_baseline_from: string | null; creator_id: string | null;
   }>(q,
-    `SELECT id, workspace_id, status, amount::text AS amount, currency,
-            ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on,
-            ${DATE('brand_baseline_from')} AS brand_baseline_from, creator_id
-     FROM campaign WHERE id = $2 AND workspace_id = $1`,
+    // El alcance se aplica a la campaña y no a cada post: campaign_result es
+    // UNA fila por campaña que comparten todos (y el worker la calcula con
+    // todos sus posts); quien ve la campaña recalcula lo mismo que el worker.
+    `SELECT c.id, c.workspace_id, c.status, c.amount::text AS amount, c.currency,
+            ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on,
+            ${DATE('c.brand_baseline_from')} AS brand_baseline_from, c.creator_id
+     FROM campaign c WHERE c.id = $2 AND c.workspace_id = $1 AND ${SCOPE_CAMPAIGN}`,
     [ws, campaignId],
   );
   const c = camps[0];
@@ -1595,7 +1672,8 @@ function isAgeCut(n: number): n is AgeCut {
  * Escribe (o reemplaza) la fila de campaign_result. UPSERT por
  * campaign_id con workspace_id explícito: la fila nace con el workspace
  * de la campaña y el UPDATE no toca una fila de otro. computedAt null =
- * now() de la base (la web); el worker pasa ctx.now().
+ * now() de la base (la web); el worker pasa ctx.now(). Fuera del alcance
+ * el SELECT no da fila: ni INSERT ni rama ON CONFLICT, y devuelve false.
  */
 export async function upsertResult(q: ResultExecutor, campaignId: string, v: CampaignResultValues, computedAt: string | null): Promise<boolean> {
   const { rows } = await queryRows<{ campaign_id: string }>(q,
@@ -1606,7 +1684,7 @@ export async function upsertResult(q: ResultExecutor, campaignId: string, v: Cam
      SELECT c.id, c.workspace_id, coalesce($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10,
             $11::numeric, $12::numeric, $13, $14::numeric, $15::numeric, $16, $17::numeric, $18, $19::numeric, $20::numeric,
             $21::numeric, NULL, $22::text[]
-     FROM campaign c WHERE c.id = $2 AND c.workspace_id = $1
+     FROM campaign c WHERE c.id = $2 AND c.workspace_id = $1 AND ${SCOPE_CAMPAIGN}
      ON CONFLICT (campaign_id) DO UPDATE SET
        computed_at = EXCLUDED.computed_at, cut_hours = EXCLUDED.cut_hours, views = EXCLUDED.views, reach = EXCLUDED.reach,
        interactions = EXCLUDED.interactions, saves = EXCLUDED.saves, shares = EXCLUDED.shares, link_clicks = EXCLUDED.link_clicks,
@@ -1651,6 +1729,9 @@ export async function computeCampaignResult(q: ResultExecutor, campaignId: strin
  * Las campañas que el job recalcula (live, measuring, reported), de todos
  * los workspaces o de uno, o una sola. Solo para el worker: como mc_app,
  * RLS la limita al workspace de la transacción.
+ *
+ * Sin alcance: solo worker (mc_worker, sin persona ni alcance):
+ * apps/worker/src/jobs/campanas/campaign-compute.ts.
  */
 export async function listCampaignsToCompute(q: PlainExecutor, filter: { workspaceId?: string; campaignId?: string } = {}): Promise<{ id: string; workspaceId: string }[]> {
   const { rows } = await queryRows<{ id: string; workspace_id: string }>(q,
@@ -1671,7 +1752,7 @@ interface RawResultRow {
   cpm: string | null; cost_per_follower: string | null; cpa: string | null; emv: string | null; missing_inputs: string[];
 }
 
-/** La fila de campaign_result de la ficha. null si todavía no se calculó. */
+/** La fila de campaign_result de la ficha. null si todavía no se calculó o si la campaña está fuera del alcance. */
 export async function getCampaignResult(tx: WorkspaceTx, campaignId: string): Promise<CampaignResultRow | null> {
   const { rows } = await tx.query<RawResultRow>(
     `SELECT campaign_id, ${TS('computed_at')} AS computed_at, cut_hours,
@@ -1684,7 +1765,8 @@ export async function getCampaignResult(tx: WorkspaceTx, campaignId: string): Pr
             code_redemptions::text AS code_redemptions, attributed_revenue::text AS attributed_revenue, currency,
             cpm::text AS cpm, cost_per_follower::text AS cost_per_follower, cpa::text AS cpa, emv::text AS emv,
             to_jsonb(missing_inputs) AS missing_inputs
-     FROM campaign_result WHERE campaign_id = $1 AND workspace_id = $2`,
+     FROM campaign_result r WHERE r.campaign_id = $1 AND r.workspace_id = $2
+       AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = r.campaign_id AND ${SCOPE_CAMPAIGN})`,
     [campaignId, tx.workspaceId],
   );
   const r = rows[0];
@@ -1720,6 +1802,9 @@ export async function getCampaignResult(tx: WorkspaceTx, campaignId: string): Pr
  * escritura y la migración 0041 se la devolvió (INSERT y UPDATE, sin
  * DELETE). El botón «Recalcular» se enseña solo si la base lo permite: en
  * una base sin 0041 la ficha dice «Se recalcula cada mañana», sin bandera.
+ *
+ * Sin alcance: pregunta por un privilegio del rol en la base, no lee
+ * filas de ningún creador, marca ni campaña.
  */
 export async function canRecomputeResult(tx: WorkspaceTx): Promise<boolean> {
   const { rows } = await tx.query<{ ok: boolean }>(
@@ -1809,7 +1894,9 @@ export function brandAccountsOf(raw: unknown): BrandAccount[] {
  * brand_baseline_from, que es el ancla de la línea base (core).
  *
  * `campaign` evita volver a leer la ficha si quien llama ya la tiene (la
- * página). null si la campaña no existe en este workspace.
+ * página). null si la campaña no existe en este workspace o está fuera
+ * del alcance (getCampaign ya filtra; la serie vuelve a filtrar por si
+ * quien llama pasó la ficha).
  */
 export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string, campaign?: CampaignDetail): Promise<BrandFollowersResult | null> {
   const c = campaign ?? (await getCampaign(tx, campaignId));
@@ -1827,7 +1914,7 @@ export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string, ca
              JOIN brand_account_snapshot s ON s.company_id = c.company_id
              JOIN unnest($2::text[], $3::text[]) AS b(platform_id, handle)
                ON b.platform_id = s.platform_id AND lower(ltrim(s.handle, '@')) = lower(b.handle)
-            WHERE c.id = $1
+            WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}
               AND (c.brand_baseline_from IS NULL OR s.day >= c.brand_baseline_from - 1)
             ORDER BY s.platform_id, s.day, (s.followers IS NULL), s.captured_at, s.id`,
           [campaignId, accounts.map((a) => a.platform_id), accounts.map((a) => a.handle)],
@@ -1860,11 +1947,14 @@ export async function listBrandFollowers(tx: WorkspaceTx, campaignId: string, ca
  * Las redes de la campaña que ya tienen una lectura CON cifra ese día.
  * «Actualizar ahora» no llama a la fuente para esas: la fila no entraría
  * (ON CONFLICT DO NOTHING) y la llamada gastaría cuota de la casa.
+ * Fuera del alcance, lista vacía.
  */
 export async function brandPlatformsReadOn(tx: WorkspaceTx, campaignId: string, day: string): Promise<string[]> {
   const { rows } = await tx.query<{ platform_id: string }>(
-    `SELECT DISTINCT platform_id FROM brand_account_snapshot
-      WHERE campaign_id = $1 AND day = $2::date AND followers IS NOT NULL ORDER BY 1`,
+    `SELECT DISTINCT s.platform_id FROM brand_account_snapshot s
+      WHERE s.campaign_id = $1 AND s.day = $2::date AND s.followers IS NOT NULL
+        AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = s.campaign_id AND ${SCOPE_CAMPAIGN})
+      ORDER BY 1`,
     [campaignId, day],
   );
   return rows.map((r) => r.platform_id);
@@ -1904,8 +1994,14 @@ export type BrandSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
  * bigserial no sale de aquí (CIM-2 §3). Desde la web, RLS exige que la
  * campaña se vea y que company_id sea el suyo; el worker filtra por
  * workspace antes de llamar.
+ *
+ * Alcance (ACC-6): antes de escribir, la campaña tiene que caer en el
+ * alcance de quien escribe (CampaignNotFoundError si no). Para el worker
+ * (mc_worker, sin persona) la comprobación deja pasar siempre.
  */
 export async function recordBrandSnapshot(db: BrandSnapshotWriter, input: BrandSnapshotInput): Promise<BrandSnapshotOutcome> {
+  const visible = await db.query(`SELECT 1 FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [input.campaignId]);
+  if (visible.rows.length === 0) throw new CampaignNotFoundError(input.campaignId);
   const { rows } = await db.query(
     `INSERT INTO brand_account_snapshot (campaign_id, company_id, platform_id, external_account_id, handle, day, followers, media_count, source)
      VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9)

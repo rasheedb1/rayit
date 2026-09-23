@@ -24,7 +24,7 @@ import {
 } from "@mc/connectors";
 import {
   addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  recordAccountSnapshot, recordConsent, type AccountRow, type WorkspaceTx,
+  recordAccountSnapshot, recordConsent, ScopeError, type AccountRow, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
 import { notifyOwner, type OwnerNotice } from "./owner-notice";
@@ -53,7 +53,7 @@ export interface Requester {
 
 export type AgregarResult =
   | { ok: true; id: string; created: boolean; profile: PublicProfile; ownerNotice: OwnerNotice }
-  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "plataforma"; message: string };
+  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "fuera_de_alcance" | "plataforma"; message: string };
 
 export type ActualizarResult =
   | {
@@ -152,6 +152,8 @@ export function createCuentasService(deps: CuentasDeps) {
       } catch (err) {
         if (err instanceof NoCreatorProfile || err instanceof CreatorNotInWorkspace) return { ok: false, code: "sin_creador", message: err.message };
         if (err instanceof SinPermisoError) return { ok: false, code: "sin_permiso", message: err.message };
+        // ACC-6: ese @ ya es una cuenta de otro creador del espacio, fuera del alcance de quien la agrega.
+        if (err instanceof ScopeError) return { ok: false, code: "fuera_de_alcance", message: err.messageEs };
         throw err;
       }
     },
