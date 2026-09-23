@@ -67,8 +67,11 @@ quien integra, nunca yo).
    dos workspaces con campaña sobre la misma marca del catálogo
    chocarían y la lectura de uno quedaría bajo la campaña del otro,
    invisible para el primero). Por eso 0035 cambia la unicidad a
-   `(campaign_id, platform_id, day)` (y `(company_id, platform_id, day)`
-   solo para las filas sin campaña, las del seed). El job hace UNA
+   `(campaign_id, platform_id, day, followers IS NOT NULL)` (y
+   `(company_id, platform_id, day)` solo para las filas sin campaña, las
+   del seed). La cuenta de la campaña se reconoce por red **y handle**
+   (sin distinguir mayúsculas ni @): otra cuenta de la misma empresa en
+   la misma red no se mezcla en la curva. El job hace UNA
    llamada por (workspace, empresa, red, handle) y deja una fila por
    campaña en ventana; `listBrandFollowers` lee por `company_id` de la
    campaña a través de `brand_account_snapshot` (RLS por la campaña de
@@ -105,17 +108,22 @@ quien integra, nunca yo).
    5xx, 429) → `failed`, sin fila, pg-boss reintenta. Fuente sin
    configurar (`missing`) → la plataforma se salta, `skipped` en la
    metadata y un `warn` una vez por corrida, como CON-10.
-6. **«Actualizar ahora».** Server Action que lee la fuente en el momento
-   y llama a la MISMA `recordBrandSnapshot(db, input)` que el job, con
-   `ON CONFLICT DO NOTHING`: la primera lectura del día queda. La función
-   recibe `{ query }` (un `WorkspaceTx` en la web, `ctx.db` en el worker),
-   como `EncryptedSecretStore`. El worker pasa `{ onConflict:
-   'fill_missing' }`: su INSERT reemplaza una marca «sin cifra» del mismo
-   día por una lectura real (nunca al revés, nunca una lectura por otra);
-   `mc_app` no tiene UPDATE, así que desde la web siempre es `DO
-   NOTHING`. Segunda corrida del job el mismo día → ninguna fila nueva.
+6. **«Actualizar ahora».** Server Action que abre con
+   `requirePermission("campanas.campana.editar")` (ACC-1, ya en `main`),
+   lee la fuente en el momento y llama a la MISMA
+   `recordBrandSnapshot(db, input)` que el job. La función recibe
+   `{ query }` (un `WorkspaceTx` en la web, `ctx.db` en el worker), como
+   `EncryptedSecretStore`, y es solo INSERT con `ON CONFLICT DO NOTHING`.
+   Si hoy ya hay cifra para esa red, no llama a la fuente
+   (`brandPlatformsReadOn`): la fila no entraría y la llamada gastaría
+   cuota de la casa. El resultado vuelve a la ficha como **códigos** en
+   la URL (`?marca=guardada&aviso=transitorio.youtube`) que la página
+   traduce con `messages.ts` (`_lib/aviso-marca.ts`): un enlace no puede
+   meter texto propio, y el nombre de una variable del servidor no llega
+   a la pantalla (va al log). Segunda corrida del job el mismo día →
+   ninguna fila nueva.
 7. **TikTok.** No hay fuente pública de seguidores: el job deja una fila
-   con `followers NULL`, `source 'tiktok.oembed'` y el handle, y la ficha
+   con `followers NULL`, `source 'no_public_source'` y el handle, y la ficha
    explica con la nota de la fuente («TikTok no publica seguidores por
    @…»). No se vuelve a llamar a oEmbed cada día para eso: la fila del
    día se escribe sin llamada. Descartado: no escribir nada (la ficha no
@@ -125,7 +133,10 @@ quien integra, nunca yo).
    0029) y la política de INSERT de 0029 es `TO CURRENT_USER` (el seed).
    Sin INSERT no existe «Actualizar ahora» desde la web, que es el punto
    (6) de la historia. La migración (a) cambia la unicidad como dice la
-   decisión 2, (b) da `INSERT` (no UPDATE ni DELETE: append-only como
+   decisión 2 —un día admite una fila sin cifra y una con cifra, así que
+   una marca «no encontrada» a las 07:00 cuyo handle se corrige a
+   mediodía tiene su cifra ese día sin que nadie haga UPDATE: la tabla
+   es de métricas, solo INSERT (CLAUDE.md)—, (b) da `INSERT` (no UPDATE ni DELETE: append-only como
    `account_metric_snapshot` en 0025 §5), `USAGE` sobre
    `brand_account_snapshot_id_seq` (0026 §4: USAGE solo donde inserta),
    una política `FOR INSERT TO mc_app` que exige `campaign_id NOT NULL`,
@@ -141,8 +152,9 @@ quien integra, nunca yo).
    no exista y la ficha solo lea lo que dejó el job, con la unicidad
    vieja. Tomé la opción con precedente (0022) y la acción degrada bien:
    si Supabase aún no tiene 0035, el INSERT falla con `42501` y la ficha
-   dice que la actualización manual llega con la migración, sin romper
-   nada.
+   dice que la actualización manual todavía no está disponible, sin
+   romper nada. **Número:** nació 0034, pero `nicolas/ACC-3-esquema-accesos`
+   y `nicolas/ACC-6-alcance-consultas` ya usan 0034; queda 0035.
 9. **Ventana de lectura del job.** Campañas `planned`, `live` o
    `measuring` con `brand_accounts` no vacío y hoy dentro de
    `[coalesce(brand_baseline_from, starts_on − 14), ends_on + 30]`; sin
@@ -164,8 +176,10 @@ quien integra, nunca yo).
     fechas por `formatterFor(await getCurrentWorkspace())`; los textos
     en `_lib/messages.ts`. Sin cifra → frase, nunca guion ni cero.
 12. **Metadata de `job_run`:** día, campañas en ventana, objetivos
-    (pares campaña/plataforma), listas de ids por resultado y `skipped`
-    por plataforma. Sin handles ni tokens; los handles de las marcas son
+    (pares campaña/plataforma), listas de pares por resultado
+    (`snapshots`, `noSource`, `errored`, `transient`, `writeErrors`,
+    `quota`) y `skipped` por plataforma. Un fallo de la base al escribir
+    una marca cuenta como transitorio de esa marca y no corta las demás. Sin handles ni tokens; los handles de las marcas son
     públicos pero no hacen falta ahí (van en la fila).
 
 ### 0.3 Dudas que resolví solo
@@ -184,3 +198,58 @@ quien integra, nunca yo).
 - **¿Serie desde `brand_baseline_from − 1`?** La consulta trae también
   la lectura anterior a la línea base si existe (es el ancla); la
   curva se dibuja desde `brand_baseline_from`.
+
+---
+
+## 1. Lo que quedó construido
+
+| Pieza | Dónde | Prueba |
+|---|---|---|
+| `ritmoSeguidores`, `isBrandSnapshotDue`, `brandNoDataReasonFor` | `packages/core/src/campanas.ts` | `packages/core/test/campanas.test.ts` (seed 12,9286 / 155 / 1 240 / ×12; línea base corta; huecos; serie vacía → null; ventana; razones) |
+| Migración 0035 | `db/migrations/0035_brand_snapshot_por_campana.sql` | `make db.check`; `packages/db/test/esquema.test.ts` y `rls.test.ts` (guardia y RLS sin cambios de expectativa) |
+| `listBrandFollowers`, `brandPlatformsReadOn`, `recordBrandSnapshot` | `packages/db/src/queries/campanas.ts` | `packages/db/test/campanas.test.ts` §«seguidores de la marca» (serie del seed, segunda campaña reutiliza, RLS negativa, INSERT idempotente, sin cifra + con cifra el mismo día, otra cuenta no se mezcla, escrituras rechazadas) |
+| Job `brand.snapshot` | `apps/worker/src/jobs/campanas/` | `apps/worker/test/brand-snapshot.test.ts` (seis casos) y `runner.test.ts` |
+| Instagram 110 → `not_found` | `packages/connectors/src/public/instagram-public.ts` | `packages/connectors/test/public-profile.test.ts` |
+| Sección de la ficha y «Actualizar ahora» | `apps/web/app/(app)/campanas/[id]/seguidores.tsx`, `actions.ts`, `_lib/{seguidores,marca-service,marca-server,aviso-marca,messages,db}.ts` | `seguidores.test.tsx`, `actualizar-marca.test.ts` (rol sin permiso), `_lib/marca-service.test.ts` (pglite + fixtures), `_lib/aviso-marca.test.ts` |
+| `LineChart.shades`, `formatNumber` | `components/ui/line-chart.tsx`, `lib/format.ts` | `charts.test.tsx`, `lib/format.test.ts` |
+
+## 2. Lo que necesita Rasheed
+
+| # | Qué | Por qué |
+|---|---|---|
+| 1 | Revisar `0035_brand_snapshot_por_campana.sql` y aplicarla en Supabase **después** de las dos 0034 de ACC (no depende de ellas), con `make db.guardia` en verde antes de desplegar. | Sin ella la curva del seed se ve igual (lectura), pero «Actualizar ahora» responde «todavía no se puede actualizar desde aquí» y el job, contra la unicidad vieja, chocaría entre workspaces. |
+| 2 | Decidir el orden de numeración si ACC-3 y ACC-6 se integran con dos 0034 (una tendrá que moverse). | Dos archivos con el mismo número detienen el runner. |
+| 3 | Worker contra Supabase (CIM-7, `GRANT mc_worker TO mc_migrator`, esquema `pgboss`). | Sin worker desplegado no hay lectura diaria en producción; «Actualizar ahora» funciona sin él. |
+| 4 | Opcional: un `CHECK (jsonb_typeof(brand_accounts) = 'array')` en `campaign`. | El job ya se protege (`CASE`), pero la columna no tiene tipo. |
+| — | Variables: ninguna nueva. Usa `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` de CON-10. | |
+
+## 3. Verificación
+
+- `make db.check`: 0035 aplica en Postgres embebido. `make db.seed.check`: seeds idempotentes y comprobaciones en verde.
+- Suites: `core` 107, `connectors` 180, `worker` 53, `web` 762 (+1 todo), `db` completa (ver entrega).
+- En dev (modo demo, puerto 3163): la ficha de Café Alma muestra «×12 el ritmo», «12,9 al día antes · 155 al día en campaña · 1.240 ganados», las dos ventanas y «datos hasta el 2 sep». En Fresko (TikTok, en medición) «Actualizar ahora» por HTTP devolvió 303 a `?marca=guardada` y la segunda vez a `?marca=ya_hoy`; la sección explicó «TikTok no publica los seguidores de @freskomarket…». A 400 px, claro y oscuro, sin desborde (`scrollWidth` 400).
+- `/code-review` alto: diez hallazgos, todos resueltos (§5). `/security-review`: sin hallazgos.
+
+## 4. Fuera de alcance
+
+- **Editar `brand_accounts` desde la ficha** (corregir un handle): hoy solo se fija al crear la campaña. Recomendado como campo del formulario de datos de CAM-1; **DECISIÓN PENDIENTE DE NICOLÁS** si entra en CAM-4 o en una historia propia.
+- **Seguidores de la marca por OAuth de la marca**: no existe (decisión D del backlog).
+- **Vigilar marcas fuera de campaña**: `watch.external`, fase 2.
+- **Resultado** (`campaign_result.brand_followers_*`, `missing_inputs` cuando `fiable = false`): CAM-5, que lee `listBrandFollowers`.
+- **TikTok con cifras**: sin fuente pública (CON-10); llega con el proveedor o con «Autorizar cifras».
+- **El parámetro `?error=` de la ficha** (CAM-1) sigue mostrando texto de la URL; no lo toca esta historia.
+
+## 5. Revisión (/code-review, nivel alto) y cómo se resolvió
+
+| Hallazgo | Resolución |
+|---|---|
+| La acción no llamaba a `requirePermission` (ACC-1 ya en `main`) | Primera línea `requirePermission("campanas.campana.editar")`; prueba con el Contador |
+| `jsonb_array_length` sobre un `brand_accounts` que no es lista tumbaba la corrida | `CASE WHEN jsonb_typeof(...) = 'array'` (un `AND` no bastaba: la prueba lo demostró) |
+| «Actualizar ahora» no podía traer la cifra tras un «no encontrada» del mismo día | Unicidad con `followers IS NOT NULL`: las dos filas conviven |
+| Series de dos cuentas de la misma red se mezclaban | Filtro por handle |
+| Llamadas repetidas gastaban cuota | `brandPlatformsReadOn` salta la llamada si ya hay cifra hoy |
+| Un fallo de escritura se trataba distinto según el camino | `write()` único: cuenta como `writeErrors`, no corta las demás |
+| `?aviso=` mostraba texto arbitrario y el nombre de una variable | Códigos traducidos con `messages.ts` |
+| `fill_missing` hacía UPDATE sobre una tabla de métricas | Eliminado; solo INSERT |
+| `getCampaign` dos veces por render | `listBrandFollowers(tx, id, campaign)` |
+| Reglas de razones duplicadas en web y worker | `brandNoDataReasonFor` y `BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE` en core; `addDays` de core |
