@@ -178,20 +178,24 @@ marca de cada campaña `planned`, `live` o `measuring` con
 
 - Una marca en varias campañas del mismo workspace se lee **una vez**
   (workspace, empresa, red, handle) y deja **una fila por campaña**:
-  `brand_account_snapshot` es único por (campaña, red, día) desde 0035.
+  `brand_account_snapshot` es único por (campaña, red, día, con o sin
+  cifra) desde 0035.
 - Escribe con `recordBrandSnapshot` de `@mc/db/queries/campanas`, el
-  mismo INSERT que «Actualizar ahora» en la ficha, con
-  `onConflict: 'fill_missing'`: la primera lectura del día queda, y el
-  worker solo reemplaza una fila **sin cifra** por una con cifra.
+  mismo INSERT que «Actualizar ahora» en la ficha: solo INSERT, `ON
+  CONFLICT DO NOTHING`. La primera lectura del día queda; una fila sin
+  cifra de la mañana convive con la cifra que llegue después, y la ficha
+  prefiere la que trae cifra. Nadie hace UPDATE.
 - Sin cifra, la fila lleva `followers NULL` y la razón en `source`:
   `no_public_source` (TikTok, sin llamada), `not_found` (Meta 110, un
   YouTube vacío) o `not_discoverable` (cuenta personal o privada). Estas
   no cuentan como fallo; mañana se vuelve a mirar.
-- Transitorio → `failed`, sin fila, pg-boss reintenta. Cuota agotada →
-  `failed` con `retry: false`. Fuente sin credencial → la red va a
+- Transitorio o fallo de la base al escribir → `failed`, sin fila,
+  pg-boss reintenta (un fallo de escritura no corta las demás marcas).
+  Cuota agotada → `failed` con `retry: false`. Fuente sin credencial → la red va a
   `metadata.skipped` con un aviso por corrida.
 - `metadata`: `day`, `campaigns`, `targets` y listas de
-  `{ campaignId, platformId }` por resultado. Sin handles ni tokens.
+  `{ campaignId, platformId }` por resultado (`snapshots`, `noSource`,
+  `errored`, `transient`, `writeErrors`, `quota`). Sin handles ni tokens.
 
 ```sql
 -- ¿Qué leyó hoy brand.snapshot y qué no?
