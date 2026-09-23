@@ -9,6 +9,7 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { pillForInvoice } from "../../_lib/estado";
+import { MESSAGES } from "../../_lib/messages";
 import { cambiarEstadoFactura } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -77,8 +78,8 @@ export default async function FacturaPage({
         title={`Factura ${invoice.number}`}
         description={`${invoice.companyName}${invoice.campaignName ? ` · ${invoice.campaignName}` : " · sin campaña"}`}
         aside={
-          <Button variant="ghost" href="/finanzas">
-            Volver a facturas
+          <Button variant="ghost" href="/finanzas/facturas">
+            {MESSAGES.facturas.back}
           </Button>
         }
       />

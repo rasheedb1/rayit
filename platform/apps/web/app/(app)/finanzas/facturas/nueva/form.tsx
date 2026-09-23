@@ -192,7 +192,7 @@ export function NuevaFacturaForm({ companies, campaigns, workspace, defaults, in
           <Button type="submit" variant="primary" loading={pending}>
             Guardar borrador
           </Button>
-          <Button variant="ghost" href="/finanzas">
+          <Button variant="ghost" href="/finanzas/facturas">
             Cancelar
           </Button>
         </div>
