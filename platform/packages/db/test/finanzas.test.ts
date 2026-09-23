@@ -262,6 +262,10 @@ describe('transiciones', () => {
 
 /** Un negocio ganado que la prueba inserta, para el caso que el seed no tiene. */
 const DEAL_SIN_FACTURA = '00000009-0000-4000-8000-0000000dea99';
+/** Y otro cuya única factura está en borrador. */
+const DEAL_CON_BORRADOR = '00000009-0000-4000-8000-0000000dea98';
+const CAMPANA_BORRADOR = '00000009-0000-4000-8000-000000ca0098';
+const FACTURA_BORRADOR = '00000009-0000-4000-8000-0000fac26098';
 
 /** La semana de `fecha`, o undefined si cae fuera de la ventana. */
 function semanaDe(c: Cashflow, fecha: string) {
@@ -294,15 +298,32 @@ describe('FIN-6 · getCashflowInputs con el seed', () => {
     assert.ok(!i.negocios.some((n) => n.name.includes('granola')), 'el perdido queda fuera');
   });
 
-  test('trae los gastos recurrentes de los últimos meses, con su fecha y sin los puntuales', async () => {
+  test('trae los gastos recurrentes de la ventana, con su fecha y sin los puntuales', async () => {
     const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
-    // Cinco recurrentes por mes; los dos puntuales (micrófono, viaje) no están.
-    assert.ok(i.gastos.length >= 5, `esperaba al menos los cinco del mes, vinieron ${i.gastos.length}`);
+    // El seed 0003 escribe sus gastos con fechas ABSOLUTAS (julio, agosto
+    // y septiembre de 2026), no relativas como las facturas, así que en
+    // algún momento se salen de la ventana de 120 días. Cuando eso pase,
+    // esta prueba tiene que decirlo con claridad y no callar.
+    assert.ok(
+      i.gastos.length > 0,
+      `Ningún gasto recurrente en la ventana de 120 días desde ${i.today}. Los del seed 0003 ` +
+        'están con fechas absolutas de 2026: hay que pasarlos a fechas relativas (CURRENT_DATE) ' +
+        'como las facturas, o esta lectura ya no prueba nada.',
+    );
     assert.ok(!i.gastos.some((g) => g.label.includes('Micrófono')), 'un gasto puntual no es recurrente');
-    const septiembre = i.gastos.filter((g) => g.incurredOn.startsWith('2026-09'));
-    assert.equal(septiembre.length, 5);
-    const suma = septiembre.reduce((acc, g) => acc + BigInt(g.amount.replace('.', '')), 0n);
-    assert.equal(suma, 370000000n, '3 700 000,00 al mes');
+    assert.ok(!i.gastos.some((g) => g.label.includes('finca')), 'un viaje puntual tampoco');
+
+    // Cinco recurrentes por mes, 3 700 000 cada mes: se comprueba mes a
+    // mes sobre lo que vino, sin fijar cuál es el mes.
+    const porMes = new Map<string, bigint>();
+    for (const g of i.gastos) {
+      const mes = g.incurredOn.slice(0, 7);
+      porMes.set(mes, (porMes.get(mes) ?? 0n) + BigInt(g.amount.replace('.', '')));
+    }
+    for (const [mes, suma] of porMes) {
+      assert.equal(i.gastos.filter((g) => g.incurredOn.startsWith(mes)).length, 5, `cinco recurrentes en ${mes}`);
+      assert.equal(suma, 370000000n, `3 700 000,00 en ${mes}`);
+    }
   });
 
   test('la moneda, el plazo y el 11 % de reserva salen del workspace, no de una constante', async () => {
@@ -341,6 +362,9 @@ describe('FIN-6 · el gráfico sale de la función con los datos del seed', () =
   test('los gastos y la reserva del seed: 853 846,15 por semana y el 11 % de cada cobro', async () => {
     const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
     const c = projectCashflow(i);
+    // El ritmo sale del último mes CERRADO con recurrentes, que es el que
+    // haya en la ventana: el seed pone los mismos 3 700 000 en cada uno.
+    assert.ok(c.gastoMes !== null && c.gastoMes < i.today.slice(0, 7), `${c.gastoMes} es un mes cerrado`);
     assert.equal(c.gastoMensual, '3700000.00');
     assert.equal(c.gastoSemanal, '853846.15');
     for (const s of c.semanas) {
@@ -393,6 +417,50 @@ describe('FIN-6 · el gráfico sale de la función con los datos del seed', () =
       assert.equal(c.excluidos.yaFacturados.count, 4, 'los cuatro del seed siguen fuera');
     } finally {
       await t.admin(`DELETE FROM deal WHERE id = '${DEAL_SIN_FACTURA}'`);
+    }
+  });
+
+  test('un ganado cuya ÚNICA factura está en borrador sigue contando: el borrador no debe nada', async () => {
+    // El agujero: la factura en borrador no está entre las que deben
+    // plata, así que si además marcara el negocio como «ya facturado»,
+    // su monto desaparecía de la proyección entre crear la factura y
+    // marcarla enviada, que es el camino normal de FIN-1.
+    await t.admin(`
+      INSERT INTO deal (id, workspace_id, company_id, name, stage_id, amount, currency, expected_close_date, won_at)
+      VALUES ('${DEAL_CON_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}',
+              'Ganado con factura en borrador', 'ganado', 2000000.00, 'COP', CURRENT_DATE - 5, now());
+      INSERT INTO campaign (id, workspace_id, company_id, deal_id, name, amount, currency, status)
+      VALUES ('${CAMPANA_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${DEAL_CON_BORRADOR}',
+              'Campaña del borrador', 2000000.00, 'COP', 'planned');
+      INSERT INTO invoice (id, workspace_id, company_id, campaign_id, number, currency,
+                           subtotal, tax, withholding, total, issued_on, due_on, status)
+      VALUES ('${FACTURA_BORRADOR}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CAMPANA_BORRADOR}',
+              'FV-2026-900', 'COP', 1680672.27, 319327.73, 184873.95, 2000000.00,
+              CURRENT_DATE, CURRENT_DATE + 30, 'draft');
+    `);
+    try {
+      const i = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+      const n = i.negocios.find((x) => x.id === DEAL_CON_BORRADOR);
+      assert.ok(n, 'el negocio viene en la consulta');
+      assert.equal(n.hasInvoice, false, 'un borrador no cuenta como facturado');
+      assert.ok(!i.facturas.some((f) => f.number === 'FV-2026-900'), 'y tampoco está entre las que deben plata');
+
+      const c = projectCashflow(i);
+      const enAlgunaSemana = c.semanas.some((s) => s.detalle.some((d) => d.id === DEAL_CON_BORRADOR));
+      assert.ok(enAlgunaSemana, 'su monto sigue en la proyección, no se evapora');
+
+      // Y al marcarla enviada, pasa a contar la factura y no el negocio.
+      await t.admin(`UPDATE invoice SET status = 'sent' WHERE id = '${FACTURA_BORRADOR}'`);
+      const j = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+      assert.equal(j.negocios.find((x) => x.id === DEAL_CON_BORRADOR)?.hasInvoice, true);
+      assert.ok(j.facturas.some((f) => f.number === 'FV-2026-900'), 'ahora sí debe plata');
+      const d = projectCashflow(j);
+      assert.ok(!d.semanas.some((s) => s.detalle.some((x) => x.id === DEAL_CON_BORRADOR)), 'el negocio ya no suma');
+      assert.ok(d.semanas.some((s) => s.detalle.some((x) => x.label === 'FV-2026-900')), 'suma la factura');
+    } finally {
+      await t.admin(`DELETE FROM invoice WHERE id = '${FACTURA_BORRADOR}'`);
+      await t.admin(`DELETE FROM campaign WHERE id = '${CAMPANA_BORRADOR}'`);
+      await t.admin(`DELETE FROM deal WHERE id = '${DEAL_CON_BORRADOR}'`);
     }
   });
 });

@@ -191,7 +191,56 @@ Ingresos de plataformas (FIN-7), escenarios optimista/pesimista (fase
 2), conversión de moneda, y la pantalla de gastos (FIN-5): FIN-6 lee
 `expense`, no la escribe.
 
-### 0.6 Dudas
+### 0.6 Correcciones tras `/code-review` (nivel alto)
+
+El plan de arriba se deja como se escribió, antes de tocar código. Estas
+son las siete cosas que la revisión encontró y cómo quedaron:
+
+1. **Una factura en borrador hacía desaparecer el negocio.** `hasInvoice`
+   contaba cualquier factura que no fuera `void`, pero las que «deben
+   plata» son solo `sent`, `partial` y `overdue`. Como `createInvoice`
+   siempre inserta en `draft` (FIN-1), entre crear la factura y marcarla
+   enviada el negocio quedaba «ya facturado» y su factura fuera de los
+   cobros: el monto se evaporaba de la proyección, en el camino normal.
+   Ahora `hasInvoice` es `status NOT IN ('void', 'draft')`, con su
+   prueba en PGlite que además comprueba el traspaso al marcarla
+   enviada.
+2. **El mes en curso hundía el ritmo de gastos.** «El mes más reciente
+   con recurrentes» es el mes que se está registrando: el 3 de octubre,
+   con una de cinco suscripciones anotada, el ritmo caía de 3 700 000 a
+   380 000 y la caja proyectada subía más de 6 M. Ahora manda el último
+   mes **cerrado**, y solo si no hay ninguno en la ventana se usa el
+   mes en curso (un espacio recién abierto). La nota del gráfico dice de
+   qué mes salió la cifra, así que el número tiene fuente comprobable.
+3. **Un negocio con fecha pero sin monto decía «sin fecha de cierre».**
+   Y además imprimía «por COP 0», que es justo el cero mudo que esta
+   historia no quiere. Ahora tiene su propio grupo, `excluidos.sinMonto`,
+   con su frase: «no tiene monto acordado, así que no hay cifra que
+   proyectar».
+4. **Los gastos del seed caducan.** `db/seed/0003` los escribe con
+   fechas absolutas de 2026 mientras las facturas del mismo seed van
+   con `CURRENT_DATE`; la ventana de la consulta es de 120 días, así que
+   alrededor de enero de 2027 se salen. La prueba ya no fija «septiembre»:
+   comprueba mes a mes lo que vino, y si no viene nada falla con un
+   mensaje que dice exactamente qué arreglar en el seed. **Rasheed: si
+   0003 es tuyo, pasar esos gastos a fechas relativas lo resuelve de
+   raíz** (ver §1.5).
+5. **Un gasto recurrente en otra moneda se avisaba una vez por mes.**
+   Ahora todo lo de gastos —el ritmo y lo que se deja fuera por moneda—
+   se mide en el mismo mes, así que una suscripción en USD se avisa una
+   vez.
+6. **`aria-labelledby` apuntaba a un id que no existe**, dejando esa
+   región sin nombre accesible. `ChartCard` ya es un `<article>` con su
+   encabezado: se quitó.
+7. **Un `<details>` dentro de un `<span>`**, que es exactamente el
+   anidamiento inválido que el comentario de al lado daba como motivo
+   para no usar `CellMain`. Ahora es un `<div>`, que sí cabe en un `<td>`.
+
+Además apareció `formatMonth` en `apps/web/lib/format.ts` (con sus
+pruebas): nombrar el mes del que sale el ritmo es lo que convierte
+«el último mes» en una cifra con fuente.
+
+### 0.7 Dudas
 
 - La de §0.2.4 (cobro bruto vs. neto de retención).
 - Si FIN-5 acaba dando a `expense` una columna «próximo cobro»
@@ -218,10 +267,17 @@ ni `queries/ventas.ts`. Lo que sí le pido, por orden de urgencia:
    `CREATE INDEX ON deal (workspace_id, expected_close_date) WHERE
    won_at IS NOT NULL`. **No lo pido todavía**: sería optimizar sin
    medir.
-3. **`expense` no tiene índice por `incurred_on`.** Igual que arriba:
+3. **`db/seed/0003`: los gastos con fecha absoluta.** Las facturas del
+   mismo seed van con `CURRENT_DATE ± n` para que la demo no envejezca;
+   los gastos, no (`DATE '2026-09-01'`). La consulta del flujo mira los
+   últimos 120 días, así que hacia enero de 2027 el seed se queda sin
+   gastos recurrentes y la demo enseña el flujo sin la mitad de su
+   historia. **No lo cambio yo** (no es mi carpeta); la prueba avisa con
+   un mensaje que lo explica. Ver §0.6.4.
+4. **`expense` no tiene índice por `incurred_on`.** Igual que arriba:
    `CREATE INDEX ON expense (workspace_id, incurred_on) WHERE
    is_recurring` cuando haya volumen. Tampoco lo pido hoy.
-4. **Revisar la decisión §0.2.4** (cobro bruto vs. neto de retención)
+5. **Revisar la decisión §0.2.4** (cobro bruto vs. neto de retención)
    con Nicolás antes de que FIN-2 registre pagos: si cambia, cambia
    también qué escribe FIN-2 en `tax_reserve`.
 

@@ -25,9 +25,10 @@
  *     semana. La retención en la fuente NO se descuenta además: es un
  *     anticipo del mismo impuesto que la reserva aparta.
  *   - Los gastos recurrentes se proyectan como ritmo mensual repartido
- *     por semana (mensual × 12 / 52), tomando el mes más reciente que
- *     tenga recurrentes; sumarlos todos contaría la misma suscripción
- *     una vez por mes.
+ *     por semana (mensual × 12 / 52), tomando el mes CERRADO más
+ *     reciente; sumarlos todos contaría la misma suscripción una vez
+ *     por mes, y tomar el mes en curso la contaría a medias mientras se
+ *     va registrando.
  *   - Lo que no venga en la moneda del workspace queda fuera: no hay
  *     conversión en el MVP.
  */
@@ -134,8 +135,10 @@ export interface Excluidos {
   vencidas: Excluido;
   /** Negocios ganados que ya tienen factura: contarlos sería duplicar. */
   yaFacturados: Excluido;
-  /** Negocios ganados sin `expected_close_date` (o sin monto). */
+  /** Negocios ganados sin `expected_close_date`. */
   sinFecha: Excluido;
+  /** Negocios ganados con fecha pero sin `amount`: no hay cifra que proyectar. */
+  sinMonto: Excluido;
   /** Cobros que caen antes o después de las ocho semanas. */
   fueraDeVentana: Excluido;
   /** Lo que venía en otra moneda, con la lista de monedas encontradas. */
@@ -149,7 +152,9 @@ export interface Cashflow {
   proyectado: Decimal;
   /** La semana con el acumulado más bajo (el fondo de caja), o null. */
   semanaMasAjustada: SemanaFlujo | null;
-  /** Suma de los recurrentes del mes más reciente que tenga alguno. */
+  /** El mes del que sale el ritmo ('2026-08'), o null si no hay gastos. */
+  gastoMes: string | null;
+  /** Suma de los recurrentes de ese mes, en la moneda del workspace. */
   gastoMensual: Decimal;
   /** `gastoMensual × 12 / 52`: lo que se resta cada semana. */
   gastoSemanal: Decimal;
@@ -246,6 +251,7 @@ export function projectCashflow(input: CashflowInput): Cashflow {
   const vencidas = new Suma();
   const yaFacturados = new Suma();
   const sinFecha = new Suma();
+  const sinMonto = new Suma();
   const fueraDeVentana = new Suma();
   const otraMoneda = new Suma();
   const monedas = new Set<string>();
@@ -297,8 +303,15 @@ export function projectCashflow(input: CashflowInput): Cashflow {
       otraMoneda.add(n.amount);
       continue;
     }
-    if (n.expectedCloseDate === null || n.amount === null) {
+    if (n.expectedCloseDate === null) {
       sinFecha.add(n.amount);
+      continue;
+    }
+    if (n.amount === null) {
+      // Tiene fecha, pero no hay cifra que proyectar. Es otra cosa que
+      // «sin fecha», y la pantalla lo dice con otra frase: si no, se
+      // leía «Sin fecha de cierre: 1 negocio por COP 0».
+      sinMonto.add(null);
       continue;
     }
     assertFecha(n.expectedCloseDate, 'expectedCloseDate');
@@ -313,22 +326,30 @@ export function projectCashflow(input: CashflowInput): Cashflow {
   }
 
   // --- Gastos recurrentes ---------------------------------------------
-  // El ritmo mensual es el del mes más reciente que tenga recurrentes:
-  // el seed (y FIN-5) registran la misma suscripción una vez por mes.
-  let mesMasReciente: string | null = null;
-  for (const g of input.gastos) {
-    if (g.currency.toUpperCase() !== moneda) continue;
-    const mes = mesDe(g.incurredOn);
-    if (mesMasReciente === null || mes > mesMasReciente) mesMasReciente = mes;
-  }
+  // UN solo mes manda, y todo lo de gastos se mide en él: el ritmo y lo
+  // que se deja fuera por moneda. Es el mes CERRADO más reciente, no el
+  // más reciente a secas: el seed (y FIN-5) registran la misma
+  // suscripción una vez por mes, así que sumarlas todas la contaría
+  // cuatro veces, y el mes en curso está a medio registrar —el día 3 de
+  // octubre, con una de cinco suscripciones anotada, el ritmo se
+  // hundiría de 3,7 M a 0,38 M y la proyección mentiría en más de 6 M—.
+  // Si no hay ningún mes cerrado en la ventana (un espacio recién
+  // abierto), se usa el mes en curso, que es lo único que hay.
+  const mesEnCurso = input.today.slice(0, 7);
+  const meses = new Set<string>();
+  for (const g of input.gastos) meses.add(mesDe(g.incurredOn));
+  const cerrados = [...meses].filter((m) => m < mesEnCurso).sort();
+  const gastoMes = cerrados[cerrados.length - 1] ?? (meses.has(mesEnCurso) ? mesEnCurso : null);
+
   let mensualCents = 0n;
   for (const g of input.gastos) {
+    if (mesDe(g.incurredOn) !== gastoMes) continue;
     if (g.currency.toUpperCase() !== moneda) {
       monedas.add(g.currency.toUpperCase());
       otraMoneda.add(g.amount);
       continue;
     }
-    if (mesDe(g.incurredOn) === mesMasReciente) mensualCents += toCents(g.amount);
+    mensualCents += toCents(g.amount);
   }
   const gastoMensual = fromCents(mensualCents);
   const gastoSemanal = semanalDeMensual(gastoMensual);
@@ -370,11 +391,13 @@ export function projectCashflow(input: CashflowInput): Cashflow {
       vencidas: vencidas.value,
       yaFacturados: yaFacturados.value,
       sinFecha: sinFecha.value,
+      sinMonto: sinMonto.value,
       fueraDeVentana: fueraDeVentana.value,
       otraMoneda: { ...otraMoneda.value, monedas: [...monedas].sort() },
     },
     proyectado: filas[filas.length - 1]?.acumulado ?? CERO,
     semanaMasAjustada: vacio ? null : masAjustada,
+    gastoMes,
     gastoMensual,
     gastoSemanal,
     reservaRate: input.reservaRate,

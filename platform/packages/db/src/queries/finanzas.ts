@@ -570,7 +570,10 @@ const PLAZO_DIAS_POR_DEFECTO = 30;
  *   - Negocios en una etapa con `is_won` —nunca por el literal
  *     'ganado': lo dice la vista `deal_pipeline` y el propio seed—,
  *     con la marca de si ya tienen factura por su campaña o por su
- *     cotización. Una factura anulada no cuenta como facturado.
+ *     cotización. Una factura anulada o en borrador no cuenta como
+ *     facturado: si contara, el monto del negocio se caería de la
+ *     proyección mientras la factura está en borrador, porque tampoco
+ *     está entre las que deben plata.
  *   - Gastos recurrentes de los últimos 120 días, con su `incurred_on`:
  *     core se queda con los del mes más reciente, porque la misma
  *     suscripción está registrada una vez por mes.
@@ -618,8 +621,14 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
                'amount',            d.amount::text,
                'expectedCloseDate', to_char(d.expected_close_date, 'YYYY-MM-DD'),
                'hasInvoice',        EXISTS (
+                 -- Ni 'void' ni 'draft': un borrador todavía no le debe
+                 -- nada a nadie, y el CTE de arriba tampoco lo trae. Si
+                 -- contara como «ya facturado», el monto del negocio
+                 -- desaparecería de la proyección entre que se crea la
+                 -- factura y se marca enviada, que es el camino normal
+                 -- (createInvoice siempre inserta en borrador).
                  SELECT 1 FROM invoice i
-                  WHERE i.status <> 'void'
+                  WHERE i.status NOT IN ('void', 'draft')
                     AND (i.campaign_id IN (SELECT c.id FROM campaign c WHERE c.deal_id = d.id)
                       OR i.quote_id    IN (SELECT q.id FROM quote    q WHERE q.deal_id = d.id))
                )

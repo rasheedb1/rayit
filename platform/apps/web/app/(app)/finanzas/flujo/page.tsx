@@ -84,12 +84,13 @@ const columnas = (f: Formatter): Column<SemanaFlujo>[] => [
     // «21–27 sep» en dos líneas y «Sin cobros previstos» en tres.
     width: "11rem",
     render: (s) => (
-      // No es `CellMain`: su `sub` envuelve el contenido en un <span>, y
-      // un <details> dentro de un <span> no es HTML válido.
-      <span className="block min-w-0">
+      // Un <div> y no `CellMain`: su `sub` envuelve el contenido en un
+      // <span>, y un <details> dentro de un <span> no es HTML válido.
+      // Dentro de un <td> sí cabe (acepta contenido de flujo).
+      <div className="min-w-0">
         <span className="block whitespace-nowrap font-medium text-ink">{f.dateRange(s.inicio, s.fin)}</span>
         <Detalle cobros={s.detalle} f={f} />
-      </span>
+      </div>
     ),
   },
   { key: "cobros", header: T.tabla.cobros, align: "num", render: (s) => f.money(s.cobros, undefined, { mode: "full" }) },
@@ -132,6 +133,12 @@ function Excluidos({ c, f }: { c: Cashflow; f: Formatter }) {
     frases.push(
       `Sin fecha de cierre: ${e.sinFecha.count} ${e.sinFecha.count === 1 ? "negocio" : "negocios"} por ` +
         `${f.money(e.sinFecha.amount, undefined, { mode: "full" })}. Ponles una fecha esperada y entran solos.`,
+    );
+  }
+  if (e.sinMonto.count > 0) {
+    frases.push(
+      `${e.sinMonto.count} ${e.sinMonto.count === 1 ? "negocio ganado no tiene" : "negocios ganados no tienen"} ` +
+        "monto acordado, así que no hay cifra que proyectar. Escríbeselo y entran solos.",
     );
   }
   if (e.fueraDeVentana.count > 0) {
@@ -190,8 +197,11 @@ export default async function FlujoPage() {
   const grafico = paraElGrafico(c);
   const ajustada = c.semanaMasAjustada;
   const nota =
-    `Los gastos son el ritmo de los recurrentes del último mes (${f.money(c.gastoMensual, undefined, { mode: "full" })}) ` +
-    `repartido por semana: ${f.money(c.gastoSemanal, undefined, { mode: "full" })}. ` +
+    (c.gastoMes === null
+      ? "Todavía no hay gastos recurrentes registrados, así que no restamos ninguno. "
+      : `Los gastos son el ritmo de ${f.month(c.gastoMes)}, el último mes cerrado con recurrentes ` +
+        `(${f.money(c.gastoMensual, undefined, { mode: "full" })}), repartido por semana: ` +
+        `${f.money(c.gastoSemanal, undefined, { mode: "full" })}. `) +
     (entradas.reservaPct === null
       ? "Todavía no hay un porcentaje de reserva de impuestos configurado, así que no apartamos nada."
       : `Los impuestos son el ${entradas.reservaPct} % de los cobros de cada semana.`);
@@ -213,7 +223,10 @@ export default async function FlujoPage() {
         />
       </KpiRow>
 
-      <section className="mt-10" aria-labelledby="grafico">
+      {/* Sin aria-labelledby: ChartCard ya es un <article> con su propio
+          encabezado, y apuntar a un id que no existe deja la región sin
+          nombre accesible. */}
+      <section className="mt-10">
         <ChartCard
           title={T.grafico.title}
           subtitle={T.grafico.subtitle}

@@ -209,10 +209,16 @@ describe('negocios ganados', () => {
     for (const s of r.semanas) assert.equal(s.cobros, '0.00');
   });
 
-  test('uno ganado sin monto tampoco se proyecta', () => {
+  test('uno ganado con fecha pero sin monto va a su propio grupo, no a «sin fecha»', () => {
     const r = projectCashflow(entrada({ negocios: [negocio({ amount: null })] }));
+    assert.equal(r.excluidos.sinFecha.count, 0, 'fecha sí tiene: decir «sin fecha» sería mentir');
+    assert.deepEqual(r.excluidos.sinMonto, { count: 1, amount: '0.00' });
+  });
+
+  test('uno sin fecha Y sin monto cuenta como sin fecha: es lo primero que le falta', () => {
+    const r = projectCashflow(entrada({ negocios: [negocio({ amount: null, expectedCloseDate: null })] }));
     assert.equal(r.excluidos.sinFecha.count, 1);
-    assert.equal(r.excluidos.sinFecha.amount, '0.00', 'no hay monto que sumar');
+    assert.equal(r.excluidos.sinMonto.count, 0);
   });
 });
 
@@ -221,7 +227,10 @@ describe('moneda distinta a la del workspace', () => {
     const r = projectCashflow(entrada({
       facturas: [factura({ currency: 'USD', outstanding: '2000.00', dueOn: '2026-09-30' })],
       negocios: [negocio({ currency: 'MXN', amount: '50000.00' })],
-      gastos: [gasto({ currency: 'USD', amount: '90.00' }), gasto({ id: 'g2', amount: '3700000.00' })],
+      gastos: [
+        gasto({ currency: 'USD', amount: '90.00', incurredOn: '2026-08-01' }),
+        gasto({ id: 'g2', amount: '3700000.00', incurredOn: '2026-08-01' }),
+      ],
     }));
     for (const s of r.semanas) assert.equal(s.cobros, '0.00');
     assert.equal(r.excluidos.otraMoneda.count, 3);
@@ -237,22 +246,60 @@ describe('moneda distinta a la del workspace', () => {
 });
 
 describe('gastos recurrentes', () => {
-  test('solo cuenta el mes más reciente: la misma suscripción está una vez por mes', () => {
-    const meses = ['2026-07-01', '2026-08-01', '2026-09-01'];
+  test('solo cuenta UN mes: la misma suscripción está registrada una vez por mes', () => {
+    const meses = ['2026-06-01', '2026-07-01', '2026-08-01'];
     const gastos = meses.flatMap((d, i) => [
       gasto({ id: `e${i}a`, amount: '1800000.00', incurredOn: d }),
       gasto({ id: `e${i}b`, amount: '1900000.00', incurredOn: d }),
     ]);
     const r = projectCashflow(entrada({ gastos }));
-    assert.equal(r.gastoMensual, '3700000.00', 'septiembre, no los tres meses');
+    assert.equal(r.gastoMes, '2026-08');
+    assert.equal(r.gastoMensual, '3700000.00', 'agosto, no los tres meses');
     assert.equal(r.gastoSemanal, '853846.15');
     for (const s of r.semanas) assert.equal(s.gastos, '853846.15');
   });
 
-  test('sin gastos recurrentes, el gasto semanal es cero y no aparece un guion mudo', () => {
+  test('el mes en curso, a medio registrar, NO manda: manda el último cerrado', () => {
+    // El 23 de septiembre, con agosto completo y septiembre con una sola
+    // suscripción anotada, tomar «el mes más reciente» hundía el ritmo
+    // de 3,7 M a 0,38 M y sobrestimaba la caja en más de 6 M.
+    const r = projectCashflow(entrada({
+      gastos: [
+        gasto({ id: 'ago1', amount: '1800000.00', incurredOn: '2026-08-01' }),
+        gasto({ id: 'ago2', amount: '1900000.00', incurredOn: '2026-08-01' }),
+        gasto({ id: 'sep1', amount: '380000.00', incurredOn: '2026-09-01' }),
+      ],
+    }));
+    assert.equal(r.gastoMes, '2026-08');
+    assert.equal(r.gastoMensual, '3700000.00');
+    assert.equal(r.gastoSemanal, '853846.15');
+  });
+
+  test('sin ningún mes cerrado (espacio recién abierto) se usa el mes en curso', () => {
+    const r = projectCashflow(entrada({ gastos: [gasto({ amount: '400000.00', incurredOn: '2026-09-05' })] }));
+    assert.equal(r.gastoMes, '2026-09');
+    assert.equal(r.gastoMensual, '400000.00');
+  });
+
+  test('sin gastos recurrentes, el gasto semanal es cero y el mes es null', () => {
     const r = projectCashflow(entrada({ facturas: [factura()] }));
+    assert.equal(r.gastoMes, null);
     assert.equal(r.gastoMensual, '0.00');
     assert.equal(r.gastoSemanal, '0.00');
+  });
+
+  test('un recurrente en otra moneda se avisa UNA vez, no una por mes', () => {
+    const r = projectCashflow(entrada({
+      gastos: [
+        gasto({ id: 'jul', currency: 'USD', amount: '90.00', incurredOn: '2026-07-01' }),
+        gasto({ id: 'ago', currency: 'USD', amount: '90.00', incurredOn: '2026-08-01' }),
+        gasto({ id: 'sep', currency: 'USD', amount: '90.00', incurredOn: '2026-09-01' }),
+        gasto({ id: 'cop', amount: '3700000.00', incurredOn: '2026-08-01' }),
+      ],
+    }));
+    assert.equal(r.gastoMes, '2026-08');
+    assert.equal(r.gastoMensual, '3700000.00');
+    assert.deepEqual(r.excluidos.otraMoneda, { count: 1, amount: '90.00', monedas: ['USD'] });
   });
 });
 

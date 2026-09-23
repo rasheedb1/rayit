@@ -107,9 +107,33 @@ describe("con cobros y gastos", () => {
     expect(screen.getAllByText("Sin cobros previstos").length).toBe(7);
   });
 
-  it("la nota del gráfico dice de dónde sale cada cifra", () => {
-    expect(screen.getByText(/ritmo de los recurrentes del último mes/)).toBeInTheDocument();
+  it("la nota del gráfico nombra el mes del que sale el ritmo y la tasa", () => {
+    // El gasto del escenario se incurrió en septiembre y «hoy» es el 23
+    // de septiembre, así que el último mes CERRADO con recurrentes es
+    // septiembre solo porque no hay ninguno anterior (§0.2.6).
+    expect(screen.getByText(/ritmo de septiembre de 2026, el último mes cerrado con recurrentes/)).toBeInTheDocument();
+    expect(screen.getByText(/COP 3\.700\.000/)).toBeInTheDocument();
     expect(screen.getByText(/11 % de los cobros de cada semana/)).toBeInTheDocument();
+  });
+
+  it("con un mes cerrado y el mes en curso a medias, el ritmo sale del cerrado", async () => {
+    // El caso que rompía: el 23 de septiembre, con agosto completo
+    // (3,7 M) y septiembre con una sola suscripción anotada, tomar «el
+    // mes más reciente» hundía el gasto semanal de 853.846,15 a 87.692,31.
+    await pintar(entradas({
+      facturas: [FACTURA],
+      gastos: [
+        { ...GASTO, id: "ago", amount: "3700000.00", incurredOn: "2026-08-01" },
+        { ...GASTO, id: "sep", amount: "380000.00", incurredOn: "2026-09-01" },
+      ],
+    }));
+    expect(screen.getByText(/ritmo de agosto de 2026/)).toBeInTheDocument();
+    // La tabla de las semanas es la que tiene ocho filas de datos; el
+    // ChartCard monta además la suya, derivada del mismo dato.
+    const tablas = screen.getAllByRole("table");
+    const semanas = tablas.find((t) => within(t).queryAllByRole("row").length === 9);
+    expect(semanas).toBeDefined();
+    expect(within(semanas!).getAllByText("COP 853.846,15")).toHaveLength(8);
   });
 });
 
