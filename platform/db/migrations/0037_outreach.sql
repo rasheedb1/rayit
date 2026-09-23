@@ -1134,10 +1134,20 @@ VOLATILE
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  INSERT INTO outbound_policy AS p (workspace_id, enabled)
-  VALUES (p_workspace, true)
-  ON CONFLICT (workspace_id)
-  DO UPDATE SET enabled = true, disabled_reason = NULL, disabled_at = NULL;
+  -- UPDATE y no INSERT … ON CONFLICT: Postgres comprueba los CHECK de la
+  -- fila PROPUESTA antes de ver el conflicto, así que un alta con
+  -- enabled = true y sin dirección fallaría aunque la fila existente sí
+  -- la tenga.
+  UPDATE outbound_policy
+     SET enabled = true, disabled_reason = NULL, disabled_at = NULL
+   WHERE workspace_id = p_workspace;
+  IF NOT FOUND THEN
+    -- Sin política no hay dirección postal: el mismo error que daría el CHECK.
+    RAISE EXCEPTION 'Sin dirección postal no se puede encender el envío (workspace %).', p_workspace
+      USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'outbound_policy_enabled_needs_address',
+            HINT = 'Guarda outbound_policy.postal_address antes de encender el outreach.';
+  END IF;
 END;
 $$;
 
@@ -1297,6 +1307,14 @@ GRANT CREATE ON SCHEMA public TO mc_public_share;   -- solo mientras dura la mig
 -- 9.1 · Lo único que mc_public_share puede tocar para la baja
 -- ---------------------------------------------------------------------
 GRANT SELECT ON outbound_touch, outbound_enrollment, contact TO mc_public_share;
+-- contact_read (0029 §3) pregunta por la empresa del contacto, y las
+-- políticas sin TO también alcanzan a este rol: sin SELECT sobre company
+-- ninguna lectura de contact se podría planificar. company_read le deja
+-- ver solo el catálogo compartido (owner_workspace_id NULL), que no es
+-- de nadie. Y contact_write (0020), que también le alcanza al marcar la
+-- baja, pregunta en su WITH CHECK por company_link: su política es la de
+-- 0010, y sin workspace fijado este rol no ve ninguna fila.
+GRANT SELECT ON company, company_link TO mc_public_share;
 GRANT UPDATE (status, blocked_reason) ON outbound_touch TO mc_public_share;
 GRANT UPDATE (status) ON outbound_enrollment TO mc_public_share;
 GRANT UPDATE (opted_out, opted_out_at, opted_out_reason) ON contact TO mc_public_share;
@@ -1398,8 +1416,10 @@ BEGIN
          WHERE c.id = contacto OR c.email = correo;
         PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
 
+        -- Sin columna en ON CONFLICT a propósito: nombrarla pediría SELECT
+        -- sobre la lista, y este rol solo inserta en ella.
         INSERT INTO contact_suppression (email, reason) VALUES (correo, 'unsubscribe_link')
-        ON CONFLICT (email) DO NOTHING;
+        ON CONFLICT DO NOTHING;
       END IF;
 
       UPDATE contact

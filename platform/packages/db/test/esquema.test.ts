@@ -1229,8 +1229,9 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
 
   test('el inventario declarado es el de 0030, 0031 y 0037, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
-      'contact', 'contact_suppression', 'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit',
-      'media_kit_lockout', 'outbound_enrollment', 'outbound_touch', 'pipeline_stage', 'quote',
+      'company', 'company_link', 'contact', 'contact_suppression', 'deal', 'deal_stage_history',
+      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'outbound_enrollment', 'outbound_touch',
+      'pipeline_stage', 'quote',
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,

@@ -535,6 +535,18 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
       'leer el correo del contacto que pide la baja y marcar la baja en sus fichas y en las de su mismo correo (0037 ' +
       '§9). Nunca el correo, el nombre ni el dueño',
   },
+  company: {
+    tabla: ['SELECT'],
+    motivo:
+      'contact_read (0029 §3) pregunta por la empresa del contacto y también le alcanza a este rol: sin SELECT, la ' +
+      'baja no podría leer la ficha (0037 §9). company_read le deja ver solo el catálogo compartido (sin dueño)',
+  },
+  company_link: {
+    tabla: ['SELECT'],
+    motivo:
+      'el WITH CHECK de contact_write (0020) pregunta por company_link al marcar la baja (0037 §9). Su política es ' +
+      'la de 0010: sin workspace fijado, este rol no ve ninguna fila',
+  },
   contact_suppression: {
     tabla: ['INSERT'],
     motivo:
