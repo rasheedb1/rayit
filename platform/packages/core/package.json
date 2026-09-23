@@ -7,7 +7,12 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "permisos:sql": "node --experimental-strip-types scripts/permisos-sql.ts"
   },
-  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.6.0" }
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0"
+  }
 }
