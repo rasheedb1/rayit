@@ -12,11 +12,11 @@
 import {
   createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
   MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher,
-  type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
+  type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
 } from "@mc/connectors";
 import {
   addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getDefaultCreatorId, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  recordAccountSnapshot, recordConsent, type AccountRow, type WorkspaceTx,
+  recordAccountSnapshot, recordConsent, setAccountAccessMode, type AccountRow, type WorkspaceTx,
 } from "@mc/db";
 import { CONSENT_POLICY_VERSION } from "./consent";
 
@@ -69,6 +69,14 @@ const OFFERS_ES: Record<PlatformId, string> = {
   facebook: "No disponible en esta versión.",
 };
 
+/** Con el proveedor de datos contratado (CON-12), TikTok sí ofrece cifras por @. */
+const TIKTOK_AGGREGATOR_OFFERS_ES = "Seguidores, vistas acumuladas y número de videos, por el proveedor de datos contratado.";
+
+function offersEs(platformId: PlatformId, source: PublicProfileSource | undefined): string {
+  if (platformId === "tiktok" && source?.accessMode === "aggregator") return TIKTOK_AGGREGATOR_OFFERS_ES;
+  return OFFERS_ES[platformId];
+}
+
 function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -88,7 +96,7 @@ export function createCuentasService(deps: CuentasDeps) {
   return {
     availability(): SourceAvailability[] {
       const src = build(new InMemoryCallLogSink());
-      return PUBLIC_PLATFORMS.map((p) => ({ platformId: p, name: PLATFORM_NAME[p], label: src[p]?.label ?? "—", missing: src[p]?.missing ?? ["sin fuente"], offersEs: OFFERS_ES[p] }));
+      return PUBLIC_PLATFORMS.map((p) => ({ platformId: p, name: PLATFORM_NAME[p], label: src[p]?.label ?? "—", missing: src[p]?.missing ?? ["sin fuente"], offersEs: offersEs(p, src[p]) }));
     },
 
     async agregar(input: { platformId: string; handle: string }, who: Requester): Promise<AgregarResult> {
@@ -118,12 +126,12 @@ export function createCuentasService(deps: CuentasDeps) {
         const out = await deps.withWorkspace(async (tx) => {
           const creatorId = await getDefaultCreatorId(tx);
           const { id, created } = await addPublicAccount(tx, {
-            creatorId, platformId, handle, externalAccountId,
+            creatorId, platformId, handle, externalAccountId, accessMode: source.accessMode,
             displayName: profile.profile.display_name, avatarUrl: profile.profile.avatar_url, profileUrl: profile.profile.profile_url, accountType: profile.profile.account_type,
           });
           await recordConsent(tx, { connectionId: id, creatorId, purpose: "analytics", policyVersion: CONSENT_POLICY_VERSION, evidence });
           if (profile.metrics) {
-            await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw });
+            await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw, source: source.accessMode });
           }
           await flush(callLog, tx, id);
           return { id, created };
@@ -146,8 +154,11 @@ export function createCuentasService(deps: CuentasDeps) {
       try {
         const profile = await source.lookup(row.handle ?? row.externalAccountId);
         const outcome = await deps.withWorkspace(async (tx) => {
+          // Contratar (o dar de baja) el proveedor mueve la cuenta de fuente
+          // sin perder su id ni su historia (CON-12 §0.4).
+          if (row.accessMode !== source.accessMode) await setAccountAccessMode(tx, id, source.accessMode);
           const saved = profile.metrics
-            ? await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw })
+            ? await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw, source: source.accessMode })
             : null;
           if (!profile.metrics) await markAccountLookupFailure(tx, id, profile.metricsNote ?? "Sin métricas públicas.", false);
           await flush(callLog, tx, id);

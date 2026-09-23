@@ -30,6 +30,7 @@ beforeAll(async () => {
     ...(await loadFixtures("instagram", [["business_discovery", "ok"]])),
     ...(await loadFixtures("youtube", [["channels.list", "handle.ok"]])),
     ...(await loadFixtures("tiktok", [["oembed.profile", "ok"], ["oembed.profile", "not_found"]])),
+    ...(await loadFixtures("ensembledata", [["user.info", "ok"], ["user.posts", "ok"]])),
   ]);
   service = createCuentasService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
 }, 60_000);
@@ -118,6 +119,58 @@ describe("actualizar y quitar", () => {
     const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
     expect(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY])).toBeNull();
     expect(JSON.stringify(fetch.calls)).not.toContain("SECRETO");
+    expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("TikTok con el proveedor de datos contratado (CON-12)", () => {
+  const ENV_PROVEEDOR = { ...ENV, ENSEMBLEDATA_TOKEN: "ed-token-web-SECRETO" };
+
+  it("sin la variable, TikTok sigue sin cifras por @ y no se llama al proveedor", () => {
+    const tiktok = service.availability().find((a) => a.platformId === "tiktok")!;
+    expect(tiktok.label).toBe("oEmbed de TikTok");
+    expect(tiktok.offersEs).toMatch(/no publica seguidores/);
+    expect(JSON.stringify(fetch.calls)).not.toContain("ensembledata.com");
+  });
+
+  it("con la variable, la cuenta que ya estaba por @ pasa a aggregator con sus cifras, sin duplicarse ni perder su id", async () => {
+    const antes = (await service.listar()).find((r) => r.handle === "laura.cocinafacil" && r.accessMode === "public_profile")!;
+    expect(antes.latest).toBeNull();
+
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    expect(conProveedor.availability().find((a) => a.platformId === "tiktok")!.offersEs).toMatch(/proveedor de datos/);
+
+    const upd = await conProveedor.actualizar(antes.id);
+    expect(upd).toMatchObject({ ok: true, withMetrics: true, alreadyReadToday: false });
+
+    const filas = await conProveedor.listar();
+    const despues = filas.find((r) => r.id === antes.id)!;
+    expect(despues.accessMode).toBe("aggregator");
+    expect(despues.latest).toEqual({ day: "2026-09-22", followers: 128400, following: 312, mediaCount: 3, views: 65401 });
+    expect(filas.filter((r) => r.handle === "laura.cocinafacil").length).toBe(1);
+
+    const src = await db.queryAsSuperuser<{ source: string }>("SELECT source FROM account_metric_snapshot WHERE connection_id = $1", [antes.id]);
+    expect(src.rows.map((r) => r.source)).toEqual(["aggregator"]);
+  });
+
+  it("agregar un @ nuevo de TikTok deja seguidores y vistas del día sin que el creador suba nada", async () => {
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    await conProveedor.quitar((await conProveedor.listar()).find((r) => r.handle === "laura.cocinafacil")!.id);
+
+    const out = await conProveedor.agregar({ platformId: "tiktok", handle: "@laura.cocinafacil" }, WHO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const row = (await conProveedor.listar()).find((r) => r.id === out.id)!;
+    expect(row.accessMode).toBe("aggregator");
+    expect(row.latest?.followers).toBe(128400);
+    expect(row.latest?.views).toBe(65401);
+    expect(row.status).toBe("active");
+  });
+
+  it("R4: el token del proveedor no queda en ninguna tabla ni en las llamadas grabadas", async () => {
+    const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, ["ed-token-web-SECRETO"])).toBeNull();
+    expect(JSON.stringify(fetch.calls)).not.toContain("ed-token-web-SECRETO");
     expect(guard.attempts).toBe(0);
   });
 });

@@ -6,7 +6,10 @@
  *
  *   instagram  business_discovery con INSTAGRAM_HOUSE_TOKEN
  *   youtube    Data API con GOOGLE_API_KEY
- *   tiktok     oEmbed: sin métricas; la cuenta queda anotada, no falla
+ *   tiktok     con ENSEMBLEDATA_TOKEN, el proveedor de datos (CON-12):
+ *              seguidores y vistas, source 'aggregator'. Sin esa
+ *              variable, oEmbed: sin métricas; la cuenta queda anotada,
+ *              no falla.
  *
  * Errores: fuente sin configurar → la plataforma se salta y se avisa una
  * vez; not_found / not_discoverable → status 'error' con el detalle en
@@ -63,7 +66,7 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   const { rows } = await ctx.db.query<AccountRow>(
     `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref
        FROM social_connection
-      WHERE access_mode IN ('public_profile', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
+      WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
       ORDER BY platform_id, connected_at`,
     [payload.connectionId ?? null, payload.workspaceId ?? null],
@@ -82,7 +85,7 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   await Promise.all(
     [...byPlatform.entries()].map(async ([platform, accounts]) => {
       const source = isPlatformId(platform) ? sources[platform] : undefined;
-      const publicOnes = accounts.filter((a) => a.access_mode === 'public_profile');
+      const publicOnes = accounts.filter((a) => a.access_mode !== 'direct_oauth');
       if (publicOnes.length > 0 && (!source || source.missing.length > 0)) {
         skipped[platform] = source ? `faltan ${source.missing.join(', ')}` : 'sin fuente pública';
         ctx.logger.warn('fuente pública sin configurar; se saltan las cuentas por @ de la plataforma', { platform, missing: source?.missing ?? [], accounts: publicOnes.length });
@@ -102,7 +105,16 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
             m = read.metrics; raw = read.raw; note = null; sourceName = 'api';
           } else {
             const profile = await source!.lookup(acc.handle ?? acc.external_account_id, { signal: ctx.signal });
-            m = profile.metrics; raw = profile.raw; note = profile.metricsNote; sourceName = PUBLIC_SNAPSHOT_SOURCE;
+            m = profile.metrics; raw = profile.raw; note = profile.metricsNote;
+            // El source del snapshot es el access_mode de la fuente que lo leyó
+            // ('public_profile' o 'aggregator'): la columna dice de dónde salió la cifra.
+            sourceName = source!.accessMode;
+            // Contratar o dar de baja el proveedor mueve la cuenta de fuente
+            // sin perder su id ni su historia (CON-12 §0.4).
+            if (acc.access_mode !== source!.accessMode) {
+              await ctx.db.query(`UPDATE social_connection SET access_mode = $3 WHERE id = $1 AND workspace_id = $2`, [acc.id, acc.workspace_id, source!.accessMode]);
+              log.info('la cuenta cambió de fuente pública', { de: acc.access_mode, a: source!.accessMode });
+            }
           }
           if (m) {
             await ctx.db.transaction(async (tx) => {

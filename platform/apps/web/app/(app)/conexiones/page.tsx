@@ -68,6 +68,7 @@ const COLUMNS: Column<AccountRow>[] = [
     header: "Cifras",
     render: (r) => {
       if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
+      if (r.accessMode === "aggregator") return <span className="text-xs text-ink-2">Por proveedor de datos</span>;
       if (r.platformId === "tiktok" && r.accessMode === "public_profile") return <TikTokAuthorize row={r} />;
       return <span className="text-xs text-ink-2">Públicas por @</span>;
     },
@@ -94,7 +95,7 @@ const COLUMNS: Column<AccountRow>[] = [
     header: "Acciones",
     render: (r) => (
       <div className="flex flex-wrap gap-1">
-        {(r.accessMode === "public_profile" || r.accessMode === "direct_oauth") && (
+        {(r.accessMode === "public_profile" || r.accessMode === "aggregator" || r.accessMode === "direct_oauth") && (
           <form action={actualizarCuenta.bind(null, r.id)}>
             <Button type="submit" size="sm" variant="secondary" aria-label={`Actualizar @${r.handle ?? r.externalAccountId}`}>
               Actualizar
