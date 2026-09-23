@@ -1,0 +1,56 @@
+import type { OAuthProviderId } from "@mc/connectors";
+import { SectionTitle } from "@/components/page-header";
+import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL } from "./_lib/consent";
+import { MESSAGES } from "./_lib/messages";
+import type { EntornoDeConexion } from "./tabla";
+import { ConnectDialog } from "./connect-dialog";
+
+const t = MESSAGES.conectar;
+
+/**
+ * Las redes que un creador conecta desde esta pantalla (decisión 6 de
+ * docs/propuestas/CON-4.md). `tiktok-business` es la Accounts API: no
+ * es otra red, es otra app de la misma, depende del trámite de CON-9 y
+ * presentada aquí haría elegir entre dos TikToks. YouTube todavía no
+ * tiene OAuth (CON-8) y sigue por @.
+ */
+export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok", "instagram"];
+
+/**
+ * «Conectar una cuenta autorizada»: un botón por red, cada uno con su
+ * diálogo de consentimiento y su POST a la ruta `start` de CON-3.
+ *
+ * Solo se monta con la bandera `oauth_connect` encendida. Una red sin
+ * credenciales en el entorno NO desaparece: el botón sale deshabilitado
+ * y dice qué variable falta, que es lo que hace falta saber para
+ * arreglarlo.
+ */
+export function Conectar({ entorno }: { entorno: EntornoDeConexion }) {
+  return (
+    <section aria-labelledby="conectar" className="mb-10 rounded-md border border-border bg-surface p-5">
+      <SectionTitle>
+        <span id="conectar">{t.titulo}</span>
+      </SectionTitle>
+      <p className="max-w-2xl text-sm leading-6 text-ink-2">{t.descripcion}</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {REDES_CONECTABLES.map((provider) => {
+          const red = PLATFORM_LABEL[provider];
+          const configurada = entorno.oauth.apps[provider];
+          const motivo = configurada ? undefined : t.sinConfigurar(red, (entorno.oauth.missing[provider] ?? []).join(", "));
+          return (
+            <ConnectDialog
+              key={provider}
+              label={red}
+              actionLabel={t.boton(red)}
+              text={consentText(provider)}
+              policyVersion={CONSENT_POLICY_VERSION}
+              action={`/conexiones/oauth/${provider}/start`}
+              disabledReason={motivo}
+              variant="secondary"
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
