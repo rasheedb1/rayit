@@ -481,6 +481,40 @@ describe("teclado y lector de pantalla", () => {
     expect(cruda).toHaveAttribute("title", "el martes pasado");
     expect(cruda.className).toMatch(/truncate/);
   });
+
+  it("a 400 px, las pastillas de aviso bajo el título parten la frase en vez de comerse el margen", async () => {
+    // jsdom no calcula cajas: lo que se fija es lo que hace posible el
+    // salto (la frase puede partirse y la pastilla no pasa del ancho de su
+    // fila). Medido en Chromium a 400 px: sin esto llegaba a right = 400.
+    const anchoAntes = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 400 });
+    try {
+      const mismaFecha = "2026-09-16T17:00:00.000000Z";
+      buscarPostsConocidos.mockResolvedValue({
+        ok: true,
+        conocidos: [
+          { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
+          { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
+          { id: "ig_18001122334455003", ultimaLectura: mismaFecha },
+        ],
+      });
+      render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+      await subir("instagram-insights.csv");
+      await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalled());
+      fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-16" } });
+      fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+
+      const aviso = await screen.findByText("3 ya tienen una lectura de esta fecha o posterior: no se guardarán");
+      const clases = aviso.className.split(/\s+/);
+      // La Pill trae `whitespace-nowrap`: solo la utilidad importante le gana.
+      expect(clases).toContain("whitespace-normal!");
+      expect(clases).toContain("max-w-full");
+      // El punto de color no se aplasta cuando la frase ocupa dos líneas.
+      expect(clases).toContain("*:shrink-0");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: anchoAntes });
+    }
+  });
 });
 
 describe("lo que se ve antes de escribir", () => {
