@@ -55,8 +55,11 @@ decisiones pendientes están repartidas en cinco propuestas.
    se añade que la ficha tampoco lo enseñe a un rol sin
    `campanas.resultado.calcular` (ni «Generar» sin
    `campanas.reporte.generar`).
-2. **F2** · Costuras con su prueba y la **prueba del ciclo** en
-   `packages/db/test/campanas-ciclo.test.ts`.
+2. **F2** · Costuras con su prueba y la **prueba del ciclo**. (Se planeó
+   en `packages/db`; acabó en la web, `apps/web/app/(app)/campanas/ciclo-db.test.ts`,
+   porque ahí encadena las Server Actions reales —aceptar la cotización,
+   aporte por formulario y CSV, «Recalcular», «Facturar», generar y enviar
+   el reporte— y la página pública, no solo las consultas.)
 3. **F3** · `TODO(ACC-2)`, notas del tablero, tabla de decisiones.
 4. **F4** · verificar completo, build, db.check, guardia, dev a 400 px y
    oscuro con Mánager y Contador, `/code-review` alto y
@@ -73,7 +76,7 @@ decisiones pendientes están repartidas en cinco propuestas.
 | F0 | `8ea4e2d` | Esta sección 0. |
 | F1 | `84ea9a0` | **Migración `0041_campaign_result_escritura_web.sql`**; `PRIVILEGIOS_DE_LA_APP` en `esquema.ts`; la ficha no pinta «Recalcular» ni «Generar»/«Enviado» a un rol sin el permiso (y lo dice con una frase). |
 | F2 | `097e88b` | La prueba del ciclo (`apps/web/app/(app)/campanas/ciclo-db.test.ts`), la ficha real contra el seed (`ficha-db.test.tsx`), CON-6 → CAM-5 con y sin línea base, y la ruta de la factura en un solo sitio (`_lib/rutas.ts`). |
-| F3 | (este) | `TODO(ACC-2)` viejos, README de la web, notas del tablero, una línea de estado en CAM-4.md y CAM-5.md, y la tabla de decisiones (§3). |
+| F3 | `6400a17` | `TODO(ACC-2)` viejos, README de la web, notas del tablero, una línea de estado en CAM-4.md y CAM-5.md, y la tabla de decisiones (§3). |
 
 ### 1.1 La migración 0041
 
@@ -168,3 +171,109 @@ lo contrario» da el archivo y el tamaño del cambio.
 | Editar `brand_accounts` desde la ficha | Decisión #3. | Historia propia (CAM, S) |
 | Esconder por rol los demás botones de la ficha (asociar, editar datos y seguimiento, registrar aporte, transiciones) | Hoy los ve todo el que entra al módulo; la acción los rechaza con `requirePermission` y el error cae en la frontera. Aquí solo se hizo con «Recalcular» y el reporte porque el prompt lo pedía. | ACC (marco de permisos, ACC-5/ACC-7) |
 | Mover a `messages.ts` los textos que `page.tsx` de la ficha aún escribe en línea (títulos de sección, vacíos de posts) | Deuda de CAM-1 anterior a la regla; no cambia comportamiento. | Pulido de CAM |
+| F4 | `bf62a8b` | Los hallazgos de `/code-review` (§7). |
+
+---
+
+## 6. Verificación
+
+### 6.1 Automática (sobre `bf62a8b`, con `origin/main` = `098b25a` sin cambios)
+
+| Qué | Resultado |
+|---|---|
+| `pnpm verificar` (typecheck + lint + test, sin caché) | **15/15 tareas.** core 242/242 · connectors 202/202 · db 769/769 · worker 88/88 · web 970 + 1 todo (115 archivos) · raíz 8/8. Cero canceladas. |
+| `next build` (con `.next` borrado) | Verde. `/campanas`, `/campanas/[id]`, `/campanas/[id]/reporte/[reportId]` y `/reporte/[slug]` dinámicas. |
+| `make db.check` | Verde: 39 migraciones en Postgres embebido, la 0041 incluida. |
+| Guardia en pglite (`esquema.test.ts`) | Verde con la 0041 (privilegios declarados, disparadores de referencia, restrictivas). |
+| Guardia contra Supabase (solo lectura, con el código de la rama) | Lo único que dice es «faltan 1 migración(es) por aplicar (la base va por 0039): 0041». **Ojo:** la del clon principal (`29460e3`, no puede hacer pull) da avisos de 0034–0039 que son del código viejo, no de la base; la de después del deploy se corre con el código de `origin/main`. |
+| Supabase, solo lectura | `has_table_privilege('mc_app','campaign_result', INSERT/UPDATE/DELETE)` = `false/false/false`; última migración `0039_demografia_de_cuenta.sql`. |
+
+### 6.2 En dev (Postgres embebido, puerto 3417, seed temporal sin commitear con un Mánager y una Contadora, borrado al terminar)
+
+| Persona | Qué | Visto |
+|---|---|---|
+| Mánager | `/campanas` | 200 |
+| Mánager | Ficha de Café Alma | «Recalcular» y «Generar reporte» sí; FV-2026-010 como texto, **sin** «Ver factura» ni enlaces a `/finanzas`. |
+| Mánager | «Recalcular» (Server Action por HTTP) | 303 a la ficha; CPM de COP 11.800 (mock) a **COP 4.353,93**, CPA 9.748,43 y «4,5× tu mediana». |
+| Mánager | «Generar reporte» → `/reporte/<slug>` | 303; el enlace del borrador da **404**. |
+| Mánager | «Enviado por enlace» → `/reporte/<slug>` sin sesión | 303; el público da **200** con «CPM COP 4.353,93»; la ficha dice «Abierto por la marca el 23 de septiembre de 2026 a las 5:49 p. m. · 1 apertura». |
+| Cualquiera | `/reporte/<slug inventado>` | 404 |
+| Contadora | `/campanas` y `/campanas/<id>` | **404** y **404**; `/finanzas` 200. |
+| Dueña | La ficha a 400 px, en claro y en oscuro | «Resultado» con «Recalcular», «Falta» con enlace, «Lo que aportó la marca» y «Reporte a la marca» legibles y sin desbordes en los dos temas. |
+
+---
+
+## 7. Revisión
+
+### 7.1 `/code-review` en nivel alto: 10 hallazgos, 8 corregidos, 2 justificados
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | Todo 42501 se leía como «falta el GRANT», también una violación de RLS. | **Corregido**: `isGrantMissing` (`_lib/errores-db.ts`, con prueba) exige «permission denied» y no «row-level security». |
+| 2 | La cabecera de 0041 decía «sin romper nada», pero el código de producción enseña el botón por la base, no por el rol. | **Corregido** en la cabecera: el hueco está descrito (un rol sin permiso ve el botón y la frontera de error lo rechaza sin escribir). |
+| 3 | «Facturar» y «Ver factura» se veían sin los permisos de Finanzas (el Mánager caía en un 404 o en la frontera). | **Corregido**: `finanzas.factura.crear` y `finanzas.factura.ver`, con frase; prueba de la ficha real con el Mánager. |
+| 4 | `facturaHref` vive en Campañas y no en Finanzas. | **Justificado**: el cierre de FIN corre en paralelo sobre `finanzas/`; la prueba del ciclo ata las dos (Finanzas tiene que redirigir a `invoiceHref`). Moverla es cambiar una importación. |
+| 5 | JSDoc de `canRecomputeResult` viejo. | **Corregido**. |
+| 6 | Los disparadores también corren para el worker. | **Justificado**: dos búsquedas por clave primaria por campaña y día; la guardia los exige. Anotado en la cabecera. |
+| 7 | `puede()` corría después de la carga. | **Corregido**: en paralelo (`Promise.all`). |
+| 8 | Identificadores en español (`puedeGenerar`…). | **Corregido**: `canGenerate`, `canSend`, `invoiceHref`. |
+| 9 | Condición de «Enviado» duplicada. | **Corregido**. |
+| 10 | La prueba del Editor dependía del orden. | **Corregido**: compara antes y después. |
+
+### 7.2 `/security-review`
+
+Sin hallazgos de confianza alta. Lo que se revisó: la 0041 (la permisiva de
+0010 hace de WITH CHECK para el workspace y las restrictivas solo
+estrechan; no hay camino para escribir en otro workspace ni colgar una
+fila de la campaña de otro), `recalcularResultado` (`requirePermission`
+en la primera línea, valores calculados en el servidor, SQL con
+parámetros) y la ficha (esconder botones es producto, no control).
+Descartados con confianza 1–2: escritura directa como `mc_app` fuera de
+la app (no hay tal camino), carrera entre leer el estado y el UPSERT
+(integridad dentro del mismo workspace) y una RLS de `campaign` más
+abierta en el futuro (las restrictivas la cubren).
+
+---
+
+## 8. Salida a producción
+
+### 8.1 PARADA 1: la migración 0041
+
+- **Número y archivo:** `platform/db/migrations/0041_campaign_result_escritura_web.sql`.
+- **Qué hace:** §1.1.
+- **Por qué convive con el código de hoy (`7737b62`):** ese código ya
+  decide el botón con `has_table_privilege` y ya hace el mismo UPSERT tras
+  `requirePermission`. Única diferencia en el hueco: un rol sin permiso ve
+  «Recalcular» y, si lo pulsa, la frontera de error lo rechaza sin escribir.
+- **Comando (lo corre Nicolás):**
+  `cd /Users/nicolasduarte/Documents/influ/rayit/platform && make db.migrate`
+
+### 8.2 Después de CONTINUAR-DESPLIEGUE
+
+(Se completa al desplegar: commit desplegado, URL anterior como plan B,
+rutas, guardia y la lectura de `has_table_privilege`.)
+
+### 8.3 Guion de humo para Nicolás, en producción con tu sesión
+
+Marcado **[escribe]** lo que toca la base real.
+
+1. `/campanas`: las cuatro campañas del seed. La Contadora, si la tienes,
+   recibe 404.
+2. Abre **Café Alma · Lanzamiento cold brew**. En «Resultado» tiene que
+   aparecer el botón **Recalcular** (antes decía «Se recalcula cada mañana»).
+3. **[escribe]** Pulsa **Recalcular**. El CPM pasa de COP 11.800 (mock) a
+   **COP 4.353,93**, el CPA a **COP 9.748,43** y aparece «4,5× tu mediana».
+   «Falta» sigue diciendo «el CSV de ventas diarias de la marca». Si ves
+   «Desde la ficha todavía no se puede recalcular…», la 0041 no está
+   aplicada.
+4. **[escribe]** Pulsa **Recalcular** otra vez: las mismas cifras (una sola fila).
+5. **[escribe]** En «Reporte a la marca», **Generar reporte** (o «Generar de
+   nuevo»): nace en borrador. Copia el enlace y ábrelo en una ventana
+   privada: **404**.
+6. **[escribe]** **Enviado por enlace**, y abre el enlace en la ventana
+   privada: el reporte con el CPM de COP 4.353,93. La ficha dice «Abierto
+   por la marca el … · 1 apertura».
+7. `/reporte/esto-no-existe` en la ventana privada: 404.
+8. En la ficha de una campaña sin factura (si hay), **Facturar** abre la
+   factura en borrador en `/finanzas/facturas/<id>`. **[escribe]** (no lo
+   hagas si no quieres una factura de prueba).
