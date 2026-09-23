@@ -4,6 +4,13 @@
  * a WASM: corren todas las migraciones del repo (incluida 0014, los
  * privilegios de mc_worker), los roles, RLS y pg-boss.
  *
+ * Las migraciones las aplica el runner de @mc/db (db/lib/aplicar.mjs,
+ * el mismo de openTestDb y de `make db.migrate`), no un bucle propio
+ * (CON-2b): mismo orden, schema_migrations con los mismos checksums, y
+ * dos migraciones con el mismo número detienen el arranque igual que en
+ * Supabase. test/migraciones.test.ts falla si una migración del repo no
+ * queda aplicada aquí.
+ *
  * Una sola sesión, así que el cambio de rol no puede ser por conexión:
  * cada consulta de negocio va dentro de una transacción con
  * `SET LOCAL ROLE mc_worker`, que se deshace al terminar. pg-boss, que
@@ -13,17 +20,14 @@
  * Está en su propio módulo para que el arranque normal (Postgres real)
  * no cargue el WASM ni dependa de @electric-sql/pglite.
  */
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { PGlite, type Transaction } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { applyMigrations, MIGRATIONS_DIR, type MigrationExec } from '@mc/db/embedded';
 import { fromPglite } from 'pg-boss';
 import { quoteIdent, type BossConnection, type Queryable, type QueryResult, type RoleCheck, type Row, type WorkerDatabase } from './db.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const MIGRATIONS_DIR = join(HERE, '..', '..', '..', '..', 'db', 'migrations');
+export { MIGRATIONS_DIR };
 
 export interface PgliteDatabaseOptions {
   setRole: string | null;
@@ -46,9 +50,18 @@ export class PgliteDatabase implements WorkerDatabase {
 
   static async open(opts: PgliteDatabaseOptions): Promise<PgliteDatabase> {
     const db = await PGlite.create({ extensions: { citext, pg_trgm } });
-    const dir = opts.migrationsDir ?? MIGRATIONS_DIR;
-    const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
-    for (const f of files) await db.exec(await readFile(join(dir, f), 'utf8'));
+    // Como superusuario, igual que antes: pg-boss comparte esta sesión y
+    // los roles (mc_worker, mc_app) los crean las propias migraciones.
+    const exec: MigrationExec = async (sql) => {
+      const out = await db.exec(sql);
+      return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+    };
+    try {
+      await applyMigrations(exec, { dir: opts.migrationsDir ?? MIGRATIONS_DIR });
+    } catch (err) {
+      await db.close().catch(() => undefined);
+      throw err;
+    }
     return new PgliteDatabase(db, opts.setRole);
   }
 

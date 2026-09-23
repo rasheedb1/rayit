@@ -7,10 +7,8 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
+import { applyRepoSeeds, jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-23T07:30:00Z');
@@ -23,12 +21,9 @@ const HOGAR = '00000003-0000-4000-8000-000000ca0004';
 const OTRO = '00000009-0000-4000-8000-000000000c05';
 const OTRA_MARCA = '00000009-0000-4000-8000-0000000c05e1';
 const OTRA_CAMPANA = '00000009-0000-4000-8000-00000c05ca01';
-const SEED_DIR = join(import.meta.dirname, '../../../db/seed');
 
 async function seed(db: PgliteDatabase): Promise<void> {
-  for (const f of (await readdir(SEED_DIR)).filter((n) => n.endsWith('.sql')).sort()) {
-    await db.raw.exec(await readFile(join(SEED_DIR, f), 'utf8'));
-  }
+  await applyRepoSeeds(db);
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, kind, currency) VALUES ('${OTRO}', 'otro-cam5', 'Otro', 'creator', 'USD');
     INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${OTRA_MARCA}', 'Otra marca', 'otra.example', '${OTRO}');

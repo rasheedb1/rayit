@@ -6,18 +6,12 @@
  * severidad info; las pagadas no reciben nada; dos workspaces no se
  * cruzan; y en job_run.metadata no hay PII.
  */
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pasoDeUrl } from '@mc/core';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { applyRepoSeeds, jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SEED_DIR = join(HERE, '..', '..', '..', 'db', 'seed');
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
 const WORKSPACE = '00000002-0000-4000-8000-000000000001';
@@ -36,8 +30,7 @@ let h: Harness;
 let hoy: string;
 
 async function seed(db: PgliteDatabase): Promise<void> {
-  const archivos = (await readdir(SEED_DIR)).filter((f) => f.endsWith('.sql')).sort();
-  for (const f of archivos) await db.raw.exec(await readFile(join(SEED_DIR, f), 'utf8'));
+  await applyRepoSeeds(db);
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale)
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno', 'Estudio Ajeno', 'creator', 'CO', 'COP', 'America/Bogota', 'es-CO')
