@@ -24,7 +24,8 @@ import {
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
 import {
-  CreatorNotInWorkspace, findConnectionByAccount, getDefaultCreatorId, NoCreatorProfile, recordConsent, upsertConnection, type ConsentPurpose, type WorkspaceTx,
+  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getDefaultCreatorId, NoCreatorProfile, recordConsent, upgradePublicAccountToOAuth,
+  upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
 
@@ -219,14 +220,25 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       try {
         connectionId = await deps.withWorkspace(async (tx) => {
         const existing = await findConnectionByAccount(tx, prov.platformId, externalAccountId);
+        // Híbrido CON-10: si la cuenta ya se agregó por @, «Autorizar» convierte ESA fila (mismo id, mismo historial).
+        const publicRow = provider !== "tiktok-business" && profile.handle ? await findPublicAccountByHandle(tx, prov.platformId, profile.handle) : null;
         // Se reutiliza la ref solo si es de ESTE proveedor: una fila de Login Kit no puede acabar con tokens de la Accounts API bajo 'enc:tiktok:'.
         const secretRef = existing && existing.secretRef.startsWith(`enc:${provider}:`) ? existing.secretRef : newSecretRef(provider);
         await new EncryptedSecretStore({ db: tx, cipher }).set(secretRef, tokens);
-        const { id } = await upsertConnection(tx, {
-          creatorId: saved.creatorId, platformId: prov.platformId, externalAccountId,
-          handle: profile.handle, displayName: profile.display_name, avatarUrl: profile.avatar_url, profileUrl: profile.profile_url, accountType: profile.account_type,
-          secretRef, scopes: scopesGranted, accessExpiresAt: tokens.accessExpiresAt, refreshExpiresAt: tokens.refreshExpiresAt ?? null, connectedAt: now(),
-        });
+        let id: string;
+        if (publicRow) {
+          id = publicRow.id;
+          await upgradePublicAccountToOAuth(tx, id, {
+            externalAccountId, handle: profile.handle, displayName: profile.display_name, avatarUrl: profile.avatar_url, profileUrl: profile.profile_url, accountType: profile.account_type,
+            secretRef, scopes: scopesGranted, accessExpiresAt: tokens.accessExpiresAt, refreshExpiresAt: tokens.refreshExpiresAt ?? null, connectedAt: now(),
+          });
+        } else {
+          id = (await upsertConnection(tx, {
+            creatorId: saved.creatorId, platformId: prov.platformId, externalAccountId,
+            handle: profile.handle, displayName: profile.display_name, avatarUrl: profile.avatar_url, profileUrl: profile.profile_url, accountType: profile.account_type,
+            secretRef, scopes: scopesGranted, accessExpiresAt: tokens.accessExpiresAt, refreshExpiresAt: tokens.refreshExpiresAt ?? null, connectedAt: now(),
+          })).id;
+        }
         const purposes: ConsentPurpose[] = purposesFor(provider, scopesGranted);
         for (const purpose of purposes) {
           await recordConsent(tx, { connectionId: id, creatorId: saved.creatorId, purpose, policyVersion: saved.policyVersion, evidence });

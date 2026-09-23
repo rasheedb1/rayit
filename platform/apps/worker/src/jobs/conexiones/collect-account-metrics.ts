@@ -12,9 +12,10 @@
  * vez; not_found / not_discoverable → status 'error' con el detalle en
  * español; transitorio → cuenta como failed y pg-boss reintenta.
  * ctx.db corre como mc_worker: cada escritura filtra por workspace_id.
- * Las cuentas autorizadas (direct_oauth) son de CON-5 y no se tocan aquí.
+ * Las cuentas autorizadas (direct_oauth, CON-3) se leen con su token: userInfo /
+ * me, source 'api'. Los videos y sus métricas son de CON-5.
  */
-import { createPublicProfileSources, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
+import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from './oauth-refresh.ts';
 
@@ -29,15 +30,40 @@ interface AccountRow extends Record<string, unknown> {
   platform_id: string;
   handle: string | null;
   external_account_id: string;
+  access_mode: string;
+  secret_ref: string;
+}
+
+interface Metrics {
+  followers: number | null;
+  following: number | null;
+  mediaCount: number | null;
+  views: number | null;
+}
+
+/** Una cuenta autorizada (CON-3) se lee con su propio token: userInfo de TikTok, me de Instagram. null = red sin lectura todavía (YouTube, CON-8). */
+async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metrics: Metrics; raw: unknown } | null> {
+  const tokens = await ctx.secrets.get(acc.secret_ref);
+  if (!tokens) throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
+  const auth = { connectionId: acc.id, tokens };
+  if (acc.platform_id === 'tiktok') {
+    const { data, raw } = await ctx.connectors.tiktokDisplay(auth).userInfo({ signal: ctx.signal });
+    return { metrics: { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views }, raw };
+  }
+  if (acc.platform_id === 'instagram') {
+    const { data, raw } = await ctx.connectors.instagram(auth).me({ signal: ctx.signal });
+    return { metrics: { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views }, raw };
+  }
+  return null;
 }
 
 export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
 
 export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>('collect.account_metrics', async (payload, ctx) => {
   const { rows } = await ctx.db.query<AccountRow>(
-    `SELECT id, workspace_id, platform_id, handle, external_account_id
+    `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref
        FROM social_connection
-      WHERE access_mode = 'public_profile' AND deleted_at IS NULL AND status IN ('active', 'error')
+      WHERE access_mode IN ('public_profile', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
       ORDER BY platform_id, connected_at`,
     [payload.connectionId ?? null, payload.workspaceId ?? null],
@@ -56,17 +82,28 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   await Promise.all(
     [...byPlatform.entries()].map(async ([platform, accounts]) => {
       const source = isPlatformId(platform) ? sources[platform] : undefined;
-      if (!source || source.missing.length > 0) {
+      const publicOnes = accounts.filter((a) => a.access_mode === 'public_profile');
+      if (publicOnes.length > 0 && (!source || source.missing.length > 0)) {
         skipped[platform] = source ? `faltan ${source.missing.join(', ')}` : 'sin fuente pública';
-        ctx.logger.warn('fuente pública sin configurar; se salta la plataforma', { platform, missing: source?.missing ?? [] });
-        return;
+        ctx.logger.warn('fuente pública sin configurar; se saltan las cuentas por @ de la plataforma', { platform, missing: source?.missing ?? [], accounts: publicOnes.length });
       }
-      await mapLimit(accounts, ctx.definition.maxConcurrency, async (acc) => {
+      const readable = accounts.filter((a) => a.access_mode === 'direct_oauth' || (source && source.missing.length === 0));
+      await mapLimit(readable, ctx.definition.maxConcurrency, async (acc) => {
         if (ctx.signal.aborted) { transient.push(acc.id); return; }
-        const log = ctx.logger.child({ connectionId: acc.id, workspaceId: acc.workspace_id, platform });
+        const log = ctx.logger.child({ connectionId: acc.id, workspaceId: acc.workspace_id, platform, accessMode: acc.access_mode });
         try {
-          const profile = await source.lookup(acc.handle ?? acc.external_account_id, { signal: ctx.signal });
-          const m = profile.metrics;
+          let m: Metrics | null;
+          let raw: unknown;
+          let note: string | null;
+          let sourceName: string;
+          if (acc.access_mode === 'direct_oauth') {
+            const read = await readAuthorized(ctx, acc);
+            if (!read) { noMetrics.push(acc.id); log.info('red autorizada sin lectura de cuenta todavía'); return; }
+            m = read.metrics; raw = read.raw; note = null; sourceName = 'api';
+          } else {
+            const profile = await source!.lookup(acc.handle ?? acc.external_account_id, { signal: ctx.signal });
+            m = profile.metrics; raw = profile.raw; note = profile.metricsNote; sourceName = PUBLIC_SNAPSHOT_SOURCE;
+          }
           if (m) {
             await ctx.db.transaction(async (tx) => {
               await tx.query(
@@ -75,7 +112,7 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
                  ON CONFLICT (connection_id, day, source) DO UPDATE
                    SET followers = EXCLUDED.followers, following = EXCLUDED.following, media_count = EXCLUDED.media_count,
                        views = EXCLUDED.views, raw = EXCLUDED.raw, captured_at = now()`,
-                [acc.id, acc.workspace_id, day, m.followers, m.following, m.mediaCount, m.views, JSON.stringify(profile.raw ?? {}), PUBLIC_SNAPSHOT_SOURCE],
+                [acc.id, acc.workspace_id, day, m.followers, m.following, m.mediaCount, m.views, JSON.stringify(raw ?? {}), sourceName],
               );
               await tx.query(
                 `UPDATE social_connection SET last_synced_at = now(), last_error_at = NULL, consecutive_failures = 0, status = 'active', status_detail = NULL
@@ -86,11 +123,22 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
             snapshots.push(acc.id);
             log.info('snapshot público guardado', { day, followers: m.followers });
           } else {
-            await ctx.db.query(`UPDATE social_connection SET status_detail = $3 WHERE id = $1 AND workspace_id = $2`, [acc.id, acc.workspace_id, profile.metricsNote]);
+            await ctx.db.query(`UPDATE social_connection SET status_detail = $3 WHERE id = $1 AND workspace_id = $2`, [acc.id, acc.workspace_id, note]);
             noMetrics.push(acc.id);
-            log.info('la fuente no publica métricas; solo identidad', { source: profile.source });
+            log.info('la fuente no publica métricas; solo identidad');
           }
         } catch (err) {
+          if (isPlatformApiError(err) && err.kind === 'auth') {
+            // El token de una cuenta autorizada ya no sirve: needs_reauth, como hace oauth.refresh.
+            await ctx.db.query(
+              `UPDATE social_connection SET status = 'needs_reauth', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
+                WHERE id = $1 AND workspace_id = $2`,
+              [acc.id, acc.workspace_id, err.messageEs],
+            );
+            errored.push(acc.id);
+            log.warn('la plataforma rechazó el token de la cuenta autorizada', { code: err.code });
+            return;
+          }
           if (err instanceof PublicLookupError && (err.code === 'not_found' || err.code === 'not_discoverable' || err.code === 'invalid_handle')) {
             await ctx.db.query(
               `UPDATE social_connection SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1

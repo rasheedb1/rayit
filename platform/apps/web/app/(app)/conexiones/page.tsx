@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { loadOAuthApps, type OAuthProviderId } from "@mc/connectors";
+import { loadOAuthApps } from "@mc/connectors";
 import type { AccountRow, ConnectionStatus } from "@mc/db";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Pill, type PillKind } from "@/components/ui/pill";
 import { flags } from "@/content/flags";
 import { formatDelta, formatInt } from "@/lib/format";
 import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions";
-import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL } from "./_lib/consent";
+import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
 import { getCuentasService } from "./_lib/cuentas-server";
 import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
@@ -64,6 +64,15 @@ const COLUMNS: Column<AccountRow>[] = [
     render: (r) => (r.latest?.views === null || r.latest?.views === undefined ? SIN_DATO : formatInt(r.latest.views)),
   },
   {
+    key: "source",
+    header: "Cifras",
+    render: (r) => {
+      if (r.accessMode === "direct_oauth") return <span className="text-xs text-ink-2">Autorizada por el dueño</span>;
+      if (r.platformId === "tiktok" && r.accessMode === "public_profile") return <TikTokAuthorize row={r} />;
+      return <span className="text-xs text-ink-2">Públicas por @</span>;
+    },
+  },
+  {
     key: "dataAsOf",
     header: "Datos",
     render: (r) => (r.latest ? <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} /> : <span className="text-xs text-muted">Sin lectura todavía</span>),
@@ -85,7 +94,7 @@ const COLUMNS: Column<AccountRow>[] = [
     header: "Acciones",
     render: (r) => (
       <div className="flex flex-wrap gap-1">
-        {r.accessMode === "public_profile" && (
+        {(r.accessMode === "public_profile" || r.accessMode === "direct_oauth") && (
           <form action={actualizarCuenta.bind(null, r.id)}>
             <Button type="submit" size="sm" variant="secondary" aria-label={`Actualizar @${r.handle ?? r.externalAccountId}`}>
               Actualizar
@@ -204,30 +213,23 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
         />
       </section>
 
-      {flags.oauth_connect && <OAuthSection rows={rows} />}
     </>
   );
 }
 
-/** La conexión autorizada (CON-3) queda detrás de la bandera oauth_connect; se enciende con OAUTH_CONNECT=1. */
-function OAuthSection({ rows }: { rows: AccountRow[] }) {
+/**
+ * TikTok no publica cifras por @: el dueño las desbloquea autorizando una
+ * vez (CON-3, detrás de la bandera oauth_connect). El botón abre el
+ * diálogo de consentimiento; el callback convierte esta misma fila.
+ */
+function TikTokAuthorize({ row }: { row: AccountRow }) {
+  if (!flags.oauth_connect) return <span className="text-xs text-muted">Sin cifras por @</span>;
   const { apps, missing } = loadOAuthApps(process.env);
-  const disabledReason = (p: OAuthProviderId) => (apps[p] ? undefined : `${PLATFORM_LABEL[p]} no está configurado en este entorno: faltan ${(missing[p] ?? []).join(", ")}.`);
-  const dialog = (p: OAuthProviderId) => (
-    <ConnectDialog key={p} label={PLATFORM_LABEL[p]} text={consentText(p)} policyVersion={CONSENT_POLICY_VERSION} action={`/conexiones/oauth/${p}/start`} disabledReason={disabledReason(p)} variant="secondary" />
-  );
-  const showBusiness = !!apps["tiktok-business"] && rows.some((r) => r.platformId === "tiktok" && r.accessMode === "direct_oauth" && r.status === "active");
+  const reason = apps.tiktok ? undefined : `TikTok no está configurado en este entorno: faltan ${(missing.tiktok ?? []).join(", ")}.`;
   return (
-    <section className="mt-10" aria-labelledby="autorizar">
-      <SectionTitle>
-        <span id="autorizar">Autorizar una cuenta (versión avanzada)</span>
-      </SectionTitle>
-      <p className="mb-3 max-w-2xl text-sm text-ink-2">Con la autorización del dueño llegan alcance, retención y demografía. Pendiente para una versión posterior.</p>
-      <div className="flex flex-wrap gap-2">
-        {dialog("tiktok")}
-        {dialog("instagram")}
-        {showBusiness && dialog("tiktok-business")}
-      </div>
-    </section>
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted">Sin cifras por @</span>
+      <ConnectDialog label="TikTok" actionLabel="Autorizar cifras" text={consentText("tiktok")} policyVersion={CONSENT_POLICY_VERSION} action="/conexiones/oauth/tiktok/start" disabledReason={reason} variant="secondary" size="sm" ariaLabel={`Autorizar cifras de @${row.handle ?? row.externalAccountId}`} />
+    </div>
   );
 }

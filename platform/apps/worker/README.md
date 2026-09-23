@@ -213,6 +213,6 @@ src/runner/boss.ts           job_definition → opciones de pg-boss
 src/runner/run.ts            una ejecución: job_run running → ok/partial/failed
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
-src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @, CON-10)
+src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
 test/                        integración (pglite) y unitarias
 ```

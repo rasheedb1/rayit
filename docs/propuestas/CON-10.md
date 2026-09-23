@@ -207,3 +207,36 @@ para el snapshot diario.
    ```bash
    make -C /Users/nicolasduarte/Documents/influ/rayit-con3/platform db.sql Q="select c.platform_id, c.handle, c.status, c.status_detail, s.day, s.followers, s.media_count from social_connection c left join account_metric_snapshot s on s.connection_id = c.id and s.source = 'public_profile' where c.access_mode = 'public_profile' and c.deleted_at is null order by c.connected_at desc, s.day desc"
    ```
+
+## 7. Híbrido: «Autorizar cifras» de TikTok (decisión del 23 de septiembre)
+
+Nicolás eligió la opción 1 para TikTok: en vez del CSV, el dueño
+**autoriza una vez** con el flujo de CON-3, gratis y oficial. Cómo queda:
+
+- La cuenta se agrega por @ como siempre. En su fila, la columna
+  «Cifras» dice «Sin cifras por @» y, con la bandera `oauth_connect`
+  encendida (`OAUTH_CONNECT=1`) y la app de TikTok configurada, muestra
+  el botón **«Autorizar cifras»**, que abre el diálogo de consentimiento
+  y lanza el OAuth de CON-3.
+- El callback busca la fila `public_profile` con ese handle y **la
+  convierte** (`upgradePublicAccountToOAuth`): mismo id, mismos
+  snapshots, `access_mode = 'direct_oauth'`, `external_account_id =
+  open_id`, tokens cifrados bajo su `secret_ref`. Si había una
+  autorización anterior con ese `open_id`, se retira y su id externo se
+  marca `~sustituida~` para liberar el UNIQUE de 0002.
+- `collect.account_metrics` también lee las cuentas autorizadas con su
+  token (`userInfo` de TikTok, `me` de Instagram; `source = 'api'`).
+  Un token rechazado pasa la cuenta a `needs_reauth`, como en
+  `oauth.refresh`. «Actualizar» en la pantalla hace lo mismo desde la web.
+- Los videos y sus métricas por video (`video.list`) siguen siendo CON-5,
+  que ahora tiene token para leerlos.
+- Requisitos externos: app en developers.tiktok.com con Login Kit, los
+  cuatro scopes, la redirect URI de producción, un **sandbox** con la
+  cuenta de Nicolás como target user (hasta 10 cuentas de prueba) y,
+  para abrirlo a cualquier creador, **App Review** de Login Kit (días o
+  pocas semanas; no es el formulario de la Accounts API). Variables:
+  `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET` y
+  `OAUTH_CONNECT=1` en Vercel; `TOKEN_ENCRYPTION_KEY` y `APP_URL` ya están.
+- Instagram y YouTube siguen por @ con las credenciales de la casa (§3).
+  RES-2 (CSV) deja de ser el camino de TikTok; CON-12 (proveedor) sigue
+  como opción futura.

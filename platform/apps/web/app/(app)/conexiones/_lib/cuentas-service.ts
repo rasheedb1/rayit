@@ -10,7 +10,8 @@
  * llamadas HTTP quedan en api_call_log con la fila.
  */
 import {
-  createPublicProfileSources, HttpCore, InMemoryCallLogSink, isPlatformId, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets,
+  createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
+  MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher,
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
 } from "@mc/connectors";
 import {
@@ -135,6 +136,7 @@ export function createCuentasService(deps: CuentasDeps) {
       if (!row) return { ok: false, code: "no_existe", message: "Esa cuenta ya no está en la lista." };
       const platformId = row.platformId;
       const callLog = new InMemoryCallLogSink();
+      if (row.accessMode === "direct_oauth") return this.actualizarAutorizada(row, callLog);
       const source = build(callLog)[platformId];
       if (!source) return { ok: false, code: "plataforma", message: "Esa red no está disponible en esta versión." };
       try {
@@ -155,6 +157,52 @@ export function createCuentasService(deps: CuentasDeps) {
           return { ok: false, code: err.code, message: err.messageEs };
         }
         throw err;
+      }
+    },
+
+    /**
+     * Cuenta autorizada (CON-3): se lee con su propio token desde el almacén
+     * cifrado (userInfo de TikTok, me de Instagram). Un token que la
+     * plataforma rechaza deja el aviso; la renovación es de oauth.refresh.
+     */
+    async actualizarAutorizada(row: AccountRow, callLog: InMemoryCallLogSink): Promise<ActualizarResult> {
+      let cipher: TokenCipher;
+      try {
+        cipher = new TokenCipher(keyringFromEnv(deps.env));
+      } catch (err) {
+        return { ok: false, code: "not_configured", message: err instanceof MasterKeyError ? err.message : "Falta la clave de cifrado." };
+      }
+      const core = new HttpCore({ callLog, fetch: deps.fetch, now, quota: new QuotaManager({ now }) });
+      try {
+        const metrics = await deps.withWorkspace(async (tx) => {
+          const tokens = await new EncryptedSecretStore({ db: tx, cipher }).get(row.secretRef);
+          if (!tokens) throw new PublicLookupError("not_configured", "No encontramos el permiso de esta cuenta; vuelve a autorizarla.");
+          const auth = { connectionId: row.id, tokens };
+          if (row.platformId === "tiktok") {
+            const { data, raw } = await new TikTokDisplayClient(core, auth).userInfo();
+            return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
+          }
+          if (row.platformId === "instagram") {
+            const { data, raw } = await new InstagramClient(core, auth).me();
+            return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
+          }
+          throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta (CON-8).");
+        });
+        await deps.withWorkspace(async (tx) => {
+          await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics });
+          await flush(callLog, tx, row.id);
+        });
+        return { ok: true, id: row.id, withMetrics: true, note: null };
+      } catch (err) {
+        const message = err instanceof PublicLookupError ? err.messageEs
+          : isPlatformApiError(err) && err.kind === "auth" ? "La plataforma rechazó el permiso de esta cuenta; hay que volver a autorizarla."
+          : isPlatformApiError(err) ? err.messageEs : "No se pudo leer la cuenta. Inténtalo de nuevo en unos minutos.";
+        const permanent = isPlatformApiError(err) && err.kind === "auth";
+        await deps.withWorkspace(async (tx) => {
+          await markAccountLookupFailure(tx, row.id, message, permanent);
+          await flush(callLog, tx, row.id);
+        }).catch(() => undefined);
+        return { ok: false, code: err instanceof PublicLookupError ? err.code : "transient", message };
       }
     },
 

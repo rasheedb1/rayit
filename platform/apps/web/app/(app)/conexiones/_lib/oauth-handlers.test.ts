@@ -232,6 +232,32 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(refs.rows.length).toBe(1);
   });
 
+  it("híbrido: una cuenta agregada por @ se convierte en autorizada conservando id e historial", async () => {
+    // Fila por @ con el handle que devolverá userInfo (laura.cocinafacil) y un snapshot previo.
+    const created = await db.queryAsSuperuser<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode)
+       VALUES ($1, '00000002-0000-4000-8000-000000000003', 'tiktok', 'laura.cocinafacil', 'laura.cocinafacil', 'public:tiktok:laura.cocinafacil', '{}', 'public_profile') RETURNING id`,
+      [SEED_WORKSPACE_ID],
+    );
+    const publicId = created.rows[0]!.id;
+    await db.queryAsSuperuser(`INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, source) VALUES ($1, $2, '2026-09-21', 412000, 'public_profile')`, [publicId, SEED_WORKSPACE_ID]);
+    // La autorización anterior de la misma cuenta (open_id_demo_laura, tiktokId) queda desactivada para no chocar con el UNIQUE.
+    const { cookie, state } = await start("tiktok");
+    const res = await handlers.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookie), "tiktok");
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).searchParams.get("conectada")).toBe(publicId);
+    const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === publicId)!;
+    expect(row.externalAccountId).toBe("open_id_demo_laura");
+    expect(row.secretRef).toMatch(/^enc:tiktok:/);
+    expect(row.scopes.length).toBeGreaterThan(0);
+    const mode = await db.queryAsSuperuser<{ access_mode: string; n: number }>("SELECT access_mode, (SELECT count(*)::int FROM account_metric_snapshot WHERE connection_id = $1) AS n FROM social_connection WHERE id = $1", [publicId]);
+    expect(mode.rows[0]).toEqual({ access_mode: "direct_oauth", n: 1 });
+    const old = await db.queryAsSuperuser<{ status: string; deleted_at: string | null }>("SELECT status, deleted_at FROM social_connection WHERE id = $1", [tiktokId]);
+    expect(old.rows[0]!.status).toBe("disabled");
+    expect(old.rows[0]!.deleted_at).not.toBeNull();
+    tiktokId = publicId;
+  });
+
   it("una fila con ref de otro proveedor (Login Kit) no presta su ref: la Accounts API tendría la suya", async () => {
     const refs = await db.queryAsSuperuser<{ secret_ref: string }>("SELECT secret_ref FROM social_connection WHERE id = $1", [tiktokId]);
     expect(refs.rows[0]!.secret_ref.startsWith("enc:tiktok:")).toBe(true);

@@ -1,7 +1,7 @@
 /** CON-10 · cuentas por @: alta, snapshot diario (reemplaza el mismo día), lista con último snapshot y Δ7d, fallos, aislamiento. */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent } from '../src/index.ts';
+import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, upgradePublicAccountToOAuth } from '../src/index.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './helpers/base.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
@@ -77,3 +77,34 @@ describe('snapshots', () => {
     assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!.status, 'active');
   });
 });
+
+describe('de @ a autorizada', () => {
+  test('autorizar convierte la misma fila (id e historial) en direct_oauth con open_id y tokens; otro workspace no la ve', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'tiktok', handle: 'selvathegolden', externalAccountId: 'selvathegolden', profileUrl: null, accountType: 'unknown' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-22', followers: null, following: null, mediaCount: null, views: null, raw: {} }));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'SelvaTheGolden')))?.id, id, 'busca sin distinguir mayúsculas');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'selvathegolden')), null);
+    // Una autorización anterior de la misma cuenta (mismo open_id) existe: al convertir la fila por @, la vieja se retira y libera el UNIQUE.
+    const previous = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode)
+       VALUES (current_workspace_id(), $1, 'tiktok', 'open_id_selva', 'selvathegolden', 'enc:tiktok:66666666-6666-4666-8666-666666666666', '{user.info.basic}', 'direct_oauth') RETURNING id`, [CREATOR_LAURA]));
+    const previousId = previous.rows[0]!.id;
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {
+      externalAccountId: 'open_id_selva', handle: 'selvathegolden', displayName: 'Selva', avatarUrl: null, profileUrl: 'https://www.tiktok.com/@selvathegolden', accountType: 'creator',
+      secretRef: 'enc:tiktok:44444444-4444-4444-8444-444444444444', scopes: ['user.info.basic', 'video.list'], accessExpiresAt: new Date('2026-09-24T00:00:00Z'), refreshExpiresAt: new Date('2027-09-23T00:00:00Z'),
+    }));
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.accessMode, 'direct_oauth');
+    assert.equal(row.externalAccountId, 'open_id_selva');
+    assert.equal(row.secretRef, 'enc:tiktok:44444444-4444-4444-8444-444444444444');
+    assert.deepEqual(row.scopes, ['user.info.basic', 'video.list']);
+    assert.equal(row.latest?.day, '2026-09-22', 'el historial por @ se conserva');
+    const old = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ status: string; external_account_id: string; deleted_at: string | null }>(`SELECT status, external_account_id, deleted_at FROM social_connection WHERE id = $1`, [previousId]));
+    assert.equal(old.rows[0]!.status, 'disabled');
+    assert.ok(old.rows[0]!.deleted_at);
+    assert.match(old.rows[0]!.external_account_id, /^open_id_selva~sustituida~/);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'selvathegolden')), null, 'ya no es pública');
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => upgradePublicAccountToOAuth(tx, id, { externalAccountId: 'x', handle: null, displayName: null, avatarUrl: null, profileUrl: null, accountType: 'unknown', secretRef: 'enc:tiktok:55555555-5555-4555-8555-555555555555', scopes: [], accessExpiresAt: new Date(), refreshExpiresAt: null })));
+  });
+});
+
