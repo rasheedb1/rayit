@@ -1021,3 +1021,119 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     }
   });
 });
+
+/**
+ * PULIDO, RONDA 1: tres puntos ciegos que los revisores reprodujeron con
+ * la guardia en verde. Un padre que aísla por PERSONA heredado como si
+ * aislara por inquilino; una función SECURITY DEFINER en `extensions`,
+ * el esquema que la comprobación de esquemas deja pasar de oficio; y el
+ * UPDATE de tabla sobre workspace, con el que la fila propia se
+ * reescribía entera (el plan incluido).
+ */
+describe('pulido, ronda 1: persona, extensions y privilegios por columna', () => {
+  async function con<T>(sql: string, deshacer: string, fn: (estado: EstadoDelEsquema) => T | Promise<T>): Promise<T> {
+    await t.admin(sql);
+    try {
+      return await fn(await estadoDelEsquema(t.db));
+    } finally {
+      await t.admin(deshacer);
+    }
+  }
+  const claves = (e: EstadoDelEsquema) => e.politicasAbiertas.map((p) => p.clave);
+
+  test('un EXISTS sobre app_user o membership no aísla una tabla con inquilino: aíslan por persona', async (ctx) => {
+    // Las dos sondas del revisor. app_user se lee «soy yo o comparto
+    // workspace con esa persona» y membership «las de aquí o las mías»:
+    // quien está en A y en B lee desde B las filas de A (rls.test.ts lo
+    // mide con la base). Con la ronda 5 las dos pasaban en verde.
+    if (t.kind !== 'pglite') return ctx.skip('las tablas de prueba las crea el rol que migra en pglite');
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_por_creador (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id), ' +
+        '  created_by uuid REFERENCES app_user(id)); ' +
+        'ALTER TABLE zz_por_creador ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_por_creador FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_por_creador_p ON zz_por_creador FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM app_user u WHERE u.id = zz_por_creador.created_by)); ' +
+        'CREATE TABLE zz_por_miembro (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id)); ' +
+        'ALTER TABLE zz_por_miembro ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_por_miembro FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_por_miembro_p ON zz_por_miembro FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM membership m WHERE m.workspace_id = zz_por_miembro.workspace_id)); ' +
+        // Los controles: con el inquilino en un AND sí aísla, y una tabla
+        // SIN columna de inquilino hereda la persona, como es debido.
+        'CREATE TABLE zz_por_creador_ok (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id), ' +
+        '  created_by uuid REFERENCES app_user(id)); ' +
+        'ALTER TABLE zz_por_creador_ok ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_por_creador_ok FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_por_creador_ok_p ON zz_por_creador_ok FOR SELECT USING (workspace_id = current_workspace_id() ' +
+        '  AND EXISTS (SELECT 1 FROM app_user u WHERE u.id = zz_por_creador_ok.created_by)); ' +
+        'CREATE TABLE zz_de_la_persona (id uuid PRIMARY KEY, user_id uuid REFERENCES app_user(id)); ' +
+        'ALTER TABLE zz_de_la_persona ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_de_la_persona FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_de_la_persona_p ON zz_de_la_persona FOR SELECT ' +
+        '  USING (EXISTS (SELECT 1 FROM app_user u WHERE u.id = zz_de_la_persona.user_id)); ' +
+        'REVOKE ALL ON zz_por_creador, zz_por_miembro, zz_por_creador_ok, zz_de_la_persona FROM mc_app; ' +
+        'GRANT SELECT ON zz_por_creador, zz_por_miembro, zz_por_creador_ok, zz_de_la_persona TO mc_app; RESET ROLE',
+      'DROP TABLE zz_por_creador, zz_por_miembro, zz_por_creador_ok, zz_de_la_persona',
+      (e) => {
+        assert.ok(claves(e).includes('zz_por_creador.zz_por_creador_p'), JSON.stringify(claves(e)));
+        assert.ok(claves(e).includes('zz_por_miembro.zz_por_miembro_p'), JSON.stringify(claves(e)));
+        assert.ok(!claves(e).includes('zz_por_creador_ok.zz_por_creador_ok_p'), 'con el inquilino en un AND, aísla');
+        assert.ok(!claves(e).includes('zz_de_la_persona.zz_de_la_persona_p'), 'sin inquilino propio, hereda la persona');
+        assert.notEqual(explicarEsquema(e), null);
+      },
+    );
+  });
+
+  test('una función SECURITY DEFINER en extensions que mc_app puede ejecutar se nombra, con su esquema', async () => {
+    // En Supabase, `extensions` es donde viven las extensiones y mc_app
+    // tiene USAGE: la comprobación de esquemas lo deja pasar de oficio. El
+    // EXECUTE a PUBLIC lo da Postgres al crear la función. La sonda del
+    // revisor daba explicarEsquema = null.
+    const existia = await t.db.withCatalogs((tx) =>
+      tx.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_namespace WHERE nspname = 'extensions'"),
+    );
+    const crear = existia.rows[0]?.n ? '' : 'CREATE SCHEMA extensions; ';
+    await con(
+      crear +
+        'GRANT USAGE ON SCHEMA extensions TO mc_app; ' +
+        'CREATE FUNCTION extensions.zz_leer_todo(uuid, text) RETURNS bigint LANGUAGE sql SECURITY DEFINER ' +
+        '  AS $$SELECT count(*) FROM public.webhook_event$$; ' +
+        // Y los dos casos que NO son un camino: sin EXECUTE para mc_app, y
+        // una de disparador (no se puede llamar; si un disparador de public
+        // la usa, lo nombra disparadoresDefiner).
+        'CREATE FUNCTION extensions.zz_sin_execute() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS $$SELECT 1::bigint$$; ' +
+        'REVOKE EXECUTE ON FUNCTION extensions.zz_sin_execute() FROM PUBLIC; ' +
+        'CREATE FUNCTION extensions.zz_de_disparador() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER ' +
+        '  AS $$BEGIN RETURN NEW; END$$',
+      crear
+        ? 'DROP SCHEMA extensions CASCADE'
+        : 'DROP FUNCTION extensions.zz_leer_todo(uuid, text), extensions.zz_sin_execute(), extensions.zz_de_disparador(); ' +
+            'REVOKE USAGE ON SCHEMA extensions FROM mc_app',
+      (e) => {
+        assert.deepEqual(e.funcionesDefiner, ['extensions.zz_leer_todo(uuid,text)']);
+        assert.match(String(explicarEsquema(e)), /extensions\.zz_leer_todo\(uuid,text\)/);
+      },
+    );
+  });
+
+  test('workspace: UPDATE de tabla entera, o en una columna que no está en la lista, se reporta', async () => {
+    // 0024 §7.6 deja a mc_app el UPDATE solo en las columnas de ajustes.
+    // Un GRANT de tabla —el de cualquier script que haga GRANT … ON ALL
+    // TABLES— devolvía el plan, y la guardia lo daba por bueno porque
+    // «UPDATE» está en la lista de workspace.
+    await con(
+      'GRANT UPDATE ON workspace TO mc_app',
+      'REVOKE UPDATE ON workspace FROM mc_app; ' +
+        'GRANT UPDATE (name, slug, country, currency, timezone, locale, niche_slugs, settings, updated_at) ON workspace TO mc_app',
+      (e) => {
+        const ws = e.privilegiosDeMas.filter((p) => p.tabla === 'workspace');
+        assert.equal(ws.length, 1, JSON.stringify(e.privilegiosDeMas));
+        assert.match(ws[0]!.motivo, /TABLA ENTERA/);
+      },
+    );
+    await con('GRANT UPDATE (plan) ON workspace TO mc_app', 'REVOKE UPDATE (plan) ON workspace FROM mc_app', (e) => {
+      const ws = e.privilegiosDeMas.filter((p) => p.tabla === 'workspace');
+      assert.equal(ws.length, 1, JSON.stringify(e.privilegiosDeMas));
+      assert.match(ws[0]!.motivo, /POR COLUMNA en plan/);
+    });
+    assert.deepEqual((await estadoDelEsquema(t.db)).privilegiosDeMas, [], 'y al deshacerlo vuelve a verde');
+  });
+});
