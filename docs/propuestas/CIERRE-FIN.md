@@ -172,8 +172,88 @@ conservadora; no cambié ninguna.
 
 ## 6. Verificación
 
-_(se completa al final: §6.1 conteos, §6.2 dev, §6.3 revisión)_
+### 6.1 Conteos (`pnpm verificar` sobre el merge final con main, `58abf03`)
 
-## 7. Producción y guion de humo
+| Paquete | Pruebas |
+|---|---|
+| @mc/core | 267 ✓ |
+| @mc/connectors | 203 ✓ |
+| @mc/db | 814 ✓ (incluye `finanzas-costuras.test.ts`, 9) |
+| @mc/worker | 121 ✓ |
+| @mc/web | 1168 ✓ + 1 todo (130 archivos; `finanzas/permisos.test.tsx`, 58) |
+| raíz | 8 ✓ |
 
-_(se completa después del despliegue)_
+`next build` verde. Sin migración: no aplica `db.check`. Tras cada
+merge de F1 `verificar` quedó verde (el único rojo, 3 de oauth-refresh
+del worker en el primero, fue carga de la máquina: 88/88 solo y en main).
+
+### 6.2 En dev (modo demo, seed; Contadora con un seed temporal NO commiteado)
+
+Ciclo completo como **Contadora** (`DEMO_USER_ID` con rol `finance`):
+factura FV-2026-012 creada (303 al detalle) → «Marcar enviada» →
+pago parcial de 1 000 000 («110.000 apartados (11 %)») → en el cobro
+«COP 1.380.000 de COP 2.380.000 · Pago parcial · Al día» → gasto
+recurrente Figma de 520 000 → gastos «COP 7.790.769,20: el ritmo de
+agosto de 2026 (COP 4.220.000 al mes)… Incluye un gasto recurrente nuevo
+de este mes» y el flujo resta 973.846,15 cada semana → tres meses de
+YouTube de 300 000 → flujo con «Otros ingresos» 69.230,77 por semana →
+configuración con IVA 16 % → FV-2026-013 nace con «IVA 16 % · COP
+160.000» y FV-2026-012 conserva su 19 %. Seis pestañas.
+
+**Mánager** (Andrés, del seed): 404 en `/finanzas`, facturas, nueva,
+detalle, gastos, flujo, ingresos, nuevo, importar y configuración;
+Finanzas fuera del menú; `guardarGasto` por curl devuelve
+`SinPermisoError` («No tienes permiso para registrar gastos»).
+
+400 px: `scripts/ancho-movil.mjs` sobre las ocho pantallas → «400 px de
+400» en todas. Capturas a 400 px en claro y oscuro de cobro, gastos y
+configuración: legibles; la tira de pestañas pasa a dos líneas.
+
+### 6.3 Revisión
+
+- `/code-review` alto: 10 hallazgos, 8 arreglados con prueba (reserva
+  que la pantalla decía 11 % y el cobro no apartaba; `CURRENT_DATE` en
+  gastos; `?mes=0000-01` en 500; series sin proveedor fundidas; filas
+  anuales sumadas como mensuales; UPDATE sin cambios; revalidación del
+  pago; error crudo en configuración) y uno más que salió al arreglar
+  (IVA de 150 % aceptado en la factura: `PCT_RE` único en core).
+  Justificados: nombres en español (siguen a sus vecinos en main) y
+  duplicación de `ESCAPE_LIKE`/`count*` heredada de FIN-3/FIN-8.
+- `/security-review`: sin hallazgos de confianza ≥ 8. Revisado: puertas y
+  acciones, SQL parametrizado, RLS de `expense` y `receivables`, el job
+  con `workspace_id` explícito, enlaces de recibo (`^https?://`), la
+  bitácora (cuenta enmascarada, sin correo) y los mensajes de error.
+
+## 7. Producción
+
+| Qué | Resultado |
+|---|---|
+| Push | `origin/main` `1dafd78..0bd7107`, por avance rápido (el primer intento se rechazó porque entró CON-A; se volvió a integrar main) |
+| Despliegue | `https://on-cue-jrzfr2n2v-influ3.vercel.app`, alias `on-cue-web.vercel.app`; API de Vercel: `meta.gitCommitSha = 0bd7107f…`, `READY` |
+| Plan B | `https://on-cue-cr4agc9cv-influ3.vercel.app` (la de CON-A): `./scripts/vercel.sh run rollback https://on-cue-cr4agc9cv-influ3.vercel.app --yes` |
+| Rutas | 200 en `/finanzas`, `/finanzas/facturas`, `/facturas/nueva`, `/facturas/<id>`, `/gastos`, `/flujo`, `/ingresos`, `/configuracion` y `/finanzas?estado=borradores`; las seis pantallas con su tira de pestañas y ninguna en la frontera de error. `/campanas`, `/conexiones`, `/resumen`, `/cotizar`: 200 |
+| Guardia | **Falla por una sola cosa, que no es de Finanzas:** «faltan 1 migración(es) por aplicar (la base va por 0039): 0041_campaign_result_escritura_web.sql». Es la PARADA 1 de CAM (`CIERRE-CAM.md` §8.1), ya en main; su código convive sin ella (la ficha no enseña «Recalcular»). Se aplica con `cd /Users/nicolasduarte/Documents/influ/rayit/platform && make db.migrate` |
+| `settings.finanzas` en la base (solo lectura) | 1 workspace, bloque `object`, con `reserva_pct`: nada malformado |
+
+### 7.1 Guion de humo (con tu sesión en https://on-cue-web.vercel.app)
+
+1. `/finanzas`: seis pestañas (Cobro, Facturas, Gastos, Flujo, Ingresos,
+   Configuración), cuatro KPI, la bandeja de recordatorios (vacía hasta
+   WRK, y lo dice) y el cobro con lo vencido arriba. *Solo lee.*
+2. `/finanzas?estado=borradores`: te lleva a Facturas con «Borradores».
+   *Solo lee.*
+3. Facturas → «Nueva factura»: IVA, retención y plazo vienen de
+   Configuración. Crea una de prueba y queda en borrador. **Escribe
+   (invoice + audit_log).**
+4. En su detalle, «Marcar enviada» y registra un pago parcial. Mira
+   «apartados (11 %)» y, en Cobro, «Pago parcial». **Escribe (payment,
+   tax_reserve, notification, audit_log).** Anúlala después si no quieres
+   dejarla (solo si no tiene cobros: los cobros no se anulan en el MVP).
+5. Gastos: registra uno recurrente. La nota dice el ritmo y «igual que
+   en el flujo»; en Flujo, la columna «Gastos» da la misma cifra.
+   **Escribe (expense, audit_log).**
+6. Configuración: si ves el aviso amarillo de la reserva, léelo; cambia
+   algo y guarda. **Escribe (workspace.settings, audit_log con la cuenta
+   enmascarada).**
+7. Con un usuario Mánager, si tienes uno: Finanzas no está en el menú y
+   `/finanzas` da 404. *Solo lee.*
