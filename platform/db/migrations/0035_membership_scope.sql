@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0034 · membership_scope: el alcance de un miembro dentro de su espacio,
+-- 0035 · membership_scope: el alcance de un miembro dentro de su espacio,
 --        y scope_allows(), el predicado que cada consulta compone (ACC-6)
 -- ---------------------------------------------------------------------
 -- La tenencia la garantiza RLS: workspace_id = current_workspace_id().
@@ -16,10 +16,12 @@
 -- archivo; si el integrador prefiere una sola migración de accesos, esta
 -- se funde en ella antes de aplicar: nada de aquí está en Supabase.
 --
--- Número: 0033 es la más alta en todas las ramas al 23-sep-2026 y 0023
--- sigue reservada para ACC-3. Si otra área eligió también 0034, el
--- integrador renumera: no depende de nada que venga después de 0028
--- (membership con RLS y current_user_id()).
+-- Número: 0034 es la de ACC-3 (0034_access_control.sql, rama
+-- nicolas/ACC-3-esquema-accesos), que crea esta misma tabla con IF NOT
+-- EXISTS y la misma política. Las dos son re-ejecutables y no dependen
+-- del orden: esta se aplicó primero (23-sep-2026) y la de ACC-3, al
+-- llegar, encuentra la tabla hecha. Solo depende de 0028 (membership con
+-- RLS y current_user_id()).
 --
 -- Quién puede qué:
 --   mc_app     SELECT, por la política del espacio fijado. Escribir el

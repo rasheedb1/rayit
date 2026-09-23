@@ -58,7 +58,7 @@ el workspace: en el MVP nadie tiene filas de alcance y nada cambia.
 
 | Archivo | Qué |
 |---|---|
-| `db/migrations/0034_membership_scope.sql` | **Nuevo.** La tabla `membership_scope` tal cual la fase 4 de la propuesta ACC (re-ejecutable: `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS`, `CREATE OR REPLACE FUNCTION`), su RLS, `mc_app` solo con SELECT, y las funciones `scope_allows(text, uuid)` y `scope_allows(text, uuid[])`. |
+| `db/migrations/0035_membership_scope.sql` | **Nuevo.** La tabla `membership_scope` tal cual la fase 4 de la propuesta ACC (re-ejecutable: `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS`, `CREATE OR REPLACE FUNCTION`), su RLS, `mc_app` solo con SELECT, y las funciones `scope_allows(text, uuid)` y `scope_allows(text, uuid[])`. |
 | `packages/db/src/scope.ts` | **Nuevo.** `scopeFilter(anchors)` (el `WHERE` que compone cada consulta), `assertScopeAllows(tx, …)` (para las altas) y `ScopeError`. |
 | `packages/db/src/index.ts` | Reexporta `scopeFilter`, `ScopeError`. |
 | `packages/db/src/esquema.ts` | `membership_scope` en `PRIVILEGIOS_DE_LA_APP` (SELECT) y las dos firmas en `FUNCIONES_QUE_USA_EL_CODIGO`. Es un archivo de la guardia (Rasheed lo escribió); son dos entradas declarativas, sin lógica. |
@@ -82,7 +82,7 @@ ACC-3 y ACC-3 no está. Tres salidas:
 |---|---|---|
 | a | Esperar a ACC-3 | Deja la historia sin nada que probar; el modo de trabajo dice entregar completo bajo supuestos. |
 | b | Escribir `0023_access_control.sql` entera aquí | Recicla el número reservado sin preguntar (prohibido en el bloque común), y mete en ACC-6 el esquema de roles, invitaciones y concesiones que es de ACC-3. |
-| c | **Una migración mínima `0034_membership_scope.sql`** con SOLO la tabla del alcance (la de la fase 4, sin cambiar una columna) y las funciones | Es la opción conservadora: número por la regla del bloque común (máximo en todas las ramas + 1), re-ejecutable, y ACC-3 la escribe con `CREATE TABLE IF NOT EXISTS membership_scope` (o quita esa tabla de su archivo). Si Rasheed prefiere que todo lo de accesos viva en una sola migración, esta se funde en ACC-3 antes de aplicar: nada de lo de aquí está en Supabase. |
+| c | **Una migración mínima `0035_membership_scope.sql`** con SOLO la tabla del alcance (la de la fase 4, sin cambiar una columna) y las funciones | Es la opción conservadora: número por la regla del bloque común (máximo en todas las ramas + 1), re-ejecutable, y ACC-3 la escribe con `CREATE TABLE IF NOT EXISTS membership_scope` (o quita esa tabla de su archivo). Si Rasheed prefiere que todo lo de accesos viva en una sola migración, esta se funde en ACC-3 antes de aplicar: nada de lo de aquí está en Supabase. |
 
 Se toma **c**. La tabla es exactamente la de la propuesta (PK compuesta,
 FK compuesta hacia `membership` con `ON DELETE CASCADE`, CHECK de
@@ -253,7 +253,7 @@ predicado es el mismo que aplican las consultas. Queda en §4.
 - **Barato sin alcance**: cada tipo empieza por un `EXISTS` sin
   correlación que Postgres evalúa una vez por consulta.
 
-## 2. La migración `0034_membership_scope.sql` (para revisar y aplicar)
+## 2. La migración `0035_membership_scope.sql` (para revisar y aplicar)
 
 | Sección | Qué | Nota para el integrador |
 |---|---|---|

@@ -1,5 +1,5 @@
 /**
- * ACC-6 · La migración 0034_membership_scope: la tabla, su RLS, los
+ * ACC-6 · La migración 0035_membership_scope: la tabla, su RLS, los
  * privilegios de mc_app y la semántica de scope_allows(). Las tres
  * pruebas por módulo (alcance-campanas, alcance-finanzas,
  * alcance-conexiones) dan por sentado lo que aquí se demuestra.
@@ -103,7 +103,7 @@ describe('la tabla y su aislamiento', () => {
   });
 
   test('la migración se puede volver a aplicar sin fallar y deja lo mismo', async () => {
-    const sql = await readFile(fileURLToPath(new URL('../../../db/migrations/0034_membership_scope.sql', import.meta.url)), 'utf8');
+    const sql = await readFile(fileURLToPath(new URL('../../../db/migrations/0035_membership_scope.sql', import.meta.url)), 'utf8');
     await t.admin(sql);
     const politicas = await t.raw<{ policyname: string }>(`SELECT policyname FROM pg_policies WHERE tablename = 'membership_scope'`);
     assert.deepEqual(politicas, [{ policyname: 'membership_scope_read' }]);

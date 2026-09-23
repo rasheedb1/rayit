@@ -11,7 +11,7 @@
  * funciones exportadas para que ninguna se lo salte.
  *
  * Quién pregunta lo sabe la base: `scope_allows()` (migración
- * 0034_membership_scope) lee las filas de `current_workspace_id()` y
+ * 0035_membership_scope) lee las filas de `current_workspace_id()` y
  * `current_user_id()`, que withWorkspace fija en la transacción. Ninguna
  * función recibe el alcance como parámetro.
  *
@@ -28,7 +28,7 @@
  */
 import type { WorkspaceTx } from './client.ts';
 
-/** membership_scope.scope_type (CHECK en 0034). */
+/** membership_scope.scope_type (CHECK en 0035). */
 export const SCOPE_KINDS = ['creator', 'company', 'campaign'] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 

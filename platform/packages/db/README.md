@@ -239,7 +239,7 @@ del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 (El 7 es la bitácora obligatoria de ACC-2.) La tenencia la garantiza
 RLS; el **alcance** —«este miembro ve solo lo de Camilo», «el
 ejecutivo, solo sus marcas»— lo pone cada consulta. Las filas viven en
-`membership_scope` (migración 0034: `creator`, `company` o `campaign`
+`membership_scope` (migración 0035: `creator`, `company` o `campaign`
 por membresía) y las lee `scope_allows()` con la persona de la
 transacción (`current_user_id()`). **Sin filas, todo el workspace**: en
 un workspace de creador del MVP nadie tiene alcance y nada cambia.
