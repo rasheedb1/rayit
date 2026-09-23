@@ -498,3 +498,30 @@ Nueve hallazgos. Ocho resueltos y uno justificado.
 | 7 | PGlite entraba como dependencia de core y la contradecía («sin base», «sin dependencias») | Resuelto: la ejecución en Postgres pasa a `packages/db/test/permisos-semilla.test.ts`; core vuelve a no tener dependencias nuevas |
 | 8 | La prueba exigía la lista exacta de `actions.ts`: un archivo nuevo la rompía | Resuelto: `arrayContaining` con los tres; uno nuevo entra solo y queda sujeto a la convención |
 | 9 | Identificadores en español (`permisosDeRol`, `SinPermisoError`…) contra «identificadores en inglés» de CLAUDE.md | Justificado: el prompt de la historia pide nombres en español para módulo, recurso y acción, y core ya tiene el precedente (`finDelDiaEnZona`, `TarifaError`, `pctToRate` mezclado), igual que las Server Actions (`crearFactura`). Renombrar es mecánico si Nicolás lo pide antes de ACC-3 |
+
+## 7. Verificación y seguridad
+
+`/security-review`: **sin hallazgos**. El generador SQL solo lee
+constantes; `requirePermission` es una comprobación en memoria que va
+antes de `withWorkspace` y RLS sin reemplazarlas; los permisos de las
+acciones tienen el tipo `Permiso`; `puedeAsignarRol` impide que un
+Administrador de agencia nombre Dueño.
+
+Verificación del 23-sep sobre `f51ae29`:
+
+| Qué | Resultado |
+|---|---|
+| core | 95 pruebas, 0 fallos (`node --test`, sin base) |
+| db | 603 pruebas, 0 fallos (incluida `permisos-semilla.test.ts`) |
+| connectors · worker · raíz | 180 · 47 · 8, 0 fallos |
+| web | 88 archivos, 739 pruebas, 0 fallos; typecheck y lint limpios |
+| `next build` | compila; 44 rutas |
+| En dev (puerto 3141, base embebida) | `marcarPrincipal` 303 y el post cambia de principal; `cambiarEstadoFactura(…, "void")` 303 y la factura queda «Anulada»; `desconectarConexion` con un id inexistente 303 a `?aviso=Esa cuenta ya no está en la lista.`: el mismo comportamiento que antes de ACC-1 |
+
+**Un error previo, no de esta rama.** `pnpm verificar` marca
+`@mc/web#test` como fallida por un rechazo no manejado de undici
+(`ERR_INVALID_STATE: ReadableStream is already closed`) que se origina en
+`app/(app)/resumen/importar/lote.test.ts` (RES-6, Rasheed). Las 17
+pruebas del archivo pasan; el rechazo sale siempre, también sobre
+`origin/main` `29460e3` sin ningún cambio de ACC-1. Para Rasheed: cerrar
+o consumir el cuerpo de la respuesta en esa prueba.
