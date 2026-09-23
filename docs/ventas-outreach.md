@@ -245,6 +245,13 @@ Decisiones que las piezas siguientes tienen que conocer:
   con los topes de `outbound_policy`, en la misma transacción. Tres
   LinkedIn de una agencia no comparten plaza. `action_type` es la
   acción (`email`, `linkedin_invite`…), nunca una cuenta.
+- Cada canal tiene un **techo** que ningún tope de cuenta pasa, ni
+  desde la web ni desde el worker (CHECK
+  `outreach_channel_account_channel_caps_check`, los números de §5.1):
+  LinkedIn 100 al día y 200 a la semana; Instagram y WhatsApp 100 y
+  700; correo 2000 y 10000. Por debajo, el tope es de la persona. Los
+  mismos números están en `CHANNEL_CAP_LIMITS` (`@mc/db/schema`), que la
+  pantalla de canales usa como máximo del campo.
 - `outbound_policy.enabled` nace apagado y no se enciende sin
   `postal_address` (lo exige un `CHECK`). `max_pending_touches` mide
   atraso (lo vencido sin salir más lo que está en `processing`), no lo
@@ -277,10 +284,21 @@ Decisiones que las piezas siguientes tienen que conocer:
 - **El enlace de baja vive fuera de la cola.** Lleva un token al azar;
   la base guarda solo su sha256, en `outbound_optout_link` (clave
   primaria: un token repetido falla al escribirlo), con la dirección a
-  la que salió el correo, el workspace, el toque, la ficha y `sent_at`.
-  Esa tabla la escribe **solo el despachador**, en la misma transacción
-  en la que anota `provider_message_id`; `mc_app` no tiene ningún
-  privilegio sobre ella y su RLS solo tiene políticas de lectura. Sus
+  la que sale el correo, el workspace, el toque, la ficha, el intento,
+  `claimed_at` y `sent_at`. Esa tabla la escribe **solo el
+  despachador**, y la escribe **al reclamar** (`scheduled →
+  processing`, en la transacción que sube `attempt_count` y escribe
+  `recipient_address`), **antes** de llamar al proveedor: si el
+  despachador cae entre Gmail y el COMMIT, o la respuesta se pierde por
+  un timeout, el correo que quizá salió lleva un token que la base ya
+  conoce. La base lo exige: un correo no se confirma en `processing`
+  sin el enlace de su intento (`outbound_touch_optout_link_required`,
+  al COMMIT; salvo `require_optout_link = false`). Cada reintento lleva
+  su propio enlace (único por `(touch_id, attempt)`), y los anteriores
+  siguen dando de baja. `sent_at` se anota una sola vez, al confirmar;
+  si nunca se confirma, el enlace funciona igual. Nada más de la fila
+  cambia. `mc_app` no tiene ningún privilegio sobre ella y su RLS solo
+  tiene políticas de lectura (y la de alta de quien siembra). Sus
   claves ajenas son `ON DELETE SET NULL`, así que el enlace no depende
   de la cola: ni del estado del toque, ni de que el toque, su empresa,
   su ficha o su workspace sigan existiendo (CAN-SPAM pide al menos 30
@@ -313,6 +331,11 @@ Decisiones que las piezas siguientes tienen que conocer:
   por columnas porque Drizzle nombra todas las columnas en cada INSERT;
   la guardia (`DISPARADORES_DE_CANDADO`) exige en cada arranque que
   existan y estén activos.
+- **`processing` es del despachador.** La web no crea un toque en ese
+  estado, no lleva uno a él ni lo saca de él, ni lo borra (42501,
+  `outbound_touch_worker_columns` y `outbound_touch_keep_sent`). Como
+  ni la baja ni el apagado cancelan lo reclamado, un toque puesto en
+  `processing` desde la web quedaba fuera de los dos.
 - **`recipient_address` se escribe al reclamar.** Es la dirección exacta
   a la que sale el mensaje, y el despachador de VEN-10 la escribe en la
   misma sentencia que pasa el toque de `scheduled` a `processing`: un
@@ -342,7 +365,9 @@ Decisiones que las piezas siguientes tienen que conocer:
   de un enrolamiento es de su secuencia.
 - A quien pidió la baja no se le enrola ni se le reanuda: el disparador
   `outbound_enrollment_optout` rechaza (23514, el mensaje de 0007) un
-  enrolamiento nuevo o que vuelve a `active`, `paused` o `cooldown`.
+  enrolamiento nuevo o que vuelve a `active`, `paused` o `cooldown`. «La
+  baja» es la misma que en el toque: la ficha, o su correo en la lista
+  global (un rebote o una queja que todavía no se reflejó en la ficha).
 - Un paso tiene un solo toque vivo por enrolamiento, y vivo es
   `scheduled`, `processing` **y `held`**: mientras uno espera revisión,
   el motor no programa el mismo paso otra vez; lo aprueba (vuelve a
@@ -376,8 +401,20 @@ Decisiones que las piezas siguientes tienen que conocer:
   `public_optout` se comprueba en ejecución (`OutreachShapeError` con la
   ruta del campo).
 - La concurrencia real de los límites está probada contra Postgres 16
-  («el bloqueo es de verdad», que PGlite salta); cómo correrla en local
-  está en `platform/packages/db/README.md`.
+  («el bloqueo es de verdad», que PGlite salta), en un paso propio del
+  job `contra-postgres-real` del CI junto con la guardia de esquema;
+  ese Postgres se monta como Supabase con
+  `platform/db/montaje-postgres-real.sql` antes de migrar. Cómo correrla
+  en local está en `platform/packages/db/README.md`.
+- `outbound_health` no recorre la historia: la cola se lee por su
+  estado vivo y cada cifra de la ventana por el índice de su propia hora
+  (`sent_at`, `status_changed_at`, `opened_at`, `replied_at`).
+- La demo trae una cadencia entera (seed `0005_demo_outreach.sql`, con
+  su verify): Gmail conectado y LinkedIn por reconectar, la secuencia
+  copiada de «Marca con campaña activa», tres enrolamientos (activo,
+  respondió, enfriamiento) y toques en todos los estados, escritos como
+  los dejaría el despachador. Es el ejemplo a copiar para VEN-10, VEN-13
+  y la pantalla de canales.
 - **Obligatorio para VEN-15:** el correo sale del Gmail del creador,
   así que el enlace de baja también queda en su carpeta de enviados.
   Quien envía podría pulsar su propio enlace y suprimir a una marca en
