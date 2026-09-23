@@ -245,4 +245,38 @@ describe("TarifarioTabla", () => {
     });
     expect(await screen.findByRole("status")).toHaveTextContent("Guardado");
   });
+
+  it("después de guardar, las casillas siguen como estaban: guardar no reinicia el formulario", async () => {
+    guardarTarifario.mockResolvedValue({ ok: true });
+    pintar({ ...BASIS_VACIO, viewsManuales: { reel: 61_000 } });
+    const derechos = screen.getByRole("checkbox", { name: /Derechos de uso/ });
+    fireEvent.click(derechos);
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000"));
+    fireEvent.click(screen.getByRole("button", { name: "Agregar paquete" }));
+    const enPaquete = screen.getByRole("checkbox", { name: "TikTok dedicado" });
+    expect(enPaquete).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar tarifario" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Guardado");
+
+    // La casilla dice lo mismo que el rango: marcada, y con el recargo.
+    expect(screen.getByRole("checkbox", { name: /Derechos de uso/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "TikTok dedicado" })).toBeChecked();
+    expect(rango("tiktok")).toBe("COP 5.103.000 – COP 7.938.000");
+    // Y pulsarla otra vez la quita, como dice la casilla.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Derechos de uso/ }));
+    await waitFor(() => expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000"));
+    expect(screen.getByRole("checkbox", { name: /Derechos de uso/ })).not.toBeChecked();
+  });
+
+  it("los campos vacíos no aparentan un cero: las views y el CPM sin valor muestran un ejemplo en texto", () => {
+    pintar();
+    const historias = screen.getByLabelText("Views por pieza · Historias (3)");
+    expect(historias).toHaveValue("");
+    expect(historias.getAttribute("placeholder")).not.toBe("0");
+    expect(historias).toHaveAttribute("placeholder", "p. ej. 25.000");
+    // Facebook no tiene CPM de referencia: sus campos se abren vacíos, con su nombre.
+    expect(screen.getByLabelText(/CPM bajo · Video en Facebook/)).toHaveAttribute("placeholder", "CPM bajo");
+    expect(screen.getByLabelText(/CPM alto · Video en Facebook/)).toHaveAttribute("placeholder", "CPM alto");
+  });
 });

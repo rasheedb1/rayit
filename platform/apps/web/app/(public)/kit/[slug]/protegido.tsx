@@ -4,7 +4,8 @@ import { useEffect, useState, useTransition } from "react";
 import type { MediaKitSnapshot } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
-import { MESSAGES } from "@/app/(app)/cotizar/messages";
+import { browserTimeZone, formatTime } from "@/lib/format";
+import { IDIOMA_MENSAJES, MESSAGES } from "@/app/(app)/cotizar/messages";
 import { MediaKitVista } from "@/app/(app)/cotizar/_ui/media-kit-vista";
 import { abrirMediaKitProtegido, type AbrirKitResultado } from "../../actions";
 
@@ -81,9 +82,13 @@ export function MediaKitProtegido({ slug, bloqueadoHasta }: { slug: string; bloq
   );
 }
 
-/** La hora en el idioma y la zona de quien mira: no es la del workspace, es la de la marca. */
+/**
+ * La hora en la zona de quien mira (no es la del workspace, es la de la
+ * marca) y en el idioma de la frase que la rodea: una hora «3:15 PM»
+ * dentro de una frase en español se leería mal. Formatea lib/format.ts.
+ */
 function textoBloqueo(hasta: string): string {
-  const hora = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(hasta));
+  const hora = formatTime(hasta, { locale: IDIOMA_MENSAJES, timeZone: browserTimeZone() });
   return MESSAGES.publico.kit.password.bloqueado(hora);
 }
 

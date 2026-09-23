@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CURRENCY, DEFAULT_LOCALE, DEFAULT_TIME_ZONE, formatCompact, formatDate, formatDateRange, formatDelta,
-  formatInt, formatMoney, formatPct, formatterFor, parseDecimal,
+  formatInt, formatMoney, formatPct, formatterFor, formatTime, parseDecimal,
 } from "./format";
 
 describe("formatMoney", () => {
@@ -125,6 +125,13 @@ describe("formatterFor: el workspace manda (locale, moneda y zona)", () => {
     expect(bogota.dateTime("2026-09-21T02:30:00Z")).toBe("20 de septiembre de 2026 a las 9:30 p. m.");
     expect(formatterFor(MEXICO).dateTime("2026-09-21T02:30:00Z")).toMatch(/20 de septiembre de 2026/);
     expect(formatterFor(ESTADOS_UNIDOS).dateTime("2026-09-21T02:30:00Z")).toMatch(/September 20, 2026/);
+  });
+
+  it("time es solo la hora, en la zona y el idioma pedidos (COT-2: el bloqueo del media kit)", () => {
+    expect(formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).time("2026-09-21T20:15:00Z")).toBe("3:15 p. m.");
+    // En el idioma de la frase, no en el del navegador: nada de «3:15 PM» dentro de una frase en español.
+    expect(formatTime("2026-09-21T20:15:00Z", { locale: "es", timeZone: "America/Bogota" })).not.toMatch(/PM/);
+    expect(formatTime("2026-09-21T20:15:00Z", { locale: "en-US", timeZone: "America/Bogota" })).toBe("3:15 PM");
   });
 
   it("un workspace sin locale, moneda o zona cae a los valores por defecto, que son los de un workspace nuevo", () => {

@@ -1,7 +1,9 @@
 "use client";
 
-import { useActionState, useId, useMemo, useRef, useState } from "react";
-import { calcularTotalesCotizacion, compareDecimal, pctToRate, type PlatformId } from "@mc/core";
+import { useActionState, useId, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import {
+  calcularTotalesCotizacion, compareDecimal, pctToRate, plazoConIncluido, terminosDeModificadores, type PlatformId,
+} from "@mc/core";
 import type { MediaKitAdjuntable, QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
@@ -11,7 +13,7 @@ import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor, type FormatSettings } from "@/lib/format";
 import type { ActionState } from "@/lib/forms";
-import { MESSAGES, nombreMetrica } from "../../messages";
+import { MESSAGES, nombreMetrica, nombreModificador } from "../../messages";
 import { etiquetaImpuesto } from "../../_lib/acordado";
 import { ResumenTotales } from "../../_ui/resumen-totales";
 
@@ -72,6 +74,18 @@ const METRICAS = ["views", "reach", "interactions", "saves", "shares", "link_cli
 const CORTES = [24, 168, 720];
 const OTRO = "";
 
+/**
+ * Un plazo del formulario («30», o "" si no se acordó) subido hasta lo
+ * que el precio del tarifario ya incluye. Nunca lo baja.
+ */
+function subirPlazo(actual: string, incluido: number | null): string {
+  const r = plazoConIncluido(actual === "" ? null : Number(actual), incluido);
+  return r === null ? "" : String(r);
+}
+
+/** Los modificadores de un ítem del tarifario (los fixtures antiguos pueden no traerlos). */
+const modificadoresDe = (tarifa: RateCardItem | undefined): string[] => tarifa?.modifierIds ?? [];
+
 /** La tasa del formulario («19,5») como fracción, o null mientras no es un porcentaje válido. */
 function tasaDe(pct: string): string | null {
   try {
@@ -91,6 +105,12 @@ function tasaDe(pct: string): string | null {
  * @mc/core, la misma función que el servidor usa al guardar: lo que se
  * ve mientras se escribe es exactamente lo que queda en la base.
  *
+ * Un entregable del tarifario cuyo precio ya lleva derechos de uso o
+ * exclusividad sube esos plazos en «Lo acordado» al elegirlo (nunca los
+ * baja), y la línea dice qué incluye: la marca no puede pagar un 50 % de
+ * exclusividad en un documento que dice «Exclusividad: no aplica». El
+ * creador puede cambiarlos después; lo que escriba es lo que se guarda.
+ *
  * Los ids de los campos salen de useId() y de la posición de la línea:
  * iguales en el servidor y en el navegador, así que la hidratación no
  * choca, y cada `<label>` apunta a su campo (también el del precio). La
@@ -102,7 +122,9 @@ export function CotizacionForm({
 }: CotizacionFormProps) {
   const t = MESSAGES.nueva;
   const f = useMemo(() => formatterFor(settings), [settings]);
-  const [state, formAction, pending] = useActionState<ActionState, FormData>(action, {});
+  const [state, formAction, pendingAccion] = useActionState<ActionState, FormData>(action, {});
+  const [pendingEnvio, startTransition] = useTransition();
+  const pending = pendingAccion || pendingEnvio;
   const errors = state.errors ?? {};
 
   const base = useId();
@@ -138,14 +160,23 @@ export function CotizacionForm({
   const [validUntil, setValidUntil] = useState(iniciales.validUntil);
   const [metricas, setMetricas] = useState<string[]>(iniciales.metricas);
   const [cortes, setCortes] = useState<number[]>(iniciales.cortes);
-  const [usageRightsDays, setUsageRightsDays] = useState(iniciales.usageRightsDays);
-  const [exclusivityDays, setExclusivityDays] = useState(iniciales.exclusivityDays);
+  // Una cotización nueva arranca con el primer entregable del tarifario:
+  // sus condiciones incluidas ya cuentan. Un borrador que se edita
+  // conserva lo que se guardó.
+  const incluidosIniciales = terminosDeModificadores(iniciales.lineas.length > 0 ? [] : modificadoresDe(tarifas[0]));
+  const [usageRightsDays, setUsageRightsDays] = useState(() =>
+    subirPlazo(iniciales.usageRightsDays, incluidosIniciales.usageRightsDays),
+  );
+  const [exclusivityDays, setExclusivityDays] = useState(() =>
+    subirPlazo(iniciales.exclusivityDays, incluidosIniciales.exclusivityDays),
+  );
   const [exclusivityScope, setExclusivityScope] = useState(iniciales.exclusivityScope);
   const [paymentTermsDays, setPaymentTermsDays] = useState(iniciales.paymentTermsDays);
   const [campaignStartsOn, setCampaignStartsOn] = useState(iniciales.campaignStartsOn);
   const [campaignEndsOn, setCampaignEndsOn] = useState(iniciales.campaignEndsOn);
   const [mediaKitId, setMediaKitId] = useState(iniciales.mediaKitId);
 
+  const kitElegido = mediaKits.find((k) => k.id === mediaKitId);
   const tasa = tasaDe(taxPct);
   const totales = useMemo(() => {
     try {
@@ -188,6 +219,13 @@ export function CotizacionForm({
     setLineas((ls) => ls.map((l) => (l.key === key ? { ...l, ...cambio } : l)));
   }
 
+  /** Sube derechos y exclusividad hasta lo que el precio de esa tarifa ya cobra. */
+  function aplicarIncluidos(tarifa: RateCardItem | undefined) {
+    const incluidos = terminosDeModificadores(modificadoresDe(tarifa));
+    setUsageRightsDays((v) => subirPlazo(v, incluidos.usageRightsDays));
+    setExclusivityDays((v) => subirPlazo(v, incluidos.exclusivityDays));
+  }
+
   function elegirTarifa(key: string, tarifaId: string) {
     const tarifa = porId.get(tarifaId);
     if (!tarifa) {
@@ -201,6 +239,24 @@ export function CotizacionForm({
       description: tarifa.labelEs,
       unitPrice: tarifa.priceLow ?? "0",
     });
+    aplicarIncluidos(tarifa);
+  }
+
+  function agregarLinea() {
+    setLineas((ls) => [...ls, lineaDesde(tarifas[0])]);
+    aplicarIncluidos(tarifas[0]);
+  }
+
+  /**
+   * Enviar sin el reinicio automático de React 19 (`<form action>`): si
+   * la acción devuelve un error, el reinicio desmarcaba en el DOM las
+   * casillas de métricas y cortes sin que el estado cambiara, igual que
+   * en el tarifario.
+   */
+  function enviar(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const datos = new FormData(e.currentTarget);
+    startTransition(() => formAction(datos));
   }
 
   function alternar<T>(lista: T[], valor: T, set: (v: T[]) => void) {
@@ -217,7 +273,7 @@ export function CotizacionForm({
     // En escritorio el total va a la derecha, fijo; en el teléfono va
     // ANTES de «Guardar borrador», para que nadie guarde sin haberlo visto.
     <form
-      action={formAction}
+      onSubmit={enviar}
       noValidate
       className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-x-8"
     >
@@ -322,6 +378,11 @@ export function CotizacionForm({
                           {fuera && <Pill kind="warn">{t.fueraDeRango}</Pill>}
                         </span>
                       )}
+                      {modificadoresDe(tarifa).length > 0 && (
+                        <span className="mt-1 block text-xs leading-4 text-muted" data-testid={`incluye-${idx}`}>
+                          {t.incluye(modificadoresDe(tarifa).map(nombreModificador))}
+                        </span>
+                      )}
                     </Field>
                     <div className="col-span-2 sm:col-span-1 sm:justify-self-end sm:pt-6">
                       <Button
@@ -338,7 +399,7 @@ export function CotizacionForm({
             })}
           </ul>
           <div className="mt-4">
-            <Button size="sm" onClick={() => setLineas((ls) => [...ls, lineaDesde(tarifas[0])])}>
+            <Button size="sm" onClick={agregarLinea}>
               {t.agregar}
             </Button>
           </div>
@@ -358,7 +419,13 @@ export function CotizacionForm({
 
         <Field
           label={t.mediaKit}
-          help={mediaKits.length > 0 ? t.mediaKitAyuda : t.sinKitsAyuda}
+          help={
+            mediaKits.length === 0
+              ? t.sinKitsAyuda
+              : kitElegido?.hasPassword
+                ? t.mediaKitConPassword
+                : t.mediaKitAyuda
+          }
           error={errors.mediaKitId}
           htmlFor={`${base}mediaKit`}
         >
@@ -368,7 +435,10 @@ export function CotizacionForm({
             onChange={(e) => setMediaKitId(e.target.value)}
             options={[
               { value: "", label: t.sinMediaKit },
-              ...mediaKits.map((k) => ({ value: k.id, label: t.mediaKitOpcion(f.date(k.createdAt), k.hasPassword) })),
+              ...mediaKits.map((k) => ({
+                value: k.id,
+                label: t.mediaKitOpcion(f.date(k.createdAt), f.time(k.createdAt), k.hasPassword),
+              })),
             ]}
           />
         </Field>

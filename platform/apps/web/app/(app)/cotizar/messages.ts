@@ -71,6 +71,8 @@ export const MESSAGES = {
     viewsManuales: "Views a mano",
     viewsBaseline: "Mediana propia",
     viewsPocoFiables: "Mediana con poca muestra",
+    /** Placeholder del campo de views vacío. Recibe la cifra ya formateada. */
+    viewsEjemplo: (views: string) => `p. ej. ${views}`,
     /** Lo que falta en una fila que todavía no tiene rango. */
     motivos: {
       sin_views: "Escribe las views de una pieza para ver el rango.",
@@ -266,8 +268,14 @@ export const MESSAGES = {
     mediaKit: "Media kit que la acompaña",
     mediaKitAyuda: "La marca lo abre desde el pie de la cotización. Solo salen los públicos y sin vencer.",
     sinMediaKit: "Sin media kit",
-    /** Una opción del selector: «Generado el 20 sep 2026 · con contraseña». */
-    mediaKitOpcion: (fecha: string, conPassword: boolean) => `Generado el ${fecha}${conPassword ? " · con contraseña" : ""}`,
+    /** Una opción del selector: «Generado el 20 sep · 3:15 p. m. · con contraseña». La hora separa dos del mismo día. */
+    mediaKitOpcion: (fecha: string, hora: string, conPassword: boolean) =>
+      `Generado el ${fecha} · ${hora}${conPassword ? " · con contraseña" : ""}`,
+    /** El media kit elegido pide contraseña, y esa contraseña no se puede recuperar. */
+    mediaKitConPassword:
+      "Este media kit tiene contraseña: tendrás que dársela a la marca. Si no la recuerdas, elige otro o genera uno sin contraseña.",
+    /** Debajo del precio de una línea del tarifario: las condiciones que ese precio ya cobra. */
+    incluye: (condiciones: readonly string[]) => `El precio del tarifario incluye: ${condiciones.join(", ")}.`,
     sinKitsAyuda: "No hay media kits públicos sin vencer. Genera uno en Media kit si quieres que acompañe la cotización.",
     guardar: "Guardar borrador",
     guardarCambios: "Guardar cambios",
@@ -336,6 +344,8 @@ export const MESSAGES = {
     visitas: (n: number) => (n === 1 ? "1 visita" : `${n} visitas`),
     sinVisitas: "Todavía sin abrir",
     totalLinea: "Total",
+    /** Debajo de la descripción de una línea: «2 × COP 1.200.000». Recibe cifras ya formateadas. */
+    cantidadPorPrecio: (cantidad: string, precio: string) => `${cantidad} × ${precio}`,
     aceptadaPor: (nombre: string, correo: string | null) => (correo ? `${nombre} · ${correo}` : nombre),
     /** Las fechas del ciclo, en el orden en que pasan. */
     fechas: {
@@ -474,6 +484,8 @@ export const MESSAGES = {
       otros: "Otros",
       tarifas: "Tarifas",
       tarifasAyuda: "Rangos de referencia. El precio final se acuerda en la cotización.",
+      /** Debajo de las tarifas: las condiciones que los rangos ya cobran. Recibe los nombres de messages.modificadores. */
+      tarifasIncluyen: (condiciones: readonly string[]) => `Estos rangos ya incluyen: ${condiciones.join(", ")}.`,
       congelado: (fecha: string) => `Cifras congeladas el ${fecha}`,
       vsMediana: (multiplo: string) => `${multiplo} su mediana`,
       password: {
@@ -533,6 +545,8 @@ export const MESSAGES = {
       error: "No pudimos registrar la aceptación. Vuelve a intentarlo en un momento.",
       pie: "Documento generado con On Cue",
     },
+    /** El esqueleto mientras public_media_kit o public_quote responden. */
+    loading: "Cargando el documento",
     noExiste: {
       title: "Este enlace no existe",
       description: "Puede haberse retirado o estar mal copiado. Pídele uno nuevo a quien te lo compartió.",

@@ -12,7 +12,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calcularItem, calcularPaquete, calcularTarifario, calcularTotalesCotizacion, precioPorViews, redondearAUnidad,
-  sumarPct, unidadDePrecio, validarRangoPrecio, MODIFICADORES_POR_DEFECTO, TarifaError, type EntradaTarifa,
+  plazoConIncluido, sumarPct, terminosDeModificadores, unidadDePrecio, validarRangoPrecio, MODIFICADORES_POR_DEFECTO,
+  TarifaError, type EntradaTarifa,
 } from '../src/tarifas.ts';
 
 /** Un TikTok dedicado de ejemplo (84.000 views a mano, CPM de cocina del seed), sin modificadores. */
@@ -275,4 +276,29 @@ test('un rango a mano al revés, vacío, en cero o que no es un número no vale'
   assert.equal(validarRangoPrecio('-5', '10'), 'no_numero');
   assert.equal(validarRangoPrecio('1.000.000', '2000000'), 'no_numero');
   assert.equal(validarRangoPrecio('1.234', '2000000'), 'no_numero', 'más de dos decimales no es un precio');
+});
+
+test('los modificadores que son una condición llegan a «Lo acordado»: derechos y exclusividad, con sus días', () => {
+  assert.deepEqual(terminosDeModificadores([]), { usageRightsDays: null, exclusivityDays: null });
+  assert.deepEqual(terminosDeModificadores(['derechos_uso_30d', 'exclusividad_30d', 'entrega_express']), {
+    usageRightsDays: 30,
+    exclusivityDays: 30,
+  });
+  // Pauta pagada y entrega exprés no tienen campo propio en la cotización.
+  assert.deepEqual(terminosDeModificadores(['uso_en_pauta_90d', 'entrega_express', 'inventado']), {
+    usageRightsDays: null,
+    exclusivityDays: null,
+  });
+  // Todo modificador del catálogo que tenga término es uno del catálogo.
+  for (const id of ['derechos_uso_30d', 'exclusividad_30d']) {
+    assert.ok(MODIFICADORES_POR_DEFECTO.some((m) => m.id === id), id);
+  }
+});
+
+test('un plazo acordado sube hasta lo incluido y nunca baja', () => {
+  assert.equal(plazoConIncluido(null, 30), 30);
+  assert.equal(plazoConIncluido(10, 30), 30);
+  assert.equal(plazoConIncluido(60, 30), 60);
+  assert.equal(plazoConIncluido(null, null), null);
+  assert.equal(plazoConIncluido(15, null), 15);
 });

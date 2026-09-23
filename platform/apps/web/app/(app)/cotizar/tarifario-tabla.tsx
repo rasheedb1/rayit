@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState, useTransition, type FormEvent, type RefObject } from "react";
 import { calcularItem, MODIFICADORES_POR_DEFECTO, pctToRate, rateToPct, type EntradaTarifa, type PlatformId } from "@mc/core";
 import type { RateCardInputs } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
@@ -59,6 +59,9 @@ const BOTON_DISCRETO =
   "text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink " +
   "disabled:cursor-not-allowed disabled:opacity-50";
 
+/** Las views de ejemplo del campo vacío: un orden de magnitud, no un dato de nadie. */
+const EJEMPLO_VIEWS = 25_000;
+
 /** El id del desglose de una fila o de un paquete, para aria-controls. */
 const idDesglose = (id: string) => `tarifario-explicacion-${id}`;
 
@@ -94,7 +97,9 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
   const [basis, setBasis] = useState<BasisTarifario>(basisInicial);
   const [abierta, setAbierta] = useState<string | null>(null);
   const [editando, setEditando] = useState<string | null>(null);
-  const [state, formAction, pending] = useActionState<ActionState, FormData>(guardarTarifario, {});
+  const [state, formAction, pendingAccion] = useActionState<ActionState, FormData>(guardarTarifario, {});
+  const [pendingEnvio, startTransition] = useTransition();
+  const pending = pendingAccion || pendingEnvio;
   const tituloDesglose = useRef<HTMLHeadingElement>(null);
   const moneda = inputs.currency;
   const dinero = (v: string) => f.money(v, moneda, { mode: "full" });
@@ -292,6 +297,21 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
     );
   }
 
+  /**
+   * Guardar SIN el reinicio automático de React 19. Con
+   * `<form action={…}>`, al terminar la acción React reinicia el
+   * formulario: las casillas vuelven a su estado de montaje en el DOM,
+   * pero `basis` no cambia y React no las repinta. Quedaban desmarcadas
+   * con el recargo todavía dentro del rango, y pulsarlas para «añadir» la
+   * condición la quitaba. Aquí el estado de la pantalla es `basis`, y el
+   * DOM no se toca por detrás.
+   */
+  function enviar(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const datos = new FormData(e.currentTarget);
+    startTransition(() => formAction(datos));
+  }
+
   const columnas: ColumnaConDetalle<Fila>[] = [
     {
       key: "entregable",
@@ -362,11 +382,23 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
             <span className="relative flex flex-col items-end gap-1.5 font-sans">
               <label className="contents">
                 <span className="sr-only">{`${t.cpmBajo} · ${r.nombre}`}</span>
-                <MoneyInput value={r.cpmLow ?? ""} currency={moneda} onChange={(v) => cambiarCpm(r.id, "low", v)} className="w-36 min-w-[8rem]" />
+                <MoneyInput
+                  value={r.cpmLow ?? ""}
+                  currency={moneda}
+                  placeholder={t.cpmBajo}
+                  onChange={(v) => cambiarCpm(r.id, "low", v)}
+                  className="w-36 min-w-[8rem]"
+                />
               </label>
               <label className="contents">
                 <span className="sr-only">{`${t.cpmAlto} · ${r.nombre}`}</span>
-                <MoneyInput value={r.cpmHigh ?? ""} currency={moneda} onChange={(v) => cambiarCpm(r.id, "high", v)} className="w-36 min-w-[8rem]" />
+                <MoneyInput
+                  value={r.cpmHigh ?? ""}
+                  currency={moneda}
+                  placeholder={t.cpmAlto}
+                  onChange={(v) => cambiarCpm(r.id, "high", v)}
+                  className="w-36 min-w-[8rem]"
+                />
               </label>
               {r.benchmark && r.cpmEditado && (
                 <span className="text-xs text-muted">{t.cpmReferencia(dinero(r.benchmark.low), dinero(r.benchmark.high))}</span>
@@ -387,7 +419,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
   ];
 
   return (
-    <form action={formAction} className="min-w-0 space-y-6">
+    <form onSubmit={enviar} className="min-w-0 space-y-6">
       <input type="hidden" name="creatorId" value={creatorId} />
       <input type="hidden" name="estado" value={JSON.stringify(basis)} />
 
@@ -523,7 +555,6 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
                           inputMode="numeric"
                           className="w-14 text-right font-mono tabular-nums"
                           value={cantidad > 0 ? String(cantidad) : ""}
-                          placeholder="0"
                           onChange={(e) =>
                             cambiarPaquete(p.basis.id, (x) => {
                               const n = Number(e.target.value.replace(/\D/g, "").slice(0, 2));
@@ -673,7 +704,9 @@ function ViewsInput({
       autoComplete="off"
       className="w-28 text-right font-mono tabular-nums"
       value={mostrado}
-      placeholder={placeholder !== null ? f.int(placeholder) : "0"}
+      // Sin mediana que sugerir, un ejemplo EN TEXTO («p. ej. 25.000»): un
+      // «0» gris se leía como si la fila ya tuviera cero views.
+      placeholder={placeholder !== null ? f.int(placeholder) : MESSAGES.tarifario.viewsEjemplo(f.int(EJEMPLO_VIEWS))}
       onFocus={() => setEnfocado(true)}
       onBlur={() => setEnfocado(false)}
       onChange={(e) => onChange(e.target.value)}

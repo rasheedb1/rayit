@@ -41,7 +41,9 @@ export default async function MediaKitPage({ searchParams }: { searchParams: Pro
       key: "creado",
       header: t.columnas.creado,
       render: (k) => (
-        <CellMain sub={k.snapshot.creator.displayName}>{f.date(k.createdAt, "long")}</CellMain>
+        // Con la hora: dos media kits del mismo día se distinguen sin
+        // leer el slug.
+        <CellMain sub={k.snapshot.creator.displayName}>{f.dateTime(k.createdAt)}</CellMain>
       ),
     },
     {

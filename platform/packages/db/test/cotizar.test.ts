@@ -22,7 +22,7 @@ import {
   getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
   nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
   saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
-  listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits,
+  listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits, terminosIncluidosEnTarifario,
   MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
@@ -1127,5 +1127,74 @@ describe('0030 con los disparadores de referencias de 0025', () => {
     });
     const r = await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
     assert.equal(r.status, 'ok');
+  });
+});
+
+describe('lo que el precio del tarifario ya incluye (derechos, exclusividad)', () => {
+  const TIKTOK = {
+    deliverable: 'tiktok', platformId: 'tiktok' as const, labelEs: 'TikTok dedicado',
+    priceLow: '8505000.00', priceHigh: '13230000.00', avgViews: 84000,
+    cpmLow: '45000.00', cpmHigh: '70000.00', overridden: false,
+    adjustments: { pasos: [], modificadores: ['exclusividad_30d', 'derechos_uso_30d', 'entrega_express'] },
+  };
+  const REEL = { ...TIKTOK, deliverable: 'reel', platformId: 'instagram' as const, labelEs: 'Reel', adjustments: { pasos: [] } };
+  const LINEA = { deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok dedicado', quantity: 1, unitPrice: '8505000' };
+
+  before(async () => {
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      saveRateCard(tx, { creatorId: creadora, currency: 'COP', basis: {}, items: [TIKTOK, REEL] }));
+  });
+
+  after(async () => {
+    // El tarifario siguiente vuelve a ser uno sin condiciones.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      saveRateCard(tx, { creatorId: creadora, currency: 'COP', basis: {}, items: [{ ...TIKTOK, adjustments: { pasos: [] } }] }));
+  });
+
+  test('cada entregable del tarifario dice qué modificadores lleva su precio', async () => {
+    const vigente = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCurrentRateCard(tx, creadora)))!;
+    const porEntregable = Object.fromEntries(vigente.items.map((i) => [i.deliverable, i.modifierIds]));
+    assert.deepEqual(porEntregable.tiktok, ['exclusividad_30d', 'derechos_uso_30d', 'entrega_express']);
+    assert.deepEqual(porEntregable.reel, []);
+    const terminos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => terminosIncluidosEnTarifario(tx, creadora, [LINEA]));
+    assert.deepEqual(terminos, { usageRightsDays: 30, exclusivityDays: 30 });
+  });
+
+  test('el media kit dice qué incluyen sus rangos, en vez de esconderlo dentro del precio', async () => {
+    const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
+    assert.deepEqual(snap.tarifasIncluyen, ['exclusividad_30d', 'derechos_uso_30d', 'entrega_express']);
+  });
+
+  test('una cotización con un entregable que cobra exclusividad dice «exclusividad 30 días» en el documento', async () => {
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))[0]!;
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [LINEA] });
+      assert.equal(c.exclusivityDays, 30);
+      assert.equal(c.usageRightsDays, 30);
+      return sendQuote(tx, c.id, TEXTOS);
+    });
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, q.slug, { count: false }));
+    assert.equal(publica.status, 'ok');
+    assert.equal(publica.status === 'ok' && publica.quote.acordado.exclusivityDays, 30);
+    assert.equal(publica.status === 'ok' && publica.quote.acordado.usageRightsDays, 30);
+  });
+
+  test('lo que el creador acuerda a mano se respeta, también «no aplica»; un borrador sin decirlo lo recupera', async () => {
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))[0]!;
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, {
+        dealId: deal.id, creatorId: creadora, items: [LINEA], exclusivityDays: null, usageRightsDays: 90,
+      });
+      assert.equal(c.exclusivityDays, null);
+      assert.equal(c.usageRightsDays, 90);
+      const editada = await updateQuoteDraft(tx, c.id, { items: [LINEA] });
+      assert.equal(editada.exclusivityDays, 30);
+      assert.equal(editada.usageRightsDays, 30);
+      // Un entregable sin condiciones no inventa ninguna.
+      const reel = await updateQuoteDraft(tx, c.id, { items: [{ ...LINEA, deliverable: 'reel', platformId: 'instagram' }] });
+      assert.equal(reel.exclusivityDays, null);
+      assert.equal(reel.usageRightsDays, null);
+      await deleteQuoteDraft(tx, c.id);
+    });
   });
 });
