@@ -73,16 +73,15 @@ export default async function ResumenPage({
         aside={cobertura.withData > 0 ? <Filtros filtro={filtro} /> : undefined}
       />
 
-      <div className="-mt-4 mb-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-        <Link href="/plan/resumen" className="underline-offset-2 hover:text-ink hover:underline">
-          {t.plan}
-        </Link>
-        {cobertura.withData > 0 && (
+      {/* El plan de construcción no se enlaza aquí: es del equipo, no de la
+          creadora que paga (pulido r8). Vive en /plan/resumen, desde el Plan. */}
+      {cobertura.withData > 0 && (
+        <div className="-mt-4 mb-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
           <Link href="/resumen/importar" className="underline-offset-2 hover:text-ink hover:underline">
             {t.importar}
           </Link>
-        )}
-      </div>
+        </div>
+      )}
 
       {cobertura.connections === 0 ? (
         <SinConexiones />

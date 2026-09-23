@@ -28,6 +28,13 @@ export interface SignalCardData {
   budgetText: string | null;
   evidenceUrl: string | null;
   viaCsv: boolean;
+  /**
+   * La marca ya está en el CRM (pulido r8). Null si aceptarla crea la
+   * empresa. `joinsDeal`: tiene un negocio abierto y la señal se sumará a
+   * él en vez de abrir otro; `dealName` es su nombre, o null si se llama
+   * como la marca.
+   */
+  crm: { companyHref: string; joinsDeal: boolean; dealName: string | null } | null;
 }
 
 type Panel = "none" | "manual" | "csv";
@@ -171,8 +178,20 @@ function SignalCard({
                 <Pill kind={card.fit.kind}>{card.fit.text}</Pill>
               </span>
             )}
+            {card.crm && (
+              <Link
+                href={card.crm.companyHref}
+                aria-label={t.inCrmLink(name)}
+                className="inline-flex rounded-full hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+              >
+                <Pill kind="neutral">{t.inCrm}</Pill>
+              </Link>
+            )}
           </div>
           <p className="mt-1 text-sm leading-5 text-ink-2">{card.headline}</p>
+          {card.crm?.joinsDeal && (
+            <p className="mt-1 text-xs leading-5 text-muted">{card.crm.dealName ? t.joinsDeal(card.crm.dealName) : t.joinsOpenDeal}</p>
+          )}
           <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
             <span>
               {t.source}: {card.sourceLabel}

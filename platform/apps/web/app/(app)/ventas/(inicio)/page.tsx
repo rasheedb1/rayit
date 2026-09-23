@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { getSalesKpis, getStageTotals, listPipeline, listSignals } from "@mc/db/queries/ventas";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
@@ -54,11 +53,6 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         eyebrow={t.header.eyebrow}
         title={t.header.title}
         description={t.header.description}
-        aside={
-          <Link href="/plan/ventas" className="text-xs text-muted underline-offset-4 hover:text-ink hover:underline">
-            {t.header.plan}
-          </Link>
-        }
       />
 
       <KpiRow>

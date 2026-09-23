@@ -33,8 +33,32 @@ describe("«Nueva empresa» con un nombre que ya está en el CRM (pulido r7)", (
       fireEvent.click(screen.getByRole("button", { name: "Crear igual" }));
     });
     const segunda = crearEmpresa.mock.calls[1]![1] as FormData;
-    expect(segunda.get("sameName")).toBe("1");
+    // El permiso es para el nombre del aviso, no un «sí» suelto (pulido r8).
+    expect(segunda.get("sameName")).toBe("Zumos Ñandú");
     // Lo que se escribió no se pierde.
     expect(segunda.get("name")).toBe("Zumos Ñandú");
+  });
+
+  it("cambiar el nombre después del aviso lo esconde: «Crear igual» no vale para otro nombre (pulido r8)", async () => {
+    crearEmpresa.mockResolvedValueOnce({ sameName: { id: EXISTENTE, name: "Zumos Ñandú" } });
+    render(<NuevaEmpresaForm countries={countryOptions("es-CO")} />);
+    const nombre = screen.getByLabelText(/Nombre/);
+    fireEvent.change(nombre, { target: { value: "Zumos Ñandú" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Crear empresa" }));
+    });
+    expect(await screen.findByRole("button", { name: "Crear igual" })).toBeInTheDocument();
+
+    fireEvent.change(nombre, { target: { value: "Bebidas Río" } });
+    expect(screen.queryByText("Ya tienes una empresa llamada «Zumos Ñandú».")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Crear igual" })).toBeNull();
+
+    // El siguiente envío va sin permiso: si «Bebidas Río» también existe, se vuelve a preguntar.
+    crearEmpresa.mockResolvedValueOnce({ sameName: { id: EXISTENTE, name: "Bebidas Río" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Crear empresa" }));
+    });
+    expect((crearEmpresa.mock.calls[1]![1] as FormData).get("sameName")).toBeNull();
+    expect(await screen.findByText("Ya tienes una empresa llamada «Bebidas Río».")).toBeInTheDocument();
   });
 });

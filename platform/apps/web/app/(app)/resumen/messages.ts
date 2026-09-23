@@ -29,7 +29,6 @@ export const MESSAGES = {
     title: "Todas tus redes en una sola lectura",
     description:
       "Seguidores, visualizaciones, alcance en no seguidores y guardados, por red y en el tiempo. Cada cifra se compara con el periodo anterior y dice hasta qué día llegan sus datos.",
-    plan: "Plan de construcción",
     importar: "Importar un CSV",
   },
   filtros: {

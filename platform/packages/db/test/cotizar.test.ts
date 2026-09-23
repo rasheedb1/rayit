@@ -19,7 +19,7 @@ import { calcularItem } from '@mc/core';
 import {
   acceptPublicQuote, acceptQuote, acceptQuoteAndCreateCampaign, buildMediaKitSnapshot, completePublicAcceptance,
   createMediaKit, createQuote, createCampaignForQuote, deleteQuoteDraft, getCurrentRateCard, getDefaultTaxRate,
-  getMediaKitById, getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
+  getMediaKitById, getQuote, getQuotePreview, getQuoteTitle, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
   nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
   saveRateCard, sendQuote, unlockMediaKit, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
   listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits, terminosIncluidosEnTarifario,
@@ -840,6 +840,13 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
     assert.ok(una);
     const desdeElVecino = await t.db.withWorkspace(WS_VECINO, (tx) => getQuote(tx, una.id));
     assert.equal(desdeElVecino, null);
+    // Ni su número y su marca, que el detalle pone en el título de la pestaña (pulido r8).
+    assert.equal(await t.db.withWorkspace(WS_VECINO, (tx) => getQuoteTitle(tx, una.id)), null);
+    assert.deepEqual(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuoteTitle(tx, una.id)), {
+      number: una.number,
+      companyName: una.companyName,
+    });
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuoteTitle(tx, 'no-soy-un-uuid')), null);
     const listaVecina = await t.db.withWorkspace(WS_VECINO, (tx) => listQuotes(tx));
     assert.equal(listaVecina.length, 0);
   });

@@ -163,7 +163,7 @@ export class DuplicateDomain extends VentasError {
  * «ZUMOS ÑANDU») y sin un dominio distinto que las separe.
  * `params.name` y `params.companyId` dicen cuál, para enlazarla. No es
  * un error de verdad: la pantalla ofrece «Crear igual»
- * (CreateCompanyInput.allowSameName).
+ * (CreateCompanyInput.allowSameNameAs).
  */
 export class DuplicateCompanyName extends VentasError {
   constructor(name: string, companyId: string) {
@@ -274,11 +274,24 @@ export interface ContactRow {
 
 export interface SignalRow {
   id: string;
+  /**
+   * La empresa de la señal: la enlazada o, si la señal todavía no tiene
+   * (una manual o de CSV de una marca que se anotó después en el CRM),
+   * la que acceptSignal resolvería (resolveCompany: dominio o, sin él,
+   * nombre dentro del CRM). Null si al aceptarla nacería una empresa.
+   */
   companyId: string | null;
   companyName: string | null;
   companyDomain: string | null;
-  /** La empresa ya está vinculada a este workspace. */
+  /** La empresa ya está vinculada a este workspace («Ya en tu CRM»). */
   companyLinked: boolean;
+  /**
+   * El negocio abierto de esa empresa al que se sumaría la señal al
+   * aceptarla (el mismo que elige acceptSignal); null si aceptarla abre
+   * uno nuevo (pulido r8).
+   */
+  openDealId: string | null;
+  openDealName: string | null;
   sourceId: string;
   sourceLabel: string;
   headlineEs: string;
@@ -453,6 +466,26 @@ export async function companyInCrm(tx: WorkspaceTx, companyId: string): Promise<
   return rows.length > 0;
 }
 
+/**
+ * El nombre de la empresa si está en el CRM del workspace, o null (no
+ * existe, es de otro espacio o el id es imposible). Lo mismo que
+ * companyInCrm con el dato que necesita el título de la pestaña de la
+ * ficha: «Café Alma · Ventas» y no un «Empresa» igual para todas
+ * (pulido r8). Una sola fila.
+ */
+export async function companyNameInCrm(tx: WorkspaceTx, companyId: string): Promise<string | null> {
+  if (!isUuid(companyId)) return null;
+  const { rows } = await tx.query<{ name: string }>(
+    `SELECT co.name
+       FROM company_link cl
+       JOIN company co ON co.id = cl.company_id
+      WHERE cl.company_id = $1
+      LIMIT 1`,
+    [companyId],
+  );
+  return rows[0]?.name ?? null;
+}
+
 /** Una empresa de este workspace por su id, o null si no es suya (o el id es imposible). */
 export async function getCompany(tx: WorkspaceTx, companyId: string): Promise<CompanyDetail | null> {
   if (!isUuid(companyId)) return null;
@@ -518,10 +551,14 @@ export interface CreateCompanyInput {
   ownerUserId?: string | null;
   /**
    * Crear aunque el CRM ya tenga una empresa con el mismo nombre (dos
-   * «Alma» de dos países). Sin él, createCompany lanza
+   * «Alma» de dos países). Es el nombre por el que se preguntó
+   * (DuplicateCompanyName.params.name), no un sí a cualquier nombre: el
+   * permiso vale solo si la empresa que choca tiene ese mismo brand_key.
+   * Si después del aviso se escribió otro nombre que TAMBIÉN está en el
+   * CRM, se vuelve a preguntar (pulido r8). Sin él, createCompany lanza
    * DuplicateCompanyName y la pantalla pregunta antes.
    */
-  allowSameName?: boolean;
+  allowSameNameAs?: string | null;
 }
 
 /**
@@ -537,7 +574,7 @@ export interface CreateCompanyInput {
  * crear una empresa NUEVA, se busca el nombre (brand_key, la misma
  * normalización sin tildes que el radar) entre las empresas del CRM.
  * Si hay una y el dominio no las separa (a una de las dos le falta),
- * DuplicateCompanyName, salvo `allowSameName` (pulido r7: quedaban dos
+ * DuplicateCompanyName, salvo `allowSameNameAs` (pulido r7: quedaban dos
  * «Zumos Ñandú» en la lista sin ningún aviso).
  *
  * El responsable (company_link.owner_user_id) es el que se pida o, si
@@ -566,19 +603,21 @@ export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput):
     }
   }
 
-  if (!companyId && !input.allowSameName) {
-    const mismoNombre = await tx.query<{ id: string; name: string }>(
-      `SELECT co.id, co.name
+  if (!companyId) {
+    // `confirmed`: se preguntó por ESTE nombre y la persona dijo «Crear
+    // igual». brand_key(NULL) es NULL, así que sin permiso nunca es true.
+    const mismoNombre = await tx.query<{ id: string; name: string; confirmed: boolean | null }>(
+      `SELECT co.id, co.name, brand_key(co.name) = brand_key($3::text) AS confirmed
          FROM company_link cl
          JOIN company co ON co.id = cl.company_id
         WHERE brand_key(co.name) = brand_key($1)
           AND ($2::text IS NULL OR co.domain IS NULL)
         ORDER BY cl.created_at ASC
         LIMIT 1`,
-      [name, domain],
+      [name, domain, input.allowSameNameAs?.trim() || null],
     );
     const previa = mismoNombre.rows[0];
-    if (previa) throw new DuplicateCompanyName(previa.name, previa.id);
+    if (previa && previa.confirmed !== true) throw new DuplicateCompanyName(previa.name, previa.id);
   }
 
   if (!companyId) {
@@ -946,10 +985,16 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
   const { rows } = await tx.query<SignalRowSql>(
     // Una señal manual o de CSV no tiene company_id hasta que se acepta:
     // el nombre y el dominio que se escribieron viven en `evidence`.
-    `SELECT s.id, s.company_id,
+    //
+    // La empresa y el negocio abierto se resuelven como en acceptSignal
+    // (resolveCompany y su «¿ya hay un negocio abierto?»), para que la
+    // tarjeta diga ANTES de aceptar lo que va a pasar: «Ya en tu CRM» y
+    // «Se sumará a <negocio>» en vez de otro negocio (pulido r8).
+    `SELECT s.id, emp.id AS company_id,
             COALESCE(co.name, s.evidence->>'company_name')              AS company_name,
             COALESCE(co.domain::text, s.evidence->>'domain')            AS company_domain,
             (cl.company_id IS NOT NULL) AS company_linked,
+            abierto.id AS open_deal_id, abierto.name AS open_deal_name,
             s.source_id, COALESCE(src.label_es, s.source_id) AS source_label,
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
@@ -957,7 +1002,37 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             COALESCE(s.evidence->>'via', 'manual') AS via
      FROM signal s
      LEFT JOIN company co        ON co.id = s.company_id
-     LEFT JOIN company_link cl   ON cl.company_id = s.company_id
+     LEFT JOIN LATERAL (
+            SELECT r.id FROM (
+              (SELECT c.id, 0 AS o
+                 FROM company c
+                WHERE s.company_id IS NULL
+                  AND nullif(s.evidence->>'domain', '') IS NOT NULL
+                  AND lower(c.domain::text) = lower(s.evidence->>'domain')
+                LIMIT 1)
+              UNION ALL
+              (SELECT c.id, 1 AS o
+                 FROM company_link l
+                 JOIN company c ON c.id = l.company_id
+                WHERE s.company_id IS NULL
+                  AND nullif(s.evidence->>'domain', '') IS NULL
+                  AND brand_key(c.name) = brand_key(s.evidence->>'company_name')
+                ORDER BY (c.domain IS NULL) ASC, l.created_at ASC
+                LIMIT 1)
+            ) r
+            ORDER BY r.o
+            LIMIT 1
+          ) resuelta ON true
+     CROSS JOIN LATERAL (SELECT COALESCE(s.company_id, resuelta.id) AS id) emp
+     LEFT JOIN company_link cl   ON cl.company_id = emp.id
+     LEFT JOIN LATERAL (
+            SELECT d.id, d.name
+              FROM deal d
+              JOIN pipeline_stage st ON st.id = d.stage_id
+             WHERE d.company_id = emp.id AND NOT st.is_won AND NOT st.is_lost
+             ORDER BY st.position DESC, d.created_at DESC
+             LIMIT 1
+          ) abierto ON true
      LEFT JOIN signal_source src ON src.id = s.source_id
      WHERE s.status = $1
      ORDER BY s.fit_score DESC NULLS LAST, s.detected_at DESC
@@ -2138,7 +2213,8 @@ function toContactRow(r: ContactRowSql): ContactRow {
 
 interface SignalRowSql {
   id: string; company_id: string | null; company_name: string | null; company_domain: string | null;
-  company_linked: boolean; source_id: string; source_label: string; headline_es: string;
+  company_linked: boolean; open_deal_id: string | null; open_deal_name: string | null;
+  source_id: string; source_label: string; headline_es: string;
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
   status: SignalStatus; discard_reason: string | null; reviewed_at: string | null; via: string;
@@ -2151,6 +2227,8 @@ function toSignalRow(r: SignalRowSql): SignalRow {
     companyName: r.company_name,
     companyDomain: r.company_domain,
     companyLinked: r.company_linked,
+    openDealId: r.open_deal_id,
+    openDealName: r.open_deal_name,
     sourceId: r.source_id,
     sourceLabel: r.source_label,
     headlineEs: r.headline_es,

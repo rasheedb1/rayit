@@ -333,7 +333,7 @@ function empresaError(err: unknown, fallback: string): VentasState {
  * Si el CRM ya tiene una empresa con ese nombre (sin un dominio que las
  * separe), no la crea: vuelve con `sameName` para que el formulario diga
  * «Ya tienes una empresa llamada X», con enlace a ella y «Crear igual»,
- * que reenvía lo mismo con `sameName=1`.
+ * que reenvía lo mismo con `sameName=X`: el permiso es para ese nombre.
  */
 export async function crearEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const parsed = empresaSchema.safeParse({
@@ -358,7 +358,9 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
         industry: v.industry || null,
         relationship: v.relationship as Relationship,
         notes: v.notes || null,
-        allowSameName: field(formData, "sameName") === "1",
+        // El nombre por el que se preguntó: «Crear igual» vale para él y
+        // no para otro que se escriba después (pulido r8).
+        allowSameNameAs: field(formData, "sameName") || null,
       }),
     );
   } catch (err) {
@@ -623,6 +625,9 @@ export interface MoverResult {
   closedQuotes?: string[];
 }
 
+/** La forma de `opts` en moverNegocio: nada más que dos textos opcionales. */
+const moverOptsSchema = z.strictObject({ lostReason: z.string().optional(), amount: z.string().optional() }).nullish();
+
 /**
  * Mueve un negocio de etapa. La llama el tablero al soltar una tarjeta
  * o al elegir en su menú, fuera de un formulario: por eso devuelve un
@@ -645,14 +650,25 @@ export async function moverNegocio(
   toStageId: string,
   opts: { lostReason?: string; amount?: string } = {},
 ): Promise<MoverResult> {
-  if (!UUID_RE.test(dealId) || !(STAGE_ID_RE.test(toStageId) || UUID_RE.test(toStageId))) {
+  // Los argumentos de una Server Action llegan de un POST que cualquiera
+  // puede fabricar: los tipos de TypeScript no los protegen. Un `opts`
+  // null o un monto numérico no pueden ser un TypeError (500 y traza en
+  // el log): se rechazan como cualquier otro movimiento inválido.
+  const shape = moverOptsSchema.safeParse(opts);
+  if (
+    typeof dealId !== "string" ||
+    typeof toStageId !== "string" ||
+    !shape.success ||
+    !UUID_RE.test(dealId) ||
+    !(STAGE_ID_RE.test(toStageId) || UUID_RE.test(toStageId))
+  ) {
     return { ok: false, message: MESSAGES.pipeline.moveError };
   }
-  const { lostReason } = opts;
+  const { lostReason, amount: rawAmount } = shape.data ?? {};
   if (lostReason !== undefined && !LOST_REASONS.includes(lostReason as LostReason)) {
     return { ok: false, message: V.lostReason };
   }
-  const amount = opts.amount?.trim() || null;
+  const amount = rawAmount?.trim() || null;
   if (amount !== null && !(DECIMAL_RE.test(amount) && amount.length <= 15)) {
     return { ok: false, message: V.amount };
   }

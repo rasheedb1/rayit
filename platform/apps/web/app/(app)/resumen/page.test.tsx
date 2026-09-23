@@ -71,7 +71,8 @@ describe("la página Resumen elige entre vacío y cifras", () => {
       expect(screen.getByTestId(id)).toBeInTheDocument();
     }
     expect(screen.queryByText(/Todavía no hay ninguna cuenta|aún no hay lecturas/)).not.toBeInTheDocument();
-    // El plan de construcción sigue enlazado, discreto, en la cabecera.
-    expect(screen.getByRole("link", { name: "Plan de construcción" })).toHaveAttribute("href", "/plan/resumen");
+    // El plan de construcción es del equipo: no se enlaza desde la pantalla de la creadora (pulido r8).
+    expect(screen.queryByRole("link", { name: "Plan de construcción" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Importar un CSV" })).toHaveAttribute("href", "/resumen/importar");
   });
 });

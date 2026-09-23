@@ -259,6 +259,26 @@ export async function getQuoteStatus(tx: WorkspaceTx, id: string): Promise<Quote
   return rows[0]?.status ?? null;
 }
 
+/**
+ * El número y la marca de una cotización de este workspace, o null si no
+ * existe (o no es suya). Una sola fila, sin ítems: es lo que el detalle
+ * pone en el título de la pestaña («COT-2026-007 · Café Alma»), para que
+ * varias cotizaciones abiertas se distingan (pulido r8).
+ */
+export async function getQuoteTitle(tx: WorkspaceTx, id: string): Promise<{ number: string; companyName: string } | null> {
+  if (!isUuid(id)) return null;
+  const { rows } = await tx.query<{ number: string; company_name: string }>(
+    `SELECT q.number, co.name AS company_name
+       FROM quote q
+       JOIN company co ON co.id = q.company_id
+      WHERE q.id = $1
+      LIMIT 1`,
+    [id],
+  );
+  const row = rows[0];
+  return row ? { number: row.number, companyName: row.company_name } : null;
+}
+
 /** Una cotización con sus ítems, o null si no existe (o no es de este workspace). */
 export async function getQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail | null> {
   if (!isUuid(id)) return null;

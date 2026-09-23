@@ -1,5 +1,6 @@
 import type { SignalRow } from "@mc/db/queries/ventas";
 import type { Formatter } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import { pillForFit } from "../_lib/estado";
 import { countryOptions } from "../_lib/paises";
 import { Radar, type SignalCardData } from "./radar";
@@ -28,6 +29,16 @@ export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: F
     budgetText: s.budgetEstimate ? f.money(s.budgetEstimate, s.budgetCurrency ?? undefined, { mode: "short" }) : null,
     evidenceUrl: s.evidenceUrl,
     viaCsv: s.via === "csv",
+    // La marca ya está en el CRM: su ficha y, si lo hay, el negocio abierto
+    // al que se sumará la señal (el mismo que elige acceptSignal).
+    crm:
+      s.companyLinked && s.companyId
+        ? {
+            companyHref: `/ventas/empresas/${s.companyId}`,
+            joinsDeal: s.openDealId !== null,
+            dealName: s.openDealId !== null ? dealLabel(s.companyName, s.openDealName) : null,
+          }
+        : null,
   }));
   return <Radar cards={cards} currency={currency} countries={countryOptions(f.locale)} />;
 }

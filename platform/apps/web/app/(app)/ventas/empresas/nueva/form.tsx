@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { crearEmpresa, editarEmpresa } from "../../actions";
@@ -67,6 +68,11 @@ export function EmpresaForm({
     onSaved?.(s.notice ?? t.saved),
   );
   const soloNotas = editing && !company.isOwn;
+  // El aviso de nombre repetido es para el nombre que lo disparó: si se
+  // cambia el campo «Nombre», se esconde (y «Crear igual» con él) hasta
+  // el siguiente envío, que vuelve a preguntar si hace falta (pulido r8).
+  const [avisoDescartado, setAvisoDescartado] = useState<typeof state | null>(null);
+  const sameName = !editing && avisoDescartado !== state ? state.sameName : undefined;
   // En la ficha el formulario vive en la columna estrecha: una sola columna.
   const grid = editing ? "grid gap-4" : "grid gap-4 sm:grid-cols-2";
   const span = editing ? "" : "sm:col-span-2";
@@ -82,15 +88,16 @@ export function EmpresaForm({
       {editing && <input type="hidden" name="companyId" value={company.id} />}
       {soloNotas && <input type="hidden" name="scope" value="notes" />}
       <Aviso message={state.message} />
-      {!editing && state.sameName && (
+      {sameName && (
         <div role="status" className="rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-sm text-ink">
-          <p>{t.sameName.title(state.sameName.name)}</p>
+          <p>{t.sameName.title(sameName.name)}</p>
           <p className="mt-1 text-xs leading-5 text-ink-2">{t.sameName.help}</p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <Link href={`/ventas/empresas/${state.sameName.id}`} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
-              {t.sameName.see(state.sameName.name)}
+            <Link href={`/ventas/empresas/${sameName.id}`} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+              {t.sameName.see(sameName.name)}
             </Link>
-            <Button size="sm" variant="secondary" loading={pending} onClick={() => resubmit({ sameName: "1" })}>
+            {/* El permiso lleva el nombre por el que se preguntó: el servidor lo compara con el que llega. */}
+            <Button size="sm" variant="secondary" loading={pending} onClick={() => resubmit({ sameName: sameName.name })}>
               {t.sameName.createAnyway}
             </Button>
           </div>
@@ -101,7 +108,14 @@ export function EmpresaForm({
         {!soloNotas && (
           <>
             <Field label={t.name} required error={errors.name} htmlFor="empresa-name" className={span}>
-              <Input name="name" maxLength={200} autoComplete="organization" autoFocus defaultValue={company?.name} />
+              <Input
+                name="name"
+                maxLength={200}
+                autoComplete="organization"
+                autoFocus
+                defaultValue={company?.name}
+                onChange={state.sameName ? () => setAvisoDescartado(state) : undefined}
+              />
             </Field>
             <Field label={t.domain} error={errors.domain} help={MESSAGES.radar.form.domainHelp} htmlFor="empresa-domain" className={span}>
               <Input

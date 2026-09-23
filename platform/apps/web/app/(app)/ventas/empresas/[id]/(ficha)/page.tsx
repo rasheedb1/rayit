@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
@@ -18,7 +17,8 @@ import { DatosEmpresa } from "../datos";
 import { NuevoNegocio } from "../negocio";
 import { RelacionForm } from "../relacion";
 
-export const metadata: Metadata = { title: MESSAGES.empresas.detail.metaTitle };
+// El título de la pestaña lo pone layout.tsx con el nombre de la empresa
+// (generateMetadata): uno estático aquí lo pisaría (pulido r8).
 export const dynamic = "force-dynamic";
 
 /**

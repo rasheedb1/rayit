@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Las Server Actions se sustituyen: aquí importa cómo reacciona la
@@ -30,6 +30,7 @@ const card: SignalCardData = {
   budgetText: null,
   evidenceUrl: null,
   viaCsv: false,
+  crm: null,
 };
 
 beforeEach(() => {
@@ -56,6 +57,36 @@ describe("Radar", () => {
     expect(alerta).toHaveTextContent("ya la aceptaste");
     expect(alerta).not.toHaveTextContent(/descart/i);
     expect(screen.getByRole("link", { name: MESSAGES.radar.form.seeCompany })).toHaveAttribute("href", empresa);
+  });
+
+  it("una marca que ya está en el CRM lo dice antes de aceptar, con su ficha y el negocio al que se sumará (pulido r8)", () => {
+    const ficha = "/ventas/empresas/00000002-0000-4000-8000-0000000000e7";
+    render(
+      <Radar
+        cards={[
+          { ...card, id: "s1", companyName: "Vitalé", crm: { companyHref: ficha, joinsDeal: true, dealName: "Snacks de temporada" } },
+          { ...card, id: "s2", companyName: "Nutrivé", crm: { companyHref: ficha, joinsDeal: true, dealName: null } },
+          { ...card, id: "s3", companyName: "Granos del Valle", crm: { companyHref: ficha, joinsDeal: false, dealName: null } },
+          { ...card, id: "s4", companyName: "Marca Nueva" },
+        ]}
+        currency="COP"
+        countries={PAISES}
+      />,
+    );
+    const [vitale, nutrive, granos, nueva] = screen.getAllByRole("listitem");
+
+    const enCrm = within(vitale!).getByRole("link", { name: MESSAGES.radar.inCrmLink("Vitalé") });
+    expect(enCrm).toHaveAttribute("href", ficha);
+    expect(enCrm).toHaveTextContent(MESSAGES.radar.inCrm);
+    expect(vitale).toHaveTextContent(MESSAGES.radar.joinsDeal("Snacks de temporada"));
+    // Un negocio que se llama como la marca: se dice sin repetir el nombre.
+    expect(nutrive).toHaveTextContent(MESSAGES.radar.joinsOpenDeal);
+    // En el CRM pero sin negocio abierto: aceptarla abre uno, así que no promete sumarse.
+    expect(within(granos!).getByText(MESSAGES.radar.inCrm)).toBeInTheDocument();
+    expect(granos).not.toHaveTextContent(/se sumará/);
+    // Una marca nueva no dice nada de eso.
+    expect(within(nueva!).queryByText(MESSAGES.radar.inCrm)).toBeNull();
+    expect(nueva).not.toHaveTextContent(/se sumará/);
   });
 
   it("aceptar anuncia el negocio abierto y enlaza al pipeline", async () => {

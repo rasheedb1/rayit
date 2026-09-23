@@ -39,7 +39,7 @@ export function useVentasForm(
 
   /**
    * Reenviar el formulario con algún campo de más, sin que la persona
-   * lo escriba: «Crear igual» manda lo mismo con `sameName=1`.
+   * lo escriba: «Crear igual» manda lo mismo con `sameName=<el nombre del aviso>`.
    */
   function resubmit(extra: Record<string, string>) {
     const form = formRef.current;
