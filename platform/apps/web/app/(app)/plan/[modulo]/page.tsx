@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ModulePlan } from "@/components/module-plan";
-import { MODULES, requireModule } from "@/content/modules";
+import { MODULES } from "@/content/modules";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 import { MESSAGES } from "./messages";
 
 /**
@@ -20,8 +21,8 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ modulo: string }> }): Promise<Metadata> {
   const { modulo } = await params;
-  // requireModule hace 404 si el módulo no existe o su bandera está apagada.
-  return { title: MESSAGES.metaTitle(requireModule(modulo).name) };
+  // 404 si el módulo no existe, su bandera está apagada o esta sesión no puede abrirlo (ACC-5).
+  return { title: MESSAGES.metaTitle((await requireModuleAccess(modulo)).name) };
 }
 
 export default async function PlanPage({ params }: { params: Promise<{ modulo: string }> }) {

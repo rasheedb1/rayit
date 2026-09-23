@@ -1,6 +1,6 @@
 import { SPRINTS } from "@/content/backlog";
 import { notFound } from "next/navigation";
-import { requireModule } from "@/content/modules";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 import { OWNERS, type OwnerId } from "@/content/team";
 import { daysRange, formatDays, stats, storiesFor } from "@/lib/backlog";
 import { OwnerAvatar } from "./owner";
@@ -14,9 +14,9 @@ import { StoryCard } from "./story-card";
  * primera historia de pantalla llegue a main, el dueño reemplaza el
  * page.tsx de su carpeta por el módulo de verdad.
  */
-export function ModulePlan({ slug }: { slug: string }) {
-  // 404 si el módulo no existe o su bandera está apagada.
-  const mod = requireModule(slug);
+export async function ModulePlan({ slug }: { slug: string }) {
+  // 404 si el módulo no existe, su bandera está apagada o esta sesión no puede abrirlo (ACC-5).
+  const mod = await requireModuleAccess(slug);
   if (!mod.prefix) notFound();
 
   const stories = storiesFor(mod.prefix);
