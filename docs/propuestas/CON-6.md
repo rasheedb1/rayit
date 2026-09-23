@@ -43,8 +43,9 @@ apps/worker/package.json           @mc/core como dependencia de workspace (no es
 apps/worker/src/jobs/conexiones/compute-baseline.ts     compute.baseline
 apps/worker/src/jobs/conexiones/compute-post-score.ts   compute.post_score
 apps/worker/src/jobs/conexiones/index.ts                los suma a conexionesJobs
-apps/worker/test/compute-baseline-post-score.test.ts    once pruebas en el arnés (pglite + migraciones reales);
+apps/worker/test/compute-baseline-post-score.test.ts    catorce pruebas en el arnés (pglite + migraciones reales);
                                                         un solo archivo porque los dos jobs se prueban en cadena
+apps/worker/test/runner.test.ts    los conteos de definiciones con handler, con dos jobs más
 apps/worker/README.md              los dos jobs nuevos
 apps/web/content/backlog.ts        estado de CON-6 (solo mi entrada)
 docs/propuestas/CON-6.md           este archivo
@@ -445,3 +446,15 @@ todavía no lee `post_score`; lo hará RES-3.
 4. **`job_definition` ya tiene las dos filas** (`compute.baseline`,
    `compute.post_score`, migración `0009`): al arrancar el worker con
    estos jobs registrados dejan de aparecer como `skipped`.
+5. **CAM-5 ya encaja sin cambios.** `computeCampaignResult`
+   (`queries/campanas.ts`, en `main`) lee `creator_baseline` por
+   `(workspace, creador, red, corte)` quedándose con el `computed_at`
+   más reciente, que es exactamente la forma en que este job escribe.
+   No hace falta tocar nada de Campañas.
+6. **En producción no corre todavía**, y no es de CON-6: el worker no
+   está desplegado (CIM-7) y `pgboss` sigue pendiente de
+   `GRANT mc_worker TO mc_migrator` + `CREATE SCHEMA pgboss`
+   (`docs/propuestas/CON-2.md`). Hasta entonces, `creator_baseline` y
+   `post_score` en Supabase son las que sembró `0002`. Los dos jobs son
+   idempotentes: el día que el worker arranque, la primera corrida
+   refresca lo que haya sin duplicar nada.
