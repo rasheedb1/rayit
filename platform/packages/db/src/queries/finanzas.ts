@@ -132,6 +132,55 @@ export interface ReceivablesKpis {
   taxRate: string | null;
 }
 
+/**
+ * Los cuatro estados de mora que devuelve la vista `receivables`
+ * (0010). No están `borrador` ni `anulada` de `AgingBucket`: la vista
+ * excluye draft y void a propósito, porque una factura que no se ha
+ * enviado no es algo que nadie te deba.
+ */
+export const RECEIVABLE_BUCKETS = ['vencida', 'vence_pronto', 'al_dia', 'pagada'] as const;
+export type ReceivableBucket = (typeof RECEIVABLE_BUCKETS)[number];
+
+/** Una fila de cuentas por cobrar: la vista `receivables` más el nombre de la campaña. */
+export interface ReceivableRow {
+  id: string;
+  number: string;
+  /** El persistido: sent, partial o paid (la vista excluye draft y void). */
+  status: InvoiceStatus;
+  bucket: ReceivableBucket;
+  companyId: string;
+  companyName: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  currency: string;
+  total: string;
+  paidAmount: string;
+  /** total − paid_amount. Es lo que se cobra, no lo que se facturó. */
+  outstanding: string;
+  dueOn: string;
+  /** CURRENT_DATE − due_on. Negativo mientras no venza; 41 es «vencida hace 41 días». */
+  daysOverdue: number;
+}
+
+export interface ListReceivablesParams {
+  /**
+   * Un `aging_bucket` concreto. Sin él —lo normal en la pantalla de
+   * cobro— devuelve TODO lo que sigue abierto (`status <> 'paid'`), que
+   * es lo que suma el KPI «Por cobrar».
+   */
+  bucket?: ReceivableBucket | null;
+  /** Empresa o número de factura. Se ignora con menos de MIN_SEARCH caracteres. */
+  q?: string | null;
+  /** 1..200. Por defecto 50. */
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface ListReceivablesResult {
+  rows: ReceivableRow[];
+  nextCursor: string | null;
+}
+
 export class InvoiceNotFound extends Error {
   constructor(id: string) {
     super(`La factura ${id} no existe en este workspace.`);
@@ -362,6 +411,164 @@ export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKp
     collectedDelta: r.delta_permille === null ? null : r.delta_permille / 1000,
     taxReserved: r.tax_reserved,
     taxRate: r.tax_rate,
+  };
+}
+
+// ---------------------------------------------------------------------
+// FIN-3 · Cuentas por cobrar
+// ---------------------------------------------------------------------
+
+/** Desde cuántos caracteres filtra el buscador. El mismo criterio que Ventas. */
+export const MIN_SEARCH = 3;
+
+/**
+ * El texto del buscador, listo para la consulta, o null si no llega al
+ * mínimo. Es la misma regla que `searchTerm` de queries/ventas.ts y se
+ * repite a propósito: son dos módulos con dueños distintos y un cambio
+ * de criterio en uno no debe mover el del otro sin que nadie lo vea.
+ */
+export function searchTerm(raw: string | undefined | null): string | null {
+  const q = (raw ?? '').trim();
+  return q.length >= MIN_SEARCH ? q : null;
+}
+
+/** El texto del usuario con los comodines de LIKE escapados: un `%` suelto no devuelve todo. */
+const ESCAPE_LIKE = `replace(replace(replace($2, '\\', '\\\\'), '%', '\\%'), '_', '\\_')`;
+
+/**
+ * El orden de cobro, en SQL y en un solo sitio: primero lo vencido,
+ * después lo que vence pronto, después lo que está al día y al final lo
+ * cobrado. Dentro de cada grupo, `due_on` ascendente —lo que venció
+ * hace más tiempo va arriba— y el número descendente para desempatar.
+ *
+ * `due_on ASC` es exactamente `days_overdue DESC` (days_overdue es
+ * CURRENT_DATE − due_on), pero `due_on` no cambia al pasar la
+ * medianoche: por eso el cursor se ancla a él y no al número de días,
+ * y una página pedida a las 23:59 y la siguiente a las 00:01 no se
+ * saltan ni repiten una fila.
+ */
+const URGENCY_RANK = `CASE v.aging_bucket
+        WHEN 'vencida' THEN 0
+        WHEN 'vence_pronto' THEN 1
+        WHEN 'al_dia' THEN 2
+        ELSE 3
+      END`;
+
+interface RawReceivable {
+  id: string;
+  number: string;
+  status: InvoiceStatus;
+  aging_bucket: ReceivableBucket;
+  company_id: string;
+  company_name: string;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  currency: string;
+  total: string;
+  paid_amount: string;
+  outstanding: string;
+  due_on: string;
+  days_overdue: number;
+  rank: number;
+}
+
+function toReceivableRow(r: RawReceivable): ReceivableRow {
+  return {
+    id: r.id,
+    number: r.number,
+    status: r.status,
+    bucket: r.aging_bucket,
+    companyId: r.company_id,
+    companyName: r.company_name,
+    campaignId: r.campaign_id,
+    campaignName: r.campaign_name,
+    currency: r.currency,
+    total: r.total,
+    paidAmount: r.paid_amount,
+    outstanding: r.outstanding,
+    dueOn: r.due_on,
+    // El único sitio donde un entero de la vista deja de ser texto.
+    daysOverdue: r.days_overdue,
+  };
+}
+
+function encodeReceivableCursor(r: RawReceivable): string {
+  return Buffer.from(`${r.rank}|${r.due_on}|${r.number}`, 'utf8').toString('base64url');
+}
+
+function decodeReceivableCursor(cursor: string): { rank: number; dueOn: string; number: string } {
+  const [rank, dueOn, number] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  if (!rank || !dueOn || !number || !/^[0-3]$/.test(rank) || !/^\d{4}-\d{2}-\d{2}$/.test(dueOn)) {
+    throw new Error('El cursor de paginación no es válido.');
+  }
+  return { rank: Number(rank), dueOn, number };
+}
+
+/**
+ * Cuentas por cobrar del workspace, ordenadas por urgencia de cobro
+ * (URGENCY_RANK). Lee la vista `receivables` (0010), que ya excluye
+ * borradores y anuladas y ya clasifica la mora; lo único que se le suma
+ * es el nombre de la campaña, que la vista no trae.
+ *
+ * Sin `bucket` devuelve todo lo que sigue abierto (`status <> 'paid'`),
+ * que es lo que suma el KPI «Por cobrar»; con `bucket` devuelve ese
+ * grupo, `'pagada'` incluida.
+ *
+ * Ninguna cifra se calcula en la pantalla: `outstanding` y
+ * `days_overdue` salen de la vista, el dinero viaja como texto y el
+ * único número que se convierte es `days_overdue`, aquí.
+ */
+export async function listReceivables(
+  tx: WorkspaceTx,
+  params: ListReceivablesParams = {},
+): Promise<ListReceivablesResult> {
+  const limit = Math.min(200, Math.max(1, params.limit ?? 50));
+  const bucket = params.bucket && RECEIVABLE_BUCKETS.includes(params.bucket) ? params.bucket : null;
+  const q = searchTerm(params.q);
+  const values: unknown[] = [bucket, q];
+  const where: string[] = [
+    // Sin bucket, lo abierto; con bucket, ese grupo (aging_bucket = 'pagada' ⟺ status = 'paid').
+    `CASE WHEN $1::text IS NULL THEN v.status <> 'paid' ELSE v.aging_bucket = $1 END`,
+    `($2::text IS NULL OR v.company_name ILIKE '%' || ${ESCAPE_LIKE} || '%'
+                       OR v.number       ILIKE '%' || ${ESCAPE_LIKE} || '%')`,
+  ];
+
+  if (params.cursor) {
+    const c = decodeReceivableCursor(params.cursor);
+    values.push(c.rank, c.dueOn, c.number);
+    const [r, d, n] = [values.length - 2, values.length - 1, values.length];
+    // El mismo orden, escrito como desigualdad: el número va DESC, así
+    // que no cabe en una comparación de tuplas y se dice a mano.
+    where.push(`(${URGENCY_RANK} > $${r}::int
+                 OR (${URGENCY_RANK} = $${r}::int
+                     AND (v.due_on > $${d}::date
+                          OR (v.due_on = $${d}::date AND v.number < $${n}))))`);
+  }
+  values.push(limit + 1);
+
+  const { rows } = await tx.query<RawReceivable>(
+    `
+    SELECT v.id, v.number, v.status, v.aging_bucket,
+           v.company_id, v.company_name,
+           v.campaign_id, ca.name AS campaign_name,
+           v.currency, v.total::text, v.paid_amount::text, v.outstanding::text,
+           to_char(v.due_on, 'YYYY-MM-DD') AS due_on,
+           v.days_overdue::int AS days_overdue,
+           ${URGENCY_RANK} AS rank
+    FROM receivables v
+    LEFT JOIN campaign ca ON ca.id = v.campaign_id
+    WHERE ${where.join('\n      AND ')}
+    ORDER BY rank, v.due_on ASC, v.number DESC
+    LIMIT $${values.length}
+    `,
+    values,
+  );
+
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page.map(toReceivableRow),
+    nextCursor: rows.length > limit && last ? encodeReceivableCursor(last) : null,
   };
 }
 
