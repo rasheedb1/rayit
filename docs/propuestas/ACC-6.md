@@ -62,9 +62,9 @@ el workspace: en el MVP nadie tiene filas de alcance y nada cambia.
 | `packages/db/src/scope.ts` | **Nuevo.** `scopeFilter(anchors)` (el `WHERE` que compone cada consulta), `assertScopeAllows(tx, …)` (para las altas) y `ScopeError`. |
 | `packages/db/src/index.ts` | Reexporta `scopeFilter`, `ScopeError`. |
 | `packages/db/src/esquema.ts` | `membership_scope` en `PRIVILEGIOS_DE_LA_APP` (SELECT) y las dos firmas en `FUNCIONES_QUE_USA_EL_CODIGO`. Es un archivo de la guardia (Rasheed lo escribió); son dos entradas declarativas, sin lógica. |
-| `packages/db/src/queries/campanas.ts` | Alcance en las 12 funciones exportadas con transacción. |
+| `packages/db/src/queries/campanas.ts` | Alcance en las 11 funciones exportadas. |
 | `packages/db/src/queries/finanzas.ts` | Alcance en las 8. |
-| `packages/db/src/queries/conexiones.ts` | Alcance en las 14. |
+| `packages/db/src/queries/conexiones.ts` | Alcance en las 14 con transacción (más `publicSecretRef`, pura). |
 | `packages/db/test/alcance.ts` | Escenario compartido: dos creadoras en el workspace de Laura, un miembro con alcance a una. |
 | `packages/db/test/alcance-esquema.test.ts` | La migración: RLS, privilegios, semántica de `scope_allows`, re-ejecución. |
 | `packages/db/test/alcance-{campanas,finanzas,conexiones}.test.ts` | Una prueba por módulo: el bucle sobre TODAS las funciones exportadas. |
@@ -99,9 +99,10 @@ puede llamar desde una política de RLS —el mismo predicado, escrito una
 sola vez—; (3) `current_user_id()` ya está fijado en la transacción, así
 que la base sabe quién pregunta sin que nadie se lo pase. La función es
 `LANGUAGE sql STABLE` y `SECURITY INVOKER`: lee `membership_scope` bajo
-la RLS del workspace fijado, y el planificador la expande en línea, de
-modo que las dos subconsultas sin correlación se evalúan una vez por
-consulta, no una vez por fila.
+la RLS del workspace fijado. (Corregido al implementar: no se expande en
+línea, así que `scopeFilter()` pone delante un `EXISTS` sin correlación
+que decide una vez por consulta, y la función solo corre por fila cuando
+la persona sí tiene alcance de ese tipo.)
 
 ```sql
 scope_allows(kind text, target uuid)     -- ¿este id está en mi alcance de ese tipo?
@@ -234,4 +235,137 @@ predicado es el mismo que aplican las consultas. Queda en §4.
 
 ---
 
-*(Las secciones 1 a 8 se completan al cerrar la historia.)*
+## 1. Cómo quedó
+
+- **34 funciones exportadas con alcance**: 11 en `campanas.ts`, 8 en
+  `finanzas.ts` y 15 en `conexiones.ts` (una de ellas pura,
+  `publicSecretRef`). Cada tabla raíz declara su ancla una sola vez
+  (`SCOPE_CAMPAIGN`, `SCOPE_INVOICE`, `SCOPE_CONNECTION`, …) y cada
+  SELECT, UPDATE y DELETE la compone.
+- **Las altas** se rechazan antes de escribir: con `ScopeError` cuando la
+  fila nueva quedaría fuera del alcance (factura sin campaña bajo
+  alcance por creadora, campaña viva de la cotización reasignada, cuenta
+  de otra creadora en una rama `ON CONFLICT`), o con el `…NotFound` del
+  insumo cuando el insumo no se ve.
+- **La web no cambió de comportamiento** para nadie sin filas de
+  alcance. Los dos servicios de Conexiones traducen `ScopeError` a
+  «fuera_de_alcance» con su frase.
+- **Barato sin alcance**: cada tipo empieza por un `EXISTS` sin
+  correlación que Postgres evalúa una vez por consulta.
+
+## 2. La migración `0034_membership_scope.sql` (para revisar y aplicar)
+
+| Sección | Qué | Nota para el integrador |
+|---|---|---|
+| 1 | `membership_scope` tal cual la fase 4 de la propuesta ACC, e índice `campaign_post (post_id)` | `CREATE … IF NOT EXISTS`: re-ejecutable |
+| 2 | RLS `FOR SELECT` por `workspace_id`; `mc_app` solo SELECT | Declarado en `PRIVILEGIOS_DE_LA_APP` |
+| 3 | `scope_allows(text, uuid)` y `scope_allows(text, uuid[])`, SECURITY INVOKER, sin EXECUTE para PUBLIC | Declaradas en `FUNCIONES_QUE_USA_EL_CODIGO`: **sin 0034 en la base, la guardia de producción no deja arrancar la web** |
+
+Orden en la cola del integrador: después de 0033. No crea roles ni
+necesita el token de administración.
+
+## 3. El contrato con ACC-7 (Rasheed)
+
+La política por creador puede usar el mismo predicado, como política
+**restrictiva** para que no abra nada:
+
+```sql
+CREATE POLICY campaign_scope ON campaign AS RESTRICTIVE
+  USING (scope_allows('creator', creator_id));
+```
+
+Con eso, una consulta cruda que olvide `scopeFilter()` tampoco devuelve
+filas de otro creador (el «terminado cuando» de ACC-7). Ojo con dos
+cosas al escribirla: `invoice` no tiene `creator_id` (llega por
+`campaign`), y una restrictiva también filtra los `ON CONFLICT DO
+UPDATE`, que es justo lo que la revisión de ACC-6 tuvo que cerrar a mano.
+
+## 4. Lo que necesita Rasheed
+
+1. **Aplicar 0034 en Supabase** (`make db.migrate` y `make db.guardia`)
+   **antes** de desplegar esta rama. Si ACC-3 llega antes, puede fundir
+   la tabla en su migración y dejar aquí solo las funciones.
+2. **Esquema Drizzle** propuesto para `src/schema/accesos.ts` (ninguna
+   consulta lo usa hoy; la prueba de esquema no lo exige):
+
+   ```ts
+   export const MEMBERSHIP_SCOPE_TYPES = ['creator', 'company', 'campaign'] as const;
+   export const membershipScope = pgTable('membership_scope', {
+     workspaceId: uuid('workspace_id').notNull(),
+     userId: uuid('user_id').notNull(),
+     scopeType: text('scope_type', { enum: MEMBERSHIP_SCOPE_TYPES }).notNull(),
+     scopeId: uuid('scope_id').notNull(),
+     createdAt: createdAt(),
+   }, (t) => [
+     primaryKey({ columns: [t.workspaceId, t.userId, t.scopeType, t.scopeId] }),
+     foreignKey({ columns: [t.workspaceId, t.userId], foreignColumns: [membership.workspaceId, membership.userId] }).onDelete('cascade'),
+   ]);
+   ```
+3. **`DEMO_USER_ID` en `lib/workspace/current.ts`** (opcional, seis
+   líneas): en una copia sin llaves, fijar también la identidad de la
+   transacción. Es lo que usé, sin commitear, para verlo en dev (§5).
+4. **Alcance en Ventas, Cotizar y Resumen**: el arnés
+   `test/alcance.ts` sirve tal cual; basta un
+   `test/alcance-ventas.test.ts` con su mapa de casos.
+5. **ACC-4** escribe `membership_scope`: necesita sus políticas de
+   INSERT y DELETE y quitar la tabla de `PRIVILEGIOS_DE_LA_APP` (o
+   ampliar lo declarado).
+
+## 5. Verificación
+
+- Pruebas: ver la salida en el PR. `@mc/db` completo en verde, más las
+  cuatro de alcance y la del callback de OAuth con un miembro acotado.
+- Comprobación de que la prueba muerde: quitar el filtro de `getInvoice`
+  y exportar una función nueva sin caso hace fallar tres pruebas, con el
+  nombre de la función.
+- Dev (embebido, seed temporal con el escenario, `DEMO_USER_ID` del
+  miembro con alcance a Laura en :3186 y sin identidad en :3187):
+
+  | Pantalla | Miembro (alcance Laura) | Sin alcance |
+  |---|---|---|
+  | `/campanas` | 5 campañas, nada de Sofía | 6, con «Playa con Marca de Sofía» |
+  | `/campanas/<campaña de Sofía>` | página de «no encontrado» | ficha de Sofía |
+  | `/finanzas` | sin FV-2026-901 | con FV-2026-901 |
+  | `/finanzas/facturas/<factura de Sofía>` | «no encontrado» | «Factura FV-2026-901» |
+  | `/finanzas/facturas/nueva` | sin la marca ni la campaña de Sofía | con las dos |
+  | `/conexiones` | sin @sofia.viaja | con @sofia.viaja |
+
+  En dev, la primera respuesta de cada servidor lleva en el payload de
+  depuración de React el texto de los seeds (le pasa igual a 0004): es
+  información de desarrollo, no sale en producción ni depende de ACC-6.
+
+## 6. Revisión (/code-review, nivel alto)
+
+| # | Hallazgo | Resolución |
+|---|---|---|
+| 1 | `upsertConnection`: la rama `ON CONFLICT` reescribía la cuenta de otra creadora | Arreglado: `WHERE` de alcance en el `DO UPDATE` y `ScopeError`; prueba en db y en el callback de OAuth |
+| 2 | `addPublicAccount`: igual, y 500 en la web | Arreglado igual; `cuentas-service` devuelve «fuera_de_alcance» |
+| 3 | Con alcance por marca, un post sin campaña no se ve ni se asocia | **Justificado**: un post sin campaña es de la creadora, no de la marca. DECISIÓN PENDIENTE (§8) |
+| 4 | `markAccountLookupFailure` pasaba a lanzar y la web no lo atrapaba | Arreglado: devuelve si anotó, sin tapar el error original |
+| 5 | `createInvoice` no comprobaba el alcance de `quoteId` | Arreglado, con prueba |
+| 6 | `createCampaignFromQuote` chocaba con el índice único si la campaña viva estaba fuera | Arreglado: búsqueda sin filtro y `ScopeError`; prueba |
+| 7 | `upgradePublicAccountToOAuth` chocaba con el UNIQUE y la web decía «temporal» | Arreglado: `ScopeError` antes del UPDATE y «fuera_de_alcance» |
+| 8 | Poner el alcance a mano en cada consulta es frágil | **Justificado**: es la decisión C de la propuesta ACC; la red de seguridad es ACC-7 (§3) y la prueba por módulo |
+| 9 | Subconsultas correlacionadas en los KPI y `JOIN post` en la lista | En parte: el `JOIN post` pasó a subconsulta que solo corre con alcance. Las de los KPI solo corren con alcance (el `EXISTS` sin correlación va primero) |
+| 10 | CTE `mias` en español; nombres de las pruebas en español | CTE renombrada a `scoped_receivables`. Las pruebas siguen el estilo de las vecinas (`cercaDelMock`, `laura`) |
+
+## 7. Revisión de seguridad (/security-review)
+
+Sin hallazgos de confianza alta. Revisados y descartados: inyección SQL
+en `scopeFilter` (todas las anclas son literales del módulo; los valores
+van por `$n`), privilegios de `scope_allows()` (INVOKER, sin EXECUTE
+para PUBLIC), escritura del alcance por `mc_app` (no tiene privilegio),
+las ramas `ON CONFLICT` (cerradas en §6) y las escrituras de seguimiento
+(todas van detrás de una lectura con alcance y `FOR UPDATE`).
+
+## 8. Decisiones pendientes de Nicolás
+
+1. **0034 aparte o dentro de ACC-3** (D1). Tomada: aparte, re-ejecutable.
+2. **Factura sin campaña bajo alcance por creadora: se oculta.** Coincide
+   con el rol Mánager («solo el cobro de sus campañas»), pero en el seed
+   la mayoría de las facturas históricas no tienen campaña: un mánager
+   acotado no las verá.
+3. **Post sin campaña bajo alcance por marca o por campaña: se oculta**
+   (hallazgo 3). Un ejecutivo de marca no podrá asociar posts nuevos a
+   sus campañas; lo apunto para AGE-4.
+4. **Entre tipos, intersección** (D3).

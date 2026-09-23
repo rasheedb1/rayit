@@ -628,8 +628,8 @@ export const STORIES: readonly Story[] = [
     title: "Alcance en las consultas",
     desc: "scopeFilter() en packages/db, compuesto por cada queries/<modulo>.ts. La tenencia se garantiza en RLS; el alcance, aquí: depende de columnas que no todas las tablas tienen, y una política de alcance mal escrita no se ve como un bug.",
     done: "Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada del módulo.",
-    status: "pendiente",
-    note: "Cada uno hace el alcance de sus módulos. Fuera del MVP: un workspace de creador tiene un solo creador, así que no hay nada que acotar hasta que existan las agencias.",
+    status: "en_curso",
+    note: "Parte de Nicolás hecha el 23-sep en la rama nicolas/ACC-6-alcance-consultas: migración 0034_membership_scope (solo la tabla del alcance y scope_allows(); ACC-3 la absorbe), scopeFilter() en packages/db/src/scope.ts y alcance en las 34 funciones exportadas de campanas, finanzas y conexiones. Una prueba por módulo recorre todas las funciones con dos creadoras en un workspace y falla sola si se exporta una sin caso. Sin filas de alcance nada cambia. Falta: aplicar 0034 en Supabase antes de desplegar (la guardia la exige), y el alcance de Ventas, Cotizar y Resumen (Rasheed). Decisiones pendientes en docs/propuestas/ACC-6.md.",
   },
   {
     id: "ACC-7", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-6"],

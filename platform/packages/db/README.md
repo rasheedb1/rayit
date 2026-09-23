@@ -12,6 +12,7 @@ src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
+src/scope.ts       scopeFilter / assertScopeAllows: el alcance dentro del workspace (ACC-6)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas, conexiones
@@ -45,7 +46,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los seis usos
+## Los usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -232,6 +233,59 @@ devolución al pool) que PGlite no toca. Los paquetes con su propia copia
 del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
 `worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
 (CON-2b).
+
+### 8. Alcance con `scopeFilter` (ACC-6)
+
+(El 7 es la bitácora obligatoria de ACC-2.) La tenencia la garantiza
+RLS; el **alcance** —«este miembro ve solo lo de Camilo», «el
+ejecutivo, solo sus marcas»— lo pone cada consulta. Las filas viven en
+`membership_scope` (migración 0034: `creator`, `company` o `campaign`
+por membresía) y las lee `scope_allows()` con la persona de la
+transacción (`current_user_id()`). **Sin filas, todo el workspace**: en
+un workspace de creador del MVP nadie tiene alcance y nada cambia.
+
+```ts
+import { scopeFilter, assertScopeAllows } from '../scope.ts';
+
+// Una vez por tabla raíz: qué columna responde a cada tipo de alcance.
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
+
+// En cada lectura Y en cada UPDATE/DELETE, junto a sus condiciones.
+await tx.query(`SELECT … FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [id]);
+
+// Antes de una alta: la fila nueva tiene que caer en el alcance de quien la crea.
+await assertScopeAllows(tx, { creator: creatorId, company: companyId, campaign: null });
+```
+
+Las reglas, y por qué:
+
+- **Un ancla por tipo, siempre los tres.** Una expresión `uuid` (la
+  columna, o una subconsulta a su padre: una factura llega a su creadora
+  por la campaña), `{ any: 'SELECT …' }` para una relación
+  uno-a-muchos (las campañas de un post), o `null` cuando la tabla no
+  tiene camino a ese tipo: una cuenta conectada no es de una marca, así
+  que quien tenga alcance por marca no ve cuentas. `null` **oculta**; abrir
+  por defecto sería una política de alcance que no se ve como un bug.
+- **Entre tipos se intersecta, dentro de un tipo se une.** Creador Y
+  marca es «las campañas de Camilo con la marca X».
+- **Un ancla NULL no está en ningún alcance.** Una factura sin campaña no
+  es de ninguna creadora; con alcance por creadora no se ve (y no se
+  puede crear: `ScopeError`, con `messageEs`).
+- **Fuera del alcance es «no existe»**: `null`, lista vacía o el mismo
+  `…NotFound` que devuelve una fila de otro workspace. La pantalla da su
+  404 sin confirmar que la fila existe.
+- **Barato cuando no hay alcance.** Cada tipo empieza por un `EXISTS`
+  sin correlación con la fila, que Postgres evalúa una vez por consulta;
+  `scope_allows()` y los `ARRAY(…)` solo se calculan si la persona sí
+  tiene filas de ese tipo.
+- **Una prueba por módulo** (`test/alcance-<modulo>.test.ts`, arnés en
+  `test/alcance.ts`) recorre TODAS las funciones exportadas con dos
+  creadoras en un workspace: exportar una función nueva sin su caso hace
+  fallar la prueba con su nombre. Hoy cubren `campanas`, `finanzas` y
+  `conexiones`; `ventas`, `cotizar` y `resumen` son de su dueño.
+- `mc_app` solo **lee** `membership_scope`: escribirla es la pantalla de
+  Equipo (ACC-4). ACC-7 puede usar el mismo predicado como política
+  restrictiva: `USING (scope_allows('creator', creator_id))`.
 
 ## Lo que hace el cliente por ti
 
