@@ -230,7 +230,9 @@ export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData)
     return { message: err instanceof Error ? err.message : MESSAGES.generico };
   }
 
-  const red = r.payout?.platformName ?? v.platformId;
+  // El NOMBRE de la red, no su id: «Instagram» y no «instagram». En el
+  // choque lo trae la fila que ya estaba, que es de la que se habla.
+  const red = r.payout?.platformName ?? r.conflicting?.platformName ?? v.platformId;
   const periodoTexto = periodo.periodStart.slice(0, 7);
   if (r.conflicting) {
     return { conflicto: { red, periodo: periodoTexto, guardado: r.conflicting.existingAmount } };

@@ -818,6 +818,8 @@ export interface PlatformPayoutInput {
 /** Un pago que no se escribió porque su periodo ya existe con OTRO monto. */
 export interface ConflictingPayout {
   platformId: string;
+  /** El nombre del catálogo («YouTube»), para la frase: un id no es un texto de interfaz. */
+  platformName: string;
   periodStart: string;
   periodEnd: string;
   currency: string;
@@ -1098,17 +1100,19 @@ export async function importPlatformPayouts(
   // Qué periodos de este lote ya existen, y con qué monto. Una sola
   // consulta para todo el lote, no una por fila.
   const existentes = await tx.query<{
-    platform_id: string; creator_id: string | null; period_start: string; period_end: string;
+    platform_id: string; platform_name: string; creator_id: string | null; period_start: string; period_end: string;
     currency: string; amount: string;
   }>(
-    `SELECT platform_id,
-            creator_id,
-            to_char(period_start, 'YYYY-MM-DD') AS period_start,
-            to_char(period_end, 'YYYY-MM-DD') AS period_end,
-            currency,
-            amount::text
-     FROM platform_payout
-     WHERE (platform_id, coalesce(creator_id, $1::uuid), period_start, period_end, currency)
+    `SELECT p.platform_id,
+            pl.name AS platform_name,
+            p.creator_id,
+            to_char(p.period_start, 'YYYY-MM-DD') AS period_start,
+            to_char(p.period_end, 'YYYY-MM-DD') AS period_end,
+            p.currency,
+            p.amount::text
+     FROM platform_payout p
+     JOIN platform pl ON pl.id = p.platform_id
+     WHERE (p.platform_id, coalesce(p.creator_id, $1::uuid), p.period_start, p.period_end, p.currency)
            IN (SELECT platform_id, coalesce(creator_id, $1::uuid), period_start, period_end, currency
                FROM unnest($2::text[], $3::uuid[], $4::date[], $5::date[], $6::text[])
                  AS l(platform_id, creator_id, period_start, period_end, currency))`,
@@ -1124,7 +1128,7 @@ export async function importPlatformPayouts(
   const guardado = new Map(
     existentes.rows.map((r) => [
       clavePeriodo(r.platform_id, r.creator_id, r.period_start, r.period_end, r.currency),
-      r.amount,
+      { amount: r.amount, name: r.platform_name },
     ]),
   );
 
@@ -1135,14 +1139,15 @@ export async function importPlatformPayouts(
     const existente = guardado.get(
       clavePeriodo(input.platformId, input.creatorId ?? null, input.periodStart, input.periodEnd, currency),
     );
-    if (existente !== undefined && toCents(existente) !== toCents(input.amount)) {
+    if (existente !== undefined && toCents(existente.amount) !== toCents(input.amount)) {
       conflicting.push({
         platformId: input.platformId,
+        platformName: existente.name,
         periodStart: input.periodStart,
         periodEnd: input.periodEnd,
         currency,
         amount: normalizeDecimal(input.amount),
-        existingAmount: existente,
+        existingAmount: existente.amount,
       });
       continue;
     }

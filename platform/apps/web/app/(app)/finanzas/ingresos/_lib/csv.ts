@@ -37,7 +37,7 @@
  * sí documentamos nosotros.
  */
 import type { PlatformPayoutInput } from "@mc/db/queries/finanzas";
-import { addDecimal, normalizeDecimal } from "@mc/core";
+import { addDecimal, normalizeDecimal, ultimoDiaDelMes } from "@mc/core";
 import { decodificarCsv, normalizarNumeroDeHoja, type Codificacion } from "@/lib/csv";
 import { ErrorCsv, leerCsv, type Tabla } from "../../../resumen/importar/_lib/csv";
 import { normalizar } from "../../../resumen/importar/_lib/formatos";
@@ -162,13 +162,10 @@ export interface Periodo {
   granularidad: "dia" | "mes";
 }
 
-const DIAS_POR_MES = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-/** El último día de ese mes, con la regla bisiesta completa (y sin `Date`). */
-export function ultimoDiaDelMes(anio: number, mes: number): number {
-  if (mes !== 2) return DIAS_POR_MES[mes - 1]!;
-  return (anio % 4 === 0 && anio % 100 !== 0) || anio % 400 === 0 ? 29 : 28;
-}
+// El último día de un mes vive en @mc/core con el resto de la
+// aritmética de meses: lo necesitan el lector, el formulario «a mano» y
+// la lista. Una segunda copia de la regla bisiesta es una copia de más.
+export { ultimoDiaDelMes };
 
 let MESES: ReadonlyMap<string, number> | null = null;
 

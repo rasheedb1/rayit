@@ -116,12 +116,9 @@ export function NuevoIngresoForm({ plataformas, currency, mesPorDefecto }: Nuevo
         </p>
       )}
 
-      <div className="flex items-center gap-3">
+      <div>
         <Button type="submit" variant="primary" loading={pending}>
           {pending ? T.enviando : T.enviar}
-        </Button>
-        <Button variant="ghost" href="/finanzas/ingresos">
-          {MESSAGES.acciones.volver}
         </Button>
       </div>
     </form>

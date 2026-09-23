@@ -5,6 +5,8 @@ import {
   mesDesplazado,
   promedioMensual,
   proyeccionDePlataformas,
+  esMesEntero,
+  ultimoDiaDelMes,
   ultimoMesCerrado,
   ventanaDeMeses,
   VENTANA_PROMEDIO_MESES,
@@ -176,5 +178,25 @@ describe('la fila que consumirá FIN-6', () => {
     const p = proyeccionDePlataformas([], { hoy: '2026-09-23', currency: 'MXN' });
     assert.equal(p.estimado, null);
     assert.equal(p.currency, 'MXN');
+  });
+});
+
+describe('el periodo de un pago', () => {
+  test('ultimoDiaDelMes conoce los bisiestos y rechaza un mes imposible', () => {
+    assert.equal(ultimoDiaDelMes(2024, 2), 29);
+    assert.equal(ultimoDiaDelMes(2026, 2), 28);
+    assert.equal(ultimoDiaDelMes(2100, 2), 28, 'un año divisible por 100 pero no por 400 no es bisiesto');
+    assert.equal(ultimoDiaDelMes(2000, 2), 29);
+    assert.equal(ultimoDiaDelMes(2026, 4), 30);
+    assert.throws(() => ultimoDiaDelMes(2026, 13), /Mes inválido/);
+  });
+
+  test('esMesEntero distingue un pago mensual de un rango escrito a mano', () => {
+    assert.equal(esMesEntero('2026-09-01', '2026-09-30'), true);
+    assert.equal(esMesEntero('2026-02-01', '2026-02-28'), true, 'febrero de un año normal');
+    assert.equal(esMesEntero('2024-02-01', '2024-02-29'), true, 'febrero bisiesto');
+    assert.equal(esMesEntero('2026-09-01', '2026-09-15'), false, 'media quincena');
+    assert.equal(esMesEntero('2026-09-15', '2026-09-30'), false, 'no empieza el día 1');
+    assert.equal(esMesEntero('2026-09-01', '2026-10-31'), false, 'cruza el mes');
   });
 });

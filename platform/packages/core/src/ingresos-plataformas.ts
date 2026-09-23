@@ -88,6 +88,29 @@ export function ultimoMesCerrado(hoyIso: string): Mes {
   return mesDesplazado(mesDelPeriodo(hoyIso), -1);
 }
 
+const DIAS_POR_MES = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** El último día de ese mes, con la regla bisiesta completa y sin `Date`. */
+export function ultimoDiaDelMes(anio: number, mes: number): number {
+  if (mes < 1 || mes > 12) throw new Error(`Mes inválido: ${mes}. Se espera un número entre 1 y 12.`);
+  if (mes !== 2) return DIAS_POR_MES[mes - 1]!;
+  return (anio % 4 === 0 && anio % 100 !== 0) || anio % 400 === 0 ? 29 : 28;
+}
+
+/**
+ * ¿Ese periodo es un mes entero? Lo es cuando empieza el día 1 y termina
+ * el último del mismo mes. La lista de ingresos lo usa para decidir si
+ * hace falta enseñar el periodo exacto: en un pago mensual —que es la
+ * norma— el mes ya lo dice todo, y repetirlo ocupa una columna que a
+ * 390 px se come la cifra.
+ */
+export function esMesEntero(periodStart: string, periodEnd: string): boolean {
+  const mes = mesDelPeriodo(periodStart);
+  if (mesDelPeriodo(periodEnd) !== mes) return false;
+  const ultimo = ultimoDiaDelMes(+mes.slice(0, 4), +mes.slice(5, 7));
+  return periodStart.endsWith('-01') && periodEnd.endsWith(`-${String(ultimo).padStart(2, '0')}`);
+}
+
 /** Los `meses` meses consecutivos que terminan en `hasta`, del más viejo al más nuevo. */
 export function ventanaDeMeses(hasta: Mes, meses: number): Mes[] {
   if (!Number.isInteger(meses) || meses < 1) {

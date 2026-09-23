@@ -645,6 +645,7 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.equal(r.conflicting.length, 1);
     assert.deepEqual(r.conflicting[0], {
       platformId: 'youtube',
+      platformName: 'YouTube',
       ...periodo(mesAnterior),
       currency: 'COP',
       amount: '1250000.00',

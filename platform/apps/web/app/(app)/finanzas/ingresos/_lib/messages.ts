@@ -61,7 +61,7 @@ export const MESSAGES = {
 
   tabla: {
     caption: "Pagos de plataformas por periodo, del más reciente al más antiguo",
-    columnas: { mes: "Mes", plataforma: "Red", periodo: "Periodo", monto: "Monto", origen: "Origen" },
+    columnas: { mes: "Mes", plataforma: "Red", monto: "Monto" },
     meta: (pagos: number) => `${pagos} ${pagos === 1 ? "pago" : "pagos"}`,
     sinCreador: "Sin creador asignado",
   },

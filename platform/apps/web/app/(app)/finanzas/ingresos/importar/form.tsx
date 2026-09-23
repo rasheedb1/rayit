@@ -63,12 +63,9 @@ export function ImportarForm({ currency }: { currency: string }) {
             className="block w-full cursor-pointer rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink file:mr-3 file:cursor-pointer file:rounded-sm file:border-0 file:bg-hover file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:bg-surface-2"
           />
         </Field>
-        <div className="flex items-center gap-3">
+        <div>
           <Button type="submit" variant="primary" loading={pending} disabled={!nombre}>
             {pending ? T.enviando : T.enviar}
-          </Button>
-          <Button variant="ghost" href="/finanzas/ingresos">
-            {MESSAGES.acciones.volver}
           </Button>
         </div>
       </form>
@@ -94,7 +91,7 @@ export function ImportarForm({ currency }: { currency: string }) {
                 {r.conflictos.map((c) => (
                   <li key={`${c.platformId}-${c.periodStart}`} className="flex flex-wrap items-center gap-2">
                     <PlatformPill platformId={c.platformId} />
-                    <span>{T.conflicto.fila(c.platformId, c.periodStart.slice(0, 7), c.existingAmount, c.amount)}</span>
+                    <span>{T.conflicto.fila(c.platformName, c.periodStart.slice(0, 7), c.existingAmount, c.amount)}</span>
                   </li>
                 ))}
               </ul>

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { proyeccionDePlataformas } from "@mc/core";
+import { esMesEntero, proyeccionDePlataformas } from "@mc/core";
 import {
   getPlatformPayoutKpis,
   getPlatformPayoutMonths,
@@ -36,17 +36,20 @@ const columnas = (f: Formatter): Column<PlatformPayoutRow>[] => [
   {
     key: "month",
     header: T.tabla.columnas.mes,
-    render: (r) => <CellMain sub={T.origen[r.source]}>{f.month(r.month)}</CellMain>,
+    // El periodo exacto solo se enseña cuando NO es el mes entero (un
+    // rango escrito a mano o traído por el formato genérico). En un pago
+    // mensual —que es la norma— repetirlo era una cuarta columna que a
+    // 390 px cortaba la cifra, que es justo lo que se viene a ver.
+    render: (r) => (
+      <CellMain sub={esMesEntero(r.periodStart, r.periodEnd) ? T.origen[r.source] : f.dateRange(r.periodStart, r.periodEnd)}>
+        {f.month(r.month)}
+      </CellMain>
+    ),
   },
   {
     key: "platform",
     header: T.tabla.columnas.plataforma,
     render: (r) => <PlatformPill platformId={r.platformId} />,
-  },
-  {
-    key: "period",
-    header: T.tabla.columnas.periodo,
-    render: (r) => <span className="text-fg-2">{f.dateRange(r.periodStart, r.periodEnd)}</span>,
   },
   {
     key: "amount",
