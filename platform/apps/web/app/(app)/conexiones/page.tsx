@@ -55,7 +55,15 @@ const COLUMNS: Column<AccountRow>[] = [
     key: "media",
     header: "Publicaciones",
     align: "num",
-    render: (r) => (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined ? SIN_DATO : formatInt(r.latest.mediaCount)),
+    // Dos cifras distintas y a propósito: lo que la red dice que tiene
+    // la cuenta, y de cuántas tenemos medidas nosotros (CON-5).
+    render: (r) => {
+      const medidas = r.postsCount > 0 ? `${formatInt(r.postsCount)} con métricas` : undefined;
+      if (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined) {
+        return medidas ? <CellMain sub={medidas}>{SIN_DATO}</CellMain> : SIN_DATO;
+      }
+      return <CellMain sub={medidas}>{formatInt(r.latest.mediaCount)}</CellMain>;
+    },
   },
   {
     key: "views",
@@ -75,7 +83,14 @@ const COLUMNS: Column<AccountRow>[] = [
   {
     key: "dataAsOf",
     header: "Datos",
-    render: (r) => (r.latest ? <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} /> : <span className="text-xs text-muted">Sin lectura todavía</span>),
+    // La frescura la marca la lectura más reciente de las dos series:
+    // la de la cuenta (CON-10) y la del contenido (CON-5).
+    render: (r) => {
+      const dias = [r.latest ? `${r.latest.day}T00:00:00Z` : null, r.lastPostSnapshotAt].filter((d): d is string => d !== null);
+      if (dias.length === 0) return <span className="text-xs text-muted">Sin lectura todavía</span>;
+      const ultima = dias.reduce((a, b) => (a > b ? a : b));
+      return <DataAsOf date={ultima} source={PLATFORM_NAME[r.platformId]} />;
+    },
   },
   {
     key: "status",

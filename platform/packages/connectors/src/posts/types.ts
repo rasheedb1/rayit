@@ -18,8 +18,10 @@
  *
  * Reglas que cumplen todas las implementaciones:
  *   - lo que la API no dio es `null`, nunca `0` (normalize/values.ts);
- *   - `listRecentPosts` entrega de la más reciente hacia atrás y para
- *     en `since` o en `max`, lo que ocurra primero;
+ *   - `listRecentPosts` entrega de la más reciente hacia atrás y deja
+ *     de pedir páginas en `since` o en `max`, lo que ocurra primero;
+ *     la página donde aparece `since` se entrega ENTERA, porque ya se
+ *     pagó (ver flattenPages);
  *   - un error se traduce a `PublicLookupError` (el vocabulario que ya
  *     entienden CON-10 y la pantalla) o sale como `PlatformApiError`
  *     con su `kind`.
@@ -89,22 +91,39 @@ export interface PostSource {
 
 export const EMPTY_METRICS_RESULT: PostMetricsResult = { readings: [], missingIds: [] };
 
-/** Corta el listado en `since` y `max`, que es lo único que comparten las cuatro fuentes. */
-export async function* takeUntil(
-  items: AsyncIterable<NormalizedVideo>,
+/**
+ * Aplana las páginas de una fuente y decide cuándo dejar de pedir más.
+ *
+ * El corte es POR PÁGINA, no por elemento, porque el costo de las dos
+ * APIs es por llamada: una página ya pedida se entrega entera aunque
+ * traiga publicaciones que ya conocíamos. Eso es lo que permite que un
+ * video que entró por el archivo de TikTok Studio se fusione cuando la
+ * API lo vuelve a ver, y que los títulos y las portadas de la ventana
+ * reciente se refresquen sin gastar una llamada de más.
+ *
+ * En cuanto una página trae algo publicado en `since` o antes, no se
+ * pide la siguiente: de ahí para atrás ya está todo guardado. Como el
+ * generador de páginas es perezoso, con no pedirla basta.
+ */
+export async function* flattenPages(
+  pages: AsyncIterable<readonly NormalizedVideo[]>,
   opts: PostListOptions,
 ): AsyncIterable<NormalizedVideo> {
   const max = opts.max ?? Number.POSITIVE_INFINITY;
   const since = opts.since ?? null;
   let n = 0;
-  for await (const video of items) {
-    if (n >= max) return;
-    const at = video.post.published_at;
-    // Un post sin fecha no se descarta: no saber cuándo se publicó no es
-    // saber que es viejo. El job lo resuelve por su id.
-    if (since !== null && at !== null && at.getTime() <= since.getTime()) return;
-    n += 1;
-    yield video;
+  for await (const page of pages) {
+    let conocido = false;
+    for (const video of page) {
+      if (n >= max) return;
+      const at = video.post.published_at;
+      // Un post sin fecha no corta la ventana: no saber cuándo se
+      // publicó no es saber que ya lo teníamos.
+      if (since !== null && at !== null && at.getTime() <= since.getTime()) conocido = true;
+      n += 1;
+      yield video;
+    }
+    if (conocido) return;
   }
 }
 

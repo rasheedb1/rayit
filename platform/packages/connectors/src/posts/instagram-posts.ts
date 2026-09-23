@@ -27,7 +27,7 @@ import { INSTAGRAM_HOUSE_TOKEN_MISSING_ES, instagramHouseTokens, missingInstagra
 import { toLookupError } from '../public/tiktok-public.ts';
 import { assertHandle, PublicLookupError } from '../public/types.ts';
 import type { OAuthTokens } from '../types.ts';
-import { takeUntil, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
+import { flattenPages, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
 
 /** Medios por página. 25 es el `limit` por defecto de /me/media en CON-1 y cabe en una sola llamada. */
 export const INSTAGRAM_POSTS_PAGE = 25;
@@ -57,7 +57,7 @@ export function createInstagramPublicPostSource(
   }
 
   /** Páginas del edge, con los errores traducidos y la cuenta no legible dicha con palabras. */
-  async function* pages(target: PostSourceTarget, maxPages: number, signal?: AbortSignal): AsyncIterable<NormalizedVideo> {
+  async function* pages(target: PostSourceTarget, maxPages: number, signal?: AbortSignal): AsyncIterable<readonly NormalizedVideo[]> {
     const { ig, handle } = open(target);
     let after: string | null = null;
     for (let page = 0; page < maxPages; page++) {
@@ -70,7 +70,7 @@ export function createInstagramPublicPostSource(
       if (page === 0 && !res.data.found) {
         throw new PublicLookupError('not_discoverable', `Instagram no devolvió publicaciones de @${handle}: solo las cuentas profesionales (creador o empresa) y públicas se pueden leer por @.`);
       }
-      for (const video of res.data.items) yield video;
+      yield res.data.items;
       if (!res.data.hasMore || !res.data.cursor) return;
       after = res.data.cursor;
     }
@@ -86,7 +86,7 @@ export function createInstagramPublicPostSource(
     listRecentPosts(target: PostSourceTarget, listOpts: PostListOptions = {}): AsyncIterable<NormalizedVideo> {
       const max = listOpts.max ?? pageSize;
       const maxPages = Math.min(INSTAGRAM_POSTS_MAX_PAGES, Math.max(1, Math.ceil(max / pageSize)));
-      return takeUntil(pages(target, maxPages, listOpts.signal), listOpts);
+      return flattenPages(pages(target, maxPages, listOpts.signal), listOpts);
     },
 
     /**
@@ -100,10 +100,12 @@ export function createInstagramPublicPostSource(
       if (posts.length === 0) return { readings: [], missingIds: [] };
       const pendientes = new Set(posts.map((p) => p.externalPostId));
       const readings: PostMetricsResult['readings'] = [];
-      for await (const video of pages(target, INSTAGRAM_POSTS_MAX_PAGES, metricOpts.signal)) {
-        const id = video.post.external_post_id;
-        if (!pendientes.delete(id)) continue;
-        readings.push({ externalPostId: id, metrics: video.metrics, raw: video.raw });
+      for await (const page of pages(target, INSTAGRAM_POSTS_MAX_PAGES, metricOpts.signal)) {
+        for (const video of page) {
+          const id = video.post.external_post_id;
+          if (!pendientes.delete(id)) continue;
+          readings.push({ externalPostId: id, metrics: video.metrics, raw: video.raw });
+        }
         if (pendientes.size === 0) break;
       }
       return { readings, missingIds: [] };

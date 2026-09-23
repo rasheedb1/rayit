@@ -29,7 +29,7 @@ import { YouTubeClient, YOUTUBE_PLAYLIST_PAGE_MAX, YOUTUBE_VIDEOS_MAX } from '..
 import { GOOGLE_API_KEY_ENV } from '../public/youtube-public.ts';
 import { toLookupError } from '../public/tiktok-public.ts';
 import { assertHandle, PublicLookupError } from '../public/types.ts';
-import { chunk, takeUntil, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
+import { chunk, flattenPages, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
 
 export const GOOGLE_API_KEY_MISSING_ES = `Falta ${GOOGLE_API_KEY_ENV}: la API key del proyecto de Google Cloud para leer canales públicos.`;
 
@@ -53,44 +53,45 @@ export function youtubePostSourceOver(
     return new YouTubeClient(core, { connectionId: target.connectionId, tokens: target.tokens }, { apiKey: opts.apiKey });
   }
 
-  /** Hasta `max` videos, del más nuevo al más viejo, ya con sus contadores. */
-  async function* recientes(target: PostSourceTarget, max: number, since: Date | null, signal?: AbortSignal): AsyncIterable<NormalizedVideo> {
+  /**
+   * Páginas de videos, de la más reciente hacia atrás. Una página aquí
+   * es una página de la lista de subidas resuelta con `videos.list`:
+   * dos unidades de cuota. El generador es perezoso, así que si el
+   * consumidor deja de pedir (porque la página ya traía algo conocido),
+   * la siguiente no se paga.
+   */
+  async function* paginas(target: PostSourceTarget, max: number, signal?: AbortSignal): AsyncIterable<readonly NormalizedVideo[]> {
     const yt = open(target);
+    const donde = target.handle ?? target.externalAccountId;
     let uploads: string;
     try {
       uploads = await opts.resolveUploads(yt, target, signal);
     } catch (err) {
-      throw toLookupError(err, target.handle ?? target.externalAccountId, 'YouTube');
+      throw toLookupError(err, donde, 'YouTube');
     }
-    const ids: string[] = [];
     let pageToken: string | null = null;
-    // La lista de subidas ya viene ordenada de lo más reciente a lo más
-    // viejo: en cuanto aparece un video anterior a `since`, no hace
-    // falta pedir otra página.
-    paginas: for (let page = 0; ids.length < max; page++) {
-      let res;
+    let entregados = 0;
+    for (;;) {
+      let lista;
       try {
-        res = await yt.uploadsPlaylistItems(uploads, { pageToken, maxResults: Math.min(YOUTUBE_PLAYLIST_PAGE_MAX, max), signal });
+        lista = await yt.uploadsPlaylistItems(uploads, { pageToken, maxResults: Math.min(YOUTUBE_PLAYLIST_PAGE_MAX, Math.max(1, max - entregados)), signal });
       } catch (err) {
-        throw toLookupError(err, target.handle ?? target.externalAccountId, 'YouTube');
+        throw toLookupError(err, donde, 'YouTube');
       }
-      for (const item of res.data.items) {
-        if (since !== null && item.publishedAt !== null && item.publishedAt.getTime() <= since.getTime()) break paginas;
-        ids.push(item.videoId);
-        if (ids.length >= max) break paginas;
+      const ids = lista.data.items.map((i) => i.videoId);
+      if (ids.length === 0) return;
+      for (const lote of chunk(ids, YOUTUBE_VIDEOS_MAX)) {
+        let res;
+        try {
+          res = await yt.videosById(lote, { signal });
+        } catch (err) {
+          throw toLookupError(err, donde, 'YouTube');
+        }
+        yield res.data;
       }
-      if (!res.data.hasMore || !res.data.cursor) break;
-      pageToken = res.data.cursor;
-    }
-    if (ids.length === 0) return;
-    for (const lote of chunk(ids, YOUTUBE_VIDEOS_MAX)) {
-      let res;
-      try {
-        res = await yt.videosById(lote, { signal });
-      } catch (err) {
-        throw toLookupError(err, target.handle ?? target.externalAccountId, 'YouTube');
-      }
-      for (const video of res.data) yield video;
+      entregados += ids.length;
+      if (!lista.data.hasMore || !lista.data.cursor || entregados >= max) return;
+      pageToken = lista.data.cursor;
     }
   }
 
@@ -103,7 +104,7 @@ export function youtubePostSourceOver(
 
     listRecentPosts(target: PostSourceTarget, listOpts: PostListOptions = {}): AsyncIterable<NormalizedVideo> {
       const max = listOpts.max ?? YOUTUBE_PLAYLIST_PAGE_MAX;
-      return takeUntil(recientes(target, max, listOpts.since ?? null, listOpts.signal), listOpts);
+      return flattenPages(paginas(target, max, listOpts.signal), listOpts);
     },
 
     /** Un lote de 50 ids por unidad de cuota. Lo que no vuelve, ya no existe en la plataforma. */

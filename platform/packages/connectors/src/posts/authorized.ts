@@ -23,7 +23,7 @@ import { TikTokDisplayClient, TIKTOK_VIDEO_LIST_MAX, TIKTOK_VIDEO_QUERY_MAX } fr
 import { PublicLookupError } from '../public/types.ts';
 import { isPlatformId, type PlatformId } from '../types.ts';
 import { youtubePostSourceOver } from './youtube-posts.ts';
-import { chunk, takeUntil, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
+import { chunk, flattenPages, type PostListOptions, type PostMetricsResult, type PostRef, type PostSource, type PostSourceTarget } from './types.ts';
 
 export const NO_TOKENS_ES = 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.';
 
@@ -51,13 +51,13 @@ function tiktokAuthorizedPostSource(core: HttpCore): PostSource {
     listRecentPosts(target: PostSourceTarget, opts: PostListOptions = {}): AsyncIterable<NormalizedVideo> {
       const max = opts.max ?? TIKTOK_VIDEO_LIST_MAX;
       const tt = open(target);
-      async function* videos(): AsyncIterable<NormalizedVideo> {
+      async function* videos(): AsyncIterable<readonly NormalizedVideo[]> {
         const maxPages = Math.max(1, Math.ceil(max / TIKTOK_VIDEO_LIST_MAX));
         for await (const page of tt.iterateVideos({ maxCount: Math.min(TIKTOK_VIDEO_LIST_MAX, max), maxPages, signal: opts.signal })) {
-          for (const video of page.data.items) yield video;
+          yield page.data.items;
         }
       }
-      return takeUntil(videos(), opts);
+      return flattenPages(videos(), opts);
     },
     async postMetrics(target: PostSourceTarget, posts: readonly PostRef[], opts: { signal?: AbortSignal } = {}): Promise<PostMetricsResult> {
       if (posts.length === 0) return { readings: [], missingIds: [] };
@@ -92,13 +92,13 @@ function instagramAuthorizedPostSource(core: HttpCore): PostSource {
     listRecentPosts(target: PostSourceTarget, opts: PostListOptions = {}): AsyncIterable<NormalizedVideo> {
       const max = opts.max ?? 25;
       const ig = open(target);
-      async function* medios(): AsyncIterable<NormalizedVideo> {
+      async function* medios(): AsyncIterable<readonly NormalizedVideo[]> {
         const maxPages = Math.max(1, Math.ceil(max / 25));
         for await (const page of ig.iterateMedia({ limit: Math.min(25, max), maxPages, signal: opts.signal })) {
-          for (const video of page.data.items) yield video;
+          yield page.data.items;
         }
       }
-      return takeUntil(medios(), opts);
+      return flattenPages(medios(), opts);
     },
     /** Una llamada por medio: es lo que cuesta un insight en Instagram. El QuotaManager es quien frena. */
     async postMetrics(target: PostSourceTarget, posts: readonly PostRef[], opts: { signal?: AbortSignal } = {}): Promise<PostMetricsResult> {

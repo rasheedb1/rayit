@@ -127,10 +127,15 @@ test('instagram por @: la segunda página se pide con media.after(CURSOR) y max 
   assert.equal(b.fetch.calls.length, 1);
 });
 
-test('instagram por @: since deja de listar en el primer post ya conocido', async () => {
-  const a = await arnes(await loadFixtures('instagram', [['business_discovery.media', 'ok']]));
-  const videos = await todos(a.publicas.instagram!, target('cafealma'), { since: new Date('2026-09-18T14:30:00Z') });
-  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['1800000000000000b01'], 'el de la misma fecha ya lo teníamos');
+test('instagram por @: la página con un post ya conocido se entrega entera y no se pide la siguiente', async () => {
+  // El corte es por página, no por elemento: la página ya se pagó, así
+  // que entregarla entera no cuesta una llamada más y sí permite
+  // refrescar (y fusionar) lo que ya teníamos.
+  const a = await arnes(await loadFixtures('instagram', [['business_discovery.media', 'paginated']]));
+  const source = createInstagramPublicPostSource(a.core, ENV, { pageSize: 2 });
+  const videos = await todos(source, target('paginada'), { since: new Date('2026-09-20T10:00:00Z') });
+  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['1800000000000000p01', '1800000000000000p02']);
+  assert.equal(a.fetch.calls.length, 1, 'la segunda página no se pide: de ahí para atrás ya está todo guardado');
 });
 
 test('instagram por @: una cuenta que no se puede descubrir se explica, no se cae', async () => {
@@ -186,21 +191,38 @@ test('instagram por @: postMetrics empareja por id y no anuncia borrados', async
 
 test('youtube por @: canal → lista de subidas → videos, con duración y contadores', async () => {
   const a = await arnes([
-    ...(await loadFixtures('youtube', [['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'ok'], ['videos.list', 'ok']])),
+    ...(await loadFixtures('youtube', [['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'uploads.ok'], ['videos.list', 'canal.ok']])),
   ]);
   const videos = await todos(a.publicas.youtube!, target('NutriveOficial'));
-  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['vid00000001', 'vid00000002']);
-  assert.equal(videos[0]!.post.title, 'Receta 1 en 10 minutos');
-  assert.equal(videos[0]!.post.duration_s, 73);
-  assert.equal(videos[0]!.metrics.views, 90001);
-  assert.equal(videos[0]!.metrics.likes, 4101);
-  assert.equal(videos[0]!.metrics.comments, 211);
-  assert.equal(videos[0]!.metrics.reach, null, 'el alcance es de Analytics: pide OAuth');
-  assert.equal(videos[0]!.metrics.completion_rate, null);
+  // La lista de subidas llega de lo más nuevo a lo más viejo y el
+  // recolector conserva ese orden al pedir los videos.
+  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['vid00000003', 'vid00000002', 'vid00000001']);
+  const uno = videos[2]!;
+  assert.equal(uno.post.title, 'Receta 1 en 10 minutos');
+  assert.equal(uno.post.duration_s, 73);
+  assert.equal(uno.metrics.views, 90001);
+  assert.equal(uno.metrics.likes, 4101);
+  assert.equal(uno.metrics.comments, 211);
+  assert.equal(uno.metrics.reach, null, 'el alcance es de Analytics: pide OAuth');
+  assert.equal(uno.metrics.completion_rate, null);
+  assert.equal(videos[0]!.metrics.comments, null, 'sin commentCount los comentarios son null, no cero');
 
   assert.deepEqual(a.log.entries.map((e) => e.endpoint), ['youtube.channels.list', 'youtube.playlist_items.list', 'youtube.videos.list']);
-  assert.deepEqual(a.log.entries.map((e) => e.request_units), [1, 1, 1]);
+  assert.deepEqual(a.log.entries.map((e) => e.request_units), [1, 1, 1], 'tres unidades de cuota por canal y corrida');
   for (const call of a.fetch.calls) assert.ok(!call.url.includes(API_KEY), 'la API key se tapa en la URL registrada');
+});
+
+test('youtube por @: con un video ya conocido en la página no se pide una página más', async () => {
+  const a = await arnes(await loadFixtures('youtube', [['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'uploads.ok'], ['videos.list', 'canal.ok']]));
+  const videos = await todos(a.publicas.youtube!, target('NutriveOficial'), { since: new Date('2026-09-03T15:00:00Z') });
+  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['vid00000003', 'vid00000002', 'vid00000001']);
+  assert.deepEqual(a.log.entries.map((e) => e.endpoint), ['youtube.channels.list', 'youtube.playlist_items.list', 'youtube.videos.list'], 'una sola página de la lista de subidas');
+});
+
+test('youtube por @: max corta el listado sin pedir más páginas', async () => {
+  const a = await arnes(await loadFixtures('youtube', [['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'uploads.ok'], ['videos.list', 'canal.ok']]));
+  const videos = await todos(a.publicas.youtube!, target('NutriveOficial'), { max: 2 });
+  assert.deepEqual(videos.map((v) => v.post.external_post_id), ['vid00000003', 'vid00000002']);
 });
 
 test('youtube por @: un canal que no existe se dice con palabras', async () => {
