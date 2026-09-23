@@ -20,10 +20,11 @@ import {
   CompanyNotFound,
   ContactNotFound,
   ContactNotOwned,
+  DuplicateCompanyName,
   DuplicateDomain,
   PITCH_ACTION,
   PENDING_DEAL_NAME,
-  PITCH_DUE_DAYS,
+  PITCH_DUE_BUSINESS_DAYS,
   SignalAlreadyReviewed,
   VentasError,
   acceptSignal,
@@ -251,6 +252,36 @@ describe('VEN-1 · empresas', () => {
       () => laura((tx) => createCompany(tx, { name: 'Cafe Alma otra vez', domain: 'cafealma.co' })),
       (err: unknown) => err instanceof DuplicateDomain && err.params.name === 'Café Alma',
     );
+  });
+
+  test('el mismo nombre sin dominio avisa con la que ya existe; «Crear igual» la crea (pulido r7)', async () => {
+    const primera = await laura((tx) => createCompany(tx, { name: 'Zumos Ñandú' }));
+    // Escrito distinto (sin tildes, en mayúsculas): la misma marca para el buscador y para el radar.
+    await assert.rejects(
+      () => laura((tx) => createCompany(tx, { name: '  ZUMOS ÑANDU ' })),
+      (err: unknown) => err instanceof DuplicateCompanyName && err.params.companyId === primera && err.params.name === 'Zumos Ñandú',
+    );
+    // Con dominio nuevo, a la de antes le falta el suyo: tampoco las separa.
+    await assert.rejects(() => laura((tx) => createCompany(tx, { name: 'Zumos Ñandú', domain: 'zumosnandu.co' })), DuplicateCompanyName);
+    const contar = () =>
+      laura(async (tx) =>
+        (await tx.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM company_link cl JOIN company co ON co.id = cl.company_id WHERE brand_key(co.name) = brand_key('Zumos Ñandú')`,
+        )).rows[0]?.n,
+      );
+    assert.equal(await contar(), 1, 'nada se creó');
+
+    const segunda = await laura((tx) => createCompany(tx, { name: 'Zumos Ñandú', allowSameName: true }));
+    assert.notEqual(segunda, primera);
+    assert.equal(await contar(), 2, 'la persona dijo «Crear igual»');
+
+    // Dos «Alma» con dominios distintos son dos marcas: no se pregunta.
+    await laura((tx) => updateCompany(tx, primera, { domain: 'nandu.co' }));
+    await laura((tx) => updateCompany(tx, segunda, { domain: 'nandu.pe' }));
+    await laura((tx) => createCompany(tx, { name: 'Zumos Ñandú', domain: 'nandu.mx' }));
+    // Y el nombre de una empresa del vecino no cuenta: no se ve.
+    await ajeno((tx) => createCompany(tx, { name: 'Refrescos del Vecino' }));
+    await laura((tx) => createCompany(tx, { name: 'Refrescos del Vecino' }));
   });
 
   test('una empresa que no es mía no se puede editar', async () => {
@@ -514,10 +545,12 @@ describe('VEN-2 · radar', () => {
     const primera = await laura((tx) => importSignals(tx, filas));
     assert.equal(primera.created, 2);
     assert.equal(primera.duplicated, 0);
+    assert.deepEqual(primera.createdRows, [0, 1], 'dice QUÉ filas entraron, no solo cuántas');
 
     const segunda = await laura((tx) => importSignals(tx, filas));
     assert.equal(segunda.created, 0, 'el mismo archivo dos veces no crea nada nuevo');
     assert.equal(segunda.duplicated, 2);
+    assert.deepEqual(segunda.createdRows, [], 'ninguna fila entró: la pantalla no puede avisar de una que «entró»');
 
     const bandeja = await laura((tx) => listSignals(tx, { limit: 200 }));
     const arepas = bandeja.filter((s) => s.headlineEs.includes('Arepas del Parque') || s.headlineEs === 'Abrió sede nueva');
@@ -616,6 +649,7 @@ describe('VEN-2 · radar', () => {
     const conDominio = await laura((tx) =>
       importSignals(tx, [{ name: 'Panaderia Trigal', domain: 'trigal.co' }, { name: 'Panadería Trigal' }]));
     assert.equal(conDominio.created, 0, 'ni con dominio ni repetida en el mismo archivo');
+    assert.deepEqual(conDominio.createdRows, []);
     const otra = await laura((tx) => createSignal(tx, { companyName: 'Trigal', headlineEs: 'Otra marca, otro nombre' }));
     assert.equal(otra.duplicate, false, 'un nombre distinto es otra marca');
   });
@@ -646,17 +680,49 @@ describe('VEN-2 · radar', () => {
     assert.equal(res.dealCreated, true);
 
     const fila = await laura(async (tx) =>
-      (await tx.query<{ next_action: string; stage_id: string; hora: number; dias: number }>(
+      (await tx.query<{ next_action: string; stage_id: string; hora: number; dow: number; habiles: number }>(
         `SELECT next_action, stage_id,
                 extract(hour FROM next_action_due AT TIME ZONE 'America/Bogota')::int AS hora,
-                ((next_action_due AT TIME ZONE 'America/Bogota')::date - (now() AT TIME ZONE 'America/Bogota')::date)::int AS dias
+                extract(isodow FROM next_action_due AT TIME ZONE 'America/Bogota')::int AS dow,
+                (SELECT count(*)::int
+                   FROM generate_series((now() AT TIME ZONE 'America/Bogota')::date + 1,
+                                        (next_action_due AT TIME ZONE 'America/Bogota')::date, interval '1 day') AS dia
+                  WHERE extract(isodow FROM dia) < 6) AS habiles
            FROM deal WHERE id = $1`, [res.dealId],
       )).rows[0],
     );
     assert.equal(fila?.stage_id, 'nuevo');
     assert.equal(fila?.next_action, 'Mandar propuesta', 'la frase la pone la pantalla');
     assert.equal(fila?.hora, 15, 'a las 15:00 en Bogotá, no a las 15:00 UTC');
-    assert.equal(fila?.dias, PITCH_DUE_DAYS);
+    assert.ok((fila?.dow ?? 7) <= 5, 'vence un día hábil');
+    assert.equal(fila?.habiles, PITCH_DUE_BUSINESS_DAYS, 'a tres días HÁBILES, como el seguimiento de una cotización');
+  });
+
+  test('«Enviar pitch» cuenta días hábiles: una señal aceptada el miércoles vence el lunes, no el sábado (pulido r7)', async () => {
+    // Miércoles 23 de septiembre de 2026, 10:00 en Bogotá. Con días de
+    // calendario el pitch caía el sábado 26 a las 15:00 y el lunes el
+    // tablero decía «Vencido».
+    const miercoles = new Date('2026-09-23T15:00:00Z');
+    const hora = (id: string) =>
+      laura(async (tx) =>
+        (await tx.query<{ local: string }>(
+          `SELECT to_char(next_action_due AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD HH24:MI') AS local FROM deal WHERE id = $1`, [id],
+        )).rows[0]?.local,
+      );
+
+    const senal = await laura((tx) => createSignal(tx, { companyName: 'Lácteos Andinos', headlineEs: 'Lanza yogur griego en Medellín' }));
+    assert.ok(senal.id);
+    const aceptada = await laura((tx) => acceptSignal(tx, senal.id!, { now: miercoles }));
+    assert.equal(aceptada.dealCreated, true);
+    assert.equal(await hora(aceptada.dealId), '2026-09-28 15:00', 'desde el radar: el lunes a las 15:00');
+
+    const aMano = await laura((tx) => createDeal(tx, { companyId: aceptada.companyId, name: 'Otra campaña', now: miercoles }));
+    assert.equal(await hora(aMano), '2026-09-28 15:00', 'desde la ficha: la misma cuenta');
+
+    // Un viernes cuenta lunes, martes y miércoles.
+    const viernes = await laura((tx) =>
+      createDeal(tx, { companyId: aceptada.companyId, name: 'La del viernes', now: new Date('2026-09-25T15:00:00Z') }));
+    assert.equal(await hora(viernes), '2026-09-30 15:00');
   });
 
   test('una marca aceptada admite una señal nueva; la MISMA señal repetida avisa que ya es un negocio', async () => {
@@ -792,7 +858,7 @@ describe('VEN-3 · pipeline', () => {
     ];
     for (const [i, caso] of casos.entries()) {
       const companyId = await laura((tx) => createCompany(tx, { name: `Marca Relación ${i}`, relationship: caso.relationship }));
-      const dealId = await laura((tx) => createDeal(tx, { companyId, name: 'Un trabajo' }));
+      const dealId = await laura((tx) => createDeal(tx, { companyId, name: 'Un trabajo', amount: '1000000' }));
       const abierto = await laura((tx) => moveDeal(tx, dealId, 'propuesta'));
       assert.equal(abierto.companyPromoted, false, 'un negocio abierto no toca la relación');
       const ganado = await laura((tx) => moveDeal(tx, dealId, 'ganado'));
@@ -808,6 +874,45 @@ describe('VEN-3 · pipeline', () => {
     assert.equal(await laura((tx) => promoteCompanyOnWin(tx, dealAbierto)), false);
     assert.equal(await laura((tx) => promoteCompanyOnWin(tx, 'no-es-uuid')), false);
     assert.equal((await laura((tx) => getCompany(tx, abierta)))?.relationship, 'prospect');
+  });
+
+  test('ganar un negocio sin monto pide el monto: sin él no se mueve, con él cuadran el conteo y la suma (pulido r7)', async () => {
+    const companyId = await laura((tx) => createCompany(tx, { name: 'Marca Sin Monto' }));
+    const dealId = await laura((tx) => createDeal(tx, { companyId, name: 'Recién aceptado' }));
+    const antes = await laura((tx) => getSalesKpis(tx));
+
+    await assert.rejects(
+      () => laura((tx) => moveDeal(tx, dealId, 'ganado')),
+      (err: unknown) => err instanceof VentasError && err.code === 'AmountRequired',
+    );
+    const sigue = await laura(async (tx) =>
+      (await tx.query<{ stage_id: string; won_at: string | null; historia: number }>(
+        `SELECT d.stage_id, d.won_at, (SELECT count(*)::int FROM deal_stage_history WHERE deal_id = d.id) AS historia
+           FROM deal d WHERE d.id = $1`, [dealId],
+      )).rows[0],
+    );
+    assert.deepEqual(sigue, { stage_id: 'nuevo', won_at: null, historia: 1 }, 'nada quedó escrito');
+    assert.equal((await laura((tx) => getCompany(tx, companyId)))?.relationship, 'prospect', 'ni la relación subió');
+
+    const ganado = await laura((tx) => moveDeal(tx, dealId, 'ganado', { amount: '3200000' }));
+    assert.equal(ganado.isWon, true);
+    assert.equal(ganado.amountTo, '3200000.00');
+    const despues = await laura((tx) => getSalesKpis(tx));
+    assert.equal(despues.wonQuarterCount, antes.wonQuarterCount + 1);
+    assert.equal(Number(despues.wonQuarter) - Number(antes.wonQuarter), 3200000, 'la suma sube con el conteo');
+    assert.equal(despues.wonQuarterNoAmountCount, antes.wonQuarterNoAmountCount);
+
+    // Un ganado sin monto de antes de la regla (escrito por fuera de
+    // moveDeal) se cuenta aparte: la pantalla dice «N cerrados, M sin monto».
+    const viejo = await laura((tx) => createDeal(tx, { companyId, name: 'Ganado sin monto, de antes' }));
+    await t.admin(`UPDATE deal SET stage_id = 'ganado', won_at = now() WHERE id = '${viejo}'`);
+    const conViejo = await laura((tx) => getSalesKpis(tx));
+    assert.equal(conViejo.wonQuarterNoAmountCount, despues.wonQuarterNoAmountCount + 1);
+    assert.equal(conViejo.wonQuarterCount, despues.wonQuarterCount + 1);
+    assert.equal(conViejo.wonQuarter, despues.wonQuarter);
+    // Se deja fuera del trimestre para las pruebas de KPI que siguen.
+    await t.admin(`UPDATE deal SET stage_id = 'perdido', won_at = NULL, lost_at = now(), lost_reason = 'otro' WHERE id = '${viejo}'`);
+    await laura((tx) => moveDeal(tx, dealId, 'negociacion'));
   });
 
   test('un negocio ganado del vecino no sube la relación de Laura con la misma marca', async () => {

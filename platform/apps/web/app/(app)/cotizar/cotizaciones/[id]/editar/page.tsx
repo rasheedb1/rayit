@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { Suspense } from "react";
 import { rateToPct } from "@mc/core";
 import {
-  getCurrentRateCard, getDefaultTaxRate, getMediaKitById, getQuote, getQuoteStatus, listShareableMediaKits, type MediaKitAdjuntable,
+  getCurrentRateCard, getDefaultTaxRate, getMediaKitById, getQuote, listShareableMediaKits, type MediaKitAdjuntable,
 } from "@mc/db/queries/cotizar";
 import { PageHeader } from "@/components/page-header";
 import { withWorkspace } from "@/lib/db";
@@ -11,7 +10,6 @@ import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { editarCotizacion } from "../../../actions";
 import { MESSAGES } from "../../../messages";
-import { EsqueletoLista } from "../../../_ui/esqueleto-lista";
 import { CotizacionForm } from "../../nueva/form";
 
 export const metadata: Metadata = { title: "Editar cotización" };
@@ -21,23 +19,14 @@ export const dynamic = "force-dynamic";
  * Editar un borrador con el mismo formulario de la nueva. Corregir un
  * precio no quema otro número COT-AAAA-NNN. Una enviada ya no se edita:
  * se vuelve a su detalle.
+ *
+ * El 404 y la vuelta al detalle los decide layout.tsx, fuera del
+ * esqueleto de loading.tsx: dentro, ni el 404 ni la redirección serían
+ * de verdad (pulido r5 y r7). Aquí se repiten solo por si el borrador
+ * cambió entre las dos lecturas.
  */
 export default async function EditarCotizacionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  // Un id desconocido es un 404, y una enviada vuelve a su detalle, antes
-  // de abrir el <Suspense>: dentro, ni el 404 ni la redirección serían
-  // de verdad (pulido r5).
-  const status = await withWorkspace((tx) => getQuoteStatus(tx, id));
-  if (status === null) notFound();
-  if (status !== "draft") redirect(`/cotizar/cotizaciones/${id}?error=QuoteNotEditable`);
-  return (
-    <Suspense fallback={<EsqueletoLista label={MESSAGES.loading.editar} filas={4} />}>
-      <EditarCotizacion id={id} />
-    </Suspense>
-  );
-}
-
-async function EditarCotizacion({ id }: { id: string }) {
   const t = MESSAGES.nueva;
   const ws = await getCurrentWorkspace();
 

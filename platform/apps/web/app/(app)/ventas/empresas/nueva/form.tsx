@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { crearEmpresa, editarEmpresa } from "../../actions";
@@ -25,7 +26,9 @@ export interface EmpresaEditable {
 /**
  * «Nueva empresa». Si sale bien, la acción redirige a la ficha; aquí
  * solo se ven los errores. Un dominio que ya es de otra empresa del
- * espacio se marca en su campo, con el nombre de la que ya existe.
+ * espacio se marca en su campo, con el nombre de la que ya existe. Un
+ * nombre que ya está en el CRM (sin dominio que las separe) no se crea
+ * a ciegas: se avisa con enlace a la que existe y «Crear igual».
  */
 export function NuevaEmpresaForm({ countries }: { countries: CountryOption[] }) {
   return <EmpresaForm countries={countries} />;
@@ -60,7 +63,7 @@ export function EmpresaForm({
 }) {
   const t = MESSAGES.empresas.form;
   const editing = company !== undefined;
-  const { state, pending, formRef, onSubmit, errors } = useVentasForm(editing ? editarEmpresa : crearEmpresa, (s) =>
+  const { state, pending, formRef, onSubmit, resubmit, errors } = useVentasForm(editing ? editarEmpresa : crearEmpresa, (s) =>
     onSaved?.(s.notice ?? t.saved),
   );
   const soloNotas = editing && !company.isOwn;
@@ -79,6 +82,20 @@ export function EmpresaForm({
       {editing && <input type="hidden" name="companyId" value={company.id} />}
       {soloNotas && <input type="hidden" name="scope" value="notes" />}
       <Aviso message={state.message} />
+      {!editing && state.sameName && (
+        <div role="status" className="rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-sm text-ink">
+          <p>{t.sameName.title(state.sameName.name)}</p>
+          <p className="mt-1 text-xs leading-5 text-ink-2">{t.sameName.help}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Link href={`/ventas/empresas/${state.sameName.id}`} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+              {t.sameName.see(state.sameName.name)}
+            </Link>
+            <Button size="sm" variant="secondary" loading={pending} onClick={() => resubmit({ sameName: "1" })}>
+              {t.sameName.createAnyway}
+            </Button>
+          </div>
+        </div>
+      )}
       {soloNotas && <p className="text-xs leading-5 text-muted">{t.notOwn}</p>}
       <div className={grid}>
         {!soloNotas && (

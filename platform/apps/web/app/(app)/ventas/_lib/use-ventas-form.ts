@@ -37,5 +37,17 @@ export function useVentasForm(
     startTransition(() => dispatch(data));
   }
 
-  return { state, pending, formRef, onSubmit, errors: state.errors ?? {} };
+  /**
+   * Reenviar el formulario con algún campo de más, sin que la persona
+   * lo escriba: «Crear igual» manda lo mismo con `sameName=1`.
+   */
+  function resubmit(extra: Record<string, string>) {
+    const form = formRef.current;
+    if (!form) return;
+    const data = new FormData(form);
+    for (const [k, v] of Object.entries(extra)) data.set(k, v);
+    startTransition(() => dispatch(data));
+  }
+
+  return { state, pending, formRef, onSubmit, resubmit, errors: state.errors ?? {} };
 }

@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 import { getMediaKitById } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
 import { withWorkspace } from "@/lib/db";
-import { MESSAGES } from "../../messages";
-import { MediaKitVista } from "../../_ui/media-kit-vista";
+import { MESSAGES } from "../../../messages";
+import { MediaKitVista } from "../../../_ui/media-kit-vista";
 
 export const metadata: Metadata = { title: "Vista previa del media kit" };
 export const dynamic = "force-dynamic";
@@ -14,6 +14,10 @@ export const dynamic = "force-dynamic";
  * con la sesión del creador y no pasa por public_media_kit(): revisar
  * tu propio kit no suma una visita al contador que le enseñas a la
  * marca, ni pide la contraseña que tú mismo pusiste.
+ *
+ * Que exista lo comprueba layout.tsx, fuera del esqueleto de
+ * loading.tsx (pulido r7); aquí se repite solo por si se borró entre
+ * las dos lecturas.
  */
 export default async function VistaPreviaMediaKitPage({ params }: { params: Promise<{ id: string }> }) {
   const t = MESSAGES.mediaKit.vistaPrevia;

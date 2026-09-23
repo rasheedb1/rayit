@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
-import { getQuote, getQuoteStatus, type QuoteItemRow } from "@mc/db/queries/cotizar";
+import { getQuote, type QuoteItemRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -11,18 +10,17 @@ import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from "../../actions";
-import { CopiarEnlace } from "../../copiar-enlace";
-import { MESSAGES, mensajeDeError } from "../../messages";
-import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
-import { estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
-import { ConfirmarAccion } from "../../_ui/confirmar-accion";
-import { EsqueletoLista } from "../../_ui/esqueleto-lista";
-import { ResumenTotales } from "../../_ui/resumen-totales";
-import { AvisoEnviada } from "./aviso-enviada";
-import { EliminarBorrador } from "./eliminar";
-import { EnviarCotizacion } from "./enviar";
-import { VentanaCampana } from "./ventana";
+import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from "../../../actions";
+import { CopiarEnlace } from "../../../copiar-enlace";
+import { MESSAGES, mensajeDeError } from "../../../messages";
+import { etiquetaImpuesto, lineasAcordado } from "../../../_lib/acordado";
+import { estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../../_lib/estado";
+import { ConfirmarAccion } from "../../../_ui/confirmar-accion";
+import { ResumenTotales } from "../../../_ui/resumen-totales";
+import { AvisoEnviada } from "../aviso-enviada";
+import { EliminarBorrador } from "../eliminar";
+import { EnviarCotizacion } from "../enviar";
+import { VentanaCampana } from "../ventana";
 
 export const metadata: Metadata = { title: "Cotización" };
 
@@ -41,22 +39,13 @@ type Props = {
 };
 
 /**
- * Primero una sola fila —¿existe la cotización en este espacio?— y, si
- * no, notFound() antes de que salga nada: 404 de verdad, sin loading.tsx
- * por encima. Después, el detalle detrás de un esqueleto, para que al
- * llegar desde la lista se vea que carga (pulido r5).
+ * El detalle de una cotización. Que exista en este espacio ya lo
+ * comprobó layout.tsx, FUERA del esqueleto de loading.tsx: por eso un id
+ * desconocido es un 404 de verdad y, aun así, al llegar desde la lista
+ * se ve que carga (pulido r7). Los dos viven en el grupo (detalle), que
+ * no cambia la URL y no envuelve a /editar ni a /vista.
  */
 export default async function CotizacionPage({ params, searchParams }: Props) {
-  const { id } = await params;
-  if ((await withWorkspace((tx) => getQuoteStatus(tx, id))) === null) notFound();
-  return (
-    <Suspense fallback={<EsqueletoLista label={MESSAGES.loading.cotizacion} filas={4} />}>
-      <CotizacionDetalle params={params} searchParams={searchParams} />
-    </Suspense>
-  );
-}
-
-async function CotizacionDetalle({ params, searchParams }: Props) {
   const t = MESSAGES.detalle;
   const { id } = await params;
   // ?error= lleva un CÓDIGO; el texto sale de messages.ts. Un código que
@@ -72,6 +61,7 @@ async function CotizacionDetalle({ params, searchParams }: Props) {
   const f = formatterFor(ws);
 
   const quote = await withWorkspace((tx) => getQuote(tx, id));
+  // Se borró (un borrador) entre la comprobación del layout y esta lectura.
   if (!quote) notFound();
 
   const pill = pillDeCotizacion(estadoVisible(quote));

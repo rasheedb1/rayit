@@ -674,9 +674,11 @@ export const MESSAGES = {
     cotizaciones: "Cargando las cotizaciones",
     mediaKits: "Cargando los media kits",
     nueva: "Cargando la nueva cotización",
-    /** El detalle y la edición, detrás de su <Suspense> (pulido r5). */
+    /** El detalle, la edición y las vistas previas: su loading.tsx, debajo del layout que comprueba el id (pulido r7). */
     cotizacion: "Cargando la cotización",
     editar: "Cargando el borrador",
+    vistaPrevia: "Cargando la vista previa",
+    mediaKit: "Cargando el media kit",
   },
 
   /**

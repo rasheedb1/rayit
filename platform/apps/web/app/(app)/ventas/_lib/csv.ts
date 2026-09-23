@@ -42,11 +42,21 @@ export interface CsvLineError {
   message: string;
 }
 
+/** Un aviso de una fila que se lee bien pero con un dato que no se pudo usar. */
+export interface CsvRowWarning extends CsvLineError {
+  /**
+   * El índice de su fila en `rows` (desde 0). Un aviso solo se enseña si
+   * esa fila entró de verdad (importSignals → createdRows): de una fila
+   * repetida que no entró no se puede decir «la marca entró sin país».
+   */
+  row: number;
+}
+
 export interface ParsedBrandCsv {
   rows: ImportSignalRow[];
   errors: CsvLineError[];
-  /** Filas que entraron, pero con un dato que no se pudo usar (un país desconocido). */
-  warnings: CsvLineError[];
+  /** Filas que se pueden cargar, pero con un dato que no se pudo usar (un país desconocido). */
+  warnings: CsvRowWarning[];
   /** Hubo cabecera y se usó para ubicar las columnas. */
   hasHeader: boolean;
 }
@@ -171,7 +181,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   const body = hasHeader ? records.slice(1) : records;
   const rows: ImportSignalRow[] = [];
   const errors: CsvLineError[] = [];
-  const warnings: CsvLineError[] = [];
+  const warnings: CsvRowWarning[] = [];
   const cell = (cells: string[], col: Column) => {
     const i = index[col];
     const v = i === undefined ? "" : (cells[i] ?? "").trim();
@@ -197,7 +207,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
     }
     const pais = cell(record.cells, "country");
     const country = pais === null ? null : countryCode(pais);
-    if (pais !== null && country === null) warnings.push({ line: record.line, message: T.unknownCountry(pais) });
+    if (pais !== null && country === null) warnings.push({ line: record.line, message: T.unknownCountry(pais), row: rows.length });
     rows.push({
       name,
       domain: cell(record.cells, "domain"),

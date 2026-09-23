@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const updateCompany = vi.fn();
 const updateContact = vi.fn();
 const moveDeal = vi.fn();
+const importSignals = vi.fn();
+const createCompany = vi.fn();
 const revalidatePath = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
@@ -19,10 +21,12 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
   updateCompany: (...a: unknown[]) => updateCompany(...a),
   updateContact: (...a: unknown[]) => updateContact(...a),
   moveDeal: (...a: unknown[]) => moveDeal(...a),
+  importSignals: (...a: unknown[]) => importSignals(...a),
+  createCompany: (...a: unknown[]) => createCompany(...a),
 }));
 
-import { CompanyNotEditable, ContactNotOwned, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
-import { cambiarRelacion, editarContacto, editarEmpresa, moverNegocio } from "./actions";
+import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
+import { cambiarRelacion, cargarLista, crearEmpresa, editarContacto, editarEmpresa, moverNegocio } from "./actions";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
 const CONTACT = "00000007-0000-4000-8000-000000000001";
@@ -42,6 +46,8 @@ beforeEach(() => {
   updateCompany.mockReset().mockResolvedValue(undefined);
   updateContact.mockReset().mockResolvedValue(undefined);
   moveDeal.mockReset().mockResolvedValue({});
+  importSignals.mockReset();
+  createCompany.mockReset().mockResolvedValue(COMPANY);
   revalidatePath.mockReset();
 });
 
@@ -144,7 +150,7 @@ describe("el país de la ficha (pulido r6)", () => {
 
 describe("moverNegocio", () => {
   it("pasa el motivo de la pérdida a moveDeal", async () => {
-    const r = await moverNegocio(DEAL, "perdido", "precio");
+    const r = await moverNegocio(DEAL, "perdido", { lostReason: "precio" });
     expect(r).toEqual({ ok: true });
     expect(moveDeal).toHaveBeenCalledWith({}, DEAL, "perdido", expect.objectContaining({ lostReason: "precio" }));
     const { quoteClosedActivity } = moveDeal.mock.calls[0]![3] as { quoteClosedActivity: (n: string) => string };
@@ -153,13 +159,13 @@ describe("moverNegocio", () => {
 
   it("perder un negocio con cotización enviada devuelve cuál se cerró, para decirlo en el aviso", async () => {
     moveDeal.mockResolvedValue({ closedQuotes: [{ id: "q1", number: "COT-2026-007" }] });
-    const r = await moverNegocio(DEAL, "perdido", "precio");
+    const r = await moverNegocio(DEAL, "perdido", { lostReason: "precio" });
     expect(r).toEqual({ ok: true, closedQuotes: ["COT-2026-007"] });
     expect(revalidatePath).toHaveBeenCalledWith("/cotizar", "layout");
   });
 
   it("un motivo que no existe no llega a la base", async () => {
-    const r = await moverNegocio(DEAL, "perdido", "me cayó mal");
+    const r = await moverNegocio(DEAL, "perdido", { lostReason: "me cayó mal" });
     expect(r.ok).toBe(false);
     expect(moveDeal).not.toHaveBeenCalled();
   });
@@ -168,5 +174,67 @@ describe("moverNegocio", () => {
     moveDeal.mockRejectedValue(new VentasError("LostReasonRequired"));
     const r = await moverNegocio(DEAL, "perdido");
     expect(r).toEqual({ ok: false, message: "Di por qué lo pierdes antes de pasarlo a «Perdido»." });
+  });
+
+  it("ganar con el monto que se escribió en la tarjeta lo pasa a moveDeal (pulido r7)", async () => {
+    const r = await moverNegocio(DEAL, "ganado", { amount: "3200000.00" });
+    expect(r).toEqual({ ok: true });
+    expect(moveDeal).toHaveBeenCalledWith({}, DEAL, "ganado", expect.objectContaining({ amount: "3200000.00" }));
+  });
+
+  it("un monto que no es un número no llega a la base", async () => {
+    const r = await moverNegocio(DEAL, "ganado", { amount: "-5" });
+    expect(r).toEqual({ ok: false, message: "El monto no es válido: solo números, con hasta dos decimales." });
+    expect(moveDeal).not.toHaveBeenCalled();
+  });
+
+  it("ganar sin monto: la base no lo mueve y se dice por qué", async () => {
+    moveDeal.mockRejectedValue(new VentasError("AmountRequired"));
+    const r = await moverNegocio(DEAL, "ganado");
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("Di por cuánto lo ganaste");
+  });
+});
+
+describe("cargarLista (pulido r7)", () => {
+  // Cuatro marcas; la línea 5 trae un país que no se reconoce.
+  const csv = "marca;dominio;país\nCafé Alma;cafealma.co;CO\nFresko;fresko.co;CO\nVitalé;vitale.co;CO\nNutrivé;nutrive.co;Narnia\n";
+  const pegar = () => cargarLista({}, form({ pasted: csv }));
+
+  it("la primera carga avisa de la fila que entró sin país", async () => {
+    importSignals.mockResolvedValue({ created: 4, duplicated: 0, duplicatedKeys: [], createdRows: [0, 1, 2, 3] });
+    const r = await pegar();
+    expect(r.notice).toBe("Entraron 4 marcas nuevas.");
+    expect(r.lineWarnings).toEqual([{ line: 5, message: expect.stringContaining("La marca entró sin país") }]);
+  });
+
+  it("la misma lista otra vez no dice «entró con un aviso» de una fila que no entró", async () => {
+    importSignals.mockResolvedValue({ created: 0, duplicated: 4, duplicatedKeys: ["a", "b", "c", "d"], createdRows: [] });
+    const r = await pegar();
+    expect(r.notice).toBe("No entró ninguna marca nueva: las 4 ya estaban en el radar.");
+    expect(r.lineWarnings).toBeUndefined();
+  });
+
+  it("si solo entran algunas, avisa solo de esas", async () => {
+    importSignals.mockResolvedValue({ created: 1, duplicated: 3, duplicatedKeys: ["a", "b", "c"], createdRows: [0] });
+    expect((await pegar()).lineWarnings).toBeUndefined();
+    importSignals.mockResolvedValue({ created: 1, duplicated: 3, duplicatedKeys: ["a", "b", "c"], createdRows: [3] });
+    expect((await pegar()).lineWarnings).toEqual([{ line: 5, message: expect.stringContaining("Narnia") }]);
+  });
+});
+
+describe("crearEmpresa con un nombre que ya está en el CRM (pulido r7)", () => {
+  const nueva = { name: "Zumos Ñandú", domain: "", country: "", city: "", industry: "", relationship: "prospect", notes: "" };
+
+  it("no la crea a ciegas: vuelve con la que ya existe para enlazarla", async () => {
+    createCompany.mockRejectedValue(new DuplicateCompanyName("Zumos Ñandú", COMPANY));
+    const r = await crearEmpresa({}, form(nueva));
+    expect(r).toEqual({ sameName: { id: COMPANY, name: "Zumos Ñandú" } });
+    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ name: "Zumos Ñandú", allowSameName: false }));
+  });
+
+  it("«Crear igual» reenvía lo mismo con permiso para repetir el nombre", async () => {
+    await crearEmpresa({}, form({ ...nueva, sameName: "1" }));
+    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ allowSameName: true }));
   });
 });

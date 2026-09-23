@@ -131,7 +131,7 @@ describe("el país de una lista", () => {
     ]);
     expect(r.errors).toEqual([]);
     expect(r.warnings).toEqual([
-      { line: 2, message: "País no reconocido: «Narnia». La marca entró sin país; usa el nombre o el código de dos letras (CO)." },
+      { line: 2, row: 0, message: "País no reconocido: «Narnia». La marca entró sin país; usa el nombre o el código de dos letras (CO)." },
     ]);
   });
 });

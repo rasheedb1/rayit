@@ -1,24 +1,22 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
-import { companyInCrm, getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
+import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { ModuleTabs } from "../../_componentes/pestanas";
-import { withWorkspace } from "../../_lib/db";
-import { RELATIONSHIP_META, lostReasonText, pillForDue } from "../../_lib/estado";
-import { MESSAGES } from "../../_lib/messages";
-import { countryOptions } from "../../_lib/paises";
-import { quoteHref } from "../../_pipeline/vista";
-import { Contactos } from "./contactos";
-import { DatosEmpresa } from "./datos";
-import { EsqueletoFicha } from "./esqueleto";
-import { NuevoNegocio } from "./negocio";
-import { RelacionForm } from "./relacion";
+import { ModuleTabs } from "../../../_componentes/pestanas";
+import { withWorkspace } from "../../../_lib/db";
+import { RELATIONSHIP_META, lostReasonText, pillForDue } from "../../../_lib/estado";
+import { MESSAGES } from "../../../_lib/messages";
+import { countryOptions } from "../../../_lib/paises";
+import { quoteHref } from "../../../_pipeline/vista";
+import { Contactos } from "../contactos";
+import { DatosEmpresa } from "../datos";
+import { NuevoNegocio } from "../negocio";
+import { RelacionForm } from "../relacion";
 
 export const metadata: Metadata = { title: MESSAGES.empresas.detail.metaTitle };
 export const dynamic = "force-dynamic";
@@ -33,33 +31,16 @@ export const dynamic = "force-dynamic";
  * negocio → cotización → campaña → factura son VEN-5 y llegan en el
  * sprint 3; esta ficha es la base sobre la que se montan.
  *
- * Carga en dos tiempos. Primero, una sola fila: ¿está esta empresa en
- * el CRM del espacio? Si no (no existe, o es de otro espacio: RLS la
- * esconde igual), notFound() antes de que salga nada, y la respuesta es
- * un 404 de verdad (not-found.tsx; por eso no hay loading.tsx encima).
- * Después, la ficha entera detrás de un esqueleto: al llegar desde la
- * lista se ve que carga en vez de quedarse la pantalla anterior quieta.
+ * Carga en dos tiempos. Primero, layout.tsx: una sola fila —¿está esta
+ * empresa en el CRM del espacio?— y, si no (no existe, o es de otro
+ * espacio: RLS la esconde igual), notFound() antes de que salga nada: un
+ * 404 de verdad (../not-found.tsx). Después, esta página, con el
+ * esqueleto de loading.tsx mientras lee: loading.tsx envuelve a la
+ * página y no al layout, así que el esqueleto nunca adelanta el 200
+ * (pulido r7; antes era un <Suspense> dentro de la página).
  */
 export default async function EmpresaPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const existe = await withWorkspace((tx) => companyInCrm(tx, id));
-  if (!existe) notFound();
-
-  return (
-    <>
-      <nav aria-label={MESSAGES.empresas.detail.breadcrumb} className="mb-2 text-xs text-muted">
-        <Link href="/ventas/empresas" className="hover:text-ink hover:underline">
-          ← {MESSAGES.empresas.back}
-        </Link>
-      </nav>
-      <Suspense fallback={<EsqueletoFicha />}>
-        <Ficha id={id} />
-      </Suspense>
-    </>
-  );
-}
-
-async function Ficha({ id }: { id: string }) {
   const t = MESSAGES.empresas;
 
   const { company, contacts, deals, owners } = await withWorkspace(async (tx) => {

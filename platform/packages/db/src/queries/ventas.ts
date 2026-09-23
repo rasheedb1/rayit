@@ -84,6 +84,8 @@ export const VENTAS_ERROR_CODES = [
   'InvalidSource',
   'InvalidStage',
   'LostReasonRequired',
+  'AmountRequired',
+  'DuplicateCompanyName',
   'SignalAlreadyReviewed',
   'SignalNotFound',
   'SignalWithoutCompany',
@@ -152,6 +154,20 @@ export class SignalAlreadyReviewed extends VentasError {
 export class DuplicateDomain extends VentasError {
   constructor(name: string) {
     super('DuplicateDomain', { name });
+  }
+}
+
+/**
+ * Ya hay en el CRM de este workspace una empresa con el mismo nombre
+ * (brand_key: sin tildes, mayúsculas ni signos, «Zumos Ñandú» =
+ * «ZUMOS ÑANDU») y sin un dominio distinto que las separe.
+ * `params.name` y `params.companyId` dicen cuál, para enlazarla. No es
+ * un error de verdad: la pantalla ofrece «Crear igual»
+ * (CreateCompanyInput.allowSameName).
+ */
+export class DuplicateCompanyName extends VentasError {
+  constructor(name: string, companyId: string) {
+    super('DuplicateCompanyName', { name, companyId });
   }
 }
 
@@ -320,6 +336,12 @@ export interface SalesKpis {
   /** Ganados en el trimestre en curso (won_at). */
   wonQuarter: string;
   wonQuarterCount: number;
+  /**
+   * De esos, los que no tienen monto (ganados antes de que «Ganado» lo
+   * pidiera, pulido r7): el conteo sube y la suma no, y la pantalla lo
+   * dice para que las dos cifras cuadren.
+   */
+  wonQuarterNoAmountCount: number;
   /** Abiertos sin siguiente acción: la fila que hay que arreglar. */
   noNextActionCount: number;
   /** Abiertos con la siguiente acción vencida. */
@@ -494,6 +516,12 @@ export interface CreateCompanyInput {
   relationship?: Relationship;
   notes?: string | null;
   ownerUserId?: string | null;
+  /**
+   * Crear aunque el CRM ya tenga una empresa con el mismo nombre (dos
+   * «Alma» de dos países). Sin él, createCompany lanza
+   * DuplicateCompanyName y la pantalla pregunta antes.
+   */
+  allowSameName?: boolean;
 }
 
 /**
@@ -504,6 +532,13 @@ export interface CreateCompanyInput {
  * para el catálogo y lo que evita dos «Café Alma» con la misma web;
  * pero si ya está vinculada a este workspace, se avisa, porque quien la
  * está creando no la encontró y probablemente escribió mal el nombre.
+ *
+ * Sin dominio, el dominio no puede avisar de nada: por eso, antes de
+ * crear una empresa NUEVA, se busca el nombre (brand_key, la misma
+ * normalización sin tildes que el radar) entre las empresas del CRM.
+ * Si hay una y el dominio no las separa (a una de las dos le falta),
+ * DuplicateCompanyName, salvo `allowSameName` (pulido r7: quedaban dos
+ * «Zumos Ñandú» en la lista sin ningún aviso).
  *
  * El responsable (company_link.owner_user_id) es el que se pida o, si
  * no se pide ninguno, quien la crea: la persona de la transacción
@@ -529,6 +564,21 @@ export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput):
       if (linked.rows.length > 0) throw new DuplicateDomain(found.name);
       companyId = found.id;
     }
+  }
+
+  if (!companyId && !input.allowSameName) {
+    const mismoNombre = await tx.query<{ id: string; name: string }>(
+      `SELECT co.id, co.name
+         FROM company_link cl
+         JOIN company co ON co.id = cl.company_id
+        WHERE brand_key(co.name) = brand_key($1)
+          AND ($2::text IS NULL OR co.domain IS NULL)
+        ORDER BY cl.created_at ASC
+        LIMIT 1`,
+      [name, domain],
+    );
+    const previa = mismoNombre.rows[0];
+    if (previa) throw new DuplicateCompanyName(previa.name, previa.id);
   }
 
   if (!companyId) {
@@ -1206,6 +1256,12 @@ export interface ImportSignalsResult {
   duplicated: number;
   /** Clave de cada fila que ya existía, en el orden del archivo. */
   duplicatedKeys: string[];
+  /**
+   * El índice (en `rows`, desde 0) de cada fila que entró DE VERDAD, en
+   * orden. La pantalla lo usa para no decir «entró con un aviso» de una
+   * fila repetida que no entró (pulido r7).
+   */
+  createdRows: number[];
 }
 
 export interface ImportSignalsOptions {
@@ -1228,9 +1284,9 @@ export async function importSignals(
   rows: ImportSignalRow[],
   opts: ImportSignalsOptions = {},
 ): Promise<ImportSignalsResult> {
-  let created = 0;
+  const createdRows: number[] = [];
   const duplicatedKeys: string[] = [];
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
     const name = row.name.trim();
     const res = await createSignal(tx, {
       companyName: name,
@@ -1242,9 +1298,9 @@ export async function importSignals(
       via: 'csv',
     });
     if (res.duplicate) duplicatedKeys.push(res.dedupeKey);
-    else created += 1;
+    else createdRows.push(i);
   }
-  return { created, duplicated: duplicatedKeys.length, duplicatedKeys };
+  return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows };
 }
 
 export interface AcceptSignalResult {
@@ -1272,6 +1328,8 @@ export interface AcceptSignalOptions {
    * marca, en el idioma de la pantalla. Por defecto, PENDING_DEAL_NAME.
    */
   pendingDealName?: string;
+  /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
+  now?: Date;
 }
 
 /**
@@ -1311,8 +1369,15 @@ export function dealNameFromSignal(
   return titular;
 }
 
-/** Días que se le dan al primer pitch cuando se acepta una señal. */
-export const PITCH_DUE_DAYS = 3;
+/**
+ * Días HÁBILES (lunes a viernes) que se le dan al primer pitch cuando se
+ * acepta una señal o se abre un negocio a mano. Hábiles, como el
+ * seguimiento de una cotización (FOLLOW_UP_BUSINESS_DAYS): con días de
+ * calendario, una señal aceptada el miércoles vencía el sábado y el
+ * lunes el tablero decía «Vencido» por algo que tocaba en fin de semana
+ * (pulido r7).
+ */
+export const PITCH_DUE_BUSINESS_DAYS = 3;
 /**
  * El TEXTO de la siguiente acción con la que nace un negocio si la
  * pantalla no da otro. Solo es un respaldo: la web pasa siempre el suyo
@@ -1326,13 +1391,31 @@ export const PITCH_ACTION = 'Enviar pitch';
 export const PITCH_DUE_HOUR = 15;
 
 /**
- * La fecha de «Enviar pitch»: dentro de N días, a las 15:00 en la zona
- * del workspace (no en UTC: en Bogotá las 15:00 UTC son las 10:00).
- * Un nombre de zona que Postgres no reconozca cae en UTC.
+ * La fecha de una siguiente acción que pone el producto («Enviar pitch»,
+ * «Seguimiento a la cotización»): el N-ésimo día HÁBIL después del de
+ * `desde`, a las HOUR en la zona del workspace (no en UTC: en Bogotá las
+ * 15:00 UTC son las 10:00). Espera la fila `w` de WORKSPACE_TZ en el
+ * FROM. Un nombre de zona que Postgres no reconozca cae en UTC.
+ *
+ * Es UNA sola expresión para el pitch y para el seguimiento: antes el
+ * pitch contaba días de calendario y el seguimiento hábiles, y la misma
+ * pantalla mezclaba los dos criterios.
+ *
+ * Los festivos no cuentan como no hábiles: dependen del país y el
+ * producto no los conoce todavía.
+ *
+ * `desde`, `dias` y `hora` son los marcadores de sus parámetros ($5…);
+ * `desde` puede ser NULL, y entonces cuenta desde now().
  */
-const DUE_IN_WORKSPACE_TZ = `
-  (date_trunc('day', now() AT TIME ZONE w.tz) + ($DAYS::int * interval '1 day') + ($HOUR::int * interval '1 hour'))
-    AT TIME ZONE w.tz`;
+function dueInBusinessDays(desde: string, dias: string, hora: string): string {
+  const hoy = `date_trunc('day', coalesce(${desde}::timestamptz, now()) AT TIME ZONE w.tz)`;
+  return `(SELECT (dia + (${hora}::int * interval '1 hour')) AT TIME ZONE w.tz
+             FROM generate_series(${hoy} + interval '1 day', ${hoy} + interval '21 days', interval '1 day') AS dia
+            WHERE extract(isodow FROM dia) < 6
+            ORDER BY dia
+           OFFSET ${dias}::int - 1
+            LIMIT 1)`;
+}
 
 /**
  * El workspace actual con su zona, para las consultas que la necesitan.
@@ -1349,8 +1432,8 @@ const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC'
  *
  *   - si la marca ya tiene un negocio abierto, la señal se suma a ese:
  *     queda su actividad en la historia del negocio y no se abre otro;
- *   - si no, abre un negocio en «nuevo» con «Enviar pitch» a tres días,
- *     su primera fila de historial y la actividad que lo explica.
+ *   - si no, abre un negocio en «nuevo» con «Enviar pitch» a tres días
+ *     hábiles, su primera fila de historial y la actividad que lo explica.
  *
  * Todo en la misma transacción que abrió la pantalla: o queda entero o
  * no queda nada. `FOR UPDATE` sobre la señal evita que dos pestañas
@@ -1447,10 +1530,13 @@ export async function acceptSignal(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, name, stage_id, amount, currency,
                        next_action, next_action_kind, next_action_due)
      SELECT current_workspace_id(), $1, $2, $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
-            ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$6').replace('$HOUR', '$7')}
+            ${dueInBusinessDays('$8', '$6', '$7')}
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
-    [companyId, signalId, truncate(dealName, 120), sig.budget_estimate, opts.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_DAYS, PITCH_DUE_HOUR],
+    [
+      companyId, signalId, truncate(dealName, 120), sig.budget_estimate, opts.nextAction?.trim() || PITCH_ACTION,
+      PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null,
+    ],
   );
   const dealId = deal.rows[0]?.id;
   if (!dealId) throw new VentasError('DealCreateFailed');
@@ -1478,13 +1564,15 @@ export interface CreateDealInput {
   amount?: string | null;
   /** La siguiente acción, en el idioma de la pantalla. Por defecto, PITCH_ACTION. */
   nextAction?: string;
+  /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
+  now?: Date;
 }
 
 /**
  * Abrir un negocio a mano desde la ficha de una empresa de MI CRM.
  *
  * Nace en «nuevo», en la moneda del workspace, con su primera fila de
- * historial y la siguiente acción a tres días a las 15:00 locales, como
+ * historial y la siguiente acción a tres días hábiles a las 15:00 locales, como
  * uno que llega del radar. Que la empresa ya tenga otro abierto no lo
  * impide: aquí lo pide la persona, a propósito (otra campaña, otro
  * producto de la misma marca).
@@ -1503,10 +1591,13 @@ export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promi
     `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
                        next_action, next_action_kind, next_action_due)
      SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4, 'pitch',
-            ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$5').replace('$HOUR', '$6')}
+            ${dueInBusinessDays('$7', '$5', '$6')}
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
-    [input.companyId, name, amount, input.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_DAYS, PITCH_DUE_HOUR],
+    [
+      input.companyId, name, amount, input.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR,
+      input.now?.toISOString() ?? null,
+    ],
   );
   const dealId = deal.rows[0]?.id;
   if (!dealId) throw new VentasError('DealCreateFailed');
@@ -1590,7 +1681,8 @@ export async function getPipelineDeal(tx: WorkspaceTx, dealId: string): Promise<
 export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
   const { rows } = await tx.query<{
     pending_signals: string; open_deals: string; open_amount: string; weighted_amount: string;
-    won_quarter: string; won_quarter_count: string; no_next_action: string; overdue: string; currency: string;
+    won_quarter: string; won_quarter_count: string; won_quarter_no_amount: string; no_next_action: string; overdue: string;
+    currency: string;
   }>(
     `WITH w AS ${WORKSPACE_TZ},
           -- El trimestre empieza a medianoche EN LA ZONA DEL WORKSPACE: en
@@ -1608,6 +1700,8 @@ export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
        (SELECT COALESCE(sum(amount), 0) FROM deal, desde
          WHERE won_at >= desde.inicio)::text                                              AS won_quarter,
        (SELECT count(*) FROM deal, desde WHERE won_at >= desde.inicio)::text              AS won_quarter_count,
+       (SELECT count(*) FROM deal, desde
+         WHERE won_at >= desde.inicio AND amount IS NULL)::text                           AS won_quarter_no_amount,
        (SELECT count(*) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost AND next_action IS NULL)::text                  AS no_next_action,
        (SELECT count(*) FROM deal_pipeline
@@ -1622,6 +1716,7 @@ export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
     weightedAmount: r?.weighted_amount ?? '0',
     wonQuarter: r?.won_quarter ?? '0',
     wonQuarterCount: Number(r?.won_quarter_count ?? 0),
+    wonQuarterNoAmountCount: Number(r?.won_quarter_no_amount ?? 0),
     noNextActionCount: Number(r?.no_next_action ?? 0),
     overdueCount: Number(r?.overdue ?? 0),
     currency: r?.currency ?? WORKSPACE_DEFAULTS.currency,
@@ -1715,7 +1810,15 @@ export const quoteClosedOnLossActivity = (quoteNumber: string): string => `${quo
 export interface MoveDealOptions {
   /** No retroceder: si ya está en esa etapa o más adelante, o cerrado, no se mueve. */
   forwardOnly?: boolean;
-  /** El monto que acuerda una cotización (string decimal, sin impuesto). */
+  /**
+   * El monto que acuerda una cotización (string decimal, sin impuesto),
+   * o el que se escribe en el tablero al ganar un negocio que no tenía.
+   *
+   * Ganar pide monto: un negocio que llega a una etapa ganada sin monto
+   * (ni el suyo ni este) no se mueve (AmountRequired) y nada queda
+   * escrito. Si no, «N cerrados» sube y «Ganado este trimestre» no, y
+   * las dos cifras dejan de cuadrar sin explicación (pulido r7).
+   */
   amount?: string | null;
   currency?: string | null;
   /**
@@ -1794,6 +1897,10 @@ export async function moveDeal(
   if (!r || r.status === 'not_found') throw new DealNotFound();
   if (r.status === 'invalid_stage') throw new VentasError('InvalidStage');
   if (r.status === 'locked') throw new DealLocked(r.reason === 'quote' ? 'quote' : 'campaign');
+
+  // Ganar sin monto: se lanza antes de escribir nada más, y la
+  // transacción entera (el paso de etapa incluido) se deshace.
+  if (r.status === 'moved' && r.isWon && (r.amountTo ?? null) === null) throw new VentasError('AmountRequired');
 
   const result: MoveDealResult = {
     dealId,
@@ -1915,6 +2022,8 @@ export interface FollowUpOptions {
    * del idioma; PITCH_ACTION siempre cuenta para esas filas viejas.
    */
   supersededActions?: readonly string[];
+  /** Desde cuándo se cuentan los días hábiles. Por defecto, now() de la base; lo fijan las pruebas. */
+  now?: Date;
 }
 
 /**
@@ -1924,11 +2033,9 @@ export interface FollowUpOptions {
  * (next_action_kind = 'pitch', en el idioma que sea) o no tiene, pasa a
  * «Seguimiento a la cotización» (marcador 'quote_follow_up') a
  * FOLLOW_UP_BUSINESS_DAYS días hábiles, a las 15:00 en la zona del
- * workspace. Una acción que la persona escribió a mano («Llamar a
- * Sofía») se respeta, y un negocio cerrado no se toca.
- *
- * Los festivos no cuentan como no hábiles: dependen del país y el
- * producto no los conoce todavía. Devuelve si cambió algo.
+ * workspace (dueInBusinessDays, la misma cuenta que el pitch). Una
+ * acción que la persona escribió a mano («Llamar a Sofía») se respeta, y
+ * un negocio cerrado no se toca. Devuelve si cambió algo.
  */
 export async function followUpAfterProposal(
   tx: WorkspaceTx,
@@ -1941,15 +2048,7 @@ export async function followUpAfterProposal(
     `UPDATE deal d
         SET next_action = $2,
             next_action_kind = 'quote_follow_up',
-            next_action_due = (
-              SELECT (dia + ($5::int * interval '1 hour')) AT TIME ZONE w.tz
-                FROM generate_series(date_trunc('day', now() AT TIME ZONE w.tz) + interval '1 day',
-                                     date_trunc('day', now() AT TIME ZONE w.tz) + interval '21 days',
-                                     interval '1 day') AS dia
-               WHERE extract(isodow FROM dia) < 6
-               ORDER BY dia
-              OFFSET $4::int - 1
-               LIMIT 1),
+            next_action_due = ${dueInBusinessDays('$6', '$4', '$5')},
             updated_at = now()
        FROM ${WORKSPACE_TZ} w, pipeline_stage st
       WHERE d.id = $1
@@ -1959,7 +2058,7 @@ export async function followUpAfterProposal(
              OR d.next_action_kind = 'pitch'
              OR (d.next_action_kind IS NULL AND btrim(d.next_action) = ANY($3::text[])))
       RETURNING d.id`,
-    [dealId, opts.followUpAction?.trim() || FOLLOW_UP_ACTION, superadas, FOLLOW_UP_BUSINESS_DAYS, PITCH_DUE_HOUR],
+    [dealId, opts.followUpAction?.trim() || FOLLOW_UP_ACTION, superadas, FOLLOW_UP_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null],
   );
   return rows.length > 0;
 }

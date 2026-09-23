@@ -8,9 +8,9 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
 const stages: BoardStage[] = [
-  { id: "nuevo", label: "Nuevo", countText: "1", amountText: "COP 3 M", isLost: false },
-  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false },
-  { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true },
+  { id: "nuevo", label: "Nuevo", countText: "1", amountText: "COP 3 M", isLost: false, isWon: false },
+  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false, isWon: true },
+  { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true, isWon: false },
 ];
 const deals: BoardDeal[] = [
   {
@@ -22,6 +22,7 @@ const deals: BoardDeal[] = [
     stageLabel: "Nuevo",
     daysInStage: 4,
     amountText: "COP 3 M",
+    currency: "COP",
     nextAction: "Enviar pitch",
     nextActionDueText: "23 sep",
     due: { kind: "neutral", text: "Al día" },
@@ -127,7 +128,7 @@ describe("PipelineBoard", () => {
     await act(async () => {
       fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
     });
-    expect(moverNegocio).toHaveBeenCalledWith(DEAL, "perdido", "precio");
+    expect(moverNegocio).toHaveBeenCalledWith(DEAL, "perdido", { lostReason: "precio" });
     expect(await screen.findByRole("status")).toHaveTextContent("Café Alma pasó a «Perdido».");
     expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
   });
@@ -168,6 +169,40 @@ describe("PipelineBoard", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Cancelar" }));
     expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
     expect(moverNegocio).not.toHaveBeenCalled();
+  });
+
+  it("ganar un negocio «Sin monto» pregunta por cuánto y no mueve sin monto (pulido r7)", async () => {
+    moverNegocio.mockResolvedValue({ ok: true });
+    render(<PipelineBoard deals={[{ ...deals[0]!, amountText: null }]} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
+    });
+    expect(moverNegocio).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId("columna-nuevo")).getByText("Café Alma")).toBeInTheDocument();
+    const form = screen.getByRole("form", { name: "Por cuánto ganas el negocio con Café Alma" });
+
+    fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Ganado»" }));
+    expect(await within(form).findByText("Escribe el monto: sin él no suma en lo ganado.")).toBeInTheDocument();
+    expect(moverNegocio).not.toHaveBeenCalled();
+
+    const monto = within(form).getByLabelText(/¿Por cuánto lo ganaste\?/);
+    fireEvent.change(monto, { target: { value: "3.200.000" } });
+    fireEvent.blur(monto);
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Ganado»" }));
+    });
+    expect(moverNegocio).toHaveBeenCalledWith(DEAL, "ganado", { amount: "3200000.00" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Café Alma pasó a «Ganado».");
+  });
+
+  it("un negocio con monto pasa a «Ganado» sin preguntar", async () => {
+    moverNegocio.mockResolvedValue({ ok: true });
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "ganado" } });
+    });
+    expect(screen.queryByRole("form", { name: /Por cuánto/ })).toBeNull();
+    expect(moverNegocio).toHaveBeenCalledWith(DEAL, "ganado");
   });
 
   it("un negocio perdido dice por qué", () => {

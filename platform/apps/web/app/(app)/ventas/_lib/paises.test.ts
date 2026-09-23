@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatCountry } from "@/lib/format";
 import { ISO_COUNTRY_CODES, countryCode, countryOptions, isCountryCode } from "./paises";
 
 describe("los países de Ventas (pulido r6)", () => {
@@ -26,5 +27,11 @@ describe("los países de Ventas (pulido r6)", () => {
   it("el formulario y el CSV leen la misma tabla", () => {
     for (const o of countryOptions("es-CO")) expect(countryCode(o.value)).toBe(o.value);
     expect(countryCode("Colombia")).toBe("CO");
+  });
+
+  it("el nombre de cada opción es el de formatCountry: una sola forma de decir «CO → Colombia» (pulido r7)", () => {
+    for (const locale of ["es-CO", "en-US", "pt-BR"]) {
+      for (const o of countryOptions(locale)) expect(o.label, `${locale} ${o.value}`).toBe(formatCountry(o.value, { locale }));
+    }
   });
 });
