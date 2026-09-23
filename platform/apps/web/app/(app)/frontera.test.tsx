@@ -19,6 +19,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppError from "./error";
 import FinanzasError from "./finanzas/error";
+import VentasError from "./ventas/error";
 import AppLoading from "./loading";
 import { MESSAGES } from "./_lib/messages";
 
@@ -95,7 +96,7 @@ describe("el segmento (app) tiene frontera de error y esqueleto de carga", () =>
     // error aunque la base hubiera vuelto. router.refresh() es la
     // petición; reset() limpia el estado cuando llega.
     const consola = vi.spyOn(console, "error").mockImplementation(() => {});
-    for (const Frontera of [AppError, FinanzasError]) {
+    for (const Frontera of [AppError, FinanzasError, VentasError]) {
       router.refresh.mockClear();
       const reset = vi.fn();
       const { unmount } = render(<Frontera error={new Error("boom")} reset={reset} />);
