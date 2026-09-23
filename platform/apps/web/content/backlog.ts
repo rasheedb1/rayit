@@ -562,7 +562,8 @@ export const STORIES: readonly Story[] = [
     title: "Flujo de caja proyectado",
     desc: "packages/core/flujo-caja.ts combina cobros esperados (facturas por due_on, deals ganados sin factura por expected_close_date y plazo de pago) menos gastos recurrentes y reserva de impuestos, por semana, ocho semanas. Gráfico y tabla.",
     done: "El gráfico sale de la función con los datos del seed; un test cubre una semana con cobro, gasto e impuesto.",
-    status: "pendiente",
+    status: "en_curso",
+    note: "Rama nicolas/FIN-6-flujo-caja. projectCashflow() en packages/core/src/flujo-caja.ts y getCashflowInputs() en queries/finanzas.ts, con /finanzas/flujo. FIN-2 y FIN-5 no hacían falta: lo que FIN-6 necesita de ellas son las tablas payment/expense (0008) y el seed 0003, no sus pantallas. Falta el 404 del rol Mánager: espera a ACC-1 y ACC-5, y mientras tanto la pantalla lleva su TODO(ACC-1) (docs/propuestas/FIN-6.md §0.4). Decisión pendiente de Nicolás en §0.2.4: el cobro esperado es el bruto de la factura, no el neto de retención.",
   },
   {
     id: "FIN-7", module: "FIN", owner: "nicolas", size: "S", sprint: 6, deps: ["FIN-6"],

@@ -197,3 +197,58 @@ Ingresos de plataformas (FIN-7), escenarios optimista/pesimista (fase
 - Si FIN-5 acaba dando a `expense` una columna «próximo cobro»
   (`next_due_on`), la decisión §0.2.6 se cae sola y el prorrateo se
   reemplaza por esa fecha. Lo anoto en §3.
+
+---
+
+## 1. Lo que necesito de Rasheed
+
+**Nada bloqueante.** FIN-6 no lleva migración, no toca `db/migrations/`,
+ni `lib/workspace/`, ni `lib/auth/`, ni `packages/db/src/{client,schema}`,
+ni `queries/ventas.ts`. Lo que sí le pido, por orden de urgencia:
+
+1. **Nada de Ventas hace falta hoy.** `deal` ya trae `amount`,
+   `currency`, `stage_id` y `expected_close_date`, y
+   `pipeline_stage.is_won` es lo que distingue un ganado. La consulta
+   del flujo vive en `queries/finanzas.ts` y **no importa** nada de
+   `queries/ventas.ts`: solo se leyó para copiar el criterio.
+2. **Un índice, cuando el volumen lo pida.** La consulta filtra
+   `deal` por `st.is_won` con un JOIN, y hoy `deal` solo tiene
+   `(workspace_id, stage_id)`. Con un puñado de negocios por espacio
+   sobra; si el piloto crece, el índice que ayudaría es
+   `CREATE INDEX ON deal (workspace_id, expected_close_date) WHERE
+   won_at IS NOT NULL`. **No lo pido todavía**: sería optimizar sin
+   medir.
+3. **`expense` no tiene índice por `incurred_on`.** Igual que arriba:
+   `CREATE INDEX ON expense (workspace_id, incurred_on) WHERE
+   is_recurring` cuando haya volumen. Tampoco lo pido hoy.
+4. **Revisar la decisión §0.2.4** (cobro bruto vs. neto de retención)
+   con Nicolás antes de que FIN-2 registre pagos: si cambia, cambia
+   también qué escribe FIN-2 en `tax_reserve`.
+
+## 2. El criterio que queda abierto
+
+«El rol Mánager no puede abrir `/finanzas/flujo`». Hoy no se puede
+cerrar y no es por esta historia:
+
+- `ACC-1` (el catálogo con `finanzas.flujo.ver` y los roles de fábrica)
+  no está en `origin/main`.
+- `requirePermission` no existe todavía en ninguna rama: es `ACC-5` /
+  `ACC-6`.
+
+Lo que hay en su lugar: `// TODO(ACC-1): finanzas.flujo.ver` en
+`app/(app)/finanzas/flujo/page.tsx` y en `getCashflowInputs`, y el
+aislamiento por workspace sí probado (`packages/db/test/finanzas.test.ts`,
+«desde otro workspace no hay facturas, ni negocios, ni gastos»). Cuando
+ACC-1 y ACC-5 entren a `main`, cerrar el criterio es una línea y una
+prueba.
+
+## 3. Si FIN-5 cambia el modelo de gastos
+
+FIN-6 proyecta el ritmo mensual de los recurrentes (§0.2.6) porque
+`expense` solo sabe **cuándo se incurrió** (`incurred_on`) y **con qué
+periodicidad** (`recurrence`), no cuándo se paga el siguiente. Si FIN-5
+le añade una fecha de próximo cobro, esta historia mejora sola:
+`projectCashflow` pasaría a colocar cada gasto en su semana igual que
+coloca un cobro, y el prorrateo se borra. El punto de cambio es una
+función de veinte líneas en `packages/core/src/flujo-caja.ts`, con sus
+pruebas ya escritas alrededor.
