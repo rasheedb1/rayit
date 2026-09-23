@@ -46,8 +46,10 @@ jobs:
     if: vars.WORKER_ONCE == 'on'
     runs-on: ubuntu-latest
     # La suma de todos los timeout_s de job_definition con handler es
-    # ~53 min; una pasada normal dura segundos.
-    timeout-minutes: 55
+    # ~53 min, más la instalación; una pasada normal dura segundos. Si
+    # GitHub la mata a mitad, la fila `running` cuenta como un intento
+    # fallido en la pasada siguiente.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

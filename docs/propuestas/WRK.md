@@ -11,7 +11,7 @@ El despliegue continuo es CIM-7 (Rasheed): lo que aquí es hosting es
 | El worker corrió un ciclo contra Supabase | **No: bloqueado por un comando de administración** (§1). Falla en `SET ROLE mc_worker`, con el error exacto en §2. | `make db.sql` (solo lectura) y los dos arranques de §2 |
 | Qué comando falta y quién lo corre | Escrito en §1. Lo corre Rasheed (o Nicolás con un token propio de `supabase login`). | — |
 | Recomendación de hosting con costos | §3: **(b) `--once` cada hora desde GitHub Actions**, 0–5 USD/mes | — |
-| Modo `--once` | **Hecho y probado**: corre lo vencido, no repite lo corrido, reintenta hasta `max_attempts`, encadena, no pisa una corrida viva, no necesita el esquema `pgboss` | `apps/worker/test/once.test.ts` (10) y `test/cron.test.ts` (6) |
+| Modo `--once` | **Hecho y probado**: corre lo vencido, no repite lo corrido, reintenta hasta `max_attempts`, encadena, no pisa una corrida viva, no necesita el esquema `pgboss` | `apps/worker/test/once.test.ts` (11) y `test/cron.test.ts` (8) |
 | Salud del worker (última corrida por job) | **Hecho**: `getWorkerHealth` y `workerDataAsOf` en `@mc/db/queries/worker`; `pnpm --filter @mc/worker salud`; `--once` la imprime al terminar | `once.test.ts` caso 10 |
 | Workflow del camino recomendado | **Escrito y apagado dos veces** (sin `schedule` y con la guardia `vars.WORKER_ONCE == 'on'`) | `.github/workflows/worker-once.yml` |
 | Variables del entorno del worker | Tabla en §5 | — |
@@ -143,16 +143,25 @@ correr a la vez: con un proceso largo encendido, el workflow se apaga.
   script `pnpm --filter @mc/worker once`). Por cada definición habilitada,
   con cron y handler: calcula su último tick (`runner/cron.ts`, UTC, sin
   dependencias nuevas) y mira las corridas **globales** (`workspace_id`
-  NULL) desde ese tick: alguna `ok/partial/skipped` → al día; una
-  `running` dentro de `timeout_s + 30 s` → otra pasada la tiene; fallidas
-  ≥ `max_attempts` → espera al próximo tick y lo avisa; si no, corre con
-  `attempt = fallidas + 1`. Corre lo de arriba antes que lo encadenado, y
-  el encadenado enseguida si hubo datos, igual que el proceso largo. Sale
-  con **1** si alguna corrida terminó `failed`, para que el workflow se
-  ponga en rojo. Respeta SIGTERM (la corrida en curso recibe la señal;
-  no empieza otra). `job_run.metadata.bossJobId` es `once:<uuid>`.
+  NULL) desde ese tick. Una `running` viva (menos de `timeout_s + 30 s`),
+  empiece cuando empiece → otra pasada la tiene. Alguna `ok` o `skipped`,
+  o un fallo que pidió `retry: false` → al día. Intentos (`partial` o
+  `failed` reintentables, más las `running` colgadas de un proceso
+  muerto) ≥ `max_attempts` → espera al próximo tick y lo avisa. Si no,
+  corre con `attempt = intentos + 1`. La regla de reintento es la del
+  proceso largo: `partial` se reintenta salvo `retry: false` o
+  `retryOnItemFailure: false`. Corre lo de arriba antes que lo
+  encadenado, y el encadenado enseguida si hubo datos; esa corrida
+  encadenada cubre también el tick propio del job de abajo (así
+  `compute.baseline` no corre dos veces al día). Sale con **1** si alguna
+  corrida terminó `failed` o si una señal dejó jobs vencidos sin
+  empezar, para que el workflow se ponga en rojo. Respeta SIGTERM (la
+  corrida en curso recibe la señal; no empieza otra).
+  `job_run.metadata.bossJobId` es `once:<uuid>`; `metadata.noRetry` marca
+  un fallo que no se reintenta.
 - **Salud** (`packages/db/src/queries/worker.ts`): `getWorkerHealth(q)`
-  devuelve, por cada `job_definition`, última corrida, su estado y error,
+  devuelve, por cada `job_definition` y contando solo las corridas
+  globales (como `--once`), última corrida, su estado y error,
   última corrida buena y fallos desde entonces; `workerDataAsOf(salud)`
   es «Datos al <fecha>»: el último `ok` más viejo entre
   `collect.account_metrics` y `collect.post_metrics`, o null si alguno
@@ -255,7 +264,25 @@ Para apagarlo: `WORKER_ONCE` a cualquier otro valor (efecto inmediato).
 | `apps/worker/src/runner/once.ts` | ¿Un reintento fallido espera a la pasada siguiente (1 h) o se reintenta dentro de la misma? | la siguiente | la siguiente: no alarga la pasada y el cron no se apila | reintento dentro: un bucle de `maxAttempts` alrededor de `executeRun` (~15 líneas) |
 | `packages/db/src/queries/worker.ts` | ¿Enseñar la salud del worker en la web? | no; Resumen ya dice «Datos hasta el…» | no por ahora | migración con una función `SECURITY DEFINER` que devuelva solo `job_id, last_ok_at`, un permiso y un componente en Resumen (M) |
 
-## 9. Fuera de alcance
+## 9. Revisión
+
+`/code-review` en nivel alto sobre `origin/main...HEAD` (diez hallazgos) y
+`/security-review`. Qué se hizo con cada uno:
+
+| Hallazgo | Qué se hizo | Prueba |
+|---|---|---|
+| `partial` se daba por cubierto y un fallo con `retry: false` se reintentaba | La regla del proceso largo (`shouldRetry` en `once.ts`); `metadata.noRetry` | `once.test.ts` casos 1–3 (`test.once_parcial`, `test.once_cuota`) |
+| Una `running` de antes del tick no contaba como viva | Cuenta cualquiera viva, empiece cuando empiece | caso 6 |
+| Una `running` colgada (proceso muerto) no gastaba intentos | Cuenta como intento | caso 6 |
+| `compute.*` corría dos veces al día (encadenado antes de su tick) | `coverFromFor`: cuenta desde el tick del de arriba | caso 7b |
+| Una pasada interrumpida salía en verde | `interrupted` y `onceExitCode` | caso 7 |
+| La salud contaba corridas de un solo workspace | Solo globales, como `--once` | caso 10 |
+| `timeout-minutes: 55` sin margen | 75 | — |
+| Parser propio de cron frente a `cron-parser` | Se queda propio (agregar la dependencia pide tu visto bueno y hoy es transitiva de pg-boss); ahora acepta nombres y la regla de Vixie para `*`; `L`, `W`, `#` y `?` lanzan `CronError`, que se registra como error, y el caso 9 exige que las 21 definiciones reales se entiendan | `cron.test.ts`, caso 9 |
+| `'sin handler'` escrito a mano en `salud.ts` | Importa `SKIPPED_NO_HANDLER` | — |
+| Identificadores en español | Renombrados los exportados y los locales nuevos (`timeAgo`, razones `due/retry/chained`, `up_to_date`…); los textos al usuario siguen en español | — |
+
+## 10. Fuera de alcance
 
 SMTP y el envío de correos (CIM-10); jobs nuevos (`trait_lift`,
 `report.generate`, `video.*`, `outbound.dispatch`, `radar.scan`,

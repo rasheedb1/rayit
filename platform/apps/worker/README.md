@@ -51,11 +51,14 @@ pnpm --filter @mc/worker salud       # última corrida de cada job, sin correr n
 
 Sin proceso largo ni pg-boss: por cada definición habilitada con cron y
 handler calcula su último tick (`src/runner/cron.ts`, UTC) y la corre si
-no hay una corrida global (`workspace_id` NULL) `ok`, `partial` o
-`skipped` desde ese tick. Una `running` dentro de `timeout_s + 30 s` no
-se pisa; un fallo se reintenta en la pasada siguiente con `attempt + 1`
-hasta `max_attempts`; lo encadenado (`after`) corre enseguida si hubo
-datos. Sale con 1 si alguna corrida terminó `failed`. Al terminar
+no hay una corrida global (`workspace_id` NULL) `ok` o `skipped` desde
+ese tick. Una `running` viva (menos de `timeout_s + 30 s`) no se pisa;
+`partial` y `failed` se reintentan en la pasada siguiente con la misma
+regla que el proceso largo (`retry: false` lo evita y queda como
+`metadata.noRetry`) hasta `max_attempts`, y una `running` colgada cuenta
+como intento; lo encadenado (`after`) corre enseguida si hubo datos y
+cubre su propio tick. Sale con 1 si alguna corrida terminó `failed` o si
+una señal dejó jobs sin empezar. Al terminar
 imprime la salud (`getWorkerHealth` de `@mc/db/queries/worker`) con
 «Datos al <fecha>». No necesita el esquema `pgboss`, solo que el rol de
 conexión pueda hacer `SET ROLE mc_worker`. Es el camino recomendado para

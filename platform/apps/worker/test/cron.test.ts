@@ -43,3 +43,14 @@ test('un cron mal escrito es CronError, no un tick inventado', () => {
   assert.throws(() => parseCron('*/0 * * * *'), CronError);
   assert.throws(() => parseCron('a * * * *'), CronError);
 });
+
+test('nombres en inglés de días y meses, como en pg-boss', () => {
+  assert.equal(tick('0 2 * * MON', '2026-09-23T13:00:00Z'), '2026-09-21T02:00:00.000Z');
+  assert.equal(tick('0 0 1 JAN *', '2026-09-23T00:00:00Z'), '2026-01-01T00:00:00.000Z');
+  assert.equal(tick('0 9 * * mon-fri', '2026-09-20T12:00:00Z'), '2026-09-18T09:00:00.000Z', 'domingo 20 → viernes 18');
+});
+
+test('un campo que empieza por * no restringe el día (regla de Vixie cron)', () => {
+  // `*/1` en día de la semana es «cualquiera»: manda el día del mes (13), no «13 o cualquier día».
+  assert.equal(tick('0 0 13 * */1', '2026-09-23T00:00:00Z'), '2026-09-13T00:00:00.000Z');
+});

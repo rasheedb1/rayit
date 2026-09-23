@@ -12,15 +12,17 @@
  *
  *   tick = último disparo de default_cron ≤ ahora (cron.ts, UTC)
  *   job_run globales (workspace_id NULL) del job desde ese tick:
- *     alguna ok, partial o skipped        → al día, no corre
- *     alguna running dentro de su timeout → otra pasada lo está corriendo
- *     fallidas ≥ max_attempts             → reintentos agotados hasta el
- *                                           próximo tick (se avisa)
- *     si no                               → corre, attempt = fallidas + 1
+ *     alguna running viva (< timeout_s + 30 s) → otra pasada lo tiene
+ *     alguna ok o skipped, o un fallo que
+ *       pidió no reintentar (retry: false)   → al día, no corre
+ *     intentos ≥ max_attempts                → reintentos agotados hasta
+ *                                              el próximo tick (se avisa)
+ *     si no                                  → corre, attempt = intentos + 1
+ *   (intentos = partial o failed reintentables + running colgadas)
  *
  * Así una pasada corre lo vencido, la siguiente no repite lo ya corrido
  * y un fallo se reintenta en la pasada siguiente hasta max_attempts,
- * que es lo que hacía pg-boss con su backoff.
+ * con la misma regla de reintento que el proceso largo (worker.ts).
  *
  * Encadenamiento (JobOptions.after): igual que en el proceso largo, si
  * un job termina ok o partial con processed > 0, lo que corre después
@@ -33,8 +35,8 @@
  * pasada completa cabe de sobra en el límite de un runner de GitHub.
  *
  * Dos pasadas a la vez: el workflow lo evita con `concurrency`; si aun
- * así se solaparan, la fila `running` de la primera hace que la segunda
- * se salte ese job.
+ * así se solaparan (o hubiera un proceso largo encendido), la fila
+ * `running` viva de la primera hace que la segunda se salte ese job.
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
@@ -45,7 +47,7 @@ import type { WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
-import { CHAIN_SOURCE, executeRun, type RunStatus } from './run.ts';
+import { CHAIN_SOURCE, executeRun, JobItemsFailedError, type RunOutcome, type RunStatus } from './run.ts';
 import { createQuota, recordSkipped } from './worker.ts';
 
 /** `source` del payload de una corrida de --once, como `cron` en las de pg-boss. */
@@ -66,12 +68,12 @@ export interface RunOnceOptions {
   signal?: AbortSignal;
 }
 
-export type OnceReason = 'vencido' | 'reintento' | 'encadenado';
+export type OnceReason = 'due' | 'retry' | 'chained';
 
 export interface OnceRun {
   job: string;
   reason: OnceReason;
-  /** El tick que se está cubriendo, ISO; null en un encadenado. */
+  /** Desde cuándo se está cubriendo el job, ISO; null en un encadenado. */
   tick: string | null;
   runId: number;
   status: RunStatus;
@@ -79,82 +81,132 @@ export interface OnceRun {
   failed: number;
 }
 
-export type OnceSkipReason = 'al_dia' | 'corriendo' | 'reintentos_agotados' | 'sin_handler' | 'sin_cron' | 'deshabilitado' | 'apagando';
+export type OnceSkipReason = 'up_to_date' | 'running' | 'retries_exhausted' | 'no_handler' | 'no_cron' | 'disabled' | 'shutting_down';
 
 export interface OnceSummary {
   /** ISO del reloj con el que se calcularon los ticks. */
   at: string;
   runs: OnceRun[];
   skipped: Array<{ job: string; reason: OnceSkipReason }>;
-  /** Corridas que terminaron failed. El proceso sale con 1 si hay alguna. */
+  /** Corridas que terminaron failed. */
   failedRuns: number;
+  /** Jobs vencidos que no llegaron a empezar porque llegó una señal. */
+  interrupted: number;
 }
+
+/** El proceso sale con 1 si hubo una corrida fallida o una pasada interrumpida: el cron externo la marca en rojo. */
+export function onceExitCode(s: OnceSummary): 0 | 1 {
+  return s.failedRuns > 0 || s.interrupted > 0 ? 1 : 0;
+}
+
+/** Marca en job_run.metadata de una corrida que el job pidió no reintentar (`retry: false`). */
+export const NO_RETRY_KEY = 'noRetry';
 
 interface DueJob {
   def: JobDefinition;
   registration: JobRegistration;
-  tick: Date;
+  coverFrom: Date;
   attempt: number;
 }
 
 interface TickState extends Record<string, unknown> {
   done: number;
-  failed: number;
+  attempts: number;
   running: number;
 }
 
 /**
- * El estado de un job desde su último tick, contando solo las corridas
+ * El estado de un job desde `coverFrom`, contando solo las corridas
  * globales: una corrida encadenada o manual de UN workspace no cubre el
  * tick de todos.
+ *
+ *   done      ok o skipped; o partial/failed que pidió no reintentar
+ *   attempts  partial o failed que sí se reintentan, y las `running`
+ *             colgadas (más viejas que timeout_s + 30 s: al proceso lo
+ *             mataron), para que max_attempts también las cuente
+ *   running   `running` viva, EMPIECE CUANDO EMPIECE: una corrida de
+ *             antes del tick que sigue en marcha tampoco se pisa
  */
-async function tickState(db: WorkerDatabase, def: JobDefinition, tick: Date, now: Date): Promise<TickState> {
-  const vivaDesde = new Date(now.getTime() - (def.timeoutS + EXPIRE_MARGIN_S) * 1000);
+async function tickState(db: WorkerDatabase, def: JobDefinition, coverFrom: Date, now: Date): Promise<TickState> {
+  const liveSince = new Date(now.getTime() - (def.timeoutS + EXPIRE_MARGIN_S) * 1000);
   const { rows } = await db.query<TickState>(
-    `SELECT count(*) FILTER (WHERE status IN ('ok','partial','skipped'))::int AS done,
-            count(*) FILTER (WHERE status = 'failed')::int AS failed,
+    `SELECT count(*) FILTER (WHERE started_at >= $2::timestamptz AND (
+                status IN ('ok','skipped')
+                OR (status IN ('partial','failed') AND (metadata->>'${NO_RETRY_KEY}')::boolean IS TRUE)))::int AS done,
+            count(*) FILTER (WHERE started_at >= $2::timestamptz AND (
+                (status IN ('partial','failed') AND (metadata->>'${NO_RETRY_KEY}')::boolean IS NOT TRUE)
+                OR (status = 'running' AND started_at <= $3::timestamptz)))::int AS attempts,
             count(*) FILTER (WHERE status = 'running' AND started_at > $3::timestamptz)::int AS running
        FROM job_run
-      WHERE job_id = $1 AND workspace_id IS NULL AND started_at >= $2::timestamptz`,
-    [def.id, tick.toISOString(), vivaDesde.toISOString()],
+      WHERE job_id = $1 AND workspace_id IS NULL AND (started_at >= $2::timestamptz OR status = 'running')`,
+    [def.id, coverFrom.toISOString(), liveSince.toISOString()],
   );
   const r = rows[0];
-  return { done: Number(r?.done ?? 0), failed: Number(r?.failed ?? 0), running: Number(r?.running ?? 0) };
+  return { done: Number(r?.done ?? 0), attempts: Number(r?.attempts ?? 0), running: Number(r?.running ?? 0) };
+}
+
+function safeTick(def: JobDefinition, now: Date, logger: Logger): Date | null {
+  if (!def.defaultCron) return null;
+  try {
+    return lastTick(def.defaultCron, now);
+  } catch (err) {
+    if (!(err instanceof CronError)) throw err;
+    logger.error('cron inválido en job_definition: el job no corre en --once', { job: def.id, cron: def.defaultCron, err });
+    return null;
+  }
+}
+
+/**
+ * Desde cuándo cuenta una corrida para cubrir el tick de `def`.
+ *
+ * Normalmente, su tick. Pero un job encadenado (compute.baseline tras
+ * collect.post_metrics) corre en la misma pasada que el de arriba, ANTES
+ * de su propio tick (05:18 frente a 05:40): sin esto, la pasada de las
+ * 06:17 lo volvería a correr. Así que cuenta también lo que corrió desde
+ * el último tick del de arriba, sin ir más atrás de su tick anterior.
+ */
+function coverFromFor(def: JobDefinition, tick: Date, registry: JobRegistry, all: ReadonlyMap<string, JobDefinition>, now: Date, logger: Logger): Date {
+  const upstream = (registry.get(def.id)?.options.after ?? [])
+    .map((id) => all.get(id))
+    .filter((d): d is JobDefinition => !!d && d.enabled)
+    .map((d) => safeTick(d, now, logger))
+    .filter((t): t is Date => t !== null);
+  if (upstream.length === 0) return tick;
+  const latestUpstream = Math.max(...upstream.map((t) => t.getTime()));
+  const previous = lastTick(def.defaultCron!, new Date(tick.getTime() - 60_000));
+  const from = Math.min(tick.getTime(), latestUpstream);
+  return new Date(previous ? Math.max(previous.getTime(), from) : from);
 }
 
 /** Qué toca correr ahora: lo de arriba antes que lo encadenado, y luego por tick. Deja constancia de los que no tienen handler, como el proceso largo. */
 export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registry: JobRegistry, now: Date, logger: Logger): Promise<{ due: DueJob[]; skipped: OnceSummary['skipped']; definitions: JobDefinition[] }> {
   const all = await loadJobDefinitions(db);
+  const allById = new Map(all.map((d) => [d.id, d]));
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
   const due: DueJob[] = [];
   const skipped: OnceSummary['skipped'] = [];
 
   for (const def of definitions) {
-    if (!def.enabled) { skipped.push({ job: def.id, reason: 'deshabilitado' }); continue; }
+    if (!def.enabled) { skipped.push({ job: def.id, reason: 'disabled' }); continue; }
     const registration = registry.get(def.id);
     if (!registration) {
       await recordSkipped(db, def.id);
-      skipped.push({ job: def.id, reason: 'sin_handler' });
+      skipped.push({ job: def.id, reason: 'no_handler' });
       continue;
     }
-    let tick: Date | null = null;
-    try {
-      tick = def.defaultCron ? lastTick(def.defaultCron, now) : null;
-    } catch (err) {
-      if (!(err instanceof CronError)) throw err;
-      logger.error('cron inválido en job_definition: el job no corre en --once', { job: def.id, cron: def.defaultCron, err });
-    }
-    if (!tick) { skipped.push({ job: def.id, reason: 'sin_cron' }); continue; }
+    const tick = safeTick(def, now, logger);
+    if (!tick) { skipped.push({ job: def.id, reason: 'no_cron' }); continue; }
 
-    const state = await tickState(db, def, tick, now);
-    if (state.done > 0) { skipped.push({ job: def.id, reason: 'al_dia' }); continue; }
-    if (state.running > 0) { skipped.push({ job: def.id, reason: 'corriendo' }); continue; }
-    if (state.failed >= def.maxAttempts) {
-      logger.warn('reintentos agotados hasta el próximo tick', { job: def.id, tick: tick.toISOString(), failed: state.failed, maxAttempts: def.maxAttempts });
-      skipped.push({ job: def.id, reason: 'reintentos_agotados' });
+    const coverFrom = coverFromFor(def, tick, registry, allById, now, logger);
+    const state = await tickState(db, def, coverFrom, now);
+    if (state.running > 0) { skipped.push({ job: def.id, reason: 'running' }); continue; }
+    if (state.done > 0) { skipped.push({ job: def.id, reason: 'up_to_date' }); continue; }
+    if (state.attempts >= def.maxAttempts) {
+      logger.warn('reintentos agotados hasta el próximo tick', { job: def.id, tick: tick.toISOString(), attempts: state.attempts, maxAttempts: def.maxAttempts });
+      skipped.push({ job: def.id, reason: 'retries_exhausted' });
       continue;
     }
-    due.push({ def, registration, tick, attempt: state.failed + 1 });
+    due.push({ def, registration, coverFrom, attempt: state.attempts + 1 });
   }
 
   // Lo de arriba antes que lo de abajo: si compute.baseline corriera
@@ -164,8 +216,19 @@ export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registr
     const after = registry.get(id)?.options.after ?? [];
     return after.length === 0 ? 0 : 1 + Math.max(...after.map(depth));
   };
-  due.sort((a, b) => depth(a.def.id) - depth(b.def.id) || a.tick.getTime() - b.tick.getTime() || a.def.id.localeCompare(b.def.id));
+  due.sort((a, b) => depth(a.def.id) - depth(b.def.id) || a.coverFrom.getTime() - b.coverFrom.getTime() || a.def.id.localeCompare(b.def.id));
   return { due, skipped, definitions };
+}
+
+/**
+ * La misma regla que el proceso largo (worker.ts): un fallo por
+ * elementos se reintenta salvo que el job diga `retry: false` o su
+ * registro `retryOnItemFailure: false`; un fallo que lanzó, siempre.
+ */
+function shouldRetry(outcome: RunOutcome, registration: JobRegistration): boolean {
+  if (outcome.status === 'ok') return false;
+  const itemFailure = outcome.status === 'partial' || outcome.error instanceof JobItemsFailedError;
+  return itemFailure ? (outcome.result?.retry ?? registration.options.retryOnItemFailure) : true;
 }
 
 export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
@@ -183,15 +246,17 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
 
   const runs: OnceRun[] = [];
   const ran = new Set<string>();
+  let interrupted = 0;
   // Una pila: el encadenado corre enseguida después de su job de arriba.
-  const pending: Array<{ def: JobDefinition; registration: JobRegistration; payload: Record<string, unknown>; attempt: number; tick: Date | null; reason: OnceReason }> =
-    due.map((d) => ({ def: d.def, registration: d.registration, payload: { job: d.def.id, source: ONCE_SOURCE }, attempt: d.attempt, tick: d.tick, reason: d.attempt > 1 ? 'reintento' as const : 'vencido' as const })).reverse();
+  const pending: Array<{ def: JobDefinition; registration: JobRegistration; payload: Record<string, unknown>; attempt: number; coverFrom: Date | null; reason: OnceReason }> =
+    due.map((d) => ({ def: d.def, registration: d.registration, payload: { job: d.def.id, source: ONCE_SOURCE }, attempt: d.attempt, coverFrom: d.coverFrom, reason: d.attempt > 1 ? 'retry' as const : 'due' as const })).reverse();
 
   while (pending.length > 0) {
     const next = pending.pop()!;
     if (ran.has(next.def.id)) continue;
     if (opts.signal?.aborted) {
-      skipped.push({ job: next.def.id, reason: 'apagando' });
+      skipped.push({ job: next.def.id, reason: 'shutting_down' });
+      interrupted++;
       continue;
     }
     ran.add(next.def.id);
@@ -199,10 +264,15 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
       { definition: next.def, registration: next.registration, payload: next.payload, attempt: next.attempt, bossJobId: `once:${randomUUID()}`, signal: opts.signal },
       { db, logger, secrets: opts.secrets, refreshers: opts.refreshers, quota, http: opts.http, env, now: opts.now },
     );
+    if (outcome.status !== 'ok' && !shouldRetry(outcome, next.registration)) {
+      // La pasada siguiente lo da por cubierto, como pg-boss cuando no se lanza.
+      await db.query(`UPDATE job_run SET metadata = metadata || jsonb_build_object($2::text, true) WHERE id = $1`, [outcome.runId, NO_RETRY_KEY]);
+      logger.info('sin reintento: el job indicó que no ayuda', { job: next.def.id, runId: outcome.runId, status: outcome.status });
+    }
     runs.push({
       job: next.def.id,
       reason: next.reason,
-      tick: next.tick?.toISOString() ?? null,
+      tick: next.coverFrom?.toISOString() ?? null,
       runId: outcome.runId,
       status: outcome.status,
       processed: outcome.result?.processed ?? 0,
@@ -210,22 +280,26 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
     });
 
     if (outcome.status !== 'failed' && (outcome.result?.processed ?? 0) > 0) {
-      const siguientes = registry.next(next.def.id).filter((id) => enabledIds.has(id) && !ran.has(id));
-      for (const id of [...siguientes].reverse()) {
+      const nextIds = registry.next(next.def.id).filter((id) => enabledIds.has(id) && !ran.has(id));
+      for (const id of [...nextIds].reverse()) {
         const def = byId.get(id);
         const registration = registry.get(id);
         if (!def || !registration) continue; // de otro grupo (WORKER_GROUPS): lo cubre su cron en su proceso
-        pending.push({ def, registration, payload: { source: CHAIN_SOURCE, after: next.def.id }, attempt: 1, tick: null, reason: 'encadenado' });
+        pending.push({ def, registration, payload: { source: CHAIN_SOURCE, after: next.def.id }, attempt: 1, coverFrom: null, reason: 'chained' });
       }
     }
   }
 
   const failedRuns = runs.filter((r) => r.status === 'failed').length;
+  const summary: OnceSummary = { at: now.toISOString(), runs, skipped, failedRuns, interrupted };
   logger.info('pasada terminada', {
     runs: runs.map((r) => `${r.job}:${r.status}`),
-    upToDate: skipped.filter((s) => s.reason === 'al_dia').map((s) => s.job),
-    exhausted: skipped.filter((s) => s.reason === 'reintentos_agotados').map((s) => s.job),
+    upToDate: skipped.filter((s) => s.reason === 'up_to_date').map((s) => s.job),
+    exhausted: skipped.filter((s) => s.reason === 'retries_exhausted').map((s) => s.job),
     failedRuns,
+    interrupted,
+    exitCode: onceExitCode(summary),
   });
-  return { at: now.toISOString(), runs, skipped, failedRuns };
+  if (interrupted > 0) logger.warn('pasada interrumpida: estos jobs vencidos no empezaron', { jobs: skipped.filter((s) => s.reason === 'shutting_down').map((s) => s.job) });
+  return summary;
 }

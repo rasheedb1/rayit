@@ -6,6 +6,11 @@
  * cuándo terminó bien por última vez y cuántas veces falló desde
  * entonces.
  *
+ * Solo cuenta las corridas GLOBALES (workspace_id NULL), las mismas que
+ * mira --once para decidir si un tick está cubierto: una corrida de un
+ * solo workspace (encadenada o manual) no dice que el worker esté al día
+ * para todos, y con ella «Datos al…» prometería una fecha falsa.
+ *
  * QUIÉN PUEDE LEERLA. Las corridas de cron son globales (workspace_id
  * NULL) y job_run tiene RLS por workspace (0010): como mc_app, la web
  * no ve ninguna. La leen el worker (mc_worker, BYPASSRLS) al terminar
@@ -48,14 +53,14 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
             ${TS('ultima.started_at')} AS last_run_at, ultima.status AS last_status, ultima.error AS last_error,
             ${TS('buena.started_at')} AS last_ok_at,
             (SELECT count(*) FROM job_run f
-              WHERE f.job_id = d.id AND f.status = 'failed'
+              WHERE f.job_id = d.id AND f.workspace_id IS NULL AND f.status = 'failed'
                 AND (buena.started_at IS NULL OR f.started_at > buena.started_at))::int AS failed_since_ok
        FROM job_definition d
        LEFT JOIN LATERAL (
-         SELECT started_at, status, error FROM job_run r WHERE r.job_id = d.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+         SELECT started_at, status, error FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT 1
        ) ultima ON true
        LEFT JOIN LATERAL (
-         SELECT started_at FROM job_run r WHERE r.job_id = d.id AND r.status IN ('ok','partial') ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+         SELECT started_at FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL AND r.status IN ('ok','partial') ORDER BY r.started_at DESC, r.id DESC LIMIT 1
        ) buena ON true
       ORDER BY d.queue, d.id`,
   );

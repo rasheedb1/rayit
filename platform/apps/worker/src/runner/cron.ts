@@ -4,10 +4,14 @@
  * Lo usa el modo «una pasada» (--once, once.ts) para saber qué está
  * vencido: un job lo está si no corrió desde su último tick. pg-boss
  * interpreta los mismos crons con cron-parser; aquí basta con el
- * subconjunto de cinco campos que usan las definiciones
- * (`*`, `n`, `a-b`, `* /n`, `a-b/n` y listas con comas), con la regla
- * clásica de cron: si día del mes Y día de la semana están
- * restringidos, basta con que coincida uno de los dos.
+ * subconjunto de cinco campos que usan las definiciones: `*`, `n`,
+ * `a-b`, `*` con paso, `a-b` con paso, listas con comas y los nombres
+ * en inglés de meses y días (JAN, MON). Con la regla clásica de cron
+ * (Vixie): si día del mes Y día de la semana están restringidos (no
+ * empiezan por `*`), basta con que coincida uno de los dos. `L`, `W`,
+ * `#` y `?` no se aceptan: lanzan CronError, que --once registra como
+ * error y no como un tick inventado. No se usa cron-parser (lo trae
+ * pg-boss) para no depender de una dependencia transitiva.
  *
  *   minuto hora día-del-mes mes día-de-la-semana(0–7, 0 y 7 = domingo)
  */
@@ -44,32 +48,43 @@ const RANGES: ReadonlyArray<readonly [number, number]> = [
 function parseField(raw: string, [min, max]: readonly [number, number], expr: string): Field {
   const values = new Set<number>();
   for (const part of raw.split(',')) {
-    const [rango, pasoRaw] = part.split('/');
-    const paso = pasoRaw === undefined ? 1 : Number(pasoRaw);
-    if (!Number.isInteger(paso) || paso < 1) throw new CronError(`Paso inválido en «${expr}»: ${part}`);
-    let desde: number;
-    let hasta: number;
-    if (rango === '*') {
-      desde = min;
-      hasta = max;
-    } else if (rango !== undefined && /^\d+-\d+$/.test(rango)) {
-      [desde, hasta] = rango.split('-').map(Number) as [number, number];
-    } else if (rango !== undefined && /^\d+$/.test(rango)) {
-      desde = Number(rango);
-      hasta = pasoRaw === undefined ? desde : max;
+    const [range, stepRaw] = part.split('/');
+    const step = stepRaw === undefined ? 1 : Number(stepRaw);
+    if (!Number.isInteger(step) || step < 1) throw new CronError(`Paso inválido en «${expr}»: ${part}`);
+    let from: number;
+    let to: number;
+    if (range === '*') {
+      from = min;
+      to = max;
+    } else if (range !== undefined && /^\d+-\d+$/.test(range)) {
+      [from, to] = range.split('-').map(Number) as [number, number];
+    } else if (range !== undefined && /^\d+$/.test(range)) {
+      from = Number(range);
+      to = stepRaw === undefined ? from : max;
     } else {
       throw new CronError(`Campo inválido en «${expr}»: ${part}`);
     }
-    if (desde < min || hasta > max || desde > hasta) throw new CronError(`Fuera de rango en «${expr}»: ${part}`);
-    for (let v = desde; v <= hasta; v += paso) values.add(v);
+    if (from < min || to > max || from > to) throw new CronError(`Fuera de range en «${expr}»: ${part}`);
+    for (let v = from; v <= to; v += step) values.add(v);
   }
-  return { values, any: raw === '*' };
+  return { values, any: raw.startsWith('*') };
+}
+
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+function replaceNames(field: string, names: readonly string[], offset: number): string {
+  return field.toUpperCase().replace(/[A-Z]{3}/g, (n) => {
+    const i = names.indexOf(n);
+    return i < 0 ? n : String(i + offset);
+  });
 }
 
 export function parseCron(expr: string): ParsedCron {
-  const campos = expr.trim().split(/\s+/);
-  if (campos.length !== 5) throw new CronError(`El cron «${expr}» no tiene cinco campos`);
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = campos.map((c, i) => parseField(c, RANGES[i]!, expr)) as [Field, Field, Field, Field, Field];
+  const raw = expr.trim().split(/\s+/);
+  const fields = raw.length === 5 ? [raw[0]!, raw[1]!, raw[2]!, replaceNames(raw[3]!, MONTHS, 1), replaceNames(raw[4]!, DAYS, 0)] : raw;
+  if (fields.length !== 5) throw new CronError(`El cron «${expr}» no tiene cinco fields`);
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields.map((c, i) => parseField(c, RANGES[i]!, expr)) as [Field, Field, Field, Field, Field];
   // 7 es domingo, igual que 0.
   if (dayOfWeek.values.has(7)) (dayOfWeek.values as Set<number>).add(0);
   return { minute, hour, dayOfMonth, month, dayOfWeek };
@@ -97,8 +112,8 @@ export function lastTick(expr: string | ParsedCron, now: Date): Date | null {
   const c = typeof expr === 'string' ? parseCron(expr) : expr;
   const t = new Date(now.getTime());
   t.setUTCSeconds(0, 0);
-  const limite = now.getTime() - MAX_DAYS_BACK * 86_400_000;
-  while (t.getTime() >= limite) {
+  const limit = now.getTime() - MAX_DAYS_BACK * 86_400_000;
+  while (t.getTime() >= limit) {
     if (!dayMatches(c, t)) {
       // Al último minuto del día anterior.
       t.setUTCHours(0, 0, 0, 0);

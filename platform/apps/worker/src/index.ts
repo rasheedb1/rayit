@@ -7,9 +7,9 @@
  *   … --demo                                                pglite + datos de ejemplo + oauth.refresh en vivo
  *   … --once                                                una pasada: corre lo vencido y sale, sin pg-boss (WRK)
  *
- * --once sale con 0 si ninguna corrida terminó failed y con 1 si alguna
- * sí: así el cron externo (GitHub Actions) la marca en rojo en vez de
- * esconderla. Al terminar imprime la salud (última corrida por job).
+ * --once sale con 1 si alguna corrida terminó failed o si una señal
+ * dejó jobs vencidos sin empezar: así el cron externo (GitHub Actions)
+ * la marca en rojo en vez de esconderla. Al terminar imprime la salud (última corrida por job).
  *
  * Apagado limpio: SIGTERM/SIGINT → boss.stop graceful (espera los jobs
  * activos hasta WORKER_STOP_TIMEOUT_S) → cierra el pool → sale con 0.
@@ -23,7 +23,7 @@ import { allJobs } from './jobs/index.ts';
 import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, type Logger } from './runner/logger.ts';
-import { runOnce } from './runner/once.ts';
+import { onceExitCode, runOnce } from './runner/once.ts';
 import { formatHealth } from './runner/salud.ts';
 import { assertRole, startWorker, type RunningWorker } from './runner/worker.ts';
 import { getWorkerHealth } from '@mc/db/queries/worker';
@@ -143,16 +143,16 @@ async function mainOnce(db: WorkerDatabase, secrets: SecretStore, refreshers: To
   };
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
-  let failedRuns = 0;
+  let exitCode: 0 | 1 = 1;
   try {
     await assertRole(db, config, logger);
     const summary = await runOnce({ config, db, logger, jobs: allJobs, secrets, refreshers, signal: abort.signal });
-    failedRuns = summary.failedRuns;
+    exitCode = onceExitCode(summary);
     process.stdout.write(formatHealth(await getWorkerHealth(db), new Date()));
   } finally {
     await db.close().catch(() => undefined);
   }
-  process.exit(failedRuns > 0 ? 1 : 0);
+  process.exit(exitCode);
 }
 
 async function main(): Promise<void> {
