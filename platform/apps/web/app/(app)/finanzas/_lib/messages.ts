@@ -53,6 +53,8 @@ export const MESSAGES = {
     },
     /** Lo facturado, cuando no coincide con lo que queda por cobrar. */
     ofTotal: (total: string) => `de ${total}`,
+    /** Lo que se lee en «Por cobrar» de una factura ya cobrada: no un cero. */
+    nothingDue: "Nada pendiente",
     noCampaign: "Sin campaña",
     seeInvoice: "Ver factura",
     /** Solo si un workspace llega al tope de filas de la pantalla. */

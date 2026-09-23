@@ -75,7 +75,9 @@ export function Filtros({ active, minSearch }: { active: ReceivableFilterKey; mi
         options={RECEIVABLE_FILTER_KEYS.map((key) => ({ value: key, label: RECEIVABLE_FILTERS[key].label }))}
         onChange={(key) => navigate({ bucket: key === "por_cobrar" ? "" : key })}
       />
-      <div role="search" className="min-w-0 flex-1 basis-56">
+      {/* Crece hasta un tope: sin él, en escritorio la caja se estiraba
+          hasta el borde y pesaba más que el filtro, que es lo principal. */}
+      <div role="search" className="min-w-0 max-w-sm flex-1 basis-56">
         <Field label={t.search} help={short ? t.shortSearch(minSearch) : t.searchHelp} htmlFor="cobros-q">
           <Input
             type="search"

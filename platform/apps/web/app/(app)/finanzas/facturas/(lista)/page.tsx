@@ -33,8 +33,15 @@ const columnas = (f: Formatter): Column<InvoiceListRow>[] => [
   {
     key: "company",
     header: "Marca",
+    // La marca enlaza a la factura, además del botón de la última
+    // columna: a 400 px la tabla hace scroll por dentro y ese botón
+    // queda fuera de la pantalla (scripts/ancho-movil.mjs con DENTRO).
     render: (r) => (
-      <CellMain sub={<span className="whitespace-nowrap font-mono">{r.number}</span>}>{r.companyName}</CellMain>
+      <CellMain sub={<span className="whitespace-nowrap font-mono">{r.number}</span>}>
+        <Link href={`/finanzas/facturas/${r.id}`} className="underline-offset-2 hover:underline">
+          {r.companyName}
+        </Link>
+      </CellMain>
     ),
   },
   {
@@ -61,14 +68,14 @@ const columnas = (f: Formatter): Column<InvoiceListRow>[] => [
   {
     key: "dueOn",
     header: "Vence",
-    render: (r) =>
-      r.bucket === "pagada" || r.bucket === "anulada" ? (
-        <span className="whitespace-nowrap text-fg-3">{f.date(r.dueOn)}</span>
-      ) : (
-        <CellMain sub={f.daysRelative(r.daysToDue)}>
-          <span className="whitespace-nowrap">{f.date(r.dueOn)}</span>
-        </CellMain>
-      ),
+    // Solo la fecha, y corta: los días que faltan o que lleva vencida
+    // los dice la pastilla de la columna siguiente, y repetirlos era
+    // «16 oct · en 23 días · Al día» en tres columnas seguidas.
+    render: (r) => (
+      <span className={`whitespace-nowrap ${r.bucket === "pagada" || r.bucket === "anulada" ? "text-fg-3" : ""}`}>
+        {f.date(r.dueOn)}
+      </span>
+    ),
   },
   {
     key: "status",

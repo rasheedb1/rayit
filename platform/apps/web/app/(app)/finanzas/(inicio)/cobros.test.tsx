@@ -172,6 +172,14 @@ describe("/finanzas con el seed coincide con el mock", () => {
       "href",
       "/finanzas/facturas/00000003-0000-4000-8000-0000fac26007",
     );
+    // A 400 px la tabla hace scroll por dentro y ese botón queda en
+    // x≈612: la marca es el mismo enlace en la primera columna, que es
+    // la que se ve. Lo mide de verdad scripts/ancho-movil.mjs con
+    // DENTRO='table td:first-child a'.
+    expect(within(f).getByRole("link", { name: "Hogar Lindo" })).toHaveAttribute(
+      "href",
+      "/finanzas/facturas/00000003-0000-4000-8000-0000fac26007",
+    );
   });
 
   it("las otras dos llevan su color y su frase, no un guion", async () => {
@@ -199,6 +207,17 @@ describe("/finanzas con el seed coincide con el mock", () => {
     const celda = within(f).getByText("Sin campaña");
     expect(celda).toHaveAttribute("data-celda-vacia");
     expect(f.textContent).not.toMatch(/—|–\s|\s-\s/);
+    estado.rows = [VENCIDA, VENCE_PRONTO, AL_DIA];
+  });
+
+  it("una factura ya cobrada no enseña «COP 0» bajo «Por cobrar», sino la frase", async () => {
+    estado.rows = [{ ...VENCIDA, bucket: "pagada", status: "paid", paidAmount: "1100000.00", outstanding: "0.00" }];
+    render(await pintar({ bucket: "pagada" }));
+    const f = fila("Hogar Lindo");
+    expect(within(f).getByText("Nada pendiente")).toHaveAttribute("data-celda-vacia");
+    expect(within(f).getByText("de COP 1.100.000")).toBeInTheDocument();
+    expect(within(f).getByText("Cobrada")).toBeInTheDocument();
+    expect(within(f).queryByText("COP 0")).not.toBeInTheDocument();
     estado.rows = [VENCIDA, VENCE_PRONTO, AL_DIA];
   });
 

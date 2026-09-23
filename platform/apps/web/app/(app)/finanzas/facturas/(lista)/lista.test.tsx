@@ -79,6 +79,12 @@ describe("/finanzas/facturas es el archivo, no la pantalla de cobro", () => {
     render(await pintar());
     expect(within(fila("Café Alma")).getByText("Borrador")).toBeInTheDocument();
     expect(within(fila("Fresko Market")).getByText("Anulada")).toBeInTheDocument();
+    // La marca es el mismo enlace: a 400 px el botón de la última
+    // columna queda detrás del scroll interno de la tabla.
+    expect(within(fila("Café Alma")).getByRole("link", { name: "Café Alma" })).toHaveAttribute(
+      "href",
+      "/finanzas/facturas/00000003-0000-4000-8000-0000fac26012",
+    );
     // Un borrador todavía no se cobra: se completa.
     expect(within(fila("Café Alma")).getByRole("link", { name: "Completar" })).toHaveAttribute(
       "href",

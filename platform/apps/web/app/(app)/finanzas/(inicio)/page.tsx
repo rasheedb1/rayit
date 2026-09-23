@@ -49,8 +49,18 @@ const columnas = (f: Formatter): Column<ReceivableRow>[] => {
     {
       key: "company",
       header: t.columns.company,
+      // La marca es el enlace a la factura, además del botón de la
+      // última columna. No es una redundancia: a 400 px la tabla hace
+      // scroll por dentro y «Ver factura» queda en x≈612, fuera de la
+      // pantalla (lo mide scripts/ancho-movil.mjs con DENTRO). Así la
+      // acción principal está siempre en la primera columna, que es la
+      // que se ve. Es la lección de COT-1 ronda 4.
       render: (r) => (
-        <CellMain sub={<span className="whitespace-nowrap font-mono">{r.number}</span>}>{r.companyName}</CellMain>
+        <CellMain sub={<span className="whitespace-nowrap font-mono">{r.number}</span>}>
+          <Link href={`/finanzas/facturas/${r.id}`} className="underline-offset-2 hover:underline">
+            {r.companyName}
+          </Link>
+        </CellMain>
       ),
     },
     {
@@ -65,9 +75,16 @@ const columnas = (f: Formatter): Column<ReceivableRow>[] => {
       // Lo que queda por cobrar, no lo que se facturó: es la pregunta de
       // esta pantalla. Cuando no coinciden —un abono parcial, o ya
       // cobrada— la segunda línea dice de cuánto era la factura.
+      //
+      // Una factura cobrada no enseña «COP 0» bajo el rótulo «Por
+      // cobrar»: ahí no queda una cifra que leer, así que va la frase.
       render: (r) => (
         <CellMain sub={r.outstanding === r.total ? undefined : t.ofTotal(f.money(r.total, r.currency, { mode: "full" }))}>
-          {f.money(r.outstanding, r.currency, { mode: "full" })}
+          {r.bucket === "pagada" ? (
+            <CeldaVacia texto={t.nothingDue} />
+          ) : (
+            f.money(r.outstanding, r.currency, { mode: "full" })
+          )}
         </CellMain>
       ),
     },
