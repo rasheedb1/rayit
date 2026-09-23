@@ -1323,30 +1323,31 @@ describe('las hijas con clave ajena opcional (0024 §6)', () => {
 });
 
 /**
- * getWorkspace no se queda esperando a que la migración esté aplicada.
+ * getWorkspace nunca sirve al vecino, esté o no la política.
  *
- * La consulta no lleva WHERE a propósito —la política es la que aísla, y
- * filtrar en JavaScript volvía a pasar el workspace como parámetro—,
- * pero eso deja la corrección al 100% en manos de que 0024 esté
- * APLICADA, y hay una ventana documentada en la que no lo está
- * (ALLOW_STALE_SCHEMA=1). En esa ventana, `limit(1)` sin ORDER BY
- * devolvía un inquilino cualquiera y Finanzas formateaba con SU moneda.
+ * Hasta integrar CIM-3 la consulta no llevaba WHERE —la política era la
+ * que dejaba ver una fila— y comprobaba la que volvía, porque en la
+ * ventana de ALLOW_STALE_SCHEMA=1 (0024 sin aplicar) `limit(1)` sin
+ * ORDER BY devolvía un inquilino cualquiera y Finanzas formateaba con
+ * SU moneda. Con CIM-3 (0028, workspace_read_member) una transacción con
+ * identidad ve también los otros espacios de su persona, así que ahora
+ * filtra por `current_workspace_id()` —la función de la transacción, no
+ * un parámetro de JavaScript— y sigue comprobando la fila.
  */
-describe('getWorkspace: si la política no está, se cae en vez de servir al vecino', () => {
+describe('getWorkspace: nunca sirve al vecino', () => {
   test('con la política puesta, devuelve el workspace de la transacción', async () => {
     const ws = await t.db.withWorkspace(WS_A, getWorkspace);
     assert.equal(ws.id, WS_A);
   });
 
-  test('sin la política, la consulta ve TODOS los inquilinos y getWorkspace se niega a servir uno', async () => {
-    // Es la ventana de ALLOW_STALE_SCHEMA: `workspace` sin la RLS de
-    // 0024. Allí `limit(1)` sin ORDER BY devuelve una fila CUALQUIERA de
-    // las cinco que hay, y antes se servía tal cual: la moneda, el
-    // locale y la zona con que Finanzas formatea salían de otro
-    // inquilino. La política de mentira es `id <> current_workspace_id()`
-    // y no `true` a propósito: con `true` el motor podría devolver por
-    // suerte la fila propia y la prueba sería intermitente; así el
-    // «cualquiera» es siempre otro, que es justo el caso malo.
+  test('con una política que abre a TODOS los inquilinos, getWorkspace sigue sin servir otro', async () => {
+    // Es la ventana de ALLOW_STALE_SCHEMA llevada al extremo: `workspace`
+    // sin la RLS de 0024, la consulta ve las filas de todos. Antes, sin
+    // filtro, `limit(1)` devolvía una CUALQUIERA y la moneda, el locale y
+    // la zona con que Finanzas formatea salían de otro inquilino. La
+    // política de mentira es `id <> current_workspace_id()` y no `true` a
+    // propósito: así el «cualquiera» es siempre otro, que es justo el caso
+    // malo.
     await t.admin(
       'DROP POLICY workspace_read ON workspace; ' +
         'CREATE POLICY workspace_read ON workspace FOR SELECT USING (id <> current_workspace_id())',
@@ -1354,11 +1355,9 @@ describe('getWorkspace: si la política no está, se cae en vez de servir al vec
     try {
       const todos = await t.db.withWorkspace(WS_B, (tx) => countRows(tx, 'workspace'));
       assert.ok(todos > 1, 'la prueba no vale si la consulta solo puede ver una fila');
-      await assert.rejects(t.db.withWorkspace(WS_B, getWorkspace), (err: unknown) => {
-        assert.match(fullMessage(err), /otro inquilino/);
-        assert.match(fullMessage(err), /0024/);
-        return true;
-      });
+      // La política de mentira esconde justo la fila propia: lo único
+      // que getWorkspace podría devolver es otro inquilino, y no lo hace.
+      await assert.rejects(t.db.withWorkspace(WS_B, getWorkspace), /no existe en esta base/);
     } finally {
       await t.admin(
         'DROP POLICY workspace_read ON workspace; ' +
@@ -1378,6 +1377,29 @@ describe('getWorkspace: si la política no está, se cae en vez de servir al vec
   test('y la política vuelve a estar, para las pruebas que siguen', async () => {
     const ws = await t.db.withWorkspace(WS_B, getWorkspace);
     assert.equal(ws.id, WS_B);
+  });
+
+  test('quien está en dos espacios ve los dos (CIM-3), y getWorkspace le da el de la transacción', async () => {
+    // El caso que rompía la integración de CIM-3 con el endurecimiento:
+    // con identidad fijada, workspace_read_member (0028) abre también los
+    // otros espacios de la persona. Sin filtro, `limit(1)` devolvía el
+    // que fuera, y la comprobación tumbaba cada pantalla de quien tiene
+    // dos espacios.
+    const persona = '0000009e-0000-4000-8000-000000000001';
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${persona}', 'dos-espacios@ejemplo.test', 'Dos espacios');
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${persona}', 'owner'), ('${WS_B}', '${persona}', 'owner');
+    `);
+    try {
+      for (const ws of [WS_A, WS_B]) {
+        const visibles = await t.db.withWorkspace(ws, (tx) => countRows(tx, 'workspace'), { userId: persona });
+        assert.equal(visibles, 2, 'la prueba no vale si la persona no ve sus dos espacios');
+        const fila = await t.db.withWorkspace(ws, getWorkspace, { userId: persona });
+        assert.equal(fila.id, ws);
+      }
+    } finally {
+      await t.admin(`DELETE FROM membership WHERE user_id = '${persona}'; DELETE FROM app_user WHERE id = '${persona}';`);
+    }
   });
 });
 
@@ -1676,6 +1698,38 @@ describe('las métricas propias y la auditoría no se reescriben desde la aplica
     for (const tabla of ['post_metric_snapshot', 'job_run', 'audit_log', 'campaign_result']) {
       assert.ok((await t.db.withWorkspace(WS_A, (tx) => countRows(tx, tabla))) >= 0);
     }
+  });
+
+  test('post_metric_snapshot: la web AÑADE lecturas de su post (CSV de RES-2), pero no del post de otro', async () => {
+    // 0025 §5 le deja a mc_app el INSERT —la importación por CSV—, y con
+    // él la sección 7 le engancha assert_reference_visible en post_id.
+    const post = await t.db.withWorkspace(WS_A, async (tx) => {
+      const { rows: [creadora] } = await tx.query<{ id: string }>(
+        "INSERT INTO creator_profile (workspace_id, display_name) VALUES (current_workspace_id(), 'Creadora pms') RETURNING id::text AS id",
+      );
+      const { rows: [conexion] } = await tx.query<{ id: string }>(
+        `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes)
+         VALUES (current_workspace_id(), $1, 'instagram', 'pms-0025', 'pms-0025', 'vault://demo', '{}') RETURNING id::text AS id`,
+        [creadora!.id],
+      );
+      const { rows: [p] } = await tx.query<{ id: string }>(
+        `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, media_type, published_at)
+         VALUES (current_workspace_id(), $1, $2, 'instagram', 'pms-0025-a', 'video', now() - interval '2 days')
+         RETURNING id::text AS id`,
+        [creadora!.id, conexion!.id],
+      );
+      return p!.id;
+    });
+    const insertar = (ws: string) =>
+      t.db.withWorkspace(ws, (tx) =>
+        tx.query(
+          `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+           VALUES ($1, current_workspace_id(), now(), 48, 10, 'csv_import')`,
+          [post],
+        ),
+      );
+    await insertar(WS_A);
+    await assert.rejects(insertar(WS_B), isReferenciaInvisible);
   });
 
   test('y el worker las sigue escribiendo, con sus propios GRANT (0014)', async (ctx) => {
@@ -2042,7 +2096,10 @@ describe('las secuencias no cuentan lo de los demás (0026 §4)', () => {
       isPermissionDenied,
     );
     await assert.rejects(
-      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT nextval('post_metric_snapshot_id_seq')")),
+      // post_retention_curve: métrica que solo escribe el worker. (Hasta
+      // integrar RES-2 era post_metric_snapshot; ahora la web inserta ahí
+      // las lecturas de un CSV y conserva USAGE, ver 0025 §5.)
+      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT nextval('post_retention_curve_id_seq')")),
       isPermissionDenied,
     );
   });
@@ -2094,7 +2151,9 @@ describe('filas heredadas: las empresas que ya existen pasan a su workspace (002
 
   before(async () => {
     if (t.kind !== 'pglite') return;
-    viejo = await createEmbeddedDb({ hasta: '0021_app_user_self_update.sql' });
+    // La base como está Supabase hoy: hasta 0022 (CON-10, de main), la
+    // última aplicada antes del endurecimiento.
+    viejo = await createEmbeddedDb({ hasta: '0022_public_profile_access.sql' });
     await viejo.execAsSuperuser(`
       INSERT INTO workspace (id, slug, name) VALUES
         ('${L}', 'l-0026', 'Laura'), ('${M}', 'm-0026', 'Otra agencia'), ('${N}', 'n-0026', 'Nuevo');

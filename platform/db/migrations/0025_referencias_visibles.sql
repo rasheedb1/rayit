@@ -245,6 +245,12 @@ CREATE POLICY workspace_signup ON workspace FOR INSERT
 --                      bitácora de trabajos
 --   SELECT + INSERT    audit_log: la aplicación anota lo que hace, y
 --                      nadie lo corrige ni lo borra
+--   SELECT + INSERT    post_metric_snapshot: la web AÑADE lecturas al
+--                      importar un CSV de Insights (RES-2, integrado
+--                      con esta migración todavía sin aplicar). Se
+--                      insertan, nunca se corrigen ni se borran; al
+--                      conservar INSERT, la sección 7 le engancha
+--                      assert_reference_visible en post_id
 --   sin DELETE         account_metric_snapshot: CON-10 (en main)
 --                      registra desde la web el snapshot público del día
 --                      con un upsert, así que conserva INSERT y UPDATE
@@ -252,7 +258,6 @@ CREATE POLICY workspace_signup ON workspace FOR INSERT
 --                      nadie
 -- =====================================================================
 REVOKE INSERT, UPDATE, DELETE ON
-  post_metric_snapshot,
   audience_breakdown,
   post_engagement_curve,
   post_retention_curve,
@@ -264,6 +269,8 @@ REVOKE INSERT, UPDATE, DELETE ON
 FROM mc_app;
 
 REVOKE UPDATE, DELETE ON audit_log FROM mc_app;
+
+REVOKE UPDATE, DELETE ON post_metric_snapshot FROM mc_app;
 
 REVOKE DELETE ON account_metric_snapshot FROM mc_app;
 

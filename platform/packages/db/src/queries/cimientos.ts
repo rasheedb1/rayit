@@ -14,6 +14,7 @@
  * Regla: ninguna capa inventa moneda, zona ni locale. Los pide aquí,
  * dentro de la transacción que ya sabe su workspace.
  */
+import { sql } from 'drizzle-orm';
 import type { WorkspaceTx } from '../client.ts';
 import { workspace } from '../schema/index.ts';
 
@@ -38,27 +39,29 @@ export interface WorkspaceSettings {
  * un workspace fijado que no está en la base es un error de
  * configuración (un DEMO_WORKSPACE_ID viejo), no una lista vacía.
  *
- * No hay WHERE, y eso es la regla del paquete, no un descuido: desde la
- * migración 0024 `workspace` lleva RLS y la política deja ver UNA fila,
- * la de current_workspace_id(). Filtrar además en JavaScript con
+ * El filtro es `id = current_workspace_id()`, el que ya fijó la
+ * transacción, y no un parámetro de JavaScript: filtrar con
  * `eq(workspace.id, tx.workspaceId)` era volver a poner el workspace
- * como parámetro de la consulta —lo que el contrato prohíbe— y, peor,
- * daba la impresión de que ESE filtro era el que aislaba: mientras
- * faltó la política, cualquier otra consulta de la tabla veía los
- * inquilinos ajenos y esta parecía prueba de que no.
+ * como parámetro de la consulta —lo que el contrato prohíbe— y daba la
+ * impresión de que ESE filtro era el que aislaba. Aislar lo hace la RLS
+ * de 0024.
  *
- * Pero quitar el WHERE deja la corrección al 100% en manos de que 0024
- * esté APLICADA, y hay una ventana documentada en la que no lo está:
- * ALLOW_STALE_SCHEMA=1, la salida para el despliegue que tiene que
- * salir antes de que el integrador corra `make db.migrate`. En esa
- * ventana, `limit(1)` sin ORDER BY sobre una tabla sin RLS devuelve un
- * workspace CUALQUIERA, y su moneda, su locale y su zona horaria se
- * sirven a /finanzas sin que nadie se entere. Así que la fila que vuelve
- * se comprueba: es barato, no vuelve a pasar el workspace a la
- * consulta, y convierte un fallo silencioso en uno ruidoso.
+ * Pero hace falta filtrar: desde CIM-3 (0028, `workspace_read_member`)
+ * una transacción con identidad ve además los espacios a los que su
+ * persona pertenece —es lo que pinta el selector—, así que sin filtro
+ * `limit(1)` devolvía cualquiera de ellos a quien tiene dos, y la
+ * comprobación de abajo lo convertía en un error en cada pantalla.
+ *
+ * Y la fila que vuelve se comprueba igual. Sin filtro, en la ventana
+ * documentada en la que 0024 no está aplicada (ALLOW_STALE_SCHEMA=1, el
+ * despliegue que sale antes de `make db.migrate`), `limit(1)` sobre una
+ * tabla sin RLS devolvía un workspace CUALQUIERA y su moneda se servía
+ * a /finanzas sin que nadie se enterara. Con el filtro eso ya no pasa,
+ * pero la comprobación es barata y deja ruidoso cualquier cambio futuro
+ * del filtro o de la función.
  */
 export async function getWorkspace(tx: WorkspaceTx): Promise<Workspace> {
-  const [row] = await tx.db.select().from(workspace).limit(1);
+  const [row] = await tx.db.select().from(workspace).where(sql`${workspace.id} = current_workspace_id()`).limit(1);
   if (!row) {
     throw new Error(
       `El workspace ${tx.workspaceId} no existe en esta base. Revisa DEMO_WORKSPACE_ID (platform/.env.example) ` +

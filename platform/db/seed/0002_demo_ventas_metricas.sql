@@ -587,6 +587,8 @@ FROM seed_post p
 ),
 
 -- El post. ON CONFLICT DO NOTHING: en la segunda pasada no hace nada.
+-- RETURNING, para que la consulta principal lo lea (abajo, «ins_post
+-- primero»).
 ins_post AS (
 INSERT INTO post (id, workspace_id, creator_id, connection_id, platform_id, external_post_id, url, media_type, surface,
                   title, caption, hashtags, mentions, duration_s, is_branded_content, published_at, first_seen_at)
@@ -595,6 +597,7 @@ SELECT c.post_id, '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-80
        c.title, c.caption, c.hashtags, c.mentions, c.duration_s, c.branded, c.published_at, c.published_at + interval '1 hour'
 FROM seed_post_curve c
 ON CONFLICT DO NOTHING
+RETURNING id
 ),
 
 
@@ -640,6 +643,14 @@ CROSS JOIN LATERAL (
          round(x.v * c.reach_ratio * c.nofol_share)::bigint AS reach_nf
 ) y
 WHERE c.published_at + make_interval(hours => a.h) <= date_trunc('day', now())
+  -- ins_post primero. Un INSERT en un WITH que nadie lee se ejecuta
+  -- AL FINAL de la sentencia, y desde 0025 cada lectura lleva el
+  -- disparador assert_reference_visible en post_id (la web también
+  -- inserta lecturas: el CSV de RES-2), que busca el post al insertar
+  -- la fila. Leer ins_post aquí —un subplan que se evalúa una vez,
+  -- antes de la primera fila— obliga a insertar los posts antes, y el
+  -- disparador, que corre en una función volátil, ya los ve.
+  AND (SELECT count(*) FROM ins_post) >= 0
   AND NOT EXISTS (
     SELECT 1 FROM post_metric_snapshot s
     WHERE s.post_id = c.post_id AND s.captured_at = c.published_at + make_interval(hours => a.h)
