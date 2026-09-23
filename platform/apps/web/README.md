@@ -62,7 +62,8 @@ app/(app)/campanas/           Campañas: lista y ficha. La sección «Seguidores
                               _lib/seguidores.ts y «Actualizar ahora» en _lib/marca-service.ts,
                               que escribe con el mismo recordBrandSnapshot que el job
                               brand.snapshot. Textos en _lib/messages.ts.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
+                              de cada factura (registrar pago, reserva de impuestos).
                               index.ts exporta facturarCampana() para Campañas.
 app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
                               calcula projectCashflow() de @mc/core; la pantalla pinta.

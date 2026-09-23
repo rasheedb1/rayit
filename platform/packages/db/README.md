@@ -572,6 +572,13 @@ además más rápido.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas
   `timestamptz` en UTC.
 - Los tokens nunca tocan la base en claro (`secret_ref`).
+- **Este paquete no tiene idioma.** Cuando una consulta deja una frase
+  en una tabla de otro módulo (`activity.subject`, `notification.title_es`,
+  que es NOT NULL desde 0009), la recibe de quien la llama por un tipo
+  `Textos…` —`TextosCotizar`, `TextosFinanzas`— y guarda junto a ella su
+  código y su entidad (`kind` + `entity_id`) para poder recomponerla.
+  Así la cifra sale con el `formatterFor` del espacio y no con un
+  `es-CO` escrito aquí.
 - Toda escritura de dinero, publicación o cuenta conectada deja su fila
   en `audit_log` con `audit()` (uso 7), en la misma transacción, con
   `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige

@@ -537,7 +537,8 @@ export const STORIES: readonly Story[] = [
     title: "Pagos y reserva de impuestos",
     desc: "Registrar un pago contra una factura (parcial o total), método y referencia. Actualiza paid_amount, status y paid_at. Crea tax_reserve con el porcentaje configurado del workspace.",
     done: "Registrar un pago parcial deja la factura en partial; el total la pasa a paid y aparta el impuesto.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Sección «Pagos» en el detalle: lista de cobros con lo que cada uno apartó y formulario con el saldo sugerido. applyPayment, taxReserveFor y reservePeriod en core (sin sobrepagos en el MVP); recordPayment escribe cobro, factura, apartado, bitácora y aviso en UNA transacción. La tasa se guarda en cada apartado, así que FIN-8 podrá cambiarla sin tocar los anteriores; un espacio sin reserva_pct cobra igual y lo dice. Un doble envío no registra dos pagos: el formulario lleva el paid_amount que vio y la consulta lo compara con FOR UPDATE tomado. Sin migraciones. ACC-1 y ACC-2 entraron a main durante la historia y ya se usan: la acción abre con requirePermission('finanzas.pago.registrar') y recordPayment llama a audit(); una prueba de punta a punta comprueba que el rol Mánager no puede cobrar y no deja ni pago ni bitácora. Propuesta: docs/propuestas/FIN-2.md.",
   },
   {
     id: "FIN-3", module: "FIN", owner: "nicolas", size: "M", sprint: 3, deps: ["FIN-1"],

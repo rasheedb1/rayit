@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { rateToPct, INVOICE_STATUS_LABEL_ES } from "@mc/core";
-import { getInvoice } from "@mc/db/queries/finanzas";
+import { hoyEnZona, rateToPct, INVOICE_STATUS_LABEL_ES } from "@mc/core";
+import { getInvoice, listPayments } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
+import { MESSAGES } from "../../_lib/messages";
 import { pillForInvoice } from "../../_lib/estado";
 import { cambiarEstadoFactura } from "../actions";
+import { SeccionPagos } from "./pagos";
 
 export const dynamic = "force-dynamic";
 
@@ -56,13 +58,23 @@ export default async function FacturaPage({
 }) {
   const { id } = await params;
   const { error } = await searchParams;
-  const invoice = await withWorkspace((tx) => getInvoice(tx, id));
+  // Una sola transacción para la factura y sus cobros: dos withWorkspace
+  // seguidos podrían leer estados distintos si entra un pago en medio.
+  const { invoice, pagos } = await withWorkspace(async (tx) => ({
+    invoice: await getInvoice(tx, id),
+    pagos: await listPayments(tx, id),
+  }));
   if (!invoice) notFound();
   // Locale, moneda y zona horaria del workspace, atados: esta pantalla
   // formateaba con es-CO fijo mientras la lista de facturas ya usaba el
   // del workspace, así que un workspace en MXN/en-US veía dos formatos
   // de número en el mismo flujo.
-  const f = formatterFor(await getCurrentWorkspace());
+  const ws = await getCurrentWorkspace();
+  const f = formatterFor(ws);
+  // El día de hoy EN LA ZONA DEL ESPACIO: es el que propone el
+  // formulario y su tope. new Date() en el servidor está en la zona del
+  // proceso, que en Vercel es UTC y no la del creador.
+  const hoy = hoyEnZona(ws.timezone);
 
   const pill = pillForInvoice(invoice);
   const puedeEnviar = invoice.status === "draft";
@@ -90,7 +102,11 @@ export default async function FacturaPage({
       )}
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-8">
+        {/* min-w-0: sin él, el ancho mínimo de una celda de rejilla es su
+            contenido, así que la tabla de cobros —que tiene su propio
+            scroll— estiraba la columna a 536 px y desbordaba la página a
+            390. Medido: scrollWidth 552 sobre clientWidth 390. */}
+        <div className="min-w-0 space-y-8">
           <section className="rounded-md border border-line p-4" aria-labelledby="montos">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 id="montos" className="text-sm font-semibold">
@@ -106,6 +122,16 @@ export default async function FacturaPage({
               <Row label="Neto que entra al banco" value={monto(f, invoice.net, invoice.currency)} />
               <Row label="Pagado" value={monto(f, invoice.paidAmount, invoice.currency)} muted />
               <Row label="Pendiente por cobrar" value={monto(f, invoice.outstanding, invoice.currency)} strong />
+              {/* Solo si de verdad se apartó algo: un espacio sin
+                  porcentaje configurado lo explica con una frase en la
+                  sección «Pagos», no con un cero aquí. */}
+              {pagos.reserveRate && (
+                <Row
+                  label={MESSAGES.pagos.reservedWith(rateToPct(pagos.reserveRate))}
+                  value={monto(f, pagos.reservedTotal, invoice.currency)}
+                  muted
+                />
+              )}
             </dl>
           </section>
 
@@ -157,10 +183,18 @@ export default async function FacturaPage({
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Pagada el</dt>
-                <dd className="text-sm">{invoice.paidAt ? f.date(invoice.paidAt, "long") : <span className="text-fg-3">—</span>}</dd>
+                <dd className="text-sm">
+                  {invoice.paidAt ? (
+                    f.date(invoice.paidAt, "long")
+                  ) : (
+                    <span className="text-fg-3">Todavía no se ha cobrado por completo</span>
+                  )}
+                </dd>
               </div>
             </dl>
           </section>
+
+          <SeccionPagos invoice={invoice} pagos={pagos} f={f} workspace={{ locale: ws.locale }} today={hoy} />
         </div>
 
         <aside className="lg:sticky lg:top-8 lg:self-start">
@@ -174,12 +208,6 @@ export default async function FacturaPage({
                   </Button>
                 </form>
               )}
-              <Button disabled title="Sprint 3 · FIN-2" className="w-full">
-                Registrar pago
-              </Button>
-              <p id="pago-nota" className="text-xs text-fg-3">
-                Registrar pago llega en el sprint 3 (FIN-2), con pagos parciales y la reserva de impuestos.
-              </p>
               {puedeAnular && (
                 <form action={cambiarEstadoFactura.bind(null, invoice.id, "void")}>
                   <Button type="submit" variant="danger" className="w-full">
@@ -188,9 +216,7 @@ export default async function FacturaPage({
                 </form>
               )}
               {!puedeEnviar && !puedeAnular && (
-                <p className="text-xs text-fg-3">
-                  Una factura {INVOICE_STATUS_LABEL_ES[invoice.status].toLowerCase()} no admite más cambios de estado desde aquí.
-                </p>
+                <p className="text-xs text-fg-3">{MESSAGES.estadoSinAcciones[invoice.status]}</p>
               )}
             </div>
           </div>

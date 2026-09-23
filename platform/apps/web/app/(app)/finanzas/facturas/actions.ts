@@ -3,17 +3,39 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { pctToRate, type InvoiceStatus } from "@mc/core";
-// UUID_RE e isUuid salen de @mc/db: había una copia aquí y otra en
-// lib/workspace/current.ts, y tres definiciones de lo mismo terminan
-// divergiendo (una acepta mayúsculas, otra no).
-import { isUuid, UUID_RE } from "@mc/db";
-import { createInvoice, createInvoiceFromCampaign, transitionInvoice } from "@mc/db/queries/finanzas";
+import {
+  compareDecimal,
+  isPaymentMethod,
+  pctToRate,
+  InvoiceError,
+  InvoicePaymentConflict,
+  MONTO_MAXIMO,
+  PaymentDateInFuture,
+  PaymentExceedsOutstanding,
+  type InvoiceStatus,
+  type PaymentMethod,
+} from "@mc/core";
+// UUID_RE, isUuid, DECIMAL_RE, firstErrors, formField y ActionState
+// salen de @/lib/forms (que a su vez reexporta las dos primeras de
+// @mc/db): este archivo llevaba su propia copia de cada uno, y tres
+// definiciones de lo mismo terminan divergiendo. Es el pendiente que
+// CAM-1 §7 y el §9.5 del backlog dejaron anotado para FIN-2.
+import {
+  createInvoice,
+  createInvoiceFromCampaign,
+  recordPayment,
+  transitionInvoice,
+  InvoiceNotFound,
+} from "@mc/db/queries/finanzas";
+import { DECIMAL_RE, firstErrors, formField, isUuid, UUID_RE, type ActionState } from "@/lib/forms";
+import { formatterFor, type Formatter } from "@/lib/format";
 import { requirePermission } from "@/lib/permisos";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
+import { MESSAGES } from "../_lib/messages";
+import { textosFinanzas } from "../_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
 const PCT_RE = /^\d{1,3}([.,]\d{1,2})?$/;
 
 /** Lo que llega del formulario "Nueva factura". Mensajes en español. */
@@ -37,34 +59,25 @@ const nuevaFacturaSchema = z
     message: "El vencimiento no puede ser anterior a la emisión.",
   });
 
-export interface CrearFacturaState {
-  /** Errores por campo, en español. */
-  errors?: Record<string, string>;
-  /** Error general (base de datos, regla de negocio). */
-  message?: string;
-}
-
-function firstErrors(issues: { path: PropertyKey[]; message: string }[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const issue of issues) {
-    const key = String(issue.path[0] ?? "form");
-    if (!(key in out)) out[key] = issue.message;
-  }
-  return out;
-}
+/**
+ * Lo que «Nueva factura» devuelve a useActionState. Es el ActionState
+ * común de @/lib/forms; el alias se conserva porque nueva/form.tsx y su
+ * prueba lo importan con este nombre.
+ */
+export type CrearFacturaState = ActionState;
 
 /** Server Action del formulario: valida, crea en borrador y redirige al detalle. */
 export async function crearFactura(_prev: CrearFacturaState, formData: FormData): Promise<CrearFacturaState> {
   await requirePermission("finanzas.factura.crear");
   const parsed = nuevaFacturaSchema.safeParse({
-    companyId: String(formData.get("companyId") ?? ""),
-    campaignId: String(formData.get("campaignId") ?? ""),
-    subtotal: String(formData.get("subtotal") ?? ""),
-    taxPct: String(formData.get("taxPct") ?? ""),
-    withholdingPct: String(formData.get("withholdingPct") ?? ""),
-    issuedOn: String(formData.get("issuedOn") ?? ""),
-    dueOn: String(formData.get("dueOn") ?? ""),
-    externalRef: String(formData.get("externalRef") ?? ""),
+    companyId: formField(formData, "companyId"),
+    campaignId: formField(formData, "campaignId"),
+    subtotal: formField(formData, "subtotal"),
+    taxPct: formField(formData, "taxPct"),
+    withholdingPct: formField(formData, "withholdingPct"),
+    issuedOn: formField(formData, "issuedOn"),
+    dueOn: formField(formData, "dueOn"),
+    externalRef: formField(formData, "externalRef"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
@@ -134,4 +147,105 @@ export async function facturarCampana(campaignId: string): Promise<void> {
   }
   revalidatePath("/finanzas");
   redirect(`/finanzas/facturas/${id}`);
+}
+
+// ---------------------------------------------------------------------
+// Pagos (FIN-2)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que llega del formulario «Registrar pago». `expectedPaidAmount` es
+ * el `paid_amount` que la pantalla vio al dibujarse: la consulta lo
+ * compara dentro de la transacción y rechaza el envío repetido
+ * (docs/propuestas/FIN-2.md §0.5).
+ */
+const registrarPagoSchema = z.object({
+  invoiceId: z.string().regex(UUID_RE, "La factura no es válida."),
+  amount: z
+    .string()
+    .regex(DECIMAL_RE, "Escribe el monto del pago.")
+    .refine((v) => compareDecimal(v, "0") > 0, "El monto del pago tiene que ser mayor que cero.")
+    .refine((v) => compareDecimal(v, MONTO_MAXIMO) <= 0, "El monto es demasiado grande para una factura."),
+  receivedOn: z.string().regex(ISO_DATE_RE, "Elige la fecha del cobro."),
+  // refine y no enum(...): la unión de zod responde «Invalid input» en inglés.
+  method: z.string().refine(isPaymentMethod, "Elige cómo entró el pago."),
+  reference: z.string().trim().max(80, "La referencia no puede pasar de 80 caracteres."),
+  notes: z.string().trim().max(500, "Las notas no pueden pasar de 500 caracteres."),
+  expectedPaidAmount: z
+    .string()
+    .regex(DECIMAL_RE, "Recarga la página: el formulario perdió el estado de la factura."),
+});
+
+/**
+ * Los errores de dominio llegan en español desde @mc/core; cualquier
+ * otro se registra y se resume.
+ *
+ * Los tres que llevan una cifra o una fecha se reescriben con el
+ * formateador del espacio: `messageEs` las trae en crudo («llevaba 0.00
+ * cobrado») porque @mc/core no tiene formateador, y el error guarda el
+ * dato aparte justo para esto.
+ */
+function messageOfPago(err: unknown, f: Formatter, currency: string): string {
+  const money = (amount: string) => f.money(amount, currency, { mode: "full" });
+  if (err instanceof InvoicePaymentConflict) return MESSAGES.errores.conflicto(money(err.expected), money(err.actual));
+  if (err instanceof PaymentExceedsOutstanding) return MESSAGES.errores.excede(money(err.outstanding));
+  if (err instanceof PaymentDateInFuture) return MESSAGES.errores.futuro(f.date(err.receivedOn, "long"), f.date(err.today, "long"));
+  if (err instanceof InvoiceError) return err.messageEs;
+  if (err instanceof InvoiceNotFound) return MESSAGES.errores.facturaIda;
+  console.error("[finanzas] registrarPago", err);
+  return MESSAGES.errores.pago;
+}
+
+/**
+ * Registra un cobro contra una factura, parcial o total, y aparta el
+ * porcentaje de impuestos del espacio. Es la primera escritura de dinero
+ * del producto después de la factura: lleva permiso y bitácora.
+ *
+ * El permiso es `finanzas.pago.registrar` (ACC-1), que el catálogo marca
+ * como sensible. La bitácora (ACC-2) la escribe `recordPayment` dentro
+ * de la transacción, no esta acción: así audita igual quien llame a la
+ * consulta —un job de FIN-4, una API— y, si la escritura se deshace, la
+ * fila se va con ella.
+ */
+export async function registrarPago(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("finanzas.pago.registrar");
+  const parsed = registrarPagoSchema.safeParse({
+    invoiceId: formField(formData, "invoiceId"),
+    amount: formField(formData, "amount"),
+    receivedOn: formField(formData, "receivedOn"),
+    method: formField(formData, "method"),
+    reference: formField(formData, "reference"),
+    notes: formField(formData, "notes"),
+    expectedPaidAmount: formField(formData, "expectedPaidAmount"),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+
+  // La moneda, el locale y la zona del espacio: para la cifra del aviso
+  // y para reescribir los errores que traen un dato en crudo. Abre su
+  // propia transacción, antes de la del cobro: no se anidan.
+  const ws = await getCurrentWorkspace();
+  const f = formatterFor(ws);
+  try {
+    await withWorkspace((tx) =>
+      recordPayment(
+        tx,
+        {
+          invoiceId: v.invoiceId,
+          amount: v.amount,
+          receivedOn: v.receivedOn,
+          method: v.method as PaymentMethod,
+          reference: v.reference || null,
+          notes: v.notes || null,
+          expectedPaidAmount: v.expectedPaidAmount,
+        },
+        textosFinanzas(ws.locale),
+      ),
+    );
+  } catch (err) {
+    return { message: messageOfPago(err, f, ws.currency) };
+  }
+  revalidatePath("/finanzas");
+  revalidatePath(`/finanzas/facturas/${v.invoiceId}`);
+  return { ok: true };
 }
