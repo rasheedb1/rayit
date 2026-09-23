@@ -226,6 +226,9 @@ export const MESSAGES = {
       sin_credencial: (red: string) => `La lectura de ${red} no está configurada todavía; el equipo de On Cue lo tiene anotado.`,
       transitorio: (red: string) => `${red} no respondió; inténtalo de nuevo en unos minutos.`,
       sin_fuente: (red: string) => `${red} no tiene una fuente pública de seguidores en esta versión.`,
+    },
+  },
+
   meta: {
     /** La pestaña de la marca: la campaña y quién la manda, como el asunto de una factura. Nunca se indexa. */
     reportePublico: (campana: string, creador: string) => (creador ? `${campana} · ${creador}` : campana),

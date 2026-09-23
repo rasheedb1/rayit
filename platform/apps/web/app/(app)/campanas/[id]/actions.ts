@@ -436,6 +436,7 @@ export async function actualizarSeguidoresMarca(campaignId: string): Promise<voi
   }
   paths(campaignId);
   redirect(`/campanas/${campaignId}?${query}#seguidores`);
+}
 
 // ---------------------------------------------------------------------
 // Reporte a la marca (CAM-6)
