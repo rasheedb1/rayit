@@ -76,7 +76,8 @@ literal de permisos. La matriz completa está en
   **Sin** flujo de caja, gastos, impuestos, configuración financiera,
   conectar o desconectar cuentas, ni invitar. Activarlo es una casilla
   consciente al invitar (ACC-4).
-- **Contador**: todo Finanzas y ver campañas.
+- **Contador**: todo Finanzas y nada más; las campañas le llegan por sus
+  facturas (ACC-5: con sesión de Contador, `/campanas` responde 404).
 - **Editor**: ver campañas, asociar posts y marcar entregables.
 - **Solo lectura**: los `.ver` de todo menos Finanzas y Equipo.
 - En la agencia, **Administrador** es Dueño menos
@@ -113,9 +114,10 @@ pnpm --filter @mc/core permisos:sql > /tmp/permisos.sql
 
 `scripts/permisos-sql.ts` imprime los `INSERT … ON CONFLICT DO NOTHING`
 de `permission`, `role` y `role_permission` con el esquema de la
-propuesta ACC (fase 4). Es determinista y `test/permisos-sql.test.ts`
-lo compara con `test/snapshots/permisos.sql` y lo ejecuta dos veces en
-PGlite contra ese esquema. Cambiar el catálogo o la matriz sin
+propuesta ACC (fase 4). Es determinista: `test/permisos-sql.test.ts`
+lo compara con `test/snapshots/permisos.sql`, y
+`packages/db/test/permisos-semilla.test.ts` lo ejecuta dos veces en
+PGlite contra ese esquema (core no tiene base). Cambiar el catálogo o la matriz sin
 regenerar el snapshot rompe la prueba:
 
 ```bash

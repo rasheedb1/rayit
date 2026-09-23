@@ -21,6 +21,7 @@
  * un rol de sistema pierda después; si ACC-3 quiere que la semilla mande,
  * añade el DELETE que documenta docs/propuestas/ACC-1.md §5.
  */
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PERMISOS, ROLES_SISTEMA } from '../src/permisos.ts';
 
@@ -76,8 +77,13 @@ export function contarFilas(): { permission: number; role: number; rolePermissio
   };
 }
 
-/** Solo imprime cuando se ejecuta como script; la prueba lo importa sin efectos. */
-const esElPrincipal = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+/**
+ * Solo imprime cuando se ejecuta como script; la prueba lo importa sin
+ * efectos. Las dos rutas pasan por realpath: import.meta.url ya viene
+ * resuelta y argv[1] no, y en un checkout con enlaces simbólicos (/tmp
+ * en macOS) no coincidirían y el script callaría.
+ */
+const esElPrincipal = process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 if (esElPrincipal) {
   process.stdout.write(generarSemillaSql());
 }

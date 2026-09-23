@@ -52,10 +52,41 @@ function actionsDe(dir: string): string[] {
   return out;
 }
 
-/** Las funciones exportadas de un archivo "use server" y cómo empieza cada cuerpo. */
+/**
+ * Dónde empieza el cuerpo, a partir del cierre de la firma: la primera
+ * llave que no está dentro de un tipo. Un tipo de retorno puede traer
+ * llaves (`Promise<{ ok: boolean }>`, `: { ok: boolean }`), así que se
+ * llevan las profundidades de `<>` y `{}`; una llave a profundidad cero
+ * que sigue a `:`, `|`, `&`, `,` o `=` abre un tipo objeto, no el cuerpo.
+ * El `=>` de una flecha (y de un tipo función) no cuenta como cierre de
+ * ángulo. Devuelve −1 si no hay cuerpo.
+ */
+function inicioDelCuerpo(src: string, desde: number): number {
+  let angulos = 0;
+  let llaves = 0;
+  let previo = "";
+  for (let i = desde; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === "<") angulos++;
+    else if (c === ">" && previo !== "=") angulos--;
+    else if (c === "{") {
+      if (angulos === 0 && llaves === 0 && !":|&,=".includes(previo)) return i;
+      llaves++;
+    } else if (c === "}") llaves--;
+    if (!/\s/.test(c)) previo = c;
+  }
+  return -1;
+}
+
+/**
+ * Las funciones exportadas de un archivo "use server" y cómo empieza
+ * cada cuerpo: `export async function nombre(…)` y también
+ * `export const nombre = async (…) =>`, con o sin genéricos, que Next
+ * acepta igual como Server Action.
+ */
 export function accionesExportadas(src: string): Accion[] {
   const out: Accion[] = [];
-  const cabecera = /^export async function (\w+)\s*\(/gm;
+  const cabecera = /^export (?:async function (\w+)|const (\w+)\s*=\s*async)\s*(?:<[^>]*>)?\s*\(/gm;
   for (let m = cabecera.exec(src); m; m = cabecera.exec(src)) {
     // Cerrar la firma: el paréntesis de apertura ya se consumió.
     let i = m.index + m[0].length;
@@ -66,7 +97,7 @@ export function accionesExportadas(src: string): Accion[] {
       else if (c === ")") profundidad--;
       i++;
     }
-    const llave = src.indexOf("{", i);
+    const llave = inicioDelCuerpo(src, i);
     if (llave < 0) continue;
     const cuerpo = src.slice(llave + 1).split("\n");
     const comentarios: string[] = [];
@@ -90,7 +121,7 @@ export function accionesExportadas(src: string): Accion[] {
       primeraLinea = linea;
       break;
     }
-    out.push({ nombre: m[1]!, primeraLinea, comentarios });
+    out.push({ nombre: (m[1] ?? m[2])!, primeraLinea, comentarios });
   }
   return out;
 }
@@ -130,12 +161,11 @@ describe("toda Server Action de los módulos con la convención abre con require
   const archivos = MODULOS_CON_CONVENCION.flatMap((m) => actionsDe(join(APP, m)));
 
   it("encuentra los actions.ts de cada módulo (si esto falla, la prueba dejó de mirar)", () => {
-    // En el orden de MODULOS_CON_CONVENCION.
-    expect(archivos.map((r) => relative(APP, r))).toEqual([
-      "campanas/[id]/actions.ts",
-      "finanzas/facturas/actions.ts",
-      "conexiones/actions.ts",
-    ]);
+    // Al menos los tres que había al adoptar la convención; uno nuevo
+    // (finanzas/gastos/actions.ts, por ejemplo) entra solo.
+    expect(archivos.map((r) => relative(APP, r))).toEqual(
+      expect.arrayContaining(["campanas/[id]/actions.ts", "finanzas/facturas/actions.ts", "conexiones/actions.ts"]),
+    );
   });
 
   it("cada función exportada empieza con la llamada (o con su TODO), con un permiso del catálogo", () => {
@@ -164,6 +194,29 @@ describe("el escáner detecta lo que tiene que detectar", () => {
     const r = revisarArchivo("x.ts", src);
     expect(r.acciones.map((a) => a.nombre)).toEqual(["mover"]);
     expect(r.hallazgos).toEqual([]);
+  });
+
+  it("no confunde las llaves de un tipo de retorno con el cuerpo", () => {
+    const src =
+      cabecera +
+      `export async function estado(id: string): Promise<{ ok: boolean; items: { id: string }[] }> {\n` +
+      `  await requirePermission("campanas.campana.ver");\n  return { ok: true, items: [] };\n}\n` +
+      `export async function plano(): { ok: boolean } {\n  await requirePermission("campanas.campana.ver");\n  return { ok: true };\n}\n` +
+      `export async function fn(): Promise<(x: string) => void> {\n  await requirePermission("campanas.campana.ver");\n  return () => {};\n}\n`;
+    const r = revisarArchivo("x.ts", src);
+    expect(r.acciones.map((a) => a.nombre)).toEqual(["estado", "plano", "fn"]);
+    expect(r.hallazgos).toEqual([]);
+  });
+
+  it("también mira las acciones escritas como `export const x = async (…) =>` y con genéricos", () => {
+    const src =
+      cabecera +
+      `export const borrar = async (id: string): Promise<void> => {\n  await withWorkspace(id);\n};\n` +
+      `export async function listar<T>(q: T): Promise<T[]> {\n  await requirePermission("campanas.campana.ver");\n  return [q];\n}\n` +
+      `export const conGenerico = async <T,>(q: T) => {\n  await requirePermission("campanas.campana.ver");\n  return q;\n};\n`;
+    const r = revisarArchivo("x.ts", src);
+    expect(r.acciones.map((a) => a.nombre)).toEqual(["borrar", "listar", "conGenerico"]);
+    expect(r.hallazgos.map((h) => h.nombre)).toEqual(["borrar"]);
   });
 
   it("rechaza una acción cuya primera línea no es la llamada", () => {

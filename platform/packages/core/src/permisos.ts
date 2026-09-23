@@ -237,8 +237,11 @@ export const ROLES_SISTEMA: readonly RolSistema[] = [
     key: 'finance',
     workspaceKind: 'creator',
     labelEs: 'Contador',
-    descriptionEs: 'Contador externo. Todo Finanzas y el nombre y monto de las campañas.',
-    permisos: ['campanas.campana.ver', ...permisosDelModulo('finanzas')],
+    // Sin campanas.campana.ver aunque la fase 5 diga «ver nombre y monto»:
+    // ACC-5 exige que con sesión de Contador /campanas responda 404, y el
+    // nombre y el monto de la campaña ya van en la factura (invoice.campaign_id).
+    descriptionEs: 'Contador externo. Todo Finanzas; las campañas las ve por sus facturas.',
+    permisos: [...permisosDelModulo('finanzas')],
   },
   {
     key: 'viewer',
@@ -275,7 +278,7 @@ export const ROLES_SISTEMA: readonly RolSistema[] = [
     workspaceKind: 'agency',
     labelEs: 'Contador',
     descriptionEs: 'Finanzas de la agencia.',
-    permisos: ['campanas.campana.ver', ...permisosDelModulo('finanzas')],
+    permisos: [...permisosDelModulo('finanzas')],
   },
   {
     key: 'viewer',
@@ -338,7 +341,10 @@ export function puedeAsignarRol(propios: ReadonlySet<Permiso>, kind: WorkspaceKi
  * user_id que hoy tienen el rol owner en el espacio.
  */
 export function esUltimoDueno(duenos: readonly string[], userId: string): boolean {
-  return duenos.length === 1 && duenos[0] === userId;
+  // Por ids distintos: una consulta que devuelva al mismo dueño dos veces
+  // (un JOIN con alcance, por ejemplo) no puede hacer que parezca que hay dos.
+  const distintos = new Set(duenos);
+  return distintos.size === 1 && distintos.has(userId);
 }
 
 /** Lanza UltimoDuenoError si quitar o degradar a `userId` dejaría el espacio sin dueño. */

@@ -11,7 +11,6 @@
     "permisos:sql": "node --experimental-strip-types scripts/permisos-sql.ts"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.17",
     "@types/node": "^24.0.0",
     "typescript": "^5.6.0"
   }

@@ -55,7 +55,7 @@ INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, i
   (NULL, 'owner', 'creator', 'Dueño', 'El creador. Todo, incluido el equipo y la cuenta.', true),
   (NULL, 'manager', 'creator', 'Mánager', 'Su agente, quien habla con las marcas. Ventas, Cotizar y Campañas completas, el estado de cobro de las campañas, y ve el resto. No conecta cuentas ni ve el flujo de caja.', true),
   (NULL, 'editor', 'creator', 'Editor', 'Community manager o editor de video. Ve las campañas y marca sus entregables.', true),
-  (NULL, 'finance', 'creator', 'Contador', 'Contador externo. Todo Finanzas y el nombre y monto de las campañas.', true),
+  (NULL, 'finance', 'creator', 'Contador', 'Contador externo. Todo Finanzas; las campañas las ve por sus facturas.', true),
   (NULL, 'viewer', 'creator', 'Solo lectura', 'Quien mira y no toca. Sin Finanzas ni Equipo.', true),
   (NULL, 'owner', 'agency', 'Dueño', 'Toda la agencia, incluidas la facturación de la cuenta y su cierre.', true),
   (NULL, 'admin', 'agency', 'Administrador', 'Personas, roles y marcas de toda la agencia. No configura ni cierra la cuenta.', true),
@@ -64,7 +64,7 @@ INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, i
   (NULL, 'viewer', 'agency', 'Solo lectura', 'Ver lo que se le asigne. Sin Finanzas ni Equipo.', true)
 ON CONFLICT (key, workspace_kind) WHERE workspace_id IS NULL DO NOTHING;
 
--- 222 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
+-- 220 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
 INSERT INTO role_permission (role_id, permission_key)
 SELECT r.id, m.permission_key
 FROM (VALUES
@@ -143,7 +143,6 @@ FROM (VALUES
   ('editor', 'creator', 'campanas.campana.ver'),
   ('editor', 'creator', 'campanas.post.asociar'),
   ('editor', 'creator', 'conexiones.cuenta.ver'),
-  ('finance', 'creator', 'campanas.campana.ver'),
   ('finance', 'creator', 'finanzas.factura.ver'),
   ('finance', 'creator', 'finanzas.factura.crear'),
   ('finance', 'creator', 'finanzas.factura.editar'),
@@ -271,7 +270,6 @@ FROM (VALUES
   ('manager', 'agency', 'campanas.post.asociar'),
   ('manager', 'agency', 'campanas.aporte.registrar'),
   ('manager', 'agency', 'campanas.reporte.enviar'),
-  ('finance', 'agency', 'campanas.campana.ver'),
   ('finance', 'agency', 'finanzas.factura.ver'),
   ('finance', 'agency', 'finanzas.factura.crear'),
   ('finance', 'agency', 'finanzas.factura.editar'),

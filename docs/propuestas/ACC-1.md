@@ -27,6 +27,7 @@ packages/core/src/index.ts                 + export * from './permisos.ts'
 packages/core/test/permisos.test.ts        NUEVO · matriz, reglas, errores
 packages/core/scripts/permisos-sql.ts      NUEVO · imprime la semilla (permission, role, role_permission)
 packages/core/test/permisos-sql.test.ts    NUEVO · N filas exactas y snapshot determinista
+packages/db/test/permisos-semilla.test.ts  NUEVO · la semilla corre dos veces en PGlite y deja la matriz
 packages/core/test/snapshots/permisos.sql  NUEVO · la salida esperada (es lo que copia ACC-3)
 packages/core/package.json                 + script "permisos:sql"
 packages/core/tsconfig.json                + "scripts" en include
@@ -107,9 +108,11 @@ docs/propuestas/ACC-1.md                   este documento
      «también puede conectar mis cuentas» de ACC-4, sí. **DECISIÓN
      PENDIENTE DE NICOLÁS**: si «Actualizar» debe bastar con
      `conexiones.cuenta.ver`.
-   - Contador: `campanas.campana.ver` entero. La fase 5 dice «ver nombre
-     y monto»; recortar campos es cosa de la pantalla o del alcance, no
-     de un permiso.
+   - Contador: **sin** `campanas.campana.ver`. La fase 5 dice «ver nombre
+     y monto», pero ACC-5 exige que con sesión de Contador `/campanas`
+     responda 404 (backlog.ts), y el permiso mínimo de Campañas es
+     justo ese. El nombre y el monto de la campaña le llegan por la
+     factura (`invoice.campaign_id`). Cambiado tras `/code-review`.
    - Ejecutivo de cuenta de agencia: exactamente Ventas, Cotizar y
      Campañas, como dice la fase 5. Sin `resumen.panel.ver`.
    - Solo lectura: Equipo «—» en las dos matrices, así que no ve la
@@ -175,7 +178,9 @@ docs/propuestas/ACC-1.md                   este documento
     pierda después; si se quiere que la semilla mande sobre los roles
     de sistema, ACC-3 añade el `DELETE` (está escrito en §5).
 11. **Sin dependencias nuevas.** Las pruebas de core siguen con
-    `node --test`; las de la web con vitest y `node:fs`, como
+    `node --test` y sin base; la ejecución de la semilla en Postgres
+    vive en `packages/db/test/permisos-semilla.test.ts`, que ya tiene
+    PGlite. Las de la web, con vitest y `node:fs`, como
     `frontera.test.tsx`.
 
 ### 0.3 Dudas que no bloquean
@@ -252,7 +257,7 @@ pedido.
 ## 2. La matriz de fábrica
 
 Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
-(`test/permisos-sql.test.ts` lo comprueba fila por fila en PGlite).
+(`packages/db/test/permisos-semilla.test.ts` lo comprueba fila por fila en PGlite).
 
 ### Workspace de creador
 
@@ -278,7 +283,7 @@ Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
 | `cotizar.cotizacion.crear` | ● | ● | — | — | — |
 | `cotizar.cotizacion.editar` | ● | ● | — | — | — |
 | `cotizar.cotizacion.enviar` | ● | ● | — | — | — |
-| `campanas.campana.ver` | ● | ● | ● | ● | ● |
+| `campanas.campana.ver` | ● | ● | ● | — | ● |
 | `campanas.campana.crear` | ● | ● | — | — | — |
 | `campanas.campana.editar` | ● | ● | — | — | — |
 | `campanas.post.asociar` | ● | ● | ● | — | — |
@@ -301,7 +306,7 @@ Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
 | `equipo.miembro.revocar` | ● | — | — | — | — |
 | `equipo.rol.editar` | ● | — | — | — | — |
 | `equipo.workspace.configurar` | ● | — | — | — | — |
-| **Total** | 43 | 28 | 4 | 10 | 9 |
+| **Total** | 43 | 28 | 4 | 9 | 9 |
 
 ### Workspace de agencia
 
@@ -327,7 +332,7 @@ Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
 | `cotizar.cotizacion.crear` | ● | ● | ● | — | — |
 | `cotizar.cotizacion.editar` | ● | ● | ● | — | — |
 | `cotizar.cotizacion.enviar` | ● | ● | ● | — | — |
-| `campanas.campana.ver` | ● | ● | ● | ● | ● |
+| `campanas.campana.ver` | ● | ● | ● | — | ● |
 | `campanas.campana.crear` | ● | ● | ● | — | — |
 | `campanas.campana.editar` | ● | ● | ● | — | — |
 | `campanas.post.asociar` | ● | ● | ● | — | — |
@@ -350,7 +355,7 @@ Generada desde `ROLES_SISTEMA`; es exactamente lo que deja la semilla
 | `equipo.miembro.revocar` | ● | ● | — | — | — |
 | `equipo.rol.editar` | ● | ● | — | — | — |
 | `equipo.workspace.configurar` | ● | — | — | — | — |
-| **Total** | 43 | 42 | 24 | 10 | 9 |
+| **Total** | 43 | 42 | 24 | 9 | 9 |
 
 Lecturas conservadoras de la fase 5 (una línea cada una si Nicolás las
 cambia): §0.2, punto 5.
@@ -451,7 +456,7 @@ salida es idéntica a `packages/core/test/snapshots/permisos.sql`.
    fetch` y el más alto en todas las ramas más uno; `0023` no se
    recicla sin preguntar a Nicolás.
 2. Después de migrar, contar: `SELECT count(*) FROM permission` → 43;
-   `role` (workspace_id IS NULL) → 10; `role_permission` → 222.
+   `role` (workspace_id IS NULL) → 10; `role_permission` → 220.
 3. Cada vez que cambie el catálogo o la matriz, se regenera el snapshot
    (`pnpm --filter @mc/core permisos:sql > packages/core/test/snapshots/
    permisos.sql`) y una migración nueva vuelve a pegar la salida: las
@@ -477,3 +482,19 @@ salida es idéntica a `packages/core/test/snapshots/permisos.sql`.
    (decisión D: la marca no tiene cuenta; el valor se deja en el enum
    pero ninguna fila real lo usa). Hoy no hay filas reales fuera del
    seed (`demo@oncue.test` es `owner`).
+
+## 6. Revisión (`/code-review` en nivel alto)
+
+Nueve hallazgos. Ocho resueltos y uno justificado.
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | El Contador tenía `campanas.campana.ver`, que es el permiso mínimo de Campañas: el criterio de ACC-5 («con sesión de Contador, /campanas responde 404») era imposible | Resuelto: el Contador de creador y de agencia quedan con todo Finanzas y nada más. Prueba: `PERMISO_MINIMO.campanas` no está en su conjunto. §0.2, punto 5 |
+| 2 | La prueba estática tomaba la llave de un tipo de retorno (`Promise<{ ok: boolean }>`) como inicio del cuerpo | Resuelto: `inicioDelCuerpo()` lleva profundidad de `<>` y `{}`; prueba con tres firmas |
+| 3 | No miraba `export const x = async (…) =>` ni funciones con genéricos | Resuelto: la cabecera las reconoce; prueba con una flecha sin permiso que sí se detecta |
+| 4 | El `TODO(ACC-3)` decía que ningún código lee `membership.role`; lo leen el selector de espacios y `/cuenta` | Resuelto: el comentario de `sesion.ts` nombra los usos y apunta al mapa de §5 |
+| 5 | `esUltimoDueno(['u1','u1'], 'u1')` devolvía `false` | Resuelto: cuenta ids distintos; prueba nueva |
+| 6 | El script callaba en un checkout con enlaces simbólicos (`/tmp` en macOS) | Resuelto: compara con `realpathSync(argv[1])` |
+| 7 | PGlite entraba como dependencia de core y la contradecía («sin base», «sin dependencias») | Resuelto: la ejecución en Postgres pasa a `packages/db/test/permisos-semilla.test.ts`; core vuelve a no tener dependencias nuevas |
+| 8 | La prueba exigía la lista exacta de `actions.ts`: un archivo nuevo la rompía | Resuelto: `arrayContaining` con los tres; uno nuevo entra solo y queda sujeto a la convención |
+| 9 | Identificadores en español (`permisosDeRol`, `SinPermisoError`…) contra «identificadores en inglés» de CLAUDE.md | Justificado: el prompt de la historia pide nombres en español para módulo, recurso y acción, y core ya tiene el precedente (`finDelDiaEnZona`, `TarifaError`, `pctToRate` mezclado), igual que las Server Actions (`crearFactura`). Renombrar es mecánico si Nicolás lo pide antes de ACC-3 |

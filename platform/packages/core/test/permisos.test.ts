@@ -131,10 +131,12 @@ test('el Mánager de creador SÍ trae campanas.reporte.enviar, todo Ventas y Cot
   assert.equal(can(manager, 'equipo.miembro.ver'), true);
 });
 
-test('el Contador no edita campañas, pero las ve y tiene todo Finanzas', () => {
+test('el Contador no edita campañas ni las abre (ACC-5: /campanas responde 404); tiene todo Finanzas', () => {
   const contador = permisosDeRol('creator', 'finance');
   assert.equal(can(contador, 'campanas.campana.editar'), false);
-  assert.equal(can(contador, 'campanas.campana.ver'), true);
+  assert.equal(can(contador, 'campanas.campana.ver'), false);
+  assert.equal(can(contador, PERMISO_MINIMO.campanas), false);
+  assert.deepEqual([...contador], permisosDelModulo('finanzas'));
   for (const p of permisosDelModulo('finanzas')) assert.equal(can(contador, p), true, p);
   assert.equal(can(contador, 'ventas.negocio.ver'), false);
   assert.equal(can(contador, 'resumen.panel.ver'), false);
@@ -206,6 +208,7 @@ test('un Administrador de agencia no puede asignar Dueño; un Dueño puede asign
 
 test('el último dueño no se quita ni se degrada', () => {
   assert.equal(esUltimoDueno(['u1'], 'u1'), true);
+  assert.equal(esUltimoDueno(['u1', 'u1'], 'u1'), true); // el mismo dueño dos veces sigue siendo uno
   assert.equal(esUltimoDueno(['u1', 'u2'], 'u1'), false);
   assert.equal(esUltimoDueno(['u2'], 'u1'), false);
   assert.equal(esUltimoDueno([], 'u1'), false);
