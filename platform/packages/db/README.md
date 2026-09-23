@@ -15,11 +15,12 @@ src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritur
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
-                   cotizar, campanas, finanzas, conexiones
+                   cotizar, campanas, finanzas (facturas y gastos), conexiones
                    (finanzas trae además getCashflowInputs, la ÚNICA consulta del
-                   flujo de caja: devuelve filas en bruto y clasifica @mc/core, y
-                   listReminders/markReminderSent, la bandeja de recordatorios de
-                   FIN-4 sobre notification: el texto ya viene redactado del job)
+                   flujo de caja y de la proyección de gastos: devuelve filas en
+                   bruto y clasifica @mc/core, y listReminders/markReminderSent,
+                   la bandeja de recordatorios de FIN-4 sobre notification: el
+                   texto ya viene redactado del job)
 test/pglite.ts     openTestDb(): la base para las pruebas de cualquier paquete
 scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 ```

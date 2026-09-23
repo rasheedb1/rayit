@@ -9,3 +9,4 @@ export * from './permisos.ts';
 export * from './flujo-caja.ts';
 export * from './ingresos-plataformas.ts';
 export * from './reporte.ts';
+export * from './gastos.ts';

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   lunesDeLaSemana,
   projectCashflow,
+  proyectarGastos,
   semanalDeMensual,
   SEMANAS_POR_DEFECTO,
   type CashflowInput,
@@ -300,6 +301,68 @@ describe('gastos recurrentes', () => {
     assert.equal(r.gastoMes, '2026-08');
     assert.equal(r.gastoMensual, '3700000.00');
     assert.deepEqual(r.excluidos.otraMoneda, { count: 1, amount: '90.00', monedas: ['USD'] });
+  });
+});
+
+describe('una sola regla: proyectarGastos es la de projectCashflow (FIN-5 + FIN-6)', () => {
+  const seed = (serie: string, amount: string, mes: string, id = `${serie}-${mes}`) =>
+    gasto({ id, serie, amount, incurredOn: `${mes}-01` });
+  const cinco = (mes: string) => [
+    seed('edicion|mateo', '1800000.00', mes), seed('software|adobe', '380000.00', mes),
+    seed('equipo|estudio', '900000.00', mes), seed('contabilidad|diana', '400000.00', mes),
+    seed('servicios|claro', '220000.00', mes),
+  ];
+
+  test('la vista de gastos y el flujo dicen la MISMA cifra para cada semana', () => {
+    const input = entrada({ facturas: [factura()], gastos: [...cinco('2026-07'), ...cinco('2026-08'), ...cinco('2026-09')] });
+    const flujo = projectCashflow(input);
+    const vista = proyectarGastos(input);
+    assert.equal(vista.semanas.length, flujo.semanas.length);
+    vista.semanas.forEach((s, i) => {
+      assert.equal(s.inicio, flujo.semanas[i]!.inicio);
+      assert.equal(s.gastos, flujo.semanas[i]!.gastos, `semana ${s.inicio}`);
+    });
+    assert.equal(vista.mes, flujo.gastoMes);
+    assert.equal(vista.mensual, '3700000.00', 'el seed: cinco suscripciones de agosto');
+    assert.equal(vista.semanal, '853846.15');
+    assert.equal(vista.total, '6830769.20', '8 × 853.846,15');
+    assert.equal(vista.nuevasDelMes, 0, 'septiembre repite las cinco series: no suma nada');
+  });
+
+  test('«un gasto recurrente aparece proyectado» aunque se registre hoy, con meses cerrados detrás', () => {
+    const nueva = gasto({ id: 'nueva', serie: 'software|figma', amount: '520000.00', incurredOn: '2026-09-15' });
+    const r = proyectarGastos(entrada({ gastos: [...cinco('2026-08'), ...cinco('2026-09'), nueva] }));
+    assert.equal(r.mes, '2026-08');
+    assert.equal(r.nuevasDelMes, 1);
+    assert.equal(r.mensual, '4220000.00', '3,7 M de agosto + la serie nueva de septiembre');
+    assert.equal(r.semanal, semanalDeMensual('4220000.00'));
+    assert.equal(projectCashflow(entrada({ gastos: [...cinco('2026-08'), nueva] })).gastoMensual, '4220000.00');
+  });
+
+  test('una serie que ya estaba en el mes que manda no se suma otra vez, ni una fecha futura', () => {
+    const r = proyectarGastos(entrada({
+      gastos: [
+        ...cinco('2026-08'),
+        seed('software|adobe', '400000.00', '2026-09', 'subio'),
+        gasto({ id: 'futura', serie: 'viajes|x', amount: '100.00', incurredOn: '2026-09-30' }),
+      ],
+    }));
+    assert.equal(r.mensual, '3700000.00');
+    assert.equal(r.nuevasDelMes, 0);
+  });
+
+  test('sin serie, el gasto del mes en curso espera a que el mes cierre (como FIN-6)', () => {
+    const r = proyectarGastos(entrada({
+      gastos: [gasto({ id: 'ago', amount: '1000.00', incurredOn: '2026-08-01' }), gasto({ id: 'sep', amount: '5.00', incurredOn: '2026-09-02' })],
+    }));
+    assert.equal(r.mensual, '1000.00');
+  });
+
+  test('vacío sin gastos, y la otra moneda se cuenta aparte', () => {
+    assert.equal(proyectarGastos(entrada()).vacio, true);
+    const r = proyectarGastos(entrada({ gastos: [gasto({ currency: 'USD', amount: '90.00', incurredOn: '2026-08-01' })] }));
+    assert.equal(r.vacio, true);
+    assert.deepEqual(r.otraMoneda, { count: 1, amount: '90.00', monedas: ['USD'] });
   });
 });
 

@@ -9,6 +9,8 @@ import {
   mulRateHalfUp,
   PaymentDateInFuture,
   PaymentExceedsOutstanding,
+  proyectarGastos,
+  semanalDeMensual,
   projectCashflow,
   proyeccionDePlataformas,
   pctToRate,
@@ -19,11 +21,14 @@ import {
 } from '@mc/core';
 import {
   countInvoicesInOtherCurrency,
+  createExpense,
   createInvoice,
   createInvoiceFromCampaign,
   createPlatformPayout,
   getInvoice,
   getCashflowInputs,
+  getExpense,
+  getExpenseMonth,
   getPlatformPayoutKpis,
   getPlatformPayoutMonths,
   getReceivablesKpis,
@@ -41,6 +46,9 @@ import {
   RECEIVABLE_BUCKETS,
   recordPayment,
   transitionInvoice,
+  updateExpense,
+  ExpenseNotFound,
+  InvalidExpenseError,
   updateFinanceSettings,
   type ReceivableRow,
   type TextosFinanzas,
@@ -1883,5 +1891,343 @@ describe('ingresos de plataformas (FIN-7)', () => {
   test('sin workspace fijado, RLS no deja ver ni escribir un solo pago', async () => {
     const vistos = await t.raw<{ n: string }>('SELECT count(*)::text AS n FROM platform_payout');
     assert.equal(vistos[0]?.n, '0', 'la sesión de mc_app sin workspace no ve ninguna fila');
+  });
+});
+
+// =====================================================================
+// Gastos (FIN-5)
+// =====================================================================
+
+/** La creadora del seed 0002: la persona que la bitácora tiene que anotar. */
+const USER_LAURA = '00000002-0000-4000-8000-000000000002';
+/** El gasto recurrente de edición de septiembre (seed 0003 §7). */
+const GASTO_EDICION_SEP = '00000003-0000-4000-8000-0009a5090001';
+
+interface LineaBitacora {
+  action: string;
+  actor_kind: string;
+  actor_user_id: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown>;
+}
+
+/**
+ * Las líneas de bitácora de un gasto, más recientes primero. Se leen
+ * DENTRO de withWorkspace porque audit_log también tiene RLS (0010): con
+ * t.raw(), fuera de transacción y sin workspace, la tabla devuelve cero
+ * filas sin avisar y la prueba pasaría por la razón equivocada. El id
+ * (bigserial) se usa para ordenar y no se devuelve (CIM-2 §3).
+ */
+async function bitacoraDe(workspaceId: string, expenseId: string): Promise<LineaBitacora[]> {
+  return t.db.withWorkspace(workspaceId, async (tx) => {
+    const { rows } = await tx.query<LineaBitacora>(
+      `SELECT action, actor_kind, actor_user_id, before, after
+       FROM audit_log
+       WHERE entity_type = 'expense' AND entity_id = $1::uuid
+       ORDER BY created_at DESC, id DESC`,
+      [expenseId],
+    );
+    return rows;
+  });
+}
+
+describe('gastos · lista por mes', () => {
+  test('septiembre de 2026 del seed: 3,7 M, los cinco recurrentes y su desglose por categoría', async () => {
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(mes.month, '2026-09');
+    assert.equal(mes.from, '2026-09-01');
+    assert.equal(mes.to, '2026-09-30');
+    assert.equal(mes.currency, 'COP');
+    assert.equal(mes.totals.total, '3700000.00', 'lo que dice la cabecera del seed');
+    assert.equal(mes.totals.recurring, '3700000.00', 'en septiembre no hay ningún gasto puntual');
+    assert.equal(mes.totals.deductible, '3700000.00', 'el seed los marca todos deducibles');
+    assert.equal(mes.totals.count, 5);
+    assert.equal(mes.rows.length, 5);
+    assert.equal(mes.otherCurrencyCount, 0);
+    assert.deepEqual(
+      mes.byCategory.map((c) => [c.category, c.total, c.count]),
+      [
+        ['edicion', '1800000.00', 1],
+        ['equipo', '900000.00', 1],
+        ['contabilidad', '400000.00', 1],
+        ['software', '380000.00', 1],
+        ['servicios', '220000.00', 1],
+      ],
+      'de mayor a menor, y el total sale del GROUP BY',
+    );
+    // La suma de las categorías es el total: la pantalla no vuelve a sumar.
+    const suma = mes.byCategory.reduce((acc, c) => acc + BigInt(c.total.replace('.', '')), 0n);
+    assert.equal(suma, 370000000n);
+    // Las fechas salen como 'YYYY-MM-DD' (to_char), no como Date del driver.
+    for (const r of mes.rows) assert.match(r.incurredOn, /^2026-09-\d{2}$/);
+  });
+
+  test('agosto trae el puntual del viaje, y el desglose lo separa', async () => {
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-08'));
+    assert.equal(mes.totals.count, 6);
+    assert.equal(mes.totals.total, '4160000.00', '3,7 M recurrentes + 460 000 del viaje');
+    assert.equal(mes.totals.recurring, '3700000.00');
+    const viaje = mes.rows.find((r) => r.category === 'viajes');
+    assert.equal(viaje?.isRecurring, false);
+    assert.equal(viaje?.recurrence, null, 'un puntual no tiene recurrencia: null, no cadena vacía');
+    assert.equal(viaje?.amount, '460000.00');
+    assert.equal(viaje?.incurredOn, '2026-08-06');
+  });
+
+  test('un mes sin gastos no da cero filas mal contadas: total en cero y ninguna fila', async () => {
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-01'));
+    assert.equal(mes.rows.length, 0);
+    assert.equal(mes.totals.count, 0);
+    assert.equal(mes.totals.total, '0.00');
+    assert.deepEqual(mes.byCategory, []);
+    assert.equal(mes.from, '2026-01-01');
+    assert.equal(mes.to, '2026-01-31');
+  });
+
+  test('sin mes, o con un mes que no existe, el mes de CURRENT_DATE (no un 500)', async () => {
+    const [porDefecto, basura, fueraDeRango] = await Promise.all([
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx)),
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, 'septiembre; DROP TABLE expense')),
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-13')),
+    ]);
+    assert.equal(porDefecto.month, porDefecto.today.slice(0, 7));
+    assert.equal(basura.month, porDefecto.month);
+    assert.equal(fueraDeRango.month, porDefecto.month);
+    // La tabla sigue ahí.
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(mes.rows.length, 5);
+  });
+
+  test('febrero de un año bisiesto termina el 29', async () => {
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2024-02'));
+    assert.equal(mes.from, '2024-02-01');
+    assert.equal(mes.to, '2024-02-29');
+  });
+});
+
+describe('gastos · recurrentes y proyección (una sola regla con el flujo)', () => {
+  test('el seed proyecta 3,7 M al mes, y la vista de gastos y el flujo dicen la misma cifra cada semana', async () => {
+    const e = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    // La vista de gastos (FIN-5) y /finanzas/flujo (FIN-6) leen la MISMA
+    // consulta y pasan por la MISMA función de core.
+    const vista = proyectarGastos(e);
+    const flujo = projectCashflow(e);
+    assert.equal(vista.mensual, '3700000.00', 'cinco series del seed, contadas una vez');
+    assert.equal(vista.semanal, '853846.15');
+    assert.equal(vista.semanas.length, 8);
+    vista.semanas.forEach((s, i) => assert.equal(s.gastos, flujo.semanas[i]!.gastos, `semana ${s.inicio}`));
+    assert.ok(e.gastos.every((g) => typeof g.serie === 'string' && g.serie.includes('|')), 'cada fila trae su serie');
+  });
+
+  test('«un gasto recurrente aparece proyectado»: el que se registra hoy entra al ritmo de las ocho semanas', async () => {
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createExpense(tx, {
+        category: 'servicios', vendor: 'Vigilancia Andes', description: 'Monitoreo del estudio',
+        amount: '150000', incurredOn: antes.today, isRecurring: true, recurrence: 'monthly', deductible: true,
+      }),
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const p = proyectarGastos(despues);
+    assert.equal(p.nuevasDelMes, 1);
+    assert.equal(p.mensual, '3850000.00', '3,7 M + la serie nueva');
+    assert.equal(p.semanal, semanalDeMensual('3850000.00'));
+    assert.equal(projectCashflow(despues).semanas[0]!.gastos, p.semanal, 'y el flujo la resta igual');
+  });
+
+  test('un gasto en otra moneda se cuenta, no se suma', async () => {
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(antes.otherCurrencyCount, 0);
+    // Una fila en otra moneda no puede entrar por createExpense (la
+    // rechaza), así que se inserta como superusuario: es el caso de una
+    // importación o de un espacio que cambió de moneda.
+    await t.admin(`
+      INSERT INTO expense (id, workspace_id, category, vendor, amount, currency, incurred_on, is_recurring, recurrence, deductible)
+      VALUES ('00000009-0000-4000-8000-0009a5990001', '${WORKSPACE_LAURA}', 'software', 'Figma',
+              20.00, 'USD', DATE '2026-09-05', true, 'monthly', true)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(mes.otherCurrencyCount, 1);
+    assert.ok(mes.rows.some((r) => r.currency === 'USD'), 'la fila se lista: la lista no miente');
+    assert.equal(mes.totals.total, antes.totals.total, 'el total en COP no cambia al aparecer una fila en USD');
+    assert.deepEqual(mes.byCategory, antes.byCategory, 'el desglose tampoco');
+    await t.admin(`DELETE FROM expense WHERE id = '00000009-0000-4000-8000-0009a5990001';`);
+  });
+});
+
+describe('gastos · alta, edición y bitácora', () => {
+  test('crear un gasto deja su línea de bitácora con la persona que lo registró', async () => {
+    const gasto = await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => createExpense(tx, {
+        category: 'equipo', vendor: 'DJI', description: 'Trípode', amount: '250000.50',
+        incurredOn: '2026-09-18', isRecurring: false, deductible: true,
+        receiptUrl: 'https://drive.example.com/recibo-123',
+      }),
+      { userId: USER_LAURA },
+    );
+    assert.equal(gasto.amount, '250000.50');
+    assert.equal(gasto.currency, 'COP', 'la moneda por defecto es la del espacio');
+    assert.equal(gasto.recurrence, null, 'sin recurrente, la recurrencia no se guarda');
+    assert.equal(gasto.receiptUrl, 'https://drive.example.com/recibo-123');
+
+    const lineas = await bitacoraDe(WORKSPACE_LAURA, gasto.id);
+    assert.equal(lineas.length, 1);
+    assert.equal(lineas[0]?.action, 'expense.created');
+    assert.equal(lineas[0]?.actor_kind, 'user');
+    assert.equal(lineas[0]?.actor_user_id, USER_LAURA);
+    assert.equal(lineas[0]?.before, null, 'una fila nueva no tiene «antes»');
+    assert.equal(lineas[0]?.after?.amount, '250000.50');
+    assert.equal(lineas[0]?.after?.vendor, 'DJI');
+    // El enlace del recibo es una credencial de ese archivo: en la
+    // bitácora va si lo hay, no cuál es.
+    assert.equal(lineas[0]?.after?.receipt, true);
+    assert.equal(JSON.stringify(lineas[0]).includes('drive.example.com'), false);
+  });
+
+  test('sin identidad en la transacción, la bitácora dice «system», no una persona inventada', async () => {
+    const gasto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createExpense(tx, { category: 'otros', amount: '1000', incurredOn: '2026-09-19', isRecurring: false, deductible: false }),
+    );
+    const lineas = await bitacoraDe(WORKSPACE_LAURA, gasto.id);
+    assert.equal(lineas[0]?.actor_kind, 'system');
+    assert.equal(lineas[0]?.actor_user_id, null);
+  });
+
+  test('editar deja before/after SOLO con lo que cambió', async () => {
+    const gasto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createExpense(tx, { category: 'software', vendor: 'Notion', amount: '90000', incurredOn: '2026-09-02', isRecurring: false, deductible: true }),
+    );
+    const editado = await t.db.withWorkspace(
+      WORKSPACE_LAURA,
+      (tx) => updateExpense(tx, gasto.id, {
+        category: 'software', vendor: 'Notion', amount: '95000', incurredOn: '2026-09-02',
+        isRecurring: true, recurrence: 'monthly', deductible: true,
+      }),
+      { userId: USER_LAURA },
+    );
+    assert.equal(editado.amount, '95000.00');
+    assert.equal(editado.isRecurring, true);
+    assert.equal(editado.recurrence, 'monthly');
+
+    const lineas = await bitacoraDe(WORKSPACE_LAURA, gasto.id);
+    assert.equal(lineas.length, 2);
+    const edicion = lineas[0];
+    assert.equal(edicion?.action, 'expense.updated');
+    assert.deepEqual(Object.keys(edicion?.after ?? {}).sort(), ['amount', 'isRecurring', 'recurrence']);
+    assert.deepEqual(edicion?.before, { amount: '90000.00', isRecurring: false, recurrence: null });
+    assert.deepEqual(edicion?.after, { amount: '95000.00', isRecurring: true, recurrence: 'monthly' });
+  });
+
+  test('guardar el mismo formulario dos veces no deja dos líneas', async () => {
+    const gasto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createExpense(tx, { category: 'viajes', vendor: 'Taxi', amount: '30000', incurredOn: '2026-09-03', isRecurring: false, deductible: true }),
+    );
+    const igual = { category: 'viajes', vendor: 'Taxi', amount: '30000.00', incurredOn: '2026-09-03', isRecurring: false, deductible: true };
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateExpense(tx, gasto.id, igual));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateExpense(tx, gasto.id, igual));
+    const lineas = await bitacoraDe(WORKSPACE_LAURA, gasto.id);
+    assert.deepEqual(lineas.map((l) => l.action), ['expense.created'], 'idempotente: nada cambió, nada se anota');
+  });
+
+  test('marcar como error es editar: quitar el recurrente lo saca de la proyección', async () => {
+    const gasto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      createExpense(tx, { category: 'contabilidad', vendor: 'Duplicado', amount: '400000', incurredOn: '2026-09-04', isRecurring: true, recurrence: 'monthly', deductible: true }),
+    );
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.ok(antes.gastos.some((r) => r.id === gasto.id));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      updateExpense(tx, gasto.id, {
+        category: 'contabilidad', vendor: 'Duplicado', description: 'Error de registro: se anuló',
+        amount: '400000', incurredOn: '2026-09-04', isRecurring: false, deductible: false,
+      }),
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.ok(!despues.gastos.some((r) => r.id === gasto.id));
+    const gastoFinal = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpense(tx, gasto.id));
+    assert.equal(gastoFinal?.recurrence, null, 'dejar de ser recurrente borra la recurrencia');
+  });
+
+  test('las reglas de un gasto se rechazan con su campo y su frase', async () => {
+    const base = { category: 'software', amount: '1000', incurredOn: '2026-09-01', isRecurring: false, deductible: true };
+    const casos: [Partial<typeof base> & Record<string, unknown>, string, string][] = [
+      [{ category: 'criptomonedas' }, 'category', /no está en la lista/.source],
+      [{ incurredOn: '01/09/2026' }, 'incurredOn', /YYYY-MM-DD/.source],
+      [{ incurredOn: '2026-02-30' }, 'incurredOn', /YYYY-MM-DD/.source],
+      [{ amount: 'mucho' }, 'amount', /decimal válido/.source],
+      [{ amount: '0' }, 'amount', /mayor que cero/.source],
+      [{ amount: '-500' }, 'amount', /mayor que cero/.source],
+      [{ isRecurring: true }, 'recurrence', /cada cuánto se repite/.source],
+      [{ isRecurring: true, recurrence: 'daily' }, 'recurrence', /cada cuánto se repite/.source],
+      [{ currency: 'USD' }, 'currency', /moneda del espacio/.source],
+      [{ receiptUrl: 'javascript:alert(1)' }, 'receiptUrl', /http:\/\/ o https:\/\//.source],
+      [{ receiptUrl: '/recibos/1.pdf' }, 'receiptUrl', /http:\/\/ o https:\/\//.source],
+    ];
+    for (const [over, field, frase] of casos) {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createExpense(tx, { ...base, ...over } as never)),
+        (e: unknown) => e instanceof InvalidExpenseError && e.field === field && new RegExp(frase).test(e.messageEs),
+        `${field}: ${JSON.stringify(over)}`,
+      );
+    }
+  });
+
+  test('un gasto que no existe da ExpenseNotFound, y un id que no es UUID no llega a la base', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpense(tx, 'no-es-un-uuid')), null);
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+        updateExpense(tx, '00000000-0000-4000-8000-000000000000', { category: 'otros', amount: '1', incurredOn: '2026-09-01', isRecurring: false, deductible: true }),
+      ),
+      ExpenseNotFound,
+    );
+  });
+});
+
+describe('gastos · aislamiento por espacio', () => {
+  test('desde otro espacio no se ve ni se edita ningún gasto del seed', async () => {
+    const mes = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(mes.rows.length, 0);
+    assert.equal(mes.totals.total, '0.00');
+    assert.deepEqual(mes.byCategory, []);
+    assert.equal(mes.otherCurrencyCount, 0);
+
+    const rec = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getCashflowInputs(tx));
+    assert.equal(rec.gastos.length, 0, 'ni un recurrente ajeno entra a la proyección');
+
+    assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getExpense(tx, GASTO_EDICION_SEP)), null);
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+        updateExpense(tx, GASTO_EDICION_SEP, { category: 'otros', amount: '1', incurredOn: '2026-09-01', isRecurring: false, deductible: true }),
+      ),
+      ExpenseNotFound,
+      'RLS no deja ni leer la fila para editarla',
+    );
+    // Y el gasto del seed sigue intacto.
+    const intacto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpense(tx, GASTO_EDICION_SEP));
+    assert.equal(intacto?.amount, '1800000.00');
+    assert.equal(intacto?.category, 'edicion');
+  });
+
+  test('un gasto creado en otro espacio no se mezcla, y su bitácora va a su espacio', async () => {
+    const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+      createExpense(tx, { category: 'otros', vendor: 'Ajeno', amount: '777', incurredOn: '2026-09-15', isRecurring: false, deductible: true }),
+    );
+    const mesAjeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.equal(mesAjeno.totals.total, '777.00');
+    const mesLaura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, '2026-09'));
+    assert.ok(!mesLaura.rows.some((r) => r.id === ajeno.id));
+    // La bitácora vive en SU espacio: se ve desde el ajeno y no desde el de Laura.
+    assert.equal((await bitacoraDe(WORKSPACE_AJENO, ajeno.id)).length, 1);
+    assert.deepEqual(await bitacoraDe(WORKSPACE_LAURA, ajeno.id), []);
+  });
+
+  test('la moneda del espacio manda: el espacio ajeno también rechaza otra', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
+        createExpense(tx, { category: 'otros', amount: '10', incurredOn: '2026-09-15', isRecurring: false, deductible: true, currency: 'EUR' }),
+      ),
+      (e: unknown) => e instanceof InvalidExpenseError && /COP/.test(e.messageEs),
+    );
   });
 });

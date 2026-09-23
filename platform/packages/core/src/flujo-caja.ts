@@ -28,7 +28,9 @@
  *     por semana (mensual × 12 / 52), tomando el mes CERRADO más
  *     reciente; sumarlos todos contaría la misma suscripción una vez
  *     por mes, y tomar el mes en curso la contaría a medias mientras se
- *     va registrando.
+ *     va registrando. Es `proyectarGastos`, la única regla: la usa
+ *     también la vista de gastos de FIN-5. Una serie que aparece por
+ *     primera vez este mes también entra (cierre del módulo FIN).
  *   - Lo que no venga en la moneda del workspace queda fuera: no hay
  *     conversión en el MVP.
  */
@@ -74,6 +76,15 @@ export interface GastoRecurrente {
   amount: Decimal;
   /** 'YYYY-MM-DD': cuándo se incurrió. Decide a qué mes pertenece. */
   incurredOn: string;
+  /**
+   * La serie del gasto: dos filas con la misma serie son la MISMA
+   * obligación registrada en meses distintos (la suscripción de julio y
+   * la de agosto). La pone la consulta —categoría y proveedor, en
+   * minúsculas— porque la descripción del seed lleva el mes («Edición
+   * de video · julio»). Sin ella, el gasto solo cuenta en el mes que
+   * manda, como antes de FIN-5.
+   */
+  serie?: string;
 }
 
 export interface CashflowInput {
@@ -232,6 +243,11 @@ class Suma {
     this.count += 1;
     if (amount !== null) this.cents += toCents(amount);
   }
+  /** Suma un grupo ya contado por otra función (los gastos en otra moneda). */
+  merge(e: Excluido): void {
+    this.count += e.count;
+    this.cents += toCents(e.amount);
+  }
   get value(): Excluido {
     return { count: this.count, amount: fromCents(this.cents) };
   }
@@ -242,6 +258,137 @@ class Suma {
 // ---------------------------------------------------------------------
 
 export const SEMANAS_POR_DEFECTO = 8;
+
+/** Lo que `proyectarGastos` necesita: un subconjunto de `CashflowInput`. */
+export interface GastosInput {
+  today: string;
+  currency: string;
+  gastos: readonly GastoRecurrente[];
+  semanas?: number;
+}
+
+/** Una semana de la proyección de gastos. */
+export interface SemanaGastos {
+  /** Lunes, 'YYYY-MM-DD'. */
+  inicio: string;
+  /** Domingo, 'YYYY-MM-DD'. */
+  fin: string;
+  /** Lo que se resta esa semana: siempre `semanal`. */
+  gastos: Decimal;
+}
+
+export interface ProyeccionGastos {
+  /** El mes CERRADO del que sale el ritmo ('2026-08'), o el en curso si no hay ninguno; null sin gastos. */
+  mes: string | null;
+  /**
+   * Cuántas series nuevas del mes en curso se sumaron al ritmo: las que
+   * no estaban en `mes`. 0 casi siempre; 1 el día que se registra una
+   * suscripción nueva. La pantalla de gastos lo dice con una frase.
+   */
+  nuevasDelMes: number;
+  /** Suma mensual, en la moneda del workspace. */
+  mensual: Decimal;
+  /** `mensual × 12 / 52` (semanalDeMensual): lo que se resta cada semana. */
+  semanal: Decimal;
+  /** Lo del mes que manda que venía en otra moneda: fuera, contado. */
+  otraMoneda: Excluido & { monedas: string[] };
+  /** `semanal × semanas`. */
+  total: Decimal;
+  semanas: SemanaGastos[];
+  /** true si no hay ni un gasto recurrente que proyectar. */
+  vacio: boolean;
+}
+
+/**
+ * LA regla de proyección de gastos recurrentes (FIN-6 §0.2.6). La usan
+ * `projectCashflow` (/finanzas/flujo) y la vista de gastos a ocho
+ * semanas (FIN-5), así que las dos dicen la misma cifra para la misma
+ * semana: no hay una segunda regla que pueda divergir.
+ *
+ * El ritmo es un monto MENSUAL repartido por semana (× 12 / 52), porque
+ * `expense` sabe cuándo se incurrió un gasto y cada cuánto se repite,
+ * no cuándo se paga el siguiente. El mes que manda es el CERRADO más
+ * reciente: el seed (y la pantalla de FIN-5) registran la misma
+ * suscripción una vez por mes, así que sumarlas todas la contaría una
+ * vez por mes, y el mes en curso está a medio registrar —el día 3 de
+ * octubre, con una de cinco suscripciones anotada, el ritmo se
+ * hundiría de 3,7 M a 0,38 M y la proyección mentiría en más de 6 M—.
+ * Sin ningún mes cerrado (un espacio recién abierto) manda el mes en
+ * curso, que es lo único que hay.
+ *
+ * Lo que añade FIN-5 al integrarse: una serie que aparece por PRIMERA
+ * vez en el mes en curso (una suscripción que se registra hoy) también
+ * entra al ritmo, en vez de esperar a que el mes cierre. Se reconoce
+ * por `serie`: si ya estaba en el mes que manda, no se suma otra vez.
+ * Sin `serie` no se puede saber, y el gasto espera, como hacía FIN-6.
+ */
+export function proyectarGastos(input: GastosInput): ProyeccionGastos {
+  assertFecha(input.today, 'today');
+  const semanas = input.semanas ?? SEMANAS_POR_DEFECTO;
+  if (!Number.isInteger(semanas) || semanas < 1 || semanas > 52) {
+    throw new Error(`El número de semanas tiene que ser un entero entre 1 y 52: ${semanas}.`);
+  }
+  const moneda = input.currency.toUpperCase();
+  const inicio = lunesDeLaSemana(input.today);
+
+  const mesEnCurso = input.today.slice(0, 7);
+  const meses = new Set<string>();
+  for (const g of input.gastos) meses.add(mesDe(g.incurredOn));
+  const cerrados = [...meses].filter((m) => m < mesEnCurso).sort();
+  const mes = cerrados[cerrados.length - 1] ?? (meses.has(mesEnCurso) ? mesEnCurso : null);
+
+  // Las series que ya cuentan en el mes que manda, para no sumar dos
+  // veces la misma obligación cuando también se registró este mes.
+  const seriesDelMes = new Set<string>();
+  for (const g of input.gastos) {
+    if (mesDe(g.incurredOn) === mes && g.serie !== undefined) seriesDelMes.add(g.serie);
+  }
+  const nuevas = new Set<string>();
+  const entra = (g: GastoRecurrente): boolean => {
+    const m = mesDe(g.incurredOn);
+    if (m === mes) return true;
+    // Solo el mes en curso aporta series nuevas, y solo si el que manda
+    // es un mes cerrado (si manda el en curso, ya entró arriba).
+    if (m !== mesEnCurso || mes === mesEnCurso || g.serie === undefined) return false;
+    if (seriesDelMes.has(g.serie) || nuevas.has(g.serie)) return false;
+    // Tampoco una fecha futura dentro del mes en curso: todavía no ha pasado.
+    if (g.incurredOn > input.today) return false;
+    nuevas.add(g.serie);
+    return true;
+  };
+
+  const otraMoneda = new Suma();
+  const monedas = new Set<string>();
+  let mensualCents = 0n;
+  let alguno = false;
+  for (const g of input.gastos) {
+    if (!entra(g)) continue;
+    if (g.currency.toUpperCase() !== moneda) {
+      monedas.add(g.currency.toUpperCase());
+      otraMoneda.add(g.amount);
+      continue;
+    }
+    alguno = true;
+    mensualCents += toCents(g.amount);
+  }
+  const mensual = fromCents(mensualCents);
+  const semanal = semanalDeMensual(mensual);
+  const filas: SemanaGastos[] = Array.from({ length: semanas }, (_, i) => {
+    const lunes = addDays(inicio, i * 7);
+    return { inicio: lunes, fin: addDays(lunes, 6), gastos: semanal };
+  });
+
+  return {
+    mes,
+    nuevasDelMes: nuevas.size,
+    mensual,
+    semanal,
+    otraMoneda: { ...otraMoneda.value, monedas: [...monedas].sort() },
+    total: fromCents(toCents(semanal) * BigInt(semanas)),
+    semanas: filas,
+    vacio: !alguno,
+  };
+}
 
 /**
  * Proyecta el flujo de caja de las próximas semanas.
@@ -339,33 +486,14 @@ export function projectCashflow(input: CashflowInput): Cashflow {
   }
 
   // --- Gastos recurrentes ---------------------------------------------
-  // UN solo mes manda, y todo lo de gastos se mide en él: el ritmo y lo
-  // que se deja fuera por moneda. Es el mes CERRADO más reciente, no el
-  // más reciente a secas: el seed (y FIN-5) registran la misma
-  // suscripción una vez por mes, así que sumarlas todas la contaría
-  // cuatro veces, y el mes en curso está a medio registrar —el día 3 de
-  // octubre, con una de cinco suscripciones anotada, el ritmo se
-  // hundiría de 3,7 M a 0,38 M y la proyección mentiría en más de 6 M—.
-  // Si no hay ningún mes cerrado en la ventana (un espacio recién
-  // abierto), se usa el mes en curso, que es lo único que hay.
-  const mesEnCurso = input.today.slice(0, 7);
-  const meses = new Set<string>();
-  for (const g of input.gastos) meses.add(mesDe(g.incurredOn));
-  const cerrados = [...meses].filter((m) => m < mesEnCurso).sort();
-  const gastoMes = cerrados[cerrados.length - 1] ?? (meses.has(mesEnCurso) ? mesEnCurso : null);
-
-  let mensualCents = 0n;
-  for (const g of input.gastos) {
-    if (mesDe(g.incurredOn) !== gastoMes) continue;
-    if (g.currency.toUpperCase() !== moneda) {
-      monedas.add(g.currency.toUpperCase());
-      otraMoneda.add(g.amount);
-      continue;
-    }
-    mensualCents += toCents(g.amount);
-  }
-  const gastoMensual = fromCents(mensualCents);
-  const gastoSemanal = semanalDeMensual(gastoMensual);
+  // La MISMA función que la vista de gastos (FIN-5): una sola regla.
+  const pg = proyectarGastos({ today: input.today, currency: moneda, gastos: input.gastos, semanas });
+  otraMoneda.merge(pg.otraMoneda);
+  for (const m of pg.otraMoneda.monedas) monedas.add(m);
+  const gastoMes = pg.mes;
+  const gastoMensual = pg.mensual;
+  const gastoSemanal = pg.semanal;
+  const mensualCents = toCents(gastoMensual);
 
   // --- Otros ingresos: lo que pagan las plataformas (FIN-7) -----------
   // Entra ya estimado desde `proyeccionDePlataformas`, que es quien sabe

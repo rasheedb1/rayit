@@ -64,8 +64,10 @@ export const AUDIT_ACTIONS = [
   // y el rango de periodos, nunca las filas.
   'platform_payout.created',
   'platform_payout.imported',
-  // Gastos (FIN-5): cada gasto es dinero que sale.
+  // Gastos (FIN-5): cada gasto es dinero que sale; corregir uno deja
+  // before/after (no hay borrado).
   'expense.created',
+  'expense.updated',
   // Configuración financiera (FIN-8): el bloque settings.finanzas y la
   // moneda del workspace. before/after llevan solo ese bloque.
   'workspace.settings_updated',
