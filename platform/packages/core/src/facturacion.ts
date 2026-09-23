@@ -510,6 +510,14 @@ function rateIsZero(rate: string): boolean {
 }
 
 /**
+ * Cuántos decimales admite la tasa guardada: `tax_reserve.rate` es
+ * `numeric(6,4)` (0008). Un porcentaje con más de dos decimales daría
+ * una tasa que la columna redondea, así que el apartado ya no
+ * correspondería a la tasa que dice haber usado.
+ */
+export const RESERVE_RATE_DECIMALS = 4;
+
+/**
  * La tasa de reserva a partir de `workspace.settings.finanzas.reserva_pct`
  * (11 en los seeds) → '0.11'.
  *
@@ -519,7 +527,8 @@ function rateIsZero(rate: string): boolean {
  *     ajuste que el producto todavía no deja tocar (es FIN-8) sería peor
  *     que no apartar, y suponer 11 % sería volver a esconder Colombia en
  *     el código.
- *   - Presente pero roto (texto, negativo, mayor que 100) →
+ *   - Presente pero roto (texto, negativo, mayor que 100, o con más de
+ *     dos decimales, que no caben en `numeric(6,4)`) →
  *     `TaxReserveRateInvalid`. Una ausencia es una decisión que nadie ha
  *     tomado; un valor roto es un error que hay que ver.
  */
@@ -533,6 +542,9 @@ export function reserveRateFrom(pct: unknown): string | null {
     // El porcentaje se compara en centésimas de punto, sin pasar por number.
     if (toCents(raw.replace(',', '.')) > toCents('100')) throw new Error('fuera de rango');
     rate = pctToRate(raw);
+    // Más decimales de los que la columna guarda: el apartado no
+    // correspondería a la tasa escrita junto a él.
+    if ((rate.split('.')[1] ?? '').length > RESERVE_RATE_DECIMALS) throw new Error('demasiados decimales');
   } catch {
     throw new TaxReserveRateInvalid(pct);
   }

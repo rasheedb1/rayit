@@ -604,7 +604,7 @@ describe('pagos (FIN-2)', () => {
     assert.equal(payment.reserved, null, 'una ausencia no es un cero');
     assert.equal(payment.reserveRate, null);
     const pagos = await t.db.withWorkspace(WORKSPACE_SIN_RESERVA, (tx) => listPayments(tx, FACTURA_SIN_RESERVA));
-    assert.equal(pagos.reservedTotal, '0');
+    assert.equal(pagos.reservedTotal, '0.00', 'un monto siempre tiene dos decimales');
     assert.equal(pagos.reserveRate, null);
   });
 

@@ -46,6 +46,15 @@ export function RegistrarPagoForm({ invoiceId, currency, locale, outstanding, pa
 
   const [amountDraft, setAmountDraft] = useState<string | null>(null);
   const [dateDraft, setDateDraft] = useState<string | null>(null);
+  /**
+   * Cuántos cobros lleva registrados este formulario. Va en la `key` del
+   * MoneyInput: el control guarda por dentro el TEXTO que se está
+   * escribiendo y solo lo suelta al perder el foco, así que al enviar
+   * con Enter seguía enseñando el monto anterior mientras el campo
+   * oculto ya llevaba el saldo nuevo. Un segundo Enter habría cobrado
+   * ese saldo sin que la pantalla lo dijera. Cambiar la key lo remonta.
+   */
+  const [cobros, setCobros] = useState(0);
   const [method, setMethod] = useState<string>(PAYMENT_METHODS[0]);
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
@@ -63,6 +72,7 @@ export function RegistrarPagoForm({ invoiceId, currency, locale, outstanding, pa
     setDateDraft(null);
     setReference("");
     setNotes("");
+    setCobros((n) => n + 1);
   }, [state]);
 
   // Foco al primer campo con error cuando el servidor devuelve errores.
@@ -92,7 +102,7 @@ export function RegistrarPagoForm({ invoiceId, currency, locale, outstanding, pa
 
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <Field label={M.amount} required help={M.amountHelp(money(outstanding))} error={errors.amount} htmlFor="amount">
-          <MoneyInput value={amount} currency={currency} onChange={(v) => setAmountDraft(v)} required />
+          <MoneyInput key={cobros} value={amount} currency={currency} onChange={(v) => setAmountDraft(v)} required />
           {/* El MoneyInput enseña "2.100.000"; al servidor viaja el decimal normalizado. */}
           <input type="hidden" name="amount" value={amount} />
         </Field>

@@ -899,11 +899,16 @@ export async function listPayments(tx: WorkspaceTx, invoiceId: string): Promise<
     [invoiceId],
   );
   const total = await tx.query<{ reserved_total: string; reserve_rate: string | null }>(
-    `SELECT coalesce(sum(tr.amount), 0)::text AS reserved_total,
+    // El total sale con dos decimales como cualquier otro monto (sin el
+    // cast, `sum` de cero valores devuelve '0' y no '0.00'). La tasa es
+    // la del apartado más reciente, con el id como desempate: dos cobros
+    // del mismo día se guardan a la misma hora, y desde FIN-8 dos
+    // apartados pueden tener tasas distintas.
+    `SELECT coalesce(sum(tr.amount), 0)::numeric(14,2)::text AS reserved_total,
             (SELECT tr2.rate::text
                FROM tax_reserve tr2 JOIN payment p2 ON p2.id = tr2.payment_id
               WHERE p2.invoice_id = $1
-              ORDER BY p2.received_at DESC LIMIT 1) AS reserve_rate
+              ORDER BY p2.received_at DESC, p2.id DESC LIMIT 1) AS reserve_rate
        FROM tax_reserve tr JOIN payment p ON p.id = tr.payment_id
       WHERE p.invoice_id = $1`,
     [invoiceId],

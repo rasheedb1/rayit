@@ -115,6 +115,12 @@ describe("RegistrarPagoForm", () => {
     rerender(<RegistrarPagoForm {...PROPS} outstanding="2100000.00" paidAmount="1000000.00" />);
 
     await waitFor(() => expect(container.querySelector('input[name="amount"]')).toHaveValue("2100000.00"));
+    // Y lo que se VE, también: el MoneyInput guarda por dentro el texto
+    // que se está escribiendo y solo lo suelta al perder el foco, así
+    // que sin remontarlo seguiría enseñando «1.000.000» sobre un campo
+    // oculto que ya lleva el saldo nuevo. Un segundo envío habría
+    // cobrado ese saldo sin que la pantalla lo dijera.
+    expect(screen.getByLabelText(/Monto del pago/)).toHaveValue("2.100.000");
     expect(screen.getByLabelText(/Referencia/)).toHaveValue("");
     expect(container.querySelector('input[name="expectedPaidAmount"]')).toHaveValue("1000000.00");
   });

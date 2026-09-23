@@ -21,7 +21,7 @@ function motivoSinCobro(status: InvoiceStatus): string | null {
 
 /** El método con su nombre en español; si viniera uno de antes, se enseña tal cual. */
 function metodo(value: string | null): string {
-  if (!value) return M.noReference;
+  if (!value) return M.noMethod;
   return isPaymentMethod(value) ? PAYMENT_METHOD_LABEL_ES[value] : value;
 }
 
@@ -47,7 +47,11 @@ const columnas = (f: Formatter): Column<PaymentRow>[] => [
       </CellMain>
     ),
   },
-  { key: "method", header: M.columns.method, render: (p) => metodo(p.method) },
+  {
+    key: "method",
+    header: M.columns.method,
+    render: (p) => (p.method ? metodo(p.method) : <span className="text-fg-3">{M.noMethod}</span>),
+  },
   {
     key: "reference",
     header: M.columns.reference,

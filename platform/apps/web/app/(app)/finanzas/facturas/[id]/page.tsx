@@ -122,9 +122,12 @@ export default async function FacturaPage({
               <Row label="Neto que entra al banco" value={monto(f, invoice.net, invoice.currency)} />
               <Row label="Pagado" value={monto(f, invoice.paidAmount, invoice.currency)} muted />
               <Row label="Pendiente por cobrar" value={monto(f, invoice.outstanding, invoice.currency)} strong />
-              {pagos.rows.length > 0 && (
+              {/* Solo si de verdad se apartó algo: un espacio sin
+                  porcentaje configurado lo explica con una frase en la
+                  sección «Pagos», no con un cero aquí. */}
+              {pagos.reserveRate && (
                 <Row
-                  label={pagos.reserveRate ? MESSAGES.pagos.reservedWith(rateToPct(pagos.reserveRate)) : MESSAGES.pagos.reserved}
+                  label={MESSAGES.pagos.reservedWith(rateToPct(pagos.reserveRate))}
                   value={monto(f, pagos.reservedTotal, invoice.currency)}
                   muted
                 />

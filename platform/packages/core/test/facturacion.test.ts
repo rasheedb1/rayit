@@ -321,6 +321,7 @@ test('la tasa sale de settings.finanzas.reserva_pct, y una ausencia no es un cer
   assert.equal(reserveRateFrom(11), '0.11');
   assert.equal(reserveRateFrom('11'), '0.11');
   assert.equal(reserveRateFrom('11,5'), '0.115');
+  assert.equal(reserveRateFrom('11.55'), '0.1155', 'cuatro decimales es lo que guarda numeric(6,4)');
   assert.equal(reserveRateFrom(100), '1');
   // Ausente o cero: este espacio no aparta y no se escribe ninguna fila.
   assert.equal(reserveRateFrom(undefined), null);
@@ -329,7 +330,9 @@ test('la tasa sale de settings.finanzas.reserva_pct, y una ausencia no es un cer
   assert.equal(reserveRateFrom('0'), null);
   assert.equal(reserveRateFrom('0.00'), null);
   // Presente pero roto: se ve, no se supone.
-  for (const roto of ['once', -1, 101, '150', {}, NaN, true]) {
+  // Más de dos decimales en el porcentaje no caben en numeric(6,4): el
+  // apartado no correspondería a la tasa escrita junto a él.
+  for (const roto of ['once', -1, 101, '150', {}, NaN, true, '11.555', 11.5555]) {
     assert.throws(() => reserveRateFrom(roto), TaxReserveRateInvalid, `debería fallar con ${JSON.stringify(roto)}`);
   }
 });

@@ -28,6 +28,8 @@ export const MESSAGES = {
     emptyPayable: "Cuando entre el dinero, regístralo aquí y la factura se actualiza sola.",
     columns: { date: "Fecha", amount: "Monto", method: "Método", reference: "Referencia" },
     noReference: "Sin referencia",
+    /** `payment.method` es nullable: un cobro de antes puede no traerlo. */
+    noMethod: "Sin método",
     /** El apartado de impuestos, en la lista y en la cabecera. */
     reserved: "Apartado para impuestos",
     reservedWith: (pct: string) => `Apartado para impuestos (${pct} %)`,
