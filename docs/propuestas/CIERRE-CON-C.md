@@ -229,7 +229,13 @@ make db.sql Q="with ws as (select set_config('app.workspace_id','00000002-0000-4
   congela el entorno en cada build. `./scripts/vercel.sh run redeploy
   <url de producción> --prod` (o el próximo despliegue desde main)
   basta.
-- **El worker tiene su propio entorno** (Railway/Fly, CIM-7 de Rasheed).
+- **El worker tiene su propio entorno.** WRK eligió `--once` desde
+  GitHub Actions (`docs/propuestas/WRK.md` §3 y §5,
+  `.github/workflows/worker-once.yml`): cada variable de esta tabla va
+  **también** como secreto del repositorio (Settings → Secrets →
+  Actions) con el mismo nombre. El workflow ya las pasa todas desde este
+  cierre —faltaban `GOOGLE_CLIENT_*` y `ENSEMBLEDATA_TOKEN`— y
+  `apps/worker/test/workflow-fuentes.test.ts` falla si alguna se cae.
   Una variable solo en Vercel enciende lo que hace la web (agregar,
   «Actualizar», autorizar) y nada de lo diario.
 - **`INSTAGRAM_HOUSE_TOKEN` caduca a los 60 días.** El día que vence, la
@@ -339,9 +345,10 @@ están en `CIERRE-CON-A.md` §6 y no se repiten.
    para los usuarios de prueba y 7 días. Número de caso a
    `docs/tramites.md`.
 2. **Entorno del worker (CIM-7 / WRK)**: las mismas variables de §2
-   cuando Nicolás las meta en Vercel: `INSTAGRAM_HOUSE_TOKEN`,
-   `GOOGLE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y, si se
-   contrata, `ENSEMBLEDATA_TOKEN`.
+   como secretos del workflow `worker-once` cuando Nicolás las meta en
+   Vercel: `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY`, `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET` y, si se contrata, `ENSEMBLEDATA_TOKEN`. El
+   workflow ya las lee.
 3. **`.env.example`** (compartido): faltan `INSTAGRAM_HOUSE_TOKEN`,
    `GOOGLE_API_KEY`, `ENSEMBLEDATA_TOKEN`, `ENSEMBLEDATA_MAX_POSTS` y
    `ENSEMBLEDATA_DAILY_UNITS`, y las `*_REDIRECT_URI` apuntan a

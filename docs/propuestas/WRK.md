@@ -202,7 +202,8 @@ Salen de `grep process.env / env[…]` en `apps/worker/src` y
 | `LOG_LEVEL`, `LOG_FORMAT` | logger | no | no | `info`, `json` |
 | `WORKER_SET_ROLE`, `WORKER_GROUPS`, `WORKER_BOSS_SCHEMA`, `WORKER_BOSS_POOL_MAX`, `WORKER_POLL_S`, `WORKER_RETRY_DELAY_S`, `WORKER_RETRY_DELAY_MAX_S`, `WORKER_STOP_TIMEOUT_S`, `WORKER_APPLICATION_NAME`, `SECRET_STORE`, `TOKEN_REFRESHER` | runner | no | no | valores por defecto |
 | `COLLECT_POSTS_MAX`, `COLLECT_MAX_AGE_HOURS`, `COLLECT_YOUTUBE_UNITS_RESERVE` | CON-5 | no | no | valores por defecto |
-| `ENSEMBLEDATA_TOKEN` | CON-12, que **no está en main** | falta | falta | no aplica todavía |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `oauth.refresh` de YouTube (CON-8, en main desde el cierre CON-C) | falta | falta | en el workflow desde CON-C; sin ellas la renovación de YouTube falla como transitorio `not_configured` |
+| `ENSEMBLEDATA_TOKEN` | CON-12 (en main y apagada desde el cierre CON-C) | falta | falta | en el workflow desde CON-C; solo si se contrata |
 
 ## 6. F4 · Seguridad
 
