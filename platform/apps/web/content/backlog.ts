@@ -390,7 +390,8 @@ export const STORIES: readonly Story[] = [
     title: "Canales de outreach",
     desc: "Migración 0015 con las tablas de outreach, conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con gmail.send y gmail.modify, pantalla de canales con estado y límites, keepalive diario del token.",
     done: "Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar.",
-    status: "pendiente",
+    status: "en_curso",
+    note: "El esquema está (23 de septiembre): migración 0037_outreach (la «0015» del documento) con cuentas de canal, pasos, enrolamientos, la cola en outbound_touch, mensajes, revisiones, contadores, disyuntores, ángulos, rúbrica y la plantilla «Marca con campaña activa»; límites atómicos, interruptor, salud, días hábiles y public_optout; esquema Drizzle y prueba en pglite. Verificada con make db.check y sin aplicar en Supabase: la aplica el integrador. Faltan el conector de Unipile, el OAuth de Gmail y la pantalla de canales.",
   },
   {
     id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2"],

@@ -217,6 +217,40 @@ Funciones: `increment_if_under_cap`, `increment_weekly`,
 `should_pause_outreach`, `disable_outreach(workspace, reason)`,
 `outbound_health(workspace, hours)`.
 
+**Cómo quedó (VEN-9, 23 de septiembre).** La migración es
+`platform/db/migrations/0037_outreach.sql`: el número 0015 lo tomó
+`connection_secret` y las fases 1 a 3 llegaron hasta 0036. Además de lo
+de arriba trae `outbound_sequence_template` (plantillas globales de solo
+lectura, con «Marca con campaña activa»), `enable_outreach`,
+`next_business_day(ts, tz)` y `public_optout(token)`. Decisiones que las
+piezas siguientes tienen que conocer:
+
+- El vocabulario de canales es el de 0007 en todas partes: `email`,
+  `linkedin`, `instagram_dm`, `whatsapp`, también en las cuentas.
+- Los estados de `outbound_touch` son `draft`, `scheduled`,
+  `processing`, `held`, `sent`, `failed`, `skipped` y `canceled`; los
+  de 0007 se tradujeron en la migración.
+- La semana de los límites es su propia fila en `outbound_counter` (el
+  lunes local del workspace): cada función bloquea la fila del periodo
+  que cuenta. Los contadores y los disyuntores los escribe solo el
+  worker.
+- `outbound_policy.enabled` nace apagado y no se enciende sin
+  `postal_address` (lo exige un `CHECK`).
+- El enlace de baja lleva un token al azar; la base guarda solo su
+  sha256 en `outbound_touch.optout_token_hash`. `public_optout` es de
+  `mc_public_share`, como los enlaces de Cotizar, y da de baja a la
+  persona en toda la plataforma: todas sus fichas con el mismo correo,
+  lo pendiente en cualquier workspace y el correo en
+  `contact_suppression` con `unsubscribe_link`.
+- **Abierto para VEN-15:** el correo sale del Gmail del creador, así que
+  el enlace de baja también queda en su carpeta de enviados, y quien lo
+  pulse desde ahí da de baja a esa persona en toda la plataforma. Es la
+  forma de sabotaje que 0029 cerró para el `opted_out` del CRM, ahora
+  con un paso más (hace falta enviarle un correo de verdad). La página
+  de baja tiene que pedir una confirmación que un clic automático no
+  dé, y el despachador no debe volver a mostrar el enlace en la
+  aplicación.
+
 ### 5.3 La cadencia recomendada para un creador
 
 Chief demostró dos cosas que valen la pena: que cada toque tenga un
