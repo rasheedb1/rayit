@@ -1,4 +1,4 @@
-import type { BrandCsvRejectReason } from "@mc/core";
+import type { BrandCsvRejectReason, MissingInput } from "@mc/core";
 
 /**
  * Textos de interfaz del módulo Campañas que no viven en una pantalla
@@ -98,5 +98,58 @@ export const MESSAGES = {
         canjes_ilegible: "los canjes no son un entero",
       } satisfies Record<BrandCsvRejectReason, string>,
     },
+  },
+  /** «Resultado» (CAM-5): los seis KPIs de campaign_result. */
+  resultado: {
+    title: "Resultado",
+    kpi: {
+      views: "Views",
+      reach: "Alcance",
+      clicks: "Clics al enlace",
+      redemptions: "Canjes del código",
+      followers: "Seguidores ganados por la marca",
+      cpm: "CPM",
+    },
+    /** Lo que dice una cifra que no está. Nunca un cero ni un guion. */
+    absent: {
+      brand: "Sin datos de la marca",
+      posts: "Sin posts medidos",
+      clicks: "Sin datos de clics",
+      amount: "Sin monto acordado",
+    },
+    note: {
+      vsMedian: (x: string) => `${x} tu mediana`,
+      nonFollowers: (pct: string) => `${pct} no te seguía`,
+      revenue: (money: string) => `${money} en ventas atribuidas`,
+      rate: (x: string) => `${x} su ritmo previo`,
+      cpa: (money: string) => `CPA ${money}`,
+      cpaAbsent: "CPA sin datos de la marca",
+      costPerFollower: (money: string) => `${money} por seguidor`,
+    },
+    cut: (label: string) => `a ${label}`,
+    partialCut: (label: string) => `parcial, a ${label}; se recalcula solo hasta llegar a 30 días`,
+    asOfSource: (cut: string) => `resultado calculado ${cut}`,
+    fromCsv: "Canjes e ingresos salen del CSV de ventas; los totales por formulario quedan como respaldo.",
+    missingTitle: "Falta",
+    missing: {
+      posts: "posts medidos: asocia los posts de la campaña",
+      amount: "el monto acordado: sin él no hay CPM ni CPA",
+      baseline: "la línea base del creador en alguna red: conecta más videos",
+      brand_followers: "los seguidores de la marca",
+      brand_followers_baseline_short: "dos semanas de seguidores de la marca antes de publicar",
+      brand_inputs: "lo que aportó la marca: canjes, ingresos o el CSV de ventas",
+      brand_csv_sales: "el CSV de ventas diarias de la marca",
+    } satisfies Record<MissingInput, string>,
+    complete: "Resultado completo a 30 días: ya puedes marcar el reporte listo.",
+    empty: {
+      title: "Todavía no hay resultado",
+      description: "Se calcula cada mañana para las campañas en curso, en medición o con reporte listo, desde los posts asociados y lo que aporta la marca.",
+      planned: "Una campaña planeada todavía no tiene posts que medir. El resultado empieza cuando la campaña esté en curso.",
+    },
+    daily: "Se recalcula cada mañana.",
+    frozen: "Una campaña cerrada conserva su resultado: ya no se recalcula.",
+    recompute: "Recalcular",
+    recomputeError: "No se pudo recalcular el resultado.",
+    recomputeDenied: "Desde la ficha todavía no se puede recalcular: el resultado se actualiza cada mañana.",
   },
 } as const;

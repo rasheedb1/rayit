@@ -13,10 +13,11 @@ import {
   deliverableLabel,
   hoyEnZona,
   INVOICE_STATUS_LABEL_ES,
+  RESULT_COMPUTE_STATUSES,
   isMoneyBrandInputKind,
   type InvoiceStatus,
 } from "@mc/core";
-import { getCampaign, listBrandInputs, listCampaignPosts, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
+import { canRecomputeResult, getCampaign, getCampaignResult, listBrandInputs, listCampaignPosts, listLinkablePosts, suggestPosts, type BrandInputTotal, type BrandInputs, type CampaignDetail, type CampaignPostRow } from "@mc/db";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -32,9 +33,10 @@ import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
-import { cambiarEstadoCampana, marcarPrincipal, quitarPost } from "./actions";
+import { cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
+import { Resultado } from "./resultado";
 import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
 import { TransitionButton } from "./transicion";
@@ -58,6 +60,8 @@ const loadCampaign = cache(async (id: string) =>
       linkable: editable ? await listLinkablePosts(tx, { campaignId: id }) : [],
       // TODO(ACC-1): campanas.campana.ver
       brandInputs: await listBrandInputs(tx, id),
+      result: await getCampaignResult(tx, id),
+      canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
     };
   }),
 );
@@ -272,7 +276,7 @@ export default async function CampanaPage({
 
   const data = await loadCampaign(id);
   if (!data) notFound();
-  const { campaign, editable, posts, suggestions, linkable, brandInputs } = data;
+  const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute } = data;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
   const today = hoyEnZona(ws.timezone);
@@ -484,17 +488,23 @@ export default async function CampanaPage({
         )}
       </div>
 
-      <div className="mt-8 min-w-0">
+      <div className="mt-8 min-w-0 space-y-8">
+        <Section id="resultado" title="Resultado">
+          <Resultado
+            campaignId={campaign.id}
+            status={campaign.status}
+            editable={editable}
+            result={result}
+            brandInputs={brandInputs}
+            canRecompute={canRecompute}
+            recompute={recalcularResultado.bind(null, campaign.id)}
+            f={f}
+          />
+        </Section>
         <BrandInputsSection campaign={campaign} editable={editable} inputs={brandInputs} f={f} today={today} />
       </div>
 
       <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-2">
-        <Section id="resultado" title="Resultado">
-          <EmptyState
-            title="Llega con la medición"
-            description="Alcance, views, clics, canjes, seguidores para la marca, CPM y CPA se calculan desde los snapshots y lo que aporta la marca. Hasta entonces no hay cifras que mostrar."
-          />
-        </Section>
 
         <Section id="seguidores" title="Seguidores de la marca">
           <EmptyState
