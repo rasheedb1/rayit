@@ -33,7 +33,7 @@ import { WorkspaceMenu, type EspacioVisible } from "./workspace-menu";
  *             cuenta su propio error.tsx.
  */
 type Vista =
-  | { modo: "sesion"; actual: EspacioVisible; espacios: EspacioVisible[] }
+  | { modo: "sesion"; actual: EspacioVisible; espacios: EspacioVisible[]; correo: string }
   | { modo: "demo"; actual: EspacioVisible }
   | { modo: "entrar" };
 
@@ -55,6 +55,7 @@ const datos = cache(async (): Promise<Vista | null> => {
       modo: "sesion",
       actual: { id: actual.id, name: actual.name },
       espacios: workspaces.map((e) => ({ id: e.id, name: e.name })),
+      correo: sesion.email,
     };
   } catch (err) {
     console.error("[workspace] no se pudo leer el espacio actual para el marco", err);
@@ -93,7 +94,7 @@ export async function WorkspaceSwitcher() {
 
   return (
     <div className="border-b border-line px-2 py-2">
-      <WorkspaceMenu actual={d.actual} espacios={d.espacios} />
+      <WorkspaceMenu actual={d.actual} espacios={d.espacios} correo={d.correo} />
     </div>
   );
 }

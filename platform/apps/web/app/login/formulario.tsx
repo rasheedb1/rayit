@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { MESSAGES } from "@/lib/auth/messages";
 import { enviarEnlace, type EstadoLogin } from "./acciones";
+import { Turnstile } from "./turnstile";
 
 /**
  * El estado inicial vive AQUÍ y no en acciones.ts: ese archivo lleva
@@ -34,10 +35,34 @@ const ESPERA_REENVIO_S = 60;
  * 429 si se pide otro enlace antes de 60 s, y pulsar justo después de
  * enviar es lo más normal. Si aun así reenviar falla, el error sale
  * debajo de «Revisa tu correo» y el correo se conserva.
+ *
+ * Con TURNSTILE_SITE_KEY (CIM-10), los dos formularios que piden enlace
+ * llevan el widget anti-bots y no se envían hasta tener token; «Usar
+ * otro correo» no pide nada y no lo necesita. Sin la clave, fuera de
+ * producción se dice en una línea (`avisoCaptcha`).
  */
-export function FormularioLogin({ next }: { next: string }) {
+export function FormularioLogin({
+  next,
+  captchaSiteKey = null,
+  avisoCaptcha = null,
+}: {
+  next: string;
+  captchaSiteKey?: string | null;
+  avisoCaptcha?: string | null;
+}) {
   const [estado, action, pendiente] = useActionState<EstadoLogin, FormData>(enviarEnlace, ESTADO_INICIAL);
+  const [token, setToken] = useState("");
   const t = MESSAGES.login;
+  const faltaToken = captchaSiteKey !== null && token === "";
+
+  const captcha = captchaSiteKey ? (
+    <>
+      <input type="hidden" name="captchaToken" value={token} />
+      <Turnstile siteKey={captchaSiteKey} onToken={setToken} reinicio={estado} />
+    </>
+  ) : avisoCaptcha ? (
+    <p className="text-xs leading-4 text-muted">{avisoCaptcha}</p>
+  ) : null;
 
   if (estado.estado === "enviado") {
     return (
@@ -66,9 +91,11 @@ export function FormularioLogin({ next }: { next: string }) {
           </p>
         )}
 
+        {captcha}
+
         <div className="flex flex-col gap-2">
           {/* La llave reinicia la cuenta atrás con cada enlace que SALE, no con un error. */}
-          <BotonReenviar key={estado.enviadoEn ?? "sin-envio"} pendiente={pendiente} />
+          <BotonReenviar key={estado.enviadoEn ?? "sin-envio"} pendiente={pendiente} sinToken={faltaToken} />
           <Button type="submit" name="accion" value="cambiar" variant="ghost">
             {t.enviado.cambiar}
           </Button>
@@ -93,7 +120,8 @@ export function FormularioLogin({ next }: { next: string }) {
           defaultValue={estado.email}
         />
       </Field>
-      <Button type="submit" variant="primary" loading={pendiente} className="w-full">
+      {captcha}
+      <Button type="submit" variant="primary" loading={pendiente} disabled={faltaToken} className="w-full">
         {pendiente ? t.enviando : t.enviar}
       </Button>
     </form>
@@ -101,7 +129,7 @@ export function FormularioLogin({ next }: { next: string }) {
 }
 
 /** «Reenviar el enlace», desactivado con su cuenta atrás mientras Supabase no deja pedir otro. */
-function BotonReenviar({ pendiente }: { pendiente: boolean }) {
+function BotonReenviar({ pendiente, sinToken }: { pendiente: boolean; sinToken: boolean }) {
   const t = MESSAGES.login.enviado;
   const [restante, setRestante] = useState(ESPERA_REENVIO_S);
 
@@ -113,7 +141,7 @@ function BotonReenviar({ pendiente }: { pendiente: boolean }) {
 
   const esperando = restante > 0;
   return (
-    <Button type="submit" name="accion" value="reenviar" variant="secondary" loading={pendiente} disabled={esperando}>
+    <Button type="submit" name="accion" value="reenviar" variant="secondary" loading={pendiente} disabled={esperando || sinToken}>
       {esperando ? t.reenviarEn(restante) : t.reenviar}
     </Button>
   );

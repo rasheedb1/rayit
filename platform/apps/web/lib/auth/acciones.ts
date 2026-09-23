@@ -9,11 +9,11 @@ import {
 import { isUuid } from "@mc/db";
 import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
-import { olvidarEspacio, recordarEspacio } from "@/lib/workspace/elegir";
-import { isAuthConfigured } from "./config";
+import { recordarEspacio } from "@/lib/workspace/elegir";
+import { correoDeSoporte } from "@/lib/soporte";
 import { MESSAGES } from "./messages";
 import { MAX_ESPACIOS_PROPIOS, MAX_NOMBRE, PUEDEN_RENOMBRAR } from "./reglas";
-import { createServerSupabase } from "./supabase";
+import { cerrarSesionLocal } from "./salir";
 
 /**
  * Lo que se hace con la sesión desde la interfaz: cambiar de espacio,
@@ -44,6 +44,12 @@ function avisarSinFirma(): void {
 
 export interface EstadoEspacio {
   error?: string;
+  /**
+   * El correo de soporte, cuando el error es de los que se resuelven
+   * escribiendo (el tope de espacios). El menú lo pinta como enlace; sin
+   * SUPPORT_EMAIL no viene y el texto no promete ningún contacto.
+   */
+  soporte?: string;
 }
 
 /** Cambia el espacio actual. El id llega del formulario; la membresía la dice la base. */
@@ -80,7 +86,8 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
   // El contexto ya trae mis espacios; se cuentan los que son MÍOS (no
   // los que me compartieron), que son los que esta acción crea.
   if (workspaces.filter((w) => w.role === "owner").length >= MAX_ESPACIOS_PROPIOS) {
-    return { error: MESSAGES.selector.errores.limite(MAX_ESPACIOS_PROPIOS) };
+    const soporte = correoDeSoporte();
+    return { error: MESSAGES.selector.errores.limite(MAX_ESPACIOS_PROPIOS), ...(soporte ? { soporte } : {}) };
   }
 
   const workspaceId = randomUUID();
@@ -95,7 +102,7 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
     );
   } catch (err) {
     console.error("[auth] no se pudo crear el espacio", err);
-    return { error: MESSAGES.selector.errores.generico };
+    return { error: MESSAGES.selector.errores.crear };
   }
 
   // El espacio YA quedó creado, así que si no se puede sellar la cookie
@@ -121,13 +128,12 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
  * espera de «Cerrar sesión» ni lo que hacen Vercel o Linear. Si algún
  * día hace falta «Cerrar sesión en todos los dispositivos», será una
  * acción aparte en /cuenta.
+ *
+ * Si Supabase no confirma el cierre (red, 5xx), las cookies `sb-…` se
+ * borran igual: ver lib/auth/salir.ts.
  */
 export async function cerrarSesion(): Promise<void> {
-  if (isAuthConfigured()) {
-    const supabase = await createServerSupabase();
-    await supabase.auth.signOut({ scope: "local" });
-  }
-  await olvidarEspacio();
+  await cerrarSesionLocal();
   revalidatePath("/", "layout");
   redirect("/login");
 }

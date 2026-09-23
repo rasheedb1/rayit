@@ -15,11 +15,15 @@
  * abierto), que es lo que deja al navegador hacer su trabajo.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+const { crearEspacio } = vi.hoisted(() => ({
+  crearEspacio: vi.fn(async (): Promise<{ error?: string; soporte?: string }> => ({})),
+}));
 
 vi.mock("@/lib/auth/acciones", () => ({
   cambiarEspacio: async () => ({}),
-  crearEspacio: async () => ({}),
+  crearEspacio,
   cerrarSesion: async () => undefined,
 }));
 
@@ -29,9 +33,10 @@ import { MESSAGES } from "@/lib/auth/messages";
 const t = MESSAGES.selector;
 const ACTUAL = { id: "a", name: "Cocina fácil" };
 const ESPACIOS = [{ id: "b", name: "Ávila estudio" }, ACTUAL, { id: "c", name: "Tercero" }];
+const CORREO = "ana@ejemplo.test";
 
 function abrir(espacios = ESPACIOS) {
-  render(<WorkspaceMenu actual={ACTUAL} espacios={espacios} />);
+  render(<WorkspaceMenu actual={ACTUAL} espacios={espacios} correo={CORREO} />);
   const disparador = screen.getByRole("button", { name: t.disparador(ACTUAL.name) });
   fireEvent.click(disparador);
   return disparador;
@@ -48,7 +53,7 @@ afterEach(cleanup);
 
 describe("WorkspaceMenu: la lista", () => {
   test("cerrado se anuncia como menú y no apunta a un id que no existe", () => {
-    render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />);
+    render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} correo={CORREO} />);
     const disparador = screen.getByRole("button", { name: t.disparador(ACTUAL.name) });
     expect(disparador).toHaveAttribute("aria-haspopup", "menu");
     expect(disparador).toHaveAttribute("aria-expanded", "false");
@@ -66,7 +71,13 @@ describe("WorkspaceMenu: la lista", () => {
     expect(marcados[0]?.textContent).toContain(ACTUAL.name);
     expect(radios.some((r) => r.hasAttribute("aria-current"))).toBe(false);
     // Crear, cuenta y cerrar sesión.
-    expect(screen.getAllByRole("menuitem").map((o) => o.textContent)).toEqual([t.crear, t.cuenta, t.cerrarSesion]);
+    expect(screen.getAllByRole("menuitem").map((o) => o.textContent)).toEqual([t.crear, `${t.cuenta}${t.sesionComo(CORREO)}`, t.cerrarSesion]);
+  });
+
+  test("dice con qué correo se entró, bajo «Tu cuenta» (login CSRF)", () => {
+    abrir();
+    const cuenta = screen.getByRole("menuitem", { name: new RegExp(t.cuenta) });
+    expect(cuenta).toHaveTextContent(CORREO);
   });
 
   test("el grupo de espacios tiene nombre", () => {
@@ -116,7 +127,7 @@ describe("WorkspaceMenu: la lista", () => {
   });
 
   test("el nombre accesible empieza por el nombre visible del espacio (WCAG 2.5.3)", () => {
-    render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />);
+    render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} correo={CORREO} />);
     // Se busca por el nombre que se VE: es lo que dice quien usa control por voz.
     const disparador = screen.getByRole("button", { name: /^Cocina fácil/ });
     expect(disparador.getAttribute("aria-label")?.startsWith(ACTUAL.name)).toBe(true);
@@ -198,7 +209,7 @@ describe("WorkspaceMenu: «Crear espacio» con el teclado", () => {
   test("si el foco sale del selector, el panel se cierra", () => {
     render(
       <>
-        <WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />
+        <WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} correo={CORREO} />
         <a href="/resumen">Resumen</a>
       </>,
     );
@@ -207,5 +218,31 @@ describe("WorkspaceMenu: «Crear espacio» con el teclado", () => {
     const fuera = screen.getByRole("link", { name: "Resumen" });
     fireEvent.focusOut(screen.getByRole("button", { name: t.cancelar }), { relatedTarget: fuera });
     expect(screen.queryByRole("group", { name: t.crear })).toBeNull();
+  });
+});
+
+describe("WorkspaceMenu: errores de «Crear espacio»", () => {
+  test("el tope de espacios da el correo de soporte como enlace cuando lo hay", async () => {
+    crearEspacio.mockResolvedValueOnce({ error: t.errores.limite(20), soporte: "soporte@oncue.test" });
+    const campo = abrirCrear();
+    fireEvent.change(campo, { target: { value: "Otro" } });
+    await act(async () => {
+      fireEvent.submit(campo.closest("form")!);
+    });
+    const alerta = await screen.findByRole("alert");
+    expect(alerta).toHaveTextContent(t.errores.limite(20));
+    expect(screen.getByRole("link", { name: "soporte@oncue.test" })).toHaveAttribute("href", "mailto:soporte@oncue.test");
+  });
+
+  test("sin correo de soporte no promete ningún contacto", async () => {
+    crearEspacio.mockResolvedValueOnce({ error: t.errores.limite(20) });
+    const campo = abrirCrear();
+    fireEvent.change(campo, { target: { value: "Otro" } });
+    await act(async () => {
+      fireEvent.submit(campo.closest("form")!);
+    });
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toBe(t.errores.limite(20));
+    expect(alerta.textContent).not.toMatch(/escríbenos/i);
   });
 });

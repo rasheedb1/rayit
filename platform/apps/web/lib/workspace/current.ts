@@ -59,6 +59,9 @@ import { espacioDeLaCookie } from "./elegir";
  * componente.
  */
 
+/** A dónde va una sesión con la identidad en conflicto: el route handler que la cierra (app/auth/salir/route.ts). */
+export const SALIDA_POR_IDENTIDAD = "/auth/salir?error=identidad";
+
 /** Workspace de la creadora ficticia del seed (db/seed/0002 y 0003). Se entra a él con demo@multicampaign.test. */
 export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
 
@@ -157,16 +160,19 @@ export const getCurrentContext = cache(async (): Promise<Contexto> => {
   // un callback que falló a medias).
   const mio = await leerOCrearSesion(sesion).catch((err: unknown) => {
     // Otra cuenta de Auth con el correo de alguien (un buzón
-    // reasignado): no se le sirve nada. A /login con su texto, no a un
-    // error genérico; el callback ya no deja entrar así, esto cubre una
-    // sesión que existiera de antes.
+    // reasignado): no se le sirve nada. El callback ya no deja entrar
+    // así; esto cubre una sesión que existiera de antes. No se va a
+    // /login directamente: la cookie `sb-…` seguiría viva (un Server
+    // Component no puede borrarla) y cualquier URL devolvería al mismo
+    // error. /auth/salir, un route handler, la cierra y ENTONCES manda a
+    // /login?error=identidad.
     if (err instanceof AuthIdentityMismatchError) {
       console.error(`[auth] identidad en conflicto (${err.motivo}): cuenta de Auth ${sesion.authUserId}`);
       return null;
     }
     throw err;
   });
-  if (!mio) redirect("/login?error=identidad");
+  if (!mio) redirect(SALIDA_POR_IDENTIDAD);
   const { userId, workspaces } = mio;
 
   const preferido = await espacioDeLaCookie(sesion.email);

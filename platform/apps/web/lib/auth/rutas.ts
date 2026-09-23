@@ -13,7 +13,7 @@
  */
 export const RUTAS_PUBLICAS = [
   "/login", //            la entrada
-  "/auth", //             el callback del enlace mágico y /auth/confirm (el clic que lo canjea)
+  "/auth", //             el callback del enlace mágico, /auth/confirm (el clic que lo canjea), /auth/comprobar y /auth/salir
   "/legal", //            términos y privacidad: se leen ANTES de dejar el correo
   "/kit", //              la galería del kit: es documentación del equipo, no datos
   "/cotizacion", //       la cotización que se le manda a una marca (COT-3)

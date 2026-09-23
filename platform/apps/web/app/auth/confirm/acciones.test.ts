@@ -11,7 +11,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthApiError } from "@supabase/supabase-js";
 
-const { verifyOtp, signOut, registrarEntrada } = vi.hoisted(() => ({
+const { verifyOtp, signOut, registrarEntrada, consumirPedido } = vi.hoisted(() => ({
+  consumirPedido: vi.fn(async (correo: string) => correo.length > 0),
   verifyOtp: vi.fn(),
   signOut: vi.fn(async () => ({ error: null })),
   registrarEntrada: vi.fn(async (q: { email: string }) => ({
@@ -43,6 +44,8 @@ vi.mock("@/lib/workspace/elegir", () => ({
   recordarEspacio: async () => true,
 }));
 
+vi.mock("@/lib/auth/pedido", () => ({ consumirPedido }));
+
 import { confirmarEntrada } from "./acciones";
 
 const VERIFICADA = {
@@ -73,6 +76,8 @@ beforeEach(() => {
   verifyOtp.mockResolvedValue({ data: { user: VERIFICADA }, error: null });
   signOut.mockClear();
   registrarEntrada.mockClear();
+  consumirPedido.mockReset();
+  consumirPedido.mockResolvedValue(true);
 });
 
 describe('la regla de "use server"', () => {
@@ -111,5 +116,23 @@ describe("confirmarEntrada", () => {
     verifyOtp.mockResolvedValue({ data: { user: { ...VERIFICADA, email_confirmed_at: null } }, error: null });
     expect(await destino({ token_hash: "h", type: "email" })).toBe("/login?error=enlace");
     expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+  });
+});
+
+describe("login CSRF: un enlace que este navegador no pidió", () => {
+  test("pasa por /auth/comprobar, con el destino, en vez de entrar directo", async () => {
+    consumirPedido.mockResolvedValue(false);
+    expect(await destino({ token_hash: "h", type: "email", next: "/finanzas" })).toBe("/auth/comprobar?next=%2Ffinanzas");
+    expect(consumirPedido).toHaveBeenCalledWith("ana@ejemplo.test");
+  });
+
+  test("el que sí pidió este navegador para ese correo entra directo", async () => {
+    expect(await destino({ token_hash: "h", type: "email", next: "/ventas" })).toBe("/ventas");
+  });
+
+  test("si la entrada falla, no se mira la huella: va a /login con su error", async () => {
+    verifyOtp.mockResolvedValue({ data: { user: { ...VERIFICADA, email_confirmed_at: null } }, error: null });
+    expect(await destino({ token_hash: "h", type: "email" })).toBe("/login?error=enlace");
+    expect(consumirPedido).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { isAuthConfigured } from "@/lib/auth/config";
 import { completarEntrada, enlaceInvalido, esTipoDeCorreo } from "@/lib/auth/entrada";
+import { consumirPedido } from "@/lib/auth/pedido";
 import { destinoSeguro } from "@/lib/auth/rutas";
 import { createServerSupabase } from "@/lib/auth/supabase";
 
@@ -21,6 +22,12 @@ import { createServerSupabase } from "@/lib/auth/supabase";
  * Todo lo que llega del formulario se vuelve a comprobar aquí: el tipo
  * contra la lista blanca y el destino con destinoSeguro.
  *
+ * Login CSRF (lib/auth/pedido.ts): si ESTE navegador no pidió un enlace
+ * para el correo con el que se acaba de entrar, no se va directo al
+ * destino sino a /auth/comprobar, que dice «Entraste como x@y» y deja
+ * cerrar la sesión. Así nadie queda sin saberlo dentro de la cuenta de
+ * quien le mandó el enlace.
+ *
  * "use server": solo exporta funciones async (ver app/login/acciones.ts).
  */
 export async function confirmarEntrada(formData: FormData): Promise<void> {
@@ -38,5 +45,9 @@ export async function confirmarEntrada(formData: FormData): Promise<void> {
   if (error) redirect(`/login?error=${enlaceInvalido(error.message)}`);
 
   const fallo = await completarEntrada(supabase, data.user);
-  redirect(fallo ? `/login?error=${fallo}` : destino);
+  if (fallo) redirect(`/login?error=${fallo}`);
+
+  // completarEntrada ya exigió un correo verificado: aquí hay correo.
+  const pedidoAqui = await consumirPedido(data.user?.email ?? "");
+  redirect(pedidoAqui ? destino : `/auth/comprobar?next=${encodeURIComponent(destino)}`);
 }

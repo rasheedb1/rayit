@@ -53,6 +53,9 @@ export const MESSAGES = {
     },
     errores: {
       correoInvalido: "Escribe un correo válido.",
+      // Supabase rechazó el enlace porque la comprobación anti-bots
+      // (Turnstile) faltó, caducó o no pasó.
+      captcha: "No pudimos comprobar que no eres un robot. Espera a que aparezca la marca de verificación y vuelve a intentarlo.",
       limite: "Ya mandamos varios enlaces a ese correo. Espera unos minutos y vuelve a intentarlo.",
       generico: "No pudimos mandar el enlace. Vuelve a intentarlo y, si sigue igual, avísanos.",
     },
@@ -65,6 +68,13 @@ export const MESSAGES = {
       variables: "Variables que faltan:",
       seguir: "Ver la demostración",
     },
+    /**
+     * La comprobación anti-bots (Cloudflare Turnstile) sin llave: solo se
+     * enseña fuera de producción, para quien desarrolla. En producción lo
+     * dice el log del servidor; a quien entra no le sirve de nada saberlo.
+     */
+    captchaSinConfigurar: "Sin comprobación anti-bots: falta TURNSTILE_SITE_KEY (ver platform/.env.example).",
+    captchaEtiqueta: "Comprobación anti-bots",
   },
 
   callback: {
@@ -81,8 +91,17 @@ export const MESSAGES = {
       // Otra cuenta con el mismo correo: un buzón reasignado, o un
       // correo que se cambió en el proveedor. No se entra, y no se dice
       // de quién es la otra cuenta.
-      identidad:
-        "Ese correo ya está ligado a otra cuenta de On Cue. Escríbenos desde la página de términos y privacidad y lo resolvemos.",
+      identidad: "Ese correo ya está ligado a otra cuenta de On Cue.",
+    },
+    /**
+     * Lo que sigue a `identidad`, según haya o no SUPPORT_EMAIL. Sin
+     * correo de soporte no se dice «escríbenos»: se da una salida que
+     * funciona ahí mismo, que es el campo de abajo.
+     */
+    identidadSalida: {
+      conCorreo: "Escríbenos a",
+      conCorreoSufijo: "y lo resolvemos.",
+      sinCorreo: "Entra con otro correo aquí abajo.",
     },
   },
 
@@ -100,6 +119,22 @@ export const MESSAGES = {
     entrando: "Entrando…",
     invalido: "Este enlace está incompleto. Pide uno nuevo.",
     pedirOtro: "Pedir otro enlace",
+  },
+
+  /**
+   * /auth/comprobar: la parada que sigue a /auth/confirm cuando el enlace
+   * NO se pidió en este navegador. Quien abre el enlace que otra persona
+   * pidió para SU correo entraría en la cuenta de esa persona sin
+   * notarlo (y todo lo que registrara acabaría allí): antes de seguir,
+   * se le dice con qué correo entró.
+   */
+  comprobar: {
+    meta: "Comprueba tu cuenta",
+    titulo: "Entraste como",
+    descripcion:
+      "Este enlace no se pidió desde este navegador. Si ese no es tu correo, cierra la sesión y pide tu propio enlace.",
+    seguir: "Sí, soy yo",
+    salir: "No soy yo, cerrar sesión",
   },
 
   cuenta: {
@@ -208,15 +243,21 @@ export const MESSAGES = {
     creando: "Creando…",
     cancelar: "Cancelar",
     cuenta: "Tu cuenta",
+    /** Con qué correo se entró, bajo «Tu cuenta»: sin él, quien entra en una cuenta ajena no lo nota. */
+    sesionComo: (correo: string) => `Sesión de ${correo}`,
     cerrarSesion: "Cerrar sesión",
     errores: {
       sinMembresia: "Ese espacio ya no es tuyo.",
       // Lo que ve la persona. El motivo técnico (la clave de firma que
-      // falta en el servidor) va al log, desde lib/auth/acciones.ts.
-      sinFirma: "No pudimos recordar el espacio elegido. Vuelve a intentarlo.",
+      // falta en el servidor) va al log, desde lib/auth/acciones.ts. No
+      // promete que reintentar lo arregle: lo que falta es del servidor.
+      sinFirma: "No pudimos guardar tu elección de espacio. Seguirás viendo el que tenías.",
       creadoSinRecordar: "El espacio se creó, pero no pudimos abrirlo. Elígelo en la lista.",
       nombreVacio: "Escribe un nombre.",
-      limite: (tope: number) => `Ya eres propietario/a de ${tope} espacios, el máximo por persona. Escríbenos si necesitas más.`,
+      limite: (tope: number) => `Ya eres propietario/a de ${tope} espacios, el máximo por persona.`,
+      /** Tras `limite`, con el enlace a SUPPORT_EMAIL. Sin correo de soporte no se pinta. */
+      limiteContacto: "Si necesitas más, escríbenos a",
+      crear: "No pudimos crear el espacio. Vuelve a intentarlo.",
       generico: "No pudimos cambiar de espacio. Vuelve a intentarlo.",
     },
   },

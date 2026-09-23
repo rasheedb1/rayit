@@ -3,7 +3,9 @@ import Link from "next/link";
 import { Marca } from "@/components/marca";
 import { faltantesAuth } from "@/lib/auth/config";
 import { MESSAGES } from "@/lib/auth/messages";
+import { claveDeCaptcha } from "@/lib/auth/captcha";
 import { destinoSeguro } from "@/lib/auth/rutas";
+import { correoDeSoporte } from "@/lib/soporte";
 import { FormularioLogin } from "./formulario";
 
 export const metadata: Metadata = { title: MESSAGES.login.meta };
@@ -35,6 +37,7 @@ export default async function LoginPage({ searchParams }: Props) {
   const destino = destinoSeguro(next);
   const t = MESSAGES.login;
   const faltan = faltantesAuth();
+  const captcha = claveDeCaptcha();
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-4 py-12">
@@ -46,6 +49,7 @@ export default async function LoginPage({ searchParams }: Props) {
       {error && (
         <p role="alert" className="mb-5 rounded-md border border-bad/40 bg-bad-wash px-3 py-2 text-sm text-bad">
           {ERRORES[error] ?? MESSAGES.callback.errores.sesion}
+          {error === "identidad" && <SalidaDeIdentidad />}
         </p>
       )}
 
@@ -70,7 +74,11 @@ export default async function LoginPage({ searchParams }: Props) {
           </Link>
         </section>
       ) : (
-        <FormularioLogin next={destino} />
+        <FormularioLogin
+          next={destino}
+          captchaSiteKey={captcha.siteKey}
+          avisoCaptcha={captcha.siteKey || process.env.NODE_ENV === "production" ? null : t.captchaSinConfigurar}
+        />
       )}
 
       <p className="mt-10 text-xs leading-4 text-muted">
@@ -85,5 +93,27 @@ export default async function LoginPage({ searchParams }: Props) {
         {t.legal.sufijo}
       </p>
     </main>
+  );
+}
+
+/**
+ * Qué hacer con una cuenta bloqueada por identidad (buzón reasignado):
+ * escribir a SUPPORT_EMAIL si lo hay, y si no, entrar con otro correo en
+ * el campo de abajo. Nunca «escríbenos» sin decir a dónde: era un
+ * callejón sin salida justo en el caso más delicado.
+ */
+function SalidaDeIdentidad() {
+  const t = MESSAGES.callback.identidadSalida;
+  const correo = correoDeSoporte();
+  if (!correo) return <> {t.sinCorreo}</>;
+  return (
+    <>
+      {" "}
+      {t.conCorreo}{" "}
+      <a href={`mailto:${correo}`} className="break-all font-medium underline underline-offset-2">
+        {correo}
+      </a>{" "}
+      {t.conCorreoSufijo}
+    </>
   );
 }
