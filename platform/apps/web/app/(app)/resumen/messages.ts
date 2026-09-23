@@ -37,27 +37,26 @@ export const MESSAGES = {
     red: "Red",
     todasLasRedes: "Todas",
     dias: (n: number) => `${n} días`,
+    /** Mientras llegan las cifras del filtro nuevo: las de pantalla aún son las del anterior. */
+    actualizando: "Actualizando las cifras",
   },
+  /**
+   * La tarjeta de un KPI lleva solo la cifra, el delta y la sparkline
+   * (Plausible: «nada que no sea el dato»). Lo que explica de dónde sale
+   * la cifra va detrás del botón (i) de la tarjeta: son las frases de
+   * `info`. En la tarjeta solo queda, cuando hace falta, UNA línea corta
+   * que dice por qué no hay flecha.
+   */
   kpis: {
     followers: {
       label: "Seguidores en total",
       /** Se usa cuando el filtro deja una sola red. */
       labelRed: (red: string) => `Seguidores en ${red}`,
-      /** Sin serie de cuenta —solo CSV— no hay seguidores que contar. */
-      sinCuenta: "Llegan al conectar la cuenta: un CSV trae métricas por video",
+      /** Sin serie de cuenta —solo CSV— no hay seguidores que contar. Va en la tarjeta: explica el «—». */
+      sinCuenta: "Llegan al conectar la cuenta",
     },
     views: {
       label: (dias: number) => `Visualizaciones en ${dias} días`,
-      /**
-       * Cuando la serie de cuenta aún no cerró el último día del reloj:
-       * la suma termina antes, y se dice hasta cuándo. `fecha` ya formateada.
-       */
-      hastaCuenta: (fecha: string) => `Hasta el ${fecha}, el último día que cerró la cuenta`,
-      /** Con serie de cuenta: cuenta otra cosa que las dos tarjetas de al lado. */
-      note: "De tus cuentas, no solo de lo publicado en el periodo",
-      /** Sin serie de cuenta: la suma de lo publicado, y hay que decirlo. */
-      noteContenido: (n: number, txt: string) =>
-        `De ${contar(n, txt, "video publicado", "videos publicados")} en el periodo, con su última lectura`,
     },
     nonFollowerReach: {
       label: "Alcance en no seguidores",
@@ -65,26 +64,47 @@ export const MESSAGES = {
     savesPer1k: {
       label: "Guardados por 1 000 visualizaciones",
     },
-    /**
-     * La base de los dos KPIs de contenido: sobre cuántos videos se
-     * calculó la razón y con qué lectura. «Vida completa» porque se usa
-     * la última lectura de cada video en los dos periodos, no un corte
-     * de edad.
-     */
-    base: (n: number, txt: string) => `Sobre ${contar(n, txt, "video", "videos")}, en su vida completa`,
+    /** Lo que se lee al pulsar (i). Frases completas, en palabras de creador. */
+    info: {
+      /** La etiqueta del botón (i) para el lector de pantalla. */
+      boton: (kpi: string) => `Qué cuenta «${kpi}»`,
+      followersSinCuenta: "Los seguidores llegan al conectar la cuenta: un CSV trae métricas por video, no de la cuenta.",
+      followers: "La suma de tus cuentas conectadas el último día con datos.",
+      /** Con serie de cuenta: cuenta otra cosa que las dos tarjetas de al lado. */
+      views: "Todas las visualizaciones de tus cuentas en esos días, no solo las de lo que publicaste en el periodo.",
+      /** Sin serie de cuenta: la suma de lo publicado, y hay que decirlo. */
+      viewsContenido: (n: number, txt: string) =>
+        `La suma de ${contar(n, txt, "video publicado", "videos publicados")} en el periodo, cada uno con su última lectura. Al conectar la cuenta pasa a ser la de la cuenta entera.`,
+      /**
+       * Cuando la serie de cuenta aún no cerró el último día del reloj:
+       * la suma termina antes, y se dice hasta cuándo. `fecha` ya formateada.
+       */
+      hastaCuenta: (fecha: string) => `Suma hasta el ${fecha}, el último día que tu cuenta ya cerró.`,
+      /**
+       * La base de los dos KPIs de contenido: sobre cuántos videos se
+       * calculó la razón y con qué lectura. «Vida completa» porque se usa
+       * la última lectura de cada video en los dos periodos, no un corte
+       * de edad.
+       */
+      base: (n: number, txt: string) =>
+        `Calculado sobre ${contar(n, txt, "video publicado", "videos publicados")} en el periodo, con todo lo que llevan acumulado.`,
+      nonFollowerReach: "De las cuentas a las que llegaron tus videos, cuántas no te siguen.",
+      savesPer1k: "Cuántas veces se guardan tus videos por cada mil visualizaciones.",
+      /** Cuentas que suman en la cifra pero no en la comparación ni en la línea. */
+      nuevas: (n: number, txt: string) =>
+        n === 1
+          ? "Una cuenta que conectaste dentro del periodo suma en la cifra, pero no en la comparación: no es crecimiento."
+          : `${txt} cuentas que conectaste dentro del periodo suman en la cifra, pero no en la comparación: no es crecimiento.`,
+    },
     /** Para las sumas del periodo. */
     deltaLabel: (dias: number) => `vs. los ${dias} días anteriores`,
     /** Para los valores de un instante, como los seguidores. */
     deltaLabelPunto: (dias: number) => `vs. hace ${dias} días`,
     sinComparacion: "Sin periodo anterior con qué comparar",
+    /** Hay periodo anterior, pero alguno de los dos tiene menos de MIN_SAMPLE videos. */
+    pocaMuestra: "Pocos videos para comparar",
     /** El delta de un KPI que ya es un porcentaje: diferencia en puntos. `txt` = «+2,1». */
     puntos: (txt: string) => `${txt} puntos`,
-    /**
-     * Cuentas que suman en la cifra pero no en la comparación ni en la
-     * línea: empezaron a medirse dentro del tramo comparado.
-     */
-    nuevas: (n: number, txt: string) =>
-      n === 1 ? "1 cuenta nueva no entra en la comparación" : `${txt} cuentas nuevas no entran en la comparación`,
     sinDato: "—",
   },
   graficos: {
@@ -93,9 +113,8 @@ export const MESSAGES = {
       subtitle: (dias: number) => `Un punto por día · ${dias} días`,
       aria: "Seguidores por red, un punto por día",
       labelsHeader: "Fecha",
-      nota: "El eje arranca en cero, así que la curva enseña el tamaño y no solo el movimiento.",
-      /** Solo con todas las redes: con una sola, no hay otras con las que desalinearse. */
-      notaRedes: "Una red que empezó a medirse dentro del periodo aparece en cero hasta su primera lectura.",
+      /** Solo con varias redes a la vez: con una sola, no hay otras con las que desalinearse. */
+      notaRedes: "Una red nueva aparece en cero hasta su primera lectura.",
       sinCuenta: {
         title: "Los seguidores llegan al conectar la cuenta",
         description:
@@ -104,41 +123,36 @@ export const MESSAGES = {
       },
     },
     views: {
-      title: "Visualizaciones por red",
-      /** El subtítulo dice cuánto cubre cada barra, que cambia con el periodo. */
-      subtitle: (paso: number, bloques: number) =>
-        paso === 1 ? `Por día · ${bloques} días` : `Cada ${paso} días · ${bloques} barras`,
-      aria: "Visualizaciones por red y periodo",
-      /** Con bloques, cada etiqueta ES el rango: «26–30/8». */
-      labelsHeaderBloque: "Días",
-      labelsHeaderDia: "Día",
-      nota: (paso: number) =>
-        paso === 1 ? undefined : `Cada barra son ${paso} días contados hacia atrás desde el último día cerrado; juntas cubren el periodo entero.`,
+      title: "Visualizaciones por semana",
+      /** Doce semanas fijas: no cambian con el periodo, y el subtítulo lo dice. */
+      subtitle: (semanas: number) => (semanas === 1 ? "Por semana · 1 semana" : `Por semana · ${semanas} semanas`),
+      aria: "Visualizaciones por red y semana",
+      /** Cada categoría ES la semana: «15–21/9». */
+      labelsHeader: "Semana",
+      /** Una línea: por qué el total no es la tarjeta de al lado. */
+      nota: "No es la suma del periodo elegido: siempre enseña las últimas semanas.",
       /** Sin serie de cuenta, las barras son otra cosa y se dice. */
-      notaContenido:
-        "Sin cuenta conectada: cada barra suma las visualizaciones de lo publicado en esos días, con su última lectura.",
+      notaContenido: "Sin cuenta conectada, cada barra suma lo que publicaste esa semana.",
     },
-  },
-  /**
-   * Los días del módulo son días cerrados en UTC (la convención del
-   * repositorio: `account_metric_snapshot.day` es el día de la plataforma
-   * y no se puede pasar a otra zona). Se dice junto a cada «datos hasta
-   * el…»: en Bogotá, a las 21:30 del 22, «hasta el 22» se leía como
-   * «incluye hoy».
-   */
-  zona: {
-    /** Va como `source` de DataAsOf: «datos hasta el 22 sep · día cerrado en UTC». */
-    asOf: "día cerrado en UTC",
-    /** Una sola vez, bajo el título del aviso de frescura. */
-    frescura: "Cada fecha es un día cerrado en UTC.",
   },
   frescura: {
     title: "Hasta cuándo llegan los datos",
+    /**
+     * Los días del módulo son días cerrados en UTC (la convención del
+     * repositorio: `account_metric_snapshot.day` es el día de la
+     * plataforma y no se puede pasar a otra zona). Se dice UNA vez, aquí
+     * y con palabras de creador, no junto a cada fecha.
+     */
+    diaCerrado: "Las cifras llegan hasta el final del día anterior.",
     sinLecturas: "Sin lecturas todavía",
     fuente: {
       api: "API",
-      csv: "CSV importado",
     },
+    /**
+     * La fecha que el creador escribió en el paso 2, tal cual: «CSV
+     * exportado el 12 sep». `fecha` ya formateada en la zona del workspace.
+     */
+    csvExportado: (fecha: string) => `CSV exportado el ${fecha}`,
     tokenPorVencer: "Permiso por vencer",
     /** Cuando la conexión no está sana: lo primero que hay que ver. */
     estado: {
@@ -187,6 +201,20 @@ export const MESSAGES = {
           "No hay ninguna lectura en los últimos 90 días. En cuanto el recolector cierre un día, o importes un CSV, aparece aquí.",
       },
     },
+    /**
+     * El gráfico semanal no depende del periodo: «Ver 90 días» no le
+     * cambia nada. Su única salida posible es quitar el filtro de red.
+     */
+    semanasSinDatos: {
+      title: "No hay datos en estas semanas",
+      quitarRed: {
+        description: "Esta red todavía no tiene lecturas en las últimas semanas. Mira todas juntas para ver lo que sí hay.",
+        accion: "Quitar el filtro de red",
+      },
+      sinSalida: {
+        description: "No hay ninguna lectura en las últimas semanas. En cuanto el recolector cierre un día, o importes un CSV, aparece aquí.",
+      },
+    },
   },
   /**
    * El nombre y el título de la frontera de error. Lo demás —las causas,
@@ -200,7 +228,7 @@ export const MESSAGES = {
   loading: {
     label: "Cargando tu resumen",
     kpis: ["Seguidores en total", "Visualizaciones", "Alcance en no seguidores", "Guardados por 1 000"],
-    graficos: ["Seguidores por red", "Visualizaciones por red"],
+    graficos: ["Seguidores por red", "Visualizaciones por semana"],
     frescura: "Cargando hasta cuándo llegan los datos",
   },
 
@@ -224,6 +252,11 @@ export const MESSAGES = {
       cualquiera: "Si tu archivo no es ninguno de estos, también sirve: en el paso siguiente dices qué columna es cada cosa.",
       demasiadoGrande: (mb: string) => `El archivo pesa más de ${mb} MB. Divídelo por fechas y sube una parte.`,
       noEsCsv: "Ese archivo no parece un CSV. Si lo exportaste en Excel, guárdalo como CSV y vuelve a subirlo.",
+    },
+    /** Se enseña en el paso 2 cuando el archivo no venía en UTF-8. */
+    codificacion: {
+      "windows-1252":
+        "Este archivo venía guardado desde Excel para Windows (Windows-1252). Lo leímos así para conservar las tildes: revisa que los nombres de abajo se vean bien.",
     },
     /** Por qué un archivo no se puede ni empezar a revisar (ErrorCsv). */
     errorArchivo: {
@@ -273,6 +306,13 @@ export const MESSAGES = {
       cuentaNuevaHandle: "Nombre de usuario de la cuenta",
       cuentaNuevaAyuda: "Sin la arroba. Es como la vas a ver en Resumen y en Conexiones.",
       cuentaNuevaEjemplo: "tu.cuenta",
+      /**
+       * El nombre escrito ya es el de una cuenta de esa red (OAuth o
+       * importada): crear otra partiría sus videos en dos y Resumen los
+       * contaría dos veces. Se propone la que existe.
+       */
+      cuentaExistente: (handle: string) => `Ya tienes @${handle} en esta red. Sus videos van a esa cuenta, no a una nueva.`,
+      usarExistente: (handle: string) => `Importar en @${handle}`,
       columnas: "Columnas",
       sinAsignar: "Sin asignar",
       obligatorio: "Obligatorio",
@@ -339,6 +379,7 @@ export const MESSAGES = {
       noSeguidoresMayor: () => "El alcance en no seguidores supera el alcance total: se importa sin ese dato.",
       repetidaEnArchivo: () => "Repetida en este mismo archivo: se queda la primera.",
       yaImportado: () => "Este video ya está: se añade una lectura nueva, no se reemplaza nada.",
+      sinNovedad: () => "Este video ya tiene una lectura de esta fecha o posterior: esta no se guardará.",
       casiVacia: () => "Sin visualizaciones ni alcance: la lectura entra casi vacía.",
     } satisfies Record<ProblemaCodigo, (p: { valor?: string; campo?: string }) => string>,
     revisar: {
@@ -359,7 +400,29 @@ export const MESSAGES = {
       /** Contra los videos que YA están en la cuenta de destino, no contra el propio archivo. */
       yaEstaban: (n: number, txt: string) =>
         n === 1 ? "1 ya estaba: se le añade una lectura" : `${txt} ya estaban: se les añade una lectura`,
-      columnas: { fila: "Fila", estado: "Estado", video: "Video", publicado: "Publicado", views: "Visualizaciones" },
+      /** Las que ya tienen una lectura igual de reciente o más: la base no las guardará. */
+      sinNovedad: (n: number, txt: string) =>
+        n === 1
+          ? "1 ya tiene una lectura de esta fecha o posterior: no se guardará"
+          : `${txt} ya tienen una lectura de esta fecha o posterior: no se guardarán`,
+      /** El <caption> de la tabla: dice qué es, sin repetir el título del paso. */
+      caption: "Filas del archivo, con su estado y las cifras que se guardarán",
+      columnas: {
+        fila: "Fila",
+        estado: "Estado",
+        video: "Video",
+        publicado: "Publicado",
+        /** Una columna por cifra MAPEADA: se ve todo lo que se va a escribir, no solo las visualizaciones. */
+        views: "Visualizaciones",
+        reach: "Alcance",
+        likes: "Me gusta",
+        comments: "Comentarios",
+        shares: "Compartidos",
+        saves: "Guardados",
+        followsFromPost: "Seguidores ganados",
+        reachNonFollowers: "Alcance en no seguidores",
+        durationS: "Duración (s)",
+      },
       estado: { lista: "Lista", error: "No entra", aviso: "Con aviso" },
       sinDato: "—",
     },
@@ -369,13 +432,18 @@ export const MESSAGES = {
       resumen: (videos: number, videosTxt: string, lecturas: number, lecturasTxt: string) =>
         `${contar(videos, videosTxt, "video", "videos")}, ${contar(lecturas, lecturasTxt, "lectura", "lecturas")}.`,
       nuevos: (n: number, txt: string) => contar(n, txt, "video nuevo", "videos nuevos"),
+      /** Solo los conocidos que SÍ recibieron lectura: los demás los cuenta `antiguas`. */
       conocidos: (n: number, txt: string) =>
         n === 1 ? "1 ya estaba: se le añadió una lectura" : `${txt} ya estaban: se les añadió una lectura`,
-      /** Lecturas que no se escribieron porque el video ya tenía una igual de reciente o más. */
+      /**
+       * Lecturas que no se escribieron porque el video ya tenía una igual
+       * de reciente o más. «No traían nada más reciente» cubre la fecha
+       * igual (reimportar el mismo archivo) y la anterior.
+       */
       antiguas: (n: number, txt: string) =>
         n === 1
-          ? "1 lectura era más antigua que la que ya había: no se guardó, para no mover las cifras hacia atrás"
-          : `${txt} lecturas eran más antiguas que las que ya había: no se guardaron, para no mover las cifras hacia atrás`,
+          ? "1 video no traía nada más reciente que lo que ya había: no se guardó"
+          : `${txt} videos no traían nada más reciente que lo que ya había: no se guardaron`,
       /** La fecha con la que quedaron las lecturas. */
       fecha: (fecha: string) => `Con fecha de exportación ${fecha}.`,
       ver: "Ver el resumen",

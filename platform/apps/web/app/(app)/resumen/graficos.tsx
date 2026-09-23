@@ -1,4 +1,4 @@
-import { getFollowersByPlatform, getViewsByBucket, type PlatformSeries } from "@mc/db/queries/resumen";
+import { getFollowersByPlatform, getViewsByWeek, type PlatformSeries } from "@mc/db/queries/resumen";
 import { ChartCard } from "@/components/ui/chart-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
@@ -7,16 +7,21 @@ import { withWorkspace } from "@/lib/db";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./messages";
+import { etiquetasDelEje } from "./_lib/eje";
 import { hrefDe, MAX_PERIODO, salidaDelVacio, type Filtro } from "./_lib/filtro";
 
 /**
  * Los dos gráficos: seguidores por red en el tiempo y visualizaciones
- * por red y periodo. Los dos vienen del kit (ChartCard + LineChart /
+ * por red y semana. Los dos vienen del kit (ChartCard + LineChart /
  * BarChart, SVG con los tokens del tema): no entra ninguna librería de
  * gráficos.
  *
  * El nombre de la red viaja como nombre de token de color
  * (`color: "tiktok"`), no como valor: quien pinta es el tema.
+ *
+ * Cada tarjeta lleva como mucho UNA línea de nota, y solo si cambia
+ * cómo se lee el gráfico. Que las fechas son días cerrados se dice una
+ * sola vez, en el aviso de frescura.
  */
 function aSeries(series: PlatformSeries[]): Series[] {
   return series.map((s) => ({ name: PLATFORM_LABEL[s.platformId], data: s.data, color: s.platformId }));
@@ -50,6 +55,23 @@ function SinDatos({ filtro }: { filtro: Filtro }) {
 }
 
 /**
+ * El vacío del gráfico semanal. Sus semanas no dependen del periodo, así
+ * que «Ver 90 días» no le cambiaría nada: la única salida posible es
+ * quitar el filtro de red.
+ */
+function SinSemanas({ filtro }: { filtro: Filtro }) {
+  const t = MESSAGES.vacio.semanasSinDatos;
+  return (
+    <EmptyState
+      title={t.title}
+      description={filtro.platform ? t.quitarRed.description : t.sinSalida.description}
+      action={filtro.platform ? { label: t.quitarRed.accion, href: hrefDe({ ...filtro, platform: null }) } : undefined}
+      className="min-h-[260px]"
+    />
+  );
+}
+
+/**
  * Sin serie de cuenta —un workspace que solo importó CSV— no hay
  * seguidores que dibujar en NINGÚN periodo. Decirle «prueba con 90
  * días» sería mandarlo a otra pantalla vacía: lo que falta es la
@@ -68,10 +90,10 @@ function SinCuenta() {
 }
 
 export async function Graficos({ filtro }: { filtro: Filtro }) {
-  const [{ seguidores, views }, ws] = await Promise.all([
+  const [{ seguidores, semanas }, ws] = await Promise.all([
     withWorkspace(async (tx) => ({
       seguidores: await getFollowersByPlatform(tx, filtro),
-      views: await getViewsByBucket(tx, filtro),
+      semanas: await getViewsByWeek(tx, { platform: filtro.platform }),
     })),
     getCurrentWorkspace(),
   ]);
@@ -79,12 +101,10 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
   const t = MESSAGES.graficos;
 
   const hasta = seguidores.labels.at(-1);
-  // Con paso 1 cada barra es un día; con 5 o 10, un bloque de días.
-  const porBloques = views.step > 1;
-  const porContenido = views.source === "content";
+  const porContenido = semanas.source === "content";
 
-  // Etiquetas del eje en número («16/9»), no «16 sep»: siete barras a
-  // 400 px dejan ~37 px por barra y «24 ago» ya no cabe entre dos
+  // Etiquetas del eje en número («16/9»), no «16 sep»: doce barras a
+  // 400 px dejan ~28 px por barra y «24 ago» ya no cabe entre dos
   // marcas; seis fechas en el eje de la línea, tampoco. El orden
   // día/mes lo pone el locale del workspace, no este archivo.
   const etiqueta = (dia: string) => f.dayMonth(dia);
@@ -100,47 +120,39 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
         // Arrancando en el mínimo, las marcas dejan de ser redondas
         // —«216,1 mil»— y no caben en los 48 px de margen del eje del
         // kit: se cortaban por la izquierda. En cero salen «100 mil»,
-        // «200 mil». Subir ese margen es cambiar la API de LineChart.
+        // «200 mil», y la curva enseña el tamaño y no solo el movimiento.
         line={{ fromZero: true }}
         labels={seguidores.labels.map(etiqueta)}
         labelsHeader={t.seguidores.labelsHeader}
         series={aSeries(seguidores.series)}
         format="int"
         axisFormat="compact"
-        // La nota explica la escala; sin curva no hay escala que explicar.
-        // La de las redes desalineadas, solo cuando se ven varias.
-        note={
-          seguidores.labels.length === 0
-            ? undefined
-            : filtro.platform === null
-              ? `${t.seguidores.nota} ${t.seguidores.notaRedes}`
-              : t.seguidores.nota
-        }
-        asOf={hasta ? { date: hasta, source: MESSAGES.zona.asOf } : undefined}
+        // Solo si se ven varias redes a la vez: una que empezó a medirse
+        // dentro del periodo aparece en cero hasta su primera lectura.
+        note={filtro.platform === null && seguidores.series.length > 1 ? t.seguidores.notaRedes : undefined}
+        asOf={hasta ? { date: hasta } : undefined}
         emptyState={
           seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
         }
       />
       <ChartCard
         title={t.views.title}
-        subtitle={t.views.subtitle(views.step, views.buckets.length)}
+        subtitle={t.views.subtitle(semanas.weeks.length)}
         ariaLabel={t.views.aria}
         chart="bar"
-        bar={{ mode: "stack", axisLabels: porBloques ? views.buckets.map((b) => etiqueta(b.end)) : undefined }}
-        // Con bloques, la categoría ES el rango («7–10/9») en el tooltip
-        // y en la tabla: solo con el primer día nadie podía saber que
-        // 317.846 es la suma de cuatro. Bajo la barra, en cambio, va solo
-        // el día final («10/9», axisLabels): a 400 px y seis barras, dos
-        // rangos seguidos se pisaban («24–28/829/8–2/9»). El subtítulo
-        // dice cuántos días cubre cada barra.
-        labels={views.buckets.map((b) => (porBloques ? f.dayMonthRange(b.start, b.end) : etiqueta(b.start)))}
-        labelsHeader={porBloques ? t.views.labelsHeaderBloque : t.views.labelsHeaderDia}
-        series={aSeries(views.series)}
+        // La categoría ES la semana («15–21/9») en el tooltip y en la
+        // tabla. Bajo la barra, en cambio, va solo el último día («21/9»):
+        // a 400 px dos rangos seguidos se pisaban. Y la etiqueta que el
+        // kit pintaría pegada a la última se deja vacía (etiquetasDelEje).
+        bar={{ mode: "stack", axisLabels: etiquetasDelEje(semanas.weeks.map((s) => etiqueta(s.end))) }}
+        labels={semanas.weeks.map((s) => f.dayMonthRange(s.start, s.end))}
+        labelsHeader={t.views.labelsHeader}
+        series={aSeries(semanas.series)}
         format="int"
         axisFormat="compact"
-        note={views.buckets.length === 0 ? undefined : porContenido ? t.views.notaContenido : t.views.nota(views.step)}
-        asOf={views.buckets.length ? { date: views.buckets.at(-1)!.end, source: MESSAGES.zona.asOf } : undefined}
-        emptyState={views.buckets.length === 0 ? <SinDatos filtro={filtro} /> : undefined}
+        note={semanas.weeks.length === 0 ? undefined : porContenido ? t.views.notaContenido : t.views.nota}
+        asOf={semanas.weeks.length ? { date: semanas.weeks.at(-1)!.end } : undefined}
+        emptyState={semanas.weeks.length === 0 ? <SinSemanas filtro={filtro} /> : undefined}
       />
     </div>
   );

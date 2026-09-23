@@ -17,7 +17,6 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkspaceTx } from '../src/client.ts';
 import {
-  bucketStep,
   countPosts,
   CsvImportError,
   ensureCsvConnection,
@@ -25,11 +24,13 @@ import {
   getFreshnessByConnection,
   getResumenCoverage,
   getResumenKpis,
-  getViewsByBucket,
+  getViewsByWeek,
   importCsvReadings,
-  lastLabelOnGrid,
   listExternalPostIds,
   listImportableAccounts,
+  listKnownPosts,
+  MIN_SAMPLE,
+  VIEWS_WEEKS,
   type CsvImportErrorCode,
   type CsvReading,
 } from '../src/queries/resumen.ts';
@@ -223,11 +224,12 @@ describe('Resumen · los cuatro KPIs', () => {
       }
       // Y la ventana de la tarjeta va por detrás del reloj, lo que la pantalla dice.
       assert.equal(dias(despues7.viewsWindow!.end), dias(despues7.end!) - 1);
-      // Las barras terminan donde termina la tarjeta y suman lo mismo.
-      const barras = await enLaura((tx) => getViewsByBucket(tx, { days: 7 }));
-      assert.equal(barras.buckets.at(-1)!.end, despues7.viewsWindow!.end);
-      assert.equal(barras.buckets[0]!.start, despues7.viewsWindow!.start);
-      assert.equal(barras.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0), despues7.views.value);
+      // La última semana termina donde termina la tarjeta: la de siete
+      // días ES la última barra, y suman lo mismo.
+      const barras = await enLaura((tx) => getViewsByWeek(tx));
+      assert.equal(barras.weeks.at(-1)!.end, despues7.viewsWindow!.end);
+      assert.equal(barras.weeks.at(-1)!.start, despues7.viewsWindow!.start);
+      assert.equal(barras.series.reduce((a, s) => a + s.data.at(-1)!, 0), despues7.views.value);
       // Y la curva de seguidores tampoco inventa un día.
       const curva = await enLaura((tx) => getFollowersByPlatform(tx, { days: 7 }));
       assert.equal(curva.labels.at(-1), despues7.viewsWindow!.end);
@@ -242,6 +244,7 @@ describe('Resumen · los cuatro KPIs', () => {
     // Conectar un canal de 300 000 seguidores hace diez días pasaba la
     // tarjeta de «+3 %» a «+79 %», con una subida que nunca pasó.
     const antes = await enLaura((tx) => getResumenKpis(tx, { days: 30 }));
+    const barrasAntes = await enLaura((tx) => getViewsByWeek(tx));
     const nueva = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'canal.nuevo' }));
     try {
       await enLaura((tx) =>
@@ -267,9 +270,10 @@ describe('Resumen · los cuatro KPIs', () => {
       // Y la tarjeta puede decir cuántas se quedaron fuera.
       assert.equal(despues.followers.newAccounts, 1);
       assert.equal(despues.views.newAccounts, 1);
-      // Las barras la cuentan, como la cifra.
-      const barras = await enLaura((tx) => getViewsByBucket(tx, { days: 30 }));
-      assert.equal(barras.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0), despues.views.value);
+      // Las barras la cuentan, como la cifra: sus diez días, en las dos últimas semanas.
+      const barras = await enLaura((tx) => getViewsByWeek(tx));
+      const suma = (s: typeof barras) => s.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0);
+      assert.equal(suma(barras), suma(barrasAntes) + 10 * 5000);
     } finally {
       await t.admin(`DELETE FROM social_connection WHERE id = '${nueva.connectionId}'`);
     }
@@ -314,56 +318,46 @@ describe('Resumen · las dos series', () => {
     assert.equal(tiktok?.data.at(-1), 214_000);
   });
 
-  test('visualizaciones por bloque: el paso lo marca el periodo y el último bloque está completo', async () => {
-    assert.equal(bucketStep(7), 1);
-    assert.equal(bucketStep(30), 5);
-    assert.equal(bucketStep(90), 10);
-
-    const mes = await enLaura((tx) => getViewsByBucket(tx, { days: 30 }));
-    assert.equal(mes.step, 5);
-    assert.equal(mes.source, 'account');
-    assert.equal(mes.buckets.length, 6);
-
-    const trimestre = await enLaura((tx) => getViewsByBucket(tx, { days: 90 }));
-    assert.equal(trimestre.step, 10);
-    assert.equal(trimestre.buckets.length, 9);
-    for (const b of trimestre.buckets) {
-      assert.equal((Date.parse(b.end) - Date.parse(b.start)) / 86_400_000, 9);
+  test('visualizaciones por semana: doce semanas de siete días, la última completa y en el último día de la cuenta', async () => {
+    const semanas = await enLaura((tx) => getViewsByWeek(tx));
+    assert.equal(semanas.source, 'account');
+    // El seed tiene noventa días de serie de cuenta: caben las doce.
+    assert.equal(VIEWS_WEEKS, 12);
+    assert.equal(semanas.weeks.length, 12);
+    for (const s of semanas.weeks) {
+      assert.equal((Date.parse(s.end) - Date.parse(s.start)) / 86_400_000, 6, `la semana ${s.start} no tiene siete días`);
     }
-    // Ordenados de más viejo a más nuevo.
-    assert.ok(Date.parse(trimestre.buckets[0]!.start) < Date.parse(trimestre.buckets.at(-1)!.start));
+    // Contiguas y de más vieja a más nueva: sin huecos ni solapes.
+    for (let i = 1; i < semanas.weeks.length; i++) {
+      assert.equal((Date.parse(semanas.weeks[i]!.start) - Date.parse(semanas.weeks[i - 1]!.end)) / 86_400_000, 1);
+    }
+    assert.ok(semanas.series.every((s) => s.data.length === 12));
 
-    const dias = await enLaura((tx) => getViewsByBucket(tx, { days: 7 }));
-    assert.equal(dias.step, 1);
-    assert.equal(dias.buckets.length, 7);
-    assert.equal(dias.series.every((s) => s.data.length === 7), true);
+    // La última semana termina el mismo día que las cifras de la cuenta.
+    const kpis = await enLaura((tx) => getResumenKpis(tx, { days: 7 }));
+    assert.equal(semanas.weeks.at(-1)!.end, kpis.viewsWindow!.end);
+    // Y la última barra ES la tarjeta de siete días: mismas cuentas, mismos días.
+    assert.equal(semanas.series.reduce((a, s) => a + s.data.at(-1)!, 0), kpis.views.value);
+
+    // El total de las doce es la suma de la serie de cuenta en esos 84 días.
+    const [directo] = await enLaura((tx) =>
+      tx.query<{ views: string }>(
+        `SELECT sum(a.views)::bigint AS views FROM account_metric_snapshot a
+          JOIN social_connection sc ON sc.id = a.connection_id AND sc.deleted_at IS NULL
+         WHERE a.day BETWEEN $1::date AND $2::date`,
+        [semanas.weeks[0]!.start, semanas.weeks.at(-1)!.end],
+      ).then((r) => r.rows),
+    );
+    assert.equal(semanas.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0), Number(directo!.views));
   });
 
-  test('con cualquier periodo, la última barra cae en la rejilla de etiquetas del kit', async () => {
-    // BarChart etiqueta cada ceil(n/8) categorías y ADEMÁS fuerza la
-    // última: si esa no cae en la rejilla, sus dos etiquetas se pisan.
-    for (const days of [7, 30, 90] as const) {
-      const serie = await enLaura((tx) => getViewsByBucket(tx, { days }));
-      assert.ok(
-        lastLabelOnGrid(serie.buckets.length),
-        `con ${days} días salen ${serie.buckets.length} barras y la última etiqueta se pisa con la anterior`,
-      );
-    }
-  });
-
-  test('las barras cubren exactamente el periodo: el gráfico y la tarjeta cuentan los mismos días', async () => {
-    for (const days of [7, 30, 90] as const) {
-      assert.equal(days % bucketStep(days), 0, `${days} días no se reparten en barras de ${bucketStep(days)}`);
-      const serie = await enLaura((tx) => getViewsByBucket(tx, { days }));
-      const kpis = await enLaura((tx) => getResumenKpis(tx, { days }));
-      assert.equal(serie.buckets[0]!.start, kpis.viewsWindow!.start, `con ${days} días el gráfico empieza otro día que la tarjeta`);
-      assert.equal(serie.buckets.at(-1)!.end, kpis.viewsWindow!.end);
-      // Con la cuenta al día, la ventana de la tarjeta es la del periodo.
-      assert.deepEqual(kpis.viewsWindow, { start: kpis.start, end: kpis.end });
-      // Y suman lo mismo: el total de las barras ES la cifra de la tarjeta.
-      const total = serie.series.flatMap((x) => x.data).reduce((a, b) => a + b, 0);
-      assert.equal(total, kpis.views.value, `con ${days} días las barras y la tarjeta no cuadran`);
-    }
+  test('el gráfico semanal no depende del periodo: lo que cambia el periodo son las tarjetas', async () => {
+    // Doce semanas «como el mock», en 7, 30 o 90 días. La función ni
+    // siquiera recibe el periodo; la tarjeta dice que el gráfico no es su suma.
+    const a = await enLaura((tx) => getViewsByWeek(tx, { platform: null }));
+    const b = await enLaura((tx) => getViewsByWeek(tx));
+    assert.deepEqual(a, b);
+    await assert.rejects(() => enLaura((tx) => getViewsByWeek(tx, { platform: 'myspace' as never })), /red inválida/);
   });
 
   test('una conexión nueva no recorta la serie de las que llevan meses midiendo', async () => {
@@ -383,8 +377,8 @@ describe('Resumen · las dos series', () => {
 
       const despues = await enLaura((tx) => getFollowersByPlatform(tx, { days: 90 }));
       assert.equal(despues.labels.length, 90, 'la conexión joven recortó la ventana de todas');
-      const bloques = await enLaura((tx) => getViewsByBucket(tx, { days: 90 }));
-      assert.equal(bloques.buckets.length, 9, 'la conexión joven vació el gráfico de barras');
+      const semanas = await enLaura((tx) => getViewsByWeek(tx));
+      assert.equal(semanas.weeks.length, 12, 'la conexión joven vació el gráfico de barras');
       // Y su red sigue sumando lo de siempre en el último punto, más la nueva.
       const tiktokAntes = antes.series.find((x) => x.platformId === 'tiktok')!.data.at(-1)!;
       const tiktokDespues = despues.series.find((x) => x.platformId === 'tiktok')!.data.at(-1)!;
@@ -496,9 +490,9 @@ describe('Resumen · un workspace que SOLO importó CSV', () => {
   });
 
   test('el gráfico de visualizaciones se llena por fecha de publicación; el de seguidores explica por qué no', async () => {
-    const views = await enSoloCsv((tx) => getViewsByBucket(tx, { days: 30 }));
+    const views = await enSoloCsv((tx) => getViewsByWeek(tx));
     assert.equal(views.source, 'content');
-    assert.ok(views.buckets.length > 0, 'el gráfico de visualizaciones no puede salir vacío');
+    assert.ok(views.weeks.length > 0, 'el gráfico de visualizaciones no puede salir vacío');
     const total = views.series.flatMap((s) => s.data).reduce((a, b) => a + b, 0);
     assert.equal(total, 4000);
     assert.deepEqual(views.series.map((s) => s.platformId), ['instagram']);
@@ -813,6 +807,59 @@ describe('Resumen · importación por CSV', () => {
     // Y la cuenta importada queda sincronizada a esa fecha, no a la de hoy.
     const frescura = (await enLaura((tx) => getFreshnessByConnection(tx))).find((f) => f.connectionId === cuenta.connectionId)!;
     assert.equal(Date.parse(frescura.lastSyncedAt!), Math.floor(Date.parse(exportado) / 1000) * 1000);
+    // La frescura trae además el instante de la exportación tal cual: la
+    // pantalla enseña «exportado el…» con el mismo día que escribió el
+    // creador, no el día anterior de la regla del reloj.
+    assert.equal(Date.parse(frescura.lastCsvExportAt!), Math.floor(Date.parse(exportado) / 1000) * 1000);
+  });
+
+  test('un nombre que ya tiene una cuenta OAuth de esa red no crea una segunda conexión', async () => {
+    // @laura.cocinafacil está conectada por OAuth en Instagram (seed). Si
+    // el creador escribe «Laura.CocinaFacil» al importar, cada video
+    // quedaría dos veces —el índice único de post incluye la conexión— y
+    // Resumen los contaría dos veces.
+    const oauth = (await enLaura((tx) => listImportableAccounts(tx, 'instagram'))).find(
+      (c) => c.accessMode === 'direct_oauth',
+    )!;
+    const conexionesAntes = (await enLaura((tx) => listImportableAccounts(tx, 'instagram'))).length;
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'instagram', handle: '@Laura.CocinaFacil' }));
+    assert.equal(cuenta.connectionId, oauth.connectionId);
+    assert.equal(cuenta.accessMode, 'direct_oauth');
+    assert.equal((await enLaura((tx) => listImportableAccounts(tx, 'instagram'))).length, conexionesAntes);
+    // El mismo nombre en OTRA red sí es otra cuenta: en Facebook no hay ninguna @laura.cocinafacil.
+    const otraRed = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'facebook', handle: 'laura.cocinafacil' }));
+    assert.notEqual(otraRed.connectionId, oauth.connectionId);
+    assert.equal(otraRed.accessMode, 'manual_csv');
+    await t.admin(`DELETE FROM social_connection WHERE id = '${otraRed.connectionId}'`);
+  });
+
+  test('la previsualización sabe cuándo se leyó por última vez cada video que ya está', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'conocidos.con.fecha' }));
+    const exportado = haceDias(2);
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'youtube',
+        rows: [fila('kn_1', { publishedAt: haceDias(9) })],
+        capturedAt: exportado,
+      }),
+    );
+    // Un video descubierto sin ninguna lectura también «ya está», sin fecha.
+    await enLaura((tx) =>
+      tx.query(
+        `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, published_at)
+         SELECT current_workspace_id(), sc.creator_id, sc.id, sc.platform_id, 'kn_sin_lectura', now() - interval '3 days'
+           FROM social_connection sc WHERE sc.id = $1`,
+        [cuenta.connectionId],
+      ),
+    );
+    const conocidos = await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, ['kn_1', 'kn_sin_lectura', 'kn_nuevo']));
+    const porId = new Map(conocidos.map((c) => [c.externalPostId, c.lastCapturedAt] as const));
+    assert.equal(porId.size, 2);
+    assert.equal(Date.parse(porId.get('kn_1')!), Date.parse(exportado));
+    assert.equal(porId.get('kn_sin_lectura'), null);
+    assert.deepEqual(await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, [])), []);
+    await assert.rejects(() => enLaura((tx) => listKnownPosts(tx, 'no-soy-uuid', ['x'])), conCodigo('invalid_connection'));
   });
 
   test('un archivo exportado ANTES que la última lectura no cambia la última ni mueve el reloj', async () => {
@@ -943,5 +990,55 @@ describe('Resumen · importación por CSV', () => {
       await t.db.withWorkspace(WS_VECINO, (tx) => listExternalPostIds(tx, cuenta.connectionId, ['ajeno_1'])),
       [],
     );
+  });
+});
+
+describe('Resumen · una razón sobre pocos videos no se compara', () => {
+  test(`con menos de ${MIN_SAMPLE} videos en un periodo, la variación es null y se dice por qué`, async () => {
+    // Con ?periodo=7, «Guardados por 1 000» salía «−50 %» en rojo sobre
+    // UN video. La cifra se enseña; la flecha, no.
+    const cuenta = await t.db.withWorkspace(WS_VECINO, (tx) =>
+      ensureCsvConnection(tx, { platform: 'instagram', handle: 'pocos.videos' }),
+    );
+    const enVecino = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_VECINO, fn);
+    try {
+      // Tres en el periodo anterior (hace 10-12 días) y uno en el actual.
+      await enVecino((tx) =>
+        importCsvReadings(tx, {
+          connectionId: cuenta.connectionId,
+          platform: 'instagram',
+          rows: [
+            fila('pv_prev_1', { publishedAt: haceDias(10), saves: 40 }),
+            fila('pv_prev_2', { publishedAt: haceDias(11), saves: 40 }),
+            fila('pv_prev_3', { publishedAt: haceDias(12), saves: 40 }),
+            fila('pv_act_1', { publishedAt: haceDias(2), saves: 20 }),
+          ],
+        }),
+      );
+      const pocos = await enVecino((tx) => getResumenKpis(tx, { days: 7 }));
+      assert.equal(pocos.savesPer1k.sample, 1);
+      assert.ok(pocos.savesPer1k.value !== null && pocos.savesPer1k.previous !== null, 'hay cifra y periodo anterior');
+      assert.equal(pocos.savesPer1k.delta, null);
+      assert.equal(pocos.savesPer1k.lowSample, true);
+      assert.equal(pocos.nonFollowerReach.delta, null);
+      assert.equal(pocos.nonFollowerReach.lowSample, true);
+
+      // Con tres videos en cada periodo, la comparación vuelve.
+      await enVecino((tx) =>
+        importCsvReadings(tx, {
+          connectionId: cuenta.connectionId,
+          platform: 'instagram',
+          rows: [fila('pv_act_2', { publishedAt: haceDias(3), saves: 20 }), fila('pv_act_3', { publishedAt: haceDias(4), saves: 20 })],
+        }),
+      );
+      const bastantes = await enVecino((tx) => getResumenKpis(tx, { days: 7 }));
+      assert.equal(bastantes.savesPer1k.sample, 3);
+      assert.equal(bastantes.savesPer1k.lowSample, false);
+      assert.ok(bastantes.savesPer1k.delta !== null && bastantes.savesPer1k.delta < 0, 'de 40 a 20 guardados por video');
+      assert.equal(bastantes.nonFollowerReach.lowSample, false);
+      assert.ok(bastantes.nonFollowerReach.delta !== null);
+    } finally {
+      await t.admin(`DELETE FROM social_connection WHERE id = '${cuenta.connectionId}'`);
+    }
   });
 });

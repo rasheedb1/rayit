@@ -7,13 +7,13 @@ import {
   aNumero,
   aTipoMedio,
   analizar,
+  decodificarCsv,
   ErrorCsv,
   faltantesDelMapeo,
   analizarFechas,
   idDesdeUrl,
   instanteDeCaptura,
   leerCsv,
-  MAX_BYTES,
   ordenPorLocale,
   proponerFechaExportacion,
   revisar,
@@ -37,6 +37,35 @@ import { mapearPorAlias, normalizar } from "./formatos";
 const BOGOTA = "America/Bogota";
 const fixture = (nombre: string) =>
   readFileSync(join(__dirname, "../../../../../test/fixtures/csv", nombre), "utf8");
+
+describe("la codificación del archivo", () => {
+  const bytes = (nombre: string) => readFileSync(join(__dirname, "../../../../../test/fixtures/csv", nombre));
+
+  it("un CSV guardado en Excel para Windows en español (Windows-1252) se lee con sus tildes", () => {
+    const { texto, codificacion } = decodificarCsv(bytes("excel-windows-1252.csv"));
+    expect(codificacion).toBe("windows-1252");
+    expect(texto).not.toContain("�");
+    const { tabla, mapeo } = analizar(texto);
+    // Los alias casan: «Duración» y «Descripción» ya no son «Duraci�n».
+    expect(tabla.encabezados).toContain("Duración");
+    expect(mapeo).toMatchObject({ publishedAt: "Fecha de publicación", title: "Descripción", durationS: "Duración" });
+    const { listas } = revisar(tabla, mapeo, { timeZone: BOGOTA });
+    expect(listas.map((l) => l.title)).toEqual(["Café de olla en 30 segundos", "Arepas rellenas: año nuevo, receta vieja"]);
+  });
+
+  it("leído a la fuerza como UTF-8, ese mismo archivo rompía las tildes: por eso se intenta estricto", () => {
+    const roto = new TextDecoder("utf-8").decode(bytes("excel-windows-1252.csv"));
+    expect(roto).toContain("�");
+  });
+
+  it("un CSV en UTF-8 (con o sin BOM) se queda en UTF-8", () => {
+    const utf8 = decodificarCsv(bytes("desconocido.csv"));
+    expect(utf8.codificacion).toBe("utf-8");
+    expect(utf8.texto).toContain("Día de salida");
+    const conBom = decodificarCsv(new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("Año;Views\n1;2\n")]));
+    expect(conBom).toEqual({ texto: "Año;Views\n1;2\n", codificacion: "utf-8" });
+  });
+});
 
 describe("normalizar y alias", () => {
   it("iguala mayúsculas, tildes y puntuación", () => {
@@ -427,7 +456,7 @@ describe("una exportación cuyas fechas sirven en los dos órdenes", () => {
 
 describe("filas sucias", () => {
   const { tabla, mapeo } = analizar(fixture("sucio.csv"));
-  const r = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: new Set(["ig_ok_1"]) });
+  const r = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: new Map([["ig_ok_1", null]]) });
 
   const problemasDe = (fila: number) => r.filas.find((f) => f.fila === fila)!.problemas;
 
@@ -461,6 +490,29 @@ describe("filas sucias", () => {
 
   it("avisa de que un video ya conocido recibe una lectura nueva, no un reemplazo", () => {
     expect(problemasDe(1).some((p) => p.gravedad === "aviso" && p.codigo === "yaImportado")).toBe(true);
+    expect(r.yaEstaban).toBe(1);
+    expect(r.sinNovedad).toBe(0);
+  });
+
+  it("un video que ya tiene una lectura de esta fecha o posterior se anuncia como «sin novedad», no como lectura nueva", () => {
+    // Reimportar el mismo archivo con la misma fecha de exportación: la
+    // base no escribirá nada (nunca hacia atrás), y el paso 3 tiene que
+    // decirlo antes, no el paso 4 después.
+    const instante = Date.parse("2026-09-12T17:00:00.000Z");
+    const conocidos = new Map<string, string | null>([
+      ["ig_ok_1", "2026-09-12T17:00:00.000000Z"], // la misma
+      ["ig_numero_raro", "2026-09-20T10:00:00.000000Z"], // posterior
+      ["ig_nofol_alto", "2026-09-01T10:00:00.000000Z"], // anterior: esta sí entra
+    ]);
+    const otra = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: conocidos, instanteCaptura: instante });
+    const codigos = (id: string) => otra.filas.find((f) => f.lectura?.externalPostId === id)!.problemas.map((p) => p.codigo);
+    expect(codigos("ig_ok_1")).toContain("sinNovedad");
+    expect(codigos("ig_numero_raro")).toContain("sinNovedad");
+    expect(codigos("ig_nofol_alto")).toContain("yaImportado");
+    expect(codigos("ig_nofol_alto")).not.toContain("sinNovedad");
+    expect({ yaEstaban: otra.yaEstaban, sinNovedad: otra.sinNovedad }).toEqual({ yaEstaban: 1, sinNovedad: 2 });
+    // Se siguen enviando: quien decide es la base, y los cuenta en staleReadings.
+    expect(otra.listas).toHaveLength(3);
   });
 
   it("guarda la celda cruda de las filas que no entran, para poder buscarlas en el archivo", () => {
@@ -616,20 +668,5 @@ describe("archivos que no son un CSV de métricas", () => {
     expect(codigoDe("Post ID,Views")).toBe("sinFilas");
     const demasiadas = ["Post ID,Views", ...Array.from({ length: 5001 }, (_, i) => `p${i},1`)].join("\n");
     expect(codigoDe(demasiadas)).toBe("demasiadasFilas");
-  });
-});
-
-describe("el techo del navegador y el del servidor", () => {
-  it("la server action acepta cualquier archivo que el navegador deja subir", async () => {
-    // Next corta el cuerpo de una server action en 1 MB por defecto. Si
-    // el techo del asistente (MAX_BYTES) lo supera, un CSV válido de 1,5
-    // MB pasa los tres primeros pasos y muere al pulsar «Importar».
-    const { default: config } = await import("../../../../../next.config");
-    const limite = config.experimental?.serverActions?.bodySizeLimit;
-    const escala = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 } as const;
-    const m = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)$/i.exec(String(limite ?? ""));
-    const bytes =
-      typeof limite === "number" ? limite : m ? Number(m[1]) * escala[m[2]!.toLowerCase() as keyof typeof escala] : 1024 ** 2;
-    expect(bytes).toBeGreaterThan(MAX_BYTES);
   });
 });

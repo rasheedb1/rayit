@@ -47,7 +47,7 @@
  * Y los días son días cerrados en UTC, por convención del repositorio
  * («la app trabaja en UTC»): `account_metric_snapshot.day` es el día de
  * la plataforma y no se puede pasar a otra zona. La pantalla lo dice
- * junto a cada «datos hasta el…».
+ * una sola vez, en el aviso de frescura, con palabras de creador.
  *
  * Las fechas `date` salen como 'YYYY-MM-DD' (to_char) para no depender
  * de la zona horaria del driver; los timestamptz, como ISO 8601 en UTC.
@@ -55,12 +55,29 @@
 import { desc } from 'drizzle-orm';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { creatorPostBoard } from '../schema/index.ts';
-import { assertPeriod, assertPlatform, PLATFORMS, type Period, type PlatformId } from './resumen-constantes.ts';
+import {
+  assertPeriod,
+  assertPlatform,
+  MIN_SAMPLE,
+  PLATFORMS,
+  VIEWS_WEEKS,
+  type Period,
+  type PlatformId,
+} from './resumen-constantes.ts';
 
 // Las redes y los periodos viven en un módulo aparte SIN dependencias
 // de servidor: los componentes cliente de la web los importan como
 // valores, y este archivo arrastra el cliente de Postgres (isUuid).
-export { assertPeriod, assertPlatform, PERIODS, PLATFORMS, type Period, type PlatformId } from './resumen-constantes.ts';
+export {
+  assertPeriod,
+  assertPlatform,
+  MIN_SAMPLE,
+  PERIODS,
+  PLATFORMS,
+  VIEWS_WEEKS,
+  type Period,
+  type PlatformId,
+} from './resumen-constantes.ts';
 
 export type PostBoardRow = typeof creatorPostBoard.$inferSelect;
 
@@ -144,6 +161,14 @@ export interface KpiSeries {
    * no entran, así que puede ser menor que `posts`.
    */
   sample?: number;
+  /**
+   * En los KPIs de contenido: true cuando HAY valor y periodo anterior,
+   * pero alguno de los dos se calculó sobre menos de MIN_SAMPLE videos.
+   * Entonces `delta` es null a propósito —una variación sobre un video
+   * es ruido— y la pantalla dice «pocos videos para comparar» en vez de
+   * «sin periodo anterior».
+   */
+  lowSample?: boolean;
 }
 
 /** De dónde sale la cifra de visualizaciones. */
@@ -201,12 +226,16 @@ export interface Bucket {
   end: string;
 }
 
-export interface BucketSeries {
-  buckets: Bucket[];
-  /** Cuántos días cubre cada bloque: 1, 5 o 10 (ver bucketStep). */
-  step: number;
+/**
+ * Visualizaciones por semana y red: hasta VIEWS_WEEKS semanas de siete
+ * días, de más vieja a más nueva, SIEMPRE las mismas sea cual sea el
+ * periodo del filtro (ver getViewsByWeek).
+ */
+export interface WeekSeries {
+  /** Cada semana, con su primer y su último día. Siete días exactos. */
+  weeks: Bucket[];
   series: PlatformSeries[];
-  /** 'account': visualizaciones diarias de la cuenta. 'content': de lo publicado en cada bloque. */
+  /** 'account': visualizaciones diarias de la cuenta. 'content': de lo publicado en cada semana. */
   source: ViewsSource;
 }
 
@@ -230,6 +259,15 @@ export interface ConnectionFreshness {
   lastSyncedReadingDay: string | null;
   /** Lo mismo para la última lectura importada por CSV. Una conexión OAuth también puede tenerla. */
   lastCsvDay: string | null;
+  /**
+   * El INSTANTE de la última lectura importada por CSV (ISO en UTC): el
+   * momento de la exportación que el creador escribió en el paso 2. La
+   * pantalla lo enseña tal cual, en la zona del workspace («exportado el
+   * 12 sep»), para que diga la misma fecha que el asistente. La regla
+   * del reloj (D-1) sigue mandando en `lastCsvDay`, `dataUntil` y
+   * `daysBehind`.
+   */
+  lastCsvExportAt: string | null;
   /** El más reciente de los tres, 'YYYY-MM-DD'. null = sin ninguna lectura. */
   dataUntil: string | null;
   /**
@@ -495,9 +533,17 @@ SELECT p.i, p.followers, p.followers_cmp, p.views, p.views_cmp, p.no_seguidores,
        -- comparable. Sin periodo anterior, o con un cero detrás, no hay.
        CASE WHEN a.followers_cmp > 0 THEN p.followers_cmp::numeric / a.followers_cmp - 1 END AS followers_delta,
        CASE WHEN a.views_cmp > 0     THEN p.views_cmp::numeric / a.views_cmp - 1         END AS views_delta,
-       -- En puntos: la diferencia de las dos razones.
-       p.no_seguidores - a.no_seguidores                                                   AS no_seguidores_delta,
-       CASE WHEN a.guardados_1k > 0  THEN p.guardados_1k / a.guardados_1k - 1              END AS guardados_1k_delta,
+       -- En puntos: la diferencia de las dos razones. Las dos razones de
+       -- contenido solo se comparan con al menos $3 videos (MIN_SAMPLE)
+       -- en CADA periodo: «−50 %» sobre un video es ruido, no una caída.
+       CASE WHEN p.posts_nf >= $3 AND a.posts_nf >= $3
+            THEN p.no_seguidores - a.no_seguidores END                                     AS no_seguidores_delta,
+       CASE WHEN a.guardados_1k > 0 AND p.posts_sv >= $3 AND a.posts_sv >= $3
+            THEN p.guardados_1k / a.guardados_1k - 1 END                                   AS guardados_1k_delta,
+       (p.no_seguidores IS NOT NULL AND a.no_seguidores IS NOT NULL
+        AND (p.posts_nf < $3 OR a.posts_nf < $3))                                          AS no_seguidores_poca,
+       (p.guardados_1k IS NOT NULL AND a.guardados_1k > 0
+        AND (p.posts_sv < $3 OR a.posts_sv < $3))                                          AS guardados_1k_poca,
        to_char((SELECT fin FROM ventana), 'YYYY-MM-DD')                 AS hasta,
        to_char((SELECT fin FROM ventana) - ($1::int - 1), 'YYYY-MM-DD') AS desde,
        -- Los días que suman las visualizaciones de la cuenta: [desde, antes_de).
@@ -529,6 +575,8 @@ interface FilaKpi {
   views_delta: string | null;
   no_seguidores_delta: string | null;
   guardados_1k_delta: string | null;
+  no_seguidores_poca: boolean;
+  guardados_1k_poca: boolean;
   hasta: string;
   desde: string;
   vistas_desde: string;
@@ -584,7 +632,7 @@ const KPI_VACIO: KpiSeries = { value: null, previous: null, delta: null, deltaKi
 export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Promise<ResumenKpis> {
   assertPeriod(filter.days);
   assertPlatform(filter.platform);
-  const { rows } = await tx.query<FilaKpi>(SQL_KPIS, [filter.days, filter.platform ?? null]);
+  const { rows } = await tx.query<FilaKpi>(SQL_KPIS, [filter.days, filter.platform ?? null, MIN_SAMPLE]);
   if (rows.length === 0) {
     return {
       end: null, start: null,
@@ -609,8 +657,12 @@ export async function getResumenKpis(tx: WorkspaceTx, filter: ResumenFilter): Pr
         : viewsSource === 'account'
           ? { start: ultima.vistas_desde, end: ultima.vistas_hasta }
           : { start: ultima.desde, end: ultima.hasta },
-    nonFollowerReach: { ...serie(rows, 'no_seguidores', 'points'), sample: ultima.posts_nf },
-    savesPer1k: { ...serie(rows, 'guardados_1k'), sample: ultima.posts_sv },
+    nonFollowerReach: {
+      ...serie(rows, 'no_seguidores', 'points'),
+      sample: ultima.posts_nf,
+      lowSample: ultima.no_seguidores_poca === true,
+    },
+    savesPer1k: { ...serie(rows, 'guardados_1k'), sample: ultima.posts_sv, lowSample: ultima.guardados_1k_poca === true },
     posts: ultima.posts,
     hasAccountSeries: ultima.hay_cuenta,
   };
@@ -690,51 +742,54 @@ export async function getFollowersByPlatform(tx: WorkspaceTx, filter: ResumenFil
 }
 
 // =====================================================================
-// 3 · Visualizaciones por bloque de días y red
+// 3 · Visualizaciones por semana y red
 // =====================================================================
 
 /**
- * Los bloques se anclan al último día cerrado y caminan hacia atrás, no
- * a la semana del calendario: así el último bloque siempre está
- * completo. Cuántos días cubre cada uno lo decide `bucketStep`.
+ * Doce semanas de siete días, SIEMPRE, sea cual sea el periodo del
+ * filtro: es lo que piden la historia y el mock («views por semana y
+ * red en 12 semanas»). El gráfico no es la suma del periodo del KPI, y
+ * la tarjeta lo dice.
  *
- * El generate_series va hasta `dias` porque ese es el techo aunque el
- * paso sea 1; quien corta de verdad es el WHERE, que descarta el
- * bloque en cuanto empieza antes del primer día con datos.
+ * Las semanas son de siete días contados hacia atrás desde el último
+ * día cerrado, no semanas ISO de lunes a domingo. Con semanas ISO
+ * cerradas, entre el lunes y el domingo el gráfico dejaría fuera hasta
+ * seis días de datos que la tarjeta sí cuenta; con la ISO en curso, la
+ * última barra saldría a medias y se leería como una caída. Así la
+ * última semana siempre está completa y termina el mismo día que las
+ * cifras de al lado.
  *
- * $1 = días, $2 = red o NULL, $3 = paso. La primera consulta suma la
- * serie de la cuenta; la segunda —el respaldo cuando no hay serie de
- * cuenta, el workspace que solo importó CSV— suma las visualizaciones
- * de lo PUBLICADO en cada bloque con su última lectura.
+ * $1 = red o NULL, $2 = cuántas semanas (VIEWS_WEEKS). La primera
+ * consulta suma la serie de la cuenta; la segunda —el respaldo cuando
+ * no hay serie de cuenta, el workspace que solo importó CSV— suma las
+ * visualizaciones de lo PUBLICADO en cada semana con su última lectura.
  *
- * El primer bloque se trata distinto en cada una. En la serie de la
- * cuenta, un bloque que empieza antes del primer día medido es una suma
- * a medias —se leería como una caída— y se descarta. Por fecha de
- * publicación no hay «a medias»: lo publicado en ese bloque es un hecho,
- * y descartarlo dejaba fuera justo el video más antiguo del archivo.
+ * La primera semana se trata distinto en cada una. En la serie de la
+ * cuenta, una semana que empieza antes del primer día medido es una
+ * suma a medias —se leería como una caída— y se descarta. Por fecha de
+ * publicación no hay «a medias»: lo publicado en esa semana es un
+ * hecho, y descartarlo dejaba fuera justo el video más antiguo del
+ * archivo.
  *
- * Y el último bloque termina en días distintos. Las barras de la cuenta
+ * Y la última semana termina en días distintos. Las barras de la cuenta
  * terminan en el último día que cerró la serie de cuenta DEL FILTRO, como
  * la tarjeta de visualizaciones (SQL_KPIS): con el reloj del módulo, una
  * lectura de contenido de madrugada dejaba la última barra a medias. Las
  * de lo publicado, en el reloj del módulo, como las tarjetas de contenido.
  */
-const SQL_BLOQUES = (finDatos: string, desdeDatos: string, bloqueParcial: 'descartar' | 'incluir') => `
+const SQL_SEMANAS = (finDatos: string, desdeDatos: string, semanaParcial: 'descartar' | 'incluir') => `
 reloj AS (SELECT (${finDatos}) AS fin),
-rango AS (
-  SELECT (SELECT fin FROM reloj) AS hasta,
-         greatest((SELECT fin FROM reloj) - ($1::int - 1), (${desdeDatos})) AS desde
-),
-bloque AS (
+semana AS (
   SELECT k,
-         (SELECT hasta FROM rango) - ($3::int * (k + 1) - 1) AS inicio,
-         (SELECT hasta FROM rango) - ($3::int * k)           AS fin
-  FROM generate_series(0, $1::int) AS g(k)
-  WHERE ${
-    bloqueParcial === 'descartar'
-      ? '(SELECT hasta FROM rango) - ($3::int * (k + 1) - 1) >= (SELECT desde FROM rango)'
-      : '(SELECT hasta FROM rango) - ($3::int * k) >= (SELECT desde FROM rango)'
-  }
+         (SELECT fin FROM reloj) - (7 * k + 6) AS inicio,
+         (SELECT fin FROM reloj) - 7 * k       AS fin
+  FROM generate_series(0, $2::int - 1) AS g(k)
+  WHERE (SELECT fin FROM reloj) IS NOT NULL
+    AND ${
+      semanaParcial === 'descartar'
+        ? `(SELECT fin FROM reloj) - (7 * k + 6) >= (${desdeDatos})`
+        : `(SELECT fin FROM reloj) - 7 * k >= (${desdeDatos})`
+    }
 )`;
 
 const SQL_VIEWS_CUENTA = `
@@ -745,98 +800,67 @@ WITH conexion AS (
     SELECT min(x.day) AS primer_dia, max(x.day) AS ultimo_dia
     FROM account_metric_snapshot x WHERE x.connection_id = sc.id
   ) a
-  WHERE sc.deleted_at IS NULL AND ($2::text IS NULL OR sc.platform_id = $2::text)
+  WHERE sc.deleted_at IS NULL AND ($1::text IS NULL OR sc.platform_id = $1::text)
 ),
-${SQL_BLOQUES('SELECT max(c.ultimo_dia) FROM conexion c', 'SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL', 'descartar')}
-SELECT to_char(b.inicio, 'YYYY-MM-DD') AS inicio,
-       to_char(b.fin, 'YYYY-MM-DD')    AS fin,
+${SQL_SEMANAS('SELECT max(c.ultimo_dia) FROM conexion c', 'SELECT min(c.primer_dia) FROM conexion c WHERE c.primer_dia IS NOT NULL', 'descartar')}
+SELECT to_char(s.inicio, 'YYYY-MM-DD') AS inicio,
+       to_char(s.fin, 'YYYY-MM-DD')    AS fin,
        c.platform_id,
        COALESCE(sum(a.views), 0)::bigint AS views
-FROM bloque b
-JOIN conexion c ON c.primer_dia IS NOT NULL AND c.primer_dia <= b.fin
-LEFT JOIN account_metric_snapshot a ON a.connection_id = c.id AND a.day BETWEEN b.inicio AND b.fin
-GROUP BY b.inicio, b.fin, c.platform_id
-ORDER BY b.inicio, c.platform_id`;
+FROM semana s
+JOIN conexion c ON c.primer_dia IS NOT NULL AND c.primer_dia <= s.fin
+LEFT JOIN account_metric_snapshot a ON a.connection_id = c.id AND a.day BETWEEN s.inicio AND s.fin
+GROUP BY s.inicio, s.fin, c.platform_id
+ORDER BY s.inicio, c.platform_id`;
 
 const SQL_VIEWS_CONTENIDO = `
 WITH publicado AS (
   SELECT p.id, p.platform_id, (p.published_at AT TIME ZONE 'UTC')::date AS dia
   FROM post p
   JOIN social_connection sc ON sc.id = p.connection_id AND sc.deleted_at IS NULL
-  WHERE p.deleted_on_platform = false AND ($2::text IS NULL OR p.platform_id = $2::text)
+  WHERE p.deleted_on_platform = false AND ($1::text IS NULL OR p.platform_id = $1::text)
     AND EXISTS (SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = p.id)
 ),
-${SQL_BLOQUES(SQL_ULTIMO_DIA, 'SELECT min(dia) FROM publicado', 'incluir')},
+${SQL_SEMANAS(SQL_ULTIMO_DIA, 'SELECT min(dia) FROM publicado', 'incluir')},
 red AS (SELECT DISTINCT platform_id FROM publicado)
-SELECT to_char(b.inicio, 'YYYY-MM-DD') AS inicio,
-       to_char(b.fin, 'YYYY-MM-DD')    AS fin,
+SELECT to_char(s.inicio, 'YYYY-MM-DD') AS inicio,
+       to_char(s.fin, 'YYYY-MM-DD')    AS fin,
        r.platform_id,
        COALESCE(sum(m.views), 0)::bigint AS views,
        count(p.id)::int AS posts
-FROM bloque b
+FROM semana s
 CROSS JOIN red r
-LEFT JOIN publicado p ON p.platform_id = r.platform_id AND p.dia BETWEEN b.inicio AND b.fin
+LEFT JOIN publicado p ON p.platform_id = r.platform_id AND p.dia BETWEEN s.inicio AND s.fin
 LEFT JOIN post_metrics_latest m ON m.post_id = p.id
-GROUP BY b.inicio, b.fin, r.platform_id
-ORDER BY b.inicio, r.platform_id`;
+GROUP BY s.inicio, s.fin, r.platform_id
+ORDER BY s.inicio, r.platform_id`;
 
-/** Visualizaciones por bloque y red. El paso lo decide bucketStep. */
-export async function getViewsByBucket(tx: WorkspaceTx, filter: ResumenFilter): Promise<BucketSeries> {
-  assertPeriod(filter.days);
+/**
+ * Visualizaciones por semana y red, en las últimas VIEWS_WEEKS semanas.
+ * Solo recibe la red: el periodo del filtro no cambia este gráfico.
+ * Cómo se etiqueta cada barra lo decide la pantalla, no esta capa.
+ */
+export async function getViewsByWeek(
+  tx: WorkspaceTx,
+  filter: { platform?: PlatformId | null } = {},
+): Promise<WeekSeries> {
   assertPlatform(filter.platform);
   const platform = filter.platform ?? null;
-  const step = bucketStep(filter.days);
   const source: ViewsSource = (await hasAccountSeries(tx, platform)) ? 'account' : 'content';
   const res = await tx.query<{
     inicio: string; fin: string; platform_id: PlatformId; views: string | number; posts?: number;
-  }>(source === 'account' ? SQL_VIEWS_CUENTA : SQL_VIEWS_CONTENIDO, [filter.days, platform, step]);
-  // Por fecha de publicación, un periodo en el que no se publicó nada no
-  // es «cero visualizaciones»: es un periodo sin datos, y la pantalla
-  // tiene que poder ofrecer la salida (un periodo más largo).
+  }>(source === 'account' ? SQL_VIEWS_CUENTA : SQL_VIEWS_CONTENIDO, [platform, VIEWS_WEEKS]);
+  // Por fecha de publicación, doce semanas en las que no se publicó nada
+  // no son «cero visualizaciones»: son semanas sin datos, y la pantalla
+  // tiene que poder decirlo en vez de pintar barras vacías.
   const rows = source === 'content' && res.rows.every((r) => !r.posts) ? [] : res.rows;
   const plano = buildSeries(rows.map((r) => ({ label: r.inicio, platformId: r.platform_id, value: num(r.views) ?? 0 })));
   const finDe = new Map(rows.map((r) => [r.inicio, r.fin] as const));
   return {
-    step,
     source,
-    buckets: plano.labels.map((start) => ({ start, end: finDe.get(start) ?? start })),
+    weeks: plano.labels.map((start) => ({ start, end: finDe.get(start) ?? start })),
     series: plano.series,
   };
-}
-
-/**
- * Cuántos días cubre cada barra. Dos condiciones, y las dos se prueban:
- *
- *   1. Las barras cubren EXACTAMENTE el periodo: `dias % paso === 0`.
- *      Con siete barras de cuatro días, el gráfico de «30 días» cubría
- *      28 y su total no cuadraba con la tarjeta de visualizaciones de al
- *      lado.
- *   2. La última barra cae en la rejilla de etiquetas del kit. BarChart
- *      etiqueta cada `ceil(n/8)` categorías Y ADEMÁS fuerza la última,
- *      así que si esa no cae en la rejilla sus dos etiquetas se pisan:
- *      `(n - 1) % (n > 8 ? ceil(n / 8) : 1) === 0` (lastLabelOnGrid).
- *
- *    7 días →  7 barras de un día      (n ≤ 8: se etiquetan todas)
- *   30 días →  6 barras de cinco días  (n ≤ 8: se etiquetan todas)
- *   90 días →  9 barras de diez días   (cada 2: 0,2,4,6,8 y 8 es la última)
- *
- * Las doce semanas del mock no cumplen NINGUNA de las dos: doce por
- * siete son 84 días, no 90, y ceil(12/8) = 2 deja la 11 fuera de la
- * rejilla. Para tenerlas, BarChart necesita decidir qué etiquetas
- * pinta, y eso es cambiar la API del kit (pendiente con Nicolás).
- */
-export function bucketStep(days: Period): number {
-  return days >= 90 ? 10 : days >= 30 ? 5 : 1;
-}
-
-/**
- * La regla de etiquetado de BarChart, escrita una sola vez para que la
- * prueba compruebe lo mismo que el kit dibuja.
- */
-export function lastLabelOnGrid(bars: number): boolean {
-  if (bars <= 1) return true;
-  const every = bars > 8 ? Math.ceil(bars / 8) : 1;
-  return (bars - 1) % every === 0;
 }
 
 /**
@@ -896,6 +920,7 @@ SELECT h.id,
        to_char(d.dia_cuenta, 'YYYY-MM-DD')   AS last_account_day,
        to_char(l.dia_api, 'YYYY-MM-DD')      AS last_synced_reading_day,
        to_char(l.dia_csv, 'YYYY-MM-DD')      AS last_csv_day,
+       to_char(l.instante_csv AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_csv_export_at,
        to_char(u.hasta, 'YYYY-MM-DD')        AS data_until,
        (r.fin - u.hasta)::int                AS dias_atras,
        h.token_expiring_soon
@@ -907,7 +932,8 @@ CROSS JOIN LATERAL (
 ) d
 CROSS JOIN LATERAL (
   SELECT (max(s.captured_at) FILTER (WHERE s.source <> 'csv_import') AT TIME ZONE 'UTC')::date - 1 AS dia_api,
-         (max(s.captured_at) FILTER (WHERE s.source =  'csv_import') AT TIME ZONE 'UTC')::date - 1 AS dia_csv
+         (max(s.captured_at) FILTER (WHERE s.source =  'csv_import') AT TIME ZONE 'UTC')::date - 1 AS dia_csv,
+         max(s.captured_at) FILTER (WHERE s.source = 'csv_import') AS instante_csv
   FROM post_metric_snapshot s
   JOIN post p ON p.id = s.post_id
   WHERE p.connection_id = h.id
@@ -925,8 +951,8 @@ export async function getFreshnessByConnection(
   const { rows } = await tx.query<{
     id: string; platform_id: PlatformId; handle: string | null; display_name: string | null; access_mode: string;
     status: string; last_synced_at: string | null; last_account_day: string | null;
-    last_synced_reading_day: string | null; last_csv_day: string | null; data_until: string | null;
-    dias_atras: number | null; token_expiring_soon: boolean | null;
+    last_synced_reading_day: string | null; last_csv_day: string | null; last_csv_export_at: string | null;
+    data_until: string | null; dias_atras: number | null; token_expiring_soon: boolean | null;
   }>(SQL_FRESCURA, [filter.platform ?? null]);
   return rows.map((r) => ({
     connectionId: r.id,
@@ -939,6 +965,7 @@ export async function getFreshnessByConnection(
     lastAccountDay: r.last_account_day,
     lastSyncedReadingDay: r.last_synced_reading_day,
     lastCsvDay: r.last_csv_day,
+    lastCsvExportAt: r.last_csv_export_at,
     dataUntil: r.data_until,
     daysBehind: r.dias_atras,
     tokenExpiringSoon: r.token_expiring_soon === true,
@@ -1075,6 +1102,44 @@ export async function listExternalPostIds(
   return rows.map((r) => r.external_post_id);
 }
 
+export interface KnownPost {
+  externalPostId: string;
+  /** ISO en UTC de la lectura más reciente del video, o null si aún no tiene ninguna. */
+  lastCapturedAt: string | null;
+}
+
+/**
+ * Como `listExternalPostIds`, y además el instante de la ÚLTIMA lectura
+ * de cada video. Con eso el paso 3 distingue los dos casos de un video
+ * que ya estaba:
+ *
+ *   - su última lectura es anterior a la de este archivo: se le añade
+ *     una lectura nueva;
+ *   - ya tiene una de esta fecha o posterior: esta NO se guardará
+ *     (importCsvReadings nunca escribe hacia atrás).
+ *
+ * Sin esa distinción, reimportar el mismo archivo decía en el paso 3
+ * «se añade una lectura» y en el paso 4 «no se guardó».
+ */
+export async function listKnownPosts(
+  tx: WorkspaceTx,
+  connectionId: string,
+  ids: readonly string[],
+): Promise<KnownPost[]> {
+  if (!isUuid(connectionId)) throw new CsvImportError('invalid_connection', connectionId);
+  if (ids.length === 0) return [];
+  const { rows } = await tx.query<{ external_post_id: string; ultima: string | null }>(
+    `SELECT p.external_post_id,
+            to_char(max(s.captured_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ultima
+       FROM post p
+       LEFT JOIN post_metric_snapshot s ON s.post_id = p.id
+      WHERE p.connection_id = $1 AND p.external_post_id = ANY($2::text[])
+      GROUP BY p.external_post_id`,
+    [connectionId, [...new Set(ids)]],
+  );
+  return rows.map((r) => ({ externalPostId: r.external_post_id, lastCapturedAt: r.ultima }));
+}
+
 /**
  * La cuenta "importada por CSV": se crea al vuelo la primera vez y se
  * reutiliza después. external_account_id lleva el prefijo csv: para que
@@ -1087,6 +1152,17 @@ export async function listExternalPostIds(
  * Un `ON CONFLICT DO UPDATE SET deleted_at = NULL` devolvía en silencio
  * la cuenta con todo su historial, que es lo contrario de lo que el
  * creador decidió al borrarla.
+ *
+ * Y el nombre se busca entre TODAS las cuentas vivas de esa red, no
+ * solo entre las importadas: si el creador escribe «Laura.CocinaFacil»
+ * en Instagram teniendo @laura.cocinafacil conectada por OAuth, se le
+ * devuelve esa. Crear otra partía sus videos en dos conexiones —el
+ * índice único de post incluye connection_id—, así que Resumen contaba
+ * cada video dos veces y la frescura enseñaba dos tarjetas de la misma
+ * cuenta. El asistente ya lo propone antes (paso 2); esto es la red por
+ * si un POST llega sin pasar por él. Si hubiera una importada y una
+ * OAuth con el mismo nombre (datos de antes de esta regla), gana la
+ * importada: es la que ya tiene el historial del CSV.
  */
 export async function ensureCsvConnection(
   tx: WorkspaceTx,
@@ -1104,12 +1180,15 @@ async function ensureCsvConnectionOnce(
   const handle = input.handle.trim().replace(/^@/, '');
   if (!handle) throw new CsvImportError('empty_handle');
 
-  const viva = await tx.query<{ id: string; handle: string | null; posts: number }>(
-    `SELECT sc.id, sc.handle, (SELECT count(*)::int FROM post p WHERE p.connection_id = sc.id) AS posts
+  const viva = await tx.query<{
+    id: string; handle: string | null; display_name: string | null; access_mode: string; posts: number;
+  }>(
+    `SELECT sc.id, sc.handle, sc.display_name, sc.access_mode,
+            (SELECT count(*)::int FROM post p WHERE p.connection_id = sc.id) AS posts
        FROM social_connection sc
-      WHERE sc.platform_id = $1 AND sc.access_mode = 'manual_csv' AND sc.deleted_at IS NULL
-        AND lower(sc.handle) = lower($2)
-      ORDER BY sc.created_at
+      WHERE sc.platform_id = $1 AND sc.deleted_at IS NULL
+        AND lower(ltrim(sc.handle, '@')) = lower($2)
+      ORDER BY (sc.access_mode = 'manual_csv') DESC, sc.created_at
       LIMIT 1`,
     [input.platform, handle],
   );
@@ -1117,7 +1196,8 @@ async function ensureCsvConnectionOnce(
   if (existente) {
     return {
       connectionId: existente.id, platformId: input.platform, handle: existente.handle ?? handle,
-      displayName: existente.handle ?? handle, accessMode: 'manual_csv', posts: existente.posts,
+      displayName: existente.display_name ?? existente.handle ?? handle, accessMode: existente.access_mode,
+      posts: existente.posts,
     };
   }
 

@@ -51,6 +51,31 @@ export class ErrorCsv extends Error {
   }
 }
 
+/** Cómo venía escrito el archivo. */
+export type Codificacion = "utf-8" | "windows-1252";
+
+/**
+ * Los bytes del archivo → texto, sin romper las tildes.
+ *
+ * Las plataformas exportan en UTF-8, pero un CSV abierto y vuelto a
+ * guardar en Excel para Windows en español sale en Windows-1252. Leído
+ * como UTF-8, «Duración» pasaba a «Duraci�n»: los alias de las columnas
+ * no casaban y los títulos se guardaban rotos, sin ningún aviso.
+ *
+ * Primero se intenta UTF-8 ESTRICTO (`fatal: true`): un byte que no
+ * forma UTF-8 válido lanza en vez de convertirse en «�». Solo entonces
+ * se lee como Windows-1252, que es lo que Excel escribe en español (y
+ * cubre también Latin-1). La pantalla dice cuál se usó. El BOM de UTF-8
+ * lo quita el propio TextDecoder.
+ */
+export function decodificarCsv(bytes: ArrayBuffer | Uint8Array): { texto: string; codificacion: Codificacion } {
+  try {
+    return { texto: new TextDecoder("utf-8", { fatal: true }).decode(bytes), codificacion: "utf-8" };
+  } catch {
+    return { texto: new TextDecoder("windows-1252").decode(bytes), codificacion: "windows-1252" };
+  }
+}
+
 /**
  * Papaparse con `header: true` y el delimitador autodetectado: Meta
  * exporta con coma, y una exportación abierta y vuelta a guardar en
@@ -433,6 +458,7 @@ export type ProblemaCodigo =
   | "enlaceInvalido"
   | "repetidaEnArchivo"
   | "yaImportado"
+  | "sinNovedad"
   | "casiVacia";
 
 export interface Problema {
@@ -473,6 +499,16 @@ export interface Revision {
    * video que falte sino la suma de los que sí están.
    */
   filasTotales: number;
+  /**
+   * De las filas que se escribirían, las que YA están en la cuenta de
+   * destino y van a recibir una lectura nueva (`yaImportado`).
+   */
+  yaEstaban: number;
+  /**
+   * Las que ya están y ya tienen una lectura de esta fecha o posterior
+   * (`sinNovedad`): se envían, pero la base no las guardará.
+   */
+  sinNovedad: number;
   /** El orden día/mes con el que se leyeron las fechas numéricas. */
   ordenFechas: OrdenFecha;
   /**
@@ -494,8 +530,21 @@ export interface OpcionesRevision {
    * orden dejaría filas ilegibles.
    */
   ordenFechas?: OrdenFecha;
-  /** Ids que ya existen en la cuenta de destino: la fila entra igual, como lectura nueva. */
-  yaConocidos?: ReadonlySet<string>;
+  /**
+   * Los videos que ya existen en la cuenta de destino: id → instante ISO
+   * de su última lectura (null si aún no tiene ninguna). La fila se
+   * envía igual; lo que cambia es el aviso.
+   */
+  yaConocidos?: ReadonlyMap<string, string | null>;
+  /**
+   * El instante (ms) con el que se guardará esta importación: la fecha
+   * de exportación del paso 2 (ver instanteDeCaptura). Un video que ya
+   * tiene una lectura de este instante o posterior no recibe la nueva
+   * —importCsvReadings nunca escribe hacia atrás— y se avisa ANTES con
+   * `sinNovedad`, no después con un «no se guardó». Sin él, se da por
+   * hecho que la lectura es nueva.
+   */
+  instanteCaptura?: number;
 }
 
 /** Campos obligatorios que faltan en el mapeo. Vacío = se puede importar. */
@@ -545,6 +594,8 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
   const vistos = new Set<string>();
   let duplicadasEnArchivo = 0;
   let filasTotales = 0;
+  let yaEstaban = 0;
+  let sinNovedad = 0;
   const analisis = analizarFechas(celdasDeFecha(tabla, mapeo));
   const ordenFechas = analisis.orden ?? opts.ordenFechas ?? ordenPorLocale(opts.locale);
 
@@ -644,7 +695,17 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
         return;
       }
       vistos.add(lectura.externalPostId);
-      if (opts.yaConocidos?.has(lectura.externalPostId)) aviso(null, "yaImportado");
+      if (opts.yaConocidos?.has(lectura.externalPostId)) {
+        const ultima = opts.yaConocidos.get(lectura.externalPostId);
+        // La misma regla que la base (captured_at >= el de esta importación).
+        if (ultima && opts.instanteCaptura !== undefined && Date.parse(ultima) >= opts.instanteCaptura) {
+          sinNovedad++;
+          aviso(null, "sinNovedad");
+        } else {
+          yaEstaban++;
+          aviso(null, "yaImportado");
+        }
+      }
       if (lectura.views === null && lectura.reach === null) aviso(null, "casiVacia");
     }
 
@@ -691,6 +752,8 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     avisos: filas.reduce((a, f) => a + f.problemas.filter((p) => p.gravedad === "aviso").length, 0),
     duplicadasEnArchivo,
     filasTotales,
+    yaEstaban,
+    sinNovedad,
     ordenFechas,
     ordenAlternativo,
   };
