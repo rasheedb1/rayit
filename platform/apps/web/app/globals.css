@@ -260,9 +260,14 @@ summary::-webkit-details-marker {
   .no-print {
     display: none !important;
   }
-  .doc-seccion,
+  /* Un post no se parte entre dos páginas, y un título no se queda
+     solo al pie: las secciones enteras sí pueden partirse (si no, una
+     sección alta deja media página en blanco). */
   .doc-bloque {
     break-inside: avoid;
+  }
+  .doc-seccion > div:first-child {
+    break-after: avoid;
   }
   a {
     text-decoration: none;

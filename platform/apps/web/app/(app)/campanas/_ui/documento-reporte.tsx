@@ -97,7 +97,7 @@ export function DocumentoReporte({
         )}
       </Seccion>
 
-      <Seccion id="doc-seguidores" title={t.seguidores} meta={r.brandFollowers ? t.seguidoresDe(r.brandFollowers.handle) : undefined}>
+      <Seccion id="doc-seguidores" title={t.seguidores}>
         <Seguidores r={r} f={f} />
       </Seccion>
 
@@ -241,14 +241,14 @@ function PostCard({ post, cutsHours, f }: { post: ReportPost; cutsHours: number[
       </p>
       <p className="text-xs text-muted">{post.publishedAt ? t.publicado(f.date(post.publishedAt, "long")) : t.sinFechaPublicacion}</p>
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[260px] text-sm">
+        <table className="w-full text-xs sm:text-sm">
           <thead>
             <tr className="text-xs text-muted">
               <th scope="col" className="py-1 text-left font-normal">
                 {t.metrica}
               </th>
               {cutsHours.map((h) => (
-                <th key={h} scope="col" className="py-1 text-right font-normal whitespace-nowrap">
+                <th key={h} scope="col" className="py-1 pl-2 text-right font-normal whitespace-nowrap">
                   {t.corte(horas(h))}
                 </th>
               ))}
@@ -263,7 +263,7 @@ function PostCard({ post, cutsHours, f }: { post: ReportPost; cutsHours: number[
                 {post.cuts.map((c, i) => {
                   const v = c === null ? null : c[m];
                   return (
-                    <td key={cutsHours[i] ?? i} className="py-1.5 text-right font-mono tabular-nums">
+                    <td key={cutsHours[i] ?? i} className="py-1.5 pl-2 text-right tabular-nums whitespace-nowrap">
                       {v === null ? <span className="text-muted">{t.sinDato}</span> : f.compact(v)}
                     </td>
                   );
