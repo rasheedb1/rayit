@@ -607,6 +607,10 @@ export const MESSAGES = {
   loading: {
     label: "Cargando el tarifario",
     section: "Entregables",
+    /** Los esqueletos de cada lista y del formulario (pulido r4: ya no heredan el del tarifario). */
+    cotizaciones: "Cargando las cotizaciones",
+    mediaKits: "Cargando los media kits",
+    nueva: "Cargando la nueva cotización",
   },
 
   /**

@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppError from "./error";
 import FinanzasError from "./finanzas/error";
 import VentasError from "./ventas/error";
-import AppLoading from "./loading";
+import { EsqueletoGenerico as AppLoading } from "./_lib/esqueleto";
 import { MESSAGES } from "./_lib/messages";
 
 // Fuera de Next no hay router: el de mentira solo registra refresh().
@@ -34,10 +34,17 @@ beforeEach(() => {
 const AQUI = dirname(fileURLToPath(import.meta.url));
 
 describe("el segmento (app) tiene frontera de error y esqueleto de carga", () => {
-  it("los dos archivos están en la raíz del segmento, que es donde Next los busca", () => {
+  it("la frontera está en la raíz del segmento; el esqueleto, en cada lista y no en la raíz", () => {
     const enElSegmento = readdirSync(AQUI);
     expect(enElSegmento).toContain("error.tsx");
-    expect(enElSegmento).toContain("loading.tsx");
+    // Desde el pulido r4 el esqueleto genérico NO es (app)/loading.tsx:
+    // en la raíz envolvía cada detalle y un id inexistente respondía 200
+    // (ver _lib/esqueleto.tsx y no-existe.test.tsx). Los módulos que lo
+    // usan lo reexportan en su segmento.
+    expect(enElSegmento).not.toContain("loading.tsx");
+    for (const modulo of ["campanas", "conexiones"]) {
+      expect(readdirSync(join(AQUI, modulo))).toContain("loading.tsx");
+    }
     // Y Finanzas conserva los suyos: un módulo puede afinar el texto.
     const enFinanzas = readdirSync(join(AQUI, "finanzas"));
     expect(enFinanzas).toContain("error.tsx");

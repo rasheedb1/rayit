@@ -8,11 +8,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { ModuleTabs } from "../_componentes/pestanas";
-import { withWorkspace } from "../_lib/db";
-import { RELATIONSHIP_META } from "../_lib/estado";
-import { MESSAGES } from "../_lib/messages";
-import { Buscador } from "./buscador";
+import { ModuleTabs } from "../../_componentes/pestanas";
+import { withWorkspace } from "../../_lib/db";
+import { RELATIONSHIP_META } from "../../_lib/estado";
+import { MESSAGES } from "../../_lib/messages";
+import { Buscador } from "../buscador";
 
 export const metadata: Metadata = { title: MESSAGES.empresas.metaTitle };
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ export default async function EmpresasPage({ searchParams }: { searchParams: Pro
         c.openDealCount === 0 ? (
           <span className="text-muted">{t.noDeals}</span>
         ) : (
-          <CellMain sub={f.money(c.openDealAmount, undefined, { mode: "compact" })}>{f.int(c.openDealCount)}</CellMain>
+          <CellMain sub={f.money(c.openDealAmount, undefined, { mode: "short" })}>{f.int(c.openDealCount)}</CellMain>
         ),
     },
     {

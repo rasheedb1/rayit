@@ -1,10 +1,15 @@
 import { Kpi, KpiRow } from "@/components/ui/kpi";
-import { MESSAGES } from "./_lib/messages";
+import { MESSAGES } from "../_lib/messages";
 
 /**
  * Esqueleto del segmento mientras la base responde: la misma fila de
  * KPIs y un bloque del tamaño de la bandeja, para que una consulta
  * lenta no deje la navegación congelada sin señal.
+ *
+ * Vive en el grupo de rutas `(inicio)` —que no cambia la URL— y no en
+ * `ventas/`: ahí era el fallback de Suspense también de
+ * /ventas/empresas/<id>, y un id inexistente respondía 200 con la
+ * página de no encontrado (ver app/(app)/_lib/esqueleto.tsx).
  */
 export default function VentasLoading() {
   const t = MESSAGES.loading;

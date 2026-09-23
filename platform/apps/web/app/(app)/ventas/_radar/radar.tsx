@@ -182,7 +182,8 @@ function SignalCard({
             </span>
             {card.budgetText && (
               <span className="tabular-nums">
-                {t.budget}: {card.budgetText}
+                {/* La cifra no se parte entre la moneda y el número («COP» / «7,0 M») a 400 px. */}
+                {t.budget}: <span className="whitespace-nowrap">{card.budgetText}</span>
               </span>
             )}
             {card.evidenceUrl && (

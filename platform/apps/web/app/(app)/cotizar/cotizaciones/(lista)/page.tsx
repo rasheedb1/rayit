@@ -8,10 +8,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { marcarAvisoVisto } from "../actions";
-import { MESSAGES } from "../messages";
-import { pillDeCotizacion } from "../_lib/estado";
+import { marcarAvisoVisto } from "../../actions";
+import { MESSAGES } from "../../messages";
+import { pillDeCotizacion } from "../../_lib/estado";
 
 export const metadata: Metadata = { title: "Cotizaciones" };
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ export default async function CotizacionesPage() {
     {
       key: "marca",
       header: t.columnas.marca,
-      render: (q) => <CellMain sub={q.dealName ?? undefined}>{q.companyName}</CellMain>,
+      render: (q) => <CellMain sub={dealLabel(q.companyName, q.dealName) ?? undefined}>{q.companyName}</CellMain>,
     },
     {
       key: "total",

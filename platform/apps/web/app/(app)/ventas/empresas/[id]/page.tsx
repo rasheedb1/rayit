@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getCompany, listContacts, listPipeline } from "@mc/db/queries/ventas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
@@ -39,15 +40,9 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
     return { company, contacts, deals: pipeline.filter((d) => d.companyId === id) };
   });
 
-  if (!company) {
-    return (
-      <>
-        <PageHeader eyebrow={MESSAGES.header.eyebrow} title={t.title} />
-        <ModuleTabs active="/ventas/empresas" />
-        <EmptyState title={t.detail.notFound.title} description={t.detail.notFound.description} action={{ label: t.detail.notFound.action, href: "/ventas/empresas" }} />
-      </>
-    );
-  }
+  // Una empresa que no existe (o de otro espacio: RLS la esconde igual)
+  // es un 404 de verdad: lo pinta not-found.tsx, con la salida a Empresas.
+  if (!company) notFound();
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
@@ -67,7 +62,13 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-10">
           <section aria-labelledby="negocios">
-            <SectionTitle meta={company.openDealCount > 0 ? f.money(company.openDealAmount, undefined, { mode: "compact" }) : undefined}>
+            <SectionTitle
+              meta={
+                company.openDealCount > 0 ? (
+                  <span className="whitespace-nowrap tabular-nums">{f.money(company.openDealAmount, undefined, { mode: "short" })}</span>
+                ) : undefined
+              }
+            >
               <span id="negocios">{t.columns.deals}</span>
             </SectionTitle>
             <div className="mb-3">
@@ -82,7 +83,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                   return (
                     <li key={d.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-ink">{d.name}</p>
+                        <p className="text-sm font-medium text-ink">{dealLabel(company.name, d.name) ?? MESSAGES.radar.pendingDealName}</p>
                         <p className="mt-0.5 text-xs text-ink-2">
                           {d.stageLabel}
                           {due && d.nextAction && (
@@ -96,8 +97,8 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                       </div>
                       <div className="flex items-center gap-2">
                         {due && <Pill kind={due.kind}>{due.text}</Pill>}
-                        <span className="text-sm tabular-nums text-ink">
-                          {d.amount ? f.money(d.amount, d.currency, { mode: "compact" }) : <span className="text-muted">{MESSAGES.pipeline.noAmount}</span>}
+                        <span className="whitespace-nowrap text-sm tabular-nums text-ink">
+                          {d.amount ? f.money(d.amount, d.currency, { mode: "short" }) : <span className="text-muted">{MESSAGES.pipeline.noAmount}</span>}
                         </span>
                         {!d.isWon && !d.isLost && (
                           <Link

@@ -78,6 +78,12 @@ export const MESSAGES = {
     /** La siguiente acción con la que nace un negocio (del radar o a mano). */
     pitchAction: "Enviar pitch",
     /**
+     * El título de un negocio aceptado cuya señal solo dice la marca (una
+     * fila de CSV sin nota). Si la señal trae titular, el negocio se llama
+     * así: «Abre 3 tiendas en Bogotá».
+     */
+    pendingDealName: "Por definir",
+    /**
      * La que la reemplaza cuando se envía una cotización del negocio: el
      * pitch ya se superó con una propuesta. La escribe Cotizar al enviar
      * (cotizar/_lib/textos.ts), con este texto.
@@ -486,6 +492,7 @@ export const MESSAGES = {
 
   loading: {
     label: "Cargando Ventas",
+    empresas: "Cargando Empresas",
     kpis: ["Señales por revisar", "Negocios abiertos", "Cierre ponderado", "Ganado este trimestre"],
     section: "Pipeline",
   },

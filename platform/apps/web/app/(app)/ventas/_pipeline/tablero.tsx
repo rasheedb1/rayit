@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useOptimistic, useState, useTransition, type DragEvent } from "react";
 import { Pill, type PillKind } from "@/components/ui/pill";
+import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
 import { Aviso } from "../_componentes/aviso";
 import { applyMove } from "../_lib/estado";
@@ -114,7 +115,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                   <span className="text-sm font-medium text-ink">{stage.label}</span>
                   <span className="text-xs tabular-nums text-muted">{stage.countText}</span>
                 </div>
-                <p className="mb-2 text-xs tabular-nums text-muted">{stage.amountText}</p>
+                <p className="mb-2 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
 
                 <div
                   className={`min-h-24 rounded-md transition-colors ${isOver ? "bg-hover outline-2 outline-dashed outline-axis" : ""}`}
@@ -191,10 +192,10 @@ function DealCard({
       <Link href={`/ventas/empresas/${deal.companyId}`} className="text-sm font-medium leading-5 text-ink hover:underline" draggable={false}>
         {deal.companyName}
       </Link>
-      {/* Un negocio que nace del radar se llama como la marca: repetirlo es ruido. */}
-      {deal.name !== deal.companyName && <p className="mt-0.5 text-xs leading-4 text-ink-2">{deal.name}</p>}
+      {/* Un negocio que se llama como la marca (los viejos del radar): repetirlo es ruido. */}
+      {dealLabel(deal.companyName, deal.name) && <p className="mt-0.5 text-xs leading-4 text-ink-2">{deal.name}</p>}
 
-      <p className="mt-2 text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
+      <p className="mt-2 whitespace-nowrap text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {deal.due && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}

@@ -6,6 +6,7 @@ import {
 } from "@mc/db/queries/cotizar";
 import { PageHeader } from "@/components/page-header";
 import { withWorkspace } from "@/lib/db";
+import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { editarCotizacion } from "../../../actions";
 import { MESSAGES } from "../../../messages";
@@ -54,7 +55,7 @@ export default async function EditarCotizacionPage({ params }: { params: Promise
       <PageHeader
         eyebrow={`${MESSAGES.detalle.eyebrow} · ${quote.number}`}
         title={t.editarTitle}
-        description={`${quote.companyName}${quote.dealName ? ` · ${quote.dealName}` : ""}. ${t.editarDescription}`}
+        description={`${[quote.companyName, dealLabel(quote.companyName, quote.dealName)].filter(Boolean).join(" · ")}. ${t.editarDescription}`}
       />
       <CotizacionForm
         action={editarCotizacion.bind(null, quote.id)}

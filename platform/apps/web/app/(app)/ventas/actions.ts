@@ -231,7 +231,7 @@ export async function aceptarSenal(_prev: VentasState, formData: FormData): Prom
   let res: Awaited<ReturnType<typeof acceptSignal>>;
   try {
     res = await withWorkspace((tx) =>
-      acceptSignal(tx, signalId, { nextAction: t.pitchAction, activityBody: t.acceptedActivity }),
+      acceptSignal(tx, signalId, { nextAction: t.pitchAction, activityBody: t.acceptedActivity, pendingDealName: t.pendingDealName }),
     );
   } catch (err) {
     return { message: messageOf(err, t.acceptError) };

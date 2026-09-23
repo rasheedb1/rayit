@@ -1184,6 +1184,48 @@ export interface AcceptSignalOptions {
   nextAction?: string;
   /** El cuerpo de la actividad que cuenta de dónde salió el negocio. */
   activityBody?: string;
+  /**
+   * El título del negocio nuevo cuando la señal no dice nada más que la
+   * marca, en el idioma de la pantalla. Por defecto, PENDING_DEAL_NAME.
+   */
+  pendingDealName?: string;
+}
+
+/**
+ * El título de un negocio que nace de una señal sin nada propio que
+ * contar: como «Olla Fácil · Por definir» en el seed. Llamarlo como la
+ * marca era peor: Cotizar pintaba «Panadería Aurora / Panadería Aurora».
+ */
+export const PENDING_DEAL_NAME = 'Por definir';
+
+/** «Panadería Aurora», «PANADERIA AURORA» y « panaderia-aurora » son el mismo nombre. */
+function nameKey(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/**
+ * El título del negocio que abre una señal aceptada (pulido r4).
+ *
+ * Es el titular de la señal —«Abre 3 tiendas en Bogotá»—, que es lo que
+ * la persona vio y lo único que distingue este negocio de otro de la
+ * misma marca. Salvo cuando el titular no es de nadie: una fila de CSV
+ * sin nota (la pantalla lo inventa a partir del nombre: «X entró por una
+ * lista de marcas») o un titular que es solo el nombre de la marca. Ahí
+ * el negocio queda «Por definir», como en el seed, y nunca repite la marca.
+ */
+export function dealNameFromSignal(
+  headline: string,
+  evidence: Record<string, unknown>,
+  brandNames: (string | null | undefined)[],
+  pendingName?: string,
+): string {
+  const titular = headline.trim();
+  const note = typeof evidence.note === 'string' ? evidence.note.trim() : '';
+  const inventado = evidence.via === 'csv' && !note;
+  const key = nameKey(titular);
+  const esLaMarca = brandNames.some((n) => typeof n === 'string' && nameKey(n) === key);
+  if (!titular || !key || inventado || esLaMarca) return pendingName?.trim() || PENDING_DEAL_NAME;
+  return titular;
 }
 
 /** Días que se le dan al primer pitch cuando se acepta una señal. */
@@ -1309,7 +1351,7 @@ export async function acceptSignal(
     return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false };
   }
 
-  const dealName = evName ?? company.name ?? sig.headline_es;
+  const dealName = dealNameFromSignal(sig.headline_es, ev, [company.name, evName], opts.pendingDealName);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, name, stage_id, amount, currency,
                        next_action, next_action_due)
