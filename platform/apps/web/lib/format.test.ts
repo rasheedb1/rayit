@@ -39,6 +39,23 @@ describe("formatMoney", () => {
     expect(() => formatMoney("abc", "COP")).toThrow();
     expect(() => parseDecimal("")).toThrow();
   });
+  it("short abrevia en toda la escala: una columna se lee con un solo formato", () => {
+    // La columna Monto del pipeline mezclaba «COP 6,0 M» con «COP 924.370».
+    expect(formatMoney("6000000.00", "COP", { mode: "short" })).toBe("COP 6,0 M");
+    expect(formatMoney("924370.00", "COP", { mode: "short" })).toBe("COP 924 mil");
+    expect(formatMoney("1500", "COP", { mode: "short" })).toBe("COP 1,5 mil");
+    expect(formatMoney("850", "COP", { mode: "short" })).toBe("COP 850");
+    expect(formatMoney("0", "COP", { mode: "short" })).toBe("COP 0");
+    expect(formatMoney("-924370", "COP", { mode: "short" })).toBe("−COP 924 mil");
+    // Lo que redondeado a miles sería «1000 mil» ya se dice en millones.
+    expect(formatMoney("999400", "COP", { mode: "short" })).toBe("COP 999 mil");
+    expect(formatMoney("999500", "COP", { mode: "short" })).toBe("COP 1,0 M");
+    expect(formatMoney("1234567890", "COP", { mode: "short" })).toBe("COP 1.235 M");
+    // El sufijo de los miles es el del idioma del workspace.
+    expect(formatMoney("924370", "USD", { mode: "short", locale: "en-US" })).toBe("USD 924K");
+    // Y compact no cambia: bajo el millón sigue siendo la cifra entera.
+    expect(formatMoney("924370.00", "COP")).toBe("COP 924.370");
+  });
 });
 
 describe("enteros, compactos y porcentajes", () => {

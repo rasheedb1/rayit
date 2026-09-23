@@ -8,6 +8,7 @@ import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { aceptarCotizacion, crearCampanaDeCotizacion, rechazarCotizacion } from "../../actions";
 import { CopiarEnlace } from "../../copiar-enlace";
@@ -125,7 +126,7 @@ export default async function CotizacionPage({
       <PageHeader
         eyebrow={`${t.eyebrow} · ${quote.number}`}
         title={quote.companyName}
-        description={quote.dealName ?? undefined}
+        description={dealLabel(quote.companyName, quote.dealName) ?? undefined}
         aside={
           <div className="flex flex-wrap items-center gap-2">
             <Pill kind={pill.kind}>{pill.text}</Pill>

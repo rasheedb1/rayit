@@ -105,7 +105,22 @@ export function parseDecimal(amountDecimal: string): number {
   return Number(s);
 }
 
-export type MoneyMode = "compact" | "full";
+/**
+ * - "compact": millones abreviados ("COP 5,2 M"); bajo el millón, la cifra entera.
+ * - "short": abreviada en TODA la escala ("COP 924 mil", "COP 5,2 M").
+ *   Para una columna o un tablero donde conviven montos de varios
+ *   órdenes: con "compact" la misma columna mezclaba «COP 6,0 M» con
+ *   «COP 924.370» y no se leía de un vistazo. Añadido por Ventas
+ *   (pulido r4); "compact" no cambia.
+ * - "full": la cifra entera, con centavos si los hay.
+ */
+export type MoneyMode = "compact" | "short" | "full";
+
+/**
+ * Desde aquí "short" ya dice millones: 999.500 redondeado a miles sería
+ * «1000 mil», así que pasa a «1,0 M».
+ */
+const SHORT_MILLION_FROM = 999_500;
 
 /**
  * formatMoney("5200000.00", "COP") → compact "COP 5,2 M" · full "COP 5.200.000".
@@ -113,6 +128,9 @@ export type MoneyMode = "compact" | "full";
  * centavos se muestran solo si no son cero: "COP 5.200.000,50".
  * De mil millones en adelante, compact no lleva decimales: "COP 1.000 M".
  * Negativos con signo menos delante: "−COP 1,1 M".
+ * short: como compact desde el millón, y los miles con la notación
+ * compacta del idioma del locale: "COP 924 mil" (es), "COP 924K" (en).
+ * Un locale sin abreviatura para los miles (de) los deja enteros.
  */
 export function formatMoney(
   amountDecimal: string,
@@ -132,12 +150,18 @@ export function formatMoney(
   // La notación compacta ("5,2 M") es una aproximación a un decimal
   // por definición, así que ahí el double no quita nada: la cifra ya
   // está redondeada a propósito.
-  if (mode === "compact" && abs >= 1e6) {
+  if ((mode === "compact" && abs >= 1e6) || (mode === "short" && abs >= SHORT_MILLION_FROM)) {
     const millions = abs / 1e6;
     const body = millions >= 1000 ? decimals(Math.round(millions), 0, locale) : decimals(millions, 1, locale);
     return `${sign}${code} ${body} M`;
   }
-  if (mode === "compact") return `${sign}${code} ${decimalsFromText(absText, 0, locale)}`;
+  if (mode === "short" && abs >= 1000) {
+    // Como formatCompact: el idioma sin la variante de país, y el
+    // redondeo por defecto de Intl (1,5 mil · 12 mil · 924 mil).
+    const language = locale.split("-")[0] || DEFAULT_LOCALE;
+    return `${sign}${code} ${plain(numberFormat(language, { notation: "compact" }).format(abs))}`;
+  }
+  if (mode === "compact" || mode === "short") return `${sign}${code} ${decimalsFromText(absText, 0, locale)}`;
 
   // En "full" se enseña la cifra entera, y ahí sí importa cada centavo:
   // se formatea desde el texto y los centavos se leen del texto.

@@ -8,10 +8,10 @@ import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { cambiarPublicacionMediaKit } from "../actions";
-import { CopiarEnlace } from "../copiar-enlace";
-import { MESSAGES, mensajeDeError } from "../messages";
-import { GenerarMediaKitForm } from "./generar-form";
+import { cambiarPublicacionMediaKit } from "../../actions";
+import { CopiarEnlace } from "../../copiar-enlace";
+import { MESSAGES, mensajeDeError } from "../../messages";
+import { GenerarMediaKitForm } from "../generar-form";
 
 export const metadata: Metadata = { title: "Media kit" };
 export const dynamic = "force-dynamic";

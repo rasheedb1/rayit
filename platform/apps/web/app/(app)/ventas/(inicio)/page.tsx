@@ -8,13 +8,13 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 // El (i) de las cifras es de Resumen (lo envuelve sin tocar el Kpi del
 // kit, que es de Nicolás). Ventas lo usa tal cual para explicar el
 // ponderado y el trimestre, en vez de contarlo en la cabecera.
-import { KpiConInfo } from "../resumen/kpi-con-info";
-import { RadarView } from "./_radar/vista";
-import { PipelineView } from "./_pipeline/vista";
-import { withWorkspace } from "./_lib/db";
-import { MESSAGES } from "./_lib/messages";
-import { pipelineForma, tabKey } from "./_lib/estado";
-import { ModuleTabs } from "./_componentes/pestanas";
+import { KpiConInfo } from "../../resumen/kpi-con-info";
+import { RadarView } from "../_radar/vista";
+import { PipelineView } from "../_pipeline/vista";
+import { withWorkspace } from "../_lib/db";
+import { MESSAGES } from "../_lib/messages";
+import { pipelineForma, tabKey } from "../_lib/estado";
+import { ModuleTabs } from "../_componentes/pestanas";
 
 export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -68,17 +68,17 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
           note={pendingNote}
           href={kpis.pendingSignals > 0 ? "/ventas" : undefined}
         />
-        <Kpi label={t.kpis.open} value={f.money(kpis.openAmount, kpis.currency, { mode: "compact" })} note={t.kpis.openCount(f.int(kpis.openDeals))} />
+        <Kpi label={t.kpis.open} value={f.money(kpis.openAmount, kpis.currency, { mode: "short" })} note={t.kpis.openCount(f.int(kpis.openDeals))} />
         <KpiConInfo
           label={t.kpis.weighted}
-          value={f.money(kpis.weightedAmount, kpis.currency, { mode: "compact" })}
+          value={f.money(kpis.weightedAmount, kpis.currency, { mode: "short" })}
           note={openNote ?? t.kpis.weightedNote}
           info={[...t.kpis.weightedInfo]}
           infoLabel={t.kpis.infoLabel(t.kpis.weighted)}
         />
         <KpiConInfo
           label={t.kpis.won}
-          value={f.money(kpis.wonQuarter, kpis.currency, { mode: "compact" })}
+          value={f.money(kpis.wonQuarter, kpis.currency, { mode: "short" })}
           note={kpis.wonQuarterCount === 0 ? t.kpis.wonNoteZero : t.kpis.wonCount(f.int(kpis.wonQuarterCount))}
           info={[...t.kpis.wonInfo]}
           infoLabel={t.kpis.infoLabel(t.kpis.won)}

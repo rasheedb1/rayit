@@ -13,6 +13,7 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor, type FormatSettings } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import type { ActionState } from "@/lib/forms";
 import { MESSAGES, nombreMetrica, nombreModificador } from "../../messages";
 import { etiquetaImpuesto } from "../../_lib/acordado";
@@ -298,7 +299,7 @@ export function CotizacionForm({
               placeholder={t.sinNegocio}
               options={deals.map((d) => ({
                 value: d.id,
-                label: `${d.companyName} · ${d.name} · ${d.stageLabel}`,
+                label: [d.companyName, dealLabel(d.companyName, d.name), d.stageLabel].filter(Boolean).join(" · "),
               }))}
             />
           </Field>

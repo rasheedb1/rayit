@@ -9,9 +9,9 @@ import { MESSAGES } from "../../messages";
  * genérico de (app), que ofrece «Volver al plan»; aquí la salida es la
  * lista de cotizaciones, como «Volver a Empresas» en Ventas.
  *
- * La respuesta sale con 200 y no con 404: (app)/loading.tsx empieza a
- * transmitir la página antes de que el segmento sepa que no existe.
- * Next.js añade igual `noindex`, y es una ruta privada.
+ * La respuesta sale con 404 de verdad (pulido r4): ningún loading.tsx
+ * envuelve este segmento, así que el notFound() llega antes del primer
+ * byte. Lo prueba app/(app)/no-existe.test.tsx.
  */
 export default function CotizacionNoEncontrada() {
   const t = MESSAGES.noEncontrado.cotizacion;

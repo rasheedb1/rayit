@@ -1,9 +1,14 @@
-import { MESSAGES } from "./messages";
+import { MESSAGES } from "../messages";
 
 /**
  * Esqueleto del segmento mientras la base responde: la cabecera, el
  * bloque de condiciones y cinco filas del alto de la tabla real, para
  * que una consulta lenta no deje la navegación sin señal.
+ *
+ * Vive en el grupo de rutas `(tarifario)` —que no cambia la URL— y no
+ * en `cotizar/`: ahí era el fallback de Suspense de TODO Cotizar, también
+ * de /cotizar/cotizaciones/<id>, y mandaba un 200 antes de que un id
+ * inexistente llegara a notFound() (ver app/(app)/_lib/esqueleto.tsx).
  */
 export default function CotizarLoading() {
   const t = MESSAGES.loading;

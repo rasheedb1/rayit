@@ -22,6 +22,7 @@ import {
   ContactNotOwned,
   DuplicateDomain,
   PITCH_ACTION,
+  PENDING_DEAL_NAME,
   PITCH_DUE_DAYS,
   SignalAlreadyReviewed,
   VentasError,
@@ -553,9 +554,33 @@ describe('VEN-2 · radar', () => {
     const pipeline = await laura((tx) => listPipeline(tx));
     const nuevo = pipeline.find((d) => d.id === dealId);
     assert.equal(nuevo?.companyName, 'Té Sereno');
+    // El negocio se llama como lo que se vio, no como la marca (pulido r4).
+    assert.equal(nuevo?.name, 'Pauta nueva en Meta');
     assert.equal(nuevo?.stageId, 'nuevo');
     assert.equal(nuevo?.nextAction, PITCH_ACTION);
     assert.equal(nuevo?.dueState, 'futuro');
+  });
+
+  test('el negocio que abre una señal nunca se llama como la marca: su titular, o «Por definir»', async () => {
+    // A mano, con titular: el negocio toma el titular.
+    const aMano = await laura((tx) => createSignal(tx, { companyName: 'Panadería Aurora', headlineEs: 'Abre 3 tiendas en Bogotá' }));
+    assert.ok(aMano.id);
+    const conTitular = await laura((tx) => acceptSignal(tx, aMano.id!));
+    // De una lista sin nota: el titular lo inventó la pantalla con el nombre.
+    await laura((tx) => importSignals(tx, [{ name: 'Lácteos Brisa' }], { headline: (n) => `${n} entró por una lista de marcas` }));
+    // Y uno cuyo titular es solo la marca, escrita de otra forma.
+    const soloMarca = await laura((tx) => createSignal(tx, { companyName: 'Miel Serrana', headlineEs: 'MIEL SERRANA' }));
+    const bandeja = await laura((tx) => listSignals(tx, { limit: 200 }));
+    const deLista = bandeja.find((s) => s.companyName === 'Lácteos Brisa');
+    assert.ok(deLista && soloMarca.id);
+    const sinTitular = await laura((tx) => acceptSignal(tx, deLista.id, { pendingDealName: 'Por definir' }));
+    const marca = await laura((tx) => acceptSignal(tx, soloMarca.id!));
+
+    const pipeline = await laura((tx) => listPipeline(tx));
+    const nombre = (id: string) => pipeline.find((d) => d.id === id)?.name;
+    assert.equal(nombre(conTitular.dealId), 'Abre 3 tiendas en Bogotá');
+    assert.equal(nombre(sinTitular.dealId), 'Por definir');
+    assert.equal(nombre(marca.dealId), PENDING_DEAL_NAME);
   });
 
   test('una marca descartada no vuelve a entrar por otra fuente, por una lista ni a mano con solo su nombre', async () => {

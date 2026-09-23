@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { MESSAGES } from "./messages";
-import { TarifarioTabla } from "./tarifario-tabla";
-import { BASIS_VACIO, leerBasis } from "./_lib/tarifario";
+import { MESSAGES } from "../messages";
+import { TarifarioTabla } from "../tarifario-tabla";
+import { BASIS_VACIO, leerBasis } from "../_lib/tarifario";
 
 export const metadata: Metadata = { title: "Cotizar" };
 // Lee la base en cada petición: nada de esto se prerenderiza.

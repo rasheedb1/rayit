@@ -5,6 +5,7 @@ import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
+import { dealLabel } from "@/lib/negocio";
 import { MESSAGES } from "../_lib/messages";
 import { needsNextAction, pillForDue, type PipelineForma } from "../_lib/estado";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
@@ -52,7 +53,7 @@ export function PipelineView({
     stageId: d.stageId,
     stageLabel: d.stageLabel,
     daysInStage: d.daysInStage,
-    amountText: d.amount ? f.money(d.amount, d.currency, { mode: "compact" }) : null,
+    amountText: d.amount ? f.money(d.amount, d.currency, { mode: "short" }) : null,
     // Un negocio cerrado no tiene siguiente acción aunque la fila la
     // conserve: «Enviar pitch» en un ganado solo confunde.
     nextAction: d.isWon || d.isLost ? null : d.nextAction,
@@ -67,7 +68,7 @@ export function PipelineView({
     id: s.stageId,
     label: s.labelEs,
     countText: f.int(s.dealCount),
-    amountText: f.money(s.amount, undefined, { mode: "compact" }),
+    amountText: f.money(s.amount, undefined, { mode: "short" }),
   }));
 
   return (
@@ -122,7 +123,7 @@ function PipelineList({ deals }: { deals: BoardDeal[] }) {
       key: "deal",
       header: t.columns.deal,
       render: (d) => (
-        <CellMain sub={d.name !== d.companyName ? d.name : undefined}>
+        <CellMain sub={dealLabel(d.companyName, d.name) ?? undefined}>
           <Link href={`/ventas/empresas/${d.companyId}`} className="hover:underline">
             {d.companyName}
           </Link>
