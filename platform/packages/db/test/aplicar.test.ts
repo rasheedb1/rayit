@@ -25,6 +25,7 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  '0034': 'de ACC-3 (0034_access_control.sql, rama nicolas/ACC-3-esquema-accesos); ACC-6 tomó 0035',
 };
 
 let dir = '';

@@ -232,7 +232,11 @@ export function definirPruebasDeAlcance(
   const funciones = funcionesExportadas(modulo);
   const conConsulta = Object.entries(casos).filter((e): e is [string, Exclude<CasoDeAlcance, 'pura'>] => e[1] !== 'pura');
 
-  describe(`alcance en queries/${nombre}.ts`, () => {
+  // El límite de 120 s del script (--test-timeout) también se aplica al
+  // describe ENTERO, y este agrupa más de treinta pruebas sobre una base:
+  // con la máquina cargada pasó de 120 s, se canceló y arrastró el resto
+  // de la suite (--test-isolation=none). Cada prueba sigue con el suyo.
+  describe(`alcance en queries/${nombre}.ts`, { timeout: 900_000 }, () => {
     let antes: Record<string, string | null>;
 
     before(async () => {

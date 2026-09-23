@@ -40,7 +40,7 @@ after(async () => {
   await t.close();
 });
 
-describe('la tabla y su aislamiento', () => {
+describe('la tabla y su aislamiento', { timeout: 600_000 }, () => {
   test('membership_scope existe con RLS forzada, una política de lectura por workspace, y mc_app solo puede leer', async () => {
     const [rel] = await t.raw<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
       `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'membership_scope'`,
@@ -117,7 +117,7 @@ describe('la tabla y su aislamiento', () => {
   });
 });
 
-describe('scope_allows(): la semántica', () => {
+describe('scope_allows(): la semántica', { timeout: 600_000 }, () => {
   test('sin filas de alcance (la dueña), todo cae en alcance, NULL incluido', async () => {
     await duena(async (tx) => {
       assert.equal(await allows(tx, 'creator', CREATOR_SOFIA), true);
@@ -188,7 +188,7 @@ describe('scope_allows(): la semántica', () => {
   });
 });
 
-describe('scopeFilter() y assertScopeAllows()', () => {
+describe('scopeFilter() y assertScopeAllows()', { timeout: 600_000 }, () => {
   test('scopeFilter compone las tres preguntas; null oculta a quien tenga ese alcance; any es un ARRAY(…)', () => {
     const tengo = (kind: string) =>
       `EXISTS (SELECT 1 FROM membership_scope s WHERE s.workspace_id = current_workspace_id() AND s.user_id = current_user_id() AND s.scope_type = '${kind}')`;
