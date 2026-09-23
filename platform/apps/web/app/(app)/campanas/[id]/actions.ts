@@ -36,6 +36,7 @@ import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@
 import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, TEXTOS_REPORTE } from "../_lib/messages";
+import { isGrantMissing } from "../_lib/errores-db";
 import { getMarcaService } from "../_lib/marca-server";
 import { queryDeMarca } from "../_lib/aviso-marca";
 import type { Codificacion } from "@/lib/csv";
@@ -383,10 +384,6 @@ export async function importarCsvVentas(_prev: ImportacionState, formData: FormD
 // Resultado (CAM-5)
 // ---------------------------------------------------------------------
 
-/** Postgres «permission denied» (42501): la base aún no deja a mc_app escribir campaign_result. */
-function isPermissionDenied(err: unknown): boolean {
-  return typeof err === "object" && err !== null && "code" in err && err.code === "42501";
-}
 
 /**
  * Botón «Recalcular» de la sección «Resultado». Se usa con
@@ -405,7 +402,7 @@ export async function recalcularResultado(campaignId: string): Promise<void> {
     const values = await withWorkspace((tx) => computeCampaignResult(tx, campaignId));
     if (!values) error = "Esa campaña no existe en este espacio.";
   } catch (err) {
-    error = isPermissionDenied(err) ? MESSAGES.resultado.recomputeDenied : messageOf(err, MESSAGES.resultado.recomputeError);
+    error = isGrantMissing(err) ? MESSAGES.resultado.recomputeDenied : messageOf(err, MESSAGES.resultado.recomputeError);
   }
   paths(campaignId);
   backWithError(campaignId, error);

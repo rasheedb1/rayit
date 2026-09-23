@@ -25,7 +25,6 @@
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ReactElement } from "react";
-import type { PublicReport } from "@mc/core";
 
 const redirect = vi.hoisted(() => vi.fn());
 const NO_ENCONTRADO = "NEXT_HTTP_ERROR_FALLBACK;404";
@@ -39,11 +38,12 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ "user-agent": "Mozilla/5.0 (la marca)", "x-forwarded-for": "203.0.113.9" }) }));
 
 import { getCampaign, getCampaignResult, listCampaignReports, recordBrandSnapshot } from "@mc/db";
+import type { PublicReportView } from "@mc/db/queries/campanas";
 import { closeDb, getDbMode, withWorkspace } from "@/lib/db";
 import { aceptarCotizacion, crearCampanaConVentana } from "@/app/(app)/cotizar/actions";
 import { facturarCampana } from "@/app/(app)/finanzas";
 import ReportePublicoPage from "@/app/(public)/reporte/[slug]/page";
-import { facturaHref } from "./_lib/rutas";
+import { invoiceHref } from "./_lib/rutas";
 import {
   asociarPost, cambiarEstadoCampana, generarReporte, importarCsvVentas, marcarReporteEnviado, recalcularResultado, registrarAporte,
 } from "./[id]/actions";
@@ -70,9 +70,9 @@ function form(campos: Record<string, string | File>): FormData {
 }
 
 /** Lo que pinta /reporte/[slug]: el payload congelado, o el 404. */
-async function abrirPublico(slug: string): Promise<PublicReport | typeof NO_ENCONTRADO> {
+async function abrirPublico(slug: string): Promise<PublicReportView | typeof NO_ENCONTRADO> {
   try {
-    const el = (await ReportePublicoPage({ params: Promise.resolve({ slug }) })) as ReactElement<{ r: PublicReport }>;
+    const el = (await ReportePublicoPage({ params: Promise.resolve({ slug }) })) as ReactElement<{ r: PublicReportView }>;
     return el.props.r;
   } catch (err) {
     if ((err as { digest?: string }).digest === NO_ENCONTRADO) return NO_ENCONTRADO;
@@ -204,8 +204,8 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     expect(factura).toHaveLength(1);
     expect(factura[0]).toMatchObject({ status: "draft", company_id: COMPANY_NUTRIVE });
     // La ruta que enlaza la ficha (un solo sitio) es la misma a la que redirige Finanzas.
-    expect(facturaHref(factura[0]!.id)).toBe(`/finanzas/facturas/${factura[0]!.id}`);
-    expect(redirect).toHaveBeenLastCalledWith(facturaHref(factura[0]!.id));
+    expect(invoiceHref(factura[0]!.id)).toBe(`/finanzas/facturas/${factura[0]!.id}`);
+    expect(redirect).toHaveBeenLastCalledWith(invoiceHref(factura[0]!.id));
 
     // ── 7 · CAM-6: borrador (404 público) → enviado → apertura pública ──
     await generarReporte(campaignId);
@@ -221,7 +221,7 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
 
     const abierto = await abrirPublico(borrador!.slug);
     expect(abierto).not.toBe(NO_ENCONTRADO);
-    const doc = abierto as PublicReport;
+    const doc = abierto as PublicReportView;
     expect(doc.campaign.name).toBe(nacida!.name);
     expect(doc.company.name).toBe("Nutrivé");
     expect(doc.agreed?.quoteNumber).toBe("COT-2026-008");
@@ -248,7 +248,7 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     await registrarAporte({}, form({ campaignId, kind: "code_redemptions", day: "2026-09-10", value: "300", currency: "", notes: "" }));
     await recalcularResultado(campaignId);
     expect(await withWorkspace((tx) => getCampaignResult(tx, campaignId).then((x) => [x?.codeRedemptions, x?.cpa]))).toEqual([300, "25783.33"]);
-    const otraVez = (await abrirPublico(borrador!.slug)) as PublicReport;
+    const otraVez = (await abrirPublico(borrador!.slug)) as PublicReportView;
     expect(otraVez.result).toEqual(doc.result);
     expect(otraVez.brandFollowers).toEqual(doc.brandFollowers);
 
@@ -262,10 +262,10 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     expect(nueva.status).toBe("draft");
     await marcarReporteEnviado(campaignId, nueva.id, "pdf");
     expect(await estadoDelReporte(borrador!.id)).toMatchObject({ superseded_by: nueva.id });
-    const vieja = (await abrirPublico(borrador!.slug)) as PublicReport;
+    const vieja = (await abrirPublico(borrador!.slug)) as PublicReportView;
     expect(vieja.superseded).toBe(true);
     expect(vieja.result).toEqual(doc.result);
-    const vigente = (await abrirPublico(nueva.slug)) as PublicReport;
+    const vigente = (await abrirPublico(nueva.slug)) as PublicReportView;
     expect(vigente.result).toMatchObject({ codeRedemptions: 300, cpa: "25783.33" });
   }, 300_000);
 });

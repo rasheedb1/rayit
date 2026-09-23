@@ -1716,10 +1716,10 @@ export async function getCampaignResult(tx: WorkspaceTx, campaignId: string): Pr
 }
 
 /**
- * ¿Puede la web escribir campaign_result? Desde 0025 mc_app solo la lee
- * (la consolida el worker). El botón «Recalcular» se enseña solo si la
- * base lo permite: el día que se aplique el GRANT propuesto en
- * docs/propuestas/CAM-5.md §2, aparece sin tocar código.
+ * ¿Puede la web escribir campaign_result? 0025 le quitó a mc_app la
+ * escritura y la migración 0041 se la devolvió (INSERT y UPDATE, sin
+ * DELETE). El botón «Recalcular» se enseña solo si la base lo permite: en
+ * una base sin 0041 la ficha dice «Se recalcula cada mañana», sin bandera.
  */
 export async function canRecomputeResult(tx: WorkspaceTx): Promise<boolean> {
   const { rows } = await tx.query<{ ok: boolean }>(

@@ -10,7 +10,8 @@
  *     (CPM 11 800) a las recalculadas (4 353,93), y una segunda vez deja
  *     UNA sola fila con las mismas cifras;
  *   - el Editor ve Campañas pero no tiene campanas.resultado.calcular:
- *     SinPermisoError y la fila no cambia;
+ *     SinPermisoError y la fila no cambia (sin depender del orden: compara
+ *     antes y después);
  *   - una campaña de otro workspace: «no existe en este espacio» y ninguna
  *     fila nueva, ni vista desde ese workspace.
  */
@@ -108,10 +109,10 @@ afterAll(async () => {
 });
 
 describe("«Recalcular» con 0041 y los roles de 0034", () => {
-  test("el Editor ve Campañas pero no recalcula: SinPermisoError y la fila sigue con las cifras del mock", async () => {
+  test("el Editor ve Campañas pero no recalcula: SinPermisoError y la fila no cambia", async () => {
     process.env.DEMO_USER_ID = EDITOR;
     const antes = await resultado();
-    expect(antes.fila?.cpm).toBe("11800.00");
+    expect(antes.n).toBe(1);
     await expect(recalcularResultado(CAMPAIGN_CAFE_ALMA)).rejects.toBeInstanceOf(SinPermisoError);
     expect(await resultado()).toEqual(antes);
   }, 120_000);

@@ -6,7 +6,13 @@
  * Finanzas) redirige justo a esta misma ruta.
  */
 
-/** El detalle de una factura de Finanzas (FIN-1). */
-export function facturaHref(invoiceId: string): string {
+/**
+ * El detalle de una factura de Finanzas (FIN-1). Vive en Campañas y no en
+ * app/(app)/finanzas/index.ts para no tocar Finanzas mientras su cierre
+ * corre en paralelo; lo que ata las dos es la prueba del ciclo, que exige
+ * que facturarCampana redirija justo aquí. Moverla al índice de Finanzas es
+ * cambiar una importación.
+ */
+export function invoiceHref(invoiceId: string): string {
   return `/finanzas/facturas/${invoiceId}`;
 }

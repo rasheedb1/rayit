@@ -41,6 +41,14 @@
 -- deploy, la ficha vieja empieza a enseñar «Recalcular» y la acción vieja
 -- (requirePermission('campanas.resultado.calcular') + el mismo UPSERT)
 -- escribe una fila válida. Nada de lo que ya corre lee o escribe distinto.
+-- Lo único del hueco: el código viejo enseña el botón según la base y no
+-- según el rol, así que un rol sin el permiso (Editor, Solo lectura) lo ve
+-- y, al pulsarlo, requirePermission lo rechaza en la frontera de error sin
+-- escribir nada. El código de esta misma rama ya lo esconde por rol.
+--
+-- El disparador de referencias también corre para mc_worker (una consulta
+-- por fila a campaign y a workspace): son dos búsquedas por clave primaria
+-- por campaña y día, y la guardia lo exige en cuanto mc_app escribe.
 --
 -- Re-ejecutable: GRANT y REVOKE son idempotentes; DROP POLICY IF EXISTS y
 -- DROP TRIGGER IF EXISTS antes de crear.

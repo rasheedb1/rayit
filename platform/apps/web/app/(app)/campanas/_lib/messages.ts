@@ -104,6 +104,13 @@ export const MESSAGES = {
       } satisfies Record<BrandCsvRejectReason, string>,
     },
   },
+  /** «Facturas» de la ficha (CAM-1 → FIN-1). */
+  facturas: {
+    cancelada: "Una campaña cancelada no se factura.",
+    sinFactura: "Sin factura todavía. «Facturar» la crea en borrador con el monto acordado.",
+    /** El rol entra a Campañas pero no tiene finanzas.factura.crear (el Mánager). */
+    sinPermiso: "Sin factura todavía. Facturar lo hace quien tenga ese permiso en su rol.",
+  },
   /** «Resultado» (CAM-5): los seis KPIs de campaign_result. */
   resultado: {
     title: "Resultado",
