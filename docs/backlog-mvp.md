@@ -46,17 +46,32 @@ Mis videos, Tendencias del nicho, Ideas y guiones, Laboratorio de
 video, Vista agencia, predictor, envío automático de outbound, adelanto
 de pagos.
 
-La base de datos ya tiene las 88 tablas. **No hace falta ninguna
-migración de esquema para el MVP.** Si aparece una, es una migración
-nueva, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
+**Entró después** (decidido el 22 de septiembre, sobre la primera
+versión de este documento): los **roles dentro de una cuenta**, épico
+ACC-1 a ACC-5 y ACC-8. Los creadores del piloto tienen mánager, y sin
+roles el piloto se hace dándole al mánager la contraseña del creador —
+que es justo lo que el producto dice resolver. Lo que sigue fuera es el
+**alcance** (ACC-6, ACC-7) y las **agencias** (épico AGE): un workspace
+de creador tiene un solo creador, así que no hay nada que acotar hasta
+que existan las agencias. El diseño, y lo que se corrió para que quepa,
+están en
+[`propuestas/ACC-accesos-y-roles.md`](propuestas/ACC-accesos-y-roles.md)
+y en §6.
+
+La base de datos ya tiene las 88 tablas. **Al MVP le hace falta una sola
+migración de esquema, `0023_access_control.sql` (ACC-3)**, y sale de esa
+decisión; el resto del producto no pide ninguna. Toda migración es un
+archivo nuevo, nunca una edición. Ya apareció la primera: `0014_worker_grants.sql`
 (CON-2), solo `GRANT`s al rol `mc_worker`, aplicada en Supabase el 21 de
 septiembre; `0015_connection_secret` (CON-3, aplicada) y
-`0016_campaign_quote_unique` (CAM-2, pendiente) el 22, y
-`0017_outbound_policy_rls` y `0018_child_tables_rls` (CIM-2, pendientes)
-el mismo día. La siguiente es `0019_…`: antes de crearla, `git fetch` y
-mirar el número más alto en todas las ramas activas. Desde CIM-2
-`make db.check` (y el job «esquema» del CI) falla si dos archivos
-comparten número.
+`0016_campaign_quote_unique` (CAM-2) y `0022_public_profile_access`
+(CON-10) el 22. 0017 a 0021 (RLS de CIM-2 y de la integración) están
+aplicadas en Supabase y viven en `rasheed/integracion`: no se reciclan.
+Números reservados: `0023_access_control` (ACC-3), `0024` y `0025`
+(endurecimiento de RLS), `0026_public_share` (Cotizar, COT-2 a COT-4) y
+`0027`/`0028` (CIM-3). Antes de crear cualquiera, `git fetch` y mirar el
+número más alto en todas las ramas activas. Desde CIM-2 `make db.check`
+(y el job «esquema» del CI) falla si dos archivos comparten número.
 
 ---
 
@@ -229,6 +244,8 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | CON-6 | Línea base y puntaje: `compute.baseline` y `compute.post_score` con `packages/core/scoring.ts`. Con menos de ocho videos, `is_reliable = false`. | M | CON-5 | Un post con el doble de views que la mediana queda como outlier. |
 | CON-7 | Demografía de audiencia (`collect.demographics`) respetando `metric_requirement`. | M | CON-5 | Con la respuesta grabada, la tabla coincide con el fixture; una cuenta personal de TikTok explica por qué no hay demografía. |
 | CON-8 | OAuth de YouTube. | M | CON-3 | Igual que CON-3 para un canal de prueba. |
+| CON-10 | Cuentas por @ con datos públicos: `public_profile`, fuentes oficiales (business_discovery con token casa, YouTube con API key, TikTok solo identidad), `collect.account_metrics`, pantalla «Agregar cuenta». | L | CON-1 | Agregar un @ deja la fila con su snapshot del día y el worker la actualiza a diario. **Hecha, en `main` el 22-sep** (§9). |
+| CON-12 | Proveedor de datos de TikTok por @ (Apify, EnsembleData o Phyllo) sobre `PublicProfileSource`, `access_mode = 'aggregator'`. Opción futura, de pago. | M | CON-10 | Agregar un @ de TikTok deja seguidores y vistas sin subir nada. **Pendiente; solo si el CSV se queda corto.** |
 | CON-9 | Trámites: formulario de Accounts API de TikTok, App Review de Meta, auditoría de Google. **Rasheed**, día 1. | — | — | Los tres iniciados, con número de caso en `docs/tramites.md`. |
 
 ### RES · Resumen (Rasheed)
@@ -300,9 +317,52 @@ a partir de CadenceV1.0):
 | FIN-7 | Ingresos de plataformas por CSV o a mano. | S | FIN-6 | Un CSV de AdSense aparece en su mes. |
 | FIN-8 | Configuración financiera del workspace: moneda, reserva, IVA, retención, datos fiscales. | S | CIM-3 | Cambiar el porcentaje afecta los pagos siguientes, no los anteriores. |
 
+### ACC · Accesos y roles dentro de una cuenta
+
+Una cuenta no es una persona. El creador tiene mánager, editor y
+contador; la agencia, un equipo. Hoy `membership` guarda un rol que
+**ningún código lee**: entrar a un workspace es tener todo el workspace.
+El diseño completo, con el esquema y la matriz de roles, está en
+[`propuestas/ACC-accesos-y-roles.md`](propuestas/ACC-accesos-y-roles.md).
+
+**Los creadores del piloto tienen mánager** (confirmado el 22 de
+septiembre). Eso mete ACC-1 a ACC-5 y ACC-8 **dentro del MVP**: sin
+ellas, el piloto se hace dándole al mánager la cuenta del creador, que
+es justo lo que el producto tiene que evitar. Lo que **no** necesita el
+piloto es el alcance (ACC-6, ACC-7): un workspace de creador tiene un
+solo creador, así que no hay nada que acotar. Eso sigue en el sprint 6,
+con las agencias, que es donde el alcance empieza a significar algo.
+
+| Id | Historia | Dueño | Tam. | Depende de | Terminado cuando |
+|---|---|---|---|---|---|
+| ACC-1 | `packages/core/permisos.ts`: catálogo de permisos `<módulo>.<recurso>.<acción>`, roles de fábrica y `can()`. Puro, sin base ni pantalla. | Nicolás | S | — | Cada Server Action nueva abre con su `requirePermission()`; una prueba comprueba que el «Mánager» no trae `finanzas.flujo.ver`. |
+| ACC-2 | `withAudit()`: toda escritura de dinero, publicación o cuenta conectada deja fila en `audit_log` con actor, `before` y `after`. | Nicolás | S | CIM-2 | Crear una factura y conectar una cuenta dejan su fila; una prueba recorre las escrituras de `queries/` y falla si alguna no audita. |
+| ACC-3 | Migración `0023_access_control.sql`: `permission`, `role`, `role_permission`, `membership.role → role_id`, `membership_scope`, `invitation`, `workspace_grant`, `audit_log.on_behalf_of_workspace_id`. Semilla de los roles de fábrica. | SQL y semilla Nicolás (§3.1); esquema Drizzle, revisión y aplicación Rasheed | M | ACC-1, CIM-3 | Migra en limpio y en Supabase; el seed deja los cinco roles de creador y los cinco de agencia con su matriz. |
+| ACC-4 | Pantalla **Equipo**, lo del piloto: invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol, revocar. Al invitar a un mánager, dos casillas explícitas: «también puede ver mis finanzas» y «también puede conectar mis cuentas», apagadas. Nadie otorga lo que no tiene; el último dueño no se puede quitar. | Rasheed | M | ACC-3 | Un creador invita a su mánager, entra por el enlace y ve Campañas pero no el flujo de caja. Con la casilla marcada sí lo ve. Intentar quitar al último dueño falla con mensaje. |
+| ACC-5 | Permisos en el marco: `requireModule()` recibe el permiso mínimo; el menú esconde lo que no se puede abrir; una ruta sin permiso da 404, no 403. | Nicolás | S | ACC-3 | Con sesión de «Contador», `/campanas` responde 404 y no aparece en el menú. |
+| ACC-6 | Alcance en las consultas: `scopeFilter()` en `packages/db` compuesto por cada `queries/<modulo>.ts`, con prueba por módulo. | los dos, por módulo | M | ACC-3 | Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada. |
+| ACC-7 | Endurecimiento: política RLS por `creator_id` en `social_connection`, `post`, `campaign` y `deal`. | Rasheed | M | ACC-6 | Una consulta cruda sin `scopeFilter()` tampoco devuelve filas de otro creador. |
+| ACC-8 | Consentimiento delegado: quien conecta una cuenta ajena no es quien consiente. `data_consent.evidence` lleva `acted_by` y el creador recibe notificación. | Nicolás | S | CON-3, ACC-3 | El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y le llega la notificación. |
+| ACC-9 | Matriz de permisos editable y roles a medida: la pantalla que muestra los permisos uno por uno y deja crear un rol propio (`role` con `workspace_id`). | Rasheed | M | ACC-4 | Una agencia crea el rol «Becario» con tres permisos y se lo asigna a alguien. |
+
+### AGE · Agencias (fase 2, tras `agency_workspace`)
+
+La agencia **no absorbe** al creador: recibe una concesión sobre su
+workspace, revocable en una fila (decisión 6). Eso deja la tenencia y
+RLS exactamente como están y hace que un creador pueda tener dos
+agencias, o irse de la suya sin perder su historia.
+
+| Id | Historia | Dueño | Tam. | Depende de | Terminado cuando |
+|---|---|---|---|---|---|
+| AGE-1 | Concesión de acceso: la agencia solicita, el creador acepta con rol, alcance y vencimiento; revocar en un clic desde cualquiera de los dos lados. | por definir | M | ACC-4 | El creador ve «Agencia X puede ver tus campañas hasta el 30 de junio» y al revocar la agencia pierde el acceso en la siguiente petición. |
+| AGE-2 | Sesión delegada: la persona de agencia entra al workspace del creador con el rol de la concesión; la interfaz avisa en qué cuenta está actuando; `audit_log` guarda `actor_kind = 'delegate'` y `on_behalf_of_workspace_id`. | por definir | M | AGE-1 | Una acción hecha por la agencia aparece en la bitácora del creador con los dos nombres. |
+| AGE-3 | Panel de agencia: consolidado de los creadores concedidos (campañas activas, por cobrar, entregas de la semana) como proyección de solo lectura que escribe el worker, con `DataAsOf`. | por definir | L | AGE-2 | Treinta creadores en una tabla, con su fecha de corte; ninguna acción se ejecuta desde ahí, todas abren el workspace del creador. |
+| AGE-4 | Marcas y equipo de la agencia: `company` como cartera, ejecutivos asignados a marcas y campañas usando `membership_scope`. | por definir | L | ACC-6, AGE-3 | Un ejecutivo con dos marcas asignadas no ve las campañas de las otras. |
+| AGE-5 | Portal de marca por enlace firmado con vencimiento, sobre el reporte congelado de CAM-6. Sin membresía (decisión 8). | por definir | M | CAM-6 | La marca abre su reporte sin cuenta; el enlace vencido pide uno nuevo y no filtra nada. |
+
 ---
 
-## 6. Calendario: cinco sprints de dos semanas
+## 6. Calendario: cinco sprints de dos semanas, más el sexto de la fase 2
 
 Con los tamaños de arriba, el backlog pide 49 días de Rasheed y 59 de
 Nicolás (extremo bajo). A diez días hábiles por sprint y persona, eso
@@ -313,12 +373,40 @@ el quinto es lo que depende de aprobaciones, más el piloto.
 |---|---|---|
 | **1** · semanas 1 y 2 | CIM-1, CIM-2, CIM-3 (días 1 a 3) · CIM-6, CIM-7, CON-9 · VEN-1, VEN-2 | CIM-4, CIM-5, CIM-8 · CON-2 · FIN-1 |
 | **2** · semanas 3 y 4 | RES-1, RES-2 · VEN-3 | CON-1, CON-3 · CAM-1, CAM-2 |
-| **3** · semanas 5 y 6 | VEN-4, VEN-5 · COT-1, COT-2 | CON-5, CON-6 · FIN-2, FIN-3, FIN-5 |
-| **4** · semanas 7 y 8 | COT-3, COT-4 · VEN-6 | CAM-3, CAM-4, CAM-5, CAM-6 · FIN-6 |
-| **5** · semanas 9 y 10 | RES-3, RES-4 · VEN-7, VEN-8 · piloto | CON-4, CON-7, CON-8 · FIN-4, FIN-7, FIN-8 |
+| **3** · semanas 5 y 6 | VEN-4, VEN-5 · COT-1, COT-2 | CON-5, CON-6 · FIN-2, FIN-3, FIN-5 · **ACC-1, ACC-2** |
+| **4** · semanas 7 y 8 | COT-3, COT-4 · VEN-6 · **ACC-3** (revisar y aplicar) | CAM-3, CAM-4, CAM-5, CAM-6 · FIN-6 · **ACC-3** (SQL y semilla) |
+| **5** · semanas 9 y 10 | RES-3 · **ACC-4** · piloto | CON-4, CON-7, CON-8 · FIN-4, FIN-8 · **ACC-5, ACC-8** |
+| **6** · fase 2, sin fecha | ACC-7, ACC-9 · AGE-1, AGE-2 · **RES-4, VEN-7, VEN-8** | ACC-6 · AGE-3 · **FIN-7** |
 
-Carga estimada por sprint (extremo bajo, sobre 10 días): Rasheed 12 ·
-12 · 11 · 9 · 5. Nicolás 12 · 13 · 12 · 12 · 10.
+Carga estimada por sprint antes de los roles (extremo bajo, sobre 10
+días): Rasheed 12 · 12 · 11 · 9 · 5. Nicolás 12 · 13 · 12 · 12 · 10.
+
+**Lo que se corrió para que quepan los roles.** Que los creadores del
+piloto tengan mánager mete ~7 días nuevos en un plan que ya iba al
+110 %. No se absorbe solo; sale de aquí:
+
+| Qué se corre al sprint 6 | De quién | Por qué es lo que menos duele |
+|---|---|---|
+| VEN-7 (brief de outbound) y VEN-8 (deal perdido con motivo) | Rasheed, 2 días | Las dos son S y ninguna es parte del ciclo que se demuestra |
+| RES-4 (demografía en pantalla) | Rasheed, 1 día | Depende de CON-7, que a su vez depende de aprobaciones que pueden no llegar (§8.4) |
+| FIN-7 (ingresos de plataformas por CSV) | Nicolás, 1 día | No la toca ningún creador en un piloto de dos semanas |
+
+El punto frágil es el **sprint 4 de Nicolás**: CAM-3 a CAM-6 es el ciclo
+completo que se demuestra al final del cuarto y no se puede tocar. Si
+aprieta, lo que se mueve es el SQL de ACC-3 a la semana 9 —Rasheed tiene
+aire en el sprint 5— y nunca ACC-4, que es lo que el piloto necesita
+enseñar. Las cifras vivas de cada sprint las calcula el tablero en
+`apps/web/content/backlog.ts`; esta tabla es la narrativa.
+
+El sprint 6 no es parte del MVP y no tiene fecha: se abre cuando el
+piloto confirme que hay agencias esperando. Dentro del MVP quedan ACC-1
+a ACC-5 y ACC-8, repartidas en tres sprints a propósito: las
+convenciones en el 3 (antes de que Campañas y Finanzas tengan sus Server
+Actions escritas, que es cuando cuestan día y medio en vez de una
+semana), el esquema en el 4 y la pantalla en el 5, pegada al piloto.
+
+ACC-6 y AGE-4/AGE-5 no están repartidos: cada uno hace el alcance de sus
+módulos, y el reparto de AGE depende de quién tenga aire cuando se abra.
 
 **Demos de los viernes:**
 
@@ -334,9 +422,12 @@ Carga estimada por sprint (extremo bajo, sobre 10 días): Rasheed 12 ·
    (Rasheed); la campaña mide seguidores de la marca, calcula el
    resultado y envía el reporte; flujo de caja (Nicolás). Pitch
    trazable (Rasheed).
-5. Pantalla de conexiones, demografía, YouTube, recordatorios de cobro
-   (Nicolás). Lo que importa esta semana, cuándo publicar, brief y
-   conversión (Rasheed). Producción abierta a los primeros creadores.
+5. Pantalla de conexiones, YouTube, recordatorios de cobro (Nicolás).
+   Lo que importa esta semana (Rasheed). **Y la que pide el piloto: el
+   creador invita a su mánager, el mánager entra y ve Campañas pero no
+   el flujo de caja** (ACC-4, Rasheed; el marco y el 404, Nicolás).
+   Producción abierta a los primeros creadores. Demografía, brief y
+   conversión salen de esta demo: se corrieron al sprint 6.
 
 ---
 
@@ -352,6 +443,35 @@ Carga estimada por sprint (extremo bajo, sobre 10 días): Rasheed 12 ·
 4. **Dueño de los trámites** (CON-9). Rasheed, el lunes de la semana 1.
 5. **Acceso de Nicolás a las apps de TikTok y Meta** (bloquea CON-3).
    Rasheed lo agrega como desarrollador la primera semana.
+
+6. **La agencia no absorbe al creador** (bloquea ACC-3 y todo AGE).
+   Propuesta: cada creador tiene su workspace y la agencia recibe una
+   concesión revocable (`workspace_grant`), en vez de que el creador
+   sea una fila dentro del workspace de la agencia. Conceder es un
+   superconjunto de absorber —una agencia puede crear el workspace del
+   creador y nacer con la concesión—, mientras que el camino inverso es
+   una migración entre tenants. Es la decisión más cara de cambiar
+   después: conviene cerrarla antes de escribir `0023`.
+7. **El código pregunta por permisos, no por roles.** Propuesta:
+   `requirePermission(session, 'finanzas.factura.crear')`, nunca
+   `role === 'admin'`. Un rol es un nombre para un conjunto de
+   permisos; agregar «Contador» debe ser una fila, no cuarenta
+   archivos en dos módulos de dos dueños.
+8. **La marca no tiene cuenta: tiene un enlace.** Propuesta: no
+   construir sobre `membership.role = 'client'`. El patrón correcto ya
+   está en COT-2 y CAM-6 —enlace firmado, con vencimiento, a contenido
+   congelado—, y no deja superficie que proteger.
+9. **El dinero no entra en ningún rol por defecto.** Propuesta: el rol
+   «Mánager» sale de fábrica sin flujo de caja, gastos ni reserva de
+   impuestos; solo el cobro de las campañas que él negoció. Activarlo
+   es un clic consciente del creador, no un valor por omisión.
+10. **Roles en el piloto.** Resuelta el 22 de septiembre: los creadores
+    del piloto tienen mánager, así que ACC-1 a ACC-5 y ACC-8 entran al
+    MVP y se corren VEN-7, VEN-8, RES-4 y FIN-7 al sprint 6 (§6). Con un
+    cabo suelto de la decisión 9: si el mánager es quien hace el
+    onboarding, necesita `conexiones.cuenta.conectar` desde el primer
+    día. Por eso ACC-4 lo pregunta con una casilla explícita al invitar,
+    en vez de meterlo en el rol.
 
 Y una que no bloquea nada: **nombre del producto y dominio**, para el
 media kit y el reporte públicos.
@@ -534,7 +654,9 @@ respuestas grabadas) y solo le falta la prueba en vivo con las apps.
 | CON-1 | Conectores con respuestas grabadas | **Hecha** | Push directo, once commits (`0b837df` a `f57177b`) | `packages/connectors`: núcleo HTTP con `fetch` y reloj inyectables, `PlatformApiError` (transitorio, definitivo, auth, cuota), reintentos con `Retry-After`, `QuotaManager` con ventanas y presupuesto diario en `api_quota_usage`, y clientes de TikTok Display, TikTok Accounts, Instagram y YouTube con 62 fixtures de la documentación. 137 pruebas sin red, incluida la matriz de transporte sobre los veinte métodos; el worker expone `ctx.connectors` y `ctx.callLog` (25 pruebas). Pendiente de CON-9: `video_view_retention` y `engagement_likes` sin confirmar contra el portal. Propuesta en `docs/propuestas/CON-1.md`. |
 | CAM-1 | Lista y ficha de campaña | **Hecha** | Rama `nicolas/CAM-1-ficha-campana` (PR #8) y avance rápido a `main` por indicación de Nicolás | «Se asocian dos posts a una campaña y aparecen con sus views actuales»: prueba de `packages/db` en Postgres embebido con el seed (asociar a Fresko el video de Nutrivé y quitarlo; Café Alma 412 K + 300 K) y, en dev, las Server Actions ejercitadas por HTTP sobre la ficha (quitar, sugerir, asociar, transicionar, editar). En producción, `/campanas` y las cuatro fichas responden 200 con las cifras del mock desde Supabase; Lighthouse 98 / 100 / 100. Propuesta y QA en `docs/propuestas/CAM-1.md`. |
 | CAM-2 | Crear campaña desde la cotización | **Hecha** | Mismo avance rápido | `createCampaignFromQuote(tx, { quoteId, startsOn, endsOn, name?, trackingCode? })` en `@mc/db`: nueve pruebas, incluido el flujo de COT-4 de punta a punta con rollback y dos aceptaciones concurrentes. Contrato para Rasheed en `docs/propuestas/CAM-2.md` (firma, ejemplo, errores, garantías, guion del lunes del sprint 4). La migración `0016_campaign_quote_unique.sql` (nació como 0015; renumerada al integrar CON-3, ver §9.5) pasa en Postgres embebido y **está pendiente de aplicar en Supabase**. |
-| CON-3 | OAuth de TikTok e Instagram en sandbox | **Hecha en código; bloqueada solo por la prueba en vivo** | Rama `nicolas/CON-3-oauth-sandbox` (desde la rama de CON-1, con `main` integrado) y avance rápido a `main` por indicación de Nicolás | Migración `0015_connection_secret.sql` (**aplicada** en Supabase el 21-sep), cifrado AES-256-GCM con HKDF y rotación, `EncryptedSecretStore`, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de `TIKTOK_BUSINESS_APP_ID`), rutas `start`/`callback` con cookie sellada de 10 minutos, `data_consent` con evidencia, pantalla mínima de `/conexiones` y `oauth.refresh` con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas por `pg_catalog` y no encuentra ningún token. `/security-review` sin hallazgos; diez de `/code-review` resueltos. En producción `TOKEN_ENCRYPTION_KEY` y `APP_URL` ya están; los botones responden con la variable que falta. Falta solo la prueba con una cuenta sandbox (`docs/propuestas/CON-3.md` §5), que depende del acceso a las apps. |
+| CON-3 | OAuth de TikTok e Instagram en sandbox | **Hecha en código; pospuesta a una versión avanzada** (bandera `oauth_connect`) | Rama `nicolas/CON-3-oauth-sandbox` (desde la rama de CON-1, con `main` integrado) y avance rápido a `main` por indicación de Nicolás | Migración `0015_connection_secret.sql` (**aplicada** en Supabase el 21-sep), cifrado AES-256-GCM con HKDF y rotación, `EncryptedSecretStore`, OAuth de TikTok Login Kit e Instagram Login (Accounts API detrás de `TIKTOK_BUSINESS_APP_ID`), rutas `start`/`callback` con cookie sellada de 10 minutos, `data_consent` con evidencia, pantalla mínima de `/conexiones` y `oauth.refresh` con los refreshers reales. La prueba clave vuelca todas las columnas de texto de todas las tablas por `pg_catalog` y no encuentra ningún token. `/security-review` sin hallazgos; diez de `/code-review` resueltos. En producción `TOKEN_ENCRYPTION_KEY` y `APP_URL` ya están; los botones responden con la variable que falta. Falta solo la prueba con una cuenta sandbox (`docs/propuestas/CON-3.md` §5), que depende del acceso a las apps. |
+
+**Cambio de producto del 22-sep (noche): sin OAuth por creador en el MVP.** Las cuentas se agregan por @ y se leen con fuentes oficiales (CON-10, hecha, en `main`): Instagram con el token de la cuenta casa, YouTube con API key, TikTok solo identidad por @. **Decidido:** las métricas de TikTok entran por el CSV de TikTok Studio (RES-2, gratuito y sin credenciales) y el proveedor de pago queda como opción futura (CON-12). CON-3 queda detrás de la bandera `oauth_connect`; CON-4 y CON-8 se posponen. Detalle en `docs/propuestas/CON-10.md`.
 
 ### 9.2 Verificación sobre `main`
 
@@ -585,6 +707,8 @@ reforzada: **producción solo se despliega desde `main`**.
 | 14 | Opcional: política RLS para `campaign_post` vía `EXISTS (SELECT 1 FROM campaign …)`. Las consultas ya se protegen solas. | Campañas | `docs/propuestas/CAM-1.md` §4 |
 | 15 | Acceso de desarrollador a la app de TikTok (Login Kit con sandbox) y a la de Meta (Instagram Login), o sus credenciales al vault con los nombres de `.env.example`; registrar las redirect URIs `/conexiones/oauth/<proveedor>/callback` y los scopes; corregir `.env.example`, que trae `/api/oauth/…`. | CON-3 | `docs/propuestas/CON-3.md` §2 y §3 |
 | 16 | Revisar la migración `0015_connection_secret.sql` (ya aplicada por Nicolás para poder desplegar). | CON-3 | `docs/propuestas/CON-3.md` §1 |
+| 17 | Revisar `0022_public_profile_access.sql` (aplicada por Nicolás) y subir al repositorio las migraciones 0017–0021 que están aplicadas en Supabase pero no en ninguna rama. | CON-10 | `docs/propuestas/CON-10.md` §2 |
+| 18 | `.env.example`: `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY`. | CON-10 | `docs/propuestas/CON-10.md` §4 |
 
 ### 9.5 Desvíos respecto al plan, y por qué
 

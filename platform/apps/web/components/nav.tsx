@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BookOpen,
   Handshake,
+  KeyRound,
   Layers,
   LayoutDashboard,
   ListChecks,
@@ -36,6 +37,7 @@ function teamTools(flags: Flags): NavItem[] {
   const items: NavItem[] = [
     { href: "/", label: "Plan", icon: ListChecks },
     { href: "/cimientos", label: "Cimientos", icon: Layers },
+    { href: "/accesos", label: "Accesos", icon: KeyRound },
     { href: "/reglas", label: "Reglas", icon: BookOpen },
   ];
   const kit = moduleBySlug("kit");

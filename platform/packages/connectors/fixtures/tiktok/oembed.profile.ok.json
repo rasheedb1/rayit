@@ -1,0 +1,9 @@
+{
+  "meta": { "source": "recorded", "recordedAt": "2026-09-22", "notes": "GET https://www.tiktok.com/oembed?url=https://www.tiktok.com/@<handle> con una cuenta real; handle y nombre anonimizados. Sin html." },
+  "request": { "method": "GET", "urlPattern": "^https://www\\.tiktok\\.com/oembed\\?url=https%3A%2F%2Fwww\\.tiktok\\.com%2F%40laura\\.cocinafacil$" },
+  "response": { "status": 200, "body": {
+    "version": "1.0", "type": "rich", "title": "Laura · Cocina fácil's Creator Profile",
+    "author_url": "https://www.tiktok.com/@laura.cocinafacil", "author_name": "Laura · Cocina fácil",
+    "width": "100%", "height": "100%", "provider_url": "https://www.tiktok.com", "provider_name": "TikTok",
+    "embed_product_id": "laura.cocinafacil", "embed_type": "profile" } }
+}

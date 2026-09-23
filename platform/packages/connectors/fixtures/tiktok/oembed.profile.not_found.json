@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "recorded", "recordedAt": "2026-09-22", "notes": "handle inexistente: 400 con { message, code }." },
+  "request": { "method": "GET", "urlPattern": "^https://www\\.tiktok\\.com/oembed\\?url=" },
+  "response": { "status": 400, "body": { "message": "Something went wrong", "code": 400 } }
+}

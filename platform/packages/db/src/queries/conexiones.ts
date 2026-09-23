@@ -318,3 +318,138 @@ export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise
   await tx.query(`DELETE FROM connection_secret WHERE secret_ref = $1`, [secretRef]);
   return { id, secretRef };
 }
+
+// ---------------------------------------------------------------------
+// Cuentas por @ con datos públicos (CON-10)
+// ---------------------------------------------------------------------
+
+export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
+
+export interface AddPublicAccountInput {
+  creatorId: string;
+  platformId: ConnectionPlatformId;
+  /** Sin @. */
+  handle: string;
+  externalAccountId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  accountType: ConnectionAccountType;
+}
+
+/** La ref de una cuenta pública no apunta a ningún secreto; la columna es NOT NULL. */
+export function publicSecretRef(platformId: ConnectionPlatformId, handle: string): string {
+  return `public:${platformId}:${handle.toLowerCase()}`;
+}
+
+/**
+ * Alta o reactivación de una cuenta por @: misma clave natural que una
+ * conexión autorizada (plataforma + id externo + workspace), con
+ * access_mode 'public_profile' y sin tokens.
+ */
+export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountInput): Promise<UpsertConnectionResult> {
+  const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
+  if (creator.rows.length === 0) throw new CreatorNotInWorkspace(input.creatorId);
+  const { rows } = await tx.query<{ id: string; created: boolean }>(
+    `INSERT INTO social_connection
+       (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
+        account_type, secret_ref, scopes, access_mode, status, connected_at)
+     VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'public_profile', 'active', now())
+     ON CONFLICT (platform_id, external_account_id, workspace_id) DO UPDATE
+       SET handle = EXCLUDED.handle,
+           display_name = COALESCE(EXCLUDED.display_name, social_connection.display_name),
+           avatar_url = COALESCE(EXCLUDED.avatar_url, social_connection.avatar_url),
+           profile_url = COALESCE(EXCLUDED.profile_url, social_connection.profile_url),
+           account_type = EXCLUDED.account_type,
+           status = 'active', status_detail = NULL, deleted_at = NULL, last_error_at = NULL, consecutive_failures = 0,
+           connected_at = CASE WHEN social_connection.deleted_at IS NULL THEN social_connection.connected_at ELSE now() END
+     RETURNING id, (xmax = 0) AS created`,
+    [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle)],
+  );
+  const r = rows[0]!;
+  return { id: r.id, created: r.created === true };
+}
+
+export interface AccountSnapshotInput {
+  connectionId: string;
+  /** YYYY-MM-DD (UTC). */
+  day: string;
+  followers: number | null;
+  following: number | null;
+  mediaCount: number | null;
+  views: number | null;
+  raw: unknown;
+}
+
+/**
+ * Snapshot diario de la cuenta con source 'public_profile'. UNIQUE
+ * (connection_id, day, source): «Actualizar» dos veces el mismo día
+ * reemplaza la fila del día, no la duplica. Marca last_synced_at.
+ */
+export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnapshotInput): Promise<void> {
+  await tx.query(
+    `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views, raw, source)
+     VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
+     ON CONFLICT (connection_id, day, source) DO UPDATE
+       SET followers = EXCLUDED.followers, following = EXCLUDED.following, media_count = EXCLUDED.media_count,
+           views = EXCLUDED.views, raw = EXCLUDED.raw, captured_at = now()`,
+    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), PUBLIC_SNAPSHOT_SOURCE],
+  );
+  await tx.query(`UPDATE social_connection SET last_synced_at = now(), last_error_at = NULL, consecutive_failures = 0, status_detail = NULL WHERE id = $1`, [input.connectionId]);
+}
+
+export interface AccountRow extends ConnectionListRow {
+  accessMode: 'direct_oauth' | 'business_portfolio' | 'aggregator' | 'manual_csv' | 'public_profile';
+  /** Último snapshot público, o null si nunca se leyó. */
+  latest: { day: string; followers: number | null; following: number | null; mediaCount: number | null; views: number | null } | null;
+  /** Seguidores hace siete días o más, para la variación; null si no hay historia. */
+  followersWeekAgo: number | null;
+}
+
+/** Cuentas vivas con su último snapshot público y el de hace una semana. */
+export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
+  const base = await listConnections(tx);
+  if (base.length === 0) return [];
+  const { rows } = await tx.query<{
+    id: string; access_mode: AccountRow['accessMode']; day: string | null; followers: string | number | null; following: string | number | null;
+    media_count: string | number | null; views: string | number | null; followers_week_ago: string | number | null;
+  }>(
+    `SELECT c.id, c.access_mode,
+            to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
+            (SELECT w.followers FROM account_metric_snapshot w
+              WHERE w.connection_id = c.id AND w.source = $1 AND w.day <= l.day - 7
+              ORDER BY w.day DESC LIMIT 1) AS followers_week_ago
+       FROM social_connection c
+       LEFT JOIN LATERAL (
+         SELECT s.day, s.followers, s.following, s.media_count, s.views
+           FROM account_metric_snapshot s
+          WHERE s.connection_id = c.id AND s.source = $1
+          ORDER BY s.day DESC LIMIT 1
+       ) l ON true
+      WHERE c.deleted_at IS NULL`,
+    [PUBLIC_SNAPSHOT_SOURCE],
+  );
+  const extra = new Map(rows.map((r) => [r.id, r]));
+  return base.map((b) => {
+    const e = extra.get(b.id);
+    const n = (v: string | number | null | undefined): number | null => (v === null || v === undefined ? null : Number(v));
+    return {
+      ...b,
+      accessMode: e?.access_mode ?? 'direct_oauth',
+      latest: e?.day ? { day: e.day, followers: n(e.followers), following: n(e.following), mediaCount: n(e.media_count), views: n(e.views) } : null,
+      followersWeekAgo: n(e?.followers_week_ago),
+    };
+  });
+}
+
+/** Anota un fallo de lectura pública sin tocar las filas históricas. `permanent` pasa la cuenta a 'error'. */
+export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<void> {
+  await tx.query(
+    `UPDATE social_connection
+        SET last_error_at = now(), consecutive_failures = consecutive_failures + 1, status_detail = $2,
+            status = CASE WHEN $3 THEN 'error' ELSE status END
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [connectionId, detailEs, permanent],
+  );
+}
+
