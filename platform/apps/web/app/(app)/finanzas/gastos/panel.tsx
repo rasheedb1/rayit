@@ -128,7 +128,12 @@ export function GastosPanel({ gastos, currency, hoy, otraMoneda, esMesActual }: 
 
       {abierto && (
         <div className="mb-4">
+          {/* La key ata el estado del formulario al gasto que edita: sin
+              ella, pulsar «Editar» en otra fila cambiaba el gastoId oculto
+              y dejaba los campos de la fila anterior, así que guardar
+              sobrescribía un gasto con los datos de otro. */}
           <GastoForm
+            key={editando?.id ?? "nuevo"}
             currency={currency}
             hoy={hoy}
             gasto={editando ? { id: editando.id, crudo: editando.crudo } : undefined}

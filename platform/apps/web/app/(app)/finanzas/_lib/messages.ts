@@ -44,6 +44,8 @@ export const MESSAGES = {
       deducible: "Deducible",
       /** En vez de los tres KPIs en cero cuando el mes no tiene nada que sumar. */
       sinGastos: "Este mes no tiene ningún gasto registrado todavía, así que no hay nada que sumar.",
+      /** Hay filas, pero ninguna en la moneda del espacio: los totales estarían en cero sobre una tabla llena. */
+      soloOtraMoneda: "Los gastos de este mes están en otra moneda, así que no hay totales que sumar en la del espacio.",
       recurrenteNota: (n: number) => `${n} ${n === 1 ? "gasto que se repite" : "gastos que se repiten"}`,
       sinRecurrentes: "Ninguno de los gastos del mes se repite",
       deducibleNota: "Lo que la contadora puede descontar",

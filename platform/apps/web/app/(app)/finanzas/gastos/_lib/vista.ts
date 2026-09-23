@@ -31,6 +31,7 @@ export interface GastoCrudo {
   incurredOn: string;
   isRecurring: boolean;
   recurrence: string;
+  deductible: boolean;
   receiptUrl: string;
 }
 
@@ -83,6 +84,9 @@ export function gastoVista(r: ExpenseRow, f: Formatter, textos: { sinProveedor: 
       incurredOn: r.incurredOn,
       isRecurring: r.isRecurring,
       recurrence: r.recurrence ?? "",
+      // Sin él, corregir un gasto NO deducible lo volvía deducible sin
+      // que nadie lo pidiera (y lo anotaba en la bitácora).
+      deductible: r.deductible,
       receiptUrl: r.receiptUrl ?? "",
     },
   };

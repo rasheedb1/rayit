@@ -41,6 +41,7 @@ function gasto(over: Partial<GastoVista> = {}): GastoVista {
       incurredOn: "2026-09-01",
       isRecurring: true,
       recurrence: "monthly",
+      deductible: true,
       receiptUrl: "",
     },
     ...over,
@@ -166,6 +167,32 @@ describe("el formulario en la misma pantalla", () => {
     expect(screen.getByLabelText(cadaCuanto)).toHaveValue("monthly");
     fireEvent.click(casilla);
     expect(screen.queryByLabelText(cadaCuanto)).not.toBeInTheDocument();
+  });
+
+  it("pasar de «Editar» una fila a otra NO arrastra los valores de la primera", () => {
+    const b = gasto({
+      id: "bbb",
+      concepto: "Micrófono",
+      deducible: false,
+      crudo: { ...gasto().crudo, category: "equipo", vendor: "DJI", description: "Micrófono DJI", amount: "890000.00", incurredOn: "2026-07-14", isRecurring: false, recurrence: "", deductible: false },
+    });
+    pintar([gasto(), b]);
+    fireEvent.click(within(filaCon("Suscripciones · septiembre")).getByRole("button", { name: T.tabla.editar }));
+    expect(screen.getByLabelText(/Categoría/)).toHaveValue("software");
+    fireEvent.click(within(filaCon("Micrófono")).getByRole("button", { name: T.tabla.editar }));
+
+    const form = formularioAbierto(T.form.tituloEditar);
+    expect(within(form).getByRole("textbox", { name: T.form.proveedor })).toHaveValue("DJI");
+    expect(within(form).getByLabelText(/Categoría/)).toHaveValue("equipo");
+    expect(within(form).getByLabelText(/Fecha del gasto/)).toHaveValue("2026-07-14");
+    // Y el gastoId oculto es el de la segunda, no el de la primera.
+    expect(form.querySelector('input[name="gastoId"]')).toHaveValue("bbb");
+  });
+
+  it("un gasto que NO es deducible abre con la casilla apagada, no la enciende al corregirlo", () => {
+    pintar([gasto({ deducible: false, crudo: { ...gasto().crudo, deductible: false } })]);
+    fireEvent.click(screen.getByRole("button", { name: T.tabla.editar }));
+    expect(screen.getByLabelText(T.form.deducible)).not.toBeChecked();
   });
 
   it("«Cancelar» lo cierra sin escribir nada", () => {

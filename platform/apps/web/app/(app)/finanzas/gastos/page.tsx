@@ -79,7 +79,11 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
   // la base, no el reloj del proceso que sirve la petición.
   const proyeccion = proyectarGastosRecurrentes(recurrentes.rows, recurrentes.today, SEMANAS_PROYECCION);
   const barras = barrasProyeccion(proyeccion, f);
+  // Sin ninguna plantilla recurrente NO se pinta el gráfico: ocho barras en
+  // cero no explican nada, y el `emptyState` de ChartCard no se dispara
+  // porque las series sí traen ocho valores (que son ceros de verdad).
   const hayProyeccion = proyeccion.currency !== null;
+  const hayQueSumar = mes.totals.count > 0;
 
   return (
     <>
@@ -99,8 +103,10 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
       </div>
 
       {/* Un mes sin nada que sumar no pinta tres ceros: lo explica el
-          estado vacío de la tabla, como Resumen sin conexiones (RES-1). */}
-      {mes.totals.count > 0 ? (
+          estado vacío de la tabla, como Resumen sin conexiones (RES-1). Y
+          si lo único que hay está en otra moneda, lo dice: los KPI en cero
+          sobre una tabla con filas serían una contradicción. */}
+      {hayQueSumar ? (
         <KpiRow>
           <Kpi
             label={T.kpis.total}
@@ -123,7 +129,7 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
           />
         </KpiRow>
       ) : (
-        <p className="text-sm text-ink-2">{T.kpis.sinGastos}</p>
+        <p className="text-sm text-ink-2">{mes.rows.length > 0 ? T.kpis.soloOtraMoneda : T.kpis.sinGastos}</p>
       )}
 
       <section className="mt-10" aria-labelledby="gastos-del-mes">
@@ -146,7 +152,18 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
         <PorCategoria filas={categorias} />
       </section>
 
-      <section className="mt-10">
+      <section className="mt-10" aria-labelledby={hayProyeccion ? undefined : "proyeccion"}>
+        {!hayProyeccion ? (
+          <>
+            <SectionTitle meta={T.proyeccion.subtitulo}>
+              <span id="proyeccion">{T.proyeccion.titulo}</span>
+            </SectionTitle>
+            <EmptyState title={T.proyeccion.vacioTitulo} description={T.proyeccion.vacioDescripcion} />
+            {recurrentes.otherCurrencyCount > 0 && (
+              <p className="mt-2 text-xs text-muted">{T.proyeccion.otraMoneda(recurrentes.otherCurrencyCount)}</p>
+            )}
+          </>
+        ) : (
         <ChartCard
           title={T.proyeccion.titulo}
           subtitle={T.proyeccion.subtitulo}
@@ -164,19 +181,18 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
           legend={false}
           note={
             <>
-              {hayProyeccion &&
-                T.proyeccion.nota(
-                  f.date(proyeccion.desde),
-                  f.date(proyeccion.hasta),
-                  f.money(proyeccion.total, proyeccion.currency ?? mes.currency, { mode: "full" }),
-                )}
+              {T.proyeccion.nota(
+                f.date(proyeccion.desde),
+                f.date(proyeccion.hasta),
+                f.money(proyeccion.total, proyeccion.currency ?? mes.currency, { mode: "full" }),
+              )}
               {recurrentes.otherCurrencyCount > 0 && (
                 <span className="mt-1 block">{T.proyeccion.otraMoneda(recurrentes.otherCurrencyCount)}</span>
               )}
             </>
           }
-          emptyState={<EmptyState title={T.proyeccion.vacioTitulo} description={T.proyeccion.vacioDescripcion} />}
         />
+        )}
       </section>
     </>
   );

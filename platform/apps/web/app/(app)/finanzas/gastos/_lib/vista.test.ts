@@ -65,6 +65,11 @@ describe("gastoVista", () => {
     expect(ninguno.sinProveedor).toBe(true);
   });
 
+  it("lo deducible viaja al formulario: corregir un gasto no deducible no lo vuelve deducible", () => {
+    expect(gastoVista(fila({ deductible: false }), f, TEXTOS).crudo.deductible).toBe(false);
+    expect(gastoVista(fila({ deductible: true }), f, TEXTOS).crudo.deductible).toBe(true);
+  });
+
   it("un puntual no dice una recurrencia que no tiene", () => {
     const v = gastoVista(fila({ isRecurring: false, recurrence: null }), f, TEXTOS);
     expect(v.recurrencia).toBeNull();
@@ -81,6 +86,7 @@ describe("gastoVista", () => {
       incurredOn: "2026-09-01",
       isRecurring: true,
       recurrence: "monthly",
+      deductible: true,
       receiptUrl: "https://drive.example.com/r",
     });
   });
