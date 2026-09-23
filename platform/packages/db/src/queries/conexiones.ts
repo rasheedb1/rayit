@@ -711,9 +711,18 @@ export interface AccountRow extends ConnectionListRow {
    * queda el correo que la evidencia guardó ese día.
    */
   connectedBy: { userId: string; name: string | null; email: string | null; at: string } | null;
+  /**
+   * Publicaciones de esta cuenta que el recolector conoce y que siguen
+   * vivas en la plataforma (CON-5). Es distinto de `latest.mediaCount`,
+   * que es lo que la plataforma DICE que tiene: esto es de lo que
+   * tenemos medidas.
+   */
+  postsCount: number;
+  /** ISO de la última lectura de contenido, o null si todavía no se ha medido ninguna. */
+  lastPostSnapshotAt: string | null;
 }
 
-/** Cuentas vivas con su último snapshot público y el de hace una semana. */
+/** Cuentas vivas con su último snapshot público, el de hace una semana y sus publicaciones medidas. */
 export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
   const base = await listConnections(tx);
   if (base.length === 0) return [];
@@ -721,13 +730,15 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
     id: string; access_mode: AccountRow['accessMode']; day: string | null; followers: string | number | null; following: string | number | null;
     media_count: string | number | null; views: string | number | null; followers_week_ago: string | number | null;
     acted_by_user_id: string | null; acted_by_email: string | null; acted_by_name: string | null; acted_at: string | Date | null;
+    posts_count: string | number; last_post_snapshot_at: string | Date | null;
   }>(
     `SELECT c.id, c.access_mode,
             to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
             (SELECT w.followers FROM account_metric_snapshot w
               WHERE w.connection_id = c.id AND w.source = ANY($1::text[]) AND w.day <= l.day - 7
               ORDER BY w.day DESC LIMIT 1) AS followers_week_ago,
-            a.acted_by_user_id, a.acted_by_email, u.name AS acted_by_name, a.acted_at
+            a.acted_by_user_id, a.acted_by_email, u.name AS acted_by_name, a.acted_at,
+            contenido.posts_count, contenido.last_post_snapshot_at
        FROM social_connection c
        LEFT JOIN LATERAL (
          SELECT s.day, s.followers, s.following, s.media_count, s.views
@@ -746,6 +757,18 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           ORDER BY d.granted_at DESC, d.id DESC LIMIT 1
        ) a ON true
        LEFT JOIN app_user u ON u.id = a.acted_by_user_id
+       CROSS JOIN LATERAL (
+         -- Publicaciones vivas y hasta cuándo llegan sus lecturas
+         -- (CON-5). Cuenta cualquier fuente de lectura: la del
+         -- recolector y la del archivo importado. Es distinto de
+         -- connection_health.posts_tracked, que cuenta también las que
+         -- ya no están en la plataforma. El LEFT JOIN multiplica filas
+         -- por lectura, así que el conteo va con DISTINCT.
+         SELECT count(DISTINCT p.id)::int AS posts_count, max(s.captured_at) AS last_post_snapshot_at
+           FROM post p
+           LEFT JOIN post_metric_snapshot s ON s.post_id = p.id AND s.workspace_id = p.workspace_id
+          WHERE p.connection_id = c.id AND p.deleted_on_platform = false
+       ) contenido
       WHERE c.deleted_at IS NULL`,
     [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
@@ -761,6 +784,8 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
       connectedBy: e?.acted_by_user_id && e.acted_at
         ? { userId: e.acted_by_user_id, name: e.acted_by_name ?? null, email: e.acted_by_email ?? null, at: iso(e.acted_at)! }
         : null,
+      postsCount: Number(e?.posts_count ?? 0),
+      lastPostSnapshotAt: iso(e?.last_post_snapshot_at ?? null),
     };
   });
 }

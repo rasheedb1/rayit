@@ -31,3 +31,4 @@ export * from './encrypted-secret-store.ts';
 export * from './oauth/index.ts';
 export * from './testing/dump-text.ts';
 export * from './public/index.ts';
+export * from './posts/index.ts';
