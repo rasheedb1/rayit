@@ -262,11 +262,13 @@ CREATE POLICY workspace_seed ON workspace FOR INSERT TO CURRENT_USER
 --                      insertan, nunca se corrigen ni se borran; al
 --                      conservar INSERT, la sección 7 le engancha
 --                      assert_reference_visible en post_id
---   sin DELETE         account_metric_snapshot: CON-10 (en main)
+--   SELECT + INSERT    account_metric_snapshot: CON-10 (en main)
 --                      registra desde la web el snapshot público del día
---                      con un upsert, así que conserva INSERT y UPDATE
---                      hasta que su dueño decida; borrar no lo necesita
---                      nadie
+--                      (recordAccountSnapshot). Desde el pulido r7 lo
+--                      hace con ON CONFLICT DO NOTHING: la primera
+--                      lectura del día queda y la web no la corrige, así
+--                      que pierde también UPDATE. El recolector diario la
+--                      escribe como mc_worker, quien mide
 -- =====================================================================
 REVOKE INSERT, UPDATE, DELETE ON
   audience_breakdown,
@@ -283,7 +285,7 @@ REVOKE UPDATE, DELETE ON audit_log FROM mc_app;
 
 REVOKE UPDATE, DELETE ON post_metric_snapshot FROM mc_app;
 
-REVOKE DELETE ON account_metric_snapshot FROM mc_app;
+REVOKE UPDATE, DELETE ON account_metric_snapshot FROM mc_app;
 
 
 -- =====================================================================

@@ -40,7 +40,11 @@
 -- ---------------------------------------------------------------------
 -- 1 · superseded_by: qué versión dejó sin efecto a esta
 -- ---------------------------------------------------------------------
+-- Cada sentencia se puede volver a correr a mano tras un fallo parcial
+-- fuera del runner (que envuelve el archivo en una transacción): las que
+-- no admiten IF NOT EXISTS van precedidas de su DROP … IF EXISTS.
 ALTER TABLE quote ADD COLUMN IF NOT EXISTS superseded_by uuid REFERENCES quote(id) ON DELETE SET NULL;
+ALTER TABLE quote DROP CONSTRAINT IF EXISTS quote_superseded_by_not_self;
 ALTER TABLE quote ADD CONSTRAINT quote_superseded_by_not_self CHECK (superseded_by IS NULL OR superseded_by <> id);
 CREATE INDEX IF NOT EXISTS quote_superseded_by_idx ON quote (superseded_by) WHERE superseded_by IS NOT NULL;
 
@@ -109,6 +113,7 @@ END $$;
 -- No se escribe como un EXISTS sobre quote: una política de quote que
 -- lee quote (o deal, cuya política de 0030 lee quote) es recursión, y
 -- Postgres la rechaza.
+DROP POLICY IF EXISTS quote_public_share_accepted_sibling ON quote;
 CREATE POLICY quote_public_share_accepted_sibling ON quote
   FOR SELECT TO mc_public_share
   USING (status = 'accepted'
@@ -127,6 +132,17 @@ CREATE POLICY quote_public_share_accepted_sibling ON quote
 --     'superseded'. La segunda de dos aceptaciones a la vez espera aquí
 --     al bloqueo del negocio y, cuando lo tiene, ya ve la primera.
 --
+-- «Sin efecto» es 'expired' CON superseded_by, igual que en sendQuote y
+-- acceptQuote: sin la columna, al recargar el enlace public_quote_impl
+-- la leería como vencida («venció») aunque su «válida hasta» no hubiera
+-- pasado, y el panel no enlazaría la versión que ganó. Por eso el rol
+-- del enlace puede escribir superseded_by, y solo esa columna más: el
+-- disparador de 0025 §3 (ref_visible_superseded_by, arriba) exige que
+-- la aceptada que nombra sea visible para quien escribe, y lo es porque
+-- el UPDATE corre mientras app.public_share_deal fija su negocio (la
+-- política de la sección 2). No puede apuntar a otra cotización.
+GRANT UPDATE (superseded_by) ON quote TO mc_public_share;
+
 -- CREATE OR REPLACE conserva el dueño (mc_public_share) y los permisos;
 -- mc_migrator puede reemplazarla porque es miembro de mc_public_share.
 CREATE OR REPLACE FUNCTION public_quote_accept_impl(p_slug text, p_name text, p_email text)
@@ -178,16 +194,20 @@ BEGIN
          WHERE deal_id = q.deal_id AND id <> q.id AND status = 'accepted'
          ORDER BY accepted_at DESC NULLS LAST
          LIMIT 1;
+        -- Sin efecto, con la versión que ganó: la aceptada tiene que
+        -- seguir visible (el negocio fijado) cuando el disparador de
+        -- superseded_by la busque. El negocio no se toca.
+        IF otra IS NOT NULL THEN
+          UPDATE quote
+             SET status = 'expired', expired_at = coalesce(expired_at, ahora), superseded_by = otra
+           WHERE id = q.id;
+        END IF;
       EXCEPTION WHEN OTHERS THEN
         PERFORM set_config('app.public_share_deal', '', true);
         RAISE;
       END;
       PERFORM set_config('app.public_share_deal', '', true);
       IF otra IS NOT NULL THEN
-        -- superseded_by no se escribe desde aquí: mc_public_share no
-        -- tiene esa columna. Basta con que deje de estar viva; el panel
-        -- la ve vencida y el negocio no se toca.
-        UPDATE quote SET status = 'expired', expired_at = coalesce(expired_at, ahora) WHERE id = q.id;
         RETURN jsonb_build_object('status', 'not_acceptable', 'quoteStatus', 'superseded');
       END IF;
     END IF;
