@@ -59,6 +59,10 @@ app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
+app/(app)/conexiones/         Cuentas por @ (CON-10) y OAuth (CON-3, detrás de
+                              oauth_connect). _lib/permisos.ts, _lib/consent.ts y
+                              _lib/messages.ts: quién puede conectar, la evidencia
+                              del consentimiento y los textos (ver «Conexiones»).
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
@@ -369,6 +373,47 @@ cumplir las dos: 0028 se para si 0024 no está en `schema_migrations`, y
 aplica las dos en el orden malo y comprueba el mensaje, y además lee de
 la base migrada que `mc_app` tenga INSERT (y no UPDATE ni DELETE) sobre
 membership.
+
+## Conexiones: quién conecta y quién consiente
+
+Quien conecta una cuenta ajena no es quien consiente (ACC-8, decisión E
+de `docs/propuestas/ACC-accesos-y-roles.md`). Las dos preguntas se
+responden por separado dentro de la misma transacción:
+
+- **A nombre de quién** queda el consentimiento: el `creator_profile`
+  del workspace (`getConsentCreator`). Siempre. Es de quien son los
+  datos, y es la respuesta el día que Meta o TikTok pregunten.
+- **Quién actuó**: la persona de la sesión, `current_user_id()`, con su
+  rol de `membership` (`getSessionMember`). Si no es el titular, la
+  fila de `data_consent` lo dice en `evidence.actedBy` (id, correo y
+  rol de ese día), el titular recibe el aviso `connection_added`
+  (migración 0034) con quién, qué cuenta y cuándo, y `audit_log` lleva
+  `connection.added` con `actor_user_id` = quien actuó. Quitar la
+  cuenta deja la misma huella en `evidence.revocation` y
+  `connection.removed`.
+
+La evidencia es la **v2** (`_lib/consent.ts`): `v`, `method`
+(`public_handle` u `oauth`), `declaredOwner`, `ipHash` (sha256; la IP
+ya no va en claro), `userAgent`, `textShown`, `policyVersion`, `at`,
+`onBehalfOf { creatorId }` y, solo si actúa un tercero, `actedBy`.
+Aplica a los dos caminos: «Agregar cuenta» por @ y el callback de OAuth.
+
+**El permiso.** `conexiones.cuenta.conectar` y `…desconectar` se
+comprueban como primera sentencia de la transacción que escribe
+(`requireConexionesPermission`, `_lib/permisos.ts`), y además antes de
+gastar una llamada a la plataforma y antes de mandar a nadie al
+diálogo de OAuth. Hasta ACC-1/ACC-3 el puente es `membership.role` de
+0001: `owner` y `admin` pueden; `member`, `viewer` y `client` ven el
+estado y no tocan. **No existe el permiso de ver un token**: la lista
+muestra estado y @, y el almacén cifrado solo lo abren los jobs y
+«Actualizar».
+
+En la lista, una cuenta conectada por un tercero dice «Conectada por
+<nombre> el <fecha>» debajo del @ (nombre de `app_user` mientras sea
+miembro; si ya no lo es, el correo que la evidencia guardó ese día).
+Cuando la conectó el propio titular no se dice nada: la ausencia de la
+línea es la información. El seed trae ese caso: Andrés Pardo, mánager
+de la demo (`db/seed/0003`), conectó el Instagram de Laura.
 
 ## Reglas del marco
 

@@ -643,8 +643,8 @@ export const STORIES: readonly Story[] = [
     title: "Consentimiento delegado",
     desc: "Quien conecta una cuenta ajena no es quien consiente: data_consent.evidence lleva acted_by y el titular recibe notificación. El token no se lee nunca; no existe el permiso de verlo.",
     done: "El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y al creador le llega la notificación.",
-    status: "pendiente",
-    note: "Deja de ser opcional en cuanto el mánager hace el onboarding del piloto. Es además la respuesta el día que Meta o TikTok pregunten quién dio el consentimiento.",
+    status: "hecho",
+    note: "23-sep: evidencia v2 (onBehalfOf + actedBy, IP resumida) en los dos caminos (por @ y OAuth), aviso connection_added al titular (migración 0034, pendiente de aplicar), bitácora connection.added/removed y «Conectada por … el …» en /conexiones. Sin ACC-1/2/3 en main: el permiso conexiones.cuenta.conectar se puentea con membership.role (owner/admin) en conexiones/_lib/permisos.ts con TODO(ACC-1); la bitácora, con TODO(ACC-2). Propuesta en docs/propuestas/ACC-8.md.",
   },
   {
     id: "ACC-9", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-4"],

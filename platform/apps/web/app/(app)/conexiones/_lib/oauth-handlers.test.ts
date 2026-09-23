@@ -7,8 +7,8 @@
  * de NINGUNA tabla (recorriendo pg_catalog) contiene el access token, el
  * refresh token, el code ni el client secret.
  */
-import { randomBytes } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createHash, randomBytes } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, keyringFromEnv, loadFixtures, TokenCipher, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
@@ -20,6 +20,8 @@ import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";
+// El volcado de R4 recorre todas las tablas del embebido: con la máquina cargada pasa de los 5 s por defecto.
+vi.setConfig({ testTimeout: 120_000 });
 const ENV = {
   NODE_ENV: "test",
   APP_URL: ORIGIN,
@@ -38,6 +40,12 @@ const SECRETS = [
   "IGQVJ-short-demo-0001-SECRETO", "IGAA-long-demo-0001-SECRETO",
 ];
 
+const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
+const USER_LAURA = "00000002-0000-4000-8000-000000000002";
+/** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
+const USER_MANAGER = "00000002-0000-4000-8000-000000000004";
+const USER_EDITOR = "00000009-0000-4000-8000-0000000000c2";
+
 let db: EmbeddedDb;
 let guard: NetworkGuard;
 let fetch: FixtureFetch;
@@ -45,6 +53,10 @@ let handlers: OAuthHandlers;
 let clock = NOW;
 
 const withWorkspace = <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => db.withWorkspace(SEED_WORKSPACE_ID, fn);
+/** Los mismos handlers con la sesión de una persona (app.user_id fijado, como lib/db desde CIM-3). */
+function handlersAs(userId: string): OAuthHandlers {
+  return createOAuthHandlers({ env: ENV, withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId }), fetch: fetch.fetch, now: () => clock });
+}
 
 beforeAll(async () => {
   guard = withoutNetwork();
@@ -54,7 +66,9 @@ beforeAll(async () => {
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),
   ]);
   handlers = createOAuthHandlers({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => clock });
-}, 60_000);
+  await db.queryAsSuperuser(`INSERT INTO app_user (id, email, name) VALUES ($1, 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING`, [USER_EDITOR]);
+  await db.queryAsSuperuser(`INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'viewer') ON CONFLICT DO NOTHING`, [SEED_WORKSPACE_ID, USER_EDITOR]);
+}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 afterAll(async () => {
   await db.close();
@@ -72,8 +86,8 @@ function cookieOf(res: Response): string {
   return m![1]!;
 }
 
-async function start(provider: string) {
-  const res = await handlers.start(startRequest(provider, { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), provider);
+async function start(provider: string, h: OAuthHandlers = handlers) {
+  const res = await h.start(startRequest(provider, { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), provider);
   expect(res.status).toBe(303);
   const location = new URL(res.headers.get("location")!);
   const state = location.searchParams.get("state")!;
@@ -192,7 +206,12 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(active.map((c) => c.purpose)).toEqual(["analytics"]);
     expect(active[0]!.policyVersion).toBe(CONSENT_POLICY_VERSION);
     const evidence = await db.queryAsSuperuser<{ evidence: Record<string, unknown> }>("SELECT evidence FROM data_consent WHERE id = $1", [active[0]!.id]);
-    expect(evidence.rows[0]!.evidence).toMatchObject({ ip: "203.0.113.7", userAgent: "vitest", policyVersion: CONSENT_POLICY_VERSION, scopesGranted: row.scopes, at: NOW.toISOString() });
+    expect(evidence.rows[0]!.evidence).toMatchObject({
+      v: 2, method: "oauth", declaredOwner: false, ipHash: createHash("sha256").update("203.0.113.7").digest("hex"), userAgent: "vitest",
+      policyVersion: CONSENT_POLICY_VERSION, scopesGranted: row.scopes, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA },
+    });
+    expect(evidence.rows[0]!.evidence).not.toHaveProperty("ip");
+    expect(evidence.rows[0]!.evidence).not.toHaveProperty("actedBy");
     expect(String(evidence.rows[0]!.evidence["textShown"])).toMatch(/TikTok/);
 
     const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean; connection_id: string | null }>("SELECT endpoint, ok, connection_id FROM api_call_log ORDER BY id");
@@ -266,6 +285,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
 
   it("R4: ninguna columna de texto, jsonb, arreglo o bytea de ninguna tabla contiene un token, el code ni el client secret", async () => {
     const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, ["203.0.113.7"]), "la IP no va en claro en ninguna evidencia").toBeNull();
     expect(dump.length).toBeGreaterThan(100);
     expect(dump.some((d) => d.table === "connection_secret" && d.column === "ciphertext")).toBe(true);
     expect(dump.some((d) => d.table === "data_consent" && d.column === "evidence")).toBe(true);
@@ -274,5 +294,53 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     const recorded = JSON.stringify(fetch.calls);
     for (const s of SECRETS) expect(recorded).not.toContain(s);
     expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma evidencia", () => {
+  it("el mánager autoriza el Instagram de la creadora: consentimiento a nombre de ella con él como operador, aviso a ella, bitácora con él", async () => {
+    const manager = handlersAs(USER_MANAGER);
+    const { cookie, state } = await start("instagram", manager);
+    const res = await manager.callback(callbackRequest("instagram", { code: CODE_IG, state }, cookie), "instagram");
+    expect(res.status).toBe(303);
+    const id = new URL(res.headers.get("location")!).searchParams.get("conectada")!;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    const active = (await withWorkspace((tx) => listConsents(tx, id))).filter((c) => c.revokedAt === null);
+    expect(active.length).toBe(2);
+    for (const c of active) {
+      const ev = await db.queryAsSuperuser<{ creator_id: string; evidence: Record<string, unknown> }>("SELECT creator_id, evidence FROM data_consent WHERE id = $1", [c.id]);
+      expect(ev.rows[0]!.creator_id).toBe(CREATOR_LAURA);
+      expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, method: "oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "admin" } });
+    }
+    const notice = await db.queryAsSuperuser<{ user_id: string; body_es: string }>("SELECT user_id, body_es FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [id]);
+    expect(notice.rows.length).toBe(1);
+    expect(notice.rows[0]!.user_id).toBe(USER_LAURA);
+    expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @laura\.cocinafacil de Instagram el .+ en tu nombre\./);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.added' AND entity_id = $1 ORDER BY id DESC LIMIT 1", [id]);
+    expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
+    expect(audit.rows[0]!.after).toMatchObject({ accessMode: "direct_oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "admin" } });
+    expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");
+    const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === id)!;
+    expect(row.secretRef).toMatch(/^enc:instagram:/);
+    for (const s of SECRETS) expect(JSON.stringify(notice.rows) + JSON.stringify(audit.rows)).not.toContain(s);
+  });
+
+  it("un editor sin conexiones.cuenta.conectar no llega a la plataforma, y con una cookie ajena el callback tampoco escribe", async () => {
+    const editor = handlersAs(USER_EDITOR);
+    const before = await countConnections();
+    const calls = fetch.calls.length;
+    const denied = await editor.start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+    expect(denied.status).toBe(303);
+    expect(denied.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_permiso`);
+    expect(denied.headers.get("set-cookie")).toBeNull();
+    // Con el inicio de otra sesión (la cookie del mánager) el callback comprueba el permiso antes de guardar nada.
+    const { cookie, state } = await start("tiktok", handlersAs(USER_MANAGER));
+    const res = await editor.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookie), "tiktok");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_permiso`);
+    expect(await countConnections()).toBe(before);
+    expect(fetch.calls.length, "el intercambio del code sí se hizo; la plataforma dará otro al reintentar").toBeGreaterThan(calls);
+    const consents = await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM data_consent WHERE evidence->'actedBy'->>'userId' = $1", [USER_EDITOR]);
+    expect(Number(consents.rows[0]!.n)).toBe(0);
   });
 });

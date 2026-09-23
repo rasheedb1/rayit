@@ -8,6 +8,13 @@
  * social_connection (access_mode 'public_profile'), data_consent con la
  * declaración de propiedad y, si hay cifras, el snapshot del día. Las
  * llamadas HTTP quedan en api_call_log con la fila.
+ *
+ * Consentimiento delegado (ACC-8): la transacción que escribe empieza
+ * comprobando el permiso (conexiones.cuenta.conectar) y devuelve quién
+ * actúa; el consentimiento queda a nombre del creator_profile con esa
+ * persona en evidence.actedBy si no es el titular; el titular recibe
+ * el aviso connection_added y la bitácora dice quién fue. Quitar sigue
+ * la misma regla con conexiones.cuenta.desconectar.
  */
 import {
   createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
@@ -15,10 +22,14 @@ import {
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getDefaultCreatorId, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  recordAccountSnapshot, recordConsent, type AccountRow, type WorkspaceTx,
+  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
+  notifyConnectionAdded, recordAccountSnapshot, recordConnectionAudit, recordConsent, type AccountRow, type ConsentCreator, type SessionMember, type WorkspaceTx,
 } from "@mc/db";
-import { CONSENT_POLICY_VERSION } from "./consent";
+import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
+import { formatterFor } from "@/lib/format";
+import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
+import { MESSAGES, nombreDe } from "./messages";
+import { PermisoDenegado, requireConexionesPermission } from "./permisos";
 
 export const PUBLIC_PLATFORMS: readonly PlatformId[] = ["instagram", "tiktok", "youtube"];
 export const PLATFORM_NAME: Record<PlatformId, string> = { tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", youtube: "YouTube" };
@@ -41,9 +52,19 @@ export interface Requester {
   userAgent: string | null;
 }
 
+/**
+ * Qué pasó con el aviso al titular (ACC-8):
+ *   enviado        un tercero conectó la cuenta y el titular tiene aviso nuevo
+ *   ya_habia       un tercero la conectó y el titular ya tenía ese aviso sin leer
+ *   titular_actua  la conectó el propio titular: no hay a quién avisar
+ *   sin_titular    el perfil del creador no tiene app_user (seed, alta por agencia)
+ *   sin_sesion     copia sin llaves: no hay nadie en la sesión
+ */
+export type AvisoTitular = "enviado" | "ya_habia" | "titular_actua" | "sin_titular" | "sin_sesion";
+
 export type AgregarResult =
-  | { ok: true; id: string; created: boolean; profile: PublicProfile }
-  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "plataforma"; message: string };
+  | { ok: true; id: string; created: boolean; profile: PublicProfile; aviso: AvisoTitular }
+  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "plataforma"; message: string };
 
 export type ActualizarResult =
   | {
@@ -73,6 +94,31 @@ function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Lo que la bitácora guarda de una cuenta: sin correo, IP ni tokens. */
+function auditAfter(p: { connectionId: string; platformId: PlatformId; handle: string | null; accessMode: string; creator: ConsentCreator; actor: SessionMember | null }): Record<string, unknown> {
+  const delegated = p.actor && p.actor.userId !== p.creator.userId;
+  return {
+    connectionId: p.connectionId, platformId: p.platformId, handle: p.handle, accessMode: p.accessMode,
+    onBehalfOf: { creatorId: p.creator.id },
+    ...(delegated && p.actor ? { actedBy: { userId: p.actor.userId, roleKey: p.actor.roleKey } } : {}),
+  };
+}
+
+/**
+ * El aviso al titular cuando un tercero conectó su cuenta. Se arma aquí
+ * (y no en @mc/db) porque la fecha va en el locale y la zona del
+ * workspace, y @mc/db no escribe frases.
+ */
+async function avisarAlTitular(tx: WorkspaceTx, p: { creator: ConsentCreator; actor: SessionMember | null; connectionId: string; platformId: PlatformId; handle: string; at: Date }): Promise<AvisoTitular> {
+  if (!p.actor) return "sin_sesion";
+  if (p.actor.userId === p.creator.userId) return "titular_actua";
+  if (!p.creator.userId) return "sin_titular";
+  const f = formatterFor(await getWorkspaceSettings(tx));
+  const body = MESSAGES.aviso.body({ who: nombreDe(p.actor) ?? p.actor.email, handle: p.handle, network: PLATFORM_NAME[p.platformId], when: f.dateTime(p.at.toISOString()) });
+  const sent = await notifyConnectionAdded(tx, { userId: p.creator.userId, connectionId: p.connectionId, titleEs: MESSAGES.aviso.title, bodyEs: body });
+  return sent ? "enviado" : "ya_habia";
+}
+
 export function createCuentasService(deps: CuentasDeps) {
   const now = deps.now ?? (() => new Date());
   const build = (callLog: InMemoryCallLogSink) => {
@@ -97,6 +143,13 @@ export function createCuentasService(deps: CuentasDeps) {
       const callLog = new InMemoryCallLogSink();
       const source = build(callLog)[platformId];
       if (!source) return { ok: false, code: "plataforma", message: "Esa red no está disponible en esta versión." };
+      // Antes de gastar una llamada a la plataforma: quien no puede conectar no lee nada. La transacción que escribe lo vuelve a comprobar.
+      try {
+        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+      } catch (err) {
+        if (err instanceof PermisoDenegado) return { ok: false, code: "sin_permiso", message: err.messageEs };
+        throw err;
+      }
       let profile: PublicProfile;
       try {
         profile = await source.lookup(input.handle);
@@ -110,27 +163,33 @@ export function createCuentasService(deps: CuentasDeps) {
       const handle = profile.profile.handle ?? input.handle.replace(/^@/, "");
       const externalAccountId = profile.profile.external_account_id ?? handle;
       const at = now();
-      const evidence = redactSecrets({
-        declaredOwner: true, handle, platformId, textShown: OWNERSHIP_DECLARATION_ES, policyVersion: CONSENT_POLICY_VERSION,
-        source: profile.source, ip: who.ip, userAgent: who.userAgent, at: at.toISOString(),
-      }) as Record<string, unknown>;
       try {
         const out = await deps.withWorkspace(async (tx) => {
-          const creatorId = await getDefaultCreatorId(tx);
+          // TODO(ACC-1): requirePermission('conexiones.cuenta.conectar') — hoy el puente de _lib/permisos.ts.
+          const actor = await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          const creator = await getConsentCreator(tx);
           const { id, created } = await addPublicAccount(tx, {
-            creatorId, platformId, handle, externalAccountId,
+            creatorId: creator.id, platformId, handle, externalAccountId,
             displayName: profile.profile.display_name, avatarUrl: profile.profile.avatar_url, profileUrl: profile.profile.profile_url, accountType: profile.profile.account_type,
           });
-          await recordConsent(tx, { connectionId: id, creatorId, purpose: "analytics", policyVersion: CONSENT_POLICY_VERSION, evidence });
+          const evidence = redactSecrets(buildConsentEvidence({
+            method: "public_handle", declaredOwner: true, ip: who.ip, userAgent: who.userAgent, textShown: OWNERSHIP_DECLARATION_ES, policyVersion: CONSENT_POLICY_VERSION, at,
+            creatorId: creator.id, creatorUserId: creator.userId, actor, extra: { handle, platformId, source: profile.source },
+          })) as Record<string, unknown>;
+          await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose: "analytics", policyVersion: CONSENT_POLICY_VERSION, evidence });
           if (profile.metrics) {
             await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw });
           }
+          // TODO(ACC-2): withAudit() cuando esté en @mc/db; la forma de `after` se conserva.
+          await recordConnectionAudit(tx, { action: "connection.added", connectionId: id, after: auditAfter({ connectionId: id, platformId, handle, accessMode: "public_profile", creator, actor }) });
+          const aviso = await avisarAlTitular(tx, { creator, actor, connectionId: id, platformId, handle, at });
           await flush(callLog, tx, id);
-          return { id, created };
+          return { id, created, aviso };
         });
         return { ok: true, ...out, profile };
       } catch (err) {
         if (err instanceof NoCreatorProfile || err instanceof CreatorNotInWorkspace) return { ok: false, code: "sin_creador", message: err.message };
+        if (err instanceof PermisoDenegado) return { ok: false, code: "sin_permiso", message: err.messageEs };
         throw err;
       }
     },
@@ -213,8 +272,22 @@ export function createCuentasService(deps: CuentasDeps) {
       }
     },
 
+    /**
+     * «Quitar»: permiso conexiones.cuenta.desconectar como primera
+     * sentencia; la revocación queda en la evidencia de cada
+     * consentimiento (quién, cuándo, a nombre de quién) y en la bitácora.
+     * Lanza PermisoDenegado o ConnectionNotFound; la acción los traduce.
+     */
     async quitar(id: string): Promise<void> {
-      await deps.withWorkspace((tx) => disconnectConnection(tx, id));
+      await deps.withWorkspace(async (tx) => {
+        // TODO(ACC-1): requirePermission('conexiones.cuenta.desconectar').
+        const actor = await requireConexionesPermission(tx, "conexiones.cuenta.desconectar");
+        const creator = await getConsentCreator(tx);
+        const at = now();
+        const gone = await disconnectConnection(tx, id, buildRevocationEvidence({ at, creatorId: creator.id, actor, creatorUserId: creator.userId }));
+        // TODO(ACC-2): withAudit().
+        await recordConnectionAudit(tx, { action: "connection.removed", connectionId: id, after: auditAfter({ connectionId: id, platformId: gone.platformId, handle: gone.handle, accessMode: gone.accessMode, creator, actor }) });
+      });
     },
 
     listar(): Promise<AccountRow[]> {

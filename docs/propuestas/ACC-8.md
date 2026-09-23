@@ -111,11 +111,11 @@ docs/propuestas/ACC-8.md            este archivo
 creator_profile.user_id`, `kind = 'connection_added'`, `severity
 'info'`, `entity_type 'social_connection'`, `entity_id` la conexión,
 `action_url '/conexiones'`. Título y cuerpo los arma la web
-(`messages.ts`) con red, @, quién (nombre y correo) y cuándo
+(`messages.ts`) con red, @, quién (nombre, o correo si no lo puso) y cuándo
 (`formatterFor(settings).dateTime`); `@mc/db` no escribe frases
 (precedente `TextosCotizar`). No se crea si el titular no tiene
 `app_user` (`user_id` NULL): el servicio lo devuelve como
-`notified: 'sin_titular'` y queda en la bitácora. No se duplica si ya
+`aviso: 'sin_titular'` y queda en la bitácora. No se duplica si ya
 hay uno sin leer para la misma conexión y persona (idempotencia de
 «Agregar» repetido; patrón `notifyMediaKitLocked`).
 
@@ -178,3 +178,73 @@ verifica solo con la prueba automática.
 - Si ACC-2 define `after` con otra forma, `recordConnectionAudit` se
   adapta; los nombres `connection.added` / `connection.removed` son
   los que el backlog nombra desde ACC-2.
+
+---
+
+## 1. Lo que necesita Rasheed
+
+### 1.1 Migración 0034 (revisar y aplicar; `make db.migrate` lo corre Nicolás o Rasheed, nunca esta rama)
+
+`platform/db/migrations/0034_notification_connection_added.sql`: una
+sola sentencia, re-ejecutable, que amplía el CHECK de
+`notification.kind` con `connection_added`. Pasa `make db.check`; la
+guardia contra Supabase (`make db.guardia`, solo lectura) reporta
+exactamente «falta 0034», que es lo esperado. Si ACC-3 tomó también el
+0034, esta se renumera sin más.
+
+### 1.2 Esquema Drizzle (`packages/db/src/schema/cimientos.ts`, de Rasheed)
+
+Añadir `'connection_added'` a `NOTIFICATION_KINDS`, con su comentario
+(`// 0034 (ACC-8): un tercero conectó una cuenta en nombre del titular`).
+Esta rama no lo toca: los INSERT de `notifyConnectionAdded` van por SQL
+y no dependen del enum de TypeScript.
+
+### 1.3 Seed (para leerlo, no para hacer nada)
+
+`db/seed/0003` (mío) trae ahora a **Andrés Pardo** (`app_user`
+`…000000000004`, `andres@ejemplo.com`), mánager de la demo con
+`membership 'admin'`, un `data_consent` v2 con `actedBy` sobre la
+cuenta de Instagram del seed (`…0000000000c1`) y un `notification`
+`connection_added` sin leer para Laura. Ids fijos, `ON CONFLICT DO
+NOTHING`. Si el seed se aplica en Supabase, 0034 tiene que ir antes
+(el CHECK). Si no queremos al mánager en la demo pública, se quita el
+bloque entero (está delimitado con su cabecera).
+
+### 1.4 Lo que ACC-1, ACC-3, ACC-4 y ACC-5 heredan de aquí
+
+- **Nombres de permiso ya en uso**: `conexiones.cuenta.conectar` y
+  `conexiones.cuenta.desconectar` (`apps/web/app/(app)/conexiones/_lib/permisos.ts`).
+  Cuando `requirePermission` exista, cada `// TODO(ACC-1)` de
+  `actions.ts`, `cuentas-service.ts` y `oauth-handlers.ts` se
+  reemplaza por esa llamada y `permisos.ts` se reduce a reexportarla.
+- **La casilla de ACC-4** («también puede conectar mis cuentas»)
+  otorga exactamente `conexiones.cuenta.conectar` y
+  `conexiones.cuenta.desconectar` al mánager. Sin ella, el rol
+  «Mánager» de fábrica no los trae (decisión E). Hasta ACC-3, el puente
+  es `membership.role IN ('owner','admin')`.
+- **`roleKey` en la evidencia** es `membership.role` hoy y `role.key`
+  con ACC-3; el campo no cambia de nombre ni de forma.
+- **ACC-2**: `recordConnectionAudit` (`queries/conexiones.ts`) escribe
+  `connection.added` / `connection.removed` con `after = { connectionId,
+  platformId, handle, accessMode, onBehalfOf, actedBy? }`. Cuando
+  `withAudit()` exista, se reemplaza la llamada; la forma de `after` es
+  la que las pruebas ya comprueban.
+- **AGE-2** (sesión delegada entre workspaces) hereda el modelo entero:
+  el actor sigue siendo `current_user_id()` y el titular
+  `creator_profile`; lo que cambia es que `audit_log` pasa a llevar
+  `actor_kind 'delegate'` y `on_behalf_of_workspace_id` (ACC-3), y la
+  evidencia puede sumar `actedBy.workspaceId`. Nada de lo de aquí se
+  reescribe.
+
+### 1.5 Fuera de alcance (con su historia)
+
+- La casilla al invitar: ACC-4 (Rasheed).
+- Sesión delegada entre workspaces: AGE-2.
+- Envío del aviso por correo: ACC-8 fase 2 (`notification.emailed_at`
+  ya existe para cuando llegue).
+- Aviso al titular cuando un tercero QUITA la cuenta: otro `kind`
+  (`connection_removed`); queda para ACC-8 fase 2 junto con el correo.
+  Hoy queda en la evidencia y en la bitácora.
+- Recolocar los textos anteriores de Conexiones en `messages.ts`
+  (declaración de propiedad, texto OAuth, errores del flujo): pulido,
+  no ACC-8.
