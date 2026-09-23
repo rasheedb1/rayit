@@ -118,12 +118,68 @@ Los 57 530 salen de las interacciones de las dos lecturas manuales
 
 ## 1. Lo hecho
 
-(Se completa al cerrar.)
+| Paso | Commit | Qué |
+|---|---|---|
+| Dependencia | `a9c9790` | Cherry-pick del core de CAM-3 (`ritmoSeguidores`). Cuando CAM-3 se integre, el mismo cambio llega dos veces y git lo reconoce. |
+| Plan | `a33819b` | §0 de esta propuesta. |
+| Core | `a3d3c4f` | `calcularResultado`, `MISSING_INPUTS`, `followerRateMultiple`, `isResultComplete`. |
+| Consultas | `f280e7e` | `getResultInputs`, `upsertResult`, `computeCampaignResult`, `listCampaignsToCompute`, `getCampaignResult`, `canRecomputeResult`. |
+| Job | `f88f633` | `campaign.compute` y su prueba en el arnés con los seeds reales. |
+| Pantalla | `8099cf6`, `55f9cff` | Sección «Resultado» y acción `recalcularResultado`. |
+| Revisión | `ea43637` | Los ocho hallazgos corregidos de §4. |
+
+Una nota de producto que sale de aquí: con el seed, **Café Alma
+recalculada tiene `views_vs_median` 4,496** (el seed lo dejaba null) y
+las interacciones pasan de 57 630 (mock) a 57 530 (la suma real de las
+lecturas manuales).
 
 ## 2. Lo que necesita Rasheed
 
-(Se completa al cerrar.)
+| # | Qué | Por qué | Urgencia |
+|---|---|---|---|
+| 1 | **DECISIÓN PENDIENTE DE NICOLÁS, y luego Rasheed**: una migración con `GRANT INSERT, UPDATE ON campaign_result TO mc_app;` y el cambio de `campaign_result` en `PRIVILEGIOS_DE_LA_APP` (`packages/db/src/esquema.ts`) de `['SELECT']` a `['SELECT', 'INSERT', 'UPDATE']` con el motivo «el botón Recalcular de CAM-5». Sin DELETE. La política `campaign_result_ws_isolation` ya aísla la escritura (USING sirve de WITH CHECK). | 0025 le quitó a `mc_app` la escritura porque «lo consolida el worker», pero el worker no está desplegado (CIM-7) y la web no llega a la cola. Sin esto, en producción `campaign_result` conserva las cifras del mock (CPM 11 800) hasta CIM-7. Con esto, «Recalcular» aparece solo en la ficha: no hay que tocar código. Probado en PGlite (`packages/db/test/campanas.test.ts`, bloque «con el GRANT propuesto») y en dev con el GRANT en un seed local no commiteado. | Alta si se quiere el resultado real antes de CIM-7. |
+| 2 | Nada de esquema: `campaign_result` ya tiene todas las columnas. | — | — |
+| 3 | El GRANT del worker (`mc_worker` sobre `campaign_result`) ya está en 0014. | — | — |
+
+Sin migraciones en esta rama y sin variables nuevas.
 
 ## 3. Contrato de lectura para CAM-6 y VEN-6
 
-(Se completa al cerrar.)
+`campaign_result` es una fila por campaña, reemplazada cada mañana (y
+por «Recalcular»). Se lee con `getCampaignResult(tx, campaignId)` de
+`@mc/db` o por SQL con RLS:
+
+| Columna | Qué es | null significa |
+|---|---|---|
+| `computed_at` | cuándo se calculó | — |
+| `cut_hours` | 720 si todos los posts llegaron a 30 días; si no, el mayor corte que todos alcanzaron (168, 72, 24) | — (**sin sentido si `missing_inputs` trae `posts`**: queda en 720 porque la columna es NOT NULL) |
+| `views`, `reach`, `interactions`, `saves`, `shares`, `link_clicks` | suma de los posts al corte | algún post no trae el dato, o no hay posts medidos |
+| `reach_non_followers_pct` | 0..1, sobre los posts que traen alcance y no seguidores | ningún post lo trae |
+| `views_vs_median` | promedio ponderado por views de views ÷ mediana del creador en la red y el corte | falta línea base fiable (`baseline`) |
+| `brand_followers_gained`, `…_baseline_rate`, `…_campaign_rate` | seguidores de la marca y sus ritmos (por día), sumados entre las redes que tienen los dos ritmos | no hay serie (`brand_followers`); con `brand_followers_baseline_short`, el «×N» no se presenta |
+| `code_redemptions`, `attributed_revenue` | del CSV de ventas si existe; si no, el último total manual (CAM-4) | la marca no lo reportó; ingresos manuales en otra moneda no se atribuyen |
+| `cpm`, `cost_per_follower`, `cpa` | monto ÷ views × 1000, ÷ ganados, ÷ canjes, al centavo | falta el monto o el divisor es 0 o null |
+| `emv` | siempre null (DECISIÓN PENDIENTE DE NICOLÁS) | — |
+| `missing_inputs` | qué falta, con los nombres de `MISSING_INPUTS` en core | — |
+
+Para VEN-6 (pitch con cifras trazables): cada cifra enlaza a la
+campaña y a `computed_at`; si `missing_inputs` no está vacío, el pitch
+no debería presentar esa campaña como «completa». Para CAM-6: el
+payload congelado copia la fila y `missing_inputs` tal cual.
+
+## 4. Revisión (`/code-review` en nivel alto)
+
+Diez hallazgos. Ocho corregidos con su prueba, dos justificados.
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | `views_vs_median` sin tope desbordaba `numeric(8,3)` y el UPSERT fallaba siempre. | **Corregido.** Topes de las tres escalas de 0008. Prueba «una razón que no cabe…». |
+| 2 | Los ritmos de la marca se sumaban sobre redes distintas (el «×N» se inflaba). | **Corregido.** Solo las redes con los dos ritmos. Prueba «los dos ritmos se suman sobre las mismas redes». |
+| 3 | El «×N» se enseñaba con línea base corta. | **Corregido.** Dice «línea base corta: sin ritmo comparable». Prueba de la sección. |
+| 4 | Sin posts medidos, la ficha decía «a 30 días». | **Corregido.** Dice «sin posts medidos», y el contrato de §3 lo advierte para `cut_hours`. |
+| 5 | La frase «salen del CSV» no seguía la elección real por concepto. | **Corregido.** `brandFigures` en core decide para la cuenta y para la frase. Pruebas en core y en la sección. |
+| 6 | La nota del CPA culpaba a la marca aunque faltara el monto. | **Corregido.** Tres causas con su frase. |
+| 7 | Ingresos en otra moneda se descartaban sin decirlo. | **Corregido** en la ficha (frase con la moneda). No hay nombre en `missing_inputs` porque la lista es fija por la historia. Un conteo no entero no puede entrar por CAM-4 (formulario y CSV solo aceptan enteros). |
+| 8 | Un post sin lecturas deja a toda la campaña sin cifras. | **Justificado.** Es la regla de la historia («el mayor corte que TODOS alcanzaron»): sumar los que sí tienen daría una cifra de campaña que no lo es. El texto de «Falta» ahora dice «asocia los posts o espera su primera lectura». |
+| 9 | `computeCampaignResult` ignoraba un UPSERT que no escribió. | **Corregido.** `ResultNotWrittenError`. |
+| 10 | Limpieza: `mapLimit` importado del job de otro módulo; serie armada con copias; `versusMedian` no reutilizado. | **Corregido** lo primero (`runner/concurrency.ts`) y lo segundo. **Justificado** lo tercero: `versusMedian` redondea cada post a tres decimales antes de ponderar y exige la muestra aparte; la ponderación necesita la razón sin redondear. |

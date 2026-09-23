@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -59,10 +59,12 @@ app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
 app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
                               index.ts exporta facturarCampana() para Campañas.
-app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Lo que aportó
-                              la marca» (CAM-4): aporte.tsx (formulario y CSV),
-                              [id]/_lib/csv-ventas.ts (el CSV de ventas diarias),
-                              _lib/messages.ts (los textos del módulo).
+app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
+                              (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
+                              qué falta y «Recalcular» si la base lo permite) y
+                              «Lo que aportó la marca» (CAM-4): aporte.tsx
+                              (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
+                              de ventas diarias), _lib/messages.ts (los textos).
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
