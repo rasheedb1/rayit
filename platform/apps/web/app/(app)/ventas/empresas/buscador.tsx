@@ -55,7 +55,7 @@ export function Buscador({ minSearch }: { minSearch: number }) {
   return (
     <div role="search" className="flex flex-wrap items-end gap-3" aria-busy={pending || undefined}>
       <Field label={t.search} help={short ? t.shortSearch(minSearch) : t.searchHelp} htmlFor="empresas-q" className="min-w-0 flex-1 basis-64">
-        <Input type="search" value={q} onChange={(e) => onChange(e.target.value)} autoComplete="off" placeholder="Café Alma, cafealma.co" />
+        <Input type="search" value={q} onChange={(e) => onChange(e.target.value)} autoComplete="off" placeholder={MESSAGES.empresas.searchPlaceholder} />
       </Field>
       <Field label={t.relationshipFilter} htmlFor="empresas-rel" className="w-44">
         <Select

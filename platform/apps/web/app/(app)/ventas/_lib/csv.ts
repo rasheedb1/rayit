@@ -1,8 +1,10 @@
 /**
  * Lee la lista de marcas que alguien carga en el radar (VEN-2).
  *
- * Puro y sin dependencias: recibe el texto del archivo y devuelve filas
- * listas para `importSignals`, más los errores por línea en español.
+ * Puro: recibe el texto del archivo ya decodificado (lib/csv.ts,
+ * decodificarCsv, con respaldo a Windows-1252) y devuelve filas listas
+ * para `importSignals`, más los errores por línea con los textos de
+ * messages.ts.
  * La deduplicación NO vive aquí: la hace el UNIQUE de la base, que es
  * lo único que se acuerda de las señales descartadas.
  *
@@ -15,6 +17,12 @@
  *   - BOM al principio y finales de línea de Windows.
  */
 import type { ImportSignalRow } from "@mc/db/queries/ventas";
+import { MESSAGES } from "./messages";
+
+const T = MESSAGES.radar.csv.parse;
+
+/** Largo máximo del nombre de una marca: el mismo tope que el formulario. */
+export const MAX_BRAND_NAME = 200;
 
 /** Filas por archivo. Una lista más larga se parte: revisarla entera en la bandeja no es realista. */
 export const MAX_CSV_ROWS = 500;
@@ -131,7 +139,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   const text = raw.replace(/^﻿/, "");
   const records = splitCsv(text, detectDelimiter(text)).filter((r) => r.cells.some((c) => c.trim() !== ""));
   if (records.length === 0) {
-    return { rows: [], errors: [{ line: 1, message: "El archivo está vacío." }], hasHeader: false };
+    return { rows: [], errors: [{ line: 1, message: T.empty }], hasHeader: false };
   }
 
   // Cabecera: la primera fila, si al menos una celda es un nombre de
@@ -162,17 +170,17 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
     if (rows.length >= MAX_CSV_ROWS) {
       errors.push({
         line: record.line,
-        message: `La lista pasa de ${MAX_CSV_ROWS} marcas. Se cargaron las primeras ${MAX_CSV_ROWS}; parte el archivo para el resto.`,
+        message: T.tooManyRows(MAX_CSV_ROWS),
       });
       break;
     }
     const name = cell(record.cells, "name");
     if (!name) {
-      errors.push({ line: record.line, message: "Falta el nombre de la marca." });
+      errors.push({ line: record.line, message: T.missingName });
       continue;
     }
-    if (name.length > 200) {
-      errors.push({ line: record.line, message: "El nombre de la marca pasa de 200 caracteres." });
+    if (name.length > MAX_BRAND_NAME) {
+      errors.push({ line: record.line, message: T.nameTooLong(MAX_BRAND_NAME) });
       continue;
     }
     rows.push({
@@ -185,7 +193,7 @@ export function parseBrandCsv(raw: string): ParsedBrandCsv {
   }
 
   if (rows.length === 0 && errors.length === 0) {
-    errors.push({ line: 1, message: "El archivo solo tiene la cabecera." });
+    errors.push({ line: 1, message: T.onlyHeader });
   }
   return { rows, errors, hasHeader };
 }

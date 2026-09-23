@@ -1,4 +1,5 @@
 import type { TextosCotizar } from "@mc/db/queries/cotizar";
+import { formatMoney } from "@/lib/format";
 import { MESSAGES } from "../messages";
 
 /**
@@ -14,6 +15,14 @@ export const TEXTOS_COTIZAR: TextosCotizar = {
     via === "panel"
       ? MESSAGES.actividad.aceptadaPanel(quoteNumber)
       : MESSAGES.actividad.aceptadaEnlace(quoteNumber, signerName ? MESSAGES.actividad.firma(signerName, signerEmail) : null),
+  // Sin el locale del workspace a mano: formatMoney usa el de por
+  // defecto. La cifra y la moneda exactas quedan además en metadata.
+  actividadMonto: ({ quoteNumber, amountFrom, currencyFrom, amountTo, currencyTo }) =>
+    MESSAGES.actividad.monto(
+      quoteNumber,
+      amountFrom ? formatMoney(amountFrom, currencyFrom, { mode: "full" }) : null,
+      formatMoney(amountTo, currencyTo, { mode: "full" }),
+    ),
   avisoAceptada: ({ companyName, quoteNumber, signerName, signerEmail, campaignName }) => {
     const firma = signerName ? MESSAGES.actividad.firma(signerName, signerEmail) : null;
     return {

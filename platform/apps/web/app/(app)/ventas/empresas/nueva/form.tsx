@@ -25,7 +25,7 @@ export function NuevaEmpresaForm() {
           <Input name="name" maxLength={200} autoComplete="organization" autoFocus />
         </Field>
         <Field label={t.domain} error={errors.domain} help={MESSAGES.radar.form.domainHelp} htmlFor="empresa-domain" className="sm:col-span-2">
-          <Input name="domain" inputMode="url" placeholder="cafealma.co" maxLength={253} autoComplete="off" />
+          <Input name="domain" inputMode="url" placeholder={t.domainPlaceholder} maxLength={253} autoComplete="off" />
         </Field>
         <Field label={t.country} help={t.countryHelp} error={errors.country} htmlFor="empresa-country">
           <Input name="country" maxLength={2} className="uppercase" autoComplete="off" />

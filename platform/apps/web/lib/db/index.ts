@@ -121,7 +121,10 @@ export async function acceptQuoteFromLink(
   const r = await withPublicShare((tx) => acceptPublicQuote(tx, slug, firma));
   if (r.status !== "ok") return r;
   try {
-    const campana = await withWorkspaceId(r.workspaceId, (tx) => completePublicAcceptance(tx, r.quoteId, textos));
+    const cambioMonto = r.dealAmountChanged
+      ? { amountFrom: r.dealAmountFrom ?? null, currencyFrom: r.dealCurrencyFrom ?? null }
+      : null;
+    const campana = await withWorkspaceId(r.workspaceId, (tx) => completePublicAcceptance(tx, r.quoteId, textos, cambioMonto));
     return { status: "ok", quoteNumber: r.quoteNumber, campaignPending: campana.campaign === null };
   } catch (err) {
     console.error("[cotizacion pública] aceptada, pero no se pudo terminar la campaña", err);

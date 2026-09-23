@@ -1,5 +1,5 @@
 /**
- * @mc/db · acceso a datos de MultiCampaign. El contrato completo, con
+ * @mc/db · acceso a datos de On Cue. El contrato completo, con
  * ejemplos, está en README.md.
  *
  *   client.ts      withWorkspace / withIdentity / asWorker sobre pg (y withCatalogs, por @mc/db/client)

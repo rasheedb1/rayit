@@ -4,7 +4,7 @@ import { ModuleTabs } from "../../_componentes/pestanas";
 import { MESSAGES } from "../../_lib/messages";
 import { NuevaEmpresaForm } from "./form";
 
-export const metadata: Metadata = { title: "Nueva empresa · Ventas" };
+export const metadata: Metadata = { title: MESSAGES.empresas.form.metaTitle };
 
 export default function NuevaEmpresaPage() {
   const t = MESSAGES.empresas.form;

@@ -14,7 +14,7 @@ import { RELATIONSHIP_META } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 import { Buscador } from "./buscador";
 
-export const metadata: Metadata = { title: "Empresas · Ventas" };
+export const metadata: Metadata = { title: MESSAGES.empresas.metaTitle };
 export const dynamic = "force-dynamic";
 
 /**

@@ -59,6 +59,9 @@ export function PipelineView({
     nextActionDueText: d.isWon || d.isLost || !d.nextActionDue ? null : f.date(d.nextActionDue),
     due: d.isWon || d.isLost ? null : pillForDue(d.dueState),
     needsNextAction: needsNextAction(d),
+    // El atajo a Cotizar, solo en los abiertos: son los que Cotizar
+    // ofrece (listQuotableDeals) y los que tiene sentido cotizar.
+    quoteHref: d.isWon || d.isLost ? null : quoteHref(d.id),
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,
@@ -69,7 +72,7 @@ export function PipelineView({
 
   return (
     <section aria-labelledby="pipeline">
-      <SectionTitle meta={`${deals.length} ${deals.length === 1 ? "negocio" : "negocios"}`}>
+      <SectionTitle meta={t.meta(deals.length)}>
         <span id="pipeline">{t.title}</span>
       </SectionTitle>
 
@@ -78,6 +81,11 @@ export function PipelineView({
       {forma === "tablero" ? <PipelineBoard deals={boardDeals} stages={boardStages} /> : <PipelineList deals={boardDeals} />}
     </section>
   );
+}
+
+/** «Cotizar» desde un negocio: la nueva cotización ya lo trae elegido (COT-3). */
+export function quoteHref(dealId: string): string {
+  return `/cotizar/cotizaciones/nueva?negocio=${encodeURIComponent(dealId)}`;
 }
 
 /** Tablero o lista. Enlaces con aria-current, como las pestañas del módulo. */
@@ -142,6 +150,17 @@ function PipelineList({ deals }: { deals: BoardDeal[] }) {
         ),
     },
     { key: "days", header: t.columns.daysInStage, align: "num", render: (d) => t.days(d.daysInStage) },
+    {
+      key: "quote",
+      header: t.quote,
+      align: "num",
+      render: (d) =>
+        d.quoteHref ? (
+          <Link href={d.quoteHref} aria-label={t.quoteLabel(d.companyName)} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+            {t.quote}
+          </Link>
+        ) : null,
+    },
   ];
   return (
     <DataTable

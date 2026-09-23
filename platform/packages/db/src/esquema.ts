@@ -285,9 +285,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     '(privilegios de COLUMNA)',
   'public_quote_accept(text,text,text)':
     'acepta la cotización desde el enlace (0030, COT-4): marca la cotización aceptada con la firma y pasa el deal a ' +
-    '«Ganado» con su historial. mc_public_share solo tiene UPDATE en esas columnas y SELECT de la etapa, así que ' +
-    'aunque tuviera un error no podría tocar importes ni nombres; la campaña la crea después la web dentro del ' +
-    'workspace de la cotización',
+    '«Ganado» con su historial por deal_move_stage (0031, SECURITY INVOKER: corre con los permisos de ' +
+    'mc_public_share). Ese rol solo tiene UPDATE en esas columnas del deal —etapa, fechas de cierre, probabilidad, ' +
+    'motivo de pérdida y el monto con su moneda, que la función copia de la cotización que acaba de leer por su ' +
+    'slug— y SELECT de la etapa: no puede tocar el total de la cotización ni el nombre, la empresa o el dueño del ' +
+    'negocio; la campaña la crea después la web dentro del workspace de la cotización',
 };
 
 /**

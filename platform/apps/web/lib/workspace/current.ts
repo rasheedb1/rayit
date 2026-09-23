@@ -62,7 +62,7 @@ import { espacioDeLaCookie } from "./elegir";
 /** A dónde va una sesión con la identidad en conflicto: el route handler que la cierra (app/auth/salir/route.ts). */
 export const SALIDA_POR_IDENTIDAD = "/auth/salir?error=identidad";
 
-/** Workspace de la creadora ficticia del seed (db/seed/0002 y 0003). Se entra a él con demo@multicampaign.test. */
+/** Workspace de la creadora ficticia del seed (db/seed/0002 y 0003). Se entra a él con demo@oncue.test. */
 export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
 
 /** Lo que una petición necesita saber antes de abrir una transacción. */

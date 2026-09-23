@@ -185,7 +185,7 @@ export const MESSAGES = {
     },
     demo: {
       titulo: "Estás viendo la demostración",
-      descripcion: "No hay sesión iniciada: la aplicación sirve el espacio de ejemplo del seed.",
+      descripcion: "No hay sesión iniciada: la aplicación te muestra el espacio de ejemplo.",
       entrar: "Entrar con mi correo",
     },
   },

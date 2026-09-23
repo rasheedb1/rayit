@@ -10,19 +10,23 @@ import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
 import { RELATIONSHIP_META, pillForDue } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
+import { quoteHref } from "../../_pipeline/vista";
 import { Contactos } from "./contactos";
+import { NuevoNegocio } from "./negocio";
 import { RelacionForm } from "./relacion";
 
-export const metadata: Metadata = { title: "Empresa · Ventas" };
+export const metadata: Metadata = { title: MESSAGES.empresas.detail.metaTitle };
 export const dynamic = "force-dynamic";
 
 /**
  * La ficha de una empresa: sus datos, la relación con ella, sus
  * negocios y sus contactos (VEN-1).
  *
- * La línea de tiempo, «lo que sabemos» y la cadena negocio → cotización
- * → campaña → factura son VEN-5 y llegan en el sprint 3; esta ficha es
- * la base sobre la que se montan.
+ * Desde aquí se abre un negocio a mano («Nuevo negocio») y se cotiza
+ * cada negocio abierto («Cotizar» lleva a la nueva cotización con el
+ * negocio ya elegido). La línea de tiempo, «lo que sabemos» y la cadena
+ * negocio → cotización → campaña → factura son VEN-5 y llegan en el
+ * sprint 3; esta ficha es la base sobre la que se montan.
  */
 export default async function EmpresaPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -45,13 +49,14 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
     );
   }
 
-  const f = formatterFor(await getCurrentWorkspace());
+  const workspace = await getCurrentWorkspace();
+  const f = formatterFor(workspace);
   const rel = RELATIONSHIP_META[company.relationship];
   const location = [company.city, company.country].filter(Boolean).join(", ");
 
   return (
     <>
-      <nav aria-label="Ruta" className="mb-2 text-xs text-muted">
+      <nav aria-label={t.detail.breadcrumb} className="mb-2 text-xs text-muted">
         <Link href="/ventas/empresas" className="hover:text-ink hover:underline">
           ← {t.back}
         </Link>
@@ -65,6 +70,9 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             <SectionTitle meta={company.openDealCount > 0 ? f.money(company.openDealAmount, undefined, { mode: "compact" }) : undefined}>
               <span id="negocios">{t.columns.deals}</span>
             </SectionTitle>
+            <div className="mb-3">
+              <NuevoNegocio companyId={company.id} currency={workspace.currency} />
+            </div>
             {deals.length === 0 ? (
               <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted">{t.noDeals}</p>
             ) : (
@@ -91,6 +99,15 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                         <span className="text-sm tabular-nums text-ink">
                           {d.amount ? f.money(d.amount, d.currency, { mode: "compact" }) : <span className="text-muted">{MESSAGES.pipeline.noAmount}</span>}
                         </span>
+                        {!d.isWon && !d.isLost && (
+                          <Link
+                            href={quoteHref(d.id)}
+                            aria-label={t.detail.quoteLabel(d.name)}
+                            className="text-sm text-ink underline underline-offset-4 hover:text-ink-2"
+                          >
+                            {t.detail.quote}
+                          </Link>
+                        )}
                       </div>
                     </li>
                   );
@@ -136,7 +153,7 @@ function Dato({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-muted">{label}</dt>
-      <dd className="text-right text-ink">{value ?? "—"}</dd>
+      <dd className="text-right text-ink">{value ?? MESSAGES.empresas.detail.empty}</dd>
     </div>
   );
 }

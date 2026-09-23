@@ -90,16 +90,16 @@ function NuevoContactoForm({ companyId, onCancel, onSaved }: { companyId: string
           <Input name="phone" type="tel" inputMode="tel" maxLength={40} autoComplete="off" />
         </Field>
         <Field label={t.instagram} error={errors.instagramHandle} htmlFor="contacto-instagram">
-          <Input name="instagramHandle" placeholder="@usuario" maxLength={31} autoComplete="off" />
+          <Input name="instagramHandle" placeholder={t.instagramPlaceholder} maxLength={31} autoComplete="off" />
         </Field>
         <Field label={t.linkedin} error={errors.linkedinUrl} htmlFor="contacto-linkedin">
-          <Input name="linkedinUrl" type="url" inputMode="url" placeholder="https://linkedin.com/in/…" />
+          <Input name="linkedinUrl" type="url" inputMode="url" placeholder={t.linkedinPlaceholder} />
         </Field>
         <Field label={t.source} help={sourceHelp} error={errors.source} required htmlFor="contacto-source">
           <Select name="source" value={source} onChange={(e) => setSource(e.target.value)} placeholder={t.sourcePlaceholder} options={SOURCE_OPTIONS} />
         </Field>
         <Field label={t.sourceUrl} help={t.sourceUrlHelp} error={errors.sourceUrl} htmlFor="contacto-source-url">
-          <Input name="sourceUrl" type="url" inputMode="url" placeholder="https://" />
+          <Input name="sourceUrl" type="url" inputMode="url" placeholder={t.urlPlaceholder} />
         </Field>
       </div>
       <Aviso message={state.message} className="mt-4" />
@@ -119,7 +119,7 @@ function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId
   const t = MESSAGES.contacto;
   const [confirming, setConfirming] = useState(false);
   const { state, pending, formRef, onSubmit } = useVentasForm(darDeBaja, () => setConfirming(false));
-  const name = c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : "—");
+  const name = c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : MESSAGES.contacto.noName);
 
   return (
     <li className="p-3">

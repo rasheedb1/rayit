@@ -34,7 +34,11 @@ beforeEach(() => {
 
 describe("Radar", () => {
   it("aceptar anuncia el negocio abierto y enlaza al pipeline", async () => {
-    aceptarSenal.mockResolvedValue({ ok: true, notice: "Abriste un negocio con Café Alma. La siguiente acción es «Enviar pitch»." });
+    aceptarSenal.mockResolvedValue({
+      ok: true,
+      notice: "Abriste un negocio con Café Alma. La siguiente acción es «Enviar pitch».",
+      link: { href: "/ventas?vista=pipeline", label: "Ver en el pipeline" },
+    });
     render(<Radar cards={[card]} currency="COP" />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
 
@@ -42,6 +46,21 @@ describe("Radar", () => {
     expect(screen.getByRole("link", { name: "Ver en el pipeline" })).toHaveAttribute("href", "/ventas?vista=pipeline");
     const data = aceptarSenal.mock.calls[0]?.[1] as FormData;
     expect(data.get("signalId")).toBe(SIGNAL);
+  });
+
+  it("aceptar la señal de una marca con un negocio abierto lo dice y enlaza a su ficha", async () => {
+    const empresa = "/ventas/empresas/00000002-0000-4000-8000-0000000000e1";
+    aceptarSenal.mockResolvedValue({
+      ok: true,
+      notice: "Ya tienes un negocio con Café Alma: la señal quedó anotada en él.",
+      link: { href: empresa, label: "Ver el negocio" },
+    });
+    render(<Radar cards={[card]} currency="COP" />);
+    fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Ya tienes un negocio con Café Alma");
+    expect(screen.getByRole("link", { name: "Ver el negocio" })).toHaveAttribute("href", empresa);
+    expect(screen.queryByRole("link", { name: "Ver en el pipeline" })).not.toBeInTheDocument();
   });
 
   it("descartar pide el motivo y muestra el error del servidor en su campo", async () => {

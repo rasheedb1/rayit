@@ -51,23 +51,60 @@ export type Relationship = (typeof RELATIONSHIPS)[number];
 // Errores
 // ---------------------------------------------------------------------
 
-/** Base de los errores de Ventas: el mensaje ya está en español. */
+/**
+ * Los códigos de error de Ventas. Esta capa no tiene idioma: lleva el
+ * código (y, si hace falta, los datos para componer la frase) y la
+ * pantalla lo traduce con su messages.ts (MESSAGES.errores), igual que
+ * Cotizar. Traducir Ventas no toca @mc/db.
+ */
+export const VENTAS_ERROR_CODES = [
+  'CompanyNotFound',
+  'CompanyNotEditable',
+  'CompanyCreateFailed',
+  'ContactNotFound',
+  'ContactNotOwned',
+  'ContactCreateFailed',
+  'DealNotFound',
+  'DealCreateFailed',
+  'DealLocked',
+  'DuplicateDomain',
+  'DuplicateEmail',
+  'EmptyContact',
+  'InvalidAmount',
+  'InvalidCompany',
+  'InvalidDealName',
+  'InvalidHeadline',
+  'InvalidName',
+  'InvalidOwner',
+  'InvalidReason',
+  'InvalidRelationship',
+  'InvalidSource',
+  'InvalidStage',
+  'SignalAlreadyReviewed',
+  'SignalNotFound',
+  'SignalWithoutCompany',
+] as const;
+export type VentasErrorCode = (typeof VENTAS_ERROR_CODES)[number];
+
+/**
+ * Base de los errores de Ventas: un código y sus datos, sin frase.
+ * `message` es el código, que es lo que sirve en un registro.
+ */
 export class VentasError extends Error {
-  readonly code: string;
-  constructor(code: string, messageEs: string) {
-    super(messageEs);
+  readonly code: VentasErrorCode;
+  /** Lo que la frase necesita: el nombre de la empresa que ya tiene el dominio, el motivo de un bloqueo… */
+  readonly params: Readonly<Record<string, string>>;
+  constructor(code: VentasErrorCode, params: Record<string, string> = {}) {
+    super(code);
     this.name = code;
     this.code = code;
-  }
-  /** El mismo texto que `message`, con nombre explícito para las pantallas. */
-  get messageEs(): string {
-    return this.message;
+    this.params = params;
   }
 }
 
 export class CompanyNotFound extends VentasError {
   constructor() {
-    super('CompanyNotFound', 'Esa empresa no existe en tu espacio.');
+    super('CompanyNotFound');
   }
 }
 
@@ -79,51 +116,60 @@ export class CompanyNotFound extends VentasError {
  */
 export class CompanyNotEditable extends VentasError {
   constructor() {
-    super(
-      'CompanyNotEditable',
-      'Esta empresa es del catálogo compartido: sus datos no se editan desde tu espacio. Puedes cambiar la relación y las notas.',
-    );
+    super('CompanyNotEditable');
   }
 }
 
 export class ContactNotFound extends VentasError {
   constructor() {
-    super('ContactNotFound', 'Ese contacto no existe o no lo guardaste tú.');
+    super('ContactNotFound');
   }
 }
 
 export class SignalNotFound extends VentasError {
   constructor() {
-    super('SignalNotFound', 'Esa señal ya no está en tu bandeja.');
+    super('SignalNotFound');
   }
 }
 
 export class DealNotFound extends VentasError {
   constructor() {
-    super('DealNotFound', 'Ese negocio no existe en tu espacio.');
+    super('DealNotFound');
   }
 }
 
 export class SignalAlreadyReviewed extends VentasError {
   constructor() {
-    super('SignalAlreadyReviewed', 'Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó.');
+    super('SignalAlreadyReviewed');
   }
 }
 
+/** El dominio ya es de otra empresa: `params.name` dice cuál. */
 export class DuplicateDomain extends VentasError {
   constructor(name: string) {
-    super('DuplicateDomain', `Ese dominio ya es de «${name}». Búscala en vez de crearla otra vez.`);
+    super('DuplicateDomain', { name });
   }
 }
 
 /**
  * Escribir un contacto ajeno. La política de 0020 no distingue «no
  * existe» de «no es tuyo» a propósito (decir cuál sería filtrar la
- * existencia de la fila), así que el mensaje tampoco.
+ * existencia de la fila), así que el código tampoco.
  */
 export class ContactNotOwned extends VentasError {
   constructor() {
-    super('ContactNotOwned', 'Solo puedes editar los contactos que guardaste tú.');
+    super('ContactNotOwned');
+  }
+}
+
+/**
+ * Sacar de «Ganado» un negocio que ya tiene campaña (no cancelada) o
+ * una cotización aceptada cuya campaña aún no existe (0031,
+ * deal_move_stage). `params.reason` es 'campaign' o 'quote'.
+ */
+export class DealLocked extends VentasError {
+  constructor(reason: 'campaign' | 'quote') {
+    super('DealLocked', { reason });
   }
 }
 
@@ -419,11 +465,11 @@ export interface CreateCompanyInput {
  */
 export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput): Promise<string> {
   const name = input.name.trim();
-  if (!name) throw new VentasError('InvalidName', 'La empresa necesita un nombre.');
+  if (!name) throw new VentasError('InvalidName');
   const domain = normalizeDomain(input.domain);
   const relationship = input.relationship && RELATIONSHIPS.includes(input.relationship) ? input.relationship : 'prospect';
   if (input.ownerUserId && !isUuid(input.ownerUserId)) {
-    throw new VentasError('InvalidOwner', 'El responsable no es válido.');
+    throw new VentasError('InvalidOwner');
   }
 
   let companyId: string | undefined;
@@ -456,7 +502,7 @@ export async function createCompany(tx: WorkspaceTx, input: CreateCompanyInput):
       ],
     );
     companyId = inserted.rows[0]?.id;
-    if (!companyId) throw new VentasError('CreateFailed', 'No se pudo crear la empresa.');
+    if (!companyId) throw new VentasError('CompanyCreateFailed');
   }
 
   await tx.query(
@@ -485,7 +531,7 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
   if (linked.rows.length === 0) throw new CompanyNotFound();
 
   if (input.name !== undefined && !input.name.trim()) {
-    throw new VentasError('InvalidName', 'La empresa necesita un nombre.');
+    throw new VentasError('InvalidName');
   }
   const domain = input.domain === undefined ? undefined : normalizeDomain(input.domain);
   if (domain) {
@@ -537,10 +583,10 @@ export async function updateCompany(tx: WorkspaceTx, companyId: string, input: U
 async function updateCompanyLink(tx: WorkspaceTx, companyId: string, input: UpdateCompanyInput): Promise<void> {
   if (input.relationship !== undefined || input.notes !== undefined || input.ownerUserId !== undefined) {
     if (input.relationship !== undefined && !RELATIONSHIPS.includes(input.relationship)) {
-      throw new VentasError('InvalidRelationship', 'Esa relación no existe.');
+      throw new VentasError('InvalidRelationship');
     }
     if (input.ownerUserId && !isUuid(input.ownerUserId)) {
-      throw new VentasError('InvalidOwner', 'El responsable no es válido.');
+      throw new VentasError('InvalidOwner');
     }
     await tx.query(
       `UPDATE company_link SET
@@ -608,7 +654,7 @@ export interface CreateContactInput {
 export async function createContact(tx: WorkspaceTx, input: CreateContactInput): Promise<string> {
   if (!isUuid(input.companyId)) throw new CompanyNotFound();
   if (!CONTACT_SOURCES.includes(input.source)) {
-    throw new VentasError('InvalidSource', 'Un contacto no se guarda sin decir de dónde salió.');
+    throw new VentasError('InvalidSource');
   }
   const linked = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
   if (linked.rows.length === 0) throw new CompanyNotFound();
@@ -623,11 +669,11 @@ export async function createContact(tx: WorkspaceTx, input: CreateContactInput):
       [email],
     );
     if (clash.rows.length > 0) {
-      throw new VentasError('DuplicateEmail', 'Ya hay un contacto con ese correo.');
+      throw new VentasError('DuplicateEmail');
     }
   }
   if (!input.fullName?.trim() && !email && !input.instagramHandle?.trim()) {
-    throw new VentasError('EmptyContact', 'Un contacto necesita al menos nombre, correo o usuario de Instagram.');
+    throw new VentasError('EmptyContact');
   }
 
   const inserted = await tx.query<{ id: string }>(
@@ -648,7 +694,7 @@ export async function createContact(tx: WorkspaceTx, input: CreateContactInput):
     ],
   );
   const id = inserted.rows[0]?.id;
-  if (!id) throw new VentasError('CreateFailed', 'No se pudo guardar el contacto.');
+  if (!id) throw new VentasError('ContactCreateFailed');
   return id;
 }
 
@@ -667,7 +713,7 @@ export interface UpdateContactInput {
 export async function updateContact(tx: WorkspaceTx, contactId: string, input: UpdateContactInput): Promise<void> {
   if (!isUuid(contactId)) throw new ContactNotFound();
   if (input.source !== undefined && !CONTACT_SOURCES.includes(input.source)) {
-    throw new VentasError('InvalidSource', 'Esa procedencia no existe.');
+    throw new VentasError('InvalidSource');
   }
   const own = await tx.query<{ is_own: boolean }>(
     'SELECT coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own FROM contact WHERE id = $1',
@@ -683,7 +729,7 @@ export async function updateContact(tx: WorkspaceTx, contactId: string, input: U
       'SELECT 1 FROM contact WHERE email = $1 AND id <> $2 AND owner_workspace_id = current_workspace_id() LIMIT 1',
       [email, contactId],
     );
-    if (clash.rows.length > 0) throw new VentasError('DuplicateEmail', 'Ya hay un contacto con ese correo.');
+    if (clash.rows.length > 0) throw new VentasError('DuplicateEmail');
   }
 
   const { rowCount } = await updateContactRow(tx, contactId, input, email);
@@ -846,35 +892,144 @@ export type SignalVia = 'manual' | 'csv';
 
 export interface CreateSignalResult {
   id: string | null;
-  /** Ya existía una señal con la misma clave: no se creó otra. */
+  /** No se creó: la marca ya estaba en el radar (ver `reason`). */
   duplicate: boolean;
+  /**
+   * Por qué no entró: 'same_key', la misma señal de la misma fuente
+   * (el UNIQUE de la base); 'pending', la marca ya tiene una señal en la
+   * bandeja; 'discarded', la marca se descartó antes. Null si entró.
+   */
+  reason: SignalDuplicateReason | null;
   dedupeKey: string;
+}
+
+export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded';
+
+/** Una empresa ya conocida, resuelta a partir de lo que se escribió. */
+interface ResolvedCompany {
+  id: string;
+  name: string;
+  domain: string | null;
+}
+
+/**
+ * La empresa que ya conocemos detrás de un id, un dominio o un nombre.
+ *
+ *   - Por id: la visible (la mía o la del catálogo compartido).
+ *   - Por dominio: cualquiera visible con ese dominio. El dominio es
+ *     único en el catálogo, así que es la misma marca.
+ *   - Por nombre, solo si no hay dominio: entre las empresas de MI CRM
+ *     (company_link), comparando brand_key (sin tildes, mayúsculas ni
+ *     signos: «Nutrivé» = «NUTRIVE»). Fuera de mi CRM un nombre no
+ *     basta: dos «Alma» de dos países no son la misma marca, y ni
+ *     siquiera se ven.
+ */
+async function resolveCompany(
+  tx: WorkspaceTx,
+  input: { companyId?: string | null; domain?: string | null; name?: string | null },
+): Promise<ResolvedCompany | null> {
+  type Row = { id: string; name: string; domain: string | null };
+  if (input.companyId) {
+    if (!isUuid(input.companyId)) return null;
+    const { rows } = await tx.query<Row>('SELECT id, name, domain::text AS domain FROM company WHERE id = $1', [input.companyId]);
+    return rows[0] ?? null;
+  }
+  const domain = normalizeDomain(input.domain);
+  if (domain) {
+    const { rows } = await tx.query<Row>('SELECT id, name, domain::text AS domain FROM company WHERE domain = $1 LIMIT 1', [domain]);
+    return rows[0] ?? null;
+  }
+  const name = input.name?.trim();
+  if (!name) return null;
+  const { rows } = await tx.query<Row>(
+    `SELECT co.id, co.name, co.domain::text AS domain
+       FROM company_link cl
+       JOIN company co ON co.id = cl.company_id
+      WHERE brand_key(co.name) = brand_key($1)
+      ORDER BY (co.domain IS NULL) ASC, cl.created_at ASC
+      LIMIT 1`,
+    [name],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * ¿La marca ya tiene una señal pendiente o descartada en este
+ * workspace, venga de la fuente que venga? Es la regla del radar: una
+ * marca que ya está en la bandeja no se repite, y una que se descartó
+ * no vuelve a entrar ni por otra fuente, ni por una lista, ni a mano.
+ * Las aceptadas no cuentan: esa marca ya está en el CRM y una señal
+ * nueva suya (otra campaña, otra temporada) es información.
+ *
+ * Se reconoce la marca por la empresa (si ya está resuelta), por el
+ * dominio, o por el nombre cuando a uno de los dos lados le falta el
+ * dominio. Dos marcas con el mismo nombre y dominios distintos no son
+ * la misma.
+ */
+async function findBrandSignal(
+  tx: WorkspaceTx,
+  brand: { companyId: string | null; domain: string | null; name: string | null },
+): Promise<'pending' | 'discarded' | null> {
+  const { rows } = await tx.query<{ status: 'pending' | 'discarded' }>(
+    `SELECT s.status
+       FROM signal s
+       LEFT JOIN company co ON co.id = s.company_id
+      WHERE s.status IN ('pending', 'discarded')
+        AND (
+              ($1::uuid IS NOT NULL AND s.company_id = $1)
+           OR ($2::text IS NOT NULL AND lower(coalesce(co.domain::text, s.evidence->>'domain')) = $2)
+           OR ($3::text IS NOT NULL
+               AND brand_key(coalesce(co.name, s.evidence->>'company_name')) = brand_key($3)
+               AND ($2::text IS NULL OR coalesce(co.domain::text, s.evidence->>'domain') IS NULL))
+            )
+      ORDER BY (s.status = 'discarded') DESC
+      LIMIT 1`,
+    [brand.companyId, brand.domain, brand.name],
+  );
+  return rows[0]?.status ?? null;
 }
 
 /**
  * Una señal escrita a mano o traída de un CSV de marcas.
  *
- * No crea la empresa: eso pasa al aceptarla. Guarda lo que se sabe en
- * `evidence` para que, si se acepta, la empresa nazca con dominio,
- * país y sector sin volver a teclearlos.
+ * Si la marca ya es una empresa conocida (por su id, su dominio o, sin
+ * dominio, su nombre dentro de mi CRM), la señal queda enlazada a ella;
+ * si no, la empresa nace al aceptarla, con lo que se guarda en
+ * `evidence` (dominio, país y sector) para no volver a teclearlo.
+ *
+ * Antes de insertar se mira la marca, no solo la clave: una marca con
+ * una señal pendiente o descartada no entra otra vez por ningún camino
+ * (findBrandSignal). La clave (fuente:marca) y su UNIQUE siguen siendo
+ * la última palabra para la misma señal de la misma fuente.
  */
 export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): Promise<CreateSignalResult> {
   const headline = input.headlineEs.trim();
-  if (!headline) throw new VentasError('InvalidHeadline', 'La señal necesita una línea que diga qué viste.');
+  if (!headline) throw new VentasError('InvalidHeadline');
   const sourceId = input.sourceId?.trim() || 'manual';
   const domain = normalizeDomain(input.domain);
   const companyName = input.companyName?.trim() || null;
   if (!input.companyId && !companyName && !domain) {
-    throw new VentasError('InvalidCompany', 'Di de qué marca es la señal: su nombre o su dominio.');
+    throw new VentasError('InvalidCompany');
   }
   if (input.companyId && !isUuid(input.companyId)) throw new CompanyNotFound();
 
-  const companyKey = domain ?? companyName ?? input.companyId ?? '';
+  const company = await resolveCompany(tx, { companyId: input.companyId, domain, name: companyName });
+  if (input.companyId && !company) throw new CompanyNotFound();
+
+  const brandDomain = domain ?? normalizeDomain(company?.domain);
+  const companyKey = brandDomain ?? companyName ?? company?.name ?? input.companyId ?? '';
   const dedupeKey = buildDedupeKey(sourceId, companyKey);
 
+  const previa = await findBrandSignal(tx, {
+    companyId: company?.id ?? null,
+    domain: brandDomain,
+    name: companyName ?? company?.name ?? null,
+  });
+  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey };
+
   const evidence = {
-    company_name: companyName,
-    domain,
+    company_name: companyName ?? company?.name ?? null,
+    domain: brandDomain,
     country: normalizeCountry(input.country),
     industry: input.industry?.trim() || null,
     note: input.note?.trim() || null,
@@ -890,7 +1045,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
      ON CONFLICT (workspace_id, dedupe_key) DO NOTHING
      RETURNING id`,
     [
-      input.companyId ?? null,
+      company?.id ?? null,
       sourceId,
       headline,
       input.evidenceUrl?.trim() || null,
@@ -901,7 +1056,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     ],
   );
   const id = rows[0]?.id ?? null;
-  return { id, duplicate: id === null, dedupeKey };
+  return { id, duplicate: id === null, reason: id === null ? 'same_key' : null, dedupeKey };
 }
 
 export interface ImportSignalRow {
@@ -919,23 +1074,37 @@ export interface ImportSignalsResult {
   duplicatedKeys: string[];
 }
 
+export interface ImportSignalsOptions {
+  /**
+   * El titular de una fila sin nota. La frase la pone la pantalla (esta
+   * capa no tiene idioma); sin ella, el titular es el nombre de la marca.
+   */
+  headline?: (name: string) => string;
+}
+
 /**
- * Carga una lista de marcas como señales pendientes. Una fila que ya
- * entró —aunque se haya descartado— no vuelve a entrar: de eso se
- * encarga el UNIQUE (workspace_id, dedupe_key), no un filtro en la
- * pantalla, que se olvidaría en el siguiente archivo.
+ * Carga una lista de marcas como señales pendientes. Una marca que ya
+ * está en el radar —pendiente o descartada, entrara por donde entrara—
+ * no vuelve a entrar: lo decide createSignal con la base, no un filtro
+ * en la pantalla, que se olvidaría en el siguiente archivo. Dos filas
+ * de la misma marca en el mismo archivo entran una vez.
  */
-export async function importSignals(tx: WorkspaceTx, rows: ImportSignalRow[]): Promise<ImportSignalsResult> {
+export async function importSignals(
+  tx: WorkspaceTx,
+  rows: ImportSignalRow[],
+  opts: ImportSignalsOptions = {},
+): Promise<ImportSignalsResult> {
   let created = 0;
   const duplicatedKeys: string[] = [];
   for (const row of rows) {
+    const name = row.name.trim();
     const res = await createSignal(tx, {
-      companyName: row.name,
+      companyName: name,
       domain: row.domain,
       country: row.country,
       industry: row.industry,
       note: row.note,
-      headlineEs: row.note?.trim() || `${row.name.trim()} entró por una lista de marcas`,
+      headlineEs: row.note?.trim() || (opts.headline ? opts.headline(name) : name),
       via: 'csv',
     });
     if (res.duplicate) duplicatedKeys.push(res.dedupeKey);
@@ -947,25 +1116,68 @@ export async function importSignals(tx: WorkspaceTx, rows: ImportSignalRow[]): P
 export interface AcceptSignalResult {
   dealId: string;
   companyId: string;
+  companyName: string;
   /** La empresa nació al aceptar la señal. */
   companyCreated: boolean;
+  /**
+   * Se abrió un negocio nuevo. False cuando la marca ya tenía uno
+   * abierto: la señal se suma a ese (queda en su historia) y `dealId`
+   * es el que ya existía, para que la pantalla diga «Ya tienes un
+   * negocio con X» en vez de abrir un segundo.
+   */
+  dealCreated: boolean;
+}
+
+export interface AcceptSignalOptions {
+  /** La siguiente acción del negocio nuevo, en el idioma de la pantalla. Por defecto, PITCH_ACTION. */
+  nextAction?: string;
+  /** El cuerpo de la actividad que cuenta de dónde salió el negocio. */
+  activityBody?: string;
 }
 
 /** Días que se le dan al primer pitch cuando se acepta una señal. */
 export const PITCH_DUE_DAYS = 3;
-/** La siguiente acción con la que nace un deal aceptado desde el radar. */
+/** La siguiente acción con la que nace un deal aceptado desde el radar si la pantalla no da otra. */
 export const PITCH_ACTION = 'Enviar pitch';
+/** A qué hora LOCAL del workspace vence la siguiente acción de un negocio nuevo. */
+export const PITCH_DUE_HOUR = 15;
 
 /**
- * Aceptar una señal: crea o reutiliza la empresa, la vincula, abre un
- * deal en «nuevo» con «Enviar pitch» a tres días, deja la primera fila
- * del historial de etapas y la actividad que lo explica.
+ * La fecha de «Enviar pitch»: dentro de N días, a las 15:00 en la zona
+ * del workspace (no en UTC: en Bogotá las 15:00 UTC son las 10:00).
+ * Un nombre de zona que Postgres no reconozca cae en UTC.
+ */
+const DUE_IN_WORKSPACE_TZ = `
+  (date_trunc('day', now() AT TIME ZONE w.tz) + ($DAYS::int * interval '1 day') + ($HOUR::int * interval '1 hour'))
+    AT TIME ZONE w.tz`;
+
+/**
+ * El workspace actual con su zona, para las consultas que la necesitan.
+ * Vacía cae en UTC, como en Cotizar (sendQuote); la zona la valida
+ * quien la guarda en el workspace.
+ */
+const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
+    FROM workspace WHERE id = current_workspace_id())`;
+
+/**
+ * Aceptar una señal: resuelve la empresa (la que ya conocemos por id,
+ * dominio o, sin dominio, por nombre dentro del CRM; si no, la crea),
+ * la vincula y:
+ *
+ *   - si la marca ya tiene un negocio abierto, la señal se suma a ese:
+ *     queda su actividad en la historia del negocio y no se abre otro;
+ *   - si no, abre un negocio en «nuevo» con «Enviar pitch» a tres días,
+ *     su primera fila de historial y la actividad que lo explica.
  *
  * Todo en la misma transacción que abrió la pantalla: o queda entero o
  * no queda nada. `FOR UPDATE` sobre la señal evita que dos pestañas
- * abiertas creen dos deals de la misma.
+ * abiertas creen dos negocios de la misma.
  */
-export async function acceptSignal(tx: WorkspaceTx, signalId: string): Promise<AcceptSignalResult> {
+export async function acceptSignal(
+  tx: WorkspaceTx,
+  signalId: string,
+  opts: AcceptSignalOptions = {},
+): Promise<AcceptSignalResult> {
   if (!isUuid(signalId)) throw new SignalNotFound();
   const { rows } = await tx.query<{
     id: string; company_id: string | null; status: SignalStatus; headline_es: string;
@@ -985,31 +1197,30 @@ export async function acceptSignal(tx: WorkspaceTx, signalId: string): Promise<A
   const evCountry = typeof ev.country === 'string' ? ev.country : null;
   const evIndustry = typeof ev.industry === 'string' ? ev.industry : null;
 
-  let companyId = sig.company_id;
+  let company = sig.company_id
+    ? await resolveCompany(tx, { companyId: sig.company_id })
+    : await resolveCompany(tx, { domain: evDomain, name: evName });
   let companyCreated = false;
 
-  if (!companyId) {
+  if (!company) {
+    if (!evName) throw new VentasError('SignalWithoutCompany');
     const domain = normalizeDomain(evDomain);
-    if (domain) {
-      const found = await tx.query<{ id: string }>('SELECT id FROM company WHERE domain = $1 LIMIT 1', [domain]);
-      companyId = found.rows[0]?.id ?? null;
-    }
-    if (!companyId) {
-      if (!evName) throw new VentasError('InvalidCompany', 'La señal no dice de qué marca es. Edítala antes de aceptarla.');
-      const inserted = await tx.query<{ id: string }>(
-        `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
-        [evName, domain, evCountry, evIndustry],
-      );
-      companyId = inserted.rows[0]?.id ?? null;
-      if (!companyId) throw new VentasError('CreateFailed', 'No se pudo crear la empresa de la señal.');
-      companyCreated = true;
-    }
+    const inserted = await tx.query<{ id: string }>(
+      `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [evName, domain, normalizeCountry(evCountry), evIndustry],
+    );
+    const id = inserted.rows[0]?.id;
+    if (!id) throw new VentasError('CompanyCreateFailed');
+    company = { id, name: evName, domain };
+    companyCreated = true;
+  }
+  const companyId = company.id;
+  if (sig.company_id !== companyId) {
     await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [signalId, companyId]);
   }
 
   // Vincular es idempotente: si ya era una empresa del workspace, se
-  // deja la relación como estaba (podía ser cliente) y solo se anota
-  // que el radar la volvió a traer.
+  // deja la relación como estaba (podía ser cliente).
   await tx.query(
     `INSERT INTO company_link (workspace_id, company_id, relationship)
      VALUES (current_workspace_id(), $1, 'prospect')
@@ -1017,18 +1228,48 @@ export async function acceptSignal(tx: WorkspaceTx, signalId: string): Promise<A
     [companyId],
   );
 
-  const dealName = evName ?? sig.headline_es;
+  const metadata = JSON.stringify({ signal_id: signalId, source_id: sig.source_id });
+  const markAccepted = () =>
+    tx.query(
+      `UPDATE signal SET status = 'accepted', reviewed_by = current_user_id(), reviewed_at = now() WHERE id = $1`,
+      [signalId],
+    );
+
+  // ¿Ya hay un negocio abierto con esta marca? Entonces la señal es
+  // contexto de ese negocio, no un negocio más: el tercero de Vitalé
+  // abierto «sin avisar» era justo lo que el CRM tiene que evitar.
+  const abierto = await tx.query<{ id: string }>(
+    `SELECT d.id
+       FROM deal d
+       JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE d.company_id = $1 AND NOT st.is_won AND NOT st.is_lost
+      ORDER BY st.position DESC, d.created_at DESC
+      LIMIT 1`,
+    [companyId],
+  );
+  const existente = abierto.rows[0]?.id;
+  if (existente) {
+    await tx.query(
+      `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, body, metadata)
+       VALUES (current_workspace_id(), $1, $2, current_user_id(), 'signal_detected', $3, $4, $5::jsonb)`,
+      [companyId, existente, truncate(sig.headline_es, 200), opts.activityBody ?? null, metadata],
+    );
+    await markAccepted();
+    return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false };
+  }
+
+  const dealName = evName ?? company.name ?? sig.headline_es;
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, name, stage_id, amount, currency,
                        next_action, next_action_due)
      SELECT current_workspace_id(), $1, $2, $3, 'nuevo', $4::numeric, w.currency, $5,
-            date_trunc('day', now()) + ($6::int * interval '1 day') + interval '15 hours'
-     FROM workspace w WHERE w.id = current_workspace_id()
+            ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$6').replace('$HOUR', '$7')}
+     FROM ${WORKSPACE_TZ} w
      RETURNING id`,
-    [companyId, signalId, truncate(dealName, 120), sig.budget_estimate, PITCH_ACTION, PITCH_DUE_DAYS],
+    [companyId, signalId, truncate(dealName, 120), sig.budget_estimate, opts.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_DAYS, PITCH_DUE_HOUR],
   );
   const dealId = deal.rows[0]?.id;
-  if (!dealId) throw new VentasError('CreateFailed', 'No se pudo abrir el negocio.');
+  if (!dealId) throw new VentasError('DealCreateFailed');
 
   await tx.query(
     `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by)
@@ -1038,20 +1279,59 @@ export async function acceptSignal(tx: WorkspaceTx, signalId: string): Promise<A
   await tx.query(
     `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, body, metadata)
      VALUES (current_workspace_id(), $1, $2, current_user_id(), 'signal_detected', $3, $4, $5::jsonb)`,
-    [
-      companyId,
-      dealId,
-      truncate(sig.headline_es, 200),
-      'Señal aceptada desde el radar.',
-      JSON.stringify({ signal_id: signalId, source_id: sig.source_id }),
-    ],
+    [companyId, dealId, truncate(sig.headline_es, 200), opts.activityBody ?? null, metadata],
   );
-  await tx.query(
-    `UPDATE signal SET status = 'accepted', reviewed_by = current_user_id(), reviewed_at = now() WHERE id = $1`,
-    [signalId],
-  );
+  await markAccepted();
 
-  return { dealId, companyId, companyCreated };
+  return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true };
+}
+
+export interface CreateDealInput {
+  companyId: string;
+  /** Cómo llama la creadora a este trabajo: «Serie de 3 videos Q4». */
+  name: string;
+  /** Monto estimado, string decimal sin impuesto; vacío si aún no se sabe. */
+  amount?: string | null;
+  /** La siguiente acción, en el idioma de la pantalla. Por defecto, PITCH_ACTION. */
+  nextAction?: string;
+}
+
+/**
+ * Abrir un negocio a mano desde la ficha de una empresa de MI CRM.
+ *
+ * Nace en «nuevo», en la moneda del workspace, con su primera fila de
+ * historial y la siguiente acción a tres días a las 15:00 locales, como
+ * uno que llega del radar. Que la empresa ya tenga otro abierto no lo
+ * impide: aquí lo pide la persona, a propósito (otra campaña, otro
+ * producto de la misma marca).
+ */
+export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promise<string> {
+  if (!isUuid(input.companyId)) throw new CompanyNotFound();
+  const name = input.name.trim();
+  if (!name || name.length > 120) throw new VentasError('InvalidDealName');
+  const amount = input.amount?.trim() || null;
+  if (amount !== null && !/^\d{1,12}(\.\d{1,2})?$/.test(amount)) throw new VentasError('InvalidAmount');
+
+  const linked = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
+  if (linked.rows.length === 0) throw new CompanyNotFound();
+
+  const deal = await tx.query<{ id: string }>(
+    `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
+                       next_action, next_action_due)
+     SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4,
+            ${DUE_IN_WORKSPACE_TZ.replace('$DAYS', '$5').replace('$HOUR', '$6')}
+     FROM ${WORKSPACE_TZ} w
+     RETURNING id`,
+    [input.companyId, name, amount, input.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_DAYS, PITCH_DUE_HOUR],
+  );
+  const dealId = deal.rows[0]?.id;
+  if (!dealId) throw new VentasError('DealCreateFailed');
+  await tx.query(
+    `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by)
+     VALUES ($1, NULL, 'nuevo', current_user_id())`,
+    [dealId],
+  );
+  return dealId;
 }
 
 /**
@@ -1062,7 +1342,7 @@ export async function acceptSignal(tx: WorkspaceTx, signalId: string): Promise<A
 export async function discardSignal(tx: WorkspaceTx, signalId: string, reason: string): Promise<void> {
   if (!isUuid(signalId)) throw new SignalNotFound();
   const motivo = reason.trim();
-  if (!motivo) throw new VentasError('InvalidReason', 'Di por qué la descartas: es lo que afina el radar.');
+  if (!motivo) throw new VentasError('InvalidReason');
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE signal
      SET status = 'discarded', discard_reason = $2, reviewed_by = current_user_id(), reviewed_at = now()
@@ -1120,23 +1400,30 @@ export async function getPipelineDeal(tx: WorkspaceTx, dealId: string): Promise<
  * otro, se añade aquí.
  *
  * «Ganado en el trimestre» usa won_at, no la etapa: un deal movido a
- * «Ganado» y luego reabierto no debe contar dos veces.
+ * «Ganado» y luego reabierto no debe contar dos veces. El trimestre se
+ * corta en la zona del workspace, no en UTC.
  */
 export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
   const { rows } = await tx.query<{
     pending_signals: string; open_deals: string; open_amount: string; weighted_amount: string;
     won_quarter: string; won_quarter_count: string; no_next_action: string; overdue: string; currency: string;
   }>(
-    `SELECT
+    `WITH w AS ${WORKSPACE_TZ},
+          -- El trimestre empieza a medianoche EN LA ZONA DEL WORKSPACE: en
+          -- Bogotá, un negocio ganado el 30 de septiembre a las 20:00 es
+          -- del tercer trimestre, aunque en UTC ya sea 1 de octubre.
+          desde AS (SELECT coalesce((SELECT date_trunc('quarter', now() AT TIME ZONE w.tz) AT TIME ZONE w.tz FROM w),
+                                    date_trunc('quarter', now())) AS inicio)
+     SELECT
        (SELECT count(*) FROM signal WHERE status = 'pending')::text                      AS pending_signals,
        (SELECT count(*) FROM deal_pipeline WHERE NOT is_won AND NOT is_lost)::text        AS open_deals,
        (SELECT COALESCE(sum(amount), 0) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost)::text                                          AS open_amount,
        (SELECT COALESCE(sum(weighted_amount), 0) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost)::text                                          AS weighted_amount,
-       (SELECT COALESCE(sum(amount), 0) FROM deal
-         WHERE won_at >= date_trunc('quarter', now()))::text                              AS won_quarter,
-       (SELECT count(*) FROM deal WHERE won_at >= date_trunc('quarter', now()))::text     AS won_quarter_count,
+       (SELECT COALESCE(sum(amount), 0) FROM deal, desde
+         WHERE won_at >= desde.inicio)::text                                              AS won_quarter,
+       (SELECT count(*) FROM deal, desde WHERE won_at >= desde.inicio)::text              AS won_quarter_count,
        (SELECT count(*) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost AND next_action IS NULL)::text                  AS no_next_action,
        (SELECT count(*) FROM deal_pipeline
@@ -1213,89 +1500,113 @@ export interface MoveDealResult {
   dealId: string;
   fromStageId: string;
   toStageId: string;
-  /** Días que pasó en la etapa que deja, con dos decimales. */
+  /** Se movió. False si ya estaba en esa etapa o si `forwardOnly` lo dejó donde estaba. */
+  moved: boolean;
+  /** Días que pasó en la etapa que deja, con dos decimales. Null si no se movió. */
   daysInStage: string | null;
   isWon: boolean;
   isLost: boolean;
+  /** El monto cambió por `opts.amount` (una cotización). */
+  amountChanged: boolean;
+  amountFrom: string | null;
+  currencyFrom: string;
+  amountTo: string | null;
+  currencyTo: string;
+}
+
+export interface MoveDealOptions {
+  /** No retroceder: si ya está en esa etapa o más adelante, o cerrado, no se mueve. */
+  forwardOnly?: boolean;
+  /** El monto que acuerda una cotización (string decimal, sin impuesto). */
+  amount?: string | null;
+  currency?: string | null;
+  /**
+   * Dejar la actividad «Etapa → Etapa» (por defecto, sí). Cotizar la
+   * apaga porque deja la suya, con el número de la cotización.
+   */
+  logActivity?: boolean;
+}
+
+interface MoveStageJson {
+  status: 'not_found' | 'invalid_stage' | 'locked' | 'moved' | 'unchanged';
+  reason?: 'campaign' | 'quote';
+  fromStageId?: string;
+  toStageId?: string;
+  daysInStage?: string | null;
+  isWon?: boolean;
+  isLost?: boolean;
+  amountChanged?: boolean;
+  amountFrom?: string | null;
+  currencyFrom?: string;
+  amountTo?: string | null;
+  currencyTo?: string;
 }
 
 /**
- * Mueve un deal de etapa: escribe el historial con los días que pasó en
- * la que deja, y fija won_at o lost_at cuando la etapa de llegada es
- * terminal. Es idempotente: mover a la etapa en la que ya está no
- * escribe historial ni cambia fechas.
+ * Mueve un negocio de etapa. Es la ÚNICA transición: la usan el
+ * tablero, Cotizar al enviar y aceptar, y (en SQL) la aceptación desde
+ * el enlace público. Las reglas viven en la función deal_move_stage de
+ * la migración 0031 —historial con los días en la etapa que deja,
+ * won_at/lost_at según la de llegada, lost_reason solo en «Perdido»,
+ * probabilidad de vuelta a la de la etapa— para que no haya tres
+ * copias que diverjan.
  *
- * `won_at` no se recalcula si ya existe, para que reabrir y volver a
- * ganar no mueva la fecha del cierre real. Al salir de una etapa
- * terminal, en cambio, la fecha se limpia: si no, el KPI del trimestre
- * seguiría contando un deal que volvió a estar abierto.
+ * Es idempotente: mover a la etapa en la que ya está no escribe
+ * historial ni cambia fechas. Sacar de «Ganado» un negocio con campaña
+ * viva o con la cotización firmada lanza DealLocked: la cotización y
+ * la campaña dirían otra cosa.
+ *
+ * El id de la etapa puede ser uno global legible ('propuesta') o el
+ * uuid al azar de una etapa privada del workspace (0026 §2); una etapa
+ * que no existe o que es de otro workspace es InvalidStage.
  */
-export async function moveDeal(tx: WorkspaceTx, dealId: string, toStageId: string): Promise<MoveDealResult> {
+export async function moveDeal(
+  tx: WorkspaceTx,
+  dealId: string,
+  toStageId: string,
+  opts: MoveDealOptions = {},
+): Promise<MoveDealResult> {
   if (!isUuid(dealId)) throw new DealNotFound();
-  const stage = await tx.query<{ id: string; is_won: boolean; is_lost: boolean }>(
-    'SELECT id, is_won, is_lost FROM pipeline_stage WHERE id = $1',
-    [toStageId],
-  );
-  const to = stage.rows[0];
-  if (!to) throw new VentasError('InvalidStage', 'Esa etapa no existe.');
+  if (!toStageId || toStageId.length > 64) throw new VentasError('InvalidStage');
+  const amount = opts.amount?.trim() || null;
+  if (amount !== null && !/^\d{1,12}(\.\d{1,2})?$/.test(amount)) throw new VentasError('InvalidAmount');
 
-  const current = await tx.query<{ stage_id: string; created_at: string }>(
-    'SELECT stage_id, created_at FROM deal WHERE id = $1 FOR UPDATE',
-    [dealId],
+  const { rows } = await tx.query<{ r: MoveStageJson }>(
+    'SELECT deal_move_stage($1::uuid, $2::text, $3::boolean, $4::numeric, $5::text) AS r',
+    [dealId, toStageId, opts.forwardOnly ?? false, amount, opts.currency ?? null],
   );
-  const deal = current.rows[0];
-  if (!deal) throw new DealNotFound();
+  const r = rows[0]?.r;
+  if (!r || r.status === 'not_found') throw new DealNotFound();
+  if (r.status === 'invalid_stage') throw new VentasError('InvalidStage');
+  if (r.status === 'locked') throw new DealLocked(r.reason === 'quote' ? 'quote' : 'campaign');
 
-  if (deal.stage_id === to.id) {
-    return { dealId, fromStageId: deal.stage_id, toStageId: to.id, daysInStage: null, isWon: to.is_won, isLost: to.is_lost };
+  const result: MoveDealResult = {
+    dealId,
+    fromStageId: r.fromStageId ?? '',
+    toStageId: r.toStageId ?? '',
+    moved: r.status === 'moved',
+    daysInStage: r.daysInStage ?? null,
+    isWon: r.isWon ?? false,
+    isLost: r.isLost ?? false,
+    amountChanged: r.amountChanged ?? false,
+    amountFrom: r.amountFrom ?? null,
+    currencyFrom: r.currencyFrom ?? '',
+    amountTo: r.amountTo ?? null,
+    currencyTo: r.currencyTo ?? '',
+  };
+
+  if (result.moved && (opts.logActivity ?? true)) {
+    await tx.query(
+      `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, metadata)
+       SELECT current_workspace_id(), d.company_id, d.id, current_user_id(), 'stage_change',
+              (SELECT label_es FROM pipeline_stage WHERE id = $2) || ' → ' ||
+              (SELECT label_es FROM pipeline_stage WHERE id = $3),
+              jsonb_build_object('from', $2::text, 'to', $3::text, 'days_in_stage', $4::numeric)
+       FROM deal d WHERE d.id = $1`,
+      [dealId, result.fromStageId, result.toStageId, result.daysInStage],
+    );
   }
-
-  // Los días en la etapa que deja: desde que entró en ella (última fila
-  // del historial con to_stage_id = la actual) o, si nunca se registró,
-  // desde que nació el deal.
-  const since = await tx.query<{ days: string }>(
-    `SELECT round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0, 2)::text AS days
-     FROM deal d
-     LEFT JOIN LATERAL (
-       SELECT changed_at FROM deal_stage_history
-       WHERE deal_id = d.id AND to_stage_id = d.stage_id
-       ORDER BY changed_at DESC LIMIT 1
-     ) h ON true
-     WHERE d.id = $1`,
-    [dealId],
-  );
-  const daysInStage = since.rows[0]?.days ?? null;
-
-  // won_at y lost_at los decide la etapa de llegada, y la etapa se lee
-  // aquí mismo con un JOIN en vez de mandar dos booleanos por parámetro:
-  // así no hay forma de que la fila y las banderas se desincronicen.
-  await tx.query(
-    `UPDATE deal SET
-       stage_id    = st.id,
-       won_at      = CASE WHEN st.is_won  THEN COALESCE(deal.won_at, now())  ELSE NULL END,
-       lost_at     = CASE WHEN st.is_lost THEN COALESCE(deal.lost_at, now()) ELSE NULL END,
-       lost_reason = CASE WHEN st.is_lost THEN deal.lost_reason ELSE NULL END,
-       updated_at  = now()
-     FROM pipeline_stage st
-     WHERE deal.id = $1 AND st.id = $2`,
-    [dealId, to.id],
-  );
-  await tx.query(
-    `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by, days_in_stage)
-     VALUES ($1, $2, $3, current_user_id(), $4::numeric)`,
-    [dealId, deal.stage_id, to.id, daysInStage],
-  );
-  await tx.query(
-    `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, metadata)
-     SELECT current_workspace_id(), d.company_id, d.id, current_user_id(), 'stage_change',
-            (SELECT label_es FROM pipeline_stage WHERE id = $2) || ' → ' ||
-            (SELECT label_es FROM pipeline_stage WHERE id = $3),
-            jsonb_build_object('from', $2::text, 'to', $3::text, 'days_in_stage', $4::numeric)
-     FROM deal d WHERE d.id = $1`,
-    [dealId, deal.stage_id, to.id, daysInStage],
-  );
-
-  return { dealId, fromStageId: deal.stage_id, toStageId: to.id, daysInStage, isWon: to.is_won, isLost: to.is_lost };
+  return result;
 }
 
 // ---------------------------------------------------------------------

@@ -51,30 +51,11 @@ export class ErrorCsv extends Error {
   }
 }
 
-/** Cómo venía escrito el archivo. */
-export type Codificacion = "utf-8" | "windows-1252";
-
-/**
- * Los bytes del archivo → texto, sin romper las tildes.
- *
- * Las plataformas exportan en UTF-8, pero un CSV abierto y vuelto a
- * guardar en Excel para Windows en español sale en Windows-1252. Leído
- * como UTF-8, «Duración» pasaba a «Duraci�n»: los alias de las columnas
- * no casaban y los títulos se guardaban rotos, sin ningún aviso.
- *
- * Primero se intenta UTF-8 ESTRICTO (`fatal: true`): un byte que no
- * forma UTF-8 válido lanza en vez de convertirse en «�». Solo entonces
- * se lee como Windows-1252, que es lo que Excel escribe en español (y
- * cubre también Latin-1). La pantalla dice cuál se usó. El BOM de UTF-8
- * lo quita el propio TextDecoder.
- */
-export function decodificarCsv(bytes: ArrayBuffer | Uint8Array): { texto: string; codificacion: Codificacion } {
-  try {
-    return { texto: new TextDecoder("utf-8", { fatal: true }).decode(bytes), codificacion: "utf-8" };
-  } catch {
-    return { texto: new TextDecoder("windows-1252").decode(bytes), codificacion: "windows-1252" };
-  }
-}
+// Los bytes → texto (UTF-8 estricto con respaldo a Windows-1252) viven
+// en lib/csv.ts: los comparte con la lista de marcas de Ventas, que
+// tenía su propio lector y rompía las tildes de un CSV de Excel. La
+// pantalla dice cuál se usó.
+export { decodificarCsv, type Codificacion } from "@/lib/csv";
 
 /**
  * Papaparse con `header: true` y el delimitador autodetectado: Meta
