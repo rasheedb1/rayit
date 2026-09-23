@@ -194,7 +194,8 @@ describe("costura CON-3 → CON-4: un acceso vencido con renovación viva", () =
   it("se renueva sola: ámbar, sin «Reautorizar» ni «Actualizar», y la frase dice que depende del worker", () => {
     const e = estadoDeCuenta(fila({ accessExpiresAt: VENCIO, refreshExpiresAt: "2027-09-23T00:00:00.000Z" }), AHORA);
     expect(e).toEqual({ tono: "warn", texto: MESSAGES.tabla.estado.seRenuevaSola, accion: "ninguna", nota: MESSAGES.tabla.seRenuevaSola });
-    expect(e.nota).toContain("cuando corra el worker");
+    expect(e.nota).toContain("worker de renovación");
+    expect(e.nota).toContain("cuando corra");
   });
 
   it("sin permiso de renovación (null) hay que volver a autorizar: rojo y «Reautorizar»", () => {

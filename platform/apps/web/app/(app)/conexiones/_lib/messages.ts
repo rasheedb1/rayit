@@ -133,7 +133,7 @@ export const MESSAGES = {
      * pasado (lo renueva 30 minutos ANTES de que venza), así que la
      * frase no promete una hora: dice de quién depende.
      */
-    seRenuevaSola: "Se renueva sola cuando corra el worker de renovación. Hasta entonces se ven las cifras de la última lectura.",
+    seRenuevaSola: "El worker de renovación la renueva sin pedirte nada cuando corra; hasta entonces se ven las cifras de la última lectura.",
     /**
      * CON-7: qué dato falta de la cuenta. El porqué NO está aquí: es
      * metric_requirement.message_es, que viene con el hueco (metric_gap).

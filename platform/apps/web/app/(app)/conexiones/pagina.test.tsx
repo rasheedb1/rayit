@@ -120,7 +120,7 @@ describe("CON-4 · la pantalla Cuentas con la bandera oauth_connect encendida", 
 
   test("un acceso vencido con la renovación viva «se renueva sola», dice de quién depende y no pide reautorizar", () => {
     expect(html).toContain("Se renueva sola");
-    expect(html).toContain("cuando corra el worker");
+    expect(html).toContain("El worker de renovación la renueva sin pedirte nada cuando corra");
     expect(html).not.toContain("Reautorizar @cafealma.pausa");
     expect(html).not.toContain("Actualizar @cafealma.pausa");
   });
