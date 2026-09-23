@@ -19,6 +19,7 @@ import {
   textoMotivo, type BasisTarifario,
 } from "./_lib/tarifario";
 import { TablaConDetalle, type ColumnaConDetalle } from "./_ui/tabla-con-detalle";
+import { Aviso } from "../_lib/aviso";
 
 export interface TarifarioTablaProps {
   creatorId: string;
@@ -455,11 +456,7 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
       <input type="hidden" name="creatorId" value={creatorId} />
       <input type="hidden" name="estado" value={JSON.stringify(basis)} />
 
-      {state.message && (
-        <p role="alert" className="rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
-          {state.message}
-        </p>
-      )}
+      <Aviso message={state.message} />
       {sinGuardar && !state.ok && (
         <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-2">
           <strong className="font-medium text-ink">{MESSAGES.tarifario.sinTarifario.title}</strong>{" "}

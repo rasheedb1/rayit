@@ -2,15 +2,19 @@
 
 import Link from "next/link";
 import { useEffect, useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
+import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
-import { Pill, type PillKind } from "@/components/ui/pill";
+import { formatMoney } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
-import { Aviso } from "../_componentes/aviso";
+import { Aviso } from "../../_lib/aviso";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
+import type { SeguimientoContexto, SiguienteAccionData, UltimoContactoData } from "../_seguimiento/datos";
+import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
+import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
 
 /** Un negocio listo para pintar: montos y fechas ya formateados en el servidor. */
 export interface BoardDeal {
@@ -24,15 +28,26 @@ export interface BoardDeal {
   amountText: string | null;
   /** La moneda del negocio: la del monto que se pide al ganarlo si no tiene. */
   currency: string;
-  nextAction: string | null;
-  nextActionDueText: string | null;
-  /** Null en los cerrados: a un negocio ganado no le vence nada. */
-  due: { kind: PillKind; text: string } | null;
-  needsNextAction: boolean;
   /** A dónde lleva «Cotizar»; null en los cerrados. */
   quoteHref: string | null;
   /** Por qué se perdió («Por el precio»); null si no está perdido o no se dijo. */
   lostReasonText: string | null;
+  /**
+   * La siguiente acción, editable en la tarjeta (VEN-4); null en los
+   * cerrados, que no tienen: a un negocio ganado no le vence nada.
+   */
+  siguiente: SiguienteAccionData | null;
+  /**
+   * «Último contacto: hace 3 días» (VEN-5), o «Sin contacto todavía»;
+   * null en los cerrados. Hace cuántos días no se le habla es la señal de
+   * que un negocio se enfría.
+   */
+  lastContact: UltimoContactoData | null;
+}
+
+/** Un negocio abierto sin siguiente acción: la tarjeta lo marca en ámbar y lo dice. */
+export function sinSiguienteAccion(deal: Pick<BoardDeal, "siguiente">): boolean {
+  return deal.siguiente !== null && deal.siguiente.action === null;
 }
 
 /** Una columna con su cabecera ya contada y sumada en SQL. */
@@ -40,7 +55,8 @@ export interface BoardStage {
   id: string;
   label: string;
   countText: string;
-  amountText: string;
+  /** Null en una columna vacía: no se pinta «COP 0» encima de «Nada aquí». */
+  amountText: string | null;
   /** Una etapa perdida: pasar a ella pide el motivo. */
   isLost: boolean;
   /** Una etapa ganada: pasar a ella un negocio sin monto pide el monto. */
@@ -73,8 +89,21 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * todavía: pregunta «¿Por cuánto lo ganaste?» en la tarjeta. Sin monto el
  * servidor no lo mueve (AmountRequired): si no, «N cerrados» subía y
  * «Ganado este trimestre» no, y las dos cifras dejaban de cuadrar.
+ *
+ * `locale` es el del espacio: con él se escribe el tope del monto ganado
+ * cuando alguien pone ceros de más (pulido r8).
  */
-export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: BoardStage[] }) {
+export function PipelineBoard({
+  deals,
+  stages,
+  ctx,
+  locale,
+}: {
+  deals: BoardDeal[];
+  stages: BoardStage[];
+  ctx: SeguimientoContexto | null;
+  locale?: string;
+}) {
   const t = MESSAGES.pipeline;
   const [optimistic, addOptimistic] = useOptimistic(deals, (current: BoardDeal[], move: Move) => applyMove(current, move));
   const [pending, startTransition] = useTransition();
@@ -86,6 +115,18 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
    * qué etapa va: por qué se pierde, o por cuánto se gana si no tiene monto.
    */
   const [pregunta, setPregunta] = useState<{ dealId: string; toStageId: string; kind: "lost" | "won" } | null>(null);
+  /**
+   * El negocio que se acaba de mover: su tarjeta se desmonta de una
+   * columna y se monta en otra, y el foco caía en <body>. Cuando termina,
+   * vuelve a su menú «Mover a», en la columna donde quedó (pulido r8).
+   */
+  const [focusDeal, setFocusDeal] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!focusDeal || pending) return;
+    document.getElementById(`mover-${focusDeal}`)?.focus();
+    setFocusDeal(null);
+  }, [focusDeal, pending, optimistic]);
 
   function move(dealId: string, toStageId: string, extra: { lostReason?: string; amount?: string } = {}) {
     const deal = optimistic.find((d) => d.id === dealId);
@@ -113,6 +154,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
             }
           : { message: res.message ?? t.moveError },
       );
+      setFocusDeal(dealId);
     });
   }
 
@@ -158,7 +200,7 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                   <span className="text-sm font-medium text-ink">{stage.label}</span>
                   <span className="text-xs tabular-nums text-muted">{stage.countText}</span>
                 </div>
-                <p className="mb-2 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
+                <p className="mb-2 min-h-4 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
 
                 <div
                   className={`min-h-24 rounded-md transition-colors ${isOver ? "bg-hover outline-2 outline-dashed outline-axis" : ""}`}
@@ -175,6 +217,8 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                           key={deal.id}
                           deal={deal}
                           stages={stages}
+                          ctx={ctx}
+                          locale={locale}
                           dragging={dragging === deal.id}
                           onDragStart={() => setDragging(deal.id)}
                           onDragEnd={() => {
@@ -209,6 +253,8 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
 function DealCard({
   deal,
   stages,
+  ctx,
+  locale,
   dragging,
   onDragStart,
   onDragEnd,
@@ -219,6 +265,8 @@ function DealCard({
 }: {
   deal: BoardDeal;
   stages: BoardStage[];
+  ctx: SeguimientoContexto | null;
+  locale?: string;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -237,6 +285,9 @@ function DealCard({
   const [amount, setAmount] = useState("");
   const amountId = `ganado-${deal.id}`;
   const askingWon = asking?.kind === "won";
+  /** Mientras se escribe la siguiente acción, la tarjeta no se arrastra: seleccionar texto la movía. */
+  const [editingNext, setEditingNext] = useState(false);
+  const sinAccion = sinSiguienteAccion(deal);
 
   // «¿Por cuánto lo ganaste?» aparece debajo del menú: el foco va al
   // monto, como el motivo de «Perdido» (que lleva autoFocus en su
@@ -266,6 +317,13 @@ function DealCard({
       document.getElementById(amountId)?.focus();
       return;
     }
+    // numeric(14,2): con ceros de más la base lo rechazaría. Se dice en
+    // el campo, con el tope, y el foco se queda en él (pulido r8).
+    if (excedeMontoMaximo(amount)) {
+      setAskError(MESSAGES.validacion.amountMax(formatMoney(MONTO_MAXIMO, deal.currency, { mode: "full", locale })));
+      document.getElementById(amountId)?.focus();
+      return;
+    }
     setAskError(undefined);
     onConfirm({ amount });
   }
@@ -278,21 +336,21 @@ function DealCard({
 
   return (
     <li
-      draggable
+      draggable={!editingNext}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, deal.id);
         e.dataTransfer.effectAllowed = "move";
         onDragStart();
       }}
       onDragEnd={onDragEnd}
-      className={`relative cursor-grab rounded-md border bg-surface p-3 active:cursor-grabbing ${deal.needsNextAction ? "border-warn" : "border-border"} ${
+      className={`relative cursor-grab rounded-md border bg-surface p-3 active:cursor-grabbing ${sinAccion ? "border-warn" : "border-border"} ${
         dragging ? "opacity-50" : ""
       }`}
       // El borde ámbar no puede ser la única señal: quien no distingue
       // el color necesita leerlo. `relative` no es decorativo: sin él, la
       // etiqueta sr-only del menú (absolute) escapa del scroll del
       // tablero y ensancha la página entera en el móvil.
-      aria-label={deal.needsNextAction ? `${deal.companyName}, ${deal.name}. ${t.noNextAction}` : `${deal.companyName}, ${deal.name}`}
+      aria-label={sinAccion ? `${deal.companyName}, ${deal.name}. ${t.noNextAction}` : `${deal.companyName}, ${deal.name}`}
     >
       <Link href={`/ventas/empresas/${deal.companyId}`} className="text-sm font-medium leading-5 text-ink hover:underline" draggable={false}>
         {deal.companyName}
@@ -302,24 +360,16 @@ function DealCard({
 
       <p className="mt-2 whitespace-nowrap text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {deal.due && <Pill kind={deal.due.kind}>{deal.due.text}</Pill>}
-        <span className="text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</span>
-      </div>
+      {/* La pastilla del vencimiento es la de la siguiente acción, abajo: una sola. */}
+      <p className="mt-2 text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</p>
+      {deal.lastContact && <UltimoContacto data={deal.lastContact} className="mt-1" />}
 
       {deal.lostReasonText && <p className="mt-2 text-xs leading-4 text-muted">{deal.lostReasonText}</p>}
 
-      {(deal.nextAction || deal.needsNextAction) && (
-        <p className="mt-2 text-xs leading-4 text-ink-2">
-          {deal.nextAction ? (
-            <>
-              {deal.nextAction}
-              {deal.nextActionDueText && <span className="text-muted"> · {deal.nextActionDueText}</span>}
-            </>
-          ) : (
-            <span className="text-warn">{t.noNextAction}</span>
-          )}
-        </p>
+      {deal.siguiente && ctx && (
+        <div className="mt-2 cursor-auto">
+          <SiguienteAccion data={deal.siguiente} ctx={ctx} compact onEditingChange={setEditingNext} />
+        </div>
       )}
 
       {deal.quoteHref && (

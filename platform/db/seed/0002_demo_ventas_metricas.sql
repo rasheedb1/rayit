@@ -1082,12 +1082,19 @@ VALUES
   -- aviso de Resumen lo dice con todas las letras («Hay 5 señales por
   -- revisar en el radar»); con cuatro, la pantalla que RES-1 copie del
   -- mock y el radar dirían números distintos el primer día.
-  ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e5', 'meta_ad_library',
+  -- Es la única de una marca que NO está en el CRM (sin company_id: el
+  -- nombre y el dominio van en evidence, como una señal que el radar
+  -- trae de fuera). Las otras cuatro son de marcas con negocio abierto, y
+  -- sin esta la demo no enseñaba el camino principal de VEN-2: aceptar
+  -- una marca nueva crea la empresa y el negocio con «Enviar pitch»
+  -- (pulido r8). Molino Andino es inventada, como todas las del seed.
+  ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', NULL, 'meta_ad_library',
    '5 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 4, 'FMDD') || ' '
-     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · salsas',
-   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=saborescaseros',
-   jsonb_build_object('active_ads', 5, 'country', 'CO', 'category', 'salsas', 'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
-   'meta_ad_library:saborescaseros.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · harinas',
+   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=molinoandino',
+   jsonb_build_object('company_name', 'Molino Andino', 'domain', 'molinoandino.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
+                      'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
+   'meta_ad_library:molinoandino.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -1104,12 +1111,16 @@ VALUES
 -- (titular, fecha, evidence y dedupe_key salen de la misma
 -- CURRENT_DATE), para que nunca diga "hace 2 horas" de algo de hace un
 -- mes. Las aceptadas, la duplicada y la descartada ya ocurrieron y no
--- se tocan.
+-- se tocan. company_id y evidence_url también se refrescan: así una base
+-- sembrada antes del pulido r8, con la quinta todavía de Sabores
+-- Caseros, pasa a la marca nueva al volver a sembrar.
 ON CONFLICT (id) DO UPDATE SET
-  headline_es = EXCLUDED.headline_es,
-  detected_at = EXCLUDED.detected_at,
-  evidence    = EXCLUDED.evidence,
-  dedupe_key  = EXCLUDED.dedupe_key
+  company_id   = EXCLUDED.company_id,
+  headline_es  = EXCLUDED.headline_es,
+  detected_at  = EXCLUDED.detected_at,
+  evidence_url = EXCLUDED.evidence_url,
+  evidence     = EXCLUDED.evidence,
+  dedupe_key   = EXCLUDED.dedupe_key
 WHERE signal.status = 'pending';
 
 
@@ -1151,7 +1162,25 @@ WHERE signal.status = 'pending';
 -- cotizaciones que lo acuerdan están en 0004.
 -- Los nombres de los meses en español, una sola vez por sentencia
 -- (ver la sentencia de signal).
-WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo)
+-- Las siguientes acciones dicen qué hacer y con quién («Llamar a Laura
+-- Quintero por la propuesta»), como las escribiría una creadora y como
+-- propone el formulario (VEN-4): «Seguimiento 1» o «Llamada» no enseñan
+-- nada en la demo. «Enviar pitch» y «Seguimiento a la cotización» se
+-- quedan: son los textos que pone el producto (next_action_kind, 0032).
+-- Las dos que vencen HOY vencen a una hora local creíble, las 15:00 de
+-- Bogotá (PITCH_DUE_HOUR, la hora de las que pone el producto) y no a
+-- las 23:59 UTC, que la pantalla enseñaba como «6:59 p. m.». Si el seed
+-- corre después de las 15:00 locales, a la próxima hora en punto (hasta
+-- las 23:30), como hace setNextAction sin hora: tienen que seguir siendo
+-- «de hoy» y no nacer vencidas (verify (i) cuenta dos de hoy).
+WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo),
+     hoy AS (
+       SELECT CASE
+                WHEN now() < ((l.dia + time '15:00') AT TIME ZONE 'America/Bogota') THEN (l.dia + time '15:00') AT TIME ZONE 'America/Bogota'
+                ELSE least(date_trunc('hour', l.ahora) + interval '1 hour', l.dia + time '23:30') AT TIME ZONE 'America/Bogota'
+              END AS vence
+         FROM (SELECT now() AT TIME ZONE 'America/Bogota' AS ahora, (now() AT TIME ZONE 'America/Bogota')::date AS dia) l
+     )
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, origin_signal_id, name, stage_id, amount, currency, probability, expected_close_date, next_action, next_action_due, next_action_user_id, last_contact_at, won_at, lost_at, lost_reason, created_at)
 SELECT d.id, '00000002-0000-4000-8000-000000000001', d.company_id, '00000002-0000-4000-8000-000000000003', '00000002-0000-4000-8000-000000000002', d.origin_signal_id,
        d.name, d.stage_id, d.amount, 'COP', NULL, d.expected_close_date, d.next_action, d.next_action_due, '00000002-0000-4000-8000-000000000002',
@@ -1160,21 +1189,21 @@ FROM (VALUES
   -- Abiertos
   ('00000002-0000-4000-8000-0000000dea01'::uuid, '00000002-0000-4000-8000-0000000000e8'::uuid, '00000002-0000-4000-8000-00000005e003'::uuid,
    'Por definir', 'nuevo', 6000000.00, NULL::date, 'Enviar pitch',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
+   (SELECT vence FROM hoy), NULL::timestamptz, NULL::timestamptz, NULL::timestamptz, NULL::text, (CURRENT_DATE - 3 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-00000005e004',
-   'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Seguimiento 2',
+   'Historias + 1 Reel', 'contactado', 8000000.00, CURRENT_DATE + 24, 'Llamar a Laura Quintero por la propuesta',
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 5 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 24 + time '16:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea14', '00000002-0000-4000-8000-0000000000e7', NULL,
-   'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Seguimiento 1',
+   'Paquete snacks · Q' || extract(quarter FROM CURRENT_DATE + 30), 'contactado', 9000000.00, CURRENT_DATE + 30, 'Mandarle a Sofía Cárdenas ideas para los snacks',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '16:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 5 + time '10:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea03', '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-00000005e005',
-   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Enviar contrato',
-   ((CURRENT_DATE + 1)::timestamp - interval '1 minute') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
+   'Paquete + exclusividad 30 d', 'negociacion', 16000000.00, CURRENT_DATE + 8, 'Mandar el contrato a Daniel Restrepo',
+   (SELECT vence FROM hoy), (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-15 13:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea04', '00000002-0000-4000-8000-0000000000e1', NULL,
-   'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamada',
+   'Renovación Q' || extract(quarter FROM CURRENT_DATE + 18) || ' · 3 meses', 'conversacion', 12000000.00, CURRENT_DATE + 18, 'Llamar a Valentina para cerrar fechas de la renovación',
    ((CURRENT_DATE + 1)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '14:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-11 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea05', '00000002-0000-4000-8000-0000000000e4', NULL,
-   'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviar propuesta',
+   'Serie de 3 videos Q' || extract(quarter FROM CURRENT_DATE + 28), 'conversacion', 11000000.00, CURRENT_DATE + 28, 'Enviarle a Julián Mesa la propuesta de la serie',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 3 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-09-10 13:40:00+00'),
   ('00000002-0000-4000-8000-0000000dea06', '00000002-0000-4000-8000-0000000000e3', NULL,
    'Historias navidad', 'conversacion', 3000000.00, CURRENT_DATE + 54, 'Esperar pago de la mora',
@@ -1183,10 +1212,10 @@ FROM (VALUES
    'Lanzamiento desayunos · 1 TikTok + 1 Reel + 3 historias', 'propuesta', 14200000.00, CURRENT_DATE + 8, 'Seguimiento a la cotización',
    ((CURRENT_DATE + 2)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, '2026-08-13 14:20:00+00'),
   ('00000002-0000-4000-8000-0000000dea08', '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-00000005e006',
-   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar entregables',
+   '2 Reels + derechos 90 d', 'propuesta', 9800000.00, CURRENT_DATE + 14, 'Ajustar los entregables con Sofía Cárdenas',
    (CURRENT_DATE - 1 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 4 + time '17:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC'),
   ('00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000000e4', NULL,
-   '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar fechas',
+   '1 TikTok + 1 Short · ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m), 'negociacion', 6500000.00, CURRENT_DATE + 10, 'Confirmar con Julián Mesa las fechas de grabación',
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
@@ -1229,10 +1258,19 @@ FROM (VALUES
 -- vista deal_pipeline y el propio verify: con la lista de literales,
 -- añadir una etapa terminal ('archivado') o renombrar una hacía que el
 -- seed reescribiera en silencio el plan de deals ya cerrados.
+-- El texto de la siguiente acción se reescribe solo si sigue siendo uno
+-- de los de relleno de antes (VEN-4): una acción que alguien escribió en
+-- la demo no se pisa.
 ON CONFLICT (id) DO UPDATE SET
   expected_close_date = EXCLUDED.expected_close_date,
   next_action_due     = EXCLUDED.next_action_due,
-  last_contact_at     = EXCLUDED.last_contact_at
+  last_contact_at     = EXCLUDED.last_contact_at,
+  next_action         = CASE
+                          WHEN deal.next_action IN ('Seguimiento 1', 'Seguimiento 2', 'Llamada', 'Enviar contrato',
+                                                    'Enviar propuesta', 'Ajustar entregables', 'Confirmar fechas')
+                          THEN EXCLUDED.next_action
+                          ELSE deal.next_action
+                        END
 WHERE deal.stage_id IN (SELECT st.id FROM pipeline_stage st WHERE NOT st.is_won AND NOT st.is_lost);
 
 -- Una base sembrada antes de fijar la convención tiene esos cuatro
@@ -1388,8 +1426,12 @@ FROM (VALUES
     'Pitch por correo', 'Con media kit y la propuesta de historias + 1 reel.', (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', '{}'),
   (28, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', '00000002-0000-4000-8000-0000000c0009', 'email_sent',
     'Seguimiento 1', 'Se cita el video "Almuerzo por 8 mil pesos" como referencia de formato.', (CURRENT_DATE - 14 + time '14:05') AT TIME ZONE 'UTC', '{}'),
-  (29, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000c0010', 'note',
-    'Perdido', 'Eligieron a otra creadora del nicho. Mateo pidió no recibir más correos.', '2026-03-20 15:00:00+00', '{}'),
+  -- La pérdida de marzo es un cambio de etapa, con su motivo, como lo
+  -- escribe moverNegocio: la línea de tiempo de la demo enseña así el
+  -- tipo «Cambio de etapa» sin mover un negocio a mano (VEN-5, r4).
+  (29, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000c0010', 'stage_change',
+    'Propuesta enviada → Perdido', 'Eligieron a otra creadora del nicho. Mateo pidió no recibir más correos.', '2026-03-20 15:00:00+00',
+    '{"from": "propuesta", "to": "perdido", "days_in_stage": 10.00, "lost_reason": "eligio_otro_creador"}'),
   -- Vitalé (relativa)
   (30, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000dea08', NULL, 'signal_detected',
     '4 anuncios activos en Meta', 'Categoría bienestar, Colombia. Pauta desde hace un mes.', (CURRENT_DATE - 31 + time '08:00') AT TIME ZONE 'UTC', '{"signal_id": "00000002-0000-4000-8000-00000005e006"}'),
@@ -1411,9 +1453,27 @@ FROM (VALUES
     'Piden un TikTok y un Short para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 10)::int] FROM meses m),
     'Julián quiere una activación corta del almuerzo listo, aparte de la serie de Q' || extract(quarter FROM CURRENT_DATE + 28) || '. Presupuesto hasta 7 M.', (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC', '{}'),
   (38, '00000002-0000-4000-8000-0000000000e4', '00000002-0000-4000-8000-0000000dea15', '00000002-0000-4000-8000-0000000c0005', 'dm_received',
-    'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}')
+    'Aceptan la cotización; faltan las fechas', 'Confirman los 6,5 M. Piden las fechas de publicación antes del viernes.', (CURRENT_DATE - 3 + time '16:00') AT TIME ZONE 'UTC', '{}'),
+  -- Cambios de etapa (VEN-5, r4): los mismos pasos que deal_stage_history
+  -- (sección 10), con la forma que deja moverNegocio (subject «A → B» y
+  -- metadata {from, to, days_in_stage}). Granos del Valle en marzo…
+  (48, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea13', NULL, 'stage_change',
+    'Contactado → En conversación', NULL, '2026-03-03 15:00:00+00', '{"from": "contactado", "to": "conversacion", "days_in_stage": 7.04}'),
+  -- …y el pitch de ahora, que pasó el negocio abierto a «Contactado».
+  (49, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000dea02', NULL, 'stage_change',
+    'Nuevo → Contactado', NULL, (CURRENT_DATE - 21 + time '14:00') AT TIME ZONE 'UTC', '{"from": "nuevo", "to": "contactado", "days_in_stage": 2.92}')
 ) AS a(n, company_id, deal_id, contact_id, kind, subject, body, occurred_at, metadata)
 ON CONFLICT DO NOTHING;
+
+-- Una base sembrada antes de r4 tiene la pérdida de Granos del Valle
+-- como nota «Perdido» (la 29 de arriba, que ON CONFLICT DO NOTHING no
+-- reescribe). Se convierte en el cambio de etapa, solo si sigue siendo
+-- esa nota: es idempotente y no pisa nada que alguien haya escrito.
+UPDATE activity
+   SET kind = 'stage_change',
+       subject = 'Propuesta enviada → Perdido',
+       metadata = '{"from": "propuesta", "to": "perdido", "days_in_stage": 10.00, "lost_reason": "eligio_otro_creador"}'
+ WHERE id = '00000002-0000-4000-8000-00000ac7001d' AND kind = 'note' AND subject = 'Perdido';
 
 
 -- ---------------------------------------------------------------------
@@ -1620,11 +1680,11 @@ UPDATE app_user
 --   company                      8
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
---   signal                      13  (6 accepted, 5 pending —las cinco del mock—,
---                                    1 duplicate, 1 discarded)
+--   signal                      13  (6 accepted, 5 pending —las cinco del mock, una
+--                                    de una marca fuera del CRM—, 1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
---   activity                    47  (38 históricas + 9 de seguimiento, sección 11b)
+--   activity                    49  (40 históricas —3 de ellas cambios de etapa— + 9 de seguimiento, sección 11b)
 --   outbound_brief               1
 --   outbound_policy              1
 --   campaign                     4  (las cuatro de 0003, enlazadas aquí a su deal ganado)

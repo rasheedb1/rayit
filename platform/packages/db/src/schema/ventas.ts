@@ -198,6 +198,8 @@ export const deal = pgTable('deal', {
   nextActionKind: text('next_action_kind', { enum: NEXT_ACTION_KINDS }),
   nextActionDue: timestamptz('next_action_due'),
   nextActionUserId: uuid('next_action_user_id').references(() => appUser.id, { onDelete: 'set null' }),
+  /** Cuándo cambió por última vez el texto o el vencimiento de la acción; lo pone un disparador (0036). NULL: antes de 0036. */
+  nextActionSetAt: timestamptz('next_action_set_at'),
   lastContactAt: timestamptz('last_contact_at'),
   wonAt: timestamptz('won_at'),
   lostAt: timestamptz('lost_at'),

@@ -1,5 +1,14 @@
 import type { Metadata } from "next";
-import { getSalesKpis, getStageTotals, listPipeline, listSignals } from "@mc/db/queries/ventas";
+import {
+  PIPELINE_SEGUIMIENTOS,
+  getSalesKpis,
+  getStageTotals,
+  listOwnerOptions,
+  listPipeline,
+  listSignals,
+  type PipelineSeguimiento,
+} from "@mc/db/queries/ventas";
+import { getLocalDates, nextActionOf } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor } from "@/lib/format";
@@ -14,23 +23,40 @@ import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 import { pipelineForma, tabKey } from "../_lib/estado";
 import { ModuleTabs } from "../_componentes/pestanas";
+import { contextoDeSeguimiento } from "../_seguimiento/datos";
+import { ParaHoy } from "../_seguimiento/para-hoy";
 
 export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
-export default async function VentasPage({ searchParams }: { searchParams: Promise<{ vista?: string; forma?: string }> }) {
+export default async function VentasPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ vista?: string; forma?: string; seguimiento?: string }>;
+}) {
   const params = await searchParams;
   const vista = tabKey(params.vista);
   const forma = pipelineForma(params.forma);
+  // «Ponérsela» y «y N más» de «Para hoy» llevan a la lista filtrada
+  // (?seguimiento=sin_accion|para_hoy). En el tablero no se filtra: sus
+  // columnas suman todo el pipeline (getStageTotals) y no cuadrarían.
+  const filtro: PipelineSeguimiento | null =
+    forma === "lista" && PIPELINE_SEGUIMIENTOS.includes(params.seguimiento as PipelineSeguimiento)
+      ? (params.seguimiento as PipelineSeguimiento)
+      : null;
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, deals, stages } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, deals, stages, owners, dates } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
-    deals: vista === "pipeline" ? await listPipeline(tx) : [],
+    deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
+    // La siguiente acción de cada negocio abierto, editable en la tarjeta
+    // (VEN-4), sale de listPipeline: aquí solo las personas y el reloj.
+    owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
+    dates: vista === "pipeline" ? await getLocalDates(tx) : null,
   }));
 
   const workspace = await getCurrentWorkspace();
@@ -54,6 +80,9 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         title={t.header.title}
         description={t.header.description}
       />
+
+      {/* VEN-4: lo vencido y lo de hoy, antes que cualquier cifra. */}
+      <ParaHoy />
 
       <KpiRow>
         <Kpi
@@ -81,7 +110,7 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
                   kpis.wonQuarterNoAmountCount > 0 ? f.int(kpis.wonQuarterNoAmountCount) : undefined,
                 )
           }
-          info={[...t.kpis.wonInfo]}
+          info={t.kpis.wonInfo(f.zoneName())}
           infoLabel={t.kpis.infoLabel(t.kpis.won)}
         />
       </KpiRow>
@@ -91,7 +120,14 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         {vista === "radar" ? (
           <RadarView signals={signals} f={f} currency={workspace.currency} />
         ) : (
-          <PipelineView deals={deals} stages={stages} f={f} forma={forma} />
+          <PipelineView
+            deals={deals}
+            stages={stages}
+            f={f}
+            forma={forma}
+            filtro={filtro}
+            ctx={dates ? contextoDeSeguimiento(owners, deals.flatMap((d) => nextActionOf(d) ?? []), dates, f) : null}
+          />
         )}
       </div>
     </>

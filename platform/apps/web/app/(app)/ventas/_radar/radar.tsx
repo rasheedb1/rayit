@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Textarea } from "@/components/ui/field";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { aceptarSenal, descartarSenal, type VentasState } from "../actions";
-import { Aviso } from "../_componentes/aviso";
+import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
 import type { CountryOption } from "../_lib/paises";
 import { CargarListaForm, NuevaSenalForm } from "./formularios";

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { crearNegocio } from "../../actions";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { MESSAGES } from "../../_lib/messages";
 import { useVentasForm } from "../../_lib/use-ventas-form";
 

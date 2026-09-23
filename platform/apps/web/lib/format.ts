@@ -385,12 +385,63 @@ export function formatCountry(code: string, opts: LocaleOpts = {}): string {
   }
 }
 
-/** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
-export function formatDaysRelative(days: number): string {
-  if (days === 0) return "hoy";
-  if (days === 1) return "mañana";
-  if (days === -1) return "ayer";
-  return days > 0 ? `en ${days} días` : `hace ${-days} días`;
+/**
+ * El nombre de una zona horaria para leerlo en una frase, en el idioma
+ * del locale: «America/Bogota» → «hora estándar de Colombia» (es) ·
+ * «Colombia Standard Time» (en); «Europe/Madrid» → «hora de Europa
+ * central». Es el nombre genérico (sin «de verano»), para que el texto no
+ * cambie dos veces al año. Donde Intl solo sabe dar un desplazamiento
+ * («GMT+00:00», como con UTC) se usa el nombre largo («hora universal
+ * coordinada»); una zona que Intl no conoce vuelve tal cual. Añadido por
+ * Ventas (VEN-4): el campo «Hora» dice en qué zona se escribe.
+ */
+export function formatTimeZoneName(timeZone: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const nombre = (timeZoneName: "longGeneric" | "long"): string | null => {
+    try {
+      return (
+        dateFormat(locale, { timeZone, timeZoneName })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? null
+      );
+    } catch {
+      return null;
+    }
+  };
+  const generico = nombre("longGeneric");
+  if (generico && !/^(GMT|UTC)/.test(generico)) return generico;
+  return nombre("long") ?? timeZone;
+}
+
+const relativeCache = new Map<string, Intl.RelativeTimeFormat>();
+
+/**
+ * Hace cuántos días (o en cuántos), en el idioma del locale y con Intl:
+ * -3 → «hace 3 días», -1 → «ayer», 0 → «hoy» (es) · «3 days ago»,
+ * «yesterday», «today» (en). El número de días lo trae la consulta,
+ * contado en la zona del espacio: aquí no se restan fechas. Añadido por
+ * Ventas (VEN-5): «Último contacto: hace 3 días».
+ */
+export function formatRelativeDays(days: number, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  let rtf = relativeCache.get(locale);
+  if (!rtf) {
+    rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    relativeCache.set(locale, rtf);
+  }
+  return rtf.format(Math.trunc(days), "day");
+}
+
+/**
+ * @deprecated Usa `formatRelativeDays` (o `f.relativeDays`). Es el mismo
+ * formato: se conserva el nombre para la columna «Vence» de Finanzas,
+ * que lo llama como `f.daysRelative`. Antes escribía «hoy» y «en N días»
+ * a mano en español, y dos funciones con nombres casi iguales para lo
+ * mismo invitaban a elegir la de español fijo. Ahora es un envoltorio:
+ * «dentro de 23 días» · «hoy» · «hace 41 días» en es, «in 23 days» en en.
+ */
+export function formatDaysRelative(days: number, opts: LocaleOpts = {}): string {
+  return formatRelativeDays(days, opts);
 }
 
 /**
@@ -425,7 +476,12 @@ export function formatterFor(settings: FormatSettings) {
     time: (iso: string) => formatTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     country: (code: string) => formatCountry(code, base),
-    daysRelative: formatDaysRelative,
+    /** El nombre de la zona del workspace (u otra), para una frase: «hora estándar de Colombia». */
+    zoneName: (tz: string = timeZone) => formatTimeZoneName(tz, base),
+    /** «hace 3 días», «ayer», «hoy», «dentro de 2 días», en el idioma del workspace. Recibe días con signo (negativo es pasado). */
+    relativeDays: (days: number) => formatRelativeDays(days, base),
+    /** @deprecated Usa `relativeDays`: es la misma función (la columna «Vence» de Finanzas aún la llama así). */
+    daysRelative: (days: number) => formatRelativeDays(days, base),
   };
 }
 

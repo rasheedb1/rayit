@@ -1,6 +1,7 @@
 import type { SignalRow } from "@mc/db/queries/ventas";
 import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
+import { safeHref } from "@/lib/url";
 import { pillForFit } from "../_lib/estado";
 import { countryOptions } from "../_lib/paises";
 import { Radar, type SignalCardData } from "./radar";
@@ -27,7 +28,8 @@ export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: F
     sourceLabel: s.sourceLabel,
     detectedText: f.date(s.detectedAt),
     budgetText: s.budgetEstimate ? f.money(s.budgetEstimate, s.budgetCurrency ?? undefined, { mode: "short" }) : null,
-    evidenceUrl: s.evidenceUrl,
+    // Solo http(s): la columna es text libre y la llenarán los conectores del radar.
+    evidenceUrl: safeHref(s.evidenceUrl),
     viaCsv: s.via === "csv",
     // La marca ya está en el CRM: su ficha y, si lo hay, el negocio abierto
     // al que se sumará la señal (el mismo que elige acceptSignal).

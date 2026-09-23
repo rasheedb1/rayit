@@ -61,11 +61,24 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(rol?.['currentUser'], 'mc_worker');
   assert.equal(rol?.['bypassRls'], true);
 
+  // Cuántas definiciones hay lo dice job_definition, no un número fijo:
+  // cada migración que añade un job (0034 añadió sales.follow_ups) no
+  // tiene que tocar esta prueba. Lo que sí se fija es el piso, las 21 de
+  // 0009, y que cada una con handler en allJobs se cuente como tal.
+  const catalogo = await h.db.query<{ id: string; default_cron: string | null; enabled: boolean }>(
+    `SELECT id, default_cron, enabled FROM job_definition WHERE id NOT LIKE 'test.%'`,
+  );
+  const base = catalogo.rows.length;
+  const conHandler = catalogo.rows.filter((d) => allJobs.some((j) => j.id === d.id)).length;
+  const baseCrons = catalogo.rows.filter((d) => d.enabled && d.default_cron !== null).length;
+  assert.ok(base >= 21, `al menos las 21 definiciones de 0009 (hay ${base})`);
+  assert.ok(catalogo.rows.some((d) => d.id === 'sales.follow_ups'), 'y sales.follow_ups de 0034');
+
   const seeded = h.worker.definitions.filter((d) => !d.id.startsWith('test.'));
-  assert.equal(seeded.length, 21, 'las 21 definiciones de 0009');
+  assert.equal(seeded.length, base);
 
   const registered = records.filter((r) => r['msg'] === 'job registrado');
-  assert.equal(registered.length, 21 + 6);
+  assert.equal(registered.length, base + 6);
   const byJob = new Map(registered.map((r) => [r['job'], r]));
   assert.equal(byJob.get('oauth.refresh')?.['handler'], 'sí');
   assert.equal(byJob.get('oauth.refresh')?.['cron'], '*/15 * * * *');
@@ -74,22 +87,22 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
-  assert.equal(listo?.['withHandler'], 7);       // oauth.refresh + collect.account_metrics + 5 de prueba (test.off está apagado)
-  assert.equal(listo?.['withoutHandler'], 19);
+  assert.equal(listo?.['withHandler'], conHandler + 5);  // los de allJobs con fila + 5 de prueba (test.off está apagado)
+  assert.equal(listo?.['withoutHandler'], base - conHandler);
   assert.equal(listo?.['disabled'], 1);
-  assert.equal(listo?.['crons'], 17);           // las 21 menos las 4 de video
+  assert.equal(listo?.['crons'], baseCrons);             // las que tienen cron (las de video no)
 
   // Sin handler → una fila skipped por arranque, y nada más.
   const skipped = await h.db.query<{ job_id: string; error: string; n: number | string }>(
     `SELECT job_id, error, count(*)::int AS n FROM job_run WHERE status = 'skipped' GROUP BY 1, 2 ORDER BY 1`,
   );
-  assert.equal(skipped.rows.length, 19);
+  assert.equal(skipped.rows.length, base - conHandler);
   assert.ok(skipped.rows.every((r) => r.error === 'sin handler' && Number(r.n) === 1));
   assert.ok(!skipped.rows.some((r) => r.job_id === 'oauth.refresh' || r.job_id === 'collect.account_metrics' || r.job_id === 'test.off'));
 
   // Los crons viven en pg-boss, con la clave 'cron' y el payload que identifica al job.
   const schedules = await h.worker.boss.getSchedules();
-  assert.equal(schedules.length, 17);
+  assert.equal(schedules.length, baseCrons);
   const oauth = schedules.find((s) => s.name === 'oauth.refresh');
   assert.equal(oauth?.cron, '*/15 * * * *');
   assert.equal(oauth?.timezone, 'UTC');
@@ -240,8 +253,18 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     secrets: new InMemorySecretStore(), refreshers: refresherRegistry([]), env: {},
   });
   try {
+    // El esperado sale del catálogo, como en la prueba 1: una migración
+    // que añada un job con cron no tiene que tocar esta prueba.
+    const catalogo = await h.db.query<{ crons: number | string; sin_handler: number | string }>(
+      `SELECT count(*) FILTER (WHERE enabled AND default_cron IS NOT NULL)::int AS crons,
+              count(*) FILTER (WHERE NOT (id = ANY($1::text[])))::int AS sin_handler
+         FROM job_definition WHERE id NOT LIKE 'test.%'`,
+      [allJobs.map((j) => j.id)],
+    );
+    const crons = Number(catalogo.rows[0]!.crons);
+    const sinHandler = Number(catalogo.rows[0]!.sin_handler);
     const after = await second.boss.getSchedules();
-    assert.equal(after.length, 17, 'mismas 17 filas de schedule');
+    assert.equal(after.length, crons, `mismas ${crons} filas de schedule`);
     assert.equal(after.filter((s) => s.name === 'oauth.refresh').length, 1);
     assert.equal(after.find((s) => s.name === 'oauth.refresh')?.cron, '*/5 * * * *');
     const updated = sink.records().find((r) => r['msg'] === 'schedule actualizado');
@@ -249,9 +272,9 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     assert.equal(updated?.['previous'], '*/15 * * * *');
     assert.equal(sink.records().filter((r) => r['msg'] === 'schedule creado').length, 0, 'ningún schedule se creó de nuevo');
     // El segundo worker no registra los jobs test.*: esos 5 sí quedan skipped
-    // (ahora no tienen handler). Los 19 de 0009 sin handler no se repiten.
+    // (ahora no tienen handler). Los del catálogo sin handler no se repiten.
     const skipped = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id NOT LIKE 'test.%'`);
-    assert.equal(Number(skipped.rows[0]!.n), 19, 'el reinicio no vuelve a insertar filas skipped');
+    assert.equal(Number(skipped.rows[0]!.n), sinHandler, 'el reinicio no vuelve a insertar filas skipped');
     const skippedTest = await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'skipped' AND job_id LIKE 'test.%'`);
     assert.equal(Number(skippedTest.rows[0]!.n), 5, 'los que perdieron su handler sí se anotan');
   } finally {

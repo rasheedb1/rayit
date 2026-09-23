@@ -13,7 +13,6 @@ import {
   fitFromPercent,
   fitPercent,
   pipelineForma,
-  needsNextAction,
   pillForDue,
   pillForFit,
   tabHref,
@@ -79,14 +78,6 @@ describe("seguimiento", () => {
 
   it("«sin fecha» avisa: es el problema que la pantalla existe para señalar", () => {
     expect(pillForDue("sin_fecha").kind).toBe("warn");
-  });
-
-  it("solo se marca un negocio abierto sin siguiente acción", () => {
-    expect(needsNextAction({ nextAction: null, isWon: false, isLost: false })).toBe(true);
-    expect(needsNextAction({ nextAction: "Llamar", isWon: false, isLost: false })).toBe(false);
-    // A un negocio ganado no le falta nada.
-    expect(needsNextAction({ nextAction: null, isWon: true, isLost: false })).toBe(false);
-    expect(needsNextAction({ nextAction: null, isWon: false, isLost: true })).toBe(false);
   });
 });
 

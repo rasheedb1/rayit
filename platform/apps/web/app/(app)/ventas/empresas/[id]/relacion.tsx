@@ -4,7 +4,7 @@ import type { OwnerOption, Relationship } from "@mc/db/queries/ventas";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { cambiarRelacion } from "../../actions";
-import { Aviso } from "../../_componentes/aviso";
+import { Aviso } from "../../../_lib/aviso";
 import { RELATIONSHIP_OPTIONS } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
 import { useVentasForm } from "../../_lib/use-ventas-form";

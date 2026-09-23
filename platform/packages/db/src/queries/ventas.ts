@@ -323,14 +323,31 @@ export interface PipelineDealRow {
   probability: string;
   weightedAmount: string | null;
   nextAction: string | null;
+  /** El instante en que vence la siguiente acción, ISO en UTC. */
   nextActionDue: string | null;
+  /** El día en que vence, en la zona del espacio: «2026-09-24». Para el <input type="date"> del editor (VEN-4). */
+  nextActionDueDate: string | null;
+  /** La hora en que vence, en la zona del espacio: «15:00». */
+  nextActionDueTime: string | null;
+  /** Quien tiene que hacer la siguiente acción (deal.next_action_user_id) y su nombre. */
+  nextActionUserId: string | null;
+  nextActionUserName: string | null;
   dueState: DueState;
+  /** La última llamada, correo o reunión con la marca por este negocio, ISO en UTC (logActivity la mueve). */
   lastContactAt: string | null;
+  /**
+   * Hace cuántos días fue, contados por días de calendario en la zona del
+   * espacio (0 hoy, 1 ayer); null sin contacto. Sale de SQL para que la
+   * pantalla no reste fechas: «Último contacto: hace 3 días».
+   */
+  lastContactDays: number | null;
   expectedCloseDate: string | null;
   isWon: boolean;
   isLost: boolean;
   /** Días en la etapa actual: desde el último cambio, o desde que nació. */
   daysInStage: number;
+  /** El responsable del negocio: el que se propone para la siguiente acción cuando no tiene. */
+  ownerUserId: string | null;
   ownerName: string | null;
   /** Por qué se perdió; solo en un negocio en una etapa perdida. */
   lostReason: LostReason | null;
@@ -1470,7 +1487,7 @@ export const PITCH_DUE_HOUR = 15;
  * «Seguimiento a la cotización»): el N-ésimo día HÁBIL después del de
  * `desde`, a las HOUR en la zona del workspace (no en UTC: en Bogotá las
  * 15:00 UTC son las 10:00). Espera la fila `w` de WORKSPACE_TZ en el
- * FROM. Un nombre de zona que Postgres no reconozca cae en UTC.
+ * FROM, cuya zona siempre es una que Postgres conoce (0035).
  *
  * Es UNA sola expresión para el pitch y para el seguimiento: antes el
  * pitch contaba días de calendario y el seguimiento hábiles, y la misma
@@ -1494,10 +1511,17 @@ function dueInBusinessDays(desde: string, dias: string, hora: string): string {
 
 /**
  * El workspace actual con su zona, para las consultas que la necesitan.
- * Vacía cae en UTC, como en Cotizar (sendQuote); la zona la valida
- * quien la guarda en el workspace.
+ * La usa también queries/ventas-ficha.ts (VEN-4, VEN-5): una sola
+ * definición de «la zona del espacio».
+ *
+ * La zona se usa tal cual en `AT TIME ZONE` sin validarla aquí: la
+ * migración 0035 corrigió las que estaban mal escritas y su disparador
+ * (workspace_timezone_check) no deja guardar ninguna que Postgres no
+ * conozca. Validar en cada lectura contra pg_timezone_names costaría un
+ * recorrido del catálogo de zonas por consulta. Vacía cae en UTC, como
+ * en Cotizar (sendQuote), aunque 0035 tampoco deja guardarla.
  */
-const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
+export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
     FROM workspace WHERE id = current_workspace_id())`;
 
 /**
@@ -1710,29 +1734,67 @@ export async function discardSignal(tx: WorkspaceTx, signalId: string, reason: s
 // VEN-3 · Pipeline
 // ---------------------------------------------------------------------
 
+/** Los dos filtros de seguimiento del pipeline (VEN-4): ver listPipeline. */
+export const PIPELINE_SEGUIMIENTOS = ['sin_accion', 'para_hoy'] as const;
+export type PipelineSeguimiento = (typeof PIPELINE_SEGUIMIENTOS)[number];
+
 /**
  * Los deals del workspace por etapa y, dentro de cada una, por fecha de
  * siguiente acción. Sale de la vista deal_pipeline, que ya resuelve
  * probabilidad, monto ponderado y estado del seguimiento; se le añaden
  * los días en la etapa actual (del historial) y el responsable.
+ *
+ * Trae también lo que el editor de la siguiente acción necesita (VEN-4):
+ * el día y la hora del vencimiento en la zona del espacio, y quién la
+ * hace. Así el tablero, la lista y la ficha leen la siguiente acción de
+ * esta única consulta y no de una segunda lectura de deal_pipeline.
+ *
+ * Los filtros van en SQL, no en la pantalla (VEN-4/VEN-5):
+ *   - `companyId`: solo los negocios de una empresa (la ficha no lee el
+ *     pipeline entero para quedarse con tres).
+ *   - `seguimiento`: 'sin_accion' deja los abiertos sin siguiente acción
+ *     con texto y fecha; 'para_hoy', los abiertos con acción vencida o
+ *     que vence hoy. Son los dos enlaces del bloque «Para hoy» y cuentan
+ *     igual que sus cifras (listDueToday).
  */
-export async function listPipeline(tx: WorkspaceTx): Promise<PipelineDealRow[]> {
+export async function listPipeline(
+  tx: WorkspaceTx,
+  opts: { companyId?: string; seguimiento?: PipelineSeguimiento | null } = {},
+): Promise<PipelineDealRow[]> {
+  if (opts.companyId !== undefined && !isUuid(opts.companyId)) return [];
+  const seguimiento = opts.seguimiento && PIPELINE_SEGUIMIENTOS.includes(opts.seguimiento) ? opts.seguimiento : null;
   const { rows } = await tx.query<PipelineRowSql>(
     `SELECT p.id, p.company_id, p.company_name, p.name, p.stage_id, p.stage_label, p.stage_position,
             p.amount::text AS amount, p.currency::text AS currency, p.probability::text AS probability,
-            p.weighted_amount::text AS weighted_amount, p.next_action, p.next_action_due, p.due_state,
-            p.last_contact_at, p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
-            u.name AS owner_name, d.lost_reason,
+            p.weighted_amount::text AS weighted_amount, p.next_action,
+            to_char(p.next_action_due AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_action_due,
+            to_char(p.next_action_due AT TIME ZONE w.tz, 'YYYY-MM-DD') AS next_action_due_date,
+            to_char(p.next_action_due AT TIME ZONE w.tz, 'HH24:MI') AS next_action_due_time,
+            d.next_action_user_id, coalesce(nullif(btrim(nu.name), ''), nu.email::text) AS next_action_user_name,
+            p.due_state,
+            to_char(p.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_contact_at,
+            ((now() AT TIME ZONE w.tz)::date - (p.last_contact_at AT TIME ZONE w.tz)::date) AS last_contact_days,
+            p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
+            d.owner_user_id, u.name AS owner_name, d.lost_reason,
             round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0)::int AS days_in_stage
      FROM deal_pipeline p
      JOIN deal d ON d.id = p.id
+     CROSS JOIN ${WORKSPACE_TZ} w
      LEFT JOIN app_user u ON u.id = d.owner_user_id
+     LEFT JOIN app_user nu ON nu.id = d.next_action_user_id
      LEFT JOIN LATERAL (
        SELECT changed_at FROM deal_stage_history
        WHERE deal_id = p.id AND to_stage_id = p.stage_id
        ORDER BY changed_at DESC LIMIT 1
      ) h ON true
+     WHERE ($1::uuid IS NULL OR p.company_id = $1::uuid)
+       AND ($2::text IS NULL
+            OR ($2 = 'sin_accion' AND NOT p.is_won AND NOT p.is_lost
+                AND (nullif(btrim(p.next_action), '') IS NULL OR p.next_action_due IS NULL))
+            OR ($2 = 'para_hoy' AND NOT p.is_won AND NOT p.is_lost
+                AND nullif(btrim(p.next_action), '') IS NOT NULL AND p.due_state IN ('vencido', 'hoy')))
      ORDER BY p.stage_position ASC, p.next_action_due ASC NULLS LAST, p.name ASC`,
+    [opts.companyId ?? null, seguimiento],
   );
   return rows.map(toPipelineRow);
 }
@@ -2249,9 +2311,11 @@ interface PipelineRowSql {
   id: string; company_id: string; company_name: string; name: string; stage_id: string;
   stage_label: string; stage_position: number; amount: string | null; currency: string;
   probability: string; weighted_amount: string | null; next_action: string | null;
-  next_action_due: string | null; due_state: DueState; last_contact_at: string | null;
+  next_action_due: string | null; next_action_due_date: string | null; next_action_due_time: string | null;
+  next_action_user_id: string | null; next_action_user_name: string | null;
+  due_state: DueState; last_contact_at: string | null; last_contact_days: number | null;
   expected_close_date: string | null; is_won: boolean; is_lost: boolean;
-  owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
+  owner_user_id: string | null; owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
 }
 
 function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
@@ -2269,12 +2333,18 @@ function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
     weightedAmount: r.weighted_amount,
     nextAction: r.next_action,
     nextActionDue: r.next_action_due,
+    nextActionDueDate: r.next_action_due_date,
+    nextActionDueTime: r.next_action_due_time,
+    nextActionUserId: r.next_action_user_id,
+    nextActionUserName: r.next_action_user_name,
     dueState: r.due_state,
     lastContactAt: r.last_contact_at,
+    lastContactDays: r.last_contact_days === null ? null : Number(r.last_contact_days),
     expectedCloseDate: r.expected_close_date,
     isWon: r.is_won,
     isLost: r.is_lost,
     daysInStage: Number(r.days_in_stage ?? 0),
+    ownerUserId: r.owner_user_id,
     ownerName: r.owner_name,
     lostReason: r.is_lost ? r.lost_reason : null,
   };
