@@ -246,7 +246,8 @@ export const STORIES: readonly Story[] = [
     title: "Línea base y puntaje",
     desc: "compute.baseline (mediana por red y corte de edad) y compute.post_score. Con menos de ocho videos, is_reliable = false. Usa packages/core/scoring.ts, que ya existe.",
     done: "Un post con el doble de views que la mediana queda con outlier_tier = outlier.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Cada video se puntúa en el mayor corte que alcanzó (24, 72, 168 o 720 h) contra la línea base de ESE corte; con menos de ocho videos, views_vs_median queda en null y nunca en cero. La línea base es append-only y se recalcula siempre (la ventana cambia con el paso del tiempo aunque no lleguen lecturas). El aviso de outlier o breakout se manda una vez por video y por nivel. Sobre el seed, las 16 líneas base y los 59 puntajes salen idénticos a los que calcula db/seed/0002 en SQL. No se hizo sin CON-5: los jobs leen post_metric_snapshot, que hoy llenan el seed y el CSV de RES-2. Pendiente humano: la migración 0024 (security_invoker en las vistas) tiene que estar aplicada en Supabase o los dos jobs ven cero filas a través de post_metrics_at_cut.",
   },
   {
     id: "CON-7", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-5"],

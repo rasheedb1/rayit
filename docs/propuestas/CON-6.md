@@ -43,8 +43,8 @@ apps/worker/package.json           @mc/core como dependencia de workspace (no es
 apps/worker/src/jobs/conexiones/compute-baseline.ts     compute.baseline
 apps/worker/src/jobs/conexiones/compute-post-score.ts   compute.post_score
 apps/worker/src/jobs/conexiones/index.ts                los suma a conexionesJobs
-apps/worker/test/compute-baseline.test.ts               pruebas en el arnés (pglite + migraciones reales)
-apps/worker/test/compute-post-score.test.ts
+apps/worker/test/compute-baseline-post-score.test.ts    once pruebas en el arnés (pglite + migraciones reales);
+                                                        un solo archivo porque los dos jobs se prueban en cadena
 apps/worker/README.md              los dos jobs nuevos
 apps/web/content/backlog.ts        estado de CON-6 (solo mi entrada)
 docs/propuestas/CON-6.md           este archivo
@@ -118,9 +118,11 @@ con la lista vacía. `median([])` devuelve `0` y eso, escrito en
 normal, no el raro.
 
 **4 · Cuándo recalcular: siempre.** Medido sobre el seed en Postgres
-embebido: las 16 líneas base (4 redes × 4 cortes, 60 videos, 2 658
-lecturas) salen de **una** consulta; el job entero cierra en menos de un
-segundo. La salida real está en §4.
+embebido (60 videos, 2 658 lecturas, 205 videos en las cuatro ventanas):
+`compute.baseline` escribe las 16 líneas base en **889 ms** la primera
+vez y 547 ms la segunda; `compute.post_score` puntúa los 59 videos en
+3 262 ms la primera (cuando además escribe las seis notificaciones) y
+399 ms la segunda. La salida completa está en §4.
 
 Descartado «solo si hay lecturas nuevas desde `computed_at`»: sería
 incorrecto, no solo prudente. La ventana cambia **con el paso del
@@ -304,6 +306,75 @@ la demo de RES-3 necesita una corrida de `compute.post_score`, o que
 construya. Es decisión de Rasheed, dueño de `0002` y de RES-3; los dos
 caminos funcionan y el job no duplica la notificación si el seed ya la
 sembró con el mismo `kind` y `entity_id`.
+
+---
+
+## 4. Verificación (23 de septiembre)
+
+El worker de verdad —pg-boss sobre Postgres embebido con las 33
+migraciones y los cuatro seeds del repositorio— corriendo los dos jobs
+sobre la demo, y el resultado comparado **fila por fila** contra lo que
+el propio seed calcula en SQL.
+
+```
+== compute.baseline: ok · 16 procesados · 0 fallidos (duration_ms 889)
+   {"cuentas":4,"workspaces":1,"windowPosts":20,"videosEnVentana":205,
+    "fiablesPorCorte":{"24":4,"72":4,"168":4,"720":4},"repetidas":0,"fallidas":[]}
+== compute.post_score: ok · 59 procesados · 0 fallidos (duration_ms 3262)
+   {"candidatos":59,"workspaces":1,"sinLineaBase":0,"noRetrocedidos":0,
+    "outliers":[…d01,d02,d06,d07,d18,d28],"avisados":[los mismos seis],"fallidos":[]}
+```
+
+**creator_baseline que escribió el job** (las 16 filas; se muestran
+cuatro, una por red):
+
+| red | corte | muestra | fiable | mediana views | p25 | p75 | engagement | guardados/1k | completion | skip 3 s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| facebook | 168 | 10 | sí | 19 697,50 | 16 720,00 | 23 362,00 | 0,067243 | 8,4896 | — | — |
+| instagram | 168 | 16 | sí | 62 177,00 | 55 952,75 | 76 224,00 | 0,070793 | 10,5032 | — | 0,28500 |
+| tiktok | 168 | 17 | sí | 115 446,00 | 90 510,00 | 133 917,00 | 0,068798 | 10,6961 | 0,09000 | 0,28000 |
+| youtube | 720 | 8 | sí | 47 000,00 | 40 500,00 | 53 500,00 | 0,072302 | 11,0000 | 0,09500 | — |
+
+Las rayas son `NULL` de verdad: Facebook no publica `completion_rate` ni
+`skip_rate_3s` en el seed, y YouTube no publica `skip_rate_3s`. Ahí es
+donde `medianOf` gana a `median`: un cero habría dicho «cero por ciento
+de retención».
+
+**Diferencias con lo que calculó el seed en SQL: ninguna.** La consulta
+compara `sample_size`, las cinco medianas, los dos percentiles y
+`is_reliable` de las 16 filas: **cero filas distintas**. Y de los 59
+puntajes, **cero** con corte, múltiplo o nivel distinto del que escribió
+el seed.
+
+**Los cinco puntajes más altos:**
+
+| red | video | corte | views al corte | × mediana | nivel | avisado |
+|---|---|---|---|---|---|---|
+| instagram | Cold brew en casa en 3 pasos | 720 | 412 000 | 5,971 | breakout | sí |
+| tiktok | La arepa que se hace sin plancha | 72 | 395 810 | 3,710 | outlier | sí |
+| instagram | Tres desayunos con dos ingredientes | 168 | 165 485 | 2,662 | outlier | sí |
+| tiktok | El cold brew que me salva las mañanas | 720 | 300 000 | 2,469 | outlier | sí |
+| youtube | Pasta cremosa en cuatro minutos | 72 | 77 095 | 2,359 | outlier | sí |
+
+Un video de los 60 se queda **sin fila**: el que todavía no cumple 24 h.
+Es lo correcto (§0.3 · 1).
+
+**Las seis notificaciones**, tal como las verá RES-3:
+
+> **Se disparó: un video tuyo hizo 6× tu mediana**
+> «Cold brew en casa en 3 pasos» llevaba 412.000 views en Instagram a
+> los 30 días, 6× tu mediana. Mira qué tuvo distinto para repetirlo.
+
+> **Un video tuyo hizo 3,7× tu mediana**
+> «La arepa que se hace sin plancha» llevaba 395.810 views en TikTok a
+> los 3 días, 3,7× tu mediana. Mira qué tuvo distinto para repetirlo.
+
+Los puntos de miles y la coma decimal salen de `workspace.locale`
+(`es-CO` en el seed), no de un formato escrito a mano.
+
+**Segunda corrida completa**: 6 notificaciones (las mismas), 48 líneas
+base (16 del seed + 16 + 16: la tabla es append-only) y 59 puntajes. Ni
+un aviso repetido, ni un puntaje que retroceda.
 
 ---
 

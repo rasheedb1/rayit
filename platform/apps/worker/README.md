@@ -202,10 +202,67 @@ SELECT platform_id, endpoint, count(*) FILTER (WHERE ok) AS ok, count(*) FILTER 
 SELECT day, units_used, units_limit, calls FROM api_quota_usage WHERE platform_id = 'youtube' AND connection_id IS NULL ORDER BY day DESC LIMIT 1;
 ```
 
+## Línea base y puntaje (CON-6)
+
+Dos jobs nocturnos producen el número central del producto: **cuántas
+veces su propia mediana hizo cada video, medido a la misma edad que los
+demás**. Toda su aritmética sale de `@mc/core` (`scoring.ts`), nunca de
+SQL suelto ni de una pantalla.
+
+| Job | Cron | Qué escribe |
+|---|---|---|
+| `compute.baseline` | `40 5` | Una fila de `creator_baseline` por (workspace, creador, red, corte de edad) con la mediana, el p25 y el p75 de views, y la mediana de alcance, engagement, guardados por mil, completion y skip a 3 s. `is_reliable = sample_size >= 8`. |
+| `compute.post_score` | `45 5` | Una fila de `post_score` por video con `views_vs_median`, `outlier_tier`, `is_outlier` y, la primera vez que llega a cada nivel, una `notification` (`outlier`, `breakout`). |
+
+Las reglas que hay que saber antes de tocarlos:
+
+- **El corte manda.** Un video se puntúa en el **mayor** corte de
+  `AGE_CUTS_HOURS` (24, 72, 168, 720 h) que ya alcanzó, contra la línea
+  base de ESE corte, y el corte queda escrito en `age_hours_cut`. Un
+  video de menos de 24 h no recibe fila: compararlo sería medirlo a otra
+  edad que los demás.
+- **La ventana son los últimos `window_posts` (20) videos** que de
+  verdad llegaron al corte —edad cumplida **y** lectura en
+  `post_metrics_at_cut`—, sin los `deleted_on_platform`.
+- **Un nulo no es un cero.** Sin ocho videos en ese corte,
+  `views_vs_median` y `outlier_tier` quedan en `NULL` (la fila se
+  escribe igual, con sus views reales). `is_outlier` es `NOT NULL`, así
+  que el «todavía no sabemos» vive en las otras dos columnas y la
+  pantalla lee esas.
+- **`creator_baseline` es append-only** (su `UNIQUE` incluye
+  `computed_at`): cada corrida deja su fila y el puntaje apunta con
+  `baseline_id` a la que usó. `post_score` tiene `PRIMARY KEY (post_id)`:
+  es el puntaje vigente y se reemplaza, pero su corte **nunca baja** y
+  `notified_at` sobrevive al recálculo.
+- **Se recalcula siempre**, también sin lecturas nuevas: la ventana
+  cambia con el paso del tiempo (un video de seis días y medio entra
+  mañana en el corte de 168 h con la lectura que ya tiene). Sobre el
+  seed son 889 ms las 16 líneas base y 3,3 s los 59 puntajes.
+- **Un aviso por video y por nivel.** El registro de «ya avisé» es la
+  propia tabla `notification` (`kind` + `entity_id`), no una fecha: así
+  un video que sube de `outlier` a `breakout` avisa la segunda vez, y
+  ninguna corrida repite la primera.
+- **Contra Supabase necesitan la migración `0024`** (`security_invoker`
+  en las vistas): los dos leen `post_metrics_at_cut`, y una vista sin esa
+  opción corre con los privilegios de su dueño, así que `mc_worker` —que
+  se salta RLS por rol— no se la salta a través de la vista y vería cero
+  filas. Detalle en [docs/propuestas/CON-6.md](../../../docs/propuestas/CON-6.md) §5.
+
+Para probarlos a mano sobre la demo:
+
+```sql
+SELECT platform_id, age_hours_cut, sample_size, median_views, is_reliable
+  FROM creator_baseline ORDER BY computed_at DESC, platform_id, age_hours_cut;
+
+SELECT p.platform_id, p.title, s.age_hours_cut, s.views_at_cut, s.views_vs_median, s.outlier_tier
+  FROM post_score s JOIN post p ON p.id = s.post_id
+ ORDER BY s.views_vs_median DESC NULLS LAST LIMIT 5;
+```
+
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite), ~45 s; incluye collect.account_metrics por @; incluye oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures
+pnpm --filter @mc/worker test        # integración sobre Postgres embebido (pglite); incluye collect.account_metrics por @; oauth.refresh con el almacén cifrado y los refreshers reales sobre fixtures; y compute.baseline + compute.post_score (CON-6) con dos workspaces
 pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y pglite para api_quota_usage, sin red
 pnpm --filter @mc/worker typecheck lint
 ```
@@ -230,5 +287,6 @@ src/runner/run.ts            una ejecución: job_run running → ok/partial/fail
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
+                             compute.baseline · compute.post_score (línea base y puntaje, CON-6)
 test/                        integración (pglite) y unitarias
 ```
