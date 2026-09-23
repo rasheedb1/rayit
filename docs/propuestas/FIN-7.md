@@ -56,9 +56,10 @@ documentamos nosotros.
 ### 0.3 Qué se construye
 
 ```
-platform/db/migrations/0036_platform_payout_unico.sql      UNIQUE natural (idempotencia del import)
+platform/db/migrations/0036_platform_payout_unico.sql      UNIQUE natural (idempotencia del import) + índice de la lista
 
-platform/packages/core/src/ingresos-plataformas.ts         NUEVO. promedioMensual(), proyeccionDePlataformas()
+platform/packages/core/src/ingresos-plataformas.ts         NUEVO. promedioMensual(), proyeccionDePlataformas(),
+                                                             ultimoDiaDelMes(), esMesEntero(), aritmética de meses
 platform/packages/core/src/index.ts                        + export
 platform/packages/core/test/ingresos-plataformas.test.ts
 platform/packages/core/src/flujo-caja.ts                   (FIN-6) + otrosIngresosMensual de entrada y
@@ -67,25 +68,31 @@ platform/packages/core/test/flujo-caja.test.ts             + describe «otros in
 
 platform/packages/db/src/audit.ts                          + platform_payout.created / .imported
 platform/packages/db/src/queries/finanzas.ts               + listPlatformPayouts, getPlatformPayoutMonths,
-                                                             getPlatformPayoutKpis, listPayoutPlatforms,
-                                                             importPlatformPayouts, createPlatformPayout;
+                                                             getPlatformPayoutKpis, getWorkspaceToday,
+                                                             listPayoutPlatforms, importPlatformPayouts,
+                                                             createPlatformPayout, PlatformPayoutInputError;
                                                              getCashflowInputs alimenta otrosIngresosMensual
-platform/packages/db/test/finanzas.test.ts                 + describe «ingresos de plataformas»
-
-platform/apps/web/app/(app)/finanzas/flujo/page.tsx        (FIN-6) columna, barra y nota de «Otros ingresos»
-platform/apps/web/app/(app)/finanzas/_lib/messages.ts      + flujo.otrosIngresos y tabla.otros
+platform/packages/db/test/finanzas.test.ts                 + describe «ingresos de plataformas» (17 pruebas)
+platform/packages/db/test/aplicar.test.ts                  0035 declarado como hueco de otra rama
+platform/packages/db/test/accesos.test.ts                  la prueba de ACC-3 deja de exigir que 0034 sea la última
 
 platform/apps/web/app/(app)/finanzas/ingresos/
   page.tsx  loading.tsx  error.tsx  actions.ts
   _lib/csv.ts            lector: detección por cabecera, 3 formatos, códigos (no frases)
-  _lib/csv.test.ts
+  _lib/csv.test.ts       32 pruebas
   _lib/messages.ts       TODOS los textos del submódulo
   importar/page.tsx + form.tsx
   nuevo/page.tsx + form.tsx
   integracion.test.ts    el «terminado cuando», de punta a punta contra pglite
 
-platform/apps/web/test/fixtures/csv/ingresos/              un fixture por formato + README
+platform/apps/web/app/(app)/finanzas/flujo/page.tsx        (FIN-6) columna, barra y nota de «Otros ingresos»
+platform/apps/web/app/(app)/finanzas/flujo/page.test.tsx   + describe «otros ingresos»
+platform/apps/web/app/(app)/finanzas/_lib/messages.ts      + flujo.otrosIngresos y tabla.otros
 platform/apps/web/app/(app)/finanzas/page.tsx              + botón «Ingresos»
+platform/apps/web/lib/csv.ts                               + normalizarNumeroDeHoja (sale de aNumero)
+platform/apps/web/app/(app)/resumen/importar/_lib/csv.ts   aNumero pasa a usarlo (comportamiento intacto)
+platform/apps/web/lib/permisos/require-permission.test.ts  + las dos acciones de FIN-7
+platform/apps/web/test/fixtures/csv/ingresos/              siete fixtures + README
 platform/apps/web/content/backlog.ts                       estado y nota de FIN-7 (solo mi entrada)
 docs/propuestas/FIN-7.md                                   este archivo
 ```

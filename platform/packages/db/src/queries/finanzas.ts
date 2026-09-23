@@ -1079,6 +1079,9 @@ export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPa
   };
 }
 
+/** El uuid con el que `coalesce` normaliza «sin creador» en el UNIQUE de 0036. */
+const SIN_CREADOR = '00000000-0000-0000-0000-000000000000';
+
 /**
  * Escribe un lote de pagos, UNA sola vez cada uno.
  *
@@ -1173,14 +1176,21 @@ export async function importPlatformPayouts(
      SELECT current_workspace_id(), l.creator_id, l.platform_id, l.period_start, l.period_end, l.amount, l.currency, l.source
      FROM unnest($1::text[], $2::uuid[], $3::date[], $4::date[], $5::numeric[], $6::text[], $7::text[])
        AS l(platform_id, creator_id, period_start, period_end, amount, currency, source)
-     -- CON objetivo, y con el objetivo ESCRITO: un \`ON CONFLICT DO
-     -- NOTHING\` a secas no falla cuando el índice no existe, se limita a
+     -- CON objetivo, y con el objetivo ESCRITO: un ON CONFLICT DO
+     -- NOTHING a secas no falla cuando el índice no existe, se limita a
      -- no deduplicar. Sobre una base sin 0036 eso es lo peor de los dos
      -- mundos: reimportar el mismo CSV duplicaría el dinero y la
      -- pantalla diría «listo». Nombrando las columnas, Postgres exige un
      -- índice único que las cubra y, si no lo hay, lanza 42P10 con un
      -- mensaje que dice exactamente qué falta aplicar.
-     ON CONFLICT (workspace_id, platform_id, coalesce(creator_id, $8::uuid), period_start, period_end, currency, amount)
+     --
+     -- El uuid va LITERAL y no como $n: Postgres infiere el índice
+     -- comparando la expresión del ON CONFLICT con la del índice, y un
+     -- parámetro no es la misma expresión que la constante de 0036. Es
+     -- una constante nuestra (SIN_CREADOR), no un dato de nadie, así que
+     -- interpolarla no abre nada; la comprobación de que son la misma la
+     -- hace la prueba que borra el índice y espera 42P10.
+     ON CONFLICT (workspace_id, platform_id, coalesce(creator_id, '${SIN_CREADOR}'::uuid), period_start, period_end, currency, amount)
        DO NOTHING
      RETURNING id`,
     [
@@ -1191,7 +1201,6 @@ export async function importPlatformPayouts(
       escribibles.map((i) => i.amount),
       escribibles.map((i) => i.currency.toUpperCase()),
       escribibles.map((i) => i.source),
-      SIN_CREADOR,
     ],
   );
   // La bitácora. Qué hecho es lo dice la columna `source`, que es el
@@ -1225,9 +1234,6 @@ export async function importPlatformPayouts(
   });
   return { inserted: rows.length, duplicated: escribibles.length - rows.length, conflicting };
 }
-
-/** El uuid con el que `coalesce` normaliza «sin creador» en el UNIQUE de 0036. */
-const SIN_CREADOR = '00000000-0000-0000-0000-000000000000';
 
 function clavePeriodo(
   platformId: string,
