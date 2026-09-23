@@ -111,7 +111,7 @@ lo necesita.
    | `permission` | SELECT | catálogo; lo llena la migración (como `job_definition`) |
    | `role` | SELECT | los de sistema los llena la migración; los a medida son ACC-9 (entonces: política de escritura por `workspace_id` + GRANT) |
    | `role_permission` | SELECT | ídem |
-   | `membership_scope` | los cuatro, por RLS | tabla de inquilino: quitar un alcance es borrar la fila (no hay columna de estado) |
+   | `membership_scope` | SELECT | el alcance lo fija quien administra el equipo, por función o worker; con escritura, un miembro borraría su propio alcance y vería todo el workspace. Misma decisión que la rama de ACC-6 |
    | `invitation` | SELECT, INSERT, UPDATE | revocar es `revoked_at`; nadie borra el rastro de a quién se invitó |
    | `workspace_grant` | SELECT | fase 2 (AGE-1): la concesión la escribirá el worker o una función; desde la web solo se lee, por los dos extremos |
 
@@ -149,14 +149,11 @@ lo necesita.
      filas aceptadas y revocadas a la vez.
    - `membership_scope`: FK compuesta `(workspace_id, user_id) → membership`
      con `ON DELETE CASCADE` (quitar a alguien se lleva su alcance). La
-     guardia no sabe comprobar visibilidad de una clave compuesta, así
-     que va declarada en `REFERENCIAS_SIN_COMPROBAR_DECLARADAS` con el
-     argumento: la política fija `workspace_id = current_workspace_id()`
-     y `membership_read` muestra todas las membresías del workspace
-     fijado, luego un par que pasa la FK es visible por construcción.
-     Descartado: dos FK simples más (`workspace_id → workspace`,
-     `user_id → app_user`) con sus disparadores, que serían redundantes
-     con ese argumento.
+     guardia solo exige el disparador de referencia en tablas que
+     `mc_app` escribe, y esta es de solo lectura (decisión 2), así que no
+     hace falta declarar nada. (La primera versión le daba escritura y
+     declaraba la FK en `REFERENCIAS_SIN_COMPROBAR_DECLARADAS`; se cambió
+     al alinearse con ACC-6.)
    - `membership`: disparador `role_fits_workspace` (función
      `assert_role_fits_workspace()`, SECURITY INVOKER) que exige
      `role.workspace_kind = workspace.kind` y (`role.workspace_id IS NULL`
@@ -260,7 +257,7 @@ secciones; cada una se puede volver a correr (§1.3).
 | 3 | `role_permission` (PK compuesta, FK con `ON DELETE CASCADE`), índice por `permission_key`, política `EXISTS` sobre `role` | Patrón 0018 para hijas sin `workspace_id`. |
 | 4 | **La semilla**: 43 permisos, 10 roles de sistema, 222 filas de matriz. `ON CONFLICT DO NOTHING` | Generada desde `permisos.ts` de ACC-1. Va ANTES del relleno (§1.2). |
 | 5 | `membership.role_id` (FK a `role`), relleno por `workspace.kind` con `NO FORCE` temporal en `membership` y `workspace`, parada si queda alguna fila sin rol, `SET NOT NULL`, `DROP COLUMN role`, índice, disparadores `ref_visible_role_id` y `role_fits_workspace` | Decisión 1 de §0.3. El `NO FORCE` es el patrón de 0026, 0032 y 0033: sin él el `UPDATE` tocaría cero filas en silencio. Las políticas de 0028 no nombran `role`. |
-| 6 | `membership_scope`: PK de cuatro columnas, FK compuesta a `membership` con cascada, política por `workspace_id` con `WITH CHECK` | La FK compuesta va declarada en la guardia con su argumento (§0.3, decisión 4). |
+| 6 | `membership_scope`: PK de cuatro columnas, FK compuesta a `membership` con cascada, política `membership_scope_read` (solo SELECT, por `workspace_id`) | Igual que en la rama de ACC-6. `mc_app` no la escribe, así que la FK compuesta no necesita disparador de referencia. |
 | 7 | `invitation` con CHECK `invitation_token_hash_is_sha256` y `invitation_not_accepted_and_revoked`, índices `invitation_pending_uk` (parcial) e `invitation_token_hash_uk`, políticas de lectura, alta y cambio por `workspace_id`, tres disparadores de referencia | Token solo como hash, una pendiente por correo; sin política ni privilegio de `DELETE`. |
 | 8 | `workspace_grant` con el CHECK de la fase 4, índice parcial `workspace_grant_live_uk`, política de lectura por los dos extremos | La guardia exige aislarla; ver §0.3, decisión 3. Sin escritura desde la web. |
 | 9 | `audit_log`: CHECK con `delegate`, columna `on_behalf_of_workspace_id` (`ON DELETE SET NULL`), CHECK `audit_log_on_behalf_only_delegate`, disparador de referencia | El CHECK nuevo impide llenar la columna con otro `actor_kind`. |
@@ -328,9 +325,21 @@ la comprobación.
 ## 3. Orden en la cola del integrador
 
 Supabase está aplicada hasta `0033_una_aceptada_por_negocio.sql`
-(leído el 23-sep con `make db.sql`). La cola queda así:
+(leído el 23-sep con `make db.sql`).
 
-1. `make db.migrate`: aplica solo `0034_access_control.sql`. No necesita
+**Choque de números con ACC-6.** La rama `nicolas/ACC-6-alcance-consultas`
+(otra sesión, ya empujada) trae `0034_membership_scope.sql`. Dos archivos
+0034 detienen el runner (`DuplicateMigrationNumberError`). ACC-6 depende
+de ACC-3, así que ACC-3 se queda con 0034 y ACC-6 pasa a
+`0035_membership_scope.sql` al integrarse. Las dos crean `membership_scope`
+con las mismas columnas (`CREATE TABLE IF NOT EXISTS`), la misma política
+`membership_scope_read` y el mismo privilegio (solo SELECT), así que la
+0035 solo añade `scope_allows()` y su índice. Una prueba de ACC-3 que
+ACC-6 no conoce todavía no depende de nada de eso.
+
+La cola queda así:
+
+1. `make db.migrate`: aplica `0034_access_control.sql` (y `0035_membership_scope.sql` si ACC-6 ya se integró). No necesita
    ningún rol nuevo ni el token de administración.
 2. `make db.guardia`: en verde antes de desplegar. La guardia ya conoce
    las tablas nuevas; si 0034 no está aplicada, la web desplegada con
@@ -431,4 +440,4 @@ eso es ACC-5; esta historia solo deja las tablas y la matriz.
 | 9 | `workspace.kind` editable dejaría membresías con un rol del tipo equivocado | **Falso positivo.** `mc_app` solo tiene UPDATE por columnas y `kind` no está (0024 §7.6). |
 | 10 | `listMyWorkspaces` con `INNER JOIN` escondía un espacio con rol a medida al pedirlo con `withIdentity` (encontrado al probar) | **Arreglado.** `LEFT JOIN` y «Solo lectura» como etiqueta; prueba con `withIdentity`. |
 
-`/security-review`: ningún hallazgo de confianza alta. Dos notas dentro de un mismo inquilino para historias futuras: cualquier miembro puede cambiar el rol o reabrir una invitación de su espacio (ACC-4 debe cerrarlo con una política por permiso), y puede borrar filas de `membership_scope` (ACC-6).
+`/security-review`: ningún hallazgo de confianza alta. Dos notas dentro de un mismo inquilino: cualquier miembro puede cambiar el rol o reabrir una invitación de su espacio (ACC-4 debe cerrarlo con una política por permiso); y podía borrar su propio `membership_scope`, que **se cerró** dejando la tabla de solo lectura para `mc_app`.

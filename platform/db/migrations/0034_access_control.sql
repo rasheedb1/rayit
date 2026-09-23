@@ -700,14 +700,14 @@ CREATE TRIGGER role_fits_workspace
 -- las consultas de @mc/db (scopeFilter, ACC-6), no RLS (decisión C).
 -- La tabla va ya para que el modelo quede cerrado; hoy nadie la lee.
 --
--- La clave compuesta hacia membership (ON DELETE CASCADE: quitar a
--- alguien se lleva su alcance) no la sabe comprobar
--- assert_reference_visible, que es de una columna. No hace falta: la
--- política fija workspace_id = current_workspace_id() y membership_read
--- muestra TODAS las membresías del workspace fijado, así que un par
--- (workspace fijado, persona) que pasa la clave ajena es, por
--- construcción, una fila que quien escribe ve. Declarado con ese motivo
--- en REFERENCIAS_SIN_COMPROBAR_DECLARADAS (src/esquema.ts).
+-- Para mc_app es de SOLO LECTURA (sección 10): el alcance de una persona
+-- lo decide quien administra el equipo (ACC-4) por una función acotada o
+-- el worker, nunca un INSERT o un DELETE sueltos desde la web; si no,
+-- cualquier miembro podría borrar su propio alcance y ver todo el
+-- workspace. Misma política y mismo privilegio que la rama de ACC-6
+-- (0034_membership_scope.sql, que al integrar pasa a 0035 y crea esta
+-- misma tabla con IF NOT EXISTS). Como mc_app no la escribe, la clave
+-- compuesta hacia membership no necesita assert_reference_visible.
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS membership_scope (
   workspace_id  uuid NOT NULL,
@@ -725,10 +725,9 @@ COMMENT ON TABLE membership_scope IS
 ALTER TABLE membership_scope ENABLE ROW LEVEL SECURITY;
 ALTER TABLE membership_scope FORCE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS membership_scope_ws_isolation ON membership_scope;
-CREATE POLICY membership_scope_ws_isolation ON membership_scope
-  USING (workspace_id = current_workspace_id())
-  WITH CHECK (workspace_id = current_workspace_id());
+DROP POLICY IF EXISTS membership_scope_read ON membership_scope;
+CREATE POLICY membership_scope_read ON membership_scope FOR SELECT
+  USING (workspace_id = current_workspace_id());
 
 
 -- =====================================================================
@@ -916,8 +915,10 @@ CREATE TRIGGER ref_visible_on_behalf_of_workspace_id
 --                     medida son ACC-9 (traerá su política y su GRANT)
 --   role_permission   ídem
 --   workspace_grant   fase 2: la escribe el worker o una función acotada
+--   membership_scope  el alcance lo fija quien administra el equipo, por
+--                     función o worker (sección 6)
 --   invitation        revocar es revoked_at; nadie borra el rastro de a
 --                     quién se invitó
 -- =====================================================================
-REVOKE INSERT, UPDATE, DELETE ON permission, role, role_permission, workspace_grant FROM mc_app;
+REVOKE INSERT, UPDATE, DELETE ON permission, role, role_permission, workspace_grant, membership_scope FROM mc_app;
 REVOKE DELETE ON invitation FROM mc_app;

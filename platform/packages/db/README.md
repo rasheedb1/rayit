@@ -269,7 +269,7 @@ muestra; qué puede hacer una sesión lo responderá `queries/accesos.ts`
 Lo demás que deja 0034: `invitation` (una pendiente por correo y
 workspace; el token solo como SHA-256, y el `CHECK` no admite otra
 cosa; revocar es `revoked_at`, `mc_app` no borra), `membership_scope`
-(el alcance, ACC-6: sin filas, todo el workspace), `workspace_grant`
+(el alcance, ACC-6: sin filas, todo el workspace; la web solo lo lee), `workspace_grant`
 (la concesión creador → agencia, AGE-1: la web la lee por los dos
 extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
 `actor_kind = 'delegate'`. Detalle y decisiones:

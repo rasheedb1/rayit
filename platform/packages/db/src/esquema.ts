@@ -582,13 +582,7 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
  * assert_reference_visible (0025 §3), como `tabla.columna`, y por qué.
  * Vacía: 0025 §7 lo engancha a todas.
  */
-export const REFERENCIAS_SIN_COMPROBAR_DECLARADAS: Readonly<Record<string, string>> = {
-  'membership_scope.workspace_id':
-    'clave COMPUESTA (workspace_id, user_id) → membership (0034 §6), que assert_reference_visible no sabe comprobar. ' +
-    'No hace falta: la política de membership_scope fija workspace_id = current_workspace_id() en lectura y escritura, ' +
-    'y membership_read muestra TODAS las membresías del workspace fijado, así que un par que pasa la clave ajena es ' +
-    'por construcción una fila que quien escribe ve',
-};
+export const REFERENCIAS_SIN_COMPROBAR_DECLARADAS: Readonly<Record<string, string>> = {};
 
 /**
  * Los índices únicos (o de exclusión) GLOBALES de tablas con RLS que
@@ -759,6 +753,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'de escritura por workspace y su GRANT',
   },
   role_permission: { permite: ['SELECT'], motivo: 'la matriz: la siembra la migración; editable solo desde ACC-9' },
+  membership_scope: {
+    permite: ['SELECT'],
+    motivo:
+      'el alcance de una persona (0034 §6, ACC-6) lo fija quien administra el equipo por función o worker; con ' +
+      'escritura, cualquier miembro borraría su propio alcance y vería todo el workspace',
+  },
   workspace_grant: {
     permite: ['SELECT'],
     motivo:

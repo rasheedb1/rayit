@@ -286,29 +286,24 @@ describe('0034: invitation', () => {
 });
 
 describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
-  test('membership_scope: se escribe y se lee solo en el workspace fijado', async () => {
-    await laura((tx) =>
-      tx.query(
-        `INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-         VALUES (current_workspace_id(), '${USER_LAURA}', 'creator', '${CREATOR_LAURA}')`,
-      ),
-    );
+  test('membership_scope: se lee solo en el workspace fijado, y la web no lo escribe ni lo borra', async () => {
+    await t.admin(`
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+      VALUES ('${WORKSPACE_LAURA}', '${USER_LAURA}', 'creator', '${CREATOR_LAURA}');
+    `);
     assert.equal(await laura((tx) => conteo(tx, 'SELECT count(*)::int AS n FROM membership_scope')), 1);
     assert.equal(await t.db.withWorkspace(WS_B, (tx) => conteo(tx, 'SELECT count(*)::int AS n FROM membership_scope')), 0);
-    await assert.rejects(
-      t.db.withWorkspace(
-        WS_B,
-        (tx) =>
-          tx.query(
-            `INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-             VALUES ('${WORKSPACE_LAURA}', '${USER_LAURA}', 'company', '${CREATOR_LAURA}')`,
-          ),
-        { userId: USER_B },
-      ),
-      esRechazada,
-      'desde B se coló un alcance en el workspace de Laura',
-    );
-    await laura((tx) => tx.query('DELETE FROM membership_scope'));
+    assert.equal(await t.db.withCatalogs((tx) => conteo(tx, 'SELECT count(*)::int AS n FROM membership_scope')), 0);
+    for (const sentencia of [
+      `INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+       VALUES (current_workspace_id(), '${USER_LAURA}', 'company', '${CREATOR_LAURA}')`,
+      // Borrar el propio alcance sería ver todo el workspace.
+      'DELETE FROM membership_scope',
+      `UPDATE membership_scope SET scope_id = '${CREATOR_LAURA}'`,
+    ]) {
+      await assert.rejects(laura((tx) => tx.query(sentencia)), esPermisoDenegado, sentencia);
+    }
+    await t.admin('DELETE FROM membership_scope');
   });
 
   test('workspace_grant: mc_app no la escribe; la ven quien concede y quien recibe, y nadie más', async () => {
