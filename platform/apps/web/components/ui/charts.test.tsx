@@ -47,7 +47,7 @@ describe("LineChart", () => {
     expect(container.querySelector("svg")?.textContent).toContain("Línea base");
     expect(container.querySelector("svg")?.textContent).toContain("Campaña");
     const fills = [...container.querySelectorAll("rect")].map((r) => r.getAttribute("fill"));
-    expect(fills).toContain("var(--hover)");
+    expect(fills).toContain("var(--surface-2)");
     expect(fills).toContain("var(--accent-wash)");
   });
 

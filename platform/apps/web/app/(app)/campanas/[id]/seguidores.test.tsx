@@ -50,9 +50,9 @@ describe("vistaCuenta", () => {
     expect(v.notas).toEqual([]);
     expect(v.labels[0]).toBe(f.dayMonth("2026-07-27"));
     expect(v.data.length).toBe(37);
-    // 27 jul..9 ago = índices 0..13; 10..17 ago = 14..21.
+    // 27 jul..9 ago = índices 0..13 (sombreada hasta el 14, donde empieza la campaña); 10..17 ago = 14..21.
     expect(v.shades).toEqual([
-      { from: 0, to: 13, label: "Línea base", tone: "muted" },
+      { from: 0, to: 14, label: "Línea base", tone: "muted" },
       { from: 14, to: 21, label: "Campaña", tone: "accent" },
     ]);
     expect(v.asOf).toEqual({ date: "2026-09-01T06:00:00Z", source: "perfil público en Instagram" });
@@ -75,6 +75,8 @@ describe("vistaCuenta", () => {
     expect(v.data).toEqual([]);
     const tiktok = vistaCuenta({ ...cuenta([], { ...hoy, source: "no_public_source" }), platformId: "tiktok", handle: "freskomarket" }, W, f);
     expect(tiktok.notas[0]).toMatch(/TikTok no publica los seguidores de @freskomarket/);
+    expect(tiktok.notas).toHaveLength(1);
+    expect(v.notas).toHaveLength(1);
     const nunca = vistaCuenta(cuenta([], null), W, f);
     expect(nunca.pill.text).toBe("Sin lecturas todavía");
     expect(nunca.notas[0]).toMatch(/desde el 27 de julio de 2026/);

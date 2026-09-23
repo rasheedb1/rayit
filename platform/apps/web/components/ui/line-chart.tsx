@@ -36,7 +36,7 @@ export type ChartShade = { from: number; to: number; label: string; tone?: "acce
 
 const SHADE_TONE = {
   accent: { fill: "var(--accent-wash)", text: "var(--accent)" },
-  muted: { fill: "var(--hover)", text: "var(--muted)" },
+  muted: { fill: "var(--surface-2)", text: "var(--muted)" },
 } as const;
 
 const M = { t: 16, b: 28, l: 48 };

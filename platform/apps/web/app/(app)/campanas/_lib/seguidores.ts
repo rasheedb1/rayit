@@ -79,8 +79,9 @@ export function vistaCuenta(a: BrandFollowersAccount, w: Ventanas, f: Formatter)
   const shades: ChartShade[] = [];
   if (w.startsOn) {
     const base = w.baselineFrom ? indicesEntre(days, w.baselineFrom, diaAnterior(w.startsOn)) : null;
-    if (base) shades.push({ ...base, label: t.shadeBaseline, tone: "muted" });
     const camp = indicesEntre(days, w.startsOn, w.endsOn);
+    // La línea base se sombrea hasta el primer día de campaña: las dos ventanas se tocan y no queda un hueco de un día.
+    if (base) shades.push({ from: base.from, to: camp && camp.from === base.to + 1 ? camp.from : base.to, label: t.shadeBaseline, tone: "muted" });
     if (camp) shades.push({ ...camp, label: t.shadeCampaign, tone: "accent" });
   }
 
@@ -102,7 +103,8 @@ export function vistaCuenta(a: BrandFollowersAccount, w: Ventanas, f: Formatter)
     pill = { kind: "neutral", text: t.pillSinRitmo };
   }
 
-  if (a.latest !== null && !r.fiable) {
+  // Las frases del ritmo solo tienen sentido con alguna cifra: sin ninguna, la razón (o «sin lecturas») lo dice todo.
+  if (puntos.length > 0 && !r.fiable) {
     if (r.baselineRate === null) notas.push(t.sinLineaBase);
     else if (r.baselineDataFrom) notas.push(t.lineaBaseCorta(f.date(r.baselineDataFrom, "long"), r.diasDeLineaBase, BRAND_BASELINE_DAYS));
     if (r.campaignRate === null && !razon) notas.push(t.sinCampana);
