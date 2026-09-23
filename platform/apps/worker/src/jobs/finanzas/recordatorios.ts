@@ -20,7 +20,17 @@
  * ctx.db corre como mc_worker y se salta RLS: cada SELECT, INSERT y
  * UPDATE lleva `workspace_id` explícito.
  */
-import { definicionPaso, hoyEnZona, pasoDeUrl, pasosPendientes, redactarRecordatorio, urlRecordatorio, type DefinicionPaso } from '@mc/core';
+import {
+  datosDePagoDe,
+  definicionPaso,
+  hoyEnZona,
+  parseFinanceSettings,
+  pasoDeUrl,
+  pasosPendientes,
+  redactarRecordatorio,
+  urlRecordatorio,
+  type DefinicionPaso,
+} from '@mc/core';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 
 export interface RecordatoriosPayload extends JobPayload {
@@ -42,6 +52,8 @@ interface FacturaRow extends Record<string, unknown> {
   workspace_name: string;
   locale: string;
   timezone: string;
+  /** `workspace.settings->'finanzas'` tal cual: lo interpreta parseFinanceSettings (FIN-8). */
+  finanzas: unknown;
 }
 
 /**
@@ -62,7 +74,8 @@ const FACTURAS = `
          ca.name                                    AS campaign_name,
          w.name                                     AS workspace_name,
          w.locale,
-         w.timezone
+         w.timezone,
+         w.settings->'finanzas'                     AS finanzas
     FROM invoice i
     JOIN company   co ON co.id = i.company_id
     JOIN workspace w  ON w.id  = i.workspace_id
@@ -110,9 +123,11 @@ async function escribirPaso(ctx: JobContext, f: FacturaRow, paso: DefinicionPaso
     moneda: f.currency,
     locale: f.locale,
     nombreCreador: f.workspace_name,
-    // Los datos de pago llegan con FIN-8; hasta entonces el texto dice
-    // dónde se configuran en vez de dejar un hueco.
-    datosDePago: null,
+    // Los datos de pago salen de la configuración financiera (FIN-8), con
+    // la MISMA función que la pantalla: un bloque ausente o roto no
+    // tumba la corrida, cae en los valores por defecto, y sin banco,
+    // cuenta ni enlace el texto dice dónde configurarlos.
+    datosDePago: datosDePagoDe(parseFinanceSettings(f.finanzas)),
   });
   const url = urlRecordatorio(f.id, paso.numero);
   const { rowCount } = await ctx.db.query(

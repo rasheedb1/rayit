@@ -39,8 +39,10 @@ async function seed(db: PgliteDatabase): Promise<void> {
   const archivos = (await readdir(SEED_DIR)).filter((f) => f.endsWith('.sql')).sort();
   for (const f of archivos) await db.raw.exec(await readFile(join(SEED_DIR, f), 'utf8'));
   await db.raw.exec(`
-    INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale)
-    VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno', 'Estudio Ajeno', 'creator', 'CO', 'COP', 'America/Bogota', 'es-CO')
+    INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale, settings)
+    VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno', 'Estudio Ajeno', 'creator', 'CO', 'COP', 'America/Bogota', 'es-CO',
+            -- FIN-8: el ajeno SÍ configuró cómo le pagan; Laura (el seed) no.
+            '{"finanzas": {"razon_social": "Estudio Ajeno S.A.S.", "banco": "Banco Ajeno", "cuenta": "Ahorros 999-000111-22"}}'::jsonb)
     ON CONFLICT DO NOTHING;
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_AJENA}', 'Marca Ajena', '${WORKSPACE_AJENO}')
     ON CONFLICT DO NOTHING;
@@ -179,6 +181,22 @@ test('dos workspaces no se cruzan: cada recordatorio lleva el suyo', async () =>
   assert.equal(rows[0]!.n, '0', 'ninguna notificación apunta a una factura de otro workspace');
 });
 
+test('costura FIN-8 → FIN-4: cada correo lleva los datos de pago de SU workspace, o la frase de dónde configurarlos', async () => {
+  const ajenos = await recordatorios(FV_AJENA);
+  for (const r of ajenos) {
+    assert.match(r.body_es ?? '', /A nombre de: Estudio Ajeno S\.A\.S\./);
+    assert.match(r.body_es ?? '', /Banco: Banco Ajeno/);
+    assert.match(r.body_es ?? '', /Cuenta: Ahorros 999-000111-22/);
+  }
+  // El seed de Laura no tiene banco ni cuenta: su correo dice dónde se configuran.
+  const deLaura = await recordatorios(FV_007);
+  assert.ok(deLaura.length > 0);
+  for (const r of deLaura) {
+    assert.match(r.body_es ?? '', /Finanzas → Configuración → «Cómo te pagan»/);
+    assert.doesNotMatch(r.body_es ?? '', /Banco Ajeno/, 'los datos de otro workspace no se cruzan');
+  }
+});
+
 test('job_run.metadata lleva conteos e ids, y ni una cifra, ni un nombre, ni el texto del correo', async () => {
   const runs = await jobRuns(h.db, 'finance.reminders');
   const primera = runs[0]!;
@@ -189,7 +207,7 @@ test('job_run.metadata lleva conteos e ids, y ni una cifra, ni un nombre, ni el 
   assert.deepEqual(md.byStep, { '1': 1, '2': 2, '3': 2, '4': 2 }, 'el paso 1 solo lo recibe FV-2026-010');
   assert.deepEqual([...md.emittedIds].sort(), [FV_007, FV_010, FV_AJENA].sort());
   const texto = JSON.stringify(primera.metadata);
-  for (const prohibido of ['Hogar Lindo', 'Marca Ajena', 'FV-2026-007', 'Hola, equipo', '1100000', 'COP']) {
+  for (const prohibido of ['Hogar Lindo', 'Marca Ajena', 'FV-2026-007', 'Hola, equipo', '1100000', 'COP', 'Banco Ajeno', '999-000111']) {
     assert.ok(!texto.includes(prohibido), `metadata no debe llevar "${prohibido}": ${texto}`);
   }
 });
@@ -198,7 +216,7 @@ test('el log del job no imprime el cuerpo del correo ni el nombre de la marca', 
   const texto = h.sink.text();
   assert.ok(texto.includes('recordatorios redactados'), 'algo tuvo que registrar');
   assert.ok(texto.includes('FV-2026-007'), 'el número de factura sí: es un identificador, y sin él no se sabe de cuál habla');
-  for (const prohibido of ['Hola, equipo', 'Hogar Lindo', 'Marca Ajena']) {
+  for (const prohibido of ['Hola, equipo', 'Hogar Lindo', 'Marca Ajena', 'Banco Ajeno', '999-000111']) {
     assert.ok(!texto.includes(prohibido), `el log no debe llevar "${prohibido}"`);
   }
 });

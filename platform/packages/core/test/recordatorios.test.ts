@@ -11,8 +11,9 @@ import {
   PASOS_RECORDATORIO,
   type EntradaRecordatorio,
   type NumeroPaso,
+  datosDePagoDe,
 } from '../src/recordatorios.ts';
-import { addDays } from '../src/facturacion.ts';
+import { addDays, parseFinanceSettings } from '../src/facturacion.ts';
 
 /** El vencimiento de FV-2026-007 si hoy fuera el 23 de septiembre de 2026. */
 const VENCE = '2026-08-13';
@@ -170,6 +171,32 @@ describe('el texto de cada paso', () => {
     assert.match(r.cuerpo, /Banco: Bancolombia/);
     assert.doesNotMatch(r.cuerpo, /NIT o cédula/, 'lo que no está no se nombra');
     assert.doesNotMatch(r.cuerpo, /Todavía no tienes datos de pago/);
+  });
+
+  test('costura FIN-8 → FIN-4: los datos de pago salen de settings.finanzas', () => {
+    const conf = parseFinanceSettings({
+      razon_social: 'Laura Gómez Estudio S.A.S.', identificacion: '901.234.567-8',
+      banco: 'Bancolombia', cuenta: 'Ahorros 123-456789-00', enlace_pago: 'https://pagos.example/laura',
+    });
+    const r = redactarRecordatorio({ ...base, datosDePago: datosDePagoDe(conf) });
+    assert.match(r.cuerpo, /A nombre de: Laura Gómez Estudio S\.A\.S\./);
+    assert.match(r.cuerpo, /NIT o cédula: 901\.234\.567-8/);
+    assert.match(r.cuerpo, /Banco: Bancolombia/);
+    assert.match(r.cuerpo, /Cuenta: Ahorros 123-456789-00/);
+    assert.match(r.cuerpo, /Enlace de pago: https:\/\/pagos\.example\/laura/);
+    assert.doesNotMatch(r.cuerpo, /Todavía no tienes datos de pago/);
+  });
+
+  test('costura FIN-8 → FIN-4: sin banco, cuenta ni enlace, la frase que dice dónde configurarlos', () => {
+    // Un workspace sin bloque (parseFinanceSettings tolera la ausencia) y
+    // uno con solo la razón social: ninguno tiene cómo pagar.
+    for (const bloque of [undefined, { razon_social: 'Laura Gómez' }]) {
+      const datos = datosDePagoDe(parseFinanceSettings(bloque));
+      assert.equal(datos, null);
+      const r = redactarRecordatorio({ ...base, datosDePago: datos });
+      assert.match(r.cuerpo, /configúralos una sola vez en Finanzas → Configuración → «Cómo te pagan»/);
+      assert.doesNotMatch(r.cuerpo, /FIN-8/, 'el correo no habla en ids de historia');
+    }
   });
 
   test('una factura parcial se cobra sobre el saldo, con las dos cifras', () => {

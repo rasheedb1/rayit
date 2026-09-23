@@ -19,7 +19,7 @@
  *   - El dinero se formatea desde el texto del decimal, sin pasar por
  *     double, igual que `formatMoney` en la web.
  */
-import { compareDecimal, daysBetween, type Decimal } from './facturacion.ts';
+import { compareDecimal, daysBetween, type Decimal, type FinanceSettings } from './facturacion.ts';
 
 // ---------------------------------------------------------------------
 // Los pasos
@@ -119,9 +119,9 @@ export function pasosPendientes(input: PasosPendientesInput): DefinicionPaso[] {
 // ---------------------------------------------------------------------
 
 /**
- * Los datos de pago del workspace. Los llenará FIN-8 (configuración
- * financiera); hoy no existe ninguno, y el texto lo dice en una frase
- * en vez de dejar un hueco mudo.
+ * Los datos de pago del workspace. Salen de la configuración financiera
+ * (FIN-8, `settings.finanzas`) con `datosDePagoDe`; sin ninguno, el texto
+ * lo dice en una frase en vez de dejar un hueco mudo.
  */
 export interface DatosDePago {
   /** A nombre de quién se consigna. */
@@ -134,6 +134,26 @@ export interface DatosDePago {
   identificacion?: string | null;
   /** Cualquier instrucción extra: Nequi, PSE, el correo de radicación. */
   nota?: string | null;
+}
+
+/**
+ * La costura FIN-8 → FIN-4: de la configuración financiera a las líneas
+ * de pago del correo. A nombre de quién (la razón social), con qué
+ * identificación, el banco, la cuenta y el enlace de pago, cada uno solo
+ * si está. Con nada de eso configurado devuelve null, y el correo dice
+ * dónde configurarlo.
+ */
+export function datosDePagoDe(s: FinanceSettings): DatosDePago | null {
+  const datos: DatosDePago = {
+    titular: s.razonSocial,
+    identificacion: s.identificacion,
+    banco: s.banco,
+    cuenta: s.cuenta,
+    nota: s.enlacePago ? `Enlace de pago: ${s.enlacePago}` : null,
+  };
+  // Sin banco, cuenta ni enlace no hay cómo pagar: el nombre y el NIT
+  // solos no son datos de pago, y el correo tiene que decir que faltan.
+  return s.banco || s.cuenta || s.enlacePago ? datos : null;
 }
 
 export interface EntradaRecordatorio {
@@ -241,7 +261,7 @@ function bloqueDePago(datos: DatosDePago | null | undefined): string {
   if (datos?.cuenta) lineas.push(`Cuenta: ${datos.cuenta}`);
   if (datos?.nota) lineas.push(datos.nota);
   if (lineas.length === 0) {
-    return 'Todavía no tienes datos de pago configurados, así que este correo no los incluye: escríbelos a mano antes de enviarlo, o configúralos una sola vez en Finanzas → Configuración (FIN-8) para que salgan solos.';
+    return 'Todavía no tienes datos de pago configurados, así que este correo no los incluye: escríbelos a mano antes de enviarlo, o configúralos una sola vez en Finanzas → Configuración → «Cómo te pagan» para que salgan solos.';
   }
   return ['Datos para el pago:', ...lineas.map((l) => `  ${l}`)].join('\n');
 }
