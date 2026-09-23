@@ -184,10 +184,25 @@ pedirle a Rasheed en `db/migrations/`.
    ventana de 60 llamadas/minuto a escala de app, marcada como
    **DECISIÓN PENDIENTE DE NICOLÁS** igual que las de CON-1: es nuestra,
    no de su documentación.
-7. **`collect.posts` no se construye aquí.** La lista de videos ya se lee
-   y se normaliza (`listPosts` de la fuente devuelve `NormalizedVideo[]`),
-   pero el job que los guarda en `post` y `post_metric_snapshot` es
-   **CON-5**. Construirlo aquí sería hacer otra historia.
+7. **`collect.posts` sí entra, porque CON-5 llegó a `main` mientras tanto.**
+   El proveedor es la única fuente que da la lista de videos de TikTok
+   por @, así que `createTikTokAggregatorPostSource` la pone detrás de la
+   interfaz `PostSource` de CON-5: `collect.posts` y `collect.post_metrics`
+   dejan de decir «TikTok no publica sus videos por @» sin cambiar una
+   línea suya. Medir es volver a listar y emparejar (`supportsLookupById:
+   false`), como Instagram por `business_discovery`; un video que ya no
+   aparece **no** se anota como borrado, porque por este camino no hay
+   forma de saberlo.
+8. **El `source` de `post_metric_snapshot` se queda en `'api'`**, y esto
+   se desvía de la letra del encargo a propósito. CON-5 (ya en `main`)
+   fijó que esa columna dice *cómo* se leyó —`'api'` para cualquier API,
+   `'csv_import'` para el archivo—, y `collect.post_metrics` busca la
+   última lectura de cada publicación por ese valor: partirlo en
+   `'aggregator'` haría que el recolector dejara de ver sus propias
+   lecturas y volviera a medir cada día. Donde sí se distingue lo comprado
+   de lo gratuito es en `account_metric_snapshot.source`, que es lo que
+   pide el criterio de terminado, y el gasto queda en `api_call_log`
+   (endpoint `ensembledata.tt.user.posts`) y en `api_quota_usage`.
 
 ### 0.5 Las variables (las mete Nicolás en el vault)
 
@@ -201,9 +216,11 @@ Las tres van al entorno de la web (Vercel) **y** al del worker (CIM-7).
 
 ### 0.6 Fuera de alcance
 
-- `collect.posts` y `collect.post_metrics` con `source 'aggregator'`:
-  **CON-5**, sobre el `listPosts` que esta historia deja listo.
-- Demografía de audiencia por proveedor: **CON-7**.
+- Demografía de audiencia por proveedor (el proveedor tiene endpoints de
+  seguidores, pero es otro contrato de privacidad): **CON-7**.
+- Detectar que un video se borró: el proveedor no deja preguntar por un
+  id suelto, así que no se puede afirmar. Si hiciera falta, su endpoint
+  `tt/post/info` es el camino, y es una historia con su propio costo.
 - Instagram y YouTube por proveedor: no hacen falta, tienen camino
   oficial y gratuito (CON-10).
 
@@ -302,3 +319,45 @@ vez (carga media por encima de 100), las pruebas de `@mc/db` y las de la
 web se cancelan por tiempo *antes* de llegar a correr —le pasa igual a
 archivos que esta historia no toca. Con la máquina tranquila, todo va en
 verde.
+
+
+## 5. Revisiones
+
+**`/code-review` (nivel alto): cuatro hallazgos, los cuatro arreglados.**
+
+1. *El tope de publicaciones recortaba datos ya pagados.* Con
+   `ENSEMBLEDATA_MAX_POSTS=2` y un catálogo de 3 videos, `lookup()`
+   devolvía `views: 62001` (el real es 65401) etiquetado como «suma de
+   todo el catálogo»: exactamente el total a medias que la historia
+   prohíbe. El tope es de **gasto**, no de datos: ahora acota cuántos
+   bloques se piden y conserva lo que llegue de más. De paso, una página
+   vacía que aun así trae cursor corta el bucle sin afirmar que el
+   catálogo esté entero.
+2. *`findPublicAccountByHandle` no veía las cuentas por proveedor.* Con
+   una cuenta ya en `aggregator`, «Autorizar cifras» no la encontraba,
+   creaba una conexión nueva y dejaba la vieja gastando unidades con la
+   historia partida en dos. Ahora busca en las dos fuentes públicas, con
+   su prueba.
+3. *La rama de `aggregator` tapaba «Autorizar cifras».* Se comprobaba
+   antes que la de TikTok, así que con el proveedor encendido el botón de
+   CON-3 quedaba muerto. Autorizar es gratis y trae más datos, así que la
+   oferta ahora se mantiene y la celda dice igual de dónde salen las
+   cifras.
+4. *La duración del video se adivinaba por el tamaño del número*
+   (`ms > 1000 ? ms/1000 : ms`), lo que convertía un video de media hora
+   en dos segundos. El aweme la manda en milisegundos y punto; si el
+   proveedor cambiara la unidad, se ve al regrabar el fixture (§3).
+
+**`/security-review`: sin hallazgos de severidad alta ni media.** Lo que
+se verificó, para que quede auditable: el token viaja en la query pero
+entra en `secrets`, así que `safeErrorMessage` lo borra de todo mensaje;
+`api_call_log` no guarda URLs; `classifyApiError` compone el mensaje con
+texto fijo y nunca con el cuerpo del proveedor; `status_detail` nombra la
+variable, nunca su valor; el log del worker pasa por `redactSecrets`;
+`account_metric_snapshot.raw` recibe la respuesta, no la petición; y
+`scripts/record.ts` corta la query antes de escribir el `urlPattern`.
+Sin SSRF: la URL base es una constante y ni el @ (validado por
+`assertHandle`) ni el cursor del proveedor pueden tocar esquema, host ni
+ruta. El aislamiento por workspace no se toca: la web escribe dentro de
+`withWorkspace` (RLS) y el worker lleva `workspace_id` explícito en cada
+escritura nueva.
