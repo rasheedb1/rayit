@@ -284,3 +284,44 @@ arrastra el snapshot `test/snapshots/permisos.sql` y la semilla de
 | Datos de pago reales en el texto | FIN-8 (el hueco ya está) |
 | La fila «factura vencida» del panel semanal | RES-3, que lee `notification` |
 | Promover el botón «Copiar» al kit (hoy hay dos gemelos, en Campañas y en Finanzas) | pulido |
+
+## 4. Revisión
+
+`/code-review` en nivel alto: **cuatro hallazgos, los cuatro
+arreglados** (commit «los cuatro hallazgos de /code-review»).
+
+1. La bandeja seguía cobrándole a quien ya pagó: `pendingOnly` no
+   miraba el estado de la factura y nada escribe `dismissed_at`. Ahora
+   exige `i.status IN ('sent','partial')`; en la ficha de la factura
+   siguen saliendo, que es su historial.
+2. La mora de la cabecera es la de HOY y el texto del correo se
+   congeló el día que se escribió: un borrador viejo parecía decir hoy
+   algo que dijo hace semanas. Cada tarjeta dice ahora «Redactado el».
+3. Con más de 50 pendientes la cabecera decía «50 recordatorios por
+   enviar» como si fueran todos. La pantalla pide `MAX_REMINDERS` y, al
+   tope, dice que hay más.
+4. `days_overdue` salía de `CURRENT_DATE` (el día del servidor, UTC) y
+   el cuerpo de `hoyEnZona(workspace.timezone)`: en Bogotá pasadas las
+   19:00 la pastilla decía «1 día de mora» al lado de un cuerpo que
+   decía «vence hoy». Ahora los dos usan la zona del workspace, como
+   `getCashflowInputs` en el mismo archivo.
+
+`/security-review`: **cero hallazgos**. Comprobado: no hay SQL
+construido por concatenación; el job, que corre con BYPASSRLS, saca el
+`workspace_id` de la fila de la factura y no del payload, y filtra por
+él en cada SELECT, INSERT y UPDATE; `markReminderSent` no puede tocar
+una fila ajena (RLS de `notification`, y el workspace sale de la sesión,
+nunca de un argumento); ni `job_run.metadata` ni el log llevan nombres,
+cifras ni el texto del correo; no hay `dangerouslySetInnerHTML`.
+
+Dos observaciones menores de esa revisión, también aplicadas:
+
+- La consulta de pasos ya emitidos emparejaba `workspace_id` y
+  `entity_id` como dos listas cruzadas (`ANY(…) AND ANY(…)`). Ahora van
+  emparejadas con `(workspace_id, entity_id) IN (SELECT * FROM
+  unnest($1, $2))`. No era explotable hoy —nadie escribe una
+  notificación con `entity_id` ajeno— pero la consulta no tiene por qué
+  depender de eso.
+- El error de «esto no es un decimal» llevaba el monto en el mensaje, y
+  ese mensaje acaba en el log. Ya no lo lleva, con su prueba.
+

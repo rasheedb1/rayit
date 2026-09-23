@@ -228,3 +228,19 @@ describe('el enlace y el paso que codifica', () => {
     }
   });
 });
+
+describe('el monto nunca sale en un error', () => {
+  test('un monto que no es decimal lanza sin escribir la cifra', () => {
+    const err = (() => {
+      try {
+        redactarRecordatorio({ ...base, total: '1100000,00' });
+        return null;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    assert.ok(err instanceof Error);
+    assert.equal(err.message, 'El monto del recordatorio no es un decimal.');
+    assert.doesNotMatch(err.message, /1100000/, 'el log del job no lleva dinero');
+  });
+});

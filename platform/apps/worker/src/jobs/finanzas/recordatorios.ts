@@ -77,11 +77,16 @@ async function emitidosPorFactura(ctx: JobContext, facturas: readonly FacturaRow
   const porFactura = new Map<string, number[]>();
   if (facturas.length === 0) return porFactura;
   const { rows } = await ctx.db.query<{ entity_id: string; action_url: string | null }>(
+    // Las dos columnas van EMPAREJADAS, no como dos listas cruzadas: con
+    // `workspace_id = ANY(…) AND entity_id = ANY(…)` una notificación de
+    // otro workspace que apuntara a esta factura contaría como paso ya
+    // emitido. Hoy nadie escribe una fila así, pero la consulta no tiene
+    // por qué depender de eso.
     `SELECT entity_id, action_url
        FROM notification
       WHERE kind = 'invoice_overdue' AND entity_type = 'invoice'
-        AND workspace_id = ANY($1::uuid[]) AND entity_id = ANY($2::uuid[])`,
-    [[...new Set(facturas.map((f) => f.workspace_id))], facturas.map((f) => f.id)],
+        AND (workspace_id, entity_id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))`,
+    [facturas.map((f) => f.workspace_id), facturas.map((f) => f.id)],
   );
   for (const r of rows) {
     const paso = pasoDeUrl(r.action_url);

@@ -189,7 +189,9 @@ interface FormateaTexto {
 }
 
 function comoTexto(f: Intl.NumberFormat, monto: Decimal): string {
-  if (!DECIMAL_RE.test(monto)) throw new Error(`No es un decimal: "${monto}".`);
+  // El mensaje NO lleva el monto: este error lo atrapa el job y lo
+  // escribe en el log, y en el log no va dinero.
+  if (!DECIMAL_RE.test(monto)) throw new Error('El monto del recordatorio no es un decimal.');
   return (f as unknown as FormateaTexto).format(monto);
 }
 
