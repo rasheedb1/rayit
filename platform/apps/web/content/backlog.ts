@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Ocho empresas, quince deals repartidos por etapa, actividades; cuatro conexiones (una por red), sesenta posts, noventa días de snapshots con curvas verosímiles y una línea base calculada. Idempotente.",
     done: "make seed deja Ventas y Resumen con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0002 determinista e idempotente cualquier día, y que no caduca por ningún lado: 60 videos con curvas ancladas a la primera corrida y una parrilla que se rellena sola (un video cada dos días desde el último guardado hasta ayer), la serie de la cuenta extendida hasta ayer, demografía cuyas personas salen de la última lectura de seguidores, línea base por día de cálculo y puntaje que sube al corte alcanzado con la regla de scoring.ts, y el CRM con 8 marcas, 13 señales (5 por revisar, como el mock) y 15 deals (10 abiertos · COP 95,5 M · ponderado 43,15 M). Volver a sembrar refresca lo que la demo mira hoy —cierre esperado, próxima acción y último contacto de los deals abiertos con su actividad de seguimiento, señales pendientes, ventana del brief, frescura de las conexiones, foto de la audiencia— y congela lo que ya pasó. Las cuatro campañas llevan su deal, así que la cadena señal → deal → campaña → factura se recorre entera. Verificación en Postgres embebido, ya colgada del comando estándar (pnpm turbo run test → tarea raíz //#test): cifras, prueba de la baja en outbound_touch, tercera pasada con el reloj a +1 y cuarta que resiembra la misma base a +41 exigiendo también videos recientes, tablero vivo y cero puntajes obsoletos; más la siembra en limpio a +40 días (node db/seed/verify/run.mjs [--dias 40], también en CI). El reloj del harness vive en reloj.mjs y ya no puede reescribir un dato que se parezca a now(). Toca 0003 (Nicolás) lo mínimo: línea de tiempo de Café Alma y las dos lecturas de Fresko condicionadas a su fecha (CIM-6.md §3.10). Decisiones en docs/propuestas/CIM-6.md. INTEGRACIÓN (22 de septiembre, rasheed/integracion): 0001, 0002 y 0003 sembrados en Supabase con make db.seed. El conflicto conocido de 0003 quedó con la clave platform_id de main y las fechas de esta rama, y las cuatro campañas de 0002 pasaron también a platform_id. Se borraron de Supabase cinco lecturas manuales que había dejado la versión anterior de 0003 —cuatro de ellas con captured_at en el FUTURO, que es justo lo que esta historia vino a quitar—: un seed solo inserta, así que no podían desaparecer solas. Y campanas.test.ts y conexiones.test.ts, que estaban clavadas al seed sin 0002, pasan a afirmar la banda alrededor de la cifra del mock en vez del valor de hoy: la curva sigue midiendo hasta los 90 días y el número exacto sube cada día.",
+    note: "Seed 0002 determinista e idempotente cualquier día (8 marcas, 13 señales, 15 deals; 60 videos y 90 días de serie que se rellenan hasta ayer), verificado en Postgres embebido con pnpm turbo run test. Sembrado en Supabase el 22-sep; detalle y decisiones en docs/propuestas/CIM-6.md (§6, integración).",
   },
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
@@ -318,8 +318,8 @@ export const STORIES: readonly Story[] = [
     title: "Empresas y contactos",
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
-    status: "en_curso",
-    note: "Lista para integrar en rasheed/VEN-1-crm-base (22 de septiembre): /ventas/empresas con búsqueda desde el tercer carácter (en la URL, ?q= y ?rel=), «Nueva empresa» (un dominio ya vinculado se marca en su campo), ficha con relación editable, negocios y contactos; añadir contacto exige procedencia y la baja pide confirmación y solo se ofrece en los propios. Comprobado de punta a punta en el navegador contra el seed: una empresa con dos contactos aparece al tercer carácter. La RLS de contact ya NO es parte de esta historia: la adelantaron las migraciones 0019 y 0020 en las rondas 4 y 5 de CIM-2. Lo que hay que saber para la pantalla: el candado es contact.owner_workspace_id, que pone la base sola (DEFAULT current_workspace_id()) —nunca se escribe a mano—; se lee lo público (source public_website/public_profile/press) más lo propio; se escribe solo lo propio y solo sobre una empresa que este workspace tenga en company_link; y opted_out no vuelve a false (un trigger lo impide), así que la baja de un contacto ajeno la registra el worker con asWorker, no la pantalla. Los casos están en packages/db/test/rls.test.ts. Aquí queda la pantalla: los contactos se leen y se escriben dentro de withWorkspace y la política hace el resto.",
+    status: "hecho",
+    note: "Integrada en rasheed/integracion (pulido r1): /ventas/empresas con búsqueda al tercer carácter, ficha y contactos con procedencia obligatoria bajo la RLS de contact. Falta solo el merge a main.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -327,15 +327,15 @@ export const STORIES: readonly Story[] = [
     desc: "Bandeja de signal con estado pendiente, aceptar (crea o actualiza empresa y deal en nuevo) o descartar con motivo. Fuente manual y carga por CSV de una lista de marcas. Las fuentes automáticas quedan para fase 2.",
     done: "Aceptar una señal crea el deal con «Enviar pitch» como siguiente acción; descartarla la saca de la bandeja y no vuelve a entrar (dedupe_key).",
     status: "en_curso",
-    note: "Lista para integrar en rasheed/VEN-1-crm-base (22 de septiembre): «Anotar una marca» y «Cargar una lista» (CSV subido o pegado, con , o ; y cabecera en español o inglés; las filas sin marca se listan con su línea) en /ventas; aceptar abre el negocio con «Enviar pitch» y enlaza al pipeline; descartar pide motivo. Una marca ya vista, aunque se haya descartado, no vuelve a entrar ni a mano ni por lista. La bandeja muestra el nombre de las señales que aún no tienen empresa (salía «Marca sin identificar»).",
+    note: "Integrada en rasheed/integracion (pulido r1): anotar a mano, cargar CSV, aceptar con «Enviar pitch» y descartar con motivo. Abierto: la clave junta dominio o nombre, así que «Fresko» sin dominio y fresko.co entran dos veces; se cierra al unificar la clave entre caminos.",
   },
   {
     id: "VEN-3", module: "VEN", owner: "rasheed", size: "L", sprint: 2, deps: ["VEN-1"],
     title: "Pipeline kanban y lista",
     desc: "Tablero por etapa y vista de lista sobre deal_pipeline. Arrastrar cambia la etapa y escribe deal_stage_history con los días en la etapa. KPIs: deals abiertos, cierre ponderado, ganado en el trimestre.",
     done: "Mover un deal a «Ganado» fija won_at; el cierre ponderado cambia al mover entre etapas.",
-    status: "en_curso",
-    note: "Lista para integrar en rasheed/VEN-1-crm-base (22 de septiembre): tablero con arrastrar y soltar y un menú «Mover a» por tarjeta para teclado y lector de pantalla, movimiento optimista que vuelve solo si el servidor lo rechaza, y vista de lista (?forma=lista). Los montos por etapa y los KPI llegan de SQL. Comprobado en el navegador: mover a «Ganado» persiste tras recargar.",
+    status: "hecho",
+    note: "Integrada en rasheed/integracion (pulido r1): tablero con arrastrar y «Mover a», vista de lista, montos y KPI desde SQL; «Ganado» fija won_at y mueve el ponderado. Falta solo el merge a main.",
   },
   {
     id: "VEN-4", module: "VEN", owner: "rasheed", size: "M", sprint: 3, deps: ["VEN-3", "CON-2"],
