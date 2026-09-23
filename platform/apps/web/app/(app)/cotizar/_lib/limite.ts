@@ -8,12 +8,11 @@
  * instancia serverless tiene el suyo y lo pierde al enfriarse, así que
  * con N instancias calientes el techo real es 5 × N por minuto. La
  * barrera que no depende de en qué instancia caiga la petición está en
- * la base: public_media_kit() bloquea el enlace 15 minutos tras 10
- * fallos (migración 0030, que también dice cuál sería el paso siguiente
- * si apareciera el abuso).
- * Por qué el bloqueo de la base es por enlace y no por IP (y por qué se
- * acepta que alguien con el enlace pueda dispararlo) está en la
- * cabecera de esa migración.
+ * la base: public_media_kit() bloquea 15 minutos al ORIGEN que falla 10
+ * veces, y al enlace entero si suma 50 fallos en una hora entre todos
+ * los orígenes (migración 0030, cuya cabecera explica el compromiso que
+ * queda y cómo lo ve y lo deshace el creador). El origen de la clave es
+ * el mismo que el de la base: _lib/origen.ts.
  */
 export class LimiteDeIntentos {
   readonly #cubetas = new Map<string, { usados: number; hasta: number }>();

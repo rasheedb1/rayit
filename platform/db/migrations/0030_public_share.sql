@@ -52,28 +52,40 @@
 -- con sal por fila, 's1:<sal hex>:<scrypt hex>'); la contraseña en claro
 -- no llega nunca a la base.
 --
--- Bloqueo por contraseñas fallidas (compromiso aceptado): 10 fallos
--- seguidos bloquean el media kit 15 minutos, cuente quien cuente. Lo
--- puede disparar cualquiera que tenga el enlace, y durante esos 15
--- minutos deja fuera también a la marca que sí sabe la contraseña. Se
--- acepta porque (1) para intentarlo hay que tener el enlace, que solo
--- circula entre quienes el creador eligió; (2) el peor caso es una
--- espera de 15 minutos y la página dice hasta qué hora; (3) delante hay
--- un límite por enlace e IP en el servidor (5 intentos por minuto,
--- apps/web/app/(app)/cotizar/_lib/limite.ts), que ahorra el scrypt a
--- quien insiste desde una máquina; y (4) la contraseña pide ahora 8
--- signos como mínimo.
+-- Bloqueo por contraseñas fallidas, en DOS niveles, contados en la base
+-- (cuentan igual caiga donde caiga la petición):
 --
--- Ese límite del servidor es POR INSTANCIA y de mejor esfuerzo: vive en
--- la memoria de cada proceso, y en Vercel cada instancia serverless
--- tiene el suyo y lo pierde al enfriarse. Con N instancias calientes el
--- techo real es 5 × N por minuto. No es la barrera: la barrera es este
--- bloqueo en la base, que cuenta igual caiga donde caiga la petición.
--- Contar por IP dentro de la base pediría guardar IPs de visitantes
--- anónimos, que es un dato personal que hoy no guardamos. Si aparece el
--- abuso, el siguiente paso es una tabla public_share_attempt (slug, HASH
--- de la IP con sal, ventana) consultada desde public_media_kit(): cuenta
--- entre instancias y no guarda la IP en claro.
+--   · POR ORIGEN: 10 fallos desde un mismo origen (la IP de la petición)
+--     bloquean ESE origen 15 minutos. La marca que escribe bien desde
+--     otro sitio no se entera. Vive en media_kit_lockout, una fila por
+--     media kit y origen, y el origen se guarda como sha256(id del kit |
+--     IP), nunca la IP: la función la recibe como argumento y no la
+--     escribe. mc_app no puede leer ese resumen (privilegio de COLUMNA:
+--     solo media_kit_id y locked_until, lo justo para contar y borrar).
+--     Las filas viejas se podan en cada fallo.
+--   · POR ENLACE, como techo: 50 fallos en una hora, sumando todos los
+--     orígenes, bloquean el enlace entero 15 minutos
+--     (media_kit.failed_attempts, failed_since y locked_until). Es lo
+--     que para a quien rota IPs, o a quien falsea X-Forwarded-For
+--     detrás de un proxy que no lo reescribe, para adivinar la
+--     contraseña: sin él, cada origen nuevo traería 10 intentos más.
+--
+-- El compromiso que queda, dicho: quien tenga el enlace y reparta sus
+-- intentos entre cinco o más IPs puede disparar el techo y dejar fuera
+-- a la marca 15 minutos cada vez. Ya no basta una máquina, y el creador
+-- lo VE: /cotizar/media-kit enseña «Bloqueado hasta …» (y cuántas
+-- visitas tienen su origen bloqueado) con un botón «Desbloquear» que
+-- pone a cero los dos niveles (queries/cotizar · unlockMediaKit). Si el
+-- abuso sigue, la salida es generar otro media kit: el enlace nuevo no
+-- lo tiene quien ataca. Un acierto borra la cuenta de SU origen pero no
+-- la del enlace, que se vacía sola al pasar la hora: si no, quien
+-- supiera la contraseña podría abrirle 50 intentos más a quien no.
+--
+-- Delante hay además un límite por enlace e IP en el servidor (5
+-- intentos por minuto, apps/web/app/(app)/cotizar/_lib/limite.ts), que
+-- ahorra el scrypt a quien insiste desde una máquina. Es POR INSTANCIA y
+-- de mejor esfuerzo (en Vercel cada instancia serverless tiene el suyo):
+-- no es la barrera, la barrera es la de la base.
 --
 -- REQUISITO EN SUPABASE (mc_migrator no tiene CREATEROLE, a propósito):
 --
@@ -160,9 +172,49 @@ ALTER TABLE quote ADD COLUMN IF NOT EXISTS accepted_by_name  text
 ALTER TABLE quote ADD COLUMN IF NOT EXISTS accepted_by_email text
   CHECK (accepted_by_email IS NULL OR (length(accepted_by_email) <= 254 AND accepted_by_email LIKE '%_@_%'));
 
--- El límite de intentos de contraseña del media kit.
+-- El límite de intentos de contraseña del media kit: el techo POR
+-- ENLACE (ver la cabecera). failed_attempts cuenta los fallos de todos
+-- los orígenes desde failed_since; pasada una hora, la cuenta vuelve a
+-- empezar.
 ALTER TABLE media_kit ADD COLUMN IF NOT EXISTS failed_attempts int NOT NULL DEFAULT 0;
+ALTER TABLE media_kit ADD COLUMN IF NOT EXISTS failed_since    timestamptz;
 ALTER TABLE media_kit ADD COLUMN IF NOT EXISTS locked_until    timestamptz;
+
+-- Y el bloqueo POR ORIGEN. Hija de media_kit: se aísla por su padre
+-- (misma forma que las hijas de 0018), así que el creador ve las de sus
+-- kits y mc_public_share solo las del kit cuyo slug fija la función.
+-- origin_hash es sha256(id del kit | IP) en hex: ni la IP en claro ni
+-- un resumen que sirva para cruzar visitas entre dos media kits.
+CREATE TABLE IF NOT EXISTS media_kit_lockout (
+  media_kit_id    uuid        NOT NULL REFERENCES media_kit(id) ON DELETE CASCADE,
+  origin_hash     text        NOT NULL CHECK (origin_hash ~ '^[0-9a-f]{64}$'),
+  failed_attempts int         NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+  locked_until    timestamptz,
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (media_kit_id, origin_hash)
+);
+ALTER TABLE media_kit_lockout ENABLE ROW LEVEL SECURITY;
+ALTER TABLE media_kit_lockout FORCE ROW LEVEL SECURITY;
+CREATE POLICY media_kit_lockout_ws_isolation ON media_kit_lockout
+  USING (EXISTS (SELECT 1 FROM media_kit p WHERE p.id = media_kit_lockout.media_kit_id));
+
+-- Lo que la aplicación hace con ella: contar los orígenes bloqueados de
+-- un kit y borrarlos con «Desbloquear». No lee el resumen del origen
+-- ni escribe filas: eso es solo de public_media_kit(). Revocar de tabla
+-- entera y conceder por columna: ALTER DEFAULT PRIVILEGES le dio los
+-- cuatro al nacer.
+REVOKE ALL ON media_kit_lockout FROM mc_app;
+GRANT SELECT (media_kit_id, locked_until) ON media_kit_lockout TO mc_app;
+GRANT DELETE ON media_kit_lockout TO mc_app;
+
+-- El disparador de referencias de 0025 §3: el bucle de 0025 §7 solo
+-- enganchó las claves que existían entonces. Con él, ni el creador ni
+-- mc_public_share nombran un media kit que no ven.
+DROP TRIGGER IF EXISTS ref_visible_media_kit_id ON media_kit_lockout;
+CREATE TRIGGER ref_visible_media_kit_id
+  BEFORE INSERT OR UPDATE OF media_kit_id ON media_kit_lockout
+  FOR EACH ROW WHEN (NEW.media_kit_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('media_kit_id', 'media_kit', 'id');
 
 -- El aviso al creador cuando la marca acepta desde el enlace. Se añade
 -- un valor al CHECK de 0009; los demás quedan igual.
@@ -193,7 +245,12 @@ CREATE INDEX IF NOT EXISTS quote_slug_idx ON quote (slug);
 -- 3 · Lo único que mc_public_share puede tocar
 -- ---------------------------------------------------------------------
 GRANT SELECT ON media_kit, quote, deal, deal_stage_history, pipeline_stage TO mc_public_share;
-GRANT UPDATE (view_count, failed_attempts, locked_until) ON media_kit TO mc_public_share;
+GRANT UPDATE (view_count, failed_attempts, failed_since, locked_until) ON media_kit TO mc_public_share;
+-- El bloqueo por origen: contar el fallo (INSERT … ON CONFLICT), borrar
+-- la fila al acertar y podar las viejas. Solo las filas del kit
+-- compartido: la política de la tabla hereda de media_kit_public_share.
+GRANT SELECT, INSERT, DELETE ON media_kit_lockout TO mc_public_share;
+GRANT UPDATE (failed_attempts, locked_until, updated_at) ON media_kit_lockout TO mc_public_share;
 GRANT UPDATE (status, viewed_at, accepted_at, expired_at, view_count,
               accepted_by_name, accepted_by_email) ON quote TO mc_public_share;
 GRANT UPDATE (stage_id, probability, won_at, lost_at) ON deal TO mc_public_share;
@@ -279,7 +336,9 @@ EXCEPTION WHEN invalid_parameter_value THEN
 END;
 $$;
 
--- Media kit.
+-- Media kit. p_origin es la IP de la petición (o lo que el servidor use
+-- para distinguir orígenes): se resume con el id del kit y no se guarda.
+-- Sin origen, todos los que llaman comparten uno.
 --
 --   {"status":"not_found"}
 --   {"status":"expired","expiresAt":"…"}
@@ -287,19 +346,24 @@ $$;
 --   {"status":"password_required","algo":"s1","salt":"…"}
 --   {"status":"password_invalid","algo":"s1","salt":"…","attemptsLeft":7}
 --   {"status":"ok","slug":"…","snapshot":{…},"viewCount":12,"createdAt":"…"}
-CREATE FUNCTION public_media_kit_impl(p_slug text, p_password_hash text, p_count boolean)
+CREATE FUNCTION public_media_kit_impl(p_slug text, p_password_hash text, p_count boolean, p_origin text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  max_intentos constant int := 10;
+  max_por_origen constant int := 10;
+  max_por_enlace constant int := 50;
+  ventana constant interval := interval '1 hour';
   bloqueo constant interval := interval '15 minutes';
   k record;
+  origen text;
+  origen_hasta timestamptz;
   intentos int;
+  del_enlace int;
   vistas int;
 BEGIN
-  SELECT id, slug, snapshot, password_hash, expires_at, view_count, created_at, failed_attempts, locked_until
+  SELECT id, slug, snapshot, password_hash, expires_at, view_count, created_at, locked_until
     INTO k
     FROM media_kit
    WHERE slug = p_slug;
@@ -313,9 +377,19 @@ BEGIN
   END IF;
 
   IF k.password_hash IS NOT NULL THEN
+    -- El techo del enlace primero: vale para todos los orígenes.
     IF k.locked_until IS NOT NULL AND k.locked_until > now() THEN
       RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(k.locked_until));
     END IF;
+
+    origen := encode(sha256(convert_to(k.id::text || '|' || coalesce(p_origin, ''), 'UTF8')), 'hex');
+    SELECT locked_until INTO origen_hasta
+      FROM media_kit_lockout
+     WHERE media_kit_id = k.id AND origin_hash = origen;
+    IF origen_hasta IS NOT NULL AND origen_hasta > now() THEN
+      RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(origen_hasta));
+    END IF;
+
     IF p_password_hash IS NULL THEN
       RETURN jsonb_build_object('status', 'password_required',
                                 'algo', split_part(k.password_hash, ':', 1),
@@ -325,21 +399,52 @@ BEGIN
     -- comparación depende de un resumen que quien ataca no controla,
     -- no de cuántos caracteres del derivado guardado acertó.
     IF sha256(convert_to(p_password_hash, 'UTF8')) <> sha256(convert_to(k.password_hash, 'UTF8')) THEN
-      -- Un bloqueo que ya venció empieza la cuenta de cero.
-      intentos := CASE WHEN k.locked_until IS NOT NULL THEN 1 ELSE k.failed_attempts + 1 END;
-      IF intentos >= max_intentos THEN
-        UPDATE media_kit SET failed_attempts = 0, locked_until = now() + bloqueo WHERE id = k.id;
+      -- Las filas de orígenes que ya no cuentan, fuera: la tabla no crece
+      -- con cada IP que alguna vez falló.
+      DELETE FROM media_kit_lockout
+       WHERE media_kit_id = k.id AND origin_hash <> origen
+         AND updated_at < now() - ventana
+         AND (locked_until IS NULL OR locked_until <= now());
+
+      -- 1 · El origen. Un bloqueo vencido, o una racha de hace más de
+      -- una hora, empieza la cuenta de cero. ON CONFLICT: dos fallos a
+      -- la vez desde el mismo origen suman los dos, sin chocar.
+      INSERT INTO media_kit_lockout AS l (media_kit_id, origin_hash, failed_attempts, locked_until, updated_at)
+      VALUES (k.id, origen, 1, NULL, now())
+      ON CONFLICT (media_kit_id, origin_hash) DO UPDATE
+         SET failed_attempts = CASE WHEN l.locked_until IS NOT NULL OR l.updated_at <= now() - ventana
+                                    THEN 1 ELSE l.failed_attempts + 1 END,
+             locked_until = NULL,
+             updated_at = now()
+      RETURNING failed_attempts INTO intentos;
+
+      -- 2 · El enlace: todos los orígenes de la última hora.
+      UPDATE media_kit
+         SET failed_attempts = CASE WHEN failed_since IS NULL OR failed_since <= now() - ventana OR locked_until IS NOT NULL
+                                    THEN 1 ELSE failed_attempts + 1 END,
+             failed_since = CASE WHEN failed_since IS NULL OR failed_since <= now() - ventana OR locked_until IS NOT NULL
+                                 THEN now() ELSE failed_since END,
+             locked_until = NULL
+       WHERE id = k.id
+      RETURNING failed_attempts INTO del_enlace;
+
+      IF del_enlace >= max_por_enlace THEN
+        UPDATE media_kit SET failed_attempts = 0, failed_since = NULL, locked_until = now() + bloqueo WHERE id = k.id;
         RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(now() + bloqueo));
       END IF;
-      UPDATE media_kit SET failed_attempts = intentos, locked_until = NULL WHERE id = k.id;
+      IF intentos >= max_por_origen THEN
+        UPDATE media_kit_lockout SET failed_attempts = 0, locked_until = now() + bloqueo, updated_at = now()
+         WHERE media_kit_id = k.id AND origin_hash = origen;
+        RETURN jsonb_build_object('status', 'locked', 'lockedUntil', to_jsonb(now() + bloqueo));
+      END IF;
       RETURN jsonb_build_object('status', 'password_invalid',
                                 'algo', split_part(k.password_hash, ':', 1),
                                 'salt', split_part(k.password_hash, ':', 2),
-                                'attemptsLeft', max_intentos - intentos);
+                                'attemptsLeft', max_por_origen - intentos);
     END IF;
-    IF k.failed_attempts > 0 OR k.locked_until IS NOT NULL THEN
-      UPDATE media_kit SET failed_attempts = 0, locked_until = NULL WHERE id = k.id;
-    END IF;
+    -- Acierto: la cuenta de ESTE origen vuelve a cero. La del enlace no
+    -- (ver la cabecera): se vacía sola al pasar la hora.
+    DELETE FROM media_kit_lockout WHERE media_kit_id = k.id AND origin_hash = origen;
   END IF;
 
   vistas := k.view_count;
@@ -356,7 +461,8 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION public_media_kit(p_slug text, p_password_hash text DEFAULT NULL, p_count boolean DEFAULT true)
+CREATE FUNCTION public_media_kit(p_slug text, p_password_hash text DEFAULT NULL, p_count boolean DEFAULT true,
+                                 p_origin text DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -371,7 +477,7 @@ BEGIN
   END IF;
   PERFORM set_config('app.public_share', p_slug, true);
   BEGIN
-    r := public_media_kit_impl(p_slug, p_password_hash, coalesce(p_count, true));
+    r := public_media_kit_impl(p_slug, p_password_hash, coalesce(p_count, true), left(p_origin, 200));
   EXCEPTION WHEN OTHERS THEN
     PERFORM set_config('app.public_share', anterior, true);
     RAISE;
@@ -580,21 +686,21 @@ $$;
 -- Primero los GRANT (los hace el dueño actual, mc_migrator) y después
 -- el cambio de dueño, que conserva la lista de privilegios.
 REVOKE ALL ON FUNCTION public_share_today(text)                    FROM PUBLIC;
-REVOKE ALL ON FUNCTION public_media_kit_impl(text, text, boolean)   FROM PUBLIC;
+REVOKE ALL ON FUNCTION public_media_kit_impl(text, text, boolean, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_quote_impl(text, boolean)             FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_quote_accept_impl(text, text, text)   FROM PUBLIC;
-REVOKE ALL ON FUNCTION public_media_kit(text, text, boolean)        FROM PUBLIC;
+REVOKE ALL ON FUNCTION public_media_kit(text, text, boolean, text)  FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_quote(text, boolean)                  FROM PUBLIC;
 REVOKE ALL ON FUNCTION public_quote_accept(text, text, text)        FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public_media_kit(text, text, boolean)     TO mc_app;
+GRANT EXECUTE ON FUNCTION public_media_kit(text, text, boolean, text) TO mc_app;
 GRANT EXECUTE ON FUNCTION public_quote(text, boolean)               TO mc_app;
 GRANT EXECUTE ON FUNCTION public_quote_accept(text, text, text)     TO mc_app;
 
 ALTER FUNCTION public_share_today(text)                    OWNER TO mc_public_share;
-ALTER FUNCTION public_media_kit_impl(text, text, boolean)   OWNER TO mc_public_share;
+ALTER FUNCTION public_media_kit_impl(text, text, boolean, text) OWNER TO mc_public_share;
 ALTER FUNCTION public_quote_impl(text, boolean)             OWNER TO mc_public_share;
 ALTER FUNCTION public_quote_accept_impl(text, text, text)   OWNER TO mc_public_share;
-ALTER FUNCTION public_media_kit(text, text, boolean)        OWNER TO mc_public_share;
+ALTER FUNCTION public_media_kit(text, text, boolean, text)  OWNER TO mc_public_share;
 ALTER FUNCTION public_quote(text, boolean)                  OWNER TO mc_public_share;
 ALTER FUNCTION public_quote_accept(text, text, text)        OWNER TO mc_public_share;
 

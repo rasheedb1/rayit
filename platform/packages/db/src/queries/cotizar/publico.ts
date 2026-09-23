@@ -27,6 +27,17 @@ export interface PublicReadOptions {
   count?: boolean;
 }
 
+export interface PublicMediaKitOptions extends PublicReadOptions {
+  /**
+   * De dónde viene la visita (la IP de la petición). Los fallos de
+   * contraseña se cuentan y se bloquean POR ORIGEN (0030): diez fallos
+   * desde una IP no dejan fuera a la marca que entra desde otra. La base
+   * la resume con el id del kit y no la guarda. Sin origen, todas las
+   * llamadas comparten uno.
+   */
+  origin?: string | null;
+}
+
 /**
  * Abre un media kit por su enlace. `password` es la que escribió la
  * visita: se deriva AQUÍ con la sal que devuelve la base, para que la
@@ -36,17 +47,27 @@ export async function readPublicMediaKit(
   tx: PublicShareTx,
   slug: string,
   password?: string | null,
-  opts: PublicReadOptions = {},
+  opts: PublicMediaKitOptions = {},
 ): Promise<PublicMediaKitResult> {
   const count = opts.count ?? true;
-  const primera = await llamarPublicMediaKit(tx, slug, null, count);
+  const origin = opts.origin ?? null;
+  const primera = await llamarPublicMediaKit(tx, slug, null, count, origin);
   if (primera.status !== 'password_required' || !password) return primera;
   const hash = await hashSharePassword(password, primera.salt);
-  return llamarPublicMediaKit(tx, slug, hash, count);
+  return llamarPublicMediaKit(tx, slug, hash, count, origin);
 }
 
-async function llamarPublicMediaKit(tx: PublicShareTx, slug: string, hash: string | null, count: boolean): Promise<PublicMediaKitResult> {
-  const { rows } = await tx.query<{ r: PublicMediaKitResult }>('SELECT public_media_kit($1, $2, $3) AS r', [slug, hash, count]);
+async function llamarPublicMediaKit(
+  tx: PublicShareTx,
+  slug: string,
+  hash: string | null,
+  count: boolean,
+  origin: string | null,
+): Promise<PublicMediaKitResult> {
+  const { rows } = await tx.query<{ r: PublicMediaKitResult }>(
+    'SELECT public_media_kit($1, $2, $3, $4) AS r',
+    [slug, hash, count, origin],
+  );
   return rows[0]?.r ?? { status: 'not_found' };
 }
 

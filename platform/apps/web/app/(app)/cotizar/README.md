@@ -26,6 +26,7 @@ aceptarse, deja una campaña planeada.
 | `_lib/acordado.ts` | «Lo acordado» y la etiqueta del impuesto con su tasa, iguales en los tres sitios |
 | `_lib/robots.ts` | Los robots de chat que desenrollan enlaces: no cuentan como visita |
 | `_lib/limite.ts` | El freno de intentos de contraseña en memoria, **por instancia y de mejor esfuerzo** |
+| `_lib/origen.ts` | De qué origen (IP) viene una visita: la clave del freno en memoria y del bloqueo por origen de la base |
 | `_lib/kits.ts` | Qué media kit llega preseleccionado en una cotización nueva |
 | `_lib/estado.ts` | La pastilla de cada estado y cuándo deja de mostrarse «Válida hasta» |
 | `_lib/textos.ts` | Las frases que la base guarda en tablas de otros módulos (historia del negocio, aviso), compuestas con `messages.ts` |
@@ -40,7 +41,7 @@ aceptarse, deja una campaña planeada.
 | `packages/core/src/tarifas.ts` | La fórmula, los paquetes y la unidad de precio. Pura, sin idioma y sin base |
 | `packages/core/src/zonas.ts` | El fin de un día en la zona del workspace |
 | `packages/db/src/queries/cotizar.ts` | La entrada de `@mc/db/queries/cotizar`: reexporta las consultas, repartidas por pieza en `queries/cotizar/` (errores, enlace, tarifario, media kit, cotización, público, campaña). Todas con `WorkspaceTx` salvo las tres públicas, que reciben `PublicShareTx` |
-| `db/migrations/0030_public_share.sql` | El rol `mc_public_share`, las columnas, las funciones y las políticas del enlace público, y el CHECK del rango del tarifario |
+| `db/migrations/0030_public_share.sql` | El rol `mc_public_share`, las columnas, las funciones y las políticas del enlace público, el bloqueo por origen (`media_kit_lockout`) y el CHECK del rango del tarifario |
 
 ## Las cuatro decisiones que explican el resto
 
@@ -240,15 +241,32 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
 - **Una cotización con la validez vencida no se envía** (`ValidezVencida`):
   nacería vencida. La numeración COT-AAAA toma el año de la zona del
   workspace, no el de UTC.
-- **El bloqueo del media kit es por enlace, no por IP** (10 contraseñas
-  fallidas → 15 minutos). Es un compromiso aceptado y explicado en la
-  cabecera de 0030: quien tiene el enlace puede dispararlo, pero no hay
-  que guardar IPs de visitantes. Delante hay un límite por IP en el
-  servidor (`_lib/limite.ts`, 5 por minuto), que es **por instancia y de
-  mejor esfuerzo**: vive en memoria y en Vercel cada instancia tiene el
-  suyo, así que el techo real crece con las instancias. La barrera es la
-  de la base; el paso siguiente si hubiera abuso (una tabla con el hash
-  de la IP, no la IP) está escrito en la cabecera de 0030.
+- **El bloqueo del media kit con contraseña es por origen, con un techo
+  por enlace** (0030, contado en la base, caiga donde caiga la
+  petición):
+  - **Por origen**: 10 fallos desde una IP bloquean **esa IP** 15
+    minutos. La marca que entra desde otro sitio no se entera. Vive en
+    `media_kit_lockout`, con el origen guardado como `sha256(id del kit
+    | IP)`: la IP no se guarda, y `mc_app` no puede leer ni el resumen
+    (privilegio de columna: solo cuenta y borra). El origen lo saca
+    `_lib/origen.ts` de las cabeceras que escribe el proxy.
+  - **Por enlace**: 50 fallos en una hora, sumando todos los orígenes,
+    bloquean el enlace entero 15 minutos. Es lo que para a quien rota
+    IPs (o falsea `X-Forwarded-For` detrás de un proxy que no lo
+    reescribe) para adivinar la contraseña.
+  - **El creador lo ve y lo deshace.** `/cotizar/media-kit` pinta
+    «Bloqueado» con la hora en la columna Estado (o cuántos visitantes
+    tienen su origen bloqueado) y un botón **Desbloquear**
+    (`desbloquearMediaKit` → `unlockMediaKit`), que pone a cero los dos
+    niveles. Cambiar la contraseña también los pone a cero.
+  - **El compromiso que queda**: quien tenga el enlace y reparta sus
+    intentos entre cinco o más IPs puede disparar el techo del enlace.
+    Ya no basta una máquina, el creador lo ve, y si se repite la salida
+    es generar otro media kit: el enlace nuevo no lo tiene quien ataca.
+  - Delante hay un freno en memoria (`_lib/limite.ts`, 5 por minuto por
+    enlace e IP) que ahorra el scrypt, **por instancia y de mejor
+    esfuerzo**: en Vercel cada instancia tiene el suyo. La barrera es la
+    de la base.
 - **Lo que el precio ya cobra se dice.** Los modificadores del
   tarifario (derechos de uso, exclusividad, pauta, exprés) se guardan en
   `rate_card_item.adjustments.modificadores` de cada entregable y cada

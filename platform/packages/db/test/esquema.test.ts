@@ -1200,7 +1200,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
 
   test('el inventario declarado es el de 0030 y 0031, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
-      'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'pipeline_stage', 'quote',
+      'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'pipeline_stage', 'quote',
     ]);
     assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 7);
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
@@ -1223,7 +1223,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     await con(
       'GRANT UPDATE ON media_kit TO mc_public_share',
       'REVOKE UPDATE ON media_kit FROM mc_public_share; ' +
-        'GRANT UPDATE (view_count, failed_attempts, locked_until) ON media_kit TO mc_public_share',
+        'GRANT UPDATE (view_count, failed_attempts, failed_since, locked_until) ON media_kit TO mc_public_share',
       (e) => dice(e, /^media_kit: UPDATE de la relación entera \(solo se concede por columna: UPDATE\)$/),
     );
   });

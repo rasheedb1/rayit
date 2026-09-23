@@ -6,7 +6,7 @@ import { z } from "zod";
 import { calcularItem, finDelDiaEnZona, pctToRate, TarifaError, validarRangoPrecio } from "@mc/core";
 import {
   acceptQuoteAndCreateCampaign, createCampaignForQuote, createMediaKit, createQuote, deleteQuoteDraft,
-  getRateCardInputs, markAcceptanceNoticeRead, rejectQuote, saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft,
+  getRateCardInputs, markAcceptanceNoticeRead, rejectQuote, saveRateCard, sendQuote, unlockMediaKit, updateMediaKitShare, updateQuoteDraft,
   CotizarError, type QuoteItemInput, type SaveRateCardItem,
 } from "@mc/db/queries/cotizar";
 import { withWorkspace } from "@/lib/db";
@@ -233,6 +233,24 @@ export async function generarMediaKit(_prev: ActionState, formData: FormData): P
   }
   revalidatePath("/cotizar/media-kit");
   return { ok: true };
+}
+
+/**
+ * «Desbloquear» un media kit con contraseña: borra la cuenta de fallos
+ * del enlace y de cada origen (0030). Es la salida del creador cuando
+ * alguien con el enlace lo mantiene bloqueado para la marca. Se usa con
+ * bind, desde la lista.
+ */
+export async function desbloquearMediaKit(id: string): Promise<void> {
+  if (!UUID_RE.test(id)) redirect("/cotizar/media-kit");
+  let error: string | null = null;
+  try {
+    await withWorkspace((tx) => unlockMediaKit(tx, id));
+  } catch (err) {
+    error = codigoDe(err);
+  }
+  revalidatePath("/cotizar/media-kit");
+  redirect(error ? `/cotizar/media-kit?error=${encodeURIComponent(error)}` : "/cotizar/media-kit");
 }
 
 /** Publicar o despublicar un enlace, desde la lista. Se usa con bind. */
