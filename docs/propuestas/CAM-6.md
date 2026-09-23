@@ -1,9 +1,17 @@
 # CAM-6 · Reporte a la marca — página pública con el payload congelado
 
-Escrito para: Rasheed, que revisa y aplica la migración `0034` y la
+Escrito para: Rasheed, que revisa y aplica la migración `0037` y la
 línea nueva de `lib/auth/rutas.ts`, y quien revise el PR de CAM-6.
 Fecha: 23 de septiembre de 2026. Rama `nicolas/CAM-6-reporte-marca`,
-sobre `origin/main` (`29460e3`).
+integrada con `origin/main` el mismo día (ACC-1/2/3, CAM-3/4/5, FIN-2/4).
+
+> **Nota de integración.** El plan de abajo se escribió sobre `29460e3`,
+> cuando ACC-1 y ACC-2 no estaban en `main`: por eso habla de `0034`,
+> de `TODO(ACC-1)` y de escribir `audit_log` a mano. Al integrar, la
+> migración pasó a **`0037`** (0034 es ACC-3; 0035 CAM-3 y ACC-6; 0036
+> FIN-7 y CON-7), las acciones abren con `requirePermission` real y la
+> bitácora va por `audit()` con `campaign.report_sent`. §1 cuenta el
+> estado final.
 
 ---
 
@@ -185,4 +193,114 @@ sobre `origin/main` (`29460e3`).
 
 ---
 
-_(Las secciones 1 a 8 se escriben al cerrar la historia.)_
+## 1. Lo que quedó
+
+| Pieza | Dónde |
+|---|---|
+| `ReportPayload` v1, `construirReporte` (lista blanca), `tituloParaLaMarca`, `urlHttp`, `trackingUrlSinParametros`, `reportForbiddenMatch`, errores con `messageEs` | `packages/core/src/reporte.ts` |
+| Permiso `campanas.reporte.generar` (junto a `…enviar`, que ya estaba) | `packages/core/src/permisos.ts`; `scripts/permisos-sql.ts` acepta `sinPermisos` para comparar 0034 con el catálogo de entonces |
+| `generateReport`, `listCampaignReports`, `getReport`, `markReportSent` | `packages/db/src/queries/campanas/reporte.ts` |
+| `readPublicReport` (`PublicShareTx`) | `packages/db/src/queries/campanas/reporte-publico.ts` |
+| Migración | `platform/db/migrations/0037_reporte_publico.sql` |
+| Guardia | `esquema.ts`: `public_report` en `FUNCIONES_DEFINER_DECLARADAS`, `report` en `PRIVILEGIOS_DEL_ENLACE_PUBLICO`, dos políticas en `POLITICAS_DEL_ENLACE_PUBLICO` |
+| Ficha | sección «Reporte a la marca» (`[id]/reporte-seccion.tsx`), acciones `generarReporte` y `marcarReporteEnviado`, vista previa `[id]/reporte/[reportId]/` |
+| Documento (uno solo para la vista previa y la marca) | `campanas/_ui/documento-reporte.tsx`, `_ui/imprimir.tsx` |
+| Página pública | `app/(public)/reporte/[slug]/page.tsx`, con el freno de fallos `campanas/_lib/freno.ts` |
+| PDF | `@media print` en `globals.css` (paleta clara completa aunque el tema sea oscuro) |
+
+## 2. La migración `0037_reporte_publico.sql` (para revisar y aplicar)
+
+- **Qué hace.** `report.superseded_by` (con su CHECK y su
+  `assert_reference_visible`), un índice por campaña, `SELECT` y
+  `UPDATE (status, viewed_at, view_count)` sobre `report` para
+  `mc_public_share`, las políticas `report_public_share` y
+  `report_public_share_state` (misma cerradura que la cotización: no
+  borradores, slug fijado por la función), y `public_report(text,
+  boolean)` SECURITY DEFINER con sus dos auxiliares
+  (`public_report_impl`, `public_report_iso`), todas de
+  `mc_public_share` y sin `PUBLIC`; `EXECUTE` solo para `mc_app`. Y la
+  fila del permiso `campanas.reporte.generar` con sus cinco
+  `role_permission` de sistema (los mismos roles que `…enviar`).
+- **Orden.** Después de 0034 (usa `permission`/`role`). No depende de
+  0035 ni de 0036. `make db.check` la aplica sobre main con 35
+  migraciones; re-ejecutable.
+- **Requisito en Supabase.** Ninguno nuevo: el rol `mc_public_share`
+  existe desde 0030 y `mc_migrator` es miembro.
+- **Después:** `make db.migrate` y `make db.guardia` antes del deploy.
+  Sin 0037 aplicada, `/reporte/<slug>` falla (no existe la función) y
+  la guardia lo dice.
+
+**Choques de numeración que vi al integrar (no son de CAM-6):** hay dos
+`0035` (CAM-3 en main y ACC-6 en su rama) y dos `0036` (FIN-7 y CON-7,
+ninguna en main). El runner se para con dos archivos del mismo número:
+quien integre la segunda de cada par tiene que renumerarla.
+
+## 3. La línea de `lib/auth/rutas.ts` (tuya)
+
+`"/reporte"` en `RUTAS_PUBLICAS`, con su motivo, como `/cotizacion`.
+Sin ella el middleware manda a la marca a `/login`. Va en este PR para
+que la historia funcione; si prefieres hacerla tú, es esa línea.
+
+## 4. Decisiones
+
+- **Regenerar** (DECISIÓN PENDIENTE DE NICOLÁS, la conservadora): un
+  enlace enviado nunca se rompe; al enviar otra versión, el viejo sigue
+  abriendo con «Hay una versión más reciente…» y las mismas cifras.
+- **Permiso de generar.** El catálogo de ACC-1 solo traía `enviar`; la
+  historia pide los dos. Se añadió `campanas.reporte.generar` con su
+  migración (0034 es inmutable) y la prueba de ACC-3 comprueba 0034
+  contra el catálogo sin él y, aparte, que 0037 lo siembre con la matriz
+  de core.
+- **Generar no se audita; enviar sí.** Un borrador solo lo ve el creador
+  y su enlace no abre: congelar no es publicar. Declarado en
+  `audit-convencion.test.ts`, que ahora también recorre
+  `campanas/reporte.ts`.
+- **Enumeración de slugs.** Sin contraseña no hay bloqueo por origen que
+  copiar de 0030; la barrera es la entropía del slug (≈128 bits). Delante
+  hay un freno en memoria que solo cuenta slugs desconocidos (60 por
+  minuto e IP → 404 sin tocar la base). No reutiliza `LimiteDeIntentos`
+  de Cotizar porque ese cuenta cada intento, y la marca que recarga su
+  enlace no debe frenarse; tampoco se tocó tu archivo.
+- **Identificadores en español** en las Server Actions (`generarReporte`,
+  `marcarReporteEnviado`) y en `construirReporte`, `FrenoDeFallos`: el
+  precedente de CAM-1/FIN-1 y el nombre que pide la historia. Las
+  consultas de `@mc/db` van en inglés.
+
+## 5. Lo que AGE-5 hereda
+
+El reporte congelado, su slug y `white_label` (`{version, creator}`).
+El portal de marca pone delante un enlace firmado con vencimiento; la
+función pública y el payload no cambian. Si AGE-5 quiere vencimiento,
+es una columna `expires_at` y una condición en `public_report_impl`,
+como el media kit.
+
+## 6. Fuera de alcance
+
+- Envío por correo o WhatsApp (fase 2, CIM-10): `email` y `whatsapp`
+  siguen en el CHECK; la acción solo admite `link` y `pdf`.
+- Reportes mensuales y programados (`report_schedule`, fase 2).
+- Portal de marca (AGE-5). PDF generado en servidor.
+
+## 7. Verificación
+
+Ver el mensaje de cierre de la historia (pruebas, `pnpm verificar`,
+`next build`, `make db.check` y la verificación en dev con salidas). La
+prueba clave es `packages/db/test/campanas-reporte.test.ts` «LA CLAVE:
+el reporte enviado no cambia aunque lleguen snapshots nuevos (byte a
+byte)»; en dev, el enlace viejo tras generar y enviar otra versión solo
+difiere en la línea del aviso.
+
+## 8. Revisión
+
+`/code-review` (alto): diez hallazgos. Corregidos ocho: la caption
+entera como título (ahora primera línea sin correos ni teléfonos, y el
+payload se revisa antes de guardar), enviar el borrador de una campaña
+cancelada, enviar con un `campaignId` que no es el del reporte, marcar
+visto un payload de versión desconocida, colores oscuros al imprimir,
+la curva recortando los días recientes, `horas()` duplicando
+`cutHoursLabel`, y la cita de 0034 §1 cambiada por error. Justificados
+dos: el freno propio (arriba) y los identificadores en español (arriba).
+
+`/security-review`: sin hallazgos (ninguno con confianza ≥ 8). Se aplicó
+igual el endurecimiento sugerido: el enlace de un post solo pasa si es
+http(s) (`urlHttp`).
