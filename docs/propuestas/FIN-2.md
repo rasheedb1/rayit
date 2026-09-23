@@ -464,3 +464,62 @@ al registrar pagos». Ya lo mantiene: un abono parcial baja el monto que
 el flujo de caja proyecta para esa semana, y una factura cobrada por
 completo sale de la proyección. Las pruebas de FIN-6 sobre el seed
 siguen en verde porque corren antes de que las de FIN-2 cobren.
+
+---
+
+## 5 · Las dos revisiones
+
+### `/code-review` en nivel alto
+
+Seis hallazgos, los seis arreglados y con prueba (commit «los seis
+hallazgos de /code-review»). Dos eran de verdad:
+
+1. **El monto que se ve y el que se manda podían no ser el mismo.** El
+   `MoneyInput` del kit guarda por dentro el texto que se está
+   escribiendo y solo lo suelta al perder el foco. Al enviar con Enter
+   —sin blur— el campo seguía enseñando el monto anterior mientras el
+   campo oculto ya llevaba el saldo nuevo, así que un segundo Enter
+   habría cobrado ese saldo sin que la pantalla lo dijera. Se remonta
+   con una `key` por cobro registrado; la prueba ahora comprueba lo que
+   se VE, no solo lo que viaja.
+2. **`reserveRateFrom` aceptaba una tasa que la columna no guarda.**
+   `tax_reserve.rate` es `numeric(6,4)`: un `reserva_pct` con tres
+   decimales daba una tasa que Postgres redondeaba, y el apartado
+   dejaba de corresponder a la tasa escrita junto a él. Ahora se
+   rechaza con `TaxReserveRateInvalid`.
+
+Los otros cuatro eran de producto o de forma: «COP 0» donde tocaba una
+frase, «Sin referencia» bajo la cabecera «Método», la tasa del apartado
+más reciente sin desempate, y un total que volvía como `'0'` y no
+`'0.00'`.
+
+### `/security-review`
+
+**Sin hallazgos.** Lo que se miró y por qué se descartó cada cosa:
+
+- **Inyección SQL por `instanteDelCobro()`**, que compone un fragmento
+  de SQL como plantilla. Los dos sitios que la llaman le pasan
+  marcadores literales (`'$1'`, `'$5'`, `'$6'`) y una expresión fija
+  sobre `w.timezone`; ningún valor de la petición entra en la
+  interpolación, y `receivedOn` va además contra `ISO_DATE_RE` y zod.
+- **Cruce de inquilinos**: ningún INSERT pasa `workspace_id` por
+  parámetro (los tres usan `current_workspace_id()`), y `payment`,
+  `tax_reserve` y `notification` están en la lista de RLS de 0010. La
+  factura se busca sin predicado de workspace, que es el contrato del
+  paquete: desde otro espacio son cero filas → `InvoiceNotFound`.
+- **Permiso**: `requirePermission("finanzas.pago.registrar")` es la
+  primera sentencia de la acción, antes de parsear nada.
+- **Bitácora y aviso**: `before`/`after` se construyen campo a campo,
+  nunca con `...row`, y dejan fuera la `reference` del banco y las
+  notas.
+- **Mensajes de error**: los tres que llevan un dato lo llevan del
+  propio espacio; `InvoiceNotFound` —cuyo texto crudo trae el id— se
+  cambia por uno genérico.
+- **XSS**: no hay `dangerouslySetInnerHTML` ni equivalente en el diff.
+
+Una nota que la revisión dejó y que NO es de esta historia:
+`apps/web/lib/permisos/sesion.ts` todavía devuelve el rol Dueño para
+toda sesión (el sustituto que ACC-3 reemplaza), así que hoy ninguna
+comprobación de permisos rechaza a nadie en producción. Está en `main`
+y es exactamente lo que ACC-3 viene a cerrar; lo anoto porque el día que
+se cierre, la prueba de punta a punta de FIN-2 ya estaba escrita.
