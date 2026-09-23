@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BrandInputs, CampaignResultRow } from "@mc/db";
 import { formatterFor } from "@/lib/format";
@@ -107,6 +107,15 @@ describe("Resultado", () => {
     pintar({ result: { ...NUTRIVE, cpm: null } });
     valor("CPM").getByText("Sin calcular");
     expect(screen.queryByText("Sin monto acordado")).toBeNull();
+  });
+
+  it("CON-6 → CAM-5: con línea base, «×N tu mediana»; sin ella, ninguna razón inventada y «Falta» lo dice", () => {
+    pintar();
+    valor("Views").getByText(/tu mediana$/);
+    cleanup();
+    pintar({ result: { ...CAFE_ALMA, viewsVsMedian: null, missingInputs: ["baseline", "brand_csv_sales"] } });
+    expect(screen.queryByText(/tu mediana/)).toBeNull();
+    expect(screen.getByText(new RegExp(MESSAGES.resultado.missing.baseline))).toBeInTheDocument();
   });
 
   it("con línea base corta no presume un «×N»; la nota del CPA dice la causa real", () => {

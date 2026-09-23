@@ -35,6 +35,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
 import { leerAvisoMarca } from "../_lib/aviso-marca";
 import { MESSAGES } from "../_lib/messages";
+import { facturaHref } from "../_lib/rutas";
 import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
@@ -324,7 +325,7 @@ export default async function CampanaPage({
         aside={
           <div className="flex flex-wrap gap-2">
             {invoice ? (
-              <Button variant="primary" href={`/finanzas/facturas/${invoice.id}`}>
+              <Button variant="primary" href={facturaHref(invoice.id)}>
                 Ver factura {invoice.number}
               </Button>
             ) : campaign.status === "cancelled" ? null : (
@@ -478,7 +479,7 @@ export default async function CampanaPage({
               <ul className="space-y-1.5 text-sm">
                 {campaign.invoices.map((i) => (
                   <li key={i.id} className="flex items-baseline justify-between gap-3">
-                    <Link href={`/finanzas/facturas/${i.id}`} className="font-mono underline-offset-2 hover:underline">
+                    <Link href={facturaHref(i.id)} className="font-mono underline-offset-2 hover:underline">
                       {i.number}
                     </Link>
                     <span className="text-xs text-fg-3">

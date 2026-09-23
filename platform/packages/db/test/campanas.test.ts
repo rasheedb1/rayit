@@ -963,6 +963,31 @@ describe('resultado de campaña', () => {
       assert.deepEqual(await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE)), antes);
     });
 
+    test('CON-6 → CAM-5: views_vs_median sale de creator_baseline; sin línea base fiable, null y «baseline»', async () => {
+      // Con la línea base del seed (el contrato de CON-6: la tabla, no su código): 4,496.
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      const con = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.deepEqual([con?.viewsVsMedian, con?.missingInputs], ['4.496', ['brand_csv_sales']]);
+      // Sin la de TikTok (CON-6 todavía no la calculó, o su muestra no es fiable).
+      const fiables = await laura((tx) =>
+        tx.query<{ id: string }>("SELECT id FROM creator_baseline WHERE platform_id = 'tiktok' AND is_reliable").then((r) => r.rows.map((x) => x.id)),
+      );
+      assert.ok(fiables.length > 0);
+      const lista = fiables.map((id) => `'${id}'::uuid`).join(', ');
+      await t.admin(`UPDATE creator_baseline SET is_reliable = false WHERE id IN (${lista})`);
+      try {
+        await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+        const sin = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+        assert.equal(sin?.viewsVsMedian, null, 'null, no la razón de un solo post');
+        assert.deepEqual(sin?.missingInputs, ['baseline', 'brand_csv_sales']);
+        assert.equal(sin?.views, 712000, 'el resto de las cifras no depende de la línea base');
+      } finally {
+        await t.admin(`UPDATE creator_baseline SET is_reliable = true WHERE id IN (${lista})`);
+      }
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.equal((await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)))?.viewsVsMedian, '4.496');
+    });
+
     test('desde otro workspace no se lee ni se escribe el resultado de Laura', async () => {
       const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
       assert.equal(await ajeno((tx) => getResultInputs(tx, CAMPAIGN_CAFE_ALMA)), null);
