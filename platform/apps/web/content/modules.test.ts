@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { flags, type Flags } from "./flags";
-import { can, hasPermission, MODULE_PERMISSIONS, MODULES, moduleBySlug, productModules, requireModule } from "./modules";
+import { PERMISO_MINIMO, permisosDeRol } from "@mc/core";
+import { MODULES, moduleBySlug, productModules, puedeAbrir, requireModule } from "./modules";
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -34,50 +35,51 @@ describe("requireModule (ruta directa)", () => {
   });
 });
 
-/** Lo que abre cada rol, escrito a mano desde la fase 5: Contador solo Finanzas; Mánager todo menos Finanzas (su mínimo es finanzas.factura.ver). */
-const contador = new Set(["finanzas.factura.ver", "finanzas.factura.crear"]);
-const manager = ["resumen.panel.ver", "ventas.*", "cotizar.*", "campanas.*", "conexiones.cuenta.ver", "equipo.miembro.ver"];
+const CONTADOR = permisosDeRol("creator", "finance");
+const MANAGER = permisosDeRol("creator", "manager");
+const DUENO = permisosDeRol("creator", "owner");
 
 describe("permiso por módulo (ACC-5)", () => {
-  it("cada módulo de producto y Accesos declaran su permiso mínimo, del catálogo", () => {
-    for (const m of MODULES.filter((x) => x.group === "producto" && x.phase === 1)) {
-      expect(m.permission, m.slug).toBeDefined();
-      expect(MODULE_PERMISSIONS).toContain(m.permission);
+  it("cada módulo de producto y Accesos declaran el permiso mínimo de @mc/core", () => {
+    const esperado = { ...PERMISO_MINIMO, accesos: PERMISO_MINIMO.equipo } as Record<string, string>;
+    for (const m of MODULES.filter((x) => (x.group === "producto" && x.phase === 1) || x.slug === "accesos")) {
+      expect(m.permission, m.slug).toBe(esperado[m.slug]);
     }
-    expect(moduleBySlug("accesos")?.permission).toBe("equipo.miembro.ver");
     // Herramientas del equipo: sin permiso, como sin bandera siempre están encendidas.
     expect(moduleBySlug("cimientos")?.permission).toBeUndefined();
     expect(moduleBySlug("kit")?.permission).toBeUndefined();
   });
 
-  it("can(): exacto o por el comodín del módulo; un módulo sin permiso se abre siempre", () => {
-    expect(can(contador, moduleBySlug("finanzas")!)).toBe(true);
-    expect(can(contador, moduleBySlug("campanas")!)).toBe(false);
-    expect(can(manager, moduleBySlug("campanas")!)).toBe(true);
-    expect(can(manager, moduleBySlug("finanzas")!)).toBe(false);
-    expect(can(new Set(), moduleBySlug("cimientos")!)).toBe(true);
-    expect(hasPermission(manager, "campanas.reporte.enviar")).toBe(true);
-    expect(hasPermission(manager, "finanzas.factura.crear")).toBe(false);
-    expect(hasPermission([], "resumen.panel.ver")).toBe(false);
+  it("puedeAbrir(): con el permiso mínimo sí, sin él no; un módulo sin permiso se abre siempre; conjunto o lista", () => {
+    expect(puedeAbrir(CONTADOR, moduleBySlug("finanzas")!)).toBe(true);
+    expect(puedeAbrir(CONTADOR, moduleBySlug("campanas")!)).toBe(false);
+    expect(puedeAbrir([...MANAGER], moduleBySlug("campanas")!)).toBe(true);
+    expect(puedeAbrir([...MANAGER], moduleBySlug("finanzas")!)).toBe(false);
+    expect(puedeAbrir([], moduleBySlug("cimientos")!)).toBe(true);
   });
 
   it("productModules con permisos: el menú del Contador es solo Finanzas; el del Mánager, todo menos Finanzas", () => {
-    expect(productModules(allOff, contador).map((m) => m.slug)).toEqual(["finanzas"]);
-    expect(productModules(allOff, manager).map((m) => m.slug)).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones"]);
+    expect(productModules(allOff, CONTADOR).map((m) => m.slug)).toEqual(["finanzas"]);
+    expect(productModules(allOff, MANAGER).map((m) => m.slug)).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones"]);
+    expect(productModules(allOff, DUENO)).toHaveLength(6);
     expect(productModules(allOff, [])).toEqual([]);
   });
 });
 
 describe("requireModule con permisos (ACC-5)", () => {
-  it("sin el permiso responde 404, igual que una bandera apagada (nunca 403)", () => {
-    expect(() => requireModule("campanas", { flags: allOff, permisos: contador })).toThrow("NEXT_NOT_FOUND");
-    expect(requireModule("finanzas", { flags: allOff, permisos: contador }).name).toBe("Finanzas");
+  it("Contador: /campanas es 404, igual que una bandera apagada (nunca 403); /finanzas abre", () => {
+    expect(() => requireModule("campanas", { flags: allOff, permisos: CONTADOR })).toThrow("NEXT_NOT_FOUND");
+    expect(requireModule("finanzas", { flags: allOff, permisos: CONTADOR }).name).toBe("Finanzas");
   });
-  it("la bandera se evalúa antes que el permiso: apagada gana aunque el permiso esté", () => {
-    expect(() => requireModule("nicho", { flags: allOff, permisos: ["nicho.*", "resumen.*"] })).toThrow("NEXT_NOT_FOUND");
+  it("Mánager: /campanas abre y /finanzas es 404", () => {
+    expect(requireModule("campanas", { flags: allOff, permisos: MANAGER }).name).toBe("Campañas");
+    expect(() => requireModule("finanzas", { flags: allOff, permisos: MANAGER })).toThrow("NEXT_NOT_FOUND");
+  });
+  it("la bandera se evalúa antes que el permiso: apagada gana aunque se tenga todo", () => {
+    expect(() => requireModule("nicho", { flags: allOff, permisos: DUENO })).toThrow("NEXT_NOT_FOUND");
     expect(requireModule("nicho", { flags: { ...allOff, niche_radar: true }, permisos: [] }).name).toBe("Tendencias del nicho");
   });
-  it("un conjunto vacío no abre ningún módulo con permiso, y sí los que no lo piden", () => {
+  it("sin permisos no se abre ningún módulo que lo pida, y sí los que no lo piden", () => {
     for (const slug of ["resumen", "ventas", "cotizar", "campanas", "finanzas", "conexiones", "accesos"]) {
       expect(() => requireModule(slug, { flags: allOff, permisos: [] }), slug).toThrow("NEXT_NOT_FOUND");
     }

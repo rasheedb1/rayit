@@ -234,90 +234,115 @@ Sin migraciones. Sin dependencias nuevas.
 - `/cuenta` (Rasheed, CIM-3) no es un módulo y no lleva permiso: es la
   ficha de la propia persona.
 
+### 0.7 Replanteo (23-sep, tarde): ACC-1, ACC-2 y ACC-3 llegaron a main
+
+Mientras esta rama corría, entraron a `origin/main` ACC-1 (catálogo y
+`requirePermission` con la sesión como Dueño), ACC-2 (bitácora) y ACC-3
+(0034, aplicada en Supabase). Se integró `origin/main` y la historia se
+cerró sobre lo real, sin costuras:
+
+- **Fuera la matriz provisional** (`roles-provisionales.ts`, borrado) y
+  el comodín `<módulo>.*`. Los conjuntos son los de `ROLES_SISTEMA` de
+  `@mc/core`, y en la sesión, los de la base.
+- **`getSessionMembership` → `getSessionPermissions(tx)`**: el JOIN
+  `membership.role_id → role_permission` que §2 anunciaba para ACC-3.
+  La web descarta una llave que el catálogo no conozca (`aConjunto`).
+- **`permission` de `ModuleDef` es `Permiso`** y sale de
+  `PERMISO_MINIMO`; `puedeAbrir(permisos, m)` usa `can` de core.
+- **Decisión pendiente 1 resuelta**: el ACC-1 final ya deja al Contador
+  sin `campanas.campana.ver`. **La 4 también**: los nombres coinciden.
+- **`/finanzas/flujo` (FIN-6)** llamaba a `requirePermission` y, sin el
+  permiso, caía en su `error.tsx`; FIN-6 dejó escrito que ACC-5 lo
+  volvería 404. `requirePagePermission(permiso)` (en `modulo.ts`) lo
+  hace.
+- **Contador y Mánager reales** en las pruebas contra el embebido (alta
+  propia con `system_role_id`, sin tocar el seed), y en dev con un seed
+  temporal sin commitear (§1).
+- Las acciones de mis módulos ya abren con `requirePermission` (ACC-1):
+  el «terminado cuando» de las acciones se prueba de punta a punta con
+  el Contador real.
+
 ---
 
 ## 1. Lo que quedó construido
 
 | Pieza | Dónde | Qué hace |
 |---|---|---|
-| Permiso por módulo | `apps/web/content/modules.ts` | `permission` en `ModuleDef` (los seis de producto y Accesos; `MODULE_PERMISSIONS` con los nombres del borrador de ACC-1); `can(permisos, m)`; `hasPermission(permisos, permiso)` (exacto o comodín `<módulo>.*`); `productModules(flags, permisos?)`; `requireModule(slug, { flags, permisos })`, puro, compatible con `requireModule(slug, flags)` y `requireModule(slug)`. Bandera primero, permiso después, 404 en los dos casos. |
-| La sesión → permisos | `apps/web/lib/permisos/sesion.ts` | `permisosDeLaSesion()` con `cache` de React; demo → Dueño o `DEMO_USER_ID`; con llaves y sin sesión → vacío; con sesión → `getSessionMembership` en `withWorkspace`. Falla cerrado. |
-| Server Actions | `apps/web/lib/permisos/index.ts` | `requirePermission(permiso)` real, `puede(permiso)`, `SinPermisoError` (`code`, `messageEs`, `permiso`; sin ids en el mensaje). |
-| Ruta directa | `apps/web/lib/permisos/modulo.ts` + `app/(app)/<módulo>/layout.tsx` ×6 | `requireModuleAccess(slug)`; el layout de cada módulo lo llama y devuelve `children`. Con `not-found.tsx` de `(app)` y sin `loading.tsx` por encima, el 404 es de verdad. |
-| Menú | `components/shell.tsx`, `components/nav.tsx` | El Shell (servidor) resuelve los permisos y baja la lista; `SideNav`/`MobileNav` filtran con `productModules(flags, permisos)`; «Accesos» solo con `equipo.miembro.ver`. Si la base falla, el menú va sin módulos y se registra. |
-| Plan | `components/module-plan.tsx`, `app/(app)/plan/[modulo]/page.tsx` | `ModulePlan` es asíncrono y usa `requireModuleAccess`: `/accesos` y `/plan/<módulo>` respetan bandera y permiso. |
-| Consulta | `packages/db/src/queries/accesos.ts` | `getSessionMembership(tx)`: `membership.role` y `workspace.kind` con `current_workspace_id()` y `current_user_id()`; sin identidad, null. Exportada como `@mc/db/queries/accesos`. |
-| Matriz provisional | `apps/web/lib/permisos/roles-provisionales.ts` | Fase 5 por módulo con comodines, y `membership.role` → rol de fábrica (el backfill de ACC-3). **Se borra con ACC-1 y ACC-3.** |
-| Pruebas | `packages/db/test/accesos.test.ts` (7), `lib/permisos/*.test.ts` (21), `content/modules.test.ts` (+7), `components/nav.test.tsx` (+4), `app/(app)/permisos-marco.test.tsx` (7), `app/(app)/permisos-marco-db.test.tsx` (3, contra Postgres embebido con el seed) | Ver §0.4. |
+| Permiso por módulo | `apps/web/content/modules.ts` | `permission: Permiso` en `ModuleDef` (los seis de producto y Accesos, de `PERMISO_MINIMO`); `puedeAbrir(permisos, m)`; `productModules(flags, permisos?)`; `requireModule(slug, { flags, permisos })`, puro y compatible con `requireModule(slug, flags)` y `requireModule(slug)`. Bandera primero, permiso después, 404 en los dos casos. |
+| La sesión → permisos | `apps/web/lib/permisos/sesion.ts` | `permisosDeLaSesion()` con `cache` de React (reemplaza el Dueño fijo de ACC-1); demo → Dueño o los permisos reales de `DEMO_USER_ID`; con llaves y sin sesión → ninguno sin abrir la base; con sesión → `getSessionPermissions` en `withWorkspace`. Falla cerrado. |
+| Server Actions | `apps/web/lib/permisos/index.ts` | `requirePermission` (de ACC-1) ahora con permisos reales; `puede(permiso)`. |
+| Ruta directa | `apps/web/lib/permisos/modulo.ts` + `app/(app)/<módulo>/layout.tsx` ×6 | `requireModuleAccess(slug)` en el layout de cada módulo; `requirePagePermission(permiso)` para una pantalla que pide más (`/finanzas/flujo`). Con `not-found.tsx` de `(app)` y sin `loading.tsx` por encima, el 404 es de verdad. |
+| Menú | `components/shell.tsx`, `components/nav.tsx` | El Shell (servidor) resuelve los permisos y baja la lista; `SideNav`/`MobileNav` filtran con `productModules(flags, permisos)`; «Accesos» solo con `equipo.miembro.ver`. Si la base falla, menú sin módulos y un `console.error`. |
+| Plan | `components/module-plan.tsx`, `app/(app)/plan/[modulo]/page.tsx` | `ModulePlan` asíncrono con `requireModuleAccess`: `/accesos` y `/plan/<módulo>` respetan bandera y permiso. |
+| Consulta | `packages/db/src/queries/accesos.ts` | `getSessionPermissions(tx)`: llaves de `membership.role_id → role_permission` con `current_workspace_id()` y `current_user_id()`; sin identidad, ninguna. Exportada como `@mc/db/queries/accesos`. |
+| Pruebas | `packages/db/test/accesos-sesion.test.ts` (8), `lib/permisos/sesion.test.ts` (9), `lib/permisos/require-permission.test.ts` (+1), `content/modules.test.ts` (+8), `components/nav.test.tsx` (+4), `app/(app)/permisos-marco.test.tsx` (7), `app/(app)/permisos-marco-db.test.tsx` (6, contra Postgres embebido con Contador y Mánager reales), `finanzas/flujo/page.test.tsx` (404) | Ver §0.4. |
 | Documentación | `apps/web/README.md` (§Reglas del marco, §Variables), `packages/db/README.md`, `lib/permisos/README.md`, `content/backlog.ts` | — |
 
 Sin migraciones, sin dependencias nuevas, sin tocar `lib/auth/`,
 `lib/workspace/` ni `queries/identidad.ts`.
 
-## 2. La consulta que ACC-3 reemplaza
-
-Hoy (`queries/accesos.ts`):
-
-```sql
-SELECT m.role, w.kind AS workspace_kind
-FROM membership m JOIN workspace w ON w.id = m.workspace_id
-WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id()
-LIMIT 1;
-```
-
-Con ACC-3 (`membership.role_id`, `role`, `role_permission`), la misma
-función pasa a devolver las llaves y la web deja de conocer roles:
+## 2. La consulta
 
 ```sql
 -- getSessionPermissions(tx): Promise<string[]>
 SELECT rp.permission_key
 FROM membership m
 JOIN role_permission rp ON rp.role_id = m.role_id
-WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id();
+WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id()
+ORDER BY 1;
 ```
 
-`role_permission` no tiene `workspace_id`: necesita política EXISTS
-sobre `role` (patrón 0018), y `role` de sistema (`workspace_id IS NULL`)
-tiene que ser visible para `mc_app` (patrón `feature_flag`, 0020). Con
-eso, `permisosDeLaSesion()` cambia dos líneas (`new Set(await
-getSessionPermissions(tx))`) y `roles-provisionales.ts` se borra. Las
-pruebas de `permisos-marco.test.tsx` no cambian: prueban conjuntos.
+Como `mc_app`: `membership_read` (0028) deja ver la fila del workspace
+fijado, y `role_permission_ws_isolation` (0034, EXISTS sobre `role`)
+las del rol de sistema o de un rol a medida de ESTE workspace. Un rol a
+medida (ACC-9) funcionará sin cambiar nada aquí.
 
 ## 3. Lo que necesita Rasheed
 
 1. **Visto bueno a `app/(app)/layout.tsx`** (el Shell bajado al grupo
    `(app)`, CIM-3 + COT-2): **dado**. Es lo correcto —`/login`, el
    callback y `(public)` no llevan marco— y `force-dynamic` en el grupo
-   es justo lo que ACC-5 necesita: el marco depende ahora también de
-   los permisos de quien mira.
+   es justo lo que ACC-5 necesita: el marco depende también de los
+   permisos de quien mira.
 2. **Tres archivos nuevos en tus carpetas**, idénticos a los míos:
    `app/(app)/resumen/layout.tsx`, `app/(app)/ventas/layout.tsx` y
-   `app/(app)/cotizar/layout.tsx` (seis líneas: `await
-   requireModuleAccess("<slug>")` y `return children`). Sin ellos, el
-   menú esconde tu módulo pero la URL directa sigue abierta. No tocan
-   ningún `page.tsx` tuyo ni tus `loading.tsx` (quedan dentro del
-   layout, como Next los pone). Si prefieres ponerlos tú, se quitan de
-   este PR. **Ningún `page.tsx` tuyo llama a `requireModule`**, así que
-   no hay más archivos afectados; `plan/[modulo]` y `ModulePlan` (míos)
-   sí, y ya aplican el permiso.
-3. **`queries/accesos.ts`** es mío y nuevo (junto a tu
-   `queries/identidad.ts`, que no toco). Cuando apliques ACC-3, la
-   sustitución es la de §2.
-4. **`DEMO_USER_ID`** la leo en `lib/permisos/sesion.ts` solo sin
-   llaves. Lo natural es que viva junto a `DEMO_WORKSPACE_ID` en
-   `lib/workspace/current.ts` y llegue como `identity` del `Contexto`
-   en modo demo: entonces `audit()` (ACC-2) tendría actor también en
-   demo y yo borro `permisosDeDemo()`. Propuesta, no urgencia.
-5. **Un segundo usuario en el seed** para probar el marco en dev sin
-   ACC-3: propongo en `db/seed/0003` (mío) o `0002` (tuyo) una fila
-   `app_user` («Valeria Ruiz», `valeria@oncue.test`,
-   `0000000e-0000-4000-8000-000000000001`) con membresía `viewer` en
-   el espacio de Laura. Hoy la prueba lo inserta en pglite. Con ACC-3
-   el seed debería traer además un Contador y un Mánager reales (son
-   los roles del «terminado cuando» de ACC-5 y de ACC-4).
+   `app/(app)/cotizar/layout.tsx` (`await requireModuleAccess("<slug>")`
+   y `return children`). Sin ellos, el menú esconde tu módulo pero la
+   URL directa sigue abierta. No tocan ningún `page.tsx` tuyo ni tus
+   `loading.tsx` (quedan dentro del layout, como Next los pone). Si
+   prefieres ponerlos tú, se quitan de este PR. **Ningún `page.tsx`
+   tuyo llama a `requireModule`**: no hay más archivos afectados; el
+   cambio de comportamiento en tus módulos es exactamente «sin el
+   permiso mínimo, 404».
+3. **`queries/accesos.ts`** es mío y nuevo, junto a tu
+   `queries/identidad.ts`, que no toco. Si prefieres que viva en
+   `identidad.ts`, es mover una función.
+4. **`DEMO_USER_ID`** (variable de desarrollo, no secreta) la leo en
+   `lib/permisos/sesion.ts` solo sin llaves. Lo natural es que viva
+   junto a `DEMO_WORKSPACE_ID` en `lib/workspace/current.ts` y llegue
+   como `identity` del `Contexto` en modo demo: entonces `audit()`
+   (ACC-2) tendría actor también en demo y yo borro `permisosDeDemo()`.
+   Propuesta, no urgencia.
+5. **Un Contador y un Mánager en el seed**, para ver el marco en dev
+   sin preparar nada. No los metí en `db/seed/0003` (mío) porque
+   `make db.seed` también carga en Supabase y serían dos cuentas con
+   correo en la base real. Propuesta, con ids fijos:
+
+   ```sql
+   INSERT INTO app_user (id, email, name, locale) VALUES
+     ('0000000e-0000-4000-8000-0000000000c1', 'contadora@oncue.test', 'Contadora del seed', 'es-CO'),
+     ('0000000e-0000-4000-8000-0000000000c2', 'manager@oncue.test', 'Mánager del seed', 'es-CO')
+   ON CONFLICT DO NOTHING;
+   INSERT INTO membership (workspace_id, user_id, role_id) VALUES
+     ('00000002-0000-4000-8000-000000000001', '0000000e-0000-4000-8000-0000000000c1', system_role_id('creator', 'finance')),
+     ('00000002-0000-4000-8000-000000000001', '0000000e-0000-4000-8000-0000000000c2', system_role_id('creator', 'manager'))
+   ON CONFLICT DO NOTHING;
+   ```
+
+   Es lo mismo que usé en dev como seed temporal (sin commitear).
 6. **Tus Server Actions** (Ventas, Cotizar, Resumen/importar) reciben
-   `await requirePermission("…")` como primera línea cuando adoptes la
-   convención (ACC-1 deja la lista de permisos en su propuesta);
-   `requirePermission` ya es real desde esta historia. Los dos route
-   handlers de OAuth (detrás de `OAUTH_CONNECT`) no pasan por el layout:
-   les toca `conexiones.cuenta.conectar` cuando se reactive CON-3.
+   `await requirePermission("…")` cuando adoptes la convención (lista en
+   `docs/propuestas/ACC-1.md` §4); desde esta historia ya es real. Los
+   dos route handlers de OAuth (detrás de `OAUTH_CONNECT`) no pasan por
+   el layout: les toca `requirePermission("conexiones.cuenta.conectar")`
+   cuando se reactive CON-3.

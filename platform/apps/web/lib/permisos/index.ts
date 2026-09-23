@@ -1,56 +1,38 @@
 import "server-only";
-import { hasPermission } from "@/content/modules";
+import { can, SinPermisoError, type Permiso } from "@mc/core";
 import { permisosDeLaSesion } from "./sesion";
 
+export { SinPermisoError, type Permiso } from "@mc/core";
+
 /**
- * requirePermission(): la primera línea de toda Server Action.
+ * La primera línea de toda Server Action (ACC-1):
  *
- *   export async function crearFactura(prev, formData) {
+ *   export async function crearFactura(_prev, formData) {
  *     await requirePermission("finanzas.factura.crear");
  *     …
  *
- * Vive en lib/permisos/ y no en lib/auth/ (de Rasheed) por la decisión
- * de ACC-1; el README de esta carpeta lo explica. Desde ACC-5 lee los
- * permisos REALES de la sesión (permisosDeLaSesion) y ya no resuelve a
- * nadie como Dueño: sin el permiso lanza SinPermisoError, que en una
- * página o layout se convierte en 404 (requireModuleAccess) y en una
- * Server Action cae en la frontera del segmento como cualquier error
- * (ACC-1, decisión 8; convertirlo en ActionState es una línea por
- * módulo cuando se decida). Es un caso de borde: el marco esconde antes
- * lo que no se puede abrir.
+ * Pregunta por un permiso del catálogo de @mc/core, nunca por un rol
+ * (backlog §7, decisión 7), y lanza SinPermisoError —con el mensaje en
+ * español— si la sesión no lo tiene. Desde ACC-5 los permisos son los
+ * REALES de la membresía en el workspace actual (./sesion.ts). Quién
+ * convierte el error en qué:
  *
- * `permiso` es `string` hasta que ACC-1 esté en main; entonces pasa a
- * ser `Permiso` de @mc/core y una llave fuera del catálogo no compila.
+ *   - páginas y layouts: notFound(), por requireModuleAccess (./modulo.ts):
+ *     404 y no 403, para no confirmar que el módulo existe.
+ *   - Server Actions: el error cae en la frontera del segmento
+ *     (error.tsx), como cualquier otro no previsto. Es un caso de
+ *     borde: el marco esconde antes lo que no se puede abrir.
+ *
+ * Vive aquí y no en lib/auth/ (de Rasheed, propuesta ACC fase 6) para no
+ * tocar su carpeta; moverlo es cambiar una importación (README.md). La
+ * convención la hace cumplir convencion.test.ts.
  */
-export async function requirePermission(permiso: string): Promise<void> {
+export async function requirePermission(permiso: Permiso): Promise<void> {
   const permisos = await permisosDeLaSesion();
-  if (!hasPermission(permisos, permiso)) throw new SinPermisoError(permiso);
+  if (!can(permisos, permiso)) throw new SinPermisoError(permiso);
 }
 
 /** ¿La sesión actual tiene este permiso? Para decidir qué pintar sin lanzar. */
-export async function puede(permiso: string): Promise<boolean> {
-  return hasPermission(await permisosDeLaSesion(), permiso);
+export async function puede(permiso: Permiso): Promise<boolean> {
+  return can(await permisosDeLaSesion(), permiso);
 }
-
-/**
- * La sesión no tiene el permiso. Mismo patrón que CampaignError (`code`
- * + `messageEs`); con ACC-1 en main se reexporta la de @mc/core, que
- * además nombra la acción («No tienes permiso para crear facturas.»).
- * El mensaje no lleva ni el usuario ni el workspace: va a pantallas y
- * logs.
- */
-export class SinPermisoError extends Error {
-  readonly code = "SinPermisoError";
-  readonly permiso: string;
-  constructor(permiso: string) {
-    super("No tienes permiso para hacer esto en este espacio.");
-    this.name = "SinPermisoError";
-    this.permiso = permiso;
-  }
-  /** El mismo texto que `message`, con nombre explícito para las pantallas. */
-  get messageEs(): string {
-    return this.message;
-  }
-}
-
-export { permisosDeLaSesion } from "./sesion";

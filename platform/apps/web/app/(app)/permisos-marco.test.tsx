@@ -7,8 +7,9 @@
  */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
+import { permisosDeRol } from "@mc/core";
 
-const estado = vi.hoisted(() => ({ permisos: new Set<string>() }));
+const estado = vi.hoisted(() => ({ permisos: new Set<string>() as ReadonlySet<string> }));
 vi.mock("@/lib/permisos/sesion", () => ({ permisosDeLaSesion: async () => estado.permisos }));
 
 import CampanasLayout from "./campanas/layout";
@@ -55,17 +56,17 @@ beforeEach(() => {
 
 describe("los layouts de módulo con la sesión puesta", () => {
   test("Contador: /campanas responde 404 y /finanzas pasa; el resto 404", async () => {
-    estado.permisos = new Set(["finanzas.*"]);
+    estado.permisos = permisosDeRol("creator", "finance");
     expect(await respuestas()).toEqual({ resumen: "404", ventas: "404", cotizar: "404", campanas: "404", finanzas: "pasa", conexiones: "404" });
   });
 
-  test("Mánager: /campanas pasa y /finanzas responde 404 (su mínimo es finanzas.factura.ver)", async () => {
-    estado.permisos = new Set(["resumen.panel.ver", "ventas.*", "cotizar.*", "campanas.*", "conexiones.cuenta.ver", "equipo.miembro.ver"]);
+  test("Mánager: /campanas pasa y /finanzas responde 404 (el mínimo es finanzas.factura.ver y el Mánager no lo tiene: decisión E)", async () => {
+    estado.permisos = permisosDeRol("creator", "manager");
     expect(await respuestas()).toEqual({ resumen: "pasa", ventas: "pasa", cotizar: "pasa", campanas: "pasa", finanzas: "404", conexiones: "pasa" });
   });
 
   test("Dueño: todo pasa; nadie: todo 404", async () => {
-    estado.permisos = new Set(["resumen.*", "ventas.*", "cotizar.*", "campanas.*", "finanzas.*", "conexiones.*", "equipo.*"]);
+    estado.permisos = permisosDeRol("creator", "owner");
     expect(Object.values(await respuestas()).every((r) => r === "pasa")).toBe(true);
     estado.permisos = new Set();
     expect(Object.values(await respuestas()).every((r) => r === "404")).toBe(true);
@@ -93,7 +94,7 @@ describe("las herramientas del equipo con permiso", () => {
   });
 
   test("la bandera apagada gana: el plan de un módulo de fase 2 es 404 aunque se tenga todo", async () => {
-    estado.permisos = new Set(["resumen.*", "ventas.*", "cotizar.*", "campanas.*", "finanzas.*", "conexiones.*", "equipo.*", "nicho.*"]);
+    estado.permisos = permisosDeRol("creator", "owner");
     expect(await digestDe(() => ModulePlan({ slug: "nicho" }))).toBe(NO_ENCONTRADO);
   });
 });

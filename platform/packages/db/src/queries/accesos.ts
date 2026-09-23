@@ -6,49 +6,38 @@
  * eso va en un archivo aparte.
  *
  * Una sola lectura por petición: `apps/web/lib/permisos/sesion.ts` la
- * memoriza con `cache` de React y el marco, la página y las Server
- * Actions preguntan una vez entre todos.
- *
- * COSTURA CON ACC-3. Hoy la base solo tiene `membership.role` (text con
- * CHECK, 0001) y ningún catálogo de permisos; el conjunto de permisos
- * de un rol lo pone la web (matriz provisional de ACC-5, que ACC-1
- * reemplaza por `permisosDeRol` de @mc/core). Cuando ACC-3 cree
- * `role`, `role_permission` y `membership.role_id`, esta función se
- * reemplaza por `getSessionPermissions(tx)` con el JOIN escrito en
- * docs/propuestas/ACC-5.md §2, y la web deja de conocer roles.
+ * memoriza con `cache` de React y el marco, el layout del módulo y las
+ * Server Actions preguntan una vez entre todos.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { WorkspaceTx } from '../client.ts';
-import { membership, workspace } from '../schema/index.ts';
-
-export type MembershipRole = (typeof membership.$inferSelect)['role'];
-export type WorkspaceKind = (typeof workspace.$inferSelect)['kind'];
-
-/** La membresía de quien abrió la transacción, en el workspace fijado. */
-export interface SessionMembership {
-  /** El valor de `membership.role` (0001): owner, admin, member, viewer o client. */
-  role: MembershipRole;
-  /** Tipo del workspace: la matriz de roles de fábrica es distinta para creador y agencia. */
-  workspaceKind: WorkspaceKind;
-}
+import { membership, rolePermission } from '../schema/index.ts';
 
 /**
- * Mi membresía en el workspace actual, o null si no la hay.
+ * Las llaves de permiso de quien abrió la transacción, en el workspace
+ * fijado: `membership.role_id → role_permission` (0034, ACC-3). Sin
+ * membresía, ninguna.
  *
  * Los dos ids salen de la transacción y no de parámetros:
  * `current_workspace_id()` lo fijó withWorkspace y `current_user_id()`
- * la identidad de la sesión (CIM-3). Sin `app.user_id` —modo demo,
- * una transacción sin identidad— la condición no casa con nada y la
- * respuesta es null: nadie recibe permisos por omisión. La política
- * `membership_read` (0028) deja ver la fila porque es del workspace
- * fijado, y `workspace_read_member` la del espacio.
+ * la identidad de la sesión (CIM-3). Sin `app.user_id` —modo demo, una
+ * transacción sin identidad— la condición no casa con nada: nadie
+ * recibe permisos por omisión.
+ *
+ * La RLS decide lo demás: `membership_read` (0028) deja ver la fila del
+ * workspace fijado y `role_permission_ws_isolation` (0034, EXISTS sobre
+ * `role`) las filas de un rol de sistema o a medida de ESTE workspace.
+ * El rol de otro workspace no se ve aunque alguien lo apuntara.
+ *
+ * Devuelve las llaves tal cual están en la base; convertirlas en
+ * `Permiso` del catálogo es de quien llama (`isPermiso` de @mc/core).
  */
-export async function getSessionMembership(tx: WorkspaceTx): Promise<SessionMembership | null> {
-  const [row] = await tx.db
-    .select({ role: membership.role, workspaceKind: workspace.kind })
+export async function getSessionPermissions(tx: WorkspaceTx): Promise<string[]> {
+  const rows = await tx.db
+    .select({ key: rolePermission.permissionKey })
     .from(membership)
-    .innerJoin(workspace, eq(workspace.id, membership.workspaceId))
+    .innerJoin(rolePermission, eq(rolePermission.roleId, membership.roleId))
     .where(and(eq(membership.workspaceId, sql`current_workspace_id()`), eq(membership.userId, sql`current_user_id()`)))
-    .limit(1);
-  return row ?? null;
+    .orderBy(asc(rolePermission.permissionKey));
+  return rows.map((r) => r.key);
 }

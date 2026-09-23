@@ -1,20 +1,21 @@
 // @vitest-environment node
 /**
  * permisosDeLaSesion(): las tres ramas, sin base. La consulta real se
- * prueba en packages/db/test/accesos.test.ts y el camino completo contra
- * Postgres embebido en app/(app)/permisos-marco-db.test.tsx.
+ * prueba en packages/db/test/accesos-sesion.test.ts y el camino completo
+ * contra Postgres embebido en app/(app)/permisos-marco-db.test.tsx.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { permisosDeRol } from "@mc/core";
 
 const estado = vi.hoisted(() => ({
   configurado: false,
   sesion: null as null | { email: string },
-  membresia: null as null | { role: string; workspaceKind: string },
+  llaves: [] as string[],
   abiertas: [] as string[],
   fallaLaBase: false,
 }));
 
-// Con un entorno explícito (usuarioDeDemo en las pruebas) decide el de verdad; sin él, el del escenario.
+// Con un entorno explícito (usuarioDeDemo) decide el de verdad; sin él, el del escenario.
 vi.mock("@/lib/auth/config", async (original) => {
   const real = await original<typeof import("@/lib/auth/config")>();
   return { isAuthConfigured: (env?: Parameters<typeof real.isAuthConfigured>[0]) => (env ? real.isAuthConfigured(env) : estado.configurado) };
@@ -22,9 +23,9 @@ vi.mock("@/lib/auth/config", async (original) => {
 vi.mock("@/lib/auth/session", () => ({ getSesion: async () => estado.sesion }));
 vi.mock("@/lib/workspace/current", () => ({ getCurrentContext: async () => ({ workspaceId: "demo" }) }));
 vi.mock("@mc/db/queries/accesos", () => ({
-  getSessionMembership: async () => {
+  getSessionPermissions: async () => {
     if (estado.fallaLaBase) throw new Error("la base no contestó");
-    return estado.membresia;
+    return estado.llaves;
   },
 }));
 vi.mock("@/lib/db", () => ({
@@ -40,16 +41,17 @@ vi.mock("@/lib/db/cliente", () => ({
   },
 }));
 
-import { permisosDeLaSesion, usuarioDeDemo } from "./sesion";
-import { PERMISOS_DE_DUENO } from "./roles-provisionales";
+import { aConjunto, permisosDeLaSesion, usuarioDeDemo } from "./sesion";
 
 const LAURA = "00000002-0000-4000-8000-000000000002";
+const DUENO = permisosDeRol("creator", "owner");
+const CONTADOR = [...permisosDeRol("creator", "finance")];
 const demoUserId = process.env.DEMO_USER_ID;
 
 beforeEach(() => {
   estado.configurado = false;
   estado.sesion = null;
-  estado.membresia = null;
+  estado.llaves = [];
   estado.abiertas = [];
   estado.fallaLaBase = false;
   delete process.env.DEMO_USER_ID;
@@ -62,16 +64,16 @@ afterEach(() => {
 
 describe("sin llaves (modo demo)", () => {
   test("sin DEMO_USER_ID es el Dueño y no abre ninguna transacción", async () => {
-    expect(await permisosDeLaSesion()).toBe(PERMISOS_DE_DUENO);
+    expect(await permisosDeLaSesion()).toBe(DUENO);
     expect(estado.abiertas).toEqual([]);
   });
 
-  test("con DEMO_USER_ID lee la membresía real de esa persona en el workspace de demo", async () => {
+  test("con DEMO_USER_ID lee los permisos reales de esa persona en el workspace de demo", async () => {
     process.env.DEMO_USER_ID = LAURA;
-    estado.membresia = { role: "viewer", workspaceKind: "creator" };
+    estado.llaves = CONTADOR;
     const permisos = await permisosDeLaSesion();
-    expect(permisos.has("campanas.campana.ver")).toBe(true);
-    expect(permisos.has("finanzas.factura.ver")).toBe(false);
+    expect(permisos.has("finanzas.factura.ver")).toBe(true);
+    expect(permisos.has("campanas.campana.ver")).toBe(false);
     expect(estado.abiertas).toEqual([`demo:demo:${LAURA}`]);
   });
 
@@ -84,23 +86,25 @@ describe("sin llaves (modo demo)", () => {
     expect(() => usuarioDeDemo({ DEMO_USER_ID: "laura" })).toThrow(/UUID/);
     expect(usuarioDeDemo({ DEMO_USER_ID: ` ${LAURA} ` })).toBe(LAURA);
     expect(usuarioDeDemo({})).toBeNull();
-    expect(usuarioDeDemo({ DEMO_USER_ID: LAURA, NEXT_PUBLIC_SUPABASE_URL: "https://x.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "k" })).toBeNull();
+    expect(
+      usuarioDeDemo({ DEMO_USER_ID: LAURA, NEXT_PUBLIC_SUPABASE_URL: "https://x.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "k" }),
+    ).toBeNull();
   });
 });
 
 describe("con llaves", () => {
-  test("sin sesión: nada, sin abrir la base (el marco de /kit)", async () => {
+  test("sin sesión: nada, sin abrir la base (el marco de /kit); DEMO_USER_ID no existe", async () => {
     estado.configurado = true;
-    process.env.DEMO_USER_ID = LAURA; // con llaves la variable no existe
+    process.env.DEMO_USER_ID = LAURA;
     expect((await permisosDeLaSesion()).size).toBe(0);
     expect(estado.abiertas).toEqual([]);
   });
 
-  test("con sesión: el conjunto del rol de mi membresía en el workspace actual, en UNA transacción", async () => {
+  test("con sesión: los permisos de mi membresía en el workspace actual, en UNA transacción", async () => {
     estado.configurado = true;
-    estado.sesion = { email: "laura@ejemplo.test" };
-    estado.membresia = { role: "owner", workspaceKind: "creator" };
-    expect(await permisosDeLaSesion()).toBe(PERMISOS_DE_DUENO);
+    estado.sesion = { email: "contadora@ejemplo.test" };
+    estado.llaves = CONTADOR;
+    expect([...(await permisosDeLaSesion())].sort()).toEqual([...CONTADOR].sort());
     expect(estado.abiertas).toEqual(["sesion"]);
   });
 
@@ -115,5 +119,14 @@ describe("con llaves", () => {
     estado.sesion = { email: "laura@ejemplo.test" };
     estado.fallaLaBase = true;
     await expect(permisosDeLaSesion()).rejects.toThrow(/no contestó/);
+  });
+});
+
+describe("aConjunto", () => {
+  test("una llave que el catálogo no conoce se descarta: nunca da más acceso", () => {
+    const p = aConjunto(["finanzas.factura.ver", "finanzas.todo.borrar", "cualquier-cosa"]);
+    expect([...p]).toEqual(["finanzas.factura.ver"]);
+    expect(Object.isFrozen(p)).toBe(true);
+    expect(aConjunto([]).size).toBe(0);
   });
 });

@@ -1,4 +1,6 @@
 import "server-only";
+import { notFound } from "next/navigation";
+import { can, type Permiso } from "@mc/core";
 import { requireModule, type ModuleDef } from "@/content/modules";
 import { permisosDeLaSesion } from "./sesion";
 
@@ -20,4 +22,15 @@ import { permisosDeLaSesion } from "./sesion";
  */
 export async function requireModuleAccess(slug: string): Promise<ModuleDef> {
   return requireModule(slug, { permisos: await permisosDeLaSesion() });
+}
+
+/**
+ * La puerta de UNA pantalla que pide más que el mínimo de su módulo
+ * (/finanzas/flujo pide finanzas.flujo.ver): sin el permiso, 404, igual
+ * que el módulo. Es requirePermission para páginas: en una Server
+ * Action se usa aquella, que lanza SinPermisoError; en una página el
+ * error se traduce aquí, antes de leer nada.
+ */
+export async function requirePagePermission(permiso: Permiso): Promise<void> {
+  if (!can(await permisosDeLaSesion(), permiso)) notFound();
 }

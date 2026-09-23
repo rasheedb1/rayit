@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { can as tienePermiso, PERMISO_MINIMO, type Permiso } from "@mc/core";
 import type { OwnerId } from "./team";
 import { flags as defaultFlags, isFlagKey, type FlagKey, type Flags } from "./flags";
 
@@ -23,63 +24,34 @@ export interface ModuleDef {
   /** Bandera que lo enciende. Sin bandera, el módulo siempre está encendido. */
   flag?: FlagKey;
   /**
-   * Permiso mínimo para abrirlo (ACC-5): el `.ver` principal del módulo.
-   * Una bandera dice si el módulo EXISTE; un permiso, si ESTA persona
-   * entra; se evalúan en ese orden (requireModule). Sin permiso, el
-   * módulo se abre a cualquier sesión, como sin bandera siempre está
-   * encendido: hoy solo las herramientas del equipo (cimientos, kit) y
-   * los de fase 2, que están apagados y reciben el suyo al encenderse.
+   * Permiso mínimo para abrirlo (ACC-5): el `.ver` principal del módulo,
+   * de `PERMISO_MINIMO` de @mc/core. Una bandera dice si el módulo EXISTE;
+   * un permiso, si ESTA persona entra; se evalúan en ese orden
+   * (requireModule). Sin permiso, el módulo se abre a cualquier sesión,
+   * como sin bandera siempre está encendido: hoy las herramientas del
+   * equipo (cimientos, kit) y los de fase 2, que están apagados y reciben
+   * el suyo al encenderse.
    */
-  permission?: ModulePermission;
+  permission?: Permiso;
 }
-
-/**
- * Los permisos mínimos por módulo, con los nombres del catálogo de
- * ACC-1 (`PERMISO_MINIMO` de @mc/core). Cuando ACC-1 esté en main este
- * tipo pasa a ser `Permiso` de core y esta lista se borra: si un
- * nombre difiere, `permission` deja de compilar y es una línea.
- */
-export const MODULE_PERMISSIONS = [
-  "resumen.panel.ver",
-  "ventas.negocio.ver",
-  "cotizar.cotizacion.ver",
-  "campanas.campana.ver",
-  "finanzas.factura.ver",
-  "conexiones.cuenta.ver",
-  "equipo.miembro.ver",
-] as const;
-
-export type ModulePermission = (typeof MODULE_PERMISSIONS)[number];
 
 /**
  * Los permisos de una sesión, como los entrega lib/permisos (conjunto)
  * o como llegan a la navegación (lista: las props de un componente
  * cliente viajan serializadas).
  */
-export type Permisos = ReadonlySet<string> | readonly string[];
+export type Permisos = ReadonlySet<Permiso> | readonly Permiso[];
 
-/**
- * ¿Este conjunto de permisos abre este módulo? Un módulo sin permiso
- * sí. Hasta ACC-1 un conjunto puede traer `<módulo>.*` (la matriz
- * provisional de lib/permisos escribe así el «Todo» de la fase 5);
- * con el catálogo de ACC-1 los conjuntos son exactos y el comodín
- * simplemente no aparece.
- */
-export function can(permisos: Permisos, m: ModuleDef): boolean {
+/** ¿Estos permisos abren este módulo? Un módulo sin permiso, sí. */
+export function puedeAbrir(permisos: Permisos, m: ModuleDef): boolean {
   if (m.permission === undefined) return true;
-  return hasPermission(permisos, m.permission);
-}
-
-/** `permiso` está en el conjunto, exacto o por el comodín de su módulo. */
-export function hasPermission(permisos: Permisos, permiso: string): boolean {
-  const set = permisos instanceof Set ? permisos : new Set(permisos);
-  return set.has(permiso) || set.has(`${permiso.split(".")[0]}.*`);
+  return tienePermiso(permisos instanceof Set ? permisos : new Set(permisos), m.permission);
 }
 
 export const MODULES: readonly ModuleDef[] = [
   {
     slug: "resumen",
-    permission: "resumen.panel.ver",
+    permission: PERMISO_MINIMO.resumen,
     name: "Resumen",
     group: "producto",
     phase: 1,
@@ -92,7 +64,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "ventas",
-    permission: "ventas.negocio.ver",
+    permission: PERMISO_MINIMO.ventas,
     name: "Ventas",
     group: "producto",
     phase: 1,
@@ -105,7 +77,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "cotizar",
-    permission: "cotizar.cotizacion.ver",
+    permission: PERMISO_MINIMO.cotizar,
     name: "Cotizar",
     group: "producto",
     phase: 1,
@@ -118,7 +90,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "campanas",
-    permission: "campanas.campana.ver",
+    permission: PERMISO_MINIMO.campanas,
     name: "Campañas",
     group: "producto",
     phase: 1,
@@ -131,7 +103,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "finanzas",
-    permission: "finanzas.factura.ver",
+    permission: PERMISO_MINIMO.finanzas,
     name: "Finanzas",
     group: "producto",
     phase: 1,
@@ -149,7 +121,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "conexiones",
-    permission: "conexiones.cuenta.ver",
+    permission: PERMISO_MINIMO.conexiones,
     name: "Conexiones",
     group: "producto",
     phase: 1,
@@ -179,7 +151,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "accesos",
-    permission: "equipo.miembro.ver",
+    permission: PERMISO_MINIMO.equipo,
     name: "Accesos",
     group: "construccion",
     phase: 1,
@@ -226,7 +198,7 @@ export function isEnabled(m: ModuleDef, flags: Flags = defaultFlags): boolean {
  * del plan de construcción.
  */
 export function productModules(flags: Flags = defaultFlags, permisos?: Permisos): ModuleDef[] {
-  return MODULES.filter((m) => m.group === "producto" && isEnabled(m, flags) && (permisos === undefined || can(permisos, m)));
+  return MODULES.filter((m) => m.group === "producto" && isEnabled(m, flags) && (permisos === undefined || puedeAbrir(permisos, m)));
 }
 
 export const PRODUCT_MODULES = productModules();
@@ -260,7 +232,7 @@ export function requireModule(slug: string, opciones: Flags | RequireModuleOptio
   const { flags = defaultFlags, permisos } = esFlags(opciones) ? { flags: opciones } : opciones;
   const m = moduleBySlug(slug);
   if (!m || !isEnabled(m, flags)) notFound();
-  if (permisos !== undefined && !can(permisos, m)) notFound();
+  if (permisos !== undefined && !puedeAbrir(permisos, m)) notFound();
   return m;
 }
 

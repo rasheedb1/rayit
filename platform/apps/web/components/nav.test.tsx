@@ -1,15 +1,16 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { permisosDeRol } from "@mc/core";
 import { flags, type Flags } from "@/content/flags";
 import { MobileNav, SideNav } from "./nav";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/campanas" }));
 
 const allOff: Flags = { ...flags, video_lab: false, agency_workspace: false, content_metrics: false, niche_radar: false, ideas_scripts: false, kit: false };
-/** El Dueño: todo (comodines por módulo, como la matriz provisional de lib/permisos). */
-const todo = ["resumen.*", "ventas.*", "cotizar.*", "campanas.*", "finanzas.*", "conexiones.*", "equipo.*"];
+/** El Dueño de creador: todo. */
+const todo = [...permisosDeRol("creator", "owner")];
 /** El Contador: solo Finanzas (ACC-5, «terminado cuando»). */
-const contador = ["finanzas.*"];
+const contador = [...permisosDeRol("creator", "finance")];
 
 function productLinks() {
   const nav = screen.getByRole("navigation", { name: "Principal" });
@@ -57,17 +58,17 @@ describe("SideNav con permisos (ACC-5)", () => {
     expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/");
   });
 
-  it("Accesos solo con equipo.miembro.ver; Plan, Cimientos y Reglas siempre", () => {
+  it("Accesos solo con equipo.miembro.ver (el Mánager lo tiene, el Contador no); Plan, Cimientos y Reglas siempre", () => {
     const { unmount } = render(<SideNav flags={allOff} permisos={contador} />);
     expect(screen.queryByRole("link", { name: "Accesos" })).not.toBeInTheDocument();
     for (const name of ["Plan", "Cimientos", "Reglas"]) expect(screen.getByRole("link", { name })).toBeInTheDocument();
     unmount();
-    render(<SideNav flags={allOff} permisos={["equipo.miembro.ver"]} />);
+    render(<SideNav flags={allOff} permisos={[...permisosDeRol("creator", "manager")]} />);
     expect(screen.getByRole("link", { name: "Accesos" })).toHaveAttribute("href", "/accesos");
   });
 
   it("una bandera apagada gana aunque el permiso esté", () => {
-    render(<SideNav flags={allOff} permisos={[...todo, "nicho.*"]} />);
+    render(<SideNav flags={allOff} permisos={todo} />);
     expect(screen.queryByRole("link", { name: /Tendencias del nicho/ })).not.toBeInTheDocument();
   });
 });

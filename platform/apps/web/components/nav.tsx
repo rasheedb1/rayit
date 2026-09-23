@@ -17,7 +17,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { flags as defaultFlags, type Flags } from "@/content/flags";
-import { can, isEnabled, moduleBySlug, productModules, type Permisos } from "@/content/modules";
+import type { Permiso } from "@mc/core";
+import { isEnabled, moduleBySlug, productModules, puedeAbrir, type Permisos } from "@/content/modules";
 import { OwnerAvatar } from "./owner";
 
 const ICONS: Partial<Record<string, LucideIcon>> = {
@@ -43,7 +44,7 @@ function teamTools(flags: Flags, permisos: Permisos): NavItem[] {
     { href: "/cimientos", label: "Cimientos", icon: Layers },
   ];
   const accesos = moduleBySlug("accesos");
-  if (accesos && can(permisos, accesos)) items.push({ href: "/accesos", label: accesos.name, icon: KeyRound });
+  if (accesos && puedeAbrir(permisos, accesos)) items.push({ href: "/accesos", label: accesos.name, icon: KeyRound });
   items.push({ href: "/reglas", label: "Reglas", icon: BookOpen });
   const kit = moduleBySlug("kit");
   if (kit && isEnabled(kit, flags)) items.push({ href: "/kit", label: kit.name, icon: Palette });
@@ -58,7 +59,7 @@ function teamTools(flags: Flags, permisos: Permisos): NavItem[] {
  */
 interface NavProps {
   flags?: Flags;
-  permisos: readonly string[];
+  permisos: readonly Permiso[];
 }
 
 function isActive(pathname: string, href: string) {

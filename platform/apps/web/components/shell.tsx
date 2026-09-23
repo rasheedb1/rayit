@@ -6,6 +6,7 @@ import { ThemeToggle } from "./theme-toggle";
 // components/workspace-switcher.tsx.
 import { WorkspaceSwitcher } from "./workspace-switcher";
 import { Marca } from "./marca";
+import type { Permiso } from "@mc/core";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 
 // CIM-3: la marca es una sola, la de components/marca.tsx (también la usan /login y /legal).
@@ -22,7 +23,7 @@ const Brand = () => <Marca enMarco />;
  * consulta (mismo criterio que el selector de espacio). Nunca se
  * concede «por si acaso».
  */
-async function permisosDelMarco(): Promise<readonly string[]> {
+async function permisosDelMarco(): Promise<readonly Permiso[]> {
   try {
     return [...(await permisosDeLaSesion())];
   } catch (err) {

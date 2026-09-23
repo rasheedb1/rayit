@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -57,8 +57,21 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
+app/(app)/finanzas/           Finanzas: lista, factura nueva, detalle y los cobros
+                              de cada factura (registrar pago, reserva de impuestos).
                               index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
+                              calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
+                              (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
+                              qué falta y «Recalcular» si la base lo permite) y
+                              «Lo que aportó la marca» (CAM-4): aporte.tsx
+                              (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
+                              de ventas diarias), _lib/messages.ts (los textos).
+                              «Seguidores de la marca» (CAM-3): [id]/seguidores.tsx, su
+                              modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
+                              _lib/marca-service.ts, con el mismo recordBrandSnapshot que
+                              el job brand.snapshot.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
@@ -381,18 +394,21 @@ membership.
   ruta no existe.
 - **Banderas y permisos (ACC-5).** Una bandera dice si el módulo
   **existe**; un permiso, si **esta persona** entra. Cada módulo declara
-  en `content/modules.ts` su permiso mínimo (`permission`, el `.ver`
-  principal) y el `layout.tsx` de su carpeta hace
+  en `content/modules.ts` su permiso mínimo (`permission`, de
+  `PERMISO_MINIMO` de `@mc/core`) y el `layout.tsx` de su carpeta hace
   `await requireModuleAccess("<slug>")` (`lib/permisos/modulo.ts`): se
   evalúa primero la bandera y después el permiso, y en los dos casos la
   ruta responde **404**, nunca 403 (un 403 confirmaría que el módulo
   existe). El menú esconde lo que no se puede abrir: el `Shell` resuelve
   `permisosDeLaSesion()` en servidor y se lo pasa a la navegación. Los
   permisos salen de la membresía en el workspace actual
-  (`@mc/db/queries/accesos`), una vez por petición; sin sesión, ninguno;
-  sin llaves (modo demo), el Dueño —o la membresía real de
-  `DEMO_USER_ID`, que es como se prueba en dev que el marco esconde y
-  cierra—. Toda Server Action abre con `await requirePermission("…")`
-  (`lib/permisos`). El detalle está en `lib/permisos/README.md`.
+  (`membership.role_id → role_permission`, `@mc/db/queries/accesos`),
+  una vez por petición; sin sesión, ninguno; sin llaves (modo demo), el
+  Dueño —o los permisos reales de `DEMO_USER_ID`, que es como se prueba
+  en dev que el marco esconde y cierra—. Una pantalla que pide más que
+  el mínimo de su módulo (`/finanzas/flujo`) llama a
+  `requirePagePermission("…")`, también 404. Toda Server Action abre con
+  `await requirePermission("…")` (`lib/permisos`). El detalle está en
+  `lib/permisos/README.md`.
 - Nada aquí hace aritmética de métricas. Cuando lleguen los datos, los
   números derivados salen de las vistas de la base.

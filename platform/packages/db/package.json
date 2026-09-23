@@ -31,6 +31,7 @@
     "introspect": "node scripts/introspect.mjs"
   },
   "dependencies": {
+    "@mc/connectors": "workspace:*",
     "@mc/core": "workspace:*",
     "drizzle-orm": "^0.45.3",
     "pg": "^8.13.1"

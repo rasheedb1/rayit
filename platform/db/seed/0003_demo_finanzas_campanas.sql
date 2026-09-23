@@ -70,8 +70,8 @@ INSERT INTO app_user (id, email, name, locale)
 VALUES ('00000002-0000-4000-8000-000000000002', 'laura@ejemplo.com', 'Laura Méndez', 'es-CO')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO membership (workspace_id, user_id, role)
-VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', 'owner')
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-000000000002', system_role_id('creator', 'owner'))
 ON CONFLICT DO NOTHING;
 
 INSERT INTO creator_profile (id, workspace_id, user_id, display_name, handle, bio, country, languages, niche_slugs)
@@ -247,7 +247,9 @@ FROM (
     FROM generate_series(0, 59) AS d
   ) g
 ) a
-ON CONFLICT (company_id, platform_id, day) DO NOTHING;
+-- Sin objetivo: vale con la unicidad de 0008 (empresa, red, día) y con la
+-- de 0035 (campaña, red, día, con o sin cifra).
+ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
