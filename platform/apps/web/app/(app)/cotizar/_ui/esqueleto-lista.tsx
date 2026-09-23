@@ -1,9 +1,10 @@
 /**
- * El esqueleto de una lista de Cotizar (cotizaciones, media kits y el
- * formulario de una nueva): la cabecera y unas filas del alto de la
- * tabla. Cada `loading.tsx` que lo usa vive en un segmento SIN detalles
- * debajo (un grupo de rutas o una hoja): un esqueleto por encima de
- * /cotizaciones/<id> mandaría el 200 antes del notFound().
+ * El esqueleto de una pantalla de Cotizar (cotizaciones, media kits, el
+ * formulario de una nueva y los detalles): la cabecera y unas filas del
+ * alto de la tabla. Cada `loading.tsx` que lo usa vive en un segmento
+ * SIN detalles debajo (un grupo de rutas o una hoja) y, en un detalle,
+ * junto al layout.tsx que comprueba el id: un esqueleto por encima de
+ * esa comprobación mandaría el 200 antes del notFound().
  */
 export function EsqueletoLista({ label, filas = 5 }: { label: string; filas?: number }) {
   return (

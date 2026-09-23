@@ -26,7 +26,8 @@ import VentasPage from "./ventas/(inicio)/page";
 import EmpresasError from "./ventas/empresas/error";
 import EmpresasPage from "./ventas/empresas/(lista)/page";
 import FichaError from "./ventas/empresas/[id]/error";
-import EmpresaPage from "./ventas/empresas/[id]/page";
+import EmpresaPage from "./ventas/empresas/[id]/(ficha)/page";
+import EmpresaEnMiCrm from "./ventas/empresas/[id]/(ficha)/layout";
 import CampanasPage from "./campanas/page";
 import ConexionesPage from "./conexiones/page";
 import { MESSAGES } from "./_lib/messages";
@@ -92,6 +93,14 @@ describe("con un DEMO_WORKSPACE_ID que no existe, la frontera dice la verdad", (
     {
       nombre: "Ventas · ficha de empresa",
       pantalla: () => EmpresaPage({ params: Promise.resolve({ id: "0000beef-0000-4000-8000-000000000001" }) }),
+      Frontera: FichaError,
+      titulo: VENTAS.errorFicha.title,
+    },
+    // La comprobación de la ficha vive en su layout (pulido r7): lo que
+    // lanza también cae en la frontera de la ficha, que está por encima.
+    {
+      nombre: "Ventas · ficha de empresa (su layout)",
+      pantalla: () => EmpresaEnMiCrm({ children: null, params: Promise.resolve({ id: "0000beef-0000-4000-8000-000000000001" }) }),
       Frontera: FichaError,
       titulo: VENTAS.errorFicha.title,
     },

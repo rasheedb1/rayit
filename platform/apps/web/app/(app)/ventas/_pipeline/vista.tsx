@@ -54,6 +54,7 @@ export function PipelineView({
     stageLabel: d.stageLabel,
     daysInStage: d.daysInStage,
     amountText: d.amount ? f.money(d.amount, d.currency, { mode: "short" }) : null,
+    currency: d.currency,
     // Un negocio cerrado no tiene siguiente acción aunque la fila la
     // conserve: «Enviar pitch» en un ganado solo confunde.
     nextAction: d.isWon || d.isLost ? null : d.nextAction,
@@ -71,6 +72,7 @@ export function PipelineView({
     countText: f.int(s.dealCount),
     amountText: f.money(s.amount, undefined, { mode: "short" }),
     isLost: s.isLost,
+    isWon: s.isWon,
   }));
 
   return (

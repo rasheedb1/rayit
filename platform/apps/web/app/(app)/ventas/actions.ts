@@ -56,6 +56,11 @@ export interface VentasState extends ActionState {
   lineWarnings?: CsvLineError[];
   /** Cambia con cada envío que sale bien: el formulario lo usa para vaciarse. */
   stamp?: number;
+  /**
+   * «Nueva empresa»: ya hay una con ese nombre en el CRM. No es un error:
+   * el formulario la enlaza y ofrece «Crear igual» (pulido r7).
+   */
+  sameName?: { id: string; name: string };
 }
 
 /** Tamaño máximo de un CSV. Más que eso no es una lista de marcas para revisar a mano. */
@@ -215,19 +220,25 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 
   let created: number;
   let duplicated: number;
+  let createdRows: ReadonlySet<number>;
   try {
     const res = await withWorkspace((tx) => importSignals(tx, parsed.rows, { headline: t.headline }));
     created = res.created;
     duplicated = res.duplicated;
+    createdRows = new Set(res.createdRows);
   } catch (err) {
     return { message: messageOf(err, t.error) };
   }
   revalidateVentas();
+  // «Entraron con un aviso» solo de las filas que entraron DE VERDAD: una
+  // repetida no entró, y decir «la marca entró sin país» sería falso
+  // (pulido r7). Con created = 0 no queda ninguno.
+  const lineWarnings = parsed.warnings.filter((w) => createdRows.has(w.row)).map(({ line, message }) => ({ line, message }));
   return {
     ok: true,
     notice: t.result(created, duplicated),
     lineErrors: parsed.errors.length > 0 ? parsed.errors : undefined,
-    lineWarnings: parsed.warnings.length > 0 ? parsed.warnings : undefined,
+    lineWarnings: lineWarnings.length > 0 ? lineWarnings : undefined,
     stamp: Date.now(),
   };
 }
@@ -316,7 +327,14 @@ function empresaError(err: unknown, fallback: string): VentasState {
   return { message };
 }
 
-/** «Nueva empresa»: la crea (o vincula la del catálogo) y abre su ficha. */
+/**
+ * «Nueva empresa»: la crea (o vincula la del catálogo) y abre su ficha.
+ *
+ * Si el CRM ya tiene una empresa con ese nombre (sin un dominio que las
+ * separe), no la crea: vuelve con `sameName` para que el formulario diga
+ * «Ya tienes una empresa llamada X», con enlace a ella y «Crear igual»,
+ * que reenvía lo mismo con `sameName=1`.
+ */
 export async function crearEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const parsed = empresaSchema.safeParse({
     name: field(formData, "name"),
@@ -340,9 +358,13 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
         industry: v.industry || null,
         relationship: v.relationship as Relationship,
         notes: v.notes || null,
+        allowSameName: field(formData, "sameName") === "1",
       }),
     );
   } catch (err) {
+    if (err instanceof VentasError && err.code === "DuplicateCompanyName" && err.params.companyId && err.params.name) {
+      return { sameName: { id: err.params.companyId, name: err.params.name } };
+    }
     return empresaError(err, MESSAGES.empresas.form.error);
   }
   revalidateVentas(id);
@@ -613,20 +635,36 @@ export interface MoverResult {
  *
  * Pasar a una etapa perdida exige el motivo (`lostReason`, uno de
  * LOST_REASONS): el tablero lo pide antes de llamar, y sin él moveDeal
- * no mueve (LostReasonRequired).
+ * no mueve (LostReasonRequired). Ganar un negocio sin monto exige el
+ * monto (`amount`, sin impuestos, en la moneda del negocio): el tablero
+ * también lo pide en la tarjeta, y sin él moveDeal no mueve
+ * (AmountRequired, pulido r7).
  */
-export async function moverNegocio(dealId: string, toStageId: string, lostReason?: string): Promise<MoverResult> {
+export async function moverNegocio(
+  dealId: string,
+  toStageId: string,
+  opts: { lostReason?: string; amount?: string } = {},
+): Promise<MoverResult> {
   if (!UUID_RE.test(dealId) || !(STAGE_ID_RE.test(toStageId) || UUID_RE.test(toStageId))) {
     return { ok: false, message: MESSAGES.pipeline.moveError };
   }
+  const { lostReason } = opts;
   if (lostReason !== undefined && !LOST_REASONS.includes(lostReason as LostReason)) {
     return { ok: false, message: V.lostReason };
+  }
+  const amount = opts.amount?.trim() || null;
+  if (amount !== null && !(DECIMAL_RE.test(amount) && amount.length <= 15)) {
+    return { ok: false, message: V.amount };
   }
   const reason = lostReason === undefined ? null : (lostReason as LostReason);
   let closedQuotes: string[];
   try {
     const res = await withWorkspace((tx) =>
-      moveDeal(tx, dealId, toStageId, { lostReason: reason, quoteClosedActivity: MESSAGES.pipeline.quoteClosedActivity }),
+      moveDeal(tx, dealId, toStageId, {
+        lostReason: reason,
+        ...(amount !== null ? { amount } : {}),
+        quoteClosedActivity: MESSAGES.pipeline.quoteClosedActivity,
+      }),
     );
     closedQuotes = (res?.closedQuotes ?? []).map((q) => q.number);
   } catch (err) {

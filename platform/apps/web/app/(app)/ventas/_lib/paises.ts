@@ -16,6 +16,7 @@
  * versión de ICU del motor. Los NOMBRES sí son de Intl, en el idioma del
  * workspace: ninguna tabla escrita a mano.
  */
+import { formatCountry } from "@/lib/format";
 
 /** ISO 3166-1 alfa-2 (249) y XK. En orden alfabético de código. */
 export const ISO_COUNTRY_CODES: readonly string[] = (
@@ -48,31 +49,24 @@ const optionsCache = new Map<string, CountryOption[]>();
  * idioma («Perú» entre «Paraguay» y «Polonia»). Se arman en el servidor y
  * viajan como props: así el nombre no depende de la versión de ICU del
  * navegador y la hidratación no cambia el texto.
+ *
+ * El nombre de cada código lo pone formatCountry (lib/format.ts), el
+ * mismo que pinta la ficha de empresa y el media kit (pulido r7): una
+ * sola forma de decir «CO → Colombia», con un solo respaldo al código
+ * cuando Intl no lo conoce. Aquí solo se ordena.
  */
 export function countryOptions(locale: string): CountryOption[] {
   const cached = optionsCache.get(locale);
   if (cached) return cached;
-  let names: Intl.DisplayNames | null;
-  try {
-    names = new Intl.DisplayNames([locale], { type: "region" });
-  } catch {
-    names = null;
-  }
   let collator: Intl.Collator;
   try {
     collator = new Intl.Collator(locale, { sensitivity: "base" });
   } catch {
     collator = new Intl.Collator();
   }
-  const options = ISO_COUNTRY_CODES.map((code) => {
-    let label: string | undefined;
-    try {
-      label = names?.of(code);
-    } catch {
-      label = undefined;
-    }
-    return { value: code, label: label ?? code };
-  }).sort((a, b) => collator.compare(a.label, b.label));
+  const options = ISO_COUNTRY_CODES.map((code) => ({ value: code, label: formatCountry(code, { locale }) })).sort((a, b) =>
+    collator.compare(a.label, b.label),
+  );
   optionsCache.set(locale, options);
   return options;
 }

@@ -4,10 +4,9 @@ import { MESSAGES } from "../../_lib/messages";
  * La ficha de una empresa mientras carga: la cabecera, la lista de
  * negocios y la columna de datos, del tamaño de lo que viene.
  *
- * No es un loading.tsx a propósito: uno por encima de /ventas/empresas/<id>
- * mandaría el 200 antes de que la página comprobara que la empresa
- * existe (app/(app)/no-existe.test.tsx). La página lo pone en su propio
- * <Suspense>, DESPUÉS de esa comprobación.
+ * Lo pinta (ficha)/loading.tsx, que está DEBAJO del layout que
+ * comprueba que la empresa existe: uno por encima de ese layout mandaría
+ * el 200 antes del notFound() (app/(app)/no-existe.test.tsx).
  */
 export function EsqueletoFicha() {
   return (

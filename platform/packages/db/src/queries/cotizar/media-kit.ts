@@ -418,6 +418,18 @@ export async function listShareableMediaKits(tx: WorkspaceTx, creatorId: string)
   }));
 }
 
+/**
+ * ¿Existe este media kit en el workspace? Una sola fila y sin el
+ * snapshot: es lo que el layout de su vista previa comprueba antes de
+ * abrir el esqueleto, para que un id desconocido sea un 404 de verdad
+ * (pulido r7).
+ */
+export async function mediaKitExists(tx: WorkspaceTx, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  const { rows } = await tx.query('SELECT 1 FROM media_kit WHERE id = $1 LIMIT 1', [id]);
+  return rows.length > 0;
+}
+
 export async function getMediaKitById(tx: WorkspaceTx, id: string): Promise<MediaKitRow | null> {
   if (!isUuid(id)) return null;
   const { rows } = await tx.query<RawMediaKit>(`${SELECT_KIT} WHERE id = $1`, [id]);

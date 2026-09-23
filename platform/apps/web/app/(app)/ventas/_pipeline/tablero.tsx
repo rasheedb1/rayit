@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
@@ -21,6 +22,8 @@ export interface BoardDeal {
   stageLabel: string;
   daysInStage: number;
   amountText: string | null;
+  /** La moneda del negocio: la del monto que se pide al ganarlo si no tiene. */
+  currency: string;
   nextAction: string | null;
   nextActionDueText: string | null;
   /** Null en los cerrados: a un negocio ganado no le vence nada. */
@@ -40,6 +43,8 @@ export interface BoardStage {
   amountText: string;
   /** Una etapa perdida: pasar a ella pide el motivo. */
   isLost: boolean;
+  /** Una etapa ganada: pasar a ella un negocio sin monto pide el monto. */
+  isWon: boolean;
 }
 
 type Move = { dealId: string; toStageId: string; toStageLabel: string };
@@ -63,6 +68,11 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * en la tarjeta la misma pregunta que «Descartar» en el radar, «¿Por qué
  * lo pierdes?», con el motivo obligatorio. Sin motivo el servidor
  * tampoco lo mueve (LostReasonRequired).
+ *
+ * Soltar en una etapa ganada un negocio «Sin monto» tampoco mueve
+ * todavía: pregunta «¿Por cuánto lo ganaste?» en la tarjeta. Sin monto el
+ * servidor no lo mueve (AmountRequired): si no, «N cerrados» subía y
+ * «Ganado este trimestre» no, y las dos cifras dejaban de cuadrar.
  */
 export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: BoardStage[] }) {
   const t = MESSAGES.pipeline;
@@ -71,22 +81,29 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
   const [aviso, setAviso] = useState<{ notice?: string; message?: string } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
-  /** El negocio al que se le está preguntando por qué se pierde, y a qué etapa va. */
-  const [perdiendo, setPerdiendo] = useState<{ dealId: string; toStageId: string } | null>(null);
+  /**
+   * El negocio al que se le está preguntando algo antes de moverlo, y a
+   * qué etapa va: por qué se pierde, o por cuánto se gana si no tiene monto.
+   */
+  const [pregunta, setPregunta] = useState<{ dealId: string; toStageId: string; kind: "lost" | "won" } | null>(null);
 
-  function move(dealId: string, toStageId: string, lostReason?: string) {
+  function move(dealId: string, toStageId: string, extra: { lostReason?: string; amount?: string } = {}) {
     const deal = optimistic.find((d) => d.id === dealId);
     const stage = stages.find((s) => s.id === toStageId);
     if (!deal || !stage || deal.stageId === toStageId) return;
     setAviso(null);
-    if (stage.isLost && !lostReason) {
-      setPerdiendo({ dealId, toStageId });
+    if (stage.isLost && !extra.lostReason) {
+      setPregunta({ dealId, toStageId, kind: "lost" });
       return;
     }
-    setPerdiendo(null);
+    if (stage.isWon && deal.amountText === null && !extra.amount) {
+      setPregunta({ dealId, toStageId, kind: "won" });
+      return;
+    }
+    setPregunta(null);
     startTransition(async () => {
       addOptimistic({ dealId, toStageId, toStageLabel: stage.label });
-      const res = lostReason ? await moverNegocio(dealId, toStageId, lostReason) : await moverNegocio(dealId, toStageId);
+      const res = extra.lostReason || extra.amount ? await moverNegocio(dealId, toStageId, extra) : await moverNegocio(dealId, toStageId);
       setAviso(
         res.ok
           ? {
@@ -165,9 +182,16 @@ export function PipelineBoard({ deals, stages }: { deals: BoardDeal[]; stages: B
                             setOver(null);
                           }}
                           onMove={(to) => move(deal.id, to)}
-                          losing={perdiendo?.dealId === deal.id ? stages.find((s) => s.id === perdiendo.toStageId) ?? null : null}
-                          onLose={(reason) => perdiendo && move(deal.id, perdiendo.toStageId, reason)}
-                          onCancelLose={() => setPerdiendo(null)}
+                          asking={
+                            pregunta?.dealId === deal.id
+                              ? (() => {
+                                  const to = stages.find((s) => s.id === pregunta.toStageId);
+                                  return to ? { stage: to, kind: pregunta.kind } : null;
+                                })()
+                              : null
+                          }
+                          onConfirm={(extra) => pregunta && move(deal.id, pregunta.toStageId, extra)}
+                          onCancel={() => setPregunta(null)}
                         />
                       ))}
                     </ul>
@@ -189,9 +213,9 @@ function DealCard({
   onDragStart,
   onDragEnd,
   onMove,
-  losing,
-  onLose,
-  onCancelLose,
+  asking,
+  onConfirm,
+  onCancel,
 }: {
   deal: BoardDeal;
   stages: BoardStage[];
@@ -199,24 +223,45 @@ function DealCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onMove: (toStageId: string) => void;
-  /** La etapa perdida a la que se quiere pasar, mientras se pregunta el motivo. */
-  losing: BoardStage | null;
-  onLose: (reason: string) => void;
-  onCancelLose: () => void;
+  /**
+   * La etapa a la que se quiere pasar mientras se pregunta algo: el
+   * motivo si es perdida («lost»), el monto si es ganada y no tiene («won»).
+   */
+  asking: { stage: BoardStage; kind: "lost" | "won" } | null;
+  onConfirm: (extra: { lostReason?: string; amount?: string }) => void;
+  onCancel: () => void;
 }) {
   const t = MESSAGES.pipeline;
   const selectId = `mover-${deal.id}`;
-  const [reasonError, setReasonError] = useState<string | undefined>();
+  const [askError, setAskError] = useState<string | undefined>();
+  const [amount, setAmount] = useState("");
 
   function lose(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const reason = String(new FormData(event.currentTarget).get("lostReason") ?? "");
     if (!reason) {
-      setReasonError(MESSAGES.validacion.lostReason);
+      setAskError(MESSAGES.validacion.lostReason);
       return;
     }
-    setReasonError(undefined);
-    onLose(reason);
+    setAskError(undefined);
+    onConfirm({ lostReason: reason });
+  }
+
+  function win(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // MoneyInput deja pasar el signo: un monto ganado es cero o más.
+    if (!amount || amount.startsWith("-")) {
+      setAskError(t.won.required);
+      return;
+    }
+    setAskError(undefined);
+    onConfirm({ amount });
+  }
+
+  function cancel() {
+    setAskError(undefined);
+    setAmount("");
+    onCancel();
   }
 
   return (
@@ -297,23 +342,32 @@ function DealCard({
           ))}
       </select>
 
-      {losing && (
+      {asking?.kind === "lost" && (
         <form onSubmit={lose} noValidate aria-label={t.lost.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
-          <Field label={t.lost.title} help={t.lost.help} error={reasonError} required htmlFor={`perdido-${deal.id}`}>
+          <Field label={t.lost.title} help={t.lost.help} error={askError} required htmlFor={`perdido-${deal.id}`}>
             <Select name="lostReason" defaultValue="" placeholder={t.lost.placeholder} options={LOST_REASON_OPTIONS} autoFocus />
           </Field>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="submit" variant="danger" size="sm">
-              {t.lost.confirm(losing.label)}
+              {t.lost.confirm(asking.stage.label)}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setReasonError(undefined);
-                onCancelLose();
-              }}
-            >
+            <Button variant="ghost" size="sm" onClick={cancel}>
+              {MESSAGES.acciones.cancel}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {asking?.kind === "won" && (
+        <form onSubmit={win} noValidate aria-label={t.won.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
+          <Field label={t.won.title} help={t.won.help} error={askError} required htmlFor={`ganado-${deal.id}`}>
+            <MoneyInput value={amount} currency={deal.currency} onChange={(v) => setAmount(v)} />
+          </Field>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="submit" variant="primary" size="sm">
+              {t.won.confirm(asking.stage.label)}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={cancel}>
               {MESSAGES.acciones.cancel}
             </Button>
           </div>

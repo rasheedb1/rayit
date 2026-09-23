@@ -44,7 +44,11 @@ export const MESSAGES = {
     wonNoteZero: "Todavía nada cerrado",
     /** Los contadores llegan ya formateados con el locale del workspace. */
     openCount: (n: string) => `${n} abiertos`,
-    wonCount: (n: string) => `${n} cerrados`,
+    /**
+     * «6 cerrados» y, si alguno no tiene monto, «6 cerrados, 1 sin monto»:
+     * sin eso el conteo sube y la suma no, y las dos cifras no cuadran.
+     */
+    wonCount: (n: string, sinMonto?: string) => (sinMonto ? `${n} cerrados, ${sinMonto} sin monto` : `${n} cerrados`),
     noNextAction: (n: number) => `${n} sin siguiente acción`,
     overdue: (n: number) => `${n} con seguimiento vencido`,
     /** El nombre accesible del botón (i) de cada cifra. */
@@ -245,6 +249,13 @@ export const MESSAGES = {
       notes: "Notas",
       submit: "Crear empresa",
       error: "No se pudo crear la empresa.",
+      /** Ya hay una empresa con ese nombre en el CRM: se pregunta antes de crear otra. */
+      sameName: {
+        title: (name: string) => `Ya tienes una empresa llamada «${name}».`,
+        help: "Si es la misma marca, ábrela en vez de crear otra. Si es otra (otro país, otra razón social), créala igual.",
+        see: (name: string) => `Ver «${name}»`,
+        createAnyway: "Crear igual",
+      },
       /** Editar desde la ficha, con el mismo formulario. */
       editTitle: "Editar los datos",
       save: "Guardar cambios",
@@ -279,7 +290,7 @@ export const MESSAGES = {
       newDeal: {
         open: "Nuevo negocio",
         title: "Nuevo negocio",
-        help: "Nace en «Nuevo» con «Enviar pitch» a tres días. El monto es sin impuestos; si todavía no lo sabes, déjalo vacío: lo pondrá la cotización.",
+        help: "Nace en «Nuevo» con «Enviar pitch» a tres días hábiles. El monto es sin impuestos; si todavía no lo sabes, déjalo vacío: lo pondrá la cotización.",
         name: "Nombre del negocio",
         namePlaceholder: "Serie de 3 videos · Q4",
         amount: "Monto estimado",
@@ -403,6 +414,17 @@ export const MESSAGES = {
       confirm: (stage: string) => `Pasar a «${stage}»`,
       formLabel: (name: string) => `Por qué pierdes el negocio con ${name}`,
     },
+    /**
+     * Ganar un negocio que no tiene monto: se pide en la tarjeta, como el
+     * motivo de pérdida. Sin él la base no lo mueve (AmountRequired).
+     */
+    won: {
+      title: "¿Por cuánto lo ganaste?",
+      help: "Sin impuestos. Es lo que suma en «Ganado este trimestre».",
+      confirm: (stage: string) => `Pasar a «${stage}»`,
+      formLabel: (name: string) => `Por cuánto ganas el negocio con ${name}`,
+      required: "Escribe el monto: sin él no suma en lo ganado.",
+    },
   },
 
   /** Por qué se perdió un negocio (deal.lost_reason), en la tarjeta y en la ficha: «Perdido · Por el precio». */
@@ -522,6 +544,8 @@ export const MESSAGES = {
     InvalidSource: "Un contacto no se guarda sin decir de dónde salió.",
     InvalidStage: "Esa etapa no existe.",
     LostReasonRequired: "Di por qué lo pierdes antes de pasarlo a «Perdido».",
+    AmountRequired: "Di por cuánto lo ganaste: un negocio ganado sin monto no suma en «Ganado este trimestre».",
+    DuplicateCompanyName: (p: Readonly<Record<string, string>>) => `Ya tienes una empresa llamada «${p.name ?? ""}».`,
     SignalAlreadyReviewed: "Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó.",
     SignalNotFound: "Esa señal ya no está en tu bandeja.",
     SignalWithoutCompany: "La señal no dice de qué marca es. Edítala antes de aceptarla.",

@@ -79,7 +79,14 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
         <KpiConInfo
           label={t.kpis.won}
           value={f.money(kpis.wonQuarter, kpis.currency, { mode: "short" })}
-          note={kpis.wonQuarterCount === 0 ? t.kpis.wonNoteZero : t.kpis.wonCount(f.int(kpis.wonQuarterCount))}
+          note={
+            kpis.wonQuarterCount === 0
+              ? t.kpis.wonNoteZero
+              : t.kpis.wonCount(
+                  f.int(kpis.wonQuarterCount),
+                  kpis.wonQuarterNoAmountCount > 0 ? f.int(kpis.wonQuarterNoAmountCount) : undefined,
+                )
+          }
           info={[...t.kpis.wonInfo]}
           infoLabel={t.kpis.infoLabel(t.kpis.won)}
         />
