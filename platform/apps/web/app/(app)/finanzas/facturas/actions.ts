@@ -29,6 +29,7 @@ import {
 } from "@mc/db/queries/finanzas";
 import { DECIMAL_RE, firstErrors, formField, isUuid, UUID_RE, type ActionState } from "@/lib/forms";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -67,6 +68,7 @@ export type CrearFacturaState = ActionState;
 
 /** Server Action del formulario: valida, crea en borrador y redirige al detalle. */
 export async function crearFactura(_prev: CrearFacturaState, formData: FormData): Promise<CrearFacturaState> {
+  await requirePermission("finanzas.factura.crear");
   const parsed = nuevaFacturaSchema.safeParse({
     companyId: formField(formData, "companyId"),
     campaignId: formField(formData, "campaignId"),
@@ -110,6 +112,7 @@ const TRANSICIONES_UI: readonly InvoiceStatus[] = ["sent", "void"];
  * Si la máquina de estados rechaza, vuelve al detalle con el mensaje.
  */
 export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promise<void> {
+  await requirePermission("finanzas.factura.editar");
   if (!isUuid(id)) redirect("/finanzas");
   if (!TRANSICIONES_UI.includes(to)) {
     redirect(`/finanzas/facturas/${id}?error=${encodeURIComponent("Esa acción todavía no está disponible.")}`);
@@ -132,6 +135,7 @@ export async function cambiarEstadoFactura(id: string, to: InvoiceStatus): Promi
  * Importarla desde app/(app)/finanzas (índice), no desde aquí.
  */
 export async function facturarCampana(campaignId: string): Promise<void> {
+  await requirePermission("finanzas.factura.crear");
   if (!isUuid(campaignId)) redirect("/finanzas");
   let id: string;
   try {
@@ -197,17 +201,14 @@ function messageOfPago(err: unknown, f: Formatter, currency: string): string {
  * porcentaje de impuestos del espacio. Es la primera escritura de dinero
  * del producto después de la factura: lleva permiso y bitácora.
  *
- * TODO(ACC-1): `requirePermission('finanzas.pago.registrar')` va como
- * PRIMERA línea en cuanto ACC-1 esté en main (hoy `requirePermission`
- * vive en apps/web/lib/auth/, que no existe todavía). El nombre del
- * permiso es el que ACC-1 ya tiene en su catálogo.
- *
- * La bitácora (ACC-2) sí está desde el primer commit, pero la escribe
- * `recordPayment` dentro de la transacción, no esta acción: así audita
- * igual quien llame a la consulta y, si la escritura se deshace, la
- * bitácora se va con ella.
+ * El permiso es `finanzas.pago.registrar` (ACC-1), que el catálogo marca
+ * como sensible. La bitácora (ACC-2) la escribe `recordPayment` dentro
+ * de la transacción, no esta acción: así audita igual quien llame a la
+ * consulta —un job de FIN-4, una API— y, si la escritura se deshace, la
+ * fila se va con ella.
  */
 export async function registrarPago(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("finanzas.pago.registrar");
   const parsed = registrarPagoSchema.safeParse({
     invoiceId: formField(formData, "invoiceId"),
     amount: formField(formData, "amount"),

@@ -11,6 +11,9 @@
  *     depender de la zona horaria del driver.
  *   - `overdue` no se persiste: se deriva (packages/core deriveStatus) y
  *     la vista receivables ya lo hace con aging_bucket.
+ *   - Toda escritura deja su fila en audit_log con audit() (ACC-2), en la
+ *     misma transacción y antes de devolver; test/audit-convencion.test.ts
+ *     lo exige.
  */
 import {
   addDays,
@@ -23,6 +26,7 @@ import {
   nextInvoiceNumber,
   normalizeDecimal,
   parseInvoiceNumber,
+  pctToRate,
   reservePeriod,
   reserveRateFrom,
   subDecimal,
@@ -33,11 +37,16 @@ import {
   DEFAULT_WITHHOLDING_RATE,
   InvoicePaymentConflict,
   type AgingBucket,
+  type CashflowInput,
+  type FacturaPorCobrar,
+  type GastoRecurrente,
   type InvoiceStatus,
+  type NegocioGanado,
   type PaymentMethod,
   type TransitionInput,
 } from '@mc/core';
 import { getWorkspaceSettings } from './cimientos.ts';
+import { audit, type AuditAction } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -446,8 +455,31 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   if (!id) throw new Error('No se pudo crear la factura.');
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  // La bitácora guarda la factura tal como nació: su número, su empresa y
+  // sus cifras. Es dinero de ESTA entidad, no de otra.
+  await audit(tx, {
+    action: 'invoice.created',
+    entityType: 'invoice',
+    entityId: id,
+    before: null,
+    after: {
+      number: detail.number, companyId: detail.companyId, campaignId: detail.campaignId, quoteId: detail.quoteId,
+      currency: detail.currency, subtotal: detail.subtotal, tax: detail.tax, withholding: detail.withholding, total: detail.total,
+      issuedOn: detail.issuedOn, dueOn: detail.dueOn, status: detail.status, externalRef: detail.externalRef,
+    },
+  });
   return detail;
 }
+
+/** Qué evento de bitácora es cada estado al que llega una factura (ACC-2). */
+const INVOICE_TRANSITION_ACTION: Record<InvoiceStatus, AuditAction> = {
+  draft: 'invoice.reopened',
+  sent: 'invoice.sent',
+  partial: 'invoice.payment_recorded',
+  paid: 'invoice.paid',
+  overdue: 'invoice.marked_overdue',
+  void: 'invoice.voided',
+};
 
 /**
  * Cambia el estado validando con la máquina de estados de core. Lee la
@@ -479,6 +511,13 @@ export async function transitionInvoice(
   );
   const detail = await getInvoice(tx, id);
   if (!detail) throw new InvoiceNotFound(id);
+  await audit(tx, {
+    action: INVOICE_TRANSITION_ACTION[result.status],
+    entityType: 'invoice',
+    entityId: id,
+    before: { status: row.status, paidAmount: row.paid_amount },
+    after: { status: detail.status, paidAmount: detail.paidAmount, paidAt: detail.paidAt },
+  });
   return detail;
 }
 
@@ -690,37 +729,6 @@ async function readWorkspaceForPayment(tx: WorkspaceTx, receivedOn: string): Pro
 }
 
 /**
- * La fila de `audit_log` de un cobro.
- *
- * TODO(ACC-2): cuando `packages/db/src/audit.ts` esté en main, esta
- * función se borra y se llama `audit(tx, { action: 'invoice.payment_recorded',
- * entityType: 'invoice', entityId, before, after })`. La forma de la fila
- * —workspace y actor puestos por la base, `actor_kind` 'system' cuando la
- * transacción no tiene identidad, la acción de AUDIT_ACTIONS— es la
- * misma a propósito, para que integrarla sea borrar código.
- *
- * Se escribe desde aquí y no desde la Server Action por dos razones: así
- * audita igual quien llame a `recordPayment` (un job de FIN-4, una API),
- * y si la escritura hace rollback la bitácora se va con ella.
- *
- * `before`/`after` llevan solo los campos de la factura que cambian y
- * los datos del cobro que no son de nadie: ni nombres, ni correos, ni la
- * `reference` del banco de la marca.
- */
-async function anotarPagoEnBitacora(
-  tx: WorkspaceTx,
-  entry: { entityId: string; before: Record<string, unknown>; after: Record<string, unknown> },
-): Promise<void> {
-  await tx.query(
-    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
-     VALUES (current_workspace_id(), current_user_id(),
-             CASE WHEN current_user_id() IS NULL THEN 'system' ELSE 'user' END,
-             'invoice.payment_recorded', 'invoice', $1::uuid, $2::jsonb, $3::jsonb)`,
-    [entry.entityId, JSON.stringify(entry.before), JSON.stringify(entry.after)],
-  );
-}
-
-/**
  * Registra un cobro contra una factura, parcial o total, y aparta el
  * porcentaje de impuestos del espacio.
  *
@@ -815,7 +823,13 @@ export async function recordPayment(
   const payment = await getPayment(tx, paymentId);
   if (!payment) throw new Error('El pago se registró pero no se pudo leer de vuelta.');
 
-  await anotarPagoEnBitacora(tx, {
+  // La bitácora (ACC-2), en esta misma transacción: si la escritura se
+  // deshace, la fila se va con ella. `before`/`after` llevan solo lo que
+  // cambia de la factura y los datos del cobro que no son de nadie: ni
+  // nombres, ni correos, ni la `reference` del banco de la marca.
+  await audit(tx, {
+    action: 'invoice.payment_recorded',
+    entityType: 'invoice',
     entityId: invoice.id,
     before: { status: row.status, paidAmount: normalizeDecimal(row.paid_amount) },
     after: {
@@ -918,5 +932,160 @@ export async function listPayments(tx: WorkspaceTx, invoiceId: string): Promise<
     rows: rows.map(toPaymentRow),
     reservedTotal: t?.reserved_total ?? '0.00',
     reserveRate: t?.reserve_rate ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Flujo de caja proyectado (FIN-6)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que `projectCashflow` de `@mc/core` necesita, más el porcentaje de
+ * reserva tal cual lo guarda el workspace ('11'), que la pantalla
+ * enseña en la nota del gráfico.
+ */
+export interface CashflowInputs extends CashflowInput {
+  /** `settings.finanzas.reserva_pct`, o null si el workspace no lo ha configurado (FIN-8). */
+  reservaPct: string | null;
+}
+
+interface CashflowRawRow {
+  currency: string;
+  /** Hoy en la zona del workspace, 'YYYY-MM-DD'. */
+  today: string;
+  reserva_pct: string | null;
+  plazo_dias: string | null;
+  facturas: FacturaPorCobrar[];
+  negocios: NegocioGanado[];
+  gastos: GastoRecurrente[];
+}
+
+/** El plazo de pago cuando el workspace no tiene uno: el mismo de `createInvoiceFromCampaign`. */
+const PLAZO_DIAS_POR_DEFECTO = 30;
+
+/**
+ * Todo lo que el flujo de caja necesita, en UNA consulta y en bruto: la
+ * clasificación —qué está vencido, qué ya se facturó, qué no tiene
+ * fecha, qué viene en otra moneda— la hace la función pura de core,
+ * que se prueba en milisegundos (docs/propuestas/FIN-6.md §0.2.10).
+ *
+ * Qué trae:
+ *   - Facturas que todavía deben plata (`sent`, `partial`, `overdue`,
+ *     con `total > paid_amount`). El monto es `total − paid_amount`,
+ *     que es lo que FIN-2 mantendrá al registrar pagos.
+ *   - Negocios en una etapa con `is_won` —nunca por el literal
+ *     'ganado': lo dice la vista `deal_pipeline` y el propio seed—,
+ *     con la marca de si ya tienen factura por su campaña o por su
+ *     cotización. Una factura anulada o en borrador no cuenta como
+ *     facturado: si contara, el monto del negocio se caería de la
+ *     proyección mientras la factura está en borrador, porque tampoco
+ *     está entre las que deben plata.
+ *   - Gastos recurrentes de los últimos 120 días, con su `incurred_on`:
+ *     core se queda con los del mes más reciente, porque la misma
+ *     suscripción está registrada una vez por mes.
+ *
+ * `today` sale de la zona del WORKSPACE —`(now() AT TIME ZONE
+ * w.timezone)::date`— y no de `CURRENT_DATE`, que es la fecha del
+ * servidor de base: a las 02:00 UTC en Bogotá todavía es ayer, y una
+ * factura que vence hoy no puede aparecer vencida por eso. La prueba
+ * comprueba que ese día coincide con `hoyEnZona()` de `@mc/core`, que
+ * es la misma regla escrita en TypeScript.
+ *
+ * Ningún id que vuelve es `bigserial` (CIM-2 §3): son los uuid de
+ * `invoice`, `deal` y `expense`.
+ */
+/*
+ * Quien la llama tiene que haber pasado por
+ * requirePermission('finanzas.flujo.ver') (ACC-1): lo hace
+ * app/(app)/finanzas/flujo/page.tsx en su primera línea. Aquí no se
+ * comprueba porque este paquete no conoce la sesión —su barandilla es
+ * la RLS del workspace—, y duplicarlo daría dos sitios donde equivocarse.
+ */
+export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs> {
+  const { rows } = await tx.query<CashflowRawRow>(`
+    WITH ws AS (
+      SELECT w.currency,
+             (now() AT TIME ZONE w.timezone)::date            AS hoy,
+             w.settings #>> '{finanzas,reserva_pct}' AS reserva_pct,
+             w.settings #>> '{finanzas,plazo_dias}'  AS plazo_dias
+        FROM workspace w
+       WHERE w.id = current_workspace_id()
+    ), facturas AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',          i.id,
+               'number',      i.number,
+               'companyName', co.name,
+               'currency',    i.currency,
+               'outstanding', (i.total - i.paid_amount)::text,
+               'dueOn',       to_char(i.due_on, 'YYYY-MM-DD')
+             ) ORDER BY i.due_on, i.number), '[]'::json) AS v
+        FROM invoice i
+        JOIN company co ON co.id = i.company_id
+       WHERE i.status IN ('sent', 'partial', 'overdue')
+         AND i.total > i.paid_amount
+    ), negocios AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',                d.id,
+               'name',              d.name,
+               'companyName',       co.name,
+               'currency',          d.currency,
+               'amount',            d.amount::text,
+               'expectedCloseDate', to_char(d.expected_close_date, 'YYYY-MM-DD'),
+               'hasInvoice',        EXISTS (
+                 -- Ni 'void' ni 'draft': un borrador todavía no le debe
+                 -- nada a nadie, y el CTE de arriba tampoco lo trae. Si
+                 -- contara como «ya facturado», el monto del negocio
+                 -- desaparecería de la proyección entre que se crea la
+                 -- factura y se marca enviada, que es el camino normal
+                 -- (createInvoice siempre inserta en borrador).
+                 SELECT 1 FROM invoice i
+                  WHERE i.status NOT IN ('void', 'draft')
+                    AND (i.campaign_id IN (SELECT c.id FROM campaign c WHERE c.deal_id = d.id)
+                      OR i.quote_id    IN (SELECT q.id FROM quote    q WHERE q.deal_id = d.id))
+               )
+             ) ORDER BY d.expected_close_date NULLS LAST, d.name), '[]'::json) AS v
+        FROM deal d
+        JOIN pipeline_stage st ON st.id = d.stage_id
+        JOIN company co        ON co.id = d.company_id
+       WHERE st.is_won
+    ), gastos AS (
+      SELECT coalesce(json_agg(json_build_object(
+               'id',         e.id,
+               'label',      coalesce(nullif(e.description, ''), e.category),
+               'currency',   e.currency,
+               'amount',     e.amount::text,
+               'incurredOn', to_char(e.incurred_on, 'YYYY-MM-DD')
+             ) ORDER BY e.incurred_on DESC, e.amount DESC), '[]'::json) AS v
+        FROM expense e, ws
+       WHERE e.is_recurring
+         AND e.incurred_on > ws.hoy - 120
+    )
+    SELECT ws.currency, to_char(ws.hoy, 'YYYY-MM-DD') AS today, ws.reserva_pct, ws.plazo_dias,
+           facturas.v AS facturas, negocios.v AS negocios, gastos.v AS gastos
+      FROM ws, facturas, negocios, gastos
+  `);
+
+  const r = rows[0];
+  // Sin fila no hay workspace que proyectar: es un error de
+  // configuración (un DEMO_WORKSPACE_ID viejo), no una lista vacía.
+  if (!r) {
+    throw new Error(
+      `El workspace ${tx.workspaceId} no existe en esta base: el flujo de caja no tiene de dónde salir.`,
+    );
+  }
+
+  const plazo = Number.parseInt(r.plazo_dias ?? '', 10);
+  return {
+    today: r.today,
+    currency: r.currency.toUpperCase(),
+    reservaPct: r.reserva_pct,
+    // Sin porcentaje configurado (FIN-8 todavía no existe) no se
+    // inventa uno: la reserva es cero y la pantalla lo dice con una
+    // frase, que es distinto de apartar el 11 % de nadie.
+    reservaRate: r.reserva_pct === null ? '0' : pctToRate(r.reserva_pct),
+    plazoDias: Number.isInteger(plazo) && plazo >= 0 ? plazo : PLAZO_DIAS_POR_DEFECTO,
+    facturas: r.facturas,
+    negocios: r.negocios,
+    gastos: r.gastos,
   };
 }

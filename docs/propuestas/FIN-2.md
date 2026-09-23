@@ -25,6 +25,17 @@ Lo que **no** está en `main` y esta historia necesitaría:
 | `PERMISOS` / `can()` | `packages/core/src/permisos.ts` | ACC-1 sin mezclar |
 | `audit()` | `packages/db/src/audit.ts` | ACC-2 sin mezclar |
 
+> **Actualización del 23 de septiembre, al integrar.** ACC-1, ACC-2,
+> FIN-6 y CAM-5 entraron a `main` mientras se construía FIN-2. La tabla
+> de arriba y el resto de este §0 son el plan **tal como se escribió**,
+> con las tres piezas todavía fuera; lo que se entregó las usa de
+> verdad. Qué cambió exactamente, en §0.6 y en §2.
+>
+> Que el plan apostara por hablar su idioma exacto fue lo que hizo que
+> integrarlas costara **una línea y un borrado**: el permiso ya se
+> llamaba `finanzas.pago.registrar` y la acción de bitácora ya era
+> `invoice.payment_recorded`.
+
 Las dos ramas existen (`nicolas/ACC-1-catalogo-permisos`,
 `nicolas/ACC-2-bitacora-obligatoria`) pero no están en `origin/main`, así
 que FIN-2 no puede importarlas sin arrastrarlas. Lo que sí hace es
@@ -197,6 +208,24 @@ API, un webhook de pasarela). Eso sí pide una clave de idempotencia
 propia, y va a §1.2 como propuesta para Rasheed, no a esta historia.
 
 ### 0.6 Decisión 5 · Permiso y bitácora desde el primer commit
+
+> **Cómo quedó al integrar (23-sep).** Las dos piezas ya están en `main`,
+> así que no queda ningún TODO:
+>
+> - `registrarPago` abre con
+>   `await requirePermission("finanzas.pago.registrar")`, que es la
+>   convención que `apps/web/lib/permisos/convencion.test.ts` hace
+>   cumplir sin revisión humana.
+> - `recordPayment` llama al `audit()` de `packages/db/src/audit.ts` con
+>   la acción `invoice.payment_recorded`; la función local
+>   `anotarPagoEnBitacora` se borró, como decía el plan.
+> - Hay prueba de punta a punta del permiso
+>   (`apps/web/lib/db/bitacora-permiso.test.ts`): con el rol **Mánager**
+>   —que sí ve el estado de cobro de sus campañas— registrar un cobro
+>   lanza `SinPermisoError` y no deja ni pago, ni apartado, ni fila de
+>   bitácora; con el Dueño deja exactamente uno de cada.
+>
+> Lo de abajo es el razonamiento original.
 
 - **Permiso.** `requirePermission()` vive en `apps/web/lib/auth/`, que es
   de Rasheed, y ACC-1 no está en `main`. La Server Action abre con
@@ -384,18 +413,20 @@ FIN-8 tiene que resolver, y FIN-2 deja escrito pero sin pantalla:
 `recordPayment` no los toca a propósito: un cobro no cancela el contador
 de recordatorios, lo cancela el estado de la factura.
 
-### ACC-1 y ACC-2
+### ACC-1 y ACC-2 · ya integrados
 
-- `registrarPago` abre con `// TODO(ACC-1): requirePermission('finanzas.pago.registrar')`.
-  El permiso es el que ACC-1 ya tiene en su catálogo, con sensibilidad
-  `sensible`. Cambiar el comentario por la llamada es una línea.
-- La bitácora se escribe desde `recordPayment` con
-  `anotarPagoEnBitacora()`, una función **local** a
-  `queries/finanzas.ts` con la forma exacta del `audit()` de ACC-2 y la
-  acción `invoice.payment_recorded`, que la rama de ACC-2 ya tiene en
-  `AUDIT_ACTIONS`. Al mezclar ACC-2: borrar la función local, importar
-  `audit` y pasarle el mismo objeto. La prueba
-  «cada cobro deja bitácora con actor y before/after» no cambia.
+Entraron a `main` durante la historia y FIN-2 los usa de verdad
+(detalle en §0.6). Lo que queda anotado para quien venga:
+
+- El permiso `finanzas.pago.registrar` es **sensible** en el catálogo y
+  el rol **Mánager** no lo tiene, a propósito: en el piloto el mánager
+  ve el estado de cobro de sus campañas y no toca el dinero. Si esa
+  decisión cambia, se cambia en `packages/core/src/permisos.ts` y la
+  prueba de punta a punta lo dice.
+- `invoice.payment_recorded` se usa tanto si el cobro deja la factura en
+  `partial` como si la deja en `paid`: el hecho es «entró un cobro», y
+  el `after` de la fila lleva el estado en que quedó. `invoice.paid`
+  queda para la transición manual de FIN-1.
 
 ---
 
@@ -410,3 +441,26 @@ de recordatorios, lo cancela el estado de la factura.
 | Recordatorios de cobro | — | FIN-4 |
 | Configurar `reserva_pct` | — | FIN-8 |
 | `MONTO_MAXIMO` en Cotizar, Ventas y `computeInvoiceTotals` | Es el pendiente de pulido, no esta historia (§1.1) | `pendientes-pulido.json` |
+
+---
+
+## 4 · Integración con lo que entró a `main` durante la historia
+
+`origin/main` avanzó 20 commits mientras FIN-2 se construía: ACC-1,
+ACC-2, FIN-6 y CAM-5. El merge tocó cinco archivos y ninguno fue una
+sorpresa de diseño:
+
+| Archivo | Qué pasó |
+|---|---|
+| `queries/finanzas.ts` | Los dos apéndices —FIN-2 y el flujo de caja de FIN-6— caían al final del archivo. Se conservan los dos; la bitácora local se cambia por `audit()` |
+| `test/finanzas.test.ts` | **FIN-6 va primero.** Sus pruebas leen FV-2026-010 con las cifras del seed y las de FIN-2 la cobran; `node:test` corre el archivo en orden |
+| `facturas/actions.ts` | Los imports y el `requirePermission` de las tres acciones de FIN-1; `registrarPago` estrena el suyo |
+| `_lib/messages.ts` | Los textos de FIN-6 (`flujo`) y los de FIN-2 conviven |
+| `packages/db/README.md` | La viñeta de la bitácora la escribió ACC-2; queda la suya, más la de «este paquete no tiene idioma» |
+
+**Una cosa que FIN-6 daba por hecha y ahora es verdad.** Su comentario
+decía «El monto es `total − paid_amount`, que es lo que FIN-2 mantendrá
+al registrar pagos». Ya lo mantiene: un abono parcial baja el monto que
+el flujo de caja proyecta para esa semana, y una factura cobrada por
+completo sale de la proyección. Las pruebas de FIN-6 sobre el seed
+siguen en verde porque corren antes de que las de FIN-2 cobren.

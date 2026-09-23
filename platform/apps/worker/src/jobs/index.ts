@@ -7,7 +7,8 @@
  *   import { finanzasJobs } from './finanzas/index.ts';   // Nicolás (FIN-4)
  *   import { campanasJobs } from './campanas/index.ts';   // Nicolás (CAM-3, CAM-5)
  */
+import { campanasJobs } from './campanas/index.ts';
 import { conexionesJobs } from './conexiones/index.ts';
 import type { JobRegistration } from '../runner/registry.ts';
 
-export const allJobs: readonly JobRegistration[] = [...conexionesJobs];
+export const allJobs: readonly JobRegistration[] = [...conexionesJobs, ...campanasJobs];

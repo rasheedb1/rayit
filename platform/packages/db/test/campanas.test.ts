@@ -18,8 +18,22 @@ import {
   QuoteNotAcceptedError,
   QuoteNotFoundError,
   createCampaignFromQuote,
+  addBrandInput,
+  importBrandCsv,
+  listBrandInputs,
+  BrandCsvOutOfWindowError,
+  CampaignWithoutDatesError,
+  openBrandCsvImport,
+  InvalidBrandInputError,
+  canRecomputeResult,
+  computeCampaignResult,
+  getCampaignResult,
+  getResultInputs,
+  listCampaignsToCompute,
+  ResultFrozenError,
   type WorkspaceTx,
 } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
@@ -33,6 +47,8 @@ const CAMPAIGN_AJENA = '00000009-0000-4000-8000-0000000ca001';
 const EMPRESA_AJENA = '00000009-0000-4000-8000-0000000000e1';
 /** Una campaña nueva de Laura, en planned, para las transiciones. */
 const CAMPAIGN_PRUEBA = '00000003-0000-4000-8000-00000ca0f001';
+/** Otra de Laura, sin fechas: no puede importar un CSV de ventas (CAM-4). */
+const CAMPAIGN_SIN_FECHAS = '00000003-0000-4000-8000-00000ca0f002';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
@@ -57,6 +73,9 @@ before(async () => {
     ON CONFLICT DO NOTHING;
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, amount, currency)
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')
+    ON CONFLICT DO NOTHING;
+    INSERT INTO campaign (id, workspace_id, company_id, name, status, amount, currency)
+    VALUES ('${CAMPAIGN_SIN_FECHAS}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña sin fechas', 'planned', 500000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
 }, { timeout: 120_000 });
@@ -95,7 +114,7 @@ const lecturaReciente = (iso: string | null | undefined, que: string) => {
 describe('lista y ficha', () => {
   test('la lista da las cuatro campañas del mock con sus cifras', async () => {
     const rows = await laura((tx) => listCampaigns(tx));
-    const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA);
+    const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA && r.id !== CAMPAIGN_SIN_FECHAS);
     assert.deepEqual(
       seed.map((r) => [r.companyName, r.status, r.postsCount, r.amount, r.hasInvoice]),
       [
@@ -188,6 +207,19 @@ describe('asociar y quitar posts', () => {
     posts = await laura((tx) => listCampaignPosts(tx, CAMPAIGN_FRESKO));
     assert.equal(posts.length, 2);
     assert.equal((await laura((tx) => listCampaignPosts(tx, CAMPAIGN_NUTRIVE))).length, 1, 'el post sigue en Nutrivé');
+
+    // Bitácora (ACC-2): cada asociación y la quitada dejan su fila sobre la campaña; el «ya no estaba» no escribe nada.
+    const asociadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked');
+    assert.equal(asociadas.length, 2);
+    const principalFresko = (asociadas[0]?.before as { primaryPostId: string | null }).primaryPostId;
+    assert.deepEqual(asociadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: false, deliverable: null, isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[0]?.after, { postId: POST_D05_YOUTUBE_NUTRIVE, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko });
+    assert.deepEqual(asociadas[1]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE, linked: true, deliverable: 'dedicado', isPrimary: false, primaryPostId: principalFresko }, 'la segunda vez ya estaba');
+    const quitadas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_unlinked');
+    assert.equal(quitadas.length, 1);
+    assert.deepEqual(quitadas[0]?.before, { postId: POST_D05_YOUTUBE_NUTRIVE });
+    assert.equal(quitadas[0]?.after, null);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, CAMPAIGN_FRESKO), [], 'desde otro workspace no se ve');
   });
 
   test('un solo principal por campaña', async () => {
@@ -204,6 +236,12 @@ describe('asociar y quitar posts', () => {
 
     await assert.rejects(laura((tx) => setPrimaryPost(tx, CAMPAIGN_FRESKO, POST_D01_REEL_CAFE_ALMA)), CampaignPostNotFoundError);
     await laura((tx) => unlinkPost(tx, CAMPAIGN_FRESKO, POST_D05_YOUTUBE_NUTRIVE));
+
+    const principal = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.primary_post_set');
+    assert.deepEqual(principal.map((f) => [f.before, f.after]), [[{ primaryPostId: POST_D05_YOUTUBE_NUTRIVE }, { primaryPostId: POST_D03_TIKTOK_FRESKO }]], 'el intento sobre un post ajeno a la campaña no escribe');
+    // Asociar D05 como principal desmarcó al anterior: queda en before, no se pierde.
+    const comoPrincipal = (await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_FRESKO, 'campaign.post_linked')).at(-1);
+    assert.equal((comoPrincipal?.after as { primaryPostId: string }).primaryPostId, POST_D05_YOUTUBE_NUTRIVE);
   });
 
   test('un post o una campaña de otro workspace no se pueden asociar', async () => {
@@ -303,6 +341,16 @@ describe('editar y cambiar de estado', () => {
     assert.equal(d.trackingUrl, null, 'null limpia');
     assert.equal(d.trackingCode, 'LAURAPRUEBA');
     assert.equal(d.endsOn, '2026-10-10');
+
+    // Bitácora (ACC-2): los dos cambios, con lo anterior y lo nuevo; los rechazados no escriben.
+    // La prueba «sin fechas» ya editó esta campaña dos veces (vaciar y restaurar fechas): esas filas también quedan.
+    const todas = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_PRUEBA, 'campaign.updated');
+    assert.equal(todas.length, 4, 'dos de «sin fechas» y dos de aquí; los tres rechazos no escriben');
+    assert.deepEqual((todas[0]?.after as { startsOn: string | null }).startsOn, null);
+    const cambios = todas.slice(2);
+    assert.deepEqual(cambios[0]?.before, { name: c.name, brief: null, startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: null, trackingUrl: null });
+    assert.deepEqual(cambios[0]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: 'LAURAPRUEBA', trackingUrl: 'https://ejemplo.co/?utm_campaign=prueba' });
+    assert.deepEqual(cambios[1]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-10', trackingCode: 'LAURAPRUEBA', trackingUrl: null });
   });
 
   test('transiciones válidas e inválidas; al pasar a live se fija la línea base', async () => {
@@ -325,6 +373,16 @@ describe('editar y cambiar de estado', () => {
     const closed = await laura((tx) => transitionCampaign(tx, CAMPAIGN_PRUEBA, 'closed'));
     assert.equal(closed.status, 'closed');
     await assert.rejects(laura((tx) => transitionCampaign(tx, CAMPAIGN_PRUEBA, 'live')), InvalidCampaignTransition);
+
+    // Bitácora (ACC-2): solo las cuatro válidas, en orden, con el estado anterior.
+    const estados = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_PRUEBA, 'campaign.status_changed');
+    assert.deepEqual(estados.map((f) => f.after), [
+      { status: 'live', brandBaselineFrom: '2026-09-17' },
+      { status: 'measuring', brandBaselineFrom: '2026-09-17' },
+      { status: 'reported', brandBaselineFrom: '2026-09-17' },
+      { status: 'closed', brandBaselineFrom: '2026-09-17' },
+    ]);
+    assert.deepEqual(estados[0]?.before, { status: 'planned', brandBaselineFrom: null });
   });
 
   test('una campaña cerrada no admite asociar, quitar ni editar', async () => {
@@ -396,6 +454,16 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     assert.equal(campaign.postsCount, 0);
     assert.equal(campaign.viewsTotal, null);
     assert.equal(campaign.hasInvoice, false);
+
+    // Bitácora (ACC-2): la campaña nace con su fila, aunque la llame COT-4 sin saberlo.
+    const nacida = await filasDeBitacora(t, WORKSPACE_LAURA, campaign.id);
+    assert.equal(nacida.length, 1);
+    assert.equal(nacida[0]?.action, 'campaign.created');
+    assert.equal(nacida[0]?.before, null);
+    assert.deepEqual(nacida[0]?.after, {
+      quoteId: QUOTE_ACCEPTED, companyId: COMPANY_CAFE_ALMA, creatorId: CREATOR_LAURA, dealId: null, name: 'Café Alma · 1 reel de cold brew',
+      amount: '6069000.00', currency: 'COP', startsOn: '2026-11-03', endsOn: '2026-11-10', status: 'planned',
+    });
   });
 
   test('aparece en la lista y la ficha muestra lo acordado y los entregables desde la cotización', async () => {
@@ -500,15 +568,18 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
 
   test('el flujo de COT-4 de punta a punta: aceptar y crear en UNA transacción, y si algo falla no queda nada', async () => {
     // Primer intento: la acción de Rasheed falla después de crear la campaña → rollback de todo.
+    let idPerdido = '';
     await assert.rejects(
       laura(async (tx) => {
         await tx.query("UPDATE quote SET status = 'accepted', accepted_at = now() WHERE id = $1", [QUOTE_FLOW]);
         const r = await createCampaignFromQuote(tx, { quoteId: QUOTE_FLOW, startsOn: '2026-12-01', endsOn: '2026-12-08' });
         assert.equal(r.created, true);
+        idPerdido = r.campaign.id;
         throw new Error('falló el UPDATE de deal');
       }),
       /falló el UPDATE de deal/,
     );
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_LAURA, idPerdido), [], 'la bitácora se fue con el rollback');
     const after = await laura((tx) => tx.query<{ status: string; n: number }>(
       'SELECT q.status, (SELECT count(*)::int FROM campaign c WHERE c.quote_id = q.id) AS n FROM quote q WHERE q.id = $1',
       [QUOTE_FLOW],
@@ -526,5 +597,314 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
     const planned = await laura((tx) => listCampaigns(tx, { status: 'planned' }));
     assert.ok(planned.some((c) => c.id === campaign.id));
     assert.equal((await laura((tx) => getCampaign(tx, campaign.id)))?.agreed?.quoteNumber, 'COT-2026-017');
+    assert.deepEqual((await filasDeBitacora(t, WORKSPACE_LAURA, campaign.id)).map((f) => f.action), ['campaign.created']);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Lo que aporta la marca (CAM-4)
+// ---------------------------------------------------------------------
+
+describe('lo que aporta la marca', () => {
+  const ajeno = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_AJENO, fn);
+  const filasDe = (campaignId: string) =>
+    laura((tx) => tx.query<{ kind: string; source: string; day: string; value: string; currency: string | null }>(
+      `SELECT kind, source, to_char(day, 'YYYY-MM-DD') AS day, value_num::text AS value, currency
+       FROM campaign_brand_input WHERE campaign_id = $1 ORDER BY source, kind, day, received_at`,
+      [campaignId],
+    )).then((r) => r.rows);
+  const bitacora = (action: string) =>
+    laura((tx) => tx.query<{ entity_type: string; entity_id: string; actor_user_id: string | null; after: Record<string, unknown> }>(
+      `SELECT entity_type, entity_id, actor_user_id, after FROM audit_log WHERE action = $1 ORDER BY created_at, id`,
+      [action],
+    )).then((r) => r.rows);
+
+  test('Café Alma trae del seed los dos totales manuales: 318 canjes y 8,4 M al 11 de septiembre', async () => {
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_CAFE_ALMA));
+    assert.equal(r.currency, 'COP');
+    assert.deepEqual(
+      r.totals.map((x) => [x.kind, x.source, x.semantics, x.value, x.currency, x.asOf, x.from, x.count]),
+      [
+        ['code_redemptions', 'brand_manual', 'total', '318.00', null, '2026-09-11', null, 1],
+        ['revenue', 'brand_manual', 'total', '8400000.00', 'COP', '2026-09-11', null, 1],
+      ],
+    );
+    assert.deepEqual(r.daily, [], 'sin CSV no hay serie diaria');
+    const fresko = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(fresko.totals, [], 'Fresko no tiene aportes: lista vacía, no ceros');
+  });
+
+  test('registrar un total por formulario: la misma alta no duplica, otra cifra manda por ser la última', async () => {
+    const primera = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '40', notes: 'Correo de la marca, lunes' }));
+    assert.equal(primera.created, true);
+    assert.equal(primera.campaignCurrency, 'COP');
+    assert.deepEqual([primera.input.kind, primera.input.source, primera.input.day, primera.input.value, primera.input.currency], ['code_redemptions', 'brand_manual', '2026-09-20', '40.00', null]);
+
+    const repetida = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '40' }));
+    assert.equal(repetida.created, false);
+    assert.equal(repetida.input.id, primera.input.id, 'devuelve la que ya estaba');
+
+    const corregida = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'code_redemptions', day: '2026-09-20', value: '45' }));
+    assert.equal(corregida.created, true);
+
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(r.totals.map((x) => [x.kind, x.value, x.asOf, x.count]), [['code_redemptions', '45.00', '2026-09-20', 2]], 'la última alta manda; hay dos filas detrás');
+  });
+
+  test('una corrección de vuelta (318 → 320 → 318) queda, y un dato atrasado no hace retroceder el acumulado', async () => {
+    const add = (day: string, value: string) => laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'signups', day, value }));
+    assert.equal((await add('2026-09-15', '318')).created, true);
+    assert.equal((await add('2026-09-15', '320')).created, true);
+    assert.equal((await add('2026-09-15', '318')).created, true, 'no es la última de ese día: se registra');
+    assert.equal((await add('2026-09-15', '318')).created, false, 'ahora sí es la última igual');
+    let r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(r.totals.filter((x) => x.kind === 'signups').map((x) => [x.value, x.asOf, x.count]), [['318.00', '2026-09-15', 3]]);
+    assert.equal((await add('2026-09-05', '200')).created, true);
+    r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(
+      r.totals.filter((x) => x.kind === 'signups').map((x) => [x.value, x.asOf]),
+      [['318.00', '2026-09-15']],
+      'el total a la fecha más reciente manda aunque el del 5 se haya cargado después',
+    );
+  });
+
+  test('ingresos: sin moneda toma la de la campaña; con otra se guarda tal cual y la respuesta dice cuál es la de la campaña', async () => {
+    const cop = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1500000.50' }));
+    assert.equal(cop.input.currency, 'COP');
+    assert.equal(cop.input.value, '1500000.50');
+    const usd = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-21', value: '400', currency: 'usd' }));
+    assert.equal(usd.input.currency, 'USD');
+    assert.equal(usd.campaignCurrency, 'COP');
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    const revenue = r.totals.find((x) => x.kind === 'revenue');
+    assert.deepEqual([revenue?.value, revenue?.currency, revenue?.asOf, revenue?.count], ['400.00', 'USD', '2026-09-21', 2]);
+  });
+
+  test('valida antes de escribir: kind, fecha, cifra y moneda', async () => {
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'csv_sales' as 'orders', day: '2026-09-20', value: '1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '20/09/2026', value: '1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '2026-09-20', value: '1.5' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1.555' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '-1' })), InvalidBrandInputError);
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1', currency: 'pesos' })), InvalidBrandInputError);
+  });
+
+  test('una campaña cerrada no admite aportes ni CSV', async () => {
+    await assert.rejects(laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_NUTRIVE, kind: 'orders', day: '2026-08-01', value: '3' })), CampaignLockedError);
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_NUTRIVE, rows: [{ line: 2, day: '2026-07-20', sales: '10.00', orders: null, redemptions: null }] })),
+      CampaignLockedError,
+    );
+    assert.deepEqual(await filasDe(CAMPAIGN_NUTRIVE), [], 'no quedó nada escrito');
+  });
+
+  test('desde otro workspace la campaña no existe: ni leer, ni registrar, ni importar', async () => {
+    const antes = await filasDe(CAMPAIGN_FRESKO);
+    await assert.rejects(ajeno((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO)), CampaignNotFoundError);
+    await assert.rejects(ajeno((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'orders', day: '2026-09-20', value: '1' })), CampaignNotFoundError);
+    await assert.rejects(
+      ajeno((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-09-02', sales: '10.00', orders: null, redemptions: null }] })),
+      CampaignNotFoundError,
+    );
+    assert.deepEqual(await filasDe(CAMPAIGN_FRESKO), antes, 'Fresko sigue igual');
+    const desdeAjeno = await ajeno((tx) => tx.query('SELECT 1 FROM campaign_brand_input WHERE campaign_id = $1', [CAMPAIGN_FRESKO]));
+    assert.equal(desdeAjeno.rows.length, 0, 'RLS: las filas de Laura no se ven desde el workspace ajeno');
+  });
+
+  const csv = [
+    { line: 2, day: '2026-09-02', sales: '1250000.50', orders: 12, redemptions: 3 },
+    { line: 3, day: '2026-09-03', sales: '980000.00', orders: 9, redemptions: 2 },
+    { line: 4, day: '2026-09-04', sales: '640000.00', orders: null, redemptions: null },
+  ];
+
+  test('importar el CSV llena la tabla por día; repetirlo no duplica; una cifra corregida se reemplaza', async () => {
+    const primera = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: csv }));
+    assert.deepEqual(primera, { inserted: 7, unchanged: 0, replaced: 0, days: 3, from: '2026-09-02', to: '2026-09-04' });
+
+    const segunda = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: csv }));
+    assert.deepEqual(segunda, { inserted: 0, unchanged: 7, replaced: 0, days: 3, from: '2026-09-02', to: '2026-09-04' });
+    const filas = (await filasDe(CAMPAIGN_FRESKO)).filter((f) => f.source === 'brand_csv');
+    assert.equal(filas.length, 7, 'siete filas, no catorce');
+
+    const corregido = csv.map((r) => (r.day === '2026-09-03' ? { ...r, sales: '990000.00' } : r));
+    const tercera = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: corregido }));
+    assert.deepEqual(tercera, { inserted: 0, unchanged: 6, replaced: 1, days: 3, from: '2026-09-02', to: '2026-09-04' });
+
+    const r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(
+      r.totals.filter((x) => x.source === 'brand_csv').map((x) => [x.kind, x.semantics, x.value, x.currency, x.from, x.asOf, x.count]),
+      [
+        ['code_redemptions', 'daily', '5.00', null, '2026-09-02', '2026-09-03', 2],
+        ['csv_sales', 'daily', '2880000.50', 'COP', '2026-09-02', '2026-09-04', 3],
+        ['orders', 'daily', '21.00', null, '2026-09-02', '2026-09-03', 2],
+      ],
+      'sumas por kind desde SQL, con la moneda de la campaña en las ventas',
+    );
+    assert.deepEqual(r.daily, [
+      { day: '2026-09-02', sales: '1250000.50', orders: 12, redemptions: 3 },
+      { day: '2026-09-03', sales: '990000.00', orders: 9, redemptions: 2 },
+      { day: '2026-09-04', sales: '640000.00', orders: null, redemptions: null },
+    ]);
+    // Los totales manuales de las pruebas anteriores siguen aparte: la fuente los separa.
+    assert.deepEqual(r.totals.filter((x) => x.source === 'brand_manual').map((x) => x.kind), ['code_redemptions', 'revenue', 'signups']);
+  });
+
+  test('la ventana starts_on − 7 … ends_on + 60 se vuelve a comprobar en la base; sin fechas no hay importación', async () => {
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-08-25', sales: '1.00', orders: null, redemptions: null }] })),
+      BrandCsvOutOfWindowError,
+    );
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [{ line: 2, day: '2026-11-09', sales: '1.00', orders: null, redemptions: null }] })),
+      BrandCsvOutOfWindowError,
+    );
+    const limites = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [
+      { line: 2, day: '2026-08-26', sales: '1.00', orders: null, redemptions: null },
+      { line: 3, day: '2026-11-08', sales: '2.00', orders: null, redemptions: null },
+    ] }));
+    assert.equal(limites.inserted, 2, 'los dos extremos entran');
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_SIN_FECHAS, rows: [{ line: 2, day: '2026-09-02', sales: '1.00', orders: null, redemptions: null }] })),
+      CampaignWithoutDatesError,
+    );
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [
+        { line: 2, day: '2026-09-10', sales: '1.00', orders: null, redemptions: null },
+        { line: 3, day: '2026-09-10', sales: '2.00', orders: null, redemptions: null },
+      ] })),
+      InvalidBrandInputError,
+      'dos filas del mismo día no se escriben',
+    );
+    assert.deepEqual(await laura((tx) => openBrandCsvImport(tx, CAMPAIGN_FRESKO)), { window: { from: '2026-08-26', to: '2026-11-08' }, currency: 'COP' });
+    await assert.rejects(laura((tx) => openBrandCsvImport(tx, CAMPAIGN_NUTRIVE)), CampaignLockedError);
+    await assert.rejects(laura((tx) => openBrandCsvImport(tx, CAMPAIGN_SIN_FECHAS)), CampaignWithoutDatesError);
+    const vacio = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [] }));
+    assert.deepEqual(vacio, { inserted: 0, unchanged: 0, replaced: 0, days: 0, from: null, to: null });
+  });
+
+  test('cada alta y cada importación dejan bitácora, sin el texto libre de la persona', async () => {
+    const altas = await bitacora('campaign.brand_input.added');
+    assert.ok(altas.length >= 4, `una entrada por alta nueva (hay ${altas.length})`);
+    for (const a of altas) {
+      assert.equal(a.entity_type, 'campaign_brand_input');
+      assert.deepEqual(Object.keys(a.after).sort(), ['campaign_id', 'currency', 'day', 'kind', 'source', 'value']);
+      assert.equal(a.actor_user_id, null, 'sin identidad en la transacción no se inventa un actor');
+    }
+    const texto = JSON.stringify(altas);
+    assert.doesNotMatch(texto, /Correo de la marca/, 'las notas no viajan a la bitácora');
+
+    const importaciones = await bitacora('campaign.brand_csv.imported');
+    assert.ok(importaciones.length >= 3);
+    const primera = importaciones.find((i) => i.after.inserted === 7);
+    assert.ok(primera, 'la primera importación con sus conteos');
+    assert.deepEqual(primera.after, { source: 'brand_csv', currency: 'COP', days: 3, from: '2026-09-02', to: '2026-09-04', inserted: 7, replaced: 0, unchanged: 0 });
+    assert.equal(primera.entity_id, CAMPAIGN_FRESKO);
+    // La bitácora del workspace ajeno no ve nada de esto.
+    const desdeAjeno = await ajeno((tx) => tx.query("SELECT 1 FROM audit_log WHERE action LIKE 'campaign.brand%'"));
+    assert.equal(desdeAjeno.rows.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Resultado de campaña (CAM-5)
+// ---------------------------------------------------------------------
+
+describe('resultado de campaña', () => {
+  const ajeno = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_AJENO, fn);
+  const filas = () => laura((tx) => tx.query<{ campaign_id: string }>('SELECT campaign_id FROM campaign_result ORDER BY campaign_id')).then((r) => r.rows.map((x) => x.campaign_id));
+
+  test('sin el GRANT, mc_app no escribe campaign_result y la ficha no ofrece «Recalcular»', async () => {
+    assert.equal(await laura((tx) => canRecomputeResult(tx)), false);
+    await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), /permission denied|permiso/i);
+  });
+
+  test('las entradas de Café Alma salen de la base: lecturas manuales a 720 h, línea base, serie de la marca y aportes', async () => {
+    const r = await laura((tx) => getResultInputs(tx, CAMPAIGN_CAFE_ALMA));
+    assert.ok(r);
+    assert.equal(r.campaign.status, 'reported');
+    assert.equal(r.inputs.amount, '3100000.00');
+    const d01 = r.inputs.posts.find((p) => p.postId === POST_D01_REEL_CAFE_ALMA);
+    const a720 = d01?.cuts.find((c) => c.cutHours === 720);
+    assert.deepEqual([a720?.views, a720?.reach, a720?.interactions], [412000, 296000, 34710], 'a igual edad manda la lectura capturada más tarde (la manual)');
+    assert.ok((d01?.maxAgeHours ?? 0) >= 720);
+    assert.ok(r.inputs.baselines.some((b) => b.platformId === 'instagram' && b.cutHours === 720 && b.reliable));
+    assert.equal(r.inputs.brandSeries[0]?.platformId, 'instagram');
+    assert.equal(r.inputs.brandSeries[0]?.points.length, 60);
+    assert.deepEqual(r.inputs.brandTotals.map((x) => [x.kind, x.source, x.value]), [['code_redemptions', 'brand_manual', '318.00'], ['revenue', 'brand_manual', '8400000.00']]);
+  });
+
+  describe('con el GRANT propuesto', () => {
+    before(async () => {
+      await t.admin('GRANT INSERT, UPDATE ON campaign_result TO mc_app');
+    });
+    after(async () => {
+      await t.admin('REVOKE INSERT, UPDATE ON campaign_result FROM mc_app');
+    });
+
+    test('recalcular Café Alma deja en la tabla los números del seed recalculados, no los del mock', async () => {
+      assert.equal(await laura((tx) => canRecomputeResult(tx)), true);
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.equal(antes?.cpm, '11800.00', 'el seed trae el CPM del mock');
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.ok(r);
+      assert.deepEqual(
+        [r.cutHours, r.views, r.reach, r.interactions, r.saves, r.shares, r.linkClicks, r.reachNonFollowersPct, r.viewsVsMedian],
+        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', '4.496'],
+      );
+      assert.deepEqual(
+        [r.brandFollowersGained, r.brandFollowersBaselineRate, r.brandFollowersCampaignRate, r.codeRedemptions, r.attributedRevenue, r.currency],
+        [1240, '12.9286', '155.0000', 318, '8400000.00', 'COP'],
+      );
+      assert.deepEqual([r.cpm, r.costPerFollower, r.cpa, r.emv], ['4353.93', '2500.00', '9748.43', null]);
+      assert.deepEqual(r.missingInputs, ['brand_csv_sales']);
+    });
+
+    test('recalcular es idempotente: la misma fila, las mismas cifras', async () => {
+      const antes = await filas();
+      const primera = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      const segunda = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.deepEqual(await filas(), antes, 'ninguna fila nueva');
+      assert.deepEqual({ ...segunda, computedAt: '' }, { ...primera, computedAt: '' });
+    });
+
+    test('Hogar Lindo sin posts: views null, no cero; el CPA sale de sus canjes', async () => {
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_HOGAR_LINDO));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_HOGAR_LINDO));
+      assert.deepEqual([r?.views, r?.reach, r?.cpm, r?.cpa], [null, null, null, '26190.48']);
+      assert.deepEqual(r?.missingInputs, ['posts', 'brand_followers', 'brand_csv_sales']);
+    });
+
+    test('Fresko aún no llega a 30 días: resultado parcial a 7 días, con el CSV de CAM-4', async () => {
+      await laura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
+      const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
+      assert.equal(r?.cutHours, 168);
+      assert.ok((r?.views ?? 0) > 0);
+      assert.deepEqual(r?.missingInputs, ['brand_followers'], 'las pruebas de CAM-4 le cargaron el CSV de ventas');
+    });
+
+    test('una campaña cerrada conserva su resultado', async () => {
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE));
+      await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_NUTRIVE)), ResultFrozenError);
+      assert.deepEqual(await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE)), antes);
+    });
+
+    test('desde otro workspace no se lee ni se escribe el resultado de Laura', async () => {
+      const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
+      assert.equal(await ajeno((tx) => getResultInputs(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.equal(await ajeno((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.equal(await ajeno((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), null);
+      assert.deepEqual(await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), antes);
+    });
+  });
+
+  test('como mc_worker (sin RLS) el filtro explícito de workspace basta', async () => {
+    const r = await t.db.asWorker((tx) => getResultInputs({ workspaceId: WORKSPACE_AJENO, query: (text, params) => tx.query(text, params) }, CAMPAIGN_CAFE_ALMA));
+    assert.equal(r, null, 'la campaña de Laura no existe para el workspace ajeno aunque RLS no aplique');
+    const todas = await t.db.asWorker((tx) => listCampaignsToCompute(tx));
+    assert.ok(todas.some((c) => c.id === CAMPAIGN_CAFE_ALMA && c.workspaceId === WORKSPACE_LAURA));
+    assert.ok(!todas.some((c) => c.id === CAMPAIGN_NUTRIVE), 'closed no se recalcula');
+    assert.deepEqual(await t.db.asWorker((tx) => listCampaignsToCompute(tx, { workspaceId: WORKSPACE_AJENO })), []);
   });
 });
