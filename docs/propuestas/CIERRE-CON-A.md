@@ -218,6 +218,54 @@ Ninguna se cambió: en el código quedó la opción conservadora.
 | «Mis videos» (pantalla del puntaje) y la lista de RES-3 | Otras historias | RES-3 (Rasheed), fase 2 |
 | Mediana por formato, aviso a quién, aviso de videos viejos | Decisiones D1–D3 | CON-6 fase 2 |
 
-## 9. Producción
+## 9. Producción (F5)
 
-Se llena al desplegar (F5).
+**Verificación antes de subir** (sobre `3a681d4`, con `main` integrado
+después del cierre de CAM): `pnpm verificar` 15/15 tareas, sin caché:
+connectors 203/203 · raíz 8/8 · core 248/248 · web 970 + 1 todo (115
+archivos) · db 769/769 · worker 120/120, sin canceladas. `next build`
+sale con 0. Sin migración: no hay `db.check` que correr por CON-A.
+
+**En dev** (`next dev -p 3171`, base embebida con el seed): `/`,
+`/conexiones`, `/campanas` y `/resumen` responden 200. No hay pantalla
+nueva ni cambiada (el único archivo web es `content/backlog.ts`, cuyas
+notas no se pintan: la portada solo cuenta), así que la revisión a
+400 px y en tema oscuro no aplica a este cierre.
+
+**Subida.** `git push origin HEAD:nicolas/CON-A-datos` y
+`git push origin HEAD:main` por avance rápido (`1bfa0ac..3a681d4`).
+Despliegue desde `rayit-deploy` en detached `origin/main`, después de
+que terminara el de CAM (`1bfa0ac`), que estaba construyéndose al llegar.
+
+| Qué | Resultado |
+|---|---|
+| Plan B (producción anterior) | `https://on-cue-92gduqy5o-influ3.vercel.app` (`1bfa0ac`, cierre de CAM) |
+| Despliegue nuevo | `https://on-cue-cr4agc9cv-influ3.vercel.app` · `dpl_DJd5DHvxebu2Sz8RMC5F2NdC9Q24` |
+| `api /v13/deployments/…` | `READY`, `target production`, `meta.gitCommitSha = 3a681d4054a3…` |
+| Alias | `on-cue-web.vercel.app` → `dpl_DJd5DHvxebu2Sz8RMC5F2NdC9Q24` |
+| Rutas | `/` 200 · `/conexiones` 200 · `/campanas` 200 · `/resumen` 200 · `/login` 200 · `/reporte/esto-no-existe` 404; ninguna con la frontera de error |
+| `job_definition` (lectura como `mc_app`) | `collect.post_metrics` `0 5 * * *` 600 s · `compute.baseline` `40 5 * * *` 300 s · `compute.post_score` `45 5 * * *` 300 s; las tres `enabled`, 5 intentos |
+| Lo que tiene Supabase de CON-6 (workspace de la demo) | 32 filas de `creator_baseline` (el seed se aplicó dos días distintos y la tabla es append-only), 67 de `post_score`, **0** corridas de `compute.*` en `job_run`: lo sembró `0002` y el worker no corre (WRK) |
+| `make db.guardia` | **Roja por una sola causa, que no es de CON-A**: «faltan 1 migración(es) por aplicar: `0041_campaign_result_escritura_web.sql`». Es la PARADA 1 de CAM (`CIERRE-CAM.md` §8.1), que llegó a `main` sin aplicar. Se corrió desde `rayit-deploy` (el código desplegado); desde el clon principal (`29460e3`, desactualizado) da además falsos positivos de código viejo (`membership.role`). El despliegue anterior tenía la misma falla, así que volver al plan B no la arregla: **no se hizo rollback**. Se pone verde con `make db.migrate` (la 0041) |
+
+### Guion de humo para Nicolás
+
+CON-A no cambia ninguna pantalla: lo que se comprueba en producción es
+que nada se rompió y que la costura con CAM lee la línea base. Marcado
+**[escribe]** lo que toca la base real.
+
+1. `https://on-cue-web.vercel.app/` con tu sesión: en la portada, el
+   módulo Conexiones cuenta CON-6 y CON-2b como hechas.
+2. `/conexiones`: tus cuentas, como antes (CON-A no toca la pantalla).
+3. `/resumen`: lo de siempre. Resumen todavía no lee el puntaje (RES-3).
+4. `/campanas` → **Café Alma · Lanzamiento cold brew** → «Resultado».
+   Si ya aplicaste la 0041 de CAM, **[escribe]** **Recalcular**: tiene que
+   aparecer «4,5× tu mediana». Ese 4,496 sale de `creator_baseline`, la
+   tabla de CON-6, y es la misma cifra que prueba
+   `costuras-con.test.ts`. Sin la 0041, la ficha lo dice con una frase y
+   no hay botón.
+5. En tu máquina (no toca producción):
+   `cd platform && pnpm --filter @mc/worker start -- --demo`. A los pocos
+   segundos imprime `demo CON-6: job_run de compute.*` con `tras:
+   collect.post_metrics`, la línea base y los dos puntajes de §4.
+   Ctrl-C para salir.
