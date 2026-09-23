@@ -1227,11 +1227,18 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   const DEAL_PUBLIC_SHARE =
     "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
 
-  test('el inventario declarado es el de 0030 y 0031, y la base recién migrada lo cumple', async () => {
+  test('el inventario declarado es el de 0030, 0031 y 0037, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
-      'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'pipeline_stage', 'quote',
+      'contact', 'contact_suppression', 'deal', 'deal_stage_history', 'deal_stage_history_id_seq', 'media_kit',
+      'media_kit_lockout', 'outbound_enrollment', 'outbound_touch', 'pipeline_stage', 'quote',
     ]);
-    assert.equal(Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length, 8, 'las siete de 0030 y la aceptada del negocio de 0033');
+    assert.equal(
+      Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
+      16,
+      'las siete de 0030, la aceptada del negocio de 0033 y las ocho de la baja de 0037',
+    );
+    // La baja (0037 §9) escribe la baja del contacto, nunca su correo.
+    assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact!.columnas!.UPDATE!.includes('email'));
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
   });
@@ -1242,9 +1249,9 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     );
   });
 
-  test('SELECT de una tabla que 0030 no le da (contact) se reporta', async () => {
-    await con('GRANT SELECT ON contact TO mc_public_share', 'REVOKE SELECT ON contact FROM mc_public_share', (e) =>
-      dice(e, /^contact: SELECT de la relación entera$/),
+  test('SELECT de una tabla que 0030 y 0037 no le dan (payment) se reporta', async () => {
+    await con('GRANT SELECT ON payment TO mc_public_share', 'REVOKE SELECT ON payment FROM mc_public_share', (e) =>
+      dice(e, /^payment: SELECT de la relación entera$/),
     );
   });
 

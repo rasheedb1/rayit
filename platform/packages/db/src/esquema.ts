@@ -256,6 +256,10 @@ export const POLITICAS_ABIERTAS_DECLARADAS: Readonly<Record<string, string>> = {
     'la rama «connection_id IS NULL» del alta: el camino de OAuth que FALLA registra sus llamadas antes de que ' +
     'exista la conexión (conexiones/oauth-handlers.ts). Esas filas no las lee nadie más que el worker ' +
     '(api_call_log_read exige la conexión), así que escribirlas no expone nada de ningún inquilino',
+  'outbound_sequence_template.outbound_sequence_template_read':
+    'las plantillas de secuencia (0037 §1 y §7.3) son un catálogo GLOBAL sin workspace ni dato de ningún inquilino: ' +
+    'las mismas para todos. Lectura abierta y ninguna política de escritura para mc_app (además del REVOKE), así que ' +
+    'esta política no abre nada que escribir',
 };
 
 /**
@@ -307,6 +311,14 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'motivo de pérdida y el monto con su moneda, que la función copia de la cotización que acaba de leer por su ' +
     'slug— y SELECT de la etapa: no puede tocar el total de la cotización ni el nombre, la empresa o el dueño del ' +
     'negocio; la campaña la crea después la web dentro del workspace de la cotización',
+  // La baja desde el enlace de un correo (0037 §9, VEN-9 y VEN-15).
+  'public_optout(text)':
+    'la baja desde el enlace de un correo (0037 §9): la página se abre sin sesión y la baja cruza workspaces (0007: ' +
+    'nadie en la plataforma vuelve a escribirle). Corre como mc_public_share, cuyas políticas `TO mc_public_share` ' +
+    'abren solo el toque ENVIADO cuyo sha256 del token fija la función, y después las fichas de ese contacto y las ' +
+    'de su mismo correo. Escribe por COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, ' +
+    'el estado de sus enrolamientos, y el correo en contact_suppression (reason unsubscribe_link, la baja ' +
+    'verificable de 0029 §1). No es de ningún disparador',
 };
 
 /**
@@ -429,13 +441,14 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
     'rol de administración de Supabase (BYPASSRLS): se lo concede ALTER DEFAULT PRIVILEGES de mc_migrator. ' +
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
   mc_public_share:
-    'dueño de las tres funciones de los enlaces públicos de Cotizar (0030). NOLOGIN, sin BYPASSRLS: ninguna ' +
+    'dueño de las funciones de los enlaces públicos: las tres de Cotizar (0030) y la baja (0037 §9). NOLOGIN, sin ' +
+    'BYPASSRLS: ninguna ' +
     'conexión entra con él. Lo que puede, privilegio por privilegio y columna por columna, lo dice ' +
     'PRIVILEGIOS_DEL_ENLACE_PUBLICO; sus políticas, POLITICAS_DEL_ENLACE_PUBLICO; y la guardia comprueba las dos ' +
     'listas y sus atributos en cada arranque, no solo la migración al aplicarse',
 };
 
-/** El rol que atiende los enlaces públicos de Cotizar (0030): dueño de sus funciones SECURITY DEFINER. */
+/** El rol que atiende los enlaces públicos (Cotizar, 0030; la baja, 0037 §9): dueño de sus funciones SECURITY DEFINER. */
 export const PUBLIC_SHARE_ROLE = 'mc_public_share';
 
 /** Lo que el rol de los enlaces públicos puede hacer sobre una relación de `public`. */
@@ -502,6 +515,32 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['SELECT'],
     motivo: 'leer la etapa del negocio: la pide assert_reference_visible de 0025 al cambiar deal.stage_id (0030 §3)',
   },
+  // La baja desde el enlace de un correo (0037 §9). Sus políticas dicen qué filas.
+  outbound_touch: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['blocked_reason', 'status'] },
+    motivo:
+      'encontrar el toque enviado por el sha256 del token y cancelar lo pendiente del contacto que pide la baja, en ' +
+      'cualquier workspace (0037 §9). Nunca el cuerpo, el destinatario ni las fechas',
+  },
+  outbound_enrollment: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['status'] },
+    motivo: 'pasar a opted_out los enrolamientos de ese contacto (0037 §9)',
+  },
+  contact: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['opted_out', 'opted_out_at', 'opted_out_reason'] },
+    motivo:
+      'leer el correo del contacto que pide la baja y marcar la baja en sus fichas y en las de su mismo correo (0037 ' +
+      '§9). Nunca el correo, el nombre ni el dueño',
+  },
+  contact_suppression: {
+    tabla: ['INSERT'],
+    motivo:
+      'anotar el correo en la baja global con reason unsubscribe_link, la baja verificable de la propia persona que ' +
+      '0029 §1 reserva a la lista (0037 §9). No la lee',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
@@ -521,9 +560,12 @@ export interface PoliticaDelEnlace {
 
 const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share'/;
 const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
+/** La baja (0037 §9): el sha256 del token, y la lista de contactos que public_optout fija. */
+const TOKEN_DE_LA_BAJA = /^\(?optout_token_hash = NULLIF\(current_setting\('app\.public_optout'/;
+const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030 y la de 0033. Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las ocho de la baja (0037 §9). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -567,6 +609,47 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
       /\bd\.workspace_id = pipeline_stage\.workspace_id\b/,
     ],
     motivo: 'la etapa en la que está un negocio que el rol ya ve (deal_public_share decide cuál)',
+  },
+  // La baja desde el enlace de un correo (0037 §9).
+  'outbound_touch.outbound_touch_public_optout': {
+    cmd: 'r',
+    exige: [TOKEN_DE_LA_BAJA],
+    motivo: 'el toque cuyo sha256 del token fija public_optout',
+  },
+  'outbound_touch.outbound_touch_public_optout_contacts': {
+    cmd: 'r',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'los toques de los contactos que se dan de baja',
+  },
+  'outbound_touch.outbound_touch_public_optout_cancel': {
+    cmd: 'w',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'cancelar los toques pendientes de esos contactos',
+  },
+  'outbound_enrollment.outbound_enrollment_public_optout': {
+    cmd: 'r',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'los enrolamientos de los contactos que se dan de baja',
+  },
+  'outbound_enrollment.outbound_enrollment_public_optout_cancel': {
+    cmd: 'w',
+    exige: [/\bcontact_id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'pasar a opted_out los enrolamientos de esos contactos',
+  },
+  'contact.contact_public_optout': {
+    cmd: 'r',
+    exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'las fichas de los contactos que se dan de baja',
+  },
+  'contact.contact_public_optout_email': {
+    cmd: 'r',
+    exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
+    motivo: 'las fichas con el mismo correo del contacto que pide la baja, en otros workspaces',
+  },
+  'contact.contact_public_optout_mark': {
+    cmd: 'w',
+    exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
+    motivo: 'marcar la baja en esas fichas',
   },
 };
 
@@ -727,6 +810,20 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     motivo:
       'la baja global la escribe el worker con una baja verificada y la lee el disparador de contact: la web no la ' +
       'toca. Con escritura, un workspace daba de baja a cualquier correo en toda la plataforma (0029 §1)',
+  },
+
+  // Outreach (0037 §7.4).
+  outbound_sequence_template: { permite: ['SELECT'], motivo: 'catálogo global de plantillas de solo lectura' },
+  outbound_counter: {
+    permite: ['SELECT'],
+    motivo:
+      'los límites diarios y semanales los suma el despachador (worker) con increment_if_under_cap e ' +
+      'increment_weekly; con escritura, un workspace se reiniciaría sus propios topes y quemaría su cuenta',
+  },
+  outbound_breaker: { permite: ['SELECT'], motivo: 'el disyuntor por tipo de paso lo calcula el worker' },
+  outbound_review: {
+    permite: ['SELECT', 'INSERT'],
+    motivo: 'bitácora de la puerta de calidad (nota, tokens y costo): se anota, no se corrige ni se borra',
   },
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
@@ -2264,8 +2361,8 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   }
   if (estado.enlacePublico.length) {
     partes.push(
-      `el rol de los enlaces públicos (${PUBLIC_SHARE_ROLE}), que atiende /kit y /cotizacion sin sesión, no es el ` +
-        'que promete 0030: ' +
+      `el rol de los enlaces públicos (${PUBLIC_SHARE_ROLE}), que atiende /kit, /cotizacion y la baja sin sesión, ` +
+        'no es el que prometen 0030 y 0037: ' +
         estado.enlacePublico.join('; ') +
         '. Revoca lo que sobra (los atributos y las membresías, con ./scripts/supabase-admin.sh), o cambia ' +
         'PRIVILEGIOS_DEL_ENLACE_PUBLICO / POLITICAS_DEL_ENLACE_PUBLICO junto con la migración que lo concede',
