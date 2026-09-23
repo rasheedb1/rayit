@@ -1,3 +1,4 @@
+import { requirePermission } from "@/lib/permisos";
 import { getOAuthHandlers } from "../../../_lib/oauth-server";
 
 type Ctx = { params: Promise<{ platform: string }> };
@@ -9,7 +10,9 @@ type Ctx = { params: Promise<{ platform: string }> };
  * su clave natural.
  */
 export async function POST(req: Request, ctx: Ctx) {
-  // TODO(ACC-1): requirePermission('conexiones.cuenta.conectar')
+  // Es el punto de entrada del flujo que escribe tokens: el mismo
+  // permiso que «Agregar cuenta», y antes de mirar el formulario.
+  await requirePermission("conexiones.cuenta.conectar");
   const { platform } = await ctx.params;
   return getOAuthHandlers().start(req, platform);
 }

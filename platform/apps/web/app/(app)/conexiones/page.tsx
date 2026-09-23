@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import { flags } from "@/content/flags";
 import { formatterFor, type Formatter } from "@/lib/format";
+import { requirePermission } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { agregarCuenta } from "./actions";
 import { getCuentasService } from "./_lib/cuentas-server";
@@ -71,8 +72,12 @@ function Notice({ params, rows, f }: { params: Search; rows: FilaDeCuenta[]; f: 
 }
 
 export default async function CuentasPage({ searchParams }: { searchParams: Promise<Search> }) {
-  // TODO(ACC-1): requirePermission('conexiones.cuenta.ver') como primera
-  // línea, en cuanto el catálogo de permisos esté en main.
+  // Hoy lanza SinPermisoError y lo enseña la frontera del segmento
+  // (error.tsx); con ACC-5, `requireModule` lo convertirá en 404 para no
+  // confirmar siquiera que la pantalla existe (PERMISO_MINIMO.conexiones
+  // es justo este permiso). La diferencia es dónde se traduce el error,
+  // no si se comprueba.
+  await requirePermission("conexiones.cuenta.ver");
   const params = await searchParams;
   const service = getCuentasService();
   // De cada cuenta, solo lo que la pantalla pinta: ni la ref del
