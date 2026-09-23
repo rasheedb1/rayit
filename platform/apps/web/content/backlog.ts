@@ -439,7 +439,7 @@ export const STORIES: readonly Story[] = [
     desc: "packages/core/tarifas.ts calcula el rango por entregable desde views promedio × CPM de niche_cpm_benchmark, con modificadores (derechos de uso, exclusividad). Las views vienen de creator_baseline si existe y es confiable; si no, el creador las escribe y quedan marcadas como manuales.",
     done: "Con las views del mock salen los rangos del mock; cambiar el CPM cambia el rango y la explicación lo dice.",
     status: "hecho",
-    note: "Rango por entregable y paquetes con la fórmula de packages/core/src/tarifas.ts, la misma en la pantalla y al guardar; «Cómo se calcula» bajo su fila, precio y CPM a mano marcados, rango al revés bloqueado en todas las capas (más un CHECK en 0030). Pulido r1: guardar ya no desmarca las casillas de condiciones y paquetes (sin el reinicio de <form action>); los modificadores quedan en cada entregable y paquete (RateCardItem.modifierIds); los campos vacíos muestran «p. ej. 25.000» o «CPM bajo» en vez de «0»; queries/cotizar partido por pieza sin cambiar su API.",
+    note: "Rango por entregable y paquetes con la fórmula de packages/core/src/tarifas.ts, la misma en la pantalla y al guardar; «Cómo se calcula» bajo su fila, precio y CPM a mano marcados, rango al revés bloqueado en todas las capas (más un CHECK en 0030). Pulido r1: guardar ya no desmarca las casillas de condiciones y paquetes (sin el reinicio de <form action>); los modificadores quedan en cada entregable y paquete (RateCardItem.modifierIds); los campos vacíos muestran «p. ej. 25.000» o «CPM bajo» en vez de «0»; queries/cotizar partido por pieza sin cambiar su API. Pulido r2: a 400 px cada entregable es una tarjeta (rango, views y CPM apilados, sin scroll lateral).",
   },
   {
     id: "COT-2", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["COT-1", "RES-1"],
@@ -447,7 +447,7 @@ export const STORIES: readonly Story[] = [
     desc: "Foto congelada de los números en media_kit.snapshot, página pública por slug, opcional con contraseña y vencimiento. Contador de vistas.",
     done: "El enlace abre sin sesión, muestra las cifras congeladas, y no cambia aunque cambien las métricas.",
     status: "hecho",
-    note: "/kit/<slug> sin sesión sobre public_media_kit() (0030, rol mc_public_share). Contraseña de 8+ signos guardada como huella; bloqueo de 15 min tras 10 fallos en la base; el freno de 5 por minuto del servidor es por instancia y de mejor esfuerzo (documentado en 0030 y el README). Vista previa y robots no cuentan visitas. Pulido r1: bajo las tarifas dice qué condiciones ya incluyen los rangos; la pastilla de red no se estira; la hora del bloqueo sale de lib/format.ts; la lista distingue por hora; las páginas públicas tienen esqueleto de carga.",
+    note: "/kit/<slug> sin sesión sobre public_media_kit() (0030, rol mc_public_share). Contraseña de 8+ signos guardada como huella; bloqueo de 15 min tras 10 fallos en la base; el freno de 5 por minuto del servidor es por instancia y de mejor esfuerzo (documentado en 0030 y el README). Vista previa y robots no cuentan visitas. Pulido r1: bajo las tarifas dice qué condiciones ya incluyen los rangos; la pastilla de red no se estira; la hora del bloqueo sale de lib/format.ts; la lista distingue por hora. Pulido r2: un enlace inexistente responde 404 de verdad (sin loading.tsx en (public), con prueba).",
   },
   {
     id: "COT-3", module: "COT", owner: "rasheed", size: "L", sprint: 4, deps: ["COT-1", "VEN-3"],
@@ -455,7 +455,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear desde un deal, ítems desde el tarifario, subtotal, descuento, impuesto y total. Lo que se acuerda antes de publicar: métricas a reportar, cortes (24 h, 7 d, 30 d), derechos, exclusividad, plazo de pago. Numeración COT-2026-014.",
     done: "Enviar pasa el deal a «Propuesta enviada»; la cotización tiene su enlace público.",
     status: "hecho",
-    note: "Ciclo draft → sent → viewed → accepted/rejected/expired con una fecha por estado y transiciones con la fila bloqueada; entregables del tarifario, impuesto del workspace, numeración COT-AAAA-NNN. Pulido r1: elegir un entregable cuyo precio cobra exclusividad o derechos sube esos días en «Lo acordado» y lo dice en la línea (createQuote hace lo mismo si no se le pasan); preselecciona el media kit más reciente sin contraseña y avisa si el elegido la tiene; el detalle cabe a 400 px (total de la línea siempre visible, historia en el mismo dibujo) y oculta «Válida hasta» cuando ya está cerrada.",
+    note: "Ciclo draft → sent → viewed → accepted/rejected/expired con una fecha por estado y transiciones con la fila bloqueada; entregables del tarifario, impuesto del workspace, numeración COT-AAAA-NNN. Pulido r1: elegir un entregable cuyo precio cobra exclusividad o derechos sube esos días en «Lo acordado» y lo dice en la línea (createQuote hace lo mismo si no se le pasan); preselecciona el media kit más reciente sin contraseña y avisa si el elegido la tiene; el detalle cabe a 400 px (total de la línea siempre visible, historia en el mismo dibujo) y oculta «Válida hasta» cuando ya está cerrada. Pulido r2: sin tarifario guardado, el formulario lo dice y enlaza a /cotizar; «enlace copiado» sale una sola vez (se limpia ?enviada).",
   },
   {
     id: "COT-4", module: "COT", owner: "rasheed", size: "M", sprint: 4, deps: ["COT-3", "CAM-2"],

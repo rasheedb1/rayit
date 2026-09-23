@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useId, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import {
   calcularTotalesCotizacion, compareDecimal, pctToRate, plazoConIncluido, terminosDeModificadores, type PlatformId,
@@ -307,6 +308,14 @@ export function CotizacionForm({
           <h2 id={`${base}entregables`} className="text-sm font-semibold">
             {t.entregables}
           </h2>
+          {tarifas.length === 0 && (
+            <p className="mt-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-2" data-aviso="sin-tarifario">
+              {t.sinTarifario.texto}{" "}
+              <Link href="/cotizar" className="font-medium text-ink underline underline-offset-2">
+                {t.sinTarifario.accion}
+              </Link>
+            </p>
+          )}
           {errors.items && (
             <p role="alert" className="mt-2 text-sm text-bad">
               {errors.items}

@@ -34,13 +34,13 @@ const KITS: MediaKitAdjuntable[] = [
   { id: "00000009-0000-4000-8000-00000000c001", slug: "kit-viejo", createdAt: "2026-08-02T15:00:00Z", hasPassword: false, expiresAt: null },
 ];
 
-function formulario(action = vi.fn(async () => ({})), mediaKits = KITS, iniciales = INICIALES) {
+function formulario(action = vi.fn(async () => ({})), mediaKits = KITS, iniciales = INICIALES, tarifas = TARIFAS) {
   return (
     <CotizacionForm
       action={action}
       creatorId="00000002-0000-4000-8000-000000000003"
       deals={DEALS}
-      tarifas={TARIFAS}
+      tarifas={tarifas}
       mediaKits={mediaKits}
       settings={{ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }}
       currency="COP"
@@ -212,6 +212,20 @@ describe("CotizacionForm", () => {
     const kit = screen.getByLabelText("Media kit que la acompaña");
     expect(kit).toBeDisabled();
     expect(screen.getByText(/No hay media kits públicos sin vencer/)).toBeInTheDocument();
+  });
+
+  it("sin tarifario guardado lo dice sobre los entregables y lleva a guardarlo", () => {
+    render(formulario(undefined, KITS, INICIALES, []));
+    const aviso = document.querySelector('[data-aviso="sin-tarifario"]') as HTMLElement;
+    expect(aviso).toHaveTextContent(/Todavía no guardaste tu tarifario/);
+    expect(within(aviso).getByRole("link", { name: "Ir al tarifario" })).toHaveAttribute("href", "/cotizar");
+    // El selector sigue ofreciendo «Otro entregable»: el aviso no bloquea.
+    expect(screen.getByLabelText("Entregable")).toHaveDisplayValue("Otro entregable");
+  });
+
+  it("con tarifario no hay aviso", () => {
+    render(formulario());
+    expect(document.querySelector('[data-aviso="sin-tarifario"]')).toBeNull();
   });
 
   it("en el teléfono el total va antes de «Guardar borrador»: nadie guarda sin haberlo visto", () => {
