@@ -22,6 +22,7 @@
     "./queries/finanzas": "./src/queries/finanzas.ts",
     "./queries/conexiones": "./src/queries/conexiones.ts",
     "./queries/accesos": "./src/queries/accesos.ts",
+    "./queries/worker": "./src/queries/worker.ts",
     "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {

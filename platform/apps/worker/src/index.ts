@@ -5,6 +5,11 @@
  *   … --install                                             crea/migra el esquema pgboss y sale
  *   … --pglite                                              Postgres embebido, vacío (sin Docker)
  *   … --demo                                                pglite + datos de ejemplo + oauth.refresh en vivo
+ *   … --once                                                una pasada: corre lo vencido y sale, sin pg-boss (WRK)
+ *
+ * --once sale con 0 si ninguna corrida terminó failed y con 1 si alguna
+ * sí: así el cron externo (GitHub Actions) la marca en rojo en vez de
+ * esconderla. Al terminar imprime la salud (última corrida por job).
  *
  * Apagado limpio: SIGTERM/SIGINT → boss.stop graceful (espera los jobs
  * activos hasta WORKER_STOP_TIMEOUT_S) → cierra el pool → sale con 0.
@@ -18,16 +23,24 @@ import { allJobs } from './jobs/index.ts';
 import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, type Logger } from './runner/logger.ts';
-import { startWorker, type RunningWorker } from './runner/worker.ts';
+import { runOnce } from './runner/once.ts';
+import { formatHealth } from './runner/salud.ts';
+import { assertRole, startWorker, type RunningWorker } from './runner/worker.ts';
+import { getWorkerHealth } from '@mc/db/queries/worker';
 
 const args = new Set(process.argv.slice(2));
 const install = args.has('--install');
+const once = args.has('--once');
 const demo = args.has('--demo');
 const embedded = demo || args.has('--pglite');
 
 if (args.has('--help') || args.has('-h')) {
-  process.stdout.write('Uso: worker [--install] [--pglite] [--demo]\n');
+  process.stdout.write('Uso: worker [--install] [--pglite] [--demo] [--once]\n');
   process.exit(0);
+}
+if (once && (install || demo)) {
+  process.stderr.write('--once no se combina con --install ni con --demo.\n');
+  process.exit(2);
 }
 
 let config: WorkerConfig;
@@ -116,10 +129,37 @@ async function buildDemo(): Promise<{ now: () => Date; http?: ConnectorHttpOverr
   return { now: reloj.now, http: red.http, env: red.env, grabado: red.grabado, avanzaUnDia: reloj.avanzaUnDia };
 }
 
+/**
+ * --once: comprueba el rol, corre lo vencido (runner/once.ts), imprime
+ * la salud y sale. Un SIGTERM (el runner de GitHub cancelando) aborta la
+ * corrida en curso y no empieza ninguna más.
+ */
+async function mainOnce(db: WorkerDatabase, secrets: SecretStore, refreshers: TokenRefresherRegistry): Promise<void> {
+  const abort = new AbortController();
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (abort.signal.aborted) process.exit(130);
+    logger.warn('apagando la pasada: la corrida en curso recibe la señal y no empieza ninguna más', { signal });
+    abort.abort(new Error(`pasada interrumpida por ${signal}`));
+  };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+  let failedRuns = 0;
+  try {
+    await assertRole(db, config, logger);
+    const summary = await runOnce({ config, db, logger, jobs: allJobs, secrets, refreshers, signal: abort.signal });
+    failedRuns = summary.failedRuns;
+    process.stdout.write(formatHealth(await getWorkerHealth(db), new Date()));
+  } finally {
+    await db.close().catch(() => undefined);
+  }
+  process.exit(failedRuns > 0 ? 1 : 0);
+}
+
 async function main(): Promise<void> {
   const db = await openDatabase();
   const secrets = buildSecrets(db);
   const refreshers = buildRefreshers();
+  if (once) return mainOnce(db, secrets, refreshers);
   const demoRed = await buildDemo();
 
   let worker: RunningWorker;
