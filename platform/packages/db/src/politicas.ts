@@ -111,6 +111,12 @@
  *     además el término del inquilino en un AND, o declarar la columna
  *     en AISLADAS_POR_PERSONA_DECLARADAS con su motivo (membership: cada
  *     persona lee sus membresías, que es la lista de sus workspaces).
+ *     La otra llave de la persona es su correo verificado (CIM-3,
+ *     0027): `email = current_user_email()` aísla SOLO en app_user y
+ *     SOLO sobre `email`, que es único en la tabla (app_user_email_key)
+ *     y lo fija la sesión con lo que Supabase verificó. Es la misma fila
+ *     que `id = current_user_id()`, dicha antes de saber el id. Sobre
+ *     cualquier otra columna o tabla, esa forma no aísla.
  *
  *   · La rama «col IS NULL» abre la fila a todos, y la fila puede NOMBRAR
  *     algo privado por OTRA clave ajena. brand_account_snapshot sin
@@ -189,6 +195,10 @@ const COL_IGUAL_WORKSPACE = new RegExp(`^${COLUMNA} = ${DEL_WORKSPACE}$`);
 const WORKSPACE_IGUAL_COL = new RegExp(`^${DEL_WORKSPACE} = ${COLUMNA}$`);
 const COL_IGUAL_PERSONA = new RegExp(`^${COLUMNA} = ${DE_LA_PERSONA}$`);
 const PERSONA_IGUAL_COL = new RegExp(`^${DE_LA_PERSONA} = ${COLUMNA}$`);
+/** El correo verificado de la sesión (0027), con un cast opcional. */
+const DEL_CORREO = `\\(?current_user_email\\(\\)\\)?${CAST}`;
+const COL_IGUAL_CORREO = new RegExp(`^${COLUMNA} = ${DEL_CORREO}$`);
+const CORREO_IGUAL_COL = new RegExp(`^${DEL_CORREO} = ${COLUMNA}$`);
 const COL_ES_NULA = new RegExp(`^(${IDENT}) IS NULL$`);
 const CORRELACION = new RegExp(`^(${IDENT})\\.(${IDENT}) = (${IDENT})\\.(${IDENT})$`);
 /**
@@ -424,6 +434,11 @@ function atomo(s: string, ctx: ContextoDePolitica): Resultado {
     }
     return aisla([col], false);
   }
+
+  // El correo verificado solo nombra a una persona en app_user.email
+  // (único): ahí es la misma fila que `id = current_user_id()`.
+  const correo = COL_IGUAL_CORREO.exec(s) ?? CORREO_IGUAL_COL.exec(s);
+  if (correo) return ctx.tabla === 'app_user' && correo[1] === 'email' ? aisla(['email'], false) : abierta(s);
 
   const nula = COL_ES_NULA.exec(s);
   if (nula) return { t: 'nulo', col: nula[1]!, correlaciones: new Set() };

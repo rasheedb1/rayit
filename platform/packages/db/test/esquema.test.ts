@@ -851,6 +851,28 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     );
   });
 
+  test('el correo de la sesión solo aísla en app_user.email; en otra columna u otra tabla, no', async () => {
+    // CIM-3 (0027): `email = current_user_email()` en app_user es la misma
+    // fila que `id = current_user_id()`, dicha antes de saber el id, y la
+    // guardia la acepta (app_user_read_self_email). La misma forma sobre
+    // una columna cualquiera de otra tabla es un filtro por texto: quien
+    // fije ese correo lee la fila, sea del workspace que sea.
+    await con(
+      'SET ROLE mc_migrator_embedded; ' +
+        'CREATE TABLE zz_correo (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
+        '  email citext); ' +
+        'ALTER TABLE zz_correo ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_correo FORCE ROW LEVEL SECURITY; ' +
+        'CREATE POLICY zz_correo_email ON zz_correo FOR SELECT USING (email = current_user_email()); ' +
+        'REVOKE ALL ON zz_correo FROM mc_app; GRANT SELECT ON zz_correo TO mc_app; RESET ROLE',
+      'DROP TABLE zz_correo',
+      async (e) => {
+        assert.ok(claves(e).includes('zz_correo.zz_correo_email'), JSON.stringify(claves(e)));
+        assert.ok(!claves(e).includes('app_user.app_user_read_self_email'), JSON.stringify(claves(e)));
+        assert.ok(!claves(e).includes('app_user.app_user_update_self_email'), JSON.stringify(claves(e)));
+      },
+    );
+  });
+
   test('una fila global que nombra una privada por otra clave ajena no aísla; correlacionada, sí', async () => {
     // brand_account_snapshot hasta 0029: `campaign_id IS NULL OR EXISTS
     // (campaign)` abría a todos company_id, handle y seguidores de

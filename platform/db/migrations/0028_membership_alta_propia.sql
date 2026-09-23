@@ -66,13 +66,20 @@
 -- este archivo a mano, o reordenó los números—, mejor parar aquí con un
 -- mensaje claro que descubrirlo en el primer inicio de sesión.
 -- schema_migrations es la tabla del runner (db/lib/aplicar.mjs); si no
--- existe, quien aplica no es el runner y no hay nada que comprobar.
+-- existe, quien aplica no es el runner (p. ej. db/seed/verify/run.mjs)
+-- y no hay nada que comprobar. La consulta va con EXECUTE porque un
+-- SELECT estático sobre una tabla que no existe no llega ni a planearse.
 DO $$
+DECLARE
+  aplicada boolean;
 BEGIN
-  IF to_regclass('public.schema_migrations') IS NOT NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM schema_migrations WHERE filename = '0024_aislamiento_por_defecto.sql'
-     ) THEN
+  IF to_regclass('schema_migrations') IS NULL THEN
+    RETURN;
+  END IF;
+  EXECUTE 'SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = $1)'
+    INTO aplicada
+    USING '0024_aislamiento_por_defecto.sql';
+  IF NOT aplicada THEN
     RAISE EXCEPTION USING
       MESSAGE = '0028_membership_alta_propia necesita 0024_aislamiento_por_defecto aplicada antes.',
       HINT = 'Aplica las migraciones en orden con make db.migrate (0024, 0025, 0026, 0027, 0028, …).';
@@ -99,10 +106,29 @@ CREATE POLICY membership_alta ON membership FOR INSERT
 -- nueva falla contra una base con el endurecimiento aplicado. En una
 -- base sin él, mc_app ya tenía INSERT y esto no cambia nada. UPDATE y
 -- DELETE se quedan como estén: sin política, no sirven de nada.
--- (En Postgres embebido no se nota: packages/db/src/embedded.ts vuelve a
--- conceder los cuatro privilegios a mc_app DESPUÉS de migrar. Contra
--- Supabase, sí.)
+-- (El Postgres embebido da a mc_app sus privilegios con ALTER DEFAULT
+-- PRIVILEGES, como Supabase, así que el REVOKE de 0024 y este GRANT se
+-- notan igual en las pruebas.)
 GRANT INSERT ON membership TO mc_app;
+
+-- Y con el INSERT, el disparador de referencias de 0025 §3. El bucle de
+-- 0025 §7 solo lo enganchó donde mc_app escribía entonces, y membership
+-- estaba cerrada. Sin él, una membresía podría nombrar un workspace o
+-- una persona que la transacción no ve (la guardia de esquema.ts lo
+-- reporta como referencia sin comprobar). El alta propia pasa: el
+-- espacio fijado se ve (workspace_read) y la propia fila de app_user
+-- también (app_user_read, «soy yo»).
+DROP TRIGGER IF EXISTS ref_visible_workspace_id ON membership;
+CREATE TRIGGER ref_visible_workspace_id
+  BEFORE INSERT OR UPDATE OF workspace_id ON membership
+  FOR EACH ROW WHEN (NEW.workspace_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('workspace_id', 'workspace', 'id');
+
+DROP TRIGGER IF EXISTS ref_visible_user_id ON membership;
+CREATE TRIGGER ref_visible_user_id
+  BEFORE INSERT OR UPDATE OF user_id ON membership
+  FOR EACH ROW WHEN (NEW.user_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('user_id', 'app_user', 'id');
 
 -- ---------------------------------------------------------------------
 -- workspace: ver el nombre de los espacios a los que pertenezco

@@ -34,9 +34,31 @@ import { openTestDb, type TestDb } from './pglite.ts';
 
 /** Drizzle envuelve el error de Postgres; el motivo real va en `cause`. */
 function esViolacionRls(err: unknown): boolean {
+  return /row-level security/.test(mensajes(err));
+}
+
+function mensajes(err: unknown): string {
   const partes: string[] = [];
   for (let e = err; e instanceof Error; e = e.cause) partes.push(e.message);
-  return /row-level security/.test(partes.join(' ← '));
+  return partes.join(' ← ');
+}
+
+/**
+ * El alta de una membresía que no es la propia la para la base, y desde
+ * el endurecimiento (0025 §3, enganchado a membership en 0028) la para
+ * ANTES que la política: el disparador assert_reference_visible es BEFORE
+ * INSERT y rechaza con 23503 una membresía que nombra un espacio o una
+ * persona que la transacción no ve. Si el disparador no estuviera, la
+ * política membership_alta lo pararía con «row-level security». Las dos
+ * cuentan como rechazo; lo que no vale es que entre.
+ */
+function esRechazoDeMembresia(err: unknown): boolean {
+  return esViolacionRls(err) || /apunta en (workspace_id|user_id) a un (workspace|app_user) que no existe o que esta transacción no puede ver/.test(mensajes(err));
+}
+
+/** mc_app sin el privilegio (0024 §7: sin UPDATE ni DELETE en membership; 0028 solo devuelve el INSERT). */
+function esPermisoDenegado(err: unknown): boolean {
+  return /permission denied for table membership/.test(mensajes(err));
 }
 
 const CORREO_A = 'ana@ejemplo.test';
@@ -257,7 +279,7 @@ describe('espacios de la persona que entra', () => {
         t.db.withIdentity({ userId: idB }, (tx) =>
           tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'owner' }),
         ),
-      esViolacionRls,
+      esRechazoDeMembresia,
     );
     assert.equal(await t.db.withIdentity({ userId: idB }, (tx) => isMemberOf(tx, WS_NUEVO, idB)), false);
   });
@@ -270,23 +292,27 @@ describe('espacios de la persona que entra', () => {
           (tx) => tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'admin' }),
           { userId: idA },
         ),
-      esViolacionRls,
+      esRechazoDeMembresia,
     );
   });
 
   test('ni cambiar roles ni borrar membresías desde la web (membership_alta_propia)', async () => {
-    // Sin política de UPDATE ni de DELETE, las dos sentencias no ven
-    // ninguna fila: no fallan, pero no tocan nada.
-    const cambiadas = await t.db.withWorkspace(
-      WS_NUEVO,
-      (tx) => tx.db.update(membership).set({ role: 'viewer' }).where(eq(membership.userId, idA)).returning(),
-      { userId: idA },
+    // Sin política de UPDATE ni de DELETE, y desde el endurecimiento
+    // tampoco con el privilegio: 0024 §7 le quita a mc_app UPDATE y
+    // DELETE sobre membership y 0028 solo le devuelve el INSERT. Las dos
+    // sentencias fallan antes de mirar ninguna fila.
+    await assert.rejects(
+      t.db.withWorkspace(
+        WS_NUEVO,
+        (tx) => tx.db.update(membership).set({ role: 'viewer' }).where(eq(membership.userId, idA)).returning(),
+        { userId: idA },
+      ),
+      esPermisoDenegado,
     );
-    assert.deepEqual(cambiadas, []);
-    const borradas = await t.db.withIdentity({ userId: idA }, (tx) =>
-      tx.db.delete(membership).where(eq(membership.userId, idA)).returning(),
+    await assert.rejects(
+      t.db.withIdentity({ userId: idA }, (tx) => tx.db.delete(membership).where(eq(membership.userId, idA)).returning()),
+      esPermisoDenegado,
     );
-    assert.deepEqual(borradas, []);
     assert.equal(await t.db.withIdentity({ userId: idA }, (tx) => isMemberOf(tx, WS_NUEVO, idA)), true);
   });
 

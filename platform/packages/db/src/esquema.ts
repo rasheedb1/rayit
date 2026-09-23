@@ -250,6 +250,23 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'la baja global (0026 §3, 0029 §1): mc_app no puede leer contact_suppression, y un contacto que nace con un ' +
     'correo suprimido tiene que nacer dado de baja. Solo LEE la lista y cambia NEW; no escribe ninguna tabla. La ' +
     'lista la llena solo el worker con una baja verificada, así que lo que aplica no lo puede fabricar un workspace',
+  // Los enlaces públicos de Cotizar (0030, COT-2 a COT-4). La web los abre
+  // sin sesión y sin workspace (Db.withPublicShare), y estas tres son lo
+  // ÚNICO que esa transacción puede hacer.
+  'public_media_kit(text,text,boolean)':
+    'abre /kit/<slug> sin sesión (0030). Corre como mc_public_share —NOLOGIN, sin BYPASSRLS, sin ninguna tabla ' +
+    'entera—, cuyas políticas `TO mc_public_share` abren solo la fila cuyo slug fija la propia función y restaura ' +
+    'al salir. Devuelve jsonb recortado, nunca la fila; la contraseña se compara por derivado. No es de ningún ' +
+    'disparador',
+  'public_quote(text,boolean)':
+    'abre /cotizacion/<slug> sin sesión (0030), con el mismo rol y la misma cerradura que public_media_kit: lee el ' +
+    'public_snapshot congelado al enviar y solo escribe los contadores de visita y la fecha de vista o vencida ' +
+    '(privilegios de COLUMNA)',
+  'public_quote_accept(text,text,text)':
+    'acepta la cotización desde el enlace (0030, COT-4): marca la cotización aceptada con la firma y pasa el deal a ' +
+    '«Ganado» con su historial. mc_public_share solo tiene UPDATE en esas columnas y SELECT de la etapa, así que ' +
+    'aunque tuviera un error no podría tocar importes ni nombres; la campaña la crea después la web dentro del ' +
+    'workspace de la cotización',
 };
 
 /**
@@ -320,6 +337,11 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
   service_role:
     'rol de administración de Supabase (BYPASSRLS): se lo concede ALTER DEFAULT PRIVILEGES de mc_migrator. ' +
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
+  mc_public_share:
+    'dueño de las tres funciones de los enlaces públicos de Cotizar (0030). NOLOGIN, sin BYPASSRLS: ninguna ' +
+    'conexión entra con él. SELECT de media_kit, quote, deal, deal_stage_history y pipeline_stage, pero solo ve ' +
+    'las filas que abren sus políticas `TO mc_public_share` (la del slug de la llamada); UPDATE solo de columnas ' +
+    'contadas e INSERT en deal_stage_history (el paso a «Ganado»). La migración comprueba sus atributos',
 };
 
 /**
@@ -352,6 +374,10 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'el id de una etapa es su clave primaria (deal.stage_id la referencia) y las globales se llaman por su nombre, ' +
     'que es público. Las PRIVADAS no pueden llevar dato: 0026 §2 las obliga por CHECK a un uuid al azar ' +
     '(pipeline_stage_private_id_random), así que chocar con una exige conocerla',
+  'app_user.app_user_auth_user_id_key':
+    'el id de la cuenta de Supabase Auth (0027, CIM-3): una cuenta es una persona. Es un uuid que genera Supabase ' +
+    'y que la web solo conoce de la sesión verificada; mc_app lo escribe solo en SU fila (la política de UPDATE de ' +
+    'app_user es «soy yo»), así que chocar con el de otra persona exige conocer su cuenta, que ya es tenerla',
   'connection_secret.connection_secret_pkey':
     'la referencia es `enc:<plataforma>:<uuid>` y el uuid lo genera el código (encrypted-secret-store.ts): ' +
     'chocar con una exige conocerla, y conocerla ya es tenerla',
@@ -425,7 +451,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
 
   // Métricas PROPIAS (0025 §5): las mide y las escribe el worker, como
   // mc_worker. Una pantalla no reescribe las vistas de un post.
-  post_metric_snapshot: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
+  post_metric_snapshot: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'métrica append-only: la mide el worker y la web la AÑADE al importar un CSV de Insights (RES-2, ' +
+      'importCsvReadings). Nadie la corrige ni la borra; el INSERT pasa por la política del workspace y por ' +
+      'assert_reference_visible en post_id',
+  },
   audience_breakdown: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_engagement_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_retention_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
@@ -463,7 +495,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, { permite: readonly 
 
   // Tablas de inquilino con un comando de menos.
   workspace: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'borrar un inquilino es del worker, no de una pantalla' },
-  membership: { permite: ['SELECT'], motivo: 'el alta y la baja de personas son del worker hasta CIM-3' },
+  membership: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'el alta propia de CIM-3 (0028): darse de alta a uno mismo en el espacio que se acaba de crear, que es lo ' +
+      'único que deja membership_alta. Cambiar roles o echar a alguien sigue siendo del worker',
+  },
   app_user: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'nadie borra a una persona desde una pantalla' },
 };
 
