@@ -47,7 +47,7 @@
 --     exige aislar toda tabla que apunte a una con RLS;
 --   · token_hash solo admite un SHA-256 hexadecimal (CHECK): el token
 --     en claro no cabe en la columna;
---   · el disparador membership_role_fits impide colgar un rol de
+--   · el disparador role_fits_workspace impide colgar un rol de
 --     agencia en un workspace de creador o el rol a medida de OTRO
 --     workspace.
 --
@@ -162,6 +162,12 @@ CREATE TABLE IF NOT EXISTS role (
 ALTER TABLE role DROP CONSTRAINT IF EXISTS role_system_has_no_workspace;
 ALTER TABLE role ADD CONSTRAINT role_system_has_no_workspace
   CHECK (is_system = (workspace_id IS NULL));
+-- Y un rol a medida no puede llamarse como uno de fábrica: la pantalla
+-- de cuenta y cualquier regla que mire la clave lo tomarían por el de
+-- sistema (un «owner» a medida sin permisos contaría como Dueño).
+ALTER TABLE role DROP CONSTRAINT IF EXISTS role_custom_key_not_system;
+ALTER TABLE role ADD CONSTRAINT role_custom_key_not_system
+  CHECK (is_system OR key NOT IN ('owner', 'admin', 'manager', 'editor', 'finance', 'viewer'));
 CREATE UNIQUE INDEX IF NOT EXISTS role_system_uk ON role (key, workspace_kind)
   WHERE workspace_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS role_ws_uk ON role (workspace_id, key)
@@ -223,8 +229,12 @@ CREATE POLICY role_permission_ws_isolation ON role_permission
 -- =====================================================================
 -- 4 · La semilla: el catálogo y los diez roles de fábrica con su matriz
 -- ---------------------------------------------------------------------
--- GENERADA desde packages/core/src/permisos.ts (ACC-1) con el formato de
--- scripts/permisos-sql.ts: no se edita a mano. Una matriz distinta será
+-- Generada desde packages/core/src/permisos.ts de ACC-1 (rama
+-- nicolas/ACC-1-catalogo-permisos, 23-sep; todavía no está en main) con
+-- el formato que promete su scripts/permisos-sql.ts, que aún no existe.
+-- Cuando llegue, su salida tiene que coincidir con este bloque; mientras
+-- tanto lo vigila test/accesos.test.ts contra la misma matriz. No se
+-- edita a mano. Una matriz distinta será
 -- otra migración (esta, aplicada, es inmutable), que borrará lo que
 -- sobre; por eso aquí no hay DELETE. ON CONFLICT DO NOTHING: la segunda
 -- pasada no cambia nada. Va ANTES del relleno de membership (sección
@@ -633,44 +643,53 @@ CREATE TRIGGER ref_visible_role_id
 
 -- Y que el rol sea del tipo del workspace: un rol de agencia no se
 -- cuelga de un workspace de creador ni al revés, y un rol a medida solo
--- vale en el workspace que lo creó. SECURITY INVOKER: lee role y
--- workspace con la RLS de quien escribe (que ya pasó
--- ref_visible_workspace_id y ref_visible_role_id, así que ve las dos
--- filas). Va DESPUÉS del relleno a propósito: el relleno corre sin
--- workspace fijado y el disparador no tendría qué leer.
-CREATE OR REPLACE FUNCTION assert_membership_role_fits() RETURNS trigger
+-- vale en el workspace que lo creó. La misma regla vale para el rol que
+-- lleva una invitación (sección 7) y una concesión (sección 8), así que
+-- la función es genérica: argumentos = columna del rol, columna del
+-- workspace donde el rol se va a usar.
+--
+-- SECURITY INVOKER: lee role y workspace con la RLS de quien escribe.
+-- El disparador se llama role_fits_workspace a propósito: Postgres
+-- dispara los BEFORE en orden alfabético, así que corre DESPUÉS de los
+-- ref_visible_*, que ya rechazaron (23503) un workspace o un rol que
+-- quien escribe no ve. Si aun así no ve alguno, no decide nada. Va
+-- DESPUÉS del relleno: el relleno corre sin workspace fijado.
+CREATE OR REPLACE FUNCTION assert_role_fits_workspace() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
+  col_rol  text := TG_ARGV[0];
+  col_ws   text := TG_ARGV[1];
+  id_rol   uuid;
+  id_ws    uuid;
   kind_ws  text;
   kind_rol text;
   ws_rol   uuid;
 BEGIN
-  SELECT w.kind INTO kind_ws FROM workspace w WHERE w.id = NEW.workspace_id;
-  SELECT r.workspace_kind, r.workspace_id INTO kind_rol, ws_rol FROM role r WHERE r.id = NEW.role_id;
+  EXECUTE format('SELECT ($1).%I, ($1).%I', col_rol, col_ws) INTO id_rol, id_ws USING NEW;
+  SELECT w.kind INTO kind_ws FROM workspace w WHERE w.id = id_ws;
+  SELECT r.workspace_kind, r.workspace_id INTO kind_rol, ws_rol FROM role r WHERE r.id = id_rol;
   IF kind_ws IS NULL OR kind_rol IS NULL THEN
-    -- No se ve el workspace o el rol: eso ya lo rechazan los
-    -- disparadores de referencia con 23503; aquí no se decide nada.
     RETURN NEW;
   END IF;
   IF kind_rol <> kind_ws THEN
-    RAISE EXCEPTION 'el rol es de un workspace de tipo % y este workspace es de tipo %', kind_rol, kind_ws
+    RAISE EXCEPTION 'el rol de % es de un workspace de tipo % y este workspace es de tipo %', TG_TABLE_NAME, kind_rol, kind_ws
       USING ERRCODE = 'check_violation',
             HINT = 'Un rol de agencia no vale en un workspace de creador ni al revés (migración 0034 §5).';
   END IF;
-  IF ws_rol IS NOT NULL AND ws_rol <> NEW.workspace_id THEN
-    RAISE EXCEPTION 'el rol a medida es de otro workspace'
+  IF ws_rol IS NOT NULL AND ws_rol <> id_ws THEN
+    RAISE EXCEPTION 'el rol a medida de % es de otro workspace', TG_TABLE_NAME
       USING ERRCODE = 'check_violation',
             HINT = 'Un rol a medida solo vale en el workspace que lo creó (migración 0034 §5).';
   END IF;
   RETURN NEW;
 END $$;
-COMMENT ON FUNCTION assert_membership_role_fits() IS
-  'Disparador BEFORE INSERT OR UPDATE OF role_id, workspace_id en membership: el rol es del tipo del workspace y, si es a medida, de ese mismo workspace (0034 §5).';
+COMMENT ON FUNCTION assert_role_fits_workspace() IS
+  'Disparador BEFORE INSERT OR UPDATE: el rol (columna TG_ARGV[0]) es del tipo del workspace (columna TG_ARGV[1]) y, si es a medida, de ese mismo workspace. En membership, invitation y workspace_grant (0034 §5).';
 
-DROP TRIGGER IF EXISTS membership_role_fits ON membership;
-CREATE TRIGGER membership_role_fits
+DROP TRIGGER IF EXISTS role_fits_workspace ON membership;
+CREATE TRIGGER role_fits_workspace
   BEFORE INSERT OR UPDATE OF role_id, workspace_id ON membership
-  FOR EACH ROW EXECUTE FUNCTION assert_membership_role_fits();
+  FOR EACH ROW EXECUTE FUNCTION assert_role_fits_workspace('role_id', 'workspace_id');
 
 
 -- =====================================================================
@@ -787,6 +806,13 @@ CREATE TRIGGER ref_visible_invited_by
   FOR EACH ROW WHEN (NEW.invited_by IS NOT NULL)
   EXECUTE FUNCTION assert_reference_visible('invited_by', 'app_user', 'id');
 
+-- El rol invitado, del tipo del workspace (sección 5): mejor fallar al
+-- invitar que dejar un enlace que no se podrá aceptar.
+DROP TRIGGER IF EXISTS role_fits_workspace ON invitation;
+CREATE TRIGGER role_fits_workspace
+  BEFORE INSERT OR UPDATE OF role_id, workspace_id ON invitation
+  FOR EACH ROW EXECUTE FUNCTION assert_role_fits_workspace('role_id', 'workspace_id');
+
 
 -- =====================================================================
 -- 8 · workspace_grant: la concesión de un creador a una agencia (AGE)
@@ -829,6 +855,13 @@ COMMENT ON TABLE workspace_grant IS
 
 ALTER TABLE workspace_grant ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workspace_grant FORCE ROW LEVEL SECURITY;
+
+-- El rol de la concesión se usa DENTRO del workspace que concede (el del
+-- creador): tiene que ser de su tipo (sección 5).
+DROP TRIGGER IF EXISTS role_fits_workspace ON workspace_grant;
+CREATE TRIGGER role_fits_workspace
+  BEFORE INSERT OR UPDATE OF role_id, grantor_workspace_id ON workspace_grant
+  FOR EACH ROW EXECUTE FUNCTION assert_role_fits_workspace('role_id', 'grantor_workspace_id');
 
 DROP POLICY IF EXISTS workspace_grant_read ON workspace_grant;
 CREATE POLICY workspace_grant_read ON workspace_grant FOR SELECT

@@ -157,8 +157,8 @@ lo necesita.
      Descartado: dos FK simples más (`workspace_id → workspace`,
      `user_id → app_user`) con sus disparadores, que serían redundantes
      con ese argumento.
-   - `membership`: disparador `membership_role_fits` (función
-     `assert_membership_role_fits()`, SECURITY INVOKER) que exige
+   - `membership`: disparador `role_fits_workspace` (función
+     `assert_role_fits_workspace()`, SECURITY INVOKER) que exige
      `role.workspace_kind = workspace.kind` y (`role.workspace_id IS NULL`
      o `= membership.workspace_id`). No está en la fase 4, pero sin él
      un rol de agencia se puede colgar de un workspace de creador y
@@ -259,7 +259,7 @@ secciones; cada una se puede volver a correr (§1.3).
 | 2 | `role` + CHECK `role_system_has_no_workspace` (`is_system = (workspace_id IS NULL)`), índices parciales `role_system_uk` y `role_ws_uk`, RLS `role_read` (de sistema o mío) y `role_seed` (`TO CURRENT_USER`, solo filas de sistema sin workspace fijado); función `system_role_id(kind, key)` STABLE, SECURITY INVOKER, `EXECUTE` a `mc_app` y `mc_worker` | Patrón `feature_flag` de 0020/0025 §4. El CHECK nuevo evita un «rol de sistema con dueño», que no significa nada. La función evita repetir el `SELECT` del id en seeds, pruebas, `createCreatorWorkspace` y ACC-4. |
 | 3 | `role_permission` (PK compuesta, FK con `ON DELETE CASCADE`), índice por `permission_key`, política `EXISTS` sobre `role` | Patrón 0018 para hijas sin `workspace_id`. |
 | 4 | **La semilla**: 43 permisos, 10 roles de sistema, 222 filas de matriz. `ON CONFLICT DO NOTHING` | Generada desde `permisos.ts` de ACC-1. Va ANTES del relleno (§1.2). |
-| 5 | `membership.role_id` (FK a `role`), relleno por `workspace.kind` con `NO FORCE` temporal en `membership` y `workspace`, parada si queda alguna fila sin rol, `SET NOT NULL`, `DROP COLUMN role`, índice, disparadores `ref_visible_role_id` y `membership_role_fits` | Decisión 1 de §0.3. El `NO FORCE` es el patrón de 0026, 0032 y 0033: sin él el `UPDATE` tocaría cero filas en silencio. Las políticas de 0028 no nombran `role`. |
+| 5 | `membership.role_id` (FK a `role`), relleno por `workspace.kind` con `NO FORCE` temporal en `membership` y `workspace`, parada si queda alguna fila sin rol, `SET NOT NULL`, `DROP COLUMN role`, índice, disparadores `ref_visible_role_id` y `role_fits_workspace` | Decisión 1 de §0.3. El `NO FORCE` es el patrón de 0026, 0032 y 0033: sin él el `UPDATE` tocaría cero filas en silencio. Las políticas de 0028 no nombran `role`. |
 | 6 | `membership_scope`: PK de cuatro columnas, FK compuesta a `membership` con cascada, política por `workspace_id` con `WITH CHECK` | La FK compuesta va declarada en la guardia con su argumento (§0.3, decisión 4). |
 | 7 | `invitation` con CHECK `invitation_token_hash_is_sha256` y `invitation_not_accepted_and_revoked`, índices `invitation_pending_uk` (parcial) e `invitation_token_hash_uk`, políticas de lectura, alta y cambio por `workspace_id`, tres disparadores de referencia | Token solo como hash, una pendiente por correo; sin política ni privilegio de `DELETE`. |
 | 8 | `workspace_grant` con el CHECK de la fase 4, índice parcial `workspace_grant_live_uk`, política de lectura por los dos extremos | La guardia exige aislarla; ver §0.3, decisión 3. Sin escritura desde la web. |
@@ -414,3 +414,20 @@ eso es ACC-5; esta historia solo deja las tablas y la matriz.
 | `make db.seed.check` | verde, cuatro pasadas y la de 41 días |
 | `pnpm verificar` | 14 de 15 tareas en verde; `@mc/web#test` con 723/723 pruebas pasando pero un «Unhandled Rejection: ReadableStream is already closed» en `resumen/importar/lote.test.ts`, que **también sale en `origin/main` limpio** (comprobado en un worktree aparte). No es de esta historia. |
 | Dev (`pnpm dev -p 3134`, base embebida con 0034 y los seeds) | `/`, `/resumen`, `/ventas`, `/cotizar`, `/campanas`, `/finanzas`, `/conexiones`, `/cuenta` y `/accesos` responden 200; la ficha de Café Alma ofrece a «Laura Méndez» como responsable (sale de `membership` con `role_id`) |
+
+## 8. Revisión (`/code-review` nivel alto y `/security-review`)
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | `PUEDEN_RENOMBRAR` (`lib/auth/reglas.ts`) sigue mirando claves de rol: un `admin` de creador rellenado como Mánager deja de poder renombrar, y el Administrador de agencia sí puede aunque no tenga `equipo.workspace.configurar` | **Justificado.** Es de Rasheed y lo reemplaza ACC-5 con `requirePermission('equipo.workspace.configurar')`. Hoy no hay ninguna fila `admin` en Supabase. Anotado para ACC-5. |
+| 2 | Un rol a medida con clave `owner` o `admin` pasaría por uno de sistema | **Arreglado.** CHECK `role_custom_key_not_system` en 0034 §2, con prueba. |
+| 3 | `listOwnerOptions` ya no excluye a los `client` rellenados como `viewer` | **Justificado.** Decisión D: la marca no tiene cuenta y en Supabase no hay ninguna fila `client`. Un miembro de solo lectura del espacio es una persona del espacio. |
+| 4 | Una invitación vencida y no revocada bloquea reinvitar al mismo correo | **Justificado.** Un índice parcial no puede usar `now()`. ACC-4 revoca la pendiente, vencida o no, antes de reinvitar (§4). |
+| 5 | `invitation.role_id` y `workspace_grant.role_id` no comprueban el tipo del workspace | **Arreglado.** Disparador genérico `role_fits_workspace` en las tres tablas, con pruebas. |
+| 6 | El comentario decía que el control de tipo corría después de los `ref_visible_*`, y no era así | **Arreglado.** El disparador se llama `role_fits_workspace`: por orden alfabético corre después, como dice el comentario. |
+| 7 | Las etiquetas de rol de `lib/auth/messages.ts` no coinciden con `role.label_es` | **Justificado.** Son etiquetas neutras de Rasheed para `/cuenta`; Equipo (ACC-4) debe leer `role.label_es` (§4). |
+| 8 | La cabecera de la semilla decía «generada por `scripts/permisos-sql.ts`», que todavía no existe | **Arreglado.** La cabecera dice de dónde salió y qué la vigila mientras llega ACC-1. |
+| 9 | `workspace.kind` editable dejaría membresías con un rol del tipo equivocado | **Falso positivo.** `mc_app` solo tiene UPDATE por columnas y `kind` no está (0024 §7.6). |
+| 10 | `listMyWorkspaces` con `INNER JOIN` escondía un espacio con rol a medida al pedirlo con `withIdentity` (encontrado al probar) | **Arreglado.** `LEFT JOIN` y «Solo lectura» como etiqueta; prueba con `withIdentity`. |
+
+`/security-review`: ningún hallazgo de confianza alta. Dos notas dentro de un mismo inquilino para historias futuras: cualquier miembro puede cambiar el rol o reabrir una invitación de su espacio (ACC-4 debe cerrarlo con una política por permiso), y puede borrar filas de `membership_scope` (ACC-6).

@@ -15,7 +15,7 @@
  *   - invitation.token_hash es SIEMPRE un SHA-256 en hexadecimal (CHECK):
  *     el token del enlace no se guarda nunca.
  *   - membership.role_id (schema/cimientos.ts) apunta a role.id; el
- *     disparador membership_role_fits exige que el rol sea del tipo del
+ *     disparador role_fits_workspace exige que el rol sea del tipo del
  *     workspace. system_role_id(kind, key) da el id de un rol de sistema.
  */
 import { boolean, jsonb, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';

@@ -359,7 +359,7 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
 
   test('el rol tiene que ser del tipo del workspace, y un rol a medida solo vale en el suyo', async () => {
     // Como superusuario (sin RLS de por medio): lo que rechaza es el
-    // disparador membership_role_fits, no una política.
+    // disparador role_fits_workspace, no una política.
     await assert.rejects(
       t.admin(`INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_AGENCIA}', '${USER_B}', system_role_id('creator', 'manager'))`),
       esCheckViolado,
@@ -381,6 +381,31 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
     // a medida no se ve (role_read), y el espacio no puede desaparecer.
     const suyos = await t.db.withIdentity({ userId: USER_BECARIO }, (tx) => listMyWorkspaces(tx));
     assert.deepEqual(suyos.map((w) => [w.id, w.role]), [[WS_B, 'viewer']]);
+    // La misma regla en la invitación y en la concesión: se rechazan al
+    // escribirlas, no al aceptarlas.
+    await assert.rejects(
+      laura((tx) =>
+        tx.query(
+          `INSERT INTO invitation (workspace_id, email, role_id, token_hash, expires_at)
+           VALUES (current_workspace_id(), 'agencia@acc3.test', system_role_id('agency', 'admin'), $1, now() + interval '1 day')`,
+          [sha256('rol-de-agencia')],
+        ),
+      ),
+      esCheckViolado,
+      'una invitación con un rol de agencia a un workspace de creador',
+    );
+    await assert.rejects(
+      t.admin(`INSERT INTO workspace_grant (grantor_workspace_id, grantee_workspace_id, role_id)
+               VALUES ('${WS_C}', '${WS_AGENCIA}', system_role_id('agency', 'manager'))`),
+      esCheckViolado,
+      'una concesión cuyo rol no es del tipo de quien concede',
+    );
+    // Un rol a medida no puede llamarse como uno de fábrica.
+    await assert.rejects(
+      t.admin(`INSERT INTO role (workspace_id, key, workspace_kind, label_es) VALUES ('${WS_B}', 'owner', 'creator', 'Falso dueño')`),
+      esCheckViolado,
+      'un rol a medida con la clave owner',
+    );
     // Y sin DEFAULT: una membresía sin rol no entra.
     await assert.rejects(
       t.admin(`INSERT INTO membership (workspace_id, user_id) VALUES ('${WS_C}', '${USER_B}')`),
@@ -400,7 +425,7 @@ describe('0034: el archivo, dos veces y al revés', () => {
                   (SELECT count(*)::int FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
                     WHERE c.relname IN ('role', 'role_permission', 'membership_scope', 'invitation', 'workspace_grant')) AS politicas,
                   (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal AND tgname IN
-                    ('ref_visible_role_id', 'membership_role_fits', 'ref_visible_invited_by', 'ref_visible_on_behalf_of_workspace_id')) AS disparadores`,
+                    ('ref_visible_role_id', 'role_fits_workspace', 'ref_visible_invited_by', 'ref_visible_on_behalf_of_workspace_id')) AS disparadores`,
         ),
       );
     const antes = await foto();

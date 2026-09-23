@@ -257,7 +257,7 @@ ver los de sistema y los a medida del workspace fijado) y no los
 escribe; los roles a medida son ACC-9. `system_role_id(kind, key)`
 devuelve el id de uno de fábrica, o `NULL` si esa clave no existe para
 ese tipo de workspace (no hay «admin» de creador). El disparador
-`membership_role_fits` impide colgar un rol de agencia en un workspace
+`role_fits_workspace` impide colgar un rol de agencia en un workspace
 de creador, o el rol a medida de otro workspace.
 
 El código pregunta por **permisos**, nunca por roles (backlog §7,
