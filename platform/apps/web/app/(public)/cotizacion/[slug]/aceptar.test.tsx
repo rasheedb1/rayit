@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const aceptarCotizacionPublica = vi.fn();
@@ -46,5 +46,35 @@ describe("AceptarCotizacion: lo que ya no se puede aceptar dice por qué", () =>
     await aceptarCon({ status: "ok", campaignPending: false });
     const estado = await screen.findByRole("status");
     expect(estado).toHaveTextContent("Le avisamos a quien te la envió");
+  });
+
+  it("con la firma incompleta, el foco va al primer campo con error y los campos llevan aria-invalid", async () => {
+    aceptarCotizacionPublica.mockResolvedValue({
+      status: "invalid",
+      errors: { email: t.firma.errores.correo, terminos: t.firma.errores.terminos },
+    });
+    render(<AceptarCotizacion slug="abc" />);
+    fireEvent.click(screen.getByRole("button", { name: t.aceptar }));
+    const correo = screen.getByLabelText(/Tu correo/);
+    await waitFor(() => expect(correo).toHaveFocus());
+    expect(correo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("checkbox")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText(/Tu nombre/)).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("con el nombre vacío, el foco empieza por el nombre", async () => {
+    aceptarCotizacionPublica.mockResolvedValue({
+      status: "invalid",
+      errors: { name: t.firma.errores.nombre, email: t.firma.errores.correo },
+    });
+    render(<AceptarCotizacion slug="abc" />);
+    fireEvent.click(screen.getByRole("button", { name: t.aceptar }));
+    await waitFor(() => expect(screen.getByLabelText(/Tu nombre/)).toHaveFocus());
+  });
+
+  it("un error general se anuncia y recibe el foco", async () => {
+    await aceptarCon({ status: "error" });
+    const alerta = await screen.findByText(t.error);
+    await waitFor(() => expect(alerta).toHaveFocus());
   });
 });

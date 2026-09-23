@@ -1,7 +1,7 @@
 import type { MediaKitSnapshot, MediaKitSnapshotAudiencia } from "@mc/db/queries/cotizar";
 import { PLATFORM_LABEL, PlatformPill, isPlatformId } from "@/components/ui/platform-pill";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { MESSAGES } from "../messages";
+import { idiomaDocumento, MESSAGES } from "../messages";
 
 /**
  * El media kit tal como lo ve la marca, en /kit/<slug> y en la vista
@@ -20,9 +20,15 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
   const f = formatterFor({ locale: snapshot.locale, currency: snapshot.currency, timezone: snapshot.timezone });
   const redes = snapshot.redes.filter((r) => r.followers !== null || r.medianViews !== null);
   const audiencia = audienciaAgrupada(snapshot);
+  // La cifra grande de views es la mediana de la MEJOR red, y se rotula
+  // con esa red. Un media kit anterior que no guardó la red no la enseña
+  // arriba: presentada sola, se leería como el alcance típico de
+  // cualquier pieza. Sigue en la lista por red.
+  const mejorRed = snapshot.totales.medianViewsMaxPlatform ?? null;
+  const viewsMejorRed = mejorRed && isPlatformId(mejorRed) ? snapshot.totales.medianViewsMax : null;
 
   return (
-    <article className="space-y-10">
+    <article className="space-y-10" lang={idiomaDocumento(snapshot.locale)}>
       <header>
         <p className="font-mono text-xs uppercase tracking-wide text-muted">{t.title}</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-balance">{snapshot.creator.displayName}</h1>
@@ -31,18 +37,21 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
         <p className="mt-3 text-xs text-muted">{t.congelado(f.date(snapshot.capturedAt, "long"))}</p>
       </header>
 
-      {(snapshot.totales.followers !== null || snapshot.totales.medianViewsMax !== null) && (
-        <section className="grid grid-cols-2 gap-6" aria-label={t.seguidores}>
+      {(snapshot.totales.followers !== null || viewsMejorRed !== null) && (
+        <section className="grid grid-cols-2 gap-6" aria-label={t.cifras}>
           {snapshot.totales.followers !== null && (
             <div>
               <p className="text-xs uppercase tracking-wide text-muted">{t.seguidores}</p>
               <p className="mt-1 font-mono text-3xl font-medium tabular-nums">{f.compact(snapshot.totales.followers)}</p>
             </div>
           )}
-          {snapshot.totales.medianViewsMax !== null && (
+          {viewsMejorRed !== null && mejorRed && isPlatformId(mejorRed) && (
             <div>
-              <p className="text-xs uppercase tracking-wide text-muted">{t.viewsMedianas}</p>
-              <p className="mt-1 font-mono text-3xl font-medium tabular-nums">{f.compact(snapshot.totales.medianViewsMax)}</p>
+              <p className="text-xs uppercase tracking-wide text-muted">{t.viewsMedianasMejorRed}</p>
+              <p className="mt-1 font-mono text-3xl font-medium tabular-nums">{f.compact(viewsMejorRed)}</p>
+              <p className="mt-1.5">
+                <PlatformPill platformId={mejorRed} />
+              </p>
             </div>
           )}
         </section>
@@ -130,12 +139,12 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
           </h2>
           <ul className="mt-3 divide-y divide-border rounded-md border border-border">
             {snapshot.tarifas.map((tarifa, i) => (
-              <li key={`${tarifa.labelEs}-${i}`} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <li key={`${tarifa.labelEs}-${i}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-4 py-3">
                 <span className="flex min-w-0 flex-col gap-1">
                   <span className="text-sm">{tarifa.labelEs}</span>
                   {tarifa.platformId && <PlatformPill platformId={tarifa.platformId} />}
                 </span>
-                <span className="font-mono text-sm tabular-nums">
+                <span className="text-right font-mono text-sm tabular-nums">
                   {tarifa.priceLow && tarifa.priceHigh
                     ? `${f.money(tarifa.priceLow, snapshot.currency)} – ${f.money(tarifa.priceHigh, snapshot.currency)}`
                     : "—"}

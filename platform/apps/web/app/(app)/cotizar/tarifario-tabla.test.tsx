@@ -27,9 +27,9 @@ const INPUTS: RateCardInputs = {
 
 const SETTINGS = { locale: "es-CO", currency: "COP", timezone: "America/Bogota" };
 
-function pintar(basis = BASIS_VACIO) {
+function pintar(basis = BASIS_VACIO, inputs = INPUTS) {
   return render(
-    <TarifarioTabla creatorId={CREADORA} inputs={INPUTS} basisInicial={basis} settings={SETTINGS} sinGuardar />,
+    <TarifarioTabla creatorId={CREADORA} inputs={inputs} basisInicial={basis} settings={SETTINGS} sinGuardar />,
   );
 }
 
@@ -120,6 +120,38 @@ describe("TarifarioTabla", () => {
     expect(screen.getAllByText("Escribe las views de una pieza para ver el rango.").length).toBeGreaterThan(0);
     expect(screen.getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
     expect(screen.queryByTestId("rango-historias")).not.toBeInTheDocument();
+  });
+
+  it("a una fila que solo le falta el CPM no se le piden las views: salen de la línea base confiable", () => {
+    pintar(BASIS_VACIO, {
+      ...INPUTS,
+      baselines: [
+        ...INPUTS.baselines,
+        { platformId: "facebook", medianViews: 19_700, sampleSize: 12, ageHoursCut: 168, isReliable: true, computedAt: "2026-09-22T00:00:00Z" },
+      ],
+    });
+    const views = screen.getByLabelText("Views por pieza · Video en Facebook");
+    expect(views).toHaveValue("19.700");
+    const celda = views.closest("td")!;
+    expect(within(celda).getByText("Mediana propia")).toBeInTheDocument();
+    expect(within(celda).queryByText("Views a mano")).not.toBeInTheDocument();
+    // Lo único que queda a la vista es lo que de verdad falta.
+    const fila = views.closest("tr")!;
+    expect(within(fila).getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
+    expect(within(fila).queryByText("Escribe las views de una pieza para ver el rango.")).not.toBeInTheDocument();
+  });
+
+  it("a 400 px las acciones se ven sin desplazar la tabla: van en la primera columna, bajo el nombre", () => {
+    pintar();
+    const boton = screen.getByRole("button", { name: "Cómo se calcula · TikTok dedicado" });
+    const editar = screen.getByRole("button", { name: "Editar · TikTok dedicado" });
+    const fila = boton.closest("tr")!;
+    const primera = fila.querySelector("td")!;
+    expect(primera).toContainElement(boton);
+    expect(primera).toContainElement(editar);
+    expect(primera).toHaveTextContent("TikTok dedicado");
+    // Y no queda una columna de acciones al final que obligue a desplazarse.
+    expect(screen.queryByRole("columnheader", { name: "Acciones" })).not.toBeInTheDocument();
   });
 
   it("con poca muestra, la mediana se sugiere en el campo pero no entra sola en el precio (D4)", async () => {

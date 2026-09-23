@@ -375,6 +375,12 @@ export async function getRateCardInputs(tx: WorkspaceTx, creatorId: string): Pro
     [creatorId, CORTE_TARIFARIO_HORAS],
   );
 
+  // El CPM se filtra por el país del creador, pero la moneda es la del
+  // workspace: una agencia en USD con una creadora de Colombia no puede
+  // tomar 45.000 COP como si fueran dólares. Si hay referencia en la
+  // moneda del workspace, gana esa; si solo la hay en otra, se devuelve
+  // igual para que la pantalla diga «no hay CPM en USD» (y no «no hay
+  // CPM»), pero la fórmula no la usa (construirFilas, en la web).
   const { rows: benchmarks } = await tx.query<{
     niche_slug: string; country: string; platform: PlatformId; currency: string;
     cpm_low: string; cpm_high: string; source: string; sample_size: number | null;
@@ -383,8 +389,8 @@ export async function getRateCardInputs(tx: WorkspaceTx, creatorId: string): Pro
             niche_slug, country, platform, currency, cpm_low, cpm_high, source, sample_size
        FROM niche_cpm_benchmark
       WHERE country = $1 AND niche_slug = ANY($2::text[]) AND valid_from <= CURRENT_DATE
-      ORDER BY niche_slug, platform, valid_from DESC`,
-    [country, nichos],
+      ORDER BY niche_slug, platform, (upper(currency) = $3) DESC, valid_from DESC`,
+    [country, nichos, currency],
   );
 
   return {
@@ -563,7 +569,15 @@ export interface MediaKitSnapshot {
   locale: string;
   timezone: string;
   redes: MediaKitSnapshotRed[];
-  totales: { followers: number | null; medianViewsMax: number | null };
+  /**
+   * Las cifras grandes de la cabecera, calculadas en SQL. `medianViewsMax`
+   * es la mediana de la MEJOR red, no una mediana del creador: por eso
+   * viaja con `medianViewsMaxPlatform`, y la página la rotula con esa red
+   * («Views medianas · mejor red» + TikTok). Los media kits generados
+   * antes no traen la red y no enseñan esa cifra en la cabecera (sí en
+   * la lista por red).
+   */
+  totales: { followers: number | null; medianViewsMax: number | null; medianViewsMaxPlatform?: PlatformId | null };
   topPosts: MediaKitSnapshotPost[];
   /** De la red con más seguidores que tenga demografía; una entrada por dimensión. */
   audiencia: MediaKitSnapshotAudiencia[];
@@ -657,7 +671,12 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
       ORDER BY CASE dimension WHEN 'age' THEN 1 WHEN 'gender' THEN 2 WHEN 'country' THEN 3 ELSE 4 END,
                dimension,
                CASE WHEN dimension = 'age' THEN bucket END,
-               share DESC NULLS LAST`,
+               -- «Otros» va siempre al final, como en Beacons y
+               -- Passionfroot: antes de un país con menos participación
+               -- parecía un error de datos.
+               CASE WHEN upper(bucket) IN ('OTHER', 'OTHERS', 'OTROS') THEN 1 ELSE 0 END,
+               share DESC NULLS LAST,
+               bucket`,
     [creatorId],
   );
   const audienciaAgrupada: MediaKitSnapshotAudiencia[] = [];
@@ -687,14 +706,40 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
     };
   });
 
-  const followers = redesSnapshot.reduce<number | null>(
-    (acc, r) => (r.followers === null ? acc : (acc ?? 0) + r.followers),
-    null,
+  // Las cifras de la cabecera las suma la base, con las mismas reglas
+  // que las filas de arriba: la última lectura de seguidores de cada red
+  // conectada, y la línea base al corte del tarifario. La mediana más
+  // alta sale con su red, que es lo que la página enseña al lado.
+  const { rows: totales } = await tx.query<{
+    followers: string | null; median_views_max: string | null; median_views_max_platform: PlatformId | null;
+  }>(
+    `WITH redes AS (
+       SELECT DISTINCT ON (c.platform_id) c.platform_id, s.followers
+         FROM social_connection c
+         LEFT JOIN account_metric_snapshot s ON s.connection_id = c.id
+        WHERE c.creator_id = $1
+        ORDER BY c.platform_id, s.day DESC NULLS LAST
+     ), base AS (
+       SELECT DISTINCT ON (platform_id) platform_id, median_views
+         FROM creator_baseline
+        WHERE creator_id = $1
+        ORDER BY platform_id, (age_hours_cut = $2) DESC, age_hours_cut DESC, computed_at DESC
+     ), mejor AS (
+       SELECT b.platform_id, round(b.median_views) AS median_views
+         FROM base b JOIN redes r USING (platform_id)
+        WHERE b.median_views IS NOT NULL
+        ORDER BY b.median_views DESC, b.platform_id
+        LIMIT 1
+     )
+     SELECT (SELECT sum(followers) FROM redes) AS followers,
+            (SELECT median_views FROM mejor)   AS median_views_max,
+            (SELECT platform_id FROM mejor)    AS median_views_max_platform`,
+    [creatorId, CORTE_TARIFARIO_HORAS],
   );
-  const medianViewsMax = redesSnapshot.reduce<number | null>(
-    (acc, r) => (r.medianViews === null ? acc : Math.max(acc ?? 0, r.medianViews)),
-    null,
-  );
+  const total = totales[0];
+  const followers = total && total.followers !== null ? Number(total.followers) : null;
+  const medianViewsMax = total && total.median_views_max !== null ? Number(total.median_views_max) : null;
+  const medianViewsMaxPlatform = total?.median_views_max_platform ?? null;
 
   return {
     version: 2,
@@ -710,7 +755,7 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
     locale: ws[0]?.locale ?? 'es-CO',
     timezone: ws[0]?.timezone ?? 'UTC',
     redes: redesSnapshot,
-    totales: { followers, medianViewsMax },
+    totales: { followers, medianViewsMax, medianViewsMaxPlatform },
     topPosts: posts.map((p) => ({
       platformId: p.platform_id,
       url: p.url,
@@ -795,6 +840,54 @@ export async function createMediaKit(tx: WorkspaceTx, input: CreateMediaKitInput
 export async function listMediaKits(tx: WorkspaceTx): Promise<MediaKitRow[]> {
   const { rows } = await tx.query<RawMediaKit>(`${SELECT_KIT} ORDER BY created_at DESC LIMIT 50`);
   return rows.map(mapKit);
+}
+
+/** Un media kit que se puede adjuntar a una cotización. */
+export interface MediaKitAdjuntable {
+  id: string;
+  slug: string;
+  createdAt: string;
+  hasPassword: boolean;
+  expiresAt: string | null;
+}
+
+/**
+ * Los media kits de un creador que la marca puede abrir HOY: públicos y
+ * sin vencer, el más reciente primero. Son los que el formulario de la
+ * cotización ofrece para acompañarla (la página pública los enlaza al
+ * pie, como las propuestas de Passionfroot y HoneyBook).
+ */
+export async function listShareableMediaKits(tx: WorkspaceTx, creatorId: string): Promise<MediaKitAdjuntable[]> {
+  if (!isUuid(creatorId)) return [];
+  const { rows } = await tx.query<{
+    id: string; slug: string; created_at: string; has_password: boolean; expires_at: string | null;
+  }>(
+    `SELECT id, slug, created_at, password_hash IS NOT NULL AS has_password, expires_at
+       FROM media_kit
+      WHERE creator_id = $1 AND is_public AND (expires_at IS NULL OR expires_at > now())
+      ORDER BY created_at DESC
+      LIMIT 20`,
+    [creatorId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    slug: r.slug,
+    createdAt: r.created_at,
+    hasPassword: r.has_password,
+    expiresAt: r.expires_at,
+  }));
+}
+
+/**
+ * El media kit que acompaña una cotización tiene que ser de su creador y
+ * de este workspace (RLS). Uno de otro creador, o un id inventado, se
+ * rechaza con MediaKitNotFound en vez de un error de clave ajena.
+ */
+async function assertMediaKitDelCreador(tx: WorkspaceTx, mediaKitId: string | null | undefined, creatorId: string): Promise<void> {
+  if (!mediaKitId) return;
+  if (!isUuid(mediaKitId)) throw new MediaKitNotFound();
+  const { rows } = await tx.query('SELECT 1 FROM media_kit WHERE id = $1 AND creator_id = $2', [mediaKitId, creatorId]);
+  if (!rows[0]) throw new MediaKitNotFound();
 }
 
 export async function getMediaKitById(tx: WorkspaceTx, id: string): Promise<MediaKitRow | null> {
@@ -1039,6 +1132,58 @@ export async function getQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail
   return quote;
 }
 
+/**
+ * Lo mismo que getQuote, pero con la fila de `quote` BLOQUEADA hasta que
+ * termine la transacción (SELECT … FOR UPDATE). Toda transición del
+ * panel (enviar, aceptar, rechazar, editar el borrador) lee con esta y
+ * no con getQuote.
+ *
+ * Por qué: el enlace público (public_quote_accept, 0026) también toma la
+ * fila con FOR UPDATE. Si el panel leyera sin bloquear, el creador
+ * podría ver 'sent', la marca aceptar en ese instante, y el UPDATE del
+ * panel —que esperaba el bloqueo— escribir 'rejected' encima de una
+ * cotización ya aceptada, con el negocio en «Ganado» y la campaña
+ * planeada. Con el bloqueo, la segunda en llegar espera, lee el estado
+ * que dejó la primera y falla con QuoteTransitionError. Es lo mismo que
+ * evita el doble «Enviar» desde dos pestañas (dos filas de historial y
+ * dos actividades).
+ *
+ * El orden de bloqueo es el de public_quote_accept —primero la
+ * cotización, después el negocio—, así que el panel y el enlace no se
+ * pueden bloquear en cruz.
+ */
+async function getQuoteForUpdate(tx: WorkspaceTx, id: string): Promise<QuoteDetail | null> {
+  if (!isUuid(id)) return null;
+  const { rows } = await tx.query<{ id: string }>('SELECT id FROM quote WHERE id = $1 FOR UPDATE', [id]);
+  if (!rows[0]) return null;
+  return getQuote(tx, id);
+}
+
+/**
+ * Cambia el estado solo si sigue en uno de `desde`. `set` son las demás
+ * columnas, con sus parámetros desde $4. Es la segunda
+ * guardia, en la base, además del bloqueo de getQuoteForUpdate: si
+ * alguien cambia el flujo y se salta la lectura bloqueada, el UPDATE no
+ * pisa un estado que no esperaba.
+ */
+async function transicionar(
+  tx: WorkspaceTx,
+  id: string,
+  desde: readonly QuoteStatus[],
+  hacia: QuoteStatus,
+  set: string,
+  params: unknown[] = [],
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE quote SET status = $2, ${set} WHERE id = $1 AND status = ANY($3::text[]) RETURNING id`,
+    [id, hacia, [...desde], ...params],
+  );
+  if (rows[0]) return;
+  const { rows: real } = await tx.query<{ status: string }>('SELECT status FROM quote WHERE id = $1', [id]);
+  if (!real[0]) throw new QuoteNotFound();
+  throw new QuoteTransitionError(real[0].status, hacia);
+}
+
 async function listQuoteItems(tx: WorkspaceTx, quoteId: string): Promise<QuoteItemRow[]> {
   const { rows } = await tx.query<{
     id: string; deliverable: string; platform_id: PlatformId | null; description: string;
@@ -1219,6 +1364,7 @@ export async function createQuote(tx: WorkspaceTx, input: CreateQuoteInput): Pro
   if (input.items.length === 0) {
     throw new CotizarError('QuoteSinItems', 'Una cotización necesita al menos un entregable.');
   }
+  await assertMediaKitDelCreador(tx, input.mediaKitId, input.creatorId);
 
   const { rows: ws } = await tx.query<{ currency: string }>('SELECT currency FROM workspace WHERE id = $1', [tx.workspaceId]);
   const moneda = (ws[0]?.currency ?? 'COP').toUpperCase();
@@ -1279,10 +1425,13 @@ export interface UpdateQuoteInput extends Omit<CreateQuoteInput, 'creatorId' | '
  * se toca. Corregir un precio no quema otro número COT-AAAA-NNN.
  */
 export async function updateQuoteDraft(tx: WorkspaceTx, id: string, input: UpdateQuoteInput): Promise<QuoteDetail> {
-  const actual = await getQuote(tx, id);
+  const actual = await getQuoteForUpdate(tx, id);
   if (!actual) throw new QuoteNotFound();
   if (actual.status !== 'draft') throw new QuoteNotEditable(actual.status);
   if (input.items.length === 0) throw new CotizarError('QuoteSinItems', 'Una cotización necesita al menos un entregable.');
+  // undefined: el media kit no se toca; null: se quita.
+  const mediaKitId = input.mediaKitId === undefined ? actual.mediaKitId : input.mediaKitId;
+  await assertMediaKitDelCreador(tx, mediaKitId, actual.creatorId);
 
   const taxRate = tasaParaGuardar(input.taxRate);
   const totales = calcularTotalesCotizacion({
@@ -1292,22 +1441,25 @@ export async function updateQuoteDraft(tx: WorkspaceTx, id: string, input: Updat
     currency: actual.currency,
   });
 
-  await tx.query(
+  const { rows: editada } = await tx.query<{ id: string }>(
     `UPDATE quote
         SET subtotal = $2, discount = $3, tax = $4, total = $5, tax_rate = $6,
             agreed_metrics = $7::text[], report_cuts_hours = $8::int[],
             usage_rights_days = $9, exclusivity_days = $10, exclusivity_scope = $11,
             payment_terms_days = $12, campaign_starts_on = $13::date, campaign_ends_on = $14::date,
-            valid_until = $15::date
-      WHERE id = $1 AND status = 'draft'`,
+            valid_until = $15::date, media_kit_id = $16
+      WHERE id = $1 AND status = 'draft'
+      RETURNING id`,
     [
       id, totales.subtotal, totales.discount, totales.tax, totales.total, taxRate,
       input.agreedMetrics ?? actual.agreedMetrics, input.reportCutsHours ?? actual.reportCutsHours,
       input.usageRightsDays ?? null, input.exclusivityDays ?? null, input.exclusivityScope ?? null,
       input.paymentTermsDays ?? actual.paymentTermsDays,
-      input.campaignStartsOn ?? null, input.campaignEndsOn ?? null, input.validUntil ?? null,
+      input.campaignStartsOn ?? null, input.campaignEndsOn ?? null, input.validUntil ?? null, mediaKitId ?? null,
     ],
   );
+  // Con la fila bloqueada no debería pasar; si pasa, los ítems no se tocan.
+  if (!editada[0]) throw new QuoteNotEditable(actual.status);
   await tx.query('DELETE FROM quote_item WHERE quote_id = $1', [id]);
   await insertItems(tx, id, input.items, totales.lineTotals);
 
@@ -1322,7 +1474,7 @@ export async function updateQuoteDraft(tx: WorkspaceTx, id: string, input: Updat
  * el último número del año, el siguiente lo reutiliza.
  */
 export async function deleteQuoteDraft(tx: WorkspaceTx, id: string): Promise<void> {
-  const actual = await getQuote(tx, id);
+  const actual = await getQuoteForUpdate(tx, id);
   if (!actual) throw new QuoteNotFound();
   if (actual.status !== 'draft') throw new QuoteNotDraft(actual.status);
   await tx.query("DELETE FROM quote WHERE id = $1 AND status = 'draft'", [id]);
@@ -1417,9 +1569,13 @@ async function buildQuoteSnapshot(tx: WorkspaceTx, quote: QuoteDetail): Promise<
  *
  * Enviada: el snapshot congelado, que es lo que la marca tiene. Borrador:
  * el snapshot que se congelaría si se enviara ahora, para revisarlo
- * antes de «Enviar».
+ * antes de «Enviar». Lleva además el id del media kit adjunto, que la
+ * página pública no recibe.
  */
-export async function getQuotePreview(tx: WorkspaceTx, id: string): Promise<PublicQuoteView | null> {
+export async function getQuotePreview(
+  tx: WorkspaceTx,
+  id: string,
+): Promise<(PublicQuoteView & { mediaKitId: string | null }) | null> {
   const quote = await getQuote(tx, id);
   if (!quote) return null;
   let snapshot: QuotePublicSnapshot;
@@ -1443,6 +1599,9 @@ export async function getQuotePreview(tx: WorkspaceTx, id: string): Promise<Publ
     acceptedByName: quote.acceptedByName,
     rejectedAt: quote.rejectedAt,
     expiredAt: quote.expiredAt,
+    // Solo para el panel: la vista previa enlaza el media kit por su
+    // vista previa (que no cuenta visitas), no por el enlace público.
+    mediaKitId: quote.mediaKitId,
   };
 }
 
@@ -1493,7 +1652,7 @@ export interface TextosCotizar {
  * historial y su actividad, como lo haría el CRM a mano.
  */
 export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
-  const quote = await getQuote(tx, id);
+  const quote = await getQuoteForUpdate(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'draft') throw new QuoteTransitionError(quote.status, 'sent');
   if (quote.items.length === 0) throw new CotizarError('QuoteSinItems', 'Una cotización sin entregables no se puede enviar.');
@@ -1507,10 +1666,9 @@ export async function sendQuote(tx: WorkspaceTx, id: string, textos: TextosCotiz
   }
 
   const snapshot = await buildQuoteSnapshot(tx, quote);
-  await tx.query(
-    `UPDATE quote SET status = 'sent', sent_at = coalesce(sent_at, now()), public_snapshot = $2::jsonb WHERE id = $1`,
-    [id, JSON.stringify(snapshot)],
-  );
+  await transicionar(tx, id, ['draft'], 'sent', 'sent_at = coalesce(sent_at, now()), public_snapshot = $4::jsonb', [
+    JSON.stringify(snapshot),
+  ]);
 
   if (quote.dealId) await moverDealAPropuesta(tx, quote.dealId, quote, textos);
 
@@ -1605,11 +1763,11 @@ async function registrarAceptacion(tx: WorkspaceTx, quote: QuoteDetail, via: 'pa
  * cotización en 'accepted' y el deal en «Ganado» con su historial.
  */
 export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCotizar): Promise<QuoteDetail> {
-  const quote = await getQuote(tx, id);
+  const quote = await getQuoteForUpdate(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'accepted');
 
-  await tx.query("UPDATE quote SET status = 'accepted', accepted_at = coalesce(accepted_at, now()) WHERE id = $1", [id]);
+  await transicionar(tx, id, ['sent', 'viewed'], 'accepted', 'accepted_at = coalesce(accepted_at, now())');
   if (quote.dealId) {
     await ganarDeal(tx, quote.dealId);
     await registrarAceptacion(tx, quote, 'panel', textos);
@@ -1620,11 +1778,17 @@ export async function acceptQuote(tx: WorkspaceTx, id: string, textos: TextosCot
   return actualizada;
 }
 
+/**
+ * Rechazar desde el panel. Con la fila bloqueada: si la marca aceptó
+ * desde el enlace un instante antes, esto falla con
+ * QuoteTransitionError('accepted', 'rejected') en vez de dejar una
+ * cotización «rechazada» con el negocio ganado.
+ */
 export async function rejectQuote(tx: WorkspaceTx, id: string): Promise<QuoteDetail> {
-  const quote = await getQuote(tx, id);
+  const quote = await getQuoteForUpdate(tx, id);
   if (!quote) throw new QuoteNotFound();
   if (quote.status !== 'sent' && quote.status !== 'viewed') throw new QuoteTransitionError(quote.status, 'rejected');
-  await tx.query("UPDATE quote SET status = 'rejected', rejected_at = coalesce(rejected_at, now()) WHERE id = $1", [id]);
+  await transicionar(tx, id, ['sent', 'viewed'], 'rejected', 'rejected_at = coalesce(rejected_at, now())');
   const actualizada = await getQuote(tx, id);
   if (!actualizada) throw new QuoteNotFound();
   return actualizada;

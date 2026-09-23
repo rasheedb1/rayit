@@ -73,7 +73,8 @@ const idDesglose = (id: string) => `tarifario-explicacion-${id}`;
  * El rango es TEXTO: es el número principal de la pantalla y tiene que
  * leerse entero sin entrar a un campo. Los campos (rango y CPM a mano)
  * se abren con «Editar» en la fila. Las columnas van en el orden en que
- * se leen en un teléfono: entregable y rango primero, lo demás después.
+ * se leen en un teléfono: entregable (con sus botones) y rango primero,
+ * lo demás después.
  *
  * «Cómo se calcula» se abre JUSTO DEBAJO de su fila (TablaConDetalle),
  * como el desglose de comisiones de Stripe, pegado al monto que explica.
@@ -120,6 +121,10 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
       };
       if (!fila.entrada) {
         const manual = basis.viewsManuales[fila.def.id];
+        // A una fila que solo le falta el CPM no se le piden las views:
+        // si la línea base es confiable, el campo las enseña como en las
+        // demás filas, y lo único que queda a la vista es lo que falta.
+        const deBaseline = manual === undefined && fila.baseline?.isReliable ? fila.baseline.medianViews : null;
         const motivos = fila.motivos.map((m) => textoMotivo(m, fila, inputs.country, red, f));
         // Un precio a mano que no vale también se dice aquí: si la fila
         // perdió sus views, es el único sitio donde se ve.
@@ -127,8 +132,15 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
         return {
           ...comun,
           entrada: null,
-          views: manual ?? null,
-          viewsEtiqueta: manual !== undefined ? t.viewsManuales : comun.viewsPlaceholder !== null ? t.viewsPocoFiables : t.viewsManuales,
+          views: manual ?? deBaseline,
+          viewsEtiqueta:
+            manual !== undefined
+              ? t.viewsManuales
+              : deBaseline !== null
+                ? t.viewsBaseline
+                : comun.viewsPlaceholder !== null
+                  ? t.viewsPocoFiables
+                  : t.viewsManuales,
           precioLow: null,
           precioHigh: null,
           editado: false,
@@ -243,14 +255,52 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
     );
   }
 
+  /**
+   * Las acciones de una fila van en la PRIMERA columna, bajo el nombre:
+   * a 400 px la tabla hace scroll horizontal y una columna de acciones
+   * al final quedaba en x≈614, fuera de la pantalla, justo con la
+   * función estrella del módulo («Cómo se calcula»). Así, el botón, el
+   * nombre y el rango que explica se ven juntos sin desplazar nada.
+   */
+  function accionesFila(r: Fila) {
+    const conRango = r.precioLow !== null;
+    const recalcular = r.editado || r.cpmEditado;
+    if (!conRango && !recalcular) return null;
+    return (
+      <span className="relative -ml-2.5 flex flex-wrap gap-x-1 gap-y-0.5" data-acciones-fila={r.id}>
+        {conRango && botonDesglose(r.id, r.nombre)}
+        {conRango && (
+          <button
+            type="button"
+            className={BOTON_DISCRETO}
+            // «Listo» no cierra un rango que no vale: primero se corrige.
+            disabled={editando === r.id && r.errorRango !== null}
+            aria-describedby={editando === r.id && r.errorRango ? `rango-error-${r.id}` : undefined}
+            onClick={() => setEditando(editando === r.id ? null : r.id)}
+          >
+            {editando === r.id ? t.listo : t.editar}
+            <span className="sr-only"> · {r.nombre}</span>
+          </button>
+        )}
+        {recalcular && (
+          <button type="button" className={BOTON_DISCRETO} onClick={() => quitarEdicion(r.id)}>
+            {t.recalcular}
+            <span className="sr-only"> · {r.nombre}</span>
+          </button>
+        )}
+      </span>
+    );
+  }
+
   const columnas: ColumnaConDetalle<Fila>[] = [
     {
       key: "entregable",
       header: t.columnas.entregable,
       render: (r) => (
-        <span className="flex min-w-[7.5rem] flex-col gap-1">
+        <span className="flex min-w-[8.5rem] flex-col items-start gap-1">
           <CellMain sub={r.cantidad > 1 ? t.piezas(f.int(r.cantidad)) : undefined}>{r.nombre}</CellMain>
           <PlatformPill platformId={r.platformId} />
+          {accionesFila(r)}
         </span>
       ),
     },
@@ -333,35 +383,6 @@ export function TarifarioTabla({ creatorId, inputs, basisInicial, settings, sinG
           </span>
         );
       },
-    },
-    {
-      key: "acciones",
-      header: t.columnas.acciones,
-      srOnlyHeader: true,
-      render: (r) => (
-        <span className="relative flex flex-col items-start gap-1">
-          {r.precioLow !== null && botonDesglose(r.id, r.nombre)}
-          {r.precioLow !== null && (
-            <button
-              type="button"
-              className={BOTON_DISCRETO}
-              // «Listo» no cierra un rango que no vale: primero se corrige.
-              disabled={editando === r.id && r.errorRango !== null}
-              aria-describedby={editando === r.id && r.errorRango ? `rango-error-${r.id}` : undefined}
-              onClick={() => setEditando(editando === r.id ? null : r.id)}
-            >
-              {editando === r.id ? t.listo : t.editar}
-              <span className="sr-only"> · {r.nombre}</span>
-            </button>
-          )}
-          {(r.editado || r.cpmEditado) && (
-            <button type="button" className={BOTON_DISCRETO} onClick={() => quitarEdicion(r.id)}>
-              {t.recalcular}
-              <span className="sr-only"> · {r.nombre}</span>
-            </button>
-          )}
-        </span>
-      ),
     },
   ];
 

@@ -255,6 +255,8 @@ const cotizacionSchema = z.object({
   paymentTermsDays: z.number().int().min(0).max(365),
   campaignStartsOn: z.string().regex(ISO_DATE_RE, V.fecha).or(z.literal("")),
   campaignEndsOn: z.string().regex(ISO_DATE_RE, V.fecha).or(z.literal("")),
+  /** El media kit que la acompaña; "" es ninguno. Que sea del creador lo comprueba la consulta. */
+  mediaKitId: z.string().regex(UUID_RE, E.MediaKitNotFound).or(z.literal("")).default(""),
 });
 
 const nuevaCotizacionSchema = cotizacionSchema.extend({
@@ -306,6 +308,7 @@ function aConsulta(v: Cotizacion) {
     paymentTermsDays: v.paymentTermsDays,
     campaignStartsOn: v.campaignStartsOn || null,
     campaignEndsOn: v.campaignEndsOn || null,
+    mediaKitId: v.mediaKitId || null,
   };
 }
 

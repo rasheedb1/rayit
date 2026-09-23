@@ -1,7 +1,6 @@
 "use server";
 
 import { headers } from "next/headers";
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { readPublicMediaKit, type MediaKitSnapshot, type QuoteStatus } from "@mc/db/queries/cotizar";
 import { acceptQuoteFromLink, withPublicShare } from "@/lib/db";
@@ -107,8 +106,13 @@ export async function aceptarCotizacionPublica(
     return { status: "invalid", errors };
   }
   try {
+    // Sin revalidatePath: volver a pintar /cotizacion/<slug> dentro de la
+    // respuesta llamaba a public_quote con count=true y sumaba una
+    // visita que nadie hizo (una apertura y su aceptación daban «3
+    // visitas»). El componente ya enseña «aceptada» con lo que devuelve
+    // esta acción, y la página es force-dynamic: quien recargue ve el
+    // estado de la base, y esa recarga sí es una visita.
     const r = await acceptQuoteFromLink(slug, { name: parsed.data.name, email: parsed.data.email }, TEXTOS_COTIZAR);
-    revalidatePath(`/cotizacion/${slug}`);
     if (r.status === "ok") return { status: "ok", campaignPending: r.campaignPending };
     if (r.status === "invalid_signer") {
       return {

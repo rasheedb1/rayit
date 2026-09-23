@@ -4,7 +4,7 @@ import type { PublicQuoteView } from "@mc/db/queries/cotizar";
 import { Pill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { formatterFor } from "@/lib/format";
-import { MESSAGES } from "../messages";
+import { idiomaDocumento, MESSAGES } from "../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../_lib/acordado";
 import { ResumenTotales } from "./resumen-totales";
 
@@ -34,7 +34,7 @@ export function DocumentoCotizacion({
   const dinero = (v: string) => f.money(v, q.currency, { mode: "full" });
 
   return (
-    <article className="space-y-10">
+    <article className="space-y-10" lang={idiomaDocumento(q.locale)}>
       <header>
         <p className="font-mono text-xs uppercase tracking-wide text-muted">
           {t.title} · {q.number}
@@ -61,9 +61,12 @@ export function DocumentoCotizacion({
         </h2>
         <ul className="mt-3 divide-y divide-border rounded-md border border-border">
           {q.items.map((i, idx) => (
-            <li key={`${i.description}-${idx}`} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            // Rejilla de dos columnas y no flex-wrap: el total de la línea
+            // se queda SIEMPRE a la derecha, como en la factura alojada de
+            // Stripe, aunque la descripción ocupe casi todo el ancho a 400 px.
+            <li key={`${i.description}-${idx}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-4 py-3">
               <span className="flex min-w-0 flex-col gap-1">
-                <span className="text-sm">{i.description}</span>
+                <span className="text-sm break-words">{i.description}</span>
                 <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
                   {i.platformId && <PlatformPill platformId={i.platformId} />}
                   <span className="tabular-nums">
@@ -71,7 +74,9 @@ export function DocumentoCotizacion({
                   </span>
                 </span>
               </span>
-              <span className="font-mono text-sm tabular-nums">{dinero(i.total)}</span>
+              <span className="whitespace-nowrap text-right font-mono text-sm tabular-nums" data-testid="total-linea">
+                {dinero(i.total)}
+              </span>
             </li>
           ))}
         </ul>

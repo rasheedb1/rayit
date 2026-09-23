@@ -154,7 +154,53 @@ cada frase la base guarda el código y los parámetros
 `notification.kind` + `entity_id`), y el aviso de la lista se recompone
 desde ellos, no desde `title_es`.
 
+## Idioma de las páginas públicas (decisión del MVP)
+
+El MVP habla solo español: `messages.ts` es un objeto por idioma y hoy
+solo existe el español (`IDIOMA_MENSAJES = "es"`). Lo que sí sigue al
+workspace es el formato: montos, fechas y cifras de `/kit/<slug>` y
+`/cotizacion/<slug>` salen con el `locale`, la moneda y la zona
+congelados en el snapshot. El `<article>` de cada documento declara el
+idioma de sus TEXTOS con `idiomaDocumento(locale)`: `es-CO` o `es-MX`
+conservan la región; un workspace en `en-US` o `pt-BR` declara `es`,
+porque un lector de pantalla que oyera `lang="en-US"` pronunciaría en
+inglés frases escritas en español. Cuando llegue un segundo idioma, será
+un segundo objeto con la misma forma que `MESSAGES`, elegido por el
+idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
+
 ## Cosas que rompen si no las sabes
+
+- **Las transiciones del panel leen con la fila bloqueada.**
+  `sendQuote`, `acceptQuote`, `rejectQuote`, `updateQuoteDraft` y
+  `deleteQuoteDraft` leen con `getQuoteForUpdate` (`SELECT … FOR
+  UPDATE`), y el UPDATE lleva además `AND status = ANY(…)`. Sin eso, la
+  marca aceptaba desde el enlace mientras el creador pulsaba «Rechazar»
+  y el UPDATE del panel, que esperaba el bloqueo, dejaba una cotización
+  «rechazada» con el negocio ganado; y un doble «Enviar» desde dos
+  pestañas dejaba dos actividades. Ahora quien llega segundo recibe
+  `QuoteTransitionError` con el estado real. La prueba de las dos
+  transacciones a la vez corre de verdad en paralelo en el job
+  «contra-postgres-real» del CI; en PGlite las transacciones se
+  serializan y la misma prueba comprueba el orden.
+- **Aceptar desde el enlace no revalida la página pública.** Volver a
+  pintarla dentro de la acción llamaba a `public_quote` con `count=true`
+  y sumaba visitas que nadie hizo. El componente enseña «aceptada» con
+  lo que devuelve la acción.
+- **El CPM de referencia tiene que estar en la moneda del workspace.**
+  Se filtra por el país del creador, pero una agencia en USD con una
+  creadora de Colombia no puede usar 45.000 COP como dólares: la fila
+  cae en «No hay CPM de referencia en USD para TikTok» y el creador
+  escribe el suyo. La consulta prefiere la moneda del workspace cuando
+  hay referencias en varias.
+- **La cifra grande de views del media kit es la de la mejor red**, y se
+  rotula así («Views medianas · mejor red» + la red). Los totales salen
+  de SQL. Los media kits generados antes de la ronda 4 no guardaron la
+  red y no enseñan esa cifra en la cabecera (sí en la lista por red).
+- **El media kit que acompaña una cotización se elige en el formulario**
+  (públicos y sin vencer, el más reciente preseleccionado). Se congela
+  su slug al enviar y la marca lo abre desde el pie del documento; la
+  vista previa del panel lo enlaza por su vista previa, que no cuenta
+  visitas.
 
 - **La migración 0026 no está aplicada en Supabase.** La aplica el
   integrador con `make db.migrate`. Su número sale de la reserva de

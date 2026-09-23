@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { rateToPct } from "@mc/core";
-import { getCurrentRateCard, getDefaultTaxRate, getQuote } from "@mc/db/queries/cotizar";
+import {
+  getCurrentRateCard, getDefaultTaxRate, getMediaKitById, getQuote, listShareableMediaKits, type MediaKitAdjuntable,
+} from "@mc/db/queries/cotizar";
 import { PageHeader } from "@/components/page-header";
 import { withWorkspace } from "@/lib/db";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -25,10 +27,22 @@ export default async function EditarCotizacionPage({ params }: { params: Promise
   const datos = await withWorkspace(async (tx) => {
     const quote = await getQuote(tx, id);
     if (!quote) return null;
+    const mediaKits: MediaKitAdjuntable[] = await listShareableMediaKits(tx, quote.creatorId);
+    // El que ya lleva el borrador se ofrece aunque haya vencido o se haya
+    // despublicado desde entonces: guardar sin tocar el selector no lo quita.
+    if (quote.mediaKitId && !mediaKits.some((k) => k.id === quote.mediaKitId)) {
+      const actual = await getMediaKitById(tx, quote.mediaKitId);
+      if (actual) {
+        mediaKits.unshift({
+          id: actual.id, slug: actual.slug, createdAt: actual.createdAt, hasPassword: actual.hasPassword, expiresAt: actual.expiresAt,
+        });
+      }
+    }
     return {
       quote,
       tarifario: await getCurrentRateCard(tx, quote.creatorId),
       taxRate: await getDefaultTaxRate(tx),
+      mediaKits,
     };
   });
   if (!datos) notFound();
@@ -46,6 +60,7 @@ export default async function EditarCotizacionPage({ params }: { params: Promise
         action={editarCotizacion.bind(null, quote.id)}
         creatorId={quote.creatorId}
         tarifas={(datos.tarifario?.items ?? []).filter((i) => !i.isModifier)}
+        mediaKits={datos.mediaKits}
         settings={ws}
         currency={quote.currency}
         textoGuardar={t.guardarCambios}
@@ -70,6 +85,7 @@ export default async function EditarCotizacionPage({ params }: { params: Promise
           paymentTermsDays: String(quote.paymentTermsDays),
           campaignStartsOn: quote.campaignStartsOn ?? "",
           campaignEndsOn: quote.campaignEndsOn ?? "",
+          mediaKitId: quote.mediaKitId ?? "",
         }}
       />
     </>

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { addDays, hoyEnZona, rateToPct } from "@mc/core";
-import { getCurrentRateCard, getDefaultTaxRate, getPrimaryCreator, listQuotableDeals } from "@mc/db/queries/cotizar";
+import {
+  getCurrentRateCard, getDefaultTaxRate, getPrimaryCreator, listQuotableDeals, listShareableMediaKits,
+} from "@mc/db/queries/cotizar";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
@@ -30,6 +32,7 @@ export default async function NuevaCotizacionPage({ searchParams }: { searchPara
       deals: await listQuotableDeals(tx),
       tarifario: await getCurrentRateCard(tx, creador.id),
       taxRate: await getDefaultTaxRate(tx),
+      mediaKits: await listShareableMediaKits(tx, creador.id),
     };
   });
 
@@ -58,6 +61,7 @@ export default async function NuevaCotizacionPage({ searchParams }: { searchPara
         creatorId={datos.creador.id}
         deals={datos.deals}
         tarifas={(datos.tarifario?.items ?? []).filter((i) => !i.isModifier)}
+        mediaKits={datos.mediaKits}
         settings={ws}
         currency={datos.tarifario?.card.currency ?? ws.currency}
         textoGuardar={t.guardar}
@@ -76,6 +80,9 @@ export default async function NuevaCotizacionPage({ searchParams }: { searchPara
           paymentTermsDays: "30",
           campaignStartsOn: addDays(hoy, 14),
           campaignEndsOn: addDays(hoy, 44),
+          // El más reciente que la marca puede abrir: es el que el
+          // creador acaba de generar para esta conversación.
+          mediaKitId: datos.mediaKits[0]?.id ?? "",
         }}
       />
     </>

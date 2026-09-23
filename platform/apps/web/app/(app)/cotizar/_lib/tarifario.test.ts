@@ -44,6 +44,38 @@ describe("construirFilas", () => {
     expect(youtube.motivos).toEqual([{ tipo: "sin_views" }, { tipo: "sin_cpm" }]);
   });
 
+  it("un CPM de referencia en otra moneda no se usa: una agencia en USD no cobra 45.000 COP como dólares", () => {
+    const enUsd: RateCardInputs = { ...INPUTS, currency: "USD" };
+    const filas = construirFilas(enUsd, BASIS_VACIO);
+    const tiktok = filas.find((x) => x.def.id === "tiktok")!;
+    // Las views confiables siguen ahí; lo que falta es un CPM en USD.
+    expect(tiktok.entrada).toBeNull();
+    expect(tiktok.benchmark).toBeNull();
+    expect(tiktok.motivos).toEqual([{ tipo: "sin_cpm", moneda: "USD" }]);
+    const usd = formatterFor({ locale: "en-US", currency: "USD", timezone: "America/New_York" });
+    expect(textoMotivo(tiktok.motivos[0]!, tiktok, "CO", "TikTok", usd)).toBe(
+      "No hay CPM de referencia en USD para TikTok. Escribe el tuyo.",
+    );
+
+    // Con una referencia en USD para la misma red, gana esa.
+    const conUsd: RateCardInputs = {
+      ...enUsd,
+      benchmarks: [
+        ...enUsd.benchmarks,
+        { nicheSlug: "cocina", country: "CO", platform: "tiktok", currency: "USD", cpmLow: "11", cpmHigh: "17", source: "manual", sampleSize: 0 },
+      ],
+    };
+    const conRango = construirFilas(conUsd, BASIS_VACIO).find((x) => x.def.id === "tiktok")!;
+    expect(conRango.entrada?.cpmLow).toBe("11");
+    expect(conRango.entrada?.currency).toBe("USD");
+    expect(calcularItem(conRango.entrada!).priceLow).toBe("924.00");
+
+    // Y el CPM que escribe el creador sí vale, en la moneda del workspace.
+    const propio = construirFilas(enUsd, { ...BASIS_VACIO, cpm: { tiktok: { low: "10", high: "15" } } }).find((x) => x.def.id === "tiktok")!;
+    expect(propio.motivos).toEqual([]);
+    expect(propio.entrada?.cpmSource).toBe("creador");
+  });
+
   it("una línea base con poca muestra NO entra sola en el precio (D4): se ofrece como sugerencia", () => {
     const reel = construirFilas(INPUTS, BASIS_VACIO).find((x) => x.def.id === "reel")!;
     expect(reel.entrada).toBeNull();

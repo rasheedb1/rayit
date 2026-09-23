@@ -22,8 +22,9 @@ import {
   getQuote, getQuotePreview, getRateCardInputs, hashSharePassword, listMediaKits, listQuotableDeals, listQuotes,
   nextQuoteNumber, nuevoSlug, overrideRateCardItemPrice, readPublicMediaKit, readPublicQuote, rejectQuote,
   saveRateCard, sendQuote, updateMediaKitShare, updateQuoteDraft, verifySharePassword, LARGO_SLUG,
-  listAcceptanceNotices, markAcceptanceNoticeRead,
-  QuoteNotDraft, QuoteNotEditable, RangoDeTarifaInvalido, ValidezVencida, type TextosCotizar,
+  listAcceptanceNotices, markAcceptanceNoticeRead, listShareableMediaKits,
+  MediaKitNotFound, QuoteNotDraft, QuoteNotEditable, QuoteTransitionError, RangoDeTarifaInvalido, ValidezVencida,
+  type TextosCotizar,
 } from '../src/queries/cotizar.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -850,6 +851,234 @@ describe('COT-3 · ciclo con fechas, borradores y estado de hoy', () => {
 });
 
 // ------------------------------- convivencia con el endurecimiento (0025)
+
+// ------------------------------------------------ carreras y ronda 4
+
+/**
+ * El panel y el enlace a la vez. Sobre Postgres real (el job
+ * «contra-postgres-real» del CI, con TEST_DATABASE_URL) las dos
+ * transacciones corren de verdad en paralelo: la del enlace acepta y se
+ * queda abierta con la fila bloqueada mientras el panel intenta
+ * rechazar. Sin el FOR UPDATE de getQuoteForUpdate, el panel leía 'sent'
+ * y su UPDATE, al soltarse el bloqueo, pisaba 'accepted' con
+ * 'rejected'. Sobre PGlite las transacciones se serializan y la prueba
+ * comprueba la misma regla en orden: quien llega segundo ve el estado
+ * que dejó el primero.
+ */
+describe('COT-3 · el panel y el enlace a la vez', () => {
+  const ITEM = { deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok', quantity: 1, unitPrice: '1000000' };
+  const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function enviadaDesdeUnNegocio() {
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))[0]!;
+    return t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, {
+        dealId: deal.id, creatorId: creadora, items: [ITEM], campaignStartsOn: '2026-11-01', campaignEndsOn: '2026-11-30',
+      });
+      return sendQuote(tx, c.id, TEXTOS);
+    });
+  }
+
+  async function actividades(quoteId: string, kind: string): Promise<number> {
+    return t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ n: string }>(
+        "SELECT count(*) AS n FROM activity WHERE metadata->>'quoteId' = $1 AND metadata->>'kind' = $2",
+        [quoteId, kind],
+      );
+      return Number(rows[0]!.n);
+    });
+  }
+
+  async function etapaDe(dealId: string | null): Promise<string> {
+    return t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const { rows } = await tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [dealId]);
+      return rows[0]!.stage_id;
+    });
+  }
+
+  test('la marca acepta desde el enlace mientras el creador rechaza: gana la aceptación y el panel recibe el error', async () => {
+    const q = await enviadaDesdeUnNegocio();
+
+    let soltar!: () => void;
+    const retenida = new Promise<void>((r) => (soltar = r));
+    let yaAcepto!: () => void;
+    const acepto = new Promise<void>((r) => (yaAcepto = r));
+
+    // La transacción del enlace acepta y NO confirma todavía: tiene la fila.
+    const enlace = t.db.withPublicShare(async (tx) => {
+      const r = await acceptPublicQuote(tx, q.slug, FIRMA);
+      yaAcepto();
+      await retenida;
+      return r;
+    });
+    await acepto;
+    // El creador pulsa «Rechazar» en ese instante.
+    const panel = t.db.withWorkspace(WORKSPACE_LAURA, (tx) => rejectQuote(tx, q.id)).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    await esperar(t.kind === 'postgres' ? 400 : 10);
+    soltar();
+
+    const r = await enlace;
+    assert.equal(r.status, 'ok');
+    const err = await panel;
+    assert.ok(err instanceof QuoteTransitionError, `el panel tenía que fallar, y devolvió ${String(err)}`);
+    assert.match((err as QuoteTransitionError).messageEs, /accepted/);
+
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
+    assert.equal(final!.status, 'accepted');
+    assert.equal(final!.rejectedAt, null);
+    assert.equal(await etapaDe(q.dealId), 'ganado');
+  });
+
+  test('aceptada desde el enlace, rechazar o aceptar después desde el panel lanza el error y no toca nada', async () => {
+    const q = await enviadaDesdeUnNegocio();
+    assert.equal((await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA))).status, 'ok');
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => rejectQuote(tx, q.id)), QuoteTransitionError);
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => acceptQuote(tx, q.id, TEXTOS)), QuoteTransitionError);
+    const final = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
+    assert.equal(final!.status, 'accepted');
+    // El «aceptar» del panel que llegó tarde no dejó su actividad.
+    assert.equal(await actividades(q.id, 'quote_accepted'), 0);
+  });
+
+  test('rechazada desde el panel mientras la marca acepta: el enlace dice «rechazada» y el negocio no se gana', async () => {
+    const q = await enviadaDesdeUnNegocio();
+    let soltar!: () => void;
+    const retenida = new Promise<void>((r) => (soltar = r));
+    let yaRechazo!: () => void;
+    const rechazo = new Promise<void>((r) => (yaRechazo = r));
+
+    const panel = t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const r = await rejectQuote(tx, q.id);
+      yaRechazo();
+      await retenida;
+      return r;
+    });
+    await rechazo;
+    const enlace = t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
+    await esperar(t.kind === 'postgres' ? 400 : 10);
+    soltar();
+
+    assert.equal((await panel).status, 'rejected');
+    assert.deepEqual(await enlace, { status: 'not_acceptable', quoteStatus: 'rejected' });
+    assert.equal(await etapaDe(q.dealId), 'propuesta');
+  });
+
+  test('«Enviar» dos veces a la vez (dos pestañas): un solo envío, una sola actividad y una sola fila de historial', async () => {
+    const deals = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx));
+    const deal = deals.find((d) => d.stageId !== 'propuesta') ?? deals[0]!;
+    const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [ITEM] }));
+    const haciaPropuesta = () =>
+      t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+        const { rows } = await tx.query<{ n: string }>(
+          "SELECT count(*) AS n FROM deal_stage_history WHERE deal_id = $1 AND to_stage_id = 'propuesta'",
+          [deal.id],
+        );
+        return Number(rows[0]!.n);
+      });
+    const antes = await haciaPropuesta();
+
+    const [a, b] = await Promise.allSettled([
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, c.id, TEXTOS)),
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => sendQuote(tx, c.id, TEXTOS)),
+    ]);
+    const fallos = [a, b].filter((x): x is PromiseRejectedResult => x.status === 'rejected');
+    assert.equal(fallos.length, 1, 'solo un envío pasa');
+    assert.ok(fallos[0]!.reason instanceof QuoteTransitionError);
+
+    assert.equal(await actividades(c.id, 'quote_sent'), 1);
+    assert.ok((await haciaPropuesta()) - antes <= 1, 'como mucho una fila nueva hacia «Propuesta enviada»');
+  });
+
+  test('aceptar desde el enlace no suma una visita: solo la apertura cuenta', async () => {
+    const q = await enviadaDesdeUnNegocio();
+    assert.equal((await t.db.withPublicShare((tx) => readPublicQuote(tx, q.slug))).status, 'ok');
+    assert.equal((await t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA))).status, 'ok');
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, q.id));
+    assert.equal(despues!.viewCount, 1);
+  });
+});
+
+describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => {
+  test('el CPM de referencia prefiere la moneda del workspace aunque haya uno más nuevo en otra', async () => {
+    // La llave de la tabla es (nicho, país, red, desde): para tener un CPM
+    // en USD MÁS NUEVO que el de COP, el de COP se corre 30 días atrás.
+    await t.admin(`
+      UPDATE niche_cpm_benchmark SET valid_from = valid_from - 30
+       WHERE niche_slug = 'cocina' AND country = 'CO' AND platform = 'tiktok' AND currency = 'COP';
+      INSERT INTO niche_cpm_benchmark (niche_slug, country, platform, currency, cpm_low, cpm_high, source, valid_from)
+      VALUES ('cocina', 'CO', 'tiktok', 'USD', 11, 17, 'manual', CURRENT_DATE - 1);`);
+    try {
+      const inputs = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getRateCardInputs(tx, creadora)))!;
+      const tiktok = inputs.benchmarks.find((b) => b.platform === 'tiktok')!;
+      assert.equal(inputs.currency, 'COP');
+      assert.equal(tiktok.currency, 'COP', 'un workspace en COP no recibe el CPM en dólares');
+    } finally {
+      await t.admin(`
+        DELETE FROM niche_cpm_benchmark WHERE currency = 'USD' AND niche_slug = 'cocina' AND country = 'CO';
+        UPDATE niche_cpm_benchmark SET valid_from = valid_from + 30
+         WHERE niche_slug = 'cocina' AND country = 'CO' AND platform = 'tiktok' AND currency = 'COP';`);
+    }
+  });
+
+  test('la cifra grande de views dice de qué red sale, y los totales salen de la base', async () => {
+    const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
+    const conViews = snap.redes.filter((r) => r.medianViews !== null);
+    assert.ok(conViews.length > 1, 'el seed trae más de una red con mediana');
+    const mejor = [...conViews].sort((a, b) => b.medianViews! - a.medianViews!)[0]!;
+    assert.equal(snap.totales.medianViewsMax, mejor.medianViews);
+    assert.equal(snap.totales.medianViewsMaxPlatform, mejor.platformId);
+    const suma = snap.redes.reduce((acc, r) => acc + (r.followers ?? 0), 0);
+    assert.equal(snap.totales.followers, suma);
+  });
+
+  test('en la audiencia por país, «Otros» va al final aunque pese más que el último país', async () => {
+    const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
+    const pais = snap.audiencia.find((a) => a.dimension === 'country');
+    assert.ok(pais, 'el seed trae audiencia por país');
+    const buckets = pais.buckets.map((b) => b.bucket);
+    assert.ok(buckets.includes('OTHER'), 'el seed trae el segmento OTHER');
+    assert.equal(buckets.at(-1), 'OTHER');
+    const paises = pais.buckets.slice(0, -1).map((b) => Number(b.share));
+    assert.deepEqual(paises, [...paises].sort((a, b) => b - a), 'los países, de mayor a menor');
+  });
+
+  test('el media kit adjunto viaja al enlace de la cotización; uno inventado no se acepta', async () => {
+    const kit = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createMediaKit(tx, { creatorId: creadora }));
+    const adjuntables = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listShareableMediaKits(tx, creadora));
+    assert.equal(adjuntables[0]?.id, kit.id, 'el más reciente primero');
+
+    const deal = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listQuotableDeals(tx)))[0]!;
+    const item = { deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok', quantity: 1, unitPrice: '1000000' };
+    const inventado = '00000000-0000-4000-8000-0000000000aa';
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [item], mediaKitId: inventado })),
+      MediaKitNotFound,
+    );
+    const q = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      const c = await createQuote(tx, { dealId: deal.id, creatorId: creadora, items: [item], mediaKitId: kit.id });
+      assert.equal(c.mediaKitId, kit.id);
+      // Editar el borrador sin decir nada del kit lo conserva.
+      const sinTocar = await updateQuoteDraft(tx, c.id, { items: [item] });
+      assert.equal(sinTocar.mediaKitId, kit.id);
+      return sendQuote(tx, c.id, TEXTOS);
+    });
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, q.slug, { count: false }));
+    assert.equal(publica.status === 'ok' && publica.quote.mediaKitSlug, kit.slug);
+  });
+
+  test('solo se ofrecen los media kits que la marca puede abrir: ni despublicados ni vencidos', async () => {
+    const [despublicado, vencido] = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => [
+      await createMediaKit(tx, { creatorId: creadora, isPublic: false }),
+      await createMediaKit(tx, { creatorId: creadora, expiresAt: new Date(Date.now() - 60_000).toISOString() }),
+    ]);
+    const ids = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listShareableMediaKits(tx, creadora))).map((k) => k.id);
+    assert.equal(ids.includes(despublicado!.id), false);
+    assert.equal(ids.includes(vencido!.id), false);
+  });
+});
 
 describe('0026 con los disparadores de referencias de 0025', () => {
   test('aceptar desde el enlace sigue funcionando cuando cada clave ajena exige ver a su padre', async (ctx) => {

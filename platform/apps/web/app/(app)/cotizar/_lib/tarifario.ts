@@ -85,15 +85,25 @@ export function modificadoresActivos(ids: readonly string[]): Modificador[] {
   return MODIFICADORES_POR_DEFECTO.filter((m) => ids.includes(m.id)).map((m) => ({ id: m.id, pct: m.pct }));
 }
 
-function benchmarkDe(inputs: RateCardInputs, platformId: PlatformId): CpmBenchmark | undefined {
-  return inputs.benchmarks.find((b) => b.platform === platformId);
+/**
+ * El CPM de referencia de una red, solo si está en la moneda del
+ * workspace. Uno en otra moneda no se convierte ni se usa: 45.000 COP
+ * no son 45.000 USD, y la fórmula multiplicaría las views por la cifra
+ * equivocada. `otraMoneda` dice que existía, para que la fila lo explique.
+ */
+function benchmarkDe(inputs: RateCardInputs, platformId: PlatformId): { bench: CpmBenchmark | null; otraMoneda: boolean } {
+  const deLaRed = inputs.benchmarks.filter((b) => b.platform === platformId);
+  const moneda = inputs.currency.toUpperCase();
+  const bench = deLaRed.find((b) => b.currency.toUpperCase() === moneda) ?? null;
+  return { bench, otraMoneda: bench === null && deLaRed.length > 0 };
 }
 
 /** Por qué una fila todavía no tiene rango. La pantalla lo dice con messages.ts. */
 export type MotivoFila =
   | { tipo: "sin_views" }
   | { tipo: "views_poco_fiables"; muestra: number; mediana: number }
-  | { tipo: "sin_cpm" }
+  /** `moneda`: había referencia, pero en otra moneda que la del workspace. */
+  | { tipo: "sin_cpm"; moneda?: string }
   | { tipo: "cpm_invertido" };
 
 export interface FilaTarifario {
@@ -125,7 +135,7 @@ export interface FilaTarifario {
 export function construirFilas(inputs: RateCardInputs, basis: BasisTarifario): FilaTarifario[] {
   const mods = modificadoresActivos(basis.modificadores);
   return ENTREGABLES.map((def) => {
-    const bench = benchmarkDe(inputs, def.platformId) ?? null;
+    const { bench, otraMoneda } = benchmarkDe(inputs, def.platformId);
     const baseline = def.usaBaseline ? (inputs.baselines.find((b) => b.platformId === def.platformId) ?? null) : null;
     const manual = basis.viewsManuales[def.id];
     const cpmManual = cpmValido(basis.cpm[def.id]);
@@ -146,7 +156,7 @@ export function construirFilas(inputs: RateCardInputs, basis: BasisTarifario): F
     }
 
     const cpm = cpmManual ?? (bench ? { low: bench.cpmLow, high: bench.cpmHigh } : null);
-    if (!cpm) motivos.push({ tipo: "sin_cpm" });
+    if (!cpm) motivos.push(otraMoneda ? { tipo: "sin_cpm", moneda: inputs.currency.toUpperCase() } : { tipo: "sin_cpm" });
     else if (compareDecimal(cpm.low, cpm.high) > 0) motivos.push({ tipo: "cpm_invertido" });
 
     const base = { def, precioManual, benchmark: bench, cpmManual, baseline };
@@ -340,7 +350,7 @@ export function textoMotivo(m: MotivoFila, fila: FilaTarifario, pais: string, re
     case "views_poco_fiables":
       return t.views_poco_fiables(f.int(m.muestra), f.int(m.mediana));
     case "sin_cpm":
-      return t.sin_cpm(redNombre, fila.benchmark?.country ?? pais);
+      return m.moneda ? t.sin_cpm_moneda(m.moneda, redNombre) : t.sin_cpm(redNombre, fila.benchmark?.country ?? pais);
     case "cpm_invertido":
       return t.cpm_invertido;
   }

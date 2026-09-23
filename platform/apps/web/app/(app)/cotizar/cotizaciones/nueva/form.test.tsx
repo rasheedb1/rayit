@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
+import type { MediaKitAdjuntable, QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
 import { CotizacionForm, type ValoresCotizacion } from "./form";
 
 const DEALS: QuotableDeal[] = [
@@ -26,18 +26,25 @@ const INICIALES: ValoresCotizacion = {
   dealId: "", lineas: [], discount: "0", taxPct: "19", validUntil: "2026-10-06",
   metricas: ["views"], cortes: [24, 168, 720], usageRightsDays: "30", exclusivityDays: "", exclusivityScope: "",
   paymentTermsDays: "30", campaignStartsOn: "2026-10-06", campaignEndsOn: "2026-11-05",
+  mediaKitId: "00000009-0000-4000-8000-00000000c002",
 };
 
-function formulario(action = vi.fn(async () => ({}))) {
+const KITS: MediaKitAdjuntable[] = [
+  { id: "00000009-0000-4000-8000-00000000c002", slug: "kit-nuevo", createdAt: "2026-09-20T15:00:00Z", hasPassword: true, expiresAt: null },
+  { id: "00000009-0000-4000-8000-00000000c001", slug: "kit-viejo", createdAt: "2026-08-02T15:00:00Z", hasPassword: false, expiresAt: null },
+];
+
+function formulario(action = vi.fn(async () => ({})), mediaKits = KITS, iniciales = INICIALES) {
   return (
     <CotizacionForm
       action={action}
       creatorId="00000002-0000-4000-8000-000000000003"
       deals={DEALS}
       tarifas={TARIFAS}
+      mediaKits={mediaKits}
       settings={{ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }}
       currency="COP"
-      iniciales={INICIALES}
+      iniciales={iniciales}
       textoGuardar="Guardar borrador"
       cancelarHref="/cotizar/cotizaciones"
     />
@@ -108,5 +115,49 @@ describe("CotizacionForm", () => {
     const payload = JSON.parse(String(fd.get("payload")));
     expect(payload.items[0].quantity).toBe(0);
     expect(payload.taxPct).toBe("19");
+  });
+
+  it("el media kit que la acompaña se elige aquí, llega preseleccionado y viaja en el payload", async () => {
+    const action = vi.fn(async () => ({}));
+    render(formulario(action));
+    const kit = screen.getByLabelText("Media kit que la acompaña");
+    expect(kit).toHaveValue("00000009-0000-4000-8000-00000000c002");
+    const opciones = within(kit).getAllByRole("option").map((o) => o.textContent);
+    expect(opciones).toEqual([
+      "Sin media kit",
+      "Generado el 20 sep · con contraseña",
+      "Generado el 2 ago",
+    ]);
+
+    fireEvent.change(kit, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    const fd = (action.mock.calls[0] as unknown as [unknown, FormData])[1];
+    expect(JSON.parse(String(fd.get("payload"))).mediaKitId).toBe("");
+  });
+
+  it("sin media kits que compartir, el selector lo explica en vez de ofrecer una lista vacía", () => {
+    render(formulario(undefined, [], { ...INICIALES, mediaKitId: "" }));
+    const kit = screen.getByLabelText("Media kit que la acompaña");
+    expect(kit).toBeDisabled();
+    expect(screen.getByText(/No hay media kits públicos sin vencer/)).toBeInTheDocument();
+  });
+
+  it("en el teléfono el total va antes de «Guardar borrador»: nadie guarda sin haberlo visto", () => {
+    render(formulario());
+    const total = screen.getByRole("complementary", { name: "Total de la cotización" });
+    const guardar = screen.getByRole("button", { name: "Guardar borrador" });
+    // El orden del documento es el del teléfono (una columna).
+    expect(total.compareDocumentPosition(guardar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("cada línea separa qué es (entregable y descripción) de cuánto (cantidad, precio, quitar)", () => {
+    render(formulario());
+    const linea = document.querySelector('[data-linea="0"]')!;
+    const [que, cuanto] = Array.from(linea.children);
+    expect(within(que as HTMLElement).getByLabelText("Entregable")).toBeInTheDocument();
+    expect(within(que as HTMLElement).getByLabelText("Descripción")).toBeInTheDocument();
+    expect(within(cuanto as HTMLElement).getByLabelText("Cantidad")).toBeInTheDocument();
+    expect(within(cuanto as HTMLElement).getByRole("button", { name: "Quitar" })).toBeInTheDocument();
   });
 });

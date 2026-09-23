@@ -32,7 +32,8 @@ export default async function VistaPreviaCotizacionPage({ params }: { params: Pr
           {t.volver}
         </Button>
       </div>
-      <DocumentoCotizacion q={q} enlaceKit={null} />
+      {/* El media kit adjunto se abre por su vista previa del panel: el enlace público contaría una visita. */}
+      <DocumentoCotizacion q={q} enlaceKit={q.mediaKitId ? `/cotizar/media-kit/${q.mediaKitId}` : null} />
     </div>
   );
 }

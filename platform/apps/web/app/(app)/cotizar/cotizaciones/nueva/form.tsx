@@ -2,7 +2,7 @@
 
 import { useActionState, useId, useMemo, useRef, useState } from "react";
 import { calcularTotalesCotizacion, compareDecimal, pctToRate, type PlatformId } from "@mc/core";
-import type { QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
+import type { MediaKitAdjuntable, QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -47,6 +47,8 @@ export interface ValoresCotizacion {
   paymentTermsDays: string;
   campaignStartsOn: string;
   campaignEndsOn: string;
+  /** El media kit que la acompaña, o "" si ninguno. */
+  mediaKitId: string;
 }
 
 export interface CotizacionFormProps {
@@ -57,6 +59,8 @@ export interface CotizacionFormProps {
   deals?: QuotableDeal[];
   /** Los entregables del tarifario vigente (paquetes incluidos). */
   tarifas: RateCardItem[];
+  /** Los media kits que la marca puede abrir hoy (públicos y sin vencer), el más reciente primero. */
+  mediaKits: MediaKitAdjuntable[];
   settings: FormatSettings;
   currency: string;
   iniciales: ValoresCotizacion;
@@ -94,7 +98,7 @@ function tasaDe(pct: string): string | null {
  * DOM.
  */
 export function CotizacionForm({
-  action, creatorId, deals, tarifas, settings, currency, iniciales, textoGuardar, cancelarHref,
+  action, creatorId, deals, tarifas, mediaKits, settings, currency, iniciales, textoGuardar, cancelarHref,
 }: CotizacionFormProps) {
   const t = MESSAGES.nueva;
   const f = useMemo(() => formatterFor(settings), [settings]);
@@ -140,6 +144,7 @@ export function CotizacionForm({
   const [paymentTermsDays, setPaymentTermsDays] = useState(iniciales.paymentTermsDays);
   const [campaignStartsOn, setCampaignStartsOn] = useState(iniciales.campaignStartsOn);
   const [campaignEndsOn, setCampaignEndsOn] = useState(iniciales.campaignEndsOn);
+  const [mediaKitId, setMediaKitId] = useState(iniciales.mediaKitId);
 
   const tasa = tasaDe(taxPct);
   const totales = useMemo(() => {
@@ -176,6 +181,7 @@ export function CotizacionForm({
     paymentTermsDays: Number(paymentTermsDays || "0"),
     campaignStartsOn,
     campaignEndsOn,
+    mediaKitId,
   };
 
   function cambiar(key: string, cambio: Partial<Linea>) {
@@ -207,11 +213,18 @@ export function CotizacionForm({
   ];
 
   return (
-    <form action={formAction} noValidate className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+    // Tres piezas en la rejilla: el formulario, el total y los botones.
+    // En escritorio el total va a la derecha, fijo; en el teléfono va
+    // ANTES de «Guardar borrador», para que nadie guarde sin haberlo visto.
+    <form
+      action={formAction}
+      noValidate
+      className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-x-8"
+    >
       <input type="hidden" name="creatorId" value={creatorId} />
       <input type="hidden" name="payload" value={JSON.stringify(payload)} />
 
-      <div className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6 lg:col-start-1 lg:row-start-1">
         {state.message && (
           <p role="alert" className="rounded-md border border-bad/30 bg-bad-wash px-3 py-2 text-sm text-bad">
             {state.message}
@@ -254,65 +267,71 @@ export function CotizacionForm({
                   ? compareDecimal(l.unitPrice, tarifa.priceLow) < 0 || compareDecimal(l.unitPrice, tarifa.priceHigh) > 0
                   : false;
               return (
-                <li
-                  key={l.key}
-                  className="grid grid-cols-1 gap-3 border-b border-border pb-4 last:border-b-0 last:pb-0 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_11rem_auto] lg:items-start"
-                >
-                  <Field label={t.entregable} htmlFor={`${idLinea}-t`}>
-                    <Select
-                      value={l.tarifaId}
-                      onChange={(e) => elegirTarifa(l.key, e.target.value)}
-                      options={opcionesTarifa}
-                    />
-                  </Field>
-                  <Field label={t.descripcion} htmlFor={`${idLinea}-d`}>
-                    <Input
-                      value={l.description}
-                      maxLength={200}
-                      placeholder={t.descripcionVacia}
-                      onChange={(e) => cambiar(l.key, { description: e.target.value })}
-                    />
-                    {l.platformId && (
-                      <span className="mt-1 inline-flex">
-                        <PlatformPill platformId={l.platformId} />
-                      </span>
-                    )}
-                  </Field>
-                  <Field label={t.cantidad} htmlFor={`${idLinea}-q`}>
-                    <Input
-                      inputMode="numeric"
-                      className="text-right font-mono tabular-nums"
-                      value={l.quantity}
-                      onChange={(e) => cambiar(l.key, { quantity: e.target.value.replace(/\D/g, "").slice(0, 3) })}
-                    />
-                  </Field>
-                  <Field label={t.precio} htmlFor={`${idLinea}-p`}>
-                    <MoneyInput
-                      id={`${idLinea}-p`}
-                      value={l.unitPrice}
-                      currency={currency}
-                      onChange={(v) => cambiar(l.key, { unitPrice: v })}
-                    />
-                    {tarifa?.priceLow && tarifa.priceHigh && (
-                      <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                        <span className="tabular-nums">
-                          {t.rangoTarifario(
-                            f.money(tarifa.priceLow, currency, { mode: "full" }),
-                            f.money(tarifa.priceHigh, currency, { mode: "full" }),
-                          )}
+                // Dos filas: qué es (entregable y descripción, a lo ancho) y
+                // cuánto (cantidad, precio, quitar). En una sola fila de cinco
+                // campos, a 1280 px el selector y la descripción se cortaban
+                // («TikTok de…»). El orden del DOM es el visual: el tabulador
+                // recorre lo mismo que se lee.
+                <li key={l.key} className="space-y-3 border-b border-border pb-4 last:border-b-0 last:pb-0" data-linea={idx}>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Field label={t.entregable} htmlFor={`${idLinea}-t`}>
+                      <Select
+                        value={l.tarifaId}
+                        onChange={(e) => elegirTarifa(l.key, e.target.value)}
+                        options={opcionesTarifa}
+                      />
+                    </Field>
+                    <Field label={t.descripcion} htmlFor={`${idLinea}-d`}>
+                      <Input
+                        value={l.description}
+                        maxLength={200}
+                        placeholder={t.descripcionVacia}
+                        onChange={(e) => cambiar(l.key, { description: e.target.value })}
+                      />
+                      {l.platformId && (
+                        <span className="mt-1 inline-flex">
+                          <PlatformPill platformId={l.platformId} />
                         </span>
-                        {fuera && <Pill kind="warn">{t.fueraDeRango}</Pill>}
-                      </span>
-                    )}
-                  </Field>
-                  <div className="lg:pt-6">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setLineas((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : ls))}
-                    >
-                      {t.quitar}
-                    </Button>
+                      )}
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-3 sm:grid-cols-[5rem_minmax(0,16rem)_minmax(0,1fr)] sm:items-start">
+                    <Field label={t.cantidad} htmlFor={`${idLinea}-q`}>
+                      <Input
+                        inputMode="numeric"
+                        className="text-right font-mono tabular-nums"
+                        value={l.quantity}
+                        onChange={(e) => cambiar(l.key, { quantity: e.target.value.replace(/\D/g, "").slice(0, 3) })}
+                      />
+                    </Field>
+                    <Field label={t.precio} htmlFor={`${idLinea}-p`}>
+                      <MoneyInput
+                        id={`${idLinea}-p`}
+                        value={l.unitPrice}
+                        currency={currency}
+                        onChange={(v) => cambiar(l.key, { unitPrice: v })}
+                      />
+                      {tarifa?.priceLow && tarifa.priceHigh && (
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                          <span className="tabular-nums">
+                            {t.rangoTarifario(
+                              f.money(tarifa.priceLow, currency, { mode: "full" }),
+                              f.money(tarifa.priceHigh, currency, { mode: "full" }),
+                            )}
+                          </span>
+                          {fuera && <Pill kind="warn">{t.fueraDeRango}</Pill>}
+                        </span>
+                      )}
+                    </Field>
+                    <div className="col-span-2 sm:col-span-1 sm:justify-self-end sm:pt-6">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setLineas((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : ls))}
+                      >
+                        {t.quitar}
+                      </Button>
+                    </div>
                   </div>
                 </li>
               );
@@ -336,6 +355,23 @@ export function CotizacionForm({
             <DateInput value={validUntil} onChange={setValidUntil} />
           </Field>
         </section>
+
+        <Field
+          label={t.mediaKit}
+          help={mediaKits.length > 0 ? t.mediaKitAyuda : t.sinKitsAyuda}
+          error={errors.mediaKitId}
+          htmlFor={`${base}mediaKit`}
+        >
+          <Select
+            value={mediaKitId}
+            disabled={mediaKits.length === 0 && mediaKitId === ""}
+            onChange={(e) => setMediaKitId(e.target.value)}
+            options={[
+              { value: "", label: t.sinMediaKit },
+              ...mediaKits.map((k) => ({ value: k.id, label: t.mediaKitOpcion(f.date(k.createdAt), k.hasPassword) })),
+            ]}
+          />
+        </Field>
 
         <section aria-labelledby={`${base}acordado`} className="min-w-0 rounded-md border border-border p-4">
           <h2 id={`${base}acordado`} className="text-sm font-semibold">
@@ -429,17 +465,13 @@ export function CotizacionForm({
           </div>
         </section>
 
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="primary" loading={pending}>
-            {textoGuardar}
-          </Button>
-          <Button variant="ghost" href={cancelarHref}>
-            {t.cancelar}
-          </Button>
-        </div>
       </div>
 
-      <aside className="min-w-0 lg:sticky lg:top-8 lg:self-start" aria-live="polite" aria-label={t.total}>
+      <aside
+        className="min-w-0 lg:sticky lg:top-8 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start"
+        aria-live="polite"
+        aria-label={t.total}
+      >
         <div className="rounded-md border border-border p-4">
           <p className="text-xs text-muted">{t.total}</p>
           <p className="mt-1 font-mono text-2xl font-medium tabular-nums">
@@ -456,6 +488,15 @@ export function CotizacionForm({
           </div>
         </div>
       </aside>
+
+      <div className="flex flex-wrap gap-2 lg:col-start-1 lg:row-start-2" data-acciones-formulario>
+        <Button type="submit" variant="primary" loading={pending}>
+          {textoGuardar}
+        </Button>
+        <Button variant="ghost" href={cancelarHref}>
+          {t.cancelar}
+        </Button>
+      </div>
     </form>
   );
 }

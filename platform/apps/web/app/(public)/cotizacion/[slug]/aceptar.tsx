@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
@@ -31,6 +31,22 @@ export function AceptarCotizacion({ slug }: { slug: string }) {
   const [terminos, setTerminos] = useState(false);
   const [resultado, setResultado] = useState<AceptarResultado | null>(null);
   const [pending, startTransition] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
+  const alertaRef = useRef<HTMLParagraphElement>(null);
+
+  // Tras un envío con errores, el foco va al primer campo inválido (en el
+  // orden del formulario: nombre, correo, casilla), como en la factura
+  // nueva de Finanzas. Si el error es general —vencida, rechazada, la
+  // base no respondió—, al aviso. Sin esto el foco se quedaba en <body>
+  // al re-pintarse el botón y había que recorrer la página otra vez.
+  useEffect(() => {
+    if (!resultado || resultado.status === "ok") return;
+    if (resultado.status === "invalid") {
+      formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+      return;
+    }
+    alertaRef.current?.focus();
+  }, [resultado]);
 
   if (resultado?.status === "ok") {
     return (
@@ -69,6 +85,7 @@ export function AceptarCotizacion({ slug }: { slug: string }) {
 
   return (
     <form
+      ref={formRef}
       className="space-y-4 rounded-md border border-border p-4"
       noValidate
       onSubmit={(e) => {
@@ -110,7 +127,7 @@ export function AceptarCotizacion({ slug }: { slug: string }) {
         {pending ? t.aceptando : t.aceptar}
       </Button>
       {general && (
-        <p role="alert" className="text-sm text-bad">
+        <p ref={alertaRef} role="alert" tabIndex={-1} className="text-sm text-bad focus:outline-none">
           {general}
         </p>
       )}

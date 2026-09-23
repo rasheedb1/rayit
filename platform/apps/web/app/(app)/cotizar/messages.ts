@@ -11,6 +11,26 @@
  * aquí: packages/core trabaja con ids ('derechos_uso_30d'), sin idioma.
  */
 
+/**
+ * El idioma en que están escritos estos textos. El MVP es solo español
+ * (decisión escrita en README.md); cuando llegue un segundo idioma,
+ * será otro objeto con la misma forma que MESSAGES y esta constante
+ * dejará de ser única.
+ */
+export const IDIOMA_MENSAJES = "es";
+
+/**
+ * El `lang` de un documento que abre la marca (media kit, cotización).
+ * Las cifras siguen el locale del workspace, pero los textos están en
+ * IDIOMA_MENSAJES: declarar `en-US` sobre frases en español haría que
+ * un lector de pantalla las pronunciara en inglés. Si el locale es del
+ * mismo idioma («es-MX»), se conserva la región.
+ */
+export function idiomaDocumento(locale: string | null | undefined): string {
+  const idioma = (locale ?? "").split("-")[0]?.toLowerCase();
+  return idioma === IDIOMA_MENSAJES && locale ? locale : IDIOMA_MENSAJES;
+}
+
 export const MESSAGES = {
   modulo: "Cotizar",
 
@@ -38,8 +58,6 @@ export const MESSAGES = {
       cpm: "CPM de referencia",
       rango: "Rango sugerido",
       estado: "Origen",
-      /** La columna de los botones. Solo la oyen los lectores de pantalla. */
-      acciones: "Acciones",
     },
     piezas: (n: string) => `${n} piezas`,
     rangoBajo: "bajo",
@@ -59,6 +77,8 @@ export const MESSAGES = {
       views_poco_fiables: (muestra: string, mediana: string) =>
         `Tu mediana sale de solo ${muestra} videos (${mediana}). Confírmala o escribe la tuya.`,
       sin_cpm: (red: string, pais: string) => `No hay CPM de referencia para ${red} en ${pais}. Escribe el tuyo.`,
+      /** Hay referencia para el país, pero en otra moneda que la del workspace: no se convierte. */
+      sin_cpm_moneda: (moneda: string, red: string) => `No hay CPM de referencia en ${moneda} para ${red}. Escribe el tuyo.`,
       cpm_invertido: "El CPM bajo no puede ser mayor que el alto.",
     },
     /** Por qué un rango escrito a mano no vale (validarRangoPrecio de @mc/core). */
@@ -243,6 +263,12 @@ export const MESSAGES = {
     ventanaAyuda: "Cuándo se publica. Al aceptar la cotización, la campaña nace con estas fechas.",
     desde: "Desde",
     hasta: "Hasta",
+    mediaKit: "Media kit que la acompaña",
+    mediaKitAyuda: "La marca lo abre desde el pie de la cotización. Solo salen los públicos y sin vencer.",
+    sinMediaKit: "Sin media kit",
+    /** Una opción del selector: «Generado el 20 sep 2026 · con contraseña». */
+    mediaKitOpcion: (fecha: string, conPassword: boolean) => `Generado el ${fecha}${conPassword ? " · con contraseña" : ""}`,
+    sinKitsAyuda: "No hay media kits públicos sin vencer. Genera uno en Media kit si quieres que acompañe la cotización.",
     guardar: "Guardar borrador",
     guardarCambios: "Guardar cambios",
     cancelar: "Cancelar",
@@ -435,6 +461,10 @@ export const MESSAGES = {
       redes: "Redes",
       seguidores: "Seguidores",
       viewsMedianas: "Views medianas",
+      /** La cifra grande de la cabecera: la mediana de la red que más rinde, con su red al lado. */
+      viewsMedianasMejorRed: "Views medianas · mejor red",
+      /** Nombre accesible de la cabecera de cifras. */
+      cifras: "Cifras principales",
       engagement: "Interacción por view",
       topPosts: "Lo que mejor funciona",
       audiencia: "Audiencia",

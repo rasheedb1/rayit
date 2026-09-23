@@ -15,7 +15,7 @@ const SNAPSHOT: MediaKitSnapshot = {
     { platformId: "tiktok", handle: "@lauracocina", followers: 128_400, followersAsOf: "2026-09-20", medianViews: 115_446, engagement: "0.074", sampleSize: 20, isReliable: true },
     { platformId: "instagram", handle: "@lauracocina", followers: 61_200, followersAsOf: "2026-09-20", medianViews: 62_177, engagement: "0.051", sampleSize: 12, isReliable: true },
   ],
-  totales: { followers: 189_600, medianViewsMax: 115_446 },
+  totales: { followers: 189_600, medianViewsMax: 115_446, medianViewsMaxPlatform: "tiktok" },
   topPosts: [
     { platformId: "tiktok", url: "https://tiktok.com/x", caption: "Arepas en 30 s", publishedAt: "2026-09-01T15:00:00Z", views: 412_000, viewsVsMedian: "3.570" },
   ],
@@ -37,6 +37,33 @@ describe("MediaKitVista", () => {
     expect(screen.getByText("189,6 mil")).toBeInTheDocument();
     expect(screen.getAllByText("115,4 mil").length).toBeGreaterThan(0);
     expect(screen.getByText("7,4 %")).toBeInTheDocument();
+  });
+
+  it("la cifra grande de views dice de qué red sale: es la mediana de la mejor red, no la del creador", () => {
+    render(<MediaKitVista snapshot={SNAPSHOT} />);
+    const cifras = screen.getByRole("region", { name: "Cifras principales" });
+    expect(within(cifras).getByText("Views medianas · mejor red")).toBeInTheDocument();
+    expect(within(cifras).getByText("115,4 mil")).toBeInTheDocument();
+    expect(within(cifras).getByText("TikTok")).toBeInTheDocument();
+    expect(within(cifras).queryByText("Views medianas")).not.toBeInTheDocument();
+  });
+
+  it("un media kit anterior, sin la red de la mejor mediana, no la enseña en la cabecera (sí por red)", () => {
+    const viejo = { ...SNAPSHOT, totales: { followers: 189_600, medianViewsMax: 115_446 } };
+    render(<MediaKitVista snapshot={viejo} />);
+    const cifras = screen.getByRole("region", { name: "Cifras principales" });
+    expect(within(cifras).queryByText("115,4 mil")).not.toBeInTheDocument();
+    expect(within(cifras).getByText("189,6 mil")).toBeInTheDocument();
+    expect(screen.getAllByText("115,4 mil")).toHaveLength(1);
+  });
+
+  it("el documento declara el idioma de sus textos, no el del locale de las cifras", () => {
+    const { container, unmount } = render(<MediaKitVista snapshot={SNAPSHOT} />);
+    expect(container.querySelector("article")).toHaveAttribute("lang", "es-CO");
+    unmount();
+    // Un workspace en EE. UU.: cifras en en-US, textos en español.
+    const { container: usa } = render(<MediaKitVista snapshot={{ ...SNAPSHOT, locale: "en-US", currency: "USD" }} />);
+    expect(usa.querySelector("article")).toHaveAttribute("lang", "es");
   });
 
   it("el video que despegó dice cuántas veces su mediana, como multiplicador", () => {
