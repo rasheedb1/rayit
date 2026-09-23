@@ -45,6 +45,11 @@ export function RegistrarAporteForm({ campaignId, currency, today }: { campaignI
   const [kind, setKind] = useState<ManualBrandInputKind | "">("");
   const [day, setDay] = useState(today);
   const [amount, setAmount] = useState("");
+  // Controlados: React 19 vacía los campos no controlados de un <form action>
+  // al terminar la acción, también cuando vuelve con errores, y la persona
+  // perdería la cifra y la nota que escribió.
+  const [count, setCount] = useState("");
+  const [notes, setNotes] = useState("");
   const [inputCurrency, setInputCurrency] = useState(currency);
   const [notice, setNotice] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -56,6 +61,8 @@ export function RegistrarAporteForm({ campaignId, currency, today }: { campaignI
       setOpen(false);
       setKind("");
       setAmount("");
+      setCount("");
+      setNotes("");
       setDay(today);
     } else if (state.errors) focusFirstInvalid(formRef.current);
     // today cambia solo con la petición; lo que importa es state.
@@ -100,7 +107,7 @@ export function RegistrarAporteForm({ campaignId, currency, today }: { campaignI
               <input type="hidden" name="value" value={amount} />
             </>
           ) : (
-            <Input name="value" required inputMode="numeric" pattern="[0-9]*" autoComplete="off" maxLength={14} />
+            <Input name="value" required inputMode="numeric" pattern="[0-9]*" autoComplete="off" maxLength={14} value={count} onChange={(e) => setCount(e.target.value)} />
           )}
         </Field>
         {money ? (
@@ -111,7 +118,7 @@ export function RegistrarAporteForm({ campaignId, currency, today }: { campaignI
           <input type="hidden" name="currency" value="" />
         )}
         <Field label={t.form.notes} help={t.form.notesHelp} error={errors.notes} htmlFor="aporte-notes" className="sm:col-span-2">
-          <Input name="notes" maxLength={500} autoComplete="off" />
+          <Input name="notes" maxLength={500} autoComplete="off" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </div>
       <div className="mt-3 flex gap-2">

@@ -79,6 +79,15 @@ describe("RegistrarAporteForm", () => {
     expect(kind).toHaveAccessibleDescription("Elige qué reporta la marca.");
     await waitFor(() => expect(kind).toHaveFocus());
 
+    // Lo escrito sobrevive a una respuesta con errores (React 19 vacía los campos no controlados).
+    fireEvent.change(screen.getByLabelText(/Cifra/), { target: { value: "41" } });
+    fireEvent.change(screen.getByLabelText(/Nota/), { target: { value: "correo del lunes" } });
+    registrarAporte.mockResolvedValueOnce({ errors: { day: "La fecha no puede ser futura." } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+    await waitFor(() => expect(screen.getByLabelText(/A qué fecha/)).toHaveAttribute("aria-invalid", "true"));
+    expect(screen.getByLabelText(/Cifra/)).toHaveValue("41");
+    expect(screen.getByLabelText(/Nota/)).toHaveValue("correo del lunes");
+
     registrarAporte.mockResolvedValueOnce({ message: "Una campaña cerrada no admite cambios." });
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Una campaña cerrada no admite cambios."));

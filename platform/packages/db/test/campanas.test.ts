@@ -23,6 +23,7 @@ import {
   listBrandInputs,
   BrandCsvOutOfWindowError,
   CampaignWithoutDatesError,
+  openBrandCsvImport,
   InvalidBrandInputError,
   type WorkspaceTx,
 } from '../src/index.ts';
@@ -590,6 +591,23 @@ describe('lo que aporta la marca', () => {
     assert.deepEqual(r.totals.map((x) => [x.kind, x.value, x.asOf, x.count]), [['code_redemptions', '45.00', '2026-09-20', 2]], 'la última alta manda; hay dos filas detrás');
   });
 
+  test('una corrección de vuelta (318 → 320 → 318) queda, y un dato atrasado no hace retroceder el acumulado', async () => {
+    const add = (day: string, value: string) => laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'signups', day, value }));
+    assert.equal((await add('2026-09-15', '318')).created, true);
+    assert.equal((await add('2026-09-15', '320')).created, true);
+    assert.equal((await add('2026-09-15', '318')).created, true, 'no es la última de ese día: se registra');
+    assert.equal((await add('2026-09-15', '318')).created, false, 'ahora sí es la última igual');
+    let r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(r.totals.filter((x) => x.kind === 'signups').map((x) => [x.value, x.asOf, x.count]), [['318.00', '2026-09-15', 3]]);
+    assert.equal((await add('2026-09-05', '200')).created, true);
+    r = await laura((tx) => listBrandInputs(tx, CAMPAIGN_FRESKO));
+    assert.deepEqual(
+      r.totals.filter((x) => x.kind === 'signups').map((x) => [x.value, x.asOf]),
+      [['318.00', '2026-09-15']],
+      'el total a la fecha más reciente manda aunque el del 5 se haya cargado después',
+    );
+  });
+
   test('ingresos: sin moneda toma la de la campaña; con otra se guarda tal cual y la respuesta dice cuál es la de la campaña', async () => {
     const cop = await laura((tx) => addBrandInput(tx, { campaignId: CAMPAIGN_FRESKO, kind: 'revenue', day: '2026-09-20', value: '1500000.50' }));
     assert.equal(cop.input.currency, 'COP');
@@ -668,7 +686,7 @@ describe('lo que aporta la marca', () => {
       { day: '2026-09-04', sales: '640000.00', orders: null, redemptions: null },
     ]);
     // Los totales manuales de las pruebas anteriores siguen aparte: la fuente los separa.
-    assert.deepEqual(r.totals.filter((x) => x.source === 'brand_manual').map((x) => x.kind), ['code_redemptions', 'revenue']);
+    assert.deepEqual(r.totals.filter((x) => x.source === 'brand_manual').map((x) => x.kind), ['code_redemptions', 'revenue', 'signups']);
   });
 
   test('la ventana starts_on − 7 … ends_on + 60 se vuelve a comprobar en la base; sin fechas no hay importación', async () => {
@@ -689,6 +707,17 @@ describe('lo que aporta la marca', () => {
       laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_SIN_FECHAS, rows: [{ line: 2, day: '2026-09-02', sales: '1.00', orders: null, redemptions: null }] })),
       CampaignWithoutDatesError,
     );
+    await assert.rejects(
+      laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [
+        { line: 2, day: '2026-09-10', sales: '1.00', orders: null, redemptions: null },
+        { line: 3, day: '2026-09-10', sales: '2.00', orders: null, redemptions: null },
+      ] })),
+      InvalidBrandInputError,
+      'dos filas del mismo día no se escriben',
+    );
+    assert.deepEqual(await laura((tx) => openBrandCsvImport(tx, CAMPAIGN_FRESKO)), { window: { from: '2026-08-26', to: '2026-11-08' }, currency: 'COP' });
+    await assert.rejects(laura((tx) => openBrandCsvImport(tx, CAMPAIGN_NUTRIVE)), CampaignLockedError);
+    await assert.rejects(laura((tx) => openBrandCsvImport(tx, CAMPAIGN_SIN_FECHAS)), CampaignWithoutDatesError);
     const vacio = await laura((tx) => importBrandCsv(tx, { campaignId: CAMPAIGN_FRESKO, rows: [] }));
     assert.deepEqual(vacio, { inserted: 0, unchanged: 0, replaced: 0, days: 0, from: null, to: null });
   });

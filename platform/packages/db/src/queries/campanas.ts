@@ -863,7 +863,8 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
 // campaign_brand_input (0008) tiene workspace_id y su política RLS; mc_app
 // conserva INSERT y UPDATE (0025 no la toca). La semántica la decide la
 // fuente (core, brandInputSemantics): lo del formulario es un total
-// acumulado a la fecha `day` y manda el último por received_at; lo del
+// acumulado a la fecha `day` y manda el de la fecha más reciente (en la
+// misma fecha, el último por received_at); lo del
 // CSV es de ese día y se suma. No hay UNIQUE sobre la clave natural
 // (campaign_id, kind, day, source): la idempotencia se hace aquí, dentro
 // de la transacción y con la fila de campaign bloqueada (FOR UPDATE en
@@ -1013,11 +1014,6 @@ interface RawBrandInputRow {
   notes: string | null;
 }
 
-const SELECT_BRAND_INPUT = `
-  SELECT id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes
-  FROM campaign_brand_input
-`;
-
 function toBrandInputRow(r: RawBrandInputRow): BrandInputRow {
   return { id: r.id, kind: r.kind, source: r.source, day: r.day, value: r.value, currency: r.currency, receivedAt: r.received_at, notes: r.notes };
 }
@@ -1058,21 +1054,33 @@ export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput):
   }
   const notes = input.notes?.trim() || null;
 
-  const existing = await tx.query<RawBrandInputRow>(
-    `${SELECT_BRAND_INPUT}
+  // Idempotente contra el ÚLTIMO reporte de ese día, no contra cualquiera:
+  // 318 → 320 → 318 es una corrección de vuelta y tiene que quedar.
+  const existing = await tx.query<RawBrandInputRow & { same: boolean }>(
+    `SELECT id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes,
+            (value_num = $4::numeric AND currency IS NOT DISTINCT FROM $5) AS same
+     FROM campaign_brand_input b
      WHERE campaign_id = $1 AND kind = $2 AND day = $3::date AND source = 'brand_manual'
-       AND value_num = $4::numeric AND currency IS NOT DISTINCT FROM $5
-     ORDER BY received_at DESC LIMIT 1`,
+     -- b.received_at y no received_at: ese nombre es el alias de texto de
+     -- arriba (resolución de segundo) y ordenaría mal dos altas seguidas.
+     ORDER BY b.received_at DESC, b.id DESC LIMIT 1`,
     [input.campaignId, input.kind, input.day, value, currency],
   );
-  const already = existing.rows[0];
-  if (already) return { input: toBrandInputRow(already), created: false, campaignCurrency: campaign.currency };
+  const latest = existing.rows[0];
+  if (latest?.same) return { input: toBrandInputRow(latest), created: false, campaignCurrency: campaign.currency };
 
-  // clock_timestamp() y no now(): dos altas en la misma transacción
-  // (o dos pruebas seguidas) quedan en orden y «la última manda» es cierto.
+  // received_at estrictamente creciente por (campaña, kind, día): «la
+  // última manda» no puede depender de un empate. clock_timestamp() y no
+  // now() para que dos altas en una transacción se ordenen, y además un
+  // microsegundo por encima de la última ya guardada, porque el reloj
+  // puede tener resolución de milisegundo (PGlite) o repetir valor. Es
+  // seguro: la fila de la campaña está bloqueada (lockEditableCampaign).
   const inserted = await tx.query<RawBrandInputRow>(
     `INSERT INTO campaign_brand_input (workspace_id, campaign_id, kind, day, value_num, currency, source, received_at, notes)
-     VALUES (current_workspace_id(), $1, $2, $3::date, $4::numeric, $5, 'brand_manual', clock_timestamp(), $6)
+     VALUES (current_workspace_id(), $1, $2, $3::date, $4::numeric, $5, 'brand_manual',
+             greatest(clock_timestamp(), (SELECT max(received_at) + interval '1 microsecond' FROM campaign_brand_input
+                                          WHERE campaign_id = $1 AND kind = $2 AND day = $3::date AND source = 'brand_manual')),
+             $6)
      RETURNING id, kind, source, ${DATE('day')} AS day, value_num::text AS value, currency, ${TS('received_at')} AS received_at, notes`,
     [input.campaignId, input.kind, input.day, value, currency, notes],
   );
@@ -1081,6 +1089,21 @@ export async function addBrandInput(tx: WorkspaceTx, input: AddBrandInputInput):
   const after: BrandInputAuditAfter = { kind: row.kind, day: row.day, value: row.value, currency: row.currency, source: row.source };
   await recordAudit(tx, 'campaign.brand_input.added', 'campaign_brand_input', row.id, { ...after, campaign_id: input.campaignId });
   return { input: toBrandInputRow(row), created: true, campaignCurrency: campaign.currency };
+}
+
+/**
+ * Abre la importación de un CSV: bloquea la campaña (FOR UPDATE), exige
+ * que admita cambios (CampaignLockedError) y que tenga fechas, y devuelve
+ * la ventana y la moneda. La Server Action revisa el archivo con ESTA
+ * ventana y después llama a importBrandCsv en la misma transacción: las
+ * fechas no pueden cambiar entre la revisión y la escritura.
+ */
+export async function openBrandCsvImport(tx: WorkspaceTx, campaignId: string): Promise<{ window: DateWindow; currency: string }> {
+  await lockEditableCampaign(tx, campaignId);
+  const campaign = await campaignDatesAndCurrency(tx, campaignId);
+  const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
+  if (!window) throw new CampaignWithoutDatesError();
+  return { window, currency: campaign.currency };
 }
 
 /** Las columnas del CSV y el kind con el que se guardan (source brand_csv, diarias). */
@@ -1110,6 +1133,9 @@ export async function importBrandCsv(tx: WorkspaceTx, input: ImportBrandCsvInput
     if (!isIsoDate(r.day)) throw new InvalidBrandInputError(`El día «${r.day}» no es una fecha YYYY-MM-DD.`);
     if (r.day < window.from || r.day > window.to) throw new BrandCsvOutOfWindowError(r.day, window);
     if (!BRAND_VALUE_RE.test(r.sales)) throw new InvalidBrandInputError(`Las ventas del ${r.day} no son un importe válido.`);
+    // reviewBrandCsvRows ya los rechaza; otro llamador podría no hacerlo, y dos
+    // filas del mismo día sumarían doble o harían ambiguo el UPDATE.
+    if (days.has(r.day)) throw new InvalidBrandInputError(`El día ${r.day} viene dos veces: deja una sola fila por día.`);
     days.add(r.day);
   }
   const result: ImportBrandCsvResult = { inserted: 0, unchanged: 0, replaced: 0, days: days.size, from: null, to: null };
@@ -1183,8 +1209,10 @@ interface RawDailyRow {
 }
 
 /**
- * Lo que aportó la marca, totalizado en SQL: para lo manual, el último
- * valor de cada kind (por received_at) con su fecha; para el CSV, la
+ * Lo que aportó la marca, totalizado en SQL: para lo manual, el total
+ * de la fecha más reciente (y en la misma fecha, el último recibido): es
+ * un acumulado, así que un dato atrasado cargado después no lo hace
+ * retroceder; para el CSV, la
  * suma por kind con el primer y el último día. Más la serie diaria del
  * CSV para el gráfico. Es también la lectura de CAM-5 (docs/propuestas/
  * CAM-4.md §3). Una campaña de otro workspace es CampaignNotFoundError.
@@ -1199,7 +1227,7 @@ export async function listBrandInputs(tx: WorkspaceTx, campaignId: string): Prom
                 count(*) OVER (PARTITION BY kind)::int AS n
          FROM campaign_brand_input
          WHERE campaign_id = $1 AND source = 'brand_manual' AND kind = ANY($2::text[]) AND day IS NOT NULL
-         ORDER BY kind, received_at DESC, id
+         ORDER BY kind, day DESC, received_at DESC, id DESC
        ) manual
        UNION ALL
        SELECT kind, source, sum(value_num)::text AS value, max(currency) AS currency,

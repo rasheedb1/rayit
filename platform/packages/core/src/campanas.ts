@@ -397,8 +397,8 @@ export function isBrandInputSource(value: string): value is BrandInputSource {
 
 /**
  * Cómo se lee una fila de campaign_brand_input:
- *   - 'total': un acumulado a la fecha `day`. Manda el último por
- *     received_at; no se suma. Es lo que reporta la marca por formulario
+ *   - 'total': un acumulado a la fecha `day`. Manda el de la fecha más
+ *     reciente y, en la misma fecha, el último por received_at; no se suma. Es lo que reporta la marca por formulario
  *     («318 canjes al 11 de septiembre»).
  *   - 'daily': lo de ESE día. Se suma. Es lo que trae el CSV de ventas
  *     diarias (ventas, y si vienen, pedidos y canjes del día).
@@ -563,6 +563,9 @@ export function reviewBrandCsvRows(rows: readonly BrandCsvRawRow[], window: Date
       continue;
     }
     seen.add(day);
+    // toFixed sobre un double es exacto aquí: con el techo de 1e12 la cifra
+    // tiene como mucho 15 dígitos significativos con los centavos, y un
+    // decimal de hasta 15 dígitos va y vuelve de double sin cambiar.
     accepted.push({ line: r.line, day, sales: sales.toFixed(2), orders: orders.value, redemptions: redemptions.value });
   }
   return { accepted, rejected };

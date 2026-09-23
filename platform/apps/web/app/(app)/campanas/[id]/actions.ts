@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
-  brandCsvWindow,
   CampaignError,
   hoyEnZona,
   isCampaignStatus,
@@ -17,12 +16,10 @@ import {
 } from "@mc/core";
 import {
   addBrandInput,
-  CampaignNotFoundError,
-  CampaignWithoutDatesError,
-  getCampaign,
   importBrandCsv,
   linkPost,
   listLinkablePosts,
+  openBrandCsvImport,
   setPrimaryPost,
   transitionCampaign,
   unlinkPost,
@@ -344,14 +341,16 @@ export async function importarCsvVentas(_prev: ImportacionState, formData: FormD
   if (!(archivo instanceof File) || archivo.size === 0) return { errors: { archivo: t.csv.missing } };
   if (archivo.size > MAX_BYTES_VENTAS) return { errors: { archivo: t.csv.tooBig(MAX_BYTES_VENTAS / KIB) } };
   const bytes = new Uint8Array(await archivo.arrayBuffer());
+  // Un byte nulo no aparece en un CSV de texto: es un .xlsx renombrado o
+  // un binario. Mejor decirlo que responder «falta la columna día».
+  if (bytes.includes(0)) return { errors: { archivo: t.csv.notCsv } };
   let resumen: ResumenImportacion;
   try {
     // TODO(ACC-2): la bitácora la escribe importBrandCsv (recordAudit) hasta que exista audit().
     resumen = await withWorkspace(async (tx) => {
-      const campaign = await getCampaign(tx, campaignId);
-      if (!campaign) throw new CampaignNotFoundError(campaignId);
-      const window = brandCsvWindow(campaign.startsOn, campaign.endsOn);
-      if (!window) throw new CampaignWithoutDatesError();
+      // Bloquea la campaña y comprueba que admite cambios ANTES de leer el
+      // archivo: la ventana con la que se revisa es la que se escribe.
+      const { window } = await openBrandCsvImport(tx, campaignId);
       const lectura = leerCsvVentas(bytes, window);
       const result: ImportBrandCsvResult =
         lectura.accepted.length > 0
