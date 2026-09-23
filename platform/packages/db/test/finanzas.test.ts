@@ -583,9 +583,8 @@ describe('ingresos de plataformas (FIN-7)', () => {
   });
 
   test('el seed no trae ninguno: la lista arranca vacía y el estimado es null, no cero', async () => {
-    const { rows, months } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     assert.equal(rows.length, 0);
-    assert.equal(months.length, 0);
 
     const kpis = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
     assert.equal(kpis.ytd, '0');
@@ -606,7 +605,7 @@ describe('ingresos de plataformas (FIN-7)', () => {
     const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => importPlatformPayouts(tx, lote));
     assert.deepEqual(r, { inserted: 3, duplicated: 0, conflicting: [] });
 
-    const { rows, months } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     assert.equal(rows.length, 3);
     const ultimo = rows[0];
     assert.equal(ultimo?.month, mesAnterior, 'el mes de un pago es el de su period_start');
@@ -617,10 +616,8 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.equal(ultimo?.periodEnd, periodo(mesAnterior).periodEnd);
     assert.match(ultimo?.createdAt ?? '', /^\d{4}-\d{2}-\d{2}T.*Z$/, 'timestamptz en UTC y como ISO');
 
-    const delMes = months.find((m) => m.month === mesAnterior);
-    assert.equal(delMes?.total, '1101500.50');
-    assert.equal(delMes?.payouts, 1, 'count(*) llega como número, no como el bigint crudo');
-    assert.equal(typeof delMes?.payouts, 'number');
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    assert.equal(meses.find((m) => m.mes === mesAnterior)?.monto, '1101500.50');
   });
 
   test('repetir la importación no duplica: las tres ya estaban', async () => {
@@ -663,8 +660,8 @@ describe('ingresos de plataformas (FIN-7)', () => {
       ]),
     );
     assert.equal(r.inserted, 1);
-    const { months } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
-    assert.equal(months.find((m) => m.month === mesAnterior)?.total, '1516751.25', 'la base suma las dos redes');
+    const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
+    assert.equal(meses.find((m) => m.mes === mesAnterior)?.monto, '1516751.25', 'la base suma las dos redes');
   });
 
   test('una moneda que no es la del espacio y una red que no existe se rechazan con una frase que nombra la fila', async () => {
@@ -775,6 +772,46 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.equal(aMano[0]?.after.source, 'manual');
   });
 
+  test('el ON CONFLICT nombra sus columnas: sobre una base sin 0036 falla, no deduplica en silencio', async () => {
+    // Un `ON CONFLICT DO NOTHING` a secas NO falla cuando el índice no
+    // existe: se limita a no deduplicar. Sobre una base sin 0036 eso
+    // duplicaría el dinero y la pantalla diría «listo». Con el objetivo
+    // escrito, Postgres exige el índice y lanza 42P10.
+    await t.admin('DROP INDEX platform_payout_natural_uidx');
+    try {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+          importPlatformPayouts(tx, [
+            { platformId: 'facebook', ...periodo(tresAntes), amount: '1.00', currency: 'COP', source: 'csv_import' },
+          ]),
+        ),
+        (err: unknown) => (err as { code?: string }).code === '42P10',
+      );
+      const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+      assert.equal(rows.length, 5, 'y no escribió nada');
+    } finally {
+      await t.admin(`
+        CREATE UNIQUE INDEX IF NOT EXISTS platform_payout_natural_uidx
+          ON platform_payout (workspace_id, platform_id,
+            coalesce(creator_id, '00000000-0000-0000-0000-000000000000'::uuid),
+            period_start, period_end, currency, amount);
+      `);
+    }
+  });
+
+  test('un periodo fechado en el año que viene no se suma al «recibido en este año»', async () => {
+    const elAnioQueViene = `${+hoy.slice(0, 4) + 1}-01`;
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      importPlatformPayouts(tx, [
+        { platformId: 'facebook', ...periodo(elAnioQueViene), amount: '999999.00', currency: 'COP', source: 'manual' },
+      ]),
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutKpis(tx));
+    assert.equal(despues.ytd, antes.ytd, 'el año tiene tope por arriba, no solo por abajo');
+    assert.equal(despues.ytdPayouts, antes.ytdPayouts);
+  });
+
   test('ninguna fila devuelve un id bigserial a la web', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     for (const r of rows) {
@@ -785,7 +822,7 @@ describe('ingresos de plataformas (FIN-7)', () => {
   test('aislamiento: el workspace ajeno no ve nada y sus pagos no se mezclan', async () => {
     const ajeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listPlatformPayouts(tx));
     assert.equal(ajeno.rows.length, 0);
-    assert.equal(ajeno.months.length, 0);
+
     assert.deepEqual(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getPlatformPayoutMonths(tx)), []);
     const kpisAjeno = await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => getPlatformPayoutKpis(tx));
     assert.equal(kpisAjeno.ytd, '0');
@@ -801,7 +838,11 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.equal(suyo.inserted, 1, 'dos espacios pueden tener el mismo pago sin saber el uno del otro');
     assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listPlatformPayouts(tx))).rows.length, 1);
     const deLaura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
-    assert.equal(deLaura.rows.length, 5, 'los tres de AdSense, el de TikTok y el de Instagram a mano');
+    assert.equal(
+      deLaura.rows.length,
+      6,
+      'los tres de AdSense, el de TikTok, el de Instagram a mano y el fechado en el año que viene',
+    );
   });
 
   test('sin workspace fijado, RLS no deja ver ni escribir un solo pago', async () => {

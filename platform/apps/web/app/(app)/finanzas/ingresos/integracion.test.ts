@@ -69,7 +69,7 @@ describe("un CSV de AdSense aparece como ingreso en su mes y no se duplica", () 
     expect(escrito).toEqual({ inserted: 3, duplicated: 0, conflicting: [] });
 
     // 3. Lo que ve quien entra a /finanzas/ingresos.
-    const { rows, months } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
+    const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     expect(rows).toHaveLength(3);
     const mesAnterior = listas[0]!.periodStart.slice(0, 7);
     const ultimo = rows[0]!;
@@ -77,7 +77,7 @@ describe("un CSV de AdSense aparece como ingreso en su mes y no se duplica", () 
     expect(ultimo.platformId).toBe("youtube");
     expect(ultimo.amount).toBe("1101500.50");
     expect(ultimo.source).toBe("csv_import");
-    expect(months.find((m) => m.month === mesAnterior)).toMatchObject({ total: "1101500.50", payouts: 1 });
+
 
     // 4. La fila del flujo de caja: (900 000 + 770 000 + 1 101 500,50) / 3.
     const meses = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getPlatformPayoutMonths(tx));
@@ -135,9 +135,8 @@ describe("un CSV de AdSense aparece como ingreso en su mes y no se duplica", () 
       VALUES ('${AJENO}', 'ajeno-fin7', 'Workspace ajeno FIN-7', 'creator', 'COP')
       ON CONFLICT DO NOTHING;
     `);
-    const { rows, months } = await t.db.withWorkspace(AJENO, (tx) => listPlatformPayouts(tx));
+    const { rows } = await t.db.withWorkspace(AJENO, (tx) => listPlatformPayouts(tx));
     expect(rows).toEqual([]);
-    expect(months).toEqual([]);
     const kpis = await t.db.withWorkspace(AJENO, (tx) => getPlatformPayoutKpis(tx));
     expect(kpis.ytd).toBe("0");
     expect(kpis.lastMonth).toBeNull();

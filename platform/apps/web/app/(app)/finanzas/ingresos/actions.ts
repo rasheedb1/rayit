@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
   createPlatformPayout,
+  getWorkspaceToday,
   importPlatformPayouts,
   listPayoutPlatforms,
+  PlatformPayoutInputError,
   type ConflictingPayout,
   type PlatformPayoutInput,
 } from "@mc/db/queries/finanzas";
@@ -105,10 +107,16 @@ export async function importarCsv(_prev: ImportarState, formData: FormData): Pro
   }
   if (leido.deteccion.formato === null) return { message: t.formatoDesconocido };
 
-  // Las redes salen del catálogo, no de una lista escrita a mano: si
-  // mañana entra una quinta, el lector la acepta sin tocar nada.
-  const plataformas = await withWorkspace(async (tx) => (await listPayoutPlatforms(tx)).map((p) => p.id));
-  const revision = revisar(leido.tabla, leido.deteccion, { currency, plataformas });
+  // Las redes salen del catálogo y no de una lista escrita a mano: si
+  // mañana entra una quinta, el lector la acepta sin tocar nada. El día
+  // es el del ESPACIO (no el del servidor de base ni el de Node), que es
+  // con el que se decide si un periodo ya cerró. Los dos, en la misma
+  // transacción.
+  const { plataformas, hoy } = await withWorkspace(async (tx) => ({
+    plataformas: (await listPayoutPlatforms(tx)).map((p) => p.id),
+    hoy: await getWorkspaceToday(tx),
+  }));
+  const revision = revisar(leido.tabla, leido.deteccion, { currency, plataformas, hoy });
 
   if (revision.listas.length === 0) {
     return {
@@ -134,7 +142,12 @@ export async function importarCsv(_prev: ImportarState, formData: FormData): Pro
     escrito = await withWorkspace((tx) => importPlatformPayouts(tx, revision.listas));
   } catch (err) {
     console.error("[finanzas/ingresos] no se pudo escribir el lote", err);
-    return { message: err instanceof Error ? err.message : MESSAGES.generico };
+    // Solo lo que la persona puede arreglar («Fila 2: «twitch» no es una
+    // red conocida») sale a la pantalla. Un error de Postgres —un
+    // «numeric field overflow», un 42P10 porque falta la migración— se
+    // queda en el log: no le dice nada a nadie y enseña la forma de la
+    // consulta.
+    return { message: err instanceof PlatformPayoutInputError ? err.message : MESSAGES.generico };
   }
 
   revalidatePath("/finanzas/ingresos");
@@ -213,6 +226,13 @@ export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData)
     : { periodStart: v.periodStart, periodEnd: v.periodEnd };
 
   const { currency } = await getCurrentWorkspace();
+  // El día del ESPACIO, de la base: un `new Date()` aquí sería el reloj
+  // del servidor, y a las 02:00 UTC en Bogotá todavía es ayer. Un
+  // periodo que no ha terminado no es un pago, es lo que va del mes:
+  // contarlo hundiría el promedio de los tres meses.
+  const hoy = await withWorkspace((tx) => getWorkspaceToday(tx));
+  if (periodo.periodEnd > hoy) return { errors: { [v.mes ? "mes" : "periodEnd"]: e.futuro } };
+
   const entrada: PlatformPayoutInput = {
     platformId: v.platformId,
     creatorId: null,
@@ -227,7 +247,10 @@ export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData)
     r = await withWorkspace((tx) => createPlatformPayout(tx, entrada));
   } catch (err) {
     console.error("[finanzas/ingresos] no se pudo guardar el ingreso", err);
-    return { message: err instanceof Error ? err.message : MESSAGES.generico };
+    // Mismo criterio que el import: la frase de dominio sí, la de
+    // Postgres no. Aquí además la validación de zod ya cubre casi todo,
+    // así que lo que llegue suele ser cosa nuestra.
+    return { message: err instanceof PlatformPayoutInputError ? err.message : MESSAGES.generico };
   }
 
   // El NOMBRE de la red, no su id: «Instagram» y no «instagram». En el

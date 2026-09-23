@@ -786,22 +786,11 @@ export interface PlatformPayoutRow {
   createdAt: string;
 }
 
-/** Un mes con su total ya sumado por la base. */
-export interface PlatformPayoutMonth {
-  /** 'YYYY-MM'. */
-  month: string;
-  currency: string;
-  total: string;
-  payouts: number;
-}
-
 /** 'api' | 'csv_import' | 'manual'. La lista es la del esquema (0008), no una copia. */
 export type PayoutSource = (typeof PAYOUT_SOURCES)[number];
 
 export interface ListPlatformPayoutsResult {
   rows: PlatformPayoutRow[];
-  /** Totales por mes, del más nuevo al más viejo. Los suma la base, no la pantalla. */
-  months: PlatformPayoutMonth[];
 }
 
 export interface PlatformPayoutInput {
@@ -813,6 +802,20 @@ export interface PlatformPayoutInput {
   amount: string;
   currency: string;
   source: PayoutSource;
+}
+
+/**
+ * Lo que la persona puede arreglar en su archivo o en su formulario: una
+ * red que no existe, un periodo al revés, otra moneda. Se distingue por
+ * su clase para que la pantalla enseñe SU frase y no la de Postgres: un
+ * «numeric field overflow» no le dice nada a nadie y puede filtrar la
+ * forma de una consulta.
+ */
+export class PlatformPayoutInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlatformPayoutInputError';
+  }
 }
 
 /** Un pago que no se escribió porque su periodo ya existe con OTRO monto. */
@@ -854,6 +857,24 @@ export async function listPayoutPlatforms(tx: WorkspaceTx): Promise<{ id: string
   return rows;
 }
 
+/**
+ * Hoy en la zona del ESPACIO, 'YYYY-MM-DD'.
+ *
+ * No `CURRENT_DATE`, que es la fecha del servidor de base: a las 02:00
+ * UTC en Bogotá todavía es ayer, y con esa fecha un periodo que acaba de
+ * cerrar parecería abierto. Es la misma regla que `getCashflowInputs`
+ * (FIN-6), escrita una vez.
+ */
+export async function getWorkspaceToday(tx: WorkspaceTx): Promise<string> {
+  const { rows } = await tx.query<{ hoy: string }>(
+    `SELECT to_char((now() AT TIME ZONE w.timezone)::date, 'YYYY-MM-DD') AS hoy
+       FROM workspace w WHERE w.id = current_workspace_id()`,
+  );
+  const hoy = rows[0]?.hoy;
+  if (!hoy) throw new Error(`El workspace ${tx.workspaceId} no existe en esta base.`);
+  return hoy;
+}
+
 /** Los ids del catálogo. Se lee una vez por importación, no una por fila. */
 async function knownPlatformIds(tx: WorkspaceTx): Promise<Set<string>> {
   return new Set((await listPayoutPlatforms(tx)).map((p) => p.id));
@@ -867,21 +888,21 @@ async function knownPlatformIds(tx: WorkspaceTx): Promise<Set<string>> {
  */
 function assertPayoutShape(input: PlatformPayoutInput, platforms: Set<string>, wsCurrency: string, where: string): void {
   if (!platforms.has(input.platformId)) {
-    throw new Error(`${where}: «${input.platformId}» no es una red conocida.`);
+    throw new PlatformPayoutInputError(`${where}: «${input.platformId}» no es una red conocida.`);
   }
   if (!ISO_DATE_RE.test(input.periodStart) || !ISO_DATE_RE.test(input.periodEnd)) {
-    throw new Error(`${where}: las fechas del periodo deben ser YYYY-MM-DD.`);
+    throw new PlatformPayoutInputError(`${where}: las fechas del periodo deben ser YYYY-MM-DD.`);
   }
   if (input.periodEnd < input.periodStart) {
-    throw new Error(`${where}: el fin del periodo no puede ser anterior a su inicio.`);
+    throw new PlatformPayoutInputError(`${where}: el fin del periodo no puede ser anterior a su inicio.`);
   }
   if (input.currency.toUpperCase() !== wsCurrency) {
-    throw new Error(
+    throw new PlatformPayoutInputError(
       `${where}: los ingresos de plataformas van en la moneda del espacio (${wsCurrency}); recibió ${input.currency.toUpperCase()}.`,
     );
   }
   if (!(PAYOUT_SOURCES as readonly string[]).includes(input.source)) {
-    throw new Error(`${where}: origen desconocido «${input.source}».`);
+    throw new PlatformPayoutInputError(`${where}: origen desconocido «${input.source}».`);
   }
 }
 
@@ -936,9 +957,12 @@ function toPayoutRow(r: RawPayout): PlatformPayoutRow {
 
 /**
  * Los ingresos de plataformas del workspace, del periodo más reciente al
- * más viejo, con los totales por mes ya sumados por la base.
+ * más viejo. RLS filtra: desde otro workspace, cero filas.
  *
- * RLS filtra: desde otro workspace, cero filas y cero meses.
+ * Los totales POR MES no salen de aquí: los pide quien los necesita, con
+ * `getPlatformPayoutMonths` (el promedio) o `getPlatformPayoutKpis` (las
+ * cifras de cabecera). Llegó a devolverlos siempre, con un `GROUP BY`
+ * sin límite que ninguna pantalla leía.
  */
 export async function listPlatformPayouts(
   tx: WorkspaceTx,
@@ -949,26 +973,7 @@ export async function listPlatformPayouts(
     `${SELECT_PAYOUT} ORDER BY p.period_start DESC, pl.name, p.created_at DESC LIMIT $1`,
     [limit],
   );
-  const meses = await tx.query<{ month: string; currency: string; total: string; payouts: string }>(`
-    SELECT to_char(period_start, 'YYYY-MM') AS month,
-           currency,
-           sum(amount)::text AS total,
-           count(*)::text AS payouts
-    FROM platform_payout
-    GROUP BY 1, 2
-    ORDER BY 1 DESC, 2
-  `);
-  return {
-    rows: rows.map(toPayoutRow),
-    // count(*) llega como bigint; se pide ::text y se convierte aquí, en
-    // un solo sitio, como manda la regla de los bigint de las vistas.
-    months: meses.rows.map((m) => ({
-      month: m.month,
-      currency: m.currency,
-      total: m.total,
-      payouts: Number(m.payouts),
-    })),
-  };
+  return { rows: rows.map(toPayoutRow) };
 }
 
 /**
@@ -1037,13 +1042,21 @@ export async function getPlatformPayoutKpis(tx: WorkspaceTx): Promise<PlatformPa
        SELECT (date_trunc('month', ws.hoy) - interval '1 month')::date AS inicio,
               date_trunc('month', ws.hoy)::date AS mes_en_curso,
               date_trunc('year', ws.hoy)::date AS anio,
+              (date_trunc('year', ws.hoy) + interval '1 year')::date AS anio_siguiente,
               ws.hoy
          FROM ws
      )
+     -- Con tope por arriba: sin él, un pago fechado por error en el año
+     -- que viene se sumaba a «Recibido en <este año>». El de abajo ya lo
+     -- tenía; este no, y eran la misma cifra mal contada.
      SELECT coalesce((SELECT sum(p.amount) FROM platform_payout p, ultimo
-                       WHERE p.currency = $1 AND p.period_start >= ultimo.anio), 0)::text AS ytd,
+                       WHERE p.currency = $1
+                         AND p.period_start >= ultimo.anio
+                         AND p.period_start < ultimo.anio_siguiente), 0)::text AS ytd,
             (SELECT count(*) FROM platform_payout p, ultimo
-              WHERE p.currency = $1 AND p.period_start >= ultimo.anio)::text AS ytd_payouts,
+              WHERE p.currency = $1
+                AND p.period_start >= ultimo.anio
+                AND p.period_start < ultimo.anio_siguiente)::text AS ytd_payouts,
             -- Sin coalesce a propósito: sum() de cero filas es NULL, que
             -- es justo lo que queremos. Un mes sin pago no vale cero.
             (SELECT sum(p.amount)::text FROM platform_payout p, ultimo
@@ -1160,7 +1173,15 @@ export async function importPlatformPayouts(
      SELECT current_workspace_id(), l.creator_id, l.platform_id, l.period_start, l.period_end, l.amount, l.currency, l.source
      FROM unnest($1::text[], $2::uuid[], $3::date[], $4::date[], $5::numeric[], $6::text[], $7::text[])
        AS l(platform_id, creator_id, period_start, period_end, amount, currency, source)
-     ON CONFLICT DO NOTHING
+     -- CON objetivo, y con el objetivo ESCRITO: un \`ON CONFLICT DO
+     -- NOTHING\` a secas no falla cuando el índice no existe, se limita a
+     -- no deduplicar. Sobre una base sin 0036 eso es lo peor de los dos
+     -- mundos: reimportar el mismo CSV duplicaría el dinero y la
+     -- pantalla diría «listo». Nombrando las columnas, Postgres exige un
+     -- índice único que las cubra y, si no lo hay, lanza 42P10 con un
+     -- mensaje que dice exactamente qué falta aplicar.
+     ON CONFLICT (workspace_id, platform_id, coalesce(creator_id, $8::uuid), period_start, period_end, currency, amount)
+       DO NOTHING
      RETURNING id`,
     [
       escribibles.map((i) => i.platformId),
@@ -1170,6 +1191,7 @@ export async function importPlatformPayouts(
       escribibles.map((i) => i.amount),
       escribibles.map((i) => i.currency.toUpperCase()),
       escribibles.map((i) => i.source),
+      SIN_CREADOR,
     ],
   );
   // La bitácora. Qué hecho es lo dice la columna `source`, que es el

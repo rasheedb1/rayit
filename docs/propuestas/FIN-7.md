@@ -191,7 +191,14 @@ de YouTube. **DECISIÓN PENDIENTE DE NICOLÁS** si quieres separarlas.
    correcto igual: el **Contador** los tiene (lleva todo Finanzas) y el
    **Mánager** no (decisión E), que es lo que se quiere.
    **DECISIÓN PENDIENTE DE NICOLÁS.**
-10. **`today` sale de la zona del ESPACIO, no de `CURRENT_DATE`.** Es la
+10. **Un periodo que no ha cerrado no se carga.** El mes en curso es
+   «lo que va del mes», no un pago: contarlo entero hundiría el promedio
+   y la lista lo enseñaría como cerrado. En el CSV es un **aviso** por
+   mes (no por fila: treinta días de septiembre son un mes abierto, no
+   treinta avisos) y en el formulario es un error de campo. La
+   comprobación usa el día del espacio, y el lector la salta si no se le
+   pasa ese día, para seguir siendo puro.
+11. **`today` sale de la zona del ESPACIO, no de `CURRENT_DATE`.** Es la
    regla que ya fijó FIN-6 (`(now() AT TIME ZONE w.timezone)::date`): a
    las 02:00 UTC en Bogotá todavía es ayer, y con dos relojes distintos
    el promedio y la proyección hablarían de meses distintos.
@@ -247,6 +254,8 @@ no hace falta la salida provisional que proponía §0 original.
 2. ¿Tres meses es la ventana correcta, o prefieres seis? (0.5.4)
 3. ¿El estimado de plataformas entra en la base de la reserva de
    impuestos? Hoy NO. (0.5.8)
+5. ¿Rechazar el mes en curso es lo que quieres, o prefieres cargarlo y
+   marcarlo como parcial? Hoy se rechaza. (0.5.10)
 4. ¿Se crean los permisos `finanzas.ingreso.*` o se quedan los
    reutilizados? (0.5.9, §1.2)
 

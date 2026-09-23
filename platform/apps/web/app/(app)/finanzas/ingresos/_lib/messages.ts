@@ -136,6 +136,8 @@ export const MESSAGES = {
       montoNegativo: (valor?: string) =>
         `el importe es negativo (${valor ?? ""}). Un ajuste o una devolución no se carga aquí todavía`,
       montoCero: (valor?: string) => `${valor ?? "ese mes"} suma cero: no se carga, porque un mes sin ingreso no es un pago de cero`,
+      periodoNoCerrado: (valor?: string) =>
+        `${valor ?? "ese periodo"} todavía no ha terminado: es lo que va del mes, no el pago. Vuelve a subirlo cuando cierre`,
       monedaDistinta: (valor?: string) =>
         `está en ${valor ?? "otra moneda"} y tu espacio lleva otra. No se carga: convertir necesita una tasa con fecha, y eso todavía no está`,
       sinPlataforma: () => "sin red",

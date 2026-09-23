@@ -232,6 +232,11 @@ export function aPeriodo(celda: string): Periodo | null {
     const [, a, m, d] = dia;
     const anio = +a!;
     const mes = +m!;
+    // El año se valida aquí y no solo en `mesEntero`: una fila diaria se
+    // sube después a su mes, y con un año fuera de rango («0001-01-15»,
+    // que el regex acepta) esa subida devolvía null y `revisar` reventaba
+    // con un TypeError que salía sin frase por la Server Action.
+    if (anio < 1970 || anio > 9999) return null;
     if (mes < 1 || mes > 12 || +d! < 1 || +d! > ultimoDiaDelMes(anio, mes)) return null;
     return { inicio: s, fin: s, granularidad: "dia" };
   }
@@ -299,6 +304,7 @@ export type ProblemaCodigo =
   | "montoNegativo"
   | "montoCero"
   | "monedaDistinta"
+  | "periodoNoCerrado"
   | "sinPlataforma"
   | "plataformaDesconocida"
   | "filaTotal";
@@ -319,6 +325,13 @@ export interface OpcionesRevision {
   currency: string;
   /** Las redes del catálogo `platform`, para el formato genérico. */
   plataformas: readonly string[];
+  /**
+   * Hoy, 'YYYY-MM-DD', en la zona del ESPACIO. Un periodo que todavía no
+   * ha terminado no es un pago: es lo que va del mes. Sin este dato no
+   * se filtra nada (la comprobación se salta), para que el lector siga
+   * siendo puro y sus pruebas no dependan del calendario.
+   */
+  hoy?: string;
 }
 
 export interface RevisionIngresos {
@@ -464,10 +477,15 @@ export function revisar(tabla: Tabla, deteccion: DeteccionIngresos, opts: Opcion
     // Un día se sube a su mes; el resto se queda como viene. La clave de
     // agrupación es la misma que el UNIQUE de 0034 sin el monto: es lo
     // que hace que dos filas del mismo mes se sumen en vez de chocar.
-    const periodoFinal =
-      granularidad === "dia"
-        ? { inicio: `${inicio.slice(0, 7)}-01`, fin: mesEntero(+inicio.slice(0, 4), +inicio.slice(5, 7))!.fin }
-        : { inicio, fin };
+    let periodoFinal = { inicio, fin };
+    if (granularidad === "dia") {
+      const delMes = mesEntero(+inicio.slice(0, 4), +inicio.slice(5, 7));
+      if (!delMes) {
+        problemas.push({ fila, gravedad: "error", codigo: "periodoIlegible", valor: celdaPeriodo });
+        return;
+      }
+      periodoFinal = { inicio: delMes.inicio, fin: delMes.fin };
+    }
     const clave = [platformId, periodoFinal.inicio, periodoFinal.fin, moneda].join("|");
     const ya = agrupadas.get(clave);
     if (ya) {
@@ -492,6 +510,22 @@ export function revisar(tabla: Tabla, deteccion: DeteccionIngresos, opts: Opcion
   // dato que el promedio trataría igual que un pago de cero.
   const listas: PlatformPayoutInput[] = [];
   for (const [clave, pago] of agrupadas) {
+    // Un periodo que todavía no ha terminado no es un pago: es lo que va
+    // del mes. Contarlo hundiría el promedio (un mes a medio cobrar
+    // entra como si fuera entero) y la lista lo enseñaría como cerrado.
+    // Va DESPUÉS de agrupar y no fila por fila: treinta filas diarias de
+    // septiembre son un mes abierto, no treinta avisos iguales. Es un
+    // AVISO y no un error: el archivo está bien, solo llegó antes de
+    // tiempo, y la frase dice que se vuelva a subir.
+    if (opts.hoy && pago.periodEnd > opts.hoy) {
+      problemas.push({
+        fila: primeraFila.get(clave) ?? 0,
+        gravedad: "aviso",
+        codigo: "periodoNoCerrado",
+        valor: pago.periodStart.slice(0, 7),
+      });
+      continue;
+    }
     if (normalizeDecimal(pago.amount) === "0.00") {
       problemas.push({
         fila: primeraFila.get(clave) ?? 0,

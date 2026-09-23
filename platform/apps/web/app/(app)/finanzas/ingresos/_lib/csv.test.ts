@@ -245,3 +245,56 @@ describe("una red desconocida no se inventa", () => {
     expect(r.listas.map((l) => l.platformId).sort()).toEqual(["instagram", "tiktok", "youtube"]);
   });
 });
+
+describe("un periodo que todavía no ha cerrado no es un pago", () => {
+  const conHoy = (texto: string, hoy: string) => {
+    const { tabla, deteccion } = analizar(Buffer.from(texto, "utf8"));
+    return revisar(tabla, deteccion, { ...OPTS, hoy });
+  };
+
+  it("el mes en curso queda fuera, con su aviso y su frase", () => {
+    const r = conHoy("Mes,Recompensas\n2026-08,415250.75\n2026-09,200000.00\n", "2026-09-23");
+    expect(r.listas.map((l) => l.periodStart)).toEqual(["2026-08-01"]);
+    expect(r.problemas).toEqual([{ fila: 2, gravedad: "aviso", codigo: "periodoNoCerrado", valor: "2026-09" }]);
+  });
+
+  it("el último día del mes todavía cuenta como abierto; el día siguiente ya no", () => {
+    expect(conHoy("Mes,Recompensas\n2026-09,200000.00\n", "2026-09-29").listas).toHaveLength(0);
+    expect(conHoy("Mes,Recompensas\n2026-09,200000.00\n", "2026-09-30").listas).toHaveLength(1);
+  });
+
+  it("sin `hoy` no se filtra nada: el lector sigue siendo puro", () => {
+    const { tabla, deteccion } = analizar(Buffer.from("Mes,Recompensas\n2026-09,200000.00\n", "utf8"));
+    expect(revisar(tabla, deteccion, OPTS).listas).toHaveLength(1);
+  });
+
+  it("las filas diarias se suman ANTES de mirar si el mes cerró", () => {
+    // Tres días de septiembre con hoy dentro del mes: el mes entero
+    // queda fuera de una vez, no tres avisos por tres días.
+    const r = conHoy(
+      "Fecha,Ingresos estimados\n2026-09-01,100\n2026-09-02,100\n2026-09-03,100\n",
+      "2026-09-23",
+    );
+    expect(r.listas).toHaveLength(0);
+    expect(r.problemas.filter((p) => p.codigo === "periodoNoCerrado")).toHaveLength(1);
+  });
+});
+
+describe("un año imposible no revienta el lector", () => {
+  it("una fila diaria con un año fuera de rango sale como periodo ilegible", () => {
+    // El regex de ISO acepta 0001-01-15; la subida al mes no. Antes
+    // lanzaba un TypeError que salía sin frase por la Server Action.
+    const { tabla, deteccion } = analizar(Buffer.from("Fecha,Ingresos estimados\n0001-01-15,100000\n", "utf8"));
+    const r = revisar(tabla, deteccion, OPTS);
+    expect(r.listas).toEqual([]);
+    expect(r.problemas).toEqual([
+      { fila: 1, gravedad: "error", codigo: "periodoIlegible", valor: "0001-01-15" },
+    ]);
+  });
+
+  it("aPeriodo lo rechaza en la rama del día, no solo en la del mes", () => {
+    expect(aPeriodo("0001-01-15")).toBeNull();
+    expect(aPeriodo("1969-12-31")).toBeNull();
+    expect(aPeriodo("1970-01-01")).not.toBeNull();
+  });
+});

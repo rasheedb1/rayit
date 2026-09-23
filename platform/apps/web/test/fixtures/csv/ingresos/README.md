@@ -31,7 +31,7 @@ columna entran en `ALIAS`.
 | Archivo | Qué prueba |
 |---|---|
 | `adsense-mensual.csv` | AdSense con `MONTH`: encabezados en inglés, moneda entre paréntesis (`Estimated earnings (COP)`), miles con punto y decimales con coma. Prueba además que `Page RPM (COP)` **no** se confunde con la columna del dinero. |
-| `adsense-diario.csv` | AdSense con `DATE`: cinco filas diarias de dos meses distintos que se suman dentro de su mes, y una fila `Total` que se descarta sin contar como error. |
+| `adsense-diario.csv` | AdSense con `DATE`: cinco filas diarias de dos meses distintos que se suman dentro de su mes, y una fila `Total` que se descarta sin contar como error. Sus filas de septiembre sirven además para el mes que **todavía no ha cerrado**: con `hoy` dentro de septiembre, el mes entero sale con un solo aviso. |
 | `tiktok-creator-rewards.csv` | Creator Rewards: separador punto y coma, meses en español («septiembre de 2026») y columna `Moneda` explícita. |
 | `ingresos-generico.csv` | El formato que sí controlamos: `plataforma,inicio,fin,monto,moneda`. Cada fila trae su red y su periodo exacto, y **no** se agrupa. |
 | `moneda-distinta.csv` | Tres redes, tres monedas. Las que no son la del espacio salen con el aviso `monedaDistinta` y no se escriben: convertir necesita una tasa con fecha, que no está en el esquema. |
@@ -64,6 +64,9 @@ instagram,2026-08-01,2026-08-31,260000.00,COP
 - Que Creator Rewards se exporte alguna vez en CSV es una suposición:
   hoy no se puede. `tiktok-creator-rewards.csv` está escrito con la
   forma del balance mensual que sí se ve en pantalla.
+- Un periodo cuyo fin es posterior a hoy no se carga: es lo que va del
+  mes, no el pago. Lo decide `revisar` con el día del espacio, después
+  de agrupar los días en su mes.
 - Un periodo escrito con dos números de dos cifras («09/10/2026») se
   rechaza a propósito: no dice si es día/mes o mes/día y aquí no hay
   una columna entera de fechas con la que decidirlo, como sí hace
