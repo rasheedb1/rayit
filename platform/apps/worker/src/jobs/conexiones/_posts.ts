@@ -39,8 +39,11 @@ export interface CollectableAccount extends Record<string, unknown> {
 }
 
 /**
- * Las cuentas por @ y las autorizadas, vivas y en un estado del que se
- * pueda leer. Una cuenta en 'error' se vuelve a intentar: el error
+ * Las cuentas por @ (por la fuente oficial o por el proveedor de pago de
+ * CON-12, 'aggregator') y las autorizadas, vivas y en un estado del que se
+ * pueda leer. Una cuenta que collect.account_metrics pasó a 'aggregator'
+ * conserva su id, así que sus posts siguen casando por (plataforma, id
+ * externo, conexión) y no se duplican. Una cuenta en 'error' se vuelve a intentar: el error
  * anterior pudo ser de la plataforma, no de la cuenta. Una en
  * 'needs_reauth' no, porque el token ya no sirve y la llamada fallaría
  * igual; vuelve cuando el creador reautoriza.
@@ -49,7 +52,7 @@ export async function selectCollectableAccounts(ctx: JobContext, payload: Collec
   const { rows } = await ctx.db.query<CollectableAccount>(
     `SELECT id, workspace_id, creator_id, platform_id, handle, external_account_id, access_mode, secret_ref
        FROM social_connection
-      WHERE access_mode IN ('public_profile', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
+      WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
       ORDER BY platform_id, connected_at`,
     [payload.connectionId ?? null, payload.workspaceId ?? null],
