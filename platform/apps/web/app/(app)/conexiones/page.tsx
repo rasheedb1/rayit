@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { flags } from "@/content/flags";
-import { formatDelta, formatInt } from "@/lib/format";
+import { formatDate, formatDelta, formatInt } from "@/lib/format";
 import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions";
 import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
 import { getCuentasService } from "./_lib/cuentas-server";
@@ -56,7 +56,18 @@ const COLUMNS: Column<AccountRow>[] = [
     key: "media",
     header: "Publicaciones",
     align: "num",
-    render: (r) => (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined ? SIN_DATO : formatInt(r.latest.mediaCount)),
+    // Dos cifras distintas y a propósito: lo que la red dice que tiene
+    // la cuenta, y cuántas publicaciones seguimos nosotros (CON-5).
+    // «En seguimiento» y no «con métricas»: entre que el recolector las
+    // descubre y las mide pasan horas, y prometer una medida que aún no
+    // existe es peor que no decir nada.
+    render: (r) => {
+      const seguidas = r.postsCount > 0 ? `${formatInt(r.postsCount)} en seguimiento` : undefined;
+      if (r.latest?.mediaCount === null || r.latest?.mediaCount === undefined) {
+        return seguidas ? <CellMain sub={seguidas}>{SIN_DATO}</CellMain> : SIN_DATO;
+      }
+      return <CellMain sub={seguidas}>{formatInt(r.latest.mediaCount)}</CellMain>;
+    },
   },
   {
     key: "views",
@@ -76,7 +87,28 @@ const COLUMNS: Column<AccountRow>[] = [
   {
     key: "dataAsOf",
     header: "Datos",
-    render: (r) => (r.latest ? <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} /> : <span className="text-xs text-muted">Sin lectura todavía</span>),
+    // Cada fecha junto a la cifra que describe, y no la más reciente de
+    // las dos: las cifras de esta fila (seguidores, publicaciones,
+    // vistas) salen de la serie de CUENTA, así que enseñar ahí la
+    // frescura del contenido haría parecer al día unos seguidores de
+    // hace una semana. La del contenido va aparte, con su nombre.
+    render: (r) => {
+      if (!r.latest && !r.lastPostSnapshotAt) return <span className="text-xs text-muted">Sin lectura todavía</span>;
+      return (
+        <div className="flex flex-col">
+          {r.latest ? (
+            <DataAsOf date={`${r.latest.day}T00:00:00Z`} source={PLATFORM_NAME[r.platformId]} />
+          ) : (
+            <span className="text-xs text-muted">Todavía sin cifras de la cuenta</span>
+          )}
+          {r.lastPostSnapshotAt && (
+            <span className="text-xs text-muted">
+              publicaciones hasta el <time dateTime={r.lastPostSnapshotAt}>{formatDate(r.lastPostSnapshotAt)}</time>
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
     key: "status",

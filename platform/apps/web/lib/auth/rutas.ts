@@ -17,6 +17,7 @@ export const RUTAS_PUBLICAS = [
   "/legal", //            términos y privacidad: se leen ANTES de dejar el correo
   "/kit", //              la galería del kit: es documentación del equipo, no datos
   "/cotizacion", //       la cotización que se le manda a una marca (COT-3)
+  "/reporte", //          el reporte de campaña que abre la marca (CAM-6)
   "/baja", //             la baja de una secuencia de outreach: la abre quien la recibe (VEN)
   "/api/webhooks", //     lo llaman las plataformas, no un navegador con sesión
 ] as const;

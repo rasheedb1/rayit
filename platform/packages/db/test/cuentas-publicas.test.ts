@@ -54,6 +54,42 @@ describe('alta por @', () => {
   });
 });
 
+describe('publicaciones medidas (CON-5)', () => {
+  test('la fila dice cuántas publicaciones vivas hay y hasta cuándo llegan sus lecturas', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, handle: 'concontenido', externalAccountId: '17841400000008888' }));
+    const vacia = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(vacia.postsCount, 0);
+    assert.equal(vacia.lastPostSnapshotAt, null, 'sin lecturas de contenido: null, no una fecha inventada');
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      await tx.query(
+        `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, media_type, published_at, deleted_on_platform)
+         VALUES (current_workspace_id(), $1, $2, 'instagram', 'medio-1', 'video', '2026-09-20T12:00:00Z', false),
+                (current_workspace_id(), $1, $2, 'instagram', 'medio-2', 'image', '2026-09-19T12:00:00Z', false),
+                (current_workspace_id(), $1, $2, 'instagram', 'medio-3', 'video', '2026-09-18T12:00:00Z', true)`,
+        [CREATOR_LAURA, id],
+      );
+      await tx.query(
+        `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+         SELECT p.id, current_workspace_id(), '2026-09-22T05:00:00Z', 41.0, 900, 'api'
+           FROM post p WHERE p.connection_id = $1 AND p.external_post_id = 'medio-1'`,
+        [id],
+      );
+      await tx.query(
+        `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+         SELECT p.id, current_workspace_id(), '2026-09-23T05:00:00Z', 65.0, 1100, 'api'
+           FROM post p WHERE p.connection_id = $1 AND p.external_post_id = 'medio-2'`,
+        [id],
+      );
+    });
+
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.postsCount, 2, 'lo borrado en la plataforma no cuenta como publicación viva');
+    assert.equal(row.lastPostSnapshotAt, '2026-09-23T05:00:00.000Z', 'la lectura de contenido más reciente, en ISO');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0, 'RLS: el otro workspace no ve nada');
+  });
+});
+
 describe('snapshots', () => {
   test('dos lecturas el mismo día dejan una fila; la historia da Δ7d; nunca inventa un cero', async () => {
     const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, input));
