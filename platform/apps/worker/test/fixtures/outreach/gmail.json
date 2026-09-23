@@ -1,0 +1,53 @@
+{
+  "_origen": "Respuestas de la API de Gmail v1 con la forma de la documentación (users.messages.send, users.messages.get format=metadata, users.threads.get format=full). Direcciones de .test; sin datos reales.",
+  "send": { "id": "18f2a9c4d1e0b001", "threadId": "18f2a9c4d1e0b001", "labelIds": ["SENT"] },
+  "metadata": {
+    "id": "18f2a9c4d1e0b001",
+    "threadId": "18f2a9c4d1e0b001",
+    "payload": { "headers": [{ "name": "Message-Id", "value": "<CAF=gmail-real-0001@mail.gmail.com>" }] }
+  },
+  "thread": {
+    "id": "18f2a9c4d1e0b001",
+    "messages": [
+      {
+        "id": "18f2a9c4d1e0b001",
+        "threadId": "18f2a9c4d1e0b001",
+        "labelIds": ["SENT"],
+        "internalDate": "1790175600000",
+        "payload": { "mimeType": "text/plain", "headers": [{ "name": "From", "value": "Laura <laura@cocina-facil.test>" }], "body": { "data": "SG9sYQ" } }
+      },
+      {
+        "id": "18f2a9c4d1e0b002",
+        "threadId": "18f2a9c4d1e0b001",
+        "labelIds": ["INBOX", "UNREAD"],
+        "internalDate": "1790186400000",
+        "snippet": "Hola, Laura. Sí, me interesa.",
+        "payload": {
+          "mimeType": "multipart/alternative",
+          "headers": [
+            { "name": "From", "value": "Sofía Cárdenas <sofia@vitale.test>" },
+            { "name": "Subject", "value": "Re: Hola, Sofía" },
+            { "name": "Message-ID", "value": "<sofia-0002@vitale.test>" },
+            { "name": "In-Reply-To", "value": "<CAF=gmail-real-0001@mail.gmail.com>" }
+          ],
+          "parts": [
+            { "mimeType": "text/plain", "body": { "data": "SG9sYSwgTGF1cmEuIFPDrSwgbWUgaW50ZXJlc2EuIMK_SGFibGFtb3MgZWwganVldmVzPw" } },
+            { "mimeType": "text/html", "body": { "data": "PHA-SG9sYTwvcD4" } }
+          ]
+        }
+      },
+      {
+        "id": "18f2a9c4d1e0b003",
+        "threadId": "18f2a9c4d1e0b001",
+        "labelIds": ["INBOX"],
+        "internalDate": "1790190000000",
+        "payload": {
+          "mimeType": "text/plain",
+          "headers": [{ "name": "From", "value": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" }],
+          "body": { "data": "RGVsaXZlcnkgZmFpbGVk" }
+        }
+      }
+    ]
+  },
+  "unauthorized": { "error": { "code": 401, "message": "Request had invalid authentication credentials.", "status": "UNAUTHENTICATED" } }
+}
