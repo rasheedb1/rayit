@@ -39,7 +39,7 @@ import { redactSecrets } from '@mc/connectors';
 import { DEFAULT_MAX_AGE_HOURS, shouldKeepMeasuring } from '@mc/core';
 import { envInt } from '../../runner/config.ts';
 import { defineJob, type JobContext } from '../../runner/registry.ts';
-import { mapLimit } from './oauth-refresh.ts';
+import { mapLimit } from '../../runner/concurrency.ts';
 import {
   chooseSource,
   groupByPlatform,

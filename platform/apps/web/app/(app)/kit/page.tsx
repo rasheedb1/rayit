@@ -275,6 +275,19 @@ export default function Page() {
         <Variant label="Serie de 90 puntos con ventana sombreada (seguidores de @cafealma)">
           <LineChart series={brand.series} labels={brand.labels} shade={brand.shade} fromZero={false} format="int" ariaLabel="Seguidores de @cafealma por día durante 90 días, con la ventana de campaña del 24 al 31 de agosto" />
         </Variant>
+        <Variant label="Dos ventanas con tono (shades, CAM-3): línea base en neutro y campaña en el acento">
+          <LineChart
+            series={brand.series}
+            labels={brand.labels}
+            shades={[
+              { from: brand.shade.from - 14, to: brand.shade.from - 1, label: "Línea base", tone: "muted" },
+              { from: brand.shade.from, to: brand.shade.to, label: "Campaña", tone: "accent" },
+            ]}
+            fromZero={false}
+            format="int"
+            ariaLabel="Seguidores de @cafealma por día, con la línea base de 14 días y la ventana de campaña sombreadas"
+          />
+        </Variant>
         <Variant label="Varias series por red, una discontinua; tooltip por pointer y por teclado (Tab y flechas)">
           <LineChart series={nets.series} labels={nets.labels} format="compact" ariaLabel="Seguidores por red en 90 días" />
         </Variant>
