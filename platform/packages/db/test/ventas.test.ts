@@ -1141,7 +1141,8 @@ describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', 
       INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', system_role_id('creator', 'owner'))
       ON CONFLICT DO NOTHING;`);
     const opciones = await laura((tx) => listOwnerOptions(tx));
-    assert.deepEqual(opciones, [{ userId: USER_LAURA, label: 'Laura Méndez' }], 'solo las personas de este espacio');
+    // Andrés Pardo es el mánager de la demo (seed 0003, ACC-8): también es de este espacio.
+    assert.deepEqual(opciones, [{ userId: '00000002-0000-4000-8000-000000000004', label: 'Andrés Pardo' }, { userId: USER_LAURA, label: 'Laura Méndez' }], 'solo las personas de este espacio');
 
     const id = await laura((tx) => createCompany(tx, { name: 'Con Responsable', domain: 'con-responsable.co' }));
     await laura((tx) => updateCompany(tx, id, { ownerUserId: USER_LAURA }));

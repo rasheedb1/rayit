@@ -41,7 +41,7 @@ describe('alta por @', () => {
     assert.deepEqual(bitacora[1]?.before, { accessMode: 'public_profile', status: 'active', deleted: false });
     assert.equal(bitacora[0]?.actor_kind, 'system', 'sin identidad en la transacción no se inventa un usuario');
     assert.equal(bitacora[0]?.before, null);
-    assert.deepEqual(bitacora[0]?.after, { platformId: 'instagram', externalAccountId: '17841400000009999', handle: 'nicolasduartea', accountType: 'business', accessMode: 'public_profile' });
+    assert.deepEqual(bitacora[0]?.after, { platformId: 'instagram', externalAccountId: '17841400000009999', handle: 'nicolasduartea', accountType: 'business', accessMode: 'public_profile', onBehalfOf: { creatorId: CREATOR_LAURA } });
     assert.equal(JSON.stringify(bitacora).includes('public:instagram'), false);
     assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, a.id), []);
   });
@@ -188,13 +188,13 @@ describe('de @ a autorizada', () => {
     const autorizada = await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.authorized');
     assert.equal(autorizada.length, 1);
     assert.deepEqual(autorizada[0]?.before, { accessMode: 'public_profile' });
-    assert.deepEqual(autorizada[0]?.after, { accessMode: 'direct_oauth', externalAccountId: 'open_id_selva', handle: 'selvathegolden', accountType: 'creator', scopes: ['user.info.basic', 'video.list'], accessExpiresAt: '2026-09-24T00:00:00.000Z' });
+    assert.deepEqual(autorizada[0]?.after, { accessMode: 'direct_oauth', externalAccountId: 'open_id_selva', handle: 'selvathegolden', accountType: 'creator', scopes: ['user.info.basic', 'video.list'], accessExpiresAt: '2026-09-24T00:00:00.000Z', onBehalfOf: { creatorId: CREATOR_LAURA } });
     assert.equal(JSON.stringify(autorizada).includes('enc:tiktok'), false);
     // La autorización anterior que se retiró tiene su propia fila: la bitácora explica por qué desapareció.
     const retirada = await filasDeBitacora(t, WORKSPACE_LAURA, previousId, 'connection.disconnected');
     assert.equal(retirada.length, 1);
     assert.deepEqual(retirada[0]?.before, { status: 'active', accessMode: 'direct_oauth', deleted: false });
-    assert.deepEqual(retirada[0]?.after, { status: 'disabled', accessMode: 'direct_oauth', deleted: true, replacedBy: id });
+    assert.deepEqual(retirada[0]?.after, { status: 'disabled', accessMode: 'direct_oauth', deleted: true, replacedBy: id, onBehalfOf: { creatorId: CREATOR_LAURA } });
     // Volver a agregar por @ una cuenta ya autorizada no la baja a pública, y la bitácora lo dice así.
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'tiktok', handle: 'selvathegolden', externalAccountId: 'open_id_selva', profileUrl: null, accountType: 'creator' }));
     const [otraVez] = (await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.reconnected')).slice(-1);
