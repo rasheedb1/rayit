@@ -27,6 +27,10 @@
  *     tiene tope;
  *   - (ronda 4) la fila de app_user queda ligada a la cuenta de Auth que
  *     entró primero: otra cuenta con el mismo correo no la hereda.
+ *   - (pulido) esa sesión en conflicto pasa por /auth/salir, que la
+ *     cierra de verdad (no queda ninguna cookie `sb-…`) solo si la base
+ *     confirma el conflicto; los errores del selector dicen lo que pasó
+ *     y el tope de espacios da el correo de soporte si lo hay.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -63,6 +67,20 @@ vi.mock("@/lib/auth/session", () => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
+/** Para forzar el fallo del alta de un espacio sin tocar lo demás. */
+const fallos = vi.hoisted(() => ({ alta: false }));
+
+vi.mock("@mc/db/queries/identidad", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mc/db/queries/identidad")>();
+  return {
+    ...original,
+    createCreatorWorkspace: (...args: Parameters<typeof original.createCreatorWorkspace>) => {
+      if (fallos.alta) throw new Error("fallo simulado del alta");
+      return original.createCreatorWorkspace(...args);
+    },
+  };
+});
+
 class Redireccion extends Error {
   constructor(readonly destino: string) {
     super(`redirect a ${destino}`);
@@ -77,7 +95,8 @@ vi.mock("next/navigation", () => ({
 
 import { sellarEspacio } from "@/lib/workspace/cookie";
 import { COOKIE_WORKSPACE } from "@/lib/workspace/cookie";
-import { getCurrentContext, SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { getCurrentContext, SALIDA_POR_IDENTIDAD, SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { GET as salir } from "@/app/auth/salir/route";
 import { closeDb, withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
 import { AuthIdentityMismatchError, listMyWorkspaces } from "@mc/db/queries/identidad";
@@ -141,7 +160,15 @@ afterAll(async () => {
 beforeEach(() => {
   cookies.clear();
   sesion = null;
+  fallos.alta = false;
 });
+
+/** Una cookie de sesión de Supabase como la dejaría @supabase/ssr (partida en trozos). */
+function conCookieDeSesion(): void {
+  for (const name of ["sb-ref-auth-token.0", "sb-ref-auth-token.1"]) cookies.set(name, { name, value: "token" });
+}
+
+const pedirSalida = () => salir(new Request(`https://on-cue.test${SALIDA_POR_IDENTIDAD}`));
 
 describe("cambiarEspacio", () => {
   test("el espacio de otra persona se rechaza y la cookie no se escribe", async () => {
@@ -206,7 +233,7 @@ describe("la identidad no sale de la cookie", () => {
     // El buzón se reasignó: la cuenta de Auth de Ana se borró y otra
     // persona se registró con el mismo correo. Su sesión trae otro id.
     sesion = { authUserId: AUTH.intrusa, email: ANA, nombre: null };
-    await expect(getCurrentContext()).rejects.toMatchObject({ destino: "/login?error=identidad" });
+    await expect(getCurrentContext()).rejects.toMatchObject({ destino: SALIDA_POR_IDENTIDAD });
     await expect(registrarEntrada({ email: ANA, authUserId: AUTH.intrusa })).rejects.toBeInstanceOf(AuthIdentityMismatchError);
   });
 
@@ -305,8 +332,73 @@ describe("crearEspacio tiene tope", () => {
         throw err;
       });
     }
+    // Sin SUPPORT_EMAIL, el texto no promete ningún contacto.
     expect(respuesta).toEqual({ error: MESSAGES.selector.errores.limite(20) });
     const mios = (await getCurrentContext()).workspaces.filter((w) => w.role === "owner");
     expect(mios).toHaveLength(20);
+
+    // Con él, el menú recibe a quién escribir.
+    const previo = process.env.SUPPORT_EMAIL;
+    process.env.SUPPORT_EMAIL = "soporte@oncue.test";
+    try {
+      expect(await crearEspacio({}, form({ nombre: "Uno más" }))).toEqual({
+        error: MESSAGES.selector.errores.limite(20),
+        soporte: "soporte@oncue.test",
+      });
+    } finally {
+      if (previo === undefined) delete process.env.SUPPORT_EMAIL;
+      else process.env.SUPPORT_EMAIL = previo;
+    }
   }, 120_000);
+});
+
+describe("/auth/salir: una sesión con la identidad en conflicto se cierra de verdad", () => {
+  test("la cuenta intrusa sale sin ninguna cookie sb- ni el espacio elegido, y llega a /login?error=identidad", async () => {
+    sesion = { authUserId: AUTH.intrusa, email: ANA, nombre: null };
+    conCookieDeSesion();
+    cookies.set(COOKIE_WORKSPACE, { name: COOKIE_WORKSPACE, value: sellarEspacio({ w: anaWs, u: anaUserId, e: ANA })! });
+
+    const r = await pedirSalida();
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("https://on-cue.test/login?error=identidad");
+    expect([...cookies.keys()].filter((n) => n.startsWith("sb-"))).toEqual([]);
+    expect(cookies.has(COOKIE_WORKSPACE)).toBe(false);
+  });
+
+  test("una sesión buena no se cierra aunque alguien le haga abrir esta URL", async () => {
+    sesion = { authUserId: AUTH.bruno, email: BRUNO, nombre: null };
+    conCookieDeSesion();
+    const r = await pedirSalida();
+    expect(r.headers.get("location")).toBe("https://on-cue.test/resumen");
+    expect(cookies.has("sb-ref-auth-token.0")).toBe(true);
+  });
+
+  test("sin sesión no hay nada que cerrar", async () => {
+    const r = await pedirSalida();
+    expect(r.headers.get("location")).toBe("https://on-cue.test/login");
+  });
+});
+
+describe("los errores del selector dicen lo que pasó", () => {
+  test("si falla crear el espacio, lo dice (no «cambiar de espacio»)", async () => {
+    sesion = { authUserId: AUTH.bruno, email: BRUNO, nombre: null };
+    fallos.alta = true;
+    const estado = await crearEspacio({}, form({ nombre: "No llega" }));
+    expect(estado).toEqual({ error: MESSAGES.selector.errores.crear });
+    expect(MESSAGES.selector.errores.crear).not.toBe(MESSAGES.selector.errores.generico);
+  });
+
+  test("sin clave de firma no promete que reintentar lo arregle", async () => {
+    sesion = { authUserId: AUTH.ana, email: ANA, nombre: null };
+    const clave = process.env.TOKEN_ENCRYPTION_KEY;
+    delete process.env.TOKEN_ENCRYPTION_KEY;
+    try {
+      const estado = await cambiarEspacio({}, form({ workspaceId: anaWs }));
+      expect(estado).toEqual({ error: MESSAGES.selector.errores.sinFirma });
+      expect(MESSAGES.selector.errores.sinFirma).not.toMatch(/vuelve a intentarlo/i);
+      expect(cookies.has(COOKIE_WORKSPACE)).toBe(false);
+    } finally {
+      process.env.TOKEN_ENCRYPTION_KEY = clave;
+    }
+  });
 });

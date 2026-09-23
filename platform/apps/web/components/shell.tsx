@@ -1,22 +1,14 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { MobileNav, SideNav } from "./nav";
 import { ThemeToggle } from "./theme-toggle";
 // CIM-3: el selector de espacio. Se monta en una línea aquí y en la
 // cabecera móvil; todo lo suyo (datos, menú, acciones) vive en
 // components/workspace-switcher.tsx.
 import { WorkspaceSwitcher } from "./workspace-switcher";
+import { Marca } from "./marca";
 
-function Brand() {
-  return (
-    <Link href="/" className="inline-flex items-center gap-2.5 rounded-sm">
-      <span className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[11px] font-bold text-accent-fg" aria-hidden="true">
-        O
-      </span>
-      <span className="text-sm font-semibold tracking-tight">On Cue</span>
-    </Link>
-  );
-}
+// CIM-3: la marca es una sola, la de components/marca.tsx (también la usan /login y /legal).
+const Brand = () => <Marca enMarco />;
 
 export function Shell({ children }: { children: ReactNode }) {
   return (

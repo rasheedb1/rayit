@@ -19,6 +19,10 @@
  *      inválido, «usar otro correo», el 429 del límite de correo, el
  *      camino feliz y (ronda 4) un «reenviar» que falla sin sacar a la
  *      persona de «Revisa tu correo».
+ *   3. (pulido) el CAPTCHA de CIM-10 —sin token no se llama a Supabase,
+ *      con token se le pasa, y su rechazo tiene texto propio—, la cookie
+ *      `mc.enlace` que deja un envío bueno (lib/auth/pedido.ts) y el
+ *      origen del enlace en producción (lib/auth/origen.ts).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -28,12 +32,31 @@ vi.mock("@/lib/auth/supabase", () => ({
   createServerSupabase: async () => ({ auth: { signInWithOtp } }),
 }));
 
-vi.mock("@/lib/auth/origen", () => ({
-  origenDeLaPeticion: async () => "https://on-cue-web.vercel.app",
+const { origen } = vi.hoisted(() => ({ origen: vi.fn(async () => "https://on-cue-web.vercel.app") }));
+
+vi.mock("@/lib/auth/origen", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth/origen")>()),
+  origenDeLaPeticion: origen,
+}));
+
+const cookies = new Map<string, string>();
+
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => (cookies.has(name) ? { name, value: cookies.get(name)! } : undefined),
+    set: (name: string, value: string) => {
+      cookies.set(name, value);
+    },
+    delete: (name: string) => {
+      cookies.delete(name);
+    },
+  }),
 }));
 
 import { enviarEnlace } from "./acciones";
 import { MESSAGES } from "@/lib/auth/messages";
+import { OrigenNoConfiguradoError } from "@/lib/auth/origen";
+import { COOKIE_PEDIDO, huellaDeCorreo } from "@/lib/auth/pedido";
 
 const entorno = {
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -63,6 +86,9 @@ afterAll(() => {
 beforeEach(() => {
   signInWithOtp.mockReset();
   signInWithOtp.mockResolvedValue({ error: null });
+  origen.mockClear();
+  cookies.clear();
+  delete process.env.TURNSTILE_SITE_KEY;
 });
 
 describe('la regla de "use server"', () => {
@@ -168,5 +194,54 @@ describe("enviarEnlace", () => {
     const estado = await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }));
     expect(estado.error).toBe(MESSAGES.login.sinConfigurar.titulo);
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://ejemplo.supabase.co";
+  });
+});
+
+describe("enviarEnlace: lo que protege el enlace (pulido)", () => {
+  const CLAVE = "1x00000000000000000000AA"; // la clave de pruebas pública de Turnstile
+
+  test("con CAPTCHA configurado y sin token, no se gasta un correo del cupo", async () => {
+    process.env.TURNSTILE_SITE_KEY = CLAVE;
+    const estado = await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }));
+    expect(estado).toEqual({ estado: "inicio", email: "ana@ejemplo.test", error: MESSAGES.login.errores.captcha });
+    expect(signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  test("con token, viaja a Supabase, que es quien lo verifica", async () => {
+    process.env.TURNSTILE_SITE_KEY = CLAVE;
+    await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test", captchaToken: "tok-123" }));
+    const args = signInWithOtp.mock.calls[0]![0] as { options: { captchaToken?: string } };
+    expect(args.options.captchaToken).toBe("tok-123");
+  });
+
+  test("sin CAPTCHA configurado, el envío no manda token", async () => {
+    await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }));
+    const args = signInWithOtp.mock.calls[0]![0] as { options: Record<string, unknown> };
+    expect(args.options).not.toHaveProperty("captchaToken");
+  });
+
+  test("el rechazo del CAPTCHA en Supabase tiene su texto, también al reenviar", async () => {
+    signInWithOtp.mockResolvedValue({ error: { status: 400, code: "captcha_failed", message: "captcha protection: request disallowed (invalid-input-response)" } });
+    expect((await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }))).error).toBe(MESSAGES.login.errores.captcha);
+    const reenvio = await enviarEnlace({ estado: "enviado", email: "ana@ejemplo.test" }, form({ email: "ana@ejemplo.test", accion: "reenviar" }));
+    expect(reenvio).toMatchObject({ estado: "enviado", error: MESSAGES.login.errores.captcha });
+  });
+
+  test("un envío bueno deja la huella del correo en este navegador; uno que falla, no", async () => {
+    await enviarEnlace(INICIAL, form({ email: " Ana@Ejemplo.test " }));
+    expect(cookies.get(COOKIE_PEDIDO)).toBe(huellaDeCorreo("ana@ejemplo.test"));
+    expect(cookies.get(COOKIE_PEDIDO)).not.toContain("ana");
+
+    cookies.clear();
+    signInWithOtp.mockResolvedValue({ error: { status: 500, message: "boom" } });
+    await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }));
+    expect(cookies.has(COOKIE_PEDIDO)).toBe(false);
+  });
+
+  test("producción sin origen configurado no manda nada y lo dice en genérico", async () => {
+    origen.mockRejectedValueOnce(new OrigenNoConfiguradoError());
+    const estado = await enviarEnlace(INICIAL, form({ email: "ana@ejemplo.test" }));
+    expect(estado.error).toBe(MESSAGES.login.errores.generico);
+    expect(signInWithOtp).not.toHaveBeenCalled();
   });
 });

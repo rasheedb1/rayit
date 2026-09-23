@@ -42,6 +42,11 @@ import { inicial } from "@/lib/workspace/inicial";
  *     (`role="group"` con nombre) con Crear y Cancelar: ahí Tab y las
  *     flechas son las del navegador, y Escape vuelve a la lista con el
  *     foco en «Crear espacio».
+ *
+ * Con qué correo se entró se ve bajo «Tu cuenta» (como en Vercel y
+ * Linear). Sin eso, quien abre un enlace mágico que pidió otra persona
+ * para SU correo trabajaría dentro de la cuenta ajena sin notarlo: el
+ * selector solo enseñaba el nombre del espacio.
  */
 export interface EspacioVisible {
   id: string;
@@ -52,7 +57,16 @@ const ESTADO: EstadoEspacio = {};
 
 const SELECTOR_OPCIONES = '[role="menuitem"], [role="menuitemradio"]';
 
-export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; espacios: EspacioVisible[] }) {
+export function WorkspaceMenu({
+  actual,
+  espacios,
+  correo,
+}: {
+  actual: EspacioVisible;
+  espacios: EspacioVisible[];
+  /** El correo de la sesión. */
+  correo: string;
+}) {
   const t = MESSAGES.selector;
   const [abierto, setAbierto] = useState(false);
   const [creando, setCreando] = useState(false);
@@ -161,6 +175,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
   };
 
   const error = estadoCambio.error ?? estadoCreacion.error;
+  const soporte = estadoCambio.error ? undefined : estadoCreacion.soporte;
 
   return (
     <div
@@ -280,8 +295,13 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
                 onClick={() => cerrar(false)}
                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:bg-hover"
               >
-                <User className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                {t.cuenta}
+                <User className="h-3.5 w-3.5 shrink-0 self-start mt-0.5" aria-hidden="true" />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span>{t.cuenta}</span>
+                  <span className="truncate text-xs text-muted" title={correo}>
+                    {t.sesionComo(correo)}
+                  </span>
+                </span>
               </Link>
 
               <form action={cerrarSesion} role="none">
@@ -300,6 +320,16 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
           {error && (
             <p role="alert" className="px-2 py-1.5 text-xs text-bad">
               {error}
+              {soporte && (
+                <>
+                  {" "}
+                  {t.errores.limiteContacto}{" "}
+                  <a href={`mailto:${soporte}`} className="break-all font-medium underline underline-offset-2">
+                    {soporte}
+                  </a>
+                  .
+                </>
+              )}
             </p>
           )}
         </div>
