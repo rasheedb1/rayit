@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    // ES2023 por Intl.NumberFormat v3: formatear un monto desde el TEXTO
+    // del decimal (recordatorios.ts) en vez de convertirlo a double.
+    "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
