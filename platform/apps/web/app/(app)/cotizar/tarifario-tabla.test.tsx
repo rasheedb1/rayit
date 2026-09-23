@@ -41,7 +41,7 @@ describe("TarifarioTabla", () => {
   it("el rango del mock se lee entero, como texto y sin centavos, sin entrar a ningún campo", () => {
     pintar();
     // Fuera del campo, las views llevan el separador de miles como todo lo demás.
-    expect(screen.getByLabelText("Views por pieza · TikTok dedicado")).toHaveValue("84.000");
+    expect(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado")).toHaveValue("84.000");
     expect(rango("tiktok")).toBe("COP 3.780.000 – COP 5.880.000");
     // Sin «Editar», no hay campos de precio.
     expect(screen.queryByLabelText(/Rango sugerido bajo · TikTok dedicado/)).not.toBeInTheDocument();
@@ -49,9 +49,9 @@ describe("TarifarioTabla", () => {
 
   it("cambiar las views recalcula el rango en el navegador y marca las views como manuales", async () => {
     pintar();
-    fireEvent.change(screen.getByLabelText("Views por pieza · TikTok dedicado"), { target: { value: "168000" } });
+    fireEvent.change(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado"), { target: { value: "168000" } });
     await waitFor(() => expect(rango("tiktok")).toBe("COP 7.560.000 – COP 11.760.000"));
-    expect(screen.getAllByText("Views a mano").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Visualizaciones a mano").length).toBeGreaterThan(0);
   });
 
   it("marcar un modificador sube el rango, y el desglose se abre anunciado y con el foco en su título", async () => {
@@ -72,7 +72,7 @@ describe("TarifarioTabla", () => {
     expect(filaDetalle.contains(panel)).toBe(true);
     expect(filaDetalle.previousElementSibling).toHaveTextContent("TikTok dedicado");
     expect(within(panel).getByRole("heading")).toHaveFocus();
-    expect(within(panel).getByText(/Tus views medianas: 84.000/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Tus visualizaciones medianas: 84.000/)).toBeInTheDocument();
     expect(within(panel).getByText(/CPM de referencia de cocina en CO/)).toBeInTheDocument();
     expect(within(panel).getByText(/Derechos de uso · 30 días \(35 %\)/)).toBeInTheDocument();
     expect(within(panel).getByText(/Rango sugerido: COP 5.103.000 – COP 7.938.000/)).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe("TarifarioTabla", () => {
 
   it("las filas sin rango dicen qué les falta", () => {
     pintar();
-    expect(screen.getAllByText("Escribe las views de una pieza para ver el rango.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Escribe las visualizaciones de una pieza para ver el rango.").length).toBeGreaterThan(0);
     expect(screen.getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
     expect(screen.queryByTestId("rango-historias")).not.toBeInTheDocument();
   });
@@ -130,15 +130,15 @@ describe("TarifarioTabla", () => {
         { platformId: "facebook", medianViews: 19_700, sampleSize: 12, ageHoursCut: 168, isReliable: true, computedAt: "2026-09-22T00:00:00Z" },
       ],
     });
-    const views = screen.getByLabelText("Views por pieza · Video en Facebook");
+    const views = screen.getByLabelText("Visualizaciones por pieza · Video en Facebook");
     expect(views).toHaveValue("19.700");
     const celda = views.closest("td")!;
     expect(within(celda).getByText("Mediana propia")).toBeInTheDocument();
-    expect(within(celda).queryByText("Views a mano")).not.toBeInTheDocument();
+    expect(within(celda).queryByText("Visualizaciones a mano")).not.toBeInTheDocument();
     // Lo único que queda a la vista es lo que de verdad falta.
     const fila = views.closest("tr")!;
     expect(within(fila).getByText("No hay CPM de referencia para Facebook en CO. Escribe el tuyo.")).toBeInTheDocument();
-    expect(within(fila).queryByText("Escribe las views de una pieza para ver el rango.")).not.toBeInTheDocument();
+    expect(within(fila).queryByText("Escribe las visualizaciones de una pieza para ver el rango.")).not.toBeInTheDocument();
   });
 
   it("a 400 px las acciones se ven sin desplazar la tabla: van en la primera columna, bajo el nombre", () => {
@@ -156,7 +156,7 @@ describe("TarifarioTabla", () => {
 
   it("con poca muestra, la mediana se sugiere en el campo pero no entra sola en el precio (D4)", async () => {
     pintar();
-    const views = screen.getByLabelText("Views por pieza · Reel de Instagram");
+    const views = screen.getByLabelText("Visualizaciones por pieza · Reel de Instagram");
     expect(views).toHaveValue("");
     expect(views).toHaveAttribute("placeholder", "61.000");
     expect(screen.getByText("Tu mediana sale de solo 6 videos (61.000). Confírmala o escribe la tuya.")).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("TarifarioTabla", () => {
 
   it("las views se escriben sin separadores y se leen con ellos al salir del campo", async () => {
     pintar();
-    const views = screen.getByLabelText("Views por pieza · TikTok dedicado");
+    const views = screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado");
     fireEvent.focus(views);
     expect(views).toHaveValue("84000");
     fireEvent.change(views, { target: { value: "115446" } });
@@ -230,7 +230,7 @@ describe("TarifarioTabla", () => {
     guardarTarifario.mockResolvedValue({ ok: true });
     pintar();
     fireEvent.click(screen.getByRole("checkbox", { name: /Exclusividad/ }));
-    fireEvent.change(screen.getByLabelText("Views por pieza · TikTok dedicado"), { target: { value: "90000" } });
+    fireEvent.change(screen.getByLabelText("Visualizaciones por pieza · TikTok dedicado"), { target: { value: "90000" } });
     fireEvent.click(screen.getByRole("button", { name: "Guardar tarifario" }));
 
     await waitFor(() => expect(guardarTarifario).toHaveBeenCalledTimes(1));
@@ -271,7 +271,7 @@ describe("TarifarioTabla", () => {
 
   it("los campos vacíos no aparentan un cero: las views y el CPM sin valor muestran un ejemplo en texto", () => {
     pintar();
-    const historias = screen.getByLabelText("Views por pieza · Historias (3)");
+    const historias = screen.getByLabelText("Visualizaciones por pieza · Historias (3)");
     expect(historias).toHaveValue("");
     expect(historias.getAttribute("placeholder")).not.toBe("0");
     expect(historias).toHaveAttribute("placeholder", "p. ej. 25.000");

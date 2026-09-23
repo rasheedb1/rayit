@@ -2,13 +2,15 @@
 
 /**
  * Las Server Actions de Ventas: radar (VEN-2), empresas y contactos
- * (VEN-1) y el movimiento de negocios en el pipeline (VEN-3).
+ * (VEN-1) y el pipeline (VEN-3).
  *
- * Todas siguen la misma forma: zod valida lo que llega del formulario,
- * la consulta de @mc/db hace el trabajo dentro de `withWorkspace` y los
- * errores de dominio (VentasError) vuelven tal cual, porque ya están en
- * español. Cualquier otro error se registra y se resume: un mensaje de
- * Postgres no es algo que se le enseñe a una creadora.
+ * Todas siguen la misma forma: zod valida lo que llega del formulario
+ * (con los textos de MESSAGES.validacion), la consulta de @mc/db hace
+ * el trabajo dentro de `withWorkspace` y los errores de dominio vuelven
+ * como CÓDIGO (VentasError.code), que aquí se traduce con
+ * MESSAGES.errores —el mismo patrón que codigoDe() de Cotizar—. Cualquier
+ * otro error se registra y se resume: un mensaje de Postgres no es algo
+ * que se le enseñe a una creadora.
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -20,6 +22,7 @@ import {
   acceptSignal,
   createCompany,
   createContact,
+  createDeal,
   createSignal,
   discardSignal,
   importSignals,
@@ -28,8 +31,10 @@ import {
   updateCompany,
   type ContactSource,
   type Relationship,
+  type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
-import { UUID_RE, firstErrors, type ActionState } from "@/lib/forms";
+import { decodificarCsv } from "@/lib/csv";
+import { DECIMAL_RE, UUID_RE, firstErrors, formField as field, type ActionState } from "@/lib/forms";
 import { withWorkspace } from "./_lib/db";
 import { parseBrandCsv, type CsvLineError } from "./_lib/csv";
 import { fitFromPercent } from "./_lib/estado";
@@ -39,6 +44,8 @@ import { MESSAGES } from "./_lib/messages";
 export interface VentasState extends ActionState {
   /** Qué pasó, cuando salió bien («Anotada. Ya está en la bandeja.»). */
   notice?: string;
+  /** Un enlace para seguir desde el aviso («Ver el negocio»). */
+  link?: { href: string; label: string };
   /** Filas del CSV que no entraron, con su línea. */
   lineErrors?: CsvLineError[];
   /** Cambia con cada envío que sale bien: el formulario lo usa para vaciarse. */
@@ -48,18 +55,29 @@ export interface VentasState extends ActionState {
 /** Tamaño máximo de un CSV. Más que eso no es una lista de marcas para revisar a mano. */
 const MAX_CSV_BYTES = 1024 * 1024;
 
-const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
 const COUNTRY_RE = /^[A-Za-z]{2}$/;
+/**
+ * El id de una etapa: el nombre legible de una global ('propuesta') o
+ * el uuid al azar de una privada del workspace (0026 §2). Aquí solo se
+ * acota la forma; si EXISTE para este workspace lo decide moveDeal bajo
+ * RLS, que responde InvalidStage.
+ */
+const STAGE_ID_RE = /^[a-z_]{1,40}$/;
 
+const V = MESSAGES.validacion;
+const E = MESSAGES.errores;
+
+/**
+ * El texto de un error: el de su código si es de Ventas, el genérico de
+ * la acción si no (y entonces se registra: es un error que nadie previó).
+ */
 function messageOf(err: unknown, fallback: string): string {
-  if (err instanceof VentasError) return err.messageEs;
+  if (err instanceof VentasError && Object.hasOwn(E, err.code)) {
+    const m = E[err.code];
+    return typeof m === "function" ? m(err.params) : m;
+  }
   console.error("[ventas]", err);
   return fallback;
-}
-
-function field(formData: FormData, name: string): string {
-  const v = formData.get(name);
-  return typeof v === "string" ? v : "";
 }
 
 function revalidateVentas(companyId?: string): void {
@@ -69,8 +87,7 @@ function revalidateVentas(companyId?: string): void {
 }
 
 /** Texto opcional con tope; vacío es «no lo sé». */
-const optionalText = (max: number, label: string) =>
-  z.string().trim().max(max, `${label} no puede pasar de ${max} caracteres.`);
+const optionalText = (max: number, label: string) => z.string().trim().max(max, V.tooLong(label, max));
 
 const optionalUrl = (message: string) =>
   z
@@ -82,7 +99,7 @@ const optionalUrl = (message: string) =>
 const optionalCountry = z
   .string()
   .trim()
-  .refine((v) => v === "" || COUNTRY_RE.test(v), "El país va en dos letras: CO, MX, PE.");
+  .refine((v) => v === "" || COUNTRY_RE.test(v), V.country);
 
 // ---------------------------------------------------------------------
 // Radar · anotar una marca
@@ -90,20 +107,28 @@ const optionalCountry = z
 
 const senalSchema = z
   .object({
-    companyName: optionalText(200, "La marca"),
-    domain: optionalText(253, "El dominio"),
-    headline: z.string().trim().min(1, "Di en una línea qué viste.").max(280, "Una línea: hasta 280 caracteres."),
-    evidenceUrl: optionalUrl("El enlace tiene que empezar por http:// o https://."),
-    fit: z.string().refine((v) => fitFromPercent(v) !== undefined, "El encaje es un número de 0 a 100."),
-    budget: z.string().refine((v) => v === "" || DECIMAL_RE.test(v), "El presupuesto no es un monto válido."),
+    companyName: optionalText(200, V.campos.brand),
+    domain: optionalText(253, V.campos.domain),
+    headline: z.string().trim().min(1, V.headlineRequired).max(280, V.headlineTooLong),
+    evidenceUrl: optionalUrl(V.evidenceUrl),
+    fit: z.string().refine((v) => fitFromPercent(v) !== undefined, V.fit),
+    budget: z.string().refine((v) => v === "" || DECIMAL_RE.test(v), V.budget),
     country: optionalCountry,
-    industry: optionalText(120, "El sector"),
-    note: optionalText(1000, "La nota"),
+    industry: optionalText(120, V.campos.sector),
+    note: optionalText(1000, V.campos.note),
   })
   .refine((v) => v.companyName !== "" || v.domain !== "", {
     path: ["companyName"],
-    message: "Di de qué marca es: su nombre o su web.",
+    message: V.brandRequired,
   });
+
+/** Por qué una marca no entró al radar, dicho a la creadora. */
+function duplicateMessage(reason: SignalDuplicateReason | null): string {
+  const t = MESSAGES.radar.form;
+  if (reason === "pending") return t.duplicatePending;
+  if (reason === "discarded") return t.duplicateDiscarded;
+  return t.duplicate;
+}
 
 export async function anotarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const parsed = senalSchema.safeParse({
@@ -120,9 +145,9 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
 
-  let duplicate: boolean;
+  let res: { duplicate: boolean; reason: SignalDuplicateReason | null };
   try {
-    const res = await withWorkspace((tx) =>
+    res = await withWorkspace((tx) =>
       createSignal(tx, {
         companyName: v.companyName || null,
         domain: v.domain || null,
@@ -136,11 +161,10 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
         via: "manual",
       }),
     );
-    duplicate = res.duplicate;
   } catch (err) {
     return { message: messageOf(err, MESSAGES.radar.form.error) };
   }
-  if (duplicate) return { message: MESSAGES.radar.form.duplicate };
+  if (res.duplicate) return { message: duplicateMessage(res.reason) };
   revalidateVentas();
   return { ok: true, notice: MESSAGES.radar.form.created, stamp: Date.now() };
 }
@@ -155,7 +179,10 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
   const file = formData.get("file");
   if (file && typeof file !== "string" && file.size > 0) {
     if (file.size > MAX_CSV_BYTES) return { errors: { file: t.tooBig } };
-    text = await file.text();
+    // Como BYTES y no con file.text(), que solo entiende UTF-8: un CSV
+    // guardado en Excel para Windows en español (Windows-1252) dejaba
+    // «Vital�» en la empresa creada. El mismo decodificador que Resumen.
+    text = decodificarCsv(new Uint8Array(await file.arrayBuffer())).texto;
     // Un binario (un .xlsx renombrado) trae bytes nulos: no es texto.
     if (text.includes("\u0000")) return { errors: { file: t.notCsv } };
   }
@@ -169,7 +196,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
   let created: number;
   let duplicated: number;
   try {
-    const res = await withWorkspace((tx) => importSignals(tx, parsed.rows));
+    const res = await withWorkspace((tx) => importSignals(tx, parsed.rows, { headline: t.headline }));
     created = res.created;
     duplicated = res.duplicated;
   } catch (err) {
@@ -189,23 +216,41 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 // ---------------------------------------------------------------------
 
 export async function aceptarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = MESSAGES.radar;
   const signalId = field(formData, "signalId");
-  const name = field(formData, "companyName") || MESSAGES.radar.unknownBrand;
-  if (!UUID_RE.test(signalId)) return { message: MESSAGES.radar.acceptError };
-  let companyId: string;
+  if (!UUID_RE.test(signalId)) return { message: t.acceptError };
+  let res: Awaited<ReturnType<typeof acceptSignal>>;
   try {
-    const res = await withWorkspace((tx) => acceptSignal(tx, signalId));
-    companyId = res.companyId;
+    res = await withWorkspace((tx) =>
+      acceptSignal(tx, signalId, { nextAction: t.pitchAction, activityBody: t.acceptedActivity }),
+    );
   } catch (err) {
-    return { message: messageOf(err, MESSAGES.radar.acceptError) };
+    return { message: messageOf(err, t.acceptError) };
   }
-  revalidateVentas(companyId);
-  return { ok: true, notice: MESSAGES.radar.accepted(name), stamp: Date.now() };
+  revalidateVentas(res.companyId);
+  const name = res.companyName || field(formData, "companyName") || t.unknownBrand;
+  // La marca ya tenía un negocio abierto: la señal se sumó a ese, y el
+  // aviso lo dice con el enlace a la ficha donde está, en vez de abrir
+  // otro sin avisar.
+  if (!res.dealCreated) {
+    return {
+      ok: true,
+      notice: t.alreadyOpen(name),
+      link: { href: `/ventas/empresas/${res.companyId}`, label: t.seeDeal },
+      stamp: Date.now(),
+    };
+  }
+  return {
+    ok: true,
+    notice: t.accepted(name),
+    link: { href: "/ventas?vista=pipeline", label: t.goToDeal },
+    stamp: Date.now(),
+  };
 }
 
 const descartarSchema = z.object({
   signalId: z.string().regex(UUID_RE, MESSAGES.radar.discardError),
-  reason: z.string().trim().min(1, "Di por qué la descartas: es lo que afina el radar.").max(280, "El motivo cabe en 280 caracteres."),
+  reason: z.string().trim().min(1, V.reasonRequired).max(280, V.reasonTooLong),
 });
 
 export async function descartarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
@@ -224,18 +269,16 @@ export async function descartarSenal(_prev: VentasState, formData: FormData): Pr
 // Empresas
 // ---------------------------------------------------------------------
 
-const relationshipField = z
-  .string()
-  .refine((v) => RELATIONSHIPS.includes(v as Relationship), "Elige una relación de la lista.");
+const relationshipField = z.string().refine((v) => RELATIONSHIPS.includes(v as Relationship), V.relationship);
 
 const empresaSchema = z.object({
-  name: z.string().trim().min(1, "La empresa necesita un nombre.").max(200, "El nombre cabe en 200 caracteres."),
-  domain: optionalText(253, "El dominio"),
+  name: z.string().trim().min(1, V.companyName).max(200, V.companyNameTooLong),
+  domain: optionalText(253, V.campos.domain),
   country: optionalCountry,
-  city: optionalText(120, "La ciudad"),
-  industry: optionalText(120, "El sector"),
+  city: optionalText(120, V.campos.city),
+  industry: optionalText(120, V.campos.sector),
   relationship: relationshipField,
-  notes: optionalText(2000, "Las notas"),
+  notes: optionalText(2000, V.campos.notes),
 });
 
 /** «Nueva empresa»: la crea (o vincula la del catálogo) y abre su ficha. */
@@ -290,34 +333,66 @@ export async function cambiarRelacion(_prev: VentasState, formData: FormData): P
   return { ok: true, notice: MESSAGES.empresas.detail.relationshipSaved, stamp: Date.now() };
 }
 
+const negocioSchema = z.object({
+  companyId: z.string().regex(UUID_RE, V.company),
+  name: z.string().trim().min(1, V.dealName).max(120, V.dealName),
+  amount: z.string().trim().refine((v) => v === "" || (DECIMAL_RE.test(v) && v.length <= 15), V.amount),
+});
+
+/**
+ * «Nuevo negocio» desde la ficha de una empresa: abre uno a mano, sin
+ * pasar por el radar, y se queda en la ficha, donde aparece en la lista
+ * de negocios con su atajo a Cotizar.
+ */
+export async function crearNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = MESSAGES.empresas.detail.newDeal;
+  const parsed = negocioSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    name: field(formData, "name"),
+    amount: field(formData, "amount"),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+  try {
+    await withWorkspace((tx) =>
+      createDeal(tx, { companyId: v.companyId, name: v.name, amount: v.amount || null, nextAction: MESSAGES.radar.pitchAction }),
+    );
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    if (err instanceof VentasError && err.code === "InvalidDealName") return { errors: { name: message } };
+    if (err instanceof VentasError && err.code === "InvalidAmount") return { errors: { amount: message } };
+    return { message };
+  }
+  revalidateVentas(v.companyId);
+  return { ok: true, notice: t.created(v.name), stamp: Date.now() };
+}
+
 // ---------------------------------------------------------------------
 // Contactos
 // ---------------------------------------------------------------------
 
 const contactoSchema = z
   .object({
-    companyId: z.string().regex(UUID_RE, "La empresa no es válida."),
-    source: z
-      .string()
-      .refine((v) => CONTACT_SOURCES.includes(v as ContactSource), "Di de dónde sacaste el dato: sin eso no se guarda."),
-    fullName: optionalText(200, "El nombre"),
-    roleTitle: optionalText(120, "El cargo"),
+    companyId: z.string().regex(UUID_RE, V.company),
+    source: z.string().refine((v) => CONTACT_SOURCES.includes(v as ContactSource), V.source),
+    fullName: optionalText(200, V.campos.name),
+    roleTitle: optionalText(120, V.campos.role),
     email: z
       .string()
       .trim()
-      .max(254, "El correo no es válido.")
-      .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "El correo no es válido."),
-    phone: optionalText(40, "El teléfono"),
-    linkedinUrl: optionalUrl("El LinkedIn tiene que ser un enlace que empiece por https://."),
+      .max(254, V.email)
+      .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), V.email),
+    phone: optionalText(40, V.campos.phone),
+    linkedinUrl: optionalUrl(V.linkedin),
     instagramHandle: z
       .string()
       .trim()
-      .refine((v) => v === "" || /^@?[A-Za-z0-9._]{1,30}$/.test(v), "El usuario de Instagram no es válido."),
-    sourceUrl: optionalUrl("El enlace a la fuente tiene que empezar por http:// o https://."),
+      .refine((v) => v === "" || /^@?[A-Za-z0-9._]{1,30}$/.test(v), V.instagram),
+    sourceUrl: optionalUrl(V.sourceUrl),
   })
   .refine((v) => v.fullName !== "" || v.email !== "" || v.instagramHandle !== "", {
     path: ["fullName"],
-    message: "Escribe al menos el nombre, el correo o el Instagram.",
+    message: V.contactAtLeastOne,
   });
 
 export async function crearContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
@@ -384,9 +459,14 @@ export interface MoverResult {
  * Mueve un negocio de etapa. La llama el tablero al soltar una tarjeta
  * o al elegir en su menú, fuera de un formulario: por eso devuelve un
  * resultado en vez de un estado de useActionState.
+ *
+ * El id de etapa puede ser legible (las globales) o un uuid (las
+ * privadas del workspace, 0026 §2): se aceptan las dos formas y la
+ * existencia la decide moveDeal. Sacar de «Ganado» un negocio con
+ * campaña o cotización firmada vuelve con el motivo (DealLocked).
  */
 export async function moverNegocio(dealId: string, toStageId: string): Promise<MoverResult> {
-  if (!UUID_RE.test(dealId) || !/^[a-z_]{1,40}$/.test(toStageId)) {
+  if (!UUID_RE.test(dealId) || !(STAGE_ID_RE.test(toStageId) || UUID_RE.test(toStageId))) {
     return { ok: false, message: MESSAGES.pipeline.moveError };
   }
   try {

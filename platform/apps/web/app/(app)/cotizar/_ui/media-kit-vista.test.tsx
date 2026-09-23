@@ -42,10 +42,10 @@ describe("MediaKitVista", () => {
   it("la cifra grande de views dice de qué red sale: es la mediana de la mejor red, no la del creador", () => {
     render(<MediaKitVista snapshot={SNAPSHOT} />);
     const cifras = screen.getByRole("region", { name: "Cifras principales" });
-    expect(within(cifras).getByText("Views medianas · mejor red")).toBeInTheDocument();
+    expect(within(cifras).getByText("Visualizaciones medianas · mejor red")).toBeInTheDocument();
     expect(within(cifras).getByText("115,4 mil")).toBeInTheDocument();
     expect(within(cifras).getByText("TikTok")).toBeInTheDocument();
-    expect(within(cifras).queryByText("Views medianas")).not.toBeInTheDocument();
+    expect(within(cifras).queryByText("Visualizaciones medianas")).not.toBeInTheDocument();
   });
 
   it("un media kit anterior, sin la red de la mejor mediana, no la enseña en la cabecera (sí por red)", () => {

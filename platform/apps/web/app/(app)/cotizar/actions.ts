@@ -11,14 +11,13 @@ import {
 } from "@mc/db/queries/cotizar";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
-import { firstErrors, UUID_RE, type ActionState } from "@/lib/forms";
+import { DECIMAL_RE, firstErrors, formField, UUID_RE, type ActionState } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES, nombreEntregable } from "./messages";
 import { construirFilas, construirPaquetes, modificadoresActivos, precioDe, type BasisTarifario } from "./_lib/tarifario";
 import { TEXTOS_COTIZAR } from "./_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
 /** Un porcentaje de 0 a 100, con coma o punto y hasta dos decimales. 999 no pasa. */
 const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
 const FRACCION_RE = /^(0(\.\d{1,6})?|1(\.0{1,6})?)$/;
@@ -94,7 +93,7 @@ const basisSchema = z.object({
  * `adjustments`.
  */
 export async function guardarTarifario(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const creatorId = String(formData.get("creatorId") ?? "");
+  const creatorId = formField(formData, "creatorId");
   if (!UUID_RE.test(creatorId)) return { message: E.CreatorNotFound };
 
   let basis: BasisTarifario;
@@ -190,9 +189,9 @@ const mediaKitSchema = z.object({
 
 export async function generarMediaKit(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const parsed = mediaKitSchema.safeParse({
-    creatorId: String(formData.get("creatorId") ?? ""),
-    password: String(formData.get("password") ?? "").trim(),
-    expiresOn: String(formData.get("expiresOn") ?? ""),
+    creatorId: formField(formData, "creatorId"),
+    password: formField(formData, "password").trim(),
+    expiresOn: formField(formData, "expiresOn"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
@@ -324,7 +323,7 @@ export async function crearCotizacion(_prev: ActionState, formData: FormData): P
   let id: string;
   try {
     const quote = await withWorkspace(async (tx) => {
-      const inputs = await getRateCardInputs(tx, String(formData.get("creatorId") ?? ""));
+      const inputs = await getRateCardInputs(tx, formField(formData, "creatorId"));
       if (!inputs) throw new CotizarError("CreatorNotFound", E.CreatorNotFound!);
       return createQuote(tx, { dealId: v.dealId, creatorId: inputs.creatorId, ...aConsulta(v) });
     });
@@ -406,8 +405,8 @@ const ventanaSchema = z.object({
 export async function crearCampanaConVentana(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
   const parsed = ventanaSchema.safeParse({
-    startsOn: String(formData.get("startsOn") ?? ""),
-    endsOn: String(formData.get("endsOn") ?? ""),
+    startsOn: formField(formData, "startsOn"),
+    endsOn: formField(formData, "endsOn"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const { startsOn, endsOn } = parsed.data;

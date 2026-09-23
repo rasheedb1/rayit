@@ -269,7 +269,7 @@ describe("el correo del seed (terminado cuando: «se entra con el correo del see
    * ese correo crea un espacio NUEVO y vacío. Está en apps/web/README.md,
    * «Cómo probarlo sin esperar un correo».
    */
-  const CORREO_SEED = "demo@multicampaign.test";
+  const CORREO_SEED = "demo@oncue.test";
 
   test("entra a la creadora demo, con sus datos, y no crea ningún espacio", async () => {
     const entrada = await registrarEntrada({ email: CORREO_SEED, authUserId: AUTH.seed });

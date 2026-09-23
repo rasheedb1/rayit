@@ -32,3 +32,19 @@ export function firstErrors(issues: { path: PropertyKey[]; message: string }[]):
   }
   return out;
 }
+
+/**
+ * Un monto como lo escribe un formulario: dígitos y, si hay, hasta dos
+ * decimales con punto ("1500000", "1500000.50"). Vivía copiado en cada
+ * módulo (Ventas, Cotizar, Finanzas); una sola definición no diverge.
+ */
+export const DECIMAL_RE = /^\d+(\.\d{1,2})?$/;
+
+/**
+ * El valor de texto de un campo del FormData, o "" si no vino o es un
+ * archivo. Es lo que zod recibe: un campo vacío es "", no null.
+ */
+export function formField(formData: FormData, name: string): string {
+  const v = formData.get(name);
+  return typeof v === "string" ? v : "";
+}

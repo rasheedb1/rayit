@@ -292,7 +292,7 @@ correo conservado, sin volver al formulario vacío.
 
 ### Cómo probarlo sin esperar un correo
 
-**El correo de la creadora demo del seed es `demo@multicampaign.test`**
+**El correo de la creadora demo del seed es `demo@oncue.test`**
 (`db/seed/0002`). El seed `0003` escribe `laura@ejemplo.com`, pero con
 `ON CONFLICT DO NOTHING`, así que no cambia nada: entrar con ese
 otro correo crea un espacio **nuevo y vacío** llamado «Laura». Y un
@@ -307,7 +307,7 @@ curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"type":"magiclink","email":"demo@multicampaign.test",
+  -d '{"type":"magiclink","email":"demo@oncue.test",
        "options":{"redirect_to":"http://localhost:3100/auth/callback"}}'
 ```
 

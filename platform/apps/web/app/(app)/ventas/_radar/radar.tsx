@@ -31,6 +31,9 @@ export interface SignalCardData {
 
 type Panel = "none" | "manual" | "csv";
 
+/** El aviso de arriba de la bandeja: qué pasó y, si hay, adónde seguir. */
+type AvisoRadar = { notice?: string; message?: string; link?: { href: string; label: string } };
+
 /**
  * La bandeja del radar con sus herramientas: anotar una marca, cargar
  * una lista, y aceptar o descartar cada señal.
@@ -42,7 +45,7 @@ type Panel = "none" | "manual" | "csv";
 export function Radar({ cards, currency }: { cards: SignalCardData[]; currency: string }) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
-  const [aviso, setAviso] = useState<{ notice?: string; message?: string; toPipeline?: boolean } | null>(null);
+  const [aviso, setAviso] = useState<AvisoRadar | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   function open(next: Panel) {
@@ -79,9 +82,9 @@ export function Radar({ cards, currency }: { cards: SignalCardData[]; currency: 
       {aviso && (
         <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
           <Aviso message={aviso.message} notice={aviso.notice} className="flex-1" />
-          {aviso.toPipeline && (
-            <Link href="/ventas?vista=pipeline" className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
-              {t.goToDeal}
+          {aviso.link && (
+            <Link href={aviso.link.href} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+              {aviso.link.label}
             </Link>
           )}
         </div>
@@ -111,7 +114,7 @@ function SignalCard({
   onResult,
 }: {
   card: SignalCardData;
-  onResult: (aviso: { notice?: string; message?: string; toPipeline?: boolean }) => void;
+  onResult: (aviso: AvisoRadar) => void;
 }) {
   const t = MESSAGES.radar;
   const [discarding, setDiscarding] = useState(false);
@@ -123,7 +126,7 @@ function SignalCard({
 
   function report(res: VentasState, kind: "accept" | "discard") {
     if (res.ok) {
-      onResult({ notice: res.notice, toPipeline: kind === "accept" });
+      onResult({ notice: res.notice, link: res.link });
       return;
     }
     if (res.errors?.reason) setReasonError(res.errors.reason);

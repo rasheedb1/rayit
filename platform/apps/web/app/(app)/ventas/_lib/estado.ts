@@ -5,8 +5,9 @@
  *
  * Todo aquí es puro y está probado. La regla del repositorio es que un
  * componente de React no decide colores ni etiquetas por su cuenta: si
- * mañana «prospect» pasa a llamarse de otro modo, se cambia en un sitio
- * y no en cinco pantallas.
+ * mañana «prospect» pasa a llamarse de otro modo, se cambia en
+ * messages.ts y no en cinco pantallas. Aquí se decide el color; el
+ * texto sale de messages.ts.
  */
 import type { ContactSource, DueState, Relationship, SignalStatus } from "@mc/db/queries/ventas";
 import type { PillKind } from "@/components/ui/pill";
@@ -61,12 +62,13 @@ export const MODULE_LINKS: { href: string; label: string; exact: boolean }[] = [
 // Relación con la empresa
 // ---------------------------------------------------------------------
 
+/** La etiqueta sale de messages.ts; aquí solo se decide el color. */
 export const RELATIONSHIP_META: Record<Relationship, { label: string; kind: PillKind }> = {
-  prospect: { label: "Prospecto", kind: "neutral" },
-  contacted: { label: "Contactada", kind: "warn" },
-  client: { label: "Cliente", kind: "good" },
-  past_client: { label: "Cliente anterior", kind: "neutral" },
-  blocked: { label: "Bloqueada", kind: "bad" },
+  prospect: { label: MESSAGES.relaciones.prospect, kind: "neutral" },
+  contacted: { label: MESSAGES.relaciones.contacted, kind: "warn" },
+  client: { label: MESSAGES.relaciones.client, kind: "good" },
+  past_client: { label: MESSAGES.relaciones.past_client, kind: "neutral" },
+  blocked: { label: MESSAGES.relaciones.blocked, kind: "bad" },
 };
 
 /** Las opciones del selector de relación, en el orden en que se recorre una venta. */
@@ -79,18 +81,10 @@ export const RELATIONSHIP_OPTIONS: { value: Relationship; label: string }[] = (
 // ---------------------------------------------------------------------
 
 /**
- * Cada fuente con su etiqueta y una ayuda que dice cuándo usarla. La
- * ayuda no es decorativa: elegir bien la procedencia es lo que separa
- * un contacto que se puede usar de uno que no.
+ * Cada fuente con su etiqueta y una ayuda que dice cuándo usarla; los
+ * textos viven en messages.ts (MESSAGES.procedencias).
  */
-export const SOURCE_META: Record<ContactSource, { label: string; help: string }> = {
-  public_website: { label: "Web de la empresa", help: "Estaba publicado en su sitio (equipo, contacto, prensa)." },
-  public_profile: { label: "Perfil público", help: "Su LinkedIn, su Instagram o su perfil profesional abierto." },
-  user_provided: { label: "Me lo dieron", help: "Te lo pasó alguien, o lo diste tú en una reunión." },
-  inbound: { label: "Te escribió", help: "Llegó por un mensaje, un formulario o un comentario." },
-  enrichment_vendor: { label: "Proveedor de datos", help: "Vino de una herramienta de enriquecimiento con licencia." },
-  press: { label: "Prensa", help: "Salió en una nota, un comunicado o una entrevista." },
-};
+export const SOURCE_META: Record<ContactSource, { label: string; help: string }> = MESSAGES.procedencias;
 
 export const SOURCE_OPTIONS: { value: ContactSource; label: string }[] = (
   ["public_website", "public_profile", "inbound", "user_provided", "press", "enrichment_vendor"] as const
@@ -101,11 +95,11 @@ export const SOURCE_OPTIONS: { value: ContactSource; label: string }[] = (
 // ---------------------------------------------------------------------
 
 export const SIGNAL_STATUS_META: Record<SignalStatus, { label: string; kind: PillKind }> = {
-  pending: { label: "Por revisar", kind: "warn" },
-  accepted: { label: "Aceptada", kind: "good" },
-  discarded: { label: "Descartada", kind: "neutral" },
-  expired: { label: "Vencida", kind: "neutral" },
-  duplicate: { label: "Repetida", kind: "neutral" },
+  pending: { label: MESSAGES.estadosSenal.pending, kind: "warn" },
+  accepted: { label: MESSAGES.estadosSenal.accepted, kind: "good" },
+  discarded: { label: MESSAGES.estadosSenal.discarded, kind: "neutral" },
+  expired: { label: MESSAGES.estadosSenal.expired, kind: "neutral" },
+  duplicate: { label: MESSAGES.estadosSenal.duplicate, kind: "neutral" },
 };
 
 // ---------------------------------------------------------------------

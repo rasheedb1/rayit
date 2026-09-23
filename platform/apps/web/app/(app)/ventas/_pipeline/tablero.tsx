@@ -23,6 +23,8 @@ export interface BoardDeal {
   /** Null en los cerrados: a un negocio ganado no le vence nada. */
   due: { kind: PillKind; text: string } | null;
   needsNextAction: boolean;
+  /** A dónde lleva «Cotizar»; null en los cerrados. */
+  quoteHref: string | null;
 }
 
 /** Una columna con su cabecera ya contada y sumada en SQL. */
@@ -210,6 +212,17 @@ function DealCard({
             <span className="text-warn">{t.noNextAction}</span>
           )}
         </p>
+      )}
+
+      {deal.quoteHref && (
+        <Link
+          href={deal.quoteHref}
+          draggable={false}
+          aria-label={t.quoteLabel(deal.companyName)}
+          className="mt-2 inline-block text-xs text-ink underline underline-offset-4 hover:text-ink-2"
+        >
+          {t.quote}
+        </Link>
       )}
 
       <label htmlFor={selectId} className="sr-only">

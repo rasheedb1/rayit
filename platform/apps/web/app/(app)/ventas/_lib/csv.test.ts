@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { decodificarCsv } from "@/lib/csv";
 import { MAX_CSV_ROWS, parseBrandCsv, splitCsv } from "./csv";
 
 describe("parseBrandCsv", () => {
@@ -46,6 +47,42 @@ describe("parseBrandCsv", () => {
     expect(r.rows).toHaveLength(MAX_CSV_ROWS);
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0]?.message).toMatch(/pasa de 500/);
+  });
+});
+
+/**
+ * Un CSV como lo guarda Excel para Windows en español: Windows-1252, un
+ * byte por letra («é» es 0xE9) y punto y coma. Se escribe byte a byte
+ * porque TextEncoder solo sabe UTF-8.
+ */
+function windows1252(text: string): Uint8Array {
+  return Uint8Array.from([...text].map((ch) => {
+    const code = ch.charCodeAt(0);
+    if (code > 0xff) throw new Error(`«${ch}» no cabe en un byte`);
+    return code;
+  }));
+}
+
+describe("la lista de marcas guardada en Excel (Windows-1252)", () => {
+  const archivo = windows1252("Marca;Dominio;País\r\nVitalé;vitale.co;CO\r\nLácteos del Sur;;CO\r\nPanadería Ñapa;;CO\r\n");
+
+  it("leída como UTF-8 rompe las tildes: por eso no se usa file.text()", () => {
+    expect(new TextDecoder("utf-8").decode(archivo)).toContain("Vital�");
+  });
+
+  it("con el decodificador compartido con Resumen, los nombres llegan enteros", () => {
+    const { texto, codificacion } = decodificarCsv(archivo);
+    expect(codificacion).toBe("windows-1252");
+    const r = parseBrandCsv(texto);
+    expect(r.errors).toEqual([]);
+    expect(r.rows.map((x) => x.name)).toEqual(["Vitalé", "Lácteos del Sur", "Panadería Ñapa"]);
+    expect(r.rows[0]).toMatchObject({ domain: "vitale.co", country: "CO" });
+  });
+
+  it("un CSV en UTF-8 se sigue leyendo como UTF-8", () => {
+    const { texto, codificacion } = decodificarCsv(new TextEncoder().encode("marca\nVitalé\n"));
+    expect(codificacion).toBe("utf-8");
+    expect(parseBrandCsv(texto).rows[0]?.name).toBe("Vitalé");
   });
 });
 

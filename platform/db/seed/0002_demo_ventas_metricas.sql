@@ -179,7 +179,7 @@ ON CONFLICT DO NOTHING;
 -- last_seen_at se refresca en cada corrida: es la última visita, no
 -- una métrica.
 INSERT INTO app_user (id, email, name, locale, last_seen_at)
-VALUES ('00000002-0000-4000-8000-000000000002', 'demo@multicampaign.test', 'Laura Méndez', 'es-CO', now() - interval '2 hours')
+VALUES ('00000002-0000-4000-8000-000000000002', 'demo@oncue.test', 'Laura Méndez', 'es-CO', now() - interval '2 hours')
 ON CONFLICT (id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at;
 
 INSERT INTO membership (workspace_id, user_id, role)
@@ -1542,6 +1542,22 @@ VALUES
    94000, 61000, 5900, 1200, 480, 700, 0.49180, NULL,
    NULL, NULL, NULL, 42, 1100000.00, 'COP', 11702.13, NULL, 26190.48, NULL, '{brand_followers}')
 ON CONFLICT DO NOTHING;
+
+
+-- =====================================================================
+-- 14 · El correo de la creadora de demo, con el nombre del producto
+-- ---------------------------------------------------------------------
+-- La cuenta de demo se llamaba demo@multicampaign.test, el nombre viejo
+-- del producto, y salía tal cual en el selector de sesión. El INSERT de
+-- arriba ya la crea como demo@oncue.test; esto corrige la fila de una
+-- base sembrada antes, porque ese INSERT solo actualiza last_seen_at al
+-- chocar. Idempotente: por id y solo si sigue con el correo viejo.
+-- (La cuenta de Supabase Auth con el correo viejo, si existe, se
+-- renombra a mano: la sesión encuentra app_user por correo.)
+UPDATE app_user
+   SET email = 'demo@oncue.test'
+ WHERE id = '00000002-0000-4000-8000-000000000002'
+   AND email = 'demo@multicampaign.test';
 
 
 -- =====================================================================

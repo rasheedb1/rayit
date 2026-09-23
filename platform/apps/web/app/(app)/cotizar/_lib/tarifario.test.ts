@@ -179,9 +179,9 @@ describe("explicarPasos", () => {
       .find((x) => x.def.id === "tiktok")!;
     const pasos = explicarPasos(calcularItem(fila.entrada!).pasos, "COP", f);
 
-    expect(pasos[0]).toBe("Tus views medianas: 84.000 (últimos 20 videos, medidos a las 168 h)");
+    expect(pasos[0]).toBe("Tus visualizaciones medianas: 84.000 (últimos 20 videos, medidos a las 168 h)");
     expect(pasos[1]).toBe("CPM de referencia de cocina en CO: COP 45.000 – COP 70.000 (estimación de mercado)");
-    expect(pasos[2]).toBe("Views ÷ 1.000 × CPM = COP 3.780.000 – COP 5.880.000");
+    expect(pasos[2]).toBe("Visualizaciones ÷ 1.000 × CPM = COP 3.780.000 – COP 5.880.000");
     expect(pasos[3]).toBe("Derechos de uso · 30 días (35 %): + COP 1.323.000 – COP 2.058.000");
     expect(pasos.at(-1)).toBe("Rango sugerido: COP 5.103.000 – COP 7.938.000");
   });

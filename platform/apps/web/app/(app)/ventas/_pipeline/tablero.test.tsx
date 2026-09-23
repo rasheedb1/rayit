@@ -25,6 +25,7 @@ const deals: BoardDeal[] = [
     nextActionDueText: "23 sep",
     due: { kind: "neutral", text: "Al día" },
     needsNextAction: false,
+    quoteHref: `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
   },
 ];
 
@@ -72,6 +73,30 @@ describe("PipelineBoard", () => {
       fireEvent.drop(target, { dataTransfer });
     });
     expect(moverNegocio).toHaveBeenCalledWith(DEAL, "ganado");
+  });
+
+  it("cada negocio abierto lleva a Cotizar con el negocio ya elegido", () => {
+    render(<PipelineBoard deals={deals} stages={stages} />);
+    expect(screen.getByRole("link", { name: "Cotizar el negocio con Café Alma" })).toHaveAttribute(
+      "href",
+      `/cotizar/cotizaciones/nueva?negocio=${DEAL}`,
+    );
+  });
+
+  it("un negocio cerrado no ofrece Cotizar", () => {
+    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} />);
+    expect(screen.queryByRole("link", { name: /Cotizar/ })).toBeNull();
+  });
+
+  it("si el servidor no deja reabrir un ganado, lo dice con su motivo", async () => {
+    const motivo = "Este negocio tiene una campaña en curso: no sale de «Ganado» mientras la campaña siga viva. Cancélala en Campañas si el acuerdo se cayó.";
+    moverNegocio.mockResolvedValue({ ok: false, message: motivo });
+    render(<PipelineBoard deals={[{ ...deals[0]!, stageId: "ganado", stageLabel: "Ganado", quoteHref: null }]} stages={stages} />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "nuevo" } });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("campaña en curso");
+    expect(within(screen.getByTestId("columna-ganado")).getByText("Café Alma")).toBeInTheDocument();
   });
 
   it("el menú no ofrece la etapa en la que ya está", () => {

@@ -195,7 +195,7 @@ idioma del snapshot, y `idiomaDocumento` devolverá el locale entero.
   escribe el suyo. La consulta prefiere la moneda del workspace cuando
   hay referencias en varias.
 - **La cifra grande de views del media kit es la de la mejor red**, y se
-  rotula así («Views medianas · mejor red» + la red). Los totales salen
+  rotula así («Visualizaciones medianas · mejor red» + la red). Los totales salen
   de SQL. Los media kits generados antes de la ronda 4 no guardaron la
   red y no enseñan esa cifra en la cabecera (sí en la lista por red).
 - **El media kit que acompaña una cotización se elige en el formulario**

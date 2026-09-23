@@ -31,13 +31,13 @@ export function NuevaSenalForm({ currency, onCancel }: { currency: string; onCan
           <Input name="companyName" autoComplete="off" maxLength={200} />
         </Field>
         <Field label={t.domain} help={t.domainHelp} error={errors.domain} htmlFor="senal-domain">
-          <Input name="domain" autoComplete="off" inputMode="url" placeholder="cafealma.co" maxLength={253} />
+          <Input name="domain" autoComplete="off" inputMode="url" placeholder={MESSAGES.empresas.form.domainPlaceholder} maxLength={253} />
         </Field>
         <Field label={t.headline} help={t.headlineHelp} error={errors.headline} required htmlFor="senal-headline" className="sm:col-span-2">
           <Input name="headline" maxLength={280} />
         </Field>
         <Field label={t.evidence} error={errors.evidenceUrl} htmlFor="senal-evidence" className="sm:col-span-2">
-          <Input name="evidenceUrl" type="url" inputMode="url" placeholder="https://" />
+          <Input name="evidenceUrl" type="url" inputMode="url" placeholder={MESSAGES.contacto.urlPlaceholder} />
         </Field>
         <Field label={t.fit} help={t.fitHelp} error={errors.fit} htmlFor="senal-fit">
           <Input name="fit" inputMode="decimal" maxLength={5} />
