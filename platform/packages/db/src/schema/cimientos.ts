@@ -25,6 +25,8 @@ export const NOTIFICATION_KINDS = [
   'quote_accepted',
   // 0030 (pulido r6): el techo de contraseñas fallidas bloqueó un media kit para todos.
   'media_kit_locked',
+  // 0038: un toque de outreach que no salió para siempre, y una respuesta de la marca (VEN-10).
+  'outreach_failed', 'outreach_reply',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

@@ -9,7 +9,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
-import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
+import { citext, country, createdAt, currency, localTime, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 // CICLO DE IMPORT, a propósito: outreach.ts también importa de aquí (el
@@ -18,7 +18,7 @@ import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts'
 // evalúa después de cargar los dos módulos; nada de outreach.ts se lee
 // al cargar este. Por eso OUTBOUND_CHANNELS, que sí se lee al cargar,
 // vive en _canales.ts y no en ninguno de los dos.
-import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
+import { outboundEnrollment, outboundSequenceTemplate, outboundStep, outreachChannelAccount } from './outreach.ts';
 
 export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
 
@@ -311,6 +311,9 @@ export const outboundPolicy = pgTable('outbound_policy', {
   postalAddress: text('postal_address'),
   /** Contrapresión: con más toques en cola, should_pause_outreach dice que se pare. */
   maxPendingTouches: integer('max_pending_touches').default(200).notNull(),
+  /** La ventana laboral local en la que sale un toque (0038 §1), en la zona de la cadencia. */
+  sendWindowStart: localTime('send_window_start').default('09:00').notNull(),
+  sendWindowEnd: localTime('send_window_end').default('17:00').notNull(),
 });
 
 export const outboundSequence = pgTable('outbound_sequence', {
@@ -384,4 +387,9 @@ export const outboundTouch = pgTable('outbound_touch', {
   /** La hora del último cambio de estado; solo se mueve con él (disparador). */
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
+  /**
+   * La cuenta que envía el toque (0038 §2): la fija el despachador al
+   * reclamarlo, y es del mismo workspace y canal (disparador).
+   */
+  channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
 });
