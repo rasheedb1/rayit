@@ -50,14 +50,18 @@ export interface MyWorkspace {
  * «Laura Mendez». No adivina tildes ni apellidos; es el valor inicial
  * que la persona edita en /cuenta, igual que el nombre del espacio.
  *
+ * La subdirección se descarta: «laura+marcas@x.com» es Laura, no
+ * «Laura Marcas». Muchas creadoras separan con un alias el correo de
+ * cada marca, y el sufijo terminaba siendo el nombre del espacio.
+ *
  * Si el correo no da nada legible (cifras, una sola letra) devuelve
  * null y quien llama decide el texto por defecto: aquí no se inventan
  * cadenas de interfaz, que además irían en un solo idioma.
  */
 export function nameFromEmail(email: string): string | null {
-  const local = email.split('@')[0] ?? '';
+  const local = (email.split('@')[0] ?? '').split('+')[0] ?? '';
   const words = local
-    .split(/[._\-+]+/)
+    .split(/[._\-]+/)
     .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
     .filter((w) => w.length > 0 && /\p{L}/u.test(w));
   if (words.length === 0) return null;
@@ -79,10 +83,12 @@ export function slugify(text: string): string {
 }
 
 /**
- * El primer slug libre a partir de un nombre. `workspace` no lleva RLS
- * —es la tabla de tenencia, no una tabla de tenant— así que la
- * comprobación ve todos los slugs, que es justo lo que hace falta para
- * no chocar contra su índice único dentro de la transacción.
+ * El primer slug libre a partir de un nombre. Hoy `workspace` no lleva
+ * RLS, así que la comprobación ve todos los slugs. Es una SUGERENCIA,
+ * no una garantía: dos altas a la vez pueden elegir el mismo, y el
+ * pase de endurecimiento pone RLS en `workspace` (entonces solo se ve
+ * el propio). Quien garantiza que no choque es createCreatorWorkspace,
+ * que reintenta contra el índice único.
  */
 export async function freeSlug(tx: IdentityTx | WorkspaceTx, name: string): Promise<string> {
   const base = slugify(name);
@@ -304,19 +310,28 @@ export async function createCreatorWorkspace(tx: WorkspaceTx, e: NuevoEspacio): 
       `createCreatorWorkspace tiene que correr dentro de withWorkspace(${e.workspaceId}): la transacción fijó ${tx.workspaceId}.`,
     );
   }
-  const [ws] = await tx.db
-    .insert(workspace)
-    .values({
-      id: e.workspaceId,
-      slug: e.slug,
-      name: e.name,
-      kind: 'creator',
-      ...(e.locale ? { locale: e.locale } : {}),
-      ...(e.currency ? { currency: e.currency } : {}),
-      ...(e.timezone ? { timezone: e.timezone } : {}),
-      ...(e.country ? { country: e.country } : {}),
-    })
-    .returning();
+  // El slug que llega es una sugerencia (freeSlug). El único que decide
+  // es el índice: ON CONFLICT (slug) DO NOTHING no necesita VER la fila
+  // que choca —vale igual con RLS en workspace— y si no inserta nada se
+  // prueba el siguiente sufijo.
+  let ws: typeof workspace.$inferSelect | undefined;
+  for (let i = 0; i < 50 && !ws; i++) {
+    const slug = i === 0 ? e.slug : `${e.slug}-${i + 1}`;
+    [ws] = await tx.db
+      .insert(workspace)
+      .values({
+        id: e.workspaceId,
+        slug: i < 49 ? slug : `${e.slug}-${Date.now().toString(36)}`,
+        name: e.name,
+        kind: 'creator',
+        ...(e.locale ? { locale: e.locale } : {}),
+        ...(e.currency ? { currency: e.currency } : {}),
+        ...(e.timezone ? { timezone: e.timezone } : {}),
+        ...(e.country ? { country: e.country } : {}),
+      })
+      .onConflictDoNothing({ target: workspace.slug })
+      .returning();
+  }
   if (!ws) throw new Error('No se pudo crear el espacio: la base no devolvió la fila de workspace.');
 
   await tx.db.insert(membership).values({ workspaceId: ws.id, userId: e.userId, role: 'owner' });
@@ -327,4 +342,42 @@ export async function createCreatorWorkspace(tx: WorkspaceTx, e: NuevoEspacio): 
   });
 
   return { id: ws.id, name: ws.name, slug: ws.slug, kind: ws.kind, role: 'owner' };
+}
+
+/**
+ * Renombra el espacio de la transacción y, si su ficha de creador
+ * todavía lleva el nombre con el que nació, también la ficha.
+ *
+ * Se llama DENTRO de `withWorkspace(id, …)`: la fila que se toca es la
+ * de `tx.workspaceId`, nunca un id que venga de fuera, y la RLS de
+ * creator_profile acota la segunda escritura al mismo espacio. Quién
+ * puede renombrar (owner o admin) lo comprueba quien llama, contra sus
+ * membresías.
+ *
+ * La ficha solo se toca cuando su display_name es igual al nombre
+ * VIEJO del espacio, que es como la deja createCreatorWorkspace. Si la
+ * creadora ya le puso otro nombre a su ficha, renombrar el espacio no
+ * se lo pisa.
+ *
+ * Devuelve false si el espacio no existe (o la transacción no lo ve).
+ */
+export async function renameWorkspace(tx: WorkspaceTx, name: string): Promise<boolean> {
+  const limpio = name.trim();
+  if (!limpio) throw new Error('renameWorkspace necesita un nombre.');
+  const [antes] = await tx.db
+    .select({ name: workspace.name })
+    .from(workspace)
+    .where(eq(workspace.id, tx.workspaceId))
+    .limit(1);
+  if (!antes) return false;
+
+  await tx.db
+    .update(workspace)
+    .set({ name: limpio, updatedAt: sql`now()` })
+    .where(eq(workspace.id, tx.workspaceId));
+  await tx.db
+    .update(creatorProfile)
+    .set({ displayName: limpio, updatedAt: sql`now()` })
+    .where(and(eq(creatorProfile.workspaceId, tx.workspaceId), eq(creatorProfile.displayName, antes.name)));
+  return true;
 }

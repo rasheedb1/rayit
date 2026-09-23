@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
 import { isAuthConfigured } from "@/lib/auth/config";
 import { MESSAGES } from "@/lib/auth/messages";
+import { getSesion } from "@/lib/auth/session";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { inicial } from "@/lib/workspace/inicial";
@@ -38,9 +39,13 @@ type Vista =
 
 const datos = cache(async (): Promise<Vista | null> => {
   try {
+    // Primero la sesión, y solo después el contexto: con llaves y sin
+    // sesión, getCurrentContext manda a /login (falla cerrado), y en una
+    // ruta pública del grupo (app) como /kit el marco tiene que poder
+    // pintarse igual, con el enlace para entrar.
+    if (isAuthConfigured() && !(await getSesion())) return { modo: "entrar" };
     const { workspaceId, sesion, workspaces } = await getCurrentContext();
     if (!sesion) {
-      if (isAuthConfigured()) return { modo: "entrar" };
       const ws = await withWorkspaceId(workspaceId, (tx) => getWorkspaceSettings(tx));
       return { modo: "demo", actual: { id: ws.id, name: ws.name } };
     }

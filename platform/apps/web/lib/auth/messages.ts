@@ -62,6 +62,10 @@ export const MESSAGES = {
       // Los textos de la URL (?error=) los pone /auth/callback; /login
       // los muestra tal cual, sin exponer nada del proveedor.
       enlace: "Ese enlace ya no sirve. Pide uno nuevo.",
+      // El enlace se abrió en un navegador distinto del que lo pidió
+      // (otro dispositivo, o el navegador interno de la app de correo).
+      otroNavegador:
+        "Abre el enlace en el mismo navegador donde lo pediste, o pide uno nuevo desde aquí y ábrelo en este.",
       cancelado: "Se canceló la entrada.",
       sesion: "No pudimos abrir tu sesión. Vuelve a intentarlo.",
     },
@@ -87,7 +91,31 @@ export const MESSAGES = {
     volver: "Volver a Resumen",
     cerrarSesion: "Cerrar sesión",
     espacios: "Tus espacios",
-    rol: { owner: "Dueña", admin: "Administra", member: "Miembro", viewer: "Mira", client: "Cliente" },
+    // Etiquetas neutras: se le muestran a cualquier persona, y el rol
+    // describe un permiso, no a quien lo tiene.
+    rol: {
+      owner: "Propietario/a",
+      admin: "Administrador/a",
+      member: "Miembro",
+      viewer: "Solo lectura",
+      client: "Cliente",
+    },
+    renombrar: {
+      accion: "Renombrar",
+      etiqueta: (espacio: string) => `Nuevo nombre para ${espacio}`,
+      guardar: "Guardar",
+      guardando: "Guardando…",
+      cancelar: "Cancelar",
+      guardado: "Nombre del espacio guardado.",
+      ayuda:
+        "Quien administra un espacio puede renombrarlo. Si tu ficha de creador lleva el mismo nombre que el espacio, cambia con él.",
+      errores: {
+        nombreVacio: "Escribe un nombre para el espacio.",
+        nombreLargo: "El nombre no puede pasar de 80 caracteres.",
+        sinPermiso: "Solo quien administra el espacio puede cambiarle el nombre.",
+        generico: "No pudimos cambiar el nombre. Vuelve a intentarlo.",
+      },
+    },
     demo: {
       titulo: "Estás viendo la demostración",
       descripcion: "No hay sesión iniciada: la aplicación sirve el espacio de ejemplo del seed.",
@@ -135,6 +163,13 @@ export const MESSAGES = {
 
   selector: {
     etiqueta: "Cambiar de espacio",
+    /**
+     * El nombre accesible del disparador. Empieza por el nombre VISIBLE
+     * del espacio (WCAG 2.5.3): quien usa un lector de pantalla oye en
+     * qué espacio está, y quien usa control por voz puede decir lo que
+     * ve.
+     */
+    disparador: (espacio: string) => `${espacio} · Cambiar de espacio`,
     espacios: "Tus espacios",
     crear: "Crear espacio",
     crearNombre: "Nombre del espacio",
@@ -148,6 +183,7 @@ export const MESSAGES = {
       creadoSinRecordar:
         "El espacio se creó, pero no podemos recordarlo en esta máquina: falta TOKEN_ENCRYPTION_KEY (make db.unlock). Entra a él desde la lista.",
       nombreVacio: "Escribe un nombre.",
+      limite: (tope: number) => `Ya eres propietario/a de ${tope} espacios, el máximo por persona. Escríbenos si necesitas más.`,
       generico: "No pudimos cambiar de espacio. Vuelve a intentarlo.",
     },
   },

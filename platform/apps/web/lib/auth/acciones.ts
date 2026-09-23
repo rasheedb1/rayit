@@ -3,7 +3,9 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createCreatorWorkspace, freeSlug, isMemberOf, updateMyName } from "@mc/db/queries/identidad";
+import {
+  createCreatorWorkspace, freeSlug, isMemberOf, listMyWorkspaces, renameWorkspace, updateMyName,
+} from "@mc/db/queries/identidad";
 import { isUuid } from "@mc/db";
 import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
@@ -13,11 +15,10 @@ import { MESSAGES } from "./messages";
 import { createServerSupabase } from "./supabase";
 
 /**
- * Las tres cosas que se hacen con la sesión desde la interfaz: cambiar
- * de espacio, crear uno y salir. Están juntas porque las tres tocan lo
- * mismo (la cookie `mc.workspace`) y ninguna de las tres puede confiar
- * en lo que le llega del formulario: el espacio se comprueba SIEMPRE
- * contra la membresía antes de recordarlo.
+ * Lo que se hace con la sesión desde la interfaz: cambiar de espacio,
+ * crear uno, renombrarlo, cambiar mi nombre y salir. Ninguna puede
+ * confiar en lo que le llega del formulario: el espacio se comprueba
+ * SIEMPRE contra la membresía antes de recordarlo o de tocarlo.
  *
  * Donde se vuelve después de cambiar de espacio es /resumen, no la
  * pantalla en la que se estaba: media aplicación son rutas con el id de
@@ -26,6 +27,17 @@ import { createServerSupabase } from "./supabase";
  * producto.
  */
 const DESPUES_DE_CAMBIAR = "/resumen";
+
+/**
+ * Cuántos espacios puede tener una persona como propietaria. Sin tope,
+ * un script con sesión crea miles de workspaces con su creator_profile.
+ * Veinte cubre de sobra a una creadora que separa marcas; una agencia
+ * con más clientes no crea espacios de creadora, crea el suyo (AGE-1).
+ *
+ * No se exporta: este archivo lleva "use server" y Next solo admite
+ * funciones async como exports (ver app/login/acciones.ts).
+ */
+const MAX_ESPACIOS_PROPIOS = 20;
 
 export interface EstadoEspacio {
   error?: string;
@@ -55,9 +67,15 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
   if (!nombre) return { error: MESSAGES.selector.errores.nombreVacio };
   if (nombre.length > 80) return { error: MESSAGES.cuenta.errores.nombreLargo };
 
-  const { identity } = await getCurrentContext();
+  const { identity, workspaces } = await getCurrentContext();
   if (!identity?.userId) redirect("/login");
   const userId = identity.userId;
+
+  // El contexto ya trae mis espacios; se cuentan los que son MÍOS (no
+  // los que me compartieron), que son los que esta acción crea.
+  if (workspaces.filter((w) => w.role === "owner").length >= MAX_ESPACIOS_PROPIOS) {
+    return { error: MESSAGES.selector.errores.limite(MAX_ESPACIOS_PROPIOS) };
+  }
 
   const workspaceId = randomUUID();
   try {
@@ -85,11 +103,20 @@ export async function crearEspacio(_prev: EstadoEspacio, formData: FormData): Pr
   redirect(DESPUES_DE_CAMBIAR);
 }
 
-/** Cierra la sesión de Supabase y olvida el espacio elegido. */
+/**
+ * Cierra la sesión de ESTE navegador y olvida el espacio elegido.
+ *
+ * `scope: 'local'` a propósito: sin argumentos, `signOut()` usa
+ * 'global' y revoca TODAS las sesiones de la persona —salir en el
+ * teléfono la echaba también del portátil—, que no es lo que nadie
+ * espera de «Cerrar sesión» ni lo que hacen Vercel o Linear. Si algún
+ * día hace falta «Cerrar sesión en todos los dispositivos», será una
+ * acción aparte en /cuenta.
+ */
 export async function cerrarSesion(): Promise<void> {
   if (isAuthConfigured()) {
     const supabase = await createServerSupabase();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
   }
   await olvidarEspacio();
   revalidatePath("/", "layout");
@@ -119,5 +146,50 @@ export async function guardarNombre(_prev: EstadoCuenta, formData: FormData): Pr
   }
 
   revalidatePath("/cuenta");
+  return { guardado: true };
+}
+
+export interface EstadoRenombrar {
+  error?: string;
+  guardado?: boolean;
+}
+
+/** Los roles que pueden cambiarle el nombre a un espacio. */
+const PUEDEN_RENOMBRAR = new Set(["owner", "admin"]);
+
+/**
+ * Renombra un espacio y la ficha de creador que nació con él.
+ *
+ * El nombre inicial sale del correo («Laura Mendez») y la historia pide
+ * que sea editable después. El id llega del formulario, así que
+ * primero se pregunta a la base qué rol tengo en ESE espacio —por mi
+ * identidad, no por lo que diga el navegador— y solo con owner o admin
+ * se abre la transacción de ese espacio. Dentro, la RLS de workspace y
+ * de creator_profile vuelve a acotar la escritura al espacio fijado.
+ */
+export async function renombrarEspacio(_prev: EstadoRenombrar, formData: FormData): Promise<EstadoRenombrar> {
+  const t = MESSAGES.cuenta.renombrar.errores;
+  const workspaceId = String(formData.get("workspaceId") ?? "").trim();
+  const nombre = String(formData.get("nombre") ?? "").trim();
+  if (!nombre) return { error: t.nombreVacio };
+  if (nombre.length > 80) return { error: t.nombreLargo };
+  if (!isUuid(workspaceId)) return { error: t.sinPermiso };
+
+  const { identity } = await getCurrentContext();
+  if (!identity?.userId) redirect("/login");
+
+  try {
+    const mios = await withIdentity(identity, (tx) => listMyWorkspaces(tx));
+    const rol = mios.find((w) => w.id === workspaceId)?.role;
+    if (!rol || !PUEDEN_RENOMBRAR.has(rol)) return { error: t.sinPermiso };
+
+    const hecho = await withWorkspaceId(workspaceId, (tx) => renameWorkspace(tx, nombre), identity);
+    if (!hecho) return { error: t.generico };
+  } catch (err) {
+    console.error("[auth] no se pudo renombrar el espacio", err);
+    return { error: t.generico };
+  }
+
+  revalidatePath("/", "layout");
   return { guardado: true };
 }

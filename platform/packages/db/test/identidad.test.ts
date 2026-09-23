@@ -2,7 +2,7 @@
  * La costura de la sesión (CIM-3) contra las políticas reales.
  *
  * Todo corre sobre Postgres embebido como mc_app, sin BYPASSRLS y con
- * las migraciones del repositorio aplicadas: si 0019, 0020, 0021 o 0022
+ * las migraciones del repositorio aplicadas: si 0019, 0020, 0021, 0022 o 0023
  * cambian, esto se rompe. Lo que se comprueba:
  *
  *   - con el correo fijado se encuentra (o se crea) la propia fila de
@@ -13,16 +13,27 @@
  *     asWorker, y no enseña los de nadie más;
  *   - el espacio nuevo nace completo (workspace, membresía de dueña,
  *     creator_profile) dentro de una sola transacción;
- *   - sin identidad fijada, ninguna de esas lecturas devuelve nada.
+ *   - sin identidad fijada, ninguna de esas lecturas devuelve nada;
+ *   - (0023) fijar mi id me deja LEER mis membresías, no escribir: no
+ *     me cuelgo de un espacio ajeno, no cuelgo a otra persona del mío,
+ *     y no me cambio el rol;
+ *   - renombrar un espacio arrastra la ficha que nació con su nombre.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appUser, creatorProfile, eq, membership } from '../src/index.ts';
+import { appUser, creatorProfile, eq, membership, workspace } from '../src/index.ts';
 import {
-  createCreatorWorkspace, freeSlug, getAppUser, isMemberOf, listMyWorkspaces, nameFromEmail, slugify,
+  createCreatorWorkspace, freeSlug, getAppUser, isMemberOf, listMyWorkspaces, nameFromEmail, renameWorkspace, slugify,
   updateMyName, upsertAppUserPorCorreo,
 } from '../src/queries/identidad.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
+
+/** Drizzle envuelve el error de Postgres; el motivo real va en `cause`. */
+function esViolacionRls(err: unknown): boolean {
+  const partes: string[] = [];
+  for (let e = err; e instanceof Error; e = e.cause) partes.push(e.message);
+  return /row-level security/.test(partes.join(' ← '));
+}
 
 const CORREO_A = 'ana@ejemplo.test';
 const CORREO_B = 'bruno@ejemplo.test';
@@ -43,8 +54,12 @@ after(async () => {
 describe('nombres y slugs a partir del correo', () => {
   test('el nombre sale del correo, sin inventar', () => {
     assert.equal(nameFromEmail('laura.mendez@ejemplo.com'), 'Laura Mendez');
-    assert.equal(nameFromEmail('ana_maria+trabajo@x.co'), 'Ana Maria Trabajo');
     assert.equal(nameFromEmail('LAURA@x.co'), 'LAURA');
+    // La subdirección no es parte del nombre: con ella, el espacio de
+    // 'revisor.cim3.r2+mudh604g@…' se llamaba 'Revisor Cim3 R2 Mudh604g'.
+    assert.equal(nameFromEmail('ana_maria+trabajo@x.co'), 'Ana Maria');
+    assert.equal(nameFromEmail('revisor.cim3.r2+mudh604g@ejemplo.test'), 'Revisor Cim3 R2');
+    assert.equal(nameFromEmail('+solo-alias@x.co'), null);
     // Sin nada legible, quien llama pone el texto por defecto.
     assert.equal(nameFromEmail('123@x.co'), null);
     assert.equal(nameFromEmail('@x.co'), null);
@@ -144,6 +159,18 @@ describe('espacios de la persona que entra', () => {
     assert.equal(slug, 'ana-restrepo-2');
   });
 
+  test('aunque la sugerencia de slug ya esté cogida, el alta no choca: prueba el siguiente', async () => {
+    // Es lo que pasa con dos altas a la vez, o cuando workspace lleve RLS
+    // y freeSlug solo vea el propio: la garantía la da el índice.
+    const WS_OTRO = '0000000f-0000-4000-8000-000000000003';
+    const creado = await t.db.withWorkspace(
+      WS_OTRO,
+      (tx) => createCreatorWorkspace(tx, { workspaceId: WS_OTRO, userId: idA, name: 'Ana Restrepo', slug: 'ana-restrepo' }),
+      { userId: idA },
+    );
+    assert.equal(creado.slug, 'ana-restrepo-2');
+  });
+
   test('otra persona no ve ese espacio ni cuenta como miembro', async () => {
     const suyos = await t.db.withIdentity({ userId: idB }, (tx) => listMyWorkspaces(tx));
     assert.deepEqual(suyos, []);
@@ -158,6 +185,62 @@ describe('espacios de la persona que entra', () => {
   test('sin identidad fijada, membership no devuelve nada', async () => {
     const filas = await t.db.withCatalogs((tx) => tx.db.select().from(membership));
     assert.deepEqual(filas, []);
+  });
+
+  test('con mi userId no puedo insertar membresía en un espacio ajeno (0023)', async () => {
+    // Era la rama «user_id = current_user_id()» de 0019, FOR ALL y sin
+    // WITH CHECK: con CIM-3 fijando app.user_id, esto pasaba sin error.
+    await assert.rejects(
+      () =>
+        t.db.withIdentity({ userId: idB }, (tx) =>
+          tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'owner' }),
+        ),
+      esViolacionRls,
+    );
+    assert.equal(await t.db.withIdentity({ userId: idB }, (tx) => isMemberOf(tx, WS_NUEVO, idB)), false);
+  });
+
+  test('dentro de mi espacio no puedo dar de alta a otra persona (0023)', async () => {
+    await assert.rejects(
+      () =>
+        t.db.withWorkspace(
+          WS_NUEVO,
+          (tx) => tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'admin' }),
+          { userId: idA },
+        ),
+      esViolacionRls,
+    );
+  });
+
+  test('ni cambiar roles ni borrar membresías desde la web (0023)', async () => {
+    // Sin política de UPDATE ni de DELETE, las dos sentencias no ven
+    // ninguna fila: no fallan, pero no tocan nada.
+    const cambiadas = await t.db.withWorkspace(
+      WS_NUEVO,
+      (tx) => tx.db.update(membership).set({ role: 'viewer' }).where(eq(membership.userId, idA)).returning(),
+      { userId: idA },
+    );
+    assert.deepEqual(cambiadas, []);
+    const borradas = await t.db.withIdentity({ userId: idA }, (tx) =>
+      tx.db.delete(membership).where(eq(membership.userId, idA)).returning(),
+    );
+    assert.deepEqual(borradas, []);
+    assert.equal(await t.db.withIdentity({ userId: idA }, (tx) => isMemberOf(tx, WS_NUEVO, idA)), true);
+  });
+
+  test('renombrar el espacio arrastra la ficha que nació con su nombre, y no pisa una ya editada', async () => {
+    const ok = await t.db.withWorkspace(WS_NUEVO, (tx) => renameWorkspace(tx, '  Cocina de Ana  '), { userId: idA });
+    assert.equal(ok, true);
+    const [ws] = await t.db.withWorkspace(WS_NUEVO, (tx) => tx.db.select({ name: workspace.name }).from(workspace).where(eq(workspace.id, WS_NUEVO)), { userId: idA });
+    assert.equal(ws?.name, 'Cocina de Ana');
+    const fichas = await t.db.withWorkspace(WS_NUEVO, (tx) => tx.db.select({ d: creatorProfile.displayName }).from(creatorProfile), { userId: idA });
+    assert.deepEqual(fichas, [{ d: 'Cocina de Ana' }]);
+
+    // La creadora le pone otro nombre a su ficha; renombrar el espacio ya no la toca.
+    await t.db.withWorkspace(WS_NUEVO, (tx) => tx.db.update(creatorProfile).set({ displayName: 'Ana R.' }), { userId: idA });
+    await t.db.withWorkspace(WS_NUEVO, (tx) => renameWorkspace(tx, 'Ana · Recetas'), { userId: idA });
+    const despues = await t.db.withWorkspace(WS_NUEVO, (tx) => tx.db.select({ d: creatorProfile.displayName }).from(creatorProfile), { userId: idA });
+    assert.deepEqual(despues, [{ d: 'Ana R.' }]);
   });
 
   test('createCreatorWorkspace se niega si la transacción fijó otro espacio', async () => {

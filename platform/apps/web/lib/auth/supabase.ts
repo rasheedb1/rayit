@@ -14,9 +14,10 @@ import { COOKIE_SESION } from "./cookies";
  * `sb-…-auth-token` con los valores por defecto de la librería, que no
  * llevan httpOnly ni Secure, y dentro de esa cookie viajan el access
  * token y el refresh token (ver lib/auth/cookies.ts). Ponerla httpOnly
- * no rompe nada aquí porque no hay cliente de Supabase en el navegador:
- * todo el flujo de sesión se resuelve en el servidor. El día que se
- * añada uno, esto hay que revisarlo junto con él.
+ * no rompe nada porque todo el flujo de sesión se resuelve en el
+ * servidor: el cliente de navegador (supabase-browser.ts) existe pero
+ * no ve la sesión, y ninguna pantalla lo usa. El día que una lo
+ * necesite con sesión, esto hay que revisarlo junto con él.
  *
  * Nunca se usa para leer datos del producto: eso es @mc/db con RLS por
  * workspace. Aquí solo se pregunta quién entró.

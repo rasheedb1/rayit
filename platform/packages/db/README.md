@@ -132,10 +132,17 @@ const mios    = await db.withIdentity({ userId: persona.id }, (tx) => listMyWork
 
 Transacción **sin workspace y con identidad**: fija `app.user_id` y
 `app.user_email` igual que `withWorkspace` fija `app.workspace_id`, y
-con eso valen las ramas «soy yo» de las políticas de `app_user` (0020 a
-0022) y de `membership` (0019). Así se responde «¿a qué espacios
+con eso valen las ramas «soy yo» de las políticas de `app_user` (0020,
+0021 y 0022) y de `membership` (0023). Así se responde «¿a qué espacios
 pertenezco?» como `mc_app`, sin `asWorker` ni una función
 `SECURITY DEFINER`.
+
+Esa rama «soy yo» es **solo de lectura**. Desde 0023, en `membership`
+solo se da de alta una fila con `user_id = current_user_id()` Y
+`workspace_id = current_workspace_id()`: fijar mi id no me deja
+colgarme de un espacio ajeno, ni colgar a otra persona del mío. No hay
+política de UPDATE ni de DELETE: cambiar roles o echar a alguien es del
+worker hasta que exista la pantalla de equipo.
 
 Sirve para **tres tablas y ninguna más**: `app_user`, `membership` y
 `workspace` (que no lleva RLS). En cualquier otra devuelve cero filas en

@@ -26,7 +26,7 @@ const ESPACIOS = [ACTUAL, { id: "b", name: "Ávila estudio" }, { id: "c", name: 
 
 function abrir() {
   render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />);
-  const disparador = screen.getByRole("button", { name: MESSAGES.selector.etiqueta });
+  const disparador = screen.getByRole("button", { name: MESSAGES.selector.disparador(ACTUAL.name) });
   fireEvent.click(disparador);
   return disparador;
 }
@@ -36,7 +36,7 @@ afterEach(cleanup);
 describe("WorkspaceMenu", () => {
   test("cerrado se anuncia como menú y no apunta a un id que no existe", () => {
     render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />);
-    const disparador = screen.getByRole("button", { name: MESSAGES.selector.etiqueta });
+    const disparador = screen.getByRole("button", { name: MESSAGES.selector.disparador(ACTUAL.name) });
     expect(disparador).toHaveAttribute("aria-haspopup", "menu");
     expect(disparador).toHaveAttribute("aria-expanded", "false");
     expect(disparador).not.toHaveAttribute("aria-controls");
@@ -77,6 +77,30 @@ describe("WorkspaceMenu", () => {
     expect(document.activeElement).toBe(enfocables[0]);
     fireEvent.keyDown(document, { key: "ArrowUp" });
     expect(document.activeElement).toBe(enfocables[enfocables.length - 1]);
+  });
+
+  test("el nombre accesible empieza por el nombre visible del espacio (WCAG 2.5.3)", () => {
+    render(<WorkspaceMenu actual={ACTUAL} espacios={ESPACIOS} />);
+    // Se busca por el nombre que se VE: es lo que dice quien usa control por voz.
+    const disparador = screen.getByRole("button", { name: /^Cocina fácil/ });
+    expect(disparador.getAttribute("aria-label")?.startsWith(ACTUAL.name)).toBe(true);
+    expect(disparador.textContent).toContain(ACTUAL.name);
+  });
+
+  test("Tab cierra el menú sin devolver el foco al disparador", () => {
+    const disparador = abrir();
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).not.toBe(disparador);
+  });
+
+  test("dentro del menú no hay listas ni formularios sueltos: solo menuitem", () => {
+    abrir();
+    const menu = screen.getByRole("menu");
+    for (const el of menu.querySelectorAll("li, ul, form")) {
+      expect(el.getAttribute("role"), el.tagName).toBe("none");
+    }
   });
 
   test("la inicial sale del nombre, también con tilde", () => {

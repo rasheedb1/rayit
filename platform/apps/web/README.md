@@ -101,15 +101,27 @@ Lo de «httpOnly» hay que decírselo a `@supabase/ssr`: por defecto
 escribe `sb-…-auth-token` **sin** `HttpOnly` y **sin** `Secure`, y
 dentro de esa cookie van el access token y el refresh token. Los dos
 clientes que la escriben —`lib/auth/supabase.ts` y `middleware.ts`—
-pasan el mismo `cookieOptions` desde `lib/auth/cookies.ts`. Si algún día
-se añade un cliente de Supabase **de navegador**, esto hay que
-revisarlo con él: hoy no lo hay, y por eso la cookie puede ser httpOnly.
+pasan el mismo `cookieOptions` desde `lib/auth/cookies.ts`. Hay un
+cliente **de navegador** (`lib/auth/supabase-browser.ts`) pero ninguna
+pantalla lo usa y, con la cookie httpOnly, no ve la sesión: es a
+propósito. Si algún día hace falta la sesión en el navegador, se decide
+con él.
+
+**Falla cerrado.** Con las llaves puestas, `lib/workspace/current.ts`
+manda a `/login` a cualquier petición sin sesión que intente leer o
+escribir, aunque el middleware no la haya mirado (una server action,
+un route handler, una ruta pública). `DEMO_WORKSPACE_ID` solo existe en
+una copia **sin** llaves. Y si Supabase no contesta (red, 5xx, 429), no
+se convierte en «no hay sesión»: la pantalla cae en su `error.tsx` con
+«Reintentar».
 
 ### Quién eres, y en qué espacio estás
 
 Son dos cosas distintas y se resuelven por separado:
 
-- **quién eres** sale SIEMPRE del correo que Supabase verificó. La
+- **quién eres** sale SIEMPRE del correo que Supabase verificó —con
+  `email_confirmed_at`; un usuario sin él no cuenta como sesión, ni en
+  el middleware, ni en `getSesion`, ni en el callback—. La
   transacción fija `app.user_email` y la fila de `app_user` se busca con
   `email = current_user_email()` (migración 0022). Nada que venga del
   navegador entra en esa respuesta.
@@ -146,17 +158,51 @@ Una persona, una vez, en **Authentication → URL Configuration**:
 
 - **Site URL**: `https://on-cue-web.vercel.app`
 - **Redirect URLs**, una por línea:
-  - `https://on-cue-web.vercel.app/auth/callback`
-  - `http://localhost:3000/auth/callback`
-  - `http://localhost:*/auth/callback` (los agentes trabajan entre el
-    3100 y el 3999; Supabase admite el comodín)
-  - `https://*.vercel.app/auth/callback` para las vistas previas
+  - `https://on-cue-web.vercel.app/**`
+  - `http://localhost:*/**` (los agentes trabajan entre el 3100 y el
+    3999)
 
-Un origen que no esté en esa lista **no recibe el enlace**: Supabase
-redirige al Site URL y la persona acaba en `/login` sin saber por qué.
+Las entradas son **globs que tienen que casar con la URL entera**, query
+incluida, y el enlace siempre vuelve con `?next=…`
+(`/auth/callback?next=%2Ffinanzas`). Por eso terminan en `/**`: una
+entrada como `http://localhost:3000/auth/callback` NO casa, Supabase cae
+en silencio al Site URL, el `?code=` nunca llega a `/auth/callback` y la
+persona acaba en producción sin sesión.
 
-Y en **Authentication → Providers → Email**: proveedor de correo
-encendido y contraseñas apagadas.
+**Nunca un comodín sobre un dominio compartido**, como
+`https://*.vercel.app/**`. Cualquiera puede publicar `lo-que-sea.vercel.app`,
+y con esa entrada un atacante pide un enlace para el correo de la víctima
+(la anon key es pública) con `redirect_to` a su subdominio: la víctima
+recibe un correo legítimo de On Cue, pulsa, y el código llega al
+atacante, que lo canjea. Toma de cuenta y de espacio.
+
+Las **vistas previas** de Vercel no entran por defecto. Para probar una,
+añade su URL exacta de rama mientras la pruebas y quítala después:
+`https://on-cue-web-git-<rama>-influ3.vercel.app/**`. El patrón de equipo
+que sugiere la guía de Supabase (`https://*-influ3.vercel.app/**`)
+depende de que nadie más pueda crear un proyecto cuyo dominio acabe en
+`-influ3`, y eso lo decide Vercel, no nosotros: no lo usamos.
+
+En **Authentication → Emails → Templates**, en «Magic Link» **y** en
+«Confirm signup», el enlace tiene que ser:
+
+```html
+<a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=email">Entrar a On Cue</a>
+```
+
+La plantilla por defecto manda `?code=` (PKCE), y el verificador de ese
+código vive en una cookie del navegador donde se **pidió** el enlace. Si
+se pide en el portátil y se abre en el teléfono —o en el navegador
+interno de Gmail o de Outlook, que es lo normal—, no hay verificador y
+la entrada falla (`/login` lo dice: «Abre el enlace en el mismo
+navegador donde lo pediste…»). Con `token_hash` el enlace sirve en
+cualquier dispositivo; `/auth/callback` ya sabe canjearlo. El `&` va
+bien porque `{{ .RedirectTo }}` siempre trae ya su `?next=`.
+
+Y en **Authentication → Sign In / Providers → Email**: proveedor de
+correo encendido, contraseñas **apagadas** y **Confirm email
+encendido**. La aplicación ya rechaza un usuario sin correo verificado;
+este ajuste es la segunda barrera, no la única.
 
 ### El límite del correo integrado
 
@@ -169,6 +215,13 @@ probar el login en bucle.
 
 ### Cómo probarlo sin esperar un correo
 
+**El correo de la creadora demo del seed es `demo@multicampaign.test`**
+(`db/seed/0002`). El seed `0003` escribe `laura@ejemplo.com`, pero con
+`ON CONFLICT DO NOTHING`, así que no cambia nada: entrar con ese
+otro correo crea un espacio **nuevo y vacío** llamado «Laura». Y un
+dominio `.test` nunca recibe correo, así que el de la demo solo se abre
+con `generate_link`.
+
 `generate_link` de la API de administración devuelve el enlace sin
 mandarlo:
 
@@ -177,14 +230,22 @@ curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"type":"magiclink","email":"tu@correo.com",
+  -d '{"type":"magiclink","email":"demo@multicampaign.test",
        "options":{"redirect_to":"http://localhost:3100/auth/callback"}}'
 ```
 
 De la respuesta salen `hashed_token` y `verification_type` —para quien
 no existía todavía es `signup`, no `magiclink`— y con los dos se abre
-`/auth/callback?token_hash=…&type=…`. La clave de servicio no se usa en
-el código de la web: solo aquí, a mano.
+`http://localhost:3100/auth/callback?token_hash=…&type=…`. Con el correo
+de la demo aparece «Laura · Cocina fácil» con sus facturas; con uno
+nuevo, un espacio vacío con el nombre sacado del correo. La clave de
+servicio no se usa en el código de la web: solo aquí, a mano.
+
+Lo mismo está cubierto sin red en las pruebas: `middleware.test.ts`
+(sin sesión, `/resumen` → `/login?next=%2Fresumen`),
+`lib/auth/acciones.test.ts` (el correo del seed entra a la creadora
+demo y no crea nada; cambiar de espacio cambia lo que se sirve) y
+`app/auth/callback/route.test.ts`.
 
 ## Reglas del marco
 

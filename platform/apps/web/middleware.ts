@@ -75,8 +75,12 @@ export async function middleware(request: NextRequest) {
   // Entre createServerClient y getUser no va NADA: cualquier await por
   // medio puede hacer que la sesión se cierre sola de forma aleatoria.
   const { data } = await supabase.auth.getUser();
+  // Un usuario con el correo sin verificar no cuenta como sesión, igual
+  // que en lib/auth/session.ts (`sesionDeUsuario`): el correo verificado
+  // es toda la frontera entre inquilinos.
+  const conSesion = Boolean(data.user?.email && data.user.email_confirmed_at);
 
-  if (!data.user && !esRutaPublica(pathname)) {
+  if (!conSesion && !esRutaPublica(pathname)) {
     const login = request.nextUrl.clone();
     login.pathname = "/login";
     login.search = "";
@@ -96,8 +100,21 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   /**
-   * Todo menos los archivos estáticos y las imágenes: pasar por aquí
-   * un .png no refresca ninguna sesión y sí cuesta una llamada.
+   * Todo menos los archivos internos de Next y los dos iconos, y SOLO
+   * por prefijo de la ruta.
+   *
+   * Antes se excluía cualquier ruta que TERMINARA en .txt, .xml, .png,
+   * .svg… y eso abría la aplicación entera: `/campanas/x.txt` no pasaba
+   * por aquí, y con la cabecera Next-Action de una server action
+   * ejecutaba esa acción sin sesión (ronda 3). Una extensión la elige
+   * quien escribe la URL; un prefijo como `_next/static` solo lo sirve
+   * Next. Hoy getCurrentContext también falla cerrado, pero el
+   * middleware no debe tener agujeros por su cuenta.
+   *
+   * No hay carpeta `public/`. Si algún día la hay, sus archivos pasan
+   * por aquí y piden sesión salvo que se declaren en lib/auth/rutas.ts;
+   * una ruta pública sin cookie `sb-…` sale por la puerta rápida, sin
+   * llamar a Supabase. Lo prueba middleware.test.ts.
    */
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|woff2?)$).*)"],
+  matcher: ["/((?!_next/static/|_next/image|favicon\\.ico$|icon\\.svg$).*)"],
 };

@@ -29,6 +29,13 @@ import { inicial } from "@/lib/workspace/inicial";
  * inexistente estando cerrado), el foco va a la primera opción al abrir
  * y vuelve al disparador al cerrar con Escape, y las flechas recorren
  * la lista.
+ *
+ * Ronda 3: el nombre accesible del disparador EMPIEZA por el nombre del
+ * espacio (WCAG 2.5.3; antes «Cambiar de espacio» tapaba el texto
+ * visible y el lector nunca decía en qué espacio estabas), Tab cierra
+ * el panel como en las referencias en vez de dejarlo abierto con el
+ * foco fuera, y los envoltorios de los menuitem (`li`, `form`) llevan
+ * role="none" para que el árbol de accesibilidad sea menu → menuitem.
  */
 export interface EspacioVisible {
   id: string;
@@ -78,6 +85,12 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
         cerrar(true);
         return;
       }
+      // Tab sale del menú: se cierra y el foco sigue su camino natural
+      // (no se devuelve al disparador, que sería atrapar a quien tabula).
+      if (e.key === "Tab") {
+        cerrar(false);
+        return;
+      }
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
       const lista = opciones();
       if (lista.length === 0) return;
@@ -106,7 +119,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
         aria-haspopup="menu"
         aria-expanded={abierto}
         aria-controls={abierto ? menuId : undefined}
-        aria-label={t.etiqueta}
+        aria-label={t.disparador(actual.name)}
         className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-hover"
       >
         <span
@@ -127,14 +140,16 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
           aria-label={t.etiqueta}
           className="absolute left-0 right-0 z-20 mt-1 rounded-md border border-border bg-surface p-1 shadow-lg"
         >
-          <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">{t.espacios}</p>
+          <p role="none" className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            {t.espacios}
+          </p>
 
-          <form action={cambiar}>
-            <ul className="max-h-64 space-y-0.5 overflow-y-auto">
+          <form action={cambiar} role="none">
+            <ul role="none" className="max-h-64 space-y-0.5 overflow-y-auto">
               {espacios.map((e) => {
                 const esActual = e.id === actual.id;
                 return (
-                  <li key={e.id}>
+                  <li key={e.id} role="none">
                     <button
                       type="submit"
                       role="menuitem"
@@ -159,10 +174,10 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
             </ul>
           </form>
 
-          <div className="my-1 h-px bg-border" />
+          <div role="separator" className="my-1 h-px bg-border" />
 
           {creando ? (
-            <form action={crear} className="flex flex-col gap-2 p-1.5">
+            <form action={crear} role="none" className="flex flex-col gap-2 p-1.5">
               <Input name="nombre" aria-label={t.crearNombre} placeholder={t.crearNombre} autoFocus required maxLength={80} />
               <Button type="submit" variant="primary" size="sm" loading={creandoEnvio}>
                 {creandoEnvio ? t.creando : t.crearBoton}
@@ -180,7 +195,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
             </button>
           )}
 
-          <div className="my-1 h-px bg-border" />
+          <div role="separator" className="my-1 h-px bg-border" />
 
           <Link
             href="/cuenta"
@@ -192,7 +207,7 @@ export function WorkspaceMenu({ actual, espacios }: { actual: EspacioVisible; es
             {t.cuenta}
           </Link>
 
-          <form action={cerrarSesion}>
+          <form action={cerrarSesion} role="none">
             <button
               type="submit"
               role="menuitem"

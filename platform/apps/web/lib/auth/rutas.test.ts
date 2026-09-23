@@ -40,6 +40,39 @@ describe("destinoSeguro", () => {
     }
   });
 
+  test("los caracteres que el parser de URL se come no abren una redirección (ronda 3)", () => {
+    // El navegador y Node quitan el tabulador y el salto de línea antes
+    // de interpretar la URL: '/\t/evil.com' terminaba siendo
+    // '//evil.com'. Se comprobó con la app levantada: 307 a otro dominio.
+    for (const malo of [
+      "/\t/evil.com",
+      "/\n/evil.com",
+      "/\r/evil.com",
+      decodeURIComponent("/%09/evil.com"),
+      "/\u0000",
+      "/\\evil.com",
+      "/ /evil.com",
+      "/ /evil.com",
+      "/ /evil.com",
+      "\t//evil.com",
+    ]) {
+      expect(destinoSeguro(malo)).toBe("/resumen");
+    }
+  });
+
+  test("lo que se devuelve es lo que entendió el parser, no la cadena de entrada", () => {
+    // Resolver contra un origen propio normaliza los '..' y deja la
+    // query y el fragmento como estaban.
+    expect(destinoSeguro("/finanzas/../resumen?x=1#arriba")).toBe("/resumen?x=1#arriba");
+    // Sin decodificar, '%09' es un segmento más de la ruta, dentro de casa.
+    expect(destinoSeguro("/%09/evil.com")).toBe("/%09/evil.com");
+    expect(new URL(destinoSeguro("/%09/evil.com"), "https://on-cue-web.vercel.app").host).toBe("on-cue-web.vercel.app");
+  });
+
+  test("una ruta pública escondida tras '..' tampoco vale como destino", () => {
+    expect(destinoSeguro("/resumen/../login")).toBe("/resumen");
+  });
+
   test("sin next, o apuntando a una ruta pública, va al resumen", () => {
     expect(destinoSeguro(null)).toBe("/resumen");
     expect(destinoSeguro("")).toBe("/resumen");

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import type { EmailOtpType } from "@supabase/supabase-js";
+import { isAuthPKCECodeVerifierMissingError, type EmailOtpType, type User } from "@supabase/supabase-js";
 import { isAuthConfigured } from "@/lib/auth/config";
 import { destinoSeguro } from "@/lib/auth/rutas";
-import { nombreDeMetadata } from "@/lib/auth/session";
+import { sesionDeUsuario } from "@/lib/auth/session";
 import { registrarEntrada } from "@/lib/auth/sincronizar";
 import { createServerSupabase } from "@/lib/auth/supabase";
 import { elegirWorkspaceId } from "@/lib/workspace/current";
@@ -59,23 +59,39 @@ export async function GET(request: Request) {
   const tipo = url.searchParams.get("type");
 
   const supabase = await createServerSupabase();
-  let email: string | null = null;
-  let nombre: string | null = null;
+  let usuario: User | null = null;
 
   if (code) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    if (error || !data.user?.email) return enlaceInvalido(alLogin, error?.message);
-    email = data.user.email;
-    nombre = nombreDeMetadata(data.user.user_metadata);
+    // El enlace se pidió en OTRO navegador (el portátil, y se abre en el
+    // teléfono o en el navegador interno de Gmail): el verificador PKCE
+    // vive en una cookie del navegador donde se pidió y aquí no está.
+    // Decir «ese enlace ya no sirve» era falso —pedir otro y abrirlo en
+    // el mismo sitio vuelve a fallar—, así que tiene su propio texto. La
+    // cura de fondo es la plantilla del correo con token_hash (README,
+    // «Autenticación»), que no depende del navegador.
+    if (error && isAuthPKCECodeVerifierMissingError(error)) return enlaceInvalido(alLogin, error.message, "otro_navegador");
+    if (error) return enlaceInvalido(alLogin, error.message);
+    usuario = data.user;
   } else if (tokenHash && tipo) {
     if (!esTipoDeCorreo(tipo)) return enlaceInvalido(alLogin, "type desconocido");
     const { data, error } = await supabase.auth.verifyOtp({ type: tipo, token_hash: tokenHash });
-    if (error || !data.user?.email) return enlaceInvalido(alLogin, error?.message);
-    email = data.user.email;
-    nombre = nombreDeMetadata(data.user.user_metadata);
+    if (error) return enlaceInvalido(alLogin, error.message);
+    usuario = data.user;
   } else {
     return enlaceInvalido(alLogin, "la URL no trae ni code ni token_hash");
   }
+
+  // Sin correo verificado no hay identidad (lib/auth/session.ts,
+  // `sesionDeUsuario`). El intercambio de arriba YA abrió la sesión, así
+  // que se cierra antes de mandar a /login: si no, quedaría una cookie
+  // viva que ninguna pantalla acepta.
+  const sesion = sesionDeUsuario(usuario);
+  if (!sesion) {
+    await cerrarAMedias(supabase);
+    return enlaceInvalido(alLogin, "usuario sin correo verificado");
+  }
+  const { email, nombre } = sesion;
 
   try {
     const { userId, workspaces } = await registrarEntrada({ email, nombre });
@@ -93,7 +109,7 @@ export async function GET(request: Request) {
     // persona se queda dentro, sin espacio y sin ver el error. Este
     // caso no es teórico: es lo que pasa contra una base sin la
     // migración 0022.
-    await supabase.auth.signOut().catch((e: unknown) => console.error("[auth] no se pudo cerrar la sesión a medias", e));
+    await cerrarAMedias(supabase);
     return alLogin("sesion");
   }
 
@@ -102,11 +118,28 @@ export async function GET(request: Request) {
 
 /**
  * Un enlace que no abre es lo primero que se pregunta cuando alguien no
- * puede entrar: caducó, ya se usó, o la plantilla del correo manda algo
- * que no esperamos. El motivo va al log del servidor —sin el token, que
- * sí es secreto— y a la persona le llega el texto de siempre.
+ * puede entrar: caducó, ya se usó, se abrió en otro navegador, o la
+ * plantilla del correo manda algo que no esperamos. El motivo va al log
+ * del servidor —sin el token, que sí es secreto— y a la persona le
+ * llega el texto de /login para ese código.
  */
-function enlaceInvalido(alLogin: (error?: string) => Response, motivo?: string): Response {
+function enlaceInvalido(
+  alLogin: (error?: string) => Response,
+  motivo?: string,
+  codigo: "enlace" | "otro_navegador" = "enlace",
+): Response {
   console.warn(`[auth] enlace no válido: ${motivo ?? "sin detalle"}`);
-  return alLogin("enlace");
+  return alLogin(codigo);
+}
+
+/**
+ * Cierra la sesión que el intercambio acaba de abrir, SOLO en este
+ * navegador (`scope: 'local'`): si la persona tiene otra sesión buena
+ * en otro dispositivo, un callback fallido aquí no tiene por qué
+ * tumbarla.
+ */
+async function cerrarAMedias(supabase: Awaited<ReturnType<typeof createServerSupabase>>): Promise<void> {
+  await supabase.auth
+    .signOut({ scope: "local" })
+    .catch((e: unknown) => console.error("[auth] no se pudo cerrar la sesión a medias", e));
 }

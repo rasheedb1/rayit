@@ -12,6 +12,7 @@ export const metadata: Metadata = { title: "Entrar" };
 /** Los errores que /auth/callback puede poner en la URL, ya en español. */
 const ERRORES: Record<string, string> = {
   enlace: MESSAGES.callback.errores.enlace,
+  otro_navegador: MESSAGES.callback.errores.otroNavegador,
   cancelado: MESSAGES.callback.errores.cancelado,
   sesion: MESSAGES.callback.errores.sesion,
 };

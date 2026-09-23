@@ -9,6 +9,10 @@ import { MESSAGES } from "@/lib/auth/messages";
 import { withIdentity } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { FormularioCuenta } from "./formulario";
+import { RenombrarEspacio } from "./renombrar";
+
+/** Los roles que pueden renombrar un espacio; el servidor lo vuelve a comprobar. */
+const PUEDEN_RENOMBRAR: ReadonlySet<string> = new Set(["owner", "admin"]);
 
 export const metadata: Metadata = { title: "Tu cuenta" };
 // Lee la sesión y la base en cada petición: nada de esto se prerenderiza.
@@ -49,10 +53,15 @@ export default async function CuentaPage() {
 
       <section className="mt-12">
         <SectionTitle>{t.espacios}</SectionTitle>
+        <p className="mb-3 text-xs text-muted">{t.renombrar.ayuda}</p>
         <ul className="overflow-hidden rounded-md border border-border">
           {espacios.map((e) => (
             <li key={e.id} className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 last:border-b-0">
-              <span className="min-w-0 truncate text-sm text-ink">{e.name}</span>
+              {PUEDEN_RENOMBRAR.has(e.role) ? (
+                <RenombrarEspacio id={e.id} nombre={e.name} />
+              ) : (
+                <span className="min-w-0 truncate text-sm text-ink">{e.name}</span>
+              )}
               <span className="flex shrink-0 items-center gap-2">
                 <span className="text-xs text-muted">{t.rol[e.role]}</span>
                 {e.id === workspaceId && <Pill kind="good">{t.actual}</Pill>}

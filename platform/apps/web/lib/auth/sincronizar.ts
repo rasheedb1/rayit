@@ -34,7 +34,7 @@ import { MESSAGES } from "./messages";
  *
  * Nada de esto corre en el navegador ni salta RLS: el correo y el id
  * viajan como identidad de la transacción (@mc/db, `withIdentity`) y
- * las políticas de 0019 a 0022 deciden qué se puede ver y escribir.
+ * las políticas de 0019 a 0023 deciden qué se puede ver y escribir.
  */
 export interface ContextoDeSesion {
   /** Fila de app_user. NO es el id de Supabase. */

@@ -33,17 +33,47 @@ export function esRutaPublica(pathname: string): boolean {
   return [...publicas, ...INTERNAS].some((p) => ruta === p || ruta.startsWith(`${p}/`));
 }
 
+/** Origen ficticio contra el que se resuelve `next`: si el resultado sale de él, `next` no era una ruta nuestra. */
+const ORIGEN_PROPIO = "http://on-cue.invalid";
+
+/**
+ * Cualquier carácter de control (el tabulador y el salto de línea
+ * incluidos), cualquier espacio —también los de Unicode— y la barra
+ * invertida. Ver `destinoSeguro`.
+ */
+const CARACTERES_PROHIBIDOS = /[\u0000-\u001F\u007F\s\\]/u;
+
 /**
  * A dónde volver después de entrar. Solo se acepta una ruta de ESTA
  * aplicación: un `next=https://otra-cosa` convertiría el login en un
  * redirector abierto, que es la forma más barata de hacer phishing con
- * un dominio legítimo. `//evil.com` y `/\evil.com` también son
- * absolutas para el navegador, así que se descartan igual.
+ * un dominio legítimo.
+ *
+ * Dos barreras, porque mirar el principio de la cadena no basta
+ * (ronda 3): el parser de URL del navegador y el de Node QUITAN el
+ * tabulador y el salto de línea antes de interpretar, así que
+ * `/\t/evil.com` pasaba el «no empieza por //» y acababa siendo
+ * `//evil.com`, que es otro dominio. Por eso:
+ *
+ *   1. fuera todo carácter de control, todo espacio y la barra
+ *      invertida (`/\evil.com` también es absoluta para el navegador);
+ *   2. y además se RESUELVE contra un origen propio con el mismo parser
+ *      que usarán el navegador y `new URL(destino, origin)` del
+ *      callback. Si el resultado cambia de origen, no era una ruta
+ *      nuestra. Lo que se devuelve es lo que el parser entendió
+ *      (ruta + query + fragmento), no la cadena de entrada.
  */
 export function destinoSeguro(next: string | null | undefined, porDefecto = "/resumen"): string {
-  if (!next) return porDefecto;
-  if (!next.startsWith("/")) return porDefecto;
-  if (next.startsWith("//") || next.startsWith("/\\")) return porDefecto;
-  if (esRutaPublica(next)) return porDefecto;
-  return next;
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return porDefecto;
+  if (CARACTERES_PROHIBIDOS.test(next)) return porDefecto;
+
+  let url: URL;
+  try {
+    url = new URL(next, ORIGEN_PROPIO);
+  } catch {
+    return porDefecto;
+  }
+  if (url.origin !== ORIGEN_PROPIO) return porDefecto;
+  if (esRutaPublica(url.pathname)) return porDefecto;
+  return `${url.pathname}${url.search}${url.hash}`;
 }
