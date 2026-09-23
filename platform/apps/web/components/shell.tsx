@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { MobileNav, SideNav } from "./nav";
 import { ThemeToggle } from "./theme-toggle";
 // CIM-3: el selector de espacio. Se monta en una línea aquí y en la
@@ -23,10 +24,13 @@ const Brand = () => <Marca enMarco />;
  * consulta (mismo criterio que el selector de espacio). Nunca se
  * concede «por si acaso».
  */
-async function permisosDelMarco(): Promise<readonly Permiso[]> {
+export async function permisosDelMarco(): Promise<readonly Permiso[]> {
   try {
     return [...(await permisosDeLaSesion())];
   } catch (err) {
+    // Una redirección de Next (a /login o a /auth/salir, desde
+    // getCurrentContext) no es un fallo de la base: se deja seguir.
+    unstable_rethrow(err);
     console.error("[permisos] no se pudieron leer los permisos de la sesión para el marco", err);
     return [];
   }

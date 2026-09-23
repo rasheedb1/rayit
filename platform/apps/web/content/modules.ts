@@ -45,7 +45,9 @@ export type Permisos = ReadonlySet<Permiso> | readonly Permiso[];
 /** ¿Estos permisos abren este módulo? Un módulo sin permiso, sí. */
 export function puedeAbrir(permisos: Permisos, m: ModuleDef): boolean {
   if (m.permission === undefined) return true;
-  return tienePermiso(permisos instanceof Set ? permisos : new Set(permisos), m.permission);
+  // Una lista (la de la navegación) se busca tal cual: construir un Set
+  // por módulo y por render no compra nada con unas cuarenta llaves.
+  return "has" in permisos ? tienePermiso(permisos, m.permission) : permisos.includes(m.permission);
 }
 
 export const MODULES: readonly ModuleDef[] = [

@@ -9,8 +9,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { permisosDeRol } from "@mc/core";
 
-const estado = vi.hoisted(() => ({ permisos: new Set<string>() as ReadonlySet<string> }));
-vi.mock("@/lib/permisos/sesion", () => ({ permisosDeLaSesion: async () => estado.permisos }));
+const estado = vi.hoisted(() => ({ permisos: new Set<string>() as ReadonlySet<string>, consultas: 0, falla: null as unknown }));
+vi.mock("@/lib/permisos/sesion", () => ({
+  permisosDeLaSesion: async () => {
+    estado.consultas++;
+    if (estado.falla) throw estado.falla;
+    return estado.permisos;
+  },
+}));
 
 import CampanasLayout from "./campanas/layout";
 import ConexionesLayout from "./conexiones/layout";
@@ -20,6 +26,8 @@ import ResumenLayout from "./resumen/layout";
 import VentasLayout from "./ventas/layout";
 import { ModulePlan } from "@/components/module-plan";
 import { generateMetadata as tituloDelPlan } from "./plan/[modulo]/page";
+import { permisosDelMarco } from "@/components/shell";
+import { redirect } from "next/navigation";
 
 const children: ReactNode = <p>contenido</p>;
 const layouts = {
@@ -52,6 +60,8 @@ async function respuestas(): Promise<Record<keyof typeof layouts, "pasa" | "404"
 
 beforeEach(() => {
   estado.permisos = new Set();
+  estado.consultas = 0;
+  estado.falla = null;
 });
 
 describe("los layouts de módulo con la sesión puesta", () => {
@@ -96,5 +106,38 @@ describe("las herramientas del equipo con permiso", () => {
   test("la bandera apagada gana: el plan de un módulo de fase 2 es 404 aunque se tenga todo", async () => {
     estado.permisos = permisosDeRol("creator", "owner");
     expect(await digestDe(() => ModulePlan({ slug: "nicho" }))).toBe(NO_ENCONTRADO);
+  });
+});
+
+describe("la bandera va antes que la sesión (revisión de código)", () => {
+  test("un módulo apagado o inexistente es 404 sin consultar la sesión, aunque la base no conteste", async () => {
+    estado.falla = new Error("la base no contestó");
+    expect(await digestDe(() => ModulePlan({ slug: "nicho" }))).toBe(NO_ENCONTRADO);
+    expect(await digestDe(() => tituloDelPlan({ params: Promise.resolve({ modulo: "no-existe" }) }))).toBe(NO_ENCONTRADO);
+    expect(estado.consultas).toBe(0);
+  });
+
+  test("un módulo sin permiso (Cimientos) no paga la consulta de la sesión", async () => {
+    estado.falla = new Error("la base no contestó");
+    expect((await tituloDelPlan({ params: Promise.resolve({ modulo: "cimientos" }) })).title).toMatch(/Cimientos/);
+    expect(estado.consultas).toBe(0);
+  });
+});
+
+describe("los permisos del marco (Shell)", () => {
+  test("si la base falla, el menú va sin módulos: nunca concede", async () => {
+    estado.falla = new Error("la base no contestó");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await permisosDelMarco()).toEqual([]);
+  });
+
+  test("una redirección de Next (a /login o /auth/salir) no se traga: sigue su camino", async () => {
+    try {
+      redirect("/auth/salir?error=identidad");
+    } catch (err) {
+      estado.falla = err;
+    }
+    const err = await permisosDelMarco().catch((e: unknown) => e);
+    expect((err as { digest?: string }).digest).toMatch(/^NEXT_REDIRECT/);
   });
 });

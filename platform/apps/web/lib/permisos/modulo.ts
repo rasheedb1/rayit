@@ -1,7 +1,8 @@
 import "server-only";
 import { notFound } from "next/navigation";
-import { can, type Permiso } from "@mc/core";
+import type { Permiso } from "@mc/core";
 import { requireModule, type ModuleDef } from "@/content/modules";
+import { puede } from "./index";
 import { permisosDeLaSesion } from "./sesion";
 
 /**
@@ -21,6 +22,11 @@ import { permisosDeLaSesion } from "./sesion";
  * abrir la base.
  */
 export async function requireModuleAccess(slug: string): Promise<ModuleDef> {
+  // Primero lo que no cuesta nada: ¿existe y está encendido? Así un
+  // módulo apagado o inexistente es 404 aunque la base no conteste, y
+  // uno sin permiso (cimientos) no paga la consulta de la sesión.
+  const m = requireModule(slug);
+  if (m.permission === undefined) return m;
   return requireModule(slug, { permisos: await permisosDeLaSesion() });
 }
 
@@ -32,5 +38,5 @@ export async function requireModuleAccess(slug: string): Promise<ModuleDef> {
  * error se traduce aquí, antes de leer nada.
  */
 export async function requirePagePermission(permiso: Permiso): Promise<void> {
-  if (!can(await permisosDeLaSesion(), permiso)) notFound();
+  if (!(await puede(permiso))) notFound();
 }
