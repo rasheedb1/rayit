@@ -6,7 +6,9 @@ import {
   assertCampaignDates, InvalidDatesError, isIsoDate, brandBaselineFrom,
   handlesFromSocials, suggestionReasons, deliverableLabel, isDeliverable,
   brandAccountsFromSocials, defaultCampaignName, briefFromQuote, cutHoursLabel,
+  ritmoSeguidores, isBrandSnapshotDue, isBrandNoDataReason, BRAND_AFTER_DAYS, BRAND_BASELINE_DAYS, type BrandFollowerPoint,
 } from '../src/campanas.ts';
+import { addDays } from '../src/facturacion.ts';
 
 // ------------------------------------------------------------- estados
 
@@ -162,4 +164,136 @@ test('briefFromQuote: lo acordado en texto, en español, sin inventar lo que fal
   assert.equal(cutHoursLabel(47), '47 h');
   assert.equal(cutHoursLabel(48), '2 días');
   assert.equal(cutHoursLabel(60), '60 h', 'dos días y medio no se redondea');
+});
+
+// ---------------------------------------------- seguidores de la marca (CAM-3)
+
+/**
+ * La serie de @cafealma del seed 0003 §2, generada con su misma fórmula:
+ * día 0 = 4 jul 2026 con 18 200; antes (d < 37) 12 + (2d mod 3); ventana
+ * 10–17 ago (d 37..44) 150,155,175,160,150,150,150,150; después 22 + (5d mod 9).
+ */
+function serieDelSeed(): BrandFollowerPoint[] {
+  const gains = [150, 155, 175, 160, 150, 150, 150, 150];
+  let total = 18200;
+  const out: BrandFollowerPoint[] = [];
+  for (let d = 0; d < 60; d++) {
+    const gain = d === 0 ? 0 : d >= 37 && d <= 44 ? gains[d - 37]! : d > 44 ? 22 + (d * 5) % 9 : 12 + (d * 2) % 3;
+    total += gain;
+    out.push({ day: addDays('2026-07-04', d), followers: total });
+  }
+  return out;
+}
+const CAFE_ALMA = { baselineFrom: '2026-07-27', startsOn: '2026-08-10', endsOn: '2026-08-17' };
+
+test('ritmoSeguidores con el seed de Café Alma: 12,9286/día antes, 155/día en campaña, 1 240 ganados, ×12', () => {
+  const r = ritmoSeguidores(serieDelSeed(), CAFE_ALMA);
+  assert.equal(r.baselineRate, 181 / 14);
+  assert.equal(Number(r.baselineRate!.toFixed(4)), 12.9286);
+  assert.equal(r.campaignRate, 155);
+  assert.equal(r.gained, 1240);
+  assert.equal(Math.round(r.ratio!), 12);
+  assert.equal(r.diasDeLineaBase, 14);
+  assert.equal(r.baselineDataFrom, '2026-07-27');
+  assert.equal(r.fiable, true);
+});
+
+test('la serie desordenada y con días sin cifra da lo mismo: los null se ignoran', () => {
+  const serie = serieDelSeed().reverse();
+  serie.push({ day: '2026-08-12', followers: null }); // el mismo día, sin cifra (una marca «no encontrada» ese día)
+  const r = ritmoSeguidores(serie, CAFE_ALMA);
+  assert.equal(r.campaignRate, 155);
+  assert.equal(r.gained, 1240);
+});
+
+test('sin lectura anterior a la línea base, el ancla es la primera lectura: 13 intervalos pero 14 días con datos', () => {
+  // Lo que deja el job cuando la campaña se crea justo 14 días antes: lecturas desde brand_baseline_from.
+  const serie = serieDelSeed().filter((p) => p.day >= CAFE_ALMA.baselineFrom);
+  const r = ritmoSeguidores(serie, CAFE_ALMA);
+  assert.equal(r.diasDeLineaBase, 14);
+  assert.equal(r.fiable, true);
+  assert.equal(r.baselineRate, 168 / 13);
+  assert.equal(r.campaignRate, 155, 'la campaña ancla en la lectura del 9 de agosto');
+  assert.equal(r.gained, 1240);
+});
+
+test('línea base corta: se marca, no se inventa', () => {
+  // La campaña se creó el 6 de agosto: cuatro días de línea base (6, 7, 8 y 9).
+  const serie = serieDelSeed().filter((p) => p.day >= '2026-08-06');
+  const r = ritmoSeguidores(serie, CAFE_ALMA);
+  assert.equal(r.diasDeLineaBase, 4);
+  assert.equal(r.baselineDataFrom, '2026-08-06');
+  assert.equal(r.fiable, false);
+  assert.ok(r.baselineRate !== null && r.campaignRate === 155);
+  assert.ok(r.ratio !== null);
+});
+
+test('huecos de días: un promedio entre lecturas reales no cambia con un día perdido', () => {
+  const serie = serieDelSeed().filter((p) => p.day !== '2026-08-01' && p.day !== '2026-08-13');
+  const r = ritmoSeguidores(serie, CAFE_ALMA);
+  assert.equal(r.baselineRate, 181 / 14);
+  assert.equal(r.campaignRate, 155);
+  assert.equal(r.gained, 1240);
+  assert.equal(r.diasDeLineaBase, 14);
+});
+
+test('una sola lectura, sin anterior: no hay intervalo, no hay tasa', () => {
+  const r = ritmoSeguidores([{ day: '2026-08-12', followers: 19000 }], CAFE_ALMA);
+  assert.equal(r.baselineRate, null);
+  assert.equal(r.campaignRate, null);
+  assert.equal(r.gained, null);
+  assert.equal(r.ratio, null);
+  assert.equal(r.diasDeLineaBase, 0);
+  assert.equal(r.fiable, false);
+});
+
+test('serie vacía, solo nulos o campaña sin fechas → todo null y nada de ceros', () => {
+  for (const r of [
+    ritmoSeguidores([], CAFE_ALMA),
+    ritmoSeguidores([{ day: '2026-08-10', followers: null }], CAFE_ALMA),
+    ritmoSeguidores(serieDelSeed(), { baselineFrom: null, startsOn: null, endsOn: null }),
+  ]) {
+    assert.deepEqual(r, { baselineRate: null, campaignRate: null, gained: null, ratio: null, diasDeLineaBase: 0, baselineDataFrom: null, fiable: false });
+  }
+});
+
+test('campaña en curso (sin ends_on o antes de terminar): la tasa va hasta la última lectura', () => {
+  const hastaHoy = serieDelSeed().filter((p) => p.day <= '2026-08-13');
+  const r = ritmoSeguidores(hastaHoy, { ...CAFE_ALMA, endsOn: null });
+  assert.equal(r.gained, 150 + 155 + 175 + 160);
+  assert.equal(r.campaignRate, 640 / 4);
+  assert.equal(r.fiable, true);
+});
+
+test('sin brand_baseline_from no hay línea base pero sí campaña; una línea base que no crece no da ratio', () => {
+  const r = ritmoSeguidores(serieDelSeed(), { ...CAFE_ALMA, baselineFrom: null });
+  assert.equal(r.baselineRate, null);
+  assert.equal(r.campaignRate, 155);
+  assert.equal(r.ratio, null);
+  assert.equal(r.fiable, false);
+  const plana = serieDelSeed().map((p) => (p.day < CAFE_ALMA.startsOn ? { ...p, followers: 18200 } : p));
+  const r2 = ritmoSeguidores(plana, CAFE_ALMA);
+  assert.equal(r2.baselineRate, 0);
+  assert.equal(r2.ratio, null, 'dividir entre cero no es «×∞»');
+});
+
+test('isBrandSnapshotDue: estado, cuentas y ventana [baseline, ends_on + 30]', () => {
+  const base = { status: 'live' as const, startsOn: '2026-08-10', endsOn: '2026-08-17', brandBaselineFrom: '2026-07-27', brandAccounts: 1 };
+  assert.equal(isBrandSnapshotDue(base, '2026-07-27'), true);
+  assert.equal(isBrandSnapshotDue(base, '2026-07-26'), false, 'antes de la línea base');
+  assert.equal(isBrandSnapshotDue(base, addDays('2026-08-17', BRAND_AFTER_DAYS)), true);
+  assert.equal(isBrandSnapshotDue(base, addDays('2026-08-17', BRAND_AFTER_DAYS + 1)), false, 'después de ends_on + 30');
+  assert.equal(isBrandSnapshotDue({ ...base, brandAccounts: 0 }, '2026-08-12'), false, 'sin cuentas de la marca');
+  for (const status of ['reported', 'closed', 'cancelled'] as const) assert.equal(isBrandSnapshotDue({ ...base, status }, '2026-08-12'), false, status);
+  for (const status of ['planned', 'measuring'] as const) assert.equal(isBrandSnapshotDue({ ...base, status }, '2026-08-12'), true, status);
+  // Sin brand_baseline_from: starts_on − 14. Sin fechas: siempre (se mide desde que existe).
+  assert.equal(isBrandSnapshotDue({ ...base, brandBaselineFrom: null }, addDays('2026-08-10', -BRAND_BASELINE_DAYS)), true);
+  assert.equal(isBrandSnapshotDue({ ...base, brandBaselineFrom: null }, addDays('2026-08-10', -BRAND_BASELINE_DAYS - 1)), false);
+  assert.equal(isBrandSnapshotDue({ ...base, startsOn: null, endsOn: null, brandBaselineFrom: null }, '2030-01-01'), true);
+});
+
+test('las razones «sin cifra» son un vocabulario cerrado', () => {
+  assert.equal(isBrandNoDataReason('not_found'), true);
+  assert.equal(isBrandNoDataReason('no_public_source'), true);
+  assert.equal(isBrandNoDataReason('instagram.business_discovery'), false);
 });
