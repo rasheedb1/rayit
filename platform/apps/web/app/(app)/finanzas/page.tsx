@@ -12,6 +12,7 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "./_lib/db";
 import { LIST_FILTERS, filterKey, pillForInvoice, type ListFilterKey } from "./_lib/estado";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: "Finanzas" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -94,6 +95,9 @@ function Filters({ active }: { active: ListFilterKey }) {
 }
 
 export default async function FinanzasPage({ searchParams }: { searchParams: Promise<{ estado?: string }> }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   const params = await searchParams;
   const filter = filterKey(params.estado);
   const statuses = LIST_FILTERS[filter].statuses;

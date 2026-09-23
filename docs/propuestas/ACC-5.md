@@ -346,3 +346,35 @@ medida (ACC-9) funcionará sin cambiar nada aquí.
    dos route handlers de OAuth (detrás de `OAUTH_CONNECT`) no pasan por
    el layout: les toca `requirePermission("conexiones.cuenta.conectar")`
    cuando se reactive CON-3.
+
+## 4. Revisiones
+
+### 4.1 `/code-review` (nivel alto): diez hallazgos
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | Las Server Actions de Ventas, Cotizar y Resumen/importar no llaman a `requirePermission`, y un layout no protege una Server Action. | **Justificado, para Rasheed (§3.6).** Son de sus carpetas y ACC-1 ya decidió no tocarlas. Hoy no es explotable: la única alta de membresía del código (`createCreatorWorkspace`) crea Dueños; nadie tiene otro rol hasta ACC-4. **Tiene que quedar resuelto antes de desplegar ACC-4.** |
+| 2 | `POST /resumen/importar/lote` (route handler) no pasa por el layout. | Igual que el 1: de Rasheed, antes de ACC-4. |
+| 3 | El mínimo de Finanzas es `finanzas.factura.ver` y el Mánager solo tiene `finanzas.cobro.ver`. | **Justificado.** Es el `PERMISO_MINIMO` de ACC-1 y lo que pide el encargo; `/finanzas` es la lista de facturas. Abrirle la portada al Mánager es la decisión pendiente de ACC-1 §0.2 (5). |
+| 4 | `requirePagePermission` en `/finanzas/flujo` queda dentro del `loading.tsx` de Finanzas: el 404 sería «blando» (200 y luego la página de no encontrado). | **Justificado.** Ninguno de los diez roles de fábrica llega ahí (quien tiene `finanzas.factura.ver` tiene `finanzas.flujo.ver`); solo un rol a medida (ACC-9). Queda para ACC-9. |
+| 5 | La portada del plan (`/`) enlaza todos los módulos. | **Justificado, DECISIÓN PENDIENTE DE NICOLÁS.** Es el plan del equipo, estático a propósito (`force-static`, Rasheed). Filtrarlo por persona le quita el prerender. Propuesta: sacar «Plan», «Cimientos» y «Reglas» del marco de quien no es del equipo antes del piloto. |
+| 6 | `requireModuleAccess` leía la sesión antes de mirar la bandera. | **Arreglado** (426cc91), con prueba: módulo apagado o inexistente es 404 sin consulta, y Cimientos no la paga. |
+| 7 | El `Shell` tragaba las redirecciones de Next. | **Arreglado** con `unstable_rethrow`, con prueba. |
+| 8 | `puedeAbrir` construía un `Set` por módulo. | **Arreglado.** |
+| 9 | `puede()` sin uso y duplicado en `requirePagePermission`. | **Arreglado**: `requirePagePermission` lo usa. |
+| 10 | Identificadores en español (`puedeAbrir`, `aConjunto`…) contra CLAUDE.md. | **Justificado.** Siguen al código vecino (`permisosDeLaSesion` de ACC-1, `workspaceDeDesarrollo` de CIM-3, `permisosDeRol` de core); la regla está en la lista de decisiones pendientes de ACC-1 §0.2. |
+
+### 4.2 `/security-review`: ningún hallazgo por encima del umbral
+
+Un hallazgo con confianza 7/10 (el filtro pide 8): en una navegación
+parcial, con la cabecera `Next-Router-State-Tree` falsificada, Next
+puede no volver a ejecutar el layout del módulo, y las páginas no
+comprobaban el permiso. **Arreglado igual**: cada `page.tsx` y cada
+`generateMetadata` de Campañas, Finanzas y Conexiones abre con
+`await requireModuleAccess("<módulo>")`, y `lib/permisos/paginas.test.ts`
+falla si una página nueva no lo hace. **Para Rasheed:** las páginas de
+Resumen, Ventas y Cotizar necesitan la misma línea (y entrar en la lista
+de la prueba) antes de ACC-4. Lo demás revisado quedó sano: la consulta
+no recibe ids, falla cerrada sin identidad, la RLS de `role_permission`
+no deja ver roles de otro workspace, y el modo demo solo existe sin
+llaves.

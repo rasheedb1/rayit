@@ -42,6 +42,7 @@ import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
 import { SeguidoresMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,9 @@ const loadCampaign = cache(async (id: string) =>
 );
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("campanas");
   const { id } = await params;
   if (!UUID_RE.test(id)) return { title: "Campaña" };
   const data = await loadCampaign(id);
@@ -273,6 +277,9 @@ export default async function CampanaPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string; marca?: string; aviso?: string }>;
 }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("campanas");
   const { id } = await params;
   const { error, marca: marcaParam, aviso } = await searchParams;
   if (!UUID_RE.test(id)) notFound();

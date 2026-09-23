@@ -8,7 +8,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor, type Formatter } from "@/lib/format";
-import { requirePagePermission } from "@/lib/permisos/modulo";
+import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
@@ -165,6 +165,9 @@ function Excluidos({ c, f }: { c: Cashflow; f: Formatter }) {
 }
 
 export default async function FlujoPage() {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("finanzas");
   // Primero el permiso, antes de leer nada: el flujo de caja y la
   // reserva de impuestos son de las cosas más sensibles del espacio, y
   // el rol Mánager NO las ve (packages/core/src/permisos.ts).
