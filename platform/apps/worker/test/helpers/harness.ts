@@ -89,6 +89,15 @@ export async function startHarness(opts: HarnessOptions): Promise<Harness> {
   };
 }
 
+/**
+ * Los mismos jobs sin encadenamiento (JobOptions.after vacío): para las
+ * pruebas que ejercitan un job por separado y cuentan sus corridas. La
+ * cadena collect → compute la prueba test/costuras-con.test.ts.
+ */
+export function sinEncadenar(jobs: readonly JobRegistration[]): JobRegistration[] {
+  return jobs.map((j) => ({ ...j, options: { ...j.options, after: [] } }));
+}
+
 /** Espera a que `check` devuelva algo distinto de null/undefined/false. */
 export async function waitFor<T>(check: () => Promise<T | null | undefined | false>, opts: { timeoutMs?: number; everyMs?: number; label?: string } = {}): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 15_000;

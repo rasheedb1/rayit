@@ -1,7 +1,8 @@
 /**
  * compute.post_score · cuántas veces su propia mediana hizo cada video.
- * Cada noche a las 05:45 UTC, cinco minutos después de compute.baseline
- * (job_definition, 0009).
+ * Corre DESPUÉS de cada compute.baseline que termina (encadenado en el
+ * runner, `after`), y además cada noche a las 05:45 UTC (job_definition,
+ * 0009) como red de seguridad.
  *
  * Cada video se puntúa en el MAYOR corte que ya alcanzó —uno de tres
  * días a las 72 h, uno de cuarenta días a las 720 h— contra la línea
@@ -345,4 +346,4 @@ export const computePostScoreJob = defineJob<ComputePostScorePayload>('compute.p
       fallidos,
     },
   };
-});
+}, { after: ['compute.baseline'] });

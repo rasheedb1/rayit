@@ -93,6 +93,20 @@ export function payloadContext(payload: unknown): PayloadContext {
   };
 }
 
+/** `source` del payload que el runner encola al encadenar un job tras otro (JobOptions.after). */
+export const CHAIN_SOURCE = 'chain';
+
+/**
+ * Si el payload lo encoló el encadenamiento, el id del job de arriba;
+ * si no, null. Va a job_run.metadata como `tras`, para que desde SQL se
+ * vea por qué corrió un compute.* fuera de su hora.
+ */
+export function chainedAfter(payload: unknown): string | null {
+  const p = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  if (p['source'] !== CHAIN_SOURCE || typeof p['after'] !== 'string') return null;
+  return /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(p['after']) ? p['after'] : null;
+}
+
 export function errorColumn(err: unknown): string {
   if (err instanceof JobTimeoutError) return 'timeout';
   if (err instanceof Error) return `${err.name}: ${err.message}`.slice(0, ERROR_COLUMN_MAX);
@@ -220,6 +234,7 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
   const metadata = redactSecrets({
     ...(result?.metadata ?? {}),
     bossJobId,
+    ...(chainedAfter(payload) ? { tras: chainedAfter(payload) } : {}),
     ...(error instanceof JobTimeoutError ? { timeoutS: error.timeoutS } : {}),
     ...(ctxPayload.workspaceId && !(await workspaceRecorded(deps, runId)) ? { workspaceIdIgnored: ctxPayload.workspaceId } : {}),
   });

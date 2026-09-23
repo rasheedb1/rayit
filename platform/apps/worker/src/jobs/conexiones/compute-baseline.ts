@@ -1,6 +1,8 @@
 /**
  * compute.baseline · la mediana propia del creador, por red y por corte
- * de edad. Cada noche a las 05:40 UTC (job_definition, 0009).
+ * de edad. Corre DESPUÉS de cada collect.post_metrics que trae datos
+ * (encadenado en el runner, `after`), y además cada noche a las 05:40
+ * UTC (job_definition, 0009) como red de seguridad.
  *
  * Qué escribe: una fila de creator_baseline por (workspace, creador,
  * red, corte) con la mediana, el p25 y el p75 de views, y la mediana de
@@ -322,6 +324,6 @@ export const computeBaselineJob = defineJob<ComputeBaselinePayload>('compute.bas
       fallidas,
     },
   };
-});
+}, { after: ['collect.post_metrics'] });
 
 export type { CandidateRow, JobContext, AgeCut };

@@ -123,12 +123,25 @@ export interface JobOptions {
    * @default true
    */
   retryOnItemFailure?: boolean;
+  /**
+   * Encadenamiento por evento: los jobs DESPUÉS de los cuales corre
+   * este. Cuando uno de ellos termina con datos nuevos (ok o partial),
+   * el runner encola este con el mismo workspaceId del payload (sin él,
+   * para todos). Así compute.baseline corre tras collect.post_metrics
+   * aunque la recolección se alargue o se reintente más allá de su hora.
+   *
+   * El cron de job_definition se queda: es la red de seguridad del día
+   * en que el de arriba falle entero, y la ventana de la línea base
+   * cambia con el paso del tiempo aunque no lleguen lecturas. Por eso
+   * el job de abajo tiene que ser idempotente.
+   */
+  after?: readonly string[];
 }
 
 export interface JobRegistration {
   id: string;
   handler: JobHandler<JobPayload>;
-  options: JobOptions & { retryOnItemFailure: boolean; instances: number | 'max' };
+  options: JobOptions & { retryOnItemFailure: boolean; instances: number | 'max'; after: readonly string[] };
 }
 
 export function defineJob<P extends object = JobPayload>(id: string, handler: JobHandler<P>, options: JobOptions = {}): JobRegistration {
@@ -143,6 +156,7 @@ export function defineJob<P extends object = JobPayload>(id: string, handler: Jo
       policy: options.policy,
       instances: options.instances ?? 1,
       retryOnItemFailure: options.retryOnItemFailure ?? true,
+      after: options.after ?? [],
     },
   };
 }
@@ -155,6 +169,31 @@ export class JobRegistry {
       if (this.#jobs.has(r.id)) throw new Error(`El job "${r.id}" está registrado dos veces`);
       this.#jobs.set(r.id, r);
     }
+    for (const r of registrations) {
+      for (const previo of r.options.after) {
+        if (!this.#jobs.has(previo)) throw new Error(`El job "${r.id}" corre después de "${previo}", que no está registrado`);
+      }
+    }
+    // Un ciclo (a tras b, b tras a) encadenaría corridas sin fin.
+    for (const r of registrations) {
+      const pendientes = [...r.options.after];
+      const vistos = new Set<string>();
+      while (pendientes.length > 0) {
+        const previo = pendientes.pop()!;
+        if (previo === r.id) throw new Error(`El encadenamiento de "${r.id}" forma un ciclo`);
+        if (vistos.has(previo)) continue;
+        vistos.add(previo);
+        pendientes.push(...this.#jobs.get(previo)!.options.after);
+      }
+    }
+  }
+
+  /**
+   * Los jobs que se encolan cuando `id` termina con datos nuevos: el
+   * inverso de `after`, en el orden en que se registraron.
+   */
+  next(id: string): string[] {
+    return [...this.#jobs.values()].filter((r) => r.options.after.includes(id)).map((r) => r.id);
   }
 
   has(id: string): boolean {

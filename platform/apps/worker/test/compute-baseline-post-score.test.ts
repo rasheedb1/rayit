@@ -24,7 +24,7 @@ import { findSecretInDump } from '@mc/connectors';
 import { AGE_CUTS_HOURS, MIN_SAMPLE_FOR_BASELINE } from '@mc/core';
 import { debeAvisar, scoreFrom } from '../src/jobs/conexiones/compute-post-score.ts';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
+import { jobRuns, sinEncadenar, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-23T05:40:00Z');
@@ -265,7 +265,9 @@ async function notificaciones(postId: string): Promise<NotificationRow[]> {
 }
 
 before(async () => {
-  h = await startHarness({ jobs: allJobs, now: () => reloj, seed });
+  // Cada job por separado: aquí se cuentan sus corridas una a una. La
+  // cadena collect → baseline → post_score va en costuras-con.test.ts.
+  h = await startHarness({ jobs: sinEncadenar(allJobs), now: () => reloj, seed });
 });
 after(async () => {
   await h.stop();
