@@ -377,7 +377,9 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', () => {
       INSERT INTO app_user (id, email, name) VALUES ('${USER_BECARIO}', 'becario@acc3.test', 'Becario');
       INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_B}', '${USER_BECARIO}', (SELECT id FROM role WHERE key = 'becario'));
     `);
-    const suyos = await t.db.withWorkspace(WS_B, (tx) => listMyWorkspaces(tx), { userId: USER_BECARIO });
+    // Con withIdentity, como lo pide la web: sin workspace fijado el rol
+    // a medida no se ve (role_read), y el espacio no puede desaparecer.
+    const suyos = await t.db.withIdentity({ userId: USER_BECARIO }, (tx) => listMyWorkspaces(tx));
     assert.deepEqual(suyos.map((w) => [w.id, w.role]), [[WS_B, 'viewer']]);
     // Y sin DEFAULT: una membresía sin rol no entra.
     await assert.rejects(

@@ -342,18 +342,23 @@ export async function listMyWorkspaces(tx: IdentityTx | WorkspaceTx): Promise<My
       kind: workspace.kind,
       // 0034: el rol es una fila de role; su clave es lo que la web
       // conoce ('owner', 'manager', …). role_read deja ver los de sistema
-      // y los a medida del workspace fijado.
+      // y los a medida del workspace FIJADO: con withIdentity (sin
+      // workspace) un rol a medida no se ve. Por eso LEFT JOIN: si fuera
+      // INNER, ese espacio desaparecería del selector.
       role: role.key,
       createdAt: membership.createdAt,
     })
     .from(membership)
     .innerJoin(workspace, eq(workspace.id, membership.workspaceId))
-    .innerJoin(role, eq(role.id, membership.roleId))
+    .leftJoin(role, eq(role.id, membership.roleId))
     .orderBy(asc(membership.createdAt), asc(workspace.name));
   // Un rol a medida (ACC-9, todavía no existe) no tiene etiqueta en la
   // pantalla de cuenta: se muestra como «Solo lectura», que nunca da más
   // de lo que la persona tiene. Lo que puede hacer lo dicen sus permisos.
-  return rows.map(({ createdAt: _createdAt, role: rol, ...ws }) => ({ ...ws, role: isRoleKey(rol) ? rol : 'viewer' }));
+  return rows.map(({ createdAt: _createdAt, role: rol, ...ws }) => ({
+    ...ws,
+    role: rol !== null && isRoleKey(rol) ? rol : 'viewer',
+  }));
 }
 
 /** ¿Tengo membresía en este espacio? Es la pregunta que valida la cookie mc.workspace. */
