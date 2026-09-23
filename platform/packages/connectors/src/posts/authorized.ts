@@ -118,6 +118,7 @@ function youtubeAuthorizedPostSource(core: HttpCore): PostSource {
   return youtubePostSourceOver(core, {
     label: 'YouTube Data API (canal autorizado)',
     missing: [],
+    credencial: 'dueno',
     async resolveUploads(client, target, signal) {
       requireTokens(target);
       const res = await client.channelMine({ signal });

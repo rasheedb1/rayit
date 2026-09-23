@@ -464,10 +464,13 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
        CROSS JOIN LATERAL (
          -- Publicaciones vivas y hasta cuándo llegan sus lecturas
          -- (CON-5). Cuenta cualquier fuente de lectura: la del
-         -- recolector y la del archivo importado.
-         SELECT count(*)::int AS posts_count,
-                max((SELECT max(s.captured_at) FROM post_metric_snapshot s WHERE s.post_id = p.id)) AS last_post_snapshot_at
+         -- recolector y la del archivo importado. Es distinto de
+         -- connection_health.posts_tracked, que cuenta también las que
+         -- ya no están en la plataforma. El LEFT JOIN multiplica filas
+         -- por lectura, así que el conteo va con DISTINCT.
+         SELECT count(DISTINCT p.id)::int AS posts_count, max(s.captured_at) AS last_post_snapshot_at
            FROM post p
+           LEFT JOIN post_metric_snapshot s ON s.post_id = p.id AND s.workspace_id = p.workspace_id
           WHERE p.connection_id = c.id AND p.deleted_on_platform = false
        ) contenido
       WHERE c.deleted_at IS NULL`,

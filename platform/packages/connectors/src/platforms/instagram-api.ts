@@ -206,7 +206,7 @@ export class InstagramClient {
     const clean = assertDiscoveryUsername(username);
     const limit = opts.limit ?? 25;
     if (limit < 1 || limit > INSTAGRAM_DISCOVERY_MEDIA_MAX) throw new ConnectorUsageError(`limit debe estar entre 1 y ${INSTAGRAM_DISCOVERY_MEDIA_MAX}`);
-    const after = opts.after ? `.after(${opts.after})` : '';
+    const after = opts.after ? `.after(${assertDiscoveryCursor(opts.after)})` : '';
     const media = `media${after}.limit(${limit}){${INSTAGRAM_DISCOVERY_MEDIA_FIELDS.join(',')}}`;
     const res = await this.#get('instagram.business_discovery.media', 'me', { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count,${media}}` }, opts.signal);
     const bd = asRecord(res.body['business_discovery']);
@@ -232,6 +232,17 @@ export class InstagramClient {
       after = res.data.cursor;
     }
   }
+}
+
+/**
+ * El cursor también viaja DENTRO de `fields`. Lo devuelve Meta, así que
+ * no es entrada de nadie, pero si un día lo fuera bastaría un paréntesis
+ * para reescribir la expansión entera: se valida aquí y así la regla
+ * «lo que entra en `fields` está validado» vale para toda la expresión.
+ */
+function assertDiscoveryCursor(cursor: string): string {
+  if (!/^[A-Za-z0-9_\-=+/]{1,512}$/.test(cursor)) throw new ConnectorUsageError('Cursor de paginación de Instagram inválido');
+  return cursor;
 }
 
 /** El @ viaja DENTRO de `fields`, no como parámetro: se valida antes para no construir una expansión rota. */

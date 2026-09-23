@@ -50,21 +50,30 @@ function fila(handle: string): HTMLElement {
 }
 
 describe("la fila de Cuentas después de que corre el recolector", () => {
-  it("dice de cuántas publicaciones tenemos métricas y hasta cuándo llegan", async () => {
+  it("dice cuántas publicaciones seguimos y hasta cuándo llegan SUS lecturas, sin mezclarlas con las de la cuenta", async () => {
     await pintar([{ ...BASE, postsCount: 12, lastPostSnapshotAt: "2026-09-23T05:00:00.000Z" }]);
     const r = fila("nutriveoficial");
-    // Lo que dice la plataforma y lo que tenemos medido, sin mezclarse.
+    // Lo que dice la plataforma y lo que seguimos nosotros, aparte.
     expect(within(r).getByText("140")).toBeInTheDocument();
-    expect(within(r).getByText("12 con métricas")).toBeInTheDocument();
-    // «Datos hasta» toma la más reciente de las dos series: la lectura
-    // de contenido del 23 manda sobre el día de cuenta del 22.
-    expect(within(r).getByText(/datos hasta el/).textContent).toContain("23 sep");
+    expect(within(r).getByText("12 en seguimiento")).toBeInTheDocument();
+    // Y cada fecha junto a la cifra que describe: las cifras de la fila
+    // son de la serie de cuenta (22), y el contenido va con su nombre (23).
+    expect(within(r).getByText(/datos hasta el/).textContent).toContain("22 sep");
+    expect(within(r).getByText(/publicaciones hasta el/).textContent).toContain("23 sep");
   });
 
-  it("sin lecturas de contenido no aparece un cero: la fila calla y manda el día de la cuenta", async () => {
+  it("no promete métricas que todavía no existen: entre descubrir y medir solo dice «en seguimiento»", async () => {
+    await pintar([{ ...BASE, postsCount: 25, lastPostSnapshotAt: null }]);
+    const r = fila("nutriveoficial");
+    expect(within(r).getByText("25 en seguimiento")).toBeInTheDocument();
+    expect(within(r).queryByText(/con métricas/)).not.toBeInTheDocument();
+    expect(within(r).queryByText(/publicaciones hasta el/)).not.toBeInTheDocument();
+  });
+
+  it("sin publicaciones seguidas no aparece un cero", async () => {
     await pintar([BASE]);
     const r = fila("nutriveoficial");
-    expect(within(r).queryByText("0 con métricas")).not.toBeInTheDocument();
+    expect(within(r).queryByText(/en seguimiento/)).not.toBeInTheDocument();
     expect(within(r).getByText(/datos hasta el/).textContent).toContain("22 sep");
   });
 
@@ -75,10 +84,11 @@ describe("la fila de Cuentas después de que corre el recolector", () => {
     expect(within(r).queryByText("—")).not.toBeInTheDocument();
   });
 
-  it("una cuenta cuyas publicaciones medimos pero cuya red no dice cuántas tiene enseña las dos cosas por separado", async () => {
-    await pintar([{ ...BASE, latest: { day: "2026-09-22", followers: 38400, mediaCount: null, following: null, views: null }, postsCount: 5, lastPostSnapshotAt: "2026-09-23T05:00:00.000Z" }]);
+  it("una cuenta medida cuya red no dice cuántas publicaciones tiene enseña las dos cosas por separado", async () => {
+    await pintar([{ ...BASE, latest: null, postsCount: 5, lastPostSnapshotAt: "2026-09-23T05:00:00.000Z" }]);
     const r = fila("nutriveoficial");
-    expect(within(r).getAllByText("Sin dato").length).toBeGreaterThan(0);
-    expect(within(r).getByText("5 con métricas")).toBeInTheDocument();
+    expect(within(r).getByText("5 en seguimiento")).toBeInTheDocument();
+    expect(within(r).getByText("Todavía sin cifras de la cuenta")).toBeInTheDocument();
+    expect(within(r).getByText(/publicaciones hasta el/).textContent).toContain("23 sep");
   });
 });

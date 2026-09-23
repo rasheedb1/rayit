@@ -239,7 +239,7 @@ export const STORIES: readonly Story[] = [
     title: "Recolector de posts y métricas",
     desc: "collect.posts descubre videos nuevos; collect.post_metrics y collect.account_metrics guardan el snapshot con age_hours. Append-only.",
     done: "Dos corridas seguidas producen dos filas por post y post_metrics_daily_delta muestra el crecimiento.",
-    status: "hecha",
+    status: "hecho",
     note: "collect.account_metrics ya venía de CON-10. Las fuentes por @ dan vistas, «me gusta» y comentarios; alcance, guardados y retención necesitan que el dueño autorice la cuenta y quedan en null, nunca en cero. TikTok por @ no publica videos: entran por el archivo de TikTok Studio (RES-2). Falta INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno para leer cuentas de verdad.",
   },
   {

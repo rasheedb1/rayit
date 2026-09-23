@@ -291,6 +291,24 @@ test('autorizada de instagram: los insights llegan por la superficie del post', 
   assert.ok(a.fetch.calls[0]!.url.includes('metric='));
 });
 
+test('autorizada de youtube: un token del dueño rechazado sale como auth, no como «credencial de la casa»', async () => {
+  // Si se tradujera a not_configured, el job culparía a nuestra API key
+  // y la cuenta del creador se quedaría para siempre en «activa» con un
+  // token muerto, sin aviso y reintentando cada día.
+  const a = await arnes(await loadFixtures('youtube', [['videos.list', 'invalid_token']]));
+  const source = createAuthorizedPostSource(a.core, 'youtube')!;
+  const err = await falla(source.postMetrics(target('NutriveOficial', OWNER), [{ externalPostId: 'vid00000001', surface: null, mediaType: 'video' }]));
+  assert.ok(!(err instanceof PublicLookupError), 'no se traduce: el job necesita el kind original');
+  assert.equal((err as PlatformApiError).kind, 'auth');
+});
+
+test('la de @ sí traduce: una API key rechazada es problema nuestro, no de la cuenta', async () => {
+  const a = await arnes(await loadFixtures('youtube', [['videos.list', 'invalid_token']]));
+  const err = await falla(a.publicas.youtube!.postMetrics(target('NutriveOficial'), [{ externalPostId: 'vid00000001', surface: null, mediaType: 'video' }]));
+  assert.ok(err instanceof PublicLookupError);
+  assert.equal(err.code, 'not_configured');
+});
+
 test('productTypeFor traduce la superficie sin adivinar', () => {
   assert.equal(productTypeFor('reels'), 'REELS');
   assert.equal(productTypeFor('story'), 'STORY');

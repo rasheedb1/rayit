@@ -44,10 +44,20 @@ export function youtubePostSourceOver(
     label: string;
     missing: readonly string[];
     apiKey?: string;
+    /**
+     * De quién es la credencial. Con la de la casa (API key) un rechazo
+     * es problema NUESTRO y se traduce a not_configured; con la del
+     * dueño, el PlatformApiError sale tal cual para que el job pueda
+     * pasar la cuenta a needs_reauth, como hacen TikTok e Instagram.
+     */
+    credencial: 'casa' | 'dueno';
     /** Cómo se llega al canal: por handle (pública) o con mine=true (autorizada). */
     resolveUploads(client: YouTubeClient, target: PostSourceTarget, signal?: AbortSignal): Promise<string>;
   },
 ): PostSource {
+  /** Con la credencial del dueño no se traduce nada: el job necesita el kind original. */
+  const comoError = (err: unknown, donde: string): unknown =>
+    opts.credencial === 'dueno' ? err : toLookupError(err, donde, 'YouTube');
   function open(target: PostSourceTarget): YouTubeClient {
     if (opts.missing.length > 0) throw new PublicLookupError('not_configured', GOOGLE_API_KEY_MISSING_ES);
     return new YouTubeClient(core, { connectionId: target.connectionId, tokens: target.tokens }, { apiKey: opts.apiKey });
@@ -67,7 +77,7 @@ export function youtubePostSourceOver(
     try {
       uploads = await opts.resolveUploads(yt, target, signal);
     } catch (err) {
-      throw toLookupError(err, donde, 'YouTube');
+      throw comoError(err, donde);
     }
     let pageToken: string | null = null;
     let entregados = 0;
@@ -76,7 +86,7 @@ export function youtubePostSourceOver(
       try {
         lista = await yt.uploadsPlaylistItems(uploads, { pageToken, maxResults: Math.min(YOUTUBE_PLAYLIST_PAGE_MAX, Math.max(1, max - entregados)), signal });
       } catch (err) {
-        throw toLookupError(err, donde, 'YouTube');
+        throw comoError(err, donde);
       }
       const ids = lista.data.items.map((i) => i.videoId);
       if (ids.length === 0) return;
@@ -85,7 +95,7 @@ export function youtubePostSourceOver(
         try {
           res = await yt.videosById(lote, { signal });
         } catch (err) {
-          throw toLookupError(err, donde, 'YouTube');
+          throw comoError(err, donde);
         }
         yield res.data;
       }
@@ -118,7 +128,7 @@ export function youtubePostSourceOver(
         try {
           res = await yt.videosById(lote, { signal: metricOpts.signal });
         } catch (err) {
-          throw toLookupError(err, target.handle ?? target.externalAccountId, 'YouTube');
+          throw comoError(err, target.handle ?? target.externalAccountId);
         }
         for (const video of res.data) {
           const id = video.post.external_post_id;
@@ -137,6 +147,7 @@ export function createYouTubePublicPostSource(core: HttpCore, env: Readonly<Reco
     label: 'YouTube Data API (por @)',
     missing: apiKey ? [] : [GOOGLE_API_KEY_ENV],
     apiKey,
+    credencial: 'casa',
     async resolveUploads(client, target, signal) {
       const handle = assertHandle('youtube', target.handle ?? target.externalAccountId);
       const res = await client.channelWithUploadsByHandle(handle, { signal });
