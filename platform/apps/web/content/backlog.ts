@@ -441,7 +441,8 @@ export const STORIES: readonly Story[] = [
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
-    status: "pendiente",
+    status: "hecho",
+    note: "23 de septiembre. @mc/core/outreach/deliverability: token de baja firmado (workspace y ficha, OUTREACH_OPTOUT_SECRET), URL de baja y List-Unsubscribe de un clic, pie obligatorio con la dirección postal (sin ella el correo no está listo), curva de calentamiento (20 al día la primera semana, tope el día 14), detección de rebotes y reglas de alerta. Página pública /baja/<token> (una frase, un botón; rechaza el clic de quien envió) y POST /baja/<token>/un-clic. Migración 0038 (contact.email_invalid, outbound_bounce, jobs y avisos; NO aplicada en Supabase, va con 0037 renumerada). Jobs outbound.bounces y outbound.alerts con resumen por SMTP_URL. Pantalla /ventas/politica. Probado en pglite con fixtures. Falta cablear: el lector de Gmail (conector de VEN-9; hoy «canal no configurado») y que el despachador de VEN-10 use token, pie, cabeceras y calentamiento.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

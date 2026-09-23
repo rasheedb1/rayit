@@ -427,6 +427,37 @@ Decisiones que las piezas siguientes tienen que conocer:
   Lo que se escape queda en `outbound_optout_event` para la alerta y
   para deshacerlo.
 
+**Cómo quedó la entregabilidad (VEN-15, 23 de septiembre).** Lo que el
+despachador de VEN-10 tiene que usar, todo en
+`@mc/core/outreach/deliverability` (puro, con pruebas):
+
+- **El token de baja** es `createOptoutToken({ workspaceId, contactId },
+  OUTREACH_OPTOUT_SECRET)`: `v1.<datos>.<firma>`, con 16 bytes al azar
+  por correo y la firma HMAC de la plataforma. En
+  `outbound_optout_link.token_hash` va `optoutTokenHash(token)`. La firma
+  existe para que la página sepa, sin leer esa tabla, qué workspace
+  envió el correo y rechace el clic de sus miembros.
+- **Cada correo** lleva `buildEmailFooter` (frase de baja con
+  `optoutUrl` y la dirección postal de la política; sin dirección no hay
+  pie y el correo no está listo) y `listUnsubscribeHeaders` (el POST de
+  un clic va a `/baja/<token>/un-clic`).
+- **El tope diario de una cuenta** es `warmupDailyLimit({ day:
+  warmupDay(conectada, ahora, zona), policyLimit, warmupDays })`: 20 al
+  día la primera semana y en línea recta hasta el tope el día
+  `warmup_days` (14 por defecto).
+- **Los rebotes** los lee `outbound.bounces` cada media hora a través de
+  la interfaz `BounceMailbox`; mientras no exista el conector de Gmail de
+  VEN-9, cada cuenta sale como «canal no configurado». Un rebote duro
+  marca `contact.email_invalid` (0038) y cancela los correos pendientes
+  de esa ficha, no los de LinkedIn; no va a `contact_suppression`, que
+  corta todos los canales. La base no deja programar un correo a una
+  ficha con el correo inválido (`outbound_touch_email_invalid`), pero sí
+  reclamarlo: la consulta de reclamo de VEN-10 tiene que filtrarlos.
+- **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
+  workspace desde las 8:00 locales) dejan una `notification` por tipo y
+  día y mandan el resumen a los dueños por `SMTP_URL`.
+- La política se edita en `/ventas/politica`.
+
 ### 5.3 La cadencia recomendada para un creador
 
 Chief demostró dos cosas que valen la pena: que cada toque tenga un
