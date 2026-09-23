@@ -36,19 +36,13 @@
  * igual con una función que leyera y luego escribiera. La garantía real
  * (la segunda llamada ESPERA el bloqueo de la fila y ve la plaza gastada)
  * la prueba «el bloqueo es de verdad», que solo corre contra Postgres. El
- * job contra-postgres-real del CI la corre en cada PR; en local, con el
- * Postgres de Docker (desde platform/):
- *
- *   make up && make seed
- *   docker compose exec -T db psql -U mc -d oncue -c \
- *     "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
- *   TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
- *   TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
- *     pnpm --filter @mc/db exec node --test --experimental-strip-types --test-isolation=none \
- *       test/outreach.test.ts
- *
- * Sin Docker vale cualquier Postgres 16 (packages/db/README.md, «Contra
- * Postgres real»). Contra una base que se queda, el archivo se lleva lo
+ * job contra-postgres-real del CI la corre en cada PR en un paso propio
+ * («Límites atómicos, baja y guardia de esquema contra Postgres real»),
+ * que tumba el job si falla: el resto de @mc/db va después, en un paso
+ * informativo que todavía no está en verde (CIM-2c). En local, el mismo
+ * montaje (db/montaje-postgres-real.sql antes de migrar) con Docker o
+ * con cualquier Postgres 16: packages/db/README.md, «Contra Postgres
+ * real, en local». Contra una base que se queda, el archivo se lleva lo
  * suyo al terminar y se puede volver a correr.
  *
  * Sin red y sin seeds: cada escenario se siembra como superusuario

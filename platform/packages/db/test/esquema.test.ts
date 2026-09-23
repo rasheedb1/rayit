@@ -30,6 +30,18 @@ after(async () => {
   await t.close();
 });
 
+/**
+ * El rol que migra, con el que las pruebas crean lo que crearía una
+ * migración: mc_migrator_embedded en PGlite; contra Postgres real, el de
+ * TEST_DATABASE_ADMIN_URL, que es quien corrió db/montaje-postgres-real.sql
+ * y las migraciones (sus DEFAULT PRIVILEGES le dan a mc_app lo mismo que
+ * en Supabase).
+ */
+const migrador = () =>
+  t.kind === 'pglite'
+    ? 'mc_migrator_embedded'
+    : decodeURIComponent(new URL(process.env.TEST_DATABASE_ADMIN_URL || process.env.TEST_DATABASE_URL || '').username);
+
 const AL_DIA: EstadoDelEsquema = { ...ESQUEMA_AL_DIA, aplicadas: 22, ultima: '0024_x.sql' };
 
 describe('estadoDelEsquema contra una base recién migrada', () => {
@@ -553,7 +565,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
   test('una política que no alcanza a mc_app (TO otro rol) no le abre nada', async () => {
     // Así deja 0025 §4 las altas de los seeds: TO el rol que migra.
     await con(
-      'CREATE POLICY solo_migrador ON deal FOR SELECT TO mc_migrator_embedded USING (true)',
+      `CREATE POLICY solo_migrador ON deal FOR SELECT TO ${migrador()} USING (true)`,
       'DROP POLICY solo_migrador ON deal',
       (e) => assert.ok(!claves(e).includes('deal.solo_migrador')),
     );
@@ -575,7 +587,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
     // —donde mc_app no tiene NINGÚN privilegio— salían por aquí.
     await t.admin(
       "INSERT INTO webhook_event (provider, payload, headers) VALUES ('tiktok', '{}', '{\"x-signature\": \"abc\"}'); " +
-        'SET ROLE mc_migrator_embedded; CREATE MATERIALIZED VIEW zz_mv_webhooks AS SELECT * FROM webhook_event; RESET ROLE',
+        `SET ROLE ${migrador()}; CREATE MATERIALIZED VIEW zz_mv_webhooks AS SELECT * FROM webhook_event; RESET ROLE`,
     );
     try {
       const { rows } = await t.db.withWorkspace('0000000a-0000-4000-8000-0000000000aa', (tx) =>
@@ -593,7 +605,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
 
   test('una función SECURITY DEFINER que mc_app puede llamar se nombra', async () => {
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE FUNCTION zz_lee_webhooks() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS $$SELECT count(*) FROM webhook_event$$; ' +
         'RESET ROLE',
       'DROP FUNCTION zz_lee_webhooks()',
@@ -627,8 +639,8 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
   });
 
   /** Una tabla de inquilino nueva, como la crearía una migración, con una clave hacia deal. */
-  const TABLA_NUEVA =
-    'SET ROLE mc_migrator_embedded; ' +
+  const tablaNueva = () =>
+    `SET ROLE ${migrador()}; ` +
     'CREATE TABLE zz_nota (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspace(id), deal_id uuid REFERENCES deal(id)); ' +
     'ALTER TABLE zz_nota ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_nota FORCE ROW LEVEL SECURITY; ' +
     'CREATE POLICY zz_nota_ws ON zz_nota USING (workspace_id = current_workspace_id()); ';
@@ -636,7 +648,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
   test('una clave ajena hacia una tabla con RLS sin assert_reference_visible se nombra', async () => {
     // La clave ajena no pasa por RLS: sin el disparador de 0025 §3, una
     // fila de B puede nombrar el deal de A si conoce su id.
-    await con(TABLA_NUEVA + 'RESET ROLE', 'DROP TABLE zz_nota', (e) => {
+    await con(tablaNueva() + 'RESET ROLE', 'DROP TABLE zz_nota', (e) => {
       assert.deepEqual(e.referenciasSinComprobar, ['zz_nota.deal_id → deal', 'zz_nota.workspace_id → workspace']);
       assert.match(String(explicarEsquema(e)), /assert_reference_visible/);
     });
@@ -644,7 +656,7 @@ describe('ronda 3: la guardia evalúa cada política, cada objeto y cada referen
 
   test('y con el disparador puesto, esa misma clave deja de reportarse', async () => {
     await con(
-      TABLA_NUEVA +
+      tablaNueva() +
         'CREATE TRIGGER ref_visible_deal_id BEFORE INSERT OR UPDATE OF deal_id ON zz_nota FOR EACH ROW ' +
         "WHEN (NEW.deal_id IS NOT NULL) EXECUTE FUNCTION assert_reference_visible('deal_id', 'deal', 'id'); " +
         'CREATE TRIGGER ref_visible_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON zz_nota FOR EACH ROW ' +
@@ -718,7 +730,7 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
     // deal suyo. Lo mismo con membership.user_id = t.created_by, que
     // abre las filas de otros workspaces de una persona compartida.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_corr (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), nota text); ' +
         'ALTER TABLE zz_corr ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_corr FORCE ROW LEVEL SECURITY; ' +
         'CREATE POLICY zz_corr_p ON zz_corr FOR SELECT USING (EXISTS (SELECT 1 FROM deal d WHERE d.name = zz_corr.nota)); ' +
@@ -746,7 +758,7 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
     // política que solo pregunta por la etapa. Toda fila que apunte a una
     // etapa GLOBAL la leía cualquier workspace, aunque fuera de A.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_etapa (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
         '  stage_id text REFERENCES pipeline_stage(id)); ' +
         'ALTER TABLE zz_etapa ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_etapa FORCE ROW LEVEL SECURITY; ' +
@@ -777,7 +789,7 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
     // contact_email_idx era esto: B chocaba con el correo de un contacto
     // de A (23505) y aprendía que otra agencia tiene a esa persona.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_u (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid, codigo text, otro text, tercero text); ' +
         'ALTER TABLE zz_u ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_u FORCE ROW LEVEL SECURITY; ' +
         'CREATE POLICY zz_u_ws ON zz_u USING (workspace_id = current_workspace_id()); ' +
@@ -802,7 +814,7 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
     // UPDATE, y deja USAGE solo donde mc_app inserta.
     await con(
       'GRANT SELECT ON audit_log_id_seq TO mc_app; ' +
-        'SET ROLE mc_migrator_embedded; CREATE SEQUENCE zz_seq; RESET ROLE',
+        `SET ROLE ${migrador()}; CREATE SEQUENCE zz_seq; RESET ROLE`,
       'REVOKE SELECT ON audit_log_id_seq FROM mc_app; DROP SEQUENCE zz_seq',
       (e) => {
         const audit = e.privilegiosDeMas.find((p) => p.tabla === 'audit_log_id_seq');
@@ -881,7 +893,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     // El guion de los revisores: `SELECT count(*)` sin GROUP BY devuelve
     // siempre una fila. Con la ronda 4, sinAislar=[] y politicasAbiertas=[].
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_b (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), deal_id uuid REFERENCES deal(id), nota text); ' +
         'ALTER TABLE zz_b ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_b FORCE ROW LEVEL SECURITY; ' +
         'CREATE POLICY zz_b_p ON zz_b FOR SELECT USING (EXISTS (SELECT count(*) FROM deal d WHERE d.id = zz_b.deal_id)); ' +
@@ -912,7 +924,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     // en dos workspaces las filas del otro. Con el inquilino en un AND, la
     // persona sí vale.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_col (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
         '  nota text, created_by uuid REFERENCES app_user(id)); ' +
         'ALTER TABLE zz_col ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_col FORCE ROW LEVEL SECURITY; ' +
@@ -942,7 +954,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     // una columna cualquiera de otra tabla es un filtro por texto: quien
     // fije ese correo lee la fila, sea del workspace que sea.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_correo (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid REFERENCES workspace(id), ' +
         '  email citext); ' +
         'ALTER TABLE zz_correo ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_correo FORCE ROW LEVEL SECURITY; ' +
@@ -963,7 +975,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     // empresas privadas. La guardia aceptaba la rama porque `IS NULL` era
     // la columna de la otra rama.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_snap (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), campaign_id uuid REFERENCES campaign(id), ' +
         '  company_id uuid NOT NULL REFERENCES company(id)); ' +
         'ALTER TABLE zz_snap ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_snap FORCE ROW LEVEL SECURITY; ' +
@@ -989,7 +1001,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     // company.owner_workspace_id hasta 0029: se borraba el workspace C y
     // su «Prospecto secreto» pasaba al catálogo de todos.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_marca (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), ' +
         '  owner_workspace_id uuid REFERENCES workspace(id) ON DELETE SET NULL); ' +
         'ALTER TABLE zz_marca ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_marca FORCE ROW LEVEL SECURITY; ' +
@@ -1004,12 +1016,15 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     );
   });
 
-  test('un disparador SECURITY DEFINER con EXECUTE revocado reescribe un catálogo, y la guardia lo nombra', async () => {
+  test('un disparador SECURITY DEFINER con EXECUTE revocado reescribe un catálogo, y la guardia lo nombra', async (ctx) => {
+    // El «permission denied» de abajo mide los privilegios de mc_app, y en
+    // el CI el rol de conexión (mc_app_ci) también hereda los de mc_worker.
+    if (t.kind !== 'pglite') return ctx.skip('los privilegios de mc_app solo se miden en PGlite (mc_app_ci hereda los de mc_worker)');
     // El guion de los revisores, tal cual: UPDATE niche falla con
     // permission denied, pero INSERT INTO company deja niche reescrito,
     // porque Postgres no mira EXECUTE al disparar.
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE FUNCTION zz_fuga() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS ' +
         "$$BEGIN UPDATE niche SET name_es = 'PWN' WHERE slug = 'zz-niche'; RETURN NEW; END$$; " +
         'REVOKE EXECUTE ON FUNCTION zz_fuga() FROM PUBLIC, mc_app; ' +
@@ -1034,7 +1049,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
 
   test('una regla sobre una tabla aislada reescribe un catálogo, y la guardia la nombra', async () => {
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         "CREATE RULE zz_rule AS ON INSERT TO company DO ALSO UPDATE niche SET name_es = 'RULE' WHERE slug = 'zz-niche'; " +
         'RESET ROLE',
       "DROP RULE zz_rule ON company; UPDATE niche SET name_es = 'Nicho intacto' WHERE slug = 'zz-niche'",
@@ -1132,7 +1147,7 @@ describe('pulido, ronda 1: persona, extensions y privilegios por columna', () =>
     // mide con la base). Con la ronda 5 las dos pasaban en verde.
     if (t.kind !== 'pglite') return ctx.skip('las tablas de prueba las crea el rol que migra en pglite');
     await con(
-      'SET ROLE mc_migrator_embedded; ' +
+      `SET ROLE ${migrador()}; ` +
         'CREATE TABLE zz_por_creador (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id), ' +
         '  created_by uuid REFERENCES app_user(id)); ' +
         'ALTER TABLE zz_por_creador ENABLE ROW LEVEL SECURITY; ALTER TABLE zz_por_creador FORCE ROW LEVEL SECURITY; ' +
