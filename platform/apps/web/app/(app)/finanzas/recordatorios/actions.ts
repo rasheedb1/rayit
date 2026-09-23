@@ -29,8 +29,9 @@ import { withWorkspace } from "../_lib/db";
 export async function marcarRecordatorioEnviado(id: string, invoiceId: string): Promise<void> {
   await requirePermission("finanzas.factura.editar");
   if (!isUuid(id)) return;
-  // TODO(ACC-2): audit() cuando exista. Marcar un recordatorio no mueve
-  // dinero, pero deja constancia de una gestión de cobro.
+  // Sin bitácora, y declarado como tal en packages/db/test/audit-convencion.test.ts:
+  // sellar `read_at` es «ya lo despaché», no un hecho del negocio (ACC-2).
+  // La constancia de la gestión es la propia fila de notification.
   await withWorkspace((tx) => markReminderSent(tx, id));
   revalidatePath("/finanzas");
   if (isUuid(invoiceId)) revalidatePath(`/finanzas/facturas/${invoiceId}`);

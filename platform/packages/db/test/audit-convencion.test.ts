@@ -23,7 +23,12 @@ const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'conexiones.ts'] as const;
  * (dinero, publicación, cuenta conectada) no se audita.
  */
 const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, string>> = {
-  'finanzas.ts': {},
+  'finanzas.ts': {
+    markReminderSent:
+      'read_at de una notificación es «ya lo despaché», el mismo gesto que marcar cualquier aviso como leído: no es dinero, ' +
+      'ni publicación, ni cuenta conectada (FIN-4). El hecho del negocio —que existe un recordatorio y con qué texto— lo ' +
+      'escribe el job finance.reminders, y la propia fila de notification es su constancia, con su fecha',
+  },
   'campanas.ts': {
     upsertResult:
       'campaign_result es la métrica derivada de la campaña (CAM-5): se recalcula entera desde snapshots y aportes cada mañana ' +

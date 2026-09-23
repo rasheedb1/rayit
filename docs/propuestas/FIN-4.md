@@ -325,3 +325,40 @@ Dos observaciones menores de esa revisión, también aplicadas:
 - El error de «esto no es un decimal» llevaba el monto en el mensaje, y
   ese mensaje acaba en el log. Ya no lo lleva, con su prueba.
 
+---
+
+## 5. Integración con `main` del 23-sep (tarde)
+
+La rama se rebasó por segunda vez, ya sobre el `main` que trae **ACC-2
+(bitácora), ACC-3 (migración 0034), CAM-4 y CAM-5**. Tres costuras:
+
+1. **`apps/worker/src/jobs/index.ts`** — CAM-5 registró `campanasJobs` y
+   FIN-4 registra `finanzasJobs`: van los dos.
+2. **Conteos de `runner.test.ts`** — con `campaign.compute` y
+   `finance.reminders` ya son **9** definiciones con handler y **17**
+   sin él (eran 8 y 18 con solo uno de los dos).
+3. **La convención de bitácora de ACC-2** — `markReminderSent` escribe
+   en `notification` desde `queries/finanzas.ts`, así que
+   `audit-convencion.test.ts` lo exigía. Queda **declarado sin bitácora
+   con su motivo**, no auditado: por el criterio del propio ACC-2
+   («lo que no es un hecho del negocio —dinero, publicación, cuenta
+   conectada— no se audita»), sellar `read_at` es «ya lo despaché», el
+   mismo gesto que marcar cualquier aviso como leído. El hecho del
+   negocio —que existe un recordatorio, y con qué texto— lo escribe el
+   job, y la propia fila de `notification` es su constancia con su
+   fecha. Auditar cada marcado llenaría `audit_log` de ruido.
+   Si prefieres que sí deje fila, es una línea: `audit()` en
+   `markReminderSent` y fuera la declaración.
+
+**0034 está aplicada en Supabase** (23-sep, 13:40), comprobado con
+`make db.sql`: el esquema de la base y el de `main` coinciden.
+
+### Lo que FIN-4 hace y NO hace en producción todavía
+
+El job **no corre** contra Supabase hasta que Rasheed aplique lo de
+CON-2 (`GRANT mc_worker TO mc_migrator`, `CREATE SCHEMA pgboss`) y
+llegue CIM-7. Hasta entonces la bandeja de `/finanzas` sale **vacía** en
+producción, con su estado vacío explicando cuándo aparecen los
+recordatorios. La pantalla aguanta cero filas sin mentir: no hay nada
+que apagar con una bandera.
+
