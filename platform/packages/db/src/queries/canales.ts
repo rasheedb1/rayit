@@ -375,14 +375,38 @@ export async function findLiveChannelAccount(tx: WorkerTx, provider: ChannelProv
   return r ? { id: r.id, workspaceId: r.workspace_id, channel: r.channel, status: r.status } : null;
 }
 
-/** El proveedor dice que la cuenta cayó: needs_reconnect, con el motivo en español. Solo mueve cuentas vivas. */
-export async function markChannelAccountDown(tx: WorkerTx, account: { id: string; workspaceId: string }, reason: string): Promise<boolean> {
+/** El aviso que ve la persona en la campana cuando su cuenta cae. Las frases las pone quien llama (@mc/db no escribe frases). */
+export interface ChannelDownNotice {
+  titleEs: string;
+  bodyEs: string;
+}
+
+/**
+ * El proveedor dice que la cuenta cayó: needs_reconnect, con el motivo en
+ * español, y un aviso 'connection_error' que lleva a /ventas/canales. Solo
+ * mueve cuentas conectadas o en error: una que ya estaba por reconectar no
+ * vuelve a avisar.
+ */
+export async function markChannelAccountDown(
+  tx: WorkerTx,
+  account: { id: string; workspaceId: string },
+  reason: string,
+  notice?: ChannelDownNotice,
+): Promise<boolean> {
   const res = await tx.query(
     `UPDATE outreach_channel_account SET status = 'needs_reconnect', last_error = $3, last_error_at = now()
-      WHERE id = $1 AND workspace_id = $2 AND status = ANY($4::text[]) RETURNING id`,
-    [account.id, account.workspaceId, reason.slice(0, 500), [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
+      WHERE id = $1 AND workspace_id = $2 AND status IN ('connected', 'error') RETURNING id`,
+    [account.id, account.workspaceId, reason.slice(0, 500)],
   );
-  return res.rows.length === 1;
+  const moved = res.rows.length === 1;
+  if (moved && notice) {
+    await tx.query(
+      `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+       VALUES ($1, 'connection_error', 'critical', $2, $3, 'outreach_channel_account', $4, '/ventas/canales')`,
+      [account.workspaceId, notice.titleEs, notice.bodyEs, account.id],
+    );
+  }
+  return moved;
 }
 
 export interface InboundMessage {

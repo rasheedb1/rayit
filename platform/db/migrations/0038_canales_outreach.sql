@@ -50,6 +50,12 @@ ALTER TABLE api_call_log ADD CONSTRAINT api_call_log_channel_account_check
   CHECK (channel_account_id IS NULL OR provider IS NOT NULL);
 ALTER TABLE api_call_log ADD CONSTRAINT api_call_log_connection_check
   CHECK (connection_id IS NULL OR platform_id IS NOT NULL);
+-- La misma regla que toda clave ajena hacia una tabla aislada (0025 §4):
+-- la fila solo nombra una cuenta que quien escribe puede leer.
+CREATE TRIGGER ref_visible_channel_account_id
+  BEFORE INSERT OR UPDATE OF channel_account_id ON api_call_log
+  FOR EACH ROW WHEN (NEW.channel_account_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('channel_account_id', 'outreach_channel_account', 'id');
 CREATE INDEX ON api_call_log (channel_account_id, called_at DESC) WHERE channel_account_id IS NOT NULL;
 CREATE INDEX ON api_call_log (provider, called_at DESC) WHERE provider IS NOT NULL;
 
