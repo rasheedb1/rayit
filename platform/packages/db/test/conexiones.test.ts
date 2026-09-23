@@ -5,6 +5,7 @@ import {
   ConnectionNotFound, CreatorNotInWorkspace, NoCreatorProfile, disconnectConnection, findConnectionByAccount, getDefaultCreatorId,
   listConnections, listConsents, recordConsent, upsertConnection, type UpsertConnectionInput,
 } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000002';
@@ -80,6 +81,17 @@ describe('alta, reconexión y consentimiento', () => {
     assert.equal(mine[0]!.lastSyncedAt, null, 'sin sincronización todavía: null, no cero');
     const found = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findConnectionByAccount(tx, 'tiktok', 'open_id_nueva_cuenta'));
     assert.deepEqual(found, { id: first.id, secretRef: REF, deletedAt: null, status: 'active' });
+
+    // Bitácora (ACC-2): alta y reconexión, sin secret_ref, y con los permisos otorgados.
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, first.id);
+    assert.deepEqual(bitacora.map((f) => f.action), ['connection.added', 'connection.reconnected']);
+    assert.equal(bitacora[0]?.entity_type, 'social_connection');
+    assert.equal(bitacora[0]?.before, null);
+    assert.deepEqual(bitacora[1]?.after, {
+      platformId: 'tiktok', externalAccountId: 'open_id_nueva_cuenta', handle: 'laura.renombrada', accountType: input().accountType,
+      accessMode: 'direct_oauth', scopes: ['user.info.basic'], accessExpiresAt: '2026-09-24T12:00:00.000Z',
+    });
+    assert.equal(JSON.stringify(bitacora).includes(REF), false, 'la referencia del secreto no llega a la bitácora');
   });
 
   test('aislamiento: la misma cuenta desde otro workspace no se ve y crea su propia fila', async () => {
@@ -114,6 +126,12 @@ describe('alta, reconexión y consentimiento', () => {
     assert.deepEqual(active.map((c) => c.purpose).sort(), ['analytics', 'audience_demographics']);
     assert.equal(consents.filter((c) => c.purpose === 'analytics' && c.revokedAt !== null).length, 1);
     assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listConsents(tx, id)).then((r) => r.length), 0);
+
+    // Bitácora (ACC-2): una fila por consentimiento, sin la evidencia (ip, user agent).
+    const registrados = await Promise.all(consents.map((c) => filasDeBitacora(t, WORKSPACE_LAURA, c.id, 'consent.recorded')));
+    assert.deepEqual(registrados.map((r) => r.length), [1, 1, 1]);
+    assert.deepEqual(registrados[0]?.[0]?.after, { connectionId: id, purpose: consents[0]?.purpose, policyVersion: '2026-09-22' });
+    assert.equal(JSON.stringify(registrados).includes('203.0.113.7'), false);
   });
 });
 
@@ -128,6 +146,10 @@ describe('desconectar', () => {
     await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => disconnectConnection(tx, found.id)), ConnectionNotFound);
     const out = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectConnection(tx, found.id));
     assert.equal(out.secretRef, REF);
+    const desconectada = await filasDeBitacora(t, WORKSPACE_LAURA, found.id, 'connection.disconnected');
+    assert.equal(desconectada.length, 1, 'el intento desde el workspace ajeno no dejó fila');
+    assert.deepEqual(desconectada[0]?.before, { status: 'active', platformId: 'tiktok', accessMode: 'direct_oauth' });
+    assert.deepEqual(desconectada[0]?.after, { status: 'disabled', platformId: 'tiktok', accessMode: 'direct_oauth' });
     assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listConnections(tx))).some((r) => r.id === found.id), false);
     const after = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findConnectionByAccount(tx, 'tiktok', 'open_id_nueva_cuenta'));
     assert.equal(after!.status, 'disabled');

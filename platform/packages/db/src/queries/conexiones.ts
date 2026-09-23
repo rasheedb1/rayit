@@ -9,9 +9,15 @@
  *   - Las fechas timestamptz se devuelven como ISO 8601 (UTC).
  *   - Los tokens NUNCA pasan por aquí: solo `secret_ref`. Quien los
  *     guarda es el SecretStore de @mc/connectors, en la misma transacción.
+ *   - Toda escritura de cuenta conectada o consentimiento deja su fila en
+ *     audit_log con audit() (ACC-2), en la misma transacción y antes de
+ *     devolver, sin secret_ref ni evidencia; test/audit-convencion.test.ts
+ *     lo exige. Los snapshots y la salud técnica de la lectura pública no
+ *     auditan (declarado ahí con su motivo).
  *
  * TODO(CIM-3): `getDefaultCreatorId` saldrá de la sesión.
  */
+import { audit } from '../audit.ts';
 import type { WorkspaceTx } from '../client.ts';
 
 // ---------------------------------------------------------------------
@@ -276,7 +282,19 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
     ],
   );
   const r = rows[0]!;
-  return { id: r.id, created: r.created === true };
+  const created = r.created === true;
+  // Sin secretRef: la bitácora recuerda qué cuenta y con qué permisos, nunca dónde está el token.
+  await audit(tx, {
+    action: created ? 'connection.added' : 'connection.reconnected',
+    entityType: 'social_connection',
+    entityId: r.id,
+    before: null,
+    after: {
+      platformId: input.platformId, externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType,
+      accessMode: 'direct_oauth', scopes: [...input.scopes], accessExpiresAt: input.accessExpiresAt,
+    },
+  });
+  return { id: r.id, created };
 }
 
 /**
@@ -294,7 +312,16 @@ export async function recordConsent(tx: WorkspaceTx, input: RecordConsentInput):
      VALUES (current_workspace_id(), $1, $2, $3, true, $4, $5::jsonb) RETURNING id`,
     [input.creatorId, input.connectionId, input.purpose, input.policyVersion, JSON.stringify(input.evidence)],
   );
-  return rows[0]!.id;
+  const id = rows[0]!.id;
+  // La evidencia (ip, user agent, texto mostrado) vive en data_consent; la bitácora solo dice qué se consintió.
+  await audit(tx, {
+    action: 'consent.recorded',
+    entityType: 'data_consent',
+    entityId: id,
+    before: null,
+    after: { connectionId: input.connectionId, purpose: input.purpose, policyVersion: input.policyVersion },
+  });
+  return id;
 }
 
 export const DISCONNECTED_DETAIL_ES = 'Desconectada por el creador.';
@@ -305,6 +332,13 @@ export const DISCONNECTED_DETAIL_ES = 'Desconectada por el creador.';
  * vuelve a escribirlo en la misma ref.
  */
 export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise<{ id: string; secretRef: string }> {
+  // El estado anterior se lee en la misma fila que se bloquea: la bitácora dice de dónde venía.
+  const previous = await tx.query<{ status: ConnectionStatus; platform_id: ConnectionPlatformId; access_mode: string }>(
+    `SELECT status, platform_id, access_mode FROM social_connection WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+    [id],
+  );
+  const before = previous.rows[0];
+  if (!before) throw new ConnectionNotFound(id);
   const { rows } = await tx.query<{ secret_ref: string }>(
     `UPDATE social_connection
         SET deleted_at = now(), status = 'disabled', status_detail = $2
@@ -316,6 +350,13 @@ export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise
   if (!secretRef) throw new ConnectionNotFound(id);
   await tx.query(`UPDATE data_consent SET revoked_at = now() WHERE connection_id = $1 AND revoked_at IS NULL`, [id]);
   await tx.query(`DELETE FROM connection_secret WHERE secret_ref = $1`, [secretRef]);
+  await audit(tx, {
+    action: 'connection.disconnected',
+    entityType: 'social_connection',
+    entityId: id,
+    before: { status: before.status, platformId: before.platform_id, accessMode: before.access_mode },
+    after: { status: 'disabled', platformId: before.platform_id, accessMode: before.access_mode },
+  });
   return { id, secretRef };
 }
 
@@ -371,7 +412,15 @@ export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountI
     [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle)],
   );
   const r = rows[0]!;
-  return { id: r.id, created: r.created === true };
+  const created = r.created === true;
+  await audit(tx, {
+    action: created ? 'connection.added' : 'connection.reconnected',
+    entityType: 'social_connection',
+    entityId: r.id,
+    before: null,
+    after: { platformId: input.platformId, externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType, accessMode: 'public_profile' },
+  });
+  return { id: r.id, created };
 }
 
 export interface AccountSnapshotInput {
@@ -540,5 +589,12 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
     [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
   );
   if (rows.length === 0) throw new ConnectionNotFound(id);
+  await audit(tx, {
+    action: 'connection.authorized',
+    entityType: 'social_connection',
+    entityId: id,
+    before: { accessMode: 'public_profile' },
+    after: { accessMode: 'direct_oauth', externalAccountId: input.externalAccountId, handle: input.handle, accountType: input.accountType, scopes: [...input.scopes], accessExpiresAt: input.accessExpiresAt },
+  });
 }
 
