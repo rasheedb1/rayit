@@ -751,12 +751,8 @@ export async function recordPayment(
 
   // 1 · La factura, bloqueada hasta el final de la transacción: dos
   //     cobros concurrentes sobre la misma se serializan aquí.
-  const { rows } = await tx.query<{
-    status: InvoiceStatus; total: string; paid_amount: string; currency: string; number: string; company_name: string;
-  }>(
-    `SELECT i.status, i.total::text, i.paid_amount::text, i.currency, i.number,
-            (SELECT co.name FROM company co WHERE co.id = i.company_id) AS company_name
-       FROM invoice i WHERE i.id = $1 FOR UPDATE`,
+  const { rows } = await tx.query<{ status: InvoiceStatus; total: string; paid_amount: string; currency: string }>(
+    'SELECT status, total::text, paid_amount::text, currency FROM invoice WHERE id = $1 FOR UPDATE',
     [input.invoiceId],
   );
   const row = rows[0];
@@ -805,13 +801,11 @@ export async function recordPayment(
   // 7 · El apartado, con la tasa de ESTE momento: cuando FIN-8 cambie el
   //     porcentaje, los apartados anteriores no se tocan.
   const rate = reserveRateFrom(ws.reservaPct);
-  const period = reservePeriod(input.receivedOn);
-  const reserved = rate === null ? null : taxReserveFor(result.amount, rate);
-  if (rate !== null && reserved !== null) {
+  if (rate !== null) {
     await tx.query(
       `INSERT INTO tax_reserve (workspace_id, payment_id, rate, amount, currency, period, released_at)
        VALUES (current_workspace_id(), $1, $2, $3, $4, $5, NULL)`,
-      [paymentId, rate, reserved, row.currency, period],
+      [paymentId, rate, taxReserveFor(result.amount, rate), row.currency, reservePeriod(input.receivedOn)],
     );
   }
 
