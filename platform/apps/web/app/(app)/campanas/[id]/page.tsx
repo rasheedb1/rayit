@@ -44,6 +44,7 @@ import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
 import { SeguidoresMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
+import { puede } from "@/lib/permisos";
 import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,7 @@ const loadCampaign = cache(async (id: string) =>
       // Ver la ficha (campanas.campana.ver) lo exige ACC-5 con requireModule en el segmento.
       brandInputs: await listBrandInputs(tx, id),
       result: await getCampaignResult(tx, id),
+      // «Recalcular» se enciende solo con el GRANT de 0041 (has_table_privilege), sin bandera.
       canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
       marca: await listBrandFollowers(tx, id, campaign),
       reports: await listCampaignReports(tx, id),
@@ -293,6 +295,12 @@ export default async function CampanaPage({
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
   const today = hoyEnZona(ws.timezone);
+  // Los botones que el rol no puede usar no se pintan: la acción los rechaza igual (requirePermission).
+  const [mayRecompute, puedeGenerar, puedeEnviar] = await Promise.all([
+    puede("campanas.resultado.calcular"),
+    puede("campanas.reporte.generar"),
+    puede("campanas.reporte.enviar"),
+  ]);
   const avisoMarca = leerAvisoMarca(marcaParam, aviso);
   // El enlace para la marca, absoluto con el origen público (APP_URL en
   // producción; nunca deducido de las cabeceras allí). Si no está
@@ -517,13 +525,14 @@ export default async function CampanaPage({
             result={result}
             brandInputs={brandInputs}
             canRecompute={canRecompute}
+            mayRecompute={mayRecompute}
             recompute={recalcularResultado.bind(null, campaign.id)}
             f={f}
           />
         </Section>
         <BrandInputsSection campaign={campaign} editable={editable} inputs={brandInputs} f={f} today={today} />
         <Section id="reporte" title={MESSAGES.reporte.title} meta={reports.length > 1 ? MESSAGES.reporte.version(reports.length) : undefined}>
-          <ReporteSeccion campaignId={campaign.id} status={campaign.status} reports={reports} origin={origin} f={f} />
+          <ReporteSeccion campaignId={campaign.id} status={campaign.status} reports={reports} origin={origin} puedeGenerar={puedeGenerar} puedeEnviar={puedeEnviar} f={f} />
         </Section>
       </div>
 

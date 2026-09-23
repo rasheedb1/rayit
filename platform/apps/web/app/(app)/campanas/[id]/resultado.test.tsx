@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BrandInputs, CampaignResultRow } from "@mc/db";
 import { formatterFor } from "@/lib/format";
+import { MESSAGES } from "../_lib/messages";
 import { Resultado, type ResultadoProps } from "./resultado";
 
 /**
@@ -46,6 +47,7 @@ function pintar(props: Partial<ResultadoProps> = {}) {
       result={CAFE_ALMA}
       brandInputs={SIN_APORTES}
       canRecompute={false}
+      mayRecompute
       recompute={recompute}
       f={f}
       {...props}
@@ -139,6 +141,12 @@ describe("Resultado", () => {
     pintar();
     expect(screen.queryByRole("button", { name: "Recalcular" })).toBeNull();
     expect(screen.getByText("Se recalcula cada mañana.")).toBeInTheDocument();
+  });
+
+  it("con la base lista pero un rol sin campanas.resultado.calcular: sin botón, y la frase lo dice", () => {
+    pintar({ canRecompute: true, mayRecompute: false });
+    expect(screen.queryByRole("button", { name: "Recalcular" })).toBeNull();
+    expect(screen.getByText(MESSAGES.resultado.noRole)).toBeInTheDocument();
   });
 
   it("con el permiso de la base, «Recalcular» envía la acción", () => {

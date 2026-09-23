@@ -31,19 +31,29 @@ function reporte(extra: Partial<CampaignReportRow> = {}): CampaignReportRow {
 
 describe("ReporteSeccion (CAM-6)", () => {
   it("una campaña planeada sin reporte explica por qué no hay nada que generar", () => {
-    render(<ReporteSeccion campaignId={CAMPANA} status="planned" reports={[]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="planned" reports={[]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText(t.noDisponible.planned)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: t.generar })).toBeNull();
   });
 
+  it("un rol sin campanas.reporte.generar ni .enviar ve el estado y el enlace, no los botones, y la frase lo dice", () => {
+    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[reporte()]} origin="https://on-cue.test" puedeGenerar={false} puedeEnviar={false} f={f} />);
+    expect(screen.queryByRole("button", { name: t.regenerar })).toBeNull();
+    expect(screen.queryByRole("button", { name: t.marcarEnlace })).toBeNull();
+    expect(screen.queryByRole("button", { name: t.marcarPdf })).toBeNull();
+    expect(screen.getByText(t.sinPermisoGenerar)).toBeInTheDocument();
+    expect(screen.getByText(t.sinPermisoEnviar)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: t.previsualizar })).toBeInTheDocument();
+  });
+
   it("sin reporte ofrece «Generar reporte» con lo que hace", () => {
-    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByRole("button", { name: t.generar })).toBeInTheDocument();
     expect(screen.getByText(t.ayudaSinReporte)).toBeInTheDocument();
   });
 
   it("un borrador: enlace absoluto con el origen público, aviso de que no abre y los dos «Enviado»", () => {
-    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[reporte()]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[reporte()]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText("https://on-cue.test/reporte/abcdefghjkmnpqrstuvwxyz234")).toBeInTheDocument();
     expect(screen.getByText(t.enlaceBorrador)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t.marcarEnlace })).toBeInTheDocument();
@@ -53,7 +63,7 @@ describe("ReporteSeccion (CAM-6)", () => {
 
   it("enviado y abierto: fechas en frases, sin botones de enviar, y «Generar de nuevo» explica las versiones", () => {
     const r = reporte({ status: "viewed", sentAt: "2026-09-23T16:00:00Z", sentVia: "pdf", viewedAt: "2026-09-24T13:00:00Z", viewCount: 3 });
-    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[r]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[r]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText(/^Enviado como PDF el /)).toBeInTheDocument();
     expect(screen.getByText(/^Abierto por la marca el .* · 3 aperturas$/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: t.marcarEnlace })).toBeNull();
@@ -63,19 +73,19 @@ describe("ReporteSeccion (CAM-6)", () => {
 
   it("enviado y sin abrir lo dice con una frase, no con un guion", () => {
     const r = reporte({ status: "sent", sentAt: "2026-09-23T16:00:00Z", sentVia: "link" });
-    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[r]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[r]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText(t.sinAbrir)).toBeInTheDocument();
   });
 
   it("sin origen público no inventa un enlace: muestra la ruta y por qué", () => {
-    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[reporte()]} origin={null} f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="measuring" reports={[reporte()]} origin={null} puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText("/reporte/abcdefghjkmnpqrstuvwxyz234")).toBeInTheDocument();
     expect(screen.getByText(t.sinOrigen)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /copiar/i })).toBeNull();
   });
 
   it("un borrador de una campaña cancelada después no ofrece enviarlo", () => {
-    render(<ReporteSeccion campaignId={CAMPANA} status="cancelled" reports={[reporte()]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="cancelled" reports={[reporte()]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.queryByRole("button", { name: t.marcarEnlace })).toBeNull();
     expect(screen.queryByRole("button", { name: t.regenerar })).toBeNull();
   });
@@ -83,7 +93,7 @@ describe("ReporteSeccion (CAM-6)", () => {
   it("con varias versiones las lista y marca la reemplazada", () => {
     const nueva = reporte({ id: "00000000-0000-4000-8000-00000000a002", status: "sent", sentAt: "2026-09-25T10:00:00Z", sentVia: "link" });
     const vieja = reporte({ status: "viewed", sentAt: "2026-09-23T16:00:00Z", sentVia: "link", viewedAt: "2026-09-24T13:00:00Z", supersededById: nueva.id });
-    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[nueva, vieja]} origin="https://on-cue.test" f={f} />);
+    render(<ReporteSeccion campaignId={CAMPANA} status="reported" reports={[nueva, vieja]} origin="https://on-cue.test" puedeGenerar puedeEnviar f={f} />);
     expect(screen.getByText(t.versiones)).toBeInTheDocument();
     expect(screen.getByText(t.version(2))).toBeInTheDocument();
     expect(screen.getByText(t.version(1))).toBeInTheDocument();

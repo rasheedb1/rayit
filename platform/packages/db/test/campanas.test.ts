@@ -1,5 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
 import {
   getCampaign,
@@ -817,9 +818,84 @@ describe('resultado de campaña', () => {
   const ajeno = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_AJENO, fn);
   const filas = () => laura((tx) => tx.query<{ campaign_id: string }>('SELECT campaign_id FROM campaign_result ORDER BY campaign_id')).then((r) => r.rows.map((x) => x.campaign_id));
 
-  test('sin el GRANT, mc_app no escribe campaign_result y la ficha no ofrece «Recalcular»', async () => {
-    assert.equal(await laura((tx) => canRecomputeResult(tx)), false);
-    await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), /permission denied|permiso/i);
+  const isRechazada = (err: unknown) =>
+    /row-level security|permission denied|no existe|violates|42501/i.test(err instanceof Error ? `${err.message} ${(err as { cause?: Error }).cause?.message ?? ''}` : String(err));
+
+  describe('si la 0041 no estuviera aplicada (producción antes del 23-sep)', () => {
+    before(async () => {
+      await t.admin('REVOKE INSERT, UPDATE ON campaign_result FROM mc_app');
+    });
+    after(async () => {
+      await t.admin('GRANT INSERT, UPDATE ON campaign_result TO mc_app');
+    });
+
+    test('mc_app no escribe campaign_result y la ficha no ofrece «Recalcular»', async () => {
+      assert.equal(await laura((tx) => canRecomputeResult(tx)), false);
+      await assert.rejects(laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA)), /permission denied|permiso/i);
+    });
+  });
+
+  describe('0041: lo que mc_app puede y no puede escribir', () => {
+    test('la migración es re-ejecutable: aplicarla otra vez deja los mismos privilegios, políticas y disparadores', async () => {
+      const estado = () => t.raw<{ privilegios: string; politicas: string; disparadores: string }>(`
+        SELECT (SELECT string_agg(p, ',' ORDER BY p) FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) p
+                 WHERE has_table_privilege('mc_app', 'campaign_result', p)) AS privilegios,
+               (SELECT string_agg(policyname || ':' || permissive || ':' || cmd, ',' ORDER BY policyname) FROM pg_policies
+                 WHERE tablename = 'campaign_result') AS politicas,
+               (SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger
+                 WHERE tgrelid = 'campaign_result'::regclass AND NOT tgisinternal) AS disparadores`);
+      const antes = await estado();
+      assert.deepEqual(antes, [{
+        privilegios: 'INSERT,SELECT,UPDATE',
+        politicas: 'campaign_result_web_insert:RESTRICTIVE:INSERT,campaign_result_web_update:RESTRICTIVE:UPDATE,campaign_result_ws_isolation:PERMISSIVE:ALL',
+        disparadores: 'ref_visible_campaign_id,ref_visible_workspace_id',
+      }]);
+      await t.admin(readFileSync(new URL('../../../db/migrations/0041_campaign_result_escritura_web.sql', import.meta.url), 'utf8'));
+      assert.deepEqual(await estado(), antes);
+    });
+
+    test('INSERT y UPDATE sí, DELETE no: un resultado no se borra desde la web', async () => {
+      assert.equal(await laura((tx) => canRecomputeResult(tx)), true);
+      await assert.rejects(laura((tx) => tx.query('DELETE FROM campaign_result WHERE campaign_id = $1', [CAMPAIGN_NUTRIVE])), isRechazada);
+      assert.ok(await laura((tx) => getCampaignResult(tx, CAMPAIGN_NUTRIVE)), 'la fila sigue');
+    });
+
+    test('una fila no puede nombrar una campaña de otro workspace, ni con el workspace propio ni con el ajeno', async () => {
+      const insertar = (campaignId: string, workspaceId: string) => (tx: WorkspaceTx) =>
+        tx.query('INSERT INTO campaign_result (campaign_id, workspace_id) VALUES ($1, $2)', [campaignId, workspaceId]);
+      await assert.rejects(laura(insertar(CAMPAIGN_AJENA, WORKSPACE_LAURA)), isRechazada);
+      await assert.rejects(laura(insertar(CAMPAIGN_AJENA, WORKSPACE_AJENO)), isRechazada);
+      await assert.rejects(ajeno(insertar(CAMPAIGN_NUTRIVE, WORKSPACE_AJENO)), isRechazada);
+      assert.equal((await t.db.asWorker((tx) => tx.query('SELECT 1 FROM campaign_result WHERE campaign_id = $1', [CAMPAIGN_AJENA]))).rows.length, 0);
+    });
+
+    test('un UPDATE no se lleva la fila a otro workspace ni la cuelga de otra campaña', async () => {
+      await assert.rejects(laura((tx) => tx.query('UPDATE campaign_result SET workspace_id = $2 WHERE campaign_id = $1', [CAMPAIGN_NUTRIVE, WORKSPACE_AJENO])), isRechazada);
+      await assert.rejects(laura((tx) => tx.query('UPDATE campaign_result SET campaign_id = $2 WHERE campaign_id = $1', [CAMPAIGN_NUTRIVE, CAMPAIGN_AJENA])), isRechazada);
+      const desdeAjeno = await ajeno((tx) => tx.query('UPDATE campaign_result SET views = 1 WHERE campaign_id = $1 RETURNING 1', [CAMPAIGN_NUTRIVE]));
+      assert.equal(desdeAjeno.rows.length, 0, 'el vecino no ve la fila: su UPDATE no toca nada');
+    });
+
+    test('las restrictivas atan la fila al workspace de su campaña aunque campaign se abra más adelante (ACC-6, agencias)', async () => {
+      // Simula una RLS de campaign más abierta que la de hoy: Laura VE la
+      // campaña ajena. El disparador de referencias ya no la frena (la ve)
+      // y la política de aislamiento tampoco (workspace_id es el suyo):
+      // solo campaign_result_web_insert / _web_update.
+      await t.admin('CREATE POLICY prueba_0041_ver_todo ON campaign FOR SELECT TO mc_app USING (true)');
+      try {
+        assert.equal((await laura((tx) => tx.query('SELECT 1 FROM campaign WHERE id = $1', [CAMPAIGN_AJENA]))).rows.length, 1, 'la simulación abre la campaña');
+        await assert.rejects(
+          laura((tx) => tx.query('INSERT INTO campaign_result (campaign_id, workspace_id) VALUES ($1, $2)', [CAMPAIGN_AJENA, WORKSPACE_LAURA])),
+          /row-level security/i,
+        );
+        await assert.rejects(
+          laura((tx) => tx.query('UPDATE campaign_result SET campaign_id = $2 WHERE campaign_id = $1', [CAMPAIGN_NUTRIVE, CAMPAIGN_AJENA])),
+          /row-level security/i,
+        );
+      } finally {
+        await t.admin('DROP POLICY prueba_0041_ver_todo ON campaign');
+      }
+    });
   });
 
   test('las entradas de Café Alma salen de la base: lecturas manuales a 720 h, línea base, serie de la marca y aportes', async () => {
@@ -837,14 +913,7 @@ describe('resultado de campaña', () => {
     assert.deepEqual(r.inputs.brandTotals.map((x) => [x.kind, x.source, x.value]), [['code_redemptions', 'brand_manual', '318.00'], ['revenue', 'brand_manual', '8400000.00']]);
   });
 
-  describe('con el GRANT propuesto', () => {
-    before(async () => {
-      await t.admin('GRANT INSERT, UPDATE ON campaign_result TO mc_app');
-    });
-    after(async () => {
-      await t.admin('REVOKE INSERT, UPDATE ON campaign_result FROM mc_app');
-    });
-
+  describe('recalcular como mc_app (0041)', () => {
     test('recalcular Café Alma deja en la tabla los números del seed recalculados, no los del mock', async () => {
       assert.equal(await laura((tx) => canRecomputeResult(tx)), true);
       const antes = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
