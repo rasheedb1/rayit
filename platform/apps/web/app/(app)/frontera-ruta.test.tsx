@@ -23,6 +23,12 @@ import FinanzasError from "./finanzas/error";
 import FinanzasPage from "./finanzas/page";
 import VentasError from "./ventas/error";
 import VentasPage from "./ventas/page";
+import EmpresasError from "./ventas/empresas/error";
+import EmpresasPage from "./ventas/empresas/page";
+import FichaError from "./ventas/empresas/[id]/error";
+import EmpresaPage from "./ventas/empresas/[id]/page";
+import CampanasPage from "./campanas/page";
+import ConexionesPage from "./conexiones/page";
 import { MESSAGES } from "./_lib/messages";
 import { MESSAGES as FINANZAS } from "./finanzas/_lib/messages";
 import { MESSAGES as VENTAS } from "./ventas/_lib/messages";
@@ -75,13 +81,33 @@ describe("con un DEMO_WORKSPACE_ID que no existe, la frontera dice la verdad", (
       Frontera: VentasError,
       titulo: VENTAS.error.title,
     },
-    // El segmento (app) no tiene hoy ninguna pantalla SIN frontera
-    // propia que lea el workspace (la portada dejó de leer la base en la
-    // ronda 2). Se le pasa el mismo error real: es la red de abajo para
-    // el próximo módulo que lo haga.
+    // Empresas y su ficha tienen frontera propia (ronda 5): la de Ventas
+    // decía «No pudimos leer tu pipeline» también aquí.
     {
-      nombre: "(app)",
-      pantalla: () => FinanzasPage({ searchParams: Promise.resolve({}) }),
+      nombre: "Ventas · Empresas",
+      pantalla: () => EmpresasPage({ searchParams: Promise.resolve({}) }),
+      Frontera: EmpresasError,
+      titulo: VENTAS.errorEmpresas.title,
+    },
+    {
+      nombre: "Ventas · ficha de empresa",
+      pantalla: () => EmpresaPage({ params: Promise.resolve({ id: "0000beef-0000-4000-8000-000000000001" }) }),
+      Frontera: FichaError,
+      titulo: VENTAS.errorFicha.title,
+    },
+    // Campañas y Conexiones no tienen frontera propia y no leen la fila
+    // workspace: hasta la ronda 5 pintaban «Todavía no hay campañas» o la
+    // lista vacía, como un workspace nuevo. Ahora withWorkspace comprueba
+    // la fila y caen en la del segmento (app), dentro del Shell.
+    {
+      nombre: "Campañas (frontera del segmento)",
+      pantalla: () => CampanasPage({ searchParams: Promise.resolve({}) }),
+      Frontera: AppError,
+      titulo: MESSAGES.error.title,
+    },
+    {
+      nombre: "Conexiones (frontera del segmento)",
+      pantalla: () => ConexionesPage({ searchParams: Promise.resolve({}) }),
       Frontera: AppError,
       titulo: MESSAGES.error.title,
     },

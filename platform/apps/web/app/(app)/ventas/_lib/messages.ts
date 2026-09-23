@@ -282,6 +282,20 @@ export const MESSAGES = {
     title: "No pudimos leer tu pipeline",
   },
 
+  /**
+   * Las fronteras de las pantallas de Empresas. Sin ellas, /ventas/empresas
+   * y la ficha caían en la de Ventas y decían «No pudimos leer tu
+   * pipeline» cuando lo que no se leyó son las empresas o la ficha.
+   */
+  errorEmpresas: {
+    eyebrow: "Ventas · Empresas",
+    title: "No pudimos leer tus empresas",
+  },
+  errorFicha: {
+    eyebrow: "Ventas · Empresas",
+    title: "No pudimos leer la ficha de esta empresa",
+  },
+
   loading: {
     label: "Cargando Ventas",
     kpis: ["Señales por revisar", "Negocios abiertos", "Cierre ponderado", "Ganado este trimestre"],
