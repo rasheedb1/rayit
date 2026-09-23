@@ -235,6 +235,12 @@ export const MESSAGES = {
     negocioAyuda: "La marca sale del negocio. Enviar la cotización lo pasa a «Propuesta enviada».",
     sinNegocio: "Elige el negocio que estás cotizando",
     entregables: "Entregables",
+    // Sin tarifario guardado, el selector solo ofrece «Otro entregable»:
+    // se dice por qué y se lleva adonde se guarda.
+    sinTarifario: {
+      texto: "Todavía no guardaste tu tarifario: guárdalo en Cotizar y aquí podrás elegir cada entregable con su precio.",
+      accion: "Ir al tarifario",
+    },
     entregable: "Entregable",
     otro: "Otro entregable",
     agregar: "Agregar entregable",
@@ -550,8 +556,8 @@ export const MESSAGES = {
       error: "No pudimos registrar la aceptación. Vuelve a intentarlo en un momento.",
       pie: "Documento generado con On Cue",
     },
-    /** El esqueleto mientras public_media_kit o public_quote responden. */
-    loading: "Cargando el documento",
+    // Sin esqueleto de carga a propósito: un loading.tsx en (public)
+    // mandaba el 200 antes de saber si el enlace existe (no-existe.test.tsx).
     noExiste: {
       title: "Este enlace no existe",
       description: "Puede haberse retirado o estar mal copiado. Pídele uno nuevo a quien te lo compartió.",

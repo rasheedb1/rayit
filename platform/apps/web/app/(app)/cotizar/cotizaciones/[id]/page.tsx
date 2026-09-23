@@ -16,6 +16,7 @@ import { etiquetaImpuesto, lineasAcordado } from "../../_lib/acordado";
 import { pillDeCotizacion, validezYaNoAplica } from "../../_lib/estado";
 import { ConfirmarAccion } from "../../_ui/confirmar-accion";
 import { ResumenTotales } from "../../_ui/resumen-totales";
+import { AvisoEnviada } from "./aviso-enviada";
 import { EliminarBorrador } from "./eliminar";
 import { EnviarCotizacion } from "./enviar";
 import { VentanaCampana } from "./ventana";
@@ -46,7 +47,8 @@ export default async function CotizacionPage({
   const error = mensajeDeError(sp.error);
   // ?enviada= también es un código: el botón de enviar ya no existe
   // cuando la página vuelve pintada como enviada, así que el aviso de
-  // «enlace copiado» lo da el detalle.
+  // «enlace copiado» lo da el detalle. Es de un solo uso: AvisoEnviada
+  // quita el parámetro de la URL en cuanto se pinta.
   const enviada = sp.enviada === "copiado" || sp.enviada === "manual" ? sp.enviada : null;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);
@@ -145,12 +147,7 @@ export default async function CotizacionPage({
           {error}
         </p>
       )}
-      {enviada && !esBorrador && (
-        <div role="status" className="mb-6 flex flex-wrap items-center gap-3 rounded-md border border-good/30 bg-good-wash px-3 py-2 text-sm">
-          <span className="font-medium text-good">{enviada === "copiado" ? t.enviadaCopiado : t.enviadaSinCopiar}</span>
-          {enviada === "manual" && <CopiarEnlace path={enlace} />}
-        </div>
-      )}
+      {enviada && !esBorrador && <AvisoEnviada enviada={enviada} enlace={enlace} />}
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-8">

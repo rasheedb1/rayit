@@ -16,6 +16,8 @@ import { MESSAGES } from "../../messages";
  * Al enviar, la página se vuelve a pintar como cotización enviada y este
  * botón desaparece; por eso el resultado viaja en la URL como un código
  * (?enviada=copiado | manual) y lo anuncia el detalle, no este botón.
+ * El detalle lo pinta una sola vez: AvisoEnviada borra el parámetro de
+ * la URL, y recargar o compartir la dirección ya no repite «copiado».
  */
 export function EnviarCotizacion({ id }: { id: string }) {
   const t = MESSAGES.detalle;
