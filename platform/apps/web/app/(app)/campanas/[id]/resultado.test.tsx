@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BrandInputs, CampaignResultRow } from "@mc/db";
 import { formatterFor } from "@/lib/format";
+import { MESSAGES } from "../_lib/messages";
 import { Resultado, type ResultadoProps } from "./resultado";
 
 /**
@@ -46,6 +47,7 @@ function pintar(props: Partial<ResultadoProps> = {}) {
       result={CAFE_ALMA}
       brandInputs={SIN_APORTES}
       canRecompute={false}
+      mayRecompute
       recompute={recompute}
       f={f}
       {...props}
@@ -107,6 +109,15 @@ describe("Resultado", () => {
     expect(screen.queryByText("Sin monto acordado")).toBeNull();
   });
 
+  it("CON-6 → CAM-5: con línea base, «×N tu mediana»; sin ella, ninguna razón inventada y «Falta» lo dice", () => {
+    pintar();
+    valor("Views").getByText(/tu mediana$/);
+    cleanup();
+    pintar({ result: { ...CAFE_ALMA, viewsVsMedian: null, missingInputs: ["baseline", "brand_csv_sales"] } });
+    expect(screen.queryByText(/tu mediana/)).toBeNull();
+    expect(screen.getByText(new RegExp(MESSAGES.resultado.missing.baseline))).toBeInTheDocument();
+  });
+
   it("con línea base corta no presume un «×N»; la nota del CPA dice la causa real", () => {
     pintar({ result: { ...CAFE_ALMA, cpa: null, missingInputs: ["amount", "brand_followers_baseline_short"] } });
     valor("Seguidores ganados por la marca").getByText("línea base corta: sin ritmo comparable");
@@ -139,6 +150,12 @@ describe("Resultado", () => {
     pintar();
     expect(screen.queryByRole("button", { name: "Recalcular" })).toBeNull();
     expect(screen.getByText("Se recalcula cada mañana.")).toBeInTheDocument();
+  });
+
+  it("con la base lista pero un rol sin campanas.resultado.calcular: sin botón, y la frase lo dice", () => {
+    pintar({ canRecompute: true, mayRecompute: false });
+    expect(screen.queryByRole("button", { name: "Recalcular" })).toBeNull();
+    expect(screen.getByText(MESSAGES.resultado.noRole)).toBeInTheDocument();
   });
 
   it("con el permiso de la base, «Recalcular» envía la acción", () => {

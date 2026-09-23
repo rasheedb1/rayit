@@ -26,8 +26,10 @@ export interface ResultadoProps {
   editable: boolean;
   result: CampaignResultRow | null;
   brandInputs: BrandInputs;
-  /** La base deja escribir campaign_result como mc_app (el GRANT de docs/propuestas/CAM-5.md §2). */
+  /** La base deja escribir campaign_result como mc_app (0041; has_table_privilege en canRecomputeResult). */
   canRecompute: boolean;
+  /** El rol de la sesión tiene campanas.resultado.calcular (puede() en la página). */
+  mayRecompute: boolean;
   /** Server Action ya ligada al id de la campaña. */
   recompute: () => Promise<void>;
   f: Formatter;
@@ -39,11 +41,12 @@ function brandValue(n: number | null, f: Formatter): string {
 }
 
 /** El pie con qué hacer: el botón si la base lo deja, o por qué no hay. */
-function RecomputeFooter({ status, canRecompute, recompute }: Pick<ResultadoProps, "status" | "canRecompute" | "recompute">) {
+function RecomputeFooter({ status, canRecompute, mayRecompute, recompute }: Pick<ResultadoProps, "status" | "canRecompute" | "mayRecompute" | "recompute">) {
   if (!RESULT_COMPUTE_STATUSES.includes(status)) {
     return status === "closed" ? <p className="text-xs text-fg-3">{t.frozen}</p> : null;
   }
   if (!canRecompute) return <p className="text-xs text-fg-3">{t.daily}</p>;
+  if (!mayRecompute) return <p className="text-xs text-fg-3">{t.noRole}</p>;
   return (
     <form action={recompute}>
       <Button type="submit" size="sm">
@@ -59,12 +62,12 @@ function RecomputeFooter({ status, canRecompute, recompute }: Pick<ResultadoProp
  * ritmo» sale de core (followerRateMultiple). Donde falta un dato, la
  * frase que lo dice; debajo, qué falta y dónde se arregla.
  */
-export function Resultado({ campaignId, status, editable, result, brandInputs, canRecompute, recompute, f }: ResultadoProps) {
+export function Resultado({ campaignId, status, editable, result, brandInputs, canRecompute, mayRecompute, recompute, f }: ResultadoProps) {
   if (!result) {
     return (
       <div className="space-y-3">
         <EmptyState title={t.empty.title} description={status === "planned" ? t.empty.planned : t.empty.description} />
-        <RecomputeFooter status={status} canRecompute={canRecompute} recompute={recompute} />
+        <RecomputeFooter status={status} canRecompute={canRecompute} mayRecompute={mayRecompute} recompute={recompute} />
       </div>
     );
   }
@@ -158,7 +161,7 @@ export function Resultado({ campaignId, status, editable, result, brandInputs, c
           {t.complete}
         </p>
       )}
-      <RecomputeFooter status={status} canRecompute={canRecompute} recompute={recompute} />
+      <RecomputeFooter status={status} canRecompute={canRecompute} mayRecompute={mayRecompute} recompute={recompute} />
     </div>
   );
 }

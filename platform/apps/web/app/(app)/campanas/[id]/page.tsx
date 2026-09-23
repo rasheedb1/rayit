@@ -35,6 +35,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { pillForCampaign } from "../_lib/estado";
 import { leerAvisoMarca } from "../_lib/aviso-marca";
 import { MESSAGES } from "../_lib/messages";
+import { invoiceHref } from "../_lib/rutas";
 import { actualizarSeguidoresMarca, cambiarEstadoCampana, marcarPrincipal, quitarPost, recalcularResultado } from "./actions";
 import { ImportarCsvForm, RegistrarAporteForm } from "./aporte";
 import { LinkPosts } from "./asociar";
@@ -44,6 +45,7 @@ import { CopyButton } from "./copiar";
 import { DetailsForm, TrackingForm } from "./editar-form";
 import { SeguidoresMarca } from "./seguidores";
 import { TransitionButton } from "./transicion";
+import { puede } from "@/lib/permisos";
 import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +68,7 @@ const loadCampaign = cache(async (id: string) =>
       // Ver la ficha (campanas.campana.ver) lo exige ACC-5 con requireModule en el segmento.
       brandInputs: await listBrandInputs(tx, id),
       result: await getCampaignResult(tx, id),
+      // «Recalcular» se enciende solo con el GRANT de 0041 (has_table_privilege), sin bandera.
       canRecompute: RESULT_COMPUTE_STATUSES.includes(campaign.status) ? await canRecomputeResult(tx) : false,
       marca: await listBrandFollowers(tx, id, campaign),
       reports: await listCampaignReports(tx, id),
@@ -287,7 +290,18 @@ export default async function CampanaPage({
   const { error, marca: marcaParam, aviso } = await searchParams;
   if (!UUID_RE.test(id)) notFound();
 
-  const data = await loadCampaign(id);
+  // Los permisos de la sesión, en paralelo con la carga: deciden qué botones
+  // se pintan. Las acciones los exigen igual (requirePermission); esconderlos es
+  // producto, no seguridad. Solo los que la ficha usa: «Recalcular», el
+  // reporte y lo que enlaza a Finanzas (el Mánager no tiene Finanzas).
+  const [data, mayRecompute, canGenerate, canSend, canInvoice, canSeeInvoices] = await Promise.all([
+    loadCampaign(id),
+    puede("campanas.resultado.calcular"),
+    puede("campanas.reporte.generar"),
+    puede("campanas.reporte.enviar"),
+    puede("finanzas.factura.crear"),
+    puede("finanzas.factura.ver"),
+  ]);
   if (!data) notFound();
   const { campaign, editable, posts, suggestions, linkable, brandInputs, result, canRecompute, marca, reports } = data;
   const ws = await getCurrentWorkspace();
@@ -316,10 +330,12 @@ export default async function CampanaPage({
         aside={
           <div className="flex flex-wrap gap-2">
             {invoice ? (
-              <Button variant="primary" href={`/finanzas/facturas/${invoice.id}`}>
-                Ver factura {invoice.number}
-              </Button>
-            ) : campaign.status === "cancelled" ? null : (
+              canSeeInvoices ? (
+                <Button variant="primary" href={invoiceHref(invoice.id)}>
+                  Ver factura {invoice.number}
+                </Button>
+              ) : null
+            ) : campaign.status === "cancelled" || !canInvoice ? null : (
               <form action={facturarCampana.bind(null, campaign.id)}>
                 <Button type="submit" variant="primary">
                   Facturar
@@ -464,15 +480,19 @@ export default async function CampanaPage({
             <SectionTitle>Facturas</SectionTitle>
             {campaign.invoices.length === 0 ? (
               <p className="text-xs text-fg-3">
-                {campaign.status === "cancelled" ? "Una campaña cancelada no se factura." : "Sin factura todavía. «Facturar» la crea en borrador con el monto acordado."}
+                {campaign.status === "cancelled" ? MESSAGES.facturas.cancelada : canInvoice ? MESSAGES.facturas.sinFactura : MESSAGES.facturas.sinPermiso}
               </p>
             ) : (
               <ul className="space-y-1.5 text-sm">
                 {campaign.invoices.map((i) => (
                   <li key={i.id} className="flex items-baseline justify-between gap-3">
-                    <Link href={`/finanzas/facturas/${i.id}`} className="font-mono underline-offset-2 hover:underline">
-                      {i.number}
-                    </Link>
+                    {canSeeInvoices ? (
+                      <Link href={invoiceHref(i.id)} className="font-mono underline-offset-2 hover:underline">
+                        {i.number}
+                      </Link>
+                    ) : (
+                      <span className="font-mono">{i.number}</span>
+                    )}
                     <span className="text-xs text-fg-3">
                       {INVOICE_STATUS_LABEL_ES[i.status as InvoiceStatus] ?? i.status} · {formatMoney(i.total, i.currency, { mode: "full" })}
                     </span>
@@ -517,13 +537,14 @@ export default async function CampanaPage({
             result={result}
             brandInputs={brandInputs}
             canRecompute={canRecompute}
+            mayRecompute={mayRecompute}
             recompute={recalcularResultado.bind(null, campaign.id)}
             f={f}
           />
         </Section>
         <BrandInputsSection campaign={campaign} editable={editable} inputs={brandInputs} f={f} today={today} />
         <Section id="reporte" title={MESSAGES.reporte.title} meta={reports.length > 1 ? MESSAGES.reporte.version(reports.length) : undefined}>
-          <ReporteSeccion campaignId={campaign.id} status={campaign.status} reports={reports} origin={origin} f={f} />
+          <ReporteSeccion campaignId={campaign.id} status={campaign.status} reports={reports} origin={origin} canGenerate={canGenerate} canSend={canSend} f={f} />
         </Section>
       </div>
 

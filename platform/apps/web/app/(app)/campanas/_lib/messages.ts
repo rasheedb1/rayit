@@ -104,6 +104,13 @@ export const MESSAGES = {
       } satisfies Record<BrandCsvRejectReason, string>,
     },
   },
+  /** «Facturas» de la ficha (CAM-1 → FIN-1). */
+  facturas: {
+    cancelada: "Una campaña cancelada no se factura.",
+    sinFactura: "Sin factura todavía. «Facturar» la crea en borrador con el monto acordado.",
+    /** El rol entra a Campañas pero no tiene finanzas.factura.crear (el Mánager). */
+    sinPermiso: "Sin factura todavía. Facturar lo hace quien tenga ese permiso en su rol.",
+  },
   /** «Resultado» (CAM-5): los seis KPIs de campaign_result. */
   resultado: {
     title: "Resultado",
@@ -162,6 +169,8 @@ export const MESSAGES = {
       planned: "Una campaña planeada todavía no tiene posts que medir. El resultado empieza cuando la campaña esté en curso.",
     },
     daily: "Se recalcula cada mañana.",
+    /** La base deja recalcular, pero el rol no tiene campanas.resultado.calcular. */
+    noRole: "Se recalcula cada mañana. Recalcular a mano lo puede hacer quien tenga ese permiso en su rol.",
     frozen: "Una campaña cerrada conserva su resultado: ya no se recalcula.",
     recompute: "Recalcular",
     recomputeError: "No se pudo recalcular el resultado.",
@@ -244,6 +253,9 @@ export const MESSAGES = {
     ayudaSinReporte: "Congela lo acordado, los posts con sus cortes, el resultado, la curva de la marca y lo que aportó. Nace en borrador: nadie lo ve hasta que lo marques enviado.",
     ayudaBorrador: "El borrador se reemplaza con las cifras de ahora. Su enlace no abre hasta que lo marques enviado.",
     ayudaEnviado: "El reporte enviado no cambia aunque lleguen lecturas nuevas. Generar de nuevo crea otra versión con otro enlace; el anterior sigue abriendo y avisa que hay una más reciente.",
+    /** El rol no tiene campanas.reporte.generar (o campanas.reporte.enviar): se ve el estado, no los botones. */
+    sinPermisoGenerar: "Generar el reporte lo puede hacer quien tenga ese permiso en su rol.",
+    sinPermisoEnviar: "Marcarlo enviado lo puede hacer quien tenga ese permiso en su rol.",
     noDisponible: {
       planned: "El reporte llega cuando la campaña esté en curso: hasta entonces no hay nada que congelar.",
       cancelled: "Una campaña cancelada no se reporta.",

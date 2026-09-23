@@ -22,6 +22,9 @@ export interface ReporteSeccionProps {
    * ruta y la frase que lo explica, nunca un enlace a localhost.
    */
   origin: string | null;
+  /** El rol tiene campanas.reporte.generar y campanas.reporte.enviar (puede() en la página). Sin ellos se ve el estado, no los botones. */
+  canGenerate: boolean;
+  canSend: boolean;
   f: Formatter;
 }
 
@@ -31,7 +34,7 @@ export interface ReporteSeccionProps {
  * sus fechas y las versiones. Solo props: lo que pinta lo trae la
  * página en su transacción.
  */
-export function ReporteSeccion({ campaignId, status, reports, origin, f }: ReporteSeccionProps) {
+export function ReporteSeccion({ campaignId, status, reports, origin, canGenerate, canSend, f }: ReporteSeccionProps) {
   const disponible = canGenerateReport(status);
   const ultimo = reports[0] ?? null;
 
@@ -40,7 +43,9 @@ export function ReporteSeccion({ campaignId, status, reports, origin, f }: Repor
   }
 
   const ayuda = !ultimo ? t.ayudaSinReporte : ultimo.status === "draft" ? t.ayudaBorrador : t.ayudaEnviado;
-  const generar = disponible ? (
+  const generar = !disponible ? null : !canGenerate ? (
+    <p className="text-xs text-fg-3">{t.sinPermisoGenerar}</p>
+  ) : (
     <div className="flex flex-col gap-1.5">
       {ultimo ? (
         <TransitionButton
@@ -57,11 +62,11 @@ export function ReporteSeccion({ campaignId, status, reports, origin, f }: Repor
       )}
       <p className="text-xs text-fg-3">{ayuda}</p>
     </div>
-  ) : null;
+  );
 
   return (
     <div className="space-y-5">
-      {ultimo && <VersionActual campaignId={campaignId} r={ultimo} origin={origin} f={f} publicable={disponible} />}
+      {ultimo && <VersionActual campaignId={campaignId} r={ultimo} origin={origin} f={f} publicable={disponible} canSend={canSend} />}
       {generar}
       {reports.length > 1 && (
         <div>
@@ -95,6 +100,7 @@ function VersionActual({
   origin,
   f,
   publicable,
+  canSend,
 }: {
   campaignId: string;
   r: CampaignReportRow;
@@ -102,6 +108,7 @@ function VersionActual({
   f: Formatter;
   /** La campaña sigue admitiendo reporte: una cancelada después de generar no publica su borrador. */
   publicable: boolean;
+  canSend: boolean;
 }) {
   const meta = REPORT_STATUS_META[r.status];
   const ruta = `/reporte/${r.slug}`;
@@ -150,21 +157,25 @@ function VersionActual({
         {r.status === "draft" && <p className="mt-1 text-xs text-fg-3">{t.enlaceBorrador}</p>}
       </div>
 
-      {r.status === "draft" && publicable && (
-        <div className="flex flex-wrap gap-2">
-          <TransitionButton
-            action={marcarReporteEnviado.bind(null, campaignId, r.id, "link")}
-            label={t.marcarEnlace}
-            confirmText={t.confirmarEnviado("link")}
-            variant="primary"
-          />
-          <TransitionButton
-            action={marcarReporteEnviado.bind(null, campaignId, r.id, "pdf")}
-            label={t.marcarPdf}
-            confirmText={t.confirmarEnviado("pdf")}
-          />
-        </div>
-      )}
+      {r.status === "draft" && publicable ? (
+        canSend ? (
+          <div className="flex flex-wrap gap-2">
+            <TransitionButton
+              action={marcarReporteEnviado.bind(null, campaignId, r.id, "link")}
+              label={t.marcarEnlace}
+              confirmText={t.confirmarEnviado("link")}
+              variant="primary"
+            />
+            <TransitionButton
+              action={marcarReporteEnviado.bind(null, campaignId, r.id, "pdf")}
+              label={t.marcarPdf}
+              confirmText={t.confirmarEnviado("pdf")}
+            />
+          </div>
+        ) : (
+          <p className="text-xs text-fg-3">{t.sinPermisoEnviar}</p>
+        )
+      ) : null}
     </div>
   );
 }
