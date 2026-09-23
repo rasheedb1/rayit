@@ -163,3 +163,47 @@ export function pillForFit(fitScore: string | null): { kind: PillKind; text: str
   const kind: PillKind = pct >= 75 ? "good" : pct >= 50 ? "warn" : "neutral";
   return { kind, text: `${pct} %` };
 }
+
+/**
+ * Lo contrario de `fitPercent`: el «80» que escribe una persona pasa a
+ * «0.80», que es lo que guarda `signal.fit_score`. Vacío es «sin
+ * encaje»; fuera de 0..100 o con letras, `undefined` para que el
+ * formulario lo marque como error.
+ */
+export function fitFromPercent(raw: string): string | null | undefined {
+  const v = raw.trim().replace(",", ".");
+  if (v === "") return null;
+  if (!/^\d{1,3}(\.\d+)?$/.test(v)) return undefined;
+  const n = Number(v);
+  if (n < 0 || n > 100) return undefined;
+  return (Math.round(n) / 100).toFixed(2);
+}
+
+// ---------------------------------------------------------------------
+// Pipeline: tablero o lista, y el movimiento optimista
+// ---------------------------------------------------------------------
+
+export const PIPELINE_FORMAS = ["tablero", "lista"] as const;
+export type PipelineForma = (typeof PIPELINE_FORMAS)[number];
+
+/** La forma que pide la URL (`?forma=lista`). Por defecto, el tablero. */
+export function pipelineForma(value: string | undefined): PipelineForma {
+  return PIPELINE_FORMAS.includes(value as PipelineForma) ? (value as PipelineForma) : "tablero";
+}
+
+/**
+ * El pipeline con un negocio ya en su etapa nueva, antes de que el
+ * servidor conteste. Solo cambia la columna y la etiqueta: los montos
+ * por etapa y los KPI llegan recalculados de SQL cuando la página se
+ * revalida, y aquí no se suman.
+ */
+export function applyMove<T extends { id: string; stageId: string; stageLabel: string; daysInStage: number }>(
+  deals: T[],
+  move: { dealId: string; toStageId: string; toStageLabel: string },
+): T[] {
+  return deals.map((d) =>
+    d.id === move.dealId && d.stageId !== move.toStageId
+      ? { ...d, stageId: move.toStageId, stageLabel: move.toStageLabel, daysInStage: 0 }
+      : d,
+  );
+}

@@ -64,6 +64,62 @@ export const MESSAGES = {
     detected: "Detectada",
     newSignal: "Anotar una marca",
     importCsv: "Cargar una lista",
+    toolbar: "Añadir al radar",
+    unknownBrand: "Marca sin identificar",
+    fromCsv: "De una lista",
+    acceptError: "No se pudo aceptar la señal.",
+    discardError: "No se pudo descartar la señal.",
+    discardPlaceholder: "Ya trabaja con otra creadora, no encaja con mi nicho…",
+    discardConfirm: "Descartar señal",
+    goToDeal: "Ver en el pipeline",
+
+    form: {
+      title: "Anotar una marca",
+      help: "Lo que viste tú: una pauta, un lanzamiento, una marca que te escribió. Entra a la bandeja como cualquier señal.",
+      company: "Marca",
+      companyHelp: "Su nombre, como la conoces.",
+      domain: "Web o dominio",
+      domainHelp: "Si ya existe en el catálogo, se reutiliza en vez de duplicarse.",
+      headline: "Qué viste",
+      headlineHelp: "Una línea: «Lanzó cold brew y está pautando en Meta».",
+      evidence: "Enlace a la evidencia",
+      fit: "Encaje %",
+      fitHelp: "De 0 a 100. Vacío si todavía no lo sabes.",
+      budget: "Presupuesto estimado",
+      country: "País",
+      countryHelp: "Dos letras: CO, MX, PE.",
+      industry: "Sector",
+      note: "Nota",
+      submit: "Anotar",
+      created: "Anotada. Ya está en la bandeja.",
+      duplicate: "Esa marca ya había entrado al radar antes (aunque se haya descartado), así que no se repite.",
+      error: "No se pudo anotar la señal.",
+    },
+
+    csv: {
+      title: "Cargar una lista",
+      help: "Un CSV con una marca por fila. Columnas: marca, dominio, país, sector y nota; solo la marca es obligatoria. Sirve el archivo tal como lo exporta Excel.",
+      file: "Archivo CSV",
+      paste: "O pega las filas aquí",
+      pastePlaceholder: "marca;dominio;país\nCafé Alma;cafealma.co;CO",
+      submit: "Cargar",
+      empty: "Elige un archivo o pega las filas.",
+      tooBig: "El archivo pasa de 1 MB. Pártelo en varios.",
+      notCsv: "Ese archivo no parece un CSV de texto.",
+      result: (created: number, duplicated: number) => {
+        const a = created === 1 ? "Entró 1 marca nueva" : `Entraron ${created} marcas nuevas`;
+        const b =
+          duplicated === 0
+            ? ""
+            : duplicated === 1
+              ? "; 1 ya estaba en el radar y no se repitió"
+              : `; ${duplicated} ya estaban en el radar y no se repitieron`;
+        return `${a}${b}.`;
+      },
+      lineErrors: "Filas que no entraron",
+      line: (n: number) => `Línea ${n}`,
+      error: "No se pudo cargar la lista.",
+    },
   },
 
   empresas: {
@@ -94,6 +150,48 @@ export const MESSAGES = {
     noDeals: "Sin negocios abiertos",
     neverContacted: "Sin actividad",
     optedOut: (n: number) => `${n} con baja`,
+    shortSearch: (min: number) => `Escribe al menos ${min} letras para buscar.`,
+    relationshipFilter: "Relación",
+    allRelationships: "Todas",
+    back: "Empresas",
+    pendingSignals: (n: number) => `${n} ${n === 1 ? "señal" : "señales"} en el radar`,
+
+    form: {
+      title: "Nueva empresa",
+      help: "Una marca con la que hablas o quieres hablar. Si su dominio ya está en el catálogo, se vincula esa en vez de crear otra.",
+      name: "Nombre",
+      domain: "Web o dominio",
+      country: "País",
+      countryHelp: "Dos letras: CO, MX, PE.",
+      city: "Ciudad",
+      industry: "Sector",
+      relationship: "Relación",
+      notes: "Notas",
+      submit: "Crear empresa",
+      error: "No se pudo crear la empresa.",
+    },
+
+    detail: {
+      data: "Datos",
+      domain: "Dominio",
+      location: "Ubicación",
+      industry: "Sector",
+      owner: "Responsable",
+      noOwner: "Sin responsable",
+      openDeals: "Negocios abiertos",
+      lastActivity: "Última actividad",
+      notes: "Notas",
+      noNotes: "Sin notas.",
+      relationship: "Relación",
+      saveRelationship: "Cambiar",
+      relationshipSaved: "Relación actualizada.",
+      error: "No se pudo actualizar la empresa.",
+      notFound: {
+        title: "Esa empresa no está en tu espacio",
+        description: "Puede que el enlace sea de otro espacio de trabajo o que la empresa ya no esté vinculada.",
+        action: "Volver a Empresas",
+      },
+    },
   },
 
   contacto: {
@@ -114,6 +212,27 @@ export const MESSAGES = {
       description: "Añade a quien decide, con la fuente de donde salió su dato.",
       action: "Añadir el primero",
     },
+    fullName: "Nombre",
+    roleTitle: "Cargo",
+    email: "Correo",
+    phone: "Teléfono",
+    linkedin: "LinkedIn",
+    instagram: "Instagram",
+    sourceUrl: "Enlace a la fuente",
+    sourceUrlHelp: "Dónde viste el dato, si fue en la web o en un perfil.",
+    atLeastOne: "Con nombre, correo o Instagram basta; lo demás es opcional.",
+    submit: "Guardar contacto",
+    saved: "Contacto guardado.",
+    error: "No se pudo guardar el contacto.",
+    optOutReason: "Motivo (opcional)",
+    optOutConfirm: "Sí, registrar la baja",
+    optOutDone: "Baja registrada. No se le volverá a escribir.",
+    optOutError: "No se pudo registrar la baja.",
+    bounced: "Correo rebotado",
+    sourceLabel: "Fuente",
+    seeSource: "ver",
+    sourcePlaceholder: "Elige la procedencia",
+    publicSource: "Fuente pública",
   },
 
   pipeline: {
@@ -142,6 +261,12 @@ export const MESSAGES = {
     days: (n: number) => `${n} ${n === 1 ? "día" : "días"}`,
     dragHint: "Arrastra una tarjeta a otra columna, o usa el menú de la tarjeta.",
     moveTo: "Mover a",
+    moveToLabel: (name: string) => `Mover «${name}» a otra etapa`,
+    moving: "Moviendo…",
+    moveError: "No se pudo mover el negocio. Volvió a su etapa.",
+    dropHere: (stage: string) => `Soltar en «${stage}»`,
+    listCaption: "Negocios del pipeline, por etapa",
+    weighted: "Ponderado",
   },
 
   due: {

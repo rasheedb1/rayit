@@ -1,27 +1,35 @@
+import Link from "next/link";
 import type { PipelineDealRow, StageTotal } from "@mc/db/queries/ventas";
 import { SectionTitle } from "@/components/page-header";
+import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
-import { needsNextAction, pillForDue } from "../_lib/estado";
+import { needsNextAction, pillForDue, type PipelineForma } from "../_lib/estado";
+import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
- * El tablero por etapa. Cada columna lleva su monto en la cabecera
- * —como Pipedrive— y ese monto NO se suma aquí: llega de
- * getStageTotals, que lo agrupa en SQL sobre la vista deal_pipeline.
+ * El pipeline en sus dos formas: el tablero por etapa (arrastrar y
+ * soltar) y la lista. La forma viaja en la URL (`?forma=lista`) igual
+ * que la vista, para que un enlace a «la lista del pipeline» se pueda
+ * compartir.
  *
- * Las columnas son todas las etapas, también las vacías: un tablero al
- * que le faltan columnas según el día no se puede leer de un vistazo.
+ * Este componente es de servidor: formatea montos y fechas con el
+ * formateador del workspace y le pasa al tablero, que es de cliente,
+ * los textos ya hechos. Los montos de cada columna llegan de
+ * getStageTotals, sumados en SQL.
  */
 export function PipelineView({
   deals,
   stages,
   f,
+  forma,
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
   f: Formatter;
+  forma: PipelineForma;
 }) {
   const t = MESSAGES.pipeline;
 
@@ -36,82 +44,112 @@ export function PipelineView({
     );
   }
 
+  const boardDeals: BoardDeal[] = deals.map((d) => ({
+    id: d.id,
+    companyId: d.companyId,
+    companyName: d.companyName,
+    name: d.name,
+    stageId: d.stageId,
+    stageLabel: d.stageLabel,
+    daysInStage: d.daysInStage,
+    amountText: d.amount ? f.money(d.amount, d.currency, { mode: "compact" }) : null,
+    // Un negocio cerrado no tiene siguiente acción aunque la fila la
+    // conserve: «Enviar pitch» en un ganado solo confunde.
+    nextAction: d.isWon || d.isLost ? null : d.nextAction,
+    nextActionDueText: d.isWon || d.isLost || !d.nextActionDue ? null : f.date(d.nextActionDue),
+    due: d.isWon || d.isLost ? null : pillForDue(d.dueState),
+    needsNextAction: needsNextAction(d),
+  }));
+  const boardStages: BoardStage[] = stages.map((s) => ({
+    id: s.stageId,
+    label: s.labelEs,
+    countText: f.int(s.dealCount),
+    amountText: f.money(s.amount, undefined, { mode: "compact" }),
+  }));
+
   return (
     <section aria-labelledby="pipeline">
       <SectionTitle meta={`${deals.length} ${deals.length === 1 ? "negocio" : "negocios"}`}>
         <span id="pipeline">{t.title}</span>
       </SectionTitle>
 
-      {/* Scroll horizontal solo del tablero: a 400 px se ve una columna
-          entera y se desliza, en vez de exprimir siete a la vez. */}
-      <div className="-mx-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
-        <ul className="flex min-w-max gap-3">
-          {stages.map((stage) => (
-            <StageColumn key={stage.stageId} stage={stage} deals={deals.filter((d) => d.stageId === stage.stageId)} f={f} />
-          ))}
-        </ul>
-      </div>
+      <FormaSwitch forma={forma} />
+
+      {forma === "tablero" ? <PipelineBoard deals={boardDeals} stages={boardStages} /> : <PipelineList deals={boardDeals} />}
     </section>
   );
 }
 
-function StageColumn({ stage, deals, f }: { stage: StageTotal; deals: PipelineDealRow[]; f: Formatter }) {
+/** Tablero o lista. Enlaces con aria-current, como las pestañas del módulo. */
+function FormaSwitch({ forma }: { forma: PipelineForma }) {
   const t = MESSAGES.pipeline;
+  const options: { key: PipelineForma; label: string; href: string }[] = [
+    { key: "tablero", label: t.board, href: "/ventas?vista=pipeline" },
+    { key: "lista", label: t.list, href: "/ventas?vista=pipeline&forma=lista" },
+  ];
   return (
-    <li className="w-64 shrink-0">
-      <div className="mb-2 flex items-baseline justify-between gap-2 border-b border-border pb-2">
-        <span className="text-sm font-medium text-ink">{stage.labelEs}</span>
-        <span className="text-xs tabular-nums text-muted">{f.int(stage.dealCount)}</span>
-      </div>
-      <p className="mb-2 text-xs tabular-nums text-muted">{f.money(stage.amount, undefined, { mode: "compact" })}</p>
-
-      {deals.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted">{t.stageEmpty}</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {deals.map((deal) => (
-            <DealCard key={deal.id} deal={deal} f={f} />
-          ))}
-        </ul>
-      )}
-    </li>
+    <nav aria-label={t.viewLabel} className="mb-4 inline-flex gap-0.5 rounded-[7px] border border-border bg-surface-2 p-0.5">
+      {options.map((o) => {
+        const on = o.key === forma;
+        return (
+          <Link
+            key={o.key}
+            href={o.href}
+            aria-current={on ? "page" : undefined}
+            className={`rounded-[5px] px-2.5 py-1 text-sm font-medium transition-colors ${on ? "bg-surface text-ink shadow-sm" : "text-ink-2 hover:text-ink"}`}
+          >
+            {o.label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 
-function DealCard({ deal, f }: { deal: PipelineDealRow; f: Formatter }) {
+/** La lista: los mismos negocios, en el orden del tablero (etapa y luego fecha de la siguiente acción). */
+function PipelineList({ deals }: { deals: BoardDeal[] }) {
   const t = MESSAGES.pipeline;
-  const due = pillForDue(deal.dueState);
-  const marcado = needsNextAction(deal);
-
-  return (
-    <li
-      className={`rounded-md border bg-surface p-3 ${marcado ? "border-warn" : "border-border"}`}
-      // El borde ámbar no puede ser la única señal: quien no distingue
-      // el color necesita leerlo.
-      aria-label={marcado ? `${deal.name}. ${t.noNextAction}` : undefined}
-    >
-      <p className="text-sm font-medium leading-5 text-ink">{deal.companyName}</p>
-      <p className="mt-0.5 text-xs leading-4 text-ink-2">{deal.name}</p>
-
-      <p className="mt-2 text-sm tabular-nums text-ink">
-        {deal.amount ? f.money(deal.amount, deal.currency, { mode: "compact" }) : <span className="text-muted">{t.noAmount}</span>}
-      </p>
-
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {!deal.isWon && !deal.isLost && <Pill kind={due.kind}>{due.text}</Pill>}
-        <span className="text-xs tabular-nums text-muted">{t.days(deal.daysInStage)}</span>
-      </div>
-
-      <p className="mt-2 text-xs leading-4 text-ink-2">
-        {deal.nextAction ? (
-          <>
-            {deal.nextAction}
-            {deal.nextActionDue && <span className="text-muted"> · {f.date(deal.nextActionDue)}</span>}
-          </>
-        ) : marcado ? (
+  const columns: Column<BoardDeal>[] = [
+    {
+      key: "deal",
+      header: t.columns.deal,
+      render: (d) => (
+        <CellMain sub={d.name !== d.companyName ? d.name : undefined}>
+          <Link href={`/ventas/empresas/${d.companyId}`} className="hover:underline">
+            {d.companyName}
+          </Link>
+        </CellMain>
+      ),
+    },
+    { key: "stage", header: t.columns.stage, render: (d) => d.stageLabel },
+    { key: "amount", header: t.columns.amount, align: "num", render: (d) => d.amountText ?? <span className="text-muted">{t.noAmount}</span> },
+    {
+      key: "next",
+      header: t.columns.nextAction,
+      render: (d) =>
+        d.nextAction ? (
+          <span className="flex flex-wrap items-center gap-1.5">
+            {d.due && <Pill kind={d.due.kind}>{d.due.text}</Pill>}
+            <span>
+              {d.nextAction}
+              {d.nextActionDueText && <span className="text-muted"> · {d.nextActionDueText}</span>}
+            </span>
+          </span>
+        ) : d.needsNextAction ? (
           <span className="text-warn">{t.noNextAction}</span>
-        ) : null}
-      </p>
-    </li>
+        ) : (
+          ""
+        ),
+    },
+    { key: "days", header: t.columns.daysInStage, align: "num", render: (d) => t.days(d.daysInStage) },
+  ];
+  return (
+    <DataTable
+      columns={columns}
+      rows={deals}
+      rowKey={(d) => d.id}
+      caption={t.listCaption}
+      emptyState={<EmptyState title={t.empty.title} description={t.empty.description} />}
+    />
   );
 }

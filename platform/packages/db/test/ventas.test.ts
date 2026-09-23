@@ -477,6 +477,14 @@ describe('VEN-2 · radar', () => {
     );
     const signalId = creada.id;
     if (signalId === null) throw new Error('la señal debería haberse creado');
+
+    // Antes de aceptarla no hay empresa todavía, pero la bandeja dice de
+    // qué marca es: el nombre y el dominio que se escribieron.
+    const enBandeja = (await laura((tx) => listSignals(tx, { limit: 200 }))).find((s) => s.id === signalId);
+    assert.equal(enBandeja?.companyId, null);
+    assert.equal(enBandeja?.companyName, 'Té Sereno');
+    assert.equal(enBandeja?.companyDomain, 'tesereno.co');
+
     const { companyId, companyCreated, dealId } = await laura((tx) => acceptSignal(tx, signalId));
     assert.equal(companyCreated, true);
 

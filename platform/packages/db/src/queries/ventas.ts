@@ -719,7 +719,11 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
   const status = params.status ?? 'pending';
   const limit = safeLimit(params.limit, 100, 200);
   const { rows } = await tx.query<SignalRowSql>(
-    `SELECT s.id, s.company_id, co.name AS company_name, co.domain::text AS company_domain,
+    // Una señal manual o de CSV no tiene company_id hasta que se acepta:
+    // el nombre y el dominio que se escribieron viven en `evidence`.
+    `SELECT s.id, s.company_id,
+            COALESCE(co.name, s.evidence->>'company_name')              AS company_name,
+            COALESCE(co.domain::text, s.evidence->>'domain')            AS company_domain,
             (cl.company_id IS NOT NULL) AS company_linked,
             s.source_id, COALESCE(src.label_es, s.source_id) AS source_label,
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,

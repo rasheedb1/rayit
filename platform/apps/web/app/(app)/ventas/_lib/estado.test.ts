@@ -8,7 +8,10 @@ import {
   SOURCE_OPTIONS,
   MODULE_LINKS,
   TABS,
+  applyMove,
+  fitFromPercent,
   fitPercent,
+  pipelineForma,
   needsNextAction,
   pillForDue,
   pillForFit,
@@ -105,5 +108,43 @@ describe("encaje", () => {
     expect(pillForFit("0.7400")).toEqual({ kind: "warn", text: "74 %" });
     expect(pillForFit("0.5000")).toEqual({ kind: "warn", text: "50 %" });
     expect(pillForFit("0.4900")).toEqual({ kind: "neutral", text: "49 %" });
+  });
+});
+
+describe("fitFromPercent", () => {
+  it("pasa el porcentaje a la fracción que guarda la base", () => {
+    expect(fitFromPercent("80")).toBe("0.80");
+    expect(fitFromPercent("7,4")).toBe("0.07");
+    expect(fitFromPercent("100")).toBe("1.00");
+    expect(fitFromPercent(" ")).toBeNull();
+  });
+  it("rechaza lo que no es un porcentaje", () => {
+    expect(fitFromPercent("120")).toBeUndefined();
+    expect(fitFromPercent("-3")).toBeUndefined();
+    expect(fitFromPercent("alto")).toBeUndefined();
+  });
+});
+
+describe("pipelineForma", () => {
+  it("el tablero es la de por defecto", () => {
+    expect(pipelineForma(undefined)).toBe("tablero");
+    expect(pipelineForma("lista")).toBe("lista");
+    expect(pipelineForma("__proto__")).toBe("tablero");
+  });
+});
+
+describe("applyMove", () => {
+  const deals = [
+    { id: "a", stageId: "nuevo", stageLabel: "Nuevo", daysInStage: 4 },
+    { id: "b", stageId: "nuevo", stageLabel: "Nuevo", daysInStage: 2 },
+  ];
+  it("mueve solo ese negocio y le reinicia los días en la etapa", () => {
+    const out = applyMove(deals, { dealId: "a", toStageId: "ganado", toStageLabel: "Ganado" });
+    expect(out[0]).toEqual({ id: "a", stageId: "ganado", stageLabel: "Ganado", daysInStage: 0 });
+    expect(out[1]).toBe(deals[1]);
+  });
+  it("soltarlo en su misma columna no cambia nada", () => {
+    const out = applyMove(deals, { dealId: "a", toStageId: "nuevo", toStageLabel: "Nuevo" });
+    expect(out[0]).toBe(deals[0]);
   });
 });

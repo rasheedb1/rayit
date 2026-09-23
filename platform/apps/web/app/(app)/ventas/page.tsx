@@ -9,43 +9,17 @@ import { RadarView } from "./_radar/vista";
 import { PipelineView } from "./_pipeline/vista";
 import { withWorkspace } from "./_lib/db";
 import { MESSAGES } from "./_lib/messages";
-import { MODULE_LINKS, tabKey } from "./_lib/estado";
+import { pipelineForma, tabKey } from "./_lib/estado";
+import { ModuleTabs } from "./_componentes/pestanas";
 
 export const metadata: Metadata = { title: "Ventas" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
-/**
- * La tira de navegación del módulo. Son enlaces, no botones: cada vista
- * tiene su URL, se puede compartir y el botón de atrás hace lo que se
- * espera. `aria-current="page"` es lo que un lector de pantalla
- * anuncia; el color solo lo acompaña.
- */
-function ModuleTabs({ active }: { active: string }) {
-  return (
-    <nav aria-label={MESSAGES.tabs.label} className="mb-6 flex flex-wrap gap-1.5 border-b border-border pb-px">
-      {MODULE_LINKS.map((link) => {
-        const on = link.href === active;
-        return (
-          <Link
-            key={link.href}
-            href={link.href}
-            aria-current={on ? "page" : undefined}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
-              on ? "border-ink font-medium text-ink" : "border-transparent text-ink-2 hover:text-ink"
-            }`}
-          >
-            {link.label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
-
-export default async function VentasPage({ searchParams }: { searchParams: Promise<{ vista?: string }> }) {
+export default async function VentasPage({ searchParams }: { searchParams: Promise<{ vista?: string; forma?: string }> }) {
   const params = await searchParams;
   const vista = tabKey(params.vista);
+  const forma = pipelineForma(params.forma);
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
@@ -56,7 +30,8 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
   }));
 
-  const f = formatterFor(await getCurrentWorkspace());
+  const workspace = await getCurrentWorkspace();
+  const f = formatterFor(workspace);
   const t = MESSAGES;
 
   // Las notas de los KPI salen de números que ya vienen contados de
@@ -104,7 +79,11 @@ export default async function VentasPage({ searchParams }: { searchParams: Promi
 
       <div className="mt-10">
         <ModuleTabs active={vista === "radar" ? "/ventas" : "/ventas?vista=pipeline"} />
-        {vista === "radar" ? <RadarView signals={signals} f={f} /> : <PipelineView deals={deals} stages={stages} f={f} />}
+        {vista === "radar" ? (
+          <RadarView signals={signals} f={f} currency={workspace.currency} />
+        ) : (
+          <PipelineView deals={deals} stages={stages} f={f} forma={forma} />
+        )}
       </div>
     </>
   );
