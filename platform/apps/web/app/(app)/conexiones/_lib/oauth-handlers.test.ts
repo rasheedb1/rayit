@@ -276,3 +276,38 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(guard.attempts).toBe(0);
   });
 });
+
+describe("alcance (ACC-6): un miembro acotado no se queda con la cuenta de otra creadora", () => {
+  const MIEMBRO = "0000000a-0000-4000-8000-0000000000f2";
+  const SOFIA = "0000000a-0000-4000-8000-0000000000f3";
+
+  it("la cuenta de TikTok ya es de Sofía y el miembro solo tiene alcance a Laura: ?error=fuera_de_alcance y la fila no cambia", async () => {
+    await db.queryAsSuperuser(`INSERT INTO app_user (id, email) VALUES ($1, 'miembro.oauth@ejemplo.com') ON CONFLICT DO NOTHING`, [MIEMBRO]);
+    await db.queryAsSuperuser(`INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`, [SEED_WORKSPACE_ID, MIEMBRO]);
+    await db.queryAsSuperuser(
+      `INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES ($1, $2, 'creator', '00000002-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING`,
+      [SEED_WORKSPACE_ID, MIEMBRO],
+    );
+    await db.queryAsSuperuser(`INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ($1, $2, 'Sofía') ON CONFLICT DO NOTHING`, [SOFIA, SEED_WORKSPACE_ID]);
+    // La autorización viva de open_id_demo_laura pasa a ser de Sofía (una agencia que reparte cuentas).
+    await db.queryAsSuperuser(`UPDATE social_connection SET creator_id = $1 WHERE external_account_id = 'open_id_demo_laura'`, [SOFIA]);
+    const antes = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+      "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+    );
+
+    const acotado = createOAuthHandlers({
+      env: ENV, fetch: fetch.fetch, now: () => clock,
+      withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId: MIEMBRO }),
+    });
+    const s = await acotado.start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+    const state = new URL(s.headers.get("location")!).searchParams.get("state")!;
+    const res = await acotado.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookieOf(s)), "tiktok");
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("fuera_de_alcance");
+
+    const despues = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+      "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+    );
+    expect(despues.rows).toEqual(antes.rows);
+  });
+});

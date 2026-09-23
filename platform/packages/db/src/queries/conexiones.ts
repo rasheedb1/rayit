@@ -21,7 +21,7 @@
  * TODO(CIM-3): `getDefaultCreatorId` saldrá de la sesión.
  */
 import type { WorkspaceTx } from '../client.ts';
-import { scopeFilter } from '../scope.ts';
+import { ScopeError, scopeFilter } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Alcance (ACC-6)
@@ -294,8 +294,11 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
   // workspace podría colgar su conexión del creador de otro. Y del
   // alcance: nadie conecta la cuenta de una creadora que no ve.
   await assertCreatorInScope(tx, input.creatorId);
+  // El alias `c` es la fila que ya existía en la rama ON CONFLICT: la
+  // cuenta de una creadora fuera del alcance no se reescribe (ni cambia
+  // de creadora, ni de secret_ref). RETURNING vuelve vacío y se rechaza.
   const { rows } = await tx.query<{ id: string; created: boolean }>(
-    `INSERT INTO social_connection
+    `INSERT INTO social_connection AS c
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
         account_type, secret_ref, scopes, access_expires_at, refresh_expires_at, access_mode, status, connected_at)
      VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text[], $11, $12, 'direct_oauth', 'active', COALESCE($13, now()))
@@ -317,13 +320,15 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
            last_error_at = NULL,
            consecutive_failures = 0,
            connected_at = EXCLUDED.connected_at
-     RETURNING id, (xmax = 0) AS created`,
+       WHERE ${SCOPE_CONNECTION}
+     RETURNING c.id, (c.xmax = 0) AS created`,
     [
       input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl,
       input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null,
     ],
   );
-  const r = rows[0]!;
+  const r = rows[0];
+  if (!r) throw new ScopeError();
   return { id: r.id, created: r.created === true };
 }
 
@@ -403,23 +408,27 @@ export function publicSecretRef(platformId: ConnectionPlatformId, handle: string
  */
 export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountInput): Promise<UpsertConnectionResult> {
   await assertCreatorInScope(tx, input.creatorId);
+  // Como en upsertConnection: la rama ON CONFLICT no toca (ni reactiva)
+  // la cuenta de una creadora fuera del alcance.
   const { rows } = await tx.query<{ id: string; created: boolean }>(
-    `INSERT INTO social_connection
+    `INSERT INTO social_connection AS c
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
         account_type, secret_ref, scopes, access_mode, status, connected_at)
      VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'public_profile', 'active', now())
      ON CONFLICT (platform_id, external_account_id, workspace_id) DO UPDATE
        SET handle = EXCLUDED.handle,
-           display_name = COALESCE(EXCLUDED.display_name, social_connection.display_name),
-           avatar_url = COALESCE(EXCLUDED.avatar_url, social_connection.avatar_url),
-           profile_url = COALESCE(EXCLUDED.profile_url, social_connection.profile_url),
+           display_name = COALESCE(EXCLUDED.display_name, c.display_name),
+           avatar_url = COALESCE(EXCLUDED.avatar_url, c.avatar_url),
+           profile_url = COALESCE(EXCLUDED.profile_url, c.profile_url),
            account_type = EXCLUDED.account_type,
            status = 'active', status_detail = NULL, deleted_at = NULL, last_error_at = NULL, consecutive_failures = 0,
-           connected_at = CASE WHEN social_connection.deleted_at IS NULL THEN social_connection.connected_at ELSE now() END
-     RETURNING id, (xmax = 0) AS created`,
+           connected_at = CASE WHEN c.deleted_at IS NULL THEN c.connected_at ELSE now() END
+       WHERE ${SCOPE_CONNECTION}
+     RETURNING c.id, (c.xmax = 0) AS created`,
     [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle)],
   );
-  const r = rows[0]!;
+  const r = rows[0];
+  if (!r) throw new ScopeError();
   return { id: r.id, created: r.created === true };
 }
 
@@ -518,11 +527,13 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
 
 /**
  * Anota un fallo de lectura pública sin tocar las filas históricas.
- * `permanent` pasa la cuenta a 'error'. Si la cuenta no está viva en este
- * workspace y en el alcance, ConnectionNotFound: un fallo que no se
- * anota en ninguna parte no es un fallo silencioso aceptable.
+ * `permanent` pasa la cuenta a 'error'. Devuelve false si no anotó nada:
+ * la cuenta ya no está viva en este workspace o no está en el alcance
+ * (se desconectó mientras se leía). No lanza a propósito: quien la
+ * llama ya está devolviendo el fallo de la lectura a la pantalla, y un
+ * segundo error taparía el primero.
  */
-export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<void> {
+export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<boolean> {
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE social_connection c
         SET last_error_at = now(), consecutive_failures = consecutive_failures + 1, status_detail = $2,
@@ -531,7 +542,7 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
       RETURNING c.id`,
     [connectionId, detailEs, permanent],
   );
-  if (rows.length === 0) throw new ConnectionNotFound(connectionId);
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------
@@ -578,11 +589,20 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
   // Primero, que la cuenta por @ exista aquí y en el alcance: nada de lo
   // que sigue toca una fila que quien autoriza no ve.
   await assertConnectionInScope(tx, id);
+  // Si ese open_id ya lo tiene una cuenta de una creadora fuera del
+  // alcance, no se retira (sería tocar una fila ajena) y el UPDATE de
+  // abajo chocaría con el UNIQUE como un error cualquiera: se dice antes.
+  const { rows: ajenas } = await tx.query(
+    `SELECT 1 FROM social_connection c
+      WHERE c.platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND c.external_account_id = $2 AND c.id <> $1
+        AND NOT (${SCOPE_CONNECTION})`,
+    [id, input.externalAccountId],
+  );
+  if (ajenas.length > 0) throw new ScopeError();
   // El UNIQUE (platform_id, external_account_id, workspace_id) cuenta también
   // las filas con deleted_at: la fila anterior con ese open_id se retira y su
-  // id externo se marca como sustituido para liberar la clave. Solo si es
-  // de una creadora del alcance; si no, el UNIQUE la protege y la
-  // autorización falla en la base en vez de retirar una cuenta ajena.
+  // id externo se marca como sustituido para liberar la clave (ya se
+  // comprobó arriba que es de una creadora del alcance).
   await tx.query(
     `UPDATE social_connection c
         SET deleted_at = COALESCE(deleted_at, now()), status = 'disabled',

@@ -42,7 +42,7 @@ import {
   type SuggestionReason,
 } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { scopeFilter } from '../scope.ts';
+import { ScopeError, scopeFilter } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -265,9 +265,8 @@ const FROM_CAMPAIGN = `
            sum(m.views)::text AS views_total,
            ${TS('max(m.captured_at)')} AS data_as_of
     FROM campaign_post cp
-    JOIN post p ON p.id = cp.post_id
     LEFT JOIN post_metrics_latest m ON m.post_id = cp.post_id
-    WHERE cp.campaign_id = c.id AND ${scopePost('p.id', 'p.creator_id')}
+    WHERE cp.campaign_id = c.id AND ${scopePost('cp.post_id', '(SELECT p.creator_id FROM post p WHERE p.id = cp.post_id)')}
   ) agg ON true
 `;
 
@@ -825,8 +824,9 @@ interface RawQuoteRow {
  *     el alcance de quien acepta, o cualquiera bajo alcance por campaña
  *     (una campaña nueva no está en ninguna lista), también.
  *   - Valida antes de escribir: InvalidDatesError (fechas), InvalidNameError
- *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError. Todos
- *     con messageEs.
+ *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError, y
+ *     ScopeError si la campaña que ya existe de esa cotización está fuera
+ *     del alcance. Todos con messageEs.
  */
 export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCampaignFromQuoteInput): Promise<CreateCampaignFromQuoteResult> {
   assertCampaignDates(input.startsOn, input.endsOn);
@@ -856,13 +856,19 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   // garantía en la base; el bloqueo evita que la segunda llamada choque
   // con él y pueda devolver la campaña de la primera.
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${q.id}`]);
-  const existing = await tx.query<{ id: string }>(
-    `SELECT c.id FROM campaign c WHERE c.quote_id = $1 AND c.status <> 'cancelled' AND ${SCOPE_CAMPAIGN} ORDER BY c.created_at LIMIT 1`,
+  // Sin filtro de alcance a propósito: el índice único parcial cuenta
+  // TODAS las campañas vivas de la cotización. Si la que existe está
+  // fuera del alcance (se reasignó a otra creadora o marca), se dice con
+  // ScopeError en vez de chocar con el índice en el INSERT.
+  const existing = await tx.query<{ id: string; visible: boolean }>(
+    `SELECT c.id, (${SCOPE_CAMPAIGN}) AS visible FROM campaign c
+      WHERE c.quote_id = $1 AND c.status <> 'cancelled' ORDER BY c.created_at LIMIT 1`,
     [q.id],
   );
-  const existingId = existing.rows[0]?.id;
-  if (existingId) {
-    return { campaign: await requireCampaign(tx, existingId), created: false };
+  const found = existing.rows[0];
+  if (found) {
+    if (!found.visible) throw new ScopeError();
+    return { campaign: await requireCampaign(tx, found.id), created: false };
   }
 
   const campaignName = name ?? defaultCampaignName(q.company_name, q.first_item, q.number);

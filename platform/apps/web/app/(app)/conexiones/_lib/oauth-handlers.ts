@@ -25,7 +25,7 @@ import {
 } from "@mc/connectors";
 import {
   CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getDefaultCreatorId, NoCreatorProfile, recordConsent, upgradePublicAccountToOAuth,
-  upsertConnection, type ConsentPurpose, type WorkspaceTx,
+  ScopeError, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
 import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
 
@@ -44,6 +44,7 @@ export const OAUTH_ERROR_MESSAGES = {
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
+  fuera_de_alcance: "Esa cuenta ya está conectada a otro creador de este espacio que no está en tu alcance.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -250,7 +251,8 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       } catch (err) {
         // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador" : "temporal";
+        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador"
+          : err instanceof ScopeError ? "fuera_de_alcance" : "temporal";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);

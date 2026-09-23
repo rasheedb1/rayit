@@ -9,7 +9,7 @@ import * as finanzas from '../src/queries/finanzas.ts';
 import { ScopeError } from '../src/scope.ts';
 import { CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA } from './pglite.ts';
 import {
-  CAMPAIGN_LAURA_PRUEBA, CAMPAIGN_SOFIA, definirPruebasDeAlcance, EMPRESA_SOFIA, INVOICE_SOFIA, USER_MIEMBRO_CAMPANA,
+  CAMPAIGN_LAURA_PRUEBA, CAMPAIGN_SOFIA, definirPruebasDeAlcance, EMPRESA_SOFIA, INVOICE_SOFIA, QUOTE_SOFIA, USER_MIEMBRO_CAMPANA,
   USER_MIEMBRO_MARCA, type CasoDeAlcance,
 } from './alcance.ts';
 
@@ -89,6 +89,13 @@ definirPruebasDeAlcance('finanzas', finanzas, CASOS, ({ duena, miembro, como }) 
     const manual = await duena((tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '100000.00', issuedOn: '2026-09-20', dueOn: '2026-10-20' }));
     assert.equal(manual.campaignId, null);
     assert.equal(await miembro((tx) => getInvoice(tx, manual.id)), null, 'y el miembro no la ve');
+  });
+
+  test('una factura de una campaña de Laura no puede enlazar la cotización de Sofía', async () => {
+    await assert.rejects(
+      miembro((tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_LAURA_PRUEBA, quoteId: QUOTE_SOFIA, subtotal: '100000.00', issuedOn: '2026-09-20', dueOn: '2026-10-20' })),
+      /La cotización no existe en este workspace/,
+    );
   });
 
   test('alcance por MARCA: solo lo de la marca de Sofía; alcance por CAMPAÑA: solo lo de Café Alma', async () => {

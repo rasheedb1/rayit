@@ -382,7 +382,7 @@ export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKp
     outstanding: string; open_count: number; overdue: string; overdue_count: number; max_days_overdue: number;
     collected_ytd: string; collected_prev: string; delta_permille: number | null; tax_reserved: string; tax_rate: string | null;
   }>(`
-    WITH mias AS (
+    WITH scoped_receivables AS (
       SELECT r.* FROM receivables r WHERE ${SCOPE_RECEIVABLE}
     ), ytd AS (
       SELECT coalesce(sum(p.amount), 0) AS v FROM payment p
@@ -395,11 +395,11 @@ export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKp
         AND ${SCOPE_PAYMENT}
     )
     SELECT
-      (SELECT coalesce(sum(outstanding), 0)::text FROM mias WHERE status <> 'paid') AS outstanding,
-      (SELECT count(*)::int FROM mias WHERE status <> 'paid') AS open_count,
-      (SELECT coalesce(sum(outstanding), 0)::text FROM mias WHERE aging_bucket = 'vencida') AS overdue,
-      (SELECT count(*)::int FROM mias WHERE aging_bucket = 'vencida') AS overdue_count,
-      (SELECT coalesce(max(days_overdue), 0)::int FROM mias WHERE aging_bucket = 'vencida') AS max_days_overdue,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM scoped_receivables WHERE status <> 'paid') AS outstanding,
+      (SELECT count(*)::int FROM scoped_receivables WHERE status <> 'paid') AS open_count,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM scoped_receivables WHERE aging_bucket = 'vencida') AS overdue,
+      (SELECT count(*)::int FROM scoped_receivables WHERE aging_bucket = 'vencida') AS overdue_count,
+      (SELECT coalesce(max(days_overdue), 0)::int FROM scoped_receivables WHERE aging_bucket = 'vencida') AS max_days_overdue,
       (SELECT v::text FROM ytd) AS collected_ytd,
       (SELECT v::text FROM prev) AS collected_prev,
       (SELECT CASE WHEN prev.v > 0 THEN round((ytd.v / prev.v - 1) * 1000)::int END FROM ytd, prev) AS delta_permille,
@@ -470,6 +470,19 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
     );
     if (camp.rows.length === 0) throw new Error('La campaña no existe en este workspace.');
     creatorId = camp.rows[0]?.creator_id ?? null;
+  }
+  // La cotización que se enlaza también tiene que caer en el alcance: si
+  // no, la factura nombraría (y la ficha devolvería) una cotización ajena.
+  if (input.quoteId) {
+    const quote = await tx.query(
+      `SELECT 1 FROM quote q WHERE q.id = $1 AND ${scopeFilter({
+        creator: 'q.creator_id',
+        company: 'q.company_id',
+        campaign: { any: 'SELECT c.id FROM campaign c WHERE c.quote_id = q.id' },
+      })}`,
+      [input.quoteId],
+    );
+    if (quote.rows.length === 0) throw new Error('La cotización no existe en este workspace.');
   }
   // La factura que se va a crear tiene que caer en el alcance de quien
   // la crea, o nunca podría verla: sin campaña, no es de ninguna

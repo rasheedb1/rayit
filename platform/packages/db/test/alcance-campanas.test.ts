@@ -6,9 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as campanas from '../src/queries/campanas.ts';
-import { CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, POST_D03_TIKTOK_FRESKO } from './pglite.ts';
+import { ScopeError } from '../src/scope.ts';
+import { CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, COMPANY_CAFE_ALMA, POST_D03_TIKTOK_FRESKO, WORKSPACE_LAURA } from './pglite.ts';
 import {
-  CAMPAIGN_LAURA_PRUEBA, CAMPAIGN_SOFIA, CREATOR_SOFIA, definirPruebasDeAlcance, POST_SOFIA, QUOTE_SOFIA,
+  CAMPAIGN_LAURA_PRUEBA, CAMPAIGN_SOFIA, CREATOR_LAURA, CREATOR_SOFIA, definirPruebasDeAlcance, POST_SOFIA, QUOTE_SOFIA,
   USER_MIEMBRO_CAMPANA, USER_MIEMBRO_MARCA, type CasoDeAlcance,
 } from './alcance.ts';
 
@@ -40,7 +41,31 @@ const CASOS: Record<string, CasoDeAlcance> = {
   },
 };
 
-definirPruebasDeAlcance('campanas', campanas, CASOS, ({ duena, miembro, como }) => {
+/** Una cotización aceptada de Laura cuya campaña viva quedó reasignada a Sofía. */
+const QUOTE_LAURA_REASIGNADA = '0000000b-0000-4000-8000-0000c0700001';
+const CAMPAIGN_REASIGNADA = '0000000b-0000-4000-8000-000000ca0002';
+
+definirPruebasDeAlcance('campanas', campanas, CASOS, ({ t, duena, miembro, como }) => {
+  test('la campaña viva de una cotización del alcance quedó fuera del alcance: ScopeError, no un choque con el índice único', async () => {
+    await t().admin(`
+      INSERT INTO quote (id, workspace_id, company_id, creator_id, number, slug, currency, subtotal, tax, total,
+                         agreed_metrics, report_cuts_hours, payment_terms_days, status)
+      VALUES ('${QUOTE_LAURA_REASIGNADA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CREATOR_LAURA}', 'COT-2026-902', 'cot-laura-902', 'COP',
+              1000000.00, 190000.00, 1190000.00, '{views}', '{168}', 30, 'accepted')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO campaign (id, workspace_id, company_id, creator_id, quote_id, name, status)
+      VALUES ('${CAMPAIGN_REASIGNADA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CREATOR_SOFIA}', '${QUOTE_LAURA_REASIGNADA}', 'Reasignada a Sofía', 'planned')
+      ON CONFLICT DO NOTHING;
+    `);
+    await assert.rejects(
+      miembro((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_LAURA_REASIGNADA, startsOn: '2026-11-03', endsOn: '2026-11-10' })),
+      ScopeError,
+    );
+    const r = await duena((tx) => createCampaignFromQuote(tx, { quoteId: QUOTE_LAURA_REASIGNADA, startsOn: '2026-11-03', endsOn: '2026-11-10' }));
+    assert.deepEqual([r.created, r.campaign.id], [false, CAMPAIGN_REASIGNADA], 'la dueña la ve: idempotente como siempre');
+    await t().admin(`DELETE FROM campaign WHERE id = '${CAMPAIGN_REASIGNADA}'; DELETE FROM quote WHERE id = '${QUOTE_LAURA_REASIGNADA}';`);
+  });
+
   test('el miembro sigue viendo TODO lo de Laura: la lista es la de la dueña menos lo de Sofía', async () => {
     const todas = await duena((tx) => listCampaigns(tx));
     const suyas = await miembro((tx) => listCampaigns(tx));
