@@ -13,6 +13,8 @@
  *      con la que escribe compute.baseline da la cifra exacta (4,496× en
  *      Café Alma), y las 16 líneas base y los 59 puntajes salen iguales
  *      a los que calcula db/seed/0002 en SQL.
+ *   4. CON-6 → RES-3: RES todavía no lee el puntaje; las dos consultas del
+ *      contrato de la propuesta (§2) dan el top 5 y los seis avisos.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -293,6 +295,40 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const r = await resultado();
     assert.equal(r.views_vs_median, '4.496', 'Café Alma: 4,496× la mediana del creador');
     assert.ok(!r.missing_inputs.includes('baseline'));
+  });
+
+  test('CON-6 → RES-3: el contrato de lectura de docs/propuestas/CON-6.md §2 da lo que Resumen va a enseñar', async () => {
+    // RES-3 (Rasheed) todavía no lee el puntaje; estas son las dos consultas
+    // que la propuesta le deja escritas. Si CON-6 cambia lo que escribe,
+    // esta prueba falla antes de que falle la pantalla.
+    const top = await h.db.query<{ post_id: string; views_vs_median: string; outlier_tier: string; is_outlier: boolean }>(
+      `SELECT post_id, views_vs_median::text AS views_vs_median, outlier_tier, is_outlier
+         FROM creator_post_board
+        WHERE workspace_id = '${LAURA}' AND views_vs_median IS NOT NULL
+        ORDER BY views_vs_median DESC
+        LIMIT 5`,
+    );
+    const post = (n: string) => `00000002-0000-4000-8000-000000000${n}`;
+    assert.deepEqual(top.rows.map((r) => [r.post_id, r.views_vs_median, r.outlier_tier, r.is_outlier]), [
+      [post('d01'), '5.971', 'breakout', true],
+      [post('d06'), '3.710', 'outlier', true],
+      [post('d18'), '2.662', 'outlier', true],
+      [post('d02'), '2.469', 'outlier', true],
+      [post('d28'), '2.359', 'outlier', true],
+    ]);
+
+    const avisos = await h.db.query<{ kind: string; entity_type: string; entity_id: string; action_url: string; title_es: string }>(
+      `SELECT kind, entity_type, entity_id, action_url, title_es FROM notification
+        WHERE workspace_id = '${LAURA}' AND kind IN ('outlier','breakout') AND read_at IS NULL AND dismissed_at IS NULL
+        ORDER BY entity_id`,
+    );
+    assert.equal(avisos.rows.length, 6, 'los seis videos a 2× o más, una vez cada uno');
+    assert.deepEqual(avisos.rows.filter((a) => a.kind === 'breakout').map((a) => a.entity_id), [post('d01')]);
+    for (const a of avisos.rows) {
+      assert.equal(a.entity_type, 'post');
+      assert.equal(a.action_url, '/resumen', 'RES-3 es quien la muestra');
+      assert.match(a.title_es, /tu mediana/);
+    }
   });
 
   test('las 16 líneas base y los 59 puntajes son los mismos que calcula db/seed/0002', async () => {
