@@ -27,6 +27,9 @@ const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023':
     'reservada en main para ACC-3 y sin usar: 0024–0033 llegaron antes y ACC-3 se escribió como ' +
     '0034_access_control.sql (cabecera de 0034). Queda como hueco declarado; rellenarlo con un archivo vacío es decisión de Nicolás',
+  // ACC-8 trae 0038 antes de que lleguen a main las que ya tienen otras ramas (fetch del 23-sep):
+  '0036': 'la tienen dos ramas sin fusionar: CON-7 (0036_demografia_de_cuenta) y FIN-7 (0036_platform_payout_unico); el integrador renumera una',
+  '0037': 'la tiene la rama CAM-6 (0037_reporte_publico), sin fusionar',
 };
 
 let dir = '';
