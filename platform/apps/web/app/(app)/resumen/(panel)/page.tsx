@@ -5,6 +5,7 @@ import { getResumenCoverage } from "@mc/db/queries/resumen";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
+import { Cifras, FiltroEnCurso } from "../filtro-en-curso";
 import { Filtros } from "../filtros";
 import { Frescura, FrescuraEsqueleto } from "../frescura";
 import { Graficos, GraficosEsqueleto } from "../graficos";
@@ -62,7 +63,9 @@ export default async function ResumenPage({
   const t = MESSAGES.page;
 
   return (
-    <>
+    // Una sola transición para los filtros y las cifras: mientras llega
+    // el filtro nuevo, las cifras de antes se atenúan (filtro-en-curso.tsx).
+    <FiltroEnCurso>
       <PageHeader
         eyebrow={t.eyebrow}
         title={t.title}
@@ -86,7 +89,7 @@ export default async function ResumenPage({
       ) : cobertura.withData === 0 ? (
         <SinDatos />
       ) : (
-        <>
+        <Cifras>
           <Suspense fallback={<KpisEsqueleto />}>
             <Kpis filtro={filtro} />
           </Suspense>
@@ -105,8 +108,8 @@ export default async function ResumenPage({
           <Suspense fallback={<FrescuraEsqueleto />}>
             <Frescura filtro={filtro} />
           </Suspense>
-        </>
+        </Cifras>
       )}
-    </>
+    </FiltroEnCurso>
   );
 }

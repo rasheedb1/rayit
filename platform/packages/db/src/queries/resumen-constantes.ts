@@ -17,6 +17,21 @@ export const PLATFORMS: readonly PlatformId[] = ['tiktok', 'instagram', 'faceboo
 export const PERIODS = [7, 30, 90] as const;
 export type Period = (typeof PERIODS)[number];
 
+/**
+ * Cuántas semanas enseña el gráfico de visualizaciones. Es fijo y NO
+ * depende del periodo del filtro: la historia (RES-1, RES-5) y el mock
+ * piden «views por semana y red en 12 semanas».
+ */
+export const VIEWS_WEEKS = 12;
+
+/**
+ * Por debajo de esto, un KPI de contenido (alcance en no seguidores,
+ * guardados por mil) no se compara contra el periodo anterior: una
+ * flecha roja de «−50 %» calculada sobre UN video es ruido que alarma.
+ * Se exige en los DOS periodos. La cifra se sigue enseñando.
+ */
+export const MIN_SAMPLE = 3;
+
 export function assertPeriod(days: number): asserts days is Period {
   if (!(PERIODS as readonly number[]).includes(days)) {
     throw new Error(`periodo inválido: ${String(days)}. Uno de ${PERIODS.join(', ')}.`);

@@ -44,29 +44,13 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? "",
   },
-  experimental: {
-    serverActions: {
-      // La importación por CSV manda el TEXTO del archivo a la server
-      // action (el servidor vuelve a validarlo, no se fía del
-      // navegador). El techo del producto son 5 MB por archivo —
-      // MAX_BYTES en resumen/importar/_lib/csv.ts— y Next corta el
-      // cuerpo en 1 MB por defecto, así que un archivo perfectamente
-      // válido moría con «Body exceeded 1 MB limit».
-      //
-      // 6 MB y no 5: el cuerpo lleva además el mapeo de columnas y el
-      // marco de RSC. Si MAX_BYTES sube, este número sube con él.
-      //
-      // OJO: este techo es GLOBAL. Next no deja fijarlo por acción, así
-      // que sube a 6 MB el cuerpo que aceptan TODAS las server actions
-      // de la app (Finanzas, Campañas, Conexiones…), no solo la de la
-      // importación. Ninguna otra recibe más que un formulario, y todas
-      // validan con zod antes de tocar nada, así que hoy el riesgo es
-      // solo de memoria por petición. La salida está en el backlog
-      // (RES-6): mover la importación a un route handler POST con su
-      // propio límite y devolver este valor al de Next (1 MB).
-      bodySizeLimit: "6mb",
-    },
-  },
+  // Sin `experimental.serverActions.bodySizeLimit` A PROPÓSITO: las
+  // server actions se quedan en el 1 MB de Next. Ese techo es GLOBAL (no
+  // se puede fijar por acción), y subirlo a 6 MB para que cupiera el CSV
+  // de Resumen lo subía para TODAS las acciones de la app. La importación
+  // va ahora por un route handler con su propio techo
+  // (resumen/importar/_lib/lote.ts, RES-6), y resumen/importar/lote.test.ts
+  // falla si este bloque vuelve.
 };
 
 export default nextConfig;

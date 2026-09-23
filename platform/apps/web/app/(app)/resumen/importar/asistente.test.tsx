@@ -4,13 +4,16 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportableAccount } from "@mc/db/queries/resumen";
 
-// La Server Action se sustituye: aquí importa el recorrido de la
-// pantalla, no lo que escribe Postgres (eso lo prueba @mc/db).
+// El envío y la server action se sustituyen: aquí importa el recorrido
+// de la pantalla, no lo que escribe Postgres (eso lo prueban @mc/db y
+// lote.test.ts, con la ruta de verdad).
 const importarCsv = vi.fn();
 const buscarPostsConocidos = vi.fn();
 vi.mock("./actions", () => ({
-  importarCsv: (...args: unknown[]) => importarCsv(...args),
   buscarPostsConocidos: (...args: unknown[]) => buscarPostsConocidos(...args),
+}));
+vi.mock("./_lib/enviar", () => ({
+  enviarLote: (...args: unknown[]) => importarCsv(...args),
 }));
 
 const refresh = vi.fn();
@@ -83,7 +86,7 @@ describe("el asistente de importación", () => {
   });
 
   it("cambiar una columna que no es el id no vuelve a preguntar a la base", async () => {
-    buscarPostsConocidos.mockResolvedValue({ ok: true, ids: [] });
+    buscarPostsConocidos.mockResolvedValue({ ok: true, conocidos: [] });
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
     await subir("instagram-insights.csv");
     await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalledTimes(1));
@@ -250,7 +253,10 @@ describe("el asistente de importación", () => {
   it("avisa de los videos que YA están en la cuenta antes de escribir nada", async () => {
     buscarPostsConocidos.mockResolvedValue({
       ok: true,
-      ids: ["ig_18001122334455001", "ig_18001122334455002"],
+      conocidos: [
+        { id: "ig_18001122334455001", ultimaLectura: "2026-09-01T12:00:00.000000Z" },
+        { id: "ig_18001122334455002", ultimaLectura: null },
+      ],
     });
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
     await subir("instagram-insights.csv");
@@ -284,7 +290,7 @@ describe("el asistente de importación", () => {
   });
 
   it("si la acción ni siquiera responde, la pantalla lo dice y conserva el trabajo", async () => {
-    // Lo que pasa cuando Next rechaza el cuerpo por tamaño: la promesa
+    // Lo que pasa con la red caída o una respuesta que no es la de la ruta: la promesa
     // se rompe. Sin try/catch subía a la frontera de error y se llevaba
     // por delante el archivo, el mapeo y la revisión.
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
@@ -292,7 +298,7 @@ describe("el asistente de importación", () => {
     fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
     await screen.findByText("3 de 3 filas listas");
 
-    importarCsv.mockRejectedValue(new Error("Body exceeded 1 MB limit"));
+    importarCsv.mockRejectedValue(new Error("Failed to fetch"));
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo importar.");
@@ -330,9 +336,46 @@ describe("la fecha de la exportación", () => {
     await waitFor(() => expect(importarCsv).toHaveBeenCalledTimes(1));
     expect((importarCsv.mock.calls[0]?.[0] as { fechaExportacion: string }).fechaExportacion).toBe("2026-09-16");
 
-    // El paso 4 dice cuántas lecturas eran más viejas que las que ya había, y con qué fecha quedó.
-    expect(await screen.findByText(/2 lecturas eran más antiguas que las que ya había/)).toBeInTheDocument();
+    // El paso 4 dice cuántos videos no traían nada más reciente, y con qué fecha quedó.
+    expect(await screen.findByText(/2 videos no traían nada más reciente que lo que ya había/)).toBeInTheDocument();
     expect(screen.getByText("Con fecha de exportación 16 de septiembre de 2026.")).toBeInTheDocument();
+    // Los dos conocidos NO recibieron lectura: no se dice a la vez que «se les añadió una».
+    expect(screen.queryByText(/ya estaban: se les añadió una lectura/)).not.toBeInTheDocument();
+  });
+
+  it("reimportar con la misma fecha: el paso 3 avisa de que no se guardará, y el paso 4 no se contradice", async () => {
+    // Lo que pasaba subiendo el mismo archivo dos veces: el paso 3 decía
+    // «se añade una lectura» y el 4, a la vez, «3 ya estaban: se les
+    // añadió una lectura» y «3 lecturas eran más antiguas».
+    const mismaFecha = "2026-09-16T17:00:00.000000Z"; // mediodía del 16 en Bogotá: lo que guardó la primera vez
+    buscarPostsConocidos.mockResolvedValue({
+      ok: true,
+      conocidos: [
+        { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
+        { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
+        { id: "ig_18001122334455003", ultimaLectura: mismaFecha },
+      ],
+    });
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-16" } });
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+
+    expect(await screen.findByText("3 ya tienen una lectura de esta fecha o posterior: no se guardarán")).toBeInTheDocument();
+    expect(screen.queryByText(/se les añade una lectura/)).not.toBeInTheDocument();
+    const tabla = screen.getByRole("table");
+    expect(within(tabla).getAllByText(/ya tiene una lectura de esta fecha o posterior: esta no se guardará/)).toHaveLength(3);
+    expect(within(tabla).queryByText(/Este video ya está/)).not.toBeInTheDocument();
+
+    importarCsv.mockResolvedValue({
+      ok: true,
+      resultado: { newPosts: 0, knownPosts: 3, readings: 0, staleReadings: 3, capturedAt: mismaFecha },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+    expect(await screen.findByText("3 videos, 0 lecturas.")).toBeInTheDocument();
+    expect(screen.getByText(/3 videos no traían nada más reciente que lo que ya había: no se guardaron/)).toBeInTheDocument();
+    expect(screen.queryByText(/ya estaban: se les añadió una lectura/)).not.toBeInTheDocument();
   });
 
   it("una fecha del futuro no deja seguir", async () => {
@@ -402,5 +445,70 @@ describe("teclado y lector de pantalla", () => {
     const cruda = within(screen.getByRole("table")).getByText("el martes pasado");
     expect(cruda).toHaveAttribute("title", "el martes pasado");
     expect(cruda.className).toMatch(/truncate/);
+  });
+});
+
+describe("lo que se ve antes de escribir", () => {
+  it("un CSV guardado en Excel para Windows se lee con sus tildes, y se dice", async () => {
+    render(<Asistente cuentas={[]} workspace={WORKSPACE} />);
+    const bytes = readFileSync(join(__dirname, "../../../../test/fixtures/csv", "excel-windows-1252.csv"));
+    const archivo = new File([new Uint8Array(bytes)], "excel.csv", { type: "text/csv" });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [archivo] } });
+    await screen.findByText(/Qué es cada columna/);
+    expect(screen.getByText(/venía guardado desde Excel para Windows \(Windows-1252\)/)).toBeInTheDocument();
+    // Los alias casan: «Duración» no llegó como «Duraci�n».
+    expect(screen.getByLabelText("Duración (segundos)")).toHaveValue("Duración");
+    expect(screen.getByLabelText("Título o descripción")).toHaveValue("Descripción");
+    expect(screen.getAllByText("Café de olla en 30 segundos").length).toBeGreaterThan(0);
+  });
+
+  it("un archivo en UTF-8 no lleva ningún aviso de codificación", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    expect(screen.queryByText(/Windows-1252/)).not.toBeInTheDocument();
+  });
+
+  it("si el nombre de la cuenta nueva ya es el de una conectada, lo dice y propone importar ahí", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.change(screen.getByLabelText("¿A qué cuenta pertenece?"), { target: { value: "__nueva__" } });
+    fireEvent.change(screen.getByLabelText("Nombre de usuario de la cuenta"), { target: { value: "@Laura.CocinaFacil" } });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Ya tienes @laura.cocinafacil en esta red.");
+    fireEvent.click(screen.getByRole("button", { name: "Importar en @laura.cocinafacil" }));
+    expect(screen.getByLabelText("¿A qué cuenta pertenece?")).toHaveValue(CUENTA_IG.connectionId);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("un nombre nuevo de verdad no lleva ningún aviso", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.change(screen.getByLabelText("¿A qué cuenta pertenece?"), { target: { value: "__nueva__" } });
+    fireEvent.change(screen.getByLabelText("Nombre de usuario de la cuenta"), { target: { value: "otra.cuenta" } });
+    expect(screen.queryByText(/Ya tienes/)).not.toBeInTheDocument();
+  });
+
+  it("la revisión enseña todas las cifras mapeadas, no solo las visualizaciones", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("3 de 3 filas listas");
+    // El caption dice qué es la tabla, sin repetir el título del paso.
+    const tabla = screen.getByRole("table", { name: "Filas del archivo, con su estado y las cifras que se guardarán" });
+    const cabeceras = within(tabla).getAllByRole("columnheader").map((c) => c.textContent);
+    expect(cabeceras).toEqual(expect.arrayContaining(["Visualizaciones", "Alcance", "Me gusta", "Compartidos", "Guardados", "Seguidores ganados", "Comentarios"]));
+    // Y la cifra de cada una, formateada: 9.310 cuentas alcanzadas y 318 guardados en la primera fila.
+    expect(within(tabla).getByText("9.310")).toBeInTheDocument();
+    expect(within(tabla).getByText("318")).toBeInTheDocument();
+  });
+
+  it("una cifra que el mapeo no tiene no se pinta como columna vacía", async () => {
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    fireEvent.change(screen.getByLabelText("Guardados"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await screen.findByText("3 de 3 filas listas");
+    const cabeceras = within(screen.getByRole("table")).getAllByRole("columnheader").map((c) => c.textContent);
+    expect(cabeceras).not.toContain("Guardados");
   });
 });

@@ -31,6 +31,7 @@ fixture nuevo y sus nombres de columna entran en `ALIAS`.
 | `sucio.csv` | Filas con problemas: fecha ilegible, número con letras, duplicada, sin id, fecha futura. |
 | `tiktok-studio-en-us.csv` | La misma exportación de TikTok con la cuenta en inglés de Estados Unidos: fechas **mes/día** («09/05/2026» es el 5 de septiembre) y una hora en reloj de 12 h («8:15 PM»). El orden lo demuestra el propio archivo («09/14/2026»). |
 | `ambiguo.csv` | Fechas numéricas que sirven en los dos órdenes (ningún número pasa de 12): el asistente pregunta, con el orden del workspace como propuesta. |
+| `excel-windows-1252.csv` | Un CSV abierto y vuelto a guardar en **Excel para Windows en español**: codificado en Windows-1252 (no UTF-8), con punto y coma y CRLF. Leído a la fuerza como UTF-8, «Duración» salía «Duraci�n» y los alias no casaban; `decodificarCsv` lo reconoce y el paso 2 lo dice. **No lo abras y lo guardes con un editor en UTF-8**: dejaría de probar lo que prueba. |
 
 ## Lo que no está documentado con certeza
 

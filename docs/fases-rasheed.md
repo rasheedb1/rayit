@@ -235,7 +235,18 @@ que hace falta saber para tocar el módulo sin romperlo.
   cuentas nuevas quedan fuera.
 - Los días son **días cerrados en UTC**, por convención del repositorio:
   `account_metric_snapshot.day` es el día de la plataforma y no se puede
-  pasar a otra zona. Cada «datos hasta el…» lo dice.
+  pasar a otra zona. La pantalla lo dice **una sola vez**, en el aviso de
+  frescura y con palabras de creador («Las cifras llegan hasta el final
+  del día anterior»), no junto a cada fecha.
+- Las tarjetas llevan **solo el dato**: cifra, delta y sparkline. Lo que
+  explica de dónde sale (la base de videos, las cuentas nuevas, hasta
+  qué día suma la cuenta) va detrás de un botón (i) por tarjeta
+  (`resumen/kpi-con-info.tsx`, que envuelve al Kpi del kit sin cambiar
+  su API). En la tarjeta solo queda, si hace falta, una línea que dice
+  por qué no hay flecha.
+- Los dos KPIs de contenido no se comparan con **menos de 3 videos**
+  (`MIN_SAMPLE`) en alguno de los dos periodos: la tarjeta dice «Pocos
+  videos para comparar» en vez de una flecha roja sobre un video.
 - El alcance en no seguidores ya es un porcentaje: su variación va en
   **puntos** («+2,1 puntos»), no relativa. Los guardados por mil siguen
   en variación relativa.
@@ -246,15 +257,22 @@ que hace falta saber para tocar el módulo sin romperlo.
   solo sobre los videos que traen sus dos términos y con la última
   lectura de cada video: `post_metrics_at_cut` no trae alcance en no
   seguidores y un video importado tiene una sola lectura.
-- Las barras **cubren exactamente el periodo** y su total cuadra con la
-  tarjeta: 7 × 1 día, 6 × 5 días, 9 × 10 días. **No cumple tal cual el
-  criterio del mock** (12 semanas): son 84 días, y la última etiqueta se
-  pisa con la anterior en la rejilla de `BarChart`. Tenerlas pide que el
-  kit deje elegir qué etiquetas pinta (Nicolás): RES-5, bloqueada. Cada
-  barra de varios días lleva su rango («26–30/8») en el tooltip y en la
-  tabla, con el guion unido a sus lados para que no se parta, y bajo la
-  barra solo el día final (`axisLabels`, añadido al kit sin cambiar su
-  API): a 400 px dos rangos seguidos se pisaban.
+- Las barras son **12 semanas de siete días, como el mock** (RES-5,
+  cerrada en el pulido): `getViewsByWeek` no recibe el periodo, y la
+  tarjeta dice en una línea que no es la suma del periodo elegido. Son
+  semanas contadas hacia atrás desde el último día cerrado, no semanas
+  ISO: con la ISO cerrada el gráfico dejaría fuera hasta seis días que
+  la tarjeta sí cuenta, y con la ISO en curso la última barra saldría a
+  medias. La última semana termina el mismo día que las cifras de la
+  cuenta y su barra ES la tarjeta de 7 días. Cada semana lleva su rango
+  («15–21/9») en el tooltip y en la tabla, con el guion unido a sus
+  lados, y bajo la barra solo el día final (`axisLabels`). La etiqueta
+  que la rejilla del kit pintaría pegada a la última se deja vacía
+  (`resumen/_lib/eje.ts`, probado contra el BarChart de verdad): no
+  hacía falta cambiar el kit otra vez. `axisLabels` y `Kpi.deltaText`
+  **sí son un cambio de API del kit**, compatible (props opcionales): van
+  aislados en la rama `rasheed/kit-axislabels-deltatext` sobre
+  origin/main para el PR que revisa Nicolás.
 - La frescura señala la conexión que no está sana (vencida, revocada,
   con error, pausada) y la que va más de dos días por detrás del resto.
 - «Con datos» es con alguna **lectura**: una conexión que descubrió sus
@@ -288,10 +306,27 @@ que hace falta saber para tocar el módulo sin romperlo.
   persona antes de seguir, igual que las columnas obligatorias.
 - Un archivo sin ninguna columna de interacción deja
   `total_interactions` en NULL, no en 0.
-- El techo de 6 MB de las server actions es **global** en Next: sube el
-  de todas. Mover la importación a un route handler con su límite es
-  RES-6.
+- La escritura va por un **route handler POST con su propio techo**
+  (`resumen/importar/lote/route.ts` → `_lib/lote.ts`, RES-6): el
+  archivo viaja tal cual en multipart, el cuerpo se lee con un contador
+  que corta en 5 MB + 64 KiB (413) sin fiarse del Content-Length, y la
+  ruta comprueba Origin contra Host como hacen las server actions. Las
+  server actions vuelven al 1 MB de Next: el techo de 6 MB era global y
+  subía el de todas.
+- El archivo se lee como bytes: UTF-8 estricto y, si no lo es,
+  **Windows-1252** (lo que escribe Excel para Windows en español), con un
+  aviso en el paso 2. Leído a la fuerza como UTF-8, «Duración» pasaba a
+  «Duraci�n» y los alias no casaban.
+- El paso 3 distingue el video que **recibe una lectura nueva** del que
+  **ya tiene una de esa fecha o posterior** (y no la recibirá), con la
+  misma regla que la base; el paso 4 no cuenta dos veces a los mismos.
+  Enseña además una columna por cada cifra mapeada.
+- Un nombre de cuenta que ya existe en esa red (también por OAuth) no
+  crea otra conexión: el asistente lo propone y `ensureCsvConnection`
+  devuelve la que existe. Crear otra contaba cada video dos veces.
+- La frescura enseña la **fecha de exportación** del CSV tal cual
+  («CSV exportado el 12 sep»), la misma que el creador escribió.
 - El archivo se valida en el navegador para la vista previa y otra vez
-  en la server action, que no se fía del navegador. `importCsvReadings`
+  en el servidor, que no se fía del navegador. `importCsvReadings`
   se protege sola: valida la cuenta, la fecha y los duplicados, y los
   rechazos viajan como código para que el texto lo ponga la pantalla.

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useOptimistic, useRef, useTransition } from "react";
 import { Segmented } from "@/components/ui/segmented";
 import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
+import { useFiltroEnCurso } from "./filtro-en-curso";
 import { MESSAGES } from "./messages";
 import { hrefDe, PERIODS, PLATFORMS, type Filtro, type Period, type PlatformId } from "./_lib/filtro";
 
@@ -24,7 +25,13 @@ const TODAS = "todas";
  */
 export function Filtros({ filtro }: { filtro: Filtro }) {
   const router = useRouter();
-  const [pendiente, empezar] = useTransition();
+  // La transición es la de la página (FiltroEnCurso) cuando la hay: así
+  // las cifras de abajo se atenúan mientras llega el filtro nuevo, y no
+  // solo este grupo. Suelta —en las pruebas— lleva la suya.
+  const propia = useTransition();
+  const enCurso = useFiltroEnCurso();
+  const pendiente = enCurso?.pendiente ?? propia[0];
+  const empezar = enCurso?.empezar ?? propia[1];
   const [actual, fijar] = useOptimistic(filtro);
   const grupo = useRef<HTMLDivElement>(null);
   const t = MESSAGES.filtros;

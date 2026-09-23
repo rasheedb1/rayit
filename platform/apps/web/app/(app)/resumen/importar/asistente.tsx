@@ -18,22 +18,25 @@ import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import { Segmented } from "@/components/ui/segmented";
 import { formatterFor, type FormatSettings, type Formatter } from "@/lib/format";
 import { MESSAGES } from "../messages";
-import { buscarPostsConocidos, importarCsv } from "./actions";
+import { buscarPostsConocidos } from "./actions";
 import {
   aFechaIso,
   analizar,
   analizarFechas,
   celdasDeFecha,
+  decodificarCsv,
   diaEnZona,
   ErrorCsv,
   esFechaNumerica,
   faltantesDelMapeo,
+  instanteDeCaptura,
   MAX_BYTES,
   ordenPorLocale,
   proponerFechaExportacion,
   revisar,
   validarFechaExportacion,
   type AnalisisFechas,
+  type Codificacion,
   type FilaRevisada,
   type OrdenFecha,
   type Problema,
@@ -42,16 +45,18 @@ import {
   type Revision,
   type Tabla,
 } from "./_lib/csv";
-import { DEF_CAMPOS, FORMATOS, type Campo, type FormatoId, type Mapeo } from "./_lib/formatos";
+import { enviarLote } from "./_lib/enviar";
+import { CAMPOS_METRICA, DEF_CAMPOS, FORMATOS, type Campo, type FormatoId, type Mapeo } from "./_lib/formatos";
 
 /**
  * Los cuatro pasos de la importación: subir → formato → revisar →
  * importar, como en Flatfile o OneSchema.
  *
  * El archivo NO sube a ningún sitio hasta el último paso: se lee y se
- * valida en el navegador, y solo al pulsar «Importar» viaja su texto a
- * la server action, que vuelve a validarlo. Quien se arrepiente en el
- * paso 3 no dejó nada escrito en ninguna parte.
+ * valida en el navegador, y solo al pulsar «Importar» viaja su texto al
+ * route handler de la importación (`lote/route.ts`, con su propio techo
+ * de tamaño), que vuelve a validarlo. Quien se arrepiente en el paso 3
+ * no dejó nada escrito en ninguna parte.
  */
 
 type Paso = 0 | 1 | 2 | 3;
@@ -98,6 +103,9 @@ function textoDeArchivo(err: ErrorCsv, f: Formatter): string {
   return MESSAGES.importar.errorArchivo[err.codigo](f.int(d.filas ?? 0), f.int(d.max ?? 0));
 }
 
+/** Un nombre de usuario comparable: sin arroba, sin espacios, en minúsculas. Como lo compara la base. */
+const comparable = (handle: string) => handle.trim().replace(/^@/, "").toLowerCase();
+
 export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const t = MESSAGES.importar;
   const f = useMemo(() => formatterFor(workspace), [workspace]);
@@ -124,8 +132,13 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [fechaElegida, setFechaElegida] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
-  /** Ids que la cuenta de destino ya tiene. null = todavía no se ha preguntado. */
-  const [yaConocidos, setYaConocidos] = useState<readonly string[] | null>(null);
+  /**
+   * Los videos que la cuenta de destino ya tiene, con el instante de su
+   * última lectura. null = todavía no se ha preguntado.
+   */
+  const [yaConocidos, setYaConocidos] = useState<ReadonlyMap<string, string | null> | null>(null);
+  /** Cómo venía escrito el archivo: si no era UTF-8, el paso 2 lo dice. */
+  const [codificacion, setCodificacion] = useState<Codificacion>("utf-8");
 
   const deLaRed = cuentas.filter((c) => c.platformId === red);
   const faltan = useMemo(() => faltantesDelMapeo(mapeo), [mapeo]);
@@ -175,7 +188,9 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     let vivo = true;
     void buscarPostsConocidos({ connectionId: cuenta, ids }).then(
       (r) => {
-        if (vivo && r.ok && r.ids.length > 0) setYaConocidos(r.ids);
+        if (vivo && r.ok && r.conocidos.length > 0) {
+          setYaConocidos(new Map(r.conocidos.map((c) => [c.id, c.ultimaLectura] as const)));
+        }
       },
       // Si la consulta falla, la previsualización sigue valiendo: solo
       // se queda sin el aviso. No es motivo para no dejar importar.
@@ -185,13 +200,6 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
       vivo = false;
     };
   }, [cuenta, idsConsulta]);
-
-  const conocidos = useMemo(() => (yaConocidos ? new Set(yaConocidos) : null), [yaConocidos]);
-
-  const revision: Revision | null = useMemo(
-    () => (tabla && revisionBase && conocidos ? revisar(tabla, mapeo, { ...opciones, yaConocidos: conocidos }) : revisionBase),
-    [tabla, mapeo, opciones, revisionBase, conocidos],
-  );
 
   // El día de la exportación: el momento de la lectura. Se propone a
   // partir del archivo y se valida contra sus propias fechas.
@@ -211,6 +219,25 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const fechaExportacion = fechaElegida ?? propuestaFecha?.fecha ?? "";
   const problemaFecha = validarFechaExportacion(fechaExportacion, { timeZone: workspace.timezone, listas: listasBase });
 
+  // El instante con el que se guardará la lectura: el mismo cálculo que
+  // hará el servidor (instanteDeCaptura). Sin fecha propia —hoy— la base
+  // pone now(), que es posterior a cualquier lectura que ya exista.
+  const instanteCaptura = useMemo(() => {
+    if (problemaFecha !== null || !fechaExportacion) return undefined;
+    const iso = instanteDeCaptura(fechaExportacion, { timeZone: workspace.timezone, listas: listasBase });
+    return iso ? Date.parse(iso) : Date.now();
+  }, [problemaFecha, fechaExportacion, workspace.timezone, listasBase]);
+
+  // La segunda pasada, con lo que dijo la base: qué videos ya están y si
+  // esta lectura es más nueva que la última que tienen.
+  const revision: Revision | null = useMemo(
+    () =>
+      tabla && revisionBase && yaConocidos
+        ? revisar(tabla, mapeo, { ...opciones, yaConocidos, instanteCaptura })
+        : revisionBase,
+    [tabla, mapeo, opciones, revisionBase, yaConocidos, instanteCaptura],
+  );
+
   // Al cambiar de paso, el título del nuevo recibe el foco: sin esto el
   // botón pulsado desaparece y el foco cae a <body>, y quien usa teclado
   // o lector de pantalla vuelve al principio de la página.
@@ -224,11 +251,16 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     contenedor.current?.querySelector<HTMLElement>(`#${TITULO_DE_PASO[paso]}`)?.focus();
   }, [paso]);
 
-  /** De las filas que se van a escribir, cuántas ya estaban en la cuenta. */
-  const yaEstaban = useMemo(
-    () => (conocidos && revision ? revision.listas.filter((l) => conocidos.has(l.externalPostId)).length : 0),
-    [conocidos, revision],
-  );
+  /**
+   * La cuenta de esa red que ya se llama como la que se quiere crear.
+   * Crear otra partiría sus videos en dos conexiones y Resumen los
+   * contaría dos veces: se propone la que existe (y la base, si llega un
+   * nombre repetido, devuelve la que existe en vez de crear otra).
+   */
+  const cuentaExistente =
+    cuenta === NUEVA && handleNuevo.trim()
+      ? deLaRed.find((c) => c.handle !== null && comparable(c.handle) === comparable(handleNuevo))
+      : undefined;
 
   function recibir(archivo: File) {
     setError(null);
@@ -238,16 +270,23 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
       setError(t.subir.demasiadoGrande(MEGAS));
       return;
     }
-    // FileReader y no `archivo.text()`: es la lectura que entienden
-    // todos los navegadores que soportamos, y además da un `onerror`
-    // que distingue «no se pudo leer» de «no es un CSV».
+    // FileReader y no `archivo.arrayBuffer()`: es la lectura que
+    // entienden todos los navegadores que soportamos, y además da un
+    // `onerror` que distingue «no se pudo leer» de «no es un CSV». Como
+    // BYTES y no como texto: el texto lo decide decodificarCsv, que
+    // reconoce un archivo guardado desde Excel para Windows
+    // (Windows-1252) en vez de romperle las tildes.
     const lector = new FileReader();
     lector.onerror = () => setError(t.subir.noEsCsv);
     lector.onload = () => {
       try {
-        const contenido = String(lector.result ?? "");
+        // Sin `instanceof ArrayBuffer`: el buffer puede venir de otro
+        // «realm» (un iframe, jsdom) y la comprobación fallaría.
+        const bytes = lector.result === null || typeof lector.result === "string" ? new ArrayBuffer(0) : lector.result;
+        const { texto: contenido, codificacion: leidaComo } = decodificarCsv(bytes);
         const { tabla: leida, deteccion, mapeo: automatico } = analizar(contenido);
         setNombreArchivo(archivo.name);
+        setCodificacion(leidaComo);
         setTexto(contenido);
         setTabla(leida);
         setMapeo(automatico);
@@ -269,15 +308,21 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         setError(err instanceof ErrorCsv ? textoDeArchivo(err, f) : t.subir.noEsCsv);
       }
     };
-    lector.readAsText(archivo, "utf-8");
+    lector.readAsArrayBuffer(archivo);
   }
 
   function importar() {
     setError(null);
     if (!red) return;
+    // El techo se mide sobre lo que de verdad viaja: el texto en UTF-8.
+    // Un archivo de Windows-1252 lleno de tildes crece al pasar a UTF-8.
+    if (new TextEncoder().encode(texto).byteLength > MAX_BYTES) {
+      setError(t.error.demasiadoGrande(MEGAS));
+      return;
+    }
     empezar(async () => {
       try {
-        const r = await importarCsv({
+        const r = await enviarLote({
           texto,
           red,
           connectionId: cuenta === NUEVA ? undefined : cuenta,
@@ -301,11 +346,11 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         setPaso(3);
         router.refresh();
       } catch (err) {
-        // Un fallo de TRANSPORTE —el cuerpo rechazado por pesar
-        // demasiado, la red caída— no puede tumbar el segmento. Sin este
-        // catch la promesa sube a la frontera de error y el creador
-        // pierde el archivo, el mapeo y la revisión, sin camino de vuelta.
-        console.error("[resumen/importar] la acción no respondió", err);
+        // Un fallo de TRANSPORTE —la red caída, una respuesta que no es
+        // la de la ruta— no puede tumbar el segmento. Sin este catch la
+        // promesa sube a la frontera de error y el creador pierde el
+        // archivo, el mapeo y la revisión, sin camino de vuelta.
+        console.error("[resumen/importar] la importación no respondió", err);
         setError(t.error.generico);
       }
     });
@@ -319,6 +364,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     setResultado(null);
     setNombreArchivo("");
     setYaConocidos(null);
+    setCodificacion("utf-8");
     setOrdenElegido(null);
     setFechaElegida(null);
     setRed(null);
@@ -360,8 +406,10 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
           onCuenta={setCuenta}
           handleNuevo={handleNuevo}
           onHandleNuevo={setHandleNuevo}
+          cuentaExistente={cuentaExistente}
           formato={formato}
           nombreArchivo={nombreArchivo}
+          codificacion={codificacion}
           faltan={faltan}
           fechas={fechas}
           ordenFechas={ordenFechas}
@@ -377,7 +425,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         />
       )}
 
-      {paso === 2 && revision && <PasoRevisar revision={revision} yaEstaban={yaEstaban} f={f} />}
+      {paso === 2 && revision && <PasoRevisar revision={revision} mapeo={mapeo} f={f} />}
 
       {paso === 3 && resultado && <PasoHecho resultado={resultado} onOtro={reiniciar} f={f} />}
 
@@ -512,8 +560,11 @@ function PasoFormato(props: {
   onCuenta: (c: string) => void;
   handleNuevo: string;
   onHandleNuevo: (h: string) => void;
+  /** La cuenta de esa red que ya se llama como la nueva, si la hay. */
+  cuentaExistente: ImportableAccount | undefined;
   formato: FormatoId | null;
   nombreArchivo: string;
+  codificacion: Codificacion;
   faltan: Campo[];
   fechas: AnalisisFechas | null;
   ordenFechas: OrdenFecha;
@@ -549,6 +600,11 @@ function PasoFormato(props: {
           <span className="font-mono text-xs text-muted">{props.nombreArchivo}</span> ·{" "}
           {props.formato ? t.detectado(MESSAGES.importar.formatos[props.formato].nombre) : t.noDetectado}
         </p>
+        {props.codificacion !== "utf-8" && (
+          <p className="mt-2 rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-xs text-ink-2">
+            {MESSAGES.importar.codificacion[props.codificacion]}
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
@@ -585,13 +641,26 @@ function PasoFormato(props: {
       </div>
 
       {props.red !== null && props.cuenta === NUEVA && (
-        <Field label={t.cuentaNuevaHandle} help={t.cuentaNuevaAyuda} className="max-w-sm">
-          <Input
-            value={props.handleNuevo}
-            onChange={(e) => props.onHandleNuevo(e.target.value)}
-            placeholder={t.cuentaNuevaEjemplo}
-          />
-        </Field>
+        <div className="space-y-2">
+          <Field label={t.cuentaNuevaHandle} help={t.cuentaNuevaAyuda} className="max-w-sm">
+            <Input
+              value={props.handleNuevo}
+              onChange={(e) => props.onHandleNuevo(e.target.value)}
+              placeholder={t.cuentaNuevaEjemplo}
+            />
+          </Field>
+          {props.cuentaExistente && (
+            <div
+              role="status"
+              className="flex max-w-xl flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-warn/40 bg-warn-wash px-3 py-2"
+            >
+              <p className="text-xs text-ink-2">{t.cuentaExistente(props.cuentaExistente.handle ?? props.handleNuevo)}</p>
+              <Button size="sm" onClick={() => props.onCuenta(props.cuentaExistente!.connectionId)}>
+                {t.usarExistente(props.cuentaExistente.handle ?? props.handleNuevo)}
+              </Button>
+            </div>
+          )}
+        </div>
       )}
 
       <Field
@@ -725,9 +794,19 @@ function OrdenDeFechas(props: {
   );
 }
 
-function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban: number; f: Formatter }) {
+/**
+ * Las cifras que la vista previa enseña, en este orden: las que se
+ * escribirán y tienen columna en el mapeo. Antes solo se veían las
+ * visualizaciones, y el alcance, los guardados o los seguidores ganados
+ * se escribían sin que nadie los hubiera visto (Flatfile y OneSchema
+ * enseñan todas las columnas mapeadas).
+ */
+const CIFRAS_DE_LA_REVISION: readonly Campo[] = [...CAMPOS_METRICA, "durationS"];
+
+function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo; f: Formatter }) {
   const t = MESSAGES.importar.revisar;
   const noEntran = revision.filas.filter((r) => !r.lectura).length;
+  const cifras = CIFRAS_DE_LA_REVISION.filter((c) => mapeo[c]);
   // «Estado» va segunda, justo después de la fila: es lo que se mira en
   // este paso, y a 400 px la tabla se desplaza dentro de sí misma y la
   // última columna quedaba cortada en el borde.
@@ -779,12 +858,19 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
           </span>
         ),
     },
-    {
-      key: "views",
-      header: t.columnas.views,
-      align: "num",
-      render: (r) => (r.lectura?.views != null ? f.int(r.lectura.views) : <span className="font-sans text-muted">{t.sinDato}</span>),
-    },
+    // Una columna por cifra mapeada. La tabla se desplaza dentro de sí
+    // misma a 400 px (DataTable), así que la página no.
+    ...cifras.map(
+      (campo): Column<FilaRevisada> => ({
+        key: campo,
+        header: t.columnas[campo as keyof typeof t.columnas],
+        align: "num",
+        render: (r) => {
+          const v = r.lectura?.[campo as keyof NonNullable<FilaRevisada["lectura"]>];
+          return typeof v === "number" ? f.int(v) : <span className="font-sans text-muted">{t.sinDato}</span>;
+        },
+      }),
+    ),
   ];
 
   return (
@@ -797,7 +883,8 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
           <span className="text-ink-2">{t.resumen(f.int(revision.listas.length), f.int(revision.filas.length))}</span>
           {noEntran > 0 && <Pill kind="bad">{t.errores(noEntran, f.int(noEntran))}</Pill>}
           {revision.avisos > 0 && <Pill kind="warn">{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
-          {yaEstaban > 0 && <span>{t.yaEstaban(yaEstaban, f.int(yaEstaban))}</span>}
+          {revision.yaEstaban > 0 && <span>{t.yaEstaban(revision.yaEstaban, f.int(revision.yaEstaban))}</span>}
+          {revision.sinNovedad > 0 && <Pill kind="warn">{t.sinNovedad(revision.sinNovedad, f.int(revision.sinNovedad))}</Pill>}
           {revision.duplicadasEnArchivo > 0 && (
             <span>{t.duplicadas(revision.duplicadasEnArchivo, f.int(revision.duplicadasEnArchivo))}</span>
           )}
@@ -816,7 +903,7 @@ function PasoRevisar({ revision, yaEstaban, f }: { revision: Revision; yaEstaban
         columns={columnas}
         rows={revision.filas}
         rowKey={(r) => String(r.fila)}
-        caption={t.title}
+        caption={t.caption}
         density="compact"
         maxHeight="420px"
         emptyState={<EmptyState title={t.ninguna} />}
@@ -835,6 +922,10 @@ function PasoHecho({
   f: Formatter;
 }) {
   const t = MESSAGES.importar.hecho;
+  // Los que ya estaban Y recibieron lectura: los que no traían nada más
+  // reciente los cuenta `antiguas`. Contarlos en las dos líneas decía a
+  // la vez «se les añadió una lectura» y «no se guardaron».
+  const conLectura = Math.max(0, resultado.conocidos - resultado.antiguas);
   return (
     <section className="mt-6" aria-labelledby="paso-hecho">
       <div className="rounded-md border border-border bg-surface px-5 py-6">
@@ -846,7 +937,7 @@ function PasoHecho({
         </p>
         <ul className="mt-2 space-y-0.5 text-sm text-ink-2">
           {resultado.nuevos > 0 && <li>{t.nuevos(resultado.nuevos, f.int(resultado.nuevos))}</li>}
-          {resultado.conocidos > 0 && <li>{t.conocidos(resultado.conocidos, f.int(resultado.conocidos))}</li>}
+          {conLectura > 0 && <li>{t.conocidos(conLectura, f.int(conLectura))}</li>}
           {resultado.antiguas > 0 && <li>{t.antiguas(resultado.antiguas, f.int(resultado.antiguas))}</li>}
           <li className="text-muted">{t.fecha(f.date(resultado.fecha, "long"))}</li>
         </ul>

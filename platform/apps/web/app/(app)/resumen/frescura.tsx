@@ -37,15 +37,20 @@ const DIAS_TOLERADOS = 2;
  *
  *   - lo que trae la conexión (la serie de cuenta del recolector o, si
  *     no la hay, su última lectura de contenido por API);
- *   - lo último que llegó por CSV.
+ *   - lo último que llegó por CSV, con la FECHA DE EXPORTACIÓN tal cual
+ *     («CSV exportado el 12 sep»), que es la que el creador escribió en
+ *     el paso 2 y la que le confirmó el paso 4. Con la regla del reloj
+ *     salía «datos hasta el 11», un día menos sin explicación.
  *
  * Mezclarlas en una sola fecha tenía dos fallos: una cuenta alimentada
  * solo por CSV salía como «Sin lecturas todavía» justo después de
  * anunciar «N videos, M lecturas», y un CSV subido a una cuenta OAuth
  * tapaba que su recolector llevaba días sin sincronizar.
  *
- * Las fechas llegan como DÍA CERRADO ('YYYY-MM-DD') y con la regla del
- * reloj del módulo: el aviso y el resto de la página dicen el mismo día.
+ * La de la conexión llega como DÍA CERRADO ('YYYY-MM-DD') y con la regla
+ * del reloj del módulo: el aviso y el resto de la página dicen el mismo
+ * día. La del CSV llega como instante y se formatea en la zona del
+ * workspace, así que dice el mismo día que escribió el creador.
  *
  * Y dos pastillas destapan lo que una fecha vieja sola no dice: la
  * conexión que no está sana (vencida, revocada, con error, pausada) y la
@@ -70,8 +75,8 @@ export function FrescuraLista({ filas, f }: { filas: readonly ConnectionFreshnes
       >
         <span id="frescura">{t.title}</span>
       </SectionTitle>
-      {/* Una vez para toda la lista: cada «datos hasta el…» es un día cerrado en UTC. */}
-      <p className="-mt-1 mb-3 text-xs text-muted">{MESSAGES.zona.frescura}</p>
+      {/* Una vez para toda la página, con palabras de creador: cada «datos hasta el…» es un día ya cerrado. */}
+      <p className="-mt-1 mb-3 text-xs text-muted">{t.diaCerrado}</p>
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {filas.map((c) => {
           const sincronizado = c.lastAccountDay ?? c.lastSyncedReadingDay;
@@ -83,8 +88,12 @@ export function FrescuraLista({ filas, f }: { filas: readonly ConnectionFreshnes
                 {c.handle && <span className="truncate text-xs text-muted">@{c.handle}</span>}
               </div>
               {sincronizado && <DataAsOf date={sincronizado} source={t.fuente.api} />}
-              {c.lastCsvDay && <DataAsOf date={c.lastCsvDay} source={t.fuente.csv} />}
-              {!sincronizado && !c.lastCsvDay && <p className="text-xs text-muted">{t.sinLecturas}</p>}
+              {c.lastCsvExportAt && (
+                <p className="text-xs text-muted">
+                  <time dateTime={c.lastCsvExportAt}>{t.csvExportado(f.date(c.lastCsvExportAt))}</time>
+                </p>
+              )}
+              {!sincronizado && !c.lastCsvExportAt && <p className="text-xs text-muted">{t.sinLecturas}</p>}
               {(c.status !== "active" || atrasada || c.tokenExpiringSoon) && (
                 <div className="flex flex-wrap gap-1.5">
                   {c.status !== "active" && <Pill kind="bad">{t.estado[c.status] ?? t.estadoDesconocido}</Pill>}

@@ -8,7 +8,7 @@ import {
   getFreshnessByConnection,
   getResumenCoverage,
   getResumenKpis,
-  getViewsByBucket,
+  getViewsByWeek,
   importCsvReadings,
 } from "@mc/db/queries/resumen";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
@@ -78,7 +78,7 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     expect(kpis.nonFollowerReach.value).toBe(kpisAntes.nonFollowerReach.value);
     // El gráfico de visualizaciones sigue siendo el de la cuenta: el
     // CSV no inventa visualizaciones diarias.
-    const views = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getViewsByBucket(tx, { days: 90 }));
+    const views = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getViewsByWeek(tx));
     expect(views.source).toBe("account");
 
     // La cuenta importada dice hasta cuándo llegan sus datos, y de dónde.
