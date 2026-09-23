@@ -451,7 +451,15 @@ todavía no lee `post_score`; lo hará RES-3.
    `(workspace, creador, red, corte)` quedándose con el `computed_at`
    más reciente, que es exactamente la forma en que este job escribe.
    No hace falta tocar nada de Campañas.
-6. **En producción no corre todavía**, y no es de CON-6: el worker no
+6. **CON-5 se terminó en paralelo** (rama `nicolas/CON-5-recolector-posts`,
+   sin push todavía). Las dos ramas chocan en dos sitios y los dos son
+   mecánicos: `apps/worker/src/jobs/conexiones/index.ts` (cada una suma
+   sus dos jobs al array) y los conteos de `apps/worker/test/runner.test.ts`
+   (cada una los subió de 10 a 12 handlers; juntas son **14** con
+   handler y **12** sin). Nada más: CON-5 escribe `post_metric_snapshot`
+   con `age_hours` en horas desde `published_at`, que es exactamente lo
+   que estos dos jobs leen por `post_metrics_at_cut`.
+7. **En producción no corre todavía**, y no es de CON-6: el worker no
    está desplegado (CIM-7) y `pgboss` sigue pendiente de
    `GRANT mc_worker TO mc_migrator` + `CREATE SCHEMA pgboss`
    (`docs/propuestas/CON-2.md`). Hasta entonces, `creator_baseline` y
