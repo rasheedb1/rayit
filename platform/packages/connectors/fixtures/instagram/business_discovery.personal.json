@@ -1,5 +1,5 @@
 {
   "meta": { "source": "docs", "recordedAt": "2026-09-22", "notes": "business_discovery sobre una cuenta personal o inexistente: code 100 (permanent) → not_discoverable." },
-  "request": { "method": "GET", "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28[^&]*media_count%7D$" },
+  "request": { "method": "GET", "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28(?![^&]*media\\.limit%28)" },
   "response": { "status": 400, "body": { "error": { "message": "(#100) The user is not an Instagram Business or Creator account, or the account is private.", "type": "OAuthException", "code": 100, "fbtrace_id": "AbCdEf200" } } }
 }
