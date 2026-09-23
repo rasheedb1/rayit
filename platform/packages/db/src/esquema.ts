@@ -477,9 +477,14 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
   quote: {
     tabla: ['SELECT'],
     columnas: {
-      UPDATE: ['accepted_at', 'accepted_by_email', 'accepted_by_name', 'expired_at', 'status', 'view_count', 'viewed_at'],
+      UPDATE: [
+        'accepted_at', 'accepted_by_email', 'accepted_by_name', 'expired_at', 'status', 'superseded_by', 'view_count',
+        'viewed_at',
+      ],
     },
-    motivo: 'abrir /cotizacion/<slug> y marcarla vista, vencida o aceptada; nunca sus montos ni sus partidas (0030 §3)',
+    motivo:
+      'abrir /cotizacion/<slug> y marcarla vista, vencida o aceptada; nunca sus montos ni sus partidas (0030 §3). ' +
+      'superseded_by: dejarla sin efecto, apuntando a la aceptada del mismo negocio, si llega tarde (0033 §3)',
   },
   deal: {
     tabla: ['SELECT'],
@@ -701,19 +706,10 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   campaign_result: { permite: ['SELECT'], motivo: 'lo consolida el worker a partir de las métricas' },
   job_run: { permite: ['SELECT'], motivo: 'bitácora de trabajos: la escribe el worker, la web solo la lee' },
   account_metric_snapshot: {
-    permite: ['SELECT', 'INSERT', 'UPDATE'],
-    // Deuda con dueño: las métricas se insertan, nunca se actualizan. El
-    // UPDATE existe solo por el upsert de CON-10 (recordAccountSnapshot
-    // en queries/conexiones.ts: «Actualizar» dos veces el mismo día
-    // reemplaza la fila, y cuentas-publicas.test.ts lo exige). Es módulo
-    // de Nicolás. Plan en docs/propuestas/CIM-2.md: el upsert pasa a ON
-    // CONFLICT DO NOTHING o al worker y, en la migración siguiente,
-    // REVOKE UPDATE ON account_metric_snapshot FROM mc_app y 'UPDATE' sale
-    // de aquí.
+    permite: ['SELECT', 'INSERT'],
     motivo:
-      'métrica: nadie la borra. CON-10 guarda desde la web el snapshot público del día con un upsert ' +
-      '(recordAccountSnapshot); el UPDATE se queda hasta que ese upsert pase a ON CONFLICT DO NOTHING o al worker ' +
-      '(docs/propuestas/CIM-2.md)',
+      'métrica: se inserta, nunca se corrige ni se borra (0025 §5). CON-10 guarda desde la web el snapshot público ' +
+      'del día con ON CONFLICT DO NOTHING (recordAccountSnapshot); el recolector diario, como mc_worker, es quien mide',
   },
   audit_log: { permite: ['SELECT', 'INSERT'], motivo: 'bitácora de auditoría: se anota, no se corrige ni se borra' },
 

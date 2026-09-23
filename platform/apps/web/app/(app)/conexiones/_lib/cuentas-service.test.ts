@@ -2,7 +2,7 @@
 /**
  * CON-10 · el servicio de cuentas por @ contra Postgres embebido con el seed
  * y fuentes sobre fixtures: agregar deja la fila, el consentimiento con la
- * declaración y el snapshot del día; actualizar reemplaza el snapshot;
+ * declaración y el snapshot del día; actualizar el mismo día no duplica el snapshot;
  * TikTok se agrega sin métricas; errores en español; sin credenciales en
  * ninguna tabla.
  */
@@ -94,7 +94,7 @@ describe("agregar", () => {
 });
 
 describe("actualizar y quitar", () => {
-  it("actualizar el mismo día reemplaza el snapshot; volver a agregar no duplica; quitar conserva la historia", async () => {
+  it("actualizar el mismo día no duplica el snapshot; volver a agregar no duplica; quitar conserva la historia", async () => {
     const rows = await service.listar();
     const ig = rows.find((r) => r.handle === "cafealma")!;
     const upd = await service.actualizar(ig.id);

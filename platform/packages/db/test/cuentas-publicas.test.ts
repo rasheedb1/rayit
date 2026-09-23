@@ -1,4 +1,4 @@
-/** CON-10 · cuentas por @: alta, snapshot diario (reemplaza el mismo día), lista con último snapshot y Δ7d, fallos, aislamiento. */
+/** CON-10 · cuentas por @: alta, snapshot diario (la primera lectura del día queda; mc_app no la corrige), lista con último snapshot y Δ7d, fallos, aislamiento. */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent } from '../src/index.ts';
@@ -54,8 +54,15 @@ describe('snapshots', () => {
     const n = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM account_metric_snapshot WHERE connection_id = $1`, [id]));
     assert.equal(Number(n.rows[0]!.n), 2, 'una fila por día');
     const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
-    assert.deepEqual(row.latest, { day: '2026-09-22', followers: 1250, following: null, mediaCount: 41, views: null });
+    // La segunda lectura del 22 no corrige la primera: las métricas se
+    // insertan, nunca se actualizan (0025 §5).
+    assert.deepEqual(row.latest, { day: '2026-09-22', followers: 1240, following: null, mediaCount: 41, views: null });
     assert.equal(row.followersWeekAgo, 1200);
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE account_metric_snapshot SET followers = 1 WHERE connection_id = $1`, [id])),
+      /permission denied/,
+      'la web no puede corregir una métrica',
+    );
     assert.ok(row.lastSyncedAt, 'la lectura marca last_synced_at');
     assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => tx.query(`SELECT 1 FROM account_metric_snapshot WHERE connection_id = $1`, [id])).then((r) => r.rows.length), 0, 'RLS: el otro workspace no ve los snapshots');
   });

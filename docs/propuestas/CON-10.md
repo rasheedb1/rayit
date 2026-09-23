@@ -77,7 +77,8 @@ apps/worker/src/jobs/conexiones/collect-account-metrics.ts   collect.account_met
    la cuenta como propia (`declaredOwner: true`), con IP, agente y texto
    mostrado. Cada lectura deja una fila en `account_metric_snapshot`
    con `source = 'public_profile'` (UNIQUE por conexión, día y fuente:
-   «Actualizar» dos veces el mismo día reemplaza, no duplica). Sin dato
+   «Actualizar» dos veces el mismo día no duplica ni corrige: queda la
+   primera lectura, pulido r7 y 0025 §5). Sin dato
    → `null`, nunca cero.
 5. **Alcance de uso.** Solo cuentas que el usuario declara suyas o que
    gestiona. No hay búsqueda ni ranking de terceros (límite de

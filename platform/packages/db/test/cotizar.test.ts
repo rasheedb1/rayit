@@ -1780,6 +1780,35 @@ describe('0033 · un negocio, una cotización aceptada', () => {
     assert.equal((await contar(dealId)).aceptadas, 1);
   });
 
+  test('la que llega tarde al negocio ganado queda sin efecto CON la que ganó: al recargar no dice «venció»', async () => {
+    const dealId = await negocio('Tarde por enlace (r7)');
+    const { vieja, nueva } = await dosVivas(dealId);
+    // Solo la parte de la base: el negocio queda ganado con `nueva` y
+    // `vieja` sigue viva, como con datos de antes de 0033 o una carrera.
+    assert.equal((await t.db.withPublicShare((tx) => acceptPublicQuote(tx, nueva.slug, FIRMA))).status, 'ok');
+    assert.deepEqual(
+      await t.db.withPublicShare((tx) => acceptPublicQuote(tx, vieja.slug, FIRMA)),
+      { status: 'not_acceptable', quoteStatus: 'superseded' },
+    );
+
+    // El panel enlaza la versión que ganó…
+    const v = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getQuote(tx, vieja.id));
+    assert.equal(v!.status, 'expired');
+    assert.equal(v!.supersededById, nueva.id);
+    assert.equal(v!.supersededByNumber, nueva.number);
+
+    // …y la marca que recarga el enlace lee «sin efecto», aunque su
+    // «válida hasta» no haya pasado.
+    const publica = await t.db.withPublicShare((tx) => readPublicQuote(tx, vieja.slug, { count: false }));
+    assert.equal(publica.status, 'ok');
+    if (publica.status === 'ok') {
+      assert.equal(publica.quote.status, 'expired');
+      assert.equal(publica.quote.superseded, true);
+    }
+    assert.deepEqual(await aceptarDesdeElEnlace(vieja.slug), { status: 'not_acceptable', quoteStatus: 'superseded' });
+    assert.deepEqual(await contar(dealId), { campanas: 0, avisos: 0, aceptadas: 1 });
+  });
+
   test('desde el panel, la misma guardia: DealAlreadyAccepted y nada cambia', async () => {
     const dealId = await negocio('Panel (r6)');
     const { vieja, nueva } = await dosVivas(dealId);
