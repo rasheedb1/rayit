@@ -15,7 +15,7 @@ import { actualizarCuenta, agregarCuenta, desconectarConexion } from "./actions"
 import { CONSENT_POLICY_VERSION, consentText } from "./_lib/consent";
 import { getCuentasService } from "./_lib/cuentas-server";
 import { OWNERSHIP_DECLARATION_ES, PLATFORM_NAME, PUBLIC_PLATFORMS } from "./_lib/cuentas-service";
-import { MESSAGES, nombreDe } from "./_lib/messages";
+import { displayNameOf, MESSAGES } from "./_lib/messages";
 import { OAUTH_ERROR_MESSAGES, type OAuthErrorCode } from "./_lib/oauth-handlers";
 import { ConnectDialog } from "./connect-dialog";
 
@@ -45,7 +45,7 @@ function AccountSub({ row, f }: { row: AccountRow; f: Formatter }) {
   return (
     <>
       {row.displayName && <span className="block">{row.displayName}</span>}
-      {by && <span className="block">{MESSAGES.lista.conectadaPor({ who: nombreDe(by) ?? MESSAGES.lista.alguienDelEquipo, when: f.date(by.at) })}</span>}
+      {by && <span className="block">{MESSAGES.list.connectedBy({ who: displayNameOf(by) ?? MESSAGES.list.someoneFromTheTeam, when: f.date(by.at) })}</span>}
     </>
   );
 }

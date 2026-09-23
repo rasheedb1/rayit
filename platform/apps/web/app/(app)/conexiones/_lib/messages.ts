@@ -12,22 +12,22 @@
  * nacieron: consent.ts, cuentas-service.ts y oauth-handlers.ts.
  */
 export const MESSAGES = {
-  aviso: {
+  ownerNotice: {
     /** notification.title_es del kind connection_added. */
     title: "Una cuenta se conectó en tu nombre",
     /** notification.body_es: quién (nombre o correo), qué cuenta, en qué red y cuándo (fecha ya formateada). */
     body: (p: { who: string; handle: string; network: string; when: string }): string =>
       `${p.who} conectó la cuenta @${p.handle} de ${p.network} el ${p.when} en tu nombre. Puedes quitarla cuando quieras desde Cuentas.`,
   },
-  lista: {
+  list: {
     /** Debajo del @ en la lista, solo cuando la conectó un tercero. */
-    conectadaPor: (p: { who: string; when: string }): string => `Conectada por ${p.who} el ${p.when}`,
+    connectedBy: (p: { who: string; when: string }): string => `Conectada por ${p.who} el ${p.when}`,
     /** Quien conectó ya no es miembro y la evidencia no guardó correo: nunca un guion mudo. */
-    alguienDelEquipo: "alguien del equipo",
+    someoneFromTheTeam: "alguien del equipo",
   },
 } as const;
 
 /** El nombre de una persona para una frase: su nombre y, si no lo puso, su correo. */
-export function nombreDe(p: { name: string | null; email: string | null }): string | null {
+export function displayNameOf(p: { name: string | null; email: string | null }): string | null {
   return p.name?.trim() || p.email || null;
 }

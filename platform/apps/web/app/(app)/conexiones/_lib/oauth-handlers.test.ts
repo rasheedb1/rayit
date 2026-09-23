@@ -351,7 +351,7 @@ describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma ev
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_permiso`);
     expect(await countConnections()).toBe(before);
-    expect(fetch.calls.length, "el intercambio del code sí se hizo; la plataforma dará otro al reintentar").toBeGreaterThan(calls);
+    expect(fetch.calls.length, "sin permiso no se canjea el code: ningún token que luego habría que tirar").toBe(calls);
     const consents = await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM data_consent WHERE evidence->'actedBy'->>'userId' = $1", [USER_EDITOR]);
     expect(Number(consents.rows[0]!.n)).toBe(0);
   });

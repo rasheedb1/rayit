@@ -8,7 +8,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addPublicAccount, disconnectConnection, getConsentCreator, getSessionMember, listAccounts, listConsents, notifyConnectionAdded,
+  addPublicAccount, disconnectConnection, getConnectionCreator, getConsentCreator, getSessionMember, listAccounts, listConsents, notifyConnectionAdded,
   recordConsent, sessionHasPermission,
 } from '../src/index.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
@@ -144,6 +144,20 @@ describe('aviso al titular y bitácora', () => {
     assert.equal(later.connectedBy!.name, null, 'app_user ya no es visible desde este workspace');
     assert.equal(later.connectedBy!.email, 'andres@ejemplo.com', 'la evidencia conserva el correo de ese día');
     await t.admin(`INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WORKSPACE_LAURA}', '${USER_MANAGER}', '${ROLE_MANAGER_CONECTA}') ON CONFLICT DO NOTHING;`);
+    // Si después la titular vuelve a consentir, la cuenta ya no está «conectada por» el mánager: manda el consentimiento vigente más reciente.
+    await asLaura((tx) => recordConsent(tx, { connectionId: row.id, creatorId: CREATOR_LAURA, purpose: 'analytics', policyVersion: '2026-09-22', evidence: { v: 2, onBehalfOf: { creatorId: CREATOR_LAURA } } }));
+    assert.equal((await asLaura(listAccounts)).find((r) => r.id === row.id)!.connectedBy, null);
+  });
+
+  test('getConnectionCreator: el titular de la cuenta aunque su perfil esté dado de baja', async () => {
+    const { id } = await asLaura((tx) => addPublicAccount(tx, { ...account, handle: 'baja', externalAccountId: '17841400000000b01' }));
+    await t.admin(`UPDATE creator_profile SET deleted_at = now() WHERE id = '${CREATOR_LAURA}';`);
+    try {
+      assert.deepEqual(await asManager((tx) => getConnectionCreator(tx, id)), { id: CREATOR_LAURA, userId: USER_LAURA, displayName: 'Laura Méndez' });
+      await assert.rejects(asManager(getConsentCreator), /no tiene un perfil de creador/);
+    } finally {
+      await t.admin(`UPDATE creator_profile SET deleted_at = NULL WHERE id = '${CREATOR_LAURA}';`);
+    }
   });
 
   test('quitar por un tercero anexa la revocación a cada consentimiento sin tocar el otorgamiento', async () => {

@@ -94,7 +94,7 @@ describe("agregar", () => {
     expect(ev.rows[0]!.evidence).not.toHaveProperty("ip");
     expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
     // Modo demo, sin sesión: no hay a quién avisar ni a quién nombrar.
-    expect(out.aviso).toBe("sin_sesion");
+    expect(out.ownerNotice).toBe("no_session");
     const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log ORDER BY id");
     expect(log.rows.at(-1)).toEqual({ endpoint: "instagram.business_discovery", connection_id: out.id });
   });
@@ -167,7 +167,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     const out = await manager.agregar({ platformId: "instagram", handle: "@cafealma" }, WHO);
     expect(out.ok).toBe(true);
     if (!out.ok) return;
-    expect(out.aviso).toBe("enviado");
+    expect(out.ownerNotice).toBe("sent");
     const consents = await withWorkspace((tx) => listConsents(tx, out.id));
     const active = consents.filter((c) => c.revokedAt === null);
     expect(active.map((c) => c.purpose)).toEqual(["analytics"]);
@@ -195,7 +195,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(row.connectedBy).toMatchObject({ userId: USER_MANAGER, name: "Andrés Pardo", email: "andres@ejemplo.com" });
     // Volver a agregarla no duplica el aviso mientras el creador no lo lea.
     const again = await manager.agregar({ platformId: "instagram", handle: "cafealma" }, WHO);
-    expect(again).toMatchObject({ ok: true, id: out.id, aviso: "ya_habia" });
+    expect(again).toMatchObject({ ok: true, id: out.id, ownerNotice: "already_pending" });
     expect(Number((await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id])).rows[0]!.n)).toBe(1);
   });
 
@@ -204,7 +204,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     const out = await laura.agregar({ platformId: "youtube", handle: "@NutriveOficial" }, WHO);
     expect(out.ok).toBe(true);
     if (!out.ok) return;
-    expect(out.aviso).toBe("titular_actua");
+    expect(out.ownerNotice).toBe("owner_acted");
     const active = (await withWorkspace((tx) => listConsents(tx, out.id))).filter((c) => c.revokedAt === null);
     const ev = await db.queryAsSuperuser<{ evidence: Record<string, unknown> }>("SELECT evidence FROM data_consent WHERE id = $1", [active[0]!.id]);
     expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, onBehalfOf: { creatorId: CREATOR_LAURA } });
@@ -227,6 +227,9 @@ describe("consentimiento delegado (ACC-8)", () => {
     const ig = (await editor.listar()).find((r) => r.handle === "cafealma")!;
     expect(ig, "sí puede VER la lista").toBeTruthy();
     await expect(editor.quitar(ig.id)).rejects.toBeInstanceOf(SinPermisoError);
+    // «Actualizar» también: abriría tokens, gastaría cuota y escribiría snapshots.
+    expect(await editor.actualizar(ig.id)).toMatchObject({ ok: false, code: "sin_permiso" });
+    expect(fetch.calls.length).toBe(calls);
     const after = await db.queryAsSuperuser<{ n: number }>("SELECT (SELECT count(*) FROM social_connection) + (SELECT count(*) FROM data_consent) + (SELECT count(*) FROM notification) + (SELECT count(*) FROM audit_log) + (SELECT count(*) FROM api_call_log) AS n");
     expect(Number(after.rows[0]!.n)).toBe(Number(before.rows[0]!.n));
     expect(ig.status).toBe("active");

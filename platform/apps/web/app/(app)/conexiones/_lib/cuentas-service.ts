@@ -23,13 +23,11 @@ import {
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  notifyConnectionAdded, recordAccountSnapshot, recordConsent, type AccountRow, type ConsentCreator, type SessionMember, type WorkspaceTx,
+  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
+  recordAccountSnapshot, recordConsent, type AccountRow, type WorkspaceTx,
 } from "@mc/db";
-import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
-import { formatterFor } from "@/lib/format";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
-import { MESSAGES, nombreDe } from "./messages";
+import { notifyOwner, type OwnerNotice } from "./owner-notice";
 import { requireConexionesPermission, SinPermisoError } from "./permisos";
 
 export const PUBLIC_PLATFORMS: readonly PlatformId[] = ["instagram", "tiktok", "youtube"];
@@ -53,18 +51,8 @@ export interface Requester {
   userAgent: string | null;
 }
 
-/**
- * Qué pasó con el aviso al titular (ACC-8):
- *   enviado        un tercero conectó la cuenta y el titular tiene aviso nuevo
- *   ya_habia       un tercero la conectó y el titular ya tenía ese aviso sin leer
- *   titular_actua  la conectó el propio titular: no hay a quién avisar
- *   sin_titular    el perfil del creador no tiene app_user (seed, alta por agencia)
- *   sin_sesion     copia sin llaves: no hay nadie en la sesión
- */
-export type AvisoTitular = "enviado" | "ya_habia" | "titular_actua" | "sin_titular" | "sin_sesion";
-
 export type AgregarResult =
-  | { ok: true; id: string; created: boolean; profile: PublicProfile; aviso: AvisoTitular }
+  | { ok: true; id: string; created: boolean; profile: PublicProfile; ownerNotice: OwnerNotice }
   | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "plataforma"; message: string };
 
 export type ActualizarResult =
@@ -73,7 +61,7 @@ export type ActualizarResult =
       /** true si ya había lectura de hoy: no se guardó nada nuevo y last_synced_at no se movió. */
       alreadyReadToday: boolean;
     }
-  | { ok: false; code: PublicLookupError["code"] | "no_existe" | "plataforma"; message: string };
+  | { ok: false; code: PublicLookupError["code"] | "no_existe" | "sin_permiso" | "plataforma"; message: string };
 
 export interface SourceAvailability {
   platformId: PlatformId;
@@ -93,21 +81,6 @@ const OFFERS_ES: Record<PlatformId, string> = {
 
 function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
-}
-
-/**
- * El aviso al titular cuando un tercero conectó su cuenta. Se arma aquí
- * (y no en @mc/db) porque la fecha va en el locale y la zona del
- * workspace, y @mc/db no escribe frases.
- */
-async function avisarAlTitular(tx: WorkspaceTx, p: { creator: ConsentCreator; actor: SessionMember | null; connectionId: string; platformId: PlatformId; handle: string; at: Date }): Promise<AvisoTitular> {
-  if (!p.actor) return "sin_sesion";
-  if (p.actor.userId === p.creator.userId) return "titular_actua";
-  if (!p.creator.userId) return "sin_titular";
-  const f = formatterFor(await getWorkspaceSettings(tx));
-  const body = MESSAGES.aviso.body({ who: nombreDe(p.actor) ?? p.actor.email, handle: p.handle, network: PLATFORM_NAME[p.platformId], when: f.dateTime(p.at.toISOString()) });
-  const sent = await notifyConnectionAdded(tx, { userId: p.creator.userId, connectionId: p.connectionId, titleEs: MESSAGES.aviso.title, bodyEs: body });
-  return sent ? "enviado" : "ya_habia";
 }
 
 export function createCuentasService(deps: CuentasDeps) {
@@ -171,9 +144,9 @@ export function createCuentasService(deps: CuentasDeps) {
           if (profile.metrics) {
             await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw });
           }
-          const aviso = await avisarAlTitular(tx, { creator, actor, connectionId: id, platformId, handle, at });
+          const ownerNotice = await notifyOwner(tx, { creator, actor, connectionId: id, network: PLATFORM_NAME[platformId], handle, at });
           await flush(callLog, tx, id);
-          return { id, created, aviso };
+          return { id, created, ownerNotice };
         });
         return { ok: true, ...out, profile };
       } catch (err) {
@@ -184,7 +157,17 @@ export function createCuentasService(deps: CuentasDeps) {
     },
 
     async actualizar(id: string): Promise<ActualizarResult> {
-      const row = (await deps.withWorkspace((tx) => listAccounts(tx))).find((r) => r.id === id);
+      // «Pedir una lectura nueva» es parte de conexiones.cuenta.conectar (catálogo de @mc/core): antes de abrir tokens o llamar a la plataforma.
+      let row: AccountRow | undefined;
+      try {
+        row = await deps.withWorkspace(async (tx) => {
+          await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          return (await listAccounts(tx)).find((r) => r.id === id);
+        });
+      } catch (err) {
+        if (err instanceof SinPermisoError) return { ok: false, code: "sin_permiso", message: err.message };
+        throw err;
+      }
       if (!row) return { ok: false, code: "no_existe", message: "Esa cuenta ya no está en la lista." };
       const platformId = row.platformId;
       const callLog = new InMemoryCallLogSink();
@@ -270,7 +253,8 @@ export function createCuentasService(deps: CuentasDeps) {
     async quitar(id: string): Promise<void> {
       await deps.withWorkspace(async (tx) => {
         const actor = await requireConexionesPermission(tx, "conexiones.cuenta.desconectar");
-        const creator = await getConsentCreator(tx);
+        // El titular de ESTA cuenta, aunque su perfil esté dado de baja: la revocación y la bitácora nombran al mismo.
+        const creator = await getConnectionCreator(tx, id);
         await disconnectConnection(tx, id, buildRevocationEvidence({ at: now(), creatorId: creator.id, actor, creatorUserId: creator.userId }));
       });
     },

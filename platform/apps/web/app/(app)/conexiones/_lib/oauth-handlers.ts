@@ -30,13 +30,11 @@ import {
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
 import {
-  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, notifyConnectionAdded, recordConsent,
+  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, recordConsent,
   upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
-import { getWorkspaceSettings } from "@mc/db/queries/cimientos";
-import { formatterFor } from "@/lib/format";
 import { buildConsentEvidence, CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
-import { MESSAGES, nombreDe } from "./messages";
+import { notifyOwner } from "./owner-notice";
 import { requireConexionesPermission, SinPermisoError } from "./permisos";
 
 export const OAUTH_COOKIE = "oc_oauth";
@@ -203,6 +201,15 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       if (!cfg) return redirect(req, "/conexiones?error=no_configurada", headers);
       const prov = OAUTH_PROVIDERS[provider];
 
+      // Antes de canjear el code: quien ya no puede conectar (su rol cambió desde start, o la cookie es de otra sesión)
+      // no obtiene tokens que luego habría que tirar. La transacción que escribe lo vuelve a comprobar.
+      try {
+        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+      } catch (err) {
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso", headers);
+        throw err;
+      }
+
       // Fase HTTP fuera de la transacción; el log se acumula y se escribe con la fila.
       const callLog = new InMemoryCallLogSink();
       const core = new HttpCore({ callLog, fetch: deps.fetch, now, quota: new QuotaManager({ now }) });
@@ -266,12 +273,7 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         for (const purpose of purposes) {
           await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose, policyVersion: saved.policyVersion, evidence });
         }
-        const delegated = actor !== null && actor.userId !== creator.userId;
-        if (delegated && creator.userId) {
-          const f = formatterFor(await getWorkspaceSettings(tx));
-          const body = MESSAGES.aviso.body({ who: nombreDe(actor) ?? actor.email, handle: profile.handle ?? externalAccountId, network: PLATFORM_LABEL[provider], when: f.dateTime(at.toISOString()) });
-          await notifyConnectionAdded(tx, { userId: creator.userId, connectionId: id, titleEs: MESSAGES.aviso.title, bodyEs: body });
-        }
+        await notifyOwner(tx, { creator, actor, connectionId: id, network: PLATFORM_LABEL[provider], handle: profile.handle ?? externalAccountId, at });
         const sink = new PostgresCallLogSink(tx);
         for (const entry of callLog.entries) await sink.record({ ...entry, connection_id: entry.connection_id ?? id });
         return id;

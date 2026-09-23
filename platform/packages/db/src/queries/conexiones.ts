@@ -251,6 +251,24 @@ export async function getConsentCreator(tx: WorkspaceTx): Promise<ConsentCreator
   return { id: r.id, userId: r.user_id, displayName: r.display_name };
 }
 
+/**
+ * El titular de UNA conexión: su creator_profile (el de la fila, no «el
+ * primero del workspace») con su app_user. Sin filtrar borrados: una
+ * cuenta de un perfil dado de baja se tiene que poder quitar igual, y la
+ * revocación tiene que nombrar al mismo titular que la bitácora.
+ */
+export async function getConnectionCreator(tx: WorkspaceTx, connectionId: string): Promise<ConsentCreator> {
+  const { rows } = await tx.query<{ id: string; user_id: string | null; display_name: string }>(
+    `SELECT cp.id, cp.user_id, cp.display_name
+       FROM social_connection c JOIN creator_profile cp ON cp.id = c.creator_id
+      WHERE c.id = $1 AND c.deleted_at IS NULL`,
+    [connectionId],
+  );
+  const r = rows[0];
+  if (!r) throw new ConnectionNotFound(connectionId);
+  return { id: r.id, userId: r.user_id, displayName: r.display_name };
+}
+
 /** Solo el id del titular (ver getConsentCreator). */
 export async function getDefaultCreatorId(tx: WorkspaceTx): Promise<string> {
   return (await getConsentCreator(tx)).id;
@@ -717,13 +735,15 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
           ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
+       -- El consentimiento vigente MÁS RECIENTE, tenga o no actedBy: si el titular
+       -- reconectó después del mánager, la cuenta ya no está «conectada por» él.
        LEFT JOIN LATERAL (
          SELECT (d.evidence->'actedBy'->>'userId')::uuid AS acted_by_user_id,
                 d.evidence->'actedBy'->>'email' AS acted_by_email,
                 d.granted_at AS acted_at
            FROM data_consent d
-          WHERE d.connection_id = c.id AND d.revoked_at IS NULL AND d.evidence ? 'actedBy'
-          ORDER BY d.granted_at DESC LIMIT 1
+          WHERE d.connection_id = c.id AND d.revoked_at IS NULL
+          ORDER BY d.granted_at DESC, d.id DESC LIMIT 1
        ) a ON true
        LEFT JOIN app_user u ON u.id = a.acted_by_user_id
       WHERE c.deleted_at IS NULL`,
