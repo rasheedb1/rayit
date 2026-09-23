@@ -64,6 +64,41 @@ describe("el filtro por estado de cobro", () => {
   });
 });
 
+describe("los tres hallazgos de /code-review", () => {
+  const caja = () => screen.getByLabelText("Buscar");
+
+  it("escribir y pulsar un estado antes de los 250 ms no borra el estado (ni lo escrito)", () => {
+    render(<Filtros active="por_cobrar" minSearch={3} />);
+    fireEvent.change(caja(), { target: { value: "Hogar" } });
+    act(() => vi.advanceTimersByTime(100)); // el temporizador sigue pendiente
+    fireEvent.click(screen.getByRole("button", { name: "Vencidas" }));
+    expect(replace).toHaveBeenCalledWith("/finanzas?bucket=vencida&q=Hogar", { scroll: false });
+    // Y el temporizador cancelado no vuelve luego a escribir una URL sin bucket.
+    act(() => vi.advanceTimersByTime(1000));
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("si la URL pierde la búsqueda por fuera (atrás, «Quitar la búsqueda»), la caja se vacía", () => {
+    search = "q=Hogar";
+    const { rerender } = render(<Filtros active="por_cobrar" minSearch={3} />);
+    expect(caja()).toHaveValue("Hogar");
+    // Una navegación blanda dentro del mismo segmento: el componente no
+    // se desmonta, solo cambian los searchParams.
+    search = "bucket=vencida";
+    rerender(<Filtros active="vencida" minSearch={3} />);
+    expect(caja()).toHaveValue("");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("escribir no se deshace solo cuando la URL confirma lo que este componente mandó", () => {
+    render(<Filtros active="por_cobrar" minSearch={3} />);
+    fireEvent.change(caja(), { target: { value: "Hogar" } });
+    act(() => vi.advanceTimersByTime(300));
+    expect(replace).toHaveBeenCalledWith("/finanzas?q=Hogar", { scroll: false });
+    expect(caja()).toHaveValue("Hogar");
+  });
+});
+
 describe("el buscador", () => {
   const caja = () => screen.getByLabelText("Buscar");
 

@@ -66,9 +66,14 @@ export type ReceivableFilterKey = keyof typeof RECEIVABLE_FILTERS;
 
 export const RECEIVABLE_FILTER_KEYS = Object.keys(RECEIVABLE_FILTERS) as ReceivableFilterKey[];
 
-/** La llave que trae la URL, o la de por defecto si no es ninguna de las nuestras. */
+/**
+ * La llave que trae la URL, o la de por defecto si no es ninguna de las
+ * nuestras. `Object.hasOwn` y no `in`: con `in`, `?bucket=toString`
+ * pasaba por buena —es una propiedad heredada de Object.prototype— y la
+ * pantalla acababa diciendo «No hay facturas en «undefined»».
+ */
 export function receivableFilterKey(value: string | undefined): ReceivableFilterKey {
-  return value && value in RECEIVABLE_FILTERS ? (value as ReceivableFilterKey) : "por_cobrar";
+  return value && Object.hasOwn(RECEIVABLE_FILTERS, value) ? (value as ReceivableFilterKey) : "por_cobrar";
 }
 
 /**
@@ -99,8 +104,9 @@ export const LIST_FILTERS = {
 
 export type ListFilterKey = keyof typeof LIST_FILTERS;
 
+/** Lo mismo que receivableFilterKey, y por el mismo motivo: `Object.hasOwn`, no `in`. */
 export function filterKey(value: string | undefined): ListFilterKey {
-  return value && value in LIST_FILTERS ? (value as ListFilterKey) : "todas";
+  return value && Object.hasOwn(LIST_FILTERS, value) ? (value as ListFilterKey) : "todas";
 }
 
 /** La URL de un filtro del archivo. */
