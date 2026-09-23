@@ -52,12 +52,20 @@ export const TOUCH_STATUSES = [
   'draft', 'scheduled', 'processing', 'held', 'sent', 'failed', 'skipped', 'canceled',
 ] as const;
 /**
- * Lo que todavía puede salir. Una baja, una respuesta o el apagado
- * cancelan todo menos 'processing', que es del despachador que lo
- * reclamó: él lo cancela antes de llamar al proveedor, o lo registra como
- * enviado si ya lo llamó (0037 §4.1).
+ * Lo que todavía puede salir (vivo): lo que cuenta la cola y lo que un
+ * contacto tiene pendiente. Incluye 'processing'. NO es lo que se
+ * cancela: para eso, CANCELABLE_TOUCH_STATUSES.
  */
-export const PENDING_TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held'] as const;
+export const LIVE_TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held'] as const;
+/**
+ * Lo que cancelan una baja (public_optout), una respuesta (VEN-14) o el
+ * cambio de cadencia (VEN-10): todo lo vivo menos 'processing', que es
+ * del despachador que lo reclamó; él lo cancela antes de llamar al
+ * proveedor, o lo registra como enviado si ya lo llamó (0037 §4.1).
+ * public_optout cancela exactamente estos. disable_outreach deja además
+ * los borradores ('draft'): son trabajo de una persona y no salen solos.
+ */
+export const CANCELABLE_TOUCH_STATUSES = ['draft', 'scheduled', 'held'] as const;
 export const SEQUENCE_STATUSES = ['draft', 'active', 'paused', 'archived'] as const;
 export const AUTOMATION_MODES = ['manual', 'review', 'auto'] as const;
 
@@ -358,12 +366,13 @@ export const outboundTouch = pgTable('outbound_touch', {
   messageIdRfc: text('message_id_rfc'),
   openedAt: timestamptz('opened_at'),
   heldReason: text('held_reason'),
-  /** sha256 (hex) del token del enlace de baja; el token solo va en el correo. Solo lo escribe el worker. */
-  optoutTokenHash: text('optout_token_hash'),
   /**
-   * La dirección exacta a la que salió el mensaje, escrita por el worker al
-   * enviar. La baja del enlace se anota sobre ella, no sobre contact.email
-   * (0037 §4 y §9). Con pruebas de envío, contactId y companyId ya no cambian.
+   * La dirección exacta a la que sale el mensaje, escrita por el worker al
+   * reclamarlo (un correo en processing o con providerMessageId la exige).
+   * La regla de la baja la compara con la lista global (0037 §4.1). Con
+   * pruebas de envío, contactId y companyId ya no cambian desde la web, y
+   * un toque en 'sent' no vuelve atrás ni se borra. El enlace de baja
+   * vive aparte, en outbound_optout_link.
    */
   recipientAddress: citext('recipient_address'),
   /** La hora del último cambio de estado; solo se mueve con él (disparador). */

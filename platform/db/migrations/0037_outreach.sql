@@ -746,12 +746,16 @@ BEGIN
                     TG_TABLE_NAME, NEW.id, NEW.workspace_id, NEW.sequence_id, espacio
       USING ERRCODE = 'check_violation';
   END IF;
-  IF TG_TABLE_NAME = 'outbound_enrollment' AND NEW.current_step_id IS NOT NULL THEN
-    SELECT st.sequence_id INTO secuencia FROM outbound_step st WHERE st.id = NEW.current_step_id;
-    IF FOUND AND secuencia IS DISTINCT FROM NEW.sequence_id THEN
-      RAISE EXCEPTION 'El paso actual % del enrolamiento % es de otra secuencia (%, no %).',
-                      NEW.current_step_id, NEW.id, secuencia, NEW.sequence_id
-        USING ERRCODE = 'check_violation';
+  -- Dos IF y no un AND: plpgsql prepara la expresión entera, y en un
+  -- paso NEW no tiene current_step_id.
+  IF TG_TABLE_NAME = 'outbound_enrollment' THEN
+    IF NEW.current_step_id IS NOT NULL THEN
+      SELECT st.sequence_id INTO secuencia FROM outbound_step st WHERE st.id = NEW.current_step_id;
+      IF FOUND AND secuencia IS DISTINCT FROM NEW.sequence_id THEN
+        RAISE EXCEPTION 'El paso actual % del enrolamiento % es de otra secuencia (%, no %).',
+                        NEW.current_step_id, NEW.id, secuencia, NEW.sequence_id
+          USING ERRCODE = 'check_violation';
+      END IF;
     END IF;
   END IF;
   RETURN NEW;
@@ -882,7 +886,10 @@ CREATE TRIGGER outbound_touch_updated BEFORE UPDATE ON outbound_touch
 -- cambia ni el estado, ni el contacto, ni la dirección pasa siempre. Si
 -- no, después de una baja ya no se podría anotar replied_at («bórrame»
 -- es una respuesta), opened_at, thread_ref ni provider_message_id en un
--- toque que ya salió.
+-- toque que ya salió. Tampoco mira lo que sigue en 'sent' (un registro
+-- no es un envío) ni el contact_id que pasa a NULL al borrar la ficha:
+-- si no, borrar la ficha, la empresa o el workspace de alguien que pidió
+-- la baja fallaría.
 --
 -- «Dado de baja» es cualquiera de estas tres cosas:
 --   · contact.opted_out de la ficha del toque (0007: la baja de ESE
@@ -955,6 +962,19 @@ BEGIN
     RETURN NEW;
   END IF;
   IF NEW.status NOT IN ('scheduled', 'processing', 'sent') THEN
+    RETURN NEW;
+  END IF;
+  -- Lo que no es enviar a nadie nuevo pasa: un toque que ya estaba en
+  -- 'sent' y sigue ahí (un registro, no un envío), y soltar la ficha sin
+  -- cambiar ni el estado ni la dirección (la clave ajena pone contact_id
+  -- a NULL al borrar la ficha, y eso no puede fallar porque la persona
+  -- haya pedido la baja).
+  IF TG_OP = 'UPDATE' AND OLD.status = 'sent' AND NEW.status = 'sent' THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.contact_id IS NULL
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.recipient_address IS NOT DISTINCT FROM OLD.recipient_address THEN
     RETURN NEW;
   END IF;
 
@@ -2352,6 +2372,7 @@ DECLARE
   enlace    outbound_optout_link%ROWTYPE;
   ya_baja   boolean;
   todas_de_baja boolean;
+  nuevas    int;
   ids       uuid[];
   r         jsonb;
 BEGIN
@@ -2384,9 +2405,13 @@ BEGIN
       PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
 
       -- Sin columna en ON CONFLICT a propósito: nombrarla pediría SELECT
-      -- sobre la lista, y este rol solo inserta en ella.
+      -- sobre la lista, y este rol solo inserta en ella. Si la dirección
+      -- ya estaba (otro clic, de este correo o de otro), no entra ninguna
+      -- fila: ya estaba de baja, aunque ninguna ficha lo diga.
       INSERT INTO contact_suppression (email, reason) VALUES (enlace.recipient_address, 'unsubscribe_link')
       ON CONFLICT DO NOTHING;
+      GET DIAGNOSTICS nuevas = ROW_COUNT;
+      ya_baja := ya_baja OR nuevas = 0;
 
       -- Quién la provocó: el workspace y el toque del correo (4.6).
       INSERT INTO outbound_optout_event (token_hash, workspace_id, touch_id, recipient_address, sent_at,

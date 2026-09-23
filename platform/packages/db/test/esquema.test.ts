@@ -1254,14 +1254,17 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   test('el inventario declarado es el de 0030, 0031 y 0037, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'company', 'company_link', 'contact', 'contact_suppression', 'deal', 'deal_stage_history',
-      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'outbound_enrollment', 'outbound_touch',
-      'pipeline_stage', 'quote',
+      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'outbound_enrollment', 'outbound_optout_event',
+      'outbound_optout_link', 'outbound_touch', 'pipeline_stage', 'quote',
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
-      16,
-      'las siete de 0030, la aceptada del negocio de 0033 y las ocho de la baja de 0037',
+      17,
+      'las siete de 0030, la aceptada del negocio de 0033 y las nueve de la baja de 0037',
     );
+    // La baja (0037 §9) lee el enlace y anota el clic; no escribe el enlace ni lee los clics.
+    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_link!.tabla, ['SELECT']);
+    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_event!.tabla, ['INSERT']);
     // La baja (0037 §9) escribe la baja del contacto, nunca su correo.
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact!.columnas!.UPDATE!.includes('email'));
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
@@ -1307,6 +1310,16 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
       'ALTER POLICY deal_public_share_won ON deal WITH CHECK (true)',
       `ALTER POLICY deal_public_share_won ON deal WITH CHECK (${DEAL_PUBLIC_SHARE})`,
       (e) => dice(e, /^política deal\.deal_public_share_won ya no abre solo .*: WITH CHECK true$/),
+    );
+    assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, [], 'y al deshacerlo vuelve a verde');
+  });
+
+  test('la política de alta del clic de baja (0037 §9) se mira por su WITH CHECK', async () => {
+    const CLIC = "token_hash = nullif(current_setting('app.public_optout', true), '')";
+    await con(
+      'ALTER POLICY outbound_optout_event_public_optout ON outbound_optout_event WITH CHECK (true)',
+      `ALTER POLICY outbound_optout_event_public_optout ON outbound_optout_event WITH CHECK (${CLIC})`,
+      (e) => dice(e, /^política outbound_optout_event\.outbound_optout_event_public_optout ya no abre solo .*: WITH CHECK true$/),
     );
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, [], 'y al deshacerlo vuelve a verde');
   });

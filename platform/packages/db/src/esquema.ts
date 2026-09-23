@@ -315,10 +315,17 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   'public_optout(text)':
     'la baja desde el enlace de un correo (0037 §9): la página se abre sin sesión y la baja cruza workspaces (0007: ' +
     'nadie en la plataforma vuelve a escribirle). Corre como mc_public_share, cuyas políticas `TO mc_public_share` ' +
-    'abren solo el toque ENVIADO cuyo sha256 del token fija la función, y después la ficha que lo recibió y las ' +
-    'que tienen la dirección a la que salió (recipient_address, que solo escribe el worker). Escribe por COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, ' +
-    'el estado de sus enrolamientos, y el correo en contact_suppression (reason unsubscribe_link, la baja ' +
-    'verificable de 0029 §1). No es de ningún disparador',
+    'abren solo el enlace (outbound_optout_link, que escribe solo el despachador) cuyo sha256 del token fija la ' +
+    'función, y después la ficha que recibió el correo y las que tienen la dirección a la que salió. Escribe por ' +
+    'COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, el estado de sus ' +
+    'enrolamientos, el correo en contact_suppression (reason unsubscribe_link, la baja verificable de 0029 §1) y ' +
+    'el clic en outbound_optout_event (quién la provocó). No es de ningún disparador',
+  // La regla de la baja de outbound_touch mira la lista global (0037 §4.1).
+  'address_is_suppressed(citext)':
+    'la regla de la baja de outbound_touch (0037 §4.1) compara el correo de la ficha y recipient_address con la ' +
+    'baja global, y mc_app no puede leer contact_suppression (0026 §3). Solo LEE la lista y responde sí o no para ' +
+    'UNA dirección: lo mismo que un workspace ya aprende creando una ficha con ese correo, que nace dada de baja ' +
+    '(contact_suppression_apply). EXECUTE solo para mc_app y mc_worker',
 };
 
 /**
@@ -397,10 +404,24 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
  */
 export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
   'outbound_touch.outbound_touch_worker_columns':
-    'optout_token_hash, provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, y ' +
-    'un toque con esas pruebas no cambia de contacto ni de empresa (0037 §4.2). Sin él, un workspace fabricaba un ' +
-    'toque «enviado» con un token suyo, o movía uno enviado de verdad a la ficha de otra persona, y con ' +
-    'public_optout daba de baja ese correo en toda la plataforma',
+    'provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, un toque con esas ' +
+    'pruebas no cambia de contacto ni de empresa, y un toque en sent no vuelve atrás (0037 §4.2). Sin él, un ' +
+    'workspace movía un envío de verdad a la ficha de otra persona, o devolvía a la cola un correo que ya salió ' +
+    '(un segundo envío)',
+  'outbound_touch.outbound_touch_keep_sent':
+    'un toque con pruebas de envío no se borra desde la aplicación (0037 §4.2): es el registro de lo que la ' +
+    'plataforma envió. Las cascadas de empresa y workspace sí pasan; el enlace de baja vive aparte',
+  'outbound_touch.outbound_touch_enrollment_check':
+    'un toque es del mismo workspace y contacto que su enrolamiento, y su paso es de la misma secuencia (0037 ' +
+    '§4.4). Sin él, un toque del enrolamiento de X con contact_id Y se saltaba la regla de la baja, que mira ' +
+    'el contacto del toque',
+  'outreach_channel_account.outreach_channel_account_worker_columns':
+    'el estado autenticado, provider_account_id, secret_ref y scopes de una cuenta de canal los escribe solo el ' +
+    'callback del proveedor (0037 §2.1). Sin él, un workspace ocupaba el buzón de otra persona en toda la ' +
+    'plataforma (outreach_channel_account_live_idx) con una fila «connected» sin OAuth',
+  'outbound_policy.outbound_policy_llm_cap':
+    'llm_daily_cap_usd lo fija la plataforma (0037 §6.1): la llave de Anthropic es de On Cue, y con un UPDATE un ' +
+    'workspace se quitaba su propio techo de gasto',
   'outbound_enrollment.outbound_enrollment_optout':
     'no se enrola ni se reanuda a quien pidió la baja (0037 §3.3): sin él, el alta quedaba viva y el motor chocaba ' +
     'con la regla de outbound_touch en cada vuelta',
@@ -574,11 +595,21 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
       'anotar el correo en la baja global con reason unsubscribe_link, la baja verificable de la propia persona que ' +
       '0029 §1 reserva a la lista (0037 §9). No la lee',
   },
+  outbound_optout_link: {
+    tabla: ['SELECT'],
+    motivo:
+      'encontrar el enlace por el sha256 del token: la dirección a la que salió el correo, la ficha y el workspace ' +
+      'que lo envió (0037 §4.5 y §9). No lo escribe',
+  },
+  outbound_optout_event: {
+    tabla: ['INSERT'],
+    motivo: 'anotar el clic con el workspace y el toque que lo originaron (0037 §4.6). No lo lee',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
 export interface PoliticaDelEnlace {
-  /** polcmd: r = SELECT, w = UPDATE. */
+  /** polcmd: r = SELECT, w = UPDATE, a = INSERT (se mira su WITH CHECK). */
   cmd: string;
   /**
    * Lo que tiene que decir la expresión. USING y, si lo trae, WITH CHECK
@@ -594,11 +625,11 @@ export interface PoliticaDelEnlace {
 const SLUG_DE_LA_LLAMADA = /\bslug = NULLIF\(current_setting\('app\.public_share'/;
 const DEAL_DE_LA_COTIZACION = [/^EXISTS \(SELECT 1 FROM quote q WHERE/, /\bq\.deal_id = deal\.id\b/, SLUG_DE_LA_LLAMADA];
 /** La baja (0037 §9): el sha256 del token, y la lista de contactos que public_optout fija. */
-const TOKEN_DE_LA_BAJA = /^\(?optout_token_hash = NULLIF\(current_setting\('app\.public_optout'/;
+const TOKEN_DE_LA_BAJA = /^\(?token_hash = NULLIF\(current_setting\('app\.public_optout'/;
 const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las ocho de la baja (0037 §9). Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las nueve de la baja (0037 §9). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -644,10 +675,15 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     motivo: 'la etapa en la que está un negocio que el rol ya ve (deal_public_share decide cuál)',
   },
   // La baja desde el enlace de un correo (0037 §9).
-  'outbound_touch.outbound_touch_public_optout': {
+  'outbound_optout_link.outbound_optout_link_public_optout': {
     cmd: 'r',
     exige: [TOKEN_DE_LA_BAJA],
-    motivo: 'el toque cuyo sha256 del token fija public_optout',
+    motivo: 'el enlace cuyo sha256 del token fija public_optout',
+  },
+  'outbound_optout_event.outbound_optout_event_public_optout': {
+    cmd: 'a',
+    exige: [TOKEN_DE_LA_BAJA],
+    motivo: 'anotar el clic de ese mismo enlace, y ningún otro',
   },
   'outbound_touch.outbound_touch_public_optout_contacts': {
     cmd: 'r',
@@ -725,9 +761,10 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'chocar con una exige conocerla, y conocerla ya es tenerla',
   'outreach_channel_account.outreach_channel_account_live_idx':
     'un buzón (el Gmail o la cuenta de Unipile) envía desde UN workspace (0037 §2): los topes son por cuenta y, con ' +
-    'dos filas vivas del mismo buzón en dos workspaces, el proveedor recibiría el doble. La web solo escribe ' +
-    'provider_account_id con lo que devuelve el proveedor al terminar el OAuth o el alta en Unipile, así que ' +
-    'chocar exige haber autenticado esa misma cuenta, que ya es tenerla',
+    'dos filas vivas del mismo buzón en dos workspaces, el proveedor recibiría el doble. El índice cubre solo las ' +
+    'cuentas AUTENTICADAS (connected, needs_reconnect, error), y a esos estados solo llega el callback del ' +
+    'proveedor (outreach_channel_account_worker_columns, en DISPARADORES_DE_CANDADO): chocar exige haber ' +
+    'autenticado esa misma cuenta, que ya es tenerla. Una fila pending de la web no ocupa nada',
 };
 
 /**
@@ -862,6 +899,18 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   outbound_review: {
     permite: ['SELECT', 'INSERT'],
     motivo: 'bitácora de la puerta de calidad (nota, tokens y costo): se anota, no se corrige ni se borra',
+  },
+  outbound_optout_link: {
+    permite: [],
+    motivo:
+      'la prueba del enlace de baja de cada correo (0037 §4.5): la escribe solo el despachador y la lee ' +
+      'public_optout. Con escritura, un workspace se fabricaba un enlace para dar de baja a cualquiera',
+  },
+  outbound_optout_event: {
+    permite: [],
+    motivo:
+      'quién provocó cada baja global (0037 §4.6): la escribe public_optout y la lee un operador. Con escritura, ' +
+      'un workspace borraría su rastro',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
@@ -2194,9 +2243,12 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     const cumple = (expr: string | null) =>
       expr !== null &&
       terminosDelAnd(expr).some((t) => !/ OR /i.test(t) && declarada.exige.every((re) => re.test(t)));
+    // Una política de INSERT ('a') no tiene USING: lo que acota la fila
+    // es su WITH CHECK, que entonces es obligatorio.
+    const alta = p.cmd === 'a';
     const malas = [
-      cumple(p.qual) ? '' : `USING ${p.qual ?? '(sin expresión)'}`,
-      p.with_check === null || cumple(p.with_check) ? '' : `WITH CHECK ${p.with_check}`,
+      (alta && p.qual === null) || cumple(p.qual) ? '' : `USING ${p.qual ?? '(sin expresión)'}`,
+      (!alta && p.with_check === null) || cumple(p.with_check) ? '' : `WITH CHECK ${p.with_check ?? '(sin expresión)'}`,
     ].filter(Boolean);
     if (malas.length) {
       enlaceDeMas.push(`política ${p.clave} ya no abre solo ${declarada.motivo}: ${malas.join('; ')}`);

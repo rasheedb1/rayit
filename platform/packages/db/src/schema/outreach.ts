@@ -11,7 +11,9 @@
  * se escribe desde ninguno). outbound_sequence_template es global y de
  * solo lectura. outbound_counter y outbound_breaker los escribe solo el
  * worker; outbound_review y outbound_llm_call son bitácoras (se insertan,
- * no se corrigen).
+ * no se corrigen). outbound_optout_link (la prueba del enlace de baja) y
+ * outbound_optout_event (quién provocó cada baja) no los toca la web:
+ * los escriben el despachador y public_optout.
  *
  * Las funciones de la migración (increment_if_under_cap,
  * increment_weekly, should_pause_outreach, disable_outreach,
@@ -19,7 +21,7 @@
  * se llaman con SQL; sus firmas están en OUTREACH_FUNCTIONS.
  */
 import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
-import { createdAt, currency, localTime, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
+import { citext, createdAt, currency, localTime, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { contact, deal, outboundSequence, outboundTouch } from './ventas.ts';
@@ -42,6 +44,20 @@ export const BREAKER_STEP_TYPES = [
 ] as const;
 export const CHANNEL_PROVIDERS = ['gmail_oauth', 'unipile'] as const;
 export const CHANNEL_ACCOUNT_STATUSES = ['pending', 'connected', 'needs_reconnect', 'error', 'disconnected'] as const;
+/**
+ * Los estados de una cuenta AUTENTICADA: los que ocupan el buzón en toda
+ * la plataforma (outreach_channel_account_live_idx) y los que solo
+ * escribe el callback del proveedor (0037 §2.1). 'pending' no ocupa nada.
+ */
+export const LIVE_CHANNEL_ACCOUNT_STATUSES = ['connected', 'needs_reconnect', 'error'] as const;
+/**
+ * Lo que la web (mc_app) no escribe en una cuenta de canal: lo escribe el
+ * callback del OAuth o de Unipile con asWorker. Desde la web, la fila se
+ * crea 'pending' (con la dirección que escribió la persona) o se pasa a
+ * 'disconnected'; el disparador outreach_channel_account_worker_columns
+ * rechaza lo demás con 42501.
+ */
+export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = ['status', 'provider_account_id', 'secret_ref', 'scopes'] as const;
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
@@ -56,11 +72,11 @@ export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend'] 
  * Las columnas de outbound_touch que solo escribe el despachador
  * (mc_worker): las pruebas de que la plataforma envió el mensaje y a qué
  * dirección. Desde la web (mc_app) el disparador
- * outbound_touch_worker_columns lo rechaza con 42501 (0037 §4.2).
+ * outbound_touch_worker_columns lo rechaza con 42501 (0037 §4.2), y un
+ * toque con alguna de ellas no se borra desde la web. El token del
+ * enlace de baja no está aquí: vive en outbound_optout_link.
  */
-export const WORKER_ONLY_TOUCH_COLUMNS = [
-  'optout_token_hash', 'provider_message_id', 'message_id_rfc', 'recipient_address',
-] as const;
+export const WORKER_ONLY_TOUCH_COLUMNS = ['provider_message_id', 'message_id_rfc', 'recipient_address'] as const;
 /**
  * Las columnas que fijan el destinatario de un toque. En cuanto el toque
  * tiene alguna de WORKER_ONLY_TOUCH_COLUMNS, mc_app ya no las cambia (el
@@ -73,6 +89,12 @@ export const LOCKED_RECIPIENT_TOUCH_COLUMNS = ['contact_id', 'company_id'] as co
  * despachador lo enviaba (processing → sent, 0037 §4.1).
  */
 export const OPTED_OUT_IN_FLIGHT = 'opted_out_in_flight';
+/**
+ * El tope diario de gasto en el modelo con el que nace una política, en
+ * USD. Es outreach_default_llm_daily_cap() de 0037 §6.1; lo cambia solo la
+ * plataforma (outbound_policy_llm_cap), nunca el workspace.
+ */
+export const DEFAULT_LLM_DAILY_CAP_USD = '5.00';
 export const COUNTER_PERIODS = ['day', 'week'] as const;
 export const BREAKER_STATES = ['closed', 'open', 'half_open'] as const;
 export const REQUIRED_ASSETS = ['media_kit', 'quote'] as const;
@@ -115,7 +137,11 @@ export interface OutboundHealth {
   breakersOpen: Array<(typeof BREAKER_STEP_TYPES)[number]>;
   accountsDown: number;
   lastSentAt: string | null;
-  /** spentToday suma outbound_llm_call del día local: todas las llamadas, no solo las del juez. */
+  /**
+   * spentToday suma outbound_llm_call del día local: todas las llamadas, no
+   * solo las del juez. dailyCap, sin política, es el valor por defecto
+   * (DEFAULT_LLM_DAILY_CAP_USD), nunca 0.
+   */
   llm: { spentToday: number; dailyCap: number; currency: 'USD' };
 }
 
@@ -384,3 +410,42 @@ export const outboundBreaker = pgTable(
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.stepType] })],
 );
+
+// ---------------------------------------------------------------------
+// La baja: el enlace y el clic
+// ---------------------------------------------------------------------
+
+/**
+ * La prueba del enlace de baja de un correo enviado (0037 §4.5). La
+ * escribe el despachador en la misma transacción que providerMessageId; la
+ * web no tiene ningún privilegio. Las claves ajenas son SET NULL: borrar el
+ * toque, la ficha o el workspace no rompe el enlace.
+ */
+export const outboundOptoutLink = pgTable('outbound_optout_link', {
+  /** sha256 (hex) del token al azar que solo va en el correo. */
+  tokenHash: text('token_hash').primaryKey(),
+  workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'set null' }),
+  touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
+  contactId: uuid('contact_id').references(() => contact.id, { onDelete: 'set null' }),
+  channel: text('channel', { enum: ['email'] }).default('email').notNull(),
+  /** La dirección a la que salió: lo que public_optout suprime. */
+  recipientAddress: citext('recipient_address').notNull(),
+  sentAt: timestamptz('sent_at').notNull(),
+  createdAt: createdAt(),
+});
+
+/**
+ * Cada clic en un enlace de baja, con el workspace y el toque que lo
+ * originaron (0037 §4.6): la baja global es atribuible y reversible. La
+ * escribe public_optout; la web no la ve. Bitácora.
+ */
+export const outboundOptoutEvent = pgTable('outbound_optout_event', {
+  id: uuidPk(),
+  tokenHash: text('token_hash').notNull(),
+  workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'set null' }),
+  touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
+  recipientAddress: citext('recipient_address').notNull(),
+  sentAt: timestamptz('sent_at').notNull(),
+  alreadyOptedOut: boolean('already_opted_out').notNull(),
+  createdAt: createdAt(),
+});

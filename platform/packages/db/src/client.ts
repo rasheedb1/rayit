@@ -149,8 +149,20 @@ export interface PublicShareTx extends BaseTx {
   readonly [PUBLIC_SHARE]: true;
 }
 
-/** Una transacción como mc_worker: RLS no aplica. Cada escritura filtra por workspace_id a mano. */
-export type WorkerTx = BaseTx;
+declare const WORKER: unique symbol;
+
+/**
+ * Una transacción como mc_worker (asWorker): RLS no aplica. Cada
+ * escritura filtra por workspace_id a mano. Lleva marca de tipo, como
+ * PublicShareTx: las funciones que solo puede llamar el worker (los
+ * límites de queries/outreach.ts) piden un WorkerTx, y un WorkspaceTx o
+ * un PublicShareTx no compilan ahí; sin la marca pasaban el tipo y
+ * fallaban en ejecución con 42501. Un WorkerTx sí sirve donde se pide un
+ * BaseTx.
+ */
+export interface WorkerTx extends BaseTx {
+  readonly [WORKER]: true;
+}
 
 /**
  * Lo que ve quien recibe una base ya construida (la web, un módulo).
@@ -442,7 +454,8 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
             { cause: err },
           );
         }
-        return fn(tx);
+        // La marca es solo de tipo, como la de withPublicShare.
+        return fn(tx as WorkerTx);
       });
     },
     close: () => runner.close(),

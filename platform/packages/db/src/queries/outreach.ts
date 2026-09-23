@@ -7,7 +7,8 @@
  * página de baja de VEN-15) recibe parámetros con nombre, el tipo de
  * transacción que corresponde y una respuesta comprobada en ejecución.
  *
- *   incrementIfUnderCap / incrementWeekly   WorkerTx. Eligen la firma por
+ *   incrementIfUnderCap / incrementWeekly   WorkerTx (con marca de tipo:
+ *       un WorkspaceTx no compila aquí). Eligen la firma por
  *       accountId: con cuenta cuenta la plaza de ESA cuenta; sin ella, la
  *       del workspace entero. Así no se confunde el orden de los
  *       argumentos entre las dos firmas (cuenta antes que acción).
@@ -266,30 +267,40 @@ export async function outboundHealth(tx: BaseTx, hours: number, workspaceId?: st
 /**
  * Lo que responde la baja. workspaceId y touchId son para el SERVIDOR
  * (avisar al creador), nunca para la página: quien pulsa el enlace no
- * tiene por qué saber quién más le escribe.
+ * tiene por qué saber quién más le escribe. Son null si el workspace que
+ * envió, o el toque, ya no existen: el enlace sigue funcionando igual
+ * (vive en outbound_optout_link, 0037 §4.5).
  */
 export type PublicOptoutResult =
   | { status: 'not_found' }
-  | { status: 'ok'; alreadyOptedOut: boolean; workspaceId: string; touchId: string };
+  | { status: 'ok'; alreadyOptedOut: boolean; workspaceId: string | null; touchId: string | null };
 
 /** Comprueba la forma del jsonb de public_optout (0037 §9). */
 export function parsePublicOptout(value: unknown): PublicOptoutResult {
   const fn = 'public_optout';
-  const { obj, bool, str } = reader(fn);
+  const { obj, bool, strOrNull } = reader(fn);
   const r = obj(value, '$');
   if (r.status === 'not_found') return { status: 'not_found' };
   if (r.status !== 'ok') throw new OutreachShapeError(fn, '$.status', `estado desconocido «${String(r.status)}»`);
-  const workspaceId = str(r, 'workspaceId', '$');
-  const touchId = str(r, 'touchId', '$');
-  if (!isUuid(workspaceId) || !isUuid(touchId)) throw new OutreachShapeError(fn, '$', 'workspaceId y touchId son uuid');
+  const workspaceId = strOrNull(r, 'workspaceId', '$');
+  const touchId = strOrNull(r, 'touchId', '$');
+  for (const [k, v] of [['workspaceId', workspaceId], ['touchId', touchId]] as const) {
+    if (v !== null && !isUuid(v)) throw new OutreachShapeError(fn, `$.${k}`, 'se esperaba un uuid o null');
+  }
   return { status: 'ok', alreadyOptedOut: bool(r, 'alreadyOptedOut', '$'), workspaceId, touchId };
 }
 
 /**
  * La baja desde el enlace de un correo, sin sesión (withPublicShare).
- * Suprime en toda la plataforma la dirección a la que salió ese correo y
- * cancela lo pendiente de esa persona en cualquier workspace. Un token
- * que no es de un correo enviado por la plataforma responde not_found.
+ * Suprime en toda la plataforma la dirección a la que salió ese correo,
+ * deja el clic en outbound_optout_event y cancela lo pendiente de esa
+ * persona en cualquier workspace (CANCELABLE_TOUCH_STATUSES: todo lo vivo
+ * menos 'processing'). Un token que no es de un correo enviado por la
+ * plataforma responde not_found.
+ *
+ * Quien la llama (la página de VEN-15) rechaza ANTES el clic que llega
+ * con una sesión del workspace que envió: el enlace también está en la
+ * carpeta de enviados del creador (docs/ventas-outreach.md §5.2).
  */
 export async function publicOptout(tx: PublicShareTx, token: string): Promise<PublicOptoutResult> {
   const r = (await tx.query<{ r: unknown }>('SELECT public_optout($1::text) AS r', [token])).rows[0]?.r;
