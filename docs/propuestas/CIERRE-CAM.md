@@ -77,6 +77,7 @@ decisiones pendientes están repartidas en cinco propuestas.
 | F1 | `84ea9a0` | **Migración `0041_campaign_result_escritura_web.sql`**; `PRIVILEGIOS_DE_LA_APP` en `esquema.ts`; la ficha no pinta «Recalcular» ni «Generar»/«Enviado» a un rol sin el permiso (y lo dice con una frase). |
 | F2 | `097e88b` | La prueba del ciclo (`apps/web/app/(app)/campanas/ciclo-db.test.ts`), la ficha real contra el seed (`ficha-db.test.tsx`), CON-6 → CAM-5 con y sin línea base, y la ruta de la factura en un solo sitio (`_lib/rutas.ts`). |
 | F3 | `6400a17` | `TODO(ACC-2)` viejos, README de la web, notas del tablero, una línea de estado en CAM-4.md y CAM-5.md, y la tabla de decisiones (§3). |
+| F4 | `bf62a8b` | Los hallazgos de `/code-review` (§7). |
 
 ### 1.1 La migración 0041
 
@@ -171,7 +172,6 @@ lo contrario» da el archivo y el tamaño del cambio.
 | Editar `brand_accounts` desde la ficha | Decisión #3. | Historia propia (CAM, S) |
 | Esconder por rol los demás botones de la ficha (asociar, editar datos y seguimiento, registrar aporte, transiciones) | Hoy los ve todo el que entra al módulo; la acción los rechaza con `requirePermission` y el error cae en la frontera. Aquí solo se hizo con «Recalcular» y el reporte porque el prompt lo pedía. | ACC (marco de permisos, ACC-5/ACC-7) |
 | Mover a `messages.ts` los textos que `page.tsx` de la ficha aún escribe en línea (títulos de sección, vacíos de posts) | Deuda de CAM-1 anterior a la regla; no cambia comportamiento. | Pulido de CAM |
-| F4 | `bf62a8b` | Los hallazgos de `/code-review` (§7). |
 
 ---
 
