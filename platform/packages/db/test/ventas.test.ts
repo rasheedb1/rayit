@@ -30,6 +30,7 @@ import {
   acceptSignal,
   buildDedupeKey,
   companyInCrm,
+  companyNameInCrm,
   countPendingSignals,
   createCompany,
   createDeal,
@@ -271,7 +272,16 @@ describe('VEN-1 · empresas', () => {
       );
     assert.equal(await contar(), 1, 'nada se creó');
 
-    const segunda = await laura((tx) => createCompany(tx, { name: 'Zumos Ñandú', allowSameName: true }));
+    // Pulido r8: el «Crear igual» es para el nombre por el que se preguntó.
+    // Si después del aviso se escribe otro nombre que también está en el
+    // CRM, se vuelve a preguntar, ahora con esa otra empresa.
+    const otra = await laura((tx) => createCompany(tx, { name: 'Bebidas Río' }));
+    await assert.rejects(
+      () => laura((tx) => createCompany(tx, { name: 'bebidas rio', allowSameNameAs: 'Zumos Ñandú' })),
+      (err: unknown) => err instanceof DuplicateCompanyName && err.params.companyId === otra,
+    );
+
+    const segunda = await laura((tx) => createCompany(tx, { name: 'Zumos Ñandú', allowSameNameAs: 'Zumos Ñandú' }));
     assert.notEqual(segunda, primera);
     assert.equal(await contar(), 2, 'la persona dijo «Crear igual»');
 
@@ -755,10 +765,41 @@ describe('VEN-2 · radar', () => {
     const enBandeja = bandeja.find((s) => s.id === nueva.id);
     assert.equal(enBandeja?.companyId, aceptada.companyId, 'enlazada a la empresa que ya está en el CRM');
     assert.equal(enBandeja?.companyLinked, true);
+    // Pulido r8: la tarjeta dice a qué negocio se sumará antes de aceptarla.
+    assert.equal(enBandeja?.openDealId, aceptada.dealId, 'se sumará al negocio abierto, no abrirá otro');
+    assert.equal(enBandeja?.openDealName, 'Lanzó café de origen en Meta');
 
     // Y con esa en la bandeja, la marca ya no entra otra vez por ningún camino.
     const otraMas = await laura((tx) => createSignal(tx, { ...marca, headlineEs: 'Otra cosa más' }));
     assert.equal(otraMas.reason, 'pending');
+  });
+
+  test('la bandeja dice si la marca ya está en el CRM aunque se anotara después de la señal (pulido r8)', async () => {
+    // La señal entra sin empresa (la marca aún no estaba en el CRM)…
+    const senal = await laura((tx) => createSignal(tx, { companyName: 'Tostadores del Páramo', headlineEs: 'Abrió tienda en línea' }));
+    assert.ok(senal.id);
+    const antes = (await laura((tx) => listSignals(tx, { limit: 200 }))).find((s) => s.id === senal.id);
+    assert.equal(antes?.companyLinked, false);
+    assert.equal(antes?.companyId, null, 'aceptarla crearía la empresa');
+    assert.equal(antes?.openDealId, null);
+
+    // …y luego alguien la crea a mano, escrita distinto. Aceptar la
+    // reutilizaría (resolveCompany por nombre): la tarjeta ya lo dice.
+    const empresa = await laura((tx) => createCompany(tx, { name: 'TOSTADORES DEL PARAMO' }));
+    const despues = (await laura((tx) => listSignals(tx, { limit: 200 }))).find((s) => s.id === senal.id);
+    assert.equal(despues?.companyLinked, true);
+    assert.equal(despues?.companyId, empresa);
+    assert.equal(despues?.openDealId, null, 'sin negocio abierto: aceptarla abre uno');
+
+    const deal = await laura((tx) => createDeal(tx, { companyId: empresa, name: 'Temporada de regalos' }));
+    const conNegocio = (await laura((tx) => listSignals(tx, { limit: 200 }))).find((s) => s.id === senal.id);
+    assert.equal(conNegocio?.openDealId, deal);
+    assert.equal(conNegocio?.openDealName, 'Temporada de regalos');
+
+    const aceptada = await laura((tx) => acceptSignal(tx, senal.id!));
+    assert.equal(aceptada.companyId, empresa, 'lo que dijo la tarjeta es lo que pasó');
+    assert.equal(aceptada.dealId, deal);
+    assert.equal(aceptada.dealCreated, false);
   });
 
   test('una señal sin marca no se puede guardar', async () => {
@@ -1154,6 +1195,10 @@ describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', 
     assert.equal(await laura((tx) => companyInCrm(tx, COMPANY_CAFE_ALMA)), true);
     assert.equal(await laura((tx) => companyInCrm(tx, COMPANY_AJENA)), false, 'la del vecino no');
     assert.equal(await laura((tx) => companyInCrm(tx, 'no-soy-un-uuid')), false);
+    // Pulido r8: el mismo corte con el nombre, para el título de la pestaña.
+    assert.equal(await laura((tx) => companyNameInCrm(tx, COMPANY_CAFE_ALMA)), 'Café Alma');
+    assert.equal(await laura((tx) => companyNameInCrm(tx, COMPANY_AJENA)), null, 'la del vecino no');
+    assert.equal(await laura((tx) => companyNameInCrm(tx, 'no-soy-un-uuid')), null);
   });
 
   test('un contacto propio se corrige y conserva su procedencia', async () => {

@@ -1,11 +1,33 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { cache } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { companyInCrm } from "@mc/db/queries/ventas";
+import { companyNameInCrm } from "@mc/db/queries/ventas";
 import { withWorkspace } from "../../../_lib/db";
 import { MESSAGES } from "../../../_lib/messages";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * El nombre de la empresa si está en el CRM del espacio, o null. Una
+ * sola fila; `cache` la comparte entre generateMetadata y el layout de
+ * la misma petición.
+ */
+const empresaEnMiCrm = cache((id: string) => withWorkspace((tx) => companyNameInCrm(tx, id)));
+
+/**
+ * La pestaña dice de qué empresa es la ficha: «Café Alma · Ventas», no
+ * un «Empresa» igual para todas (pulido r8). Si no está en el CRM, el
+ * título genérico: el 404 lo decide el layout, no los metadatos (que
+ * desde Next 15.2 se transmiten y llegarían tarde).
+ */
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const name = await empresaEnMiCrm(id);
+  const t = MESSAGES.empresas.detail;
+  return { title: name ? t.metaTitleOf(name) : t.metaTitle };
+}
 
 /**
  * ¿Está esta empresa en el CRM del espacio? Una sola fila, y si no,
@@ -19,7 +41,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function EmpresaEnMiCrm({ children, params }: { children: ReactNode; params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!(await withWorkspace((tx) => companyInCrm(tx, id)))) notFound();
+  if ((await empresaEnMiCrm(id)) === null) notFound();
   return (
     <>
       <nav aria-label={MESSAGES.empresas.detail.breadcrumb} className="mb-2 text-xs text-muted">

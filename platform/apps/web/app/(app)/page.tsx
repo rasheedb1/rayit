@@ -32,11 +32,17 @@ export const metadata: Metadata = { title: "Plan" };
 export const dynamic = "force-static";
 const PUBLICADO = formatDate(new Date().toISOString(), "long");
 
+/**
+ * Cada módulo lleva a su plan (/plan/<módulo>), que es lo que resume la
+ * tarjeta. Las pantallas del producto ya no enlazan su plan desde la
+ * cabecera (pulido r8): era un artefacto del equipo delante de la
+ * creadora, así que el camino al plan de un módulo es este.
+ */
 function ModuleCard({ m }: { m: ModuleDef }) {
   const st = stats(m.prefix ? storiesFor(m.prefix) : []);
   return (
     <Link
-      href={`/${m.slug}`}
+      href={m.prefix ? `/plan/${m.slug}` : `/${m.slug}`}
       className="group flex flex-col rounded-md border border-line bg-bg p-4 transition-colors hover:border-line-2 hover:bg-bg-2"
     >
       <div className="flex items-start justify-between gap-3">

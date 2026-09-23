@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getQuote, type QuoteItemRow } from "@mc/db/queries/cotizar";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -22,7 +21,8 @@ import { EliminarBorrador } from "../eliminar";
 import { EnviarCotizacion } from "../enviar";
 import { VentanaCampana } from "../ventana";
 
-export const metadata: Metadata = { title: MESSAGES.meta.cotizacion };
+// El título de la pestaña lo pone layout.tsx con el número y la marca
+// (generateMetadata): uno estático aquí lo pisaría (pulido r8).
 
 /**
  * Una fila de «Lo acordado» y de «Historia»: el término arriba y el

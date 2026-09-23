@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
+import { useEffect, useOptimistic, useState, useTransition, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
@@ -235,6 +235,16 @@ function DealCard({
   const selectId = `mover-${deal.id}`;
   const [askError, setAskError] = useState<string | undefined>();
   const [amount, setAmount] = useState("");
+  const amountId = `ganado-${deal.id}`;
+  const askingWon = asking?.kind === "won";
+
+  // «¿Por cuánto lo ganaste?» aparece debajo del menú: el foco va al
+  // monto, como el motivo de «Perdido» (que lleva autoFocus en su
+  // Select). MoneyInput no acepta autoFocus y cambiar su API pide PR del
+  // kit, así que se enfoca por id, el mismo que le da el Field.
+  useEffect(() => {
+    if (askingWon) document.getElementById(amountId)?.focus();
+  }, [askingWon, amountId]);
 
   function lose(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -252,6 +262,8 @@ function DealCard({
     // MoneyInput deja pasar el signo: un monto ganado es cero o más.
     if (!amount || amount.startsWith("-")) {
       setAskError(t.won.required);
+      // Con el error, el foco vuelve al campo que lo tiene, no se queda en el botón.
+      document.getElementById(amountId)?.focus();
       return;
     }
     setAskError(undefined);
@@ -360,7 +372,7 @@ function DealCard({
 
       {asking?.kind === "won" && (
         <form onSubmit={win} noValidate aria-label={t.won.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
-          <Field label={t.won.title} help={t.won.help} error={askError} required htmlFor={`ganado-${deal.id}`}>
+          <Field label={t.won.title} help={t.won.help} error={askError} required htmlFor={amountId}>
             <MoneyInput value={amount} currency={deal.currency} onChange={(v) => setAmount(v)} />
           </Field>
           <div className="mt-3 flex flex-wrap gap-2">

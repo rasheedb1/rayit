@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { CeldaVacia } from "../../_componentes/celda-vacia";
 import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
 import { RELATIONSHIP_META } from "../../_lib/estado";
@@ -114,23 +115,6 @@ export default async function EmpresasPage({ searchParams }: { searchParams: Pro
           }
         />
       </section>
-    </>
-  );
-}
-
-/**
- * Una celda de cifra sin valor: una raya, no una frase en la letra
- * monoespaciada de las cifras, que se leía como un dato y rompía la
- * columna. La frase («Sin negocios abiertos») sigue ahí para el lector
- * de pantalla.
- */
-function CeldaVacia({ texto }: { texto: string }) {
-  return (
-    <>
-      <span aria-hidden="true" className="text-muted">
-        {MESSAGES.empresas.emptyCell}
-      </span>
-      <span className="sr-only">{texto}</span>
     </>
   );
 }

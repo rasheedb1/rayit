@@ -31,11 +31,11 @@ import { dirname, join, relative, sep } from "node:path";
 import type { ReactNode } from "react";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { closeDb, getDbMode } from "@/lib/db";
-import CotizacionExiste from "./cotizar/cotizaciones/[id]/(detalle)/layout";
+import CotizacionExiste, { generateMetadata as tituloCotizacion } from "./cotizar/cotizaciones/[id]/(detalle)/layout";
 import EditarSoloBorrador from "./cotizar/cotizaciones/[id]/editar/layout";
 import VistaPreviaExiste from "./cotizar/cotizaciones/[id]/vista/layout";
 import MediaKitExiste from "./cotizar/media-kit/[id]/(detalle)/layout";
-import EmpresaEnMiCrm from "./ventas/empresas/[id]/(ficha)/layout";
+import EmpresaEnMiCrm, { generateMetadata as tituloEmpresa } from "./ventas/empresas/[id]/(ficha)/layout";
 
 vi.mock("next/navigation", async (original) => ({
   ...(await original<typeof import("next/navigation")>()),
@@ -141,4 +141,24 @@ describe("un detalle privado que no existe es un 404, con su esqueleto", () => {
       expect(existsSync(join(SEGMENTO, ...lista.split("/"), "page.tsx")), lista).toBe(true);
     }
   });
+});
+
+/**
+ * Con varias cotizaciones o fichas abiertas, cada pestaña dice cuál es
+ * (pulido r8): el layout que ya lee el id pone el título, contra la base
+ * embebida con el seed. Un id que no existe no rompe los metadatos: el
+ * 404 lo decide el layout.
+ */
+describe("el título de la pestaña del detalle dice de qué es", () => {
+  const id = (v: string) => ({ params: Promise.resolve({ id: v }) });
+
+  test("una cotización: su número y su marca", async () => {
+    expect((await tituloCotizacion(id("00000004-0000-4000-8000-0000000c0703"))).title).toBe("COT-2026-003 · Café Alma");
+    expect((await tituloCotizacion(id(ID_INEXISTENTE))).title).toBe("Cotización");
+  }, 120_000);
+
+  test("una empresa: su nombre y el módulo", async () => {
+    expect((await tituloEmpresa(id("00000002-0000-4000-8000-0000000000e1"))).title).toBe("Café Alma · Ventas");
+    expect((await tituloEmpresa(id(ID_INEXISTENTE))).title).toBe("Empresa · Ventas");
+  }, 120_000);
 });

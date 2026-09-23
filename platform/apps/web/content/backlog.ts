@@ -327,7 +327,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
     status: "hecho",
-    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» empresa y contactos, responsable elegible, país por su nombre. Pulido r6: el país se elige de una lista ISO (Select, _lib/paises.ts; «XX» ya no pasa) y borrar la búsqueda bajo tres letras vuelve a la lista entera. Pulido r7: un nombre ya en el CRM avisa con «Crear igual»; las fichas (empresa, cotización, media kit) tienen esqueleto y siguen dando 404 de verdad (layout.tsx comprueba el id). Pendiente humano: la cola única de la nota de CIM-2 y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
+    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» empresa y contactos, responsable elegible, país por su nombre. Pulido r6: el país se elige de una lista ISO (Select, _lib/paises.ts; «XX» ya no pasa) y borrar la búsqueda bajo tres letras vuelve a la lista entera. Pulido r7: un nombre ya en el CRM avisa con «Crear igual»; las fichas (empresa, cotización, media kit) tienen esqueleto y siguen dando 404 de verdad (layout.tsx comprueba el id). Pulido r8: la lista no desborda a 400 px con empresas vacías; «Crear igual» vale solo para el nombre del aviso; la pestaña de la ficha dice la empresa. Pendiente humano: la cola única de la nota de CIM-2 y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -335,7 +335,7 @@ export const STORIES: readonly Story[] = [
     desc: "Bandeja de signal con estado pendiente, aceptar (crea o actualiza empresa y deal en nuevo) o descartar con motivo. Fuente manual y carga por CSV de una lista de marcas. Las fuentes automáticas quedan para fase 2.",
     done: "Aceptar una señal crea el deal con «Enviar pitch» como siguiente acción; descartarla la saca de la bandeja y no vuelve a entrar (dedupe_key).",
     status: "hecho",
-    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r5: el CSV entiende el país por su nombre; el pitch se reconoce por deal.next_action_kind (0032). Pulido r6: formulario y CSV validan el país contra la misma lista ISO. Pulido r7: «Enviar pitch» a tres días hábiles, como el seguimiento; recargar una lista no avisa de filas que no entraron. Pendiente humano: la cola única de la nota de CIM-2 (0031–0033 incluidas).",
+    note: "Anotar una marca y cargar una lista (CSV UTF-8 o Windows-1252); una marca pendiente o descartada no vuelve a entrar; aceptar reutiliza la empresa y su negocio abierto; «Enviar pitch» a las 15:00 locales. Pulido r5: el CSV entiende el país por su nombre; el pitch se reconoce por deal.next_action_kind (0032). Pulido r6: formulario y CSV validan el país contra la misma lista ISO. Pulido r7: «Enviar pitch» a tres días hábiles, como el seguimiento; recargar una lista no avisa de filas que no entraron. Pulido r8: la tarjeta dice «Ya en tu CRM» y a qué negocio abierto se sumará. Pendiente humano: la cola única de la nota de CIM-2 (0031–0033 incluidas).",
   },
   {
     id: "VEN-3", module: "VEN", owner: "rasheed", size: "L", sprint: 2, deps: ["VEN-1"],
@@ -343,7 +343,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tablero por etapa y vista de lista sobre deal_pipeline. Arrastrar cambia la etapa y escribe deal_stage_history con los días en la etapa. KPIs: deals abiertos, cierre ponderado, ganado en el trimestre.",
     done: "Mover un deal a «Ganado» fija won_at; el cierre ponderado cambia al mover entre etapas.",
     status: "hecho",
-    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031). Pulido r5: pasar a «Perdido» pide el motivo. Pulido r6: perder un negocio cierra sus cotizaciones enviadas o vistas (deal_move_stage, 0031) y el aviso lo dice; la marca ya no lo gana desde el enlace. Pulido r7: ganar un negocio sin monto lo pide en la tarjeta (AmountRequired) y el KPI dice «N cerrados, M sin monto». Pendiente humano: la cola única de la nota de CIM-2 (0031–0033 incluidas).",
+    note: "Tablero con arrastrar y soltar, «Mover a», lista y KPI desde SQL; una sola transición de etapa (deal_move_stage, 0031). Pulido r5: pasar a «Perdido» pide el motivo. Pulido r6: perder un negocio cierra sus cotizaciones enviadas o vistas (deal_move_stage, 0031) y el aviso lo dice; la marca ya no lo gana desde el enlace. Pulido r7: ganar un negocio sin monto lo pide en la tarjeta (AmountRequired) y el KPI dice «N cerrados, M sin monto». Pulido r8: el foco va al monto al ganar; moverNegocio valida sus opciones con zod. Pendiente humano: la cola única de la nota de CIM-2 (0031–0033 incluidas).",
   },
   {
     id: "VEN-4", module: "VEN", owner: "rasheed", size: "M", sprint: 3, deps: ["VEN-3", "CON-2"],

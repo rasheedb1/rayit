@@ -45,6 +45,8 @@ export const MESSAGES = {
     cotizaciones: "Cotizaciones",
     nueva: "Nueva cotización",
     cotizacion: "Cotización",
+    /** El detalle en el panel: número y marca, para distinguir varias pestañas abiertas (pulido r8). */
+    cotizacionDe: (numero: string, marca: string) => `${numero} · ${marca}`,
     editar: "Editar cotización",
     vistaPrevia: "Vista previa de la cotización",
     /** La pestaña de la marca: el número y quién la manda, como el asunto de una factura. */

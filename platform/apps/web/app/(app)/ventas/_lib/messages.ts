@@ -22,7 +22,6 @@ export const MESSAGES = {
     title: "A quién le vendes, en qué va cada conversación y qué sigue",
     description:
       "El radar te trae marcas que encajan con lo que haces; el tablero dice en qué etapa está cada negocio y qué toca hacer hoy.",
-    plan: "Plan de construcción",
     /** El título de la pestaña del navegador. */
     metaTitle: "Ventas",
   },
@@ -116,6 +115,16 @@ export const MESSAGES = {
     discardPlaceholder: "Ya trabaja con otra creadora, no encaja con mi nicho…",
     discardConfirm: "Descartar señal",
     goToDeal: "Ver en el pipeline",
+    /**
+     * La marca de la señal ya está en el CRM (pulido r8): la tarjeta lo
+     * dice antes de aceptar, con enlace a su ficha.
+     */
+    inCrm: "Ya en tu CRM",
+    inCrmLink: (name: string) => `Ya en tu CRM: ver la ficha de ${name}`,
+    /** Aceptarla no abre otro negocio: la señal se suma al abierto (acceptSignal). */
+    joinsDeal: (deal: string) => `Al aceptarla se sumará a «${deal}», el negocio abierto: no abre otro.`,
+    /** Lo mismo cuando el negocio se llama como la marca (los viejos del radar). */
+    joinsOpenDeal: "Al aceptarla se sumará al negocio abierto con esta marca: no abre otro.",
 
     form: {
       title: "Anotar una marca",
@@ -267,7 +276,10 @@ export const MESSAGES = {
     },
 
     detail: {
+      /** Solo si la empresa no se pudo leer; la pestaña lleva su nombre (metaTitleOf). */
       metaTitle: "Empresa · Ventas",
+      /** Con varias fichas abiertas, cada pestaña dice de quién es (pulido r8). */
+      metaTitleOf: (name: string) => `${name} · Ventas`,
       breadcrumb: "Ruta",
       empty: "—",
       data: "Datos",

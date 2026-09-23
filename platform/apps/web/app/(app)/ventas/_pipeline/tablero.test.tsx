@@ -180,12 +180,18 @@ describe("PipelineBoard", () => {
     expect(moverNegocio).not.toHaveBeenCalled();
     expect(within(screen.getByTestId("columna-nuevo")).getByText("Café Alma")).toBeInTheDocument();
     const form = screen.getByRole("form", { name: "Por cuánto ganas el negocio con Café Alma" });
+    const monto = within(form).getByLabelText(/¿Por cuánto lo ganaste\?/);
+    // Pulido r8: el foco salta al monto al abrir la pregunta, sin buscarlo con Tab…
+    expect(document.activeElement).toBe(monto);
 
-    fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Ganado»" }));
+    const enviar = within(form).getByRole("button", { name: "Pasar a «Ganado»" });
+    enviar.focus();
+    fireEvent.click(enviar);
     expect(await within(form).findByText("Escribe el monto: sin él no suma en lo ganado.")).toBeInTheDocument();
     expect(moverNegocio).not.toHaveBeenCalled();
+    // …y vuelve a él con el error, en vez de quedarse en el botón.
+    expect(document.activeElement).toBe(monto);
 
-    const monto = within(form).getByLabelText(/¿Por cuánto lo ganaste\?/);
     fireEvent.change(monto, { target: { value: "3.200.000" } });
     fireEvent.blur(monto);
     await act(async () => {

@@ -26,6 +26,7 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
 }));
 
 import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
+import { MESSAGES } from "./_lib/messages";
 import { cambiarRelacion, cargarLista, crearEmpresa, editarContacto, editarEmpresa, moverNegocio } from "./actions";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
@@ -188,6 +189,22 @@ describe("moverNegocio", () => {
     expect(moveDeal).not.toHaveBeenCalled();
   });
 
+  it("unos argumentos fabricados no revientan la acción: vuelve { ok: false } (pulido r8)", async () => {
+    const fabricada = moverNegocio as unknown as (...a: unknown[]) => ReturnType<typeof moverNegocio>;
+    const moveError = MESSAGES.pipeline.moveError;
+    for (const opts of [{ amount: 3200000 }, { lostReason: 7 }, "ganado", 42, [], { amount: "1.00", extra: true }]) {
+      const r = await fabricada(DEAL, "ganado", opts);
+      expect(r, JSON.stringify(opts)).toEqual({ ok: false, message: moveError });
+    }
+    expect(await fabricada(null, "ganado")).toEqual({ ok: false, message: moveError });
+    expect(await fabricada(DEAL, { id: "ganado" })).toEqual({ ok: false, message: moveError });
+    expect(moveDeal).not.toHaveBeenCalled();
+    // null es «sin opciones»: pasa, y la base decide (aquí, que falta el monto).
+    moveDeal.mockRejectedValue(new VentasError("AmountRequired"));
+    expect((await fabricada(DEAL, "ganado", null)).ok).toBe(false);
+    expect(moveDeal).toHaveBeenCalledTimes(1);
+  });
+
   it("ganar sin monto: la base no lo mueve y se dice por qué", async () => {
     moveDeal.mockRejectedValue(new VentasError("AmountRequired"));
     const r = await moverNegocio(DEAL, "ganado");
@@ -230,11 +247,12 @@ describe("crearEmpresa con un nombre que ya está en el CRM (pulido r7)", () => 
     createCompany.mockRejectedValue(new DuplicateCompanyName("Zumos Ñandú", COMPANY));
     const r = await crearEmpresa({}, form(nueva));
     expect(r).toEqual({ sameName: { id: COMPANY, name: "Zumos Ñandú" } });
-    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ name: "Zumos Ñandú", allowSameName: false }));
+    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ name: "Zumos Ñandú", allowSameNameAs: null }));
   });
 
-  it("«Crear igual» reenvía lo mismo con permiso para repetir el nombre", async () => {
-    await crearEmpresa({}, form({ ...nueva, sameName: "1" }));
-    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ allowSameName: true }));
+  it("«Crear igual» reenvía lo mismo con permiso para el nombre del aviso, no para cualquiera (pulido r8)", async () => {
+    await crearEmpresa({}, form({ ...nueva, sameName: "Zumos Ñandú" }));
+    // createCompany solo lo respeta si la empresa que choca tiene ese brand_key.
+    expect(createCompany).toHaveBeenCalledWith({}, expect.objectContaining({ allowSameNameAs: "Zumos Ñandú" }));
   });
 });
