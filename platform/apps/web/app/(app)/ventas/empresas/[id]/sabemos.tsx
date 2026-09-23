@@ -3,6 +3,7 @@ import type { CompanyDetail } from "@mc/db/queries/ventas";
 import type { CompanySignalRow } from "@mc/db/queries/ventas-ficha";
 import { Pill } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
+import { safeHref } from "@/lib/url";
 import { SIGNAL_STATUS_META, pillForFit } from "../../_lib/estado";
 import { FICHA } from "../messages";
 
@@ -71,6 +72,8 @@ export function LoQueSabemos({
             {signals.map((s) => {
               const estado = SIGNAL_STATUS_META[s.status];
               const encaje = pillForFit(s.fitScore, f);
+              // Solo http(s): la columna es text libre y la llenarán los conectores del radar.
+              const evidencia = safeHref(s.evidenceUrl);
               return (
                 <li key={s.id} className="rounded-md border border-border p-3">
                   <p className="text-sm leading-5 text-ink">{s.headline}</p>
@@ -90,10 +93,10 @@ export function LoQueSabemos({
                     </p>
                   )}
                   {s.status === "discarded" && s.discardReason && <p className="mt-1 text-xs text-muted">{t.discarded(s.discardReason)}</p>}
-                  {(s.evidenceUrl || s.status === "pending") && (
+                  {(evidencia || s.status === "pending") && (
                     <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                      {s.evidenceUrl && (
-                        <a href={s.evidenceUrl} target="_blank" rel="noreferrer noopener" className="text-ink underline underline-offset-4 hover:text-ink-2">
+                      {evidencia && (
+                        <a href={evidencia} target="_blank" rel="noreferrer noopener" className="text-ink underline underline-offset-4 hover:text-ink-2">
                           {t.evidence}
                         </a>
                       )}

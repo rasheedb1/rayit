@@ -31,6 +31,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import type { VentasState } from "../actions";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
+import { textoDeVencimiento, type GuardadaVista } from "../_seguimiento/datos";
 import { vistaDeActividad, type ActividadVista } from "./[id]/actividad";
 import { FICHA } from "./messages";
 
@@ -39,7 +40,10 @@ const F = FICHA.errores;
 
 /** El texto de un error de dominio, o el genérico de la acción (y entonces se registra). */
 function messageOf(err: unknown, fallback: string): string {
-  if (err instanceof FichaError && Object.hasOwn(F, err.code)) return F[err.code];
+  if (err instanceof FichaError && Object.hasOwn(F, err.code)) {
+    const m = F[err.code];
+    return typeof m === "function" ? m(err.params.current ?? null) : m;
+  }
   if (err instanceof VentasError && Object.hasOwn(E, err.code)) {
     const m = E[err.code];
     return typeof m === "function" ? m(err.params) : m;
@@ -78,12 +82,22 @@ const siguienteSchema = z.object({
 });
 
 /**
+ * Lo que vuelve de guardar la siguiente acción: lo de siempre y lo que
+ * quedó guardado, escrito igual que lo pinta la línea (siguienteAccionData).
+ * La línea enseña «Guardada para el…» solo mientras pinte ESA acción: si
+ * se cierra o cambia por otro camino, el aviso ya no dice la verdad.
+ */
+export interface SiguienteState extends VentasState {
+  saved?: GuardadaVista;
+}
+
+/**
  * Qué, cuándo y quién: la siguiente acción de un negocio abierto. El día
  * y la hora se leen en la zona del espacio (lo hace la base). Si el
  * formulario no manda el campo del responsable, no se toca; vacío es
  * «Sin responsable».
  */
-export async function fijarSiguienteAccion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+export async function fijarSiguienteAccion(_prev: SiguienteState, formData: FormData): Promise<SiguienteState> {
   const t = FICHA.siguiente;
   const parsed = siguienteSchema.safeParse({
     dealId: field(formData, "dealId"),
@@ -121,21 +135,29 @@ export async function fijarSiguienteAccion(_prev: VentasState, formData: FormDat
   // «Guardada para el 24 sep · 3:00 p. m.»: dónde quedó, en la zona del
   // espacio. En «Para hoy» es lo último que se ve de la fila que se va.
   const f = formatterFor(await getCurrentWorkspace());
-  return { ok: true, notice: t.savedFor(`${f.date(saved.dueAt)} · ${f.time(saved.dueAt)}`), stamp: Date.now() };
+  const dueText = textoDeVencimiento(saved.dueAt, f);
+  return { ok: true, notice: t.savedFor(dueText), saved: { action: v.action, dueText }, stamp: Date.now() };
 }
 
 /**
  * «Hecha»: la acción se cumplió. Queda como nota en la historia y el
  * negocio pide la siguiente.
+ *
+ * `expectedAction` es la acción que la persona tenía delante (la línea y
+ * el aviso «¿Era…?» la mandan). Si el negocio ya tiene otra, no se marca
+ * nada (ActionChanged) y se revalida la ficha, para que la pantalla que
+ * estaba vieja enseñe la acción de ahora junto al aviso que lo explica.
  */
 export async function marcarHecha(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const t = FICHA.siguiente;
   const dealId = field(formData, "dealId");
   if (!UUID_RE.test(dealId)) return { message: t.doneError };
+  const expected = formData.has("expectedAction") ? field(formData, "expectedAction") : undefined;
   let companyId: string;
   try {
-    ({ companyId } = await withWorkspace((tx) => completeNextAction(tx, dealId, t.doneActivity)));
+    ({ companyId } = await withWorkspace((tx) => completeNextAction(tx, dealId, t.doneActivity, expected)));
   } catch (err) {
+    if (err instanceof FichaError && err.code === "ActionChanged" && err.params.companyId) revalidate(err.params.companyId);
     return { message: messageOf(err, t.doneError) };
   }
   revalidate(companyId);

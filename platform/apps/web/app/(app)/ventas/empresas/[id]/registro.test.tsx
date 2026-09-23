@@ -47,15 +47,25 @@ const siguientes = {
   ),
 };
 
-function renderRegistro(
-  deals = [
-    { id: ABIERTO, label: "Renovación Q4 · 3 meses", stage: "En conversación", open: true },
-    { id: GANADO, label: "Lanzamiento", stage: "Ganado", open: false },
-  ],
-) {
+const DEALS = [
+  { id: ABIERTO, label: "Renovación Q4 · 3 meses", stage: "En conversación", open: true },
+  { id: GANADO, label: "Lanzamiento", stage: "Ganado", open: false },
+];
+
+/** La ficha revalidada con otra siguiente acción para el negocio abierto (null: sin acción). */
+function conAccion(action: string | null): typeof siguientes {
+  return { [ABIERTO]: { ...siguientes[ABIERTO]!, action, dueText: action ? siguientes[ABIERTO]!.dueText : null } };
+}
+
+function renderRegistro(deals = DEALS) {
+  const r = render(ficha(deals, siguientes));
+  return { ...r, revalidar: (sig: typeof siguientes) => r.rerender(ficha(deals, sig)) };
+}
+
+function ficha(deals: typeof DEALS, sig: typeof siguientes) {
   // Como en la ficha: el registro dentro del bloque «Actividad», y fuera
   // un botón de otro bloque («Cambiar» de un negocio).
-  return render(
+  return (
     <>
       <button type="button">Cambiar</button>
       <Bloque id="actividad" title="Actividad">
@@ -64,11 +74,11 @@ function renderRegistro(
           today="2026-09-23"
           deals={deals}
           contacts={[{ id: LAURA, label: "Laura Gómez" }]}
-          siguientes={siguientes}
+          siguientes={sig}
           ctx={ctx}
         />
       </Bloque>
-    </>,
+    </>
   );
 }
 
@@ -167,7 +177,8 @@ describe("RegistroRapido", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Marcar «Llamar a Laura Quintero» como hecha y poner la siguiente" }));
     });
-    expect(Object.fromEntries(marcarHecha.mock.calls[0]?.[1] as FormData)).toEqual({ dealId: ABIERTO });
+    // Con la acción por la que pregunta: si el negocio ya tiene otra, el servidor no marca nada.
+    expect(Object.fromEntries(marcarHecha.mock.calls[0]?.[1] as FormData)).toEqual({ dealId: ABIERTO, expectedAction: "Llamar a Laura Quintero" });
 
     // Se abre el editor de la siguiente, vacío y para mañana, con el foco en «Qué toca hacer».
     const editor = await screen.findByRole("form", { name: "Siguiente acción de «Granos del Valle · Historias + 1 Reel»" });
@@ -179,6 +190,44 @@ describe("RegistroRapido", () => {
     fireEvent.keyDown(screen.getByLabelText(/Qué toca hacer/), { key: "Escape" });
     expect(screen.queryByRole("form", { name: /Siguiente acción de/ })).toBeNull();
     expect(screen.getByText(FICHA.actividad.pendiente.leftWithout)).toBeInTheDocument();
+  });
+
+  it("la pregunta se va en cuanto la acción del negocio cambia por otro camino (su línea, otra pestaña)", async () => {
+    // El guion del revisor en Olla Fácil: se registró una llamada, apareció
+    // «¿Era…?», se cerró la acción desde la línea del negocio y se escribió
+    // otra. El aviso viejo seguía ahí y «Marcarla hecha» cerraba la nueva.
+    registrarActividad.mockResolvedValue({ ok: true, notice: "Llamada registrada.", stamp: 1, pendientes: [{ dealId: ABIERTO, action: "Llamar a Laura Quintero" }] });
+    const { revalidar } = renderRegistro();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Registrar" }));
+    });
+    expect(await screen.findByRole("group", { name: /Siguiente acción pendiente/ })).toBeInTheDocument();
+
+    revalidar(conAccion("Nueva acción escrita después"));
+    expect(screen.queryByRole("group", { name: /Siguiente acción pendiente/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Marcar «Llamar a Laura Quintero» como hecha/ })).toBeNull();
+    revalidar(conAccion(null));
+    expect(screen.queryByRole("group", { name: /Siguiente acción pendiente/ })).toBeNull();
+    expect(marcarHecha).not.toHaveBeenCalled();
+  });
+
+  it("si se pulsa con la pantalla vieja, el servidor no marca nada y la pregunta dice por qué", async () => {
+    registrarActividad.mockResolvedValue({ ok: true, notice: "Llamada registrada.", stamp: 1, pendientes: [{ dealId: ABIERTO, action: "Llamar a Laura Quintero" }] });
+    const cambio = FICHA.errores.ActionChanged("Nueva acción escrita después");
+    marcarHecha.mockResolvedValue({ message: cambio });
+    const { revalidar } = renderRegistro();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Registrar" }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /Marcar «Llamar a Laura Quintero» como hecha/ }));
+    });
+    // La revalidación que manda marcarHecha llega con la acción de ahora: el porqué se queda.
+    revalidar(conAccion("Nueva acción escrita después"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(cambio);
+    expect(screen.queryByRole("form", { name: /Siguiente acción de/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "No era «Llamar a Laura Quintero»: dejarla como está" }));
+    expect(screen.queryByRole("group", { name: /Siguiente acción pendiente/ })).toBeNull();
   });
 
   it("«No» deja la acción como estaba y no llama a nada", async () => {

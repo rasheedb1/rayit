@@ -41,6 +41,12 @@ export const FICHA_ERROR_CODES = [
   'InvalidResponsible',
   /** No hay siguiente acción que marcar como hecha. */
   'NoNextAction',
+  /**
+   * La acción que se quiso marcar hecha ya no es la del negocio: alguien
+   * la cerró o la cambió por otro camino (su línea, otra pestaña, otra
+   * persona). `params.current` dice cuál es ahora; nada se marca.
+   */
+  'ActionChanged',
   /** Ese tipo de actividad no se registra a mano. */
   'InvalidActivityKind',
   /** Una nota sin texto, o un texto de más de ACTIVITY_BODY_MAX caracteres. */
@@ -56,12 +62,22 @@ export const FICHA_ERROR_CODES = [
 ] as const;
 export type FichaErrorCode = (typeof FICHA_ERROR_CODES)[number];
 
+/** Lo que un error necesita para explicarse. Hoy solo lo usa ActionChanged. */
+export interface FichaErrorParams {
+  /** La siguiente acción que tiene el negocio ahora (null: ninguna). */
+  current?: string | null;
+  /** La empresa del negocio, para que la pantalla revalide su ficha. */
+  companyId?: string;
+}
+
 export class FichaError extends Error {
   readonly code: FichaErrorCode;
-  constructor(code: FichaErrorCode) {
+  readonly params: FichaErrorParams;
+  constructor(code: FichaErrorCode, params: FichaErrorParams = {}) {
     super(code);
     this.name = code;
     this.code = code;
+    this.params = params;
   }
 }
 
@@ -403,14 +419,29 @@ export async function setNextAction(
  * negocio se queda sin siguiente acción, marcado, hasta que se le ponga
  * la próxima. El responsable se conserva: es el que se propone para la
  * siguiente.
+ *
+ * `expected` es la acción que la persona VIO al pulsar «Hecha» o
+ * «Marcarla hecha». Si el negocio ya tiene otra (o ninguna) —se cerró
+ * desde su línea, desde otra pestaña, o la cambió otra persona—, lanza
+ * ActionChanged y no toca nada: sin esta condición, un aviso viejo
+ * cerraba la acción NUEVA, que nadie había hecho, y la historia guardaba
+ * «Hecho: …» de algo pendiente. La comparación se hace con la fila ya
+ * bloqueada (readOpenDeal, FOR UPDATE), así que dos «Hecha» a la vez no
+ * cierran dos acciones. Sin `expected` (undefined) no se compara.
  */
 export async function completeNextAction(
   tx: WorkspaceTx,
   dealId: string,
   doneText: (action: string) => string,
+  expected?: string | null,
 ): Promise<{ companyId: string }> {
   if (!isUuid(dealId)) throw new DealNotFound();
   const deal = await readOpenDeal(tx, dealId);
+  if (expected !== undefined) {
+    // Las dos con el mismo trim que nextActionOf, de donde sale la acción que la pantalla pinta.
+    const vista = (expected ?? '').trim() || null;
+    if (vista !== (deal.action?.trim() || null)) throw new FichaError('ActionChanged', { current: deal.action, companyId: deal.companyId });
+  }
   if (!deal.action) throw new FichaError('NoNextAction');
   await tx.query(
     `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, metadata)

@@ -22,6 +22,17 @@ import { EditorSiguienteAccion } from "./siguiente-accion";
  *     (la deja como nota en la historia) y abre, aquí mismo, el editor de
  *     la siguiente, vacío y para mañana.
  *   · «No» la deja como está.
+ *   · Si la acción del negocio ya no es esa (se cerró o se cambió desde
+ *     su línea, a pocos centímetros, o en otra pestaña), la pregunta se
+ *     va sola al revalidarse la ficha: seguía en pantalla y «Marcarla
+ *     hecha» cerraba la acción NUEVA. Por si llega a pulsarse con la
+ *     pantalla vieja, el formulario manda la acción que pregunta
+ *     (`expectedAction`) y el servidor no marca nada si ya es otra; el
+ *     aviso lo explica aquí mismo.
+ *
+ * Se esconde y no se desmonta: el resultado de «Marcarla hecha» y la
+ * revalidación llegan en el mismo render, y desmontada no podría abrir
+ * el editor ni decir por qué no se marcó.
  *
  * `onClose` avisa cuando termina, con lo que hay que decir: «Guardada
  * para el…» si se puso la siguiente, o que quedó sin ella.
@@ -44,6 +55,8 @@ export function CerrarPendiente({
   const t = FICHA.actividad.pendiente;
   const [editing, setEditing] = useState(false);
   const hecha = useVentasForm(marcarHecha, () => setEditing(true));
+  // Ya no es la acción del negocio y aquí no hay nada en curso ni que decir.
+  const vieja = data.action !== action && !editing && !hecha.pending && !hecha.state.ok && !hecha.state.message;
 
   if (editing) {
     return (
@@ -59,6 +72,8 @@ export function CerrarPendiente({
     );
   }
 
+  if (vieja) return null;
+
   return (
     <div role="group" aria-label={t.label(action)} className="rounded-md border border-border bg-surface-2 p-3">
       <p className="text-sm text-ink">
@@ -68,6 +83,7 @@ export function CerrarPendiente({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <form ref={hecha.formRef} onSubmit={hecha.onSubmit} noValidate>
           <input type="hidden" name="dealId" value={data.dealId} />
+          <input type="hidden" name="expectedAction" value={action} />
           <Button type="submit" size="sm" variant="primary" loading={hecha.pending} aria-label={t.markDoneLabel(action)}>
             {t.markDone}
           </Button>

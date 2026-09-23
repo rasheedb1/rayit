@@ -49,6 +49,7 @@ const DEAL_BOGOTA_2 = '0000000a-0000-4000-8000-000000000d0a';
 const DEAL_LLAMADA = '0000000a-0000-4000-8000-000000000d0b';
 const DEAL_RESP_FUERA = '0000000a-0000-4000-8000-000000000d0c';
 const DEAL_NADIE = '0000000a-0000-4000-8000-000000000d0d';
+const DEAL_659 = '0000000a-0000-4000-8000-000000000d0e';
 /** Alguien que tuvo negocios en Bogotá y ya no es del espacio (sin membership). */
 const USER_EX = '0000000a-0000-4000-8000-0000000000a3';
 
@@ -192,9 +193,9 @@ test('una zona mal escrita en un espacio se cuenta en UTC y no deja sin avisos a
   // Un dato de antes de 0035: el disparador ya no deja guardarlo, así que
   // se escribe con el disparador apagado, como estaría en una base vieja.
   await db.raw.exec(`
-    ALTER TABLE workspace DISABLE TRIGGER workspace_timezone_valida;
+    ALTER TABLE workspace DISABLE TRIGGER workspace_timezone_check;
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_ROTO}', 'seg-roto', 'Zona mal escrita', 'Bogota');
-    ALTER TABLE workspace ENABLE TRIGGER workspace_timezone_valida;
+    ALTER TABLE workspace ENABLE TRIGGER workspace_timezone_check;
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_ROTO}', 'Marca rota', '${WS_ROTO}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_ROTO}', '${COMPANY_ROTO}');
     INSERT INTO deal (id, workspace_id, company_id, name, stage_id, currency, next_action, next_action_due, updated_at, next_action_set_at) VALUES
@@ -333,4 +334,28 @@ test('un responsable que ya no es del espacio no recibe el aviso: pasa al del ne
   assert.equal(lista.find((a) => a.entity_id === DEAL_RESP_FUERA)?.user_id, USER_ANA, 'al responsable del negocio, que sigue');
   assert.equal(lista.find((a) => a.entity_id === DEAL_NADIE)?.user_id, null, 'a todo el espacio');
   assert.ok(!lista.some((a) => a.user_id === USER_EX), 'nunca a quien se fue');
+});
+
+test('lo que vence hoy antes de la hora de aviso (6:59) avisa «Seguimiento vencido», no «Vence hoy», y una sola vez', async () => {
+  // Como las acciones del seed en Supabase: vence el 30 a las 6:59 de
+  // Bogotá (11:59 UTC). A las 7:05 «Para hoy» y el tablero ya la pintan
+  // «Vencido»; el aviso no puede decir otra cosa del mismo negocio.
+  await db.raw.exec(`
+    INSERT INTO deal (id, workspace_id, company_id, owner_user_id, name, stage_id, currency, next_action, next_action_due, updated_at, next_action_set_at) VALUES
+      ('${DEAL_659}', '${WS_BOGOTA}', '${COMPANY}', '${USER_LAURA}', 'Antes de las 7', 'contactado', 'COP', 'Llamar temprano', '2026-09-30T11:59:00Z', '${TOCADO_ANTES}', '${TOCADO_ANTES}');
+  `);
+  const delNegocio = async () => (await avisos()).filter((a) => a.entity_id === DEAL_659);
+
+  const r = await runSeguimientos(db, new Date('2026-09-30T12:05:00Z'));
+  assert.ok(r.dealIds.includes(DEAL_659));
+  const [aviso, ...otros] = await delNegocio();
+  assert.deepEqual(otros, []);
+  assert.equal(aviso?.kind, 'deal_overdue');
+  assert.equal(aviso?.severity, 'warning');
+  assert.equal(aviso?.title_es, 'Seguimiento vencido: Llamar temprano · Café Alma');
+
+  // Ni la corrida de la hora siguiente ni la de la mañana siguiente lo repiten.
+  await runSeguimientos(db, new Date('2026-09-30T13:05:00Z'));
+  await runSeguimientos(db, new Date('2026-10-01T12:05:00Z'));
+  assert.equal((await delNegocio()).length, 1);
 });

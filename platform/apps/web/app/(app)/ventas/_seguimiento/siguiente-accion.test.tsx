@@ -204,11 +204,78 @@ describe("SiguienteAccion", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Marcar «Llamar a Sofía» como hecha" }));
     });
-    expect((marcarHecha.mock.calls[0]?.[1] as FormData).get("dealId")).toBe(DEAL);
+    // Con la acción que se ve: si el negocio ya tiene otra, el servidor no marca nada (ActionChanged).
+    expect(Object.fromEntries(marcarHecha.mock.calls[0]?.[1] as FormData)).toEqual({ dealId: DEAL, expectedAction: "Llamar a Sofía" });
 
     const form = await screen.findByRole("form", { name: `Siguiente acción de «${LABEL}»` });
     expect(within(form).getByRole("status")).toHaveTextContent("Hecha. ¿Qué sigue?");
     expect(within(form).getByLabelText(/Qué toca hacer/)).toHaveValue("");
     expect(form.querySelector<HTMLInputElement>('input[name="dueDate"]')?.value).toBe("2026-09-24");
+  });
+});
+
+describe("SiguienteAccion · el editor mide su contenedor, no la ventana", () => {
+  it("la rejilla de cuatro columnas depende del ancho del formulario (@container), no de sm:", () => {
+    render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    const form = screen.getByRole("form", { name: `Siguiente acción de «${LABEL}»` });
+    // A 1280 px la columna de la ficha mide ~580 px: con `sm:` (la ventana)
+    // se abrían cuatro columnas y el día, la hora y el nombre se cortaban.
+    expect(form).toHaveClass("@container");
+    const rejilla = within(form).getByLabelText(/Qué toca hacer/).closest(".grid");
+    expect(rejilla?.className).toContain("@md:grid-cols-2");
+    expect(rejilla?.className).toContain("@2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.2fr)]");
+    expect(rejilla?.className).not.toMatch(/(^|\s)sm:grid-cols/);
+    // En dos columnas, «Qué» y «Quién» van a lo ancho; «Cuándo» y «Hora», juntos.
+    const campo = (label: RegExp) => within(form).getByLabelText(label).closest(".flex-col");
+    expect(campo(/Qué toca hacer/)).toHaveClass("@md:col-span-2", "@2xl:col-span-1");
+    expect(campo(/Quién/)).toHaveClass("@md:col-span-2", "@2xl:col-span-1");
+    expect(campo(/Hora/)).not.toHaveClass("@md:col-span-2");
+  });
+
+  it("en la tarjeta del tablero (compact) todo va en una columna", () => {
+    render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} compact />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    const rejilla = screen.getByLabelText(/Qué toca hacer/).closest(".grid");
+    expect(rejilla?.className).not.toContain("grid-cols");
+  });
+});
+
+describe("SiguienteAccion · el aviso de guardado dice la verdad de lo que se pinta", () => {
+  const guardada = { ...vencida, action: "Enviar la propuesta firmada", dueAt: "2026-09-24T20:00:00Z", dueDate: "2026-09-24", dueTime: "15:00", dueState: "futuro" as const };
+
+  async function guardar() {
+    const datos = siguienteAccionData(guardada, f, ctx, LABEL);
+    fijarSiguienteAccion.mockResolvedValue({
+      ok: true,
+      notice: `Guardada para el ${datos.dueText}`,
+      saved: { action: "Enviar la propuesta firmada", dueText: datos.dueText },
+      stamp: 1,
+    });
+    const r = render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} />);
+    fireEvent.click(screen.getByRole("button", { name: /Cambiar la siguiente acción/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+    });
+    // La revalidación trae la acción guardada: el aviso se ve.
+    r.rerender(<SiguienteAccion data={datos} ctx={ctx} />);
+    expect(screen.getByRole("status")).toHaveTextContent(`Guardada para el ${datos.dueText}`);
+    return r;
+  }
+
+  it("se va cuando la acción se cierra por otro camino: no convive con «Sin siguiente acción»", async () => {
+    const r = await guardar();
+    // Se cerró desde el aviso «¿Era…?» del registro: la ficha se revalida sin acción.
+    r.rerender(<SiguienteAccion data={siguienteAccionData(sinAccion, f, ctx, LABEL)} ctx={ctx} />);
+    expect(screen.getByText("Sin siguiente acción")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("se va cuando la acción o su fecha cambian por otro camino", async () => {
+    const r = await guardar();
+    r.rerender(<SiguienteAccion data={siguienteAccionData({ ...guardada, action: "Otra cosa" }, f, ctx, LABEL)} ctx={ctx} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    r.rerender(<SiguienteAccion data={siguienteAccionData({ ...guardada, dueAt: "2026-09-25T20:00:00Z", dueDate: "2026-09-25" }, f, ctx, LABEL)} ctx={ctx} />);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

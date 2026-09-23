@@ -33,6 +33,22 @@ export interface SiguienteAccionData {
 }
 
 /**
+ * Lo que quedó guardado al fijar una siguiente acción, escrito como lo
+ * pinta la línea: `action` y `dueText` se comparan con los de
+ * SiguienteAccionData para saber si «Guardada para el…» sigue siendo
+ * verdad.
+ */
+export interface GuardadaVista {
+  action: string;
+  dueText: string;
+}
+
+/** «24 sep · 9:30 a. m.»: el vencimiento en la zona del espacio. Uno solo para la línea y para el aviso de guardado. */
+export function textoDeVencimiento(dueAt: string, f: Formatter): string {
+  return `${f.date(dueAt)} · ${f.time(dueAt)}`;
+}
+
+/**
  * Lo que el editor necesita del espacio, igual para todos los negocios de
  * la pantalla. Es getLocalDates (queries/ventas-ficha) más las personas.
  */
@@ -89,7 +105,7 @@ export function siguienteAccionData(
     dealId: row.dealId,
     dealLabel,
     action: row.action,
-    dueText: row.dueAt ? `${f.date(row.dueAt)} · ${f.time(row.dueAt)}` : null,
+    dueText: row.dueAt ? textoDeVencimiento(row.dueAt, f) : null,
     due: row.action ? pillForDue(row.dueState) : null,
     responsibleName: row.responsibleName,
     form: {

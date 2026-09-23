@@ -351,9 +351,35 @@ describe('VEN-4 · la siguiente acción', () => {
     await assert.rejects(laura((tx) => setNextAction(tx, 'no-es-un-id', { action: 'x', dueDate: manana })), DealNotFound);
   });
 
+  test('«Marcarla hecha» de un aviso viejo no cierra la acción nueva: ActionChanged y el negocio queda como estaba', async () => {
+    // El guion del revisor en Olla Fácil: el aviso del registro preguntaba
+    // por «Llamar a Sofía», esa se cerró desde la línea y alguien escribió
+    // otra. Pulsar el aviso viejo cerraba la NUEVA y la historia decía
+    // «Hecho: …» de algo que nadie hizo.
+    const empresa = '00000002-0000-4000-8000-0000000000e8';
+    const antes = (await acciones(empresa)).find((r) => r.dealId === DEAL_OLLA);
+    assert.equal(antes?.action, 'Enviar el pitch');
+    const historia = async () => (await laura((tx) => listCompanyActivity(tx, empresa))).rows.map((r) => r.id);
+    const idsAntes = await historia();
+
+    await assert.rejects(laura((tx) => completeNextAction(tx, DEAL_OLLA, (a) => `Hecho: ${a}`, 'Llamar a Sofía')), (err: unknown) => {
+      assert.ok(err instanceof FichaError);
+      assert.equal(err.code, 'ActionChanged');
+      assert.deepEqual(err.params, { current: 'Enviar el pitch', companyId: empresa }, 'dice cuál es ahora, para explicarlo');
+      return true;
+    });
+    const despues = (await acciones(empresa)).find((r) => r.dealId === DEAL_OLLA);
+    assert.equal(despues?.action, 'Enviar el pitch', 'la acción nueva sigue ahí');
+    assert.equal(despues?.dueAt, antes?.dueAt);
+    assert.deepEqual(await historia(), idsAntes, 'y la historia no ganó un «Hecho»');
+    // Una acción que ya no existe tampoco se «cierra» desde un aviso que la nombraba.
+    await rejects(laura((tx) => completeNextAction(tx, DEAL_OLLA, (a) => a, '')), 'ActionChanged');
+  });
+
   test('«Hecha» la deja en la historia y el negocio queda sin siguiente acción, contado en «Para hoy»', async () => {
     const antes = await laura((tx) => listDueToday(tx));
-    await laura((tx) => completeNextAction(tx, DEAL_OLLA, (a) => `Hecho: ${a}`));
+    // Con la acción que se vio (los espacios de los bordes no cuentan, como en nextActionOf).
+    await laura((tx) => completeNextAction(tx, DEAL_OLLA, (a) => `Hecho: ${a}`, ' Enviar el pitch '));
     const fila = (await acciones()).find((r) => r.dealId === DEAL_OLLA);
     assert.equal(fila?.action, null);
     assert.equal(fila?.dueState, 'sin_fecha');
@@ -493,5 +519,53 @@ describe('VEN-5 · lo que sabemos y la cadena', () => {
     assert.equal(nombres[0]?.slug, 'cocina');
     assert.ok(nombres[0]?.nameEs);
     assert.deepEqual(await laura((tx) => listNicheNames(tx, [])), []);
+  });
+});
+
+describe('0035 · las zonas mal escritas que ya estaban se corrigen al migrar', () => {
+  test('«Bogota» pasa a America/Bogota, una ambigua o inventada a UTC, y ninguna lectura con AT TIME ZONE vuelve a fallar', async (ctx) => {
+    // Sin esto, la vista deal_pipeline (0034) y WORKSPACE_TZ hacían
+    // `AT TIME ZONE` con la zona tal cual, y un espacio en 'Bogota' perdía
+    // el tablero, «Para hoy» y la ficha enteros. La base se reconstruye tal
+    // como estaba antes de 0035, se siembran las zonas malas y se migra con
+    // el mismo rol que en Supabase (dueño de la tabla, con RLS forzada).
+    if (t.kind !== 'pglite') return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
+    const { createEmbeddedDb } = await import('../src/embedded.ts');
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0034_seguimientos.sql' });
+    try {
+      const casos: Record<string, [string, string]> = {
+        'zona-sin-region': ['Bogota', 'America/Bogota'],
+        'zona-minusculas': ['america/bogota', 'America/Bogota'],
+        'zona-madrid': [' Madrid ', 'Europe/Madrid'],
+        'zona-inventada': ['Marte/Olimpo', 'UTC'],
+        'zona-ambigua': ['Central', 'UTC'],
+        'zona-vacia': ['', 'UTC'],
+        'zona-buena': ['America/Mexico_City', 'America/Mexico_City'],
+      };
+      await antes.execAsSuperuser(
+        `INSERT INTO workspace (slug, name, timezone) VALUES ${Object.entries(casos)
+          .map(([slug, [zona]]) => `('${slug}', '${slug}', '${zona}')`)
+          .join(', ')}`,
+      );
+      // Antes de 0035, así fallaban las pantallas de Ventas.
+      await assert.rejects(
+        antes.queryAsSuperuser(`SELECT now() AT TIME ZONE timezone FROM workspace WHERE slug = 'zona-sin-region'`),
+        /time zone "Bogota" not recognized/,
+      );
+
+      assert.deepEqual(await antes.migrar('0035_zona_del_espacio_valida.sql'), ['0035_zona_del_espacio_valida.sql']);
+      const { rows } = await antes.queryAsSuperuser<{ slug: string; timezone: string }>(
+        `SELECT slug, timezone FROM workspace WHERE slug LIKE 'zona-%' ORDER BY slug`,
+      );
+      assert.deepEqual(
+        Object.fromEntries(rows.map((r) => [r.slug, r.timezone])),
+        Object.fromEntries(Object.entries(casos).map(([slug, [, despues]]) => [slug, despues])),
+      );
+      const forzada = await antes.queryAsSuperuser<{ f: boolean }>(`SELECT relforcerowsecurity AS f FROM pg_class WHERE oid = 'workspace'::regclass`);
+      assert.equal(forzada.rows[0]?.f, true, 'la RLS forzada vuelve a quedar como estaba');
+      await antes.queryAsSuperuser(`SELECT now() AT TIME ZONE timezone FROM workspace`);
+    } finally {
+      await antes.close();
+    }
   });
 });

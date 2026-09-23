@@ -42,15 +42,18 @@ export function DatosEmpresa({
 
   // Un bloque que se pliega, como el resto de la ficha (patrón Attio).
   // «Editar» va dentro, no en el título: el título es el botón que
-  // pliega el bloque, y un botón dentro de otro no se anuncia.
+  // pliega el bloque, y un botón dentro de otro no se anuncia. Va donde
+  // «Negocios» y «Contactos» ponen su acción: lo primero del cuerpo, a la
+  // izquierda y secundario. Solo y a la derecha, encima de la tarjeta,
+  // parecía un botón perdido.
   return (
     <Bloque id="empresa-datos" title={editing ? MESSAGES.empresas.form.editTitle : t.data}>
       <div className="space-y-3">
         {!editing && (
-          <div className="-mt-1 flex justify-end">
+          <div>
             <Button
               size="sm"
-              variant="ghost"
+              variant="secondary"
               onClick={() => {
                 setEditing(true);
                 setNotice(undefined);

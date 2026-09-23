@@ -80,4 +80,14 @@ describe("DatosEmpresa", () => {
     expect(screen.queryByRole("form", { name: "Editar los datos" })).toBeNull();
     expect(editarEmpresa).not.toHaveBeenCalled();
   });
+
+  it("«Editar» va donde «Negocios» y «Contactos» ponen su acción: lo primero del cuerpo, a la izquierda y secundario", () => {
+    render(<DatosEmpresa company={propia} filas={filas} signalsLink={null} countries={PAISES} />);
+    const editar = screen.getByRole("button", { name: "Editar los datos de Café Alma" });
+    // Solo, a la derecha y encima de la tarjeta, parecía un botón perdido (visto a 1440 px).
+    expect(editar.parentElement).not.toHaveClass("justify-end");
+    expect(editar).toHaveClass("border-border");
+    const tarjeta = screen.getByText("Dominio").closest("dl");
+    expect(tarjeta && editar.compareDocumentPosition(tarjeta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

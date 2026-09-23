@@ -219,7 +219,9 @@ export function RegistroRapido({
         otro. La región está siempre montada para que el lector de
         pantalla anuncie la pregunta cuando aparece. */}
     {ctx && siguientes && (
-      <div aria-live="polite" className={pendientes.length > 0 ? "mt-3 space-y-2" : undefined}>
+      // empty:mt-0: una pregunta cuya acción ya cambió se esconde (CerrarPendiente
+      // devuelve null) y la región vacía no deja un hueco.
+      <div aria-live="polite" className={pendientes.length > 0 ? "mt-3 space-y-2 empty:mt-0" : undefined}>
         {pendientes.flatMap((p) => {
           const data = siguientes[p.dealId];
           if (!data) return [];

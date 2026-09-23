@@ -28,11 +28,19 @@
  *   - si el worker no corrió en la mañana, la primera corrida del día
  *     pone al día lo que faltaba, aunque sea por la tarde. Es la única
  *     forma de que un aviso llegue fuera de la mañana, y es mejor que
- *     perderlo.
+ *     perderlo;
+ *   - lo que vence HOY pero ya pasó su hora cuando se avisa (a las 6:59,
+ *     y el aviso sale a las 7:05; o a las 10:00 y el worker no corrió
+ *     hasta las 11:05) avisa como 'deal_overdue', «Seguimiento vencido»:
+ *     «Para hoy» y el tablero ya lo pintan «Vencido», y el aviso no puede
+ *     decir «Vence hoy» del mismo negocio. Es el mismo aviso, una sola
+ *     vez: la mañana siguiente no se repite (el vencido ya existe después
+ *     del vencimiento).
  *
  * La zona de cada espacio se resuelve contra pg_timezone_names: una zona
  * mal escrita en un espacio ('Bogota') se cuenta en UTC para ese espacio
- * y no tumba la corrida de todos (0035 además impide guardarla).
+ * y no tumba la corrida de todos (0035 además corrige las que había y
+ * no deja guardar otra; esto es por si el job corre antes que 0035).
  *
  * Cómo no duplica, sin columna nueva en notification:
  *   - un 'deal_overdue' del negocio creado DESPUÉS de su vencimiento
@@ -164,28 +172,39 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
       [now.toISOString(), hora, t.overdueTitle, t.body],
     );
 
-    const dueToday = await tx.query<{ entity_id: string }>(
+    // Lo de hoy. Si a la hora del aviso ya pasó su hora ($1 > vencimiento),
+    // sale como vencido: la pantalla ya dice «Vencido». No se repite si ya
+    // hay un «Vence hoy» de ese día, ni un vencido posterior al vencimiento
+    // (la misma regla que la rama de arriba).
+    const hoy = await tx.query<{ entity_id: string; kind: string }>(
       `WITH ${CANDIDATOS}
        INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
-       SELECT c.workspace_id, c.user_id, 'deal_due', 'info',
-              format($3::text, c.next_action, c.company_name, c.name), format($4::text, c.next_action, c.company_name, c.name),
+       SELECT c.workspace_id, c.user_id,
+              CASE WHEN c.next_action_due < $1::timestamptz THEN 'deal_overdue' ELSE 'deal_due' END,
+              CASE WHEN c.next_action_due < $1::timestamptz THEN 'warning' ELSE 'info' END,
+              format(CASE WHEN c.next_action_due < $1::timestamptz THEN $5::text ELSE $3::text END, c.next_action, c.company_name, c.name),
+              format($4::text, c.next_action, c.company_name, c.name),
               'deal', c.id, '/ventas/empresas/' || c.company_id, $1::timestamptz
          FROM candidatos c
         WHERE (c.next_action_due AT TIME ZONE c.tz)::date = c.hoy
           AND ($2::int = 0 OR c.next_action_set_at IS NULL OR c.next_action_set_at < c.aviso_at)
           AND NOT EXISTS (
             SELECT 1 FROM notification n
-             WHERE n.workspace_id = c.workspace_id AND n.kind = 'deal_due'
+             WHERE n.workspace_id = c.workspace_id
                AND n.entity_type = 'deal' AND n.entity_id = c.id
-               AND (n.created_at AT TIME ZONE c.tz)::date = (c.next_action_due AT TIME ZONE c.tz)::date)
-       RETURNING entity_id`,
-      [now.toISOString(), hora, t.dueTitle, t.body],
+               AND ((n.kind = 'deal_due'
+                     AND (n.created_at AT TIME ZONE c.tz)::date = (c.next_action_due AT TIME ZONE c.tz)::date)
+                 OR (n.kind = 'deal_overdue' AND n.created_at >= c.next_action_due)))
+       RETURNING entity_id, kind`,
+      [now.toISOString(), hora, t.dueTitle, t.body, t.overdueTitle],
     );
+    const hoyVencidos = hoy.rows.filter((r) => r.kind === 'deal_overdue');
+    const hoyVence = hoy.rows.filter((r) => r.kind === 'deal_due');
 
     return {
-      dueToday: dueToday.rows.length,
-      overdue: overdue.rows.length,
-      dealIds: [...overdue.rows, ...dueToday.rows].map((r) => r.entity_id),
+      dueToday: hoyVence.length,
+      overdue: overdue.rows.length + hoyVencidos.length,
+      dealIds: [...overdue.rows, ...hoyVencidos, ...hoyVence].map((r) => r.entity_id),
     };
   });
 }

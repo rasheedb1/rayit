@@ -289,11 +289,16 @@ export const FICHA = {
     PastDueTime: "Esa hora ya pasó. Elige una más tarde o mañana.",
     InvalidResponsible: "Elige a alguien de tu espacio.",
     NoNextAction: "Ese negocio no tiene una siguiente acción que marcar.",
+    /** La acción que se quiso marcar hecha ya no es la del negocio: se cerró o cambió por otro camino. */
+    ActionChanged: (current: string | null) =>
+      current
+        ? `Esa acción ya cambió: ahora es «${current}». No se marcó nada; revísala en su línea.`
+        : "Esa acción ya se cerró o se quitó por otro lado. No se marcó nada.",
     InvalidActivityKind: "Elige nota, llamada, correo o reunión.",
     InvalidActivityBody: `Escribe qué pasó (hasta ${ACTIVITY_BODY_MAX} caracteres).`,
     InvalidActivityDate: "Elige hoy o un día anterior.",
     DealNotInCompany: "Ese negocio no es de esta empresa.",
     ContactNotInCompany: "Ese contacto no es de esta empresa.",
     ContactOptedOut: "Esa persona pidió no ser contactada: no se le registran llamadas, correos ni reuniones. Una nota sí.",
-  } satisfies Record<FichaErrorCode, string>,
+  } satisfies Record<FichaErrorCode, string | ((current: string | null) => string)>,
 } as const;

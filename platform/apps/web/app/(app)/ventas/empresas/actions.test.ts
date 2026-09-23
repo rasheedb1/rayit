@@ -133,7 +133,10 @@ describe("fijarSiguienteAccion", () => {
     const r = await fijarSiguienteAccion({}, form(accion));
     // Dice dónde quedó, en la zona del espacio: 14:30 UTC son las 9:30 en Bogotá.
     const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
-    expect(r).toMatchObject({ ok: true, notice: FICHA.siguiente.savedFor(`${f.date("2026-09-24T14:30:00Z")} · ${f.time("2026-09-24T14:30:00Z")}`) });
+    const dueText = `${f.date("2026-09-24T14:30:00Z")} · ${f.time("2026-09-24T14:30:00Z")}`;
+    expect(r).toMatchObject({ ok: true, notice: FICHA.siguiente.savedFor(dueText) });
+    // Y lo que quedó, escrito como lo pinta la línea: el aviso se enseña solo mientras la línea pinte eso.
+    expect(r.saved).toEqual({ action: "Llamar a Sofía", dueText });
     expect(r.notice).toMatch(/^Guardada para el 24 sep/);
     expect(setNextAction).toHaveBeenCalledWith({}, DEAL, {
       action: "Llamar a Sofía",
@@ -186,6 +189,22 @@ describe("marcarHecha", () => {
     const [, dealId, texto] = completeNextAction.mock.calls[0] as [unknown, string, (a: string) => string];
     expect(dealId).toBe(DEAL);
     expect(texto("Llamar a Sofía")).toBe("Hecho: Llamar a Sofía");
+  });
+
+  it("manda la acción que se vio; si ya es otra, lo explica y revalida la ficha para enseñar la de ahora", async () => {
+    await marcarHecha({}, form({ dealId: DEAL, expectedAction: "Llamar a Sofía" }));
+    expect(completeNextAction.mock.calls[0]?.[3]).toBe("Llamar a Sofía");
+    // Sin el campo, no se compara (undefined), para no romper un formulario viejo.
+    await marcarHecha({}, form({ dealId: DEAL }));
+    expect(completeNextAction.mock.calls[1]?.[3]).toBeUndefined();
+
+    revalidatePath.mockReset();
+    completeNextAction.mockRejectedValueOnce(new FichaError("ActionChanged", { current: "Enviar pitch", companyId: COMPANY }));
+    const r = await marcarHecha({}, form({ dealId: DEAL, expectedAction: "Llamar a Sofía" }));
+    expect(r).toEqual({ message: "Esa acción ya cambió: ahora es «Enviar pitch». No se marcó nada; revísala en su línea." });
+    expect(revalidatePath).toHaveBeenCalledWith(`/ventas/empresas/${COMPANY}`);
+    completeNextAction.mockRejectedValueOnce(new FichaError("ActionChanged", { current: null, companyId: COMPANY }));
+    expect((await marcarHecha({}, form({ dealId: DEAL, expectedAction: "Llamar a Sofía" }))).message).toBe(FICHA.errores.ActionChanged(null));
   });
 
   it("un negocio que no existe (o de otro espacio) lo dice sin revalidar", async () => {

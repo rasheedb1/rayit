@@ -1487,7 +1487,7 @@ export const PITCH_DUE_HOUR = 15;
  * «Seguimiento a la cotización»): el N-ésimo día HÁBIL después del de
  * `desde`, a las HOUR en la zona del workspace (no en UTC: en Bogotá las
  * 15:00 UTC son las 10:00). Espera la fila `w` de WORKSPACE_TZ en el
- * FROM. Un nombre de zona que Postgres no reconozca cae en UTC.
+ * FROM, cuya zona siempre es una que Postgres conoce (0035).
  *
  * Es UNA sola expresión para el pitch y para el seguimiento: antes el
  * pitch contaba días de calendario y el seguimiento hábiles, y la misma
@@ -1511,9 +1511,15 @@ function dueInBusinessDays(desde: string, dias: string, hora: string): string {
 
 /**
  * El workspace actual con su zona, para las consultas que la necesitan.
- * Vacía cae en UTC, como en Cotizar (sendQuote); la zona la valida
- * quien la guarda en el workspace. La usa también queries/ventas-ficha.ts
- * (VEN-4, VEN-5): una sola definición de «la zona del espacio».
+ * La usa también queries/ventas-ficha.ts (VEN-4, VEN-5): una sola
+ * definición de «la zona del espacio».
+ *
+ * La zona se usa tal cual en `AT TIME ZONE` sin validarla aquí: la
+ * migración 0035 corrigió las que estaban mal escritas y su disparador
+ * (workspace_timezone_check) no deja guardar ninguna que Postgres no
+ * conozca. Validar en cada lectura contra pg_timezone_names costaría un
+ * recorrido del catálogo de zonas por consulta. Vacía cae en UTC, como
+ * en Cotizar (sendQuote), aunque 0035 tampoco deja guardarla.
  */
 export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
     FROM workspace WHERE id = current_workspace_id())`;

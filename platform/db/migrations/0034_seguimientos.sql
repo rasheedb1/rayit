@@ -42,7 +42,10 @@
 --
 --   La zona sale de la fila del workspace del negocio. Si no se ve (no
 --   debería: RLS deja leer la propia), o está vacía, se cuenta en UTC,
---   como WORKSPACE_TZ en queries/ventas.ts.
+--   como WORKSPACE_TZ en queries/ventas.ts. Que sea una zona que
+--   Postgres conoce lo garantiza 0035, que va en el mismo deploy: corrige
+--   las mal escritas y no deja guardar otra. Por eso aquí no se valida
+--   contra pg_timezone_names fila a fila.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------

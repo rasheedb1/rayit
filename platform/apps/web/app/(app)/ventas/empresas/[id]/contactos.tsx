@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
+import { safeHref } from "@/lib/url";
 import { crearContacto, darDeBaja, editarContacto } from "../../actions";
 import { Aviso } from "../../../_lib/aviso";
 import { SOURCE_META, SOURCE_OPTIONS } from "../../_lib/estado";
@@ -165,6 +166,9 @@ function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId
   const [notice, setNotice] = useState<string | undefined>();
   const { state, pending, formRef, onSubmit } = useVentasForm(darDeBaja, () => setConfirming(false));
   const name = c.fullName ?? c.email ?? (c.instagramHandle ? `@${c.instagramHandle}` : MESSAGES.contacto.noName);
+  // Solo http(s): son text libre y los llenarán también los conectores (fuente pública, enriquecimiento).
+  const linkedin = safeHref(c.linkedinUrl);
+  const fuente = safeHref(c.sourceUrl);
 
   return (
     <li className="p-3">
@@ -189,18 +193,18 @@ function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId
               ))}
             {c.phone && <span>{c.phone}</span>}
             {c.instagramHandle && name !== `@${c.instagramHandle}` && <span>@{c.instagramHandle}</span>}
-            {c.linkedinUrl && (
-              <a href={c.linkedinUrl} target="_blank" rel="noreferrer noopener" className="hover:underline">
+            {linkedin && (
+              <a href={linkedin} target="_blank" rel="noreferrer noopener" className="hover:underline">
                 {t.linkedin}
               </a>
             )}
           </p>
           <p className="mt-1 text-xs text-muted">
             {t.sourceLabel}: {SOURCE_META[c.source].label}
-            {c.sourceUrl && (
+            {fuente && (
               <>
                 {" · "}
-                <a href={c.sourceUrl} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2 hover:text-ink">
+                <a href={fuente} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2 hover:text-ink">
                   {t.seeSource}
                 </a>
               </>

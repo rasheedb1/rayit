@@ -432,12 +432,16 @@ export function formatRelativeDays(days: number, opts: LocaleOpts = {}): string 
   return rtf.format(Math.trunc(days), "day");
 }
 
-/** Días relativos para la columna "Vence": "en 23 días" · "hoy" · "hace 41 días". */
-export function formatDaysRelative(days: number): string {
-  if (days === 0) return "hoy";
-  if (days === 1) return "mañana";
-  if (days === -1) return "ayer";
-  return days > 0 ? `en ${days} días` : `hace ${-days} días`;
+/**
+ * @deprecated Usa `formatRelativeDays` (o `f.relativeDays`). Es el mismo
+ * formato: se conserva el nombre para la columna «Vence» de Finanzas,
+ * que lo llama como `f.daysRelative`. Antes escribía «hoy» y «en N días»
+ * a mano en español, y dos funciones con nombres casi iguales para lo
+ * mismo invitaban a elegir la de español fijo. Ahora es un envoltorio:
+ * «dentro de 23 días» · «hoy» · «hace 41 días» en es, «in 23 days» en en.
+ */
+export function formatDaysRelative(days: number, opts: LocaleOpts = {}): string {
+  return formatRelativeDays(days, opts);
 }
 
 /**
@@ -474,9 +478,10 @@ export function formatterFor(settings: FormatSettings) {
     country: (code: string) => formatCountry(code, base),
     /** El nombre de la zona del workspace (u otra), para una frase: «hora estándar de Colombia». */
     zoneName: (tz: string = timeZone) => formatTimeZoneName(tz, base),
-    daysRelative: formatDaysRelative,
-    /** «hace 3 días», «ayer», «hoy», en el idioma del workspace. Recibe días con signo (negativo es pasado). */
+    /** «hace 3 días», «ayer», «hoy», «dentro de 2 días», en el idioma del workspace. Recibe días con signo (negativo es pasado). */
     relativeDays: (days: number) => formatRelativeDays(days, base),
+    /** @deprecated Usa `relativeDays`: es la misma función (la columna «Vence» de Finanzas aún la llama así). */
+    daysRelative: (days: number) => formatRelativeDays(days, base),
   };
 }
 
