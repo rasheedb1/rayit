@@ -373,40 +373,58 @@ Todo contra respuestas grabadas, sin red (`withoutNetwork()`:
 
 ### 5.1 El worker de verdad, en Postgres embebido
 
-Cinco cuentas de un workspace: Instagram autorizada, TikTok Business,
-TikTok personal, canal de YouTube con el scope de Analytics, y una
-cuenta agregada por `@`. Una corrida de `collect.demographics`:
+Seis cuentas de un workspace: Instagram autorizada, TikTok Business,
+TikTok personal, canal de YouTube con el scope de Analytics, un canal
+con el permiso **caído** (`needs_reauth`) y una cuenta agregada por `@`.
 
 ```
-job_run  status=ok  procesados=5  fallidos=0  ms=2857
+══ primera corrida: status=ok procesados=6 fallidos=0 ms=104
+   saved=3 empty=0 alreadyToday=0 gaps=3 errored=0 transient=0
 
-audience_breakdown (39 filas, scope account, día 2026-09-23)
-  instagram  cafealma           followers  age         25-34    share=—         personas=164000
-  instagram  cafealma           followers  city        Bogotá, Bogota            personas=141000
-  instagram  cafealma           followers  gender      F                         personas=288000
-  tiktok     laura.cocinafacil  followers  country     CO       share=0.820000  personas=—
-  youtube    NutriveOficial     viewers    age_gender  25-34|F  share=0.279000  personas=—
-  youtube    NutriveOficial     viewers    country     CO       share=—         personas=31000
-  …
+audience_breakdown (scope account, 2026-09-23)
+  instagram  cafealma           followers  age         7 buckets
+  instagram  cafealma           followers  city        4 buckets
+  instagram  cafealma           followers  country     3 buckets
+  instagram  cafealma           followers  gender      3 buckets
+  tiktok     laura.cocinafacil  followers  age         5 buckets
+  tiktok     laura.cocinafacil  followers  country     3 buckets
+  tiktok     laura.cocinafacil  followers  gender      3 buckets
+  youtube    NutriveOficial     viewers    age_gender  8 buckets
+  youtube    NutriveOficial     viewers    country     3 buckets
+  total: 39 filas
 
-metric_gap · por qué NO hay demografía
-  instagram/selvathegolden (public_profile) → owner_authorization
-      «Esta cuenta se agregó por su @, y lo que Instagram publica no
-        incluye la audiencia. Para verla, el dueño tiene que autorizar
-        la lectura de sus cifras.»
-  tiktok/laura.personal (direct_oauth) → scope_video_insights
-      «Falta el permiso de analítica de video. Vuelve a conectar la
-        cuenta y acepta el permiso de insights.»
+metric_gap · por qué NO hay demografía, con la frase que lee la persona
+  instagram/selvathegolden (public_profile, active) → owner_authorization
+      «Instagram no publica la audiencia de una cuenta: solo se la
+        entrega a quien la autoriza. Para verla, el dueño tiene que
+        autorizar la lectura de sus cifras.»
+  tiktok/laura.personal (direct_oauth, active) → business_account
+      «La demografía de TikTok solo existe en cuentas Business. Cámbiala
+        en la app de TikTok (Ajustes, Cuenta, Cambiar a cuenta Business)
+        y vuelve a autorizarla; ten en cuenta que una cuenta Business
+        pierde Creator Rewards.»
+  youtube/CanalCaido (direct_oauth, needs_reauth) → owner_authorization
+      «La audiencia de un canal solo sale de YouTube Analytics, y eso
+        exige el permiso del dueño. Para verla, el dueño tiene que
+        autorizar YouTube Analytics.»
 
-api_call_log · a quién se llamó
-  instagram.account.demographics  cafealma           ok=true   (×4, un corte cada una)
-  tiktok.business.get             laura.cocinafacil  ok=true
-  youtube.analytics.query         NutriveOficial     ok=true   (×2)
-  fetch fuera de los fixtures: 0
+api_call_log · a quién se llamó (y a quién NO)
+  instagram.account.demographics     cafealma             ×4
+  tiktok.business.get                laura.cocinafacil    ×1
+  youtube.analytics.query            NutriveOficial       ×2
+
+══ segunda corrida, con el corte por ciudad borrado: status=ok  ms=19
+   saved=1 alreadyToday=2 gaps=3 errored=0 transient=0
+   llamadas nuevas: 1 (solo el corte que faltaba)
+   total sin duplicar: 39 filas
+
+fetch fuera de los fixtures: 0
 ```
 
-Siete llamadas para tres cuentas con dato. **Cero** para las dos que no
-cumplen el prerrequisito, que es el criterio de terminado.
+Siete llamadas para tres cuentas con dato. **Cero** para las tres que no
+cumplen el prerrequisito, que es el criterio de terminado. Y la segunda
+corrida, con un corte borrado a mano, pide **una sola** llamada y no
+duplica ni una fila.
 
 ### 5.2 Pruebas automáticas
 
@@ -414,9 +432,21 @@ cumplen el prerrequisito, que es el criterio de terminado.
 |---|---|
 | La decisión de llamar o no, camino por camino, en 2 s | `apps/worker/test/prerrequisitos-demografia.test.ts` (7) |
 | El job de punta a punta sobre fixtures | `apps/worker/test/collect-demographics.test.ts` (4) |
-| El contrato de lectura, el orden y el aislamiento por RLS | `packages/db/test/demografia.test.ts` (4) |
-| Que la tabla nueva está aislada y `mc_app` no la escribe | `packages/db/test/schema.test.ts` (68, ya existían) |
-| El esquema en Postgres embebido | `make db.check` |
+| El contrato de lectura, el orden y el aislamiento por RLS | `packages/db/test/demografia.test.ts` (5) |
+| Que la tabla nueva está aislada y `mc_app` no la escribe | `packages/db/test/schema.test.ts` (74, ya existían) |
+| El esquema en Postgres embebido | `make db.check`: 35 migraciones, 98 tablas, 248 índices |
+
+Los paquetes, con los archivos definitivos: `@mc/db` **705/705** (107 s),
+`@mc/worker` **69/69** (44 s), `@mc/web` **810/810**, `@mc/connectors`
+**180/180**, `@mc/core` **170/170**, seeds **8/8**, y `next build` de la
+web compila. `typecheck` y `lint` en verde en los cinco paquetes.
+
+**Lo que no se pudo cerrar en una sola invocación** es `pnpm verificar`
+de punta a punta: hay cuatro o cinco sesiones más en esta máquina
+corriendo sus propias suites de Postgres embebido a la vez, y con esa
+carga los `before` que abren la base se pasan de su límite y la suite de
+`@mc/db` se cancela en bloque (`pass 0, cancelled 704`). Corriendo cada
+paquete sin competencia, todo está verde y tarda menos de dos minutos.
 
 ## 6. Qué falta para la prueba en vivo (el bloqueo)
 
