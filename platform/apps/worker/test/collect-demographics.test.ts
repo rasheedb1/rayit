@@ -44,6 +44,12 @@ let h: Harness;
 let guard: NetworkGuard;
 let fetch: FixtureFetch;
 let ids: Record<string, string>;
+/** El id de la conexión sembrada con esa clave. Falla ruidosamente si el seed cambió de nombre. */
+const id = (clave: string): string => {
+  const v = ids[clave];
+  if (v === undefined) throw new Error(`La prueba no sembró la cuenta "${clave}"`);
+  return v;
+};
 
 interface SeedCuenta {
   clave: string;
@@ -132,7 +138,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
     day: string; saved: string[]; gaps: Record<string, string>; alreadyToday: string[]; errored: string[]; transient: string[];
   };
   assert.equal(md.day, DAY);
-  assert.deepEqual([...md.saved].sort(), [ids['ig'], ids['ttBusiness'], ids['yt']].sort());
+  assert.deepEqual([...md.saved].sort(), [id('ig'), id('ttBusiness'), id('yt')].sort());
   assert.deepEqual(md.errored, []);
   assert.deepEqual(md.transient, []);
 
@@ -140,7 +146,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
   const ig = await h.db.query<{ population: string; dimension: string; bucket: string; share: string | null; absolute: string | null; day: string; scope: string; workspace_id: string }>(
     `SELECT population, dimension, bucket, share::text AS share, absolute::text AS absolute, day::text AS day, scope, workspace_id
        FROM audience_breakdown WHERE connection_id = $1 ORDER BY dimension, bucket`,
-    [ids['ig']],
+    [id('ig')],
   );
   assert.equal(ig.rows.length, 17, 'siete tramos de edad, tres géneros, tres países y cuatro ciudades');
   assert.ok(ig.rows.every((r) => r.scope === 'account' && r.day === DAY && r.population === 'followers' && r.workspace_id === WS_A));
@@ -158,7 +164,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
   const yt = await h.db.query<{ dimension: string; population: string; bucket: string; share: string | null; absolute: string | null }>(
     `SELECT dimension, population, bucket, share::text AS share, absolute::text AS absolute
        FROM audience_breakdown WHERE connection_id = $1 ORDER BY dimension, bucket`,
-    [ids['yt']],
+    [id('yt')],
   );
   const edadGenero = yt.rows.filter((r) => r.dimension === 'age_gender');
   assert.equal(edadGenero.length, 8);
@@ -171,7 +177,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
   // --- TikTok Accounts: una llamada, tres dimensiones ---------------
   const tt = await h.db.query<{ dimension: string; bucket: string; share: string | null }>(
     `SELECT dimension, bucket, share::text AS share FROM audience_breakdown WHERE connection_id = $1 ORDER BY dimension, bucket`,
-    [ids['ttBusiness']],
+    [id('ttBusiness')],
   );
   assert.deepEqual([...new Set(tt.rows.map((r) => r.dimension))].sort(), ['age', 'country', 'gender']);
   assert.equal(tt.rows.find((r) => r.dimension === 'country' && r.bucket === 'CO')!.share, '0.820000');
@@ -182,16 +188,16 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
        FROM metric_gap g JOIN metric_requirement r ON r.id = g.requirement_id ORDER BY g.connection_id`,
   );
   const porCuenta = new Map(gaps.rows.map((g) => [g.connection_id, g]));
-  assert.deepEqual([...porCuenta.keys()].sort(), [ids['igPocos'], ids['ttPersonal'], ids['porArroba'], ids['vecina']].sort());
+  assert.deepEqual([...porCuenta.keys()].sort(), [id('igPocos'), id('ttPersonal'), id('porArroba'), id('vecina')].sort());
   assert.ok(gaps.rows.every((g) => g.metric_group === DEMOGRAPHICS_GROUP && g.day === DAY));
 
-  const personal = porCuenta.get(ids['ttPersonal'])!;
+  const personal = porCuenta.get(id('ttPersonal'))!;
   assert.equal(personal.requirement_id, 'tt.insights.scope');
   assert.match(personal.message_es, /permiso de analítica de video/);
-  assert.equal(porCuenta.get(ids['igPocos'])!.requirement_id, 'ig.demographics');
-  assert.match(porCuenta.get(ids['igPocos'])!.message_es, /al menos cien seguidores|cien interacciones/);
-  assert.equal(porCuenta.get(ids['porArroba'])!.requirement, 'owner_authorization');
-  assert.match(porCuenta.get(ids['porArroba'])!.message_es, /el dueño tiene que autorizar/);
+  assert.equal(porCuenta.get(id('igPocos'))!.requirement_id, 'ig.demographics');
+  assert.match(porCuenta.get(id('igPocos'))!.message_es, /al menos cien seguidores|cien interacciones/);
+  assert.equal(porCuenta.get(id('porArroba'))!.requirement, 'owner_authorization');
+  assert.match(porCuenta.get(id('porArroba'))!.message_es, /el dueño tiene que autorizar/);
 
   // --- ninguna llamada de más ---------------------------------------
   const log = await h.db.query<{ endpoint: string; connection_id: string }>(`SELECT endpoint, connection_id FROM api_call_log ORDER BY id`);
@@ -201,7 +207,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
       'tiktok.business.get', 'youtube.analytics.query', 'youtube.analytics.query'],
     'siete llamadas: cuatro cortes de Instagram, una de TikTok y dos de YouTube. Ninguna por una cuenta sin prerrequisito',
   );
-  assert.ok(!log.rows.some((r) => [ids['ttPersonal'], ids['igPocos'], ids['porArroba'], ids['vecina']].includes(r.connection_id)));
+  assert.ok(!log.rows.some((r) => [id('ttPersonal'), id('igPocos'), id('porArroba'), id('vecina')].includes(r.connection_id)));
   assert.equal(guard.attempts, 0);
 
   // --- 5 · dos workspaces, sin cruce --------------------------------
@@ -210,7 +216,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
       WHERE a.workspace_id <> c.workspace_id`,
   );
   assert.equal(cruce.rows[0]!.n, '0', 'cada fila lleva el workspace de SU conexión');
-  assert.equal(porCuenta.get(ids['vecina'])!.workspace_id, WS_B);
+  assert.equal(porCuenta.get(id('vecina'))!.workspace_id, WS_B);
   const deB = await h.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown WHERE workspace_id = $1`, [WS_B]);
   assert.equal(deB.rows[0]!.n, '0', 'la vecina no llegó a tener demografía: su hueco es suyo y las filas de Laura no son suyas');
 
@@ -225,11 +231,11 @@ test('la segunda corrida del mismo día no duplica ni una fila, y no llama a nad
   const antes = fetch.calls.length;
   const filasAntes = await h.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown`);
   // El hueco de la cuenta personal lleva abierto desde el 3 de septiembre.
-  await h.db.query(`UPDATE metric_gap SET day = '2026-09-03', detected_at = '2026-09-03T05:20:00Z' WHERE connection_id = $1`, [ids['ttPersonal']]);
+  await h.db.query(`UPDATE metric_gap SET day = '2026-09-03', detected_at = '2026-09-03T05:20:00Z' WHERE connection_id = $1`, [id('ttPersonal')]);
 
   const md = await correr(h, 'segunda corrida') as { saved: string[]; alreadyToday: string[]; gaps: Record<string, string> };
   assert.deepEqual(md.saved, [], 'no se guarda nada nuevo');
-  assert.deepEqual([...md.alreadyToday].sort(), [ids['ig'], ids['ttBusiness'], ids['yt']].sort());
+  assert.deepEqual([...md.alreadyToday].sort(), [id('ig'), id('ttBusiness'), id('yt')].sort());
   assert.equal(fetch.calls.length, antes, 'cero llamadas: la demografía de hoy ya estaba');
   const filasDespues = await h.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM audience_breakdown`);
   assert.equal(filasDespues.rows[0]!.n, filasAntes.rows[0]!.n);
@@ -237,7 +243,7 @@ test('la segunda corrida del mismo día no duplica ni una fila, y no llama a nad
   // `day` es DESDE cuándo falta, no la última vez que se miró: pisarlo
   // cada mañana convertiría «desde hace tres semanas» en «desde hoy».
   const g = await h.db.query<{ day: string; detected_at: string }>(
-    `SELECT day::text AS day, detected_at::text AS detected_at FROM metric_gap WHERE connection_id = $1`, [ids['ttPersonal']]);
+    `SELECT day::text AS day, detected_at::text AS detected_at FROM metric_gap WHERE connection_id = $1`, [id('ttPersonal')]);
   assert.equal(g.rows[0]!.day, '2026-09-03');
   assert.ok(g.rows[0]!.detected_at > '2026-09-03', 'pero la última comprobación sí se mueve');
 });

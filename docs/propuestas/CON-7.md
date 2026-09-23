@@ -32,7 +32,12 @@ necesita para no pintar una celda vacía.
 | `platform/packages/connectors/fixtures/…` | Tres respuestas grabadas nuevas (Instagram `city`, YouTube canal) |
 | `platform/packages/connectors/src/platforms/youtube-api.ts` | La constante del scope de Analytics (dato del conector, no del job) |
 
-No se toca ninguna pantalla: la demografía en pantalla es RES-4.
+No se toca ninguna pantalla: la demografía en pantalla es RES-4. Y no
+hay Server Action, así que no entra `requirePermission` (ACC-1) ni
+`audit()` (ACC-2): lo que escribe es un job del worker, que mide, y lo
+que añade a `queries/conexiones.ts` son dos funciones de **solo
+lectura** (la prueba de convención de ACC-2 solo alcanza a las que
+escriben).
 
 ### 0.2 Decisiones
 
@@ -252,10 +257,15 @@ ninguna de las dos.
    el worker, que es quien mide; la web solo la lee, como con
    `audience_breakdown` (0025 §5).
 
-Comprobado con `make db.check` (Postgres embebido) y con las 68 pruebas de la guardia de aislamiento de
-`packages/db` (`test/schema.test.ts`), que exige política a toda tabla
-nueva con `workspace_id` y se negaría a pasar si `metric_gap` no la
-tuviera.
+Comprobado con `make db.check` (Postgres embebido: 35 migraciones,
+98 tablas, 248 índices) y con la guardia de aislamiento de `packages/db`
+(`test/schema.test.ts`), que exige política a toda tabla nueva con
+`workspace_id` y se negaría a pasar si `metric_gap` no la tuviera.
+
+**Choque de números.** La rama de ACC-6 trae otra `0034`
+(`membership_scope`) y al integrarse tendrá que moverse; si el
+integrador la pone en `0036`, esta pasa a `0037`. No depende de nada
+posterior a `0011`, así que renumerarla es cambiarle el nombre.
 
 **No hace falta tocar `packages/db/src/schema/`** (tuyo): la guardia no
 exige que una tabla nueva esté en el esquema Drizzle mientras esté
