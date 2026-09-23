@@ -17,6 +17,12 @@
  *     (intOrNull). No son dinero: number está bien.
  *   - Las cifras derivadas salen de las vistas de 0010
  *     (post_metrics_latest, creator_post_board), no de aritmética aquí.
+ *   - Alcance (ACC-6): toda lectura y escritura compone scopeFilter()
+ *     (../scope.ts). Una campaña se acota por su creadora, su marca y
+ *     ella misma; un post por su creadora y, a través de campaign_post,
+ *     por las marcas y campañas que lo asocian. Fuera del alcance es «no
+ *     existe», igual que fuera del workspace. test/alcance-campanas.test.ts
+ *     recorre TODAS las funciones exportadas de este archivo.
  */
 import {
   assertCampaignDates,
@@ -36,6 +42,7 @@ import {
   type SuggestionReason,
 } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
+import { scopeFilter } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -215,13 +222,41 @@ interface RawListRow {
   has_invoice: boolean;
 }
 
+// ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/** La campaña `c`: su creadora, su marca y ella misma. */
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
+
+/** Una factura `i` de la campaña `c` (la creadora llega por la campaña). */
+const SCOPE_INVOICE_OF_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'i.company_id', campaign: 'i.campaign_id' });
+
+/**
+ * Un post: por su creadora, y por marca y campaña a través de las
+ * campañas que lo asocian (campaign_post). Recibe las expresiones del
+ * id y de la creadora porque la vista creator_post_board las llama
+ * post_id / creator_id y la tabla post, id / creator_id.
+ */
+function scopePost(postId: string, creatorId: string): string {
+  return scopeFilter({
+    creator: creatorId,
+    company: { any: `SELECT c2.company_id FROM campaign_post cp2 JOIN campaign c2 ON c2.id = cp2.campaign_id WHERE cp2.post_id = ${postId}` },
+    campaign: { any: `SELECT cp2.campaign_id FROM campaign_post cp2 WHERE cp2.post_id = ${postId}` },
+  });
+}
+
 /** Agregados de posts y facturas, comunes a la lista y a la ficha (con FROM_CAMPAIGN). */
 const CAMPAIGN_AGGREGATES = `
   agg.posts_count, agg.views_total, agg.data_as_of,
-  EXISTS (SELECT 1 FROM invoice i WHERE i.campaign_id = c.id AND i.status <> 'void') AS has_invoice
+  EXISTS (SELECT 1 FROM invoice i WHERE i.campaign_id = c.id AND i.status <> 'void' AND ${SCOPE_INVOICE_OF_CAMPAIGN}) AS has_invoice
 `;
 
-/** Una sola pasada por los posts de cada campaña para contar y sumar views. */
+/**
+ * Una sola pasada por los posts de cada campaña para contar y sumar
+ * views. Solo los posts del alcance: la misma regla que listCampaignPosts,
+ * para que la lista no cuente lo que la ficha no enseña.
+ */
 const FROM_CAMPAIGN = `
   FROM campaign c
   JOIN company co ON co.id = c.company_id
@@ -230,8 +265,9 @@ const FROM_CAMPAIGN = `
            sum(m.views)::text AS views_total,
            ${TS('max(m.captured_at)')} AS data_as_of
     FROM campaign_post cp
+    JOIN post p ON p.id = cp.post_id
     LEFT JOIN post_metrics_latest m ON m.post_id = cp.post_id
-    WHERE cp.campaign_id = c.id
+    WHERE cp.campaign_id = c.id AND ${scopePost('p.id', 'p.creator_id')}
   ) agg ON true
 `;
 
@@ -264,14 +300,14 @@ function toListRow(r: RawListRow): CampaignListRow {
 /** Campañas del workspace, las más recientes primero. */
 export async function listCampaigns(tx: WorkspaceTx, params: ListCampaignsParams = {}): Promise<CampaignListRow[]> {
   const values: unknown[] = [];
-  let where = '';
+  const where = [SCOPE_CAMPAIGN];
   if (params.status) {
     const statuses = Array.isArray(params.status) ? params.status : [params.status];
     values.push(statuses);
-    where = `WHERE c.status = ANY($1::text[])`;
+    where.push(`c.status = ANY($1::text[])`);
   }
   const { rows } = await tx.query<RawListRow>(
-    `${SELECT_LIST} ${where} ORDER BY c.starts_on DESC NULLS LAST, c.created_at DESC, c.name`,
+    `${SELECT_LIST} WHERE ${where.join(' AND ')} ORDER BY c.starts_on DESC NULLS LAST, c.created_at DESC, c.name`,
     values,
   );
   return rows.map(toListRow);
@@ -324,9 +360,9 @@ const SELECT_DETAIL = `
          (SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', i.id, 'number', i.number, 'status', i.status, 'total', i.total::text, 'currency', i.currency)
             ORDER BY i.issued_on DESC, i.number DESC), '[]'::jsonb)
-          FROM invoice i WHERE i.campaign_id = c.id) AS invoices
+          FROM invoice i WHERE i.campaign_id = c.id AND ${SCOPE_INVOICE_OF_CAMPAIGN}) AS invoices
   ${FROM_CAMPAIGN}
-  WHERE c.id = $1
+  WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}
 `;
 
 function toDetail(r: RawDetailRow): CampaignDetail {
@@ -390,9 +426,9 @@ async function requireCampaign(tx: WorkspaceTx, id: string): Promise<CampaignDet
   return c;
 }
 
-/** Existe en este workspace (RLS), sin cargar la ficha entera. */
+/** Existe en este workspace (RLS) y en el alcance, sin cargar la ficha entera. */
 async function assertCampaignExists(tx: WorkspaceTx, id: string): Promise<void> {
-  const { rows } = await tx.query('SELECT 1 FROM campaign WHERE id = $1', [id]);
+  const { rows } = await tx.query(`SELECT 1 FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [id]);
   if (rows.length === 0) throw new CampaignNotFoundError(id);
 }
 
@@ -419,8 +455,10 @@ interface RawPostRow {
 
 /**
  * Posts de la campaña desde creator_post_board (views actuales de
- * post_metrics_latest), unidos a campaign para que RLS aplique.
- * Principal primero, luego por fecha de publicación.
+ * post_metrics_latest), unidos a campaign para que RLS aplique, y solo
+ * los del alcance (un post de otra creadora asociado a esta campaña no
+ * se enseña a quien no la ve). Principal primero, luego por fecha de
+ * publicación.
  */
 export async function listCampaignPosts(tx: WorkspaceTx, campaignId: string): Promise<CampaignPostRow[]> {
   const { rows } = await tx.query<RawPostRow>(
@@ -433,7 +471,7 @@ export async function listCampaignPosts(tx: WorkspaceTx, campaignId: string): Pr
      JOIN campaign_post cp ON cp.campaign_id = c.id
      JOIN creator_post_board b ON b.post_id = cp.post_id
      LEFT JOIN post_metrics_latest m ON m.post_id = b.post_id
-     WHERE c.id = $1
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} AND ${scopePost('b.post_id', 'b.creator_id')}
      ORDER BY cp.is_primary DESC, b.published_at ASC NULLS LAST, b.post_id`,
     [campaignId],
   );
@@ -507,6 +545,7 @@ export async function listLinkablePosts(
             ${TS('b.published_at')} AS published_at, b.views::text AS views
      FROM creator_post_board b
      WHERE NOT EXISTS (SELECT 1 FROM campaign_post cp WHERE cp.campaign_id = $1 AND cp.post_id = b.post_id)
+       AND ${scopePost('b.post_id', 'b.creator_id')}
        ${search}
      ORDER BY b.published_at DESC NULLS LAST, b.post_id
      LIMIT $${values.length}`,
@@ -525,7 +564,7 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
   const { rows: camps } = await tx.query<{ starts_on: string | null; ends_on: string | null; tracking_code: string | null; name: string; socials: unknown }>(
     `SELECT ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, co.name, co.socials
      FROM campaign c JOIN company co ON co.id = c.company_id
-     WHERE c.id = $1`,
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [campaignId],
   );
   const camp = camps[0];
@@ -542,6 +581,7 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
      WHERE b.published_at >= ($2::date - $4::int)::timestamptz
        AND b.published_at < ($3::date + $4::int + 1)::timestamptz
        AND NOT EXISTS (SELECT 1 FROM campaign_post cp WHERE cp.campaign_id = $1 AND cp.post_id = b.post_id)
+       AND ${scopePost('b.post_id', 'b.creator_id')}
      ORDER BY b.published_at ASC, b.post_id`,
     [campaignId, camp.starts_on, camp.ends_on, SUGGESTION_WINDOW_DAYS],
   );
@@ -560,9 +600,12 @@ export async function suggestPosts(tx: WorkspaceTx, campaignId: string): Promise
 // Escritura sobre campaign_post
 // ---------------------------------------------------------------------
 
-/** La campaña existe aquí y admite cambios; bloquea la fila mientras dura la transacción. */
+/** La campaña existe aquí (workspace y alcance) y admite cambios; bloquea la fila mientras dura la transacción. */
 async function lockEditableCampaign(tx: WorkspaceTx, campaignId: string): Promise<CampaignStatus> {
-  const { rows } = await tx.query<{ status: CampaignStatus }>('SELECT status FROM campaign WHERE id = $1 FOR UPDATE', [campaignId]);
+  const { rows } = await tx.query<{ status: CampaignStatus }>(
+    `SELECT c.status FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} FOR UPDATE OF c`,
+    [campaignId],
+  );
   const row = rows[0];
   if (!row) throw new CampaignNotFoundError(campaignId);
   if (!canEditCampaign(row.status)) throw new CampaignLockedError(row.status);
@@ -583,7 +626,7 @@ async function findCampaignPost(tx: WorkspaceTx, campaignId: string, postId: str
  */
 export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, input.campaignId);
-  const post = await tx.query('SELECT 1 FROM post WHERE id = $1', [input.postId]);
+  const post = await tx.query(`SELECT 1 FROM post p WHERE p.id = $1 AND ${scopePost('p.id', 'p.creator_id')}`, [input.postId]);
   if (post.rows.length === 0) throw new PostNotFoundError(input.postId);
 
   const deliverable = input.deliverable?.trim() || null;
@@ -591,7 +634,8 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
     await tx.query(
       `UPDATE campaign_post SET is_primary = false
        FROM campaign c
-       WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id <> $2`,
+       WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id <> $2
+         AND ${SCOPE_CAMPAIGN}`,
       [input.campaignId, input.postId],
     );
   }
@@ -613,6 +657,7 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
     `DELETE FROM campaign_post
      USING campaign c
      WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id = $2
+       AND ${SCOPE_CAMPAIGN}
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
@@ -625,7 +670,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
      FROM campaign c
-     WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1
+     WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND ${SCOPE_CAMPAIGN}
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
@@ -645,7 +690,7 @@ export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId
 export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateCampaignInput): Promise<CampaignDetail> {
   await lockEditableCampaign(tx, id);
   const { rows } = await tx.query<{ starts_on: string | null; ends_on: string | null }>(
-    `SELECT ${DATE('starts_on')} AS starts_on, ${DATE('ends_on')} AS ends_on FROM campaign WHERE id = $1`,
+    `SELECT ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [id],
   );
   const current = rows[0];
@@ -659,14 +704,14 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   if (input.name !== undefined && !name) throw new InvalidNameError();
 
   await tx.query(
-    `UPDATE campaign SET
+    `UPDATE campaign c SET
        name = coalesce($2, name),
        brief = CASE WHEN $3::boolean THEN $4 ELSE brief END,
        starts_on = $5::date,
        ends_on = $6::date,
        tracking_code = CASE WHEN $7::boolean THEN $8 ELSE tracking_code END,
        tracking_url = CASE WHEN $9::boolean THEN $10 ELSE tracking_url END
-     WHERE id = $1`,
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [
       id,
       name ?? null,
@@ -686,14 +731,17 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
  */
 export async function transitionCampaign(tx: WorkspaceTx, id: string, to: CampaignStatus): Promise<CampaignDetail> {
   const { rows } = await tx.query<{ status: CampaignStatus; starts_on: string | null; brand_baseline_from: string | null }>(
-    `SELECT status, ${DATE('starts_on')} AS starts_on, ${DATE('brand_baseline_from')} AS brand_baseline_from
-     FROM campaign WHERE id = $1 FOR UPDATE`,
+    `SELECT c.status, ${DATE('c.starts_on')} AS starts_on, ${DATE('c.brand_baseline_from')} AS brand_baseline_from
+     FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} FOR UPDATE OF c`,
     [id],
   );
   const row = rows[0];
   if (!row) throw new CampaignNotFoundError(id);
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
-  await tx.query('UPDATE campaign SET status = $2, brand_baseline_from = $3::date WHERE id = $1', [id, result.status, result.brandBaselineFrom]);
+  await tx.query(
+    `UPDATE campaign c SET status = $2, brand_baseline_from = $3::date WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
+    [id, result.status, result.brandBaselineFrom],
+  );
   return requireCampaign(tx, id);
 }
 
@@ -772,7 +820,10 @@ interface RawQuoteRow {
  *     'campaign-from-quote:' || quote_id) y el índice único parcial de
  *     0016 lo garantiza en la base para cualquier escritor. Una campaña
  *     cancelada libera la cotización: se puede crear otra.
- *   - RLS: una cotización de otro workspace es QuoteNotFoundError.
+ *   - RLS: una cotización de otro workspace es QuoteNotFoundError. Y el
+ *     alcance (ACC-6): una cotización cuya creadora o marca no caen en
+ *     el alcance de quien acepta, o cualquiera bajo alcance por campaña
+ *     (una campaña nueva no está en ninguna lista), también.
  *   - Valida antes de escribir: InvalidDatesError (fechas), InvalidNameError
  *     (name en blanco), QuoteNotFoundError, QuoteNotAcceptedError. Todos
  *     con messageEs.
@@ -793,7 +844,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
             (SELECT qi.description FROM quote_item qi WHERE qi.quote_id = q.id ORDER BY qi.position, qi.id LIMIT 1) AS first_item
      FROM quote q
      JOIN company co ON co.id = q.company_id
-     WHERE q.id = $1`,
+     WHERE q.id = $1 AND ${scopeFilter({ creator: 'q.creator_id', company: 'q.company_id', campaign: null })}`,
     [input.quoteId],
   );
   const q = rows[0];
@@ -806,7 +857,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   // con él y pueda devolver la campaña de la primera.
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${q.id}`]);
   const existing = await tx.query<{ id: string }>(
-    "SELECT id FROM campaign WHERE quote_id = $1 AND status <> 'cancelled' ORDER BY created_at LIMIT 1",
+    `SELECT c.id FROM campaign c WHERE c.quote_id = $1 AND c.status <> 'cancelled' AND ${SCOPE_CAMPAIGN} ORDER BY c.created_at LIMIT 1`,
     [q.id],
   );
   const existingId = existing.rows[0]?.id;

@@ -9,10 +9,48 @@
  *   - Las fechas timestamptz se devuelven como ISO 8601 (UTC).
  *   - Los tokens NUNCA pasan por aquí: solo `secret_ref`. Quien los
  *     guarda es el SecretStore de @mc/connectors, en la misma transacción.
+ *   - Alcance (ACC-6): toda lectura y escritura compone scopeFilter()
+ *     (../scope.ts). Una cuenta es de una creadora: se acota por
+ *     creator_id y NO tiene camino a una marca ni a una campaña, así que
+ *     quien tenga alcance por marca o por campaña no ve cuentas (ni
+ *     perfiles de creador). Consentimientos y snapshots llegan por su
+ *     cuenta. Fuera del alcance es «no existe», igual que fuera del
+ *     workspace. test/alcance-conexiones.test.ts recorre TODAS las
+ *     funciones exportadas de este archivo.
  *
  * TODO(CIM-3): `getDefaultCreatorId` saldrá de la sesión.
  */
 import type { WorkspaceTx } from '../client.ts';
+import { scopeFilter } from '../scope.ts';
+
+// ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/** La cuenta `c` (social_connection o connection_health): solo por su creadora. */
+const SCOPE_CONNECTION = scopeFilter({ creator: 'c.creator_id', company: null, campaign: null });
+
+/** El perfil de creador `cp`: él mismo. */
+const SCOPE_CREATOR = scopeFilter({ creator: 'cp.id', company: null, campaign: null });
+
+/** Una fila `x` (consentimiento, snapshot) que cuelga de una cuenta: por la creadora de la cuenta. */
+const SCOPE_BY_CONNECTION = scopeFilter({
+  creator: '(SELECT c.creator_id FROM social_connection c WHERE c.id = x.connection_id)',
+  company: null,
+  campaign: null,
+});
+
+/** La cuenta existe en este workspace y en el alcance; si no, ConnectionNotFound. */
+async function assertConnectionInScope(tx: WorkspaceTx, id: string): Promise<void> {
+  const { rows } = await tx.query(`SELECT 1 FROM social_connection c WHERE c.id = $1 AND ${SCOPE_CONNECTION}`, [id]);
+  if (rows.length === 0) throw new ConnectionNotFound(id);
+}
+
+/** El perfil de creador existe en este workspace y en el alcance; si no, CreatorNotInWorkspace. */
+async function assertCreatorInScope(tx: WorkspaceTx, creatorId: string): Promise<void> {
+  const { rows } = await tx.query(`SELECT 1 FROM creator_profile cp WHERE cp.id = $1 AND ${SCOPE_CREATOR}`, [creatorId]);
+  if (rows.length === 0) throw new CreatorNotInWorkspace(creatorId);
+}
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -167,7 +205,7 @@ function numOrNull(v: string | number | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Conexiones vivas del workspace sobre la vista connection_health (0010), con los datos de la fila que la vista no expone. */
+/** Conexiones vivas del workspace, dentro del alcance, sobre la vista connection_health (0010), con los datos de la fila que la vista no expone. */
 export async function listConnections(tx: WorkspaceTx): Promise<ConnectionListRow[]> {
   const { rows } = await tx.query<ListRow>(
     `SELECT h.id, h.platform_id, c.external_account_id, h.handle, c.display_name, c.avatar_url, c.profile_url,
@@ -176,6 +214,7 @@ export async function listConnections(tx: WorkspaceTx): Promise<ConnectionListRo
             h.consecutive_failures, h.posts_tracked, h.failed_calls_24h
        FROM connection_health h
        JOIN social_connection c ON c.id = h.id
+      WHERE ${SCOPE_CONNECTION}
       ORDER BY h.platform_id, c.connected_at DESC`,
   );
   return rows.map((r) => ({
@@ -209,16 +248,24 @@ export async function listConnections(tx: WorkspaceTx): Promise<ConnectionListRo
  */
 export async function findConnectionByAccount(tx: WorkspaceTx, platformId: ConnectionPlatformId, externalAccountId: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
-    `SELECT id, secret_ref, deleted_at, status FROM social_connection WHERE platform_id = $1 AND external_account_id = $2`,
+    `SELECT c.id, c.secret_ref, c.deleted_at, c.status FROM social_connection c
+      WHERE c.platform_id = $1 AND c.external_account_id = $2 AND ${SCOPE_CONNECTION}`,
     [platformId, externalAccountId],
   );
   const r = rows[0];
   return r ? { id: r.id, secretRef: r.secret_ref, deletedAt: iso(r.deleted_at), status: r.status } : null;
 }
 
-/** TODO(CIM-3): el creador vendrá de la sesión. Hoy, el perfil del workspace actual (RLS lo filtra). */
+/**
+ * TODO(CIM-3): el creador vendrá de la sesión. Hoy, el primer perfil del
+ * workspace actual (RLS lo filtra) DENTRO del alcance: el mánager con
+ * alcance a Camilo agrega cuentas de Camilo sin que la pantalla sepa de
+ * alcance. Sin ninguno en alcance, NoCreatorProfile.
+ */
 export async function getDefaultCreatorId(tx: WorkspaceTx): Promise<string> {
-  const { rows } = await tx.query<{ id: string }>(`SELECT id FROM creator_profile ORDER BY created_at ASC LIMIT 1`);
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT cp.id FROM creator_profile cp WHERE cp.deleted_at IS NULL AND ${SCOPE_CREATOR} ORDER BY cp.created_at ASC LIMIT 1`,
+  );
   const id = rows[0]?.id;
   if (!id) throw new NoCreatorProfile();
   return id;
@@ -226,7 +273,8 @@ export async function getDefaultCreatorId(tx: WorkspaceTx): Promise<string> {
 
 export async function listConsents(tx: WorkspaceTx, connectionId: string): Promise<ConsentRow[]> {
   const { rows } = await tx.query<{ id: string; purpose: ConsentPurpose; granted: boolean; granted_at: string | Date; revoked_at: string | Date | null; policy_version: string }>(
-    `SELECT id, purpose, granted, granted_at, revoked_at, policy_version FROM data_consent WHERE connection_id = $1 ORDER BY granted_at ASC, purpose`,
+    `SELECT x.id, x.purpose, x.granted, x.granted_at, x.revoked_at, x.policy_version FROM data_consent x
+      WHERE x.connection_id = $1 AND ${SCOPE_BY_CONNECTION} ORDER BY x.granted_at ASC, x.purpose`,
     [connectionId],
   );
   return rows.map((r) => ({ id: r.id, purpose: r.purpose, granted: r.granted, grantedAt: iso(r.granted_at)!, revokedAt: iso(r.revoked_at), policyVersion: r.policy_version }));
@@ -243,9 +291,9 @@ export async function listConsents(tx: WorkspaceTx, connectionId: string): Promi
  */
 export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionInput): Promise<UpsertConnectionResult> {
   // La FK a creator_profile se comprueba por debajo de RLS: sin esto, un
-  // workspace podría colgar su conexión del creador de otro.
-  const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
-  if (creator.rows.length === 0) throw new CreatorNotInWorkspace(input.creatorId);
+  // workspace podría colgar su conexión del creador de otro. Y del
+  // alcance: nadie conecta la cuenta de una creadora que no ve.
+  await assertCreatorInScope(tx, input.creatorId);
   const { rows } = await tx.query<{ id: string; created: boolean }>(
     `INSERT INTO social_connection
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
@@ -285,6 +333,8 @@ export async function upsertConnection(tx: WorkspaceTx, input: UpsertConnectionI
  * una sola activa.
  */
 export async function recordConsent(tx: WorkspaceTx, input: RecordConsentInput): Promise<string> {
+  await assertConnectionInScope(tx, input.connectionId);
+  await assertCreatorInScope(tx, input.creatorId);
   await tx.query(
     `UPDATE data_consent SET revoked_at = now() WHERE connection_id = $1 AND purpose = $2 AND revoked_at IS NULL`,
     [input.connectionId, input.purpose],
@@ -306,10 +356,10 @@ export const DISCONNECTED_DETAIL_ES = 'Desconectada por el creador.';
  */
 export async function disconnectConnection(tx: WorkspaceTx, id: string): Promise<{ id: string; secretRef: string }> {
   const { rows } = await tx.query<{ secret_ref: string }>(
-    `UPDATE social_connection
+    `UPDATE social_connection c
         SET deleted_at = now(), status = 'disabled', status_detail = $2
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING secret_ref`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
+      RETURNING c.secret_ref`,
     [id, DISCONNECTED_DETAIL_ES],
   );
   const secretRef = rows[0]?.secret_ref;
@@ -352,8 +402,7 @@ export function publicSecretRef(platformId: ConnectionPlatformId, handle: string
  * access_mode 'public_profile' y sin tokens.
  */
 export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountInput): Promise<UpsertConnectionResult> {
-  const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
-  if (creator.rows.length === 0) throw new CreatorNotInWorkspace(input.creatorId);
+  await assertCreatorInScope(tx, input.creatorId);
   const { rows } = await tx.query<{ id: string; created: boolean }>(
     `INSERT INTO social_connection
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
@@ -404,6 +453,7 @@ export interface AccountSnapshotInput {
 export type AccountSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
 
 export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnapshotInput): Promise<AccountSnapshotOutcome> {
+  await assertConnectionInScope(tx, input.connectionId);
   const inserted = await tx.query(
     `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views, raw, source)
      VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
@@ -450,7 +500,7 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
           ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
-      WHERE c.deleted_at IS NULL`,
+      WHERE c.deleted_at IS NULL AND ${SCOPE_CONNECTION}`,
     [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
   const extra = new Map(rows.map((r) => [r.id, r]));
@@ -466,15 +516,22 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
   });
 }
 
-/** Anota un fallo de lectura pública sin tocar las filas históricas. `permanent` pasa la cuenta a 'error'. */
+/**
+ * Anota un fallo de lectura pública sin tocar las filas históricas.
+ * `permanent` pasa la cuenta a 'error'. Si la cuenta no está viva en este
+ * workspace y en el alcance, ConnectionNotFound: un fallo que no se
+ * anota en ninguna parte no es un fallo silencioso aceptable.
+ */
 export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<void> {
-  await tx.query(
-    `UPDATE social_connection
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE social_connection c
         SET last_error_at = now(), consecutive_failures = consecutive_failures + 1, status_detail = $2,
             status = CASE WHEN $3 THEN 'error' ELSE status END
-      WHERE id = $1 AND deleted_at IS NULL`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
+      RETURNING c.id`,
     [connectionId, detailEs, permanent],
   );
+  if (rows.length === 0) throw new ConnectionNotFound(connectionId);
 }
 
 // ---------------------------------------------------------------------
@@ -487,8 +544,9 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
-    `SELECT id, secret_ref, deleted_at, status FROM social_connection
-      WHERE platform_id = $1 AND access_mode = 'public_profile' AND deleted_at IS NULL AND lower(handle) = lower($2)`,
+    `SELECT c.id, c.secret_ref, c.deleted_at, c.status FROM social_connection c
+      WHERE c.platform_id = $1 AND c.access_mode = 'public_profile' AND c.deleted_at IS NULL AND lower(c.handle) = lower($2)
+        AND ${SCOPE_CONNECTION}`,
     [platformId, handle],
   );
   const r = rows[0];
@@ -517,26 +575,32 @@ export interface UpgradeToOAuthInput {
  * autorización anterior), se desactiva para no chocar con el UNIQUE.
  */
 export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, input: UpgradeToOAuthInput): Promise<void> {
+  // Primero, que la cuenta por @ exista aquí y en el alcance: nada de lo
+  // que sigue toca una fila que quien autoriza no ve.
+  await assertConnectionInScope(tx, id);
   // El UNIQUE (platform_id, external_account_id, workspace_id) cuenta también
   // las filas con deleted_at: la fila anterior con ese open_id se retira y su
-  // id externo se marca como sustituido para liberar la clave.
+  // id externo se marca como sustituido para liberar la clave. Solo si es
+  // de una creadora del alcance; si no, el UNIQUE la protege y la
+  // autorización falla en la base en vez de retirar una cuenta ajena.
   await tx.query(
-    `UPDATE social_connection
+    `UPDATE social_connection c
         SET deleted_at = COALESCE(deleted_at, now()), status = 'disabled',
             status_detail = 'Reemplazada por la cuenta agregada por @ al autorizarla.',
             external_account_id = external_account_id || '~sustituida~' || left(id::text, 8)
-      WHERE platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND external_account_id = $2 AND id <> $1`,
+      WHERE c.platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND c.external_account_id = $2 AND c.id <> $1
+        AND ${SCOPE_CONNECTION}`,
     [id, input.externalAccountId],
   );
   const { rows } = await tx.query<{ id: string }>(
-    `UPDATE social_connection
+    `UPDATE social_connection c
         SET external_account_id = $2, handle = COALESCE($3, handle), display_name = COALESCE($4, display_name),
             avatar_url = COALESCE($5, avatar_url), profile_url = COALESCE($6, profile_url), account_type = $7,
             secret_ref = $8, scopes = $9::text[], access_expires_at = $10, refresh_expires_at = $11,
             access_mode = 'direct_oauth', status = 'active', status_detail = NULL, last_error_at = NULL, consecutive_failures = 0,
             connected_at = COALESCE($12, now())
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
+      RETURNING c.id`,
     [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
   );
   if (rows.length === 0) throw new ConnectionNotFound(id);

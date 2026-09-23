@@ -11,6 +11,14 @@
  *     depender de la zona horaria del driver.
  *   - `overdue` no se persiste: se deriva (packages/core deriveStatus) y
  *     la vista receivables ya lo hace con aging_bucket.
+ *   - Alcance (ACC-6): toda lectura y escritura compone scopeFilter()
+ *     (../scope.ts). Una factura se acota por su marca, su campaña y, a
+ *     través de la campaña, su creadora: una factura sin campaña no es
+ *     de ninguna creadora y no la ve quien tenga alcance por creador.
+ *     Los pagos y la reserva de impuestos llegan por su factura. Las
+ *     marcas (company_link) por las campañas que tienen con la creadora
+ *     o la campaña del alcance. test/alcance-finanzas.test.ts recorre
+ *     TODAS las funciones exportadas de este archivo.
  */
 import {
   addDays,
@@ -30,6 +38,7 @@ import {
 } from '@mc/core';
 import { getWorkspaceSettings } from './cimientos.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
+import { assertScopeAllows, scopeFilter } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -138,6 +147,50 @@ export class InvoiceNotFound extends Error {
     this.name = 'InvoiceNotFound';
   }
 }
+
+// ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/** La factura `i` con su campaña `ca` (LEFT JOIN): la creadora llega por la campaña. */
+const SCOPE_INVOICE = scopeFilter({ creator: 'ca.creator_id', company: 'i.company_id', campaign: 'i.campaign_id' });
+
+/** La fila `r` de la vista receivables (no expone la creadora: se busca en su campaña). */
+const SCOPE_RECEIVABLE = scopeFilter({
+  creator: '(SELECT c.creator_id FROM campaign c WHERE c.id = r.campaign_id)',
+  company: 'r.company_id',
+  campaign: 'r.campaign_id',
+});
+
+/** El pago `p`, por su factura. Un pago sin factura no cae en ningún alcance. */
+const SCOPE_PAYMENT = scopeFilter({
+  creator: '(SELECT c.creator_id FROM invoice i JOIN campaign c ON c.id = i.campaign_id WHERE i.id = p.invoice_id)',
+  company: '(SELECT i.company_id FROM invoice i WHERE i.id = p.invoice_id)',
+  campaign: '(SELECT i.campaign_id FROM invoice i WHERE i.id = p.invoice_id)',
+});
+
+/** La reserva `t`, por su pago → su factura. */
+const SCOPE_TAX_RESERVE = scopeFilter({
+  creator: '(SELECT c.creator_id FROM payment p JOIN invoice i ON i.id = p.invoice_id JOIN campaign c ON c.id = i.campaign_id WHERE p.id = t.payment_id)',
+  company: '(SELECT i.company_id FROM payment p JOIN invoice i ON i.id = p.invoice_id WHERE p.id = t.payment_id)',
+  campaign: '(SELECT i.campaign_id FROM payment p JOIN invoice i ON i.id = p.invoice_id WHERE p.id = t.payment_id)',
+});
+
+/** La campaña `ca`: su creadora, su marca y ella misma. */
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'ca.creator_id', company: 'ca.company_id', campaign: 'ca.id' });
+
+/**
+ * La marca vinculada `l` (company_link). Es la única derivación que va
+ * del padre al hijo: con alcance por creadora o por campaña, la marca
+ * se ve si tiene una campaña de esa creadora o esa campaña. Ocultarlas
+ * todas dejaría sin marca a la factura de una campaña que sí se ve;
+ * enseñarlas todas es lo que AGE-4 quiere acotar.
+ */
+const SCOPE_COMPANY_LINK = scopeFilter({
+  creator: { any: 'SELECT c.creator_id FROM campaign c WHERE c.company_id = l.company_id' },
+  company: 'l.company_id',
+  campaign: { any: 'SELECT c.id FROM campaign c WHERE c.company_id = l.company_id' },
+});
 
 // ---------------------------------------------------------------------
 // Lectura
@@ -251,7 +304,7 @@ function decodeCursor(cursor: string): { issuedOn: string; number: string } {
  */
 export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams = {}): Promise<ListInvoicesResult> {
   const limit = Math.min(200, Math.max(1, params.limit ?? 50));
-  const where: string[] = [];
+  const where: string[] = [SCOPE_INVOICE];
   const values: unknown[] = [];
 
   if (params.status) {
@@ -271,7 +324,7 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
   values.push(limit + 1);
 
   const sql = `${SELECT_INVOICE}
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    WHERE ${where.join(' AND ')}
     ORDER BY i.issued_on DESC, i.number DESC
     LIMIT $${values.length}`;
   const { rows } = await tx.query<RawRow>(sql, values);
@@ -287,17 +340,18 @@ export async function listInvoices(tx: WorkspaceTx, params: ListInvoicesParams =
  */
 export async function getInvoice(tx: WorkspaceTx, id: string): Promise<InvoiceDetail | null> {
   if (!isUuid(id)) return null;
-  const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1`, [id]);
+  const { rows } = await tx.query<RawRow>(`${SELECT_INVOICE} WHERE i.id = $1 AND ${SCOPE_INVOICE}`, [id]);
   const r = rows[0];
   return r ? toDetail(r) : null;
 }
 
-/** Empresas vinculadas al workspace (company_link tiene RLS; company no). */
+/** Empresas vinculadas al workspace (company_link tiene RLS; company no), dentro del alcance. */
 export async function listCompanies(tx: WorkspaceTx): Promise<CompanyOption[]> {
   const { rows } = await tx.query<CompanyOption>(`
     SELECT c.id, c.name
     FROM company_link l
     JOIN company c ON c.id = l.company_id
+    WHERE ${SCOPE_COMPANY_LINK}
     ORDER BY c.name
   `);
   return rows;
@@ -313,7 +367,7 @@ export async function listCampaignsForInvoice(tx: WorkspaceTx): Promise<Campaign
            ca.amount::text, ca.currency, ca.quote_id
     FROM campaign ca
     JOIN company co ON co.id = ca.company_id
-    WHERE ca.status <> 'cancelled'
+    WHERE ca.status <> 'cancelled' AND ${SCOPE_CAMPAIGN}
     ORDER BY ca.starts_on DESC NULLS LAST, ca.name
   `);
   return rows.map((r) => ({
@@ -322,32 +376,35 @@ export async function listCampaignsForInvoice(tx: WorkspaceTx): Promise<Campaign
   }));
 }
 
-/** Los cuatro KPIs de Finanzas, desde la vista receivables, payment y tax_reserve. */
+/** Los cuatro KPIs de Finanzas, desde la vista receivables, payment y tax_reserve, dentro del alcance. */
 export async function getReceivablesKpis(tx: WorkspaceTx): Promise<ReceivablesKpis> {
   const { rows } = await tx.query<{
     outstanding: string; open_count: number; overdue: string; overdue_count: number; max_days_overdue: number;
     collected_ytd: string; collected_prev: string; delta_permille: number | null; tax_reserved: string; tax_rate: string | null;
   }>(`
-    WITH ytd AS (
-      SELECT coalesce(sum(amount), 0) AS v FROM payment
-      WHERE direction = 'in' AND received_at >= date_trunc('year', CURRENT_DATE)
+    WITH mias AS (
+      SELECT r.* FROM receivables r WHERE ${SCOPE_RECEIVABLE}
+    ), ytd AS (
+      SELECT coalesce(sum(p.amount), 0) AS v FROM payment p
+      WHERE p.direction = 'in' AND p.received_at >= date_trunc('year', CURRENT_DATE) AND ${SCOPE_PAYMENT}
     ), prev AS (
-      SELECT coalesce(sum(amount), 0) AS v FROM payment
-      WHERE direction = 'in'
-        AND received_at >= date_trunc('year', CURRENT_DATE) - interval '1 year'
-        AND received_at < (CURRENT_DATE - interval '1 year') + interval '1 day'
+      SELECT coalesce(sum(p.amount), 0) AS v FROM payment p
+      WHERE p.direction = 'in'
+        AND p.received_at >= date_trunc('year', CURRENT_DATE) - interval '1 year'
+        AND p.received_at < (CURRENT_DATE - interval '1 year') + interval '1 day'
+        AND ${SCOPE_PAYMENT}
     )
     SELECT
-      (SELECT coalesce(sum(outstanding), 0)::text FROM receivables WHERE status <> 'paid') AS outstanding,
-      (SELECT count(*)::int FROM receivables WHERE status <> 'paid') AS open_count,
-      (SELECT coalesce(sum(outstanding), 0)::text FROM receivables WHERE aging_bucket = 'vencida') AS overdue,
-      (SELECT count(*)::int FROM receivables WHERE aging_bucket = 'vencida') AS overdue_count,
-      (SELECT coalesce(max(days_overdue), 0)::int FROM receivables WHERE aging_bucket = 'vencida') AS max_days_overdue,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM mias WHERE status <> 'paid') AS outstanding,
+      (SELECT count(*)::int FROM mias WHERE status <> 'paid') AS open_count,
+      (SELECT coalesce(sum(outstanding), 0)::text FROM mias WHERE aging_bucket = 'vencida') AS overdue,
+      (SELECT count(*)::int FROM mias WHERE aging_bucket = 'vencida') AS overdue_count,
+      (SELECT coalesce(max(days_overdue), 0)::int FROM mias WHERE aging_bucket = 'vencida') AS max_days_overdue,
       (SELECT v::text FROM ytd) AS collected_ytd,
       (SELECT v::text FROM prev) AS collected_prev,
       (SELECT CASE WHEN prev.v > 0 THEN round((ytd.v / prev.v - 1) * 1000)::int END FROM ytd, prev) AS delta_permille,
-      (SELECT coalesce(sum(amount), 0)::text FROM tax_reserve WHERE released_at IS NULL) AS tax_reserved,
-      (SELECT max(rate)::text FROM tax_reserve WHERE released_at IS NULL) AS tax_rate
+      (SELECT coalesce(sum(t.amount), 0)::text FROM tax_reserve t WHERE t.released_at IS NULL AND ${SCOPE_TAX_RESERVE}) AS tax_reserved,
+      (SELECT max(t.rate)::text FROM tax_reserve t WHERE t.released_at IS NULL AND ${SCOPE_TAX_RESERVE}) AS tax_rate
   `);
   const r = rows[0];
   if (!r) throw new Error('La consulta de KPIs no devolvió filas.');
@@ -400,14 +457,24 @@ export async function createInvoice(tx: WorkspaceTx, input: CreateInvoiceInput):
   });
 
   // La empresa tiene que estar vinculada a ESTE workspace: la FK de
-  // invoice.company_id no lo garantiza, company_link (con RLS) sí.
-  const link = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
+  // invoice.company_id no lo garantiza, company_link (con RLS) sí. Y
+  // dentro del alcance de quien factura.
+  const link = await tx.query(`SELECT 1 FROM company_link l WHERE l.company_id = $1 AND ${SCOPE_COMPANY_LINK}`, [input.companyId]);
   if (link.rows.length === 0) throw new Error('La empresa no existe en este workspace.');
 
+  let creatorId: string | null = null;
   if (input.campaignId) {
-    const camp = await tx.query('SELECT 1 FROM campaign WHERE id = $1', [input.campaignId]);
+    const camp = await tx.query<{ creator_id: string | null }>(
+      `SELECT ca.creator_id FROM campaign ca WHERE ca.id = $1 AND ${SCOPE_CAMPAIGN}`,
+      [input.campaignId],
+    );
     if (camp.rows.length === 0) throw new Error('La campaña no existe en este workspace.');
+    creatorId = camp.rows[0]?.creator_id ?? null;
   }
+  // La factura que se va a crear tiene que caer en el alcance de quien
+  // la crea, o nunca podría verla: sin campaña, no es de ninguna
+  // creadora; bajo alcance por campaña, tiene que ser de una de ellas.
+  await assertScopeAllows(tx, { creator: creatorId, company: input.companyId, campaign: input.campaignId ?? null });
 
   // Es un entero de un formato controlado (YYYY), no dinero.
   const year = parseInt(input.issuedOn.slice(0, 4), 10);
@@ -452,7 +519,10 @@ export async function transitionInvoice(
   input: TransitionInput = {},
 ): Promise<InvoiceDetail> {
   const { rows } = await tx.query<{ status: InvoiceStatus; total: string; paid_amount: string }>(
-    'SELECT status, total::text, paid_amount::text FROM invoice WHERE id = $1 FOR UPDATE',
+    `SELECT i.status, i.total::text, i.paid_amount::text
+     FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+     WHERE i.id = $1 AND ${SCOPE_INVOICE}
+     FOR UPDATE OF i`,
     [id],
   );
   const row = rows[0];
@@ -500,7 +570,7 @@ export async function createInvoiceFromCampaign(
            q.payment_terms_days, to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today
     FROM campaign ca
     LEFT JOIN quote q ON q.id = ca.quote_id
-    WHERE ca.id = $1
+    WHERE ca.id = $1 AND ${SCOPE_CAMPAIGN}
   `, [campaignId]);
   const camp = rows[0];
   if (!camp) throw new Error('La campaña no existe en este workspace.');
