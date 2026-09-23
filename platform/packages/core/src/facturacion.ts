@@ -278,6 +278,278 @@ export function transitionInvoice(
 }
 
 // ---------------------------------------------------------------------
+// Pagos (FIN-2)
+// ---------------------------------------------------------------------
+
+/**
+ * El máximo que cabe en un `numeric(14,2)`. Sin este tope, un monto con
+ * ceros de más viaja hasta Postgres y vuelve como `22003 numeric field
+ * overflow`, que la pantalla convierte en un error genérico sin marcar
+ * ningún campo (docs/propuestas/pendientes-pulido.json, «MONTO_MAXIMO»).
+ *
+ * FIN-2 pone la constante y `AmountOutOfRange` aquí y los aplica en
+ * `applyPayment`. Cotizar (`tarifas.ts`) y Ventas los importan de
+ * `@mc/core` cuando atiendan ese pendiente: una sola definición del
+ * tope, no tres.
+ */
+export const MONTO_MAXIMO: Decimal = '999999999999.99';
+
+/**
+ * Un error de negocio de Finanzas, con el texto ya en español. Misma
+ * forma que `CampaignError` de campanas.ts: las Server Actions lo
+ * distinguen de un fallo de infraestructura y muestran `messageEs` tal
+ * cual, en vez de un genérico.
+ */
+export class InvoiceError extends Error {
+  readonly code: string;
+  constructor(code: string, messageEs: string) {
+    super(messageEs);
+    this.name = code;
+    this.code = code;
+  }
+  /** El mismo texto que `message`, con nombre explícito para las pantallas. */
+  get messageEs(): string {
+    return this.message;
+  }
+}
+
+/** Se intentó cobrar una factura en borrador, pagada o anulada. */
+export class InvoiceNotPayable extends InvoiceError {
+  readonly status: InvoiceStatus;
+  constructor(status: InvoiceStatus) {
+    super(
+      'InvoiceNotPayable',
+      `Una factura ${INVOICE_STATUS_LABEL_ES[status].toLowerCase()} no admite pagos. ` +
+        (status === 'draft'
+          ? 'Márcala enviada primero.'
+          : status === 'paid'
+            ? 'Ya está cobrada por completo.'
+            : 'No hay nada que cobrar.'),
+    );
+    this.status = status;
+  }
+}
+
+/** Un pago de cero o negativo. Una devolución es otra cosa y no existe todavía. */
+export class PaymentAmountInvalid extends InvoiceError {
+  constructor(amount: string) {
+    super('PaymentAmountInvalid', `El monto del pago tiene que ser mayor que cero; recibí «${amount}».`);
+  }
+}
+
+/** El pago pasa de lo que queda por cobrar. Sin sobrepagos en el MVP. */
+export class PaymentExceedsOutstanding extends InvoiceError {
+  readonly outstanding: Decimal;
+  constructor(outstanding: Decimal) {
+    super(
+      'PaymentExceedsOutstanding',
+      `El pago no puede pasar de lo que queda por cobrar (${outstanding}). ` +
+        'Si la marca pagó de más, regístralo por lo que debía y avísanos.',
+    );
+    this.outstanding = outstanding;
+  }
+}
+
+/** Un monto que no cabe en numeric(14,2). */
+export class AmountOutOfRange extends InvoiceError {
+  constructor(amount: string) {
+    super('AmountOutOfRange', `El monto ${amount} pasa del máximo que admite una factura (${MONTO_MAXIMO}).`);
+  }
+}
+
+/** Un cobro fechado mañana no ha ocurrido. */
+export class PaymentDateInFuture extends InvoiceError {
+  constructor(receivedOn: string, today: string) {
+    super('PaymentDateInFuture', `Un cobro no se puede fechar en el futuro: ${receivedOn} es posterior a hoy (${today}).`);
+  }
+}
+
+/**
+ * La factura cambió entre que la pantalla la dibujó y el envío del
+ * formulario: otro pago entró en medio, o es el mismo formulario enviado
+ * dos veces. Ver docs/propuestas/FIN-2.md §0.5.
+ */
+export class InvoicePaymentConflict extends InvoiceError {
+  readonly expected: Decimal;
+  readonly actual: Decimal;
+  constructor(expected: Decimal, actual: Decimal) {
+    super(
+      'InvoicePaymentConflict',
+      `Esta factura cambió mientras registrabas el pago: llevaba ${expected} cobrado y ahora lleva ${actual}. ` +
+        'Recarga la página y comprueba antes de volver a registrarlo.',
+    );
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/** El porcentaje de reserva del workspace existe pero no es un número entre 0 y 100. */
+export class TaxReserveRateInvalid extends InvoiceError {
+  constructor(value: unknown) {
+    super(
+      'TaxReserveRateInvalid',
+      `El porcentaje de reserva de impuestos de este espacio no es válido (${JSON.stringify(value) ?? 'sin valor'}): ` +
+        'tiene que ser un número entre 0 y 100.',
+    );
+  }
+}
+
+/** Los estados desde los que se puede cobrar. `overdue` es derivado, pero se cobra igual. */
+export const PAYABLE_STATUSES: readonly InvoiceStatus[] = ['sent', 'partial', 'overdue'];
+
+/** Cómo entró la plata. Lista cerrada: el seed 0003 usa 'transferencia'. */
+export const PAYMENT_METHODS = ['transferencia', 'efectivo', 'pse', 'tarjeta', 'otro'] as const;
+
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_METHOD_LABEL_ES: Record<PaymentMethod, string> = {
+  transferencia: 'Transferencia',
+  efectivo: 'Efectivo',
+  pse: 'PSE',
+  tarjeta: 'Tarjeta',
+  otro: 'Otro',
+};
+
+export function isPaymentMethod(value: string): value is PaymentMethod {
+  return (PAYMENT_METHODS as readonly string[]).includes(value);
+}
+
+export interface PaymentInput {
+  /** Decimal como string: "1500000" o "1500000.50". */
+  amount: string;
+  /** El día del cobro, 'YYYY-MM-DD', ya en la zona del workspace. */
+  receivedOn: string;
+  /** El instante que se guarda en `payment.received_at` (ISO, UTC). Lo resuelve la consulta. */
+  receivedAt: string;
+  /** Hoy, 'YYYY-MM-DD', en la zona del workspace: un cobro no se fecha en el futuro. */
+  today: string;
+}
+
+export interface PaymentResult {
+  /** El monto normalizado a dos decimales. */
+  amount: Decimal;
+  /** `paid_amount` después del pago. */
+  paidAmount: Decimal;
+  /** Lo que queda por cobrar después del pago. */
+  outstanding: Decimal;
+  /** El estado en que queda la factura. */
+  status: Extract<InvoiceStatus, 'partial' | 'paid'>;
+  /** `paid_at`: el instante del cobro que la deja pagada, o null si solo es un abono. */
+  paidAt: string | null;
+}
+
+/**
+ * Valida un pago contra una factura y calcula en qué la deja. No muta
+ * nada y no toca la base: quien persiste aplica el resultado en la misma
+ * transacción en la que leyó la fila con FOR UPDATE.
+ *
+ * Reglas (docs/propuestas/FIN-2.md §0.2): se cobra sobre `sent`,
+ * `partial` u `overdue`; el monto es mayor que cero y no pasa de lo que
+ * queda por cobrar —sin sobrepagos en el MVP—; si completa el total la
+ * factura queda `paid` con `paid_at = receivedAt`, y si no, `partial`
+ * **sin** tocar `paid_at`: esa columna se lee como «Pagada el …» y la
+ * fecha de un abono del 30 % ahí sería mentira.
+ */
+export function applyPayment(
+  invoice: { status: InvoiceStatus; total: string; paidAmount: string },
+  input: PaymentInput,
+): PaymentResult {
+  if (!PAYABLE_STATUSES.includes(invoice.status)) throw new InvoiceNotPayable(invoice.status);
+  assertIsoDate(input.receivedOn, 'receivedOn');
+  assertIsoDate(input.today, 'today');
+  if (input.receivedOn > input.today) throw new PaymentDateInFuture(input.receivedOn, input.today);
+
+  const max = toCents(MONTO_MAXIMO);
+  const amount = toCents(input.amount);
+  if (amount <= 0n) throw new PaymentAmountInvalid(input.amount);
+  if (amount > max) throw new AmountOutOfRange(normalizeDecimal(input.amount));
+
+  const total = toCents(invoice.total);
+  const already = toCents(invoice.paidAmount);
+  const outstanding = total - already;
+  if (amount > outstanding) throw new PaymentExceedsOutstanding(fromCents(outstanding > 0n ? outstanding : 0n));
+
+  const paid = already + amount;
+  if (paid > max) throw new AmountOutOfRange(fromCents(paid));
+
+  const status = paid === total ? 'paid' : 'partial';
+  return {
+    amount: fromCents(amount),
+    paidAmount: fromCents(paid),
+    outstanding: fromCents(total - paid),
+    status,
+    paidAt: status === 'paid' ? input.receivedAt : null,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Reserva de impuestos
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que se aparta de un cobro, redondeado al centavo mitad hacia
+ * arriba: 3 700 000,00 al 11 % → 407 000,00, que es lo que dice el seed
+ * 0003 §6. La tasa se guarda junto al apartado, así que cuando FIN-8
+ * cambie el porcentaje los apartados anteriores no se recalculan.
+ */
+export function taxReserveFor(amount: Decimal, rate: string): Decimal {
+  return mulRateHalfUp(amount, rate);
+}
+
+/** Una tasa "0.000000" en cualquiera de sus formas. */
+function rateIsZero(rate: string): boolean {
+  return /^0*(\.0*)?$/.test(rate.trim());
+}
+
+/**
+ * La tasa de reserva a partir de `workspace.settings.finanzas.reserva_pct`
+ * (11 en los seeds) → '0.11'.
+ *
+ *   - Ausente, null o 0 → `null`: este espacio no aparta impuestos y no
+ *     se escribe ninguna fila. `workspace.settings` es `{}` por defecto
+ *     (0001), así que un espacio nuevo cae aquí; impedirle cobrar por un
+ *     ajuste que el producto todavía no deja tocar (es FIN-8) sería peor
+ *     que no apartar, y suponer 11 % sería volver a esconder Colombia en
+ *     el código.
+ *   - Presente pero roto (texto, negativo, mayor que 100) →
+ *     `TaxReserveRateInvalid`. Una ausencia es una decisión que nadie ha
+ *     tomado; un valor roto es un error que hay que ver.
+ */
+export function reserveRateFrom(pct: unknown): string | null {
+  if (pct === undefined || pct === null || pct === '') return null;
+  const raw =
+    typeof pct === 'number' ? (Number.isFinite(pct) ? String(pct) : '') : typeof pct === 'string' ? pct.trim() : '';
+  if (raw === '') throw new TaxReserveRateInvalid(pct);
+  let rate: string;
+  try {
+    // El porcentaje se compara en centésimas de punto, sin pasar por number.
+    if (toCents(raw.replace(',', '.')) > toCents('100')) throw new Error('fuera de rango');
+    rate = pctToRate(raw);
+  } catch {
+    throw new TaxReserveRateInvalid(pct);
+  }
+  return rateIsZero(rate) ? null : rate;
+}
+
+/**
+ * El período fiscal de un cobro: '2026-Q3'. Recibe el DÍA del cobro ya
+ * en la zona del workspace ('YYYY-MM-DD'), no un instante: la zona la
+ * resuelve quien lee la fila `workspace`, porque un cobro del 31 de
+ * diciembre a las 20:00 en Bogotá es el 1 de enero en UTC y el creador
+ * lo declara en el trimestre anterior.
+ *
+ * Bordes: '2026-03-31' → '2026-Q1'; '2026-04-01' → '2026-Q2'.
+ */
+export function reservePeriod(receivedOn: string): string {
+  assertIsoDate(receivedOn, 'receivedOn');
+  // Son enteros de un formato ya validado, no dinero.
+  const year = receivedOn.slice(0, 4);
+  const month = parseInt(receivedOn.slice(5, 7), 10);
+  if (month < 1 || month > 12) throw new Error(`Mes inválido en "${receivedOn}".`);
+  return `${year}-Q${Math.ceil(month / 3)}`;
+}
+
+// ---------------------------------------------------------------------
 // Estado derivado
 // ---------------------------------------------------------------------
 
