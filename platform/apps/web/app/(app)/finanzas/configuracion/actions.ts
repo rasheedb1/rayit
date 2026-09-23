@@ -10,9 +10,9 @@ import {
 } from "@mc/core";
 import { updateFinanceSettings } from "@mc/db/queries/finanzas";
 import { firstErrors, formField, type ActionState } from "@/lib/forms";
+import { requirePermission } from "@/lib/permisos";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
-import { exigirConfigurarFinanzas, SinPermisoError } from "../_lib/permiso";
 
 const t = MESSAGES.configuracion;
 
@@ -78,21 +78,17 @@ export interface ConfiguracionState extends ActionState {
 /**
  * Guarda la configuración financiera del workspace.
  *
- * `exigirConfigurarFinanzas()` es la PRIMERA línea a propósito: la
- * pantalla ya no ofrece el formulario a quien no puede, pero eso es
- * cortesía del render. Lo que decide es esto.
+ * El permiso es la PRIMERA línea, antes de validar y antes de abrir
+ * ninguna transacción (ACC-1). Que la pantalla no ofrezca el formulario
+ * a quien no puede es cortesía del render; la que decide es esta línea.
+ * `SinPermisoError` cae en la frontera del segmento, como en las otras
+ * doce acciones de mis módulos: ACC-5 esconde antes lo que no se abre.
  */
 export async function guardarConfiguracion(
   _prev: ConfiguracionState,
   formData: FormData,
 ): Promise<ConfiguracionState> {
-  // TODO(ACC-1): requirePermission('finanzas.ajustes.configurar')
-  try {
-    await exigirConfigurarFinanzas();
-  } catch (err) {
-    if (err instanceof SinPermisoError) return { message: t.errores.sinPermiso };
-    throw err;
-  }
+  await requirePermission("finanzas.ajustes.configurar");
 
   const parsed = esquema.safeParse({
     ivaPct: formField(formData, "ivaPct"),

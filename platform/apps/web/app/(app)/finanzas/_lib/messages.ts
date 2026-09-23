@@ -105,7 +105,6 @@ export const MESSAGES = {
       texto: (max: number) => `No puede pasar de ${max} caracteres.`,
       correo: "Escribe un correo válido, o déjalo vacío.",
       enlace: "Tiene que ser una dirección https://.",
-      sinPermiso: "No tienes permiso para configurar Finanzas en este espacio.",
       general: "No pudimos guardar la configuración. Vuelve a intentarlo.",
     },
   },

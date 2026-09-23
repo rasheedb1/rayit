@@ -1,38 +1,37 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FINANCE_SETTINGS_DEFAULTS, FINANCE_TEXT_MAX } from "@mc/core";
+import { FINANCE_SETTINGS_DEFAULTS, FINANCE_TEXT_MAX, permisosDeRol, SinPermisoError } from "@mc/core";
 
 /**
  * guardarConfiguracion sin base y sin Next: lo que importa aquí es qué
  * NO llega a la base (un porcentaje de 200, un plazo de un año, un
- * enlace http://) y que la compuerta de permiso es lo PRIMERO que corre.
+ * enlace http://) y que el permiso es lo PRIMERO que corre.
+ *
+ * El rol se inyecta sustituyendo lib/permisos/sesion, que es justo el
+ * archivo que ACC-3 va a cambiar: la prueba sigue valiendo cuando los
+ * permisos salgan de role_permission. Es el patrón de
+ * lib/permisos/require-permission.test.ts.
  */
 const withWorkspace = vi.fn();
 const revalidatePath = vi.fn();
 const updateFinanceSettings = vi.fn();
-const puedeConfigurar = vi.fn();
+const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
 
+vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/permisos/sesion")>();
+  return { permisosDeLaSesion: async () => sesion.permisos ?? real.permisosDeLaSesion() };
+});
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (...a: unknown[]) => withWorkspace(...a) }));
 vi.mock("@mc/db/queries/finanzas", () => ({
   updateFinanceSettings: (...a: unknown[]) => updateFinanceSettings(...a),
-  countInvoicesInOtherCurrency: vi.fn(),
 }));
-vi.mock("@/lib/workspace/current", () => ({ getCurrentContext: vi.fn() }));
-
-// La compuerta se sustituye por su respuesta: quién puede lo decide
-// _lib/permiso.ts y eso se prueba aparte (permiso.test.ts).
-vi.mock("../_lib/permiso", async () => {
-  const { SinPermisoError } = await vi.importActual<typeof import("../_lib/permiso")>("../_lib/permiso");
-  return {
-    SinPermisoError,
-    exigirConfigurarFinanzas: async () => {
-      if (!puedeConfigurar()) throw new SinPermisoError();
-    },
-  };
-});
 
 import { guardarConfiguracion } from "./actions";
+
+/** «Mánager» y «Contador» del catálogo de ACC-1, para un workspace de creador. */
+const MANAGER = permisosDeRol("creator", "manager");
+const CONTADOR = permisosDeRol("creator", "finance");
 
 /** El formulario completo, con lo del seed, para cambiarle un campo por prueba. */
 function datos(cambios: Record<string, string> = {}): FormData {
@@ -57,11 +56,10 @@ function datos(cambios: Record<string, string> = {}): FormData {
 }
 
 beforeEach(() => {
+  sesion.permisos = null;
   withWorkspace.mockReset();
   revalidatePath.mockReset();
   updateFinanceSettings.mockReset();
-  puedeConfigurar.mockReset();
-  puedeConfigurar.mockReturnValue(true);
   // withWorkspace(fn) corre fn con un tx de mentira.
   withWorkspace.mockImplementation((fn: (tx: unknown) => unknown) => fn({ workspaceId: "ws" }));
   updateFinanceSettings.mockResolvedValue({
@@ -72,22 +70,31 @@ beforeEach(() => {
   });
 });
 
-describe("guardarConfiguracion · permiso", () => {
-  it("sin el permiso no se abre ninguna transacción ni se guarda nada", async () => {
-    puedeConfigurar.mockReturnValue(false);
-    const r = await guardarConfiguracion({}, datos());
-    expect(r.ok).toBeUndefined();
-    expect(r.message).toBe("No tienes permiso para configurar Finanzas en este espacio.");
+describe("guardarConfiguracion · permiso (ACC-1)", () => {
+  it("el Mánager no tiene finanzas.ajustes.configurar: lanza y no se abre ninguna transacción", async () => {
+    sesion.permisos = MANAGER;
+    const err = await guardarConfiguracion({}, datos()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SinPermisoError);
+    expect((err as SinPermisoError).permiso).toBe("finanzas.ajustes.configurar");
+    expect((err as Error).message).toBe("No tienes permiso para configurar los parámetros financieros.");
     expect(withWorkspace).not.toHaveBeenCalled();
     expect(updateFinanceSettings).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("el permiso se comprueba ANTES de validar: un formulario basura sin permiso dice lo del permiso", async () => {
-    puedeConfigurar.mockReturnValue(false);
-    const r = await guardarConfiguracion({}, datos({ ivaPct: "doscientos", plazoDias: "-5" }));
-    expect(r.errors).toBeUndefined();
-    expect(r.message).toBe("No tienes permiso para configurar Finanzas en este espacio.");
+  it("el permiso se comprueba ANTES de validar: un formulario basura sin permiso lanza igual", async () => {
+    sesion.permisos = MANAGER;
+    await expect(guardarConfiguracion({}, datos({ ivaPct: "doscientos", plazoDias: "-5" }))).rejects.toThrow(
+      SinPermisoError,
+    );
+    expect(updateFinanceSettings).not.toHaveBeenCalled();
+  });
+
+  it("el Contador sí puede: es todo Finanzas (backlog §7, decisión E)", async () => {
+    sesion.permisos = CONTADOR;
+    const r = await guardarConfiguracion({}, datos());
+    expect(r.ok).toBe(true);
+    expect(updateFinanceSettings).toHaveBeenCalledTimes(1);
   });
 });
 

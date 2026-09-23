@@ -112,7 +112,10 @@ opción conservadora: usar la llave que ya existe. Si prefieres el otro
 nombre, se cambia en ACC-1 y aquí es una línea.
 
 **E · ACC-1 y ACC-2 no están en `main`, así que la compuerta es
-provisional y está marcada.** La regla del repo dice `// TODO(ACC-1)`
+provisional y está marcada.** *(Superado: ACC-1 entró a `main` mientras
+esta historia estaba en curso —`88f339e`—. Ver §3.3, que es lo que quedó.
+Se deja escrito el plan original porque explica por qué la decisión D se
+tomó como se tomó.)* La regla del repo dice `// TODO(ACC-1)`
 cuando `requirePermission` no existe todavía. Pero «el Mánager no puede
 abrir la pantalla» es un criterio de TERMINADO de esta historia, y un
 comentario no se puede probar. Solución: `finanzas/_lib/permiso.ts`, 30
@@ -275,16 +278,33 @@ Cuando `packages/db/src/audit.ts` entre a `main`, esas ocho líneas se
 cambian por `audit(tx, { action: 'workspace.settings_updated', … })`. La
 acción hay que agregarla a `AUDIT_ACTIONS` (§2.2).
 
-### 3.3 El permiso, mientras ACC-1 no esté
+### 3.3 El permiso: ACC-1 entró a `main` a mitad de la historia
 
-`apps/web/app/(app)/finanzas/_lib/permiso.ts`, 80 líneas con su JSDoc.
-Hoy: `owner` y `admin` pueden; `member` (el Mánager de hoy), `viewer` y
-`client` no. **Falla cerrado**, y la distinción está escrita a propósito:
-«no hay sesión» (modo demo, sin llaves de Supabase Auth) devuelve `true`
-porque no hay roles que consultar; «hay sesión pero no encuentro mi rol
-en este espacio» devuelve `false`. La primera versión resolvía las dos
-ramas con el mismo `rol === null` y abría la pantalla en las dos: lo
-encontró la prueba, no la revisión.
+El plan (§0.3 E) preveía una compuerta provisional en
+`finanzas/_lib/permiso.ts` porque ACC-1 no estaba en `main`. Entró
+mientras tanto (`88f339e`), así que **esa compuerta se borró** y la
+historia usa la API de verdad. La decisión D resultó ser la correcta: el
+permiso del catálogo se llama `finanzas.ajustes.configurar`, y escribir
+`finanzas.configuracion.editar` habría sido un error de tipos el día del
+rebase.
+
+- `guardarConfiguracion` abre con
+  `await requirePermission("finanzas.ajustes.configurar")` como primera
+  línea de código, y `lib/permisos/convencion.test.ts` —la prueba
+  estática de ACC-1— lo comprueba sola. `SinPermisoError` cae en la
+  frontera del segmento, igual que en las otras doce acciones de mis
+  módulos.
+- La pantalla pregunta el mismo permiso y, si no lo tiene, explica en vez
+  de reventar. Lleva `// TODO(ACC-5): requireModule("finanzas",
+  "finanzas.ajustes.configurar")`, que responderá `notFound()`.
+- Las pruebas del rol inyectan el permiso sustituyendo
+  `@/lib/permisos/sesion` —el archivo que ACC-3 va a cambiar—, que es el
+  patrón de `lib/permisos/require-permission.test.ts`: el «Mánager»
+  lanza, el «Contador» pasa.
+
+Lo que sí sigue provisional es la bitácora: `packages/db/src/audit.ts`
+(ACC-2) no está en `main`, así que el `INSERT INTO audit_log` se queda
+donde está con su `// TODO(ACC-2)` (§3.2 y §2.2).
 
 ### 3.4 Lo que NO hice, y de quién es
 
@@ -293,7 +313,7 @@ encontró la prueba, no la revisión.
 | `REVOKE UPDATE, DELETE ON tax_reserve FROM mc_app` | CIM / endurecimiento (§2.3) |
 | Unificar `settings.taxRate` con `settings.finanzas.iva_pct` | Rasheed, Cotizar (§2.1) |
 | `audit()` de verdad y la acción nueva | ACC-2 (§2.2) |
-| `requirePermission()` de verdad | ACC-1 (§0.3 D) |
+| `requireModule()` en la pantalla, que responda 404 | ACC-5 |
 | Facturación electrónica (DIAN), multimoneda con conversión, liberar reservas por periodo | Fuera de alcance (fase 2) |
 
 ### 3.5 Revisión (R9)

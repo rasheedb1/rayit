@@ -4,13 +4,28 @@ import { countLiveInvoicesInCurrency, getFinanceSettings } from "@mc/db/queries/
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { requirePermission, SinPermisoError } from "@/lib/permisos";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
-import { puedeConfigurarFinanzas } from "../_lib/permiso";
 import { ConfiguracionForm } from "./form";
 
 const t = MESSAGES.configuracion;
+
+/**
+ * El mismo permiso que exige la Server Action, en forma de booleano para
+ * poder pintar una explicación en vez de reventar en error.tsx.
+ * `requirePermission` lanza; aquí solo interesa si pasa.
+ */
+async function puedeConfigurar(): Promise<boolean> {
+  try {
+    await requirePermission("finanzas.ajustes.configurar");
+    return true;
+  } catch (err) {
+    if (err instanceof SinPermisoError) return false;
+    throw err;
+  }
+}
 
 export const metadata: Metadata = { title: t.meta };
 // Lee la sesión y la base en cada petición: nada de esto se prerenderiza.
@@ -31,8 +46,11 @@ export const dynamic = "force-dynamic";
  * en el render no es una comprobación.
  */
 export default async function ConfiguracionFinancieraPage() {
-  // TODO(ACC-1): requirePermission('finanzas.ajustes.configurar')
-  if (!(await puedeConfigurarFinanzas())) {
+  // TODO(ACC-5): requireModule("finanzas", "finanzas.ajustes.configurar"),
+  // que responde notFound() para no confirmar siquiera que la pantalla
+  // existe. Mientras tanto se explica, que es mejor producto que un 404
+  // y no filtra nada que el menú no diga ya.
+  if (!(await puedeConfigurar())) {
     return (
       <>
         <PageHeader eyebrow={t.eyebrow} title={t.meta} />
