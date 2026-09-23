@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Un video sin play_count: el total no se guarda a medias, las vistas quedan en null."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/posts\\?"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "aweme_id": "7400000000000000d01",
+          "desc": "Receta 1 con @cafealma.co #recetafacil",
+          "create_time": 1787932800,
+          "is_top": false,
+          "author": {
+            "unique_id": "laura.cocinafacil"
+          },
+          "music": {
+            "id": "7000000000000001"
+          },
+          "video": {
+            "duration": 31000,
+            "width": 1080,
+            "height": 1920,
+            "cover": {
+              "url_list": [
+                "https://p16-sign.tiktokcdn-us.com/demo/cover-d01.jpeg"
+              ]
+            }
+          },
+          "statistics": {
+            "play_count": 50001,
+            "digg_count": 1201,
+            "comment_count": 41,
+            "share_count": 11
+          }
+        },
+        {
+          "aweme_id": "7400000000000000d02",
+          "desc": "Receta 2 #recetafacil",
+          "create_time": 1788019200,
+          "is_top": false,
+          "author": {
+            "unique_id": "laura.cocinafacil"
+          },
+          "music": {
+            "id": "7000000000000002"
+          },
+          "video": {
+            "duration": 31000,
+            "width": 1080,
+            "height": 1920,
+            "cover": {
+              "url_list": [
+                "https://p16-sign.tiktokcdn-us.com/demo/cover-d02.jpeg"
+              ]
+            }
+          },
+          "statistics": {
+            "digg_count": 402
+          }
+        }
+      ],
+      "nextCursor": null
+    }
+  }
+}

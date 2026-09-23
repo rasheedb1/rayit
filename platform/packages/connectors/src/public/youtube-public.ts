@@ -18,6 +18,7 @@ export function createYouTubePublicSource(core: HttpCore, env: Readonly<Record<s
     platformId: 'youtube',
     label: 'YouTube Data API',
     missing: apiKey ? [] : [GOOGLE_API_KEY_ENV],
+    accessMode: 'public_profile',
     async lookup(handle, opts = {}) {
       const clean = assertHandle('youtube', handle);
       if (!apiKey) throw new PublicLookupError('not_configured', `Falta ${GOOGLE_API_KEY_ENV}: la API key del proyecto de Google Cloud para leer canales públicos.`);
@@ -36,6 +37,7 @@ export function createYouTubePublicSource(core: HttpCore, env: Readonly<Record<s
         metrics: { followers: ch.metrics.followers, following: null, mediaCount: ch.metrics.media_count, views: ch.metrics.views },
         metricsNote: YOUTUBE_METRICS_NOTE_ES,
         source: 'youtube.channels.list',
+        coverage: null,
         raw: res.raw,
       };
       return profile;

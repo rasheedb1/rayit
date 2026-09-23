@@ -11,7 +11,7 @@
  */
 import type { PlatformId } from '../types.ts';
 
-export type QuotaFamily = 'tiktok' | 'tiktok-accounts' | 'instagram' | 'youtube' | 'youtube-search' | 'youtube-analytics';
+export type QuotaFamily = 'tiktok' | 'tiktok-accounts' | 'ensembledata' | 'instagram' | 'youtube' | 'youtube-search' | 'youtube-analytics';
 
 export type QuotaScope = 'connection' | 'app';
 
@@ -57,7 +57,9 @@ const ARCHITECTURE_DOC = 'docs/arquitectura.md «APIs de plataforma»';
 const META_RATE_LIMIT_DOC = 'developers.facebook.com/docs/graph-api/overview/rate-limiting';
 const YOUTUBE_QUOTA_DOC = 'developers.google.com/youtube/v3/determine_quota_cost (actualizada 15-sep-2026)';
 const YOUTUBE_ANALYTICS_DOC = 'developers.google.com/youtube/analytics/reference/reports/query';
+const ENSEMBLEDATA_DOC = 'ensembledata.com/apis/docs y ensembledata.com/pricing (leídas el 23-sep-2026)';
 const CHECKED_AT = '2026-09-22';
+const ENSEMBLEDATA_CHECKED_AT = '2026-09-23';
 
 export const DEFAULT_LIMITS: LimitsTable = {
   tiktok: {
@@ -76,6 +78,24 @@ export const DEFAULT_LIMITS: LimitsTable = {
     ],
     daily: null,
     unitCost: {},
+  },
+  // CON-12. Proveedor de datos de TikTok: platform_id 'tiktok' con cuota
+  // propia, porque es otro contrato y otro presupuesto que el de la
+  // Display API. Es la única familia de 'tiktok' con presupuesto diario,
+  // así que es la que puede persistir en api_quota_usage.
+  ensembledata: {
+    platformId: 'tiktok',
+    rates: [
+      { scope: 'app', perEndpoint: false, windowS: 60, max: 60, source: ENSEMBLEDATA_DOC, checkedAt: ENSEMBLEDATA_CHECKED_AT, note: 'DECISIÓN PENDIENTE DE NICOLÁS: el proveedor dice que «no impone límites de tasa», pero su SDK reconoce un 429 (STATUS_429_RATE_LIMIT_EXCEEDED). La ventana es nuestra, conservadora, no suya.' },
+    ],
+    daily: { scope: 'app', units: null, persist: true, source: ENSEMBLEDATA_DOC, checkedAt: ENSEMBLEDATA_CHECKED_AT, note: 'El presupuesto depende del plan contratado (Wood 1 500 · Bronze 5 000 · Silver 11 000 · Gold 25 000 · Platinum 50 000 unidades/día; se reinician a las 00:00 UTC). units null = existe pero no se conoce: no se corta aquí, se persiste lo gastado y el 495 del proveedor (ed_units_depleted) corta. DECISIÓN PENDIENTE DE NICOLÁS: al aprobar el plan, su número entra por platform.limits.' },
+    unitCost: {
+      // Todos los endpoints de TikTok del proveedor cuestan 1 unidad. El
+      // catálogo se cobra por bloques de diez, así que user.posts declara
+      // sus unidades por llamada (`units` = depth) en vez de fijarlas aquí.
+      'ensembledata.tt.user.info': 1,
+      'ensembledata.tt.user.posts': 1,
+    },
   },
   instagram: {
     platformId: 'instagram',
@@ -109,7 +129,7 @@ export const DEFAULT_LIMITS: LimitsTable = {
   },
 };
 
-export const QUOTA_FAMILIES: readonly QuotaFamily[] = ['tiktok', 'tiktok-accounts', 'instagram', 'youtube', 'youtube-search', 'youtube-analytics'];
+export const QUOTA_FAMILIES: readonly QuotaFamily[] = ['tiktok', 'tiktok-accounts', 'ensembledata', 'instagram', 'youtube', 'youtube-search', 'youtube-analytics'];
 
 export function isQuotaFamily(value: unknown): value is QuotaFamily {
   return typeof value === 'string' && (QUOTA_FAMILIES as readonly string[]).includes(value);

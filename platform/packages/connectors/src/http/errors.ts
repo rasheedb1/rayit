@@ -98,7 +98,8 @@ export interface ClassifyInput {
 
 /** Códigos que significan «el token no sirve», por plataforma. */
 export const AUTH_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: ['access_token_invalid', 'scope_not_authorized'],
+  // ed_*: códigos del proveedor de datos de TikTok (CON-12, public/tiktok-aggregator.ts).
+  tiktok: ['access_token_invalid', 'scope_not_authorized', 'ed_invalid_token', 'ed_unverified_email'],
   instagram: ['190'],
   facebook: ['190'],
   youtube: ['authError', 'unauthorized'],
@@ -106,7 +107,7 @@ export const AUTH_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
 
 /** Códigos de cuota agotada por una ventana larga (horas o el día): no se reintenta ahora. */
 export const QUOTA_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: [],
+  tiktok: ['ed_units_depleted', 'ed_subscription_expired'],
   instagram: ['4', '17', '32', '613', '80001', '80002', '80004'],
   facebook: ['4', '17', '32', '613', '80001', '80002', '80004'],
   youtube: ['quotaExceeded', 'dailyLimitExceeded'],
@@ -114,14 +115,27 @@ export const QUOTA_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
 
 /** Códigos transitorios que algunas plataformas mandan con HTTP 400/403. */
 export const TRANSIENT_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: ['internal_error'],
+  tiktok: ['internal_error', 'ed_internal_error'],
   instagram: ['1', '2'],       // «An unknown error has occurred», «Service temporarily unavailable»
   facebook: ['1', '2'],
   youtube: ['backendError', 'internalError'],
 };
 
 /** Códigos de rate limit corto (segundos o un minuto): transitorio con espera. */
-const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'rate_limit']);
+const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'rate_limit', 'ed_rate_limit']);
+
+/**
+ * Códigos definitivos que llegan con un estado HTTP que por sí solo
+ * diría otra cosa. El proveedor de datos de TikTok manda sus códigos
+ * COMO estado HTTP, y el 520 (publicación restringida) no es un 5xx
+ * transitorio: reintentarlo gasta unidades para nada.
+ */
+export const PERMANENT_CODES_BY_PLATFORM: Readonly<Record<PlatformId, readonly string[]>> = {
+  tiktok: ['ed_post_restricted', 'ed_topic_restricted'],
+  instagram: [],
+  facebook: [],
+  youtube: [],
+};
 
 /** TikTok Accounts API: 40100–40199 son de autenticación (cabecera de platforms/tiktok.ts). */
 const TIKTOK_BUSINESS_AUTH_RANGE: readonly [number, number] = [40100, 40199];
@@ -160,6 +174,7 @@ export function kindFor(platformId: PlatformId, httpStatus: number | undefined, 
     if (httpStatus === 429) return 'transient';
     if (QUOTA_CODES[platformId].includes(code)) return 'quota';
     if (RATE_LIMIT_CODES.has(code) || TRANSIENT_CODES[platformId].includes(code)) return 'transient';
+    if (PERMANENT_CODES_BY_PLATFORM[platformId].includes(code)) return 'permanent';
     if (platformId === 'tiktok' && /^\d{5}$/.test(code)) {
       const n = Number(code);
       if (n >= TIKTOK_BUSINESS_AUTH_RANGE[0] && n <= TIKTOK_BUSINESS_AUTH_RANGE[1]) return 'auth';
