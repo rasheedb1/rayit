@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { hasFiscalIdentity } from "@mc/core";
-import { countLiveInvoicesInCurrency, getFinanceSettings } from "@mc/db/queries/finanzas";
+import { countLiveInvoicesInCurrency, getFinanceSettings, getReserveState } from "@mc/db/queries/finanzas";
 import { PageHeader } from "@/components/page-header";
 import { requireModuleAccess, requirePagePermission } from "@/lib/permisos/modulo";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
@@ -39,8 +39,11 @@ export default async function ConfiguracionFinancieraPage() {
 
   const { currency } = await getCurrentWorkspace();
   const permisos = await permisosDeLaSesion();
-  const { settings, facturasVivas } = await withWorkspace(async (tx) => ({
+  const { settings, facturasVivas, reserva } = await withWorkspace(async (tx) => ({
     settings: await getFinanceSettings(tx),
+    // El formulario enseña el 11 % por defecto aunque no haya nada
+    // guardado; el cobro, en cambio, lee lo guardado. Se dice.
+    reserva: await getReserveState(tx),
     // Cuántas facturas se quedarían en la moneda de hoy si se cambia. Se
     // pide al pintar para poder advertir ANTES y no después de guardar.
     facturasVivas: await countLiveInvoicesInCurrency(tx, currency),
@@ -54,6 +57,11 @@ export default async function ConfiguracionFinancieraPage() {
         description={t.descripcion}
       />
       <ModuleTabs active="/finanzas/configuracion" permisos={permisos} />
+      {reserva !== "configurada" && (
+        <p role="status" className="mb-6 max-w-3xl rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-sm leading-5 text-ink">
+          {reserva === "invalida" ? t.porcentajes.reservaInvalida : t.porcentajes.reservaSinGuardar}
+        </p>
+      )}
       {!hasFiscalIdentity(settings) && (
         <p className="mb-6 max-w-3xl rounded-md border border-line bg-bg-2 px-3 py-2 text-sm leading-5 text-fg-2">
           {t.fiscales.sinConfigurar}

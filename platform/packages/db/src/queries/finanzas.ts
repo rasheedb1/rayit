@@ -870,6 +870,30 @@ export function bloqueParaBitacora(bloque: Record<string, unknown>): Record<stri
   return { ...bloque, cuenta: `••••${digitos.slice(-4)}` };
 }
 
+/**
+ * Qué hará el PRÓXIMO cobro con la reserva de impuestos, leído igual que
+ * `recordPayment` (`reserveRateFrom` sobre el valor guardado). La
+ * pantalla de configuración enseña el 11 % por defecto de
+ * `parseFinanceSettings` aunque no haya nada guardado; sin esto, un
+ * espacio sin `reserva_pct` veía «11 %» y cobraba sin apartar nada.
+ *
+ *   - 'configurada': hay un porcentaje válido mayor que cero.
+ *   - 'sin_configurar': no hay ninguno (o es 0): el cobro no aparta.
+ *   - 'invalida': hay uno roto: el cobro fallará hasta que se guarde.
+ */
+export type ReserveState = 'configurada' | 'sin_configurar' | 'invalida';
+
+export async function getReserveState(tx: WorkspaceTx): Promise<ReserveState> {
+  const { rows } = await tx.query<{ reserva_pct: unknown }>(
+    `SELECT settings #> '{finanzas,reserva_pct}' AS reserva_pct FROM workspace WHERE id = current_workspace_id()`,
+  );
+  try {
+    return reserveRateFrom(rows[0]?.reserva_pct) === null ? 'sin_configurar' : 'configurada';
+  } catch {
+    return 'invalida';
+  }
+}
+
 /** Lo que devuelve un guardado: el bloque que quedó, su moneda y lo que hay que advertir. */
 export interface FinanceSettingsSaved {
   settings: FinanceSettings;
@@ -1551,11 +1575,18 @@ export async function getCashflowInputs(tx: WorkspaceTx): Promise<CashflowInputs
                'amount',     e.amount::text,
                'incurredOn', to_char(e.incurred_on, 'YYYY-MM-DD'),
                -- La serie (FIN-5): la misma obligación registrada otro
-               -- mes. La descripción no sirve, porque lleva el mes.
-               'serie',      lower(e.category) || '|' || lower(coalesce(e.vendor, ''))
+               -- mes. Con proveedor, categoría y proveedor (la descripción
+               -- del seed lleva el mes); sin proveedor, la descripción,
+               -- para que dos suscripciones sin proveedor de la misma
+               -- categoría no se fundan en una y se dejen de proyectar.
+               'serie',      lower(e.category) || '|' ||
+                             lower(coalesce(nullif(trim(e.vendor), ''), '~' || coalesce(e.description, '')))
              ) ORDER BY e.incurred_on DESC, e.amount DESC), '[]'::json) AS v
         FROM expense e, ws
        WHERE e.is_recurring
+         -- El ritmo es MENSUAL: una fila semanal o anual (importada; el
+         -- formulario solo escribe 'monthly') no se suma como si lo fuera.
+         AND coalesce(e.recurrence, 'monthly') = 'monthly'
          AND e.incurred_on > ws.hoy - 120
     ), plataformas AS (
       -- Los ingresos de plataformas por mes (FIN-7), solo en la moneda
@@ -2269,7 +2300,11 @@ export async function markReminderSent(tx: WorkspaceTx, id: string): Promise<boo
 //     bitácora con before/after (decisión 7 de docs/propuestas/FIN-5.md).
 // =====================================================================
 
-const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+/**
+ * 'YYYY-MM' con un año que Postgres acepta como date: `0000-01` pasaba el
+ * patrón viejo y la consulta reventaba con 22008 (un 500 desde la URL).
+ */
+const MONTH_RE = /^(19|20)\d{2}-(0[1-9]|1[0-2])$/;
 /** Enlace de recibo: http(s) absoluto. Ni `javascript:` ni una ruta relativa. */
 const HTTP_URL_RE = /^https?:\/\/[^\s<>"]+$/i;
 
@@ -2446,9 +2481,11 @@ export async function getExpense(tx: WorkspaceTx, id: string): Promise<ExpenseRo
  */
 export async function getExpenseMonth(tx: WorkspaceTx, month?: string | null): Promise<ExpenseMonth> {
   const { currency } = await getWorkspaceSettings(tx);
-  const hoy = await tx.query<{ today: string }>(`SELECT to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today`);
-  const today = hoy.rows[0]?.today;
-  if (!today) throw new Error('La base no devolvió la fecha de hoy.');
+  // El día del WORKSPACE, no CURRENT_DATE: a las 20:00 del 30 de
+  // septiembre en Bogotá ya es 1 de octubre en UTC, y la pantalla abría
+  // octubre vacío mientras la proyección de abajo (getCashflowInputs,
+  // con ws.hoy) seguía en septiembre.
+  const today = await getWorkspaceToday(tx);
   const mes = month && MONTH_RE.test(month) ? month : today.slice(0, 7);
   const primero = `${mes}-01`;
 
@@ -2603,6 +2640,14 @@ export async function updateExpense(tx: WorkspaceTx, id: string, input: UpdateEx
   if (!antes) throw new ExpenseNotFound(id);
 
   const v = await validarGasto(tx, input);
+  // Sin un solo cambio no se escribe NADA: ni la fila ni la bitácora.
+  // Guardar dos veces el mismo formulario no es una corrección.
+  const igual =
+    antes.category === v.category && antes.vendor === v.vendor && antes.description === v.description &&
+    compareDecimal(antes.amount, v.amount) === 0 && antes.currency === v.currency && antes.incurredOn === v.incurredOn &&
+    antes.isRecurring === v.isRecurring && antes.recurrence === v.recurrence && antes.receiptUrl === v.receiptUrl &&
+    antes.deductible === v.deductible;
+  if (igual) return antes;
   await tx.query(
     `UPDATE expense
      SET category = $2, vendor = $3, description = $4, amount = $5, currency = $6,

@@ -10,6 +10,7 @@ import {
   InvoiceError,
   InvoicePaymentConflict,
   MONTO_MAXIMO,
+  PCT_RE,
   PaymentDateInFuture,
   PaymentExceedsOutstanding,
   type InvoiceStatus,
@@ -36,7 +37,6 @@ import { MESSAGES } from "../_lib/messages";
 import { textosFinanzas } from "../_lib/textos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PCT_RE = /^\d{1,3}([.,]\d{1,2})?$/;
 
 /** Lo que llega del formulario "Nueva factura". Mensajes en español. */
 const nuevaFacturaSchema = z
@@ -259,7 +259,8 @@ export async function registrarPago(_prev: ActionState, formData: FormData): Pro
   } catch (err) {
     return { message: messageOfPago(err, f, ws.currency) };
   }
-  revalidatePath("/finanzas");
+  // Un cobro mueve la factura en el cobro, en el archivo y en el flujo.
+  revalidarFinanzas();
   revalidatePath(`/finanzas/facturas/${v.invoiceId}`);
   return { ok: true };
 }

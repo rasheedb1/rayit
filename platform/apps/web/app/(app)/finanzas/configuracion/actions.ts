@@ -6,6 +6,7 @@ import {
   FINANCE_PLAZO_MAX,
   FINANCE_TEXT_MAX,
   parseFinanceSettings,
+  PCT_RE,
   type FinanceSettings,
 } from "@mc/core";
 import { updateFinanceSettings } from "@mc/db/queries/finanzas";
@@ -17,7 +18,6 @@ import { MESSAGES } from "../_lib/messages";
 const t = MESSAGES.configuracion;
 
 /** Un porcentaje como lo escribe una persona: 0 a 100, con coma o punto y hasta dos decimales. */
-const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
 const MONEDA_RE = /^[A-Za-z]{3}$/;
 /** Un correo, con el criterio flojo que basta para un campo opcional: hay un @ y algo a cada lado. */
 const CORREO_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -132,8 +132,11 @@ export async function guardarConfiguracion(
   try {
     guardado = await withWorkspace((tx) => updateFinanceSettings(tx, { settings, currency: v.currency }));
   } catch (err) {
+    // La causa se registra en el servidor; al usuario, una frase. El
+    // mensaje de un error de la base puede traer SQL o el nombre de una
+    // migración («falta la política… corre make db.migrate»).
     console.error("[finanzas] no se pudo guardar la configuración", err);
-    return { message: err instanceof Error ? err.message : t.errores.general };
+    return { message: t.errores.general };
   }
 
   // La configuración cambia los defaults de «factura nueva» y la

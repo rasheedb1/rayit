@@ -58,10 +58,11 @@ export const CATEGORIAS_GASTO: readonly OpcionGasto<CategoriaGasto>[] = CATEGORI
 /**
  * En el MVP solo hay gastos mensuales: es lo que tiene el seed y lo
  * único que el formulario ofrece. `'weekly'` y `'yearly'` caben en la
- * columna (`expense.recurrence` es texto) y entrarían aquí con su
- * aritmética en `proyectarGastos` (flujo-caja.ts); hasta que
- * alguien las pida, una fila con otra recurrencia NO se proyecta y la
- * pantalla lo dice con una frase.
+ * columna (`expense.recurrence` es texto) y entrarían con su aritmética
+ * en `proyectarGastos` (flujo-caja.ts); hasta que alguien las pida, una
+ * fila con otra recurrencia (importada) NO entra al ritmo mensual:
+ * `getCashflowInputs` la filtra, para no sumar un pago anual como si
+ * fuera de cada mes.
  */
 export const RECURRENCIA_IDS = ['monthly'] as const;
 

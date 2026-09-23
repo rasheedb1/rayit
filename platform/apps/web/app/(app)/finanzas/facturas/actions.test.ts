@@ -34,6 +34,7 @@ vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
 
 import { permisosDeRol, SinPermisoError } from "@mc/core";
 import { facturarCampana } from "..";
+import { crearFactura } from "./actions";
 
 const CAMPANA = "00000003-0000-4000-8000-000000ca0001";
 const FACTURA = "00000003-0000-4000-8000-0000fac26099";
@@ -74,5 +75,22 @@ describe("«Facturar» desde la ficha de campaña (CAM-1 → FIN-1)", () => {
     await expect(facturarCampana(CAMPANA)).rejects.toThrow(SinPermisoError);
     expect(createInvoiceFromCampaign).not.toHaveBeenCalled();
     expect(redirect).not.toHaveBeenCalled();
+  });
+});
+
+describe("crearFactura · el IVA y la retención son porcentajes de 0 a 100", () => {
+  it("un IVA de 150 % se rechaza en su campo, con el mismo patrón que la configuración", async () => {
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({
+      companyId: "00000002-0000-4000-8000-0000000000e1", campaignId: "", subtotal: "1000000",
+      taxPct: "150", withholdingPct: "11", issuedOn: "2026-09-23", dueOn: "2026-10-23", externalRef: "",
+    })) fd.set(k, v);
+    const r = await crearFactura({}, fd);
+    expect(r.errors?.taxPct).toMatch(/entre 0 y 100/);
+    fd.set("taxPct", "19,5");
+    fd.set("withholdingPct", "100.01");
+    const r2 = await crearFactura({}, fd);
+    expect(r2.errors?.taxPct).toBeUndefined();
+    expect(r2.errors?.withholdingPct).toMatch(/entre 0 y 100/);
   });
 });

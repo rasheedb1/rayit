@@ -27,6 +27,7 @@ vi.mock("@mc/db/queries/finanzas", () => ({
   updateFinanceSettings: (...a: unknown[]) => updateFinanceSettings(...a),
 }));
 
+import { MESSAGES } from "../_lib/messages";
 import { guardarConfiguracion } from "./actions";
 
 /** «Mánager» y «Contador» del catálogo de ACC-1, para un workspace de creador. */
@@ -192,11 +193,15 @@ describe("guardarConfiguracion · lo que guarda", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/finanzas", "layout");
   });
 
-  it("si la base falla, el mensaje vuelve y no se revalida nada", async () => {
+  it("si la base falla, vuelve una frase (no el error crudo) y no se revalida nada", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     updateFinanceSettings.mockRejectedValue(new Error("falta la RLS de la migración 0024 en esta base"));
     const r = await guardarConfiguracion({}, datos());
     expect(r.ok).toBeUndefined();
-    expect(r.message).toMatch(/0024/);
+    expect(r.message).toBe(MESSAGES.configuracion.errores.general);
+    expect(r.message).not.toMatch(/0024|RLS/);
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

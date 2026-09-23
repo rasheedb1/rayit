@@ -730,8 +730,13 @@ export const FINANCE_TEXT_MAX = 200;
 /** Plazo de pago máximo, en días. Medio año ya es un caso raro; un año es un error de tecleo. */
 export const FINANCE_PLAZO_MAX = 180;
 
-/** Un porcentaje de 0 a 100 con hasta dos decimales, con coma o punto. */
-const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
+/**
+ * Un porcentaje escrito por una persona: de 0 a 100, con hasta dos
+ * decimales y punto o coma. Es EL patrón: lo usan la lectura de
+ * `settings.finanzas` y los formularios de factura y de configuración,
+ * para que un 150 % no sea válido en un sitio y en otro no.
+ */
+export const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
 
 /**
  * Las llaves del jsonb, en español y snake_case. No son identificadores

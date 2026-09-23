@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import {
   addDays,
   compareDecimal,
+  proyectarGastos,
   lunesDeLaSemana,
   mulRateHalfUp,
   projectCashflow,
@@ -40,12 +41,15 @@ import {
   createInvoiceFromCampaign,
   createPlatformPayout,
   getCashflowInputs,
+  getExpenseMonth,
+  getReserveState,
   getFinanceSettings,
   getInvoice,
   getReceivablesKpis,
   listPayoutPlatforms,
   listReceivables,
   recordPayment,
+  updateExpense,
   updateFinanceSettings,
   type TextosFinanzas,
 } from '../src/queries/finanzas.ts';
@@ -281,5 +285,75 @@ describe('costura COT → FIN-8: hoy son dos IVA, y guardar Finanzas no toca el 
     // Cuando Rasheed unifique las dos fuentes (CIERRE-FIN.md), esta
     // prueba tiene que fallar y cambiarse a propósito, no por accidente.
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
+  });
+});
+
+describe('lo que encontró la revisión del cierre', () => {
+  test('/finanzas/gastos?mes=0000-01 no revienta: cae en el mes de hoy del workspace', async () => {
+    const hoy = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx))).today;
+    for (const raro of ['0000-01', '0001-12', '2026-13', 'abc']) {
+      const mes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getExpenseMonth(tx, raro));
+      assert.equal(mes.month, hoy.slice(0, 7), raro);
+      assert.equal(mes.today, hoy, 'el día del workspace, el mismo que usa la proyección');
+    }
+  });
+
+  test('una suscripción anual no entra al ritmo mensual, y dos sin proveedor no se funden en una', async () => {
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    const hoy = antes.today;
+    const mensualAntes = proyectarGastos(antes).mensual;
+    await t.admin(`
+      INSERT INTO expense (id, workspace_id, category, vendor, description, amount, currency, incurred_on, is_recurring, recurrence, deductible)
+      VALUES ('00000009-0000-4000-8000-0009a5aa0001', '${WORKSPACE_LAURA}', 'software', 'Anual SA', 'Licencia anual',
+              1200000.00, 'COP', DATE '${hoy}', true, 'yearly', true);
+    `);
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      for (const description of ['Canva sin proveedor', 'Notion sin proveedor']) {
+        await createExpense(tx, {
+          category: 'software', vendor: null, description, amount: '100000', incurredOn: hoy,
+          isRecurring: true, recurrence: 'monthly', deductible: true,
+        });
+      }
+    });
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx));
+    assert.ok(!despues.gastos.some((g) => g.label === 'Licencia anual'), 'la anual no viaja al flujo');
+    const p = proyectarGastos(despues);
+    assert.equal(p.nuevasDelMes - proyectarGastos(antes).nuevasDelMes, 2, 'las dos sin proveedor son dos series');
+    assert.equal(
+      BigInt(p.mensual.replace('.', '')) - BigInt(mensualAntes.replace('.', '')),
+      20000000n, // 200 000,00 en centavos
+    );
+    await t.admin(`DELETE FROM expense WHERE id = '00000009-0000-4000-8000-0009a5aa0001';`);
+  });
+
+  test('guardar un gasto sin cambios no reescribe la fila ni deja bitácora', async () => {
+    const hoy = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getCashflowInputs(tx))).today;
+    const entrada = {
+      category: 'equipo', vendor: 'Sin cambios SAS', description: 'Trípode', amount: '90000', incurredOn: hoy,
+      isRecurring: false, deductible: true,
+    };
+    const g = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createExpense(tx, entrada));
+    // xmin cambia con cada UPDATE: si sigue igual, la fila no se reescribió.
+    const ver = () => t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ x: string }>('SELECT xmin::text AS x FROM expense WHERE id = $1', [g.id])).rows[0]?.x);
+    const antes = await ver();
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateExpense(tx, g.id, { ...entrada, amount: '90000.00' }));
+    assert.equal(await ver(), antes, 'la misma versión de la fila: no hubo UPDATE');
+    const lineas = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ n: number }>("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1 AND action = 'expense.updated'", [g.id])).rows[0]?.n);
+    assert.equal(lineas, 0);
+  });
+
+  test('getReserveState dice lo mismo que hará el próximo cobro', async () => {
+    const estado = () => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getReserveState(tx));
+    assert.equal(await estado(), 'configurada', 'el seed aparta el 11 %');
+    const guardar = (v: string) =>
+      t.admin(`UPDATE workspace SET settings = jsonb_set(settings, '{finanzas,reserva_pct}', '${v}'::jsonb) WHERE id = '${WORKSPACE_LAURA}';`);
+    await t.admin(`UPDATE workspace SET settings = settings #- '{finanzas,reserva_pct}' WHERE id = '${WORKSPACE_LAURA}';`);
+    assert.equal(await estado(), 'sin_configurar', 'sin nada guardado, el cobro no aparta aunque la pantalla sugiera 11 %');
+    await guardar('"abc"');
+    assert.equal(await estado(), 'invalida', 'un valor roto: el cobro fallará');
+    await guardar('11');
+    assert.equal(await estado(), 'configurada');
   });
 });

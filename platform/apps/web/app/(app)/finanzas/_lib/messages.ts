@@ -214,6 +214,11 @@ export const MESSAGES = {
       retencionAyuda: "Lo que la marca te retiene al pagar. No se resta del total de la factura.",
       reserva: "Reserva de impuestos %",
       reservaAyuda: "Cuánto se aparta de cada cobro. Lo que ya se apartó conserva su porcentaje.",
+      /** El valor del campo es una sugerencia hasta que se guarda: el cobro lee lo guardado (FIN-2). */
+      reservaSinGuardar:
+        "Todavía no apartas nada de tus cobros: el porcentaje de reserva que ves abajo es una sugerencia y empieza a aplicarse cuando guardes.",
+      reservaInvalida:
+        "El porcentaje de reserva guardado no es válido y los cobros no se pueden registrar hasta que lo corrijas: revisa el campo y guarda.",
       plazo: "Plazo de pago (días)",
       plazoAyuda: "Emisión + este plazo = vencimiento. Cero es pago contra entrega.",
     },
