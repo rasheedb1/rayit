@@ -38,6 +38,7 @@ export {
   UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
+export { assertScopeAllows, SCOPE_KINDS, ScopeError, scopeFilter, type ScopeAnchors, type ScopeKind, type ScopeMany } from './scope.ts';
 export {
   APP_ROLE, assertSchemaUpToDate, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
   explicarEsquema, FUNCION_DE_REFERENCIAS, migracionesDelRepositorio, POLITICAS_ABIERTAS_DECLARADAS, PRIVILEGIOS,

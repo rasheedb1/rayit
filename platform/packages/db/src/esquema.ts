@@ -324,6 +324,10 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'deal_move_stage(uuid,text,boolean,numeric,text)':
     '0031_mover_negocio: el tablero de Ventas, «Enviar» y «Aceptar» en Cotizar y la aceptación pública',
   'brand_key(text)': '0031_mover_negocio: el radar y las listas de Ventas reconocen una marca por su nombre',
+  'scope_allows(text,uuid)':
+    '0034_membership_scope: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
+    'Conexiones (src/scope.ts, ACC-6)',
+  'scope_allows(text,uuid[])': '0034_membership_scope: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
 };
 
 /**
@@ -749,6 +753,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'único que deja membership_alta. Cambiar roles o echar a alguien sigue siendo del worker',
   },
   app_user: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'nadie borra a una persona desde una pantalla' },
+  membership_scope: {
+    permite: ['SELECT'],
+    motivo:
+      'el alcance de cada miembro (0034, ACC-6): las consultas lo leen por scope_allows(). Escribirlo es la pantalla de ' +
+      'Equipo (ACC-4), que traerá sus políticas; hasta entonces solo el worker',
+  },
   media_kit_lockout: {
     permite: ['SELECT', 'DELETE'],
     motivo:
