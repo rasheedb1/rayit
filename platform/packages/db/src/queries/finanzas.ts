@@ -15,9 +15,14 @@
 import {
   addDays,
   agingBucket,
+  compareDecimal,
   computeInvoiceTotals,
   deriveStatus,
+  esCategoriaGasto,
+  esRecurrencia,
+  isIsoDate,
   nextInvoiceNumber,
+  normalizeDecimal,
   parseInvoiceNumber,
   subDecimal,
   subtotalFromTotal,
@@ -522,4 +527,442 @@ export async function createInvoiceFromCampaign(
     externalRef: overrides.externalRef ?? null,
     currency: camp.currency,
   });
+}
+
+// =====================================================================
+// Gastos (FIN-5)
+// ---------------------------------------------------------------------
+// `expense` existe desde 0008 con su índice (workspace_id, incurred_on
+// DESC), que es exactamente el de la lista por mes: FIN-5 no trae
+// migración.
+//
+// Reglas propias de esta sección:
+//   - Al ESCRIBIR, la categoría y la recurrencia son las listas cerradas
+//     de @mc/core; al LEER no se valida nada (la columna es texto libre
+//     y una fila importada con otra categoría tiene que verse, no
+//     tumbar la pantalla).
+//   - Los totales del mes y el desglose por categoría salen de un GROUP
+//     BY, nunca de la pantalla, y solo suman las filas en la moneda del
+//     espacio: las demás se cuentan y se dicen.
+//   - No hay borrado. Corregir un gasto es editarlo, y la edición deja
+//     bitácora con before/after (decisión 7 de docs/propuestas/FIN-5.md).
+// =====================================================================
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+/** Enlace de recibo: http(s) absoluto. Ni `javascript:` ni una ruta relativa. */
+const HTTP_URL_RE = /^https?:\/\/[^\s<>"]+$/i;
+
+export interface ExpenseRow {
+  id: string;
+  /** Texto libre en la base; una de CATEGORIAS_GASTO en lo que escribe la app. */
+  category: string;
+  vendor: string | null;
+  description: string | null;
+  /** Decimal como string. La moneda va aparte. */
+  amount: string;
+  currency: string;
+  /** 'YYYY-MM-DD' */
+  incurredOn: string;
+  isRecurring: boolean;
+  /** 'monthly' en el MVP; null si no es recurrente. */
+  recurrence: string | null;
+  receiptUrl: string | null;
+  deductible: boolean;
+  /** ISO 8601 en UTC. */
+  createdAt: string;
+}
+
+export interface ExpenseCategoryTotal {
+  category: string;
+  total: string;
+  count: number;
+}
+
+export interface ExpenseMonth {
+  /** 'YYYY-MM': el mes que se está mirando. */
+  month: string;
+  /** Primer día del mes, 'YYYY-MM-DD'. */
+  from: string;
+  /** Último día del mes, 'YYYY-MM-DD'. */
+  to: string;
+  /** CURRENT_DATE, para saber si el mes es el de hoy. */
+  today: string;
+  /** La del espacio: es la de los totales. */
+  currency: string;
+  rows: ExpenseRow[];
+  totals: {
+    /** Todo lo del mes en la moneda del espacio. */
+    total: string;
+    /** Lo recurrente (is_recurring). */
+    recurring: string;
+    /** Lo deducible. */
+    deductible: string;
+    count: number;
+    recurringCount: number;
+    deductibleCount: number;
+  };
+  byCategory: ExpenseCategoryTotal[];
+  /** Gastos del mes en otra moneda: se cuentan, no se suman. */
+  otherCurrencyCount: number;
+}
+
+export interface RecurringExpenses {
+  /** Las filas recurrentes del espacio, en su moneda. Van a proyectarGastosRecurrentes. */
+  rows: ExpenseRow[];
+  today: string;
+  currency: string;
+  otherCurrencyCount: number;
+}
+
+export interface CreateExpenseInput {
+  /** Una de CATEGORIA_GASTO_IDS. */
+  category: string;
+  vendor?: string | null;
+  description?: string | null;
+  /** Decimal como string, mayor que cero. */
+  amount: string;
+  /** 'YYYY-MM-DD' */
+  incurredOn: string;
+  isRecurring: boolean;
+  /** Obligatoria si isRecurring; se ignora si no. */
+  recurrence?: string | null;
+  /** http(s) absoluto, o nada. */
+  receiptUrl?: string | null;
+  deductible: boolean;
+  /** ISO-4217. Por defecto, la del espacio; tiene que ser la del espacio. */
+  currency?: string;
+}
+
+export type UpdateExpenseInput = CreateExpenseInput;
+
+export class ExpenseNotFound extends Error {
+  readonly messageEs: string;
+  constructor(id: string) {
+    super(`El gasto ${id} no existe en este espacio.`);
+    this.name = 'ExpenseNotFound';
+    this.messageEs = this.message;
+  }
+}
+
+/** Un dato del gasto que no cumple su regla. El mensaje se muestra tal cual. */
+export class InvalidExpenseError extends Error {
+  readonly field: string | null;
+  readonly messageEs: string;
+  constructor(message: string, field: string | null = null) {
+    super(message);
+    this.name = 'InvalidExpenseError';
+    this.field = field;
+    this.messageEs = message;
+  }
+}
+
+const SELECT_EXPENSE = `
+  SELECT e.id, e.category, e.vendor, e.description, e.amount::text, e.currency,
+         to_char(e.incurred_on, 'YYYY-MM-DD') AS incurred_on,
+         e.is_recurring, e.recurrence, e.receipt_url, e.deductible,
+         to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
+  FROM expense e
+`;
+
+interface RawExpense {
+  id: string;
+  category: string;
+  vendor: string | null;
+  description: string | null;
+  amount: string;
+  currency: string;
+  incurred_on: string;
+  is_recurring: boolean;
+  recurrence: string | null;
+  receipt_url: string | null;
+  deductible: boolean;
+  created_at: string;
+}
+
+function toExpense(r: RawExpense): ExpenseRow {
+  return {
+    id: r.id,
+    category: r.category,
+    vendor: r.vendor,
+    description: r.description,
+    amount: r.amount,
+    currency: r.currency,
+    incurredOn: r.incurred_on,
+    isRecurring: r.is_recurring,
+    recurrence: r.recurrence,
+    receiptUrl: r.receipt_url,
+    deductible: r.deductible,
+    createdAt: r.created_at,
+  };
+}
+
+/**
+ * Deja la fila de bitácora del gasto en la MISMA transacción de la
+ * escritura: si la escritura hace rollback, la anotación se va con ella.
+ *
+ * TODO(ACC-2): esto es `audit(tx, { action, entityType, entityId, before,
+ * after })` de packages/db/src/audit.ts, que todavía no está en `main`
+ * (rama nicolas/ACC-2-bitacora-obligatoria). El INSERT es el mismo, letra
+ * por letra, y ACC-2 tendrá que agregar 'expense.created' y
+ * 'expense.updated' a AUDIT_ACTIONS. Cuando entre, se borra este helper.
+ *
+ * El workspace y el actor los pone la BASE (current_workspace_id(),
+ * current_user_id()): nada que venga por parámetro puede cambiarlos. El
+ * `id` de audit_log no se devuelve (bigserial, contador global; CIM-2 §3).
+ */
+async function anotarGasto(
+  tx: WorkspaceTx,
+  action: 'expense.created' | 'expense.updated',
+  expenseId: string,
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+): Promise<void> {
+  await tx.query(
+    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
+     VALUES (current_workspace_id(), current_user_id(),
+             CASE WHEN current_user_id() IS NULL THEN 'system' ELSE 'user' END,
+             $1, 'expense', $2::uuid, $3::jsonb, $4::jsonb)`,
+    [action, expenseId, before === null ? null : JSON.stringify(before), JSON.stringify(after)],
+  );
+}
+
+/**
+ * Lo que la bitácora guarda de un gasto. Campo por campo, nunca
+ * `...row`: el recibo va como un booleano porque un enlace de Drive es
+ * una credencial de ese archivo para quien lo tenga, y una credencial no
+ * entra en audit_log (regla de secretos del repositorio).
+ */
+function gastoParaBitacora(e: ExpenseRow): Record<string, unknown> {
+  return {
+    category: e.category,
+    vendor: e.vendor,
+    description: e.description,
+    amount: e.amount,
+    currency: e.currency,
+    incurredOn: e.incurredOn,
+    isRecurring: e.isRecurring,
+    recurrence: e.recurrence,
+    deductible: e.deductible,
+    receipt: e.receiptUrl !== null,
+  };
+}
+
+/** Un gasto del espacio por su id, o null. Un id que no es UUID no se consulta (22P02 → 500). */
+export async function getExpense(tx: WorkspaceTx, id: string): Promise<ExpenseRow | null> {
+  if (!isUuid(id)) return null;
+  const { rows } = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1`, [id]);
+  const r = rows[0];
+  return r ? toExpense(r) : null;
+}
+
+/**
+ * Los gastos de un mes ('YYYY-MM'), con el total, el recurrente, el
+ * deducible y el desglose por categoría, todo desde SQL. Sin `month`, o
+ * con uno mal formado, el mes de CURRENT_DATE: un parámetro de la URL no
+ * puede convertirse en un 500.
+ */
+export async function getExpenseMonth(tx: WorkspaceTx, month?: string | null): Promise<ExpenseMonth> {
+  const { currency } = await getWorkspaceSettings(tx);
+  const hoy = await tx.query<{ today: string }>(`SELECT to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today`);
+  const today = hoy.rows[0]?.today;
+  if (!today) throw new Error('La base no devolvió la fecha de hoy.');
+  const mes = month && MONTH_RE.test(month) ? month : today.slice(0, 7);
+  const primero = `${mes}-01`;
+
+  const filas = await tx.query<RawExpense>(
+    `${SELECT_EXPENSE}
+     WHERE e.incurred_on >= $1::date AND e.incurred_on < ($1::date + interval '1 month')
+     ORDER BY e.incurred_on DESC, e.created_at DESC, e.id`,
+    [primero],
+  );
+
+  const agregados = await tx.query<{
+    from_on: string; to_on: string; total: string; recurring: string; deductible: string;
+    count: number; recurring_count: number; deductible_count: number; other_currency_count: number;
+  }>(
+    `WITH mes AS (
+       SELECT $1::date AS d1, ($1::date + interval '1 month')::date AS d2
+     ), g AS (
+       SELECT e.amount, e.currency, e.is_recurring, e.deductible
+       FROM expense e, mes
+       WHERE e.incurred_on >= mes.d1 AND e.incurred_on < mes.d2
+     )
+     SELECT to_char((SELECT d1 FROM mes), 'YYYY-MM-DD') AS from_on,
+            to_char((SELECT d2 FROM mes) - 1, 'YYYY-MM-DD') AS to_on,
+            -- ::numeric(14,2) antes de ::text: sin él un mes vacío devuelve
+            -- '0' y el dinero pierde sus dos decimales a mitad de camino.
+            (SELECT coalesce(sum(amount), 0)::numeric(14,2)::text FROM g WHERE currency = $2) AS total,
+            (SELECT coalesce(sum(amount), 0)::numeric(14,2)::text FROM g WHERE currency = $2 AND is_recurring) AS recurring,
+            (SELECT coalesce(sum(amount), 0)::numeric(14,2)::text FROM g WHERE currency = $2 AND deductible) AS deductible,
+            (SELECT count(*)::int FROM g WHERE currency = $2) AS count,
+            (SELECT count(*)::int FROM g WHERE currency = $2 AND is_recurring) AS recurring_count,
+            (SELECT count(*)::int FROM g WHERE currency = $2 AND deductible) AS deductible_count,
+            (SELECT count(*)::int FROM g WHERE currency <> $2) AS other_currency_count`,
+    [primero, currency],
+  );
+  const a = agregados.rows[0];
+  if (!a) throw new Error('La consulta de totales del mes no devolvió filas.');
+
+  const porCategoria = await tx.query<{ category: string; total: string; count: number }>(
+    `SELECT e.category, sum(e.amount)::numeric(14,2)::text AS total, count(*)::int AS count
+     FROM expense e
+     WHERE e.incurred_on >= $1::date AND e.incurred_on < ($1::date + interval '1 month')
+       AND e.currency = $2
+     GROUP BY e.category
+     ORDER BY sum(e.amount) DESC, e.category`,
+    [primero, currency],
+  );
+
+  return {
+    month: mes,
+    from: a.from_on,
+    to: a.to_on,
+    today,
+    currency,
+    rows: filas.rows.map(toExpense),
+    totals: {
+      total: a.total,
+      recurring: a.recurring,
+      deductible: a.deductible,
+      count: a.count,
+      recurringCount: a.recurring_count,
+      deductibleCount: a.deductible_count,
+    },
+    byCategory: porCategoria.rows,
+    otherCurrencyCount: a.other_currency_count,
+  };
+}
+
+/**
+ * Las plantillas recurrentes del espacio, en su moneda, para
+ * `proyectarGastosRecurrentes` de @mc/core. Devuelve TODAS las filas
+ * recurrentes: quién es la plantilla de cada serie lo decide core, que es
+ * donde está probado (y donde FIN-6 lo vuelve a necesitar).
+ */
+export async function listRecurringExpenses(tx: WorkspaceTx): Promise<RecurringExpenses> {
+  const { currency } = await getWorkspaceSettings(tx);
+  const cabecera = await tx.query<{ today: string; other_currency_count: number }>(
+    `SELECT to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today,
+            (SELECT count(*)::int FROM expense
+             WHERE is_recurring AND recurrence IS NOT NULL AND currency <> $1) AS other_currency_count`,
+    [currency],
+  );
+  const c = cabecera.rows[0];
+  if (!c) throw new Error('La consulta de gastos recurrentes no devolvió filas.');
+  const { rows } = await tx.query<RawExpense>(
+    `${SELECT_EXPENSE}
+     WHERE e.is_recurring AND e.recurrence IS NOT NULL AND e.currency = $1
+     ORDER BY e.incurred_on DESC, e.id`,
+    [currency],
+  );
+  return { rows: rows.map(toExpense), today: c.today, currency, otherCurrencyCount: c.other_currency_count };
+}
+
+/** Normaliza y valida lo que llega, para crear y para editar con las mismas reglas. */
+async function validarGasto(tx: WorkspaceTx, input: CreateExpenseInput): Promise<{
+  category: string; vendor: string | null; description: string | null; amount: string; currency: string;
+  incurredOn: string; isRecurring: boolean; recurrence: string | null; receiptUrl: string | null; deductible: boolean;
+}> {
+  if (!esCategoriaGasto(input.category)) {
+    throw new InvalidExpenseError(`La categoría «${input.category}» no está en la lista de gastos.`, 'category');
+  }
+  if (!isIsoDate(input.incurredOn)) {
+    throw new InvalidExpenseError('La fecha del gasto debe ser YYYY-MM-DD.', 'incurredOn');
+  }
+  let amount: string;
+  try {
+    amount = normalizeDecimal(input.amount);
+  } catch {
+    throw new InvalidExpenseError('El monto del gasto no es un decimal válido.', 'amount');
+  }
+  if (compareDecimal(amount, '0.00') <= 0) {
+    throw new InvalidExpenseError('El monto del gasto tiene que ser mayor que cero.', 'amount');
+  }
+  // Misma regla que las facturas: un gasto en otra moneda mezclaría
+  // cifras que los KPI del mes suman sin convertir.
+  const { currency: wsCurrency } = await getWorkspaceSettings(tx);
+  const currency = (input.currency ?? wsCurrency).toUpperCase();
+  if (currency !== wsCurrency) {
+    throw new InvalidExpenseError(`Los gastos van en la moneda del espacio (${wsCurrency}); recibió ${currency}.`, 'currency');
+  }
+  let recurrence: string | null = null;
+  if (input.isRecurring) {
+    const r = input.recurrence ?? '';
+    if (!esRecurrencia(r)) {
+      throw new InvalidExpenseError('Un gasto recurrente necesita cada cuánto se repite.', 'recurrence');
+    }
+    recurrence = r;
+  }
+  const receiptUrl = input.receiptUrl?.trim() || null;
+  if (receiptUrl !== null && !HTTP_URL_RE.test(receiptUrl)) {
+    throw new InvalidExpenseError('El enlace del recibo tiene que empezar por http:// o https://.', 'receiptUrl');
+  }
+  return {
+    category: input.category,
+    vendor: input.vendor?.trim() || null,
+    description: input.description?.trim() || null,
+    amount,
+    currency,
+    incurredOn: input.incurredOn,
+    isRecurring: input.isRecurring,
+    recurrence,
+    receiptUrl,
+    deductible: input.deductible,
+  };
+}
+
+/** Registra un gasto y deja su línea de bitácora en la misma transacción. */
+export async function createExpense(tx: WorkspaceTx, input: CreateExpenseInput): Promise<ExpenseRow> {
+  const v = await validarGasto(tx, input);
+  const inserted = await tx.query<{ id: string }>(
+    `INSERT INTO expense (workspace_id, category, vendor, description, amount, currency,
+                          incurred_on, is_recurring, recurrence, receipt_url, deductible)
+     VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6::date, $7, $8, $9, $10)
+     RETURNING id`,
+    [v.category, v.vendor, v.description, v.amount, v.currency, v.incurredOn, v.isRecurring, v.recurrence, v.receiptUrl, v.deductible],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) throw new Error('No se pudo registrar el gasto.');
+  const gasto = await getExpense(tx, id);
+  if (!gasto) throw new ExpenseNotFound(id);
+  await anotarGasto(tx, 'expense.created', id, null, gastoParaBitacora(gasto));
+  return gasto;
+}
+
+/**
+ * Corrige un gasto. Deja bitácora con SOLO los campos que cambian, en
+ * `before` y en `after`. Si nada cambia no escribe nada —ni la fila ni la
+ * bitácora—: guardar dos veces el mismo formulario no deja dos líneas.
+ */
+export async function updateExpense(tx: WorkspaceTx, id: string, input: UpdateExpenseInput): Promise<ExpenseRow> {
+  if (!isUuid(id)) throw new ExpenseNotFound(id);
+  // FOR UPDATE en la misma transacción: si la validación falla, no se
+  // escribe nada, y nadie más mueve la fila mientras se compara.
+  const actual = await tx.query<RawExpense>(`${SELECT_EXPENSE} WHERE e.id = $1 FOR UPDATE OF e`, [id]);
+  const antes = actual.rows[0] ? toExpense(actual.rows[0]) : null;
+  if (!antes) throw new ExpenseNotFound(id);
+
+  const v = await validarGasto(tx, input);
+  await tx.query(
+    `UPDATE expense
+     SET category = $2, vendor = $3, description = $4, amount = $5, currency = $6,
+         incurred_on = $7::date, is_recurring = $8, recurrence = $9, receipt_url = $10, deductible = $11
+     WHERE id = $1`,
+    [id, v.category, v.vendor, v.description, v.amount, v.currency, v.incurredOn, v.isRecurring, v.recurrence, v.receiptUrl, v.deductible],
+  );
+  const despues = await getExpense(tx, id);
+  if (!despues) throw new ExpenseNotFound(id);
+
+  const a = gastoParaBitacora(antes);
+  const b = gastoParaBitacora(despues);
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const clave of Object.keys(b)) {
+    if (a[clave] !== b[clave]) {
+      before[clave] = a[clave];
+      after[clave] = b[clave];
+    }
+  }
+  if (Object.keys(after).length > 0) await anotarGasto(tx, 'expense.updated', id, before, after);
+  return despues;
 }

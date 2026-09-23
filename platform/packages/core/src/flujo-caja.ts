@@ -32,8 +32,6 @@ import { isIsoDate } from './campanas.ts';
 // Categorías y recurrencias
 // ---------------------------------------------------------------------
 
-export type CategoriaGasto = 'edicion' | 'software' | 'equipo' | 'contabilidad' | 'servicios' | 'viajes' | 'otros';
-
 export interface OpcionGasto<T extends string> {
   id: T;
   labelEs: string;
@@ -43,18 +41,29 @@ export interface OpcionGasto<T extends string> {
  * Las seis del seed 0003 §7 más `otros`. Una lista cerrada sin salida
  * obliga a mentir en el primer gasto que no encaje; `otros` es esa
  * salida, y la descripción dice de qué se trata.
+ *
+ * Es una tupla no vacía (`as const`) para que entre a `z.enum` en el
+ * formulario sin forzar el tipo, como PLATFORMS en Resumen.
  */
-export const CATEGORIAS_GASTO: readonly OpcionGasto<CategoriaGasto>[] = [
-  { id: 'edicion', labelEs: 'Edición' },
-  { id: 'software', labelEs: 'Software y suscripciones' },
-  { id: 'equipo', labelEs: 'Equipo y estudio' },
-  { id: 'contabilidad', labelEs: 'Contabilidad' },
-  { id: 'servicios', labelEs: 'Servicios' },
-  { id: 'viajes', labelEs: 'Viajes' },
-  { id: 'otros', labelEs: 'Otros' },
-] as const;
+export const CATEGORIA_GASTO_IDS = ['edicion', 'software', 'equipo', 'contabilidad', 'servicios', 'viajes', 'otros'] as const;
 
-export const CATEGORIA_GASTO_IDS: readonly CategoriaGasto[] = CATEGORIAS_GASTO.map((c) => c.id);
+export type CategoriaGasto = (typeof CATEGORIA_GASTO_IDS)[number];
+
+/** Record, no array de pares: si mañana falta una etiqueta, no compila. */
+const CATEGORIA_GASTO_LABEL: Record<CategoriaGasto, string> = {
+  edicion: 'Edición',
+  software: 'Software y suscripciones',
+  equipo: 'Equipo y estudio',
+  contabilidad: 'Contabilidad',
+  servicios: 'Servicios',
+  viajes: 'Viajes',
+  otros: 'Otros',
+};
+
+export const CATEGORIAS_GASTO: readonly OpcionGasto<CategoriaGasto>[] = CATEGORIA_GASTO_IDS.map((id) => ({
+  id,
+  labelEs: CATEGORIA_GASTO_LABEL[id],
+}));
 
 /**
  * En el MVP solo hay gastos mensuales: es lo que tiene el seed y lo
@@ -64,11 +73,16 @@ export const CATEGORIA_GASTO_IDS: readonly CategoriaGasto[] = CATEGORIAS_GASTO.m
  * alguien las pida, una fila con otra recurrencia NO se proyecta y la
  * pantalla lo dice con una frase.
  */
-export type Recurrencia = 'monthly';
+export const RECURRENCIA_IDS = ['monthly'] as const;
 
-export const RECURRENCIAS: readonly OpcionGasto<Recurrencia>[] = [{ id: 'monthly', labelEs: 'Cada mes' }] as const;
+export type Recurrencia = (typeof RECURRENCIA_IDS)[number];
 
-export const RECURRENCIA_IDS: readonly Recurrencia[] = RECURRENCIAS.map((r) => r.id);
+const RECURRENCIA_LABEL: Record<Recurrencia, string> = { monthly: 'Cada mes' };
+
+export const RECURRENCIAS: readonly OpcionGasto<Recurrencia>[] = RECURRENCIA_IDS.map((id) => ({
+  id,
+  labelEs: RECURRENCIA_LABEL[id],
+}));
 
 /** La etiqueta en español de una categoría, o el valor crudo si no está en la lista. */
 export function labelCategoria(id: string): string {
