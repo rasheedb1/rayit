@@ -153,7 +153,7 @@ va en §3 de este documento.
 | `transitionCampaign` | `campaign.status_changed` | `campaign` / id | status, brandBaselineFrom | status, brandBaselineFrom |
 | `createCampaignFromQuote` (solo si creó) | `campaign.created` | `campaign` / id | null | quoteId, companyId, creatorId, dealId, name, amount, currency, startsOn, endsOn, status |
 | `upsertConnection` | `connection.added` si la fila es nueva, `connection.reconnected` si se reactivó | `social_connection` / id | null | platformId, externalAccountId, handle, accountType, accessMode, scopes, accessExpiresAt |
-| `recordConsent` | `consent.recorded` | `data_consent` / id | null | connectionId, purpose, policyVersion |
+| `recordConsent` | `consent.recorded` (y `consent.revoked` por la que reemplaza) | `data_consent` / id | null | connectionId, purpose, policyVersion |
 | `disconnectConnection` | `connection.disconnected` | `social_connection` / id | status | status |
 | `addPublicAccount` | `connection.added` / `connection.reconnected` | `social_connection` / id | null | platformId, externalAccountId, handle, accountType, accessMode |
 | `upgradePublicAccountToOAuth` | `connection.authorized` | `social_connection` / id | accessMode | accessMode, externalAccountId, handle, scopes, accessExpiresAt |
@@ -287,3 +287,41 @@ dejar la propia función SECURITY DEFINER (con el `workspace_id` de la
 cotización) o la Server Action de aceptación que corre después con
 workspace. Lo decides tú al adoptarla; te recomiendo la función, porque
 es la única que sabe que la aceptación ocurrió.
+
+## 4. Verificación (23 de septiembre de 2026)
+
+| Qué | Resultado |
+|---|---|
+| `pnpm verificar` (typecheck, lint y test de todos los paquetes, `--force`) | 15/15 tareas. @mc/db 624/624, @mc/web 741 + 1 todo, @mc/connectors 180/180, @mc/core 95/95, @mc/worker 47/47, raíz 8/8 |
+| `next build` de la web | Compiled successfully |
+| `make db.check` / `make db.guardia` | No aplica: sin migraciones |
+| Dev (puerto 3127, Postgres embebido con el seed, sin `.env.local`) | Crear factura por la Server Action real → 303 y fila `invoice.created` con número y cifras; «Marcar enviada» → `invoice.sent` con `before {status: draft}`; agregar @selvathegolden en TikTok → `connection.added` + `consent.recorded`; quitar la cuenta de Facebook del seed → `connection.disconnected`. Ninguna fila trae `secret_ref`, evidencia ni IP. La bitácora se leyó con una página temporal de solo lectura que se borró después (no está en la rama). |
+
+Nota de entorno: con la máquina a carga 80 las suites de PGlite se
+cancelan por el timeout de 120 s del arranque; se corrieron de nuevo con
+carga baja y dieron verde. No es de esta rama.
+
+## 5. Revisión
+
+### /code-review (nivel alto): 10 hallazgos
+
+| # | Hallazgo | Qué se hizo |
+|---|---|---|
+| 1 | `addPublicAccount` anotaba `accessMode: 'public_profile'` aunque el upsert conservara una cuenta ya autorizada | Resuelto: `RETURNING access_mode` y `before` leído de la fila. Prueba en `cuentas-publicas.test.ts` |
+| 2 | `upgradePublicAccountToOAuth` retiraba otra conexión sin fila y suponía el `before` | Resuelto: la fila propia se lee con `FOR UPDATE`; la retirada deja `connection.disconnected` con `replacedBy` |
+| 3 | El patrón de correo se comía URLs con @ y menciones | Resuelto: patrón con parte local sin `/` delante y TLD de letras; prueba con `tiktok.com/@selva.thegolden` y `(@cafe.alma)` |
+| 4 | Solo se quitaba la clave `ip` exacta | Resuelto: `clientIp`, `ipAddress`, `remote_addr`, `x-forwarded-for`, `X-Real-IP`, … sin tapar `zip` ni `description` |
+| 5 | Revocar consentimientos no dejaba rastro | Resuelto: `consent.revoked` al reemplazar (`recordConsent`) y al desconectar |
+| 6 | `linkPost` decía `before null` aunque el post ya estuviera, y no anotaba el principal desmarcado | Resuelto: `before` con el enlace y el principal anteriores; `setPrimaryPost` igual |
+| 7 | `upsertConnection` llamaba «reconexión» a una cuenta por @ que pasaba a autorizada | Resuelto: `connection.authorized` en ese caso, con `before` |
+| 8 | La prueba de convención no veía funciones flecha y contaba comentarios | Resuelto: reconoce `const x = async (…) =>` y quita comentarios; prueba propia del caso |
+| 9 | Una consulta más al desconectar | Se deja: desconectar es raro y leer el estado bajo bloqueo es lo que hace honesto el `before` |
+| 10 | `audit.ts` cargaba todo el barril de `@mc/connectors` | Resuelto: subruta `@mc/connectors/redact` (nadie importaba rutas internas del paquete) |
+
+### /security-review
+
+Sin hallazgos de severidad alta ni media. Se comprobó: parámetros
+posicionales en todo el SQL nuevo, que los `SELECT … FOR UPDATE` y el
+CTE corren como `mc_app` bajo RLS, que ningún `before`/`after` lleva
+`secret_ref`, tokens, evidencia, IP ni correos, y que el id de
+`audit_log` no sale de la base.
