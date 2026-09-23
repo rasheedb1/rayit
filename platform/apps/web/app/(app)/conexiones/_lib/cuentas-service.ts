@@ -199,7 +199,7 @@ export function createCuentasService(deps: CuentasDeps) {
           await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics });
           await flush(callLog, tx, row.id);
         });
-        return { ok: true, id: row.id, withMetrics: true, note: null };
+        return { ok: true, id: row.id, withMetrics: true, note: null, alreadyReadToday: false };
       } catch (err) {
         const message = err instanceof PublicLookupError ? err.messageEs
           : isPlatformApiError(err) && err.kind === "auth" ? "La plataforma rechazó el permiso de esta cuenta; hay que volver a autorizarla."
