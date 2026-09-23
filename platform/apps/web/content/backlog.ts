@@ -618,10 +618,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
     title: "Permisos en el marco",
-    desc: "requireModule() recibe el permiso mínimo además de la bandera; el menú esconde lo que la persona no puede abrir; la ruta directa responde 404.",
+    desc: "Cada módulo declara su permiso mínimo (permission en content/modules.ts); el layout.tsx de cada módulo hace requireModuleAccess(slug): primero la bandera, después el permiso, y las dos responden 404. El Shell resuelve permisosDeLaSesion() en servidor y el menú esconde lo que no se puede abrir; requirePermission() lee la membresía real (queries/accesos.ts) una vez por petición.",
     done: "Con sesión de «Contador», /campanas responde 404 y no aparece en el menú.",
-    status: "pendiente",
-    note: "404 y no 403, igual que una bandera apagada: un 403 confirma que el módulo existe.",
+    status: "hecho",
+    note: "Hecha el 23-sep sin esperar a ACC-1 ni ACC-3 (corrían a la vez): dos costuras marcadas, la matriz provisional por módulo en lib/permisos/roles-provisionales.ts (la borra ACC-1 con permisosDeRol) y la lectura de membership.role (la reemplaza ACC-3 por el JOIN con role_permission). Contador y Mánager se prueban sobre el conjunto del rol; contra Postgres embebido, la dueña del seed y alguien que no es miembro (DEMO_USER_ID en modo demo). Tres layout.tsx nuevos en carpetas de Rasheed (resumen, ventas, cotizar), pendientes de su visto bueno. Pendiente de Nicolás: el borrador de ACC-1 da al Contador campanas.campana.ver y este criterio dice lo contrario. Detalle en docs/propuestas/ACC-5.md.",
   },
   {
     id: "ACC-6", module: "ACC", owner: "nicolas", size: "M", sprint: 6, deps: ["ACC-3"],

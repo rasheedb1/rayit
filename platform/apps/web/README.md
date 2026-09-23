@@ -181,6 +181,7 @@ en `platform/.env.local`) y en Vercel:
 | `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
 | `APP_URL` | a qué origen vuelve el enlace del correo. En desarrollo y en las vistas previas, sin ella se deduce de las cabeceras de la petición; en **producción** nunca (las manda el cliente): sin `APP_URL` ni `VERCEL_PROJECT_PRODUCTION_URL`, `/login` no manda el enlace y el log dice por qué (`lib/auth/origen.ts`) |
 | `SUPPORT_EMAIL` | el correo de contacto que publican `/legal`, el error «ese correo ya está ligado a otra cuenta» de `/login` y el tope de espacios del selector. Sin él ninguno promete «escríbenos»: `/legal` dice que se publicará y `/login` ofrece entrar con otro correo. En producción, que falte se avisa en el log |
+| `DEMO_USER_ID` | **solo sin llaves** (modo demo): a quién se simula para los permisos del marco (ACC-5). Un id de `app_user`; el de la creadora del seed es `00000002-0000-4000-8000-000000000002`. Sin ella, el modo demo es el Dueño. Con llaves no se lee, como `DEMO_WORKSPACE_ID` |
 | `TURNSTILE_SITE_KEY` | la clave **de sitio** (pública) de Cloudflare Turnstile para el CAPTCHA de `/login` (CIM-10). La secreta va en el panel de Supabase, no aquí. Sin ella, `/login` funciona sin CAPTCHA: fuera de producción lo dice en una línea, en producción lo avisa el log |
 
 Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
@@ -378,5 +379,20 @@ membership.
   literal.
 - Un módulo apagado en `content/flags.ts` desaparece del menú y su
   ruta no existe.
+- **Banderas y permisos (ACC-5).** Una bandera dice si el módulo
+  **existe**; un permiso, si **esta persona** entra. Cada módulo declara
+  en `content/modules.ts` su permiso mínimo (`permission`, el `.ver`
+  principal) y el `layout.tsx` de su carpeta hace
+  `await requireModuleAccess("<slug>")` (`lib/permisos/modulo.ts`): se
+  evalúa primero la bandera y después el permiso, y en los dos casos la
+  ruta responde **404**, nunca 403 (un 403 confirmaría que el módulo
+  existe). El menú esconde lo que no se puede abrir: el `Shell` resuelve
+  `permisosDeLaSesion()` en servidor y se lo pasa a la navegación. Los
+  permisos salen de la membresía en el workspace actual
+  (`@mc/db/queries/accesos`), una vez por petición; sin sesión, ninguno;
+  sin llaves (modo demo), el Dueño —o la membresía real de
+  `DEMO_USER_ID`, que es como se prueba en dev que el marco esconde y
+  cierra—. Toda Server Action abre con `await requirePermission("…")`
+  (`lib/permisos`). El detalle está en `lib/permisos/README.md`.
 - Nada aquí hace aritmética de métricas. Cuando lleguen los datos, los
   números derivados salen de las vistas de la base.

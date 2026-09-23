@@ -238,12 +238,86 @@ Sin migraciones. Sin dependencias nuevas.
 
 ## 1. Lo que quedó construido
 
-(Se completa al cerrar la historia.)
+| Pieza | Dónde | Qué hace |
+|---|---|---|
+| Permiso por módulo | `apps/web/content/modules.ts` | `permission` en `ModuleDef` (los seis de producto y Accesos; `MODULE_PERMISSIONS` con los nombres del borrador de ACC-1); `can(permisos, m)`; `hasPermission(permisos, permiso)` (exacto o comodín `<módulo>.*`); `productModules(flags, permisos?)`; `requireModule(slug, { flags, permisos })`, puro, compatible con `requireModule(slug, flags)` y `requireModule(slug)`. Bandera primero, permiso después, 404 en los dos casos. |
+| La sesión → permisos | `apps/web/lib/permisos/sesion.ts` | `permisosDeLaSesion()` con `cache` de React; demo → Dueño o `DEMO_USER_ID`; con llaves y sin sesión → vacío; con sesión → `getSessionMembership` en `withWorkspace`. Falla cerrado. |
+| Server Actions | `apps/web/lib/permisos/index.ts` | `requirePermission(permiso)` real, `puede(permiso)`, `SinPermisoError` (`code`, `messageEs`, `permiso`; sin ids en el mensaje). |
+| Ruta directa | `apps/web/lib/permisos/modulo.ts` + `app/(app)/<módulo>/layout.tsx` ×6 | `requireModuleAccess(slug)`; el layout de cada módulo lo llama y devuelve `children`. Con `not-found.tsx` de `(app)` y sin `loading.tsx` por encima, el 404 es de verdad. |
+| Menú | `components/shell.tsx`, `components/nav.tsx` | El Shell (servidor) resuelve los permisos y baja la lista; `SideNav`/`MobileNav` filtran con `productModules(flags, permisos)`; «Accesos» solo con `equipo.miembro.ver`. Si la base falla, el menú va sin módulos y se registra. |
+| Plan | `components/module-plan.tsx`, `app/(app)/plan/[modulo]/page.tsx` | `ModulePlan` es asíncrono y usa `requireModuleAccess`: `/accesos` y `/plan/<módulo>` respetan bandera y permiso. |
+| Consulta | `packages/db/src/queries/accesos.ts` | `getSessionMembership(tx)`: `membership.role` y `workspace.kind` con `current_workspace_id()` y `current_user_id()`; sin identidad, null. Exportada como `@mc/db/queries/accesos`. |
+| Matriz provisional | `apps/web/lib/permisos/roles-provisionales.ts` | Fase 5 por módulo con comodines, y `membership.role` → rol de fábrica (el backfill de ACC-3). **Se borra con ACC-1 y ACC-3.** |
+| Pruebas | `packages/db/test/accesos.test.ts` (7), `lib/permisos/*.test.ts` (21), `content/modules.test.ts` (+7), `components/nav.test.tsx` (+4), `app/(app)/permisos-marco.test.tsx` (7), `app/(app)/permisos-marco-db.test.tsx` (3, contra Postgres embebido con el seed) | Ver §0.4. |
+| Documentación | `apps/web/README.md` (§Reglas del marco, §Variables), `packages/db/README.md`, `lib/permisos/README.md`, `content/backlog.ts` | — |
+
+Sin migraciones, sin dependencias nuevas, sin tocar `lib/auth/`,
+`lib/workspace/` ni `queries/identidad.ts`.
 
 ## 2. La consulta que ACC-3 reemplaza
 
-(Se completa al cerrar.)
+Hoy (`queries/accesos.ts`):
+
+```sql
+SELECT m.role, w.kind AS workspace_kind
+FROM membership m JOIN workspace w ON w.id = m.workspace_id
+WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id()
+LIMIT 1;
+```
+
+Con ACC-3 (`membership.role_id`, `role`, `role_permission`), la misma
+función pasa a devolver las llaves y la web deja de conocer roles:
+
+```sql
+-- getSessionPermissions(tx): Promise<string[]>
+SELECT rp.permission_key
+FROM membership m
+JOIN role_permission rp ON rp.role_id = m.role_id
+WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id();
+```
+
+`role_permission` no tiene `workspace_id`: necesita política EXISTS
+sobre `role` (patrón 0018), y `role` de sistema (`workspace_id IS NULL`)
+tiene que ser visible para `mc_app` (patrón `feature_flag`, 0020). Con
+eso, `permisosDeLaSesion()` cambia dos líneas (`new Set(await
+getSessionPermissions(tx))`) y `roles-provisionales.ts` se borra. Las
+pruebas de `permisos-marco.test.tsx` no cambian: prueban conjuntos.
 
 ## 3. Lo que necesita Rasheed
 
-(Se completa al cerrar.)
+1. **Visto bueno a `app/(app)/layout.tsx`** (el Shell bajado al grupo
+   `(app)`, CIM-3 + COT-2): **dado**. Es lo correcto —`/login`, el
+   callback y `(public)` no llevan marco— y `force-dynamic` en el grupo
+   es justo lo que ACC-5 necesita: el marco depende ahora también de
+   los permisos de quien mira.
+2. **Tres archivos nuevos en tus carpetas**, idénticos a los míos:
+   `app/(app)/resumen/layout.tsx`, `app/(app)/ventas/layout.tsx` y
+   `app/(app)/cotizar/layout.tsx` (seis líneas: `await
+   requireModuleAccess("<slug>")` y `return children`). Sin ellos, el
+   menú esconde tu módulo pero la URL directa sigue abierta. No tocan
+   ningún `page.tsx` tuyo ni tus `loading.tsx` (quedan dentro del
+   layout, como Next los pone). Si prefieres ponerlos tú, se quitan de
+   este PR. **Ningún `page.tsx` tuyo llama a `requireModule`**, así que
+   no hay más archivos afectados; `plan/[modulo]` y `ModulePlan` (míos)
+   sí, y ya aplican el permiso.
+3. **`queries/accesos.ts`** es mío y nuevo (junto a tu
+   `queries/identidad.ts`, que no toco). Cuando apliques ACC-3, la
+   sustitución es la de §2.
+4. **`DEMO_USER_ID`** la leo en `lib/permisos/sesion.ts` solo sin
+   llaves. Lo natural es que viva junto a `DEMO_WORKSPACE_ID` en
+   `lib/workspace/current.ts` y llegue como `identity` del `Contexto`
+   en modo demo: entonces `audit()` (ACC-2) tendría actor también en
+   demo y yo borro `permisosDeDemo()`. Propuesta, no urgencia.
+5. **Un segundo usuario en el seed** para probar el marco en dev sin
+   ACC-3: propongo en `db/seed/0003` (mío) o `0002` (tuyo) una fila
+   `app_user` («Valeria Ruiz», `valeria@oncue.test`,
+   `0000000e-0000-4000-8000-000000000001`) con membresía `viewer` en
+   el espacio de Laura. Hoy la prueba lo inserta en pglite. Con ACC-3
+   el seed debería traer además un Contador y un Mánager reales (son
+   los roles del «terminado cuando» de ACC-5 y de ACC-4).
+6. **Tus Server Actions** (Ventas, Cotizar, Resumen/importar) reciben
+   `await requirePermission("…")` como primera línea cuando adoptes la
+   convención (ACC-1 deja la lista de permisos en su propuesta);
+   `requirePermission` ya es real desde esta historia. Los dos route
+   handlers de OAuth (detrás de `OAUTH_CONNECT`) no pasan por el layout:
+   les toca `conexiones.cuenta.conectar` cuando se reactive CON-3.

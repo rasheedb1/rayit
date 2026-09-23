@@ -25,6 +25,7 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 |---|---|---|
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
+| Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionMembership } from '@mc/db/queries/accesos'` — lee `membership.role` con los dos ids de la transacción; la web lo convierte en permisos (`apps/web/lib/permisos`) |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
 
