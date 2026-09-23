@@ -375,10 +375,16 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 -- escribió en la fila 'pending'.
 -- =====================================================================
 
--- Quién es el despachador: mc_worker (tras SET ROLE), o un superusuario
--- o un rol con BYPASSRLS (quien migra o siembra). mc_app, no. Lo usan
--- todos los candados de columna de esta migración; current_user es el
--- rol efectivo aunque la conexión herede otros (el mc_app_ci del CI es
+-- Quién es el despachador: mc_worker (tras SET ROLE), un superusuario o
+-- un rol con BYPASSRLS, o el DUEÑO de outbound_touch, que es quien migra
+-- y siembra (mc_migrator en Supabase, que no tiene BYPASSRLS; el seed
+-- 0005 escribe así la demo de outreach). Es el dueño de esa tabla y no
+-- el del esquema porque esta misma migración la altera: quien la aplica
+-- es su dueño por fuerza. Y no le da nada nuevo: ya puede ALTER TABLE …
+-- DISABLE TRIGGER. mc_app, no: no es miembro de
+-- ningún rol (ROLES_DE_LA_APP_DECLARADOS, vacía). Lo usan todos los
+-- candados de columna de esta migración; current_user es el rol
+-- efectivo aunque la conexión herede otros (el mc_app_ci del CI es
 -- miembro de mc_worker).
 CREATE FUNCTION outreach_is_dispatcher()
 RETURNS boolean
@@ -387,8 +393,9 @@ STABLE
 SET search_path = public, pg_temp
 AS $$
   SELECT coalesce((SELECT current_user = 'mc_worker' OR r.rolsuper OR r.rolbypassrls
-                     FROM pg_catalog.pg_roles r
-                    WHERE r.rolname = current_user), false);
+                          OR pg_has_role(current_user, c.relowner, 'MEMBER')
+                     FROM pg_catalog.pg_roles r, pg_catalog.pg_class c
+                    WHERE r.rolname = current_user AND c.oid = 'public.outbound_touch'::regclass), false);
 $$;
 
 CREATE TABLE outreach_channel_account (
@@ -2509,6 +2516,14 @@ GRANT INSERT ON outbound_optout_event TO mc_public_share;
 -- ---------------------------------------------------------------------
 -- 9.2 · La cerradura: políticas acotadas a lo que fija la función
 -- ---------------------------------------------------------------------
+-- La demo (seed 0005) la siembra quien migra, con el workspace de la
+-- demo fijado: sin BYPASSRLS y con FORCE, sin esta política no podría
+-- dejar el enlace de un correo «enviado». TO CURRENT_USER (mc_migrator,
+-- o mc_migrator_embedded en PGlite) y solo en el workspace fijado, como
+-- las altas de 7.2; a mc_app no le alcanza.
+CREATE POLICY outbound_optout_link_seed ON outbound_optout_link FOR INSERT TO CURRENT_USER
+  WITH CHECK (current_workspace_id() IS NOT NULL AND workspace_id = current_workspace_id());
+
 CREATE POLICY outbound_optout_link_public_optout ON outbound_optout_link
   FOR SELECT TO mc_public_share
   USING (token_hash = nullif(current_setting('app.public_optout', true), ''));
