@@ -21,6 +21,7 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "local
 import { closeDb, getDbMode } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { formatDate, formatInt } from "@/lib/format";
 import { MESSAGES } from "./_lib/messages";
 import CampanaPage from "./[id]/page";
 
@@ -82,15 +83,18 @@ describe("la ficha real contra el seed", () => {
     // las fecha respecto de CURRENT_DATE, así que el número y el día cambian a medianoche UTC:
     // se leen de la base en vez de fijarlos (hasta el 23-sep decía «417.673 hasta el 22 sep»).
     const ultimas = await withWorkspaceId(SEED_WORKSPACE_ID, async (tx) =>
-      (await tx.query<{ title: string; views: string }>(
-        `SELECT p.title, (SELECT s.views::text FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) AS views
-           FROM post p WHERE p.title IN ('Cold brew en casa en 3 pasos', 'El cold brew que me salva las mañanas')`,
+      (await tx.query<{ title: string; views: string; captured_at: string }>(
+        `SELECT p.title, l.views::text AS views, to_char(l.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS captured_at
+           FROM post p
+           JOIN LATERAL (SELECT s.views, s.captured_at FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) l ON true
+          WHERE p.title IN ('Cold brew en casa en 3 pasos', 'El cold brew que me salva las mañanas')`,
       )).rows,
     );
     expect(ultimas).toHaveLength(2);
     for (const [titulo, red, publicado] of [["Cold brew en casa en 3 pasos", "Instagram", "10 ago"], ["El cold brew que me salva las mañanas", "TikTok", "12 ago"]] as const) {
-      const views = Number(ultimas.find((u) => u.title === titulo)!.views).toLocaleString("es-CO");
-      expect(texto).toMatch(new RegExp(`${titulo} ${red} ${publicado} ${views.replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
+      const u = ultimas.find((x) => x.title === titulo)!;
+      // La cifra y el día de ESA lectura, formateados como los formatea la ficha.
+      expect(texto).toContain(`${titulo} ${red} ${publicado} ${formatInt(Number(u.views))} hasta el ${formatDate(u.captured_at)}`);
     }
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);

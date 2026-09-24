@@ -145,6 +145,15 @@ export interface EstadoDeCuenta {
 }
 
 /**
+ * Redes cuyo refresh token NO tiene fecha de vencimiento: Google no la
+ * manda (CON-8 §0.2 · 4), así que `refresh_expires_at` nulo es «se
+ * renueva mientras nadie la revoque», no «no hay renovación». Instagram,
+ * con nulo, sí se queda sin salida: su token largo no se renueva vencido.
+ * Si Google la revoca, oauth.refresh la pasa a needs_reauth y manda eso.
+ */
+const REFRESH_WITHOUT_EXPIRY: ReadonlySet<FilaDeCuenta["platformId"]> = new Set(["youtube"]);
+
+/**
  * El estado que se pinta, derivado de la fila y del reloj.
  *
  * El orden importa: `needs_reauth` y `revoked` son respuestas de la
@@ -171,7 +180,8 @@ export function estadoDeCuenta(row: FilaDeCuenta, ahora: Date): EstadoDeCuenta {
       // la renueva 30 minutos ANTES de que venza, así que si la fila se
       // ve así es que no corre (hoy, en producción): se ofrece
       // reautorizar como salida secundaria para no dejarla atascada.
-      if (row.refreshExpiresAt !== null && !vencido(row.refreshExpiresAt, ahora)) {
+      const renewable = row.refreshExpiresAt === null ? REFRESH_WITHOUT_EXPIRY.has(row.platformId) : !vencido(row.refreshExpiresAt, ahora);
+      if (renewable) {
         return e("warn", t.estado.seRenuevaSola, "reautorizar_opcional", t.seRenuevaSola);
       }
       return e("bad", t.estado.vencida, "reautorizar");
@@ -237,9 +247,9 @@ export function frescura(horas: number | null): string {
 }
 
 /**
- * Qué app de CON-3 reautoriza esta red. YouTube y Facebook no tienen
- * proveedor todavía (CON-8, pospuesta): su cuenta se ve, pero no se
- * ofrece un botón que no lleva a ninguna parte.
+ * Qué app reautoriza esta red: las de CON-3 (TikTok, Instagram) y la de
+ * CON-8 (YouTube). Facebook no tiene proveedor todavía: su cuenta se ve,
+ * pero no se ofrece un botón que no lleva a ninguna parte.
  */
 const PROVEEDOR: Partial<Record<ConnectionPlatformId, OAuthProviderId>> = {
   tiktok: "tiktok",

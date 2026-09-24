@@ -11,8 +11,6 @@ export type ConnectDialogProps = {
   policyVersion: string;
   /** POST a /conexiones/oauth/<proveedor>/start. */
   action: string;
-  /** Si viene, el botón se muestra deshabilitado con este motivo (app sin configurar). */
-  disabledReason?: string;
   variant?: "primary" | "secondary" | "danger";
   size?: "sm" | "md";
   /** Texto del botón; por defecto «Conectar {label}». */
@@ -32,18 +30,19 @@ export type ConnectDialogProps = {
  * MISMA ruta `start` sirven para «Reautorizar» una cuenta cuyo permiso
  * caducó, porque el callback reactiva la fila por su clave natural en
  * vez de crear otra. Lo único que cambia es lo que se lee y el tono.
+ * Ya no tiene estado deshabilitado (cierre CON-C): una red sin sus
+ * variables no monta el diálogo y la pantalla lo dice con una frase.
  */
-export function ConnectDialog({ label, text, policyVersion, action, disabledReason, variant = "primary", size = "md", actionLabel, ariaLabel, title }: ConnectDialogProps) {
+export function ConnectDialog({ label, text, policyVersion, action, variant = "primary", size = "md", actionLabel, ariaLabel, title }: ConnectDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descId = useId();
   const encabezado = title ?? `Conectar ${label}`;
   return (
     <>
-      <Button variant={variant} size={size} onClick={() => ref.current?.showModal()} disabled={!!disabledReason} title={disabledReason} aria-label={ariaLabel}>
+      <Button variant={variant} size={size} onClick={() => ref.current?.showModal()} aria-label={ariaLabel}>
         {actionLabel ?? `Conectar ${label}`}
       </Button>
-      {disabledReason && <span className="sr-only">{disabledReason}</span>}
       <dialog
         ref={ref}
         aria-labelledby={titleId}

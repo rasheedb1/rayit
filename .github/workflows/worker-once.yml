@@ -19,6 +19,8 @@ name: Worker · una pasada
 #   TIKTOK_LOGIN_CLIENT_KEY, TIKTOK_LOGIN_CLIENT_SECRET
 #   INSTAGRAM_HOUSE_TOKEN, GOOGLE_API_KEY   (sin ellas esas redes se saltan y se avisa)
 #   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  (CON-8: renovar los canales autorizados)
+#   META_APP_ID, META_APP_SECRET, TIKTOK_BUSINESS_APP_ID, TIKTOK_BUSINESS_APP_SECRET
+#                              (apps de CON-3 fuera del MVP: hoy sin conexiones)
 #   ENSEMBLEDATA_TOKEN         (CON-12, solo si se contrata el proveedor)
 # Un secreto que no existe llega vacío, y vacío es «no configurada»: la
 # fuente se apaga y lo dice (docs/propuestas/CIERRE-CON-C.md §2).
@@ -77,6 +79,10 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           ENSEMBLEDATA_TOKEN: ${{ secrets.ENSEMBLEDATA_TOKEN }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          TIKTOK_BUSINESS_APP_ID: ${{ secrets.TIKTOK_BUSINESS_APP_ID }}
+          TIKTOK_BUSINESS_APP_SECRET: ${{ secrets.TIKTOK_BUSINESS_APP_SECRET }}
           OAUTH_REFRESH_MARGIN_MINUTES: '120'
           WORKER_JOB_POOL_MAX: '4'
           LOG_FORMAT: json

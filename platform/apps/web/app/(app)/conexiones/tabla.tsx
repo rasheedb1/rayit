@@ -77,8 +77,9 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * El botón «Reautorizar», en rojo, para una cuenta cuyo permiso caducó
  * o fue revocado. Reusa el `POST …/start` de CON-3: el callback vuelve
  * a la MISMA fila por su clave natural, así que el historial se
- * conserva. Si la app de esa red no está configurada en el entorno, el
- * botón sale deshabilitado diciendo qué falta, nunca desaparece.
+ * conserva. Si la app de esa red no está configurada en el entorno no
+ * se monta: la fila dice qué hacer (`sinReautorizar`) sin nombrar
+ * variables de servidor.
  */
 function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; provider: OAuthProviderId; urgente?: boolean }) {
   const red = PLATFORM_LABEL[provider];
@@ -104,20 +105,22 @@ function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; pro
  * demografía—, que la Data API no entrega sin el permiso del canal
  * (CON-8). Instagram no aparece: por @ ya da lo que el MVP necesita.
  */
-const AUTORIZABLES: Partial<Record<FilaDeCuenta["platformId"], { provider: OAuthProviderId; label: string; aria: (cuenta: string) => string }>> = {
+const OWNER_AUTHORIZABLE: Partial<Record<FilaDeCuenta["platformId"], { provider: OAuthProviderId; label: string; aria: (cuenta: string) => string }>> = {
   tiktok: { provider: "tiktok", label: t.autorizarCifras, aria: t.autorizarCifrasAria },
   youtube: { provider: "youtube", label: t.autorizarAnalitica, aria: t.autorizarAnaliticaAria },
 };
 
-function Autorizar({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {
+function AuthorizeButton({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {
   // Sin la app configurada (YouTube sin GOOGLE_CLIENT_*, por ejemplo) no
   // hay nada que autorizar y no se ofrece un botón muerto: qué falta lo
   // dice la sección de conectar, que es donde mira quien despliega.
-  const conf = AUTORIZABLES[row.platformId];
+  const conf = OWNER_AUTHORIZABLE[row.platformId];
   if (!conf || !entorno.oauthConnect || !appDeRed(entorno, conf.provider).configurada) return null;
   return (
     <ConnectDialog
       label={PLATFORM_LABEL[conf.provider]}
+      // El diálogo dice lo mismo que el botón: autorizar ESTA fila, no conectar una cuenta nueva.
+      title={`${conf.label} · ${nombre(row)}`}
       actionLabel={conf.label}
       ariaLabel={conf.aria(nombre(row))}
       text={consentText(conf.provider)}
@@ -290,7 +293,7 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
                 </Button>
               </form>
             )}
-            {permisos.conectar && (acceso.clase === "por_arroba" || acceso.clase === "proveedor") && <Autorizar row={r} entorno={entorno} />}
+            {permisos.conectar && (acceso.clase === "por_arroba" || acceso.clase === "proveedor") && <AuthorizeButton row={r} entorno={entorno} />}
             {permisos.desconectar && (
               <form action={desconectarConexion.bind(null, r.id)}>
                 <Button type="submit" size="sm" variant="ghost" aria-label={t.quitarAria(nombre(r))}>

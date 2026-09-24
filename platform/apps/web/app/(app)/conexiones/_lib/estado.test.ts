@@ -205,6 +205,8 @@ describe("costura CON-3 → CON-4: un acceso vencido con renovación viva", () =
 
   it("sin permiso de renovación (null) hay que volver a autorizar: rojo y «Reautorizar»", () => {
     expect(estadoDeCuenta(fila({ accessExpiresAt: VENCIO, refreshExpiresAt: null }), AHORA)).toMatchObject({ tono: "bad", texto: "Vencida", accion: "reautorizar" });
+    // YouTube (CON-8): Google no pone fecha al refresh token; nulo es «se renueva», no «no hay renovación».
+    expect(estadoDeCuenta(fila({ platformId: "youtube", accessExpiresAt: VENCIO, refreshExpiresAt: null }), AHORA)).toMatchObject({ tono: "warn", accion: "reautorizar_opcional" });
   });
 
   it("con la renovación TAMBIÉN vencida, igual: rojo y «Reautorizar»", () => {

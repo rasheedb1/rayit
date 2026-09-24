@@ -42,14 +42,16 @@ export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok", "youtube
  * encenderla. Nombres de variables, nunca sus valores.
  */
 export function Conectar({ entorno }: { entorno: EntornoDeConexion }) {
+  const ready = REDES_CONECTABLES.filter((provider) => appDeRed(entorno, provider).configurada);
+  const off = REDES_CONECTABLES.filter((provider) => !appDeRed(entorno, provider).configurada).map((provider) => ({ provider, missing: appDeRed(entorno, provider).faltan }));
   return (
     <section aria-labelledby="conectar" className="mb-10 rounded-md border border-border bg-surface p-5">
       <SectionTitle>
         <span id="conectar">{t.titulo}</span>
       </SectionTitle>
       <p className="max-w-2xl text-sm leading-6 text-ink-2">{t.descripcion}</p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {REDES_CONECTABLES.filter((provider) => appDeRed(entorno, provider).configurada).map((provider) => {
+      {ready.length > 0 && <div className="mt-4 flex flex-wrap gap-2">
+        {ready.map((provider) => {
           const red = PLATFORM_LABEL[provider];
           return (
             <ConnectDialog
@@ -63,10 +65,10 @@ export function Conectar({ entorno }: { entorno: EntornoDeConexion }) {
             />
           );
         })}
-      </div>
-      {REDES_CONECTABLES.filter((provider) => !appDeRed(entorno, provider).configurada).map((provider) => (
+      </div>}
+      {off.map(({ provider, missing }) => (
         <p key={provider} className="mt-2 max-w-2xl text-xs text-ink-2">
-          {t.sinConfigurar(PLATFORM_LABEL[provider], appDeRed(entorno, provider).faltan.join(", "))}
+          {t.sinConfigurar(PLATFORM_LABEL[provider], missing.join(", "))}
         </p>
       ))}
     </section>

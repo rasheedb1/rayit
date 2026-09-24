@@ -20,9 +20,11 @@ test('el workflow del worker pasa las variables de todas las fuentes, cada una d
   const fuentes = [
     INSTAGRAM_HOUSE_TOKEN_ENV, // CON-10 / CON-5, Instagram por @
     GOOGLE_API_KEY_ENV, // CON-10 / CON-5, YouTube por @
-    OAUTH_ENV_NAMES.youtube.clientId, OAUTH_ENV_NAMES.youtube.clientSecret, // CON-8
-    OAUTH_ENV_NAMES.tiktok.clientId, OAUTH_ENV_NAMES.tiktok.clientSecret, // CON-3
     ENSEMBLEDATA_TOKEN_ENV, // CON-12
+    // Todas las apps de OAuth (CON-3 y CON-8), no una lista escogida: una
+    // app que la web ofrece y el worker no ve es un token que nadie renueva.
+    // El redirect_uri no hace falta: sale de APP_URL.
+    ...Object.values(OAUTH_ENV_NAMES).flatMap((names) => [names.clientId, names.clientSecret]),
   ];
   for (const nombre of fuentes) {
     assert.match(yml, new RegExp(`^\\s+${nombre}: \\$\\{\\{ secrets\\.${nombre} \\}\\}$`, 'm'), `${nombre} no llega al worker`);

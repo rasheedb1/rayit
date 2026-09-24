@@ -238,6 +238,14 @@ make db.sql Q="with ws as (select set_config('app.workspace_id','00000002-0000-4
   `apps/worker/test/workflow-fuentes.test.ts` falla si alguna se cae.
   Una variable solo en Vercel enciende lo que hace la web (agregar,
   «Actualizar», autorizar) y nada de lo diario.
+- **`ENSEMBLEDATA_TOKEN` va en Vercel y en el workflow A LA VEZ, o en
+  ninguno.** Con la variable, la fila de TikTok pasa a `aggregator`; sin
+  ella, vuelve a `public_profile`. Si solo la tiene un lado, cada pasada
+  del worker y cada «Actualizar» de la web la cambian de fuente, con su
+  fila de bitácora y su etiqueta alternando entre «Por proveedor» y «Por
+  @». Lo mismo al darla de baja: se quita de los dos. (Revisión del
+  cierre, hallazgo 2; no se protege en código porque la variable es el
+  interruptor por diseño, CON-12 §0.4 · 1.)
 - **`INSTAGRAM_HOUSE_TOKEN` caduca a los 60 días.** El día que vence, la
   fila de cada cuenta de Instagram por @ dice «La credencial de Instagram
   de On Cue venció» y ninguna cifra nueva entra. La renovación automática
