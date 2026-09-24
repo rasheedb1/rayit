@@ -337,6 +337,10 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'system_role_id(text,text)':
     '0034_access_control: el id de un rol de sistema por (tipo de workspace, clave). Lo usan createCreatorWorkspace ' +
     '(la dueña del espacio nuevo), los seeds y las pruebas',
+  'scope_allows(text,uuid)':
+    '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
+    'Conexiones (src/scope.ts, ACC-6)',
+  'scope_allows(text,uuid[])': '0040_scope_allows: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
 };
 
 /**

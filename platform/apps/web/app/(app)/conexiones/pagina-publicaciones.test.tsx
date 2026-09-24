@@ -10,7 +10,7 @@
  */
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AccountRow } from "@mc/db";
+import type { AccountRow, ScopeKind } from "@mc/db";
 
 vi.mock("./_lib/cuentas-server", () => ({ getCuentasService: () => servicio }));
 // ACC-8: la página formatea «Conectada por … el …» con los ajustes del workspace.
@@ -23,6 +23,7 @@ vi.mock("./actions", () => ({
   desconectarConexion: vi.fn(),
 }));
 
+import { MESSAGES } from "./_lib/messages";
 import CuentasPage from "./page";
 
 const BASE: AccountRow = {
@@ -36,11 +37,12 @@ const BASE: AccountRow = {
   refreshExpiresAt: null, gaps: [],
 };
 
-let servicio: { listar: () => Promise<AccountRow[]>; availability: () => Array<{ platformId: string; name: string; offersEs: string; missing: string[] }> };
+let servicio: { listar: () => Promise<AccountRow[]>; alcance: () => Promise<ScopeKind[]>; availability: () => Array<{ platformId: string; name: string; offersEs: string; missing: string[] }> };
 
-async function pintar(filas: AccountRow[]) {
+async function pintar(filas: AccountRow[], alcance: ScopeKind[] = []) {
   servicio = {
     listar: () => Promise.resolve(filas),
+    alcance: () => Promise.resolve(alcance),
     availability: () => [
       { platformId: "instagram", name: "Instagram", offersEs: "Seguidores y publicaciones.", missing: [] },
       { platformId: "tiktok", name: "TikTok", offersEs: "Solo identidad.", missing: [] },
@@ -107,5 +109,24 @@ describe("la fila de Cuentas después de que corre el recolector", () => {
     expect(within(fila("nutriveoficial")).getByText(/^Conectada por Andrés Pardo el 20/)).toBeInTheDocument();
     expect(within(fila("propia")).queryByText(/Conectada por/)).toBeNull();
     expect(within(fila("sinnombre")).getByText(/^Conectada por alguien del equipo el 20/)).toBeInTheDocument();
+  });
+});
+
+describe("alcance (ACC-6): una lista vacía por alcance se explica, no dice «todavía no hay»", () => {
+  it("con alcance por marca o por campaña no hay cuentas y la pantalla dice por qué", async () => {
+    await pintar([], ["company"]);
+    expect(screen.getByText(MESSAGES.alcance.title)).toBeInTheDocument();
+    expect(screen.queryByText("Todavía no hay cuentas")).not.toBeInTheDocument();
+  });
+
+  it("sin alcance (hoy, todos) el vacío sigue siendo «todavía no hay cuentas»", async () => {
+    await pintar([]);
+    expect(screen.getByText("Todavía no hay cuentas")).toBeInTheDocument();
+    expect(screen.queryByText(MESSAGES.alcance.title)).not.toBeInTheDocument();
+  });
+
+  it("con alcance por creador el vacío es el de siempre: las cuentas de su creador sí se verían", async () => {
+    await pintar([], ["creator"]);
+    expect(screen.getByText("Todavía no hay cuentas")).toBeInTheDocument();
   });
 });

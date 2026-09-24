@@ -84,7 +84,9 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
   const service = getCuentasService();
   // De cada cuenta, solo lo que la pantalla pinta: ni la ref del
   // secreto ni los scopes bajan al navegador (_lib/estado.ts).
-  const [cuentas, ws] = await Promise.all([service.listar(), getCurrentWorkspace()]);
+  // ACC-6: con alcance por marca o campaña no se ve ninguna cuenta; se dice, no se pinta «todavía no hay».
+  const [cuentas, ws, alcance] = await Promise.all([service.listar(), getCurrentWorkspace(), service.alcance()]);
+  const fueraDeAlcance = alcance.includes("company") || alcance.includes("campaign");
   const rows = cuentas.map(filaDeCuenta);
   const f = formatterFor(ws);
   const availability = service.availability();
@@ -158,7 +160,7 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
         <SectionTitle meta={MESSAGES.tabla.cuenta(rows.length)}>
           <span id="cuentas">{MESSAGES.tabla.titulo}</span>
         </SectionTitle>
-        <TablaDeCuentas rows={rows} ahora={new Date()} f={f} entorno={entorno} permisos={{ conectar, desconectar }} />
+        <TablaDeCuentas rows={rows} ahora={new Date()} f={f} entorno={entorno} permisos={{ conectar, desconectar }} fueraDeAlcance={fueraDeAlcance} />
         {rows.length > 0 && <p className="mt-3 text-xs text-muted">{MESSAGES.tabla.huecosCadaManana}</p>}
       </section>
 

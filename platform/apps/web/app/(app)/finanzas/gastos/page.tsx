@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { can, proyectarGastos } from "@mc/core";
+import { getScopeKinds } from "@mc/db";
 import { getCashflowInputs, getExpenseMonth } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { ChartCard } from "@/components/ui/chart-card";
@@ -72,15 +73,32 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
   await requireModuleAccess("finanzas");
   await requirePagePermission("finanzas.gasto.ver");
   const params = await searchParams;
-  const { mes, entradas } = await withWorkspace(async (tx) => ({
-    mes: await getExpenseMonth(tx, params.mes ?? null),
-    // La MISMA consulta que /finanzas/flujo: la proyección de abajo y la
-    // columna «Gastos» del flujo no pueden decir dos cifras distintas.
-    entradas: await getCashflowInputs(tx),
-  }));
+  // ACC-6: con cualquier alcance, los gastos (que son de todo el espacio)
+  // no se ven; se pregunta PRIMERO para no leer el mes ni el flujo que no
+  // se van a pintar, y la pantalla lo dice en vez de «no hay gastos».
+  const datos = await withWorkspace(async (tx) => {
+    if ((await getScopeKinds(tx)).length > 0) return null;
+    return {
+      mes: await getExpenseMonth(tx, params.mes ?? null),
+      // La MISMA consulta que /finanzas/flujo: la proyección de abajo y la
+      // columna «Gastos» del flujo no pueden decir dos cifras distintas.
+      entradas: await getCashflowInputs(tx),
+    };
+  });
   const f = formatterFor(await getCurrentWorkspace());
   const permisos = await permisosDeLaSesion();
 
+  if (datos === null) {
+    return (
+      <>
+        <PageHeader eyebrow={T.header.eyebrow} title={T.header.title} description={T.header.description} />
+        <ModuleTabs active="/finanzas/gastos" permisos={permisos} />
+        <EmptyState title={MESSAGES.alcance.gastosTitulo} description={MESSAGES.alcance.gastosDescripcion} />
+      </>
+    );
+  }
+
+  const { mes, entradas } = datos;
   const gastos = mes.rows.map((r) => gastoVista(r, f, { sinProveedor: T.tabla.sinProveedor, sinDescripcion: T.tabla.sinDescripcion }));
   const categorias = categoriasVista(mes.byCategory, mes.currency, f);
 

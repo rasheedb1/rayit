@@ -158,6 +158,12 @@ Reglas:
 - `ctx.db` corre como **`mc_worker`, que se salta RLS**. Cada escritura
   filtra por `workspace_id` explícitamente. Un `UPDATE` sin ese `WHERE`
   toca todos los clientes.
+- **El worker no aplica alcance** (ACC-6). `membership_scope` acota lo
+  que ve una PERSONA en la web; un job no es una persona:
+  `scope_allows()` no encuentra filas sin `current_user_id()` y deja
+  pasar todo, y ningún archivo de `src/` compone `scopeFilter()`
+  (`packages/db/test/alcance-convencion.test.ts` lo comprueba). Lo que
+  un job escriba, la web lo filtra al leer.
 - Devuelve `{ processed, failed, metadata? }`. `metadata` va a
   `job_run.metadata` pasando por el redactor: ids y fechas sí, tokens
   jamás.

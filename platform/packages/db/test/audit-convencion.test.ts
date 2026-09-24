@@ -55,7 +55,13 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
   },
 };
 
-const ESCRITURA_RE = /\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\btx\.db\.(?:insert|update|delete)\(/;
+/**
+ * Un UPDATE con alias (`UPDATE campaign c SET`, `UPDATE invoice AS i SET`)
+ * también escribe: antes solo se reconocía `UPDATE <tabla> SET` y un
+ * alias bastaba para esconder una escritura (lo encontró el cierre de
+ * ACC, 23-sep). El `(?!SET\b)` evita leer `DO UPDATE SET` como tabla.
+ */
+const ESCRITURA_RE = /\bINSERT\s+INTO\b|\bUPDATE\s+(?!SET\b)\w+(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET\b|\bDELETE\s+FROM\b|\btx\.db\.(?:insert|update|delete)\(/;
 const BITACORA_RE = /\baudit(?:AsJob)?\(/;
 /** Declaraciones de nivel superior: `function x(`, y `const x = async (` / `const x = (` / `const x = async x =>`. */
 const FUNCION_RE = /^(?:export\s+)?(?:(?:async\s+)?function\s+(\w+)|const\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\b|\(|\w+\s*=>))/gm;
@@ -125,11 +131,13 @@ describe('toda escritura de queries/ deja bitácora (ACC-2)', () => {
     assert.deepEqual(escriben.filter((f) => !BITACORA_RE.test(f.cuerpo)).map((f) => f.nombre), ['markPaid', 'quiet']);
   });
 
-  test('la búsqueda reconoce las cuatro formas de escribir y no confunde FOR UPDATE ni DO UPDATE', () => {
+  test('la búsqueda reconoce las cuatro formas de escribir (UPDATE con alias incluido) y no confunde FOR UPDATE ni DO UPDATE', () => {
     assert.ok(ESCRITURA_RE.test('INSERT INTO invoice (a) VALUES (1)'));
     assert.ok(ESCRITURA_RE.test('UPDATE invoice\n     SET status = $2'));
     assert.ok(ESCRITURA_RE.test('DELETE FROM campaign_post'));
     assert.ok(ESCRITURA_RE.test('await tx.db.insert(deal).values({})'));
+    assert.ok(ESCRITURA_RE.test('UPDATE campaign c SET status = $2'), 'un alias no esconde la escritura');
+    assert.ok(ESCRITURA_RE.test('UPDATE invoice AS i\n     SET status = $2'));
     assert.equal(ESCRITURA_RE.test('SELECT status FROM campaign WHERE id = $1 FOR UPDATE'), false);
     assert.equal(ESCRITURA_RE.test('ON CONFLICT (a) DO UPDATE\n       SET b = 1'), false);
   });

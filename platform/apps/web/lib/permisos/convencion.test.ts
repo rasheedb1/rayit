@@ -2,8 +2,10 @@
 /**
  * La convención de ACC-1, sin revisión humana: toda Server Action de los
  * módulos que la adoptaron abre con `await requirePermission("<permiso
- * del catálogo>")` como primera línea de código, o lleva el comentario
- * `// TODO(ACC-1): <permiso>` en su lugar.
+ * del catálogo>")` como primera línea de código. El comentario
+ * `// TODO(ACC-1): <permiso>` que valía mientras ACC-1 no estaba en
+ * main ya NO se acepta (cierre de ACC, 23-sep-2026): era una salida para
+ * ramas sin el catálogo, y hoy solo serviría para olvidar el permiso.
  *
  * Es una prueba estática: lee los actions.ts de app/(app)/<módulo>/ y
  * mira el cuerpo de cada `export async function`. Sin AST: un escáner
@@ -137,9 +139,9 @@ export function motivoDeIncumplimiento(a: Accion): string | null {
   }
   const todo = a.comentarios.map((c) => TODO.exec(c)).find((x) => x !== null);
   if (todo) {
-    return isPermiso(todo[1]!) ? null : `el TODO(ACC-1) nombra «${todo[1]}», que no está en el catálogo`;
+    return `lleva un TODO(ACC-1) («${todo[1]}») en vez de la llamada: ACC-1 ya está en main, llama a requirePermission("${todo[1]}")`;
   }
-  return `su primera línea es «${a.primeraLinea || "(vacía)"}» y no una llamada a requirePermission ni un TODO(ACC-1)`;
+  return `su primera línea es «${a.primeraLinea || "(vacía)"}» y no una llamada a requirePermission`;
 }
 
 /** Recorre los archivos y devuelve lo que no cumple. Exportado para que la propia prueba se pruebe. */
@@ -226,16 +228,16 @@ describe("el escáner detecta lo que tiene que detectar", () => {
     expect(r.hallazgos[0]!.motivo).toMatch(/primera línea es «const x = 1;»/);
   });
 
-  it("rechaza un permiso que no está en el catálogo, en la llamada y en el TODO", () => {
+  it("rechaza un permiso que no está en el catálogo", () => {
     const a = cabecera + `export async function crear(): Promise<void> {\n  await requirePermission("finanzas.factura.borrar");\n}\n`;
     expect(revisarArchivo("a.ts", a).hallazgos[0]!.motivo).toMatch(/«finanzas.factura.borrar», que no está en el catálogo/);
-    const b = `export async function crear(): Promise<void> {\n  // TODO(ACC-1): finanzas.factura.borrar\n  return;\n}\n`;
-    expect(revisarArchivo("b.ts", b).hallazgos[0]!.motivo).toMatch(/TODO\(ACC-1\) nombra «finanzas.factura.borrar»/);
   });
 
-  it("acepta el TODO(ACC-1) con un permiso del catálogo como sustituto provisional", () => {
+  it("ya no acepta el TODO(ACC-1) como sustituto: ACC-1 está en main y el comentario solo serviría para olvidar el permiso", () => {
     const src = `export async function crear(): Promise<void> {\n  // TODO(ACC-1): finanzas.factura.crear\n  return;\n}\n`;
-    expect(revisarArchivo("x.ts", src).hallazgos).toEqual([]);
+    const { hallazgos } = revisarArchivo("x.ts", src);
+    expect(hallazgos).toHaveLength(1);
+    expect(hallazgos[0]!.motivo).toMatch(/lleva un TODO\(ACC-1\).*llama a requirePermission\("finanzas.factura.crear"\)/);
   });
 
   it("rechaza la llamada si el archivo no la importa de @/lib/permisos", () => {

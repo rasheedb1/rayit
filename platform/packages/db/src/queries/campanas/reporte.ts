@@ -20,6 +20,14 @@
  *     superseded_by en los enviados anteriores, actividad en la empresa,
  *     aviso al creador, bitácora y la campaña a «Reporte listo» si
  *     estaba midiendo.
+ *   - Alcance (ACC-6): un reporte se acota por SU campaña (creadora,
+ *     marca y ella misma), con el mismo scopeFilter() que campanas.ts.
+ *     Fuera del alcance es «no existe» (null, lista vacía,
+ *     CampaignNotFoundError o ReportNotFoundError), antes de escribir
+ *     nada. Las piezas del payload las leen funciones internas después
+ *     de esa puerta; los posts, con listCampaignPosts, que ya filtra
+ *     cada post. readPublicReport (./reporte-publico.ts) no lo lleva: es
+ *     la lectura sin sesión ni persona, por slug.
  */
 import {
   canGenerateReport,
@@ -46,6 +54,7 @@ import {
 } from '@mc/core';
 import { audit } from '../../audit.ts';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { scopeFilter } from '../../scope.ts';
 import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { nuevoSlug } from '../cotizar/enlace.ts';
 import { getCampaign, listCampaignPosts, transitionCampaign, CampaignNotFoundError, type CampaignDetail } from '../campanas.ts';
@@ -91,6 +100,17 @@ export class ReportNotFoundError extends CampaignError {
     super('ReportNotFoundError', `El reporte ${id} no existe en este workspace.`);
   }
 }
+
+// ---------------------------------------------------------------------
+// Alcance (ACC-6)
+// ---------------------------------------------------------------------
+
+/**
+ * La campaña `c` del reporte: su creadora, su marca y ella misma. Es la
+ * misma de campanas.ts, declarada aquí porque los dos módulos se importan
+ * entre sí y una constante de módulo no se puede leer a mitad de carga.
+ */
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
 
 // ---------------------------------------------------------------------
 // Conversión
@@ -143,21 +163,24 @@ function toRow(r: RawReportRow): CampaignReportRow {
 // Lectura
 // ---------------------------------------------------------------------
 
-/** Las versiones del reporte de una campaña, la más reciente primero. Solo kind 'campaign'. */
+/** Las versiones del reporte de una campaña, la más reciente primero. Solo kind 'campaign'. Vacía fuera del alcance. */
 export async function listCampaignReports(tx: WorkspaceTx, campaignId: string): Promise<CampaignReportRow[]> {
   if (!isUuid(campaignId)) return [];
   const { rows } = await tx.query<RawReportRow>(
-    `${SELECT_ROW} FROM report r WHERE r.campaign_id = $1 AND r.kind = 'campaign' ORDER BY r.created_at DESC, r.id`,
+    `${SELECT_ROW} FROM report r JOIN campaign c ON c.id = r.campaign_id
+      WHERE r.campaign_id = $1 AND r.kind = 'campaign' AND ${SCOPE_CAMPAIGN}
+      ORDER BY r.created_at DESC, r.id`,
     [campaignId],
   );
   return rows.map(toRow);
 }
 
-/** Un reporte con su payload, para la vista previa del creador. null si no existe en este workspace. */
+/** Un reporte con su payload, para la vista previa del creador. null si no existe en este workspace o su campaña está fuera del alcance. */
 export async function getReport(tx: WorkspaceTx, reportId: string): Promise<CampaignReportDetail | null> {
   if (!isUuid(reportId)) return null;
   const { rows } = await tx.query<RawReportRow & { payload: ReportPayload }>(
-    `${SELECT_ROW}, r.payload FROM report r WHERE r.id = $1 AND r.kind = 'campaign'`,
+    `${SELECT_ROW}, r.payload FROM report r JOIN campaign c ON c.id = r.campaign_id
+      WHERE r.id = $1 AND r.kind = 'campaign' AND ${SCOPE_CAMPAIGN}`,
     [reportId],
   );
   const r = rows[0];
@@ -441,12 +464,18 @@ async function entradasDelReporte(tx: WorkspaceTx, campaign: CampaignDetail): Pr
  * UPDATE: dos «Generar» a la vez se serializan.
  *
  * Errores con messageEs: CampaignNotFoundError (también para una
- * campaña de otro workspace), ReportNotAvailableError (planeada o
- * cancelada).
+ * campaña de otro workspace o fuera del alcance), ReportNotAvailableError
+ * (planeada o cancelada). Bajo alcance por creador, un post de otra
+ * creadora asociado a la campaña no entra en el payload (listCampaignPosts
+ * lo oculta): el reporte enseña lo que quien lo genera puede ver.
  */
 export async function generateReport(tx: WorkspaceTx, campaignId: string): Promise<CampaignReportDetail> {
   if (!isUuid(campaignId)) throw new CampaignNotFoundError(campaignId);
-  const { rows } = await tx.query<{ status: CampaignStatus }>('SELECT status FROM campaign WHERE id = $1 FOR UPDATE', [campaignId]);
+  // La puerta del alcance: fuera de él, CampaignNotFoundError antes de leer o escribir nada.
+  const { rows } = await tx.query<{ status: CampaignStatus }>(
+    `SELECT c.status FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN} FOR UPDATE OF c`,
+    [campaignId],
+  );
   const estado = rows[0]?.status;
   if (!estado) throw new CampaignNotFoundError(campaignId);
   if (!canGenerateReport(estado)) throw new ReportNotAvailableError(estado);
@@ -470,7 +499,8 @@ export async function generateReport(tx: WorkspaceTx, campaignId: string): Promi
       `UPDATE report
           SET payload = $2::jsonb, white_label = $3::jsonb, company_id = $4,
               period_start = $5::date, period_end = $6::date, created_at = now()
-        WHERE id = $1`,
+         FROM campaign c
+        WHERE report.id = $1 AND c.id = report.campaign_id AND ${SCOPE_CAMPAIGN}`,
       [borrador.id, JSON.stringify(payload), JSON.stringify(whiteLabel), campaign.companyId, campaign.startsOn, campaign.endsOn],
     );
     return requireReport(tx, borrador.id);
@@ -506,7 +536,8 @@ export async function generateReport(tx: WorkspaceTx, campaignId: string): Promi
  *
  * Idempotente: un reporte ya enviado lanza ReportAlreadySentError sin
  * escribir nada. El reporte tiene que ser de `campaignId`
- * (ReportNotFoundError si no), y la campaña seguir admitiendo reporte
+ * (ReportNotFoundError si no, y también si su campaña está fuera del
+ * alcance), y la campaña seguir admitiendo reporte
  * (ReportNotAvailableError si se canceló después de generarlo). Un canal fuera del MVP (email, whatsapp) lanza
  * ReportNotSendableError. Nunca toca el payload.
  */
@@ -527,7 +558,7 @@ export async function markReportSent(
        FROM report r
        JOIN campaign c ON c.id = r.campaign_id
        JOIN company co ON co.id = c.company_id
-      WHERE r.id = $1 AND r.campaign_id = $2 AND r.kind = 'campaign'
+      WHERE r.id = $1 AND r.campaign_id = $2 AND r.kind = 'campaign' AND ${SCOPE_CAMPAIGN}
       FOR UPDATE OF r, c`,
     [reportId, campaignId],
   );
@@ -537,10 +568,16 @@ export async function markReportSent(
   // Un borrador de una campaña que después se canceló no se publica.
   if (!canGenerateReport(r.campaign_status)) throw new ReportNotAvailableError(r.campaign_status);
 
-  await tx.query("UPDATE report SET status = 'sent', sent_at = now(), sent_via = $2 WHERE id = $1", [r.id, via]);
+  await tx.query(
+    `UPDATE report SET status = 'sent', sent_at = now(), sent_via = $2
+       FROM campaign c WHERE report.id = $1 AND c.id = report.campaign_id AND ${SCOPE_CAMPAIGN}`,
+    [r.id, via],
+  );
   await tx.query(
     `UPDATE report SET superseded_by = $1
-      WHERE campaign_id = $2 AND kind = 'campaign' AND id <> $1 AND status IN ('sent', 'viewed') AND superseded_by IS NULL`,
+       FROM campaign c
+      WHERE report.campaign_id = $2 AND report.kind = 'campaign' AND report.id <> $1 AND report.status IN ('sent', 'viewed')
+        AND report.superseded_by IS NULL AND c.id = report.campaign_id AND ${SCOPE_CAMPAIGN}`,
     [r.id, r.campaign_id],
   );
 

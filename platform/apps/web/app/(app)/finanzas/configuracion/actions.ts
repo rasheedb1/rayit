@@ -9,6 +9,7 @@ import {
   PCT_RE,
   type FinanceSettings,
 } from "@mc/core";
+import { ScopeError } from "@mc/db";
 import { updateFinanceSettings } from "@mc/db/queries/finanzas";
 import { firstErrors, formField, type ActionState } from "@/lib/forms";
 import { requirePermission } from "@/lib/permisos";
@@ -132,6 +133,8 @@ export async function guardarConfiguracion(
   try {
     guardado = await withWorkspace((tx) => updateFinanceSettings(tx, { settings, currency: v.currency }));
   } catch (err) {
+    // ACC-6: la configuración es de todo el espacio; con alcance acotado no se cambia.
+    if (err instanceof ScopeError) return { message: err.messageEs };
     // La causa se registra en el servidor; al usuario, una frase. El
     // mensaje de un error de la base puede traer SQL o el nombre de una
     // migración («falta la política… corre make db.migrate»).

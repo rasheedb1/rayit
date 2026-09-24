@@ -24,8 +24,10 @@ export async function crearFactura(_prev: ActionState, formData: FormData): Prom
 - La primera línea de código del cuerpo. Antes de validar, antes de
   abrir la transacción.
 - El permiso es un literal del catálogo: uno que no existe no compila.
-- Si una acción todavía no puede llamarlo (una rama sin ACC-1 integrada),
-  lleva el comentario `// TODO(ACC-1): <permiso>` en su lugar.
+- Ya no hay sustituto: el comentario `// TODO(ACC-1): <permiso>` que
+  valía para ramas sin el catálogo dejó de aceptarse en el cierre de ACC
+  (23-sep-2026). ACC-1 está en main; una acción nueva llama a
+  `requirePermission` o la prueba falla.
 - `convencion.test.ts` recorre `app/(app)/<módulo>/**/actions.ts` de los
   módulos de la lista `MODULOS_CON_CONVENCION` y falla si una función
   exportada no cumple. Al adoptar la convención en un módulo, se agrega

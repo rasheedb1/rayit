@@ -35,7 +35,7 @@ import {
 } from "@mc/connectors";
 import {
   CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, recordConsent,
-  upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
+  ScopeError, upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
 import { notifyOwner } from "./owner-notice";
@@ -58,6 +58,7 @@ export const OAUTH_ERROR_MESSAGES = {
   sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
   sin_canal: "Esa cuenta de Google no tiene ningún canal de YouTube. Entra a YouTube con ella, crea el canal y vuelve a intentarlo.",
   sin_renovacion: "Google no entregó el permiso de renovación para este canal, así que la conexión caducaría en una hora. Vuelve a conectarlo; si se repite, avísanos.",
+  fuera_de_alcance: "Tu acceso a este espacio no alcanza a ese creador o a esa cuenta: no la puedes conectar desde aquí.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -172,6 +173,8 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       } catch (err) {
         if (err instanceof NoCreatorProfile) return redirect(req, "/conexiones?error=sin_creador");
         if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso");
+        // ACC-6: hay creador, pero no en el alcance de quien conecta. A la plataforma no se le manda.
+        if (err instanceof ScopeError) return redirect(req, "/conexiones?error=fuera_de_alcance");
         throw err;
       }
 
@@ -298,7 +301,9 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
         await flushCallLog(deps, callLog).catch(() => undefined);
         const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador"
-          : err instanceof SinPermisoError ? "sin_permiso" : "temporal";
+          : err instanceof SinPermisoError ? "sin_permiso"
+          // ACC-6: la cuenta autorizada ya es de otro creador del espacio, fuera del alcance de quien conecta.
+          : err instanceof ScopeError ? "fuera_de_alcance" : "temporal";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);

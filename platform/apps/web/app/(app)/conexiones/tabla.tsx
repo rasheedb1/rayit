@@ -17,6 +17,11 @@ const t = MESSAGES.tabla;
 
 export interface TablaDeCuentasProps {
   rows: FilaDeCuenta[];
+  /**
+   * ACC-6: quien mira tiene alcance por marca o por campaña, y una cuenta
+   * es de un creador: la lista vacía lo dice en vez de «todavía no hay».
+   */
+  fueraDeAlcance?: boolean;
   /** El reloj con el que se decide si un token ya venció. */
   ahora: Date;
   /** formatterFor(await getCurrentWorkspace()): su locale, su zona. */
@@ -314,14 +319,20 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
  * que se hace quien mira —«¿de dónde salen estas cifras y están
  * frescas?»— es la misma para las dos.
  */
-export function TablaDeCuentas({ rows, ahora, f, entorno, permisos }: TablaDeCuentasProps) {
+export function TablaDeCuentas({ rows, ahora, f, entorno, permisos, fueraDeAlcance = false }: TablaDeCuentasProps) {
   return (
     <DataTable
       columns={columnas(ahora, f, entorno, permisos)}
       rows={rows}
       rowKey={(r) => r.id}
       caption={t.caption}
-      emptyState={<EmptyState title={t.vacio.titulo} description={t.vacio.descripcion} />}
+      emptyState={
+        fueraDeAlcance ? (
+          <EmptyState title={MESSAGES.alcance.title} description={MESSAGES.alcance.description} />
+        ) : (
+          <EmptyState title={t.vacio.titulo} description={t.vacio.descripcion} />
+        )
+      }
     />
   );
 }

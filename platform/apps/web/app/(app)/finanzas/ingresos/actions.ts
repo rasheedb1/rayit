@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { ScopeError } from "@mc/db";
 import {
   createPlatformPayout,
   getWorkspaceToday,
@@ -147,7 +148,7 @@ export async function importarCsv(_prev: ImportarState, formData: FormData): Pro
     // «numeric field overflow», un 42P10 porque falta la migración— se
     // queda en el log: no le dice nada a nadie y enseña la forma de la
     // consulta.
-    return { message: err instanceof PlatformPayoutInputError ? err.message : MESSAGES.generico };
+    return { message: err instanceof PlatformPayoutInputError ? err.message : err instanceof ScopeError ? err.messageEs : MESSAGES.generico };
   }
 
   revalidatePath("/finanzas/ingresos");
@@ -250,7 +251,7 @@ export async function crearIngreso(_prev: NuevoIngresoState, formData: FormData)
     // Mismo criterio que el import: la frase de dominio sí, la de
     // Postgres no. Aquí además la validación de zod ya cubre casi todo,
     // así que lo que llegue suele ser cosa nuestra.
-    return { message: err instanceof PlatformPayoutInputError ? err.message : MESSAGES.generico };
+    return { message: err instanceof PlatformPayoutInputError ? err.message : err instanceof ScopeError ? err.messageEs : MESSAGES.generico };
   }
 
   // El NOMBRE de la red, no su id: «Instagram» y no «instagram». En el
