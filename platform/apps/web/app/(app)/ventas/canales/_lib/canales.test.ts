@@ -354,7 +354,7 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
 
   it("si Unipile no da el enlace, la fila dice una frase nuestra con el nombre del servicio, nunca el texto del proveedor", async () => {
     const spy = vi.spyOn(unipile, "createHostedAuthLink").mockRejectedValueOnce(new OutreachApiError({
-      provider: "unipile", endpoint: "POST /hosted/accounts/link", httpStatus: 401, code: "errors/invalid_credentials", kind: "config",
+      provider: "unipile", endpoint: "POST /hosted/accounts/link", httpStatus: 401, code: "errors/invalid_credentials", kind: "permanent",
       messageEs: "The provided API key is invalid",
     }));
     try {
