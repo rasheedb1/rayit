@@ -9,8 +9,10 @@ import { readFile } from 'node:fs/promises';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { FakeUnipile } from '../src/outreach/fake-unipile.ts';
 import {
-  channelRouteKey, parseUnipileWebhook, sharedSecretMatches, signChannelRoute, verifyChannelRoute,
+  channelRouteKey, channelSigningKeys, parseUnipileWebhook, sharedSecretMatches, signChannelRoute, verifyChannelRoute,
 } from '../src/outreach/unipile-webhook.ts';
+import { keyringOf } from '../src/crypto/master-key.ts';
+import { GOOGLE_STATE_TTL_MS, signChannelState, verifyChannelState } from '../src/outreach/state.ts';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
 import { UnipileClient } from '../src/unipile.ts';
 
@@ -92,4 +94,22 @@ test('FakeUnipile.createWebhook guarda el aviso y no registra el valor de las ca
   await fake.createWebhook({ source: 'account_status', accountId: 'acc_1', requestUrl: 'https://x.test', headers: { 'x-on-cue-secret': 'S' } });
   assert.equal(fake.webhooks.length, 1);
   assert.deepEqual((fake.calls[0]!.args as { headers: string[] }).headers, ['x-on-cue-secret']);
+});
+
+test('rotar TOKEN_ENCRYPTION_KEY no deja 401 lo ya firmado: v1 firma, se rota a v2 y la ruta y el estado siguen abriendo', () => {
+  const v1 = channelSigningKeys(keyringOf({ v1: MASTER }));
+  const route = signChannelRoute(ROUTE, v1.current.route, NOW);
+  const state = signChannelState({ workspaceId: ROUTE.workspaceId, creatorId: ROUTE.workspaceId, channel: 'linkedin', nonce: 'n'.repeat(43) }, v1.current.state, NOW);
+
+  const rotado = channelSigningKeys(keyringOf({ v1: MASTER, v2: OTRA }, 'v2'));
+  assert.notDeepEqual(rotado.current.route, v1.current.route, 'lo nuevo se firma con v2');
+  assert.equal(rotado.route.length, 2);
+  assert.deepEqual(verifyChannelRoute(route, rotado.route, NOW), ROUTE, 'el aviso firmado con v1 sigue entrando');
+  assert.equal(verifyChannelState(state, rotado.state, NOW, GOOGLE_STATE_TTL_MS).ok, true);
+  // Con la actual sola (el comportamiento de antes) no abría: es lo que se arregla.
+  assert.equal(verifyChannelRoute(route, rotado.current.route, NOW), null);
+  // Retirada v1 del llavero, ya no abre: la rotación termina cuando se vuelven a firmar las rutas.
+  assert.equal(verifyChannelRoute(route, channelSigningKeys(keyringOf({ v2: OTRA })).route, NOW), null);
+  // Firmada con v2, abre con el llavero rotado.
+  assert.deepEqual(verifyChannelRoute(signChannelRoute(ROUTE, rotado.current.route, NOW), rotado.route, NOW), ROUTE);
 });

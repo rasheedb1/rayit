@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-24",
+    "notes": "DELETE de una cuenta que Unipile ya no tiene → 404 resource_not_found. Cuenta como borrada."
+  },
+  "request": {
+    "method": "DELETE",
+    "urlPattern": "^https://[^/]+/api/v1/accounts/acc_li_0001$"
+  },
+  "response": {
+    "status": 404,
+    "body": { "status": 404, "type": "errors/resource_not_found", "title": "Resource not found.", "detail": "Account not found." }
+  }
+}

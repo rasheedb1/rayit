@@ -18,7 +18,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
-import { openSealedValue, sealValue } from '../crypto/sealed-cookie.ts';
+import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
 import type { OpenSealedResult } from '../crypto/sealed-cookie.ts';
 
 export const CHANNEL_STATE_INFO = 'on-cue/channel-state/v1';
@@ -68,9 +68,9 @@ export function signChannelState(state: ChannelState, key: Uint8Array, issuedAt:
 
 export type VerifiedChannelState = OpenSealedResult<ChannelState> | { ok: false; reason: 'bad_shape' };
 
-/** Firma, caducidad y forma. Un estado con la firma buena pero sin los cuatro campos no pasa. */
-export function verifyChannelState(token: string | null | undefined, key: Uint8Array, now: Date, ttlMs: number): VerifiedChannelState {
-  const opened = openSealedValue<ChannelState>(token, key, now, ttlMs);
+/** Firma, caducidad y forma. Un estado con la firma buena pero sin los cuatro campos no pasa. `keys`: la actual primero. */
+export function verifyChannelState(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): VerifiedChannelState {
+  const opened = openWithAnyKey<ChannelState>(token, keys, now, ttlMs);
   if (!opened.ok) return opened;
   const p = opened.payload as Partial<ChannelState> | null;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -94,3 +94,4 @@ export function verifyChannelState(token: string | null | undefined, key: Uint8A
 export function pendingAccountId(nonce: string): string {
   return `pending:${nonce}`;
 }
+

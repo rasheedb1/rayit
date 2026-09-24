@@ -12,9 +12,11 @@
  *                                                  refresh_token (solo en el primero), scope. Error: { error:
  *                                                  'invalid_grant' } = revocado o vencido, hay que reconectar
  *   GET  https://www.googleapis.com/oauth2/v2/userinfo   con userinfo.email → { email, verified_email }
+ *   POST https://oauth2.googleapis.com/revoke      token=<refresh o access> (form) → 200 vacío; 400
+ *                                                  { error: 'invalid_token' } si ya no existe
  *   POST gmail/v1/users/me/messages/send           { raw: base64url(MIME), threadId? } → { id, threadId }
  *   GET  gmail/v1/users/me/messages/{id}           format=metadata&metadataHeaders=Message-ID… → payload.headers
- *   GET  gmail/v1/users/me/threads/{id}            format=full → messages[]
+ *   GET  gmail/v1/users/me/threads/{id}            format=full | metadata → messages[] (con labelIds)
  *   GET  gmail/v1/users/me/messages                q=… → messages[{ id, threadId }], nextPageToken
  * Errores de la API: { error: { code, message, status, errors: [{ reason }] } }; 401 = token malo; 403 con
  * rateLimitExceeded, userRateLimitExceeded, dailyLimitExceeded o quotaExceeded = límite; 429 = límite.
@@ -51,6 +53,7 @@ export function shortScope(scope: string): string {
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
+export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 /** El margen del refresco perezoso: un token que vence en menos de esto se renueva antes de usarlo. */
@@ -86,6 +89,13 @@ export interface GoogleOAuthApi {
   /** Pide un access token nuevo. Conserva el refresh token si Google no manda otro. */
   refresh(tokens: OAuthTokens, opts?: { channelAccountId?: string | null }): Promise<OAuthTokens>;
   userEmail(tokens: OAuthTokens): Promise<{ email: string; verified: boolean }>;
+  /**
+   * Revoca la concesión (POST oauth2.googleapis.com/revoke con el refresh
+   * token): al desconectar, Google deja de aceptar el permiso y la persona
+   * lo ve retirado en su cuenta. Un token que Google ya no conoce
+   * (invalid_token) cuenta como revocado.
+   */
+  revoke(tokens: OAuthTokens, opts?: { channelAccountId?: string | null }): Promise<void>;
 }
 
 export interface SentEmail {
@@ -93,8 +103,16 @@ export interface SentEmail {
   providerMessageId: string;
   /** El hilo de Gmail (outbound_touch.thread_ref). */
   threadId: string;
-  /** El Message-ID RFC real, con <> (outbound_touch.message_id_rfc): el que va en In-Reply-To del siguiente toque. */
+  /**
+   * El Message-ID RFC real, con <> (outbound_touch.message_id_rfc): el que
+   * va en In-Reply-To del siguiente toque. null si no se pudo leer después
+   * de enviar (messageIdPending): el correo YA salió y no se reintenta; el
+   * Message-ID se relee con getMessage(providerMessageId) antes del
+   * siguiente toque del hilo.
+   */
   messageIdRfc: string | null;
+  /** El envío salió pero la lectura del Message-ID falló (red, 5xx, 429): hay que releerlo, nunca reenviar. */
+  messageIdPending?: boolean;
 }
 
 export interface GmailMessage {
@@ -260,6 +278,20 @@ export class GoogleOAuth implements GoogleOAuthApi {
     return { email: email.trim().toLowerCase(), verified: b['verified_email'] === true };
   }
 
+  async revoke(tokens: OAuthTokens, opts: { channelAccountId?: string | null } = {}): Promise<void> {
+    const token = tokens.refreshToken ?? tokens.accessToken;
+    try {
+      await this.#http.call({
+        endpoint: 'google.oauth.revoke', method: 'POST', url: GOOGLE_REVOKE_URL, form: { token },
+        secrets: [token, tokens.accessToken], channelAccountId: opts.channelAccountId ?? null,
+      });
+    } catch (err) {
+      // Ya no existe: la concesión está retirada, que es lo que se pedía.
+      if (err instanceof OutreachApiError && err.code === 'invalid_token') return;
+      throw err;
+    }
+  }
+
   async #token(endpoint: string, form: Record<string, string>, secrets: string[], channelAccountId: string | null): Promise<Json> {
     const res = await this.#http.call({
       endpoint, method: 'POST', url: GOOGLE_TOKEN_URL, form, secrets: [...secrets, this.#cfg.clientSecret], channelAccountId,
@@ -340,8 +372,15 @@ export class GmailClient implements GmailApi {
     const threadId = str(b['threadId']);
     if (!id || !threadId) throw malformed('gmail.messages.send', 'Gmail no devolvió el id del mensaje enviado.');
     // Gmail pone su propio Message-ID: se lee del mensaje enviado para que el siguiente toque responda al de verdad.
-    const meta = await this.#get('gmail.messages.get', `/messages/${encodeURIComponent(id)}`, { format: 'metadata', metadataHeaders: 'Message-ID' });
-    return { providerMessageId: id, threadId, messageIdRfc: header(meta, 'Message-ID') };
+    // A partir de aquí el correo YA salió. Si la lectura falla, no se lanza: un error haría que el despachador
+    // reintentara el envío y la marca recibiría el correo dos veces. La falla ya quedó en la bitácora (la
+    // escribe OutreachHttp) y el Message-ID se relee después con getMessage.
+    try {
+      const meta = await this.#get('gmail.messages.get', `/messages/${encodeURIComponent(id)}`, { format: 'metadata', metadataHeaders: 'Message-ID' });
+      return { providerMessageId: id, threadId, messageIdRfc: header(meta, 'Message-ID') };
+    } catch {
+      return { providerMessageId: id, threadId, messageIdRfc: null, messageIdPending: true };
+    }
   }
 
   async getMessage(id: string): Promise<GmailMessage> {
@@ -353,9 +392,29 @@ export class GmailClient implements GmailApi {
     return Array.isArray(b['messages']) ? b['messages'].map(normalizeGmailMessage) : [];
   }
 
+  /**
+   * Con threadId se lee ESE hilo (threads.get, format=metadata) en vez de
+   * buscar en todo el buzón: una búsqueda trae los N últimos del buzón
+   * entero y, en un buzón con mucho tráfico, las respuestas del hilo
+   * quedaban fuera. Del hilo cuentan los mensajes que no mandó la persona
+   * (sin la etiqueta SENT), que no son rebotes y que llegaron desde `since`.
+   */
   async searchReplies(opts: { since: Date; threadId?: string; max?: number }): Promise<GmailMessageRef[]> {
-    const refs = await this.#search(`in:inbox ${REPLY_EXCLUDE} after:${epoch(opts.since)}`, opts.max);
-    return opts.threadId ? refs.filter((r) => r.threadId === opts.threadId) : refs;
+    if (!opts.threadId) return this.#search(`in:inbox ${REPLY_EXCLUDE} after:${epoch(opts.since)}`, opts.max);
+    const b = await this.#get('gmail.threads.get', `/threads/${encodeURIComponent(opts.threadId)}`, {
+      format: 'metadata', metadataHeaders: 'From',
+    });
+    const messages = Array.isArray(b['messages']) ? b['messages'].map(obj) : [];
+    const since = opts.since.getTime();
+    return messages.flatMap((m) => {
+      const id = str(m['id']);
+      const threadId = str(m['threadId']) ?? opts.threadId!;
+      const labels = Array.isArray(m['labelIds']) ? m['labelIds'] : [];
+      const at = typeof m['internalDate'] === 'string' ? Number(m['internalDate']) : NaN;
+      const from = (header(m, 'From') ?? '').toLowerCase();
+      if (!id || labels.includes('SENT') || !(at >= since) || /mailer-daemon|postmaster/.test(from)) return [];
+      return [{ id, threadId }];
+    }).slice(0, opts.max ?? 100);
   }
 
   async searchBounces(opts: { since: Date; max?: number }): Promise<GmailMessageRef[]> {

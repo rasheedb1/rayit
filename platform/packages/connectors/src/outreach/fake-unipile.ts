@@ -29,6 +29,9 @@ export class FakeUnipile implements UnipileApi {
   readonly messages = new Map<string, UnipileMessage[]>();
   readonly hostedLinks: HostedAuthRequest[] = [];
   readonly webhooks: (CreateWebhookRequest & { id: string })[] = [];
+  /** Las cuentas y los avisos que se borraron (en orden). */
+  readonly deletedAccounts: string[] = [];
+  readonly deletedWebhooks: string[] = [];
   readonly #failures = new Map<keyof UnipileApi, OutreachApiError[]>();
   #seq = 0;
 
@@ -143,5 +146,18 @@ export class FakeUnipile implements UnipileApi {
     const id = this.#id('wh');
     this.webhooks.push({ ...req, id });
     return { webhookId: id };
+  }
+
+  async deleteAccount(accountId: string, opts?: UnipileCallOptions): Promise<void> {
+    this.#enter('deleteAccount', { accountId }, opts);
+    this.accounts.delete(accountId);
+    this.deletedAccounts.push(accountId);
+  }
+
+  async deleteWebhook(webhookId: string, opts?: UnipileCallOptions): Promise<void> {
+    this.#enter('deleteWebhook', { webhookId }, opts);
+    const i = this.webhooks.findIndex((w) => w.id === webhookId);
+    if (i >= 0) this.webhooks.splice(i, 1);
+    this.deletedWebhooks.push(webhookId);
   }
 }

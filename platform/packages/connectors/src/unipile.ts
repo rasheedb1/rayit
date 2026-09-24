@@ -21,6 +21,9 @@
  *   POST /api/v1/posts/reaction              JSON: account_id, post_id, reaction_type
  *   POST /api/v1/posts/{post_id}/comments    JSON: account_id, text
  *   GET  /api/v1/chats · /chats/{id}/messages   listas con cursor
+ *   DELETE /api/v1/accounts/{id}            → AccountDeleted. Unipile cobra por cuenta conectada al mes: al
+ *                                            desconectar se borra aquí, no solo en nuestra fila (§5.1)
+ *   DELETE /api/v1/webhooks/{id}            → WebhookDeleted
  *   POST /api/v1/webhooks                    request_url, source ('messaging' | 'account_status'), account_ids,
  *                                            headers [{ key, value }], format → { object: 'WebhookCreated', webhook_id }.
  *                                            Uno por cuenta: lleva nuestra ruta firmada y el secreto compartido en
@@ -159,6 +162,10 @@ export interface UnipileApi {
   listChats(req: { accountId: string; cursor?: string; limit?: number }, opts?: UnipileCallOptions): Promise<UnipilePage<UnipileChat>>;
   listMessages(req: { chatId: string; cursor?: string; limit?: number }, opts?: UnipileCallOptions): Promise<UnipilePage<UnipileMessage>>;
   createWebhook(req: CreateWebhookRequest, opts?: UnipileCallOptions): Promise<{ webhookId: string }>;
+  /** Borra la cuenta en Unipile (deja de cobrarse). Una que Unipile ya no tiene cuenta como borrada. */
+  deleteAccount(accountId: string, opts?: UnipileCallOptions): Promise<void>;
+  /** Borra un aviso. Uno que ya no existe cuenta como borrado. */
+  deleteWebhook(webhookId: string, opts?: UnipileCallOptions): Promise<void>;
 }
 
 // ---------------------------------------------------------------------
@@ -395,6 +402,26 @@ export class UnipileClient implements UnipileApi {
     const webhookId = str(body['webhook_id']);
     if (!webhookId) throw malformed('unipile.webhooks.create', 'Unipile no devolvió el aviso creado.');
     return { webhookId };
+  }
+
+  async deleteAccount(accountId: string, opts?: UnipileCallOptions): Promise<void> {
+    const path = `/accounts/${encodeURIComponent(accountId)}`;
+    await deleted(this.request({ endpoint: 'unipile.accounts.delete', method: 'DELETE', path }, opts));
+  }
+
+  async deleteWebhook(webhookId: string, opts?: UnipileCallOptions): Promise<void> {
+    const path = `/webhooks/${encodeURIComponent(webhookId)}`;
+    await deleted(this.request({ endpoint: 'unipile.webhooks.delete', method: 'DELETE', path }, opts));
+  }
+}
+
+/** Un 404 al borrar es lo que se quería: ya no está. */
+async function deleted(p: Promise<unknown>): Promise<void> {
+  try {
+    await p;
+  } catch (err) {
+    if (err instanceof OutreachApiError && (err.httpStatus === 404 || err.code === 'errors/resource_not_found')) return;
+    throw err;
   }
 }
 

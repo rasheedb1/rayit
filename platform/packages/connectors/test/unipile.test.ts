@@ -155,3 +155,20 @@ test('FakeUnipile cumple la misma interfaz: cuenta caída → not_connected; fai
   assert.equal((await failure(fake.sendInvitation({ accountId: 'acc_2', providerId: 'p' }))).kind, 'limit');
   assert.deepEqual(await fake.sendInvitation({ accountId: 'acc_2', providerId: 'p' }), { invitationId: 'inv_0003' });
 });
+
+test('deleteAccount y deleteWebhook: DELETE con la bitácora; un 404 cuenta como borrado', async () => {
+  const { api, log, fetch } = await client([['accounts.delete', 'ok'], ['webhooks.delete', 'ok']]);
+  await api.deleteAccount('acc_li_0001', { channelAccountId: CA });
+  await api.deleteWebhook('wh_0001', { channelAccountId: CA });
+  assert.deepEqual(fetch.calls.map((c) => c.method), ['DELETE', 'DELETE']);
+  assert.deepEqual(log.entries.map((e) => [e.endpoint, e.ok, e.channel_account_id]), [
+    ['unipile.accounts.delete', true, CA], ['unipile.webhooks.delete', true, CA],
+  ]);
+  const gone = await client([['accounts.delete', 'not_found']]);
+  await gone.api.deleteAccount('acc_li_0001');
+  const fake = new FakeUnipile();
+  fake.addAccount({ id: 'acc_x' });
+  await fake.deleteAccount('acc_x');
+  assert.equal(fake.accounts.has('acc_x'), false);
+  assert.deepEqual(fake.deletedAccounts, ['acc_x']);
+});

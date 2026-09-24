@@ -21,7 +21,9 @@
  */
 import { timingSafeEqual } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
-import { openSealedValue, sealValue } from '../crypto/sealed-cookie.ts';
+import { currentMasterKey, type Keyring } from '../crypto/master-key.ts';
+import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
+import { channelStateKey } from './state.ts';
 
 /** La cabecera del secreto compartido. Unipile la manda porque la pusimos al crear el aviso. */
 export const UNIPILE_SECRET_HEADER = 'x-on-cue-secret';
@@ -48,8 +50,9 @@ export function signChannelRoute(route: ChannelRoute, key: Uint8Array, issuedAt:
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function verifyChannelRoute(token: string | null | undefined, key: Uint8Array, now: Date): ChannelRoute | null {
-  const opened = openSealedValue<ChannelRoute>(token, key, now, CHANNEL_ROUTE_TTL_MS);
+/** `keys`: la llave de la versión actual primero y después las anteriores (state.ts, openWithAnyKey). */
+export function verifyChannelRoute(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date): ChannelRoute | null {
+  const opened = openWithAnyKey<ChannelRoute>(token, keys, now, CHANNEL_ROUTE_TTL_MS);
   if (!opened.ok) return null;
   const p = opened.payload as Partial<ChannelRoute> | null;
   if (!p || typeof p.workspaceId !== 'string' || !UUID.test(p.workspaceId) || typeof p.channelAccountId !== 'string' || !UUID.test(p.channelAccountId)) {
@@ -68,6 +71,28 @@ export function sharedSecretMatches(received: string | null | undefined, expecte
     return false;
   }
   return timingSafeEqual(a, b);
+}
+
+/**
+ * Las llaves de firma de los canales, derivadas de CADA versión del
+ * llavero: `current` firma lo nuevo; `state` y `route` verifican, con la
+ * actual primero. Rotar TOKEN_ENCRYPTION_KEY no deja 401 los avisos de
+ * las cuentas que ya estaban conectadas.
+ */
+export interface ChannelSigningKeys {
+  current: { state: Uint8Array; route: Uint8Array };
+  state: Uint8Array[];
+  route: Uint8Array[];
+}
+
+export function channelSigningKeys(keyring: Keyring): ChannelSigningKeys {
+  const current = currentMasterKey(keyring);
+  const masters = [current, ...[...keyring.keys.entries()].filter(([v]) => v !== keyring.current).reverse().map(([, k]) => k)];
+  return {
+    current: { state: channelStateKey(current), route: channelRouteKey(current) },
+    state: masters.map(channelStateKey),
+    route: masters.map(channelRouteKey),
+  };
 }
 
 // ---------------------------------------------------------------------

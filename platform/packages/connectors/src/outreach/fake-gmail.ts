@@ -87,6 +87,16 @@ export class FakeGmail implements GoogleOAuthApi, GmailApi {
     return this.#issue(rt, tokens.scopes);
   }
 
+  /** Revocar deja el refresh token en `revoked` (Google ya no lo acepta) y lo apunta en `revokeCalls`. */
+  readonly revokeCalls: string[] = [];
+
+  async revoke(tokens: OAuthTokens): Promise<void> {
+    this.#enter();
+    const t = tokens.refreshToken ?? tokens.accessToken;
+    this.revokeCalls.push(t);
+    this.revoked.add(t);
+  }
+
   async userEmail(): Promise<{ email: string; verified: boolean }> {
     this.#enter();
     return { email: this.email.trim().toLowerCase(), verified: true };

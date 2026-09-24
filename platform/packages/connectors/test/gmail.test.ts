@@ -124,13 +124,12 @@ test('send con 429: limit, con Retry-After, y no se reintenta dentro de la llama
 });
 
 test('getThread, searchReplies, searchBounces y getMessage de un rebote', async () => {
-  const { http, oauth } = await setup([['threads.get', 'ok'], ['messages.list', 'replies.ok'], ['messages.list', 'bounces.ok'], ['messages.get', 'bounce']]);
+  const { http, oauth } = await setup([['threads.get', 'ok'], ['messages.list', 'bounces.ok'], ['messages.get', 'bounce']]);
   const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
   const thread = await gmail.getThread('18c1f0a0b0c0d0e1');
   assert.equal(thread.length, 2);
   assert.equal(thread[1]!.inReplyTo, '<CADemo123@mail.gmail.com>');
   assert.equal(thread[1]!.text, 'Me interesa, ¿tienes media kit?');
-  assert.deepEqual(await gmail.searchReplies({ since: NOW, threadId: '18c1f0a0b0c0d0e1' }), [{ id: '18c1f0a0b0c0d0f2', threadId: '18c1f0a0b0c0d0e1' }]);
   const bounces = await gmail.searchBounces({ since: NOW });
   assert.equal(bounces.length, 1);
   const bounce = await gmail.getMessage(bounces[0]!.id);
@@ -149,4 +148,47 @@ test('FakeGmail: refresca con un token nuevo y responde invalid_grant a un refre
   const sent = await fake.send({ from: { address: 'laura@x.test' }, to: { address: 'm@y.test' }, subject: 'Hola', text: 'x' });
   assert.match(sent.messageIdRfc!, /^<.+@mail\.gmail\.test>$/);
   assert.equal(fake.sent.length, 1);
+});
+
+test('send: si la lectura del Message-ID falla después de enviar, NO lanza (el correo ya salió) y lo marca pendiente', async () => {
+  const { http, oauth, log } = await setup([['messages.send', 'ok'], ['messages.get', 'unavailable']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS, mime: { boundary: (n) => `b${n}` } });
+  const sent = await gmail.send({ from: { address: 'laura@cocina-facil.test' }, to: { address: 'marta@cafealma.test' }, subject: 'Hola', text: 'x' });
+  assert.deepEqual(sent, { providerMessageId: '18c1f0a0b0c0d0e1', threadId: '18c1f0a0b0c0d0e1', messageIdRfc: null, messageIdPending: true });
+  // El envío salió una sola vez; la falla de la lectura quedó en la bitácora.
+  assert.equal(log.entries.filter((e) => e.endpoint === 'gmail.messages.send').length, 1);
+  assert.ok(log.entries.some((e) => e.endpoint === 'gmail.messages.get' && !e.ok));
+});
+
+test('searchReplies con threadId lee ESE hilo: sin lo enviado, sin rebotes y desde `since`', async () => {
+  const { http, oauth, fetch } = await setup([['threads.get', 'metadata.ok']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
+  const since = new Date(1790000000000);
+  assert.deepEqual(await gmail.searchReplies({ since, threadId: '18c1f0a0b0c0d0e1' }), [{ id: '18c1f0a0b0c0d0f2', threadId: '18c1f0a0b0c0d0e1' }]);
+  assert.match(fetch.calls[0]!.url, /threads\/18c1f0a0b0c0d0e1\?format=metadata/);
+  // Todo lo del hilo es anterior a `since`: nada.
+  const later = await setup([['threads.get', 'metadata.ok']]);
+  const g2 = new GmailClient({ ...later.http, oauth: later.oauth, channelAccountId: CA, tokens: TOKENS });
+  assert.deepEqual(await g2.searchReplies({ since: new Date(1790009999999), threadId: '18c1f0a0b0c0d0e1' }), []);
+});
+
+test('searchReplies sin hilo busca en la bandeja con los filtros', async () => {
+  const { http, oauth, fetch } = await setup([['messages.list', 'replies.ok']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
+  assert.equal((await gmail.searchReplies({ since: NOW })).length > 0, true);
+  assert.match(decodeURIComponent(fetch.calls[0]!.url), /-from:mailer-daemon/);
+});
+
+test('revoke: manda el refresh token a /revoke sin dejarlo en la bitácora; invalid_token cuenta como revocado', async () => {
+  const { oauth, log, fetch } = await setup([['oauth.revoke', 'ok']]);
+  await oauth.revoke(TOKENS, { channelAccountId: CA });
+  assert.equal(fetch.calls[0]!.url, 'https://oauth2.googleapis.com/revoke');
+  assert.deepEqual(log.entries.map((e) => [e.endpoint, e.ok, e.channel_account_id]), [['google.oauth.revoke', true, CA]]);
+  assert.ok(!JSON.stringify(log.entries).includes(TOKENS.refreshToken!));
+  const gone = await setup([['oauth.revoke', 'invalid_token']]);
+  await gone.oauth.revoke(TOKENS);
+  const fake = new FakeGmail({ now: () => NOW });
+  const { tokens } = await fake.exchangeCode('c');
+  await fake.revoke(tokens);
+  assert.equal((await failure(fake.refresh(tokens))).kind, 'not_connected', 'revocado: Google ya no acepta el refresh token');
 });
