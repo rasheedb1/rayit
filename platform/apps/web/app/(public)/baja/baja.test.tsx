@@ -61,16 +61,21 @@ describe("/baja/<token>", () => {
 
   it("el botón da de baja y lo dice", async () => {
     estadoDelEnlaceDeBaja.mockResolvedValue(VALIDO);
-    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: false });
+    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
     await pagina();
     fireEvent.click(screen.getByRole("button", { name: t.pregunta.boton }));
     expect(await screen.findByRole("heading", { name: t.listo.title })).toBeInTheDocument();
     expect(darDeBajaDesdeEnlace).toHaveBeenCalledWith(TOKEN);
+    // El aviso recibe el foco para que se anuncie, sin el anillo de un campo:
+    // `outline-none!` gana a la regla global de :focus-visible (r3).
+    const aviso = screen.getByRole("status");
+    expect(aviso).toHaveFocus();
+    expect(aviso.className).toMatch(/(^|\s)outline-none!(\s|$)/);
   });
 
   it("quien ya estaba fuera lo sabe", async () => {
     estadoDelEnlaceDeBaja.mockResolvedValue(VALIDO);
-    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: true });
+    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: true, scope: "workspace" });
     await pagina();
     fireEvent.click(screen.getByRole("button", { name: t.pregunta.boton }));
     expect(await screen.findByRole("heading", { name: t.yaEstaba.title })).toBeInTheDocument();
@@ -120,7 +125,7 @@ describe("POST /baja/<token>/un-clic (RFC 8058)", () => {
   });
 
   it("con él da de baja; quien envió recibe 403 y un token ajeno 404", async () => {
-    darDeBajaDesdeEnlace.mockResolvedValueOnce({ status: "ok", alreadyOptedOut: false });
+    darDeBajaDesdeEnlace.mockResolvedValueOnce({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
     expect((await post("List-Unsubscribe=One-Click")).status).toBe(200);
     expect(darDeBajaDesdeEnlace).toHaveBeenCalledWith(TOKEN);
     darDeBajaDesdeEnlace.mockResolvedValueOnce({ status: "sender" });
@@ -131,7 +136,7 @@ describe("POST /baja/<token>/un-clic (RFC 8058)", () => {
 
   it("no depende de ningún secreto: sin OUTREACH_OPTOUT_SECRET la baja sale igual", async () => {
     delete process.env.OUTREACH_OPTOUT_SECRET;
-    darDeBajaDesdeEnlace.mockResolvedValueOnce({ status: "ok", alreadyOptedOut: false });
+    darDeBajaDesdeEnlace.mockResolvedValueOnce({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
     expect((await post("List-Unsubscribe=One-Click")).status).toBe(200);
   });
 });
