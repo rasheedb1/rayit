@@ -24,6 +24,8 @@ import { deriveKey } from '../crypto/token-cipher.ts';
 import { currentMasterKey, type Keyring } from '../crypto/master-key.ts';
 import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
 import { channelStateKey } from './state.ts';
+import type { UnipileApi } from '../unipile.ts';
+import { isOutreachApiError } from './errors.ts';
 
 /** La cabecera del secreto compartido. Unipile la manda porque la pusimos al crear el aviso. */
 export const UNIPILE_SECRET_HEADER = 'x-on-cue-secret';
@@ -149,4 +151,55 @@ export function parseUnipileWebhook(raw: unknown): UnipileWebhookEvent {
     };
   }
   return { kind: 'ignored', reason: `evento sin manejar (${s(b['event']) ?? status ?? 'desconocido'})` };
+}
+
+// ---------------------------------------------------------------------
+// Dar de alta los avisos de una cuenta
+// ---------------------------------------------------------------------
+
+/** Las dos fuentes de avisos de una cuenta: los mensajes y su salud. */
+export const UNIPILE_ACCOUNT_WEBHOOK_SOURCES = ['messaging', 'account_status'] as const;
+
+export interface RegisterAccountWebhooksInput {
+  unipile: Pick<UnipileApi, 'createWebhook'>;
+  /** El account_id de Unipile. */
+  providerAccountId: string;
+  /** El workspace y la fila (outreach_channel_account.id): van firmados en la cabecera de ruta. */
+  route: ChannelRoute;
+  /** La llave de ruta de la versión actual de TOKEN_ENCRYPTION_KEY. */
+  routeKey: Uint8Array;
+  /** UNIPILE_WEBHOOK_SECRET. Sin él no se da de alta nada: un aviso sin secreto sería 401 para siempre. */
+  secret: string | undefined;
+  /** `${APP_URL}/api/webhooks/unipile` */
+  requestUrl: string;
+  now: Date;
+}
+
+/**
+ * Da de alta los dos avisos de UNA cuenta (mensajes y salud), con el
+ * secreto compartido y la ruta firmada en cabeceras. La usan la web al
+ * conectar, su botón «Volver a intentar» y el keepalive diario cuando una
+ * cuenta conectada se quedó sin avisos: un solo sitio que sabe cómo se
+ * pide un aviso. Devuelve los ids creados (para outreach_channel_set_webhooks)
+ * y si alguno faltó; un error que no es del proveedor sube.
+ */
+export async function registerAccountWebhooks(i: RegisterAccountWebhooksInput): Promise<{ created: string[]; failed: boolean }> {
+  const secret = i.secret?.trim();
+  if (!secret) return { created: [], failed: true };
+  const headers = { [UNIPILE_SECRET_HEADER]: secret, [UNIPILE_ROUTE_HEADER]: signChannelRoute(i.route, i.routeKey, i.now) };
+  const created: string[] = [];
+  let failed = false;
+  for (const source of UNIPILE_ACCOUNT_WEBHOOK_SOURCES) {
+    try {
+      const { webhookId } = await i.unipile.createWebhook(
+        { source, accountId: i.providerAccountId, requestUrl: i.requestUrl, headers },
+        { channelAccountId: i.route.channelAccountId },
+      );
+      created.push(webhookId);
+    } catch (err) {
+      if (!isOutreachApiError(err)) throw err;
+      failed = true;
+    }
+  }
+  return { created, failed };
 }

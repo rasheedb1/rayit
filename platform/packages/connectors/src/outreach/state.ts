@@ -14,14 +14,21 @@
  * con la cuenta de otro usuario «reclamando cuentas sin dueño». Aquí un
  * aviso sin estado válido se ignora.
  *
- * No cifra: el estado no lleva ningún secreto, solo ids.
+ * Y CIFRA el cuerpo (AES-256-GCM, con una llave derivada de la de firma):
+ * el estado no lleva secretos, pero sí los ids internos del espacio y del
+ * creador, y viaja en la URL de Google (historial del navegador,
+ * registros del proveedor) y en el `name` de la cuenta de Unipile. Lo que
+ * se ve desde fuera es `<base64url({p:{c}, at})>.<hmac>`: la hora de
+ * emisión y un bloque opaco.
  */
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
-import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
+import { openSealedValue, sealValue } from '../crypto/sealed-cookie.ts';
 import type { OpenSealedResult } from '../crypto/sealed-cookie.ts';
 
 export const CHANNEL_STATE_INFO = 'on-cue/channel-state/v1';
+/** La llave de cifrado del cuerpo, derivada de la de firma: rotar TOKEN_ENCRYPTION_KEY rota las dos. */
+export const CHANNEL_STATE_ENC_INFO = 'on-cue/channel-state-enc/v1';
 
 /** Los canales que se conectan desde la pantalla de canales (el vocabulario de 0007). */
 export const CONNECTABLE_CHANNELS = ['email', 'linkedin', 'instagram_dm'] as const;
@@ -62,17 +69,61 @@ export function newNonce(random: (bytes: number) => Uint8Array = (n) => new Uint
   return Buffer.from(random(32)).toString('hex');
 }
 
-export function signChannelState(state: ChannelState, key: Uint8Array, issuedAt: Date): string {
-  return sealValue(state, key, issuedAt);
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+
+function encrypt(state: ChannelState, key: Uint8Array, random: (bytes: number) => Uint8Array): string {
+  const iv = random(IV_BYTES);
+  const cipher = createCipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(state), 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, body, cipher.getAuthTag()]).toString('base64url');
+}
+
+function decrypt(blob: unknown, key: Uint8Array): unknown {
+  if (typeof blob !== 'string') return null;
+  const raw = Buffer.from(blob, 'base64url');
+  if (raw.length <= IV_BYTES + TAG_BYTES) return null;
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), raw.subarray(0, IV_BYTES));
+    decipher.setAuthTag(raw.subarray(raw.length - TAG_BYTES));
+    const plain = Buffer.concat([decipher.update(raw.subarray(IV_BYTES, raw.length - TAG_BYTES)), decipher.final()]);
+    return JSON.parse(plain.toString('utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** Cifra el estado y firma el resultado. `random`, para fijar el IV en pruebas. */
+export function signChannelState(
+  state: ChannelState,
+  key: Uint8Array,
+  issuedAt: Date,
+  random: (bytes: number) => Uint8Array = (n) => new Uint8Array(randomBytes(n)),
+): string {
+  return sealValue({ c: encrypt(state, key, random) }, key, issuedAt);
 }
 
 export type VerifiedChannelState = OpenSealedResult<ChannelState> | { ok: false; reason: 'bad_shape' };
 
-/** Firma, caducidad y forma. Un estado con la firma buena pero sin los cuatro campos no pasa. `keys`: la actual primero. */
+/**
+ * Firma, caducidad, descifrado y forma. Un estado con la firma buena pero
+ * sin los cuatro campos no pasa. `keys`: la actual primero; el cuerpo se
+ * descifra con la llave que verificó la firma (rotar no invalida lo que
+ * está en vuelo).
+ */
 export function verifyChannelState(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): VerifiedChannelState {
-  const opened = openWithAnyKey<ChannelState>(token, keys, now, ttlMs);
-  if (!opened.ok) return opened;
-  const p = opened.payload as Partial<ChannelState> | null;
+  const list = keys instanceof Uint8Array ? [keys] : keys;
+  let opened: OpenSealedResult<{ c?: unknown }> = { ok: false, reason: 'bad_signature' };
+  let key: Uint8Array | null = null;
+  for (const k of list) {
+    opened = openSealedValue<{ c?: unknown }>(token, k, now, ttlMs);
+    if (opened.ok || opened.reason !== 'bad_signature') {
+      key = k;
+      break;
+    }
+  }
+  if (!opened.ok || !key) return opened as VerifiedChannelState;
+  const p = decrypt(opened.payload?.c, key) as Partial<ChannelState> | null;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
     !p || typeof p.workspaceId !== 'string' || !uuid.test(p.workspaceId)
@@ -82,7 +133,7 @@ export function verifyChannelState(token: string | null | undefined, keys: Uint8
   ) {
     return { ok: false, reason: 'bad_shape' };
   }
-  return opened;
+  return { ok: true, payload: { workspaceId: p.workspaceId, creatorId: p.creatorId, channel: p.channel, nonce: p.nonce }, issuedAt: opened.issuedAt };
 }
 
 /**

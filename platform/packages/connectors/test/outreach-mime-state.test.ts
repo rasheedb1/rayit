@@ -83,3 +83,22 @@ test('estado firmado: ida y vuelta, caducidad, firma de otra llave y forma', () 
   assert.deepEqual(verifyChannelState(raro, key, now, GOOGLE_STATE_TTL_MS), { ok: false, reason: 'bad_shape' });
   assert.equal(pendingAccountId('abc'), 'pending:abc');
 });
+
+test('estado firmado: el cuerpo va cifrado (ni el espacio, ni el creador, ni el nonce se leen en la URL) y rota con la llave', () => {
+  const vieja = channelStateKey(new Uint8Array(32).fill(3));
+  const nueva = channelStateKey(new Uint8Array(32).fill(4));
+  const now = new Date('2026-09-23T12:00:00Z');
+  const state: ChannelState = {
+    workspaceId: '00000002-0000-4000-8000-000000000001', creatorId: '00000002-0000-4000-8000-000000000003', channel: 'email',
+    nonce: newNonce(() => new Uint8Array(32).fill(9)),
+  };
+  const token = signChannelState(state, vieja, now);
+  const visible = Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8');
+  for (const id of [state.workspaceId, state.creatorId, state.nonce, 'email']) assert.ok(!visible.includes(id), `${id} no se ve`);
+  // Firmado con la versión anterior del llavero: se verifica y se descifra con esa.
+  const r = verifyChannelState(token, [nueva, vieja], now, GOOGLE_STATE_TTL_MS);
+  assert.ok(r.ok);
+  assert.deepEqual(r.payload, state);
+  // Dos estados iguales no dan el mismo texto (IV al azar).
+  assert.notEqual(signChannelState(state, vieja, now), token);
+});
