@@ -30,10 +30,12 @@ const REBOTES_VISIBLES = 8;
  * de redacción— se enseña, con el motivo, para que nadie lo busque.
  */
 export default async function PoliticaPage() {
+  // Un solo «ahora» para las cifras de 24 horas y para saber qué rebote es de hoy.
+  const ahora = new Date();
   const { policy, health, counts, rebotes, listo } = await withWorkspace(async (tx) => ({
     policy: await getOutboundPolicy(tx),
     health: await outboundHealth(tx, HEALTH_WINDOW_H),
-    counts: await readAlertSignalCounts(tx, tx.workspaceId, new Date()),
+    counts: await readAlertSignalCounts(tx, tx.workspaceId, ahora),
     rebotes: await listRecentBounces(tx, REBOTES_VISIBLES),
     listo: await readSendReadiness(tx),
   }));
@@ -49,9 +51,13 @@ export default async function PoliticaPage() {
   const maximos = Object.fromEntries(campos.map((c) => [c, POLICY_LIMITS[c].max])) as PoliticaFormProps["maximos"];
   const minimos = Object.fromEntries(campos.map((c) => [c, POLICY_LIMITS[c].min])) as PoliticaFormProps["minimos"];
 
+  // disabled_reason es un código ('manual'…, r4): se traduce aquí; uno desconocido va como detalle.
+  const motivoTraducido = policy.disabledReason ? t.interruptor.motivos[policy.disabledReason] : undefined;
   const motivo =
     !policy.enabled && policy.disabledReason && policy.disabledAt
-      ? t.interruptor.offReason(policy.disabledReason, f.date(policy.disabledAt, "long"))
+      ? motivoTraducido
+        ? t.interruptor.offReason(motivoTraducido, f.date(policy.disabledAt, "long"))
+        : t.interruptor.offReasonDetalle(policy.disabledReason, f.date(policy.disabledAt, "long"))
       : null;
 
   return (
@@ -74,10 +80,17 @@ export default async function PoliticaPage() {
         nuncaEncendido={!policy.enabled && policy.disabledAt === null}
         puedeCambiar={puedeCambiar}
         cuentasConectadas={listo.connectedAccounts}
-        aprobadosHoy={{ n: f.int(listo.approvedDueToday), hay: listo.approvedDueToday > 0 }}
+        aprobadosHoy={{ n: f.int(listo.approvedDueToday), cuantos: listo.approvedDueToday }}
       />
 
-      <Salud health={health} counts={counts} rebotes={rebotes} caidas={listo.downAccounts} f={f} />
+      <Salud
+        health={health}
+        counts={counts}
+        rebotes={rebotes}
+        caidas={listo.downAccounts}
+        f={f}
+        ahora={ahora.toISOString()}
+      />
 
       <PoliticaForm
         policy={policy}

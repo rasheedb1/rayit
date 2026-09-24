@@ -1,20 +1,33 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { WARMUP_START_LIMIT, warmupCurve } from "@mc/core/outreach/warmup";
+import {
+  WARMUP_START_LIMIT,
+  warmupCurve,
+  warmupSeries,
+} from "@mc/core/outreach/warmup";
 import type { OutboundPolicyView } from "@mc/db/queries/entregabilidad";
 import { formatInt } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
+import { LineChart } from "@/components/ui/line-chart";
 import { Segmented } from "@/components/ui/segmented";
 import { guardarPolitica, type GuardarPoliticaState } from "./actions";
 import { MESSAGES } from "./messages";
 
-type Numerico = "maxTouchesPerCompany" | "minDaysBetweenTouches" | "maxEmailsPerDay" | "cooldownDaysAfterNo" | "warmupDays";
+type Numerico =
+  | "maxTouchesPerCompany"
+  | "minDaysBetweenTouches"
+  | "maxEmailsPerDay"
+  | "cooldownDaysAfterNo"
+  | "warmupDays";
 type SiNo = "si" | "no";
 
 export interface PoliticaFormProps {
-  policy: Pick<OutboundPolicyView, Numerico | "requireHumanReview" | "claimsMustBeSourced" | "postalAddress">;
+  policy: Pick<
+    OutboundPolicyView,
+    Numerico | "requireHumanReview" | "claimsMustBeSourced" | "postalAddress"
+  >;
   /** Los rangos de cada número, ya formateados («Entre 1 y 12.»). */
   rangos: Record<Numerico, string>;
   /** El tope de cada número, para el atributo max del control. */
@@ -35,7 +48,13 @@ const t = MESSAGES;
 
 /** Lo que enseña el recuadro del calentamiento con lo que está escrito ahora. */
 export type Calentamiento =
-  | { tipo: "curva"; filas: Array<{ dia: string; correos: string }> }
+  | {
+      tipo: "curva";
+      /** Los días clave, en texto (la tabla accesible). */
+      filas: Array<{ dia: string; correos: string }>;
+      /** La rampa entera, un punto por día (el gráfico, r4): etiquetas formateadas y topes crudos. */
+      serie: { dias: string[]; topes: number[] };
+    }
   | { tipo: "sinCalentamiento" }
   | { tipo: "topeBajo"; texto: string }
   | { tipo: "fueraDeRango" };
@@ -48,24 +67,38 @@ export type Calentamiento =
 export function calentamientoDe(
   topeEscrito: string,
   diasEscritos: string,
-  limites: { tope: { min: number; max: number }; dias: { min: number; max: number } },
+  limites: {
+    tope: { min: number; max: number };
+    dias: { min: number; max: number };
+  },
   locale: string,
 ): Calentamiento {
   const tope = /^\d+$/.test(topeEscrito.trim()) ? Number(topeEscrito) : NaN;
   const dias = /^\d+$/.test(diasEscritos.trim()) ? Number(diasEscritos) : NaN;
-  const dentro = (n: number, r: { min: number; max: number }) => Number.isInteger(n) && n >= r.min && n <= r.max;
-  if (!dentro(tope, limites.tope) || !dentro(dias, limites.dias)) return { tipo: "fueraDeRango" };
+  const dentro = (n: number, r: { min: number; max: number }) =>
+    Number.isInteger(n) && n >= r.min && n <= r.max;
+  if (!dentro(tope, limites.tope) || !dentro(dias, limites.dias))
+    return { tipo: "fueraDeRango" };
   const curva = warmupCurve(tope, dias);
   if (curva.length > 0) {
+    const serie = warmupSeries(tope, dias);
     return {
       tipo: "curva",
       filas: curva.map((p) => ({
         dia: t.calentamiento.dia(formatInt(p.day, { locale })),
         correos: t.calentamiento.correos(formatInt(p.limit, { locale })),
       })),
+      serie: {
+        dias: serie.map((p) => formatInt(p.day, { locale })),
+        topes: serie.map((p) => p.limit),
+      },
     };
   }
-  if (tope <= WARMUP_START_LIMIT && dias > 1) return { tipo: "topeBajo", texto: t.calentamiento.topeBajo(formatInt(tope, { locale })) };
+  if (tope <= WARMUP_START_LIMIT && dias > 1)
+    return {
+      tipo: "topeBajo",
+      texto: t.calentamiento.topeBajo(formatInt(tope, { locale })),
+    };
   return { tipo: "sinCalentamiento" };
 }
 
@@ -74,11 +107,25 @@ export function calentamientoDe(
  * y la de la base (rangos y la dirección con el envío encendido); aquí
  * solo se pinta lo que devuelven, con el foco en el primer error.
  */
-export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editable = true }: PoliticaFormProps) {
-  const [state, formAction, pending] = useActionState<GuardarPoliticaState, FormData>(guardarPolitica, {});
+export function PoliticaForm({
+  policy,
+  rangos,
+  maximos,
+  minimos,
+  locale,
+  editable = true,
+}: PoliticaFormProps) {
+  const [state, formAction, pending] = useActionState<
+    GuardarPoliticaState,
+    FormData
+  >(guardarPolitica, {});
   const formRef = useRef<HTMLFormElement>(null);
-  const [revision, setRevision] = useState<SiNo>(policy.requireHumanReview ? "si" : "no");
-  const [cifras, setCifras] = useState<SiNo>(policy.claimsMustBeSourced ? "si" : "no");
+  const [revision, setRevision] = useState<SiNo>(
+    policy.requireHumanReview ? "si" : "no",
+  );
+  const [cifras, setCifras] = useState<SiNo>(
+    policy.claimsMustBeSourced ? "si" : "no",
+  );
   // Controlados: si el guardado falla, React 19 reinicia el formulario y
   // los valores escritos se perderían con defaultValue.
   const [valores, setValores] = useState<Record<Numerico, string>>({
@@ -105,12 +152,17 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
       ),
     [valores.maxEmailsPerDay, valores.warmupDays, minimos, maximos, locale],
   );
-  const ayudaDelCalentamiento = t.campos.warmupDays.help(formatInt(WARMUP_START_LIMIT, { locale }));
-  const ayuda = (campo: Numerico) => (campo === "warmupDays" ? ayudaDelCalentamiento : t.campos[campo].help);
+  const ayudaDelCalentamiento = t.campos.warmupDays.help(
+    formatInt(WARMUP_START_LIMIT, { locale }),
+  );
+  const ayuda = (campo: Numerico) =>
+    campo === "warmupDays" ? ayudaDelCalentamiento : t.campos[campo].help;
 
   useEffect(() => {
     if (!state.errors) return;
-    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+    formRef.current
+      ?.querySelector<HTMLElement>('[aria-invalid="true"]')
+      ?.focus();
   }, [state]);
 
   const numero = (campo: Numerico) => (
@@ -135,7 +187,11 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
     </Field>
   );
 
-  const siNo = (campo: "requireHumanReview" | "claimsMustBeSourced", value: SiNo, set: (v: SiNo) => void) => (
+  const siNo = (
+    campo: "requireHumanReview" | "claimsMustBeSourced",
+    value: SiNo,
+    set: (v: SiNo) => void,
+  ) => (
     <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium text-ink" id={`${campo}-label`}>
         {t.campos[campo].label}
@@ -155,7 +211,6 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
     </div>
   );
 
-
   // La rejilla pone cada bloque en su sitio sin repetir la curva: en el
   // escritorio, la curva va a la derecha, junto al tope diario (como en
   // Lemlist e Instantly); en el móvil, justo debajo del campo de días de
@@ -168,14 +223,23 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
       noValidate
       className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_280px]"
     >
-      <fieldset disabled={!editable} className="min-w-0 space-y-10 lg:col-start-1 lg:row-start-1">
+      <fieldset
+        disabled={!editable}
+        className="min-w-0 space-y-10 lg:col-start-1 lg:row-start-1"
+      >
         {!editable && (
-          <p role="note" className="rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink-2">
+          <p
+            role="note"
+            className="rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink-2"
+          >
             {t.sinPermiso}
           </p>
         )}
         {state.message && (
-          <p role="alert" className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
+          <p
+            role="alert"
+            className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger"
+          >
             {state.message}
           </p>
         )}
@@ -219,7 +283,9 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
             />
           </Field>
           <div>
-            <p className="text-sm font-medium text-ink">{t.fijo.optout.label}</p>
+            <p className="text-sm font-medium text-ink">
+              {t.fijo.optout.label}
+            </p>
             <p className="mt-1 text-xs text-muted">{t.fijo.optout.body}</p>
           </div>
         </section>
@@ -241,19 +307,47 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editabl
             {t.calentamiento.title}
           </p>
           {calentamiento.tipo === "curva" ? (
-            <table className="mt-3 w-full text-sm">
-              <caption className="sr-only">{t.calentamiento.caption}</caption>
-              <tbody>
-                {calentamiento.filas.map((f) => (
-                  <tr key={f.dia} className="border-b border-line last:border-b-0">
-                    <th scope="row" className="py-1.5 text-left font-normal text-fg-2 tabular-nums">
-                      {f.dia}
-                    </th>
-                    <td className="py-1.5 text-right tabular-nums">{f.correos}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              {/* La rampa como línea, como en Lemlist e Instantly (r4); los días clave, en la tabla accesible de abajo. */}
+              <LineChart
+                className="mt-3 tabular-nums"
+                ariaLabel={t.calentamiento.caption}
+                series={[
+                  {
+                    name: t.calentamiento.serie,
+                    data: calentamiento.serie.topes,
+                    color: "accent",
+                  },
+                ]}
+                labels={calentamiento.serie.dias}
+                format="int"
+                height={150}
+                maxXLabels={4}
+                endLabels={false}
+              />
+              <p className="mt-1 text-xs text-muted">{t.calentamiento.ejeX}</p>
+              <table className="sr-only">
+                <caption>{t.calentamiento.caption}</caption>
+                <tbody>
+                  {calentamiento.filas.map((f) => (
+                    <tr
+                      key={f.dia}
+                      className="border-b border-line last:border-b-0"
+                    >
+                      <th
+                        scope="row"
+                        className="py-1.5 text-left font-normal text-fg-2 tabular-nums"
+                      >
+                        {f.dia}
+                      </th>
+                      <td className="py-1.5 text-right tabular-nums">
+                        {f.correos}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           ) : (
             <p className="mt-2 text-xs text-muted" aria-live="polite">
               {calentamiento.tipo === "topeBajo"

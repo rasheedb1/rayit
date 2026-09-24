@@ -1,3 +1,4 @@
+import { BOUNCE_READING_CONNECTED, channelAccountLabel } from "@mc/core/outreach/deliverability";
 import type { AlertSignalCounts, DownChannelAccount, RecentBounce } from "@mc/db/queries/entregabilidad";
 import type { OutboundHealth } from "@mc/db/schema";
 import { DataTable, CellMain } from "@/components/ui/data-table";
@@ -16,6 +17,12 @@ const TONO: Record<RecentBounce["kind"], "bad" | "warn" | "neutral"> = { hard: "
  * decide las alertas), y los últimos rebotes leídos del Gmail
  * (outbound_bounce, 0038). La pantalla no calcula nada: la tasa llega
  * hecha.
+ *
+ * Mientras el job de rebotes no lea los buzones (BOUNCE_READING_CONNECTED,
+ * hasta integrar VEN-9), lo dice encima de la tabla: «Ningún rebote» no
+ * es «todo bien» si nadie los está leyendo (r4). La fecha de cada rebote
+ * va corta —la hora si es de hoy, el día y el mes si no— para que la
+ * tabla quepa a 400 px.
  */
 export function Salud({
   health,
@@ -23,6 +30,8 @@ export function Salud({
   rebotes,
   caidas,
   f,
+  ahora,
+  lecturaConectada = BOUNCE_READING_CONNECTED,
 }: {
   health: OutboundHealth;
   counts: AlertSignalCounts;
@@ -30,11 +39,17 @@ export function Salud({
   /** Las cuentas que piden reconectar o fallan (readSendReadiness): cuáles son, no solo cuántas. */
   caidas: DownChannelAccount[];
   f: Formatter;
+  /** El instante de la página (ISO), para saber qué rebote es de hoy en la zona del workspace. */
+  ahora: string;
+  /** Si el job de rebotes lee los buzones; se pasa solo en pruebas. */
+  lecturaConectada?: boolean;
 }) {
   const t = MESSAGES.salud;
-  const cuales = new Intl.ListFormat(f.locale, { style: "long", type: "conjunction" }).format(
-    caidas.map((c) => `${t.canal[c.channel]}: ${c.name}`),
-  );
+  // «LinkedIn: Laura», sin repetir el canal si el nombre ya lo dice.
+  const nombre = (c: DownChannelAccount) => channelAccountLabel(t.canal[c.channel], c.name);
+  const cuales = new Intl.ListFormat(f.locale, { style: "long", type: "conjunction" }).format(caidas.map(nombre));
+  const hoy = f.date(ahora);
+  const cuando = (iso: string) => (f.date(iso) === hoy ? f.time(iso) : f.date(iso));
   return (
     <section id="salud" aria-labelledby="salud-titulo" className="mb-10 scroll-mt-8">
       <h2 id="salud-titulo" className="text-sm font-semibold">
@@ -50,13 +65,13 @@ export function Salud({
           note={
             counts.hardBounceRate === null
               ? t.rebotes.sinEnvios
-              : t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent))
+              : t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent), counts.hardBounces)
           }
         />
         <Kpi
           label={t.cola.label}
           value={f.int(health.queue.due)}
-          note={health.queue.stuck > 0 ? t.cola.note(f.int(health.queue.stuck)) : t.cola.noteSinAtascos}
+          note={health.queue.stuck > 0 ? t.cola.note(f.int(health.queue.stuck), health.queue.stuck) : t.cola.noteSinAtascos}
         />
         <Kpi
           label={t.cuentas.label}
@@ -77,7 +92,7 @@ export function Salud({
               {caidas.map((c) => (
                 <li key={c.id} className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium break-words">{`${t.canal[c.channel]}: ${c.name}`}</span>
+                    <span className="text-sm font-medium break-words">{nombre(c)}</span>
                     <Pill kind={c.status === "error" ? "bad" : "warn"}>{t.caidas.estado[c.status]}</Pill>
                     {c.lastErrorAt && <span className="text-xs text-muted">{t.caidas.desde(f.date(c.lastErrorAt, "long"))}</span>}
                   </div>
@@ -91,6 +106,12 @@ export function Salud({
       </div>
 
       <h3 className="mt-6 text-sm font-medium">{t.rebotesTitle}</h3>
+      {!lecturaConectada && (
+        <div role="note" className="mt-2 rounded-md border border-line bg-surface-2 p-3">
+          <p className="text-sm font-medium">{t.lecturaPendiente.title}</p>
+          <p className="mt-1 text-xs text-ink-2">{t.lecturaPendiente.description}</p>
+        </div>
+      )}
       <DataTable<RecentBounce>
         className="mt-2"
         caption={t.rebotesCaption}
@@ -110,7 +131,15 @@ export function Salud({
             header: t.columnas.motivo,
             render: (r) => <span className="line-clamp-2 break-words text-xs text-ink-2">{r.reason}</span>,
           },
-          { key: "fecha", header: t.columnas.fecha, align: "num", render: (r) => f.dateTime(r.detectedAt) },
+          {
+            key: "fecha",
+            header: t.columnas.fecha,
+            render: (r) => (
+              <time dateTime={r.detectedAt} title={f.dateTime(r.detectedAt)} className="whitespace-nowrap text-xs tabular-nums">
+                {cuando(r.detectedAt)}
+              </time>
+            ),
+          },
         ]}
       />
     </section>

@@ -330,6 +330,14 @@ export const MESSAGES = {
     sourceHelp:
       "Es obligatorio. Sin procedencia no se guarda: es lo que nos deja escribirle sin romper la ley ni tu reputación.",
     optedOut: "Pidió la baja",
+    /**
+     * Los motivos que guarda la base como código (contact.opted_out_reason,
+     * VEN-15 r4): se traducen aquí. Lo que no es un código es el texto que
+     * escribió quien registró la baja a mano, y se enseña tal cual.
+     */
+    optedOutReasons: {
+      unsubscribe_link: "Pidió la baja desde el enlace de un correo.",
+    } as Readonly<Record<string, string>>,
     optedOutHelp: "No se le escribe por ningún canal. No se puede deshacer.",
     optOut: "Registrar baja",
     optOutTitle: "Registrar la baja de este contacto",

@@ -14,7 +14,7 @@ import { CopiarEnlace } from "../../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../../_lib/acordado";
 import { enlaceDeCotizacion, estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../../_lib/estado";
-import { ConfirmarAccion } from "../../../_ui/confirmar-accion";
+import { ConfirmarAccion } from "@/components/ui/confirmar-accion";
 import { ResumenTotales } from "../../../_ui/resumen-totales";
 import { AvisoEnviada } from "../aviso-enviada";
 import { EliminarBorrador } from "../eliminar";

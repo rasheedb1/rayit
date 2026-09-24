@@ -30,7 +30,7 @@ aceptarse, deja una campaña planeada.
 | `_lib/kits.ts` | Qué media kit llega preseleccionado en una cotización nueva |
 | `_lib/estado.ts` | La pastilla de cada estado y cuándo deja de mostrarse «Válida hasta» |
 | `_lib/textos.ts` | Las frases que la base guarda en tablas de otros módulos (historia del negocio, aviso), compuestas con `messages.ts` |
-| `_ui/confirmar-accion.tsx` | El segundo paso en línea de las acciones que no se deshacen (aceptar, rechazar, eliminar) |
+| `components/ui/confirmar-accion.tsx` (kit, desde VEN-15 r4) | El segundo paso en línea de las acciones que no se deshacen (aceptar, rechazar, eliminar) |
 | `_ui/tabla-con-detalle.tsx` | La tabla del tarifario con el «Cómo se calcula» abierto bajo su fila |
 | `_ui/documento-cotizacion.tsx` | La cotización como documento: la página pública y la vista previa son el mismo componente |
 | `_ui/media-kit-vista.tsx` | El media kit, igual en `/kit/<slug>` y en la vista previa |
@@ -133,7 +133,7 @@ segundo clic**, por los dos caminos:
   campaña con esas fechas: una aceptada ya no se edita, y sin ese
   formulario quedaba pendiente para siempre.
 - «Marcar aceptada» y «Marcar rechazada» **piden confirmación** en línea
-  (`_ui/confirmar-accion.tsx`), con lo que va a pasar escrito: ninguna de
+  (`components/ui/confirmar-accion.tsx`, en el kit desde VEN-15 r4), con lo que va a pasar escrito: ninguna de
   las dos se deshace.
 - **Desde el enlace público**: `lib/db · acceptQuoteFromLink` hace dos
   transacciones. En la primera, sin workspace, `public_quote_accept()`

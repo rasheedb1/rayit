@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { enviarCotizacion } from "../../actions";
 import { MESSAGES } from "../../messages";
-import { ConfirmarAccion } from "../../_ui/confirmar-accion";
+import { ConfirmarAccion } from "@/components/ui/confirmar-accion";
 
 /**
  * «Enviar y copiar enlace». Hace las dos cosas que dice: envía (congela

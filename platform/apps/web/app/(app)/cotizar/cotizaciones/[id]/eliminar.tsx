@@ -2,7 +2,7 @@
 
 import { eliminarBorrador } from "../../actions";
 import { MESSAGES } from "../../messages";
-import { ConfirmarAccion } from "../../_ui/confirmar-accion";
+import { ConfirmarAccion } from "@/components/ui/confirmar-accion";
 
 /**
  * «Eliminar borrador», con confirmación en línea: borrar no se deshace.

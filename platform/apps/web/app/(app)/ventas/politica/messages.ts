@@ -5,7 +5,17 @@
  * calentamiento de Lemlist e Instantly. Voz: una creadora que escribe a
  * marcas, no un equipo de ventas. Nada atado a un país: las cifras y las
  * fechas llegan formateadas con el locale del workspace.
+ *
+ * Los plurales (r4): la cifra llega formateada para pintarla y cruda para
+ * elegir la forma con Intl.PluralRules del idioma de estos textos, nunca
+ * con un «n === 1» a mano.
  */
+const reglas = new Intl.PluralRules("es");
+/** La forma de una frase según la cifra: «1 atascado», «3 atascados». */
+function plural(n: number, one: string, other: string): string {
+  return reglas.select(n) === "one" ? one : other;
+}
+
 export const MESSAGES = {
   metaTitle: "Política de envío",
   header: {
@@ -23,9 +33,18 @@ export const MESSAGES = {
     onHelp: "Los mensajes aprobados salen solos, dentro de estos límites.",
     /** Nunca se encendió: no había nada en cola que cancelar. */
     offHelpNunca: "Todavía no sale nada. Enciéndelo cuando tengas tu dirección postal guardada y un canal conectado.",
+    /** Nunca se encendió y falta algo: el paso concreto lo dice la línea de abajo, sin repetirlo aquí (r4). */
+    offHelpNuncaCorto: "Todavía no sale nada.",
     /** Se apagó, sin motivo guardado: lo que estaba en cola se canceló. */
     offHelp: "No sale nada. Lo que estaba en cola se canceló y vuelve a planificarse al encender.",
     offReason: (motivo: string, fecha: string) => `Apagado el ${fecha}: ${motivo}.`,
+    /**
+     * Los motivos que guarda outbound_policy.disabled_reason como código
+     * (r4): la base no guarda frases. Uno que no está aquí (lo pone otro
+     * proceso) se enseña con offReasonDetalle, como detalle.
+     */
+    motivos: { manual: "lo apagaste desde la política" } as Readonly<Record<string, string>>,
+    offReasonDetalle: (detalle: string, fecha: string) => `Apagado el ${fecha}. Motivo registrado: ${detalle}.`,
     encender: "Encender el envío",
     apagar: "Apagar el envío",
     confirmarApagar: "¿Apagar el envío?",
@@ -38,13 +57,14 @@ export const MESSAGES = {
     /** Quien no es dueño ni administra el espacio (0038 §7). */
     sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
     confirmarEncender: "¿Encender el envío?",
-    /** `n` es el número de mensajes aprobados para hoy, ya formateado. */
-    consecuenciaEncender: (n: string, hay: boolean) =>
-      hay
-        ? `Hoy salen ${n} mensajes aprobados, dentro de tus límites, y desde ahí lo que apruebes sale solo, en tu nombre.`
+    /** `n` es el número de mensajes aprobados para hoy, ya formateado; `cuantos`, el mismo sin formatear. */
+    consecuenciaEncender: (n: string, cuantos: number) =>
+      cuantos > 0
+        ? `${plural(cuantos, `Hoy sale ${n} mensaje aprobado`, `Hoy salen ${n} mensajes aprobados`)}, dentro de tus límites, y desde ahí lo que apruebes sale solo, en tu nombre.`
         : "Hoy no hay mensajes aprobados en cola. Desde ahora, lo que apruebes sale solo, en tu nombre y dentro de tus límites.",
     siEncender: "Sí, encender",
-    motivoManual: "lo apagaste desde la política",
+    /** El código que se guarda al apagar a mano (disable_outreach lo toma también por defecto, 0037). */
+    motivoManual: "manual",
     errorEncender: "No se pudo encender. Revisa que la dirección postal esté guardada.",
     errorApagar: "No se pudo apagar. Inténtalo de nuevo.",
   },
@@ -113,6 +133,10 @@ export const MESSAGES = {
     topeBajo: (tope: string) => `Con un tope de ${tope} correos al día no hace falta calentar: vale desde el primer día.`,
     fueraDeRango: "Corrige el tope o los días de calentamiento para ver la curva.",
     caption: "Correos al día según el día desde que conectaste tu Gmail",
+    /** El nombre de la línea del gráfico (tooltip). */
+    serie: "Correos al día",
+    /** Debajo del gráfico: qué es el eje horizontal. */
+    ejeX: "Día desde que conectaste tu Gmail",
   },
 
   salud: {
@@ -121,13 +145,15 @@ export const MESSAGES = {
     enviados: { label: "Correos enviados", note: "En las últimas 24 horas" },
     rebotes: {
       label: "Rebotes",
-      /** «2 de 40 no existen». */
-      note: (duros: string, enviados: string) => `${duros} de ${enviados} no existen`,
+      /** «1 de 40 no existe», «2 de 40 no existen»; `n` es `duros` sin formatear. */
+      note: (duros: string, enviados: string, n: number) =>
+        plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
       sinEnvios: "Sin envíos todavía",
     },
     cola: {
       label: "Por salir",
-      note: (atascados: string) => `${atascados} atascados`,
+      /** `n` es `atascados` sin formatear. */
+      note: (atascados: string, n: number) => plural(n, `${atascados} atascado`, `${atascados} atascados`),
       noteSinAtascos: "Nada atascado",
     },
     cuentas: {
@@ -135,8 +161,6 @@ export const MESSAGES = {
       /** Cuáles, ya en una lista con Intl («LinkedIn: Laura · Cocina fácil»). */
       note: (cuales: string) => cuales,
       noteBien: "Todas conectadas",
-      /** El enlace de la nota, a la lista de abajo. */
-      verCuales: "Ver qué pasó",
     },
     /** La lista de cuentas caídas, adonde lleva la alerta outreach_account_down. */
     caidas: {
@@ -171,6 +195,16 @@ export const MESSAGES = {
     sinRebotes: {
       title: "Ningún rebote",
       description: "Cuando un correo no llegue, aquí verás a qué dirección y por qué.",
+    },
+    /**
+     * Mientras el job de rebotes no lea los buzones (BOUNCE_READING_CONNECTED
+     * de @mc/core, hasta integrar VEN-9): que «Ningún rebote» no se lea como
+     * «todo bien» (r4).
+     */
+    lecturaPendiente: {
+      title: "Todavía no leemos los rebotes de tu Gmail",
+      description:
+        "La lectura automática de los avisos de rebote se conecta junto con los canales de envío. Hasta entonces, esta tabla y la cifra de rebotes no cuentan los que lleguen a tu buzón: revísalos allí.",
     },
   },
 

@@ -16,6 +16,7 @@ import { ChartCard } from "@/components/ui/chart-card";
 import { brandFollowers, CASH, followersByNetwork, weeklyViews } from "./data";
 import { FormDemo, FormDisabledDemo } from "./form-demo";
 import { Section, Variant } from "./section";
+import { ConfirmarDemo } from "./confirmar-demo";
 import { ArrowRight } from "lucide-react";
 
 export const metadata: Metadata = { title: "Kit de interfaz" };
@@ -33,6 +34,7 @@ const SECTIONS = [
   ["line-chart", "LineChart"],
   ["bar-chart", "BarChart"],
   ["chart-card", "ChartCard"],
+  ["confirmar-accion", "ConfirmarAccion"],
 ] as const;
 
 // Galería del kit (CIM-5). Detrás de la bandera "kit": encendida en
@@ -359,6 +361,15 @@ export default function Page() {
             ariaLabel="Seguidores por día"
           />
         </Variant>
+      </Section>
+
+      <Section
+        id="confirmar-accion"
+        title="ConfirmarAccion"
+        usage={`<ConfirmarAccion action={rechazar.bind(null, id)} label="Marcar rechazada" variant="danger"
+  pregunta="¿Rechazar COT-2026-003?" consecuencia="…" confirmar="Sí, rechazar" cancelar="Cancelar" />`}
+      >
+        <ConfirmarDemo />
       </Section>
     </>
   );

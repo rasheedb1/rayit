@@ -215,7 +215,9 @@ function ContactItem({ contact: c, companyId, bouncedNote }: { contact: ContactR
             )}
           </p>
           {!c.isOwn && <p className="mt-1 text-xs text-muted">{t.notOwn}</p>}
-          {c.optedOut && c.optedOutReason && <p className="mt-1 text-xs text-muted">{c.optedOutReason}</p>}
+          {c.optedOut && c.optedOutReason && (
+            <p className="mt-1 text-xs text-muted">{t.optedOutReasons[c.optedOutReason] ?? c.optedOutReason}</p>
+          )}
         </div>
         {/* Solo los propios y sin baja: uno del catálogo no es de este
             espacio, y a uno que pidió la baja no se le vuelve a escribir. */}

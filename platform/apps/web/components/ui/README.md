@@ -20,6 +20,7 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. Cliente. |
 | `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. `axisLabels` opcional: etiqueta corta bajo la barra, la categoría entera en tooltip y tabla. Cliente. |
 | `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota, DataAsOf, carga y error. |
+| `ConfirmarAccion` | `confirmar-accion.tsx` | Una acción que no se deshace, en dos pasos en el mismo sitio: el primer botón enseña la pregunta y su consecuencia, el segundo actúa (patrón de Stripe Quotes). Foco a la pregunta, Escape cancela. Si el mismo sitio alterna dos acciones (encender/apagar), dale una `key` por estado. Nació en Cotizar; en el kit desde VEN-15 r4. Cliente. |
 | `chart-utils.ts` | — | Colores por nombre de token y formato por nombre (`int`, `compact`, `pct`, `money`, `money-full`), para que crucen la frontera servidor → cliente. |
 
 Contraste: los tokens cumplen AA en los dos temas; tres valores del tema claro se apartan del mock por eso (ver el comentario en `app/globals.css`).

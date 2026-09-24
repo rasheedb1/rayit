@@ -1,9 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ConfirmarAccion } from "./confirmar-accion";
-import { MESSAGES } from "../messages";
 
-const t = MESSAGES.detalle;
+// Los textos de Cotizar, su primer usuario, escritos aquí: el kit no depende de ningún módulo.
+const t = {
+  rechazar: "Marcar rechazada",
+  confirmar: {
+    rechazar: {
+      pregunta: (n: string) => `¿Rechazar ${n}?`,
+      consecuencia: "La cotización queda rechazada y no se puede aceptar después.",
+      boton: "Sí, rechazar",
+    },
+    cancelar: "Cancelar",
+  },
+};
 
 function pintar(action = vi.fn(async () => {})) {
   render(

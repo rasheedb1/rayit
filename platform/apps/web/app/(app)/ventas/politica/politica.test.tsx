@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -51,6 +51,8 @@ import { Salud } from "./salud";
 import { formatterFor } from "@/lib/format";
 
 const t = MESSAGES;
+/** El instante de la página en las pruebas de «Salud de hoy»: 9:00 en Bogotá. */
+const AHORA = "2026-09-23T14:00:00Z";
 const LIMITES = { tope: POLICY_LIMITS.maxEmailsPerDay, dias: POLICY_LIMITS.warmupDays };
 
 function formulario(over: Record<string, string> = {}): FormData {
@@ -95,7 +97,7 @@ const interruptor = (p: Partial<Parameters<typeof Interruptor>[0]> = {}) => (
     nuncaEncendido={false}
     puedeCambiar
     cuentasConectadas={1}
-    aprobadosHoy={{ n: "0", hay: false }}
+    aprobadosHoy={{ n: "0", cuantos: 0 }}
     {...p}
   />
 );
@@ -134,7 +136,9 @@ describe("el interruptor", () => {
   it("apagar deja el motivo", async () => {
     disableOutreach.mockResolvedValue(3);
     expect(await apagarEnvio()).toEqual({ ok: true });
-    expect(disableOutreach).toHaveBeenCalledWith({}, t.interruptor.motivoManual);
+    // Un código, no una frase (r4): la página lo traduce con interruptor.motivos.
+    expect(disableOutreach).toHaveBeenCalledWith({}, "manual");
+    expect(t.interruptor.motivos[t.interruptor.motivoManual]).toBe("lo apagaste desde la política");
   });
 
   it("apagar pide confirmación en el sitio, con el patrón del producto y sin window.confirm", () => {
@@ -160,10 +164,10 @@ describe("el interruptor", () => {
   });
 
   it("encender también pide confirmación y dice cuántos mensajes aprobados salen hoy", () => {
-    render(interruptor({ aprobadosHoy: { n: "3", hay: true } }));
+    render(interruptor({ aprobadosHoy: { n: "3", cuantos: 3 } }));
     fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
     expect(screen.getByRole("group", { name: t.interruptor.confirmarEncender })).toHaveAccessibleDescription(
-      t.interruptor.consecuenciaEncender("3", true),
+      t.interruptor.consecuenciaEncender("3", 3),
     );
     expect(screen.getByRole("button", { name: t.interruptor.siEncender })).toBeInTheDocument();
     expect(enableOutreach).not.toHaveBeenCalled();
@@ -205,7 +209,7 @@ describe("solo quien administra el espacio (0038 §7, r3)", () => {
 
     render(<PoliticaForm {...PROPS_DEL_FORMULARIO} editable={false} />);
     expect(screen.getByText(t.sinPermiso)).toBeInTheDocument();
-    expect(screen.getByLabelText(new RegExp(t.campos.maxEmailsPerDay.label))).toBeDisabled();
+    expect(screen.getByLabelText(new RegExp(t.campos.maxEmailsPerDay.label), { selector: "input" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: t.guardar })).not.toBeInTheDocument();
   });
 });
@@ -249,17 +253,17 @@ describe("la curva de calentamiento", () => {
 
     // En el móvil (una columna, el orden del DOM) la curva va justo debajo del
     // campo que la mueve y antes de «Guardar», no al final de la página.
-    const dias = screen.getByLabelText(new RegExp(t.campos.warmupDays.label));
+    const dias = screen.getByLabelText(new RegExp(t.campos.warmupDays.label), { selector: "input" });
     const guardar = screen.getByRole("button", { name: t.guardar });
     expect(dias.compareDocumentPosition(tabla) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(tabla.compareDocumentPosition(guardar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label)), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label), { selector: "input" }), { target: { value: "0" } });
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.getByText(t.calentamiento.sinCalentamiento)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.maxEmailsPerDay.label)), { target: { value: "20" } });
-    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label)), { target: { value: "14" } });
+    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.maxEmailsPerDay.label), { selector: "input" }), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label), { selector: "input" }), { target: { value: "14" } });
     expect(screen.getByText(t.calentamiento.topeBajo("20"))).toBeInTheDocument();
   });
 
@@ -285,7 +289,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
 
   it("la nota dice CUÁL es, y la lista de #cuentas dice qué pasó y qué hacer (adonde lleva la alerta)", () => {
     const { container } = render(
-      <Salud health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} />,
+      <Salud health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} />,
     );
     expect(screen.getAllByText("LinkedIn: Laura · Cocina fácil").length).toBeGreaterThan(0);
     const cuentas = container.querySelector("#cuentas");
@@ -305,9 +309,109 @@ describe("«Salud de hoy»: la cuenta caída", () => {
         rebotes={[]}
         caidas={[]}
         f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })}
+        ahora={AHORA}
       />,
     );
     expect(screen.getByText(t.salud.cuentas.noteBien)).toBeInTheDocument();
     expect(container.querySelector("#cuentas")?.children.length).toBe(0);
+  });
+});
+
+describe("ronda 4", () => {
+  const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+  const health = {
+    enabled: true, disabledReason: null, disabledAt: null, shouldPause: false, since: "2026-09-22T14:00:00Z", hours: 24,
+    queue: { draft: 0, scheduled: 1, due: 1, processing: 0, stuck: 1, held: 0 },
+    window: { sent: 3, failed: 0, canceled: 0, opened: 1, replied: 1, optedOut: 0, sentAfterOptOut: 0 },
+    byChannel: {}, breakersOpen: [], accountsDown: 0, lastSentAt: null,
+    llm: { spentToday: 0, dailyCap: 5, currency: "USD" as const },
+  };
+  const counts = { emailsSent: 40, hardBounces: 1, dueToSend: 0, hardBounceRate: 0.025 };
+
+  it("después de encender se ve «Apagar el envío», no la confirmación de apagar ya abierta; y al revés", async () => {
+    enableOutreach.mockResolvedValue(undefined);
+    disableOutreach.mockResolvedValue(0);
+    const { rerender } = render(interruptor());
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siEncender }));
+    await waitFor(() => expect(enableOutreach).toHaveBeenCalledTimes(1));
+    // La página vuelve a pintarse con la política encendida (revalidatePath).
+    rerender(interruptor({ enabled: true }));
+    expect(screen.getByRole("button", { name: t.interruptor.apagar })).toBeInTheDocument();
+    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.interruptor.siApagar })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.apagar }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siApagar }));
+    await waitFor(() => expect(disableOutreach).toHaveBeenCalledTimes(1));
+    rerender(interruptor({ enabled: false }));
+    expect(screen.getByRole("button", { name: t.interruptor.encender })).toBeInTheDocument();
+    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("sin dirección, la línea de arriba no repite lo que dice la de abajo", () => {
+    render(interruptor({ nuncaEncendido: true, hasAddress: false }));
+    expect(screen.getByText(t.interruptor.offHelpNuncaCorto)).toBeInTheDocument();
+    expect(screen.getByText(t.interruptor.sinDireccion)).toBeInTheDocument();
+    expect(screen.queryByText(t.interruptor.offHelpNunca)).not.toBeInTheDocument();
+  });
+
+  it("los plurales salen de Intl.PluralRules, con 1 y con 2", () => {
+    expect(t.interruptor.consecuenciaEncender("1", 1)).toMatch(/^Hoy sale 1 mensaje aprobado, /);
+    expect(t.interruptor.consecuenciaEncender("2", 2)).toMatch(/^Hoy salen 2 mensajes aprobados, /);
+    expect(t.salud.cola.note("1", 1)).toBe("1 atascado");
+    expect(t.salud.cola.note("2", 2)).toBe("2 atascados");
+    expect(t.salud.rebotes.note("1", "40", 1)).toBe("1 de 40 no existe");
+    expect(t.salud.rebotes.note("2", "40", 2)).toBe("2 de 40 no existen");
+    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    expect(screen.getByText("1 atascado")).toBeInTheDocument();
+    expect(screen.getByText("1 de 40 no existe")).toBeInTheDocument();
+  });
+
+  it("mientras no se lean los buzones, «Salud de hoy» lo dice encima de la tabla de rebotes", () => {
+    const { unmount } = render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    expect(screen.getByRole("note")).toHaveTextContent(t.salud.lecturaPendiente.title);
+    unmount();
+    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lecturaConectada />);
+    expect(screen.queryByText(t.salud.lecturaPendiente.title)).not.toBeInTheDocument();
+  });
+
+  it("una cuenta cuyo nombre ya dice el canal no lo repite", () => {
+    const caida = {
+      id: "c2", channel: "linkedin" as const, name: "Laura (LinkedIn)", status: "error" as const,
+      lastError: null, lastErrorAt: null,
+    };
+    render(<Salud health={{ ...health, accountsDown: 1 }} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA} />);
+    expect(screen.getAllByText("Laura (LinkedIn)").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/LinkedIn: Laura/)).not.toBeInTheDocument();
+  });
+
+  it("la fecha de un rebote es corta: la hora si es de hoy, el día y el mes si no", () => {
+    const rebotes = [
+      { id: "b1", recipientAddress: "hoy@marca.test", kind: "hard" as const, reason: "550 5.1.1", detectedAt: "2026-09-23T13:55:00Z" },
+      { id: "b2", recipientAddress: "antes@marca.test", kind: "soft" as const, reason: "452 4.2.2", detectedAt: "2026-09-21T16:55:00Z" },
+    ];
+    render(<Salud health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
+    const tabla = screen.getByRole("table", { name: t.salud.rebotesCaption });
+    expect(within(tabla).getByText(f.time("2026-09-23T13:55:00Z"))).toBeInTheDocument();
+    expect(within(tabla).getByText("21 sep")).toBeInTheDocument();
+    expect(tabla.textContent).not.toMatch(/de septiembre de 2026/);
+  });
+
+  it("la rampa de calentamiento se pinta con el LineChart del kit, un punto por día", () => {
+    const c = calentamientoDe("60", "14", LIMITES, "es-CO");
+    expect(c.tipo).toBe("curva");
+    if (c.tipo === "curva") {
+      expect(c.serie.dias[0]).toBe("1");
+      expect(c.serie.topes[0]).toBe(20);
+      expect(c.serie.topes.at(-1)).toBe(60);
+      expect(c.serie.topes.length).toBe(c.serie.dias.length);
+      // No baja nunca.
+      expect(c.serie.topes.every((v, i, a) => i === 0 || v >= (a[i - 1] ?? 0))).toBe(true);
+    }
+    render(<PoliticaForm {...PROPS_DEL_FORMULARIO} />);
+    expect(screen.getByRole("img", { name: t.calentamiento.caption })).toBeInTheDocument();
+    // La tabla sigue, para quien no ve el gráfico.
+    expect(screen.getByRole("table", { name: t.calentamiento.caption })).toBeInTheDocument();
   });
 });

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
-import { ConfirmarAccion } from "../../cotizar/_ui/confirmar-accion";
+import { ConfirmarAccion } from "@/components/ui/confirmar-accion";
 import { apagarEnvio, encenderEnvio } from "./actions";
 import { MESSAGES } from "./messages";
 
@@ -12,7 +12,7 @@ import { MESSAGES } from "./messages";
  * con su pill, una línea que dice qué implica, y el botón.
  *
  * Encender y apagar piden confirmación en el sitio, con el patrón del
- * producto (ConfirmarAccion de Cotizar: el primer botón enseña qué va a
+ * producto (ConfirmarAccion del kit, nacida en Cotizar: el primer botón enseña qué va a
  * pasar, el segundo es el que actúa). Apagar, porque cancela la cola;
  * encender, porque es lo que empieza a escribir a marcas en nombre del
  * creador, y dice cuántos mensajes aprobados salen hoy.
@@ -23,7 +23,13 @@ import { MESSAGES } from "./messages";
  *
  * `motivo` llega ya armado por la página («Apagado el 23 de septiembre: …»);
  * `nuncaEncendido` distingue una política recién creada, en la que no se
- * canceló nada, de una que se apagó. `aprobadosHoy` llega formateado.
+ * canceló nada, de una que se apagó. `aprobadosHoy` llega formateado y
+ * crudo (el crudo elige el plural).
+ *
+ * Los dos ConfirmarAccion llevan una `key` por estado (r4): ocupan el
+ * mismo sitio, y sin ella React reutilizaba el de encender para apagar,
+ * con la confirmación ya abierta y el foco en ella justo después de
+ * encender. Un segundo clic distraído deshacía lo que se acababa de hacer.
  */
 export function Interruptor({
   enabled,
@@ -42,8 +48,8 @@ export function Interruptor({
   puedeCambiar: boolean;
   /** Cuentas de envío conectadas: sin ninguna, encender no enviaría nada. */
   cuentasConectadas: number;
-  /** Los mensajes aprobados que salen hoy al encender, ya formateados. */
-  aprobadosHoy: { n: string; hay: boolean };
+  /** Los mensajes aprobados que salen hoy al encender: `n` formateado, `cuantos` sin formatear. */
+  aprobadosHoy: { n: string; cuantos: number };
 }) {
   const t = MESSAGES.interruptor;
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +66,6 @@ export function Interruptor({
     if (!r.ok) setError(r.message);
   }
 
-  const ayuda = enabled ? t.onHelp : (motivo ?? (nuncaEncendido ? t.offHelpNunca : t.offHelp));
   // Lo primero que falta, en una línea. El rol va antes: sin él, lo demás no importa.
   const falta = !puedeCambiar
     ? t.sinPermiso
@@ -71,6 +76,10 @@ export function Interruptor({
         : cuentasConectadas === 0
           ? t.sinCanal
           : null;
+  // Si falta algo, la línea de abajo dice el paso concreto: la de arriba no lo repite (r4).
+  const ayuda = enabled
+    ? t.onHelp
+    : (motivo ?? (nuncaEncendido ? (falta ? t.offHelpNuncaCorto : t.offHelpNunca) : t.offHelp));
 
   return (
     <section aria-labelledby="interruptor" className="mb-10 rounded-md border border-line p-4">
@@ -95,6 +104,7 @@ export function Interruptor({
           </Button>
         ) : enabled ? (
           <ConfirmarAccion
+            key="apagar"
             action={apagar}
             label={t.apagar}
             variant="danger"
@@ -110,11 +120,12 @@ export function Interruptor({
           </Button>
         ) : (
           <ConfirmarAccion
+            key="encender"
             action={encender}
             label={t.encender}
             variant="primary"
             pregunta={t.confirmarEncender}
-            consecuencia={t.consecuenciaEncender(aprobadosHoy.n, aprobadosHoy.hay)}
+            consecuencia={t.consecuenciaEncender(aprobadosHoy.n, aprobadosHoy.cuantos)}
             confirmar={t.siEncender}
             cancelar={t.cancelar}
             anchoAbierta="w-full sm:w-80"
