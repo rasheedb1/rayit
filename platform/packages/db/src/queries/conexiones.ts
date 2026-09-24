@@ -615,8 +615,17 @@ export async function notifyConnectionAdded(tx: WorkspaceTx, input: NotifyConnec
 export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
 /** Lectura hecha con el token del dueño (cuenta autorizada): la misma que escribe el worker. */
 export const API_SNAPSHOT_SOURCE = 'api';
+/** Lectura comprada a un proveedor de datos (CON-12: TikTok por @). */
+export const AGGREGATOR_SNAPSHOT_SOURCE = 'aggregator';
 /** Las fuentes que la pantalla considera «la última lectura» de la cuenta. */
-export const ACCOUNT_SNAPSHOT_SOURCES: readonly string[] = [PUBLIC_SNAPSHOT_SOURCE, API_SNAPSHOT_SOURCE];
+export const ACCOUNT_SNAPSHOT_SOURCES: readonly string[] = [PUBLIC_SNAPSHOT_SOURCE, AGGREGATOR_SNAPSHOT_SOURCE, API_SNAPSHOT_SOURCE];
+
+/**
+ * Cómo se leen las cifras de una cuenta dada de alta por @. Es también
+ * el `source` de sus snapshots: las dos columnas dicen de dónde salió la
+ * cifra, y mantenerlas iguales evita una tabla de equivalencias.
+ */
+export type PublicAccessMode = typeof PUBLIC_SNAPSHOT_SOURCE | typeof AGGREGATOR_SNAPSHOT_SOURCE;
 
 export interface AddPublicAccountInput {
   creatorId: string;
@@ -628,6 +637,8 @@ export interface AddPublicAccountInput {
   avatarUrl: string | null;
   profileUrl: string | null;
   accountType: ConnectionAccountType;
+  /** Por defecto 'public_profile' (fuente oficial de la plataforma). 'aggregator' = proveedor de pago (CON-12). */
+  accessMode?: PublicAccessMode;
 }
 
 /** La ref de una cuenta pública no apunta a ningún secreto; la columna es NOT NULL. */
@@ -637,8 +648,10 @@ export function publicSecretRef(platformId: ConnectionPlatformId, handle: string
 
 /**
  * Alta o reactivación de una cuenta por @: misma clave natural que una
- * conexión autorizada (plataforma + id externo + workspace), con
- * access_mode 'public_profile' y sin tokens.
+ * conexión autorizada (plataforma + id externo + workspace), con el
+ * access_mode de su fuente ('public_profile' o 'aggregator') y sin
+ * tokens. Una cuenta que ya está autorizada por su dueño NO se degrada:
+ * el token del creador siempre manda sobre una lectura por @.
  */
 export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountInput): Promise<UpsertConnectionResult> {
   const creator = await tx.query<{ id: string }>(`SELECT id FROM creator_profile WHERE id = $1`, [input.creatorId]);
@@ -648,9 +661,10 @@ export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountI
     `INSERT INTO social_connection
        (workspace_id, creator_id, platform_id, external_account_id, handle, display_name, avatar_url, profile_url,
         account_type, secret_ref, scopes, access_mode, status, connected_at)
-     VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'public_profile', 'active', now())
+     VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', $10, 'active', now())
      ON CONFLICT (platform_id, external_account_id, workspace_id) DO UPDATE
        SET handle = EXCLUDED.handle,
+           access_mode = CASE WHEN social_connection.access_mode = 'direct_oauth' THEN social_connection.access_mode ELSE EXCLUDED.access_mode END,
            display_name = COALESCE(EXCLUDED.display_name, social_connection.display_name),
            avatar_url = COALESCE(EXCLUDED.avatar_url, social_connection.avatar_url),
            profile_url = COALESCE(EXCLUDED.profile_url, social_connection.profile_url),
@@ -658,11 +672,11 @@ export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountI
            status = 'active', status_detail = NULL, deleted_at = NULL, last_error_at = NULL, consecutive_failures = 0,
            connected_at = CASE WHEN social_connection.deleted_at IS NULL THEN social_connection.connected_at ELSE now() END
      RETURNING id, (xmax = 0) AS created, access_mode`,
-    [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle)],
+    [input.creatorId, input.platformId, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, publicSecretRef(input.platformId, input.handle), input.accessMode ?? PUBLIC_SNAPSHOT_SOURCE],
   );
   const r = rows[0]!;
   const created = r.created === true;
-  // El ON CONFLICT no cambia access_mode: una cuenta ya autorizada que se vuelve a agregar por @ sigue autorizada, y la bitácora dice la de la fila.
+  // El ON CONFLICT sí mueve el access_mode entre fuentes públicas (CON-12), pero NUNCA degrada una cuenta ya autorizada: se vuelve a agregar por @ y sigue autorizada. La bitácora dice la de la fila.
   await audit(tx, {
     action: created || !prior ? 'connection.added' : 'connection.reconnected',
     entityType: 'social_connection',
@@ -674,6 +688,34 @@ export async function addPublicAccount(tx: WorkspaceTx, input: AddPublicAccountI
     },
   });
   return { id: r.id, created };
+}
+
+/**
+ * Mueve una cuenta por @ entre fuentes públicas conservando su id, su
+ * consentimiento y su historia: pasa a 'aggregator' el día que se
+ * contrata el proveedor (CON-12) y vuelve a 'public_profile' si se da de
+ * baja. Nunca toca una cuenta autorizada por su dueño.
+ */
+export async function setAccountAccessMode(tx: WorkspaceTx, id: string, accessMode: PublicAccessMode): Promise<boolean> {
+  const { rows } = await tx.query<{ access_mode: PublicAccessMode }>(
+    `UPDATE social_connection SET access_mode = $2
+      WHERE id = $1 AND deleted_at IS NULL AND access_mode <> $2
+        AND access_mode IN ('public_profile', 'aggregator')
+      RETURNING (SELECT c.access_mode FROM social_connection c WHERE c.id = $1) AS access_mode`,
+    [id, accessMode],
+  );
+  const previous = rows[0];
+  if (!previous) return false;
+  // De dónde salen las cifras de una cuenta conectada —y si se pagan— es
+  // un hecho del negocio, no salud técnica de la lectura (ACC-2).
+  await audit(tx, {
+    action: 'connection.source_changed',
+    entityType: 'social_connection',
+    entityId: id,
+    before: { accessMode: previous.access_mode },
+    after: { accessMode },
+  });
+  return true;
 }
 
 export interface AccountSnapshotInput {
@@ -889,13 +931,16 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
 // ---------------------------------------------------------------------
 
 /**
- * La fila 'public_profile' de esa red con ese handle, si existe y está
- * viva: es la que «Autorizar» debe convertir, para conservar id e historial.
+ * La fila leída por @ de esa red con ese handle —por la fuente oficial o
+ * por el proveedor de pago (CON-12)—, si existe y está viva: es la que
+ * «Autorizar» debe convertir, para conservar id e historial. Si dejara
+ * fuera a las de proveedor, autorizar crearía una cuenta duplicada y la
+ * vieja seguiría gastando unidades.
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
     `SELECT id, secret_ref, deleted_at, status FROM social_connection
-      WHERE platform_id = $1 AND access_mode = 'public_profile' AND deleted_at IS NULL AND lower(handle) = lower($2)`,
+      WHERE platform_id = $1 AND access_mode IN ('public_profile', 'aggregator') AND deleted_at IS NULL AND lower(handle) = lower($2)`,
     [platformId, handle],
   );
   const r = rows[0];

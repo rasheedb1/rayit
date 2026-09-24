@@ -17,16 +17,18 @@ src/encrypted-secret-store.ts   EncryptedSecretStore: el real (CON-3), connectio
 src/crypto/master-key.ts     TOKEN_ENCRYPTION_KEY (32 bytes en base64 o hex) y llavero por versión (_V2, _CURRENT)
 src/crypto/token-cipher.ts   AES-256-GCM con HKDF (info on-cue/token/<versión>), IV por escritura, AAD = secret_ref, rotación
 src/crypto/sealed-cookie.ts  sello HMAC-SHA256 con TTL para la cookie del flujo OAuth
-src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login):
+src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login), youtube (Google, CON-8):
                              authorizationUrl, exchangeCode, identity, refresh; loadOAuthApps(env) solo con nombres de variables
 src/token-refresher.ts       TokenRefresher, TokenRefreshError, kindFromHttp (CON-2)
 src/redact.ts                redactSecrets: lo usan el logger del worker y este paquete
 src/platforms/tiktok.ts      createTikTokRefresher(core, { login, business }): elige la app por el prefijo del secret_ref
 src/platforms/instagram.ts   createInstagramRefresher(core, app)
-src/platforms/youtube.ts     refresher sin implementar hasta CON-8
+src/platforms/youtube.ts     createYouTubeRefresher (CON-8): renueva contra oauth2.googleapis.com
 src/testing/dump-text.ts     dumpTextColumns / findSecretInDump: todas las columnas de texto por pg_catalog (la prueba R4)
 src/public/                  Cuentas por @ (CON-10): PublicProfileSource por plataforma. tiktok = oEmbed (identidad), instagram = business_discovery con INSTAGRAM_HOUSE_TOKEN, youtube = Data API con GOOGLE_API_KEY (YouTubeClient acepta apiKey)
+src/public/tiktok-aggregator.ts  Proveedor de datos de TikTok (CON-12): EnsembleDataClient (tt/user/info, tt/user/posts) y la fuente con accessMode 'aggregator'. Solo existe con ENSEMBLEDATA_TOKEN
 src/posts/                   Publicaciones (CON-5): PostSource con dos estrategias tras la misma interfaz. createPublicPostSources(core, env) da la pública por plataforma; createAuthorizedPostSource(core, platformId) la del token del dueño. El job elige por social_connection.access_mode
+src/posts/tiktok-posts.ts    TikTok sin videos por @, y con ENSEMBLEDATA_TOKEN la fuente del proveedor que sí los lista (CON-12)
 
 src/http/errors.ts           PlatformApiError { kind: transient | permanent | auth | quota } y el clasificador único
 src/http/retry.ts            backoff exponencial con jitter, Retry-After, sleep cancelable
@@ -74,7 +76,7 @@ const core = new HttpCore({ callLog: new PostgresCallLogSink(tx), quota: new Quo
 const brand = await new InstagramClient(core, { connectionId: conn.id, tokens }).businessDiscovery('cafealma');
 ```
 
-## OAuth y el token en reposo (CON-3)
+## OAuth y el token en reposo (CON-3, CON-8)
 
 ```
 POST /conexiones/oauth/<proveedor>/start   →  state (32 bytes) + cookie sellada  →  authorizationUrl(cfg, { state })
@@ -90,8 +92,20 @@ oauth.refresh (worker)                     →  ctx.secrets.get(ref) → refresh
   duración (60 días) como `accessToken`, `refreshToken` vacío, y
   `instagramRefresh` pide otro mientras queden más de 24 h; vencido es
   definitivo (`refresh_expired`).
-- **Sin PKCE en web**: ninguna de las tres plataformas lo documenta para
-  web; la cookie deja el campo `verifier` para cuando alguna lo admita.
+- **YouTube (CON-8)** pide `access_type=offline` y `prompt=consent`:
+  Google entrega el `refresh_token` solo con el primero y solo la
+  primera vez que esa cuenta autoriza la app, así que sin el segundo
+  reconectar daría una conexión que muere en una hora. El refresh token
+  **no rota** y **no tiene fecha de vencimiento** (`refreshExpiresAt`
+  vacío): lo revoca el usuario, seis meses de inactividad, o siete días
+  si el proyecto sigue en «Testing». El id del canal no sale del
+  endpoint de token: lo dice `channels.list?mine=true`; una cuenta de
+  Google sin canal falla con `no_channel`, no con «no sabemos quién
+  eres». Scopes: `youtube.readonly` y `yt-analytics.readonly`, los dos
+  de solo lectura.
+- **Sin PKCE en web**: ninguna de las cuatro plataformas lo documenta
+  para web; la cookie deja el campo `verifier` para cuando alguna lo
+  admita.
 - **`EncryptedSecretStore`** recibe `{ query(text, params) }`: en la web
   el `WorkspaceTx` (RLS pone el workspace en el INSERT con
   `current_workspace_id()`); en el worker `ctx.db` (`mc_worker`, la fila
@@ -114,11 +128,72 @@ Fixtures: `fixtures/<plataforma>/oauth.*.json` (`ok`, `invalid`/`invalid_grant`,
 `rate_limit`, `server_error_then_ok`), con `meta.source = 'docs'`; los de
 `tiktok-accounts` se confirman con CON-9.
 
+## Cuentas por @: fuente oficial o proveedor (CON-10 y CON-12)
+
+Una cuenta se agrega escribiendo su **@**, y quien la lee es un
+`PublicProfileSource`. Su `accessMode` es a la vez el
+`social_connection.access_mode` de la cuenta y el
+`account_metric_snapshot.source` de sus lecturas: las dos columnas dicen
+de dónde salió la cifra.
+
+| Red | Fuente | `accessMode` | Qué da |
+|---|---|---|---|
+| Instagram | `business_discovery` con `INSTAGRAM_HOUSE_TOKEN` | `public_profile` | Seguidores y publicaciones de cuentas profesionales públicas |
+| YouTube | Data API con `GOOGLE_API_KEY` | `public_profile` | Suscriptores y videos (el acumulado de vistas del canal queda en `raw`, no como vistas del día) |
+| TikTok, **sin** `ENSEMBLEDATA_TOKEN` | oEmbed oficial | `public_profile` | Solo identidad: TikTok no publica cifras por @ |
+| TikTok, **con** `ENSEMBLEDATA_TOKEN` | EnsembleData | `aggregator` | Seguidores, seguidos y número de videos (una unidad) — y, a diferencia de las otras, **también la lista de publicaciones** (`posts/tiktok-posts.ts`), así que `collect.posts` y `collect.post_metrics` dejan de decir «TikTok no publica sus videos por @» |
+
+La variable es el interruptor: sin ella no sale una llamada al proveedor
+y TikTok se comporta como en CON-10. Con ella, `createPublicProfileSources`
+devuelve el agregador y la cuenta que ya existía por @ se convierte
+conservando su id, su consentimiento y su historia (el proveedor la
+identifica con el mismo @, no con el `secUid`).
+
+**Las vistas de una cuenta por @ van en `null`.** `PublicAccountMetrics.views`
+es lo que se guarda en `account_metric_snapshot.views`, y esa columna son
+las vistas **del día**: así la llena la semilla y así la suma Resumen.
+Ninguna fuente por @ las da —YouTube publica el acumulado del canal y
+TikTok nada—, así que las vistas llegan video por video (`collect.posts`
+y `collect.post_metrics`). Hasta el cierre de CON-C el proveedor sumaba el
+`play_count` de todo el catálogo en cada lectura de cuenta (hasta 21
+unidades por cuenta y día) para guardar un acumulado que Resumen habría
+contado una vez por día; guardar el acumulado aparte es la decisión D20
+de `docs/propuestas/CIERRE-CON-C.md`.
+
+**El gasto sigue al que pide.** La fuente de posts del proveedor pide en
+cada llamada solo los bloques de diez que le faltan para el `max` de
+quien lista (25 en `collect.posts` = 3 unidades), nunca más de
+`ENSEMBLEDATA_MAX_POSTS` (200) en total.
+
+**Si el proveedor cambia de forma**, el parseo es tolerante en lo
+accesorio (campos extra, `data.posts` en vez de `data`, cursor numérico)
+y definitivo en lo que sostiene una cifra: sin `uniqueId` o sin
+`followerCount` sale un error permanente que lo dice en español, y no se
+da de alta ni se actualiza nada.
+
+**Qué `source` lleva cada fila.** En `account_metric_snapshot` el
+`source` es el `accessMode` de la fuente, así que una lectura comprada se
+distingue de una gratuita (`'aggregator'` vs `'public_profile'` vs
+`'api'`). En `post_metric_snapshot` NO: CON-5 fijó que ahí el `source`
+dice *cómo* se leyó —`'api'` para cualquier API, `'csv_import'` para el
+archivo— y `collect.post_metrics` busca la última lectura por ese valor.
+Lo que costó dinero se ve donde corresponde: `api_call_log` guarda el
+endpoint `ensembledata.tt.user.posts` y `api_quota_usage` acumula sus
+unidades.
+
+Costo, comparación con Apify y Phyllo, y las variables que hay que meter
+al vault: `docs/propuestas/CON-12.md`.
+
 ## La regla: el token nunca sale de OAuthTokens
 
 - El núcleo pone la credencial en una cabecera (`Authorization: Bearer`
   en TikTok Display, Instagram y Google; `Access-Token` en TikTok
   Accounts). **Nunca en la URL**, aunque Meta acepte `access_token=`.
+  Dos credenciales no son del creador sino de la casa y sus APIs solo
+  las aceptan en la query (`key` de Google, `token` de EnsembleData): van
+  en `secrets` para que `safeErrorMessage` las borre de cualquier
+  mensaje, `api_call_log` no guarda URLs, y `FixtureFetch` las tapa al
+  grabar.
 - Ningún error lleva el token: los mensajes de la plataforma pasan por
   `safeErrorMessage` (borra el valor literal del token) antes de entrar
   a `api_call_log` y a `PlatformApiError`.
@@ -166,10 +241,13 @@ cualquier código del cuerpo.
 | `tiktok` (Display) | 40/min por (conexión, endpoint) · **DECISIÓN PENDIENTE DE NICOLÁS**: la documentación de hoy no distingue por cuenta | docs/arquitectura.md | 22-sep-2026 |
 | `tiktok` (Display) | 600/min por (app, endpoint): `user/info`, `video/list`, `video/query`; ventana deslizante de un minuto; 429 `rate_limit_exceeded` | developers.tiktok.com/doc/tiktok-api-v2-rate-limit | página del 4-ago-2026 |
 | `tiktok-accounts` | 40/min por (conexión, endpoint) | docs/arquitectura.md (el portal de la Accounts API es JavaScript y no se pudo leer; se confirma con CON-9) | 22-sep-2026 |
+| `ensembledata` | 60/min por app · **DECISIÓN PENDIENTE DE NICOLÁS**: el proveedor dice que no impone límite de tasa, pero su SDK reconoce un 429; la ventana es nuestra | ensembledata.com/apis/docs | 23-sep-2026 |
+| `ensembledata` | Presupuesto diario en unidades, `null` hasta que haya plan aprobado (Wood 1 500 · Bronze 5 000 · Silver 11 000 · Gold 25 000 · Platinum 50 000 al día, 00:00 UTC). Cada endpoint de TikTok = 1 unidad; la lista de publicaciones cobra una por bloque de diez. Es la única familia de `tiktok` con presupuesto, así que es la que persiste en `api_quota_usage` | ensembledata.com/pricing · docs/propuestas/CON-12.md §0.2 | 23-sep-2026 |
 | `instagram` | 200 llamadas/hora por conexión (fórmula de plataforma: 200 × usuarios). El BUC (4800 × impresiones en 24 h) no se puede calcular: se respeta por sus códigos (`quota`) · **DECISIÓN PENDIENTE DE NICOLÁS** | developers.facebook.com/docs/graph-api/overview/rate-limiting | 22-sep-2026 |
 | `youtube` (Data) | 10 000 unidades/día por proyecto (scope app); `channels.list`, `playlistItems.list`, `videos.list` = 1 unidad; toda petición, aun inválida, cuesta ≥ 1 | developers.google.com/youtube/v3/determine_quota_cost | actualizada 15-sep-2026 |
 | `youtube-search` | `search.list` = 1 unidad en un cubo propio de 100/día (cambió en jun-2026; antes 100 unidades del cubo general). No se usa en el MVP | misma página | 15-sep-2026 |
 | `youtube-analytics` | cuota aparte; Google no publica el número · **DECISIÓN PENDIENTE DE NICOLÁS**: leerlo del proyecto en Google Cloud | developers.google.com/youtube/analytics/reference/reports/query | 22-sep-2026 |
+| `google-oauth` | `oauth2.googleapis.com/token` no gasta unidades de la Data API: familia propia para que renovar un token de una hora cuarenta veces al día no se coma el cupo diario. 600/min de app es NUESTRO freno, no un límite publicado · **DECISIÓN PENDIENTE DE NICOLÁS** | developers.google.com/identity/protocols/oauth2/web-server | 23-sep-2026 |
 
 Cómo se aplica: `acquire()` **espera** (con el `sleep` inyectado)
 cuando la siguiente llamada superaría una ventana, y **lanza `quota`
@@ -276,7 +354,7 @@ casos de error siguen saliendo de la documentación.
 ## Pruebas
 
 ```bash
-pnpm --filter @mc/connectors test        # 180 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
+pnpm --filter @mc/connectors test        # 218 pruebas, < 4 s, sin red (guard en cada archivo); pglite para api_quota_usage y connection_secret
 pnpm --filter @mc/connectors typecheck lint
 ```
 

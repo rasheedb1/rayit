@@ -12,9 +12,9 @@
  * sin aviso; un editor sin permiso → falla antes de leer o escribir nada;
  * ningún token en la evidencia ni en el aviso.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from "@mc/connectors";
+import { dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, keyringFromEnv, loadFixtures, TokenCipher, withoutNetwork, type NetworkGuard } from "@mc/connectors";
 import { listConsents, type WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
@@ -47,6 +47,7 @@ beforeAll(async () => {
     ...(await loadFixtures("instagram", [["business_discovery", "ok"]])),
     ...(await loadFixtures("youtube", [["channels.list", "handle.ok"]])),
     ...(await loadFixtures("tiktok", [["oembed.profile", "ok"], ["oembed.profile", "not_found"]])),
+    ...(await loadFixtures("ensembledata", [["user.info", "ok"], ["user.posts", "ok"]])),
   ]);
   service = createCuentasService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
   await db.execAsSuperuser(`
@@ -123,7 +124,8 @@ describe("agregar", () => {
     if (!out.ok) return;
     const row = (await service.listar()).find((r) => r.id === out.id)!;
     expect(row.latest?.followers).toBe(38400);
-    expect(row.latest?.views).not.toBeNull();
+    // El canal publica su acumulado; la columna es la vista del día, que Resumen suma por día (cierre CON-C).
+    expect(row.latest?.views).toBeNull();
     const sinKey = createCuentasService({ env: { INSTAGRAM_HOUSE_TOKEN: "x" }, withWorkspace, fetch: fetch.fetch, now: () => NOW });
     const res = await sinKey.agregar({ platformId: "youtube", handle: "@NutriveOficial" }, WHO);
     expect(res).toMatchObject({ ok: false, code: "not_configured" });
@@ -258,5 +260,90 @@ describe("consentimiento delegado (ACC-8)", () => {
     const notices = dump.find((d) => d.table === "notification" && d.column === "body_es")!;
     expect(notices.text).toContain("en tu nombre");
     expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("TikTok con el proveedor de datos contratado (CON-12)", () => {
+  const ENV_PROVEEDOR = { ...ENV, ENSEMBLEDATA_TOKEN: "ed-token-web-SECRETO" };
+
+  it("sin la variable, TikTok sigue sin cifras por @ y no se llama al proveedor", () => {
+    const tiktok = service.availability().find((a) => a.platformId === "tiktok")!;
+    expect(tiktok.label).toBe("oEmbed de TikTok");
+    expect(tiktok.offersEs).toMatch(/no publica seguidores/);
+    expect(JSON.stringify(fetch.calls)).not.toContain("ensembledata.com");
+  });
+
+  it("con la variable, la cuenta que ya estaba por @ pasa a aggregator con sus cifras, sin duplicarse ni perder su id", async () => {
+    const todasAntes = await service.listar();
+    const antes = todasAntes.find((r) => r.handle === "laura.cocinafacil" && r.accessMode === "public_profile")!;
+    expect(antes.latest).toBeNull();
+
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    expect(conProveedor.availability().find((a) => a.platformId === "tiktok")!.offersEs).toMatch(/proveedor de datos/);
+
+    const upd = await conProveedor.actualizar(antes.id);
+    expect(upd).toMatchObject({ ok: true, withMetrics: true, alreadyReadToday: false });
+
+    const filas = await conProveedor.listar();
+    const despues = filas.find((r) => r.id === antes.id)!;
+    expect(despues.accessMode).toBe("aggregator");
+    expect(despues.latest).toEqual({ day: "2026-09-22", followers: 128400, following: 312, mediaCount: 3, views: null });
+    // El seed ya traía otra fila de TikTok con ese @ (open_id distinto, autorizada):
+    // lo que importa es que cambiar de fuente no agregó ninguna.
+    expect(filas.length).toBe(todasAntes.length);
+    expect(filas.filter((r) => r.accessMode === "aggregator").map((r) => r.id)).toEqual([antes.id]);
+
+    const src = await db.queryAsSuperuser<{ source: string }>("SELECT source FROM account_metric_snapshot WHERE connection_id = $1", [antes.id]);
+    expect(src.rows.map((r) => r.source)).toEqual(["aggregator"]);
+  });
+
+  it("agregar un @ nuevo de TikTok deja seguidores y videos del día sin que el creador suba nada (las vistas llegan por video)", async () => {
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    await conProveedor.quitar((await conProveedor.listar()).find((r) => r.handle === "laura.cocinafacil")!.id);
+
+    const out = await conProveedor.agregar({ platformId: "tiktok", handle: "@laura.cocinafacil" }, WHO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const row = (await conProveedor.listar()).find((r) => r.id === out.id)!;
+    expect(row.accessMode).toBe("aggregator");
+    expect(row.latest?.followers).toBe(128400);
+    expect(row.latest?.mediaCount).toBe(3);
+    expect(row.latest?.views).toBeNull();
+    expect(row.status).toBe("active");
+  });
+
+  it("R4: el token del proveedor no queda en ninguna tabla ni en las llamadas grabadas", async () => {
+    const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, ["ed-token-web-SECRETO"])).toBeNull();
+    expect(JSON.stringify(fetch.calls)).not.toContain("ed-token-web-SECRETO");
+    expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("YouTube autorizado (CON-8): «Actualizar» lee con el token del dueño", () => {
+  it("deja los suscriptores del día con source api y vistas en null; antes del cierre decía «todavía no tiene lectura de cuenta»", async () => {
+    const env = { ...ENV, TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64") };
+    const ref = "enc:youtube:0000000c-0000-4000-8000-0000000000a1";
+    const tokens = { accessToken: "ya29.web-actualizar-SECRETO", refreshToken: "1//web-actualizar-SECRETO", accessExpiresAt: new Date("2026-09-22T16:00:00Z"), scopes: ["https://www.googleapis.com/auth/youtube.readonly"] };
+    const inserted = await db.queryAsSuperuser<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, access_expires_at)
+       VALUES ($1, $2, 'youtube', 'UCcanalActualizar000000a1', 'CanalActualizar', $3, $4::text[], 'direct_oauth', $5) RETURNING id`,
+      [SEED_WORKSPACE_ID, CREATOR_LAURA, ref, tokens.scopes, tokens.accessExpiresAt],
+    );
+    const id = inserted.rows[0]!.id;
+    await withWorkspace((tx) => new EncryptedSecretStore({ db: tx, cipher: new TokenCipher(keyringFromEnv(env)) }).set(ref, tokens));
+    const yt = new FixtureFetch(await loadFixtures("youtube", [["channels.list", "mine.ok"]]));
+    const conToken = createCuentasService({ env, withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId: USER_LAURA }), fetch: yt.fetch, now: () => NOW });
+
+    const out = await conToken.actualizar(id);
+    expect(out).toMatchObject({ ok: true, withMetrics: true });
+    const snap = await db.queryAsSuperuser<{ followers: string | null; views: string | null; source: string }>(
+      "SELECT followers::text, views::text, source FROM account_metric_snapshot WHERE connection_id = $1", [id]);
+    expect(snap.rows).toHaveLength(1);
+    expect(Number(snap.rows[0]!.followers)).toBeGreaterThan(0);
+    expect(snap.rows[0]!.views).toBeNull();
+    expect(snap.rows[0]!.source).toBe("api");
+    expect(yt.calls.map((c) => new URL(c.url).pathname)).toEqual(["/youtube/v3/channels"]);
+    expect(JSON.stringify(yt.calls)).not.toContain(tokens.accessToken);
   });
 });

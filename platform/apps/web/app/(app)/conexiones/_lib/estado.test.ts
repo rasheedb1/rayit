@@ -84,10 +84,11 @@ describe("estadoDeCuenta · una cuenta autorizada", () => {
   });
 
   it("una cuenta que esta pantalla no sabe releer no ofrece «Actualizar»: sería un botón que solo puede fallar", () => {
-    for (const modo of ["business_portfolio", "manual_csv", "aggregator"] as const) {
+    for (const modo of ["business_portfolio", "manual_csv"] as const) {
       expect(estadoDeCuenta(fila({ accessMode: modo }), AHORA).accion).toBe("ninguna");
     }
-    for (const modo of ["direct_oauth", "public_profile"] as const) {
+    // El proveedor de datos (CON-12) se relee igual que una cuenta por @ (cierre CON-C).
+    for (const modo of ["direct_oauth", "public_profile", "aggregator"] as const) {
       expect(estadoDeCuenta(fila({ accessMode: modo }), AHORA).accion).toBe("actualizar");
     }
   });
@@ -135,7 +136,7 @@ describe("accesoDe", () => {
     expect(accesoDe("direct_oauth")).toMatchObject({ clase: "autorizada", etiqueta: "Autorizada", conToken: true, relectura: true });
     expect(accesoDe("business_portfolio")).toMatchObject({ clase: "autorizada", conToken: true, relectura: false });
     expect(accesoDe("manual_csv")).toMatchObject({ clase: "csv", etiqueta: "Por CSV", conToken: false, relectura: false });
-    expect(accesoDe("aggregator")).toMatchObject({ clase: "proveedor", etiqueta: "Por proveedor", conToken: false, relectura: false });
+    expect(accesoDe("aggregator")).toMatchObject({ clase: "proveedor", etiqueta: "Por proveedor", conToken: false, relectura: true });
   });
 
   it("«Por @» y «Autorizada» no comparten ni etiqueta ni explicación: se distinguen leyendo", () => {
@@ -177,10 +178,10 @@ describe("filaDeCuenta", () => {
 });
 
 describe("proveedorDe", () => {
-  it("solo TikTok e Instagram tienen app de CON-3; YouTube y Facebook todavía no", () => {
+  it("TikTok e Instagram tienen app de CON-3 y YouTube la de CON-8; Facebook todavía no", () => {
     expect(proveedorDe("tiktok")).toBe("tiktok");
     expect(proveedorDe("instagram")).toBe("instagram");
-    expect(proveedorDe("youtube")).toBeNull();
+    expect(proveedorDe("youtube")).toBe("youtube");
     expect(proveedorDe("facebook")).toBeNull();
     // Revisión: el portafolio de empresa de Meta no se repara con Instagram Login.
     expect(proveedorDe("instagram", "business_portfolio")).toBeNull();
@@ -204,6 +205,8 @@ describe("costura CON-3 → CON-4: un acceso vencido con renovación viva", () =
 
   it("sin permiso de renovación (null) hay que volver a autorizar: rojo y «Reautorizar»", () => {
     expect(estadoDeCuenta(fila({ accessExpiresAt: VENCIO, refreshExpiresAt: null }), AHORA)).toMatchObject({ tono: "bad", texto: "Vencida", accion: "reautorizar" });
+    // YouTube (CON-8): Google no pone fecha al refresh token; nulo es «se renueva», no «no hay renovación».
+    expect(estadoDeCuenta(fila({ platformId: "youtube", accessExpiresAt: VENCIO, refreshExpiresAt: null }), AHORA)).toMatchObject({ tono: "warn", accion: "reautorizar_opcional" });
   });
 
   it("con la renovación TAMBIÉN vencida, igual: rojo y «Reautorizar»", () => {

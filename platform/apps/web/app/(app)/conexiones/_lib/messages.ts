@@ -54,8 +54,8 @@ export const MESSAGES = {
     descripcion:
       "Si la cuenta es tuya, autorizarla una vez deja que On Cue lea lo que la red solo entrega a su dueño: vistas, alcance y retención de cada video. Puedes revocar el permiso cuando quieras.",
     boton: (red: string) => `Conectar ${red}`,
-    /** El botón deshabilitado dice qué falta, en vez de desaparecer. */
-    sinConfigurar: (red: string, falta: string) => `${red} no está configurado en este entorno: faltan ${falta}.`,
+    /** Una red sin sus variables no ofrece botón (cierre CON-C): la frase dice qué falta, en lugar del botón. */
+    sinConfigurar: (red: string, falta: string) => `${red} todavía no se puede conectar desde aquí: faltan ${falta}.`,
     reautorizar: "Reautorizar",
     reautorizarAria: (cuenta: string) => `Reautorizar ${cuenta}`,
     reautorizarTitulo: (red: string) => `Reautorizar ${red}`,
@@ -110,6 +110,9 @@ export const MESSAGES = {
     sinCifrasPorArroba: "Sin cifras por @",
     autorizarCifras: "Autorizar cifras",
     autorizarCifrasAria: (cuenta: string) => `Autorizar cifras de ${cuenta}`,
+    /** CON-8: en YouTube, autorizar desbloquea la analítica (retención, demografía), no las cifras, que ya salen por @. */
+    autorizarAnalitica: "Autorizar analítica",
+    autorizarAnaliticaAria: (cuenta: string) => `Autorizar analítica de ${cuenta}`,
     delta: (texto: string) => `${texto} en 7 días`,
     /**
      * CON-5: de cuántas publicaciones tenemos lecturas nosotros, aparte

@@ -40,6 +40,7 @@ export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record
     platformId: 'instagram',
     label: 'Instagram (business_discovery)',
     missing: missingInstagramHouseToken(env),
+    accessMode: 'public_profile',
     async lookup(handle, opts = {}) {
       const clean = assertHandle('instagram', handle);
       if (!house) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_TOKEN_MISSING_ES);

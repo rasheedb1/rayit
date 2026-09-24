@@ -29,9 +29,11 @@ fuera de `main`. Las seis con commits propios:
 | `CAM-4-aporte-marca` | 1 | Una nota de propuesta superada por CIERRE-CAM | Se puede borrar |
 
 Sesiones abiertas en otros worktrees al empezar: **CON-C**
-(`rayit-cierre-con-c`, 25 commits locales sin push) y **ACC**
-(`rayit-cierre-acc`, 11 commits locales y tres archivos sin commitear).
-E2E corre antes de que terminen: lo que traigan no está en esta prueba.
+(`rayit-cierre-con-c`, 25 commits locales) y **ACC** (`rayit-cierre-acc`,
+11 commits locales y tres archivos sin commitear). **CON-C entró a
+`main` mientras E2E trabajaba** (con CON-8 y CON-12, apagadas): esta
+rama la trae en el merge final y la prueba corre sobre ella. ACC sigue
+fuera.
 
 ## 1. La prueba de punta a punta (F1)
 
@@ -142,12 +144,12 @@ en /conexiones, anula la factura (`void`) y cancela la campaña.
 | 2 | **0041 sin aplicar** | «Recalcular» apagado; guardia roja | `make db.migrate` | **Nicolás** |
 | 3 | **Alcance por asignación** (ACC-6, 0040) | Un Mánager ve todas las campañas | El cierre de ACC en `main` + su migración; el alcance de Ventas, Cotizar y Resumen | **Sesión de ACC** y **Rasheed** |
 | 4 | **Lecturas reales de Instagram y YouTube** | Sin cifras por @ de esas redes | `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` en el vault, Vercel y GitHub | **Nicolás** |
-| 5 | **OAuth de YouTube** (CON-8) y **proveedor de TikTok** (CON-12) | Ramas sin fusionar | `GOOGLE_CLIENT_ID/SECRET` + CON-9; decidir si se contrata EnsembleData | **Nicolás** y **Rasheed** (CON-9) |
+| 5 | **OAuth de YouTube** (CON-8) y **proveedor de TikTok** (CON-12) | En `main` y apagados: sin sus variables, la pantalla no los ofrece y lo dice | `GOOGLE_CLIENT_ID/SECRET` (+ verificación de Google, CON-9); decidir si se contrata EnsembleData | **Nicolás** y **Rasheed** (CON-9) |
 | 6 | **Demografía en vivo** (CON-7) | La pantalla dice qué requisito falta | Una conexión autorizada con insights (CON-9) | **Rasheed** (CON-9) |
 | 7 | **Bitácora de Cotizar y Ventas** | Aceptar una cotización o crear un negocio no deja fila | Extender la convención de ACC-2 a sus módulos | **Rasheed** |
 | 8 | **Envío de correos** | Los recordatorios se copian de la bandeja | SMTP (CIM-10) | **Rasheed** |
 | 9 | **Despliegue continuo** | Se despliega a mano desde `rayit-deploy` | CIM-7 | **Rasheed** |
-| 10 | **CON-C** (fuentes con credencial) | 25 commits locales sin push | Su cierre | **Sesión de CON-C** |
+| 10 | **ACC** (su cierre) | 11 commits locales sin push | Su cierre, con la 0040 | **Sesión de ACC** |
 
 ## 5. El plan (F3)
 
@@ -175,7 +177,10 @@ hice: es el árbol principal).
 
 **Tres pruebas de `main` fallaban pasada la medianoche UTC**, por la
 fecha y no por el código. Las tres fallaban igual en `origin/main` sin
-esta rama (comprobado en `rayit-deploy` a las 00:17 UTC):
+esta rama (comprobado en `rayit-deploy` a las 00:17 UTC). La sesión de
+CON-C arregló en paralelo las de FIN-4 y la ficha (`d94e18a`,
+`e9e84e1`); en el merge quedó su versión, que resuelve lo mismo. La de
+CON-6 queda con el arreglo de E2E:
 
 | Prueba | Por qué fallaba | Arreglo |
 |---|---|---|

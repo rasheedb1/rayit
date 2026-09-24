@@ -77,8 +77,9 @@ function AccesoPill({ acceso }: { acceso: Acceso }) {
  * El botón «Reautorizar», en rojo, para una cuenta cuyo permiso caducó
  * o fue revocado. Reusa el `POST …/start` de CON-3: el callback vuelve
  * a la MISMA fila por su clave natural, así que el historial se
- * conserva. Si la app de esa red no está configurada en el entorno, el
- * botón sale deshabilitado diciendo qué falta, nunca desaparece.
+ * conserva. Si la app de esa red no está configurada en el entorno no
+ * se monta: la fila dice qué hacer (`sinReautorizar`) sin nombrar
+ * variables de servidor.
  */
 function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; provider: OAuthProviderId; urgente?: boolean }) {
   const red = PLATFORM_LABEL[provider];
@@ -98,23 +99,33 @@ function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; pro
 }
 
 /**
- * «Autorizar cifras» para una cuenta de TikTok agregada por @ (CON-10
- * §7): TikTok no publica seguidores ni vistas por @, y el dueño las
- * desbloquea autorizando una vez.
+ * Lo que el dueño desbloquea autorizando una cuenta que ya se lee por @
+ * (o por el proveedor de datos, CON-12): en TikTok las cifras, que por @
+ * no existen (CON-10 §7); en YouTube la analítica —retención y
+ * demografía—, que la Data API no entrega sin el permiso del canal
+ * (CON-8). Instagram no aparece: por @ ya da lo que el MVP necesita.
  */
-function AutorizarCifras({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {
-  // Sin la app configurada no hay nada que autorizar. La fila ya dice
-  // «Sin cifras por @»; qué variable falta se ve en la sección de
-  // conectar, que es donde mira quien despliega.
-  if (!entorno.oauthConnect || row.platformId !== "tiktok" || !appDeRed(entorno, "tiktok").configurada) return null;
+const OWNER_AUTHORIZABLE: Partial<Record<FilaDeCuenta["platformId"], { provider: OAuthProviderId; label: string; aria: (cuenta: string) => string }>> = {
+  tiktok: { provider: "tiktok", label: t.autorizarCifras, aria: t.autorizarCifrasAria },
+  youtube: { provider: "youtube", label: t.autorizarAnalitica, aria: t.autorizarAnaliticaAria },
+};
+
+function AuthorizeButton({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {
+  // Sin la app configurada (YouTube sin GOOGLE_CLIENT_*, por ejemplo) no
+  // hay nada que autorizar y no se ofrece un botón muerto: qué falta lo
+  // dice la sección de conectar, que es donde mira quien despliega.
+  const conf = OWNER_AUTHORIZABLE[row.platformId];
+  if (!conf || !entorno.oauthConnect || !appDeRed(entorno, conf.provider).configurada) return null;
   return (
     <ConnectDialog
-      label={PLATFORM_LABEL.tiktok}
-      actionLabel={t.autorizarCifras}
-      ariaLabel={t.autorizarCifrasAria(nombre(row))}
-      text={consentText("tiktok")}
+      label={PLATFORM_LABEL[conf.provider]}
+      // El diálogo dice lo mismo que el botón: autorizar ESTA fila, no conectar una cuenta nueva.
+      title={`${conf.label} · ${nombre(row)}`}
+      actionLabel={conf.label}
+      ariaLabel={conf.aria(nombre(row))}
+      text={consentText(conf.provider)}
       policyVersion={CONSENT_POLICY_VERSION}
-      action="/conexiones/oauth/tiktok/start"
+      action={`/conexiones/oauth/${conf.provider}/start`}
       variant="secondary"
       size="sm"
     />
@@ -258,8 +269,8 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
         const estado = estadoDeCuenta(r, ahora);
         const acceso = accesoDe(r.accessMode);
         // Reautorizar solo se ofrece si de verdad se puede: con la
-        // bandera encendida, en una red que tiene app de OAuth (YouTube
-        // y Facebook todavía no, CON-8) y con esa app configurada en
+        // bandera encendida, en una red que tiene app de OAuth (Facebook
+        // todavía no) y con esa app configurada en
         // este entorno. Si no, la fila no se queda sin salida: dice qué
         // hacer. Un botón deshabilitado con el nombre de una variable
         // de servidor le sirve a quien despliega, no a quien mira.
@@ -282,7 +293,7 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
                 </Button>
               </form>
             )}
-            {permisos.conectar && acceso.clase === "por_arroba" && <AutorizarCifras row={r} entorno={entorno} />}
+            {permisos.conectar && (acceso.clase === "por_arroba" || acceso.clase === "proveedor") && <AuthorizeButton row={r} entorno={entorno} />}
             {permisos.desconectar && (
               <form action={desconectarConexion.bind(null, r.id)}>
                 <Button type="submit" size="sm" variant="ghost" aria-label={t.quitarAria(nombre(r))}>

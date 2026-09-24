@@ -28,6 +28,7 @@ export function createTikTokPublicSource(core: HttpCore): PublicProfileSource {
     platformId: 'tiktok',
     label: 'oEmbed de TikTok',
     missing: [],
+    accessMode: 'public_profile',
     async lookup(handle, opts = {}) {
       const clean = assertHandle('tiktok', handle);
       const profileUrl = `https://www.tiktok.com/@${clean}`;

@@ -157,6 +157,12 @@ describe("CON-4 · la pantalla Cuentas con la bandera oauth_connect encendida", 
     expect(html).not.toContain("Conectar Instagram");
   });
 
+  test("cierre CON-C: YouTube sin GOOGLE_CLIENT_* no ofrece botón ni ruta; una frase dice qué falta", () => {
+    expect(html).not.toContain("Conectar YouTube");
+    expect(html).not.toContain("/conexiones/oauth/youtube/start");
+    expect(html).toContain("YouTube todavía no se puede conectar desde aquí: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.");
+  });
+
   test("el paso manual sale del catálogo de la base, no de una constante de la pantalla", () => {
     expect(html).toContain("Activa Analytics en la app de TikTok");
     expect(html).toContain("Un paso que solo puedes dar tú");

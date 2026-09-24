@@ -5,7 +5,7 @@
  * costuras que viven en la pantalla y no en una consulta:
  *
  *   - CON-5 / CON-10 → CAM-1: los posts asociados salen de post y
- *     post_metric_snapshot (Café Alma: 417 673 y 303 685, su última lectura), y una
+ *     post_metric_snapshot (Café Alma: su última lectura, leída de la base), y una
  *     campaña sin posts lo dice con una frase, no con una tabla vacía;
  *   - CAM-5 con 0041: «Recalcular» aparece para quien tiene
  *     campanas.resultado.calcular y no para el Editor, que lee la frase;
@@ -21,6 +21,7 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "local
 import { closeDb, getDbMode } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { formatDate, formatInt } from "@/lib/format";
 import { MESSAGES } from "./_lib/messages";
 import CampanaPage from "./[id]/page";
 
@@ -31,8 +32,6 @@ const CAMPAIGN_HOGAR_LINDO = "00000003-0000-4000-8000-000000ca0004";
 /** Una campaña de Laura sin factura, creada aquí (todas las del seed tienen una). */
 const CAMPAIGN_SIN_FACTURA = "0000000e-0000-4000-8000-0000000006f1";
 const COMPANY_CAFE_ALMA = "00000002-0000-4000-8000-0000000000e1";
-const POST_D01 = "00000002-0000-4000-8000-000000000d01";
-const POST_D02 = "00000002-0000-4000-8000-000000000d02";
 
 const entorno = { DATABASE_URL: process.env.DATABASE_URL, DEMO_WORKSPACE_ID: process.env.DEMO_WORKSPACE_ID, DEMO_USER_ID: process.env.DEMO_USER_ID };
 
@@ -81,18 +80,22 @@ describe("la ficha real contra el seed", () => {
     expect(texto).toContain("Posts asociados");
     expect(texto).toContain("2 posts");
     // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002
-    // rellena la serie hasta ayer, así que la cifra cambia cada día: se lee de la base y se exige
-    // que la ficha diga esa misma (antes estaba escrita a mano con la del 22-sep y fallaba desde el 23).
-    const { rows } = await withWorkspaceId(SEED_WORKSPACE_ID, (tx) =>
-      tx.query<{ id: string; views: string }>(
-        `SELECT p.id, (SELECT s.views::text FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) AS views
-           FROM post p WHERE p.id = ANY($1::uuid[])`,
-        [[POST_D01, POST_D02]],
-      ),
+    // las fecha respecto de CURRENT_DATE, así que el número y el día cambian a medianoche UTC:
+    // se leen de la base en vez de fijarlos (hasta el 23-sep decía «417.673 hasta el 22 sep»).
+    const ultimas = await withWorkspaceId(SEED_WORKSPACE_ID, async (tx) =>
+      (await tx.query<{ title: string; views: string; captured_at: string }>(
+        `SELECT p.title, l.views::text AS views, to_char(l.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS captured_at
+           FROM post p
+           JOIN LATERAL (SELECT s.views, s.captured_at FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) l ON true
+          WHERE p.title IN ('Cold brew en casa en 3 pasos', 'El cold brew que me salva las mañanas')`,
+      )).rows,
     );
-    const views = (id: string) => new Intl.NumberFormat("es-CO").format(Number(rows.find((r) => r.id === id)?.views));
-    expect(texto).toMatch(new RegExp(`Cold brew en casa en 3 pasos Instagram 10 ago ${views(POST_D01).replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
-    expect(texto).toMatch(new RegExp(`El cold brew que me salva las mañanas TikTok 12 ago ${views(POST_D02).replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
+    expect(ultimas).toHaveLength(2);
+    for (const [titulo, red, publicado] of [["Cold brew en casa en 3 pasos", "Instagram", "10 ago"], ["El cold brew que me salva las mañanas", "TikTok", "12 ago"]] as const) {
+      const u = ultimas.find((x) => x.title === titulo)!;
+      // La cifra y el día de ESA lectura, formateados como los formatea la ficha.
+      expect(texto).toContain(`${titulo} ${red} ${publicado} ${formatInt(Number(u.views))} hasta el ${formatDate(u.captured_at)}`);
+    }
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);
 

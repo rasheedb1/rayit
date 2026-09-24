@@ -262,9 +262,9 @@ estado, está en `apps/web/content/backlog.ts` y en la URL.
 | CON-5 | Recolector: `collect.posts`, `collect.post_metrics`, `collect.account_metrics`, con `age_hours`. Append-only. | L | CON-1, CON-2 | Dos corridas producen dos filas por post y `post_metrics_daily_delta` muestra el crecimiento. |
 | CON-6 | Línea base y puntaje: `compute.baseline` y `compute.post_score` con `packages/core/scoring.ts`. Con menos de ocho videos, `is_reliable = false`. | M | CON-5 | Un post con el doble de views que la mediana queda como outlier. |
 | CON-7 | Demografía de audiencia (`collect.demographics`) respetando `metric_requirement`. | M | CON-5 | Con la respuesta grabada, la tabla coincide con el fixture; una cuenta personal de TikTok explica por qué no hay demografía. **Hecha en código el 23-sep (rama `nicolas/CON-7`, migración `0039`); bloqueada solo por la prueba en vivo**: ninguna fuente pública da demografía y no hay todavía una cuenta autorizada con permiso de insights (`docs/propuestas/CON-7.md` §6). |
-| CON-8 | OAuth de YouTube. | M | CON-3 | Igual que CON-3 para un canal de prueba. |
+| CON-8 | OAuth de YouTube. | M | CON-3 | Igual que CON-3 para un canal de prueba. **En `main` y apagada el 23-sep (cierre CON-C); bloqueada por `GOOGLE_CLIENT_*` y la verificación de Google (CON-9)** (§10.1). |
 | CON-10 | Cuentas por @ con datos públicos: `public_profile`, fuentes oficiales (business_discovery con token casa, YouTube con API key, TikTok solo identidad), `collect.account_metrics`, pantalla «Agregar cuenta». | L | CON-1 | Agregar un @ deja la fila con su snapshot del día y el worker la actualiza a diario. **Hecha, en `main` el 22-sep** (§9). |
-| CON-12 | Proveedor de datos de TikTok por @ (Apify, EnsembleData o Phyllo) sobre `PublicProfileSource`, `access_mode = 'aggregator'`. Opción futura, de pago. | M | CON-10 | Agregar un @ de TikTok deja seguidores y vistas sin subir nada. **Pendiente; solo si el CSV se queda corto.** |
+| CON-12 | Proveedor de datos de TikTok por @ (Apify, EnsembleData o Phyllo) sobre `PublicProfileSource`, `access_mode = 'aggregator'`. Opción futura, de pago. | M | CON-10 | Agregar un @ de TikTok deja seguidores y vistas sin subir nada. **Hecha y apagada en `main` el 23-sep (cierre CON-C): se enciende con `ENSEMBLEDATA_TOKEN`; contratar sigue pendiente** (§10.1). |
 | CON-9 | Trámites: formulario de Accounts API de TikTok, App Review de Meta, auditoría de Google. **Rasheed**, día 1. | — | — | Los tres iniciados, con número de caso en `docs/tramites.md`. |
 
 ### RES · Resumen (Rasheed)
@@ -822,6 +822,9 @@ corrido sobre `origin/main` en un worktree limpio (`rayit-main-check`),
 | CON-2b | El worker sobre `@mc/db` | **Hecha** (23-sep, cierre CON-A) | Rama `nicolas/CON-A-datos`, avance rápido a `main` | El worker (`runner/db-pglite.ts`) y las pruebas de connectors migran con `applyMigrations` de `db/lib/aplicar.mjs`, el runner de `@mc/db` (re-exportado en `@mc/db/embedded`, una línea en carpeta de Rasheed propuesta en `docs/propuestas/CIERRE-CON-A.md`). `apps/worker/test/migraciones.test.ts` falla si una migración del repo no queda en `schema_migrations` del worker; worker y `openTestDb` terminan con la misma tabla. |
 | CON-6 | Línea base y puntaje | **Hecha** (23-sep, cierre CON-A); en producción corre cuando esté el worker (WRK) | Merge de `nicolas/CON-6-linea-base-puntaje` en `nicolas/CON-A-datos`, avance rápido a `main` | «Un post con el doble de la mediana queda outlier»: `compute-baseline-post-score.test.ts`. Costuras en `costuras-con.test.ts`: collect → baseline → post_score encadenados en el runner (sin migración), las 16 líneas base y los 59 puntajes idénticos a `db/seed/0002`, `campaign.compute` 4,496× en Café Alma con la línea base de CON-6, y el contrato de lectura para RES-3. Detalle en `docs/propuestas/CIERRE-CON-A.md`. |
 | CON-4 | Pantalla Conexiones | **Hecha y en producción** (23-sep, cierre CON-B) | Merge `--no-ff` de `nicolas/CON-4-pantalla-conexiones` en `nicolas/CON-B-pantalla`, avance rápido a `main` | «Una conexión con token vencido se ve en rojo con el botón de reautorizar», y cada clase de fila probada: `estado.test.ts`, `tabla.test.tsx`, `pagina.test.tsx` (página entera contra pglite con el escenario del `--demo`), `permisos.test.tsx` (404 al Contador, el Mánager sin botones) y `packages/db/test/cuentas-pantalla.test.ts` (huecos de CON-7, renovación, la cuenta híbrida como una sola fila). Costuras con CON-3, CON-5, CON-7, CON-10, ACC-5 y ACC-8 en `docs/propuestas/CIERRE-CON-B.md` §3. |
+| CON-8 | OAuth de YouTube | **Bloqueada** (23-sep, cierre CON-C): en `main`, apagada hasta que estén `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` (Nicolás) y, para creadores reales, la verificación de Google (CON-9, Rasheed) | Rama local rescatada y publicada (`nicolas/CON-8-oauth-youtube`), merge en `nicolas/CON-C-fuentes`, avance rápido a `main` | «Igual que CON-3 para un canal de prueba»: callback completo de YouTube sobre respuestas grabadas (`oauth-handlers.test.ts`: fila con sus scopes, token cifrado, R4) y el refresher real (`oauth-refresh-real.test.ts`). Apagada: sin las variables, `/conexiones/oauth/youtube/*` responde 404 con la frase y la pantalla no ofrece YouTube. Encendido paso a paso en `docs/propuestas/CIERRE-CON-C.md` §2. |
+| CON-12 | Proveedor de datos de TikTok | **Hecha, apagada** (23-sep, cierre CON-C); contratar EnsembleData sigue pendiente de Nicolás | Merge de `nicolas/CON-12-proveedor-tiktok` en `nicolas/CON-C-fuentes`, avance rápido a `main` | «Agregar un @ de TikTok deja seguidores y vistas»: con `ENSEMBLEDATA_TOKEN`, `collect-account-metrics.test.ts` deja 128 400 seguidores con `source = 'aggregator'`; las vistas llegan por video (la de cuenta es la del día y queda en null, D20 del cierre). La costura con CON-5 estaba rota al integrar (una cuenta convertida a `aggregator` no volvía a listar videos) y se arregló con `fuentes-tiktok-proveedor.test.ts`: la misma cuenta por oEmbed y por el proveedor, encendiendo y apagando la variable, sin duplicar ni la fila ni un post. Costo: Wood, 100 USD/mes (`CIERRE-CON-C.md` §2 y §4). |
+| CON-7 | Demografía de audiencia | **Bloqueada solo por la prueba en vivo** (sin cambios de código); ensayo escrito y probado en el cierre CON-C | Ya estaba en `main` con 0039 aplicada | Ninguna conexión real tiene permiso de insights. El camino más corto es YouTube con CON-8; el ensayo exacto (cuenta, permiso, job, fila que aparece en `audience_breakdown` y fila de `metric_gap` que desaparece) está en `CIERRE-CON-C.md` §3 y pasa en el arnés (`con7-ensayo-en-vivo.test.ts`). |
 
 **Cambio de producto, cerrado.** La cadena del 22-sep (sin OAuth por
 creador) y la del 23-sep (híbrido: TikTok se agrega por @ y el dueño
@@ -1005,8 +1008,8 @@ resumen y lo que queda.
 | FIN-1 a FIN-8 | **Hechas** | Cierre FIN (`CIERRE-FIN.md`): FIN-3, FIN-5 y FIN-8 desde sus ramas; el resto ya estaba | Cada criterio con su prueba en `finanzas.test.ts` y las costuras en `finanzas-costuras.test.ts`; en producción desde el cierre. FIN-4 escribe su borrador diario cuando corra el worker |
 | CAM-1 a CAM-6 | **Hechas** | Cierre CAM (`CIERRE-CAM.md`), con la migración **0041** en `main` | Ciclo entero en `ciclo-db.test.tsx`; «Recalcular» espera a que se aplique la 0041 |
 | CON-1, CON-2, CON-2b, CON-3, CON-4, CON-5, CON-6, CON-10 | **Hechas** | CON-A y CON-B; las demás desde el sprint 2 | `costuras-con.test.ts` (collect → baseline → score → campaign.compute), la tabla de `/conexiones` en producción |
-| CON-7 | Bloqueada | En `main` y producción (0039) | Solo le falta la prueba en vivo: ninguna fuente pública da demografía (CON-9) |
-| CON-8, CON-12 | Bloqueadas / en curso | Ramas en GitHub sin fusionar | Esperan credenciales de Google y CON-9 (CON-8) y la decisión de contratar EnsembleData (CON-12) |
+| CON-7 | Bloqueada | En `main` y producción (0039) | Solo le falta la prueba en vivo: ninguna conexión real con permiso de insights (`CIERRE-CON-C.md`) |
+| CON-8, CON-12 | En `main`, apagadas | Cierre CON-C | Se encienden con `GOOGLE_CLIENT_ID/SECRET` (CON-8) y `ENSEMBLEDATA_TOKEN` (CON-12, falta decidir si se contrata) |
 | WRK (el worker en producción) | **Listo, sin encender** | `--once`, salud y un workflow de GitHub Actions apagado (`WRK.md`) | Falta crear `mc_worker_login` (§11.4, fila 25) y la PARADA 2 de Nicolás |
 | ACC-1, ACC-2, ACC-3, ACC-5, ACC-8 | **Hechas** | Sprint 3 | La prueba de punta a punta las ejercita (bitácora y roles) |
 | ACC-6 | En curso | Rama; la sesión de cierre de ACC la lleva a `main` con la **0040** | Mientras no entre, un Mánager ve todas las campañas |
@@ -1024,8 +1027,8 @@ verde y 1 saltada con su motivo** (el alcance por asignación, ACC-6).
 
 ### 11.2 Verificación sobre `main`
 
-`pnpm verificar` sobre la rama de E2E (que es `main` + la prueba + tres
-arreglos de pruebas), el 24 de septiembre a las 00:40 UTC: **15/15
+`pnpm verificar` sobre la rama de E2E (que es `main`, con el cierre de
+CON-C, + la prueba + el arreglo de abajo), el 24 de septiembre: **15/15
 tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 203, `@mc/db` 817,
 `@mc/worker` 156 (+1 saltada), `@mc/web` 1242 (+1 todo); 0 fallos.
 
@@ -1035,7 +1038,9 @@ dependían del día o de la hora**, no del código (comprobado en
 workspace, la línea base de CON-6 comparada contra filas que la 0002
 guardó antes de que la 0003 agregara una lectura, y la ficha de
 campaña con las views del 22-sep escritas a mano. Las tres se
-arreglaron en la prueba (el código de producción estaba bien).
+arreglaron en la prueba (el código de producción estaba bien): las de
+FIN-4 y la ficha las arregló también, en paralelo, la sesión de CON-C,
+y quedó su versión; la de CON-6 la arregló E2E.
 `oauth-refresh.test.ts` falló una vez dentro de `verificar` con la
 máquina cargada y pasa sola y en la siguiente corrida.
 
@@ -1076,8 +1081,9 @@ aplicar y por eso `make db.guardia` sale roja por una sola razón.
 3. El alcance por asignación: el cierre de ACC y la fila 28.
 4. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
    `GOOGLE_API_KEY` (Nicolás).
-5. CON-8, CON-12 y la demografía en vivo: credenciales de Google, la
-   decisión sobre EnsembleData y CON-9 (Rasheed).
+5. CON-8, CON-12 (en `main`, apagadas) y la demografía en vivo:
+   `GOOGLE_CLIENT_ID/SECRET` y la decisión sobre EnsembleData
+   (Nicolás) y CON-9 (Rasheed).
 6. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
 7. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
-8. CON-C: su sesión.
+8. ACC: su sesión de cierre (la 0040 y el alcance).

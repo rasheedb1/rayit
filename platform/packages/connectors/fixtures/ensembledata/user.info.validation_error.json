@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "source": "recorded",
+    "recordedAt": "2026-09-23",
+    "notes": "Respuesta real del proveedor (23-sep-2026) a un token que no mide 16 caracteres: 422, no 491. Sin cuerpo útil."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/info\\?"
+  },
+  "response": {
+    "status": 422,
+    "body": {
+      "detail": "Validation error"
+    }
+  }
+}

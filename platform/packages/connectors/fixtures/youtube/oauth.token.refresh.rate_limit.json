@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-23", "notes": "Google no publica un límite del endpoint de token; el 429 con Retry-After es la forma estándar y es lo que clasifica el núcleo (el código del cuerpo no hace falta). Sirve para probar que se respeta Retry-After y que no se toca el estado de la cuenta." },
+  "request": { "method": "POST", "urlPattern": "^https://oauth2\\.googleapis\\.com/token$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 429, "headers": { "retry-after": "7" }, "body": { "error": "rate_limit_exceeded", "error_description": "Too many requests." } }
+}

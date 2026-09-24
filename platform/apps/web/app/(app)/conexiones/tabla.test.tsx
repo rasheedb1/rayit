@@ -133,6 +133,28 @@ describe("la tabla con oauth_connect encendida", () => {
     expect(r.getByRole("button", { name: MESSAGES.tabla.autorizarCifrasAria("@cafealma.recetas") })).toBeInTheDocument();
   });
 
+  it("CON-8: un canal de YouTube por @ ofrece «Autorizar analítica» solo si la app de Google está configurada", () => {
+    const canal = fila({ id: "3", platformId: "youtube", handle: "NutriveOficial", accessMode: "public_profile", secretRef: "public:youtube:NutriveOficial", accessExpiresAt: null });
+    pintar([canal], { ...CONFIGURADO, apps: { ...CONFIGURADO.apps, youtube: { configurada: true, faltan: [] } } });
+    expect(screen.getByRole("button", { name: MESSAGES.tabla.autorizarAnaliticaAria("@NutriveOficial") })).toBeInTheDocument();
+  });
+
+  it("CON-8 apagado: sin GOOGLE_CLIENT_* la fila de YouTube no tiene botón de autorizar ni nombra variables", () => {
+    const canal = fila({ id: "3", platformId: "youtube", handle: "NutriveOficial", accessMode: "public_profile", secretRef: "public:youtube:NutriveOficial", accessExpiresAt: null });
+    pintar([canal], { ...CONFIGURADO, apps: { ...CONFIGURADO.apps, youtube: { configurada: false, faltan: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] } } });
+    expect(screen.queryByRole("button", { name: MESSAGES.tabla.autorizarAnaliticaAria("@NutriveOficial") })).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("GOOGLE_CLIENT_ID");
+  });
+
+  it("CON-12: una cuenta por proveedor se relee con «Actualizar» y sigue ofreciendo «Autorizar cifras»", () => {
+    const proveedor = fila({ id: "4", handle: "laura.cocinafacil", accessMode: "aggregator", secretRef: "public:tiktok:laura.cocinafacil", accessExpiresAt: null });
+    pintar([proveedor], CONFIGURADO);
+    const r = celdas("@laura.cocinafacil");
+    expect(r.getByText(MESSAGES.tabla.acceso.proveedor)).toBeInTheDocument();
+    expect(r.getByRole("button", { name: MESSAGES.tabla.actualizarAria("@laura.cocinafacil") })).toBeInTheDocument();
+    expect(r.getByRole("button", { name: MESSAGES.tabla.autorizarCifrasAria("@laura.cocinafacil") })).toBeInTheDocument();
+  });
+
   it("sin lectura, una frase; nunca un guion ni un cero", () => {
     pintar([POR_ARROBA], CONFIGURADO);
     expect(celdas("@cafealma.recetas").getByText(MESSAGES.tabla.frescura.sinLectura)).toBeInTheDocument();
@@ -199,14 +221,49 @@ describe("la tabla con oauth_connect apagada (lo que hay hoy en producción)", (
   });
 });
 
-describe("una red que todavía no tiene app de OAuth (YouTube, CON-8)", () => {
+describe("una red que todavía no tiene app de OAuth (Facebook)", () => {
   it("con el token vencido dice qué hacer en vez de ofrecer un botón que no existe", () => {
-    const youtube = fila({ id: "9", platformId: "youtube", handle: "LauraPostres", accessExpiresAt: "2026-09-22T00:00:00.000Z" });
-    pintar([youtube], CONFIGURADO);
+    const facebook = fila({ id: "9", platformId: "facebook", handle: "LauraPostres", accessExpiresAt: "2026-09-22T00:00:00.000Z" });
+    pintar([facebook], CONFIGURADO);
     const r = celdas("@LauraPostres");
     expect(r.getByText(MESSAGES.tabla.estado.vencida)).toBeInTheDocument();
     expect(r.getByText(MESSAGES.tabla.sinReautorizar)).toBeInTheDocument();
     expect(r.queryByRole("button", { name: MESSAGES.conectar.reautorizarAria("@LauraPostres") })).not.toBeInTheDocument();
+  });
+});
+
+describe("un canal de YouTube autorizado (CON-8)", () => {
+  const CON_GOOGLE: EntornoDeConexion = { ...CONFIGURADO, apps: { ...CONFIGURADO.apps, youtube: { configurada: true, faltan: [] } } };
+  const canal = (over: Partial<AccountRow>) =>
+    fila({ id: "yt1", platformId: "youtube", handle: "NutriveOficial", secretRef: "enc:youtube:00000000-0000-4000-8000-0000000000y1", accessExpiresAt: "2026-09-23T11:00:00.000Z", refreshExpiresAt: null, ...over });
+
+  it("una hora después de autorizarlo NO es «Vencida»: Google no pone fecha al refresh token, así que se renueva sola", () => {
+    pintar([canal({})], CON_GOOGLE);
+    const r = celdas("@NutriveOficial");
+    expect(r.getByText(MESSAGES.tabla.estado.seRenuevaSola)).toBeInTheDocument();
+    expect(r.queryByText(MESSAGES.tabla.estado.vencida)).not.toBeInTheDocument();
+    const boton = r.getByRole("button", { name: MESSAGES.conectar.reautorizarAria("@NutriveOficial") });
+    expect(boton.className).not.toMatch(/bad/);
+  });
+
+  it("revocado en Google (needs_reauth): «Reautorizar» en rojo, por la ruta de YouTube", () => {
+    pintar([canal({ status: "needs_reauth" })], CON_GOOGLE);
+    expect(celdas("@NutriveOficial").getByRole("button", { name: MESSAGES.conectar.reautorizarAria("@NutriveOficial") })).toBeInTheDocument();
+    expect(document.querySelector("dialog form")).toHaveAttribute("action", "/conexiones/oauth/youtube/start");
+  });
+
+  it("sin GOOGLE_CLIENT_* la fila revocada dice qué hacer y no ofrece un botón muerto", () => {
+    pintar([canal({ status: "needs_reauth" })], CONFIGURADO);
+    const r = celdas("@NutriveOficial");
+    expect(r.getByText(MESSAGES.tabla.sinReautorizar)).toBeInTheDocument();
+    expect(r.queryByRole("button", { name: MESSAGES.conectar.reautorizarAria("@NutriveOficial") })).not.toBeInTheDocument();
+  });
+
+  it("«Autorizar analítica» abre un diálogo que dice lo mismo que el botón, no «Conectar YouTube»", () => {
+    const porArroba = fila({ id: "yt2", platformId: "youtube", handle: "NutriveOficial", accessMode: "public_profile", secretRef: "public:youtube:NutriveOficial", accessExpiresAt: null });
+    pintar([porArroba], CON_GOOGLE);
+    expect(screen.getByText(`${MESSAGES.tabla.autorizarAnalitica} · @NutriveOficial`)).toBeInTheDocument();
+    expect(screen.queryByText("Conectar YouTube")).not.toBeInTheDocument();
   });
 });
 

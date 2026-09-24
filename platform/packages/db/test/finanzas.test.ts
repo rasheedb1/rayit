@@ -52,7 +52,6 @@ import {
   updateFinanceSettings,
   type ReceivableRow,
   type TextosFinanzas,
-  getWorkspaceToday,
 } from '../src/queries/finanzas.ts';
 import { getWorkspaceSettings } from '../src/queries/cimientos.ts';
 import { assertWorkspaceId } from '../src/index.ts';
@@ -1113,21 +1112,21 @@ describe('bandeja de recordatorios (FIN-4)', () => {
     assert.deepEqual(filas.map((f) => f.paso), [5, 3, 2]);
     assert.deepEqual(filas.map((f) => f.etiquetaEs), ['Aviso formal de cobro', 'Primer aviso de mora', 'Aviso de vencimiento']);
     const uno = filas[1]!;
-    assert.equal(uno.asunto, 'Factura FV-2026-007 pendiente · 41 días de mora');
+    assert.equal(uno.asunto, 'Factura FV-2026-007 pendiente · 41 días de mora', 'el asunto es el texto guardado del aviso, no se recalcula');
     assert.equal(uno.cuerpo, 'Hola, equipo de Hogar Lindo:');
     assert.equal(uno.invoiceNumber, 'FV-2026-007');
     assert.equal(uno.companyName, 'Hogar Lindo');
     assert.equal(uno.currency, 'COP');
     assert.equal(uno.outstanding, '1100000.00');
-    // La mora se cuenta con el «hoy» de la zona del workspace (Bogotá), no con el de UTC: el
-    // seed fecha FV-2026-007 a CURRENT_DATE − 41 en UTC, así que entre las 00:00 y las 05:00
-    // UTC son 40 días en Bogotá. Se compara contra ese hoy, no contra un 41 fijo.
-    const esperado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
-      const hoy = await getWorkspaceToday(tx);
-      const { rows } = await tx.query<{ dias: number }>('SELECT ($1::date - due_on)::int AS dias FROM invoice WHERE id = $2', [hoy, FV_007]);
-      return rows[0]!.dias;
-    });
-    assert.ok(esperado === 41 || esperado === 40, `el seed deja 41 días en UTC: ${esperado}`);
+    // La mora se cuenta en la zona del workspace (Bogotá) y el seed fecha
+    // due_on con CURRENT_DATE en UTC: entre las 00:00 y las 05:00 UTC son
+    // 40 y no 41. Se compara con el mismo reloj en vez de fijar el número
+    // (se puso roja a las 00:00 UTC del 24-sep, también en main).
+    const esperado = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ d: number }>(
+        `SELECT (((now() AT TIME ZONE w.timezone)::date) - i.due_on)::int AS d
+           FROM invoice i JOIN workspace w ON w.id = i.workspace_id WHERE i.id = $1`, [FV_007])).rows[0]!.d);
+    assert.ok(esperado === 40 || esperado === 41, `el seed la deja vencida hace 41 días (40 de madrugada UTC), no ${esperado}`);
     assert.equal(uno.daysOverdue, esperado);
     assert.equal(uno.sentAt, null);
     assert.match(uno.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);

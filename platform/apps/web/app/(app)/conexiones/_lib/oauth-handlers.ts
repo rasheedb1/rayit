@@ -14,6 +14,10 @@
  *                    data_consent por finalidad, api_call_log → 303 a
  *                    /conexiones?conectada=<id>.
  *
+ * Una red sin sus variables en este entorno (YouTube sin GOOGLE_CLIENT_*,
+ * por ejemplo) está apagada: start y callback responden 404 con la frase
+ * que nombra lo que falta, y la pantalla no ofrece su botón.
+ *
  * Ni el code ni los tokens tocan logs, errores, URLs nuestras ni la cookie.
  *
  * Consentimiento delegado (ACC-8): start comprueba el permiso
@@ -48,11 +52,12 @@ export const OAUTH_ERROR_MESSAGES = {
   plataforma: "La plataforma devolvió un error al autorizar. Inténtalo de nuevo en unos minutos.",
   consentimiento: "Para conectar una cuenta tienes que aceptar el tratamiento de datos.",
   sin_creador: "Este workspace no tiene un perfil de creador; no se puede conectar una cuenta.",
-  no_configurada: "Esa red todavía no está configurada en este entorno.",
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
   sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
+  sin_canal: "Esa cuenta de Google no tiene ningún canal de YouTube. Entra a YouTube con ella, crea el canal y vuelve a intentarlo.",
+  sin_renovacion: "Google no entregó el permiso de renovación para este canal, así que la conexión caducaría en una hora. Vuelve a conectarlo; si se repite, avísanos.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -137,15 +142,18 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
   }
 
   const clear = cookieHeader("", 0, secure);
+  /** La frase de una red sin app en este entorno: nombra las variables que faltan, nunca sus valores. */
+  const notConfigured = (provider: OAuthProviderId) =>
+    `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}. Vuelve a /conexiones.`;
 
   return {
     async start(req, providerRaw) {
       if (req.method !== "POST") return text(405, "Usa el botón «Conectar» de /conexiones: el inicio del flujo va por POST con tu consentimiento.", { Allow: "POST" });
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.");
       const provider = providerRaw;
-      if ("error" in keys) return text(503, keys.error);
       const cfg = apps[provider];
-      if (!cfg) return text(503, `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}.`);
+      if (!cfg) return text(404, notConfigured(provider));
+      if ("error" in keys) return text(503, keys.error);
 
       // Un POST sin formulario (sin cuerpo, JSON, un robot) hace lanzar a
       // formData(): sin esto era un 500. Es lo mismo que no consentir.
@@ -178,6 +186,9 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const headers = { "Set-Cookie": clear };
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.", headers);
       const provider = providerRaw;
+      // Una red apagada (sin sus variables, p. ej. YouTube sin GOOGLE_CLIENT_*) no tiene callback vivo: la frase y 404, nunca un 500.
+      const cfg = apps[provider];
+      if (!cfg) return text(404, notConfigured(provider), headers);
       const params = new URL(req.url).searchParams;
 
       // El creador canceló (Instagram: error=access_denied&error_reason=user_denied; TikTok: error + error_description).
@@ -200,8 +211,6 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const code = params.get("code");
       if (!code) return text(400, "La plataforma no devolvió un código de autorización.", headers);
 
-      const cfg = apps[provider];
-      if (!cfg) return redirect(req, "/conexiones?error=no_configurada", headers);
       const prov = OAUTH_PROVIDERS[provider];
 
       // Antes de canjear el code: quien ya no puede conectar (su rol cambió desde start, o la cookie es de otra sesión)
@@ -228,7 +237,11 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         externalAccountId = profile.external_account_id ?? exchanged.externalAccountId;
       } catch (err) {
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
+        // Una cuenta de Google sin canal, o sin refresh token, no es un code malo ni una caída: se dice con esas palabras (CON-8).
+        const codeOut: OAuthErrorCode = isPlatformApiError(err) && err.code === "no_channel"
+          ? "sin_canal"
+          : isPlatformApiError(err) && err.code === "no_refresh_token" ? "sin_renovacion"
+          : isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       if (!externalAccountId) {

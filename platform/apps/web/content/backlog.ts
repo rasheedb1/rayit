@@ -224,15 +224,15 @@ export const STORIES: readonly Story[] = [
     desc: "Decisión del 22-sep: sin OAuth por creador en el MVP. Una cuenta se agrega con su @ y se lee cada día con fuentes oficiales: Instagram por business_discovery con el token de la cuenta casa (INSTAGRAM_HOUSE_TOKEN), YouTube con API key (GOOGLE_API_KEY), TikTok solo identidad por oEmbed hasta elegir fuente. Migración 0022 (access_mode public_profile), snapshots en account_metric_snapshot con source public_profile, job collect.account_metrics, pantalla «Agregar cuenta».",
     done: "Agregar un @ deja la fila con su snapshot público del día, el worker la actualiza cada día y ninguna credencial aparece en las tablas.",
     status: "hecho",
-    note: "En main el 22-sep y en producción. Híbrido del 23-sep: la cuenta de TikTok se agrega por @ y el dueño desbloquea las cifras con «Autorizar cifras» (CON-3); collect.account_metrics lee públicas y autorizadas; la lista toma la última lectura de ambas fuentes (29460e3, pendiente de desplegar). Para Instagram y YouTube por @ faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en Vercel (docs/propuestas/CON-10.md §3). Cuentas de prueba: @selvathegolden (TikTok, autorizada) y @nicolasduartea (Instagram).",
+    note: "En main y en producción desde el 22-sep; el híbrido del 23-sep (TikTok por @ + «Autorizar cifras» de CON-3) también. 23-sep (cierre CON-C): para leer Instagram y YouTube por @ en producción faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en Vercel y en el worker; qué poner y cómo comprobarlo en docs/propuestas/CIERRE-CON-C.md §2.",
   },
   {
     id: "CON-12", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-10"],
     title: "Proveedor de datos de TikTok (opción futura)",
     desc: "Seguidores, vistas y videos de TikTok por @ a través de un proveedor de pago (Apify, EnsembleData o Phyllo) sobre la interfaz PublicProfileSource de CON-10, con access_mode = aggregator. Solo si el CSV de TikTok Studio (RES-2) se queda corto o la fricción de subir archivos frena a los creadores.",
     done: "Agregar un @ de TikTok deja seguidores y vistas del día sin que el creador suba nada; el costo mensual del proveedor está aprobado y anotado.",
-    status: "en_curso",
-    note: "23-sep: rama nicolas/CON-12-proveedor-tiktok (en GitHub, sin fusionar): conector de EnsembleData, la base distingue la cuenta leída por proveedor y el recolector diario lo usa, apagado sin ENSEMBLEDATA_TOKEN. Sigue sin decidir si se contrata el proveedor; no bloquea nada.",
+    status: "hecho",
+    note: "23-sep (cierre CON-C): en main y apagada sin ENSEMBLEDATA_TOKEN (la variable es el interruptor). Con ella, la misma fila de TikTok pasa a aggregator y collect.posts lista sus videos sin duplicar (worker: fuentes-tiktok-proveedor.test.ts). Proveedor: EnsembleData. Pendiente solo la decisión de contratar Wood, 100 USD/mes; recomendación, todavía no (CIERRE-CON-C.md §4, D12).",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],
@@ -240,7 +240,7 @@ export const STORIES: readonly Story[] = [
     desc: "collect.posts descubre videos nuevos; collect.post_metrics y collect.account_metrics guardan el snapshot con age_hours. Append-only.",
     done: "Dos corridas seguidas producen dos filas por post y post_metrics_daily_delta muestra el crecimiento.",
     status: "hecho",
-    note: "collect.account_metrics ya venía de CON-10. Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null (nunca en cero) hasta que el dueño autorice la cuenta. TikTok por @ no publica videos: entran por el CSV de RES-2. Para leer cuentas reales faltan INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY en el entorno y en Vercel."
+    note: "collect.account_metrics ya venía de CON-10. Por @ entran vistas, «me gusta» y comentarios; alcance, guardados y retención quedan en null (nunca en cero) hasta que el dueño autorice la cuenta. TikTok por @ no publica videos: entran por el CSV de RES-2, o por el proveedor si se contrata (CON-12). 23-sep: en producción no lee cuentas reales hasta que estén INSTAGRAM_HOUSE_TOKEN y GOOGLE_API_KEY y corra el worker (WRK); ver CIERRE-CON-C.md §2."
   },
   {
     id: "CON-6", module: "CON", owner: "nicolas", size: "M", sprint: 3, deps: ["CON-5"],
@@ -256,7 +256,7 @@ export const STORIES: readonly Story[] = [
     desc: "collect.demographics por cuenta, respetando metric_requirement: si falta un prerrequisito, lo explica en vez de dejar la celda vacía.",
     done: "Con la respuesta grabada, la tabla coincide con el fixture; con una cuenta personal de TikTok, dice por qué no hay demografía.",
     status: "bloqueada",
-    note: "23-sep: en main y en producción (0039 aplicada). La pantalla dice qué requisito le falta a cada cuenta (metric_gap). Bloqueada solo por la prueba en vivo: ninguna fuente pública da demografía (Instagram por @ no la trae, YouTube pide OAuth y TikTok el trámite CON-9) y no hay ninguna conexión autorizada con permisos de insights. La lectura diaria (collect.demographics) espera al worker (WRK)."
+    note: "En main y con 0039 aplicada desde el 23-sep. Bloqueada solo por la prueba en vivo: ninguna conexión real tiene permiso de insights. El camino más corto es YouTube con CON-8 (faltan GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET, Nicolás) y el worker en producción (WRK). El ensayo exacto está en CIERRE-CON-C.md §3 y pasa en el arnés (con7-ensayo-en-vivo.test.ts)."
   },
   {
     id: "CON-8", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3"],
@@ -264,7 +264,7 @@ export const STORIES: readonly Story[] = [
     desc: "Mismo flujo que CON-3 para un canal de prueba.",
     done: "Conectar un canal de prueba deja la fila con sus scopes y el token cifrado.",
     status: "bloqueada",
-    note: "23-sep: código completo y probado con respuestas grabadas en la rama nicolas/CON-8-oauth-youtube (en GitHub, sin fusionar). Espera GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en el vault y en Vercel, y la verificación de la pantalla de consentimiento de Google (CON-9). Paso a paso en docs/propuestas/CON-8.md §3.",
+    note: "23-sep (cierre CON-C): en main y apagada. Sin GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET la pantalla no ofrece YouTube y /conexiones/oauth/youtube/* responde 404 con la frase. Faltan esas dos variables (Nicolás, en Vercel y en el worker) y, para creadores reales, la verificación de Google de los dos scopes sensibles (CON-9, Rasheed): sin ella solo autorizan los usuarios de prueba y por 7 días. Encendido: CIERRE-CON-C.md §2.",
   },
   {
     id: "CON-9", module: "CON", owner: "rasheed", size: null, sprint: 1, deps: [],
