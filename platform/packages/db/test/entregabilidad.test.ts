@@ -582,6 +582,31 @@ describe('la política editable', () => {
       // Y otro workspace no ve estas cuentas.
       assert.equal((await t.db.withWorkspace(WS_S, (tx) => readSendReadiness(tx))).downAccounts.length, 0);
     });
+
+    test('si se leen los rebotes, por el cursor de cada Gmail: nunca, parada (hace 3 horas) o al día (r5)', async () => {
+      // El Gmail de WS_O de la prueba anterior, sin leer nunca.
+      const leer = () => t.db.withWorkspace(WS_O, (tx) => readSendReadiness(tx));
+      const sinLeer = () => t.db.withWorkspace(WS_O, async (tx) => (await readAlertSignalCounts(tx, WS_O, new Date())).unreadMailboxes);
+      assert.deepEqual(
+        await leer().then((r) => [r.bouncesReading, r.bouncesReadAt]),
+        ['never', null],
+      );
+      assert.equal(await sinLeer(), 1, 'la alerta outreach_bounces_unread lo cuenta');
+
+      const cursor = (sql: string) =>
+        t.db.asWorker((tx) =>
+          tx.query(`UPDATE outreach_channel_account SET bounces_read_at = ${sql} WHERE provider_account_id = 'otro@creador.test'`),
+        );
+      await cursor(`now() - interval '3 hours'`);
+      const parada = await leer();
+      assert.equal(parada.bouncesReading, 'stale');
+      assert.ok(parada.bouncesReadAt && Date.now() - Date.parse(parada.bouncesReadAt) > 2.9 * 3600_000);
+      assert.equal(await sinLeer(), 1);
+
+      await cursor(`now() - interval '10 minutes'`);
+      assert.equal((await leer()).bouncesReading, 'ok');
+      assert.equal(await sinLeer(), 0);
+    });
   });
 });
 
@@ -709,7 +734,7 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
 
   test('solo cuentan los rebotes duros de lo que salió en la ventana, una vez por correo', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES));
-    assert.deepEqual(c, { emailsSent: 20, hardBounces: 1, dueToSend: 0, hardBounceRate: 0.05 });
+    assert.deepEqual(c, { emailsSent: 20, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.05 });
   });
 
   test('la pantalla lee lo mismo con el workspace de su transacción', async () => {

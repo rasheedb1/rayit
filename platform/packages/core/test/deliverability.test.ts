@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   BOUNCE_MIN_ATTEMPTS, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
   footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, maskEmailAddress, oneClickUnsubscribeUrl, optoutTokenHash,
-  channelAccountLabel, optoutUrl, warmupCurve, warmupDailyLimit, warmupSeries, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
+  channelAccountLabel, optoutUrl, URGENT_ALERT_KINDS, warmupCurve, warmupDailyLimit, warmupSeries, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
 } from '../src/outreach/deliverability.ts';
 
 // ------------------------------------------------------------------ token
@@ -385,6 +385,26 @@ function entrada(over: Partial<AlertInput> = {}): AlertInput {
 
 test('un workspace sano no alerta', () => {
   assert.deepEqual(evaluateOutreachAlerts(entrada({ hardBounces: 2, dueToSend: 5 })), []);
+});
+
+test('un Gmail cuyo buzón de rebotes nadie lee avisa (r5); sin el dato, como 0', () => {
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ unreadMailboxes: 0 })), []);
+  assert.deepEqual(evaluateOutreachAlerts(entrada()), [], 'un fixture de antes, sin el campo');
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ unreadMailboxes: 2 })), [
+    { kind: 'bounces_unread', severity: 'warning', values: { mailboxes: 2 } },
+  ]);
+});
+
+test('lo urgente, que no espera al resumen de mañana, es lo crítico: la cuenta caída y los rebotes (r5)', () => {
+  assert.deepEqual([...URGENT_ALERT_KINDS].sort(), ['account_down', 'bounce_rate']);
+  const todas = evaluateOutreachAlerts(
+    entrada({ emailsSent: 20, hardBounces: 5, dueToSend: 3, unreadMailboxes: 1,
+      health: salud({ accountsDown: 1, queue: { stuck: 1 }, window: { sent: 0 }, llm: { spentToday: 6, dailyCap: 5 } }) }),
+  );
+  assert.deepEqual(
+    todas.filter((a) => a.severity === 'critical').map((a) => a.kind).sort(),
+    [...URGENT_ALERT_KINDS].sort(),
+  );
 });
 
 test('rebotes duros sobre el 5 % solo con diez envíos o más', () => {

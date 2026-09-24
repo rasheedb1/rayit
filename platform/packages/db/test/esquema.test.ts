@@ -1282,9 +1282,9 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     // La baja en dos tiempos (0038 §8) anota la baja de ESE workspace y lee quién más la tiene; no la borra ni la cambia.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.tabla, ['INSERT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.columnas, { SELECT: ['email', 'workspace_id'] });
-    // La vista previa de la baja (0038 §5) lee el nombre de quien envía, por columna, y nada más del workspace.
+    // La vista previa de la baja (0038 §5) lee el nombre y el idioma (r5) de quien envía, por columna, y nada más del workspace.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.tabla, []);
-    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.columnas, { SELECT: ['id', 'name'] });
+    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.columnas, { SELECT: ['id', 'locale', 'name'] });
     // La baja (0037 §9) lee el enlace y anota el clic; no escribe el enlace ni lee los clics.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_link!.tabla, ['SELECT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_event!.tabla, ['INSERT']);

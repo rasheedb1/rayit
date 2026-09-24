@@ -625,10 +625,11 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
   // Lo que la página de baja enseña antes del clic (0038 §5).
   workspace: {
     tabla: [],
-    columnas: { SELECT: ['id', 'name'] },
+    columnas: { SELECT: ['id', 'locale', 'name'] },
     motivo:
-      'el nombre del workspace que envió el correo del enlace, para decir quién escribe (0038 §5). Solo id y name, ' +
-      'y su política solo abre la fila que fija public_optout_preview',
+      'el nombre del workspace que envió el correo del enlace, para decir quién escribe, y su idioma, para que la ' +
+      'página hable el del pie del correo (0038 §5, r5). Solo id, name y locale, y su política solo abre la fila que ' +
+      'fija public_optout_preview',
   },
   membership: {
     tabla: [],
