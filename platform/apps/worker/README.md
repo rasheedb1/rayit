@@ -147,30 +147,41 @@ Reglas:
 ## Motor de cadencias (Ventas, VEN-10)
 
 Dos jobs de `src/jobs/ventas/`, programados por `job_definition` en la
-migración 0038 (grupo `sales`):
+migración 0041 (grupo `sales`). Las consultas viven en
+`packages/db/src/queries/outreach/` (`enroll`, `claim`, `send`,
+`replies`), la programación pura en `packages/core/src/outreach/`.
 
 | Job | Cada | Qué hace |
 |---|---|---|
-| `outbound.dispatch` | 2 min | Zombis de más de 5 min en `processing` → `failed` y aviso, sin reenviar. Reclama hasta 50 toques vencidos con `UPDATE … RETURNING` (topes diarios y semanales, calentamiento, ventana laboral; si un tope no da, el toque va al siguiente día hábil sin gastar intento). Por cada uno, en su transacción: relee toque, enrolamiento, ficha, lista global, interruptor y cuenta; compone (pie de baja en el correo, hilo en la respuesta) y envía por su adaptador. Transitorio → reintento con espera creciente hasta 5; permanente → `failed` y aviso. |
-| `outbound.replies` | 5 min | Respaldo del webhook: lee los hilos abiertos, escribe `outbound_message` entrante, marca el enrolamiento `replied` (o `opted_out` si pide la baja) y cancela lo pendiente. |
+| `outbound.dispatch` | 2 min | **Zombis** de más de 5 min en `processing`: si nunca llegaron al proveedor (sin `send_started_at`) vuelven a la cola; si llegaron, `failed` y aviso, sin reenviar. **Reclamo** de hasta 50 toques vencidos (o los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s antes del timeout) con `UPDATE … RETURNING`: fuera de la ventana laboral o en fin de semana van a la apertura; un paso no sale mientras uno anterior de su enrolamiento siga en la cola; sin cuenta conectada esperan una hora (un aviso por canal y día); con un tope lleno (diario, semanal, calentamiento) van al siguiente día hábil y los pasos de detrás se corren con ellos. **Envío**, uno por uno: `send_started_at` en su propia transacción, y en otra la relectura (toque, enrolamiento, ficha, lista global, interruptor, cuenta), la composición (pie de baja, hilo; una respuesta en el hilo sin correo anterior se retiene) y el adaptador. Transitorio → reintento con espera creciente, dentro de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de reintentar se pregunta al proveedor si salió (`findSent`); rebote → se cancela ese canal y la cadencia termina en `bounced`; cuenta caída → espera. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento descontado, sin su enlace de baja y con su plaza del tope. |
+| `outbound.replies` | 5 min | Respaldo del webhook: lee los hilos de los últimos 30 días (también los de cadencias que ya respondieron o completaron), escribe `outbound_message` entrante; una respuesta marca `replied` y cancela lo pendiente; una baja marca la ficha y las de su correo y cancela todo lo suyo pendiente en cualquier secuencia, como el enlace de baja. |
 
 Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
 (`ChannelSender`, `ChannelReader`): Gmail, Unipile (LinkedIn e Instagram)
 y `fake`. La guardia de placeholders (`@mc/core`) corre en el punto de
-envío. Una pasada a mano, con la misma conexión que el worker:
+envío. `OUTREACH_CHANNELS=fake` se ignora con `NODE_ENV=production`.
+
+Deuda conocida: la rama VEN-9-canales trae clientes de Gmail y Unipile en
+`packages/connectors` (con su MIME, sus errores y sus fakes). Cuando se
+integre, `canales/gmail.ts`, `canales/unipile.ts` y `canales/mime.ts` se
+reducen a adaptadores finos sobre esos clientes.
+
+Una pasada a mano, con la misma conexión que el worker:
 
 ```bash
 pnpm --filter @mc/worker run job:dispatch                  # canales reales
-pnpm --filter @mc/worker run job:dispatch -- --canal-falso # buzón en memoria; el envío queda en outbound_touch
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace 00000002-0000-4000-8000-000000000001
+                                                           # buzón en memoria; el envío queda en outbound_touch
 pnpm --filter @mc/worker run job:replies                   # respuestas de los hilos abiertos
 pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido con migraciones y seeds: apagada no envía, encendida sí
 ```
 
-`--workspace <uuid>` limita la pasada a un workspace. Contra Supabase
-necesita, como `job:seguimientos`, `GRANT mc_worker TO mc_migrator` y las
-migraciones 0037 y 0038 aplicadas. El runner (`src/runner/`) es el de
-CON-2: el motor no le cambia nada, solo suma sus dos jobs en
-`src/jobs/ventas/index.ts`.
+`--canal-falso` se niega contra una base que no es local salvo con
+`--workspace` de la demo: deja como enviados mensajes que nadie recibió.
+Contra Supabase necesita, como `job:seguimientos`, `GRANT mc_worker TO
+mc_migrator` y las migraciones 0037 y 0041 aplicadas. El runner
+(`src/runner/`) es el de CON-2: el motor no le cambia nada, solo suma sus
+dos jobs en `src/jobs/ventas/index.ts`.
 
 ## Qué pasa cuando falla
 

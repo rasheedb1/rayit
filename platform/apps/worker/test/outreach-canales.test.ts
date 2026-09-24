@@ -19,7 +19,7 @@ import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
 import { encodeHeader } from '../src/jobs/ventas/canales/mime.ts';
 import { profileIdentifier, UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import type { Fetch, OutgoingMessage } from '../src/jobs/ventas/canales/types.ts';
-import { composeMessage } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { claimBudget, composeMessage, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
 
 const GMAIL = JSON.parse(readFileSync(new URL('./fixtures/outreach/gmail.json', import.meta.url), 'utf8'));
 const UNIPILE = JSON.parse(readFileSync(new URL('./fixtures/outreach/unipile.json', import.meta.url), 'utf8'));
@@ -293,6 +293,15 @@ test('decideBeforeSend relee todo en la transacción del envío', () => {
   assert.match(huerfano.kind === 'hold' ? huerfano.reason : '', /no salió/);
   assert.equal(decideBeforeSend(ctx({ body: 'Hola, {{first_name}}' }), CLAIMED_AT, NOW).kind, 'hold');
   assert.equal(decideBeforeSend(ctx({ postalAddress: null }), CLAIMED_AT, NOW).kind, 'hold');
+});
+
+test('claimBudget: se reclama solo lo que cabe en el tiempo que le queda a la corrida', () => {
+  const ahora = Date.parse('2026-09-24T15:00:00Z');
+  assert.equal(claimBudget({}), 50, 'sin límite de tiempo, el lote entero');
+  assert.equal(claimBudget({ limit: 10 }), 10);
+  assert.equal(claimBudget({ deadline: new Date(ahora + 80_000) }, ahora), 80_000 / ESTIMATED_SEND_MS);
+  assert.equal(claimBudget({ deadline: new Date(ahora + 1_000_000) }, ahora), 50, 'nunca más que el lote');
+  assert.equal(claimBudget({ deadline: new Date(ahora - 1) }, ahora), 0, 'sin tiempo, nada');
 });
 
 test('composeMessage pone el pie de baja al correo y el hilo a la respuesta', () => {

@@ -183,19 +183,22 @@ BEGIN
   END IF;
   IF NOT contact_visible_to(NEW.contact_id, NEW.workspace_id) THEN
     RAISE EXCEPTION 'El contacto % no es del workspace % (%).', NEW.contact_id, NEW.workspace_id, TG_TABLE_NAME
-      USING ERRCODE = 'insufficient_privilege',
+      USING ERRCODE = 'check_violation',
             HINT = 'Solo se le escribe a una ficha propia, o a una pública cuya empresa está en el embudo del workspace.';
   END IF;
   RETURN NEW;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS outbound_enrollment_contact_workspace ON outbound_enrollment;
-CREATE TRIGGER outbound_enrollment_contact_workspace
+-- Los nombres empiezan por «workspace_contact» para dispararse DESPUÉS de
+-- las coherencias de 0037 (Postgres los ordena por nombre): si el toque
+-- ya es incoherente con su enrolamiento, ese es el error que se dice.
+DROP TRIGGER IF EXISTS outbound_enrollment_workspace_contact ON outbound_enrollment;
+CREATE TRIGGER outbound_enrollment_workspace_contact
   BEFORE INSERT OR UPDATE OF contact_id, workspace_id ON outbound_enrollment
   FOR EACH ROW EXECUTE FUNCTION outreach_contact_of_workspace();
-DROP TRIGGER IF EXISTS outbound_touch_contact_workspace ON outbound_touch;
-CREATE TRIGGER outbound_touch_contact_workspace
+DROP TRIGGER IF EXISTS outbound_touch_workspace_contact ON outbound_touch;
+CREATE TRIGGER outbound_touch_workspace_contact
   BEFORE INSERT OR UPDATE OF contact_id, workspace_id ON outbound_touch
   FOR EACH ROW WHEN (NEW.contact_id IS NOT NULL)
   EXECUTE FUNCTION outreach_contact_of_workspace();

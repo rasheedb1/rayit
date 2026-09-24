@@ -25,6 +25,10 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  // Las ramas de outreach se aplican en este orden fijo (0041_motor_cadencias.sql, cabecera).
+  '0038': 'rasheed/VEN-9-canales (0038_canales_outreach.sql)',
+  '0039': 'rasheed/VEN-9-canales (0039_callback_de_canales.sql)',
+  '0040': 'rasheed/VEN-15-entregabilidad (0040_entregabilidad.sql; 0038 en su rama)',
 };
 
 let dir = '';
