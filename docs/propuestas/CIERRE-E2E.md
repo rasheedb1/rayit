@@ -174,8 +174,8 @@ hice: es el árbol principal).
 ## 6. Verificación
 
 `pnpm verificar` sobre la rama (main + la prueba + los arreglos de abajo),
-24-sep, tras los merges de los cierres de CON-C y ACC: **15/15
-tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 1037,
+24-sep, tras los merges de los cierres de CON-C y ACC y la 0042: **15/15
+tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 1040,
 `@mc/worker` 167, `@mc/web` 1268 (+1 todo); 0 fallos. Typecheck y lint del worker limpios.
 
 **Tres pruebas de `main` fallaban pasada la medianoche UTC**, por la

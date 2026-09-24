@@ -1029,8 +1029,8 @@ con alcance a una campaña ve solo esa. **17 en verde, ninguna saltada.**
 
 `pnpm verificar` sobre la rama de E2E (que es `main`, con el cierre de
 CON-C, + la prueba + el arreglo de abajo), el 24 de septiembre: **15/15
-tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 1037,
-`@mc/worker` 167, `@mc/web` 1268 (+1 todo); 0 fallos (tras los merges de CON-C y ACC).
+tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 1040,
+`@mc/worker` 167, `@mc/web` 1268 (+1 todo); 0 fallos (tras los merges de CON-C, ACC y la 0042).
 
 Pasada la medianoche UTC, `main` tenía **tres pruebas rojas**
 (comprobado en `rayit-deploy`): la mora de FIN-4 contada en UTC y no en
