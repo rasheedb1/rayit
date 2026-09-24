@@ -11,7 +11,7 @@ producción, y deja el plan diciendo la verdad.
 |---|---|
 | `origin/main` | `5ad18fa` al empezar el merge (cierre de CON-B); esta rama lo trae |
 | Producción | `78c1e8c` (WRK, docs) en `on-cue-web.vercel.app` (API v13); CON-B desplegó después su cierre |
-| Supabase | Al empezar, `0001`–`0039` (`0023` hueco), con la `0041` (CAM) en `main` sin aplicar y la `0040` (ACC-6) en la rama de ACC. **A las 00:37 UTC del 24 se aplicaron la 0040 y la 0041** |
+| Supabase | Al empezar, `0001`–`0039` (`0023` hueco), con la `0041` (CAM) en `main` sin aplicar y la `0040` (ACC-6) en la rama de ACC. **A las 00:37 UTC del 24 se aplicaron la 0040 y la 0041.** La **0042** (CON-C) entró después y espera su PARADA 1 |
 | Worker | `pgboss` 0, `GRANT mc_worker TO mc_migrator` false, `mc_worker_login` no existe, **`job_run` 0 filas**: ningún job ha corrido nunca en producción (WRK.md §1) |
 | Vercel production (nombres) | `APP_URL`, `DATABASE_URL`, `DEMO_WORKSPACE_ID`, `OAUTH_CONNECT`, `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`. Faltan `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ENSEMBLEDATA_TOKEN` |
 | Clon principal (`rayit/`) | En `29460e3`, con `backlog-mvp.md`, `plan-equipo.md` y `backlog.ts` modificados sin commitear: es el borrador del cierre del sprint 2 (§10), que ya está en `main` en otra forma. **Choca con `main`**; por eso el plan se actualizó aquí (§5) |
@@ -104,7 +104,9 @@ Lo que la prueba destapó y dejó escrito (no son fallos, son contratos):
 al empezar, roja solo por la 0041 sin aplicar. **Tras aplicar la 0040 y
 la 0041 (00:37 UTC del 24), en verde**: «40 migraciones (la última,
 0041_campaign_result_escritura_web.sql), 83 tablas aisladas, nada sin
-declarar». Desde el clon principal da rojos falsos (compara con código
+declarar». Con la **0042** en `main` y sin aplicar, la guardia vuelve a
+pedirla hasta que Nicolás corra `make db.migrate` (PARADA 1 de CON-C).
+Desde el clon principal da rojos falsos (compara con código
 de `29460e3`).
 
 ## 3. Guion de humo único, en el orden de la cadena
@@ -143,7 +145,7 @@ en /conexiones, anula la factura (`void`) y cancela la campaña.
 | # | Qué no está conectado | Qué se ve hoy | Lo desbloquea | Quién |
 |---|---|---|---|---|
 | 1 | **El worker no corre en producción** (`job_run` = 0): ni `oauth.refresh`, ni `collect.*`, ni `compute.*`, ni `brand.snapshot`, ni `campaign.compute`, ni `finance.reminders` | Cada pantalla dice que se actualiza cada mañana; el token de TikTok de @selvathegolden caduca | Crear `mc_worker_login` (WRK.md §1.1) y encender el workflow (§7) | **Rasheed** (token de admin) y **Nicolás** (PARADA 2) |
-| 2 | ~~0041 sin aplicar~~ | Aplicada el 24-sep a las 00:37 UTC | — | hecho |
+| 2 | **0042 sin aplicar** (la 0040 y la 0041 ya están) | La línea base puede cambiar de un día a otro si un video tiene dos lecturas de la misma edad | `make db.migrate` (PARADA 1 de CON-C) | **Nicolás** |
 | 3 | **Alcance en Ventas, Cotizar y Resumen** | Campañas, Finanzas y Conexiones ya filtran por alcance (ACC-6, en `main`); esas tres pantallas no | Su parte de ACC-6 (`CIERRE-ACC.md` §5) | **Rasheed** |
 | 4 | **Lecturas reales de Instagram y YouTube** | Sin cifras por @ de esas redes | `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` en el vault, Vercel y GitHub | **Nicolás** |
 | 5 | **OAuth de YouTube** (CON-8) y **proveedor de TikTok** (CON-12) | En `main` y apagados: sin sus variables, la pantalla no los ofrece y lo dice | `GOOGLE_CLIENT_ID/SECRET` (+ verificación de Google, CON-9); decidir si se contrata EnsembleData | **Nicolás** y **Rasheed** (CON-9) |
@@ -179,14 +181,12 @@ tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 1037,
 **Tres pruebas de `main` fallaban pasada la medianoche UTC**, por la
 fecha y no por el código. Las tres fallaban igual en `origin/main` sin
 esta rama (comprobado en `rayit-deploy` a las 00:17 UTC). La sesión de
-CON-C arregló en paralelo las de FIN-4 y la ficha (`d94e18a`,
-`e9e84e1`); en el merge quedó su versión, que resuelve lo mismo. La de
-CON-6 queda con el arreglo de E2E:
+CON-C arregló en paralelo las tres; en los merges quedó su versión:
 
 | Prueba | Por qué fallaba | Arreglo |
 |---|---|---|
 | `packages/db/test/finanzas.test.ts` (FIN-4, bandeja) | Esperaba 41 días de mora fijos; el seed fecha la factura en UTC y la mora se cuenta, bien, en la zona del workspace: entre las 00:00 y las 05:00 UTC son 40 | Compara contra `hoy del workspace − due_on` |
-| `apps/worker/test/costuras-con.test.ts` (CON-6 = seed 0002) | Comparaba el job contra las filas que 0002 guardó **antes** de que 0003 agregara la lectura de `d02` del 12-sep sin retención, que desde el 24-sep es la de su corte de 720 h (mediana 0,09 con 9 valores frente a 0,085 con 10) | Compara contra la fórmula de 0002 aplicada a los datos finales |
+| `apps/worker/test/costuras-con.test.ts` (CON-6 = seed 0002) | **No era la fecha.** `d02` tiene dos lecturas con la misma edad (720 h), una de la API y otra manual, y la vista `post_metrics_at_cut` desempataba al azar: el seed (superusuario) tomó una y el job (`mc_worker`) la otra (mediana de completion 0,085 frente a 0,09). En producción haría cambiar la línea base de un día a otro sin datos nuevos | **Migración 0042** de CON-C (la vista desempata por `captured_at` e `id`), con su PARADA 1. E2E había arreglado la prueba comparando contra la fórmula de 0002 en el momento, con un diagnóstico equivocado (lo atribuyó a la 0003 y al día); se descartó y quedó la prueba original, que con la 0042 pasa |
 | `apps/web/app/(app)/campanas/ficha-db.test.tsx` (CAM-1) | Tenía escritas a mano las views y la fecha del 22-sep; el seed rellena la serie hasta ayer | Lee la última lectura de la base y exige esa cifra exacta |
 
 `apps/worker/test/oauth-refresh.test.ts` falló una vez dentro de
