@@ -339,6 +339,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
     'no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outreach_channel_set_webhooks(uuid,text[])':
+    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (0040): provider_webhook_ids es ' +
+    'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
+    'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
+    'forma de id. EXECUTE solo para mc_app. No es de ningún disparador',
 };
 
 /**

@@ -5,3 +5,4 @@ export * from './campanas.ts';
 export * from './tarifas.ts';
 export * from './zonas.ts';
 export * from './ventas.ts';
+export * from './bajas.ts';

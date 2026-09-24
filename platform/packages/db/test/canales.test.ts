@@ -18,7 +18,8 @@ import assert from 'node:assert/strict';
 import {
   ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
   failPendingChannelAccount, findUnipileAccountForWebhook, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown,
-  recordInboundMessage, updateChannelAccountCaps,
+  channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, recordInboundMessage, setChannelWebhooks,
+  updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -43,6 +44,11 @@ before(async () => {
 });
 after(async () => { await t?.close(); });
 
+/** Lee como mc_worker (sin RLS), fuera de toda transacción. */
+async function sel<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
+  return t.db.asWorker(async (tx) => (await tx.query<T>(sql)).rows);
+}
+
 describe('la pantalla (mc_app)', () => {
   test('lista las cuentas del workspace con su uso; la pendiente no enseña su nonce', async () => {
     const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx));
@@ -59,14 +65,72 @@ describe('la pantalla (mc_app)', () => {
     assert.deepEqual(await t.db.withWorkspace(WS_OTRO, (tx) => getChannelPolicyCaps(tx)), { emailPerDay: 20, enabled: false });
   });
 
-  test('los topes: dentro del techo se guardan; por encima, ChannelCapError sin tocar la base', async () => {
+  test('los límites salen de la vista: el correo lo fija la política, LinkedIn el proveedor; lo que rige nunca pasa del máximo', async () => {
+    const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx));
+    const gmail = rows.find((r) => r.id === GMAIL_LAURA)!;
+    assert.deepEqual(gmail.limits, {
+      effectiveDaily: 20, effectiveWeekly: 100, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: 'policy', personalMailbox: false,
+    });
+    const li = rows.find((r) => r.id === LINKEDIN_LAURA)!;
+    assert.equal(li.limits.maxDaily, 100);
+    assert.equal(li.limits.maxWeekly, 200);
+    assert.equal(li.limits.dailyLimitedBy, 'provider');
+    // Un tope viejo por encima de la política (la demo tenía 40 con una política de 20): rige la política.
+    await t.admin(`UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${GMAIL_LAURA}'`);
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, GMAIL_LAURA)))?.effectiveDaily, 20);
+    // Una cuenta personal de Gmail corta en 500 aunque la política diga más.
+    await t.admin(`UPDATE outbound_policy SET max_emails_per_day = 900 WHERE workspace_id = '${WORKSPACE_LAURA}'`);
+    await t.admin(`INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status)
+      VALUES ('00000005-0000-4000-8000-0000000acf01', '${WORKSPACE_LAURA}', '${CREATOR_LAURA}', 'email', 'gmail_oauth', 'laura.personal@gmail.com', 'disconnected')`);
+    const personal = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, '00000005-0000-4000-8000-0000000acf01'));
+    assert.deepEqual([personal?.maxDaily, personal?.dailyLimitedBy, personal?.personalMailbox], [500, 'provider', true]);
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, GMAIL_LAURA)))?.maxDaily, 900);
+    await t.admin(`UPDATE outbound_policy SET max_emails_per_day = 20 WHERE workspace_id = '${WORKSPACE_LAURA}';
+                   UPDATE outreach_channel_account SET daily_cap = 20 WHERE id = '${GMAIL_LAURA}';
+                   DELETE FROM outreach_channel_account WHERE id = '00000005-0000-4000-8000-0000000acf01'`);
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => getChannelLimits(tx, GMAIL_LAURA)), null, 'otro espacio no ve los límites de Laura');
+  });
+
+  test('los topes: dentro del máximo se guardan; por encima de la política o del proveedor, ChannelCapError sin tocar la base', async () => {
     await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       assert.equal(await updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 30, weeklyCap: 150 }), true);
-      await assert.rejects(updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 101, weeklyCap: 150 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'dailyCap' && e.max === 100);
-      await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 40, weeklyCap: 10_001 }), ChannelCapError);
+      await assert.rejects(updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 101, weeklyCap: 150 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'dailyCap' && e.max === 100 && e.limitedBy === 'provider');
+      // 2.000 cabe en el techo del CHECK, pero la política del espacio dice 20.
+      await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 2000, weeklyCap: null }), (e: unknown) => e instanceof ChannelCapError && e.field === 'dailyCap' && e.max === 20 && e.limitedBy === 'policy');
+      await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 10, weeklyCap: 141 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'weeklyCap' && e.max === 140);
+      // El diario no pasa del semanal.
+      await assert.rejects(updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 50, weeklyCap: 30 }), (e: unknown) => e instanceof ChannelCapError && e.problem === 'daily_above_weekly');
       assert.equal(await updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: null, weeklyCap: null }), true);
+      const { rows } = await tx.query<{ daily_cap: number | null }>(`SELECT daily_cap FROM outreach_channel_account WHERE id = $1`, [LINKEDIN_LAURA]);
+      assert.equal(rows[0]?.daily_cap, 30, 'lo rechazado no tocó la base');
     });
     assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 1, weeklyCap: 1 })), false);
+  });
+
+  test('reconectar sale de la fila: solo una cuenta caída del espacio y del canal pedido', async () => {
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getReconnectableUnipileAccount(tx, LINKEDIN_LAURA, 'linkedin')), 'unipile-demo-laura-linkedin');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getReconnectableUnipileAccount(tx, LINKEDIN_LAURA, 'instagram_dm')), null);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getReconnectableUnipileAccount(tx, GMAIL_LAURA, 'linkedin')), null);
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => getReconnectableUnipileAccount(tx, LINKEDIN_LAURA, 'linkedin')), null, 'la fila de otro espacio no existe para este');
+  });
+
+  test('los avisos y la liberación son del despachador: mc_app no los escribe (42501); desconectar deja la cuenta por soltar', async () => {
+    const es42501 = (e: unknown) => (e as { code?: string }).code === '42501';
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET provider_webhook_ids = '{wh_x}' WHERE id = $1`, [LINKEDIN_LAURA])), es42501);
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET released_at = now() WHERE id = $1`, [LINKEDIN_LAURA])), es42501);
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      // Por la función de 0040, solo en una cuenta viva de este espacio.
+      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_a', 'wh_b']), true);
+      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_b']), true);
+      assert.equal(await channelWebhookCount(tx, LINKEDIN_LAURA), 2);
+      assert.equal(await setChannelWebhooks(tx, GMAIL_LAURA, ['wh_c']), false, 'un Gmail no tiene avisos de Unipile');
+    });
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_z'])), false);
+    await t.admin(`UPDATE outreach_channel_account SET released_at = now() WHERE id = '${LINKEDIN_LAURA}'`);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA));
+    const rows = await sel<{ status: string; released_at: Date | null }>(`SELECT status, released_at FROM outreach_channel_account WHERE id = '${LINKEDIN_LAURA}'`);
+    assert.deepEqual(rows[0], { status: 'disconnected', released_at: null });
+    await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect', provider_webhook_ids = '{}' WHERE id = '${LINKEDIN_LAURA}'`);
   });
 
   test('la web crea la pendiente, pero no la autentica (42501)', async () => {
@@ -156,16 +220,55 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     assert.equal(avisos.rows.length, 1);
   });
 
-  test('una respuesta entra atada al toque de su hilo, y el webhook repetido no la duplica', async () => {
+  test('una respuesta entra atada al toque de su hilo, el enrolamiento deja de enviar y el webhook repetido no la duplica', async () => {
     const msg = {
       account: { id: GMAIL_LAURA, channel: 'email' as const }, threadRef: 'gmail-thread-demo-0002', providerMessageId: 'gmail-demo-0002-r1',
-      body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date(),
+      body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date(), optOutReasonEs: 'Pidió la baja respondiendo.',
     };
-    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg)), true);
-    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg)), false);
+    const first = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg));
+    assert.deepEqual(first, { inserted: true, enrollmentStopped: true, touchesCanceled: 3, optedOut: false });
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg))).inserted, false);
     const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ touch_id: string; intent: string | null; direction: string }>(
       `SELECT touch_id, intent, direction FROM outbound_message WHERE provider_message_id = 'gmail-demo-0002-r1'`,
     ));
     assert.deepEqual(rows.rows, [{ touch_id: '00000005-0000-4000-8000-000000070002', intent: null, direction: 'inbound' }]);
+    const e = await sel<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = '00000005-0000-4000-8000-0000000e0001'`);
+    assert.equal(e[0]?.status, 'replied', 'el siguiente toque ya no sale');
+    const touches = await sel<{ id: string; status: string; blocked_reason: string | null }>(
+      `SELECT id, status, blocked_reason FROM outbound_touch WHERE enrollment_id = '00000005-0000-4000-8000-0000000e0001' ORDER BY step_index`,
+    );
+    assert.deepEqual(touches.map((x) => [x.status, x.blocked_reason]), [
+      ['sent', null], ['sent', null], ['canceled', 'replied'], ['canceled', 'replied'], ['canceled', 'replied'],
+    ]);
+    const c = await sel<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '00000002-0000-4000-8000-0000000c0011'`);
+    assert.equal(c[0]?.opted_out, false, 'una respuesta sin baja no da de baja');
+  });
+
+  test('una respuesta que pide la baja por LinkedIn: intención unsubscribe, ficha dada de baja y nada suyo vuelve a salir', async () => {
+    const CONTACTO = '00000002-0000-4000-8000-0000000c0012';
+    await t.admin(`
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel, body, status,
+                                  scheduled_for, claimed_at, sent_at, attempt_count, provider_message_id, thread_ref, status_changed_at)
+      VALUES ('00000005-0000-4000-8000-0000000700f1', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e8', '${CONTACTO}',
+              '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0003', '00000005-0000-4000-8000-0000005e0103',
+              'linkedin', 'Hola Carolina', 'sent', now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour', 1,
+              'unipile-msg-f1', 'chat_carolina', now() - interval '1 hour'),
+             ('00000005-0000-4000-8000-0000000700f2', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e8', '${CONTACTO}',
+              '00000005-0000-4000-8000-0000005e0001', 5, '00000005-0000-4000-8000-0000000e0003', '00000005-0000-4000-8000-0000005e0105',
+              'linkedin', 'Otra idea', 'scheduled', now() + interval '1 day', NULL, NULL, 0, NULL, NULL, now());
+    `);
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
+      account: { id: LINKEDIN_LAURA, channel: 'linkedin' }, threadRef: 'chat_carolina', providerMessageId: 'li-in-f1',
+      body: 'Por favor, no me escribas más.', fromAddress: 'Carolina', occurredAt: new Date(), optOutReasonEs: 'Pidió la baja respondiendo por LinkedIn.',
+    }));
+    assert.equal(r.optedOut, true);
+    const m = await sel<{ intent: string | null }>(`SELECT intent FROM outbound_message WHERE provider_message_id = 'li-in-f1'`);
+    assert.equal(m[0]?.intent, 'unsubscribe');
+    const c = await sel<{ opted_out: boolean; opted_out_reason: string }>(`SELECT opted_out, opted_out_reason FROM contact WHERE id = '${CONTACTO}'`);
+    assert.deepEqual(c[0], { opted_out: true, opted_out_reason: 'Pidió la baja respondiendo por LinkedIn.' });
+    const e = await sel<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE contact_id = '${CONTACTO}'`);
+    assert.ok(e.every((x) => x.status === 'opted_out'), 'todos sus enrolamientos');
+    const pending = await sel<{ status: string; blocked_reason: string }>(`SELECT status, blocked_reason FROM outbound_touch WHERE id = '00000005-0000-4000-8000-0000000700f2'`);
+    assert.deepEqual(pending[0], { status: 'canceled', blocked_reason: 'opted_out' });
   });
 });

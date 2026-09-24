@@ -6,10 +6,11 @@
  *   La pantalla /ventas/canales
  *     listChannelAccounts        una fila por cuenta, con su uso de hoy y de
  *                                la semana ya sumado (la pantalla no suma)
- *     getChannelPolicyCaps       lo que dice outbound_policy cuando la cuenta
- *                                no tiene tope propio
+ *                                y sus límites (la vista outreach_channel_account_limits, 0040)
+ *     getChannelPolicyCaps       lo que dice outbound_policy
  *     updateChannelAccountCaps   los topes de la persona, nunca por encima
- *                                del techo del canal (CHANNEL_CAP_LIMITS)
+ *                                del máximo de la vista (proveedor y política)
+ *     getReconnectableUnipileAccount  la cuenta caída que se va a reconectar
  *     createPendingChannelAccount  la fila 'pending' al empezar a conectar
  *     disconnectChannelAccount   desconectar es de la persona
  *
@@ -21,7 +22,9 @@
  *     existingGmailSecretRef     la ref del token al reconectar un Gmail
  *     findUnipileAccountForWebhook  la cuenta de un aviso de Unipile
  *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (0039)
- *     recordInboundMessage       una respuesta nueva, a outbound_message
+ *     recordInboundMessage       una respuesta nueva, a outbound_message; su
+ *                                enrolamiento deja de enviar y una baja explícita se respeta
+ *     setChannelWebhooks         los avisos de Unipile de la cuenta (0040)
  *
  * A un estado autenticado (connected, needs_reconnect, error) solo llega
  * quien habló con el proveedor: el disparador
@@ -30,11 +33,13 @@
  * ven más que el espacio de la transacción y piden la fila 'pending' del
  * nonce. El worker (keepalive) escribe directo con asWorker.
  */
+import { looksLikeOptOut } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import {
   CHANNEL_CAP_LIMITS, LIVE_CHANNEL_ACCOUNT_STATUSES, type CHANNEL_ACCOUNT_STATUSES, type CHANNEL_PROVIDERS,
 } from '../schema/outreach.ts';
 import type { OUTBOUND_CHANNELS } from '../schema/_canales.ts';
+import { CANCELABLE_TOUCH_STATUSES } from '../schema/ventas.ts';
 
 export type OutreachChannel = (typeof OUTBOUND_CHANNELS)[number];
 export type ChannelProvider = (typeof CHANNEL_PROVIDERS)[number];
@@ -42,8 +47,16 @@ export type ChannelAccountStatus = (typeof CHANNEL_ACCOUNT_STATUSES)[number];
 
 /** El prefijo del provider_account_id de una fila de Unipile que todavía no tiene cuenta. */
 export const PENDING_ACCOUNT_PREFIX = 'pending:';
-/** Una fila 'pending' más vieja que esto ya no espera a nadie: el enlace de Unipile vence en el día. */
-export const PENDING_STALE_HOURS = 24;
+/**
+ * Cuándo una fila 'pending' ya no espera a nadie, por canal: lo que vive
+ * su estado firmado (@mc/connectors, outreach/state.ts). El OAuth de
+ * Google vuelve en diez minutos o no vuelve (GOOGLE_STATE_TTL_MS); el
+ * enlace de Unipile vence en el día (UNIPILE_STATE_TTL_MS). Una prueba de
+ * la web comprueba que casan.
+ */
+export const PENDING_STALE_MINUTES: Readonly<Record<'email' | 'linkedin' | 'instagram_dm' | 'whatsapp', number>> = {
+  email: 10, linkedin: 24 * 60, instagram_dm: 24 * 60, whatsapp: 24 * 60,
+};
 
 /** Qué quedó escrito en last_error cuando no es un mensaje del proveedor. */
 export const CHANNEL_ERROR_CODES = {
@@ -51,6 +64,8 @@ export const CHANNEL_ERROR_CODES = {
   taken: 'taken',
   /** Google no concedió gmail.send o gmail.modify. */
   missingScopes: 'missing_scopes',
+  /** La persona canceló en la pantalla del proveedor. */
+  cancelled: 'cancelled',
   /** La cuenta que conectó en Unipile no es del canal que se pidió (un Instagram donde se pidió LinkedIn). */
   wrongProvider: 'wrong_provider',
 } as const;
@@ -63,10 +78,13 @@ export interface ChannelAccountRow {
   providerAccountId: string | null;
   displayName: string | null;
   status: ChannelAccountStatus;
-  /** Una fila 'pending' de hace más de PENDING_STALE_HOURS: nadie terminó de conectarla. */
+  /** Una fila 'pending' más vieja que PENDING_STALE_MINUTES de su canal: nadie terminó de conectarla. */
   stale: boolean;
+  /** Los topes que puso la persona (NULL = sin tope propio). */
   dailyCap: number | null;
   weeklyCap: number | null;
+  /** Los límites de la vista outreach_channel_account_limits (0040): lo que rige y lo más que se puede poner. */
+  limits: ChannelLimits;
   scopes: string[];
   lastOkAt: Date | null;
   lastErrorAt: Date | null;
@@ -77,7 +95,35 @@ export interface ChannelAccountRow {
   usedThisWeek: number;
 }
 
-interface RawAccount extends Record<string, unknown> {
+/** Una fila de outreach_channel_account_limits (0040). */
+export interface ChannelLimits {
+  /** Lo que rige hoy: el tope propio o el máximo, nunca por encima del máximo. */
+  effectiveDaily: number;
+  effectiveWeekly: number;
+  /** Lo más que la persona puede poner. */
+  maxDaily: number;
+  maxWeekly: number;
+  /** Qué fija el máximo diario: la política del espacio o el proveedor. */
+  dailyLimitedBy: 'policy' | 'provider';
+  /** Un buzón @gmail.com o @googlemail.com (Google corta en 500 al día). */
+  personalMailbox: boolean;
+}
+
+interface RawLimits {
+  effective_daily: number;
+  effective_weekly: number;
+  max_daily: number;
+  max_weekly: number;
+  daily_limited_by: 'policy' | 'provider';
+  personal_mailbox: boolean;
+}
+
+const toLimits = (r: RawLimits): ChannelLimits => ({
+  effectiveDaily: r.effective_daily, effectiveWeekly: r.effective_weekly, maxDaily: r.max_daily, maxWeekly: r.max_weekly,
+  dailyLimitedBy: r.daily_limited_by, personalMailbox: r.personal_mailbox,
+});
+
+interface RawAccount extends RawLimits, Record<string, unknown> {
   id: string;
   channel: OutreachChannel;
   provider: ChannelProvider;
@@ -115,15 +161,17 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
          FROM zona
      )
      SELECT a.id, a.channel, a.provider, a.provider_account_id, a.display_name, a.status,
-            (a.status = 'pending' AND a.updated_at < now() - make_interval(hours => $1)) AS stale,
+            (a.status = 'pending' AND a.updated_at < now() - make_interval(mins => ($1::jsonb ->> a.channel)::int)) AS stale,
             a.daily_cap, a.weekly_cap, a.scopes, a.last_ok_at, a.last_error_at, a.last_error, a.updated_at,
+            l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.personal_mailbox,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
                        WHERE c.channel_account_id = a.id AND c.period = 'day' AND c.period_start = p.hoy), 0)::int AS used_today,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
                        WHERE c.channel_account_id = a.id AND c.period = 'week' AND c.period_start = p.lunes), 0)::int AS used_week
        FROM outreach_channel_account a
+       JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
       ORDER BY (a.status = ANY($2::text[])) DESC, a.updated_at DESC`,
-    [PENDING_STALE_HOURS, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
+    [JSON.stringify(PENDING_STALE_MINUTES), [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -135,6 +183,7 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
     stale: r.stale,
     dailyCap: r.daily_cap,
     weeklyCap: r.weekly_cap,
+    limits: toLimits(r),
     scopes: r.scopes,
     lastOkAt: toDate(r.last_ok_at),
     lastErrorAt: toDate(r.last_error_at),
@@ -160,47 +209,93 @@ export async function getChannelPolicyCaps(tx: WorkspaceTx): Promise<ChannelPoli
   return { emailPerDay: rows[0]?.max_emails_per_day ?? 20, enabled: rows[0]?.enabled ?? false };
 }
 
+export type ChannelCapProblem = 'above_max' | 'daily_above_weekly';
+
+/**
+ * Un tope que no se puede guardar: por encima del máximo de la cuenta
+ * (proveedor o política, `limitedBy`), o un diario mayor que el semanal.
+ * La pantalla lo convierte en frase con su formato; aquí no hay frases.
+ */
 export class ChannelCapError extends Error {
   readonly field: 'dailyCap' | 'weeklyCap';
   readonly max: number;
-  constructor(field: 'dailyCap' | 'weeklyCap', max: number) {
-    super(`${field} tiene que ser un entero entre 0 y ${max}.`);
+  readonly problem: ChannelCapProblem;
+  readonly limitedBy: 'policy' | 'provider';
+  constructor(field: 'dailyCap' | 'weeklyCap', max: number, problem: ChannelCapProblem = 'above_max', limitedBy: 'policy' | 'provider' = 'provider') {
+    super(problem === 'above_max' ? `${field} tiene que ser un entero entre 0 y ${max}.` : 'El tope diario no puede pasar del semanal.');
     this.name = 'ChannelCapError';
     this.field = field;
     this.max = max;
+    this.problem = problem;
+    this.limitedBy = limitedBy;
   }
 }
 
-/** El techo del canal: lo que el proveedor aguanta (0037 §2, CHECK outreach_channel_account_channel_caps_check). */
+/** El techo del CHECK de 0037 por canal. El máximo de una cuenta concreta es el de la vista (getChannelLimits). */
 export function channelCapLimits(channel: OutreachChannel): { daily: number; weekly: number } {
   return CHANNEL_CAP_LIMITS[channel];
 }
 
+/** Los límites de UNA cuenta del espacio (outreach_channel_account_limits, 0040). null si no es de este workspace. */
+export async function getChannelLimits(tx: WorkspaceTx, accountId: string): Promise<ChannelLimits | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<RawLimits & Record<string, unknown>>(
+    `SELECT effective_daily, effective_weekly, max_daily, max_weekly, daily_limited_by, personal_mailbox
+       FROM outreach_channel_account_limits WHERE channel_account_id = $1`,
+    [accountId],
+  );
+  return rows[0] ? toLimits(rows[0]) : null;
+}
+
 /**
- * Cambia los topes de una cuenta. null = sin tope propio (el de la
- * política). Valida contra el techo ANTES de ir a la base, para que la
- * pantalla diga qué campo está mal en vez de un CHECK. Devuelve false si
- * la cuenta no es de este workspace.
+ * Cambia los topes de una cuenta. null = sin tope propio (rige el
+ * máximo). Valida ANTES de ir a la base, contra el máximo de ESA cuenta
+ * (el menor entre lo que aguanta el proveedor y lo que dice la política
+ * del espacio) y que el diario no pase del semanal, para que la pantalla
+ * diga qué campo está mal. Devuelve false si la cuenta no es de este
+ * workspace.
  */
 export async function updateChannelAccountCaps(
   tx: WorkspaceTx,
   accountId: string,
   caps: { dailyCap: number | null; weeklyCap: number | null },
 ): Promise<boolean> {
-  if (!isUuid(accountId)) return false;
-  const { rows } = await tx.query<{ channel: OutreachChannel }>(`SELECT channel FROM outreach_channel_account WHERE id = $1`, [accountId]);
-  const channel = rows[0]?.channel;
-  if (!channel) return false;
-  const limits = channelCapLimits(channel);
-  for (const [field, max] of [['dailyCap', limits.daily], ['weeklyCap', limits.weekly]] as const) {
+  const limits = await getChannelLimits(tx, accountId);
+  if (!limits) return false;
+  const bounds = [['dailyCap', limits.maxDaily, limits.dailyLimitedBy], ['weeklyCap', limits.maxWeekly, 'provider']] as const;
+  for (const [field, max, by] of bounds) {
     const v = caps[field];
-    if (v !== null && (!Number.isInteger(v) || v < 0 || v > max)) throw new ChannelCapError(field, max);
+    if (v !== null && (!Number.isInteger(v) || v < 0 || v > max)) throw new ChannelCapError(field, max, 'above_max', by);
   }
+  const daily = caps.dailyCap ?? limits.maxDaily;
+  const weekly = caps.weeklyCap ?? limits.maxWeekly;
+  if (daily > weekly) throw new ChannelCapError(caps.weeklyCap !== null ? 'weeklyCap' : 'dailyCap', weekly, 'daily_above_weekly');
   const res = await tx.query(
     `UPDATE outreach_channel_account SET daily_cap = $2, weekly_cap = $3 WHERE id = $1 RETURNING id`,
     [accountId, caps.dailyCap, caps.weeklyCap],
   );
   return res.rows.length === 1;
+}
+
+/**
+ * La cuenta de Unipile que se va a reconectar, por el id de SU fila (no
+ * por el account_id que mande el navegador): solo si es de este espacio
+ * (RLS), del canal pedido y está caída. Devuelve el account_id de
+ * Unipile, el único valor que viaja a createHostedAuthLink.
+ */
+export async function getReconnectableUnipileAccount(
+  tx: WorkspaceTx,
+  accountId: string,
+  channel: 'linkedin' | 'instagram_dm',
+): Promise<string | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<{ provider_account_id: string }>(
+    `SELECT provider_account_id FROM outreach_channel_account
+      WHERE id = $1 AND provider = 'unipile' AND channel = $2 AND status IN ('needs_reconnect', 'error')
+        AND provider_account_id NOT LIKE 'pending:%'`,
+    [accountId, channel],
+  );
+  return rows[0]?.provider_account_id ?? null;
 }
 
 /** Los canales que se conectan desde /ventas/canales. WhatsApp es de fase 2. */
@@ -378,18 +473,46 @@ export interface InboundMessage {
   body: string;
   fromAddress: string | null;
   occurredAt: Date;
+  /** La frase que queda en contact.opted_out_reason si la respuesta pide la baja (@mc/db no escribe frases). */
+  optOutReasonEs: string;
+}
+
+export interface InboundResult {
+  /** false si ya estaba (webhook repetido): entonces no se toca nada más. */
+  inserted: boolean;
+  /** El enrolamiento del hilo dejó de enviar (replied, u opted_out si pidió la baja). */
+  enrollmentStopped: boolean;
+  /** Toques pendientes que se cancelaron. */
+  touchesCanceled: number;
+  /** La respuesta pedía la baja explícitamente (looksLikeOptOut): intención 'unsubscribe' y ficha dada de baja. */
+  optedOut: boolean;
 }
 
 /**
- * Una respuesta nueva: una fila 'inbound' en outbound_message, sin
- * intención todavía (la pone el clasificador de VEN-14, que toma las que
- * tienen intent NULL). Si el hilo es el de un toque enviado desde esta
- * cuenta, la fila queda atada al toque, su enrolamiento, su contacto y su
- * negocio. Un webhook repetido no crea otra (índice único por
- * provider_message_id). Devuelve si la insertó.
+ * Una respuesta nueva, en UNA sentencia:
+ *
+ *   · una fila 'inbound' en outbound_message. Si el hilo es el de un toque
+ *     enviado desde esta cuenta, queda atada al toque, su enrolamiento, su
+ *     contacto y su negocio. Un webhook repetido no crea otra (índice
+ *     único por provider_message_id) y no toca nada más;
+ *   · su enrolamiento deja de enviar: pasa a 'replied' y sus toques que
+ *     todavía podían salir (CANCELABLE_TOUCH_STATUSES: borrador,
+ *     programado, retenido) se cancelan con blocked_reason 'replied'. El
+ *     aviso llega en segundos para eso (§9): que el siguiente toque no
+ *     salga mientras el clasificador de VEN-14 decide qué hacer. Lo que el
+ *     despachador ya reclamó (processing) no se toca: él relee el
+ *     enrolamiento en la transacción del envío;
+ *   · si pide la baja explícitamente (looksLikeOptOut de @mc/core, la
+ *     lista mínima mientras no exista el clasificador), la intención queda
+ *     'unsubscribe', la ficha dada de baja (y con ella su correo en la
+ *     baja global, 0026) y TODOS sus enrolamientos y toques pendientes, de
+ *     cualquier canal, se cancelan con blocked_reason 'opted_out'.
+ *
+ * Lo demás queda con intent NULL: la cola del clasificador (VEN-14).
  */
-export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): Promise<boolean> {
-  const { rows } = await tx.query<{ id: string }>(
+export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): Promise<InboundResult> {
+  const optOut = looksLikeOptOut(m.body);
+  const { rows } = await tx.query<{ inserted: number; stopped: number; canceled: number }>(
     `WITH toque AS (
        SELECT t.id, t.enrollment_id, t.contact_id, e.deal_id
          FROM outbound_touch t
@@ -397,20 +520,79 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
         WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent'
         ORDER BY t.sent_at DESC NULLS LAST
         LIMIT 1
+     ),
+     nuevo AS (
+       INSERT INTO outbound_message
+         (workspace_id, channel_account_id, touch_id, enrollment_id, contact_id, deal_id, direction, channel,
+          thread_ref, provider_message_id, from_address, body, occurred_at, intent, classified_at)
+       SELECT current_workspace_id(), $3, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $2, $1,
+              $4, $5, $6, $7, CASE WHEN $8 THEN 'unsubscribe' END, CASE WHEN $8 THEN now() END
+         FROM (SELECT 1) uno LEFT JOIN toque ON true
+       ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
+       RETURNING enrollment_id, contact_id
+     ),
+     baja AS (
+       UPDATE contact c
+          SET opted_out = true, opted_out_at = coalesce(c.opted_out_at, now()), opted_out_reason = coalesce(c.opted_out_reason, $9)
+         FROM nuevo
+        WHERE $8 AND c.id = nuevo.contact_id AND NOT c.opted_out
+       RETURNING c.id
+     ),
+     enrolamientos AS (
+       UPDATE outbound_enrollment e
+          SET status = CASE WHEN $8 THEN 'opted_out' ELSE 'replied' END,
+              finished_at = CASE WHEN $8 THEN coalesce(e.finished_at, now()) ELSE e.finished_at END
+         FROM nuevo
+        WHERE (e.id = nuevo.enrollment_id OR ($8 AND e.contact_id = nuevo.contact_id))
+          AND e.status IN ('active', 'paused', 'cooldown')
+       RETURNING e.id
+     ),
+     toques AS (
+       UPDATE outbound_touch t
+          SET status = 'canceled', blocked_reason = CASE WHEN $8 THEN 'opted_out' ELSE 'replied' END
+         FROM nuevo
+        WHERE (t.enrollment_id = nuevo.enrollment_id OR ($8 AND t.contact_id = nuevo.contact_id))
+          AND t.status = ANY($10::text[])
+       RETURNING t.id
      )
-     INSERT INTO outbound_message
-       (workspace_id, channel_account_id, touch_id, enrollment_id, contact_id, deal_id, direction, channel,
-        thread_ref, provider_message_id, from_address, body, occurred_at)
-     SELECT current_workspace_id(), $3, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $2, $1, $4, $5, $6, $7
-       FROM (SELECT 1) uno LEFT JOIN toque ON true
-     ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt],
+     SELECT (SELECT count(*) FROM nuevo)::int AS inserted, (SELECT count(*) FROM enrolamientos)::int AS stopped,
+            (SELECT count(*) FROM toques)::int AS canceled, (SELECT count(*) FROM baja)::int AS opted_out`,
+    [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt, optOut,
+      m.optOutReasonEs.slice(0, 500), [...CANCELABLE_TOUCH_STATUSES]],
   );
-  return rows.length === 1;
+  const r = rows[0]!;
+  const inserted = r.inserted === 1;
+  return { inserted, enrollmentStopped: r.stopped > 0, touchesCanceled: r.canceled, optedOut: inserted && optOut };
 }
 
-/** Desconectar: la fila queda en 'disconnected'. El token lo borra el keepalive del worker, que es quien puede. */
+/**
+ * Los avisos que la web acaba de dar de alta en Unipile para una cuenta
+ * conectada, por outreach_channel_set_webhooks (0040): la columna es del
+ * despachador, que los borra al soltar la cuenta.
+ */
+export async function setChannelWebhooks(tx: WorkspaceTx, accountId: string, webhookIds: readonly string[]): Promise<boolean> {
+  if (!isUuid(accountId) || webhookIds.length === 0) return false;
+  const { rows } = await tx.query<{ ok: boolean }>(`SELECT outreach_channel_set_webhooks($1, $2::text[]) AS ok`, [accountId, [...webhookIds]]);
+  return rows[0]?.ok === true;
+}
+
+/** Cuántos avisos tiene anotados una cuenta: al reconectar, si no tiene, se vuelven a dar de alta. */
+export async function channelWebhookCount(tx: WorkspaceTx, accountId: string): Promise<number> {
+  if (!isUuid(accountId)) return 0;
+  const { rows } = await tx.query<{ n: number }>(
+    `SELECT cardinality(provider_webhook_ids)::int AS n FROM outreach_channel_account WHERE id = $1`, [accountId],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Desconectar: la fila queda en 'disconnected' y, por el disparador de
+ * 0040, pendiente de soltar (released_at NULL). sales.channels_release
+ * (worker, mc_worker) revoca el permiso de Google y borra el token, o
+ * borra la cuenta y sus avisos en Unipile, con la bitácora en
+ * api_call_log. La web no puede: secret_ref y los avisos son del
+ * despachador.
+ */
 export async function disconnectChannelAccount(tx: WorkspaceTx, accountId: string): Promise<boolean> {
   if (!isUuid(accountId)) return false;
   const res = await tx.query(
