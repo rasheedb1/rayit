@@ -15,9 +15,11 @@
  *   · Se quita lo citado (líneas «>» y todo lo que sigue a «El … escribió:»
  *     u «On … wrote:»): la respuesta suele citar nuestro correo, y nuestro
  *     pie dice cómo darse de baja.
- *   · Se quita la firma: desde «--», «Saludos», «Regards», «Sent from…»
- *     (una línea corta que empieza así). Las firmas corporativas traen
- *     «To unsubscribe from our newsletter…».
+ *   · Se quita la firma: desde «--», «Sent from…», o una línea que es solo
+ *     el saludo de cierre («Saludos», «Regards») o el saludo y un nombre
+ *     («Saludos, Marcela»), siempre DESPUÉS de algo escrito (r3): «Saludos.
+ *     No nos escriban más.» es el mensaje entero. Las firmas corporativas
+ *     traen «To unsubscribe from our newsletter…».
  *   · Se busca sin tildes, en minúsculas y con el apóstrofo recto.
  *
  * Lo que NO es baja, con sus pruebas: «no me enviaste el media kit»
@@ -55,13 +57,26 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
   // Español
   {
     id: 'es_dar_de_baja', lang: 'es',
-    re: /\b(dar(me|nos)|den(me|nos)|de(me|nos))\s+de\s+baja\b|\b(por\s+)?favor,?\s+(dar|den)\s+de\s+baja\b|\b(quiero|queremos|deseo|deseamos)\s+(dar(me|nos)?\s+de\s+baja|la\s+baja)\b/,
+    re: /\b(dar(me|nos)|da(me|nos)|den(me|nos)|de(me|nos))\s+de\s+baja\b|\b(por\s+)?favor,?\s+(dar|den)\s+de\s+baja\b|\b(quiero|queremos|deseo|deseamos)\s+(dar(me|nos)?\s+de\s+baja|la\s+baja)\b/,
   },
   {
+    // «No me escriban más», «no nos vuelvan a escribir», y (r3) el pronombre
+    // pegado o ausente: «no vuelvan a escribirnos», «no volver a
+    // contactarnos», «NO ESCRIBAN MÁS». Sin pronombre, el subjuntivo solo
+    // cuenta con «más» o «nunca»: «no manden el contrato» no es baja.
     id: 'es_no_escribir', lang: 'es',
-    re: new RegExp(`\\bno\\s+(me|nos)\\s+(vuelva[ns]?\\s+a\\s+(escribir|contactar|enviar|mandar)\\b|${ES_CONTACT_SUBJ}${ES_TAIL})`, 'm'),
+    re: new RegExp(
+      `\\bno\\s+((me|nos)\\s+)?(vuelva[ns]?|volver)\\s+a\\s+(escribir|contactar|enviar|mandar)(me|nos|le|les)?\\b`
+        + `|\\bno\\s+(me|nos)\\s+${ES_CONTACT_SUBJ}${ES_TAIL}`
+        + `|\\bno\\s+${ES_CONTACT_SUBJ}\\s+(mas|nunca)\\b`,
+      'm',
+    ),
   },
-  { id: 'es_quitar_de_lista', lang: 'es', re: /\b(quit|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/ },
+  {
+    // «Quítenme de su lista» y (r3) «que me saquen de su lista».
+    id: 'es_quitar_de_lista', lang: 'es',
+    re: /\b(quit|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/,
+  },
   {
     id: 'es_no_recibir', lang: 'es',
     re: /\bno\s+(quiero|queremos|deseo|deseamos)\s+(recibir|seguir\s+recibiendo)\s+(mas\s+)?(correos|mensajes|e-?mails|informacion|comunicaciones|publicidad|propuestas)\b|\bno\s+(quiero|queremos|deseo|deseamos)\s+que\s+(me|nos)\s+(escriban|contacten|sigan\s+escribiendo)\b/,
@@ -117,35 +132,44 @@ export function stripQuoted(text: string): string {
   return out.join('\n');
 }
 
-/** Una línea que abre la firma: «--», «Saludos», «Regards», «Sent from my iPhone»… (corta, al principio de la línea). */
-const SIGNATURE_START =
-  /^(--\s*$|-- |_{3,}\s*$|(saludos|un saludo|saludos cordiales|cordialmente|atentamente|un abrazo|abrazos|regards|best regards|kind regards|warm regards|best|cheers|sent from|enviado desde|get outlook for)\b)/;
+/** Las marcas que solo abren una firma: «--», «___», «Sent from…», «Enviado desde…». */
+const SIGNATURE_MARKER = /^(--\s*$|-- |_{3,}\s*$|(sent from|enviado desde|get outlook for)\b)/;
+/** Los saludos de cierre. */
+const CLOSING = '(saludos cordiales|saludos|un saludo|cordialmente|atentamente|un abrazo|abrazos|best regards|kind regards|warm regards|regards|best|cheers)';
+/** El saludo solo: «Saludos», «Best,», «Cordialmente.». */
+const CLOSING_ALONE = new RegExp(`^${CLOSING}\\s*[,.!]?\\s*$`);
+/** El saludo al principio de la línea original, sin importar mayúsculas (ninguno lleva tilde). */
+const CLOSING_LEAD = new RegExp(`^${CLOSING}`, 'i');
+/** Lo que sigue al saludo cuando es un nombre: «, Marcela Ríos», « John». Mayúscula inicial en cada palabra. */
+const NAME_AFTER_CLOSING = /^\s*[,.!-]?\s+\p{Lu}[\p{L}'.-]*(\s+\p{Lu}[\p{L}'.-]*){0,3}\s*$/u;
 
-/** Lo propio sin la firma: todo lo que va desde la primera línea corta que la abre. */
+/**
+ * ¿Esta línea abre la firma? (r3) Solo si ANTES hay algo escrito por la
+ * persona, y la línea es una marca de firma, el saludo de cierre solo, o
+ * el saludo y un nombre. «Saludos. No nos escriban más.», «Saludos, por
+ * favor dejen de escribirnos» y «Cordialmente les pido que me saquen de
+ * su lista» son el mensaje, no la firma: la ronda 2 los cortaba enteros y
+ * la baja se perdía.
+ */
+function opensSignature(line: string, hasContent: boolean): boolean {
+  if (!hasContent) return false;
+  const original = line.trim();
+  const t = normalizeForOptOut(original);
+  if (t.length > 60) return false;
+  if (SIGNATURE_MARKER.test(t) || CLOSING_ALONE.test(t)) return true;
+  const lead = CLOSING_LEAD.exec(original);
+  return lead !== null && NAME_AFTER_CLOSING.test(original.slice(lead[0].length));
+}
+
+/** Lo propio sin la firma: todo lo que va desde la primera línea que la abre (opensSignature). */
 export function stripSignature(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
   for (const line of lines) {
-    const t = normalizeForOptOut(line.trim());
-    if (t.length <= 60 && SIGNATURE_START.test(t)) break;
+    if (opensSignature(line, out.some((l) => l.trim() !== ''))) break;
     out.push(line);
   }
   return out.join('\n');
-}
-
-/**
- * La ruta pública de la página de baja (VEN-15): /baja/<token>. La usa el
- * despachador para el pie y la cabecera List-Unsubscribe; la página la
- * sirve la web. Si cambia, cambia aquí y en la página a la vez.
- */
-export const OPTOUT_PATH = '/baja';
-
-/** El enlace de baja de un correo: `${base}/baja/${token}`, sin barras dobles. */
-export function optoutUrl(baseUrl: string, token: string): string {
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(token)) throw new TypeError('El token de baja no tiene la forma esperada.');
-  const base = new URL(baseUrl);
-  if (base.protocol !== 'https:' && base.protocol !== 'http:') throw new TypeError(`URL base inválida: ${baseUrl}`);
-  return `${base.origin}${OPTOUT_PATH}/${token}`;
 }
 
 export interface OptOutResult {

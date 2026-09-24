@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addBusinessDays, clampToWindow, isInsideWindow, nextBusinessSlot, nextRetryAt, nextWindowSlot, parseClock, planSteps,
-  retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClockSeconds, warmupDailyCap, zonedInstant, zonedParts,
+  retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClockSeconds, zonedInstant, zonedParts,
   MAX_SEND_ATTEMPTS, RETRY_BASE_MS, RETRY_MAX_MS, type PlanStep,
 } from '../src/outreach/schedule.ts';
 
@@ -175,14 +175,4 @@ test('shiftFollowingSteps: el paso que va detrás se corre con el que se movió,
   // Mismo día, orden siguiente: al menos cinco minutos después.
   const mismo = shiftFollowingSteps(moved, [{ id: 'y', dayOffset: 0, orderInDay: 1, at: at('2026-09-25T15:00:00Z') }], BOGOTA, W);
   assert.ok(mismo[0]!.at.getTime() >= moved.at.getTime() + 5 * 60 * 1000);
-});
-
-test('calentamiento: sube en línea recta hasta el tope', () => {
-  const start = new Date('2026-09-01T00:00:00Z');
-  const cap = (days: number) => warmupDailyCap({ cap: 40, warmupStartedAt: start, warmupDays: 14, now: new Date(start.getTime() + days * 86_400_000) });
-  assert.equal(cap(0), 3);
-  assert.ok(cap(7) > cap(0) && cap(7) < 40);
-  assert.equal(cap(14), 40);
-  assert.equal(warmupDailyCap({ cap: 40, warmupStartedAt: null, warmupDays: 14, now: start }), 40);
-  assert.equal(warmupDailyCap({ cap: 0, warmupStartedAt: start, warmupDays: 14, now: start }), 0);
 });

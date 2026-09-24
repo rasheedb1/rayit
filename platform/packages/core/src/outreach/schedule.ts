@@ -402,23 +402,3 @@ export function nextRetryAt(
   const raw = new Date(now.getTime() + retryDelayMs(attempt, seed));
   return place ? nextWindowSlot(raw, place.timeZone, place.window, { seed: `${seed}:retry:${attempt}` }) : raw;
 }
-
-// ---------------------------------------------------------------------
-// Calentamiento
-// ---------------------------------------------------------------------
-
-/**
- * El tope diario de una cuenta en calentamiento: sube en línea recta
- * desde cap/(días+1) hasta el tope entero en `warmupDays` días (§5.1: una
- * cuenta nueva empieza bajo). El día 0 es el de warmup_started_at; sin
- * fecha, o pasados los días, el tope entero. Nunca menos de 1 si el tope
- * deja pasar algo.
- */
-export function warmupDailyCap(input: { cap: number; warmupStartedAt: Date | null; warmupDays: number; now: Date }): number {
-  const { cap, warmupStartedAt, warmupDays, now } = input;
-  if (!Number.isInteger(cap) || cap <= 0) return 0;
-  if (!warmupStartedAt || warmupDays <= 0) return cap;
-  const day = Math.max(0, Math.floor((now.getTime() - warmupStartedAt.getTime()) / (DAY_S * 1000)));
-  if (day >= warmupDays) return cap;
-  return Math.max(1, Math.ceil((cap * (day + 1)) / (warmupDays + 1)));
-}

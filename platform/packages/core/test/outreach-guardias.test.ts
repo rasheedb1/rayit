@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertNoPlaceholders, findPlaceholders, hasPlaceholders, PlaceholderError } from '../src/outreach/placeholder-guard.ts';
-import { detectOptOut, OPT_OUT_RULES, optoutUrl, stripQuoted, stripSignature } from '../src/outreach/optout.ts';
+import { detectOptOut, OPT_OUT_RULES, stripQuoted, stripSignature } from '../src/outreach/optout.ts';
 import { firstNameOf, renderTemplate } from '../src/outreach/template.ts';
 
 test('la guardia bloquea los siete tipos de hueco', () => {
@@ -131,10 +131,37 @@ test('el detector sí ve la baja en sus formas reales, y en la primera línea lo
   assert.equal(stripSignature('Hola\nSaludos, Marcela\nTo unsubscribe…'), 'Hola');
 });
 
-test('el enlace de baja: ruta pública y token validado', () => {
-  assert.equal(optoutUrl('https://on-cue-web.vercel.app/', 'abcdefghijklmnop1234'), 'https://on-cue-web.vercel.app/baja/abcdefghijklmnop1234');
-  assert.throws(() => optoutUrl('https://x.test', 'corto'), TypeError);
-  assert.throws(() => optoutUrl('ftp://x.test', 'abcdefghijklmnop1234'), TypeError);
+test('una respuesta de una línea que empieza por el saludo es el mensaje, no la firma (r3)', () => {
+  for (const texto of [
+    'Saludos. No nos escriban más.',
+    'Saludos, por favor dejen de escribirnos',
+    'Cordialmente les pido que me saquen de su lista',
+  ]) {
+    assert.notEqual(stripSignature(texto).trim(), '', texto);
+    assert.equal(detectOptOut(texto).optOut, true, texto);
+  }
+  // Y la firma de verdad se sigue quitando: el saludo solo, o con un nombre, después del mensaje.
+  assert.equal(stripSignature('Nos interesa, hablemos.\nSaludos,\nMarcela'), 'Nos interesa, hablemos.');
+  assert.equal(stripSignature('Nos interesa.\nBest, John Smith\nUnsubscribe'), 'Nos interesa.');
+  assert.equal(stripSignature('Nos interesa.\nSaludos, por favor sigan'), 'Nos interesa.\nSaludos, por favor sigan');
+});
+
+test('las formas pronominales de la baja en español (r3)', () => {
+  const casos: Array<[string, string]> = [
+    ['No vuelvan a escribirnos.', 'es_no_escribir'],
+    ['Por favor no volver a contactarnos', 'es_no_escribir'],
+    ['Les pido que me saquen de su lista.', 'es_quitar_de_lista'],
+    ['NO NOS INTERESA, NO ESCRIBAN MAS', 'es_no_escribir'],
+  ];
+  for (const [texto, regla] of casos) {
+    const r = detectOptOut(texto);
+    assert.equal(r.optOut, true, texto);
+    assert.equal(r.ruleId, regla, texto);
+  }
+  // Sin pronombre y sin «más», el subjuntivo sigue sin ser baja: tiene un objeto.
+  for (const texto of ['No manden el contrato todavía.', '¿No vuelves a escribir el lunes?', 'No nos interesa por ahora.']) {
+    assert.equal(detectOptOut(texto).optOut, false, texto);
+  }
 });
 
 test('el renderizador sustituye lo conocido y deja a la vista lo que falta', () => {
