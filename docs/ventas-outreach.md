@@ -464,13 +464,24 @@ que el despachador de VEN-10 tiene que usar, todo en
   `contact_suppression` (toda la plataforma, como decía 0007) cuando la
   confirma un SEGUNDO espacio: la misma dirección pulsa el enlace de un
   correo de otro creador. Eso el remitente no lo puede fabricar sin que
-  otro espacio le haya escrito de verdad. No se usa «una ventana corta
+  otro espacio le haya escrito de verdad. **Desde la ronda 4 ese segundo
+  espacio tiene que ser de OTRAS personas:** uno que comparte algún
+  miembro con el primero no confirma nada (una agencia, o cualquiera que
+  sea miembro de dos espacios que escriben a la misma marca, pulsaba sus
+  dos enlaces y la suprimía para todos). La política
+  `membership_public_optout` abre, solo mientras dura la llamada, las
+  membresías de esos espacios y de ninguno más. Lo que queda abierto es
+  el sabotaje de dos personas distintas en connivencia, y eso ya no es un
+  clic: queda en `outbound_optout_event` para verlo y deshacerlo. La base
+  guarda el motivo como código (`contact.opted_out_reason =
+  'unsubscribe_link'`, `outbound_policy.disabled_reason = 'manual'`) y la
+  pantalla lo traduce. No se usa «una ventana corta
   sin señal del remitente»: la única señal sería la IP o el navegador de
   sus sesiones, que la plataforma no guarda, y con una ventana el
   remitente por VPN volvía a suprimir a la marca, solo que más tarde.
-  **Para decidir (§8):** una persona que pide la baja a un solo creador
-  deja de recibir mensajes de ese creador, no de todos; la ley (CAN-SPAM,
-  RGPD) pide lo primero.
+  **Pendiente de la firma de Rasheed (§8, decisión 6):** una persona que
+  pide la baja a un solo creador deja de recibir mensajes de ese creador,
+  no de todos; la ley (CAN-SPAM, RGPD) pide lo primero.
 - **Cada correo** lleva `buildEmailFooter` (frase de baja con
   `optoutUrl` y la dirección postal de la política; sin dirección no hay
   pie y el correo no está listo) y `listUnsubscribeHeaders`.
@@ -485,9 +496,17 @@ que el despachador de VEN-10 tiene que usar, todo en
   ya está (`apps/worker/src/jobs/ventas/gmail-rebotes.ts`,
   `gmailBounceMailbox`), probado con un Gmail falso de la forma de su
   FakeGmail. **Falta al integrar VEN-9:** construir el `GmailApi` de cada
-  cuenta y registrar `createBouncesJob((c) => gmailBounceMailbox(api))`
-  en lugar de `gmailNoConfigurado`; hasta entonces cada cuenta sale como
-  «canal no configurado». `detectBounce` exige un remitente de rebote
+  cuenta (con su token del vault) en `bouncesMailboxFor`
+  (`outbound.bounces.ts`), que devuelva `gmailBounceMailbox(api)`, y poner
+  `BOUNCE_READING_CONNECTED` (`@mc/core/outreach/deliverability`) en
+  `true`. Hasta entonces cada cuenta sale como «canal no configurado» y
+  `/ventas/politica` dice en «Salud de hoy» que la lectura de rebotes
+  todavía no está conectada, para que «Ningún rebote» no se lea como
+  «todo bien». Una prueba del worker (`outbound-bounces.test.ts`) falla
+  en cuanto exista `packages/connectors/src/gmail.ts` y el job registrado
+  siga sin leer. La hora de cada aviso es la de llegada al buzón
+  (`internalDate` de Gmail), no su cabecera `Date`, que pone el remoto y
+  puede venir atrasada: con ella un aviso quedaba detrás del cursor. `detectBounce` exige un remitente de rebote
   (mailer-daemon, postmaster) también con DSN, y solo da «duro» con lo
   que dijo el servidor (Diagnostic-Code, una línea con código SMTP, o la
   frase del notificador de que el DOMINIO no existe), nunca por una frase
@@ -512,8 +531,12 @@ que el despachador de VEN-10 tiene que usar, todo en
   lista viene llena el job lo avisa en el registro.
 - **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
   workspace desde las 8:00 locales) dejan una `notification` por tipo y
-  día, en el idioma del espacio, con su propio enlace, y mandan UN
-  resumen por correo a todos los dueños por `SMTP_URL`. La tasa de
+  día, en el idioma del espacio, con su propio enlace y sus plurales
+  (`Intl.PluralRules`), y mandan UN resumen por correo al día (local) a
+  todos los dueños por `SMTP_URL`: sale en la primera corrida del día
+  que tenga algo que contar, y lo que aparezca más tarde se queda en la
+  campana y va en el resumen del día siguiente (también lo 'critical':
+  la campana ya lo enseña al momento). La tasa de
   rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
   nada» solo salta si había toques que tocaba enviar
   (`readAlertSignalCounts`, `@mc/db`). La cuenta caída dice cuál es y
@@ -528,11 +551,32 @@ que el despachador de VEN-10 tiene que usar, todo en
   además una cuenta de envío conectada y confirmación con los mensajes
   aprobados que salen hoy.
 - La demo (seed 0006) trae un rebote duro con su ficha marcada, uno
-  blando y la alerta del día de la cuenta de LinkedIn caída.
+  blando y la alerta del día de la cuenta de LinkedIn caída. Desde la
+  ronda 4 cuenta la historia al abrir `/ventas/politica`: cuatro correos
+  salieron en las últimas 24 horas (uno rebotó, así que «Rebotes» tiene
+  cifra) y la política de la demo es de 80 correos al día con 14 de
+  calentamiento, así que se pinta la rampa.
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
-tokens al azar, así que ningún enlace suyo se puede pulsar. Con el
-Postgres de Docker:
+tokens al azar, así que ningún enlace suyo se puede pulsar.
+
+*Sin nada instalado (modo demo, el de siempre).* Sin `.env.local` la web
+arranca con el Postgres embebido y el seed. Al terminar de sembrar
+fabrica un enlace de baja sobre el último correo enviado de la demo,
+como el despachador (`crearEnlaceDeDemo`, `@mc/db/demo-baja`), y lo
+imprime en el aviso del arranque:
+
+```bash
+cd platform
+PORT=3100 pnpm --filter @mc/web dev --port 3100
+# [db] Sin DATABASE_URL: Postgres embebido … Enlace de baja de prueba (…): http://localhost:3100/baja/<token> (a …)
+```
+
+Solo en modo embebido: con `DATABASE_URL` no se fabrica nada (sería un
+enlace de baja real). Cada arranque trae una base nueva y un enlace
+nuevo.
+
+*Con el Postgres de Docker:*
 
 ```bash
 cd platform
@@ -547,7 +591,7 @@ Abre el enlace sin sesión (o en una ventana privada), pulsa «Dejar de
 recibir mensajes» y la ficha queda de baja con sus toques cancelados. El
 comando se niega con Supabase (escribiría un enlace de baja real) y no
 sirve con la web en modo demo (el Postgres en memoria vive dentro del
-proceso de la web).
+proceso de la web: ahí el enlace lo imprime el arranque, arriba).
 
 ### 5.3 La cadencia recomendada para un creador
 
@@ -732,7 +776,14 @@ revisores técnico y de producto y el mismo umbral.
    al primer clic, descartando los clics que vengan de las IP de las
    sesiones del remitente— pide guardar la IP de cada sesión de cada
    miembro, que hoy no se guarda. Propuesta: quedarse con los dos
-   tiempos.
+   tiempos. **Estado (ronda 4): implementado así y pendiente de su
+   firma.** Un agente no puede cerrarla por él. Si la aprueba, el
+   «terminado cuando» de VEN-15 en `backlog.ts` pasa a «un clic da de
+   baja con quien envió, y en toda la plataforma cuando un segundo
+   creador lo confirma». Si no, se vuelve al alcance global del primer
+   clic, que la ronda 4 ya deja menos expuesto: el segundo espacio no
+   puede compartir miembros con el primero, y el mismo filtro serviría
+   para el primer clic.
 
 ## 9. Los errores de Chief que no vamos a repetir
 
