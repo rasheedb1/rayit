@@ -24,7 +24,7 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  channelStateKey, dumpTextColumns, EncryptedSecretStore, FakeGmail, FakeUnipile, findSecretInDump, signChannelRoute,
+  channelStateKey, dumpTextColumns, EncryptedSecretStore, FakeGmail, FakeUnipile, findSecretInDump, OutreachApiError, signChannelRoute,
   signChannelState, TokenCipher, UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
 import type { WorkspaceTx } from "@mc/db";
@@ -35,8 +35,9 @@ import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { MESSAGES } from "../messages";
 import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, retryAccountWebhooks, unipileWebhook } from "./aviso";
 import { channelSetup } from "./config";
+import { channelBanner } from "./banner";
 import { channelRows } from "./filas";
-import { GOOGLE_COOKIE, googleCallback, googleStart, unipileStart } from "./conexion";
+import { GOOGLE_COOKIE, googleCallback, googleStart, unipileFailure, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
 
 const NOW = new Date("2026-09-24T10:00:00Z");
@@ -126,7 +127,7 @@ describe("Gmail", () => {
   }, HEAVY_MS);
 
   it("un estado que no empezó en este navegador, uno alterado, sin code o de otro espacio no pasan, y vuelven a la pantalla con su aviso", async () => {
-    const back = (code: string) => `${ORIGIN}/ventas/canales?error=${code}`;
+    const back = (code: string) => `${ORIGIN}/ventas/canales?error=${code}&canal=email`;
     const { state, nonce } = await startGoogle();
     const canje = vi.spyOn(gmail, "exchangeCode");
     const otroNavegador = await googleCallback(callback({ code: "x", state }, "otro-nonce"), deps());
@@ -145,13 +146,13 @@ describe("Gmail", () => {
     const sinModify = new FakeGmail({ now: () => NOW, email: "otra@gmail.test", scopesGranted: ["https://www.googleapis.com/auth/gmail.send"] });
     const { state, nonce } = await startGoogle();
     const res = await googleCallback(callback({ code: "c", state }, nonce), deps({ google: () => sinModify }));
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=permisos`);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=permisos&canal=email`);
     expect((await accounts()).some((a) => a.lastError === "missing_scopes" && a.status === "disconnected")).toBe(true);
   }, HEAVY_MS);
 
   it("cancelar en Google vuelve con el aviso; sin estado no toca la base, con el estado de este navegador la pendiente dice «cancelaste»", async () => {
     const res = await googleCallback(callback({ error: "access_denied" }), deps());
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=cancelada`);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=cancelada&canal=email`);
     const { state, nonce } = await startGoogle();
     const pendientes = async () => (await accounts()).filter((a) => a.channel === "email" && a.status === "pending").length;
     const antes = await pendientes();
@@ -159,7 +160,7 @@ describe("Gmail", () => {
     await googleCallback(callback({ error: "access_denied", state }, "otro"), deps());
     expect(await pendientes()).toBe(antes);
     const ok = await googleCallback(callback({ error: "access_denied", state }, nonce), deps());
-    expect(ok.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=cancelada`);
+    expect(ok.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=cancelada&canal=email`);
     expect(await pendientes()).toBe(antes - 1);
     expect((await accounts()).some((a) => a.status === "disconnected" && a.lastError === "cancelled")).toBe(true);
   }, HEAVY_MS);
@@ -173,9 +174,9 @@ describe("sin llaves", () => {
       const env = { NODE_ENV: "test", TOKEN_ENCRYPTION_KEY: ENV.TOKEN_ENCRYPTION_KEY };
       const res = await googleStart(post("/api/oauth/google"), deps({ env, google: null }));
       expect(res.status).toBe(303);
-      expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=no_configurado`);
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=no_configurado&canal=email`);
       const li = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), deps({ env, unipile: null }));
-      expect(li.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=no_configurado`);
+      expect(li.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=no_configurado&canal=linkedin`);
       // El navegador no ve ni una variable; el servidor sí las registra.
       expect(MESSAGES.banners.errors.no_configurado).not.toMatch(/[A-Z]{3,}_[A-Z]+/);
       const logged = warn.mock.calls.map((c) => String(c[0])).join("\n");
@@ -308,7 +309,7 @@ describe("el webhook de Unipile", () => {
       VALUES ('${OTRO_ESPACIO}', '00000009-0000-4000-8000-00000000c0b1', 'linkedin', 'unipile', 'acc_de_otro', 'needs_reconnect') ON CONFLICT DO NOTHING`);
     for (const reconectar of [OTRO_ESPACIO, "00000009-0000-4000-8000-000000000000", "acc_de_otro", "00000005-0000-4000-8000-0000000ac001"]) {
       const res = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin", reconectar }), deps());
-      expect(res.headers.get("location"), reconectar).toBe(`${ORIGIN}/ventas/canales?error=vencida`);
+      expect(res.headers.get("location"), reconectar).toBe(`${ORIGIN}/ventas/canales?error=vencida&canal=linkedin`);
     }
     expect(unipile.hostedLinks.length).toBe(antes);
     expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(filas + 1);
@@ -345,6 +346,73 @@ describe("el webhook de Unipile", () => {
     const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_web", name: link.state }), deps());
     expect(await res.json()).toEqual({ ok: true, ignored: "wrong_provider" });
     expect((await accounts()).some((a) => a.lastError === "wrong_provider")).toBe(true);
+  }, HEAVY_MS);
+});
+
+describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
+  const texts = () => new Set<string>(Object.values(MESSAGES.banners.errors).flatMap((e) => (typeof e === "function" ? [e("Instagram"), e("LinkedIn")] : [e])));
+
+  it("si Unipile no da el enlace, la fila dice una frase nuestra con el nombre del servicio, nunca el texto del proveedor", async () => {
+    const spy = vi.spyOn(unipile, "createHostedAuthLink").mockRejectedValueOnce(new OutreachApiError({
+      provider: "unipile", endpoint: "POST /hosted/accounts/link", httpStatus: 401, code: "errors/invalid_credentials", kind: "config",
+      messageEs: "The provided API key is invalid",
+    }));
+    try {
+      const res = await unipileStart(post("/ventas/canales/conectar", { canal: "instagram_dm" }), deps());
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=proveedor&canal=instagram_dm`);
+    } finally {
+      spy.mockRestore();
+    }
+    // (Un Instagram vivo de una prueba anterior encabezaría la fila: se mira el intento más reciente, que no está vivo.)
+    const intento = (await accounts()).filter((a) => a.channel === "instagram_dm" && !["connected", "needs_reconnect", "error"].includes(a.status))[0]!;
+    expect([intento.status, intento.lastError]).toEqual(["disconnected", "provider_error"]);
+    const rows = channelRows([intento], channelSetup(ENV));
+    const ig = rows.find((r) => r.channel === "instagram_dm")!;
+    expect(ig.state).toBe("disconnected");
+    expect(ig.reason).toBe(MESSAGES.banners.errors.proveedor("Instagram"));
+    expect(texts().has(ig.reason!), "el motivo está en MESSAGES").toBe(true);
+    expect(JSON.stringify(await accounts())).not.toMatch(/API key|invalid/i);
+    // Arriba no se repite lo que ya dice la fila.
+    expect(channelBanner({ error: "proveedor", canal: "instagram_dm" }, rows).message).toBeNull();
+  }, HEAVY_MS);
+
+  it("un cuerpo que no es de formulario responde 400 sin tocar la base, no un 500", async () => {
+    const antes = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
+    const json = new Request(`${ORIGIN}/ventas/canales/conectar`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canal: "linkedin" }) });
+    const res = await unipileStart(json, deps());
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe(MESSAGES.routes.badForm);
+    expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(antes);
+  }, HEAVY_MS);
+
+  it("si la página de Unipile termina sin cuenta, la pendiente de ESE intento deja de decir «Conectando» y dice qué revisar", async () => {
+    const start = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), deps());
+    expect(start.status).toBe(303);
+    const link = unipile.hostedLinks.at(-1)!;
+    // La vuelta de fallo lleva el nonce del intento y el canal, a nuestra ruta; no a «?error=proveedor».
+    const failure = new URL(link.failureRedirectUrl);
+    expect(`${failure.origin}${failure.pathname}`).toBe(`${ORIGIN}/ventas/canales/conectar`);
+    expect(failure.searchParams.get("canal")).toBe("linkedin");
+    const filas = async () => channelRows(await accounts(), channelSetup(ENV));
+    const linkedin = async () => (await filas()).find((r) => r.channel === "linkedin")!;
+    // (Una LinkedIn viva de una prueba anterior encabezaría la fila: se mira la pendiente de este intento.)
+    const deEsteIntento = async () => (await accounts()).filter((a) => a.channel === "linkedin" && !["connected", "needs_reconnect", "error"].includes(a.status))[0]!;
+    expect((await deEsteIntento()).status).toBe("pending");
+
+    const res = await unipileFailure(new Request(failure), deps());
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=unipile_fallo&canal=linkedin`);
+    const fallida = await deEsteIntento();
+    expect([fallida.status, fallida.lastError]).toEqual(["disconnected", "auth_failed"]);
+    const sinVivas = channelRows([fallida], channelSetup(ENV)).find((r) => r.channel === "linkedin")!;
+    expect(sinVivas.state).toBe("disconnected");
+    expect(sinVivas.reason).toBe(MESSAGES.banners.errors.unipile_fallo("LinkedIn"));
+    expect(channelBanner({ error: "unipile_fallo", canal: "linkedin" }, [sinVivas]).message, "la fila ya lo dice").toBeNull();
+    expect((await linkedin()).state, "la fila nunca sigue «Conectando»").not.toBe("pending");
+    // Otra vez la misma vuelta, o una con un nonce inventado o sin canal: no toca nada y vuelve con el aviso.
+    const inventada = await unipileFailure(new Request(`${ORIGIN}/ventas/canales/conectar?fallo=${"z".repeat(64)}&canal=linkedin`), deps());
+    expect(inventada.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=unipile_fallo&canal=linkedin`);
+    const sinCanal = await unipileFailure(new Request(`${ORIGIN}/ventas/canales/conectar?fallo=x`), deps());
+    expect(sinCanal.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=unipile_fallo`);
   }, HEAVY_MS);
 });
 

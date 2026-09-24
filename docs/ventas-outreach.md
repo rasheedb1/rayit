@@ -624,6 +624,13 @@ dueño aquí:
 | Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
 | Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si su hilo es el de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041); lo demás se ignora sin guardar el cuerpo | VEN-9 |
 | Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
+| Sin `List-Unsubscribe`, sin pie de baja, sin rebotes asíncronos | VEN-15 completa | VEN-15 |
+| Un `owner_id` escrito a mano en el validador de similitud | Filtro por workspace | VEN-12 |
+| Ventana 09:00–16:59 en UTC en vez de la zona de la cadencia | Zona del workspace, una sola implementación en `core` | VEN-10 |
+| Métricas de LinkedIn siempre en cero por un valor de estado que viola el `CHECK` | Las vistas se prueban contra datos reales en el CI | VEN-16 |
+| Tres listas de variables de plantilla distintas y un renderizador muerto | Un solo renderizador en `core`, con pruebas | VEN-12 |
+| Envíos masivos en bucles del navegador con tres segundos de espera | Todo envío pasa por la cola del worker | VEN-10 |
+| Aprobación por WhatsApp que caduca a las cuatro horas sin escalar | Bandeja en la app, sin caducidad; el toque espera | VEN-14 |
 
 ### 9.1 Los avisos de Unipile: uno por cuenta, y el plan B
 
@@ -657,10 +664,24 @@ ruta firmada. El webhook, tras validar el secreto, resuelve
 que es una), y con eso abre la transacción del espacio. Pasar a ese
 modo es una migración (la función) y un cambio en `aviso.ts`; las
 cuentas existentes se migran borrando sus avisos por cuenta.
-| Sin `List-Unsubscribe`, sin pie de baja, sin rebotes asíncronos | VEN-15 completa | VEN-15 |
-| Un `owner_id` escrito a mano en el validador de similitud | Filtro por workspace | VEN-12 |
-| Ventana 09:00–16:59 en UTC en vez de la zona de la cadencia | Zona del workspace, una sola implementación en `core` | VEN-10 |
-| Métricas de LinkedIn siempre en cero por un valor de estado que viola el `CHECK` | Las vistas se prueban contra datos reales en el CI | VEN-16 |
-| Tres listas de variables de plantilla distintas y un renderizador muerto | Un solo renderizador en `core`, con pruebas | VEN-12 |
-| Envíos masivos en bucles del navegador con tres segundos de espera | Todo envío pasa por la cola del worker | VEN-10 |
-| Aprobación por WhatsApp que caduca a las cuatro horas sin escalar | Bandeja en la app, sin caducidad; el toque espera | VEN-14 |
+
+### 9.2 Lo que la pantalla de canales le dice al creador
+
+- **Nunca el texto de un proveedor.** En `last_error` solo van códigos
+  (`CHANNEL_ERROR_CODES` de `@mc/db`: `cancelled`, `provider_error`,
+  `auth_failed`…) o frases de `@mc/core` (`canales-textos.ts`, las
+  mismas para la web y el keepalive). La pantalla traduce los códigos en
+  `ventas/canales/messages.ts`, con el nombre del servicio («No pudimos
+  conectar con Instagram…»), nunca «el proveedor» ni «Unipile». El
+  `detail` de Unipile o el `message` de Google, en inglés, quedan en
+  `api_call_log.error_message`.
+- **Una pendiente por creador y canal.** Pulsar «Conectar» otra vez
+  borra el intento que quedó a medias, y la fila muestra siempre el
+  intento más reciente: nunca «Conectando» debajo de un «Cancelaste».
+- **La vuelta fallida de Unipile** (contraseña mala, código de
+  verificación sin resolver) pasa por `GET /ventas/canales/conectar
+  ?fallo=<nonce>&canal=…`: la pendiente de ese intento dice qué revisar
+  y deja de decir «Conectando» durante 24 horas.
+- **Sin llaves**, la fila dice que el canal no está disponible, sin
+  prometer un aviso que no existe; con los tres canales así, un solo
+  aviso arriba de la lista.

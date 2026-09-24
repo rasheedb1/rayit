@@ -12,6 +12,7 @@ vi.mock("./actions", () => ({
 
 import { ConectarBoton } from "./conectar-boton";
 import { Desconectar } from "./desconectar";
+import { FilaCanal } from "./fila-canal";
 import { Limites } from "./limites";
 import { MESSAGES } from "./messages";
 import { ReintentarAvisos } from "./reintentar-avisos";
@@ -71,6 +72,47 @@ describe("Desconectar", () => {
     expect(screen.getByText(MESSAGES.actions.disconnectConfirm).getAttribute("aria-live")).toBe("polite");
     fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.cancel }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));
+  });
+});
+
+describe("Desconectar dentro de su fila", () => {
+  it("al terminar, la fila anuncia qué cuenta se soltó (aria-live) y el foco va a su título, no al cuerpo", async () => {
+    const notice = MESSAGES.actions.disconnected("laura@cocina.test");
+    desconectar.mockResolvedValue({ notice });
+    render(
+      <ul>
+        <FilaCanal headingId="canal-email-titulo">
+          <h3 id="canal-email-titulo" tabIndex={-1}>Correo</h3>
+          <Desconectar accountId={ID} account="laura@cocina.test" />
+        </FilaCanal>
+      </ul>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnect }));
+    });
+    expect((desconectar.mock.calls[0]![0] as FormData).get("accountId")).toBe(ID);
+    const said = await screen.findByText(notice);
+    expect(said.closest("[aria-live='polite']")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Correo" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("si la cuenta ya estaba desconectada, lo dice en la fila", async () => {
+    desconectar.mockResolvedValue({ message: MESSAGES.actions.alreadyDisconnected });
+    render(
+      <ul>
+        <FilaCanal headingId="canal-linkedin-titulo">
+          <h3 id="canal-linkedin-titulo" tabIndex={-1}>LinkedIn</h3>
+          <Desconectar accountId={ID} account="Laura Gómez" />
+        </FilaCanal>
+      </ul>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("Laura Gómez") }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnect }));
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(MESSAGES.actions.alreadyDisconnected);
   });
 });
 
