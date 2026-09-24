@@ -6,19 +6,19 @@
  *   · la pantalla lee sus cuentas con el uso ya sumado y no ve las de otro
  *     workspace; los topes no pasan el techo del canal;
  *   · la web crea la fila pendiente y desconecta, pero no autentica;
- *   · el callback del proveedor (asWorker) conecta Gmail con una sola fila
- *     por concesión, completa la conexión de Unipile por su nonce (una
- *     sola vez), y no deja que un buzón conectado en otro espacio se
- *     conecte aquí;
+ *   · el callback del proveedor (las funciones de 0039, como mc_app)
+ *     conecta Gmail con una sola fila por concesión, completa la conexión
+ *     de Unipile por su nonce (una sola vez, solo en su espacio), y no
+ *     deja que un buzón conectado en otro espacio se conecte aquí;
  *   · una respuesta entra a outbound_message atada al toque de su hilo, y
  *     un webhook repetido no la duplica.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ChannelCapError, completeUnipileConnection, connectGmailAccount, createPendingChannelAccount, disconnectChannelAccount,
-  findLiveChannelAccount, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown, recordInboundMessage,
-  updateChannelAccountCaps,
+  ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
+  failPendingChannelAccount, findUnipileAccountForWebhook, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown,
+  recordInboundMessage, updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -80,72 +80,89 @@ describe('la pantalla (mc_app)', () => {
   });
 });
 
-describe('el callback del proveedor (asWorker)', () => {
+describe('el callback del proveedor, desde la web (0039)', () => {
   test('Unipile: la pendiente del nonce pasa al account_id de Unipile, una sola vez', async () => {
-    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_LAURA, nonce: NONCE }));
-    const input = {
-      workspaceId: WORKSPACE_LAURA, creatorId: CREATOR_LAURA, channel: 'linkedin' as const, nonce: NONCE,
-      account: { id: 'acc_li_nueva', provider: 'LINKEDIN', name: 'Laura Gómez', username: 'laura-gomez' },
-    };
-    const r = await t.db.asWorker((tx) => completeUnipileConnection(tx, input));
-    assert.equal(r.status, 'connected');
-    assert.equal((await t.db.asWorker((tx) => completeUnipileConnection(tx, input))).status, 'unknown_state', 'el nonce ya se usó');
-    const live = await t.db.asWorker((tx) => findLiveChannelAccount(tx, 'unipile', 'acc_li_nueva'));
-    assert.equal(live?.workspaceId, WORKSPACE_LAURA);
+    const pendingId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_LAURA, nonce: NONCE }));
+    const input = { channel: 'linkedin' as const, nonce: NONCE, providerAccountId: 'acc_li_nueva', displayName: 'Laura Gómez', secretRef: null, scopes: null };
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, input));
+    assert.deepEqual(r, { status: 'connected', accountId: pendingId, reconnected: false });
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, input))).status, 'unknown_state', 'el nonce ya se usó');
+    const live = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, pendingId, 'acc_li_nueva'));
+    assert.equal(live?.status, 'connected');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, pendingId, 'acc_otra')), null, 'id y account_id tienen que casar');
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => findUnipileAccountForWebhook(tx, pendingId, 'acc_li_nueva')), null, 'otro espacio no la ve');
   });
 
-  test('Unipile: la cuenta ya conectada en otro espacio no se conecta aquí; un Instagram donde se pidió LinkedIn tampoco', async () => {
+  test('sin la pendiente de ESE espacio no se conecta nada: el nonce de Laura no sirve en otro', async () => {
+    const n = 'q'.repeat(43);
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'instagram_dm', creatorId: CREATOR_LAURA, nonce: n }));
+    const r = await t.db.withWorkspace(WS_OTRO, (tx) => completeChannelConnection(tx, {
+      channel: 'instagram_dm', nonce: n, providerAccountId: 'acc_ig_ajena', displayName: null, secretRef: null, scopes: null,
+    }));
+    assert.equal(r.status, 'unknown_state');
+  });
+
+  test('la cuenta ya conectada en otro espacio no se conecta aquí y la pendiente dice por qué', async () => {
     const n2 = 'm'.repeat(43);
     await t.db.withWorkspace(WS_OTRO, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_OTRO, nonce: n2 }));
-    const taken = await t.db.asWorker((tx) => completeUnipileConnection(tx, {
-      workspaceId: WS_OTRO, creatorId: CREATOR_OTRO, channel: 'linkedin', nonce: n2,
-      account: { id: 'acc_li_nueva', provider: 'LINKEDIN', name: null, username: null },
+    const taken = await t.db.withWorkspace(WS_OTRO, (tx) => completeChannelConnection(tx, {
+      channel: 'linkedin', nonce: n2, providerAccountId: 'acc_li_nueva', displayName: null, secretRef: null, scopes: null,
     }));
     assert.equal(taken.status, 'taken');
-    const n3 = 'k'.repeat(43);
-    await t.db.withWorkspace(WS_OTRO, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_OTRO, nonce: n3 }));
-    const wrong = await t.db.asWorker((tx) => completeUnipileConnection(tx, {
-      workspaceId: WS_OTRO, creatorId: CREATOR_OTRO, channel: 'linkedin', nonce: n3,
-      account: { id: 'acc_ig_x', provider: 'INSTAGRAM', name: null, username: null },
-    }));
-    assert.equal(wrong.status, 'wrong_provider');
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => failPendingChannelAccount(tx, { channel: 'linkedin', nonce: n2, code: 'taken' })), true);
     const rows = await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx));
-    assert.deepEqual(rows.map((r) => [r.status, r.lastError]).sort(), [['disconnected', 'taken'], ['disconnected', 'wrong_provider']]);
+    assert.deepEqual(rows.map((r) => [r.status, r.lastError]), [['disconnected', 'taken']]);
   });
 
   test('Gmail: una fila por concesión; reconectar reutiliza la fila y la ref', async () => {
-    const refs: (string | null)[] = [];
-    const write = async (prev: string | null) => { refs.push(prev); return prev ?? 'enc:gmail:00000000-0000-4000-8000-00000000abcd'; };
+    const ref = 'enc:gmail:00000000-0000-4000-8000-00000000abcd';
     await t.admin(`INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
-      VALUES ('enc:gmail:00000000-0000-4000-8000-00000000abcd', '${WS_OTRO}', '\\x00', '\\x000000000000000000000000', '\\x00000000000000000000000000000000')`);
-    const input = { workspaceId: WS_OTRO, creatorId: CREATOR_OTRO, email: ' Otro@Gmail.test ', scopes: ['gmail.send', 'gmail.modify'] };
-    const first = await t.db.asWorker((tx) => connectGmailAccount(tx, input, write));
+      VALUES ('${ref}', '${WS_OTRO}', '\\x00', '\\x000000000000000000000000', '\\x00000000000000000000000000000000')`);
+    const conectar = (nonce: string, email: string) => t.db.withWorkspace(WS_OTRO, async (tx) => {
+      await createPendingChannelAccount(tx, { channel: 'email', creatorId: CREATOR_OTRO, nonce });
+      return completeChannelConnection(tx, { channel: 'email', nonce, providerAccountId: email, displayName: null, secretRef: ref, scopes: ['gmail.send', 'gmail.modify'] });
+    });
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => existingGmailSecretRef(tx, 'otro@gmail.test')), null);
+    const first = await conectar('g'.repeat(43), ' Otro@Gmail.test ');
     assert.equal(first.status, 'connected');
-    const second = await t.db.asWorker((tx) => connectGmailAccount(tx, input, write));
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => existingGmailSecretRef(tx, 'OTRO@gmail.test')), ref);
+    const second = await conectar('h'.repeat(43), 'otro@gmail.test');
     assert.ok(second.status === 'connected' && first.status === 'connected' && second.accountId === first.accountId && second.reconnected);
-    assert.deepEqual(refs, [null, 'enc:gmail:00000000-0000-4000-8000-00000000abcd']);
+    const gmails = (await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx))).filter((r) => r.channel === 'email');
+    assert.deepEqual(gmails.map((r) => [r.providerAccountId, r.status, r.scopes]), [['otro@gmail.test', 'connected', ['gmail.send', 'gmail.modify']]]);
     // El Gmail de Laura (vivo en su espacio) no se conecta en otro.
-    const taken = await t.db.asWorker((tx) => connectGmailAccount(tx, { ...input, email: 'laura@cocina-facil.test' }, write));
-    assert.equal(taken.status, 'taken');
+    assert.equal((await conectar('j'.repeat(43), 'laura@cocina-facil.test')).status, 'taken');
   });
 
-  test('markChannelAccountDown mueve una cuenta viva a needs_reconnect con el motivo', async () => {
-    const live = await t.db.asWorker((tx) => findLiveChannelAccount(tx, 'unipile', 'acc_li_nueva'));
-    assert.ok(live);
-    assert.equal(await t.db.asWorker((tx) => markChannelAccountDown(tx, live, 'La sesión de LinkedIn expiró.')), true);
-    const again = await t.db.asWorker((tx) => findLiveChannelAccount(tx, 'unipile', 'acc_li_nueva'));
+  test('un Gmail sin token no pasa (22023)', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_OTRO, (tx) => completeChannelConnection(tx, {
+        channel: 'email', nonce: 'z'.repeat(43), providerAccountId: 'x@y.test', displayName: null, secretRef: null, scopes: null,
+      })),
+      (e: { code?: string }) => e.code === '22023',
+    );
+  });
+
+  test('markChannelAccountDown mueve una cuenta viva a needs_reconnect con el motivo y avisa una vez', async () => {
+    const [li] = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx))).filter((r) => r.providerAccountId === 'acc_li_nueva');
+    assert.ok(li);
+    const notice = { titleEs: 'Vuelve a conectar tu LinkedIn', bodyEs: 'La sesión de LinkedIn expiró.' };
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, 'La sesión de LinkedIn expiró.', notice)), true);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, 'otra vez', notice)), false, 'no vuelve a avisar');
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountDown(tx, li.id, 'ajena')), false, 'otro espacio no la toca');
+    const again = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, li.id, 'acc_li_nueva'));
     assert.equal(again?.status, 'needs_reconnect');
+    const avisos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`SELECT 1 FROM notification WHERE entity_id = $1`, [li.id]));
+    assert.equal(avisos.rows.length, 1);
   });
 
   test('una respuesta entra atada al toque de su hilo, y el webhook repetido no la duplica', async () => {
-    const account = await t.db.asWorker((tx) => findLiveChannelAccount(tx, 'gmail_oauth', 'laura@cocina-facil.test'));
-    assert.ok(account);
     const msg = {
-      account, threadRef: 'gmail-thread-demo-0002', providerMessageId: 'gmail-demo-0002-r1', body: 'Me interesa, hablemos.',
-      fromAddress: 'sofia@vitale.co', occurredAt: new Date(),
+      account: { id: GMAIL_LAURA, channel: 'email' as const }, threadRef: 'gmail-thread-demo-0002', providerMessageId: 'gmail-demo-0002-r1',
+      body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date(),
     };
-    assert.equal(await t.db.asWorker((tx) => recordInboundMessage(tx, msg)), true);
-    assert.equal(await t.db.asWorker((tx) => recordInboundMessage(tx, msg)), false);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg)), true);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg)), false);
     const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ touch_id: string; intent: string | null; direction: string }>(
       `SELECT touch_id, intent, direction FROM outbound_message WHERE provider_message_id = 'gmail-demo-0002-r1'`,
     ));

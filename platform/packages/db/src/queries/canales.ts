@@ -1,31 +1,35 @@
 /**
  * Canales de outreach · las cuentas conectadas y su uso (VEN-9). Dueño: Rasheed.
  *
- * Dos lados, con dos tipos de transacción:
+ * Todo corre en un WorkspaceTx (mc_app, RLS del espacio de la transacción):
  *
- *   WorkspaceTx (la pantalla /ventas/canales, como mc_app)
+ *   La pantalla /ventas/canales
  *     listChannelAccounts        una fila por cuenta, con su uso de hoy y de
  *                                la semana ya sumado (la pantalla no suma)
  *     getChannelPolicyCaps       lo que dice outbound_policy cuando la cuenta
  *                                no tiene tope propio
  *     updateChannelAccountCaps   los topes de la persona, nunca por encima
  *                                del techo del canal (CHANNEL_CAP_LIMITS)
- *     createPendingChannelAccount  la fila 'pending' antes de mandar a la
- *                                persona a Unipile
+ *     createPendingChannelAccount  la fila 'pending' al empezar a conectar
  *     disconnectChannelAccount   desconectar es de la persona
  *
- *   WorkerTx (los callbacks de los proveedores, con asWorker)
- *     connectGmailAccount        el callback del OAuth de Google
- *     completeUnipileConnection  el aviso de cuenta creada de Unipile
- *     markChannelAccountDown     el proveedor dice que la cuenta cayó
+ *   Los callbacks de los proveedores (rutas de la web, tras verificar el
+ *   estado firmado y hablar con el proveedor)
+ *     completeChannelConnection  pending → connected, por outreach_channel_connect (0039)
+ *     failPendingChannelAccount  la conexión no se completó: el motivo, a la fila
+ *     existingGmailSecretRef     la ref del token al reconectar un Gmail
+ *     findUnipileAccountForWebhook  la cuenta de un aviso de Unipile
+ *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (0039)
  *     recordInboundMessage       una respuesta nueva, a outbound_message
  *
- * Por qué dos lados: a un estado autenticado (connected, needs_reconnect,
- * error) solo llega quien habló con el proveedor, y el disparador
+ * A un estado autenticado (connected, needs_reconnect, error) solo llega
+ * quien habló con el proveedor: el disparador
  * outreach_channel_account_worker_columns (0037 §2.1) lo exige con 42501.
- * La web crea la fila 'pending' o desconecta; nada más.
+ * La web escribe esos estados solo por las dos funciones de 0039, que no
+ * ven más que el espacio de la transacción y piden la fila 'pending' del
+ * nonce. El worker (keepalive) escribe directo con asWorker.
  */
-import { assertWorkspaceId, isUuid, type WorkerTx, type WorkspaceTx } from '../client.ts';
+import { isUuid, type WorkspaceTx } from '../client.ts';
 import {
   CHANNEL_CAP_LIMITS, LIVE_CHANNEL_ACCOUNT_STATUSES, type CHANNEL_ACCOUNT_STATUSES, type CHANNEL_PROVIDERS,
 } from '../schema/outreach.ts';
@@ -198,181 +202,132 @@ export async function updateChannelAccountCaps(
   return res.rows.length === 1;
 }
 
+/** Los canales que se conectan desde /ventas/canales. WhatsApp es de fase 2. */
+export type ConnectableChannel = Exclude<OutreachChannel, 'whatsapp'>;
+
+const PROVIDER_FOR_CHANNEL: Record<ConnectableChannel, ChannelProvider> = { email: 'gmail_oauth', linkedin: 'unipile', instagram_dm: 'unipile' };
+const NONCE_RE = /^[A-Za-z0-9_-]{32,64}$/;
+
 /**
- * La fila 'pending' de una conexión de Unipile, con 'pending:<nonce>' como
+ * La fila 'pending' del inicio de una conexión, con 'pending:<nonce>' como
  * provider_account_id: no ocupa ningún buzón (el índice global solo mira
- * los estados autenticados) y hace de un solo uso al nonce.
+ * los estados autenticados) y hace de un solo uso al nonce, que viaja en
+ * el estado firmado y vuelve con el proveedor. Sirve para los tres
+ * canales: el callback no conecta nada que no haya empezado aquí.
  */
 export async function createPendingChannelAccount(
   tx: WorkspaceTx,
-  input: { channel: Exclude<OutreachChannel, 'email'>; creatorId: string; nonce: string },
+  input: { channel: ConnectableChannel; creatorId: string; nonce: string },
 ): Promise<string> {
   if (!isUuid(input.creatorId)) throw new TypeError('createPendingChannelAccount: creatorId no es un uuid.');
-  if (!/^[A-Za-z0-9_-]{32,64}$/.test(input.nonce)) throw new TypeError('createPendingChannelAccount: nonce inválido.');
+  if (!NONCE_RE.test(input.nonce)) throw new TypeError('createPendingChannelAccount: nonce inválido.');
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO outreach_channel_account (workspace_id, creator_id, channel, provider, provider_account_id, status)
-     VALUES (current_workspace_id(), $1, $2, 'unipile', $3, 'pending')
+     VALUES (current_workspace_id(), $1, $2, $3, $4, 'pending')
      RETURNING id`,
-    [input.creatorId, input.channel, `${PENDING_ACCOUNT_PREFIX}${input.nonce}`],
+    [input.creatorId, input.channel, PROVIDER_FOR_CHANNEL[input.channel], `${PENDING_ACCOUNT_PREFIX}${input.nonce}`],
   );
   return rows[0]!.id;
 }
 
 // ---------------------------------------------------------------------
-// Lo que escribe el callback del proveedor (WorkerTx)
+// El callback del proveedor, desde la web (0039)
 // ---------------------------------------------------------------------
-// RLS no aplica en un WorkerTx: cada sentencia filtra por workspace_id a
-// mano, y el workspace sale SIEMPRE del estado firmado o de la fila, nunca
-// de lo que diga la petición.
+// La web es mc_app y no puede escribir un estado autenticado (el
+// disparador de 0037 §2.1). Lo hace por las dos operaciones con nombre
+// de 0039, que solo ven el workspace de la transacción. Quien llama ya
+// verificó el estado firmado y habló con el proveedor con su llave.
 
 export type ConnectResult =
   | { status: 'connected'; accountId: string; reconnected: boolean }
   | { status: 'taken' }
-  | { status: 'unknown_state' }
-  | { status: 'wrong_provider'; accountId: string };
+  | { status: 'unknown_state' };
 
-/** ¿Está ese buzón autenticado en OTRO workspace? El índice global lo impediría con 23505. */
-async function takenElsewhere(tx: WorkerTx, workspaceId: string, provider: ChannelProvider, providerAccountId: string): Promise<boolean> {
-  const { rows } = await tx.query(
-    `SELECT 1 FROM outreach_channel_account
-      WHERE provider = $1 AND provider_account_id = $2 AND workspace_id <> $3 AND status = ANY($4::text[])`,
-    [provider, providerAccountId, workspaceId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
-  );
-  return rows.length > 0;
-}
-
-export interface GmailConnection {
-  workspaceId: string;
-  creatorId: string;
-  /** El buzón que DEVOLVIÓ Google (userinfo), no uno que escribió la persona. */
-  email: string;
-  /** Los alcances concedidos, con el nombre corto (gmail.send…). */
-  scopes: string[];
-}
-
-/**
- * El callback del OAuth de Google. Una fila por concesión: si el buzón ya
- * tenía fila en el workspace (reconectar), se reutilizan la fila y su
- * secret_ref; `writeSecret` recibe la ref y guarda el token cifrado ANTES
- * de que la fila la nombre (la clave ajena lo exige). Todo en la misma
- * transacción: si algo falla, no queda ni el token ni la fila.
- */
-export async function connectGmailAccount(
-  tx: WorkerTx,
-  input: GmailConnection,
-  writeSecret: (secretRef: string | null) => Promise<string>,
-): Promise<ConnectResult> {
-  assertWorkspaceId(input.workspaceId);
-  const email = input.email.trim().toLowerCase();
-  if (await takenElsewhere(tx, input.workspaceId, 'gmail_oauth', email)) return { status: 'taken' };
-  const { rows: existing } = await tx.query<{ id: string; secret_ref: string | null; status: ChannelAccountStatus }>(
-    `SELECT id, secret_ref, status FROM outreach_channel_account
-      WHERE workspace_id = $1 AND provider = 'gmail_oauth' AND provider_account_id = $2
-      FOR UPDATE`,
-    [input.workspaceId, email],
-  );
-  const prev = existing[0];
-  const secretRef = await writeSecret(prev?.secret_ref?.startsWith('enc:gmail:') ? prev.secret_ref : null);
-  const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO outreach_channel_account
-       (workspace_id, creator_id, channel, provider, provider_account_id, display_name, secret_ref, status, scopes,
-        warmup_started_at, last_ok_at)
-     VALUES ($1, $2, 'email', 'gmail_oauth', $3, $3, $4, 'connected', $5, now(), now())
-     ON CONFLICT (workspace_id, provider, provider_account_id) DO UPDATE
-       SET status = 'connected', creator_id = EXCLUDED.creator_id, secret_ref = EXCLUDED.secret_ref, scopes = EXCLUDED.scopes,
-           display_name = EXCLUDED.display_name, last_ok_at = now(), last_error = NULL, last_error_at = NULL,
-           warmup_started_at = coalesce(outreach_channel_account.warmup_started_at, now())
-     RETURNING id`,
-    [input.workspaceId, input.creatorId, email, secretRef, input.scopes],
-  );
-  return { status: 'connected', accountId: rows[0]!.id, reconnected: prev !== undefined };
-}
-
-export interface UnipileConnection {
-  workspaceId: string;
-  creatorId: string;
-  channel: Exclude<OutreachChannel, 'email'>;
+export interface ChannelConnection {
+  channel: ConnectableChannel;
+  /** El nonce del estado firmado: casa con la fila 'pending'. */
   nonce: string;
-  /** Lo que DEVOLVIÓ Unipile al preguntarle por la cuenta del aviso. */
-  account: { id: string; provider: string; name: string | null; username: string | null };
+  /** Lo que DEVOLVIÓ el proveedor: el correo de userinfo, o el account_id de Unipile. */
+  providerAccountId: string;
+  displayName: string | null;
+  /** Solo Gmail: la ref del token ya guardado en el vault (connection_secret). */
+  secretRef: string | null;
+  /** Solo Gmail: los alcances concedidos, con su nombre corto. */
+  scopes: string[] | null;
 }
 
-const PROVIDER_OF_CHANNEL: Record<UnipileConnection['channel'], string> = { linkedin: 'LINKEDIN', instagram_dm: 'INSTAGRAM', whatsapp: 'WHATSAPP' };
+/**
+ * Pasa la fila 'pending' del nonce a 'connected'. Si el espacio ya tenía
+ * fila para esa cuenta (reconectar), revive esa y borra la pendiente.
+ * 'taken' si la cuenta vive en otro espacio (no se escribe nada), y
+ * 'unknown_state' si no hay pendiente para ese nonce (ya se usó, o nunca
+ * se empezó aquí).
+ */
+export async function completeChannelConnection(tx: WorkspaceTx, c: ChannelConnection): Promise<ConnectResult> {
+  const providerAccountId = c.channel === 'email' ? c.providerAccountId.trim().toLowerCase() : c.providerAccountId.trim();
+  const { rows } = await tx.query<{ result: 'connected' | 'taken' | 'unknown_state'; account_id: string | null; reconnected: boolean }>(
+    `SELECT result, account_id, reconnected FROM outreach_channel_connect($1, $2, $3, $4, $5, $6::text[])`,
+    [c.channel, c.nonce, providerAccountId, c.displayName, c.secretRef, c.scopes],
+  );
+  const r = rows[0]!;
+  if (r.result === 'connected') return { status: 'connected', accountId: r.account_id!, reconnected: r.reconnected };
+  return { status: r.result };
+}
 
 /**
- * El aviso de cuenta creada de Unipile. Busca la fila 'pending' de ese
- * nonce en ese workspace (sin ella, el aviso no corresponde a ninguna
- * conexión iniciada aquí y no se escribe nada) y la pasa al account_id
- * que devolvió Unipile. Si el workspace ya tenía fila para esa cuenta
- * (una reconexión), revive esa y borra la pendiente.
+ * La conexión que empezó con ese nonce no se completó: la pendiente queda
+ * 'disconnected' con el motivo (CHANNEL_ERROR_CODES), para que la
+ * pantalla lo diga. mc_app puede: ni el estado ni last_error son de los
+ * candados de 0037.
  */
-export async function completeUnipileConnection(tx: WorkerTx, input: UnipileConnection): Promise<ConnectResult> {
-  assertWorkspaceId(input.workspaceId);
-  const { rows: pend } = await tx.query<{ id: string }>(
-    `SELECT id FROM outreach_channel_account
-      WHERE workspace_id = $1 AND provider = 'unipile' AND channel = $2 AND provider_account_id = $3 AND status = 'pending'
-      FOR UPDATE`,
-    [input.workspaceId, input.channel, `${PENDING_ACCOUNT_PREFIX}${input.nonce}`],
+export async function failPendingChannelAccount(
+  tx: WorkspaceTx,
+  input: { channel: ConnectableChannel; nonce: string; code: string },
+): Promise<boolean> {
+  if (!NONCE_RE.test(input.nonce)) return false;
+  const res = await tx.query(
+    `UPDATE outreach_channel_account SET status = 'disconnected', last_error = $3, last_error_at = now()
+      WHERE provider = $1 AND channel = $2 AND provider_account_id = $4 AND status = 'pending' RETURNING id`,
+    [PROVIDER_FOR_CHANNEL[input.channel], input.channel, input.code.slice(0, 500), `${PENDING_ACCOUNT_PREFIX}${input.nonce}`],
   );
-  const pending = pend[0];
-  if (!pending) return { status: 'unknown_state' };
-  if (input.account.provider !== PROVIDER_OF_CHANNEL[input.channel]) {
-    await tx.query(
-      `UPDATE outreach_channel_account SET status = 'disconnected', last_error = $2, last_error_at = now() WHERE id = $1 AND workspace_id = $3`,
-      [pending.id, CHANNEL_ERROR_CODES.wrongProvider, input.workspaceId],
-    );
-    return { status: 'wrong_provider', accountId: pending.id };
-  }
-  if (await takenElsewhere(tx, input.workspaceId, 'unipile', input.account.id)) {
-    await tx.query(
-      `UPDATE outreach_channel_account SET status = 'disconnected', last_error = $2, last_error_at = now() WHERE id = $1 AND workspace_id = $3`,
-      [pending.id, CHANNEL_ERROR_CODES.taken, input.workspaceId],
-    );
-    return { status: 'taken' };
-  }
-  const displayName = input.account.name ?? input.account.username;
-  const { rows: prev } = await tx.query<{ id: string }>(
-    `SELECT id FROM outreach_channel_account WHERE workspace_id = $1 AND provider = 'unipile' AND provider_account_id = $2 FOR UPDATE`,
-    [input.workspaceId, input.account.id],
+  return res.rows.length === 1;
+}
+
+/**
+ * La ref del token de un Gmail que el espacio ya tuvo, para reescribir el
+ * token nuevo en la MISMA ref al reconectar: una fila por concesión.
+ */
+export async function existingGmailSecretRef(tx: WorkspaceTx, email: string): Promise<string | null> {
+  const { rows } = await tx.query<{ secret_ref: string | null }>(
+    `SELECT secret_ref FROM outreach_channel_account WHERE provider = 'gmail_oauth' AND provider_account_id = $1`,
+    [email.trim().toLowerCase()],
   );
-  if (prev[0]) {
-    await tx.query(`DELETE FROM outreach_channel_account WHERE id = $1 AND workspace_id = $2`, [pending.id, input.workspaceId]);
-    await tx.query(
-      `UPDATE outreach_channel_account
-          SET status = 'connected', creator_id = $3, display_name = coalesce($4, display_name),
-              last_ok_at = now(), last_error = NULL, last_error_at = NULL,
-              warmup_started_at = coalesce(warmup_started_at, now())
-        WHERE id = $1 AND workspace_id = $2`,
-      [prev[0].id, input.workspaceId, input.creatorId, displayName],
-    );
-    return { status: 'connected', accountId: prev[0].id, reconnected: true };
-  }
-  await tx.query(
-    `UPDATE outreach_channel_account
-        SET provider_account_id = $3, status = 'connected', display_name = $4, last_ok_at = now(),
-            last_error = NULL, last_error_at = NULL, warmup_started_at = now()
-      WHERE id = $1 AND workspace_id = $2`,
-    [pending.id, input.workspaceId, input.account.id, displayName],
-  );
-  return { status: 'connected', accountId: pending.id, reconnected: false };
+  const ref = rows[0]?.secret_ref ?? null;
+  return ref?.startsWith('enc:gmail:') ? ref : null;
 }
 
 export interface LiveChannelAccount {
   id: string;
-  workspaceId: string;
   channel: OutreachChannel;
   status: ChannelAccountStatus;
+  displayName: string | null;
 }
 
-/** La cuenta viva de ese buzón en toda la plataforma (hay una como mucho: outreach_channel_account_live_idx). */
-export async function findLiveChannelAccount(tx: WorkerTx, provider: ChannelProvider, providerAccountId: string): Promise<LiveChannelAccount | null> {
-  const { rows } = await tx.query<{ id: string; workspace_id: string; channel: OutreachChannel; status: ChannelAccountStatus }>(
-    `SELECT id, workspace_id, channel, status FROM outreach_channel_account
-      WHERE provider = $1 AND provider_account_id = $2 AND status = ANY($3::text[])`,
-    [provider, providerAccountId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
+/**
+ * La cuenta de Unipile de un aviso: la fila de ESE id en el espacio de la
+ * transacción, y solo si su account_id es el que trae el aviso y sigue
+ * viva. El id sale de la ruta firmada del webhook; el account_id, del
+ * cuerpo. Los dos tienen que casar.
+ */
+export async function findUnipileAccountForWebhook(tx: WorkspaceTx, accountId: string, providerAccountId: string): Promise<LiveChannelAccount | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<{ id: string; channel: OutreachChannel; status: ChannelAccountStatus; display_name: string | null }>(
+    `SELECT id, channel, status, display_name FROM outreach_channel_account
+      WHERE id = $1 AND provider = 'unipile' AND provider_account_id = $2 AND status = ANY($3::text[])`,
+    [accountId, providerAccountId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
   );
   const r = rows[0];
-  return r ? { id: r.id, workspaceId: r.workspace_id, channel: r.channel, status: r.status } : null;
+  return r ? { id: r.id, channel: r.channel, status: r.status, displayName: r.display_name } : null;
 }
 
 /** El aviso que ve la persona en la campana cuando su cuenta cae. Las frases las pone quien llama (@mc/db no escribe frases). */
@@ -382,35 +337,26 @@ export interface ChannelDownNotice {
 }
 
 /**
- * El proveedor dice que la cuenta cayó: needs_reconnect, con el motivo en
- * español, y un aviso 'connection_error' que lleva a /ventas/canales. Solo
- * mueve cuentas conectadas o en error: una que ya estaba por reconectar no
+ * El proveedor dice que la cuenta cayó: needs_reconnect, con el motivo, y
+ * un aviso 'connection_error' que lleva a /ventas/canales. Solo mueve
+ * cuentas conectadas o en error: una que ya estaba por reconectar no
  * vuelve a avisar.
  */
-export async function markChannelAccountDown(
-  tx: WorkerTx,
-  account: { id: string; workspaceId: string },
-  reason: string,
-  notice?: ChannelDownNotice,
-): Promise<boolean> {
-  const res = await tx.query(
-    `UPDATE outreach_channel_account SET status = 'needs_reconnect', last_error = $3, last_error_at = now()
-      WHERE id = $1 AND workspace_id = $2 AND status IN ('connected', 'error') RETURNING id`,
-    [account.id, account.workspaceId, reason.slice(0, 500)],
-  );
-  const moved = res.rows.length === 1;
+export async function markChannelAccountDown(tx: WorkspaceTx, accountId: string, reason: string, notice?: ChannelDownNotice): Promise<boolean> {
+  const { rows } = await tx.query<{ moved: boolean }>(`SELECT outreach_channel_mark_down($1, $2) AS moved`, [accountId, reason]);
+  const moved = rows[0]?.moved === true;
   if (moved && notice) {
     await tx.query(
       `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-       VALUES ($1, 'connection_error', 'critical', $2, $3, 'outreach_channel_account', $4, '/ventas/canales')`,
-      [account.workspaceId, notice.titleEs, notice.bodyEs, account.id],
+       VALUES (current_workspace_id(), 'connection_error', 'critical', $1, $2, 'outreach_channel_account', $3, '/ventas/canales')`,
+      [notice.titleEs, notice.bodyEs, accountId],
     );
   }
   return moved;
 }
 
 export interface InboundMessage {
-  account: LiveChannelAccount;
+  account: Pick<LiveChannelAccount, 'id' | 'channel'>;
   /** El chat de Unipile o el hilo de Gmail (outbound_touch.thread_ref). */
   threadRef: string;
   providerMessageId: string;
@@ -427,24 +373,24 @@ export interface InboundMessage {
  * negocio. Un webhook repetido no crea otra (índice único por
  * provider_message_id). Devuelve si la insertó.
  */
-export async function recordInboundMessage(tx: WorkerTx, m: InboundMessage): Promise<boolean> {
+export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): Promise<boolean> {
   const { rows } = await tx.query<{ id: string }>(
     `WITH toque AS (
        SELECT t.id, t.enrollment_id, t.contact_id, e.deal_id
          FROM outbound_touch t
-         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id AND e.workspace_id = t.workspace_id
-        WHERE t.workspace_id = $1 AND t.thread_ref = $2 AND t.channel = $3 AND t.status = 'sent'
+         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
+        WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent'
         ORDER BY t.sent_at DESC NULLS LAST
         LIMIT 1
      )
      INSERT INTO outbound_message
        (workspace_id, channel_account_id, touch_id, enrollment_id, contact_id, deal_id, direction, channel,
         thread_ref, provider_message_id, from_address, body, occurred_at)
-     SELECT $1, $4, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $3, $2, $5, $6, $7, $8
+     SELECT current_workspace_id(), $3, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $2, $1, $4, $5, $6, $7
        FROM (SELECT 1) uno LEFT JOIN toque ON true
      ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id`,
-    [m.account.workspaceId, m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt],
+    [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt],
   );
   return rows.length === 1;
 }
