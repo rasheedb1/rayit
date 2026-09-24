@@ -187,7 +187,7 @@ function AccountLine({
             <h3
               id={heading.id}
               tabIndex={-1}
-              className="w-fit rounded-sm text-sm font-semibold outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="w-fit rounded-sm text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ink"
             >
               {heading.text}
             </h3>
