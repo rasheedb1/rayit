@@ -50,6 +50,8 @@ export interface SendContext {
   attempt: number;
   /** El intento cuyo resultado no se supo (0051 §6): se comprueba antes de reenviar. */
   unconfirmedAttempt: number | null;
+  /** (r5) El día en que ese intento reservó su plaza (0052 §2): vuelve ahí si el proveedor dice que no salió. */
+  unconfirmedCapsOn: string | null;
   subject: string | null;
   body: string;
   recipient: string | null;
@@ -96,6 +98,7 @@ interface SendContextRow {
   order_in_day: number | null;
   attempt_count: number;
   unconfirmed_attempt: number | null;
+  unconfirmed_caps_on: string | null;
   subject: string | null;
   body: string | null;
   recipient: string | null;
@@ -141,6 +144,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     stepOrderInDay: r.order_in_day === null ? null : int(fn, '$.order_in_day', r.order_in_day),
     attempt: int(fn, '$.attempt_count', r.attempt_count),
     unconfirmedAttempt: r.unconfirmed_attempt === null ? null : int(fn, '$.unconfirmed_attempt', r.unconfirmed_attempt),
+    unconfirmedCapsOn: textOrNull(fn, '$.unconfirmed_caps_on', r.unconfirmed_caps_on),
     subject: textOrNull(fn, '$.subject', r.subject),
     body: textOrNull(fn, '$.body', r.body) ?? '',
     recipient: textOrNull(fn, '$.recipient', r.recipient),
@@ -197,7 +201,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
   const r = (
     await tx.query<SendContextRow>(
       `SELECT t.id, t.workspace_id, t.status, t.claimed_at, t.scheduled_for, t.caps_reserved_on::text AS caps_reserved_on, t.channel, st.step_type, st.day_offset, st.order_in_day,
-              t.attempt_count, t.unconfirmed_attempt, t.subject, t.body,
+              t.attempt_count, t.unconfirmed_attempt, t.unconfirmed_caps_on::text AS unconfirmed_caps_on, t.subject, t.body,
               t.recipient_address::text AS recipient, t.enrollment_id, t.contact_id, t.deal_id,
               c.full_name AS contact_name, co.name AS company_name,
               e.status AS enrollment_status, e.resume_at, s.status AS sequence_status,
@@ -344,7 +348,13 @@ async function release(tx: WorkerSql, ctx: SendContext): Promise<void> {
  * Gmail sin llaves de la plataforma esperan días sin acercarse a los
  * cinco intentos.
  */
-export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: SendDecision, now: Date): Promise<void> {
+export async function applyDecision(
+  tx: WorkerSql,
+  ctx: SendContext,
+  decision: SendDecision,
+  now: Date,
+  opts: { keepCaps?: boolean } = {},
+): Promise<void> {
   if (decision.kind === 'send' || decision.kind === 'gone') return;
   let moved = false;
   switch (decision.kind) {
@@ -386,7 +396,28 @@ export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: S
       moved = await failTouch(tx, ctx.touchId, decision.reason, now);
       break;
   }
-  if (moved) await release(tx, ctx);
+  // Un intento que pudo salir (el último ambiguo, retenido) conserva su plaza.
+  if (moved && !opts.keepCaps) await release(tx, ctx);
+}
+
+/**
+ * (r5) El proveedor dijo que el intento ambiguo anterior NO salió: su
+ * plaza (reservada el día unconfirmed_caps_on) vuelve, y la columna se
+ * borra en la misma transacción para no devolverla dos veces. Sin esto,
+ * cada ambigüedad que no salió gastaba dos plazas del tope: la del
+ * intento ambiguo y la del reclamo que sí envía. Devuelve si devolvió.
+ */
+export async function releaseUnconfirmedCaps(tx: WorkerSql, ctx: SendContext): Promise<boolean> {
+  if (!ctx.unconfirmedCapsOn || !ctx.account) return false;
+  const r = await tx.query(
+    `UPDATE outbound_touch SET unconfirmed_caps_on = NULL WHERE id = $1::uuid AND unconfirmed_caps_on IS NOT NULL RETURNING id`,
+    [ctx.touchId],
+  );
+  if (r.rows.length === 0) return false;
+  await releaseCaps(tx, {
+    workspaceId: ctx.workspaceId, accountId: ctx.account.id, channel: ctx.channel, stepType: ctx.stepType, reservedOn: ctx.unconfirmedCapsOn,
+  });
+  return true;
 }
 
 /**
@@ -440,7 +471,7 @@ export async function recordSent(
   const done = await tx.query(
     `UPDATE outbound_touch
         SET status = 'sent', sent_at = $2::timestamptz, provider_message_id = $3, thread_ref = $4, message_id_rfc = $5,
-            next_retry_at = NULL, unconfirmed_attempt = NULL
+            next_retry_at = NULL, unconfirmed_attempt = NULL, unconfirmed_caps_on = NULL
       WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
     [ctx.touchId, now.toISOString(), proof.providerMessageId, proof.threadRef, proof.messageIdRfc],
   );
@@ -538,16 +569,20 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
     const next = nextRetryAt(now, ctx.attempt, ctx.touchId, { timeZone: ctx.timeZone, window: ctx.window }, MAX_SEND_ATTEMPTS);
     if (!next) {
       if (failure.ambiguous) {
-        await applyDecision(tx, ctx, { kind: 'hold', reason: HOLD_REASONS.unconfirmed(ctx.attempt) }, now);
+        // Pudo salir: la plaza queda gastada, como la de cualquier ambiguo.
+        await applyDecision(tx, ctx, { kind: 'hold', reason: HOLD_REASONS.unconfirmed(ctx.attempt) }, now, { keepCaps: true });
         return 'held';
       }
       if (await failTouch(tx, ctx.touchId, 'max_attempts', now)) await release(tx, ctx);
       return 'failed';
     }
+    // (r5) Un ambiguo anota también el día de su plaza (unconfirmed_caps_on):
+    // si el proveedor dice después que no salió, vuelve a ese día.
     const r = await tx.query(
-      `UPDATE outbound_touch SET status = 'scheduled', next_retry_at = $2::timestamptz, unconfirmed_attempt = $3::int
+      `UPDATE outbound_touch SET status = 'scheduled', next_retry_at = $2::timestamptz, unconfirmed_attempt = $3::int,
+              unconfirmed_caps_on = $4::date
         WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
-      [ctx.touchId, next.toISOString(), failure.ambiguous ? ctx.attempt : null],
+      [ctx.touchId, next.toISOString(), failure.ambiguous ? ctx.attempt : null, failure.ambiguous ? ctx.capsReservedOn : null],
     );
     if (r.rows.length === 0) return 'gone';
     if (!failure.ambiguous) await release(tx, ctx);

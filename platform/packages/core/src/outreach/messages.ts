@@ -71,6 +71,7 @@ export const FAILURE_REASON_TEXTS: Record<NoticeLang, Record<string, string>> = 
     secret_missing: 'no encontramos el permiso guardado de la cuenta',
     note_too_long: `la nota de la invitación de LinkedIn pasa de ${LINKEDIN_INVITE_NOTE_MAX} caracteres`,
     email_invalid: 'el correo de la ficha rebotó antes',
+    company_cap: 'la marca ya recibió todos los mensajes que permite tu política',
   },
   en: {
     account_unavailable: 'the channel account is not connected',
@@ -85,6 +86,7 @@ export const FAILURE_REASON_TEXTS: Record<NoticeLang, Record<string, string>> = 
     secret_missing: "we couldn't find the account's stored permission",
     note_too_long: `the LinkedIn invitation note is longer than ${LINKEDIN_INVITE_NOTE_MAX} characters`,
     email_invalid: "the contact's email bounced before",
+    company_cap: 'the brand already received every message your policy allows',
   },
 };
 
@@ -107,9 +109,12 @@ export function failureReason(lang: NoticeLang, code: string): string {
 //   reply_without_thread       respuesta en el hilo a un correo que no salió
 //   unconfirmed_attempt:<n>    no se pudo comprobar si el intento n salió
 //   note_too_long:<n>          la nota de la invitación de LinkedIn tiene n caracteres
+//   needs_review               (r5) espera la aprobación de una persona: la
+//                              revisión humana de la política, o una secuencia
+//                              en modo 'review'
 
 export const HOLD_CODES = [
-  'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long',
+  'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long', 'needs_review',
 ] as const;
 export type HoldCode = (typeof HOLD_CODES)[number];
 
@@ -142,6 +147,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     unconfirmed_attempt: (d) =>
       `no pudimos comprobar si el intento ${d} salió; mira tu carpeta de enviados antes de aprobarlo, para no mandarlo dos veces`,
     note_too_long: (d) => `la nota de la invitación de LinkedIn tiene ${d} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}`,
+    needs_review: () => 'espera tu aprobación antes de salir (la revisión humana está encendida)',
   },
   en: {
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
@@ -151,6 +157,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     unconfirmed_attempt: (d) =>
       `we couldn't confirm whether attempt ${d} went out; check your sent folder before approving it, so it isn't sent twice`,
     note_too_long: (d) => `the LinkedIn invitation note has ${d} characters and the limit is ${LINKEDIN_INVITE_NOTE_MAX}`,
+    needs_review: () => 'it waits for your approval before going out (human review is on)',
   },
 };
 

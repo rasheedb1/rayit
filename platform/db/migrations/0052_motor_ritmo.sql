@@ -17,7 +17,10 @@
 --   2. outbound_touch.unconfirmed_caps_on: el día en que el intento
 --      AMBIGUO reservó su plaza. Si el proveedor dice después que ese
 --      intento no salió, la plaza vuelve a ese día (sin esto, cada
---      ambigüedad que no salió gastaba dos plazas del tope).
+--      ambigüedad que no salió gastaba dos plazas del tope). Y una
+--      persona que aprueba en la ficha un mensaje retenido por un intento
+--      sin comprobar puede borrar la marca de ese intento (antes solo el
+--      despachador: el retenido volvía a retenerse para siempre).
 --
 -- Idempotente (CREATE OR REPLACE, IF NOT EXISTS), como las anteriores.
 -- =====================================================================
@@ -44,8 +47,10 @@
 --
 -- Los fija la plataforma, no la persona: son el cuidado de la cuenta del
 -- creador frente al proveedor. El reclamo del despachador (claimDueTouches)
--- los aplica ANTES de reservar la plaza del día: lo que viola el ritmo se
--- mueve al primer momento en que cabe, sin gastar intento ni plaza.
+-- los aplica después de los topes del día y de la semana (lo que ya no cabe
+-- hoy va directo al siguiente día hábil): lo que cabe hoy pero viola el
+-- ritmo se mueve al primer momento en que cabe, sin gastar intento, y la
+-- plaza que se acababa de reservar se deshace.
 CREATE OR REPLACE VIEW outreach_channel_account_limits WITH (security_invoker = on) AS
 WITH base AS (
   SELECT a.id, a.workspace_id, a.channel, a.daily_cap, a.weekly_cap,
@@ -118,6 +123,17 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   IF outreach_is_dispatcher() THEN
+    RETURN NEW;
+  END IF;
+  -- Una persona aprueba (o descarta) un mensaje retenido porque no se supo
+  -- si un intento anterior salió (releaseHeldTouch): dice que no salió, y
+  -- la marca del intento se borra. Solo borrarla, solo desde 'held', y sin
+  -- tocar las demás columnas del despachador.
+  IF TG_OP = 'UPDATE' AND OLD.status = 'held' AND NEW.status IN ('scheduled', 'canceled')
+     AND NEW.unconfirmed_attempt IS NULL AND NEW.unconfirmed_caps_on IS NULL
+     AND NEW.send_started_at IS NOT DISTINCT FROM OLD.send_started_at
+     AND NEW.replies_checked_at IS NOT DISTINCT FROM OLD.replies_checked_at
+     AND NEW.caps_reserved_on IS NOT DISTINCT FROM OLD.caps_reserved_on THEN
     RETURN NEW;
   END IF;
   IF (TG_OP = 'INSERT' AND (NEW.send_started_at IS NOT NULL OR NEW.unconfirmed_attempt IS NOT NULL

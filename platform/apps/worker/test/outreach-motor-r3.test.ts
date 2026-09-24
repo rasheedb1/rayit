@@ -209,10 +209,21 @@ test('el tope del día es la curva de VEN-15 sobre el límite que rige de VEN-9,
   assert.equal(esperado, 20, 'la meseta de la primera semana');
   await enroll(w, bogota('2026-09-23', '07:00'));
   const fake = fakeChannels();
+  // (r5) La primera hora, el ritmo de la cuenta: un cuarto de su tope que
+  // rige (0052 §1), 60 / 4 = 15. Lo demás espera su turno sin gastar plaza.
+  const porHora = await scalar<number>(
+    `SELECT effective_hourly AS v FROM outreach_channel_account_limits WHERE channel_account_id = $1`, [w.gmail],
+  );
+  assert.equal(porHora, 15);
   const r = await runDispatch(motor, deps(w, fake, () => clock));
-  assert.equal(r.sent.length, esperado, 'el despachador envía lo mismo que la pantalla dice');
-  assert.equal(r.claim.rescheduled.length, 25 - esperado);
-  assert.ok(r.claim.rescheduled.every((x) => x.cap === 'account_day' && localDay(x.until) === '2026-09-25'));
+  assert.equal(r.sent.length, porHora, 'la primera hora, el ritmo de la cuenta');
+  assert.equal(r.claim.paced.length, 25 - porHora);
+  assert.ok(r.claim.paced.every((x) => x.reason === 'account_hour'));
+  // Una hora después, lo que queda del día: la curva de calentamiento manda.
+  const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-24', '13:05')));
+  assert.equal(r.sent.length + r2.sent.length, esperado, 'en el día, el despachador envía lo mismo que la pantalla dice');
+  assert.equal(r2.claim.rescheduled.length, 25 - esperado);
+  assert.ok(r2.claim.rescheduled.every((x) => x.cap === 'account_day' && localDay(x.until) === '2026-09-25'));
 
   // Y día a día, la misma curva que pinta /ventas/politica (warmupCurve).
   for (const p of warmupCurve(60, 14)) {

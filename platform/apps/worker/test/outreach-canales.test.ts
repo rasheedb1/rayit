@@ -85,7 +85,7 @@ const CLAIMED_AT = new Date('2026-09-24T14:58:00Z');
 function ctx(over: Partial<SendContext> = {}): SendContext {
   return {
     touchId: 't', workspaceId: 'ws', status: 'processing', claimedAt: CLAIMED_AT, scheduledFor: CLAIMED_AT, capsReservedOn: null, channel: 'email', stepType: 'email',
-    attempt: 1, stepDayOffset: 0, stepOrderInDay: 0, unconfirmedAttempt: null,
+    attempt: 1, stepDayOffset: 0, stepOrderInDay: 0, unconfirmedAttempt: null, unconfirmedCapsOn: null,
     subject: 'Hola', body: 'Hola, Sofía.', recipient: 'sofia@vitale.test', enrollmentId: 'e', contactId: 'c', dealId: null,
     contactName: 'Sofía', companyName: 'Vitalé', enrollmentStatus: 'active', resumeAt: null, sequenceStatus: 'active',
     optedOut: false, enabled: true, postalAddress: 'Calle 93 # 11-26, Bogotá', requireOptoutLink: true, workspaceName: 'Laura', locale: 'es-CO',

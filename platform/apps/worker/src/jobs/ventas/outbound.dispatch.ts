@@ -31,7 +31,7 @@ import { assertNoPlaceholders, PlaceholderError } from '@mc/core';
 import { buildEmailFooter, footerTextsFor, oneClickUnsubscribeUrl, optoutUrl } from '@mc/core/outreach/deliverability';
 import {
   applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, emptyClaimReport, HOLD_REASONS, loadSendContext,
-  markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch, type ClaimReport,
+  markSendStarted, recordFailure, recordSent, releaseUnattempted, releaseUnconfirmedCaps, rescueZombies, type ClaimedTouch, type ClaimReport,
   type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
 import { PostgresOutreachCallLog } from '@mc/connectors';
@@ -201,6 +201,11 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
         report.confirmed.push(ctx.touchId);
         deps.logger?.info('intento ambiguo confirmado: no se reenvía', { touchId: ctx.touchId, attempt: ctx.unconfirmedAttempt });
         return;
+      }
+      if (check.found === false) {
+        // (r5) No salió: la plaza que ese intento conservaba vuelve a su día,
+        // y este envío gasta solo la que su reclamo reservó.
+        await releaseUnconfirmedCaps(tx, ctx);
       }
       if (check.found === 'unknown') {
         const reason = HOLD_REASONS.unconfirmed(ctx.unconfirmedAttempt);

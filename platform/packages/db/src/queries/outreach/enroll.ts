@@ -38,9 +38,23 @@ export interface EnrollInput {
  */
 export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address';
 
+/**
+ * (r5) Lo que la secuencia no va a poder cumplir con la política del
+ * workspace, dicho al enrolar (la pantalla que enrola lo muestra):
+ *   · over_company_cap: tiene más pasos que el despachador envía que
+ *     max_touches_per_company; los de más se cancelan al reclamar
+ *     (company_cap);
+ *   · steps_closer_than_min_gap: dos pasos enviables están a menos días
+ *     que min_days_between_touches; el segundo se corre hasta cumplirlos.
+ */
+export type EnrollWarning =
+  | { code: 'over_company_cap'; steps: number; cap: number }
+  | { code: 'steps_closer_than_min_gap'; minDays: number };
+
 export interface EnrollResult {
   enrolled: Array<{ enrollmentId: string; contactId: string; scheduled: number; held: number; drafts: number; skipped: number }>;
   skipped: Array<{ contactId: string; reason: EnrollSkipReason }>;
+  warnings: EnrollWarning[];
 }
 
 interface SequenceRow {
@@ -52,6 +66,9 @@ interface SequenceRow {
   sender: string;
   w_start: string | null;
   w_end: string | null;
+  human_review: boolean;
+  max_touches: number;
+  min_days: number;
 }
 
 interface StepRow {
@@ -77,6 +94,8 @@ interface ContactRow {
   opted_out: boolean;
   suppressed: boolean;
   email_invalid: boolean;
+  /** (r5) Pidió la baja a ESTE workspace (un enrolamiento suyo en opted_out), aunque la ficha sea pública. */
+  ws_opted_out: boolean;
   company: string;
 }
 
@@ -93,8 +112,11 @@ interface ContactRow {
  *   · la plantilla deja huecos sin rellenar → held (placeholders:<huecos>);
  *   · (r4) la nota de una invitación de LinkedIn pasa de 300 caracteres →
  *     held (note_too_long:<n>): no se corta en el adaptador;
- *   · si no → scheduled. El texto de una plantilla fija lo escribió la
- *     persona: es un mensaje aprobado.
+ *   · (r5) la política pide revisión humana (require_human_review, el
+ *     valor por defecto) o la secuencia es 'review' (0037 §3.1: «la
+ *     máquina propone y la persona aprueba») → held (needs_review): sale
+ *     cuando una persona lo aprueba en la ficha (releaseHeldTouch);
+ *   · si no (una secuencia 'auto' con la revisión apagada) → scheduled.
  */
 export function initialTouchState(input: {
   stepType: string;
@@ -106,6 +128,8 @@ export function initialTouchState(input: {
   emailInvalid?: boolean;
   subject: string | null;
   body: string | null;
+  /** (r5) outbound_policy.require_human_review. Por defecto, sí (como la política). */
+  requireHumanReview?: boolean;
 }): { status: 'draft' | 'scheduled' | 'held' | 'skipped'; heldReason?: string; blockedReason?: string } {
   if (!(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) return { status: 'draft' };
   if (!input.hasAddress) return { status: 'skipped', blockedReason: 'no_address' };
@@ -120,7 +144,27 @@ export function initialTouchState(input: {
     const over = inviteNoteOverflow(input.body);
     if (over !== null) return { status: 'held', heldReason: formatHoldReason({ code: 'note_too_long', detail: over }) };
   }
+  if (input.requireHumanReview !== false || input.automationMode === 'review') {
+    return { status: 'held', heldReason: formatHoldReason({ code: 'needs_review' }) };
+  }
   return { status: 'scheduled' };
+}
+
+/** (r5) Lo que la secuencia no podrá cumplir con la política (puro, ver EnrollWarning). */
+export function sequenceWarnings(
+  steps: ReadonlyArray<{ stepType: string; dayOffset: number }>,
+  policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number },
+): EnrollWarning[] {
+  const sendable = steps.filter((s) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(s.stepType));
+  const out: EnrollWarning[] = [];
+  if (sendable.length > policy.maxTouchesPerCompany) {
+    out.push({ code: 'over_company_cap', steps: sendable.length, cap: policy.maxTouchesPerCompany });
+  }
+  const days = sendable.map((s) => s.dayOffset).sort((a, b) => a - b);
+  if (policy.minDaysBetweenTouches > 0 && days.some((d, i) => i > 0 && d - days[i - 1]! < policy.minDaysBetweenTouches)) {
+    out.push({ code: 'steps_closer_than_min_gap', minDays: policy.minDaysBetweenTouches });
+  }
+  return out;
 }
 
 /**
@@ -142,7 +186,9 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
   const seq = (
     await tx.query<SequenceRow>(
       `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz, w.name AS sender,
-              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              coalesce(p.require_human_review, true) AS human_review,
+              coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days
          FROM outbound_sequence s
          JOIN workspace w ON w.id = s.workspace_id
          LEFT JOIN outbound_policy p ON p.workspace_id = s.workspace_id
@@ -170,7 +216,9 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
   const contacts = (
     await tx.query<ContactRow>(
       `SELECT c.id, c.company_id, c.full_name, c.role_title, c.email::text AS email, c.linkedin_url, c.instagram_handle,
-              c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company
+              c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company,
+              EXISTS (SELECT 1 FROM outbound_enrollment e
+                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out
          FROM contact c JOIN company co ON co.id = c.company_id
         WHERE c.id = ANY($1::uuid[]) AND contact_visible_to(c.id, $2::uuid)`,
       [[...input.contactIds], seq.workspace_id],
@@ -178,14 +226,19 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
   ).rows;
   const byId = new Map(contacts.map((c) => [c.id, c]));
 
-  const result: EnrollResult = { enrolled: [], skipped: [] };
+  const result: EnrollResult = {
+    enrolled: [], skipped: [],
+    warnings: sequenceWarnings(steps.map((s) => ({ stepType: s.step_type, dayOffset: s.day_offset })), {
+      maxTouchesPerCompany: seq.max_touches, minDaysBetweenTouches: seq.min_days,
+    }),
+  };
   for (const contactId of new Set(input.contactIds)) {
     const c = byId.get(contactId);
     if (!c) {
       result.skipped.push({ contactId, reason: 'not_found' });
       continue;
     }
-    if (c.opted_out || c.suppressed) {
+    if (c.opted_out || c.suppressed || c.ws_opted_out) {
       result.skipped.push({ contactId, reason: 'opted_out' });
       continue;
     }
@@ -201,6 +254,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
       const state = initialTouchState({
         stepType: s.step_type, generateWithAi: s.generate_with_ai, automationMode: seq.automation_mode,
         hasAddress: recipientFor(s.channel, c) !== null, channel: s.channel, emailInvalid: c.email_invalid === true, subject, body,
+        requireHumanReview: seq.human_review,
       });
       return { step: s, subject, body, state };
     });

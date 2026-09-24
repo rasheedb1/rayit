@@ -25,12 +25,13 @@
  *        secuencias → cancelado (company_cap), y la cadencia avanza;
  *      · (r5) el último mensaje a la marca fue hace menos de
  *        min_days_between_touches → cuando se cumplan, en la ventana;
- *      · (r5) la cuenta ya sacó su ritmo por hora, o su último envío fue
- *        hace menos de su separación mínima (0052 §1) → cuando quepa;
  *      · un tope lleno (el de la cuenta según outreach_channel_account_limits
  *        con la curva de calentamiento de VEN-15, el semanal o el diario
  *        de correos del workspace) → al siguiente día hábil DEL WORKSPACE
  *        (el de los contadores, r5), y los pasos de detrás se corren con él;
+ *      · (r5) la cuenta ya sacó su ritmo por hora, o su último envío fue
+ *        hace menos de su separación mínima (0052 §1) → cuando quepa, sin
+ *        quedarse con la plaza del día;
  *   4. pasa los que quedan a processing con UPDATE … WHERE status =
  *      'scheduled' … RETURNING: hora del reclamo, intento, dirección y
  *      cuenta; la plaza del tope queda reservada;
@@ -469,20 +470,6 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       report.paced.push({ touchId: c.id, until: gapUntil, reason: 'company_gap' });
       continue;
     }
-    // (r5) El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
-    const pace = paces.get(acct.id) ?? (await accountPace(tx, acct.id, now));
-    paces.set(acct.id, pace);
-    const limits = {
-      hourlyCap: int('claimDueTouches', 'effective_hourly', acct.effective_hourly),
-      minGapSeconds: int('claimDueTouches', 'min_gap_seconds', acct.min_gap_seconds),
-    };
-    const paceUntil = paceSlot(now, pace, limits, { timeZone: c.timeZone, window: c.window, seed: c.id });
-    if (paceUntil) {
-      await moveScheduled(tx, c, paceUntil);
-      report.paced.push({ touchId: c.id, until: paceUntil, reason: pace.lastHour >= limits.hourlyCap ? 'account_hour' : 'account_gap' });
-      continue;
-    }
-
     const dayCap = accountDailyCap({
       effectiveDaily: int('claimDueTouches', 'effective_daily', acct.effective_daily),
       warmupStartedAt: toDate(acct.warmup_started_at), warmupDays: c.warmupDays, now, timeZone: c.workspaceTimeZone,
@@ -509,6 +496,23 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       const until = nextWindowSlot(nextBusinessSlot(now, c.workspaceTimeZone, c.window), c.timeZone, c.window, { seed: c.id });
       await moveScheduled(tx, c, until);
       report.rescheduled.push({ touchId: c.id, until, cap });
+      continue;
+    }
+    // (r5) El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
+    // Después de los topes del día y la semana: lo que ya no cabe hoy va
+    // directo a mañana; lo que cabe hoy pero no ahora, espera su turno sin
+    // quedarse con la plaza.
+    const pace = paces.get(acct.id) ?? (await accountPace(tx, acct.id, now));
+    paces.set(acct.id, pace);
+    const limits = {
+      hourlyCap: int('claimDueTouches', 'effective_hourly', acct.effective_hourly),
+      minGapSeconds: int('claimDueTouches', 'min_gap_seconds', acct.min_gap_seconds),
+    };
+    const paceUntil = paceSlot(now, pace, limits, { timeZone: c.timeZone, window: c.window, seed: c.id });
+    if (paceUntil) {
+      await tx.query('ROLLBACK TO SAVEPOINT motor_cap');
+      await moveScheduled(tx, c, paceUntil);
+      report.paced.push({ touchId: c.id, until: paceUntil, reason: pace.lastHour >= limits.hourlyCap ? 'account_hour' : 'account_gap' });
       continue;
     }
     await tx.query('RELEASE SAVEPOINT motor_cap');
