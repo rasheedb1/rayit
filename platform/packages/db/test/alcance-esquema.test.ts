@@ -9,7 +9,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { assertScopeAllows, ScopeError, scopeFilter, type WorkspaceTx } from '../src/index.ts';
+import { assertScopeAllows, assertUnscoped, getScopeKinds, ScopeError, scopeFilter, type WorkspaceTx } from '../src/index.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 import { CAMPAIGN_SOFIA, CREATOR_LAURA, CREATOR_SOFIA, EMPRESA_SOFIA, sembrarAlcance, USER_LAURA, USER_MIEMBRO } from './alcance.ts';
 
@@ -226,5 +226,13 @@ describe('scopeFilter() y assertScopeAllows()', { timeout: 600_000 }, () => {
       ScopeError,
       'sin creador no cae en el alcance por creador',
     );
+  });
+
+  test('getScopeKinds dice qué tipos de alcance tiene quien mira (para explicar un vacío); assertUnscoped deja pasar solo sin alcance', async () => {
+    assert.deepEqual(await duena((tx) => getScopeKinds(tx)), []);
+    assert.deepEqual(await miembro((tx) => getScopeKinds(tx)), ['creator']);
+    assert.deepEqual(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getScopeKinds(tx)), [], 'sin identidad (demo), sin alcance');
+    await duena((tx) => assertUnscoped(tx));
+    await assert.rejects(miembro((tx) => assertUnscoped(tx)), ScopeError);
   });
 });

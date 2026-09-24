@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { can, proyectarGastos } from "@mc/core";
+import { getScopeKinds } from "@mc/db";
 import { getCashflowInputs, getExpenseMonth } from "@mc/db/queries/finanzas";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { ChartCard } from "@/components/ui/chart-card";
@@ -72,7 +73,10 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
   await requireModuleAccess("finanzas");
   await requirePagePermission("finanzas.gasto.ver");
   const params = await searchParams;
-  const { mes, entradas } = await withWorkspace(async (tx) => ({
+  const { mes, entradas, alcance } = await withWorkspace(async (tx) => ({
+    // ACC-6: con cualquier alcance, los gastos (que son de todo el espacio)
+    // no se ven; la pantalla lo dice en vez de pintar «no hay gastos».
+    alcance: await getScopeKinds(tx),
     mes: await getExpenseMonth(tx, params.mes ?? null),
     // La MISMA consulta que /finanzas/flujo: la proyección de abajo y la
     // columna «Gastos» del flujo no pueden decir dos cifras distintas.
@@ -80,6 +84,16 @@ export default async function GastosPage({ searchParams }: { searchParams: Promi
   }));
   const f = formatterFor(await getCurrentWorkspace());
   const permisos = await permisosDeLaSesion();
+
+  if (alcance.length > 0) {
+    return (
+      <>
+        <PageHeader eyebrow={T.header.eyebrow} title={T.header.title} description={T.header.description} />
+        <ModuleTabs active="/finanzas/gastos" permisos={permisos} />
+        <EmptyState title={MESSAGES.alcance.gastosTitulo} description={MESSAGES.alcance.gastosDescripcion} />
+      </>
+    );
+  }
 
   const gastos = mes.rows.map((r) => gastoVista(r, f, { sinProveedor: T.tabla.sinProveedor, sinDescripcion: T.tabla.sinDescripcion }));
   const categorias = categoriasVista(mes.byCategory, mes.currency, f);

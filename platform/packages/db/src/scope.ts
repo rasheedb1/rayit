@@ -135,3 +135,19 @@ export async function assertUnscoped(tx: WorkspaceTx): Promise<void> {
   const { rows } = await tx.query<{ ok: boolean }>(`SELECT ${UNSCOPED_ONLY} AS ok`);
   if (rows[0]?.ok !== true) throw new ScopeError();
 }
+
+/**
+ * Los tipos de alcance que tiene la persona de la transacción en el
+ * workspace fijado (vacío = sin alcance: ve todo). Es para que una
+ * pantalla EXPLIQUE una ausencia —«los gastos son de todo el espacio y
+ * no están en tu alcance»— en vez de pintar un vacío mudo; el filtro lo
+ * siguen poniendo las consultas.
+ */
+export async function getScopeKinds(tx: WorkspaceTx): Promise<ScopeKind[]> {
+  const { rows } = await tx.query<{ scope_type: ScopeKind }>(
+    `SELECT DISTINCT s.scope_type FROM membership_scope s
+      WHERE s.workspace_id = current_workspace_id() AND s.user_id = current_user_id()
+      ORDER BY 1`,
+  );
+  return rows.map((r) => r.scope_type);
+}

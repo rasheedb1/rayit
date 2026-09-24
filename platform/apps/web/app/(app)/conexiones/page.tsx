@@ -213,6 +213,9 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
   const service = getCuentasService();
   const f = formatterFor(await getCurrentWorkspace());
   const rows = await service.listar();
+  // ACC-6: con alcance por marca o campaña no se ve ninguna cuenta; se dice, no se pinta «todavía no hay».
+  const alcance = await service.alcance();
+  const sinCuentasPorAlcance = alcance.includes("company") || alcance.includes("campaign");
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {
     const a = availability.find((x) => x.platformId === p)!;
@@ -268,7 +271,13 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
           rows={rows}
           rowKey={(r) => r.id}
           caption="Cuentas del workspace con su última lectura pública y su estado"
-          emptyState={<EmptyState title="Todavía no hay cuentas" description="Agrega la primera con su @ en el formulario de arriba. Desde ese momento guardamos su historial diario." />}
+          emptyState={
+            sinCuentasPorAlcance ? (
+              <EmptyState title={MESSAGES.alcance.title} description={MESSAGES.alcance.description} />
+            ) : (
+              <EmptyState title="Todavía no hay cuentas" description="Agrega la primera con su @ en el formulario de arriba. Desde ese momento guardamos su historial diario." />
+            )
+          }
         />
       </section>
 

@@ -24,7 +24,7 @@ import {
 } from "@mc/connectors";
 import {
   addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  recordAccountSnapshot, recordConsent, ScopeError, type AccountRow, type WorkspaceTx,
+  getScopeKinds, recordAccountSnapshot, recordConsent, ScopeError, type AccountRow, type ScopeKind, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
 import { notifyOwner, type OwnerNotice } from "./owner-notice";
@@ -263,6 +263,11 @@ export function createCuentasService(deps: CuentasDeps) {
 
     listar(): Promise<AccountRow[]> {
       return deps.withWorkspace((tx) => listAccounts(tx));
+    },
+
+    /** Los tipos de alcance de quien mira (ACC-6), para que la pantalla explique una lista vacía por alcance. */
+    alcance(): Promise<ScopeKind[]> {
+      return deps.withWorkspace((tx) => getScopeKinds(tx));
     },
   };
 }

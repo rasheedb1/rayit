@@ -13,6 +13,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const consultas = vi.hoisted(() => ({ getExpenseMonth: vi.fn(), getCashflowInputs: vi.fn() }));
 const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
 vi.mock("@mc/db/queries/finanzas", () => consultas);
+// ACC-6: los tipos de alcance de quien mira; por defecto ninguno (hoy, todos).
+const alcance = vi.hoisted(() => ({ kinds: [] as string[] }));
+vi.mock("@mc/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@mc/db")>()),
+  getScopeKinds: async () => alcance.kinds,
+}));
 // El rol se inyecta sustituyendo lib/permisos/sesion, como en flujo/page.test.tsx.
 vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/permisos/sesion")>();
@@ -88,6 +94,7 @@ beforeEach(() => {
   consultas.getExpenseMonth.mockReset();
   consultas.getCashflowInputs.mockReset();
   sesion.permisos = null; // Dueño: todo
+  alcance.kinds = [];
 });
 
 describe("los KPIs del mes", () => {
@@ -191,5 +198,15 @@ describe("el permiso manda (ACC-1, ACC-5)", () => {
     await pintar({ rows: [UN_GASTO] });
     const tabs = screen.getByRole("navigation", { name: "Vistas de Finanzas" });
     expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe("Gastos");
+  });
+});
+
+describe("alcance (ACC-6)", () => {
+  it("con cualquier alcance, los gastos (que son de todo el espacio) no se ven y la pantalla lo dice con una frase", async () => {
+    alcance.kinds = ["creator"];
+    await pintar({ rows: [UN_GASTO], totals: { total: "380000.00", recurring: "380000.00", deductible: "380000.00", count: 1, recurringCount: 1, deductibleCount: 1 } });
+    expect(screen.getByText(MESSAGES.alcance.gastosTitulo)).toBeInTheDocument();
+    expect(screen.queryByTestId("panel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("grafico")).not.toBeInTheDocument();
   });
 });
