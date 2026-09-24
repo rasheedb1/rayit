@@ -452,7 +452,25 @@ que el despachador de VEN-10 tiene que usar, todo en
   espacio que escribe, si ya estaba de baja y si quien la abre es
   miembro del espacio que la envió. Ese último caso no ofrece el botón
   (la regla de §5.2). El clic va por `public_optout`. El POST de un clic
-  de Gmail va a `/baja/<token>/un-clic`.
+  de Gmail va a `/baja/<token>/un-clic`, que acepta el cuerpo en
+  `multipart/form-data` (el SHOULD de la RFC 8058 §3.1) y en
+  `application/x-www-form-urlencoded` (lo que manda Gmail).
+- **La baja por enlace va en dos tiempos (ronda 3, 0038 §8).** Sin
+  sesión nadie sabe quién pulsa: el propio creador, en una ventana
+  privada o con un `curl` a `/un-clic`, suprimía a la marca para toda la
+  plataforma. Ahora el clic vale YA para el espacio que envió ese correo
+  (`outbound_workspace_optout`: no le vuelve a escribir por ningún canal,
+  se cancela lo suyo y se marca su ficha si es propia) y pasa a
+  `contact_suppression` (toda la plataforma, como decía 0007) cuando la
+  confirma un SEGUNDO espacio: la misma dirección pulsa el enlace de un
+  correo de otro creador. Eso el remitente no lo puede fabricar sin que
+  otro espacio le haya escrito de verdad. No se usa «una ventana corta
+  sin señal del remitente»: la única señal sería la IP o el navegador de
+  sus sesiones, que la plataforma no guarda, y con una ventana el
+  remitente por VPN volvía a suprimir a la marca, solo que más tarde.
+  **Para decidir (§8):** una persona que pide la baja a un solo creador
+  deja de recibir mensajes de ese creador, no de todos; la ley (CAN-SPAM,
+  RGPD) pide lo primero.
 - **Cada correo** lleva `buildEmailFooter` (frase de baja con
   `optoutUrl` y la dirección postal de la política; sin dirección no hay
   pie y el correo no está listo) y `listUnsubscribeHeaders`.
@@ -469,26 +487,48 @@ que el despachador de VEN-10 tiene que usar, todo en
   FakeGmail. **Falta al integrar VEN-9:** construir el `GmailApi` de cada
   cuenta y registrar `createBouncesJob((c) => gmailBounceMailbox(api))`
   en lugar de `gmailNoConfigurado`; hasta entonces cada cuenta sale como
-  «canal no configurado». `detectBounce` solo da «duro» con un DSN o con
-  lo que dijo el servidor (Diagnostic-Code, o una línea con código SMTP),
-  nunca por una frase suelta del cuerpo: un «fuera de la oficina» de
-  postmaster@ no marca a nadie. Un rebote duro marca `contact.email_invalid`
-  (y `bounced`) con su motivo, que la ficha enseña con su fecha, y cancela
-  los correos pendientes de esa ficha, no los de LinkedIn; no va a
+  «canal no configurado». `detectBounce` exige un remitente de rebote
+  (mailer-daemon, postmaster) también con DSN, y solo da «duro» con lo
+  que dijo el servidor (Diagnostic-Code, una línea con código SMTP, o la
+  frase del notificador de que el DOMINIO no existe), nunca por una frase
+  suelta del cuerpo: un «fuera de la oficina» de postmaster@ no marca a
+  nadie. **Solo un rebote VERIFICADO tiene efectos** (ronda 3): el aviso
+  trae el Message-ID de un correo `sent` de ese mismo espacio. Entonces
+  marca `contact.email_invalid` (y `bounced`) con su motivo si la ficha es
+  PROPIA del espacio, cancela los correos pendientes de ese espacio a esa
+  dirección (no los de LinkedIn, ni los que ya van a otra dirección), y
+  frena en ese espacio los correos nuevos a esa dirección, también a una
+  ficha compartida (contacto global), que no se marca: un aviso en el
+  buzón de un creador no le cierra el correo a los demás. No va a
   `contact_suppression`, que corta todos los canales. Corregir el correo
   de la ficha borra las dos marcas. La base no deja programar un correo a
-  una ficha con el correo inválido (`outbound_touch_email_invalid`), pero
-  sí reclamarlo: la consulta de reclamo de VEN-10 tiene que filtrarlos.
+  esa dirección (`outbound_touch_email_invalid`), pero sí reclamarlo: la
+  consulta de reclamo de VEN-10 tiene que filtrarlos. El job lee cada
+  buzón desde su cursor (`outreach_channel_account.bounces_read_at`), del
+  más viejo al más nuevo y como mucho 300 avisos por pasada: una ráfaga
+  no deja atrás a los viejos. **Falta en el conector de VEN-9:**
+  `GmailApi.searchBounces` tiene que aceptar `pageToken` y devolver
+  `nextPageToken` (messages.list los tiene); con el arreglo de hoy, si la
+  lista viene llena el job lo avisa en el registro.
 - **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
   workspace desde las 8:00 locales) dejan una `notification` por tipo y
   día, en el idioma del espacio, con su propio enlace, y mandan UN
   resumen por correo a todos los dueños por `SMTP_URL`. La tasa de
   rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
   nada» solo salta si había toques que tocaba enviar
-  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída lleva a la salud
-  de `/ventas/politica` hasta que exista `/ventas/canales` (se cambia en
-  `CANALES_URL`, `apps/worker/src/jobs/ventas/messages.ts`).
-- La política y la **salud de hoy** se ven en `/ventas/politica`.
+  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída dice cuál es y
+  lleva a la lista de cuentas caídas de `/ventas/politica#cuentas` (lo
+  que dijo el proveedor y el paso para volver a enviar) hasta que exista
+  `/ventas/canales` (se cambia en `CANALES_URL`,
+  `apps/worker/src/jobs/ventas/messages.ts`). Sin `APP_URL` el resumen
+  sale sin enlaces y el job lo avisa en el registro.
+- La política y la **salud de hoy** se ven en `/ventas/politica`. Solo
+  la cambian 'owner' y 'admin' del espacio (0038 §7: políticas
+  RESTRICTIVE de `outbound_policy`, y la pantalla lo dice); encender pide
+  además una cuenta de envío conectada y confirmación con los mensajes
+  aprobados que salen hoy.
+- La demo (seed 0006) trae un rebote duro con su ficha marcada, uno
+  blando y la alerta del día de la cuenta de LinkedIn caída.
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
 tokens al azar, así que ningún enlace suyo se puede pulsar. Con el
@@ -684,6 +724,15 @@ revisores técnico y de producto y el mismo umbral.
    Europa, en CAN-SPAM y GDPR. Propuesta: pie de baja y dirección
    postal del workspace obligatorios desde el primer envío, y la
    `source` del contacto siempre visible en el mensaje retenido.
+6. **Alcance de la baja por enlace (VEN-15, ronda 3).** Hoy va en dos
+   tiempos: el clic vale para el creador que envió ese correo, y pasa a
+   toda la plataforma cuando la persona pide la baja a un segundo
+   creador (0038 §8). Es lo que cierra el sabotaje del remitente que
+   pulsa su propio enlace sin sesión. La alternativa —toda la plataforma
+   al primer clic, descartando los clics que vengan de las IP de las
+   sesiones del remitente— pide guardar la IP de cada sesión de cada
+   miembro, que hoy no se guarda. Propuesta: quedarse con los dos
+   tiempos.
 
 ## 9. Los errores de Chief que no vamos a repetir
 
