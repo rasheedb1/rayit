@@ -284,6 +284,86 @@ export function nextBusinessSlot(at: Date, timeZone: string, window: SendWindow 
   return zonedInstant(nextBusinessDate(date), clampToWindow(seconds, window), timeZone);
 }
 
+/** Minutos de dispersión por defecto al abrir la ventana (lo que se acumuló de noche no sale todo a las 09:00:00). */
+export const DEFAULT_OPENING_SPREAD_MINUTES = 30;
+
+/**
+ * El primer instante en que algo puede salir, a partir de `at` (VEN-10 r2).
+ * Es lo que el despachador aplica a TODO lo que reclama, no solo a lo que
+ * programa: un reintento, un resume_at, un retenido que se aprueba de
+ * noche o lo que se acumuló con el worker caído el fin de semana.
+ *
+ *   · `at` dentro de la ventana de un día hábil → `at`, tal cual;
+ *   · día hábil antes de que abra → hoy, al abrir;
+ *   · después del cierre o en fin de semana → el siguiente día hábil, al
+ *     abrir.
+ *
+ * Con `seed`, la apertura lleva una dispersión determinista de hasta
+ * `spreadMinutes` (encerrada en la ventana), para que cincuenta toques
+ * atrasados no salgan en el mismo segundo. Sin semilla, la apertura exacta.
+ */
+export function nextWindowSlot(
+  at: Date,
+  timeZone: string,
+  window: SendWindow = DEFAULT_SEND_WINDOW,
+  opts: { seed?: string; spreadMinutes?: number } = {},
+): Date {
+  assertTimeZone(timeZone);
+  const { start } = windowSeconds(window);
+  if (isInsideWindow(at, timeZone, window)) return at;
+  const { date, seconds } = zonedParts(at, timeZone);
+  const day = isBusinessDay(date) && seconds < start ? date : nextBusinessDate(date);
+  const spread = opts.seed ? spreadSeconds(`${opts.seed}:opening`, opts.spreadMinutes ?? DEFAULT_OPENING_SPREAD_MINUTES) : 0;
+  return zonedInstant(day, clampToWindow(start + spread, window), timeZone);
+}
+
+/** Un paso que ya tiene hora y todavía no salió, para correrlo detrás de otro. */
+export interface ShiftStep {
+  id: string;
+  dayOffset: number;
+  orderInDay: number;
+  /** Su hora programada actual. */
+  at: Date;
+}
+
+/**
+ * Cuando un paso se mueve (un tope lo mandó al siguiente día hábil), los
+ * que van detrás en el mismo enrolamiento se corren con él (VEN-10 r2):
+ * cada uno conserva su separación en DÍAS HÁBILES respecto del que se
+ * movió (day_offset) y su hora local de reloj, encerrada en la ventana,
+ * con la separación mínima entre pasos. Nunca adelanta un paso: si su
+ * hora ya iba después, se queda. Devuelve solo los que cambian.
+ *
+ * Así el paso 2 («Como te comenté ayer…») no sale antes que el paso 1,
+ * ni el mismo día.
+ */
+export function shiftFollowingSteps(
+  moved: { dayOffset: number; orderInDay: number; at: Date },
+  following: readonly ShiftStep[],
+  timeZone: string,
+  window: SendWindow = DEFAULT_SEND_WINDOW,
+): Array<{ id: string; at: Date }> {
+  assertTimeZone(timeZone);
+  const { date: anchor } = zonedParts(moved.at, timeZone);
+  const ordered = [...following]
+    .filter((s) => s.dayOffset > moved.dayOffset || (s.dayOffset === moved.dayOffset && s.orderInDay > moved.orderInDay))
+    .sort((a, b) => a.dayOffset - b.dayOffset || a.orderInDay - b.orderInDay);
+  const out: Array<{ id: string; at: Date }> = [];
+  let prev = moved.at.getTime();
+  for (const s of ordered) {
+    const { seconds } = zonedParts(s.at, timeZone);
+    let at = zonedInstant(addBusinessDays(anchor, s.dayOffset - moved.dayOffset), clampToWindow(seconds, window), timeZone).getTime();
+    if (at < prev + MIN_STEP_GAP_MS) at = prev + MIN_STEP_GAP_MS;
+    if (at > s.at.getTime()) {
+      out.push({ id: s.id, at: new Date(at) });
+      prev = at;
+    } else {
+      prev = s.at.getTime();
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------
 // Reintentos
 // ---------------------------------------------------------------------
@@ -299,10 +379,28 @@ export function retryDelayMs(attempt: number, seed: string): number {
   return Math.round(base * (1 + 0.2 * seededUnit(`${seed}:retry:${attempt}`)));
 }
 
-/** El instante del siguiente intento, o null si `attempt` ya era el último. */
-export function nextRetryAt(now: Date, attempt: number, seed: string, maxAttempts: number = MAX_SEND_ATTEMPTS): Date | null {
+/** Dónde vive la cadencia: su zona y su ventana. Sin ella, el reintento no se encierra (solo para pruebas puras). */
+export interface SendPlace {
+  timeZone: string;
+  window?: SendWindow;
+}
+
+/**
+ * El instante del siguiente intento, o null si `attempt` ya era el
+ * último. Con `place`, encerrado en la ventana laboral de un día hábil
+ * (nextWindowSlot): el reintento de 64 minutos de un viernes a las 16:50
+ * sale el lunes al abrir, no el viernes a las 18:00.
+ */
+export function nextRetryAt(
+  now: Date,
+  attempt: number,
+  seed: string,
+  place?: SendPlace,
+  maxAttempts: number = MAX_SEND_ATTEMPTS,
+): Date | null {
   if (attempt >= maxAttempts) return null;
-  return new Date(now.getTime() + retryDelayMs(attempt, seed));
+  const raw = new Date(now.getTime() + retryDelayMs(attempt, seed));
+  return place ? nextWindowSlot(raw, place.timeZone, place.window, { seed: `${seed}:retry:${attempt}` }) : raw;
 }
 
 // ---------------------------------------------------------------------

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertNoPlaceholders, findPlaceholders, hasPlaceholders, PlaceholderError } from '../src/outreach/placeholder-guard.ts';
-import { detectOptOut, OPT_OUT_RULES, optoutUrl, stripQuoted } from '../src/outreach/optout.ts';
+import { detectOptOut, OPT_OUT_RULES, optoutUrl, stripQuoted, stripSignature } from '../src/outreach/optout.ts';
 import { firstNameOf, renderTemplate } from '../src/outreach/template.ts';
 
 test('la guardia bloquea los siete tipos de hueco', () => {
@@ -54,7 +54,7 @@ test('el detector reconoce las catorce expresiones', () => {
     es_cancelar_suscripcion: 'Quiero cancelar mi suscripción.',
     es_no_contactar: 'Favor no contactar.',
     en_unsubscribe: 'Unsubscribe',
-    en_remove_me: 'Please remove me.',
+    en_remove_me: 'Please remove me from your list.',
     en_stop_contacting: 'Stop emailing me.',
     en_do_not_contact: "Don't contact us again.",
     en_opt_out: 'I want to opt-out.',
@@ -80,6 +80,55 @@ test('el detector no confunde un «ahora no», un interés ni nuestro pie citado
     assert.equal(detectOptOut(texto).optOut, false, texto);
   }
   assert.equal(stripQuoted('hola\n> citado\nadiós'), 'hola\nadiós');
+});
+
+test('el detector no toma por baja a una marca interesada (VEN-10 r2)', () => {
+  // Los cinco casos de la revisión: pretérito, pregunta, firma corporativa y «remove me from the CC».
+  for (const texto of [
+    'no me enviaste el media kit, ¿me lo mandas?',
+    'No nos mandaste la tarifa. Nos interesa mucho',
+    '¿No me contactas el lunes?',
+    'Perfecto, hablemos el jueves.\n\nSaludos,\nMarcela Ríos\nMarketing · Vitalé\nTo unsubscribe from our newsletter, click here.',
+    'Sure, remove me from the CC and loop in Andrés.',
+    // Y otros parecidos.
+    'No me mandes el contrato todavía, lo reviso el lunes.',
+    '¿Por qué no contactar a nuestra agencia? Ellos llevan la cuenta.',
+    'No quiero recibir la muestra sin antes ver las tarifas.',
+    "Don't email me the contract, send it by DocuSign.",
+    'Can creators opt out of the exclusivity clause?',
+    'No more emails needed, let us hop on a call.',
+    'Please take me off the thread, Carla will follow up.',
+    'Great!\n--\nAna · Brand Manager\nUnsubscribe\nPrivacy',
+    'Thanks.\n\nBest regards,\nJohn\nIf you no longer wish to receive these emails, unsubscribe here.',
+  ]) {
+    assert.equal(detectOptOut(texto).optOut, false, texto);
+  }
+});
+
+test('el detector sí ve la baja en sus formas reales, y en la primera línea lo que solo vale solo', () => {
+  const casos: Array<[string, string]> = [
+    ['No nos escriban más, por favor.', 'es_no_escribir'],
+    ['Gracias, pero no me contactes.', 'es_no_escribir'],
+    ['No me vuelvas a mandar nada.', 'es_no_escribir'],
+    ['Buenas. Por favor dar de baja este correo.', 'es_dar_de_baja'],
+    ['No queremos que nos sigan escribiendo.', 'es_no_recibir'],
+    ['Unsubscribe me, please.', 'en_unsubscribe'],
+    ['unsubscribe\n\nSent from my iPhone', 'en_unsubscribe'],
+    ['Please remove us from your mailing list.', 'en_remove_me'],
+    ['Please don’t contact me again.', 'en_do_not_contact'],
+    ['Opt out', 'en_opt_out'],
+    ['We’d like to opt out.', 'en_opt_out'],
+  ];
+  for (const [texto, regla] of casos) {
+    const r = detectOptOut(texto);
+    assert.equal(r.optOut, true, texto);
+    assert.equal(r.ruleId, regla, texto);
+  }
+  // «Unsubscribe» suelto solo cuenta arriba: en la línea diez es otra cosa.
+  const largo = ['Hola,', 'uno', 'dos', 'tres', 'cuatro', 'unsubscribe'].join('\n');
+  assert.equal(detectOptOut(largo).optOut, false);
+  assert.equal(stripSignature('Hola\n--\nFirma\nunsubscribe'), 'Hola');
+  assert.equal(stripSignature('Hola\nSaludos, Marcela\nTo unsubscribe…'), 'Hola');
 });
 
 test('el enlace de baja: ruta pública y token validado', () => {

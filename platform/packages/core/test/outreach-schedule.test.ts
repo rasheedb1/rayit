@@ -6,8 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addBusinessDays, clampToWindow, isInsideWindow, nextBusinessSlot, nextRetryAt, parseClock, planSteps,
-  retryDelayMs, seededUnit, spreadSeconds, stepClockSeconds, warmupDailyCap, zonedInstant, zonedParts,
+  addBusinessDays, clampToWindow, isInsideWindow, nextBusinessSlot, nextRetryAt, nextWindowSlot, parseClock, planSteps,
+  retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClockSeconds, warmupDailyCap, zonedInstant, zonedParts,
   MAX_SEND_ATTEMPTS, RETRY_BASE_MS, RETRY_MAX_MS, type PlanStep,
 } from '../src/outreach/schedule.ts';
 
@@ -114,6 +114,67 @@ test('los reintentos esperan cada vez más, hasta un tope, y se acaban en el qui
   assert.ok(nextRetryAt(now, 1, 't')!.getTime() > now.getTime());
   assert.equal(nextRetryAt(now, MAX_SEND_ATTEMPTS, 't'), null);
   assert.throws(() => retryDelayMs(0, 't'), RangeError);
+});
+
+test('nextWindowSlot: dentro de la ventana no cambia; de madrugada, hoy al abrir; de noche o en fin de semana, el siguiente hábil', () => {
+  const dentro = new Date('2026-09-23T16:00:00Z'); // miércoles 11:00 en Bogotá
+  assert.equal(nextWindowSlot(dentro, BOGOTA, W), dentro);
+  const madrugada = nextWindowSlot(new Date('2026-09-22T08:00:00Z'), BOGOTA, W); // martes 03:00
+  assert.equal(localDay(madrugada, BOGOTA), '2026-09-22');
+  assert.equal(localClock(madrugada, BOGOTA), '09:00');
+  const noche = nextWindowSlot(new Date('2026-09-23T23:30:00Z'), BOGOTA, W); // miércoles 18:30
+  assert.equal(localDay(noche, BOGOTA), '2026-09-24');
+  assert.equal(localClock(noche, BOGOTA), '09:00');
+  const sabado = nextWindowSlot(new Date('2026-09-26T15:00:00Z'), BOGOTA, W);
+  assert.equal(localDay(sabado, BOGOTA), '2026-09-28');
+  // El cierre es exclusivo: a las 17:00 ya no sale.
+  assert.equal(localDay(nextWindowSlot(new Date('2026-09-25T22:00:00Z'), BOGOTA, W), BOGOTA), '2026-09-28');
+  // Con semilla, la apertura se dispersa (determinista) sin salirse de la ventana.
+  const a = nextWindowSlot(new Date('2026-09-22T08:00:00Z'), BOGOTA, W, { seed: 'toque-1' });
+  const b = nextWindowSlot(new Date('2026-09-22T08:00:00Z'), BOGOTA, W, { seed: 'toque-1' });
+  assert.equal(a.getTime(), b.getTime());
+  assert.match(localClock(a, BOGOTA), /^09:[0-2]\d$/);
+  assert.ok(isInsideWindow(a, BOGOTA, W));
+  // En Madrid, con cambio de horario el domingo 25 de octubre: el lunes al abrir, hora local.
+  const madrid = nextWindowSlot(new Date('2026-10-24T10:00:00Z'), MADRID, W);
+  assert.equal(localDay(madrid, MADRID), '2026-10-26');
+  assert.equal(localClock(madrid, MADRID), '09:00');
+});
+
+test('nextRetryAt con la zona: el reintento de un viernes a las 16:50 sale el lunes, dentro de la ventana', () => {
+  const viernes = new Date('2026-09-25T21:50:00Z'); // viernes 16:50 en Bogotá
+  const crudo = nextRetryAt(viernes, 4, 'toque')!;
+  assert.ok(!isInsideWindow(crudo, BOGOTA, W), 'sin zona, 64 minutos después ya es de noche');
+  const r = nextRetryAt(viernes, 4, 'toque', { timeZone: BOGOTA, window: W })!;
+  assert.equal(localDay(r, BOGOTA), '2026-09-28');
+  assert.ok(isInsideWindow(r, BOGOTA, W));
+  // Un reintento que cae dentro no se mueve.
+  const temprano = new Date('2026-09-23T15:00:00Z'); // miércoles 10:00
+  assert.equal(nextRetryAt(temprano, 1, 'toque', { timeZone: BOGOTA, window: W })!.getTime(), nextRetryAt(temprano, 1, 'toque')!.getTime());
+  assert.equal(nextRetryAt(temprano, MAX_SEND_ATTEMPTS, 'toque', { timeZone: BOGOTA }), null);
+});
+
+test('shiftFollowingSteps: el paso que va detrás se corre con el que se movió, en días hábiles y sin adelantarse', () => {
+  const at = (iso: string) => new Date(iso);
+  // El paso 1 (día 0) pasó del viernes 25 al lunes 28 a las 16:50; el 2 (día 1) estaba el viernes 25 a las 11:00
+  // y el 3 (día 4) el miércoles 30 a las 10:00.
+  const moved = { dayOffset: 0, orderInDay: 0, at: at('2026-09-28T21:50:00Z') };
+  const r = shiftFollowingSteps(moved, [
+    { id: 's2', dayOffset: 1, orderInDay: 0, at: at('2026-09-25T16:00:00Z') },
+    { id: 's3', dayOffset: 4, orderInDay: 0, at: at('2026-09-30T15:00:00Z') },
+    { id: 's0', dayOffset: 0, orderInDay: 0, at: at('2026-09-20T15:00:00Z') },
+  ], BOGOTA, W);
+  const byId = new Map(r.map((x) => [x.id, x.at]));
+  assert.equal(localDay(byId.get('s2')!, BOGOTA), '2026-09-29', 'un día hábil después del lunes');
+  assert.equal(localClock(byId.get('s2')!, BOGOTA), '11:00', 'con su hora de reloj');
+  assert.equal(localDay(byId.get('s3')!, BOGOTA), '2026-10-02', 'cuatro días hábiles después del lunes');
+  assert.ok(!byId.has('s0'), 'lo que va antes no se toca');
+  // Lo que ya iba después no se adelanta.
+  const lejos = shiftFollowingSteps(moved, [{ id: 'x', dayOffset: 1, orderInDay: 0, at: at('2026-10-20T15:00:00Z') }], BOGOTA, W);
+  assert.deepEqual(lejos, []);
+  // Mismo día, orden siguiente: al menos cinco minutos después.
+  const mismo = shiftFollowingSteps(moved, [{ id: 'y', dayOffset: 0, orderInDay: 1, at: at('2026-09-25T15:00:00Z') }], BOGOTA, W);
+  assert.ok(mismo[0]!.at.getTime() >= moved.at.getTime() + 5 * 60 * 1000);
 });
 
 test('calentamiento: sube en línea recta hasta el tope', () => {
