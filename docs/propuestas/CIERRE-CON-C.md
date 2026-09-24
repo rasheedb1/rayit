@@ -369,8 +369,95 @@ están en `CIERRE-CON-A.md` §6 y no se repiten.
 
 ## 6. Verificación
 
-PENDIENTE.
+### 6.1 Pruebas
+
+`pnpm verificar --continue` sobre el commit final (en un worktree
+desechable del mismo commit, `7ab1a55`): **raíz 8, core 267, connectors
+234, db 821, web 1260 + 1 todo, worker 147 de 150**. Typecheck y lint de
+los seis paquetes en verde. Los tres rojos del worker:
+
+- «las 16 líneas base y los 59 puntajes…» (bloque «CON-6 → CAM-5»): el
+  caso de fecha de la tabla de abajo, igual en `origin/main`;
+- `oauth-refresh.test.ts` caso 5 y «el reintento…» (el que ya lleva
+  «flaky» en el título): solo fallan con turbo corriendo dos paquetes a
+  la vez. La suite del worker sola da **149 de 150** (solo CON-6), y el
+  archivo solo, 6 de 6. CON-C no toca ese job salvo el texto de un log.
+
+Tras cada merge de F1 (antes de la revisión): CON-8 → raíz 8, core 267,
+connectors 218, db 814, worker 121, web 1170 + 1 todo; CON-12 → raíz 8,
+core 267, connectors 234, db 818, worker 122, web 1174 + 1 todo. Las dos
+en 15/15 tareas.
+
+**Tres pruebas se pusieron rojas a las 00:00 UTC del 24-sep, también en
+`origin/main` (`92819a5`), sin que CON-C las tocara.** Todas leen el seed,
+que fecha los datos respecto de `CURRENT_DATE`:
+
+| Prueba | Por qué | Qué se hizo |
+|---|---|---|
+| `apps/web/app/(app)/campanas/ficha-db.test.tsx` (CAM) | Fijaba «417.673 hasta el 22 sep»; el 24 la última lectura es otra | Compara con la última lectura de `post_metric_snapshot` formateada con el `formatDate`/`formatInt` de la ficha (`e9e84e1`, `d8852ba`). Con un +1 falla |
+| `packages/db/test/finanzas.test.ts`, bandeja (FIN-4) | La mora se cuenta en Bogotá y el seed fecha `due_on` en UTC: de 00:00 a 05:00 UTC son 40 días, no 41 | Compara con la misma expresión de la consulta (`d94e18a`) |
+| `apps/worker/test/costuras-con.test.ts`, «las 16 líneas base y los 59 puntajes…» (CON-6, cierre CON-A) | Lo que calcula `compute.baseline` deja de coincidir con lo que escribe el seed 0002 en SQL a partir del 24-sep (p. ej. `median_completion` 0,085 contra 0,09). No es la zona horaria de la máquina (con `TZ=UTC` falla igual) | **No se arregló aquí**: es una diferencia de ventana entre el job y el seed de CON-6, y decidir cuál tiene razón es de CON-A. Queda como pendiente con su evidencia (§8) |
+
+`next build` (tras borrar `.next`): compila; `/conexiones` y las dos rutas `oauth/[platform]/{start,callback}` son dinámicas (ƒ).
+
+### 6.2 En dev
+
+`next dev -p 3193` con Postgres embebido y el seed, `OAUTH_CONNECT=1`,
+TikTok configurado con valores de mentira:
+
+- **Sin `GOOGLE_CLIENT_*`** (como producción): `/conexiones` 200; en el
+  HTML, «Conectar TikTok» sí, «Conectar YouTube» 0 veces,
+  `/conexiones/oauth/youtube/start` 0 veces, la frase «YouTube todavía no
+  se puede conectar desde aquí: faltan GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET.» presente, ni el secreto de mentira ni
+  `secretRef` en el HTML. Rutas: `GET …/youtube/start` 405;
+  `POST …/youtube/start` 404 con la frase; `GET …/youtube/callback`
+  (vacío y con `code`/`state`) 404 con la frase. Ningún 500.
+- **Con `GOOGLE_CLIENT_*` de mentira**: «Conectar YouTube» aparece;
+  `POST …/youtube/start` con el consentimiento → 303 a
+  `accounts.google.com/o/oauth2/v2/auth` con `redirect_uri` exacto,
+  `youtube.readonly` + `yt-analytics.readonly`, `access_type=offline` y
+  `prompt=consent`.
+- **400 px**: `node apps/web/scripts/ancho-movil.mjs … /conexiones` →
+  `✓ /conexiones  400 px de 400`. **Oscuro**: captura a 390 px con
+  `--force-dark-mode`, sin desborde. De ahí salió un texto viejo (la
+  tarjeta de YouTube prometía «vistas acumuladas»), corregido en `ffe41b8`.
+
+### 6.3 Revisiones
+
+- **`/code-review` alto, primera vuelta** (merges y arreglos, diez
+  hallazgos): siete arreglados con prueba (§1.6, `862aefd`), tres
+  justificados: (a) `sumViews` aceptaba un catálogo «completo» con menos
+  videos que `videoCount` → desaparece con §1.6; (b) el bucle de
+  paginación duplicado → queda uno solo, el de la fuente de posts;
+  (c) `PublicAccessMode` declarado en connectors y en db → se deja:
+  `@mc/db` no depende de `@mc/connectors`, y la prueba de cuentas
+  públicas de db fija los dos valores.
+- **`/code-review` alto, segunda vuelta** (la pantalla sobre CON-B, el
+  workflow y las pruebas de fecha, diez hallazgos): nueve arreglados
+  (`d8852ba`); el de `ENSEMBLEDATA_TOKEN` en un solo lado se resuelve
+  como regla de encendido (§2.1).
+- **`/security-review`**: sin hallazgos. Se revisó el flujo OAuth de
+  Google (state sellado, permisos, sin redirección abierta, scopes de
+  solo lectura), a qué workspace se ata la identidad, dónde viajan los
+  tokens (cuerpo del formulario, `secrets`, `api_call_log` sin URL),
+  SSRF (hosts fijos, handle validado, cursor escapado) y SQL
+  parametrizado con `workspace_id` en el worker.
 
 ## 7. Producción y guion de humo
 
 PENDIENTE.
+
+## 8. Qué quedó fuera, y a dónde va
+
+| Qué | Por qué no aquí | Historia |
+|---|---|---|
+| Pedir `GOOGLE_CLIENT_*`, `GOOGLE_API_KEY`, `INSTAGRAM_HOUSE_TOKEN`, `ENSEMBLEDATA_TOKEN` | Fuera de alcance del prompt: las pide Nicolás | — (§2) |
+| Verificación de Google de los scopes sensibles | Trámite | CON-9 (Rasheed) |
+| Guardar el acumulado de vistas de una cuenta (`views_total`) | Migración y Resumen, de Rasheed | D20 |
+| `collect.posts` una vez al día para cuentas por proveedor | Solo vale si se contrata | D21 |
+| La diferencia entre `compute.baseline` y el seed 0002 que aparece el 24-sep (`costuras-con.test.ts`) | Es de CON-6/CON-A y del seed: hay que decidir quién tiene razón en la ventana, no taparlo con la prueba | Seguimiento de CON-A (Nicolás) |
+| `oauth-refresh.test.ts` inestable con carga | Preexistente (su título ya dice «flaky»); no depende de CON-C | WRK / CON-2 |
+| Revocar el token en Google al desconectar | Decisión de producto para las tres redes | CON-4 (CON-8.md §0.6) |
+| Demografía en pantalla | RES-4 | RES-4 (Rasheed) |
+| `.env.example` con las rutas y variables reales | Archivo compartido | Rasheed (§5) |
