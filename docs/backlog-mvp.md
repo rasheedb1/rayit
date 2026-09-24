@@ -1029,8 +1029,8 @@ verde y 1 saltada con su motivo** (el alcance por asignación, ACC-6).
 
 `pnpm verificar` sobre la rama de E2E (que es `main`, con el cierre de
 CON-C, + la prueba + el arreglo de abajo), el 24 de septiembre: **15/15
-tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 203, `@mc/db` 817,
-`@mc/worker` 156 (+1 saltada), `@mc/web` 1242 (+1 todo); 0 fallos.
+tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 234, `@mc/db` 821,
+`@mc/worker` 166 (+1 saltada), `@mc/web` 1260 (+1 todo); 0 fallos.
 
 Pasada la medianoche UTC, `main` tenía **tres pruebas rojas que
 dependían del día o de la hora**, no del código (comprobado en
