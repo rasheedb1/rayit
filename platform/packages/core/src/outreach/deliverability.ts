@@ -6,10 +6,11 @@
  * (VEN-10) al armar cada correo, la página pública de baja y los jobs de
  * rebotes y alertas del worker. Ver docs/ventas-outreach.md §4 y §5.1.
  *
- *   El enlace de baja   createOptoutToken / readOptoutToken / optoutTokenHash,
- *                       optoutUrl, oneClickUnsubscribeUrl, listUnsubscribeHeaders
+ *   El enlace de baja   createOptoutToken / looksLikeOptoutToken / optoutTokenHash,
+ *                       maskEmailAddress, optoutUrl, oneClickUnsubscribeUrl,
+ *                       listUnsubscribeHeaders
  *   El pie obligatorio  complianceReadiness / buildEmailFooter
- *   El calentamiento    warmupDay / warmupDailyLimit
+ *   El calentamiento    warmupDay / warmupDailyLimit / warmupCurve
  *   Los rebotes         detectBounce
  *   Las alertas         evaluateOutreachAlerts
  *
@@ -17,118 +18,60 @@
  * `@mc/core`: usa node:crypto, y el índice del paquete también lo leen
  * componentes de cliente.
  */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------
 // 1 · El token de baja
 // ---------------------------------------------------------------------
 //
-// Forma: `v1.<datos>.<firma>`, todo en base64url.
-//   datos  48 bytes: el workspace que envía (16), la ficha que lo recibe
-//          (16) y 16 bytes al azar (el token es único por correo aunque
-//          sea la misma persona y el mismo workspace).
-//   firma  los primeros 16 bytes de HMAC-SHA256(secreto, "on-cue:optout:v1." + datos).
+// Un token OPACO: 32 bytes al azar en base64url (43 caracteres), uno por
+// intento de envío. No lleva ningún dato dentro. La base guarda solo su
+// sha256 en outbound_optout_link (0037 §4.5), escrito por el despachador
+// al reclamar el envío, y todo lo demás se resuelve desde ese hash:
+//   · public_optout_preview (0038) dice a quién va el enlace (la
+//     dirección enmascarada), quién lo envió (el nombre del workspace) y
+//     si quien lo abre con sesión es de ese workspace, para rechazar el
+//     clic desde la carpeta de enviados (docs/ventas-outreach.md §5.2);
+//   · public_optout (0037 §9) da de baja.
 //
-// Por qué firmado, si la base ya guarda el sha256 (outbound_optout_link):
-//   · la página de baja rechaza el clic de un miembro del workspace que
-//     envió (§5.2, «Obligatorio para VEN-15»), y la web no puede leer
-//     outbound_optout_link (mc_app no tiene ningún privilegio y no es
-//     miembro de mc_worker). La firma le dice, sin base, qué workspace
-//     envió ese correo, y que nadie cambió ese dato en la URL;
-//   · un token que no tiene la forma o la firma no llega a la base.
-// La prueba de que el correo salió de verdad sigue siendo la fila de
-// outbound_optout_link, que escribe solo el despachador: la firma no la
-// sustituye. public_optout busca el sha256 del token ENTERO.
+// Por qué no firmado (la ronda 1 lo firmaba con OUTREACH_OPTOUT_SECRET y
+// llevaba los uuid del workspace y de la ficha en claro):
+//   · la firma no probaba nada que el hash no pruebe mejor: la fila de
+//     outbound_optout_link solo existe si el correo se reclamó para salir;
+//   · un secreto que falta o se rota apagaba en silencio TODA baja, y los
+//     enlaces tienen que funcionar al menos 30 días (CAN-SPAM) y aquí no
+//     caducan;
+//   · quien recibe o reenvía el correo veía los identificadores internos;
+//   · el despachador de VEN-10 ya genera tokens de esta misma forma
+//     (randomBytes(32).toString('base64url')): un solo contrato.
+// 256 bits al azar no se adivinan; el hash es la llave primaria.
 
-export const OPTOUT_TOKEN_VERSION = 'v1';
-const OPTOUT_HMAC_CONTEXT = 'on-cue:optout:v1.';
-const OPTOUT_NONCE_BYTES = 16;
-const OPTOUT_SIGNATURE_BYTES = 16;
-/** Un secreto más corto que esto no firma: con 32 bytes al azar alcanza. */
-export const OPTOUT_SECRET_MIN_LENGTH = 32;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TOKEN_RE = /^v1\.([A-Za-z0-9_-]{64})\.([A-Za-z0-9_-]{22})$/;
-
-export interface OptoutTokenClaims {
-  /** El workspace que envía el correo. */
-  workspaceId: string;
-  /** La ficha (contact) que lo recibe. */
-  contactId: string;
-}
-
-export type OptoutTokenReading =
-  | ({ ok: true } & OptoutTokenClaims)
-  | { ok: false; reason: 'malformed' | 'bad_signature' };
-
-/** El secreto no sirve para firmar: vacío o corto. */
-export class OptoutSecretError extends Error {
-  constructor() {
-    super(
-      `OUTREACH_OPTOUT_SECRET falta o tiene menos de ${OPTOUT_SECRET_MIN_LENGTH} caracteres: ` +
-        'sin él no se firman ni se leen los enlaces de baja (platform/.env.example).',
-    );
-    this.name = 'OptoutSecretError';
-  }
-}
-
-function assertSecret(secret: string | undefined | null): asserts secret is string {
-  if (!secret || secret.length < OPTOUT_SECRET_MIN_LENGTH) throw new OptoutSecretError();
-}
-
-function uuidToBytes(id: string, campo: string): Buffer {
-  if (!UUID_RE.test(id)) throw new TypeError(`${campo} no es un uuid: «${id}».`);
-  return Buffer.from(id.replace(/-/g, ''), 'hex');
-}
-
-function bytesToUuid(b: Buffer): string {
-  const h = b.toString('hex');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
-
-function sign(secret: string, datos: string): Buffer {
-  return createHmac('sha256', secret).update(OPTOUT_HMAC_CONTEXT + datos).digest().subarray(0, OPTOUT_SIGNATURE_BYTES);
-}
+/** Bytes al azar de cada token: 256 bits. */
+export const OPTOUT_TOKEN_BYTES = 32;
+/** Lo que public_optout acepta buscar (0037 §9): de 16 a 200 caracteres. */
+export const OPTOUT_TOKEN_MIN_LENGTH = 16;
+export const OPTOUT_TOKEN_MAX_LENGTH = 200;
+/**
+ * La forma de un token que vale la pena buscar: caracteres de URL sin
+ * reservar (base64url, hex, y el punto de los tokens v1 de la ronda 1
+ * por si alguno llegó a salir). Lo demás no llega a la base.
+ */
+const TOKEN_SHAPE_RE = new RegExp(`^[A-Za-z0-9._~-]{${OPTOUT_TOKEN_MIN_LENGTH},${OPTOUT_TOKEN_MAX_LENGTH}}$`);
 
 /**
- * El token de baja de UN correo. `nonce` solo se pasa en pruebas: por
- * defecto son 16 bytes al azar, y cada reintento de un toque lleva el suyo
- * (outbound_optout_link es único por (touch_id, attempt)).
+ * El token de baja de UN intento de envío. `random` solo se pasa en
+ * pruebas; por defecto, node:crypto. Cada reintento de un toque lleva el
+ * suyo (outbound_optout_link es único por (touch_id, attempt)).
  */
-export function createOptoutToken(claims: OptoutTokenClaims, secret: string, nonce?: Uint8Array): string {
-  assertSecret(secret);
-  const azar = nonce ? Buffer.from(nonce) : randomBytes(OPTOUT_NONCE_BYTES);
-  if (azar.length !== OPTOUT_NONCE_BYTES) throw new TypeError(`El nonce tiene que ser de ${OPTOUT_NONCE_BYTES} bytes.`);
-  const datos = Buffer.concat([
-    uuidToBytes(claims.workspaceId, 'workspaceId'),
-    uuidToBytes(claims.contactId, 'contactId'),
-    azar,
-  ]).toString('base64url');
-  return `${OPTOUT_TOKEN_VERSION}.${datos}.${sign(secret, datos).toString('base64url')}`;
+export function createOptoutToken(random: (n: number) => Uint8Array = randomBytes): string {
+  const bytes = Buffer.from(random(OPTOUT_TOKEN_BYTES));
+  if (bytes.length !== OPTOUT_TOKEN_BYTES) throw new TypeError(`Hacen falta ${OPTOUT_TOKEN_BYTES} bytes al azar.`);
+  return bytes.toString('base64url');
 }
 
-/**
- * Lee y comprueba un token. `malformed` si no tiene la forma (ni se
- * calcula la firma); `bad_signature` si la firma no es de este secreto o
- * alguien cambió los datos. La comparación es de tiempo constante.
- */
-export function readOptoutToken(token: string, secret: string): OptoutTokenReading {
-  assertSecret(secret);
-  const m = TOKEN_RE.exec(token);
-  if (!m) return { ok: false, reason: 'malformed' };
-  const [, datos, firma] = m as unknown as [string, string, string];
-  const esperada = sign(secret, datos);
-  const recibida = Buffer.from(firma, 'base64url');
-  if (recibida.length !== esperada.length || !timingSafeEqual(recibida, esperada)) {
-    return { ok: false, reason: 'bad_signature' };
-  }
-  const bytes = Buffer.from(datos, 'base64url');
-  return { ok: true, workspaceId: bytesToUuid(bytes.subarray(0, 16)), contactId: bytesToUuid(bytes.subarray(16, 32)) };
-}
-
-/** Si la cadena TIENE la forma de un token (sin comprobar la firma): para descartar basura sin secreto. */
-export function looksLikeOptoutToken(token: string): boolean {
-  return TOKEN_RE.test(token);
+/** Si la cadena puede ser un token nuestro (solo la forma): para no llevar basura a la base. */
+export function looksLikeOptoutToken(token: unknown): token is string {
+  return typeof token === 'string' && TOKEN_SHAPE_RE.test(token);
 }
 
 /**
@@ -138,6 +81,22 @@ export function looksLikeOptoutToken(token: string): boolean {
  */
 export function optoutTokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
+ * La dirección enmascarada que enseña la página de baja: «v•••@marca.com».
+ * Dice a quien abre el enlace para qué correo es, sin regalarle la
+ * dirección entera a quien lo reciba reenviado. El dominio va entero: es
+ * lo que la persona reconoce. La misma regla que public_optout_preview
+ * (0038); esta es la referencia para las pruebas y para quien la necesite
+ * sin base.
+ */
+export function maskEmailAddress(address: string): string {
+  const at = address.lastIndexOf('@');
+  if (at <= 0) return '•••';
+  const local = address.slice(0, at);
+  const first = Array.from(local)[0] ?? '';
+  return `${first}•••${address.slice(at)}`.toLowerCase();
 }
 
 // ---------------------------------------------------------------------
@@ -190,8 +149,8 @@ export function listUnsubscribeHeaders(
 // ---------------------------------------------------------------------
 //
 // CAN-SPAM pide una dirección postal válida y una forma clara de darse de
-// baja en cada correo comercial; habeas data (Colombia) y el RGPD, lo
-// mismo en espíritu. La base ya no deja encender el envío sin dirección
+// baja en cada correo comercial; el RGPD y las leyes locales de protección
+// de datos, lo mismo en espíritu. La base ya no deja encender el envío sin dirección
 // (outbound_policy_enabled_needs_address); esto es la misma regla para
 // cada correo: sin dirección o sin enlace, el correo no está listo y el
 // despachador no lo reclama.
@@ -349,24 +308,27 @@ const ASUNTO_DE_REBOTE = new RegExp(
   ].join('|'),
   'i',
 );
+/**
+ * «La dirección no existe», en las formas que usan los servidores. Se
+ * busca SOLO en lo que dijo el servidor (el Diagnostic-Code del DSN o sus
+ * líneas con código SMTP) y en el asunto, nunca en todo el cuerpo: un
+ * «fuera de la oficina» de postmaster@ que dice «el evento no existe
+ * hasta el lunes» no es un rebote. «No existe» y «does not exist» van
+ * anclados a de QUÉ se habla (buzón, dirección, usuario, cuenta).
+ */
+const SUJETO_DURO = '(address|mailbox|user|recipient|account|e-?mail|direcci[oó]n|buz[oó]n|usuario|cuenta|destinatario)';
 const TEXTO_DURO = new RegExp(
   [
     'address not found',
     'user unknown',
-    'unknown user',
-    'no such user',
-    'no such (mailbox|recipient)',
-    'mailbox (does not exist|not found|unavailable)',
-    'does not exist',
-    "doesn'?t exist",
+    'unknown (user|recipient)',
+    'no such (user|mailbox|recipient|address)',
+    'mailbox (not found|unavailable)',
+    `${SUJETO_DURO}[^.\\n]{0,60}(does not exist|doesn'?t exist|no existe|not found|couldn'?t be found|could not be found|unable to be found)`,
     'recipient address rejected',
     'invalid (recipient|address|mailbox)',
     'account (has been )?disabled',
-    "couldn'?t be found",
-    'could not be found',
-    'unable to be found',
     'la direcci[oó]n no (existe|se encontr[oó])',
-    'no existe',
   ].join('|'),
   'i',
 );
@@ -378,6 +340,12 @@ const ESTADO_RE = /(?:^|\n)\s*Status:\s*([245]\.\d{1,3}\.\d{1,3})/i;
 const DIAGNOSTICO_RE = /(?:^|\n)\s*Diagnostic-Code:\s*(?:smtp;\s*)?([^\n]+(?:\n[ \t]+[^\n]+)*)/i;
 const ESTADO_EN_TEXTO_RE = /\b([245]\.\d{1,3}\.\d{1,3})\b/;
 const SMTP_RE = /\b([45]\d\d)[ -](?:[245]\.\d{1,3}\.\d{1,3}\b|[A-Za-z])/;
+/**
+ * Una línea que es la respuesta del servidor remoto y no prosa del aviso:
+ * trae un código SMTP («550 5.1.1 …», «said: 550 …», «The response was:
+ * 550-5.1.1 …»).
+ */
+const LINEA_DEL_SERVIDOR_RE = /\b[45]\d\d[ -](?:[245]\.\d{1,3}\.\d{1,3}\b|[A-Za-z<#])|\bsaid:\s*[45]\d\d\b/;
 const DESTINO_RE = /\b(?:Final|Original)-Recipient:\s*(?:rfc822;\s*)?<?([^\s<>;]+@[^\s<>;]+)>?/i;
 const DESTINO_GMAIL_RE = /(?:wasn'?t|was not|could ?n[o']t be) delivered to\s+<?([^\s<>]+@[^\s<>]+?)>?[\s.,]/i;
 const CORREO_RE = /<?([A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?/;
@@ -388,11 +356,24 @@ function limpiar(s: string): string {
   return s.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
+/** Lo que dijo el servidor: el Diagnostic-Code si hay DSN; si no, las líneas del cuerpo con código SMTP. */
+function textoDelServidor(body: string, diagnostico: string | null): string {
+  if (diagnostico) return diagnostico;
+  return body
+    .split(/\r?\n/)
+    .filter((l) => LINEA_DEL_SERVIDOR_RE.test(l))
+    .join('\n');
+}
+
 /**
- * Si el correo es un aviso de rebote, qué dice; si no, null. Un correo
- * normal que menciona «undeliverable» en el asunto sin venir de
- * mailer-daemon ni traer un DSN no es un rebote: lo exige el remitente, o
- * un informe de entrega con Status.
+ * Si el correo es un aviso de rebote, qué dice; si no, null.
+ *
+ * Qué cuenta como aviso: un informe de entrega (DSN, RFC 3464) con su
+ * línea Status, o un correo de mailer-daemon o postmaster que ADEMÁS
+ * tiene asunto de rebote o cabecera X-Failed-Recipients. El remitente
+ * solo no basta: postmaster@ también manda respuestas automáticas. Un
+ * correo normal con «undeliverable» en el asunto tampoco: sin remitente
+ * de rebote ni DSN, no es un aviso.
  */
 export function detectBounce(mail: InboundMail): BounceDetection | null {
   const body = mail.body ?? '';
@@ -400,16 +381,15 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
   const headers = mail.headers ?? {};
   const deRebote = REMITENTE_DE_REBOTE.test(mail.from);
   const estadoDsn = ESTADO_RE.exec(body)?.[1] ?? null;
-  if (!deRebote && !estadoDsn) return null;
-  if (!estadoDsn && !ASUNTO_DE_REBOTE.test(subject) && !headers['x-failed-recipients'] && !TEXTO_DURO.test(body)) {
-    return null;
-  }
+  const fallido = headers['x-failed-recipients']?.split(',')[0]?.trim() || null;
+  if (!estadoDsn && !(deRebote && (ASUNTO_DE_REBOTE.test(subject) || fallido))) return null;
 
   const diagnostico = DIAGNOSTICO_RE.exec(body)?.[1] ?? null;
-  const statusCode = estadoDsn ?? (diagnostico ? ESTADO_EN_TEXTO_RE.exec(diagnostico)?.[1] : null) ?? ESTADO_EN_TEXTO_RE.exec(body)?.[1] ?? null;
-  const smtpTexto = SMTP_RE.exec(diagnostico ?? body)?.[1];
+  const servidor = textoDelServidor(body, diagnostico);
+  const statusCode = estadoDsn ?? ESTADO_EN_TEXTO_RE.exec(servidor)?.[1] ?? null;
+  const smtpTexto = SMTP_RE.exec(servidor)?.[1];
   const smtpCode = smtpTexto ? Number(smtpTexto) : null;
-  const texto = `${diagnostico ?? ''}\n${subject}\n${body}`;
+  const texto = `${servidor}\n${subject}`;
 
   let kind: BounceKind;
   if (statusCode?.startsWith('4') || (smtpCode !== null && smtpCode < 500)) kind = 'soft';
@@ -420,7 +400,6 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
     kind = TEXTO_BLOQUEO.test(texto) ? 'blocked' : 'hard';
   } else kind = TEXTO_TEMPORAL.test(texto) ? 'soft' : TEXTO_BLOQUEO.test(texto) ? 'blocked' : 'soft';
 
-  const fallido = headers['x-failed-recipients']?.split(',')[0]?.trim();
   const recipientRaw =
     DESTINO_RE.exec(body)?.[1] ?? (fallido ? CORREO_RE.exec(fallido)?.[1] : undefined) ?? DESTINO_GMAIL_RE.exec(body)?.[1] ?? null;
   const recipient = recipientRaw ? recipientRaw.replace(/[.,;]+$/, '').toLowerCase() : null;
@@ -429,7 +408,7 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
     MESSAGE_ID_RE.exec(body)?.[1] ?? (headers['references'] ? REFERENCIA_RE.exec(headers['references'])?.[1] : undefined) ??
     (headers['in-reply-to'] ? REFERENCIA_RE.exec(headers['in-reply-to'])?.[1] : undefined) ?? null;
 
-  const reason = limpiar(diagnostico ?? (subject || 'Aviso de rebote sin diagnóstico'));
+  const reason = limpiar(diagnostico ?? (servidor.split('\n')[0] || subject || 'Aviso de rebote sin diagnóstico'));
   return { kind, statusCode, smtpCode, recipient, originalMessageId, reason };
 }
 
@@ -438,8 +417,8 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
 // ---------------------------------------------------------------------
 //
 // Con la salud de un workspace (outbound_health, 24 h) y lo que ella no
-// trae (rebotes e intentos de correo, enrolamientos activos), qué está
-// mal hoy. Una alerta por tipo; el job decide si ya se avisó hoy.
+// trae (rebotes duros de lo enviado, toques que tocaban y no salieron),
+// qué está mal hoy. Una alerta por tipo; el job decide si ya se avisó hoy.
 
 export type OutreachAlertKind = 'bounce_rate' | 'no_sends' | 'queue_stuck' | 'account_down' | 'llm_budget';
 
@@ -447,10 +426,16 @@ export const OUTREACH_ALERT_KINDS: readonly OutreachAlertKind[] = [
   'bounce_rate', 'no_sends', 'queue_stuck', 'account_down', 'llm_budget',
 ];
 
-/** Sobre esta proporción de rebotes, alerta… */
+/** Sobre esta proporción de rebotes DUROS, alerta… */
 export const BOUNCE_RATE_THRESHOLD = 0.05;
-/** …pero solo con al menos estos intentos de correo en la ventana: 1 de 3 no dice nada. */
+/** …pero solo con al menos estos correos enviados en la ventana: 1 de 3 no dice nada. */
 export const BOUNCE_MIN_ATTEMPTS = 10;
+/**
+ * Un toque cuenta como «tocaba y no salió» si lleva al menos esto vencido:
+ * el despachador pasa cada pocos minutos, y lo que venció hace diez no es
+ * una avería.
+ */
+export const NO_SENDS_GRACE_H = 1;
 
 /** Lo mínimo de outbound_health que hace falta (la forma de @mc/db, sin depender de ella). */
 export interface HealthForAlerts {
@@ -463,12 +448,22 @@ export interface HealthForAlerts {
 
 export interface AlertInput {
   health: HealthForAlerts;
-  /** Correos que salieron o fallaron en la ventana. */
-  emailAttempts: number;
-  /** Rebotes registrados en la ventana (outbound_bounce). */
-  bounces: number;
-  /** Enrolamientos en 'active'. */
-  activeEnrollments: number;
+  /** Correos ENVIADOS en la ventana (sent_at dentro): el denominador de la tasa. */
+  emailsSent: number;
+  /**
+   * Rebotes DUROS de esos mismos correos: toques enviados en la ventana
+   * con al menos un rebote 'hard' en outbound_bounce. Los blandos y los
+   * bloqueos no cuentan (no dicen que la lista esté mal), y uno de un
+   * correo de otro día tampoco: así la tasa nunca pasa del 100 %.
+   */
+  hardBounces: number;
+  /**
+   * Toques (cualquier canal) que tocaba enviar en la ventana y no
+   * salieron: scheduled_for (o el reintento) dentro de la ventana, vencido
+   * hace más de NO_SENDS_GRACE_H, y todavía en 'scheduled' o en 'failed'.
+   * Un domingo sin nada programado da 0: no hay nada que avisar.
+   */
+  dueToSend: number;
 }
 
 export interface OutreachAlert {
@@ -481,16 +476,18 @@ export interface OutreachAlert {
 export function evaluateOutreachAlerts(input: AlertInput): OutreachAlert[] {
   const { health } = input;
   const alertas: OutreachAlert[] = [];
-  if (input.emailAttempts >= BOUNCE_MIN_ATTEMPTS && input.bounces / input.emailAttempts > BOUNCE_RATE_THRESHOLD) {
+  const duros = Math.min(input.hardBounces, input.emailsSent);
+  if (input.emailsSent >= BOUNCE_MIN_ATTEMPTS && duros / input.emailsSent > BOUNCE_RATE_THRESHOLD) {
     alertas.push({
       kind: 'bounce_rate',
       severity: 'critical',
-      values: { bounces: input.bounces, attempts: input.emailAttempts, rate: input.bounces / input.emailAttempts },
+      values: { bounces: duros, attempts: input.emailsSent, rate: duros / input.emailsSent },
     });
   }
-  // Con el envío apagado, cero envíos es lo esperado.
-  if (health.enabled && input.activeEnrollments > 0 && health.window.sent === 0) {
-    alertas.push({ kind: 'no_sends', severity: 'warning', values: { activeEnrollments: input.activeEnrollments } });
+  // Con el envío apagado, cero envíos es lo esperado; y sin nada que
+  // tocara enviar (fin de semana, días entre toques), también.
+  if (health.enabled && input.dueToSend > 0 && health.window.sent === 0) {
+    alertas.push({ kind: 'no_sends', severity: 'warning', values: { dueToSend: input.dueToSend } });
   }
   if (health.queue.stuck > 0) {
     alertas.push({ kind: 'queue_stuck', severity: 'warning', values: { stuck: health.queue.stuck } });

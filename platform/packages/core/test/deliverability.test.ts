@@ -1,78 +1,69 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   BOUNCE_MIN_ATTEMPTS, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
-  footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, oneClickUnsubscribeUrl, OptoutSecretError, optoutTokenHash,
-  optoutUrl, readOptoutToken, warmupDailyLimit, warmupDay, type HealthForAlerts,
+  footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, maskEmailAddress, oneClickUnsubscribeUrl, optoutTokenHash,
+  optoutUrl, warmupCurve, warmupDailyLimit, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
 } from '../src/outreach/deliverability.ts';
-
-const SECRET = 'secreto-de-prueba-con-mas-de-32-caracteres!!';
-const WS = '0000000f-0000-4000-8000-000000000001';
-const CONTACT = '0000000f-0000-4000-8000-0000000000c1';
-const NONCE = new Uint8Array(16).fill(7);
 
 // ------------------------------------------------------------------ token
 
-test('el token lleva el workspace y la ficha, firmados, y se lee de vuelta', () => {
-  const token = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET);
+test('el token es opaco: 32 bytes al azar en base64url, sin ningún id dentro', () => {
+  const token = createOptoutToken();
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
   assert.ok(looksLikeOptoutToken(token));
-  assert.ok(token.length >= 16 && token.length <= 200, 'public_optout solo busca tokens de 16 a 200 caracteres');
-  assert.deepEqual(readOptoutToken(token, SECRET), { ok: true, workspaceId: WS, contactId: CONTACT });
+  assert.ok(!token.includes('.'), 'sin puntos: el optoutUrl de VEN-10 (^[A-Za-z0-9_-]{16,128}$) lo acepta');
+  const fijo = createOptoutToken((n) => new Uint8Array(n).fill(7));
+  assert.equal(fijo, Buffer.alloc(32, 7).toString('base64url'));
+  assert.throws(() => createOptoutToken(() => new Uint8Array(8)), /32 bytes/);
 });
 
-test('dos correos a la misma persona llevan tokens distintos (16 bytes al azar)', () => {
-  const a = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET);
-  const b = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET);
-  assert.notEqual(a, b);
+test('dos correos a la misma persona llevan tokens distintos', () => {
+  assert.notEqual(createOptoutToken(), createOptoutToken());
 });
 
-test('con el mismo nonce el token es determinista', () => {
-  const a = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET, NONCE);
-  assert.equal(a, createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET, NONCE));
+test('el token del despachador de VEN-10 tiene la misma forma: un solo contrato', () => {
+  // outreach-motor.ts (VEN-10) genera randomBytes(32).toString('base64url').
+  const deVen10 = randomBytes(32).toString('base64url');
+  assert.ok(looksLikeOptoutToken(deVen10));
+  // Y un token hex de 64, o uno v1 de la ronda 1, también se busca: la base decide.
+  assert.ok(looksLikeOptoutToken('a'.repeat(64)));
+  assert.ok(looksLikeOptoutToken(`v1.${'A'.repeat(64)}.${'b'.repeat(22)}`));
 });
 
-test('cambiar el workspace en la URL rompe la firma', () => {
-  const token = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET, NONCE);
-  const otro = createOptoutToken({ workspaceId: '0000000f-0000-4000-8000-000000000002', contactId: CONTACT }, SECRET, NONCE);
-  const [, , firma] = token.split('.');
-  const [v, datosOtro] = otro.split('.');
-  assert.deepEqual(readOptoutToken(`${v}.${datosOtro}.${firma}`, SECRET), { ok: false, reason: 'bad_signature' });
-});
-
-test('otro secreto no lee el token, y lo que no tiene la forma ni se firma', () => {
-  const token = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET);
-  assert.deepEqual(readOptoutToken(token, `${SECRET}-otro`), { ok: false, reason: 'bad_signature' });
-  assert.deepEqual(readOptoutToken('k2Jd8sQ0pX4vN7bW1eR5tY9uI3oP6aS0', SECRET), { ok: false, reason: 'malformed' });
-  assert.deepEqual(readOptoutToken(`${token}x`, SECRET), { ok: false, reason: 'malformed' });
-});
-
-test('sin secreto, o con uno corto, no se firma ni se lee', () => {
-  assert.throws(() => createOptoutToken({ workspaceId: WS, contactId: CONTACT }, ''), OptoutSecretError);
-  assert.throws(() => readOptoutToken('v1.x.y', 'corto'), OptoutSecretError);
-});
-
-test('los ids tienen que ser uuid', () => {
-  assert.throws(() => createOptoutToken({ workspaceId: 'ws-1', contactId: CONTACT }, SECRET), /uuid/);
+test('lo que no tiene forma de token no llega a la base', () => {
+  assert.equal(looksLikeOptoutToken(''), false);
+  assert.equal(looksLikeOptoutToken('corto'), false);
+  assert.equal(looksLikeOptoutToken('x'.repeat(201)), false);
+  assert.equal(looksLikeOptoutToken("abc'; drop table contact;--xxxxxxxx"), false);
+  assert.equal(looksLikeOptoutToken(undefined), false);
 });
 
 test('el hash es el mismo que calcula public_optout: sha256 hex del token en UTF-8', () => {
-  const token = createOptoutToken({ workspaceId: WS, contactId: CONTACT }, SECRET, NONCE);
+  const token = createOptoutToken((n) => new Uint8Array(n).fill(1));
   assert.equal(optoutTokenHash(token), createHash('sha256').update(Buffer.from(token, 'utf8')).digest('hex'));
   assert.match(optoutTokenHash(token), /^[0-9a-f]{64}$/);
+});
+
+test('la dirección enmascarada deja la inicial y el dominio', () => {
+  assert.equal(maskEmailAddress('Valentina@Marca.com'), 'v•••@marca.com');
+  assert.equal(maskEmailAddress('a@b.co'), 'a•••@b.co');
+  assert.equal(maskEmailAddress('sin-arroba'), '•••');
 });
 
 // ------------------------------------------------------------------ URL y cabeceras
 
 test('la URL de baja cuelga de /baja y la de un clic de /baja/<token>/un-clic', () => {
-  assert.equal(optoutUrl('https://on-cue-web.vercel.app/', 'v1.a.b'), 'https://on-cue-web.vercel.app/baja/v1.a.b');
-  assert.equal(oneClickUnsubscribeUrl('http://localhost:3100', 'v1.a.b'), 'http://localhost:3100/baja/v1.a.b/un-clic');
-  assert.throws(() => optoutUrl('javascript:alert(1)', 't'), /http/);
+  const token = createOptoutToken((n) => new Uint8Array(n).fill(2));
+  assert.equal(optoutUrl('https://on-cue-web.vercel.app/', token), `https://on-cue-web.vercel.app/baja/${token}`);
+  assert.equal(oneClickUnsubscribeUrl('http://localhost:3100', token), `http://localhost:3100/baja/${token}/un-clic`);
+  assert.throws(() => optoutUrl('javascript:alert(1)', token), /http/);
 });
 
 test('List-Unsubscribe de un clic (RFC 8058)', () => {
-  assert.deepEqual(listUnsubscribeHeaders('https://app.test', 'v1.a.b'), {
-    'List-Unsubscribe': '<https://app.test/baja/v1.a.b/un-clic>',
+  assert.deepEqual(listUnsubscribeHeaders('https://app.test', 'tok-de-prueba-123'), {
+    'List-Unsubscribe': '<https://app.test/baja/tok-de-prueba-123/un-clic>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
   });
 });
@@ -122,8 +113,42 @@ test('calentamiento: nunca pasa del tope, y sin calentamiento es el tope', () =>
   assert.equal(warmupDailyLimit({ day: 1, policyLimit: 12 }), 12);
   assert.equal(warmupDailyLimit({ day: 30, policyLimit: 20 }), 20);
   assert.equal(warmupDailyLimit({ day: 1, policyLimit: 150, warmupDays: 0 }), 150);
-  assert.equal(warmupDailyLimit({ day: 8, policyLimit: 150, warmupDays: 5 }), 150);
+  assert.equal(warmupDailyLimit({ day: 1, policyLimit: 150, warmupDays: 1 }), 150);
+  assert.equal(warmupDailyLimit({ day: 5, policyLimit: 150, warmupDays: 5 }), 150);
   assert.equal(warmupDailyLimit({ day: 0, policyLimit: 150 }), 20);
+});
+
+test('un calentamiento corto recorta la meseta y sigue subiendo poco a poco (sin saltos de 20 al tope)', () => {
+  const dias = (hasta: number) => Array.from({ length: hasta }, (_, i) => warmupDailyLimit({ day: i + 1, policyLimit: 60, warmupDays: hasta }));
+  assert.deepEqual(dias(5), [20, 20, 33, 46, 60]);
+  assert.deepEqual(dias(8), [20, 20, 20, 20, 30, 40, 50, 60]);
+  assert.deepEqual(dias(2), [20, 60], 'con dos días, el segundo ya es el tope: es lo que se pidió');
+});
+
+test('la curva de la pantalla y el motor dicen lo mismo para 0 a 21 días de calentamiento', () => {
+  for (const tope of [15, 20, 21, 60, 2000]) {
+    for (let hasta = 0; hasta <= 21; hasta++) {
+      const motor = Array.from({ length: hasta + 3 }, (_, i) => warmupDailyLimit({ day: i + 1, policyLimit: tope, warmupDays: hasta }));
+      const curva = warmupCurve(tope, hasta);
+      const hayCalentamiento = motor.some((n) => n < tope);
+      assert.equal(curva.length > 0, hayCalentamiento, `tope ${tope}, ${hasta} días`);
+      for (const p of curva) assert.equal(p.limit, motor[p.day - 1], `tope ${tope}, ${hasta} días, día ${p.day}`);
+      for (let i = 1; i < motor.length; i++) assert.ok(motor[i]! >= motor[i - 1]!, `nunca baja (tope ${tope}, ${hasta} días)`);
+      if (curva.length) {
+        assert.equal(curva[0]?.day, 1);
+        assert.equal(curva.at(-1)?.limit, tope, 'la curva termina en el tope');
+        assert.equal(curva.at(-1)?.day, motor.indexOf(tope) + 1, 'en el primer día que lo alcanza');
+      }
+    }
+  }
+});
+
+test('la curva enseña el primer día, el primero que sube, uno intermedio y el del tope', () => {
+  assert.deepEqual(warmupCurve(100, 14).map((p) => p.day), [1, 8, 11, 14]);
+  assert.deepEqual(warmupCurve(100, 14).map((p) => p.limit), [20, 31, 65, 100]);
+  assert.deepEqual(warmupCurve(WARMUP_START_LIMIT, 14), [], 'con un tope de 20 no hay nada que calentar');
+  assert.deepEqual(warmupCurve(100, 0), []);
+  assert.deepEqual(warmupCurve(100, 10_000), [], 'un valor fuera de rango no se pinta');
 });
 
 test('el día del calentamiento se cuenta en la zona del workspace', () => {
@@ -223,6 +248,36 @@ test('una respuesta normal no es un rebote, aunque hable de entregas', () => {
   assert.equal(detectBounce({ from: 'mailer-daemon@googlemail.com', subject: 'Tu resumen semanal', body: 'Nada que ver.' }), null);
 });
 
+test('un fuera de oficina de postmaster@ que dice «no existe» no es un rebote', () => {
+  // La prueba del hallazgo: antes daba 'hard' y, con In-Reply-To, marcaba
+  // como inválida una dirección que funciona.
+  const ausente = {
+    from: 'Postmaster <postmaster@marca.com>',
+    subject: 'Fuera de la oficina',
+    headers: { 'in-reply-to': '<CAF=abc123@mail.gmail.com>' },
+    body: 'Estoy fuera hasta el lunes: el evento no existe hasta el lunes. The office does not exist on weekends.',
+  };
+  assert.equal(detectBounce(ausente), null);
+  // Con asunto de rebote pero sin nada del servidor, no se inventa un «duro».
+  const vago = detectBounce({
+    from: 'postmaster@marca.com',
+    subject: 'Undeliverable: Propuesta',
+    body: 'Hola, el formulario de contacto no existe más; escríbenos por la web.',
+  });
+  assert.notEqual(vago?.kind, 'hard');
+});
+
+test('«no existe» cuenta cuando lo dice el servidor sobre la dirección', () => {
+  const r = detectBounce({
+    from: 'MAILER-DAEMON@mx.tienda.co',
+    subject: 'Mensaje no entregado',
+    body: 'No pudimos entregar tu mensaje.\nhost mx.tienda.co said: 550 El buzón hola@tienda.co no existe',
+  });
+  assert.equal(r?.kind, 'hard');
+  assert.equal(r?.smtpCode, 550);
+  assert.match(r?.reason ?? '', /no existe/);
+});
+
 // ------------------------------------------------------------------ alertas
 
 function salud(over: Partial<HealthForAlerts> = {}): HealthForAlerts {
@@ -236,37 +291,53 @@ function salud(over: Partial<HealthForAlerts> = {}): HealthForAlerts {
   };
 }
 
+function entrada(over: Partial<AlertInput> = {}): AlertInput {
+  return { health: salud(), emailsSent: 40, hardBounces: 0, dueToSend: 0, ...over };
+}
+
 test('un workspace sano no alerta', () => {
-  assert.deepEqual(evaluateOutreachAlerts({ health: salud(), emailAttempts: 40, bounces: 2, activeEnrollments: 5 }), []);
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ hardBounces: 2, dueToSend: 5 })), []);
 });
 
-test('rebotes sobre el 5 % solo con diez intentos o más', () => {
-  const pocos = evaluateOutreachAlerts({ health: salud(), emailAttempts: BOUNCE_MIN_ATTEMPTS - 1, bounces: 5, activeEnrollments: 1 });
-  assert.deepEqual(pocos, []);
-  const justo = evaluateOutreachAlerts({ health: salud(), emailAttempts: 20, bounces: 1, activeEnrollments: 1 });
-  assert.deepEqual(justo, [], 'el 5 % exacto no alerta: es «sobre»');
-  const [a] = evaluateOutreachAlerts({ health: salud(), emailAttempts: 20, bounces: 2, activeEnrollments: 1 });
+test('rebotes duros sobre el 5 % solo con diez envíos o más', () => {
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: BOUNCE_MIN_ATTEMPTS - 1, hardBounces: 5 })), []);
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 1 })), [], 'el 5 % exacto no alerta: es «sobre»');
+  const [a] = evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 2 }));
   assert.equal(a?.kind, 'bounce_rate');
   assert.equal(a?.values.rate, 0.1);
 });
 
-test('cero envíos con enrolamientos activos alerta, salvo con el envío apagado', () => {
+test('3 rebotes blandos sobre 20 no alertan: solo cuentan los duros', () => {
+  // Quien lee la salud pasa solo los duros (outbound.alerts: kind = 'hard');
+  // tres blandos son 0 duros.
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0 })), []);
+});
+
+test('la tasa nunca pasa del 100 %', () => {
+  const [a] = evaluateOutreachAlerts(entrada({ emailsSent: 10, hardBounces: 30 }));
+  assert.equal(a?.values.rate, 1);
+  assert.equal(a?.values.bounces, 10);
+});
+
+test('cero envíos alerta solo si había toques que tocaba enviar, y con el envío encendido', () => {
   const sinEnvios = salud({ window: { sent: 0 } });
   assert.deepEqual(
-    evaluateOutreachAlerts({ health: sinEnvios, emailAttempts: 0, bounces: 0, activeEnrollments: 3 }).map((a) => a.kind),
-    ['no_sends'],
+    evaluateOutreachAlerts(entrada({ health: sinEnvios, emailsSent: 0, dueToSend: 3 })).map((a) => [a.kind, a.values.dueToSend]),
+    [['no_sends', 3]],
   );
-  assert.deepEqual(evaluateOutreachAlerts({ health: { ...sinEnvios, enabled: false }, emailAttempts: 0, bounces: 0, activeEnrollments: 3 }), []);
-  assert.deepEqual(evaluateOutreachAlerts({ health: sinEnvios, emailAttempts: 0, bounces: 0, activeEnrollments: 0 }), []);
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ health: { ...sinEnvios, enabled: false }, emailsSent: 0, dueToSend: 3 })), []);
+});
+
+test('un fin de semana sin toques debidos no alerta, aunque haya secuencias activas', () => {
+  // Sábado y domingo el despachador no envía y nada estaba programado:
+  // dueToSend = 0. Antes bastaban los enrolamientos activos para avisar.
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ health: salud({ window: { sent: 0 } }), emailsSent: 0, dueToSend: 0 })), []);
 });
 
 test('cola atascada, cuenta caída y presupuesto agotado, cada una con su tipo', () => {
-  const r = evaluateOutreachAlerts({
-    health: salud({ queue: { stuck: 2 }, accountsDown: 1, llm: { spentToday: 5, dailyCap: 5 } }),
-    emailAttempts: 5,
-    bounces: 0,
-    activeEnrollments: 1,
-  });
+  const r = evaluateOutreachAlerts(
+    entrada({ health: salud({ queue: { stuck: 2 }, accountsDown: 1, llm: { spentToday: 5, dailyCap: 5 } }), emailsSent: 5 }),
+  );
   assert.deepEqual(r.map((a) => [a.kind, a.severity]), [
     ['queue_stuck', 'warning'],
     ['account_down', 'critical'],
