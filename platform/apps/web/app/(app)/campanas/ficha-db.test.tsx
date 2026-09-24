@@ -31,6 +31,8 @@ const CAMPAIGN_HOGAR_LINDO = "00000003-0000-4000-8000-000000ca0004";
 /** Una campaña de Laura sin factura, creada aquí (todas las del seed tienen una). */
 const CAMPAIGN_SIN_FACTURA = "0000000e-0000-4000-8000-0000000006f1";
 const COMPANY_CAFE_ALMA = "00000002-0000-4000-8000-0000000000e1";
+const POST_D01 = "00000002-0000-4000-8000-000000000d01";
+const POST_D02 = "00000002-0000-4000-8000-000000000d02";
 
 const entorno = { DATABASE_URL: process.env.DATABASE_URL, DEMO_WORKSPACE_ID: process.env.DEMO_WORKSPACE_ID, DEMO_USER_ID: process.env.DEMO_USER_ID };
 
@@ -78,9 +80,19 @@ describe("la ficha real contra el seed", () => {
     const { texto } = await ficha(CAMPAIGN_CAFE_ALMA);
     expect(texto).toContain("Posts asociados");
     expect(texto).toContain("2 posts");
-    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post (seed 0002, 22-sep).
-    expect(texto).toContain("Cold brew en casa en 3 pasos Instagram 10 ago 417.673 hasta el 22 sep");
-    expect(texto).toContain("El cold brew que me salva las mañanas TikTok 12 ago 303.685 hasta el 22 sep");
+    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002
+    // rellena la serie hasta ayer, así que la cifra cambia cada día: se lee de la base y se exige
+    // que la ficha diga esa misma (antes estaba escrita a mano con la del 22-sep y fallaba desde el 23).
+    const { rows } = await withWorkspaceId(SEED_WORKSPACE_ID, (tx) =>
+      tx.query<{ id: string; views: string }>(
+        `SELECT p.id, (SELECT s.views::text FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) AS views
+           FROM post p WHERE p.id = ANY($1::uuid[])`,
+        [[POST_D01, POST_D02]],
+      ),
+    );
+    const views = (id: string) => new Intl.NumberFormat("es-CO").format(Number(rows.find((r) => r.id === id)?.views));
+    expect(texto).toMatch(new RegExp(`Cold brew en casa en 3 pasos Instagram 10 ago ${views(POST_D01).replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
+    expect(texto).toMatch(new RegExp(`El cold brew que me salva las mañanas TikTok 12 ago ${views(POST_D02).replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);
 
