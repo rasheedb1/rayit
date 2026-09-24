@@ -14,8 +14,8 @@ migraciones inmutables) siguen vigentes.
 los módulos de Nicolás: FIN, CAM y Conexiones en `main` y en
 producción, el worker listo pero sin encender (le falta un rol de
 Supabase, de Rasheed), una prueba de punta a punta que recorre la
-cadena entera en verde y `pnpm verificar` en verde. Supabase va por la 0041; la 0042 (CON-C) espera
-`make db.migrate`. El detalle está en la
+cadena entera en verde y `pnpm verificar` en verde. Supabase tiene aplicadas todas las migraciones de `main`
+(hasta la 0042) y la guardia está en verde. El detalle está en la
 [sección 11](#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
 
 **Antes, el 23 de septiembre,** con el cierre del sprint 2
@@ -1038,7 +1038,7 @@ la zona del workspace y la ficha de campaña con las views del 22-sep
 escritas a mano, que dependían del día y se arreglaron en la prueba; y
 la línea base de CON-6, que **no dependía del día**: la vista
 `post_metrics_at_cut` desempataba al azar dos lecturas de la misma
-edad. La arregla la **migración 0042** (CON-C), que espera su PARADA 1.
+edad. La arregla la **migración 0042** (CON-C), ya aplicada.
 La sesión de CON-C y E2E dieron con las tres en paralelo; quedó la
 versión de CON-C.
 `oauth-refresh.test.ts` falló una vez dentro de `verificar` con la
@@ -1050,9 +1050,9 @@ máquina cargada y pasa sola y en la siguiente corrida.
 de Vercel y el plan B de cada despliegue están en el `CIERRE-<MÓDULO>.md`
 de cada uno. E2E probó **48 rutas** sin sesión: ninguna en 500 (las
 públicas con un slug falso dan 404; las fichas con ids del seed, 200).
-Supabase tiene aplicadas la **0040** y la **0041** (24-sep, 00:37 UTC);
-la **0042** (CON-C) está en `main` y espera `make db.migrate`: hasta
-entonces la guardia la pide.
+Supabase tiene aplicadas todas las migraciones de `main`, hasta la
+**0042** (la 0040 y la 0041 el 24-sep a las 00:37 UTC; la 0042 después,
+con el cierre de CON-C), y `make db.guardia` está en verde.
 `job_run` tiene **0 filas**: ningún job ha corrido nunca en producción.
 
 ### 11.4 Lo que Nicolás necesita de Rasheed (lo nuevo respecto a §10.4)
@@ -1078,12 +1078,11 @@ entonces la guardia la pide.
 ### 11.6 Lo que sigue sin estar conectado, y de quién depende
 
 1. El worker en producción: fila 25 (Rasheed) y PARADA 2 (Nicolás).
-2. La 0042: `make db.migrate` (Nicolás, PARADA 1 de CON-C).
-3. El alcance en Ventas, Cotizar y Resumen: fila 28 (Rasheed).
-4. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
+2. El alcance en Ventas, Cotizar y Resumen: fila 28 (Rasheed).
+3. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
    `GOOGLE_API_KEY` (Nicolás).
-5. CON-8, CON-12 (en `main`, apagadas) y la demografía en vivo:
+4. CON-8, CON-12 (en `main`, apagadas) y la demografía en vivo:
    `GOOGLE_CLIENT_ID/SECRET` y la decisión sobre EnsembleData
    (Nicolás) y CON-9 (Rasheed).
-6. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
-7. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
+5. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
+6. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
