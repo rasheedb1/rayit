@@ -213,6 +213,19 @@ before(async () => {
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_C}', 'outreach-c', 'Outreach C', 'America/Mexico_City');
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_C}', 'Empresa de C', '${WS_C}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_C}', '${COMPANY_C}');
+    -- Desde 0038 §8 (VEN-15 r3) la baja por enlace va en dos tiempos: el
+    -- primer clic vale solo para el workspace que envió, y pasa a toda la
+    -- plataforma cuando otro workspace la confirma. Estas pruebas miden la
+    -- baja GLOBAL de 0037 (lo que hace el clic que la confirma), así que
+    -- cada dirección llega con la baja de otro workspace (C) ya anotada.
+    -- El primer tiempo, y que un solo remitente no suprime a nadie para
+    -- los demás, se prueban en entregabilidad.test.ts.
+    INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES
+      ('${WS_C}', 'marta@cafe.test', '${sha256('confirmacion-previa-marta')}'),
+      ('${WS_C}', 'sola@cafe.test', '${sha256('confirmacion-previa-sola')}'),
+      ('${WS_C}', 'victima@cafe.test', '${sha256('confirmacion-previa-victima')}'),
+      ('${WS_C}', 'yo@outreach-b.test', '${sha256('confirmacion-previa-yo-b')}'),
+      ('${WS_C}', 'borrada@cafe.test', '${sha256('confirmacion-previa-borrada')}');
   `);
 });
 
@@ -873,6 +886,11 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
           ('${C1}', '${COMPANY_C}', 'Uno', 'uno@c.outreach.test', 'user_provided', '${WS_C}'),
           ('${C2}', '${COMPANY_C}', 'Dos', 'dos@c.outreach.test', 'user_provided', '${WS_C}'),
           ('${C3}', '${COMPANY_C}', 'Tres', 'tres@c.outreach.test', 'user_provided', '${WS_C}');
+        -- La confirmación de otro workspace (A), para medir la baja global (0038 §8; ver el before de arriba).
+        INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES
+          ('${WS_A}', 'uno@c.outreach.test', '${sha256('confirmacion-previa-uno')}'),
+          ('${WS_A}', 'dos@c.outreach.test', '${sha256('confirmacion-previa-dos')}'),
+          ('${WS_A}', 'tres@c.outreach.test', '${sha256('confirmacion-previa-tres')}');
       `);
       // El despachador envía: el toque con sus pruebas y el enlace, en la misma transacción.
       for (const [touch, contacto, correo] of [

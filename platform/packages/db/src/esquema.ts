@@ -638,6 +638,15 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
       'esto no se podría leer el nombre (0038 §5). Sus políticas solo abren la sesión o el workspace fijados, y este ' +
       'rol no tiene ninguno: no ve ninguna fila',
   },
+  // La baja en dos tiempos (0038 §8, VEN-15 r3).
+  outbound_workspace_optout: {
+    tabla: ['INSERT'],
+    columnas: { SELECT: ['email', 'workspace_id'] },
+    motivo:
+      'la baja vale ya para el workspace que envió el correo (el alta, solo con el token, el workspace y la dirección ' +
+      'del enlace) y pasa a toda la plataforma cuando otro workspace la confirma: por eso lee QUÉ workspaces tienen ' +
+      'esa dirección (0038 §8). Solo las filas de la dirección que fija public_optout',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
@@ -662,8 +671,8 @@ const TOKEN_DE_LA_BAJA = /^\(?token_hash = NULLIF\(current_setting\('app\.public
 const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9) y la de
- * quién envía (0038 §5). Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9), la de
+ * quién envía (0038 §5) y las dos de la baja en dos tiempos (0038 §8). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -759,6 +768,17 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     cmd: 'r',
     exige: [/^\(?id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
     motivo: 'el workspace que envió el correo del enlace, cuyo id fija public_optout_preview',
+  },
+  // La baja en dos tiempos (0038 §8).
+  'outbound_workspace_optout.outbound_workspace_optout_public_optout_read': {
+    cmd: 'r',
+    exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
+    motivo: 'qué workspaces ya tienen de baja la dirección del enlace: con dos, la baja pasa a toda la plataforma',
+  },
+  'outbound_workspace_optout.outbound_workspace_optout_public_optout': {
+    cmd: 'a',
+    exige: [TOKEN_DE_LA_BAJA],
+    motivo: 'la baja de ese mismo enlace en el workspace que lo envió, y ninguna otra',
   },
 };
 
@@ -957,6 +977,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     motivo:
       'los rebotes los lee del buzón el worker (0038, VEN-15) y la web solo los muestra. Con escritura, un ' +
       'workspace se borraría los rebotes que disparan la alerta de entregabilidad',
+  },
+  outbound_workspace_optout: {
+    permite: ['SELECT'],
+    motivo:
+      'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (0038 §8). ' +
+      'La escribe solo public_optout: con escritura, un workspace se quitaría una baja o se la pondría a otro',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
