@@ -10,12 +10,15 @@ vi.mock("./actions", () => ({
   reactivarAvisos: (...a: unknown[]) => reactivarAvisos(...a),
 }));
 
+import type { ChannelAccountRow } from "@mc/db/queries/canales";
+import { formatterFor } from "@/lib/format";
 import { ConectarBoton } from "./conectar-boton";
 import { Desconectar } from "./desconectar";
 import { FilaCanal } from "./fila-canal";
 import { Limites } from "./limites";
 import { MESSAGES } from "./messages";
 import { ReintentarAvisos } from "./reintentar-avisos";
+import { UsoCuenta } from "./uso";
 
 const ID = "00000005-0000-4000-8000-0000000ac001";
 
@@ -62,7 +65,38 @@ describe("Limites", () => {
   });
 });
 
+describe("UsoCuenta", () => {
+  const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+  const live = {
+    id: ID, channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test", status: "connected", stale: false,
+    dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: new Date("2026-09-24T11:18:00Z"), lastOkAgoS: 2 * 3600 + 5, lastErrorAt: null, lastError: null,
+    lastErrorRecent: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
+    limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", personalMailbox: false },
+  } satisfies ChannelAccountRow;
+
+  it("«Comprobada» va en relativo, con la fecha completa en el title, y puede partirse (a 400 px no desborda la fila)", () => {
+    const { container } = render(<UsoCuenta live={live} f={f} />);
+    const comprobada = container.querySelector("[data-comprobada]")!;
+    expect(comprobada.textContent).toBe(MESSAGES.detail.lastOk("hace 2 horas"));
+    expect(comprobada.getAttribute("title")).toBe(f.dateTime(live.lastOkAt.toISOString()));
+    expect(comprobada.className).not.toMatch(/nowrap/);
+    expect(comprobada.className).toMatch(/break-words/);
+    expect(screen.getByText(MESSAGES.detail.usageToday("3", "20"))).toBeTruthy();
+  });
+});
+
 describe("Desconectar", () => {
+  it("la región viva de la pregunta está montada desde el principio, vacía: el lector la anuncia al escribir en ella", () => {
+    const { container } = render(<Desconectar accountId={ID} account="laura@cocina.test" />);
+    const live = container.querySelector("[aria-live=polite]")!;
+    expect(live.textContent).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));
+    expect(container.querySelector("[aria-live=polite]"), "la misma región, no una nueva").toBe(live);
+    expect(live.textContent).toBe(MESSAGES.actions.disconnectConfirm);
+    const group = screen.getByRole("group", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") });
+    expect(group.getAttribute("aria-describedby")).toBe(live.id);
+  });
+
   it("al preguntar, el foco va a confirmar y la pregunta se anuncia; al cancelar, vuelve a «Desconectar»", () => {
     render(<Desconectar accountId={ID} account="laura@cocina.test" />);
     fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));

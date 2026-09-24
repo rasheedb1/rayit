@@ -624,6 +624,11 @@ dueño aquí:
 | Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
 | Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si su hilo es el de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041); lo demás se ignora sin guardar el cuerpo | VEN-9 |
 | Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
+| El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (0042): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
+| Una hosted auth que termina bien en Unipile pero no se conecta aquí (canal equivocado, perfil ocupado, doble clic) deja una cuenta huérfana cobrando | La web la borra en Unipile si nadie la usa (`in_use` de outreach_channel_connect, 0042); si el borrado falla, el keepalive concilia `listAccounts` contra la base y borra las cuentas de NUESTRA hosted auth sin fila y con más de un día | VEN-9 |
+| El aviso de cuenta creada confía en el account_id del cuerpo | Al crear, la cuenta tiene que haber nacido después de firmar el estado; al reconectar, tiene que ser la que se firmó en él | VEN-9 |
+| Una concesión de Google canjeada y deshecha se queda viva en la cuenta de la persona | Se revoca si nadie usa ese buzón; si vive en otro espacio, NO (revocar tumbaría la concesión entera, también la de ese espacio) | VEN-9 |
+| Cualquier miembro del espacio conecta o suelta el buzón de la creadora | `PUEDEN_GESTIONAR_CANALES` (owner, admin) en el servidor, en las tres acciones y en los dos inicios; la pantalla no ofrece los botones a los demás | VEN-9 |
 | Sin `List-Unsubscribe`, sin pie de baja, sin rebotes asíncronos | VEN-15 completa | VEN-15 |
 | Un `owner_id` escrito a mano en el validador de similitud | Filtro por workspace | VEN-12 |
 | Ventana 09:00–16:59 en UTC en vez de la zona de la cadencia | Zona del workspace, una sola implementación en `core` | VEN-10 |
@@ -655,6 +660,39 @@ ya está:
   cuenta: el número de avisos vivos es el de cuentas conectadas, no el
   de cuentas que alguna vez lo estuvieron.
 
+**Rotar el secreto sin perder avisos.** Cada aviso lleva
+UNIPILE_WEBHOOK_SECRET en su cabecera, y la fila guarda la HUELLA del
+secreto con el que se dio de alta (`provider_webhook_secret_fp`, 0042).
+Para rotarlo (se filtró, o toca por calendario):
+
+1. En la web y en el worker: `UNIPILE_WEBHOOK_SECRET_PREVIOUS` = el
+   actual, y `UNIPILE_WEBHOOK_SECRET` = uno nuevo
+   (`openssl rand -base64 32`). Desplegar los dos. Desde ahí la web
+   acepta los dos secretos (comparados en tiempo constante): ningún
+   aviso responde 401.
+2. El keepalive (cada hora, por lotes) ve que la huella de cada cuenta
+   conectada no es la del secreto nuevo: da de alta sus dos avisos con
+   el nuevo y, si salen, borra los viejos en Unipile. Si falla, la
+   cuenta conserva los viejos (siguen valiendo por el paso 1) y se
+   reintenta en la corrida siguiente.
+3. Cuando esta consulta devuelve cero, se borra
+   `UNIPILE_WEBHOOK_SECRET_PREVIOUS` de los dos y se despliega:
+
+   ```sql
+   select count(*) from outreach_channel_account
+    where provider = 'unipile' and status = 'connected'
+      and provider_webhook_secret_fp is distinct from '<huella del nuevo>';
+   ```
+
+   (la huella: `webhookSecretFingerprint(secreto)` de @mc/connectors).
+
+**El keepalive, por lotes.** Corre cada hora y toma, por proveedor, las
+cuentas vivas que no se comprobaron en veinte horas
+(`keepalive_checked_at`, 0042), de la más vieja a la más nueva, 200
+como mucho y cuatro a la vez. Si el job se queda sin tiempo deja de
+tomar cuentas y las que quedan van primero en la hora siguiente: cada
+cuenta se mira una vez al día aunque haya miles.
+
 **El plan B**, si Unipile pone un techo o lo alcanzamos: UN aviso
 global por fuente (sin `account_ids`), con el secreto compartido y sin
 ruta firmada. El webhook, tras validar el secreto, resuelve
@@ -667,14 +705,34 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 
 ### 9.2 Lo que la pantalla de canales le dice al creador
 
-- **Nunca el texto de un proveedor.** En `last_error` solo van códigos
-  (`CHANNEL_ERROR_CODES` de `@mc/db`: `cancelled`, `provider_error`,
-  `auth_failed`…) o frases de `@mc/core` (`canales-textos.ts`, las
-  mismas para la web y el keepalive). La pantalla traduce los códigos en
-  `ventas/canales/messages.ts`, con el nombre del servicio («No pudimos
-  conectar con Instagram…»), nunca «el proveedor» ni «Unipile». El
-  `detail` de Unipile o el `message` de Google, en inglés, quedan en
+- **Nunca el texto de un proveedor, y nunca una frase en la base.** En
+  `last_error` solo van códigos (`CHANNEL_ERROR_CODES` de `@mc/db`:
+  `cancelled`, `provider_error`, `gmail_revoked`, `transient`…, y
+  `unipile_status:<X>` para lo que Unipile dijo de la sesión), los
+  escriba la web o el keepalive. La pantalla los traduce al pintar
+  (`_lib/filas.ts` con `ventas/canales/messages.ts`), con el nombre del
+  servicio («No pudimos conectar con Instagram…»), nunca «el proveedor»
+  ni «Unipile»; así otro idioma del espacio no hereda un español
+  congelado. Un código que la pantalla no conoce sale como una frase
+  genérica, nunca crudo. Lo único con frase es el aviso de la campana
+  (la tabla `notification` es de frases), de `@mc/core`. El `detail` de
+  Unipile o el `message` de Google, en inglés, quedan en
   `api_call_log.error_message`.
+- **Un motivo pasajero caduca.** «No pudimos conectar con Instagram
+  ahora mismo» solo se enseña si es de las últimas 24 horas.
+- **El nombre de la cuenta es el de la persona.** Sale de
+  `connection_params.im` de Unipile, nunca del `name` de la cuenta (con
+  la hosted auth, Unipile guarda ahí el estado firmado que le mandamos).
+- **«Conectar otra cuenta»** solo cuando el canal ya tiene una cuenta
+  conectada. En el correo pide a Google elegir cuenta
+  (`select_account`); «Reconectar» le propone el buzón caído
+  (`login_hint`).
+- **De vuelta de Unipile sin confirmación.** Si el aviso de cuenta
+  creada no llega en el minuto que la pantalla se refresca sola, el
+  aviso cambia a «LinkedIn tarda en confirmar…» y la fila deja de pedir
+  que termine algo que ya terminó.
+- **Roles.** Solo `owner` y `admin` conectan, desconectan o cambian
+  topes; los demás ven la pantalla con una frase que lo explica.
 - **Una pendiente por creador y canal.** Pulsar «Conectar» otra vez
   borra el intento que quedó a medias, y la fila muestra siempre el
   intento más reciente: nunca «Conectando» debajo de un «Cancelaste».

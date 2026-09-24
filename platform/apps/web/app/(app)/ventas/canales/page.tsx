@@ -21,6 +21,7 @@ import { ChannelIcon } from "./iconos";
 import { Limites } from "./limites";
 import { MESSAGES } from "./messages";
 import { ReintentarAvisos } from "./reintentar-avisos";
+import { UsoCuenta } from "./uso";
 
 export const metadata: Metadata = { title: MESSAGES.meta.title };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
@@ -196,18 +197,7 @@ function AccountLine({
           ) : (
             <p className="text-xs text-fg-3">{t.blurb}</p>
           )}
-          {live && (
-            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-fg-2">
-              <span className="whitespace-nowrap">{MESSAGES.detail.usageToday(f.int(live.usedToday), f.int(live.limits.effectiveDaily))}</span>
-              <span className="whitespace-nowrap">{MESSAGES.detail.usageWeek(f.int(live.usedThisWeek), f.int(live.limits.effectiveWeekly))}</span>
-              {live.lastOkAt && live.lastOkAgoS !== null && (
-                // En relativo («hace 2 horas»), como Vercel y Linear; la fecha completa, en el title. Sin nowrap: a 360 px envuelve.
-                <span className="min-w-0 break-words text-fg-3" title={f.dateTime(live.lastOkAt.toISOString())}>
-                  {MESSAGES.detail.lastOk(f.relative(-live.lastOkAgoS))}
-                </span>
-              )}
-            </p>
-          )}
+          {live && <UsoCuenta live={live} f={f} />}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Pill kind={pill.kind}>{pill.label}</Pill>

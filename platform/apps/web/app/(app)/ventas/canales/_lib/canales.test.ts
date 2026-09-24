@@ -32,7 +32,9 @@ import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { listChannelAccounts } from "@mc/db/queries/canales";
 import { proofWorkspace, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../messages";
+import { disconnect, saveCaps } from "./acciones";
 import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, retryAccountWebhooks, unipileWebhook } from "./aviso";
 import { channelSetup } from "./config";
 import { channelBanner } from "./banner";
@@ -455,4 +457,176 @@ it("channelKeys deriva de TOKEN_ENCRYPTION_KEY y sin ella es null", () => {
   expect(channelKeys(ENV)?.cipher).toBeInstanceOf(TokenCipher);
   expect(channelKeys({ ...ENV, TOKEN_ENCRYPTION_KEY_V2: randomBytes(32).toString("base64") })?.verify.route).toHaveLength(2);
   expect(channelKeys({})).toBeNull();
+});
+
+// ---------------------------------------------------------------------
+// Ronda 5: un perfil es una cuenta, lo que no se liga se suelta, roles,
+// rotación del secreto y la sesión que vuelve sola
+// ---------------------------------------------------------------------
+
+/** Conecta LinkedIn o Instagram de punta a punta y devuelve el estado del enlace. */
+async function hostedAuth(channel: "linkedin" | "instagram_dm", d = deps()) {
+  const res = await unipileStart(post("/ventas/canales/conectar", { canal: channel }), d);
+  expect(res.status).toBe(303);
+  return unipile.hostedLinks.at(-1)!;
+}
+
+const notify = (accountId: string, state: string, d = deps()) =>
+  unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: accountId, name: state }), d);
+
+describe("un perfil es una cuenta (0042)", () => {
+  it("el mismo perfil conectado otra vez en el espacio: la cuenta nueva se borra en Unipile y la fila dice por qué", async () => {
+    const primero = await hostedAuth("instagram_dm");
+    unipile.addAccount({ id: "acc_ig_perfil_1", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
+    expect(await (await notify("acc_ig_perfil_1", primero.state)).json()).toEqual({ ok: true });
+    const segundo = await hostedAuth("instagram_dm");
+    unipile.addAccount({ id: "acc_ig_perfil_2", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
+    expect(await (await notify("acc_ig_perfil_2", segundo.state)).json()).toEqual({ ok: true, ignored: "duplicate" });
+    expect(unipile.deletedAccounts).toContain("acc_ig_perfil_2");
+    expect(unipile.deletedAccounts).not.toContain("acc_ig_perfil_1");
+    const filas = (await accounts()).filter((a) => a.channel === "instagram_dm");
+    expect(filas.filter((a) => a.providerAccountId === "acc_ig_perfil_2")).toEqual([]);
+    expect(filas.some((a) => a.status === "disconnected" && a.lastError === "duplicate")).toBe(true);
+  }, HEAVY_MS);
+
+  it("el mismo perfil vivo en OTRO espacio: taken, la frase de «ocupada» y la cuenta nueva borrada", async () => {
+    const OTRO = "00000009-0000-4000-8000-00000000c0d1";
+    await db.queryAsSuperuser(`INSERT INTO workspace (id, slug, name) VALUES ('${OTRO}', 'otro-perfil', 'Otro') ON CONFLICT DO NOTHING`);
+    await db.queryAsSuperuser(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, provider_identity, status)
+      VALUES ('${OTRO}', 'linkedin', 'unipile', 'acc_li_de_otro_espacio', 'ACoAAB_perfil_compartido', 'connected')`);
+    const link = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_li_perfil_nuevo", provider: "LINKEDIN", providerIdentity: "ACoAAB_perfil_compartido" });
+    expect(await (await notify("acc_li_perfil_nuevo", link.state)).json()).toEqual({ ok: true, ignored: "taken" });
+    expect(unipile.deletedAccounts).toContain("acc_li_perfil_nuevo");
+    const intento = (await accounts()).find((a) => a.channel === "linkedin" && a.lastError === "taken")!;
+    expect(channelRows([intento], channelSetup(ENV))[1]!.reason).toBe(MESSAGES.banners.errors.ocupada);
+  }, HEAVY_MS);
+
+  it("una cuenta que ya existía en el tenant no se liga a quien tenga un estado válido propio", async () => {
+    const link = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_li_vieja_del_tenant", provider: "LINKEDIN", createdAt: new Date(NOW.getTime() - 3 * 24 * 3600_000) });
+    expect(await (await notify("acc_li_vieja_del_tenant", link.state)).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    expect((await accounts()).some((a) => a.providerAccountId === "acc_li_vieja_del_tenant")).toBe(false);
+    expect(unipile.deletedAccounts, "no es nuestra: ni se liga ni se borra").not.toContain("acc_li_vieja_del_tenant");
+  }, HEAVY_MS);
+
+  it("un doble «Conectar»: la cuenta del primer enlace llega con el nonce ya reemplazado, nadie la usa y se borra", async () => {
+    const primero = await hostedAuth("instagram_dm");
+    await hostedAuth("instagram_dm");
+    unipile.addAccount({ id: "acc_ig_doble_clic", provider: "INSTAGRAM", providerIdentity: "ig_doble" });
+    expect(await (await notify("acc_ig_doble_clic", primero.state)).json()).toEqual({ ok: true, ignored: "unknown_state" });
+    expect(unipile.deletedAccounts).toContain("acc_ig_doble_clic");
+  }, HEAVY_MS);
+
+  it("Unipile pide y borra con el presupuesto interactivo (ocho segundos, un reintento)", async () => {
+    const spy = vi.spyOn(unipile, "createHostedAuthLink");
+    await hostedAuth("linkedin");
+    expect(spy.mock.calls.at(-1)![1]).toMatchObject(INTERACTIVE_BUDGET);
+    spy.mockRestore();
+  }, HEAVY_MS);
+});
+
+describe("la sesión vuelve sola y el secreto se rota", () => {
+  it("un aviso OK de una cuenta caída la devuelve a connected, con su aviso de éxito en la campana", async () => {
+    const link = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_li_vuelve", provider: "LINKEDIN", displayName: "Laura Vuelve", providerIdentity: "ACoAAB_vuelve" });
+    await notify("acc_li_vuelve", link.state);
+    const li = (await accounts()).find((a) => a.providerAccountId === "acc_li_vuelve")!;
+    const headers = unipile.webhooks.find((w) => w.accountId === "acc_li_vuelve")!.headers;
+    const status = (message: string) => webhook({ AccountStatus: { account_id: "acc_li_vuelve", account_type: "LINKEDIN", message } }, headers);
+    await unipileWebhook(status("CREDENTIALS"), deps());
+    expect((await accounts()).find((a) => a.id === li.id)?.status).toBe("needs_reconnect");
+    expect(await (await unipileWebhook(status("OK"), deps())).json()).toEqual({ ok: true });
+    const vuelta = (await accounts()).find((a) => a.id === li.id)!;
+    expect([vuelta.status, vuelta.lastError]).toEqual(["connected", null]);
+    const avisos = await db.queryAsSuperuser<{ severity: string; title_es: string }>(`SELECT severity, title_es FROM notification WHERE entity_id = $1 ORDER BY created_at`, [li.id]);
+    expect(avisos.rows.map((r) => r.severity)).toEqual(["critical", "success"]);
+    expect(avisos.rows[1]!.title_es).toBe(MESSAGES.health.back.title("LinkedIn", "Laura Vuelve"));
+    // Otra vez OK: ya estaba bien, no avisa.
+    expect(await (await unipileWebhook(status("OK"), deps())).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.healthy });
+  }, HEAVY_MS);
+
+  it("durante una rotación se aceptan el secreto actual y el anterior; sin la rotación, el viejo es 401", async () => {
+    const link = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_li_rotacion", provider: "LINKEDIN", providerIdentity: "ACoAAB_rotacion" });
+    await notify("acc_li_rotacion", link.state);
+    const route = unipile.webhooks.find((w) => w.accountId === "acc_li_rotacion")!.headers[UNIPILE_ROUTE_HEADER]!;
+    const body = { AccountStatus: { account_id: "acc_li_rotacion", account_type: "LINKEDIN", message: "OK" } };
+    const rotando = { ...ENV, UNIPILE_WEBHOOK_SECRET: "SECRETO-NUEVO-DE-PRUEBA-456", UNIPILE_WEBHOOK_SECRET_PREVIOUS: SECRET };
+    expect((await unipileWebhook(webhook(body, { [UNIPILE_SECRET_HEADER]: SECRET, [UNIPILE_ROUTE_HEADER]: route }), deps({ env: rotando }))).status).toBe(200);
+    expect((await unipileWebhook(webhook(body, { [UNIPILE_SECRET_HEADER]: "SECRETO-NUEVO-DE-PRUEBA-456", [UNIPILE_ROUTE_HEADER]: route }), deps({ env: rotando }))).status).toBe(200);
+    const terminada = { ...ENV, UNIPILE_WEBHOOK_SECRET: "SECRETO-NUEVO-DE-PRUEBA-456" };
+    expect((await unipileWebhook(webhook(body, { [UNIPILE_SECRET_HEADER]: SECRET, [UNIPILE_ROUTE_HEADER]: route }), deps({ env: terminada }))).status).toBe(401);
+    // Los avisos que da de alta la web llevan la huella del secreto actual: el keepalive sabe cuáles renovar.
+    const fp = await db.queryAsSuperuser<{ fp: string }>(`SELECT provider_webhook_secret_fp AS fp FROM outreach_channel_account WHERE provider_account_id = 'acc_li_rotacion'`);
+    expect(fp.rows[0]!.fp).toMatch(/^[0-9a-f]{16}$/);
+  }, HEAVY_MS);
+});
+
+describe("Gmail: la concesión que no se guarda se revoca, salvo que otro espacio la use", () => {
+  it("ocupada en otro espacio: NO se revoca (tumbaría la concesión de ese espacio)", async () => {
+    const OTRO = "00000009-0000-4000-8000-00000000c0e1";
+    await db.queryAsSuperuser(`INSERT INTO workspace (id, slug, name) VALUES ('${OTRO}', 'otro-gmail', 'Otro') ON CONFLICT DO NOTHING`);
+    await db.queryAsSuperuser(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+      VALUES ('${OTRO}', 'email', 'gmail_oauth', 'ocupado@gmail.test', 'connected')`);
+    const ocupado = new FakeGmail({ now: () => NOW, email: "ocupado@gmail.test" });
+    const { state, nonce } = await startGoogle();
+    const res = await googleCallback(callback({ code: "c", state }, nonce), deps({ google: () => ocupado }));
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=ocupada&canal=email`);
+    expect(ocupado.revokeCalls).toEqual([]);
+  }, HEAVY_MS);
+
+  it("la pendiente ya reemplazada (doble clic) con un buzón que nadie usa: la concesión nueva se revoca", async () => {
+    const huerfano = new FakeGmail({ now: () => NOW, email: "huerfano@gmail.test" });
+    const primero = await startGoogle();
+    await startGoogle();
+    const res = await googleCallback(callback({ code: "c", state: primero.state }, primero.nonce), deps({ google: () => huerfano }));
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=vencida&canal=email`);
+    expect(huerfano.revokeCalls).toHaveLength(1);
+  }, HEAVY_MS);
+
+  it("reconectar propone el buzón caído (login_hint); «Conectar otra cuenta» pide elegir (select_account)", async () => {
+    const [gmailRow] = (await accounts()).filter((a) => a.channel === "email" && a.status === "connected");
+    const re = await googleStart(post("/api/oauth/google", { reconectar: gmailRow!.id }), deps());
+    expect(new URL(re.headers.get("location")!).searchParams.get("login_hint")).toBe(gmailRow!.providerAccountId);
+    const otra = await googleStart(post("/api/oauth/google", { otra: "1" }), deps());
+    const u = new URL(otra.headers.get("location")!);
+    expect([u.searchParams.get("prompt"), u.searchParams.get("login_hint")]).toEqual(["select_account consent", null]);
+    // Una fila ajena o inventada no da pista ninguna.
+    const ajena = await googleStart(post("/api/oauth/google", { reconectar: "00000009-0000-4000-8000-000000000000" }), deps());
+    expect(new URL(ajena.headers.get("location")!).searchParams.get("login_hint")).toBeNull();
+  }, HEAVY_MS);
+});
+
+describe("solo quien administra el espacio gestiona los canales", () => {
+  const viewer = () => deps({ canManage: async () => false });
+  const actionDeps = (canManage: boolean) => ({
+    canManage: async () => canManage, withWorkspace, format: async () => formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
+  });
+
+  it("un 'viewer' no empieza ninguna conexión: 403 y ninguna fila", async () => {
+    const antes = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
+    const g = await googleStart(post("/api/oauth/google"), viewer());
+    const u = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), viewer());
+    expect([g.status, u.status]).toEqual([403, 403]);
+    expect(await g.text()).toBe(MESSAGES.routes.forbidden);
+    expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(antes);
+  }, HEAVY_MS);
+
+  it("un 'viewer' no cambia topes, no desconecta y no reactiva avisos; quien administra, sí", async () => {
+    const [li] = (await accounts()).filter((a) => a.channel === "linkedin" && a.status === "connected");
+    const form = (fields: Record<string, string>) => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries(fields)) f.set(k, v);
+      return f;
+    };
+    expect(await saveCaps(actionDeps(false), form({ accountId: li!.id, dailyCap: "3", weeklyCap: "" }))).toEqual({ message: MESSAGES.detail.readOnly });
+    expect(await disconnect(actionDeps(false), form({ accountId: li!.id }))).toEqual({ message: MESSAGES.detail.readOnly });
+    expect(await retryAccountWebhooks(li!.id, ORIGIN, viewer())).toBe("forbidden");
+    const sigue = (await accounts()).find((a) => a.id === li!.id)!;
+    expect([sigue.status, sigue.dailyCap]).toEqual(["connected", null]);
+    // Con el rol, sí.
+    expect(await saveCaps(actionDeps(true), form({ accountId: li!.id, dailyCap: "3", weeklyCap: "" }))).toMatchObject({ notice: MESSAGES.caps.saved });
+    expect((await accounts()).find((a) => a.id === li!.id)!.dailyCap).toBe(3);
+  }, HEAVY_MS);
 });
