@@ -14,7 +14,7 @@
  *   · require_optout_link: el pie de baja es obligatorio (CAN-SPAM), no
  *     un ajuste.
  */
-import { looksLikeOptoutToken } from '@mc/core/outreach/deliverability';
+import { looksLikeOptoutToken, NO_SENDS_GRACE_H } from '@mc/core/outreach/deliverability';
 import { WARMUP_MAX_DAYS } from '@mc/core/outreach/warmup';
 import { isUuid, type PublicShareTx, type WorkspaceTx } from '../client.ts';
 import { OutreachShapeError, publicOptout } from './outreach.ts';
@@ -288,4 +288,107 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
     if (e.code === '23514' && e.constraint === 'outbound_policy_enabled_needs_address') throw new PolicyNeedsAddressError();
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------
+// La salud del día: lo que leen las alertas y el bloque «Salud de hoy»
+// ---------------------------------------------------------------------
+//
+// Las cifras que outbound_health (0037) no trae y que deciden dos
+// alertas (evaluateOutreachAlerts, @mc/core):
+//   emailsSent   correos con sent_at en la ventana;
+//   hardBounces  de ESOS correos, los que tienen un rebote duro en
+//                outbound_bounce: la tasa se mide sobre lo que salió en
+//                la ventana, así que nunca pasa del 100 %, y los rebotes
+//                blandos y los bloqueos no cuentan;
+//   dueToSend    toques de cualquier canal que tocaba enviar en la
+//                ventana (scheduled_for, o el reintento), vencidos hace
+//                más de NO_SENDS_GRACE_H, y que siguen en 'scheduled' o
+//                acabaron en 'failed'. Un domingo sin nada programado da 0.
+// La misma consulta la usan el job outbound.alerts (como mc_worker, con
+// el workspace nombrado) y la pantalla (con el de su transacción): la
+// pantalla no resta ni divide nada, la tasa sale de aquí.
+
+/** Lo mínimo para una consulta con parámetros: sirve el WorkspaceTx de la web y la transacción del worker. */
+export interface SqlQueryable {
+  query(text: string, params?: readonly unknown[]): Promise<{ rows: unknown[] }>;
+}
+
+export interface AlertSignalCounts {
+  emailsSent: number;
+  hardBounces: number;
+  dueToSend: number;
+  /** hardBounces / emailsSent, calculada en SQL; null sin envíos. */
+  hardBounceRate: number | null;
+}
+
+/** La ventana de las alertas y del bloque de salud, en horas. */
+export const HEALTH_WINDOW_H = 24;
+
+/**
+ * Las cifras de la ventana que termina en `now`. `workspaceId` es el de
+ * la transacción (tx.workspaceId en la web) o el que procesa el worker.
+ */
+export async function readAlertSignalCounts(
+  tx: SqlQueryable,
+  workspaceId: string,
+  now: Date,
+  windowHours: number = HEALTH_WINDOW_H,
+): Promise<AlertSignalCounts> {
+  if (!isUuid(workspaceId)) throw new TypeError(`readAlertSignalCounts: «${workspaceId}» no es un uuid.`);
+  const { rows } = await tx.query(
+    `WITH v AS (SELECT $2::timestamptz AS hasta, $2::timestamptz - make_interval(hours => $3::int) AS desde,
+                       $2::timestamptz - make_interval(hours => $4::int) AS vencido),
+     c AS (SELECT
+       (SELECT count(*) FROM outbound_touch t, v
+         WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
+           AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS enviados,
+       (SELECT count(DISTINCT t.id) FROM outbound_touch t
+          JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind = 'hard', v
+         WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
+           AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS duros,
+       (SELECT count(*) FROM outbound_touch t, v
+         WHERE t.workspace_id = $1 AND t.status IN ('scheduled', 'failed')
+           AND coalesce(t.next_retry_at, t.scheduled_for) >= v.desde
+           AND coalesce(t.next_retry_at, t.scheduled_for) < v.vencido)::int AS debidos)
+     SELECT enviados, duros, debidos, CASE WHEN enviados > 0 THEN duros::float8 / enviados END AS tasa FROM c`,
+    [workspaceId, now.toISOString(), windowHours, NO_SENDS_GRACE_H],
+  );
+  const r = (rows[0] ?? {}) as { enviados?: number; duros?: number; debidos?: number; tasa?: number | null };
+  return {
+    emailsSent: Number(r.enviados ?? 0),
+    hardBounces: Number(r.duros ?? 0),
+    dueToSend: Number(r.debidos ?? 0),
+    hardBounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
+  };
+}
+
+export interface RecentBounce {
+  id: string;
+  recipientAddress: string | null;
+  kind: 'hard' | 'soft' | 'blocked';
+  reason: string;
+  detectedAt: string;
+}
+
+/** Los últimos rebotes del workspace de la transacción (outbound_bounce, 0038), los más recientes primero. */
+export async function listRecentBounces(tx: WorkspaceTx, limit = 10): Promise<RecentBounce[]> {
+  const n = Math.max(1, Math.min(50, Math.trunc(limit)));
+  const { rows } = await tx.query<{
+    id: string; recipient_address: string | null; kind: RecentBounce['kind']; reason: string; detected_at: Date | string;
+  }>(
+    `SELECT id, recipient_address::text AS recipient_address, kind, reason, detected_at
+       FROM outbound_bounce
+      WHERE workspace_id = current_workspace_id()
+      ORDER BY detected_at DESC, id
+      LIMIT $1`,
+    [n],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    recipientAddress: r.recipient_address,
+    kind: r.kind,
+    reason: r.reason,
+    detectedAt: iso(r.detected_at) as string,
+  }));
 }

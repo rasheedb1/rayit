@@ -22,7 +22,8 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
 import {
-  checkOptoutLink, getOutboundPolicy, optoutFromLink, PolicyNeedsAddressError, publicOptoutPreview, saveOutboundPolicy,
+  checkOptoutLink, getOutboundPolicy, optoutFromLink, PolicyNeedsAddressError, publicOptoutPreview, readAlertSignalCounts,
+  saveOutboundPolicy,
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { enableOutreach } from '../src/queries/outreach.ts';
@@ -94,7 +95,7 @@ before(async () => {
 after(async () => {
   if (t.kind === 'postgres') {
     await t.admin(`
-      DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}');
+      DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}', '00000038-0000-4000-8000-0000000000ea');
       DELETE FROM company WHERE id = '${COMPANY}';
       DELETE FROM outbound_optout_link WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
       DELETE FROM outbound_optout_event WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
@@ -271,5 +272,67 @@ describe('outbound_bounce', () => {
       ),
       /permission denied|permiso/,
     );
+  });
+});
+
+describe('las cifras de las alertas (readAlertSignalCounts)', () => {
+  const WS_A = '00000038-0000-4000-8000-0000000000ea';
+  const C_A = '00000038-0000-4000-8000-0000000000e1';
+  /** Lunes 21 de septiembre de 2026, 14:00 UTC. */
+  const LUNES = new Date('2026-09-21T14:00:00Z');
+
+  before(async () => {
+    // 20 correos enviados el lunes por la mañana: 3 con rebote blando, 1 con uno duro (y un duro
+    // repetido del mismo correo), y un rebote duro de un correo de la semana pasada.
+    const enviados = Array.from({ length: 20 }, (_, i) =>
+      `('00000038-0000-4000-8000-0000000071${String(i).padStart(2, '0')}', '${WS_A}', '${COMPANY}', '${C_A}', 'email', 'Hola', 'sent',
+        '2026-09-21T09:00:00Z', '2026-09-21T09:0${i % 10}:00Z', 'gm-${i}', 'ana@marca.test', 1)`,
+    );
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_A}', 'senales', 'Señales', 'America/Bogota');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_A}', '${COMPANY}');
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id)
+      VALUES ('${C_A}', '${COMPANY}', 'Ana', 'ana@marca.test', 'user_provided', '${WS_A}');
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, sent_at,
+                                  provider_message_id, recipient_address, attempt_count) VALUES
+        ${enviados.join(',\n')},
+        ('00000038-0000-4000-8000-000000007199', '${WS_A}', '${COMPANY}', '${C_A}', 'email', 'Vieja', 'sent',
+         '2026-09-14T09:00:00Z', '2026-09-14T09:00:00Z', 'gm-viejo', 'ana@marca.test', 1);
+      INSERT INTO outbound_bounce (workspace_id, provider_message_id, touch_id, kind, reason) VALUES
+        ('${WS_A}', 'b1', '00000038-0000-4000-8000-000000007100', 'soft', 'Buzón lleno'),
+        ('${WS_A}', 'b2', '00000038-0000-4000-8000-000000007101', 'soft', 'Buzón lleno'),
+        ('${WS_A}', 'b3', '00000038-0000-4000-8000-000000007102', 'blocked', '5.7.1'),
+        ('${WS_A}', 'b4', '00000038-0000-4000-8000-000000007103', 'hard', '5.1.1'),
+        ('${WS_A}', 'b5', '00000038-0000-4000-8000-000000007103', 'hard', '5.1.1 otra vez'),
+        ('${WS_A}', 'b6', '00000038-0000-4000-8000-000000007199', 'hard', '5.1.1 de la semana pasada');
+    `);
+  });
+
+  test('solo cuentan los rebotes duros de lo que salió en la ventana, una vez por correo', async () => {
+    const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES));
+    assert.deepEqual(c, { emailsSent: 20, hardBounces: 1, dueToSend: 0, hardBounceRate: 0.05 });
+  });
+
+  test('la pantalla lee lo mismo con el workspace de su transacción', async () => {
+    const c = await t.db.withWorkspace(WS_A, (tx) => readAlertSignalCounts(tx, tx.workspaceId, LUNES));
+    assert.equal(c.hardBounces, 1);
+    assert.equal(c.emailsSent, 20);
+  });
+
+  test('un domingo sin nada programado no tiene toques debidos; uno vencido sí, pasada la gracia', async () => {
+    const DOMINGO = new Date('2026-09-20T15:00:00Z');
+    assert.equal((await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, DOMINGO))).dueToSend, 0);
+    await t.admin(`
+      INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for) VALUES
+        ('${WS_A}', '${COMPANY}', '${C_A}', 'linkedin', 'Vencido', 'scheduled', '2026-09-21T10:00:00Z'),
+        ('${WS_A}', '${COMPANY}', '${C_A}', 'linkedin', 'Recién vencido', 'scheduled', '2026-09-21T13:30:00Z'),
+        ('${WS_A}', '${COMPANY}', '${C_A}', 'linkedin', 'Para mañana', 'scheduled', '2026-09-22T10:00:00Z');
+    `);
+    assert.equal((await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES))).dueToSend, 1);
+  });
+
+  test('sin envíos no hay tasa', async () => {
+    const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, new Date('2026-09-01T00:00:00Z')));
+    assert.equal(c.hardBounceRate, null);
   });
 });
