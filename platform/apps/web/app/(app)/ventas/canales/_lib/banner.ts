@@ -13,8 +13,11 @@
  *                                    sola unos segundos (refresh: true);
  *   · cualquier otra cosa         → nada: la fila ya dice lo que pasa.
  *
- * Un ?error= conocido es siempre el mensaje de error. Pura: se prueba sin
- * React.
+ * Un ?error= conocido es el mensaje de error, con el nombre del servicio
+ * de ?canal= cuando la frase lo lleva. Pero si la fila de ese canal ya
+ * dice ese mismo motivo (la ruta lo dejó en last_error), el aviso de
+ * arriba no lo repite: la misma falla, dos veces y con dos redacciones, era ruido.
+ * Pura: se prueba sin React.
  */
 import { MESSAGES } from "../messages";
 import { isChannel } from "./config";
@@ -31,9 +34,26 @@ export interface ChannelBanner {
 
 const NONE: ChannelBanner = { message: null, notice: null, refresh: false };
 
-export function channelBanner(params: { conectado?: string; error?: string }, rows: readonly ChannelRowView[]): ChannelBanner {
-  const errors: Record<string, string> = MESSAGES.banners.errors;
-  if (params.error && Object.hasOwn(errors, params.error)) return { message: errors[params.error as ChannelErrorCode]!, notice: null, refresh: false };
+export function isChannelErrorCode(v: unknown): v is ChannelErrorCode {
+  return typeof v === "string" && Object.hasOwn(MESSAGES.banners.errors, v);
+}
+
+/** El texto de un código de error, con el nombre del servicio si la frase lo lleva. */
+export function errorText(code: ChannelErrorCode, service: string): string {
+  const e: string | ((service: string) => string) = MESSAGES.banners.errors[code];
+  return typeof e === "function" ? e(service) : e;
+}
+
+export function channelBanner(params: { conectado?: string; error?: string; canal?: string }, rows: readonly ChannelRowView[]): ChannelBanner {
+  if (isChannelErrorCode(params.error)) {
+    const channel = isChannel(params.canal) ? params.canal : null;
+    const row = channel ? rows.find((r) => r.channel === channel) : undefined;
+    const service = channel ? MESSAGES.channels[channel].provider : MESSAGES.banners.genericService;
+    const message = errorText(params.error, service);
+    // La fila ya lo dice con las mismas palabras: no se repite arriba.
+    if (row?.reason === message) return NONE;
+    return { message, notice: null, refresh: false };
+  }
   if (!isChannel(params.conectado)) return NONE;
   const channel = params.conectado;
   const row = rows.find((r) => r.channel === channel);

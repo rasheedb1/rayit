@@ -28,6 +28,18 @@
  *                                     (aviso.ts). Reconectar manda el id
  *                                     de NUESTRA fila; el account_id de
  *                                     Unipile se lee en el servidor.
+ *   GET  /ventas/canales/conectar     la vuelta de Unipile cuando su página
+ *        ?fallo=<nonce>&canal=…       termina sin cuenta (contraseña mala,
+ *                                     el código de verificación sin
+ *                                     resolver, la persona la cerró): la
+ *                                     pendiente de ese nonce dice por qué y
+ *                                     la persona vuelve a la pantalla con
+ *                                     ?error=unipile_fallo&canal=….
+ *
+ * Toda vuelta con error lleva ?canal=: el aviso de arriba nombra el
+ * servicio y no repite lo que ya dice la fila de ese canal (banner.ts).
+ * En last_error solo van códigos (CHANNEL_ERROR_CODES) o frases de
+ * @mc/core, nunca el texto de un proveedor: ese queda en api_call_log.
  *
  * Sin las llaves de un proveedor no se empieza nada: vuelve a la
  * pantalla con ?error=no_configurado (texto de producto) y lo que falta
@@ -55,7 +67,8 @@ export const CANALES = "/ventas/canales";
 
 export type { ChannelErrorCode };
 
-const back = (req: Request, code: ChannelErrorCode, headers: Record<string, string> = {}) => redirectTo(req, `${CANALES}?error=${code}`, headers);
+const back = (req: Request, code: ChannelErrorCode, headers: Record<string, string> = {}, channel?: Channel) =>
+  redirectTo(req, `${CANALES}?error=${code}${channel ? `&canal=${channel}` : ""}`, headers);
 
 /** Lanzar esto dentro de la transacción la deshace entera (el token y la fila), y el callback responde con `code`. */
 class RollbackConnection extends Error {
@@ -73,7 +86,7 @@ function cookie(value: string, maxAgeS: number, secure: boolean): string {
 /** Sin llaves: lo que falta va al registro del servidor y la persona vuelve a la pantalla con un texto de producto. */
 function notConfigured(req: Request, channel: Channel, missing: readonly string[]): Response {
   console.warn(MESSAGES.routes.serverMissing(MESSAGES.channels[channel].provider, missing.join(", ") || "TOKEN_ENCRYPTION_KEY"));
-  return back(req, "no_configurado");
+  return back(req, "no_configurado", {}, channel);
 }
 
 /**
@@ -117,7 +130,7 @@ export async function googleStart(req: Request, deps: ChannelDeps): Promise<Resp
   const keys = channelKeys(deps.env);
   if (missing.length > 0 || !keys || !deps.google) return notConfigured(req, "email", missing);
   const started = await begin(deps, "email", keys.sign.state);
-  if ("error" in started) return back(req, started.error);
+  if ("error" in started) return back(req, started.error, {}, "email");
   const google = deps.google(new InMemoryOutreachCallLog(), await deps.origin(req));
   const secure = deps.env["NODE_ENV"] === "production";
   return new Response(null, {
@@ -129,6 +142,7 @@ export async function googleStart(req: Request, deps: ChannelDeps): Promise<Resp
 export async function googleCallback(req: Request, deps: ChannelDeps): Promise<Response> {
   const secure = deps.env["NODE_ENV"] === "production";
   const headers = { "Set-Cookie": cookie("", 0, secure) };
+  const backEmail = (code: ChannelErrorCode) => back(req, code, headers, "email");
   const params = new URL(req.url).searchParams;
   const keys = channelKeys(deps.env);
   const now = deps.now?.() ?? new Date();
@@ -139,22 +153,22 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
     if (v?.ok && v.payload.channel === "email" && readCookie(req, GOOGLE_COOKIE) === v.payload.nonce
       && (await deps.currentWorkspaceId()) === v.payload.workspaceId) {
       await deps.withWorkspace((tx) => failPendingChannelAccount(tx, {
-        channel: "email", nonce: v.payload.nonce, code: code === "cancelada" ? CHANNEL_ERROR_CODES.cancelled : MESSAGES.banners.errors.proveedor,
+        channel: "email", nonce: v.payload.nonce, code: code === "cancelada" ? CHANNEL_ERROR_CODES.cancelled : CHANNEL_ERROR_CODES.providerError,
       }));
     }
-    return back(req, code, headers);
+    return backEmail(code);
   }
 
-  if (!keys || !deps.google) return back(req, "no_configurado", headers);
+  if (!keys || !deps.google) return backEmail("no_configurado");
   // Volver atrás tras autorizar, abrir el enlace en otro navegador o tardar más de diez minutos: la pantalla de
   // canales con su aviso, dentro de la aplicación, nunca una página en blanco. Nada se toca.
   const verified = verifyChannelState(params.get("state"), keys.verify.state, now, GOOGLE_STATE_TTL_MS);
-  if (!verified.ok || verified.payload.channel !== "email") return back(req, "vencida", headers);
+  if (!verified.ok || verified.payload.channel !== "email") return backEmail("vencida");
   const state = verified.payload;
-  if (readCookie(req, GOOGLE_COOKIE) !== state.nonce) return back(req, "vencida", headers);
-  if ((await deps.currentWorkspaceId()) !== state.workspaceId) return back(req, "otro_espacio", headers);
+  if (readCookie(req, GOOGLE_COOKIE) !== state.nonce) return backEmail("vencida");
+  if ((await deps.currentWorkspaceId()) !== state.workspaceId) return backEmail("otro_espacio");
   const code = params.get("code");
-  if (!code) return back(req, "vencida", headers);
+  if (!code) return backEmail("vencida");
 
   // Fase HTTP, fuera de la transacción. La bitácora se escribe después, con la cuenta.
   const log = new InMemoryOutreachCallLog();
@@ -171,12 +185,12 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
     email = who.email.trim().toLowerCase();
   } catch (err) {
     const out: ChannelErrorCode = err instanceof RollbackConnection ? err.code : isOutreachApiError(err) && err.kind === "transient" ? "proveedor" : "intercambio";
-    await flushAndFail(deps, log, state.nonce, MESSAGES.banners.errors[out]);
-    return back(req, out, headers);
+    await flushAndFail(deps, log, state.nonce, out === "proveedor" ? CHANNEL_ERROR_CODES.providerError : CHANNEL_ERROR_CODES.exchangeFailed);
+    return backEmail(out);
   }
   if (!GMAIL_REQUIRED_SCOPES.map(shortScope).every((s) => scopes.includes(s))) {
     await flushAndFail(deps, log, state.nonce, CHANNEL_ERROR_CODES.missingScopes);
-    return back(req, "permisos", headers);
+    return backEmail("permisos");
   }
 
   try {
@@ -195,12 +209,12 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
     // 'vencida': la pendiente ya no existe o ya se usó; no hay nada que marcar.
     const reason = err.code === "ocupada" ? CHANNEL_ERROR_CODES.taken : err.code === "soltando" ? CHANNEL_ERROR_CODES.releasing : null;
     await flushAndFail(deps, log, state.nonce, reason);
-    return back(req, err.code, headers);
+    return backEmail(err.code);
   }
   return redirectTo(req, `${CANALES}?conectado=email`, headers);
 }
 
-/** Lo que se llamó queda en la bitácora aunque la conexión no se complete; con `code`, la pendiente dice por qué (un código de CHANNEL_ERROR_CODES o una frase). */
+/** Lo que se llamó queda en la bitácora aunque la conexión no se complete; con `code` (CHANNEL_ERROR_CODES), la pendiente dice por qué. */
 async function flushAndFail(deps: ChannelDeps, log: InMemoryOutreachCallLog, nonce: string, code: string | null): Promise<void> {
   await deps.withWorkspace(async (tx: WorkspaceTx) => {
     await log.flushTo(new PostgresOutreachCallLog(tx), null);
@@ -215,7 +229,13 @@ async function flushAndFail(deps: ChannelDeps, log: InMemoryOutreachCallLog, non
  */
 export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
-  const form = await req.formData();
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    // Un cuerpo que no es de formulario (JSON, vacío, cortado): el botón de la pantalla nunca lo manda. 400, no un 500.
+    return plain(400, MESSAGES.routes.badForm);
+  }
   const channel = form.get("canal");
   if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "no_configurado");
   const missing = missingFor(channel, deps.env);
@@ -225,7 +245,7 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
   const reconnectRowId = typeof raw === "string" && raw !== "" ? raw : undefined;
 
   const started = await begin(deps, channel, keys.sign.state, reconnectRowId);
-  if ("error" in started) return back(req, started.error);
+  if ("error" in started) return back(req, started.error, {}, channel);
   const origin = await deps.origin(req);
   const now = deps.now?.() ?? new Date();
   const log = new InMemoryOutreachCallLog();
@@ -234,17 +254,38 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
       channel, state: started.state, reconnectAccountId: started.reconnectAccountId,
       notifyUrl: `${origin}/api/webhooks/unipile`,
       successRedirectUrl: `${origin}${CANALES}?conectado=${channel}`,
-      failureRedirectUrl: `${origin}${CANALES}?error=proveedor`,
+      // Su página terminó sin cuenta: la vuelta pasa por unipileFailure, que marca ESTA pendiente (por su nonce).
+      failureRedirectUrl: `${origin}${CANALES}/conectar?fallo=${started.nonce}&canal=${channel}`,
       expiresOn: new Date(now.getTime() + UNIPILE_STATE_TTL_MS),
     });
     await deps.withWorkspace((tx) => log.flushTo(new PostgresOutreachCallLog(tx), null));
     return redirectTo(req, url);
   } catch (err) {
     if (!isOutreachApiError(err)) throw err;
+    // El texto del proveedor (err.messageEs, en inglés) queda en api_call_log; a la fila, el código.
     await deps.withWorkspace(async (tx) => {
       await log.flushTo(new PostgresOutreachCallLog(tx), null);
-      await failPendingChannelAccount(tx, { channel, nonce: started.nonce, code: err.messageEs });
+      await failPendingChannelAccount(tx, { channel, nonce: started.nonce, code: CHANNEL_ERROR_CODES.providerError });
     });
-    return back(req, "proveedor");
+    return back(req, "proveedor", {}, channel);
   }
+}
+
+/**
+ * La vuelta de Unipile cuando su página de conexión termina sin cuenta
+ * (failure_redirect_url). La pendiente de ese nonce, en el espacio de la
+ * sesión (RLS) y del canal, pasa a 'disconnected' con auth_failed: la
+ * fila deja de decir «Conectando» y dice qué revisar. El nonce solo sirve
+ * para marcar como fallida SU pendiente: no conecta nada (eso pide el
+ * estado firmado del aviso de Unipile).
+ */
+export async function unipileFailure(req: Request, deps: ChannelDeps): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const channel = params.get("canal");
+  if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "unipile_fallo");
+  const nonce = params.get("fallo");
+  if (nonce) {
+    await deps.withWorkspace((tx) => failPendingChannelAccount(tx, { channel, nonce, code: CHANNEL_ERROR_CODES.authFailed }));
+  }
+  return back(req, "unipile_fallo", {}, channel);
 }

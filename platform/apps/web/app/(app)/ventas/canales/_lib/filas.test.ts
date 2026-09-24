@@ -110,13 +110,37 @@ describe("channelRows", () => {
     expect(otra!.action).toBeNull();
   });
 
-  it("reasonText traduce los códigos y deja pasar las frases", () => {
-    expect(reasonText("releasing")).toBe(MESSAGES.detail.releasing);
-    expect(reasonText("webhooks_missing")).toBe(MESSAGES.detail.webhooksMissing);
-    expect(reasonText("missing_scopes")).toBe(MESSAGES.banners.errors.permisos);
-    expect(reasonText("wrong_provider")).toBe(MESSAGES.banners.errors.canal_equivocado);
-    expect(reasonText("Unipile dijo algo.")).toBe("Unipile dijo algo.");
-    expect(reasonText(null)).toBeNull();
+  it("reasonText traduce los códigos (con el nombre del servicio si la frase lo lleva) y deja pasar las frases de @mc/core", () => {
+    expect(reasonText("releasing", "email")).toBe(MESSAGES.detail.releasing);
+    expect(reasonText("webhooks_missing", "linkedin")).toBe(MESSAGES.detail.webhooksMissing);
+    expect(reasonText("missing_scopes", "email")).toBe(MESSAGES.banners.errors.permisos);
+    expect(reasonText("wrong_provider", "linkedin")).toBe(MESSAGES.banners.errors.canal_equivocado);
+    expect(reasonText("exchange_failed", "email")).toBe(MESSAGES.banners.errors.intercambio);
+    expect(reasonText("provider_error", "instagram_dm")).toBe(MESSAGES.banners.errors.proveedor("Instagram"));
+    expect(reasonText("auth_failed", "linkedin")).toBe(MESSAGES.banners.errors.unipile_fallo("LinkedIn"));
+    expect(reasonText("provider_error", "instagram_dm"), "nombra el servicio, no «el proveedor»").not.toMatch(/proveedor/);
+    expect(reasonText(MESSAGES.health.transient, "email")).toBe(MESSAGES.health.transient);
+    expect(reasonText("toString", "email"), "un nombre de Object.prototype no es un código").toBe("toString");
+    expect(reasonText(null, "email")).toBeNull();
+  });
+
+  it("pendiente vieja + intento nuevo cancelado: la fila dice «cancelaste», no «Conectando» (manda el intento más reciente)", () => {
+    const rows = channelRows([
+      account({ id: "nuevo", status: "disconnected", lastError: "cancelled", updatedAt: new Date(2_000) }),
+      account({ id: "viejo", status: "pending", stale: false, providerAccountId: null, updatedAt: new Date(1_000) }),
+    ], channelSetup(ALL));
+    expect(rows[0]).toMatchObject({ state: "disconnected", action: "connect", reason: MESSAGES.banners.errors.cancelada });
+    expect(rows[0]!.account?.id).toBe("nuevo");
+  });
+
+  it("un canal con una cuenta viva ofrece «Conectar otra cuenta»; sin cuenta viva, sin llaves o en una sub-fila, no", () => {
+    const [gmail] = channelRows([account({ id: "a", status: "connected" }), account({ id: "b", status: "needs_reconnect" })], channelSetup(ALL));
+    expect(gmail!.addAnother).toBe(true);
+    expect(gmail!.others.map((o) => o.addAnother)).toEqual([false]);
+    expect(channelRows([account({ status: "needs_reconnect" })], channelSetup(ALL))[0]!.addAnother, "con la viva caída también").toBe(true);
+    expect(channelRows([account({ status: "connected" })], channelSetup({}))[0]!.addAnother, "sin llaves no").toBe(false);
+    expect(channelRows([], channelSetup(ALL)).map((r) => r.addAnother)).toEqual([false, false, false]);
+    expect(channelRows([account({ status: "pending" })], channelSetup(ALL))[0]!.addAnother).toBe(false);
   });
 
   it("una pendiente vence cuando vence su estado firmado: diez minutos en Google, un día en Unipile", () => {
@@ -147,5 +171,23 @@ describe("channelBanner: el aviso sale del estado real de la fila, no solo de la
     expect(channelBanner({ error: "cancelada" }, [])).toEqual({ message: MESSAGES.banners.errors.cancelada, notice: null, refresh: false });
     expect(channelBanner({ error: "toString" }, []).message).toBeNull();
     expect(channelBanner({ conectado: "fax" }, []).notice).toBeNull();
+  });
+
+  it("un error del servicio lo nombra (?canal=); sin canal, «el servicio»; nunca «el proveedor»", () => {
+    expect(channelBanner({ error: "proveedor", canal: "instagram_dm" }, []).message).toBe(MESSAGES.banners.errors.proveedor("Instagram"));
+    expect(channelBanner({ error: "unipile_fallo", canal: "linkedin" }, []).message).toBe(MESSAGES.banners.errors.unipile_fallo("LinkedIn"));
+    expect(channelBanner({ error: "proveedor" }, []).message).toBe(MESSAGES.banners.errors.proveedor(MESSAGES.banners.genericService));
+    expect(channelBanner({ error: "proveedor", canal: "linkedin" }, []).message).not.toMatch(/proveedor/i);
+  });
+
+  it("si la fila de ese canal ya dice lo mismo, el aviso de arriba no lo repite; si dice otra cosa, sí sale", () => {
+    const fallida = channelRows([account({ channel: "linkedin", provider: "unipile", status: "disconnected", lastError: "auth_failed" })], channelSetup(ALL));
+    expect(fallida[1]!.reason).toBe(MESSAGES.banners.errors.unipile_fallo("LinkedIn"));
+    expect(channelBanner({ error: "unipile_fallo", canal: "linkedin" }, fallida)).toEqual({ message: null, notice: null, refresh: false });
+    const sinEnlace = channelRows([account({ channel: "instagram_dm", provider: "unipile", status: "disconnected", lastError: "provider_error" })], channelSetup(ALL));
+    expect(channelBanner({ error: "proveedor", canal: "instagram_dm" }, sinEnlace).message).toBeNull();
+    // Una conectada con otro motivo (sus avisos) no tapa el error de un intento nuevo.
+    const conAvisos = channelRows([account({ channel: "linkedin", provider: "unipile", status: "connected", lastError: "webhooks_missing" })], channelSetup(ALL));
+    expect(channelBanner({ error: "proveedor", canal: "linkedin" }, conAvisos).message).toBe(MESSAGES.banners.errors.proveedor("LinkedIn"));
   });
 });

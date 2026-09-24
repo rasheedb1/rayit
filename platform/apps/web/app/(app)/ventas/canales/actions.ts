@@ -65,12 +65,6 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
 }
 
 /**
- * Desconectar es de la persona: la fila queda 'disconnected' y pendiente
- * de soltar (0040). El worker (sales.channels_release, cada cinco
- * minutos) revoca el permiso de Google o borra la cuenta y sus avisos en
- * Unipile, que deja de cobrarla.
- */
-/**
  * «Volver a intentar» de una cuenta conectada que se quedó sin avisos de
  * Unipile (webhooks_missing): los vuelve a dar de alta, sin pasar por la
  * hosted auth. La cuenta sale de la base con RLS; del formulario solo
@@ -87,9 +81,19 @@ export async function reactivarAvisos(formData: FormData): Promise<AvisosState> 
   return { message: MESSAGES.banners.webhooksStillMissing };
 }
 
-export async function desconectar(formData: FormData): Promise<void> {
+/**
+ * Desconectar es de la persona: la fila queda 'disconnected' y pendiente
+ * de soltar (0040). El worker (sales.channels_release, cada cinco
+ * minutos) revoca el permiso de Google o borra la cuenta y sus avisos en
+ * Unipile, que deja de cobrarla. Devuelve la confirmación con el nombre
+ * de la cuenta (de la base, no del formulario): la pantalla la anuncia
+ * en la fila del canal, donde queda el foco.
+ */
+export async function desconectar(formData: FormData): Promise<AvisosState> {
   const accountId = String(formData.get("accountId") ?? "");
-  if (!isUuid(accountId)) return;
-  await withWorkspace((tx) => disconnectChannelAccount(tx, accountId));
+  if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
+  const done = await withWorkspace((tx) => disconnectChannelAccount(tx, accountId));
   revalidatePath("/ventas/canales");
+  if (!done) return { message: MESSAGES.actions.alreadyDisconnected };
+  return { notice: MESSAGES.actions.disconnected(done.name) };
 }

@@ -139,8 +139,32 @@ describe('la pantalla (mc_app)', () => {
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET status = 'connected' WHERE id = $1`, [id])),
       (e: { code?: string }) => e.code === '42501',
     );
-    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)), true);
-    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)), false, 'dos veces no cambia nada');
+    assert.ok(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)));
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)), null, 'dos veces no cambia nada');
+    // Devuelve el nombre de la cuenta, para que la pantalla confirme cuál soltó.
+    await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect' WHERE id = '${LINKEDIN_LAURA}'`);
+    const soltada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA));
+    assert.ok(soltada && soltada.name.length > 0);
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA)), null, 'otro espacio no la ve');
+    await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect', provider_webhook_ids = '{}' WHERE id = '${LINKEDIN_LAURA}'`);
+  });
+
+  test('como mucho una pendiente por creador y canal: un intento nuevo reemplaza al que quedó a medias', async () => {
+    const pendientes = async () => (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx)))
+      .filter((r) => r.channel === 'instagram_dm' && r.status === 'pending');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'instagram_dm', creatorId: CREATOR_LAURA, nonce: 'a'.repeat(43) }));
+    const segunda = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'instagram_dm', creatorId: CREATOR_LAURA, nonce: 'b'.repeat(43) }));
+    assert.deepEqual((await pendientes()).map((r) => r.id), [segunda], 'solo queda la del intento nuevo');
+    // La vuelta del intento viejo ya no casa con nada; la del nuevo sí dice por qué no se conectó.
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => failPendingChannelAccount(tx, { channel: 'instagram_dm', nonce: 'a'.repeat(43), code: 'cancelled' })), false);
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => failPendingChannelAccount(tx, { channel: 'instagram_dm', nonce: 'b'.repeat(43), code: 'cancelled' })), true);
+    assert.deepEqual(await pendientes(), []);
+    // Otro canal no se toca.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_LAURA, nonce: 'c'.repeat(43) }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'instagram_dm', creatorId: CREATOR_LAURA, nonce: 'd'.repeat(43) }));
+    const li = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx))).filter((r) => r.channel === 'linkedin' && r.status === 'pending');
+    assert.equal(li.length, 1);
+    await t.admin(`DELETE FROM outreach_channel_account WHERE status = 'pending' OR provider_account_id IN ('pending:${'b'.repeat(43)}')`);
   });
 });
 

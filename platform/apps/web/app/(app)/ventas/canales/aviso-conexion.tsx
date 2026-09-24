@@ -15,7 +15,7 @@ export const REFRESH_FOR_MS = 60_000;
  *     antes de mandar su aviso), refresca la pantalla cada tres segundos
  *     durante un minuto: en cuanto la fila pasa a «Conectado», el servidor
  *     devuelve el aviso de éxito.
- *   · Si ya dijo lo que tenía que decir, quita ?conectado= y ?error= de la
+ *   · Si ya dijo lo que tenía que decir, quita ?conectado=, ?error= y ?canal= de la
  *     URL con history.replaceState (Next lo integra con su router sin
  *     volver a pedir la página), para que no reaparezca al recargar.
  */
@@ -31,9 +31,10 @@ export function AvisoConexion({ message, notice, refresh }: { message: string | 
       return () => window.clearInterval(id);
     }
     const url = new URL(window.location.href);
-    if (url.searchParams.has("conectado") || url.searchParams.has("error")) {
+    if (["conectado", "error", "canal"].some((k) => url.searchParams.has(k))) {
       url.searchParams.delete("conectado");
       url.searchParams.delete("error");
+      url.searchParams.delete("canal");
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     }
     return undefined;

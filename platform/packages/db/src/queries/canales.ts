@@ -78,6 +78,20 @@ export const CHANNEL_ERROR_CODES = {
    * el keepalive lo reintenta a diario.
    */
   webhooksMissing: 'webhooks_missing',
+  /**
+   * El servicio no respondió al empezar o al terminar la conexión (pedir
+   * el enlace de Unipile, canjear el code de Google): transitorio. El
+   * texto del proveedor queda en api_call_log, nunca aquí.
+   */
+  providerError: 'provider_error',
+  /** Google no aceptó el code de la autorización (o el correo no está verificado). */
+  exchangeFailed: 'exchange_failed',
+  /**
+   * La conexión en la página de Unipile terminó sin cuenta: contraseña
+   * mala, el código de verificación sin resolver o la persona la cerró.
+   * Unipile manda a failure_redirect_url.
+   */
+  authFailed: 'auth_failed',
 } as const;
 
 export interface ChannelAccountRow {
@@ -320,6 +334,14 @@ const NONCE_RE = /^[A-Za-z0-9_-]{32,64}$/;
  * los estados autenticados) y hace de un solo uso al nonce, que viaja en
  * el estado firmado y vuelve con el proveedor. Sirve para los tres
  * canales: el callback no conecta nada que no haya empezado aquí.
+ *
+ * Como mucho UNA pendiente por creador y canal: en la misma transacción
+ * se borran las anteriores. Un intento nuevo reemplaza al que quedó a
+ * medias (volver atrás sin terminar y pulsar otra vez «Conectar»); si
+ * no, la pantalla seguía diciendo «Conectando» por el intento viejo
+ * encima del aviso del nuevo («Cancelaste…»). Si el proveedor vuelve
+ * después con el nonce viejo, ya no casa con nada y la vuelta es
+ * 'vencida', como la de un enlace usado.
  */
 export async function createPendingChannelAccount(
   tx: WorkspaceTx,
@@ -327,6 +349,10 @@ export async function createPendingChannelAccount(
 ): Promise<string> {
   if (!isUuid(input.creatorId)) throw new TypeError('createPendingChannelAccount: creatorId no es un uuid.');
   if (!NONCE_RE.test(input.nonce)) throw new TypeError('createPendingChannelAccount: nonce inválido.');
+  await tx.query(
+    `DELETE FROM outreach_channel_account WHERE creator_id = $1 AND channel = $2 AND status = 'pending'`,
+    [input.creatorId, input.channel],
+  );
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO outreach_channel_account (workspace_id, creator_id, channel, provider, provider_account_id, status)
      VALUES (current_workspace_id(), $1, $2, $3, $4, 'pending')
@@ -655,12 +681,17 @@ export async function channelWebhookCount(tx: WorkspaceTx, accountId: string): P
  * borra la cuenta y sus avisos en Unipile, con la bitácora en
  * api_call_log. La web no puede: secret_ref y los avisos son del
  * despachador.
+ *
+ * Devuelve el nombre de la cuenta (el que enseña la pantalla) para que la
+ * web confirme QUÉ cuenta soltó, o null si no había nada que desconectar
+ * (no es de este espacio, o ya estaba desconectada).
  */
-export async function disconnectChannelAccount(tx: WorkspaceTx, accountId: string): Promise<boolean> {
-  if (!isUuid(accountId)) return false;
-  const res = await tx.query(
-    `UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1 AND status <> 'disconnected' RETURNING id`,
+export async function disconnectChannelAccount(tx: WorkspaceTx, accountId: string): Promise<{ name: string } | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<{ name: string }>(
+    `UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1 AND status <> 'disconnected'
+     RETURNING coalesce(display_name, provider_account_id) AS name`,
     [accountId],
   );
-  return res.rows.length === 1;
+  return rows[0] ? { name: rows[0].name } : null;
 }

@@ -4,8 +4,11 @@
  * botón. Pura, para probarla sin base ni React.
  *
  * Qué cuenta encabeza un canal: la viva (conectada, por reconectar o con
- * error) si la hay; si no, la última pendiente; si no, la última que se
- * desconectó o no terminó, para poder decir por qué. Las DEMÁS cuentas
+ * error) si la hay; si no, el intento MÁS RECIENTE (pendiente, cancelado,
+ * fallido o desconectado), para decir en qué quedó el último clic y no
+ * uno viejo: @mc/db deja como mucho una pendiente por creador y canal, y
+ * aquí manda la fecha. Un canal con cuenta viva ofrece además «Conectar
+ * otra cuenta» (`addAnother`). Las DEMÁS cuentas
  * vivas del canal (dos buzones en el mismo espacio, dos LinkedIn) van en
  * `others`, una sub-fila cada una con su estado, sus límites y su
  * «Desconectar», como Vercel con varias integraciones del mismo tipo:
@@ -47,6 +50,8 @@ export interface ChannelRowView {
   reason: string | null;
   /** Las demás cuentas vivas del canal, cada una con su vista (y `others` vacío). */
   others: ChannelRowView[];
+  /** El canal ya tiene una cuenta viva y se puede conectar otra (solo en la fila principal, con el canal disponible). */
+  addAnother: boolean;
 }
 
 const LIVE = new Set(["connected", "needs_reconnect", "error"]);
@@ -67,31 +72,42 @@ export function pillFor(row: ChannelRowView): { kind: PillKind; label: string } 
   return STATE_PILL[row.state];
 }
 
-/** Los códigos que escribe el código en last_error (CHANNEL_ERROR_CODES), en frase; lo demás ya es una frase nuestra. */
-const REASON_BY_CODE: Record<string, string> = {
-  [CHANNEL_ERROR_CODES.taken]: MESSAGES.banners.errors.ocupada,
-  [CHANNEL_ERROR_CODES.missingScopes]: MESSAGES.banners.errors.permisos,
-  [CHANNEL_ERROR_CODES.wrongProvider]: MESSAGES.banners.errors.canal_equivocado,
-  [CHANNEL_ERROR_CODES.cancelled]: MESSAGES.banners.errors.cancelada,
-  [CHANNEL_ERROR_CODES.releasing]: MESSAGES.detail.releasing,
-  [CHANNEL_ERROR_CODES.webhooksMissing]: MESSAGES.detail.webhooksMissing,
+const E = MESSAGES.banners.errors;
+
+/**
+ * Los códigos que escribe el código en last_error (CHANNEL_ERROR_CODES),
+ * en frase, con el nombre del servicio cuando la frase lo lleva. Lo que
+ * no es un código es una frase nuestra (@mc/core, canales-textos.ts):
+ * ni la web ni el worker escriben en last_error el texto de un proveedor.
+ */
+const REASON_BY_CODE: Record<string, (service: string) => string> = {
+  [CHANNEL_ERROR_CODES.taken]: () => E.ocupada,
+  [CHANNEL_ERROR_CODES.missingScopes]: () => E.permisos,
+  [CHANNEL_ERROR_CODES.wrongProvider]: () => E.canal_equivocado,
+  [CHANNEL_ERROR_CODES.cancelled]: () => E.cancelada,
+  [CHANNEL_ERROR_CODES.releasing]: () => MESSAGES.detail.releasing,
+  [CHANNEL_ERROR_CODES.webhooksMissing]: () => MESSAGES.detail.webhooksMissing,
+  [CHANNEL_ERROR_CODES.providerError]: E.proveedor,
+  [CHANNEL_ERROR_CODES.exchangeFailed]: () => E.intercambio,
+  [CHANNEL_ERROR_CODES.authFailed]: E.unipile_fallo,
 };
 
-export function reasonText(lastError: string | null): string | null {
+export function reasonText(lastError: string | null, channel: Channel): string | null {
   if (!lastError) return null;
-  return REASON_BY_CODE[lastError] ?? lastError;
+  const byCode = Object.hasOwn(REASON_BY_CODE, lastError) ? REASON_BY_CODE[lastError] : undefined;
+  return byCode ? byCode(MESSAGES.channels[channel].provider) : lastError;
 }
 
 type Base = Pick<ChannelRowView, "channel" | "missing" | "unavailable">;
 
 /** La vista de UNA cuenta viva: conectada (con «Volver a intentar» si le faltan los avisos) o caída (con «Reconectar»). */
 function liveRow(base: Base, account: ChannelAccountRow): ChannelRowView {
-  const reason = reasonText(account.lastError);
+  const reason = reasonText(account.lastError, base.channel);
   if (account.status === "connected") {
     const action: RowAction = account.lastError === CHANNEL_ERROR_CODES.webhooksMissing ? "rewebhook" : null;
-    return { ...base, account, state: "connected", action, reason, others: [] };
+    return { ...base, account, state: "connected", action, reason, others: [], addAnother: false };
   }
-  return { ...base, account, state: account.status as "needs_reconnect" | "error", action: "reconnect", reason, others: [] };
+  return { ...base, account, state: account.status as "needs_reconnect" | "error", action: "reconnect", reason, others: [], addAnother: false };
 }
 
 export function channelRows(accounts: readonly ChannelAccountRow[], setup: ChannelSetup): ChannelRowView[] {
@@ -102,13 +118,15 @@ export function channelRows(accounts: readonly ChannelAccountRow[], setup: Chann
     const base: Base = { channel, missing, unavailable: !configured };
     if (live.length > 0) {
       const [first, ...rest] = live;
-      return { ...liveRow(base, first!), others: rest.map((a) => liveRow(base, a)) };
+      return { ...liveRow(base, first!), others: rest.map((a) => liveRow(base, a)), addAnother: configured };
     }
-    const account = mine.find((a) => a.status === "pending" && !a.stale) ?? mine[0] ?? null;
-    if (!configured) return { ...base, account, state: "not_configured", action: "connect", reason: null, others: [] };
+    // El intento más reciente (listChannelAccounts ordena por updated_at, de nuevo a viejo), no «cualquier pendiente».
+    const account = mine[0] ?? null;
+    const none = { others: [], addAnother: false };
+    if (!configured) return { ...base, account, state: "not_configured", action: "connect", reason: null, ...none };
     if (account?.status === "pending") {
-      return { ...base, account, state: account.stale ? "expired" : "pending", action: "retry", reason: null, others: [] };
+      return { ...base, account, state: account.stale ? "expired" : "pending", action: "retry", reason: null, ...none };
     }
-    return { ...base, account, state: "disconnected", action: "connect", reason: reasonText(account?.lastError ?? null), others: [] };
+    return { ...base, account, state: "disconnected", action: "connect", reason: reasonText(account?.lastError ?? null, channel), ...none };
   });
 }

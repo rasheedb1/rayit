@@ -22,7 +22,7 @@ export const MESSAGES = {
     eyebrow: "Ventas",
     title: "Canales",
     description:
-      "Las cuentas desde las que On Cue escribe a las marcas por ti. Cada cuenta tiene su límite diario y semanal, dentro de la política de tu espacio y de lo que aguanta el proveedor.",
+      "Las cuentas desde las que On Cue escribe a las marcas por ti. Cada cuenta tiene su límite diario y semanal, dentro de la política de tu espacio y de lo que permite cada servicio.",
   },
   tabs: { canales: "Canales" },
   section: "Tus canales",
@@ -56,8 +56,8 @@ export const MESSAGES = {
     otherAccounts: (channel: string) => `Otras cuentas de ${channel}`,
     /** Una cuenta conectada sin avisos de Unipile: no nos enteramos de sus respuestas. */
     webhooksMissing: "Conectada, pero todavía no nos enteramos de las respuestas: no pudimos activar sus avisos.",
-    /** Se reconectó mientras la soltábamos en el proveedor. */
-    releasing: "Estábamos soltando esta cuenta cuando la volviste a conectar. Espera un minuto y vuelve a intentarlo.",
+    /** Se reconectó mientras la soltábamos en el servicio. */
+    releasing: "Estábamos desconectando esta cuenta cuando la volviste a conectar. Espera un minuto y vuelve a intentarlo.",
     pendingHint: {
       email: "Estás autorizando en Google. Si cerraste esa página sin terminar, vuelve a intentarlo.",
       unipile: (provider: string) => `Termina la conexión en la página de ${provider} que se abrió. Si la cerraste, vuelve a intentarlo.`,
@@ -66,10 +66,21 @@ export const MESSAGES = {
       email: "No terminaste de autorizar en Google. Vuelve a intentarlo.",
       unipile: (provider: string) => `La conexión con ${provider} no se terminó a tiempo. Vuelve a intentarlo.`,
     },
-    /** Sin las llaves del proveedor en la plataforma: para el creador, en voz de producto. */
-    unavailable: "Este canal todavía no está disponible en tu cuenta de On Cue. Te avisamos cuando lo esté.",
+    /**
+     * Sin las llaves del proveedor en la plataforma: para el creador, en
+     * voz de producto. Sin promesas: nada avisa cuando las llaves llegan.
+     */
+    unavailable: "Este canal todavía no está disponible en On Cue.",
+    /** Los tres canales sin llaves: UN aviso arriba de la lista, y en cada fila solo la pastilla. */
+    allUnavailable: "Los canales de outreach todavía no están disponibles en On Cue. Puedes seguir usando el resto de Ventas.",
     /** Una cuenta conectada que no puede enviar mientras el canal no esté disponible. */
-    unavailableConnected: "Tu cuenta sigue conectada, pero On Cue no puede enviar por este canal ahora mismo. Te avisamos cuando vuelva.",
+    unavailableConnected: "Tu cuenta sigue conectada, pero On Cue no puede enviar por este canal ahora mismo.",
+    /**
+     * Una cuenta caída en un canal no disponible: el botón «Reconectar» va
+     * deshabilitado, así que la frase no pide reconectar (la de la caída,
+     * «… Vuelve a conectar la cuenta», contradecía al botón).
+     */
+    unavailableDown: "Esta cuenta necesita volver a conectarse, pero el canal no está disponible ahora mismo en On Cue.",
     /** Solo en desarrollo: qué falta en el servidor, plegado. */
     adminDetails: "Detalles para quien administra la plataforma",
     adminMissing: (vars: string) => `Faltan en el servidor: ${vars}. Cómo se consiguen: platform/.env.example.`,
@@ -77,13 +88,19 @@ export const MESSAGES = {
 
   actions: {
     connect: "Conectar",
+    /** Un canal que ya tiene una cuenta viva: conectar una más (dos buzones, dos LinkedIn), como «Add another» de Vercel. */
+    connectAnother: "Conectar otra cuenta",
     reconnect: "Reconectar",
     retry: "Volver a intentar",
     connecting: "Abriendo…",
     disconnect: "Desconectar",
     /** El nombre accesible de «Desconectar» de una cuenta concreta. */
     disconnectAccount: (account: string) => `Desconectar ${account}`,
-    disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes por este canal se detienen y la cuenta se suelta en el proveedor.",
+    disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes por este canal se detienen y On Cue deja de tener acceso a ella.",
+    /** La confirmación, anunciada en la fila del canal, después de desconectar. */
+    disconnected: (account: string) => `Desconectaste ${account}. On Cue deja de usarla ahora y retira su acceso en unos minutos.`,
+    /** Desconectar una cuenta que ya no estaba (otra pestaña, otro miembro del espacio). */
+    alreadyDisconnected: "Esa cuenta ya estaba desconectada.",
     cancel: "Cancelar",
     saveCaps: "Guardar límites",
     saving: "Guardando…",
@@ -112,7 +129,12 @@ export const MESSAGES = {
     notFound: "Esa cuenta ya no está en este espacio.",
   },
 
-  /** Lo que vuelve en /ventas/canales?conectado=… o ?error=… */
+  /**
+   * Lo que vuelve en /ventas/canales?conectado=… o ?error=…&canal=…. Un
+   * error que depende del servicio es una función de su nombre (Gmail,
+   * LinkedIn, Instagram): la persona conectó «LinkedIn», no «el
+   * proveedor». Los mismos textos son el motivo de la fila (filas.ts).
+   */
   banners: {
     connected: (channel: string) => `${channel} quedó conectado.`,
     /** El aviso de éxito llegó antes que el de Unipile: la fila sigue «Conectando». */
@@ -122,17 +144,23 @@ export const MESSAGES = {
       permisos: "Google no concedió los permisos de enviar y leer correo. Vuelve a conectar y acepta los dos.",
       ocupada: "Esa cuenta ya está conectada en otro espacio de On Cue.",
       vencida: "La conexión tardó demasiado o ya se había usado. Vuelve a intentarlo.",
-      proveedor: "El proveedor no respondió. Inténtalo de nuevo en unos minutos.",
+      /** El servicio no respondió al empezar o al terminar la conexión (transitorio). */
+      proveedor: (service: string) => `No pudimos conectar con ${service} ahora mismo. Inténtalo de nuevo en unos minutos.`,
+      /** La página de conexión de Unipile terminó sin cuenta: contraseña mala, el código de verificación sin resolver o se cerró. */
+      unipile_fallo: (service: string) =>
+        `No se pudo conectar tu ${service}. Revisa el usuario y la contraseña, o el código de verificación, y vuelve a intentarlo.`,
       intercambio: "Google no aceptó la autorización. Vuelve a intentar conectar el correo.",
       sin_creador: "Este espacio no tiene un perfil de creador; no se puede conectar una cuenta.",
       no_configurado: "Este canal todavía no está disponible en tu cuenta de On Cue.",
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
       otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
-      soltando: "Estábamos soltando esa cuenta en el proveedor. Espera un minuto y vuelve a intentarlo.",
+      soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",
     },
+    /** El nombre del servicio cuando un ?error= llega sin ?canal= (un enlace viejo). */
+    genericService: "el servicio",
     /** «Volver a intentar» de los avisos de una cuenta conectada. */
     webhooksRestored: "Listo: ya nos enteramos de las respuestas de esa cuenta.",
-    webhooksStillMissing: "El proveedor no respondió. Inténtalo de nuevo en unos minutos; también lo reintentamos cada día.",
+    webhooksStillMissing: "Todavía no pudimos activar los avisos de esa cuenta. Inténtalo de nuevo en unos minutos; también lo reintentamos cada día.",
   },
 
   /** Respuestas de las rutas (texto plano o JSON para el proveedor, no la pantalla). */
@@ -142,6 +170,7 @@ export const MESSAGES = {
     webhookPostOnly: "Solo POST.",
     unauthorized: "Firma inválida.",
     badJson: "JSON inválido.",
+    badForm: "Formulario inválido.",
     tooLarge: "Aviso demasiado grande.",
     providerDown: "Unipile no respondió.",
     /** Por qué un aviso autenticado no cambió nada (va en el JSON de la respuesta a Unipile). */

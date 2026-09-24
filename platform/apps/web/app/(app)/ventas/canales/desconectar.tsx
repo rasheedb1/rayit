@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { desconectar } from "./actions";
+import { useAvisoDeFila } from "./fila-canal";
 import { MESSAGES } from "./messages";
 
 /**
@@ -15,6 +16,10 @@ import { MESSAGES } from "./messages";
  * quien usa teclado o lector de pantalla perdía el sitio y no oía la
  * pregunta. `account`, el nombre de la cuenta, va en los nombres
  * accesibles: con varias cuentas del mismo canal, se sabe cuál.
+ *
+ * Al terminar, este control desaparece con su cuenta: la confirmación
+ * («Desconectaste …») la anuncia la fila del canal (FilaCanal), que
+ * también se queda con el foco.
  */
 export function Desconectar({ accountId, account }: { accountId: string; account: string }) {
   const [asking, setAsking] = useState(false);
@@ -22,6 +27,7 @@ export function Desconectar({ accountId, account }: { accountId: string; account
   const confirmRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLSpanElement>(null);
   const wasAsking = useRef(false);
+  const announce = useAvisoDeFila();
 
   useEffect(() => {
     if (asking) confirmRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
@@ -49,7 +55,7 @@ export function Desconectar({ accountId, account }: { accountId: string; account
           onClick={() => {
             const form = new FormData();
             form.set("accountId", accountId);
-            start(() => desconectar(form));
+            start(async () => announce(await desconectar(form)));
           }}
         >
           {MESSAGES.actions.disconnect}

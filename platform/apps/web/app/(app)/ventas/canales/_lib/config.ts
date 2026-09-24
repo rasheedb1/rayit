@@ -9,14 +9,24 @@
  *   todos      TOKEN_ENCRYPTION_KEY: firma el estado de la conexión y
  *              cifra el token de Google
  */
-import { GOOGLE_ENV, MASTER_KEY_ENV, UNIPILE_ENV, UNIPILE_WEBHOOK_SECRET_ENV } from "@mc/connectors";
+import {
+  CONNECTABLE_CHANNELS, GOOGLE_ENV, isConnectableChannel, MASTER_KEY_ENV, UNIPILE_ENV, UNIPILE_WEBHOOK_SECRET_ENV, type ConnectableChannel,
+} from "@mc/connectors";
+import type { ConnectableChannel as DbConnectableChannel } from "@mc/db/queries/canales";
 
-export const CHANNELS = ["email", "linkedin", "instagram_dm"] as const;
-export type Channel = (typeof CHANNELS)[number];
+/**
+ * Los canales de la pantalla, en su orden: la lista de @mc/connectors (la
+ * misma que valida el estado firmado), no una copia. @mc/db deriva el
+ * suyo del vocabulario de 0007 (no depende de @mc/connectors); la
+ * comprobación de abajo no compila si los dos se separan.
+ */
+export const CHANNELS = CONNECTABLE_CHANNELS;
+export type Channel = ConnectableChannel;
+export const isChannel: (v: unknown) => v is Channel = isConnectableChannel;
 
-export function isChannel(v: unknown): v is Channel {
-  return typeof v === "string" && (CHANNELS as readonly string[]).includes(v);
-}
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const channelsAgree: Same<Channel, DbConnectableChannel> = true;
+void channelsAgree;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
