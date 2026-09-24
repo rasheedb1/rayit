@@ -101,10 +101,14 @@ app/(public)/reporte/[slug]/  El reporte que abre la marca sin sesión (CAM-6), 
                               public_report() de la migración 0037: noindex, 404 real
                               para un borrador o un slug desconocido, y la primera
                               apertura marca viewed_at (los robots de vista previa no).
-app/(app)/conexiones/         Cuentas por @ (CON-10) y OAuth (CON-3, detrás de
-                              oauth_connect). _lib/permisos.ts, _lib/consent.ts y
-                              _lib/messages.ts: quién puede conectar, la evidencia
-                              del consentimiento y los textos (ver «Conexiones»).
+app/(app)/conexiones/         Cuentas (CON-4): alta por @ (CON-10), una tabla con las
+                              dos clases de fila (por @ y autorizada) y el flujo OAuth
+                              de CON-3 detrás de oauth_connect. _lib/estado.ts: el
+                              estado, el acceso, la frescura y los huecos (CON-7) como
+                              funciones puras; tabla.tsx los pinta con lo de CON-5
+                              (publicaciones) y ACC-8 («Conectada por»). _lib/permisos.ts,
+                              _lib/consent.ts y _lib/messages.ts: quién puede conectar,
+                              la evidencia del consentimiento y los textos.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona

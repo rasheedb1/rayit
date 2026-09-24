@@ -88,13 +88,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
   const { config, db, logger, secrets, refreshers } = opts;
   const env = opts.env ?? process.env;
   const registry = new JobRegistry(opts.jobs);
-  const quota = opts.quota ?? new QuotaManager({
-    limits: await loadPlatformLimits(db, logger),
-    store: new PostgresQuotaUsageStore(db),
-    logger,
-    now: opts.now,
-    sleep: opts.http?.sleep,
-  });
+  const quota = opts.quota ?? await createQuota(db, logger, opts.now, opts.http);
   const all = await loadJobDefinitions(db);
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
   const summary: JobSummary[] = [];
@@ -166,6 +160,20 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
 }
 
 /**
+ * La cuota compartida del proceso (CON-1): api_quota_usage y
+ * platform.limits. La usan el proceso largo y la pasada de --once.
+ */
+export async function createQuota(db: WorkerDatabase, logger: Logger, now?: () => Date, http?: ConnectorHttpOverrides): Promise<QuotaManager> {
+  return new QuotaManager({
+    limits: await loadPlatformLimits(db, logger),
+    store: new PostgresQuotaUsageStore(db),
+    logger,
+    now,
+    sleep: http?.sleep,
+  });
+}
+
+/**
  * Encola los jobs que corren después de `desde` (JobOptions.after), con
  * el mismo workspaceId. Solo se llama si `desde` terminó ok o partial Y
  * procesó algo: una recolección vacía no trae nada que recalcular. El singletonKey es por alcance: en una cola
@@ -194,7 +202,7 @@ async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: 
  * log. Una sola fila mientras siga sin handler: si la última fila del
  * job ya dice eso, no se repite en cada reinicio.
  */
-async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
+export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
   const { rows } = await db.query<{ status: string; error: string | null }>(
     'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
     [jobId],
@@ -229,7 +237,7 @@ async function reconcileSchedule(boss: PgBoss, def: JobDefinition, logger: Logge
   return true;
 }
 
-async function assertRole(db: WorkerDatabase, config: WorkerConfig, logger: Logger): Promise<void> {
+export async function assertRole(db: WorkerDatabase, config: WorkerConfig, logger: Logger): Promise<void> {
   const who = await db.whoAmI();
   if (config.setRole) {
     if (who.currentUser !== config.setRole) {

@@ -33,7 +33,8 @@ const BASE: AccountRow = {
   lastSyncedAt: "2026-09-23T05:10:00.000Z", hoursSinceSync: 1, accessExpiresAt: null, tokenExpiringSoon: false,
   consecutiveFailures: 0, postsTracked: 3, failedCalls24h: 0, accessMode: "public_profile",
   latest: { day: "2026-09-22", followers: 38400, mediaCount: 140, following: null, views: 1200000 },
-  followersWeekAgo: null, postsCount: 0, lastPostSnapshotAt: null, connectedBy: null,
+  followersWeekAgo: null, followersDelta7d: null, postsCount: 0, lastPostSnapshotAt: null, connectedBy: null,
+  refreshExpiresAt: null, gaps: [],
 };
 
 let servicio: { listar: () => Promise<AccountRow[]>; alcance: () => Promise<ScopeKind[]>; availability: () => Array<{ platformId: string; name: string; offersEs: string; missing: string[] }> };
@@ -84,9 +85,10 @@ describe("la fila de Cuentas después de que corre el recolector", () => {
   });
 
   it("sin ninguna lectura de ninguna serie lo explica con una frase, no con un guion", async () => {
-    await pintar([{ ...BASE, latest: null, lastSyncedAt: null, postsCount: 0, lastPostSnapshotAt: null }]);
+    await pintar([{ ...BASE, latest: null, lastSyncedAt: null, hoursSinceSync: null, postsCount: 0, lastPostSnapshotAt: null }]);
     const r = fila("nutriveoficial");
-    expect(within(r).getByText("Sin lectura todavía")).toBeInTheDocument();
+    // La frase es la de frescura() de CON-4, la fuente única desde el cierre de CON-B.
+    expect(within(r).getByText("Sin leer todavía")).toBeInTheDocument();
     expect(within(r).queryByText("—")).not.toBeInTheDocument();
   });
 

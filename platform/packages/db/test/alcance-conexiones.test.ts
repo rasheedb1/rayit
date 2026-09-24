@@ -89,6 +89,8 @@ const CASOS: Record<string, CasoDeAlcance> = {
   findConnectionByAccount: { run: (tx) => findConnectionByAccount(tx, 'tiktok', EXTERNAL_ACCOUNT_SOFIA), duena: 'nombra', miembro: 'nada' },
   // Solo la usa el callback de OAuth, que va a escribir: una fila de otra creadora fuera del alcance no es «no
   // existe» sino ScopeError; si no, el callback crearía una segunda fila para la misma cuenta real.
+  // Catálogo global de prerrequisitos (CON-B): no es de nadie, no lleva alcance (alcance-convencion.test.ts lo declara).
+  getMetricRequirement: { run: (tx) => conexiones.getMetricRequirement(tx, 'tt.insights.optin'), duena: 'pasa', miembro: 'nada' },
   findPublicAccountByHandle: { run: (tx) => findPublicAccountByHandle(tx, 'tiktok', HANDLE_SOFIA), duena: 'nombra', miembro: { rechaza: ScopeError } },
   // Para las dos es Laura (la más antigua; para el miembro, la única de su alcance). Que sea «el primero DEL
   // alcance» lo muerden las pruebas propias con el miembro de Sofía y los de marca y campaña.

@@ -1,0 +1,76 @@
+name: Worker · una pasada
+
+# El worker de On Cue como cron externo (camino (b) de
+# docs/propuestas/WRK.md): cada hora arranca `--once`, corre los jobs
+# vencidos según job_definition y sale. Sin proceso largo ni pg-boss.
+#
+# APAGADO hasta que Nicolás y Rasheed acuerden WRK.md (el despliegue
+# es CIM-7). Está apagado dos veces:
+#   1. no hay `schedule`: solo se lanza a mano (Actions → Run workflow);
+#   2. aun a mano, el job se salta si la variable de repositorio
+#      WORKER_ONCE no vale `on` (Settings → Variables → Actions).
+# Para encenderlo: los secretos de abajo, WORKER_ONCE=on, una corrida a
+# mano en verde y entonces descomentar `schedule`.
+#
+# Secretos del repositorio (Settings → Secrets → Actions), solo nombres:
+#   WORKER_DATABASE_URL        rol mc_worker_login, pooler :5432 (WRK.md §1)
+#   TOKEN_ENCRYPTION_KEY       la del vault
+#   APP_URL                    la de producción (redirect de las apps OAuth)
+#   TIKTOK_LOGIN_CLIENT_KEY, TIKTOK_LOGIN_CLIENT_SECRET
+#   INSTAGRAM_HOUSE_TOKEN, GOOGLE_API_KEY   (sin ellas esas redes se saltan y se avisa)
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   # Cada hora al minuto 17: GitHub retrasa y a veces descarta los
+  #   # disparos en punto. oauth.refresh tiene cron */15; una pasada por
+  #   # hora basta con el margen de 120 min de abajo (el token de TikTok
+  #   # dura 24 h).
+  #   - cron: '17 * * * *'
+
+# Nunca dos pasadas a la vez: la segunda espera a que termine la primera.
+concurrency:
+  group: worker-once
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: platform
+
+jobs:
+  pasada:
+    name: Correr lo vencido
+    if: vars.WORKER_ONCE == 'on'
+    runs-on: ubuntu-latest
+    # La suma de todos los timeout_s de job_definition con handler es
+    # ~53 min, más la instalación; una pasada normal dura segundos. Si
+    # GitHub la mata a mitad, la fila `running` cuenta como un intento
+    # fallido en la pasada siguiente.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: platform/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --filter @mc/worker...
+      - name: Una pasada del worker
+        run: pnpm --filter @mc/worker exec node --experimental-strip-types src/index.ts --once
+        env:
+          WORKER_DATABASE_URL: ${{ secrets.WORKER_DATABASE_URL }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          APP_URL: ${{ secrets.APP_URL }}
+          TIKTOK_LOGIN_CLIENT_KEY: ${{ secrets.TIKTOK_LOGIN_CLIENT_KEY }}
+          TIKTOK_LOGIN_CLIENT_SECRET: ${{ secrets.TIKTOK_LOGIN_CLIENT_SECRET }}
+          INSTAGRAM_HOUSE_TOKEN: ${{ secrets.INSTAGRAM_HOUSE_TOKEN }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OAUTH_REFRESH_MARGIN_MINUTES: '120'
+          WORKER_JOB_POOL_MAX: '4'
+          LOG_FORMAT: json
+          LOG_LEVEL: info

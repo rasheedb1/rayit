@@ -64,6 +64,9 @@ const SIN_ALCANCE_DECLARADAS: Record<Archivo, Record<string, string>> = {
     getWorkspaceToday: 'la fecha de hoy en la zona horaria del espacio: no lee filas de negocio',
   },
   'conexiones.ts': {
+    getMetricRequirement:
+      'metric_requirement es un catálogo GLOBAL de solo lectura (0024 §7.1: sin workspace_id ni RLS): el texto de un ' +
+      'prerrequisito de plataforma, no un dato de ningún creador (CON-B)',
     getSessionMember:
       'la identidad de la persona de la sesión (su membresía y rol), para la evidencia del consentimiento delegado (ACC-8): ' +
       'es de quien pregunta, no de un creador; acotarla sería esconderle a alguien quién es',

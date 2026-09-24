@@ -418,6 +418,32 @@ async function delegationFor(tx: WorkspaceTx, creatorId: string): Promise<Connec
   return out;
 }
 
+/** Una fila del catálogo `metric_requirement` (0011): qué exige una red para entregar un grupo de métricas. */
+export interface MetricRequirement {
+  id: string;
+  platformId: ConnectionPlatformId;
+  metricGroup: string;
+  requirement: string;
+  /** El texto que ve el creador, en español. La pantalla no lo copia: lo lee de aquí. */
+  messageEs: string;
+  fixUrl: string | null;
+}
+
+/**
+ * Un prerrequisito por su id ('tt.insights.optin'…). `metric_requirement`
+ * es un catálogo GLOBAL de solo lectura: sin workspace_id, sin RLS y sin
+ * escritura para mc_app (0024 §7.1). Se lee dentro de la transacción de
+ * workspace que ya está abierta; no hace falta otra.
+ */
+export async function getMetricRequirement(tx: WorkspaceTx, id: string): Promise<MetricRequirement | null> {
+  const { rows } = await tx.query<{ id: string; platform_id: ConnectionPlatformId; metric_group: string; requirement: string; message_es: string; fix_url: string | null }>(
+    `SELECT id, platform_id, metric_group, requirement, message_es, fix_url FROM metric_requirement WHERE id = $1`,
+    [id],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, platformId: r.platform_id, metricGroup: r.metric_group, requirement: r.requirement, messageEs: r.message_es, fixUrl: r.fix_url } : null;
+}
+
 export async function listConsents(tx: WorkspaceTx, connectionId: string): Promise<ConsentRow[]> {
   const { rows } = await tx.query<{ id: string; purpose: ConsentPurpose; granted: boolean; granted_at: string | Date; revoked_at: string | Date | null; policy_version: string }>(
     `SELECT x.id, x.purpose, x.granted, x.granted_at, x.revoked_at, x.policy_version FROM data_consent x
@@ -808,6 +834,37 @@ export interface AccountRow extends ConnectionListRow {
   postsCount: number;
   /** ISO de la última lectura de contenido, o null si todavía no se ha medido ninguna. */
   lastPostSnapshotAt: string | null;
+  /**
+   * La variación de seguidores en esos siete días, ya calculada aquí
+   * (0,012 = +1,2 %). Ninguna pantalla resta ni divide métricas: la
+   * aritmética es de la base o de @mc/core (§3.3 del backlog).
+   */
+  followersDelta7d: number | null;
+  /**
+   * ISO de cuándo vence el permiso de RENOVACIÓN (el refresh token), o
+   * null si la plataforma no dio uno o la cuenta no tiene token. Con el
+   * acceso vencido y esto en el futuro, la cuenta se renueva sola
+   * (oauth.refresh); sin esto, hay que volver a autorizarla (CON-4).
+   */
+  refreshExpiresAt: string | null;
+  /**
+   * Por qué falta un grupo de cifras de esta cuenta (metric_gap, 0039),
+   * con el texto de metric_requirement. Vacío si no falta nada o si el
+   * job que lo detecta (collect.demographics) todavía no ha corrido.
+   */
+  gaps: AccountGap[];
+}
+
+/** Un hueco de cifras de una cuenta: qué grupo falta, por qué y desde cuándo (CON-7). */
+export interface AccountGap {
+  /** 'demografia_de_cuenta', 'retencion_y_audiencia'… */
+  metricGroup: string;
+  requirementId: string;
+  /** La frase que va en pantalla. Sale de la migración, no del JSX. */
+  messageEs: string;
+  fixUrl: string | null;
+  /** 'YYYY-MM-DD' desde el que falta este requisito. */
+  since: string;
 }
 
 /** Cuentas vivas con su último snapshot público, el de hace una semana y sus publicaciones medidas. */
@@ -819,14 +876,19 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
     media_count: string | number | null; views: string | number | null; followers_week_ago: string | number | null;
     acted_by_user_id: string | null; acted_by_email: string | null; acted_by_name: string | null; acted_at: string | Date | null;
     posts_count: string | number; last_post_snapshot_at: string | Date | null;
+    followers_delta_7d: string | number | null;
+    refresh_expires_at: string | Date | null;
+    gaps: AccountGap[] | null;
   }>(
     `SELECT c.id, c.access_mode,
             to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
-            (SELECT w.followers FROM account_metric_snapshot w
-              WHERE w.connection_id = c.id AND w.source = ANY($1::text[]) AND w.day <= l.day - 7
-              ORDER BY w.day DESC LIMIT 1) AS followers_week_ago,
+            w.followers AS followers_week_ago,
+            CASE WHEN w.followers > 0 AND l.followers IS NOT NULL
+                 THEN round((l.followers - w.followers)::numeric / w.followers, 6)
+            END AS followers_delta_7d,
             a.acted_by_user_id, a.acted_by_email, u.name AS acted_by_name, a.acted_at,
-            contenido.posts_count, contenido.last_post_snapshot_at
+            contenido.posts_count, contenido.last_post_snapshot_at,
+            c.refresh_expires_at, huecos.gaps
        FROM social_connection c
        LEFT JOIN LATERAL (
          SELECT s.day, s.followers, s.following, s.media_count, s.views
@@ -834,6 +896,12 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           WHERE s.connection_id = c.id AND s.source = ANY($1::text[])
           ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
        ) l ON true
+       LEFT JOIN LATERAL (
+         SELECT h.followers
+           FROM account_metric_snapshot h
+          WHERE h.connection_id = c.id AND h.source = ANY($1::text[]) AND h.day <= l.day - 7
+          ORDER BY h.day DESC LIMIT 1
+       ) w ON true
        -- El consentimiento vigente MÁS RECIENTE, tenga o no actedBy: si el titular
        -- reconectó después del mánager, la cuenta ya no está «conectada por» él.
        LEFT JOIN LATERAL (
@@ -857,6 +925,18 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
            LEFT JOIN post_metric_snapshot s ON s.post_id = p.id AND s.workspace_id = p.workspace_id
           WHERE p.connection_id = c.id AND p.deleted_on_platform = false
        ) contenido
+       LEFT JOIN LATERAL (
+         -- CON-7: los huecos vivos de la cuenta con su explicación. Una
+         -- fila por grupo (UNIQUE de 0039); metric_requirement es un
+         -- catálogo global de solo lectura.
+         SELECT json_agg(json_build_object(
+                  'metricGroup', g.metric_group, 'requirementId', g.requirement_id,
+                  'messageEs', r.message_es, 'fixUrl', r.fix_url, 'since', to_char(g.day, 'YYYY-MM-DD'))
+                ORDER BY g.metric_group) AS gaps
+           FROM metric_gap g
+           JOIN metric_requirement r ON r.id = g.requirement_id
+          WHERE g.connection_id = c.id
+       ) huecos ON true
       WHERE c.deleted_at IS NULL AND ${SCOPE_CONNECTION}`,
     [[...ACCOUNT_SNAPSHOT_SOURCES]],
   );
@@ -874,6 +954,9 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
         : null,
       postsCount: Number(e?.posts_count ?? 0),
       lastPostSnapshotAt: iso(e?.last_post_snapshot_at ?? null),
+      followersDelta7d: n(e?.followers_delta_7d),
+      refreshExpiresAt: iso(e?.refresh_expires_at ?? null),
+      gaps: e?.gaps ?? [],
     };
   });
 }

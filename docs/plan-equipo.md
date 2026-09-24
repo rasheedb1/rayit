@@ -41,6 +41,9 @@ nueve índices, y el entorno local se levanta con un comando.
 > manejado en una prueba de Resumen. Detalle, pendientes de Rasheed y
 > lo que sigue en la sección 10 de
 > [backlog-mvp.md](backlog-mvp.md#10-cierre-del-sprint-2-al-23-de-septiembre-de-2026).
+> Al cierre de módulos del 23-sep por la tarde, CON-4 (la pantalla
+> Conexiones) quedó en `main` y en producción: ver
+> [propuestas/CIERRE-CON-B.md](propuestas/CIERRE-CON-B.md).
 
 ---
 
