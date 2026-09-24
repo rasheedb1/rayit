@@ -1,246 +1,65 @@
 /**
- * Correo por el Gmail del creador (VEN-10), con la API REST de Gmail.
+ * Correo por el Gmail del creador (VEN-10): un adaptador fino sobre el
+ * cliente de VEN-9 (GmailApi de @mc/connectors: GmailClient, su MIME con
+ * List-Unsubscribe de un clic, su renovación del token en un solo sitio y
+ * su bitácora en api_call_log). Aquí solo queda:
  *
- *   enviar   POST /gmail/v1/users/me/messages/send {raw, threadId?}
- *            y después GET …/messages/{id}?format=metadata para leer el
- *            Message-ID que quedó de verdad (el que va en In-Reply-To
- *            del paso «respuesta en el hilo»).
- *   leer     GET /gmail/v1/users/me/threads/{threadId}?format=full: lo
- *            que no lleva la etiqueta SENT y no conocemos es de la marca.
+ *   · sacar el token de la cuenta del almacén (SecretStore, por
+ *     secret_ref; nunca de la base en claro) y guardar el renovado con la
+ *     MISMA ref;
+ *   · traducir lo que pasa al idioma del motor (failureFrom);
+ *   · leer un hilo sin lo nuestro, sin lo conocido, sin rebotes, sin lo
+ *     que no trae fecha, y marcando las respuestas automáticas.
  *
- * El token sale del SecretStore por secret_ref (nunca de la base en
- * claro). Si caducó y hay GOOGLE_CLIENT_ID/SECRET, se refresca aquí y se
- * guarda; si no, el envío queda como transitorio (el keepalive de VEN-9
- * lo renueva). Un 401 o un invalid_grant es la cuenta: pasa a
- * needs_reconnect. Un fallo NUESTRO (el almacén no tiene el secreto) no
- * cambia la cuenta, como en oauth.refresh.
+ * «Canal no configurado» (r3): sin GOOGLE_CLIENT_ID/SECRET no hay OAuth
+ * para renovar un token que dura una hora, y la web tampoco puede
+ * conectar un Gmail. configured() es false: el despachador no reclama
+ * correos (esperan en la cola sin gastar intentos, y la salud los cuenta)
+ * y el lector no lee hilos. Si falta el token de una cuenta en el almacén,
+ * el correo espera como «cuenta no disponible», sin tocar la cuenta.
  *
- * Duplicados (r2): un timeout o un corte DESPUÉS de hacer el POST es
- * ambiguo (networkFailure con sends), y antes del siguiente intento el
- * despachador llama a findSent: si el intento anterior está en el buzón
- * (rfc822msgid:), se registra como enviado y no se reenvía. Un 2xx con
- * un cuerpo ilegible es un envío, nunca un fallo.
- *
- * Deuda conocida (VEN-10 r2, anotada en el backlog): la rama VEN-9-canales
- * trae su propio cliente de Gmail en packages/connectors (gmail.ts,
- * outreach/mime.ts, errors.ts, fake-gmail). Cuando se integre, este
- * archivo y mime.ts se reducen a un adaptador fino ChannelSender → ese
- * cliente, sin su propia traducción de errores ni su propio MIME.
+ * Duplicados: el cliente se crea sin reintentos propios (el motor tiene
+ * los suyos). Un corte después del POST es ambiguo, y antes del siguiente
+ * intento findSent busca en Enviados lo mandado a esa dirección con ese
+ * asunto y ese texto. Un 2xx sin id es un envío, nunca un fallo.
  */
-import type { SecretStore } from '@mc/connectors';
-import type { InboundMessage, OpenThread } from '@mc/db/queries/outreach';
-import { buildMime, messageIdFor, toBase64Url } from './mime.ts';
 import {
-  abortedBeforeSend, failureFromStatus, networkFailure, withTimeout, type ChannelReader, type ChannelSender, type Fetch,
-  type FindSentResult, type OutgoingMessage, type SendResult,
+  GmailClient, NULL_OUTREACH_CALL_LOG, OutreachApiError, type FetchLike, type GmailApi, type GmailMessage,
+  type GoogleOAuthApi, type OAuthTokens, type OutreachCallLogSink, type SecretStore,
+} from '@mc/connectors';
+import type { InboundMessage, OpenThread } from '@mc/db/queries/outreach';
+import {
+  abortedBeforeSend, failureFrom, type ChannelLogger, type ChannelReader, type ChannelSender, type FindSentResult,
+  type OutgoingMessage, type SendResult, type SenderAccount,
 } from './types.ts';
 
-export const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
-export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const TIMEOUT_MS = 20_000;
-/** Margen para refrescar el token antes de que caduque (el de Chief). */
-const REFRESH_MARGIN_MS = 2 * 60_000;
+/** Cuánto hacia atrás busca findSent en Enviados: más que la espera más larga entre dos intentos. */
+export const FIND_SENT_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 
-export interface GmailOptions {
+export interface GmailMailboxInput {
+  tokens: OAuthTokens;
+  oauth: GoogleOAuthApi;
+  account: Pick<SenderAccount, 'id'>;
+  onTokens: (tokens: OAuthTokens) => Promise<void>;
+}
+
+export interface GmailChannelOptions {
   secrets: SecretStore;
-  fetch?: Fetch;
-  clientId?: string;
-  clientSecret?: string;
-  /** Dominio del Message-ID propio. */
-  messageIdDomain?: string;
+  /** El OAuth de Google de la plataforma. null: faltan GOOGLE_CLIENT_ID/SECRET, y el canal no está configurado. */
+  oauth: GoogleOAuthApi | null;
+  /** El buzón de una cuenta. Por defecto, GmailClient; las pruebas pasan FakeGmail. */
+  mailbox?: (input: GmailMailboxInput) => GmailApi;
+  callLog?: OutreachCallLogSink;
+  fetch?: FetchLike;
   now?: () => Date;
+  logger?: ChannelLogger;
 }
 
-type TokenResult = { ok: true; token: string } | { ok: false; result: SendResult };
+type Mailbox = { ok: true; api: GmailApi } | { ok: false; result: SendResult };
 
-export class GmailChannel implements ChannelSender, ChannelReader {
-  readonly channel = 'email' as const;
-  readonly #o: GmailOptions;
-  readonly #fetch: Fetch;
-
-  constructor(opts: GmailOptions) {
-    this.#o = opts;
-    this.#fetch = opts.fetch ?? ((u, i) => fetch(u, i));
-  }
-
-  /** Enviar no necesita llaves de la plataforma: el token es del creador. Refrescarlo sí. */
-  configured(): boolean {
-    return true;
-  }
-
-  async #token(secretRef: string | null, signal?: AbortSignal): Promise<TokenResult> {
-    if (!secretRef) {
-      return { ok: false, result: { ok: false, kind: 'permanent', code: 'account_auth', message: 'La cuenta de Gmail no tiene credenciales guardadas.', account: 'needs_reconnect' } };
-    }
-    const tokens = await this.#o.secrets.get(secretRef);
-    if (!tokens) {
-      return { ok: false, result: { ok: false, kind: 'transient', code: 'secret_missing', message: `El almacén no tiene ${secretRef}.` } };
-    }
-    const now = (this.#o.now ?? (() => new Date()))();
-    if (tokens.accessExpiresAt.getTime() - REFRESH_MARGIN_MS > now.getTime()) return { ok: true, token: tokens.accessToken };
-    if (!this.#o.clientId || !this.#o.clientSecret || !tokens.refreshToken) {
-      return { ok: false, result: { ok: false, kind: 'transient', code: 'token_expired', message: 'El token de Gmail venció y no hay GOOGLE_CLIENT_ID/SECRET para refrescarlo.' } };
-    }
-    let res: Response;
-    try {
-      res = await this.#fetch(GOOGLE_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token', refresh_token: tokens.refreshToken, client_id: this.#o.clientId, client_secret: this.#o.clientSecret,
-        }).toString(),
-        signal: withTimeout(signal, TIMEOUT_MS),
-      });
-    } catch (err) {
-      return { ok: false, result: networkFailure(err) };
-    }
-    const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string };
-    if (!res.ok || !json.access_token) {
-      if (json.error === 'invalid_grant') {
-        return { ok: false, result: { ok: false, kind: 'permanent', code: 'account_auth', message: 'Google revocó el permiso (invalid_grant).', account: 'needs_reconnect' } };
-      }
-      return { ok: false, result: failureFromStatus(res.status, json.error ?? 'refresh', 'Google OAuth') };
-    }
-    await this.#o.secrets.set(secretRef, {
-      ...tokens,
-      accessToken: json.access_token,
-      accessExpiresAt: new Date(now.getTime() + (json.expires_in ?? 3600) * 1000),
-    });
-    return { ok: true, token: json.access_token };
-  }
-
-  async send(m: OutgoingMessage, signal?: AbortSignal): Promise<SendResult> {
-    const tok = await this.#token(m.account.secretRef, signal);
-    if (!tok.ok) return tok.result;
-    const ownId = this.#ownId(m);
-    const raw = toBase64Url(buildMime({
-      from: m.account.providerAccountId, fromName: m.account.displayName, to: m.recipient, toName: m.recipientName,
-      subject: m.subject, body: m.body, messageId: ownId, inReplyTo: m.reply?.messageIdRfc ?? null,
-      unsubscribeUrl: m.unsubscribeUrl, date: (this.#o.now ?? (() => new Date()))(),
-    }));
-    const auth = { authorization: `Bearer ${tok.token}` };
-    if (signal?.aborted) return abortedBeforeSend();
-    let res: Response;
-    try {
-      res = await this.#fetch(`${GMAIL_API}/messages/send`, {
-        method: 'POST',
-        headers: { ...auth, 'content-type': 'application/json' },
-        body: JSON.stringify(m.reply?.threadRef ? { raw, threadId: m.reply.threadRef } : { raw }),
-        signal: withTimeout(signal, TIMEOUT_MS),
-      });
-    } catch (err) {
-      // Un timeout o un corte con la petición ya enviada es ambiguo: Gmail pudo haberlo mandado.
-      return networkFailure(err, { sends: true });
-    }
-    if (!res.ok) return failureFromStatus(res.status, await res.text().catch(() => ''), 'Gmail');
-    let sent: { id?: string; threadId?: string } | null = null;
-    try {
-      sent = (await res.json()) as { id?: string; threadId?: string };
-    } catch {
-      sent = null;
-    }
-    if (!sent?.id) {
-      // Gmail dijo 2xx: el correo SALIÓ aunque la respuesta no se pueda
-      // leer. Nunca se reenvía; se busca por su Message-ID para tener el
-      // id y el hilo, y si tampoco se puede, queda enviado sin ellos.
-      const found = await this.findSent(m, signal);
-      if (found.found === true) return { ok: true, ...found.proof, warning: 'Gmail respondió 2xx sin cuerpo legible; se tomó el id de la búsqueda.' };
-      return {
-        ok: true, providerMessageId: `gmail-rfc822:${ownId}`, threadRef: null, messageIdRfc: ownId,
-        warning: 'Gmail respondió 2xx sin cuerpo legible y la búsqueda no lo encontró: enviado sin id de Gmail ni hilo.',
-      };
-    }
-    // El Message-ID que quedó. Si esta lectura falla, el correo YA salió:
-    // se registra con el propio, que es el que se puso en la cabecera.
-    let messageIdRfc = ownId;
-    try {
-      const meta = await this.#fetch(`${GMAIL_API}/messages/${encodeURIComponent(sent.id)}?format=metadata&metadataHeaders=Message-ID`, {
-        headers: auth, signal: withTimeout(signal, TIMEOUT_MS),
-      });
-      if (meta.ok) {
-        const j = (await meta.json()) as { payload?: { headers?: Array<{ name: string; value: string }> } };
-        messageIdRfc = j.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value ?? ownId;
-      }
-    } catch {
-      // Se queda con el propio.
-    }
-    return { ok: true, providerMessageId: sent.id, threadRef: sent.threadId ?? null, messageIdRfc };
-  }
-
-  /**
-   * ¿Salió el intento `m.attempt`? Se busca en el buzón por su Message-ID
-   * propio (rfc822msgid:, que Gmail conserva en la copia enviada). Sin
-   * token o sin respuesta legible, no se sabe: 'unknown'.
-   */
-  async findSent(m: OutgoingMessage, signal?: AbortSignal): Promise<FindSentResult> {
-    const tok = await this.#token(m.account.secretRef, signal);
-    if (!tok.ok) return { found: 'unknown', reason: 'sin token de Gmail para buscar el envío' };
-    const ownId = this.#ownId(m);
-    const q = `rfc822msgid:${ownId.replace(/^<|>$/g, '')}`;
-    try {
-      const res = await this.#fetch(`${GMAIL_API}/messages?q=${encodeURIComponent(q)}&maxResults=1&includeSpamTrash=true`, {
-        headers: { authorization: `Bearer ${tok.token}` }, signal: withTimeout(signal, TIMEOUT_MS),
-      });
-      if (!res.ok) return { found: 'unknown', reason: `Gmail respondió ${res.status} a la búsqueda` };
-      const j = (await res.json()) as { messages?: Array<{ id?: string; threadId?: string }> };
-      const hit = j.messages?.find((x) => typeof x.id === 'string');
-      if (!hit?.id) return { found: false };
-      return { found: true, proof: { providerMessageId: hit.id, threadRef: hit.threadId ?? null, messageIdRfc: ownId } };
-    } catch (err) {
-      return { found: 'unknown', reason: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  #ownId(m: OutgoingMessage): string {
-    return messageIdFor(m.touchId, m.attempt, this.#o.messageIdDomain ?? 'mail.oncue.app');
-  }
-
-  async readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]> {
-    const tok = await this.#token(thread.account.secretRef, signal);
-    if (!tok.ok) throw new Error(`Gmail: no se pudo leer el hilo (${tok.result.ok ? '' : tok.result.code}).`);
-    const res = await this.#fetch(`${GMAIL_API}/threads/${encodeURIComponent(thread.threadRef)}?format=full`, {
-      headers: { authorization: `Bearer ${tok.token}` }, signal: withTimeout(signal, TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`Gmail respondió ${res.status} al leer el hilo ${thread.threadRef}.`);
-    const j = (await res.json()) as { messages?: GmailMessage[] };
-    return (j.messages ?? [])
-      .filter((msg) => !(msg.labelIds ?? []).includes('SENT') && !(msg.labelIds ?? []).includes('DRAFT'))
-      .filter((msg) => !thread.knownMessageIds.includes(msg.id))
-      .map(toInbound)
-      // Los rebotes (mailer-daemon) no son respuestas: los lee VEN-15.
-      .filter((msg) => !/mailer-daemon|postmaster/i.test(msg.fromAddress ?? ''));
-  }
-}
-
-interface GmailPart {
-  mimeType?: string;
-  headers?: Array<{ name: string; value: string }>;
-  body?: { data?: string };
-  parts?: GmailPart[];
-}
-interface GmailMessage {
-  id: string;
-  threadId: string;
-  labelIds?: string[];
-  internalDate?: string;
-  snippet?: string;
-  payload?: GmailPart;
-}
-
-function header(p: GmailPart | undefined, name: string): string | null {
-  return p?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? null;
-}
-
-/** El primer text/plain del árbol MIME, decodificado. */
-function plainText(p: GmailPart | undefined): string | null {
-  if (!p) return null;
-  if (p.mimeType === 'text/plain' && p.body?.data) return Buffer.from(p.body.data, 'base64url').toString('utf8');
-  for (const child of p.parts ?? []) {
-    const t = plainText(child);
-    if (t) return t;
-  }
-  return null;
-}
+const NO_TOKEN_REF: SendResult = {
+  ok: false, kind: 'permanent', code: 'account_auth', message: 'La cuenta de Gmail no tiene credenciales guardadas.', account: 'needs_reconnect',
+};
 
 /** Solo la dirección de «Nombre <dirección>». */
 function addressOf(from: string | null): string | null {
@@ -249,14 +68,135 @@ function addressOf(from: string | null): string | null {
   return (m ? m[1]! : from).trim().toLowerCase();
 }
 
-function toInbound(msg: GmailMessage): InboundMessage {
-  return {
-    providerMessageId: msg.id,
-    messageIdRfc: header(msg.payload, 'Message-ID'),
-    inReplyTo: header(msg.payload, 'In-Reply-To'),
-    fromAddress: addressOf(header(msg.payload, 'From')),
-    subject: header(msg.payload, 'Subject'),
-    body: plainText(msg.payload) ?? msg.snippet ?? '',
-    occurredAt: new Date(Number(msg.internalDate ?? Date.now())),
-  };
+/** Espacios colapsados, para comparar lo enviado con lo que devuelve Gmail. */
+function flat(s: string | null | undefined): string {
+  return (s ?? '').replace(/\s+/g, ' ').trim();
+}
+
+export class GmailChannel implements ChannelSender, ChannelReader {
+  readonly channel = 'email' as const;
+  readonly #o: GmailChannelOptions;
+
+  constructor(opts: GmailChannelOptions) {
+    this.#o = opts;
+  }
+
+  configured(): boolean {
+    return this.#o.oauth !== null;
+  }
+
+  async #mailbox(account: Pick<SenderAccount, 'id' | 'secretRef'>): Promise<Mailbox> {
+    const oauth = this.#o.oauth;
+    if (!oauth) {
+      return { ok: false, result: { ok: false, kind: 'transient', code: 'token_expired', message: 'Faltan GOOGLE_CLIENT_ID/SECRET.', account: 'unavailable' } };
+    }
+    const ref = account.secretRef;
+    if (!ref) return { ok: false, result: NO_TOKEN_REF };
+    const tokens = await this.#o.secrets.get(ref);
+    if (!tokens) {
+      // Un problema nuestro (el almacén), no de la persona: la cuenta no cambia.
+      return { ok: false, result: { ok: false, kind: 'transient', code: 'secret_missing', message: `El almacén no tiene ${ref}.`, account: 'unavailable' } };
+    }
+    const onTokens = async (t: OAuthTokens) => {
+      await this.#o.secrets.set(ref, t);
+    };
+    const api = this.#o.mailbox
+      ? this.#o.mailbox({ tokens, oauth, account, onTokens })
+      : new GmailClient({
+          tokens, oauth, channelAccountId: account.id, onTokens, callLog: this.#o.callLog ?? NULL_OUTREACH_CALL_LOG,
+          fetch: this.#o.fetch, now: this.#o.now, retry: { maxRetries: 0 },
+        });
+    return { ok: true, api };
+  }
+
+  async send(m: OutgoingMessage, signal?: AbortSignal): Promise<SendResult> {
+    const box = await this.#mailbox(m.account);
+    if (!box.ok) return box.result;
+    if (signal?.aborted) return abortedBeforeSend();
+    try {
+      const sent = await box.api.send({
+        from: { address: m.account.providerAccountId, name: m.account.displayName },
+        to: { address: m.recipient, name: m.recipientName },
+        subject: m.subject ?? '',
+        text: m.body,
+        threadId: m.reply?.threadRef ?? undefined,
+        inReplyTo: m.reply?.messageIdRfc ?? undefined,
+        unsubscribeUrl: m.unsubscribeUrl ?? undefined,
+      });
+      return {
+        ok: true, providerMessageId: sent.providerMessageId, threadRef: sent.threadId, messageIdRfc: sent.messageIdRfc,
+        warning: sent.messageIdPending ? 'Gmail envió el correo pero no se pudo leer su Message-ID: la respuesta del hilo irá sin In-Reply-To.' : null,
+      };
+    } catch (err) {
+      // Gmail respondió 2xx sin id: el correo SALIÓ. Nunca se reenvía; se busca para tener su id y su hilo.
+      if (err instanceof OutreachApiError && err.endpoint === 'gmail.messages.send' && err.code === 'malformed_response') {
+        const found = await this.#findIn(box.api, m);
+        if (found.found === true) return { ok: true, ...found.proof, warning: 'Gmail respondió 2xx sin id; se tomó el de Enviados.' };
+        return {
+          ok: true, providerMessageId: `gmail-sin-id:${m.touchId}.${m.attempt}`, threadRef: null, messageIdRfc: null,
+          warning: 'Gmail respondió 2xx sin id y no se encontró en Enviados: enviado sin id de Gmail ni hilo.',
+        };
+      }
+      // Solo el POST de envío es ambiguo; la renovación del token y las lecturas no envían nada.
+      const sends = !(err instanceof OutreachApiError) || err.endpoint === 'gmail.messages.send';
+      return failureFrom(err, { sends });
+    }
+  }
+
+  /**
+   * ¿Salió el intento sin confirmar? Se busca en Enviados lo mandado a esa
+   * dirección en las últimas dos semanas con el mismo asunto y el mismo
+   * texto (sin el pie, que cambia de enlace en cada intento). Gmail pone su
+   * propio Message-ID al enviar, así que no sirve de llave.
+   */
+  async findSent(m: OutgoingMessage): Promise<FindSentResult> {
+    const box = await this.#mailbox(m.account);
+    if (!box.ok) return { found: 'unknown', reason: 'no se pudo abrir el buzón de Gmail' };
+    return this.#findIn(box.api, m);
+  }
+
+  async #findIn(api: GmailApi, m: OutgoingMessage): Promise<FindSentResult> {
+    const now = (this.#o.now ?? (() => new Date()))();
+    try {
+      const refs = await api.searchSent({ to: m.recipient, since: new Date(now.getTime() - FIND_SENT_LOOKBACK_MS), max: 10 });
+      const content = flat(m.content);
+      for (const ref of refs) {
+        const sent = await api.getMessage(ref.id);
+        if (flat(sent.subject) === flat(m.subject) && flat(sent.text).startsWith(content)) {
+          return { found: true, proof: { providerMessageId: sent.id, threadRef: sent.threadId || ref.threadId, messageIdRfc: sent.messageIdRfc } };
+        }
+      }
+      return { found: false };
+    } catch (err) {
+      return { found: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async readThread(thread: OpenThread): Promise<InboundMessage[]> {
+    const box = await this.#mailbox({ id: thread.account.id, secretRef: thread.account.secretRef });
+    if (!box.ok) throw new Error(`Gmail: no se pudo abrir el buzón (${box.result.ok ? '' : box.result.code}).`);
+    const messages = await box.api.getThread(thread.threadRef);
+    return messages.flatMap((msg) => this.#inbound(thread, msg));
+  }
+
+  #inbound(thread: OpenThread, msg: GmailMessage): InboundMessage[] {
+    if (msg.labelIds.includes('SENT') || msg.labelIds.includes('DRAFT')) return [];
+    if (!msg.id || thread.knownMessageIds.includes(msg.id)) return [];
+    // Los rebotes (mailer-daemon) no son respuestas: los lee outbound.bounces (VEN-15).
+    if (msg.failedRecipient || /mailer-daemon|postmaster/i.test(msg.from ?? '')) return [];
+    if (!msg.sentAt) {
+      this.#o.logger?.warn('Gmail entregó un mensaje sin fecha: se descarta', { threadRef: thread.threadRef, messageId: msg.id });
+      return [];
+    }
+    return [{
+      providerMessageId: msg.id,
+      messageIdRfc: msg.messageIdRfc,
+      inReplyTo: msg.inReplyTo,
+      fromAddress: addressOf(msg.from),
+      subject: msg.subject,
+      body: msg.text || msg.snippet,
+      occurredAt: msg.sentAt,
+      automatic: msg.automatic === true,
+    }];
+  }
 }

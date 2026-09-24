@@ -131,6 +131,12 @@ export interface GmailMessage {
   labelIds: string[];
   /** Cabecera X-Failed-Recipients o Final-Recipient de un rebote. */
   failedRecipient: string | null;
+  /**
+   * Una respuesta automática (VEN-10 r3): Auto-Submitted distinto de «no»
+   * (RFC 3834), X-Autoreply o X-Autorespond, o Precedence: auto_reply. El
+   * lector de respuestas la guarda sin cancelar la cadencia.
+   */
+  automatic?: boolean;
 }
 
 export interface GmailMessageRef {
@@ -146,6 +152,12 @@ export interface GmailApi {
   searchReplies(opts: { since: Date; threadId?: string; max?: number }): Promise<GmailMessageRef[]>;
   /** Los rebotes (mailer-daemon, postmaster) desde `since`. */
   searchBounces(opts: { since: Date; max?: number }): Promise<GmailMessageRef[]>;
+  /**
+   * Lo que la persona envió a `to` desde `since` (VEN-10 r3): el
+   * despachador lo mira antes de reenviar un intento cuyo resultado no se
+   * supo, para no mandarle dos veces el mismo correo a una marca.
+   */
+  searchSent(opts: { to: string; since: Date; max?: number }): Promise<GmailMessageRef[]>;
 }
 
 // ---------------------------------------------------------------------
@@ -421,6 +433,12 @@ export class GmailClient implements GmailApi {
     return this.#search(`(from:mailer-daemon OR from:postmaster) after:${epoch(opts.since)}`, opts.max);
   }
 
+  async searchSent(opts: { to: string; since: Date; max?: number }): Promise<GmailMessageRef[]> {
+    const to = opts.to.trim();
+    if (!/^[^\s@"()<>]+@[^\s@"()<>]+$/.test(to)) return [];
+    return this.#search(`in:sent to:${to} after:${epoch(opts.since)}`, opts.max ?? 10);
+  }
+
   async #search(q: string, max = 100): Promise<GmailMessageRef[]> {
     const b = await this.#get('gmail.messages.list', '/messages', { q, maxResults: Math.min(Math.max(1, max), 500) });
     const list = Array.isArray(b['messages']) ? b['messages'].map(obj) : [];
@@ -476,5 +494,14 @@ export function normalizeGmailMessage(raw: unknown): GmailMessage {
     text,
     labelIds: Array.isArray(m['labelIds']) ? m['labelIds'].filter((l): l is string => typeof l === 'string') : [],
     failedRecipient: (header(m, 'X-Failed-Recipients') ?? finalRecipient)?.trim().toLowerCase() ?? null,
+    automatic: isAutomaticReply(m),
   };
+}
+
+/** RFC 3834 y las cabeceras de facto de los «fuera de oficina» (Exchange, Gmail, Zendesk). */
+export function isAutomaticReply(message: Json): boolean {
+  const auto = (header(message, 'Auto-Submitted') ?? '').trim().toLowerCase();
+  if (auto !== '' && auto !== 'no') return true;
+  if (header(message, 'X-Autoreply') !== null || header(message, 'X-Autorespond') !== null) return true;
+  return /^\s*auto_reply\s*$/i.test(header(message, 'Precedence') ?? '');
 }

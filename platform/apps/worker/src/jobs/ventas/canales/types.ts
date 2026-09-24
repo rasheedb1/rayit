@@ -4,15 +4,18 @@
  * El despachador no sabe de Gmail ni de Unipile: recibe un toque ya
  * reclamado y releído, arma el mensaje y se lo da al ChannelSender de su
  * canal. El resultado vuelve en el idioma del motor (SentProof o
- * SendFailure de @mc/db/queries/outreach), no en el del proveedor: cada
- * adaptador traduce sus errores a transitorio o permanente.
+ * SendFailure de @mc/db/queries/outreach), no en el del proveedor.
  *
  * Lo mismo para leer respuestas: ChannelReader devuelve los mensajes
  * nuevos de un hilo abierto, y el job outbound.replies decide qué hacer.
  *
- * Implementaciones: email (Gmail), linkedin e instagram_dm (Unipile) y
- * fake (pruebas y demo, sin red).
+ * Implementaciones (r3): adaptadores finos sobre los clientes de VEN-9 en
+ * @mc/connectors (GmailApi y UnipileApi: su HTTP, su MIME, su bitácora en
+ * api_call_log y su traducción de errores a OutreachApiError), y `fake`
+ * para las pruebas y la demo. Aquí solo queda traducir un OutreachApiError
+ * a lo que el motor decide: reintentar, esperar la cuenta o fallar.
  */
+import { isOutreachApiError, MimeError } from '@mc/connectors';
 import type { DispatchableStepType, DispatchChannel, InboundMessage, OpenThread, SendFailure, SentProof } from '@mc/db/queries/outreach';
 
 /** La cuenta que envía, como la guarda outreach_channel_account. Nunca lleva el token: solo su referencia. */
@@ -38,11 +41,17 @@ export interface OutgoingMessage {
   recipient: string;
   recipientName: string | null;
   subject: string | null;
-  /** El cuerpo final: en un correo, ya con el pie de baja. */
+  /** El cuerpo final: en un correo, ya con el pie de baja (buildEmailFooter de VEN-15). */
   body: string;
+  /** Lo que escribió la persona, sin el pie: con esto se reconoce un envío en la carpeta de enviados. */
+  content: string;
   /** El hilo al que responde (email_reply, o el chat ya abierto de LinkedIn e Instagram). */
   reply: { threadRef: string | null; messageIdRfc: string | null } | null;
-  /** El enlace de baja de un clic (cabecera List-Unsubscribe). Solo correo. */
+  /**
+   * La URL de la baja de UN CLIC (oneClickUnsubscribeUrl de VEN-15, …/un-clic):
+   * la de la cabecera List-Unsubscribe, a la que Gmail y Yahoo hacen el
+   * POST (RFC 8058). Solo correo. El pie lleva la de la página (/baja/<token>).
+   */
   unsubscribeUrl: string | null;
 }
 
@@ -57,7 +66,7 @@ export type FindSentResult = { found: true; proof: SentProof } | { found: false 
 
 export interface ChannelSender {
   readonly channel: DispatchChannel;
-  /** ¿Están las llaves de la plataforma? Sin ellas, lo de este canal espera en la cola. */
+  /** ¿Están las llaves de la plataforma? Sin ellas, lo de este canal espera en la cola sin gastar intentos. */
   configured(): boolean;
   send(message: OutgoingMessage, signal?: AbortSignal): Promise<SendResult>;
   /**
@@ -71,53 +80,17 @@ export interface ChannelSender {
 export interface ChannelReader {
   readonly channel: DispatchChannel;
   configured(): boolean;
-  /** Los mensajes de la otra parte que todavía no están en outbound_message. */
+  /**
+   * Los mensajes de la otra parte que todavía no están en outbound_message.
+   * Lo que el proveedor entrega sin fecha se descarta (y se dice en el
+   * log): una fecha inventada podría colarse o quedar fuera del hilo.
+   */
   readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]>;
 }
 
-/** Un fetch inyectable (las pruebas pasan uno grabado; nunca hay red en ellas). */
-export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-
-/** Une la señal del job con un tiempo máximo por llamada. */
-export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const t = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, t]) : t;
-}
-
-/**
- * Los errores de red que pasan ANTES de que la petición salga de la
- * máquina: no hubo conexión, no se resolvió el nombre, el TLS no cerró.
- * Todo lo demás (timeout esperando la respuesta, conexión cortada,
- * abort) pudo pasar DESPUÉS de que el proveedor recibió el mensaje.
- */
-const PRE_SEND_CODES = new Set([
-  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
-  'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID',
-]);
-
-/** El código de un error de fetch (undici lo pone en cause, a veces dos niveles abajo). */
-export function errorCode(err: unknown): string | null {
-  let e: unknown = err;
-  for (let i = 0; i < 3 && e && typeof e === 'object'; i++) {
-    const code = (e as { code?: unknown }).code;
-    if (typeof code === 'string') return code;
-    e = (e as { cause?: unknown }).cause;
-  }
-  return null;
-}
-
-/**
- * Un error de red o de tiempo es transitorio: el despachador reintenta
- * con espera creciente. Si la llamada ENVÍA el mensaje (`sends`) y el
- * error no es de los de antes de salir, el resultado es AMBIGUO: el
- * proveedor pudo haberlo enviado, y reenviarlo a ciegas duplicaría el
- * correo. El despachador pregunta antes del siguiente intento.
- */
-export function networkFailure(err: unknown, opts: { sends?: boolean } = {}): SendResult {
-  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  const code = errorCode(err);
-  const ambiguous = Boolean(opts.sends) && !(code !== null && PRE_SEND_CODES.has(code));
-  return { ok: false, kind: 'transient', code: ambiguous ? 'network_ambiguous' : 'network', message, ambiguous };
+/** Para los avisos de un adaptador (un mensaje descartado, un envío a medias). */
+export interface ChannelLogger {
+  warn(message: string, meta?: Record<string, unknown>): void;
 }
 
 /** La corrida se cortó antes de llamar: no salió nada, se reintenta. */
@@ -125,11 +98,57 @@ export function abortedBeforeSend(): SendResult {
   return { ok: false, kind: 'transient', code: 'aborted', message: 'La corrida se detuvo antes de llamar al proveedor.' };
 }
 
-/** 429 y 5xx se reintentan; 401 y 403 son de la cuenta; el resto de 4xx, del mensaje. */
-export function failureFromStatus(status: number, detail: string, provider: string): SendResult {
-  const message = `${provider} respondió ${status}: ${detail.slice(0, 300)}`;
-  if (status === 429 || status >= 500) return { ok: false, kind: 'transient', code: status === 429 ? 'rate_limited' : 'provider_error', message };
-  if (status === 401 || status === 403) return { ok: false, kind: 'permanent', code: 'account_auth', message, account: 'needs_reconnect' };
-  if (status === 404 || status === 422) return { ok: false, kind: 'permanent', code: 'invalid_recipient', message };
-  return { ok: false, kind: 'permanent', code: 'rejected', message };
+/**
+ * Los códigos de OutreachApiError que dicen que la configuración de la
+ * PLATAFORMA falla (nuestras llaves), no la cuenta de la persona: el
+ * mensaje espera sin tumbar la cuenta.
+ */
+const PLATFORM_CONFIG_CODES = new Set(['invalid_client', 'unauthorized_client', 'redirect_uri_mismatch', 'errors/missing_credentials']);
+/**
+ * Los que dicen que el destinatario no existe o no se le puede escribir.
+ * Gmail no está: acepta el envío y el rebote llega después al buzón (lo lee
+ * outbound.bounces de VEN-15); su 400 invalidArgument es un MIME malo, no
+ * una dirección, y no debe cancelar los otros correos de la ficha.
+ */
+const BAD_RECIPIENT_CODES = new Set([
+  'errors/invalid_recipient', 'errors/recipient_cannot_be_reached', 'errors/resource_not_found',
+  'errors/not_found',
+]);
+
+/**
+ * Un error de @mc/connectors en el idioma del motor.
+ *
+ *   `sends`: la llamada que ENVÍA el mensaje. Un corte de red o un
+ *   tiempo agotado en ella es AMBIGUO: el proveedor pudo haberlo enviado,
+ *   y el siguiente intento pregunta antes (findSent). En una lectura, o en
+ *   la renovación del token, es un transitorio sin más.
+ */
+export function failureFrom(err: unknown, opts: { sends: boolean }): SendResult {
+  // Un correo que no se puede armar (una dirección rota, un salto de línea en el asunto): no mejora reintentando.
+  if (err instanceof MimeError) return { ok: false, kind: 'permanent', code: 'rejected', message: err.message };
+  if (!isOutreachApiError(err)) {
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    return { ok: false, kind: 'transient', code: opts.sends ? 'adapter_error' : 'provider_error', message, ambiguous: opts.sends };
+  }
+  const message = `${err.provider} ${err.endpoint}: ${err.messageEs} (${err.code})`;
+  if (PLATFORM_CONFIG_CODES.has(err.code)) return { ok: false, kind: 'transient', code: 'not_configured', message, account: 'unavailable' };
+  switch (err.kind) {
+    case 'not_connected':
+      return { ok: false, kind: 'permanent', code: 'account_auth', message, account: 'needs_reconnect' };
+    case 'limit':
+      return { ok: false, kind: 'transient', code: 'rate_limited', message };
+    case 'transient': {
+      const cut = err.httpStatus === null && (err.code === 'network' || err.code === 'timeout');
+      return cut && opts.sends
+        ? { ok: false, kind: 'transient', code: 'network_ambiguous', message, ambiguous: true }
+        : { ok: false, kind: 'transient', code: err.httpStatus === null ? 'network' : 'provider_error', message };
+    }
+    case 'already_connected':
+      return { ok: false, kind: 'permanent', code: 'rejected', message };
+    case 'permanent':
+      if (BAD_RECIPIENT_CODES.has(err.code) || (err.provider === 'unipile' && (err.httpStatus === 404 || err.httpStatus === 422))) {
+        return { ok: false, kind: 'permanent', code: 'invalid_recipient', message };
+      }
+      return { ok: false, kind: 'permanent', code: 'rejected', message };
+  }
 }

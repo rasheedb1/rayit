@@ -27,17 +27,17 @@
  * interruptor apagado (outbound_policy.enabled = false) no se reclama
  * nada de ese workspace; disable_outreach ya canceló lo pendiente.
  */
-import { optoutUrl } from '@mc/core';
+import { buildEmailFooter, footerTextsFor, oneClickUnsubscribeUrl, optoutUrl } from '@mc/core/outreach/deliverability';
 import {
   applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, HOLD_REASONS, loadSendContext,
   markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch, type ClaimReport,
   type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
+import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
 import { buildChannels } from './canales/index.ts';
 import type { ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './canales/types.ts';
-import { withOptoutFooter } from './messages.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
 
 export const DISPATCH_JOB_ID = 'outbound.dispatch';
@@ -116,12 +116,27 @@ export function replySubject(ctx: SendContext): string | null {
   return /^re:/i.test(prev) ? prev : `Re: ${prev}`;
 }
 
-/** Compone lo que sale: el pie de baja en el correo, el hilo en una respuesta. */
+/**
+ * Compone lo que sale: el hilo en una respuesta y, en un correo, lo de
+ * VEN-15 (@mc/core/outreach/deliverability), que es la única definición:
+ *   · el pie (buildEmailFooter, en el idioma del workspace): la frase de
+ *     baja con el enlace a la PÁGINA /baja/<token> y la dirección postal;
+ *   · la cabecera List-Unsubscribe con la URL de UN CLIC
+ *     (oneClickUnsubscribeUrl, /baja/<token>/un-clic), a la que Gmail y
+ *     Yahoo hacen el POST de RFC 8058. Solo con https (el MIME de VEN-9 no
+ *     acepta otra); en desarrollo, sin cabecera y con el pie.
+ * Sin pie posible (sin dirección o sin enlace) el correo sale sin él solo
+ * si la política no lo exige: decideBeforeSend ya retuvo el que falta.
+ */
 export function composeMessage(ctx: SendContext, claimed: ClaimedTouch, appUrl: string | null): OutgoingMessage {
-  const unsubscribeUrl = ctx.channel === 'email' && claimed.optoutToken && appUrl ? optoutUrl(appUrl, claimed.optoutToken) : null;
-  const body = ctx.channel === 'email'
-    ? withOptoutFooter(ctx.body, { locale: ctx.locale, postalAddress: ctx.postalAddress, unsubscribeUrl })
-    : ctx.body;
+  const token = ctx.channel === 'email' ? claimed.optoutToken : null;
+  let body = ctx.body;
+  let unsubscribeUrl: string | null = null;
+  if (token && appUrl) {
+    const footer = buildEmailFooter({ postalAddress: ctx.postalAddress, unsubscribeUrl: optoutUrl(appUrl, token), texts: footerTextsFor(ctx.locale) });
+    if (footer.ok) body = `${ctx.body.trimEnd()}\n\n${footer.footer.text}`;
+    if (appUrl.startsWith('https://')) unsubscribeUrl = oneClickUnsubscribeUrl(appUrl, token);
+  }
   const inThread = ctx.stepType === 'email_reply' || ctx.channel !== 'email';
   return {
     touchId: ctx.touchId,
@@ -134,6 +149,7 @@ export function composeMessage(ctx: SendContext, claimed: ClaimedTouch, appUrl: 
     recipientName: ctx.contactName,
     subject: ctx.channel === 'email' ? (ctx.stepType === 'email_reply' ? replySubject(ctx) : ctx.subject) : null,
     body,
+    content: ctx.body,
     reply: inThread && ctx.previous ? { threadRef: ctx.previous.threadRef, messageIdRfc: ctx.previous.messageIdRfc } : null,
     unsubscribeUrl,
   };
@@ -263,7 +279,9 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
 export const dispatchJob = defineJob(
   DISPATCH_JOB_ID,
   async (_payload, ctx) => {
-    const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets, logger: ctx.logger });
+    const channels = buildChannels({
+      env: ctx.env, secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db), now: () => ctx.now(),
+    });
     const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - DEADLINE_MARGIN_MS);
     const report = await runDispatch(motorDbFromJob(ctx.db), {
       senders: channels.senders,
