@@ -358,6 +358,22 @@ describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma ev
 });
 
 describe("alcance (ACC-6): un miembro acotado no se queda con la cuenta de otra creadora", () => {
+  it("con alcance por marca no hay creador en su alcance: el arranque vuelve con ?error=fuera_de_alcance y no va a la plataforma", async () => {
+    const MARCA = "0000000a-0000-4000-8000-0000000000f4";
+    await db.execAsSuperuser(`
+      INSERT INTO app_user (id, email) VALUES ('${MARCA}', 'marca.oauth@ejemplo.com') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${MARCA}', '${ROLE_MANAGER_CONECTA}') ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+      SELECT '${SEED_WORKSPACE_ID}', '${MARCA}', 'company', company_id FROM company_link WHERE workspace_id = '${SEED_WORKSPACE_ID}' LIMIT 1
+      ON CONFLICT DO NOTHING;
+    `);
+    const calls = fetch.calls.length;
+    const res = await handlersAs(MARCA).start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("fuera_de_alcance");
+    expect(fetch.calls.length, "no se habló con la plataforma").toBe(calls);
+  });
+
   const MIEMBRO = "0000000a-0000-4000-8000-0000000000f2";
   const SOFIA = "0000000a-0000-4000-8000-0000000000f3";
 

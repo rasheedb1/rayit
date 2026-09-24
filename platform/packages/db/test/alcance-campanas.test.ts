@@ -245,6 +245,8 @@ definirPruebasDeAlcance('campanas', campanas, CASOS, ({ t, duena, miembro, como 
       assert.deepEqual(ficha?.deliverables, [], 'los entregables tampoco cuentan el post que no ve');
       // Y no puede marcarlo principal ni quitarlo, porque para él no está.
       await assert.rejects(miembro((tx) => setPrimaryPost(tx, CAMPAIGN_LAURA_PRUEBA, POST_SOFIA)), CampaignPostNotFoundError);
+      // La campaña sí es suya, pero el enlace no lo ve: quitarlo devuelve false y no borra nada (/code-review del cierre).
+      assert.equal(await miembro((tx) => unlinkPost(tx, CAMPAIGN_LAURA_PRUEBA, POST_SOFIA)), false);
       assert.equal((await duena((tx) => listCampaignPosts(tx, CAMPAIGN_LAURA_PRUEBA))).length, 1, 'sigue asociado');
     } finally {
       await duena((tx) => unlinkPost(tx, CAMPAIGN_LAURA_PRUEBA, POST_SOFIA));

@@ -212,9 +212,8 @@ export default async function CuentasPage({ searchParams }: { searchParams: Prom
   const params = await searchParams;
   const service = getCuentasService();
   const f = formatterFor(await getCurrentWorkspace());
-  const rows = await service.listar();
   // ACC-6: con alcance por marca o campaña no se ve ninguna cuenta; se dice, no se pinta «todavía no hay».
-  const alcance = await service.alcance();
+  const [rows, alcance] = await Promise.all([service.listar(), service.alcance()]);
   const sinCuentasPorAlcance = alcance.includes("company") || alcance.includes("campaign");
   const availability = service.availability();
   const options = PUBLIC_PLATFORMS.map((p) => {

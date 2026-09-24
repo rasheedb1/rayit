@@ -295,7 +295,17 @@ export async function getConsentCreator(tx: WorkspaceTx): Promise<ConsentCreator
       WHERE cp.deleted_at IS NULL AND ${SCOPE_CREATOR} ORDER BY cp.created_at ASC LIMIT 1`,
   );
   const r = rows[0];
-  if (!r) throw new NoCreatorProfile();
+  if (!r) {
+    // ACC-6: «no hay creador» y «hay, pero no en tu alcance» no son lo
+    // mismo. Decir lo primero a un miembro acotado por marca sería falso
+    // («este workspace no tiene un perfil de creador»). Solo se revela
+    // que existe alguno, nunca cuál.
+    const { rows: hay } = await tx.query<{ ok: boolean }>(
+      'SELECT EXISTS (SELECT 1 FROM creator_profile WHERE deleted_at IS NULL) AS ok',
+    );
+    if (hay[0]?.ok === true) throw new ScopeError();
+    throw new NoCreatorProfile();
+  }
   return { id: r.id, userId: r.user_id, displayName: r.display_name };
 }
 
@@ -876,15 +886,12 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
  * fallo de la lectura a la pantalla, y un segundo error taparía el primero.
  */
 export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<boolean> {
-  // Sin alias en el UPDATE a propósito: test/audit-convencion.test.ts reconoce
-  // la escritura por «UPDATE <tabla> SET», y esta es la única que hace.
   const { rows } = await tx.query<{ id: string }>(
-    `UPDATE social_connection
+    `UPDATE social_connection c
         SET last_error_at = now(), consecutive_failures = consecutive_failures + 1, status_detail = $2,
             status = CASE WHEN $3 THEN 'error' ELSE status END
-      WHERE id = $1 AND deleted_at IS NULL
-        AND EXISTS (SELECT 1 FROM social_connection c WHERE c.id = $1 AND ${SCOPE_CONNECTION})
-      RETURNING id`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
+      RETURNING c.id`,
     [connectionId, detailEs, permanent],
   );
   return rows.length > 0;
@@ -897,16 +904,22 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
 /**
  * La fila 'public_profile' de esa red con ese handle, si existe y está
  * viva: es la que «Autorizar» debe convertir, para conservar id e historial.
+ *
+ * Alcance (ACC-6): solo la llama el callback de OAuth, que va a escribir.
+ * Si la fila existe pero es de un creador fuera del alcance, NO se
+ * devuelve null (el callback crearía una segunda fila para la misma
+ * cuenta real bajo otro creador): se lanza ScopeError antes de escribir.
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
-  const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus }>(
-    `SELECT c.id, c.secret_ref, c.deleted_at, c.status FROM social_connection c
-      WHERE c.platform_id = $1 AND c.access_mode = 'public_profile' AND c.deleted_at IS NULL AND lower(c.handle) = lower($2)
-        AND ${SCOPE_CONNECTION}`,
+  const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus; visible: boolean }>(
+    `SELECT c.id, c.secret_ref, c.deleted_at, c.status, (${SCOPE_CONNECTION}) AS visible FROM social_connection c
+      WHERE c.platform_id = $1 AND c.access_mode = 'public_profile' AND c.deleted_at IS NULL AND lower(c.handle) = lower($2)`,
     [platformId, handle],
   );
   const r = rows[0];
-  return r ? { id: r.id, secretRef: r.secret_ref, deletedAt: iso(r.deleted_at), status: r.status } : null;
+  if (!r) return null;
+  if (!r.visible) throw new ScopeError();
+  return { id: r.id, secretRef: r.secret_ref, deletedAt: iso(r.deleted_at), status: r.status };
 }
 
 export interface UpgradeToOAuthInput {

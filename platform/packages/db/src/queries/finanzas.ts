@@ -347,9 +347,8 @@ const SCOPE_PAYOUT = scopeFilter({ creator: 'p.creator_id', company: null, campa
 
 /**
  * El recordatorio (notification que nombra una factura), por esa
- * factura. Es un EXISTS y no un JOIN para poder ir en el WHERE del
- * UPDATE de markReminderSent, que nombra la tabla sin alias (la prueba
- * de convención de ACC-2 reconoce la escritura por `UPDATE <tabla> SET`).
+ * factura. Es un EXISTS y no un JOIN para poder ir tal cual en el WHERE
+ * del UPDATE de markReminderSent, que nombra la tabla `notification`.
  */
 const SCOPE_REMINDER = `EXISTS (SELECT 1 FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
                  WHERE i.id = notification.entity_id AND ${SCOPE_INVOICE})`;

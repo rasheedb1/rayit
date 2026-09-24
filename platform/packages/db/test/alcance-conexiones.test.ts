@@ -18,7 +18,7 @@ const {
   listConnections, findConnectionByAccount, getConsentCreator, getConnectionCreator, getDefaultCreatorId, getSessionMember,
   sessionHasPermission, listConsents, upsertConnection, recordConsent, disconnectConnection, notifyConnectionAdded, addPublicAccount,
   recordAccountSnapshot, listAccounts, markAccountLookupFailure, findPublicAccountByHandle, upgradePublicAccountToOAuth,
-  getAccountAudience, listAccountAudience, ConnectionNotFound, CreatorNotInWorkspace, NoCreatorProfile,
+  getAccountAudience, listAccountAudience, ConnectionNotFound, CreatorNotInWorkspace,
 } = conexiones;
 
 /** Un cuarto miembro, solo de este módulo: alcance creator = Sofía. Prueba que «el primero» es el primero DEL ALCANCE. */
@@ -87,7 +87,9 @@ const CASOS: Record<string, CasoDeAlcance> = {
   listConnections: { run: (tx) => listConnections(tx), duena: 'nombra', miembro: 'nada' },
   listAccounts: { run: (tx) => listAccounts(tx), duena: 'nombra', miembro: 'nada' },
   findConnectionByAccount: { run: (tx) => findConnectionByAccount(tx, 'tiktok', EXTERNAL_ACCOUNT_SOFIA), duena: 'nombra', miembro: 'nada' },
-  findPublicAccountByHandle: { run: (tx) => findPublicAccountByHandle(tx, 'tiktok', HANDLE_SOFIA), duena: 'nombra', miembro: 'nada' },
+  // Solo la usa el callback de OAuth, que va a escribir: una fila de otra creadora fuera del alcance no es «no
+  // existe» sino ScopeError; si no, el callback crearía una segunda fila para la misma cuenta real.
+  findPublicAccountByHandle: { run: (tx) => findPublicAccountByHandle(tx, 'tiktok', HANDLE_SOFIA), duena: 'nombra', miembro: { rechaza: ScopeError } },
   // Para las dos es Laura (la más antigua; para el miembro, la única de su alcance). Que sea «el primero DEL
   // alcance» lo muerden las pruebas propias con el miembro de Sofía y los de marca y campaña.
   getDefaultCreatorId: { run: (tx) => getDefaultCreatorId(tx), duena: (r) => r === CREATOR_LAURA, miembro: 'nada' },
@@ -228,8 +230,9 @@ definirPruebasDeAlcance('conexiones', conexiones, CASOS, ({ t, duena, miembro, c
     for (const userId of [USER_MIEMBRO_MARCA, USER_MIEMBRO_CAMPANA]) {
       assert.deepEqual(await como(userId, (tx) => listConnections(tx)), []);
       assert.deepEqual(await como(userId, (tx) => listAccounts(tx)), []);
-      await assert.rejects(como(userId, (tx) => getDefaultCreatorId(tx)), NoCreatorProfile);
-      await assert.rejects(como(userId, (tx) => getConsentCreator(tx)), NoCreatorProfile);
+      // Hay creadores en el espacio, pero ninguno en su alcance: ScopeError, no «este workspace no tiene creador».
+      await assert.rejects(como(userId, (tx) => getDefaultCreatorId(tx)), ScopeError);
+      await assert.rejects(como(userId, (tx) => getConsentCreator(tx)), ScopeError);
       assert.deepEqual(await como(userId, (tx) => listAccountAudience(tx)), []);
       await assert.rejects(
         como(userId, (tx) => addPublicAccount(tx, { creatorId: CREATOR_LAURA, platformId: 'instagram', handle: 'x', externalAccountId: 'x', displayName: null, avatarUrl: null, profileUrl: null, accountType: 'creator' })),

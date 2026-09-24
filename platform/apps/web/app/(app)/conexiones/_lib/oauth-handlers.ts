@@ -53,7 +53,7 @@ export const OAUTH_ERROR_MESSAGES = {
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
   sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
-  fuera_de_alcance: "Esa cuenta ya está conectada a otro creador de este espacio que no está en tu alcance.",
+  fuera_de_alcance: "Tu acceso a este espacio no alcanza a ese creador o a esa cuenta: no la puedes conectar desde aquí.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -162,6 +162,8 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       } catch (err) {
         if (err instanceof NoCreatorProfile) return redirect(req, "/conexiones?error=sin_creador");
         if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso");
+        // ACC-6: hay creador, pero no en el alcance de quien conecta. A la plataforma no se le manda.
+        if (err instanceof ScopeError) return redirect(req, "/conexiones?error=fuera_de_alcance");
         throw err;
       }
 

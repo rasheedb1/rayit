@@ -23,7 +23,7 @@ import {
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
+  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
   getScopeKinds, recordAccountSnapshot, recordConsent, ScopeError, type AccountRow, type ScopeKind, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
@@ -107,11 +107,19 @@ export function createCuentasService(deps: CuentasDeps) {
       const callLog = new InMemoryCallLogSink();
       const source = build(callLog)[platformId];
       if (!source) return { ok: false, code: "plataforma", message: "Esa red no está disponible en esta versión." };
-      // Antes de gastar una llamada a la plataforma: quien no puede conectar no lee nada. La transacción que escribe lo vuelve a comprobar.
+      // Antes de gastar una llamada a la plataforma (cuota de la casa): quien no puede conectar no lee nada, y
+      // tampoco quien no tiene un creador en su alcance o pide un @ que ya es de otro creador fuera de él (ACC-6).
+      // La transacción que escribe lo vuelve a comprobar todo.
       try {
-        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+        await deps.withWorkspace(async (tx) => {
+          await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          await getConsentCreator(tx);
+          await findPublicAccountByHandle(tx, platformId, input.handle.trim().replace(/^@/, ""));
+        });
       } catch (err) {
         if (err instanceof SinPermisoError) return { ok: false, code: "sin_permiso", message: err.message };
+        if (err instanceof NoCreatorProfile || err instanceof CreatorNotInWorkspace) return { ok: false, code: "sin_creador", message: err.message };
+        if (err instanceof ScopeError) return { ok: false, code: "fuera_de_alcance", message: err.messageEs };
         throw err;
       }
       let profile: PublicProfile;

@@ -722,7 +722,11 @@ export async function linkPost(tx: WorkspaceTx, input: LinkPostInput): Promise<C
   return row;
 }
 
-/** Quita el post de la campaña. Devuelve false si no estaba. */
+/**
+ * Quita el post de la campaña. Devuelve false si no estaba, o si el post
+ * está fuera del alcance (ACC-6): la campaña se ve, pero no se quita un
+ * enlace que listCampaignPosts no enseña.
+ */
 export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<boolean> {
   await lockEditableCampaign(tx, campaignId);
   const { rows } = await tx.query<{ post_id: string }>(
@@ -730,6 +734,7 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
      USING campaign c
      WHERE c.id = campaign_post.campaign_id AND campaign_post.campaign_id = $1 AND campaign_post.post_id = $2
        AND ${SCOPE_CAMPAIGN}
+       AND EXISTS (SELECT 1 FROM post p WHERE p.id = campaign_post.post_id AND ${scopePost('p.id', 'p.creator_id')})
      RETURNING campaign_post.post_id`,
     [campaignId, postId],
   );
@@ -738,9 +743,16 @@ export async function unlinkPost(tx: WorkspaceTx, campaignId: string, postId: st
   return true;
 }
 
-/** Marca el post como principal y desmarca los demás de la campaña. */
+/**
+ * Marca el post como principal y desmarca los demás de la campaña. El
+ * post tiene que estar en el alcance (ACC-6); desmarcar a los demás sí
+ * toca un principal que el alcance no enseñe, porque «hay un solo
+ * principal» es una propiedad de la campaña, que sí se ve.
+ */
 export async function setPrimaryPost(tx: WorkspaceTx, campaignId: string, postId: string): Promise<CampaignPostRow> {
   await lockEditableCampaign(tx, campaignId);
+  const visible = await tx.query(`SELECT 1 FROM post p WHERE p.id = $1 AND ${scopePost('p.id', 'p.creator_id')}`, [postId]);
+  if (visible.rows.length === 0) throw new CampaignPostNotFoundError();
   const previous = await linkState(tx, campaignId, postId);
   const { rows } = await tx.query<{ post_id: string }>(
     `UPDATE campaign_post SET is_primary = (campaign_post.post_id = $2)
@@ -783,15 +795,14 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   if (input.name !== undefined && !name) throw new InvalidNameError();
 
   await tx.query(
-    // Sin alias en UPDATE: test/audit-convencion.test.ts reconoce «UPDATE <tabla> SET».
-    `UPDATE campaign SET
+    `UPDATE campaign c SET
        name = coalesce($2, name),
        brief = CASE WHEN $3::boolean THEN $4 ELSE brief END,
        starts_on = $5::date,
        ends_on = $6::date,
        tracking_code = CASE WHEN $7::boolean THEN $8 ELSE tracking_code END,
        tracking_url = CASE WHEN $9::boolean THEN $10 ELSE tracking_url END
-     WHERE id = $1 AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = campaign.id AND ${SCOPE_CAMPAIGN})`,
+     WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [
       id,
       name ?? null,
@@ -833,8 +844,8 @@ export async function transitionCampaign(tx: WorkspaceTx, id: string, to: Campai
   if (!row) throw new CampaignNotFoundError(id);
   const result = applyTransition({ status: row.status, startsOn: row.starts_on, brandBaselineFrom: row.brand_baseline_from }, to);
   await tx.query(
-    `UPDATE campaign SET status = $2, brand_baseline_from = $3::date
-      WHERE id = $1 AND EXISTS (SELECT 1 FROM campaign c WHERE c.id = campaign.id AND ${SCOPE_CAMPAIGN})`,
+    `UPDATE campaign c SET status = $2, brand_baseline_from = $3::date
+      WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [id, result.status, result.brandBaselineFrom],
   );
   await audit(tx, {
