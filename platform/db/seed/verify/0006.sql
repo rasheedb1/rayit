@@ -55,9 +55,33 @@ SELECT 'd_alerta_del_dia' AS check_id,
          AND (n.created_at AT TIME ZONE 'America/Bogota')::date = (now() AT TIME ZONE 'America/Bogota')::date
          AND n.read_at IS NULL AND n.emailed_at IS NOT NULL
          AND n.action_url = '/ventas/politica#cuentas'
-         AND n.body_es LIKE '%LinkedIn: Laura · Cocina fácil (LinkedIn)%'
+         -- Sin el canal repetido (r4): el nombre ya dice «(LinkedIn)».
+         AND n.body_es LIKE 'No sale nada por Laura · Cocina fácil (LinkedIn) hasta%'
          AND EXISTS (SELECT 1 FROM outreach_channel_account a
                       WHERE a.channel = 'linkedin' AND a.status = 'needs_reconnect'
                         AND a.display_name = 'Laura · Cocina fácil (LinkedIn)') AS ok
   FROM notification n
  WHERE n.id = '00000006-0000-4000-8000-0000000a1001';
+
+-- (e) La ventana de «Salud de hoy» tiene cifras (r4): los correos que
+--     salieron en las últimas 24 horas, y el rebote duro de Natalia entre
+--     ellos. Es la misma cuenta que hace readAlertSignalCounts.
+SELECT 'e_salud_de_hoy' AS check_id, x.enviados, x.duros,
+       x.enviados >= 4 AND x.duros = 1 AS ok
+  FROM (SELECT
+          (SELECT count(*) FROM outbound_touch t
+            WHERE t.channel = 'email' AND t.status = 'sent'
+              AND t.sent_at >= now() - interval '24 hours' AND t.sent_at < now()) AS enviados,
+          (SELECT count(DISTINCT t.id) FROM outbound_touch t
+             JOIN outbound_bounce b ON b.touch_id = t.id AND b.kind = 'hard'
+            WHERE t.channel = 'email' AND t.status = 'sent'
+              AND t.sent_at >= now() - interval '24 hours' AND t.sent_at < now()) AS duros) x;
+
+-- (f) La política de la demo tiene una rampa que pintar (r4): un tope por
+--     encima del inicio del calentamiento (20, @mc/core/outreach/warmup) y
+--     días de calentamiento. Con 20 al día la pantalla solo decía que no
+--     hacía falta calentar.
+SELECT 'f_politica_con_rampa' AS check_id, p.max_emails_per_day, p.warmup_days,
+       p.max_emails_per_day = 80 AND p.warmup_days = 14 AS ok
+  FROM outbound_policy p
+ WHERE p.workspace_id = '00000002-0000-4000-8000-000000000001';
