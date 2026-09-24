@@ -1,0 +1,10 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-23", "notes": "grant_type=refresh_token. Google NO devuelve refresh_token: el refresher conserva el que tenía." },
+  "request": { "method": "POST", "urlPattern": "^https://oauth2\\.googleapis\\.com/token$", "body": { "grant_type": "refresh_token" } },
+  "response": { "status": 200, "body": {
+    "access_token": "ya29.demo-access-youtube-0002-SECRETO",
+    "expires_in": 3599,
+    "scope": "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly",
+    "token_type": "Bearer"
+  } }
+}

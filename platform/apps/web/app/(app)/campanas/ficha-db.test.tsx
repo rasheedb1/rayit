@@ -21,6 +21,7 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "local
 import { closeDb, getDbMode } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { formatDate, formatInt } from "@/lib/format";
 import { MESSAGES } from "./_lib/messages";
 import CampanaPage from "./[id]/page";
 
@@ -78,21 +79,23 @@ describe("la ficha real contra el seed", () => {
     const { texto } = await ficha(CAMPAIGN_CAFE_ALMA);
     expect(texto).toContain("Posts asociados");
     expect(texto).toContain("2 posts");
-    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002 fecha
-    // sus lecturas respecto a hoy, así que la cifra y el día se leen de la base: fijarlos rompía la
-    // prueba al pasar la medianoche UTC (cierre de ACC, 23-sep).
-    const { rows } = await withWorkspaceId(SEED_WORKSPACE_ID, (tx) =>
-      tx.query<{ title: string; views: string }>(
-        `SELECT p.title, s.views::text FROM campaign_post cp JOIN post p ON p.id = cp.post_id
-           JOIN LATERAL (SELECT views FROM post_metric_snapshot m WHERE m.post_id = p.id ORDER BY captured_at DESC LIMIT 1) s ON true
-          WHERE cp.campaign_id = $1`,
-        [CAMPAIGN_CAFE_ALMA],
-      ),
+    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002
+    // las fecha respecto de CURRENT_DATE, así que el número y el día cambian a medianoche UTC:
+    // se leen de la base en vez de fijarlos (hasta el 23-sep decía «417.673 hasta el 22 sep»).
+    const ultimas = await withWorkspaceId(SEED_WORKSPACE_ID, async (tx) =>
+      (await tx.query<{ title: string; views: string; captured_at: string }>(
+        `SELECT p.title, l.views::text AS views, to_char(l.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS captured_at
+           FROM post p
+           JOIN LATERAL (SELECT s.views, s.captured_at FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) l ON true
+          WHERE p.title IN ('Cold brew en casa en 3 pasos', 'El cold brew que me salva las mañanas')`,
+      )).rows,
     );
-    const vistas = new Map(rows.map((r) => [r.title, new Intl.NumberFormat("es-CO").format(Number(r.views))]));
-    expect(vistas.size).toBe(2);
-    expect(texto).toMatch(new RegExp(`Cold brew en casa en 3 pasos Instagram 10 ago ${vistas.get("Cold brew en casa en 3 pasos")!.replace(/\./g, "\\.")} hasta el \\d{1,2} sep`));
-    expect(texto).toMatch(new RegExp(`El cold brew que me salva las mañanas TikTok 12 ago ${vistas.get("El cold brew que me salva las mañanas")!.replace(/\./g, "\\.")} hasta el \\d{1,2} sep`));
+    expect(ultimas).toHaveLength(2);
+    for (const [titulo, red, publicado] of [["Cold brew en casa en 3 pasos", "Instagram", "10 ago"], ["El cold brew que me salva las mañanas", "TikTok", "12 ago"]] as const) {
+      const u = ultimas.find((x) => x.title === titulo)!;
+      // La cifra y el día de ESA lectura, formateados como los formatea la ficha.
+      expect(texto).toContain(`${titulo} ${red} ${publicado} ${formatInt(Number(u.views))} hasta el ${formatDate(u.captured_at)}`);
+    }
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);
 

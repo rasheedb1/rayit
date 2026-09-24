@@ -19,12 +19,12 @@
  */
 import {
   createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
-  MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher,
-  type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSources,
+  MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher, YouTubeClient,
+  type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
 } from "@mc/connectors";
 import {
   addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  getScopeKinds, recordAccountSnapshot, recordConsent, ScopeError, type AccountRow, type ScopeKind, type WorkspaceTx,
+  getScopeKinds, recordAccountSnapshot, recordConsent, ScopeError, setAccountAccessMode, type AccountRow, type ScopeKind, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
 import { notifyOwner, type OwnerNotice } from "./owner-notice";
@@ -75,9 +75,17 @@ export interface SourceAvailability {
 const OFFERS_ES: Record<PlatformId, string> = {
   instagram: "Seguidores y número de publicaciones de cuentas profesionales (creador o empresa) públicas.",
   tiktok: "Confirmamos la cuenta; TikTok no publica seguidores ni vistas por @ (métricas pendientes de fuente).",
-  youtube: "Suscriptores, vistas acumuladas y número de videos del canal.",
+  youtube: "Suscriptores y número de videos del canal; las vistas, video por video.",
   facebook: "No disponible en esta versión.",
 };
+
+/** Con el proveedor de datos contratado (CON-12), TikTok sí ofrece cifras por @. */
+const TIKTOK_AGGREGATOR_OFFERS_ES = "Seguidores y número de videos por el proveedor de datos contratado; las vistas, video por video.";
+
+function offersEs(platformId: PlatformId, source: PublicProfileSource | undefined): string {
+  if (platformId === "tiktok" && source?.accessMode === "aggregator") return TIKTOK_AGGREGATOR_OFFERS_ES;
+  return OFFERS_ES[platformId];
+}
 
 function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -98,7 +106,7 @@ export function createCuentasService(deps: CuentasDeps) {
   return {
     availability(): SourceAvailability[] {
       const src = build(new InMemoryCallLogSink());
-      return PUBLIC_PLATFORMS.map((p) => ({ platformId: p, name: PLATFORM_NAME[p], label: src[p]?.label ?? "—", missing: src[p]?.missing ?? ["sin fuente"], offersEs: OFFERS_ES[p] }));
+      return PUBLIC_PLATFORMS.map((p) => ({ platformId: p, name: PLATFORM_NAME[p], label: src[p]?.label ?? "—", missing: src[p]?.missing ?? ["sin fuente"], offersEs: offersEs(p, src[p]) }));
     },
 
     async agregar(input: { platformId: string; handle: string }, who: Requester): Promise<AgregarResult> {
@@ -141,7 +149,7 @@ export function createCuentasService(deps: CuentasDeps) {
           const actor = await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
           const creator = await getConsentCreator(tx);
           const { id, created } = await addPublicAccount(tx, {
-            creatorId: creator.id, platformId, handle, externalAccountId,
+            creatorId: creator.id, platformId, handle, externalAccountId, accessMode: source.accessMode,
             displayName: profile.profile.display_name, avatarUrl: profile.profile.avatar_url, profileUrl: profile.profile.profile_url, accountType: profile.profile.account_type,
           });
           const evidence = redactSecrets(buildConsentEvidence({
@@ -150,7 +158,7 @@ export function createCuentasService(deps: CuentasDeps) {
           })) as Record<string, unknown>;
           await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose: "analytics", policyVersion: CONSENT_POLICY_VERSION, evidence });
           if (profile.metrics) {
-            await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw });
+            await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(at), ...profile.metrics, raw: profile.raw, source: source.accessMode });
           }
           const ownerNotice = await notifyOwner(tx, { creator, actor, connectionId: id, network: PLATFORM_NAME[platformId], handle, at });
           await flush(callLog, tx, id);
@@ -187,8 +195,11 @@ export function createCuentasService(deps: CuentasDeps) {
       try {
         const profile = await source.lookup(row.handle ?? row.externalAccountId);
         const outcome = await deps.withWorkspace(async (tx) => {
+          // Contratar (o dar de baja) el proveedor mueve la cuenta de fuente
+          // sin perder su id ni su historia (CON-12 §0.4).
+          if (row.accessMode !== source.accessMode) await setAccountAccessMode(tx, id, source.accessMode);
           const saved = profile.metrics
-            ? await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw })
+            ? await recordAccountSnapshot(tx, { connectionId: id, day: utcDay(now()), ...profile.metrics, raw: profile.raw, source: source.accessMode })
             : null;
           if (!profile.metrics) await markAccountLookupFailure(tx, id, profile.metricsNote ?? "Sin métricas públicas.", false);
           await flush(callLog, tx, id);
@@ -209,9 +220,11 @@ export function createCuentasService(deps: CuentasDeps) {
     },
 
     /**
-     * Cuenta autorizada (CON-3): se lee con su propio token desde el almacén
-     * cifrado (userInfo de TikTok, me de Instagram). Un token que la
-     * plataforma rechaza deja el aviso; la renovación es de oauth.refresh.
+     * Cuenta autorizada (CON-3, CON-8): se lee con su propio token desde el
+     * almacén cifrado (userInfo de TikTok, me de Instagram, channels.list?
+     * mine=true de YouTube, cuyas vistas son el acumulado del canal y van en
+     * null: la columna es la del día). Un token que la plataforma rechaza
+     * deja el aviso; la renovación es de oauth.refresh.
      */
     async actualizarAutorizada(row: AccountRow, callLog: InMemoryCallLogSink): Promise<ActualizarResult> {
       let cipher: TokenCipher;
@@ -234,7 +247,12 @@ export function createCuentasService(deps: CuentasDeps) {
             const { data, raw } = await new InstagramClient(core, auth).me();
             return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
           }
-          throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta (CON-8).");
+          if (row.platformId === "youtube") {
+            const { data, raw } = await new YouTubeClient(core, auth).channelMine();
+            if (!data) throw new PublicLookupError("not_found", "La cuenta de Google autorizada ya no tiene canal de YouTube; hay que volver a autorizarla.");
+            return { followers: data.metrics.followers, following: null, mediaCount: data.metrics.media_count, views: null, raw };
+          }
+          throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta.");
         });
         await deps.withWorkspace(async (tx) => {
           await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics, source: API_SNAPSHOT_SOURCE });

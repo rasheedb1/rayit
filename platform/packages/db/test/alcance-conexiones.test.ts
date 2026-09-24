@@ -91,6 +91,8 @@ const CASOS: Record<string, CasoDeAlcance> = {
   // existe» sino ScopeError; si no, el callback crearía una segunda fila para la misma cuenta real.
   // Catálogo global de prerrequisitos (CON-B): no es de nadie, no lleva alcance (alcance-convencion.test.ts lo declara).
   getMetricRequirement: { run: (tx) => conexiones.getMetricRequirement(tx, 'tt.insights.optin'), duena: 'pasa', miembro: 'nada' },
+  // CON-12: mover la cuenta de Sofía al proveedor de pago. El miembro no la ve: false y sin escribir (la huella).
+  setAccountAccessMode: { run: (tx) => conexiones.setAccountAccessMode(tx, CONEXION_SOFIA, 'aggregator'), duena: (r) => r === true, miembro: 'nada' },
   findPublicAccountByHandle: { run: (tx) => findPublicAccountByHandle(tx, 'tiktok', HANDLE_SOFIA), duena: 'nombra', miembro: { rechaza: ScopeError } },
   // Para las dos es Laura (la más antigua; para el miembro, la única de su alcance). Que sea «el primero DEL
   // alcance» lo muerden las pruebas propias con el miembro de Sofía y los de marca y campaña.

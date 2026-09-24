@@ -66,13 +66,18 @@ test('Instagram por business_discovery con el token casa: seguidores y publicaci
   await assert.rejects(nf.src.instagram!.lookup('cafe_alma_mal'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_found' && /No encontramos @cafe_alma_mal en Instagram/.test(e.messageEs));
 });
 
-test('YouTube con API key: suscriptores, vistas y videos; la key va en la query pero no en el log ni en la URL grabada; sin key → not_configured', async () => {
+test('YouTube con API key: suscriptores y videos, y las vistas acumuladas NO como vistas del día; la key va en la query pero no en el log ni en la URL grabada; sin key → not_configured', async () => {
   const { src, log, fetch } = await sources([['youtube', 'channels.list', 'handle.ok']]);
   const p = await src.youtube!.lookup('@NutriveOficial');
   assert.equal(p.profile.display_name, 'Nutrivé');
   assert.equal(p.profile.handle, 'nutriveoficial');
   assert.equal(p.metrics!.followers, 38400);
-  assert.ok(p.metrics!.mediaCount !== null && p.metrics!.views !== null);
+  assert.ok(p.metrics!.mediaCount !== null);
+  // El canal publica su acumulado (viewCount) y account_metric_snapshot.views
+  // es la columna del día, que Resumen suma día por día: null, y la frase lo dice.
+  assert.equal(p.metrics!.views, null);
+  assert.ok(Number(JSON.stringify(p.raw).match(/"viewCount":"(\d+)"/)?.[1]) > 0, 'el acumulado sigue en raw');
+  assert.match(p.metricsNote!, /no las del día/);
   assert.equal(log.entries[0]!.endpoint, 'youtube.channels.list');
   assert.ok(fetch.calls[0]!.url.includes('key=REDACTADO'), fetch.calls[0]!.url);
   assert.ok(!JSON.stringify(fetch.calls).includes(ENV.GOOGLE_API_KEY) && !JSON.stringify(log.entries).includes(ENV.GOOGLE_API_KEY));

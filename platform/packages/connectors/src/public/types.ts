@@ -8,7 +8,8 @@
  *
  *   instagram  business_discovery con el token de la cuenta casa
  *   youtube    Data API con API key
- *   tiktok     oEmbed: identidad sí, métricas no (pendiente de fuente)
+ *   tiktok     oEmbed: identidad sí, métricas no; con ENSEMBLEDATA_TOKEN,
+ *              el proveedor de datos de pago (CON-12)
  */
 import type { NormalizedAccountProfile } from '../normalize/types.ts';
 import type { PlatformId } from '../types.ts';
@@ -17,7 +18,14 @@ export interface PublicAccountMetrics {
   followers: number | null;
   following: number | null;
   mediaCount: number | null;
-  /** Vistas acumuladas de la cuenta cuando la plataforma las publica (YouTube). */
+  /**
+   * Vistas DEL DÍA de la cuenta, que es lo que guarda
+   * `account_metric_snapshot.views` y lo que Resumen suma día por día.
+   * Ninguna fuente por @ las publica: YouTube da el acumulado del canal y
+   * TikTok no da nada, así que aquí va null y las vistas llegan video por
+   * video (CON-5). Un acumulado guardado aquí se contaría una vez por día
+   * en Resumen (cierre CON-C, D20).
+   */
   views: number | null;
 }
 
@@ -26,7 +34,7 @@ export interface PublicProfile {
   profile: NormalizedAccountProfile;
   /** null cuando la fuente solo confirma identidad (TikTok por oEmbed). */
   metrics: PublicAccountMetrics | null;
-  /** Por qué no hay métricas, en español, para la pantalla. */
+  /** Por qué no hay métricas (o cuáles faltan), en español, para la pantalla. */
   metricsNote: string | null;
   /** Qué endpoint lo dio: 'instagram.business_discovery', 'youtube.channels.list', 'tiktok.oembed'. */
   source: string;
@@ -46,12 +54,25 @@ export class PublicLookupError extends Error {
   }
 }
 
+/**
+ * Cómo entra la cuenta a `social_connection.access_mode`. Es también el
+ * valor de `account_metric_snapshot.source` de sus lecturas: las dos
+ * columnas dicen lo mismo —de dónde salió la cifra— y mantenerlas
+ * iguales evita una segunda tabla de equivalencias.
+ *
+ *   public_profile  fuente oficial y gratuita de la plataforma (CON-10)
+ *   aggregator      proveedor de datos de pago (CON-12)
+ */
+export type PublicAccessMode = 'public_profile' | 'aggregator';
+
 export interface PublicProfileSource {
   readonly platformId: PlatformId;
   /** Nombre corto de la fuente para la pantalla y api_call_log. */
   readonly label: string;
   /** Variables que faltan para que la fuente funcione; vacío si está lista. */
   readonly missing: readonly string[];
+  /** access_mode de las cuentas de esta fuente, y source de sus snapshots. */
+  readonly accessMode: PublicAccessMode;
   lookup(handle: string, opts?: { signal?: AbortSignal }): Promise<PublicProfile>;
 }
 

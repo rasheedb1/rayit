@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-23", "notes": "v3/docs/channels/list con mine=true para una cuenta de Google SIN canal de YouTube: 200 con items vacío. No es un error de la API, así que hay que decirlo con una frase (docs/propuestas/CON-8.md §0.2 · 5)." },
+  "request": { "method": "GET", "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/channels\\?part=snippet%2CcontentDetails%2Cstatistics&mine=true" },
+  "response": { "status": 200, "body": { "kind": "youtube#channelListResponse", "etag": "e", "pageInfo": { "totalResults": 0, "resultsPerPage": 5 }, "items": [] } }
+}
