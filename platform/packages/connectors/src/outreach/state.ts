@@ -35,7 +35,7 @@ export interface ChannelState {
   workspaceId: string;
   creatorId: string;
   channel: ConnectableChannel;
-  /** 32 bytes al azar en base64url: casa el aviso con su fila 'pending' y con la cookie del navegador. */
+  /** newNonce(): casa el aviso con su fila 'pending' y con la cookie del navegador. */
   nonce: string;
 }
 
@@ -52,8 +52,14 @@ export function channelStateKey(master: Uint8Array): Uint8Array {
   return deriveKey(master, CHANNEL_STATE_INFO);
 }
 
+/**
+ * 32 bytes al azar en hexadecimal en minúsculas (64 caracteres). En
+ * minúsculas porque la fila 'pending' de un Gmail lleva 'pending:<nonce>'
+ * como provider_account_id, y los buzones de Gmail viven bajo un CHECK de
+ * minúsculas (0037, outreach_channel_account_gmail_lower_check).
+ */
 export function newNonce(random: (bytes: number) => Uint8Array = (n) => new Uint8Array(randomBytes(n))): string {
-  return Buffer.from(random(32)).toString('base64url');
+  return Buffer.from(random(32)).toString('hex');
 }
 
 export function signChannelState(state: ChannelState, key: Uint8Array, issuedAt: Date): string {
