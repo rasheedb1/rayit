@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listCompanyCadenceTouches } from "@mc/db/queries/outreach";
 import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
 import {
   getCompanyChain,
@@ -27,6 +28,7 @@ import { SiguienteAccion } from "../../../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../../../_seguimiento/ultimo-contacto";
 import { FICHA } from "../../messages";
 import { Bloque } from "../bloque";
+import { MensajesDeCadencia } from "../cadencia";
 import { Cadena } from "../cadena";
 import { Contactos } from "../contactos";
 import { DatosEmpresa } from "../datos";
@@ -82,11 +84,13 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       invoices: await listChainInvoices(tx, id, chain),
       niches: await listNicheNames(tx, company.nicheSlugs),
       dates: await getLocalDates(tx),
+      // Los mensajes de las secuencias (VEN-10 r5): adonde llevan los avisos del motor.
+      cadence: await listCompanyCadenceTouches(tx, id),
     };
   });
   // Se desvinculó entre la primera lectura y esta.
   if (!data) notFound();
-  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates } = data;
+  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates, cadence } = data;
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
@@ -242,6 +246,8 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             />
             <LineaDeTiempo companyId={company.id} items={vistaDeActividad(activity.rows, company.name, f)} nextCursor={activity.nextCursor} />
           </Bloque>
+
+          <MensajesDeCadencia companyId={company.id} touches={cadence} f={f} />
 
           <Contactos
             companyId={company.id}

@@ -4,6 +4,7 @@
  * Las Server Actions de la ficha de empresa (VEN-5) y de la siguiente
  * acción (VEN-4): registrar una actividad, fijar la siguiente acción y
  * marcarla hecha. Las usan la ficha, el pipeline y el bloque «Para hoy».
+ * Y (VEN-10 r5) aprobar un mensaje retenido de la cadencia.
  *
  * La misma forma que ../actions.ts: zod valida lo que llega, la consulta
  * de @mc/db hace el trabajo dentro de `withWorkspace`, y los errores de
@@ -14,6 +15,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
+import { releaseHeldTouch, type ReleaseHeldResult } from "@mc/db/queries/outreach";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
   FichaError,
@@ -260,4 +262,58 @@ export async function verMasActividad(
     console.error("[ventas/ficha]", err);
     return { error: t.moreError };
   }
+}
+
+// ---------------------------------------------------------------------
+// VEN-10 r5 · Aprobar un mensaje retenido de la cadencia
+// ---------------------------------------------------------------------
+
+const aprobarSchema = z.object({
+  companyId: z.string().regex(UUID_RE),
+  touchId: z.string().regex(UUID_RE),
+  subject: z.string().max(998),
+  body: z.string().max(20_000),
+});
+
+/**
+ * «Aprobar y enviar» en la ficha: el mensaje retenido vuelve a la cola con
+ * el asunto y el texto que dejó la persona (releaseHeldTouch revalida lo
+ * mismo que el despachador). Si no se puede, el motivo vuelve en el campo
+ * que hay que corregir, o como aviso.
+ */
+export async function aprobarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia;
+  const parsed = aprobarSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    touchId: field(formData, "touchId"),
+    subject: field(formData, "subject"),
+    body: field(formData, "body"),
+  });
+  if (!parsed.success) return { message: t.error };
+  const v = parsed.data;
+  let result: ReleaseHeldResult;
+  try {
+    result = await withWorkspace((tx) => releaseHeldTouch(tx, v.touchId, { subject: v.subject, body: v.body }));
+  } catch (err) {
+    console.error("[ventas/ficha] aprobar mensaje", err);
+    return { message: t.error };
+  }
+  if (!result.ok) {
+    const e = t.errores;
+    switch (result.code) {
+      case "empty":
+        return { errors: { body: e.empty } };
+      case "empty_subject":
+        return { errors: { subject: e.empty_subject } };
+      case "placeholders":
+        return { errors: { body: e.placeholders(result.detail ?? "") } };
+      case "note_too_long":
+        return { errors: { body: e.note_too_long(result.detail ?? "") } };
+      default:
+        revalidate(v.companyId);
+        return { message: e[result.code] };
+    }
+  }
+  revalidate(v.companyId);
+  return { ok: true, notice: t.aprobado, stamp: Date.now() };
 }

@@ -369,7 +369,7 @@ test('los avisos hablan el idioma del workspace', async () => {
   );
   assert.equal(aviso.rows[0]!.title_es, 'A message to Marca 12 was not sent');
   assert.equal(aviso.rows[0]!.body_es, "The message to Persona 1 Prueba over email was not sent: the address is not valid. Check Marca 12's page.");
-  assert.equal(aviso.rows[0]!.action_url, `/ventas/empresas/${w.company}`, 'a la ficha, no a una cola que no existe (r4)');
+  assert.equal(aviso.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'a la ficha, no a una cola que no existe (r4)');
 });
 
 test('el reclamo no toca lo de otro workspace aunque corra para todos', async () => {

@@ -274,7 +274,7 @@ test('un mensaje retenido guarda un código, avisa una sola vez y lleva a la fic
   assert.equal(avisos.rows.length, 1, 'uno por mensaje');
   assert.equal(avisos.rows[0]!.title_es, 'A message to Marca 7 needs your review', 'en el idioma del workspace');
   assert.match(avisos.rows[0]!.body_es, /there are unfilled placeholders \(\[NOMBRE\]\)/);
-  assert.equal(avisos.rows[0]!.action_url, `/ventas/empresas/${w.company}`);
+  assert.equal(avisos.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'al bloque donde se aprueba (r5)');
   assert.equal(fake.email.sent.length, 0);
 });
 

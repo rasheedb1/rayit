@@ -35,6 +35,8 @@ export interface CadenceTouch {
   subject: string | null;
   body: string;
   statusChangedAt: Date;
+  /** La última respuesta que llegó a este mensaje (outbound_message entrante): adonde lleva el aviso de respuesta. */
+  reply: { body: string; occurredAt: Date } | null;
 }
 
 /** Cuántos mensajes enseña la ficha como mucho: primero los retenidos, después lo que viene y lo último que pasó. */
@@ -53,10 +55,16 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
       id: string; contact_name: string | null; channel: string; step_type: string | null; step_index: number | null;
       sequence_name: string | null; status: string; held_reason: string | null; blocked_reason: string | null;
       scheduled_for: unknown; sent_at: unknown; subject: string | null; body: string | null; status_changed_at: unknown;
+      reply_body: string | null; reply_at: unknown;
     }>(
       `SELECT t.id, c.full_name AS contact_name, t.channel, st.step_type, t.step_index, s.name AS sequence_name, t.status,
-              t.held_reason, t.blocked_reason, t.scheduled_for, t.sent_at, t.subject, t.body, t.status_changed_at
+              t.held_reason, t.blocked_reason, t.scheduled_for, t.sent_at, t.subject, t.body, t.status_changed_at,
+              r.body AS reply_body, r.occurred_at AS reply_at
          FROM outbound_touch t
+         LEFT JOIN LATERAL (
+                SELECT m.body, m.occurred_at FROM outbound_message m
+                 WHERE m.touch_id = t.id AND m.direction = 'inbound'
+                 ORDER BY m.occurred_at DESC LIMIT 1) r ON true
          LEFT JOIN contact c ON c.id = t.contact_id
          LEFT JOIN outbound_step st ON st.id = t.step_id
          LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
@@ -84,11 +92,12 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
     subject: textOrNull(fn, `$[${i}].subject`, r.subject),
     body: textOrNull(fn, `$[${i}].body`, r.body) ?? '',
     statusChangedAt: date(fn, `$[${i}].status_changed_at`, r.status_changed_at),
+    reply: r.reply_body === null ? null : { body: r.reply_body, occurredAt: date(fn, `$[${i}].reply_at`, r.reply_at) },
   }));
 }
 
 /** Por qué no se pudo aprobar un mensaje retenido. */
-export type ReleaseHeldCode = 'not_found' | 'not_held' | 'empty' | 'placeholders' | 'note_too_long' | 'opted_out' | 'no_postal_address';
+export type ReleaseHeldCode = 'not_found' | 'not_held' | 'empty' | 'empty_subject' | 'placeholders' | 'note_too_long' | 'opted_out' | 'no_postal_address';
 
 export type ReleaseHeldResult = { ok: true } | { ok: false; code: ReleaseHeldCode; detail?: string };
 
@@ -133,6 +142,8 @@ export async function releaseHeldTouch(
   const subject = row.channel === 'email' ? (input.subject?.trim() || null) : null;
   const body = input.body.trim();
   if (!body) return { ok: false, code: 'empty' };
+  // Un correo nuevo necesita asunto; la respuesta en el hilo toma el del anterior («Re: …»).
+  if (row.channel === 'email' && row.step_type !== 'email_reply' && !subject) return { ok: false, code: 'empty_subject' };
   const hits = [...findPlaceholders(subject), ...findPlaceholders(body)];
   if (hits.length > 0) return { ok: false, code: 'placeholders', detail: hits.map((h) => h.match).join(' ') };
   if (row.step_type === 'linkedin_connect') {

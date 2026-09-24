@@ -281,6 +281,60 @@ export const FICHA = {
   },
 
   /** Los errores de @mc/db/queries/ventas-ficha, por su código (FichaError.code). */
+  /**
+   * Los mensajes de la cadencia (VEN-10 r5): adonde llevan los avisos del
+   * motor. Un mensaje retenido dice por qué y se aprueba aquí, con su
+   * texto a la vista y editable. El motivo lo traduce holdReasonText de
+   * @mc/core/outreach/messages (los textos del motor viven ahí).
+   */
+  cadencia: {
+    title: "Mensajes de la cadencia",
+    caption: "Los mensajes de tus secuencias para esta empresa: primero los que esperan tu aprobación",
+    meta: (pendientes: string) => `${pendientes} por aprobar`,
+    columnas: { persona: "Persona", canal: "Canal", estado: "Estado", cuando: "Cuándo" },
+    paso: (secuencia: string, n: string) => `${secuencia} · paso ${n}`,
+    pasoSuelto: "Mensaje suelto",
+    sinNombre: "Sin nombre",
+    estados: {
+      held: "Espera tu aprobación",
+      draft: "Borrador",
+      scheduled: "Programado",
+      processing: "Enviándose",
+      sent: "Enviado",
+      failed: "No salió",
+      skipped: "Saltado",
+      canceled: "Cancelado",
+    } as Record<string, string>,
+    canales: { email: "Correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
+    sale: (fecha: string) => `Sale ${fecha}`,
+    salio: (fecha: string) => `Salió ${fecha}`,
+    porQue: (motivo: string) => `Retenido: ${motivo}.`,
+    respondio: (fecha: string) => `Respondió ${fecha}:`,
+    vacio: {
+      title: "Sin mensajes de cadencia",
+      description: "Cuando enroles a alguien de esta empresa en una secuencia, sus mensajes aparecen aquí.",
+    },
+    revisar: "Revisar y aprobar",
+    revisarLabel: (persona: string) => `Revisar y aprobar el mensaje a ${persona}`,
+    asunto: "Asunto",
+    texto: "Mensaje",
+    textoHelp: "Lo que sale, tal cual. Sale a su hora, o en la próxima pasada si ya pasó.",
+    aprobar: "Aprobar y enviar",
+    cerrar: "Cerrar",
+    aprobado: "Aprobado. Sale en la próxima pasada del envío, dentro de tu horario.",
+    error: "No se pudo aprobar. Inténtalo de nuevo.",
+    errores: {
+      not_found: "Ese mensaje ya no existe.",
+      not_held: "Ese mensaje ya no espera aprobación: alguien lo movió.",
+      empty: "Escribe el mensaje.",
+      empty_subject: "Escribe el asunto del correo.",
+      placeholders: (huecos: string) => `Quedan huecos sin rellenar: ${huecos}.`,
+      note_too_long: (n: string) => `La nota de la invitación tiene ${n} caracteres; LinkedIn permite 300.`,
+      opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
+      no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
+    },
+  },
+
   errores: {
     DealClosed: "Ese negocio ya se cerró: no tiene siguiente acción.",
     InvalidNextAction: `Escribe qué toca hacer, en hasta ${NEXT_ACTION_MAX} caracteres.`,

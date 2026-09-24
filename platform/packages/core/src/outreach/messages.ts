@@ -27,6 +27,12 @@ export const OUTREACH_URLS = {
   channels: '/ventas/canales',
   /** La ficha de una empresa: sus contactos, su negocio y su actividad. */
   company: (companyId: string) => `/ventas/empresas/${companyId}`,
+  /**
+   * (r5) El bloque «Mensajes de la cadencia» de la ficha: los retenidos con
+   * su «Revisar y aprobar», y las respuestas. Adonde llevan los avisos de un
+   * mensaje retenido, fallido o respondido.
+   */
+  companyCadence: (companyId: string) => `/ventas/empresas/${companyId}#cadencia`,
 } as const;
 
 /** La nota de una invitación de LinkedIn: 300 caracteres (documentación de Unipile, /users/invite). */

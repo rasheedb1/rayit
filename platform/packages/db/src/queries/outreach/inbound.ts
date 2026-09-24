@@ -43,7 +43,7 @@
  * consulta nombra su workspace y sus filas.
  */
 import { detectOptOut, type OptOutResult } from '@mc/core';
-import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS } from '@mc/core/outreach/messages';
+import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS } from '@mc/core/outreach/messages';
 import type { SqlExecutor } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { markEnrollmentReplied } from './enroll.ts';
@@ -185,23 +185,30 @@ async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Pro
   return [known?.email, known?.recipient].some((a) => normalizeAddress(a) === from);
 }
 
+interface Who {
+  locale: string | null;
+  who: string | null;
+  /** La empresa de la ficha: el aviso lleva a su bloque «Mensajes de la cadencia», donde se ve la respuesta (r5). */
+  company_id: string | null;
+}
+
 /** El workspace y el nombre de quien respondió, para el aviso y la frase de la baja. */
-async function whoAndLocale(tx: SqlExecutor, workspaceId: string, contactId: string | null): Promise<{ locale: string | null; who: string | null }> {
+async function whoAndLocale(tx: SqlExecutor, workspaceId: string, contactId: string | null): Promise<Who> {
   return (
-    await tx.query<{ locale: string | null; who: string | null }>(
-      `SELECT w.locale, coalesce(c.full_name, co.name) AS who
+    await tx.query<Who>(
+      `SELECT w.locale, coalesce(c.full_name, co.name) AS who, c.company_id
          FROM workspace w LEFT JOIN contact c ON c.id = $2::uuid LEFT JOIN company co ON co.id = c.company_id
         WHERE w.id = $1::uuid`,
       [workspaceId, contactId],
     )
-  ).rows[0] ?? { locale: null, who: null };
+  ).rows[0] ?? { locale: null, who: null, company_id: null };
 }
 
 async function notifyInbound(
   tx: SqlExecutor,
   input: InboundEffectsInput,
   kind: 'reply' | 'optout' | 'optout_review',
-  w: { locale: string | null; who: string | null },
+  w: Who,
 ): Promise<void> {
   const lang = noticeLang(w.locale);
   const m = OUTREACH_NOTICE_TEXTS[lang];
@@ -219,9 +226,10 @@ async function notifyInbound(
      VALUES ($1::uuid,
              (SELECT m.user_id FROM membership m JOIN outbound_enrollment e ON e.enrolled_by = m.user_id
                WHERE e.id = $2::uuid AND m.workspace_id = $1::uuid AND m.role <> 'client'),
-             'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, '/ventas', $7::timestamptz)`,
+             'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, $8, $7::timestamptz)`,
     [
       input.workspaceId, input.enrollmentId, text.severity, text.title, text.body, input.messageId, input.now.toISOString(),
+      w.company_id ? OUTREACH_URLS.companyCadence(w.company_id) : '/ventas',
     ],
   );
 }

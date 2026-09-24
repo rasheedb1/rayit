@@ -60,7 +60,7 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
     [
       touchId, m.failedTitle(r.company),
       m.failedBody(r.contact ?? r.company, channelLabel(lang, r.channel), failureReason(lang, reason), r.company),
-      now.toISOString(), OUTREACH_URLS.company(r.company_id),
+      now.toISOString(), OUTREACH_URLS.companyCadence(r.company_id),
     ],
   );
 }
@@ -73,7 +73,9 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
  * muestra (VEN-16) todavía no existe. Uno por mensaje: si el mismo
  * mensaje se retiene otra vez, no se repite. Es un 'outreach_failed' de
  * severidad info con entity_type 'outbound_touch_held' (no hace falta un
- * aviso nuevo en el CHECK de 0051 §9), y lleva a la ficha de la empresa.
+ * aviso nuevo en el CHECK de 0051 §9), y lleva al bloque «Mensajes de la
+ * cadencia» de la ficha (r5), donde el mensaje se revisa y se aprueba
+ * (releaseHeldTouch).
  * `reason` es el código de held_reason; la frase sale de holdReasonText.
  */
 export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<boolean> {
@@ -93,7 +95,7 @@ export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: 
     [
       touchId, m.heldTitle(r.company),
       m.heldBody(r.contact ?? r.company, channelLabel(lang, r.channel), holdReasonText(lang, reason), r.company),
-      now.toISOString(), OUTREACH_URLS.company(r.company_id),
+      now.toISOString(), OUTREACH_URLS.companyCadence(r.company_id),
     ],
   );
   return ins.rows.length > 0;
