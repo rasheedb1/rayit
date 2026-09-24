@@ -43,7 +43,10 @@ test('loadGoogleOAuthConfig: dice qué falta y deduce la redirección del origen
 
 test('authorizationUrl: offline, consent, los tres alcances y el state', async () => {
   const { oauth } = await setup([]);
-  const u = new URL(oauth.authorizationUrl('ESTADO', 'laura@x.test'));
+  const u = new URL(oauth.authorizationUrl('ESTADO', { loginHint: 'laura@x.test' }));
+  assert.equal(u.searchParams.get('login_hint'), 'laura@x.test', 'reconectar propone el buzón caído');
+  // «Conectar otra cuenta»: Google pregunta cuál, sin dejar de pedir consentimiento (refresh_token).
+  assert.equal(new URL(oauth.authorizationUrl('E', { selectAccount: true })).searchParams.get('prompt'), 'select_account consent');
   assert.equal(u.origin + u.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
   assert.equal(u.searchParams.get('access_type'), 'offline');
   assert.equal(u.searchParams.get('prompt'), 'consent');

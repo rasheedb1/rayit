@@ -6,7 +6,7 @@
   },
   "request": {
     "method": "GET",
-    "urlPattern": "^https://[^/]+/api/v1/accounts$"
+    "urlPattern": "^https://[^/]+/api/v1/accounts(\\?.*)?$"
   },
   "response": {
     "status": 200,

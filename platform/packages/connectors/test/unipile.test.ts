@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { OutreachApiError } from '../src/outreach/errors.ts';
 import { FakeUnipile } from '../src/outreach/fake-unipile.ts';
+import { INTERACTIVE_BUDGET } from '../src/outreach/http.ts';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
 import { classifyUnipileError, loadUnipileConfig, LINKEDIN_INVITE_NOTE_MAX, UnipileClient } from '../src/unipile.ts';
@@ -39,7 +40,10 @@ test('loadUnipileConfig: sin las dos variables dice cuáles faltan; con https://
 test('getAccount: normaliza la cuenta, manda X-API-KEY y deja una fila en la bitácora con la cuenta de canal', async () => {
   const { api, log, fetch } = await client([['accounts.get', 'ok']]);
   const a = await api.getAccount('acc_li_0001', { channelAccountId: CA });
-  assert.deepEqual(a, { id: 'acc_li_0001', provider: 'LINKEDIN', name: 'Laura Gómez', username: 'laura-gomez-cocina', health: 'ok', rawStatus: 'OK' });
+  assert.deepEqual(a, {
+    id: 'acc_li_0001', provider: 'LINKEDIN', displayName: 'Laura Gómez', username: 'laura-gomez-cocina', providerIdentity: 'ACoAAB_demo',
+    createdAt: new Date('2026-09-20T14:02:11.000Z'), hostedAuthName: 'Laura Gómez', health: 'ok', rawStatus: 'OK',
+  });
   assert.equal(fetch.calls[0]!.headers['X-API-KEY'], KEY, 'la llave viaja en la cabecera, no en la URL');
   assert.ok(!fetch.calls[0]!.url.includes(KEY));
   assert.deepEqual(log.entries.map((e) => [e.provider, e.endpoint, e.ok, e.channel_account_id]), [['unipile', 'unipile.accounts.get', true, CA]]);
@@ -64,6 +68,31 @@ test('listAccounts: LinkedIn e Instagram', async () => {
   const { api } = await client([['accounts.list', 'ok']]);
   const list = await api.listAccounts();
   assert.deepEqual(list.map((a) => [a.provider, a.username]), [['LINKEDIN', 'laura-gomez-cocina'], ['INSTAGRAM', 'laura.cocinafacil']]);
+});
+
+test('listAccounts recorre las páginas con el cursor (el keepalive concilia contra TODAS las cuentas)', async () => {
+  const { api, fetch } = await client([['accounts.list', 'paged']]);
+  const list = await api.listAccounts();
+  assert.deepEqual(list.map((a) => a.id), ['acc_li_0001', 'acc_ig_0002']);
+  assert.equal(new URL(fetch.calls[1]!.url).searchParams.get('cursor'), 'cursor_pagina_2');
+});
+
+test('una cuenta de NUESTRA hosted auth: el nombre visible nunca es el `name` (el estado firmado), y sale su identidad', async () => {
+  const { api } = await client([['accounts.get', 'hosted_auth']]);
+  const a = await api.getAccount('acc_li_hosted');
+  assert.match(a.hostedAuthName ?? '', /^eyJ.+\..+$/, 'el fixture trae el estado como name, como lo guarda Unipile');
+  assert.equal(a.displayName, 'Laura Gómez');
+  assert.ok(!(a.displayName ?? '').startsWith('eyJ') && !(a.username ?? '').startsWith('eyJ'));
+  assert.equal(a.providerIdentity, 'ACoAAB_laura_demo', 'el member id: el mismo perfil aunque cambie el account_id');
+  assert.equal(a.createdAt?.toISOString(), '2026-09-24T09:58:40.000Z');
+});
+
+test('el presupuesto interactivo: un 503 se reintenta una sola vez y con poca espera', async () => {
+  const { api, slept, log } = await client([['accounts.get', 'server_error_then_ok']]);
+  const a = await api.getAccount('acc_li_0001', { ...INTERACTIVE_BUDGET });
+  assert.equal(a.id, 'acc_li_0001');
+  assert.ok(slept.every((ms) => ms <= INTERACTIVE_BUDGET.maxRetryWaitMs));
+  assert.equal(log.entries.length, 2);
 });
 
 test('createHostedAuthLink: type create, el proveedor del canal y el estado firmado en name', async () => {

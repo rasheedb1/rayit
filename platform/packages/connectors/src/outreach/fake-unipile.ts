@@ -36,11 +36,22 @@ export class FakeUnipile implements UnipileApi {
   readonly deletedAccounts: string[] = [];
   readonly deletedWebhooks: string[] = [];
   readonly #failures = new Map<keyof UnipileApi, OutreachApiError[]>();
+  readonly #now: () => Date;
   #seq = 0;
 
-  /** Una cuenta que Unipile conoce, como si la persona hubiera pasado por el hosted auth. */
+  constructor(opts: { now?: () => Date } = {}) {
+    this.#now = opts.now ?? (() => new Date());
+  }
+
+  /**
+   * Una cuenta que Unipile conoce, como si la persona hubiera pasado por el
+   * hosted auth. Nace «ahora» (createdAt = now()) salvo que se diga otra cosa.
+   */
   addAccount(account: Partial<UnipileAccount> & { id: string }): UnipileAccount {
-    const full: UnipileAccount = { provider: 'LINKEDIN', name: null, username: null, health: 'ok', rawStatus: 'OK', ...account };
+    const full: UnipileAccount = {
+      provider: 'LINKEDIN', displayName: null, username: null, providerIdentity: null, createdAt: this.#now(), hostedAuthName: null,
+      health: 'ok', rawStatus: 'OK', ...account,
+    };
     this.accounts.set(full.id, full);
     return full;
   }

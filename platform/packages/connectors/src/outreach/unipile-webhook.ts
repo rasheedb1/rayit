@@ -19,12 +19,12 @@
  * Es lo que Chief no hacía: allí el webhook de LinkedIn no validaba nada
  * y cualquiera podía pausar cadencias.
  */
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
 import { currentMasterKey, type Keyring } from '../crypto/master-key.ts';
 import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
 import { channelStateKey } from './state.ts';
-import type { UnipileApi } from '../unipile.ts';
+import type { UnipileApi, UnipileCallOptions } from '../unipile.ts';
 import { isOutreachApiError } from './errors.ts';
 
 /** La cabecera del secreto compartido. Unipile la manda porque la pusimos al crear el aviso. */
@@ -32,6 +32,13 @@ export const UNIPILE_SECRET_HEADER = 'x-on-cue-secret';
 /** La cabecera de la ruta firmada: workspace y cuenta de canal del aviso. */
 export const UNIPILE_ROUTE_HEADER = 'x-on-cue-route';
 export const UNIPILE_WEBHOOK_SECRET_ENV = 'UNIPILE_WEBHOOK_SECRET';
+/**
+ * El secreto anterior, solo durante una rotación (docs/ventas-outreach.md
+ * §9.1): los avisos que Unipile ya tiene dados de alta llevan el viejo
+ * hasta que el keepalive los vuelve a dar de alta con el nuevo. Mientras
+ * tanto la web acepta los dos; después se borra.
+ */
+export const UNIPILE_WEBHOOK_SECRET_PREVIOUS_ENV = 'UNIPILE_WEBHOOK_SECRET_PREVIOUS';
 export const CHANNEL_ROUTE_INFO = 'on-cue/channel-route/v1';
 /** La ruta vive lo que vive el aviso en Unipile: se firma una vez al conectar y no caduca antes de diez años. */
 export const CHANNEL_ROUTE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000;
@@ -73,6 +80,39 @@ export function sharedSecretMatches(received: string | null | undefined, expecte
     return false;
   }
   return timingSafeEqual(a, b);
+}
+
+/**
+ * El secreto de un aviso contra TODOS los aceptados (el actual y, durante
+ * una rotación, el anterior): se comparan siempre todos, en tiempo
+ * constante, para que el tiempo no diga contra cuál casó. Devuelve el
+ * índice del que casó, o -1.
+ */
+export function matchSharedSecret(received: string | null | undefined, accepted: readonly (string | null | undefined)[]): number {
+  let hit = -1;
+  accepted.forEach((secret, i) => {
+    if (sharedSecretMatches(received, secret?.trim()) && hit === -1) hit = i;
+  });
+  return hit;
+}
+
+/** Los secretos que acepta el webhook: el actual primero y el anterior si hay una rotación en curso. */
+export function acceptedWebhookSecrets(env: Readonly<Record<string, string | undefined>>): string[] {
+  return [env[UNIPILE_WEBHOOK_SECRET_ENV], env[UNIPILE_WEBHOOK_SECRET_PREVIOUS_ENV]]
+    .map((v) => v?.trim() ?? '')
+    .filter((v) => v !== '');
+}
+
+/**
+ * La huella de un secreto de avisos: qué secreto llevan los avisos de una
+ * cuenta (outreach_channel_account.provider_webhook_secret_fp, 0042), sin
+ * guardar el secreto. HMAC-SHA256 con una etiqueta fija, 16 caracteres
+ * hexadecimales: el secreto es de 32 bytes al azar (.env.example), así
+ * que la huella no sirve para adivinarlo. El keepalive vuelve a dar de
+ * alta los avisos de toda cuenta cuya huella no es la del secreto actual.
+ */
+export function webhookSecretFingerprint(secret: string): string {
+  return createHmac('sha256', 'on-cue/unipile-webhook-secret/v1').update(secret.trim(), 'utf8').digest('hex').slice(0, 16);
 }
 
 /**
@@ -173,6 +213,8 @@ export interface RegisterAccountWebhooksInput {
   /** `${APP_URL}/api/webhooks/unipile` */
   requestUrl: string;
   now: Date;
+  /** El presupuesto de cada llamada: INTERACTIVE_BUDGET desde la web; sin él, el del cliente (el worker). */
+  budget?: Pick<UnipileCallOptions, 'timeoutMs' | 'maxRetries' | 'maxRetryWaitMs'>;
 }
 
 /**
@@ -183,9 +225,9 @@ export interface RegisterAccountWebhooksInput {
  * pide un aviso. Devuelve los ids creados (para outreach_channel_set_webhooks)
  * y si alguno faltó; un error que no es del proveedor sube.
  */
-export async function registerAccountWebhooks(i: RegisterAccountWebhooksInput): Promise<{ created: string[]; failed: boolean }> {
+export async function registerAccountWebhooks(i: RegisterAccountWebhooksInput): Promise<{ created: string[]; failed: boolean; secretFingerprint: string | null }> {
   const secret = i.secret?.trim();
-  if (!secret) return { created: [], failed: true };
+  if (!secret) return { created: [], failed: true, secretFingerprint: null };
   const headers = { [UNIPILE_SECRET_HEADER]: secret, [UNIPILE_ROUTE_HEADER]: signChannelRoute(i.route, i.routeKey, i.now) };
   const created: string[] = [];
   let failed = false;
@@ -193,7 +235,7 @@ export async function registerAccountWebhooks(i: RegisterAccountWebhooksInput): 
     try {
       const { webhookId } = await i.unipile.createWebhook(
         { source, accountId: i.providerAccountId, requestUrl: i.requestUrl, headers },
-        { channelAccountId: i.route.channelAccountId },
+        { ...i.budget, channelAccountId: i.route.channelAccountId },
       );
       created.push(webhookId);
     } catch (err) {
@@ -201,5 +243,5 @@ export async function registerAccountWebhooks(i: RegisterAccountWebhooksInput): 
       failed = true;
     }
   }
-  return { created, failed };
+  return { created, failed, secretFingerprint: webhookSecretFingerprint(secret) };
 }

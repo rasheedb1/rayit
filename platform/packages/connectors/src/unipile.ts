@@ -69,10 +69,31 @@ export type UnipileAccountHealth = 'ok' | 'needs_reconnect' | 'connecting';
 export interface UnipileAccount {
   id: string;
   provider: string;
-  /** El nombre del perfil, para enseñar. */
-  name: string | null;
+  /**
+   * El nombre del perfil, para enseñar: el de connection_params.im
+   * (LinkedIn pone ahí el nombre de la persona; Instagram, su usuario) o,
+   * sin él, el identificador público. NUNCA el `name` de la cuenta: con la
+   * hosted auth, Unipile guarda como `name` el que le mandamos, que es
+   * nuestro estado cifrado (outreach/state.ts).
+   */
+  displayName: string | null;
   /** El usuario o identificador público (linkedin.com/in/<x>, @x en Instagram). */
   username: string | null;
+  /**
+   * Quién es la persona en el proveedor (connection_params.im.id: el
+   * member id de LinkedIn, el id de Instagram). No cambia aunque la misma
+   * persona complete otra hosted auth, que sí estrena account_id: es lo
+   * que dice que dos cuentas de Unipile son el mismo perfil.
+   */
+  providerIdentity: string | null;
+  /** Cuándo nació la cuenta en Unipile. Una cuenta de «crear» no puede ser más vieja que su estado firmado. */
+  createdAt: Date | null;
+  /**
+   * El `name` crudo de la cuenta: nuestro estado firmado si nació de una
+   * hosted auth nuestra. Solo sirve para saber si la cuenta es de este
+   * entorno (el keepalive no toca las que no lo son); jamás se enseña.
+   */
+  hostedAuthName: string | null;
   health: UnipileAccountHealth;
   /** El estado crudo de la primera fuente ('OK', 'CREDENTIALS', 'STOPPED'…). */
   rawStatus: string | null;
@@ -109,10 +130,18 @@ export interface UnipilePage<T> {
   cursor: string | null;
 }
 
-/** Con qué cuenta de canal se registra la llamada en api_call_log. */
+/**
+ * Con qué cuenta de canal se registra la llamada en api_call_log y, en el
+ * camino interactivo (la persona espera en la pantalla), el presupuesto
+ * de la petición: INTERACTIVE_BUDGET de outreach/http.ts. Sin él, los
+ * 30 s y los tres reintentos del cliente, que son para el worker.
+ */
 export interface UnipileCallOptions {
   channelAccountId?: string | null;
   signal?: AbortSignal;
+  timeoutMs?: number;
+  maxRetries?: number;
+  maxRetryWaitMs?: number;
 }
 
 export interface HostedAuthRequest {
@@ -216,21 +245,41 @@ const date = (v: unknown): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-/** Estados de las fuentes de una cuenta (docs: webhook account_status). */
-const DOWN_STATUSES = new Set(['CREDENTIALS', 'ERROR', 'STOPPED', 'DELETED', 'DISCONNECTED']);
+/**
+ * Los estados de una fuente que dicen que la sesión se cayó (docs:
+ * webhook account_status). Una sola lista para el webhook de la web, el
+ * keepalive y la normalización: si Unipile añade uno, se añade aquí.
+ */
+export const UNIPILE_DOWN_STATUSES: ReadonlySet<string> = new Set(['CREDENTIALS', 'ERROR', 'STOPPED', 'DELETED', 'DISCONNECTED']);
+/** Los que dicen que volvió: la persona resolvió el reto o reconectó. */
+export const UNIPILE_OK_STATUSES: ReadonlySet<string> = new Set(['OK', 'RECONNECTED', 'CREATION_SUCCESS', 'SYNC_SUCCESS']);
+
+export function isUnipileDownStatus(status: string | null | undefined): boolean {
+  return typeof status === 'string' && UNIPILE_DOWN_STATUSES.has(status);
+}
+
+export function isUnipileOkStatus(status: string | null | undefined): boolean {
+  return typeof status === 'string' && UNIPILE_OK_STATUSES.has(status);
+}
 
 export function normalizeUnipileAccount(raw: unknown): UnipileAccount {
   const a = obj(raw);
   const sources = Array.isArray(a['sources']) ? a['sources'].map(obj) : [];
   const statuses = sources.map((s) => str(s['status'])).filter((s): s is string => s !== null);
-  const down = statuses.find((s) => DOWN_STATUSES.has(s));
+  const down = statuses.find(isUnipileDownStatus);
   const connecting = statuses.find((s) => s === 'CONNECTING');
   const im = obj(obj(a['connection_params'])['im']);
+  const publicId = str(im['publicIdentifier']) ?? str(im['public_identifier']);
+  const imName = str(im['username']);
   return {
     id: String(a['id'] ?? ''),
     provider: String(a['type'] ?? ''),
-    name: str(a['name']),
-    username: str(im['publicIdentifier']) ?? str(im['username']),
+    // Nunca a['name']: es el estado firmado que mandamos en la hosted auth.
+    displayName: imName ?? publicId,
+    username: publicId ?? imName,
+    providerIdentity: str(im['id']),
+    createdAt: date(a['created_at']),
+    hostedAuthName: str(a['name']),
     health: down ? 'needs_reconnect' : connecting ? 'connecting' : 'ok',
     rawStatus: down ?? statuses[0] ?? null,
   };
@@ -304,6 +353,7 @@ export class UnipileClient implements UnipileApi {
       headers: { 'X-API-KEY': this.#config.accessToken }, json: req.json, multipart: req.multipart,
       secrets: [this.#config.accessToken, ...(opts.secrets ?? [])], channelAccountId: opts.channelAccountId ?? null, signal: opts.signal,
       idempotent: req.idempotent ?? req.method !== 'POST',
+      timeoutMs: opts.timeoutMs, maxRetries: opts.maxRetries, maxRetryWaitMs: opts.maxRetryWaitMs,
     });
     return res.body;
   }
@@ -333,8 +383,18 @@ export class UnipileClient implements UnipileApi {
     return normalizeUnipileAccount(await this.request({ endpoint: 'unipile.accounts.get', method: 'GET', path: `/accounts/${encodeURIComponent(accountId)}` }, opts));
   }
 
+  /** Todas las cuentas del tenant, página a página (hasta LIST_ACCOUNTS_MAX_PAGES de 250). */
   async listAccounts(opts?: UnipileCallOptions): Promise<UnipileAccount[]> {
-    return page(await this.request({ endpoint: 'unipile.accounts.list', method: 'GET', path: '/accounts' }, opts), normalizeUnipileAccount).items;
+    const out: UnipileAccount[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < LIST_ACCOUNTS_MAX_PAGES; i++) {
+      const query = { limit: 250, cursor };
+      const p = page(await this.request({ endpoint: 'unipile.accounts.list', method: 'GET', path: '/accounts', query }, opts), normalizeUnipileAccount);
+      out.push(...p.items);
+      if (!p.cursor) break;
+      cursor = p.cursor;
+    }
+    return out;
   }
 
   async sendMessage(req: SendMessageRequest, opts?: UnipileCallOptions): Promise<{ chatId: string | null; messageId: string | null }> {
@@ -421,6 +481,9 @@ export class UnipileClient implements UnipileApi {
     await deleted(this.request({ endpoint: 'unipile.webhooks.delete', method: 'DELETE', path }, opts));
   }
 }
+
+/** 40 páginas de 250: diez mil cuentas. Más que eso es otro problema (y otro plan con Unipile). */
+const LIST_ACCOUNTS_MAX_PAGES = 40;
 
 /** Un 404 al borrar es lo que se quería: ya no está. */
 async function deleted(p: Promise<unknown>): Promise<void> {

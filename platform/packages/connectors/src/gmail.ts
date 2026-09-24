@@ -83,8 +83,20 @@ export function loadGoogleOAuthConfig(
 // Las dos interfaces que cumplen el cliente real y FakeGmail
 // ---------------------------------------------------------------------
 
+/**
+ * Cómo se abre la pantalla de Google:
+ *   loginHint      el buzón que se reconecta: Google propone ESE, no el
+ *                  primero de la sesión del navegador
+ *   selectAccount  «Conectar otra cuenta»: Google pregunta qué cuenta, en
+ *                  vez de autorizar sola la única sesión abierta
+ */
+export interface AuthorizationUrlOptions {
+  loginHint?: string;
+  selectAccount?: boolean;
+}
+
 export interface GoogleOAuthApi {
-  authorizationUrl(state: string, loginHint?: string): string;
+  authorizationUrl(state: string, opts?: AuthorizationUrlOptions): string;
   exchangeCode(code: string): Promise<{ tokens: OAuthTokens; scopesGranted: string[] }>;
   /** Pide un access token nuevo. Conserva el refresh token si Google no manda otro. */
   refresh(tokens: OAuthTokens, opts?: { channelAccountId?: string | null }): Promise<OAuthTokens>;
@@ -234,17 +246,18 @@ export class GoogleOAuth implements GoogleOAuthApi {
     this.#now = opts.now ?? (() => new Date());
   }
 
-  authorizationUrl(state: string, loginHint?: string): string {
+  authorizationUrl(state: string, opts: AuthorizationUrlOptions = {}): string {
     const u = new URL(GOOGLE_AUTH_URL);
     u.searchParams.set('client_id', this.#cfg.clientId);
     u.searchParams.set('redirect_uri', this.#cfg.redirectUri);
     u.searchParams.set('response_type', 'code');
     u.searchParams.set('scope', GMAIL_SCOPES.join(' '));
     u.searchParams.set('access_type', 'offline');
-    u.searchParams.set('prompt', 'consent');
+    // consent siempre (sin él Google no vuelve a dar refresh_token); select_account para elegir otro buzón.
+    u.searchParams.set('prompt', opts.selectAccount ? 'select_account consent' : 'consent');
     u.searchParams.set('include_granted_scopes', 'true');
     u.searchParams.set('state', state);
-    if (loginHint) u.searchParams.set('login_hint', loginHint);
+    if (opts.loginHint) u.searchParams.set('login_hint', opts.loginHint);
     return u.toString();
   }
 

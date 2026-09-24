@@ -13,7 +13,7 @@
 import { OutreachApiError, type OutreachErrorKind } from './errors.ts';
 import { buildMime, type OutgoingEmail } from './mime.ts';
 import {
-  GMAIL_SCOPES, type GmailApi, type GmailMessage, type GmailMessageRef, type GoogleOAuthApi, type SentEmail,
+  GMAIL_SCOPES, type AuthorizationUrlOptions, type GmailApi, type GmailMessage, type GmailMessageRef, type GoogleOAuthApi, type SentEmail,
 } from '../gmail.ts';
 import type { OAuthTokens } from '../types.ts';
 
@@ -64,10 +64,11 @@ export class FakeGmail implements GoogleOAuthApi, GmailApi {
     return { accessToken: this.#next('fake-access'), refreshToken, accessExpiresAt: new Date(this.#now().getTime() + 3600_000), scopes: [...scopes] };
   }
 
-  authorizationUrl(state: string, loginHint?: string): string {
+  authorizationUrl(state: string, opts: AuthorizationUrlOptions = {}): string {
     const u = new URL('https://accounts.google.test/o/oauth2/v2/auth');
     u.searchParams.set('state', state);
-    if (loginHint) u.searchParams.set('login_hint', loginHint);
+    u.searchParams.set('prompt', opts.selectAccount ? 'select_account consent' : 'consent');
+    if (opts.loginHint) u.searchParams.set('login_hint', opts.loginHint);
     return u.toString();
   }
 

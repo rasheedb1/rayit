@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { FakeUnipile } from '../src/outreach/fake-unipile.ts';
 import {
-  channelRouteKey, channelSigningKeys, parseUnipileWebhook, sharedSecretMatches, signChannelRoute, verifyChannelRoute,
+  acceptedWebhookSecrets, channelRouteKey, channelSigningKeys, matchSharedSecret, parseUnipileWebhook, sharedSecretMatches, webhookSecretFingerprint, signChannelRoute, verifyChannelRoute,
 } from '../src/outreach/unipile-webhook.ts';
 import { keyringOf } from '../src/crypto/master-key.ts';
 import { GOOGLE_STATE_TTL_MS, signChannelState, verifyChannelState } from '../src/outreach/state.ts';
@@ -48,6 +48,22 @@ test('el secreto compartido: igual casa; distinto, vacío o ausente, no', () => 
   assert.equal(sharedSecretMatches('corto', 's3creto-largo'), false);
   assert.equal(sharedSecretMatches(null, 's3creto-largo'), false);
   assert.equal(sharedSecretMatches('', ''), false, 'sin secreto configurado nada casa');
+});
+
+test('rotar el secreto de los avisos: se aceptan el actual y el anterior, y la huella dice cuál llevan los avisos', () => {
+  const env = { UNIPILE_WEBHOOK_SECRET: ' nuevo-secreto-largo ', UNIPILE_WEBHOOK_SECRET_PREVIOUS: 'viejo-secreto-largo' };
+  const accepted = acceptedWebhookSecrets(env);
+  assert.deepEqual(accepted, ['nuevo-secreto-largo', 'viejo-secreto-largo']);
+  assert.equal(matchSharedSecret('nuevo-secreto-largo', accepted), 0);
+  assert.equal(matchSharedSecret('viejo-secreto-largo', accepted), 1, 'durante la rotación el viejo sigue valiendo');
+  assert.equal(matchSharedSecret('otro', accepted), -1);
+  assert.equal(matchSharedSecret('viejo-secreto-largo', acceptedWebhookSecrets({ UNIPILE_WEBHOOK_SECRET: 'nuevo-secreto-largo' })), -1, 'sin la rotación, solo el actual');
+  assert.deepEqual(acceptedWebhookSecrets({}), []);
+  const fp = webhookSecretFingerprint('nuevo-secreto-largo');
+  assert.match(fp, /^[0-9a-f]{16}$/);
+  assert.equal(fp, webhookSecretFingerprint(' nuevo-secreto-largo '), 'los espacios del .env no cambian la huella');
+  assert.notEqual(fp, webhookSecretFingerprint('viejo-secreto-largo'));
+  assert.ok(!fp.includes('nuevo'));
 });
 
 test('parseUnipileWebhook: cuenta creada, salud y mensaje, con los fixtures grabados', async () => {

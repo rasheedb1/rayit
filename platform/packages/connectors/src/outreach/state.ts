@@ -44,6 +44,12 @@ export interface ChannelState {
   channel: ConnectableChannel;
   /** newNonce(): casa el aviso con su fila 'pending' y con la cookie del navegador. */
   nonce: string;
+  /**
+   * Solo al reconectar una cuenta de Unipile: el account_id que se firmó
+   * (el de NUESTRA fila caída). El aviso de vuelta tiene que traer ese
+   * mismo id: un estado de reconexión no sirve para ligar otra cuenta.
+   */
+  reconnectAccountId?: string;
 }
 
 /** Diez minutos para volver del OAuth de Google. */
@@ -121,10 +127,13 @@ export function verifyChannelState(token: string | null | undefined, keys: Uint8
     || typeof p.creatorId !== 'string' || !uuid.test(p.creatorId)
     || !isConnectableChannel(p.channel)
     || typeof p.nonce !== 'string' || !/^[A-Za-z0-9_-]{32,64}$/.test(p.nonce)
+    || (p.reconnectAccountId !== undefined && (typeof p.reconnectAccountId !== 'string' || p.reconnectAccountId === '' || p.reconnectAccountId.length > 256))
   ) {
     return { ok: false, reason: 'bad_shape' };
   }
-  return { ok: true, payload: { workspaceId: p.workspaceId, creatorId: p.creatorId, channel: p.channel, nonce: p.nonce }, issuedAt: opened.issuedAt };
+  const payload: ChannelState = { workspaceId: p.workspaceId, creatorId: p.creatorId, channel: p.channel, nonce: p.nonce };
+  if (p.reconnectAccountId !== undefined) payload.reconnectAccountId = p.reconnectAccountId;
+  return { ok: true, payload, issuedAt: opened.issuedAt };
 }
 
 /**

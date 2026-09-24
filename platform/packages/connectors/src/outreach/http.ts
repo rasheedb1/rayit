@@ -63,7 +63,24 @@ export interface OutreachRequest {
    * despacha (VEN-10) decide, después de mirar el hilo.
    */
   idempotent: boolean;
+  /**
+   * El presupuesto de ESTA petición, cuando no es el del cliente: una
+   * petición interactiva (la persona espera con «Abriendo…») pide menos
+   * tiempo y menos reintentos que el worker (INTERACTIVE_BUDGET).
+   */
+  timeoutMs?: number;
+  maxRetries?: number;
+  /** Un Retry-After o una espera mayor que esto no se espera: el error sale. */
+  maxRetryWaitMs?: number;
 }
+
+/**
+ * Lo que aguanta una petición que alguien mira en la pantalla: ocho
+ * segundos y un reintento. Con los 30 s y los tres reintentos del worker,
+ * un proveedor colgado dejaba «Abriendo…» más de dos minutos y la función
+ * de Vercel cortaba antes con un 504 sin aviso nuestro.
+ */
+export const INTERACTIVE_BUDGET = { timeoutMs: 8_000, maxRetries: 1, maxRetryWaitMs: 1_000 } as const;
 
 export interface OutreachResponse<T> {
   status: number;
@@ -100,11 +117,11 @@ export class OutreachHttp {
       const out = await this.#attempt<T>(req, url);
       if (out.ok) return { status: out.status, body: out.body, attempts: attempt };
       const err = out.error;
-      const maxRetries = req.idempotent ? this.#retry.maxRetries : 0;
+      const maxRetries = req.idempotent ? (req.maxRetries ?? this.#retry.maxRetries) : 0;
       const retriesLeft = maxRetries - (attempt - 1);
       if (!err.isRetryable || retriesLeft <= 0 || req.signal?.aborted) throw err;
       const delay = delayForRetry(this.#retry, attempt, err.retryAfterS, this.#random);
-      if (delay > (this.#opts.maxRetryWaitMs ?? MAX_RETRY_WAIT_MS)) throw err;
+      if (delay > (req.maxRetryWaitMs ?? this.#opts.maxRetryWaitMs ?? MAX_RETRY_WAIT_MS)) throw err;
       await this.#sleep(delay, req.signal);
     }
   }
@@ -123,7 +140,7 @@ export class OutreachHttp {
       body = JSON.stringify(req.json);
       headers['Content-Type'] = 'application/json';
     }
-    const timeout = AbortSignal.timeout(this.#opts.timeoutMs ?? OUTREACH_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(req.timeoutMs ?? this.#opts.timeoutMs ?? OUTREACH_TIMEOUT_MS);
     const signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
     const t0 = performance.now();
     let res: Response;
