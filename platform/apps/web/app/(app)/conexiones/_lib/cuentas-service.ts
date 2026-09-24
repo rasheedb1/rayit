@@ -75,12 +75,12 @@ export interface SourceAvailability {
 const OFFERS_ES: Record<PlatformId, string> = {
   instagram: "Seguidores y número de publicaciones de cuentas profesionales (creador o empresa) públicas.",
   tiktok: "Confirmamos la cuenta; TikTok no publica seguidores ni vistas por @ (métricas pendientes de fuente).",
-  youtube: "Suscriptores, vistas acumuladas y número de videos del canal.",
+  youtube: "Suscriptores y número de videos del canal; las vistas, video por video.",
   facebook: "No disponible en esta versión.",
 };
 
 /** Con el proveedor de datos contratado (CON-12), TikTok sí ofrece cifras por @. */
-const TIKTOK_AGGREGATOR_OFFERS_ES = "Seguidores, vistas acumuladas y número de videos, por el proveedor de datos contratado.";
+const TIKTOK_AGGREGATOR_OFFERS_ES = "Seguidores y número de videos por el proveedor de datos contratado; las vistas, video por video.";
 
 function offersEs(platformId: PlatformId, source: PublicProfileSource | undefined): string {
   if (platformId === "tiktok" && source?.accessMode === "aggregator") return TIKTOK_AGGREGATOR_OFFERS_ES;
