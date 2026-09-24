@@ -15,7 +15,7 @@
  *   · `unverifiable` hace que findSent no lo sepa decir ('unknown');
  *   · `slow(ms)` hace que cada envío tarde (para cortar la corrida a mitad);
  *   · `reply(threadRef, texto)` deja una respuesta de la otra parte en el
- *     hilo, que readThread entrega una vez.
+ *     hilo (o una automática), que readThread entrega una vez.
  */
 import type { InboundMessage, OpenThread, SendFailure } from '@mc/db/queries/outreach';
 import type { ChannelReader, ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './types.ts';
@@ -91,8 +91,8 @@ export class FakeChannel implements ChannelSender, ChannelReader {
     return { providerMessageId, threadRef, messageIdRfc };
   }
 
-  /** La otra parte responde en un hilo. */
-  reply(threadRef: string, body: string, at: Date, from?: string): InboundMessage {
+  /** La otra parte responde en un hilo. `automatic`: un «fuera de oficina» (Auto-Submitted). */
+  reply(threadRef: string, body: string, at: Date, from?: string, opts: { automatic?: boolean } = {}): InboundMessage {
     this.#seq += 1;
     const msg: InboundMessage = {
       providerMessageId: `fake-${this.channel}-in-${String(this.#seq).padStart(4, '0')}`,
@@ -102,6 +102,7 @@ export class FakeChannel implements ChannelSender, ChannelReader {
       subject: null,
       body,
       occurredAt: at,
+      automatic: opts.automatic === true,
     };
     const list = this.#inbox.get(threadRef) ?? [];
     list.push(msg);
