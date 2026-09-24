@@ -44,6 +44,15 @@ nueve índices, y el entorno local se levanta con un comando.
 > Al cierre de módulos del 23-sep por la tarde, CON-4 (la pantalla
 > Conexiones) quedó en `main` y en producción: ver
 > [propuestas/CIERRE-CON-B.md](propuestas/CIERRE-CON-B.md).
+>
+> **Cierre de los módulos de Nicolás, 23 y 24 de septiembre.** FIN, CAM
+> y Conexiones están en `main` y en producción; el worker quedó listo y
+> sin encender (falta un rol de Supabase, de Rasheed, y el visto bueno
+> de Nicolás); una prueba de punta a punta recorre la cadena entera en
+> una base, de la cuenta por @ al flujo de caja, y `pnpm verificar` está
+> en verde. Lo que sigue sin estar conectado y de quién depende está en
+> la sección 11 de
+> [backlog-mvp.md](backlog-mvp.md#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
 
 ---
 

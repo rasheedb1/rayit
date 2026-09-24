@@ -10,7 +10,15 @@ cambió a pedido de Rasheed). Reemplaza el alcance de
 reglas de trabajo de ese documento (ramas, revisión, integración,
 migraciones inmutables) siguen vigentes.
 
-**Actualizado el 23 de septiembre de 2026** con el cierre del sprint 2
+**Actualizado el 24 de septiembre de 2026 (00:40 UTC)** con el cierre de
+los módulos de Nicolás: FIN, CAM y Conexiones en `main` y en
+producción, el worker listo pero sin encender (le falta un rol de
+Supabase, de Rasheed), una prueba de punta a punta que recorre la
+cadena entera en verde y `pnpm verificar` en verde. Supabase va por la
+0039 y la 0041 espera `make db.migrate`. El detalle está en la
+[sección 11](#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
+
+**Antes, el 23 de septiembre,** con el cierre del sprint 2
 de Nicolás: CON-1, CAM-1, CAM-2, CON-3 (TikTok, probada en vivo) y
 CON-10 están en `main`; producción sirve `1a524d7` y le falta un
 commit; Supabase tiene aplicadas todas las migraciones de `main`
@@ -978,3 +986,98 @@ no existe), 15 solo para Meta, 16, y 18 (`.env.example` sigue con
   el SQL de ACC-3; COT-4 ya llama al contrato de CAM-2, así que el
   «lunes del sprint 4» de `docs/propuestas/CAM-2.md` es una prueba
   conjunta, no una integración.
+
+## 11. Cierre de los módulos de Nicolás al 23 de septiembre de 2026
+
+Escrito para Nicolás y Rasheed. La tarde y la noche del 23 de
+septiembre se cerraron, uno por uno y cada uno desplegado, los módulos
+de Nicolás con los prompts de `docs/cierre-modulos-nicolas-prompts.md`:
+P0 (main en verde), FIN, CAM, CON-A (datos: CON-6 y CON-2b), CON-B
+(pantalla Conexiones), WRK (el worker, listo pero sin encender) y E2E
+(esta sección). Cada módulo tiene su detalle en
+`docs/propuestas/CIERRE-<MÓDULO>.md` (y WRK en `WRK.md`); aquí va el
+resumen y lo que queda.
+
+### 11.1 Historias, una por una
+
+| Historia | Estado | Cómo llegó a `main` | Terminado cuando, y cómo se comprobó |
+|---|---|---|---|
+| FIN-1 a FIN-8 | **Hechas** | Cierre FIN (`CIERRE-FIN.md`): FIN-3, FIN-5 y FIN-8 desde sus ramas; el resto ya estaba | Cada criterio con su prueba en `finanzas.test.ts` y las costuras en `finanzas-costuras.test.ts`; en producción desde el cierre. FIN-4 escribe su borrador diario cuando corra el worker |
+| CAM-1 a CAM-6 | **Hechas** | Cierre CAM (`CIERRE-CAM.md`), con la migración **0041** en `main` | Ciclo entero en `ciclo-db.test.tsx`; «Recalcular» espera a que se aplique la 0041 |
+| CON-1, CON-2, CON-2b, CON-3, CON-4, CON-5, CON-6, CON-10 | **Hechas** | CON-A y CON-B; las demás desde el sprint 2 | `costuras-con.test.ts` (collect → baseline → score → campaign.compute), la tabla de `/conexiones` en producción |
+| CON-7 | Bloqueada | En `main` y producción (0039) | Solo le falta la prueba en vivo: ninguna fuente pública da demografía (CON-9) |
+| CON-8, CON-12 | Bloqueadas / en curso | Ramas en GitHub sin fusionar | Esperan credenciales de Google y CON-9 (CON-8) y la decisión de contratar EnsembleData (CON-12) |
+| WRK (el worker en producción) | **Listo, sin encender** | `--once`, salud y un workflow de GitHub Actions apagado (`WRK.md`) | Falta crear `mc_worker_login` (§11.4, fila 25) y la PARADA 2 de Nicolás |
+| ACC-1, ACC-2, ACC-3, ACC-5, ACC-8 | **Hechas** | Sprint 3 | La prueba de punta a punta las ejercita (bitácora y roles) |
+| ACC-6 | En curso | Rama; la sesión de cierre de ACC la lleva a `main` con la **0040** | Mientras no entre, un Mánager ve todas las campañas |
+
+**La prueba de punta a punta** (`apps/worker/test/punta-a-punta.test.ts`,
+cierre E2E) recorre en una sola base, con el seed, la web como `mc_app` y
+los jobs reales como `mc_worker`: cuenta por @ → posts y lecturas
+(respuestas grabadas) → línea base y puntaje → cotización aceptada →
+campaña → posts → aporte de la marca → seguidores → resultado
+(`campaign.compute`) → reporte público sin sesión → factura → pago con
+reserva → cobro por antigüedad → flujo con gastos e ingresos de
+plataforma → una fila de bitácora por escritura → la Contadora y el
+Mánager, cada uno con lo suyo → ningún secreto en la base. **16 en
+verde y 1 saltada con su motivo** (el alcance por asignación, ACC-6).
+
+### 11.2 Verificación sobre `main`
+
+`pnpm verificar` sobre la rama de E2E (que es `main` + la prueba + tres
+arreglos de pruebas), el 24 de septiembre a las 00:40 UTC: **15/15
+tareas**; raíz 8, `@mc/core` 267, `@mc/connectors` 203, `@mc/db` 817,
+`@mc/worker` 156 (+1 saltada), `@mc/web` 1242 (+1 todo); 0 fallos.
+
+Pasada la medianoche UTC, `main` tenía **tres pruebas rojas que
+dependían del día o de la hora**, no del código (comprobado en
+`rayit-deploy`): la mora de FIN-4 contada en UTC y no en la zona del
+workspace, la línea base de CON-6 comparada contra filas que la 0002
+guardó antes de que la 0003 agregara una lectura, y la ficha de
+campaña con las views del 22-sep escritas a mano. Las tres se
+arreglaron en la prueba (el código de producción estaba bien).
+`oauth-refresh.test.ts` falló una vez dentro de `verificar` con la
+máquina cargada y pasa sola y en la siguiente corrida.
+
+### 11.3 Producción
+
+`https://on-cue-web.vercel.app` sirve `main`; el commit exacto, la API
+de Vercel y el plan B de cada despliegue están en el `CIERRE-<MÓDULO>.md`
+de cada uno. E2E probó **48 rutas** sin sesión: ninguna en 500 (las
+públicas con un slug falso dan 404; las fichas con ids del seed, 200).
+Supabase va por la **0039**: la **0041** (CAM) está en `main` sin
+aplicar y por eso `make db.guardia` sale roja por una sola razón.
+`job_run` tiene **0 filas**: ningún job ha corrido nunca en producción.
+
+### 11.4 Lo que Nicolás necesita de Rasheed (lo nuevo respecto a §10.4)
+
+| # | Qué | Para qué | Detalle |
+|---|---|---|---|
+| 25 | Crear `mc_worker_login` (LOGIN, miembro de `mc_worker`) con el token de administración. Con `--once` ya no hace falta el esquema `pgboss` | Que el worker corra por primera vez: tokens de TikTok, lecturas diarias, línea base, resultado de campañas, recordatorios | `docs/propuestas/WRK.md` §1.1 |
+| 26 | Acordar el hosting del worker: GitHub Actions cada hora (recomendado, 0–5 USD/mes) frente a Railway o Fly | CIM-7 | `WRK.md` §3 |
+| 27 | Extender la convención de bitácora de ACC-2 a Cotizar y Ventas | Hoy aceptar una cotización o crear un negocio no deja fila en `audit_log` | `CIERRE-E2E.md` §1 |
+| 28 | El alcance de ACC-6 en Ventas, Cotizar y Resumen | Que un Mánager vea solo lo suyo en todas las pantallas | `ACC-6` |
+
+### 11.5 Desvíos respecto al plan, y por qué
+
+- **El worker no se desplegó.** WRK dejó todo listo y apagado a
+  propósito: encenderlo es una PARADA 2 (visto bueno de Nicolás y
+  acuerdo con Rasheed), y antes hace falta la fila 25.
+- **La prueba de punta a punta vive en `apps/worker/test/`** y no en la
+  web ni en `@mc/db`: es el único paquete que puede correr los jobs y
+  las consultas sobre la misma base sin cruzar dueños.
+- **E2E corrió antes de que terminaran CON-C y ACC**, que siguen en
+  sus sesiones: lo que traigan no está en la prueba.
+
+### 11.6 Lo que sigue sin estar conectado, y de quién depende
+
+1. El worker en producción: fila 25 (Rasheed) y PARADA 2 (Nicolás).
+2. La 0041: `make db.migrate` (Nicolás).
+3. El alcance por asignación: el cierre de ACC y la fila 28.
+4. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
+   `GOOGLE_API_KEY` (Nicolás).
+5. CON-8, CON-12 y la demografía en vivo: credenciales de Google, la
+   decisión sobre EnsembleData y CON-9 (Rasheed).
+6. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
+7. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
+8. CON-C: su sesión.

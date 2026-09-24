@@ -232,7 +232,7 @@ export const STORIES: readonly Story[] = [
     desc: "Seguidores, vistas y videos de TikTok por @ a través de un proveedor de pago (Apify, EnsembleData o Phyllo) sobre la interfaz PublicProfileSource de CON-10, con access_mode = aggregator. Solo si el CSV de TikTok Studio (RES-2) se queda corto o la fricción de subir archivos frena a los creadores.",
     done: "Agregar un @ de TikTok deja seguidores y vistas del día sin que el creador suba nada; el costo mensual del proveedor está aprobado y anotado.",
     status: "en_curso",
-    note: "23-sep: rama nicolas/CON-12-proveedor-tiktok, solo local: conector de EnsembleData, la base distingue la cuenta leída por proveedor y el recolector diario lo usa. Sigue sin decidir si se contrata el proveedor; no bloquea nada.",
+    note: "23-sep: rama nicolas/CON-12-proveedor-tiktok (en GitHub, sin fusionar): conector de EnsembleData, la base distingue la cuenta leída por proveedor y el recolector diario lo usa, apagado sin ENSEMBLEDATA_TOKEN. Sigue sin decidir si se contrata el proveedor; no bloquea nada.",
   },
   {
     id: "CON-5", module: "CON", owner: "nicolas", size: "L", sprint: 3, deps: ["CON-1", "CON-2"],
@@ -256,7 +256,7 @@ export const STORIES: readonly Story[] = [
     desc: "collect.demographics por cuenta, respetando metric_requirement: si falta un prerrequisito, lo explica en vez de dejar la celda vacía.",
     done: "Con la respuesta grabada, la tabla coincide con el fixture; con una cuenta personal de TikTok, dice por qué no hay demografía.",
     status: "bloqueada",
-    note: "23-sep: construida y probada contra respuestas grabadas en la rama nicolas/CON-7-demografia-audiencia (worker 69, db 705, la lógica de prerrequisitos en 2 s). Bloqueada por la prueba en vivo: ninguna fuente pública da demografía —business_discovery no la trae, YouTube la da por Analytics con OAuth y TikTok por la Accounts API con el trámite CON-9— y hoy no hay ninguna conexión autorizada con permisos de insights. El job escribe audience_breakdown con scope 'account' y, cuando falta un prerrequisito, NO llama a la API: escribe el requisito en metric_gap (migración 0039) con el message_es de metric_requirement, que es lo que lee RES-4 por getAccountAudience. 0039 añade además el UNIQUE que le faltaba a audience_breakdown y siete filas de metric_requirement, entre ellas el requisito nuevo owner_authorization para las cuentas agregadas por @. Era 0036, pero ese número lo reclama también FIN-7: se renumeró a 0039, el primero libre por encima de la 0037 de CAM-6. Detalle en docs/propuestas/CON-7.md."
+    note: "23-sep: en main y en producción (0039 aplicada). La pantalla dice qué requisito le falta a cada cuenta (metric_gap). Bloqueada solo por la prueba en vivo: ninguna fuente pública da demografía (Instagram por @ no la trae, YouTube pide OAuth y TikTok el trámite CON-9) y no hay ninguna conexión autorizada con permisos de insights. La lectura diaria (collect.demographics) espera al worker (WRK)."
   },
   {
     id: "CON-8", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3"],
@@ -264,7 +264,7 @@ export const STORIES: readonly Story[] = [
     desc: "Mismo flujo que CON-3 para un canal de prueba.",
     done: "Conectar un canal de prueba deja la fila con sus scopes y el token cifrado.",
     status: "bloqueada",
-    note: "23-sep: código completo y probado con respuestas grabadas en la rama nicolas/CON-8-oauth-youtube, solo local. Espera GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en el vault y en Vercel, y la verificación de la pantalla de consentimiento de Google (CON-9). Paso a paso en docs/propuestas/CON-8.md §3.",
+    note: "23-sep: código completo y probado con respuestas grabadas en la rama nicolas/CON-8-oauth-youtube (en GitHub, sin fusionar). Espera GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en el vault y en Vercel, y la verificación de la pantalla de consentimiento de Google (CON-9). Paso a paso en docs/propuestas/CON-8.md §3.",
   },
   {
     id: "CON-9", module: "CON", owner: "rasheed", size: null, sprint: 1, deps: [],
@@ -642,7 +642,7 @@ export const STORIES: readonly Story[] = [
     desc: "scopeFilter() en packages/db, compuesto por cada queries/<modulo>.ts. La tenencia se garantiza en RLS; el alcance, aquí: depende de columnas que no todas las tablas tienen, y una política de alcance mal escrita no se ve como un bug.",
     done: "Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada del módulo.",
     status: "en_curso",
-    note: "23-sep: parte de Nicolás hecha en la rama nicolas/ACC-6-alcance-consultas (en GitHub): scopeFilter() y alcance en las 34 funciones de Campañas, Finanzas y Conexiones. Su migración 0035 ya la tomó CAM-3 en main: hay que renumerarla. Falta el alcance de Ventas, Cotizar y Resumen (Rasheed).",
+    note: "23-sep: scopeFilter() y alcance en las 34 funciones de Campañas, Finanzas y Conexiones en la rama nicolas/ACC-6-alcance-consultas; el cierre de ACC la lleva a main con la migración 0040 (la 0035 la tomó CAM-3). Mientras no entre, un Mánager ve todas las campañas del workspace (la prueba E2E lo salta con este motivo). Falta el alcance de Ventas, Cotizar y Resumen (Rasheed).",
   },
   {
     id: "ACC-7", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-6"],
