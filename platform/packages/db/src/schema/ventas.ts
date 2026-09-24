@@ -319,7 +319,7 @@ export const outboundPolicy = pgTable('outbound_policy', {
   postalAddress: text('postal_address'),
   /** Contrapresión: con más toques en cola, should_pause_outreach dice que se pare. */
   maxPendingTouches: integer('max_pending_touches').default(200).notNull(),
-  /** La ventana laboral local en la que sale un toque (0041 §1), en la zona de la cadencia. */
+  /** La ventana laboral local en la que sale un toque (0051 §1), en la zona de la cadencia. */
   sendWindowStart: localTime('send_window_start').default('09:00').notNull(),
   sendWindowEnd: localTime('send_window_end').default('17:00').notNull(),
 });
@@ -396,12 +396,12 @@ export const outboundTouch = pgTable('outbound_touch', {
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
   /**
-   * La cuenta que envía el toque (0041 §2): la fija el despachador al
+   * La cuenta que envía el toque (0051 §2): la fija el despachador al
    * reclamarlo, y es del mismo workspace y canal (disparador).
    */
   channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
-  /** Cuándo el despachador llamó al proveedor en este intento (0041 §6): sin ella, un reclamo caído nunca salió. */
+  /** Cuándo el despachador llamó al proveedor en este intento (0051 §6): sin ella, un reclamo caído nunca salió. */
   sendStartedAt: timestamptz('send_started_at'),
-  /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0041 §6). */
+  /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0051 §6). */
   unconfirmedAttempt: integer('unconfirmed_attempt'),
 });

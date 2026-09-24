@@ -13,7 +13,9 @@
  * La plaza del tope se reservó al reclamar: todo lo que no sale la
  * devuelve (releaseCaps), salvo un resultado ambiguo, que pudo salir.
  */
-import { findPlaceholders, nextBusinessSlot, nextRetryAt, nextWindowSlot, MAX_SEND_ATTEMPTS, type SendWindow } from '@mc/core';
+import {
+  findPlaceholders, nextBusinessSlot, nextRetryAt, nextWindowSlot, MAX_SEND_ATTEMPTS, MIN_STEP_GAP_MS, type SendWindow,
+} from '@mc/core';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
@@ -34,13 +36,15 @@ export interface SendContext {
   workspaceId: string;
   status: (typeof TOUCH_STATUSES)[number];
   claimedAt: Date | null;
+  /** La hora a la que tocaba (r3): si sale mucho después, los pasos de detrás se corren. */
+  scheduledFor: Date | null;
   channel: DispatchChannel;
   stepType: DispatchableStepType;
   /** La posición del paso en la cadencia (null en un toque suelto): para correr los de detrás. */
   stepDayOffset: number | null;
   stepOrderInDay: number | null;
   attempt: number;
-  /** El intento cuyo resultado no se supo (0041 §6): se comprueba antes de reenviar. */
+  /** El intento cuyo resultado no se supo (0051 §6): se comprueba antes de reenviar. */
   unconfirmedAttempt: number | null;
   subject: string | null;
   body: string;
@@ -80,6 +84,7 @@ interface SendContextRow {
   workspace_id: string;
   status: string;
   claimed_at: unknown;
+  scheduled_for: unknown;
   channel: string;
   step_type: string | null;
   day_offset: number | null;
@@ -123,6 +128,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     workspaceId: text(fn, '$.workspace_id', r.workspace_id),
     status: oneOf(fn, '$.status', r.status, TOUCH_STATUSES),
     claimedAt: toDate(r.claimed_at),
+    scheduledFor: toDate(r.scheduled_for),
     channel,
     stepType: r.step_type === null ? stepTypeForChannel(channel)! : oneOf(fn, '$.step_type', r.step_type, DISPATCHABLE_STEP_TYPES),
     stepDayOffset: r.day_offset === null ? null : int(fn, '$.day_offset', r.day_offset),
@@ -162,12 +168,29 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
   };
 }
 
-/** Relee y bloquea un toque reclamado. null si ya no existe. */
+/**
+ * Relee y bloquea un toque reclamado, y antes su enrolamiento. null si ya
+ * no existe.
+ *
+ * (r3) El enrolamiento se bloquea (FOR NO KEY UPDATE) hasta que la
+ * transacción del envío termina: recordInbound lo pide FOR UPDATE, así que
+ * una respuesta que llega mientras dura la llamada al proveedor espera a
+ * que el envío se registre, y una que llegó antes se ve aquí (replied →
+ * cancel). No es FOR SHARE: el envío después lo actualiza
+ * (advanceEnrollment), y subir de SHARE a UPDATE con una respuesta
+ * esperando es un interbloqueo. La web que pausa una cadencia espera lo
+ * mismo, como mucho el tiempo máximo de una llamada al proveedor.
+ */
 export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<SendContext | null> {
   assertIds('loadSendContext', [touchId]);
+  await tx.query(
+    `SELECT e.id FROM outbound_enrollment e JOIN outbound_touch t ON t.enrollment_id = e.id
+      WHERE t.id = $1::uuid FOR NO KEY UPDATE OF e`,
+    [touchId],
+  );
   const r = (
     await tx.query<SendContextRow>(
-      `SELECT t.id, t.workspace_id, t.status, t.claimed_at, t.channel, st.step_type, st.day_offset, st.order_in_day,
+      `SELECT t.id, t.workspace_id, t.status, t.claimed_at, t.scheduled_for, t.channel, st.step_type, st.day_offset, st.order_in_day,
               t.attempt_count, t.unconfirmed_attempt, t.subject, t.body,
               t.recipient_address::text AS recipient, t.enrollment_id, t.contact_id, t.deal_id,
               c.full_name AS contact_name, co.name AS company_name,
@@ -210,7 +233,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
 }
 
 /**
- * «Voy a llamar al proveedor» (0041 §6), en su propia transacción, justo
+ * «Voy a llamar al proveedor» (0051 §6), en su propia transacción, justo
  * antes de la del envío. Solo si el toque sigue siendo de ESTE reclamo.
  * Devuelve false si ya no lo es (otro lo movió): no se envía.
  */
@@ -280,7 +303,9 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
 
 /** La plaza que el reclamo reservó para este toque. */
 function capsOf(ctx: SendContext) {
-  return ctx.account ? { workspaceId: ctx.workspaceId, accountId: ctx.account.id, channel: ctx.channel, stepType: ctx.stepType } : null;
+  return ctx.account && ctx.claimedAt
+    ? { workspaceId: ctx.workspaceId, accountId: ctx.account.id, channel: ctx.channel, stepType: ctx.stepType, claimedAt: ctx.claimedAt }
+    : null;
 }
 
 async function release(tx: WorkerSql, ctx: SendContext): Promise<void> {
@@ -292,6 +317,13 @@ async function release(tx: WorkerSql, ctx: SendContext): Promise<void> {
  * Aplica una decisión que no es enviar. Todo filtra por el id y por
  * status = 'processing': si otro lo movió, no se toca nada. La plaza del
  * tope vuelve; lo pospuesto arrastra los pasos de detrás.
+ *
+ * (r3) Posponer no gasta un intento: nada llegó al proveedor (la cuenta
+ * no estaba, la cadencia estaba en pausa). attempt_count vuelve a lo que
+ * era antes del reclamo y el enlace de baja de ese intento, que nunca
+ * salió, se borra, como en releaseUnattempted. Así una cuenta caída o un
+ * Gmail sin llaves de la plataforma esperan días sin acercarse a los
+ * cinco intentos.
  */
 export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: SendDecision, now: Date): Promise<void> {
   if (decision.kind === 'send' || decision.kind === 'gone') return;
@@ -305,11 +337,17 @@ export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: S
       break;
     case 'postpone':
       moved = (await tx.query(
-        `UPDATE outbound_touch SET status = 'scheduled', scheduled_for = $2::timestamptz, next_retry_at = NULL
+        `UPDATE outbound_touch
+            SET status = 'scheduled', scheduled_for = $2::timestamptz, next_retry_at = NULL,
+                attempt_count = greatest(attempt_count - 1, 0), claimed_at = NULL
           WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
         [ctx.touchId, decision.until.toISOString()],
       )).rows.length > 0;
       if (moved) {
+        await tx.query(
+          `DELETE FROM outbound_optout_link WHERE touch_id = $1::uuid AND attempt = $2::int AND sent_at IS NULL`,
+          [ctx.touchId, ctx.attempt],
+        );
         await shiftFollowing(tx, { enrollmentId: ctx.enrollmentId, dayOffset: ctx.stepDayOffset, orderInDay: ctx.stepOrderInDay, at: decision.until }, ctx.timeZone, ctx.window);
         if (decision.reason === 'account_unavailable') {
           await notifyAccountDown(tx, { workspaceId: ctx.workspaceId, channel: ctx.channel, waiting: 1, now });
@@ -406,6 +444,15 @@ export async function recordSent(
     await tx.query(`UPDATE outreach_channel_account SET last_ok_at = $2::timestamptz WHERE id = $1::uuid`, [ctx.account.id, now.toISOString()]);
   }
   if (opts.confirmedAttempt !== undefined && opts.confirmedAttempt !== ctx.attempt) await release(tx, ctx);
+  // (r3) Un paso que sale tarde (estuvo retenido o bloqueado días) arrastra
+  // a los de detrás: conservan su separación en días hábiles desde HOY.
+  // Sin esto, el paso 2 ya vencido salía en la corrida siguiente, dos
+  // minutos después del 1. shiftFollowing nunca adelanta nada.
+  if (ctx.scheduledFor && now.getTime() - ctx.scheduledFor.getTime() > MIN_STEP_GAP_MS) {
+    await shiftFollowing(
+      tx, { enrollmentId: ctx.enrollmentId, dayOffset: ctx.stepDayOffset, orderInDay: ctx.stepOrderInDay, at: now }, ctx.timeZone, ctx.window,
+    );
+  }
   if (ctx.enrollmentId) await advanceEnrollment(tx, ctx.enrollmentId, now);
   return true;
 }
@@ -417,8 +464,14 @@ export interface SendFailure {
   /** bounced, invalid_recipient, account_auth, rejected, network, rate_limited… */
   code: string;
   message: string;
-  /** Si la cuenta quedó inservible: needs_reconnect (permiso perdido) o error. */
-  account?: 'needs_reconnect' | 'error';
+  /**
+   * Si la cuenta no sirvió: needs_reconnect (permiso perdido) o error, y
+   * la cuenta cambia de estado; o (r3) unavailable: no se pudo usar por
+   * algo NUESTRO (falta el token en el almacén, faltan las llaves de
+   * Google para renovarlo), y la cuenta no cambia. En los tres casos el
+   * mensaje espera sin gastar intento, con un aviso por canal y día.
+   */
+  account?: 'needs_reconnect' | 'error' | 'unavailable';
   /**
    * La petición pudo llegar al proveedor (un timeout o un corte DESPUÉS de
    * enviarla, o un 2xx ilegible): el mensaje pudo salir. No se reenvía a
@@ -447,12 +500,14 @@ export type FailureOutcome = 'retry' | 'failed' | 'waiting' | 'held' | 'gone';
  *   · otro permanente → failed y aviso.
  */
 export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: SendFailure, now: Date): Promise<FailureOutcome> {
-  if (failure.account && ctx.account) {
+  if (failure.account && ctx.account && failure.account !== 'unavailable') {
     await tx.query(
       `UPDATE outreach_channel_account SET status = $2, last_error_at = $3::timestamptz, last_error = $4
         WHERE id = $1::uuid AND status = 'connected'`,
       [ctx.account.id, failure.account, now.toISOString(), failure.message.slice(0, 500)],
     );
+  }
+  if (failure.account) {
     const until = nextWindowSlot(new Date(now.getTime() + ACCOUNT_WAIT_MS), ctx.timeZone, ctx.window);
     await applyDecision(tx, ctx, { kind: 'postpone', until, reason: 'account_unavailable' }, now);
     return 'waiting';
@@ -491,7 +546,7 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
  * La dirección rebotó o no existe: no se le vuelve a escribir por ESE
  * canal desde este workspace. Se cancela lo pendiente del canal para la
  * ficha, y cada enrolamiento suyo que se quede sin nada vivo termina en
- * 'bounced' (0041 §7). No es una baja (la persona no pidió nada): los
+ * 'bounced' (0051 §7). No es una baja (la persona no pidió nada): los
  * otros canales siguen, y la marca del correo inválido en la ficha es de
  * VEN-15 (contact.email_invalid).
  */

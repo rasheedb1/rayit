@@ -74,7 +74,7 @@ export const CHANNEL_CAP_LIMITS = {
   instagram_dm: { daily: 100, weekly: 700 },
   whatsapp: { daily: 100, weekly: 700 },
 } as const satisfies Record<(typeof OUTBOUND_CHANNELS)[number], { daily: number; weekly: number }>;
-/** 'bounced' (0041 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
+/** 'bounced' (0051 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
@@ -187,7 +187,7 @@ export const OUTREACH_FUNCTIONS = {
   nextBusinessDay: 'next_business_day(timestamp with time zone,text)',
   publicOptout: 'public_optout(text)',
   contactVisibleTo: 'contact_visible_to(uuid,uuid)',
-  releaseCap: 'outbound_counter_release(uuid,uuid,text)',
+  releaseCap: 'outbound_counter_release(uuid,uuid,text,timestamp with time zone)',
 } as const;
 
 // ---------------------------------------------------------------------

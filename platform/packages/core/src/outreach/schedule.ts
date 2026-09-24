@@ -40,7 +40,7 @@ export interface SendWindow {
   end: string;
 }
 
-/** La ventana por defecto (la de outbound_policy.send_window_*, 0041). */
+/** La ventana por defecto (la de outbound_policy.send_window_*, 0051). */
 export const DEFAULT_SEND_WINDOW: SendWindow = { start: '09:00', end: '17:00' };
 
 /** Minutos de dispersión por defecto sobre la hora del paso. */

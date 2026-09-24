@@ -1,5 +1,5 @@
 /**
- * VEN-10 r2 · lo que la migración 0041 le pone al esquema del motor,
+ * VEN-10 r2 · lo que la migración 0051 le pone al esquema del motor,
  * probado contra la base (embebida, o TEST_DATABASE_URL en el CI):
  *
  *   · los avisos de notification son la UNIÓN de las ramas y coinciden

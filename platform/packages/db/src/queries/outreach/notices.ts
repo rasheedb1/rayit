@@ -40,6 +40,8 @@ export const FAILURE_REASON_TEXTS: Record<NoticeLang, Record<string, string>> = 
     max_attempts: 'fallaron los cinco intentos',
     zombie: 'el envío quedó a medias y no se reintenta para no duplicarlo',
     not_configured: 'el canal no está configurado en la plataforma',
+    token_expired: 'el permiso del buzón venció y la plataforma no tiene las llaves de Google para renovarlo',
+    secret_missing: 'no encontramos el permiso guardado de la cuenta',
   },
   en: {
     account_unavailable: 'the channel account is not connected',
@@ -50,6 +52,8 @@ export const FAILURE_REASON_TEXTS: Record<NoticeLang, Record<string, string>> = 
     max_attempts: 'all five attempts failed',
     zombie: 'the send was interrupted and is not retried to avoid a duplicate',
     not_configured: 'the channel is not configured on the platform',
+    token_expired: "the mailbox permission expired and the platform doesn't have the Google keys to renew it",
+    secret_missing: "we couldn't find the account's stored permission",
   },
 };
 

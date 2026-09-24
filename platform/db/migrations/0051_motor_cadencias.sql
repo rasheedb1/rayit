@@ -43,6 +43,8 @@
 --   8. (r2) outbound_counter_release: devolver la plaza de un tope que se
 --      reservó al reclamar y no se gastó.
 --   9. (r2) notification_kind_check con la unión de todos los avisos.
+--  10. (r3) outbound_touch.replies_checked_at: el lector de respuestas
+--      recorre todos los hilos, empezando por el que hace más que no lee.
 --
 -- Idempotente donde se puede (IF NOT EXISTS, ON CONFLICT), como las
 -- anteriores.
@@ -223,7 +225,9 @@ CREATE TRIGGER outbound_touch_workspace_contact
 -- Los dos son del despachador, como las pruebas de envío (0037 §4.2).
 ALTER TABLE outbound_touch
   ADD COLUMN IF NOT EXISTS send_started_at timestamptz,
-  ADD COLUMN IF NOT EXISTS unconfirmed_attempt int CHECK (unconfirmed_attempt BETWEEN 1 AND 20);
+  ADD COLUMN IF NOT EXISTS unconfirmed_attempt int CHECK (unconfirmed_attempt BETWEEN 1 AND 20),
+  -- (r3) cuándo leyó el hilo el lector de respuestas: ver §10.
+  ADD COLUMN IF NOT EXISTS replies_checked_at timestamptz;
 
 CREATE OR REPLACE FUNCTION outbound_touch_dispatch_columns()
 RETURNS trigger
@@ -234,10 +238,12 @@ BEGIN
   IF outreach_is_dispatcher() THEN
     RETURN NEW;
   END IF;
-  IF (TG_OP = 'INSERT' AND (NEW.send_started_at IS NOT NULL OR NEW.unconfirmed_attempt IS NOT NULL))
+  IF (TG_OP = 'INSERT' AND (NEW.send_started_at IS NOT NULL OR NEW.unconfirmed_attempt IS NOT NULL
+                             OR NEW.replies_checked_at IS NOT NULL))
      OR (TG_OP = 'UPDATE' AND (NEW.send_started_at IS DISTINCT FROM OLD.send_started_at
-                               OR NEW.unconfirmed_attempt IS DISTINCT FROM OLD.unconfirmed_attempt)) THEN
-    RAISE EXCEPTION 'send_started_at y unconfirmed_attempt los escribe solo el despachador (rol %).', current_user
+                               OR NEW.unconfirmed_attempt IS DISTINCT FROM OLD.unconfirmed_attempt
+                               OR NEW.replies_checked_at IS DISTINCT FROM OLD.replies_checked_at)) THEN
+    RAISE EXCEPTION 'send_started_at, unconfirmed_attempt y replies_checked_at los escribe solo el despachador (rol %).', current_user
       USING ERRCODE = 'insufficient_privilege',
             HINT = 'Dicen qué llegó al proveedor: la aplicación no los escribe.';
   END IF;
@@ -247,7 +253,7 @@ $$;
 
 DROP TRIGGER IF EXISTS outbound_touch_dispatch_columns ON outbound_touch;
 CREATE TRIGGER outbound_touch_dispatch_columns
-  BEFORE INSERT OR UPDATE OF send_started_at, unconfirmed_attempt ON outbound_touch
+  BEFORE INSERT OR UPDATE OF send_started_at, unconfirmed_attempt, replies_checked_at ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_dispatch_columns();
 
 -- ---------------------------------------------------------------------
@@ -263,38 +269,43 @@ ALTER TABLE outbound_enrollment ADD CONSTRAINT outbound_enrollment_status_check
   CHECK (status IN ('active','paused','completed','replied','opted_out','cooldown','bounced'));
 
 -- ---------------------------------------------------------------------
--- 8 · Devolver una plaza de un tope (r2)
+-- 8 · Devolver una plaza de un tope (r2, r3)
 -- ---------------------------------------------------------------------
 -- El despachador reserva la plaza al reclamar (increment_if_under_cap e
 -- increment_weekly, 0037 §8.3): así dos despachadores no pasan del tope.
 -- Si el toque no sale (se cancela, se pospone, se retiene, falla en
 -- transitorio o se devuelve a la cola sin intentarlo), la plaza vuelve.
--- Nunca baja de cero, y solo toca el día y la semana de HOY en la zona
--- del workspace (lo que se reservó otro día ya no cuenta).
-CREATE OR REPLACE FUNCTION outbound_counter_release(p_workspace uuid, p_account uuid, p_action_type text)
+-- Nunca baja de cero.
+--
+-- (r3) Vuelve al día y a la semana en que se RESERVÓ (p_claimed_at, en la
+-- zona del workspace), no a los de hoy: un zombi reclamado anoche y
+-- rescatado esta mañana devolvía una plaza de hoy que nunca se gastó, y
+-- el tope diario se pasaba en uno. Lo de un día ya cerrado se devuelve a
+-- ese día, donde ya no cambia nada.
+CREATE OR REPLACE FUNCTION outbound_counter_release(p_workspace uuid, p_account uuid, p_action_type text, p_claimed_at timestamptz)
 RETURNS void
 LANGUAGE plpgsql
 VOLATILE
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  hoy date := outreach_local_date(p_workspace, now());
-  lunes date := hoy - (extract(isodow FROM hoy)::int - 1);
+  dia date := outreach_local_date(p_workspace, p_claimed_at);
+  lunes date := dia - (extract(isodow FROM dia)::int - 1);
 BEGIN
   UPDATE outbound_counter c
      SET count = c.count - 1, updated_at = now()
    WHERE c.workspace_id = p_workspace
      AND c.channel_account_id IS NOT DISTINCT FROM p_account
      AND c.action_type = p_action_type
-     AND ((c.period = 'day' AND c.period_start = hoy) OR (c.period = 'week' AND c.period_start = lunes))
+     AND ((c.period = 'day' AND c.period_start = dia) OR (c.period = 'week' AND c.period_start = lunes))
      AND c.count > 0;
 END;
 $$;
-REVOKE ALL ON FUNCTION outbound_counter_release(uuid, uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION outbound_counter_release(uuid, uuid, text) TO mc_worker;
-COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text) IS
-  'Devuelve la plaza de hoy y de esta semana de un tope (cuenta, o workspace con p_account NULL) que el '
-  'despachador reservó al reclamar y no gastó (0051 §8).';
+REVOKE ALL ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) TO mc_worker;
+COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) IS
+  'Devuelve la plaza del día y de la semana del RECLAMO (p_claimed_at, zona del workspace) de un tope (cuenta, o '
+  'workspace con p_account NULL) que el despachador reservó y no gastó (0051 §8).';
 
 -- ---------------------------------------------------------------------
 -- 9 · Todos los avisos (r2)
@@ -313,3 +324,18 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'outreach_bounce_rate','outreach_no_sends','outreach_queue_stuck',
    'outreach_account_down','outreach_llm_budget',
    'outreach_failed','outreach_reply'));
+
+-- ---------------------------------------------------------------------
+-- 10 · Cuándo se leyó por última vez un hilo (r3)
+-- ---------------------------------------------------------------------
+-- El lector de respuestas (outbound.replies) leía siempre los mismos 200
+-- hilos: los primeros por thread_ref. Un creador con más hilos abiertos
+-- no se enteraba nunca de las respuestas del resto, y la cadencia seguía
+-- escribiendo a quien ya había respondido (el error número uno de Chief,
+-- docs/ventas-outreach.md §9). Ahora cada corrida lee primero lo que
+-- nunca se leyó y después lo que hace más tiempo que no se lee, y anota
+-- la hora en el último toque enviado del hilo. Es del despachador, como
+-- las pruebas de envío (§6).
+CREATE INDEX IF NOT EXISTS outbound_touch_open_threads_idx
+  ON outbound_touch (replies_checked_at NULLS FIRST, sent_at DESC)
+  WHERE status = 'sent' AND thread_ref IS NOT NULL;

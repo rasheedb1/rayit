@@ -9,7 +9,7 @@
  * Solo fichas del workspace de la secuencia (r2): la web pasa por la RLS,
  * pero el worker corre con BYPASSRLS, y sin el filtro una secuencia de A
  * enrolaba la ficha privada de B y el despachador le escribía desde el
- * Gmail de A. La regla es contact_visible_to (0041 §5), la misma que
+ * Gmail de A. La regla es contact_visible_to (0051 §5), la misma que
  * exigen los disparadores de la base: aquí para decir not_found, allá
  * para que nadie se la salte.
  */

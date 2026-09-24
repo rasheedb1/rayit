@@ -17,7 +17,6 @@
  * pruebas avanzan uno falso. Lo único que no se puede adelantar son los
  * contadores de 0037, que cuentan el día con now() de la base.
  */
-import { createHash, randomBytes } from 'node:crypto';
 import { DEFAULT_SEND_WINDOW, shiftFollowingSteps, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';
 import { OutreachShapeError } from '../outreach.ts';
@@ -44,13 +43,6 @@ export const DISPATCH_BATCH_SIZE = 50;
 export const ZOMBIE_AFTER_MINUTES = 5;
 /** Cuánto espera un toque cuya cuenta no está conectada antes de volver a mirar (dentro de la ventana). */
 export const ACCOUNT_WAIT_MS = 60 * 60 * 1000;
-
-/**
- * Tope diario de una cuenta que no tiene el suyo (daily_cap NULL): el
- * extremo bajo de §5.1, muy por debajo del techo del canal. La semana es
- * cinco días de ese tope.
- */
-export const DEFAULT_ACCOUNT_DAILY_CAP: Record<DispatchChannel, number> = { email: 50, linkedin: 20, instagram_dm: 20 };
 
 /** La acción que cuenta en outbound_counter por cada tipo de paso. */
 export function actionTypeFor(stepType: string | null, channel: string): string {
@@ -141,14 +133,8 @@ export function int(fn: string, path: string, value: unknown): number {
 }
 
 // ---------------------------------------------------------------------
-// Enlace de baja y dirección
+// Dirección
 // ---------------------------------------------------------------------
-
-/** El token del enlace de baja y su sha256 (lo único que guarda la base). */
-export function newOptoutToken(): { token: string; hash: string } {
-  const token = randomBytes(32).toString('base64url');
-  return { token, hash: createHash('sha256').update(token).digest('hex') };
-}
 
 /** La dirección a la que sale un toque según su canal, o null si la ficha no la tiene. */
 export function recipientFor(channel: string, c: { email: string | null; linkedin_url: string | null; instagram_handle: string | null }): string | null {
@@ -160,7 +146,7 @@ export function recipientFor(channel: string, c: { email: string | null; linkedi
 }
 
 // ---------------------------------------------------------------------
-// Topes: devolver la plaza que no se gastó (0041 §8)
+// Topes: devolver la plaza que no se gastó (0051 §8)
 // ---------------------------------------------------------------------
 
 /** Lo que el reclamo reservó para un toque: la plaza de su cuenta y, si es correo, la del workspace. */
@@ -169,6 +155,8 @@ export interface CapReservation {
   accountId: string;
   channel: string;
   stepType: string | null;
+  /** Cuándo se reclamó (r3): la plaza vuelve al día y a la semana de ESE reclamo, en la zona del workspace. */
+  claimedAt: Date;
 }
 
 /**
@@ -178,9 +166,10 @@ export interface CapReservation {
  * send_started_at) NO la devuelve: la plaza protege la cuenta.
  */
 export async function releaseCaps(tx: WorkerSql, r: CapReservation): Promise<void> {
-  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3)`, [r.workspaceId, r.accountId, actionTypeFor(r.stepType, r.channel)]);
+  const at = r.claimedAt.toISOString();
+  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3, $4::timestamptz)`, [r.workspaceId, r.accountId, actionTypeFor(r.stepType, r.channel), at]);
   if (r.channel === 'email') {
-    await tx.query(`SELECT outbound_counter_release($1::uuid, NULL, 'email')`, [r.workspaceId]);
+    await tx.query(`SELECT outbound_counter_release($1::uuid, NULL, 'email', $2::timestamptz)`, [r.workspaceId, at]);
   }
 }
 

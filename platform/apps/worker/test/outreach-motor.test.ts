@@ -140,7 +140,7 @@ after(async () => {
   await db?.close();
 });
 
-test('los dos jobs están registrados con su cron (0041)', async () => {
+test('los dos jobs están registrados con su cron (0051)', async () => {
   for (const id of [DISPATCH_JOB_ID, REPLIES_JOB_ID]) assert.ok(allJobs.some((j) => j.id === id), id);
   const { rows } = await db.raw.query<{ id: string; default_cron: string }>(
     `SELECT id, default_cron FROM job_definition WHERE id IN ('outbound.dispatch', 'outbound.replies') ORDER BY id`,

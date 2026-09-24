@@ -3,11 +3,12 @@
  *
  * Las consultas del motor (@mc/db/queries/outreach) piden un WorkerSql.
  * El job lo saca de ctx.db, que ya corre como mc_worker (SET ROLE en
- * Postgres, SET LOCAL ROLE en el embebido); la demo lo saca de asWorker
- * de un cliente de @mc/db. Las dos cosas se ven igual desde aquí.
+ * Postgres, SET LOCAL ROLE en el embebido), con workerSqlFrom de
+ * @mc/db/worker (una ruta que la web no puede importar); la demo lo saca
+ * de asWorker de un cliente de @mc/db. Las dos cosas se ven igual desde aquí.
  */
-import type { SqlExecutor, WorkerSql } from '@mc/db';
-import { workerSqlFrom } from '@mc/db/client';
+import type { WorkerSql } from '@mc/db';
+import { workerSqlFrom } from '@mc/db/worker';
 import type { JobDatabase } from '../../runner/db.ts';
 
 export interface MotorDb {
@@ -17,7 +18,7 @@ export interface MotorDb {
 /** Desde la base de un job (ctx.db). */
 export function motorDbFromJob(db: JobDatabase): MotorDb {
   return {
-    transaction: (fn) => db.transaction((q) => fn(workerSqlFrom(q as unknown as SqlExecutor))),
+    transaction: (fn) => db.transaction((q) => fn(workerSqlFrom(q))),
   };
 }
 

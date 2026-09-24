@@ -2,7 +2,9 @@
  * Outreach · los hilos abiertos y las respuestas (VEN-10).
  *
  * listOpenThreads da los hilos a los que se escribió en los últimos
- * treinta días; recordInbound registra lo que llegó y su efecto:
+ * treinta días, primero los que nunca se leyeron y después los que hace
+ * más que no se leen (r3: antes siempre los mismos 200); markThreadsChecked
+ * anota la lectura. recordInbound registra lo que llegó y su efecto:
  *   · pide la baja (detectOptOut, catorce expresiones) → la ficha, las
  *     fichas con su correo y todo lo suyo pendiente, en cualquier
  *     secuencia, como public_optout (r2);
@@ -11,7 +13,11 @@
  *   · si ya había respondido, el mensaje se registra y solo se mira la
  *     baja (r2): una marca que respondió y luego escribe «no nos escriban
  *     más» queda de baja en todos los canales, sin un segundo aviso de
- *     «respondió».
+ *     «respondió»;
+ *   · una respuesta automática (fuera de oficina: Auto-Submitted,
+ *     X-Autoreply, Precedence: auto_reply) se guarda sin cancelar, sin
+ *     avisar y sin contar como respuesta (r3): la marca solo estaba de
+ *     vacaciones. Queda sin intención para el clasificador de VEN-14.
  */
 import { detectOptOut } from '@mc/core';
 import type { WorkerSql } from '../../client.ts';
@@ -44,6 +50,8 @@ export interface OpenThread {
   account: { id: string; provider: SenderProvider; providerAccountId: string; secretRef: string | null; status: string };
   /** Los ids de proveedor que ya están en outbound_message: lo nuestro y lo ya leído. */
   knownMessageIds: string[];
+  /** Cuándo lo leyó por última vez el lector de respuestas (null: nunca). */
+  checkedAt: Date | null;
 }
 
 interface OpenThreadRow {
@@ -63,6 +71,7 @@ interface OpenThreadRow {
   secret_ref: string | null;
   account_status: string;
   known: unknown;
+  replies_checked_at: unknown;
 }
 
 function parseOpenThread(r: OpenThreadRow, i: number): OpenThread {
@@ -91,8 +100,12 @@ function parseOpenThread(r: OpenThreadRow, i: number): OpenThread {
       status: text(fn, `$[${i}].account_status`, r.account_status),
     },
     knownMessageIds: known as string[],
+    checkedAt: r.replies_checked_at === null ? null : date(fn, `$[${i}].replies_checked_at`, r.replies_checked_at),
   };
 }
+
+/** Cuántos hilos da como mucho una lectura (el lector pide páginas de este tamaño). */
+export const OPEN_THREADS_PAGE = 200;
 
 /**
  * Los hilos abiertos: toques enviados con hilo en los últimos `sinceDays`
@@ -100,40 +113,77 @@ function parseOpenThread(r: OpenThreadRow, i: number): OpenThread {
  * (READABLE_ENROLLMENT_STATUSES: los que ya respondieron o completaron
  * también, porque la baja puede llegar en el segundo mensaje), por la
  * cuenta que los envió. Uno por hilo, con su último toque.
+ *
+ * El orden es el turno (r3): primero los que nunca se leyeron, después
+ * los que hace más que no se leen (outbound_touch.replies_checked_at del
+ * último toque, 0051 §10), y a igualdad lo enviado más reciente. Con
+ * markThreadsChecked después de cada lectura, dos corridas de 200 leen
+ * 400 hilos distintos, y ninguno se queda sin leer más de
+ * ceil(hilos / 200) corridas. `excludeTouchIds` deja fuera lo ya leído
+ * en esta misma corrida (la página siguiente).
  */
 export async function listOpenThreads(
   tx: WorkerSql,
-  opts: { now: Date; sinceDays?: number; limit?: number; workspaceId?: string },
+  opts: { now: Date; sinceDays?: number; limit?: number; workspaceId?: string; excludeTouchIds?: readonly string[] },
 ): Promise<OpenThread[]> {
   if (opts.workspaceId) assertIds('listOpenThreads', [opts.workspaceId]);
+  const exclude = [...(opts.excludeTouchIds ?? [])];
+  assertIds('listOpenThreads', exclude);
   const rows = (
     await tx.query<OpenThreadRow>(
-      `SELECT DISTINCT ON (t.workspace_id, t.channel, t.thread_ref)
-              t.workspace_id, t.enrollment_id, t.contact_id, t.deal_id, t.channel, t.thread_ref, t.id AS touch_id, t.sent_at,
-              t.recipient_address::text AS recipient,
+      `WITH hilos AS (
+         SELECT DISTINCT ON (t.workspace_id, t.channel, t.thread_ref)
+                t.workspace_id, t.enrollment_id, t.contact_id, t.deal_id, t.channel, t.thread_ref, t.id AS touch_id,
+                t.sent_at, t.recipient_address::text AS recipient, t.replies_checked_at, t.channel_account_id
+           FROM outbound_touch t
+           LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
+          WHERE t.status = 'sent' AND t.thread_ref IS NOT NULL AND t.channel_account_id IS NOT NULL
+            AND t.sent_at >= $1::timestamptz - make_interval(days => $2::int)
+            AND (e.id IS NULL OR e.status = ANY($5::text[]))
+            AND ($3::uuid IS NULL OR t.workspace_id = $3::uuid)
+          ORDER BY t.workspace_id, t.channel, t.thread_ref, t.sent_at DESC
+       ),
+       turno AS (
+         SELECT * FROM hilos
+          WHERE NOT (touch_id = ANY($6::uuid[]))
+          ORDER BY replies_checked_at NULLS FIRST, sent_at DESC, touch_id
+          LIMIT $4
+       )
+       SELECT h.workspace_id, h.enrollment_id, h.contact_id, h.deal_id, h.channel, h.thread_ref, h.touch_id, h.sent_at,
+              h.recipient, h.replies_checked_at,
               (SELECT min(x.sent_at) FROM outbound_touch x
-                WHERE x.workspace_id = t.workspace_id AND x.channel = t.channel AND x.thread_ref = t.thread_ref
+                WHERE x.workspace_id = h.workspace_id AND x.channel = h.channel AND x.thread_ref = h.thread_ref
                   AND x.status = 'sent') AS first_sent_at,
               a.id AS account_id, a.provider, a.provider_account_id, a.secret_ref, a.status AS account_status,
               coalesce((SELECT array_agg(m.provider_message_id) FROM outbound_message m
-                         WHERE m.workspace_id = t.workspace_id AND m.channel = t.channel AND m.thread_ref = t.thread_ref
+                         WHERE m.workspace_id = h.workspace_id AND m.channel = h.channel AND m.thread_ref = h.thread_ref
                            AND m.provider_message_id IS NOT NULL), '{}') AS known
-         FROM outbound_touch t
-         JOIN outreach_channel_account a ON a.id = t.channel_account_id
-         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
-        WHERE t.status = 'sent' AND t.thread_ref IS NOT NULL
-          AND t.sent_at >= $1::timestamptz - make_interval(days => $2::int)
-          AND (e.id IS NULL OR e.status = ANY($5::text[]))
-          AND ($3::uuid IS NULL OR t.workspace_id = $3::uuid)
-        ORDER BY t.workspace_id, t.channel, t.thread_ref, t.sent_at DESC
-        LIMIT $4`,
+         FROM turno h
+         JOIN outreach_channel_account a ON a.id = h.channel_account_id
+        ORDER BY h.replies_checked_at NULLS FIRST, h.sent_at DESC, h.touch_id`,
       [
-        opts.now.toISOString(), opts.sinceDays ?? 30, opts.workspaceId ?? null, Math.max(1, Math.min(opts.limit ?? 200, 2000)),
-        [...READABLE_ENROLLMENT_STATUSES],
+        opts.now.toISOString(), opts.sinceDays ?? 30, opts.workspaceId ?? null,
+        Math.max(1, Math.min(opts.limit ?? OPEN_THREADS_PAGE, 2000)), [...READABLE_ENROLLMENT_STATUSES], exclude,
       ],
     )
   ).rows;
   return rows.map(parseOpenThread);
+}
+
+/**
+ * Anota que el lector miró estos hilos (por su último toque): pasan al
+ * final del turno (0051 §10). Se anota también lo que no se pudo leer
+ * (cuenta caída, error del proveedor): si no, un buzón roto se quedaría
+ * delante para siempre y tapaba a los demás.
+ */
+export async function markThreadsChecked(tx: WorkerSql, touchIds: readonly string[], now: Date): Promise<number> {
+  if (touchIds.length === 0) return 0;
+  assertIds('markThreadsChecked', touchIds);
+  const r = await tx.query(
+    `UPDATE outbound_touch SET replies_checked_at = $2::timestamptz WHERE id = ANY($1::uuid[]) AND status = 'sent' RETURNING id`,
+    [[...touchIds], now.toISOString()],
+  );
+  return r.rows.length;
 }
 
 /** Un mensaje que llegó a un hilo abierto, como lo entrega el lector del canal. */
@@ -145,6 +195,12 @@ export interface InboundMessage {
   subject?: string | null;
   body: string;
   occurredAt: Date;
+  /**
+   * Una respuesta automática (r3): fuera de oficina, Auto-Submitted
+   * distinto de «no», X-Autoreply, Precedence: auto_reply. La lee el
+   * adaptador del canal de las cabeceras.
+   */
+  automatic?: boolean;
 }
 
 export interface InboundResult {
@@ -156,6 +212,8 @@ export interface InboundResult {
   canceled: string[];
   /** Si dejó un aviso (una baja, o la PRIMERA respuesta de una cadencia viva). */
   notified: boolean;
+  /** Era una respuesta automática: se guardó y nada más. */
+  automatic: boolean;
 }
 
 /**
@@ -254,7 +312,10 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
       ],
     )
   ).rows[0];
-  if (!inserted) return { isNew: false, optOut: false, optOutRule: null, canceled: [], notified: false };
+  if (!inserted) return { isNew: false, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: false };
+  // Un «estoy de vacaciones hasta el lunes» no es una respuesta: ni cancela,
+  // ni avisa, ni marca replied_at (el embudo de VEN-16 lo contaría).
+  if (msg.automatic) return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: true };
 
   const firstReply = (
     await tx.query(
@@ -271,18 +332,18 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
     const wasOut = (await tx.query<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = $1::uuid`, [thread.contactId])).rows[0]?.opted_out === true;
     const canceled = await applyContactOptOut(tx, thread.contactId, `reply:${verdict.ruleId}`, now);
     if (!wasOut) await notifyInbound(tx, thread, inserted.id, 'optout', now);
-    return { isNew: true, optOut: true, optOutRule: verdict.ruleId, canceled, notified: !wasOut };
+    return { isNew: true, optOut: true, optOutRule: verdict.ruleId, canceled, notified: !wasOut, automatic: false };
   }
   if (thread.enrollmentId) {
     // Una cadencia viva, o que ya había completado sus pasos: esta es SU respuesta.
     if (enrollmentStatus && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(enrollmentStatus) || enrollmentStatus === 'completed')) {
       const canceled = await markEnrollmentReplied(tx, thread.enrollmentId, msg.occurredAt);
       await notifyInbound(tx, thread, inserted.id, 'reply', now);
-      return { isNew: true, optOut: false, optOutRule: null, canceled, notified: true };
+      return { isNew: true, optOut: false, optOutRule: null, canceled, notified: true, automatic: false };
     }
     // Ya había respondido: el mensaje queda en la conversación, sin otro aviso.
-    return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: false };
+    return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: false };
   }
   if (firstReply) await notifyInbound(tx, thread, inserted.id, 'reply', now);
-  return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: firstReply };
+  return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: firstReply, automatic: false };
 }

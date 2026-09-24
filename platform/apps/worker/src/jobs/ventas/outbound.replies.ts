@@ -1,7 +1,7 @@
 /**
  * outbound.replies · las respuestas de los hilos abiertos (VEN-10).
  *
- * Cada cinco minutos (0041), como respaldo del webhook de Unipile y del
+ * Cada cinco minutos (0051), como respaldo del webhook de Unipile y del
  * aviso de Gmail: lee los hilos a los que se escribió en los últimos
  * treinta días (también los de cadencias que ya respondieron o
  * completaron: la baja puede llegar en el segundo mensaje), pide a cada

@@ -10,7 +10,8 @@
  *      enrolamientos y secuencias activas, sin disyuntor abierto, y sin
  *      un paso ANTERIOR del mismo enrolamiento que todavía no salió
  *      (scheduled, processing o held: r2, el «como te comenté ayer» sobre
- *      un correo que no salió). FOR UPDATE SKIP LOCKED: dos despachadores
+ *      un correo que no salió; y r3, un borrador de un paso enviable, que
+ *      espera al generador). FOR UPDATE SKIP LOCKED: dos despachadores
  *      no toman el mismo;
  *   3. por cada uno, en este orden, sin gastar un intento:
  *      · fuera de la ventana laboral o en fin de semana (un reintento, un
@@ -19,8 +20,9 @@
  *      · sin cuenta conectada del canal → espera una hora dentro de la
  *        ventana, con UN aviso por canal y día (r2): al reconectar sale
  *        solo;
- *      · un tope lleno (el de la cuenta con calentamiento, el semanal o el
- *        diario de correos del workspace) → al siguiente día hábil, y los
+ *      · un tope lleno (el de la cuenta según outreach_channel_account_limits
+ *        con la curva de calentamiento de VEN-15, el semanal o el diario
+ *        de correos del workspace) → al siguiente día hábil, y los
  *        pasos de detrás se corren con él;
  *   4. pasa los que quedan a processing con UPDATE … WHERE status =
  *      'scheduled' … RETURNING: hora del reclamo, intento, dirección y
@@ -31,16 +33,15 @@
  * cola con releaseUnattempted; un reclamo que se cayó sin llegar al
  * proveedor, con rescueZombies.
  */
-import {
-  isInsideWindow, nextBusinessSlot, nextWindowSlot, warmupDailyCap, type SendWindow,
-} from '@mc/core';
+import { isInsideWindow, nextBusinessSlot, nextWindowSlot, type SendWindow } from '@mc/core';
+import { createOptoutToken, optoutTokenHash, warmupDailyLimit, warmupDay } from '@mc/core/outreach/deliverability';
 import type { WorkerSql } from '../../client.ts';
 import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
-  ACCOUNT_WAIT_MS, actionTypeFor, assertIds, date, DEFAULT_ACCOUNT_DAILY_CAP, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
-  DISPATCHABLE_STEP_TYPES, int, newOptoutToken, oneOf, recipientFor, releaseCaps, shiftFollowing, stepTypeForChannel, text,
+  ACCOUNT_WAIT_MS, actionTypeFor, assertIds, date, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
+  DISPATCHABLE_STEP_TYPES, int, oneOf, recipientFor, releaseCaps, shiftFollowing, stepTypeForChannel, text,
   textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
 } from './shared.ts';
 
@@ -104,6 +105,7 @@ interface CandidateRow {
   w_start: string | null;
   w_end: string | null;
   tz: string;
+  ws_tz: string;
 }
 
 interface Candidate {
@@ -120,6 +122,8 @@ interface Candidate {
   warmupDays: number;
   window: SendWindow;
   timeZone: string;
+  /** La zona del workspace: la de los contadores y la del calentamiento (VEN-15 cuenta sus días ahí). */
+  workspaceTimeZone: string;
 }
 
 function parseCandidate(r: CandidateRow, i: number): Candidate {
@@ -140,6 +144,7 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
     warmupDays: int(fn, `$[${i}].warmup_days`, r.warmup_days),
     window: windowOf(r.w_start, r.w_end),
     timeZone: text(fn, `$[${i}].tz`, r.tz),
+    workspaceTimeZone: text(fn, `$[${i}].ws_tz`, r.ws_tz),
   };
 }
 
@@ -160,6 +165,28 @@ async function moveScheduled(tx: WorkerSql, c: Candidate, until: Date): Promise<
     [c.id, until.toISOString()],
   );
   await shiftFollowing(tx, { enrollmentId: c.enrollmentId, dayOffset: c.dayOffset, orderInDay: c.orderInDay, at: until }, c.timeZone, c.window);
+}
+
+/**
+ * El tope diario de una cuenta HOY: el que rige (outreach_channel_account_limits)
+ * pasado por la curva de calentamiento de VEN-15 (warmupDailyLimit), con
+ * el día contado desde warmup_started_at en la zona del workspace. Es la
+ * misma curva que pinta /ventas/politica: una sola regla para la pantalla
+ * y el despachador. Sin warmup_started_at, sin calentamiento.
+ */
+export function accountDailyCap(input: {
+  effectiveDaily: number;
+  warmupStartedAt: Date | null;
+  warmupDays: number;
+  now: Date;
+  timeZone: string;
+}): number {
+  if (!input.warmupStartedAt) return Math.max(0, input.effectiveDaily);
+  return warmupDailyLimit({
+    day: warmupDay(input.warmupStartedAt, input.now, input.timeZone),
+    policyLimit: input.effectiveDaily,
+    warmupDays: input.warmupDays,
+  });
 }
 
 /** El reclamo del despachador (ver la cabecera). */
@@ -207,7 +234,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
               st.step_type, st.day_offset, st.order_in_day,
               c.email::text AS email, c.linkedin_url, c.instagram_handle,
               p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
-              coalesce(s.timezone, w.timezone) AS tz
+              coalesce(s.timezone, w.timezone) AS tz, w.timezone AS ws_tz
          FROM outbound_touch t
          JOIN outbound_policy p ON p.workspace_id = t.workspace_id AND p.enabled
          JOIN workspace w ON w.id = t.workspace_id
@@ -226,11 +253,15 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
                    AND b.step_type = coalesce(st.step_type, CASE t.channel WHEN 'email' THEN 'email'
                                                                      WHEN 'linkedin' THEN 'linkedin_message'
                                                                      ELSE t.channel END))
-          -- Un paso no sale mientras uno ANTERIOR de su enrolamiento siga en la cola.
+          -- Un paso no sale mientras uno ANTERIOR de su enrolamiento siga en la cola:
+          -- programado, reclamado, retenido, o (r3) un borrador de un paso que el
+          -- despachador envía (el correo que espera al generador de VEN-12). Un
+          -- borrador de un paso manual (un «me gusta», una tarea) no frena a nadie.
           AND NOT EXISTS (
                 SELECT 1 FROM outbound_touch pt JOIN outbound_step ps ON ps.id = pt.step_id
                  WHERE pt.enrollment_id = t.enrollment_id AND pt.id <> t.id
-                   AND pt.status IN ('scheduled', 'processing', 'held')
+                   AND (pt.status IN ('scheduled', 'processing', 'held')
+                        OR (pt.status = 'draft' AND ps.step_type = ANY($4::text[])))
                    AND (ps.day_offset, ps.order_in_day) < (st.day_offset, st.order_in_day))
         ORDER BY coalesce(t.next_retry_at, t.scheduled_for), t.id
         LIMIT $5
@@ -255,12 +286,15 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       report.outsideWindow.push({ touchId: c.id, until });
       continue;
     }
+    // El tope de la cuenta es el que rige hoy según outreach_channel_account_limits
+    // (VEN-9, 0040): el suyo, nunca por encima del del proveedor ni del de la política.
     const acct = (
-      await tx.query<{ id: string; daily_cap: number | null; weekly_cap: number | null; warmup_started_at: unknown }>(
-        `SELECT id, daily_cap, weekly_cap, warmup_started_at FROM outreach_channel_account
-          WHERE workspace_id = $1::uuid AND channel = $2 AND status = 'connected'
-            AND ($3::uuid IS NULL OR id = $3::uuid)
-          ORDER BY created_at, id LIMIT 1`,
+      await tx.query<{ id: string; effective_daily: number; effective_weekly: number; warmup_started_at: unknown }>(
+        `SELECT a.id, l.effective_daily, l.effective_weekly, a.warmup_started_at
+           FROM outreach_channel_account a JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
+          WHERE a.workspace_id = $1::uuid AND a.channel = $2 AND a.status = 'connected'
+            AND ($3::uuid IS NULL OR a.id = $3::uuid)
+          ORDER BY a.created_at, a.id LIMIT 1`,
         [c.workspaceId, c.channel, c.channelAccountId],
       )
     ).rows[0];
@@ -276,16 +310,16 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       waiting.set(key, w);
       continue;
     }
-    const fallback = DEFAULT_ACCOUNT_DAILY_CAP[c.channel];
-    const dayCap = warmupDailyCap({
-      cap: acct.daily_cap ?? fallback, warmupStartedAt: toDate(acct.warmup_started_at), warmupDays: c.warmupDays, now,
+    const dayCap = accountDailyCap({
+      effectiveDaily: int('claimDueTouches', 'effective_daily', acct.effective_daily),
+      warmupStartedAt: toDate(acct.warmup_started_at), warmupDays: c.warmupDays, now, timeZone: c.workspaceTimeZone,
     });
     const action = actionTypeFor(c.stepType, c.channel);
     await tx.query('SAVEPOINT motor_cap');
     let cap: ClaimReport['rescheduled'][number]['cap'] | null = null;
     if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap }))) {
       cap = 'account_day';
-    } else if (!(await incrementWeekly(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: acct.weekly_cap ?? fallback * 5 }))) {
+    } else if (!(await incrementWeekly(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: int('claimDueTouches', 'effective_weekly', acct.effective_weekly) }))) {
       cap = 'account_week';
     } else if (c.channel === 'email'
       && !(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, actionType: 'email', cap: c.maxEmailsPerDay }))) {
@@ -323,7 +357,8 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     const attempt = int('claimDueTouches', 'attempt_count', row.attempt_count);
     let optoutToken: string | null = null;
     if (m.c.channel === 'email') {
-      const { token, hash } = newOptoutToken();
+      const token = createOptoutToken();
+      const hash = optoutTokenHash(token);
       await tx.query(
         `INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at)
          VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5::int, $6, $7::timestamptz)`,
@@ -371,7 +406,9 @@ export async function releaseUnattempted(tx: WorkerSql, touches: readonly Claime
     [mine.map((t) => t.id), mine.map((t) => t.attempt)],
   );
   for (const t of mine) {
-    if (t.accountId) await releaseCaps(tx, { workspaceId: t.workspaceId, accountId: t.accountId, channel: t.channel, stepType: t.stepType });
+    if (t.accountId) {
+      await releaseCaps(tx, { workspaceId: t.workspaceId, accountId: t.accountId, channel: t.channel, stepType: t.stepType, claimedAt: t.claimedAt });
+    }
   }
   return back;
 }

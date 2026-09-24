@@ -1,7 +1,7 @@
 /**
  * outbound.dispatch · el despachador de cadencias (VEN-10).
  *
- * Cada dos minutos (0041), en cuatro tiempos:
+ * Cada dos minutos (0051), en cuatro tiempos:
  *
  *   1. Zombis. Lo que lleva más de cinco minutos en processing: si nunca
  *      llegó al proveedor (sin send_started_at), vuelve a la cola; si

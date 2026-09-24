@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
+    "./worker": "./src/worker.ts",
     "./schema": "./src/schema/index.ts",
     "./embedded": "./src/embedded.ts",
     "./pglite": "./src/pglite.ts",
