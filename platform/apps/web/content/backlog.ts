@@ -406,8 +406,8 @@ export const STORIES: readonly Story[] = [
     title: "Motor de cadencias",
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
-    status: "en_curso",
-    note: "Ronda 4 (24 de septiembre). Hecho y probado sin red: enrolar, reclamar, despachar, reintentar, rebotes (síncronos y del buzón de Gmail), respuestas con un solo detector para el webhook y el job, topes por cuenta y avisos de lo retenido; contra Postgres 16 con los roles reales, job:dispatch con la política apagada no reclamó nada y encendida registró el envío en outbound_touch (salidas en docs/ventas-outreach.md §5.2). Falta la integración: aplicar hasta 0051 en Supabase, dar GRANT mc_worker TO mc_migrator y repetir las dos corridas allí.",
+    status: "bloqueada",
+    note: "Ronda 5 (24 de septiembre). Hecho y probado sin red, y bloqueada solo por la integración: la baja por respuesta se queda en su workspace por las dos puertas, un tercero en copia no da de baja, se aplican el tope y la separación de la marca, la revisión humana retiene y se aprueba en la ficha («Mensajes de la cadencia»), ritmo por hora de cada cuenta (0052), horario de envío en /ventas/politica. Falta: mezclar main, correr scripts/renumerar-outreach.sh (0034-0040 pasan a 0043-0049), aplicar hasta 0052 en Supabase, GRANT mc_worker TO mc_migrator y las dos corridas de job:dispatch con --canal-falso en el workspace de la demo (docs/ventas-outreach.md §5.2, ronda 5); pegar aquí las salidas y pasarla a hecho.",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
