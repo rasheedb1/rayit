@@ -206,12 +206,20 @@ probar en vistas previas.
 uno solo, el de la demo (`00000002-0000-4000-8000-000000000001`, slug
 `laura-cocina-facil`), que tiene @selvathegolden y cuatro filas
 **sembradas** (instagram, tiktok, youtube y facebook de «Laura»): esas
-cuatro no son cuentas reales y no sirven para comprobar nada. Plantilla:
+cuatro no son cuentas reales y no sirven para comprobar nada. Plantilla,
+en **dos sentencias** (la primera fija el workspace para la sesión, la
+segunda consulta):
 
 ```bash
 cd /Users/nicolasduarte/Documents/influ/rayit-deploy/platform
-make db.sql Q="with ws as (select set_config('app.workspace_id','00000002-0000-4000-8000-000000000001',true)) <SELECT> "
+make db.sql Q="select set_config('app.workspace_id','00000002-0000-4000-8000-000000000001',false); <SELECT>"
 ```
+
+Por qué no el `with ws as (select set_config(…)) … from tabla` de la
+primera versión: Postgres no garantiza que evalúe el CTE antes de que la
+política RLS lea el ajuste (`social_connection` tiene `FORCE ROW LEVEL
+SECURITY`). El 24-sep devolvió filas en las consultas de esta tabla,
+pero depende del plan; con dos sentencias no hay orden que adivinar.
 
 | | **Instagram por @** (CON-10, CON-5) | **YouTube por @** (CON-10, CON-5) | **YouTube autorizado** (CON-8) | **TikTok por proveedor** (CON-12, opcional) |
 |---|---|---|---|---|
@@ -220,7 +228,7 @@ make db.sql Q="with ws as (select set_config('app.workspace_id','00000002-0000-4
 | **Trámite de plataforma (CON-9, Rasheed)** | Ninguno | Ninguno | **Verificación de la pantalla de consentimiento de Google** (los dos scopes son *sensibles*). Sin ella la app queda en «Testing»: solo autorizan los correos de la lista de usuarios de prueba (máx. 100) y su refresh token vence a los **7 días** | Ninguno (es un contrato con el proveedor) |
 | **Qué se enciende en la pantalla** | `/conexiones`: la tarjeta de Instagram deja de decir que falta la variable; «Agregar cuenta» de un @ profesional deja seguidores, publicaciones y «datos hasta»; «Actualizar» en su fila lee de inmediato | Igual para YouTube: suscriptores y número de videos (las vistas llegan video por video) | En «Conectar una cuenta autorizada» aparece **«Conectar YouTube»**, y en las acciones de la fila de un canal por @, **«Autorizar analítica»** (ya está `OAUTH_CONNECT=1` en producción). Hoy, sin las variables, no hay ninguno de los dos botones y la sección dice «YouTube todavía no se puede conectar desde aquí: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.» (§1.5) | La tarjeta de TikTok pasa a «Seguidores y número de videos por el proveedor de datos contratado; las vistas, video por video»; la fila de @selvathegolden no cambia porque ya está autorizada (§2.1) |
 | **Qué job empieza a leer** | `collect.account_metrics` (05:10 UTC), `collect.posts` (cada 6 h), `collect.post_metrics` (05:00) y `brand.snapshot` (07:00, seguidores de las marcas en campaña, CAM-3). **Solo cuando el worker corra (WRK)**; hasta entonces, lo que la web lee al agregar o con «Actualizar» | Los mismos cuatro | `oauth.refresh` (cada 15 min: renueva el access token de una hora) y `collect.demographics` (05:20) para ese canal. Con el worker apagado, el token caduca a la hora y la analítica no se lee | `collect.account_metrics` (convierte la fila a `aggregator` conservando id e historia), `collect.posts` y `collect.post_metrics` para TikTok |
-| **Cómo compruebo que funcionó** (solo lectura) | `select c.handle, c.status, c.status_detail, s.day::text, s.followers, s.source from ws, social_connection c left join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'instagram' and c.access_mode = 'public_profile' order by s.day desc nulls last` → una fila con `followers` y `source = 'public_profile'`, `status = 'active'`. Y `select l.endpoint, l.ok, l.http_status from ws, api_call_log l join social_connection c on c.id = l.connection_id where l.endpoint = 'instagram.business_discovery' order by l.called_at desc limit 3` → `ok = true` | La misma con `platform_id = 'youtube'` y `l.endpoint = 'youtube.channels.list'` | `select c.handle, c.access_mode, c.status, c.scopes, c.secret_ref like 'enc:youtube:%' as cifrada, to_char(c.access_expires_at at time zone 'UTC','YYYY-MM-DD HH24:MI') as vence, c.refresh_expires_at from ws, social_connection c where c.platform_id = 'youtube' and c.handle <> 'LauraCocinaFacil'` → `direct_oauth`, `active`, los dos scopes, `cifrada = true`, vence en ~1 h, `refresh_expires_at` nulo. Consentimiento: `select d.purpose, d.policy_version from ws, data_consent d join social_connection c on c.id = d.connection_id where c.platform_id = 'youtube' and d.revoked_at is null` → `analytics` y `audience_demographics` | `select c.handle, c.access_mode, s.day::text, s.followers, s.views, s.source from ws, social_connection c join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'tiktok' and s.source = 'aggregator'` → seguidores y vistas. Consumo: `select day::text, units_used, calls from api_quota_usage where platform_id = 'tiktok' order by day desc limit 7` |
+| **Cómo compruebo que funcionó** (solo lectura) | `select c.handle, c.status, c.status_detail, s.day::text, s.followers, s.source from social_connection c left join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'instagram' and c.access_mode = 'public_profile' order by s.day desc nulls last` → una fila con `followers` y `source = 'public_profile'`, `status = 'active'`. Y `select l.endpoint, l.ok, l.http_status from api_call_log l join social_connection c on c.id = l.connection_id where l.endpoint = 'instagram.business_discovery' order by l.called_at desc limit 3` → `ok = true` | La misma con `platform_id = 'youtube'` y `l.endpoint = 'youtube.channels.list'` | `select c.handle, c.access_mode, c.status, c.scopes, c.secret_ref like 'enc:youtube:%' as cifrada, to_char(c.access_expires_at at time zone 'UTC','YYYY-MM-DD HH24:MI') as vence, c.refresh_expires_at from social_connection c where c.platform_id = 'youtube' and c.handle <> 'LauraCocinaFacil'` → `direct_oauth`, `active`, los dos scopes, `cifrada = true`, vence en ~1 h, `refresh_expires_at` nulo. Consentimiento: `select d.purpose, d.policy_version from data_consent d join social_connection c on c.id = d.connection_id where c.platform_id = 'youtube' and d.revoked_at is null` → `analytics` y `audience_demographics` | `select c.handle, c.access_mode, s.day::text, s.followers, s.views, s.source from social_connection c join account_metric_snapshot s on s.connection_id = c.id where c.platform_id = 'tiktok' and s.source = 'aggregator'` → seguidores y vistas. Consumo: `select day::text, units_used, calls from api_quota_usage where platform_id = 'tiktok' order by day desc limit 7` |
 | **Costo** | Gratis. Límite de Meta: 200 llamadas/hora por usuario de la app; con **un** token casa, todo `business_discovery` comparte ese cupo (§4, D3) | Gratis. **10 000 unidades/día** por proyecto; `channels.list` y `videos.list` cuestan 1; `collect.post_metrics` guarda 500 de reserva (`COLLECT_YOUTUBE_UNITS_RESERVE`) | Gratis. El endpoint de token no gasta unidades de la Data API (familia propia `google-oauth`); la Analytics API tiene cuota aparte que Google no publica | **Wood, 100 USD/mes = 1 500 unidades/día.** Por cuenta y día, tras la revisión: 1 (perfil) + 4 × 3 (`collect.posts` cada 6 h, 25 posts = 3 bloques, aunque no haya nada nuevo) + ≥ 5 (`collect.post_metrics`, primer tramo de 50) ≈ **18 unidades** → unas **80 cuentas** en Wood, ~1,20 USD/cuenta/mes. Con `collect.posts` una vez al día serían ~9 (D21). Bronze 200 USD = 5 000/día. Cada «Agregar» o «Actualizar» en la pantalla gasta 1 más |
 
 ### 2.1 Cosas que pasan al encender y conviene saber
@@ -280,6 +288,12 @@ no necesita trámite para una cuenta de prueba: Google deja autorizar a
 los correos de la lista de usuarios de prueba aunque la app esté en
 «Testing».
 
+**El ensayo ocupa dos días.** `--once` corre cada job una vez por
+pasada según su cron, y `collect.demographics` tiene uno al día (05:20
+UTC): el hueco del paso 4 (antes de autorizar) y la tabla del paso 7
+(después) salen de dos corridas diarias distintas, las dos dentro de
+los 7 días que dura el refresh token con la app en «Testing».
+
 ### 3.1 El ensayo, paso a paso
 
 | Paso | Qué | Quién |
@@ -287,10 +301,10 @@ los correos de la lista de usuarios de prueba aunque la app esté en
 | 1 | `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` en Vercel (production) y en el worker; YouTube Analytics API habilitada en el proyecto; el correo del canal de prueba en «Usuarios de prueba» (§2, columna CON-8) | Nicolás |
 | 2 | El worker corriendo en producción con `TOKEN_REFRESHER=real` (WRK) | Rasheed / WRK |
 | 3 | **Cuenta**: un canal de YouTube cuyo correo esté en la lista de prueba (el de Nicolás, p. ej. @nicolasduartea si tiene canal). En `/conexiones` → «Agregar cuenta» → YouTube → el @ del canal. Si `GOOGLE_API_KEY` ya está, la fila nace con suscriptores; si no, igual nace | Nicolás |
-| 4 | **Antes de autorizar**, correr `collect.demographics` una vez (o esperar a las 05:20 UTC). Debe aparecer la fila de hueco:<br>`select g.requirement_id, r.message_es from ws, metric_gap g join metric_requirement r on r.id = g.requirement_id join social_connection c on c.id = g.connection_id where c.platform_id = 'youtube' and c.handle = '<HANDLE>'`<br>→ `yt.demographics.auth` · «La audiencia de un canal solo sale de YouTube Analytics, y eso exige el permiso del dueño…» | Worker |
+| 4 | **Antes de autorizar**, correr `collect.demographics` una vez (o esperar a las 05:20 UTC). Debe aparecer la fila de hueco:<br>`select g.requirement_id, r.message_es from metric_gap g join metric_requirement r on r.id = g.requirement_id join social_connection c on c.id = g.connection_id where c.platform_id = 'youtube' and c.handle = '<HANDLE>'`<br>→ `yt.demographics.auth` · «La audiencia de un canal solo sale de YouTube Analytics, y eso exige el permiso del dueño…» | Worker |
 | 5 | **Permiso**: en la fila del canal, «Autorizar analítica» → aceptar el consentimiento → Google pide la cuenta y muestra `youtube.readonly` y `yt-analytics.readonly` → vuelve a `/conexiones?conectada=<id>`. La **misma** fila pasa a `direct_oauth` con los dos scopes (consulta de la columna CON-8 del §2) | Nicolás |
 | 6 | **Job**: `collect.demographics` otra vez. Hace dos llamadas (`youtube.analytics.query`: edad×género y país, ventana de los 28 días que terminan ayer) | Worker |
-| 7 | **Fila que tiene que aparecer** en `audience_breakdown`:<br>`select a.day::text, a.population, a.dimension, count(*) from ws, audience_breakdown a join social_connection c on c.id = a.connection_id where a.scope = 'account' and c.platform_id = 'youtube' and c.handle = '<HANDLE>' group by 1, 2, 3`<br>→ `population = 'viewers'`, dimensiones `age_gender` y `country`, `share` como vino de Google (puede no sumar 1) y `absolute` nulo | — |
+| 7 | **Fila que tiene que aparecer** en `audience_breakdown`:<br>`select a.day::text, a.population, a.dimension, count(*) from audience_breakdown a join social_connection c on c.id = a.connection_id where a.scope = 'account' and c.platform_id = 'youtube' and c.handle = '<HANDLE>' group by 1, 2, 3`<br>→ `population = 'viewers'`, dimensiones `age_gender` y `country`, `share` como vino de Google (puede no sumar 1) y `absolute` nulo | — |
 | 8 | **Fila que tiene que desaparecer**: la consulta del paso 4 devuelve **cero filas** | — |
 | 9 | Una segunda corrida el mismo día no escribe nada ni llama (`job_run.metadata->'alreadyToday'` trae el id) | — |
 
