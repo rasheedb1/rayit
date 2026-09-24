@@ -15,7 +15,8 @@
  *     sin el token en el almacén, espera sin gastar intento ni tumbar la cuenta;
  *   · el tope del día es la curva de calentamiento de VEN-15 sobre el
  *     límite que rige de VEN-9, en la zona del workspace;
- *   · la plaza vuelve al día en que se reservó, no a hoy.
+ *   · la plaza vuelve al día en que se reservó, no a hoy;
+ *   · un correo a una dirección que rebotó para siempre (VEN-15) se cancela en la cola.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -249,4 +250,21 @@ test('la plaza de un reclamo que no salió vuelve al día en que se reservó, no
     assert.equal(f.count, f.viejo ? 0 : 1, `${f.period} ${f.viejo ? 'de hace una semana: devuelta' : 'de hoy: intacta'}`);
   }
   assert.equal(filas.rows.filter((f) => f.viejo).length, 3, 'día y semana de la cuenta, y día de los correos del workspace');
+});
+
+test('un correo a una dirección que rebotó para siempre (VEN-15) no se reclama: se cancela en la cola', async () => {
+  const w = await workspace(10, { contacts: 2 });
+  const [rebotado, sano] = w.contacts as [string, string];
+  await enroll(w, bogota('2026-09-23', '07:00'));
+  await db.raw.query(
+    `UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1 user unknown' WHERE id = $1`,
+    [rebotado],
+  );
+  const fake = fakeChannels();
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.claim.canceledEmailInvalid, 1);
+  assert.equal(r.sent.length, 1, 'la otra marca sí recibe su correo');
+  const [t1] = await touches(rebotado);
+  assert.deepEqual([t1!.status, t1!.blocked_reason], ['canceled', 'email_invalid']);
+  assert.equal((await touches(sano))[0]!.status, 'sent');
 });

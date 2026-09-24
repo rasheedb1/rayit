@@ -439,11 +439,12 @@ que el despachador de VEN-10 tiene que usar, todo en
   secreto: la base lo reconoce por su sha256, así que un error de
   configuración no puede apagar la baja y los enlaces no caducan. La
   primera ronda lo firmaba con `OUTREACH_OPTOUT_SECRET` y llevaba los
-  uuid en claro; esa llave ya no existe. **Para VEN-10 al integrar:**
-  cambiar `newOptoutToken` por `createOptoutToken` + `optoutTokenHash`,
-  `withOptoutFooter` por `buildEmailFooter` + `listUnsubscribeHeaders`, y
-  borrar su `optoutUrl` duplicado de `@mc/core/outreach/optout.ts`.
-  Mientras tanto los dos contratos son compatibles: un token de VEN-10 da
+  uuid en claro; esa llave ya no existe. **Hecho en VEN-10 r3:** el
+  despachador usa `createOptoutToken` + `optoutTokenHash`,
+  `buildEmailFooter` y `oneClickUnsubscribeUrl` (la cabecera
+  `List-Unsubscribe` apunta a `/baja/<token>/un-clic`); sus copias
+  (`newOptoutToken`, `withOptoutFooter`, el `optoutUrl` de
+  `@mc/core/outreach/optout.ts`) ya no existen. Un token de la ronda 2 da
   de baja igual (probado en `packages/db/test/entregabilidad.test.ts`).
 - **La página de baja** (`/baja/<token>`, sin sesión) pregunta a
   `public_optout_preview(token, espacios de quien la abre)` (0038 §5,
@@ -508,6 +509,45 @@ recibir mensajes» y la ficha queda de baja con sus toques cancelados. El
 comando se niega con Supabase (escribiría un enlace de baja real) y no
 sirve con la web en modo demo (el Postgres en memoria vive dentro del
 proceso de la web).
+
+**Cómo quedó el motor (VEN-10, ronda 3, 24 de septiembre).** La rama
+del motor trae mezcladas `rasheed/VEN-9-canales-r2` y
+`rasheed/VEN-15-entregabilidad-r2`, porque el motor se apoya en las dos:
+
+- **Una sola implementación de cada cosa.** Los canales del motor
+  (`apps/worker/src/jobs/ventas/canales/`) son adaptadores finos sobre
+  `GmailApi` y `UnipileApi` de VEN-9 (`@mc/connectors`); el MIME, los
+  clientes HTTP y la traducción de errores propios de la ronda 2 se
+  borraron. El pie, el token y la cabecera de baja son los de VEN-15. El
+  tope de una cuenta es `outreach_channel_account_limits.effective_daily`
+  (VEN-9) pasado por `warmupDailyLimit` (VEN-15), contado en la zona del
+  workspace: la pantalla y el despachador dan el mismo número. La baja
+  en una respuesta la decide `detectOptOut` también en el webhook de
+  Unipile (`looksLikeOptOut` de VEN-9 lo llama y solo añade portugués).
+- **Lo que VEN-9 ganó para el motor** (cambios mínimos en
+  `packages/connectors`, dichos aquí porque la carpeta es de Nicolás):
+  `GmailApi.searchSent` (lo enviado a una dirección desde una fecha: con
+  eso el despachador comprueba un intento ambiguo, porque Gmail cambia
+  el `Message-ID` al enviar) y `GmailMessage.automatic` (las cabeceras de
+  un «fuera de oficina»).
+- **La numeración.** En Supabase, `schema_migrations` llega a
+  `0042_metricas_al_corte_desempate.sql`, toda de main. Las de
+  integración que chocan con esa serie (`0034_seguimientos` …
+  `0037_outreach`) y las tres de VEN-9-canales pasan a 0043–0049 al
+  mezclar con main, en su orden; la entregabilidad ya es
+  `0050_entregabilidad.sql` y el motor `0051_motor_cadencias.sql`, la
+  última de outreach porque redefine `notification_kind_check` con la
+  unión de todos los avisos. Comprobado en Postgres embebido con esa
+  mezcla exacta (main 0001–0042 + las siete renumeradas + 0050 + 0051):
+  las 50 se aplican y el CHECK final tiene los 21 avisos, incluido
+  `connection_added` de main.
+- **Queda para el integrador:** aplicar todo lo anterior en Supabase,
+  `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`, y
+  entonces `pnpm --filter @mc/worker run job:dispatch -- --canal-falso
+  --workspace 00000002-0000-4000-8000-000000000001` con la política
+  apagada y encendida (el «terminado cuando» de VEN-10). Y registrar en
+  `outbound.bounces` (VEN-15) el buzón de cada cuenta con el mismo
+  `GmailChannel` del motor, en vez de `gmailNoConfigurado`.
 
 ### 5.3 La cadencia recomendada para un creador
 

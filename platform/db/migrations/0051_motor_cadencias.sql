@@ -18,7 +18,7 @@
 -- contra el CHECK de todas las que la preceden (la prueba de
 -- NOTIFICATION_KINDS lo compara). Lo comprobó VEN-10 r3 con main +
 -- integración + VEN-9-canales-r2 + VEN-15-r2 renumeradas así, en
--- Postgres embebido (docs/ventas-outreach.md §9.3).
+-- Postgres embebido (docs/ventas-outreach.md §5.2, «Cómo quedó el motor»).
 --
 -- Lo que el despachador necesita y 0037 no traía:
 --

@@ -76,6 +76,8 @@ export interface ClaimReport {
   claimed: ClaimedTouch[];
   /** Cancelados antes de reclamar: la ficha o su correo se dieron de baja. */
   canceledOptedOut: number;
+  /** Cancelados antes de reclamar: el correo de la ficha rebotó para siempre (contact.email_invalid, VEN-15). */
+  canceledEmailInvalid: number;
   /** Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote) o la secuencia se archivó. */
   canceledFinished: number;
   /** Saltados: el contacto no tiene dirección en ese canal. */
@@ -199,7 +201,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   if (ws) assertIds('claimDueTouches', [ws]);
   const channels = opts.channels.filter((c) => (DISPATCH_CHANNELS as readonly string[]).includes(c));
   const report: ClaimReport = {
-    claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
+    claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
     accountDownNotices: 0, rescheduled: [],
   };
 
@@ -211,6 +213,23 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
           AND (t.contact_id IS NULL
                OR address_is_suppressed(t.recipient_address)
                OR EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND (c.opted_out OR address_is_suppressed(c.email))))
+        RETURNING t.id`,
+      [now.toISOString(), ws],
+    )
+  ).rows.length;
+
+  // (r3, con VEN-15) Un correo a una dirección que rebotó para siempre
+  // (contact.email_invalid) no se reclama: la base impide programarlo
+  // (0050 §2), pero no mira lo que ya estaba en la cola ni un reintento.
+  // Solo si el toque va a ESA dirección: si va a otra, esa no rebotó.
+  report.canceledEmailInvalid = (
+    await tx.query(
+      `UPDATE outbound_touch t
+          SET status = 'canceled', blocked_reason = 'email_invalid'
+         FROM contact c
+        WHERE c.id = t.contact_id AND c.email_invalid AND t.channel = 'email'
+          AND (t.recipient_address IS NULL OR t.recipient_address = c.email)
+          AND t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
         RETURNING t.id`,
       [now.toISOString(), ws],
     )

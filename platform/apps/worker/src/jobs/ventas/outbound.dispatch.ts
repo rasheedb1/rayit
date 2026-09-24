@@ -241,7 +241,7 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
   const claim: ClaimReport = budget > 0
     ? await db.transaction((tx) => claimDueTouches(tx, { now: deps.now(), limit: budget, channels: ready, workspaceId: deps.workspaceId }))
     : {
-        claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
+        claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
         accountDownNotices: 0, rescheduled: [],
       };
   const report: DispatchReport = {
@@ -294,7 +294,7 @@ export const dispatchJob = defineJob(
     const metadata = {
       claimed: report.claim.claimed, sent: report.sent.length, confirmed: report.confirmed.length, retried: report.retried.length,
       failed: report.failed.length, waiting: report.waiting.length + report.claim.waitingAccount.length,
-      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledFinished,
+      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledEmailInvalid + report.claim.canceledFinished,
       held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
       errors: report.errors.length, notConfigured: report.notConfigured,
