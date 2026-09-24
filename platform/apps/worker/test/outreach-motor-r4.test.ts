@@ -198,3 +198,150 @@ test('un rebote síncrono marca el correo inválido: otra secuencia que la enrol
   assert.deepEqual(re.skipped, [{ contactId: c, reason: 'email_invalid' }]);
   assert.equal(fake.email.sent.length, 0);
 });
+
+// ---------------------------------------------------------------------
+// El techo de la cuenta (hallazgo 4) y el último paso sin dirección (16)
+// ---------------------------------------------------------------------
+
+test('el techo de LinkedIn es uno para la cuenta: con 1 al día, una invitación y un mensaje no salen el mismo día', async () => {
+  const w = await workspace(5, { contacts: 2 });
+  const [a, b] = w.contacts as [string, string];
+  const acc = await linkedin(w, 1);
+  const invitar = await secuencia(w, 3, [{ type: 'linkedin_connect', channel: 'linkedin', day: 0, body: 'Hola, {{first_name}}: me gustaría conectar.' }]);
+  const escribir = await secuencia(w, 4, [{ type: 'linkedin_message', channel: 'linkedin', day: 0, body: 'Hola, {{first_name}}: una idea para {{company}}.' }]);
+  const t0 = bogota('2026-09-23', '07:00'); // miércoles
+  await motor.transaction((tx) => enrollContacts(tx, { sequenceId: invitar, contactIds: [a], now: t0 }));
+  await motor.transaction((tx) => enrollContacts(tx, { sequenceId: escribir, contactIds: [b], now: t0 }));
+  const fake = fakeChannels();
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.sent.length, 1, 'una sola acción por la cuenta');
+  assert.equal(fake.linkedin.sent.length, 1);
+  assert.equal(r.claim.rescheduled.length, 1);
+  assert.equal(r.claim.rescheduled[0]!.cap, 'account_day');
+  assert.equal(localDay(r.claim.rescheduled[0]!.until), '2026-09-24', 'al siguiente día hábil');
+  // Una sola fila por cuenta y día: la que suma /ventas/canales (used_today).
+  const filas = await db.raw.query<{ action_type: string; period: string; count: number }>(
+    `SELECT action_type, period, count FROM outbound_counter WHERE channel_account_id = $1 ORDER BY period`, [acc],
+  );
+  assert.deepEqual(filas.rows.map((f) => [f.action_type, f.period, f.count]), [['linkedin', 'day', 1], ['linkedin', 'week', 1]]);
+  // Al día siguiente, a su hora, sale el otro. Los contadores cuentan el día
+  // con now() de la base, que el reloj falso no mueve: la fila de «hoy» pasa a ayer.
+  await db.raw.query(`UPDATE outbound_counter SET period_start = period_start - 1 WHERE channel_account_id = $1 AND period = 'day'`, [acc]);
+  const manana = new Date(r.claim.rescheduled[0]!.until.getTime() + 60_000);
+  const r2 = await runDispatch(motor, deps(w, fake, () => manana));
+  assert.equal(r2.sent.length, 1);
+  assert.deepEqual(new Set(fake.linkedin.sent.map((m) => m.stepType)), new Set(['linkedin_connect', 'linkedin_message']));
+});
+
+test('el último paso sin dirección no deja la cadencia activa para siempre', async () => {
+  const w = await workspace(6, { contacts: 1 });
+  const c = w.contacts[0]!;
+  const enr = await enroll(w, bogota('2026-09-23', '07:00'));
+  // Los dos primeros ya salieron; antes del tercero, alguien borró el correo de la ficha.
+  await db.raw.query(
+    `UPDATE outbound_touch SET status = 'sent', sent_at = scheduled_for, attempt_count = 1, provider_message_id = 'enviado-' || step_index,
+            thread_ref = 'hilo-r4-6', recipient_address = 'p1.motor-r46@marca.test', channel_account_id = $2
+      WHERE enrollment_id = $1 AND step_index IN (1, 2)`,
+    [enr.get(c), w.gmail],
+  );
+  await db.raw.query(`UPDATE contact SET email = NULL WHERE id = $1`, [c]);
+  const r = await runDispatch(motor, deps(w, fakeChannels(), () => bogota('2026-09-25', '12:00')));
+  assert.equal(r.claim.skippedNoAddress, 1);
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'completed');
+  assert.match(resumenDespacho(r), /Sin dirección: 1\./);
+});
+
+// ---------------------------------------------------------------------
+// Retenidos (hallazgos 7, 10, 13, 14 y 15)
+// ---------------------------------------------------------------------
+
+test('un mensaje retenido guarda un código, avisa una sola vez y lleva a la ficha de la empresa', async () => {
+  const w = await workspace(7, { contacts: 1, locale: 'en-US' });
+  const c = w.contacts[0]!;
+  await enroll(w, bogota('2026-09-23', '07:00'));
+  const [t1] = await touches(c);
+  await db.raw.query(`UPDATE outbound_touch SET body = 'Hola, [NOMBRE]: te escribo por la campaña.' WHERE id = $1`, [t1!.id]);
+  const fake = fakeChannels();
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.held.length, 1);
+  assert.equal((await touches(c))[0]!.held_reason, 'placeholders:[NOMBRE]', 'un código con su dato, no una frase');
+  // La persona lo vuelve a programar sin corregirlo: se retiene otra vez, sin otro aviso.
+  await db.raw.query(`UPDATE outbound_touch SET status = 'scheduled', held_reason = NULL WHERE id = $1`, [t1!.id]);
+  await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '13:00')));
+  const avisos = await db.raw.query<{ severity: string; title_es: string; body_es: string; action_url: string }>(
+    `SELECT severity, title_es, body_es, action_url FROM notification WHERE workspace_id = $1 AND entity_type = 'outbound_touch_held'`, [w.id],
+  );
+  assert.equal(avisos.rows.length, 1, 'uno por mensaje');
+  assert.equal(avisos.rows[0]!.title_es, 'A message to Marca 7 needs your review', 'en el idioma del workspace');
+  assert.match(avisos.rows[0]!.body_es, /there are unfilled placeholders \(\[NOMBRE\]\)/);
+  assert.equal(avisos.rows[0]!.action_url, `/ventas/empresas/${w.company}`);
+  assert.equal(fake.email.sent.length, 0);
+});
+
+test('la guardia de huecos mira el mensaje final: un pie con un hueco en la dirección postal no sale', async () => {
+  const w = await workspace(8, { contacts: 1 });
+  const c = w.contacts[0]!;
+  await db.raw.query(`UPDATE outbound_policy SET postal_address = '[DIRECCIÓN POSTAL]' WHERE workspace_id = $1`, [w.id]);
+  await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.sent.length, 0);
+  assert.equal(r.held.length, 1);
+  assert.equal((await touches(c))[0]!.held_reason, 'placeholders:[DIRECCIÓN POSTAL]');
+  assert.equal(fake.email.sent.length, 0);
+});
+
+test('una nota de invitación de más de 300 caracteres no se corta: se retiene, al enrolar y al enviar', async () => {
+  assert.equal(LINKEDIN_INVITE_NOTE_MAX, CONNECTOR_NOTE_MAX, 'el mismo límite que el cliente de Unipile');
+  const w = await workspace(9, { contacts: 1 });
+  const c = w.contacts[0]!;
+  await linkedin(w, 20);
+  const larga = 'Hola, {{first_name}}. ' + 'Me encantaría conectar contigo para hablar de una campaña. '.repeat(6);
+  const seq = await secuencia(w, 5, [{ type: 'linkedin_connect', channel: 'linkedin', day: 0, body: larga }]);
+  const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
+  assert.equal(r.enrolled[0]!.held, 1);
+  const held = await scalar<string>(`SELECT held_reason AS v FROM outbound_touch WHERE enrollment_id = $1`, [r.enrolled[0]!.enrollmentId]);
+  assert.match(held, /^note_too_long:\d+$/);
+  assert.match(holdReasonText('es', held), /tiene \d+ caracteres y el máximo es 300/);
+  // Si alguien la aprueba tal cual, la relectura antes de enviar la retiene otra vez: no sale cortada.
+  await db.raw.query(`UPDATE outbound_touch SET status = 'scheduled', held_reason = NULL WHERE enrollment_id = $1`, [r.enrolled[0]!.enrollmentId]);
+  const fake = fakeChannels();
+  const d = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(d.held.length, 1);
+  assert.equal(fake.linkedin.sent.length, 0);
+});
+
+// ---------------------------------------------------------------------
+// Respuestas automáticas (hallazgo 10) y el resumen a mano (9 y 17)
+// ---------------------------------------------------------------------
+
+test('una respuesta automática que pide la baja da de baja; no cuenta como respuesta', async () => {
+  const w = await workspace(10, { contacts: 1 });
+  const c = w.contacts[0]!;
+  const enr = await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  const hilo = fake.email.sent[0]!.threadRef;
+  fake.email.reply(hilo, 'Ya no trabajo aquí. Sáquenme de su lista.', bogota('2026-09-23', '12:05'), undefined, { automatic: true });
+  const r = await runReplies(motor, { readers: fake, now: () => bogota('2026-09-23', '13:00'), workspaceId: w.id });
+  assert.deepEqual([r.inbound, r.optOuts, r.automatic], [1, 1, 1]);
+  assert.equal(await scalar<boolean>(`SELECT opted_out AS v FROM contact WHERE id = $1`, [c]), true);
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'opted_out');
+  assert.equal(await scalar<Date | null>(`SELECT replied_at AS v FROM outbound_touch WHERE thread_ref = $1`, [hilo]), null, 'no es una respuesta');
+});
+
+test('job:dispatch cuenta los cancelados como la metadata del job, y un argumento desconocido enseña el uso', () => {
+  const r = {
+    zombies: { failed: 0, canceled: 0, released: 0 },
+    claim: {
+      claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, outsideWindow: [], waitingAccount: [],
+      accountDownNotices: 0, rescheduled: [],
+    },
+    sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [{ touchId: 'x', reason: 'opted_out' }], postponed: [], held: [],
+    released: [], warnings: [], errors: [], notConfigured: [],
+  };
+  assert.equal(canceledCount(r), 7);
+  const texto = resumenDespacho(r);
+  assert.match(texto, /Cancelados: 7 \(2 por correo rebotado\)\. Sin dirección: 4\./);
+  assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);
+});
