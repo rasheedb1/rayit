@@ -17,8 +17,11 @@
  *      cuenta pasa a needs_reconnect con un aviso; si vuelve a estar OK (se
  *      reconectó desde Unipile), vuelve a connected.
  *   3. Limpieza. Las filas 'pending' que nadie terminó en dos días se
- *      borran, y el token de una cuenta desconectada se borra del vault
- *      (la web marca 'disconnected' pero no puede tocar secret_ref).
+ *      borran, y lo desconectado se suelta en el proveedor con la misma
+ *      función que sales.channels_release (canales.release.ts): Google
+ *      revocado y token fuera del vault; cuenta y avisos borrados en
+ *      Unipile. El keepalive es la red de ese job: lo que falló allí se
+ *      vuelve a intentar aquí.
  *
  * Qué NO cambia el estado de una cuenta: un problema nuestro (la llave de
  * Google o de Unipile sin configurar, un token que no descifra, la red, un
@@ -38,6 +41,7 @@ import {
   PostgresOutreachCallLog, UnipileClient, type GoogleOAuthApi, type OAuthTokens, type SecretStore, type UnipileApi,
 } from '@mc/connectors';
 import type { Queryable } from '../../runner/db.ts';
+import { runChannelsRelease, type ReleaseResult } from './canales.release.ts';
 import { defineJob } from '../../runner/registry.ts';
 
 export const CHANNELS_KEEPALIVE_JOB_ID = 'sales.channels_keepalive';
@@ -55,7 +59,16 @@ export const PENDING_MAX_AGE_HOURS = 48;
 export const KEEPALIVE_TEXTOS = {
   gmailRevoked: 'Google ya no acepta el permiso de este Gmail (lo quitaste o venció). Vuelve a conectarlo.',
   gmailNoSecret: 'No encontramos el permiso guardado de este Gmail. Vuelve a conectarlo.',
-  unipileDown: (raw: string | null) => `Unipile dice que la sesión se cayó${raw ? ` (${raw})` : ''}. Vuelve a conectar la cuenta.`,
+  /** Lo que dice Unipile de la sesión, en frase; el código crudo queda solo en api_call_log. */
+  unipileDown: (raw: string | null, channel: string) => {
+    switch (raw) {
+      case 'CREDENTIALS': return `${channel} cerró la sesión. Vuelve a conectar la cuenta.`;
+      case 'STOPPED': return 'La cuenta se detuvo. Vuelve a conectarla.';
+      case 'DELETED': return 'La cuenta se borró en el proveedor. Vuelve a conectarla.';
+      case 'DISCONNECTED': return 'La cuenta se desconectó. Vuelve a conectarla.';
+      default: return `${channel} dio un error con la sesión. Vuelve a conectar la cuenta.`;
+    }
+  },
   unipileGone: 'Unipile ya no tiene esta cuenta. Vuelve a conectarla.',
   transient: (detail: string) => `No pudimos comprobar la cuenta hoy: ${detail} Lo intentamos de nuevo mañana.`,
   noticeTitle: (channel: string, name: string | null) => `Vuelve a conectar tu ${channel}${name ? ` (${name})` : ''}`,
@@ -63,15 +76,19 @@ export const KEEPALIVE_TEXTOS = {
 
 const CHANNEL_NAME: Record<string, string> = { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' };
 
+const EMPTY_RELEASE: ReleaseResult = {
+  released: 0, googleRevoked: 0, secretsPurged: 0, unipileAccountsDeleted: 0, unipileWebhooksDeleted: 0, sharedKept: 0, waitingForKeys: 0, failed: 0,
+};
+
 export interface KeepaliveDeps {
   /** Como mc_worker. */
   db: Queryable;
   /** El vault de tokens (EncryptedSecretStore en producción). */
   secrets: SecretStore;
   /** null = GOOGLE_CLIENT_ID/SECRET no están: los Gmail no se tocan. */
-  google: Pick<GoogleOAuthApi, 'refresh'> | null;
+  google: Pick<GoogleOAuthApi, 'refresh' | 'revoke'> | null;
   /** null = UNIPILE_DSN/ACCESS_TOKEN no están: los LinkedIn e Instagram no se tocan. */
-  unipile: Pick<UnipileApi, 'getAccount'> | null;
+  unipile: Pick<UnipileApi, 'getAccount' | 'deleteAccount' | 'deleteWebhook'> | null;
   now: Date;
   marginMs?: number;
 }
@@ -87,7 +104,8 @@ export interface KeepaliveResult {
   /** Fallos nuestros o transitorios: no cambian el estado de la cuenta. */
   failed: number;
   pendingRemoved: number;
-  secretsPurged: number;
+  /** Lo desconectado que se soltó en el proveedor (runChannelsRelease). */
+  release: ReleaseResult;
   skipped: { gmail: boolean; unipile: boolean };
 }
 
@@ -151,7 +169,7 @@ export async function runChannelsKeepalive(deps: KeepaliveDeps): Promise<Keepali
   const margin = deps.marginMs ?? KEEPALIVE_MARGIN_MS;
   const r: KeepaliveResult = {
     gmailRefreshed: 0, gmailUnchanged: 0, unipileChecked: 0, markedDown: 0, recovered: 0, failed: 0,
-    pendingRemoved: 0, secretsPurged: 0, skipped: { gmail: deps.google === null, unipile: deps.unipile === null },
+    pendingRemoved: 0, release: EMPTY_RELEASE, skipped: { gmail: deps.google === null, unipile: deps.unipile === null },
   };
 
   // 1 · Gmail
@@ -202,7 +220,7 @@ export async function runChannelsKeepalive(deps: KeepaliveDeps): Promise<Keepali
       try {
         const acc = await deps.unipile.getAccount(a.provider_account_id, { channelAccountId: a.id });
         if (acc.health === 'needs_reconnect') {
-          if (await markDown(db, a, KEEPALIVE_TEXTOS.unipileDown(acc.rawStatus), now)) r.markedDown += 1;
+          if (await markDown(db, a, KEEPALIVE_TEXTOS.unipileDown(acc.rawStatus, CHANNEL_NAME[a.channel] ?? a.channel), now)) r.markedDown += 1;
         } else if (acc.health === 'ok' && (await markOk(db, a, now))) {
           r.recovered += 1;
         }
@@ -223,12 +241,7 @@ export async function runChannelsKeepalive(deps: KeepaliveDeps): Promise<Keepali
     [now, PENDING_MAX_AGE_HOURS],
   );
   r.pendingRemoved = pend.rows.length;
-  for (const a of await accounts(db, 'gmail_oauth', ['disconnected'])) {
-    if (!a.secret_ref) continue;
-    await db.query(`UPDATE outreach_channel_account SET secret_ref = NULL, scopes = '{}' WHERE id = $1 AND workspace_id = $2`, [a.id, a.workspace_id]);
-    await db.query(`DELETE FROM connection_secret WHERE secret_ref = $1 AND workspace_id = $2`, [a.secret_ref, a.workspace_id]);
-    r.secretsPurged += 1;
-  }
+  r.release = await runChannelsRelease({ db, secrets: deps.secrets, google: deps.google, unipile: deps.unipile, now });
   return r;
 }
 
@@ -247,7 +260,7 @@ export const canalesKeepaliveJob = defineJob(
     });
     ctx.logger.info('keepalive de canales', { ...r });
     // Un fallo transitorio se reintenta mañana, con el cron: reintentar ya no ayuda.
-    return { processed: r.gmailRefreshed + r.gmailUnchanged + r.unipileChecked, failed: r.failed, metadata: { ...r }, retry: false };
+    return { processed: r.gmailRefreshed + r.gmailUnchanged + r.unipileChecked, failed: r.failed + r.release.failed, metadata: { ...r }, retry: false };
   },
   { retryOnItemFailure: false },
 );

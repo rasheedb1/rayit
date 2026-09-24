@@ -8,8 +8,10 @@
  * Además: un token lejos de vencer no se toca; un refresh token revocado
  * deja la cuenta en needs_reconnect con un aviso; un fallo transitorio no
  * la tumba; Unipile caído la marca y Unipile de vuelta la recupera; sin
- * llaves no se toca nada; y la limpieza borra lo pendiente viejo y el
- * token de lo desconectado.
+ * llaves no se toca nada; y la limpieza borra lo pendiente viejo y suelta
+ * lo desconectado en el proveedor (sales.channels_release): Google
+ * revocado y token fuera del vault; cuenta y avisos borrados en Unipile,
+ * salvo que la misma cuenta siga viva en otra fila.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,6 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { EncryptedSecretStore, FakeGmail, FakeUnipile, keyringOf, TokenCipher, withoutNetwork, type NetworkGuard, type OAuthTokens } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { CHANNELS_KEEPALIVE_JOB_ID, runChannelsKeepalive } from '../src/jobs/ventas/canales.keepalive.ts';
+import { CHANNELS_RELEASE_JOB_ID, runChannelsRelease } from '../src/jobs/ventas/canales.release.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase } from './helpers/harness.ts';
 
@@ -30,6 +33,10 @@ const GMAIL_DESCONECTADO = '0000000b-0000-4000-8000-0000000ac004';
 const LINKEDIN = '0000000b-0000-4000-8000-0000000ac005';
 const INSTAGRAM_CAIDO = '0000000b-0000-4000-8000-0000000ac006';
 const PENDIENTE_VIEJA = '0000000b-0000-4000-8000-0000000ac007';
+const LINKEDIN_DESCONECTADO = '0000000b-0000-4000-8000-0000000ac008';
+const LINKEDIN_COMPARTIDO = '0000000b-0000-4000-8000-0000000ac009';
+const PENDIENTE_FALLIDA = '0000000b-0000-4000-8000-0000000ac00a';
+const WS_OTRO = '0000000b-0000-4000-8000-000000000f01';
 const ref = (n: number) => `enc:gmail:0000000b-0000-4000-8000-00000000f00${n}`;
 
 let db: PgliteDatabase;
@@ -69,11 +76,27 @@ before(async () => {
       ('${GMAIL_DESCONECTADO}', '${WS}', '${CREATOR}', 'email', 'gmail_oauth', 'd@x.test', 'd@x.test', '${ref(4)}', 'disconnected', '{gmail.send}', now()),
       ('${LINKEDIN}', '${WS}', '${CREATOR}', 'linkedin', 'unipile', 'acc_li', 'Laura', NULL, 'needs_reconnect', '{}', now()),
       ('${INSTAGRAM_CAIDO}', '${WS}', '${CREATOR}', 'instagram_dm', 'unipile', 'acc_ig', '@laura', NULL, 'connected', '{}', now()),
-      ('${PENDIENTE_VIEJA}', '${WS}', '${CREATOR}', 'linkedin', 'unipile', 'pending:${'p'.repeat(43)}', NULL, NULL, 'pending', '{}', '${new Date(NOW.getTime() - 72 * 3600_000).toISOString()}');
+      ('${PENDIENTE_VIEJA}', '${WS}', '${CREATOR}', 'linkedin', 'unipile', 'pending:${'p'.repeat(43)}', NULL, NULL, 'pending', '{}', '${new Date(NOW.getTime() - 72 * 3600_000).toISOString()}'),
+      ('${PENDIENTE_FALLIDA}', '${WS}', '${CREATOR}', 'linkedin', 'unipile', 'pending:${'q'.repeat(43)}', NULL, NULL, 'disconnected', '{}', now());
+    INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, status, provider_webhook_ids) VALUES
+      ('${LINKEDIN_DESCONECTADO}', '${WS}', '${CREATOR}', 'linkedin', 'unipile', 'acc_li_viejo', 'Laura', 'disconnected', '{wh_m,wh_s}');
+    INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_OTRO}', 'keepalive-otro', 'Otra', 'America/Bogota');
+    -- La misma cuenta de Unipile, desconectada aquí y viva en otro espacio: no se borra en Unipile.
+    INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status, provider_webhook_ids) VALUES
+      ('${LINKEDIN_COMPARTIDO}', '${WS}', 'linkedin', 'unipile', 'acc_compartida', 'disconnected', '{wh_c}'),
+      ('0000000b-0000-4000-8000-0000000ac0f1', '${WS_OTRO}', 'linkedin', 'unipile', 'acc_compartida', 'connected', '{}');
   `);
   unipile.addAccount({ id: 'acc_li', health: 'ok' });
   unipile.addAccount({ id: 'acc_ig', provider: 'INSTAGRAM', health: 'needs_reconnect', rawStatus: 'CREDENTIALS' });
+  unipile.addAccount({ id: 'acc_li_viejo' });
+  unipile.addAccount({ id: 'acc_compartida' });
 });
+
+interface Soltada extends Record<string, unknown> { released_at: Date | null; provider_webhook_ids: string[] }
+async function soltada(id: string): Promise<Soltada | undefined> {
+  const { rows } = await db.raw.query<Soltada>(`SELECT released_at, provider_webhook_ids FROM outreach_channel_account WHERE id = $1`, [id]);
+  return rows[0];
+}
 
 after(async () => {
   guard.restore();
@@ -81,8 +104,11 @@ after(async () => {
   assert.equal(guard.attempts, 0, 'el keepalive no salió a la red');
 });
 
-test('el job está registrado con el id de job_definition (0038)', async () => {
+test('los dos jobs están registrados con el id de job_definition (0038, 0040)', async () => {
   assert.ok(allJobs.some((j) => j.id === CHANNELS_KEEPALIVE_JOB_ID));
+  assert.ok(allJobs.some((j) => j.id === CHANNELS_RELEASE_JOB_ID));
+  const release = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_RELEASE_JOB_ID]);
+  assert.equal(release.rows[0]?.default_cron, '*/5 * * * *');
   const { rows } = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_KEEPALIVE_JOB_ID]);
   assert.equal(rows[0]?.default_cron, '30 6 * * *');
 });
@@ -93,9 +119,15 @@ test('sin llaves de Google ni de Unipile no toca ninguna cuenta, pero limpia', a
   assert.equal(gmail.refreshCalls, 0);
   assert.equal((await cuenta(GMAIL_POR_VENCER))?.status, 'connected');
   assert.equal((await store.get(ref(1)))?.accessToken, 'access-rt-1');
-  // La limpieza no necesita llaves: es de la base.
+  // Borrar lo pendiente viejo no necesita llaves: es de la base.
   assert.equal(r.pendingRemoved, 1);
-  assert.equal(r.secretsPurged, 1);
+  // Soltar en el proveedor sí: sin llaves, lo desconectado espera (el token sigue cifrado en el vault para poder revocarlo).
+  assert.equal(r.release.waitingForKeys, 3, 'el Gmail y los dos LinkedIn desconectados esperan');
+  assert.equal(r.release.secretsPurged, 0);
+  assert.ok(await store.get(ref(4)), 'el token del Gmail desconectado sigue: sin llaves no se puede revocar');
+  assert.equal((await soltada(LINKEDIN_DESCONECTADO))?.released_at, null);
+  // La pendiente que falló no tiene nada en el proveedor: se suelta sin llaves.
+  assert.ok((await soltada(PENDIENTE_FALLIDA))?.released_at);
 });
 
 test('el Gmail por vencer se refresca con la misma ref; el lejano no; el revocado pide reconectar con aviso', async () => {
@@ -133,10 +165,39 @@ test('el Gmail por vencer se refresca con la misma ref; el lejano no; el revocad
   assert.equal(r.recovered, 1);
   assert.equal(r.markedDown, 2);
 
-  // Limpieza (la hizo ya la corrida sin llaves): la pendiente vieja no está y el desconectado ya no tiene token.
+  // Limpieza: la pendiente vieja no está; el Gmail desconectado se revocó en Google y su token salió del vault.
   assert.equal(await cuenta(PENDIENTE_VIEJA), undefined);
+  assert.deepEqual(gmail.revokeCalls, ['rt-4']);
+  assert.equal(r.release.googleRevoked, 1);
+  assert.equal(r.release.secretsPurged, 1);
   assert.equal((await cuenta(GMAIL_DESCONECTADO))?.secret_ref, null);
   assert.equal(await store.get(ref(4)), null);
+  assert.ok((await soltada(GMAIL_DESCONECTADO))?.released_at);
+  // Unipile: los dos avisos y la cuenta desconectada, borrados; la compartida solo pierde su aviso.
+  assert.deepEqual(unipile.deletedWebhooks.sort(), ['wh_c', 'wh_m', 'wh_s']);
+  assert.deepEqual(unipile.deletedAccounts, ['acc_li_viejo'], 'acc_compartida sigue viva en otro espacio: no se borra');
+  assert.equal(r.release.sharedKept, 1);
+  assert.deepEqual(await soltada(LINKEDIN_DESCONECTADO).then((x) => x?.provider_webhook_ids), []);
+  assert.ok(unipile.calls.filter((c) => c.method === 'deleteAccount').every((c) => c.channelAccountId === LINKEDIN_DESCONECTADO), 'con la cuenta de canal para la bitácora');
+});
+
+test('sales.channels_release: lo ya soltado no se vuelve a tocar; desconectar otra vez vuelve a la cola', async () => {
+  const antes = unipile.deletedAccounts.length;
+  const r = await runChannelsRelease({ db, secrets: store, google: gmail, unipile, now: NOW });
+  assert.equal(r.released, 0);
+  assert.equal(unipile.deletedAccounts.length, antes);
+  // Reconectada y vuelta a desconectar: el disparador de 0040 la deja otra vez por soltar.
+  await db.raw.query(`UPDATE outreach_channel_account SET status = 'connected' WHERE id = $1`, [LINKEDIN_DESCONECTADO]);
+  await db.raw.query(`UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1`, [LINKEDIN_DESCONECTADO]);
+  assert.equal((await soltada(LINKEDIN_DESCONECTADO))?.released_at, null);
+  unipile.addAccount({ id: 'acc_li_viejo' });
+  unipile.failNext('deleteAccount', 'transient', 'errors/service_unavailable', 503);
+  const fallo = await runChannelsRelease({ db, secrets: store, google: gmail, unipile, now: NOW });
+  assert.equal(fallo.failed, 1, 'un 503 deja la fila en la cola');
+  assert.equal((await soltada(LINKEDIN_DESCONECTADO))?.released_at, null);
+  const ok = await runChannelsRelease({ db, secrets: store, google: gmail, unipile, now: NOW });
+  assert.equal(ok.unipileAccountsDeleted, 1);
+  assert.ok((await soltada(LINKEDIN_DESCONECTADO))?.released_at);
 });
 
 test('un fallo transitorio de Google no tumba la cuenta: deja el motivo y cuenta el fallo', async () => {
