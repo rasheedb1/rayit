@@ -1,9 +1,12 @@
 /**
  * FakeUnipile: la misma interfaz que UnipileClient (UnipileApi), en
- * memoria. Es lo que usan las pruebas de la web, del keepalive y del
- * despachador (VEN-10), y lo que corre en desarrollo cuando no hay
- * UNIPILE_DSN ni UNIPILE_ACCESS_TOKEN: nada sale a la red y nada finge
- * ser una cuenta real fuera de la memoria del proceso.
+ * memoria. Solo lo usan las PRUEBAS (de la web, del keepalive y del
+ * despachador, VEN-10): nada sale a la red y nada finge ser una cuenta
+ * real fuera de la memoria del proceso. No corre en desarrollo: sin
+ * UNIPILE_DSN ni UNIPILE_ACCESS_TOKEN la web no conecta LinkedIn ni
+ * Instagram y la pantalla de canales lo dice («No disponible», con la
+ * llave que falta). Para probarlos en local hacen falta las llaves de
+ * una cuenta de Unipile de pruebas (ver platform/.env.example).
  *
  * Cada método registra la llamada en `calls` y, si se le programó un
  * error con `failNext`, lo lanza como lo lanzaría el cliente real

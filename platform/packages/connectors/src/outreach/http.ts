@@ -6,7 +6,8 @@
  * connection_id). Lo que sí se comparte es la política: fetch, reloj,
  * sleep y azar inyectables (las pruebas corren sin red ni timers),
  * reintentos solo para `transient` con Retry-After y jitter
- * (http/retry.ts), una fila de bitácora por intento, y ningún secreto en
+ * (http/retry.ts) y solo en peticiones idempotentes, una fila de
+ * bitácora por intento, y ningún secreto en
  * un mensaje de error (safeErrorMessage).
  *
  * Los cupos de Gmail y de Unipile no se cuentan aquí: los cuenta el
@@ -52,6 +53,16 @@ export interface OutreachRequest {
   secrets?: readonly string[];
   channelAccountId: string | null;
   signal?: AbortSignal;
+  /**
+   * Si repetir la petición no puede duplicar su efecto. Obligatorio a
+   * propósito: cada llamada lo decide. Una petición que NO lo es (enviar
+   * un correo, un DM, una invitación, un comentario) no se reintenta
+   * aquí ante un error transitorio, porque un timeout o un 502 del borde
+   * no dicen si el proveedor la recibió: reintentar podría mandarle dos
+   * veces lo mismo a la marca. El error sube con kind 'transient' y quien
+   * despacha (VEN-10) decide, después de mirar el hilo.
+   */
+  idempotent: boolean;
 }
 
 export interface OutreachResponse<T> {
@@ -89,7 +100,8 @@ export class OutreachHttp {
       const out = await this.#attempt<T>(req, url);
       if (out.ok) return { status: out.status, body: out.body, attempts: attempt };
       const err = out.error;
-      const retriesLeft = this.#retry.maxRetries - (attempt - 1);
+      const maxRetries = req.idempotent ? this.#retry.maxRetries : 0;
+      const retriesLeft = maxRetries - (attempt - 1);
       if (!err.isRetryable || retriesLeft <= 0 || req.signal?.aborted) throw err;
       const delay = delayForRetry(this.#retry, attempt, err.retryAfterS, this.#random);
       if (delay > (this.#opts.maxRetryWaitMs ?? MAX_RETRY_WAIT_MS)) throw err;

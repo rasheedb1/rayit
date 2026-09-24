@@ -192,3 +192,43 @@ test('revoke: manda el refresh token a /revoke sin dejarlo en la bitácora; inva
   await fake.revoke(tokens);
   assert.equal((await failure(fake.refresh(tokens))).kind, 'not_connected', 'revocado: Google ya no acepta el refresh token');
 });
+
+/** Un fetch inyectado que cuenta las peticiones por método y responde con `reply` (o lanza). */
+function countingFetch(reply: (n: number) => Response | Error) {
+  const seen: string[] = [];
+  const fetch = async (_url: string, init: RequestInit): Promise<Response> => {
+    seen.push(init.method ?? 'GET');
+    const r = reply(seen.length);
+    if (r instanceof Error) throw r;
+    return r;
+  };
+  return { fetch, seen };
+}
+
+test('send no se reintenta ante un error de red: exactamente 1 POST y kind transient (VEN-10 decide tras mirar el hilo)', async () => {
+  const log = new InMemoryOutreachCallLog();
+  const { fetch, seen } = countingFetch(() => new TypeError('fetch failed'));
+  const http = { callLog: log, fetch, now: () => NOW, sleep: async () => {}, random: () => 0 };
+  const gmail = new GmailClient({ ...http, oauth: new GoogleOAuth(CFG, http), channelAccountId: CA, tokens: TOKENS });
+  const err = await failure(gmail.send({ from: { address: 'a@b.test' }, to: { address: 'c@d.test' }, subject: 'x', text: 'y' }));
+  assert.equal(err.kind, 'transient');
+  assert.equal(err.code, 'network');
+  assert.deepEqual(seen, ['POST'], 'un POST que pudo haber llegado no se repite');
+  assert.equal(log.entries.length, 1);
+});
+
+test('send con un 502 del borde tampoco se reintenta; una lectura con 503 sí', async () => {
+  const log = new InMemoryOutreachCallLog();
+  const bad = () => new Response(JSON.stringify({ error: { code: 502, message: 'Bad Gateway' } }), { status: 502 });
+  const send = countingFetch(bad);
+  const http = { callLog: log, fetch: send.fetch, now: () => NOW, sleep: async () => {}, random: () => 0 };
+  const gmail = new GmailClient({ ...http, oauth: new GoogleOAuth(CFG, http), channelAccountId: CA, tokens: TOKENS });
+  assert.equal((await failure(gmail.send({ from: { address: 'a@b.test' }, to: { address: 'c@d.test' }, subject: 'x', text: 'y' }))).kind, 'transient');
+  assert.deepEqual(send.seen, ['POST']);
+
+  const read = countingFetch((n) => (n === 1 ? bad() : new Response(JSON.stringify({ id: 't1', messages: [] }), { status: 200 })));
+  const http2 = { ...http, fetch: read.fetch };
+  const gmail2 = new GmailClient({ ...http2, oauth: new GoogleOAuth(CFG, http2), channelAccountId: CA, tokens: TOKENS });
+  await gmail2.getThread('t1');
+  assert.deepEqual(read.seen, ['GET', 'GET'], 'leer dos veces no le hace nada a nadie');
+});

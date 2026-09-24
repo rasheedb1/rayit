@@ -270,7 +270,7 @@ export class GoogleOAuth implements GoogleOAuthApi {
   async userEmail(tokens: OAuthTokens): Promise<{ email: string; verified: boolean }> {
     const res = await this.#http.call({
       endpoint: 'google.userinfo', method: 'GET', url: GOOGLE_USERINFO_URL,
-      headers: { Authorization: `Bearer ${tokens.accessToken}` }, secrets: [tokens.accessToken], channelAccountId: null,
+      headers: { Authorization: `Bearer ${tokens.accessToken}` }, secrets: [tokens.accessToken], channelAccountId: null, idempotent: true,
     });
     const b = obj(res.body);
     const email = str(b['email']);
@@ -283,7 +283,7 @@ export class GoogleOAuth implements GoogleOAuthApi {
     try {
       await this.#http.call({
         endpoint: 'google.oauth.revoke', method: 'POST', url: GOOGLE_REVOKE_URL, form: { token },
-        secrets: [token, tokens.accessToken], channelAccountId: opts.channelAccountId ?? null,
+        secrets: [token, tokens.accessToken], channelAccountId: opts.channelAccountId ?? null, idempotent: true,
       });
     } catch (err) {
       // Ya no existe: la concesión está retirada, que es lo que se pedía.
@@ -294,7 +294,8 @@ export class GoogleOAuth implements GoogleOAuthApi {
 
   async #token(endpoint: string, form: Record<string, string>, secrets: string[], channelAccountId: string | null): Promise<Json> {
     const res = await this.#http.call({
-      endpoint, method: 'POST', url: GOOGLE_TOKEN_URL, form, secrets: [...secrets, this.#cfg.clientSecret], channelAccountId,
+      // Idempotente para la marca: repetir un canje o un refresco no le manda nada a nadie.
+      endpoint, method: 'POST', url: GOOGLE_TOKEN_URL, form, secrets: [...secrets, this.#cfg.clientSecret], channelAccountId, idempotent: true,
     });
     return obj(res.body);
   }
@@ -355,6 +356,7 @@ export class GmailClient implements GmailApi {
     const token = await this.#auth();
     const res = await this.#http.call({
       endpoint, method: 'GET', url: `${GMAIL_API}${path}`, query, headers: { Authorization: `Bearer ${token}` }, secrets: [token], channelAccountId: this.#opts.channelAccountId,
+      idempotent: true,
     });
     return obj(res.body);
   }
@@ -366,6 +368,8 @@ export class GmailClient implements GmailApi {
       endpoint: 'gmail.messages.send', method: 'POST', url: `${GMAIL_API}/messages/send`,
       headers: { Authorization: `Bearer ${token}` }, json: { raw, ...(msg.threadId ? { threadId: msg.threadId } : {}) },
       secrets: [token], channelAccountId: this.#opts.channelAccountId,
+      // Un timeout o un 5xx no dicen si Gmail lo envió: reintentar aquí podría mandarle el correo dos veces a la marca.
+      idempotent: false,
     });
     const b = obj(res.body);
     const id = str(b['id']);

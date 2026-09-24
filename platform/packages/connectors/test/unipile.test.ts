@@ -172,3 +172,35 @@ test('deleteAccount y deleteWebhook: DELETE con la bitácora; un 404 cuenta como
   assert.equal(fake.accounts.has('acc_x'), false);
   assert.deepEqual(fake.deletedAccounts, ['acc_x']);
 });
+
+test('los POST que mandan algo a una persona no se reintentan: un fallo de red o un 503 da exactamente 1 POST', async () => {
+  const cases: Array<[string, (api: UnipileClient) => Promise<unknown>]> = [
+    ['chats.start', (api) => api.sendMessage({ accountId: 'acc_li_0001', attendeeProviderId: 'p', text: 'Hola' })],
+    ['chats.messages.send', (api) => api.sendMessage({ accountId: 'acc_li_0001', chatId: 'chat_0001', text: 'Sigo' })],
+    ['users.invite', (api) => api.sendInvitation({ accountId: 'acc_li_0001', providerId: 'p', note: 'Hola' })],
+    ['posts.comment', (api) => api.commentOnPost({ accountId: 'acc_li_0001', postId: 'urn:li:activity:1', text: '¡Bien!' })],
+    ['posts.reaction', (api) => api.reactToPost({ accountId: 'acc_li_0001', postId: 'urn:li:activity:1' })],
+  ];
+  const failures: Array<() => Response | Error> = [
+    () => new TypeError('fetch failed'),
+    () => new Response(JSON.stringify({ status: 503, type: 'errors/service_unavailable', title: 'Service unavailable' }), { status: 503 }),
+  ];
+  for (const [name, run] of cases) {
+    for (const fail of failures) {
+      let posts = 0;
+      const fetch = async (_url: string, init: RequestInit): Promise<Response> => {
+        if (init.method === 'POST') posts++;
+        const r = fail();
+        if (r instanceof Error) throw r;
+        return r;
+      };
+      const api = new UnipileClient({
+        config: { dsn: 'api1.unipile.test:13111', accessToken: KEY }, callLog: new InMemoryOutreachCallLog(), fetch,
+        sleep: async () => {}, random: () => 0.5,
+      });
+      const err = await failure(run(api));
+      assert.equal(err.kind, 'transient', name);
+      assert.equal(posts, 1, `${name}: un solo POST`);
+    }
+  }
+});

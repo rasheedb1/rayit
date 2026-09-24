@@ -1,8 +1,9 @@
 /**
  * FakeGmail: el OAuth de Google y el buzón de Gmail en memoria, detrás de
  * las mismas interfaces que GoogleOAuth y GmailClient (GoogleOAuthApi y
- * GmailApi). Lo usan las pruebas del callback de OAuth, del keepalive y
- * del despachador (VEN-10), y el desarrollo sin GOOGLE_CLIENT_ID.
+ * GmailApi). Solo lo usan las pruebas del callback de OAuth, del
+ * keepalive y del despachador (VEN-10); sin GOOGLE_CLIENT_ID la web no
+ * conecta Gmail y la pantalla de canales dice qué llave falta.
  *
  * Refrescar da un access token nuevo con una hora de vida y conserva el
  * refresh token, como Google. Un refresh token en `revoked` responde

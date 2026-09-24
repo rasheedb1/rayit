@@ -150,7 +150,12 @@ export interface SendMessageRequest {
 /** La interfaz que usan la web, el keepalive y el despachador. La cumplen UnipileClient y FakeUnipile. */
 export interface UnipileApi {
   /** La petición genérica: cualquier endpoint de /api/v1, con la misma bitácora y clasificación de errores. */
-  request<T = unknown>(req: { endpoint: string; method: 'GET' | 'POST' | 'DELETE'; path: string; query?: Record<string, string | number | undefined>; json?: unknown; multipart?: FormData }, opts?: UnipileCallOptions): Promise<T>;
+  /**
+   * `idempotent`: si repetirla no duplica su efecto. Por omisión, GET y
+   * DELETE lo son y POST no: un POST no se reintenta ante un error
+   * transitorio (ver OutreachRequest.idempotent).
+   */
+  request<T = unknown>(req: { endpoint: string; method: 'GET' | 'POST' | 'DELETE'; path: string; query?: Record<string, string | number | undefined>; json?: unknown; multipart?: FormData; idempotent?: boolean }, opts?: UnipileCallOptions): Promise<T>;
   createHostedAuthLink(req: HostedAuthRequest, opts?: UnipileCallOptions): Promise<{ url: string }>;
   getAccount(accountId: string, opts?: UnipileCallOptions): Promise<UnipileAccount>;
   listAccounts(opts?: UnipileCallOptions): Promise<UnipileAccount[]>;
@@ -298,13 +303,15 @@ export class UnipileClient implements UnipileApi {
       endpoint: req.endpoint, method: req.method, url: `${this.baseUrl}/api/v1${req.path}`, query: req.query,
       headers: { 'X-API-KEY': this.#config.accessToken }, json: req.json, multipart: req.multipart,
       secrets: [this.#config.accessToken, ...(opts.secrets ?? [])], channelAccountId: opts.channelAccountId ?? null, signal: opts.signal,
+      idempotent: req.idempotent ?? req.method !== 'POST',
     });
     return res.body;
   }
 
   async createHostedAuthLink(req: HostedAuthRequest, opts?: UnipileCallOptions): Promise<{ url: string }> {
     const body = await this.request({
-      endpoint: 'unipile.hosted.link', method: 'POST', path: '/hosted/accounts/link',
+      // Pedir el enlace dos veces solo da dos enlaces; la cuenta nace cuando la persona completa uno.
+      endpoint: 'unipile.hosted.link', method: 'POST', path: '/hosted/accounts/link', idempotent: true,
       json: {
         type: req.reconnectAccountId ? 'reconnect' : 'create',
         providers: [UNIPILE_PROVIDER_BY_CHANNEL[req.channel]],
