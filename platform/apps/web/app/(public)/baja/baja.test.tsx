@@ -16,21 +16,35 @@ vi.mock("@/lib/db/baja", () => ({
   darDeBajaDesdeEnlace: (...a: unknown[]) => darDeBajaDesdeEnlace(...a),
 }));
 
+/** El Accept-Language de la petición, para la página sin idioma del espacio (r5). */
+let acceptLanguage: string | null = null;
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers(acceptLanguage ? { "accept-language": acceptLanguage } : {}),
+}));
+
 import BajaError from "./[token]/error";
 import BajaPage from "./[token]/page";
 import { POST } from "./[token]/un-clic/route";
 import { dejarDeRecibir } from "./actions";
-import { MESSAGES } from "./messages";
+import { bajaIdioma, idiomaDelNavegador, MESSAGES_EN, MESSAGES_ES } from "./messages";
 
-const t = MESSAGES;
+const t = MESSAGES_ES;
+const en = MESSAGES_EN;
 const TOKEN = "k2Jd8sQ0pX4vN7bW1eR5tY9uI3oP6aS0dF2gH4jK6lZ";
-const VALIDO = { status: "valid", maskedAddress: "v•••@marca.com", senderName: "Laura · Cocina fácil", alreadyOptedOut: false };
+const VALIDO = {
+  status: "valid",
+  maskedAddress: "v•••@marca.com",
+  senderName: "Laura · Cocina fácil",
+  locale: "es-CO",
+  alreadyOptedOut: false,
+};
 
 async function pagina(token = TOKEN) {
   render(await BajaPage({ params: Promise.resolve({ token }) }));
 }
 
 beforeEach(() => {
+  acceptLanguage = null;
   estadoDelEnlaceDeBaja.mockReset();
   darDeBajaDesdeEnlace.mockReset();
 });
@@ -108,16 +122,65 @@ describe("/baja/<token>", () => {
   });
 });
 
+describe("/baja/<token> en el idioma de quien escribe (r5)", () => {
+  it("un espacio en inglés: la página entera en inglés, como el pie del correo que trajo hasta aquí", async () => {
+    estadoDelEnlaceDeBaja.mockResolvedValue({ ...VALIDO, senderName: "Laura's Kitchen", locale: "en-US" });
+    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
+    acceptLanguage = "es-CO,es;q=0.9";
+    await pagina();
+    expect(screen.getByRole("heading", { name: en.pregunta.title })).toBeInTheDocument();
+    expect(screen.getByText(en.pregunta.destino("v•••@marca.com"))).toBeInTheDocument();
+    expect(screen.getByText(en.pregunta.alcance("Laura's Kitchen"))).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: en.pregunta.title }).closest("[lang]")).toHaveAttribute("lang", "en");
+    fireEvent.click(screen.getByRole("button", { name: en.pregunta.boton }));
+    expect(await screen.findByRole("heading", { name: "Done. Laura's Kitchen won't write to you again." })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Dejar de recibir|Listo/);
+  });
+
+  it("sin espacio que diga el idioma (un enlace que no existe), el del navegador", async () => {
+    estadoDelEnlaceDeBaja.mockResolvedValue({ status: "not_found" });
+    acceptLanguage = "fr-FR,en-GB;q=0.8,es;q=0.5";
+    await pagina();
+    expect(screen.getByRole("heading", { name: en.noExiste.title })).toBeInTheDocument();
+  });
+
+  it("el título de la pestaña va en el mismo idioma", async () => {
+    const { generateMetadata } = await import("./[token]/page");
+    estadoDelEnlaceDeBaja.mockResolvedValue({ ...VALIDO, locale: "en" });
+    expect((await generateMetadata({ params: Promise.resolve({ token: TOKEN }) })).title).toBe(en.metaTitle);
+    estadoDelEnlaceDeBaja.mockResolvedValue(VALIDO);
+    expect((await generateMetadata({ params: Promise.resolve({ token: TOKEN }) })).title).toBe(t.metaTitle);
+  });
+
+  it("la regla del idioma es la del pie (footerTextsFor): inglés con «en», español con cualquier otro", () => {
+    expect(bajaIdioma("en-US")).toBe("en");
+    expect(bajaIdioma("es-CO", "en-US")).toBe("es");
+    expect(bajaIdioma("pt-BR")).toBe("es");
+    expect(bajaIdioma(null, "en-US,en;q=0.9")).toBe("en");
+    expect(bajaIdioma(null, null)).toBe("es");
+    expect(idiomaDelNavegador("de-DE, es;q=0.4, en;q=0.6")).toBe("en");
+    expect(idiomaDelNavegador("en;q=0, es-MX")).toBe("es");
+    expect(idiomaDelNavegador("de, fr")).toBeNull();
+  });
+});
+
 describe("los textos (r4)", () => {
   it("la pregunta va en infinitivo, como la de Substack, y el listo sin nombre no inventa uno", () => {
     expect(t.pregunta.title).toBe("¿Dejar de recibir estos mensajes?");
     expect(t.listo.title(null)).toBe("Listo. No te escribirá más.");
+  });
+
+  it("la promesa no se contradice (r5): ni «a este correo» junto a «por ningún canal», ni la plataforma por dentro", () => {
+    expect(t.pregunta.alcance("Laura")).toBe("Un clic y Laura no te vuelve a escribir, ni por correo ni por otro canal.");
+    expect(t.listo.body).not.toMatch(/otro creador|On Cue/);
+    expect(en.listo.body).not.toMatch(/creator|On Cue/);
   });
 });
 
 describe("si la base falla al abrir /baja/<token> (error.tsx, r4)", () => {
   it("habla de la baja, no de un documento, dice que se puede responder al correo y deja reintentar", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["es-CO", "es"]);
     const reset = vi.fn();
     render(<BajaError error={Object.assign(new Error("sin DATABASE_URL"), { digest: "abc123" })} reset={reset} />);
     expect(screen.getByRole("alert")).toHaveTextContent(t.errorPagina.title);
@@ -126,6 +189,14 @@ describe("si la base falla al abrir /baja/<token> (error.tsx, r4)", () => {
     expect(screen.getByText(/abc123/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: t.errorPagina.retry }));
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("sin la base no se sabe quién escribe: habla el idioma del navegador (r5)", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-US", "en"]);
+    render(<BajaError error={new Error("x")} reset={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(en.errorPagina.title);
+    expect(screen.getByRole("button", { name: en.errorPagina.retry })).toBeInTheDocument();
   });
 });
 

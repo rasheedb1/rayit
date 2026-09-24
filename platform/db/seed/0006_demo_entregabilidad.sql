@@ -63,7 +63,15 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- horas desde el Gmail de Laura (dentro de la ventana de «Salud de hoy»), con lo que deja el despachador: el
 -- intento, la hora del reclamo, la dirección EXACTA, el id de Gmail y la
 -- cabecera Message-ID.
+--
+-- Con la ficha ya marcada (la segunda pasada), la regla del correo
+-- inválido (0038 §2) rechaza dar de alta un correo 'sent' a esa
+-- dirección antes de que ON CONFLICT lo descarte (el disparador BEFORE
+-- corre primero). Por eso el alta va dentro de un IF NOT EXISTS.
 -- =====================================================================
+DO $seed$
+BEGIN
+IF NOT EXISTS (SELECT 1 FROM outbound_touch WHERE id = '00000006-0000-4000-8000-000000070001') THEN
 INSERT INTO outbound_touch
   (id, workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for, claimed_at, sent_at,
    attempt_count, recipient_address, provider_message_id, message_id_rfc, thread_ref, status_changed_at, created_at)
@@ -77,6 +85,9 @@ VALUES
    'natalia.velez@nutrive.co', 'gmail-demo-6001', '<demo-6001@mail.gmail.com>', 'gmail-thread-demo-6001',
    now() - interval '5 hours', now() - interval '6 hours')
 ON CONFLICT (id) DO NOTHING;
+END IF;
+END
+$seed$;
 
 -- Los tres correos de hoy (r4), sueltos como el de Natalia y a fichas
 -- con correo que no están en ninguna secuencia de la demo: llegaron, así

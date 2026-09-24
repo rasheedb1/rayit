@@ -49,7 +49,15 @@ export interface OptoutGates {
 /** Lo que responde public_optout_preview (0038 §5), comprobado. */
 export type OptoutPreview =
   | { status: 'not_found' }
-  | { status: 'ok'; maskedAddress: string; senderName: string | null; isSender: boolean; alreadyOptedOut: boolean };
+  | {
+      status: 'ok';
+      maskedAddress: string;
+      senderName: string | null;
+      /** El locale del workspace que envió (r5): la página de baja habla el idioma del pie del correo. */
+      locale: string | null;
+      isSender: boolean;
+      alreadyOptedOut: boolean;
+    };
 
 /** Comprueba la forma del jsonb de public_optout_preview. */
 export function parseOptoutPreview(value: unknown): OptoutPreview {
@@ -62,6 +70,9 @@ export function parseOptoutPreview(value: unknown): OptoutPreview {
     throw new OutreachShapeError(fn, '$.maskedAddress', 'se esperaba una dirección enmascarada');
   }
   if (r.senderName !== null && typeof r.senderName !== 'string') throw new OutreachShapeError(fn, '$.senderName', 'se esperaba texto o null');
+  if (r.locale !== undefined && r.locale !== null && typeof r.locale !== 'string') {
+    throw new OutreachShapeError(fn, '$.locale', 'se esperaba texto o null');
+  }
   for (const k of ['isSender', 'alreadyOptedOut'] as const) {
     if (typeof r[k] !== 'boolean') throw new OutreachShapeError(fn, `$.${k}`, 'se esperaba boolean');
   }
@@ -69,6 +80,7 @@ export function parseOptoutPreview(value: unknown): OptoutPreview {
     status: 'ok',
     maskedAddress: r.maskedAddress,
     senderName: (r.senderName as string | null) ?? null,
+    locale: (r.locale as string | null | undefined) ?? null,
     isSender: r.isSender as boolean,
     alreadyOptedOut: r.alreadyOptedOut as boolean,
   };
@@ -89,7 +101,7 @@ export async function publicOptoutPreview(
 }
 
 export type OptoutLinkCheck =
-  | { status: 'valid'; maskedAddress: string; senderName: string | null; alreadyOptedOut: boolean }
+  | { status: 'valid'; maskedAddress: string; senderName: string | null; locale: string | null; alreadyOptedOut: boolean }
   | { status: 'not_found' }
   | { status: 'sender' };
 
@@ -155,7 +167,13 @@ export async function checkOptoutLink(gates: OptoutGates, token: string): Promis
   const p = await gates.withPublicShare((tx) => publicOptoutPreview(tx, token, mios));
   if (p.status === 'not_found') return p;
   if (p.isSender) return { status: 'sender' };
-  return { status: 'valid', maskedAddress: p.maskedAddress, senderName: p.senderName, alreadyOptedOut: p.alreadyOptedOut };
+  return {
+    status: 'valid',
+    maskedAddress: p.maskedAddress,
+    senderName: p.senderName,
+    locale: p.locale,
+    alreadyOptedOut: p.alreadyOptedOut,
+  };
 }
 
 /**

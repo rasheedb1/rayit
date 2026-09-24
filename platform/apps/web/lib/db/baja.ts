@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { checkOptoutLink, optoutFromLink, type OptoutGates, type OptoutScope } from "@mc/db/queries/entregabilidad";
 import { getMyIdentityAndWorkspaces } from "@mc/db/queries/identidad";
 import { getSesion } from "@/lib/auth/session";
@@ -31,7 +32,7 @@ import { withIdentity, withPublicShare } from "./cliente";
  */
 
 export type EstadoEnlace =
-  | { status: "valid"; maskedAddress: string; senderName: string | null; alreadyOptedOut: boolean }
+  | { status: "valid"; maskedAddress: string; senderName: string | null; locale: string | null; alreadyOptedOut: boolean }
   | { status: "not_found" }
   | { status: "sender" };
 
@@ -53,10 +54,12 @@ const puertas: OptoutGates = {
   sessionWorkspaceIds: espaciosDeLaSesion,
 };
 
-/** Lo que la página puede decir antes del clic. No escribe nada. */
-export function estadoDelEnlaceDeBaja(token: string): Promise<EstadoEnlace> {
-  return checkOptoutLink(puertas, token);
-}
+/**
+ * Lo que la página puede decir antes del clic. No escribe nada. Con
+ * `cache` de React, el título (generateMetadata) y la página comparten
+ * una sola consulta por petición.
+ */
+export const estadoDelEnlaceDeBaja = cache((token: string): Promise<EstadoEnlace> => checkOptoutLink(puertas, token));
 
 /** El clic: vale ya para quien envió el correo, y para toda la plataforma cuando otro creador lo confirma. */
 export function darDeBajaDesdeEnlace(token: string): Promise<ResultadoBaja> {

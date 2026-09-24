@@ -75,7 +75,16 @@ const TOUCH_AGO_PEND = '00000038-0000-4000-8000-0000000070e4';
 const TOKEN_AG1 = createOptoutToken();
 const TOKEN_AG2 = createOptoutToken();
 const TOKEN_AGO = createOptoutToken();
-const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O, TOKEN_AG1, TOKEN_AG2, TOKEN_AGO];
+/** r5: el toque reclamado (processing) cuando llega la baja. */
+const CONTACT_Z = '00000038-0000-4000-8000-0000000000f9';
+const TOUCH_Z_SENT = '00000038-0000-4000-8000-0000000070d1';
+const TOUCH_Z_RETRY = '00000038-0000-4000-8000-0000000070d2';
+const TOUCH_Z_FLIGHT = '00000038-0000-4000-8000-0000000070d3';
+const TOKEN_Z = createOptoutToken();
+const CONTACT_RZ = '00000038-0000-4000-8000-0000000000fa';
+const TOUCH_RZ = '00000038-0000-4000-8000-0000000070d4';
+const TOKEN_RZ = createOptoutToken();
+const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O, TOKEN_AG1, TOKEN_AG2, TOKEN_AGO, TOKEN_Z, TOKEN_RZ];
 
 let t: TestDb;
 
@@ -126,7 +135,7 @@ after(async () => {
       DELETE FROM company WHERE id = '${COMPANY}';
       DELETE FROM outbound_optout_link WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
       DELETE FROM outbound_optout_event WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
-      DELETE FROM contact WHERE id IN ('${CONTACT_GLOBAL}', '${CONTACT_AG}');
+      DELETE FROM contact WHERE id IN ('${CONTACT_GLOBAL}', '${CONTACT_AG}', '${CONTACT_Z}');
       DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test', 'prensa@marca.test',
                                                       'agencia@marca.test');
     `);
@@ -156,11 +165,22 @@ describe('la baja desde el enlace', () => {
       status: 'valid',
       maskedAddress: 'v•••@marca.test',
       senderName: 'Laura · Cocina fácil',
+      locale: 'es-CO',
       alreadyOptedOut: false,
     });
     assert.deepEqual(await estados(), antes);
     const eventos = await sinRls(`SELECT 1 FROM outbound_optout_event WHERE token_hash = '${optoutTokenHash(TOKEN)}'`);
     assert.equal(eventos.length, 0, 'mirar el enlace no es darse de baja');
+  });
+
+  test('la vista previa dice el idioma del espacio que envió: la página habla el del pie (r5)', async () => {
+    await t.admin(`UPDATE workspace SET locale = 'en-US' WHERE id = '${WS_S}'`);
+    try {
+      const r = await checkOptoutLink(puertas([]), TOKEN);
+      assert.equal(r.status === 'valid' && r.locale, 'en-US');
+    } finally {
+      await t.admin(`UPDATE workspace SET locale = 'es-CO' WHERE id = '${WS_S}'`);
+    }
   });
 
   test('la vista previa no deja ningún parámetro abierto en la transacción', async () => {
@@ -340,6 +360,95 @@ describe('la baja desde el enlace', () => {
   });
 });
 
+/** Un 23514 (check_violation) con el mensaje de la regla. */
+function rechazo(mensaje: RegExp) {
+  return (e: unknown) => {
+    const err = e as { code?: string; message?: string };
+    assert.equal(err.code, '23514', `se esperaba check_violation, llegó ${err.code}: ${err.message}`);
+    assert.match(String(err.message), mensaje);
+    return true;
+  };
+}
+
+describe('la baja con un toque reclamado (r5: una sola regla de la baja)', () => {
+  // Un contacto global (sin dueño): la baja del workspace no marca la
+  // ficha, así que el freno es outbound_workspace_optout. Hasta r4 un
+  // toque en processing al pulsar la baja volvía a la cola con el
+  // reintento o el rescate del zombi y salía como 'sent' sin marca.
+  before(async () => {
+    await t.admin(`
+      INSERT INTO contact (id, company_id, full_name, email, source, source_url, owner_workspace_id) VALUES
+        ('${CONTACT_Z}', '${COMPANY}', 'Mercadeo', 'zombi@marca.test', 'public_website', 'https://marca.test/mercadeo', NULL);
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at,
+                                  sent_at, provider_message_id, recipient_address, attempt_count) VALUES
+        ('${TOUCH_Z_SENT}', '${WS_S}', '${COMPANY}', '${CONTACT_Z}', 'email', 'Hola', 'sent',
+         now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 'gmail-z1', 'zombi@marca.test', 1),
+        ('${TOUCH_Z_RETRY}', '${WS_S}', '${COMPANY}', '${CONTACT_Z}', 'linkedin', 'Hola por aquí', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', NULL, NULL, NULL, 1),
+        ('${TOUCH_Z_FLIGHT}', '${WS_S}', '${COMPANY}', '${CONTACT_Z}', 'linkedin', 'Y por aquí', 'processing',
+         now() - interval '1 minute', now() - interval '1 minute', NULL, NULL, NULL, 1);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, claimed_at, sent_at)
+      VALUES ('${optoutTokenHash(TOKEN_Z)}', '${WS_S}', '${TOUCH_Z_SENT}', '${CONTACT_Z}', 'zombi@marca.test',
+              now() - interval '1 day', now() - interval '1 day');
+    `);
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_Z), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
+  });
+
+  const toque = async (id: string) =>
+    (await sinRls<{ status: string; blocked_reason: string | null }>(
+      `SELECT status, blocked_reason FROM outbound_touch WHERE id = '${id}'`,
+    ))[0];
+
+  test('la baja no cancela lo reclamado: es del despachador', async () => {
+    assert.equal((await toque(TOUCH_Z_RETRY))?.status, 'processing');
+    assert.equal((await toque(TOUCH_Z_FLIGHT))?.status, 'processing');
+  });
+
+  test('el reintento o el rescate del zombi (processing → scheduled) falla con check_violation', async () => {
+    await assert.rejects(
+      t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_Z_RETRY}'`)),
+      rechazo(/pidió no recibir más mensajes de este espacio/),
+    );
+    assert.equal((await toque(TOUCH_Z_RETRY))?.status, 'processing');
+    // Lo que sí puede: cancelarlo.
+    await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'canceled' WHERE id = '${TOUCH_Z_RETRY}'`));
+    assert.equal((await toque(TOUCH_Z_RETRY))?.status, 'canceled');
+  });
+
+  test('lo que ya salió se registra (processing → sent) y queda marcado opted_out_in_flight', async () => {
+    await t.db.asWorker((tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), provider_message_id = 'unipile-z'
+                 WHERE id = '${TOUCH_Z_FLIGHT}'`),
+    );
+    assert.deepEqual(await toque(TOUCH_Z_FLIGHT), { status: 'sent', blocked_reason: 'opted_out_in_flight' });
+  });
+
+  test('el reclamo (scheduled → processing) también falla: el despachador lo descubre así y lo cancela', async () => {
+    // Un toque programado a mano por quien migra, saltándose la regla, como
+    // el que quedara de antes de la baja en una base vieja.
+    await t.admin(`
+      ALTER TABLE outbound_touch DISABLE TRIGGER outbound_touch_optout;
+      INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+      VALUES ('${WS_S}', '${COMPANY}', '${CONTACT_Z}', 'linkedin', 'Colado', 'scheduled', now());
+      ALTER TABLE outbound_touch ENABLE TRIGGER outbound_touch_optout;
+    `);
+    await assert.rejects(
+      t.db.asWorker((tx) =>
+        tx.query(`UPDATE outbound_touch SET status = 'processing', claimed_at = now(), attempt_count = 1
+                   WHERE contact_id = '${CONTACT_Z}' AND body = 'Colado'`),
+      ),
+      rechazo(/pidió no recibir más mensajes de este espacio/),
+    );
+  });
+
+  test('otro workspace no se entera: la baja es de quien envió', async () => {
+    await t.db.withWorkspace(WS_O, (tx) =>
+      tx.query(`INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+                VALUES ($1, $2, $3, 'linkedin', 'Hola desde O', 'scheduled', now() + interval '1 day')`, [WS_O, COMPANY, CONTACT_Z]),
+    );
+  });
+});
+
 describe('la política editable', () => {
   test('sin guardar, los valores por defecto; guardar la crea apagada', async () => {
     const antes = await t.db.withWorkspace(WS_O, (tx) => getOutboundPolicy(tx));
@@ -493,6 +602,35 @@ describe('el correo inválido (0038)', () => {
       tx.query(`INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
                 VALUES ('${WS_S}', '${COMPANY}', '${CONTACT_REBOTE}', 'linkedin', 'Hola', 'scheduled', now() + interval '1 day')`),
     );
+  });
+
+  test('un correo que rebota mientras está reclamado no vuelve a la cola (r5)', async () => {
+    await t.admin(`
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id) VALUES
+        ('${CONTACT_RZ}', '${COMPANY}', 'Rebote en vuelo', 'rebota-z@marca.test', 'user_provided', '${WS_S}');
+      BEGIN;
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at,
+                                  recipient_address, attempt_count) VALUES
+        ('${TOUCH_RZ}', '${WS_S}', '${COMPANY}', '${CONTACT_RZ}', 'email', 'Hola', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', 'rebota-z@marca.test', 1);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, attempt, claimed_at)
+      VALUES ('${optoutTokenHash(TOKEN_RZ)}', '${WS_S}', '${TOUCH_RZ}', '${CONTACT_RZ}', 'rebota-z@marca.test', 1,
+              now() - interval '10 minutes');
+      COMMIT;
+      UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1', bounced = true
+       WHERE id = '${CONTACT_RZ}';
+    `);
+    await assert.rejects(
+      t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_RZ}'`)),
+      rechazo(/rebotó/),
+    );
+    // Si ya había salido, se registra.
+    await t.db.asWorker((tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), provider_message_id = 'gmail-rz'
+                 WHERE id = '${TOUCH_RZ}'`),
+    );
+    const [z] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_RZ}'`);
+    assert.equal(z?.status, 'sent');
   });
 
   test('cambiar el correo de la ficha borra la marca, también la píldora «Correo rebotado» (bounced)', async () => {

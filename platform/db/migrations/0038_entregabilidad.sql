@@ -36,6 +36,13 @@
 --      un miembro con el primero (una agencia con dos espacios) no
 --      confirma nada.
 --
+-- Ronda 5, también en su sitio: una sola regla de la baja para los toques
+-- (§8.3: enforce_outbound_optout mira también outbound_workspace_optout,
+-- con las transiciones de 0037, así que un toque reclamado al pulsar la
+-- baja no vuelve a la cola), la regla del correo inválido mira también
+-- el reclamo y la vuelta desde 'processing' (§2), y la vista previa de
+-- la baja dice el idioma del workspace que envió (§5).
+--
 -- Ronda 4, también en su sitio: outreach_can_manage falla cerrada (sin
 -- identidad solo responde que sí con la bandera explícita
 -- app.auth_disabled, §7), y la baja guarda un código
@@ -88,11 +95,17 @@ CREATE TRIGGER contact_email_invalid_reset
 -- ---------------------------------------------------------------------
 -- 2 · Un correo no se programa a un correo inválido
 -- ---------------------------------------------------------------------
--- Mira la ENTRADA en 'scheduled' (alta, o draft/held → scheduled al
--- aprobar), no el reclamo: el job de rebotes ya cancela lo programado,
--- y un reclamo que fallara tumbaría el lote entero del despachador. La
--- vuelta de 'processing' a 'scheduled' (un reintento del despachador)
--- tampoco se mira, por lo mismo; el siguiente paso del job la cancela.
+-- Mira la ENTRADA en 'scheduled', en 'processing' y en 'sent' (r5), como
+-- la regla de la baja (0037 §4.1): el alta, aprobar (draft/held →
+-- scheduled), el reclamo del despachador (scheduled → processing), el
+-- reintento o el rescate de un zombi (processing → scheduled) y un envío
+-- registrado a mano. Hasta r4 solo miraba la entrada en 'scheduled' y se
+-- saltaba la vuelta desde 'processing': un correo que rebotaba mientras
+-- estaba reclamado volvía a la cola y nadie lo cancelaba otra vez. La
+-- excepción es processing → sent: el correo ya salió y se registra.
+-- Como con la baja, el despachador de VEN-10 descubre el rebote porque
+-- la base le rechaza el reclamo; su consulta de reclamo filtra esas
+-- filas y las pasa a 'canceled' (docs/ventas-outreach.md §5.2).
 -- La dirección que cuenta es la del envío si ya la tiene, y si no la de
 -- la ficha: si el toque va a otra dirección, esa no rebotó.
 --
@@ -117,10 +130,11 @@ DECLARE
   c record;
   direccion citext;
 BEGIN
-  IF NEW.channel <> 'email' OR NEW.status <> 'scheduled' OR NEW.contact_id IS NULL THEN
+  IF NEW.channel <> 'email' OR NEW.status NOT IN ('scheduled', 'processing', 'sent') OR NEW.contact_id IS NULL THEN
     RETURN NEW;
   END IF;
-  IF TG_OP = 'UPDATE' AND OLD.status IN ('scheduled', 'processing') THEN
+  -- Seguir en el mismo estado no es entrar; y lo que ya salió se registra.
+  IF TG_OP = 'UPDATE' AND (OLD.status = NEW.status OR (OLD.status = 'processing' AND NEW.status = 'sent')) THEN
     RETURN NEW;
   END IF;
   SELECT x.email, x.email_invalid INTO c FROM contact x WHERE x.id = NEW.contact_id;
@@ -251,6 +265,9 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
 --     enlace puede llegar reenviado, y quien lo reciba así no se lleva la
 --     dirección entera;
 --   · QUIÉN escribe: el nombre del workspace que envió ese correo;
+--   · EN QUÉ IDIOMA (r5): el locale de ese workspace. El pie del correo
+--     sale en su idioma (footerTextsFor), y la página a la que lleva
+--     tiene que hablar el mismo;
 --   · si quien lo abre con sesión es MIEMBRO de ese workspace. El correo
 --     sale del Gmail del creador y el enlace queda en su carpeta de
 --     enviados: su clic suprimiría a la marca en toda la plataforma
@@ -262,8 +279,8 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
 -- mc_public_share, políticas `TO mc_public_share` que abren solo lo que
 -- la función fija en parámetros de la transacción, y se restauran al
 -- salir. Lo nuevo que el rol puede leer:
---   workspace   id y name, solo la fila que fija app.public_optout_workspace
---               (el workspace del enlace);
+--   workspace   id, name y locale, solo la fila que fija
+--               app.public_optout_workspace (el workspace del enlace);
 --   membership  workspace_id y user_id, que no le abren ninguna fila: los
 --               pide workspace_read_member (0028), la política sin TO de
 --               workspace, que también le alcanza al leerlo, y las
@@ -273,11 +290,11 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
 -- Respuesta:
 --   {"status":"not_found"}
 --   {"status":"ok","maskedAddress":"v•••@marca.com","senderName":"…"|null,
---    "isSender":bool,"alreadyOptedOut":bool}
+--    "locale":"es-CO"|null,"isSender":bool,"alreadyOptedOut":bool}
 
 GRANT CREATE ON SCHEMA public TO mc_public_share;   -- solo mientras dura la migración (ver 0030 §1)
 
-GRANT SELECT (id, name) ON workspace TO mc_public_share;
+GRANT SELECT (id, name, locale) ON workspace TO mc_public_share;
 GRANT SELECT (workspace_id, user_id) ON membership TO mc_public_share;
 
 CREATE POLICY workspace_public_optout ON workspace
@@ -299,6 +316,7 @@ DECLARE
   enlace    outbound_optout_link%ROWTYPE;
   direccion text;
   nombre    text;
+  idioma    text;
   ya_baja   boolean;
   r         jsonb;
 BEGIN
@@ -327,13 +345,14 @@ BEGIN
       ya_baja := coalesce(ya_baja, false)
                  OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
                              WHERE o.workspace_id = enlace.workspace_id AND o.email = enlace.recipient_address);
-      SELECT w.name INTO nombre FROM workspace w WHERE w.id = enlace.workspace_id;
+      SELECT w.name, w.locale INTO nombre, idioma FROM workspace w WHERE w.id = enlace.workspace_id;
 
       r := jsonb_build_object(
         'status', 'ok',
         -- La regla de maskEmailAddress (@mc/core/outreach/deliverability).
         'maskedAddress', lower(left(direccion, 1) || '•••' || substr(direccion, strpos(direccion, '@'))),
         'senderName', nombre,
+        'locale', idioma,
         'isSender', coalesce(enlace.workspace_id = ANY (coalesce(p_viewer_workspaces, '{}'::uuid[])), false),
         'alreadyOptedOut', coalesce(ya_baja, false));
     END IF;
@@ -355,7 +374,7 @@ $$;
 
 COMMENT ON FUNCTION public_optout_preview(text, uuid[]) IS
   'Lo que la página de baja enseña antes del clic (VEN-15): la dirección enmascarada a la que salió el correo del '
-  'enlace, el nombre del workspace que lo envió, si ya estaba de baja, y si quien lo abre (sus workspaces) es de '
+  'enlace, el nombre y el idioma del workspace que lo envió, si ya estaba de baja, y si quien lo abre (sus workspaces) es de '
   'ese workspace. Solo lee, por el sha256 del token. SECURITY DEFINER de mc_public_share (0037 §9, 0038 §5).';
 
 REVOKE ALL ON FUNCTION public_optout_preview(text, uuid[]) FROM PUBLIC;
@@ -773,51 +792,121 @@ REVOKE CREATE ON SCHEMA public FROM mc_public_share;
 -- ---------------------------------------------------------------------
 -- 8.3 · Lo que un workspace ya no puede programar
 -- ---------------------------------------------------------------------
--- La misma forma que la regla del correo inválido (§2): mira la ENTRADA
--- en 'scheduled' de un toque (de cualquier canal: la persona pidió no
--- recibir más mensajes de este remitente, no solo correos) y la entrada
--- de un enrolamiento en active, paused o cooldown. No mira el reclamo del
--- despachador: lo programado ya lo canceló public_optout. La dirección
--- que cuenta es la del envío y la de la ficha. mc_app lee
--- outbound_workspace_optout con su RLS (el workspace del toque es el de
--- la transacción); el worker, sin ella.
+-- Una sola regla de la baja para los toques (r5). Hasta r4 la baja del
+-- workspace tenía su propio disparador, que solo miraba la ENTRADA en
+-- 'scheduled' y se saltaba la vuelta desde 'processing'. Con un contacto
+-- global (owner_workspace_id NULL, que la baja del workspace no marca)
+-- la regla de 0037 tampoco lo frenaba: un toque de LinkedIn reclamado al
+-- pulsar la baja volvía a la cola con el reintento o el rescate del
+-- zombi, se reclamaba otra vez y salía como 'sent' con blocked_reason
+-- NULL. La persona había pedido no recibir nada, por ningún canal.
+--
+-- Ahora outbound_workspace_optout es una fuente más de
+-- enforce_outbound_optout (0037 §4.1), con las mismas transiciones que
+-- la ficha dada de baja y la lista global: un toque de CUALQUIER canal
+-- no entra en 'scheduled', 'processing' ni 'sent' si su workspace tiene
+-- la dirección de su ficha, o la del envío, en outbound_workspace_optout.
+-- La excepción es la de siempre: processing → sent se registra con
+-- blocked_reason = 'opted_out_in_flight'. El despachador de VEN-10
+-- descubre la baja porque la base le rechaza el reclamo; su consulta de
+-- reclamo filtra también outbound_workspace_optout y pasa esas filas a
+-- 'canceled' (docs/ventas-outreach.md §5.2).
+--
+-- mc_app lee outbound_workspace_optout con su RLS (el workspace del
+-- toque es el de la transacción); el worker, sin ella. El mensaje del
+-- error distingue la baja de este workspace de la global.
+CREATE OR REPLACE FUNCTION enforce_outbound_optout()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  is_out     boolean := false;
+  del_espacio boolean := false;
+  correo     citext;
+BEGIN
+  IF TG_OP = 'UPDATE'
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id
+     AND NEW.recipient_address IS NOT DISTINCT FROM OLD.recipient_address THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.status NOT IN ('scheduled', 'processing', 'sent') THEN
+    RETURN NEW;
+  END IF;
+  -- Lo que no es enviar a nadie nuevo pasa (0037 §4.1): un toque que ya
+  -- estaba en 'sent' y sigue ahí, y soltar la ficha sin cambiar ni el
+  -- estado ni la dirección.
+  IF TG_OP = 'UPDATE' AND OLD.status = 'sent' AND NEW.status = 'sent' THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.contact_id IS NULL
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.recipient_address IS NOT DISTINCT FROM OLD.recipient_address THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.contact_id IS NOT NULL THEN
+    SELECT c.opted_out, c.email INTO is_out, correo FROM contact c WHERE c.id = NEW.contact_id;
+  END IF;
+  is_out := coalesce(is_out, false)
+            OR address_is_suppressed(correo)
+            OR address_is_suppressed(NEW.recipient_address);
+  IF NOT is_out THEN
+    del_espacio := EXISTS (
+      SELECT 1 FROM outbound_workspace_optout o
+       WHERE o.workspace_id = NEW.workspace_id
+         AND (o.email = correo OR o.email = NEW.recipient_address));
+  END IF;
+  IF NOT is_out AND NOT del_espacio THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.status = 'sent' AND TG_OP = 'UPDATE' AND OLD.status = 'processing'
+     AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
+    NEW.blocked_reason := 'opted_out_in_flight';
+    RETURN NEW;
+  END IF;
+
+  IF del_espacio THEN
+    RAISE EXCEPTION 'La persona de la ficha % pidió no recibir más mensajes de este espacio.',
+                    coalesce(NEW.contact_id::text, NEW.recipient_address::text)
+      USING ERRCODE = 'check_violation',
+            HINT = 'Pulsó el enlace de baja de un correo de este espacio (outbound_workspace_optout).';
+  END IF;
+  RAISE EXCEPTION 'El contacto % pidió no ser contactado (opt-out).', coalesce(NEW.contact_id::text, NEW.recipient_address::text)
+    USING ERRCODE = 'check_violation',
+          HINT = 'La ficha está dada de baja, o su correo o la dirección del envío están en la baja global.';
+END;
+$$;
+
+-- Y la entrada de un enrolamiento en active, paused o cooldown: a quien
+-- pidió la baja de este workspace no se le enrola ni se le reanuda.
 CREATE FUNCTION outbound_workspace_optout_check()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  correo    citext;
-  direccion citext;
+  correo citext;
 BEGIN
-  IF TG_TABLE_NAME = 'outbound_touch' THEN
-    IF NEW.status <> 'scheduled' OR (TG_OP = 'UPDATE' AND OLD.status IN ('scheduled', 'processing')) THEN
-      RETURN NEW;
-    END IF;
-    direccion := NEW.recipient_address;
-  ELSE
-    IF NEW.status NOT IN ('active', 'paused', 'cooldown')
-       OR (TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status
-           AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id) THEN
-      RETURN NEW;
-    END IF;
+  IF NEW.status NOT IN ('active', 'paused', 'cooldown')
+     OR (TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status
+         AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id) THEN
+    RETURN NEW;
   END IF;
   IF NEW.contact_id IS NOT NULL THEN
     SELECT c.email INTO correo FROM contact c WHERE c.id = NEW.contact_id;
   END IF;
-  IF EXISTS (SELECT 1 FROM outbound_workspace_optout o
-              WHERE o.workspace_id = NEW.workspace_id AND (o.email = correo OR o.email = direccion)) THEN
-    RAISE EXCEPTION 'La persona de la ficha % pidió no recibir más mensajes de este espacio.', coalesce(NEW.contact_id::text, direccion::text)
+  IF correo IS NOT NULL AND EXISTS (SELECT 1 FROM outbound_workspace_optout o
+              WHERE o.workspace_id = NEW.workspace_id AND o.email = correo) THEN
+    RAISE EXCEPTION 'La persona de la ficha % pidió no recibir más mensajes de este espacio.', NEW.contact_id
       USING ERRCODE = 'check_violation',
             HINT = 'Pulsó el enlace de baja de un correo de este espacio (outbound_workspace_optout).';
   END IF;
   RETURN NEW;
 END;
 $$;
-
-CREATE TRIGGER outbound_touch_workspace_optout
-  BEFORE INSERT OR UPDATE OF status ON outbound_touch
-  FOR EACH ROW EXECUTE FUNCTION outbound_workspace_optout_check();
 
 CREATE TRIGGER outbound_enrollment_workspace_optout
   BEFORE INSERT OR UPDATE OF contact_id, status ON outbound_enrollment

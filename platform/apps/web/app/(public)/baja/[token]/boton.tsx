@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { dejarDeRecibir } from "../actions";
-import { MESSAGES } from "../messages";
+import { bajaTexts, type BajaIdioma } from "../messages";
 import { Aviso } from "./aviso";
 
 type Resultado = Awaited<ReturnType<typeof dejarDeRecibir>>;
@@ -14,8 +14,19 @@ type Resultado = Awaited<ReturnType<typeof dejarDeRecibir>>;
  * reemplaza al botón y recibe el foco, para que un lector de pantalla lo
  * anuncie.
  */
-export function DejarDeRecibir({ token, direccion, quien }: { token: string; direccion: string; quien: string | null }) {
-  const t = MESSAGES;
+export function DejarDeRecibir({
+  token,
+  direccion,
+  quien,
+  idioma,
+}: {
+  token: string;
+  direccion: string;
+  quien: string | null;
+  /** El de la página: el del espacio que envió el correo (r5). */
+  idioma: BajaIdioma;
+}) {
+  const t = bajaTexts(idioma);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [pending, startTransition] = useTransition();
   const avisoRef = useRef<HTMLDivElement>(null);
