@@ -62,10 +62,10 @@ describe("etiquetas de la base", () => {
     }
   });
 
-  it("solo el radar y el pipeline viajan en la URL; Empresas es su propia ruta", () => {
+  it("solo el radar y el pipeline viajan en la URL; Empresas y Canales son su propia ruta", () => {
     expect(TABS).toEqual(["radar", "pipeline"]);
     expect(tabKey("empresas")).toBe("radar");
-    expect(MODULE_LINKS.map((l) => l.href)).toEqual(["/ventas", "/ventas?vista=pipeline", "/ventas/empresas"]);
+    expect(MODULE_LINKS.map((l) => l.href)).toEqual(["/ventas", "/ventas?vista=pipeline", "/ventas/empresas", "/ventas/canales"]);
   });
 });
 

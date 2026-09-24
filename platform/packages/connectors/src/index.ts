@@ -31,3 +31,14 @@ export * from './encrypted-secret-store.ts';
 export * from './oauth/index.ts';
 export * from './testing/dump-text.ts';
 export * from './public/index.ts';
+// Canales de outreach (VEN-9): Gmail y Unipile, con su bitácora, su estado firmado y sus dobles.
+export * from './outreach/errors.ts';
+export * from './outreach/log.ts';
+export * from './outreach/http.ts';
+export * from './outreach/state.ts';
+export * from './outreach/mime.ts';
+export * from './unipile.ts';
+export * from './gmail.ts';
+export * from './outreach/fake-unipile.ts';
+export * from './outreach/fake-gmail.ts';
+export * from './outreach/unipile-webhook.ts';

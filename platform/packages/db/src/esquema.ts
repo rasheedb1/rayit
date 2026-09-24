@@ -326,6 +326,24 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'baja global, y mc_app no puede leer contact_suppression (0026 §3). Solo LEE la lista y responde sí o no para ' +
     'UNA dirección: lo mismo que un workspace ya aprende creando una ficha con ese correo, que nace dada de baja ' +
     '(contact_suppression_apply). EXECUTE solo para mc_app y mc_worker',
+  // El callback de un canal de outreach desde la web (0039, VEN-9).
+  'outreach_channel_connect(text,text,text,text,text,text[])':
+    'el callback de la conexión de un canal (0039): la web es mc_app y el disparador de 0037 §2.1 no le deja escribir ' +
+    'un estado autenticado. Es del rol que migra (despachador por ser dueño de outbound_touch) y, como las tablas ' +
+    'llevan FORCE ROW LEVEL SECURITY, solo ve el workspace de la transacción: pasa a connected la fila pending de ESE ' +
+    'nonce (de un solo uso, nace al empezar la conexión) con la cuenta que devolvió el proveedor, o revive la fila que ' +
+    'el espacio ya tenía. Un buzón vivo en otro espacio lo dice el índice global con 23505 y responde taken sin ' +
+    'escribir. La llaman las rutas de la web tras verificar el estado firmado y hablar con el proveedor. EXECUTE solo ' +
+    'para mc_app. No es de ningún disparador',
+  'outreach_channel_mark_down(uuid,text)':
+    'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
+    'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
+    'no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outreach_channel_set_webhooks(uuid,text[])':
+    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (0040): provider_webhook_ids es ' +
+    'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
+    'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
+    'forma de id. EXECUTE solo para mc_app. No es de ningún disparador',
 };
 
 /**

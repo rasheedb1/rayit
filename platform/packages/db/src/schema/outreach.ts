@@ -273,6 +273,10 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   lastErrorAt: timestamptz('last_error_at'),
   lastError: text('last_error'),
   scopes: text('scopes').array().default([]).notNull(),
+  /** Los avisos de Unipile de la cuenta, para borrarlos al soltarla (0040). Solo el despachador. */
+  providerWebhookIds: text('provider_webhook_ids').array().default([]).notNull(),
+  /** Cuándo se soltó en el proveedor tras desconectarla; NULL en una desconectada = pendiente (0040). */
+  releasedAt: timestamptz('released_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

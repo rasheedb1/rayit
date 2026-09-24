@@ -57,3 +57,22 @@ export function openSealedValue<T>(sealed: string | undefined | null, key: Uint8
   if (age < 0 || age > ttlMs) return { ok: false, reason: 'expired' };
   return { ok: true, payload: (parsed as { p: T }).p, issuedAt: new Date(at) };
 }
+
+/**
+ * Abre un sello probando cada llave: la de la versión actual de
+ * TOKEN_ENCRYPTION_KEY primero y después las anteriores. Así rotar la
+ * llave maestra (TOKEN_ENCRYPTION_KEY_V2 y _CURRENT, crypto/master-key.ts)
+ * no invalida lo que ya se firmó: los estados en vuelo y, sobre todo, las
+ * rutas de los avisos de Unipile, que se firman una vez al conectar y
+ * viven diez años. Una firma mala con todas las llaves es 'bad_signature';
+ * si alguna llave casa, manda lo que diga esa (caducado, por ejemplo).
+ */
+export function openWithAnyKey<T>(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): OpenSealedResult<T> {
+  const list = keys instanceof Uint8Array ? [keys] : keys;
+  let last: OpenSealedResult<T> = { ok: false, reason: 'bad_signature' };
+  for (const key of list) {
+    last = openSealedValue<T>(token, key, now, ttlMs);
+    if (last.ok || last.reason !== 'bad_signature') return last;
+  }
+  return last;
+}

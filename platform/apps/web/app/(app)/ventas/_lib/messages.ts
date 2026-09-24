@@ -31,6 +31,7 @@ export const MESSAGES = {
     radar: "Radar",
     pipeline: "Pipeline",
     empresas: "Empresas",
+    canales: "Canales",
   },
 
   kpis: {

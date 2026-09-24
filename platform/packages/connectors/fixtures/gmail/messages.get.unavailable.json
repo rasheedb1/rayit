@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-24",
+    "notes": "GET messages/{id} con 503 backendError: la lectura del Message-ID después de enviar falla (el envío ya salió)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages/[^/?]+\\?"
+  },
+  "response": {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": 503,
+        "message": "The service is currently unavailable.",
+        "status": "UNAVAILABLE",
+        "errors": [{ "message": "The service is currently unavailable.", "domain": "global", "reason": "backendError" }]
+      }
+    }
+  }
+}
