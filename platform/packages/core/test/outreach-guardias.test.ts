@@ -43,8 +43,9 @@ test('${x} cuenta una vez, no también como {x}', () => {
   assert.equal(findPlaceholders('${a} y {b}').length, 2);
 });
 
-test('el detector reconoce las catorce expresiones', () => {
-  assert.equal(OPT_OUT_RULES.length, 14);
+test('el detector reconoce las catorce expresiones, y la de portugués (r4)', () => {
+  assert.equal(OPT_OUT_RULES.filter((r) => r.lang !== 'pt').length, 14);
+  assert.equal(OPT_OUT_RULES.length, 15);
   const frases: Record<string, string> = {
     es_dar_de_baja: 'Por favor, dénme de baja.',
     es_no_escribir: 'No me vuelvan a escribir, gracias.',
@@ -60,6 +61,7 @@ test('el detector reconoce las catorce expresiones', () => {
     en_opt_out: 'I want to opt-out.',
     en_take_me_off: 'Take me off your list.',
     en_no_more_emails: 'No more emails please.',
+    pt_nao_escrever: 'Por favor, não me escreva mais.',
   };
   for (const rule of OPT_OUT_RULES) {
     const r = detectOptOut(frases[rule.id]);
@@ -173,4 +175,45 @@ test('el renderizador sustituye lo conocido y deja a la vista lo que falta', () 
   assert.equal(renderTemplate(null, {}), null);
   assert.equal(firstNameOf('  Sofía Cárdenas '), 'Sofía');
   assert.equal(firstNameOf(null), null);
+});
+
+test('el detector ve las bajas más comunes que la ronda 3 dejaba pasar (r4)', () => {
+  const casos: Array<[string, string]> = [
+    ['Sáquenme de su lista', 'es_quitar_de_lista'],
+    ['Sáquenme de su lista, por favor.', 'es_quitar_de_lista'],
+    ['Por favor eliminen mi correo de su base de datos', 'es_quitar_de_lista'],
+    ['Baja', 'es_dar_de_baja'],
+    ['BAJA', 'es_dar_de_baja'],
+    ['Dar de baja', 'es_dar_de_baja'],
+    ['Dar de baja por favor', 'es_dar_de_baja'],
+    ['Por favor, baja.', 'es_dar_de_baja'],
+    ['No quiero más correos', 'es_no_recibir'],
+    ['No queremos más mensajes, gracias.', 'es_no_recibir'],
+    ['STOP', 'en_stop_contacting'],
+    ['stop.', 'en_stop_contacting'],
+    ['Please remove me.', 'en_remove_me'],
+    ['Not interested, please remove me.', 'en_remove_me'],
+    ['Remove me', 'en_remove_me'],
+    ['Parar', 'pt_nao_escrever'],
+    ['Me descadastre, por favor.', 'pt_nao_escrever'],
+  ];
+  for (const [texto, regla] of casos) {
+    const r = detectOptOut(texto);
+    assert.equal(r.optOut, true, texto);
+    assert.equal(r.ruleId, regla, texto);
+  }
+});
+
+test('las reglas nuevas no toman por baja lo que no lo es (r4)', () => {
+  for (const texto of [
+    'Stop by our office next week.',
+    'Sure, please remove me from the CC and loop in Andrés.',
+    'La baja de precios nos interesa: ¿hablamos?',
+    'Estamos de baja por maternidad hasta marzo, escríbenos en abril.',
+    'No quiero más correos sin la propuesta adjunta: ¿me la mandas?',
+    'Saquemos la campaña de su lista de pendientes, ¿te parece?',
+    '¿Cómo es el proceso de baja de un creador?',
+  ]) {
+    assert.equal(detectOptOut(texto).optOut, false, texto);
+  }
 });

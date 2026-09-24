@@ -27,6 +27,7 @@
  * interruptor apagado (outbound_policy.enabled = false) no se reclama
  * nada de ese workspace; disable_outreach ya canceló lo pendiente.
  */
+import { assertNoPlaceholders, PlaceholderError } from '@mc/core';
 import { buildEmailFooter, footerTextsFor, oneClickUnsubscribeUrl, optoutUrl } from '@mc/core/outreach/deliverability';
 import {
   applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, HOLD_REASONS, loadSendContext,
@@ -99,6 +100,11 @@ export function dispatchableChannels(deps: Pick<DispatchDeps, 'senders' | 'appUr
     else notConfigured.push(ch);
   }
   return { ready, notConfigured };
+}
+
+/** Cuántos canceló una pasada, en el reclamo y al enviar: lo mismo en la metadata del job y en job:dispatch. */
+export function canceledCount(r: DispatchReport): number {
+  return r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledEmailInvalid + r.claim.canceledFinished;
 }
 
 /** Cuántos toques reclamar: el tope de la corrida, o los que caben en el tiempo que queda. */
@@ -205,6 +211,21 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
       }
     }
 
+    // (r4) La guardia de huecos en el punto de envío, sobre lo que SALE: el
+    // asunto compuesto («Re: …» del correo anterior) y el cuerpo con su pie.
+    // decideBeforeSend ya miró lo que escribió la persona; esto es lo último
+    // antes del proveedor.
+    try {
+      assertNoPlaceholders(message.subject, message.body);
+    } catch (err) {
+      if (!(err instanceof PlaceholderError)) throw err;
+      const reason = HOLD_REASONS.placeholders(err.hits.map((h) => h.match));
+      await applyDecision(tx, ctx, { kind: 'hold', reason }, now);
+      report.held.push({ touchId: ctx.touchId, reason });
+      deps.logger?.warn('huecos sin rellenar en el mensaje final: retenido', { touchId: ctx.touchId, reason });
+      return;
+    }
+
     let result: SendResult;
     try {
       result = sender
@@ -294,7 +315,8 @@ export const dispatchJob = defineJob(
     const metadata = {
       claimed: report.claim.claimed, sent: report.sent.length, confirmed: report.confirmed.length, retried: report.retried.length,
       failed: report.failed.length, waiting: report.waiting.length + report.claim.waitingAccount.length,
-      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledEmailInvalid + report.claim.canceledFinished,
+      canceled: canceledCount(report),
+      canceledEmailInvalid: report.claim.canceledEmailInvalid, skippedNoAddress: report.claim.skippedNoAddress,
       held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
       errors: report.errors.length, notConfigured: report.notConfigured,

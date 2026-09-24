@@ -6,7 +6,7 @@
  *   un chat que ya existe   sendMessage({ chatId })
  *   la primera vez          getProfile (URL pública o usuario → provider_id)
  *                           y sendMessage({ attendeeProviderId }), que abre el chat
- *   invitar (LinkedIn)      getProfile y sendInvitation, con la nota de 300
+ *   invitar (LinkedIn)      getProfile y sendInvitation, con la nota (≤ 300, nunca cortada)
  *   leer                    listMessages del chat: lo que no es is_sender
  *
  * El hilo (thread_ref) es el chat_id: el segundo mensaje a la misma
@@ -44,9 +44,15 @@ export function profileIdentifier(channel: DispatchChannel, recipient: string): 
   return /^[A-Za-z0-9._]{1,30}$/.test(u) ? u : null;
 }
 
-/** La nota de una invitación de LinkedIn: 300 caracteres (§5.1), sin partir un carácter. */
+/**
+ * La nota de una invitación de LinkedIn: el cuerpo, sin espacios alrededor.
+ * (r4) Nunca se corta: una nota de 320 caracteres cortada a mitad de
+ * palabra le llegaba así a la marca. decideBeforeSend (y enrollContacts)
+ * retienen la que pasa de 300 (note_too_long); si aun así llega una
+ * aquí, no sale.
+ */
 export function inviteNote(body: string): string {
-  return [...body.trim()].slice(0, LINKEDIN_INVITE_NOTE_MAX).join('');
+  return body.trim();
 }
 
 export interface UnipileChannelOptions {
@@ -103,8 +109,15 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     if (signal?.aborted) return abortedBeforeSend();
 
     if (m.stepType === 'linkedin_connect') {
+      const note = inviteNote(m.body);
+      if ([...note].length > LINKEDIN_INVITE_NOTE_MAX) {
+        return {
+          ok: false, kind: 'permanent', code: 'note_too_long',
+          message: `La nota de la invitación tiene ${[...note].length} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}.`,
+        };
+      }
       try {
-        const r = await api.sendInvitation({ accountId, providerId, note: inviteNote(m.body) }, opts);
+        const r = await api.sendInvitation({ accountId, providerId, note }, opts);
         return {
           ok: true, providerMessageId: r.invitationId ?? `invite:${providerId}:${m.touchId}.${m.attempt}`, threadRef: null, messageIdRfc: null,
           warning: r.invitationId ? null : NO_ID,

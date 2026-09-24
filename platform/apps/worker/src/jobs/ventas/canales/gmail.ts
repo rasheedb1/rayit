@@ -28,6 +28,8 @@ import {
   type GoogleOAuthApi, type OAuthTokens, type OutreachCallLogSink, type SecretStore,
 } from '@mc/connectors';
 import type { InboundMessage, OpenThread } from '@mc/db/queries/outreach';
+import { gmailBounceMailbox } from '../gmail-rebotes.ts';
+import type { BounceMailbox, MailboxAccount } from '../outbound.bounces.ts';
 import {
   abortedBeforeSend, failureFrom, type ChannelLogger, type ChannelReader, type ChannelSender, type FindSentResult,
   type OutgoingMessage, type SendResult, type SenderAccount,
@@ -170,6 +172,26 @@ export class GmailChannel implements ChannelSender, ChannelReader {
     } catch (err) {
       return { found: 'unknown', reason: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /**
+   * El buzón de rebotes de una cuenta (VEN-10 r4, para outbound.bounces de
+   * VEN-15): el mismo GmailApi que envía, abierto con el token de la cuenta
+   * del almacén, visto como BounceMailbox (gmail-rebotes.ts). null si el
+   * canal no está configurado (sin las llaves de Google). El token se lee
+   * al leer el buzón: si falta, esa lectura falla y el job lo anota sin
+   * tumbar a las demás cuentas.
+   */
+  bounceMailboxFor(account: Pick<MailboxAccount, 'id' | 'secretRef'>): BounceMailbox | null {
+    if (!this.configured()) return null;
+    const now = this.#o.now ?? (() => new Date());
+    return {
+      listBounceCandidates: async (opts) => {
+        const box = await this.#mailbox({ id: account.id, secretRef: account.secretRef });
+        if (!box.ok) throw new Error(`Gmail: no se pudo abrir el buzón (${box.result.ok ? '' : box.result.code}).`);
+        return gmailBounceMailbox(box.api, now).listBounceCandidates(opts);
+      },
+    };
   }
 
   async readThread(thread: OpenThread): Promise<InboundMessage[]> {

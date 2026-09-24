@@ -285,16 +285,19 @@ test('Unipile: sin llaves no está configurado; con ellas abre un chat nuevo por
   assert.equal(profileIdentifier('linkedin', 'no es un perfil'), null);
 });
 
-test('Unipile: el segundo mensaje va al chat que ya existe; la invitación lleva la nota de 300; ya invitada es un paso hecho', async () => {
+test('Unipile: el segundo mensaje va al chat que ya existe; la invitación lleva su nota entera, y una de más de 300 no sale cortada; ya invitada es un paso hecho', async () => {
   const { fake, channel } = unipile();
   const first = await channel.send(linkedin());
   assert.ok(first.ok);
   const second = await channel.send(linkedin({ body: 'Te escribo otra vez.', reply: { threadRef: first.threadRef, messageIdRfc: null } }));
   assert.ok(second.ok && second.threadRef === first.threadRef);
-  const inv = await channel.send(linkedin({ stepType: 'linkedin_connect', body: 'á'.repeat(400) }));
+  const larga = await channel.send(linkedin({ stepType: 'linkedin_connect', body: 'á'.repeat(400) }));
+  assert.ok(!larga.ok && larga.code === 'note_too_long' && larga.kind === 'permanent', 'no se corta a 300: no sale');
+  assert.equal(fake.calls.filter((c) => c.method === 'sendInvitation').length, 0, 'ni llega a Unipile');
+  const inv = await channel.send(linkedin({ stepType: 'linkedin_connect', body: 'á'.repeat(300) }));
   assert.ok(inv.ok && inv.threadRef === null);
   const invite = fake.calls.find((c) => c.method === 'sendInvitation')!.args as { note: string };
-  assert.equal([...invite.note].length, 300);
+  assert.equal([...invite.note].length, 300, 'la nota entera');
   assert.equal(inviteNote('  hola  '), 'hola');
   fake.failNext('sendInvitation', 'already_connected', 'errors/already_invited_recently');
   const ya = await channel.send(linkedin({ stepType: 'linkedin_connect' }));

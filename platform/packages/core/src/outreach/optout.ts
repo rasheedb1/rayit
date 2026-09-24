@@ -2,8 +2,11 @@
  * Detector de baja en lo que responde una marca (VEN-10).
  *
  * Catorce expresiones, siete en español y siete en inglés, como las de
- * Chief (docs/ventas-outreach.md §2), aplicadas a lo que entra por
- * correo, LinkedIn e Instagram. Una coincidencia marca contact.opted_out,
+ * Chief (docs/ventas-outreach.md §2), más una de portugués (r4: antes
+ * era una lista aparte en bajas.ts, y el webhook y el job decidían
+ * distinto), aplicadas a lo que entra por correo, LinkedIn e Instagram.
+ * Es el ÚNICO detector: lo usan el webhook de Unipile (VEN-9) y el lector
+ * de respuestas del motor, a través de @mc/db (applyInboundEffects). Una coincidencia marca contact.opted_out,
  * y el disparador de 0026 manda la dirección a contact_suppression, que es
  * GLOBAL y no tiene vuelta: nadie en la plataforma le vuelve a escribir.
  * Por eso cada regla pide una INTENCIÓN (imperativo, subjuntivo o
@@ -30,7 +33,7 @@
 
 export interface OptOutRule {
   id: string;
-  lang: 'es' | 'en';
+  lang: 'es' | 'en' | 'pt';
   /** Se busca en todo lo que la persona escribió. */
   re: RegExp;
   /**
@@ -58,6 +61,9 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
   {
     id: 'es_dar_de_baja', lang: 'es',
     re: /\b(dar(me|nos)|da(me|nos)|den(me|nos)|de(me|nos))\s+de\s+baja\b|\b(por\s+)?favor,?\s+(dar|den)\s+de\s+baja\b|\b(quiero|queremos|deseo|deseamos)\s+(dar(me|nos)?\s+de\s+baja|la\s+baja)\b/,
+    // (r4) La baja de una palabra, como «Unsubscribe» en inglés: «Baja», «BAJA»,
+    // «Dar de baja», «Dar de baja por favor». Solo si es la línea entera.
+    head: /^\s*(por\s+favor\s*,?\s*)?(dar(me|nos)?\s+de\s+)?baja(\s*,?\s*por\s+favor)?\s*[.!]*\s*$/m,
   },
   {
     // «No me escriban más», «no nos vuelvan a escribir», y (r3) el pronombre
@@ -73,13 +79,23 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     ),
   },
   {
-    // «Quítenme de su lista» y (r3) «que me saquen de su lista».
+    // «Quítenme de su lista», (r3) «que me saquen de su lista», (r4) el
+    // imperativo con c→qu («Sáquenme de su lista») y el correo como objeto
+    // («Por favor eliminen mi correo de su base de datos»).
     id: 'es_quitar_de_lista', lang: 'es',
-    re: /\b(quit|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/,
+    re: /\b(quit|saqu|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(quit|saqu|sac|elimin|borr)[a-z]*\s+(mi|mis|nuestro|nuestros)\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/,
   },
   {
+    // (r4) también «No quiero más correos», sin «recibir».
     id: 'es_no_recibir', lang: 'es',
-    re: /\bno\s+(quiero|queremos|deseo|deseamos)\s+(recibir|seguir\s+recibiendo)\s+(mas\s+)?(correos|mensajes|e-?mails|informacion|comunicaciones|publicidad|propuestas)\b|\bno\s+(quiero|queremos|deseo|deseamos)\s+que\s+(me|nos)\s+(escriban|contacten|sigan\s+escribiendo)\b/,
+    // Sin «recibir», solo si ahí termina la frase: «No quiero más correos sin
+    // la propuesta» no es baja.
+    re: new RegExp(
+      '\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+(recibir|seguir\\s+recibiendo)\\s+(mas\\s+)?(correos|mensajes|e-?mails|informacion|comunicaciones|publicidad|propuestas)\\b'
+        + `|\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+mas\\s+(correos|mensajes|e-?mails)${ES_TAIL}`
+        + '|\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+que\\s+(me|nos)\\s+(escriban|contacten|sigan\\s+escribiendo)\\b',
+      'm',
+    ),
   },
   { id: 'es_dejar_de_escribir', lang: 'es', re: /\bdej(a|e|en|ar)\s+de\s+(escribir|enviar|mandar|contactar)(me|nos)\b/ },
   { id: 'es_cancelar_suscripcion', lang: 'es', re: /\b(cancelar|anular)\s+(la\s+|mi\s+)?suscripcion\b/ },
@@ -92,10 +108,22 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     head: /^\s*(please\s+)?unsubscribe(\s+please)?\s*[.!]*\s*$/m,
   },
   {
+    // (r4) y «Please remove me.» al final de la frase («Not interested, please
+    // remove me.»), no «please remove me from the CC».
     id: 'en_remove_me', lang: 'en',
-    re: /\bremove\s+(me|us|my\s+(email|address))\s+from\s+(your|this|the|all)\s+(\w+\s+)?(list|lists|mailing|emails?|database|contacts?|sequence|outreach)\b/,
+    re: new RegExp(
+      '\\bremove\\s+(me|us|my\\s+(email|address))\\s+from\\s+(your|this|the|all)\\s+(\\w+\\s+)?(list|lists|mailing|emails?|database|contacts?|sequence|outreach)\\b'
+        + `|\\bplease\\s+remove\\s+(me|us)${EN_TAIL}`,
+      'm',
+    ),
+    head: /^\s*(please\s+)?remove\s+(me|us)(\s+please)?\s*[.!]*\s*$/m,
   },
-  { id: 'en_stop_contacting', lang: 'en', re: /\bstop\s+(emailing|contacting|messaging|spamming|writing\s+to\s+(me|us)|sending\s+(me|us))\b/ },
+  {
+    // (r4) «STOP» como respuesta entera (la convención de los SMS), no «Stop by our office».
+    id: 'en_stop_contacting', lang: 'en',
+    re: /\bstop\s+(emailing|contacting|messaging|spamming|writing\s+to\s+(me|us)|sending\s+(me|us))\b/,
+    head: /^\s*stop\s*[.!]*\s*$/m,
+  },
   { id: 'en_do_not_contact', lang: 'en', re: new RegExp(`\\b(do\\s+not|don't|dont)\\s+(contact|email|message|write\\s+to)\\s+(me|us)${EN_TAIL}`, 'm') },
   {
     id: 'en_opt_out', lang: 'en',
@@ -107,6 +135,13 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     re: /\btake\s+(me|us)\s+off\s+(your|this|the|all)\s+(\w+\s+)?(list|lists|mailing|emails?|database|sequence)\b/,
   },
   { id: 'en_no_more_emails', lang: 'en', re: /\bno\s+more\s+(e-?mails|messages)\s*(,?\s*(please|pls|thanks|thank\s+you))?\s*([.!;,]|$)/m },
+  // Portugués (r4): era la lista aparte de bajas.ts (VEN-9); ahora es una
+  // regla más del MISMO detector, el del webhook y el del job.
+  {
+    id: 'pt_nao_escrever', lang: 'pt',
+    re: /\bnao\s+me\s+(escreva|escrevam|contate|contatem|contacte|contactem)\b|\bpare(m)?\s+de\s+me\s+(escrever|contatar|enviar)\b|\bme\s+descadastr(e|a|em)\b|\bdescadastrar\b|\bremova[\s-]+me\s+da\s+lista\b|\bme\s+remova\s+da\s+lista\b/,
+    head: /^\s*(parar|pare)\s*[.!]*\s*$/m,
+  },
 ];
 
 /** Minúsculas, sin tildes y con el apóstrofo recto: «Dénme de BAJA» → «denme de baja». */

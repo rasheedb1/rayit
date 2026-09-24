@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./outreach/deliverability": "./src/outreach/deliverability.ts",
-    "./outreach/warmup": "./src/outreach/warmup.ts"
+    "./outreach/warmup": "./src/outreach/warmup.ts",
+    "./outreach/messages": "./src/outreach/messages.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

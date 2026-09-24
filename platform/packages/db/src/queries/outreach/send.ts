@@ -16,9 +16,11 @@
 import {
   findPlaceholders, nextBusinessSlot, nextRetryAt, nextWindowSlot, MAX_SEND_ATTEMPTS, MIN_STEP_GAP_MS, type SendWindow,
 } from '@mc/core';
+import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
+import { finishBouncedEnrollments, markContactEmailInvalid } from './bounce.ts';
 import { advanceEnrollment } from './enroll.ts';
-import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
+import { notifyAccountDown, notifyTouchFailed, notifyTouchHeld } from './notices.ts';
 import {
   ACCOUNT_WAIT_MS, assertIds, DISPATCH_CHANNELS, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, SENDER_PROVIDERS,
   shiftFollowing, stepTypeForChannel, text, textOrNull, toDate, windowOf, type DispatchableStepType, type DispatchChannel,
@@ -261,13 +263,20 @@ export type SendDecision =
   | { kind: 'hold'; reason: string }
   | { kind: 'fail'; reason: string };
 
-/** Por qué se retiene un toque: lo lee una persona en la cola de Ventas. */
+/**
+ * Por qué se retiene un toque (r4): held_reason guarda un CÓDIGO estable
+ * de @mc/core/outreach/messages (HOLD_CODES), con su dato detrás de «:»
+ * (formatHoldReason), nunca una frase: la cola de VEN-16 y el aviso lo
+ * traducen al idioma del workspace con holdReasonText. Antes se guardaba
+ * una frase en español con nombres de columnas.
+ */
 export const HOLD_REASONS = {
-  noPostalAddress: 'Falta la dirección postal del pie de baja (outbound_policy.postal_address).',
-  noBody: 'El mensaje no tiene cuerpo.',
-  replyWithoutThread: 'Es una respuesta en el hilo, pero el correo al que responde no salió: revísalo antes de enviarlo.',
-  unconfirmed: (attempt: number) =>
-    `No se pudo comprobar si el intento ${attempt} salió: mira la carpeta de enviados antes de aprobarlo, para no enviarlo dos veces.`,
+  noPostalAddress: formatHoldReason({ code: 'no_postal_address' }),
+  noBody: formatHoldReason({ code: 'no_body' }),
+  replyWithoutThread: formatHoldReason({ code: 'reply_without_thread' }),
+  placeholders: (matches: readonly string[]) => formatHoldReason({ code: 'placeholders', detail: matches.join(' ') }),
+  unconfirmed: (attempt: number) => formatHoldReason({ code: 'unconfirmed_attempt', detail: attempt }),
+  noteTooLong: (length: number) => formatHoldReason({ code: 'note_too_long', detail: length }),
 } as const;
 
 /**
@@ -299,7 +308,13 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
   }
   if (!ctx.body.trim()) return { kind: 'hold', reason: HOLD_REASONS.noBody };
   const hits = [...findPlaceholders(ctx.subject), ...findPlaceholders(ctx.body)];
-  if (hits.length > 0) return { kind: 'hold', reason: `placeholders: ${hits.map((h) => h.match).join(' ')}` };
+  if (hits.length > 0) return { kind: 'hold', reason: HOLD_REASONS.placeholders(hits.map((h) => h.match)) };
+  // (r4) La nota de una invitación de LinkedIn no se corta: una nota de 320
+  // caracteres cortada a mitad de palabra le llegaba así a la marca.
+  if (ctx.stepType === 'linkedin_connect') {
+    const over = inviteNoteOverflow(ctx.body);
+    if (over !== null) return { kind: 'hold', reason: HOLD_REASONS.noteTooLong(over) };
+  }
   // «Como te comenté ayer…» sobre un correo que no salió (§9): no sale huérfano ni sin asunto.
   if (ctx.stepType === 'email_reply' && !ctx.previous) return { kind: 'hold', reason: HOLD_REASONS.replyWithoutThread };
   return { kind: 'send' };
@@ -363,6 +378,9 @@ export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: S
         `UPDATE outbound_touch SET status = 'held', held_reason = $2 WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
         [ctx.touchId, decision.reason],
       )).rows.length > 0;
+      // (r4) Un mensaje retenido avisa (uno por mensaje): sin la cola de
+      // VEN-16, era un mensaje que desaparecía en silencio.
+      if (moved) await notifyTouchHeld(tx, ctx.touchId, decision.reason, now);
       break;
     case 'fail':
       moved = await failTouch(tx, ctx.touchId, decision.reason, now);
@@ -551,11 +569,21 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
  * canal desde este workspace. Se cancela lo pendiente del canal para la
  * ficha, y cada enrolamiento suyo que se quede sin nada vivo termina en
  * 'bounced' (0051 §7). No es una baja (la persona no pidió nada): los
- * otros canales siguen, y la marca del correo inválido en la ficha es de
- * VEN-15 (contact.email_invalid).
+ * otros canales siguen.
+ *
+ * (r4) Si es un correo, la ficha queda además con contact.email_invalid,
+ * igual que cuando el rebote llega al buzón (outbound.bounces de VEN-15,
+ * con la misma función, markContactEmailInvalid): una secuencia que la
+ * enrole mañana, aquí o en otro workspace, ya no le programa correos a una
+ * dirección que se sabe mala. Antes solo lo marcaba el job de rebotes.
  */
 async function stopForBadAddress(tx: WorkerSql, ctx: SendContext, code: string, now: Date): Promise<void> {
   if (!ctx.contactId) return;
+  const enrollments: Array<string | null> = [ctx.enrollmentId];
+  if (ctx.channel === 'email') {
+    const marked = await markContactEmailInvalid(tx, { contactId: ctx.contactId, address: ctx.recipient, reason: code, now });
+    enrollments.push(...marked.canceled.map((c) => c.enrollmentId));
+  }
   const canceled = (
     await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch SET status = 'canceled', blocked_reason = $4
@@ -564,13 +592,6 @@ async function stopForBadAddress(tx: WorkerSql, ctx: SendContext, code: string, 
       [ctx.contactId, ctx.workspaceId, ctx.channel, code],
     )
   ).rows;
-  const enrollments = [...new Set([ctx.enrollmentId, ...canceled.map((r) => r.enrollment_id)].filter((x): x is string => Boolean(x)))];
-  if (enrollments.length === 0) return;
-  await tx.query(
-    `UPDATE outbound_enrollment e SET status = 'bounced', finished_at = $2::timestamptz
-      WHERE e.id = ANY($1::uuid[]) AND e.status IN ('active', 'paused', 'cooldown')
-        AND NOT EXISTS (SELECT 1 FROM outbound_touch t
-                         WHERE t.enrollment_id = e.id AND t.status IN ('draft', 'scheduled', 'processing', 'held'))`,
-    [enrollments, now.toISOString()],
-  );
+  enrollments.push(...canceled.map((r) => r.enrollment_id));
+  await finishBouncedEnrollments(tx, enrollments.filter((x): x is string => Boolean(x)), now);
 }

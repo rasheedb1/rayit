@@ -2,133 +2,107 @@
  * Outreach · los avisos del motor (notification), en el idioma del
  * workspace (VEN-10 r2).
  *
- * Un solo lugar para lo que la campana le dice a la persona: los títulos
- * y cuerpos por idioma, las etiquetas de cada canal y los motivos de un
- * fallo, en la voz del producto («mensaje», nunca la jerga interna
- * «toque»). notification guarda el texto en title_es/body_es (el nombre
- * de la columna es de 0002); aquí se elige por workspace.locale, como el
- * pie de baja del despachador.
+ * (r4) Las frases no viven aquí: están en @mc/core/outreach/messages
+ * (OUTREACH_NOTICE_TEXTS, los motivos de un fallo y de una retención, las
+ * etiquetas de cada canal y las URL de cada aviso), el messages.ts del
+ * motor, que leen también el worker y la web. Aquí solo se elige el
+ * idioma por workspace.locale y se escribe la fila en la misma
+ * transacción que la causa. notification guarda el texto en
+ * title_es/body_es (el nombre de la columna es de 0002).
  */
+import {
+  channelLabel, failureReason, holdReasonText, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS,
+} from '@mc/core/outreach/messages';
 import type { SqlExecutor } from '../../client.ts';
 import { assertIds } from './shared.ts';
-
-export type NoticeLang = 'es' | 'en';
-
-/** 'es-CO' → es, 'en-US' → en; lo que no se conoce, es. */
-export function noticeLang(locale: string | null | undefined): NoticeLang {
-  return (locale ?? '').toLowerCase().startsWith('en') ? 'en' : 'es';
-}
-
-/** Cómo se llama cada canal para una persona. */
-export const CHANNEL_LABELS: Record<NoticeLang, Record<string, string>> = {
-  es: { email: 'correo', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
-  en: { email: 'email', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
-};
-
-export function channelLabel(lang: NoticeLang, channel: string): string {
-  return CHANNEL_LABELS[lang][channel] ?? channel;
-}
-
-/** Por qué no salió un mensaje, en palabras. Lo que no está aquí se dice de forma genérica. */
-export const FAILURE_REASON_TEXTS: Record<NoticeLang, Record<string, string>> = {
-  es: {
-    account_unavailable: 'la cuenta del canal no está conectada',
-    account_auth: 'la cuenta del canal perdió el permiso y hay que reconectarla',
-    bounced: 'el correo rebotó',
-    invalid_recipient: 'la dirección no es válida',
-    rejected: 'el proveedor lo rechazó',
-    max_attempts: 'fallaron los cinco intentos',
-    zombie: 'el envío quedó a medias y no se reintenta para no duplicarlo',
-    not_configured: 'el canal no está configurado en la plataforma',
-    token_expired: 'el permiso del buzón venció y la plataforma no tiene las llaves de Google para renovarlo',
-    secret_missing: 'no encontramos el permiso guardado de la cuenta',
-  },
-  en: {
-    account_unavailable: 'the channel account is not connected',
-    account_auth: 'the channel account lost its permission and needs to be reconnected',
-    bounced: 'the email bounced',
-    invalid_recipient: 'the address is not valid',
-    rejected: 'the provider rejected it',
-    max_attempts: 'all five attempts failed',
-    zombie: 'the send was interrupted and is not retried to avoid a duplicate',
-    not_configured: 'the channel is not configured on the platform',
-    token_expired: "the mailbox permission expired and the platform doesn't have the Google keys to renew it",
-    secret_missing: "we couldn't find the account's stored permission",
-  },
-};
-
-export function failureReason(lang: NoticeLang, code: string): string {
-  return FAILURE_REASON_TEXTS[lang][code] ?? (lang === 'en' ? 'the provider returned an error' : 'el proveedor devolvió un error');
-}
-
-/** Los textos de cada aviso, por idioma. */
-export const OUTREACH_NOTICE_TEXTS = {
-  es: {
-    failedTitle: (company: string) => `Un mensaje a ${company} no salió`,
-    failedBody: (who: string, channel: string, reason: string) =>
-      `El mensaje a ${who} por ${channel} no se envió: ${reason}. Revisa la cola de Ventas.`,
-    replyTitle: (who: string) => `${who} respondió`,
-    replyBody: (channel: string) => `Llegó una respuesta por ${channel}. Lo pendiente de esa cadencia se canceló.`,
-    optOutTitle: (who: string) => `${who} pidió no recibir más mensajes`,
-    optOutBody: () => 'Se marcó la baja: nadie en la plataforma le volverá a escribir.',
-    accountDownTitle: (channel: string) => `Tu cuenta de ${channel} no está conectada`,
-    accountDownBody: (count: number, channel: string) =>
-      `${count === 1 ? 'Un mensaje espera' : `${count} mensajes esperan`} a que reconectes tu cuenta de ${channel}. ` +
-      'Salen solos en cuanto vuelva a estar conectada.',
-  },
-  en: {
-    failedTitle: (company: string) => `A message to ${company} was not sent`,
-    failedBody: (who: string, channel: string, reason: string) =>
-      `The message to ${who} over ${channel} was not sent: ${reason}. Check the Sales queue.`,
-    replyTitle: (who: string) => `${who} replied`,
-    replyBody: (channel: string) => `A reply came in over ${channel}. What was pending in that cadence was canceled.`,
-    optOutTitle: (who: string) => `${who} asked not to be contacted again`,
-    optOutBody: () => 'The opt-out was recorded: no one on the platform will write to them again.',
-    accountDownTitle: (channel: string) => `Your ${channel} account is not connected`,
-    accountDownBody: (count: number, channel: string) =>
-      `${count === 1 ? 'One message is' : `${count} messages are`} waiting for you to reconnect your ${channel} account. ` +
-      'They go out on their own once it is connected again.',
-  },
-} as const;
 
 /** Quién recibe el aviso: quien enroló (si sigue siendo del equipo), o todo el espacio (user_id NULL). */
 const RECIPIENT_SQL = `(SELECT m.user_id FROM membership m
                          WHERE m.workspace_id = t.workspace_id AND m.user_id = e.enrolled_by AND m.role <> 'client')`;
 
-/**
- * El aviso de un mensaje que no salió y no se va a reintentar (rebote,
- * cinco fallos, zombi, rechazo). Corre como mc_worker: el workspace es
- * el del toque, nunca otro.
- */
-export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<void> {
-  assertIds('notifyTouchFailed', [touchId]);
-  const r = (
-    await tx.query<{ locale: string | null; company: string; contact: string | null; channel: string }>(
-      `SELECT w.locale, co.name AS company, c.full_name AS contact, t.channel
+interface TouchNoticeRow {
+  locale: string | null;
+  company: string;
+  company_id: string;
+  contact: string | null;
+  channel: string;
+}
+
+async function touchNoticeRow(tx: SqlExecutor, touchId: string): Promise<TouchNoticeRow | undefined> {
+  return (
+    await tx.query<TouchNoticeRow>(
+      `SELECT w.locale, co.name AS company, co.id AS company_id, c.full_name AS contact, t.channel
          FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id JOIN company co ON co.id = t.company_id
          LEFT JOIN contact c ON c.id = t.contact_id
         WHERE t.id = $1::uuid`,
       [touchId],
     )
   ).rows[0];
+}
+
+/**
+ * El aviso de un mensaje que no salió y no se va a reintentar (rebote,
+ * cinco fallos, zombi, rechazo). Lleva a la ficha de la empresa (r4:
+ * antes a '/ventas', una cola que no existe todavía; la de VEN-16). Corre
+ * como mc_worker: el workspace es el del toque, nunca otro.
+ */
+export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<void> {
+  assertIds('notifyTouchFailed', [touchId]);
+  const r = await touchNoticeRow(tx, touchId);
   if (!r) return;
   const lang = noticeLang(r.locale);
   const m = OUTREACH_NOTICE_TEXTS[lang];
   await tx.query(
     `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
-     SELECT t.workspace_id, ${RECIPIENT_SQL}, 'outreach_failed', 'warning', $2, $3, 'outbound_touch', t.id, '/ventas', $4::timestamptz
+     SELECT t.workspace_id, ${RECIPIENT_SQL}, 'outreach_failed', 'warning', $2, $3, 'outbound_touch', t.id, $5, $4::timestamptz
        FROM outbound_touch t LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
       WHERE t.id = $1::uuid`,
     [
-      touchId, m.failedTitle(r.company), m.failedBody(r.contact ?? r.company, channelLabel(lang, r.channel), failureReason(lang, reason)),
-      now.toISOString(),
+      touchId, m.failedTitle(r.company),
+      m.failedBody(r.contact ?? r.company, channelLabel(lang, r.channel), failureReason(lang, reason), r.company),
+      now.toISOString(), OUTREACH_URLS.company(r.company_id),
     ],
   );
 }
 
 /**
+ * (r4) El aviso de un mensaje RETENIDO (huecos sin rellenar, un intento
+ * sin comprobar, una respuesta en el hilo sin correo previo, sin texto,
+ * sin dirección postal, una nota de LinkedIn demasiado larga): sin él, un
+ * mensaje retenido desaparecía en silencio, porque la cola que los
+ * muestra (VEN-16) todavía no existe. Uno por mensaje: si el mismo
+ * mensaje se retiene otra vez, no se repite. Es un 'outreach_failed' de
+ * severidad info con entity_type 'outbound_touch_held' (no hace falta un
+ * aviso nuevo en el CHECK de 0051 §9), y lleva a la ficha de la empresa.
+ * `reason` es el código de held_reason; la frase sale de holdReasonText.
+ */
+export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<boolean> {
+  assertIds('notifyTouchHeld', [touchId]);
+  const r = await touchNoticeRow(tx, touchId);
+  if (!r) return false;
+  const lang = noticeLang(r.locale);
+  const m = OUTREACH_NOTICE_TEXTS[lang];
+  const ins = await tx.query(
+    `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
+     SELECT t.workspace_id, ${RECIPIENT_SQL}, 'outreach_failed', 'info', $2, $3, 'outbound_touch_held', t.id, $5, $4::timestamptz
+       FROM outbound_touch t LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
+      WHERE t.id = $1::uuid
+        AND NOT EXISTS (SELECT 1 FROM notification n
+                         WHERE n.workspace_id = t.workspace_id AND n.entity_type = 'outbound_touch_held' AND n.entity_id = t.id)
+     RETURNING id`,
+    [
+      touchId, m.heldTitle(r.company),
+      m.heldBody(r.contact ?? r.company, channelLabel(lang, r.channel), holdReasonText(lang, reason), r.company),
+      now.toISOString(), OUTREACH_URLS.company(r.company_id),
+    ],
+  );
+  return ins.rows.length > 0;
+}
+
+/**
  * Un solo aviso por workspace, canal y día cuando la cuenta del canal no
- * está conectada (r2): no uno por mensaje. Los mensajes esperan en la
+ * está conectada (r2): no uno por mensaje. Lleva a /ventas/canales (r4),
+ * donde está el botón de reconectar. Los mensajes esperan en la
  * cola (se posponen) y salen solos al reconectar. El «día» son las
  * últimas veinte horas: la corrida de mañana vuelve a avisar si sigue
  * caída. Devuelve si avisó.
@@ -149,13 +123,13 @@ export async function notifyAccountDown(
      SELECT $1::uuid, NULL, 'outreach_failed', 'warning', $2, $3, 'outreach_channel',
             (SELECT a.id FROM outreach_channel_account a
               WHERE a.workspace_id = $1::uuid AND a.channel = $5 ORDER BY a.updated_at DESC LIMIT 1),
-            '/ventas', $4::timestamptz
+            $6, $4::timestamptz
       WHERE NOT EXISTS (
               SELECT 1 FROM notification n
                WHERE n.workspace_id = $1::uuid AND n.kind = 'outreach_failed' AND n.entity_type = 'outreach_channel'
                  AND n.title_es = $2 AND n.created_at > $4::timestamptz - interval '20 hours')
      RETURNING id`,
-    [input.workspaceId, title, m.accountDownBody(input.waiting, label), input.now.toISOString(), input.channel],
+    [input.workspaceId, title, m.accountDownBody(input.waiting, label), input.now.toISOString(), input.channel, OUTREACH_URLS.channels],
   );
   return r.rows.length > 0;
 }

@@ -44,21 +44,19 @@ export const ZOMBIE_AFTER_MINUTES = 5;
 /** Cuánto espera un toque cuya cuenta no está conectada antes de volver a mirar (dentro de la ventana). */
 export const ACCOUNT_WAIT_MS = 60 * 60 * 1000;
 
-/** La acción que cuenta en outbound_counter por cada tipo de paso. */
-export function actionTypeFor(stepType: string | null, channel: string): string {
-  switch (stepType) {
-    case 'email':
-    case 'email_reply':
-      return 'email';
-    case 'linkedin_connect':
-      return 'linkedin_invite';
-    case 'linkedin_message':
-      return 'linkedin_message';
-    case 'instagram_dm':
-      return 'instagram_dm';
-    default:
-      return channel === 'email' ? 'email' : channel === 'linkedin' ? 'linkedin_message' : channel;
-  }
+/**
+ * La plaza que cuenta en outbound_counter por CUENTA (r4): una sola por
+ * canal, porque el techo de la cuenta (outreach_channel_account_limits:
+ * effective_daily y effective_weekly, 100/200 en LinkedIn) es uno para
+ * todo lo que sale por ella. Antes se contaba por acción (linkedin_invite
+ * y linkedin_message por separado) y una cuenta de LinkedIn podía mandar
+ * su techo en invitaciones MÁS su techo en mensajes, el doble de lo que el
+ * proveedor aguanta. Una sola fila por cuenta y día es además lo que suma
+ * /ventas/canales (listChannelAccounts: used_today, used_week). El correo
+ * sigue siendo 'email', que es lo que ya era.
+ */
+export function accountActionType(channel: string): string {
+  return channel === 'instagram_dm' ? 'instagram_dm' : channel === 'linkedin' ? 'linkedin' : 'email';
 }
 
 /** El tipo de paso de un toque sin paso (un toque suelto de la web): el mensaje de su canal. */
@@ -149,7 +147,7 @@ export function recipientFor(channel: string, c: { email: string | null; linkedi
 // Topes: devolver la plaza que no se gastó (0051 §8)
 // ---------------------------------------------------------------------
 
-/** Lo que el reclamo reservó para un toque: la plaza de su cuenta y, si es correo, la del workspace. */
+/** Lo que el reclamo reservó para un toque: la plaza de su cuenta (una por canal) y, si es correo, la del workspace. */
 export interface CapReservation {
   workspaceId: string;
   accountId: string;
@@ -170,7 +168,7 @@ export interface CapReservation {
  */
 export async function releaseCaps(tx: WorkerSql, r: CapReservation): Promise<void> {
   if (!r.reservedOn) return;
-  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3, $4::date)`, [r.workspaceId, r.accountId, actionTypeFor(r.stepType, r.channel), r.reservedOn]);
+  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3, $4::date)`, [r.workspaceId, r.accountId, accountActionType(r.channel), r.reservedOn]);
   if (r.channel === 'email') {
     await tx.query(`SELECT outbound_counter_release($1::uuid, NULL, 'email', $2::date)`, [r.workspaceId, r.reservedOn]);
   }

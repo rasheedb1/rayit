@@ -37,10 +37,11 @@ import { isInsideWindow, nextBusinessSlot, nextWindowSlot, type SendWindow } fro
 import { createOptoutToken, optoutTokenHash, warmupDailyLimit, warmupDay } from '@mc/core/outreach/deliverability';
 import type { WorkerSql } from '../../client.ts';
 import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
+import { finishBouncedEnrollments } from './bounce.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
-  ACCOUNT_WAIT_MS, actionTypeFor, assertIds, date, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
+  accountActionType, ACCOUNT_WAIT_MS, assertIds, date, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
   DISPATCHABLE_STEP_TYPES, int, oneOf, recipientFor, releaseCaps, shiftFollowing, stepTypeForChannel, text,
   textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
 } from './shared.ts';
@@ -205,50 +206,68 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     accountDownNotices: 0, rescheduled: [],
   };
 
-  report.canceledOptedOut = (
-    await tx.query(
+  // (r4) Los enrolamientos que se quedan sin un toque vivo por lo que el
+  // reclamo cancela o salta: al final se avanzan (advanceEnrollment), como
+  // en rescueZombies. Si no, el último paso sin dirección dejaba el
+  // enrolamiento 'active' para siempre y el embudo de VEN-16 contaba
+  // cadencias activas fantasma.
+  const touched = new Set<string>();
+  const note = (rows: Array<{ enrollment_id: string | null }>) => {
+    for (const r of rows) if (r.enrollment_id) touched.add(r.enrollment_id);
+    return rows.length;
+  };
+
+  report.canceledOptedOut = note(
+    (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = CASE WHEN t.contact_id IS NULL THEN 'no_contact' ELSE 'opted_out' END
         WHERE t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
           AND (t.contact_id IS NULL
                OR address_is_suppressed(t.recipient_address)
                OR EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND (c.opted_out OR address_is_suppressed(c.email))))
-        RETURNING t.id`,
+        RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
-    )
-  ).rows.length;
+    )).rows,
+  );
 
   // (r3, con VEN-15) Un correo a una dirección que rebotó para siempre
   // (contact.email_invalid) no se reclama: la base impide programarlo
   // (0050 §2), pero no mira lo que ya estaba en la cola ni un reintento.
   // Solo si el toque va a ESA dirección: si va a otra, esa no rebotó.
-  report.canceledEmailInvalid = (
-    await tx.query(
+  const emailInvalidRows = (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = 'email_invalid'
          FROM contact c
         WHERE c.id = t.contact_id AND c.email_invalid AND t.channel = 'email'
           AND (t.recipient_address IS NULL OR t.recipient_address = c.email)
           AND t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
-        RETURNING t.id`,
+        RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
-    )
-  ).rows.length;
+    )).rows;
+  report.canceledEmailInvalid = note(emailInvalidRows);
+  // Sin nada vivo por un rebote, el enrolamiento termina en 'bounced', no en 'completed'.
+  await finishBouncedEnrollments(tx, emailInvalidRows.flatMap((r) => (r.enrollment_id ? [r.enrollment_id] : [])), now);
 
-  report.canceledFinished = (
-    await tx.query(
+  report.canceledFinished = note(
+    (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = CASE WHEN s.status = 'archived' THEN 'sequence_archived' ELSE e.status END
          FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
         WHERE e.id = t.enrollment_id AND t.status = 'scheduled' AND ${DUE}
           AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
           AND (e.status IN ('replied', 'opted_out', 'completed', 'bounced') OR s.status = 'archived')
-        RETURNING t.id`,
+        RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
-    )
-  ).rows.length;
+    )).rows,
+  );
+  const advanceTouched = async () => {
+    for (const e of touched) await advanceEnrollment(tx, e, now);
+  };
 
-  if (channels.length === 0) return report;
+  if (channels.length === 0) {
+    await advanceTouched();
+    return report;
+  }
   const candidates = (
     await tx.query<CandidateRow>(
       `SELECT t.id, t.workspace_id, t.channel, t.channel_account_id, t.enrollment_id,
@@ -298,6 +317,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     if (!recipient) {
       await tx.query(`UPDATE outbound_touch SET status = 'skipped', blocked_reason = 'no_address' WHERE id = $1::uuid`, [c.id]);
       report.skippedNoAddress++;
+      if (c.enrollmentId) touched.add(c.enrollmentId);
       continue;
     }
     // La ventana manda también al despachar, no solo al programar.
@@ -335,7 +355,8 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       effectiveDaily: int('claimDueTouches', 'effective_daily', acct.effective_daily),
       warmupStartedAt: toDate(acct.warmup_started_at), warmupDays: c.warmupDays, now, timeZone: c.workspaceTimeZone,
     });
-    const action = actionTypeFor(c.stepType, c.channel);
+    // Una plaza por cuenta, sea invitación o mensaje (r4): el techo es de la cuenta.
+    const action = accountActionType(c.channel);
     await tx.query('SAVEPOINT motor_cap');
     let cap: ClaimReport['rescheduled'][number]['cap'] | null = null;
     if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap }))) {
@@ -359,6 +380,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   for (const w of waiting.values()) {
     if (await notifyAccountDown(tx, { workspaceId: w.workspaceId, channel: w.channel, waiting: w.count, now })) report.accountDownNotices++;
   }
+  await advanceTouched();
   if (toClaim.length === 0) return report;
 
   const claimed = (

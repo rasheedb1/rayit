@@ -1,7 +1,11 @@
 /**
  * Textos de los jobs de Ventas que salen del worker hacia una persona:
- * hoy, las alertas diarias del outreach (VEN-15), en la campana y en el
- * correo de resumen. En el idioma del workspace (workspace.locale), como
+ * las alertas diarias del outreach (VEN-15), en la campana y en el
+ * correo de resumen. Los avisos del motor de cadencias (un mensaje que
+ * no salió, uno retenido, una respuesta, una cuenta caída) los escribe
+ * @mc/db en la misma transacción que su causa, con los textos de
+ * @mc/core/outreach/messages (VEN-10 r4), que es el messages.ts del
+ * motor: lo leen la base, el worker y la web. En el idioma del workspace (workspace.locale), como
  * el pie del correo del outreach (footerTextsFor de @mc/core): inglés si
  * el locale es inglés, si no español.
  *
@@ -14,17 +18,18 @@
  * del workspace.
  */
 import type { OutreachAlertKind } from '@mc/core/outreach/deliverability';
+import { OUTREACH_URLS } from '@mc/core/outreach/messages';
 
 /**
- * Adónde lleva cada alerta. Todas a /ventas/politica, que trae el bloque
- * «Salud de hoy» (outbound_health y los últimos rebotes) y el
- * presupuesto; account_down, a /ventas/canales cuando VEN-9 integre esa
- * pantalla: se cambia AQUÍ (CANALES_URL) y en nada más.
+ * Adónde lleva cada alerta. Casi todas a /ventas/politica, que trae el
+ * bloque «Salud de hoy» (outbound_health y los últimos rebotes) y el
+ * presupuesto; account_down, a /ventas/canales (VEN-9), donde está el
+ * botón de reconectar: la misma URL que los avisos del motor
+ * (OUTREACH_URLS de @mc/core/outreach/messages, una sola definición).
  */
 export const SALUD_URL = '/ventas/politica#salud';
 export const PRESUPUESTO_URL = '/ventas/politica#presupuesto';
-/** Hasta que /ventas/canales (VEN-9) esté integrada, la salud; después, '/ventas/canales'. */
-export const CANALES_URL = SALUD_URL;
+export const CANALES_URL = OUTREACH_URLS.channels;
 
 export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
   bounce_rate: SALUD_URL,

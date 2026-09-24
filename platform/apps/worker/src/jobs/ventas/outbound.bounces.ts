@@ -17,23 +17,31 @@
  *      tampoco va a contact_suppression (0038).
  *
  * El buzón se lee A TRAVÉS de una interfaz (BounceMailbox), no de un
- * cliente de Gmail escrito aquí: el conector de Gmail es de VEN-9
- * (packages/connectors, rama rasheed/VEN-9-canales, sin integrar). El
- * adaptador ya está (gmail-rebotes.ts: GmailApi.searchBounces +
- * getMessage → BounceMailbox) y probado contra un Gmail falso con la
- * forma del FakeGmail de VEN-9. Lo que falta es de la integración:
- * construir el GmailApi de cada cuenta con su token y registrar
- * createBouncesJob((cuenta) => gmailBounceMailbox(api)). Hasta entonces el
- * job registrado usa gmailNoConfigurado: cada cuenta cuenta como «canal
- * no configurado», y el job lo dice en el registro. Las pruebas usan un
- * buzón con avisos grabados (test/fixtures/rebotes).
+ * cliente de Gmail escrito aquí. (VEN-10 r4) El job registrado lee el
+ * Gmail de verdad: el mismo GmailChannel del despachador (buildChannels,
+ * con el token de cada cuenta del almacén y las llaves de Google de la
+ * plataforma) le da a cada cuenta su buzón (bounceMailboxFor), y
+ * gmail-rebotes.ts lo traduce (GmailApi.searchBounces + getMessage →
+ * BounceMailbox). Sin GOOGLE_CLIENT_ID/SECRET, o con el canal falso, las
+ * cuentas cuentan como «canal no configurado» y el job lo dice en el
+ * registro. Las pruebas usan un buzón con avisos grabados
+ * (test/fixtures/rebotes) y el FakeGmail de VEN-9.
+ *
+ * Lo que marca un rebote duro (la ficha, sus correos, sus enrolamientos)
+ * lo hace markContactEmailInvalid de @mc/db, la misma función que usa el
+ * despachador cuando el envío mismo rebota: un rebote deja lo mismo en la
+ * base llegue por donde llegue.
  *
  * Corre como mc_worker (BYPASSRLS): cada consulta filtra por el
  * workspace de la cuenta que se está leyendo, y nada se escribe en otro.
  */
 import { detectBounce, type BounceDetection, type InboundMail } from '@mc/core/outreach/deliverability';
+import { finishBouncedEnrollments, markContactEmailInvalid } from '@mc/db/queries/outreach';
+import { workerSqlFrom } from '@mc/db/worker';
+import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
-import { defineJob } from '../../runner/registry.ts';
+import { defineJob, type JobContext } from '../../runner/registry.ts';
+import { buildChannels } from './canales/index.ts';
 
 export const BOUNCES_JOB_ID = 'outbound.bounces';
 
@@ -58,12 +66,14 @@ export interface MailboxAccount {
   id: string;
   workspaceId: string;
   providerAccountId: string | null;
+  /** La referencia del token en el almacén (nunca el token). */
+  secretRef: string | null;
 }
 
 /** El buzón de una cuenta, o null si el canal no está configurado (sin conector o sin llaves). */
 export type MailboxFor = (account: MailboxAccount) => BounceMailbox | null;
 
-/** Hasta que VEN-9 entregue el conector de Gmail: ninguna cuenta tiene buzón legible. */
+/** Ninguna cuenta tiene buzón legible (sin llaves de Google, o con el canal falso). */
 export const gmailNoConfigurado: MailboxFor = () => null;
 
 export interface BouncesResult {
@@ -148,27 +158,13 @@ async function registrar(
     if (d.kind !== 'hard' || !contactId) return { inserted: true, invalidated: false, canceled: 0 };
 
     // Solo si la ficha SIGUE teniendo la dirección que rebotó: si alguien
-    // ya le corrigió el correo, el rebote es de la dirección vieja.
-    const marca = await tx.query(
-      `UPDATE contact
-          SET email_invalid = true, email_invalid_at = $2, email_invalid_reason = left($3, 300), bounced = true
-        WHERE id = $1 AND NOT email_invalid AND ($4::citext IS NULL OR email = $4::citext)
-        RETURNING id`,
-      [contactId, now.toISOString(), d.reason || 'Rebote', address],
-    );
-    const { rows: invalida } = await tx.query<{ email_invalid: boolean }>(
-      'SELECT email_invalid FROM contact WHERE id = $1',
-      [contactId],
-    );
-    if (!invalida[0]?.email_invalid) return { inserted: true, invalidated: false, canceled: 0 };
-    // Lo que 'processing' tiene es del despachador (0037 §4.1): no se toca.
-    const cancel = await tx.query(
-      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'email_invalid'
-        WHERE contact_id = $1 AND channel = 'email' AND status IN ('draft', 'scheduled', 'held')
-        RETURNING id`,
-      [contactId],
-    );
-    return { inserted: true, invalidated: marca.rows.length > 0, canceled: cancel.rows.length };
+    // ya le corrigió el correo, el rebote es de la dirección vieja. Lo que
+    // 'processing' tiene es del despachador (0037 §4.1): no se toca.
+    const sql = workerSqlFrom(tx);
+    const marked = await markContactEmailInvalid(sql, { contactId, address, reason: d.reason || 'Rebote', now });
+    if (!marked.isInvalid) return { inserted: true, invalidated: false, canceled: 0 };
+    await finishBouncedEnrollments(sql, marked.canceled.flatMap((c) => (c.enrollmentId ? [c.enrollmentId] : [])), now);
+    return { inserted: true, invalidated: marked.invalidated, canceled: marked.canceled.length };
   });
 }
 
@@ -195,14 +191,14 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
   const r: BouncesResult = {
     accounts: 0, notConfigured: 0, read: 0, bounces: 0, hard: 0, contactsInvalidated: 0, touchesCanceled: 0, failed: 0,
   };
-  const { rows: cuentas } = await db.query<{ id: string; workspace_id: string; provider_account_id: string | null }>(
-    `SELECT id, workspace_id, provider_account_id FROM outreach_channel_account
+  const { rows: cuentas } = await db.query<{ id: string; workspace_id: string; provider_account_id: string | null; secret_ref: string | null }>(
+    `SELECT id, workspace_id, provider_account_id, secret_ref FROM outreach_channel_account
       WHERE channel = 'email' AND status = 'connected' ORDER BY workspace_id, id`,
   );
   for (const c of cuentas) {
     if (opts.signal?.aborted) break;
     r.accounts++;
-    const account: MailboxAccount = { id: c.id, workspaceId: c.workspace_id, providerAccountId: c.provider_account_id };
+    const account: MailboxAccount = { id: c.id, workspaceId: c.workspace_id, providerAccountId: c.provider_account_id, secretRef: c.secret_ref };
     const mailbox = mailboxFor(account);
     if (!mailbox) {
       r.notConfigured++;
@@ -229,10 +225,10 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
   return r;
 }
 
-/** El job con el buzón que se le dé; el registrado usa gmailNoConfigurado hasta que exista el conector. */
-export function createBouncesJob(mailboxFor: MailboxFor) {
+/** El job con el buzón que se arma con el contexto de cada corrida. */
+export function createBouncesJobFrom(build: (ctx: JobContext) => MailboxFor) {
   return defineJob(BOUNCES_JOB_ID, async (_payload, ctx) => {
-    const r = await runBounces(ctx.db, ctx.now(), mailboxFor, {
+    const r = await runBounces(ctx.db, ctx.now(), build(ctx), {
       signal: ctx.signal,
       onAccountError: (a, err) =>
         ctx.logger.warn('no se pudo leer el buzón de rebotes', { accountId: a.id, error: err instanceof Error ? err.message : String(err) }),
@@ -248,4 +244,21 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
   });
 }
 
-export const bouncesJob = createBouncesJob(gmailNoConfigurado);
+/** El job con un buzón fijo (las pruebas). */
+export function createBouncesJob(mailboxFor: MailboxFor) {
+  return createBouncesJobFrom(() => mailboxFor);
+}
+
+/**
+ * Los buzones de verdad (VEN-10 r4): el GmailChannel de buildChannels, el
+ * mismo del despachador, con el almacén de tokens y las llaves de Google
+ * del worker, y la bitácora de api_call_log. Sin llaves, o con el canal
+ * falso, ninguna cuenta tiene buzón (canal no configurado).
+ */
+export function gmailMailboxes(ctx: JobContext): MailboxFor {
+  return buildChannels({
+    env: ctx.env, secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db), now: () => ctx.now(),
+  }).bounces;
+}
+
+export const bouncesJob = createBouncesJobFrom(gmailMailboxes);

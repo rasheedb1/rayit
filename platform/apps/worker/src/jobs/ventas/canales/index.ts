@@ -29,6 +29,7 @@ import type { Env } from '../../../runner/config.ts';
 import type { Logger } from '../../../runner/logger.ts';
 import { fakeChannels } from './fake.ts';
 import { GmailChannel } from './gmail.ts';
+import type { MailboxFor } from '../outbound.bounces.ts';
 import type { ChannelReader, ChannelSender } from './types.ts';
 import { UnipileChannel } from './unipile.ts';
 
@@ -41,6 +42,8 @@ export interface Channels {
   mode: 'real' | 'fake';
   senders: Partial<Record<DispatchChannel, ChannelSender>>;
   readers: Partial<Record<DispatchChannel, ChannelReader>>;
+  /** El buzón de rebotes de cada cuenta de correo (outbound.bounces, VEN-15). null: canal no configurado. */
+  bounces: MailboxFor;
   appUrl: string | null;
 }
 
@@ -88,7 +91,8 @@ export function buildChannels(opts: BuildChannelsOptions): Channels {
   const appUrl = appUrlFrom(opts.env);
   if (mode === 'fake') {
     const f = fakeChannels();
-    return { mode, senders: f, readers: f, appUrl: appUrl ?? 'http://localhost:3100' };
+    // El canal falso no tiene buzón: los rebotes del modo falso no existen.
+    return { mode, senders: f, readers: f, bounces: () => null, appUrl: appUrl ?? 'http://localhost:3100' };
   }
   const callLog = opts.callLog ?? NULL_OUTREACH_CALL_LOG;
   const http = { callLog, fetch: opts.fetch, now: opts.now, retry: { maxRetries: 0 } };
@@ -106,6 +110,7 @@ export function buildChannels(opts: BuildChannelsOptions): Channels {
     mode,
     senders: { email: gmail, linkedin, instagram_dm: instagram },
     readers: { email: gmail, linkedin, instagram_dm: instagram },
+    bounces: (account) => gmail.bounceMailboxFor(account),
     appUrl,
   };
 }

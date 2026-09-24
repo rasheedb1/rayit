@@ -39,7 +39,7 @@ import { PostgresDatabase } from '../../runner/db.ts';
 import { buildChannels } from './canales/index.ts';
 import { DEMO_WORKSPACE_IDS, resumenDemo, runDemoMotor } from './demo-motor.ts';
 import { motorDbFromJob } from './motor-db.ts';
-import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
+import { canceledCount, runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
 
 type Pasada = 'dispatch' | 'replies';
@@ -53,13 +53,14 @@ interface Opciones {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const USO = 'Uso: correr-motor.ts dispatch|replies [--canal-falso] [--workspace <uuid>] [--demo]';
 
 /** Lee los argumentos. Lanza ConfigError con el uso si algo no cuadra. */
 export function parseArgs(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): Opciones {
   // pnpm pasa el «--» que separa sus argumentos de los del comando.
   const [pasada, ...resto] = argv.filter((a) => a !== '--');
   if (pasada !== 'dispatch' && pasada !== 'replies') {
-    throw new ConfigError('Uso: correr-motor.ts dispatch|replies [--canal-falso] [--workspace <uuid>] [--demo]');
+    throw new ConfigError(USO);
   }
   let workspaceId: string | undefined;
   let canalFalso = env['OUTREACH_CHANNELS'] === 'fake';
@@ -70,9 +71,9 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
     else if (a === '--demo') demo = true;
     else if (a === '--workspace') {
       const v = resto[++i];
-      if (!v || !UUID.test(v)) throw new ConfigError('--workspace pide el uuid de un workspace.');
+      if (!v || !UUID.test(v)) throw new ConfigError(`--workspace pide el uuid de un workspace. ${USO}`);
       workspaceId = v;
-    } else throw new ConfigError(`Argumento desconocido: ${a}`);
+    } else throw new ConfigError(`Argumento desconocido: ${a}. ${USO}`);
   }
   if (demo && pasada !== 'dispatch') throw new ConfigError('--demo solo existe para dispatch.');
   return { pasada, canalFalso: canalFalso || demo, demo, workspaceId };
@@ -122,7 +123,7 @@ export function resumenDespacho(r: DispatchReport): string {
     `Despacho: ${r.claim.claimed} reclamado(s), ${r.sent.length} enviado(s), ${r.retried.length} a reintento, ${r.failed.length} fallido(s).`,
     `  Reprogramados por tope: ${r.claim.rescheduled.length}. Fuera de la ventana: ${r.claim.outsideWindow.length}. ` +
       `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}.`,
-    `  Cancelados: ${r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledFinished}. ` +
+    `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado). Sin dirección: ${r.claim.skippedNoAddress}. ` +
       `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} devuelto(s) a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];
   if (r.confirmed.length) lineas.push(`  Intentos ambiguos que sí habían salido (no se reenviaron): ${r.confirmed.length}.`);

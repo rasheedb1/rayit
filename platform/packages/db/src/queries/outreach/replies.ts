@@ -4,33 +4,28 @@
  * listOpenThreads da los hilos a los que se escribió en los últimos
  * treinta días, primero los que nunca se leyeron y después los que hace
  * más que no se leen (r3: antes siempre los mismos 200); markThreadsChecked
- * anota la lectura. recordInbound registra lo que llegó y su efecto:
- *   · pide la baja (detectOptOut, catorce expresiones) → la ficha, las
- *     fichas con su correo y todo lo suyo pendiente, en cualquier
- *     secuencia, como public_optout (r2);
+ * anota la lectura. recordInbound registra lo que llegó, y su efecto lo
+ * decide applyInboundEffects (inbound.ts, r4), la misma función que usa
+ * el webhook de VEN-9:
+ *   · pide la baja (el detector único de @mc/core) → la ficha, las fichas
+ *     con su correo y todo lo suyo cancelable, en cualquier secuencia,
+ *     como public_optout; también si la respuesta es automática (r4);
  *   · si no, y la cadencia seguía viva (o había completado sus pasos) →
- *     replied, se cancela lo pendiente y se avisa;
+ *     replied, se cancela lo cancelable y se avisa;
  *   · si ya había respondido, el mensaje se registra y solo se mira la
- *     baja (r2): una marca que respondió y luego escribe «no nos escriban
- *     más» queda de baja en todos los canales, sin un segundo aviso de
- *     «respondió»;
- *   · una respuesta automática (fuera de oficina: Auto-Submitted,
- *     X-Autoreply, Precedence: auto_reply) se guarda sin cancelar, sin
- *     avisar y sin contar como respuesta (r3): la marca solo estaba de
- *     vacaciones. Queda sin intención para el clasificador de VEN-14.
+ *     baja: una marca que respondió y luego escribe «no nos escriban más»
+ *     queda de baja en todos los canales, sin un segundo aviso;
+ *   · una respuesta automática que no pide la baja (fuera de oficina) se
+ *     guarda sin cancelar, sin avisar y sin contar como respuesta (r3).
  */
-import { detectOptOut } from '@mc/core';
 import type { WorkerSql } from '../../client.ts';
-import { markEnrollmentReplied } from './enroll.ts';
-import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS } from './notices.ts';
+import { applyInboundEffects } from './inbound.ts';
 import {
   assertIds, date, DISPATCH_CHANNELS, oneOf, SENDER_PROVIDERS, text, textOrNull, type DispatchChannel, type SenderProvider,
 } from './shared.ts';
 
 /** Los enrolamientos cuyos hilos se siguen leyendo. replied y completed también: la baja puede llegar después. */
 export const READABLE_ENROLLMENT_STATUSES = ['active', 'paused', 'cooldown', 'completed', 'replied'] as const;
-/** Los que todavía pueden recibir mensajes nuestros. */
-const LIVE_ENROLLMENT_STATUSES = ['active', 'paused', 'cooldown'] as const;
 
 /** Un hilo al que se le escribió y que todavía puede traer una respuesta. */
 export interface OpenThread {
@@ -217,83 +212,11 @@ export interface InboundResult {
 }
 
 /**
- * La baja que llega en una respuesta, con el mismo alcance que la del
- * enlace (public_optout, 0037 §9): la ficha que respondió y las fichas
- * con su mismo correo, en cualquier workspace; todo lo suyo pendiente
- * (draft, scheduled, held) cancelado en cualquier secuencia, y sus
- * enrolamientos vivos a opted_out. contact.opted_out lleva la dirección a
- * contact_suppression (disparador de 0026). Lo que ya está en processing
- * lo cancela el despachador al releer. Devuelve los toques cancelados.
- */
-export async function applyContactOptOut(tx: WorkerSql, contactId: string, reason: string, now: Date): Promise<string[]> {
-  assertIds('applyContactOptOut', [contactId]);
-  const ids = (
-    await tx.query<{ id: string }>(
-      `SELECT DISTINCT c.id FROM contact c, contact b
-        WHERE b.id = $1::uuid AND (c.id = b.id OR (b.email IS NOT NULL AND c.email = b.email))`,
-      [contactId],
-    )
-  ).rows.map((r) => r.id);
-  if (ids.length === 0) return [];
-  const canceled = (
-    await tx.query<{ id: string }>(
-      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'opted_out'
-        WHERE contact_id = ANY($1::uuid[]) AND status IN ('draft', 'scheduled', 'held') RETURNING id`,
-      [ids],
-    )
-  ).rows.map((r) => r.id);
-  await tx.query(
-    `UPDATE outbound_enrollment SET status = 'opted_out', finished_at = coalesce(finished_at, $2::timestamptz)
-      WHERE contact_id = ANY($1::uuid[]) AND status = ANY($3::text[])`,
-    [ids, now.toISOString(), [...LIVE_ENROLLMENT_STATUSES]],
-  );
-  await tx.query(
-    `UPDATE contact SET opted_out = true, opted_out_at = coalesce(opted_out_at, $2::timestamptz),
-            opted_out_reason = coalesce(opted_out_reason, $3)
-      WHERE id = ANY($1::uuid[]) AND NOT opted_out`,
-    [ids, now.toISOString(), reason],
-  );
-  return canceled;
-}
-
-async function notifyInbound(
-  tx: WorkerSql,
-  thread: OpenThread,
-  messageId: string,
-  kind: 'reply' | 'optout',
-  now: Date,
-): Promise<void> {
-  const w = (
-    await tx.query<{ locale: string | null; who: string | null }>(
-      `SELECT w.locale, coalesce(c.full_name, co.name) AS who
-         FROM workspace w LEFT JOIN contact c ON c.id = $2::uuid LEFT JOIN company co ON co.id = c.company_id
-        WHERE w.id = $1::uuid`,
-      [thread.workspaceId, thread.contactId],
-    )
-  ).rows[0];
-  const lang = noticeLang(w?.locale);
-  const m = OUTREACH_NOTICE_TEXTS[lang];
-  const label = channelLabel(lang, thread.channel);
-  const who = w?.who ?? label;
-  await tx.query(
-    `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
-     VALUES ($1::uuid,
-             (SELECT m.user_id FROM membership m JOIN outbound_enrollment e ON e.enrolled_by = m.user_id
-               WHERE e.id = $2::uuid AND m.workspace_id = $1::uuid AND m.role <> 'client'),
-             'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, '/ventas', $7::timestamptz)`,
-    [
-      thread.workspaceId, thread.enrollmentId, kind === 'optout' ? 'warning' : 'success',
-      kind === 'optout' ? m.optOutTitle(who) : m.replyTitle(who), kind === 'optout' ? m.optOutBody() : m.replyBody(label),
-      messageId, now.toISOString(),
-    ],
-  );
-}
-
-/**
  * Registra una respuesta: el mensaje entrante en outbound_message (sin
- * duplicar), replied_at en el toque, y el efecto en la cadencia en la
- * misma transacción (ver la cabecera). Solo lo nuevo tiene efecto:
- * releer un hilo no vuelve a cancelar ni a avisar.
+ * duplicar) y su efecto, en la misma transacción, con applyInboundEffects
+ * (inbound.ts): la MISMA función que usa el webhook de VEN-9, así que una
+ * respuesta deja la misma base llegue por donde llegue (r4). Solo lo nuevo
+ * tiene efecto: releer un hilo no vuelve a cancelar ni a avisar.
  */
 export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: InboundMessage, now: Date): Promise<InboundResult> {
   const inserted = (
@@ -313,37 +236,10 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
     )
   ).rows[0];
   if (!inserted) return { isNew: false, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: false };
-  // Un «estoy de vacaciones hasta el lunes» no es una respuesta: ni cancela,
-  // ni avisa, ni marca replied_at (el embudo de VEN-16 lo contaría).
-  if (msg.automatic) return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: true };
-
-  const firstReply = (
-    await tx.query(
-      `UPDATE outbound_touch SET replied_at = $2::timestamptz WHERE id = $1::uuid AND replied_at IS NULL RETURNING id`,
-      [thread.touchId, msg.occurredAt.toISOString()],
-    )
-  ).rows.length > 0;
-  const enrollmentStatus = thread.enrollmentId
-    ? (await tx.query<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = $1::uuid FOR UPDATE`, [thread.enrollmentId])).rows[0]?.status ?? null
-    : null;
-
-  const verdict = detectOptOut(msg.body);
-  if (verdict.optOut && thread.contactId) {
-    const wasOut = (await tx.query<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = $1::uuid`, [thread.contactId])).rows[0]?.opted_out === true;
-    const canceled = await applyContactOptOut(tx, thread.contactId, `reply:${verdict.ruleId}`, now);
-    if (!wasOut) await notifyInbound(tx, thread, inserted.id, 'optout', now);
-    return { isNew: true, optOut: true, optOutRule: verdict.ruleId, canceled, notified: !wasOut, automatic: false };
-  }
-  if (thread.enrollmentId) {
-    // Una cadencia viva, o que ya había completado sus pasos: esta es SU respuesta.
-    if (enrollmentStatus && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(enrollmentStatus) || enrollmentStatus === 'completed')) {
-      const canceled = await markEnrollmentReplied(tx, thread.enrollmentId, msg.occurredAt);
-      await notifyInbound(tx, thread, inserted.id, 'reply', now);
-      return { isNew: true, optOut: false, optOutRule: null, canceled, notified: true, automatic: false };
-    }
-    // Ya había respondido: el mensaje queda en la conversación, sin otro aviso.
-    return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: false, automatic: false };
-  }
-  if (firstReply) await notifyInbound(tx, thread, inserted.id, 'reply', now);
-  return { isNew: true, optOut: false, optOutRule: null, canceled: [], notified: firstReply, automatic: false };
+  const fx = await applyInboundEffects(tx, {
+    workspaceId: thread.workspaceId, messageId: inserted.id, channel: thread.channel, touchId: thread.touchId,
+    enrollmentId: thread.enrollmentId, contactId: thread.contactId, body: msg.body, automatic: msg.automatic === true,
+    occurredAt: msg.occurredAt, now,
+  });
+  return { isNew: true, optOut: fx.optOut, optOutRule: fx.optOutRule, canceled: fx.canceled, notified: fx.notified, automatic: fx.automatic };
 }
