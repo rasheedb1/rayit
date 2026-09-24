@@ -442,7 +442,8 @@ export const STORIES: readonly Story[] = [
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "24 de septiembre, ronda 2. Hecho y probado en pglite: token de baja opaco (32 bytes al azar, sin secreto; el sha256 manda y es la misma forma que el despachador de VEN-10), página /baja/<token> con la dirección enmascarada y quién escribe (public_optout_preview, 0038 §5) y POST de un clic; pie obligatorio y List-Unsubscribe; calentamiento con una sola regla (warmupDailyLimit/warmupCurve); rebotes duros solo con lo que dice el servidor; alertas con rebotes duros de lo enviado y toques debidos, en el idioma del espacio y un resumen por espacio; /ventas/politica con «Salud de hoy»; demo:enlace-baja para probar la baja a mano. 0038 NO aplicada en Supabase. Bloqueada por la integración de VEN-9-canales: registrar gmailBounceMailbox (ya escrito y probado) con el GmailApi de cada cuenta en outbound.bounces, que hoy dice «canal no configurado»; y, al integrar VEN-10, usar createOptoutToken, buildEmailFooter y listUnsubscribeHeaders en lugar de sus copias (docs/ventas-outreach.md §5.2).",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

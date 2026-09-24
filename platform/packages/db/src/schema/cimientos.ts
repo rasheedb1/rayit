@@ -27,9 +27,9 @@ export const NOTIFICATION_KINDS = [
   'media_kit_locked',
   // main 0038: una conexión nueva (CON). Main todavía no la tiene en esta lista.
   'connection_added',
-  // VEN-15 (0040_entregabilidad): las alertas diarias del outreach.
+  // VEN-15 (0050_entregabilidad): las alertas diarias del outreach.
   'outreach_bounce_rate', 'outreach_no_sends', 'outreach_queue_stuck', 'outreach_account_down', 'outreach_llm_budget',
-  // 0041: un mensaje de outreach que no salió para siempre, y una respuesta de la marca (VEN-10).
+  // 0051: un mensaje de outreach que no salió para siempre, y una respuesta de la marca (VEN-10).
   'outreach_failed', 'outreach_reply',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;

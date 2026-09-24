@@ -24,13 +24,15 @@
     "./queries/conexiones": "./src/queries/conexiones.ts",
     "./queries/outreach": "./src/queries/outreach.ts",
     "./queries/canales": "./src/queries/canales.ts",
+    "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
     "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 test/*.test.ts",
-    "introspect": "node scripts/introspect.mjs"
+    "introspect": "node scripts/introspect.mjs",
+    "demo:enlace-baja": "node --experimental-strip-types scripts/demo-enlace-baja.ts"
   },
   "dependencies": {
     "@mc/core": "workspace:*",

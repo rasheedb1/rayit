@@ -27,11 +27,14 @@ export function Contactos({
   companyId,
   contacts,
   contactsMeta,
+  bouncedNotes = {},
 }: {
   companyId: string;
   contacts: ContactRow[];
   /** Lo que va junto al título, ya formateado en el servidor («3»). */
   contactsMeta?: string;
+  /** Por ficha: «Rebotó el 23 de septiembre: 550 5.1.1 …», ya con la fecha formateada en el servidor. */
+  bouncedNotes?: Readonly<Record<string, string>>;
 }) {
   const t = MESSAGES.contacto;
   const [adding, setAdding] = useState(false);
@@ -69,7 +72,7 @@ export function Contactos({
       ) : (
         <ul className="mt-3 divide-y divide-border rounded-md border border-border">
           {contacts.map((c) => (
-            <ContactItem key={c.id} contact={c} companyId={companyId} />
+            <ContactItem key={c.id} contact={c} companyId={companyId} bouncedNote={bouncedNotes[c.id]} />
           ))}
         </ul>
       )}
@@ -159,7 +162,7 @@ function ContactoForm({
   );
 }
 
-function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId: string }) {
+function ContactItem({ contact: c, companyId, bouncedNote }: { contact: ContactRow; companyId: string; bouncedNote?: string }) {
   const t = MESSAGES.contacto;
   const [confirming, setConfirming] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -180,6 +183,7 @@ function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId
             {c.bounced && <Pill kind="warn">{t.bounced}</Pill>}
             {!c.isOwn && <Pill kind="neutral">{t.publicSource}</Pill>}
           </p>
+          {c.bounced && bouncedNote && <p className="mt-0.5 text-xs text-warn">{bouncedNote}</p>}
           {c.roleTitle && <p className="mt-0.5 text-xs text-ink-2">{c.roleTitle}</p>}
           <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-2">
             {/* Sin nombre, el correo o el Instagram hacen de título: no se repiten aquí. */}

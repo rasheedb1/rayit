@@ -1,19 +1,24 @@
 -- =====================================================================
--- 0041 · El motor de cadencias (VEN-10)
+-- 0051 · El motor de cadencias (VEN-10)
 -- ---------------------------------------------------------------------
--- Número: 0041 y no 0038 (VEN-10 r2). Tres ramas de outreach crean
--- migraciones a la vez sobre 0037 y el integrador las aplica en este
--- orden fijo:
---   0038_canales_outreach.sql      VEN-9-canales
---   0039_callback_de_canales.sql   VEN-9-canales
---   0040_entregabilidad.sql        VEN-15 (hoy 0038 en su rama)
---   0041_motor_cadencias.sql       esta
--- Va la última porque redefine notification_kind_check con la UNIÓN de
--- todos los avisos (§9): la que se aplica última gana, y así ninguno de
--- los de VEN-15 ni los del motor se pierde. No depende de nada de 0038
--- a 0040, así que también se aplica sola detrás de 0037 (lo hacen
--- `make db.check` y las pruebas de esta rama). Si el integrador renumera
--- todo detrás de lo que main ya aplicó, el orden relativo es el mismo.
+-- Número: la regla, no un número fijo. Esta va DETRÁS de todas las de
+-- outreach (0037_outreach, las de VEN-9-canales y la de VEN-15), porque
+-- redefine notification_kind_check con la UNIÓN de todos los avisos
+-- (§9): la que se aplica última gana, y así no se pierde ninguno.
+-- Depende de 0037 (tablas del outreach) y de nada más: 0038-0040 de
+-- VEN-9-canales y la entregabilidad no le aportan columnas.
+--
+-- Por qué 0051 (24-sep-2026, schema_migrations de Supabase): main ya
+-- aplicó su serie 0034-0042. Las de integración que chocan con ella
+-- (0034_seguimientos … 0037_outreach, y 0038-0040 de VEN-9-canales)
+-- pasan a 0043-0049 al mezclar con main, en su mismo orden; la
+-- entregabilidad de VEN-15 ya es 0050 y esta, 0051. Si al integrar
+-- aparece otra migración de main o de otra rama, esta se renumera para
+-- seguir siendo la última de outreach, y su unión de avisos se revisa
+-- contra el CHECK de todas las que la preceden (la prueba de
+-- NOTIFICATION_KINDS lo compara). Lo comprobó VEN-10 r3 con main +
+-- integración + VEN-9-canales-r2 + VEN-15-r2 renumeradas así, en
+-- Postgres embebido (docs/ventas-outreach.md §9.3).
 --
 -- Lo que el despachador necesita y 0037 no traía:
 --
@@ -169,7 +174,7 @@ $$;
 REVOKE ALL ON FUNCTION contact_visible_to(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION contact_visible_to(uuid, uuid) TO mc_app, mc_worker;
 COMMENT ON FUNCTION contact_visible_to(uuid, uuid) IS
-  'La ficha es del workspace, o es pública y su empresa está en el embudo del workspace (0041 §5). '
+  'La ficha es del workspace, o es pública y su empresa está en el embudo del workspace (0051 §5). '
   'La usan enrollContacts y los disparadores de outbound_enrollment y outbound_touch.';
 
 CREATE OR REPLACE FUNCTION outreach_contact_of_workspace()
@@ -289,7 +294,7 @@ REVOKE ALL ON FUNCTION outbound_counter_release(uuid, uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION outbound_counter_release(uuid, uuid, text) TO mc_worker;
 COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text) IS
   'Devuelve la plaza de hoy y de esta semana de un tope (cuenta, o workspace con p_account NULL) que el '
-  'despachador reservó al reclamar y no gastó (0041 §8).';
+  'despachador reservó al reclamar y no gastó (0051 §8).';
 
 -- ---------------------------------------------------------------------
 -- 9 · Todos los avisos (r2)

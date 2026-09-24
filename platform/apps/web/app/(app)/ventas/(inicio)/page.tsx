@@ -10,6 +10,7 @@ import {
 } from "@mc/db/queries/ventas";
 import { getLocalDates, nextActionOf } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -79,6 +80,11 @@ export default async function VentasPage({
         eyebrow={t.header.eyebrow}
         title={t.header.title}
         description={t.header.description}
+        aside={
+          <Button variant="ghost" href="/ventas/politica">
+            {t.header.politica}
+          </Button>
+        }
       />
 
       {/* VEN-4: lo vencido y lo de hoy, antes que cualquier cifra. */}

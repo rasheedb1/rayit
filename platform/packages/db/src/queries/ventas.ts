@@ -264,6 +264,13 @@ export interface ContactRow {
   optedOutReason: string | null;
   bounced: boolean;
   /**
+   * Por qué y cuándo rebotó (contact.email_invalid_reason y _at, 0038):
+   * el diagnóstico del servidor que lo rechazó. Null si no rebotó, o si
+   * rebotó antes de 0038 (solo bounced, sin motivo).
+   */
+  bouncedReason: string | null;
+  bouncedAt: string | null;
+  /**
    * Lo guardó este workspace. Un contacto visible pero ajeno (fuente
    * pública, guardado por otro) se lee y no se edita: la pantalla lo
    * muestra sin los botones, y la base lo rechazaría igual.
@@ -810,7 +817,7 @@ export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<
   const { rows } = await tx.query<ContactRowSql>(
     `SELECT id, company_id, full_name, role_title, email::text AS email, phone, linkedin_url,
             instagram_handle, source, source_url, opted_out, opted_out_at, opted_out_reason,
-            bounced, created_at,
+            bounced, email_invalid_reason, email_invalid_at, created_at,
             coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own
      FROM contact
      WHERE company_id = $1
@@ -2249,7 +2256,8 @@ interface ContactRowSql {
   email: string | null; phone: string | null; linkedin_url: string | null;
   instagram_handle: string | null; source: ContactSource; source_url: string | null;
   opted_out: boolean; opted_out_at: string | null; opted_out_reason: string | null;
-  bounced: boolean; is_own: boolean; created_at: string;
+  bounced: boolean; email_invalid_reason: string | null; email_invalid_at: Date | string | null;
+  is_own: boolean; created_at: string;
 }
 
 function toContactRow(r: ContactRowSql): ContactRow {
@@ -2268,6 +2276,13 @@ function toContactRow(r: ContactRowSql): ContactRow {
     optedOutAt: r.opted_out_at,
     optedOutReason: r.opted_out_reason,
     bounced: r.bounced,
+    bouncedReason: r.email_invalid_reason ?? null,
+    bouncedAt:
+      r.email_invalid_at === null || r.email_invalid_at === undefined
+        ? null
+        : r.email_invalid_at instanceof Date
+          ? r.email_invalid_at.toISOString()
+          : new Date(r.email_invalid_at).toISOString(),
     isOwn: r.is_own,
     createdAt: r.created_at,
   };

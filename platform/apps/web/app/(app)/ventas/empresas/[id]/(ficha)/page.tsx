@@ -243,7 +243,18 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             <LineaDeTiempo companyId={company.id} items={vistaDeActividad(activity.rows, company.name, f)} nextCursor={activity.nextCursor} />
           </Bloque>
 
-          <Contactos companyId={company.id} contacts={contacts} contactsMeta={contacts.length > 0 ? f.int(contacts.length) : undefined} />
+          <Contactos
+            companyId={company.id}
+            contacts={contacts}
+            contactsMeta={contacts.length > 0 ? f.int(contacts.length) : undefined}
+            bouncedNotes={Object.fromEntries(
+              contacts.flatMap((c) =>
+                c.bounced && c.bouncedAt && c.bouncedReason
+                  ? [[c.id, MESSAGES.contacto.bouncedNote(f.date(c.bouncedAt, "long"), c.bouncedReason)]]
+                  : [],
+              ),
+            )}
+          />
         </div>
 
         <aside className="min-w-0 space-y-8" aria-label={t.detail.data}>

@@ -24,6 +24,8 @@ export const MESSAGES = {
       "El radar te trae marcas que encajan con lo que haces; el tablero dice en qué etapa está cada negocio y qué toca hacer hoy.",
     /** El título de la pestaña del navegador. */
     metaTitle: "Ventas",
+    /** El enlace a /ventas/politica (VEN-15). */
+    politica: "Política de envío",
   },
 
   tabs: {
@@ -363,6 +365,8 @@ export const MESSAGES = {
     edited: "Contacto actualizado.",
     editError: "No se pudo actualizar el contacto.",
     bounced: "Correo rebotado",
+    /** Junto a la píldora: cuándo y por qué, con el diagnóstico del servidor que lo rechazó (0038). */
+    bouncedNote: (fecha: string, motivo: string) => `Rebotó el ${fecha}: ${motivo}`,
     sourceLabel: "Fuente",
     seeSource: "ver",
     sourcePlaceholder: "Elige la procedencia",

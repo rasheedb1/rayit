@@ -138,6 +138,14 @@ export const contact = pgTable('contact', {
   bounced: boolean('bounced').default(false).notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /**
+   * El correo rebotó con un error permanente (0038, VEN-15). No se le
+   * programan correos (outbound_touch_email_invalid); los otros canales
+   * siguen. Cambiar el correo de la ficha lo borra.
+   */
+  emailInvalid: boolean('email_invalid').default(false).notNull(),
+  emailInvalidAt: timestamptz('email_invalid_at'),
+  emailInvalidReason: text('email_invalid_reason'),
 });
 
 export const companyLink = pgTable(

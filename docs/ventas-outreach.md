@@ -421,11 +421,93 @@ Decisiones que las piezas siguientes tienen que conocer:
   toda la plataforma. La página de baja **rechaza el clic que llega con
   una sesión de un miembro del workspace que envió** (el servidor lo
   sabe antes de llamar a `publicOptout`: `outbound_optout_link` no se
-  lee desde la web, así que lo pregunta el servidor con `asWorker` por
-  el sha256 del token), pide una confirmación que un clic automático no
-  dé, y el despachador no vuelve a mostrar el enlace en la aplicación.
+  lee desde la web, así que se lo pregunta a `public_optout_preview`
+  (0038 §5) por el sha256 del token, sin `asWorker`), pide una
+  confirmación que un clic automático no dé, y el despachador no vuelve
+  a mostrar el enlace en la aplicación.
   Lo que se escape queda en `outbound_optout_event` para la alerta y
   para deshacerlo.
+
+**Cómo quedó la entregabilidad (VEN-15, ronda 2, 24 de septiembre).** Lo
+que el despachador de VEN-10 tiene que usar, todo en
+`@mc/core/outreach/deliverability` (puro, con pruebas):
+
+- **El token de baja** es opaco: `createOptoutToken()` da 32 bytes al
+  azar en base64url, la misma forma que genera hoy `newOptoutToken` de
+  VEN-10, y en `outbound_optout_link.token_hash` va
+  `optoutTokenHash(token)`. No lleva ningún id dentro ni depende de un
+  secreto: la base lo reconoce por su sha256, así que un error de
+  configuración no puede apagar la baja y los enlaces no caducan. La
+  primera ronda lo firmaba con `OUTREACH_OPTOUT_SECRET` y llevaba los
+  uuid en claro; esa llave ya no existe. **Para VEN-10 al integrar:**
+  cambiar `newOptoutToken` por `createOptoutToken` + `optoutTokenHash`,
+  `withOptoutFooter` por `buildEmailFooter` + `listUnsubscribeHeaders`, y
+  borrar su `optoutUrl` duplicado de `@mc/core/outreach/optout.ts`.
+  Mientras tanto los dos contratos son compatibles: un token de VEN-10 da
+  de baja igual (probado en `packages/db/test/entregabilidad.test.ts`).
+- **La página de baja** (`/baja/<token>`, sin sesión) pregunta a
+  `public_optout_preview(token, espacios de quien la abre)` (0038 §5,
+  SECURITY DEFINER de `mc_public_share`): si el enlace es de un correo
+  que salió, la dirección enmascarada («v•••@marca.com»), el nombre del
+  espacio que escribe, si ya estaba de baja y si quien la abre es
+  miembro del espacio que la envió. Ese último caso no ofrece el botón
+  (la regla de §5.2). El clic va por `public_optout`. El POST de un clic
+  de Gmail va a `/baja/<token>/un-clic`.
+- **Cada correo** lleva `buildEmailFooter` (frase de baja con
+  `optoutUrl` y la dirección postal de la política; sin dirección no hay
+  pie y el correo no está listo) y `listUnsubscribeHeaders`.
+- **El tope diario de una cuenta** es `warmupDailyLimit({ day:
+  warmupDay(conectada, ahora, zona), policyLimit, warmupDays })`: 20 al
+  día durante la meseta (la primera semana con 14 días de calentamiento;
+  la primera mitad si son menos) y en línea recta hasta el tope el día
+  `warmup_days`. La pantalla pinta `warmupCurve`, que sale de la misma
+  función.
+- **Los rebotes** los lee `outbound.bounces` cada media hora a través de
+  la interfaz `BounceMailbox`. El adaptador sobre el `GmailApi` de VEN-9
+  ya está (`apps/worker/src/jobs/ventas/gmail-rebotes.ts`,
+  `gmailBounceMailbox`), probado con un Gmail falso de la forma de su
+  FakeGmail. **Falta al integrar VEN-9:** construir el `GmailApi` de cada
+  cuenta y registrar `createBouncesJob((c) => gmailBounceMailbox(api))`
+  en lugar de `gmailNoConfigurado`; hasta entonces cada cuenta sale como
+  «canal no configurado». `detectBounce` solo da «duro» con un DSN o con
+  lo que dijo el servidor (Diagnostic-Code, o una línea con código SMTP),
+  nunca por una frase suelta del cuerpo: un «fuera de la oficina» de
+  postmaster@ no marca a nadie. Un rebote duro marca `contact.email_invalid`
+  (y `bounced`) con su motivo, que la ficha enseña con su fecha, y cancela
+  los correos pendientes de esa ficha, no los de LinkedIn; no va a
+  `contact_suppression`, que corta todos los canales. Corregir el correo
+  de la ficha borra las dos marcas. La base no deja programar un correo a
+  una ficha con el correo inválido (`outbound_touch_email_invalid`), pero
+  sí reclamarlo: la consulta de reclamo de VEN-10 tiene que filtrarlos.
+- **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
+  workspace desde las 8:00 locales) dejan una `notification` por tipo y
+  día, en el idioma del espacio, con su propio enlace, y mandan UN
+  resumen por correo a todos los dueños por `SMTP_URL`. La tasa de
+  rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
+  nada» solo salta si había toques que tocaba enviar
+  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída lleva a la salud
+  de `/ventas/politica` hasta que exista `/ventas/canales` (se cambia en
+  `CANALES_URL`, `apps/worker/src/jobs/ventas/messages.ts`).
+- La política y la **salud de hoy** se ven en `/ventas/politica`.
+
+**Probar la baja a mano, en local.** El seed guarda solo hashes de
+tokens al azar, así que ningún enlace suyo se puede pulsar. Con el
+Postgres de Docker:
+
+```bash
+cd platform
+make up && make seed
+docker compose exec -T db psql -U mc -d oncue -c \
+  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+pnpm --filter @mc/db demo:enlace-baja          # imprime /baja/<token> y el curl del un clic
+DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue pnpm --filter @mc/web dev --port 3100
+```
+
+Abre el enlace sin sesión (o en una ventana privada), pulsa «Dejar de
+recibir mensajes» y la ficha queda de baja con sus toques cancelados. El
+comando se niega con Supabase (escribiría un enlace de baja real) y no
+sirve con la web en modo demo (el Postgres en memoria vive dentro del
+proceso de la web).
 
 ### 5.3 La cadencia recomendada para un creador
 
