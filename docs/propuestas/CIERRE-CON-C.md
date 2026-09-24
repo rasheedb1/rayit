@@ -396,7 +396,7 @@ que fecha los datos respecto de `CURRENT_DATE`:
 |---|---|---|
 | `apps/web/app/(app)/campanas/ficha-db.test.tsx` (CAM) | Fijaba «417.673 hasta el 22 sep»; el 24 la última lectura es otra | Compara con la última lectura de `post_metric_snapshot` formateada con el `formatDate`/`formatInt` de la ficha (`e9e84e1`, `d8852ba`). Con un +1 falla |
 | `packages/db/test/finanzas.test.ts`, bandeja (FIN-4) | La mora se cuenta en Bogotá y el seed fecha `due_on` en UTC: de 00:00 a 05:00 UTC son 40 días, no 41 | Compara con la misma expresión de la consulta (`d94e18a`) |
-| `apps/worker/test/costuras-con.test.ts`, «las 16 líneas base y los 59 puntajes…» (CON-6, cierre CON-A) | Lo que calcula `compute.baseline` deja de coincidir con lo que escribe el seed 0002 en SQL a partir del 24-sep (p. ej. `median_completion` 0,085 contra 0,09). No es la zona horaria de la máquina (con `TZ=UTC` falla igual) | **No se arregló aquí**: es una diferencia de ventana entre el job y el seed de CON-6, y decidir cuál tiene razón es de CON-A. Queda como pendiente con su evidencia (§8) |
+| `apps/worker/test/costuras-con.test.ts`, «las 16 líneas base y los 59 puntajes…» (CON-6) | **No era la fecha** (diagnóstico posterior al despliegue, §9): el post d02 tiene dos lecturas de 720 h (API y manual) y la vista `post_metrics_at_cut` no desempataba; el seed y el job leían filas distintas | Migración **0042** con desempate determinista y su prueba (`c1812cf`, rama `nicolas/CON-cierre-seed-fecha`). Sin aplicar: PARADA 1 (§9) |
 
 `next build` (tras borrar `.next`): compila; `/conexiones` y las dos rutas `oauth/[platform]/{start,callback}` son dinámicas (ƒ).
 
@@ -446,7 +446,7 @@ TikTok configurado con valores de mentira:
 
 ## 7. Producción y guion de humo
 
-### 7.1 Salida (24-sep, 00:5x UTC)
+### 7.1 Salida (24-sep, 00:20 UTC)
 
 - `git push origin HEAD:main` por avance rápido: `5ad18fa..58fb163`.
 - Sin migración: no hubo PARADA 1.
@@ -501,8 +501,50 @@ para CON-7, el ensayo de §3.
 | Verificación de Google de los scopes sensibles | Trámite | CON-9 (Rasheed) |
 | Guardar el acumulado de vistas de una cuenta (`views_total`) | Migración y Resumen, de Rasheed | D20 |
 | `collect.posts` una vez al día para cuentas por proveedor | Solo vale si se contrata | D21 |
-| La diferencia entre `compute.baseline` y el seed 0002 que aparece el 24-sep (`costuras-con.test.ts`) | Es de CON-6/CON-A y del seed: hay que decidir quién tiene razón en la ventana, no taparlo con la prueba | Seguimiento de CON-A (Nicolás) |
 | `oauth-refresh.test.ts` inestable con carga | Preexistente (su título ya dice «flaky»); no depende de CON-C | WRK / CON-2 |
 | Revocar el token en Google al desconectar | Decisión de producto para las tres redes | CON-4 (CON-8.md §0.6) |
 | Demografía en pantalla | RES-4 | RES-4 (Rasheed) |
 | `.env.example` con las rutas y variables reales | Archivo compartido | Rasheed (§5) |
+
+## 9. Después del despliegue: la causa del rojo de CON-6 y la 0042
+
+El rojo de `costuras-con.test.ts` no era de fecha. Diagnóstico:
+
+1. Las 16 líneas base solo difieren en `median_completion` y
+   `median_skip_3s` a 720 h (TikTok 0,085 contra 0,09; YouTube 0,095
+   contra 0,09), con la misma muestra y las mismas vistas.
+2. `selectWindow` (el job) y la consulta del seed eligen los mismos diez
+   posts, pero el post **d02** de Café Alma llega con completion 0,06 al
+   seed y nula al job.
+3. d02 tiene **dos lecturas con `age_hours = 720`**: la de la API
+   (seed 0002, 11-sep 16:30, 0,06) y una manual (seed 0003, 12-sep 06:00,
+   sin completion). La vista `post_metrics_at_cut` (0010) hace
+   `DISTINCT ON … ORDER BY age_hours DESC` sin desempate, así que Postgres
+   devuelve cualquiera según el plan: el seed, como superusuario, una; el
+   job, como `mc_worker`, la otra.
+
+Es un fallo real de producción, no de la prueba: una lectura del CSV y
+una de la API a la misma edad harían variar la línea base y el puntaje
+de un día a otro sin datos nuevos.
+
+**Arreglo: `0042_metricas_al_corte_desempate.sql`.** Rehace la vista con
+las mismas columnas, desempata por `captured_at ASC, id ASC` y conserva
+`security_invoker = on`. Prueba nueva:
+`packages/db/test/metricas-al-corte.test.ts` (el caso sintético falla
+sin 0042). `make db.check` en verde; `costuras-con.test.ts` vuelve a 11/11.
+
+**PARADA 1.** La 0042 está en la rama `nicolas/CON-cierre-seed-fecha`,
+**no en main**. Es compatible con el código de producción: mismas
+columnas y tipos; solo fija qué fila sale cuando hay empate. Se aplica
+junto con la 0041 de CAM, que también está pendiente:
+
+```bash
+cd /Users/nicolasduarte/Documents/influ/rayit/platform && make db.migrate
+```
+
+(Si el clon principal no está al día, córrelo desde `rayit-deploy/platform`
+una vez que la rama entre a main.) Después, `make db.guardia` debería
+quedar en verde por primera vez desde el cierre de CAM. Tras
+`CONTINUAR-DESPLIEGUE`: push de la rama a main por avance rápido y
+despliegue (el código de la web no cambia; es para que main y producción
+sean el mismo commit).
