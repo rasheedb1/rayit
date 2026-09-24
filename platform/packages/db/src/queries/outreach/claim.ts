@@ -36,6 +36,7 @@ import {
 } from '@mc/core';
 import type { WorkerSql } from '../../client.ts';
 import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
+import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
   ACCOUNT_WAIT_MS, actionTypeFor, assertIds, date, DEFAULT_ACCOUNT_DAILY_CAP, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
@@ -434,18 +435,20 @@ export async function rescueZombies(tx: WorkerSql, now: Date, workspaceId?: stri
   const started = rows.filter((r) => r.started);
   if (started.length > 0) {
     const done = (
-      await tx.query<{ id: string; status: string }>(
+      await tx.query<{ id: string; status: string; enrollment_id: string | null }>(
         `UPDATE outbound_touch t
             SET status = x.nuevo, blocked_reason = CASE x.nuevo WHEN 'canceled' THEN 'opted_out' ELSE 'zombie' END
            FROM unnest($1::uuid[], $2::text[]) AS x(id, nuevo)
           WHERE t.id = x.id AND t.status = 'processing'
-          RETURNING t.id, t.status`,
+          RETURNING t.id, t.status, t.enrollment_id`,
         [started.map((r) => r.id), started.map((r) => (r.opted_out ? 'canceled' : 'failed'))],
       )
     ).rows;
     report.failed = done.filter((r) => r.status === 'failed').map((r) => r.id);
     report.canceled = done.filter((r) => r.status === 'canceled').map((r) => r.id);
     for (const id of report.failed) await notifyTouchFailed(tx, id, 'zombie', now);
+    // La cadencia sigue con el paso siguiente, o se completa.
+    for (const e of new Set(done.map((r) => r.enrollment_id).filter((x): x is string => Boolean(x)))) await advanceEnrollment(tx, e, now);
   }
   return report;
 }

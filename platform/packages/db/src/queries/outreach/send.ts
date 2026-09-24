@@ -329,14 +329,21 @@ export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: S
   if (moved) await release(tx, ctx);
 }
 
-async function failTouch(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<boolean> {
-  const r = await tx.query(
+/**
+ * processing → failed, con su aviso. La cadencia sigue: el enrolamiento
+ * avanza al siguiente paso vivo, o se completa si no queda ninguno (un
+ * paso que falló no deja la cadencia «activa» para siempre).
+ */
+async function failTouch(tx: SqlExecutor, touchId: string, reason: string, now: Date, opts: { advance?: boolean } = {}): Promise<boolean> {
+  const r = await tx.query<{ enrollment_id: string | null }>(
     `UPDATE outbound_touch SET status = 'failed', blocked_reason = $2, next_retry_at = NULL
-      WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
+      WHERE id = $1::uuid AND status = 'processing' RETURNING enrollment_id`,
     [touchId, reason],
   );
-  if (r.rows.length === 0) return false;
+  const row = r.rows[0];
+  if (!row) return false;
   await notifyTouchFailed(tx, touchId, reason, now);
+  if (row.enrollment_id && opts.advance !== false) await advanceEnrollment(tx, row.enrollment_id, now);
   return true;
 }
 
@@ -470,9 +477,13 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
     await shiftFollowing(tx, { enrollmentId: ctx.enrollmentId, dayOffset: ctx.stepDayOffset, orderInDay: ctx.stepOrderInDay, at: next }, ctx.timeZone, ctx.window);
     return 'retry';
   }
-  if (!(await failTouch(tx, ctx.touchId, failure.code, now))) return 'gone';
+  const badAddress = (BAD_ADDRESS_CODES as readonly string[]).includes(failure.code);
+  if (!(await failTouch(tx, ctx.touchId, failure.code, now, { advance: !badAddress }))) return 'gone';
   await release(tx, ctx);
-  if ((BAD_ADDRESS_CODES as readonly string[]).includes(failure.code)) await stopForBadAddress(tx, ctx, failure.code, now);
+  if (badAddress) {
+    await stopForBadAddress(tx, ctx, failure.code, now);
+    if (ctx.enrollmentId) await advanceEnrollment(tx, ctx.enrollmentId, now);
+  }
   return 'failed';
 }
 

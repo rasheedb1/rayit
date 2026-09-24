@@ -13,7 +13,8 @@
  *   · una marca responde y lo pendiente de su cadencia se cancela;
  *   · un fallo transitorio se reintenta con espera y sale en el hilo;
  *   · el límite diario reprograma al siguiente día hábil;
- *   · un reclamo que se quedó a medias es un zombi: failed, sin reenviar;
+ *   · un reclamo caído: lo que no llegó al proveedor vuelve a la cola y
+ *     sale; lo que estaba en vuelo es un zombi: failed, sin reenviar;
  *   · una respuesta que pide la baja marca la ficha;
  *   · apagar el interruptor cancela lo pendiente y el despachador no toma nada.
  *
@@ -25,7 +26,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zonedParts } from '@mc/core';
-import { claimDueTouches, enrollContacts } from '@mc/db/queries/outreach';
+import { claimDueTouches, enrollContacts, markSendStarted } from '@mc/db/queries/outreach';
 import { allJobs } from '../src/jobs/index.ts';
 import { fakeChannels, type FakeChannel } from '../src/jobs/ventas/canales/fake.ts';
 import { DISPATCH_JOB_ID, runDispatch, type DispatchDeps } from '../src/jobs/ventas/outbound.dispatch.ts';
@@ -139,7 +140,7 @@ after(async () => {
   await db?.close();
 });
 
-test('los dos jobs están registrados con su cron (0038)', async () => {
+test('los dos jobs están registrados con su cron (0041)', async () => {
   for (const id of [DISPATCH_JOB_ID, REPLIES_JOB_ID]) assert.ok(allJobs.some((j) => j.id === id), id);
   const { rows } = await db.raw.query<{ id: string; default_cron: string }>(
     `SELECT id, default_cron FROM job_definition WHERE id IN ('outbound.dispatch', 'outbound.replies') ORDER BY id`,
@@ -273,32 +274,52 @@ test('el límite diario reprograma al siguiente día hábil', async () => {
   assert.deepEqual(pendientes.rows.map((x) => [x.status, x.attempt_count]), [['scheduled', 0], ['scheduled', 0]], 'sin gastar un intento');
 });
 
-test('un reclamo que se quedó a medias es un zombi: failed y aviso, sin reenviar', async () => {
+test('un reclamo caído: lo que nunca llegó al proveedor vuelve a la cola; lo que llegó es un zombi, sin reenviar', async () => {
   await db.raw.exec(`DELETE FROM outbound_counter; UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${GMAIL}';`);
   clock = bogota('2026-09-28', '12:00');
-  // El despachador reclama y «se cae» antes de enviar.
+  // El despachador reclama, marca el primero como «voy a enviar» y se cae.
   const claimed = await motor.transaction((tx) => claimDueTouches(tx, { now: clock, channels: ['email'] }));
-  assert.ok(claimed.claimed.length >= 1);
+  assert.ok(claimed.claimed.length >= 2, JSON.stringify(claimed));
+  const [enVuelo, ...nunca] = claimed.claimed;
+  assert.equal(await motor.transaction((tx) => markSendStarted(tx, enVuelo!.id, enVuelo!.claimedAt, clock)), true);
   const sentBefore = fake.email.sent.length;
+  const avisosAntes = await scalar<number>(`SELECT count(*)::int AS v FROM notification WHERE kind = 'outreach_failed'`);
+
   clock = bogota('2026-09-28', '12:10');
   const r = await runDispatch(motor, deps());
-  assert.equal(r.zombies.failed, claimed.claimed.length);
-  assert.equal(fake.email.sent.length - sentBefore, r.sent.length, 'lo del zombi no se reenvía');
-  const estados = await db.raw.query<{ status: string; blocked_reason: string }>(
-    `SELECT status, blocked_reason FROM outbound_touch WHERE id = ANY($1::uuid[])`, [claimed.claimed.map((c) => c.id)],
+  assert.equal(r.zombies.released, nunca.length, 'lo que no llegó al proveedor vuelve a la cola');
+  assert.equal(r.zombies.failed, 1, 'solo el que estaba en vuelo es un zombi');
+  // Lo devuelto sale en esta misma corrida, con su intento descontado y vuelto a contar.
+  for (const t of nunca) assert.ok(r.sent.includes(t.id), `${t.id} salió`);
+  assert.equal(fake.email.sent.length - sentBefore, nunca.length, 'el zombi no se reenvía');
+  const zombi = await db.raw.query<{ status: string; blocked_reason: string; attempt_count: number }>(
+    `SELECT status, blocked_reason, attempt_count FROM outbound_touch WHERE id = $1`, [enVuelo!.id],
   );
-  for (const e of estados.rows) assert.deepEqual([e.status, e.blocked_reason], ['failed', 'zombie']);
-  assert.ok((await scalar<number>(`SELECT count(*)::int AS v FROM notification WHERE kind = 'outreach_failed'`)) >= claimed.claimed.length);
+  assert.deepEqual({ ...zombi.rows[0] }, { status: 'failed', blocked_reason: 'zombie', attempt_count: 1 });
+  const reenviados = await db.raw.query<{ attempt_count: number; links: number }>(
+    `SELECT t.attempt_count, (SELECT count(*)::int FROM outbound_optout_link l WHERE l.touch_id = t.id) AS links
+       FROM outbound_touch t WHERE t.id = ANY($1::uuid[])`, [nunca.map((t) => t.id)],
+  );
+  for (const x of reenviados.rows) assert.deepEqual({ ...x }, { attempt_count: 1, links: 1 }, 'un solo intento y un solo enlace');
+  assert.equal(
+    (await scalar<number>(`SELECT count(*)::int AS v FROM notification WHERE kind = 'outreach_failed'`)) - avisosAntes, 1,
+    'un aviso, el del zombi; ninguno por lo devuelto',
+  );
 });
 
-test('una respuesta que pide la baja marca la ficha y cancela lo suyo', async () => {
+test('una respuesta que pide la baja marca la ficha y cancela todo lo suyo', async () => {
   const daniel = fake.email.sent.find((m) => m.recipient === 'daniel@sabores.test')!;
   clock = bogota('2026-09-28', '15:00');
   fake.email.reply(daniel.threadRef, 'Por favor, dénme de baja de su lista.', bogota('2026-09-28', '14:00'));
   const r = await runReplies(motor, { readers: fake, now: () => clock });
   assert.equal(r.optOuts, 1);
   assert.equal(await scalar<boolean>(`SELECT opted_out AS v FROM contact WHERE id = $1`, [DANIEL]), true);
-  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enrollments.get(DANIEL)]), 'opted_out');
+  assert.equal(
+    await scalar<number>(`SELECT count(*)::int AS v FROM outbound_touch WHERE contact_id = $1 AND status IN ('draft', 'scheduled', 'held')`, [DANIEL]),
+    0,
+  );
+  // Un enrolamiento vivo pasa a opted_out; uno que ya había terminado se queda como estaba.
+  assert.ok(['opted_out', 'completed'].includes(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enrollments.get(DANIEL)])));
 });
 
 test('apagar el interruptor cancela lo pendiente y el despachador no toma nada', async () => {
