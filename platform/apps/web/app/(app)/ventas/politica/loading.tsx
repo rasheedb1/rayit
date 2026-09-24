@@ -2,7 +2,7 @@ import { MESSAGES } from "./messages";
 
 /**
  * Esqueleto de la política mientras la base responde: la cabecera, el
- * interruptor y seis campos, del tamaño de la pantalla real.
+ * interruptor, la salud del día y seis campos, del tamaño de la pantalla real.
  */
 export default function PoliticaLoading() {
   return (
@@ -13,6 +13,11 @@ export default function PoliticaLoading() {
         <span className="mt-3 block h-4 w-full animate-pulse rounded-sm bg-hover" />
       </div>
       <div className="mb-10 h-20 animate-pulse rounded-md border border-line bg-hover" />
+      <div className="mb-10 grid gap-px sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <span key={i} className="block h-20 animate-pulse rounded-md bg-hover" />
+        ))}
+      </div>
       <div className="max-w-2xl space-y-6">
         {Array.from({ length: 6 }, (_, i) => (
           <div key={i} className="space-y-2">

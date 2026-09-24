@@ -364,6 +364,8 @@ export const MESSAGES = {
     edited: "Contacto actualizado.",
     editError: "No se pudo actualizar el contacto.",
     bounced: "Correo rebotado",
+    /** Junto a la píldora: cuándo y por qué, con el diagnóstico del servidor que lo rechazó (0038). */
+    bouncedNote: (fecha: string, motivo: string) => `Rebotó el ${fecha}: ${motivo}`,
     sourceLabel: "Fuente",
     seeSource: "ver",
     sourcePlaceholder: "Elige la procedencia",

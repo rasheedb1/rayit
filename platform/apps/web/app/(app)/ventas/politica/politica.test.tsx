@@ -2,10 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * /ventas/politica sin base: la validación y los errores de la acción,
- * el interruptor y la curva de calentamiento que se mueve con lo escrito.
- * Guardar de verdad (RLS, la dirección con el envío encendido) está
- * probado en pglite: packages/db/test/entregabilidad.test.ts.
+ * /ventas/politica sin base: la validación y los errores de la acción
+ * (con las cifras en el locale del workspace), el interruptor con su
+ * confirmación en el sitio, y la curva de calentamiento que se mueve con
+ * lo escrito y sale de la misma regla que el despachador. Guardar de
+ * verdad (RLS, la dirección con el envío encendido) está probado en
+ * pglite: packages/db/test/entregabilidad.test.ts.
  */
 const saveOutboundPolicy = vi.fn();
 const enableOutreach = vi.fn();
@@ -13,6 +15,9 @@ const disableOutreach = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
+vi.mock("@/lib/workspace/settings", () => ({
+  getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
+}));
 vi.mock("@mc/db/queries/entregabilidad", async (importOriginal) => {
   const real = await importOriginal<typeof import("@mc/db/queries/entregabilidad")>();
   return {
@@ -27,18 +32,21 @@ vi.mock("@mc/db/queries/outreach", () => ({
   disableOutreach: (...a: unknown[]) => disableOutreach(...a),
 }));
 
-import { PolicyNeedsAddressError } from "@mc/db/queries/entregabilidad";
+import { warmupCurve } from "@mc/core/outreach/warmup";
+import { PolicyNeedsAddressError, POLICY_LIMITS } from "@mc/db/queries/entregabilidad";
 import { apagarEnvio, encenderEnvio, guardarPolitica } from "./actions";
-import { diasDeLaCurva, PoliticaForm } from "./form";
+import { calentamientoDe, PoliticaForm } from "./form";
+import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
 
 const t = MESSAGES;
+const LIMITES = { tope: POLICY_LIMITS.maxEmailsPerDay, dias: POLICY_LIMITS.warmupDays };
 
 function formulario(over: Record<string, string> = {}): FormData {
   const f = new FormData();
   const base = {
     maxTouchesPerCompany: "4", minDaysBetweenTouches: "3", maxEmailsPerDay: "60", cooldownDaysAfterNo: "180",
-    warmupDays: "14", requireHumanReview: "si", claimsMustBeSourced: "si", postalAddress: "Calle 93 # 11-26, Bogotá",
+    warmupDays: "14", requireHumanReview: "si", claimsMustBeSourced: "si", postalAddress: "1 Main St, Springfield, US",
     ...over,
   };
   for (const [k, v] of Object.entries(base)) f.set(k, v);
@@ -57,13 +65,13 @@ describe("guardarPolitica", () => {
     expect(await guardarPolitica({}, formulario({ requireHumanReview: "no" }))).toEqual({ ok: true });
     expect(saveOutboundPolicy).toHaveBeenCalledWith({}, {
       maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 60, cooldownDaysAfterNo: 180, warmupDays: 14,
-      requireHumanReview: false, claimsMustBeSourced: true, postalAddress: "Calle 93 # 11-26, Bogotá",
+      requireHumanReview: false, claimsMustBeSourced: true, postalAddress: "1 Main St, Springfield, US",
     });
   });
 
-  it("un número fuera de rango o que no es entero no llega a la base", async () => {
+  it("un número fuera de rango o que no es entero no llega a la base, y el rango sale con Intl", async () => {
     const r = await guardarPolitica({}, formulario({ maxEmailsPerDay: "5000", minDaysBetweenTouches: "2,5" }));
-    expect(r.errors?.maxEmailsPerDay).toBe(t.rango("1", "2000"));
+    expect(r.errors?.maxEmailsPerDay).toBe(t.rango("1", "2.000"));
     expect(r.errors?.minDaysBetweenTouches).toBe(t.entero);
     expect(saveOutboundPolicy).not.toHaveBeenCalled();
   });
@@ -87,30 +95,84 @@ describe("el interruptor", () => {
     expect(await apagarEnvio()).toEqual({ ok: true });
     expect(disableOutreach).toHaveBeenCalledWith({}, t.interruptor.motivoManual);
   });
+
+  it("apagar pide confirmación en el sitio, con el patrón del producto y sin window.confirm", () => {
+    const confirmar = vi.spyOn(window, "confirm");
+    render(<Interruptor enabled hasAddress motivo={null} nuncaEncendido={false} />);
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.apagar }));
+    expect(screen.getByRole("group", { name: t.interruptor.confirmarApagar })).toHaveAccessibleDescription(
+      t.interruptor.consecuenciaApagar,
+    );
+    expect(screen.getByRole("button", { name: t.interruptor.siApagar })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.cancelar }));
+    expect(screen.getByRole("button", { name: t.interruptor.apagar })).toBeInTheDocument();
+    expect(confirmar).not.toHaveBeenCalled();
+    expect(disableOutreach).not.toHaveBeenCalled();
+  });
+
+  it("una política que nunca se encendió no dice que se canceló nada", () => {
+    const { unmount } = render(<Interruptor enabled={false} hasAddress motivo={null} nuncaEncendido />);
+    expect(screen.getByText(t.interruptor.offHelpNunca)).toBeInTheDocument();
+    unmount();
+    render(<Interruptor enabled={false} hasAddress motivo={null} nuncaEncendido={false} />);
+    expect(screen.getByText(t.interruptor.offHelp)).toBeInTheDocument();
+  });
 });
 
 describe("la curva de calentamiento", () => {
-  it("enseña el primer día, el primero que sube, uno intermedio y el del tope", () => {
-    expect(diasDeLaCurva(14)).toEqual([1, 8, 11, 14]);
-    expect(diasDeLaCurva(8)).toEqual([1, 8]);
-    expect(diasDeLaCurva(7)).toEqual([]);
-    expect(diasDeLaCurva(0)).toEqual([]);
+  it("sale de warmupCurve, la regla del despachador, para 0 a 21 días", () => {
+    for (let dias = 0; dias <= 21; dias++) {
+      const c = calentamientoDe("60", String(dias), LIMITES, "es-CO");
+      const motor = warmupCurve(60, dias);
+      if (motor.length) {
+        expect(c.tipo).toBe("curva");
+        if (c.tipo === "curva") expect(c.filas.map((f) => f.correos)).toEqual(motor.map((p) => t.calentamiento.correos(String(p.limit))));
+      } else {
+        expect(c.tipo).not.toBe("curva");
+      }
+    }
   });
 
-  it("se mueve con lo escrito, con la misma función que el despachador", () => {
+  it("con 5 días no dice «sin calentamiento»: enseña los días que sube", () => {
+    const c = calentamientoDe("60", "5", LIMITES, "es-CO");
+    expect(c.tipo).toBe("curva");
+    if (c.tipo === "curva") expect(c.filas.map((f) => f.dia)).toEqual(["Día 1", "Día 3", "Día 4", "Día 5"]);
+  });
+
+  it("fuera de rango no pinta nada engañoso, y con un tope bajo lo explica", () => {
+    expect(calentamientoDe("5000", "14", LIMITES, "es-CO")).toEqual({ tipo: "fueraDeRango" });
+    expect(calentamientoDe("60", "200", LIMITES, "es-CO")).toEqual({ tipo: "fueraDeRango" });
+    expect(calentamientoDe("", "14", LIMITES, "es-CO")).toEqual({ tipo: "fueraDeRango" });
+    expect(calentamientoDe("20", "14", LIMITES, "es-CO")).toEqual({ tipo: "topeBajo", texto: t.calentamiento.topeBajo("20") });
+    expect(calentamientoDe("60", "0", LIMITES, "es-CO")).toEqual({ tipo: "sinCalentamiento" });
+  });
+
+  it("se mueve con lo escrito, con cifras en el locale del workspace", () => {
     const policy = {
-      maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 100, cooldownDaysAfterNo: 180, warmupDays: 14,
+      maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 1500, cooldownDaysAfterNo: 180, warmupDays: 14,
       requireHumanReview: true, claimsMustBeSourced: true, postalAddress: null,
     };
     const rangos = { maxTouchesPerCompany: "", minDaysBetweenTouches: "", maxEmailsPerDay: "", cooldownDaysAfterNo: "", warmupDays: "" };
     const maximos = { maxTouchesPerCompany: 12, minDaysBetweenTouches: 30, maxEmailsPerDay: 2000, cooldownDaysAfterNo: 730, warmupDays: 90 };
-    render(<PoliticaForm policy={policy} rangos={rangos} maximos={maximos} locale="es-CO" />);
+    const minimos = { maxTouchesPerCompany: 1, minDaysBetweenTouches: 1, maxEmailsPerDay: 1, cooldownDaysAfterNo: 0, warmupDays: 0 };
+    render(<PoliticaForm policy={policy} rangos={rangos} maximos={maximos} minimos={minimos} locale="es-CO" />);
     const tabla = screen.getByRole("table", { name: t.calentamiento.caption });
     expect(within(tabla).getByRole("row", { name: /Día 1 20 al día/ })).toBeInTheDocument();
-    expect(within(tabla).getByRole("row", { name: /Día 14 100 al día/ })).toBeInTheDocument();
+    expect(within(tabla).getByRole("row", { name: /Día 14 1\.500 al día/ })).toBeInTheDocument();
+    expect(tabla.querySelector(".font-mono")).toBeNull();
+    expect(screen.getAllByText(t.campos.warmupDays.help("20")).length).toBeGreaterThan(0);
 
     fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label)), { target: { value: "0" } });
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.getByText(t.calentamiento.sinCalentamiento)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.maxEmailsPerDay.label)), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText(new RegExp(t.campos.warmupDays.label)), { target: { value: "14" } });
+    expect(screen.getByText(t.calentamiento.topeBajo("20"))).toBeInTheDocument();
+  });
+
+  it("la dirección de ejemplo no es de ningún país", () => {
+    expect(t.campos.postalAddress.placeholder).not.toMatch(/Bogotá|Colombia/);
+    expect(t.campos.postalAddress.help).not.toMatch(/habeas/i);
   });
 });

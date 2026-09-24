@@ -1,9 +1,10 @@
 /**
  * Textos de /ventas/politica (VEN-15): la política de envío del
- * outreach. Cada regla lleva una línea que dice qué hace y por qué;
- * referencia: la configuración de límites y calentamiento de Lemlist e
- * Instantly. Voz: una creadora que escribe a marcas, no un equipo de
- * ventas.
+ * outreach y la salud del día. Cada regla lleva una línea que dice qué
+ * hace y por qué; referencia: la configuración de límites y
+ * calentamiento de Lemlist e Instantly. Voz: una creadora que escribe a
+ * marcas, no un equipo de ventas. Nada atado a un país: las cifras y las
+ * fechas llegan formateadas con el locale del workspace.
  */
 export const MESSAGES = {
   metaTitle: "Política de envío",
@@ -20,11 +21,17 @@ export const MESSAGES = {
     on: "Encendido",
     off: "Apagado",
     onHelp: "Los mensajes aprobados salen solos, dentro de estos límites.",
+    /** Nunca se encendió: no había nada en cola que cancelar. */
+    offHelpNunca: "Todavía no sale nada. Enciéndelo cuando tengas tu dirección postal guardada y un canal conectado.",
+    /** Se apagó, sin motivo guardado: lo que estaba en cola se canceló. */
     offHelp: "No sale nada. Lo que estaba en cola se canceló y vuelve a planificarse al encender.",
     offReason: (motivo: string, fecha: string) => `Apagado el ${fecha}: ${motivo}.`,
     encender: "Encender el envío",
     apagar: "Apagar el envío",
-    confirmarApagar: "¿Apagar el envío? Lo que está en cola se cancela; tus secuencias quedan como están.",
+    confirmarApagar: "¿Apagar el envío?",
+    consecuenciaApagar: "Lo que está en cola se cancela; tus secuencias quedan como están y vuelven a planificarse al encender.",
+    siApagar: "Sí, apagar",
+    cancelar: "Cancelar",
     sinDireccion: "Para encender el envío guarda primero tu dirección postal.",
     motivoManual: "lo apagaste desde la política",
     errorEncender: "No se pudo encender. Revisa que la dirección postal esté guardada.",
@@ -65,12 +72,14 @@ export const MESSAGES = {
     },
     warmupDays: {
       label: "Días de calentamiento",
-      help: "Una cuenta nueva empieza con 20 correos al día la primera semana y sube poco a poco hasta tu tope en este día.",
+      /** `inicio` es WARMUP_START_LIMIT ya formateado: la regla vive en @mc/core/outreach/warmup. */
+      help: (inicio: string) =>
+        `Una cuenta nueva empieza con ${inicio} correos al día y sube poco a poco hasta tu tope en este día. 0 es sin calentamiento.`,
     },
     postalAddress: {
       label: "Dirección postal",
-      help: "Va al pie de cada correo junto al enlace de baja. La exigen las leyes de correo comercial (CAN-SPAM, habeas data); sin ella no sale nada.",
-      placeholder: "Calle 93 # 11-26, Bogotá, Colombia",
+      help: "Va al pie de cada correo junto al enlace de baja. La exigen las leyes de correo comercial (CAN-SPAM, RGPD y las leyes locales); sin ella no sale nada.",
+      placeholder: "Calle, número, ciudad y país",
     },
   },
 
@@ -86,7 +95,38 @@ export const MESSAGES = {
     dia: (d: string) => `Día ${d}`,
     correos: (n: string) => `${n} al día`,
     sinCalentamiento: "Sin calentamiento: el tope vale desde el primer día.",
+    /** El tope no pasa del inicio del calentamiento: no hay nada que subir. */
+    topeBajo: (tope: string) => `Con un tope de ${tope} correos al día no hace falta calentar: vale desde el primer día.`,
+    fueraDeRango: "Corrige el tope o los días de calentamiento para ver la curva.",
     caption: "Correos al día según el día desde que conectaste tu Gmail",
+  },
+
+  salud: {
+    title: "Salud de hoy",
+    description: "Las últimas 24 horas del envío. Si algo se sale de lo normal, también te avisamos por correo.",
+    enviados: { label: "Correos enviados", note: "En las últimas 24 horas" },
+    rebotes: {
+      label: "Rebotes",
+      /** «2 de 40 no existen». */
+      note: (duros: string, enviados: string) => `${duros} de ${enviados} no existen`,
+      sinEnvios: "Sin envíos todavía",
+    },
+    cola: {
+      label: "Por salir",
+      note: (atascados: string) => `${atascados} atascados`,
+      noteSinAtascos: "Nada atascado",
+    },
+    cuentas: { label: "Cuentas caídas", note: "Piden reconectar o fallan", noteBien: "Todas conectadas" },
+    sinDato: "—",
+    rebotesTitle: "Últimos rebotes",
+    rebotesCaption: "Los últimos avisos de rebote leídos de tu Gmail",
+    columnas: { direccion: "Dirección", tipo: "Tipo", motivo: "Lo que dijo el servidor", fecha: "Cuándo" },
+    tipos: { hard: "No existe", soft: "Pasajero", blocked: "Bloqueado" },
+    sinDireccion: "Sin dirección en el aviso",
+    sinRebotes: {
+      title: "Ningún rebote",
+      description: "Cuando un correo no llegue, aquí verás a qué dirección y por qué.",
+    },
   },
 
   fijo: {

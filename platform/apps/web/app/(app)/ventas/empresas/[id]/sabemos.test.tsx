@@ -71,6 +71,8 @@ describe("Contactos: LinkedIn y fuente solo se enlazan si son http(s)", () => {
     optedOutAt: null,
     optedOutReason: null,
     bounced: false,
+    bouncedReason: null,
+    bouncedAt: null,
     isOwn: true,
     createdAt: "2026-09-20T12:00:00Z",
   };

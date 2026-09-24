@@ -6,6 +6,8 @@ import {
   POLICY_LIMITS, POSTAL_ADDRESS_MAX, PolicyNeedsAddressError, saveOutboundPolicy,
 } from "@mc/db/queries/entregabilidad";
 import { disableOutreach, enableOutreach } from "@mc/db/queries/outreach";
+import { formatterFor } from "@/lib/format";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "./messages";
 
@@ -18,26 +20,31 @@ import { MESSAGES } from "./messages";
 
 const t = MESSAGES;
 
-function entero(campo: keyof typeof POLICY_LIMITS) {
+type Campo = keyof typeof POLICY_LIMITS;
+
+/** Un entero dentro de POLICY_LIMITS; el error de rango, con las cifras ya formateadas en el locale del workspace. */
+function entero(campo: Campo, rango: (c: Campo) => string) {
   const { min, max } = POLICY_LIMITS[campo];
   return z
     .string()
     .trim()
     .regex(/^\d{1,5}$/, t.entero)
     .transform(Number)
-    .refine((n) => n >= min && n <= max, t.rango(String(min), String(max)));
+    .refine((n) => n >= min && n <= max, rango(campo));
 }
 
-const politicaSchema = z.object({
-  maxTouchesPerCompany: entero("maxTouchesPerCompany"),
-  minDaysBetweenTouches: entero("minDaysBetweenTouches"),
-  maxEmailsPerDay: entero("maxEmailsPerDay"),
-  cooldownDaysAfterNo: entero("cooldownDaysAfterNo"),
-  warmupDays: entero("warmupDays"),
-  requireHumanReview: z.enum(["si", "no"]).transform((v) => v === "si"),
-  claimsMustBeSourced: z.enum(["si", "no"]).transform((v) => v === "si"),
-  postalAddress: z.string().trim().max(POSTAL_ADDRESS_MAX, t.direccionLarga(String(POSTAL_ADDRESS_MAX))),
-});
+function politicaSchema(rango: (c: Campo) => string, direccionLarga: string) {
+  return z.object({
+    maxTouchesPerCompany: entero("maxTouchesPerCompany", rango),
+    minDaysBetweenTouches: entero("minDaysBetweenTouches", rango),
+    maxEmailsPerDay: entero("maxEmailsPerDay", rango),
+    cooldownDaysAfterNo: entero("cooldownDaysAfterNo", rango),
+    warmupDays: entero("warmupDays", rango),
+    requireHumanReview: z.enum(["si", "no"]).transform((v) => v === "si"),
+    claimsMustBeSourced: z.enum(["si", "no"]).transform((v) => v === "si"),
+    postalAddress: z.string().trim().max(POSTAL_ADDRESS_MAX, direccionLarga),
+  });
+}
 
 export interface GuardarPoliticaState {
   errors?: Record<string, string>;
@@ -56,7 +63,10 @@ function primeros(issues: { path: PropertyKey[]; message: string }[]): Record<st
 
 export async function guardarPolitica(_prev: GuardarPoliticaState, form: FormData): Promise<GuardarPoliticaState> {
   const campo = (k: string) => String(form.get(k) ?? "");
-  const parsed = politicaSchema.safeParse({
+  // Las cifras del error, como las de la ayuda de la pantalla: «Entre 1 y 2.000.» en es-CO.
+  const f = formatterFor(await getCurrentWorkspace());
+  const rango = (c: Campo) => t.rango(f.int(POLICY_LIMITS[c].min), f.int(POLICY_LIMITS[c].max));
+  const parsed = politicaSchema(rango, t.direccionLarga(f.int(POSTAL_ADDRESS_MAX))).safeParse({
     maxTouchesPerCompany: campo("maxTouchesPerCompany"),
     minDaysBetweenTouches: campo("minDaysBetweenTouches"),
     maxEmailsPerDay: campo("maxEmailsPerDay"),
