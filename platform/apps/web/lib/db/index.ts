@@ -7,6 +7,7 @@ import {
   type TextosCotizar,
 } from "@mc/db/queries/cotizar";
 import { getCurrentContext } from "@/lib/workspace/current";
+import { proofWorkspace, type ProviderCallbackProof } from "./aviso-de-proveedor";
 import { closeDb as cerrarCliente, withPublicShare, withWorkspaceId } from "./cliente";
 
 /**
@@ -171,26 +172,24 @@ export async function openProtectedMediaKit(
 
 /**
  * La prueba de que un aviso de proveedor es nuestro y de qué espacio es
- * (VEN-9). Solo la fabrican las verificaciones de
- * app/(app)/ventas/canales/_lib/: el estado firmado de una conexión
- * (HMAC, caducidad, nonce) o la ruta firmada de un aviso de Unipile. El
- * workspace sale de la FIRMA, nunca del cuerpo de la petición.
+ * (VEN-9): lib/db/aviso-de-proveedor.ts. Solo la emiten las dos
+ * verificaciones de firma de ese módulo; un literal no compila y un
+ * objeto forzado lanza.
  */
-export interface ProviderCallbackProof {
-  workspaceId: string;
-  verifiedBy: "channel_state" | "channel_route";
-}
+export {
+  verifyChannelRouteProof, verifyChannelStateProof, type ProviderCallbackProof,
+} from "./aviso-de-proveedor";
 
 /**
- * Una transacción en el espacio de un aviso de proveedor ya verificado:
+ * Una transacción en el espacio de un aviso de proveedor YA verificado:
  * el webhook de Unipile llega sin sesión y sin cookie, y el espacio lo
- * dice su firma. Es una operación con nombre, como acceptQuoteFromLink:
- * la web sigue sin poder abrir el workspace que quiera a partir de algo
- * que mande el navegador. Lo que puede hacer dentro es lo de cualquier
- * withWorkspace (mc_app y RLS) más las dos funciones de 0039.
+ * dice su firma. Es una operación con nombre, como acceptQuoteFromLink,
+ * y recibe la prueba, no un workspace: la web sigue sin poder abrir el
+ * workspace que quiera. Lo que puede hacer dentro es lo de cualquier
+ * withWorkspace (mc_app y RLS) más las funciones de 0039 y 0040.
  */
 export async function withProviderCallback<T>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
-  return withWorkspaceId(proof.workspaceId, fn);
+  return withWorkspaceId(proofWorkspace(proof), fn);
 }
 
 export { getDbMode } from "./cliente";

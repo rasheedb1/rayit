@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { isUuid } from "@mc/db";
-import { ChannelCapError, disconnectChannelAccount, updateChannelAccountCaps } from "@mc/db/queries/canales";
+import { ChannelCapError, disconnectChannelAccount, getChannelLimits, updateChannelAccountCaps } from "@mc/db/queries/canales";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -14,7 +14,7 @@ export interface LimitesState {
   notice?: string;
 }
 
-/** Vacío = sin límite propio (manda la política); si no, un entero. El techo lo comprueba @mc/db. */
+/** Vacío = sin límite propio (rige el máximo de la cuenta); si no, un entero. El máximo lo comprueba @mc/db. */
 function parseCap(raw: FormDataEntryValue | null): number | null | "invalid" {
   const v = String(raw ?? "").trim();
   if (v === "") return null;
@@ -22,20 +22,25 @@ function parseCap(raw: FormDataEntryValue | null): number | null | "invalid" {
   return Number(v);
 }
 
-/** Guarda los límites de una cuenta, nunca por encima del techo del canal. */
+/**
+ * Guarda los límites de una cuenta, nunca por encima de su máximo (el
+ * menor entre la política del espacio y lo que aguanta el proveedor). El
+ * máximo se lee en el servidor (outreach_channel_account_limits, 0040):
+ * del formulario solo llegan el id y los dos números.
+ */
 export async function guardarLimites(_prev: LimitesState, formData: FormData): Promise<LimitesState> {
   const accountId = String(formData.get("accountId") ?? "");
   if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
   const dailyCap = parseCap(formData.get("dailyCap"));
   const weeklyCap = parseCap(formData.get("weeklyCap"));
-  // El techo ya formateado con el locale del espacio, como lo pintó la pantalla.
-  const maxDaily = String(formData.get("maxDaily") ?? "");
-  const maxWeekly = String(formData.get("maxWeekly") ?? "");
+  const f = formatterFor(await getCurrentWorkspace());
   if (dailyCap === "invalid" || weeklyCap === "invalid") {
+    const limits = await withWorkspace((tx) => getChannelLimits(tx, accountId));
+    if (!limits) return { message: MESSAGES.caps.notFound };
     return {
       errors: {
-        ...(dailyCap === "invalid" ? { dailyCap: MESSAGES.caps.invalid(maxDaily) } : {}),
-        ...(weeklyCap === "invalid" ? { weeklyCap: MESSAGES.caps.invalid(maxWeekly) } : {}),
+        ...(dailyCap === "invalid" ? { dailyCap: MESSAGES.caps.invalid(f.int(limits.maxDaily)) } : {}),
+        ...(weeklyCap === "invalid" ? { weeklyCap: MESSAGES.caps.invalid(f.int(limits.maxWeekly)) } : {}),
       },
     };
   }
@@ -44,8 +49,8 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
     if (!ok) return { message: MESSAGES.caps.notFound };
   } catch (err) {
     if (err instanceof ChannelCapError) {
-      const f = formatterFor(await getCurrentWorkspace());
-      return { errors: { [err.field]: MESSAGES.caps.invalid(f.int(err.max)) } };
+      const text = err.problem === "daily_above_weekly" ? MESSAGES.caps.dailyAboveWeekly(f.int(err.max)) : MESSAGES.caps.invalid(f.int(err.max));
+      return { errors: { [err.field]: text } };
     }
     throw err;
   }
@@ -53,7 +58,12 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
   return { notice: MESSAGES.caps.saved };
 }
 
-/** Desconectar es de la persona: la fila queda 'disconnected' y el token lo borra el keepalive. */
+/**
+ * Desconectar es de la persona: la fila queda 'disconnected' y pendiente
+ * de soltar (0040). El worker (sales.channels_release, cada cinco
+ * minutos) revoca el permiso de Google o borra la cuenta y sus avisos en
+ * Unipile, que deja de cobrarla.
+ */
 export async function desconectar(formData: FormData): Promise<void> {
   const accountId = String(formData.get("accountId") ?? "");
   if (!isUuid(accountId)) return;

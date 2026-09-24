@@ -5,11 +5,10 @@
  * transacción) y las transacciones son las de lib/db.
  */
 import {
-  channelRouteKey, channelStateKey, currentMasterKey, keyringFromEnv, MasterKeyError, TokenCipher,
-  type GoogleOAuthApi, type OutreachCallLogSink, type UnipileApi,
+  channelSigningKeys, keyringFromEnv, MasterKeyError, TokenCipher, type GoogleOAuthApi, type OutreachCallLogSink, type UnipileApi,
 } from "@mc/connectors";
 import type { WorkspaceTx } from "@mc/db";
-import type { ProviderCallbackProof } from "@/lib/db";
+import type { ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -19,7 +18,11 @@ export interface ChannelDeps {
   withWorkspace: <T>(fn: (tx: WorkspaceTx) => Promise<T>) => Promise<T>;
   /** El espacio de la sesión, para firmarlo en el estado y compararlo al volver. */
   currentWorkspaceId: () => Promise<string>;
-  /** La transacción de un aviso ya verificado (lib/db withProviderCallback). */
+  /**
+   * La transacción de un aviso ya verificado (lib/db withProviderCallback).
+   * Recibe la prueba de lib/db/aviso-de-proveedor.ts, que solo emiten sus
+   * dos verificaciones de firma: aquí no se puede pasar un workspace.
+   */
   withProviderCallback: <T>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>) => Promise<T>;
   /** null = faltan GOOGLE_CLIENT_ID/SECRET. Recibe la bitácora de la petición. */
   google: ((log: OutreachCallLogSink, origin: string) => GoogleOAuthApi) | null;
@@ -33,16 +36,18 @@ export interface ChannelDeps {
 
 export interface ChannelKeys {
   cipher: TokenCipher;
-  state: Uint8Array;
-  route: Uint8Array;
+  /** Con qué se firma lo nuevo: la versión actual de TOKEN_ENCRYPTION_KEY. */
+  sign: { state: Uint8Array; route: Uint8Array };
+  /** Con qué se verifica: todas las versiones del llavero, la actual primero (rotar no invalida lo firmado). */
+  verify: { state: Uint8Array[]; route: Uint8Array[] };
 }
 
-/** Las tres llaves salen de TOKEN_ENCRYPTION_KEY, derivadas con etiquetas distintas. null si falta o no es válida. */
+/** Las llaves salen de TOKEN_ENCRYPTION_KEY (y sus versiones), derivadas con etiquetas distintas. null si falta o no es válida. */
 export function channelKeys(env: Env): ChannelKeys | null {
   try {
     const keyring = keyringFromEnv(env);
-    const master = currentMasterKey(keyring);
-    return { cipher: new TokenCipher(keyring), state: channelStateKey(master), route: channelRouteKey(master) };
+    const k = channelSigningKeys(keyring);
+    return { cipher: new TokenCipher(keyring), sign: k.current, verify: { state: k.state, route: k.route } };
   } catch (err) {
     if (err instanceof MasterKeyError) return null;
     throw err;

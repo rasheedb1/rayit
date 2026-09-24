@@ -19,7 +19,13 @@
  *                                     enlace de hosted auth de Unipile y
  *                                     303 a ese enlace. La cuenta se
  *                                     conecta cuando llega el aviso
- *                                     (aviso.ts).
+ *                                     (aviso.ts). Reconectar manda el id
+ *                                     de NUESTRA fila; el account_id de
+ *                                     Unipile se lee en el servidor.
+ *
+ * Sin las llaves de un proveedor no se empieza nada: vuelve a la
+ * pantalla con ?error=no_configurado (texto de producto) y lo que falta
+ * va al registro del servidor, nunca al navegador.
  *
  * Ni el code ni los tokens tocan logs, URLs nuestras ni la cookie.
  */
@@ -30,8 +36,10 @@ import {
 import { getDefaultCreatorId, NoCreatorProfile, type WorkspaceTx } from "@mc/db";
 import {
   CHANNEL_ERROR_CODES, completeChannelConnection, createPendingChannelAccount, existingGmailSecretRef, failPendingChannelAccount,
+  getReconnectableUnipileAccount,
 } from "@mc/db/queries/canales";
 import { MESSAGES } from "../messages";
+import type { ChannelErrorCode } from "./banner";
 import { missingFor, type Channel } from "./config";
 import { channelKeys, plain, readCookie, redirectTo, type ChannelDeps } from "./deps";
 
@@ -39,7 +47,7 @@ export const GOOGLE_COOKIE = "oc_canal";
 export const GOOGLE_COOKIE_PATH = "/api/oauth/google";
 export const CANALES = "/ventas/canales";
 
-export type ChannelErrorCode = keyof typeof MESSAGES.banners.errors;
+export type { ChannelErrorCode };
 
 const back = (req: Request, code: ChannelErrorCode, headers: Record<string, string> = {}) => redirectTo(req, `${CANALES}?error=${code}`, headers);
 
@@ -56,18 +64,41 @@ function cookie(value: string, maxAgeS: number, secure: boolean): string {
   return parts.join("; ");
 }
 
-/** La fila 'pending' y el estado firmado, en el espacio de la sesión. */
-async function begin(deps: ChannelDeps, channel: Channel, stateKey: Uint8Array): Promise<{ state: string; nonce: string } | { error: ChannelErrorCode }> {
+/** Sin llaves: lo que falta va al registro del servidor y la persona vuelve a la pantalla con un texto de producto. */
+function notConfigured(req: Request, channel: Channel, missing: readonly string[]): Response {
+  console.warn(MESSAGES.routes.serverMissing(MESSAGES.channels[channel].provider, missing.join(", ") || "TOKEN_ENCRYPTION_KEY"));
+  return back(req, "no_configurado");
+}
+
+/**
+ * La fila 'pending' y el estado firmado, en el espacio de la sesión. Con
+ * `reconnectRowId`, en la MISMA transacción se lee el account_id de
+ * Unipile de esa fila (de este espacio, del canal y caída): si no hay,
+ * no se crea nada y vuelve 'vencida'.
+ */
+async function begin(
+  deps: ChannelDeps,
+  channel: Channel,
+  stateKey: Uint8Array,
+  reconnectRowId?: string,
+): Promise<{ state: string; nonce: string; reconnectAccountId: string | undefined } | { error: ChannelErrorCode }> {
   const now = deps.now?.() ?? new Date();
   const nonce = newNonce(deps.random);
   const workspaceId = await deps.currentWorkspaceId();
   try {
-    const creatorId = await deps.withWorkspace(async (tx) => {
+    const started = await deps.withWorkspace(async (tx) => {
+      let reconnectAccountId: string | undefined;
+      if (reconnectRowId !== undefined) {
+        if (channel === "email") return null;
+        reconnectAccountId = (await getReconnectableUnipileAccount(tx, reconnectRowId, channel)) ?? undefined;
+        if (!reconnectAccountId) return null;
+      }
       const id = await getDefaultCreatorId(tx);
       await createPendingChannelAccount(tx, { channel, creatorId: id, nonce });
-      return id;
+      return { creatorId: id, reconnectAccountId };
     });
-    return { state: signChannelState({ workspaceId, creatorId, channel, nonce }, stateKey, now), nonce };
+    if (!started) return { error: "vencida" };
+    return { state: signChannelState({ workspaceId, creatorId: started.creatorId, channel, nonce }, stateKey, now), nonce, reconnectAccountId: started.reconnectAccountId };
   } catch (err) {
     if (err instanceof NoCreatorProfile) return { error: "sin_creador" };
     throw err;
@@ -78,8 +109,8 @@ export async function googleStart(req: Request, deps: ChannelDeps): Promise<Resp
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
   const missing = missingFor("email", deps.env);
   const keys = channelKeys(deps.env);
-  if (missing.length > 0 || !keys || !deps.google) return plain(503, MESSAGES.routes.notConfigured(missing.join(", ") || "TOKEN_ENCRYPTION_KEY"));
-  const started = await begin(deps, "email", keys.state);
+  if (missing.length > 0 || !keys || !deps.google) return notConfigured(req, "email", missing);
+  const started = await begin(deps, "email", keys.sign.state);
   if ("error" in started) return back(req, started.error);
   const google = deps.google(new InMemoryOutreachCallLog(), await deps.origin(req));
   const secure = deps.env["NODE_ENV"] === "production";
@@ -93,12 +124,23 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
   const secure = deps.env["NODE_ENV"] === "production";
   const headers = { "Set-Cookie": cookie("", 0, secure) };
   const params = new URL(req.url).searchParams;
-  if (params.get("error")) return back(req, params.get("error") === "access_denied" ? "cancelada" : "proveedor", headers);
-
   const keys = channelKeys(deps.env);
-  if (!keys || !deps.google) return back(req, "no_configurado", headers);
   const now = deps.now?.() ?? new Date();
-  const verified = verifyChannelState(params.get("state"), keys.state, now, GOOGLE_STATE_TTL_MS);
+  if (params.get("error")) {
+    const code: ChannelErrorCode = params.get("error") === "access_denied" ? "cancelada" : "proveedor";
+    // La pendiente de ESTE navegador y de este espacio deja de estar «Conectando»: dice por qué no se conectó.
+    const v = keys ? verifyChannelState(params.get("state"), keys.verify.state, now, GOOGLE_STATE_TTL_MS) : null;
+    if (v?.ok && v.payload.channel === "email" && readCookie(req, GOOGLE_COOKIE) === v.payload.nonce
+      && (await deps.currentWorkspaceId()) === v.payload.workspaceId) {
+      await deps.withWorkspace((tx) => failPendingChannelAccount(tx, {
+        channel: "email", nonce: v.payload.nonce, code: code === "cancelada" ? CHANNEL_ERROR_CODES.cancelled : MESSAGES.banners.errors.proveedor,
+      }));
+    }
+    return back(req, code, headers);
+  }
+
+  if (!keys || !deps.google) return back(req, "no_configurado", headers);
+  const verified = verifyChannelState(params.get("state"), keys.verify.state, now, GOOGLE_STATE_TTL_MS);
   if (!verified.ok || verified.payload.channel !== "email") return plain(400, MESSAGES.routes.badState, headers);
   const state = verified.payload;
   if (readCookie(req, GOOGLE_COOKIE) !== state.nonce) return plain(400, MESSAGES.routes.badState, headers);
@@ -155,7 +197,11 @@ async function flushAndFail(deps: ChannelDeps, log: InMemoryOutreachCallLog, non
   }).catch((err: unknown) => console.error("[canales] no se pudo registrar el intento fallido", err));
 }
 
-/** LinkedIn o Instagram: al enlace de hosted auth de Unipile. `reconectar` es el account_id de Unipile de una cuenta caída. */
+/**
+ * LinkedIn o Instagram: al enlace de hosted auth de Unipile. `reconectar`
+ * es el id de NUESTRA fila (outreach_channel_account) de una cuenta caída;
+ * el account_id de Unipile sale de la base con RLS, nunca del formulario.
+ */
 export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
   const form = await req.formData();
@@ -163,17 +209,18 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
   if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "no_configurado");
   const missing = missingFor(channel, deps.env);
   const keys = channelKeys(deps.env);
-  if (missing.length > 0 || !keys || !deps.unipile) return plain(503, MESSAGES.routes.notConfigured(missing.join(", ") || "TOKEN_ENCRYPTION_KEY"));
-  const reconnect = typeof form.get("reconectar") === "string" && /^[\w.-]{1,128}$/.test(String(form.get("reconectar"))) ? String(form.get("reconectar")) : undefined;
+  if (missing.length > 0 || !keys || !deps.unipile) return notConfigured(req, channel, missing);
+  const raw = form.get("reconectar");
+  const reconnectRowId = typeof raw === "string" && raw !== "" ? raw : undefined;
 
-  const started = await begin(deps, channel, keys.state);
+  const started = await begin(deps, channel, keys.sign.state, reconnectRowId);
   if ("error" in started) return back(req, started.error);
   const origin = await deps.origin(req);
   const now = deps.now?.() ?? new Date();
   const log = new InMemoryOutreachCallLog();
   try {
     const { url } = await deps.unipile(log).createHostedAuthLink({
-      channel, state: started.state, reconnectAccountId: reconnect,
+      channel, state: started.state, reconnectAccountId: started.reconnectAccountId,
       notifyUrl: `${origin}/api/webhooks/unipile`,
       successRedirectUrl: `${origin}${CANALES}?conectado=${channel}`,
       failureRedirectUrl: `${origin}${CANALES}?error=proveedor`,
