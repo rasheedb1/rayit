@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import {
   getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, readAlertSignalCounts,
 } from "@mc/db/queries/entregabilidad";
-import { outboundHealth } from "@mc/db/queries/outreach";
+import { COMPANY_CAP_WINDOW_DAYS, outboundHealth } from "@mc/db/queries/outreach";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { formatterFor } from "@/lib/format";
+import { formatTime, formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { PoliticaForm, type PoliticaFormProps } from "./form";
@@ -45,6 +45,13 @@ export default async function PoliticaPage() {
   ) as PoliticaFormProps["rangos"];
   const maximos = Object.fromEntries(campos.map((c) => [c, POLICY_LIMITS[c].max])) as PoliticaFormProps["maximos"];
   const minimos = Object.fromEntries(campos.map((c) => [c, POLICY_LIMITS[c].min])) as PoliticaFormProps["minimos"];
+  // Las horas del horario de envío, por medias horas, con la etiqueta en el
+  // idioma del espacio («9:00 a. m.»). Es una hora de reloj, no un instante:
+  // se formatea en UTC para que ninguna zona la corra.
+  const horas = Array.from({ length: 48 }, (_, i) => {
+    const value = `${String(Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`;
+    return { value, label: formatTime(`2000-01-03T${value}:00Z`, { locale: f.locale, timeZone: "UTC" }) };
+  });
 
   const motivo =
     !policy.enabled && policy.disabledReason && policy.disabledAt
@@ -73,7 +80,16 @@ export default async function PoliticaPage() {
 
       <Salud health={health} counts={counts} rebotes={rebotes} f={f} />
 
-      <PoliticaForm policy={policy} rangos={rangos} maximos={maximos} minimos={minimos} locale={f.locale} />
+      <PoliticaForm
+        policy={policy}
+        rangos={rangos}
+        maximos={maximos}
+        minimos={minimos}
+        locale={f.locale}
+        horas={horas}
+        zona={f.zoneName()}
+        ventanaMarca={f.int(COMPANY_CAP_WINDOW_DAYS)}
+      />
 
       <section id="presupuesto" aria-labelledby="fijo-llm" className="mt-10 max-w-2xl scroll-mt-8 border-t border-line pt-6">
         <h2 id="fijo-llm" className="text-sm font-medium">

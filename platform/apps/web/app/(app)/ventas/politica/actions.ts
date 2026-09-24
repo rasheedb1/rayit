@@ -33,6 +33,9 @@ function entero(campo: Campo, rango: (c: Campo) => string) {
     .refine((n) => n >= min && n <= max, rango(campo));
 }
 
+/** 'HH:MM' de 00:00 a 23:59. */
+const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 function politicaSchema(rango: (c: Campo) => string, direccionLarga: string) {
   return z.object({
     maxTouchesPerCompany: entero("maxTouchesPerCompany", rango),
@@ -43,7 +46,10 @@ function politicaSchema(rango: (c: Campo) => string, direccionLarga: string) {
     requireHumanReview: z.enum(["si", "no"]).transform((v) => v === "si"),
     claimsMustBeSourced: z.enum(["si", "no"]).transform((v) => v === "si"),
     postalAddress: z.string().trim().max(POSTAL_ADDRESS_MAX, direccionLarga),
-  });
+    // (VEN-10 r5) La ventana laboral: 'HH:MM', y el fin después del inicio (el CHECK de 0051 §1).
+    sendWindowStart: z.string().regex(HORA, t.campos.sendWindow.invalida),
+    sendWindowEnd: z.string().regex(HORA, t.campos.sendWindow.invalida),
+  }).refine((v) => v.sendWindowEnd > v.sendWindowStart, { path: ["sendWindowEnd"], message: t.campos.sendWindow.error });
 }
 
 export interface GuardarPoliticaState {
@@ -75,6 +81,8 @@ export async function guardarPolitica(_prev: GuardarPoliticaState, form: FormDat
     requireHumanReview: campo("requireHumanReview"),
     claimsMustBeSourced: campo("claimsMustBeSourced"),
     postalAddress: campo("postalAddress"),
+    sendWindowStart: campo("sendWindowStart"),
+    sendWindowEnd: campo("sendWindowEnd"),
   });
   if (!parsed.success) return { errors: primeros(parsed.error.issues) };
   const v = parsed.data;

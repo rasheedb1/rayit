@@ -5,7 +5,7 @@ import { WARMUP_START_LIMIT, warmupCurve } from "@mc/core/outreach/warmup";
 import type { OutboundPolicyView } from "@mc/db/queries/entregabilidad";
 import { formatInt } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Textarea } from "@/components/ui/field";
+import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
 import { guardarPolitica, type GuardarPoliticaState } from "./actions";
 import { MESSAGES } from "./messages";
@@ -14,7 +14,10 @@ type Numerico = "maxTouchesPerCompany" | "minDaysBetweenTouches" | "maxEmailsPer
 type SiNo = "si" | "no";
 
 export interface PoliticaFormProps {
-  policy: Pick<OutboundPolicyView, Numerico | "requireHumanReview" | "claimsMustBeSourced" | "postalAddress">;
+  policy: Pick<
+    OutboundPolicyView,
+    Numerico | "requireHumanReview" | "claimsMustBeSourced" | "postalAddress" | "sendWindowStart" | "sendWindowEnd"
+  >;
   /** Los rangos de cada número, ya formateados («Entre 1 y 12.»). */
   rangos: Record<Numerico, string>;
   /** El tope de cada número, para el atributo max del control. */
@@ -23,6 +26,12 @@ export interface PoliticaFormProps {
   minimos: Record<Numerico, number>;
   /** El locale del workspace, para las cifras de la curva. */
   locale: string;
+  /** (VEN-10 r5) Las horas que se pueden elegir para el horario de envío ('HH:MM', con su etiqueta en el locale). */
+  horas: Array<{ value: string; label: string }>;
+  /** El nombre de la zona del workspace, para decir en qué hora se lee el horario. */
+  zona: string;
+  /** Los días en que se cuentan los mensajes por marca, ya formateados. */
+  ventanaMarca: string;
 }
 
 const t = MESSAGES;
@@ -68,7 +77,7 @@ export function calentamientoDe(
  * y la de la base (rangos y la dirección con el envío encendido); aquí
  * solo se pinta lo que devuelven, con el foco en el primer error.
  */
-export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: PoliticaFormProps) {
+export function PoliticaForm({ policy, rangos, maximos, minimos, locale, horas, zona, ventanaMarca }: PoliticaFormProps) {
   const [state, formAction, pending] = useActionState<GuardarPoliticaState, FormData>(guardarPolitica, {});
   const formRef = useRef<HTMLFormElement>(null);
   const [revision, setRevision] = useState<SiNo>(policy.requireHumanReview ? "si" : "no");
@@ -83,6 +92,11 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
     warmupDays: String(policy.warmupDays),
   });
   const [direccion, setDireccion] = useState(policy.postalAddress ?? "");
+  const [desde, setDesde] = useState(policy.sendWindowStart);
+  const [hasta, setHasta] = useState(policy.sendWindowEnd);
+  // Una hora guardada que no es de la lista (09:15) se ofrece igual: guardar no la cambia a escondidas.
+  const opciones = (actual: string) =>
+    horas.some((h) => h.value === actual) ? horas : [...horas, { value: actual, label: actual }].sort((a, b) => a.value.localeCompare(b.value));
   const errors = state.errors ?? {};
 
   // La curva con la misma función que usa el despachador, con lo que está escrito ahora.
@@ -100,7 +114,11 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
     [valores.maxEmailsPerDay, valores.warmupDays, minimos, maximos, locale],
   );
   const ayudaDelCalentamiento = t.campos.warmupDays.help(formatInt(WARMUP_START_LIMIT, { locale }));
-  const ayuda = (campo: Numerico) => (campo === "warmupDays" ? ayudaDelCalentamiento : t.campos[campo].help);
+  const ayuda = (campo: Numerico) => {
+    if (campo === "warmupDays") return ayudaDelCalentamiento;
+    if (campo === "maxTouchesPerCompany") return t.campos.maxTouchesPerCompany.help(ventanaMarca);
+    return t.campos[campo].help;
+  };
 
   useEffect(() => {
     if (!state.errors) return;
@@ -166,6 +184,32 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
           {numero("minDaysBetweenTouches")}
           {numero("maxEmailsPerDay")}
           {numero("cooldownDaysAfterNo")}
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-ink">{t.campos.sendWindow.label}</legend>
+            <div className="flex flex-wrap gap-3">
+              <Field label={t.campos.sendWindow.desde} error={errors.sendWindowStart} htmlFor="sendWindowStart">
+                <Select
+                  id="sendWindowStart"
+                  name="sendWindowStart"
+                  value={desde}
+                  onChange={(e) => setDesde(e.target.value)}
+                  options={opciones(desde)}
+                  className="w-36 tabular-nums"
+                />
+              </Field>
+              <Field label={t.campos.sendWindow.hasta} error={errors.sendWindowEnd} htmlFor="sendWindowEnd">
+                <Select
+                  id="sendWindowEnd"
+                  name="sendWindowEnd"
+                  value={hasta}
+                  onChange={(e) => setHasta(e.target.value)}
+                  options={opciones(hasta)}
+                  className="w-36 tabular-nums"
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-muted">{t.campos.sendWindow.help(zona)}</p>
+          </fieldset>
         </section>
 
         <section aria-labelledby="sec-cuidado" className="space-y-5">

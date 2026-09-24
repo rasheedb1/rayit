@@ -202,16 +202,24 @@ describe('la política editable', () => {
     assert.equal(antes.saved, false);
     assert.equal(antes.maxEmailsPerDay, 20);
     assert.equal(antes.llmDailyCapUsd, '5.00');
+    assert.deepEqual([antes.sendWindowStart, antes.sendWindowEnd], ['09:00', '17:00'], 'la ventana de 0051 §1');
     const guardada = await t.db.withWorkspace(WS_O, (tx) =>
       saveOutboundPolicy(tx, {
         maxTouchesPerCompany: 5, minDaysBetweenTouches: 4, maxEmailsPerDay: 60, cooldownDaysAfterNo: 90,
         requireHumanReview: false, claimsMustBeSourced: true, warmupDays: 21, postalAddress: '  Calle 93 # 11-26, Bogotá  ',
+        sendWindowStart: '08:00', sendWindowEnd: '12:30',
       }),
     );
     assert.equal(guardada.saved, true);
     assert.equal(guardada.enabled, false);
     assert.equal(guardada.maxEmailsPerDay, 60);
     assert.equal(guardada.postalAddress, 'Calle 93 # 11-26, Bogotá');
+    // (VEN-10 r5) El horario de envío se guarda y es el que lee el motor.
+    assert.deepEqual([guardada.sendWindowStart, guardada.sendWindowEnd], ['08:00', '12:30']);
+    const ventana = await t.db.asWorker(async (tx) =>
+      (await tx.query<{ w: string }>(`SELECT send_window_start::text || '-' || send_window_end::text AS w FROM outbound_policy WHERE workspace_id = $1`, [WS_O])).rows[0]!.w,
+    );
+    assert.equal(ventana, '08:00:00-12:30:00');
     // Otro workspace no la ve.
     assert.equal((await t.db.withWorkspace(WS_S, (tx) => getOutboundPolicy(tx))).saved, false);
   });
@@ -229,6 +237,10 @@ describe('la política editable', () => {
   test('los rangos se comprueban antes de la base', async () => {
     const p = await t.db.withWorkspace(WS_O, (tx) => getOutboundPolicy(tx));
     await assert.rejects(t.db.withWorkspace(WS_O, (tx) => saveOutboundPolicy(tx, { ...p, maxEmailsPerDay: 5000 })), RangeError);
+    await assert.rejects(
+      t.db.withWorkspace(WS_O, (tx) => saveOutboundPolicy(tx, { ...p, sendWindowStart: '17:00', sendWindowEnd: '09:00' })),
+      RangeError, 'el fin antes del inicio',
+    );
   });
 });
 

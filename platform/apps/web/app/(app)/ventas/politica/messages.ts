@@ -48,11 +48,22 @@ export const MESSAGES = {
   campos: {
     maxTouchesPerCompany: {
       label: "Mensajes por marca",
-      help: "Cuántas veces, como mucho, se le escribe a una marca en una secuencia. Más de cuatro suele sentirse insistente.",
+      /** `dias` es la ventana en la que se cuentan (COMPANY_CAP_WINDOW_DAYS de @mc/db), ya formateada. */
+      help: (dias: string) =>
+        `Cuántas veces, como mucho, se le escribe a una marca en ${dias} días, sumando todas tus secuencias. Los de más no salen. Más de cuatro suele sentirse insistente.`,
     },
     minDaysBetweenTouches: {
       label: "Días entre mensajes",
-      help: "El mínimo de días entre un mensaje y el siguiente a la misma marca.",
+      help: "El mínimo de días entre un mensaje y el siguiente a la misma marca, por cualquier canal. Si una secuencia los tiene más juntos, el siguiente espera.",
+    },
+    sendWindow: {
+      label: "Horario de envío",
+      /** `zona` es el nombre de la zona del workspace, en su idioma («hora estándar de Colombia»). */
+      help: (zona: string) => `Los mensajes salen entre estas horas, en ${zona}, de lunes a viernes.`,
+      desde: "Desde",
+      hasta: "Hasta",
+      error: "La hora de fin tiene que ser después de la de inicio.",
+      invalida: "Elige una hora de la lista.",
     },
     maxEmailsPerDay: {
       label: "Correos al día",
@@ -64,7 +75,7 @@ export const MESSAGES = {
     },
     requireHumanReview: {
       label: "Revisión humana",
-      help: "Cada mensaje espera tu aprobación antes de salir. Recomendado hasta que confíes en lo que se redacta.",
+      help: "Cada mensaje de tus secuencias espera tu aprobación en la ficha de la empresa antes de salir. Recomendado hasta que confíes en lo que se redacta.",
     },
     claimsMustBeSourced: {
       label: "Cifras con origen",

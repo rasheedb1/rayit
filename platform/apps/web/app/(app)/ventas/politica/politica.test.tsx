@@ -47,6 +47,7 @@ function formulario(over: Record<string, string> = {}): FormData {
   const base = {
     maxTouchesPerCompany: "4", minDaysBetweenTouches: "3", maxEmailsPerDay: "60", cooldownDaysAfterNo: "180",
     warmupDays: "14", requireHumanReview: "si", claimsMustBeSourced: "si", postalAddress: "1 Main St, Springfield, US",
+    sendWindowStart: "09:00", sendWindowEnd: "17:00",
     ...over,
   };
   for (const [k, v] of Object.entries(base)) f.set(k, v);
@@ -66,7 +67,19 @@ describe("guardarPolitica", () => {
     expect(saveOutboundPolicy).toHaveBeenCalledWith({}, {
       maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 60, cooldownDaysAfterNo: 180, warmupDays: 14,
       requireHumanReview: false, claimsMustBeSourced: true, postalAddress: "1 Main St, Springfield, US",
+      sendWindowStart: "09:00", sendWindowEnd: "17:00",
     });
+  });
+
+  it("el horario de envío: el fin va después del inicio, y una hora que no es HH:MM no llega a la base (VEN-10 r5)", async () => {
+    const alReves = await guardarPolitica({}, formulario({ sendWindowStart: "12:00", sendWindowEnd: "08:00" }));
+    expect(alReves.errors?.sendWindowEnd).toBe(t.campos.sendWindow.error);
+    const rara = await guardarPolitica({}, formulario({ sendWindowStart: "9h" }));
+    expect(rara.errors?.sendWindowStart).toBe(t.campos.sendWindow.invalida);
+    expect(saveOutboundPolicy).not.toHaveBeenCalled();
+    saveOutboundPolicy.mockResolvedValue({});
+    expect(await guardarPolitica({}, formulario({ sendWindowStart: "08:00", sendWindowEnd: "12:00" }))).toEqual({ ok: true });
+    expect(saveOutboundPolicy.mock.calls[0]?.[1]).toMatchObject({ sendWindowStart: "08:00", sendWindowEnd: "12:00" });
   });
 
   it("un número fuera de rango o que no es entero no llega a la base, y el rango sale con Intl", async () => {
@@ -150,12 +163,33 @@ describe("la curva de calentamiento", () => {
   it("se mueve con lo escrito, con cifras en el locale del workspace", () => {
     const policy = {
       maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 1500, cooldownDaysAfterNo: 180, warmupDays: 14,
-      requireHumanReview: true, claimsMustBeSourced: true, postalAddress: null,
+      requireHumanReview: true, claimsMustBeSourced: true, postalAddress: null, sendWindowStart: "09:15", sendWindowEnd: "17:00",
     };
     const rangos = { maxTouchesPerCompany: "", minDaysBetweenTouches: "", maxEmailsPerDay: "", cooldownDaysAfterNo: "", warmupDays: "" };
     const maximos = { maxTouchesPerCompany: 12, minDaysBetweenTouches: 30, maxEmailsPerDay: 2000, cooldownDaysAfterNo: 730, warmupDays: 90 };
     const minimos = { maxTouchesPerCompany: 1, minDaysBetweenTouches: 1, maxEmailsPerDay: 1, cooldownDaysAfterNo: 0, warmupDays: 0 };
-    render(<PoliticaForm policy={policy} rangos={rangos} maximos={maximos} minimos={minimos} locale="es-CO" />);
+    const horas = [
+      { value: "08:00", label: "8:00 a. m." },
+      { value: "09:00", label: "9:00 a. m." },
+      { value: "17:00", label: "5:00 p. m." },
+    ];
+    render(
+      <PoliticaForm
+        policy={policy}
+        rangos={rangos}
+        maximos={maximos}
+        minimos={minimos}
+        locale="es-CO"
+        horas={horas}
+        zona="hora estándar de Colombia"
+        ventanaMarca="90"
+      />,
+    );
+    // El horario de envío, con la zona del espacio a la vista; una hora guardada fuera de la lista se conserva.
+    expect(screen.getByText(t.campos.sendWindow.help("hora estándar de Colombia"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t.campos.sendWindow.desde)).toHaveValue("09:15");
+    expect(screen.getByLabelText(t.campos.sendWindow.hasta)).toHaveValue("17:00");
+    expect(screen.getByText(new RegExp(t.campos.maxTouchesPerCompany.help("90").slice(0, 60)))).toBeInTheDocument();
     const tabla = screen.getByRole("table", { name: t.calentamiento.caption });
     expect(within(tabla).getByRole("row", { name: /Día 1 20 al día/ })).toBeInTheDocument();
     expect(within(tabla).getByRole("row", { name: /Día 14 1\.500 al día/ })).toBeInTheDocument();

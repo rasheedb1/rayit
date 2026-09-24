@@ -143,7 +143,18 @@ export const POLICY_DEFAULTS = {
   claimsMustBeSourced: true,
   warmupDays: 14,
   postalAddress: null as string | null,
+  /** (VEN-10 r5) La ventana laboral de 0051 §1, en la zona del workspace: 'HH:MM'. */
+  sendWindowStart: '09:00',
+  sendWindowEnd: '17:00',
 } as const;
+
+/** 'HH:MM' de 00:00 a 23:59. */
+const CLOCK_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** ¿Es una ventana de envío válida? Las dos horas 'HH:MM' y el fin después del inicio (el CHECK de 0051 §1). */
+export function isValidSendWindow(start: string, end: string): boolean {
+  return CLOCK_RE.test(start) && CLOCK_RE.test(end) && end > start;
+}
 
 export interface OutboundPolicyView {
   /** false si el workspace nunca guardó su política: lo de abajo son los valores por defecto. */
@@ -156,6 +167,9 @@ export interface OutboundPolicyView {
   claimsMustBeSourced: boolean;
   warmupDays: number;
   postalAddress: string | null;
+  /** (VEN-10 r5) Desde qué hora y hasta cuál salen los mensajes, 'HH:MM', en la zona del workspace, de lunes a viernes. */
+  sendWindowStart: string;
+  sendWindowEnd: string;
   enabled: boolean;
   disabledReason: string | null;
   disabledAt: string | null;
@@ -174,6 +188,8 @@ export type OutboundPolicyInput = Pick<
   | 'claimsMustBeSourced'
   | 'warmupDays'
   | 'postalAddress'
+  | 'sendWindowStart'
+  | 'sendWindowEnd'
 >;
 
 interface PolicyRow {
@@ -185,6 +201,8 @@ interface PolicyRow {
   claims_must_be_sourced: boolean;
   warmup_days: number;
   postal_address: string | null;
+  send_window_start: string;
+  send_window_end: string;
   enabled: boolean;
   disabled_reason: string | null;
   disabled_at: Date | string | null;
@@ -193,7 +211,9 @@ interface PolicyRow {
 }
 
 const COLUMNAS = `max_touches_per_company, min_days_between_touches, max_emails_per_day, cooldown_days_after_no,
-  require_human_review, claims_must_be_sourced, warmup_days, postal_address, enabled, disabled_reason, disabled_at,
+  require_human_review, claims_must_be_sourced, warmup_days, postal_address,
+  to_char(send_window_start, 'HH24:MI') AS send_window_start, to_char(send_window_end, 'HH24:MI') AS send_window_end,
+  enabled, disabled_reason, disabled_at,
   llm_daily_cap_usd::text AS llm_daily_cap_usd, updated_at`;
 
 function iso(v: Date | string | null): string | null {
@@ -215,6 +235,8 @@ function toView(r: PolicyRow | undefined, defaultCap: string): OutboundPolicyVie
     claimsMustBeSourced: r.claims_must_be_sourced,
     warmupDays: r.warmup_days,
     postalAddress: r.postal_address,
+    sendWindowStart: r.send_window_start,
+    sendWindowEnd: r.send_window_end,
     enabled: r.enabled,
     disabledReason: r.disabled_reason,
     disabledAt: iso(r.disabled_at),
@@ -261,12 +283,15 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
   if (direccion && direccion.length > POSTAL_ADDRESS_MAX) {
     throw new RangeError(`postalAddress pasa de ${POSTAL_ADDRESS_MAX} caracteres.`);
   }
+  if (!isValidSendWindow(input.sendWindowStart, input.sendWindowEnd)) {
+    throw new RangeError(`La ventana ${input.sendWindowStart}–${input.sendWindowEnd} no es válida (HH:MM, el fin después del inicio).`);
+  }
   try {
     const { rows } = await tx.query<PolicyRow>(
       `INSERT INTO outbound_policy AS p (workspace_id, max_touches_per_company, min_days_between_touches,
          max_emails_per_day, cooldown_days_after_no, require_human_review, claims_must_be_sourced, warmup_days,
-         postal_address)
-       VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8)
+         postal_address, send_window_start, send_window_end)
+       VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time)
        ON CONFLICT (workspace_id) DO UPDATE SET
          max_touches_per_company = EXCLUDED.max_touches_per_company,
          min_days_between_touches = EXCLUDED.min_days_between_touches,
@@ -275,11 +300,14 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
          require_human_review = EXCLUDED.require_human_review,
          claims_must_be_sourced = EXCLUDED.claims_must_be_sourced,
          warmup_days = EXCLUDED.warmup_days,
-         postal_address = EXCLUDED.postal_address
+         postal_address = EXCLUDED.postal_address,
+         send_window_start = EXCLUDED.send_window_start,
+         send_window_end = EXCLUDED.send_window_end
        RETURNING ${COLUMNAS}`,
       [
         input.maxTouchesPerCompany, input.minDaysBetweenTouches, input.maxEmailsPerDay, input.cooldownDaysAfterNo,
-        input.requireHumanReview, input.claimsMustBeSourced, input.warmupDays, direccion,
+        input.requireHumanReview, input.claimsMustBeSourced, input.warmupDays, direccion, input.sendWindowStart,
+        input.sendWindowEnd,
       ],
     );
     return toView(rows[0], rows[0]?.llm_daily_cap_usd ?? '5.00');
