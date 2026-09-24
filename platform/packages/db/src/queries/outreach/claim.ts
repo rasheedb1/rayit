@@ -255,12 +255,16 @@ interface CompanyState {
 async function companyState(tx: WorkerSql, c: Candidate, now: Date): Promise<CompanyState> {
   const r = (
     await tx.query<{ recent: number; last: unknown }>(
+      // Cuentan los MENSAJES (los pasos que el despachador envía, y los
+      // toques sueltos): un «me gusta» o un comentario en un post no es
+      // escribirle a la marca.
       `SELECT count(*) FILTER (WHERE coalesce(t.sent_at, t.claimed_at) > $3::timestamptz - make_interval(days => $4::int))::int AS recent,
               max(coalesce(t.sent_at, t.claimed_at)) AS last
-         FROM outbound_touch t
+         FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
         WHERE t.workspace_id = $1::uuid AND t.company_id = $2::uuid AND t.status IN ('sent', 'processing')
+          AND (st.step_type IS NULL OR st.step_type = ANY($5::text[]))
           AND coalesce(t.sent_at, t.claimed_at) <= $3::timestamptz`,
-      [c.workspaceId, c.companyId, now.toISOString(), COMPANY_CAP_WINDOW_DAYS],
+      [c.workspaceId, c.companyId, now.toISOString(), COMPANY_CAP_WINDOW_DAYS, [...DISPATCHABLE_STEP_TYPES]],
     )
   ).rows[0];
   return { recent: int('claimDueTouches', 'company.recent', r?.recent ?? 0), last: toDate(r?.last) };

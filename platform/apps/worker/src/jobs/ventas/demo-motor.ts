@@ -10,14 +10,20 @@
  *   1. Con la política del seed, que viene APAGADA: no se reclama nada.
  *   2. Encendida, con el LinkedIn de la demo reconectado (el seed lo deja
  *      en needs_reconnect; aquí se hace lo que haría el callback de
- *      Unipile): sale el mensaje de LinkedIn que el seed dejó programado.
- *   3. Una secuencia de tres correos (día 0, respuesta en el hilo el día
- *      1, día 2) con dos marcas enroladas desde ayer: sus dos primeros
- *      correos, ya vencidos, salen con su pie (la página de baja y la
- *      dirección postal) y su cabecera de baja de un clic.
- *   4. Una de las dos marcas responde: el lector de respuestas lo ve y lo
+ *      Unipile): el mensaje de LinkedIn que el seed dejó programado para
+ *      Vitalé espera (r5): la política del seed pide tres días entre
+ *      mensajes a la misma marca y el seed le mandó un correo ayer.
+ *   3. Cuando se cumplen, sale.
+ *   4. Una secuencia de tres correos (días 0, 3 y 6: la separación de la
+ *      política; el segundo es la respuesta en el hilo) con dos marcas
+ *      enroladas desde ayer. La política del seed pide revisión humana
+ *      (r5): los mensajes nacen retenidos y la creadora los aprueba como
+ *      en la ficha (releaseHeldTouch, con la RLS de su espacio). Sus dos
+ *      primeros correos, ya vencidos, salen con su pie (la página de baja
+ *      y la dirección postal) y su cabecera de baja de un clic.
+ *   5. Una de las dos marcas responde: el lector de respuestas lo ve y lo
  *      pendiente de su cadencia queda cancelado.
- *   5. Al día hábil siguiente sale el segundo correo de la otra, en el hilo.
+ *   6. Tres días hábiles después sale el segundo correo de la otra, en el hilo.
  *
  * La secuencia de tres correos se crea en la base embebida, no en el
  * seed: el seed 0005 (VEN-9) ya está sembrado y verificado, y su
@@ -25,7 +31,7 @@
  * en borrador para VEN-12.
  */
 import { DEFAULT_SEND_WINDOW, nextBusinessSlot, nextWindowSlot } from '@mc/core';
-import { enableOutreach, enrollContacts } from '@mc/db/queries/outreach';
+import { enableOutreach, enrollContacts, releaseHeldTouch } from '@mc/db/queries/outreach';
 import { fakeChannels } from './canales/fake.ts';
 import { motorDbFromClient } from './motor-db.ts';
 import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
@@ -59,9 +65,12 @@ export interface DemoDelivery {
 export interface DemoMotorReport {
   /** La pasada con la política apagada, con el toque ya vencido. */
   off: DispatchReport;
-  /** La pasada con la política encendida y el reloj en la hora del toque. */
+  /** La pasada con la política encendida y el reloj en la hora del toque: la separación con la marca lo hace esperar (r5). */
   on: DispatchReport;
-  /** Los toques de la demo que la segunda pasada dejó enviados, leídos de la base. */
+  /** La pasada cuando se cumple la separación: sale. */
+  later: DispatchReport;
+  laterClock: Date;
+  /** Los toques de la demo que esa pasada dejó enviados, leídos de la base. */
   sentTouches: DemoTouch[];
   /** La hora a la que se movió el reloj en la segunda pasada. */
   clock: Date;
@@ -70,6 +79,8 @@ export interface DemoMotorReport {
   /** La cadencia de tres correos. */
   cadence: {
     brands: Array<{ contactId: string; name: string; email: string }>;
+    /** Los mensajes que la creadora aprobó (nacen retenidos: la revisión humana del seed). */
+    approved: number;
     first: DispatchReport;
     replies: RepliesReport;
     next: DispatchReport;
@@ -84,9 +95,9 @@ export interface DemoMotorReport {
 const STEPS = [
   { day: 0, type: 'email', time: '10:00', subject: 'Una idea para {{company}}',
     body: 'Hola, {{first_name}}: cocino para 180 mil personas que compran lo que ven en mis recetas. Tengo una idea para {{company}}.' },
-  { day: 1, type: 'email_reply', time: '10:30', subject: null,
-    body: 'Como te comenté ayer, {{first_name}}: te dejo mi media kit por si quieres verlo.' },
-  { day: 2, type: 'email', time: '11:00', subject: 'La última, {{first_name}}',
+  { day: 3, type: 'email_reply', time: '10:30', subject: null,
+    body: 'Como te comenté el otro día, {{first_name}}: te dejo mi media kit por si quieres verlo.' },
+  { day: 6, type: 'email', time: '11:00', subject: 'La última, {{first_name}}',
     body: 'Cierro por aquí para no llenarte el correo. Si en algún momento te sirve, aquí estoy.' },
 ] as const;
 
@@ -136,11 +147,17 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     const off = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     await db.asWorker((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID));
     const on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
-    const sentTouches = on.sent.length === 0 ? [] : await db.asWorker(async (tx) =>
+    // (r5) La separación con la marca lo movió: el reloj va a esa hora.
+    const waitUntil = on.claim.paced.reduce<Date | null>((m, x) => (!m || x.until > m ? x.until : m), null);
+    const laterClock = waitUntil ? nextWindowSlot(new Date(waitUntil.getTime() + 60_000), next.tz, window) : clock;
+    const later = waitUntil
+      ? await runDispatch(motor, { senders: fake, appUrl, now: () => laterClock, workspaceId: DEMO_WORKSPACE_ID })
+      : on;
+    const sentTouches = later.sent.length === 0 ? [] : await db.asWorker(async (tx) =>
       (await tx.query<DemoTouch>(
         `SELECT id, status, scheduled_for, sent_at, provider_message_id, thread_ref
            FROM outbound_touch WHERE id = ANY($1::uuid[]) ORDER BY scheduled_for`,
-        [on.sent],
+        [later.sent],
       )).rows,
     );
 
@@ -172,23 +189,56 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
       return { sequenceId: seq, brands: picked };
     });
     if (brands.length < 2) throw new Error('El seed no tiene dos marcas con correo libres para la cadencia de la demo.');
-    const yesterday = new Date(clock.getTime() - 24 * 3600_000);
+    const yesterday = new Date(laterClock.getTime() - 24 * 3600_000);
     const enrolled = await motor.transaction((tx) =>
       enrollContacts(tx, { sequenceId, contactIds: brands.map((b) => b.contactId), now: yesterday }),
     );
     const byContact = new Map(enrolled.enrolled.map((e) => [e.contactId, e.enrollmentId]));
-    const first = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
+    // (r5) La revisión humana del seed: los mensajes nacen retenidos
+    // (needs_review) y la creadora los aprueba tal cual, como en la ficha.
+    const approved = await db.withWorkspace(DEMO_WORKSPACE_ID, async (tx) => {
+      const held = (await tx.query<{ id: string; subject: string | null; body: string }>(
+        `SELECT id, subject, body FROM outbound_touch WHERE enrollment_id = ANY($1::uuid[]) AND status = 'held'`,
+        [[...byContact.values()]],
+      )).rows;
+      let n = 0;
+      for (const h of held) if ((await releaseHeldTouch(tx, h.id, { subject: h.subject, body: h.body })).ok) n++;
+      return n;
+    });
+    // El reloj, cuando ya vencieron los dos primeros correos (si «ayer» fue
+    // domingo, el día 0 es hoy a su hora).
+    const firstDue = await db.asWorker(async (tx) =>
+      (await tx.query<{ at: Date | null }>(
+        `SELECT max(t.scheduled_for) AS at FROM outbound_touch t JOIN outbound_step st ON st.id = t.step_id
+          WHERE t.enrollment_id = ANY($1::uuid[]) AND st.day_offset = 0`,
+        [[...byContact.values()]],
+      )).rows[0]?.at ?? null,
+    );
+    const firstClock = firstDue && new Date(firstDue).getTime() + 60_000 > laterClock.getTime()
+      ? new Date(new Date(firstDue).getTime() + 60_000)
+      : laterClock;
+    const first = await runDispatch(motor, { senders: fake, appUrl, now: () => firstClock, workspaceId: DEMO_WORKSPACE_ID });
 
     // La primera marca responde una hora después.
     const answering = brands[0]!;
     const thread = fake.email.sent.find((m) => m.recipient === answering.email)?.threadRef;
-    const replyAt = new Date(clock.getTime() + 3600_000);
+    const replyAt = new Date(firstClock.getTime() + 3600_000);
     if (thread) fake.email.reply(thread, '¡Hola, Laura! Nos encanta la idea. ¿Hablamos el jueves?', replyAt);
     const replies = await runReplies(motor, { readers: fake, now: () => replyAt, workspaceId: DEMO_WORKSPACE_ID });
 
-    // Al día hábil siguiente, pasada la hora del segundo paso: solo le escribe a la otra.
-    const nextClock = new Date(nextBusinessSlot(clock, next.tz, window).getTime() + 3 * 3600_000);
-    const nextRun = await runDispatch(motor, { senders: fake, appUrl, now: () => nextClock, workspaceId: DEMO_WORKSPACE_ID });
+    // Tres días hábiles después, pasada la hora del segundo paso: solo le
+    // escribe a la otra. Si la separación con la marca todavía no se cumple,
+    // el reloj va a la hora que dice el despachador (como mucho, dos veces).
+    let nextClock = firstClock;
+    for (let i = 0; i < 3; i++) nextClock = nextBusinessSlot(nextClock, next.tz, window);
+    nextClock = new Date(nextClock.getTime() + 3 * 3600_000);
+    let nextRun = await runDispatch(motor, { senders: fake, appUrl, now: () => nextClock, workspaceId: DEMO_WORKSPACE_ID });
+    for (let i = 0; i < 2 && nextRun.sent.length === 0 && nextRun.claim.paced.length > 0; i++) {
+      const until = nextRun.claim.paced.reduce((m, x) => (x.until > m ? x.until : m), nextClock);
+      const at = nextWindowSlot(new Date(until.getTime() + 60_000), next.tz, window);
+      nextClock = at;
+      nextRun = await runDispatch(motor, { senders: fake, appUrl, now: () => at, workspaceId: DEMO_WORKSPACE_ID });
+    }
 
     const statuses = await db.asWorker(async (tx) =>
       Promise.all(brands.map(async (b) => ({
@@ -207,8 +257,8 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
       })),
     );
     return {
-      off, on, sentTouches, clock, reconnected, delivered,
-      cadence: { brands, first, replies, next: nextRun, nextClock, statuses },
+      off, on, later, laterClock, sentTouches, clock, reconnected, delivered,
+      cadence: { brands, approved, first, replies, next: nextRun, nextClock, statuses },
     };
   } finally {
     await db.close();
@@ -225,13 +275,19 @@ export function resumenDemo(r: DemoMotorReport): string {
     '',
     `1. Política del seed (apagada): ${r.off.claim.claimed} reclamado(s), ${r.off.sent.length} enviado(s).`,
     `2. Política encendida: ${r.on.claim.claimed} reclamado(s), ${r.on.sent.length} enviado(s), ` +
-      `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s).`,
+      `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s), ` +
+      `${r.on.claim.paced.length} esperando la separación con la marca (tres días entre mensajes, la política del seed).`,
+    `3. ${r.laterClock.toISOString()}: se cumple la separación. ${r.later.claim.claimed} reclamado(s), ${r.later.sent.length} enviado(s).`,
   ];
   for (const t of r.sentTouches) {
     l.push(`   · outbound_touch ${t.id}: ${t.status}, provider_message_id ${t.provider_message_id}, hilo ${t.thread_ref}`);
   }
   const c = r.cadence;
-  l.push('', `3. Cadencia de tres correos, ${c.brands.map((b) => b.name).join(' y ')} enroladas ayer: ${c.first.sent.length} correo(s) enviado(s).`);
+  l.push(
+    '',
+    `4. Cadencia de tres correos (días 0, 3 y 6), ${c.brands.map((b) => b.name).join(' y ')} enroladas ayer. ` +
+      `Revisión humana encendida: la creadora aprueba ${c.approved} mensaje(s); salen ${c.first.sent.length} correo(s).`,
+  );
   const firstEmail = r.delivered.find((d) => d.channel === 'email');
   if (firstEmail) {
     l.push(`   Así sale el de ${firstEmail.recipient} («${firstEmail.subject ?? ''}»):`);
@@ -240,8 +296,8 @@ export function resumenDemo(r: DemoMotorReport): string {
   }
   l.push(
     '',
-    `4. ${c.brands[0]!.name} responde: ${c.replies.inbound} respuesta(s) leída(s), ${c.replies.canceled} toque(s) pendiente(s) cancelado(s).`,
-    `5. Al día hábil siguiente (${c.nextClock.toISOString()}): ${c.next.sent.length} enviado(s), solo a quien no respondió.`,
+    `5. ${c.brands[0]!.name} responde: ${c.replies.inbound} respuesta(s) leída(s), ${c.replies.canceled} toque(s) pendiente(s) cancelado(s).`,
+    `6. Tres días hábiles después (${c.nextClock.toISOString()}): ${c.next.sent.length} enviado(s), solo a quien no respondió.`,
   );
   for (const s of c.statuses) l.push(`   · ${s.name}: ${s.statuses.join(' → ')}`);
   l.push('', 'Todo lo que recibió el buzón falso:');
