@@ -12,6 +12,8 @@
     "install-schema": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --install",
     "humo": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/humo.ts",
     "job:seguimientos": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-seguimientos.ts",
+    "job:dispatch": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-motor.ts dispatch",
+    "job:replies": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-motor.ts replies",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 test/*.test.ts"

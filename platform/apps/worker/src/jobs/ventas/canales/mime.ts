@@ -18,7 +18,6 @@
 /** RFC 2047 si hace falta: ASCII imprimible tal cual; lo demás, base64 en UTF-8. */
 export function encodeHeader(value: string): string {
   const clean = value.replace(/[\r\n]+/g, ' ').trim();
-  // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7e]*$/.test(clean)) return clean;
   return `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`;
 }
@@ -27,7 +26,6 @@ export function encodeHeader(value: string): string {
 export function formatAddress(address: string, name?: string | null): string {
   const a = address.replace(/[\r\n<>]/g, '').trim();
   if (!name?.trim()) return a;
-  // eslint-disable-next-line no-control-regex
   const n = /^[\x20-\x7e]*$/.test(name) ? `"${name.replace(/["\\\r\n]/g, '').trim()}"` : encodeHeader(name);
   return `${n} <${a}>`;
 }
