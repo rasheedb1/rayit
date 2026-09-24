@@ -27,6 +27,7 @@ import {
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { enableOutreach } from '../src/queries/outreach.ts';
+import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
 const WS_S = '00000038-0000-4000-8000-00000000000a';
@@ -334,5 +335,25 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
   test('sin envíos no hay tasa', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, new Date('2026-09-01T00:00:00Z')));
     assert.equal(c.hardBounceRate, null);
+  });
+});
+
+describe('el enlace de baja de la demo (pnpm --filter @mc/db demo:enlace-baja)', () => {
+  test('se niega con Supabase o cualquier base remota', () => {
+    assert.equal(esBaseLocal('postgres://mc:mc@localhost:5432/oncue'), true);
+    assert.equal(esBaseLocal('postgresql://mc@127.0.0.1:55437/oncue'), true);
+    assert.equal(esBaseLocal('postgres://mc_app.x:y@aws-0-ca-central-1.pooler.supabase.com:6543/postgres'), false);
+    assert.equal(esBaseLocal('postgres://u:p@db.abcdefghijklmnop.supabase.co:5432/postgres'), false);
+    assert.equal(esBaseLocal('postgres://u:p@mi-servidor.example.com/oncue'), false);
+    assert.equal(esBaseLocal('no es una url'), false);
+  });
+
+  test('fabrica un enlace que se puede pulsar: la página lo reconoce y el clic da de baja', async () => {
+    const r = await t.db.asWorker((tx) => crearEnlaceDeDemo(tx, 'http://localhost:3100/'));
+    assert.ok(r.ok);
+    assert.equal(r.url, `http://localhost:3100/baja/${r.token}`);
+    const previa = await checkOptoutLink(puertas([]), r.token);
+    assert.equal(previa.status, 'valid');
+    assert.deepEqual(await optoutFromLink(puertas([]), r.token), { status: 'ok', alreadyOptedOut: false });
   });
 });
