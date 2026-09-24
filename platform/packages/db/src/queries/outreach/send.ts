@@ -580,10 +580,6 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
 async function stopForBadAddress(tx: WorkerSql, ctx: SendContext, code: string, now: Date): Promise<void> {
   if (!ctx.contactId) return;
   const enrollments: Array<string | null> = [ctx.enrollmentId];
-  if (ctx.channel === 'email') {
-    const marked = await markContactEmailInvalid(tx, { contactId: ctx.contactId, address: ctx.recipient, reason: code, now });
-    enrollments.push(...marked.canceled.map((c) => c.enrollmentId));
-  }
   const canceled = (
     await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch SET status = 'canceled', blocked_reason = $4
@@ -593,5 +589,11 @@ async function stopForBadAddress(tx: WorkerSql, ctx: SendContext, code: string, 
     )
   ).rows;
   enrollments.push(...canceled.map((r) => r.enrollment_id));
+  // Lo que queda (borradores, y los correos de esa ficha en otros
+  // workspaces) lo cancela la marca, con blocked_reason 'email_invalid'.
+  if (ctx.channel === 'email') {
+    const marked = await markContactEmailInvalid(tx, { contactId: ctx.contactId, address: ctx.recipient, reason: code, now });
+    enrollments.push(...marked.canceled.map((c) => c.enrollmentId));
+  }
   await finishBouncedEnrollments(tx, enrollments.filter((x): x is string => Boolean(x)), now);
 }

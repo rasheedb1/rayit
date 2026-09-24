@@ -390,7 +390,7 @@ test('decideBeforeSend relee todo en la transacción del envío', () => {
   // «Como te comenté ayer…» sobre un correo que no salió: retenido, no huérfano.
   const huerfano = decideBeforeSend(ctx({ stepType: 'email_reply', subject: null, previous: null }), CLAIMED_AT, NOW);
   assert.equal(huerfano.kind, 'hold');
-  assert.match(huerfano.kind === 'hold' ? huerfano.reason : '', /no salió/);
+  assert.equal(huerfano.kind === 'hold' ? huerfano.reason : '', 'reply_without_thread');
   assert.equal(decideBeforeSend(ctx({ body: 'Hola, {{first_name}}' }), CLAIMED_AT, NOW).kind, 'hold');
   assert.equal(decideBeforeSend(ctx({ postalAddress: null }), CLAIMED_AT, NOW).kind, 'hold');
 });

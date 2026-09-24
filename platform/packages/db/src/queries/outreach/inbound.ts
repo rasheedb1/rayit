@@ -18,10 +18,13 @@
  *     looksLikeOptOut), y se mira también en las respuestas automáticas
  *     («ya no trabajo aquí, sáquenme de su lista» llega con Auto-Submitted);
  *   · una baja: intención 'unsubscribe' en el mensaje, la ficha y las
- *     fichas con su correo dadas de baja (contact_suppression por el
- *     disparador de 0026), todo lo suyo cancelable (draft, scheduled,
- *     held) cancelado en cualquier secuencia, sus enrolamientos vivos a
- *     opted_out, y un aviso si no estaba ya de baja;
+ *     fichas con su correo dadas de baja (contact.opted_out), todo lo suyo
+ *     cancelable (draft, scheduled, held) cancelado en cualquier
+ *     secuencia, sus enrolamientos vivos a opted_out, y un aviso si no
+ *     estaba ya de baja. La lista global (contact_suppression) es solo
+ *     para lo que la plataforma verifica (enlace de baja, rebote duro,
+ *     queja: 0029 §1); el reclamo y la relectura del despachador miran
+ *     contact.opted_out de la ficha;
  *   · una respuesta automática que no pide la baja: nada más (ni replied,
  *     ni cancelar, ni avisar: la marca solo estaba de vacaciones);
  *   · una respuesta: replied_at en el toque; si la cadencia seguía viva o
@@ -80,14 +83,12 @@ export interface InboundEffects {
 }
 
 /**
- * La baja que llega en una respuesta, con el mismo alcance que la del
- * enlace (public_optout, 0037 §9): la ficha que respondió y las fichas
- * con su mismo correo; todo lo suyo cancelable (draft, scheduled, held)
- * cancelado en cualquier secuencia, y sus enrolamientos vivos a
- * opted_out. contact.opted_out lleva la dirección a contact_suppression
- * (disparador de 0026). Lo que ya está en processing lo cancela el
- * despachador al releer. Devuelve los toques cancelados y los
- * enrolamientos que paró.
+ * La baja que llega en una respuesta: la ficha que respondió y las fichas
+ * con su mismo correo (las que la transacción ve: todas como mc_worker,
+ * las del workspace con la RLS del webhook); todo lo suyo cancelable
+ * (draft, scheduled, held) cancelado en cualquier secuencia, y sus
+ * enrolamientos vivos a opted_out. Lo que ya está en processing lo
+ * cancela el despachador al releer. Devuelve los toques cancelados.
  */
 export async function applyContactOptOut(
   tx: SqlExecutor,

@@ -20,6 +20,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { holdReasonText } from '@mc/core/outreach/messages';
 import { isInsideWindow } from '@mc/core';
 import { claimDueTouches, enrollContacts } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
@@ -170,7 +171,8 @@ test('la respuesta en el hilo cuyo correo no salió se retiene: nunca huérfana 
   const [t1, t2] = await touches(c);
   assert.equal(t1!.status, 'failed');
   assert.equal(t2!.status, 'held');
-  assert.match(t2!.held_reason ?? '', /no salió/);
+  assert.equal(t2!.held_reason, 'reply_without_thread', 'un código, no una frase (r4)');
+  assert.match(holdReasonText('es', t2!.held_reason!), /no salió/);
   assert.equal(fake.email.sent.length, 0);
 });
 
@@ -256,7 +258,9 @@ test('un intento ambiguo que el canal no sabe comprobar se retiene para una pers
   assert.equal(r2.held.length, 1);
   [t] = await touches(c);
   assert.equal(t!.status, 'held');
-  assert.match(t!.held_reason ?? '', /No se pudo comprobar si el intento 1 salió/);
+  assert.equal(t!.held_reason, 'unconfirmed_attempt:1');
+  assert.match(holdReasonText('es', t!.held_reason!), /no pudimos comprobar si el intento 1 salió/);
+  assert.match(holdReasonText('en', t!.held_reason!), /couldn't confirm whether attempt 1 went out/);
   assert.equal(fake.email.sent.length, 1, 'ni un envío de más');
 });
 
@@ -305,7 +309,8 @@ test('un rebote cancela lo pendiente de ese canal y la cadencia termina en bounc
     `SELECT title_es, body_es FROM notification WHERE workspace_id = $1 AND kind = 'outreach_failed'`, [w.id],
   );
   assert.equal(aviso.rows[0]!.title_es, 'Un mensaje a Marca 10 no salió');
-  assert.equal(aviso.rows[0]!.body_es, 'El mensaje a Persona 1 Prueba por correo no se envió: el correo rebotó. Revisa la cola de Ventas.');
+  assert.equal(aviso.rows[0]!.body_es, 'El mensaje a Persona 1 Prueba por correo no se envió: el correo rebotó. Revisa la ficha de Marca 10.');
+  assert.equal(await scalar<boolean>(`SELECT email_invalid AS v FROM contact WHERE id = $1`, [c]), true, 'r4: el rebote síncrono marca el correo inválido');
 });
 
 test('la baja que llega después de una respuesta se respeta, y cancela lo de las otras secuencias', async () => {
@@ -359,11 +364,12 @@ test('los avisos hablan el idioma del workspace', async () => {
   const fake = fakeChannels();
   fake.email.failNext(1, { kind: 'permanent', code: 'invalid_recipient', message: 'invalid To header' });
   await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
-  const aviso = await db.raw.query<{ title_es: string; body_es: string }>(
-    `SELECT title_es, body_es FROM notification WHERE workspace_id = $1 AND kind = 'outreach_failed'`, [w.id],
+  const aviso = await db.raw.query<{ title_es: string; body_es: string; action_url: string }>(
+    `SELECT title_es, body_es, action_url FROM notification WHERE workspace_id = $1 AND kind = 'outreach_failed'`, [w.id],
   );
   assert.equal(aviso.rows[0]!.title_es, 'A message to Marca 12 was not sent');
-  assert.equal(aviso.rows[0]!.body_es, 'The message to Persona 1 Prueba over email was not sent: the address is not valid. Check the Sales queue.');
+  assert.equal(aviso.rows[0]!.body_es, "The message to Persona 1 Prueba over email was not sent: the address is not valid. Check Marca 12's page.");
+  assert.equal(aviso.rows[0]!.action_url, `/ventas/empresas/${w.company}`, 'a la ficha, no a una cola que no existe (r4)');
 });
 
 test('el reclamo no toca lo de otro workspace aunque corra para todos', async () => {
