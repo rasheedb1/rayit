@@ -121,7 +121,8 @@ test('sin SMTP las alertas quedan, y el resumen no sale', async () => {
 test('cada alerta lleva su propio enlace, a una pantalla que existe', async () => {
   const mal = await avisos(WS_MAL);
   assert.deepEqual(mal.map((a) => a.action_url), [ALERTAS_URL.account_down, ALERTAS_URL.bounce_rate]);
-  assert.ok(mal.every((a) => a.action_url.startsWith('/ventas/politica')), 'no a /ventas/canales hasta que VEN-9 la integre');
+  // La cuenta caída lleva a /ventas/canales (VEN-9, ya en la rama), donde se reconecta; el resto, a la salud.
+  assert.deepEqual(mal.map((a) => a.action_url), ['/ventas/canales', '/ventas/politica#salud']);
 });
 
 test('la corrida siguiente, con cartero, no repite avisos y manda el resumen una vez a la dueña', async () => {

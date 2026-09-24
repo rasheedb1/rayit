@@ -465,11 +465,12 @@ que el despachador de VEN-10 tiene que usar, todo en
   función.
 - **Los rebotes** los lee `outbound.bounces` cada media hora a través de
   la interfaz `BounceMailbox`. El adaptador sobre el `GmailApi` de VEN-9
-  ya está (`apps/worker/src/jobs/ventas/gmail-rebotes.ts`,
-  `gmailBounceMailbox`), probado con un Gmail falso de la forma de su
-  FakeGmail. **Falta al integrar VEN-9:** construir el `GmailApi` de cada
-  cuenta y registrar `createBouncesJob((c) => gmailBounceMailbox(api))`
-  en lugar de `gmailNoConfigurado`; hasta entonces cada cuenta sale como
+  está en `apps/worker/src/jobs/ventas/gmail-rebotes.ts`
+  (`gmailBounceMailbox`), y desde VEN-10 r4 el job registrado lee el
+  Gmail de verdad: `GmailChannel.bounceMailboxFor(cuenta)`, el mismo
+  canal del despachador, con el token de la cuenta del almacén
+  (`gmailMailboxes` en `outbound.bounces.ts`). Sin
+  `GOOGLE_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
   «canal no configurado». `detectBounce` solo da «duro» con un DSN o con
   lo que dijo el servidor (Diagnostic-Code, o una línea con código SMTP),
   nunca por una frase suelta del cuerpo: un «fuera de la oficina» de
@@ -486,9 +487,9 @@ que el despachador de VEN-10 tiene que usar, todo en
   resumen por correo a todos los dueños por `SMTP_URL`. La tasa de
   rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
   nada» solo salta si había toques que tocaba enviar
-  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída lleva a la salud
-  de `/ventas/politica` hasta que exista `/ventas/canales` (se cambia en
-  `CANALES_URL`, `apps/worker/src/jobs/ventas/messages.ts`).
+  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída lleva a
+  `/ventas/canales`, donde se reconecta (`CANALES_URL`, que es
+  `OUTREACH_URLS.channels` de `@mc/core/outreach/messages`).
 - La política y la **salud de hoy** se ven en `/ventas/politica`.
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
@@ -545,9 +546,83 @@ del motor trae mezcladas `rasheed/VEN-9-canales-r2` y
   `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`, y
   entonces `pnpm --filter @mc/worker run job:dispatch -- --canal-falso
   --workspace 00000002-0000-4000-8000-000000000001` con la política
-  apagada y encendida (el «terminado cuando» de VEN-10). Y registrar en
-  `outbound.bounces` (VEN-15) el buzón de cada cuenta con el mismo
-  `GmailChannel` del motor, en vez de `gmailNoConfigurado`.
+  apagada y encendida (el «terminado cuando» de VEN-10), pegar las dos
+  salidas en la nota de VEN-10 y pasarla a hecho.
+
+**Ronda 4 del motor (VEN-10, 24 de septiembre).** Lo que cambió:
+
+- **Enrolar** nunca tumba el lote: una ficha con el correo rebotado
+  (`contact.email_invalid`) nace con sus pasos de correo en `skipped`
+  (`email_invalid`) y los de LinkedIn e Instagram siguen; si no le llega
+  ningún paso, sale en `skipped` con `email_invalid` (o `no_address`). El
+  enrolamiento empieza por su primer paso vivo.
+- **Rebotes, por las dos vías, dejan lo mismo** (`markContactEmailInvalid`
+  y `finishBouncedEnrollments`, `packages/db/src/queries/outreach/bounce.ts`):
+  el aviso que llega al buzón (el job, que ahora lee el Gmail real) y el
+  rebote síncrono que devuelve el proveedor al enviar (`invalid_recipient`,
+  `bounced`). Los dos marcan `email_invalid`, cancelan los correos
+  pendientes de la ficha y cierran en `bounced` la cadencia sin nada vivo.
+- **Una respuesta deja la misma base** llegue por el webhook de Unipile o
+  por el lector del motor: las dos llaman a `applyInboundEffects`
+  (`queries/outreach/inbound.ts`). Un solo detector (`detectOptOut`, que
+  ahora trae el portugués y las bajas de una palabra: «Baja», «STOP»,
+  «Sáquenme de su lista», «Please remove me.»), los mismos estados
+  cancelados (`CANCELABLE_TOUCH_STATUSES`), un enrolamiento completo pasa
+  a `replied`, y una respuesta automática que pide la baja da de baja. La
+  baja por respuesta marca `contact.opted_out` de las fichas con ese
+  correo (todas, como mc_worker; las del workspace, por el webhook con su
+  RLS); `contact_suppression` sigue siendo solo para lo que la plataforma
+  verifica (0029 §1).
+- **El techo de una cuenta es uno**: una plaza por cuenta y canal en
+  `outbound_counter` (`accountActionType`: `email`, `linkedin`,
+  `instagram_dm`), no una por invitación y otra por mensaje. Es la fila
+  que suma `/ventas/canales`.
+- **`held_reason` guarda un código** (`no_postal_address`, `no_body`,
+  `placeholders:<huecos>`, `reply_without_thread`,
+  `unconfirmed_attempt:<n>`, `note_too_long:<n>`), que la cola de VEN-16
+  traduce con `holdReasonText`. Los textos del motor viven en
+  `@mc/core/outreach/messages` (es/en), no en `@mc/db`. Un mensaje
+  retenido deja un aviso (uno por mensaje) que lleva a la ficha de la
+  empresa, y los fallidos también; la cuenta caída, a `/ventas/canales`.
+- **La guardia de huecos** corre también sobre el mensaje final (asunto
+  «Re: …» y cuerpo con el pie), y la nota de una invitación de LinkedIn
+  de más de 300 caracteres se retiene (`note_too_long`), nunca se corta.
+- **El último paso sin dirección** ya no deja el enrolamiento `active`
+  para siempre: el reclamo avanza los enrolamientos que tocó.
+
+**La corrida contra Postgres 16 con los roles reales** (24 de
+septiembre, sin Docker: `embedded-postgres@16.14.0-beta.17` con la
+receta del README de `@mc/db`, `db/montaje-postgres-real.sql`, `node
+db/migrate.mjs <url> --seed`, y el rol `mc_app_ci` miembro de mc_app y
+de mc_worker; el worker entra con `WORKER_DATABASE_URL` y `SET ROLE
+mc_worker`, como en Supabase). Preparado como la demo: la dirección
+postal de la política, el LinkedIn de la demo reconectado y su mensaje
+del seed vencido hace un minuto. Con la política apagada:
+
+```
+Canal falso: nada sale de la máquina.
+Despacho: 0 reclamado(s), 0 enviado(s), 0 a reintento, 0 fallido(s).
+  Reprogramados por tope: 0. Fuera de la ventana: 0. Esperando cuenta: 0. Retenidos: 0. Pospuestos: 0.
+  Cancelados: 0 (0 por correo rebotado). Sin dirección: 0. Zombis: 0 a fallido, 0 devuelto(s) a la cola. Sin intentar, de vuelta: 0.
+```
+
+Con `enable_outreach` (como mc_worker):
+
+```
+Canal falso: nada sale de la máquina.
+Despacho: 1 reclamado(s), 1 enviado(s), 0 a reintento, 0 fallido(s).
+  Reprogramados por tope: 0. Fuera de la ventana: 0. Esperando cuenta: 0. Retenidos: 0. Pospuestos: 0.
+  Cancelados: 0 (0 por correo rebotado). Sin dirección: 0. Zombis: 0 a fallido, 0 devuelto(s) a la cola. Sin intentar, de vuelta: 0.
+```
+
+y en `outbound_touch` el toque `…000070003` quedó `sent`, con
+`provider_message_id = fake-linkedin-0001`, `thread_ref =
+fake-thread-linkedin-0001` e `attempt_count = 1`; en `outbound_counter`,
+una fila `linkedin` del día y una de la semana. Sobre la misma base,
+`test/outreach.test.ts` y `test/outreach-respuestas.test.ts` de `@mc/db`
+pasan (53 en verde, 2 saltadas, las de GRANT que solo se miden en
+PGlite). No es Supabase (ni su pooler ni sus certificados): esa corrida
+es la del integrador.
 
 ### 5.3 La cadencia recomendada para un creador
 
