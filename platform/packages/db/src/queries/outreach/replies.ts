@@ -8,8 +8,10 @@
  * decide applyInboundEffects (inbound.ts, r4), la misma función que usa
  * el webhook de VEN-9:
  *   · pide la baja (el detector único de @mc/core) → la ficha, las fichas
- *     con su correo y todo lo suyo cancelable, en cualquier secuencia,
- *     como public_optout; también si la respuesta es automática (r4);
+ *     con su correo que el workspace ve y todo lo suyo cancelable, en
+ *     cualquier secuencia DEL WORKSPACE (r5: nunca otro); también si la
+ *     respuesta es automática (r4). En un correo, solo si la pide la
+ *     ficha: un tercero en copia deja la baja para una persona (r5);
  *   · si no, y la cadencia seguía viva (o había completado sus pasos) →
  *     replied, se cancela lo cancelable y se avisa;
  *   · si ya había respondido, el mensaje se registra y solo se mira la
@@ -239,7 +241,7 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
   const fx = await applyInboundEffects(tx, {
     workspaceId: thread.workspaceId, messageId: inserted.id, channel: thread.channel, touchId: thread.touchId,
     enrollmentId: thread.enrollmentId, contactId: thread.contactId, body: msg.body, automatic: msg.automatic === true,
-    occurredAt: msg.occurredAt, now,
+    occurredAt: msg.occurredAt, now, fromAddress: msg.fromAddress ?? null,
   });
   return { isNew: true, optOut: fx.optOut, optOutRule: fx.optOutRule, canceled: fx.canceled, notified: fx.notified, automatic: fx.automatic };
 }

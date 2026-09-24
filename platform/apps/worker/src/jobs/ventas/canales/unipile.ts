@@ -21,7 +21,7 @@
 import { LINKEDIN_INVITE_NOTE_MAX, OutreachApiError, type UnipileApi, type UnipileMessage } from '@mc/connectors';
 import type { DispatchChannel, InboundMessage, OpenThread } from '@mc/db/queries/outreach';
 import {
-  abortedBeforeSend, failureFrom, type ChannelLogger, type ChannelReader, type ChannelSender, type FindSentResult,
+  abortedBeforeSend, failureFrom, isNotFound, type ChannelLogger, type ChannelReader, type ChannelSender, type FindSentResult,
   type OutgoingMessage, type SendResult,
 } from './types.ts';
 
@@ -82,7 +82,9 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     const accountId = m.account.providerAccountId;
     const opts = { channelAccountId: m.account.id, signal };
 
-    // Un chat que ya existe: el mensaje va ahí.
+    // Un chat que ya existe: el mensaje va ahí. (r5) Si Unipile dice que el
+    // chat no existe (se borró), no salió nada: se abre uno nuevo con la
+    // persona, como la primera vez. Un 404 del chat no dice que ella no exista.
     if (m.stepType !== 'linkedin_connect' && m.reply?.threadRef) {
       const chatId = m.reply.threadRef;
       if (signal?.aborted) return abortedBeforeSend();
@@ -90,7 +92,8 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
         const r = await api.sendMessage({ accountId, text: m.body, chatId }, opts);
         return { ok: true, providerMessageId: r.messageId ?? syntheticId(m), threadRef: chatId, messageIdRfc: null, warning: r.messageId ? null : NO_ID };
       } catch (err) {
-        return failureFrom(err, { sends: true });
+        if (!isNotFound(err)) return failureFrom(err, { sends: true });
+        this.#logger?.warn('Unipile: el chat ya no existe; se abre uno nuevo', { chatId, touchId: m.touchId });
       }
     }
 
@@ -104,7 +107,8 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
       if (err instanceof OutreachApiError && err.code === 'malformed_response') {
         return { ok: false, kind: 'transient', code: 'provider_error', message: err.messageEs };
       }
-      return failureFrom(err, { sends: false });
+      // El 404 de un perfil sí dice que no hay a quién escribirle.
+      return failureFrom(err, { sends: false, lookup: true });
     }
     if (signal?.aborted) return abortedBeforeSend();
 

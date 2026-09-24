@@ -30,7 +30,7 @@
 import { assertNoPlaceholders, PlaceholderError } from '@mc/core';
 import { buildEmailFooter, footerTextsFor, oneClickUnsubscribeUrl, optoutUrl } from '@mc/core/outreach/deliverability';
 import {
-  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, HOLD_REASONS, loadSendContext,
+  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, emptyClaimReport, HOLD_REASONS, loadSendContext,
   markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch, type ClaimReport,
   type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
@@ -261,10 +261,7 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
   const budget = deps.signal?.aborted ? 0 : claimBudget(deps);
   const claim: ClaimReport = budget > 0
     ? await db.transaction((tx) => claimDueTouches(tx, { now: deps.now(), limit: budget, channels: ready, workspaceId: deps.workspaceId }))
-    : {
-        claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
-        accountDownNotices: 0, rescheduled: [],
-      };
+    : emptyClaimReport();
   const report: DispatchReport = {
     zombies: { failed: zombies.failed.length, canceled: zombies.canceled.length, released: zombies.released.length },
     claim: { ...claim, claimed: claim.claimed.length },

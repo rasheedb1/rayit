@@ -93,6 +93,18 @@ export interface ClaimReport {
   rescheduled: Array<{ touchId: string; until: Date; cap: 'account_day' | 'account_week' | 'workspace_day' }>;
 }
 
+/**
+ * Un reclamo que no tomó nada (r5): la ÚNICA definición del informe
+ * vacío. La usan claimDueTouches y el despachador cuando no le queda
+ * tiempo para reclamar; un campo nuevo se añade aquí y en ClaimReport.
+ */
+export function emptyClaimReport(): ClaimReport {
+  return {
+    claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
+    accountDownNotices: 0, rescheduled: [],
+  };
+}
+
 interface CandidateRow {
   id: string;
   workspace_id: string;
@@ -201,10 +213,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const ws = opts.workspaceId ?? null;
   if (ws) assertIds('claimDueTouches', [ws]);
   const channels = opts.channels.filter((c) => (DISPATCH_CHANNELS as readonly string[]).includes(c));
-  const report: ClaimReport = {
-    claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
-    accountDownNotices: 0, rescheduled: [],
-  };
+  const report = emptyClaimReport();
 
   // (r4) Los enrolamientos que se quedan sin un toque vivo por lo que el
   // reclamo cancela o salta: al final se avanzan (advanceEnrollment), como

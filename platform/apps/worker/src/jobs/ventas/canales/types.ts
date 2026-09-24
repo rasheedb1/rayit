@@ -105,15 +105,26 @@ export function abortedBeforeSend(): SendResult {
  */
 const PLATFORM_CONFIG_CODES = new Set(['invalid_client', 'unauthorized_client', 'redirect_uri_mismatch', 'errors/missing_credentials']);
 /**
- * Los que dicen que el destinatario no existe o no se le puede escribir.
+ * Los que dicen que el destinatario no existe o no se le puede escribir
+ * (r5: solo los EXPLÍCITOS). Activan stopForBadAddress, que cancela todo lo
+ * pendiente de ese canal para la ficha y cierra la cadencia en 'bounced':
+ * por eso un 404 o un 422 genéricos ya no cuentan. Un 404 al escribir en
+ * un chat que se borró no dice que la persona no exista (el adaptador
+ * abre otro chat), y un 422 de validación del cuerpo falla solo ese
+ * mensaje ('rejected'). El 404 de un perfil sí lo dice: lo pide quien
+ * llama con `lookup` (getProfile).
  * Gmail no está: acepta el envío y el rebote llega después al buzón (lo lee
  * outbound.bounces de VEN-15); su 400 invalidArgument es un MIME malo, no
  * una dirección, y no debe cancelar los otros correos de la ficha.
  */
-const BAD_RECIPIENT_CODES = new Set([
-  'errors/invalid_recipient', 'errors/recipient_cannot_be_reached', 'errors/resource_not_found',
-  'errors/not_found',
-]);
+export const BAD_RECIPIENT_CODES = new Set(['errors/invalid_recipient', 'errors/recipient_cannot_be_reached']);
+/** Los códigos de «no existe» de Unipile, además del HTTP 404. */
+const NOT_FOUND_CODES = new Set(['errors/resource_not_found', 'errors/not_found']);
+
+/** ¿Dice este error que el recurso (un chat, un perfil) no existe? */
+export function isNotFound(err: unknown): boolean {
+  return isOutreachApiError(err) && err.kind === 'permanent' && (err.httpStatus === 404 || NOT_FOUND_CODES.has(err.code));
+}
 
 /**
  * Un error de @mc/connectors en el idioma del motor.
@@ -122,8 +133,10 @@ const BAD_RECIPIENT_CODES = new Set([
  *   tiempo agotado en ella es AMBIGUO: el proveedor pudo haberlo enviado,
  *   y el siguiente intento pregunta antes (findSent). En una lectura, o en
  *   la renovación del token, es un transitorio sin más.
+ *   `lookup` (r5): la llamada que busca el PERFIL del destinatario. Ahí,
+ *   y solo ahí, un «no existe» dice que la dirección no sirve.
  */
-export function failureFrom(err: unknown, opts: { sends: boolean }): SendResult {
+export function failureFrom(err: unknown, opts: { sends: boolean; lookup?: boolean }): SendResult {
   // Un correo que no se puede armar (una dirección rota, un salto de línea en el asunto): no mejora reintentando.
   if (err instanceof MimeError) return { ok: false, kind: 'permanent', code: 'rejected', message: err.message };
   if (!isOutreachApiError(err)) {
@@ -146,7 +159,7 @@ export function failureFrom(err: unknown, opts: { sends: boolean }): SendResult 
     case 'already_connected':
       return { ok: false, kind: 'permanent', code: 'rejected', message };
     case 'permanent':
-      if (BAD_RECIPIENT_CODES.has(err.code) || (err.provider === 'unipile' && (err.httpStatus === 404 || err.httpStatus === 422))) {
+      if (BAD_RECIPIENT_CODES.has(err.code) || (opts.lookup === true && isNotFound(err))) {
         return { ok: false, kind: 'permanent', code: 'invalid_recipient', message };
       }
       return { ok: false, kind: 'permanent', code: 'rejected', message };

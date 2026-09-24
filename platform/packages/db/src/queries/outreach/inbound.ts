@@ -1,30 +1,35 @@
 /**
- * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10 r4).
+ * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10 r4, r5).
  *
  * Una respuesta entra por dos puertas: el webhook de Unipile de VEN-9
  * (recordInboundMessage, con la RLS del workspace) y el lector de
  * respuestas del motor, el respaldo cada cinco minutos (recordInbound,
- * como mc_worker). Hasta la r3 cada una decidía a su manera: el webhook
- * usaba un detector con portugués, cancelaba también los borradores y no
- * tocaba un enrolamiento completo; el job usaba otro detector, no
- * cancelaba borradores, pasaba un completo a replied y avisaba. Una baja
- * en portugués perdida por el webhook y recogida por el job no daba de
- * baja a nadie.
- *
- * Ahora las dos guardan el mensaje (outbound_message, sin duplicar) y
- * llaman a applyInboundEffects, que es lo único que decide:
+ * como mc_worker). Las dos guardan el mensaje (outbound_message, sin
+ * duplicar) y llaman a applyInboundEffects, que es lo único que decide:
  *
  *   · el detector es UNO (detectOptOut de @mc/core, el mismo que
  *     looksLikeOptOut), y se mira también en las respuestas automáticas
  *     («ya no trabajo aquí, sáquenme de su lista» llega con Auto-Submitted);
- *   · una baja: intención 'unsubscribe' en el mensaje, la ficha y las
- *     fichas con su correo dadas de baja (contact.opted_out), todo lo suyo
- *     cancelable (draft, scheduled, held) cancelado en cualquier
- *     secuencia, sus enrolamientos vivos a opted_out, y un aviso si no
- *     estaba ya de baja. La lista global (contact_suppression) es solo
- *     para lo que la plataforma verifica (enlace de baja, rebote duro,
- *     queja: 0029 §1); el reclamo y la relectura del despachador miran
- *     contact.opted_out de la ficha;
+ *   · una baja es del WORKSPACE del mensaje (r5, 0029 §1): la marca
+ *     contact.opted_out de SUS fichas con ese correo, cancela lo suyo
+ *     cancelable (draft, scheduled, held) en cualquier secuencia SUYA y
+ *     pasa SUS enrolamientos vivos a opted_out. Nunca toca otro workspace:
+ *     hasta la r4 el lector (mc_worker, BYPASSRLS) daba de baja las fichas
+ *     con ese correo de TODOS los workspaces, y un falso positivo del
+ *     detector en A borraba el outreach de B sin avisarle, mientras el
+ *     webhook (con RLS) solo tocaba A. Ahora las dos puertas filtran igual
+ *     (contact_visible_to y workspace_id) y dejan la misma base. Una ficha
+ *     pública (del catálogo, sin dueño) no se marca: es de todos; lo que
+ *     la protege en este workspace es su enrolamiento en opted_out, que
+ *     enrollContacts mira antes de volver a enrolarla. La lista global
+ *     (contact_suppression) es solo para lo que la plataforma verifica
+ *     (enlace de baja, rebote duro, queja: 0029 §1);
+ *   · (r5) en un correo, la baja la pide la ficha: si quien escribe
+ *     (fromAddress) no es su correo ni la dirección a la que se escribió
+ *     (un tercero en copia, otra persona de la marca), el mensaje queda
+ *     con intención 'unsubscribe', la cadencia se detiene como con una
+ *     respuesta y se avisa para que una persona decida; la ficha no se
+ *     da de baja sola;
  *   · una respuesta automática que no pide la baja: nada más (ni replied,
  *     ni cancelar, ni avisar: la marca solo estaba de vacaciones);
  *   · una respuesta: replied_at en el toque; si la cadencia seguía viva o
@@ -35,7 +40,7 @@
  *
  * Funciona con cualquier transacción (SqlExecutor): con la del webhook la
  * RLS limita todo al workspace del mensaje; con la del worker cada
- * consulta nombra sus filas por id.
+ * consulta nombra su workspace y sus filas.
  */
 import { detectOptOut, type OptOutResult } from '@mc/core';
 import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS } from '@mc/core/outreach/messages';
@@ -68,6 +73,8 @@ export interface InboundEffectsInput {
   now: Date;
   /** contact.opted_out_reason si pide la baja. Por defecto, la frase de @mc/core en el idioma del workspace. */
   optOutReason?: string;
+  /** (r5) Quien escribió, tal como lo dio el proveedor. En un correo, la baja solo vale si es la ficha. */
+  fromAddress?: string | null;
 }
 
 export interface InboundEffects {
@@ -80,56 +87,102 @@ export interface InboundEffects {
   /** Si dejó un aviso (una baja nueva, o la PRIMERA respuesta de una cadencia viva). */
   notified: boolean;
   automatic: boolean;
+  /** (r5) Pidió la baja alguien que no es la ficha (un tercero en copia): queda para una persona, sin dar de baja a nadie. */
+  optOutReview: boolean;
 }
 
 /**
- * La baja que llega en una respuesta: la ficha que respondió y las fichas
- * con su mismo correo (las que la transacción ve: todas como mc_worker,
- * las del workspace con la RLS del webhook); todo lo suyo cancelable
- * (draft, scheduled, held) cancelado en cualquier secuencia, y sus
- * enrolamientos vivos a opted_out. Lo que ya está en processing lo
- * cancela el despachador al releer. Devuelve los toques cancelados.
+ * La baja que llega en una respuesta, en el workspace del mensaje (r5):
+ * la ficha que respondió y las fichas con su mismo correo que ESE
+ * workspace ve (contact_visible_to); lo suyo cancelable (draft, scheduled,
+ * held) cancelado en cualquier secuencia del workspace, y sus
+ * enrolamientos vivos del workspace a opted_out. contact.opted_out se
+ * marca solo en las fichas propias del workspace (las que su RLS le deja
+ * escribir): la misma base por el webhook y por el lector. Lo que ya está
+ * en processing lo cancela el despachador al releer. Devuelve los toques
+ * cancelados.
  */
 export async function applyContactOptOut(
   tx: SqlExecutor,
   contactId: string,
+  workspaceId: string,
   reason: string,
   now: Date,
 ): Promise<string[]> {
-  return (await optOutContact(tx, contactId, reason, now)).canceled;
+  return (await optOutContact(tx, contactId, workspaceId, reason, now)).canceled;
 }
 
-async function optOutContact(tx: SqlExecutor, contactId: string, reason: string, now: Date): Promise<{ canceled: string[]; stopped: string[] }> {
-  assertIds('applyContactOptOut', [contactId]);
+async function optOutContact(
+  tx: SqlExecutor,
+  contactId: string,
+  workspaceId: string,
+  reason: string,
+  now: Date,
+): Promise<{ canceled: string[]; stopped: string[]; marked: string[] }> {
+  assertIds('applyContactOptOut', [contactId, workspaceId]);
   const ids = (
     await tx.query<{ id: string }>(
       `SELECT DISTINCT c.id FROM contact c, contact b
-        WHERE b.id = $1::uuid AND (c.id = b.id OR (b.email IS NOT NULL AND c.email = b.email))`,
-      [contactId],
+        WHERE b.id = $1::uuid AND (c.id = b.id OR (b.email IS NOT NULL AND c.email = b.email))
+          AND contact_visible_to(c.id, $2::uuid)`,
+      [contactId, workspaceId],
     )
   ).rows.map((r) => r.id);
-  if (ids.length === 0) return { canceled: [], stopped: [] };
+  if (ids.length === 0) return { canceled: [], stopped: [], marked: [] };
   const canceled = (
     await tx.query<{ id: string }>(
       `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'opted_out'
-        WHERE contact_id = ANY($1::uuid[]) AND status = ANY($2::text[]) RETURNING id`,
-      [ids, [...CANCELABLE_TOUCH_STATUSES]],
+        WHERE contact_id = ANY($1::uuid[]) AND workspace_id = $2::uuid AND status = ANY($3::text[]) RETURNING id`,
+      [ids, workspaceId, [...CANCELABLE_TOUCH_STATUSES]],
     )
   ).rows.map((r) => r.id);
   const stopped = (
     await tx.query<{ id: string }>(
-      `UPDATE outbound_enrollment SET status = 'opted_out', finished_at = coalesce(finished_at, $2::timestamptz)
-        WHERE contact_id = ANY($1::uuid[]) AND status = ANY($3::text[]) RETURNING id`,
-      [ids, now.toISOString(), [...LIVE_ENROLLMENT_STATUSES]],
+      `UPDATE outbound_enrollment SET status = 'opted_out', finished_at = coalesce(finished_at, $3::timestamptz)
+        WHERE contact_id = ANY($1::uuid[]) AND workspace_id = $2::uuid AND status = ANY($4::text[]) RETURNING id`,
+      [ids, workspaceId, now.toISOString(), [...LIVE_ENROLLMENT_STATUSES]],
     )
   ).rows.map((r) => r.id);
-  await tx.query(
-    `UPDATE contact SET opted_out = true, opted_out_at = coalesce(opted_out_at, $2::timestamptz),
-            opted_out_reason = coalesce(opted_out_reason, $3)
-      WHERE id = ANY($1::uuid[]) AND NOT opted_out`,
-    [ids, now.toISOString(), reason.slice(0, 500)],
-  );
-  return { canceled, stopped };
+  const marked = (
+    await tx.query<{ id: string }>(
+      `UPDATE contact SET opted_out = true, opted_out_at = coalesce(opted_out_at, $3::timestamptz),
+              opted_out_reason = coalesce(opted_out_reason, $4)
+        WHERE id = ANY($1::uuid[]) AND owner_workspace_id = $2::uuid AND NOT opted_out
+        RETURNING id`,
+      [ids, workspaceId, now.toISOString(), reason.slice(0, 500)],
+    )
+  ).rows.map((r) => r.id);
+  return { canceled, stopped, marked };
+}
+
+/** Una dirección de correo comparable: sin «Nombre <…>», sin espacios, en minúsculas. */
+export function normalizeAddress(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const m = /<([^>]+)>/.exec(value);
+  const addr = (m ? m[1]! : value).trim().toLowerCase();
+  return addr.includes('@') ? addr : null;
+}
+
+/**
+ * (r5) ¿Escribió la ficha? En un correo, quien pide la baja tiene que ser
+ * la persona a la que se escribió: su correo en la ficha o la dirección
+ * del toque. Sin fromAddress (el proveedor no lo dijo) no hay con qué
+ * compararla y vale lo que diga el hilo; en LinkedIn e Instagram el chat
+ * es con esa persona.
+ */
+async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Promise<boolean> {
+  if (input.channel !== 'email' || !input.contactId) return true;
+  const from = normalizeAddress(input.fromAddress);
+  if (!from) return true;
+  const known = (
+    await tx.query<{ email: string | null; recipient: string | null }>(
+      `SELECT c.email::text AS email,
+              (SELECT t.recipient_address::text FROM outbound_touch t WHERE t.id = $2::uuid) AS recipient
+         FROM contact c WHERE c.id = $1::uuid`,
+      [input.contactId, input.touchId],
+    )
+  ).rows[0];
+  return [known?.email, known?.recipient].some((a) => normalizeAddress(a) === from);
 }
 
 /** El workspace y el nombre de quien respondió, para el aviso y la frase de la baja. */
@@ -147,13 +200,20 @@ async function whoAndLocale(tx: SqlExecutor, workspaceId: string, contactId: str
 async function notifyInbound(
   tx: SqlExecutor,
   input: InboundEffectsInput,
-  kind: 'reply' | 'optout',
+  kind: 'reply' | 'optout' | 'optout_review',
   w: { locale: string | null; who: string | null },
 ): Promise<void> {
   const lang = noticeLang(w.locale);
   const m = OUTREACH_NOTICE_TEXTS[lang];
   const label = channelLabel(lang, input.channel);
   const who = w.who ?? label;
+  const text = {
+    reply: { severity: 'success', title: m.replyTitle(who), body: m.replyBody(label) },
+    optout: { severity: 'warning', title: m.optOutTitle(who), body: m.optOutBody() },
+    optout_review: {
+      severity: 'warning', title: m.optOutReviewTitle(who), body: m.optOutReviewBody(normalizeAddress(input.fromAddress) ?? label, who),
+    },
+  }[kind];
   await tx.query(
     `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
      VALUES ($1::uuid,
@@ -161,9 +221,7 @@ async function notifyInbound(
                WHERE e.id = $2::uuid AND m.workspace_id = $1::uuid AND m.role <> 'client'),
              'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, '/ventas', $7::timestamptz)`,
     [
-      input.workspaceId, input.enrollmentId, kind === 'optout' ? 'warning' : 'success',
-      kind === 'optout' ? m.optOutTitle(who) : m.replyTitle(who), kind === 'optout' ? m.optOutBody() : m.replyBody(label),
-      input.messageId, input.now.toISOString(),
+      input.workspaceId, input.enrollmentId, text.severity, text.title, text.body, input.messageId, input.now.toISOString(),
     ],
   );
 }
@@ -173,6 +231,7 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
   assertIds('applyInboundEffects', [input.workspaceId, input.messageId]);
   const none: InboundEffects = {
     optOut: false, optOutRule: null, canceled: [], enrollmentStopped: false, notified: false, automatic: input.automatic,
+    optOutReview: false,
   };
   // El enrolamiento primero, y bloqueado: una respuesta que llega mientras
   // el despachador envía espera a que el envío se registre (loadSendContext).
@@ -188,14 +247,26 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
     );
     if (!input.contactId) return { ...none, optOut: true, optOutRule: verdict.ruleId };
     const w = await whoAndLocale(tx, input.workspaceId, input.contactId);
-    const wasOut = (await tx.query<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = $1::uuid`, [input.contactId])).rows[0]?.opted_out === true;
+    // (r5) Un tercero en copia que pide «sáquenme de su lista» no da de baja
+    // a la ficha: la cadencia se detiene (nadie quiere seguir escribiendo en
+    // ese hilo) y una persona decide.
+    if (!(await senderIsContact(tx, input))) {
+      const live = enrollmentStatus !== null
+        && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(enrollmentStatus) || enrollmentStatus === 'completed');
+      const canceled = live && input.enrollmentId ? await markEnrollmentReplied(tx, input.enrollmentId, input.occurredAt) : [];
+      await notifyInbound(tx, input, 'optout_review', w);
+      return { ...none, optOutRule: verdict.ruleId, canceled, enrollmentStopped: live, notified: true, optOutReview: true };
+    }
     const lang = noticeLang(w.locale);
     const reason = input.optOutReason ?? OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel));
-    const { canceled, stopped } = await optOutContact(tx, input.contactId, reason, input.now);
-    if (!wasOut) await notifyInbound(tx, input, 'optout', w);
+    const { canceled, stopped, marked } = await optOutContact(tx, input.contactId, input.workspaceId, reason, input.now);
+    // Avisa si la baja cambió algo en este workspace: una ficha marcada o
+    // una cadencia detenida. Quien ya estaba de baja y vuelve a escribir, no.
+    const changed = marked.length > 0 || stopped.length > 0;
+    if (changed) await notifyInbound(tx, input, 'optout', w);
     return {
       ...none, optOut: true, optOutRule: verdict.ruleId, canceled,
-      enrollmentStopped: input.enrollmentId !== null && stopped.includes(input.enrollmentId), notified: !wasOut,
+      enrollmentStopped: input.enrollmentId !== null && stopped.includes(input.enrollmentId), notified: changed,
     };
   }
   // Un «estoy de vacaciones hasta el lunes» no es una respuesta: ni cancela,

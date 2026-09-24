@@ -177,7 +177,11 @@ export const OUTREACH_NOTICE_TEXTS = {
     replyTitle: (who: string) => `${who} respondió`,
     replyBody: (channel: string) => `Llegó una respuesta por ${channel}. Lo pendiente de esa cadencia se canceló.`,
     optOutTitle: (who: string) => `${who} pidió no recibir más mensajes`,
-    optOutBody: () => 'Se marcó la baja: nadie en la plataforma le volverá a escribir.',
+    optOutBody: () => 'Se marcó la baja: no le volverás a escribir desde On Cue. Lo pendiente con esa persona se canceló.',
+    /** (r5) Pidió la baja alguien del hilo que no es la ficha: lo decide una persona. */
+    optOutReviewTitle: (who: string) => `Alguien en el hilo con ${who} pidió no recibir más mensajes`,
+    optOutReviewBody: (from: string, who: string) =>
+      `Lo escribió ${from}, que no es el correo de ${who}. La cadencia se detuvo y ${who} no quedó de baja: revisa la conversación y márcala a mano si corresponde.`,
     /** contact.opted_out_reason cuando una respuesta pide la baja. */
     optOutReason: (channel: string) => `Pidió no ser contactado, respondiendo por ${channel}.`,
     accountDownTitle: (channel: string) => `Tu cuenta de ${channel} no está conectada`,
@@ -195,7 +199,10 @@ export const OUTREACH_NOTICE_TEXTS = {
     replyTitle: (who: string) => `${who} replied`,
     replyBody: (channel: string) => `A reply came in over ${channel}. What was pending in that cadence was canceled.`,
     optOutTitle: (who: string) => `${who} asked not to be contacted again`,
-    optOutBody: () => 'The opt-out was recorded: no one on the platform will write to them again.',
+    optOutBody: () => "The opt-out was recorded: you won't write to them again from On Cue. Anything pending for them was canceled.",
+    optOutReviewTitle: (who: string) => `Someone in the thread with ${who} asked not to be contacted`,
+    optOutReviewBody: (from: string, who: string) =>
+      `It came from ${from}, which is not ${who}'s email. The cadence stopped and ${who} was not opted out: check the conversation and mark it by hand if it applies.`,
     optOutReason: (channel: string) => `Asked not to be contacted, replying over ${channel}.`,
     accountDownTitle: (channel: string) => `Your ${channel} account is not connected`,
     accountDownBody: (count: number, channel: string) =>

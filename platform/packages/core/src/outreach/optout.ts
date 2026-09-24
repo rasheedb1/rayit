@@ -6,13 +6,20 @@
  * era una lista aparte en bajas.ts, y el webhook y el job decidían
  * distinto), aplicadas a lo que entra por correo, LinkedIn e Instagram.
  * Es el ÚNICO detector: lo usan el webhook de Unipile (VEN-9) y el lector
- * de respuestas del motor, a través de @mc/db (applyInboundEffects). Una coincidencia marca contact.opted_out,
- * y el disparador de 0026 manda la dirección a contact_suppression, que es
- * GLOBAL y no tiene vuelta: nadie en la plataforma le vuelve a escribir.
- * Por eso cada regla pide una INTENCIÓN (imperativo, subjuntivo o
- * «quiero…»), no una palabra suelta (VEN-10 r2): un falso positivo pierde
- * a una marca interesada en toda la plataforma; un falso negativo lo ve
- * la persona en la bandeja y lo marca a mano.
+ * de respuestas del motor, a través de @mc/db (applyInboundEffects).
+ *
+ * Qué hace una coincidencia (r5): marca contact.opted_out de la ficha en
+ * el workspace que recibió la respuesta, cancela lo pendiente de ESE
+ * workspace y pasa sus cadencias a opted_out. No toca a los demás
+ * workspaces ni la lista global: contact_suppression solo la llena el
+ * worker con una baja VERIFICADA (el enlace de baja, un rebote duro o una
+ * queja: 0029 §1), nunca con una expresión regular sobre una respuesta. En
+ * un correo, además, la tiene que pedir la ficha: si la escribe un tercero
+ * en copia, queda para una persona. Aun así cada regla pide una
+ * INTENCIÓN (imperativo, subjuntivo o «quiero…»), no una palabra suelta
+ * (VEN-10 r2): un falso positivo pierde a una marca interesada para ese
+ * workspace; un falso negativo lo ve la persona en la bandeja y lo marca
+ * a mano.
  *
  * Qué se mira: solo lo que la persona escribió.
  *   · Se quita lo citado (líneas «>» y todo lo que sigue a «El … escribió:»

@@ -530,7 +530,7 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
   const fx = await applyInboundEffects(tx, {
     workspaceId: row.workspace_id, messageId: row.id, channel: m.account.channel, touchId: row.touch_id,
     enrollmentId: row.enrollment_id, contactId: row.contact_id, body: m.body, automatic: false,
-    occurredAt: m.occurredAt, now: new Date(), optOutReason: m.optOutReasonEs,
+    occurredAt: m.occurredAt, now: new Date(), optOutReason: m.optOutReasonEs, fromAddress: m.fromAddress,
   });
   return { inserted: true, enrollmentStopped: fx.enrollmentStopped, touchesCanceled: fx.canceled.length, optedOut: fx.optOut };
 }
