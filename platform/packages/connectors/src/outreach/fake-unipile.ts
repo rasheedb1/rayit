@@ -11,7 +11,7 @@
  */
 import { OutreachApiError, type OutreachErrorKind } from './errors.ts';
 import {
-  LINKEDIN_INVITE_NOTE_MAX, type HostedAuthRequest, type UnipilePage, type SendMessageRequest, type UnipileAccount, type UnipileApi,
+  LINKEDIN_INVITE_NOTE_MAX, type CreateWebhookRequest, type HostedAuthRequest, type UnipilePage, type SendMessageRequest, type UnipileAccount, type UnipileApi,
   type UnipileCallOptions, type UnipileChat, type UnipileMessage, type UnipileProfile,
 } from '../unipile.ts';
 
@@ -28,6 +28,7 @@ export class FakeUnipile implements UnipileApi {
   readonly chats = new Map<string, UnipileChat>();
   readonly messages = new Map<string, UnipileMessage[]>();
   readonly hostedLinks: HostedAuthRequest[] = [];
+  readonly webhooks: (CreateWebhookRequest & { id: string })[] = [];
   readonly #failures = new Map<keyof UnipileApi, OutreachApiError[]>();
   #seq = 0;
 
@@ -135,5 +136,12 @@ export class FakeUnipile implements UnipileApi {
   async listMessages(req: { chatId: string; cursor?: string; limit?: number }, opts?: UnipileCallOptions): Promise<UnipilePage<UnipileMessage>> {
     this.#enter('listMessages', req, opts);
     return { items: [...(this.messages.get(req.chatId) ?? [])], cursor: null };
+  }
+
+  async createWebhook(req: CreateWebhookRequest, opts?: UnipileCallOptions): Promise<{ webhookId: string }> {
+    this.#enter('createWebhook', { ...req, headers: Object.keys(req.headers) }, opts);
+    const id = this.#id('wh');
+    this.webhooks.push({ ...req, id });
+    return { webhookId: id };
   }
 }

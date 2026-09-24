@@ -21,6 +21,10 @@
  *   POST /api/v1/posts/reaction              JSON: account_id, post_id, reaction_type
  *   POST /api/v1/posts/{post_id}/comments    JSON: account_id, text
  *   GET  /api/v1/chats · /chats/{id}/messages   listas con cursor
+ *   POST /api/v1/webhooks                    request_url, source ('messaging' | 'account_status'), account_ids,
+ *                                            headers [{ key, value }], format → { object: 'WebhookCreated', webhook_id }.
+ *                                            Uno por cuenta: lleva nuestra ruta firmada y el secreto compartido en
+ *                                            cabeceras propias (outreach/unipile-webhook.ts).
  * Errores: { status, type: 'errors/<código>', title, detail }. Los que
  * importan, por HTTP: 401 disconnected_account, expired_credentials,
  * invalid_credentials; 422 already_invited_recently, already_connected,
@@ -120,6 +124,17 @@ export interface HostedAuthRequest {
   reconnectAccountId?: string;
 }
 
+export type UnipileWebhookSource = 'messaging' | 'account_status';
+
+export interface CreateWebhookRequest {
+  source: UnipileWebhookSource;
+  /** Solo los avisos de esta cuenta de Unipile. */
+  accountId: string;
+  requestUrl: string;
+  /** Cabeceras que Unipile manda con cada aviso: el secreto compartido y la ruta firmada. */
+  headers: Record<string, string>;
+}
+
 export interface SendMessageRequest {
   accountId: string;
   text: string;
@@ -143,6 +158,7 @@ export interface UnipileApi {
   commentOnPost(req: { accountId: string; postId: string; text: string }, opts?: UnipileCallOptions): Promise<void>;
   listChats(req: { accountId: string; cursor?: string; limit?: number }, opts?: UnipileCallOptions): Promise<UnipilePage<UnipileChat>>;
   listMessages(req: { chatId: string; cursor?: string; limit?: number }, opts?: UnipileCallOptions): Promise<UnipilePage<UnipileMessage>>;
+  createWebhook(req: CreateWebhookRequest, opts?: UnipileCallOptions): Promise<{ webhookId: string }>;
 }
 
 // ---------------------------------------------------------------------
@@ -269,11 +285,12 @@ export class UnipileClient implements UnipileApi {
     return `https://${this.#config.dsn}`;
   }
 
-  async request<T = unknown>(req: GenericRequest, opts: UnipileCallOptions = {}): Promise<T> {
+  /** `secrets`: valores que además de la llave nunca pueden salir en un error ni en la bitácora (el secreto de los avisos). */
+  async request<T = unknown>(req: GenericRequest, opts: UnipileCallOptions & { secrets?: readonly string[] } = {}): Promise<T> {
     const res = await this.#http.call<T>({
       endpoint: req.endpoint, method: req.method, url: `${this.baseUrl}/api/v1${req.path}`, query: req.query,
       headers: { 'X-API-KEY': this.#config.accessToken }, json: req.json, multipart: req.multipart,
-      secrets: [this.#config.accessToken], channelAccountId: opts.channelAccountId ?? null, signal: opts.signal,
+      secrets: [this.#config.accessToken, ...(opts.secrets ?? [])], channelAccountId: opts.channelAccountId ?? null, signal: opts.signal,
     });
     return res.body;
   }
@@ -365,7 +382,27 @@ export class UnipileClient implements UnipileApi {
     const query = { cursor: req.cursor, limit: req.limit };
     return page(await this.request({ endpoint: 'unipile.chats.messages.list', method: 'GET', path, query }, opts), normalizeMessage);
   }
+
+  async createWebhook(req: CreateWebhookRequest, opts?: UnipileCallOptions): Promise<{ webhookId: string }> {
+    const body = obj(await this.request({
+      endpoint: 'unipile.webhooks.create', method: 'POST', path: '/webhooks',
+      json: {
+        request_url: req.requestUrl, source: req.source, format: 'json', enabled: true, account_ids: [req.accountId],
+        events: WEBHOOK_EVENTS[req.source], name: `on-cue-${req.source}`,
+        headers: Object.entries(req.headers).map(([key, value]) => ({ key, value })),
+      },
+    }, { ...opts, secrets: Object.values(req.headers) }));
+    const webhookId = str(body['webhook_id']);
+    if (!webhookId) throw malformed('unipile.webhooks.create', 'Unipile no devolvió el aviso creado.');
+    return { webhookId };
+  }
 }
+
+/** Los avisos que pide cada fuente: las respuestas nuevas y la salud de la cuenta. */
+const WEBHOOK_EVENTS: Record<UnipileWebhookSource, string[]> = {
+  messaging: ['message_received'],
+  account_status: ['credentials', 'error', 'stopped', 'ok', 'deleted'],
+};
 
 function malformed(endpoint: string, messageEs: string): OutreachApiError {
   return new OutreachApiError({ provider: 'unipile', endpoint, httpStatus: null, code: 'malformed_response', kind: 'permanent', messageEs });

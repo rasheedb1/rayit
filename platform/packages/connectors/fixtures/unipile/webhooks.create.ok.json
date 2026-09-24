@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-24",
+    "notes": "POST /webhooks → WebhookCreated. Uno por cuenta (account_ids) con cabeceras propias: el secreto compartido y la ruta firmada."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://[^/]+/api/v1/webhooks$",
+    "body": {
+      "source": "messaging",
+      "format": "json",
+      "account_ids": [
+        "acc_li_0001"
+      ]
+    }
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "object": "WebhookCreated",
+      "webhook_id": "wh_demo_0001"
+    }
+  }
+}
