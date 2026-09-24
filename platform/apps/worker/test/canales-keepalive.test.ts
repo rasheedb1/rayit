@@ -215,3 +215,120 @@ test('una segunda corrida no vuelve a avisar de lo que ya estaba caído', async 
   const { rows } = await db.raw.query<{ n: number }>(`SELECT count(*)::int AS n FROM notification WHERE kind = 'connection_error' AND workspace_id = $1`, [WS]);
   assert.equal(rows[0]!.n, 2);
 });
+
+// ---------------------------------------------------------------------
+// Soltar y reconectar a la vez (0041)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que hace el callback de Google de la web en el espacio: la fila
+ * pendiente de ese nonce y outreach_channel_connect con la ref donde ya
+ * guardó el token nuevo. Devuelve lo que dijo la función. (Como mc_app lo
+ * prueba @mc/db, test/canales.test.ts; aquí importa el orden con el job.)
+ */
+async function reconectarComoLaWeb(email: string, nonce: string, secretRef: string): Promise<string> {
+  return db.raw.transaction(async (tx) => {
+    await tx.query(`SELECT set_config('app.workspace_id', $1, true)`, [WS]);
+    await tx.query(
+      `INSERT INTO outreach_channel_account (workspace_id, creator_id, channel, provider, provider_account_id, status)
+       VALUES (current_workspace_id(), $1, 'email', 'gmail_oauth', 'pending:' || $2, 'pending')`,
+      [CREATOR, nonce],
+    );
+    const { rows } = await tx.query<{ result: string }>(
+      `SELECT result FROM outreach_channel_connect('email', $1, $2, NULL, $3, '{gmail.send,gmail.modify}')`, [nonce, email, secretRef],
+    );
+    return rows[0]!.result;
+  });
+}
+
+test('reconectar mientras el job revoca: la conexión espera (releasing) y el job no revoca una concesión nueva', async () => {
+  const ID = '0000000b-0000-4000-8000-0000000ac0b1';
+  await store.set(ref(5), tokens('rt-5', 30));
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, secret_ref, status, scopes)
+     VALUES ($1, $2, $3, 'email', 'gmail_oauth', 'carrera@x.test', 'carrera@x.test', $4, 'disconnected', '{gmail.send}')`,
+    [ID, WS, CREATOR, ref(5)],
+  );
+  // La persona reconecta justo mientras el job habla con Google: entre el reclamo y el revoke.
+  const nueva = ref(6);
+  await store.set(nueva, tokens('rt-6', 60));
+  let during = '';
+  const google = {
+    revoke: async (t: OAuthTokens) => {
+      during = await reconectarComoLaWeb('carrera@x.test', 'r'.repeat(43), nueva);
+      await gmail.revoke(t);
+    },
+  };
+  const r = await runChannelsRelease({ db, secrets: store, google, unipile, now: NOW });
+  assert.equal(during, 'releasing', 'la fila reclamada no se revive a medio soltar');
+  assert.equal(r.googleRevoked, 1);
+  assert.ok(gmail.revokeCalls.includes('rt-5'), 'se revocó el token de la fila desconectada, leído de SU ref');
+  assert.ok(!gmail.revokeCalls.includes('rt-6'), 'nunca el de la reconexión');
+  const soltadaRow = await db.raw.query<{ status: string; secret_ref: string | null; released_at: Date | null; release_claimed_at: Date | null }>(
+    `SELECT status, secret_ref, released_at, release_claimed_at FROM outreach_channel_account WHERE id = $1`, [ID],
+  );
+  assert.equal(soltadaRow.rows[0]?.status, 'disconnected');
+  assert.equal(soltadaRow.rows[0]?.secret_ref, null);
+  assert.ok(soltadaRow.rows[0]?.released_at);
+  assert.equal(soltadaRow.rows[0]?.release_claimed_at, null);
+  assert.equal(await store.get(ref(5)), null, 'el token viejo salió del vault');
+
+  // Un minuto después, la misma reconexión entra: revive la fila con la concesión nueva, que nadie revocó.
+  assert.equal(await reconectarComoLaWeb('carrera@x.test', 's'.repeat(43), nueva), 'connected');
+  const viva = await cuenta(ID);
+  assert.deepEqual([viva?.status, viva?.secret_ref], ['connected', nueva]);
+  await gmail.refresh((await store.get(nueva))!); // la concesión nueva sigue viva en Google
+});
+
+test('reconectar ANTES de que el job la reclame: el job no la toca (ni revoca ni borra el token)', async () => {
+  const ID = '0000000b-0000-4000-8000-0000000ac0b2';
+  await store.set(ref(7), tokens('rt-7', 30));
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, secret_ref, status, scopes)
+     VALUES ($1, $2, $3, 'email', 'gmail_oauth', 'antes@x.test', 'antes@x.test', $4, 'disconnected', '{gmail.send}')`,
+    [ID, WS, CREATOR, ref(7)],
+  );
+  await store.set(ref(8), tokens('rt-8', 60));
+  assert.equal(await reconectarComoLaWeb('antes@x.test', 't'.repeat(43), ref(8)), 'connected');
+  const revocados = gmail.revokeCalls.length;
+  await runChannelsRelease({ db, secrets: store, google: gmail, unipile, now: NOW });
+  assert.equal(gmail.revokeCalls.length, revocados, 'nada que soltar: la fila está viva');
+  assert.deepEqual([(await cuenta(ID))?.status, (await cuenta(ID))?.secret_ref], ['connected', ref(8)]);
+  assert.equal(await store.get(ref(7)), null, 'la conexión borró el token viejo, que ya nadie nombraba');
+});
+
+test('una cuenta de Unipile conectada sin avisos los recupera en el keepalive; si Unipile falla, queda marcada', async () => {
+  const ID = '0000000b-0000-4000-8000-0000000ac0c1';
+  const hace = new Date(NOW.getTime() - 60 * 60_000);
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, status, last_error, updated_at)
+     VALUES ($1, $2, $3, 'instagram_dm', 'unipile', 'acc_ig_sordo', '@sorda', 'connected', 'webhooks_missing', $4)`,
+    [ID, WS, CREATOR, hace],
+  );
+  unipile.addAccount({ id: 'acc_ig_sordo', provider: 'INSTAGRAM' });
+  const webhooks = { secret: 'SECRETO-DE-PRUEBA', routeKey: new Uint8Array(32).fill(5), requestUrl: 'https://app.test/api/webhooks/unipile' };
+
+  unipile.failNext('createWebhook', 'transient', 'errors/service_unavailable', 503);
+  const mal = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, webhooks, now: NOW });
+  assert.equal(mal.webhooksRestored, 0);
+  const tras = await db.raw.query<{ last_error: string; provider_webhook_ids: string[] }>(
+    `SELECT last_error, provider_webhook_ids FROM outreach_channel_account WHERE id = $1`, [ID],
+  );
+  assert.equal(tras.rows[0]?.last_error, 'webhooks_missing', 'la pantalla sigue ofreciendo «Volver a intentar»');
+
+  // Al día siguiente sale: los dos avisos, con la ruta firmada de ESTA cuenta, y el código fuera. (El UPDATE de la
+  // corrida anterior movió updated_at al reloj de verdad: «mañana» es una hora después de ese reloj.)
+  await db.raw.query(`UPDATE outreach_channel_account SET provider_webhook_ids = '{}' WHERE id = $1`, [ID]);
+  const antes = unipile.webhooks.length;
+  const manana = new Date(Date.now() + 60 * 60_000);
+  const bien = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, webhooks, now: manana });
+  // Esta y las demás cuentas de Unipile conectadas sin avisos de la prueba (el LinkedIn que volvió, la del otro espacio).
+  assert.ok(bien.webhooksRestored >= 1);
+  const nuevos = unipile.webhooks.slice(antes).filter((w) => w.accountId === 'acc_ig_sordo');
+  assert.deepEqual(nuevos.map((w) => w.source).sort(), ['account_status', 'messaging']);
+  const fila = await db.raw.query<{ last_error: string | null; provider_webhook_ids: string[] }>(
+    `SELECT last_error, provider_webhook_ids FROM outreach_channel_account WHERE id = $1`, [ID],
+  );
+  assert.equal(fila.rows[0]?.last_error, null);
+  assert.ok(fila.rows[0]!.provider_webhook_ids.length >= 2);
+});

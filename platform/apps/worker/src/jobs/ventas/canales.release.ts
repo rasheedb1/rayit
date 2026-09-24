@@ -5,7 +5,12 @@
  * web es mc_app y no puede tocar el token (secret_ref) ni los avisos
  * (provider_webhook_ids, 0040). El disparador de 0040 deja la fila con
  * released_at NULL, que es la cola de este job. Cada cinco minutos (y en
- * la limpieza del keepalive diario), como mc_worker:
+ * la limpieza del keepalive diario), como mc_worker, cada fila se
+ * RECLAMA primero (release_claimed_at, 0041) y solo después se habla con
+ * el proveedor: mientras dure el reclamo, reconectar esa misma cuenta
+ * responde «espera un minuto» en vez de revivir una fila cuyo permiso
+ * está a punto de revocarse. Si el proveedor falla, el reclamo se suelta
+ * y la fila vuelve a la cola.
  *
  *   Gmail     revoca el permiso en Google (POST /revoke con el refresh
  *             token), borra el token del vault y la ref de la fila.
@@ -80,7 +85,16 @@ interface Row extends Record<string, unknown> {
   provider_account_id: string;
   secret_ref: string | null;
   provider_webhook_ids: string[];
+  /**
+   * El reclamo de esta vuelta (release_claimed_at, 0041), en texto: con
+   * sus microsegundos, que un Date de JavaScript perdería y la comparación
+   * de cierre ya no casaría.
+   */
+  claim: string;
 }
+
+/** Un reclamo más viejo que esto es de un job que murió a medias: otro lo puede tomar (0041). */
+export const RELEASE_CLAIM_STALE_MINUTES = 15;
 
 /** ¿El mismo buzón o la misma cuenta de Unipile sigue viva en otra fila (de cualquier espacio)? */
 async function liveElsewhere(db: Queryable, r: Row): Promise<boolean> {
@@ -94,26 +108,56 @@ async function liveElsewhere(db: Queryable, r: Row): Promise<boolean> {
 }
 
 /**
- * Marca la fila como soltada, solo si sigue desconectada y pendiente: si
- * la persona la reconectó mientras tanto, no se toca (y el token no se
- * borra: quien llama lo mira).
+ * Reclama la fila ANTES de hablar con el proveedor, en una sentencia:
+ * solo si sigue desconectada, sin soltar y sin un reclamo vivo. Devuelve
+ * lo que se va a soltar (la ref y los avisos) tal como estaban en ese
+ * instante. Desde aquí outreach_channel_connect no la revive ('releasing',
+ * 0041): la persona que reconecta en este minuto espera, en vez de
+ * quedarse con un permiso que Google retira un segundo después.
+ */
+async function claim(db: Queryable, id: string, staleBefore: Date): Promise<Row | null> {
+  const { rows } = await db.query<Row>(
+    `UPDATE outreach_channel_account
+        SET release_claimed_at = clock_timestamp()
+      WHERE id = $1 AND status = 'disconnected' AND released_at IS NULL
+        AND (release_claimed_at IS NULL OR release_claimed_at < $2)
+      RETURNING id, workspace_id, provider, provider_account_id, secret_ref, provider_webhook_ids, release_claimed_at::text AS claim`,
+    [id, staleBefore],
+  );
+  return rows[0] ?? null;
+}
+
+/** El proveedor falló o faltan llaves: la fila vuelve a la cola, solo si el reclamo sigue siendo el nuestro. */
+async function unclaim(db: Queryable, r: Row): Promise<void> {
+  await db.query(
+    `UPDATE outreach_channel_account SET release_claimed_at = NULL
+      WHERE id = $1 AND workspace_id = $2 AND release_claimed_at = $3::timestamptz`,
+    [r.id, r.workspace_id, r.claim],
+  );
+}
+
+/**
+ * Cierra la fila como soltada, solo si el reclamo sigue siendo el nuestro
+ * (nadie la revivió: la conexión no puede mientras dure, y uno viejo que
+ * otro job retomó ya no casa). El token de Google sale de la fila; el de
+ * la ref reclamada se borra del vault aparte.
  */
 async function markReleased(db: Queryable, r: Row, at: Date): Promise<boolean> {
   const { rows } = await db.query(
     `UPDATE outreach_channel_account
-        SET released_at = $3, provider_webhook_ids = '{}',
+        SET released_at = $3, release_claimed_at = NULL, provider_webhook_ids = '{}',
             secret_ref = CASE WHEN provider = 'gmail_oauth' THEN NULL ELSE secret_ref END,
             scopes = CASE WHEN provider = 'gmail_oauth' THEN '{}' ELSE scopes END
-      WHERE id = $1 AND workspace_id = $2 AND status = 'disconnected' AND released_at IS NULL
+      WHERE id = $1 AND workspace_id = $2 AND status = 'disconnected' AND release_claimed_at = $4::timestamptz
       RETURNING id`,
-    [r.id, r.workspace_id, at],
+    [r.id, r.workspace_id, at, r.claim],
   );
   return rows.length === 1;
 }
 
 async function purgeSecret(db: Queryable, r: Row): Promise<boolean> {
   if (!r.secret_ref) return false;
-  // Solo si ninguna otra fila la nombra (una fila por concesión: no debería, pero no se borra lo ajeno).
+  // Solo si ninguna fila la nombra ya (una fila por concesión: no debería, pero no se borra lo ajeno).
   const { rows } = await db.query(
     `DELETE FROM connection_secret s
       WHERE s.secret_ref = $1 AND s.workspace_id = $2
@@ -130,16 +174,20 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
     released: 0, googleRevoked: 0, secretsPurged: 0, unipileAccountsDeleted: 0, unipileWebhooksDeleted: 0, sharedKept: 0,
     waitingForKeys: 0, failed: 0,
   };
-  const { rows } = await db.query<Row>(
-    `SELECT id, workspace_id, provider, provider_account_id, secret_ref, provider_webhook_ids
-       FROM outreach_channel_account
+  const staleBefore = new Date(now.getTime() - RELEASE_CLAIM_STALE_MINUTES * 60_000);
+  const { rows: queue } = await db.query<{ id: string }>(
+    `SELECT id FROM outreach_channel_account
       WHERE status = 'disconnected' AND released_at IS NULL
+        AND (release_claimed_at IS NULL OR release_claimed_at < $2)
       ORDER BY updated_at
       LIMIT $1`,
-    [RELEASE_BATCH],
+    [RELEASE_BATCH, staleBefore],
   );
 
-  for (const a of rows) {
+  for (const { id } of queue) {
+    // Otro job (el keepalive y este corren a la vez) o una reconexión se la llevaron: nada que hacer.
+    const a = await claim(db, id, staleBefore);
+    if (!a) continue;
     // Una conexión que no terminó: en el proveedor no hay nada nuestro.
     if (a.provider_account_id.startsWith('pending:')) {
       if (await markReleased(db, a, now)) r.released += 1;
@@ -151,8 +199,10 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
         if (a.secret_ref && !shared) {
           if (!deps.google) {
             r.waitingForKeys += 1;
+            await unclaim(db, a);
             continue;
           }
+          // La ref que devolvió el reclamo: la de ESTA fila desconectada. Una reconexión estrena otra (0041).
           const tokens = await deps.secrets.get(a.secret_ref);
           if (tokens) {
             await deps.google.revoke(tokens, { channelAccountId: a.id });
@@ -164,6 +214,7 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
       } else {
         if (!deps.unipile) {
           r.waitingForKeys += 1;
+          await unclaim(db, a);
           continue;
         }
         for (const webhookId of a.provider_webhook_ids) {
@@ -179,8 +230,9 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
       if (shared) r.sharedKept += 1;
       r.released += 1;
     } catch (err) {
-      // Del proveedor (red, 5xx, nuestra configuración) o un token que no descifra (la llave, no la persona): se
-      // reintenta en la siguiente vuelta. Lo demás es un error de verdad y sube.
+      // Del proveedor (red, 5xx, nuestra configuración) o un token que no descifra (la llave, no la persona): la
+      // fila vuelve a la cola y se reintenta en la siguiente vuelta. Lo demás es un error de verdad y sube.
+      await unclaim(db, a);
       if (!isOutreachApiError(err) && !(err instanceof TokenCipherError)) throw err;
       r.failed += 1;
     }

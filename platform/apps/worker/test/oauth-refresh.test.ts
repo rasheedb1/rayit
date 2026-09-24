@@ -185,11 +185,11 @@ test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_rea
 });
 
 test('el reintento solo toca lo que quedó pendiente (flaky), porque near ya no vence pronto', async () => {
-  const runs = await waitFor(async () => {
+  // Por su número de intento y no por su posición: con la máquina cargada, otra corrida puede colarse en medio.
+  const second = await waitFor(async () => {
     const r = await jobRuns(h.db, 'oauth.refresh');
-    return r.length >= 2 && r[1]!.status !== 'running' ? r : null;
+    return r.find((x) => x.attempt === 2 && x.status !== 'running') ?? null;
   }, { timeoutMs: 20_000, label: 'segundo intento' });
-  const second = runs[1]!;
   assert.equal(second.attempt, 2);
   const md = second.metadata as { due: number; renewed: string[]; needsReauth: string[]; transient: string[] };
   assert.equal(md.due, 1, 'solo flaky sigue dentro del margen y activa');
