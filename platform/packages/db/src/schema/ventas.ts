@@ -18,7 +18,7 @@ import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts'
 // evalúa después de cargar los dos módulos; nada de outreach.ts se lee
 // al cargar este. Por eso OUTBOUND_CHANNELS, que sí se lee al cargar,
 // vive en _canales.ts y no en ninguno de los dos.
-import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
+import { outboundEnrollment, outboundSequenceTemplate, outboundStep, outreachChannelAccount } from './outreach.ts';
 
 export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
 
@@ -384,4 +384,11 @@ export const outboundTouch = pgTable('outbound_touch', {
   /** La hora del último cambio de estado; solo se mueve con él (disparador). */
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
+  /**
+   * La cuenta que envía el toque (0041 §3, la misma columna que VEN-10):
+   * la fija el despachador al reclamarlo, y es del mismo workspace y canal
+   * (disparador). Una respuesta solo se guarda si su hilo es el de un toque
+   * de ESA cuenta.
+   */
+  channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
 });

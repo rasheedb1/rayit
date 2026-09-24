@@ -221,12 +221,14 @@ describe('el callback del proveedor, desde la web (0039)', () => {
   });
 
   test('una respuesta entra atada al toque de su hilo, el enrolamiento deja de enviar y el webhook repetido no la duplica', async () => {
+    // El despachador (VEN-10) fija la cuenta del toque al reclamarlo; la demo no la trae.
+    await t.admin(`UPDATE outbound_touch SET channel_account_id = '${GMAIL_LAURA}' WHERE id = '00000005-0000-4000-8000-000000070002'`);
     const msg = {
       account: { id: GMAIL_LAURA, channel: 'email' as const }, threadRef: 'gmail-thread-demo-0002', providerMessageId: 'gmail-demo-0002-r1',
       body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date(), optOutReasonEs: 'Pidió la baja respondiendo.',
     };
     const first = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg));
-    assert.deepEqual(first, { inserted: true, enrollmentStopped: true, touchesCanceled: 3, optedOut: false });
+    assert.deepEqual(first, { matched: true, inserted: true, enrollmentStopped: true, touchesCanceled: 3, optedOut: false });
     assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg))).inserted, false);
     const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ touch_id: string; intent: string | null; direction: string }>(
       `SELECT touch_id, intent, direction FROM outbound_message WHERE provider_message_id = 'gmail-demo-0002-r1'`,
@@ -248,14 +250,15 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     const CONTACTO = '00000002-0000-4000-8000-0000000c0012';
     await t.admin(`
       INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel, body, status,
-                                  scheduled_for, claimed_at, sent_at, attempt_count, provider_message_id, thread_ref, status_changed_at)
+                                  scheduled_for, claimed_at, sent_at, attempt_count, provider_message_id, thread_ref, status_changed_at,
+                                  channel_account_id)
       VALUES ('00000005-0000-4000-8000-0000000700f1', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e8', '${CONTACTO}',
               '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0003', '00000005-0000-4000-8000-0000005e0103',
               'linkedin', 'Hola Carolina', 'sent', now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour', 1,
-              'unipile-msg-f1', 'chat_carolina', now() - interval '1 hour'),
+              'unipile-msg-f1', 'chat_carolina', now() - interval '1 hour', '${LINKEDIN_LAURA}'),
              ('00000005-0000-4000-8000-0000000700f2', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e8', '${CONTACTO}',
               '00000005-0000-4000-8000-0000005e0001', 5, '00000005-0000-4000-8000-0000000e0003', '00000005-0000-4000-8000-0000005e0105',
-              'linkedin', 'Otra idea', 'scheduled', now() + interval '1 day', NULL, NULL, 0, NULL, NULL, now());
+              'linkedin', 'Otra idea', 'scheduled', now() + interval '1 day', NULL, NULL, 0, NULL, NULL, now(), NULL);
     `);
     const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
       account: { id: LINKEDIN_LAURA, channel: 'linkedin' }, threadRef: 'chat_carolina', providerMessageId: 'li-in-f1',
@@ -270,5 +273,75 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     assert.ok(e.every((x) => x.status === 'opted_out'), 'todos sus enrolamientos');
     const pending = await sel<{ status: string; blocked_reason: string }>(`SELECT status, blocked_reason FROM outbound_touch WHERE id = '00000005-0000-4000-8000-0000000700f2'`);
     assert.deepEqual(pending[0], { status: 'canceled', blocked_reason: 'opted_out' });
+  });
+
+  test('un mensaje en un chat sin toque nuestro, o con el toque de OTRA cuenta, no escribe ninguna fila (ni el cuerpo)', async () => {
+    const OTRA_LI = '00000005-0000-4000-8000-0000000ac0e1';
+    await t.admin(`
+      INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, status)
+      VALUES ('${OTRA_LI}', '${WORKSPACE_LAURA}', '${CREATOR_LAURA}', 'linkedin', 'unipile', 'acc_li_segunda', 'Laura (2)', 'connected')
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    const antes = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message`);
+    const base = { fromAddress: 'Un amigo', occurredAt: new Date(), optOutReasonEs: 'x' };
+    // Un DM de un amigo: ningún toque en ese chat.
+    const amigo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
+      ...base, account: { id: LINKEDIN_LAURA, channel: 'linkedin' }, threadRef: 'chat_de_un_amigo', providerMessageId: 'li-amigo-1',
+      body: '¿Vamos a cenar el viernes? No me escribas más por aquí, jaja',
+    }));
+    assert.deepEqual(amigo, { matched: false, inserted: false, enrollmentStopped: false, touchesCanceled: 0, optedOut: false });
+    // El chat de un toque de LINKEDIN_LAURA, pero el aviso llega por otra cuenta del mismo espacio.
+    const cruzado = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
+      ...base, account: { id: OTRA_LI, channel: 'linkedin' }, threadRef: 'chat_carolina', providerMessageId: 'li-cruzado-1', body: 'Hola',
+    }));
+    assert.equal(cruzado.matched, false);
+    const despues = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message`);
+    assert.equal(despues[0]!.n, antes[0]!.n, 'ninguna fila nueva');
+    const cuerpo = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message WHERE body LIKE '%cenar el viernes%'`);
+    assert.equal(cuerpo[0]!.n, 0, 'el cuerpo de un mensaje ajeno no queda en la base');
+  });
+});
+
+describe('reconectar mientras el worker suelta la cuenta (0041)', () => {
+  const REF_VIEJA = 'enc:gmail:00000000-0000-4000-8000-00000000be01';
+  const REF_NUEVA = 'enc:gmail:00000000-0000-4000-8000-00000000be02';
+  const secreto = (ref: string) => `INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
+    VALUES ('${ref}', '${WS_OTRO}', '\\x00', '\\x000000000000000000000000', '\\x00000000000000000000000000000000') ON CONFLICT DO NOTHING`;
+  const conectar = (nonce: string, ref: string) => t.db.withWorkspace(WS_OTRO, async (tx) => {
+    await createPendingChannelAccount(tx, { channel: 'email', creatorId: CREATOR_OTRO, nonce });
+    return completeChannelConnection(tx, { channel: 'email', nonce, providerAccountId: 'suelta@gmail.test', displayName: null, secretRef: ref, scopes: ['gmail.send', 'gmail.modify'] });
+  });
+
+  test('una fila desconectada no presta su ref; una reclamada no se revive (releasing); después, sí, con la ref nueva y sin el token viejo', async () => {
+    await t.admin(secreto(REF_VIEJA));
+    const first = await conectar('s'.repeat(43), REF_VIEJA);
+    assert.equal(first.status, 'connected');
+    const id = first.status === 'connected' ? first.accountId : '';
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => existingGmailSecretRef(tx, 'suelta@gmail.test')), REF_VIEJA, 'viva: presta su ref');
+    await t.db.withWorkspace(WS_OTRO, (tx) => disconnectChannelAccount(tx, id));
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => existingGmailSecretRef(tx, 'suelta@gmail.test')), null, 'desconectada: ref nueva');
+
+    // mc_app no puede reclamarla: es del despachador.
+    await assert.rejects(
+      t.db.withWorkspace(WS_OTRO, (tx) => tx.query(`UPDATE outreach_channel_account SET release_claimed_at = now() WHERE id = $1`, [id])),
+      (e: { code?: string }) => e.code === '42501',
+    );
+    // El worker la reclama para soltarla; la persona reconecta en ese momento.
+    await t.admin(`UPDATE outreach_channel_account SET release_claimed_at = now() WHERE id = '${id}'`);
+    await t.admin(secreto(REF_NUEVA));
+    assert.deepEqual(await conectar('u'.repeat(43), REF_NUEVA), { status: 'releasing' });
+    const quieta = await sel<{ status: string; secret_ref: string }>(`SELECT status, secret_ref FROM outreach_channel_account WHERE id = '${id}'`);
+    assert.deepEqual(quieta[0], { status: 'disconnected', secret_ref: REF_VIEJA }, 'no se escribió nada');
+
+    // Un reclamo de hace más de 15 minutos es de un job que murió: ya no frena.
+    await t.admin(`UPDATE outreach_channel_account SET release_claimed_at = now() - interval '16 minutes' WHERE id = '${id}'`);
+    const again = await conectar('v'.repeat(43), REF_NUEVA);
+    assert.ok(again.status === 'connected' && again.accountId === id && again.reconnected);
+    const viva = await sel<{ status: string; secret_ref: string; release_claimed_at: Date | null; released_at: Date | null }>(
+      `SELECT status, secret_ref, release_claimed_at, released_at FROM outreach_channel_account WHERE id = '${id}'`,
+    );
+    assert.deepEqual(viva[0], { status: 'connected', secret_ref: REF_NUEVA, release_claimed_at: null, released_at: null });
+    const vieja = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM connection_secret WHERE secret_ref = '${REF_VIEJA}'`);
+    assert.equal(vieja[0]!.n, 0, 'el token viejo, que ya nadie nombra, sale del vault');
   });
 });

@@ -274,6 +274,8 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   providerWebhookIds: text('provider_webhook_ids').array().default([]).notNull(),
   /** Cuándo se soltó en el proveedor tras desconectarla; NULL en una desconectada = pendiente (0040). */
   releasedAt: timestamptz('released_at'),
+  /** sales.channels_release la reclamó para soltarla (0041): mientras dure, reconectar espera. */
+  releaseClaimedAt: timestamptz('release_claimed_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

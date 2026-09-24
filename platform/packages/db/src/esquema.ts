@@ -333,7 +333,8 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'llevan FORCE ROW LEVEL SECURITY, solo ve el workspace de la transacción: pasa a connected la fila pending de ESE ' +
     'nonce (de un solo uso, nace al empezar la conexión) con la cuenta que devolvió el proveedor, o revive la fila que ' +
     'el espacio ya tenía. Un buzón vivo en otro espacio lo dice el índice global con 23505 y responde taken sin ' +
-    'escribir. La llaman las rutas de la web tras verificar el estado firmado y hablar con el proveedor. EXECUTE solo ' +
+    'escribir; una fila que sales.channels_release reclamó para soltarla responde releasing sin escribir (0041), y al ' +
+    'revivir una fila desconectada con una ref nueva borra del vault el token viejo que ya nadie nombra. La llaman las rutas de la web tras verificar el estado firmado y hablar con el proveedor. EXECUTE solo ' +
     'para mc_app. No es de ningún disparador',
   'outreach_channel_mark_down(uuid,text)':
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +

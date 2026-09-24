@@ -68,6 +68,14 @@ export const CHANNEL_ERROR_CODES = {
   cancelled: 'cancelled',
   /** La cuenta que conectó en Unipile no es del canal que se pidió (un Instagram donde se pidió LinkedIn). */
   wrongProvider: 'wrong_provider',
+  /** Se reconectó mientras sales.channels_release soltaba esa misma cuenta (0041): hay que esperar un minuto. */
+  releasing: 'releasing',
+  /**
+   * Conectada, pero sin los avisos de Unipile (mensajes y salud): no nos
+   * enteramos de las respuestas. La pantalla ofrece «Volver a intentar» y
+   * el keepalive lo reintenta a diario.
+   */
+  webhooksMissing: 'webhooks_missing',
 } as const;
 
 export interface ChannelAccountRow {
@@ -337,7 +345,9 @@ export async function createPendingChannelAccount(
 export type ConnectResult =
   | { status: 'connected'; accountId: string; reconnected: boolean }
   | { status: 'taken' }
-  | { status: 'unknown_state' };
+  | { status: 'unknown_state' }
+  /** sales.channels_release está soltando esa misma cuenta en el proveedor (0041): no se escribió nada. */
+  | { status: 'releasing' };
 
 export interface ChannelConnection {
   channel: ConnectableChannel;
@@ -355,13 +365,15 @@ export interface ChannelConnection {
 /**
  * Pasa la fila 'pending' del nonce a 'connected'. Si el espacio ya tenía
  * fila para esa cuenta (reconectar), revive esa y borra la pendiente.
- * 'taken' si la cuenta vive en otro espacio (no se escribe nada), y
+ * 'taken' si la cuenta vive en otro espacio (no se escribe nada),
  * 'unknown_state' si no hay pendiente para ese nonce (ya se usó, o nunca
- * se empezó aquí).
+ * se empezó aquí) y 'releasing' si el worker está soltando esa misma
+ * cuenta en el proveedor (0041): revivirla ahora daría un permiso que
+ * Google o Unipile retiran un segundo después.
  */
 export async function completeChannelConnection(tx: WorkspaceTx, c: ChannelConnection): Promise<ConnectResult> {
   const providerAccountId = c.channel === 'email' ? c.providerAccountId.trim().toLowerCase() : c.providerAccountId.trim();
-  const { rows } = await tx.query<{ result: 'connected' | 'taken' | 'unknown_state'; account_id: string | null; reconnected: boolean }>(
+  const { rows } = await tx.query<{ result: 'connected' | 'taken' | 'unknown_state' | 'releasing'; account_id: string | null; reconnected: boolean }>(
     `SELECT result, account_id, reconnected FROM outreach_channel_connect($1, $2, $3, $4, $5, $6::text[])`,
     [c.channel, c.nonce, providerAccountId, c.displayName, c.secretRef, c.scopes],
   );
@@ -390,13 +402,20 @@ export async function failPendingChannelAccount(
 }
 
 /**
- * La ref del token de un Gmail que el espacio ya tuvo, para reescribir el
- * token nuevo en la MISMA ref al reconectar: una fila por concesión.
+ * La ref del token de un Gmail VIVO del espacio (conectado, por
+ * reconectar o con error), para reescribir el token nuevo en la MISMA ref
+ * al reconectar: una fila por concesión.
+ *
+ * Una fila desconectada no presta su ref: puede estar en la cola de
+ * sales.channels_release, que lee esa ref para revocar. El token nuevo va
+ * a una ref nueva y outreach_channel_connect (0041) borra el viejo al
+ * revivir la fila.
  */
 export async function existingGmailSecretRef(tx: WorkspaceTx, email: string): Promise<string | null> {
   const { rows } = await tx.query<{ secret_ref: string | null }>(
-    `SELECT secret_ref FROM outreach_channel_account WHERE provider = 'gmail_oauth' AND provider_account_id = $1`,
-    [email.trim().toLowerCase()],
+    `SELECT secret_ref FROM outreach_channel_account
+      WHERE provider = 'gmail_oauth' AND provider_account_id = $1 AND status = ANY($2::text[])`,
+    [email.trim().toLowerCase(), [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
   );
   const ref = rows[0]?.secret_ref ?? null;
   return ref?.startsWith('enc:gmail:') ? ref : null;
@@ -478,7 +497,13 @@ export interface InboundMessage {
 }
 
 export interface InboundResult {
-  /** false si ya estaba (webhook repetido): entonces no se toca nada más. */
+  /**
+   * El hilo es el de un toque enviado desde ESTA cuenta. false = un chat
+   * ajeno al outreach (los DM de amigos o de fans del Instagram de la
+   * persona): no se guardó nada, ni el cuerpo.
+   */
+  matched: boolean;
+  /** false si ya estaba (webhook repetido) o si el chat es ajeno: entonces no se toca nada más. */
   inserted: boolean;
   /** El enrolamiento del hilo dejó de enviar (replied, u opted_out si pidió la baja). */
   enrollmentStopped: boolean;
@@ -491,10 +516,16 @@ export interface InboundResult {
 /**
  * Una respuesta nueva, en UNA sentencia:
  *
- *   · una fila 'inbound' en outbound_message. Si el hilo es el de un toque
- *     enviado desde esta cuenta, queda atada al toque, su enrolamiento, su
- *     contacto y su negocio. Un webhook repetido no crea otra (índice
- *     único por provider_message_id) y no toca nada más;
+ *   · SOLO si el hilo es el de un toque enviado ('sent') desde ESTA cuenta.
+ *     La cuenta de LinkedIn o de Instagram es la personal del creador: por
+ *     ella pasan los mensajes de amigos, fans y clientes que no tienen
+ *     nada que ver con el outreach. Esos no se guardan (sus datos no son
+ *     nuestros) ni entran en la cola del clasificador de VEN-14, que
+ *     pagaría una llamada al modelo por cada uno: `matched` false y
+ *     ninguna fila;
+ *   · una fila 'inbound' en outbound_message, atada al toque, su
+ *     enrolamiento, su contacto y su negocio. Un webhook repetido no crea
+ *     otra (índice único por provider_message_id) y no toca nada más;
  *   · su enrolamiento deja de enviar: pasa a 'replied' y sus toques que
  *     todavía podían salir (CANCELABLE_TOUCH_STATUSES: borrador,
  *     programado, retenido) se cancelan con blocked_reason 'replied'. El
@@ -512,12 +543,12 @@ export interface InboundResult {
  */
 export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): Promise<InboundResult> {
   const optOut = looksLikeOptOut(m.body);
-  const { rows } = await tx.query<{ inserted: number; stopped: number; canceled: number }>(
+  const { rows } = await tx.query<{ matched: number; inserted: number; stopped: number; canceled: number }>(
     `WITH toque AS (
        SELECT t.id, t.enrollment_id, t.contact_id, e.deal_id
          FROM outbound_touch t
          LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
-        WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent'
+        WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
         ORDER BY t.sent_at DESC NULLS LAST
         LIMIT 1
      ),
@@ -527,7 +558,7 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
           thread_ref, provider_message_id, from_address, body, occurred_at, intent, classified_at)
        SELECT current_workspace_id(), $3, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $2, $1,
               $4, $5, $6, $7, CASE WHEN $8 THEN 'unsubscribe' END, CASE WHEN $8 THEN now() END
-         FROM (SELECT 1) uno LEFT JOIN toque ON true
+         FROM toque
        ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
        RETURNING enrollment_id, contact_id
      ),
@@ -555,14 +586,14 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
           AND t.status = ANY($10::text[])
        RETURNING t.id
      )
-     SELECT (SELECT count(*) FROM nuevo)::int AS inserted, (SELECT count(*) FROM enrolamientos)::int AS stopped,
+     SELECT (SELECT count(*) FROM toque)::int AS matched, (SELECT count(*) FROM nuevo)::int AS inserted, (SELECT count(*) FROM enrolamientos)::int AS stopped,
             (SELECT count(*) FROM toques)::int AS canceled, (SELECT count(*) FROM baja)::int AS opted_out`,
     [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt, optOut,
       m.optOutReasonEs.slice(0, 500), [...CANCELABLE_TOUCH_STATUSES]],
   );
   const r = rows[0]!;
   const inserted = r.inserted === 1;
-  return { inserted, enrollmentStopped: r.stopped > 0, touchesCanceled: r.canceled, optedOut: inserted && optOut };
+  return { matched: r.matched === 1, inserted, enrollmentStopped: r.stopped > 0, touchesCanceled: r.canceled, optedOut: inserted && optOut };
 }
 
 /**
