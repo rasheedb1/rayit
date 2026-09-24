@@ -39,24 +39,42 @@ test('el canal falso contra una base compartida solo corre sobre el workspace de
   assert.equal(isLocalDatabase(null), false);
 });
 
-test('demo con el seed: apagada no envía nada; encendida, el canal falso deja el envío en outbound_touch', async () => {
+test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres correos sale, una respuesta la corta y la otra sigue', async () => {
   const r = await runDemoMotor();
 
   // Mismo reloj, el toque ya vencido: lo único distinto es el interruptor.
   assert.equal(r.off.claim.claimed, 0);
   assert.equal(r.off.sent.length, 0);
 
+  // El mensaje de LinkedIn del seed sale, y queda en outbound_touch con su id y su hilo.
   assert.equal(r.on.claim.claimed, 1);
   assert.deepEqual(r.on.failed, []);
-  assert.equal(r.on.sent.length, 1);
   assert.equal(r.sentTouches.length, 1);
   const [touch] = r.sentTouches;
   assert.equal(touch!.status, 'sent');
   assert.ok(touch!.sent_at, 'el envío deja sent_at');
   assert.match(touch!.provider_message_id ?? '', /^fake-linkedin-/);
   assert.match(touch!.thread_ref ?? '', /^fake-thread-linkedin-/);
-  assert.equal(r.delivered.length, 1);
-  assert.equal(r.delivered[0]!.touchId, touch!.id);
 
-  assert.match(resumenDemo(r), /apagada\): 0 reclamado\(s\), 0 enviado\(s\)/);
+  // La cadencia: dos correos con su pie y su baja de un clic; una marca responde y se corta; la otra recibe el día 2 en el hilo.
+  const c = r.cadence;
+  assert.equal(c.first.sent.length, 2);
+  const correos = r.delivered.filter((d) => d.channel === 'email');
+  for (const m of correos) {
+    assert.match(m.body, /https:\/\/oncue\.test\/baja\/[A-Za-z0-9_-]{43}\n/, 'el pie lleva la página de baja');
+    assert.match(m.unsubscribeUrl ?? '', /\/un-clic$/, 'y la cabecera, la baja de un clic');
+  }
+  assert.equal(c.replies.inbound, 1);
+  assert.equal(c.replies.canceled, 2);
+  assert.equal(c.next.sent.length, 1);
+  assert.deepEqual(c.statuses.map((s) => s.statuses), [['sent', 'canceled', 'canceled'], ['sent', 'sent', 'scheduled']]);
+  const segundo = correos.at(-1)!;
+  assert.match(segundo.subject ?? '', /^Re: /);
+  assert.equal(segundo.threadRef, correos.find((m) => m.recipient === segundo.recipient)!.threadRef, 'en el mismo hilo');
+
+  const texto = resumenDemo(r);
+  assert.match(texto, /apagada\): 0 reclamado\(s\), 0 enviado\(s\)/);
+  assert.match(texto, /List-Unsubscribe: <https:\/\/oncue\.test\/baja\/\S+\/un-clic>/);
+  assert.match(texto, /LinkedIn a \S+: mensaje de LinkedIn/);
+  assert.doesNotMatch(texto, /sin asunto/);
 });

@@ -49,7 +49,7 @@ const ENR = '00000038-0000-4000-8000-00000000e0a1';
 const TOKEN = createOptoutToken();
 /** Un token con la forma de siempre, pero ningún correo salió con él. */
 const TOKEN_SIN_CORREO = createOptoutToken();
-/** Como lo genera hoy el despachador de VEN-10 (outreach-motor.ts, newOptoutToken), sin pasar por @mc/core. */
+/** Como lo generaba el despachador de VEN-10 en su ronda 2 (newOptoutToken), sin pasar por @mc/core: un enlace de entonces sigue valiendo. */
 const TOKEN_VEN10 = randomBytes(32).toString('base64url');
 
 let t: TestDb;

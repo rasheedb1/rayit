@@ -8,7 +8,7 @@
  *   · el contacto de un enrolamiento o de un toque es del workspace,
  *     también para el worker (contact_visible_to);
  *   · send_started_at y unconfirmed_attempt son solo del despachador;
- *   · outbound_counter_release devuelve una plaza y nunca baja de cero.
+ *   · outbound_counter_release devuelve una plaza al día de su reserva y nunca baja de cero.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -109,7 +109,10 @@ test('send_started_at y unconfirmed_attempt los escribe solo el despachador', as
   await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET unconfirmed_attempt = 1 WHERE id = $1`, [TOUCH_A]));
 });
 
-test('outbound_counter_release devuelve la plaza de hoy y de la semana, sin bajar de cero', async () => {
+/** El día de hoy en la zona del workspace, como lo cuentan los contadores (now() de la base). */
+const HOY = 'outreach_local_date($1, now())';
+
+test('outbound_counter_release devuelve la plaza del día de la reserva y de su semana, sin bajar de cero', async () => {
   const cuenta = async () =>
     t.db.asWorker(async (tx) =>
       (await tx.query<{ period: string; count: number }>(
@@ -122,15 +125,18 @@ test('outbound_counter_release devuelve la plaza de hoy y de la semana, sin baja
     }
   });
   assert.deepEqual(await cuenta(), ['day:2', 'week:2']);
-  await t.db.asWorker((tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email')`, [WS_A, ACC_A]));
+  // Una reserva de hace dos semanas no toca las filas de hoy (r3: antes restaba de hoy).
+  await t.db.asWorker((tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email', outreach_local_date($1, now()) - 14)`, [WS_A, ACC_A]));
+  assert.deepEqual(await cuenta(), ['day:2', 'week:2']);
+  await t.db.asWorker((tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email', ${HOY})`, [WS_A, ACC_A]));
   assert.deepEqual(await cuenta(), ['day:1', 'week:1']);
   await t.db.asWorker(async (tx) => {
-    for (let i = 0; i < 3; i++) await tx.query(`SELECT outbound_counter_release($1, $2, 'email')`, [WS_A, ACC_A]);
+    for (let i = 0; i < 3; i++) await tx.query(`SELECT outbound_counter_release($1, $2, 'email', ${HOY})`, [WS_A, ACC_A]);
   });
   assert.deepEqual(await cuenta(), ['day:0', 'week:0'], 'nunca por debajo de cero');
   // La web no la llama: es del despachador.
   await assert.rejects(
-    t.db.withWorkspace(WS_A, (tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email')`, [WS_A, ACC_A])),
+    t.db.withWorkspace(WS_A, (tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email', ${HOY})`, [WS_A, ACC_A])),
     (e: { code?: string }) => e.code === '42501',
   );
 });

@@ -404,4 +404,8 @@ export const outboundTouch = pgTable('outbound_touch', {
   sendStartedAt: timestamptz('send_started_at'),
   /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0051 §6). */
   unconfirmedAttempt: integer('unconfirmed_attempt'),
+  /** Cuándo leyó el hilo el lector de respuestas: el turno de la lectura (0051 §10). */
+  repliesCheckedAt: timestamptz('replies_checked_at'),
+  /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale (0051 §8). */
+  capsReservedOn: date('caps_reserved_on', { mode: 'string' }),
 });
