@@ -2,6 +2,8 @@ import "server-only";
 import {
   createDbFromEnv, type Db, type DbMode, type Identity, type IdentityTx, type PublicShareTx, type WorkspaceTx,
 } from "@mc/db";
+import { crearEnlaceDeDemo } from "@mc/db/demo-baja";
+import { authConfig } from "@/lib/auth/config";
 
 /**
  * La base de la web: quién la abre y cómo se cierra. Aquí NO se decide
@@ -24,13 +26,48 @@ declare global {
   var __mcDb: Promise<{ db: Db; mode: DbMode }> | undefined;
 }
 
+/**
+ * Adónde apunta el enlace de baja de la demo: APP_URL si está, si no el
+ * puerto con el que arrancó la web; sin ninguno de los dos, la ruta sola.
+ */
+function baseDeLaDemo(): string {
+  const app = process.env.APP_URL?.trim();
+  if (app) return app;
+  const puerto = process.env.PORT?.trim();
+  return puerto ? `http://localhost:${puerto}` : "";
+}
+
+/**
+ * Solo en modo demo (Postgres embebido, que vive dentro de este proceso):
+ * un enlace de baja que se puede pulsar, para recorrer a mano el camino
+ * de VEN-15 sin Docker (docs/ventas-outreach.md §5.2). El seed solo
+ * guarda hashes de tokens al azar; este lo fabrica como el despachador,
+ * sobre el último correo enviado de la demo. Nunca con DATABASE_URL: ahí
+ * sería un enlace de baja real.
+ */
+async function enlaceDeBajaDeLaDemo(db: Db): Promise<string> {
+  try {
+    const r = await db.asWorker((tx) => crearEnlaceDeDemo(tx, baseDeLaDemo()));
+    if (!r.ok) return "";
+    return ` Enlace de baja de prueba (ábrelo sin sesión o en una ventana privada): ${r.url} (a ${r.recipient}).`;
+  } catch (err) {
+    console.warn("[db] No se pudo crear el enlace de baja de la demo:", err instanceof Error ? err.message : err);
+    return "";
+  }
+}
+
 function getDb(): Promise<{ db: Db; mode: DbMode }> {
   if (!globalThis.__mcDb) {
-    globalThis.__mcDb = createDbFromEnv().then((r) => {
+    // Sin Supabase Auth no existe ningún usuario: las reglas por rol que
+    // fallan cerradas (outreach_can_manage, 0038 §7) necesitan la bandera
+    // explícita app.auth_disabled. Con Auth configurado no se fija nunca.
+    globalThis.__mcDb = createDbFromEnv(process.env, { authDisabled: authConfig() === null }).then(async (r) => {
       if (r.mode === "embedded") {
+        const baja = await enlaceDeBajaDeLaDemo(r.db);
         console.warn(
           "[db] Sin DATABASE_URL: Postgres embebido en memoria con el seed (modo demo). " +
-            "Para ver la base real: make db.unlock y vuelve a arrancar (el script dev de apps/web lee ../../.env.local).",
+            "Para ver la base real: make db.unlock y vuelve a arrancar (el script dev de apps/web lee ../../.env.local)." +
+            baja,
         );
       }
       return r;

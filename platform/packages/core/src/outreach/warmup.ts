@@ -102,3 +102,20 @@ export function warmupCurve(policyLimit: number, warmupDays: number): WarmupPoin
   const medio = Math.round((sube + llega) / 2);
   return [...new Set([1, sube, medio, llega])].sort((a, b) => a - b).map((day) => ({ day, limit: limite(day) }));
 }
+
+/**
+ * La rampa entera, un punto por día: del día 1 al primero que llega al
+ * tope, cada uno con su warmupDailyLimit. Es lo que pinta el gráfico de
+ * /ventas/politica (la referencia de Lemlist e Instantly enseña la rampa
+ * como una línea); warmupCurve da los días que se leen en texto. Vacía
+ * en los mismos casos que warmupCurve: no hay nada que calentar.
+ */
+export function warmupSeries(policyLimit: number, warmupDays: number): WarmupPoint[] {
+  const clave = warmupCurve(policyLimit, warmupDays);
+  const ultimo = clave[clave.length - 1];
+  if (!ultimo) return [];
+  return Array.from({ length: ultimo.day }, (_, i) => ({
+    day: i + 1,
+    limit: warmupDailyLimit({ day: i + 1, policyLimit, warmupDays }),
+  }));
+}

@@ -7,12 +7,15 @@
  *     rechazo del clic de quien envió con sesión (sin tocar nada), la baja
  *     en dos tiempos (r3: el primer clic vale para quien envió; un
  *     segundo workspace la lleva a toda la plataforma; el remitente sin
- *     sesión no suprime una ficha compartida para nadie más); el segundo clic; un token sin
+ *     sesión no suprime una ficha compartida para nadie más; r4: una
+ *     persona con dos espacios que pulsa sus dos enlaces tampoco); el
+ *     motivo de la baja se guarda como código; el segundo clic; un token sin
  *     correo detrás no encuentra nada; y el token del despachador de
  *     VEN-10 (randomBytes(32) en base64url) da de baja igual;
  *   · la política editable: valores por defecto, guardar, el interruptor
  *     con dirección postal, que no se puede quitar la dirección con el
- *     envío encendido, y que solo owner y admin la cambian (r3);
+ *     envío encendido, y que solo owner y admin la cambian (r3); sin
+ *     identidad la regla falla cerrada salvo con app.auth_disabled (r4);
  *   · contact.email_invalid (0038): no se programa un correo a un correo
  *     que rebotó, los otros canales siguen, y cambiar el correo borra la
  *     marca y también contact.bounced;
@@ -28,6 +31,7 @@ import {
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
+import { createDb, type BaseTx } from '../src/client.ts';
 import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -59,7 +63,19 @@ const TOUCH_GLOBAL_PEND_O = '00000038-0000-4000-8000-0000000070f3';
 const TOUCH_GLOBAL_SENT_O = '00000038-0000-4000-8000-0000000070f4';
 const TOKEN_GLOBAL_S = createOptoutToken();
 const TOKEN_GLOBAL_O = createOptoutToken();
-const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O];
+/** r4: una persona (una agencia) dueña de dos espacios que le escriben a la misma marca. */
+const WS_AG1 = '00000038-0000-4000-8000-0000000000a8';
+const WS_AG2 = '00000038-0000-4000-8000-0000000000a9';
+const AGENCIA = '00000038-0000-4000-8000-0000000000d8';
+const CONTACT_AG = '00000038-0000-4000-8000-0000000000f8';
+const TOUCH_AG1_SENT = '00000038-0000-4000-8000-0000000070e1';
+const TOUCH_AG2_SENT = '00000038-0000-4000-8000-0000000070e2';
+const TOUCH_AGO_SENT = '00000038-0000-4000-8000-0000000070e3';
+const TOUCH_AGO_PEND = '00000038-0000-4000-8000-0000000070e4';
+const TOKEN_AG1 = createOptoutToken();
+const TOKEN_AG2 = createOptoutToken();
+const TOKEN_AGO = createOptoutToken();
+const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O, TOKEN_AG1, TOKEN_AG2, TOKEN_AGO];
 
 let t: TestDb;
 
@@ -105,12 +121,14 @@ before(async () => {
 after(async () => {
   if (t.kind === 'postgres') {
     await t.admin(`
-      DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}', '00000038-0000-4000-8000-0000000000ea');
+      DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}', '${WS_AG1}', '${WS_AG2}', '00000038-0000-4000-8000-0000000000ea');
+      DELETE FROM app_user WHERE id = '${AGENCIA}' OR email LIKE '%@politica.test';
       DELETE FROM company WHERE id = '${COMPANY}';
       DELETE FROM outbound_optout_link WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
       DELETE FROM outbound_optout_event WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
-      DELETE FROM contact WHERE id = '${CONTACT_GLOBAL}';
-      DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test', 'prensa@marca.test');
+      DELETE FROM contact WHERE id IN ('${CONTACT_GLOBAL}', '${CONTACT_AG}');
+      DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test', 'prensa@marca.test',
+                                                      'agencia@marca.test');
     `);
   }
   await t.close();
@@ -252,6 +270,67 @@ describe('la baja desde el enlace', () => {
     assert.equal((await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'prensa@marca.test'`)).length, 1);
   });
 
+  test('sabotaje (r4): una persona dueña de dos espacios pulsa sus dos enlaces y la baja sigue siendo de esos espacios', async () => {
+    // Una agencia (o una creadora con dos marcas personales) escribe a la
+    // misma dirección desde WS_AG1 y WS_AG2, y es owner de los dos. Sus dos
+    // clics sin sesión no son «dos creadores distintos».
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES
+        ('${WS_AG1}', 'agencia-uno', 'Agencia · Uno', 'America/Bogota'),
+        ('${WS_AG2}', 'agencia-dos', 'Agencia · Dos', 'America/Bogota');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_AG1}', '${COMPANY}'), ('${WS_AG2}', '${COMPANY}');
+      INSERT INTO app_user (id, email, name) VALUES ('${AGENCIA}', 'duena@agencia.test', 'Agencia');
+      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_AG1}', '${AGENCIA}', 'owner'), ('${WS_AG2}', '${AGENCIA}', 'owner');
+      INSERT INTO contact (id, company_id, full_name, email, source, source_url, owner_workspace_id) VALUES
+        ('${CONTACT_AG}', '${COMPANY}', 'Compras', 'agencia@marca.test', 'public_website', 'https://marca.test/compras', NULL);
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, sent_at,
+                                  provider_message_id, recipient_address, attempt_count) VALUES
+        ('${TOUCH_AG1_SENT}', '${WS_AG1}', '${COMPANY}', '${CONTACT_AG}', 'email', 'Hola', 'sent',
+         now() - interval '1 day', now() - interval '1 day', 'gmail-a1', 'agencia@marca.test', 1),
+        ('${TOUCH_AG2_SENT}', '${WS_AG2}', '${COMPANY}', '${CONTACT_AG}', 'email', 'Hola', 'sent',
+         now() - interval '1 day', now() - interval '1 day', 'gmail-a2', 'agencia@marca.test', 1),
+        ('${TOUCH_AGO_SENT}', '${WS_O}', '${COMPANY}', '${CONTACT_AG}', 'email', 'Hola desde O', 'sent',
+         now() - interval '2 days', now() - interval '2 days', 'gmail-a3', 'agencia@marca.test', 1),
+        ('${TOUCH_AGO_PEND}', '${WS_O}', '${COMPANY}', '${CONTACT_AG}', 'email', 'Sigo desde O', 'scheduled',
+         now() + interval '1 day', NULL, NULL, NULL, 0);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, claimed_at, sent_at)
+      VALUES ('${optoutTokenHash(TOKEN_AG1)}', '${WS_AG1}', '${TOUCH_AG1_SENT}', '${CONTACT_AG}', 'agencia@marca.test',
+              now() - interval '1 day', now() - interval '1 day'),
+             ('${optoutTokenHash(TOKEN_AG2)}', '${WS_AG2}', '${TOUCH_AG2_SENT}', '${CONTACT_AG}', 'agencia@marca.test',
+              now() - interval '1 day', now() - interval '1 day'),
+             ('${optoutTokenHash(TOKEN_AGO)}', '${WS_O}', '${TOUCH_AGO_SENT}', '${CONTACT_AG}', 'agencia@marca.test',
+              now() - interval '2 days', now() - interval '2 days');
+    `);
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_AG1), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
+    assert.deepEqual(
+      await optoutFromLink(puertas([]), TOKEN_AG2),
+      { status: 'ok', alreadyOptedOut: false, scope: 'workspace' },
+      'el segundo espacio comparte dueña con el primero: no confirma nada',
+    );
+    assert.deepEqual(await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'agencia@marca.test'`), []);
+    const [pend] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_AGO_PEND}'`);
+    assert.equal(pend?.status, 'scheduled', 'el otro creador le sigue escribiendo');
+    const [ficha] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_AG}'`);
+    assert.equal(ficha?.opted_out, false);
+
+    // Un creador de OTRAS personas (WS_O) sí confirma, y la baja pasa a toda la plataforma.
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_AGO), { status: 'ok', alreadyOptedOut: false, scope: 'global' });
+    const [pend2] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_AGO_PEND}'`);
+    assert.equal(pend2?.status, 'canceled');
+    assert.equal((await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'agencia@marca.test'`)).length, 1);
+
+    // Y la política que abre esas membresías no sobrevive a la llamada.
+    await t.db.withPublicShare(async (tx) => {
+      const { rows } = await tx.query('SELECT 1 FROM membership');
+      assert.equal(rows.length, 0);
+    });
+  });
+
+  test('el motivo de la baja se guarda como código, no como una frase en un idioma (r4)', async () => {
+    const [c] = await sinRls<{ opted_out_reason: string | null }>(`SELECT opted_out_reason FROM contact WHERE id = '${CONTACT_S}'`);
+    assert.equal(c?.opted_out_reason, 'unsubscribe_link');
+  });
+
   test('el token del despachador de VEN-10, sin firma ni puntos, da de baja igual', async () => {
     assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_VEN10), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
     const [c] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_V10}'`);
@@ -326,6 +405,44 @@ describe('la política editable', () => {
         assert.equal((await como(quien, (tx) => getOutboundPolicy(tx))).maxEmailsPerDay, p.maxEmailsPerDay);
       }
       assert.notEqual((await como(DUENA, (tx) => getOutboundPolicy(tx))).maxEmailsPerDay, 2000);
+    });
+
+    test('sin identidad la regla falla cerrada: sin la bandera app.auth_disabled, 42501 (r4)', async () => {
+      const p = await t.db.withWorkspace(WS_O, (tx) => getOutboundPolicy(tx));
+      const sinBandera = <T>(fn: Parameters<typeof t.db.withWorkspace<T>>[1]) =>
+        t.db.withWorkspace(WS_O, async (tx) => {
+          // Como una ruta con Supabase Auth configurado que abre withWorkspace sin identidad.
+          await tx.query("SELECT set_config('app.auth_disabled', '', true)");
+          return fn(tx);
+        });
+      await assert.rejects(sinBandera((tx) => saveOutboundPolicy(tx, { ...p, maxEmailsPerDay: 1999 })), PolicyForbiddenError);
+      await assert.rejects(sinBandera((tx) => disableOutreach(tx, 'cron')), (e: unknown) => isPolicyForbidden(e));
+      await assert.rejects(
+        sinBandera((tx) => tx.query(`UPDATE outbound_policy SET enabled = true WHERE workspace_id = '${WS_O}'`)),
+        (e: unknown) => (e as { code?: string }).code === '42501',
+      );
+      // Con la bandera (las pruebas, la web sin Supabase Auth) sí, como antes.
+      const flag = await t.db.withWorkspace(WS_O, async (tx) =>
+        (await tx.query<{ v: string }>("SELECT current_setting('app.auth_disabled', true) AS v")).rows[0]?.v);
+      assert.equal(flag, 'on');
+    });
+
+    test('el cliente fija app.auth_disabled solo si se le pide (DbOptions.authDisabled)', async () => {
+      const consultas = async (opts: { authDisabled?: boolean }) => {
+        const vistas: string[] = [];
+        const raw = {
+          db: {},
+          query: async (text: string) => {
+            vistas.push(text);
+            return { rows: [] };
+          },
+        } as unknown as BaseTx;
+        const db = createDb({ run: (fn) => fn(raw), close: async () => undefined }, opts);
+        await db.withWorkspace(WS_O, async () => undefined);
+        return vistas.filter((q) => q.includes('app.auth_disabled'));
+      };
+      assert.deepEqual(await consultas({}), [], 'por defecto no: sin identidad, la regla dice que no');
+      assert.equal((await consultas({ authDisabled: true })).length, 1);
     });
 
     test("'owner' y 'admin' sí", async () => {

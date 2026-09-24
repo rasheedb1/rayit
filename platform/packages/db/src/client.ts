@@ -278,6 +278,15 @@ export interface DbOptions {
   statementTimeoutMs?: number;
   /** `SET LOCAL idle_in_transaction_session_timeout`, en ms. 0 lo desactiva. */
   idleInTransactionTimeoutMs?: number;
+  /**
+   * No hay autenticación en este despliegue: ningún usuario existe (la web
+   * sin Supabase Auth, las pruebas). withWorkspace fija entonces
+   * `app.auth_disabled = 'on'`, la bandera explícita con la que las
+   * reglas por rol que fallan cerradas (outreach_can_manage, 0038 §7)
+   * aceptan una transacción sin identidad. Por defecto, no: sin identidad
+   * y sin esta bandera, esas reglas responden que no.
+   */
+  authDisabled?: boolean;
 }
 
 /** Lo que cada driver aporta: una transacción abierta con sus dos manijas. */
@@ -384,6 +393,7 @@ async function applyIdentity(tx: BaseTx, identity: Identity | undefined): Promis
 export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
   const statementTimeout = timeoutMs(opts.statementTimeoutMs, DEFAULT_STATEMENT_TIMEOUT_MS, 'statementTimeoutMs');
   const idleTimeout = timeoutMs(opts.idleInTransactionTimeoutMs, DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS, 'idleInTransactionTimeoutMs');
+  const authDisabled = opts.authDisabled === true;
 
   /**
    * El dueño de las transacciones de ESTE cliente: dentro de fn está en
@@ -420,6 +430,7 @@ export function createDb(runner: TxRunner, opts: DbOptions = {}): CatalogDb {
       const who = normalizeIdentity(identity);
       return run(async (tx) => {
         await tx.query("SELECT set_config('app.workspace_id', $1, true)", [workspaceId]);
+        if (authDisabled) await tx.query("SELECT set_config('app.auth_disabled', 'on', true)");
         await applyIdentity(tx, who);
         return fn({ db: tx.db, query: tx.query, workspaceId, identity: who });
       });

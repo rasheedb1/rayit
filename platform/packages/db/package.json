@@ -24,6 +24,7 @@
     "./queries/conexiones": "./src/queries/conexiones.ts",
     "./queries/outreach": "./src/queries/outreach.ts",
     "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
+    "./demo-baja": "./src/demo-baja.ts",
     "./test/pglite": "./test/pglite.ts"
   },
   "scripts": {

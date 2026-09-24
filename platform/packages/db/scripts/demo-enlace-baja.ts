@@ -17,7 +17,11 @@
  * aparte contra la misma base, como dice docs/ventas-outreach.md.
  */
 import pg from 'pg';
-import { createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
+import { crearEnlaceDeDemo } from '../src/demo-baja.ts';
+
+// La fábrica vive en src/demo-baja.ts: la usa también la web en modo demo
+// (lib/db/cliente.ts), que imprime un enlace pulsable al arrancar.
+export { crearEnlaceDeDemo, type EnlaceDeDemo } from '../src/demo-baja.ts';
 
 const URL_POR_DEFECTO = 'postgres://mc:mc@localhost:5432/oncue';
 const HOSTS_LOCALES = new Set(['localhost', '127.0.0.1', '::1', '[::1]', 'db', 'host.docker.internal']);
@@ -33,51 +37,6 @@ export function esBaseLocal(url: string): boolean {
   if (!/^postgres(ql)?:$/.test(u.protocol)) return false;
   if (/supabase\.(co|com)$/i.test(u.hostname)) return false;
   return HOSTS_LOCALES.has(u.hostname);
-}
-
-/** Lo mínimo para una consulta con parámetros (pg.Client, o una transacción de @mc/db en las pruebas). */
-interface Consultable {
-  query(text: string, params?: readonly unknown[]): Promise<{ rows: unknown[] }>;
-}
-
-export type EnlaceDeDemo =
-  | { ok: true; token: string; url: string; recipient: string; touchId: string; attempt: number }
-  | { ok: false; reason: 'sin_toque' | 'demasiados' };
-
-/**
- * El enlace, como lo escribiría el despachador: para el último correo
- * enviado a una ficha que no está de baja, otro intento con su token.
- */
-export async function crearEnlaceDeDemo(q: Consultable, appUrl: string): Promise<EnlaceDeDemo> {
-  const { rows } = await q.query(
-    `SELECT t.id, t.workspace_id, t.contact_id, t.recipient_address::text AS recipient_address,
-            coalesce((SELECT max(l.attempt) FROM outbound_optout_link l WHERE l.touch_id = t.id), 0) + 1 AS siguiente
-       FROM outbound_touch t
-       JOIN contact c ON c.id = t.contact_id
-      WHERE t.channel = 'email' AND t.status = 'sent' AND t.recipient_address IS NOT NULL AND NOT c.opted_out
-      ORDER BY t.sent_at DESC NULLS LAST, t.id
-      LIMIT 1`,
-  );
-  const toque = rows[0] as
-    | { id: string; workspace_id: string; contact_id: string; recipient_address: string; siguiente: number }
-    | undefined;
-  if (!toque) return { ok: false, reason: 'sin_toque' };
-  const intento = Number(toque.siguiente);
-  if (intento > 20) return { ok: false, reason: 'demasiados' };
-  const token = createOptoutToken();
-  await q.query(
-    `INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at, sent_at)
-     VALUES ($1, $2, $3, $4, $5, $6::citext, now(), now())`,
-    [optoutTokenHash(token), toque.workspace_id, toque.id, toque.contact_id, intento, toque.recipient_address],
-  );
-  return {
-    ok: true,
-    token,
-    url: `${appUrl.replace(/\/+$/, '')}/baja/${token}`,
-    recipient: toque.recipient_address,
-    touchId: toque.id,
-    attempt: intento,
-  };
 }
 
 async function main(): Promise<void> {

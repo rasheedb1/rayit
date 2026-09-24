@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   BOUNCE_MIN_ATTEMPTS, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
   footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, maskEmailAddress, oneClickUnsubscribeUrl, optoutTokenHash,
-  optoutUrl, warmupCurve, warmupDailyLimit, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
+  channelAccountLabel, optoutUrl, warmupCurve, warmupDailyLimit, warmupSeries, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
 } from '../src/outreach/deliverability.ts';
 
 // ------------------------------------------------------------------ token
@@ -149,6 +149,17 @@ test('la curva enseña el primer día, el primero que sube, uno intermedio y el 
   assert.deepEqual(warmupCurve(WARMUP_START_LIMIT, 14), [], 'con un tope de 20 no hay nada que calentar');
   assert.deepEqual(warmupCurve(100, 0), []);
   assert.deepEqual(warmupCurve(100, 10_000), [], 'un valor fuera de rango no se pinta');
+});
+
+test('la rampa del gráfico: un punto por día hasta el tope, y los días de warmupCurve están en ella', () => {
+  const serie = warmupSeries(80, 14);
+  assert.deepEqual(serie.map((p) => p.day), Array.from({ length: 14 }, (_, i) => i + 1));
+  assert.deepEqual(serie.slice(0, 7).map((p) => p.limit), Array(7).fill(WARMUP_START_LIMIT), 'la primera semana, 20');
+  assert.equal(serie.at(-1)?.limit, 80);
+  for (const p of warmupCurve(80, 14)) assert.equal(serie[p.day - 1]?.limit, p.limit);
+  for (let i = 1; i < serie.length; i++) assert.ok(serie[i]!.limit >= serie[i - 1]!.limit, 'nunca baja');
+  assert.deepEqual(warmupSeries(WARMUP_START_LIMIT, 14), []);
+  assert.deepEqual(warmupSeries(100, 0), []);
 });
 
 test('el día del calentamiento se cuenta en la zona del workspace', () => {
@@ -420,4 +431,11 @@ test('cola atascada, cuenta caída y presupuesto agotado, cada una con su tipo',
     ['account_down', 'critical'],
     ['llm_budget', 'warning'],
   ]);
+});
+
+test('el nombre de una cuenta no repite el canal si ya lo lleva', () => {
+  assert.equal(channelAccountLabel('LinkedIn', 'Laura · Cocina fácil'), 'LinkedIn: Laura · Cocina fácil');
+  assert.equal(channelAccountLabel('LinkedIn', 'Laura · Cocina fácil (LinkedIn)'), 'Laura · Cocina fácil (LinkedIn)');
+  assert.equal(channelAccountLabel('Gmail', 'laura@gmail.com'), 'Gmail: laura@gmail.com');
+  assert.equal(channelAccountLabel('Instagram', ''), 'Instagram');
 });

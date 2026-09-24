@@ -494,7 +494,23 @@ export interface SendReadiness {
    * workspace: lo que empezaría a salir al encender, dentro del tope.
    */
   approvedDueToday: number;
+  /**
+   * Si los rebotes del correo se están leyendo (job outbound.bounces), por
+   * el cursor de las cuentas de Gmail conectadas (bounces_read_at, 0038 §6):
+   *   'no_email'  no hay ningún Gmail conectado: no hay nada que leer;
+   *   'never'     hay Gmail, pero su buzón no se leyó nunca (el conector de
+   *               VEN-9 todavía no está registrado en el job, o sus llaves
+   *               faltan): «Ningún rebote» NO quiere decir «todo llegó»;
+   *   'stale'     la última lectura tiene más de BOUNCES_STALE_H horas;
+   *   'ok'        leído hace poco.
+   */
+  bouncesReading: 'no_email' | 'never' | 'stale' | 'ok';
+  /** La lectura más vieja entre los Gmail conectados (la que manda), o null. */
+  bouncesReadAt: string | null;
 }
+
+/** El job de rebotes pasa cada media hora: con más de esto sin leer, algo se paró. */
+export const BOUNCES_STALE_H = 2;
 
 /** Lo que el interruptor y «Salud de hoy» necesitan saber del workspace de la transacción. */
 export async function readSendReadiness(tx: WorkspaceTx): Promise<SendReadiness> {
@@ -515,7 +531,27 @@ export async function readSendReadiness(tx: WorkspaceTx): Promise<SendReadiness>
         AND coalesce(t.next_retry_at, t.scheduled_for)
             < (date_trunc('day', now() AT TIME ZONE w.timezone) + interval '1 day') AT TIME ZONE w.timezone`,
   );
+  // La cuenta menos leída manda: si un Gmail conectado no se leyó nunca,
+  // sus rebotes no están en la tabla aunque otro sí se lea.
+  const { rows: [lectura] } = await tx.query<{ gmails: number; nunca: number; mas_vieja: Date | string | null; vieja: boolean }>(
+    `SELECT count(*)::int AS gmails,
+            count(*) FILTER (WHERE bounces_read_at IS NULL)::int AS nunca,
+            min(bounces_read_at) AS mas_vieja,
+            coalesce(min(bounces_read_at) < now() - make_interval(hours => $1::int), false) AS vieja
+       FROM outreach_channel_account
+      WHERE workspace_id = current_workspace_id() AND channel = 'email' AND status = 'connected'`,
+    [BOUNCES_STALE_H],
+  );
+  const bouncesReading: SendReadiness['bouncesReading'] = !lectura?.gmails
+    ? 'no_email'
+    : lectura.nunca > 0
+      ? 'never'
+      : lectura.vieja
+        ? 'stale'
+        : 'ok';
   return {
+    bouncesReading,
+    bouncesReadAt: lectura?.gmails && !lectura.nunca ? iso(lectura.mas_vieja) : null,
     connectedAccounts: cuentas.filter((c) => c.status === 'connected').length,
     downAccounts: cuentas
       .filter((c): c is typeof c & { status: DownChannelAccount['status'] } => c.status === 'needs_reconnect' || c.status === 'error')

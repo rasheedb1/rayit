@@ -31,7 +31,16 @@
 --   8. La baja por enlace en dos tiempos (r3): vale ya para el workspace
 --      que envió (outbound_workspace_optout) y pasa a toda la plataforma
 --      cuando otro workspace la confirma. Cierra el sabotaje del
---      remitente que pulsa su propio enlace sin sesión.
+--      remitente que pulsa su propio enlace sin sesión. Desde r4 el
+--      segundo workspace tiene que ser de OTRAS personas: uno que comparte
+--      un miembro con el primero (una agencia con dos espacios) no
+--      confirma nada.
+--
+-- Ronda 4, también en su sitio: outreach_can_manage falla cerrada (sin
+-- identidad solo responde que sí con la bandera explícita
+-- app.auth_disabled, §7), y la baja guarda un código
+-- ('unsubscribe_link') en contact.opted_out_reason en vez de una frase:
+-- la pantalla lo traduce en el idioma del espacio.
 --
 -- Esta migración no está aplicada en ningún sitio (en Supabase, la 0038
 -- es la de main), así que la ronda 3 la corrige en su sitio en vez de
@@ -413,12 +422,17 @@ CREATE TRIGGER outreach_channel_account_bounces_cursor
 -- security policy») y no un UPDATE que no encuentra nada, que
 -- enable_outreach leería como «sin dirección postal».
 --
--- Sin identidad en la transacción (app.user_id NULL) no hay roles que
--- mirar: es el modo de desarrollo sin Supabase Auth, donde no existe
--- ningún usuario, y las pruebas de @mc/db. Con Supabase Auth
--- configurado la web SIEMPRE fija app.user_id (lib/db, withWorkspace con
--- la identidad de la sesión; sin sesión, getCurrentContext manda a
--- /login), así que un 'viewer' o un 'client' siempre llega con su rol.
+-- Falla CERRADA (r4). Sin identidad en la transacción (app.user_id NULL)
+-- no hay roles que mirar, y la respuesta es NO, salvo que la transacción
+-- traiga la bandera explícita app.auth_disabled = 'on'. La fija el
+-- cliente de @mc/db (DbOptions.authDisabled) solo donde de verdad no
+-- existe ningún usuario: la web sin Supabase Auth (lib/db/cliente.ts,
+-- cuando authConfig() es null) y las pruebas (openTestDb). Así, una ruta
+-- futura que abra withWorkspace sin identidad con Supabase Auth
+-- configurado (un cron de Vercel, un webhook, un route handler) recibe
+-- 42501 en vez de saltarse la regla sin que nadie lo note. La bandera no
+-- es una frontera contra código hostil —quien tiene mc_app puede fijar
+-- cualquier parámetro, también app.user_id—, sino contra el olvido.
 -- El worker (BYPASSRLS) y quien migra (las políticas son TO mc_app) no
 -- cambian: el disyuntor del worker sigue apagando el envío.
 CREATE FUNCTION outreach_can_manage(p_workspace uuid)
@@ -427,7 +441,7 @@ LANGUAGE sql
 STABLE
 SET search_path = public, pg_temp
 AS $$
-  SELECT current_user_id() IS NULL
+  SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
       OR EXISTS (SELECT 1 FROM membership m
                   WHERE m.workspace_id = p_workspace
                     AND m.user_id = current_user_id()
@@ -436,8 +450,9 @@ $$;
 
 COMMENT ON FUNCTION outreach_can_manage(uuid) IS
   'Si quien está en la transacción puede cambiar la política de envío del workspace: owner o admin (VEN-15 r3). '
-  'Sin identidad (desarrollo sin Supabase Auth, pruebas) no hay roles y responde que sí. Corre con los privilegios '
-  'de quien llama: mc_app solo ve las membresías del workspace fijado.';
+  'Sin identidad responde que no, salvo con app.auth_disabled = ''on'' (desarrollo sin Supabase Auth, pruebas: '
+  'lo fija el cliente de @mc/db). Corre con los privilegios de quien llama: mc_app solo ve las membresías del '
+  'workspace fijado.';
 
 CREATE POLICY outbound_policy_manage_insert ON outbound_policy AS RESTRICTIVE
   FOR INSERT TO mc_app
@@ -476,10 +491,17 @@ CREATE POLICY outbound_policy_manage_delete ON outbound_policy AS RESTRICTIVE
 --   2. La baja pasa a TODA la plataforma (contact_suppression con
 --      'unsubscribe_link', las fichas marcadas y lo pendiente cancelado
 --      en cualquier workspace, como hacía 0037) cuando la confirma un
---      SEGUNDO workspace: la misma dirección pulsa el enlace de un
---      correo de otro creador. Eso el remitente no lo puede fabricar:
---      necesita que otro workspace le haya escrito de verdad a esa
---      dirección (el enlace solo existe si el despachador lo reclamó).
+--      SEGUNDO workspace DE OTRAS PERSONAS: la misma dirección pulsa el
+--      enlace de un correo de otro creador. Eso el remitente no lo puede
+--      fabricar: necesita que otro workspace le haya escrito de verdad a
+--      esa dirección (el enlace solo existe si el despachador lo
+--      reclamó), y desde r4 que ese workspace no comparta NINGÚN miembro
+--      con el suyo. Sin esto, una agencia (o cualquier persona miembro de
+--      dos espacios) que escribe a la misma marca desde los dos pulsaba
+--      sus dos enlaces sin sesión y la suprimía para todos los creadores.
+--      Lo que sigue abierto es el sabotaje con dos cuentas de personas
+--      distintas en connivencia; eso ya no es un clic, y queda en
+--      outbound_optout_event para la alerta y para deshacerlo.
 --
 -- Por qué no «pasa a global si en una ventana no hay señal de que fue el
 -- remitente»: la única señal sería la IP o el navegador de una sesión
@@ -526,12 +548,24 @@ REVOKE INSERT, UPDATE, DELETE ON outbound_workspace_optout FROM mc_app;
 
 COMMENT ON TABLE outbound_workspace_optout IS
   'La baja por enlace con efecto en el workspace que envió el correo (VEN-15 r3). La escribe public_optout; con dos '
-  'workspaces distintos para la misma dirección, la baja pasa a contact_suppression (toda la plataforma).';
+  'workspaces sin miembros en común para la misma dirección, la baja pasa a contact_suppression (toda la plataforma).';
 
 -- Lo que la baja lee y escribe aquí, con la misma cerradura que 0037 §9:
 -- las filas de la dirección que fija la función, y el alta solo para el
 -- workspace y el token del enlace que se está pulsando.
 GRANT SELECT (workspace_id, email), INSERT ON outbound_workspace_optout TO mc_public_share;
+
+-- Quién confirma (r4): para saber si dos workspaces comparten miembro,
+-- public_optout lee las membresías del workspace del enlace y de los
+-- workspaces que ya anotaron la baja de ESA dirección, y nada más. Las
+-- columnas (workspace_id, user_id) ya son suyas desde §5; esta política
+-- abre solo esas filas y solo mientras la función tiene fijados el
+-- workspace y la dirección del enlace (los restaura al salir).
+CREATE POLICY membership_public_optout ON membership
+  FOR SELECT TO mc_public_share
+  USING (workspace_id = nullif(current_setting('app.public_optout_workspace', true), '')::uuid
+         OR workspace_id IN (SELECT o.workspace_id FROM outbound_workspace_optout o
+                              WHERE o.email = nullif(current_setting('app.public_optout_email', true), '')::citext));
 
 CREATE POLICY outbound_workspace_optout_public_optout_read ON outbound_workspace_optout
   FOR SELECT TO mc_public_share
@@ -616,12 +650,21 @@ BEGIN
         ON CONFLICT DO NOTHING;
       END IF;
 
-      -- 2 · Para toda la plataforma, cuando lo confirma otro workspace. Un
+      -- 2 · Para toda la plataforma, cuando lo confirma otro workspace DE
+      -- OTRAS PERSONAS (r4): cuenta el del enlace y los que ya anotaron la
+      -- baja sin compartir ningún miembro con él. Una persona con dos
+      -- espacios que pulsa sus dos enlaces sigue en 'workspace'. Un
       -- workspace que ya no existe cuenta como el remitente que fue (su
       -- fila se fue con él): su enlace confirma la baja que otro anotó.
       SELECT count(DISTINCT o.workspace_id) INTO remitentes
         FROM outbound_workspace_optout o
-       WHERE o.email = enlace.recipient_address;
+       WHERE o.email = enlace.recipient_address
+         AND (o.workspace_id = enlace.workspace_id
+              OR NOT EXISTS (SELECT 1
+                               FROM membership m1
+                               JOIN membership m2 ON m1.user_id = m2.user_id
+                              WHERE m1.workspace_id = o.workspace_id
+                                AND m2.workspace_id = enlace.workspace_id));
       es_global := remitentes + CASE WHEN enlace.workspace_id IS NULL THEN 1 ELSE 0 END >= 2;
 
       IF es_global THEN
@@ -664,7 +707,9 @@ BEGIN
       UPDATE contact
          SET opted_out = true,
              opted_out_at = coalesce(opted_out_at, now()),
-             opted_out_reason = coalesce(opted_out_reason, 'Pidió la baja desde el enlace de un correo.')
+             -- Un código, no una frase (r4): la ficha lo traduce en el idioma
+             -- del espacio (ventas/_lib/messages.ts, contacto.optedOutReasons).
+             opted_out_reason = coalesce(opted_out_reason, 'unsubscribe_link')
        WHERE id = ANY (ids) AND NOT opted_out
          AND (es_global OR owner_workspace_id = enlace.workspace_id);
 
