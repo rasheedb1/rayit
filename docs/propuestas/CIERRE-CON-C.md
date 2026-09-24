@@ -548,3 +548,25 @@ quedar en verde por primera vez desde el cierre de CAM. Tras
 `CONTINUAR-DESPLIEGUE`: push de la rama a main por avance rápido y
 despliegue (el código de la web no cambia; es para que main y producción
 sean el mismo commit).
+
+### 9.1 Salida de la 0042 (24-sep, 00:48 UTC)
+
+- Nicolás aplicó la 0042 desde `rayit-cierre-con-c` (la de ACC, 0040,
+  ya estaba). Guardia: **verde, 41 migraciones (la última, 0042), 83
+  tablas aisladas, nada sin declarar**, antes y después del despliegue.
+- La rama se puso al día con el cierre de ACC (`f607726`, sin
+  conflictos): `db.check` 41 migraciones y `verificar` 15/15 — raíz 8,
+  core 267, connectors 234, db 1040, worker 150, web 1268 + 1 todo.
+- `main` por avance rápido `8820a8d..2974621` (el último merge solo traía
+  documentación de ACC).
+- Despliegue **`on-cue-6q5upooci-influ3.vercel.app`**: la API de Vercel da
+  `gitCommitSha 2974621…`, `READY`, con el alias `on-cue-web.vercel.app`.
+  **Plan B**: `on-cue-3qosxbrqg-influ3.vercel.app` (`af1acee`, ACC).
+- Rutas en producción, ninguna en 500: `/`, `/conexiones`, `/resumen`,
+  `/campanas`, la ficha de Café Alma, `/finanzas`, `/finanzas/facturas`,
+  `/finanzas/flujo`, `/finanzas/ingresos`, `/ventas`, `/cotizar`,
+  `/accesos`, `/plan/conexiones` y `/login` → 200;
+  `/conexiones/oauth/youtube/start` 405 (GET) y 404 (POST, con la
+  frase); `…/youtube/callback` 404; `…/tiktok/callback` sin cookie 400.
+  (`/plan` a secas es 404 porque no tiene página: el plan vive en
+  `/plan/<módulo>`.)
