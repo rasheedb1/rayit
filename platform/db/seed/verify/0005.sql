@@ -17,18 +17,21 @@ SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', fa
 
 -- (a) Conteos: dos cuentas (una conectada, una por reconectar), una
 --     secuencia desde la plantilla, tres enrolamientos (uno por
---     desenlace) y nueve toques en los estados que enseña la pantalla.
+--     desenlace) y nueve toques en los estados que enseña la pantalla
+--     (los de este seed: el 0006 añade el correo que rebotó).
 SELECT 'a_conteos' AS check_id,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected')       AS conectadas,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') AS por_reconectar,
        (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment)        AS enrolamientos,
        (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
-          FROM (SELECT status, count(*) AS n FROM outbound_touch GROUP BY status) x)   AS toques,
+          FROM (SELECT status, count(*) AS n FROM outbound_touch
+                 WHERE id::text LIKE '00000005-%' GROUP BY status) x)   AS toques,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected') = 1
          AND (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') = 1
          AND (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment) = 'active,cooldown,replied'
          AND (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
-                FROM (SELECT status, count(*) AS n FROM outbound_touch GROUP BY status) x)
+                FROM (SELECT status, count(*) AS n FROM outbound_touch
+                 WHERE id::text LIKE '00000005-%' GROUP BY status) x)
              = 'canceled=2,draft=1,held=1,scheduled=1,sent=4' AS ok;
 
 -- (b) La secuencia es la plantilla «Marca con campaña activa» copiada:
@@ -61,7 +64,7 @@ SELECT 'c_correos_con_pruebas_y_enlace' AS check_id,
                                 AND l.recipient_address = t.recipient_address AND l.sent_at IS NOT NULL) = 3 AS ok
   FROM outbound_touch t
   LEFT JOIN outbound_optout_link l ON l.touch_id = t.id AND l.attempt = t.attempt_count
- WHERE t.status = 'sent' AND t.channel = 'email';
+ WHERE t.status = 'sent' AND t.channel = 'email' AND t.id::text LIKE '00000005-%';
 
 -- (d) La salud del workspace demo ya no es todo cero: la cola tiene lo
 --     que la pantalla enseña y la cuenta de LinkedIn cuenta como caída.
