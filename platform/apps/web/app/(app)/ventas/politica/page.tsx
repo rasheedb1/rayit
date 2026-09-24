@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import {
-  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, readAlertSignalCounts, readSendReadiness,
+  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, POSTAL_ADDRESS_MAX, readAlertSignalCounts,
+  readSendReadiness,
 } from "@mc/db/queries/entregabilidad";
 import { outboundHealth } from "@mc/db/queries/outreach";
 import { PageHeader } from "@/components/page-header";
@@ -90,6 +91,7 @@ export default async function PoliticaPage() {
         caidas={listo.downAccounts}
         f={f}
         ahora={ahora.toISOString()}
+        lectura={{ estado: listo.bouncesReading, desde: listo.bouncesReadAt }}
       />
 
       <PoliticaForm
@@ -97,6 +99,7 @@ export default async function PoliticaPage() {
         rangos={rangos}
         maximos={maximos}
         minimos={minimos}
+        direccionMax={POSTAL_ADDRESS_MAX}
         locale={f.locale}
         editable={puedeCambiar}
       />

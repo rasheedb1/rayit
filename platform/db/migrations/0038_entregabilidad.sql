@@ -18,8 +18,9 @@
 --   3. outbound_bounce: la bitácora de rebotes que lee el job
 --      outbound.bounces del buzón del creador. Única por aviso del
 --      buzón: leer dos veces el mismo buzón no cuenta dos rebotes.
---   4. Los dos jobs en job_definition y los cinco avisos nuevos de
---      notification (las alertas diarias del outreach).
+--   4. Los dos jobs en job_definition y los seis avisos nuevos de
+--      notification (las alertas diarias del outreach; el sexto, r5, es
+--      el buzón de rebotes que nadie lee).
 --   5. public_optout_preview(token, espacios de quien lo abre): lo que la
 --      página de baja enseña ANTES del clic (la dirección enmascarada y
 --      quién la escribe) y si quien la abre es del workspace que envió.
@@ -253,7 +254,7 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'analysis_ready','report_sent','trend','quote_accepted','media_kit_locked',
    'connection_added',
    'outreach_bounce_rate','outreach_no_sends','outreach_queue_stuck',
-   'outreach_account_down','outreach_llm_budget'));
+   'outreach_account_down','outreach_llm_budget','outreach_bounces_unread'));
 
 -- ---------------------------------------------------------------------
 -- 5 · public_optout_preview: lo que la página de baja dice antes del clic

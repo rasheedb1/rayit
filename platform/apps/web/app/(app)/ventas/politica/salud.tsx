@@ -1,5 +1,5 @@
-import { BOUNCE_READING_CONNECTED, channelAccountLabel } from "@mc/core/outreach/deliverability";
-import type { AlertSignalCounts, DownChannelAccount, RecentBounce } from "@mc/db/queries/entregabilidad";
+import { channelAccountLabel } from "@mc/core/outreach/deliverability";
+import type { AlertSignalCounts, DownChannelAccount, RecentBounce, SendReadiness } from "@mc/db/queries/entregabilidad";
 import type { OutboundHealth } from "@mc/db/schema";
 import { DataTable, CellMain } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -18,9 +18,12 @@ const TONO: Record<RecentBounce["kind"], "bad" | "warn" | "neutral"> = { hard: "
  * (outbound_bounce, 0038). La pantalla no calcula nada: la tasa llega
  * hecha.
  *
- * Mientras el job de rebotes no lea los buzones (BOUNCE_READING_CONNECTED,
- * hasta integrar VEN-9), lo dice encima de la tabla: «Ningún rebote» no
- * es «todo bien» si nadie los está leyendo (r4). La fecha de cada rebote
+ * Si nadie está leyendo los rebotes de un Gmail conectado, lo dice encima
+ * de la tabla: «Ningún rebote» no es «todo bien» si nadie los lee (r4).
+ * Desde r5 lo decide el cursor de cada cuenta (readSendReadiness): 'never'
+ * si un buzón no se leyó nunca (hasta integrar VEN-9), 'stale' si el job
+ * se paró, con la hora de la última lectura. BOUNCE_READING_CONNECTED
+ * (@mc/core) queda solo como interruptor del job. La fecha de cada rebote
  * va corta —la hora si es de hoy, el día y el mes si no— para que la
  * tabla quepa a 400 px.
  */
@@ -31,7 +34,7 @@ export function Salud({
   caidas,
   f,
   ahora,
-  lecturaConectada = BOUNCE_READING_CONNECTED,
+  lectura,
 }: {
   health: OutboundHealth;
   counts: AlertSignalCounts;
@@ -41,8 +44,8 @@ export function Salud({
   f: Formatter;
   /** El instante de la página (ISO), para saber qué rebote es de hoy en la zona del workspace. */
   ahora: string;
-  /** Si el job de rebotes lee los buzones; se pasa solo en pruebas. */
-  lecturaConectada?: boolean;
+  /** Si se leen los rebotes de los Gmail conectados (readSendReadiness), y la última lectura. */
+  lectura: { estado: SendReadiness["bouncesReading"]; desde: string | null };
 }) {
   const t = MESSAGES.salud;
   // «LinkedIn: Laura», sin repetir el canal si el nombre ya lo dice.
@@ -106,10 +109,14 @@ export function Salud({
       </div>
 
       <h3 className="mt-6 text-sm font-medium">{t.rebotesTitle}</h3>
-      {!lecturaConectada && (
+      {(lectura.estado === "never" || lectura.estado === "stale") && (
         <div role="note" className="mt-2 rounded-md border border-line bg-surface-2 p-3">
-          <p className="text-sm font-medium">{t.lecturaPendiente.title}</p>
-          <p className="mt-1 text-xs text-ink-2">{t.lecturaPendiente.description}</p>
+          <p className="text-sm font-medium">{t.lectura[lectura.estado].title}</p>
+          <p className="mt-1 text-xs text-ink-2">
+            {lectura.estado === "stale" && lectura.desde
+              ? t.lectura.stale.description(f.dateTime(lectura.desde))
+              : t.lectura.never.description}
+          </p>
         </div>
       )}
       <DataTable<RecentBounce>

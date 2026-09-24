@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { ConfirmarAccion } from "@/components/ui/confirmar-accion";
@@ -30,6 +30,13 @@ import { MESSAGES } from "./messages";
  * mismo sitio, y sin ella React reutilizaba el de encender para apagar,
  * con la confirmación ya abierta y el foco en ella justo después de
  * encender. Un segundo clic distraído deshacía lo que se acababa de hacer.
+ *
+ * Después de encender o apagar (r5), el ConfirmarAccion desaparece con el
+ * botón que tenía el foco. Para que quien navega con teclado o con lector
+ * de pantalla no se quede en <body>, el foco va al título del interruptor
+ * (tabIndex=-1) y una región role=status dice «Envío encendido» o «Envío
+ * apagado». La región existe siempre, vacía, para que el lector anuncie
+ * el cambio.
  */
 export function Interruptor({
   enabled,
@@ -53,17 +60,33 @@ export function Interruptor({
 }) {
   const t = MESSAGES.interruptor;
   const [error, setError] = useState<string | null>(null);
+  const [anuncio, setAnuncio] = useState<string | null>(null);
+  const tituloRef = useRef<HTMLHeadingElement>(null);
+  const llevarElFoco = useRef(false);
+
+  // Cuando el cambio ya se pintó (el anuncio, o la página con el nuevo estado), el foco va al título.
+  useEffect(() => {
+    if (!llevarElFoco.current) return;
+    llevarElFoco.current = false;
+    tituloRef.current?.focus();
+  }, [anuncio, enabled]);
 
   async function encender() {
     setError(null);
+    setAnuncio(null);
     const r = await encenderEnvio();
-    if (!r.ok) setError(r.message);
+    if (!r.ok) return setError(r.message);
+    llevarElFoco.current = true;
+    setAnuncio(t.anuncioEncendido);
   }
 
   async function apagar() {
     setError(null);
+    setAnuncio(null);
     const r = await apagarEnvio();
-    if (!r.ok) setError(r.message);
+    if (!r.ok) return setError(r.message);
+    llevarElFoco.current = true;
+    setAnuncio(t.anuncioApagado);
   }
 
   // Lo primero que falta, en una línea. El rol va antes: sin él, lo demás no importa.
@@ -79,14 +102,14 @@ export function Interruptor({
   // Si falta algo, la línea de abajo dice el paso concreto: la de arriba no lo repite (r4).
   const ayuda = enabled
     ? t.onHelp
-    : (motivo ?? (nuncaEncendido ? (falta ? t.offHelpNuncaCorto : t.offHelpNunca) : t.offHelp));
+    : (motivo ?? (nuncaEncendido ? (falta ? t.offHelpNuncaCorto : t.offHelpListo) : t.offHelp));
 
   return (
     <section aria-labelledby="interruptor" className="mb-10 rounded-md border border-line p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 id="interruptor" className="text-sm font-semibold">
+            <h2 id="interruptor" ref={tituloRef} tabIndex={-1} className="text-sm font-semibold outline-none!">
               {t.title}
             </h2>
             <Pill kind={enabled ? "good" : "neutral"}>{enabled ? t.on : t.off}</Pill>
@@ -132,6 +155,9 @@ export function Interruptor({
           />
         )}
       </div>
+      <p role="status" className="sr-only">
+        {anuncio}
+      </p>
       {error && (
         <p role="alert" className="mt-3 text-sm text-bad">
           {error}

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
-  isPolicyForbidden, POLICY_LIMITS, POSTAL_ADDRESS_MAX, PolicyForbiddenError, PolicyNeedsAddressError, readSendReadiness,
+  DISABLED_REASON_MANUAL, isPolicyForbidden, POLICY_LIMITS, POSTAL_ADDRESS_MAX, PolicyForbiddenError, PolicyNeedsAddressError, readSendReadiness,
   saveOutboundPolicy,
 } from "@mc/db/queries/entregabilidad";
 import { disableOutreach, enableOutreach } from "@mc/db/queries/outreach";
@@ -125,7 +125,7 @@ export async function encenderEnvio(): Promise<InterruptorResultado> {
 export async function apagarEnvio(): Promise<InterruptorResultado> {
   if (!(await puedeCambiarLaPolitica())) return { ok: false, message: t.interruptor.sinPermiso };
   try {
-    await withWorkspace((tx) => disableOutreach(tx, t.interruptor.motivoManual));
+    await withWorkspace((tx) => disableOutreach(tx, DISABLED_REASON_MANUAL));
   } catch (err) {
     if (isPolicyForbidden(err)) return { ok: false, message: t.interruptor.sinPermiso };
     console.error("[ventas/politica] no se pudo apagar", err);

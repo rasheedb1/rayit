@@ -29,6 +29,7 @@ export const NOTIFICATION_KINDS = [
   // 'connection_added' es de main (ACC-8) y la 0038 de integración lo
   // conserva en el CHECK; se declara aquí cuando llegue su código.
   'outreach_bounce_rate', 'outreach_no_sends', 'outreach_queue_stuck', 'outreach_account_down', 'outreach_llm_budget',
+  'outreach_bounces_unread',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

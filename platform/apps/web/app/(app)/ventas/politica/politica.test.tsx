@@ -29,6 +29,7 @@ vi.mock("@mc/db/queries/entregabilidad", async (importOriginal) => {
   return {
     POLICY_LIMITS: real.POLICY_LIMITS,
     POSTAL_ADDRESS_MAX: real.POSTAL_ADDRESS_MAX,
+    DISABLED_REASON_MANUAL: real.DISABLED_REASON_MANUAL,
     PolicyNeedsAddressError: real.PolicyNeedsAddressError,
     PolicyForbiddenError: real.PolicyForbiddenError,
     isPolicyForbidden: real.isPolicyForbidden,
@@ -42,7 +43,7 @@ vi.mock("@mc/db/queries/outreach", () => ({
 }));
 
 import { warmupCurve } from "@mc/core/outreach/warmup";
-import { PolicyNeedsAddressError, POLICY_LIMITS } from "@mc/db/queries/entregabilidad";
+import { DISABLED_REASON_MANUAL, PolicyNeedsAddressError, POLICY_LIMITS, POSTAL_ADDRESS_MAX } from "@mc/db/queries/entregabilidad";
 import { apagarEnvio, encenderEnvio, guardarPolitica } from "./actions";
 import { calentamientoDe, PoliticaForm } from "./form";
 import { Interruptor } from "./interruptor";
@@ -85,8 +86,12 @@ const PROPS_DEL_FORMULARIO = {
   rangos: { maxTouchesPerCompany: "", minDaysBetweenTouches: "", maxEmailsPerDay: "", cooldownDaysAfterNo: "", warmupDays: "" },
   maximos: { maxTouchesPerCompany: 12, minDaysBetweenTouches: 30, maxEmailsPerDay: 2000, cooldownDaysAfterNo: 730, warmupDays: 90 },
   minimos: { maxTouchesPerCompany: 1, minDaysBetweenTouches: 1, maxEmailsPerDay: 1, cooldownDaysAfterNo: 0, warmupDays: 0 },
+  direccionMax: POSTAL_ADDRESS_MAX,
   locale: "es-CO",
 };
+
+/** «Salud de hoy» con los rebotes leídos hace poco: sin aviso encima de la tabla. */
+const LEIDA = { estado: "ok" as const, desde: "2026-09-23T13:40:00Z" };
 
 /** El interruptor con lo de siempre: dueña, una cuenta conectada, nada aprobado para hoy. */
 const interruptor = (p: Partial<Parameters<typeof Interruptor>[0]> = {}) => (
@@ -137,8 +142,10 @@ describe("el interruptor", () => {
     disableOutreach.mockResolvedValue(3);
     expect(await apagarEnvio()).toEqual({ ok: true });
     // Un código, no una frase (r4): la página lo traduce con interruptor.motivos.
-    expect(disableOutreach).toHaveBeenCalledWith({}, "manual");
-    expect(t.interruptor.motivos[t.interruptor.motivoManual]).toBe("lo apagaste desde la política");
+    expect(disableOutreach).toHaveBeenCalledWith({}, DISABLED_REASON_MANUAL);
+    // El código vive en @mc/db (r5), no en los textos: traducir messages.ts no lo rompe.
+    expect(DISABLED_REASON_MANUAL).toBe("manual");
+    expect(t.interruptor.motivos[DISABLED_REASON_MANUAL]).toBe("lo apagaste desde la política");
   });
 
   it("apagar pide confirmación en el sitio, con el patrón del producto y sin window.confirm", () => {
@@ -156,8 +163,11 @@ describe("el interruptor", () => {
   });
 
   it("una política que nunca se encendió no dice que se canceló nada", () => {
+    // Con la dirección guardada y una cuenta conectada no pide lo que ya está (r5).
     const { unmount } = render(interruptor({ nuncaEncendido: true }));
-    expect(screen.getByText(t.interruptor.offHelpNunca)).toBeInTheDocument();
+    expect(screen.getByText(t.interruptor.offHelpListo)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.interruptor.encender })).toBeEnabled();
+    expect(document.body.textContent).not.toMatch(/cuando tengas tu dirección postal/);
     unmount();
     render(interruptor());
     expect(screen.getByText(t.interruptor.offHelp)).toBeInTheDocument();
@@ -281,7 +291,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     byChannel: {}, breakersOpen: [], accountsDown: 1, lastSentAt: null,
     llm: { spentToday: 0, dailyCap: 5, currency: "USD" as const },
   };
-  const counts = { emailsSent: 3, hardBounces: 0, dueToSend: 0, hardBounceRate: 0 };
+  const counts = { emailsSent: 3, hardBounces: 0, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0 };
   const caida = {
     id: "c1", channel: "linkedin" as const, name: "Laura · Cocina fácil", status: "needs_reconnect" as const,
     lastError: "Unipile: la sesión de LinkedIn expiró.", lastErrorAt: "2026-09-22T14:00:00Z",
@@ -289,7 +299,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
 
   it("la nota dice CUÁL es, y la lista de #cuentas dice qué pasó y qué hacer (adonde lleva la alerta)", () => {
     const { container } = render(
-      <Salud health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} />,
+      <Salud lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} />,
     );
     expect(screen.getAllByText("LinkedIn: Laura · Cocina fácil").length).toBeGreaterThan(0);
     const cuentas = container.querySelector("#cuentas");
@@ -303,7 +313,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
 
   it("sin cuentas caídas, «Todas conectadas» y nada más", () => {
     const { container } = render(
-      <Salud
+      <Salud lectura={LEIDA}
         health={{ ...health, accountsDown: 0 }}
         counts={counts}
         rebotes={[]}
@@ -326,7 +336,7 @@ describe("ronda 4", () => {
     byChannel: {}, breakersOpen: [], accountsDown: 0, lastSentAt: null,
     llm: { spentToday: 0, dailyCap: 5, currency: "USD" as const },
   };
-  const counts = { emailsSent: 40, hardBounces: 1, dueToSend: 0, hardBounceRate: 0.025 };
+  const counts = { emailsSent: 40, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.025 };
 
   it("después de encender se ve «Apagar el envío», no la confirmación de apagar ya abierta; y al revés", async () => {
     enableOutreach.mockResolvedValue(undefined);
@@ -353,7 +363,7 @@ describe("ronda 4", () => {
     render(interruptor({ nuncaEncendido: true, hasAddress: false }));
     expect(screen.getByText(t.interruptor.offHelpNuncaCorto)).toBeInTheDocument();
     expect(screen.getByText(t.interruptor.sinDireccion)).toBeInTheDocument();
-    expect(screen.queryByText(t.interruptor.offHelpNunca)).not.toBeInTheDocument();
+    expect(screen.queryByText(t.interruptor.offHelpListo)).not.toBeInTheDocument();
   });
 
   it("los plurales salen de Intl.PluralRules, con 1 y con 2", () => {
@@ -363,17 +373,33 @@ describe("ronda 4", () => {
     expect(t.salud.cola.note("2", 2)).toBe("2 atascados");
     expect(t.salud.rebotes.note("1", "40", 1)).toBe("1 de 40 no existe");
     expect(t.salud.rebotes.note("2", "40", 2)).toBe("2 de 40 no existen");
-    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    render(<Salud lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
     expect(screen.getByText("1 atascado")).toBeInTheDocument();
     expect(screen.getByText("1 de 40 no existe")).toBeInTheDocument();
   });
 
-  it("mientras no se lean los buzones, «Salud de hoy» lo dice encima de la tabla de rebotes", () => {
-    const { unmount } = render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
-    expect(screen.getByRole("note")).toHaveTextContent(t.salud.lecturaPendiente.title);
+  it("si un Gmail no se leyó nunca, «Salud de hoy» lo dice encima de la tabla de rebotes", () => {
+    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "never", desde: null }} />);
+    expect(screen.getByRole("note")).toHaveTextContent(t.salud.lectura.never.title);
+    expect(screen.getByRole("note")).toHaveTextContent(t.salud.lectura.never.description);
+  });
+
+  it("si la lectura se paró (cursor viejo), lo dice con la hora de la última lectura (r5)", () => {
+    const desde = "2026-09-23T11:00:00Z";
+    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "stale", desde }} />);
+    const nota = screen.getByRole("note");
+    expect(nota).toHaveTextContent(t.salud.lectura.stale.title);
+    expect(nota).toHaveTextContent(t.salud.lectura.stale.description(f.dateTime(desde)));
+    // «Ningún rebote» sigue debajo, pero ya no se lee como «todo bien».
+    expect(screen.getByText(t.salud.sinRebotes.title)).toBeInTheDocument();
+  });
+
+  it("leída hace poco, o sin ningún Gmail que leer, no hay aviso", () => {
+    const { unmount } = render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={LEIDA} />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
     unmount();
-    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lecturaConectada />);
-    expect(screen.queryByText(t.salud.lecturaPendiente.title)).not.toBeInTheDocument();
+    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "no_email", desde: null }} />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
   it("una cuenta cuyo nombre ya dice el canal no lo repite", () => {
@@ -381,7 +407,7 @@ describe("ronda 4", () => {
       id: "c2", channel: "linkedin" as const, name: "Laura (LinkedIn)", status: "error" as const,
       lastError: null, lastErrorAt: null,
     };
-    render(<Salud health={{ ...health, accountsDown: 1 }} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA} />);
+    render(<Salud lectura={LEIDA} health={{ ...health, accountsDown: 1 }} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA} />);
     expect(screen.getAllByText("Laura (LinkedIn)").length).toBeGreaterThan(0);
     expect(screen.queryByText(/LinkedIn: Laura/)).not.toBeInTheDocument();
   });
@@ -391,7 +417,7 @@ describe("ronda 4", () => {
       { id: "b1", recipientAddress: "hoy@marca.test", kind: "hard" as const, reason: "550 5.1.1", detectedAt: "2026-09-23T13:55:00Z" },
       { id: "b2", recipientAddress: "antes@marca.test", kind: "soft" as const, reason: "452 4.2.2", detectedAt: "2026-09-21T16:55:00Z" },
     ];
-    render(<Salud health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
+    render(<Salud lectura={LEIDA} health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
     const tabla = screen.getByRole("table", { name: t.salud.rebotesCaption });
     expect(within(tabla).getByText(f.time("2026-09-23T13:55:00Z"))).toBeInTheDocument();
     expect(within(tabla).getByText("21 sep")).toBeInTheDocument();
@@ -413,5 +439,56 @@ describe("ronda 4", () => {
     expect(screen.getByRole("img", { name: t.calentamiento.caption })).toBeInTheDocument();
     // La tabla sigue, para quien no ve el gráfico.
     expect(screen.getByRole("table", { name: t.calentamiento.caption })).toBeInTheDocument();
+  });
+});
+
+describe("ronda 5", () => {
+  it("después de encender o apagar, el foco va al título del interruptor y una región status lo dice", async () => {
+    enableOutreach.mockResolvedValue(undefined);
+    disableOutreach.mockResolvedValue(0);
+    const { rerender } = render(interruptor());
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siEncender }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioEncendido));
+    rerender(interruptor({ enabled: true }));
+    const titulo = screen.getByRole("heading", { name: t.interruptor.title });
+    await waitFor(() => expect(titulo).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.apagar }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siApagar }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioApagado));
+    rerender(interruptor({ enabled: false }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus());
+  });
+
+  it("si falla, el foco no se mueve y el error lo dice", async () => {
+    enableOutreach.mockRejectedValue(new Error("base caída"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(interruptor());
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siEncender }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(t.interruptor.errorEncender);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    expect(screen.getByRole("heading", { name: t.interruptor.title })).not.toHaveFocus();
+  });
+
+  it("el tope de la dirección es POSTAL_ADDRESS_MAX, el mismo que valida la acción", () => {
+    render(<PoliticaForm {...PROPS_DEL_FORMULARIO} direccionMax={120} />);
+    expect(screen.getByLabelText(new RegExp(t.campos.postalAddress.label), { selector: "textarea" })).toHaveAttribute(
+      "maxLength",
+      "120",
+    );
+  });
+
+  it("la tabla accesible de la curva va DENTRO de un div sr-only: una <table> con sr-only no se encoge y daba scroll horizontal", () => {
+    // jsdom no calcula el layout, así que se comprueba la forma; la medida
+    // (scrollWidth = clientWidth a 400 y a 1280 px) se hizo en el navegador.
+    const { container } = render(<PoliticaForm {...PROPS_DEL_FORMULARIO} />);
+    const tabla = screen.getByRole("table", { name: t.calentamiento.caption });
+    expect(tabla.className).not.toMatch(/sr-only/);
+    expect(tabla.parentElement?.tagName).toBe("DIV");
+    expect(tabla.parentElement?.className).toMatch(/(^|\s)sr-only(\s|$)/);
+    for (const el of container.querySelectorAll("table.sr-only")) throw new Error(`una tabla con sr-only: ${el.outerHTML.slice(0, 80)}`);
   });
 });

@@ -1,15 +1,17 @@
 /**
  * outbound.alerts · las alertas diarias del outreach (VEN-15).
  *
- * Una vez al día por workspace (el cron corre cada hora y cada workspace
- * se procesa desde las ALERTAS_HORA_LOCAL de su zona, como
- * sales.follow_ups), con la salud de las últimas 24 h:
+ * Cada hora, por workspace, desde las ALERTAS_HORA_LOCAL de su zona
+ * (como sales.follow_ups), con la salud de las últimas 24 h:
  *
  *   outreach_bounce_rate   rebotes DUROS de lo enviado sobre el 5 %, con diez envíos o más
  *   outreach_no_sends      cero envíos con el envío encendido y toques que tocaba enviar
  *   outreach_queue_stuck   toques reclamados hace más de cinco minutos
  *   outreach_account_down  una cuenta de canal caída o por reconectar
  *   outreach_llm_budget    el presupuesto diario del modelo, agotado
+ *   outreach_bounces_unread un Gmail conectado cuyo buzón de rebotes no se
+ *                          lee (nunca, o hace más de BOUNCES_STALE_H):
+ *                          «ningún rebote» no quiere decir «todo llegó» (r5)
  *
  * Qué está mal lo decide evaluateOutreachAlerts (@mc/core, puro); las
  * cifras salen de outbound_health (0037) y de readAlertSignalCounts
@@ -25,10 +27,16 @@
  * todos sus dueños (membership.role = 'owner') a la vez, con las alertas
  * que todavía no salieron por correo; al enviarlo se anota
  * notification.emailed_at, y esa misma columna dice si hoy ya salió uno.
- * Sale en la primera corrida del día que tenga algo que contar; lo que
- * aparezca más tarde (una cuenta que cae a las 15:00) se queda en la
- * campana y va en el resumen del día siguiente, también lo 'critical':
- * la pieza pide un resumen diario, y la campana ya lo enseña al momento.
+ * Sale en la primera corrida del día que tenga algo que contar. Lo que
+ * aparezca más tarde se reparte así (r5):
+ *   · lo URGENTE (URGENT_ALERT_KINDS: una cuenta caída, los rebotes
+ *     disparados) sale por correo en esa misma corrida, en un correo
+ *     corto aparte: una cuenta de Gmail que cae a las 15:00 no puede
+ *     esperar a mañana, y la web todavía no tiene una campana donde
+ *     verlo (las notification del outreach solo se leen en el correo y
+ *     en /ventas/politica). Como hay una notification por tipo y día,
+ *     son como mucho dos correos urgentes al día;
+ *   · lo demás va en el resumen del día siguiente.
  * Uno por workspace y no uno por dueño: si el envío falla no sale a nadie
  * y nada queda marcado, así que la corrida siguiente no le repite el
  * resumen a quien ya lo tenía. Sin SMTP_URL, o si el correo falla, las
@@ -48,7 +56,7 @@
  * cada fila lleva el workspace que la origina.
  */
 import {
-  channelAccountLabel, evaluateOutreachAlerts, type AlertInput, type OutreachAlert, type OutreachAlertKind,
+  channelAccountLabel, evaluateOutreachAlerts, URGENT_ALERT_KINDS, type AlertInput, type OutreachAlert, type OutreachAlertKind,
 } from '@mc/core/outreach/deliverability';
 import { HEALTH_WINDOW_H, readAlertSignalCounts } from '@mc/db/queries/entregabilidad';
 import { parseOutboundHealth } from '@mc/db/queries/outreach';
@@ -93,7 +101,13 @@ export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
   ]);
   const health = parseOutboundHealth(rows[0]?.h);
   const c = await readAlertSignalCounts(tx, workspaceId, now, ALERTAS_VENTANA_H);
-  return { health, emailsSent: c.emailsSent, hardBounces: c.hardBounces, dueToSend: c.dueToSend };
+  return {
+    health,
+    emailsSent: c.emailsSent,
+    hardBounces: c.hardBounces,
+    dueToSend: c.dueToSend,
+    unreadMailboxes: c.unreadMailboxes,
+  };
 };
 
 export interface AlertasDeps {
@@ -121,6 +135,8 @@ export interface AlertasResult {
   emailFailed: number;
   /** Workspaces con alertas sin correo que esperan al resumen de mañana: hoy ya salió uno. */
   emailDeferred: number;
+  /** Correos inmediatos de alertas urgentes que aparecieron después del resumen del día (r5). */
+  urgentSent: number;
 }
 
 type Espacio = {
@@ -205,15 +221,20 @@ async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: 
 
 type Pendiente = {
   id: string;
+  kind: string;
   title_es: string;
   body_es: string | null;
   action_url: string | null;
 };
 
+/** Las notification de las alertas urgentes (outreach_account_down…), por su kind. */
+const KINDS_URGENTES = new Set(URGENT_ALERT_KINDS.map((k) => `outreach_${k}`));
+
 /**
  * El resumen por correo de las alertas que no salieron todavía (de los
  * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños, y como
- * mucho uno por día local del workspace.
+ * mucho uno por día local del workspace. Si hoy ya salió, las urgentes
+ * pendientes salen ahora en un correo aparte (r5) y las demás esperan.
  */
 async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: AlertasDeps, r: AlertasResult): Promise<void> {
   // ¿Hoy (día local) ya salió un resumen? Lo dice emailed_at, que se anota
@@ -226,17 +247,18 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     [w.id, now.toISOString(), w.tz],
   );
   const { rows: pendientes } = await db.query<Pendiente>(
-    `SELECT id, title_es, body_es, action_url FROM notification
+    `SELECT id, kind, title_es, body_es, action_url FROM notification
       WHERE workspace_id = $1 AND kind LIKE 'outreach\\_%' AND emailed_at IS NULL
         AND created_at >= $2::timestamptz - make_interval(days => $3::int)
       ORDER BY created_at, kind`,
     [w.id, now.toISOString(), ALERTAS_REENVIO_DIAS],
   );
   if (!pendientes.length) return;
-  if (hoy?.ya) {
-    r.emailDeferred++;
-    return;
-  }
+  // Hoy ya hubo resumen: solo lo urgente sale ya; lo demás, mañana.
+  const urgente = Boolean(hoy?.ya);
+  const aEnviar = urgente ? pendientes.filter((p) => KINDS_URGENTES.has(p.kind)) : pendientes;
+  if (urgente && aEnviar.length < pendientes.length) r.emailDeferred++;
+  if (!aEnviar.length) return;
   if (!deps.mailer) {
     r.emailSkipped++;
     return;
@@ -249,20 +271,21 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
   if (!duenos.length) return;
   const c = alertTextsFor(w.locale).email;
   const llenar = (p: Parameters<typeof fillTemplate>[0], v: Record<string, string>) =>
-    fillTemplate(p, v, { n: pendientes.length }, w.locale);
-  const subject = llenar(c.subject, { n: new Intl.NumberFormat(w.locale).format(pendientes.length), workspace: w.name });
+    fillTemplate(p, v, { n: aEnviar.length }, w.locale);
+  const n = new Intl.NumberFormat(w.locale).format(aEnviar.length);
+  const subject = llenar(urgente ? c.urgentSubject : c.subject, { n, workspace: w.name });
   const base = deps.appUrl ? deps.appUrl.replace(/\/+$/, '') : null;
   const text = [
-    llenar(c.intro, { workspace: w.name }),
+    llenar(urgente ? c.urgentIntro : c.intro, { workspace: w.name }),
     '',
-    ...pendientes.flatMap((p) => [
+    ...aEnviar.flatMap((p) => [
       `· ${p.title_es}`,
       ...(p.body_es ? [`  ${p.body_es}`] : []),
       ...(p.action_url && base ? [`  ${llenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
       '',
     ]),
     ...(base ? [] : [c.whereToSee, '']),
-    c.outro,
+    urgente ? c.urgentOutro : c.outro,
   ].join('\n');
   try {
     await deps.mailer.send({ to: duenos.map((d) => d.email), subject, text });
@@ -271,10 +294,11 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     throw err;
   }
   await db.query('UPDATE notification SET emailed_at = $2 WHERE id = ANY($1::uuid[]) AND emailed_at IS NULL', [
-    pendientes.map((p) => p.id),
+    aEnviar.map((p) => p.id),
     now.toISOString(),
   ]);
-  r.emailsSent++;
+  if (urgente) r.urgentSent++;
+  else r.emailsSent++;
 }
 
 export async function runAlertas(
@@ -285,7 +309,9 @@ export async function runAlertas(
 ): Promise<AlertasResult> {
   const hora = Math.max(0, Math.min(23, Math.trunc(deps.horaLocal ?? ALERTAS_HORA_LOCAL)));
   const leer = deps.readSignals ?? readSignalsFromDb;
-  const r: AlertasResult = { workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailFailed: 0, emailDeferred: 0 };
+  const r: AlertasResult = {
+    workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailFailed: 0, emailDeferred: 0, urgentSent: 0,
+  };
   for (const w of await espacios(db, now, hora)) {
     r.workspaces++;
     try {

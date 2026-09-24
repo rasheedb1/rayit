@@ -85,3 +85,12 @@ SELECT 'f_politica_con_rampa' AS check_id, p.max_emails_per_day, p.warmup_days,
        p.max_emails_per_day = 80 AND p.warmup_days = 14 AS ok
   FROM outbound_policy p
  WHERE p.workspace_id = '00000002-0000-4000-8000-000000000001';
+
+-- (g) El Gmail de la demo tiene su buzón de rebotes leído hace poco (r5):
+--     «Salud de hoy» no dice «todavía no leemos tus rebotes» encima de una
+--     tabla con rebotes. Es la regla de readSendReadiness (BOUNCES_STALE_H
+--     = 2 horas).
+SELECT 'g_rebotes_leidos' AS check_id, a.bounces_read_at,
+       a.bounces_read_at IS NOT NULL AND a.bounces_read_at > now() - interval '2 hours' AS ok
+  FROM outreach_channel_account a
+ WHERE a.id = '00000005-0000-4000-8000-0000000ac001';

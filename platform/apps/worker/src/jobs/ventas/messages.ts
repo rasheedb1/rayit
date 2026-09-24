@@ -1,7 +1,7 @@
 /**
  * Textos de los jobs de Ventas que salen del worker hacia una persona:
- * hoy, las alertas diarias del outreach (VEN-15), en la campana y en el
- * correo de resumen. En el idioma del workspace (workspace.locale), como
+ * hoy, las alertas del outreach (VEN-15): la notification del día, el
+ * correo de resumen y, para las urgentes, el correo inmediato (r5). En el idioma del workspace (workspace.locale), como
  * el pie del correo del outreach (footerTextsFor de @mc/core): inglés si
  * el locale es inglés, si no español.
  *
@@ -34,6 +34,7 @@ export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
   queue_stuck: SALUD_URL,
   account_down: CANALES_URL,
   llm_budget: PRESUPUESTO_URL,
+  bounces_unread: SALUD_URL,
 };
 
 /**
@@ -73,6 +74,14 @@ export interface AlertTexts {
     /** Sin APP_URL no hay enlaces: dónde verlo, en una línea. */
     whereToSee: string;
     outro: string;
+    /**
+     * El correo inmediato de una alerta urgente (URGENT_ALERT_KINDS, r5):
+     * aparece después del resumen del día y no espera a mañana. Por `n`,
+     * el número de alertas.
+     */
+    urgentSubject: Plural;
+    urgentIntro: string;
+    urgentOutro: string;
   };
 }
 
@@ -120,6 +129,15 @@ export const ALERT_TEXTS_ES: AlertTexts = {
       title: 'Se agotó el presupuesto diario de redacción',
       body: 'Se gastaron {spentToday} de {dailyCap} hoy. Los mensajes nuevos esperan a mañana; lo aprobado sigue saliendo.',
     },
+    bounces_unread: {
+      title: 'No estamos leyendo los rebotes de tu Gmail',
+      body: {
+        by: 'mailboxes',
+        one: 'Los avisos de rebote de {mailboxes} cuenta de Gmail no se están leyendo. Mientras tanto, «ningún rebote» no quiere decir que todo llegó: revisa los rebotes en tu buzón.',
+        other:
+          'Los avisos de rebote de {mailboxes} cuentas de Gmail no se están leyendo. Mientras tanto, «ningún rebote» no quiere decir que todo llegó: revisa los rebotes en tus buzones.',
+      },
+    },
   },
   accounts: {
     channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
@@ -134,7 +152,14 @@ export const ALERT_TEXTS_ES: AlertTexts = {
     intro: 'Esto es lo que vimos en el outreach de {workspace}:',
     link: 'Revísalo: {url}',
     whereToSee: 'Lo ves en On Cue, en Ventas → Política de envío.',
-    outro: 'Te escribimos una vez al día porque eres dueño de este espacio en On Cue. Lo que aparezca más tarde está en la campana y va en el resumen de mañana.',
+    outro: 'Te escribimos una vez al día porque eres dueño de este espacio en On Cue. Si más tarde cae una cuenta o se disparan los rebotes, te escribimos en el momento; lo demás va en el resumen de mañana.',
+    urgentSubject: {
+      by: 'n',
+      one: 'On Cue · Alerta urgente del outreach de {workspace}',
+      other: 'On Cue · {n} alertas urgentes del outreach de {workspace}',
+    },
+    urgentIntro: 'Esto acaba de pasar en el outreach de {workspace} y no espera al resumen de mañana:',
+    urgentOutro: 'Te escribimos porque eres dueño de este espacio en On Cue. Solo las alertas urgentes salen así; lo demás va en el resumen diario.',
   },
 };
 
@@ -173,6 +198,15 @@ export const ALERT_TEXTS_EN: AlertTexts = {
       title: 'The daily writing budget is used up',
       body: '{spentToday} of {dailyCap} spent today. New messages wait until tomorrow; approved ones keep going out.',
     },
+    bounces_unread: {
+      title: "We aren't reading your Gmail bounces",
+      body: {
+        by: 'mailboxes',
+        one: "Bounce notices for {mailboxes} Gmail account aren't being read. Until they are, “no bounces” doesn't mean everything arrived: check bounces in your inbox.",
+        other:
+          "Bounce notices for {mailboxes} Gmail accounts aren't being read. Until they are, “no bounces” doesn't mean everything arrived: check bounces in your inboxes.",
+      },
+    },
   },
   accounts: {
     channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
@@ -187,7 +221,14 @@ export const ALERT_TEXTS_EN: AlertTexts = {
     intro: "Here's what we saw in {workspace}'s outreach:",
     link: 'Review it: {url}',
     whereToSee: 'You can see it in On Cue, under Sales → Sending policy.',
-    outro: "We write once a day because you own this workspace on On Cue. Anything that shows up later is in the bell and goes in tomorrow's summary.",
+    outro: "We write once a day because you own this workspace on On Cue. If an account goes down or bounces spike later on, we write right away; everything else goes in tomorrow's summary.",
+    urgentSubject: {
+      by: 'n',
+      one: 'On Cue · Urgent outreach alert for {workspace}',
+      other: 'On Cue · {n} urgent outreach alerts for {workspace}',
+    },
+    urgentIntro: "This just happened in {workspace}'s outreach and can't wait for tomorrow's summary:",
+    urgentOutro: 'We write because you own this workspace on On Cue. Only urgent alerts go out like this; everything else goes in the daily summary.',
   },
 };
 

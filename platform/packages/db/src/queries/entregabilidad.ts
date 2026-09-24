@@ -205,6 +205,14 @@ export const POLICY_LIMITS = {
 
 export const POSTAL_ADDRESS_MAX = 300;
 
+/**
+ * Los códigos que outbound_policy.disabled_reason guarda (r4: la base no
+ * guarda frases; la pantalla los traduce). 'manual' es el apagado desde
+ * la política, y el valor por defecto de disable_outreach (0037).
+ */
+export const DISABLED_REASON_MANUAL = 'manual' as const;
+export type DisabledReasonCode = typeof DISABLED_REASON_MANUAL;
+
 /** Los valores de una política que todavía no existe: los DEFAULT de 0007 y 0037. */
 export const POLICY_DEFAULTS = {
   maxTouchesPerCompany: 4,
@@ -414,6 +422,12 @@ export interface AlertSignalCounts {
   dueToSend: number;
   /** hardBounces / emailsSent, calculada en SQL; null sin envíos. */
   hardBounceRate: number | null;
+  /**
+   * Gmail conectados cuyo buzón de rebotes no se leyó nunca o lleva más de
+   * BOUNCES_STALE_H horas sin leerse, contado en `now` (r5): la alerta
+   * outreach_bounces_unread.
+   */
+  unreadMailboxes: number;
 }
 
 /** La ventana de las alertas y del bloque de salud, en horas. */
@@ -444,15 +458,20 @@ export async function readAlertSignalCounts(
        (SELECT count(*) FROM outbound_touch t, v
          WHERE t.workspace_id = $1 AND t.status IN ('scheduled', 'failed')
            AND coalesce(t.next_retry_at, t.scheduled_for) >= v.desde
-           AND coalesce(t.next_retry_at, t.scheduled_for) < v.vencido)::int AS debidos)
-     SELECT enviados, duros, debidos, CASE WHEN enviados > 0 THEN duros::float8 / enviados END AS tasa FROM c`,
-    [workspaceId, now.toISOString(), windowHours, NO_SENDS_GRACE_H],
+           AND coalesce(t.next_retry_at, t.scheduled_for) < v.vencido)::int AS debidos,
+       (SELECT count(*) FROM outreach_channel_account a, v
+         WHERE a.workspace_id = $1 AND a.channel = 'email' AND a.status = 'connected'
+           AND (a.bounces_read_at IS NULL
+                OR a.bounces_read_at < v.hasta - make_interval(hours => $5::int)))::int AS sin_leer)
+     SELECT enviados, duros, debidos, sin_leer, CASE WHEN enviados > 0 THEN duros::float8 / enviados END AS tasa FROM c`,
+    [workspaceId, now.toISOString(), windowHours, NO_SENDS_GRACE_H, BOUNCES_STALE_H],
   );
-  const r = (rows[0] ?? {}) as { enviados?: number; duros?: number; debidos?: number; tasa?: number | null };
+  const r = (rows[0] ?? {}) as { enviados?: number; duros?: number; debidos?: number; sin_leer?: number; tasa?: number | null };
   return {
     emailsSent: Number(r.enviados ?? 0),
     hardBounces: Number(r.duros ?? 0),
     dueToSend: Number(r.debidos ?? 0),
+    unreadMailboxes: Number(r.sin_leer ?? 0),
     hardBounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
   };
 }

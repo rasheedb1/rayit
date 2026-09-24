@@ -10,6 +10,9 @@
  * elegir la forma con Intl.PluralRules del idioma de estos textos, nunca
  * con un «n === 1» a mano.
  */
+// Solo el tipo: este archivo llega al cliente (interruptor.tsx) y @mc/db no.
+import type { DisabledReasonCode } from "@mc/db/queries/entregabilidad";
+
 const reglas = new Intl.PluralRules("es");
 /** La forma de una frase según la cifra: «1 atascado», «3 atascados». */
 function plural(n: number, one: string, other: string): string {
@@ -31,8 +34,11 @@ export const MESSAGES = {
     on: "Encendido",
     off: "Apagado",
     onHelp: "Los mensajes aprobados salen solos, dentro de estos límites.",
-    /** Nunca se encendió: no había nada en cola que cancelar. */
-    offHelpNunca: "Todavía no sale nada. Enciéndelo cuando tengas tu dirección postal guardada y un canal conectado.",
+    /**
+     * Nunca se encendió y no falta nada (r5): la dirección está guardada y
+     * hay una cuenta conectada, así que no se pide lo que ya está.
+     */
+    offHelpListo: "Todo listo: al encenderlo, lo aprobado sale solo dentro de estos límites.",
     /** Nunca se encendió y falta algo: el paso concreto lo dice la línea de abajo, sin repetirlo aquí (r4). */
     offHelpNuncaCorto: "Todavía no sale nada.",
     /** Se apagó, sin motivo guardado: lo que estaba en cola se canceló. */
@@ -43,7 +49,9 @@ export const MESSAGES = {
      * (r4): la base no guarda frases. Uno que no está aquí (lo pone otro
      * proceso) se enseña con offReasonDetalle, como detalle.
      */
-    motivos: { manual: "lo apagaste desde la política" } as Readonly<Record<string, string>>,
+    motivos: { manual: "lo apagaste desde la política" } satisfies Record<DisabledReasonCode, string> as Readonly<
+      Record<string, string>
+    >,
     offReasonDetalle: (detalle: string, fecha: string) => `Apagado el ${fecha}. Motivo registrado: ${detalle}.`,
     encender: "Encender el envío",
     apagar: "Apagar el envío",
@@ -63,8 +71,9 @@ export const MESSAGES = {
         ? `${plural(cuantos, `Hoy sale ${n} mensaje aprobado`, `Hoy salen ${n} mensajes aprobados`)}, dentro de tus límites, y desde ahí lo que apruebes sale solo, en tu nombre.`
         : "Hoy no hay mensajes aprobados en cola. Desde ahora, lo que apruebes sale solo, en tu nombre y dentro de tus límites.",
     siEncender: "Sí, encender",
-    /** El código que se guarda al apagar a mano (disable_outreach lo toma también por defecto, 0037). */
-    motivoManual: "manual",
+    /** Lo que anuncia la región role=status después de encender o apagar (r5). */
+    anuncioEncendido: "Envío encendido.",
+    anuncioApagado: "Envío apagado.",
     errorEncender: "No se pudo encender. Revisa que la dirección postal esté guardada.",
     errorApagar: "No se pudo apagar. Inténtalo de nuevo.",
   },
@@ -197,14 +206,24 @@ export const MESSAGES = {
       description: "Cuando un correo no llegue, aquí verás a qué dirección y por qué.",
     },
     /**
-     * Mientras el job de rebotes no lea los buzones (BOUNCE_READING_CONNECTED
-     * de @mc/core, hasta integrar VEN-9): que «Ningún rebote» no se lea como
-     * «todo bien» (r4).
+     * Cuando nadie está leyendo los rebotes de un Gmail conectado
+     * (readSendReadiness.bouncesReading, por el cursor de cada cuenta, r5):
+     * que «Ningún rebote» no se lea como «todo bien». 'never' mientras el
+     * job no lea los buzones (hasta integrar VEN-9, o si faltan las llaves);
+     * 'stale' si el job se paró.
      */
-    lecturaPendiente: {
-      title: "Todavía no leemos los rebotes de tu Gmail",
-      description:
-        "La lectura automática de los avisos de rebote se conecta junto con los canales de envío. Hasta entonces, esta tabla y la cifra de rebotes no cuentan los que lleguen a tu buzón: revísalos allí.",
+    lectura: {
+      never: {
+        title: "Todavía no leemos los rebotes de tu Gmail",
+        description:
+          "La lectura automática de los avisos de rebote se conecta junto con los canales de envío. Hasta entonces, los que lleguen a tu buzón no se cuentan aquí ni en la cifra de rebotes: revísalos allí.",
+      },
+      stale: {
+        title: "La lectura de rebotes está parada",
+        /** `fecha` es la última lectura, con fecha y hora en la zona del espacio. */
+        description: (fecha: string) =>
+          `La última vez que leímos los rebotes de tu Gmail fue el ${fecha}. Los que llegaron después no se cuentan aquí ni en la cifra de rebotes: revísalos en tu buzón.`,
+      },
     },
   },
 

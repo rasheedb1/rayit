@@ -28,13 +28,14 @@ declare global {
 
 /**
  * Adónde apunta el enlace de baja de la demo: APP_URL si está, si no el
- * puerto con el que arrancó la web; sin ninguno de los dos, la ruta sola.
+ * puerto con el que arrancó la web. Sin ninguno de los dos, null: un
+ * enlace sin host no se puede pulsar y no se fabrica (r5).
  */
-function baseDeLaDemo(): string {
+function baseDeLaDemo(): string | null {
   const app = process.env.APP_URL?.trim();
-  if (app) return app;
+  if (app && /^https?:\/\//i.test(app)) return app;
   const puerto = process.env.PORT?.trim();
-  return puerto ? `http://localhost:${puerto}` : "";
+  return puerto && /^\d+$/.test(puerto) ? `http://localhost:${puerto}` : null;
 }
 
 /**
@@ -43,11 +44,16 @@ function baseDeLaDemo(): string {
  * de VEN-15 sin Docker (docs/ventas-outreach.md §5.2). El seed solo
  * guarda hashes de tokens al azar; este lo fabrica como el despachador,
  * sobre el último correo enviado de la demo. Nunca con DATABASE_URL: ahí
- * sería un enlace de baja real.
+ * sería un enlace de baja real. Ni en las pruebas (NODE_ENV=test), ni sin
+ * APP_URL o PORT: se imprime solo un enlace que se puede abrir.
  */
 async function enlaceDeBajaDeLaDemo(db: Db): Promise<string> {
+  // Las pruebas también arrancan la base embebida: ni escriben el enlace ni
+  // llenan su salida con él (r5). Y sin una URL absoluta, nada.
+  const base = baseDeLaDemo();
+  if (process.env.NODE_ENV === "test" || !base) return "";
   try {
-    const r = await db.asWorker((tx) => crearEnlaceDeDemo(tx, baseDeLaDemo()));
+    const r = await db.asWorker((tx) => crearEnlaceDeDemo(tx, base));
     if (!r.ok) return "";
     return ` Enlace de baja de prueba (ábrelo sin sesión o en una ventana privada): ${r.url} (a ${r.recipient}).`;
   } catch (err) {

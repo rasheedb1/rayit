@@ -282,10 +282,10 @@ async function espacioDeFixture(ws: string, user: string, slug: string, name: st
   `);
 }
 
-test('todo mal (r4): el fixture da las cinco notificaciones, con su gravedad, su enlace y sus cifras, una sola vez', async () => {
+test('todo mal (r4, r5): el fixture da las seis notificaciones, con su gravedad, su enlace y sus cifras, una sola vez', async () => {
   await espacioDeFixture(WS_TODO, '0000015a-0000-4000-8000-0000000000a7', 'alertas-todo', 'Todo Mal');
   const cartero = new CarteroFalso();
-  // La inserción pasa el CHECK de notification.kind para los cinco tipos: si no, el workspace falla entero.
+  // La inserción pasa el CHECK de notification.kind para los seis tipos: si no, el workspace falla entero.
   const fallos: unknown[] = [];
   await runAlertas(db, new Date('2026-10-01T14:00:00Z'), { mailer: cartero, appUrl: 'https://app.test', readSignals: desdeFixture }, (_ws, e) =>
     fallos.push(e),
@@ -299,6 +299,7 @@ test('todo mal (r4): el fixture da las cinco notificaciones, con su gravedad, su
     [
       ['outreach_account_down', 'critical', '/ventas/politica#cuentas'],
       ['outreach_bounce_rate', 'critical', '/ventas/politica#salud'],
+      ['outreach_bounces_unread', 'warning', '/ventas/politica#salud'],
       ['outreach_llm_budget', 'warning', '/ventas/politica#presupuesto'],
       ['outreach_no_sends', 'warning', '/ventas/politica#salud'],
       ['outreach_queue_stuck', 'warning', '/ventas/politica#salud'],
@@ -320,10 +321,12 @@ test('todo mal (r4): el fixture da las cinco notificaciones, con su gravedad, su
   assert.match(porTipo['outreach_no_sends']?.body_es ?? '', /^Había 7 mensajes por salir y no salió ninguno/);
   assert.match(porTipo['outreach_account_down']?.body_es ?? '', /^No sale nada por una cuenta de canal hasta que se reconecte/);
   assert.match(porTipo['outreach_bounce_rate']?.body_es ?? '', /^3 de 20 correos enviados en las últimas 24 horas rebotaron/);
+  assert.equal(porTipo['outreach_bounces_unread']?.title_es, 'No estamos leyendo los rebotes de tu Gmail');
+  assert.match(porTipo['outreach_bounces_unread']?.body_es ?? '', /^Los avisos de rebote de 1 cuenta de Gmail no se están leyendo/);
 
-  // El correo de resumen lista las cinco, cada una con su enlace.
+  // El correo de resumen lista las seis, cada una con su enlace.
   const [correo] = cartero.enviados.filter((m) => m.subject.includes('Todo Mal'));
-  assert.equal(correo?.subject, 'On Cue · 5 alertas del outreach de Todo Mal');
+  assert.equal(correo?.subject, 'On Cue · 6 alertas del outreach de Todo Mal');
   for (const a of todo) {
     assert.ok(correo?.text.includes(`· ${a.title_es}`), `el correo lista «${a.title_es}»`);
     assert.ok(correo?.text.includes(`https://app.test${a.action_url}`));
@@ -332,11 +335,11 @@ test('todo mal (r4): el fixture da las cinco notificaciones, con su gravedad, su
   // Una segunda corrida el mismo día no crea ninguna ni manda otro correo.
   const otra = new CarteroFalso();
   await runAlertas(db, new Date('2026-10-01T18:00:00Z'), { mailer: otra, appUrl: 'https://app.test', readSignals: desdeFixture });
-  assert.equal((await avisos(WS_TODO)).length, 5);
+  assert.equal((await avisos(WS_TODO)).length, 6);
   assert.equal(otra.enviados.filter((m) => m.subject.includes('Todo Mal')).length, 0);
 });
 
-test('un resumen por día (r4): lo que aparece por la tarde se queda en la campana y va en el correo de mañana', async () => {
+test('un resumen por día (r4), y lo urgente no espera a mañana (r5)', async () => {
   await espacioDeFixture(WS_TARDE, '0000015a-0000-4000-8000-0000000000a8', 'alertas-tarde', 'Por La Tarde');
   const soloRebotes: AlertInput = { ...SALUD.enProblemas, health: { ...SALUD.enProblemas.health, accountsDown: 0 } };
   let salud: AlertInput = soloRebotes;
@@ -349,26 +352,60 @@ test('un resumen por día (r4): lo que aparece por la tarde se queda en la campa
   assert.equal(deTarde(manana).length, 1);
   assert.equal(deTarde(manana)[0]?.subject, 'On Cue · Una alerta del outreach de Por La Tarde');
 
-  // 15:00: cae una cuenta. Notificación nueva en la campana, pero hoy no sale otro correo.
-  salud = { ...soloRebotes, health: { ...soloRebotes.health, accountsDown: 1 } };
+  // 15:00: cae una cuenta y se atasca un mensaje. La cuenta caída es urgente:
+  // sale ya, en un correo corto aparte. El atasco espera al resumen de mañana.
+  salud = { ...soloRebotes, health: { ...soloRebotes.health, accountsDown: 1, queue: { stuck: 2 } } };
   const tarde = new CarteroFalso();
   const r = await runAlertas(db, new Date('2026-10-03T20:00:00Z'), { mailer: tarde, appUrl: 'https://app.test', readSignals: leer });
   assert.equal(r.created.account_down, 1);
-  assert.ok(r.emailDeferred >= 1);
-  assert.equal(deTarde(tarde).length, 0, 'un solo correo al día');
+  assert.equal(r.created.queue_stuck, 1);
+  assert.equal(r.urgentSent, 1);
+  assert.ok(r.emailDeferred >= 1, 'el atasco espera');
+  const [urgente] = deTarde(tarde);
+  assert.equal(deTarde(tarde).length, 1);
+  assert.equal(urgente?.subject, 'On Cue · Alerta urgente del outreach de Por La Tarde');
+  assert.match(urgente?.text ?? '', /Una cuenta de envío necesita atención/);
+  assert.doesNotMatch(urgente?.text ?? '', /atascado/, 'solo lo urgente');
   assert.deepEqual(
     (await avisos(WS_TARDE)).map((a) => [a.kind, a.emailed_at === null]),
     [
       ['outreach_bounce_rate', false],
-      ['outreach_account_down', true],
+      ['outreach_account_down', false],
+      ['outreach_queue_stuck', true],
     ],
   );
 
-  // Al día siguiente, a las 8:00, la cuenta sigue caída: el resumen trae la de ayer por la tarde y la de hoy.
+  // 17:00: nada nuevo. Ni la cuenta caída se repite ni el atasco sale hoy.
+  const luego = new CarteroFalso();
+  await runAlertas(db, new Date('2026-10-03T22:00:00Z'), { mailer: luego, appUrl: 'https://app.test', readSignals: leer });
+  assert.equal(deTarde(luego).length, 0);
+
+  // Al día siguiente, a las 8:00, la cuenta sigue caída: el resumen trae el atasco de ayer y la cuenta de hoy.
   salud = { ...SALUD.sano, health: { ...SALUD.sano.health, accountsDown: 1 } };
   const otroDia = new CarteroFalso();
   await runAlertas(db, new Date('2026-10-04T13:00:00Z'), { mailer: otroDia, appUrl: 'https://app.test', readSignals: leer });
   assert.equal(deTarde(otroDia).length, 1);
   assert.equal(deTarde(otroDia)[0]?.subject, 'On Cue · 2 alertas del outreach de Por La Tarde');
   assert.ok((await avisos(WS_TARDE)).every((a) => a.emailed_at !== null));
+});
+
+
+test('con la base real (r5): un Gmail conectado cuyo buzón de rebotes nadie lee da su alerta; leído hace poco, no', async () => {
+  const WS_GMAIL = '0000015a-0000-4000-8000-000000000009';
+  await espacioDeFixture(WS_GMAIL, '0000015a-0000-4000-8000-0000000000a9', 'alertas-gmail', 'Sin Leer');
+  await db.raw.exec(`
+    INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, display_name, status)
+    VALUES ('${WS_GMAIL}', 'email', 'gmail_oauth', 'sinleer@alertas.test', NULL, 'connected');
+  `);
+  const r = await runAlertas(db, new Date('2026-11-10T14:00:00Z'), { mailer: null, appUrl: 'https://app.test' });
+  assert.ok((r.created.bounces_unread ?? 0) >= 1);
+  const sinLeer = (await avisos(WS_GMAIL)).filter((a) => a.kind === 'outreach_bounces_unread');
+  assert.equal(sinLeer.length, 1);
+  assert.equal(sinLeer[0]?.action_url, SALUD_URL);
+
+  // Leído hace media hora: al día siguiente ya no avisa.
+  await db.raw.exec(`UPDATE outreach_channel_account SET bounces_read_at = '2026-11-11T13:30:00Z'
+                      WHERE provider_account_id = 'sinleer@alertas.test'`);
+  await runAlertas(db, new Date('2026-11-11T14:00:00Z'), { mailer: null, appUrl: 'https://app.test' });
+  assert.equal((await avisos(WS_GMAIL)).filter((a) => a.kind === 'outreach_bounces_unread').length, 1);
 });

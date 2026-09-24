@@ -176,6 +176,16 @@ UPDATE contact c
    AND c.email = b.recipient_address
    AND NOT c.email_invalid;
 
+-- El cursor de rebotes del Gmail de la demo, como lo deja el job cada
+-- media hora (r5). Sin él, «Salud de hoy» decía «todavía no leemos los
+-- rebotes de tu Gmail» encima de una tabla con dos rebotes: la página se
+-- contradecía. Con él, la demo cuenta lo que se verá cuando la lectura
+-- esté conectada (VEN-9); una cuenta real sin leer sigue con su aviso.
+-- Se mueve en cada siembra: la demo siempre está leída hace poco.
+UPDATE outreach_channel_account
+   SET bounces_read_at = now() - interval '20 minutes'
+ WHERE id = '00000005-0000-4000-8000-0000000ac001';
+
 
 -- =====================================================================
 -- 3 · La política de la demo, con calentamiento que se vea (r4)

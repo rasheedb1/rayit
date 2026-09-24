@@ -479,11 +479,24 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
 // trae (rebotes duros de lo enviado, toques que tocaban y no salieron),
 // qué está mal hoy. Una alerta por tipo; el job decide si ya se avisó hoy.
 
-export type OutreachAlertKind = 'bounce_rate' | 'no_sends' | 'queue_stuck' | 'account_down' | 'llm_budget';
+export type OutreachAlertKind =
+  | 'bounce_rate'
+  | 'no_sends'
+  | 'queue_stuck'
+  | 'account_down'
+  | 'llm_budget'
+  | 'bounces_unread';
 
 export const OUTREACH_ALERT_KINDS: readonly OutreachAlertKind[] = [
-  'bounce_rate', 'no_sends', 'queue_stuck', 'account_down', 'llm_budget',
+  'bounce_rate', 'no_sends', 'queue_stuck', 'account_down', 'llm_budget', 'bounces_unread',
 ];
+
+/**
+ * Las alertas que no esperan al resumen del día siguiente (r5): si una
+ * cuenta cae o los rebotes se disparan después del resumen de la mañana,
+ * el correo sale en la corrida siguiente. Las demás van en el resumen.
+ */
+export const URGENT_ALERT_KINDS: readonly OutreachAlertKind[] = ['bounce_rate', 'account_down'];
 
 /** Sobre esta proporción de rebotes DUROS, alerta… */
 export const BOUNCE_RATE_THRESHOLD = 0.05;
@@ -523,6 +536,13 @@ export interface AlertInput {
    * Un domingo sin nada programado da 0: no hay nada que avisar.
    */
   dueToSend: number;
+  /**
+   * Cuentas de Gmail conectadas cuyo buzón de rebotes no se leyó nunca o
+   * lleva más de BOUNCES_STALE_H horas sin leerse (r5): mientras nadie
+   * lee los rebotes, «ningún rebote» no quiere decir «todo llegó», y la
+   * tasa de rebotes no puede avisar. Sin el dato (un fixture de antes), 0.
+   */
+  unreadMailboxes?: number;
 }
 
 export interface OutreachAlert {
@@ -560,6 +580,10 @@ export function evaluateOutreachAlerts(input: AlertInput): OutreachAlert[] {
       severity: 'warning',
       values: { spentToday: health.llm.spentToday, dailyCap: health.llm.dailyCap },
     });
+  }
+  const sinLeer = input.unreadMailboxes ?? 0;
+  if (sinLeer > 0) {
+    alertas.push({ kind: 'bounces_unread', severity: 'warning', values: { mailboxes: sinLeer } });
   }
   return alertas;
 }

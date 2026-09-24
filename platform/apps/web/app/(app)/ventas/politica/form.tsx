@@ -34,6 +34,8 @@ export interface PoliticaFormProps {
   maximos: Record<Numerico, number>;
   /** El mínimo de cada número (POLICY_LIMITS): fuera de rango, la curva no se pinta. */
   minimos: Record<Numerico, number>;
+  /** El largo máximo de la dirección postal (POSTAL_ADDRESS_MAX, el mismo que valida la acción). */
+  direccionMax: number;
   /** El locale del workspace, para las cifras de la curva. */
   locale: string;
   /**
@@ -112,6 +114,7 @@ export function PoliticaForm({
   rangos,
   maximos,
   minimos,
+  direccionMax,
   locale,
   editable = true,
 }: PoliticaFormProps) {
@@ -279,7 +282,7 @@ export function PoliticaForm({
               value={direccion}
               onChange={(e) => setDireccion(e.target.value)}
               placeholder={t.campos.postalAddress.placeholder}
-              maxLength={300}
+              maxLength={direccionMax}
             />
           </Field>
           <div>
@@ -326,27 +329,26 @@ export function PoliticaForm({
                 endLabels={false}
               />
               <p className="mt-1 text-xs text-muted">{t.calentamiento.ejeX}</p>
-              <table className="sr-only">
-                <caption>{t.calentamiento.caption}</caption>
-                <tbody>
-                  {calentamiento.filas.map((f) => (
-                    <tr
-                      key={f.dia}
-                      className="border-b border-line last:border-b-0"
-                    >
-                      <th
-                        scope="row"
-                        className="py-1.5 text-left font-normal text-fg-2 tabular-nums"
-                      >
-                        {f.dia}
-                      </th>
-                      <td className="py-1.5 text-right tabular-nums">
-                        {f.correos}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {/*
+                sr-only en un <div>, no en la <table> (r5): una tabla no se
+                encoge a 1 px (crece hasta el ancho de su contenido), así que
+                con sr-only en ella medía 423 px en posición absoluta y la
+                página entera tenía scroll horizontal, también en escritorio.
+                El div sí recorta.
+              */}
+              <div className="sr-only">
+                <table>
+                  <caption>{t.calentamiento.caption}</caption>
+                  <tbody>
+                    {calentamiento.filas.map((f) => (
+                      <tr key={f.dia}>
+                        <th scope="row">{f.dia}</th>
+                        <td>{f.correos}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           ) : (
             <p className="mt-2 text-xs text-muted" aria-live="polite">
