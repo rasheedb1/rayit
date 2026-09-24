@@ -10,9 +10,11 @@
  * bloque plegado para quien administra la plataforma.
  *
  * Las frases de SALUD de una cuenta (qué dijo Unipile de la sesión, el
- * aviso de la campana) no están aquí: las escribe también el keepalive
- * del worker, y viven en @mc/core (canales-textos.ts) para que el mismo
- * evento diga lo mismo lo detecte quien lo detecte. Se re-exportan abajo.
+ * aviso de la campana) no están aquí: el keepalive del worker escribe el
+ * mismo aviso, y viven en @mc/core (canales-textos.ts) para que el mismo
+ * evento diga lo mismo lo detecte quien lo detecte. Se re-exportan abajo
+ * (`health`). En last_error de la base solo hay CÓDIGOS: la pantalla los
+ * traduce aquí al pintar (_lib/filas.ts, REASON_BY_CODE).
  */
 import { CANALES_TEXTOS } from "@mc/core";
 
@@ -50,7 +52,11 @@ export const MESSAGES = {
     /** «Hoy 3 de 20» y «Semana 12 de 100», por separado para que en móvil no se partan a medias. Los límites vienen de la vista (0040). */
     usageToday: (today: string, dayCap: string) => `Hoy ${today} de ${dayCap}`,
     usageWeek: (week: string, weekCap: string) => `Semana ${week} de ${weekCap}`,
-    /** Cuándo se comprobó por última vez que la cuenta responde (last_ok_at), como las integraciones de Vercel. */
+    /**
+     * Cuándo se comprobó por última vez que la cuenta responde (last_ok_at),
+     * en relativo como las integraciones de Vercel y Linear («Comprobada
+     * hace 2 horas»); la fecha completa va en el title.
+     */
     lastOk: (when: string) => `Comprobada ${when}`,
     /** El nombre accesible de la lista de las demás cuentas vivas de un canal. */
     otherAccounts: (channel: string) => `Otras cuentas de ${channel}`,
@@ -61,6 +67,8 @@ export const MESSAGES = {
     pendingHint: {
       email: "Estás autorizando en Google. Si cerraste esa página sin terminar, vuelve a intentarlo.",
       unipile: (provider: string) => `Termina la conexión en la página de ${provider} que se abrió. Si la cerraste, vuelve a intentarlo.`,
+      /** La persona YA volvió de la página de conexión (?conectado=): falta la confirmación, no su parte. */
+      returned: (provider: string) => `Terminaste en ${provider}; estamos esperando su confirmación. Si en unos minutos no aparece como conectado, vuelve a intentarlo.`,
     },
     expiredHint: {
       email: "No terminaste de autorizar en Google. Vuelve a intentarlo.",
@@ -84,6 +92,15 @@ export const MESSAGES = {
     /** Solo en desarrollo: qué falta en el servidor, plegado. */
     adminDetails: "Detalles para quien administra la plataforma",
     adminMissing: (vars: string) => `Faltan en el servidor: ${vars}. Cómo se consiguen: platform/.env.example.`,
+    /** Un motivo guardado que la pantalla no conoce (un código nuevo del worker): nunca se enseña crudo. */
+    unknownReason: "Algo falló con esta cuenta. Si no se arregla sola, vuelve a conectarla.",
+    /** Las frases de los códigos que escribe el keepalive (last_error). */
+    reasons: {
+      transient: "No pudimos comprobar la cuenta. Lo volvemos a intentar en unas horas.",
+      duplicado: "Ese perfil ya estaba conectado en este espacio: seguimos usando esa conexión.",
+    },
+    /** Quien no puede gestionar los canales (un miembro, un invitado): ve la pantalla, no la toca. */
+    readOnly: "Solo quien administra este espacio puede conectar, desconectar o cambiar los límites de los canales.",
   },
 
   actions: {
@@ -139,6 +156,8 @@ export const MESSAGES = {
     connected: (channel: string) => `${channel} quedó conectado.`,
     /** El aviso de éxito llegó antes que el de Unipile: la fila sigue «Conectando». */
     finishing: (channel: string) => `Estamos terminando de conectar tu ${channel}…`,
+    /** Pasó el minuto de espera y el aviso de Unipile no llegó: no prometer que «estamos terminando» para siempre. */
+    finishingSlow: (channel: string) => `${channel} tarda en confirmar. Si en unos minutos no aparece como conectado, vuelve a intentarlo.`,
     errors: {
       cancelada: "Cancelaste la autorización. La cuenta no se conectó.",
       permisos: "Google no concedió los permisos de enviar y leer correo. Vuelve a conectar y acepta los dos.",
@@ -155,6 +174,8 @@ export const MESSAGES = {
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
       otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
       soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",
+      /** El mismo perfil ya está conectado en este espacio (0042): la cuenta nueva se soltó en Unipile. */
+      duplicado: "Ese perfil ya está conectado en este espacio. Seguimos usando esa conexión.",
     },
     /** El nombre del servicio cuando un ?error= llega sin ?canal= (un enlace viejo). */
     genericService: "el servicio",
@@ -169,6 +190,8 @@ export const MESSAGES = {
     postOnly: "Usa el botón «Conectar» de /ventas/canales: el inicio va por POST.",
     webhookPostOnly: "Solo POST.",
     unauthorized: "Firma inválida.",
+    /** Conectar o desconectar sin el rol (PUEDEN_GESTIONAR_CANALES). */
+    forbidden: "Solo quien administra este espacio puede conectar o desconectar canales.",
     badJson: "JSON inválido.",
     badForm: "Formulario inválido.",
     tooLarge: "Aviso demasiado grande.",
@@ -183,6 +206,8 @@ export const MESSAGES = {
       /** Un DM del creador que no es respuesta a un toque nuestro: ni se guarda ni se clasifica. */
       foreignChat: "chat ajeno al outreach",
       notAccountEvent: "aviso de cuenta con cabeceras de ruta",
+      /** El aviso de cuenta creada trae una cuenta que no nació de ese intento (una vieja, u otra que la reconectada). */
+      notThisAttempt: "cuenta que no es de este intento",
     },
     /** Lo que se registra en el servidor (console.warn) cuando falta configuración. */
     serverMissing: (channel: string, vars: string) => `[canales] ${channel} no está disponible: faltan ${vars} (ver platform/.env.example).`,

@@ -8,9 +8,23 @@ import "server-only";
  */
 import { GOOGLE_ENV, GoogleOAuth, loadGoogleOAuthConfig, loadUnipileConfig, UnipileClient } from "@mc/connectors";
 import { origenDesde } from "@/lib/auth/origen";
+import { PUEDEN_GESTIONAR_CANALES } from "@/lib/auth/reglas";
 import { withProviderCallback, withWorkspace } from "@/lib/db";
-import { getCurrentWorkspaceId } from "@/lib/workspace/current";
+import { getCurrentContext, getCurrentWorkspaceId } from "@/lib/workspace/current";
 import type { ChannelDeps } from "./deps";
+
+/**
+ * ¿El rol de quien pide, en el espacio de la sesión, puede gestionar los
+ * canales? Sin sesión solo se llega en una copia SIN Supabase Auth (el
+ * atajo de desarrollo de lib/workspace/current.ts): ahí no hay roles que
+ * mirar y la persona es la dueña de su copia.
+ */
+export async function puedeGestionarCanales(): Promise<boolean> {
+  const ctx = await getCurrentContext();
+  if (!ctx.sesion) return true;
+  const role = ctx.workspaces.find((w) => w.id === ctx.workspaceId)?.role;
+  return role !== undefined && PUEDEN_GESTIONAR_CANALES.has(role);
+}
 
 export function channelDeps(env: Readonly<Record<string, string | undefined>> = process.env): ChannelDeps {
   const unipile = loadUnipileConfig(env);
@@ -20,6 +34,7 @@ export function channelDeps(env: Readonly<Record<string, string | undefined>> = 
     withWorkspace,
     withProviderCallback,
     currentWorkspaceId: getCurrentWorkspaceId,
+    canManage: puedeGestionarCanales,
     origin: async (req) => origenDesde(env, req.headers),
     google: hasGoogle
       ? (callLog, origin) => {

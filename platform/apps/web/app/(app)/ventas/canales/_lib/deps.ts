@@ -17,6 +17,12 @@ export interface ChannelDeps {
   /** El espacio de la sesión, para firmarlo en el estado y compararlo al volver. */
   currentWorkspaceId: () => Promise<string>;
   /**
+   * Si quien pide puede conectar, desconectar o cambiar los topes de un
+   * canal en el espacio de la sesión (PUEDEN_GESTIONAR_CANALES de
+   * lib/auth/reglas.ts, por su rol). Lo comprueba el servidor siempre.
+   */
+  canManage: () => Promise<boolean>;
+  /**
    * La transacción de un aviso ya verificado (lib/db withProviderCallback).
    * Recibe la prueba de lib/db/aviso-de-proveedor.ts, que solo emiten sus
    * dos verificaciones de firma: aquí no se puede pasar un workspace.

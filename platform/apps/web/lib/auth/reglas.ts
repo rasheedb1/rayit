@@ -18,6 +18,15 @@ export const MAX_NOMBRE = 80;
 export const PUEDEN_RENOMBRAR: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin"]);
 
 /**
+ * Los roles que pueden conectar, reconectar o desconectar un canal de
+ * outreach y cambiar sus topes (VEN-9). Es lo más sensible de Ventas: el
+ * buzón o el LinkedIn que se conecta escribe a las marcas en nombre de la
+ * creadora. Un 'member', un 'viewer' o un 'client' ven la pantalla, no la
+ * tocan.
+ */
+export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin"]);
+
+/**
  * Cuántos espacios puede tener una persona como propietaria. Sin tope,
  * un script con sesión crea miles de workspaces con su creator_profile.
  * Veinte cubre de sobra a una creadora que separa marcas; una agencia

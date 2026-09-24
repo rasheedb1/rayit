@@ -21,6 +21,7 @@ export function ConectarBoton({
   variant,
   disabled,
   ariaLabel,
+  className,
 }: {
   action: string;
   fields: Record<string, string>;
@@ -28,6 +29,8 @@ export function ConectarBoton({
   variant: ButtonVariant;
   disabled: boolean;
   ariaLabel?: string;
+  /** Para alinear un botón fantasma con el texto de la fila. */
+  className?: string;
 }) {
   const [sending, setSending] = useState(false);
   useEffect(() => {
@@ -52,7 +55,7 @@ export function ConectarBoton({
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <Button type="submit" size="sm" variant={variant} disabled={disabled} loading={sending} aria-label={ariaLabel}>
+      <Button type="submit" size="sm" variant={variant} disabled={disabled} loading={sending} aria-label={ariaLabel} className={className}>
         {sending ? MESSAGES.actions.connecting : label}
       </Button>
     </form>

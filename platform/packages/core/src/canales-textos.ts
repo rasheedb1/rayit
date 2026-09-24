@@ -3,16 +3,20 @@
  *
  * Una cuenta de LinkedIn, de Instagram o de Gmail puede caer por dos
  * caminos: el aviso de Unipile a la web (/api/webhooks/unipile) o el
- * keepalive diario del worker. El mismo evento tiene que decir lo mismo
- * lo detecte quien lo detecte, y quedar traducido en UN sitio: la web
- * (ventas/canales/messages.ts) y el worker (canales.keepalive.ts) leen
- * de aquí. Nada de esto nombra un código crudo del proveedor: el código
+ * keepalive del worker. El mismo evento tiene que decir lo mismo lo
+ * detecte quien lo detecte, y quedar traducido en UN sitio: la web
+ * (ventas/canales/messages.ts los reexporta) y el worker leen de aquí.
+ *
+ * Qué va a la base y qué no (ronda 5): en last_error de la cuenta solo
+ * van CÓDIGOS (CHANNEL_ERROR_CODES de @mc/db, 'unipile_status:<X>'), y la
+ * pantalla los traduce con estas frases en el momento de pintar, así un
+ * espacio en otro idioma no hereda un español congelado en la base. Lo
+ * único que se escribe con frase es el aviso de la campana (la tabla
+ * notification guarda title_es y body_es): `down` y `back`.
+ *
+ * Nada de esto nombra un código crudo del proveedor: el código
  * (CREDENTIALS, STOPPED…) queda en api_call_log y en el registro del
  * servidor.
- *
- * Es texto que queda escrito en la base (last_error de la cuenta y el
- * aviso de la campana), por eso vive en @mc/core, que no depende de
- * nadie, y no en una pantalla.
  */
 
 /** El nombre de cada canal como lo lee la persona, para las frases. */
@@ -54,10 +58,15 @@ export const CANALES_TEXTOS = {
    */
   transient: 'No pudimos comprobar la cuenta hoy. Lo intentamos de nuevo mañana.',
 
-  /** Lo que queda en last_error y en la campana cuando la cuenta cae. */
+  /** El aviso de la campana cuando la cuenta cae. */
   down: {
     title: (channel: string, name: string | null) => `Vuelve a conectar tu ${channel}${name ? ` (${name})` : ''}`,
     /** `what` es una de las frases de arriba. */
     body: (what: string) => `${what} Vuelve a conectar la cuenta desde Canales.`,
+  },
+  /** El aviso de la campana cuando la sesión vuelve sola (la persona resolvió el reto en LinkedIn). */
+  back: {
+    title: (channel: string, name: string | null) => `Tu ${channel}${name ? ` (${name})` : ''} volvió a conectarse`,
+    body: 'On Cue ya puede volver a enviar por esta cuenta.',
   },
 } as const;

@@ -6,7 +6,12 @@
  *                                     estado firmado {workspace, creador,
  *                                     canal, nonce}, cookie con el nonce
  *                                     (ata la vuelta a ESTE navegador) y
- *                                     303 a Google.
+ *                                     303 a Google. «Reconectar» manda el
+ *                                     id de NUESTRA fila y Google propone
+ *                                     ese buzón (login_hint, leído en el
+ *                                     servidor); «Conectar otra cuenta»
+ *                                     manda otra=1 y Google pregunta cuál
+ *                                     (select_account).
  *   GET  /api/oauth/google/callback   estado válido + misma cookie + mismo
  *                                     espacio de la sesión → canje del
  *                                     code → alcances → correo de userinfo
@@ -27,14 +32,23 @@
  *                                     conecta cuando llega el aviso
  *                                     (aviso.ts). Reconectar manda el id
  *                                     de NUESTRA fila; el account_id de
- *                                     Unipile se lee en el servidor.
+ *                                     Unipile se lee en el servidor y va
+ *                                     firmado en el estado. Una cookie
+ *                                     con el nonce ata la vuelta fallida
+ *                                     a ESTE navegador.
  *   GET  /ventas/canales/conectar     la vuelta de Unipile cuando su página
  *        ?fallo=<nonce>&canal=…       termina sin cuenta (contraseña mala,
  *                                     el código de verificación sin
- *                                     resolver, la persona la cerró): la
- *                                     pendiente de ese nonce dice por qué y
- *                                     la persona vuelve a la pantalla con
+ *                                     resolver, la persona la cerró): si
+ *                                     la cookie de ESTE navegador trae ese
+ *                                     nonce, la pendiente dice por qué; la
+ *                                     persona vuelve a la pantalla con
  *                                     ?error=unipile_fallo&canal=….
+ *
+ * Conectar, reconectar y desconectar es de quien puede gestionar los
+ * canales (PUEDEN_GESTIONAR_CANALES: owner y admin). Los demás roles
+ * reciben 403: el buzón que se conecta escribe a las marcas en nombre de
+ * la creadora.
  *
  * Toda vuelta con error lleva ?canal=: el aviso de arriba nombra el
  * servicio y no repite lo que ya dice la fila de ese canal (banner.ts).
@@ -45,16 +59,23 @@
  * pantalla con ?error=no_configurado (texto de producto) y lo que falta
  * va al registro del servidor, nunca al navegador.
  *
+ * Si el callback de Google se deshace después de canjear el code, la
+ * concesión recién emitida se revoca, salvo que el buzón esté vivo en
+ * algún espacio (revocar tumba la concesión entera de esa persona con
+ * nuestro cliente: también la de ese espacio). Lo dice
+ * outreach_channel_connect (0042, in_use).
+ *
  * Ni el code ni los tokens tocan logs, URLs nuestras ni la cookie.
  */
 import {
-  EncryptedSecretStore, GMAIL_REQUIRED_SCOPES, GOOGLE_STATE_TTL_MS, InMemoryOutreachCallLog, isOutreachApiError, newNonce, newSecretRef,
-  PostgresOutreachCallLog, shortScope, signChannelState, UNIPILE_STATE_TTL_MS, verifyChannelState, type OAuthTokens,
+  EncryptedSecretStore, GMAIL_REQUIRED_SCOPES, GOOGLE_STATE_TTL_MS, InMemoryOutreachCallLog, INTERACTIVE_BUDGET, isOutreachApiError, newNonce,
+  newSecretRef, PostgresOutreachCallLog, shortScope, signChannelState, UNIPILE_STATE_TTL_MS, verifyChannelState, type ChannelState,
+  type GoogleOAuthApi, type OAuthTokens,
 } from "@mc/connectors";
 import { getDefaultCreatorId, NoCreatorProfile, type WorkspaceTx } from "@mc/db";
 import {
   CHANNEL_ERROR_CODES, completeChannelConnection, createPendingChannelAccount, existingGmailSecretRef, failPendingChannelAccount,
-  getReconnectableUnipileAccount,
+  getReconnectableGmail, getReconnectableUnipileAccount,
 } from "@mc/db/queries/canales";
 import { MESSAGES } from "../messages";
 import type { ChannelErrorCode } from "./banner";
@@ -64,23 +85,44 @@ import { channelKeys, plain, readCookie, redirectTo, type ChannelDeps } from "./
 export const GOOGLE_COOKIE = "oc_canal";
 export const GOOGLE_COOKIE_PATH = "/api/oauth/google";
 export const CANALES = "/ventas/canales";
+/** La cookie de la hosted auth de Unipile: ata la vuelta fallida (?fallo=<nonce>) a ESTE navegador. */
+export const UNIPILE_COOKIE = "oc_canal_unipile";
+export const UNIPILE_COOKIE_PATH = `${CANALES}/conectar`;
 
 export type { ChannelErrorCode };
 
 const back = (req: Request, code: ChannelErrorCode, headers: Record<string, string> = {}, channel?: Channel) =>
   redirectTo(req, `${CANALES}?error=${code}${channel ? `&canal=${channel}` : ""}`, headers);
 
-/** Lanzar esto dentro de la transacción la deshace entera (el token y la fila), y el callback responde con `code`. */
+/**
+ * Lanzar esto dentro de la transacción la deshace entera (el token y la
+ * fila), y el callback responde con `code`. `inUse`: el buzón está vivo en
+ * algún espacio (outreach_channel_connect, 0042): su concesión no se revoca.
+ */
 class RollbackConnection extends Error {
-  constructor(readonly code: ChannelErrorCode) {
+  constructor(readonly code: ChannelErrorCode, readonly inUse = true) {
     super(code);
   }
 }
 
-function cookie(value: string, maxAgeS: number, secure: boolean): string {
-  const parts = [`${GOOGLE_COOKIE}=${value}`, `Path=${GOOGLE_COOKIE_PATH}`, "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeS}`];
+function cookie(value: string, maxAgeS: number, secure: boolean, name = GOOGLE_COOKIE, path = GOOGLE_COOKIE_PATH): string {
+  const parts = [`${name}=${value}`, `Path=${path}`, "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeS}`];
   if (secure) parts.push("Secure");
   return parts.join("; ");
+}
+
+/** Conectar o desconectar sin el rol: 403 con una frase de producto (el botón ni siquiera se ofrece). */
+const forbidden = () => plain(403, MESSAGES.routes.forbidden);
+
+/** El formulario del botón, o uno vacío si no se mandó ninguno; null si el cuerpo dice ser un formulario y no lo es. */
+async function optionalForm(req: Request): Promise<FormData | null> {
+  const type = req.headers.get("content-type") ?? "";
+  if (!type.includes("form")) return new FormData();
+  try {
+    return await req.formData();
+  } catch {
+    return null;
+  }
 }
 
 /** Sin llaves: lo que falta va al registro del servidor y la persona vuelve a la pantalla con un texto de producto. */
@@ -117,7 +159,10 @@ async function begin(
       return { creatorId: id, reconnectAccountId };
     });
     if (!started) return { error: "vencida" };
-    return { state: signChannelState({ workspaceId, creatorId: started.creatorId, channel, nonce }, stateKey, now), nonce, reconnectAccountId: started.reconnectAccountId };
+    const payload: ChannelState = { workspaceId, creatorId: started.creatorId, channel, nonce };
+    // Reconectar firma la cuenta que se reconecta: el aviso de vuelta tiene que traer esa y no otra.
+    if (started.reconnectAccountId) payload.reconnectAccountId = started.reconnectAccountId;
+    return { state: signChannelState(payload, stateKey, now), nonce, reconnectAccountId: started.reconnectAccountId };
   } catch (err) {
     if (err instanceof NoCreatorProfile) return { error: "sin_creador" };
     throw err;
@@ -126,16 +171,25 @@ async function begin(
 
 export async function googleStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
+  if (!(await deps.canManage())) return forbidden();
+  const form = await optionalForm(req);
+  if (!form) return plain(400, MESSAGES.routes.badForm);
   const missing = missingFor("email", deps.env);
   const keys = channelKeys(deps.env);
   if (missing.length > 0 || !keys || !deps.google) return notConfigured(req, "email", missing);
+  // Reconectar: Google propone el buzón de ESA fila (leído en el servidor, con RLS). Una fila ajena no da pista ninguna.
+  const raw = form.get("reconectar");
+  const loginHint = typeof raw === "string" && raw !== ""
+    ? ((await deps.withWorkspace((tx) => getReconnectableGmail(tx, raw))) ?? undefined)
+    : undefined;
   const started = await begin(deps, "email", keys.sign.state);
   if ("error" in started) return back(req, started.error, {}, "email");
   const google = deps.google(new InMemoryOutreachCallLog(), await deps.origin(req));
   const secure = deps.env["NODE_ENV"] === "production";
+  const location = google.authorizationUrl(started.state, { loginHint, selectAccount: form.get("otra") === "1" });
   return new Response(null, {
     status: 303,
-    headers: { Location: google.authorizationUrl(started.state), "Set-Cookie": cookie(started.nonce, GOOGLE_STATE_TTL_MS / 1000, secure) },
+    headers: { Location: location, "Set-Cookie": cookie(started.nonce, GOOGLE_STATE_TTL_MS / 1000, secure) },
   });
 }
 
@@ -198,20 +252,34 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
       const ref = (await existingGmailSecretRef(tx, email)) ?? newSecretRef("gmail");
       await new EncryptedSecretStore({ db: tx, cipher: keys.cipher }).set(ref, tokens);
       const r = await completeChannelConnection(tx, { channel: "email", nonce: state.nonce, providerAccountId: email, displayName: email, secretRef: ref, scopes });
-      if (r.status === "taken") throw new RollbackConnection("ocupada");
-      if (r.status === "unknown_state") throw new RollbackConnection("vencida");
+      // Vivo en otro espacio: su concesión es la de ese espacio (in_use). No se revoca.
+      if (r.status === "taken") throw new RollbackConnection("ocupada", r.inUse);
+      if (r.status === "unknown_state") throw new RollbackConnection("vencida", r.inUse);
       // El worker está soltando ese mismo Gmail (revoca en Google): el token nuevo moriría con el viejo. Se deshace todo.
-      if (r.status === "releasing") throw new RollbackConnection("soltando");
+      if (r.status === "releasing") throw new RollbackConnection("soltando", r.inUse);
+      if (r.status !== "connected") throw new RollbackConnection("vencida");
       await log.flushTo(new PostgresOutreachCallLog(tx), r.accountId);
     });
   } catch (err) {
     if (!(err instanceof RollbackConnection)) throw err;
+    // La concesión que Google acaba de emitir no la guarda nadie: se revoca, salvo que ese buzón siga vivo en algún espacio.
+    if (!err.inUse) await revokeQuietly(google, tokens);
     // 'vencida': la pendiente ya no existe o ya se usó; no hay nada que marcar.
     const reason = err.code === "ocupada" ? CHANNEL_ERROR_CODES.taken : err.code === "soltando" ? CHANNEL_ERROR_CODES.releasing : null;
     await flushAndFail(deps, log, state.nonce, reason);
     return backEmail(err.code);
   }
   return redirectTo(req, `${CANALES}?conectado=email`, headers);
+}
+
+/** Revocar la concesión recién emitida, a mejor esfuerzo: la llamada queda en la bitácora; si falla, no cambia la respuesta. */
+async function revokeQuietly(google: GoogleOAuthApi, tokens: OAuthTokens): Promise<void> {
+  try {
+    await google.revoke(tokens);
+  } catch (err) {
+    if (!isOutreachApiError(err)) throw err;
+    console.warn("[canales] no se pudo revocar en Google una concesión que no se guardó", { code: err.code });
+  }
 }
 
 /** Lo que se llamó queda en la bitácora aunque la conexión no se complete; con `code` (CHANNEL_ERROR_CODES), la pendiente dice por qué. */
@@ -226,9 +294,12 @@ async function flushAndFail(deps: ChannelDeps, log: InMemoryOutreachCallLog, non
  * LinkedIn o Instagram: al enlace de hosted auth de Unipile. `reconectar`
  * es el id de NUESTRA fila (outreach_channel_account) de una cuenta caída;
  * el account_id de Unipile sale de la base con RLS, nunca del formulario.
+ * Pedir el enlace lleva el presupuesto interactivo: la persona espera con
+ * «Abriendo…».
  */
 export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
+  if (!(await deps.canManage())) return forbidden();
   let form: FormData;
   try {
     form = await req.formData();
@@ -237,7 +308,8 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
     return plain(400, MESSAGES.routes.badForm);
   }
   const channel = form.get("canal");
-  if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "no_configurado");
+  // Un canal inventado no es «todavía no disponible»: es un formulario que el botón nunca manda.
+  if (channel !== "linkedin" && channel !== "instagram_dm") return plain(400, MESSAGES.routes.badForm);
   const missing = missingFor(channel, deps.env);
   const keys = channelKeys(deps.env);
   if (missing.length > 0 || !keys || !deps.unipile) return notConfigured(req, channel, missing);
@@ -254,12 +326,13 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
       channel, state: started.state, reconnectAccountId: started.reconnectAccountId,
       notifyUrl: `${origin}/api/webhooks/unipile`,
       successRedirectUrl: `${origin}${CANALES}?conectado=${channel}`,
-      // Su página terminó sin cuenta: la vuelta pasa por unipileFailure, que marca ESTA pendiente (por su nonce).
+      // Su página terminó sin cuenta: la vuelta pasa por unipileFailure, que marca ESTA pendiente (por su nonce y la cookie).
       failureRedirectUrl: `${origin}${CANALES}/conectar?fallo=${started.nonce}&canal=${channel}`,
       expiresOn: new Date(now.getTime() + UNIPILE_STATE_TTL_MS),
-    });
+    }, INTERACTIVE_BUDGET);
     await deps.withWorkspace((tx) => log.flushTo(new PostgresOutreachCallLog(tx), null));
-    return redirectTo(req, url);
+    const secure = deps.env["NODE_ENV"] === "production";
+    return redirectTo(req, url, { "Set-Cookie": cookie(started.nonce, UNIPILE_STATE_TTL_MS / 1000, secure, UNIPILE_COOKIE, UNIPILE_COOKIE_PATH) });
   } catch (err) {
     if (!isOutreachApiError(err)) throw err;
     // El texto del proveedor (err.messageEs, en inglés) queda en api_call_log; a la fila, el código.
@@ -274,18 +347,21 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
 /**
  * La vuelta de Unipile cuando su página de conexión termina sin cuenta
  * (failure_redirect_url). La pendiente de ese nonce, en el espacio de la
- * sesión (RLS) y del canal, pasa a 'disconnected' con auth_failed: la
- * fila deja de decir «Conectando» y dice qué revisar. El nonce solo sirve
- * para marcar como fallida SU pendiente: no conecta nada (eso pide el
- * estado firmado del aviso de Unipile).
+ * sesión (RLS) y del canal, pasa a 'disconnected' con auth_failed, pero
+ * SOLO si este navegador es el que empezó ese intento (la cookie de
+ * unipileStart trae el mismo nonce): un enlace con el nonce abierto en
+ * otro sitio no cambia nada. El nonce solo sirve para marcar como fallida
+ * SU pendiente: no conecta nada (eso pide el estado firmado del aviso).
  */
 export async function unipileFailure(req: Request, deps: ChannelDeps): Promise<Response> {
   const params = new URL(req.url).searchParams;
   const channel = params.get("canal");
-  if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "unipile_fallo");
+  const secure = deps.env["NODE_ENV"] === "production";
+  const clear = { "Set-Cookie": cookie("", 0, secure, UNIPILE_COOKIE, UNIPILE_COOKIE_PATH) };
+  if (channel !== "linkedin" && channel !== "instagram_dm") return back(req, "unipile_fallo", clear);
   const nonce = params.get("fallo");
-  if (nonce) {
+  if (nonce && readCookie(req, UNIPILE_COOKIE) === nonce) {
     await deps.withWorkspace((tx) => failPendingChannelAccount(tx, { channel, nonce, code: CHANNEL_ERROR_CODES.authFailed }));
   }
-  return back(req, "unipile_fallo", {}, channel);
+  return back(req, "unipile_fallo", clear, channel);
 }

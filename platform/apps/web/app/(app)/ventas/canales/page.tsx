@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
-import { getChannelPolicyCaps, listChannelAccounts } from "@mc/db/queries/canales";
+import { getChannelPolicyCaps, isLiveChannelStatus, listChannelAccounts } from "@mc/db/queries/canales";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
 import { getDbMode, withWorkspace } from "@/lib/db";
@@ -9,9 +9,10 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { Aviso } from "../../_lib/aviso";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { channelBanner } from "./_lib/banner";
-import { channelSetup, type Channel } from "./_lib/config";
+import { channelSetup, isChannel, type Channel } from "./_lib/config";
 import { CANALES } from "./_lib/conexion";
 import { channelRows, pillFor, type ChannelRowView } from "./_lib/filas";
+import { puedeGestionarCanales } from "./_lib/server";
 import { AvisoConexion } from "./aviso-conexion";
 import { ConectarBoton } from "./conectar-boton";
 import { Desconectar } from "./desconectar";
@@ -24,8 +25,6 @@ import { ReintentarAvisos } from "./reintentar-avisos";
 export const metadata: Metadata = { title: MESSAGES.meta.title };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
-
-const LIVE_STATES = new Set(["connected", "needs_reconnect", "error"]);
 
 const accountName = (a: ChannelAccountRow) => a.displayName ?? a.providerAccountId ?? "";
 
@@ -49,10 +48,17 @@ function warnMissingOnce(rows: readonly ChannelRowView[]): void {
   }
 }
 
-/** El botón que abre la conexión de un canal: el correo va a Google, LinkedIn e Instagram a Unipile. */
-function connectTarget(channel: Channel, reconnectId?: string): { action: string; fields: Record<string, string> } {
-  if (channel === "email") return { action: "/api/oauth/google", fields: {} };
-  return { action: `${CANALES}/conectar`, fields: reconnectId ? { canal: channel, reconectar: reconnectId } : { canal: channel } };
+/**
+ * El botón que abre la conexión de un canal: el correo va a Google,
+ * LinkedIn e Instagram a Unipile. Reconectar manda el id de NUESTRA fila
+ * (el servidor lee el buzón o la cuenta: Google propone ese buzón con
+ * login_hint); «Conectar otra cuenta» del correo manda otra=1 para que
+ * Google pregunte qué cuenta en vez de autorizar sola la sesión abierta.
+ */
+function connectTarget(channel: Channel, opts: { reconnectId?: string; another?: boolean } = {}): { action: string; fields: Record<string, string> } {
+  const extra: Record<string, string> = opts.reconnectId ? { reconectar: opts.reconnectId } : {};
+  if (channel === "email") return { action: "/api/oauth/google", fields: { ...extra, ...(opts.another ? { otra: "1" } : {}) } };
+  return { action: `${CANALES}/conectar`, fields: { canal: channel, ...extra } };
 }
 
 /**
@@ -64,16 +70,19 @@ function connectTarget(channel: Channel, reconnectId?: string): { action: string
  * servidor, sin salir de la página. Sin llaves, el botón sigue ahí pero
  * deshabilitado, con el motivo en su nombre accesible.
  */
-function RowAction({ row }: { row: ChannelRowView }) {
+function RowAction({ row, canManage }: { row: ChannelRowView; canManage: boolean }) {
   if (!row.action) return null;
   const label = row.action === "connect" ? MESSAGES.actions.connect : row.action === "reconnect" ? MESSAGES.actions.reconnect : MESSAGES.actions.retry;
-  const a11y = row.unavailable ? MESSAGES.actions.unavailableLabel(label, MESSAGES.detail.unavailable) : undefined;
+  // Deshabilitado con el motivo en su nombre accesible: sin llaves en la plataforma, o sin el rol para gestionar canales.
+  const why = row.unavailable ? MESSAGES.detail.unavailable : !canManage ? MESSAGES.detail.readOnly : null;
+  const a11y = why ? MESSAGES.actions.unavailableLabel(label, why) : undefined;
+  const disabled = why !== null;
   if (row.action === "rewebhook" && row.account) {
-    return <ReintentarAvisos accountId={row.account.id} disabled={row.unavailable} ariaLabel={a11y} />;
+    return <ReintentarAvisos accountId={row.account.id} disabled={disabled} ariaLabel={a11y} />;
   }
   const variant = row.action === "reconnect" ? "primary" : "secondary";
-  const { action, fields } = connectTarget(row.channel, row.action === "reconnect" ? row.account?.id : undefined);
-  return <ConectarBoton action={action} fields={fields} label={label} variant={variant} disabled={row.unavailable} ariaLabel={a11y} />;
+  const { action, fields } = connectTarget(row.channel, { reconnectId: row.action === "reconnect" ? row.account?.id : undefined });
+  return <ConectarBoton action={action} fields={fields} label={label} variant={variant} disabled={disabled} ariaLabel={a11y} />;
 }
 
 /**
@@ -94,7 +103,12 @@ function unavailableText(row: ChannelRowView, quiet: boolean): string | null {
 function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails: boolean; quiet: boolean }) {
   const provider = MESSAGES.channels[row.channel].provider;
   const lines: { key: string; text: string; tone: "fg" | "warn" }[] = [];
-  if (row.state === "pending") lines.push({ key: "p", tone: "fg", text: row.channel === "email" ? MESSAGES.detail.pendingHint.email : MESSAGES.detail.pendingHint.unipile(provider) });
+  if (row.state === "pending") {
+    // Si ya volvió de la página del proveedor, no se le pide terminar algo que terminó: se espera la confirmación.
+    const hint = row.channel === "email" ? MESSAGES.detail.pendingHint.email
+      : row.returned ? MESSAGES.detail.pendingHint.returned(provider) : MESSAGES.detail.pendingHint.unipile(provider);
+    lines.push({ key: "p", tone: "fg", text: hint });
+  }
   if (row.state === "expired") lines.push({ key: "e", tone: "fg", text: row.channel === "email" ? MESSAGES.detail.expiredHint.email : MESSAGES.detail.expiredHint.unipile(provider) });
   const unavailable = unavailableText(row, quiet);
   if (unavailable) lines.push({ key: "u", tone: "warn", text: unavailable });
@@ -157,18 +171,23 @@ function Manage({ row, live, f }: { row: ChannelRowView; live: ChannelAccountRow
  * demás cuentas no lo repiten.
  */
 function AccountLine({
-  row, f, adminDetails, heading, quiet,
-}: { row: ChannelRowView; f: Formatter; adminDetails: boolean; heading: { id: string; text: string } | null; quiet: boolean }) {
+  row, f, adminDetails, heading, quiet, canManage,
+}: { row: ChannelRowView; f: Formatter; adminDetails: boolean; heading: { id: string; text: string } | null; quiet: boolean; canManage: boolean }) {
   const t = MESSAGES.channels[row.channel];
   const pill = pillFor(row);
-  const live = row.account && LIVE_STATES.has(row.state) ? row.account : null;
+  const live = row.account && isLiveChannelStatus(row.state) ? row.account : null;
   const name = live ? accountName(live) : null;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
           {heading && (
-            <h3 id={heading.id} tabIndex={-1} className="text-sm font-semibold">
+            // Recibe el foco al desconectar (FilaCanal): sin anillo al ratón, y con teclado uno pegado al texto, no a la fila.
+            <h3
+              id={heading.id}
+              tabIndex={-1}
+              className="w-fit rounded-sm text-sm font-semibold outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
               {heading.text}
             </h3>
           )}
@@ -181,17 +200,23 @@ function AccountLine({
             <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-fg-2">
               <span className="whitespace-nowrap">{MESSAGES.detail.usageToday(f.int(live.usedToday), f.int(live.limits.effectiveDaily))}</span>
               <span className="whitespace-nowrap">{MESSAGES.detail.usageWeek(f.int(live.usedThisWeek), f.int(live.limits.effectiveWeekly))}</span>
-              {live.lastOkAt && <span className="whitespace-nowrap text-fg-3">{MESSAGES.detail.lastOk(f.dateTime(live.lastOkAt.toISOString()))}</span>}
+              {live.lastOkAt && live.lastOkAgoS !== null && (
+                // En relativo («hace 2 horas»), como Vercel y Linear; la fecha completa, en el title. Sin nowrap: a 360 px envuelve.
+                <span className="min-w-0 break-words text-fg-3" title={f.dateTime(live.lastOkAt.toISOString())}>
+                  {MESSAGES.detail.lastOk(f.relative(-live.lastOkAgoS))}
+                </span>
+              )}
             </p>
           )}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Pill kind={pill.kind}>{pill.label}</Pill>
-          <RowAction row={row} />
+          <RowAction row={row} canManage={canManage} />
         </div>
       </div>
       <Hints row={row} adminDetails={adminDetails} quiet={quiet} />
-      {live && <Manage row={row} live={live} f={f} />}
+      {/* Límites y desconectar son de quien administra el espacio; los demás ven el uso y el tope en la línea de arriba. */}
+      {live && canManage && <Manage row={row} live={live} f={f} />}
     </div>
   );
 }
@@ -202,27 +227,34 @@ function AccountLine({
  * cuentas vivas en sub-filas y, si ya hay una viva, «Conectar otra
  * cuenta». FilaCanal (cliente) anuncia lo que pasa con sus cuentas.
  */
-function ChannelRow({ row, f, adminDetails, quiet }: { row: ChannelRowView; f: Formatter; adminDetails: boolean; quiet: boolean }) {
+function ChannelRow({
+  row, f, adminDetails, quiet, canManage,
+}: { row: ChannelRowView; f: Formatter; adminDetails: boolean; quiet: boolean; canManage: boolean }) {
   const channelName = MESSAGES.channels[row.channel].name;
-  const another = connectTarget(row.channel);
+  const another = connectTarget(row.channel, { another: true });
   return (
     <FilaCanal headingId={headingId(row.channel)}>
       <div className="flex items-start gap-3">
         <ChannelIcon channel={row.channel} />
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <AccountLine row={row} f={f} adminDetails={adminDetails} heading={{ id: headingId(row.channel), text: channelName }} quiet={quiet} />
+          <AccountLine
+            row={row} f={f} adminDetails={adminDetails} heading={{ id: headingId(row.channel), text: channelName }} quiet={quiet} canManage={canManage}
+          />
           {row.others.length > 0 && (
             <ul className="flex flex-col gap-3 border-l border-line pl-3" aria-label={MESSAGES.detail.otherAccounts(channelName)}>
               {row.others.map((other) => (
                 <li key={other.account?.id}>
-                  <AccountLine row={other} f={f} adminDetails={false} heading={null} quiet={quiet} />
+                  <AccountLine row={other} f={f} adminDetails={false} heading={null} quiet={quiet} canManage={canManage} />
                 </li>
               ))}
             </ul>
           )}
-          {row.addAnother && (
+          {row.addAnother && canManage && (
             <div>
-              <ConectarBoton action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false} />
+              {/* -ml-2.5: el texto del botón fantasma se alinea con el de la fila (su padding es px-2.5). */}
+              <ConectarBoton
+                action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false} className="-ml-2.5"
+              />
             </div>
           )}
         </div>
@@ -238,7 +270,8 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
     policy: await getChannelPolicyCaps(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
-  const rows = channelRows(accounts, channelSetup(process.env));
+  const canManage = await puedeGestionarCanales();
+  const rows = channelRows(accounts, channelSetup(process.env), { returnedFrom: isChannel(params.conectado) ? params.conectado : null });
   const banner = channelBanner(params, rows);
   // Qué falta en el servidor: al registro una vez por proceso; a la pantalla, solo en desarrollo y plegado.
   warnMissingOnce(rows);
@@ -251,14 +284,15 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
       <PageHeader eyebrow={MESSAGES.header.eyebrow} title={MESSAGES.header.title} description={MESSAGES.header.description} />
       <ModuleTabs active={CANALES} />
       <div className="flex flex-col gap-4">
-        <AvisoConexion message={banner.message} notice={banner.notice} refresh={banner.refresh} />
+        <AvisoConexion message={banner.message} notice={banner.notice} refresh={banner.refresh} slowNotice={banner.slowNotice} />
         {quiet && <p className="text-sm text-warn">{MESSAGES.detail.allUnavailable}</p>}
+        {!canManage && <p className="text-sm text-fg-2">{MESSAGES.detail.readOnly}</p>}
         {!policy.enabled && <p className="text-sm text-fg-2">{MESSAGES.policyOff}</p>}
         <section>
           <SectionTitle>{MESSAGES.section}</SectionTitle>
           <ul className="divide-y divide-line rounded-md border border-line bg-surface">
             {rows.map((row) => (
-              <ChannelRow key={row.channel} row={row} f={f} adminDetails={adminDetails} quiet={quiet} />
+              <ChannelRow key={row.channel} row={row} f={f} adminDetails={adminDetails} quiet={quiet} canManage={canManage} />
             ))}
           </ul>
         </section>

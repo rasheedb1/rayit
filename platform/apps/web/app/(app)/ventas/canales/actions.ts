@@ -1,67 +1,34 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { isUuid } from "@mc/db";
-import { ChannelCapError, disconnectChannelAccount, getChannelLimits, updateChannelAccountCaps } from "@mc/db/queries/canales";
 import { origenDeLaPeticion } from "@/lib/auth/origen";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import type { VentasState } from "../actions";
+import { disconnect, saveCaps, type ActionDeps, type AvisosState, type LimitesState } from "./_lib/acciones";
 import { retryAccountWebhooks } from "./_lib/aviso";
-import { channelDeps } from "./_lib/server";
+import { channelDeps, puedeGestionarCanales } from "./_lib/server";
 import { MESSAGES } from "./messages";
 
-/** El estado del formulario de límites: el de todo Ventas (useVentasForm), con errores por campo dailyCap y weeklyCap. */
-export type LimitesState = VentasState;
-
-export interface AvisosState {
-  message?: string;
-  notice?: string;
-}
-
-/** Vacío = sin límite propio (rige el máximo de la cuenta); si no, un entero. El máximo lo comprueba @mc/db. */
-function parseCap(raw: FormDataEntryValue | null): number | null | "invalid" {
-  const v = String(raw ?? "").trim();
-  if (v === "") return null;
-  if (!/^\d{1,6}$/.test(v)) return "invalid";
-  return Number(v);
-}
+export type { AvisosState, LimitesState };
 
 /**
- * Guarda los límites de una cuenta, nunca por encima de su máximo (el
- * menor entre la política del espacio y lo que aguanta el proveedor). El
- * máximo se lee en el servidor (outreach_channel_account_limits, 0040):
- * del formulario solo llegan el id y los dos números.
+ * Las acciones de servidor de /ventas/canales. Lo que hacen está en
+ * _lib/acciones.ts y _lib/aviso.ts, con sus dependencias inyectadas y sus
+ * pruebas; aquí solo se cablean las de verdad y se refresca la pantalla.
+ * Las tres comprueban el rol en el servidor (PUEDEN_GESTIONAR_CANALES).
  */
+const deps = (): ActionDeps => ({
+  canManage: puedeGestionarCanales,
+  withWorkspace,
+  format: async () => formatterFor(await getCurrentWorkspace()),
+});
+
+/** Guarda los límites de una cuenta, nunca por encima de su máximo (la vista de 0040). */
 export async function guardarLimites(_prev: LimitesState, formData: FormData): Promise<LimitesState> {
-  const accountId = String(formData.get("accountId") ?? "");
-  if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
-  const dailyCap = parseCap(formData.get("dailyCap"));
-  const weeklyCap = parseCap(formData.get("weeklyCap"));
-  const f = formatterFor(await getCurrentWorkspace());
-  if (dailyCap === "invalid" || weeklyCap === "invalid") {
-    const limits = await withWorkspace((tx) => getChannelLimits(tx, accountId));
-    if (!limits) return { message: MESSAGES.caps.notFound };
-    return {
-      errors: {
-        ...(dailyCap === "invalid" ? { dailyCap: MESSAGES.caps.invalid(f.int(limits.maxDaily)) } : {}),
-        ...(weeklyCap === "invalid" ? { weeklyCap: MESSAGES.caps.invalid(f.int(limits.maxWeekly)) } : {}),
-      },
-    };
-  }
-  try {
-    const ok = await withWorkspace((tx) => updateChannelAccountCaps(tx, accountId, { dailyCap, weeklyCap }));
-    if (!ok) return { message: MESSAGES.caps.notFound };
-  } catch (err) {
-    if (err instanceof ChannelCapError) {
-      const text = err.problem === "daily_above_weekly" ? MESSAGES.caps.dailyAboveWeekly(f.int(err.max)) : MESSAGES.caps.invalid(f.int(err.max));
-      return { errors: { [err.field]: text } };
-    }
-    throw err;
-  }
-  revalidatePath("/ventas/canales");
-  return { notice: MESSAGES.caps.saved };
+  const { saved, ...state } = await saveCaps(deps(), formData);
+  if (saved) revalidatePath("/ventas/canales");
+  return state;
 }
 
 /**
@@ -72,8 +39,8 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
  */
 export async function reactivarAvisos(formData: FormData): Promise<AvisosState> {
   const accountId = String(formData.get("accountId") ?? "");
-  if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
   const r = await retryAccountWebhooks(accountId, await origenDeLaPeticion(), channelDeps());
+  if (r === "forbidden") return { message: MESSAGES.detail.readOnly };
   revalidatePath("/ventas/canales");
   if (r === "restored") return { notice: MESSAGES.banners.webhooksRestored };
   if (r === "not_found") return { message: MESSAGES.caps.notFound };
@@ -82,18 +49,12 @@ export async function reactivarAvisos(formData: FormData): Promise<AvisosState> 
 }
 
 /**
- * Desconectar es de la persona: la fila queda 'disconnected' y pendiente
- * de soltar (0040). El worker (sales.channels_release, cada cinco
- * minutos) revoca el permiso de Google o borra la cuenta y sus avisos en
- * Unipile, que deja de cobrarla. Devuelve la confirmación con el nombre
- * de la cuenta (de la base, no del formulario): la pantalla la anuncia
- * en la fila del canal, donde queda el foco.
+ * Desconectar es de quien administra el espacio: la fila queda
+ * 'disconnected' y pendiente de soltar (0040); el worker la suelta en el
+ * proveedor. La confirmación la anuncia la fila del canal.
  */
 export async function desconectar(formData: FormData): Promise<AvisosState> {
-  const accountId = String(formData.get("accountId") ?? "");
-  if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
-  const done = await withWorkspace((tx) => disconnectChannelAccount(tx, accountId));
-  revalidatePath("/ventas/canales");
-  if (!done) return { message: MESSAGES.actions.alreadyDisconnected };
-  return { notice: MESSAGES.actions.disconnected(done.name) };
+  const { changed, ...state } = await disconnect(deps(), formData);
+  if (changed) revalidatePath("/ventas/canales");
+  return state;
 }

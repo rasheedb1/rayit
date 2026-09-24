@@ -433,6 +433,32 @@ export function formatRelativeDays(days: number, opts: LocaleOpts = {}): string 
 }
 
 /**
+ * Hace cuánto (o en cuánto), con la unidad que se lee de un vistazo, en el
+ * idioma del locale y con Intl: -40 → «hace 40 segundos», -7200 → «hace 2
+ * horas», -86400 → «ayer» (es) · «2 hours ago», «yesterday» (en). Recibe
+ * SEGUNDOS con signo (negativo es pasado) que ya trae la consulta, igual
+ * que formatRelativeDays recibe días: aquí no se restan fechas, solo se
+ * elige la unidad. Menos de un minuto es «ahora». Añadido por Ventas
+ * (VEN-9): «Comprobada hace 2 horas», como Vercel y Linear.
+ */
+export function formatRelativeSeconds(seconds: number, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  let rtf = relativeCache.get(locale);
+  if (!rtf) {
+    rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    relativeCache.set(locale, rtf);
+  }
+  const abs = Math.abs(seconds);
+  const sign = seconds < 0 ? -1 : 1;
+  if (abs < 60) return rtf.format(0, "second");
+  if (abs < 3600) return rtf.format(sign * Math.floor(abs / 60), "minute");
+  if (abs < 86_400) return rtf.format(sign * Math.floor(abs / 3600), "hour");
+  if (abs < 30 * 86_400) return rtf.format(sign * Math.floor(abs / 86_400), "day");
+  if (abs < 365 * 86_400) return rtf.format(sign * Math.floor(abs / (30 * 86_400)), "month");
+  return rtf.format(sign * Math.floor(abs / (365 * 86_400)), "year");
+}
+
+/**
  * @deprecated Usa `formatRelativeDays` (o `f.relativeDays`). Es el mismo
  * formato: se conserva el nombre para la columna «Vence» de Finanzas,
  * que lo llama como `f.daysRelative`. Antes escribía «hoy» y «en N días»
@@ -480,6 +506,8 @@ export function formatterFor(settings: FormatSettings) {
     zoneName: (tz: string = timeZone) => formatTimeZoneName(tz, base),
     /** «hace 3 días», «ayer», «hoy», «dentro de 2 días», en el idioma del workspace. Recibe días con signo (negativo es pasado). */
     relativeDays: (days: number) => formatRelativeDays(days, base),
+    /** «hace 2 horas», «hace 5 minutos», «ahora», en el idioma del workspace. Recibe segundos con signo (negativo es pasado). */
+    relative: (seconds: number) => formatRelativeSeconds(seconds, base),
     /** @deprecated Usa `relativeDays`: es la misma función (la columna «Vence» de Finanzas aún la llama así). */
     daysRelative: (days: number) => formatRelativeDays(days, base),
   };

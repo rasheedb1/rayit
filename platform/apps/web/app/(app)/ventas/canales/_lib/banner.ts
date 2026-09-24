@@ -10,7 +10,11 @@
  *   · la fila está conectada      → «quedó conectado», en verde;
  *   · la fila sigue conectándose  → «Estamos terminando de conectar tu
  *                                    LinkedIn…» y la pantalla se refresca
- *                                    sola unos segundos (refresh: true);
+ *                                    sola un minuto (refresh: true); si
+ *                                    el aviso no llega en ese minuto, la
+ *                                    frase cambia a `slowNotice` («LinkedIn
+ *                                    tarda en confirmar…»): nunca «estamos
+ *                                    terminando» para siempre;
  *   · cualquier otra cosa         → nada: la fila ya dice lo que pasa.
  *
  * Un ?error= conocido es el mensaje de error, con el nombre del servicio
@@ -30,9 +34,11 @@ export interface ChannelBanner {
   notice: string | null;
   /** La conexión todavía no terminó: refrescar la pantalla hasta que la fila cambie. */
   refresh: boolean;
+  /** Lo que dice el aviso cuando pasó el minuto de refrescos y la fila sigue sin confirmar. */
+  slowNotice: string | null;
 }
 
-const NONE: ChannelBanner = { message: null, notice: null, refresh: false };
+const NONE: ChannelBanner = { message: null, notice: null, refresh: false, slowNotice: null };
 
 export function isChannelErrorCode(v: unknown): v is ChannelErrorCode {
   return typeof v === "string" && Object.hasOwn(MESSAGES.banners.errors, v);
@@ -52,13 +58,13 @@ export function channelBanner(params: { conectado?: string; error?: string; cana
     const message = errorText(params.error, service);
     // La fila ya lo dice con las mismas palabras: no se repite arriba.
     if (row?.reason === message) return NONE;
-    return { message, notice: null, refresh: false };
+    return { ...NONE, message };
   }
   if (!isChannel(params.conectado)) return NONE;
   const channel = params.conectado;
   const row = rows.find((r) => r.channel === channel);
   const name = MESSAGES.channels[channel].provider;
-  if (row?.state === "connected") return { message: null, notice: MESSAGES.banners.connected(name), refresh: false };
-  if (row?.state === "pending") return { message: null, notice: MESSAGES.banners.finishing(name), refresh: true };
+  if (row?.state === "connected") return { ...NONE, notice: MESSAGES.banners.connected(name) };
+  if (row?.state === "pending") return { ...NONE, notice: MESSAGES.banners.finishing(name), refresh: true, slowNotice: MESSAGES.banners.finishingSlow(name) };
   return NONE;
 }

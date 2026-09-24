@@ -58,12 +58,12 @@ export function verifyChannelStateProof(
   now: Date,
   ttlMs: number,
   env: Env = process.env,
-): { proof: ProviderCallbackProof; state: ChannelState } | null {
+): { proof: ProviderCallbackProof; state: ChannelState; issuedAt: Date } | null {
   const keys = channelSigningKeysFromEnv(env);
   if (!keys) return null;
   const v = verifyChannelState(token, keys.state, now, ttlMs);
   if (!v.ok) return null;
-  return { proof: issue(v.payload.workspaceId, "channel_state"), state: v.payload };
+  return { proof: issue(v.payload.workspaceId, "channel_state"), state: v.payload, issuedAt: v.issuedAt };
 }
 
 /** La ruta firmada de un aviso de Unipile (cabecera x-on-cue-route). null si no es nuestra. */

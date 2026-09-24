@@ -24,8 +24,8 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  channelStateKey, dumpTextColumns, EncryptedSecretStore, FakeGmail, FakeUnipile, findSecretInDump, OutreachApiError, signChannelRoute,
-  signChannelState, TokenCipher, UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, withoutNetwork, type NetworkGuard,
+  channelStateKey, dumpTextColumns, EncryptedSecretStore, FakeGmail, FakeUnipile, findSecretInDump, INTERACTIVE_BUDGET, normalizeUnipileAccount,
+  OutreachApiError, signChannelRoute, signChannelState, TokenCipher, UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
 import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
@@ -37,7 +37,7 @@ import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, retryAccountWebhooks, unipileWebho
 import { channelSetup } from "./config";
 import { channelBanner } from "./banner";
 import { channelRows } from "./filas";
-import { GOOGLE_COOKIE, googleCallback, googleStart, unipileFailure, unipileStart } from "./conexion";
+import { GOOGLE_COOKIE, googleCallback, googleStart, UNIPILE_COOKIE, unipileFailure, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
 
 const NOW = new Date("2026-09-24T10:00:00Z");
@@ -59,7 +59,8 @@ const ENV = {
 let db: EmbeddedDb;
 let guard: NetworkGuard;
 const gmail = new FakeGmail({ now: () => NOW, email: "Laura.Alianzas@Gmail.test" });
-const unipile = new FakeUnipile();
+// Las cuentas nacen a la hora de la prueba: una cuenta de «crear» no puede ser más vieja que su estado firmado.
+const unipile = new FakeUnipile({ now: () => NOW });
 
 const withWorkspace = <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => db.withWorkspace(SEED_WORKSPACE_ID, fn);
 // Como lib/db: solo abre el espacio de una prueba emitida por una verificación de firma.
@@ -67,7 +68,7 @@ const withProviderCallback = <T,>(proof: ProviderCallbackProof, fn: (tx: Workspa
 
 function deps(over: Partial<ChannelDeps> = {}): ChannelDeps {
   return {
-    env: ENV, withWorkspace, withProviderCallback, currentWorkspaceId: async () => SEED_WORKSPACE_ID,
+    env: ENV, withWorkspace, withProviderCallback, currentWorkspaceId: async () => SEED_WORKSPACE_ID, canManage: async () => true,
     origin: async () => ORIGIN, google: () => gmail, unipile: () => unipile, now: () => NOW, ...over,
   };
 }
@@ -240,11 +241,20 @@ describe("el webhook de Unipile", () => {
     const link = unipile.hostedLinks.at(-1)!;
     expect(link.notifyUrl).toBe(`${ORIGIN}/api/webhooks/unipile`);
 
-    unipile.addAccount({ id: "acc_li_web", provider: "LINKEDIN", name: "Laura Gómez", username: "laura-gomez" });
+    // Como la devuelve Unipile tras NUESTRA hosted auth: el `name` de la cuenta es el estado firmado que le mandamos.
+    unipile.addAccount(normalizeUnipileAccount({
+      object: "Account", type: "LINKEDIN", id: "acc_li_web", name: link.state, created_at: NOW.toISOString(),
+      connection_params: { im: { id: "ACoAAB_laura_web", publicIdentifier: "laura-gomez", username: "Laura Gómez" } },
+      sources: [{ id: "acc_li_web_MESSAGING", status: "OK" }],
+    }));
     const notify = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_li_web", name: link.state }), deps());
     expect(notify.status).toBe(200);
     const li = (await accounts()).find((a) => a.providerAccountId === "acc_li_web")!;
     expect(li).toMatchObject({ status: "connected", displayName: "Laura Gómez", channel: "linkedin" });
+    // El nombre visible nunca es el estado: ni en la fila, ni en ninguna columna de texto de la base.
+    expect(li.displayName!.startsWith(link.state.slice(0, 12))).toBe(false);
+    const volcado = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(volcado, [link.state]), "el estado firmado no queda en la base").toBeNull();
     expect(unipile.webhooks.map((w) => [w.source, w.accountId])).toEqual([["messaging", "acc_li_web"], ["account_status", "acc_li_web"]]);
     const headers = unipile.webhooks[0]!.headers;
     expect(headers[UNIPILE_SECRET_HEADER]).toBe(SECRET);
@@ -256,6 +266,7 @@ describe("el webhook de Unipile", () => {
     const again = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_li_web", name: link.state }), deps());
     expect(await again.json()).toEqual({ ok: true, ignored: "unknown_state" });
     expect(unipile.webhooks.length, "no se dieron de alta avisos otra vez").toBe(2);
+    expect(unipile.deletedAccounts, "un aviso repetido no borra la cuenta que ya está viva").not.toContain("acc_li_web");
 
     // Un DM de un amigo en un chat donde no hay ningún toque nuestro: se ignora y su cuerpo no queda en la base.
     const amigo = await unipileWebhook(webhook({ ...MESSAGE("acc_li_web", "msg_amigo_1"), chat_id: "chat_de_un_amigo", message: "¿Cenamos el viernes?" }, headers), deps());
@@ -288,8 +299,9 @@ describe("el webhook de Unipile", () => {
     expect(caida.status).toBe(200);
     const caidaRow = (await accounts()).find((a) => a.id === li.id);
     expect(caidaRow?.status).toBe("needs_reconnect");
-    // La persona lee una frase; el código de Unipile no sale de la ruta.
-    expect(caidaRow?.lastError).toBe(MESSAGES.health.unipileStatus("CREDENTIALS", "LinkedIn"));
+    // En la base, un código; la pantalla lo traduce. La campana lleva la frase, sin el código crudo.
+    expect(caidaRow?.lastError).toBe("unipile_status:CREDENTIALS");
+    expect(channelRows([caidaRow!], channelSetup(ENV))[1]!.reason).toBe(MESSAGES.health.unipileStatus("CREDENTIALS", "LinkedIn"));
     const aviso = await db.queryAsSuperuser<{ title_es: string; body_es: string }>(`SELECT title_es, body_es FROM notification WHERE entity_id = $1`, [li.id]);
     expect(aviso.rows).toHaveLength(1);
     expect(JSON.stringify(aviso.rows)).not.toMatch(/CREDENTIALS/);
@@ -297,7 +309,18 @@ describe("el webhook de Unipile", () => {
     // Reconectar por el id de la fila: el account_id de Unipile sale de la base, no del formulario.
     const re = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin", reconectar: li.id }), deps());
     expect(re.status).toBe(303);
-    expect(unipile.hostedLinks.at(-1)!.reconnectAccountId).toBe("acc_li_web");
+    const relink = unipile.hostedLinks.at(-1)!;
+    expect(relink.reconnectAccountId).toBe("acc_li_web");
+    // El estado de una reconexión solo liga ESA cuenta: con otra del tenant, aunque sea nueva, se ignora.
+    unipile.addAccount({ id: "acc_li_otra_del_tenant", provider: "LINKEDIN", providerIdentity: "ACoAAB_otra" });
+    const otra = await unipileWebhook(webhook({ status: "RECONNECTED", account_id: "acc_li_otra_del_tenant", name: relink.state }), deps());
+    expect(await otra.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    expect((await accounts()).some((a) => a.providerAccountId === "acc_li_otra_del_tenant")).toBe(false);
+    expect(unipile.deletedAccounts, "lo que no es de este intento no se toca").not.toContain("acc_li_otra_del_tenant");
+    // Con la suya, sí: la fila vuelve a connected.
+    const ok = await unipileWebhook(webhook({ status: "RECONNECTED", account_id: "acc_li_web", name: relink.state }), deps());
+    expect(ok.status).toBe(200);
+    expect((await accounts()).find((a) => a.id === li.id)?.status).toBe("connected");
   }, HEAVY_MS);
 
   it("reconectar con un id ajeno, inventado o de otro canal no pide enlace a Unipile ni crea nada", async () => {
@@ -318,7 +341,7 @@ describe("el webhook de Unipile", () => {
   it("si el alta de los avisos falla, la cuenta queda conectada con webhooks_missing y «Volver a intentar» los da de alta", async () => {
     await unipileStart(post("/ventas/canales/conectar", { canal: "instagram_dm" }), deps());
     const link = unipile.hostedLinks.at(-1)!;
-    unipile.addAccount({ id: "acc_ig_sorda", provider: "INSTAGRAM", name: "@laura.sorda" });
+    unipile.addAccount({ id: "acc_ig_sorda", provider: "INSTAGRAM", displayName: "laura.sorda" });
     unipile.failNext("createWebhook", "transient", "errors/service_unavailable", 503);
     const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_sorda", name: link.state }), deps());
     expect(res.status).toBe(200);
@@ -339,13 +362,16 @@ describe("el webhook de Unipile", () => {
     expect(await retryAccountWebhooks("00000009-0000-4000-8000-0000000ac0f9", ORIGIN, deps())).toBe("not_found");
   }, HEAVY_MS);
 
-  it("una cuenta de Instagram donde se pidió LinkedIn no se conecta", async () => {
+  it("una cuenta de Instagram donde se pidió LinkedIn no se conecta, y se borra en Unipile (no se queda cobrando)", async () => {
     await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), deps());
     const link = unipile.hostedLinks.at(-1)!;
     unipile.addAccount({ id: "acc_ig_web", provider: "INSTAGRAM" });
     const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_web", name: link.state }), deps());
     expect(await res.json()).toEqual({ ok: true, ignored: "wrong_provider" });
     expect((await accounts()).some((a) => a.lastError === "wrong_provider")).toBe(true);
+    expect(unipile.deletedAccounts).toContain("acc_ig_web");
+    // Con la bitácora: el borrado quedó en api_call_log (el doble no escribe, pero la llamada se registró en su lista).
+    expect(unipile.calls.some((c) => c.method === "deleteAccount" && (c.args as { accountId: string }).accountId === "acc_ig_web")).toBe(true);
   }, HEAVY_MS);
 });
 
@@ -376,12 +402,14 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     expect(channelBanner({ error: "proveedor", canal: "instagram_dm" }, rows).message).toBeNull();
   }, HEAVY_MS);
 
-  it("un cuerpo que no es de formulario responde 400 sin tocar la base, no un 500", async () => {
+  it("un cuerpo que no es de formulario, o un canal inventado, responde 400 sin tocar la base (ni «no disponible», que sería falso)", async () => {
     const antes = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
     const json = new Request(`${ORIGIN}/ventas/canales/conectar`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canal: "linkedin" }) });
     const res = await unipileStart(json, deps());
     expect(res.status).toBe(400);
     expect(await res.text()).toBe(MESSAGES.routes.badForm);
+    const inventado = await unipileStart(post("/ventas/canales/conectar", { canal: "fax" }), deps());
+    expect([inventado.status, await inventado.text()]).toEqual([400, MESSAGES.routes.badForm]);
     expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(antes);
   }, HEAVY_MS);
 
@@ -399,8 +427,15 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     const deEsteIntento = async () => (await accounts()).filter((a) => a.channel === "linkedin" && !["connected", "needs_reconnect", "error"].includes(a.status))[0]!;
     expect((await deEsteIntento()).status).toBe("pending");
 
-    const res = await unipileFailure(new Request(failure), deps());
+    // Sin la cookie de ESTE navegador (un enlace con el nonce abierto en otro sitio), no se toca nada.
+    const ajeno = await unipileFailure(new Request(failure), deps());
+    expect(ajeno.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=unipile_fallo&canal=linkedin`);
+    expect((await deEsteIntento()).status, "un GET sin la cookie no cambia estado").toBe("pending");
+    const cookie = new RegExp(`${UNIPILE_COOKIE}=([^;]*)`).exec(start.headers.get("set-cookie") ?? "")![1]!;
+    expect(cookie).toBe(failure.searchParams.get("fallo"));
+    const res = await unipileFailure(new Request(failure, { headers: { cookie: `${UNIPILE_COOKIE}=${cookie}` } }), deps());
     expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=unipile_fallo&canal=linkedin`);
+    expect(res.headers.get("set-cookie")).toMatch(/Max-Age=0/);
     const fallida = await deEsteIntento();
     expect([fallida.status, fallida.lastError]).toEqual(["disconnected", "auth_failed"]);
     const sinVivas = channelRows([fallida], channelSetup(ENV)).find((r) => r.channel === "linkedin")!;

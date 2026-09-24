@@ -50,6 +50,19 @@ export type OutreachChannel = (typeof OUTBOUND_CHANNELS)[number];
 export type ChannelProvider = (typeof CHANNEL_PROVIDERS)[number];
 export type ChannelAccountStatus = (typeof CHANNEL_ACCOUNT_STATUSES)[number];
 
+/**
+ * Los estados VIVOS de una cuenta (autenticada: conectada, por reconectar
+ * o con error), el mismo vocabulario que el índice global de 0037 §2. La
+ * pantalla lo importa de aquí: una sola lista para la base y la web.
+ */
+export { LIVE_CHANNEL_ACCOUNT_STATUSES };
+export type LiveChannelAccountStatus = (typeof LIVE_CHANNEL_ACCOUNT_STATUSES)[number];
+const LIVE_SET: ReadonlySet<string> = new Set(LIVE_CHANNEL_ACCOUNT_STATUSES);
+
+export function isLiveChannelStatus(status: string): status is LiveChannelAccountStatus {
+  return LIVE_SET.has(status);
+}
+
 /** El prefijo del provider_account_id de una fila de Unipile que todavía no tiene cuenta. */
 export const PENDING_ACCOUNT_PREFIX = 'pending:';
 /**
