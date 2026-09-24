@@ -18,13 +18,15 @@ import type { OutreachAlertKind } from '@mc/core/outreach/deliverability';
 /**
  * Adónde lleva cada alerta. Todas a /ventas/politica, que trae el bloque
  * «Salud de hoy» (outbound_health y los últimos rebotes) y el
- * presupuesto; account_down, a /ventas/canales cuando VEN-9 integre esa
- * pantalla: se cambia AQUÍ (CANALES_URL) y en nada más.
+ * presupuesto. account_down lleva a la lista de cuentas caídas de esa
+ * misma pantalla (#cuentas: cuál es, qué dijo el proveedor y qué hacer),
+ * y a /ventas/canales cuando VEN-9 integre esa pantalla, donde se
+ * reconecta: se cambia AQUÍ (CANALES_URL) y en nada más.
  */
 export const SALUD_URL = '/ventas/politica#salud';
 export const PRESUPUESTO_URL = '/ventas/politica#presupuesto';
-/** Hasta que /ventas/canales (VEN-9) esté integrada, la salud; después, '/ventas/canales'. */
-export const CANALES_URL = SALUD_URL;
+/** Hasta que /ventas/canales (VEN-9) esté integrada, las cuentas caídas de la política; después, '/ventas/canales'. */
+export const CANALES_URL = '/ventas/politica#cuentas';
 
 export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
   bounce_rate: SALUD_URL,
@@ -36,12 +38,24 @@ export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
 
 export interface AlertTexts {
   alerts: Record<OutreachAlertKind, { title: string; body: string }>;
+  /**
+   * Cómo se nombra una cuenta caída en {accounts}: «LinkedIn: Laura ·
+   * Cocina fácil». Si no se sabe cuáles son (una salud de fixture), el
+   * número: una o varias.
+   */
+  accounts: {
+    channel: Record<'email' | 'linkedin' | 'instagram_dm' | 'whatsapp', string>;
+    one: string;
+    many: string;
+  };
   email: {
     subject: string;
     subjectOne: string;
     intro: string;
     /** El enlace de cada alerta, debajo de su texto. */
     link: string;
+    /** Sin APP_URL no hay enlaces: dónde verlo, en una línea. */
+    whereToSee: string;
     outro: string;
   };
 }
@@ -62,18 +76,24 @@ export const ALERT_TEXTS_ES: AlertTexts = {
     },
     account_down: {
       title: 'Una cuenta de envío necesita atención',
-      body: '{accountsDown} cuentas de canal están caídas o piden reconectar. Mientras tanto no sale nada por ellas.',
+      body: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué dijo el proveedor y qué hacer.',
     },
     llm_budget: {
       title: 'Se agotó el presupuesto diario de redacción',
       body: 'Se gastaron {spentToday} de {dailyCap} hoy. Los mensajes nuevos esperan a mañana; lo aprobado sigue saliendo.',
     },
   },
+  accounts: {
+    channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
+    one: 'una cuenta de canal',
+    many: '{n} cuentas de canal',
+  },
   email: {
     subject: 'On Cue · {n} alertas del outreach de {workspace}',
     subjectOne: 'On Cue · Una alerta del outreach de {workspace}',
     intro: 'Esto es lo que vimos en el outreach de {workspace}:',
     link: 'Revísalo: {url}',
+    whereToSee: 'Lo ves en On Cue, en Ventas → Política de envío.',
     outro: 'Te escribimos porque eres dueño de este espacio en On Cue.',
   },
 };
@@ -94,18 +114,24 @@ export const ALERT_TEXTS_EN: AlertTexts = {
     },
     account_down: {
       title: 'A sending account needs attention',
-      body: '{accountsDown} channel accounts are down or need to reconnect. Nothing goes out through them until then.',
+      body: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what the provider said and what to do.',
     },
     llm_budget: {
       title: 'The daily writing budget is used up',
       body: '{spentToday} of {dailyCap} spent today. New messages wait until tomorrow; approved ones keep going out.',
     },
   },
+  accounts: {
+    channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
+    one: 'one channel account',
+    many: '{n} channel accounts',
+  },
   email: {
     subject: 'On Cue · {n} outreach alerts for {workspace}',
     subjectOne: 'On Cue · One outreach alert for {workspace}',
     intro: "Here's what we saw in {workspace}'s outreach:",
     link: 'Review it: {url}',
+    whereToSee: 'You can see it in On Cue, under Sales → Sending policy.',
     outro: "You're receiving this because you own this workspace on On Cue.",
   },
 };

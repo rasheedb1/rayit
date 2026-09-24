@@ -8,8 +8,9 @@
  * siguiente con cartero, aunque sea otro día; si el correo falla no se
  * marca nada y nadie lo recibe dos veces; el día siguiente vuelve a
  * avisar; antes de la hora local no se revisa; un workspace en inglés lo
- * recibe en inglés; cada alerta lleva su enlace; y con la base real
- * (outbound_health) una cuenta por reconectar produce su alerta.
+ * recibe en inglés; cada alerta lleva su enlace; con la base real
+ * (outbound_health) una cuenta por reconectar produce su alerta, que dice
+ * cuál es; y sin APP_URL el resumen sale sin enlaces y el job lo avisa.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +19,8 @@ import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import type { Mailer, MailMessage } from '../src/jobs/ventas/correo.ts';
 import { ALERTAS_URL, SALUD_URL } from '../src/jobs/ventas/messages.ts';
-import { ALERTAS_JOB_ID, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
+import { ALERTAS_JOB_ID, createAlertasJob, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
+import type { JobContext } from '../src/runner/registry.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase } from './helpers/harness.ts';
 
@@ -85,9 +87,9 @@ after(async () => {
 
 async function avisos(ws: string) {
   const { rows } = await db.raw.query<{
-    kind: string; severity: string; title_es: string; action_url: string; emailed_at: string | null;
+    kind: string; severity: string; title_es: string; body_es: string | null; action_url: string; emailed_at: string | null;
   }>(
-    `SELECT kind, severity, title_es, action_url, emailed_at::text FROM notification WHERE workspace_id = '${ws}' ORDER BY created_at, kind`,
+    `SELECT kind, severity, title_es, body_es, action_url, emailed_at::text FROM notification WHERE workspace_id = '${ws}' ORDER BY created_at, kind`,
   );
   return rows;
 }
@@ -154,13 +156,16 @@ test('al día siguiente, si sigue mal, vuelve a avisar', async () => {
 
 test('con la base real: una cuenta por reconectar da su alerta (outbound_health)', async () => {
   await db.raw.exec(`
-    INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
-    VALUES ('${WS_REAL}', 'linkedin', 'unipile', 'unipile-real-1', 'needs_reconnect');
+    INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, display_name, status)
+    VALUES ('${WS_REAL}', 'linkedin', 'unipile', 'unipile-real-1', 'Creador Real', 'needs_reconnect');
   `);
   const r = await runAlertas(db, NOW, { mailer: null, appUrl: 'http://x.test' });
   assert.equal(r.created.account_down, 1);
   const real = await avisos(WS_REAL);
   assert.deepEqual(real.map((a) => a.kind), ['outreach_account_down']);
+  // Dice CUÁL es, y lleva a donde se ve qué dijo el proveedor (no a una pantalla que no la nombra).
+  assert.match(real[0]?.body_es ?? '', /No sale nada por LinkedIn: Creador Real hasta que se reconecte/);
+  assert.equal(real[0]?.action_url, '/ventas/politica#cuentas');
 });
 
 test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al día siguiente en un solo correo', async () => {
@@ -204,4 +209,43 @@ test('un workspace en inglés recibe la campana y el correo en inglés', async (
   assert.match(correo?.text ?? '', /3 of 20 emails sent in the last 24 hours bounced/);
   const en = await avisos(WS_EN);
   assert.ok(en.some((a) => /^Too many emails are bouncing: 15\s?%$/.test(a.title_es)));
+});
+
+test('sin APP_URL el job lo avisa en el registro y el resumen sale sin enlaces (nada de localhost)', async () => {
+  const WS_SIN_URL = '0000015a-0000-4000-8000-000000000006';
+  const USER_SIN_URL = '0000015a-0000-4000-8000-0000000000a6';
+  await db.raw.exec(`
+    INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_SIN_URL}', 'alertas-sin-url', 'Sin URL', 'America/Bogota', 'es-CO');
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_SIN_URL}', 'sin-url@alertas.test', 'Sin URL');
+    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_SIN_URL}', '${USER_SIN_URL}', 'owner');
+    INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_SIN_URL}');
+  `);
+  const cartero = new CarteroFalso();
+  const avisosDelRegistro: string[] = [];
+  const logger = {
+    level: 'info',
+    debug: () => {},
+    info: () => {},
+    warn: (msg: string) => avisosDelRegistro.push(msg),
+    error: () => {},
+    child: () => logger,
+  } as unknown as JobContext['logger'];
+  const job = createAlertasJob({
+    readSignals: async (_tx, ws) => (ws === WS_SIN_URL ? SALUD.enProblemas : SALUD.sano),
+    mailerFromEnv: () => cartero,
+  });
+  const ctx = {
+    db,
+    logger,
+    env: {},
+    signal: new AbortController().signal,
+    now: () => new Date('2026-09-28T14:00:00Z'),
+  } as unknown as JobContext;
+  await job.handler({}, ctx);
+  assert.ok(avisosDelRegistro.some((m) => /sin APP_URL/.test(m)), 'lo dice en el registro');
+  const [correo] = cartero.enviados.filter((m) => m.subject.includes('Sin URL'));
+  assert.ok(correo, 'el resumen sale igual');
+  assert.doesNotMatch(correo.text, /https?:\/\//, 'ningún enlace, tampoco a localhost');
+  assert.match(correo.text, /Lo ves en On Cue, en Ventas → Política de envío\./);
+  assert.ok((await avisos(WS_SIN_URL)).every((a) => a.emailed_at !== null));
 });

@@ -30,7 +30,13 @@
  * alertas quedan sin marcar y salen con la siguiente corrida que pueda
  * enviar, aunque sea otro día, mientras tengan menos de
  * ALERTAS_REENVIO_DIAS: una semana sin correo no se convierte en un
- * resumen con alertas de hace un mes.
+ * resumen con alertas de hace un mes. Sin APP_URL el resumen sale igual,
+ * pero sin enlaces (uno a localhost sería un enlace roto) y con una línea
+ * que dice dónde verlo; el job lo avisa en el registro.
+ *
+ * La alerta de cuenta caída dice CUÁL es («LinkedIn: Laura · Cocina
+ * fácil») y lleva a /ventas/politica#cuentas, donde está lo que dijo el
+ * proveedor.
  *
  * Textos en el idioma del workspace (messages.ts). Corre como mc_worker:
  * cada fila lleva el workspace que la origina.
@@ -89,8 +95,12 @@ export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
 export interface AlertasDeps {
   /** null = sin SMTP_URL: no se envía el resumen. */
   mailer: Mailer | null;
-  /** APP_URL, para el enlace del correo. */
-  appUrl: string;
+  /**
+   * APP_URL, para el enlace de cada alerta en el correo. null = sin
+   * APP_URL: el resumen sale sin enlaces (uno a localhost sería un enlace
+   * roto en un despliegue mal configurado) y dice dónde verlo.
+   */
+  appUrl: string | null;
   readSignals?: ReadSignals;
   /** Hora local desde la que se revisa; 0 revisa a cualquier hora. */
   horaLocal?: number;
@@ -137,6 +147,28 @@ async function espacios(db: Queryable, now: Date, hora: number): Promise<Espacio
   return rows;
 }
 
+/**
+ * Cuáles son las cuentas caídas, para que la alerta lo diga («LinkedIn:
+ * Laura · Cocina fácil»), en una lista con Intl.ListFormat del locale del
+ * workspace. Si la salud no viene de la base (un fixture) y no hay filas,
+ * el número.
+ */
+async function cuentasCaidas(tx: Queryable, w: Espacio, cuantas: number): Promise<string> {
+  const t = alertTextsFor(w.locale).accounts;
+  const { rows } = await tx.query<{ channel: keyof typeof t.channel; name: string }>(
+    `SELECT channel, coalesce(nullif(btrim(display_name), ''), provider_account_id) AS name
+       FROM outreach_channel_account
+      WHERE workspace_id = $1 AND status IN ('needs_reconnect', 'error')
+      ORDER BY channel, id`,
+    [w.id],
+  );
+  if (!rows.length) {
+    return cuantas === 1 ? t.one : rellenar(t.many, { n: new Intl.NumberFormat(w.locale).format(cuantas) });
+  }
+  const nombres = rows.map((r) => `${t.channel[r.channel] ?? r.channel}: ${r.name}`);
+  return new Intl.ListFormat(w.locale, { style: 'long', type: 'conjunction' }).format(nombres);
+}
+
 /** Deja las notificaciones del día que falten. Devuelve los tipos creados. */
 async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: Date): Promise<OutreachAlertKind[]> {
   const textos = alertTextsFor(w.locale).alerts;
@@ -144,6 +176,7 @@ async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: 
   for (const a of alertas) {
     const t = textos[a.kind];
     const valores = cifras(a, w.locale);
+    if (a.kind === 'account_down') valores['accounts'] = await cuentasCaidas(tx, w, a.values['accountsDown'] ?? 0);
     const { rows } = await tx.query(
       `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, action_url, created_at)
        SELECT $1, NULL, $2, $3, $4, $5, $6, $7::timestamptz
@@ -197,16 +230,17 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     pendientes.length === 1
       ? rellenar(c.subjectOne, { workspace: w.name })
       : rellenar(c.subject, { n: new Intl.NumberFormat(w.locale).format(pendientes.length), workspace: w.name });
-  const base = deps.appUrl.replace(/\/+$/, '');
+  const base = deps.appUrl ? deps.appUrl.replace(/\/+$/, '') : null;
   const text = [
     rellenar(c.intro, { workspace: w.name }),
     '',
     ...pendientes.flatMap((p) => [
       `· ${p.title_es}`,
       ...(p.body_es ? [`  ${p.body_es}`] : []),
-      ...(p.action_url ? [`  ${rellenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
+      ...(p.action_url && base ? [`  ${rellenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
       '',
     ]),
+    ...(base ? [] : [c.whereToSee, '']),
     c.outro,
   ].join('\n');
   try {
@@ -252,7 +286,8 @@ export function createAlertasJob(deps: Omit<AlertasDeps, 'mailer' | 'appUrl'> & 
     ALERTAS_JOB_ID,
     async (_payload, ctx) => {
       const mailer = (deps.mailerFromEnv ?? smtpMailerFromEnv)(ctx.env);
-      const appUrl = ctx.env['APP_URL']?.trim() || 'http://localhost:3100';
+      const appUrl = ctx.env['APP_URL']?.trim() || null;
+      if (!appUrl) ctx.logger.warn('alertas de outreach: sin APP_URL, el resumen sale sin enlaces', {});
       let fallos = 0;
       const r = await runAlertas(ctx.db, ctx.now(), { ...deps, mailer, appUrl }, (ws, err) => {
         fallos++;
