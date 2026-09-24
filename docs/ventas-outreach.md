@@ -621,6 +621,42 @@ dueño aquí:
 | El refresh token de Google en cuatro sitios; el keepalive deja uno caducado | Una fila por concesión, token en el vault | VEN-9 |
 | Desconectar una cuenta la deja viva en el proveedor, cobrando y recibiendo avisos | Desconectar la deja pendiente de soltar (0040) y `sales.channels_release` revoca el permiso de Google o borra la cuenta y sus avisos en Unipile, sin tocar lo que siga vivo en otro espacio | VEN-9 |
 | Topes por canal que solo miran el techo del proveedor | La vista `outreach_channel_account_limits` (0040): el máximo de cada cuenta es el menor entre la política del espacio y el proveedor (500 en un Gmail personal) | VEN-9 |
+| Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
+| Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si su hilo es el de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041); lo demás se ignora sin guardar el cuerpo | VEN-9 |
+| Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
+
+### 9.1 Los avisos de Unipile: uno por cuenta, y el plan B
+
+Cada cuenta conectada da de alta DOS avisos en Unipile (`messaging` y
+`account_status`) con `account_ids` = esa cuenta y dos cabeceras
+nuestras: el secreto compartido y la ruta firmada (workspace y fila).
+Así el webhook sabe a qué espacio va el aviso sin buscar entre todos
+los espacios y sin una función que cruce workspaces. Son 2N avisos
+para N cuentas.
+
+**El límite.** Unipile no publica un techo de avisos por cliente en
+su documentación (leída el 23-sep-2026); su soporte habla de «cientos»
+como uso normal. Con cientos de creadores podemos acercarnos. Lo que
+ya está:
+
+- Un alta que falla deja la cuenta conectada con el código
+  `webhooks_missing`: la pantalla ofrece «Volver a intentar» (vuelve a
+  dar de alta los avisos sin pasar por la hosted auth) y el keepalive
+  diario lo reintenta solo para toda cuenta conectada con menos de dos
+  avisos. Ninguna cuenta se queda sorda sin que nada lo intente.
+- Al desconectar, `sales.channels_release` borra los avisos de la
+  cuenta: el número de avisos vivos es el de cuentas conectadas, no el
+  de cuentas que alguna vez lo estuvieron.
+
+**El plan B**, si Unipile pone un techo o lo alcanzamos: UN aviso
+global por fuente (sin `account_ids`), con el secreto compartido y sin
+ruta firmada. El webhook, tras validar el secreto, resuelve
+`account_id` → fila por una función `SECURITY DEFINER` (como las de
+0039) que devuelve SOLO el workspace y el id de la fila viva con ese
+`provider_account_id` (el índice global de cuentas vivas ya garantiza
+que es una), y con eso abre la transacción del espacio. Pasar a ese
+modo es una migración (la función) y un cambio en `aviso.ts`; las
+cuentas existentes se migran borrando sus avisos por cuenta.
 | Sin `List-Unsubscribe`, sin pie de baja, sin rebotes asíncronos | VEN-15 completa | VEN-15 |
 | Un `owner_id` escrito a mano en el validador de similitud | Filtro por workspace | VEN-12 |
 | Ventana 09:00–16:59 en UTC en vez de la zona de la cadencia | Zona del workspace, una sola implementación en `core` | VEN-10 |
