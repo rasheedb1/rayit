@@ -31,7 +31,9 @@
  */
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EncryptedSecretStore, EnvSecretStore, InMemorySecretStore, keyringFromEnv, MasterKeyError, TokenCipher, type SecretStore } from '@mc/connectors';
+import {
+  EncryptedSecretStore, EnvSecretStore, InMemorySecretStore, keyringFromEnv, MasterKeyError, PostgresOutreachCallLog, TokenCipher, type SecretStore,
+} from '@mc/connectors';
 import { ConfigError, loadConfig, type WorkerConfig } from '../../runner/config.ts';
 import { PostgresDatabase } from '../../runner/db.ts';
 import { buildChannels } from './canales/index.ts';
@@ -135,7 +137,8 @@ export function resumenDespacho(r: DispatchReport): string {
 
 export function resumenRespuestas(r: RepliesReport): string {
   const lineas = [
-    `Respuestas: ${r.threads} hilo(s) abierto(s), ${r.inbound} mensaje(s) nuevo(s), ${r.optOuts} baja(s), ${r.canceled} toque(s) cancelado(s).`,
+    `Respuestas: ${r.threads} hilo(s) leído(s) en ${r.pages} página(s), ${r.inbound} mensaje(s) nuevo(s), ${r.optOuts} baja(s), ` +
+      `${r.automatic} automática(s), ${r.canceled} toque(s) cancelado(s).`,
   ];
   for (const u of r.unreadable) lineas.push(`  · ${u.channel} ${u.threadRef} sin leer: ${u.error}`);
   return `${lineas.join('\n')}\n`;
@@ -183,6 +186,8 @@ async function main(): Promise<void> {
   try {
     const channels = buildChannels({
       env: process.env, secrets: secretStore(config, db, opciones.canalFalso), mode: opciones.canalFalso ? 'fake' : 'real',
+      // Como el job: cada llamada a Gmail o a Unipile deja su fila en api_call_log.
+      callLog: new PostgresOutreachCallLog(db),
     });
     if (channels.mode === 'fake') process.stdout.write('Canal falso: nada sale de la máquina.\n');
     const motor = motorDbFromJob(db);
