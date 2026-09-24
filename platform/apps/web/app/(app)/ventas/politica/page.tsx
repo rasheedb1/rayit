@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import {
-  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, readAlertSignalCounts,
+  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, readAlertSignalCounts, readSendReadiness,
 } from "@mc/db/queries/entregabilidad";
 import { outboundHealth } from "@mc/db/queries/outreach";
 import { PageHeader } from "@/components/page-header";
@@ -11,6 +11,7 @@ import { withWorkspace } from "../_lib/db";
 import { PoliticaForm, type PoliticaFormProps } from "./form";
 import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
+import { puedeCambiarLaPolitica } from "./permiso";
 import { Salud } from "./salud";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
@@ -29,12 +30,14 @@ const REBOTES_VISIBLES = 8;
  * de redacción— se enseña, con el motivo, para que nadie lo busque.
  */
 export default async function PoliticaPage() {
-  const { policy, health, counts, rebotes } = await withWorkspace(async (tx) => ({
+  const { policy, health, counts, rebotes, listo } = await withWorkspace(async (tx) => ({
     policy: await getOutboundPolicy(tx),
     health: await outboundHealth(tx, HEALTH_WINDOW_H),
     counts: await readAlertSignalCounts(tx, tx.workspaceId, new Date()),
     rebotes: await listRecentBounces(tx, REBOTES_VISIBLES),
+    listo: await readSendReadiness(tx),
   }));
+  const puedeCambiar = await puedeCambiarLaPolitica();
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
   const t = MESSAGES;
@@ -69,11 +72,21 @@ export default async function PoliticaPage() {
         hasAddress={Boolean(policy.postalAddress)}
         motivo={motivo}
         nuncaEncendido={!policy.enabled && policy.disabledAt === null}
+        puedeCambiar={puedeCambiar}
+        cuentasConectadas={listo.connectedAccounts}
+        aprobadosHoy={{ n: f.int(listo.approvedDueToday), hay: listo.approvedDueToday > 0 }}
       />
 
-      <Salud health={health} counts={counts} rebotes={rebotes} f={f} />
+      <Salud health={health} counts={counts} rebotes={rebotes} caidas={listo.downAccounts} f={f} />
 
-      <PoliticaForm policy={policy} rangos={rangos} maximos={maximos} minimos={minimos} locale={f.locale} />
+      <PoliticaForm
+        policy={policy}
+        rangos={rangos}
+        maximos={maximos}
+        minimos={minimos}
+        locale={f.locale}
+        editable={puedeCambiar}
+      />
 
       <section id="presupuesto" aria-labelledby="fijo-llm" className="mt-10 max-w-2xl scroll-mt-8 border-t border-line pt-6">
         <h2 id="fijo-llm" className="text-sm font-medium">

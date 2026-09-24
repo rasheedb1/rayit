@@ -23,6 +23,12 @@ export interface PoliticaFormProps {
   minimos: Record<Numerico, number>;
   /** El locale del workspace, para las cifras de la curva. */
   locale: string;
+  /**
+   * Quien mira puede cambiarla (owner o admin, 0038 §7). Si no, el
+   * formulario se enseña deshabilitado y con una línea que dice por qué;
+   * la base lo rechazaría igual.
+   */
+  editable?: boolean;
 }
 
 const t = MESSAGES;
@@ -68,7 +74,7 @@ export function calentamientoDe(
  * y la de la base (rangos y la dirección con el envío encendido); aquí
  * solo se pinta lo que devuelven, con el foco en el primer error.
  */
-export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: PoliticaFormProps) {
+export function PoliticaForm({ policy, rangos, maximos, minimos, locale, editable = true }: PoliticaFormProps) {
   const [state, formAction, pending] = useActionState<GuardarPoliticaState, FormData>(guardarPolitica, {});
   const formRef = useRef<HTMLFormElement>(null);
   const [revision, setRevision] = useState<SiNo>(policy.requireHumanReview ? "si" : "no");
@@ -149,9 +155,25 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
     </div>
   );
 
+
+  // La rejilla pone cada bloque en su sitio sin repetir la curva: en el
+  // escritorio, la curva va a la derecha, junto al tope diario (como en
+  // Lemlist e Instantly); en el móvil, justo debajo del campo de días de
+  // calentamiento que la mueve, antes del botón, y no al final de la
+  // página.
   return (
-    <form ref={formRef} action={formAction} noValidate className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_280px]">
-      <div className="min-w-0 space-y-10">
+    <form
+      ref={formRef}
+      action={formAction}
+      noValidate
+      className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_280px]"
+    >
+      <fieldset disabled={!editable} className="min-w-0 space-y-10 lg:col-start-1 lg:row-start-1">
+        {!editable && (
+          <p role="note" className="rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink-2">
+            {t.sinPermiso}
+          </p>
+        )}
         {state.message && (
           <p role="alert" className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
             {state.message}
@@ -208,20 +230,12 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
           </h2>
           {numero("warmupDays")}
         </section>
+      </fieldset>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" variant="primary" loading={pending}>
-            {t.guardar}
-          </Button>
-          {state.ok && !pending && (
-            <p role="status" className="text-sm text-good">
-              {t.guardado}
-            </p>
-          )}
-        </div>
-      </div>
-
-      <aside aria-labelledby="curva" className="lg:sticky lg:top-8 lg:self-start">
+      <aside
+        aria-labelledby="curva"
+        className="-mt-5 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:mt-0 lg:sticky lg:top-8 lg:self-start"
+      >
         <div className="rounded-md border border-line p-4">
           <p id="curva" className="text-sm font-medium">
             {t.calentamiento.title}
@@ -249,9 +263,21 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale }: Polit
                   : t.calentamiento.sinCalentamiento}
             </p>
           )}
-          <p className="mt-3 text-xs leading-4 text-fg-3">{ayudaDelCalentamiento}</p>
         </div>
       </aside>
+
+      {editable && (
+        <div className="flex flex-wrap items-center gap-3 lg:col-start-1 lg:row-start-2">
+          <Button type="submit" variant="primary" loading={pending}>
+            {t.guardar}
+          </Button>
+          {state.ok && !pending && (
+            <p role="status" className="text-sm text-good">
+              {t.guardado}
+            </p>
+          )}
+        </div>
+      )}
     </form>
   );
 }

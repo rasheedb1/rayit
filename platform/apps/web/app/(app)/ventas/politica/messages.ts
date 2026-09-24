@@ -33,10 +33,24 @@ export const MESSAGES = {
     siApagar: "Sí, apagar",
     cancelar: "Cancelar",
     sinDireccion: "Para encender el envío guarda primero tu dirección postal.",
+    /** Sin ninguna cuenta de envío conectada, encender no enviaría nada. */
+    sinCanal: "Para encender el envío conecta primero una cuenta de envío (Gmail, LinkedIn o Instagram).",
+    /** Quien no es dueño ni administra el espacio (0038 §7). */
+    sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
+    confirmarEncender: "¿Encender el envío?",
+    /** `n` es el número de mensajes aprobados para hoy, ya formateado. */
+    consecuenciaEncender: (n: string, hay: boolean) =>
+      hay
+        ? `Hoy salen ${n} mensajes aprobados, dentro de tus límites, y desde ahí lo que apruebes sale solo, en tu nombre.`
+        : "Hoy no hay mensajes aprobados en cola. Desde ahora, lo que apruebes sale solo, en tu nombre y dentro de tus límites.",
+    siEncender: "Sí, encender",
     motivoManual: "lo apagaste desde la política",
     errorEncender: "No se pudo encender. Revisa que la dirección postal esté guardada.",
     errorApagar: "No se pudo apagar. Inténtalo de nuevo.",
   },
+
+  /** El formulario, para quien no es dueño ni administra el espacio (0038 §7). */
+  sinPermiso: "Solo quien es dueño o administra este espacio puede cambiar estas reglas. Puedes verlas; para cambiarlas, pídeselo.",
 
   secciones: {
     ritmo: "Ritmo",
@@ -116,7 +130,38 @@ export const MESSAGES = {
       note: (atascados: string) => `${atascados} atascados`,
       noteSinAtascos: "Nada atascado",
     },
-    cuentas: { label: "Cuentas caídas", note: "Piden reconectar o fallan", noteBien: "Todas conectadas" },
+    cuentas: {
+      label: "Cuentas caídas",
+      /** Cuáles, ya en una lista con Intl («LinkedIn: Laura · Cocina fácil»). */
+      note: (cuales: string) => cuales,
+      noteBien: "Todas conectadas",
+      /** El enlace de la nota, a la lista de abajo. */
+      verCuales: "Ver qué pasó",
+    },
+    /** La lista de cuentas caídas, adonde lleva la alerta outreach_account_down. */
+    caidas: {
+      title: "Cuentas que necesitan atención",
+      description:
+        "Mientras una cuenta no se reconecte, no sale nada por ella: lo de ese canal espera en la cola y no se pierde.",
+      estado: { needs_reconnect: "Pide reconectar", error: "Falla" } as Record<"needs_reconnect" | "error", string>,
+      /** «Desde el 23 de septiembre». */
+      desde: (fecha: string) => `Desde el ${fecha}`,
+      sinDetalle: "El proveedor no dio más detalle.",
+      /**
+       * El paso concreto, en una frase, en vez de un enlace a una página
+       * que no resuelve nada: la pantalla de canales (VEN-9), donde se
+       * reconecta, todavía no está integrada. Cuando llegue, la alerta y
+       * esta lista enlazan allí (CANALES_URL del worker).
+       */
+      paso: {
+        email: "Para volver a enviar, vuelve a conectar este Gmail y acepta los permisos de envío.",
+        otro: "Para volver a enviar, vuelve a conectar esta cuenta con tu sesión del proveedor.",
+      },
+    },
+    canal: { email: "Gmail", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<
+      "email" | "linkedin" | "instagram_dm" | "whatsapp",
+      string
+    >,
     sinDato: "—",
     rebotesTitle: "Últimos rebotes",
     rebotesCaption: "Los últimos avisos de rebote leídos de tu Gmail",
