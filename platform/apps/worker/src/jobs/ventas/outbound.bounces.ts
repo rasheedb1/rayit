@@ -18,9 +18,15 @@
  *
  * El buzón se lee A TRAVÉS de una interfaz (BounceMailbox), no de un
  * cliente de Gmail escrito aquí: el conector de Gmail es de VEN-9
- * (packages/connectors) y todavía no existe. Mientras no esté, cada
- * cuenta cuenta como «canal no configurado» y el job no hace nada más;
- * las pruebas usan un buzón con avisos grabados (test/fixtures/rebotes).
+ * (packages/connectors, rama rasheed/VEN-9-canales, sin integrar). El
+ * adaptador ya está (gmail-rebotes.ts: GmailApi.searchBounces +
+ * getMessage → BounceMailbox) y probado contra un Gmail falso con la
+ * forma del FakeGmail de VEN-9. Lo que falta es de la integración:
+ * construir el GmailApi de cada cuenta con su token y registrar
+ * createBouncesJob((cuenta) => gmailBounceMailbox(api)). Hasta entonces el
+ * job registrado usa gmailNoConfigurado: cada cuenta cuenta como «canal
+ * no configurado», y el job lo dice en el registro. Las pruebas usan un
+ * buzón con avisos grabados (test/fixtures/rebotes).
  *
  * Corre como mc_worker (BYPASSRLS): cada consulta filtra por el
  * workspace de la cuenta que se está leyendo, y nada se escribe en otro.
