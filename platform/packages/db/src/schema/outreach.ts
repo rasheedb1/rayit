@@ -187,7 +187,7 @@ export const OUTREACH_FUNCTIONS = {
   nextBusinessDay: 'next_business_day(timestamp with time zone,text)',
   publicOptout: 'public_optout(text)',
   contactVisibleTo: 'contact_visible_to(uuid,uuid)',
-  releaseCap: 'outbound_counter_release(uuid,uuid,text,timestamp with time zone)',
+  releaseCap: 'outbound_counter_release(uuid,uuid,text,date)',
 } as const;
 
 // ---------------------------------------------------------------------

@@ -38,6 +38,8 @@ export interface SendContext {
   claimedAt: Date | null;
   /** La hora a la que tocaba (r3): si sale mucho después, los pasos de detrás se corren. */
   scheduledFor: Date | null;
+  /** El día local en que el reclamo reservó la plaza de los topes (r3): a él vuelve si no sale. */
+  capsReservedOn: string | null;
   channel: DispatchChannel;
   stepType: DispatchableStepType;
   /** La posición del paso en la cadencia (null en un toque suelto): para correr los de detrás. */
@@ -85,6 +87,7 @@ interface SendContextRow {
   status: string;
   claimed_at: unknown;
   scheduled_for: unknown;
+  caps_reserved_on: string | null;
   channel: string;
   step_type: string | null;
   day_offset: number | null;
@@ -129,6 +132,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     status: oneOf(fn, '$.status', r.status, TOUCH_STATUSES),
     claimedAt: toDate(r.claimed_at),
     scheduledFor: toDate(r.scheduled_for),
+    capsReservedOn: textOrNull(fn, '$.caps_reserved_on', r.caps_reserved_on),
     channel,
     stepType: r.step_type === null ? stepTypeForChannel(channel)! : oneOf(fn, '$.step_type', r.step_type, DISPATCHABLE_STEP_TYPES),
     stepDayOffset: r.day_offset === null ? null : int(fn, '$.day_offset', r.day_offset),
@@ -190,7 +194,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
   );
   const r = (
     await tx.query<SendContextRow>(
-      `SELECT t.id, t.workspace_id, t.status, t.claimed_at, t.scheduled_for, t.channel, st.step_type, st.day_offset, st.order_in_day,
+      `SELECT t.id, t.workspace_id, t.status, t.claimed_at, t.scheduled_for, t.caps_reserved_on::text AS caps_reserved_on, t.channel, st.step_type, st.day_offset, st.order_in_day,
               t.attempt_count, t.unconfirmed_attempt, t.subject, t.body,
               t.recipient_address::text AS recipient, t.enrollment_id, t.contact_id, t.deal_id,
               c.full_name AS contact_name, co.name AS company_name,
@@ -303,8 +307,8 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
 
 /** La plaza que el reclamo reservó para este toque. */
 function capsOf(ctx: SendContext) {
-  return ctx.account && ctx.claimedAt
-    ? { workspaceId: ctx.workspaceId, accountId: ctx.account.id, channel: ctx.channel, stepType: ctx.stepType, claimedAt: ctx.claimedAt }
+  return ctx.account
+    ? { workspaceId: ctx.workspaceId, accountId: ctx.account.id, channel: ctx.channel, stepType: ctx.stepType, reservedOn: ctx.capsReservedOn }
     : null;
 }
 
@@ -339,7 +343,7 @@ export async function applyDecision(tx: WorkerSql, ctx: SendContext, decision: S
       moved = (await tx.query(
         `UPDATE outbound_touch
             SET status = 'scheduled', scheduled_for = $2::timestamptz, next_retry_at = NULL,
-                attempt_count = greatest(attempt_count - 1, 0), claimed_at = NULL
+                attempt_count = greatest(attempt_count - 1, 0), claimed_at = NULL, caps_reserved_on = NULL
           WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
         [ctx.touchId, decision.until.toISOString()],
       )).rows.length > 0;

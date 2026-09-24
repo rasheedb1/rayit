@@ -68,6 +68,8 @@ export interface ClaimedTouch {
   /** El token del enlace de baja de ESTE intento (solo correo). Va en el correo; la base guarda su sha256. */
   optoutToken: string | null;
   claimedAt: Date;
+  /** El día local en que se reservó la plaza (caps_reserved_on): a él vuelve si no sale. */
+  capsReservedOn: string | null;
 }
 
 export interface ClaimReport {
@@ -341,13 +343,16 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   if (toClaim.length === 0) return report;
 
   const claimed = (
-    await tx.query<{ id: string; workspace_id: string; contact_id: string; attempt_count: number }>(
+    await tx.query<{ id: string; workspace_id: string; contact_id: string; attempt_count: number; caps_reserved_on: string }>(
+      // caps_reserved_on se calcula como outbound_counter_bump (now() de la base,
+      // en esta misma transacción): es el día de la fila del contador que se sumó.
       `UPDATE outbound_touch t
           SET status = 'processing', claimed_at = $1::timestamptz, attempt_count = t.attempt_count + 1,
-              recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL
+              recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL,
+              caps_reserved_on = outreach_local_date(t.workspace_id, now())
          FROM unnest($2::uuid[], $3::text[], $4::uuid[]) AS x(id, addr, acct)
         WHERE t.id = x.id AND t.status = 'scheduled'
-        RETURNING t.id, t.workspace_id, t.contact_id, t.attempt_count`,
+        RETURNING t.id, t.workspace_id, t.contact_id, t.attempt_count, t.caps_reserved_on::text AS caps_reserved_on`,
       [now.toISOString(), toClaim.map((x) => x.c.id), toClaim.map((x) => x.recipient), toClaim.map((x) => x.accountId)],
     )
   ).rows;
@@ -369,6 +374,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     report.claimed.push({
       id: row.id, workspaceId: row.workspace_id, channel: m.c.channel, stepType: m.c.stepType, attempt,
       accountId: m.accountId, recipient: m.recipient, optoutToken, claimedAt: now,
+      capsReservedOn: textOrNull('claimDueTouches', 'caps_reserved_on', row.caps_reserved_on),
     });
   }
   return report;
@@ -388,7 +394,7 @@ export async function releaseUnattempted(tx: WorkerSql, touches: readonly Claime
   const back = (
     await tx.query<{ id: string }>(
       `UPDATE outbound_touch t
-          SET status = 'scheduled', attempt_count = t.attempt_count - 1, claimed_at = NULL
+          SET status = 'scheduled', attempt_count = t.attempt_count - 1, claimed_at = NULL, caps_reserved_on = NULL
          FROM unnest($1::uuid[], $2::timestamptz[], $3::int[]) AS x(id, claimed_at, attempt)
         WHERE t.id = x.id AND t.status = 'processing' AND t.claimed_at = x.claimed_at
           AND t.attempt_count = x.attempt AND t.send_started_at IS NULL
@@ -407,7 +413,7 @@ export async function releaseUnattempted(tx: WorkerSql, touches: readonly Claime
   );
   for (const t of mine) {
     if (t.accountId) {
-      await releaseCaps(tx, { workspaceId: t.workspaceId, accountId: t.accountId, channel: t.channel, stepType: t.stepType, claimedAt: t.claimedAt });
+      await releaseCaps(tx, { workspaceId: t.workspaceId, accountId: t.accountId, channel: t.channel, stepType: t.stepType, reservedOn: t.capsReservedOn });
     }
   }
   return back;
@@ -439,9 +445,10 @@ export async function rescueZombies(tx: WorkerSql, now: Date, workspaceId?: stri
   const rows = (
     await tx.query<{
       id: string; workspace_id: string; channel: string; channel_account_id: string | null; step_type: string | null;
-      attempt_count: number; claimed_at: unknown; started: boolean; opted_out: boolean;
+      attempt_count: number; claimed_at: unknown; started: boolean; opted_out: boolean; caps_reserved_on: string | null;
     }>(
       `SELECT z.id, z.workspace_id, z.channel, z.channel_account_id, st.step_type, z.attempt_count, z.claimed_at,
+              z.caps_reserved_on::text AS caps_reserved_on,
               z.send_started_at IS NOT NULL AS started,
               (address_is_suppressed(z.recipient_address)
                OR EXISTS (SELECT 1 FROM contact c WHERE c.id = z.contact_id AND (c.opted_out OR address_is_suppressed(c.email))))
@@ -465,6 +472,7 @@ export async function rescueZombies(tx: WorkerSql, now: Date, workspaceId?: stri
       stepType: r.step_type === null ? stepTypeForChannel(channel)! : oneOf(fn, `$[${i}].step_type`, r.step_type, DISPATCHABLE_STEP_TYPES),
       attempt: int(fn, `$[${i}].attempt_count`, r.attempt_count), accountId: r.channel_account_id ?? '', recipient: '',
       optoutToken: null, claimedAt: date(fn, `$[${i}].claimed_at`, r.claimed_at),
+      capsReservedOn: textOrNull(fn, `$[${i}].caps_reserved_on`, r.caps_reserved_on),
     });
   }
   report.released = await releaseUnattempted(tx, neverSent);

@@ -257,8 +257,13 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   assert.equal(fake.email.sent.length, 0);
   const r3 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '12:30')));
   assert.deepEqual(r3.sent, [despues[0]!.id], 'primero el 1: en esta corrida el 2 todavía lo espera');
+  // El 1 salió tres horas tarde: el 2 no sale dos minutos después, se corre un día hábil desde hoy (r3).
   const r4 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '12:32')));
-  assert.deepEqual(r4.sent, [despues[1]!.id], 'y en la siguiente, en el hilo, el 2');
+  assert.deepEqual(r4.sent, []);
+  const [, t2] = await touches(c);
+  assert.equal(localDay(t2!.scheduled_for), '2026-09-29');
+  const r5 = await runDispatch(motor, deps(w, fake, () => new Date(t2!.scheduled_for.getTime() + 60_000)));
+  assert.deepEqual(r5.sent, [despues[1]!.id], 'y al día hábil siguiente, en el hilo, el 2');
   assert.deepEqual(fake.email.sent.map((m) => m.stepType), ['email', 'email_reply']);
   assert.equal(fake.email.sent[1]!.subject, 'Re: Hola, Persona');
   assert.equal(fake.email.sent[1]!.reply?.threadRef, fake.email.sent[0]!.threadRef);

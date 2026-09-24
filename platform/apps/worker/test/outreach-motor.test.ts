@@ -183,7 +183,10 @@ test('encendido, salen los dos correos del día 0 con su pie de baja, su enlace 
   assert.equal(msg.subject, 'Hola, Sofía');
   assert.match(msg.body, /Calle 93 # 11-26/);
   assert.match(msg.body, /https:\/\/oncue\.test\/baja\/[A-Za-z0-9_-]{43}/);
-  assert.equal(msg.unsubscribeUrl, msg.body.match(/https:\/\/oncue\.test\/baja\/\S+/)![0]);
+  // El pie lleva la página de baja; la cabecera List-Unsubscribe, la de un clic (VEN-15, RFC 8058).
+  const pagina = msg.body.match(/https:\/\/oncue\.test\/baja\/\S+/)![0];
+  assert.ok(!pagina.endsWith('/un-clic'));
+  assert.equal(msg.unsubscribeUrl, `${pagina}/un-clic`);
 
   const [t1] = await touches(SOFIA);
   assert.equal(t1!.status, 'sent');

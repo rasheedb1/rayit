@@ -155,8 +155,11 @@ export interface CapReservation {
   accountId: string;
   channel: string;
   stepType: string | null;
-  /** Cuándo se reclamó (r3): la plaza vuelve al día y a la semana de ESE reclamo, en la zona del workspace. */
-  claimedAt: Date;
+  /**
+   * El día local en que se reservó (outbound_touch.caps_reserved_on, 'AAAA-MM-DD'),
+   * r3: la plaza vuelve a ESE día y a su semana. null: no hay nada que devolver.
+   */
+  reservedOn: string | null;
 }
 
 /**
@@ -166,10 +169,10 @@ export interface CapReservation {
  * send_started_at) NO la devuelve: la plaza protege la cuenta.
  */
 export async function releaseCaps(tx: WorkerSql, r: CapReservation): Promise<void> {
-  const at = r.claimedAt.toISOString();
-  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3, $4::timestamptz)`, [r.workspaceId, r.accountId, actionTypeFor(r.stepType, r.channel), at]);
+  if (!r.reservedOn) return;
+  await tx.query(`SELECT outbound_counter_release($1::uuid, $2::uuid, $3, $4::date)`, [r.workspaceId, r.accountId, actionTypeFor(r.stepType, r.channel), r.reservedOn]);
   if (r.channel === 'email') {
-    await tx.query(`SELECT outbound_counter_release($1::uuid, NULL, 'email', $2::timestamptz)`, [r.workspaceId, at]);
+    await tx.query(`SELECT outbound_counter_release($1::uuid, NULL, 'email', $2::date)`, [r.workspaceId, r.reservedOn]);
   }
 }
 

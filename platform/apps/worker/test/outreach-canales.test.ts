@@ -84,7 +84,7 @@ function gmailOnHttp(fetch: FetchLike, store = secrets(new Date(NOW.getTime() + 
 const CLAIMED_AT = new Date('2026-09-24T14:58:00Z');
 function ctx(over: Partial<SendContext> = {}): SendContext {
   return {
-    touchId: 't', workspaceId: 'ws', status: 'processing', claimedAt: CLAIMED_AT, scheduledFor: CLAIMED_AT, channel: 'email', stepType: 'email',
+    touchId: 't', workspaceId: 'ws', status: 'processing', claimedAt: CLAIMED_AT, scheduledFor: CLAIMED_AT, capsReservedOn: null, channel: 'email', stepType: 'email',
     attempt: 1, stepDayOffset: 0, stepOrderInDay: 0, unconfirmedAttempt: null,
     subject: 'Hola', body: 'Hola, Sofía.', recipient: 'sofia@vitale.test', enrollmentId: 'e', contactId: 'c', dealId: null,
     contactName: 'Sofía', companyName: 'Vitalé', enrollmentStatus: 'active', resumeAt: null, sequenceStatus: 'active',
@@ -96,7 +96,7 @@ function ctx(over: Partial<SendContext> = {}): SendContext {
 }
 const CLAIMED = {
   id: 't', workspaceId: 'ws', channel: 'email' as const, stepType: 'email' as const, attempt: 1, accountId: 'acc',
-  recipient: 'sofia@vitale.test', optoutToken: TOKEN, claimedAt: CLAIMED_AT,
+  recipient: 'sofia@vitale.test', optoutToken: TOKEN, claimedAt: CLAIMED_AT, capsReservedOn: null,
 };
 
 // ---------------------------------------------------------------------

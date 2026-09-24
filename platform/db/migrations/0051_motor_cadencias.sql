@@ -227,7 +227,9 @@ ALTER TABLE outbound_touch
   ADD COLUMN IF NOT EXISTS send_started_at timestamptz,
   ADD COLUMN IF NOT EXISTS unconfirmed_attempt int CHECK (unconfirmed_attempt BETWEEN 1 AND 20),
   -- (r3) cuándo leyó el hilo el lector de respuestas: ver §10.
-  ADD COLUMN IF NOT EXISTS replies_checked_at timestamptz;
+  ADD COLUMN IF NOT EXISTS replies_checked_at timestamptz,
+  -- (r3) el día local en que el reclamo reservó la plaza de los topes: ver §8.
+  ADD COLUMN IF NOT EXISTS caps_reserved_on date;
 
 CREATE OR REPLACE FUNCTION outbound_touch_dispatch_columns()
 RETURNS trigger
@@ -239,11 +241,12 @@ BEGIN
     RETURN NEW;
   END IF;
   IF (TG_OP = 'INSERT' AND (NEW.send_started_at IS NOT NULL OR NEW.unconfirmed_attempt IS NOT NULL
-                             OR NEW.replies_checked_at IS NOT NULL))
+                             OR NEW.replies_checked_at IS NOT NULL OR NEW.caps_reserved_on IS NOT NULL))
      OR (TG_OP = 'UPDATE' AND (NEW.send_started_at IS DISTINCT FROM OLD.send_started_at
                                OR NEW.unconfirmed_attempt IS DISTINCT FROM OLD.unconfirmed_attempt
-                               OR NEW.replies_checked_at IS DISTINCT FROM OLD.replies_checked_at)) THEN
-    RAISE EXCEPTION 'send_started_at, unconfirmed_attempt y replies_checked_at los escribe solo el despachador (rol %).', current_user
+                               OR NEW.replies_checked_at IS DISTINCT FROM OLD.replies_checked_at
+                               OR NEW.caps_reserved_on IS DISTINCT FROM OLD.caps_reserved_on)) THEN
+    RAISE EXCEPTION 'send_started_at, unconfirmed_attempt, replies_checked_at y caps_reserved_on los escribe solo el despachador (rol %).', current_user
       USING ERRCODE = 'insufficient_privilege',
             HINT = 'Dicen qué llegó al proveedor: la aplicación no los escribe.';
   END IF;
@@ -253,7 +256,7 @@ $$;
 
 DROP TRIGGER IF EXISTS outbound_touch_dispatch_columns ON outbound_touch;
 CREATE TRIGGER outbound_touch_dispatch_columns
-  BEFORE INSERT OR UPDATE OF send_started_at, unconfirmed_attempt, replies_checked_at ON outbound_touch
+  BEFORE INSERT OR UPDATE OF send_started_at, unconfirmed_attempt, replies_checked_at, caps_reserved_on ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_dispatch_columns();
 
 -- ---------------------------------------------------------------------
@@ -277,35 +280,36 @@ ALTER TABLE outbound_enrollment ADD CONSTRAINT outbound_enrollment_status_check
 -- transitorio o se devuelve a la cola sin intentarlo), la plaza vuelve.
 -- Nunca baja de cero.
 --
--- (r3) Vuelve al día y a la semana en que se RESERVÓ (p_claimed_at, en la
--- zona del workspace), no a los de hoy: un zombi reclamado anoche y
--- rescatado esta mañana devolvía una plaza de hoy que nunca se gastó, y
--- el tope diario se pasaba en uno. Lo de un día ya cerrado se devuelve a
--- ese día, donde ya no cambia nada.
-CREATE OR REPLACE FUNCTION outbound_counter_release(p_workspace uuid, p_account uuid, p_action_type text, p_claimed_at timestamptz)
+-- (r3) Vuelve al día y a la semana en que se RESERVÓ, no a los de hoy:
+-- un zombi reclamado anoche y rescatado esta mañana devolvía una plaza
+-- de hoy que nunca se gastó, y el tope diario se pasaba en uno. El día lo
+-- anota el reclamo en outbound_touch.caps_reserved_on, calculado igual
+-- que outbound_counter_bump (outreach_local_date con now() de la base, en
+-- la misma transacción): la plaza vuelve exactamente a la fila que se
+-- sumó. Lo de un día ya cerrado vuelve a ese día, donde ya no cambia nada.
+CREATE OR REPLACE FUNCTION outbound_counter_release(p_workspace uuid, p_account uuid, p_action_type text, p_day date)
 RETURNS void
 LANGUAGE plpgsql
 VOLATILE
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  dia date := outreach_local_date(p_workspace, p_claimed_at);
-  lunes date := dia - (extract(isodow FROM dia)::int - 1);
+  lunes date := p_day - (extract(isodow FROM p_day)::int - 1);
 BEGIN
   UPDATE outbound_counter c
      SET count = c.count - 1, updated_at = now()
    WHERE c.workspace_id = p_workspace
      AND c.channel_account_id IS NOT DISTINCT FROM p_account
      AND c.action_type = p_action_type
-     AND ((c.period = 'day' AND c.period_start = dia) OR (c.period = 'week' AND c.period_start = lunes))
+     AND ((c.period = 'day' AND c.period_start = p_day) OR (c.period = 'week' AND c.period_start = lunes))
      AND c.count > 0;
 END;
 $$;
-REVOKE ALL ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) TO mc_worker;
-COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text, timestamptz) IS
-  'Devuelve la plaza del día y de la semana del RECLAMO (p_claimed_at, zona del workspace) de un tope (cuenta, o '
-  'workspace con p_account NULL) que el despachador reservó y no gastó (0051 §8).';
+REVOKE ALL ON FUNCTION outbound_counter_release(uuid, uuid, text, date) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_counter_release(uuid, uuid, text, date) TO mc_worker;
+COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text, date) IS
+  'Devuelve la plaza del día p_day (outbound_touch.caps_reserved_on) y de su semana de un tope (cuenta, o workspace '
+  'con p_account NULL) que el despachador reservó al reclamar y no gastó (0051 §8).';
 
 -- ---------------------------------------------------------------------
 -- 9 · Todos los avisos (r2)
