@@ -393,8 +393,47 @@ Anotado por debajo del umbral:
 | Comando | `cd /Users/nicolasduarte/Documents/influ/rayit/platform && make db.migrate` |
 | Después | `make db.guardia` desde el clon principal y me pegas CONTINUAR-DESPLIEGUE |
 
-(El resto de §7 —el despliegue, la comprobación en producción, el plan B
-y el guion de humo— se completa después de CONTINUAR-DESPLIEGUE.)
+**Aplicada el 24-sep (00:5x UTC)** desde este worktree (el clon
+principal está en `29460e3` y no tiene la 0040), con el mismo comando
+del Makefile y las credenciales de `rayit/platform/.env.local`:
+`✓ 0040_scope_allows.sql (421 ms)`, `✓ 0041_campaign_result_escritura_web.sql
+(340 ms)`, «2 migración(es) nueva(s). Esquema: 98 tablas, 10 vistas, 252
+índices». Producción, todavía con el código anterior, siguió en 200.
+
+### 7.2 El despliegue
+
+| Paso | Resultado |
+|---|---|
+| `git fetch` + merge de `origin/main` | main seguía en `7ef8e2b`: nada nuevo, no hubo que volver a verificar |
+| `git push origin HEAD:main` | avance rápido `7ef8e2b..af1acee` |
+| Plan B (producción anterior) | `https://on-cue-ils7qhmu5-influ3.vercel.app` (CON-C, `58fb163`). Para volver: `./scripts/vercel.sh run rollback https://on-cue-ils7qhmu5-influ3.vercel.app --yes` desde `rayit-deploy/platform`. **Ojo:** ese código no llama a `scope_allows()`, así que convive con la 0040 |
+| Despliegue | desde `rayit-deploy` (detached en `af1acee`): `https://on-cue-3qosxbrqg-influ3.vercel.app`, alias `on-cue-web.vercel.app` |
+| API de Vercel | `/v13/deployments/dpl_8K3jiLnyTfkXeDh914QYCRbKpXf8`: `gitCommitSha af1aceee…`, `readyState READY`, `target production`; el alias `on-cue-web.vercel.app` → `dpl_8K3jiLnyTfkXeDh914QYCRbKpXf8` |
+| Rutas | 200 en `/`, `/login`, `/campanas`, `/campanas/<Café Alma>`, `/finanzas`, `/finanzas/facturas`, `/finanzas/facturas/nueva`, `/finanzas/gastos`, `/finanzas/flujo`, `/finanzas/ingresos`, `…/importar`, `…/nuevo`, `/finanzas/configuracion`, `/conexiones`, `/conexiones?error=fuera_de_alcance`, `/accesos`, `/resumen`, `/ventas`, `/cotizar`. Las públicas con un slug que no existe, 404: `/reporte/…`, `/cotizacion/…`, `/kit/…`. **Ninguna en 500.** Las pantallas pintan su título real, no la frontera de error |
+| Guardia | «Guardia en verde: 40 migraciones (la última, 0041_campaign_result_escritura_web.sql), 83 tablas aisladas, nada sin declarar». Corrida desde `rayit-deploy` (el código desplegado). Desde el clon principal sale roja porque ese código (`29460e3`) no conoce 0034; está anotado desde el cierre de CON-A |
+| `make db.sql` (solo lectura) | última `0041_campaign_result_escritura_web.sql` · `membership_scope` con 0 filas · `mc_app` ejecuta las dos firmas de `scope_allows` · `anon` no |
+
+### 7.3 Guion de humo (para Nicolás, con su sesión en producción)
+
+Hoy nadie tiene filas de alcance, así que **todo tiene que verse igual
+que antes del despliegue**. Lo que se prueba es que el filtro nuevo no
+esconde nada a quien no tiene alcance, y que las escrituras que cambiaron
+siguen funcionando. Solo los pasos 7 y 8 escriben en la base real.
+
+| # | Pantalla | Qué hacer | Qué tienes que ver | ¿Escribe? |
+|---|---|---|---|---|
+| 1 | `/campanas` | Abrir | las mismas campañas y cifras de siempre | no |
+| 2 | La ficha de una campaña con posts | Abrir | los posts asociados con sus views, el resultado y las facturas | no |
+| 3 | `/finanzas` | Abrir | los cuatro KPI y las cuentas por cobrar de siempre, sin cambios | no |
+| 4 | `/finanzas/gastos` | Abrir | los gastos del mes y la proyección. **No** la frase «Los gastos no están en tu alcance» | no |
+| 5 | `/finanzas/ingresos` y `/finanzas/flujo` | Abrir | lo de siempre; si Ingresos está vacío, «Todavía no hay ingresos…», **no** la frase de alcance | no |
+| 6 | `/conexiones` | Abrir | tus cuentas, incluida @selvathegolden; **no** «Las cuentas conectadas no están en tu alcance» | no |
+| 7 | La ficha de una campaña **tuya de prueba** | «Editar seguimiento», cambiar el código y guardar; luego dejarlo como estaba | se guarda y la ficha lo enseña (prueba el `UPDATE campaign c` nuevo con alcance) | **sí**: `campaign` y dos filas de `audit_log` |
+| 8 | Esa misma ficha, si tiene dos posts | «Marcar principal» en el otro post y volver | cambia la pastilla «Principal» (prueba `setPrimaryPost`, que ahora exige el post en el alcance) | **sí**: `campaign_post` y `audit_log` |
+| 9 | `/conexiones?error=fuera_de_alcance` | Abrir | la frase «Tu acceso a este espacio no alcanza a ese creador o a esa cuenta…» | no |
+
+Si algo de 1 a 6 sale vacío o distinto, es el alcance: vuelve al plan B
+de §7.2 y avísame.
 
 ## 8. Fuera de alcance, con su historia
 
