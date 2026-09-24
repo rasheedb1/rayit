@@ -282,7 +282,44 @@ Para apagarlo: `WORKER_ONCE` a cualquier otro valor (efecto inmediato).
 | `'sin handler'` escrito a mano en `salud.ts` | Importa `SKIPPED_NO_HANDLER` | — |
 | Identificadores en español | Renombrados los exportados y los locales nuevos (`timeAgo`, razones `due/retry/chained`, `up_to_date`…); los textos al usuario siguen en español | — |
 
-## 10. Fuera de alcance
+## 10. Salida a producción (23-sep)
+
+| Paso | Resultado |
+|---|---|
+| Merge de `origin/main` | 2a388d6 (solo `CIERRE-FIN.md`), sin conflictos |
+| `pnpm verificar` tras el merge | 15/15 tareas; raíz 8, `@mc/connectors` 203, `@mc/core` 267, `@mc/db` 814, `@mc/worker` 140, `@mc/web` 1168 (+1 todo); 0 fallos |
+| `next build` | compilado sin errores |
+| Push | `nicolas/WRK-worker-produccion` y `main` por avance rápido: `2a388d6..8c9f133` |
+| Plan B (producción anterior) | `https://on-cue-jrzfr2n2v-influ3.vercel.app` |
+| Deploy | desde `rayit-deploy` en `origin/main`; `on-cue-msvpgxhw9-influ3.vercel.app`, `gitCommitSha` 8c9f133, alias `on-cue-web.vercel.app` apuntando ahí (API v13). Después, CON-B desplegó d97f010, que contiene 8c9f133 |
+| Rutas | `/` 200, `/login` 200, `/resumen` 200, `/conexiones` 200, `/campanas` 200, `/finanzas` 200, `/cotizar` 200, `/accesos` 200; ninguna 500 |
+| `make db.guardia` (desde `rayit-deploy`, en `origin/main`) | **Roja por algo ajeno a WRK**: «faltan 1 migración(es) por aplicar: 0041_campaign_result_escritura_web.sql» (la de CAM, en `main` desde antes de este cierre). WRK no trae migración, así que no se volvió atrás. La cierra `make db.migrate` (Nicolás, PARADA 1 de CAM). Desde el clon principal (en 29460e3) la guardia compara con código viejo y no sirve |
+
+WRK no cambia ninguna pantalla: lo que se desplegó es la nota de CON-2
+en el tablero. **El worker en sí sigue sin correr en producción**: PARADA 2.
+
+## 11. Guion de humo para Nicolás
+
+Solo lectura salvo donde se marca.
+
+1. `https://on-cue-web.vercel.app/` → tablero, tarjeta CON-2: la nota
+   del 23-sep dice que el worker muere en `SET ROLE` y que falta
+   `mc_worker_login` (WRK.md §1).
+2. `cd platform && make db.sql Q="select count(*) from job_run"` → 0
+   (nada corrió todavía en producción).
+3. Cuando Rasheed (o tú) corra §1.1 — **escribe en la base (roles)**:
+   `make db.sql Q="select pg_has_role('mc_worker_login','mc_worker','member')"` → `true`.
+4. Con `WORKER_DATABASE_URL` en `.env.local`: `pnpm --filter @mc/worker once`
+   — **escribe en la base real** (`job_run`, y lo que hagan los jobs:
+   `oauth.refresh` puede renovar el token de @selvathegolden). Se espera
+   salida 0 o 1 con la tabla de salud al final.
+5. `pnpm --filter @mc/worker salud` → una línea por job con su última
+   corrida; «Datos al…» aparece cuando los dos `collect.*` terminen bien.
+6. Repite el paso 4 enseguida: no debe correr nada nuevo (todo «al día»).
+7. PARADA 2: con tu visto bueno a §3 y el acuerdo con Rasheed, §7 pasos 4–5
+   (secretos en GitHub, `WORKER_ONCE=on`, una corrida a mano, `schedule`).
+
+## 12. Fuera de alcance
 
 SMTP y el envío de correos (CIM-10); jobs nuevos (`trait_lift`,
 `report.generate`, `video.*`, `outbound.dispatch`, `radar.scan`,
