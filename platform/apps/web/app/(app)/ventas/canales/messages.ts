@@ -50,6 +50,7 @@ export const MESSAGES = {
     retry: "Volver a intentar",
     disconnect: "Desconectar",
     disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes por este canal se detienen.",
+    cancel: "Cancelar",
     saveCaps: "Guardar límites",
     saving: "Guardando…",
   },
