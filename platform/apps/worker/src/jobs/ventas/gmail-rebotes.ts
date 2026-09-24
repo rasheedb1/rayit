@@ -39,6 +39,15 @@ export interface GmailBounceMessage {
   subject: string | null;
   /** El texto plano del cuerpo. */
   text: string;
+  /**
+   * La hora a la que el aviso llegó al buzón (internalDate de
+   * messages.get): la pone Gmail, no el servidor remoto. Es la que manda
+   * para el cursor (r4). Opcional para aceptar un GmailMessage que no la
+   * traiga aparte; el normalizeGmailMessage de VEN-9 ya llena `sentAt`
+   * con ella.
+   */
+  internalDate?: Date | null;
+  /** Respaldo: la cabecera Date del aviso, que pone el remoto y puede venir atrasada. */
   sentAt: Date | null;
   inReplyTo: string | null;
   references: readonly string[];
@@ -80,7 +89,9 @@ export function gmailMessageToBounce(m: GmailBounceMessage, fallbackReceivedAt: 
     subject: m.subject,
     body: m.text,
     headers,
-    receivedAt: m.sentAt ?? fallbackReceivedAt,
+    // internalDate y no la cabecera Date: un aviso con la Date atrasada
+    // quedaría detrás del cursor y no se volvería a leer.
+    receivedAt: m.internalDate ?? m.sentAt ?? fallbackReceivedAt,
   };
 }
 

@@ -19,10 +19,11 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { BOUNCE_READING_CONNECTED } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import {
-  BOUNCES_JOB_ID, gmailNoConfigurado, nextBouncesCursor, runBounces, type BounceBatch, type BounceMailbox, type BounceMessage,
+  BOUNCES_JOB_ID, bouncesMailboxFor, gmailNoConfigurado, nextBouncesCursor, runBounces, type BounceBatch, type BounceMailbox, type BounceMessage,
   type MailboxFor,
 } from '../src/jobs/ventas/outbound.bounces.ts';
 import {
@@ -125,6 +126,19 @@ test('el job está registrado y programado cada media hora (0038)', async () => 
     [BOUNCES_JOB_ID],
   );
   assert.deepEqual(rows[0], { queue: 'sales', default_cron: '*/30 * * * *' });
+});
+
+test('cuando llegue el conector de Gmail (VEN-9), el job registrado tiene que leer los buzones (r4)', () => {
+  // El conector vive en packages/connectors/src/gmail.ts (rama VEN-9-canales). Mientras no esté, el job
+  // registrado no lee nada y la política lo dice; en cuanto esté, esta prueba exige conectarlo.
+  const conector = new URL('../../../packages/connectors/src/gmail.ts', import.meta.url);
+  if (existsSync(conector)) {
+    assert.notEqual(bouncesMailboxFor, gmailNoConfigurado, 'VEN-9 está integrado: construye el GmailApi de cada cuenta en bouncesMailboxFor');
+    assert.equal(BOUNCE_READING_CONNECTED, true, 'y enciende BOUNCE_READING_CONNECTED para que la política deje de avisarlo');
+  } else {
+    assert.equal(bouncesMailboxFor, gmailNoConfigurado);
+    assert.equal(BOUNCE_READING_CONNECTED, false, 'sin conector, /ventas/politica tiene que decir que la lectura de rebotes no está conectada');
+  }
 });
 
 test('sin conector de Gmail la cuenta es «canal no configurado» y no se toca nada', async () => {
@@ -335,8 +349,9 @@ class GmailFalso implements GmailBounceSource {
   async searchBounces(opts: { since: Date; max?: number; pageToken?: string }): Promise<GmailRefPage> {
     this.paginas++;
     const todos = this.inbox
-      .filter((m) => /mailer-daemon|postmaster/i.test(m.from ?? '') && (m.sentAt?.getTime() ?? 0) >= opts.since.getTime())
-      .sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0));
+      // Como Gmail: after: y el orden van por internalDate, no por la cabecera Date.
+      .filter((m) => /mailer-daemon|postmaster/i.test(m.from ?? '') && llegada(m) >= opts.since.getTime())
+      .sort((a, b) => llegada(b) - llegada(a));
     const desde = Number(opts.pageToken ?? 0);
     const tam = Math.min(opts.max ?? 100, this.pagina);
     const hasta = desde + tam;
@@ -351,6 +366,10 @@ class GmailFalso implements GmailBounceSource {
     if (!m) throw new Error(`no existe ${id}`);
     return m;
   }
+}
+
+function llegada(m: GmailBounceMessage): number {
+  return (m.internalDate ?? m.sentAt)?.getTime() ?? 0;
 }
 
 /** El aviso duro de Gmail, como lo normaliza normalizeGmailMessage de VEN-9 (solo el text/plain). */
@@ -387,6 +406,22 @@ test('el adaptador de Gmail entrega el aviso con su destinatario, su hilo y su h
   );
   const sinFecha = gmailMessageToBounce({ ...avisoDeGmail('g-2', 'y@m.test', '<a@b>', '2026-09-23T00:00:00Z'), sentAt: null }, NOW);
   assert.equal(sinFecha.receivedAt, NOW);
+});
+
+test('la hora del aviso es la de llegada al buzón (internalDate), no su cabecera Date atrasada (r4)', async () => {
+  const cursorDeLaCuenta = new Date('2026-09-23T12:00:00Z');
+  const atrasado: GmailBounceMessage = {
+    ...avisoDeGmail('g-atrasado', 'z@marca.test', '<z@b>', '2026-09-21T12:00:00Z'),
+    internalDate: new Date('2026-09-23T12:30:00Z'),
+  };
+  const r = await gmailBounceMailbox(new GmailFalso([atrasado])).listBounceCandidates({ since: cursorDeLaCuenta, max: 10 });
+  assert.equal(r.messages[0]?.receivedAt.toISOString(), '2026-09-23T12:30:00.000Z');
+  // A medias, el cursor queda en ese aviso: por delante del cursor viejo, no dos días atrás.
+  const siguiente = nextBouncesCursor(cursorDeLaCuenta, { messages: r.messages, complete: false }, NOW);
+  assert.equal(siguiente.toISOString(), '2026-09-23T12:30:00.000Z');
+  assert.ok(siguiente.getTime() >= cursorDeLaCuenta.getTime());
+  // Sin internalDate, la cabecera Date sigue de respaldo.
+  assert.equal(gmailMessageToBounce({ ...atrasado, internalDate: null }, NOW).receivedAt.toISOString(), '2026-09-21T12:00:00.000Z');
 });
 
 test('con el searchBounces de hoy (un arreglo, sin páginas) y la lista llena, el lote sale marcado como truncado', async () => {

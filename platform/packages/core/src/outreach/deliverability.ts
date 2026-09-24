@@ -263,6 +263,17 @@ export * from './warmup.ts';
 //   blocked  el servidor rechazó por política o reputación (5.7.x): dice
 //            algo de quien envía, no de la dirección; se registra.
 
+/**
+ * Si el job outbound.bounces lee de verdad los buzones de Gmail. Hoy no:
+ * el conector de Gmail es de VEN-9 y todavía no está integrado, así que
+ * el job registrado usa gmailNoConfigurado. Lo lee /ventas/politica para
+ * no enseñar «Ningún rebote» como si todo fuera bien, y una prueba del
+ * worker (outbound-bounces.test.ts) exige que se cambie a true —y que el
+ * job registrado construya el buzón de cada cuenta— en cuanto el conector
+ * exista en packages/connectors.
+ */
+export const BOUNCE_READING_CONNECTED = false;
+
 export type BounceKind = 'hard' | 'soft' | 'blocked';
 
 export interface InboundMail {

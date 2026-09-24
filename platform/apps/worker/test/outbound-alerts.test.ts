@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import type { Mailer, MailMessage } from '../src/jobs/ventas/correo.ts';
-import { ALERTAS_URL, SALUD_URL } from '../src/jobs/ventas/messages.ts';
+import { ALERT_TEXTS_EN, ALERT_TEXTS_ES, ALERTAS_URL, SALUD_URL, fillTemplate } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, createAlertasJob, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { JobContext } from '../src/runner/registry.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
@@ -39,13 +39,16 @@ const USER_DUENO_2 = '0000015a-0000-4000-8000-0000000000a4';
 const USER_OWNER_EN = '0000015a-0000-4000-8000-0000000000a5';
 
 const SALUD = JSON.parse(readFileSync(new URL('./fixtures/salud-outreach.json', import.meta.url), 'utf8')) as Record<
-  'enProblemas' | 'sano',
+  'enProblemas' | 'sano' | 'todoMal',
   AlertInput
 >;
 
 /** La salud grabada de cada workspace de fixture. */
 const EN_PROBLEMAS = new Set([WS_MAL, WS_DOS, WS_EN]);
-const desdeFixture: ReadSignals = async (_tx, ws) => (EN_PROBLEMAS.has(ws) ? SALUD.enProblemas : SALUD.sano);
+const WS_TODO = '0000015a-0000-4000-8000-000000000007';
+const WS_TARDE = '0000015a-0000-4000-8000-000000000008';
+const desdeFixture: ReadSignals = async (_tx, ws) =>
+  ws === WS_TODO ? SALUD.todoMal : EN_PROBLEMAS.has(ws) ? SALUD.enProblemas : SALUD.sano;
 
 class CarteroFalso implements Mailer {
   enviados: MailMessage[] = [];
@@ -93,6 +96,25 @@ async function avisos(ws: string) {
   );
   return rows;
 }
+
+test('los plurales salen de Intl.PluralRules del locale, con 1 y con 2 (r4)', () => {
+  const es = ALERT_TEXTS_ES.alerts.queue_stuck;
+  const en = ALERT_TEXTS_EN.alerts.queue_stuck;
+  const con = (n: number) => [{ stuck: String(n) }, { stuck: n }] as const;
+  assert.equal(fillTemplate(es.body, ...con(1), 'es-CO'), '1 mensaje lleva más de cinco minutos enviándose. Si sigue así, revisa el canal.');
+  assert.equal(fillTemplate(es.body, ...con(2), 'es-CO'), '2 mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.');
+  assert.equal(fillTemplate(en.body, ...con(1), 'en-US'), '1 message has been sending for more than five minutes. If it keeps up, check the channel.');
+  assert.equal(fillTemplate(en.body, ...con(2), 'en-US'), '2 messages have been sending for more than five minutes. If it keeps up, check the channel.');
+  const noSends = ALERT_TEXTS_ES.alerts.no_sends.body;
+  assert.match(fillTemplate(noSends, { dueToSend: '1' }, { dueToSend: 1 }, 'es-CO'), /^Había 1 mensaje por salir y no salió en 24 horas/);
+  assert.match(fillTemplate(noSends, { dueToSend: '2' }, { dueToSend: 2 }, 'es-CO'), /^Había 2 mensajes por salir/);
+  const bounces = ALERT_TEXTS_ES.alerts.bounce_rate.body;
+  assert.match(fillTemplate(bounces, { bounces: '1', attempts: '12' }, { bounces: 1 }, 'es-CO'), /^1 de 12 correos .* rebotó porque/);
+  assert.match(fillTemplate(bounces, { bounces: '2', attempts: '12' }, { bounces: 2 }, 'es-CO'), /^2 de 12 correos .* rebotaron porque/);
+  const subject = ALERT_TEXTS_ES.email.subject;
+  assert.equal(fillTemplate(subject, { n: '1', workspace: 'X' }, { n: 1 }, 'es-CO'), 'On Cue · Una alerta del outreach de X');
+  assert.equal(fillTemplate(subject, { n: '2', workspace: 'X' }, { n: 2 }, 'es-CO'), 'On Cue · 2 alertas del outreach de X');
+});
 
 test('el job está registrado y corre cada hora (0038)', async () => {
   assert.ok(allJobs.some((j) => j.id === ALERTAS_JOB_ID));
@@ -248,4 +270,105 @@ test('sin APP_URL el job lo avisa en el registro y el resumen sale sin enlaces (
   assert.doesNotMatch(correo.text, /https?:\/\//, 'ningún enlace, tampoco a localhost');
   assert.match(correo.text, /Lo ves en On Cue, en Ventas → Política de envío\./);
   assert.ok((await avisos(WS_SIN_URL)).every((a) => a.emailed_at !== null));
+});
+
+/** Un workspace con dueña y política, sin cuentas en la base: la salud llega del fixture. */
+async function espacioDeFixture(ws: string, user: string, slug: string, name: string): Promise<void> {
+  await db.raw.exec(`
+    INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${ws}', '${slug}', '${name}', 'America/Bogota', 'es-CO');
+    INSERT INTO app_user (id, email, name) VALUES ('${user}', '${slug}@alertas.test', '${name}');
+    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${ws}', '${user}', 'owner');
+    INSERT INTO outbound_policy (workspace_id) VALUES ('${ws}');
+  `);
+}
+
+test('todo mal (r4): el fixture da las cinco notificaciones, con su gravedad, su enlace y sus cifras, una sola vez', async () => {
+  await espacioDeFixture(WS_TODO, '0000015a-0000-4000-8000-0000000000a7', 'alertas-todo', 'Todo Mal');
+  const cartero = new CarteroFalso();
+  // La inserción pasa el CHECK de notification.kind para los cinco tipos: si no, el workspace falla entero.
+  const fallos: unknown[] = [];
+  await runAlertas(db, new Date('2026-10-01T14:00:00Z'), { mailer: cartero, appUrl: 'https://app.test', readSignals: desdeFixture }, (_ws, e) =>
+    fallos.push(e),
+  );
+  assert.deepEqual(fallos, []);
+
+  const todo = await avisos(WS_TODO);
+  const porTipo = Object.fromEntries(todo.map((a) => [a.kind, a]));
+  assert.deepEqual(
+    todo.map((a) => [a.kind, a.severity, a.action_url]).sort(),
+    [
+      ['outreach_account_down', 'critical', '/ventas/politica#cuentas'],
+      ['outreach_bounce_rate', 'critical', '/ventas/politica#salud'],
+      ['outreach_llm_budget', 'warning', '/ventas/politica#presupuesto'],
+      ['outreach_no_sends', 'warning', '/ventas/politica#salud'],
+      ['outreach_queue_stuck', 'warning', '/ventas/politica#salud'],
+    ],
+  );
+  // Ninguna {variable} sin rellenar, ni en el título ni en el cuerpo.
+  for (const a of todo) {
+    assert.ok(!a.title_es.includes('{'), `título sin rellenar: ${a.title_es}`);
+    assert.ok(!(a.body_es ?? '').includes('{'), `cuerpo sin rellenar: ${a.body_es}`);
+  }
+  // Las cifras, con Intl y con su plural; el dinero en la moneda del presupuesto (USD) y el locale del espacio.
+  const usd = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'USD' });
+  assert.equal(
+    porTipo['outreach_llm_budget']?.body_es,
+    `Se gastaron ${usd.format(5.2)} de ${usd.format(5)} hoy. Los mensajes nuevos esperan a mañana; lo aprobado sigue saliendo.`,
+  );
+  assert.equal(porTipo['outreach_queue_stuck']?.title_es, 'Hay un mensaje atascado en la cola');
+  assert.match(porTipo['outreach_queue_stuck']?.body_es ?? '', /^1 mensaje lleva más de cinco minutos/);
+  assert.match(porTipo['outreach_no_sends']?.body_es ?? '', /^Había 7 mensajes por salir y no salió ninguno/);
+  assert.match(porTipo['outreach_account_down']?.body_es ?? '', /^No sale nada por una cuenta de canal hasta que se reconecte/);
+  assert.match(porTipo['outreach_bounce_rate']?.body_es ?? '', /^3 de 20 correos enviados en las últimas 24 horas rebotaron/);
+
+  // El correo de resumen lista las cinco, cada una con su enlace.
+  const [correo] = cartero.enviados.filter((m) => m.subject.includes('Todo Mal'));
+  assert.equal(correo?.subject, 'On Cue · 5 alertas del outreach de Todo Mal');
+  for (const a of todo) {
+    assert.ok(correo?.text.includes(`· ${a.title_es}`), `el correo lista «${a.title_es}»`);
+    assert.ok(correo?.text.includes(`https://app.test${a.action_url}`));
+  }
+
+  // Una segunda corrida el mismo día no crea ninguna ni manda otro correo.
+  const otra = new CarteroFalso();
+  await runAlertas(db, new Date('2026-10-01T18:00:00Z'), { mailer: otra, appUrl: 'https://app.test', readSignals: desdeFixture });
+  assert.equal((await avisos(WS_TODO)).length, 5);
+  assert.equal(otra.enviados.filter((m) => m.subject.includes('Todo Mal')).length, 0);
+});
+
+test('un resumen por día (r4): lo que aparece por la tarde se queda en la campana y va en el correo de mañana', async () => {
+  await espacioDeFixture(WS_TARDE, '0000015a-0000-4000-8000-0000000000a8', 'alertas-tarde', 'Por La Tarde');
+  const soloRebotes: AlertInput = { ...SALUD.enProblemas, health: { ...SALUD.enProblemas.health, accountsDown: 0 } };
+  let salud: AlertInput = soloRebotes;
+  const leer: ReadSignals = async (_tx, ws) => (ws === WS_TARDE ? salud : SALUD.sano);
+  const deTarde = (c: CarteroFalso) => c.enviados.filter((m) => m.subject.includes('Por La Tarde'));
+
+  // 8:00 en Bogotá: rebotes. Sale el resumen, con una alerta.
+  const manana = new CarteroFalso();
+  await runAlertas(db, new Date('2026-10-03T13:00:00Z'), { mailer: manana, appUrl: 'https://app.test', readSignals: leer });
+  assert.equal(deTarde(manana).length, 1);
+  assert.equal(deTarde(manana)[0]?.subject, 'On Cue · Una alerta del outreach de Por La Tarde');
+
+  // 15:00: cae una cuenta. Notificación nueva en la campana, pero hoy no sale otro correo.
+  salud = { ...soloRebotes, health: { ...soloRebotes.health, accountsDown: 1 } };
+  const tarde = new CarteroFalso();
+  const r = await runAlertas(db, new Date('2026-10-03T20:00:00Z'), { mailer: tarde, appUrl: 'https://app.test', readSignals: leer });
+  assert.equal(r.created.account_down, 1);
+  assert.ok(r.emailDeferred >= 1);
+  assert.equal(deTarde(tarde).length, 0, 'un solo correo al día');
+  assert.deepEqual(
+    (await avisos(WS_TARDE)).map((a) => [a.kind, a.emailed_at === null]),
+    [
+      ['outreach_bounce_rate', false],
+      ['outreach_account_down', true],
+    ],
+  );
+
+  // Al día siguiente, a las 8:00, la cuenta sigue caída: el resumen trae la de ayer por la tarde y la de hoy.
+  salud = { ...SALUD.sano, health: { ...SALUD.sano.health, accountsDown: 1 } };
+  const otroDia = new CarteroFalso();
+  await runAlertas(db, new Date('2026-10-04T13:00:00Z'), { mailer: otroDia, appUrl: 'https://app.test', readSignals: leer });
+  assert.equal(deTarde(otroDia).length, 1);
+  assert.equal(deTarde(otroDia)[0]?.subject, 'On Cue · 2 alertas del outreach de Por La Tarde');
+  assert.ok((await avisos(WS_TARDE)).every((a) => a.emailed_at !== null));
 });

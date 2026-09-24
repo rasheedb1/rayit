@@ -344,4 +344,13 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
   });
 }
 
-export const bouncesJob = createBouncesJob(gmailNoConfigurado);
+/**
+ * El buzón con el que corre el job registrado. Al integrar VEN-9: construir
+ * aquí el GmailApi de cada outreach_channel_account (con su token del
+ * vault) y devolver gmailBounceMailbox(api), y poner
+ * BOUNCE_READING_CONNECTED (@mc/core) en true. La prueba «cuando llegue el
+ * conector…» de outbound-bounces.test.ts falla mientras no se haga.
+ */
+export const bouncesMailboxFor: MailboxFor = gmailNoConfigurado;
+
+export const bouncesJob = createBouncesJob(bouncesMailboxFor);
