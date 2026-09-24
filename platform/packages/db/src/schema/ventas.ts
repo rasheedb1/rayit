@@ -408,4 +408,6 @@ export const outboundTouch = pgTable('outbound_touch', {
   repliesCheckedAt: timestamptz('replies_checked_at'),
   /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale (0051 §8). */
   capsReservedOn: date('caps_reserved_on', { mode: 'string' }),
+  /** El día en que el intento AMBIGUO reservó su plaza: vuelve ahí si el proveedor dice que no salió (0052 §2). */
+  unconfirmedCapsOn: date('unconfirmed_caps_on', { mode: 'string' }),
 });

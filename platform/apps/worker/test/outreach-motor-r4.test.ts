@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { FakeGmail, InMemorySecretStore, LINKEDIN_INVITE_NOTE_MAX as CONNECTOR_NOTE_MAX, type GmailMessage } from '@mc/connectors';
 import { holdReasonText, LINKEDIN_INVITE_NOTE_MAX } from '@mc/core/outreach/messages';
-import { enrollContacts } from '@mc/db/queries/outreach';
+import { emptyClaimReport, enrollContacts } from '@mc/db/queries/outreach';
 import { buildChannels } from '../src/jobs/ventas/canales/index.ts';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
 import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
@@ -333,15 +333,12 @@ test('una respuesta automática que pide la baja da de baja; no cuenta como resp
 test('job:dispatch cuenta los cancelados como la metadata del job, y un argumento desconocido enseña el uso', () => {
   const r = {
     zombies: { failed: 0, canceled: 0, released: 0 },
-    claim: {
-      claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, outsideWindow: [], waitingAccount: [],
-      accountDownNotices: 0, rescheduled: [],
-    },
+    claim: { ...emptyClaimReport(), claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, canceledCompanyCap: 5 },
     sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [{ touchId: 'x', reason: 'opted_out' }], postponed: [], held: [],
     released: [], warnings: [], errors: [], notConfigured: [],
   };
-  assert.equal(canceledCount(r), 7);
+  assert.equal(canceledCount(r), 12);
   const texto = resumenDespacho(r);
-  assert.match(texto, /Cancelados: 7 \(2 por correo rebotado\)\. Sin dirección: 4\./);
+  assert.match(texto, /Cancelados: 12 \(2 por correo rebotado, 5 por el tope de la marca\)\. Sin dirección: 4\./);
   assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);
 });

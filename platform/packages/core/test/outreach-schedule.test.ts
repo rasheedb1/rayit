@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addBusinessDays, clampToWindow, isInsideWindow, nextBusinessSlot, nextRetryAt, nextWindowSlot, parseClock, planSteps,
+  addBusinessDays, clampToWindow, companyGapSlot, paceSlot, isInsideWindow, nextBusinessSlot, nextRetryAt, nextWindowSlot, parseClock, planSteps,
   retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClockSeconds, zonedInstant, zonedParts,
   MAX_SEND_ATTEMPTS, RETRY_BASE_MS, RETRY_MAX_MS, type PlanStep,
 } from '../src/outreach/schedule.ts';
@@ -175,4 +175,39 @@ test('shiftFollowingSteps: el paso que va detrás se corre con el que se movió,
   // Mismo día, orden siguiente: al menos cinco minutos después.
   const mismo = shiftFollowingSteps(moved, [{ id: 'y', dayOffset: 0, orderInDay: 1, at: at('2026-09-25T15:00:00Z') }], BOGOTA, W);
   assert.ok(mismo[0]!.at.getTime() >= moved.at.getTime() + 5 * 60 * 1000);
+});
+
+// ---------------------------------------------------------------------
+// El ritmo (r5)
+// ---------------------------------------------------------------------
+
+test('paceSlot: diez por hora en Instagram; la separación mínima lleva su azar; fuera de la ventana, mañana', () => {
+  const now = new Date('2026-09-24T14:30:00Z'); // 09:30 en Bogotá, jueves
+  const place = { timeZone: BOGOTA, window: W, seed: 'toque-1' };
+  const ig = { hourlyCap: 10, minGapSeconds: 120 };
+  assert.equal(paceSlot(now, { lastHour: 0, oldestInHour: null, last: null }, ig, place), null, 'una cuenta sin envíos sale');
+  const lleno = paceSlot(now, { lastHour: 10, oldestInHour: new Date('2026-09-24T14:05:00Z'), last: new Date('2026-09-24T14:20:00Z') }, ig, place)!;
+  assert.ok(lleno.getTime() > new Date('2026-09-24T15:05:00Z').getTime(), 'cuando el más viejo cumple la hora');
+  const pegado = paceSlot(now, { lastHour: 1, oldestInHour: now, last: now }, ig, place)!;
+  const espera = pegado.getTime() - now.getTime();
+  assert.ok(espera >= 120_000 && espera < 240_000, `entre 120 y 240 s, no ${espera}`);
+  const otro = paceSlot(now, { lastHour: 1, oldestInHour: now, last: now }, ig, { ...place, seed: 'toque-2' })!;
+  assert.notEqual(otro.getTime(), pegado.getTime(), 'el azar depende del toque');
+  assert.equal(paceSlot(now, { lastHour: 1, oldestInHour: now, last: now }, { hourlyCap: 5, minGapSeconds: 0 }, place), null, 'sin separación, el correo sale');
+  const cierre = new Date('2026-09-24T21:59:00Z'); // 16:59
+  const manana = paceSlot(cierre, { lastHour: 1, oldestInHour: cierre, last: cierre }, ig, place)!;
+  assert.equal(localDay(manana, BOGOTA), '2026-09-25', 'después del cierre, el siguiente día hábil');
+});
+
+test('companyGapSlot: tres días desde el último mensaje a la marca, dentro de la ventana', () => {
+  const place = { timeZone: BOGOTA, window: W, seed: 'toque-1' };
+  const lunes = new Date('2026-09-21T15:00:00Z'); // lunes 10:00
+  assert.equal(companyGapSlot(new Date('2026-09-24T15:00:01Z'), lunes, 3, place), null, 'ya pasaron tres días');
+  assert.equal(companyGapSlot(new Date('2026-09-22T15:00:00Z'), null, 3, place), null, 'nunca se le escribió');
+  assert.equal(companyGapSlot(new Date('2026-09-22T15:00:00Z'), lunes, 0, place), null, 'sin separación');
+  const jueves = companyGapSlot(new Date('2026-09-22T15:00:00Z'), lunes, 3, place)!;
+  assert.equal(localDay(jueves, BOGOTA), '2026-09-24');
+  assert.ok(jueves.getTime() >= lunes.getTime() + 3 * 86_400_000);
+  const viernes = companyGapSlot(new Date('2026-09-22T15:00:00Z'), new Date('2026-09-25T21:30:00Z'), 1, place)!;
+  assert.equal(localDay(viernes, BOGOTA), '2026-09-28', 'un sábado se corre al lunes');
 });

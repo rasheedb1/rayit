@@ -122,8 +122,10 @@ export function resumenDespacho(r: DispatchReport): string {
   const lineas = [
     `Despacho: ${r.claim.claimed} reclamado(s), ${r.sent.length} enviado(s), ${r.retried.length} a reintento, ${r.failed.length} fallido(s).`,
     `  Reprogramados por tope: ${r.claim.rescheduled.length}. Fuera de la ventana: ${r.claim.outsideWindow.length}. ` +
-      `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}.`,
-    `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado). Sin dirección: ${r.claim.skippedNoAddress}. ` +
+      `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}. ` +
+      `Movidos por el ritmo (marca o cuenta): ${r.claim.paced.length}.`,
+    `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado, ${r.claim.canceledCompanyCap} por el tope de la marca). ` +
+      `Sin dirección: ${r.claim.skippedNoAddress}. ` +
       `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} devuelto(s) a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];
   if (r.confirmed.length) lineas.push(`  Intentos ambiguos que sí habían salido (no se reenviaron): ${r.confirmed.length}.`);

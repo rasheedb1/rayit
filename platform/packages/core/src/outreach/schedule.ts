@@ -402,3 +402,69 @@ export function nextRetryAt(
   const raw = new Date(now.getTime() + retryDelayMs(attempt, seed));
   return place ? nextWindowSlot(raw, place.timeZone, place.window, { seed: `${seed}:retry:${attempt}` }) : raw;
 }
+
+// ---------------------------------------------------------------------
+// El ritmo (VEN-10 r5): por hora y por cuenta, y por marca
+// ---------------------------------------------------------------------
+
+/** Lo que una cuenta ya sacó: en la última hora corrida y su último envío. */
+export interface AccountPace {
+  /** Envíos (o reclamos en curso) de la cuenta en la última hora. */
+  lastHour: number;
+  /** El más viejo de esa hora: cuando sale de la hora, cabe otro. */
+  oldestInHour: Date | null;
+  /** El último envío o reclamo de la cuenta. */
+  last: Date | null;
+}
+
+/**
+ * ¿Puede salir ahora un mensaje por esta cuenta? null si sí; si no, el
+ * primer instante en que cabe (docs/ventas-outreach.md §5.1):
+ *
+ *   · la cuenta ya sacó `hourlyCap` en la última hora → cuando el más
+ *     viejo de esa hora cumpla una hora;
+ *   · el último envío fue hace menos de `minGapSeconds` → el último más la
+ *     separación, más un azar determinista de hasta otra separación (por
+ *     `seed`): LinkedIn pide espaciar al azar, no cada 90 s exactos.
+ *
+ * Lo que resulte se encierra en la ventana laboral (nextWindowSlot): una
+ * espera que cae después del cierre sale mañana al abrir.
+ */
+export function paceSlot(
+  now: Date,
+  pace: AccountPace,
+  limits: { hourlyCap: number; minGapSeconds: number },
+  place: { timeZone: string; window?: SendWindow; seed: string },
+): Date | null {
+  let until = now.getTime();
+  if (limits.hourlyCap <= 0) {
+    until = Math.max(until, now.getTime() + 3600_000);
+  } else if (pace.lastHour >= limits.hourlyCap) {
+    const oldest = pace.oldestInHour?.getTime() ?? now.getTime();
+    until = Math.max(until, oldest + 3600_000 + 1000);
+  }
+  if (limits.minGapSeconds > 0 && pace.last && now.getTime() - pace.last.getTime() < limits.minGapSeconds * 1000) {
+    const jitter = Math.floor(seededUnit(`${place.seed}:gap`) * limits.minGapSeconds * 1000);
+    until = Math.max(until, pace.last.getTime() + limits.minGapSeconds * 1000 + jitter);
+  }
+  if (until <= now.getTime()) return null;
+  return nextWindowSlot(new Date(until), place.timeZone, place.window, { seed: `${place.seed}:pace` });
+}
+
+/**
+ * La separación mínima entre dos mensajes a la misma marca
+ * (outbound_policy.min_days_between_touches): null si ya pasó; si no, el
+ * último envío más esos días, encerrado en la ventana laboral con su
+ * dispersión. Días de calendario (24 h), como los cuenta la política.
+ */
+export function companyGapSlot(
+  now: Date,
+  lastSentToCompany: Date | null,
+  minDays: number,
+  place: { timeZone: string; window?: SendWindow; seed: string },
+): Date | null {
+  if (!lastSentToCompany || minDays <= 0) return null;
+  const earliest = lastSentToCompany.getTime() + minDays * 24 * 3600_000;
+  if (earliest <= now.getTime()) return null;
+  return nextWindowSlot(new Date(earliest), place.timeZone, place.window, { seed: `${place.seed}:company` });
+}

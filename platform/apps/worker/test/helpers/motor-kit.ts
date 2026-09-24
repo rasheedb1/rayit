@@ -69,6 +69,12 @@ export interface WorkspaceOptions {
   warmupDays?: number;
   /** Desde cuándo calienta la cuenta (NULL: sin calentamiento). */
   warmupStartedAt?: Date | null;
+  /** (r5) La política de la marca y la revisión humana (por defecto: sin tope, sin separación, sin revisión). */
+  maxTouchesPerCompany?: number;
+  minDaysBetweenTouches?: number;
+  humanReview?: boolean;
+  /** La zona de la secuencia (NULL: la del workspace). */
+  sequenceTimeZone?: string;
 }
 
 export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb; prefix: string; slug: string }) {
@@ -97,8 +103,12 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
       INSERT INTO company (id, name, owner_workspace_id) VALUES ('${w.company}', 'Marca ${n}', '${w.id}');
       INSERT INTO company_link (workspace_id, company_id) VALUES ('${w.id}', '${w.company}');
       INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};
-      INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, warmup_days)
-      VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100, ${o.warmupDays ?? 14});
+      -- Sin revisión humana, sin tope ni separación con la marca, salvo que
+      -- la prueba los pida (r5: el motor los aplica; aquí se prueba lo demás).
+      INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, warmup_days, require_human_review,
+                                   max_touches_per_company, min_days_between_touches)
+      VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100, ${o.warmupDays ?? 14}, ${o.humanReview ? 'true' : 'false'},
+              ${o.maxTouchesPerCompany ?? 50}, ${o.minDaysBetweenTouches ?? 0});
       -- La fila del almacén a la que apunta secret_ref (el cifrado no importa aquí: el canal de la prueba usa su propio almacén).
       INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
       VALUES ('enc:gmail:${opts.slug}${n}', '${w.id}', '\\x00', decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'));
@@ -106,8 +116,8 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
                                             weekly_cap, secret_ref, warmup_started_at)
       VALUES ('${w.gmail}', '${w.id}', 'email', 'gmail_oauth', 'creadora${n}@${opts.slug}.test', 'Creadora ${n}', 'connected',
               ${o.dailyCap ?? 40}, 200, 'enc:gmail:${opts.slug}${n}', ${warmup});
-      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode)
-      VALUES ('${w.seq}', '${w.id}', 'Tres correos', 'email', 'active', 'auto');
+      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode, timezone)
+      VALUES ('${w.seq}', '${w.id}', 'Tres correos', 'email', 'active', 'auto', ${o.sequenceTimeZone ? `'${o.sequenceTimeZone}'` : 'NULL'});
       INSERT INTO outbound_step (id, workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time,
                                  subject_template, body_template, generate_with_ai) VALUES
         ('${w.steps[0]}', '${w.id}', '${w.seq}', 0, 0, 'email', 'email', '09:30', 'Hola, {{first_name}}',

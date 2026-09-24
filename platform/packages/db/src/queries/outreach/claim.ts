@@ -20,10 +20,17 @@
  *      · sin cuenta conectada del canal → espera una hora dentro de la
  *        ventana, con UN aviso por canal y día (r2): al reconectar sale
  *        solo;
+ *      · (r5) la marca ya recibió max_touches_per_company mensajes del
+ *        workspace en COMPANY_CAP_WINDOW_DAYS días, sumando todas sus
+ *        secuencias → cancelado (company_cap), y la cadencia avanza;
+ *      · (r5) el último mensaje a la marca fue hace menos de
+ *        min_days_between_touches → cuando se cumplan, en la ventana;
+ *      · (r5) la cuenta ya sacó su ritmo por hora, o su último envío fue
+ *        hace menos de su separación mínima (0052 §1) → cuando quepa;
  *      · un tope lleno (el de la cuenta según outreach_channel_account_limits
  *        con la curva de calentamiento de VEN-15, el semanal o el diario
- *        de correos del workspace) → al siguiente día hábil, y los
- *        pasos de detrás se corren con él;
+ *        de correos del workspace) → al siguiente día hábil DEL WORKSPACE
+ *        (el de los contadores, r5), y los pasos de detrás se corren con él;
  *   4. pasa los que quedan a processing con UPDATE … WHERE status =
  *      'scheduled' … RETURNING: hora del reclamo, intento, dirección y
  *      cuenta; la plaza del tope queda reservada;
@@ -33,7 +40,9 @@
  * cola con releaseUnattempted; un reclamo que se cayó sin llegar al
  * proveedor, con rescueZombies.
  */
-import { isInsideWindow, nextBusinessSlot, nextWindowSlot, type SendWindow } from '@mc/core';
+import {
+  companyGapSlot, isInsideWindow, nextBusinessSlot, nextWindowSlot, paceSlot, type AccountPace, type SendWindow,
+} from '@mc/core';
 import { createOptoutToken, optoutTokenHash, warmupDailyLimit, warmupDay } from '@mc/core/outreach/deliverability';
 import type { WorkerSql } from '../../client.ts';
 import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
@@ -91,6 +100,18 @@ export interface ClaimReport {
   accountDownNotices: number;
   /** Reprogramados porque un tope se agotó: al siguiente día hábil. */
   rescheduled: Array<{ touchId: string; until: Date; cap: 'account_day' | 'account_week' | 'workspace_day' }>;
+  /**
+   * (r5) Cancelados porque la marca ya recibió los mensajes que permite la
+   * política (max_touches_per_company en COMPANY_CAP_WINDOW_DAYS días,
+   * sumando todas las secuencias del workspace).
+   */
+  canceledCompanyCap: number;
+  /**
+   * (r5) Movidos sin gastar intento ni plaza por el ritmo: la separación
+   * mínima con la marca (company_gap, min_days_between_touches), o el
+   * ritmo por hora de la cuenta (account_hour, account_gap: 0052 §1).
+   */
+  paced: Array<{ touchId: string; until: Date; reason: 'company_gap' | 'account_hour' | 'account_gap' }>;
 }
 
 /**
@@ -101,13 +122,16 @@ export interface ClaimReport {
 export function emptyClaimReport(): ClaimReport {
   return {
     claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
-    accountDownNotices: 0, rescheduled: [],
+    accountDownNotices: 0, rescheduled: [], canceledCompanyCap: 0, paced: [],
   };
 }
 
 interface CandidateRow {
   id: string;
   workspace_id: string;
+  company_id: string;
+  max_touches_per_company: number;
+  min_days_between_touches: number;
   channel: string;
   channel_account_id: string | null;
   enrollment_id: string | null;
@@ -128,6 +152,10 @@ interface CandidateRow {
 interface Candidate {
   id: string;
   workspaceId: string;
+  companyId: string;
+  /** La política de la marca (r5): cuántos mensajes como mucho y cuántos días entre uno y otro. */
+  maxTouchesPerCompany: number;
+  minDaysBetweenTouches: number;
   channel: DispatchChannel;
   channelAccountId: string | null;
   enrollmentId: string | null;
@@ -150,6 +178,9 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
   return {
     id: text(fn, `$[${i}].id`, r.id),
     workspaceId: text(fn, `$[${i}].workspace_id`, r.workspace_id),
+    companyId: text(fn, `$[${i}].company_id`, r.company_id),
+    maxTouchesPerCompany: int(fn, `$[${i}].max_touches_per_company`, r.max_touches_per_company),
+    minDaysBetweenTouches: int(fn, `$[${i}].min_days_between_touches`, r.min_days_between_touches),
     channel,
     channelAccountId: textOrNull(fn, `$[${i}].channel_account_id`, r.channel_account_id),
     enrollmentId: textOrNull(fn, `$[${i}].enrollment_id`, r.enrollment_id),
@@ -204,6 +235,50 @@ export function accountDailyCap(input: {
     policyLimit: input.effectiveDaily,
     warmupDays: input.warmupDays,
   });
+}
+
+/**
+ * La ventana de max_touches_per_company (r5): los mensajes a una marca se
+ * cuentan en los últimos 90 días, sumando todas las secuencias del
+ * workspace. Pasado ese plazo, una campaña nueva vuelve a empezar de cero
+ * (el «no» de una marca lo cubre cooldown_days_after_no, aparte).
+ */
+export const COMPANY_CAP_WINDOW_DAYS = 90;
+
+/** Lo que una marca ya recibió del workspace: cuántos en la ventana y el último. */
+interface CompanyState {
+  recent: number;
+  last: Date | null;
+}
+
+async function companyState(tx: WorkerSql, c: Candidate, now: Date): Promise<CompanyState> {
+  const r = (
+    await tx.query<{ recent: number; last: unknown }>(
+      `SELECT count(*) FILTER (WHERE coalesce(t.sent_at, t.claimed_at) > $3::timestamptz - make_interval(days => $4::int))::int AS recent,
+              max(coalesce(t.sent_at, t.claimed_at)) AS last
+         FROM outbound_touch t
+        WHERE t.workspace_id = $1::uuid AND t.company_id = $2::uuid AND t.status IN ('sent', 'processing')
+          AND coalesce(t.sent_at, t.claimed_at) <= $3::timestamptz`,
+      [c.workspaceId, c.companyId, now.toISOString(), COMPANY_CAP_WINDOW_DAYS],
+    )
+  ).rows[0];
+  return { recent: int('claimDueTouches', 'company.recent', r?.recent ?? 0), last: toDate(r?.last) };
+}
+
+/** Lo que una cuenta sacó en la última hora (enviados y reclamos en curso), con el reloj del despachador. */
+async function accountPace(tx: WorkerSql, accountId: string, now: Date): Promise<AccountPace> {
+  const r = (
+    await tx.query<{ last_hour: number; oldest: unknown; last: unknown }>(
+      `SELECT count(*) FILTER (WHERE x.at > $2::timestamptz - interval '1 hour')::int AS last_hour,
+              min(x.at) FILTER (WHERE x.at > $2::timestamptz - interval '1 hour') AS oldest,
+              max(x.at) AS last
+         FROM (SELECT coalesce(t.sent_at, t.claimed_at) AS at FROM outbound_touch t
+                WHERE t.channel_account_id = $1::uuid AND t.status IN ('sent', 'processing')) x
+        WHERE x.at > $2::timestamptz - interval '1 day' AND x.at <= $2::timestamptz`,
+      [accountId, now.toISOString()],
+    )
+  ).rows[0];
+  return { lastHour: int('claimDueTouches', 'pace.last_hour', r?.last_hour ?? 0), oldestInHour: toDate(r?.oldest), last: toDate(r?.last) };
 }
 
 /** El reclamo del despachador (ver la cabecera). */
@@ -279,7 +354,8 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   }
   const candidates = (
     await tx.query<CandidateRow>(
-      `SELECT t.id, t.workspace_id, t.channel, t.channel_account_id, t.enrollment_id,
+      `SELECT t.id, t.workspace_id, t.company_id, p.max_touches_per_company, p.min_days_between_touches,
+              t.channel, t.channel_account_id, t.enrollment_id,
               st.step_type, st.day_offset, st.order_in_day,
               c.email::text AS email, c.linkedin_url, c.instagram_handle,
               p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
@@ -321,6 +397,11 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 
   const toClaim: Array<{ c: Candidate; recipient: string; accountId: string }> = [];
   const waiting = new Map<string, { workspaceId: string; channel: DispatchChannel; count: number }>();
+  // (r5) Lo que cada marca y cada cuenta ya recibieron o sacaron, leído una
+  // vez por corrida y sumado con lo que ESTA corrida reclama: dos toques de
+  // la misma marca o de la misma cuenta en el mismo lote cuentan.
+  const companies = new Map<string, CompanyState>();
+  const paces = new Map<string, AccountPace>();
   for (const c of candidates) {
     const recipient = recipientFor(c.channel, c.address);
     if (!recipient) {
@@ -339,8 +420,11 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     // El tope de la cuenta es el que rige hoy según outreach_channel_account_limits
     // (VEN-9, 0040): el suyo, nunca por encima del del proveedor ni del de la política.
     const acct = (
-      await tx.query<{ id: string; effective_daily: number; effective_weekly: number; warmup_started_at: unknown }>(
-        `SELECT a.id, l.effective_daily, l.effective_weekly, a.warmup_started_at
+      await tx.query<{
+        id: string; effective_daily: number; effective_weekly: number; effective_hourly: number; min_gap_seconds: number;
+        warmup_started_at: unknown;
+      }>(
+        `SELECT a.id, l.effective_daily, l.effective_weekly, l.effective_hourly, l.min_gap_seconds, a.warmup_started_at
            FROM outreach_channel_account a JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
           WHERE a.workspace_id = $1::uuid AND a.channel = $2 AND a.status = 'connected'
             AND ($3::uuid IS NULL OR a.id = $3::uuid)
@@ -360,6 +444,45 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       waiting.set(key, w);
       continue;
     }
+
+    // (r5) La política de la marca, antes de reservar ninguna plaza:
+    //   · max_touches_per_company: ya recibió todos los mensajes que se le
+    //     pueden mandar en COMPANY_CAP_WINDOW_DAYS días, contando todas
+    //     las secuencias del workspace → este no sale nunca (company_cap);
+    //   · min_days_between_touches: el último le llegó hace menos → espera
+    //     hasta que se cumplan, con los pasos de detrás detrás de él.
+    const companyKey = `${c.workspaceId}:${c.companyId}`;
+    const company = companies.get(companyKey) ?? (await companyState(tx, c, now));
+    companies.set(companyKey, company);
+    if (company.recent >= c.maxTouchesPerCompany) {
+      const r = await tx.query<{ enrollment_id: string | null }>(
+        `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'company_cap'
+          WHERE id = $1::uuid AND status = 'scheduled' RETURNING enrollment_id`,
+        [c.id],
+      );
+      report.canceledCompanyCap += note(r.rows);
+      continue;
+    }
+    const gapUntil = companyGapSlot(now, company.last, c.minDaysBetweenTouches, { timeZone: c.timeZone, window: c.window, seed: c.id });
+    if (gapUntil) {
+      await moveScheduled(tx, c, gapUntil);
+      report.paced.push({ touchId: c.id, until: gapUntil, reason: 'company_gap' });
+      continue;
+    }
+    // (r5) El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
+    const pace = paces.get(acct.id) ?? (await accountPace(tx, acct.id, now));
+    paces.set(acct.id, pace);
+    const limits = {
+      hourlyCap: int('claimDueTouches', 'effective_hourly', acct.effective_hourly),
+      minGapSeconds: int('claimDueTouches', 'min_gap_seconds', acct.min_gap_seconds),
+    };
+    const paceUntil = paceSlot(now, pace, limits, { timeZone: c.timeZone, window: c.window, seed: c.id });
+    if (paceUntil) {
+      await moveScheduled(tx, c, paceUntil);
+      report.paced.push({ touchId: c.id, until: paceUntil, reason: pace.lastHour >= limits.hourlyCap ? 'account_hour' : 'account_gap' });
+      continue;
+    }
+
     const dayCap = accountDailyCap({
       effectiveDaily: int('claimDueTouches', 'effective_daily', acct.effective_daily),
       warmupStartedAt: toDate(acct.warmup_started_at), warmupDays: c.warmupDays, now, timeZone: c.workspaceTimeZone,
@@ -378,13 +501,23 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     }
     if (cap) {
       await tx.query('ROLLBACK TO SAVEPOINT motor_cap');
-      const until = nextBusinessSlot(now, c.timeZone, c.window);
+      // (r5) El día de los contadores es el de la zona del WORKSPACE
+      // (outreach_local_date): el siguiente día hábil se cuenta ahí, y
+      // después se encierra en la ventana de la zona de la cadencia. Con la
+      // zona de la secuencia, el «mañana» podía caer todavía en el mismo
+      // día del contador y toparse otra vez, en bucle hasta medianoche.
+      const until = nextWindowSlot(nextBusinessSlot(now, c.workspaceTimeZone, c.window), c.timeZone, c.window, { seed: c.id });
       await moveScheduled(tx, c, until);
       report.rescheduled.push({ touchId: c.id, until, cap });
       continue;
     }
     await tx.query('RELEASE SAVEPOINT motor_cap');
     toClaim.push({ c, recipient, accountId: acct.id });
+    company.recent++;
+    company.last = now;
+    pace.lastHour++;
+    pace.oldestInHour = pace.oldestInHour ?? now;
+    pace.last = now;
   }
   for (const w of waiting.values()) {
     if (await notifyAccountDown(tx, { workspaceId: w.workspaceId, channel: w.channel, waiting: w.count, now })) report.accountDownNotices++;
