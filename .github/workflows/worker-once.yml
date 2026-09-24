@@ -4,13 +4,9 @@ name: Worker · una pasada
 # docs/propuestas/WRK.md): cada hora arranca `--once`, corre los jobs
 # vencidos según job_definition y sale. Sin proceso largo ni pg-boss.
 #
-# APAGADO hasta que Nicolás y Rasheed acuerden WRK.md (el despliegue
-# es CIM-7). Está apagado dos veces:
-#   1. no hay `schedule`: solo se lanza a mano (Actions → Run workflow);
-#   2. aun a mano, el job se salta si la variable de repositorio
-#      WORKER_ONCE no vale `on` (Settings → Variables → Actions).
-# Para encenderlo: los secretos de abajo, WORKER_ONCE=on, una corrida a
-# mano en verde y entonces descomentar `schedule`.
+# ENCENDIDO cada hora (WRK.md §7). Se apaga al instante poniendo la
+# variable de repositorio WORKER_ONCE a cualquier valor distinto de `on`
+# (Settings → Variables → Actions): el job se salta, programado o a mano.
 #
 # Secretos del repositorio (Settings → Secrets → Actions), solo nombres:
 #   WORKER_DATABASE_URL        rol mc_worker_login, pooler :5432 (WRK.md §1)
@@ -27,12 +23,12 @@ name: Worker · una pasada
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   # Cada hora al minuto 17: GitHub retrasa y a veces descarta los
-  #   # disparos en punto. oauth.refresh tiene cron */15; una pasada por
-  #   # hora basta con el margen de 120 min de abajo (el token de TikTok
-  #   # dura 24 h).
-  #   - cron: '17 * * * *'
+  schedule:
+    # Cada hora al minuto 17: GitHub retrasa y a veces descarta los
+    # disparos en punto. oauth.refresh tiene cron */15; una pasada por
+    # hora basta con el margen de 120 min de abajo (el token de TikTok
+    # dura 24 h).
+    - cron: '17 * * * *'
 
 # Nunca dos pasadas a la vez: la segunda espera a que termine la primera.
 concurrency:
