@@ -242,3 +242,97 @@ ni los seeds. Lo que ya estaba pedido sigue igual:
 | Renovar el token desde la pantalla («Renovar ahora») | Es el job `oauth.refresh`; la pantalla ofrece reautorizar mientras tanto | WRK |
 | La demografía en sí (gráficas) | La pantalla solo dice qué falta; enseñarla es de Resumen | RES-4 |
 | Alcance por marca/creador en la consulta de cuentas | `membership_scope` | ACC-6 (cierre ACC, 0040) |
+
+---
+
+## 9. Producción (F5)
+
+**Autorizado y hecho, sin migración.** La salida pasó por tres vueltas,
+todas por avance rápido y sin `--force`:
+
+1. `git push origin HEAD:main` se rechazó: WRK había entrado a `main`
+   (`8c9f133`). Merge de `origin/main` sin conflictos (`d97f010`),
+   `pnpm verificar` y `build` otra vez en verde (worker pasó a 140),
+   push a `main` y despliegue de `d97f010`.
+2. Al comprobarlo, `curl -X POST` sin cuerpo a
+   `/conexiones/oauth/tiktok/start` daba **500**: `req.formData()` lanza
+   sin un Content-Type de formulario. Ya pasaba antes de CON-B (el mismo
+   handler), así que un rollback no lo arreglaba: se arregló en la rama
+   (`284cfa8`, con su prueba) y se volvió a verificar en verde (web 1242).
+   En esa vuelta WRK subió `78c1e8c` (solo `WRK.md`) y el push volvió a
+   rechazarse. Mi cadena de comandos siguió y desplegó `origin/main`
+   (`78c1e8c`): es legítimo (sale de `main` y contiene CON-B), pero
+   quedó sin el arreglo unos minutos.
+3. Merge de `78c1e8c` (solo documentación, el código es el verificado),
+   push a `main` = **`92819a5`** y despliegue.
+
+**Plan B** (la producción anterior a CON-B, la de WRK):
+`https://on-cue-msvpgxhw9-influ3.vercel.app` (`8c9f133`). Vuelta atrás:
+`./scripts/vercel.sh run rollback on-cue-msvpgxhw9-influ3.vercel.app --yes`.
+
+**El despliegue, por la API de Vercel:**
+
+```
+$ ./scripts/vercel.sh run api /v13/deployments/on-cue-8fu179sih-influ3.vercel.app
+dpl_8R1mZU8GWowEbxRuga2JLZU4NJ79 READY production 92819a5866f59f4a8b6452a07ed2d07a7395d918
+$ ./scripts/vercel.sh run api /v4/aliases/on-cue-web.vercel.app
+alias -> dpl_8R1mZU8GWowEbxRuga2JLZU4NJ79
+```
+
+**Rutas del módulo (`https://on-cue-web.vercel.app`):**
+
+```
+/conexiones                            GET  200
+/conexiones/oauth/tiktok/start         GET  405   (el inicio va por POST con consentimiento)
+/conexiones/oauth/tiktok/callback      GET  400   (sin state: 400 en español)
+/conexiones/oauth/instagram/start      GET  405
+start sin cuerpo                       POST 303 → /conexiones?error=consentimiento   (antes: 500)
+start con JSON                         POST 303 → /conexiones?error=consentimiento
+start sin consentimiento               POST 303 → /conexiones?error=consentimiento
+start con el formulario real           POST 303 → https://www.tiktok.com/v2/auth/authorize/?… (no escribe en la base)
+```
+
+El HTML de `/conexiones` en producción trae la tabla nueva («Última
+lectura», «Acceso», el pie de los huecos) y **0** apariciones de
+`enc:tiktok`, `secretRef`, `"scopes"` y `TIKTOK_LOGIN_CLIENT`.
+
+**`@selvathegolden`, contra Supabase en solo lectura** (`make db.sql`
+como `mc_app`, con `set_config('app.workspace_id', …)` y sin columnas de
+secretos):
+
+```
+handle          platform_id  access_mode   status  access_expires_at          refresh_expires_at         ahora
+selvathegolden  tiktok       direct_oauth  active  2026-09-24 19:21:29 UTC    2027-09-23 19:21:29 UTC    2026-09-24 00:03 UTC
+```
+
+Le quedan unas 19 horas de acceso (menos de 24): la fila de producción
+dice **«Vence pronto»**, que es su estado verdadero. A partir del 24-sep
+a las 19:21 UTC, con el worker todavía sin correr, dirá **«Se renueva
+sola»** con «Reautorizar» como botón secundario, porque su renovación
+vale hasta 2027.
+
+**`make db.guardia`** (desde `rayit-deploy`, en `92819a5`; el clon
+principal está en `29460e3` con cambios sin commitear y compara contra
+un esquema viejo):
+
+```
+faltan 1 migración(es) por aplicar (la base va por 0039_demografia_de_cuenta.sql): 0041_campaign_result_escritura_web.sql
+```
+
+Es el único rojo, y es el mismo que dejaron CON-A y FIN: la 0041 de CAM
+espera a que la apliques. CON-B no trae migración.
+
+### Guion de humo para Nicolás
+
+Con tu sesión en https://on-cue-web.vercel.app/conexiones:
+
+| # | Qué haces | Qué tienes que ver | ¿Escribe en la base real? |
+|---|---|---|---|
+| 1 | Abre Cuentas | La tabla con las columnas Cuenta, Acceso, Seguidores, Publicaciones, Vistas, Última lectura, Estado y Acciones; debajo, «Qué dato le falta a cada cuenta… lo revisa el worker cada mañana…» | No |
+| 2 | Mira la fila de `@selvathegolden` | «Autorizada», 81 seguidores, 13 publicaciones, «hace N horas · datos hasta el 23 sep» y **«Vence pronto»** hasta el 24-sep 19:21 UTC; después, **«Se renueva sola»** con la frase del worker y «Reautorizar» gris (no rojo) | No |
+| 3 | Mira `@LauraCocinaFacil` (YouTube) | «Vencida» y «Esta versión no puede reautorizarla desde aquí…» (YouTube no tiene OAuth todavía, CON-8) | No |
+| 4 | En `@selvathegolden`, «Actualizar» (antes de que venza) | Aviso verde «actualizada con los datos de hoy» o «la lectura de hoy ya está guardada» | **Sí**: un snapshot del día (si no había) y una fila en `api_call_log` |
+| 5 | (Solo si ya vence) «Reautorizar» → acepta → TikTok | Vuelves a Cuentas con «Cuenta conectada.»; la misma fila, con su historial | **Sí**: renueva tokens (cifrados), consentimiento y bitácora `connection.reconnected` |
+| 6 | Con un rol que solo ve (Mánager o Solo lectura) | La tabla entera, la frase «Tu rol puede ver las cuentas, pero no…» y **ningún** botón | No |
+| 7 | Con el rol Contador | `/conexiones` responde 404 | No |
+| 8 | En Resumen o Campañas | Siguen en 200 (CON-B no los toca) | No |
