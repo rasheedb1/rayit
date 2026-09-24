@@ -401,6 +401,22 @@ describe('outbound_bounce', () => {
       /permission denied|permiso/,
     );
   });
+
+  test('la web no mueve el cursor de rebotes de una cuenta: esconder avisos no se puede (0038 §6)', async () => {
+    await t.admin(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+                   VALUES ('${WS_S}', 'email', 'gmail_oauth', 'cursor@creador.test', 'connected')`);
+    await assert.rejects(
+      t.db.withWorkspace(WS_S, (tx) =>
+        tx.query(`UPDATE outreach_channel_account SET bounces_read_at = now() + interval '1 year'
+                   WHERE provider_account_id = 'cursor@creador.test'`),
+      ),
+      /cursor de rebotes/,
+    );
+    // El worker sí.
+    await t.db.asWorker((tx) =>
+      tx.query(`UPDATE outreach_channel_account SET bounces_read_at = now() WHERE provider_account_id = 'cursor@creador.test'`),
+    );
+  });
 });
 
 describe('las cifras de las alertas (readAlertSignalCounts)', () => {

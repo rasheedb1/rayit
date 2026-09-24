@@ -3,30 +3,48 @@
  *
  * Gmail no avisa de un rebote por API: al buzón del creador llega un
  * correo de mailer-daemon. Cada media hora, por cada Gmail conectado:
- *   1. lee los avisos desde la última lectura (con una hora de solape;
- *      la bitácora es única por aviso, así que leer dos veces no cuenta
- *      dos rebotes);
+ *   1. lee los avisos DESDE EL CURSOR de la cuenta
+ *      (outreach_channel_account.bounces_read_at, 0038 §6), del más
+ *      viejo al más nuevo, como mucho BOUNCES_PER_RUN por pasada, y
+ *      avanza el cursor solo hasta el último aviso que leyó. Si leyó
+ *      todo lo que había, el cursor queda en «ahora» menos una hora de
+ *      solape (lo que Gmail indexa tarde). Una ráfaga de avisos no deja
+ *      atrás a los más viejos, y una caída larga tampoco: la próxima
+ *      pasada sigue donde quedó;
  *   2. los reconoce y clasifica con detectBounce (@mc/core): duro,
  *      blando o bloqueo;
- *   3. lo anota en outbound_bounce, con el toque que rebotó (por su
- *      Message-ID, o el último enviado a esa dirección) y su ficha;
- *   4. si es DURO: marca contact.email_invalid con el motivo y cancela
- *      los correos pendientes de esa ficha (draft, scheduled, held). Los
- *      de LinkedIn e Instagram siguen: un rebote dice que la dirección
- *      no existe, no que la persona pidió no ser contactada, y por eso
- *      tampoco va a contact_suppression (0038).
+ *   3. lo anota en outbound_bounce, con el toque que rebotó y su ficha;
+ *   4. si es DURO y está VERIFICADO —el aviso trae el Message-ID de un
+ *      correo que ESTE workspace envió ('sent', antes del aviso)—:
+ *        · marca contact.email_invalid con el motivo, solo si la ficha es
+ *          PROPIA de este workspace y sigue teniendo esa dirección;
+ *        · cancela los correos pendientes (draft, scheduled, held) de ESTE
+ *          workspace a esa dirección: los que ya la llevan en
+ *          recipient_address y los que todavía no la tienen pero van a
+ *          una ficha con ese correo (la misma regla que el disparador de
+ *          0038 §2);
+ *        · y el rebote verificado frena, en este workspace, los correos
+ *          nuevos a esa dirección (0038 §2), también a una ficha
+ *          compartida.
+ *      Los de LinkedIn e Instagram siguen: un rebote dice que la
+ *      dirección no existe, no que la persona pidió no ser contactada, y
+ *      por eso tampoco va a contact_suppression.
+ *
+ * Nada de lo que llega a un buzón tiene efectos en otro workspace. Una
+ * ficha compartida (contacto global, owner_workspace_id NULL) no se marca:
+ * un aviso falso en el Gmail de un creador —de él mismo, o de un tercero
+ * que le escriba— no le cierra el correo a los demás creadores. Y un aviso
+ * que no se casa con un correo enviado queda anotado y nada más.
  *
  * El buzón se lee A TRAVÉS de una interfaz (BounceMailbox), no de un
  * cliente de Gmail escrito aquí: el conector de Gmail es de VEN-9
- * (packages/connectors, rama rasheed/VEN-9-canales, sin integrar). El
- * adaptador ya está (gmail-rebotes.ts: GmailApi.searchBounces +
- * getMessage → BounceMailbox) y probado contra un Gmail falso con la
- * forma del FakeGmail de VEN-9. Lo que falta es de la integración:
- * construir el GmailApi de cada cuenta con su token y registrar
- * createBouncesJob((cuenta) => gmailBounceMailbox(api)). Hasta entonces el
- * job registrado usa gmailNoConfigurado: cada cuenta cuenta como «canal
- * no configurado», y el job lo dice en el registro. Las pruebas usan un
- * buzón con avisos grabados (test/fixtures/rebotes).
+ * (packages/connectors, sin integrar). El adaptador ya está
+ * (gmail-rebotes.ts) y probado contra un Gmail falso con la forma del de
+ * VEN-9. Lo que falta es de la integración: construir el GmailApi de cada
+ * cuenta con su token y registrar createBouncesJob((cuenta) =>
+ * gmailBounceMailbox(api)). Hasta entonces el job registrado usa
+ * gmailNoConfigurado: cada cuenta cuenta como «canal no configurado», y
+ * el job lo dice en el registro.
  *
  * Corre como mc_worker (BYPASSRLS): cada consulta filtra por el
  * workspace de la cuenta que se está leyendo, y nada se escribe en otro.
@@ -37,9 +55,14 @@ import { defineJob } from '../../runner/registry.ts';
 
 export const BOUNCES_JOB_ID = 'outbound.bounces';
 
-/** Cuánto hacia atrás se lee la primera vez, y el solape de las siguientes. */
+/** Cuánto hacia atrás se lee la primera vez (sin cursor). */
 export const BOUNCES_FIRST_LOOKBACK_H = 72;
+/** Con todo leído, la pasada siguiente vuelve a mirar esta última hora: Gmail indexa algún aviso tarde. */
 export const BOUNCES_OVERLAP_H = 1;
+/** Un cursor más viejo que esto (una cuenta caída un mes) se lee desde aquí. */
+export const BOUNCES_MAX_LOOKBACK_D = 30;
+/** Avisos que se leen, como mucho, por cuenta y pasada. Lo demás, en la siguiente. */
+export const BOUNCES_PER_RUN = 300;
 
 /** Un aviso del buzón, como lo entrega el conector. */
 export interface BounceMessage extends InboundMail {
@@ -48,10 +71,27 @@ export interface BounceMessage extends InboundMail {
   receivedAt: Date;
 }
 
+/** Lo que devuelve una lectura del buzón. */
+export interface BounceBatch {
+  /** Del más viejo al más nuevo. */
+  messages: BounceMessage[];
+  /** Se leyó todo lo que había desde `since`. Si no, la próxima pasada sigue desde el último. */
+  complete: boolean;
+  /**
+   * El buzón no sabe paginar y la lista vino llena: pudo haber avisos más
+   * viejos que no llegaron. Se dice en el registro.
+   */
+  truncated?: boolean;
+}
+
 /** Lo único que este job necesita de un buzón. */
 export interface BounceMailbox {
-  /** Los mensajes recibidos desde `since` que pueden ser avisos de rebote (el conector puede filtrar por remitente). */
-  listBounceCandidates(opts: { since: Date; signal?: AbortSignal }): Promise<BounceMessage[]>;
+  /**
+   * Los mensajes recibidos desde `since` que pueden ser avisos de rebote
+   * (el conector puede filtrar por remitente), del más viejo al más
+   * nuevo, como mucho `max`.
+   */
+  listBounceCandidates(opts: { since: Date; max: number; signal?: AbortSignal }): Promise<BounceBatch>;
 }
 
 export interface MailboxAccount {
@@ -72,10 +112,16 @@ export interface BouncesResult {
   read: number;
   bounces: number;
   hard: number;
+  /** Rebotes duros casados con un correo enviado por ese workspace: los que tienen efectos. */
+  verified: number;
   contactsInvalidated: number;
   touchesCanceled: number;
   /** Cuentas cuyo buzón falló al leerse (red, token vencido). */
   failed: number;
+  /** Cuentas con más avisos de los que caben en una pasada: siguen en la próxima. */
+  pending: number;
+  /** Cuentas cuyo buzón no pagina y pudo dejar avisos viejos fuera. */
+  truncated: number;
 }
 
 type TouchRow = {
@@ -84,32 +130,31 @@ type TouchRow = {
   recipient_address: string | null;
 };
 
-async function touchOf(tx: Queryable, workspaceId: string, d: BounceDetection): Promise<TouchRow | null> {
-  if (d.originalMessageId) {
-    const { rows } = await tx.query<TouchRow>(
-      `SELECT id, contact_id, recipient_address FROM outbound_touch
-        WHERE workspace_id = $1 AND channel = 'email' AND message_id_rfc IN ($2, '<' || $2 || '>')
-        ORDER BY sent_at DESC NULLS LAST LIMIT 1`,
-      [workspaceId, d.originalMessageId],
-    );
-    if (rows[0]) return rows[0];
-  }
-  if (d.recipient) {
-    const { rows } = await tx.query<TouchRow>(
-      `SELECT id, contact_id, recipient_address FROM outbound_touch
-        WHERE workspace_id = $1 AND channel = 'email' AND status = 'sent' AND recipient_address = $2::citext
-        ORDER BY sent_at DESC NULLS LAST LIMIT 1`,
-      [workspaceId, d.recipient],
-    );
-    if (rows[0]) return rows[0];
-  }
-  return null;
+/**
+ * El correo que rebotó: el toque 'sent' de ESTE workspace cuyo
+ * Message-ID trae el aviso, enviado antes del aviso. outbound_touch no
+ * guarda la cuenta que lo envió (0037), así que la prueba es esa: solo
+ * quien recibió el correo, o quien lo envió, conoce su Message-ID, y un
+ * aviso no puede llegar antes que el correo. Sin Message-ID no se adivina
+ * por la dirección: el aviso queda anotado sin efectos.
+ */
+async function sentTouch(tx: Queryable, workspaceId: string, d: BounceDetection, receivedAt: Date): Promise<TouchRow | null> {
+  if (!d.originalMessageId) return null;
+  const { rows } = await tx.query<TouchRow>(
+    `SELECT id, contact_id, recipient_address FROM outbound_touch
+      WHERE workspace_id = $1 AND channel = 'email' AND status = 'sent'
+        AND message_id_rfc IN ($2, '<' || $2 || '>')
+        AND (sent_at IS NULL OR sent_at <= $3)
+      ORDER BY sent_at DESC NULLS LAST LIMIT 1`,
+    [workspaceId, d.originalMessageId, receivedAt.toISOString()],
+  );
+  return rows[0] ?? null;
 }
 
-/** La ficha del workspace con esa dirección, si el aviso no trae un toque nuestro. */
+/** La ficha PROPIA del workspace con esa dirección, para la bitácora de un aviso sin toque. */
 async function contactByAddress(tx: Queryable, workspaceId: string, address: string): Promise<string | null> {
   const { rows } = await tx.query<{ id: string }>(
-    'SELECT id FROM contact WHERE owner_workspace_id = $1 AND email = $2::citext LIMIT 1',
+    'SELECT id FROM contact WHERE owner_workspace_id = $1 AND email = $2::citext ORDER BY created_at, id LIMIT 1',
     [workspaceId, address],
   );
   return rows[0]?.id ?? null;
@@ -117,11 +162,12 @@ async function contactByAddress(tx: Queryable, workspaceId: string, address: str
 
 interface Registro {
   inserted: boolean;
+  verified: boolean;
   invalidated: boolean;
   canceled: number;
 }
 
-/** Anota un aviso ya reconocido, y si es duro marca la ficha y cancela sus correos. Una transacción. */
+/** Anota un aviso ya reconocido y, si es duro y verificado, aplica sus efectos en ESTE workspace. Una transacción. */
 async function registrar(
   db: JobDatabase,
   account: MailboxAccount,
@@ -130,73 +176,100 @@ async function registrar(
   now: Date,
 ): Promise<Registro> {
   return db.transaction(async (tx) => {
-    const touch = await touchOf(tx, account.workspaceId, d);
-    const address = d.recipient ?? touch?.recipient_address ?? null;
-    const contactId = touch?.contact_id ?? (address ? await contactByAddress(tx, account.workspaceId, address) : null);
+    const ws = account.workspaceId;
+    const touch = await sentTouch(tx, ws, d, msg.receivedAt);
+    // Con el toque, la dirección es la suya: es a la que salió el correo, y
+    // la del aviso puede venir mal leída de la prosa.
+    const address = touch?.recipient_address ?? d.recipient ?? null;
+    const verified = touch !== null && address !== null;
+    const contactId = touch?.contact_id ?? (address ? await contactByAddress(tx, ws, address) : null);
     const ins = await tx.query(
       `INSERT INTO outbound_bounce (workspace_id, channel_account_id, provider_message_id, touch_id, contact_id,
-                                    recipient_address, kind, status_code, smtp_code, reason, received_at, detected_at)
-       VALUES ($1, $2, $3, $4, $5, $6::citext, $7, $8, $9, $10, $11, $12)
+                                    recipient_address, verified, kind, status_code, smtp_code, reason, received_at,
+                                    detected_at)
+       VALUES ($1, $2, $3, $4, $5, $6::citext, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (workspace_id, provider_message_id) DO NOTHING
        RETURNING id`,
       [
-        account.workspaceId, account.id, msg.id.slice(0, 200), touch?.id ?? null, contactId, address, d.kind,
+        ws, account.id, msg.id.slice(0, 200), touch?.id ?? null, contactId, address, verified, d.kind,
         d.statusCode, d.smtpCode, d.reason || 'Rebote', msg.receivedAt.toISOString(), now.toISOString(),
       ],
     );
-    if (!ins.rows.length) return { inserted: false, invalidated: false, canceled: 0 };
-    if (d.kind !== 'hard' || !contactId) return { inserted: true, invalidated: false, canceled: 0 };
+    const nada = { inserted: ins.rows.length > 0, verified, invalidated: false, canceled: 0 };
+    if (!ins.rows.length || d.kind !== 'hard' || !verified) return nada;
 
-    // Solo si la ficha SIGUE teniendo la dirección que rebotó: si alguien
-    // ya le corrigió el correo, el rebote es de la dirección vieja.
-    const marca = await tx.query(
-      `UPDATE contact
-          SET email_invalid = true, email_invalid_at = $2, email_invalid_reason = left($3, 300), bounced = true
-        WHERE id = $1 AND NOT email_invalid AND ($4::citext IS NULL OR email = $4::citext)
-        RETURNING id`,
-      [contactId, now.toISOString(), d.reason || 'Rebote', address],
-    );
-    const { rows: invalida } = await tx.query<{ email_invalid: boolean }>(
-      'SELECT email_invalid FROM contact WHERE id = $1',
-      [contactId],
-    );
-    if (!invalida[0]?.email_invalid) return { inserted: true, invalidated: false, canceled: 0 };
-    // Lo que 'processing' tiene es del despachador (0037 §4.1): no se toca.
+    // La ficha, solo si es de este workspace y SIGUE teniendo la dirección
+    // que rebotó (si alguien ya le corrigió el correo, el rebote es de la
+    // vieja). Una ficha compartida no se toca: la frena el rebote
+    // verificado de este workspace (0038 §2).
+    let invalidated = false;
+    if (contactId) {
+      const marca = await tx.query(
+        `UPDATE contact
+            SET email_invalid = true, email_invalid_at = $3, email_invalid_reason = left($4, 300), bounced = true
+          WHERE id = $1 AND owner_workspace_id = $2 AND NOT email_invalid AND email = $5::citext
+          RETURNING id`,
+        [contactId, ws, now.toISOString(), d.reason || 'Rebote', address],
+      );
+      invalidated = marca.rows.length > 0;
+    }
+    // Los correos pendientes de ESTE workspace a esa dirección. Lo que
+    // 'processing' tiene es del despachador (0037 §4.1): no se toca.
     const cancel = await tx.query(
-      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'email_invalid'
-        WHERE contact_id = $1 AND channel = 'email' AND status IN ('draft', 'scheduled', 'held')
-        RETURNING id`,
-      [contactId],
+      `UPDATE outbound_touch t SET status = 'canceled', blocked_reason = 'email_invalid'
+        WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status IN ('draft', 'scheduled', 'held')
+          AND (t.recipient_address = $2::citext
+               OR (t.recipient_address IS NULL AND t.contact_id IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND c.email = $2::citext)))
+        RETURNING t.id`,
+      [ws, address],
     );
-    return { inserted: true, invalidated: marca.rows.length > 0, canceled: cancel.rows.length };
+    return { inserted: true, verified, invalidated, canceled: cancel.rows.length };
   });
 }
 
-/** Desde cuándo leer una cuenta: el último aviso anotado menos el solape, o las últimas 72 h. */
-async function desde(db: Queryable, accountId: string, now: Date): Promise<Date> {
-  const { rows } = await db.query<{ ultimo: Date | string | null }>(
-    'SELECT max(received_at) AS ultimo FROM outbound_bounce WHERE channel_account_id = $1',
-    [accountId],
-  );
-  const ultimo = rows[0]?.ultimo ? new Date(rows[0].ultimo) : null;
-  const piso = new Date(now.getTime() - BOUNCES_FIRST_LOOKBACK_H * 3_600_000);
-  if (!ultimo) return piso;
-  const conSolape = new Date(ultimo.getTime() - BOUNCES_OVERLAP_H * 3_600_000);
-  return conSolape > piso ? conSolape : piso;
+/** Desde cuándo leer una cuenta: su cursor, o las últimas 72 h la primera vez. Nunca más de un mes. */
+function desde(cursor: Date | null, now: Date): Date {
+  const primera = new Date(now.getTime() - BOUNCES_FIRST_LOOKBACK_H * 3_600_000);
+  if (!cursor) return primera;
+  const piso = new Date(now.getTime() - BOUNCES_MAX_LOOKBACK_D * 86_400_000);
+  return cursor > piso ? cursor : piso;
+}
+
+/**
+ * El cursor después de una lectura. Si se leyó todo, «ahora» menos el
+ * solape (sin volver atrás del que había); si no, el último aviso leído:
+ * la pasada siguiente sigue desde ahí.
+ */
+export function nextBouncesCursor(since: Date, batch: BounceBatch, now: Date): Date {
+  if (batch.complete) {
+    const conSolape = new Date(now.getTime() - BOUNCES_OVERLAP_H * 3_600_000);
+    return conSolape > since ? conSolape : since;
+  }
+  const ultimo = batch.messages.at(-1)?.receivedAt;
+  return ultimo && ultimo > since ? ultimo : since;
 }
 
 export interface BouncesOptions {
   signal?: AbortSignal;
   /** Para el registro: una cuenta que falló no tumba a las demás. */
   onAccountError?: (account: MailboxAccount, err: unknown) => void;
+  /** Para el registro: un buzón que no pagina pudo dejar avisos fuera. */
+  onTruncated?: (account: MailboxAccount) => void;
+  /** Avisos por cuenta y pasada (BOUNCES_PER_RUN). */
+  perRun?: number;
 }
 
 export async function runBounces(db: JobDatabase, now: Date, mailboxFor: MailboxFor, opts: BouncesOptions = {}): Promise<BouncesResult> {
   const r: BouncesResult = {
-    accounts: 0, notConfigured: 0, read: 0, bounces: 0, hard: 0, contactsInvalidated: 0, touchesCanceled: 0, failed: 0,
+    accounts: 0, notConfigured: 0, read: 0, bounces: 0, hard: 0, verified: 0, contactsInvalidated: 0, touchesCanceled: 0,
+    failed: 0, pending: 0, truncated: 0,
   };
-  const { rows: cuentas } = await db.query<{ id: string; workspace_id: string; provider_account_id: string | null }>(
-    `SELECT id, workspace_id, provider_account_id FROM outreach_channel_account
+  const max = Math.max(1, Math.trunc(opts.perRun ?? BOUNCES_PER_RUN));
+  const { rows: cuentas } = await db.query<{
+    id: string; workspace_id: string; provider_account_id: string | null; bounces_read_at: Date | string | null;
+  }>(
+    `SELECT id, workspace_id, provider_account_id, bounces_read_at FROM outreach_channel_account
       WHERE channel = 'email' AND status = 'connected' ORDER BY workspace_id, id`,
   );
   for (const c of cuentas) {
@@ -209,18 +282,37 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
       continue;
     }
     try {
-      const mensajes = await mailbox.listBounceCandidates({ since: await desde(db, account.id, now), signal: opts.signal });
-      for (const msg of mensajes) {
+      const since = desde(c.bounces_read_at ? new Date(c.bounces_read_at) : null, now);
+      const batch = await mailbox.listBounceCandidates({ since, max, signal: opts.signal });
+      const leidos: BounceMessage[] = [];
+      for (const msg of batch.messages) {
+        if (opts.signal?.aborted) break;
         r.read++;
+        leidos.push(msg);
         const d = detectBounce(msg);
         if (!d) continue;
         const reg = await registrar(db, account, msg, d, now);
         if (!reg.inserted) continue;
         r.bounces++;
         if (d.kind === 'hard') r.hard++;
+        if (d.kind === 'hard' && reg.verified) r.verified++;
         if (reg.invalidated) r.contactsInvalidated++;
         r.touchesCanceled += reg.canceled;
       }
+      // Lo que se cortó a medias (una señal de parar) cuenta como no leído.
+      const leido: BounceBatch = {
+        messages: leidos,
+        complete: batch.complete && leidos.length === batch.messages.length,
+      };
+      if (!leido.complete) r.pending++;
+      if (batch.truncated) {
+        r.truncated++;
+        opts.onTruncated?.(account);
+      }
+      await db.query(
+        'UPDATE outreach_channel_account SET bounces_read_at = $3 WHERE id = $1 AND workspace_id = $2',
+        [account.id, account.workspaceId, nextBouncesCursor(since, leido, now).toISOString()],
+      );
     } catch (err) {
       r.failed++;
       opts.onAccountError?.(account, err);
@@ -236,6 +328,10 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
       signal: ctx.signal,
       onAccountError: (a, err) =>
         ctx.logger.warn('no se pudo leer el buzón de rebotes', { accountId: a.id, error: err instanceof Error ? err.message : String(err) }),
+      onTruncated: (a) =>
+        ctx.logger.warn('rebotes: el buzón no pagina y la lista vino llena; pudieron quedar avisos viejos sin leer', {
+          accountId: a.id,
+        }),
     });
     if (r.notConfigured > 0) {
       ctx.logger.info('rebotes: canal de correo no configurado', { cuentas: r.notConfigured });

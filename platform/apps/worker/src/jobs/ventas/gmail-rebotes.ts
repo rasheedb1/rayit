@@ -4,19 +4,33 @@
  * rasheed/VEN-9-canales) a la interfaz BounceMailbox que lee el job
  * outbound.bounces:
  *
- *   searchBounces({ since })  los avisos de mailer-daemon y postmaster
- *   getMessage(id)            cada aviso, con su texto y su destinatario
+ *   searchBounces({ since, max, pageToken })  los avisos de mailer-daemon
+ *                                              y postmaster, del más nuevo
+ *                                              al más viejo (messages.list)
+ *   getMessage(id)                             cada aviso, con su texto y
+ *                                              su destinatario
+ *
+ * Gmail devuelve la lista del más NUEVO al más viejo. Para no dejar atrás
+ * a los más viejos en una ráfaga de avisos (una lista mala: justo cuando
+ * más importa), el adaptador recorre TODAS las páginas de ids desde
+ * `since` (los ids son baratos; hasta GMAIL_BOUNCES_MAX_REFS), les da la
+ * vuelta y pide el cuerpo solo de los `max` más viejos. El job avanza su
+ * cursor hasta el último que leyó y la pasada siguiente sigue desde ahí.
  *
  * Aquí no se importa @mc/connectors: el tipo es ESTRUCTURAL, con solo lo
- * que el adaptador usa, copiado de la firma de GmailApi. Así esta pieza
- * compila y se prueba antes de que VEN-9 se integre, y el GmailApi real
- * encaja sin cambios cuando llegue (packages/connectors es de Nicolás y no
- * se toca desde aquí). Lo que queda para la integración: construir un
- * GmailApi por cuenta conectada (con su token del vault) dentro de
- * `mailboxFor` y registrarlo en lugar de gmailNoConfigurado
- * (outbound.bounces.ts).
+ * que el adaptador usa. searchBounces acepta las dos formas:
+ *   · la paginada, { messages, nextPageToken }, la de messages.list;
+ *   · la de hoy en VEN-9, un arreglo sin pageToken. Con ella, si la lista
+ *     viene llena, pudo haber avisos más viejos que no llegaron: el lote
+ *     sale marcado `truncated` y el job lo dice en el registro. Para
+ *     cerrarlo, GmailApi.searchBounces tiene que pasar pageToken a
+ *     messages.list y devolver nextPageToken (docs/ventas-outreach.md §9).
+ * packages/connectors es de Nicolás y no se toca desde aquí. Lo que queda
+ * para la integración: construir un GmailApi por cuenta conectada (con su
+ * token del vault) dentro de `mailboxFor` y registrarlo en lugar de
+ * gmailNoConfigurado (outbound.bounces.ts).
  */
-import type { BounceMailbox, BounceMessage } from './outbound.bounces.ts';
+import type { BounceBatch, BounceMailbox, BounceMessage } from './outbound.bounces.ts';
 
 /** Lo que el adaptador usa de un mensaje de Gmail (GmailMessage de VEN-9). */
 export interface GmailBounceMessage {
@@ -32,14 +46,27 @@ export interface GmailBounceMessage {
   failedRecipient: string | null;
 }
 
+export interface GmailMessageRef {
+  id: string;
+  threadId: string;
+}
+
+/** Una página de messages.list. */
+export interface GmailRefPage {
+  messages: GmailMessageRef[];
+  nextPageToken?: string | null;
+}
+
 /** Lo que el adaptador usa de GmailApi (VEN-9). */
 export interface GmailBounceSource {
-  searchBounces(opts: { since: Date; max?: number }): Promise<Array<{ id: string; threadId: string }>>;
+  searchBounces(opts: { since: Date; max?: number; pageToken?: string }): Promise<GmailMessageRef[] | GmailRefPage>;
   getMessage(id: string): Promise<GmailBounceMessage>;
 }
 
-/** Cuántos avisos se leen, como mucho, en una pasada por cuenta. */
-export const GMAIL_BOUNCES_MAX = 100;
+/** El tamaño de página que se pide (el máximo de messages.list). */
+export const GMAIL_BOUNCES_PAGE = 500;
+/** Ids que se recorren, como mucho, en una pasada: diez páginas. */
+export const GMAIL_BOUNCES_MAX_REFS = 5000;
 
 /** Un aviso de Gmail como lo espera detectBounce. */
 export function gmailMessageToBounce(m: GmailBounceMessage, fallbackReceivedAt: Date): BounceMessage {
@@ -58,19 +85,56 @@ export function gmailMessageToBounce(m: GmailBounceMessage, fallbackReceivedAt: 
 }
 
 /**
+ * Todos los ids desde `since`, del más nuevo al más viejo, página a
+ * página. `truncated` si el buzón no pagina y la lista vino llena, o si
+ * se llegó al tope de ids.
+ */
+async function todosLosIds(
+  api: GmailBounceSource,
+  since: Date,
+  signal?: AbortSignal,
+): Promise<{ refs: GmailMessageRef[]; truncated: boolean }> {
+  const refs: GmailMessageRef[] = [];
+  const vistos = new Set<string>();
+  let pageToken: string | undefined;
+  for (;;) {
+    const r = await api.searchBounces({ since, max: GMAIL_BOUNCES_PAGE, ...(pageToken ? { pageToken } : {}) });
+    const pagina = Array.isArray(r) ? r : r.messages;
+    for (const ref of pagina) {
+      if (vistos.has(ref.id)) continue;
+      vistos.add(ref.id);
+      refs.push(ref);
+    }
+    if (Array.isArray(r)) return { refs, truncated: pagina.length >= GMAIL_BOUNCES_PAGE };
+    pageToken = r.nextPageToken ?? undefined;
+    if (!pageToken) return { refs, truncated: false };
+    if (refs.length >= GMAIL_BOUNCES_MAX_REFS || signal?.aborted) return { refs, truncated: true };
+  }
+}
+
+/**
  * BounceMailbox sobre un GmailApi. `now` fija la hora de un aviso que
  * llega sin fecha (no debería: Gmail siempre trae internalDate).
  */
 export function gmailBounceMailbox(api: GmailBounceSource, now: () => Date = () => new Date()): BounceMailbox {
   return {
-    async listBounceCandidates({ since, signal }) {
-      const refs = await api.searchBounces({ since, max: GMAIL_BOUNCES_MAX });
-      const out: BounceMessage[] = [];
-      for (const ref of refs) {
+    async listBounceCandidates({ since, max, signal }): Promise<BounceBatch> {
+      const { refs, truncated } = await todosLosIds(api, since, signal);
+      // Del más viejo al más nuevo, y solo los `max` más viejos.
+      const viejos = refs.slice().reverse();
+      const tanda = viejos.slice(0, Math.max(1, max));
+      const messages: BounceMessage[] = [];
+      for (const ref of tanda) {
         if (signal?.aborted) break;
-        out.push(gmailMessageToBounce(await api.getMessage(ref.id), now()));
+        messages.push(gmailMessageToBounce(await api.getMessage(ref.id), now()));
       }
-      return out;
+      // messages.list ordena por internalDate; por si acaso, se ordena por la hora del aviso.
+      messages.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+      return {
+        messages,
+        complete: !truncated && messages.length === viejos.length,
+        ...(truncated ? { truncated: true } : {}),
+      };
     },
   };
 }
