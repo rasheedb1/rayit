@@ -18,8 +18,8 @@ import assert from 'node:assert/strict';
 import {
   ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
   failPendingChannelAccount, findUnipileAccountForWebhook, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown,
-  channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, recordInboundMessage, setChannelWebhooks,
-  updateChannelAccountCaps,
+  channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, markChannelAccountOk, parseUnipileStatusCode, recordInboundMessage,
+  setChannelWebhooks, unipileStatusCode, updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -120,12 +120,12 @@ describe('la pantalla (mc_app)', () => {
     await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET released_at = now() WHERE id = $1`, [LINKEDIN_LAURA])), es42501);
     await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       // Por la función de 0040, solo en una cuenta viva de este espacio.
-      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_a', 'wh_b']), true);
-      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_b']), true);
+      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_a', 'wh_b'], 'a1b2c3d4e5f60718'), true);
+      assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_b'], 'a1b2c3d4e5f60718'), true);
       assert.equal(await channelWebhookCount(tx, LINKEDIN_LAURA), 2);
-      assert.equal(await setChannelWebhooks(tx, GMAIL_LAURA, ['wh_c']), false, 'un Gmail no tiene avisos de Unipile');
+      assert.equal(await setChannelWebhooks(tx, GMAIL_LAURA, ['wh_c'], 'a1b2c3d4e5f60718'), false, 'un Gmail no tiene avisos de Unipile');
     });
-    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_z'])), false);
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_z'], 'a1b2c3d4e5f60718')), false);
     await t.admin(`UPDATE outreach_channel_account SET released_at = now() WHERE id = '${LINKEDIN_LAURA}'`);
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA));
     const rows = await sel<{ status: string; released_at: Date | null }>(`SELECT status, released_at FROM outreach_channel_account WHERE id = '${LINKEDIN_LAURA}'`);
@@ -173,8 +173,9 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     const pendingId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_LAURA, nonce: NONCE }));
     const input = { channel: 'linkedin' as const, nonce: NONCE, providerAccountId: 'acc_li_nueva', displayName: 'Laura Gómez', secretRef: null, scopes: null };
     const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, input));
-    assert.deepEqual(r, { status: 'connected', accountId: pendingId, reconnected: false });
-    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, input))).status, 'unknown_state', 'el nonce ya se usó');
+    assert.deepEqual(r, { status: 'connected', accountId: pendingId, reconnected: false, replaced: null });
+    assert.deepEqual(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, input)), { status: 'unknown_state', inUse: true },
+      'el nonce ya se usó, y la cuenta está viva aquí: un aviso repetido no la manda a borrar');
     const live = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, pendingId, 'acc_li_nueva'));
     assert.equal(live?.status, 'connected');
     assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, pendingId, 'acc_otra')), null, 'id y account_id tienen que casar');
@@ -196,7 +197,7 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     const taken = await t.db.withWorkspace(WS_OTRO, (tx) => completeChannelConnection(tx, {
       channel: 'linkedin', nonce: n2, providerAccountId: 'acc_li_nueva', displayName: null, secretRef: null, scopes: null,
     }));
-    assert.equal(taken.status, 'taken');
+    assert.deepEqual(taken, { status: 'taken', inUse: true }, 'la cuenta misma vive en otro espacio: no se borra en Unipile');
     assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => failPendingChannelAccount(tx, { channel: 'linkedin', nonce: n2, code: 'taken' })), true);
     const rows = await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx));
     assert.deepEqual(rows.map((r) => [r.status, r.lastError]), [['disconnected', 'taken']]);
@@ -219,7 +220,8 @@ describe('el callback del proveedor, desde la web (0039)', () => {
     const gmails = (await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx))).filter((r) => r.channel === 'email');
     assert.deepEqual(gmails.map((r) => [r.providerAccountId, r.status, r.scopes]), [['otro@gmail.test', 'connected', ['gmail.send', 'gmail.modify']]]);
     // El Gmail de Laura (vivo en su espacio) no se conecta en otro.
-    assert.equal((await conectar('j'.repeat(43), 'laura@cocina-facil.test')).status, 'taken');
+    assert.deepEqual(await conectar('j'.repeat(43), 'laura@cocina-facil.test'), { status: 'taken', inUse: true },
+      'en uso en otro espacio: revocar tumbaría la concesión de ese espacio');
   });
 
   test('un Gmail sin token no pasa (22023)', async () => {
@@ -353,7 +355,7 @@ describe('reconectar mientras el worker suelta la cuenta (0041)', () => {
     // El worker la reclama para soltarla; la persona reconecta en ese momento.
     await t.admin(`UPDATE outreach_channel_account SET release_claimed_at = now() WHERE id = '${id}'`);
     await t.admin(secreto(REF_NUEVA));
-    assert.deepEqual(await conectar('u'.repeat(43), REF_NUEVA), { status: 'releasing' });
+    assert.deepEqual(await conectar('u'.repeat(43), REF_NUEVA), { status: 'releasing', inUse: false });
     const quieta = await sel<{ status: string; secret_ref: string }>(`SELECT status, secret_ref FROM outreach_channel_account WHERE id = '${id}'`);
     assert.deepEqual(quieta[0], { status: 'disconnected', secret_ref: REF_VIEJA }, 'no se escribió nada');
 
@@ -367,5 +369,94 @@ describe('reconectar mientras el worker suelta la cuenta (0041)', () => {
     assert.deepEqual(viva[0], { status: 'connected', secret_ref: REF_NUEVA, release_claimed_at: null, released_at: null });
     const vieja = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM connection_secret WHERE secret_ref = '${REF_VIEJA}'`);
     assert.equal(vieja[0]!.n, 0, 'el token viejo, que ya nadie nombra, sale del vault');
+  });
+});
+
+describe('un perfil es una cuenta: la identidad de Unipile (0042)', () => {
+  const ID_PERFIL = 'ACoAAB_perfil_0042';
+  const conectar = (ws: string, creator: string, nonce: string, accountId: string, identity: string | null = ID_PERFIL) =>
+    t.db.withWorkspace(ws, async (tx) => {
+      await createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: creator, nonce });
+      return completeChannelConnection(tx, {
+        channel: 'linkedin', nonce, providerAccountId: accountId, displayName: 'Perfil', secretRef: null, scopes: null, providerIdentity: identity,
+      });
+    });
+
+  test('mc_app no escribe la identidad ni la huella de los avisos (42501): son del callback y del despachador', async () => {
+    const es42501 = (e: unknown) => (e as { code?: string }).code === '42501';
+    const IG = '00000005-0000-4000-8000-0000000ac0d1';
+    await t.admin(`INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status)
+      VALUES ('${IG}', '${WORKSPACE_LAURA}', 'instagram_dm', 'unipile', 'acc_ig_candado', 'needs_reconnect')`);
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET provider_identity = 'x' WHERE id = $1`, [IG])), es42501);
+    await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET provider_webhook_secret_fp = 'a1b2c3d4e5f60718' WHERE id = $1`, [IG])), es42501);
+    await t.admin(`DELETE FROM outreach_channel_account WHERE id = '${IG}'`);
+    // La sonda de «¿vive en otro espacio?» no es de la web: solo la llama outreach_channel_connect.
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`SELECT outreach_channel_live_elsewhere(current_workspace_id(), 'email', 'gmail_oauth', 'x@y.test')`)),
+      es42501,
+    );
+  });
+
+  test('el mismo perfil con otra cuenta de Unipile: conectado → duplicate; caído → su fila adopta la cuenta nueva y devuelve la vieja', async () => {
+    const first = await conectar(WS_OTRO, CREATOR_OTRO, 'a'.repeat(43), 'acc_perfil_1');
+    assert.equal(first.status, 'connected');
+    const filaId = first.status === 'connected' ? first.accountId : '';
+    await t.admin(`UPDATE outreach_channel_account SET provider_webhook_ids = '{wh_viejo_m,wh_viejo_s}' WHERE id = '${filaId}'`);
+
+    // Conectado: la cuenta nueva sobra. No se escribe nada y la web la borra en Unipile.
+    const dup = await conectar(WS_OTRO, CREATOR_OTRO, 'b'.repeat(43), 'acc_perfil_2');
+    assert.deepEqual(dup, { status: 'duplicate', accountId: filaId });
+    const vivas = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outreach_channel_account WHERE provider_identity = '${ID_PERFIL}'`);
+    assert.equal(vivas[0]!.n, 1, 'un perfil, una fila');
+
+    // Caído: la fila del perfil (con su historial y sus contadores) adopta la cuenta nueva.
+    await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountDown(tx, filaId, 'unipile_status:CREDENTIALS'));
+    const adopt = await conectar(WS_OTRO, CREATOR_OTRO, 'c'.repeat(43), 'acc_perfil_3');
+    assert.deepEqual(adopt, {
+      status: 'connected', accountId: filaId, reconnected: true,
+      replaced: { providerAccountId: 'acc_perfil_1', webhookIds: ['wh_viejo_m', 'wh_viejo_s'] },
+    });
+    const fila = await sel<{ provider_account_id: string; status: string; provider_webhook_ids: string[] }>(
+      `SELECT provider_account_id, status, provider_webhook_ids FROM outreach_channel_account WHERE id = '${filaId}'`,
+    );
+    assert.deepEqual(fila[0], { provider_account_id: 'acc_perfil_3', status: 'connected', provider_webhook_ids: [] });
+  });
+
+  test('el mismo perfil vivo en OTRO espacio: taken, y la cuenta nueva no la usa nadie (la web la borra)', async () => {
+    const r = await conectar(WORKSPACE_LAURA, CREATOR_LAURA, 'd'.repeat(43), 'acc_perfil_4');
+    assert.deepEqual(r, { status: 'taken', inUse: false });
+    const nada = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outreach_channel_account WHERE provider_account_id = 'acc_perfil_4'`);
+    assert.equal(nada[0]!.n, 0, 'no se escribió nada');
+  });
+
+  test('«unknown_state» con una cuenta que nadie usa (el primer enlace de un doble clic): in_use false, sin escribir nada', async () => {
+    const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => completeChannelConnection(tx, {
+      channel: 'instagram_dm', nonce: 'e'.repeat(43), providerAccountId: 'acc_ig_huerfana', displayName: null, secretRef: null, scopes: null, providerIdentity: 'ig_1',
+    }));
+    assert.deepEqual(r, { status: 'unknown_state', inUse: false });
+    const nada = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outreach_channel_account WHERE provider_account_id = 'acc_ig_huerfana'`);
+    assert.equal(nada[0]!.n, 0, 'la sonda se deshizo');
+  });
+
+  test('markChannelAccountOk: una caída vuelve a connected con su aviso de éxito; una conectada no se toca', async () => {
+    const [li] = (await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx))).filter((r) => r.providerAccountId === 'acc_perfil_3');
+    assert.ok(li);
+    await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountDown(tx, li.id, 'unipile_status:CREDENTIALS'));
+    const notice = { titleEs: 'Tu LinkedIn volvió', bodyEs: 'Ya puede enviar.' };
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountOk(tx, li.id, notice)), true);
+    assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountOk(tx, li.id, notice)), false, 'ya estaba bien: no avisa otra vez');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountOk(tx, li.id)), false, 'otro espacio no la toca');
+    const fila = await sel<{ status: string; last_error: string | null }>(`SELECT status, last_error FROM outreach_channel_account WHERE id = '${li.id}'`);
+    assert.deepEqual(fila[0], { status: 'connected', last_error: null });
+    const avisos = await sel<{ severity: string }>(`SELECT severity FROM notification WHERE entity_id = '${li.id}' AND severity = 'success'`);
+    assert.equal(avisos.length, 1);
+  });
+
+  test('los códigos de last_error: unipile_status parametrizado y limpio', () => {
+    assert.equal(unipileStatusCode('CREDENTIALS'), 'unipile_status:CREDENTIALS');
+    assert.equal(unipileStatusCode('<b>x</b>'), 'unipile_status:BXB');
+    assert.equal(unipileStatusCode(null), 'unipile_status:UNKNOWN');
+    assert.equal(parseUnipileStatusCode('unipile_status:STOPPED'), 'STOPPED');
+    assert.equal(parseUnipileStatusCode('taken'), null);
   });
 });

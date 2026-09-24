@@ -22,6 +22,9 @@
  *     existingGmailSecretRef     la ref del token al reconectar un Gmail
  *     findUnipileAccountForWebhook  la cuenta de un aviso de Unipile
  *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (0039)
+ *     markChannelAccountOk       el proveedor dice que volvió, por outreach_channel_mark_ok (0042)
+ *     unipileAccountInUseHere    antes de borrar en Unipile una cuenta que no se conectó
+ *     getReconnectableGmail      el buzón que Google tiene que proponer al reconectar
  *     recordInboundMessage       una respuesta nueva, a outbound_message; su
  *                                enrolamiento deja de enviar y una baja explícita se respeta
  *     setChannelWebhooks         los avisos de Unipile de la cuenta (0040)
@@ -92,7 +95,37 @@ export const CHANNEL_ERROR_CODES = {
    * Unipile manda a failure_redirect_url.
    */
   authFailed: 'auth_failed',
+  /**
+   * El perfil de LinkedIn o de Instagram ya está conectado en este espacio
+   * con otra cuenta de Unipile (0042): la nueva se borró en Unipile.
+   */
+  duplicate: 'duplicate',
+  /** Google ya no acepta el refresh token (la persona quitó el acceso, o venció sin uso). Lo escribe el keepalive. */
+  gmailRevoked: 'gmail_revoked',
+  /** La fila del Gmail no tiene su token en el vault. */
+  gmailNoSecret: 'gmail_no_secret',
+  /** Unipile ya no tiene la cuenta (se borró o caducó). */
+  unipileGone: 'unipile_gone',
+  /** No se pudo comprobar la cuenta (red, 5xx, nuestra llave): la cuenta no cambia de estado. */
+  transient: 'transient',
 } as const;
+
+/**
+ * Lo que dijo Unipile de una sesión caída, como código parametrizado:
+ * 'unipile_status:CREDENTIALS'. La pantalla lo traduce con el nombre del
+ * canal; el estado crudo solo viaja dentro del código, nunca en frase.
+ */
+export const UNIPILE_STATUS_CODE_PREFIX = 'unipile_status:';
+
+export function unipileStatusCode(status: string | null): string {
+  const clean = (status ?? '').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 40);
+  return `${UNIPILE_STATUS_CODE_PREFIX}${clean || 'UNKNOWN'}`;
+}
+
+/** El estado de un código 'unipile_status:<X>', o null si no es uno. */
+export function parseUnipileStatusCode(code: string | null): string | null {
+  return code?.startsWith(UNIPILE_STATUS_CODE_PREFIX) ? code.slice(UNIPILE_STATUS_CODE_PREFIX.length) : null;
+}
 
 export interface ChannelAccountRow {
   id: string;
@@ -111,8 +144,12 @@ export interface ChannelAccountRow {
   limits: ChannelLimits;
   scopes: string[];
   lastOkAt: Date | null;
+  /** Hace cuántos segundos se comprobó (now() - last_ok_at, en la base): la pantalla lo dice en relativo, sin restar fechas. */
+  lastOkAgoS: number | null;
   lastErrorAt: Date | null;
   lastError: string | null;
+  /** last_error es de las últimas 24 horas: un motivo pasajero más viejo ya no se enseña. */
+  lastErrorRecent: boolean;
   updatedAt: Date;
   /** Acciones de hoy y de esta semana (lunes local), sumadas en outbound_counter por cuenta. */
   usedToday: number;
@@ -159,8 +196,10 @@ interface RawAccount extends RawLimits, Record<string, unknown> {
   weekly_cap: number | null;
   scopes: string[];
   last_ok_at: Date | string | null;
+  last_ok_ago_s: number | null;
   last_error_at: Date | string | null;
   last_error: string | null;
+  last_error_recent: boolean;
   updated_at: Date | string;
   used_today: number;
   used_week: number;
@@ -187,6 +226,8 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
      SELECT a.id, a.channel, a.provider, a.provider_account_id, a.display_name, a.status,
             (a.status = 'pending' AND a.updated_at < now() - make_interval(mins => ($1::jsonb ->> a.channel)::int)) AS stale,
             a.daily_cap, a.weekly_cap, a.scopes, a.last_ok_at, a.last_error_at, a.last_error, a.updated_at,
+            greatest(0, extract(epoch FROM now() - a.last_ok_at))::int AS last_ok_ago_s,
+            coalesce(a.last_error_at > now() - interval '24 hours', false) AS last_error_recent,
             l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.personal_mailbox,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
                        WHERE c.channel_account_id = a.id AND c.period = 'day' AND c.period_start = p.hoy), 0)::int AS used_today,
@@ -210,8 +251,10 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
     limits: toLimits(r),
     scopes: r.scopes,
     lastOkAt: toDate(r.last_ok_at),
+    lastOkAgoS: r.last_ok_ago_s,
     lastErrorAt: toDate(r.last_error_at),
     lastError: r.last_error,
+    lastErrorRecent: r.last_error_recent,
     updatedAt: toDate(r.updated_at)!,
     usedToday: r.used_today,
     usedThisWeek: r.used_week,
@@ -371,11 +414,23 @@ export async function createPendingChannelAccount(
 // verificó el estado firmado y habló con el proveedor con su llave.
 
 export type ConnectResult =
-  | { status: 'connected'; accountId: string; reconnected: boolean }
-  | { status: 'taken' }
-  | { status: 'unknown_state' }
+  /**
+   * `replaced`: la fila del mismo perfil adoptó la cuenta nueva (0042) y
+   * esta es la cuenta VIEJA de Unipile con sus avisos, para borrarlos.
+   */
+  | { status: 'connected'; accountId: string; reconnected: boolean; replaced: { providerAccountId: string; webhookIds: string[] } | null }
+  /**
+   * La cuenta o el perfil viven en otro espacio. `inUse`: la cuenta del
+   * proveedor misma está viva allí (un Gmail ocupado: no se revoca); false
+   * si es el mismo perfil con una cuenta de Unipile nueva, que se borra.
+   */
+  | { status: 'taken'; inUse: boolean }
+  /** No hay pendiente para ese nonce. `inUse`: la cuenta ya está viva (un aviso repetido): no se suelta. */
+  | { status: 'unknown_state'; inUse: boolean }
   /** sales.channels_release está soltando esa misma cuenta en el proveedor (0041): no se escribió nada. */
-  | { status: 'releasing' };
+  | { status: 'releasing'; inUse: boolean }
+  /** El perfil ya está conectado en este espacio con otra cuenta de Unipile (0042): no se escribió nada. */
+  | { status: 'duplicate'; accountId: string };
 
 export interface ChannelConnection {
   channel: ConnectableChannel;
@@ -388,26 +443,76 @@ export interface ChannelConnection {
   secretRef: string | null;
   /** Solo Gmail: los alcances concedidos, con su nombre corto. */
   scopes: string[] | null;
+  /** Solo Unipile: quién es la persona en el proveedor (connection_params.im.id), para no conectar el mismo perfil dos veces. */
+  providerIdentity?: string | null;
 }
 
 /**
- * Pasa la fila 'pending' del nonce a 'connected'. Si el espacio ya tenía
- * fila para esa cuenta (reconectar), revive esa y borra la pendiente.
- * 'taken' si la cuenta vive en otro espacio (no se escribe nada),
- * 'unknown_state' si no hay pendiente para ese nonce (ya se usó, o nunca
- * se empezó aquí) y 'releasing' si el worker está soltando esa misma
- * cuenta en el proveedor (0041): revivirla ahora daría un permiso que
- * Google o Unipile retiran un segundo después.
+ * Pasa la fila 'pending' del nonce a 'connected' (outreach_channel_connect,
+ * 0042). Si el espacio ya tenía fila para esa cuenta (reconectar), revive
+ * esa y borra la pendiente; si tenía el mismo PERFIL con otra cuenta de
+ * Unipile, caído o desconectado, esa fila adopta la cuenta nueva
+ * (`replaced`); conectado, responde 'duplicate'. 'taken' si la cuenta o el
+ * perfil viven en otro espacio, 'unknown_state' si no hay pendiente para
+ * ese nonce y 'releasing' si el worker está soltando esa misma cuenta.
+ * Ninguna de esas tres escribe nada; su `inUse` dice si quien llama puede
+ * soltar en el proveedor lo que se acaba de crear.
  */
 export async function completeChannelConnection(tx: WorkspaceTx, c: ChannelConnection): Promise<ConnectResult> {
   const providerAccountId = c.channel === 'email' ? c.providerAccountId.trim().toLowerCase() : c.providerAccountId.trim();
-  const { rows } = await tx.query<{ result: 'connected' | 'taken' | 'unknown_state' | 'releasing'; account_id: string | null; reconnected: boolean }>(
-    `SELECT result, account_id, reconnected FROM outreach_channel_connect($1, $2, $3, $4, $5, $6::text[])`,
-    [c.channel, c.nonce, providerAccountId, c.displayName, c.secretRef, c.scopes],
+  const identity = c.channel === 'email' ? null : c.providerIdentity?.trim() || null;
+  const { rows } = await tx.query<{
+    result: 'connected' | 'taken' | 'unknown_state' | 'releasing' | 'duplicate'; account_id: string | null; reconnected: boolean;
+    in_use: boolean; replaced_account_id: string | null; replaced_webhook_ids: string[] | null;
+  }>(
+    `SELECT result, account_id, reconnected, in_use, replaced_account_id, replaced_webhook_ids
+       FROM outreach_channel_connect($1, $2, $3, $4, $5, $6::text[], $7)`,
+    [c.channel, c.nonce, providerAccountId, c.displayName, c.secretRef, c.scopes, identity],
   );
   const r = rows[0]!;
-  if (r.result === 'connected') return { status: 'connected', accountId: r.account_id!, reconnected: r.reconnected };
-  return { status: r.result };
+  switch (r.result) {
+    case 'connected':
+      return {
+        status: 'connected', accountId: r.account_id!, reconnected: r.reconnected,
+        replaced: r.replaced_account_id ? { providerAccountId: r.replaced_account_id, webhookIds: r.replaced_webhook_ids ?? [] } : null,
+      };
+    case 'duplicate':
+      return { status: 'duplicate', accountId: r.account_id! };
+    default:
+      return { status: r.result, inUse: r.in_use };
+  }
+}
+
+/**
+ * ¿Alguna fila de ESTE espacio tiene esa cuenta de Unipile viva o por
+ * soltar? Antes de borrar en Unipile una cuenta que no se conectó (canal
+ * equivocado): si una fila la nombra, esa manda.
+ */
+export async function unipileAccountInUseHere(tx: WorkspaceTx, providerAccountId: string): Promise<boolean> {
+  const { rows } = await tx.query(
+    `SELECT 1 FROM outreach_channel_account
+      WHERE provider = 'unipile' AND provider_account_id = $1
+        AND (status = ANY($2::text[]) OR (status = 'disconnected' AND released_at IS NULL))
+      LIMIT 1`,
+    [providerAccountId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * El buzón de un Gmail del espacio que se va a reconectar, por el id de
+ * SU fila: va a Google como login_hint para que proponga ESE buzón y no
+ * el primero de la sesión del navegador. null si no es de este espacio,
+ * no es un Gmail o no está vivo.
+ */
+export async function getReconnectableGmail(tx: WorkspaceTx, accountId: string): Promise<string | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<{ provider_account_id: string }>(
+    `SELECT provider_account_id FROM outreach_channel_account
+      WHERE id = $1 AND provider = 'gmail_oauth' AND status = ANY($2::text[])`,
+    [accountId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
+  );
+  return rows[0]?.provider_account_id ?? null;
 }
 
 /**
@@ -542,6 +647,29 @@ export async function markChannelAccountDown(tx: WorkspaceTx, accountId: string,
   return moved;
 }
 
+/** El aviso de la campana cuando la cuenta vuelve. Las frases las pone quien llama. */
+export type ChannelBackNotice = ChannelDownNotice;
+
+/**
+ * Unipile dice que la sesión volvió (OK, RECONNECTED: la persona resolvió
+ * el reto): needs_reconnect o error → connected, por
+ * outreach_channel_mark_ok (0042), y un aviso de éxito en la campana. Una
+ * cuenta que ya estaba conectada no se toca ni avisa.
+ */
+export async function markChannelAccountOk(tx: WorkspaceTx, accountId: string, notice?: ChannelBackNotice): Promise<boolean> {
+  if (!isUuid(accountId)) return false;
+  const { rows } = await tx.query<{ moved: boolean }>(`SELECT outreach_channel_mark_ok($1) AS moved`, [accountId]);
+  const moved = rows[0]?.moved === true;
+  if (moved && notice) {
+    await tx.query(
+      `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+       VALUES (current_workspace_id(), 'connection_error', 'success', $1, $2, 'outreach_channel_account', $3, '/ventas/canales')`,
+      [notice.titleEs, notice.bodyEs, accountId],
+    );
+  }
+  return moved;
+}
+
 export interface InboundMessage {
   account: Pick<LiveChannelAccount, 'id' | 'channel'>;
   /** El chat de Unipile o el hilo de Gmail (outbound_touch.thread_ref). */
@@ -656,12 +784,16 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
 
 /**
  * Los avisos que la web acaba de dar de alta en Unipile para una cuenta
- * conectada, por outreach_channel_set_webhooks (0040): la columna es del
- * despachador, que los borra al soltar la cuenta.
+ * conectada, con la huella del secreto que llevan, por
+ * outreach_channel_set_webhooks (0040, 0042): las columnas son del
+ * despachador, que los borra al soltar la cuenta y los renueva al rotar
+ * el secreto.
  */
-export async function setChannelWebhooks(tx: WorkspaceTx, accountId: string, webhookIds: readonly string[]): Promise<boolean> {
+export async function setChannelWebhooks(tx: WorkspaceTx, accountId: string, webhookIds: readonly string[], secretFingerprint: string): Promise<boolean> {
   if (!isUuid(accountId) || webhookIds.length === 0) return false;
-  const { rows } = await tx.query<{ ok: boolean }>(`SELECT outreach_channel_set_webhooks($1, $2::text[]) AS ok`, [accountId, [...webhookIds]]);
+  const { rows } = await tx.query<{ ok: boolean }>(
+    `SELECT outreach_channel_set_webhooks($1, $2::text[], $3) AS ok`, [accountId, [...webhookIds], secretFingerprint],
+  );
   return rows[0]?.ok === true;
 }
 

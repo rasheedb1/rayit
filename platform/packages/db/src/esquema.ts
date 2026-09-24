@@ -327,21 +327,29 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'UNA dirección: lo mismo que un workspace ya aprende creando una ficha con ese correo, que nace dada de baja ' +
     '(contact_suppression_apply). EXECUTE solo para mc_app y mc_worker',
   // El callback de un canal de outreach desde la web (0039, VEN-9).
-  'outreach_channel_connect(text,text,text,text,text,text[])':
-    'el callback de la conexión de un canal (0039): la web es mc_app y el disparador de 0037 §2.1 no le deja escribir ' +
+  'outreach_channel_connect(text,text,text,text,text,text[],text)':
+    'el callback de la conexión de un canal (0039, 0042 con la identidad del perfil): la web es mc_app y el disparador de 0037 §2.1 no le deja escribir ' +
     'un estado autenticado. Es del rol que migra (despachador por ser dueño de outbound_touch) y, como las tablas ' +
     'llevan FORCE ROW LEVEL SECURITY, solo ve el workspace de la transacción: pasa a connected la fila pending de ESE ' +
     'nonce (de un solo uso, nace al empezar la conexión) con la cuenta que devolvió el proveedor, o revive la fila que ' +
     'el espacio ya tenía. Un buzón vivo en otro espacio lo dice el índice global con 23505 y responde taken sin ' +
     'escribir; una fila que sales.channels_release reclamó para soltarla responde releasing sin escribir (0041), y al ' +
-    'revivir una fila desconectada con una ref nueva borra del vault el token viejo que ya nadie nombra. La llaman las rutas de la web tras verificar el estado firmado y hablar con el proveedor. EXECUTE solo ' +
-    'para mc_app. No es de ningún disparador',
+    'revivir una fila desconectada con una ref nueva borra del vault el token viejo que ya nadie nombra. Con la ' +
+    'identidad (0042): el mismo perfil ya conectado aquí responde duplicate sin escribir; caído o desconectado, su ' +
+    'fila adopta la cuenta nueva y devuelve la vieja para borrarla en Unipile. in_use dice si la cuenta la usa alguien ' +
+    '(outreach_channel_live_elsewhere, sin escribir). La llaman las rutas de la web tras verificar el estado firmado y ' +
+    'hablar con el proveedor. EXECUTE solo para mc_app. No es de ningún disparador',
   'outreach_channel_mark_down(uuid,text)':
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
     'no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
-  'outreach_channel_set_webhooks(uuid,text[])':
-    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (0040): provider_webhook_ids es ' +
+  'outreach_channel_mark_ok(uuid)':
+    'el aviso account_status de Unipile de una sesión que volvió (0042): una cuenta de Unipile needs_reconnect o error ' +
+    'del workspace de la transacción vuelve a connected. La pareja de outreach_channel_mark_down, mismo dueño y misma ' +
+    'cerradura; no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outreach_channel_set_webhooks(uuid,text[],text)':
+    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (0040, 0042 con la huella del ' +
+    'secreto): provider_webhook_ids y provider_webhook_secret_fp son ' +
     'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
     'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
     'forma de id. EXECUTE solo para mc_app. No es de ningún disparador',
@@ -795,6 +803,12 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'cuentas AUTENTICADAS (connected, needs_reconnect, error), y a esos estados solo llega el callback del ' +
     'proveedor (outreach_channel_account_worker_columns, en DISPARADORES_DE_CANDADO): chocar exige haber ' +
     'autenticado esa misma cuenta, que ya es tenerla. Una fila pending de la web no ocupa nada',
+  'outreach_channel_account.outreach_channel_account_identity_live_idx':
+    'el mismo perfil de LinkedIn o de Instagram (connection_params.im.id de Unipile, 0042) envía desde UN workspace, ' +
+    'aunque Unipile le dé un account_id nuevo en cada hosted auth: con dos filas vivas del mismo perfil los topes se ' +
+    'sumarían y LinkedIn podría bloquearlo. Mismo criterio que outreach_channel_account_live_idx: cubre solo las ' +
+    'cuentas autenticadas y provider_identity la escribe solo el callback del proveedor (candado de 0037 §2.1, 0042): ' +
+    'chocar exige haber autenticado ese perfil',
 };
 
 /**

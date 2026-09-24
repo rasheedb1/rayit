@@ -16,8 +16,10 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { EncryptedSecretStore, FakeGmail, FakeUnipile, keyringOf, TokenCipher, withoutNetwork, type NetworkGuard, type OAuthTokens } from '@mc/connectors';
-import { CANALES_TEXTOS } from '@mc/core';
+import {
+  EncryptedSecretStore, FakeGmail, FakeUnipile, keyringOf, signChannelState, TokenCipher, webhookSecretFingerprint, withoutNetwork, type NetworkGuard,
+  type OAuthTokens,
+} from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { CHANNELS_KEEPALIVE_JOB_ID, runChannelsKeepalive } from '../src/jobs/ventas/canales.keepalive.ts';
 import { CHANNELS_RELEASE_JOB_ID, runChannelsRelease } from '../src/jobs/ventas/canales.release.ts';
@@ -111,7 +113,7 @@ test('los dos jobs están registrados con el id de job_definition (0038, 0040)',
   const release = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_RELEASE_JOB_ID]);
   assert.equal(release.rows[0]?.default_cron, '*/5 * * * *');
   const { rows } = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_KEEPALIVE_JOB_ID]);
-  assert.equal(rows[0]?.default_cron, '30 6 * * *');
+  assert.equal(rows[0]?.default_cron, '17 * * * *', 'cada hora, por lotes (0042)');
 });
 
 test('sin llaves de Google ni de Unipile no toca ninguna cuenta, pero limpia', async () => {
@@ -153,7 +155,7 @@ test('el Gmail por vencer se refresca con la misma ref; el lejano no; el revocad
 
   const revocado = await cuenta(GMAIL_REVOCADO);
   assert.equal(revocado?.status, 'needs_reconnect');
-  assert.match(revocado?.last_error ?? '', /Google ya no acepta/);
+  assert.equal(revocado?.last_error, 'gmail_revoked', 'un código: la pantalla lo traduce');
   const { rows: avisos } = await db.raw.query<{ entity_id: string; action_url: string }>(
     `SELECT entity_id, action_url FROM notification WHERE kind = 'connection_error' AND workspace_id = $1 ORDER BY entity_id`, [WS],
   );
@@ -201,13 +203,15 @@ test('sales.channels_release: lo ya soltado no se vuelve a tocar; desconectar ot
   assert.ok((await soltada(LINKEDIN_DESCONECTADO))?.released_at);
 });
 
-test('un fallo transitorio de Google no tumba la cuenta: deja una frase nuestra (nunca el texto del proveedor) y cuenta el fallo', async () => {
+test('un fallo transitorio de Google no tumba la cuenta: deja el código transient (nunca el texto del proveedor) y cuenta el fallo', async () => {
+  // Ya se miró en esta hora: vuelve a la cola como si hubiera pasado un día.
+  await db.raw.query(`UPDATE outreach_channel_account SET keepalive_checked_at = NULL WHERE id = $1`, [GMAIL_POR_VENCER]);
   gmail.failNext('transient', 'backendError', 503);
   const r = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW });
   assert.equal(r.failed, 1);
   const a = await cuenta(GMAIL_POR_VENCER);
   assert.equal(a?.status, 'connected');
-  assert.equal(a?.last_error, CANALES_TEXTOS.transient, 'la frase fija de @mc/core');
+  assert.equal(a?.last_error, 'transient', 'un código; la frase la pone la pantalla');
   assert.doesNotMatch(a?.last_error ?? '', /backendError|Internal|error/i, 'ni el código ni el mensaje de Google');
 });
 
@@ -237,7 +241,7 @@ async function reconectarComoLaWeb(email: string, nonce: string, secretRef: stri
       [CREATOR, nonce],
     );
     const { rows } = await tx.query<{ result: string }>(
-      `SELECT result FROM outreach_channel_connect('email', $1, $2, NULL, $3, '{gmail.send,gmail.modify}')`, [nonce, email, secretRef],
+      `SELECT result FROM outreach_channel_connect('email', $1, $2, NULL, $3, '{gmail.send,gmail.modify}', NULL)`, [nonce, email, secretRef],
     );
     return rows[0]!.result;
   });
@@ -308,7 +312,7 @@ test('una cuenta de Unipile conectada sin avisos los recupera en el keepalive; s
     [ID, WS, CREATOR, hace],
   );
   unipile.addAccount({ id: 'acc_ig_sordo', provider: 'INSTAGRAM' });
-  const webhooks = { secret: 'SECRETO-DE-PRUEBA', routeKey: new Uint8Array(32).fill(5), requestUrl: 'https://app.test/api/webhooks/unipile' };
+  const webhooks = { secret: 'SECRETO-DE-PRUEBA', secretFingerprint: webhookSecretFingerprint('SECRETO-DE-PRUEBA'), routeKey: new Uint8Array(32).fill(5), requestUrl: 'https://app.test/api/webhooks/unipile' };
 
   unipile.failNext('createWebhook', 'transient', 'errors/service_unavailable', 503);
   const mal = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, webhooks, now: NOW });
@@ -333,4 +337,113 @@ test('una cuenta de Unipile conectada sin avisos los recupera en el keepalive; s
   );
   assert.equal(fila.rows[0]?.last_error, null);
   assert.ok(fila.rows[0]!.provider_webhook_ids.length >= 2);
+});
+
+// ---------------------------------------------------------------------
+// Por lotes, rotación del secreto, conciliación y limpieza (0042)
+// ---------------------------------------------------------------------
+
+test('por lotes: cada corrida toma como mucho el lote, de la comprobación más vieja a la más nueva, y la siguiente sigue', async () => {
+  // Todo lo anterior ya se comprobó hoy: solo cuentan las tres de esta prueba.
+  await db.raw.query(`UPDATE outreach_channel_account SET keepalive_checked_at = $1`, [NOW]);
+  const ids = ['0000000b-0000-4000-8000-0000000ac0e1', '0000000b-0000-4000-8000-0000000ac0e2', '0000000b-0000-4000-8000-0000000ac0e3'];
+  for (const [i, id] of ids.entries()) {
+    const r = `enc:gmail:0000000b-0000-4000-8000-00000000e00${i}`;
+    await store.set(r, tokens(`rt-lote-${i}`, 30));
+    await db.raw.query(
+      `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, secret_ref, status, scopes)
+       VALUES ($1, $2, $3, 'email', 'gmail_oauth', $4, $5, 'connected', '{gmail.send}')`,
+      [id, WS, CREATOR, `lote${i}@x.test`, r],
+    );
+  }
+  const primera = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW, batchSize: 2 });
+  assert.equal(primera.gmailRefreshed, 2, 'el lote es de dos');
+  const vistas = await db.raw.query<{ id: string }>(`SELECT id FROM outreach_channel_account WHERE id = ANY($1::uuid[]) AND keepalive_checked_at IS NOT NULL ORDER BY id`, [ids]);
+  assert.deepEqual(vistas.rows.map((x) => x.id), ids.slice(0, 2), 'las dos primeras por id (las tres sin comprobar empatan)');
+
+  const segunda = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW, batchSize: 2 });
+  assert.equal(segunda.gmailRefreshed, 1, 'la que quedó va en la corrida siguiente');
+  const tercera = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW, batchSize: 2 });
+  assert.equal(tercera.gmailRefreshed + tercera.gmailUnchanged, 0, 'ya se miraron todas hoy: la hora siguiente no repite');
+  // Veinte horas después, vuelven a la cola.
+  const manana = new Date(NOW.getTime() + 21 * 3600_000);
+  const otroDia = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: manana, batchSize: 10 });
+  assert.ok(otroDia.gmailRefreshed + otroDia.gmailUnchanged >= 3);
+});
+
+test('sin tiempo (la señal del job vencida) no toma ninguna cuenta: quedan para la corrida siguiente', async () => {
+  await db.raw.query(`UPDATE outreach_channel_account SET keepalive_checked_at = NULL WHERE id = '0000000b-0000-4000-8000-0000000ac0e1'`);
+  const antes = gmail.refreshCalls;
+  const r = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW, signal: AbortSignal.abort() });
+  assert.equal(gmail.refreshCalls, antes);
+  assert.ok(r.deferred >= 1);
+  const fila = await db.raw.query<{ keepalive_checked_at: Date | null }>(`SELECT keepalive_checked_at FROM outreach_channel_account WHERE id = '0000000b-0000-4000-8000-0000000ac0e1'`);
+  assert.equal(fila.rows[0]?.keepalive_checked_at, null);
+});
+
+test('rotar el secreto: los avisos dados de alta con el viejo se vuelven a dar de alta con el nuevo y los viejos se borran', async () => {
+  const ID = '0000000b-0000-4000-8000-0000000ac0f5';
+  const hace = new Date(NOW.getTime() - 60 * 60_000);
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status, provider_webhook_ids,
+                                           provider_webhook_secret_fp, updated_at)
+     VALUES ($1, $2, $3, 'linkedin', 'unipile', 'acc_rotar', 'connected', '{wh_viejo_1,wh_viejo_2}', $4, $5)`,
+    [ID, WS, CREATOR, webhookSecretFingerprint('SECRETO-VIEJO'), hace],
+  );
+  unipile.addAccount({ id: 'acc_rotar' });
+  const webhooks = { secret: 'SECRETO-NUEVO', secretFingerprint: webhookSecretFingerprint('SECRETO-NUEVO'), routeKey: new Uint8Array(32).fill(6), requestUrl: 'https://app.test/api/webhooks/unipile' };
+  const antes = new Set(unipile.webhooks.map((w) => w.id));
+  const r = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, webhooks, now: new Date(Date.now() + 60 * 60_000) });
+  assert.ok(r.webhooksRotated >= 1);
+  const nuevos = unipile.webhooks.filter((w) => !antes.has(w.id) && w.accountId === 'acc_rotar');
+  assert.deepEqual(nuevos.map((w) => w.source).sort(), ['account_status', 'messaging']);
+  assert.ok(nuevos.every((w) => w.headers['x-on-cue-secret'] === 'SECRETO-NUEVO'), 'con el secreto actual');
+  assert.ok(unipile.deletedWebhooks.includes('wh_viejo_1') && unipile.deletedWebhooks.includes('wh_viejo_2'), 'los viejos se borran');
+  const fila = await db.raw.query<{ provider_webhook_ids: string[]; provider_webhook_secret_fp: string }>(
+    `SELECT provider_webhook_ids, provider_webhook_secret_fp FROM outreach_channel_account WHERE id = $1`, [ID],
+  );
+  assert.deepEqual([...fila.rows[0]!.provider_webhook_ids].sort(), nuevos.map((w) => w.id).sort());
+  assert.equal(fila.rows[0]!.provider_webhook_secret_fp, webhookSecretFingerprint('SECRETO-NUEVO'));
+  // Al día: la corrida siguiente no la vuelve a tocar.
+  const otra = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, webhooks, now: new Date(Date.now() + 2 * 60 * 60_000) });
+  assert.equal(unipile.webhooks.filter((w) => w.accountId === 'acc_rotar').length, 2);
+  assert.equal(otra.webhooksRotated, 0);
+});
+
+test('conciliación: una cuenta de Unipile de NUESTRA hosted auth sin fila y con más de un día se borra; las demás no', async () => {
+  const llave = new Uint8Array(32).fill(9);
+  const estado = (n: string) => signChannelState({ workspaceId: WS, creatorId: CREATOR, channel: 'linkedin', nonce: n.repeat(43) }, llave, NOW);
+  const ajeno = signChannelState({ workspaceId: WS, creatorId: CREATOR, channel: 'linkedin', nonce: 'y'.repeat(43) }, new Uint8Array(32).fill(1), NOW);
+  const viejo = new Date(NOW.getTime() - 3 * 24 * 3600_000);
+  unipile.addAccount({ id: 'acc_huerfana', provider: 'INSTAGRAM', hostedAuthName: estado('h'), createdAt: viejo });
+  unipile.addAccount({ id: 'acc_de_otro_entorno', hostedAuthName: ajeno, createdAt: viejo });
+  unipile.addAccount({ id: 'acc_recien_creada', hostedAuthName: estado('r'), createdAt: new Date(NOW.getTime() - 60_000) });
+  unipile.addAccount({ id: 'acc_con_fila', hostedAuthName: estado('f'), createdAt: viejo });
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (workspace_id, creator_id, channel, provider, provider_account_id, status)
+     VALUES ($1, $2, 'linkedin', 'unipile', 'acc_con_fila', 'connected')`, [WS, CREATOR],
+  );
+  const r = await runChannelsKeepalive({ db, secrets: store, google: null, unipile, stateKeys: [llave], now: NOW });
+  assert.equal(r.orphansDeleted, 1);
+  assert.ok(unipile.deletedAccounts.includes('acc_huerfana'));
+  for (const id of ['acc_de_otro_entorno', 'acc_recien_creada', 'acc_con_fila']) assert.ok(!unipile.deletedAccounts.includes(id), id);
+  // Sin las llaves de estado no se concilia nada.
+  unipile.addAccount({ id: 'acc_huerfana_2', hostedAuthName: estado('i'), createdAt: viejo });
+  await runChannelsKeepalive({ db, secrets: store, google: null, unipile, now: NOW });
+  assert.ok(!unipile.deletedAccounts.includes('acc_huerfana_2'));
+});
+
+test('limpieza: los intentos fallidos o cancelados ya soltados hace más de una semana se borran; los recientes se quedan', async () => {
+  const VIEJO = '0000000b-0000-4000-8000-0000000ac0a1';
+  const RECIENTE = '0000000b-0000-4000-8000-0000000ac0a2';
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status, last_error, released_at) VALUES
+       ($1, $3, $4, 'linkedin', 'unipile', 'pending:${'k'.repeat(43)}', 'disconnected', 'cancelled', $5),
+       ($2, $3, $4, 'linkedin', 'unipile', 'pending:${'l'.repeat(43)}', 'disconnected', 'auth_failed', $6)`,
+    [VIEJO, RECIENTE, WS, CREATOR, new Date(NOW.getTime() - 8 * 24 * 3600_000), new Date(NOW.getTime() - 24 * 3600_000)],
+  );
+  const r = await runChannelsKeepalive({ db, secrets: store, google: null, unipile: null, now: NOW });
+  assert.ok(r.failedAttemptsRemoved >= 1);
+  assert.equal(await cuenta(VIEJO), undefined);
+  assert.ok(await cuenta(RECIENTE), 'la pantalla la enseña todavía');
 });

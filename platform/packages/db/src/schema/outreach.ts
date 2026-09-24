@@ -276,6 +276,12 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   releasedAt: timestamptz('released_at'),
   /** sales.channels_release la reclamó para soltarla (0041): mientras dure, reconectar espera. */
   releaseClaimedAt: timestamptz('release_claimed_at'),
+  /** Quién es la persona en el proveedor (connection_params.im.id de Unipile), única entre las vivas (0042). */
+  providerIdentity: text('provider_identity'),
+  /** La huella del secreto con el que se dieron de alta los avisos (0042). Solo el despachador. */
+  providerWebhookSecretFp: text('provider_webhook_secret_fp'),
+  /** El cursor de los lotes del keepalive (0042). */
+  keepaliveCheckedAt: timestamptz('keepalive_checked_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
