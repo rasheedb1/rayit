@@ -43,7 +43,11 @@ nueve índices, y el entorno local se levanta con un comando.
 > [backlog-mvp.md](backlog-mvp.md#10-cierre-del-sprint-2-al-23-de-septiembre-de-2026).
 > Al cierre de módulos del 23-sep por la tarde, CON-4 (la pantalla
 > Conexiones) quedó en `main` y en producción: ver
-> [propuestas/CIERRE-CON-B.md](propuestas/CIERRE-CON-B.md).
+> [propuestas/CIERRE-CON-B.md](propuestas/CIERRE-CON-B.md). La parte de
+> Nicolás en Accesos (ACC-1, 2, 3, 5, 6 y 8) se cerró con ACC-6: el
+> alcance cubre todas las consultas de Campañas, Finanzas y Conexiones
+> (migración 0040); lo que falta de Rasheed antes de ACC-4 y ACC-7 está en
+> [propuestas/CIERRE-ACC.md](propuestas/CIERRE-ACC.md) §5.
 
 ---
 

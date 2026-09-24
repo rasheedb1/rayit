@@ -641,8 +641,8 @@ export const STORIES: readonly Story[] = [
     title: "Alcance en las consultas",
     desc: "scopeFilter() en packages/db, compuesto por cada queries/<modulo>.ts. La tenencia se garantiza en RLS; el alcance, aquí: depende de columnas que no todas las tablas tienen, y una política de alcance mal escrita no se ve como un bug.",
     done: "Un miembro con alcance a un creador no ve las campañas, los deals ni los posts del otro, en ninguna función exportada del módulo.",
-    status: "en_curso",
-    note: "23-sep: parte de Nicolás hecha en la rama nicolas/ACC-6-alcance-consultas (en GitHub): scopeFilter() y alcance en las 34 funciones de Campañas, Finanzas y Conexiones. Su migración 0035 ya la tomó CAM-3 en main: hay que renumerarla. Falta el alcance de Ventas, Cotizar y Resumen (Rasheed).",
+    status: "hecho",
+    note: "23-sep (cierre ACC): parte de Nicolás hecha. alcance en las 81 funciones de Campañas, Finanzas y Conexiones que consultan (70 con scopeFilter; 11 sin él, con motivo: worker, permisos, configuración, catálogos y el reporte público); una prueba por módulo con dos creadoras y otra estática que falla si una función nueva no pasa por el alcance. Migración 0040_scope_allows (solo la función y un índice; la tabla es de 0034). Sin filas de alcance nada cambia. Falta la parte de Rasheed: Ventas, Cotizar y Resumen (CIERRE-ACC.md §5).",
   },
   {
     id: "ACC-7", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-6"],
