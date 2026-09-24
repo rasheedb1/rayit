@@ -65,6 +65,18 @@ export class PgliteDatabase implements WorkerDatabase {
     return new PgliteDatabase(db, opts.setRole);
   }
 
+  /**
+   * Envuelve una PGlite que ya existe y ya está migrada, sin volver a
+   * migrar. Es para la prueba de punta a punta (E2E): la base la abre
+   * `createEmbeddedDb` de @mc/db, con los roles y privilegios de
+   * Supabase y los seeds, la web la usa como mc_app y el worker corre
+   * sus jobs sobre LA MISMA base como `setRole`. pg-boss no se usa ahí
+   * (los jobs se corren con executeRun o --once); close() la cierra.
+   */
+  static wrap(db: PGlite, setRole: string | null): PgliteDatabase {
+    return new PgliteDatabase(db, setRole);
+  }
+
   /** Acceso directo como superusuario: para sembrar datos en pruebas y demos. */
   get raw(): PGlite {
     return this.#db;
