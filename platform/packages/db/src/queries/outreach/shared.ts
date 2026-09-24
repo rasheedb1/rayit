@@ -14,8 +14,8 @@
  *   replies.ts   los hilos abiertos y las respuestas (baja incluida).
  *
  * El reloj lo pone quien llama (`now`): el worker pasa el suyo y las
- * pruebas avanzan uno falso. Lo único que no se puede adelantar son los
- * contadores de 0037, que cuentan el día con now() de la base.
+ * pruebas avanzan uno falso. Los contadores de los topes cuentan el día
+ * de ese mismo reloj (r5, 0052 §3).
  */
 import { DEFAULT_SEND_WINDOW, shiftFollowingSteps, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';

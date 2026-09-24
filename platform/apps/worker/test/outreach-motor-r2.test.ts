@@ -121,12 +121,12 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   await enroll(w, bogota('2026-09-25', '07:00')); // viernes: pasos el viernes, el lunes y el martes
   const antes = await touches(c);
   assert.deepEqual(antes.map((t) => localDay(t.scheduled_for)), ['2026-09-25', '2026-09-28', '2026-09-29']);
-  // El tope diario de la cuenta ya está lleno hoy (el contador cuenta con el día real de la base).
+  // El tope diario de la cuenta ya está lleno hoy (r5: el contador cuenta el día del reloj del despachador, 0052 §3).
   await db.raw.query(`UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = $1`, [w.gmail]);
   await db.raw.query(
     `INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
-     VALUES ($1, $2, 'day', outreach_local_date($1, now()), 'email', 1)`,
-    [w.id, w.gmail],
+     VALUES ($1, $2, 'day', $3::date, 'email', 1)`,
+    [w.id, w.gmail, '2026-09-25'],
   );
   const fake = fakeChannels();
   const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-25', '12:00')));
@@ -240,6 +240,37 @@ test('un intento ambiguo que el proveedor sí envió no se reenvía: se confirma
   assert.deepEqual(links.rows.map((l) => [l.attempt, l.sent]), [[1, true], [2, false]], 'el enlace que salió es el del intento 1');
   const plazaDespues = await scalar<number>(`SELECT count::int AS v FROM outbound_counter WHERE workspace_id = $1 AND period = 'day' AND channel_account_id IS NOT NULL`, [w.id]);
   assert.equal(plazaDespues, 1, 'el segundo reclamo devolvió su plaza: un solo envío, una sola plaza');
+});
+
+test('un intento ambiguo que NO salió devuelve su plaza al reenviar: una sola plaza gastada, no dos (r5)', async () => {
+  const w = await workspace(20, { contacts: 1 });
+  const c = w.contacts[0]!;
+  await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  // El corte llega antes de que el proveedor lo envíe: ambiguo, pero no salió.
+  fake.email.failNext(1, { kind: 'transient', code: 'network_ambiguous', message: 'timeout', ambiguous: true });
+  let clock = bogota('2026-09-23', '12:00');
+  const r = await runDispatch(motor, deps(w, fake, () => clock));
+  assert.equal(r.retried.length, 1);
+  let [t] = await touches(c);
+  assert.equal(t!.unconfirmed_attempt, 1);
+  const plazaDelDia = () =>
+    scalar<number>(`SELECT count::int AS v FROM outbound_counter WHERE workspace_id = $1 AND period = 'day' AND channel_account_id IS NOT NULL`, [w.id]);
+  assert.equal(await plazaDelDia(), 1, 'la plaza del intento ambiguo se conserva: pudo salir');
+  assert.ok(await scalar<string>(`SELECT unconfirmed_caps_on::text AS v FROM outbound_touch WHERE id = $1`, [t!.id]), 'con el día de su plaza');
+
+  clock = new Date(t!.next_retry_at!.getTime() + 1000);
+  const r2 = await runDispatch(motor, deps(w, fake, () => clock));
+  assert.equal(r2.sent.length, 1, 'el proveedor dijo que no salió: se envía');
+  assert.equal(fake.email.sent.length, 1);
+  [t] = await touches(c);
+  assert.equal(t!.status, 'sent');
+  assert.equal(await plazaDelDia(), 1, 'un solo envío, una sola plaza: la del ambiguo volvió');
+  assert.equal(await scalar<string | null>(`SELECT unconfirmed_caps_on::text AS v FROM outbound_touch WHERE id = $1`, [t!.id]), null);
+  const semana = await scalar<number>(
+    `SELECT count::int AS v FROM outbound_counter WHERE workspace_id = $1 AND period = 'week' AND channel_account_id IS NOT NULL`, [w.id],
+  );
+  assert.equal(semana, 1, 'y la de la semana, igual');
 });
 
 test('un intento ambiguo que el canal no sabe comprobar se retiene para una persona', async () => {

@@ -21,6 +21,9 @@
 --      persona que aprueba en la ficha un mensaje retenido por un intento
 --      sin comprobar puede borrar la marca de ese intento (antes solo el
 --      despachador: el retenido volvía a retenerse para siempre).
+--   3. increment_if_under_cap e increment_weekly con el instante que
+--      cuenta (p_at): los topes cuentan el día del reloj del despachador,
+--      no el de la base. Las de 0037 quedan igual.
 --
 -- Idempotente (CREATE OR REPLACE, IF NOT EXISTS), como las anteriores.
 -- =====================================================================
@@ -157,3 +160,75 @@ CREATE TRIGGER outbound_touch_dispatch_columns
   BEFORE INSERT OR UPDATE OF send_started_at, unconfirmed_attempt, unconfirmed_caps_on, replies_checked_at, caps_reserved_on
   ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_dispatch_columns();
+
+-- ---------------------------------------------------------------------
+-- 3 · Los topes cuentan el día del reloj de quien reclama
+-- ---------------------------------------------------------------------
+-- increment_if_under_cap e increment_weekly (0037 §8.3) cuentan el día
+-- local del workspace con now() de la base. El despachador reclama con
+-- SU reloj (ClaimOptions.now): en producción es el mismo instante, pero
+-- en las pruebas, con un reloj falso, el contador no cambiaba de día
+-- aunque el reloj sí, y había que borrar outbound_counter a mano. Estas
+-- variantes reciben el instante (p_at) y cuentan el día local de ESE
+-- instante; las de 0037 quedan igual (delegan con now()). El reclamo
+-- anota caps_reserved_on con el mismo instante, así que la plaza vuelve
+-- exactamente a la fila que se sumó.
+CREATE OR REPLACE FUNCTION outbound_counter_bump_at(p_workspace uuid, p_account uuid, p_period text,
+                                                    p_action_type text, p_cap int, p_at timestamptz)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  hoy date;
+  inicio date;
+  nuevo int;
+BEGIN
+  IF p_cap IS NULL OR p_cap <= 0 THEN
+    RETURN false;
+  END IF;
+  IF p_account IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM outreach_channel_account a WHERE a.id = p_account AND a.workspace_id = p_workspace) THEN
+    RAISE EXCEPTION 'La cuenta % no es del workspace %.', p_account, p_workspace
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+  hoy := outreach_local_date(p_workspace, coalesce(p_at, now()));
+  inicio := CASE p_period WHEN 'week' THEN hoy - (extract(isodow FROM hoy)::int - 1) ELSE hoy END;
+
+  INSERT INTO outbound_counter AS c (workspace_id, channel_account_id, period, period_start, action_type, count)
+  VALUES (p_workspace, p_account, p_period, inicio, p_action_type, 1)
+  ON CONFLICT (workspace_id, channel_account_id, period, period_start, action_type)
+  DO UPDATE SET count = c.count + 1, updated_at = now()
+     WHERE c.count < p_cap
+  RETURNING c.count INTO nuevo;
+  RETURN nuevo IS NOT NULL;
+END;
+$$;
+
+-- La de 0037, ahora un caso de la de arriba: una sola definición de la sentencia.
+CREATE OR REPLACE FUNCTION outbound_counter_bump(p_workspace uuid, p_account uuid, p_period text,
+                                                 p_action_type text, p_cap int)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+  SELECT outbound_counter_bump_at(p_workspace, p_account, p_period, p_action_type, p_cap, now());
+$$;
+
+CREATE OR REPLACE FUNCTION increment_if_under_cap(p_workspace uuid, p_account uuid, p_action_type text, p_cap int, p_at timestamptz)
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+AS $$ SELECT outbound_counter_bump_at(p_workspace, p_account, 'day', p_action_type, p_cap, p_at); $$;
+
+CREATE OR REPLACE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_cap int, p_at timestamptz)
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+AS $$ SELECT outbound_counter_bump_at(p_workspace, NULL, 'day', p_action_type, p_cap, p_at); $$;
+
+CREATE OR REPLACE FUNCTION increment_weekly(p_workspace uuid, p_account uuid, p_action_type text, p_cap int, p_at timestamptz)
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+AS $$ SELECT outbound_counter_bump_at(p_workspace, p_account, 'week', p_action_type, p_cap, p_at); $$;
+
+CREATE OR REPLACE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int, p_at timestamptz)
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+AS $$ SELECT outbound_counter_bump_at(p_workspace, NULL, 'week', p_action_type, p_cap, p_at); $$;

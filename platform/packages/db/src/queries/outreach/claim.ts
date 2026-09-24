@@ -482,12 +482,16 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     const action = accountActionType(c.channel);
     await tx.query('SAVEPOINT motor_cap');
     let cap: ClaimReport['rescheduled'][number]['cap'] | null = null;
-    if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap }))) {
+    // (r5) Los contadores cuentan el día del reloj del despachador (0052 §3).
+    if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap, at: now }))) {
       cap = 'account_day';
-    } else if (!(await incrementWeekly(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: int('claimDueTouches', 'effective_weekly', acct.effective_weekly) }))) {
+    } else if (!(await incrementWeekly(tx, {
+      workspaceId: c.workspaceId, accountId: acct.id, actionType: action, at: now,
+      cap: int('claimDueTouches', 'effective_weekly', acct.effective_weekly),
+    }))) {
       cap = 'account_week';
     } else if (c.channel === 'email'
-      && !(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, actionType: 'email', cap: c.maxEmailsPerDay }))) {
+      && !(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, actionType: 'email', cap: c.maxEmailsPerDay, at: now }))) {
       cap = 'workspace_day';
     }
     if (cap) {
@@ -535,12 +539,12 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 
   const claimed = (
     await tx.query<{ id: string; workspace_id: string; contact_id: string; attempt_count: number; caps_reserved_on: string }>(
-      // caps_reserved_on se calcula como outbound_counter_bump (now() de la base,
-      // en esta misma transacción): es el día de la fila del contador que se sumó.
+      // caps_reserved_on se calcula como outbound_counter_bump_at, con el mismo
+      // reloj (0052 §3): es el día de la fila del contador que se sumó.
       `UPDATE outbound_touch t
           SET status = 'processing', claimed_at = $1::timestamptz, attempt_count = t.attempt_count + 1,
               recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL,
-              caps_reserved_on = outreach_local_date(t.workspace_id, now())
+              caps_reserved_on = outreach_local_date(t.workspace_id, $1::timestamptz)
          FROM unnest($2::uuid[], $3::text[], $4::uuid[]) AS x(id, addr, acct)
         WHERE t.id = x.id AND t.status = 'scheduled'
         RETURNING t.id, t.workspace_id, t.contact_id, t.attempt_count, t.caps_reserved_on::text AS caps_reserved_on`,

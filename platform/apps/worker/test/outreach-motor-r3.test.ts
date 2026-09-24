@@ -254,8 +254,9 @@ test('la plaza de un reclamo que no salió vuelve al día en que se reservó, no
   const zombies = await motor.transaction((tx) => rescueZombies(tx, new Date(claimedAt.getTime() + 10 * 60_000), w.id));
   assert.deepEqual(zombies.released, [touch.id]);
   const filas = await db.raw.query<{ period: string; viejo: boolean; count: number }>(
-    `SELECT period, period_start < outreach_local_date(workspace_id, now()) - 6 AS viejo, count
-       FROM outbound_counter WHERE workspace_id = $1 ORDER BY period, viejo`, [w.id],
+    // (r5) Los contadores cuentan el día del reloj del despachador (0052 §3): «hoy» es el del reclamo.
+    `SELECT period, period_start < $2::date - 6 AS viejo, count
+       FROM outbound_counter WHERE workspace_id = $1 ORDER BY period, viejo`, [w.id, localDay(claimedAt)],
   );
   for (const f of filas.rows) {
     assert.equal(f.count, f.viejo ? 0 : 1, `${f.period} ${f.viejo ? 'de hace una semana: devuelta' : 'de hoy: intacta'}`);

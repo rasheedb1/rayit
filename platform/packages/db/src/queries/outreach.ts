@@ -60,6 +60,11 @@ export interface CapRequest {
   actionType: string;
   /** El tope del periodo. 0 o menos no deja pasar nada. */
   cap: number;
+  /**
+   * (VEN-10 r5, 0052 §3) El instante cuyo día local cuenta: el reloj de
+   * quien reclama. Sin él, now() de la base (las funciones de 0037).
+   */
+  at?: Date;
 }
 
 function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] } {
@@ -73,12 +78,17 @@ function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] 
   if (!Number.isInteger(req.cap)) {
     throw new TypeError(`${fn}: cap tiene que ser un entero (${req.cap}).`);
   }
+  if (req.at !== undefined && Number.isNaN(req.at.getTime())) throw new TypeError(`${fn}: at no es una fecha válida.`);
+  const at = req.at === undefined ? [] : [req.at.toISOString()];
   return req.accountId !== undefined && req.accountId !== null
     ? {
-        sql: `SELECT ${fn}($1::uuid, $2::uuid, $3::text, $4::int) AS ok`,
-        params: [req.workspaceId, req.accountId, req.actionType, req.cap],
+        sql: `SELECT ${fn}($1::uuid, $2::uuid, $3::text, $4::int${at.length ? ', $5::timestamptz' : ''}) AS ok`,
+        params: [req.workspaceId, req.accountId, req.actionType, req.cap, ...at],
       }
-    : { sql: `SELECT ${fn}($1::uuid, $2::text, $3::int) AS ok`, params: [req.workspaceId, req.actionType, req.cap] };
+    : {
+        sql: `SELECT ${fn}($1::uuid, $2::text, $3::int${at.length ? ', $4::timestamptz' : ''}) AS ok`,
+        params: [req.workspaceId, req.actionType, req.cap, ...at],
+      };
 }
 
 async function bump(tx: WorkerSql, fn: 'increment_if_under_cap' | 'increment_weekly', req: CapRequest): Promise<boolean> {

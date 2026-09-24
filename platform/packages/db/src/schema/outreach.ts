@@ -180,6 +180,11 @@ export const OUTREACH_FUNCTIONS = {
   incrementIfUnderCapForAccount: 'increment_if_under_cap(uuid,uuid,text,integer)',
   incrementWeekly: 'increment_weekly(uuid,text,integer)',
   incrementWeeklyForAccount: 'increment_weekly(uuid,uuid,text,integer)',
+  /** (0052 §3) Las mismas, contando el día del instante que se les pasa (el reloj del despachador). */
+  incrementIfUnderCapAt: 'increment_if_under_cap(uuid,text,integer,timestamp with time zone)',
+  incrementIfUnderCapForAccountAt: 'increment_if_under_cap(uuid,uuid,text,integer,timestamp with time zone)',
+  incrementWeeklyAt: 'increment_weekly(uuid,text,integer,timestamp with time zone)',
+  incrementWeeklyForAccountAt: 'increment_weekly(uuid,uuid,text,integer,timestamp with time zone)',
   shouldPauseOutreach: 'should_pause_outreach(uuid)',
   disableOutreach: 'disable_outreach(uuid,text)',
   enableOutreach: 'enable_outreach(uuid)',
