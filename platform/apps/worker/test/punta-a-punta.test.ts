@@ -10,7 +10,8 @@
  *
  * Cada eslabón lee lo que escribió el anterior; ninguno se siembra a
  * mano salvo lo que en producción llega de fuera (las respuestas
- * grabadas de YouTube). Si un eslabón no está en main, su prueba se salta
+ * grabadas de YouTube) y las personas y su alcance, que en producción
+ * da de alta Accesos. Si un eslabón no está en main, su prueba se salta
  * con el motivo y la historia, en vez de fingir.
  */
 import { after, before, describe, test } from 'node:test';
@@ -19,14 +20,14 @@ import { dumpTextColumns, findSecretInDump, FixtureFetch, InMemorySecretStore, l
 import { createEmbeddedDb, type EmbeddedDb } from '@mc/db/embedded';
 import { getSessionPermissions } from '@mc/db/queries/accesos';
 import {
-  addBrandInput, getCampaign, getCampaignResult, linkPost, listBrandFollowers, listCampaignPosts, recordBrandSnapshot, transitionCampaign,
+  addBrandInput, getCampaign, getCampaignResult, linkPost, listCampaigns, listBrandFollowers, listCampaignPosts, recordBrandSnapshot, transitionCampaign,
   generateReport, markReportSent, readPublicReport, type TextosReporte,
 } from '@mc/db/queries/campanas';
 import { addPublicAccount } from '@mc/db/queries/conexiones';
 import { acceptQuoteAndCreateCampaign, createQuote, sendQuote, type TextosCotizar } from '@mc/db/queries/cotizar';
 import {
   createExpense, createInvoiceFromCampaign, createPlatformPayout, getCashflowInputs, getInvoice, getReceivablesKpis, getReserveState,
-  listPayoutPlatforms, listReceivables, recordPayment, transitionInvoice, type TextosFinanzas,
+  listInvoices, listPayoutPlatforms, listReceivables, recordPayment, transitionInvoice, type TextosFinanzas,
 } from '@mc/db/queries/finanzas';
 import { createDeal } from '@mc/db/queries/ventas';
 import { MIN_SAMPLE_FOR_BASELINE, mulRateHalfUp, projectCashflow, sumarMeses, ultimoDiaDelMes, ultimoMesCerrado } from '@mc/core';
@@ -45,6 +46,8 @@ const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
 const USER_MANAGER = '00000002-0000-4000-8000-000000000004';
 /** Una Contadora, creada aquí: el seed no trae ninguna. */
 const USER_CONTADORA = '0000e2e0-0000-4000-8000-0000000000c1';
+/** Un Mánager con alcance a UNA campaña (ACC-6): se le asigna la de la cadena. */
+const USER_MANAGER_ALCANCE = '0000e2e0-0000-4000-8000-0000000000d1';
 /** Otro workspace con su propia campaña: nadie de Laura la ve. */
 const WORKSPACE_AJENO = '0000e2e0-0000-4000-8000-0000000000a1';
 const CAMPAIGN_AJENA = '0000e2e0-0000-4000-8000-0000000000a2';
@@ -73,6 +76,8 @@ const AHORA = new Date('2026-09-23T06:00:00Z');
 const DIA_7 = new Date('2026-09-08T14:00:00Z');
 /** La marca del seed (0002): sus redes (Instagram «nutrive», YouTube «NutriveOficial») pasan a la campaña. */
 const COMPANY_NUTRIVE = '00000002-0000-4000-8000-0000000000e4';
+/** Una campaña del seed (0003) que no es de la cadena. */
+const CAMPAIGN_CAFE_ALMA = '00000003-0000-4000-8000-000000ca0001';
 
 let web: EmbeddedDb;
 let worker: PgliteDatabase;
@@ -361,5 +366,20 @@ describe('Accesos: bitácora y roles', () => {
     assert.ok(runs.rows.length >= 6 && runs.rows.every((r) => r.status === 'ok'), `cada job de la cadena dejó su job_run ok: ${JSON.stringify(runs.rows)}`);
   });
 
-  test('15b · el Mánager ve SOLO las campañas que tiene asignadas', { skip: 'ACC-6 (membership_scope y scope_allows, migración 0040) no está en main: sigue en la rama de la sesión de ACC' }, () => {});
+  test('17 · un Mánager con alcance a la campaña de la cadena ve SOLO esa, y solo su factura (ACC-6)', async () => {
+    await web.execAsSuperuser(`
+      INSERT INTO app_user (id, email, name) VALUES ('${USER_MANAGER_ALCANCE}', 'manager-alcance-e2e@ejemplo.com', 'Mánager con alcance') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WORKSPACE_LAURA}', '${USER_MANAGER_ALCANCE}', system_role_id('creator', 'manager')) ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+      VALUES ('${WORKSPACE_LAURA}', '${USER_MANAGER_ALCANCE}', 'campaign', '${cadena.campaignId}') ON CONFLICT DO NOTHING;
+    `);
+    const conAlcance = <T,>(fn: Parameters<typeof asLaura<T>>[0]) => web.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_MANAGER_ALCANCE });
+    const suyas = (await conAlcance((tx) => listCampaigns(tx))).map((c) => c.id);
+    assert.deepEqual(suyas, [cadena.campaignId], 'solo la campaña asignada');
+    const todas = (await asLaura((tx) => listCampaigns(tx))).map((c) => c.id);
+    assert.ok(todas.length > 1 && todas.includes(cadena.campaignId!), 'la dueña, sin alcance, las ve todas (control)');
+    assert.equal(await conAlcance((tx) => getCampaign(tx, CAMPAIGN_CAFE_ALMA)), null, 'una campaña del seed fuera de su alcance no existe para él');
+    const facturas = (await conAlcance((tx) => listInvoices(tx))).rows.map((f) => f.id);
+    assert.deepEqual(facturas, [cadena.invoiceId], 'solo la factura de su campaña');
+  });
 });

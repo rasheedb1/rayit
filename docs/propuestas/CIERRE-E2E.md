@@ -11,7 +11,7 @@ producción, y deja el plan diciendo la verdad.
 |---|---|
 | `origin/main` | `5ad18fa` al empezar el merge (cierre de CON-B); esta rama lo trae |
 | Producción | `78c1e8c` (WRK, docs) en `on-cue-web.vercel.app` (API v13); CON-B desplegó después su cierre |
-| Supabase | `0001`–`0039` aplicadas (`0023` hueco). **`0041` (CAM) en `main` y SIN aplicar**. `0040` (ACC-6) solo en la rama local de la sesión de ACC |
+| Supabase | Al empezar, `0001`–`0039` (`0023` hueco), con la `0041` (CAM) en `main` sin aplicar y la `0040` (ACC-6) en la rama de ACC. **A las 00:37 UTC del 24 se aplicaron la 0040 y la 0041** |
 | Worker | `pgboss` 0, `GRANT mc_worker TO mc_migrator` false, `mc_worker_login` no existe, **`job_run` 0 filas**: ningún job ha corrido nunca en producción (WRK.md §1) |
 | Vercel production (nombres) | `APP_URL`, `DATABASE_URL`, `DEMO_WORKSPACE_ID`, `OAUTH_CONNECT`, `TIKTOK_LOGIN_CLIENT_KEY`, `TIKTOK_LOGIN_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`. Faltan `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ENSEMBLEDATA_TOKEN` |
 | Clon principal (`rayit/`) | En `29460e3`, con `backlog-mvp.md`, `plan-equipo.md` y `backlog.ts` modificados sin commitear: es el borrador del cierre del sprint 2 (§10), que ya está en `main` en otra forma. **Choca con `main`**; por eso el plan se actualizó aquí (§5) |
@@ -32,13 +32,15 @@ Sesiones abiertas en otros worktrees al empezar: **CON-C**
 (`rayit-cierre-con-c`, 25 commits locales) y **ACC** (`rayit-cierre-acc`,
 11 commits locales y tres archivos sin commitear). **CON-C entró a
 `main` mientras E2E trabajaba** (con CON-8 y CON-12, apagadas): esta
-rama la trae en el merge final y la prueba corre sobre ella. ACC sigue
-fuera.
+rama la trae en el merge final y la prueba corre sobre ella. ACC entró
+después (con la 0040), y esta rama también la trae.
 
 ## 1. La prueba de punta a punta (F1)
 
-`platform/apps/worker/test/punta-a-punta.test.ts`: **16 en verde, 1
-saltada con su motivo** (`node --test`, ~3 s tras abrir la base).
+`platform/apps/worker/test/punta-a-punta.test.ts`: **17 en verde, ninguna
+saltada** (`node --test`, ~3 s tras abrir la base). Mientras ACC no había
+entrado, el eslabón 17 se saltaba con su motivo; con el cierre de ACC en
+`main` se escribió de verdad.
 
 **Dónde y por qué ahí.** La cadena cruza la web (consultas de
 `@mc/db` como `mc_app`, con RLS e identidad) y el worker (jobs reales
@@ -68,7 +70,7 @@ dos cosas sin cruzar dueños (el worker ya depende de `@mc/db`).
 | 14 | Bitácora | ACC-2 | Una fila por escritura: `connection.added` 1, `campaign.created` 1, `post_linked` 3, `status_changed` 3, `report_sent` 1, `brand_input.added` 2, `invoice.created` 1, `invoice.sent` 1, `invoice.payment_recorded` 2, `expense.created` 1, `platform_payout.created` 3 |
 | 15 | Roles | ACC-1/3/5 | La Contadora tiene `finanzas.flujo.ver` y `finanzas.pago.registrar` y no `campanas.campana.editar`; el Mánager edita campañas y envía reportes y no ve el flujo; ninguno ve la campaña de otro workspace (RLS) |
 | 16 | Secretos | R4 | Tras la cadena entera, la API key no está en ninguna columna de texto de la base (`dumpTextColumns` como superusuario); cada job dejó su `job_run` `ok` |
-| 15b | Alcance por asignación | ACC-6 | **Saltada**: `membership_scope`/`scope_allows` (0040) no están en `main` |
+| 17 | Alcance por asignación | ACC-6 | Un Mánager con alcance a la campaña de la cadena ve **solo** esa en la lista, no ve Café Alma (`getCampaign` → null) y en facturas ve solo la suya; la dueña, sin alcance, las ve todas (control) |
 
 Lo que la prueba destapó y dejó escrito (no son fallos, son contratos):
 
@@ -99,10 +101,11 @@ Lo que la prueba destapó y dejó escrito (no son fallos, son contratos):
 | 400 | `/conexiones/oauth/tiktok/callback` sin `code`/`state` |
 
 **Guardia** (`make db.guardia` desde `rayit-deploy` en `origin/main`):
-**roja por una sola cosa**, «faltan 1 migración(es) por aplicar:
-0041_campaign_result_escritura_web.sql». Es la PARADA 1 de CAM, que
-corre Nicolás. Desde el clon principal da rojos falsos (compara con
-código de `29460e3`).
+al empezar, roja solo por la 0041 sin aplicar. **Tras aplicar la 0040 y
+la 0041 (00:37 UTC del 24), en verde**: «40 migraciones (la última,
+0041_campaign_result_escritura_web.sql), 83 tablas aisladas, nada sin
+declarar». Desde el clon principal da rojos falsos (compara con código
+de `29460e3`).
 
 ## 3. Guion de humo único, en el orden de la cadena
 
@@ -121,8 +124,7 @@ base real.**
 4. **/campanas/<la nueva>** → asocia dos posts ✍, pásala a «En curso» ✍,
    registra un aporte de la marca ✍, «Actualizar ahora» en seguidores
    (sin `INSTAGRAM_HOUSE_TOKEN` lo dice con una frase y no escribe),
-   «Recalcular» **apagado** con la frase de que se actualiza cada mañana
-   hasta que apliques la 0041.
+   y «Recalcular» ✍ (con la 0041 aplicada, ya lo ve la dueña).
 5. En la misma ficha → «Generar reporte» ✍ → «Enviar por enlace» ✍ → abre
    el enlace en una ventana privada: 200, sin sesión, con el nombre de la
    marca. Recarga: el contador de aperturas sube ✍.
@@ -141,15 +143,14 @@ en /conexiones, anula la factura (`void`) y cancela la campaña.
 | # | Qué no está conectado | Qué se ve hoy | Lo desbloquea | Quién |
 |---|---|---|---|---|
 | 1 | **El worker no corre en producción** (`job_run` = 0): ni `oauth.refresh`, ni `collect.*`, ni `compute.*`, ni `brand.snapshot`, ni `campaign.compute`, ni `finance.reminders` | Cada pantalla dice que se actualiza cada mañana; el token de TikTok de @selvathegolden caduca | Crear `mc_worker_login` (WRK.md §1.1) y encender el workflow (§7) | **Rasheed** (token de admin) y **Nicolás** (PARADA 2) |
-| 2 | **0041 sin aplicar** | «Recalcular» apagado; guardia roja | `make db.migrate` | **Nicolás** |
-| 3 | **Alcance por asignación** (ACC-6, 0040) | Un Mánager ve todas las campañas | El cierre de ACC en `main` + su migración; el alcance de Ventas, Cotizar y Resumen | **Sesión de ACC** y **Rasheed** |
+| 2 | ~~0041 sin aplicar~~ | Aplicada el 24-sep a las 00:37 UTC | — | hecho |
+| 3 | **Alcance en Ventas, Cotizar y Resumen** | Campañas, Finanzas y Conexiones ya filtran por alcance (ACC-6, en `main`); esas tres pantallas no | Su parte de ACC-6 (`CIERRE-ACC.md` §5) | **Rasheed** |
 | 4 | **Lecturas reales de Instagram y YouTube** | Sin cifras por @ de esas redes | `INSTAGRAM_HOUSE_TOKEN` y `GOOGLE_API_KEY` en el vault, Vercel y GitHub | **Nicolás** |
 | 5 | **OAuth de YouTube** (CON-8) y **proveedor de TikTok** (CON-12) | En `main` y apagados: sin sus variables, la pantalla no los ofrece y lo dice | `GOOGLE_CLIENT_ID/SECRET` (+ verificación de Google, CON-9); decidir si se contrata EnsembleData | **Nicolás** y **Rasheed** (CON-9) |
 | 6 | **Demografía en vivo** (CON-7) | La pantalla dice qué requisito falta | Una conexión autorizada con insights (CON-9) | **Rasheed** (CON-9) |
 | 7 | **Bitácora de Cotizar y Ventas** | Aceptar una cotización o crear un negocio no deja fila | Extender la convención de ACC-2 a sus módulos | **Rasheed** |
 | 8 | **Envío de correos** | Los recordatorios se copian de la bandeja | SMTP (CIM-10) | **Rasheed** |
 | 9 | **Despliegue continuo** | Se despliega a mano desde `rayit-deploy` | CIM-7 | **Rasheed** |
-| 10 | **ACC** (su cierre) | 11 commits locales sin push | Su cierre, con la 0040 | **Sesión de ACC** |
 
 ## 5. El plan (F3)
 

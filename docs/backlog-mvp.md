@@ -14,8 +14,8 @@ migraciones inmutables) siguen vigentes.
 los módulos de Nicolás: FIN, CAM y Conexiones en `main` y en
 producción, el worker listo pero sin encender (le falta un rol de
 Supabase, de Rasheed), una prueba de punta a punta que recorre la
-cadena entera en verde y `pnpm verificar` en verde. Supabase va por la
-0039 y la 0041 espera `make db.migrate`. El detalle está en la
+cadena entera en verde y `pnpm verificar` en verde. Supabase tiene aplicadas todas las migraciones de `main`
+(hasta la 0041). El detalle está en la
 [sección 11](#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
 
 **Antes, el 23 de septiembre,** con el cierre del sprint 2
@@ -1012,8 +1012,7 @@ resumen y lo que queda.
 | CON-7 | Bloqueada | En `main` y producción (0039) | Solo le falta la prueba en vivo: ninguna conexión real con permiso de insights (`CIERRE-CON-C.md`) |
 | CON-8, CON-12 | En `main`, apagadas | Cierre CON-C | Se encienden con `GOOGLE_CLIENT_ID/SECRET` (CON-8) y `ENSEMBLEDATA_TOKEN` (CON-12, falta decidir si se contrata) |
 | WRK (el worker en producción) | **Listo, sin encender** | `--once`, salud y un workflow de GitHub Actions apagado (`WRK.md`) | Falta crear `mc_worker_login` (§11.4, fila 25) y la PARADA 2 de Nicolás |
-| ACC-1, ACC-2, ACC-3, ACC-5, ACC-8 | **Hechas** | Sprint 3 | La prueba de punta a punta las ejercita (bitácora y roles) |
-| ACC-6 | En curso | Rama; la sesión de cierre de ACC la lleva a `main` con la **0040** | Mientras no entre, un Mánager ve todas las campañas |
+| ACC-1, ACC-2, ACC-3, ACC-5, ACC-6, ACC-8 | **Hechas** (la parte de Nicolás) | Sprint 3 y el cierre de ACC (`CIERRE-ACC.md`, migración 0040) | La prueba de punta a punta las ejercita: bitácora, roles y alcance por asignación |
 
 **La prueba de punta a punta** (`apps/worker/test/punta-a-punta.test.ts`,
 cierre E2E) recorre en una sola base, con el seed, la web como `mc_app` y
@@ -1023,8 +1022,8 @@ campaña → posts → aporte de la marca → seguidores → resultado
 (`campaign.compute`) → reporte público sin sesión → factura → pago con
 reserva → cobro por antigüedad → flujo con gastos e ingresos de
 plataforma → una fila de bitácora por escritura → la Contadora y el
-Mánager, cada uno con lo suyo → ningún secreto en la base. **16 en
-verde y 1 saltada con su motivo** (el alcance por asignación, ACC-6).
+Mánager, cada uno con lo suyo → ningún secreto en la base → un Mánager
+con alcance a una campaña ve solo esa. **17 en verde, ninguna saltada.**
 
 ### 11.2 Verificación sobre `main`
 
@@ -1051,8 +1050,8 @@ máquina cargada y pasa sola y en la siguiente corrida.
 de Vercel y el plan B de cada despliegue están en el `CIERRE-<MÓDULO>.md`
 de cada uno. E2E probó **48 rutas** sin sesión: ninguna en 500 (las
 públicas con un slug falso dan 404; las fichas con ids del seed, 200).
-Supabase va por la **0039**: la **0041** (CAM) está en `main` sin
-aplicar y por eso `make db.guardia` sale roja por una sola razón.
+Supabase tiene aplicadas todas las migraciones de `main` (la **0040**
+y la **0041**, el 24-sep a las 00:37 UTC).
 `job_run` tiene **0 filas**: ningún job ha corrido nunca en producción.
 
 ### 11.4 Lo que Nicolás necesita de Rasheed (lo nuevo respecto a §10.4)
@@ -1072,19 +1071,17 @@ aplicar y por eso `make db.guardia` sale roja por una sola razón.
 - **La prueba de punta a punta vive en `apps/worker/test/`** y no en la
   web ni en `@mc/db`: es el único paquete que puede correr los jobs y
   las consultas sobre la misma base sin cruzar dueños.
-- **E2E corrió antes de que terminaran CON-C y ACC**, que siguen en
-  sus sesiones: lo que traigan no está en la prueba.
+- **CON-C y ACC entraron a `main` mientras corría E2E**: la rama los
+  trajo con dos merges y la prueba corre sobre ellos.
 
 ### 11.6 Lo que sigue sin estar conectado, y de quién depende
 
 1. El worker en producción: fila 25 (Rasheed) y PARADA 2 (Nicolás).
-2. La 0041: `make db.migrate` (Nicolás).
-3. El alcance por asignación: el cierre de ACC y la fila 28.
-4. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
+2. El alcance en Ventas, Cotizar y Resumen: fila 28 (Rasheed).
+3. Lecturas reales de Instagram y YouTube: `INSTAGRAM_HOUSE_TOKEN` y
    `GOOGLE_API_KEY` (Nicolás).
-5. CON-8, CON-12 (en `main`, apagadas) y la demografía en vivo:
+4. CON-8, CON-12 (en `main`, apagadas) y la demografía en vivo:
    `GOOGLE_CLIENT_ID/SECRET` y la decisión sobre EnsembleData
    (Nicolás) y CON-9 (Rasheed).
-6. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
-7. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
-8. ACC: su sesión de cierre (la 0040 y el alcance).
+5. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
+6. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
