@@ -33,18 +33,26 @@ export const CANALES_TEXTOS = {
     switch (status) {
       case 'CREDENTIALS': return `${channel} cerró la sesión.`;
       case 'STOPPED': return 'La cuenta se detuvo.';
-      case 'DELETED': return 'La cuenta se borró en el proveedor.';
+      case 'DELETED': return `La cuenta de ${channel} se borró.`;
       case 'DISCONNECTED': return 'La cuenta se desconectó.';
       default: return `${channel} dio un error con la sesión.`;
     }
   },
-  /** Unipile ya no tiene la cuenta (la borró quien la conectó, o caducó). */
-  unipileGone: 'Unipile ya no tiene esta cuenta.',
+  /**
+   * Unipile ya no tiene la cuenta (la borró quien la conectó, o caducó).
+   * Nombra el canal, no a Unipile: la persona conectó «LinkedIn», no
+   * conoce al intermediario.
+   */
+  unipileGone: (channel: string): string => `${channel} ya no reconoce esta cuenta.`,
   /** Google no acepta el refresh token: la persona quitó el acceso, o venció sin uso. */
   gmailRevoked: 'Google ya no acepta el permiso de este Gmail (lo quitaste o venció).',
   gmailNoSecret: 'No encontramos el permiso guardado de este Gmail.',
-  /** Un problema nuestro o pasajero: la cuenta no cambia de estado. */
-  transient: (detail: string) => `No pudimos comprobar la cuenta hoy: ${detail} Lo intentamos de nuevo mañana.`,
+  /**
+   * Un problema nuestro o pasajero: la cuenta no cambia de estado. Frase
+   * fija: el detalle del proveedor (en inglés, tal cual lo manda) queda
+   * en api_call_log.error_message y nunca llega al creador.
+   */
+  transient: 'No pudimos comprobar la cuenta hoy. Lo intentamos de nuevo mañana.',
 
   /** Lo que queda en last_error y en la campana cuando la cuenta cae. */
   down: {

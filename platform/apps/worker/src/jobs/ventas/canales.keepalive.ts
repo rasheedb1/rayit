@@ -46,6 +46,7 @@ import {
   type GoogleOAuthApi, type OAuthTokens, type SecretStore, type UnipileApi,
 } from '@mc/connectors';
 import { CANALES_TEXTOS, channelHealthName } from '@mc/core';
+import { CHANNEL_ERROR_CODES } from '@mc/db/queries/canales';
 import type { Queryable } from '../../runner/db.ts';
 import { runChannelsRelease, type ReleaseResult } from './canales.release.ts';
 import { defineJob } from '../../runner/registry.ts';
@@ -67,7 +68,7 @@ export const PENDING_MAX_AGE_HOURS = 48;
  * primero. El código que marca una cuenta sin avisos es el de @mc/db
  * (CHANNEL_ERROR_CODES.webhooksMissing): la pantalla lo traduce.
  */
-const WEBHOOKS_MISSING = 'webhooks_missing';
+const WEBHOOKS_MISSING = CHANNEL_ERROR_CODES.webhooksMissing;
 /** Una cuenta recién conectada tiene un momento sin avisos (la web los está dando de alta): no se toca. */
 const WEBHOOKS_GRACE_MINUTES = 10;
 
@@ -154,10 +155,15 @@ async function markOk(db: Queryable, a: AccountRow, at: Date): Promise<boolean> 
   return rows[0] !== undefined && rows[0].was !== 'connected';
 }
 
-async function noteFailure(db: Queryable, a: AccountRow, detail: string, at: Date): Promise<void> {
+/**
+ * Un fallo nuestro o pasajero: una frase fija en last_error. Nunca el
+ * texto del proveedor (err.messageEs es su `detail` o su `message` tal
+ * cual, en inglés): ese queda en api_call_log.error_message.
+ */
+async function noteFailure(db: Queryable, a: AccountRow, at: Date): Promise<void> {
   await db.query(
     `UPDATE outreach_channel_account SET last_error = $3, last_error_at = $4 WHERE id = $1 AND workspace_id = $2`,
-    [a.id, a.workspace_id, CANALES_TEXTOS.transient(detail), at],
+    [a.id, a.workspace_id, CANALES_TEXTOS.transient, at],
   );
 }
 
@@ -256,7 +262,7 @@ export async function runChannelsKeepalive(deps: KeepaliveDeps): Promise<Keepali
           if (await markDown(db, a, CANALES_TEXTOS.gmailRevoked, now)) r.markedDown += 1;
         } else {
           r.failed += 1;
-          await noteFailure(db, a, isOutreachApiError(err) ? err.messageEs : 'error inesperado.', now);
+          await noteFailure(db, a, now);
         }
       }
     }
@@ -279,10 +285,10 @@ export async function runChannelsKeepalive(deps: KeepaliveDeps): Promise<Keepali
         }
       } catch (err) {
         if (isOutreachApiError(err) && (err.kind === 'not_connected' || err.code === 'errors/resource_not_found')) {
-          if (await markDown(db, a, CANALES_TEXTOS.unipileGone, now)) r.markedDown += 1;
+          if (await markDown(db, a, CANALES_TEXTOS.unipileGone(channelHealthName(a.channel)), now)) r.markedDown += 1;
         } else {
           r.failed += 1;
-          await noteFailure(db, a, isOutreachApiError(err) ? err.messageEs : 'error inesperado.', now);
+          await noteFailure(db, a, now);
         }
       }
     }

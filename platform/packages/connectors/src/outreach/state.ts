@@ -23,7 +23,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
-import { openSealedValue, sealValue } from '../crypto/sealed-cookie.ts';
+import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
 import type { OpenSealedResult } from '../crypto/sealed-cookie.ts';
 
 export const CHANNEL_STATE_INFO = 'on-cue/channel-state/v1';
@@ -112,18 +112,9 @@ export type VerifiedChannelState = OpenSealedResult<ChannelState> | { ok: false;
  * está en vuelo).
  */
 export function verifyChannelState(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): VerifiedChannelState {
-  const list = keys instanceof Uint8Array ? [keys] : keys;
-  let opened: OpenSealedResult<{ c?: unknown }> = { ok: false, reason: 'bad_signature' };
-  let key: Uint8Array | null = null;
-  for (const k of list) {
-    opened = openSealedValue<{ c?: unknown }>(token, k, now, ttlMs);
-    if (opened.ok || opened.reason !== 'bad_signature') {
-      key = k;
-      break;
-    }
-  }
-  if (!opened.ok || !key) return opened as VerifiedChannelState;
-  const p = decrypt(opened.payload?.c, key) as Partial<ChannelState> | null;
+  const opened = openWithAnyKey<{ c?: unknown }>(token, keys, now, ttlMs);
+  if (!opened.ok) return opened;
+  const p = decrypt(opened.payload?.c, opened.key) as Partial<ChannelState> | null;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
     !p || typeof p.workspaceId !== 'string' || !uuid.test(p.workspaceId)

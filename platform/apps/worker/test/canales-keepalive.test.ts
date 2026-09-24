@@ -17,6 +17,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { EncryptedSecretStore, FakeGmail, FakeUnipile, keyringOf, TokenCipher, withoutNetwork, type NetworkGuard, type OAuthTokens } from '@mc/connectors';
+import { CANALES_TEXTOS } from '@mc/core';
 import { allJobs } from '../src/jobs/index.ts';
 import { CHANNELS_KEEPALIVE_JOB_ID, runChannelsKeepalive } from '../src/jobs/ventas/canales.keepalive.ts';
 import { CHANNELS_RELEASE_JOB_ID, runChannelsRelease } from '../src/jobs/ventas/canales.release.ts';
@@ -200,13 +201,14 @@ test('sales.channels_release: lo ya soltado no se vuelve a tocar; desconectar ot
   assert.ok((await soltada(LINKEDIN_DESCONECTADO))?.released_at);
 });
 
-test('un fallo transitorio de Google no tumba la cuenta: deja el motivo y cuenta el fallo', async () => {
+test('un fallo transitorio de Google no tumba la cuenta: deja una frase nuestra (nunca el texto del proveedor) y cuenta el fallo', async () => {
   gmail.failNext('transient', 'backendError', 503);
   const r = await runChannelsKeepalive({ db, secrets: store, google: gmail, unipile: null, now: NOW });
   assert.equal(r.failed, 1);
   const a = await cuenta(GMAIL_POR_VENCER);
   assert.equal(a?.status, 'connected');
-  assert.match(a?.last_error ?? '', /mañana/);
+  assert.equal(a?.last_error, CANALES_TEXTOS.transient, 'la frase fija de @mc/core');
+  assert.doesNotMatch(a?.last_error ?? '', /backendError|Internal|error/i, 'ni el código ni el mensaje de Google');
 });
 
 test('una segunda corrida no vuelve a avisar de lo que ya estaba caído', async () => {

@@ -4,6 +4,7 @@ import { angleId, buildMime, encodeHeaderWord, MimeError, toGmailRaw } from '../
 import {
   channelStateKey, GOOGLE_STATE_TTL_MS, newNonce, pendingAccountId, signChannelState, verifyChannelState, type ChannelState,
 } from '../src/outreach/state.ts';
+import { openWithAnyKey, sealValue } from '../src/crypto/sealed-cookie.ts';
 
 const boundary = (n: number) => `b${n}`;
 const decodeWord = (w: string) => Buffer.from(/=\?UTF-8\?B\?(.+)\?=/.exec(w)![1]!, 'base64').toString('utf8');
@@ -101,4 +102,18 @@ test('estado firmado: el cuerpo va cifrado (ni el espacio, ni el creador, ni el 
   assert.deepEqual(r.payload, state);
   // Dos estados iguales no dan el mismo texto (IV al azar).
   assert.notEqual(signChannelState(state, vieja, now), token);
+});
+
+test('openWithAnyKey dice qué llave casó (verifyChannelState descifra con ella, sin repetir el bucle)', () => {
+  const vieja = new Uint8Array(32).fill(5);
+  const nueva = new Uint8Array(32).fill(6);
+  const now = new Date('2026-09-24T12:00:00Z');
+  const sealed = sealValue({ x: 1 }, vieja, now);
+  const r = openWithAnyKey<{ x: number }>(sealed, [nueva, vieja], now, 60_000);
+  assert.ok(r.ok);
+  assert.equal(r.key, vieja);
+  assert.deepEqual(r.payload, { x: 1 });
+  // Caducado con la llave que casa: manda lo que dice esa, sin llave.
+  assert.deepEqual(openWithAnyKey(sealed, [nueva, vieja], new Date(now.getTime() + 120_000), 60_000), { ok: false, reason: 'expired' });
+  assert.deepEqual(openWithAnyKey(sealed, [nueva], now, 60_000), { ok: false, reason: 'bad_signature' });
 });
