@@ -352,7 +352,19 @@ Decisiones que las piezas siguientes tienen que conocer:
   `contact.email`. La excepción es `processing → sent` (lo que ya salió
   se registra, marcado `opted_out_in_flight`). La consulta de reclamo de
   VEN-10 tiene que filtrar esas filas y pasarlas a `canceled`, porque la
-  base rechaza el reclamo entero. `mc_app` no lee la lista: la regla usa
+  base rechaza el reclamo entero. **Desde VEN-15 r5 (0038 §8.3) es una
+  sola regla con una fuente más:** `enforce_outbound_optout` mira también
+  `outbound_workspace_optout` (la baja por enlace de ESE workspace, que en
+  un contacto global no marca la ficha), con las mismas transiciones. Así
+  que el reclamo de VEN-10 filtra además `outbound_workspace_optout` (por
+  `workspace_id` y por la dirección de la ficha o la del envío) y, en
+  correo, `contact.email_invalid` y los rebotes duros verificados del
+  workspace (`outbound_touch_email_invalid`, 0038 §2); y el rescate del
+  zombi y el reintento (`processing → scheduled`) pasan esas filas a
+  `canceled`, porque la base los rechaza con 23514. Hasta r4 la baja del
+  workspace se saltaba la vuelta desde `processing`: un toque de LinkedIn
+  reclamado al pulsar la baja volvía a la cola y salía como `sent` sin
+  marca. `mc_app` no lee la lista: la regla usa
   `address_is_suppressed(citext)`, SECURITY DEFINER, que responde sí o
   no para una dirección (lo mismo que ya enseña crear una ficha con ese
   correo).
@@ -448,10 +460,13 @@ que el despachador de VEN-10 tiene que usar, todo en
 - **La página de baja** (`/baja/<token>`, sin sesión) pregunta a
   `public_optout_preview(token, espacios de quien la abre)` (0038 §5,
   SECURITY DEFINER de `mc_public_share`): si el enlace es de un correo
-  que salió, la dirección enmascarada («v•••@marca.com»), el nombre del
-  espacio que escribe, si ya estaba de baja y si quien la abre es
-  miembro del espacio que la envió. Ese último caso no ofrece el botón
-  (la regla de §5.2). El clic va por `public_optout`. El POST de un clic
+  que salió, la dirección enmascarada («v•••@marca.com»), el nombre y el
+  idioma (r5) del espacio que escribe, si ya estaba de baja y si quien la
+  abre es miembro del espacio que la envió. Ese último caso no ofrece el
+  botón (la regla de §5.2). La página habla el idioma del pie que trajo
+  hasta ella (español o inglés, la regla de `footerTextsFor`); sin
+  espacio que lo diga (un enlace que no existe, la frontera de error), el
+  del `Accept-Language` del navegador. El clic va por `public_optout`. El POST de un clic
   de Gmail va a `/baja/<token>/un-clic`, que acepta el cuerpo en
   `multipart/form-data` (el SHOULD de la RFC 8058 §3.1) y en
   `application/x-www-form-urlencoded` (lo que manda Gmail).
@@ -499,10 +514,21 @@ que el despachador de VEN-10 tiene que usar, todo en
   cuenta (con su token del vault) en `bouncesMailboxFor`
   (`outbound.bounces.ts`), que devuelva `gmailBounceMailbox(api)`, y poner
   `BOUNCE_READING_CONNECTED` (`@mc/core/outreach/deliverability`) en
-  `true`. Hasta entonces cada cuenta sale como «canal no configurado» y
-  `/ventas/politica` dice en «Salud de hoy» que la lectura de rebotes
-  todavía no está conectada, para que «Ningún rebote» no se lea como
-  «todo bien». Una prueba del worker (`outbound-bounces.test.ts`) falla
+  `true`. **Condición de integración, con dueño (r5):** quien integre
+  VEN-9 en `rasheed/integracion` (el integrador de la fase, con Rasheed
+  como responsable de la historia) hace esos dos cambios en el mismo
+  merge y deja en verde la prueba «cuando llegue el conector…» de
+  `outbound-bounces.test.ts`; hasta entonces VEN-15 queda `bloqueada` en
+  el backlog y la mitad de los rebotes no funciona en producción. Hasta
+  entonces cada cuenta sale como «canal no configurado», la alerta
+  diaria trae `outreach_bounces_unread`, y `/ventas/politica` dice en
+  «Salud de hoy» que la lectura de rebotes no está conectada. Desde r5
+  eso lo decide el cursor de cada Gmail (`readSendReadiness.
+  bouncesReading`): «todavía no leemos» si un buzón no se leyó nunca, y
+  «la lectura está parada desde…» con la hora si el cursor tiene más de
+  dos horas; `BOUNCE_READING_CONNECTED` queda solo como interruptor del
+  job. Así, un job parado después de la integración no vuelve a enseñar
+  «Ningún rebote» como si todo fuera bien. Una prueba del worker (`outbound-bounces.test.ts`) falla
   en cuanto exista `packages/connectors/src/gmail.ts` y el job registrado
   siga sin leer. La hora de cada aviso es la de llegada al buzón
   (`internalDate` de Gmail), no su cabecera `Date`, que pone el remoto y
@@ -520,8 +546,10 @@ que el despachador de VEN-10 tiene que usar, todo en
   ficha compartida (contacto global), que no se marca: un aviso en el
   buzón de un creador no le cierra el correo a los demás. No va a
   `contact_suppression`, que corta todos los canales. Corregir el correo
-  de la ficha borra las dos marcas. La base no deja programar un correo a
-  esa dirección (`outbound_touch_email_invalid`), pero sí reclamarlo: la
+  de la ficha borra las dos marcas. La base no deja programar, reclamar
+  ni devolver a la cola un correo a esa dirección
+  (`outbound_touch_email_invalid`, desde r5 también en `processing` y en
+  la vuelta desde él); `processing → sent` sí, porque ya salió. La
   consulta de reclamo de VEN-10 tiene que filtrarlos. El job lee cada
   buzón desde su cursor (`outreach_channel_account.bounces_read_at`), del
   más viejo al más nuevo y como mucho 300 avisos por pasada: una ráfaga
@@ -529,14 +557,22 @@ que el despachador de VEN-10 tiene que usar, todo en
   `GmailApi.searchBounces` tiene que aceptar `pageToken` y devolver
   `nextPageToken` (messages.list los tiene); con el arreglo de hoy, si la
   lista viene llena el job lo avisa en el registro.
-- **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
-  workspace desde las 8:00 locales) dejan una `notification` por tipo y
-  día, en el idioma del espacio, con su propio enlace y sus plurales
-  (`Intl.PluralRules`), y mandan UN resumen por correo al día (local) a
-  todos los dueños por `SMTP_URL`: sale en la primera corrida del día
-  que tenga algo que contar, y lo que aparezca más tarde se queda en la
-  campana y va en el resumen del día siguiente (también lo 'critical':
-  la campana ya lo enseña al momento). La tasa de
+- **Las alertas** (`outbound.alerts`, cada hora por workspace desde las
+  8:00 locales) dejan una `notification` por tipo y día, en el idioma del
+  espacio, con su propio enlace y sus plurales (`Intl.PluralRules`), y
+  mandan UN resumen por correo al día (local) a todos los dueños por
+  `SMTP_URL`: sale en la primera corrida del día que tenga algo que
+  contar. **Desde r5, lo urgente no espera:** si después del resumen cae
+  una cuenta o se disparan los rebotes (`URGENT_ALERT_KINDS`, las dos
+  'critical'), sale en esa misma corrida un correo corto aparte; lo demás
+  va en el resumen del día siguiente. La web todavía no tiene una
+  campana de avisos (ni `shell.tsx` ni `nav.tsx` la tienen): hasta que
+  exista, esas `notification` solo se ven en el correo y en
+  `/ventas/politica`. Hay un sexto tipo, `outreach_bounces_unread`: un
+  Gmail conectado cuyo buzón de rebotes no se leyó nunca o lleva más de
+  dos horas sin leerse (`readAlertSignalCounts.unreadMailboxes`), para
+  que «ningún rebote» no se lea como «todo llegó» mientras la lectura no
+  esté conectada. La tasa de
   rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
   nada» solo salta si había toques que tocaba enviar
   (`readAlertSignalCounts`, `@mc/db`). La cuenta caída dice cuál es y
@@ -555,7 +591,22 @@ que el despachador de VEN-10 tiene que usar, todo en
   ronda 4 cuenta la historia al abrir `/ventas/politica`: cuatro correos
   salieron en las últimas 24 horas (uno rebotó, así que «Rebotes» tiene
   cifra) y la política de la demo es de 80 correos al día con 14 de
-  calentamiento, así que se pinta la rampa.
+  calentamiento, así que se pinta la rampa. Desde la ronda 5 el Gmail de
+  la demo tiene su buzón de rebotes leído hace 20 minutos (el cursor que
+  deja el job), así que «Salud de hoy» no dice «todavía no leemos tus
+  rebotes» encima de una tabla con dos.
+- **Ronda 5 (24 de septiembre), en una línea cada cosa:** una sola regla
+  de la baja para los toques (arriba, §5.2), el correo inválido también
+  en el reclamo y en la vuelta desde `processing`; la baja en el idioma
+  del espacio que envió; la tabla accesible de la curva dentro de un
+  `div.sr-only` (una `<table>` con `sr-only` no se encoge y daba scroll
+  horizontal a 400 y a 1280 px); el interruptor devuelve el foco a su
+  título y anuncia «Envío encendido» o «Envío apagado»; con la dirección
+  y una cuenta listas dice «Todo listo»; el tope de la dirección sale de
+  `POSTAL_ADDRESS_MAX` y el código `manual` de `DISABLED_REASON_MANUAL`
+  (`@mc/db`); la frase de la baja ya no dice «a este correo» y «por
+  ningún canal» a la vez; y el enlace de baja de la demo no se fabrica en
+  las pruebas ni sin una URL absoluta.
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
 tokens al azar, así que ningún enlace suyo se puede pulsar.
@@ -573,7 +624,8 @@ PORT=3100 pnpm --filter @mc/web dev --port 3100
 ```
 
 Solo en modo embebido: con `DATABASE_URL` no se fabrica nada (sería un
-enlace de baja real). Cada arranque trae una base nueva y un enlace
+enlace de baja real). Tampoco en las pruebas (`NODE_ENV=test`) ni sin
+`APP_URL` o `PORT`: un enlace sin host no se puede pulsar. Cada arranque trae una base nueva y un enlace
 nuevo.
 
 *Con el Postgres de Docker:*
@@ -784,6 +836,21 @@ revisores técnico y de producto y el mismo umbral.
    clic, que la ronda 4 ya deja menos expuesto: el segundo espacio no
    puede compartir miembros con el primero, y el mismo filtro serviría
    para el primer clic.
+7. **El token de baja: opaco, no firmado (VEN-15, ronda 2).** La pieza
+   pedía un «token de baja firmado por contacto y workspace». Se entrega
+   un token opaco (32 bytes al azar) que la base reconoce por su sha256
+   en `outbound_optout_link`: no lleva ningún id dentro (un enlace
+   reenviado no enseña a quién ni desde dónde), no depende de un secreto
+   (un `OUTREACH_OPTOUT_SECRET` mal configurado o rotado habría apagado
+   la baja de toda la plataforma, y la ley pide que el enlace funcione al
+   menos 30 días), y es la misma forma que ya genera el despachador de
+   VEN-10. El contacto y el workspace no viajan en el token: los guarda
+   la fila del enlace, que solo escribe el despachador. Propuesta:
+   quedarse con el token opaco. **Estado (ronda 5): implementado así y
+   pendiente de su firma, junto con la 6.** Si Rasheed firma las dos, el
+   «terminado cuando» de VEN-15 en `backlog.ts` se reescribe con los dos
+   cambios a la vez (la baja con quien envió y en toda la plataforma al
+   confirmarla un segundo creador; el enlace por token opaco).
 
 ## 9. Los errores de Chief que no vamos a repetir
 
