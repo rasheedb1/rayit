@@ -446,7 +446,52 @@ TikTok configurado con valores de mentira:
 
 ## 7. Producción y guion de humo
 
-PENDIENTE.
+### 7.1 Salida (24-sep, 00:5x UTC)
+
+- `git push origin HEAD:main` por avance rápido: `5ad18fa..58fb163`.
+- Sin migración: no hubo PARADA 1.
+- Despliegue desde `rayit-deploy` (detached en `origin/main` = `58fb163`):
+  **`on-cue-ils7qhmu5-influ3.vercel.app`**. La API de Vercel
+  (`/v13/deployments/…`) da `meta.gitCommitSha = 58fb1632e8…`, `READY`,
+  con los alias `on-cue-web.vercel.app`, `multicampaign-web.vercel.app` y
+  `on-cue-web-influ3.vercel.app`.
+- **Plan B**: `on-cue-8fu179sih-influ3.vercel.app` (`92819a5`, CON-B).
+  Volver: `./scripts/vercel.sh run rollback on-cue-8fu179sih-influ3.vercel.app --yes`.
+
+### 7.2 Comprobado en producción
+
+| Ruta | Código | Qué dice |
+|---|---|---|
+| `GET /conexiones` | 200 | «Conectar TikTok» sí; «Conectar YouTube» y `/conexiones/oauth/youtube/start` 0 veces; la frase «YouTube todavía no se puede conectar desde aquí: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.»; la tarjeta de YouTube ya dice «las vistas, video por video»; `secretRef` 0 veces |
+| `GET /conexiones/oauth/youtube/start` | 405 | «Usa el botón «Conectar»…» |
+| `POST /conexiones/oauth/youtube/start` | 404 | «YouTube no está configurado en este entorno: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET. Vuelve a /conexiones.» |
+| `GET /conexiones/oauth/youtube/callback` (vacío y con `code`/`state`) | 404 | La misma frase |
+| `GET /conexiones/oauth/tiktok/callback` sin cookie | 400 | Sin cambios: TikTok sigue vivo |
+| `/resumen`, `/campanas`, `/finanzas` | 200 | — |
+
+**Guardia** (`make db.guardia` desde `rayit-deploy`): roja **solo** porque
+la 0041 de CAM está en main sin aplicar («faltan 1 migración(es)…:
+0041_campaign_result_escritura_web.sql»), igual que en los cierres de
+CON-A y FIN. Es la PARADA 1 de CAM: `make db.migrate` la corre Nicolás.
+
+**Supabase, solo lectura**: las cinco conexiones del workspace siguen
+como estaban (ninguna pasó a `aggregator`), cero llamadas a
+`ensembledata.*` o al `oauth.token` de YouTube en `api_call_log`, y
+`api_quota_usage` vacía. Las fuentes están apagadas de verdad.
+
+### 7.3 Guion de humo (para Nicolás, con su sesión)
+
+| # | Dónde | Qué haces | Qué tienes que ver | ¿Escribe? |
+|---|---|---|---|---|
+| 1 | `/conexiones` | Abrir la página | Sección «Conectar una cuenta autorizada»: botón «Conectar TikTok» y, debajo, la frase de YouTube con las dos variables que faltan. Ningún botón de YouTube | No |
+| 2 | `/conexiones`, tarjeta «Agregar cuenta» | Mirar las tres tarjetas | YouTube: «Suscriptores y número de videos del canal; las vistas, video por video» y «falta GOOGLE_API_KEY». Instagram: «falta INSTAGRAM_HOUSE_TOKEN». TikTok: «no publica seguidores ni vistas por @» | No |
+| 3 | Fila de @selvathegolden | Mirar acceso y acciones | «Autorizada», sin «Autorizar analítica» ni «Por proveedor» | No |
+| 4 | Fila de @selvathegolden | Pulsar «Actualizar» | Vuelve con seguidores del día y «hace menos de una hora» | **Sí**: un snapshot `api` del día (si no había) y una fila en `api_call_log` |
+| 5 | Barra de direcciones | Abrir `https://on-cue-web.vercel.app/conexiones/oauth/youtube/callback` | Texto plano: «YouTube no está configurado en este entorno: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET. Vuelve a /conexiones.» | No |
+| 6 | 400 px y oscuro | Repetir 1 en el móvil con tema oscuro | Nada se sale por la derecha; la frase de YouTube se lee | No |
+
+Cuando llegue cada credencial, el guion de encendido es la tabla de §2 y,
+para CON-7, el ensayo de §3.
 
 ## 8. Qué quedó fuera, y a dónde va
 
