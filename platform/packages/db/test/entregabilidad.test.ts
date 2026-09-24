@@ -4,14 +4,15 @@
  *   · la baja desde el enlace, de punta a punta: el token opaco (el hash
  *     manda, sin secreto), lo que la página enseña antes del clic
  *     (public_optout_preview: dirección enmascarada, quién escribe), el
- *     rechazo del clic de quien envió (sin tocar nada), la ficha marcada
- *     y todo lo pendiente cancelado, en este workspace y en los demás que
- *     le escriben a la misma dirección; el segundo clic; un token sin
+ *     rechazo del clic de quien envió con sesión (sin tocar nada), la baja
+ *     en dos tiempos (r3: el primer clic vale para quien envió; un
+ *     segundo workspace la lleva a toda la plataforma; el remitente sin
+ *     sesión no suprime una ficha compartida para nadie más); el segundo clic; un token sin
  *     correo detrás no encuentra nada; y el token del despachador de
  *     VEN-10 (randomBytes(32) en base64url) da de baja igual;
  *   · la política editable: valores por defecto, guardar, el interruptor
- *     con dirección postal, y que no se puede quitar la dirección con el
- *     envío encendido;
+ *     con dirección postal, que no se puede quitar la dirección con el
+ *     envío encendido, y que solo owner y admin la cambian (r3);
  *   · contact.email_invalid (0038): no se programa un correo a un correo
  *     que rebotó, los otros canales siguen, y cambiar el correo borra la
  *     marca y también contact.bounced;
@@ -22,11 +23,11 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
 import {
-  checkOptoutLink, getOutboundPolicy, optoutFromLink, PolicyNeedsAddressError, publicOptoutPreview, readAlertSignalCounts,
-  saveOutboundPolicy,
+  checkOptoutLink, getOutboundPolicy, isPolicyForbidden, optoutFromLink, PolicyForbiddenError, PolicyNeedsAddressError,
+  publicOptoutPreview, readAlertSignalCounts, readSendReadiness, saveOutboundPolicy,
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
-import { enableOutreach } from '../src/queries/outreach.ts';
+import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
 import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
@@ -51,6 +52,14 @@ const TOKEN = createOptoutToken();
 const TOKEN_SIN_CORREO = createOptoutToken();
 /** Como lo genera hoy el despachador de VEN-10 (outreach-motor.ts, newOptoutToken), sin pasar por @mc/core. */
 const TOKEN_VEN10 = randomBytes(32).toString('base64url');
+const CONTACT_GLOBAL = '00000038-0000-4000-8000-0000000000f1';
+const TOUCH_GLOBAL_SENT_S = '00000038-0000-4000-8000-0000000070f1';
+const TOUCH_GLOBAL_PEND_S = '00000038-0000-4000-8000-0000000070f2';
+const TOUCH_GLOBAL_PEND_O = '00000038-0000-4000-8000-0000000070f3';
+const TOUCH_GLOBAL_SENT_O = '00000038-0000-4000-8000-0000000070f4';
+const TOKEN_GLOBAL_S = createOptoutToken();
+const TOKEN_GLOBAL_O = createOptoutToken();
+const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O];
 
 let t: TestDb;
 
@@ -98,9 +107,10 @@ after(async () => {
     await t.admin(`
       DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}', '00000038-0000-4000-8000-0000000000ea');
       DELETE FROM company WHERE id = '${COMPANY}';
-      DELETE FROM outbound_optout_link WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
-      DELETE FROM outbound_optout_event WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
-      DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test');
+      DELETE FROM outbound_optout_link WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
+      DELETE FROM outbound_optout_event WHERE token_hash IN (${TOKENS.map((x) => `'${optoutTokenHash(x)}'`).join(', ')});
+      DELETE FROM contact WHERE id = '${CONTACT_GLOBAL}';
+      DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test', 'prensa@marca.test');
     `);
   }
   await t.close();
@@ -160,35 +170,90 @@ describe('la baja desde el enlace', () => {
     assert.deepEqual(await optoutFromLink(puertas([]), "x' OR 1=1 --xxxxxxxxxxxx"), { status: 'not_found' });
   });
 
-  test('un clic marca a la persona y cancela todo lo pendiente, en todos los workspaces', async () => {
-    // Una sesión de OTRO workspace que también le escribe no es quien envió este correo.
-    assert.deepEqual(await optoutFromLink(puertas([WS_O]), TOKEN), { status: 'ok', alreadyOptedOut: false });
+  test('un clic sin sesión vale YA para quien envió: su ficha, sus toques y su enrolamiento; los demás creadores siguen', async () => {
+    // Sin sesión la base no sabe quién pulsa: puede ser el propio
+    // remitente en una ventana privada (r3). Por eso el primer clic no
+    // suprime a la persona para los demás.
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
     assert.deepEqual(await estados(), {
       [TOUCH_SENT]: 'sent',
       [TOUCH_PENDING]: 'canceled',
       [TOUCH_LINKEDIN]: 'canceled',
-      [TOUCH_PENDING_O]: 'canceled',
+      [TOUCH_PENDING_O]: 'scheduled',
     });
     const fichas = await sinRls<{ id: string; opted_out: boolean }>(
       `SELECT id, opted_out FROM contact WHERE id IN ('${CONTACT_S}', '${CONTACT_O}') ORDER BY id`,
     );
-    assert.deepEqual(fichas.map((f) => f.opted_out), [true, true]);
+    assert.deepEqual(fichas.map((f) => f.opted_out), [true, false], 'la ficha de quien envió, sí; la del otro creador, no');
     const [e] = await sinRls<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = '${ENR}'`);
     assert.equal(e?.status, 'opted_out');
-    const eventos = await sinRls<{ workspace_id: string }>(
-      `SELECT workspace_id FROM outbound_optout_event WHERE token_hash = '${optoutTokenHash(TOKEN)}'`,
+    assert.deepEqual(await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'valentina@marca.test'`), [], 'nada global');
+    const eventos = await sinRls<{ workspace_id: string; scope: string }>(
+      `SELECT workspace_id, scope FROM outbound_optout_event WHERE token_hash = '${optoutTokenHash(TOKEN)}'`,
     );
-    assert.deepEqual(eventos.map((x) => x.workspace_id), [WS_S], 'el clic queda atribuido al workspace que envió');
+    assert.deepEqual(eventos, [{ workspace_id: WS_S, scope: 'workspace' }], 'el clic queda atribuido al workspace que envió');
   });
 
   test('el segundo clic dice que ya estaba de baja, y la vista previa también', async () => {
     const previa = await checkOptoutLink(puertas([]), TOKEN);
     assert.equal(previa.status === 'valid' && previa.alreadyOptedOut, true);
-    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN), { status: 'ok', alreadyOptedOut: true });
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN), { status: 'ok', alreadyOptedOut: true, scope: 'workspace' });
+  });
+
+  test('sabotaje (r3): el remitente que pulsa su enlace sin sesión, o con un POST a mano, no suprime a una ficha compartida para nadie más', async () => {
+    // Un contacto global (fuente pública, sin dueño) al que le escriben los dos.
+    await t.admin(`
+      INSERT INTO contact (id, company_id, full_name, email, source, source_url, owner_workspace_id) VALUES
+        ('${CONTACT_GLOBAL}', '${COMPANY}', 'Prensa', 'prensa@marca.test', 'public_website', 'https://marca.test/prensa', NULL);
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, sent_at,
+                                  provider_message_id, recipient_address, attempt_count) VALUES
+        ('${TOUCH_GLOBAL_SENT_S}', '${WS_S}', '${COMPANY}', '${CONTACT_GLOBAL}', 'email', 'Hola', 'sent',
+         now() - interval '1 day', now() - interval '1 day', 'gmail-g1', 'prensa@marca.test', 1),
+        ('${TOUCH_GLOBAL_PEND_S}', '${WS_S}', '${COMPANY}', '${CONTACT_GLOBAL}', 'email', 'Sigo', 'scheduled',
+         now() + interval '1 day', NULL, NULL, NULL, 0),
+        ('${TOUCH_GLOBAL_PEND_O}', '${WS_O}', '${COMPANY}', '${CONTACT_GLOBAL}', 'email', 'Hola', 'scheduled',
+         now() + interval '1 day', NULL, NULL, NULL, 0),
+        ('${TOUCH_GLOBAL_SENT_O}', '${WS_O}', '${COMPANY}', '${CONTACT_GLOBAL}', 'email', 'Hola desde O', 'sent',
+         now() - interval '2 days', now() - interval '2 days', 'gmail-g2', 'prensa@marca.test', 1);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, claimed_at, sent_at)
+      VALUES ('${optoutTokenHash(TOKEN_GLOBAL_S)}', '${WS_S}', '${TOUCH_GLOBAL_SENT_S}', '${CONTACT_GLOBAL}', 'prensa@marca.test',
+              now() - interval '1 day', now() - interval '1 day'),
+             ('${optoutTokenHash(TOKEN_GLOBAL_O)}', '${WS_O}', '${TOUCH_GLOBAL_SENT_O}', '${CONTACT_GLOBAL}', 'prensa@marca.test',
+              now() - interval '2 days', now() - interval '2 days');
+    `);
+    // El remitente, sin sesión: su baja es solo suya.
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_GLOBAL_S), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
+    const toquesG = async () =>
+      Object.fromEntries(
+        (await sinRls<{ id: string; status: string }>(
+          `SELECT id, status FROM outbound_touch WHERE id IN ('${TOUCH_GLOBAL_PEND_S}', '${TOUCH_GLOBAL_PEND_O}')`,
+        )).map((r) => [r.id, r.status]),
+      );
+    assert.deepEqual(await toquesG(), { [TOUCH_GLOBAL_PEND_S]: 'canceled', [TOUCH_GLOBAL_PEND_O]: 'scheduled' });
+    const [g] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_GLOBAL}'`);
+    assert.equal(g?.opted_out, false, 'la ficha compartida no se marca por un solo remitente');
+    assert.deepEqual(await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'prensa@marca.test'`), []);
+
+    // El workspace que envió ya no le puede programar nada (ningún canal); el otro, sí.
+    const nuevo = (ws: string, canal: string) =>
+      t.db.withWorkspace(ws, (tx) =>
+        tx.query(`INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+                  VALUES ($1, $2, $3, $4, 'Otra vez', 'scheduled', now() + interval '3 days')`, [ws, COMPANY, CONTACT_GLOBAL, canal]),
+      );
+    await assert.rejects(nuevo(WS_S, 'email'), /pidió no recibir más mensajes de este espacio/);
+    await assert.rejects(nuevo(WS_S, 'linkedin'), /pidió no recibir más mensajes de este espacio/);
+    await nuevo(WS_O, 'email');
+
+    // Un segundo creador que también le escribió confirma: ahora sí, para toda la plataforma.
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_GLOBAL_O), { status: 'ok', alreadyOptedOut: false, scope: 'global' });
+    assert.equal((await toquesG())[TOUCH_GLOBAL_PEND_O], 'canceled');
+    const [g2] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_GLOBAL}'`);
+    assert.equal(g2?.opted_out, true);
+    assert.equal((await sinRls(`SELECT 1 FROM contact_suppression WHERE email = 'prensa@marca.test'`)).length, 1);
   });
 
   test('el token del despachador de VEN-10, sin firma ni puntos, da de baja igual', async () => {
-    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_VEN10), { status: 'ok', alreadyOptedOut: false });
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_VEN10), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
     const [c] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_V10}'`);
     assert.equal(c?.opted_out, true);
     const [pend] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_V10_PENDING}'`);
@@ -229,6 +294,68 @@ describe('la política editable', () => {
   test('los rangos se comprueban antes de la base', async () => {
     const p = await t.db.withWorkspace(WS_O, (tx) => getOutboundPolicy(tx));
     await assert.rejects(t.db.withWorkspace(WS_O, (tx) => saveOutboundPolicy(tx, { ...p, maxEmailsPerDay: 5000 })), RangeError);
+  });
+
+  describe('solo quien administra el espacio (0038 §7, r3)', () => {
+    const DUENA = '00000038-0000-4000-8000-0000000000d1';
+    const ADMIN = '00000038-0000-4000-8000-0000000000d2';
+    const LECTORA = '00000038-0000-4000-8000-0000000000d3';
+    const CLIENTE = '00000038-0000-4000-8000-0000000000d4';
+    const MIEMBRO = '00000038-0000-4000-8000-0000000000d5';
+    const como = <T>(userId: string, fn: Parameters<typeof t.db.withWorkspace<T>>[1]) => t.db.withWorkspace(WS_O, fn, { userId });
+
+    before(async () => {
+      await t.admin(`
+        INSERT INTO app_user (id, email, name) VALUES
+          ('${DUENA}', 'duena@politica.test', 'Dueña'), ('${ADMIN}', 'admin@politica.test', 'Admin'),
+          ('${LECTORA}', 'lectora@politica.test', 'Lectora'), ('${CLIENTE}', 'cliente@politica.test', 'Cliente'),
+          ('${MIEMBRO}', 'miembro@politica.test', 'Miembro');
+        INSERT INTO membership (workspace_id, user_id, role) VALUES
+          ('${WS_O}', '${DUENA}', 'owner'), ('${WS_O}', '${ADMIN}', 'admin'), ('${WS_O}', '${LECTORA}', 'viewer'),
+          ('${WS_O}', '${CLIENTE}', 'client'), ('${WS_O}', '${MIEMBRO}', 'member');
+      `);
+    });
+
+    test("'viewer', 'client' y 'member' no guardan la política, ni encienden, ni apagan el envío", async () => {
+      const p = await como(DUENA, (tx) => getOutboundPolicy(tx));
+      for (const quien of [LECTORA, CLIENTE, MIEMBRO]) {
+        await assert.rejects(como(quien, (tx) => saveOutboundPolicy(tx, { ...p, maxEmailsPerDay: 2000 })), PolicyForbiddenError);
+        await assert.rejects(como(quien, (tx) => disableOutreach(tx, 'yo')), (e: unknown) => isPolicyForbidden(e));
+        await assert.rejects(como(quien, (tx) => enableOutreach(tx)), (e: unknown) => isPolicyForbidden(e));
+        // Leerla, sí: la pantalla la enseña a todos.
+        assert.equal((await como(quien, (tx) => getOutboundPolicy(tx))).maxEmailsPerDay, p.maxEmailsPerDay);
+      }
+      assert.notEqual((await como(DUENA, (tx) => getOutboundPolicy(tx))).maxEmailsPerDay, 2000);
+    });
+
+    test("'owner' y 'admin' sí", async () => {
+      const p = await como(DUENA, (tx) => getOutboundPolicy(tx));
+      await como(ADMIN, (tx) => saveOutboundPolicy(tx, { ...p, maxEmailsPerDay: 80 }));
+      await como(ADMIN, (tx) => disableOutreach(tx, 'revisión'));
+      await como(DUENA, (tx) => enableOutreach(tx));
+      const q = await como(DUENA, (tx) => getOutboundPolicy(tx));
+      assert.equal(q.maxEmailsPerDay, 80);
+      assert.equal(q.enabled, true);
+    });
+
+    test('lo que el envío necesita saber antes de encender: cuentas conectadas, caídas y lo aprobado para hoy', async () => {
+      await t.admin(`
+        INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, display_name, status,
+                                              last_error, last_error_at) VALUES
+          ('${WS_O}', 'email', 'gmail_oauth', 'otro@creador.test', NULL, 'connected', NULL, NULL),
+          ('${WS_O}', 'linkedin', 'unipile', 'unipile-otro', 'Otro creador (LinkedIn)', 'needs_reconnect',
+           'La sesión expiró.', now() - interval '1 hour');
+      `);
+      const r = await t.db.withWorkspace(WS_O, (tx) => readSendReadiness(tx));
+      assert.equal(r.connectedAccounts, 1);
+      assert.deepEqual(r.downAccounts.map((a) => [a.channel, a.name, a.status, a.lastError]), [
+        ['linkedin', 'Otro creador (LinkedIn)', 'needs_reconnect', 'La sesión expiró.'],
+      ]);
+      // TOUCH_PENDING_O está programado para mañana: hoy no sale nada.
+      assert.equal(r.approvedDueToday, 0);
+      // Y otro workspace no ve estas cuentas.
+      assert.equal((await t.db.withWorkspace(WS_S, (tx) => readSendReadiness(tx))).downAccounts.length, 0);
+    });
   });
 });
 
@@ -354,6 +481,6 @@ describe('el enlace de baja de la demo (pnpm --filter @mc/db demo:enlace-baja)',
     assert.equal(r.url, `http://localhost:3100/baja/${r.token}`);
     const previa = await checkOptoutLink(puertas([]), r.token);
     assert.equal(previa.status, 'valid');
-    assert.deepEqual(await optoutFromLink(puertas([]), r.token), { status: 'ok', alreadyOptedOut: false });
+    assert.deepEqual(await optoutFromLink(puertas([]), r.token), { status: 'ok', alreadyOptedOut: false, scope: 'workspace' });
   });
 });
