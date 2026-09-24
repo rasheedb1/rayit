@@ -5,7 +5,7 @@
  * costuras que viven en la pantalla y no en una consulta:
  *
  *   - CON-5 / CON-10 → CAM-1: los posts asociados salen de post y
- *     post_metric_snapshot (Café Alma: 417 673 y 303 685, su última lectura), y una
+ *     post_metric_snapshot (Café Alma: su última lectura, leída de la base), y una
  *     campaña sin posts lo dice con una frase, no con una tabla vacía;
  *   - CAM-5 con 0041: «Recalcular» aparece para quien tiene
  *     campanas.resultado.calcular y no para el Editor, que lee la frase;
@@ -78,9 +78,20 @@ describe("la ficha real contra el seed", () => {
     const { texto } = await ficha(CAMPAIGN_CAFE_ALMA);
     expect(texto).toContain("Posts asociados");
     expect(texto).toContain("2 posts");
-    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post (seed 0002, 22-sep).
-    expect(texto).toContain("Cold brew en casa en 3 pasos Instagram 10 ago 417.673 hasta el 22 sep");
-    expect(texto).toContain("El cold brew que me salva las mañanas TikTok 12 ago 303.685 hasta el 22 sep");
+    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002
+    // las fecha respecto de CURRENT_DATE, así que el número y el día cambian a medianoche UTC:
+    // se leen de la base en vez de fijarlos (hasta el 23-sep decía «417.673 hasta el 22 sep»).
+    const ultimas = await withWorkspaceId(SEED_WORKSPACE_ID, async (tx) =>
+      (await tx.query<{ title: string; views: string }>(
+        `SELECT p.title, (SELECT s.views::text FROM post_metric_snapshot s WHERE s.post_id = p.id ORDER BY s.captured_at DESC LIMIT 1) AS views
+           FROM post p WHERE p.title IN ('Cold brew en casa en 3 pasos', 'El cold brew que me salva las mañanas')`,
+      )).rows,
+    );
+    expect(ultimas).toHaveLength(2);
+    for (const [titulo, red, publicado] of [["Cold brew en casa en 3 pasos", "Instagram", "10 ago"], ["El cold brew que me salva las mañanas", "TikTok", "12 ago"]] as const) {
+      const views = Number(ultimas.find((u) => u.title === titulo)!.views).toLocaleString("es-CO");
+      expect(texto).toMatch(new RegExp(`${titulo} ${red} ${publicado} ${views.replace(/\./g, "\\.")} hasta el \\d{1,2} \\w{3}`));
+    }
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);
 
