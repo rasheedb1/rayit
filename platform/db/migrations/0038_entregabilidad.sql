@@ -557,15 +557,13 @@ GRANT SELECT (workspace_id, email), INSERT ON outbound_workspace_optout TO mc_pu
 
 -- Quién confirma (r4): para saber si dos workspaces comparten miembro,
 -- public_optout lee las membresías del workspace del enlace y de los
--- workspaces que ya anotaron la baja de ESA dirección, y nada más. Las
--- columnas (workspace_id, user_id) ya son suyas desde §5; esta política
--- abre solo esas filas y solo mientras la función tiene fijados el
--- workspace y la dirección del enlace (los restaura al salir).
+-- workspaces que ya anotaron la baja de ESA dirección, y nada más. Los
+-- fija en app.public_optout_members (una lista de uuid, como
+-- app.public_optout_contacts) y los restaura al salir. Las columnas
+-- (workspace_id, user_id) ya son suyas desde §5.
 CREATE POLICY membership_public_optout ON membership
   FOR SELECT TO mc_public_share
-  USING (workspace_id = nullif(current_setting('app.public_optout_workspace', true), '')::uuid
-         OR workspace_id IN (SELECT o.workspace_id FROM outbound_workspace_optout o
-                              WHERE o.email = nullif(current_setting('app.public_optout_email', true), '')::citext));
+  USING (workspace_id = ANY (nullif(current_setting('app.public_optout_members', true), '')::uuid[]));
 
 CREATE POLICY outbound_workspace_optout_public_optout_read ON outbound_workspace_optout
   FOR SELECT TO mc_public_share
@@ -604,8 +602,10 @@ DECLARE
   antes_contacts  text := coalesce(current_setting('app.public_optout_contacts', true), '');
   antes_email     text := coalesce(current_setting('app.public_optout_email', true), '');
   antes_workspace text := coalesce(current_setting('app.public_optout_workspace', true), '');
+  antes_members   text := coalesce(current_setting('app.public_optout_members', true), '');
   resumen   text;
   enlace    outbound_optout_link%ROWTYPE;
+  espacios  uuid[];
   ya_ficha  boolean;
   ya_aqui   boolean;
   ya        boolean;
@@ -656,6 +656,14 @@ BEGIN
       -- espacios que pulsa sus dos enlaces sigue en 'workspace'. Un
       -- workspace que ya no existe cuenta como el remitente que fue (su
       -- fila se fue con él): su enlace confirma la baja que otro anotó.
+      -- Las membresías que hacen falta, y ninguna más, las abre
+      -- membership_public_optout con esta lista.
+      SELECT array_agg(DISTINCT o.workspace_id) INTO espacios
+        FROM outbound_workspace_optout o
+       WHERE o.email = enlace.recipient_address;
+      PERFORM set_config('app.public_optout_members',
+                         format('{%s}', array_to_string(array_append(coalesce(espacios, '{}'::uuid[]), enlace.workspace_id), ',')),
+                         true);
       SELECT count(DISTINCT o.workspace_id) INTO remitentes
         FROM outbound_workspace_optout o
        WHERE o.email = enlace.recipient_address
@@ -737,6 +745,7 @@ BEGIN
     PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
     PERFORM set_config('app.public_optout_email', antes_email, true);
     PERFORM set_config('app.public_optout_workspace', antes_workspace, true);
+    PERFORM set_config('app.public_optout_members', antes_members, true);
     RAISE;
   END;
 
@@ -744,6 +753,7 @@ BEGIN
   PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
   PERFORM set_config('app.public_optout_email', antes_email, true);
   PERFORM set_config('app.public_optout_workspace', antes_workspace, true);
+  PERFORM set_config('app.public_optout_members', antes_members, true);
   RETURN r;
 END;
 $$;

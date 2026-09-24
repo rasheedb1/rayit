@@ -1275,9 +1275,9 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
-      20,
-      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037, la de quién envía de 0038 y ' +
-        'las dos de la baja en dos tiempos (0038 §8)',
+      21,
+      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037, la de quién envía de 0038, ' +
+        'las dos de la baja en dos tiempos (0038 §8) y la de quién confirma la baja global (0038 §8, r4)',
     );
     // La baja en dos tiempos (0038 §8) anota la baja de ESE workspace y lee quién más la tiene; no la borra ni la cambia.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.tabla, ['INSERT']);

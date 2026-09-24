@@ -635,8 +635,9 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     columnas: { SELECT: ['user_id', 'workspace_id'] },
     motivo:
       'workspace_read_member (0028), la política sin TO de workspace, pregunta por membership al leer workspace: sin ' +
-      'esto no se podría leer el nombre (0038 §5). Sus políticas solo abren la sesión o el workspace fijados, y este ' +
-      'rol no tiene ninguno: no ve ninguna fila',
+      'esto no se podría leer el nombre (0038 §5). Y la baja en dos tiempos (r4) mira si dos workspaces comparten ' +
+      'miembro: membership_public_optout abre solo las membresías del workspace del enlace y de los que ya anotaron ' +
+      'la baja de esa dirección, mientras public_optout las tiene fijadas',
   },
   // La baja en dos tiempos (0038 §8, VEN-15 r3).
   outbound_workspace_optout: {
@@ -672,7 +673,7 @@ const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_op
 
 /**
  * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9), la de
- * quién envía (0038 §5) y las dos de la baja en dos tiempos (0038 §8). Una
+ * quién envía (0038 §5), las dos de la baja en dos tiempos (0038 §8) y la de quién la confirma (r4). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -779,6 +780,14 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     cmd: 'a',
     exige: [TOKEN_DE_LA_BAJA],
     motivo: 'la baja de ese mismo enlace en el workspace que lo envió, y ninguna otra',
+  },
+  // Quién confirma la baja global (0038 §8, r4).
+  'membership.membership_public_optout': {
+    cmd: 'r',
+    exige: [/^\(?workspace_id = ANY \(\(?NULLIF\(current_setting\('app\.public_optout_members'/],
+    motivo:
+      'las membresías del workspace del enlace y de los que ya anotaron la baja de esa dirección: dos workspaces ' +
+      'que comparten un miembro no confirman una baja global (una persona con dos espacios no suprime a nadie)',
   },
 };
 

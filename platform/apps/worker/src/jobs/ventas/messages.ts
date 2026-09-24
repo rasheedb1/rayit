@@ -36,8 +36,24 @@ export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
   llm_budget: PRESUPUESTO_URL,
 };
 
+/**
+ * Una frase que cambia con una cifra («1 mensaje lleva…», «3 mensajes
+ * llevan…»). La forma la elige Intl.PluralRules del locale del workspace
+ * con la cifra CRUDA de `by` (una de las de la alerta); las `{…}` se
+ * rellenan después con las cifras ya formateadas. Las categorías que no
+ * sean 'one' (few, many… en otros idiomas) usan `other`.
+ */
+export interface Plural {
+  by: string;
+  one: string;
+  other: string;
+}
+
+/** Un texto fijo o uno con plural. */
+export type Plantilla = string | Plural;
+
 export interface AlertTexts {
-  alerts: Record<OutreachAlertKind, { title: string; body: string }>;
+  alerts: Record<OutreachAlertKind, { title: Plantilla; body: Plantilla }>;
   /**
    * Cómo se nombra una cuenta caída en {accounts}: «LinkedIn: Laura ·
    * Cocina fácil». Si no se sabe cuáles son (una salud de fixture), el
@@ -45,12 +61,12 @@ export interface AlertTexts {
    */
   accounts: {
     channel: Record<'email' | 'linkedin' | 'instagram_dm' | 'whatsapp', string>;
-    one: string;
-    many: string;
+    /** Sin nombres: «una cuenta de canal» / «{n} cuentas de canal», por accountsDown. */
+    unnamed: Plural;
   };
   email: {
-    subject: string;
-    subjectOne: string;
+    /** Por `n`, el número de alertas del resumen. */
+    subject: Plural;
     intro: string;
     /** El enlace de cada alerta, debajo de su texto. */
     link: string;
@@ -64,19 +80,41 @@ export const ALERT_TEXTS_ES: AlertTexts = {
   alerts: {
     bounce_rate: {
       title: 'Rebotan demasiados correos: {rate}',
-      body: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+      body: {
+        by: 'bounces',
+        one: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotó porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+        other:
+          '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+      },
     },
     no_sends: {
       title: 'El outreach no envió nada ayer',
-      body: 'Había {dueToSend} mensajes por salir y no salió ninguno en 24 horas. Revisa los canales y la cola.',
+      body: {
+        by: 'dueToSend',
+        one: 'Había {dueToSend} mensaje por salir y no salió en 24 horas. Revisa los canales y la cola.',
+        other: 'Había {dueToSend} mensajes por salir y no salió ninguno en 24 horas. Revisa los canales y la cola.',
+      },
     },
     queue_stuck: {
-      title: 'Hay mensajes atascados en la cola',
-      body: '{stuck} mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+      title: { by: 'stuck', one: 'Hay un mensaje atascado en la cola', other: 'Hay mensajes atascados en la cola' },
+      body: {
+        by: 'stuck',
+        one: '{stuck} mensaje lleva más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+        other: '{stuck} mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+      },
     },
     account_down: {
-      title: 'Una cuenta de envío necesita atención',
-      body: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué dijo el proveedor y qué hacer.',
+      title: {
+        by: 'accountsDown',
+        one: 'Una cuenta de envío necesita atención',
+        other: 'Hay cuentas de envío que necesitan atención',
+      },
+      body: {
+        by: 'accountsDown',
+        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué dijo el proveedor y qué hacer.',
+        other:
+          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola. En tu política de envío ves qué dijo cada proveedor y qué hacer.',
+      },
     },
     llm_budget: {
       title: 'Se agotó el presupuesto diario de redacción',
@@ -85,16 +123,18 @@ export const ALERT_TEXTS_ES: AlertTexts = {
   },
   accounts: {
     channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
-    one: 'una cuenta de canal',
-    many: '{n} cuentas de canal',
+    unnamed: { by: 'accountsDown', one: 'una cuenta de canal', other: '{accountsDown} cuentas de canal' },
   },
   email: {
-    subject: 'On Cue · {n} alertas del outreach de {workspace}',
-    subjectOne: 'On Cue · Una alerta del outreach de {workspace}',
+    subject: {
+      by: 'n',
+      one: 'On Cue · Una alerta del outreach de {workspace}',
+      other: 'On Cue · {n} alertas del outreach de {workspace}',
+    },
     intro: 'Esto es lo que vimos en el outreach de {workspace}:',
     link: 'Revísalo: {url}',
     whereToSee: 'Lo ves en On Cue, en Ventas → Política de envío.',
-    outro: 'Te escribimos porque eres dueño de este espacio en On Cue.',
+    outro: 'Te escribimos una vez al día porque eres dueño de este espacio en On Cue. Lo que aparezca más tarde está en la campana y va en el resumen de mañana.',
   },
 };
 
@@ -106,15 +146,28 @@ export const ALERT_TEXTS_EN: AlertTexts = {
     },
     no_sends: {
       title: 'Outreach sent nothing yesterday',
-      body: '{dueToSend} messages were due and none went out in 24 hours. Check your channels and the queue.',
+      body: {
+        by: 'dueToSend',
+        one: "{dueToSend} message was due and it didn't go out in 24 hours. Check your channels and the queue.",
+        other: '{dueToSend} messages were due and none went out in 24 hours. Check your channels and the queue.',
+      },
     },
     queue_stuck: {
-      title: 'Messages are stuck in the queue',
-      body: '{stuck} messages have been sending for more than five minutes. If it keeps up, check the channel.',
+      title: { by: 'stuck', one: 'A message is stuck in the queue', other: 'Messages are stuck in the queue' },
+      body: {
+        by: 'stuck',
+        one: '{stuck} message has been sending for more than five minutes. If it keeps up, check the channel.',
+        other: '{stuck} messages have been sending for more than five minutes. If it keeps up, check the channel.',
+      },
     },
     account_down: {
-      title: 'A sending account needs attention',
-      body: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what the provider said and what to do.',
+      title: { by: 'accountsDown', one: 'A sending account needs attention', other: 'Some sending accounts need attention' },
+      body: {
+        by: 'accountsDown',
+        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what the provider said and what to do.',
+        other:
+          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue. Your sending policy shows what each provider said and what to do.',
+      },
     },
     llm_budget: {
       title: 'The daily writing budget is used up',
@@ -123,18 +176,41 @@ export const ALERT_TEXTS_EN: AlertTexts = {
   },
   accounts: {
     channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
-    one: 'one channel account',
-    many: '{n} channel accounts',
+    unnamed: { by: 'accountsDown', one: 'one channel account', other: '{accountsDown} channel accounts' },
   },
   email: {
-    subject: 'On Cue · {n} outreach alerts for {workspace}',
-    subjectOne: 'On Cue · One outreach alert for {workspace}',
+    subject: {
+      by: 'n',
+      one: 'On Cue · One outreach alert for {workspace}',
+      other: 'On Cue · {n} outreach alerts for {workspace}',
+    },
     intro: "Here's what we saw in {workspace}'s outreach:",
     link: 'Review it: {url}',
     whereToSee: 'You can see it in On Cue, under Sales → Sending policy.',
-    outro: "You're receiving this because you own this workspace on On Cue.",
+    outro: "We write once a day because you own this workspace on On Cue. Anything that shows up later is in the bell and goes in tomorrow's summary.",
   },
 };
+
+/**
+ * Rellena una plantilla: elige la forma con Intl.PluralRules(locale) y la
+ * cifra cruda de `crudos[by]`, y cambia cada `{clave}` por su valor ya
+ * formateado. Una `{clave}` sin valor se queda como está (y una prueba lo
+ * atrapa: ningún texto guardado lleva «{»).
+ */
+export function fillTemplate(
+  plantilla: Plantilla,
+  valores: Readonly<Record<string, string>>,
+  crudos: Readonly<Record<string, number>>,
+  locale: string,
+): string {
+  const texto =
+    typeof plantilla === 'string'
+      ? plantilla
+      : new Intl.PluralRules(locale).select(crudos[plantilla.by] ?? 0) === 'one'
+        ? plantilla.one
+        : plantilla.other;
+  return texto.replace(/\{(\w+)\}/g, (_, k: string) => valores[k] ?? `{${k}}`);
+}
 
 /** Los textos para un locale BCP 47 ('es-CO', 'en-US'…): inglés si el locale es inglés, si no español. */
 export function alertTextsFor(locale: string): AlertTexts {

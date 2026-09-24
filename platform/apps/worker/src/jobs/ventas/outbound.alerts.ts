@@ -21,11 +21,16 @@
  * 'stately' y además hay un candado de transacción). Cada una lleva su
  * propio enlace (messages.ts, ALERTAS_URL).
  *
- * Después, UN correo de resumen por workspace, a todos sus dueños
- * (membership.role = 'owner') a la vez, con las alertas que todavía no
- * salieron por correo; al enviarlo se anota notification.emailed_at. Uno
- * por workspace y no uno por dueño: si el envío falla no sale a nadie y
- * nada queda marcado, así que la corrida siguiente no le repite el
+ * Después, UN correo de resumen por workspace y por DÍA LOCAL (r4), a
+ * todos sus dueños (membership.role = 'owner') a la vez, con las alertas
+ * que todavía no salieron por correo; al enviarlo se anota
+ * notification.emailed_at, y esa misma columna dice si hoy ya salió uno.
+ * Sale en la primera corrida del día que tenga algo que contar; lo que
+ * aparezca más tarde (una cuenta que cae a las 15:00) se queda en la
+ * campana y va en el resumen del día siguiente, también lo 'critical':
+ * la pieza pide un resumen diario, y la campana ya lo enseña al momento.
+ * Uno por workspace y no uno por dueño: si el envío falla no sale a nadie
+ * y nada queda marcado, así que la corrida siguiente no le repite el
  * resumen a quien ya lo tenía. Sin SMTP_URL, o si el correo falla, las
  * alertas quedan sin marcar y salen con la siguiente corrida que pueda
  * enviar, aunque sea otro día, mientras tengan menos de
@@ -38,16 +43,19 @@
  * fácil») y lleva a /ventas/politica#cuentas, donde está lo que dijo el
  * proveedor.
  *
- * Textos en el idioma del workspace (messages.ts). Corre como mc_worker:
+ * Textos en el idioma del workspace (messages.ts), con los plurales de
+ * Intl.PluralRules («1 mensaje lleva…», «3 mensajes llevan…»). Corre como mc_worker:
  * cada fila lleva el workspace que la origina.
  */
-import { evaluateOutreachAlerts, type AlertInput, type OutreachAlert, type OutreachAlertKind } from '@mc/core/outreach/deliverability';
+import {
+  channelAccountLabel, evaluateOutreachAlerts, type AlertInput, type OutreachAlert, type OutreachAlertKind,
+} from '@mc/core/outreach/deliverability';
 import { HEALTH_WINDOW_H, readAlertSignalCounts } from '@mc/db/queries/entregabilidad';
 import { parseOutboundHealth } from '@mc/db/queries/outreach';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob } from '../../runner/registry.ts';
 import { smtpMailerFromEnv, type Mailer } from './correo.ts';
-import { ALERTAS_URL, alertTextsFor } from './messages.ts';
+import { ALERTAS_URL, alertTextsFor, fillTemplate } from './messages.ts';
 
 export const ALERTAS_JOB_ID = 'outbound.alerts';
 
@@ -57,10 +65,6 @@ export const ALERTAS_HORA_LOCAL = 8;
 export const ALERTAS_VENTANA_H = HEALTH_WINDOW_H;
 /** Una alerta sin correo se sigue intentando mandar durante estos días. */
 export const ALERTAS_REENVIO_DIAS = 7;
-
-function rellenar(plantilla: string, valores: Readonly<Record<string, string>>): string {
-  return plantilla.replace(/\{(\w+)\}/g, (_, k: string) => valores[k] ?? `{${k}}`);
-}
 
 /** Las cifras de la alerta, formateadas en el locale del workspace. */
 function cifras(alerta: OutreachAlert, locale: string): Record<string, string> {
@@ -115,6 +119,8 @@ export interface AlertasResult {
   /** Workspaces con alertas por enviar y sin SMTP_URL. */
   emailSkipped: number;
   emailFailed: number;
+  /** Workspaces con alertas sin correo que esperan al resumen de mañana: hoy ya salió uno. */
+  emailDeferred: number;
 }
 
 type Espacio = {
@@ -155,6 +161,7 @@ async function espacios(db: Queryable, now: Date, hora: number): Promise<Espacio
  */
 async function cuentasCaidas(tx: Queryable, w: Espacio, cuantas: number): Promise<string> {
   const t = alertTextsFor(w.locale).accounts;
+  const n = new Intl.NumberFormat(w.locale);
   const { rows } = await tx.query<{ channel: keyof typeof t.channel; name: string }>(
     `SELECT channel, coalesce(nullif(btrim(display_name), ''), provider_account_id) AS name
        FROM outreach_channel_account
@@ -163,9 +170,10 @@ async function cuentasCaidas(tx: Queryable, w: Espacio, cuantas: number): Promis
     [w.id],
   );
   if (!rows.length) {
-    return cuantas === 1 ? t.one : rellenar(t.many, { n: new Intl.NumberFormat(w.locale).format(cuantas) });
+    return fillTemplate(t.unnamed, { accountsDown: n.format(cuantas) }, { accountsDown: cuantas }, w.locale);
   }
-  const nombres = rows.map((r) => `${t.channel[r.channel] ?? r.channel}: ${r.name}`);
+  // Sin repetir el canal si el nombre ya lo dice («Laura (LinkedIn)»).
+  const nombres = rows.map((r) => channelAccountLabel(t.channel[r.channel] ?? r.channel, r.name));
   return new Intl.ListFormat(w.locale, { style: 'long', type: 'conjunction' }).format(nombres);
 }
 
@@ -186,8 +194,8 @@ async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: 
              AND (n.created_at AT TIME ZONE $8)::date = ($7::timestamptz AT TIME ZONE $8)::date)
        RETURNING id`,
       [
-        w.id, `outreach_${a.kind}`, a.severity, rellenar(t.title, valores), rellenar(t.body, valores), ALERTAS_URL[a.kind],
-        now.toISOString(), w.tz,
+        w.id, `outreach_${a.kind}`, a.severity, fillTemplate(t.title, valores, a.values, w.locale),
+        fillTemplate(t.body, valores, a.values, w.locale), ALERTAS_URL[a.kind], now.toISOString(), w.tz,
       ],
     );
     if (rows.length) creadas.push(a.kind);
@@ -204,9 +212,19 @@ type Pendiente = {
 
 /**
  * El resumen por correo de las alertas que no salieron todavía (de los
- * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños.
+ * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños, y como
+ * mucho uno por día local del workspace.
  */
 async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: AlertasDeps, r: AlertasResult): Promise<void> {
+  // ¿Hoy (día local) ya salió un resumen? Lo dice emailed_at, que se anota
+  // al enviarlo: sin tabla aparte que se pueda desincronizar.
+  const { rows: [hoy] } = await db.query<{ ya: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM notification
+        WHERE workspace_id = $1 AND kind LIKE 'outreach\\_%' AND emailed_at IS NOT NULL
+          AND (emailed_at AT TIME ZONE $3)::date = ($2::timestamptz AT TIME ZONE $3)::date) AS ya`,
+    [w.id, now.toISOString(), w.tz],
+  );
   const { rows: pendientes } = await db.query<Pendiente>(
     `SELECT id, title_es, body_es, action_url FROM notification
       WHERE workspace_id = $1 AND kind LIKE 'outreach\\_%' AND emailed_at IS NULL
@@ -215,6 +233,10 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     [w.id, now.toISOString(), ALERTAS_REENVIO_DIAS],
   );
   if (!pendientes.length) return;
+  if (hoy?.ya) {
+    r.emailDeferred++;
+    return;
+  }
   if (!deps.mailer) {
     r.emailSkipped++;
     return;
@@ -226,18 +248,17 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
   );
   if (!duenos.length) return;
   const c = alertTextsFor(w.locale).email;
-  const subject =
-    pendientes.length === 1
-      ? rellenar(c.subjectOne, { workspace: w.name })
-      : rellenar(c.subject, { n: new Intl.NumberFormat(w.locale).format(pendientes.length), workspace: w.name });
+  const llenar = (p: Parameters<typeof fillTemplate>[0], v: Record<string, string>) =>
+    fillTemplate(p, v, { n: pendientes.length }, w.locale);
+  const subject = llenar(c.subject, { n: new Intl.NumberFormat(w.locale).format(pendientes.length), workspace: w.name });
   const base = deps.appUrl ? deps.appUrl.replace(/\/+$/, '') : null;
   const text = [
-    rellenar(c.intro, { workspace: w.name }),
+    llenar(c.intro, { workspace: w.name }),
     '',
     ...pendientes.flatMap((p) => [
       `· ${p.title_es}`,
       ...(p.body_es ? [`  ${p.body_es}`] : []),
-      ...(p.action_url && base ? [`  ${rellenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
+      ...(p.action_url && base ? [`  ${llenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
       '',
     ]),
     ...(base ? [] : [c.whereToSee, '']),
@@ -264,7 +285,7 @@ export async function runAlertas(
 ): Promise<AlertasResult> {
   const hora = Math.max(0, Math.min(23, Math.trunc(deps.horaLocal ?? ALERTAS_HORA_LOCAL)));
   const leer = deps.readSignals ?? readSignalsFromDb;
-  const r: AlertasResult = { workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailFailed: 0 };
+  const r: AlertasResult = { workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailFailed: 0, emailDeferred: 0 };
   for (const w of await espacios(db, now, hora)) {
     r.workspaces++;
     try {
