@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { FakeTokenRefresher } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { mapLimit } from '../src/jobs/conexiones/oauth-refresh.ts';
-import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { jobRuns, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-21T12:00:00Z');
@@ -76,7 +76,7 @@ before(async () => {
   for (const [key, s] of Object.entries(SECRETS)) {
     await h.secrets.set(`vault:${key}`, { ...s, accessExpiresAt: minutes(10), refreshExpiresAt: minutes(60 * 24 * 200), scopes: ['user.info.basic'] });
   }
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await h.stop();

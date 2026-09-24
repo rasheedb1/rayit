@@ -31,7 +31,7 @@ import {
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
 import { DealLocked, FOLLOW_UP_ACTION, FOLLOW_UP_BUSINESS_DAYS, PITCH_ACTION, createCompany, createDeal, getCompany, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
-import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
+import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
 const FIRMA = { name: 'Ana Gómez', email: 'ana@cafealma.co' };
@@ -66,7 +66,7 @@ before(async () => {
     return rows;
   });
   creadora = c!.id;
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -1460,7 +1460,7 @@ describe('lo que el precio del tarifario ya incluye (derechos, exclusividad)', (
   before(async () => {
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       saveRateCard(tx, { creatorId: creadora, currency: 'COP', basis: {}, items: [TIKTOK, REEL] }));
-  });
+  }, SETUP_TIMEOUT);
 
   after(async () => {
     // El tarifario siguiente vuelve a ser uno sin condiciones.

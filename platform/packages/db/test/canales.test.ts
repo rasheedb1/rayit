@@ -21,7 +21,7 @@ import {
   channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, recordInboundMessage, setChannelWebhooks,
   updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
 const GMAIL_LAURA = '00000005-0000-4000-8000-0000000ac001';
@@ -41,7 +41,7 @@ before(async () => {
     INSERT INTO creator_profile (id, workspace_id, display_name, handle)
       VALUES ('${CREATOR_OTRO}', '${WS_OTRO}', 'Otro', 'otro.canales') ON CONFLICT (id) DO NOTHING;
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => { await t?.close(); });
 
 /** Lee como mc_worker (sin RLS), fuera de toda transacción. */

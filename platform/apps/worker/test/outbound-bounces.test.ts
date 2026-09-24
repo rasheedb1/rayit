@@ -19,7 +19,7 @@ import {
 } from '../src/jobs/ventas/outbound.bounces.ts';
 import { gmailBounceMailbox, gmailMessageToBounce, type GmailBounceMessage, type GmailBounceSource } from '../src/jobs/ventas/gmail-rebotes.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const NOW = new Date('2026-09-23T14:00:00Z');
 const WS = '0000015b-0000-4000-8000-000000000001';
@@ -74,7 +74,7 @@ before(async () => {
       ('${T_LLENO}', '${WS}', '${COMPANY}', '${C_LLENO}', 'email', 'Hola', 'scheduled', '2026-09-25T13:00:00Z',
        NULL, NULL, NULL, NULL, 0);
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await db?.close();
 });

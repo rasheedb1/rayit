@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
+import { SETUP_TIMEOUT } from './pglite.ts';
 
 /**
  * Números que ya tiene otra rama, y que esta todavía no: un hueco
@@ -47,7 +48,7 @@ let dir = '';
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'mc-migraciones-'));
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await rm(dir, { recursive: true, force: true });

@@ -14,7 +14,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NOTIFICATION_KINDS } from '../src/schema/cimientos.ts';
 import { ENROLLMENT_STATUSES } from '../src/schema/outreach.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_A = '00000041-0000-4000-8000-00000000000a';
 const WS_B = '00000041-0000-4000-8000-00000000000b';
@@ -47,7 +47,7 @@ before(async () => {
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
     VALUES ('${TOUCH_A}', '${WS_A}', '${CO_A}', '${CONTACT_A}', 'email', 'Hola', 'scheduled', now());
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await t?.close();
 });

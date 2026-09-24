@@ -16,7 +16,7 @@ import { getCurrentRateCard } from '../src/queries/cotizar.ts';
 import { getInvoice } from '../src/queries/finanzas.ts';
 import { listPostBoard } from '../src/queries/resumen.ts';
 import { getPipelineDeal, listPipeline } from '../src/queries/ventas.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Un workspace vecino, para comprobar que los helpers no cruzan la frontera. */
 const WS_VECINO = '0000000b-0000-4000-8000-000000000042';
@@ -79,7 +79,7 @@ before(async () => {
       .returning({ id: creatorProfile.id });
     creadoraVecina = c!.id;
   });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

@@ -20,7 +20,7 @@ import type { Mailer, MailMessage } from '../src/jobs/ventas/correo.ts';
 import { ALERTAS_URL, SALUD_URL } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 /** 9:00 en Bogotá. */
 const NOW = new Date('2026-09-23T14:00:00Z');
@@ -78,7 +78,7 @@ before(async () => {
       ('${WS_MAL}', '${USER_MIEMBRO}', 'member');
     INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_MAL}'), ('${WS_SANO}');
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await db?.close();
 });

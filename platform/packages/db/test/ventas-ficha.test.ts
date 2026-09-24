@@ -28,7 +28,7 @@ import {
 } from '../src/queries/ventas-ficha.ts';
 import { CompanyNotFound, DealNotFound, listPipeline } from '../src/queries/ventas.ts';
 import type { WorkspaceTx } from '../src/client.ts';
-import { CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_010, WORKSPACE_LAURA, openTestDb, type TestDb } from './pglite.ts';
+import { CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_010, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Negocios y empresas del seed 0002. */
 const DEAL_CAFE_RENOVACION = '00000002-0000-4000-8000-0000000dea04';
@@ -100,7 +100,7 @@ before(async () => {
     INSERT INTO activity (workspace_id, company_id, deal_id, kind, subject)
     VALUES ('${WORKSPACE_AJENO}', '${COMPANY_AJENA}', '${DEAL_AJENO}', 'note', 'Nota ajena');
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await t?.close();
 });

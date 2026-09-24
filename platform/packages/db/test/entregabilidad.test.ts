@@ -28,7 +28,7 @@ import {
 } from '../src/queries/entregabilidad.ts';
 import { enableOutreach } from '../src/queries/outreach.ts';
 import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_S = '00000038-0000-4000-8000-00000000000a';
 const WS_O = '00000038-0000-4000-8000-00000000000b';
@@ -91,7 +91,7 @@ before(async () => {
            ('${optoutTokenHash(TOKEN_VEN10)}', '${WS_S}', '${TOUCH_V10_SENT}', '${CONTACT_V10}', 'tomas@marca.test',
             now() - interval '2 days', now() - interval '2 days');
   `);
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   if (t.kind === 'postgres') {
@@ -319,7 +319,7 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
         ('${WS_A}', 'b5', '00000038-0000-4000-8000-000000007103', 'hard', '5.1.1 otra vez'),
         ('${WS_A}', 'b6', '00000038-0000-4000-8000-000000007199', 'hard', '5.1.1 de la semana pasada');
     `);
-  });
+  }, SETUP_TIMEOUT);
 
   test('solo cuentan los rebotes duros de lo que salió en la ventana, una vez por correo', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES));

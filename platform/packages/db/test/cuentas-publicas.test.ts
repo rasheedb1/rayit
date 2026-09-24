@@ -2,7 +2,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, upgradePublicAccountToOAuth } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, WORKSPACE_LAURA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -11,7 +11,7 @@ let t: TestDb;
 before(async () => {
   t = await openTestDb();
   await t.admin(`INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-cuentas', 'Ajeno') ON CONFLICT DO NOTHING;`);
-});
+}, SETUP_TIMEOUT);
 after(async () => { await t.close(); });
 
 const input = { creatorId: CREATOR_LAURA, platformId: 'instagram' as const, handle: 'nicolasduartea', externalAccountId: '17841400000009999', displayName: null, avatarUrl: null, profileUrl: 'https://www.instagram.com/nicolasduartea/', accountType: 'business' as const };

@@ -20,11 +20,9 @@ import {
   createCampaignFromQuote,
   type WorkspaceTx,
 } from '../src/index.ts';
-import {
-  openTestDb, type TestDb,
+import { openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
-  POST_D01_REEL_CAFE_ALMA, POST_D02_TIKTOK_CAFE_ALMA, POST_D03_TIKTOK_FRESKO, POST_D04_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE,
-} from './pglite.ts';
+  POST_D01_REEL_CAFE_ALMA, POST_D02_TIKTOK_CAFE_ALMA, POST_D03_TIKTOK_FRESKO, POST_D04_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Un workspace ajeno con una campaña propia, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';
@@ -59,7 +57,7 @@ before(async () => {
     VALUES ('${CAMPAIGN_PRUEBA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Campaña de prueba', 'planned', DATE '2026-10-01', DATE '2026-10-08', 1000000.00, 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -367,7 +365,7 @@ describe('crear campaña desde la cotización (CAM-2)', () => {
       WHERE (SELECT count(*) FROM quote_item WHERE quote_id = '${id}') < 2;
     `;
     await t.admin(quote(QUOTE_ACCEPTED, 'COT-2026-014', 'accepted') + quote(QUOTE_SENT, 'COT-2026-015', 'sent') + quote(QUOTE_RACE, 'COT-2026-016', 'accepted') + quote(QUOTE_FLOW, 'COT-2026-017', 'sent'));
-  });
+  }, SETUP_TIMEOUT);
 
   test('crea la campaña con lo copiado de la cotización, la línea base y las cuentas de la marca', async () => {
     const { campaign, created } = await laura((tx) =>

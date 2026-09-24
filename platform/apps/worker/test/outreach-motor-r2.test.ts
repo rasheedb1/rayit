@@ -29,7 +29,7 @@ import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { runReplies } from '../src/jobs/ventas/outbound.replies.ts';
 import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { bogota, localClock, localDay, motorKit, TZ, W } from './helpers/motor-kit.ts';
 
 let db: PgliteDatabase;
@@ -38,7 +38,7 @@ let motor: MotorDb;
 before(async () => {
   db = await openTestDatabase();
   motor = motorDbFromJob(db);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await db?.close();
 });

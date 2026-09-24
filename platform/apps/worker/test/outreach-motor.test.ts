@@ -33,7 +33,7 @@ import { DISPATCH_JOB_ID, runDispatch, type DispatchDeps } from '../src/jobs/ven
 import { REPLIES_JOB_ID, runReplies } from '../src/jobs/ventas/outbound.replies.ts';
 import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const TZ = 'America/Bogota';
 const WS = '0000000b-0000-4000-8000-000000000001';
@@ -139,7 +139,7 @@ before(async () => {
       ('${STEP3}', '${WS}', '${SEQ}', 2, 0, 'email', 'email', '10:00', 'Una última idea',
        'Cierro con mi media kit, {{first_name}}.', false);
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await db?.close();
 });

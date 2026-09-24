@@ -21,7 +21,7 @@ import { allJobs } from '../src/jobs/index.ts';
 import { CHANNELS_KEEPALIVE_JOB_ID, runChannelsKeepalive } from '../src/jobs/ventas/canales.keepalive.ts';
 import { CHANNELS_RELEASE_JOB_ID, runChannelsRelease } from '../src/jobs/ventas/canales.release.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const NOW = new Date('2026-09-23T06:30:00Z');
 const WS = '0000000b-0000-4000-8000-000000000001';
@@ -90,7 +90,7 @@ before(async () => {
   unipile.addAccount({ id: 'acc_ig', provider: 'INSTAGRAM', health: 'needs_reconnect', rawStatus: 'CREDENTIALS' });
   unipile.addAccount({ id: 'acc_li_viejo' });
   unipile.addAccount({ id: 'acc_compartida' });
-});
+}, SETUP_TIMEOUT);
 
 interface Soltada extends Record<string, unknown> { released_at: Date | null; provider_webhook_ids: string[] }
 async function soltada(id: string): Promise<Soltada | undefined> {

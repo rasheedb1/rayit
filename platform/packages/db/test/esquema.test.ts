@@ -18,13 +18,13 @@ import {
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import type { CatalogDb } from '../src/client.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 let t: TestDb;
 
 before(async () => {
   t = await openTestDb({ seeds: false });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -876,7 +876,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
       `INSERT INTO workspace (id, slug, name) VALUES ('${WS}', 'ronda-5', 'Ronda 5'); ` +
         "INSERT INTO niche (slug, name_es) VALUES ('zz-niche', 'Nicho intacto')",
     );
-  });
+  }, SETUP_TIMEOUT);
   after(async () => {
     await t.admin(`DELETE FROM workspace WHERE id = '${WS}'; DELETE FROM niche WHERE slug = 'zz-niche'`);
   });

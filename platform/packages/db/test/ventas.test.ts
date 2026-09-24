@@ -57,7 +57,7 @@ import {
 } from '../src/queries/ventas.ts';
 import { WORKSPACE_DEFAULTS } from '../src/queries/cimientos.ts';
 import type { WorkspaceTx } from '../src/client.ts';
-import { openTestDb, type TestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA } from './pglite.ts';
+import { openTestDb, type TestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Empresas del seed 0002 que estas pruebas nombran. */
 const COMPANY_FRESKO = '00000002-0000-4000-8000-0000000000e2';
@@ -140,7 +140,7 @@ before(async () => {
             'Señal ajena', 'manual:marcaajena.co', 'pending', 0.99)
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 180_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
 import { defineJob } from '../src/runner/registry.ts';
-import { jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -49,7 +49,7 @@ let h: Harness;
 
 before(async () => {
   h = await startHarness({ jobs: [...allJobs, echoJob, failJob, slowJob, itemsJob, noRetryJob], seed: seedTestDefinitions });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await h.stop();

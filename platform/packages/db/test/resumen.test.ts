@@ -34,7 +34,7 @@ import {
   type CsvImportErrorCode,
   type CsvReading,
 } from '../src/queries/resumen.ts';
-import { openTestDb, POST_D02_TIKTOK_CAFE_ALMA, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, POST_D02_TIKTOK_CAFE_ALMA, WORKSPACE_LAURA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Un workspace vecino, vacío salvo su creador: el estado "sin datos" tiene que ser NULL, no cero. */
 const WS_VECINO = '0000000c-0000-4000-8000-000000000042';
@@ -67,7 +67,7 @@ before(async () => {
            ('${CREADOR_VIVO}',    '${WS_CREADOR_BORRADO}', 'Sigue',  'sigue',  now() - interval '10 days', NULL)
     ON CONFLICT DO NOTHING;
   `);
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t?.close();
@@ -467,7 +467,7 @@ describe('Resumen · un workspace que SOLO importó CSV', () => {
         rows: [fila('csv_1'), fila('csv_2', { publishedAt: haceDias(3), views: 3000, saves: 30 })],
       }),
     );
-  });
+  }, SETUP_TIMEOUT);
 
   test('los cuatro KPIs: los de contenido con cifra, las visualizaciones de lo publicado', async () => {
     const cobertura = await enSoloCsv((tx) => getResumenCoverage(tx));

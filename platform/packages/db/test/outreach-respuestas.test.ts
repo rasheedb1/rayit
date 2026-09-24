@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { OUTREACH_NOTICE_TEXTS } from '@mc/core/outreach/messages';
 import { recordInboundMessage } from '../src/queries/canales.ts';
 import { listOpenThreads, recordInbound } from '../src/queries/outreach.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const GMAIL_LAURA = '00000005-0000-4000-8000-0000000ac001';
 const NOW = new Date('2026-09-24T15:00:00Z');
@@ -24,7 +24,7 @@ const NOW = new Date('2026-09-24T15:00:00Z');
 let t: TestDb;
 before(async () => {
   t = await openTestDb();
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await t?.close();
 });
@@ -145,3 +145,59 @@ for (const [i, caso] of CASOS.entries()) {
     }
   });
 }
+
+// ---------------------------------------------------------------------
+// r5 · la baja se queda en el workspace del mensaje, por las dos puertas
+// ---------------------------------------------------------------------
+
+const WS_OTRO = '000010a4-ffff-4000-8000-00000000000b';
+
+/** En otro workspace, una ficha con el MISMO correo que la del escenario n, con su cadencia y un mensaje programado. */
+async function fichaAjena(n: number): Promise<{ contact: string; touch: string; enrollment: string }> {
+  const [company, contact, seq, enr, touch] = [id(n, 'bc0'), id(n, 'bc1'), id(n, 'b5e'), id(n, 'be0'), id(n, 'b70')];
+  await t.admin(`
+    INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_OTRO}', 'respuestas-r5-otro', 'Otra creadora', 'America/Bogota')
+    ON CONFLICT (id) DO NOTHING;
+    INSERT INTO company (id, name, owner_workspace_id) VALUES ('${company}', 'Marca ${n} (otra)', '${WS_OTRO}');
+    INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_OTRO}', '${company}');
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+    VALUES ('${contact}', '${company}', '${WS_OTRO}', 'Persona ${n}', 'persona${n}@respuestas-r4.test', 'user_provided');
+    INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES ('${seq}', '${WS_OTRO}', 'Otra', 'email', 'active');
+    INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status, started_at)
+    VALUES ('${enr}', '${WS_OTRO}', '${seq}', '${contact}', 'active', now());
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, channel, subject, body, status, scheduled_for)
+    VALUES ('${touch}', '${WS_OTRO}', '${company}', '${contact}', '${seq}', 1, '${enr}', 'email', 'Hola', 'Hola.', 'scheduled', now() + interval '1 day');
+  `);
+  return { contact, touch, enrollment: enr };
+}
+
+test('una baja por respuesta no toca la ficha de otro workspace con el mismo correo, ni por el webhook ni por el lector (r5)', async () => {
+  const porWebhook = await escenario(21, 'active');
+  const porJob = await escenario(22, 'active');
+  const ajenaW = await fichaAjena(21);
+  const ajenaJ = await fichaAjena(22);
+
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
+    account: { id: GMAIL_LAURA, channel: 'email' }, threadRef: porWebhook.thread, providerMessageId: 'webhook-r5', body: 'Sáquenme de su lista.',
+    fromAddress: null, occurredAt: NOW, optOutReasonEs: OUTREACH_NOTICE_TEXTS.es.optOutReason('correo'),
+  }));
+  await t.db.asWorker(async (tx) => {
+    const threads = await listOpenThreads(tx, { now: NOW, workspaceId: WORKSPACE_LAURA, limit: 2000 });
+    const thread = threads.find((x) => x.threadRef === porJob.thread)!;
+    return recordInbound(tx, thread, { providerMessageId: 'job-r5', body: 'Sáquenme de su lista.', occurredAt: NOW }, NOW);
+  });
+
+  const estadoAjeno = (a: { contact: string; touch: string; enrollment: string }) =>
+    t.db.asWorker(async (tx) => (await tx.query<{ opted_out: boolean; touch: string; enr: string }>(
+      `SELECT c.opted_out, (SELECT status FROM outbound_touch WHERE id = $2) AS touch, (SELECT status FROM outbound_enrollment WHERE id = $3) AS enr
+         FROM contact c WHERE c.id = $1`, [a.contact, a.touch, a.enrollment],
+    )).rows[0]!);
+  for (const ajena of [ajenaW, ajenaJ]) {
+    assert.deepEqual({ ...(await estadoAjeno(ajena)) }, { opted_out: false, touch: 'scheduled', enr: 'active' }, 'la otra creadora no se entera');
+  }
+  const [a, b] = [await estado(porWebhook, 'webhook-r5'), await estado(porJob, 'job-r5')];
+  assert.deepEqual(a, b, 'la misma base por las dos puertas');
+  assert.equal(a.contact?.opted_out, true, 'la ficha del workspace del mensaje sí');
+  assert.equal(a.enr?.status, 'opted_out');
+  assert.match(a.notices[0]?.title_es ?? '', /pidió no recibir más mensajes/);
+});
