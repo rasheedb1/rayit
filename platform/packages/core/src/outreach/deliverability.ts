@@ -316,7 +316,27 @@ const ASUNTO_DE_REBOTE = new RegExp(
  * hasta el lunes» no es un rebote. «No existe» y «does not exist» van
  * anclados a de QUÉ se habla (buzón, dirección, usuario, cuenta).
  */
-const SUJETO_DURO = '(address|mailbox|user|recipient|account|e-?mail|direcci[oó]n|buz[oó]n|usuario|cuenta|destinatario)';
+const SUJETO_DURO =
+  '(address|mailbox|user|recipient|account|e-?mail|domain|direcci[oó]n|buz[oó]n|usuario|cuenta|destinatario|dominio)';
+/**
+ * «El dominio no existe»: un rebote tan permanente como un buzón que no
+ * existe. El nombre del dominio lleva puntos, así que no cabe en el
+ * `[^.\n]` de arriba y va con \S+ («the domain marca.co couldn't be
+ * found»). Lo dice Gmail en prosa, Postfix («Host or domain name not
+ * found»), Exim («unrouteable address») y cualquier resolvedor (NXDOMAIN,
+ * sin registro MX).
+ */
+const DOMINIO_INEXISTENTE = [
+  'domain not found',
+  'host not found',
+  'host or domain name not found',
+  'no mx record',
+  'nxdomain',
+  'unrouteable address',
+  "domain \\S+ (couldn'?t|could not|cannot|can'?t) be found",
+  'no se (ha )?(podido )?encontr(ar|ado|[oó]) el dominio',
+  'el dominio \\S+ no (existe|se (ha )?(podido )?encontr(ar|ado|[oó]))',
+];
 const TEXTO_DURO = new RegExp(
   [
     'address not found',
@@ -329,6 +349,7 @@ const TEXTO_DURO = new RegExp(
     'invalid (recipient|address|mailbox)',
     'account (has been )?disabled',
     'la direcci[oó]n no (existe|se encontr[oó])',
+    ...DOMINIO_INEXISTENTE,
   ].join('|'),
   'i',
 );
@@ -346,8 +367,29 @@ const SMTP_RE = /\b([45]\d\d)[ -](?:[245]\.\d{1,3}\.\d{1,3}\b|[A-Za-z])/;
  * 550-5.1.1 …»).
  */
 const LINEA_DEL_SERVIDOR_RE = /\b[45]\d\d[ -](?:[245]\.\d{1,3}\.\d{1,3}\b|[A-Za-z<#])|\bsaid:\s*[45]\d\d\b/;
+/**
+ * La línea del aviso que dice que el DOMINIO no existe. Gmail no trae
+ * código SMTP en ese caso («…because the domain marca.co couldn't be
+ * found», «DNS Error: … NXDOMAIN»): sin esto el aviso quedaba en blando
+ * y a la ficha se le seguía escribiendo en cada paso de la secuencia.
+ * Es una frase concreta del notificador, no «no existe» suelto: un fuera
+ * de oficina no la dice.
+ */
+const LINEA_DE_DOMINIO_RE = new RegExp(`(DNS Error|${DOMINIO_INEXISTENTE.join('|')})`, 'i');
 const DESTINO_RE = /\b(?:Final|Original)-Recipient:\s*(?:rfc822;\s*)?<?([^\s<>;]+@[^\s<>;]+)>?/i;
-const DESTINO_GMAIL_RE = /(?:wasn'?t|was not|could ?n[o']t be) delivered to\s+<?([^\s<>]+@[^\s<>]+?)>?[\s.,]/i;
+/**
+ * El destinatario en la prosa de Gmail, en inglés y en español, cuando
+ * el aviso no trae cabeceras DSN. La dirección se lee con la forma de
+ * CORREO_RE: el TLD (`\.[A-Za-z]{2,}`) hace que la captura llegue hasta
+ * el final del dominio y no se corte en el primer punto
+ * («nadie@marca.co», no «nadie@marca»).
+ */
+const DESTINO_GMAIL_RE = new RegExp(
+  "(?:(?:wasn'?t|was not|could ?n[o']t be) delivered to|" +
+    'no se (?:ha podido |pudo |ha )?entrega(?:r|do)(?: (?:el|tu) mensaje)? a)' +
+    "\\s+<?([A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})>?",
+  'i',
+);
 const CORREO_RE = /<?([A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?/;
 const MESSAGE_ID_RE = /(?:^|\n)\s*Message-ID:\s*<([^>\s]+)>/i;
 const REFERENCIA_RE = /<([^>\s]+@[^>\s]+)>/;
@@ -361,19 +403,24 @@ function textoDelServidor(body: string, diagnostico: string | null): string {
   if (diagnostico) return diagnostico;
   return body
     .split(/\r?\n/)
-    .filter((l) => LINEA_DEL_SERVIDOR_RE.test(l))
+    .filter((l) => LINEA_DEL_SERVIDOR_RE.test(l) || LINEA_DE_DOMINIO_RE.test(l))
     .join('\n');
 }
 
 /**
  * Si el correo es un aviso de rebote, qué dice; si no, null.
  *
- * Qué cuenta como aviso: un informe de entrega (DSN, RFC 3464) con su
- * línea Status, o un correo de mailer-daemon o postmaster que ADEMÁS
- * tiene asunto de rebote o cabecera X-Failed-Recipients. El remitente
- * solo no basta: postmaster@ también manda respuestas automáticas. Un
- * correo normal con «undeliverable» en el asunto tampoco: sin remitente
- * de rebote ni DSN, no es un aviso.
+ * Qué cuenta como aviso: un correo de mailer-daemon o postmaster que
+ * ADEMÁS trae un informe de entrega (DSN, RFC 3464, con su línea
+ * Status), asunto de rebote o cabecera X-Failed-Recipients. El remitente
+ * de rebote se exige SIEMPRE, también con DSN: una línea «Status: 5.1.1»
+ * la puede escribir cualquiera en un correo normal, y un aviso falso
+ * marcaría como inválida una dirección que funciona. Y el remitente solo
+ * tampoco basta: postmaster@ también manda respuestas automáticas.
+ *
+ * Esto filtra lo burdo; lo que decide si un aviso tiene efectos es el
+ * job (outbound.bounces): solo invalida si el Message-ID del aviso es el
+ * de un correo que esa misma cuenta envió.
  */
 export function detectBounce(mail: InboundMail): BounceDetection | null {
   const body = mail.body ?? '';
@@ -382,7 +429,8 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
   const deRebote = REMITENTE_DE_REBOTE.test(mail.from);
   const estadoDsn = ESTADO_RE.exec(body)?.[1] ?? null;
   const fallido = headers['x-failed-recipients']?.split(',')[0]?.trim() || null;
-  if (!estadoDsn && !(deRebote && (ASUNTO_DE_REBOTE.test(subject) || fallido))) return null;
+  if (!deRebote) return null;
+  if (!estadoDsn && !ASUNTO_DE_REBOTE.test(subject) && !fallido) return null;
 
   const diagnostico = DIAGNOSTICO_RE.exec(body)?.[1] ?? null;
   const servidor = textoDelServidor(body, diagnostico);

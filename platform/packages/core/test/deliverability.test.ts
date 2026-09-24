@@ -278,6 +278,83 @@ test('«no existe» cuenta cuando lo dice el servidor sobre la dirección', () =
   assert.match(r?.reason ?? '', /no existe/);
 });
 
+test('un DSN que no viene de mailer-daemon ni de postmaster no es un aviso (r3)', () => {
+  // Cualquiera puede escribir «Status: 5.1.1» en un correo normal: sin el
+  // remitente de rebote, un aviso falso marcaba como inválida una
+  // dirección que funciona (y, con un contacto global, en otro workspace).
+  const falso = detectBounce({
+    from: 'Yo <yo@a.test>',
+    subject: 'Hola',
+    body: 'Final-Recipient: rfc822; valentina@marca.test\nStatus: 5.1.1\nDiagnostic-Code: smtp; 550 5.1.1 User unknown',
+  });
+  assert.equal(falso, null);
+});
+
+test('el aviso de Gmail sin cabeceras DSN: el destinatario sale entero de la prosa, en inglés y en español', () => {
+  const ingles = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Delivery Status Notification (Failure)',
+    body:
+      "** Address not found **\n\nYour message wasn't delivered to nadie@marca.co because the address couldn't be found.\n\n" +
+      'The response from the remote server was:\n550 5.1.1 The email account that you tried to reach does not exist.',
+  });
+  assert.equal(ingles?.recipient, 'nadie@marca.co', 'no se corta en el primer punto del dominio');
+  assert.equal(ingles?.kind, 'hard');
+  const espanol = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Notificación de estado de la entrega (error)',
+    body:
+      'No se ha encontrado la dirección\n\nTu mensaje no se ha entregado a compras@tienda.com.co porque no se ha encontrado la dirección.\n\n' +
+      'La respuesta del servidor remoto fue:\n550 5.1.1 The email account that you tried to reach does not exist.',
+  });
+  assert.equal(espanol?.recipient, 'compras@tienda.com.co');
+  assert.equal(espanol?.kind, 'hard');
+});
+
+test('un dominio que no existe es un rebote duro, con o sin código', () => {
+  const gmail = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Delivery Status Notification (Failure)',
+    body: [
+      '** Address not found **',
+      '',
+      "Your message wasn't delivered to x@dominio-que-no-existe.co because the domain dominio-que-no-existe.co couldn't be found. " +
+        'Check for typos or unnecessary spaces and try again.',
+      '',
+      "The response was:\nDNS Error: DNS type 'mx' lookup of dominio-que-no-existe.co responded with code NXDOMAIN",
+    ].join('\n'),
+  });
+  assert.equal(gmail?.kind, 'hard');
+  assert.equal(gmail?.statusCode, null);
+  assert.equal(gmail?.recipient, 'x@dominio-que-no-existe.co');
+  assert.match(gmail?.reason ?? '', /couldn't be found|NXDOMAIN/);
+
+  const postfix = detectBounce({
+    from: 'MAILER-DAEMON@mx.ejemplo.com (Mail Delivery System)',
+    subject: 'Undelivered Mail Returned to Sender',
+    body: '<ana@nada.test>: Host or domain name not found. Name service error for name=nada.test type=MX: Host not found',
+  });
+  assert.equal(postfix?.kind, 'hard');
+  for (const frase of ['unrouteable address', 'no MX record for domain', 'Domain not found']) {
+    const r = detectBounce({ from: 'mailer-daemon@mx.test', subject: 'Mail delivery failed', body: `ana@nada.test\n${frase}` });
+    assert.equal(r?.kind, 'hard', frase);
+  }
+  const espanol = detectBounce({
+    from: 'mailer-daemon@googlemail.com',
+    subject: 'Mensaje no entregado',
+    body: 'Tu mensaje no se ha entregado a hola@nada.co porque no se ha encontrado el dominio nada.co.',
+  });
+  assert.equal(espanol?.kind, 'hard');
+  assert.equal(espanol?.recipient, 'hola@nada.co');
+  // Un fallo pasajero del DNS (SERVFAIL) no es un dominio inexistente.
+  const pasajero = detectBounce({
+    from: 'mailer-daemon@googlemail.com',
+    subject: 'Delivery Status Notification (Failure)',
+    body: "DNS Error: DNS type 'mx' lookup of marca.co responded with code SERVFAIL",
+  });
+  assert.equal(pasajero?.kind, 'soft');
+});
+
 // ------------------------------------------------------------------ alertas
 
 function salud(over: Partial<HealthForAlerts> = {}): HealthForAlerts {
