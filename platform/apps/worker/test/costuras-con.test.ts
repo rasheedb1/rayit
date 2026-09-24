@@ -245,6 +245,39 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
                         median_completion::text AS median_completion, median_skip_3s::text AS median_skip_3s, is_reliable
                    FROM creator_baseline WHERE workspace_id = '${LAURA}'
                   ORDER BY platform_id, age_hours_cut, computed_at DESC`;
+  /**
+   * La fórmula de db/seed/0002 §7 (mediana de los últimos 20 videos que
+   * alcanzaron el corte, medida a esa edad), aplicada a los datos FINALES
+   * de los seeds. No se comparan las filas que 0002 guardó: las calculó
+   * antes de que 0003 (CIM-8) agregara la lectura de d02 del 12-sep, que
+   * no trae retención, y según el día esa lectura pasa a ser la de su
+   * corte de 720 h (con los 9 valores medidos la mediana de completion de
+   * TikTok es 0,09; con los 10 que vio 0002, 0,085). El job lee los datos
+   * finales, que es lo que hace en producción.
+   */
+  const FORMULA_0002 = `SELECT r.platform_id || ':' || r.cut AS clave, count(*)::int AS sample_size,
+         round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.views)::numeric, 2)::text AS median_views,
+         round(percentile_cont(0.25) WITHIN GROUP (ORDER BY r.views)::numeric, 2)::text AS p25_views,
+         round(percentile_cont(0.75) WITHIN GROUP (ORDER BY r.views)::numeric, 2)::text AS p75_views,
+         round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.engagement)::numeric, 6)::text AS median_engagement,
+         round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.saves_per_1k)::numeric, 4)::text AS median_saves_per_1k,
+         round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.completion_rate)::numeric, 5)::text AS median_completion,
+         round(percentile_cont(0.5)  WITHIN GROUP (ORDER BY r.skip_rate_3s)::numeric, 5)::text AS median_skip_3s,
+         count(*) >= 8 AS is_reliable
+    FROM (
+      SELECT p.platform_id, c.cut, m.views, m.completion_rate, m.skip_rate_3s,
+             CASE WHEN m.views > 0 THEN m.total_interactions::numeric / m.views END AS engagement,
+             CASE WHEN m.views > 0 THEN m.saves::numeric * 1000 / m.views END        AS saves_per_1k,
+             row_number() OVER (PARTITION BY p.platform_id, c.cut ORDER BY p.published_at DESC) AS rn
+        FROM post p
+       CROSS JOIN (VALUES (24), (72), (168), (720)) AS c(cut)
+        JOIN post_metrics_at_cut m ON m.post_id = p.id AND m.cut_hours = c.cut
+       WHERE p.creator_id = '00000002-0000-4000-8000-000000000003'
+         AND p.published_at <= date_trunc('day', now()) - make_interval(hours => c.cut)
+    ) r
+   WHERE r.rn <= 20
+   GROUP BY r.platform_id, r.cut
+   ORDER BY r.platform_id, r.cut`;
   const PUNTAJES = `SELECT post_id, age_hours_cut, views_at_cut::text AS views_at_cut, views_vs_median::text AS views_vs_median, outlier_tier, is_outlier
                       FROM post_score WHERE workspace_id = '${LAURA}' ORDER BY post_id`;
 
@@ -263,7 +296,7 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
         await applyRepoSeeds(db);
         const r = await db.raw.query<{ computed_at: Date }>(`SELECT max(computed_at) AS computed_at FROM creator_baseline WHERE workspace_id = '${LAURA}'`);
         reloj = new Date(new Date(r.rows[0]!.computed_at).getTime() + 1_000);
-        basesDelSeed = (await db.raw.query<BaseSeed>(BASES)).rows;
+        basesDelSeed = (await db.raw.query<BaseSeed>(FORMULA_0002)).rows;
         puntajesDelSeed = (await db.raw.query<ScoreSeed>(PUNTAJES)).rows;
         // Se borra lo que calculó el seed: lo que haya después lo escribió CON-6.
         await db.raw.exec(`
